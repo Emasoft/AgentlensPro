@@ -1,0 +1,3736 @@
+{
+  "cases": {
+    "cold_start_no_prev": {
+      "prev": null,
+      "cur": {
+        "model": "claude-opus-5",
+        "tools": [],
+        "system": [
+          {
+            "type": "text",
+            "text": "system prose",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "prev2": null,
+      "timing": {
+        "cacheReadTokens": 5000,
+        "cacheCreateTokens": 20000,
+        "ephemeral5mTokens": 0,
+        "ephemeral1hTokens": 20000
+      },
+      "verdict": {
+        "cause": "COLD_START",
+        "culpritLayer": "timing",
+        "culpritId": "timing:COLD_START",
+        "culpritSummary": "first observed turn for this session (cold cache warm)",
+        "ttlTier": "none"
+      }
+    },
+    "caching_disabled": {
+      "prev": null,
+      "cur": {
+        "model": "claude-opus-5",
+        "tools": [],
+        "system": [
+          {
+            "type": "text",
+            "text": "system prose"
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello"
+              }
+            ]
+          }
+        ]
+      },
+      "prev2": null,
+      "timing": {
+        "cacheReadTokens": 0,
+        "cacheCreateTokens": 0,
+        "ephemeral5mTokens": 0,
+        "ephemeral1hTokens": 20000
+      },
+      "verdict": {
+        "cause": "CACHING_DISABLED",
+        "culpritLayer": "timing",
+        "culpritId": "config:no-cache-control",
+        "culpritSummary": "the request carried no cache_control marker anywhere — nothing was offered to the cache",
+        "ttlTier": "none"
+      }
+    },
+    "below_min_cacheable": {
+      "prev": null,
+      "cur": {
+        "model": "claude-haiku-4-5",
+        "tools": [],
+        "system": [
+          {
+            "type": "text",
+            "text": "system prose",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "prev2": null,
+      "timing": {
+        "cacheReadTokens": 0,
+        "cacheCreateTokens": 0,
+        "ephemeral5mTokens": 0,
+        "ephemeral1hTokens": 20000
+      },
+      "verdict": {
+        "cause": "BELOW_MIN_CACHEABLE",
+        "culpritLayer": "timing",
+        "culpritId": "config:below-min:claude-haiku-4-5",
+        "culpritSummary": "cache_control present but nothing cached: ~5 est. tokens is under this model's 4,096-token minimum",
+        "ttlTier": "none"
+      }
+    },
+    "no_min_row_for_model": {
+      "prev": null,
+      "cur": {
+        "model": "gpt-4o",
+        "tools": [],
+        "system": [
+          {
+            "type": "text",
+            "text": "system prose",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "prev2": null,
+      "timing": {
+        "cacheReadTokens": 0,
+        "cacheCreateTokens": 0,
+        "ephemeral5mTokens": 0,
+        "ephemeral1hTokens": 20000
+      },
+      "verdict": {
+        "cause": "COLD_START",
+        "culpritLayer": "timing",
+        "culpritId": "timing:COLD_START",
+        "culpritSummary": "first observed turn for this session (cold cache warm)",
+        "ttlTier": "none"
+      }
+    },
+    "interleave_aba": {
+      "prev": {
+        "model": "claude-sonnet-5",
+        "tools": [
+          {
+            "name": "Grep",
+            "description": "d",
+            "input_schema": {
+              "type": "object"
+            }
+          }
+        ],
+        "system": [
+          {
+            "type": "text",
+            "text": "system prose",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "cur": {
+        "model": "claude-opus-5",
+        "tools": [
+          {
+            "name": "Bash",
+            "description": "d",
+            "input_schema": {
+              "type": "object"
+            }
+          }
+        ],
+        "system": [
+          {
+            "type": "text",
+            "text": "system prose",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "prev2": {
+        "model": "claude-opus-5",
+        "tools": [
+          {
+            "name": "Bash",
+            "description": "d",
+            "input_schema": {
+              "type": "object"
+            }
+          }
+        ],
+        "system": [
+          {
+            "type": "text",
+            "text": "system prose",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "timing": {
+        "cacheReadTokens": 5000,
+        "cacheCreateTokens": 20000,
+        "ephemeral5mTokens": 0,
+        "ephemeral1hTokens": 20000
+      },
+      "verdict": {
+        "cause": "SUBAGENT_INTERLEAVE",
+        "culpritLayer": "timing",
+        "culpritId": "interleave:claude-opus-5 <-> claude-sonnet-5",
+        "culpritSummary": "A→B→A interleave (claude-opus-5 <-> claude-sonnet-5): this request matches turn-2's stream, not turn-1's — a sub-agent's calls share the parent session id",
+        "ttlTier": "none"
+      }
+    },
+    "interleave_not_claimed": {
+      "prev": {
+        "model": "claude-sonnet-5",
+        "tools": [
+          {
+            "name": "Grep",
+            "description": "d",
+            "input_schema": {
+              "type": "object"
+            }
+          }
+        ],
+        "system": [
+          {
+            "type": "text",
+            "text": "system prose",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "cur": {
+        "model": "claude-opus-5",
+        "tools": [
+          {
+            "name": "Bash",
+            "description": "d",
+            "input_schema": {
+              "type": "object"
+            }
+          }
+        ],
+        "system": [
+          {
+            "type": "text",
+            "text": "system prose",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "prev2": {
+        "model": "claude-fable-5",
+        "tools": [
+          {
+            "name": "Read",
+            "description": "d",
+            "input_schema": {
+              "type": "object"
+            }
+          }
+        ],
+        "system": [
+          {
+            "type": "text",
+            "text": "system prose",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "timing": {
+        "cacheReadTokens": 5000,
+        "cacheCreateTokens": 20000,
+        "ephemeral5mTokens": 0,
+        "ephemeral1hTokens": 20000
+      },
+      "verdict": {
+        "cause": "MODEL_SWITCH",
+        "culpritLayer": "model",
+        "culpritId": "model",
+        "culpritSummary": "model claude-sonnet-5 → claude-opus-5"
+      }
+    },
+    "model_switch": {
+      "prev": {
+        "model": "claude-sonnet-5",
+        "tools": [],
+        "system": [
+          {
+            "type": "text",
+            "text": "system prose",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "cur": {
+        "model": "claude-opus-5",
+        "tools": [],
+        "system": [
+          {
+            "type": "text",
+            "text": "system prose",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "prev2": null,
+      "timing": {
+        "cacheReadTokens": 5000,
+        "cacheCreateTokens": 20000,
+        "ephemeral5mTokens": 0,
+        "ephemeral1hTokens": 20000
+      },
+      "verdict": {
+        "cause": "MODEL_SWITCH",
+        "culpritLayer": "model",
+        "culpritId": "model",
+        "culpritSummary": "model claude-sonnet-5 → claude-opus-5"
+      }
+    },
+    "tools_added": {
+      "prev": {
+        "model": "claude-opus-5",
+        "tools": [
+          {
+            "name": "Bash",
+            "description": "d",
+            "input_schema": {
+              "type": "object"
+            }
+          }
+        ],
+        "system": [
+          {
+            "type": "text",
+            "text": "system prose",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "cur": {
+        "model": "claude-opus-5",
+        "tools": [
+          {
+            "name": "Bash",
+            "description": "d",
+            "input_schema": {
+              "type": "object"
+            }
+          },
+          {
+            "name": "Grep",
+            "description": "d",
+            "input_schema": {
+              "type": "object"
+            }
+          }
+        ],
+        "system": [
+          {
+            "type": "text",
+            "text": "system prose",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "prev2": null,
+      "timing": {
+        "cacheReadTokens": 5000,
+        "cacheCreateTokens": 20000,
+        "ephemeral5mTokens": 0,
+        "ephemeral1hTokens": 20000
+      },
+      "verdict": {
+        "cause": "TOOLSET_CHANGED",
+        "culpritLayer": "tools",
+        "culpritId": "tools:TOOLSET_CHANGED:Grep",
+        "culpritSummary": "tool(s) added Grep"
+      }
+    },
+    "tools_removed": {
+      "prev": {
+        "model": "claude-opus-5",
+        "tools": [
+          {
+            "name": "Bash",
+            "description": "d",
+            "input_schema": {
+              "type": "object"
+            }
+          },
+          {
+            "name": "Grep",
+            "description": "d",
+            "input_schema": {
+              "type": "object"
+            }
+          }
+        ],
+        "system": [
+          {
+            "type": "text",
+            "text": "system prose",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "cur": {
+        "model": "claude-opus-5",
+        "tools": [
+          {
+            "name": "Bash",
+            "description": "d",
+            "input_schema": {
+              "type": "object"
+            }
+          }
+        ],
+        "system": [
+          {
+            "type": "text",
+            "text": "system prose",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "prev2": null,
+      "timing": {
+        "cacheReadTokens": 5000,
+        "cacheCreateTokens": 20000,
+        "ephemeral5mTokens": 0,
+        "ephemeral1hTokens": 20000
+      },
+      "verdict": {
+        "cause": "TOOLSET_CHANGED",
+        "culpritLayer": "tools",
+        "culpritId": "tools:TOOLSET_CHANGED:Grep",
+        "culpritSummary": "tool(s)  removed Grep"
+      }
+    },
+    "tools_deferred_loaded": {
+      "prev": {
+        "model": "claude-opus-5",
+        "tools": [
+          {
+            "name": "Bash",
+            "description": "d",
+            "input_schema": {
+              "type": "object"
+            }
+          }
+        ],
+        "system": [
+          {
+            "type": "text",
+            "text": "system prose",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "cur": {
+        "model": "claude-opus-5",
+        "tools": [
+          {
+            "name": "Bash",
+            "description": "d",
+            "input_schema": {
+              "type": "object"
+            }
+          },
+          {
+            "name": "WebSearch",
+            "description": "d",
+            "input_schema": {
+              "type": "object"
+            },
+            "defer_loading": true
+          }
+        ],
+        "system": [
+          {
+            "type": "text",
+            "text": "system prose",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "prev2": null,
+      "timing": {
+        "cacheReadTokens": 5000,
+        "cacheCreateTokens": 20000,
+        "ephemeral5mTokens": 0,
+        "ephemeral1hTokens": 20000
+      },
+      "verdict": {
+        "cause": "TOOL_SEARCH_DEFERRED",
+        "culpritLayer": "tools",
+        "culpritId": "tools:TOOL_SEARCH_DEFERRED:WebSearch",
+        "culpritSummary": "deferred tool(s) loaded mid-session: WebSearch"
+      }
+    },
+    "tools_deferred_plus_removal": {
+      "prev": {
+        "model": "claude-opus-5",
+        "tools": [
+          {
+            "name": "Bash",
+            "description": "d",
+            "input_schema": {
+              "type": "object"
+            }
+          },
+          {
+            "name": "Grep",
+            "description": "d",
+            "input_schema": {
+              "type": "object"
+            }
+          }
+        ],
+        "system": [
+          {
+            "type": "text",
+            "text": "system prose",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "cur": {
+        "model": "claude-opus-5",
+        "tools": [
+          {
+            "name": "Bash",
+            "description": "d",
+            "input_schema": {
+              "type": "object"
+            }
+          },
+          {
+            "name": "WebSearch",
+            "description": "d",
+            "input_schema": {
+              "type": "object"
+            },
+            "defer_loading": true
+          }
+        ],
+        "system": [
+          {
+            "type": "text",
+            "text": "system prose",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "prev2": null,
+      "timing": {
+        "cacheReadTokens": 5000,
+        "cacheCreateTokens": 20000,
+        "ephemeral5mTokens": 0,
+        "ephemeral1hTokens": 20000
+      },
+      "verdict": {
+        "cause": "TOOLSET_CHANGED",
+        "culpritLayer": "tools",
+        "culpritId": "tools:TOOLSET_CHANGED:Grep,WebSearch",
+        "culpritSummary": "tool(s) added WebSearch removed Grep"
+      }
+    },
+    "tools_mcp_server": {
+      "prev": {
+        "model": "claude-opus-5",
+        "tools": [
+          {
+            "name": "Bash",
+            "description": "d",
+            "input_schema": {
+              "type": "object"
+            }
+          },
+          {
+            "name": "mcp__chrome__click",
+            "description": "d",
+            "input_schema": {
+              "type": "object"
+            }
+          },
+          {
+            "name": "mcp__chrome__type",
+            "description": "d",
+            "input_schema": {
+              "type": "object"
+            }
+          }
+        ],
+        "system": [
+          {
+            "type": "text",
+            "text": "system prose",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "cur": {
+        "model": "claude-opus-5",
+        "tools": [
+          {
+            "name": "Bash",
+            "description": "d",
+            "input_schema": {
+              "type": "object"
+            }
+          }
+        ],
+        "system": [
+          {
+            "type": "text",
+            "text": "system prose",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "prev2": null,
+      "timing": {
+        "cacheReadTokens": 5000,
+        "cacheCreateTokens": 20000,
+        "ephemeral5mTokens": 0,
+        "ephemeral1hTokens": 20000
+      },
+      "verdict": {
+        "cause": "MCP_TOOLS_CHANGED",
+        "culpritLayer": "tools",
+        "culpritId": "tools:MCP_TOOLS_CHANGED:chrome",
+        "culpritSummary": "MCP tool(s)  removed mcp__chrome__click, mcp__chrome__type [server: chrome]"
+      }
+    },
+    "tools_harness_builtins": {
+      "prev": {
+        "model": "claude-opus-5",
+        "tools": [
+          {
+            "name": "Bash",
+            "description": "d",
+            "input_schema": {
+              "type": "object"
+            }
+          },
+          {
+            "name": "CronList",
+            "description": "d",
+            "input_schema": {
+              "type": "object"
+            }
+          },
+          {
+            "name": "TaskGet",
+            "description": "d",
+            "input_schema": {
+              "type": "object"
+            }
+          }
+        ],
+        "system": [
+          {
+            "type": "text",
+            "text": "system prose",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "cur": {
+        "model": "claude-opus-5",
+        "tools": [
+          {
+            "name": "Bash",
+            "description": "d",
+            "input_schema": {
+              "type": "object"
+            }
+          }
+        ],
+        "system": [
+          {
+            "type": "text",
+            "text": "system prose",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "prev2": null,
+      "timing": {
+        "cacheReadTokens": 5000,
+        "cacheCreateTokens": 20000,
+        "ephemeral5mTokens": 0,
+        "ephemeral1hTokens": 20000
+      },
+      "verdict": {
+        "cause": "TOOL_SEARCH_DEFERRED",
+        "culpritLayer": "tools",
+        "culpritId": "tools:TOOL_SEARCH_DEFERRED:harness:deferred-builtins",
+        "culpritSummary": "harness ToolSearch toggled deferred built-ins (2): CronList, TaskGet"
+      }
+    },
+    "tools_many_added": {
+      "prev": {
+        "model": "claude-opus-5",
+        "tools": [
+          {
+            "name": "Bash",
+            "description": "d",
+            "input_schema": {
+              "type": "object"
+            }
+          }
+        ],
+        "system": [
+          {
+            "type": "text",
+            "text": "system prose",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "cur": {
+        "model": "claude-opus-5",
+        "tools": [
+          {
+            "name": "Bash",
+            "description": "d",
+            "input_schema": {
+              "type": "object"
+            }
+          },
+          {
+            "name": "A1",
+            "description": "d",
+            "input_schema": {
+              "type": "object"
+            }
+          },
+          {
+            "name": "B2",
+            "description": "d",
+            "input_schema": {
+              "type": "object"
+            }
+          },
+          {
+            "name": "C3",
+            "description": "d",
+            "input_schema": {
+              "type": "object"
+            }
+          },
+          {
+            "name": "D4",
+            "description": "d",
+            "input_schema": {
+              "type": "object"
+            }
+          },
+          {
+            "name": "E5",
+            "description": "d",
+            "input_schema": {
+              "type": "object"
+            }
+          }
+        ],
+        "system": [
+          {
+            "type": "text",
+            "text": "system prose",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "prev2": null,
+      "timing": {
+        "cacheReadTokens": 5000,
+        "cacheCreateTokens": 20000,
+        "ephemeral5mTokens": 0,
+        "ephemeral1hTokens": 20000
+      },
+      "verdict": {
+        "cause": "TOOLSET_CHANGED",
+        "culpritLayer": "tools",
+        "culpritId": "tools:TOOLSET_CHANGED:A1,B2,C3",
+        "culpritSummary": "tool(s) added A1, B2, C3 +2 more"
+      }
+    },
+    "tools_reordered": {
+      "prev": {
+        "model": "claude-opus-5",
+        "tools": [
+          {
+            "name": "Bash",
+            "description": "d",
+            "input_schema": {
+              "type": "object"
+            }
+          },
+          {
+            "name": "Grep",
+            "description": "d",
+            "input_schema": {
+              "type": "object"
+            }
+          }
+        ],
+        "system": [
+          {
+            "type": "text",
+            "text": "system prose",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "cur": {
+        "model": "claude-opus-5",
+        "tools": [
+          {
+            "name": "Grep",
+            "description": "d",
+            "input_schema": {
+              "type": "object"
+            }
+          },
+          {
+            "name": "Bash",
+            "description": "d",
+            "input_schema": {
+              "type": "object"
+            }
+          }
+        ],
+        "system": [
+          {
+            "type": "text",
+            "text": "system prose",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "prev2": null,
+      "timing": {
+        "cacheReadTokens": 5000,
+        "cacheCreateTokens": 20000,
+        "ephemeral5mTokens": 0,
+        "ephemeral1hTokens": 20000
+      },
+      "verdict": {
+        "cause": "TOOLS_REORDERED",
+        "culpritLayer": "tools",
+        "culpritId": "tools:TOOLS_REORDERED:Grep",
+        "culpritSummary": "same 2 tools, order changed (first at \"Grep\")"
+      }
+    },
+    "tools_definition_changed": {
+      "prev": {
+        "model": "claude-opus-5",
+        "tools": [
+          {
+            "name": "Bash",
+            "description": "run a command",
+            "input_schema": {
+              "type": "object"
+            }
+          }
+        ],
+        "system": [
+          {
+            "type": "text",
+            "text": "system prose",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "cur": {
+        "model": "claude-opus-5",
+        "tools": [
+          {
+            "name": "Bash",
+            "description": "run a command, now with more words",
+            "input_schema": {
+              "type": "object"
+            }
+          }
+        ],
+        "system": [
+          {
+            "type": "text",
+            "text": "system prose",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "prev2": null,
+      "timing": {
+        "cacheReadTokens": 5000,
+        "cacheCreateTokens": 20000,
+        "ephemeral5mTokens": 0,
+        "ephemeral1hTokens": 20000
+      },
+      "verdict": {
+        "cause": "TOOLSET_CHANGED",
+        "culpritLayer": "tools",
+        "culpritId": "tools:TOOLSET_CHANGED:Bash",
+        "culpritSummary": "tool definition changed: Bash"
+      }
+    },
+    "plugins_reloaded_2": {
+      "prev": {
+        "model": "claude-opus-5",
+        "tools": [
+          {
+            "name": "Bash",
+            "description": "d",
+            "input_schema": {
+              "type": "object"
+            }
+          }
+        ],
+        "system": [
+          {
+            "type": "text",
+            "text": "The following skills are available for use with the Skill tool:\n- one"
+          },
+          {
+            "type": "text",
+            "text": "Available agent types for the Agent tool:\n- a",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "cur": {
+        "model": "claude-opus-5",
+        "tools": [
+          {
+            "name": "Bash",
+            "description": "d",
+            "input_schema": {
+              "type": "object"
+            }
+          },
+          {
+            "name": "Grep",
+            "description": "d",
+            "input_schema": {
+              "type": "object"
+            }
+          }
+        ],
+        "system": [
+          {
+            "type": "text",
+            "text": "The following skills are available for use with the Skill tool:\n- one and two"
+          },
+          {
+            "type": "text",
+            "text": "Available agent types for the Agent tool:\n- a",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "prev2": null,
+      "timing": {
+        "cacheReadTokens": 5000,
+        "cacheCreateTokens": 20000,
+        "ephemeral5mTokens": 0,
+        "ephemeral1hTokens": 20000
+      },
+      "verdict": {
+        "cause": "PLUGINS_RELOADED",
+        "culpritLayer": "tools",
+        "culpritId": "plugins:reloaded",
+        "culpritSummary": "plugin reload — 2 catalogs churned together (tools, skills)",
+        "confidence": "medium"
+      }
+    },
+    "plugins_reloaded_3": {
+      "prev": {
+        "model": "claude-opus-5",
+        "tools": [
+          {
+            "name": "Bash",
+            "description": "d",
+            "input_schema": {
+              "type": "object"
+            }
+          }
+        ],
+        "system": [
+          {
+            "type": "text",
+            "text": "The following skills are available for use with the Skill tool:\n- one"
+          },
+          {
+            "type": "text",
+            "text": "Available agent types for the Agent tool:\n- a",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "cur": {
+        "model": "claude-opus-5",
+        "tools": [
+          {
+            "name": "Bash",
+            "description": "d",
+            "input_schema": {
+              "type": "object"
+            }
+          },
+          {
+            "name": "Grep",
+            "description": "d",
+            "input_schema": {
+              "type": "object"
+            }
+          }
+        ],
+        "system": [
+          {
+            "type": "text",
+            "text": "The following skills are available for use with the Skill tool:\n- one and two"
+          },
+          {
+            "type": "text",
+            "text": "Available agent types for the Agent tool:\n- a and b",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "prev2": null,
+      "timing": {
+        "cacheReadTokens": 5000,
+        "cacheCreateTokens": 20000,
+        "ephemeral5mTokens": 0,
+        "ephemeral1hTokens": 20000
+      },
+      "verdict": {
+        "cause": "PLUGINS_RELOADED",
+        "culpritLayer": "tools",
+        "culpritId": "plugins:reloaded",
+        "culpritSummary": "plugin reload — 3 catalogs churned together (tools, skills, agents)",
+        "confidence": "high"
+      }
+    },
+    "catalog_first_appearance": {
+      "prev": {
+        "model": "claude-opus-5",
+        "tools": [
+          {
+            "name": "Bash",
+            "description": "d",
+            "input_schema": {
+              "type": "object"
+            }
+          }
+        ],
+        "system": [
+          {
+            "type": "text",
+            "text": "plain prose",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "cur": {
+        "model": "claude-opus-5",
+        "tools": [
+          {
+            "name": "Bash",
+            "description": "d",
+            "input_schema": {
+              "type": "object"
+            }
+          },
+          {
+            "name": "Grep",
+            "description": "d",
+            "input_schema": {
+              "type": "object"
+            }
+          }
+        ],
+        "system": [
+          {
+            "type": "text",
+            "text": "The following skills are available for use with the Skill tool:\n- one",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "prev2": null,
+      "timing": {
+        "cacheReadTokens": 5000,
+        "cacheCreateTokens": 20000,
+        "ephemeral5mTokens": 0,
+        "ephemeral1hTokens": 20000
+      },
+      "verdict": {
+        "cause": "TOOLSET_CHANGED",
+        "culpritLayer": "tools",
+        "culpritId": "tools:TOOLSET_CHANGED:Grep",
+        "culpritSummary": "tool(s) added Grep"
+      }
+    },
+    "param_thinking": {
+      "prev": {
+        "model": "claude-opus-5",
+        "tools": [],
+        "system": [
+          {
+            "type": "text",
+            "text": "system prose",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ],
+        "thinking": {
+          "type": "enabled",
+          "budget_tokens": 1000
+        }
+      },
+      "cur": {
+        "model": "claude-opus-5",
+        "tools": [],
+        "system": [
+          {
+            "type": "text",
+            "text": "system prose",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ],
+        "thinking": {
+          "type": "enabled",
+          "budget_tokens": 2000
+        }
+      },
+      "prev2": null,
+      "timing": {
+        "cacheReadTokens": 5000,
+        "cacheCreateTokens": 20000,
+        "ephemeral5mTokens": 0,
+        "ephemeral1hTokens": 20000
+      },
+      "verdict": {
+        "cause": "THINKING_CONFIG_CHANGED",
+        "culpritLayer": "effort",
+        "culpritId": "param:thinking",
+        "culpritSummary": "thinking enabled:1000 → enabled:2000"
+      }
+    },
+    "param_effort": {
+      "prev": {
+        "model": "claude-opus-5",
+        "tools": [],
+        "system": [
+          {
+            "type": "text",
+            "text": "system prose",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ],
+        "output_config": {
+          "effort": "low"
+        }
+      },
+      "cur": {
+        "model": "claude-opus-5",
+        "tools": [],
+        "system": [
+          {
+            "type": "text",
+            "text": "system prose",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ],
+        "output_config": {
+          "effort": "high"
+        }
+      },
+      "prev2": null,
+      "timing": {
+        "cacheReadTokens": 5000,
+        "cacheCreateTokens": 20000,
+        "ephemeral5mTokens": 0,
+        "ephemeral1hTokens": 20000
+      },
+      "verdict": {
+        "cause": "EFFORT_PARAM_CHANGED",
+        "culpritLayer": "effort",
+        "culpritId": "param:effort",
+        "culpritSummary": "output_config.effort low → high"
+      }
+    },
+    "param_tool_choice": {
+      "prev": {
+        "model": "claude-opus-5",
+        "tools": [],
+        "system": [
+          {
+            "type": "text",
+            "text": "system prose",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ],
+        "tool_choice": {
+          "type": "auto"
+        }
+      },
+      "cur": {
+        "model": "claude-opus-5",
+        "tools": [],
+        "system": [
+          {
+            "type": "text",
+            "text": "system prose",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ],
+        "tool_choice": {
+          "type": "tool",
+          "name": "Bash"
+        }
+      },
+      "prev2": null,
+      "timing": {
+        "cacheReadTokens": 5000,
+        "cacheCreateTokens": 20000,
+        "ephemeral5mTokens": 0,
+        "ephemeral1hTokens": 20000
+      },
+      "verdict": {
+        "cause": "TOOL_CHOICE_CHANGED",
+        "culpritLayer": "effort",
+        "culpritId": "param:tool_choice",
+        "culpritSummary": "tool_choice auto → tool:Bash"
+      }
+    },
+    "param_speed": {
+      "prev": {
+        "model": "claude-opus-5",
+        "tools": [],
+        "system": [
+          {
+            "type": "text",
+            "text": "system prose",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ],
+        "speed": "standard"
+      },
+      "cur": {
+        "model": "claude-opus-5",
+        "tools": [],
+        "system": [
+          {
+            "type": "text",
+            "text": "system prose",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ],
+        "speed": "fast"
+      },
+      "prev2": null,
+      "timing": {
+        "cacheReadTokens": 5000,
+        "cacheCreateTokens": 20000,
+        "ephemeral5mTokens": 0,
+        "ephemeral1hTokens": 20000
+      },
+      "verdict": {
+        "cause": "EFFORT_SWITCH",
+        "culpritLayer": "effort",
+        "culpritId": "param:speed",
+        "culpritSummary": "speed/fast-mode standard → fast"
+      }
+    },
+    "param_absent_to_present": {
+      "prev": {
+        "model": "claude-opus-5",
+        "tools": [],
+        "system": [
+          {
+            "type": "text",
+            "text": "system prose",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "cur": {
+        "model": "claude-opus-5",
+        "tools": [],
+        "system": [
+          {
+            "type": "text",
+            "text": "system prose",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ],
+        "output_config": {
+          "effort": "high"
+        }
+      },
+      "prev2": null,
+      "timing": {
+        "cacheReadTokens": 5000,
+        "cacheCreateTokens": 20000,
+        "ephemeral5mTokens": 0,
+        "ephemeral1hTokens": 20000,
+        "gapMs": 1000
+      },
+      "verdict": {
+        "cause": "UNCLASSIFIED",
+        "culpritLayer": "timing",
+        "culpritId": "timing:UNCLASSIFIED",
+        "culpritSummary": "unlocalised re-write",
+        "rawDiffSummary": "prefix byte-identical by fingerprint but cache_creation=20000; tools=0 sys=1 msg=1"
+      }
+    },
+    "env_changed": {
+      "prev": {
+        "model": "claude-opus-5",
+        "tools": [],
+        "system": [
+          {
+            "type": "text",
+            "text": "prose\n<env>\nWorking directory: /w/one\nPlatform: darwin\n</env>",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "cur": {
+        "model": "claude-opus-5",
+        "tools": [],
+        "system": [
+          {
+            "type": "text",
+            "text": "prose\n<env>\nWorking directory: /w/two\nPlatform: darwin\n</env>",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "prev2": null,
+      "timing": {
+        "cacheReadTokens": 5000,
+        "cacheCreateTokens": 20000,
+        "ephemeral5mTokens": 0,
+        "ephemeral1hTokens": 20000
+      },
+      "verdict": {
+        "cause": "WORKING_DIR_CHANGED",
+        "culpritLayer": "system",
+        "culpritId": "system:env-block",
+        "culpritSummary": "the environment block (working directory / platform / shell / OS) changed between these turns"
+      }
+    },
+    "git_changed": {
+      "prev": {
+        "model": "claude-opus-5",
+        "tools": [],
+        "system": [
+          {
+            "type": "text",
+            "text": "prose\ngitStatus: clean\nCurrent branch: main\nRecent commits:\naaaaaaa feat: x\n\ntrailing prose",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "cur": {
+        "model": "claude-opus-5",
+        "tools": [],
+        "system": [
+          {
+            "type": "text",
+            "text": "prose\ngitStatus: clean\nCurrent branch: main\nRecent commits:\nbbbbbbb feat: x\n\ntrailing prose",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "prev2": null,
+      "timing": {
+        "cacheReadTokens": 5000,
+        "cacheCreateTokens": 20000,
+        "ephemeral5mTokens": 0,
+        "ephemeral1hTokens": 20000
+      },
+      "verdict": {
+        "cause": "GIT_STATE_CHANGED",
+        "culpritLayer": "system",
+        "culpritId": "system:git-snapshot",
+        "culpritSummary": "the startup git snapshot (branch / status / recent commits) changed between these turns"
+      }
+    },
+    "env_and_timestamp": {
+      "prev": {
+        "model": "claude-opus-5",
+        "tools": [],
+        "system": [
+          {
+            "type": "text",
+            "text": "<env>\nWorking directory: /w/one\nToday's date is 2026-08-20\n</env>",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "cur": {
+        "model": "claude-opus-5",
+        "tools": [],
+        "system": [
+          {
+            "type": "text",
+            "text": "<env>\nWorking directory: /w/one\nToday's date is 2026-08-21\n</env>",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "prev2": null,
+      "timing": {
+        "cacheReadTokens": 5000,
+        "cacheCreateTokens": 20000,
+        "ephemeral5mTokens": 0,
+        "ephemeral1hTokens": 20000
+      },
+      "verdict": {
+        "cause": "SYSTEM_TIMESTAMP",
+        "culpritLayer": "system",
+        "culpritId": "system:SYSTEM_TIMESTAMP:date:system date/clock",
+        "culpritSummary": "moving date/clock in system date/clock"
+      }
+    },
+    "sys_timestamp": {
+      "prev": {
+        "model": "claude-opus-5",
+        "tools": [],
+        "system": [
+          {
+            "type": "text",
+            "text": "Today's date is 2026-08-20",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "cur": {
+        "model": "claude-opus-5",
+        "tools": [],
+        "system": [
+          {
+            "type": "text",
+            "text": "Today's date is 2026-08-21",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "prev2": null,
+      "timing": {
+        "cacheReadTokens": 5000,
+        "cacheCreateTokens": 20000,
+        "ephemeral5mTokens": 0,
+        "ephemeral1hTokens": 20000
+      },
+      "verdict": {
+        "cause": "SYSTEM_TIMESTAMP",
+        "culpritLayer": "system",
+        "culpritId": "system:SYSTEM_TIMESTAMP:date:system date/clock",
+        "culpritSummary": "moving date/clock in system date/clock"
+      }
+    },
+    "sys_postcompact": {
+      "prev": {
+        "model": "claude-opus-5",
+        "tools": [],
+        "system": [
+          {
+            "type": "text",
+            "text": "prose",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "cur": {
+        "model": "claude-opus-5",
+        "tools": [],
+        "system": [
+          {
+            "type": "text",
+            "text": "This session is being continued from a previous conversation.",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "prev2": null,
+      "timing": {
+        "cacheReadTokens": 5000,
+        "cacheCreateTokens": 20000,
+        "ephemeral5mTokens": 0,
+        "ephemeral1hTokens": 20000
+      },
+      "verdict": {
+        "cause": "COMPACTION",
+        "culpritLayer": "system",
+        "culpritId": "system:COMPACTION:postcompact:system[0]",
+        "culpritSummary": "conversation compaction rebuilt the system prefix at system[0]"
+      }
+    },
+    "sys_billing_header_ignored": {
+      "prev": {
+        "model": "claude-opus-5",
+        "tools": [],
+        "system": [
+          {
+            "type": "text",
+            "text": "x-anthropic-billing-header: cc_version=2.1.229"
+          },
+          {
+            "type": "text",
+            "text": "stable prose",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "cur": {
+        "model": "claude-opus-5",
+        "tools": [],
+        "system": [
+          {
+            "type": "text",
+            "text": "x-anthropic-billing-header: cc_version=2.1.230"
+          },
+          {
+            "type": "text",
+            "text": "stable prose",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "prev2": null,
+      "timing": {
+        "cacheReadTokens": 5000,
+        "cacheCreateTokens": 20000,
+        "ephemeral5mTokens": 0,
+        "ephemeral1hTokens": 20000,
+        "gapMs": 5400000
+      },
+      "verdict": {
+        "cause": "TTL_EXPIRY",
+        "culpritLayer": "timing",
+        "culpritId": "timing:TTL_EXPIRY:1h",
+        "culpritSummary": "no prefix change; 90.0m gap > 1h TTL",
+        "ttlTier": "1h"
+      }
+    },
+    "sys_skill_injection": {
+      "prev": {
+        "model": "claude-opus-5",
+        "tools": [],
+        "system": [
+          {
+            "type": "text",
+            "text": "prose"
+          },
+          {
+            "type": "text",
+            "text": "more prose",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "cur": {
+        "model": "claude-opus-5",
+        "tools": [],
+        "system": [
+          {
+            "type": "text",
+            "text": "prose"
+          },
+          {
+            "type": "text",
+            "text": "The following skills are available for use with the Skill tool:\n- one",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "prev2": null,
+      "timing": {
+        "cacheReadTokens": 5000,
+        "cacheCreateTokens": 20000,
+        "ephemeral5mTokens": 0,
+        "ephemeral1hTokens": 20000
+      },
+      "verdict": {
+        "cause": "SKILL_INJECTION",
+        "culpritLayer": "system",
+        "culpritId": "system:SKILL_INJECTION:skillcatalog:available-skills catalog",
+        "culpritSummary": "skill catalog injected at pos 1: available-skills catalog"
+      }
+    },
+    "sys_skill_truncation": {
+      "prev": {
+        "model": "claude-opus-5",
+        "tools": [],
+        "system": [
+          {
+            "type": "text",
+            "text": "The following skills are available for use with the Skill tool:\n- a-very-long-list-of-skill-names-that-fills-the-catalog-out",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "cur": {
+        "model": "claude-opus-5",
+        "tools": [],
+        "system": [
+          {
+            "type": "text",
+            "text": "The following skills are available for use with the Skill tool:\n- short",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "prev2": null,
+      "timing": {
+        "cacheReadTokens": 5000,
+        "cacheCreateTokens": 20000,
+        "ephemeral5mTokens": 0,
+        "ephemeral1hTokens": 20000
+      },
+      "verdict": {
+        "cause": "SKILL_DESCRIPTION_TRUNCATION",
+        "culpritLayer": "system",
+        "culpritId": "system:SKILL_DESCRIPTION_TRUNCATION:skillcatalog:available-skills catalog",
+        "culpritSummary": "skill catalog shrank 124→71 chars: available-skills catalog"
+      }
+    },
+    "sys_order_changed": {
+      "prev": {
+        "model": "claude-opus-5",
+        "tools": [],
+        "system": [
+          {
+            "type": "text",
+            "text": "alpha block"
+          },
+          {
+            "type": "text",
+            "text": "beta block",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "cur": {
+        "model": "claude-opus-5",
+        "tools": [],
+        "system": [
+          {
+            "type": "text",
+            "text": "beta block"
+          },
+          {
+            "type": "text",
+            "text": "alpha block",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "prev2": null,
+      "timing": {
+        "cacheReadTokens": 5000,
+        "cacheCreateTokens": 20000,
+        "ephemeral5mTokens": 0,
+        "ephemeral1hTokens": 20000
+      },
+      "verdict": {
+        "cause": "CONTEXT_ORDER_CHANGED",
+        "culpritLayer": "system",
+        "culpritId": "system:order",
+        "culpritSummary": "system blocks reordered at system[0] (identical content, different order)"
+      }
+    },
+    "sys_generic_change": {
+      "prev": {
+        "model": "claude-opus-5",
+        "tools": [],
+        "system": [
+          {
+            "type": "text",
+            "text": "Contents of /w/p/CLAUDE.md (project instructions):\nbe good",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "cur": {
+        "model": "claude-opus-5",
+        "tools": [],
+        "system": [
+          {
+            "type": "text",
+            "text": "Contents of /w/p/CLAUDE.md (project instructions):\nbe better",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "prev2": null,
+      "timing": {
+        "cacheReadTokens": 5000,
+        "cacheCreateTokens": 20000,
+        "ephemeral5mTokens": 0,
+        "ephemeral1hTokens": 20000
+      },
+      "verdict": {
+        "cause": "CLAUDE_MD_CHANGED",
+        "culpritLayer": "system",
+        "culpritId": "system:CLAUDE_MD_CHANGED:claudemd:/w/p/CLAUDE.md",
+        "culpritSummary": "claudemd block changed at pos 0: /w/p/CLAUDE.md"
+      }
+    },
+    "sys_shrank": {
+      "prev": {
+        "model": "claude-opus-5",
+        "tools": [],
+        "system": [
+          {
+            "type": "text",
+            "text": "alpha block"
+          },
+          {
+            "type": "text",
+            "text": "beta block",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "cur": {
+        "model": "claude-opus-5",
+        "tools": [],
+        "system": [
+          {
+            "type": "text",
+            "text": "alpha block",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "prev2": null,
+      "timing": {
+        "cacheReadTokens": 5000,
+        "cacheCreateTokens": 20000,
+        "ephemeral5mTokens": 0,
+        "ephemeral1hTokens": 20000
+      },
+      "verdict": {
+        "cause": "UNCLASSIFIED",
+        "culpritLayer": "system",
+        "culpritId": "system:UNCLASSIFIED:usertext:system[1]",
+        "culpritSummary": "usertext block removed from the system prefix: system[1]"
+      }
+    },
+    "msg0_interleave": {
+      "prev": {
+        "model": "claude-opus-5",
+        "tools": [],
+        "system": [
+          {
+            "type": "text",
+            "text": "system prose",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "plain conversation text conversation A opening",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "cur": {
+        "model": "claude-opus-5",
+        "tools": [],
+        "system": [
+          {
+            "type": "text",
+            "text": "system prose",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "plain conversation text conversation B opening",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "prev2": null,
+      "timing": {
+        "cacheReadTokens": 5000,
+        "cacheCreateTokens": 20000,
+        "ephemeral5mTokens": 0,
+        "ephemeral1hTokens": 20000
+      },
+      "verdict": {
+        "cause": "SUBAGENT_INTERLEAVE",
+        "culpritLayer": "message",
+        "culpritId": "interleave:root-differs",
+        "culpritSummary": "msg[0]'s own prompt text differs — these two requests are DIFFERENT conversations sharing one session id (a sub-agent's calls carry the parent's session id), so neither one broke the other's cache"
+      }
+    },
+    "msg0_memory_change": {
+      "prev": {
+        "model": "claude-opus-5",
+        "tools": [],
+        "system": [
+          {
+            "type": "text",
+            "text": "system prose",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "Contents of /w/p/CLAUDE.md (project instructions):\nrev 1",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "cur": {
+        "model": "claude-opus-5",
+        "tools": [],
+        "system": [
+          {
+            "type": "text",
+            "text": "system prose",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "Contents of /w/p/CLAUDE.md (project instructions):\nrev 2",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "prev2": null,
+      "timing": {
+        "cacheReadTokens": 5000,
+        "cacheCreateTokens": 20000,
+        "ephemeral5mTokens": 0,
+        "ephemeral1hTokens": 20000
+      },
+      "verdict": {
+        "cause": "CLAUDE_MD_CHANGED",
+        "culpritLayer": "message",
+        "culpritId": "message:CLAUDE_MD_CHANGED:claudemd:/w/p/CLAUDE.md",
+        "culpritSummary": "claudemd block changed at pos 0: /w/p/CLAUDE.md"
+      }
+    },
+    "msg_spliced": {
+      "prev": {
+        "model": "claude-opus-5",
+        "tools": [],
+        "system": [
+          {
+            "type": "text",
+            "text": "system prose",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "plain conversation text one"
+              },
+              {
+                "type": "text",
+                "text": "plain conversation text two",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "cur": {
+        "model": "claude-opus-5",
+        "tools": [],
+        "system": [
+          {
+            "type": "text",
+            "text": "system prose",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "plain conversation text one"
+              },
+              {
+                "type": "text",
+                "text": "<pss-skills>injected</pss-skills>"
+              },
+              {
+                "type": "text",
+                "text": "plain conversation text two",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "prev2": null,
+      "timing": {
+        "cacheReadTokens": 5000,
+        "cacheCreateTokens": 20000,
+        "ephemeral5mTokens": 0,
+        "ephemeral1hTokens": 20000
+      },
+      "verdict": {
+        "cause": "HOOK_INJECTION",
+        "culpritLayer": "message",
+        "culpritId": "message:HOOK_INJECTION:hook:hook: pss-skills (perfect-skill-suggester)",
+        "culpritSummary": "hook block spliced in at pos 1: hook: pss-skills (perfect-skill-suggester) — later message blocks shifted, invalidating everything after the splice point"
+      }
+    },
+    "msg_spliced_unknown_kind": {
+      "prev": {
+        "model": "claude-opus-5",
+        "tools": [],
+        "system": [
+          {
+            "type": "text",
+            "text": "system prose",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "plain conversation text root"
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": "plain conversation text one"
+              },
+              {
+                "type": "text",
+                "text": "plain conversation text two",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "cur": {
+        "model": "claude-opus-5",
+        "tools": [],
+        "system": [
+          {
+            "type": "text",
+            "text": "system prose",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "plain conversation text root"
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": "plain conversation text one"
+              },
+              {
+                "type": "text",
+                "text": "plain conversation text mystery"
+              },
+              {
+                "type": "text",
+                "text": "plain conversation text two",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "prev2": null,
+      "timing": {
+        "cacheReadTokens": 5000,
+        "cacheCreateTokens": 20000,
+        "ephemeral5mTokens": 0,
+        "ephemeral1hTokens": 20000
+      },
+      "verdict": {
+        "cause": "MESSAGE_SPLICED",
+        "culpritLayer": "message",
+        "culpritId": "message:MESSAGE_SPLICED:usertext:msg[1] assistant",
+        "culpritSummary": "usertext block spliced in at pos 2: msg[1] assistant — later message blocks shifted, invalidating everything after the splice point"
+      }
+    },
+    "msg_trimmed_midway": {
+      "prev": {
+        "model": "claude-opus-5",
+        "tools": [],
+        "system": [
+          {
+            "type": "text",
+            "text": "system prose",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "plain conversation text root"
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": "plain conversation text one"
+              },
+              {
+                "type": "text",
+                "text": "plain conversation text two"
+              },
+              {
+                "type": "text",
+                "text": "plain conversation text three",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "cur": {
+        "model": "claude-opus-5",
+        "tools": [],
+        "system": [
+          {
+            "type": "text",
+            "text": "system prose",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "plain conversation text root"
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": "plain conversation text one"
+              },
+              {
+                "type": "text",
+                "text": "plain conversation text three",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "prev2": null,
+      "timing": {
+        "cacheReadTokens": 5000,
+        "cacheCreateTokens": 20000,
+        "ephemeral5mTokens": 0,
+        "ephemeral1hTokens": 20000
+      },
+      "verdict": {
+        "cause": "MESSAGE_TRIMMED",
+        "culpritLayer": "message",
+        "culpritId": "message:MESSAGE_TRIMMED:usertext:msg[1] assistant",
+        "culpritSummary": "usertext block removed at pos 2: msg[1] assistant — later message blocks shifted up (context-editing/trim), invalidating everything after the removal point"
+      }
+    },
+    "msg_growth": {
+      "prev": {
+        "model": "claude-opus-5",
+        "tools": [],
+        "system": [
+          {
+            "type": "text",
+            "text": "system prose",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "plain conversation text one",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "cur": {
+        "model": "claude-opus-5",
+        "tools": [],
+        "system": [
+          {
+            "type": "text",
+            "text": "system prose",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "plain conversation text one"
+              },
+              {
+                "type": "text",
+                "text": "plain conversation text two",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "prev2": null,
+      "timing": {
+        "cacheReadTokens": 5000,
+        "cacheCreateTokens": 20000,
+        "ephemeral5mTokens": 0,
+        "ephemeral1hTokens": 20000
+      },
+      "verdict": {
+        "cause": "NORMAL_GROWTH",
+        "culpritLayer": "message",
+        "culpritId": "growth:new-tail",
+        "culpritSummary": "append-only growth: +1 new message block(s) cached for the first time (expected incremental write, not a break)",
+        "ttlTier": "none"
+      }
+    },
+    "timing_1h": {
+      "prev": {
+        "model": "claude-opus-5",
+        "tools": [],
+        "system": [
+          {
+            "type": "text",
+            "text": "system prose",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "cur": {
+        "model": "claude-opus-5",
+        "tools": [],
+        "system": [
+          {
+            "type": "text",
+            "text": "system prose",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "prev2": null,
+      "timing": {
+        "cacheReadTokens": 5000,
+        "cacheCreateTokens": 20000,
+        "ephemeral5mTokens": 0,
+        "ephemeral1hTokens": 20000,
+        "gapMs": 3660000
+      },
+      "verdict": {
+        "cause": "TTL_EXPIRY",
+        "culpritLayer": "timing",
+        "culpritId": "timing:TTL_EXPIRY:1h",
+        "culpritSummary": "no prefix change; 61.0m gap > 1h TTL",
+        "ttlTier": "1h"
+      }
+    },
+    "timing_4m42s": {
+      "prev": {
+        "model": "claude-opus-5",
+        "tools": [],
+        "system": [
+          {
+            "type": "text",
+            "text": "system prose",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "cur": {
+        "model": "claude-opus-5",
+        "tools": [],
+        "system": [
+          {
+            "type": "text",
+            "text": "system prose",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "prev2": null,
+      "timing": {
+        "cacheReadTokens": 5000,
+        "cacheCreateTokens": 20000,
+        "ephemeral5mTokens": 0,
+        "ephemeral1hTokens": 20000,
+        "gapMs": 282000
+      },
+      "verdict": {
+        "cause": "TTL_EXPIRY",
+        "culpritLayer": "timing",
+        "culpritId": "timing:TTL_EXPIRY:5m",
+        "culpritSummary": "no prefix change; 4.7m gap ≈ 5m TTL",
+        "ttlTier": "5m"
+      }
+    },
+    "timing_over_5m": {
+      "prev": {
+        "model": "claude-opus-5",
+        "tools": [],
+        "system": [
+          {
+            "type": "text",
+            "text": "system prose",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "cur": {
+        "model": "claude-opus-5",
+        "tools": [],
+        "system": [
+          {
+            "type": "text",
+            "text": "system prose",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "prev2": null,
+      "timing": {
+        "cacheReadTokens": 5000,
+        "cacheCreateTokens": 20000,
+        "ephemeral5mTokens": 0,
+        "ephemeral1hTokens": 20000,
+        "gapMs": 420000
+      },
+      "verdict": {
+        "cause": "TTL_EXPIRY",
+        "culpritLayer": "timing",
+        "culpritId": "timing:TTL_EXPIRY:5m",
+        "culpritSummary": "no prefix change; 7.0m gap > 5m TTL",
+        "ttlTier": "5m"
+      }
+    },
+    "lookback_overflow": {
+      "prev": {
+        "model": "claude-opus-5",
+        "tools": [],
+        "system": [
+          {
+            "type": "text",
+            "text": "system prose",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "cur": {
+        "model": "claude-opus-5",
+        "tools": [],
+        "system": [
+          {
+            "type": "text",
+            "text": "system prose",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "prev2": null,
+      "timing": {
+        "cacheReadTokens": 0,
+        "cacheCreateTokens": 500000,
+        "ephemeral5mTokens": 0,
+        "ephemeral1hTokens": 20000,
+        "gapMs": 1000,
+        "blocksAddedSinceLastWrite": 25
+      },
+      "verdict": {
+        "cause": "LOOKBACK_OVERFLOW",
+        "culpritLayer": "message",
+        "culpritId": "lookback:overflow",
+        "culpritSummary": "unchanged prefix, zero cache_read: 25 block(s) appended since the last cache write > the 20-block lookback window",
+        "ttlTier": "none"
+      }
+    },
+    "lookback_under_window": {
+      "prev": {
+        "model": "claude-opus-5",
+        "tools": [],
+        "system": [
+          {
+            "type": "text",
+            "text": "system prose",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "cur": {
+        "model": "claude-opus-5",
+        "tools": [],
+        "system": [
+          {
+            "type": "text",
+            "text": "system prose",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "prev2": null,
+      "timing": {
+        "cacheReadTokens": 0,
+        "cacheCreateTokens": 500000,
+        "ephemeral5mTokens": 0,
+        "ephemeral1hTokens": 20000,
+        "gapMs": 1000,
+        "blocksAddedSinceLastWrite": 19
+      },
+      "verdict": {
+        "cause": "COLD_START",
+        "culpritLayer": "timing",
+        "culpritId": "timing:COLD_START",
+        "culpritSummary": "no cache_read this turn — nothing cached to break (cold warm)",
+        "ttlTier": "none"
+      }
+    },
+    "unclassified": {
+      "prev": {
+        "model": "claude-opus-5",
+        "tools": [],
+        "system": [
+          {
+            "type": "text",
+            "text": "system prose",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "cur": {
+        "model": "claude-opus-5",
+        "tools": [],
+        "system": [
+          {
+            "type": "text",
+            "text": "system prose",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "prev2": null,
+      "timing": {
+        "cacheReadTokens": 5000,
+        "cacheCreateTokens": 20000,
+        "ephemeral5mTokens": 0,
+        "ephemeral1hTokens": 20000,
+        "gapMs": 1000
+      },
+      "verdict": {
+        "cause": "UNCLASSIFIED",
+        "culpritLayer": "timing",
+        "culpritId": "timing:UNCLASSIFIED",
+        "culpritSummary": "unlocalised re-write",
+        "rawDiffSummary": "prefix byte-identical by fingerprint but cache_creation=20000; tools=0 sys=1 msg=1"
+      }
+    }
+  }
+}
