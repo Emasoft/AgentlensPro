@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-21T02:49:25+0200
+updated: 2026-08-21T03:28:13+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -1431,23 +1431,57 @@ release-via: publish
   **`blind='capture-off'` has NO oracle** — `investigateBurn`'s `bodiesDir` override hardcodes
   `captureOn:true`, so the branch is unreachable through the TS public API. Pinned by a Rust unit
   test and labelled as such; do not mistake it for oracle-verified.
-- **NEXT (P4x.2d continued): 9 of 53 remain.** Immediate: **`burnInvestigator` SLICE 2** —
-  detectors + assembly, TS ~235-440 (`clusterSpikes`, `reqsIn`, `detectStormsAndRewrites`,
-  `detectPremiumFanout`, `detectIdleKeepwarm`, `detectImageResidency`, then `investigateBurn`'s
-  findings/verdict composition and `attachCausingCalls`) → wires `investigate_burn` + `burn_seismic`.
-  Build on `burn::investigator_scan::ScanOutcome`; `SPIKE_CC`, `CLUSTER_MS`, `equiv_of` and `fmt_k`
-  are already exported for it. Extend `gen-burnscan-expected.mjs`'s SAME fixture corpus (the oracle
-  already stores the full `investigateBurn` output — `findings`/`verdict` are simply not compared
-  yet), so no fixture regeneration is needed beyond adding cases. `causingToolCall`
-  (`causingToolCalls`/`composition`/`SpawnCall`) → `burn/causing_tool_call.rs` ✓ is its last dep.
-  THEN `rateLimitReport` (134) → `cacheBreakTimeline` (1,927 → 2 tools:
+- **P4x.2f DONE (commit 01140e1): `burnInvestigator` SLICE 2 — detectors + assembly. 45 of 53.**
+  `burn/investigator.rs`: the 4 detectors, findings/verdict composition, `attach_causing_calls`,
+  and the wired `investigate_burn` arm. 417 tests, clippy 28. All 11 oracle cases match the TS
+  byte for byte including `findings` and `verdict`.
+  **⚠ RE-SIZED — the entry above was WRONG: `burn_seismic` is NOT in this module.** It comes from
+  `src/burnSeismic.ts`, a SEPARATE 1,004-line engine importing `ndjsonDuck` (no `.rs` counterpart)
+  and `projectSlug` — so it moves to the SQL-backed group at the end, and this slice wired ONE
+  tool, not two. FOURTH time the size-by-engine check corrected a queue entry; run it before
+  starting any handler, not after.
+  **Load-bearing, not style:**
+  - Key order is NOT uniform across findings and that IS the wire contract — `base`-spread findings
+    run `equivTokens, shareOfWindow, evidence, cause, confidence, verdict`; every other detector
+    leads with `cause`. Normalizing compares equal field-by-field and is wrong on the wire.
+  - Cluster equiv is `equivOf(cc, 0)` — a rewrite's bill IS its writes, so it differs from the
+    window's equiv deliberately.
+  - `attach_causing_calls` takes the findings array OUT and puts it BACK; iterating a `mem::take`d
+    temporary drops every mutation AND empties the array, turning a report with findings into one
+    without any. Written wrong here first, caught before it ran, now pinned by a test.
+  - `by_model` / `fams` / `attr` stay insertion-ordered Vecs — costs are float sums over them.
+  - The arm reports an unparseable `untilIso` as an EXPLICIT error payload, never a fallback to
+    "now": confident numbers about hours nobody asked for is the worse failure.
+  **KNOWN DIVERGENCE, deliberate:** the TS resolves a possibly-MULTI-dir scope via
+  `captureConfig.resolveBodiesReadScope` (live spool + legacy dir during a drain). Unported, so the
+  arm passes the single `default_bodies_dir`. `coverage.dirsScanned` reports exactly what was read,
+  so the report never implies wider coverage than it had. Porting that resolver is the one thing
+  that would close it.
+  **Falsified, 4 rules:** median-as-min; reporting floor `&&`→`||` (4 tests red, and
+  `every_burn_cause_…` NAMED the 4 causes that vanished); FORK_STORM key order normalized; the
+  `attach_causing_calls` write-back removed.
+  **⚠ TWO MORE HOLES FOUND AND CLOSED — same shape as slice 1's q8, a rule NO fixture could
+  observe.** (1) The idle corpus used UNIFORM gaps, so `gaps[len/2]` equalled min, max AND mean at
+  once and every wrong median passed; gaps are now `[70..3000]`, median 660 vs min 70 / max 3000 /
+  mean 698. (2) NO corpus reached the verdict's honesty clause (`attributedShare < 0.5`) and my
+  test asserted `main` did — it attributes 74%. `burnscan-partial/` now lands at 12.5%, between the
+  2% reporting floor and the 50% threshold, and is also the only single-spike cluster so it covers
+  `confidence:'low'`. **THE PATTERN: "all tests reddened" is NOT coverage.** Ask which fixture could
+  distinguish the rule, and if none can, build it.
+  **A FOURTH wrong assertion of mine against a correct port** (`main` under-attributes). The count
+  is now four; treat a failing new assertion beside a passing `same()` as evidence about the
+  assertion, always.
+- **NEXT (P4x.2d continued): 8 of 53 remain.** Immediate: **`rateLimitReport` (134)** — the
+  smallest remaining engine and the last one with no SQL/DuckDB dependency. THEN
+  `cacheBreakTimeline` (1,927 → 2 tools:
   `get_cache_break_timeline` + `get_cache_break_causes`, and it also unblocks the `groupBy='cause'`
   branch above) → `subscriptionUsage` (976, **NETWORK** — the oracle MUST stub the Anthropic usage
   endpoint; it is also the live TTL-regime oracle) → the 2 sql tools (`run_diagnostics_sql`,
-  `run_transcript_sql`) — and `compare_configs` NOW SITS WITH THEM, per the re-size above.
+  `run_transcript_sql`) — and `compare_configs` AND `burn_seismic` NOW SIT WITH THEM, per the two
+  re-sizes above (both need a SQL/DuckDB binding the crate lacks).
   **SIZE BY ENGINE: before starting any handler, grep its imports for a module with no `.rs`
-  counterpart** — that check caught `effortTransitions`, `residentCost`, and now
-  `forensicsDb`, and skipping it mis-sized this queue three times before that.
+  counterpart** — that check caught `effortTransitions`, `residentCost`, `forensicsDb`, and now
+  `burnSeismic`'s `ndjsonDuck`, and skipping it mis-sized this queue three times before that.
   **SUPERSEDED — do NOT carry forward:** every earlier "next up" ordering in this block (the
   handler-line-count orderings that named `handleGetCacheBreakReport` 81 / `handleGetCostByCause`
   82 / `handleGetContextInflationReport` 90 / `handleGetAgentTokens` 102 / `handleCheckCacheExpiry`
