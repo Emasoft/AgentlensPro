@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-21T01:52:37+0200
+updated: 2026-08-21T02:13:03+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -1357,13 +1357,23 @@ release-via: publish
   `scanRequest`, `djb2`, `looksLikeWorkspace`), landed as an ENGINE with its own parity test the
   way `cacheBreak.ts` and `effortTransitions.ts` were; **slice 2** = the detectors + assembly
   (TS ~260-632) which wires `investigate_burn` + `burn_seismic`.
-  **PREREQUISITE (own commit, first): promote `utf16_len` + `utf16_slice` into
-  `summarize::helpers`.** `scanRequest` slices by UTF-16 CODE UNITS (`text.slice(-256)` for the
-  chunk carry, `text.slice(i, i+2600)` for the fingerprint input) and `djb2` hashes via
-  `charCodeAt` — any divergence changes the fingerprint that identifies "same inherited
-  transcript". `utf16_len` is duplicated PRIVATELY in **7** agentlens-core files and core has **no
-  `utf16_slice` at all** (agentlens-logscan has a private one). Same one-source-of-truth move
-  already made for `js_to_fixed_str` and `pad_start`.
+  **PREREQUISITE — DONE (commit `bcd964e`): `utf16_len` + `js_slice_from` promoted into
+  `summarize::helpers`, SEVEN private `utf16_len` copies deleted.** They agreed by luck, not
+  construction (one had drifted to `encode_utf16().count()` — same answer, a second body to keep
+  in step forever). Needed because `scanRequest` slices by UTF-16 CODE UNITS (`text.slice(-256)`
+  carry, `text.slice(i, i+2600)` fingerprint input) and `djb2` hashes via `charCodeAt`.
+  **CORRECTS MY OWN NOTE FROM THE PREVIOUS TURN:** it said core had "no `utf16_slice` at all".
+  It does — **`js_slice(s, n)` IS `utf16_slice`**, under the JS name it ports. Verifying before
+  acting on my own handoff note is what caught it; otherwise a duplicate helper would have shipped
+  into the very commit whose purpose was removing duplicates.
+  The new `helpers.rs::utf16_tests` pin a DELIBERATE lossy edge nobody had written down: `js_slice`
+  and `js_slice_from` are complements at every boundary EXCEPT one inside a surrogate pair, where
+  **BOTH halves drop the char** (JS splits it into two lone surrogates that re-concatenate
+  losslessly; a Rust `&str` cannot hold one). Honest — a lone surrogate JSON-encodes to U+FFFD —
+  but invisible on ASCII and silently lossy on real text, so the 256-unit carry CAN lose an emoji
+  on the boundary. My first version of that test asserted they were complements EVERYWHERE and
+  failed against code with passing parity suites — **the second time this session a new assertion
+  of mine was wrong about behaviour the port had right.**
   Two further traps, each already paid for once upstream: `buf.toString('utf-8')` on a chunk
   boundary SPLITS a multi-byte character and Node emits U+FFFD, so `String::from_utf8_lossy` is
   the faithful port (re-joining the boundary "correctly" diverges the text AND the fingerprint) ·
