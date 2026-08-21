@@ -1,0 +1,9 @@
+{
+  "message": {
+    "model": "claude-mythos-5"
+  },
+  "usage": {
+    "input_tokens": 5,
+    "output_tokens": 6
+  }
+}

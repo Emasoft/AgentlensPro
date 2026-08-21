@@ -1,0 +1,29 @@
+{
+  "model": "claude-opus-5",
+  "thinking": {
+    "budget_tokens": 24576
+  },
+  "metadata": {
+    "user_id": "{\"device_id\":\"dddddddd\",\"account_uuid\":\"bbbbbbbb-1111-2222-3333-444444444444\",\"session_id\":\"aaaaaaaa-1111-2222-3333-444444444444\"}"
+  },
+  "diagnostics": {
+    "previous_message_id": "msg_aaaa"
+  },
+  "system": [
+    {
+      "type": "text",
+      "text": "Contents of /fixture/.claude/CLAUDE.md (project instructions):\nbe good"
+    }
+  ],
+  "tools": [
+    {
+      "name": "Bash"
+    }
+  ],
+  "messages": [
+    {
+      "role": "user",
+      "content": "hi"
+    }
+  ]
+}

@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-21T16:12:00+0200
+updated: 2026-08-21T17:15:50+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -1739,11 +1739,29 @@ release-via: publish
   the INPUT rate, never the `cacheReadPerMTok` column — equal on every Claude model, 5x apart on
   gpt-4o. Falsified: that mutation reddens gpt-4o by 5x AND the opus-5 case by ONE ULP
   (0.49999999999999994 vs 0.5), which is why parity asserts bit-equality and not an epsilon.
+- **SLICE B2 DONE — the bounded scan (`forensics_scan.rs`), TS 263-461.** `refFor`, `resolveTs`,
+  `selectRecent`, the previous_message_id join and `scanApiCallEvents`. Reuses the existing
+  `ScanCoverage` rather than declaring a twin. `InjectionRow` gained `#[derive(Clone)]`.
+  **MTIMES ARE INPUT, AND GIT DOES NOT PRESERVE THEM.** A spool `EvidenceRow` carries `ts_ms: None`,
+  so `resolve_ts` falls back to the file's mtime. Both generator and test STAMP them from a manifest,
+  and **every mtime is DISTINCT** — which also stops OS-dependent `read_dir` order leaking through
+  the stable ts-descending sort. Same "never pin a tie" lesson as the ORDER BY trap, third occurrence.
+  **THE WINDOW CANNOT BE ORACLE-TESTED:** `scanApiCallEvents` computes it from `Date.now()` with no
+  seam, so a fixture would pin the generator's wall clock (built that way it returned 0 events, the
+  mtimes being ~10 months old). Falsified natively instead, where `now_ms` is a parameter. The
+  committed runs touch `Date.now()` nowhere.
+  **THE FIXTURE STORES PATHS AS A `<FIX>` TOKEN.** Written verbatim its 14 absolute paths would have
+  failed `check-identities` at commit AND only matched on the machine that generated them.
+  Falsified: hashing `ref` instead of `src_name` moves the synthesized id on relocation (the recorded
+  double-counting bug); emitting `null` instead of OMITTING an absent optional breaks both the
+  key-order oracle and the unattributed test.
 - **NEXT (P4x.2d continued): 2 of 53 remain — `run_diagnostics_sql` and `compare_configs`.**
-  **Both still need SLICE B2-B4** — the bounded body scan (TS 263-461 `scanApiCallEvents` + the
-  previous_message_id join), `loadSpawnMap`/`resolveSpawn` (483-551), and
-  `indexApiCalls`/`ensureFreshIndex` (553-701). B1 (the fact store they all write into) is landed.
-  Then the two tools are shapers over it:
+  **Both still need SLICE B3-B4** — `loadSpawnMap`/`resolveSpawn` (TS 483-551, a rusqlite read of the
+  MAIN agentlens.db `sessions` table, degrading to an empty map so every call resolves 'unresolved'
+  rather than guessed) and `indexApiCalls`/`ensureFreshIndex` (553-701). B1 (the fact store) and B2
+  (the scan that feeds it) are landed. NOTE for B4: the TS `InjectionRow.tokens` is invariantly 0, and
+  the Rust struct omits the field while its `to_value()` emits `"tokens": 0` — the INSERT must supply
+  a literal 0, not read a field. Then the two tools are shapers over it:
   `run_diagnostics_sql` (`src/forensicsSql.ts`, 321) and `compare_configs`
   (`src/forensicsCompare.ts`, 253).
   **The fact-store engine question is DECIDED — keep SQLite, via `rusqlite`.** `forensicsIndex`

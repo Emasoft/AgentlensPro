@@ -77,6 +77,7 @@ pub mod burn_seismic;
 pub mod seismic_stats;
 pub mod forensics_index;
 pub mod forensics_db;
+pub mod forensics_scan;
 pub mod subscription_usage;
 pub mod summarize;
 pub mod token_estimator;

@@ -113,6 +113,7 @@ fn sha1_hex(text: &str) -> String {
 /// One attributed injection. `tokens` is deliberately 0: the co-occurrence stats rank on the CALL's
 /// cache/output tokens joined by call_id, not on injection tokens, and a per-injection split cannot
 /// be cleanly attributed out of one shared system block. A fabricated split would rank on itself.
+#[derive(Clone)]
 pub struct InjectionRow {
     pub kind: &'static str,
     pub name: String,

@@ -1,0 +1,14 @@
+{
+  "metadata": {
+    "user_id": "{\"device_id\":\"dddddddd\",\"account_uuid\":\"bbbbbbbb-1111-2222-3333-444444444444\",\"session_id\":\"cccccccc-1111-2222-3333-444444444444\"}"
+  },
+  "diagnostics": {
+    "previous_message_id": "msg_eeee"
+  },
+  "system": [
+    {
+      "type": "text",
+      "text": "plain"
+    }
+  ]
+}

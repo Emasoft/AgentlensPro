@@ -1,0 +1,191 @@
+{
+  "nowMs": 1760000000000,
+  "mtimes": {
+    "call1.request.json": 1759999400000,
+    "call1.response.json": 1759999460000,
+    "call2.response.json": 1759999520000,
+    "call3.response.json": 1759999580000,
+    "call4.response.json": 1759999640000,
+    "call5.request.json": 1759999700000,
+    "call5.response.json": 1759999760000,
+    "old.response.json": 1759827200000
+  },
+  "runs": [
+    {
+      "label": "no window",
+      "windowHours": null,
+      "scanCap": null,
+      "events": [
+        {
+          "callId": "msg_eeee",
+          "responseRef": "<FIX>/spool/call5.response.json",
+          "requestRef": "<FIX>/spool/call5.request.json",
+          "requestContentTags": [],
+          "ts": 1759999760000,
+          "sessionId": "cccccccc-1111-2222-3333-444444444444",
+          "accountUuid": "bbbbbbbb-1111-2222-3333-444444444444",
+          "model": "claude-opus-5",
+          "effort": "none",
+          "frontmatterFp": "ebd7a1bc1e47368c3cd8a11bf7a3737881ed5d22",
+          "inputTokens": 7,
+          "outputTokens": 8,
+          "cacheReadTokens": 0,
+          "cacheCreationTokens": 9,
+          "tier5mTokens": 0,
+          "tier1hTokens": 0,
+          "injections": [],
+          "attributed": true
+        },
+        {
+          "callId": "sha1:a54d60de55ad2d8a29cb3637ee9b8385e176cb36",
+          "responseRef": "<FIX>/spool/call4.response.json",
+          "ts": 1759999640000,
+          "model": "claude-mythos-5",
+          "effort": "none",
+          "inputTokens": 5,
+          "outputTokens": 6,
+          "cacheReadTokens": 0,
+          "cacheCreationTokens": 0,
+          "tier5mTokens": 0,
+          "tier1hTokens": 0,
+          "injections": [],
+          "attributed": false
+        },
+        {
+          "callId": "msg_bbbb",
+          "responseRef": "<FIX>/spool/call2.response.json",
+          "ts": 1759999520000,
+          "model": "claude-sonnet-5",
+          "effort": "none",
+          "inputTokens": 1,
+          "outputTokens": 2,
+          "cacheReadTokens": 3,
+          "cacheCreationTokens": 4,
+          "tier5mTokens": 0,
+          "tier1hTokens": 0,
+          "injections": [],
+          "attributed": false
+        },
+        {
+          "callId": "msg_aaaa",
+          "responseRef": "<FIX>/spool/call1.response.json",
+          "requestRef": "<FIX>/spool/call1.request.json",
+          "requestContentTags": [],
+          "ts": 1759999460000,
+          "sessionId": "aaaaaaaa-1111-2222-3333-444444444444",
+          "accountUuid": "bbbbbbbb-1111-2222-3333-444444444444",
+          "model": "claude-opus-5",
+          "effort": "medium",
+          "frontmatterFp": "4de17495069ca88f9e6fb2691f4a42f0c2c4b34c",
+          "inputTokens": 10,
+          "outputTokens": 20,
+          "cacheReadTokens": 30,
+          "cacheCreationTokens": 40,
+          "tier5mTokens": 25,
+          "tier1hTokens": 15,
+          "injections": [
+            {
+              "kind": "claudemd",
+              "name": "/fixture/.claude/CLAUDE.md",
+              "tokens": 0
+            }
+          ],
+          "attributed": true
+        },
+        {
+          "callId": "msg_dddd",
+          "responseRef": "<FIX>/spool/old.response.json",
+          "ts": 1759827200000,
+          "model": "claude-opus-5",
+          "effort": "none",
+          "inputTokens": 100,
+          "outputTokens": 200,
+          "cacheReadTokens": 0,
+          "cacheCreationTokens": 0,
+          "tier5mTokens": 0,
+          "tier1hTokens": 0,
+          "injections": [],
+          "attributed": false
+        }
+      ],
+      "coverage": {
+        "bodiesDir": "<FIX>/spool",
+        "dirExists": true,
+        "responseFilesTotal": 6,
+        "responseFilesScanned": 6,
+        "requestFilesTotal": 2,
+        "requestFilesIndexed": 2,
+        "scanCap": 4000,
+        "complete": true,
+        "note": "Scanned all 6 response body(ies) — 0 from the Parquet store, 6 from the raw spool (drained history stays in evidence)."
+      }
+    },
+    {
+      "label": "cap 2",
+      "windowHours": null,
+      "scanCap": 2,
+      "events": [
+        {
+          "callId": "msg_eeee",
+          "responseRef": "<FIX>/spool/call5.response.json",
+          "requestRef": "<FIX>/spool/call5.request.json",
+          "requestContentTags": [],
+          "ts": 1759999760000,
+          "sessionId": "cccccccc-1111-2222-3333-444444444444",
+          "accountUuid": "bbbbbbbb-1111-2222-3333-444444444444",
+          "model": "claude-opus-5",
+          "effort": "none",
+          "frontmatterFp": "ebd7a1bc1e47368c3cd8a11bf7a3737881ed5d22",
+          "inputTokens": 7,
+          "outputTokens": 8,
+          "cacheReadTokens": 0,
+          "cacheCreationTokens": 9,
+          "tier5mTokens": 0,
+          "tier1hTokens": 0,
+          "injections": [],
+          "attributed": true
+        },
+        {
+          "callId": "sha1:a54d60de55ad2d8a29cb3637ee9b8385e176cb36",
+          "responseRef": "<FIX>/spool/call4.response.json",
+          "ts": 1759999640000,
+          "model": "claude-mythos-5",
+          "effort": "none",
+          "inputTokens": 5,
+          "outputTokens": 6,
+          "cacheReadTokens": 0,
+          "cacheCreationTokens": 0,
+          "tier5mTokens": 0,
+          "tier1hTokens": 0,
+          "injections": [],
+          "attributed": false
+        }
+      ],
+      "coverage": {
+        "bodiesDir": "<FIX>/spool",
+        "dirExists": true,
+        "responseFilesTotal": 6,
+        "responseFilesScanned": 2,
+        "requestFilesTotal": 2,
+        "requestFilesIndexed": 2,
+        "scanCap": 2,
+        "complete": false,
+        "note": "SAMPLE: 2 most-recent of 6 matching response body(ies) (cap 2; 0 store / 2 spool). Not full history."
+      }
+    }
+  ],
+  "absent": {
+    "events": [],
+    "coverage": {
+      "bodiesDir": "<FIX>/nope",
+      "dirExists": false,
+      "responseFilesTotal": 0,
+      "responseFilesScanned": 0,
+      "requestFilesTotal": 0,
+      "requestFilesIndexed": 0,
+      "scanCap": 4000,
+      "complete": true,
+      "note": "No raw-body evidence: neither <FIX>/nope nor the Parquet store at <FIX>/no-such-store exists — set OTEL_LOG_RAW_API_BODIES to capture bodies."
+    }
+  }
+}

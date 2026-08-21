@@ -63,6 +63,13 @@ futures-core = "0.3"
 # lock via tokio; a direct dep so the calls are ours, not a transitive accident.
 libc = "0.2"
 
+[dev-dependencies]
+# forensics_scan's oracle stamps fixture mtimes on both sides: a spool EvidenceRow carries no
+# ts_ms, so resolve_ts falls back to the file's mtime — and git does not preserve mtimes, so a
+# checked-out fixture would otherwise carry whatever time the clone happened. std cannot SET an
+# mtime. Already in the lock via notify, so this adds no crate and no compile.
+filetime = "0.2"
+
 [[bin]]
 name = "alcore"
 path = "src/bin/alcore.rs"
