@@ -1,0 +1,8 @@
+{
+  "id": "msg_cccc",
+  "model": "claude-mythos-5",
+  "usage": {
+    "input_tokens": 1,
+    "output_tokens": 1
+  }
+}

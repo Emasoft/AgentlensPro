@@ -1,0 +1,151 @@
+{
+  "nowMsNote": "indexed_at / last_run_ms are Date.now() and are deliberately not pinned",
+  "mtimes": {
+    "a.request.json": 1759999460000,
+    "a.response.json": 1759999520000,
+    "b.response.json": 1759999580000,
+    "c.response.json": 1759999640000,
+    "d.response.json": 1759999700000
+  },
+  "inserted": 4,
+  "apiCalls": [
+    {
+      "call_id": "msg_aaaa",
+      "has_request_ref": 1,
+      "ts": 1759999520000,
+      "session_id": "aaaaaaaa-1111-2222-3333-444444444444",
+      "account_uuid": "bbbbbbbb-1111-2222-3333-444444444444",
+      "model": "claude-opus-5",
+      "effort": "low",
+      "spawn_kind": "task",
+      "subagent_type": "spark",
+      "spawn_model_override": "claude-opus-5",
+      "spawn_isolation": "worktree",
+      "is_sidechain": 1,
+      "parent_session": "eeeeeeee",
+      "spawn_resolution": "direct",
+      "input_tokens": 100,
+      "output_tokens": 200,
+      "cache_read_tokens": 300,
+      "cache_creation_tokens": 40,
+      "tier_5m_tokens": 25,
+      "tier_1h_tokens": 15,
+      "break_cause": null,
+      "culprit_fingerprint": null,
+      "gap_minutes": null,
+      "frontmatter_fp": "4f9949039660db014f14f122637a9501bf5776ef",
+      "cost_usd": 0.0059,
+      "billable_weight": 0.00595625
+    },
+    {
+      "call_id": "msg_bbbb",
+      "has_request_ref": 0,
+      "ts": 1759999580000,
+      "session_id": null,
+      "account_uuid": null,
+      "model": "claude-opus-5",
+      "effort": "none",
+      "spawn_kind": null,
+      "subagent_type": null,
+      "spawn_model_override": null,
+      "spawn_isolation": null,
+      "is_sidechain": 0,
+      "parent_session": null,
+      "spawn_resolution": "unresolved",
+      "input_tokens": 10,
+      "output_tokens": 20,
+      "cache_read_tokens": 0,
+      "cache_creation_tokens": 5000,
+      "tier_5m_tokens": 0,
+      "tier_1h_tokens": 0,
+      "break_cause": null,
+      "culprit_fingerprint": null,
+      "gap_minutes": null,
+      "frontmatter_fp": null,
+      "cost_usd": 0.0318,
+      "billable_weight": 0.0318
+    },
+    {
+      "call_id": "msg_cccc",
+      "has_request_ref": 0,
+      "ts": 1759999640000,
+      "session_id": null,
+      "account_uuid": null,
+      "model": "claude-mythos-5",
+      "effort": "none",
+      "spawn_kind": null,
+      "subagent_type": null,
+      "spawn_model_override": null,
+      "spawn_isolation": null,
+      "is_sidechain": 0,
+      "parent_session": null,
+      "spawn_resolution": "unresolved",
+      "input_tokens": 1,
+      "output_tokens": 1,
+      "cache_read_tokens": 0,
+      "cache_creation_tokens": 0,
+      "tier_5m_tokens": 0,
+      "tier_1h_tokens": 0,
+      "break_cause": null,
+      "culprit_fingerprint": null,
+      "gap_minutes": null,
+      "frontmatter_fp": null,
+      "cost_usd": 0.000059999999999999995,
+      "billable_weight": 0.00006
+    },
+    {
+      "call_id": "msg_dddd",
+      "has_request_ref": 0,
+      "ts": 1759999700000,
+      "session_id": null,
+      "account_uuid": null,
+      "model": "no-such-model-xyz",
+      "effort": "none",
+      "spawn_kind": null,
+      "subagent_type": null,
+      "spawn_model_override": null,
+      "spawn_isolation": null,
+      "is_sidechain": 0,
+      "parent_session": null,
+      "spawn_resolution": "unresolved",
+      "input_tokens": 1000,
+      "output_tokens": 1000,
+      "cache_read_tokens": 0,
+      "cache_creation_tokens": 1000,
+      "tier_5m_tokens": 0,
+      "tier_1h_tokens": 0,
+      "break_cause": null,
+      "culprit_fingerprint": null,
+      "gap_minutes": null,
+      "frontmatter_fp": null,
+      "cost_usd": 0,
+      "billable_weight": 0
+    }
+  ],
+  "callInjections": [
+    {
+      "call_id": "msg_aaaa",
+      "kind": "claudemd",
+      "name": "/fixture/.claude/CLAUDE.md",
+      "tokens": 0
+    }
+  ],
+  "indexState": [
+    {
+      "k": "coverage_note",
+      "v": "Scanned all 4 response body(ies) — 0 from the Parquet store, 4 from the raw spool (drained history stays in evidence)."
+    },
+    {
+      "k": "high_water_mtime_ms",
+      "v": "1759999700000"
+    },
+    {
+      "k": "responses_indexed",
+      "v": "4"
+    },
+    {
+      "k": "responses_total",
+      "v": "4"
+    }
+  ]
+}

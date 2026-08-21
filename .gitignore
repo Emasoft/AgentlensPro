@@ -65,3 +65,9 @@ agent-lens-export-*.json
 /.trashcan/*
 !/.trashcan/.gitkeep
 !/.trashcan/README.txt
+
+# gen-forensicsindexer-expected.mjs writes a main agentlens.db and a forensics.db beside its spool.
+# Both are regeneratable binaries whose only content is one sessions row and the indexed output; the
+# Rust parity test builds its own rather than reading them, so committing them would ship two binary
+# blobs nothing consumes.
+rust-core/crates/agentlens-core/tests/fixtures/forensicsindexer/*.db

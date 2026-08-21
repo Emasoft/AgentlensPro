@@ -1,0 +1,9 @@
+{
+  "id": "msg_dddd",
+  "model": "no-such-model-xyz",
+  "usage": {
+    "input_tokens": 1000,
+    "output_tokens": 1000,
+    "cache_creation_input_tokens": 1000
+  }
+}

@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-21T18:10:26+0200
+updated: 2026-08-21T18:48:39+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -1768,14 +1768,34 @@ release-via: publish
   `loadSpawnMap` is not oracled (an oracle would test sql.js's reader against rusqlite's, not the
   port); its three degradations — absent DB, no `sessions` table, and the un-migrated
   `spawn_subagent_type` column — are pinned natively, as is the skip of a NULL `session_id` row.
-- **NEXT (P4x.2d continued): 2 of 53 remain — `run_diagnostics_sql` and `compare_configs`.**
-  **Only SLICE B4 remains first** — `indexApiCalls`/`ensureFreshIndex` (TS 553-701): the
-  `AC_INSERT_SQL` upsert, `apiCallParams` (including the flat-`cache_creation`-to-5m-tier
-  synthesis for `billable_weight` only, NOT for the stored `tier_5m_tokens` column), the manual
-  child-row cascade, the monotonic high-water mark, and the freshness gate. B1 (fact store), B2
-  (scan) and B3 (spawn join) are landed. NOTE: the TS `InjectionRow.tokens` is invariantly 0, and the
-  Rust struct omits the field while its `to_value()` emits `"tokens": 0` — the INSERT must supply a
-  literal 0, not read a field. Then the two tools are shapers over it:
+- **SLICE B4 DONE — the indexer (`index_api_calls` / `ensure_fresh_index`, TS 553-701), in
+  `forensics_scan.rs`. `forensicsIndex` IS NOW FULLY PORTED (B1+B2+B3+B4).**
+  **THE ORACLE COMPARES WHAT LANDS IN THE TABLES, not a return value** — the indexer's whole product
+  is the fact rows the last two tools query. `indexed_at`/`last_run_ms` are excluded as the only
+  `Date.now()` values written.
+  **THE FLAT-`cache_creation` SYNTHESIS IS THE HEADLINE TRAP.** A response can carry a flat total
+  with no tier sub-object, leaving both tiers 0; the WEIGHT must attribute it to the 5-minute tier or
+  `billable_weight` disagrees with `cost_usd`, which already counts it. The STORED `tier_5m_tokens`
+  column stays 0 — only the weight sees the synthesized value. Falsified: dropping the synthesis
+  gives weight 0.00055 against cost 0.0318, a **58x undercount**, which is exactly the documented
+  failure of "worst config" rankings missing the cache-write-heavy configs they exist to find.
+  **ITS OWN SPOOL FIXTURE, deliberately not B2's:** B2's contains `claude-sonnet-5`, the one model
+  with a `scheduledChange`. B2 computed no cost so it did not matter; B4 writes `cost_usd`, and
+  `calcTokenCostUsd` resolves rates against `Date.now()` with no seam, so those numbers would have
+  changed on 2026-09-01.
+  **THE SPAWN JOIN IS TESTED AGAINST A REAL `sessions` ROW, not an empty map** — with an empty map
+  every spawn column is null and a column-ORDER slip in the 28-placeholder INSERT is invisible.
+  The generator's `agentlens.db` and `forensics.db` are GITIGNORED: regeneratable binaries nothing
+  consumes, since the Rust test builds its own.
+  Also pinned: a re-index REPLACES rather than duplicates (the parent is replaced, so ON DELETE
+  CASCADE never fires for it — the manual child DELETE is what stops rows accumulating); the
+  high-water mark never moves backwards; and a DB that exists but never completed a run is NOT fresh
+  (`last_run_ms > 0` is the guard, or a failed first index caches as success for a whole window).
+- **NEXT (P4x.2d continued): 2 of 53 remain — `run_diagnostics_sql` and `compare_configs`, and
+  NOTHING BLOCKS THEM ANY MORE.** `forensicsIndex` is fully ported, so both are now shapers over the
+  fact tables: `run_diagnostics_sql` (`src/forensicsSql.ts`, 321) hands RAW caller SQL to
+  `open_readonly_snapshot` (which is why the engine stayed SQLite), and `compare_configs`
+  (`src/forensicsCompare.ts`, 253). Both call `ensureFreshIndex` before answering.
   `run_diagnostics_sql` (`src/forensicsSql.ts`, 321) and `compare_configs`
   (`src/forensicsCompare.ts`, 253).
   **The fact-store engine question is DECIDED — keep SQLite, via `rusqlite`.** `forensicsIndex`

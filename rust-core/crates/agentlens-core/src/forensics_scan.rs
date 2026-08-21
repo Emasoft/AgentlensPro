@@ -17,6 +17,7 @@ use std::path::{Path, PathBuf};
 
 use agentlens_store::bodies_evidence::{list_body_evidence, load_body_texts, EvidenceFilter, EvidenceRow};
 use indexmap::IndexMap;
+use rusqlite::Connection;
 use serde_json::{Map, Value};
 use sha1::{Digest, Sha1};
 
@@ -24,6 +25,11 @@ use crate::cache_creation_forensics::{
     ScanCoverage, MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES, REQUEST_INDEX_CAP, RESPONSE_SCAN_CAP,
 };
 use crate::context_composition_index::build_call_composition;
+use crate::forensics_db::{
+    billable_weight, load_spawn_map, open_forensics_db, read_index_state, resolve_spawn,
+    write_index_state,
+};
+use crate::pricing::calc_token_cost_usd;
 use crate::forensics_index::{
     classify_effort, compute_frontmatter_fp, derive_content_tags, extract_injections, InjectionRow,
 };
@@ -251,6 +257,207 @@ impl ApiCallEvent {
         m.insert("attributed".into(), Value::Bool(self.attributed));
         Value::Object(m)
     }
+}
+
+// ── SLICE B4: the indexer (TS 553-701) ──────────────────────────────────────────
+
+const AC_INSERT_SQL: &str = "INSERT OR REPLACE INTO api_calls (
+  call_id, response_ref, request_ref, ts,
+  session_id, account_uuid, model, effort,
+  spawn_kind, subagent_type, spawn_model_override, spawn_isolation, is_sidechain, parent_session, spawn_resolution,
+  input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, tier_5m_tokens, tier_1h_tokens,
+  break_cause, culprit_fingerprint, gap_minutes, frontmatter_fp, cost_usd, billable_weight, indexed_at
+) VALUES (
+  ?1, ?2, ?3, ?4,
+  ?5, ?6, ?7, ?8,
+  ?9, ?10, ?11, ?12, ?13, ?14, ?15,
+  ?16, ?17, ?18, ?19, ?20, ?21,
+  ?22, ?23, ?24, ?25, ?26, ?27, ?28
+)";
+
+pub struct IndexApiCallsResult {
+    pub inserted: usize,
+    pub coverage: ScanCoverage,
+    pub high_water_ms: f64,
+}
+
+/// Index the bounded slice of API-call facts into forensics.db. Idempotent: keyed on call_id via
+/// INSERT OR REPLACE, so re-running is safe and a previously-unresolved spawn is re-resolved once
+/// the sessions table catches up.
+///
+/// `break_cause` / `culprit_fingerprint` / `gap_minutes` stay NULL until the optional
+/// cacheBreakTimeline dependency lands — the TS says the same, and writing a placeholder would make
+/// an absent analysis look like a computed one.
+pub fn index_api_calls(
+    conn: &mut Connection,
+    opts: &ScanApiCallOptions,
+    main_db_path: &Path,
+    with_injections: bool,
+    now_ms: f64,
+) -> Result<IndexApiCallsResult, rusqlite::Error> {
+    let (events, coverage) = scan_api_call_events(opts, now_ms);
+    let spawn_map = load_spawn_map(main_db_path);
+    let mut high_water = 0.0_f64;
+    let mut inserted = 0usize;
+
+    // One transaction for the whole batch: a partially-indexed DB whose index_state claims a
+    // completed run is worse than no run, because the freshness gate would then skip the repair.
+    let tx = conn.transaction()?;
+    for ev in &events {
+        let spawn = resolve_spawn(ev.session_id.as_deref(), &spawn_map);
+        let model = ev.model.as_deref();
+        let cost_usd = match model {
+            // The TS calls the 5-ARG calcTokenCostUsd, whose trailing 1h argument defaults to 0.
+            Some(m) => calc_token_cost_usd(
+                ev.input_tokens,
+                ev.cache_read_tokens,
+                ev.cache_creation_tokens,
+                ev.output_tokens,
+                m,
+                0.0,
+                None,
+                now_ms,
+            ),
+            None => 0.0,
+        };
+        // A response can carry a FLAT cache_creation total with no tier sub-object, leaving both
+        // tiers 0. Attribute that flat total to the 5-minute tier for the WEIGHT only, so the
+        // priciest bucket is counted instead of dropped — otherwise billable_weight disagrees with
+        // cost_usd (which already uses the flat total) and every "worst config" ranking undercounts
+        // cache-write-heavy configs. The STORED tier_5m_tokens column below is left as-is: only the
+        // weight computation sees the synthesized value.
+        let weight_tier_5m = if ev.tier_5m_tokens == 0.0 && ev.tier_1h_tokens == 0.0 && ev.cache_creation_tokens > 0.0 {
+            ev.cache_creation_tokens
+        } else {
+            ev.tier_5m_tokens
+        };
+        let weight = billable_weight(
+            weight_tier_5m,
+            ev.tier_1h_tokens,
+            ev.cache_read_tokens,
+            ev.output_tokens,
+            ev.input_tokens,
+            model,
+            now_ms,
+        );
+        tx.execute(
+            AC_INSERT_SQL,
+            rusqlite::params![
+                ev.call_id,
+                ev.response_ref,
+                ev.request_ref,
+                ev.ts,
+                ev.session_id,
+                ev.account_uuid,
+                model,
+                ev.effort,
+                spawn.spawn_kind,
+                spawn.subagent_type,
+                spawn.spawn_model_override,
+                spawn.spawn_isolation,
+                spawn.is_sidechain,
+                spawn.parent_session,
+                spawn.spawn_resolution,
+                ev.input_tokens,
+                ev.output_tokens,
+                ev.cache_read_tokens,
+                ev.cache_creation_tokens,
+                ev.tier_5m_tokens,
+                ev.tier_1h_tokens,
+                Option::<String>::None, // break_cause
+                Option::<String>::None, // culprit_fingerprint
+                Option::<f64>::None,    // gap_minutes
+                ev.frontmatter_fp,
+                cost_usd,
+                weight,
+                now_ms,
+            ],
+        )?;
+        // Manual cascade. Under rusqlite `PRAGMA foreign_keys = ON` genuinely fires ON DELETE
+        // CASCADE, but the parent is REPLACED rather than deleted here, so the children of the old
+        // row would survive on their own: clearing them first is what makes a re-index leave no
+        // stale content/injection rows.
+        if with_injections {
+            tx.execute("DELETE FROM call_injections WHERE call_id = ?1", [&ev.call_id])?;
+            for r in &ev.injections {
+                tx.execute(
+                    "INSERT OR REPLACE INTO call_injections (call_id, kind, name, tokens) VALUES (?1, ?2, ?3, ?4)",
+                    // A literal 0: the TS InjectionRow.tokens is invariantly 0 (a per-injection
+                    // split cannot be attributed out of one shared system block, and a fabricated
+                    // one would rank on itself), and the Rust struct omits the field entirely.
+                    rusqlite::params![ev.call_id, r.kind, r.name, 0],
+                )?;
+            }
+        }
+        if opts.with_content {
+            tx.execute("DELETE FROM call_content WHERE call_id = ?1", [&ev.call_id])?;
+            for t in ev.request_content_tags.as_deref().unwrap_or(&[]) {
+                tx.execute(
+                    "INSERT OR REPLACE INTO call_content (call_id, tag, tokens, count) VALUES (?1, ?2, ?3, ?4)",
+                    rusqlite::params![
+                        ev.call_id,
+                        t.get("tag").and_then(Value::as_str).unwrap_or(""),
+                        num_or0(t.get("tokens")),
+                        num_or0(t.get("count")),
+                    ],
+                )?;
+            }
+        }
+        inserted += 1;
+        if ev.ts > high_water {
+            high_water = ev.ts;
+        }
+    }
+    tx.commit()?;
+
+    // The high-water mark advances MONOTONICALLY toward the present: a prior deeper run is never
+    // rolled back by a later shallower one.
+    let prev_hw = read_index_state(conn, "high_water_mtime_ms")
+        .and_then(|s| s.parse::<f64>().ok())
+        .unwrap_or(0.0);
+    let new_hw = prev_hw.max(high_water);
+    write_index_state(conn, "high_water_mtime_ms", &js_num(new_hw))?;
+    write_index_state(conn, "last_run_ms", &js_num(now_ms))?;
+    write_index_state(conn, "responses_indexed", &coverage.response_files_scanned.to_string())?;
+    write_index_state(conn, "responses_total", &coverage.response_files_total.to_string())?;
+    write_index_state(conn, "coverage_note", &coverage.note)?;
+
+    Ok(IndexApiCallsResult { inserted, coverage, high_water_ms: new_hw })
+}
+
+/// `String(n)` for a value the TS holds as a JS number — an integral f64 must render as "17", never
+/// "17.0", or the stored index_state string differs from the TS's and a later parse round-trips to a
+/// different literal.
+fn js_num(v: f64) -> String {
+    crate::summarize::helpers::js_string(&num(v))
+}
+
+/// Re-index only when the fact DB is missing or its last run is older than `max_age_ms` (default 5
+/// minutes in the TS). This is what the MCP tools call before answering: the first query pays the
+/// index cost and later queries inside the freshness window reuse the cached facts.
+pub fn ensure_fresh_index(
+    db_path: &Path,
+    opts: &ScanApiCallOptions,
+    main_db_path: &Path,
+    with_injections: bool,
+    max_age_ms: f64,
+    force: bool,
+    now_ms: f64,
+) -> Result<Option<IndexApiCallsResult>, rusqlite::Error> {
+    if !force && db_path.exists() {
+        let probe = open_forensics_db(db_path, now_ms)?;
+        let last = read_index_state(&probe, "last_run_ms")
+            .and_then(|s| s.parse::<f64>().ok())
+            .unwrap_or(0.0);
+        drop(probe);
+        // `last > 0` matters: a DB that exists but has never completed a run must NOT be treated as
+        // fresh, or a failed first index would be cached as success for the whole window.
+        if last > 0.0 && now_ms - last < max_age_ms {
+            return Ok(None);
+        }
+    }
+    let mut conn = open_forensics_db(db_path, now_ms)?;
+    index_api_calls(&mut conn, opts, main_db_path, with_injections, now_ms).map(Some)
 }
 
 pub struct ScanApiCallOptions {
