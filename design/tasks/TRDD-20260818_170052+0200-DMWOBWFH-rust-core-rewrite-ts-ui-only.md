@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-21T08:57:45+0200
+updated: 2026-08-21T10:25:42+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -1622,11 +1622,49 @@ release-via: publish
   **Unobservable single-process, stated rather than faked:** the TOCTOU re-check under the lock
   cannot be exercised by a single-threaded oracle (nothing changes between the two reads). It is
   ported and commented; no fixture claims to cover it.
-- **NEXT (P4x.2d continued): 4 of 53 remain — the SQL group, and EVERY ONE needs a SQL binding.**
-  ~~Immediate: `cacheBreakTimeline`~~ ~~then `subscriptionUsage`~~ **— BOTH LANDED; what is left is
-  `run_diagnostics_sql`, `run_transcript_sql`, `compare_configs`, `burn_seismic`. DuckDB is
-  available (`agentlens-store` bundles it and `agentlens-core` depends on that crate), so "needs
-  SQL" is not blocked.** (historical: 1,927 → 2 tools:
+- **P4x.2o DONE (commit c2d530b): `run_transcript_sql` → `agentlens-store::transcript_sql`. 50 of
+  53.** It lives in the STORE crate because that crate owns the DuckDB binding and `core` already
+  depends on it; the other way round adds a second native dependency edge for one engine.
+  **THE ORACLE OVERTURNED THE OBVIOUS IMPLEMENTATION TWICE, and both would have been wrong across
+  the whole preset library.** `getRowObjectsJson()` renders INTEGER as a JSON **number** but BIGINT
+  as a **string**; DECIMAL is a string (scale kept, `"-12.340"`) while DOUBLE and FLOAT are numbers.
+  Every `count(*)`/`sum(...)` in a preset is BIGINT. A `type_probe` case pins one column per type —
+  and it had to be pinned TWICE, because a bare `1.5` is DECIMAL, not DOUBLE, so the first
+  measurement concluded "DOUBLE is a string" while DOUBLE had never been tested at all. **Read
+  nested cells from the OWNED `duckdb::types::Value`, not `ValueRef`** — the owned form has already
+  materialized LIST/STRUCT, turning them into two recursive lines instead of Arrow downcasts.
+  **A FIXTURE THAT ASSERTED WHAT NO ENGINE PROMISES:** three record types shared a count and
+  `record_type_histogram` orders by count — ORDER BY ties are unspecified, and the two DuckDB builds
+  broke the tie differently. Counts are now all distinct. **Never pin a tie.**
+  Four falsifications redden: non-recursive walk, BIGINT-as-number, `LIMIT` without the +1 probe,
+  and the torn-line probe counting rows instead of TYPED rows.
+- **P4x.2p DONE (commit 4fa48c5): `forensicsIndex` SLICE A — the pure half.** `classifyEffort`,
+  `computeFrontmatterFp`, `extractInjections`, `deriveContentTags` →
+  `agentlens-core::forensics_index`. No tool-count change; it is the shared prerequisite of the last
+  two SQL tools. New dep `sha1` (tiny, RustCrypto) — the fingerprint's algorithm is part of the
+  on-wire value, so it must be sha1, not merely "some digest".
+  **A FALSIFICATION THAT WAS A NO-OP, recorded instead of papered over:** the TS spells the MCP
+  server repetition LAZY (`*?`) and flipping it to greedy changes NO output on any input — each
+  repetition is `_` + `[^_]+`, which cannot consume a second underscore, so the first `__` ends the
+  group either way. The comment had claimed the laziness was load-bearing. Two boundary cases now
+  pin what the quantifier actually decides (`mcp__srv__tool__extra` → `mcp__srv`).
+  **The identity gate matches the SHAPE of a home path**, so the fixture's invented `/home/u/…` rule
+  paths failed it — rerooted at `/fixture` and `Z:\fixture`. A guard keyed on the real account would
+  have passed this and gone blind on the next one.
+- **NEXT (P4x.2d continued): 3 of 53 remain — `run_diagnostics_sql`, `compare_configs`,
+  `burn_seismic`.**
+  **`burn_seismic` (1004 lines, CFAR/FDR/Poisson statistics) is INDEPENDENT of everything below and
+  should be sliced next** — it reads transcripts and bodies directly, not the fact tables.
+  **The other two are BLOCKED ON ONE DECISION, and it is open:** `forensicsIndex` SLICE B writes
+  fact tables (`api_calls`, `injections`, `content`) that both then query — today via **sql.js
+  SQLite** (`src/forensicsDb.ts`), where `defaultMainDb()` is `<dataDir>/agentlens.db`, the
+  product's MAIN sessions DB, whose `sessions` table `loadSpawnMap` reads. The Rust workspace has
+  **DuckDB and no SQLite crate**. Options: (A) DuckDB — zero new deps, different dialect for the
+  RAW caller SQL `run_diagnostics_sql` accepts; (B) add rusqlite — same file, same dialect;
+  (C) something else. **The deciding question is whether the main-DB `sessions` read forces a SQLite
+  reader into the Rust binary REGARDLESS — if it does, (B)'s marginal cost is zero and that settles
+  it.** A fable-advisor consult was dispatched on exactly this; decide when it returns, and record
+  the answer here before writing SLICE B. (historical: 1,927 → 2 tools:
   `get_cache_break_timeline` + `get_cache_break_causes`, and it also unblocks the `groupBy='cause'`
   branch above). **SLICE IT IN FOUR — 1,927 lines will not fit one context alongside an oracle and
   a parity test.** The seams are already clean in the TS, by line:
