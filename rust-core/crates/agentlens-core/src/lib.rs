@@ -73,6 +73,7 @@ pub mod skill_attribution;
 pub mod span_window;
 pub mod spawn_rollup;
 pub mod statusline_store;
+pub mod burn_seismic;
 pub mod forensics_index;
 pub mod subscription_usage;
 pub mod summarize;

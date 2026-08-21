@@ -1,0 +1,737 @@
+{
+  "cases": {
+    "reason_no_files": {
+      "windowSinceIso": "2026-08-21 02:00:00",
+      "bucketMinutes": 5,
+      "filesAnalysed": 42,
+      "totalUsd": 123.456,
+      "totalWriteUsd": 80.5,
+      "totalReadUsd": 30.25,
+      "totalOutputUsd": 12.706,
+      "totalTurns": 1234,
+      "bucketCount": 240,
+      "baseline": {
+        "median": 0.125,
+        "mad": 0.0625
+      },
+      "poissonLambda": 5.142857,
+      "intensityBaseline": {
+        "median": -1.5,
+        "mad": 0.75
+      },
+      "rateLaw": "negative-binomial",
+      "dispersionIndex": 3.14159,
+      "fdrAlpha": 0.05,
+      "fdrMethod": "bh",
+      "fdrThreshold": 0.000123456,
+      "fdrSignificantCount": 7,
+      "calibration": {
+        "alpha": 0.05,
+        "observedBackgroundShare": 0.0612,
+        "pi0": 0.83,
+        "nullAttributableShare": 0.41,
+        "upperUniformity": 1.06
+      },
+      "localBaseline": {
+        "reference": 30,
+        "guard": 3,
+        "trim": 0.2,
+        "fallbackShare": 0.125
+      },
+      "pvalueEngine": "internal",
+      "dominantModeOverall": "CACHE_THRASH",
+      "verdict": "one workspace drove 68% of the excess",
+      "changePoints": [
+        "2026-08-21 03:05:00",
+        "2026-08-21 04:10:00"
+      ],
+      "peltChangepoints": [
+        "2026-08-21 03:00:00"
+      ],
+      "events": [],
+      "sessions": [],
+      "spawnsInMainshock": [],
+      "buckets": [],
+      "reason": "no-files"
+    },
+    "reason_duckdb": {
+      "windowSinceIso": "2026-08-21 02:00:00",
+      "bucketMinutes": 5,
+      "filesAnalysed": 42,
+      "totalUsd": 123.456,
+      "totalWriteUsd": 80.5,
+      "totalReadUsd": 30.25,
+      "totalOutputUsd": 12.706,
+      "totalTurns": 1234,
+      "bucketCount": 240,
+      "baseline": {
+        "median": 0.125,
+        "mad": 0.0625
+      },
+      "poissonLambda": 5.142857,
+      "intensityBaseline": {
+        "median": -1.5,
+        "mad": 0.75
+      },
+      "rateLaw": "negative-binomial",
+      "dispersionIndex": 3.14159,
+      "fdrAlpha": 0.05,
+      "fdrMethod": "bh",
+      "fdrThreshold": 0.000123456,
+      "fdrSignificantCount": 7,
+      "calibration": {
+        "alpha": 0.05,
+        "observedBackgroundShare": 0.0612,
+        "pi0": 0.83,
+        "nullAttributableShare": 0.41,
+        "upperUniformity": 1.06
+      },
+      "localBaseline": {
+        "reference": 30,
+        "guard": 3,
+        "trim": 0.2,
+        "fallbackShare": 0.125
+      },
+      "pvalueEngine": "internal",
+      "dominantModeOverall": "CACHE_THRASH",
+      "verdict": "one workspace drove 68% of the excess",
+      "changePoints": [
+        "2026-08-21 03:05:00",
+        "2026-08-21 04:10:00"
+      ],
+      "peltChangepoints": [
+        "2026-08-21 03:00:00"
+      ],
+      "events": [],
+      "sessions": [],
+      "spawnsInMainshock": [],
+      "buckets": [],
+      "reason": "duckdb-unavailable",
+      "mainshock": {
+        "fromIso": "2026-08-21 03:00:00",
+        "toIso": "2026-08-21 03:25:00",
+        "durMin": 25,
+        "costUsd": 41.5,
+        "excessUsd": 33.25,
+        "writeUsd": 30,
+        "readUsd": 8,
+        "outputUsd": 3.5,
+        "turns": 96,
+        "peakUsd": 12.75,
+        "peakIso": "2026-08-21 03:10:00",
+        "peakModZ": 8.42,
+        "peakStaLta": 6.1,
+        "minP": 0.0000012345,
+        "minPRate": 0.00004,
+        "minPIntensity": 0.002,
+        "magnitude": 4.25,
+        "dominantMode": "CACHE_THRASH",
+        "cause": "FAT_TURN_THRASH",
+        "culprits": []
+      }
+    },
+    "no_mainshock": {
+      "windowSinceIso": "2026-08-21 02:00:00",
+      "bucketMinutes": 5,
+      "filesAnalysed": 42,
+      "totalUsd": 123.456,
+      "totalWriteUsd": 80.5,
+      "totalReadUsd": 30.25,
+      "totalOutputUsd": 12.706,
+      "totalTurns": 1234,
+      "bucketCount": 240,
+      "baseline": {
+        "median": 0.125,
+        "mad": 0.0625
+      },
+      "poissonLambda": 5.142857,
+      "intensityBaseline": {
+        "median": -1.5,
+        "mad": 0.75
+      },
+      "rateLaw": "negative-binomial",
+      "dispersionIndex": 3.14159,
+      "fdrAlpha": 0.05,
+      "fdrMethod": "bh",
+      "fdrThreshold": 0.000123456,
+      "fdrSignificantCount": 7,
+      "calibration": {
+        "alpha": 0.05,
+        "observedBackgroundShare": 0.0612,
+        "pi0": 0.83,
+        "nullAttributableShare": 0.41,
+        "upperUniformity": 1.06
+      },
+      "localBaseline": {
+        "reference": 30,
+        "guard": 3,
+        "trim": 0.2,
+        "fallbackShare": 0.125
+      },
+      "pvalueEngine": "internal",
+      "dominantModeOverall": "CACHE_THRASH",
+      "verdict": "one workspace drove 68% of the excess",
+      "changePoints": [
+        "2026-08-21 03:05:00",
+        "2026-08-21 04:10:00"
+      ],
+      "peltChangepoints": [
+        "2026-08-21 03:00:00"
+      ],
+      "events": [],
+      "sessions": [],
+      "spawnsInMainshock": [],
+      "buckets": []
+    },
+    "nulls_everywhere": {
+      "windowSinceIso": "2026-08-21 02:00:00",
+      "bucketMinutes": 5,
+      "filesAnalysed": 42,
+      "totalUsd": 123.456,
+      "totalWriteUsd": 80.5,
+      "totalReadUsd": 30.25,
+      "totalOutputUsd": 12.706,
+      "totalTurns": 1234,
+      "bucketCount": 240,
+      "baseline": {
+        "median": 0.125,
+        "mad": 0.0625
+      },
+      "poissonLambda": 5.142857,
+      "intensityBaseline": {
+        "median": -1.5,
+        "mad": 0.75
+      },
+      "rateLaw": "poisson",
+      "dispersionIndex": 3.14159,
+      "fdrAlpha": 0.05,
+      "fdrMethod": "by",
+      "fdrThreshold": 0.000123456,
+      "fdrSignificantCount": 7,
+      "calibration": {
+        "alpha": 0.05,
+        "observedBackgroundShare": null,
+        "pi0": null,
+        "nullAttributableShare": null,
+        "upperUniformity": null
+      },
+      "localBaseline": null,
+      "pvalueEngine": "stochastic",
+      "dominantModeOverall": "CACHE_THRASH",
+      "verdict": "",
+      "changePoints": [],
+      "peltChangepoints": [],
+      "events": [],
+      "sessions": [],
+      "spawnsInMainshock": [],
+      "buckets": []
+    },
+    "background_without_pi0": {
+      "windowSinceIso": "2026-08-21 02:00:00",
+      "bucketMinutes": 5,
+      "filesAnalysed": 42,
+      "totalUsd": 123.456,
+      "totalWriteUsd": 80.5,
+      "totalReadUsd": 30.25,
+      "totalOutputUsd": 12.706,
+      "totalTurns": 1234,
+      "bucketCount": 240,
+      "baseline": {
+        "median": 0.125,
+        "mad": 0.0625
+      },
+      "poissonLambda": 5.142857,
+      "intensityBaseline": {
+        "median": -1.5,
+        "mad": 0.75
+      },
+      "rateLaw": "negative-binomial",
+      "dispersionIndex": 3.14159,
+      "fdrAlpha": 0.05,
+      "fdrMethod": "bh",
+      "fdrThreshold": 0.000123456,
+      "fdrSignificantCount": 7,
+      "calibration": {
+        "alpha": 0.05,
+        "observedBackgroundShare": 0.5,
+        "pi0": null,
+        "nullAttributableShare": null,
+        "upperUniformity": null
+      },
+      "localBaseline": {
+        "reference": 30,
+        "guard": 3,
+        "trim": 0.2,
+        "fallbackShare": 0.125
+      },
+      "pvalueEngine": "internal",
+      "dominantModeOverall": "CACHE_THRASH",
+      "verdict": "one workspace drove 68% of the excess",
+      "changePoints": [
+        "2026-08-21 03:05:00",
+        "2026-08-21 04:10:00"
+      ],
+      "peltChangepoints": [
+        "2026-08-21 03:00:00"
+      ],
+      "events": [],
+      "sessions": [],
+      "spawnsInMainshock": [],
+      "buckets": []
+    },
+    "zero_total": {
+      "windowSinceIso": "2026-08-21 02:00:00",
+      "bucketMinutes": 5,
+      "filesAnalysed": 42,
+      "totalUsd": 0,
+      "totalWriteUsd": 0,
+      "totalReadUsd": 0,
+      "totalOutputUsd": 0,
+      "totalTurns": 1234,
+      "bucketCount": 240,
+      "baseline": {
+        "median": 0.125,
+        "mad": 0.0625
+      },
+      "poissonLambda": 5.142857,
+      "intensityBaseline": {
+        "median": -1.5,
+        "mad": 0.75
+      },
+      "rateLaw": "negative-binomial",
+      "dispersionIndex": 3.14159,
+      "fdrAlpha": 0.05,
+      "fdrMethod": "bh",
+      "fdrThreshold": 0.000123456,
+      "fdrSignificantCount": 7,
+      "calibration": {
+        "alpha": 0.05,
+        "observedBackgroundShare": 0.0612,
+        "pi0": 0.83,
+        "nullAttributableShare": 0.41,
+        "upperUniformity": 1.06
+      },
+      "localBaseline": {
+        "reference": 30,
+        "guard": 3,
+        "trim": 0.2,
+        "fallbackShare": 0.125
+      },
+      "pvalueEngine": "internal",
+      "dominantModeOverall": "CACHE_THRASH",
+      "verdict": "one workspace drove 68% of the excess",
+      "changePoints": [
+        "2026-08-21 03:05:00",
+        "2026-08-21 04:10:00"
+      ],
+      "peltChangepoints": [
+        "2026-08-21 03:00:00"
+      ],
+      "events": [
+        {
+          "fromIso": "2026-08-21 03:00:00",
+          "toIso": "2026-08-21 03:25:00",
+          "durMin": 25,
+          "costUsd": 0,
+          "excessUsd": 33.25,
+          "writeUsd": 30,
+          "readUsd": 8,
+          "outputUsd": 3.5,
+          "turns": 96,
+          "peakUsd": 12.75,
+          "peakIso": "2026-08-21 03:10:00",
+          "peakModZ": 8.42,
+          "peakStaLta": 6.1,
+          "minP": 0.0000012345,
+          "minPRate": 0.00004,
+          "minPIntensity": 0.002,
+          "magnitude": 4.25,
+          "dominantMode": "CACHE_THRASH",
+          "cause": "FAT_TURN_THRASH",
+          "culprits": []
+        }
+      ],
+      "sessions": [
+        {
+          "session": "aaaaaaaabbbb",
+          "project": "p",
+          "costUsd": 0,
+          "writeUsd": 0,
+          "readUsd": 0,
+          "outputUsd": 0,
+          "turns": 0,
+          "maxPrefixTokens": 0,
+          "eventExcessUsd": 0
+        }
+      ],
+      "spawnsInMainshock": [],
+      "buckets": [],
+      "mainshock": {
+        "fromIso": "2026-08-21 03:00:00",
+        "toIso": "2026-08-21 03:25:00",
+        "durMin": 25,
+        "costUsd": 0,
+        "excessUsd": 33.25,
+        "writeUsd": 0,
+        "readUsd": 0,
+        "outputUsd": 0,
+        "turns": 96,
+        "peakUsd": 12.75,
+        "peakIso": "2026-08-21 03:10:00",
+        "peakModZ": 8.42,
+        "peakStaLta": 6.1,
+        "minP": 0.0000012345,
+        "minPRate": 0.00004,
+        "minPIntensity": 0.002,
+        "magnitude": 4.25,
+        "dominantMode": "CACHE_THRASH",
+        "cause": "FAT_TURN_THRASH",
+        "culprits": [
+          {
+            "session": "aaaaaaaabbbb",
+            "project": "p",
+            "eventUsd": 0,
+            "excessUsd": 0,
+            "writeUsd": 0,
+            "readUsd": 0,
+            "outputUsd": 0,
+            "turns": 0,
+            "tags": [],
+            "models": []
+          }
+        ]
+      }
+    },
+    "exponent_zero_and_positive": {
+      "windowSinceIso": "2026-08-21 02:00:00",
+      "bucketMinutes": 5,
+      "filesAnalysed": 42,
+      "totalUsd": 123.456,
+      "totalWriteUsd": 80.5,
+      "totalReadUsd": 30.25,
+      "totalOutputUsd": 12.706,
+      "totalTurns": 1234,
+      "bucketCount": 240,
+      "baseline": {
+        "median": 0.125,
+        "mad": 0.0625
+      },
+      "poissonLambda": 5.142857,
+      "intensityBaseline": {
+        "median": -1.5,
+        "mad": 0.75
+      },
+      "rateLaw": "negative-binomial",
+      "dispersionIndex": 3.14159,
+      "fdrAlpha": 0.05,
+      "fdrMethod": "bh",
+      "fdrThreshold": 1,
+      "fdrSignificantCount": 7,
+      "calibration": {
+        "alpha": 0.05,
+        "observedBackgroundShare": 0.0612,
+        "pi0": 0.83,
+        "nullAttributableShare": 0.41,
+        "upperUniformity": 1.06
+      },
+      "localBaseline": {
+        "reference": 30,
+        "guard": 3,
+        "trim": 0.2,
+        "fallbackShare": 0.125
+      },
+      "pvalueEngine": "internal",
+      "dominantModeOverall": "CACHE_THRASH",
+      "verdict": "one workspace drove 68% of the excess",
+      "changePoints": [
+        "2026-08-21 03:05:00",
+        "2026-08-21 04:10:00"
+      ],
+      "peltChangepoints": [
+        "2026-08-21 03:00:00"
+      ],
+      "events": [
+        {
+          "fromIso": "2026-08-21 03:00:00",
+          "toIso": "2026-08-21 03:25:00",
+          "durMin": 25,
+          "costUsd": 41.5,
+          "excessUsd": 33.25,
+          "writeUsd": 30,
+          "readUsd": 8,
+          "outputUsd": 3.5,
+          "turns": 96,
+          "peakUsd": 12.75,
+          "peakIso": "2026-08-21 03:10:00",
+          "peakModZ": 8.42,
+          "peakStaLta": 6.1,
+          "minP": 0,
+          "minPRate": 0.00004,
+          "minPIntensity": 0.002,
+          "magnitude": 4.25,
+          "dominantMode": "CACHE_THRASH",
+          "cause": "FAT_TURN_THRASH",
+          "culprits": []
+        },
+        {
+          "fromIso": "2026-08-21 03:00:00",
+          "toIso": "2026-08-21 03:25:00",
+          "durMin": 25,
+          "costUsd": 41.5,
+          "excessUsd": 33.25,
+          "writeUsd": 30,
+          "readUsd": 8,
+          "outputUsd": 3.5,
+          "turns": 96,
+          "peakUsd": 12.75,
+          "peakIso": "2026-08-21 03:10:00",
+          "peakModZ": 8.42,
+          "peakStaLta": 6.1,
+          "minP": 1,
+          "minPRate": 0.00004,
+          "minPIntensity": 0.002,
+          "magnitude": 4.25,
+          "dominantMode": "CACHE_THRASH",
+          "cause": "FAT_TURN_THRASH",
+          "culprits": []
+        }
+      ],
+      "sessions": [],
+      "spawnsInMainshock": [],
+      "buckets": [],
+      "mainshock": {
+        "fromIso": "2026-08-21 03:00:00",
+        "toIso": "2026-08-21 03:25:00",
+        "durMin": 25,
+        "costUsd": 41.5,
+        "excessUsd": 33.25,
+        "writeUsd": 30,
+        "readUsd": 8,
+        "outputUsd": 3.5,
+        "turns": 96,
+        "peakUsd": 12.75,
+        "peakIso": "2026-08-21 03:10:00",
+        "peakModZ": 8.42,
+        "peakStaLta": 6.1,
+        "minP": 0,
+        "minPRate": 0,
+        "minPIntensity": 12345,
+        "magnitude": 4.25,
+        "dominantMode": "CACHE_THRASH",
+        "cause": "FAT_TURN_THRASH",
+        "culprits": []
+      }
+    },
+    "full": {
+      "windowSinceIso": "2026-08-21 02:00:00",
+      "bucketMinutes": 5,
+      "filesAnalysed": 42,
+      "totalUsd": 123.456,
+      "totalWriteUsd": 80.5,
+      "totalReadUsd": 30.25,
+      "totalOutputUsd": 12.706,
+      "totalTurns": 1234,
+      "bucketCount": 240,
+      "baseline": {
+        "median": 0.125,
+        "mad": 0.0625
+      },
+      "poissonLambda": 5.142857,
+      "intensityBaseline": {
+        "median": -1.5,
+        "mad": 0.75
+      },
+      "rateLaw": "negative-binomial",
+      "dispersionIndex": 3.14159,
+      "fdrAlpha": 0.05,
+      "fdrMethod": "bh",
+      "fdrThreshold": 0.000123456,
+      "fdrSignificantCount": 7,
+      "calibration": {
+        "alpha": 0.05,
+        "observedBackgroundShare": 0.0612,
+        "pi0": 0.83,
+        "nullAttributableShare": 0.41,
+        "upperUniformity": 1.06
+      },
+      "localBaseline": {
+        "reference": 30,
+        "guard": 3,
+        "trim": 0.2,
+        "fallbackShare": 0.125
+      },
+      "pvalueEngine": "internal",
+      "dominantModeOverall": "CACHE_THRASH",
+      "verdict": "one workspace drove 68% of the excess",
+      "changePoints": [
+        "2026-08-21 03:05:00",
+        "2026-08-21 04:10:00"
+      ],
+      "peltChangepoints": [
+        "2026-08-21 03:00:00"
+      ],
+      "events": [
+        {
+          "fromIso": "2026-08-21 03:00:00",
+          "toIso": "2026-08-21 03:25:00",
+          "durMin": 25,
+          "costUsd": 41.5,
+          "excessUsd": 33.25,
+          "writeUsd": 30,
+          "readUsd": 8,
+          "outputUsd": 3.5,
+          "turns": 96,
+          "peakUsd": 12.75,
+          "peakIso": "2026-08-21 03:10:00",
+          "peakModZ": 8.42,
+          "peakStaLta": 6.1,
+          "minP": 0.0000012345,
+          "minPRate": 0.00004,
+          "minPIntensity": 0.002,
+          "magnitude": 4.25,
+          "dominantMode": "CACHE_THRASH",
+          "cause": "FAT_TURN_THRASH",
+          "culprits": []
+        },
+        {
+          "fromIso": "2026-08-21 04:00:00",
+          "toIso": "2026-08-21 03:25:00",
+          "durMin": 5,
+          "costUsd": 2.5,
+          "excessUsd": 1.25,
+          "writeUsd": 30,
+          "readUsd": 8,
+          "outputUsd": 3.5,
+          "turns": 96,
+          "peakUsd": 12.75,
+          "peakIso": "2026-08-21 03:10:00",
+          "peakModZ": 8.42,
+          "peakStaLta": 6.1,
+          "minP": 0.049,
+          "minPRate": 0.00004,
+          "minPIntensity": 0.002,
+          "magnitude": 1.05,
+          "dominantMode": "CACHE_THRASH",
+          "cause": "FANOUT_RATE",
+          "culprits": []
+        }
+      ],
+      "sessions": [
+        {
+          "session": "aaaaaaaa-1111-2222-3333-444444444444",
+          "project": "/w/one",
+          "costUsd": 60.5,
+          "writeUsd": 40,
+          "readUsd": 15.5,
+          "outputUsd": 5,
+          "turns": 400,
+          "maxPrefixTokens": 512000,
+          "eventExcessUsd": 24
+        },
+        {
+          "session": "bbbbbbbb-1111-2222-3333-444444444444",
+          "project": "/w/two",
+          "costUsd": 22,
+          "writeUsd": 10,
+          "readUsd": 9,
+          "outputUsd": 3,
+          "turns": 150,
+          "maxPrefixTokens": 96000,
+          "eventExcessUsd": 9.25
+        }
+      ],
+      "spawnsInMainshock": [
+        {
+          "n": 1,
+          "iso": "2026-08-21 03:02:00",
+          "sessionId": "aaaaaaaa-1111-2222-3333-444444444444",
+          "tool": "Agent",
+          "subagentType": "general-purpose",
+          "model": "claude-opus-5",
+          "input": "short input"
+        },
+        {
+          "n": 2,
+          "iso": "2026-08-21 03:03:00",
+          "sessionId": "bbbbbbbb-1111-2222-3333-444444444444",
+          "tool": "Task",
+          "subagentType": null,
+          "model": "",
+          "input": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx🔥yyyyyyyyyy"
+        },
+        {
+          "n": 3,
+          "iso": "2026-08-21 03:04:00",
+          "sessionId": "cccccccc-1111-2222-3333-444444444444",
+          "tool": "Agent",
+          "subagentType": "spark",
+          "model": null,
+          "input": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      ],
+      "buckets": [],
+      "mainshock": {
+        "fromIso": "2026-08-21 03:00:00",
+        "toIso": "2026-08-21 03:25:00",
+        "durMin": 25,
+        "costUsd": 41.5,
+        "excessUsd": 33.25,
+        "writeUsd": 30,
+        "readUsd": 8,
+        "outputUsd": 3.5,
+        "turns": 96,
+        "peakUsd": 12.75,
+        "peakIso": "2026-08-21 03:10:00",
+        "peakModZ": 8.42,
+        "peakStaLta": 6.1,
+        "minP": 0.0000012345,
+        "minPRate": 0.00004,
+        "minPIntensity": 0.002,
+        "magnitude": 4.25,
+        "dominantMode": "CACHE_THRASH",
+        "cause": "FAT_TURN_THRASH",
+        "culprits": [
+          {
+            "session": "aaaaaaaa-1111-2222-3333-444444444444",
+            "project": "/w/one",
+            "eventUsd": 30,
+            "excessUsd": 24,
+            "writeUsd": 25,
+            "readUsd": 4,
+            "outputUsd": 1,
+            "turns": 64,
+            "tags": [
+              "COLD_REWRITE",
+              "MODEL_SWITCH"
+            ],
+            "models": [
+              "claude-opus-5"
+            ]
+          },
+          {
+            "session": "bbbbbbbb-1111-2222-3333-444444444444",
+            "project": "/w/two",
+            "eventUsd": 11.5,
+            "excessUsd": 9.25,
+            "writeUsd": 5,
+            "readUsd": 4,
+            "outputUsd": 2.5,
+            "turns": 32,
+            "tags": [],
+            "models": []
+          }
+        ]
+      }
+    }
+  },
+  "rendered": {
+    "reason_no_files": "burn-seismic: no analysis (no-files)",
+    "reason_duckdb": "burn-seismic: no analysis (duckdb-unavailable)",
+    "no_mainshock": "BURN EVENT — COST SEISMOGRAM v2 (marked-point-process null, calibrated statistics)\n  window since 2026-08-21 02:00:00   bucket 5m   files 42\n  series: 240 buckets, 1234 costed turns, $123.46 total\n    split: cache-WRITE(cold) $80.50 (65%)  cache-READ $30.25 (25%)  output $12.71 (10%)\n  null model: turns ~ NegBinom(over-dispersed)(λ̂=5.14/bucket, dispersion σ²/μ=3.1) × per-turn cost ~ lognormal (log-median -1.50, log-MAD 0.75); Fisher-combined (χ²₄)\n  cost baseline (median/MAD): $0.13/min, MAD $0.06\n  background: LOCAL CFAR ±30 buckets, guard ±3, trim 0.2 (13% of buckets fell back to global)\n  p-value engine: internal TS core (unit-tested vs textbook + stochastic Δ≤2e-16)\n  significance: BH FDR α=0.05 on combined p → 7 significant buckets (crit p ≤ 1.23e-4)\n  calibration: background p<0.05 = 6.1%, of which 41.0% is null-attributable (Storey π̂₀=0.83 ⇒ ~17% of active background is genuine signal); upper-half uniformity 1.1× (≈1 = well-specified null)\n  segmentation: PELT changepoints 1   |   CUSUM alarms 2\n  VERDICT: one workspace drove 68% of the excess\n  no statistically significant event in window.",
+    "nulls_everywhere": "BURN EVENT — COST SEISMOGRAM v2 (marked-point-process null, calibrated statistics)\n  window since 2026-08-21 02:00:00   bucket 5m   files 42\n  series: 240 buckets, 1234 costed turns, $123.46 total\n    split: cache-WRITE(cold) $80.50 (65%)  cache-READ $30.25 (25%)  output $12.71 (10%)\n  null model: turns ~ Poisson(λ̂=5.14/bucket, dispersion σ²/μ=3.1) × per-turn cost ~ lognormal (log-median -1.50, log-MAD 0.75); Fisher-combined (χ²₄)\n  cost baseline (median/MAD): $0.13/min, MAD $0.06\n  background: GLOBAL (stationary null — local background disabled)\n  p-value engine: stochastic community extension (independent)\n  significance: BY FDR α=0.05 on combined p → 7 significant buckets (crit p ≤ 1.23e-4)\n  calibration: background p<0.05 = n/a (background too small)\n  segmentation: PELT changepoints 0   |   CUSUM alarms 0\n  no statistically significant event in window.",
+    "background_without_pi0": "BURN EVENT — COST SEISMOGRAM v2 (marked-point-process null, calibrated statistics)\n  window since 2026-08-21 02:00:00   bucket 5m   files 42\n  series: 240 buckets, 1234 costed turns, $123.46 total\n    split: cache-WRITE(cold) $80.50 (65%)  cache-READ $30.25 (25%)  output $12.71 (10%)\n  null model: turns ~ NegBinom(over-dispersed)(λ̂=5.14/bucket, dispersion σ²/μ=3.1) × per-turn cost ~ lognormal (log-median -1.50, log-MAD 0.75); Fisher-combined (χ²₄)\n  cost baseline (median/MAD): $0.13/min, MAD $0.06\n  background: LOCAL CFAR ±30 buckets, guard ±3, trim 0.2 (13% of buckets fell back to global)\n  p-value engine: internal TS core (unit-tested vs textbook + stochastic Δ≤2e-16)\n  significance: BH FDR α=0.05 on combined p → 7 significant buckets (crit p ≤ 1.23e-4)\n  calibration: background p<0.05 = 50.0%\n  segmentation: PELT changepoints 1   |   CUSUM alarms 2\n  VERDICT: one workspace drove 68% of the excess\n  no statistically significant event in window.",
+    "zero_total": "BURN EVENT — COST SEISMOGRAM v2 (marked-point-process null, calibrated statistics)\n  window since 2026-08-21 02:00:00   bucket 5m   files 42\n  series: 240 buckets, 1234 costed turns, $0.00 total\n    split: cache-WRITE(cold) $0.00 (0%)  cache-READ $0.00 (0%)  output $0.00 (0%)\n  null model: turns ~ NegBinom(over-dispersed)(λ̂=5.14/bucket, dispersion σ²/μ=3.1) × per-turn cost ~ lognormal (log-median -1.50, log-MAD 0.75); Fisher-combined (χ²₄)\n  cost baseline (median/MAD): $0.13/min, MAD $0.06\n  background: LOCAL CFAR ±30 buckets, guard ±3, trim 0.2 (13% of buckets fell back to global)\n  p-value engine: internal TS core (unit-tested vs textbook + stochastic Δ≤2e-16)\n  significance: BH FDR α=0.05 on combined p → 7 significant buckets (crit p ≤ 1.23e-4)\n  calibration: background p<0.05 = 6.1%, of which 41.0% is null-attributable (Storey π̂₀=0.83 ⇒ ~17% of active background is genuine signal); upper-half uniformity 1.1× (≈1 = well-specified null)\n  segmentation: PELT changepoints 1   |   CUSUM alarms 2\n  VERDICT: one workspace drove 68% of the excess\n\nEVENT CATALOG (PELT segments with FDR-significant buckets, ranked by EXCESS $):\n   #  onset (UTC)          dur   excess$    total$   mag   p(comb)     cause\n   1  2026-08-21 03:00:00    25m    $33.25     $0.00  4.3     1.2e-6   FAT_TURN_THRASH\n\nMAINSHOCK  2026-08-21 03:00:00 → 2026-08-21 03:25:00  (~25 min)   excess $33.25 of $0.00, 96 turns\n  cause: FAT_TURN_THRASH   evidence: rate p 4.0e-5 vs intensity p 2.0e-3   magnitude 4.25\n  peak $12.75/bucket at 2026-08-21 03:10:00   intensity-z 8.4   STA/LTA 6.1\n  decomposition: cold-WRITE $0.00 (0%)  READ $0.00 (0%)  output $0.00 (0%)   mode: CACHE_THRASH\n  CULPRITS (sessions by excess inside this event):\n       $0.00 excess of    $0.00     0t  W/R/O 0%/0%/0%  aaaaaaaa · p\n\nTOP SESSIONS (ranked by accumulated EVENT EXCESS — who drove the anomalies):\n   evtExcess$    total$   turns   maxPrefix   W/R/O split       session · project\n       $0.00      $0.00      0          0   0%/0%/0%         aaaaaaaa · p\n\nSPAWN CALLS INSIDE MAINSHOCK (0) — verbatim, time-ordered:\n  (none — the mainshock is cost-driven (cache thrash / re-read), not a new fan-out)",
+    "exponent_zero_and_positive": "BURN EVENT — COST SEISMOGRAM v2 (marked-point-process null, calibrated statistics)\n  window since 2026-08-21 02:00:00   bucket 5m   files 42\n  series: 240 buckets, 1234 costed turns, $123.46 total\n    split: cache-WRITE(cold) $80.50 (65%)  cache-READ $30.25 (25%)  output $12.71 (10%)\n  null model: turns ~ NegBinom(over-dispersed)(λ̂=5.14/bucket, dispersion σ²/μ=3.1) × per-turn cost ~ lognormal (log-median -1.50, log-MAD 0.75); Fisher-combined (χ²₄)\n  cost baseline (median/MAD): $0.13/min, MAD $0.06\n  background: LOCAL CFAR ±30 buckets, guard ±3, trim 0.2 (13% of buckets fell back to global)\n  p-value engine: internal TS core (unit-tested vs textbook + stochastic Δ≤2e-16)\n  significance: BH FDR α=0.05 on combined p → 7 significant buckets (crit p ≤ 1.00e+0)\n  calibration: background p<0.05 = 6.1%, of which 41.0% is null-attributable (Storey π̂₀=0.83 ⇒ ~17% of active background is genuine signal); upper-half uniformity 1.1× (≈1 = well-specified null)\n  segmentation: PELT changepoints 1   |   CUSUM alarms 2\n  VERDICT: one workspace drove 68% of the excess\n\nEVENT CATALOG (PELT segments with FDR-significant buckets, ranked by EXCESS $):\n   #  onset (UTC)          dur   excess$    total$   mag   p(comb)     cause\n   1  2026-08-21 03:00:00    25m    $33.25    $41.50  4.3     0.0e+0   FAT_TURN_THRASH\n   2  2026-08-21 03:00:00    25m    $33.25    $41.50  4.3     1.0e+0   FAT_TURN_THRASH\n\nMAINSHOCK  2026-08-21 03:00:00 → 2026-08-21 03:25:00  (~25 min)   excess $33.25 of $41.50, 96 turns\n  cause: FAT_TURN_THRASH   evidence: rate p 0.0e+0 vs intensity p 1.2e+4   magnitude 4.25\n  peak $12.75/bucket at 2026-08-21 03:10:00   intensity-z 8.4   STA/LTA 6.1\n  decomposition: cold-WRITE $30.00 (72%)  READ $8.00 (19%)  output $3.50 (8%)   mode: CACHE_THRASH\n\nTOP SESSIONS (ranked by accumulated EVENT EXCESS — who drove the anomalies):\n   evtExcess$    total$   turns   maxPrefix   W/R/O split       session · project\n\nSPAWN CALLS INSIDE MAINSHOCK (0) — verbatim, time-ordered:\n  (none — the mainshock is cost-driven (cache thrash / re-read), not a new fan-out)",
+    "full": "BURN EVENT — COST SEISMOGRAM v2 (marked-point-process null, calibrated statistics)\n  window since 2026-08-21 02:00:00   bucket 5m   files 42\n  series: 240 buckets, 1234 costed turns, $123.46 total\n    split: cache-WRITE(cold) $80.50 (65%)  cache-READ $30.25 (25%)  output $12.71 (10%)\n  null model: turns ~ NegBinom(over-dispersed)(λ̂=5.14/bucket, dispersion σ²/μ=3.1) × per-turn cost ~ lognormal (log-median -1.50, log-MAD 0.75); Fisher-combined (χ²₄)\n  cost baseline (median/MAD): $0.13/min, MAD $0.06\n  background: LOCAL CFAR ±30 buckets, guard ±3, trim 0.2 (13% of buckets fell back to global)\n  p-value engine: internal TS core (unit-tested vs textbook + stochastic Δ≤2e-16)\n  significance: BH FDR α=0.05 on combined p → 7 significant buckets (crit p ≤ 1.23e-4)\n  calibration: background p<0.05 = 6.1%, of which 41.0% is null-attributable (Storey π̂₀=0.83 ⇒ ~17% of active background is genuine signal); upper-half uniformity 1.1× (≈1 = well-specified null)\n  segmentation: PELT changepoints 1   |   CUSUM alarms 2\n  VERDICT: one workspace drove 68% of the excess\n\nEVENT CATALOG (PELT segments with FDR-significant buckets, ranked by EXCESS $):\n   #  onset (UTC)          dur   excess$    total$   mag   p(comb)     cause\n   1  2026-08-21 03:00:00    25m    $33.25    $41.50  4.3     1.2e-6   FAT_TURN_THRASH\n   2  2026-08-21 04:00:00     5m     $1.25     $2.50  1.1     4.9e-2   FANOUT_RATE\n\nMAINSHOCK  2026-08-21 03:00:00 → 2026-08-21 03:25:00  (~25 min)   excess $33.25 of $41.50, 96 turns\n  cause: FAT_TURN_THRASH   evidence: rate p 4.0e-5 vs intensity p 2.0e-3   magnitude 4.25\n  peak $12.75/bucket at 2026-08-21 03:10:00   intensity-z 8.4   STA/LTA 6.1\n  decomposition: cold-WRITE $30.00 (72%)  READ $8.00 (19%)  output $3.50 (8%)   mode: CACHE_THRASH\n  CULPRITS (sessions by excess inside this event):\n      $24.00 excess of   $30.00    64t  W/R/O 83%/13%/3%  aaaaaaaa · /w/one  [COLD_REWRITE, MODEL_SWITCH]\n       $9.25 excess of   $11.50    32t  W/R/O 43%/35%/22%  bbbbbbbb · /w/two\n\nTOP SESSIONS (ranked by accumulated EVENT EXCESS — who drove the anomalies):\n   evtExcess$    total$   turns   maxPrefix   W/R/O split       session · project\n      $24.00     $60.50    400     512000   66%/26%/8%       aaaaaaaa · /w/one\n       $9.25     $22.00    150      96000   45%/41%/14%      bbbbbbbb · /w/two\n\nSPAWN CALLS INSIDE MAINSHOCK (3) — verbatim, time-ordered:\n  1. 2026-08-21 03:02:00  [aaaaaaaa]  Agent subagent_type=general-purpose model=claude-opus-5\n       short input\n  2. 2026-08-21 03:03:00  [bbbbbbbb]  Task\n       xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx🔥…(+10b)\n  3. 2026-08-21 03:04:00  [cccccccc]  Agent subagent_type=spark\n       aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa…(+212b)"
+  }
+}

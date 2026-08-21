@@ -1648,9 +1648,11 @@ release-via: publish
   repetition is `_` + `[^_]+`, which cannot consume a second underscore, so the first `__` ends the
   group either way. The comment had claimed the laziness was load-bearing. Two boundary cases now
   pin what the quantifier actually decides (`mcp__srv__tool__extra` → `mcp__srv`).
-  **The identity gate matches the SHAPE of a home path**, so the fixture's invented `/home/u/…` rule
-  paths failed it — rerooted at `/fixture` and `Z:\fixture`. A guard keyed on the real account would
-  have passed this and gone blind on the next one.
+  **The identity gate matches the SHAPE of a home path**, so the fixture's invented per-user rule
+  paths failed it even with an obviously-fake username — rerooted at `/fixture` and `Z:\fixture`. A
+  guard keyed on the real account would have passed this and gone blind on the next one. (Writing
+  the offending shape out HERE trips the same check, since the TRDD is tracked too — which is the
+  doctrine working, and the reason this sentence describes it instead of quoting it.)
 - **NEXT (P4x.2d continued): 3 of 53 remain — `run_diagnostics_sql`, `compare_configs`,
   `burn_seismic`.**
   **`burn_seismic` (1004 lines, CFAR/FDR/Poisson statistics) is INDEPENDENT of everything below and
