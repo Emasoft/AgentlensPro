@@ -748,6 +748,30 @@ fn str_or<'a>(v: Option<&'a Value>, default: &'a str) -> &'a str {
 /// the P4d e2e real-window replay caught truncated userRequests immediately. The one remaining
 /// divergence: a cap landing mid-surrogate-pair keeps the whole char out (JS would keep a lone
 /// surrogate, which a Rust String cannot represent).
+/// JS `.length` — UTF-16 CODE UNITS, not bytes and not chars. An emoji is 1 char, 4 bytes, and
+/// **2** here, so every cap, offset and hash that must agree with the TS measures through this.
+///
+/// Was duplicated privately in seven modules; they agreed by luck rather than by construction
+/// (one had drifted to `encode_utf16().count()` — same answer, different code to keep in step).
+pub fn utf16_len(s: &str) -> usize {
+    s.chars().map(char::len_utf16).sum()
+}
+
+/// `s.slice(n)` — the REST of the string from UTF-16 offset `n`. The mirror of `js_slice`, which
+/// takes the first `n`. `s.slice(-n)` (the LAST n units) is `js_slice_from(s, utf16_len(s) - n)`.
+pub fn js_slice_from(s: &str, n: usize) -> &str {
+    let mut units = 0usize;
+    for (i, c) in s.char_indices() {
+        if units >= n {
+            return &s[i..];
+        }
+        units += c.len_utf16();
+    }
+    ""
+}
+
+/// `s.slice(0, n)` — the FIRST `n` UTF-16 code units. This IS the "utf16_slice" other crates
+/// define privately; it lives here under the JS name it ports.
 pub fn js_slice(s: &str, n: usize) -> &str {
     let mut units = 0usize;
     for (i, c) in s.char_indices() {
@@ -873,4 +897,69 @@ pub fn summarize_tool_result(tool_name: &str, result: &str) -> String {
         return format!("{:.1}KB", len as f64 / 1024.0);
     }
     format!("{len} chars")
+}
+
+#[cfg(test)]
+mod utf16_tests {
+    use super::{js_slice, js_slice_from, utf16_len};
+
+    /// The three measures DISAGREE, and that is the whole point: JS `.length` is the UTF-16 one.
+    /// A port that reaches for `.len()` (bytes) or `.chars().count()` (scalars) reads the same on
+    /// ASCII and silently diverges the moment a caption, a path or a tool description carries an
+    /// emoji — which is exactly where a cap or an offset stops matching the TS.
+    #[test]
+    fn utf16_len_counts_code_units_not_bytes_or_chars() {
+        assert_eq!(utf16_len("abc"), 3);
+        // An astral char: 1 char, 4 bytes, 2 UTF-16 units.
+        assert_eq!("🔥".chars().count(), 1);
+        assert_eq!("🔥".len(), 4);
+        assert_eq!(utf16_len("🔥"), 2);
+        // A BMP multi-byte char: 1 char, 2 bytes, 1 unit.
+        assert_eq!(utf16_len("é"), 1);
+        assert_eq!("é".len(), 2);
+        assert_eq!(utf16_len("a🔥b"), 4);
+    }
+
+    /// They ARE complements at every boundary that does not fall inside a surrogate pair.
+    #[test]
+    fn js_slice_and_js_slice_from_are_complements_off_pair_boundaries() {
+        let s = "a🔥bc";
+        // Unit 2 is inside the pair — the one boundary where this does not hold (next test).
+        for n in [0, 1, 3, 4, 5] {
+            assert_eq!(format!("{}{}", js_slice(s, n), js_slice_from(s, n)), s, "split at {n}");
+        }
+    }
+
+    /// **A boundary INSIDE a surrogate pair drops the character from BOTH halves.** JS splits it
+    /// into two lone surrogates that re-concatenate losslessly; a Rust `&str` cannot hold a lone
+    /// surrogate, so each side takes whole chars and the pair belongs to neither.
+    ///
+    /// This is DELIBERATE, not a bug to fix: whole-pair truncation is the honest equivalent of a
+    /// lone surrogate, which JSON-encodes to U+FFFD anyway. It is pinned because it is invisible
+    /// on ASCII and silently lossy on real text — anyone reassembling a string from a
+    /// `js_slice` + `js_slice_from` pair at an arbitrary offset must know the char can vanish.
+    #[test]
+    fn a_boundary_inside_a_surrogate_pair_drops_the_char_from_both_halves() {
+        let s = "a🔥bc";
+        assert_eq!(js_slice(s, 2), "a");
+        assert_eq!(js_slice_from(s, 2), "bc");
+        assert_eq!(format!("{}{}", js_slice(s, 2), js_slice_from(s, 2)), "abc", "the emoji is gone");
+        // Either side of the pair, both halves behave normally.
+        assert_eq!(js_slice(s, 1), "a");
+        assert_eq!(js_slice_from(s, 1), "🔥bc");
+        assert_eq!(js_slice(s, 3), "a🔥");
+        assert_eq!(js_slice_from(s, 3), "bc");
+    }
+
+    /// `s.slice(-n)` — the LAST n units — is `js_slice_from(s, utf16_len(s) - n)`. This is the
+    /// form the burn scanner's chunk carry needs, so it is pinned here rather than re-derived.
+    #[test]
+    fn last_n_units_is_js_slice_from_of_the_difference() {
+        let s = "hello🔥world";
+        let take_last = |n: usize| js_slice_from(s, utf16_len(s).saturating_sub(n));
+        assert_eq!(take_last(5), "world");
+        assert_eq!(take_last(7), "🔥world");
+        // A request for MORE units than exist yields the whole string, never a panic.
+        assert_eq!(take_last(9999), s);
+    }
 }

@@ -6,6 +6,7 @@
 //! env knobs fail FAST on a malformed value (the TS module throws at boot; running unbounded
 //! silently is the failure mode both guard against).
 
+use super::helpers::utf16_len;
 use serde_json::Value;
 use std::sync::OnceLock;
 
@@ -51,10 +52,6 @@ pub fn timeline_hot_age_ms() -> i64 {
 pub fn timeline_hot_cards() -> usize {
     static V: OnceLock<usize> = OnceLock::new();
     *V.get_or_init(|| resolve_positive_int("AGENTLENS_TIMELINE_HOT_CARDS", 50, 1))
-}
-
-fn utf16_len(s: &str) -> usize {
-    s.chars().map(char::len_utf16).sum()
 }
 
 /// entryCost — the heavy text fields a transcript can inflate, in UTF-16 units (JS `.length`).

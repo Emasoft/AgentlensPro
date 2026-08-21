@@ -6,7 +6,7 @@
 use indexmap::IndexMap;
 use serde_json::{json, Value};
 
-use crate::summarize::helpers::{fmt_js_num, js_math_round, js_to_fixed_num};
+use crate::summarize::helpers::{fmt_js_num, js_math_round, js_to_fixed_num, utf16_len};
 
 fn f(v: &Value, k: &str) -> f64 {
     // Absent card fields propagate as NaN in the TS arithmetic — mirrored, not defaulted.
@@ -63,11 +63,6 @@ fn role_from_filename(name: &str) -> String {
 fn make_id(category: &str, key: &str) -> String {
     let mangled: String = key.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).collect();
     format!("{category}:{}", mangled.to_lowercase())
-}
-
-/// JS `.length` (UTF-16 units) for the short-basename filter.
-fn utf16_len(s: &str) -> usize {
-    s.encode_utf16().count()
 }
 
 /// `basename.pop()` of a '/'-split — JS pop() on a split result is never undefined (a split

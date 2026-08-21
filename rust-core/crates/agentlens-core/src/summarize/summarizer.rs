@@ -14,7 +14,7 @@ use std::collections::{HashMap, HashSet};
 use super::claude::build_claude_sessions;
 use super::codex::build_codex_sessions;
 use super::copilot::build_copilot_sessions;
-use super::helpers::{self as h, js_slice, num};
+use super::helpers::{self as h, js_slice, num, utf16_len};
 use super::loop_detector::detect_loop_signals;
 
 fn f(v: &Value, k: &str) -> f64 {
@@ -23,10 +23,6 @@ fn f(v: &Value, k: &str) -> f64 {
 
 fn sstr<'a>(v: &'a Value, k: &str) -> &'a str {
     v.get(k).and_then(Value::as_str).unwrap_or("")
-}
-
-fn utf16_len(s: &str) -> usize {
-    s.chars().map(char::len_utf16).sum()
 }
 
 fn empty_efficiency() -> Value {

@@ -8,12 +8,7 @@
 
 use serde_json::{Map, Value};
 
-use crate::summarize::helpers::{fmt_js_num, js_slice, js_to_fixed_num, num, truthy};
-
-/// JS `String.prototype.length` — UTF-16 code units, never bytes and never chars.
-fn utf16_len(s: &str) -> usize {
-    s.chars().map(char::len_utf16).sum()
-}
+use crate::summarize::helpers::{fmt_js_num, js_slice, js_to_fixed_num, num, truthy, utf16_len};
 
 /// `get_call_context` — the full literal context of ONE llm call.
 ///

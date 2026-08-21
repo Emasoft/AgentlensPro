@@ -14,7 +14,7 @@ use std::io::BufRead;
 use agentlens_logscan::discovery::Env;
 
 use crate::context_composition::{classify_attachment, find_session_file};
-use crate::summarize::helpers::{js_slice, num};
+use crate::summarize::helpers::{js_slice, js_slice_from, num, utf16_len};
 use crate::token_estimator::{calibrate_tokens, count_tokens};
 
 const MAX_LINES: u64 = 3_000_000;
@@ -38,21 +38,6 @@ fn text_budget_bytes(env: &Env) -> u64 {
     (mb.max(1.0) * 1024.0 * 1024.0) as u64
 }
 
-fn utf16_len(s: &str) -> usize {
-    s.chars().map(char::len_utf16).sum()
-}
-
-/// `s.slice(n)` — the REST of the string from UTF-16 offset `n`.
-fn js_slice_from(s: &str, n: usize) -> &str {
-    let mut units = 0usize;
-    for (i, c) in s.char_indices() {
-        if units >= n {
-            return &s[i..];
-        }
-        units += c.len_utf16();
-    }
-    ""
-}
 
 /// Map classifyAttachment's kind onto a ContextBlockKind.
 fn attachment_kind(kind: &str) -> &'static str {

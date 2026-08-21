@@ -18,7 +18,7 @@
 use serde_json::{Map, Value};
 use std::sync::OnceLock;
 
-use crate::summarize::helpers::{js_slice, js_string, num};
+use crate::summarize::helpers::{js_slice, js_string, num, utf16_len};
 use crate::token_estimator::{count_tokens, estimate_tokens_from_bytes};
 
 /// Image content blocks stay in the shared `other` ContextBlockKind bucket; this label prefix is
@@ -35,12 +35,6 @@ pub const MAX_RAW_BODY_BYTES: u64 = 64 * 1024 * 1024;
 /// is still computed on the FULL text (TRDD-IQENK7JM) — see `push_block`, which counts BEFORE the
 /// cap is applied. That ordering is load-bearing.
 const BLOCK_TEXT_CAP: usize = 20_000;
-
-/// UTF-16 code-unit length of `s`, matching JS `.length` — used only to decide whether `js_slice`
-/// must actually cap (avoids slicing/copying text that is already under the cap).
-fn utf16_len(s: &str) -> usize {
-    s.chars().map(char::len_utf16).sum()
-}
 
 fn re(cell: &'static OnceLock<regex::Regex>, pattern: &str) -> &'static regex::Regex {
     cell.get_or_init(|| regex::Regex::new(pattern).expect("valid regex"))

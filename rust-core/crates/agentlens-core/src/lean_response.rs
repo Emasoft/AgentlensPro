@@ -21,7 +21,7 @@
 use indexmap::IndexMap;
 use serde_json::{Map, Value};
 
-use crate::summarize::helpers::js_slice;
+use crate::summarize::helpers::{js_slice, utf16_len};
 
 const CHARS_PER_TOKEN: f64 = 4.0;
 const DEFAULT_MAX_TOKENS: f64 = 1200.0;
@@ -37,10 +37,6 @@ const MAX_DEPTH: usize = 4;
 /// actor, cause). `remediation` is deliberately NOT here — it is genuinely part of four tools'
 /// advertised answer, and dropping it made them promise a fix hint they never delivered.
 const DROP_KEYS: [&str; 7] = ["rawDiffSummary", "culpritId", "actorId", "ttlTier", "bodyRef", "ref", "breakdown"];
-
-fn utf16_len(s: &str) -> usize {
-    s.chars().map(char::len_utf16).sum()
-}
 
 /// `Math.ceil(JSON.stringify(v ?? '').length / 4)`. The `?? ''` matters: a null payload measures as
 /// `""` (2 units → 1 token), NOT as the 4 units of `null`.
