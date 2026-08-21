@@ -35,7 +35,12 @@ notify = "8"
 # TS-oracle comparison depends on fixture floats parsing to the exact double JS printed.
 serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
 regex = "1"
-tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "time", "signal", "sync"] }
+# The ONE outbound call this server makes (the OAuth usage + profile endpoints). Blocking and
+# rustls-only, which is what makes it cheap here: it is already in the lock at this exact version as
+# libduckdb-sys' build dependency, so declaring it adds no new crate, no OpenSSL, and no async
+# client stack for a request that fires at most once per 10-minute TTL.
+ureq = "3"
+tokio ={ version = "1", features = ["rt-multi-thread", "net", "macros", "time", "signal", "sync"] }
 hyper = { version = "1", features = ["server", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 http-body-util = "0.1"

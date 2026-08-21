@@ -1,0 +1,2368 @@
+{
+  "now": 1787292000000,
+  "platform": "darwin",
+  "fp": "0ee2938d8ee7cd30",
+  "uuid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+  "access": "sk-access-token-fixture",
+  "refresh": "sk-refresh-token-fixture",
+  "usageBody": {
+    "five_hour": {
+      "utilization": 61
+    },
+    "seven_day": {
+      "used_percentage": 12.5
+    },
+    "limits": [
+      {
+        "kind": "session",
+        "group": "session",
+        "percent": 61,
+        "severity": "normal",
+        "resets_at": "2099-01-01T00:00:00.000Z",
+        "is_active": true
+      }
+    ],
+    "extra_usage": {
+      "is_enabled": false
+    },
+    "spend": {
+      "percent": 4.25
+    }
+  },
+  "profileBody": {
+    "account": {
+      "email": "owner@example.com",
+      "uuid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+      "full_name": "Owner"
+    },
+    "organization": {
+      "rate_limit_tier": "max_20x"
+    }
+  },
+  "cases": {
+    "ok_fetch": {
+      "usage": {
+        "fetchedAt": 1787292000000,
+        "ageSeconds": 0,
+        "stale": false,
+        "accountFp": "0ee2938d8ee7cd30",
+        "accountUuid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        "accountLabel": "owner@example.com",
+        "accountTier": "max_20x",
+        "localClaimedLabel": null,
+        "accountLabelSuspect": false,
+        "accountVerified": "yes",
+        "reason": "ok",
+        "limits": [
+          {
+            "kind": "session",
+            "group": "session",
+            "percent": 61,
+            "severity": "normal",
+            "resetsAt": "2099-01-01T00:00:00.000Z",
+            "isActive": true,
+            "scopeLabel": null,
+            "resetsInSeconds": 2283616800
+          }
+        ],
+        "fiveHourPercent": 61,
+        "sevenDayPercent": 12.5,
+        "usageCreditsEnabled": false,
+        "spendPercent": 4.25,
+        "note": "Utilization is Anthropic's own figure for this account (the numbers /usage shows), not a local projection. Endpoint is undocumented and community-reverse-engineered."
+      },
+      "calls": [
+        "https://api.anthropic.com/api/oauth/usage",
+        "https://api.anthropic.com/api/oauth/profile"
+      ],
+      "cache": {
+        "fetchedAt": 1787292000000,
+        "ageSeconds": 0,
+        "stale": false,
+        "accountFp": "0ee2938d8ee7cd30",
+        "accountUuid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        "accountLabel": "owner@example.com",
+        "accountTier": "max_20x",
+        "localClaimedLabel": null,
+        "accountLabelSuspect": false,
+        "accountVerified": "yes",
+        "reason": "ok",
+        "limits": [
+          {
+            "kind": "session",
+            "group": "session",
+            "percent": 61,
+            "severity": "normal",
+            "resetsAt": "2099-01-01T00:00:00.000Z",
+            "isActive": true,
+            "scopeLabel": null,
+            "resetsInSeconds": 2283616800
+          }
+        ],
+        "fiveHourPercent": 61,
+        "sevenDayPercent": 12.5,
+        "usageCreditsEnabled": false,
+        "spendPercent": 4.25,
+        "note": "Utilization is Anthropic's own figure for this account (the numbers /usage shows), not a local projection. Endpoint is undocumented and community-reverse-engineered."
+      },
+      "cooldown": null,
+      "archived": {
+        "fetchedAt": 1787292000000,
+        "ageSeconds": 0,
+        "stale": false,
+        "accountFp": "0ee2938d8ee7cd30",
+        "accountUuid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        "accountLabel": "owner@example.com",
+        "accountTier": "max_20x",
+        "localClaimedLabel": null,
+        "accountLabelSuspect": false,
+        "accountVerified": "yes",
+        "reason": "ok",
+        "limits": [
+          {
+            "kind": "session",
+            "group": "session",
+            "percent": 61,
+            "severity": "normal",
+            "resetsAt": "2099-01-01T00:00:00.000Z",
+            "isActive": true,
+            "scopeLabel": null,
+            "resetsInSeconds": 2283616800
+          }
+        ],
+        "fiveHourPercent": 61,
+        "sevenDayPercent": 12.5,
+        "usageCreditsEnabled": false,
+        "spendPercent": 4.25,
+        "note": "Utilization is Anthropic's own figure for this account (the numbers /usage shows), not a local projection. Endpoint is undocumented and community-reverse-engineered."
+      },
+      "lockRemains": false,
+      "seed": {
+        "cache": null,
+        "cooldown": null,
+        "lock": null,
+        "lockAgeMs": 0,
+        "credentials": {
+          "claudeAiOauth": {
+            "accessToken": "sk-access-token-fixture",
+            "refreshToken": "sk-refresh-token-fixture"
+          }
+        },
+        "force": false,
+        "plan": "ok"
+      }
+    },
+    "fresh_hit": {
+      "usage": {
+        "fetchedAt": 1787291940000,
+        "ageSeconds": 60,
+        "stale": false,
+        "accountFp": "0ee2938d8ee7cd30",
+        "accountUuid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        "accountLabel": "owner@example.com",
+        "accountTier": "max_20x",
+        "localClaimedLabel": null,
+        "accountLabelSuspect": false,
+        "accountVerified": "yes",
+        "reason": "fresh",
+        "limits": [
+          {
+            "kind": "session",
+            "group": "session",
+            "percent": 44,
+            "severity": "normal",
+            "resetsAt": "2099-01-01T00:00:00.000Z",
+            "isActive": true,
+            "scopeLabel": null,
+            "resetsInSeconds": 2283616800
+          }
+        ],
+        "fiveHourPercent": 44,
+        "sevenDayPercent": 9,
+        "usageCreditsEnabled": null,
+        "spendPercent": null,
+        "note": "cached"
+      },
+      "calls": [],
+      "cache": {
+        "fetchedAt": 1787291940000,
+        "ageSeconds": 0,
+        "stale": false,
+        "accountFp": "0ee2938d8ee7cd30",
+        "accountUuid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        "accountLabel": "owner@example.com",
+        "accountTier": "max_20x",
+        "localClaimedLabel": null,
+        "accountLabelSuspect": false,
+        "accountVerified": "yes",
+        "reason": "ok",
+        "limits": [
+          {
+            "kind": "session",
+            "group": "session",
+            "percent": 44,
+            "severity": "normal",
+            "resetsAt": "2099-01-01T00:00:00.000Z",
+            "isActive": true,
+            "scopeLabel": null,
+            "resetsInSeconds": 0
+          }
+        ],
+        "fiveHourPercent": 44,
+        "sevenDayPercent": 9,
+        "usageCreditsEnabled": null,
+        "spendPercent": null,
+        "note": "cached"
+      },
+      "cooldown": null,
+      "archived": null,
+      "lockRemains": false,
+      "seed": {
+        "cache": {
+          "fetchedAt": 1787291940000,
+          "ageSeconds": 0,
+          "stale": false,
+          "accountFp": "0ee2938d8ee7cd30",
+          "accountUuid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+          "accountLabel": "owner@example.com",
+          "accountTier": "max_20x",
+          "localClaimedLabel": null,
+          "accountLabelSuspect": false,
+          "accountVerified": "yes",
+          "reason": "ok",
+          "limits": [
+            {
+              "kind": "session",
+              "group": "session",
+              "percent": 44,
+              "severity": "normal",
+              "resetsAt": "2099-01-01T00:00:00.000Z",
+              "isActive": true,
+              "scopeLabel": null,
+              "resetsInSeconds": 0
+            }
+          ],
+          "fiveHourPercent": 44,
+          "sevenDayPercent": 9,
+          "usageCreditsEnabled": null,
+          "spendPercent": null,
+          "note": "cached"
+        },
+        "cooldown": null,
+        "lock": null,
+        "lockAgeMs": 0,
+        "credentials": {
+          "claudeAiOauth": {
+            "accessToken": "sk-access-token-fixture",
+            "refreshToken": "sk-refresh-token-fixture"
+          }
+        },
+        "force": false,
+        "plan": "ok"
+      }
+    },
+    "force_refetch": {
+      "usage": {
+        "fetchedAt": 1787292000000,
+        "ageSeconds": 0,
+        "stale": false,
+        "accountFp": "0ee2938d8ee7cd30",
+        "accountUuid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        "accountLabel": "owner@example.com",
+        "accountTier": "max_20x",
+        "localClaimedLabel": null,
+        "accountLabelSuspect": false,
+        "accountVerified": "yes",
+        "reason": "ok",
+        "limits": [
+          {
+            "kind": "session",
+            "group": "session",
+            "percent": 61,
+            "severity": "normal",
+            "resetsAt": "2099-01-01T00:00:00.000Z",
+            "isActive": true,
+            "scopeLabel": null,
+            "resetsInSeconds": 2283616800
+          }
+        ],
+        "fiveHourPercent": 61,
+        "sevenDayPercent": 12.5,
+        "usageCreditsEnabled": false,
+        "spendPercent": 4.25,
+        "note": "Utilization is Anthropic's own figure for this account (the numbers /usage shows), not a local projection. Endpoint is undocumented and community-reverse-engineered."
+      },
+      "calls": [
+        "https://api.anthropic.com/api/oauth/usage",
+        "https://api.anthropic.com/api/oauth/profile"
+      ],
+      "cache": {
+        "fetchedAt": 1787292000000,
+        "ageSeconds": 0,
+        "stale": false,
+        "accountFp": "0ee2938d8ee7cd30",
+        "accountUuid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        "accountLabel": "owner@example.com",
+        "accountTier": "max_20x",
+        "localClaimedLabel": null,
+        "accountLabelSuspect": false,
+        "accountVerified": "yes",
+        "reason": "ok",
+        "limits": [
+          {
+            "kind": "session",
+            "group": "session",
+            "percent": 61,
+            "severity": "normal",
+            "resetsAt": "2099-01-01T00:00:00.000Z",
+            "isActive": true,
+            "scopeLabel": null,
+            "resetsInSeconds": 2283616800
+          }
+        ],
+        "fiveHourPercent": 61,
+        "sevenDayPercent": 12.5,
+        "usageCreditsEnabled": false,
+        "spendPercent": 4.25,
+        "note": "Utilization is Anthropic's own figure for this account (the numbers /usage shows), not a local projection. Endpoint is undocumented and community-reverse-engineered."
+      },
+      "cooldown": null,
+      "archived": {
+        "fetchedAt": 1787292000000,
+        "ageSeconds": 0,
+        "stale": false,
+        "accountFp": "0ee2938d8ee7cd30",
+        "accountUuid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        "accountLabel": "owner@example.com",
+        "accountTier": "max_20x",
+        "localClaimedLabel": null,
+        "accountLabelSuspect": false,
+        "accountVerified": "yes",
+        "reason": "ok",
+        "limits": [
+          {
+            "kind": "session",
+            "group": "session",
+            "percent": 61,
+            "severity": "normal",
+            "resetsAt": "2099-01-01T00:00:00.000Z",
+            "isActive": true,
+            "scopeLabel": null,
+            "resetsInSeconds": 2283616800
+          }
+        ],
+        "fiveHourPercent": 61,
+        "sevenDayPercent": 12.5,
+        "usageCreditsEnabled": false,
+        "spendPercent": 4.25,
+        "note": "Utilization is Anthropic's own figure for this account (the numbers /usage shows), not a local projection. Endpoint is undocumented and community-reverse-engineered."
+      },
+      "lockRemains": false,
+      "seed": {
+        "cache": {
+          "fetchedAt": 1787291940000,
+          "ageSeconds": 0,
+          "stale": false,
+          "accountFp": "0ee2938d8ee7cd30",
+          "accountUuid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+          "accountLabel": "owner@example.com",
+          "accountTier": "max_20x",
+          "localClaimedLabel": null,
+          "accountLabelSuspect": false,
+          "accountVerified": "yes",
+          "reason": "ok",
+          "limits": [
+            {
+              "kind": "session",
+              "group": "session",
+              "percent": 44,
+              "severity": "normal",
+              "resetsAt": "2099-01-01T00:00:00.000Z",
+              "isActive": true,
+              "scopeLabel": null,
+              "resetsInSeconds": 0
+            }
+          ],
+          "fiveHourPercent": 44,
+          "sevenDayPercent": 9,
+          "usageCreditsEnabled": null,
+          "spendPercent": null,
+          "note": "cached"
+        },
+        "cooldown": null,
+        "lock": null,
+        "lockAgeMs": 0,
+        "credentials": {
+          "claudeAiOauth": {
+            "accessToken": "sk-access-token-fixture",
+            "refreshToken": "sk-refresh-token-fixture"
+          }
+        },
+        "force": true,
+        "plan": "ok"
+      }
+    },
+    "fp_mismatch": {
+      "usage": {
+        "fetchedAt": 1787292000000,
+        "ageSeconds": 0,
+        "stale": false,
+        "accountFp": "0ee2938d8ee7cd30",
+        "accountUuid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        "accountLabel": "owner@example.com",
+        "accountTier": "max_20x",
+        "localClaimedLabel": null,
+        "accountLabelSuspect": false,
+        "accountVerified": "yes",
+        "reason": "ok",
+        "limits": [
+          {
+            "kind": "session",
+            "group": "session",
+            "percent": 61,
+            "severity": "normal",
+            "resetsAt": "2099-01-01T00:00:00.000Z",
+            "isActive": true,
+            "scopeLabel": null,
+            "resetsInSeconds": 2283616800
+          }
+        ],
+        "fiveHourPercent": 61,
+        "sevenDayPercent": 12.5,
+        "usageCreditsEnabled": false,
+        "spendPercent": 4.25,
+        "note": "Utilization is Anthropic's own figure for this account (the numbers /usage shows), not a local projection. Endpoint is undocumented and community-reverse-engineered."
+      },
+      "calls": [
+        "https://api.anthropic.com/api/oauth/usage",
+        "https://api.anthropic.com/api/oauth/profile"
+      ],
+      "cache": {
+        "fetchedAt": 1787292000000,
+        "ageSeconds": 0,
+        "stale": false,
+        "accountFp": "0ee2938d8ee7cd30",
+        "accountUuid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        "accountLabel": "owner@example.com",
+        "accountTier": "max_20x",
+        "localClaimedLabel": null,
+        "accountLabelSuspect": false,
+        "accountVerified": "yes",
+        "reason": "ok",
+        "limits": [
+          {
+            "kind": "session",
+            "group": "session",
+            "percent": 61,
+            "severity": "normal",
+            "resetsAt": "2099-01-01T00:00:00.000Z",
+            "isActive": true,
+            "scopeLabel": null,
+            "resetsInSeconds": 2283616800
+          }
+        ],
+        "fiveHourPercent": 61,
+        "sevenDayPercent": 12.5,
+        "usageCreditsEnabled": false,
+        "spendPercent": 4.25,
+        "note": "Utilization is Anthropic's own figure for this account (the numbers /usage shows), not a local projection. Endpoint is undocumented and community-reverse-engineered."
+      },
+      "cooldown": null,
+      "archived": {
+        "fetchedAt": 1787292000000,
+        "ageSeconds": 0,
+        "stale": false,
+        "accountFp": "0ee2938d8ee7cd30",
+        "accountUuid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        "accountLabel": "owner@example.com",
+        "accountTier": "max_20x",
+        "localClaimedLabel": null,
+        "accountLabelSuspect": false,
+        "accountVerified": "yes",
+        "reason": "ok",
+        "limits": [
+          {
+            "kind": "session",
+            "group": "session",
+            "percent": 61,
+            "severity": "normal",
+            "resetsAt": "2099-01-01T00:00:00.000Z",
+            "isActive": true,
+            "scopeLabel": null,
+            "resetsInSeconds": 2283616800
+          }
+        ],
+        "fiveHourPercent": 61,
+        "sevenDayPercent": 12.5,
+        "usageCreditsEnabled": false,
+        "spendPercent": 4.25,
+        "note": "Utilization is Anthropic's own figure for this account (the numbers /usage shows), not a local projection. Endpoint is undocumented and community-reverse-engineered."
+      },
+      "lockRemains": false,
+      "seed": {
+        "cache": {
+          "fetchedAt": 1787291940000,
+          "ageSeconds": 0,
+          "stale": false,
+          "accountFp": "someone-elses-fp",
+          "accountUuid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+          "accountLabel": "owner@example.com",
+          "accountTier": "max_20x",
+          "localClaimedLabel": null,
+          "accountLabelSuspect": false,
+          "accountVerified": "yes",
+          "reason": "ok",
+          "limits": [
+            {
+              "kind": "session",
+              "group": "session",
+              "percent": 44,
+              "severity": "normal",
+              "resetsAt": "2099-01-01T00:00:00.000Z",
+              "isActive": true,
+              "scopeLabel": null,
+              "resetsInSeconds": 0
+            }
+          ],
+          "fiveHourPercent": 44,
+          "sevenDayPercent": 9,
+          "usageCreditsEnabled": null,
+          "spendPercent": null,
+          "note": "cached"
+        },
+        "cooldown": null,
+        "lock": null,
+        "lockAgeMs": 0,
+        "credentials": {
+          "claudeAiOauth": {
+            "accessToken": "sk-access-token-fixture",
+            "refreshToken": "sk-refresh-token-fixture"
+          }
+        },
+        "force": false,
+        "plan": "ok"
+      }
+    },
+    "expired_ttl": {
+      "usage": {
+        "fetchedAt": 1787292000000,
+        "ageSeconds": 0,
+        "stale": false,
+        "accountFp": "0ee2938d8ee7cd30",
+        "accountUuid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        "accountLabel": "owner@example.com",
+        "accountTier": "max_20x",
+        "localClaimedLabel": null,
+        "accountLabelSuspect": false,
+        "accountVerified": "yes",
+        "reason": "ok",
+        "limits": [
+          {
+            "kind": "session",
+            "group": "session",
+            "percent": 61,
+            "severity": "normal",
+            "resetsAt": "2099-01-01T00:00:00.000Z",
+            "isActive": true,
+            "scopeLabel": null,
+            "resetsInSeconds": 2283616800
+          }
+        ],
+        "fiveHourPercent": 61,
+        "sevenDayPercent": 12.5,
+        "usageCreditsEnabled": false,
+        "spendPercent": 4.25,
+        "note": "Utilization is Anthropic's own figure for this account (the numbers /usage shows), not a local projection. Endpoint is undocumented and community-reverse-engineered."
+      },
+      "calls": [
+        "https://api.anthropic.com/api/oauth/usage",
+        "https://api.anthropic.com/api/oauth/profile"
+      ],
+      "cache": {
+        "fetchedAt": 1787292000000,
+        "ageSeconds": 0,
+        "stale": false,
+        "accountFp": "0ee2938d8ee7cd30",
+        "accountUuid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        "accountLabel": "owner@example.com",
+        "accountTier": "max_20x",
+        "localClaimedLabel": null,
+        "accountLabelSuspect": false,
+        "accountVerified": "yes",
+        "reason": "ok",
+        "limits": [
+          {
+            "kind": "session",
+            "group": "session",
+            "percent": 61,
+            "severity": "normal",
+            "resetsAt": "2099-01-01T00:00:00.000Z",
+            "isActive": true,
+            "scopeLabel": null,
+            "resetsInSeconds": 2283616800
+          }
+        ],
+        "fiveHourPercent": 61,
+        "sevenDayPercent": 12.5,
+        "usageCreditsEnabled": false,
+        "spendPercent": 4.25,
+        "note": "Utilization is Anthropic's own figure for this account (the numbers /usage shows), not a local projection. Endpoint is undocumented and community-reverse-engineered."
+      },
+      "cooldown": null,
+      "archived": {
+        "fetchedAt": 1787292000000,
+        "ageSeconds": 0,
+        "stale": false,
+        "accountFp": "0ee2938d8ee7cd30",
+        "accountUuid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        "accountLabel": "owner@example.com",
+        "accountTier": "max_20x",
+        "localClaimedLabel": null,
+        "accountLabelSuspect": false,
+        "accountVerified": "yes",
+        "reason": "ok",
+        "limits": [
+          {
+            "kind": "session",
+            "group": "session",
+            "percent": 61,
+            "severity": "normal",
+            "resetsAt": "2099-01-01T00:00:00.000Z",
+            "isActive": true,
+            "scopeLabel": null,
+            "resetsInSeconds": 2283616800
+          }
+        ],
+        "fiveHourPercent": 61,
+        "sevenDayPercent": 12.5,
+        "usageCreditsEnabled": false,
+        "spendPercent": 4.25,
+        "note": "Utilization is Anthropic's own figure for this account (the numbers /usage shows), not a local projection. Endpoint is undocumented and community-reverse-engineered."
+      },
+      "lockRemains": false,
+      "seed": {
+        "cache": {
+          "fetchedAt": 1787290800000,
+          "ageSeconds": 0,
+          "stale": false,
+          "accountFp": "0ee2938d8ee7cd30",
+          "accountUuid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+          "accountLabel": "owner@example.com",
+          "accountTier": "max_20x",
+          "localClaimedLabel": null,
+          "accountLabelSuspect": false,
+          "accountVerified": "yes",
+          "reason": "ok",
+          "limits": [
+            {
+              "kind": "session",
+              "group": "session",
+              "percent": 44,
+              "severity": "normal",
+              "resetsAt": "2099-01-01T00:00:00.000Z",
+              "isActive": true,
+              "scopeLabel": null,
+              "resetsInSeconds": 0
+            }
+          ],
+          "fiveHourPercent": 44,
+          "sevenDayPercent": 9,
+          "usageCreditsEnabled": null,
+          "spendPercent": null,
+          "note": "cached"
+        },
+        "cooldown": null,
+        "lock": null,
+        "lockAgeMs": 0,
+        "credentials": {
+          "claudeAiOauth": {
+            "accessToken": "sk-access-token-fixture",
+            "refreshToken": "sk-refresh-token-fixture"
+          }
+        },
+        "force": false,
+        "plan": "ok"
+      }
+    },
+    "fresh_beats_cooldown": {
+      "usage": {
+        "fetchedAt": 1787291940000,
+        "ageSeconds": 60,
+        "stale": false,
+        "accountFp": "0ee2938d8ee7cd30",
+        "accountUuid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        "accountLabel": "owner@example.com",
+        "accountTier": "max_20x",
+        "localClaimedLabel": null,
+        "accountLabelSuspect": false,
+        "accountVerified": "yes",
+        "reason": "fresh",
+        "limits": [
+          {
+            "kind": "session",
+            "group": "session",
+            "percent": 44,
+            "severity": "normal",
+            "resetsAt": "2099-01-01T00:00:00.000Z",
+            "isActive": true,
+            "scopeLabel": null,
+            "resetsInSeconds": 2283616800
+          }
+        ],
+        "fiveHourPercent": 44,
+        "sevenDayPercent": 9,
+        "usageCreditsEnabled": null,
+        "spendPercent": null,
+        "note": "cached"
+      },
+      "calls": [],
+      "cache": {
+        "fetchedAt": 1787291940000,
+        "ageSeconds": 0,
+        "stale": false,
+        "accountFp": "0ee2938d8ee7cd30",
+        "accountUuid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        "accountLabel": "owner@example.com",
+        "accountTier": "max_20x",
+        "localClaimedLabel": null,
+        "accountLabelSuspect": false,
+        "accountVerified": "yes",
+        "reason": "ok",
+        "limits": [
+          {
+            "kind": "session",
+            "group": "session",
+            "percent": 44,
+            "severity": "normal",
+            "resetsAt": "2099-01-01T00:00:00.000Z",
+            "isActive": true,
+            "scopeLabel": null,
+            "resetsInSeconds": 0
+          }
+        ],
+        "fiveHourPercent": 44,
+        "sevenDayPercent": 9,
+        "usageCreditsEnabled": null,
+        "spendPercent": null,
+        "note": "cached"
+      },
+      "cooldown": {
+        "until": 1787292060000,
+        "consecutive": 2
+      },
+      "archived": null,
+      "lockRemains": false,
+      "seed": {
+        "cache": {
+          "fetchedAt": 1787291940000,
+          "ageSeconds": 0,
+          "stale": false,
+          "accountFp": "0ee2938d8ee7cd30",
+          "accountUuid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+          "accountLabel": "owner@example.com",
+          "accountTier": "max_20x",
+          "localClaimedLabel": null,
+          "accountLabelSuspect": false,
+          "accountVerified": "yes",
+          "reason": "ok",
+          "limits": [
+            {
+              "kind": "session",
+              "group": "session",
+              "percent": 44,
+              "severity": "normal",
+              "resetsAt": "2099-01-01T00:00:00.000Z",
+              "isActive": true,
+              "scopeLabel": null,
+              "resetsInSeconds": 0
+            }
+          ],
+          "fiveHourPercent": 44,
+          "sevenDayPercent": 9,
+          "usageCreditsEnabled": null,
+          "spendPercent": null,
+          "note": "cached"
+        },
+        "cooldown": {
+          "until": 1787292060000,
+          "consecutive": 2
+        },
+        "lock": null,
+        "lockAgeMs": 0,
+        "credentials": {
+          "claudeAiOauth": {
+            "accessToken": "sk-access-token-fixture",
+            "refreshToken": "sk-refresh-token-fixture"
+          }
+        },
+        "force": false,
+        "plan": "ok"
+      }
+    },
+    "null_fp_fresh_cache": {
+      "usage": {
+        "fetchedAt": 1787291940000,
+        "ageSeconds": 60,
+        "stale": false,
+        "accountFp": null,
+        "accountUuid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        "accountLabel": "owner@example.com",
+        "accountTier": "max_20x",
+        "localClaimedLabel": null,
+        "accountLabelSuspect": false,
+        "accountVerified": "unknown",
+        "reason": "opt_in_required",
+        "limits": [
+          {
+            "kind": "session",
+            "group": "session",
+            "percent": 44,
+            "severity": "normal",
+            "resetsAt": "2099-01-01T00:00:00.000Z",
+            "isActive": true,
+            "scopeLabel": null,
+            "resetsInSeconds": 2283616800
+          }
+        ],
+        "fiveHourPercent": 44,
+        "sevenDayPercent": 9,
+        "usageCreditsEnabled": null,
+        "spendPercent": null,
+        "note": "cached"
+      },
+      "calls": [],
+      "cache": {
+        "fetchedAt": 1787291940000,
+        "ageSeconds": 0,
+        "stale": false,
+        "accountFp": null,
+        "accountUuid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        "accountLabel": "owner@example.com",
+        "accountTier": "max_20x",
+        "localClaimedLabel": null,
+        "accountLabelSuspect": false,
+        "accountVerified": "yes",
+        "reason": "ok",
+        "limits": [
+          {
+            "kind": "session",
+            "group": "session",
+            "percent": 44,
+            "severity": "normal",
+            "resetsAt": "2099-01-01T00:00:00.000Z",
+            "isActive": true,
+            "scopeLabel": null,
+            "resetsInSeconds": 0
+          }
+        ],
+        "fiveHourPercent": 44,
+        "sevenDayPercent": 9,
+        "usageCreditsEnabled": null,
+        "spendPercent": null,
+        "note": "cached"
+      },
+      "cooldown": null,
+      "archived": null,
+      "lockRemains": false,
+      "seed": {
+        "cache": {
+          "fetchedAt": 1787291940000,
+          "ageSeconds": 0,
+          "stale": false,
+          "accountFp": null,
+          "accountUuid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+          "accountLabel": "owner@example.com",
+          "accountTier": "max_20x",
+          "localClaimedLabel": null,
+          "accountLabelSuspect": false,
+          "accountVerified": "yes",
+          "reason": "ok",
+          "limits": [
+            {
+              "kind": "session",
+              "group": "session",
+              "percent": 44,
+              "severity": "normal",
+              "resetsAt": "2099-01-01T00:00:00.000Z",
+              "isActive": true,
+              "scopeLabel": null,
+              "resetsInSeconds": 0
+            }
+          ],
+          "fiveHourPercent": 44,
+          "sevenDayPercent": 9,
+          "usageCreditsEnabled": null,
+          "spendPercent": null,
+          "note": "cached"
+        },
+        "cooldown": null,
+        "lock": null,
+        "lockAgeMs": 0,
+        "credentials": null,
+        "force": false,
+        "plan": "ok"
+      }
+    },
+    "cooldown_active": {
+      "usage": {
+        "fetchedAt": 1787290800000,
+        "ageSeconds": 1200,
+        "stale": false,
+        "accountFp": "0ee2938d8ee7cd30",
+        "accountUuid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        "accountLabel": "owner@example.com",
+        "accountTier": "max_20x",
+        "localClaimedLabel": null,
+        "accountLabelSuspect": false,
+        "accountVerified": "yes",
+        "reason": "cooldown",
+        "limits": [
+          {
+            "kind": "session",
+            "group": "session",
+            "percent": 44,
+            "severity": "normal",
+            "resetsAt": "2099-01-01T00:00:00.000Z",
+            "isActive": true,
+            "scopeLabel": null,
+            "resetsInSeconds": 2283616800
+          }
+        ],
+        "fiveHourPercent": 44,
+        "sevenDayPercent": 9,
+        "usageCreditsEnabled": null,
+        "spendPercent": null,
+        "note": "cached"
+      },
+      "calls": [],
+      "cache": {
+        "fetchedAt": 1787290800000,
+        "ageSeconds": 0,
+        "stale": false,
+        "accountFp": "0ee2938d8ee7cd30",
+        "accountUuid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        "accountLabel": "owner@example.com",
+        "accountTier": "max_20x",
+        "localClaimedLabel": null,
+        "accountLabelSuspect": false,
+        "accountVerified": "yes",
+        "reason": "ok",
+        "limits": [
+          {
+            "kind": "session",
+            "group": "session",
+            "percent": 44,
+            "severity": "normal",
+            "resetsAt": "2099-01-01T00:00:00.000Z",
+            "isActive": true,
+            "scopeLabel": null,
+            "resetsInSeconds": 0
+          }
+        ],
+        "fiveHourPercent": 44,
+        "sevenDayPercent": 9,
+        "usageCreditsEnabled": null,
+        "spendPercent": null,
+        "note": "cached"
+      },
+      "cooldown": {
+        "until": 1787292060000,
+        "consecutive": 2
+      },
+      "archived": null,
+      "lockRemains": false,
+      "seed": {
+        "cache": {
+          "fetchedAt": 1787290800000,
+          "ageSeconds": 0,
+          "stale": false,
+          "accountFp": "0ee2938d8ee7cd30",
+          "accountUuid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+          "accountLabel": "owner@example.com",
+          "accountTier": "max_20x",
+          "localClaimedLabel": null,
+          "accountLabelSuspect": false,
+          "accountVerified": "yes",
+          "reason": "ok",
+          "limits": [
+            {
+              "kind": "session",
+              "group": "session",
+              "percent": 44,
+              "severity": "normal",
+              "resetsAt": "2099-01-01T00:00:00.000Z",
+              "isActive": true,
+              "scopeLabel": null,
+              "resetsInSeconds": 0
+            }
+          ],
+          "fiveHourPercent": 44,
+          "sevenDayPercent": 9,
+          "usageCreditsEnabled": null,
+          "spendPercent": null,
+          "note": "cached"
+        },
+        "cooldown": {
+          "until": 1787292060000,
+          "consecutive": 2
+        },
+        "lock": null,
+        "lockAgeMs": 0,
+        "credentials": {
+          "claudeAiOauth": {
+            "accessToken": "sk-access-token-fixture",
+            "refreshToken": "sk-refresh-token-fixture"
+          }
+        },
+        "force": false,
+        "plan": "ok"
+      }
+    },
+    "cooldown_expired": {
+      "usage": {
+        "fetchedAt": 1787292000000,
+        "ageSeconds": 0,
+        "stale": false,
+        "accountFp": "0ee2938d8ee7cd30",
+        "accountUuid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        "accountLabel": "owner@example.com",
+        "accountTier": "max_20x",
+        "localClaimedLabel": null,
+        "accountLabelSuspect": false,
+        "accountVerified": "yes",
+        "reason": "ok",
+        "limits": [
+          {
+            "kind": "session",
+            "group": "session",
+            "percent": 61,
+            "severity": "normal",
+            "resetsAt": "2099-01-01T00:00:00.000Z",
+            "isActive": true,
+            "scopeLabel": null,
+            "resetsInSeconds": 2283616800
+          }
+        ],
+        "fiveHourPercent": 61,
+        "sevenDayPercent": 12.5,
+        "usageCreditsEnabled": false,
+        "spendPercent": 4.25,
+        "note": "Utilization is Anthropic's own figure for this account (the numbers /usage shows), not a local projection. Endpoint is undocumented and community-reverse-engineered."
+      },
+      "calls": [
+        "https://api.anthropic.com/api/oauth/usage",
+        "https://api.anthropic.com/api/oauth/profile"
+      ],
+      "cache": {
+        "fetchedAt": 1787292000000,
+        "ageSeconds": 0,
+        "stale": false,
+        "accountFp": "0ee2938d8ee7cd30",
+        "accountUuid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        "accountLabel": "owner@example.com",
+        "accountTier": "max_20x",
+        "localClaimedLabel": null,
+        "accountLabelSuspect": false,
+        "accountVerified": "yes",
+        "reason": "ok",
+        "limits": [
+          {
+            "kind": "session",
+            "group": "session",
+            "percent": 61,
+            "severity": "normal",
+            "resetsAt": "2099-01-01T00:00:00.000Z",
+            "isActive": true,
+            "scopeLabel": null,
+            "resetsInSeconds": 2283616800
+          }
+        ],
+        "fiveHourPercent": 61,
+        "sevenDayPercent": 12.5,
+        "usageCreditsEnabled": false,
+        "spendPercent": 4.25,
+        "note": "Utilization is Anthropic's own figure for this account (the numbers /usage shows), not a local projection. Endpoint is undocumented and community-reverse-engineered."
+      },
+      "cooldown": null,
+      "archived": {
+        "fetchedAt": 1787292000000,
+        "ageSeconds": 0,
+        "stale": false,
+        "accountFp": "0ee2938d8ee7cd30",
+        "accountUuid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        "accountLabel": "owner@example.com",
+        "accountTier": "max_20x",
+        "localClaimedLabel": null,
+        "accountLabelSuspect": false,
+        "accountVerified": "yes",
+        "reason": "ok",
+        "limits": [
+          {
+            "kind": "session",
+            "group": "session",
+            "percent": 61,
+            "severity": "normal",
+            "resetsAt": "2099-01-01T00:00:00.000Z",
+            "isActive": true,
+            "scopeLabel": null,
+            "resetsInSeconds": 2283616800
+          }
+        ],
+        "fiveHourPercent": 61,
+        "sevenDayPercent": 12.5,
+        "usageCreditsEnabled": false,
+        "spendPercent": 4.25,
+        "note": "Utilization is Anthropic's own figure for this account (the numbers /usage shows), not a local projection. Endpoint is undocumented and community-reverse-engineered."
+      },
+      "lockRemains": false,
+      "seed": {
+        "cache": {
+          "fetchedAt": 1787290800000,
+          "ageSeconds": 0,
+          "stale": false,
+          "accountFp": "0ee2938d8ee7cd30",
+          "accountUuid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+          "accountLabel": "owner@example.com",
+          "accountTier": "max_20x",
+          "localClaimedLabel": null,
+          "accountLabelSuspect": false,
+          "accountVerified": "yes",
+          "reason": "ok",
+          "limits": [
+            {
+              "kind": "session",
+              "group": "session",
+              "percent": 44,
+              "severity": "normal",
+              "resetsAt": "2099-01-01T00:00:00.000Z",
+              "isActive": true,
+              "scopeLabel": null,
+              "resetsInSeconds": 0
+            }
+          ],
+          "fiveHourPercent": 44,
+          "sevenDayPercent": 9,
+          "usageCreditsEnabled": null,
+          "spendPercent": null,
+          "note": "cached"
+        },
+        "cooldown": {
+          "until": 1787291999999,
+          "consecutive": 2
+        },
+        "lock": null,
+        "lockAgeMs": 0,
+        "credentials": {
+          "claudeAiOauth": {
+            "accessToken": "sk-access-token-fixture",
+            "refreshToken": "sk-refresh-token-fixture"
+          }
+        },
+        "force": false,
+        "plan": "ok"
+      }
+    },
+    "http_429": {
+      "usage": {
+        "fetchedAt": 1787290800000,
+        "ageSeconds": 1200,
+        "stale": false,
+        "accountFp": "0ee2938d8ee7cd30",
+        "accountUuid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        "accountLabel": "owner@example.com",
+        "accountTier": "max_20x",
+        "localClaimedLabel": null,
+        "accountLabelSuspect": false,
+        "accountVerified": "yes",
+        "reason": "429",
+        "limits": [
+          {
+            "kind": "session",
+            "group": "session",
+            "percent": 44,
+            "severity": "normal",
+            "resetsAt": "2099-01-01T00:00:00.000Z",
+            "isActive": true,
+            "scopeLabel": null,
+            "resetsInSeconds": 2283616800
+          }
+        ],
+        "fiveHourPercent": 44,
+        "sevenDayPercent": 9,
+        "usageCreditsEnabled": null,
+        "spendPercent": null,
+        "note": "cached"
+      },
+      "calls": [
+        "https://api.anthropic.com/api/oauth/usage"
+      ],
+      "cache": {
+        "fetchedAt": 1787290800000,
+        "ageSeconds": 0,
+        "stale": false,
+        "accountFp": "0ee2938d8ee7cd30",
+        "accountUuid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        "accountLabel": "owner@example.com",
+        "accountTier": "max_20x",
+        "localClaimedLabel": null,
+        "accountLabelSuspect": false,
+        "accountVerified": "yes",
+        "reason": "ok",
+        "limits": [
+          {
+            "kind": "session",
+            "group": "session",
+            "percent": 44,
+            "severity": "normal",
+            "resetsAt": "2099-01-01T00:00:00.000Z",
+            "isActive": true,
+            "scopeLabel": null,
+            "resetsInSeconds": 0
+          }
+        ],
+        "fiveHourPercent": 44,
+        "sevenDayPercent": 9,
+        "usageCreditsEnabled": null,
+        "spendPercent": null,
+        "note": "cached"
+      },
+      "cooldown": {
+        "until": 1787292300000,
+        "consecutive": 1
+      },
+      "archived": null,
+      "lockRemains": false,
+      "seed": {
+        "cache": {
+          "fetchedAt": 1787290800000,
+          "ageSeconds": 0,
+          "stale": false,
+          "accountFp": "0ee2938d8ee7cd30",
+          "accountUuid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+          "accountLabel": "owner@example.com",
+          "accountTier": "max_20x",
+          "localClaimedLabel": null,
+          "accountLabelSuspect": false,
+          "accountVerified": "yes",
+          "reason": "ok",
+          "limits": [
+            {
+              "kind": "session",
+              "group": "session",
+              "percent": 44,
+              "severity": "normal",
+              "resetsAt": "2099-01-01T00:00:00.000Z",
+              "isActive": true,
+              "scopeLabel": null,
+              "resetsInSeconds": 0
+            }
+          ],
+          "fiveHourPercent": 44,
+          "sevenDayPercent": 9,
+          "usageCreditsEnabled": null,
+          "spendPercent": null,
+          "note": "cached"
+        },
+        "cooldown": null,
+        "lock": null,
+        "lockAgeMs": 0,
+        "credentials": {
+          "claudeAiOauth": {
+            "accessToken": "sk-access-token-fixture",
+            "refreshToken": "sk-refresh-token-fixture"
+          }
+        },
+        "force": false,
+        "plan": {
+          "usage": {
+            "status": 429,
+            "headers": {
+              "retry-after": "300"
+            }
+          }
+        }
+      }
+    },
+    "http_429_no_header": {
+      "usage": {
+        "fetchedAt": 1787290800000,
+        "ageSeconds": 1200,
+        "stale": false,
+        "accountFp": "0ee2938d8ee7cd30",
+        "accountUuid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        "accountLabel": "owner@example.com",
+        "accountTier": "max_20x",
+        "localClaimedLabel": null,
+        "accountLabelSuspect": false,
+        "accountVerified": "yes",
+        "reason": "429",
+        "limits": [
+          {
+            "kind": "session",
+            "group": "session",
+            "percent": 44,
+            "severity": "normal",
+            "resetsAt": "2099-01-01T00:00:00.000Z",
+            "isActive": true,
+            "scopeLabel": null,
+            "resetsInSeconds": 2283616800
+          }
+        ],
+        "fiveHourPercent": 44,
+        "sevenDayPercent": 9,
+        "usageCreditsEnabled": null,
+        "spendPercent": null,
+        "note": "cached"
+      },
+      "calls": [
+        "https://api.anthropic.com/api/oauth/usage"
+      ],
+      "cache": {
+        "fetchedAt": 1787290800000,
+        "ageSeconds": 0,
+        "stale": false,
+        "accountFp": "0ee2938d8ee7cd30",
+        "accountUuid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        "accountLabel": "owner@example.com",
+        "accountTier": "max_20x",
+        "localClaimedLabel": null,
+        "accountLabelSuspect": false,
+        "accountVerified": "yes",
+        "reason": "ok",
+        "limits": [
+          {
+            "kind": "session",
+            "group": "session",
+            "percent": 44,
+            "severity": "normal",
+            "resetsAt": "2099-01-01T00:00:00.000Z",
+            "isActive": true,
+            "scopeLabel": null,
+            "resetsInSeconds": 0
+          }
+        ],
+        "fiveHourPercent": 44,
+        "sevenDayPercent": 9,
+        "usageCreditsEnabled": null,
+        "spendPercent": null,
+        "note": "cached"
+      },
+      "cooldown": {
+        "until": 1787292600000,
+        "consecutive": 1
+      },
+      "archived": null,
+      "lockRemains": false,
+      "seed": {
+        "cache": {
+          "fetchedAt": 1787290800000,
+          "ageSeconds": 0,
+          "stale": false,
+          "accountFp": "0ee2938d8ee7cd30",
+          "accountUuid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+          "accountLabel": "owner@example.com",
+          "accountTier": "max_20x",
+          "localClaimedLabel": null,
+          "accountLabelSuspect": false,
+          "accountVerified": "yes",
+          "reason": "ok",
+          "limits": [
+            {
+              "kind": "session",
+              "group": "session",
+              "percent": 44,
+              "severity": "normal",
+              "resetsAt": "2099-01-01T00:00:00.000Z",
+              "isActive": true,
+              "scopeLabel": null,
+              "resetsInSeconds": 0
+            }
+          ],
+          "fiveHourPercent": 44,
+          "sevenDayPercent": 9,
+          "usageCreditsEnabled": null,
+          "spendPercent": null,
+          "note": "cached"
+        },
+        "cooldown": null,
+        "lock": null,
+        "lockAgeMs": 0,
+        "credentials": {
+          "claudeAiOauth": {
+            "accessToken": "sk-access-token-fixture",
+            "refreshToken": "sk-refresh-token-fixture"
+          }
+        },
+        "force": false,
+        "plan": {
+          "usage": {
+            "status": 429
+          }
+        }
+      }
+    },
+    "http_error": {
+      "usage": {
+        "fetchedAt": 1787290800000,
+        "ageSeconds": 1200,
+        "stale": false,
+        "accountFp": "0ee2938d8ee7cd30",
+        "accountUuid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        "accountLabel": "owner@example.com",
+        "accountTier": "max_20x",
+        "localClaimedLabel": null,
+        "accountLabelSuspect": false,
+        "accountVerified": "yes",
+        "reason": "http_error",
+        "limits": [
+          {
+            "kind": "session",
+            "group": "session",
+            "percent": 44,
+            "severity": "normal",
+            "resetsAt": "2099-01-01T00:00:00.000Z",
+            "isActive": true,
+            "scopeLabel": null,
+            "resetsInSeconds": 2283616800
+          }
+        ],
+        "fiveHourPercent": 44,
+        "sevenDayPercent": 9,
+        "usageCreditsEnabled": null,
+        "spendPercent": null,
+        "note": "cached"
+      },
+      "calls": [
+        "https://api.anthropic.com/api/oauth/usage"
+      ],
+      "cache": {
+        "fetchedAt": 1787290800000,
+        "ageSeconds": 0,
+        "stale": false,
+        "accountFp": "0ee2938d8ee7cd30",
+        "accountUuid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        "accountLabel": "owner@example.com",
+        "accountTier": "max_20x",
+        "localClaimedLabel": null,
+        "accountLabelSuspect": false,
+        "accountVerified": "yes",
+        "reason": "ok",
+        "limits": [
+          {
+            "kind": "session",
+            "group": "session",
+            "percent": 44,
+            "severity": "normal",
+            "resetsAt": "2099-01-01T00:00:00.000Z",
+            "isActive": true,
+            "scopeLabel": null,
+            "resetsInSeconds": 0
+          }
+        ],
+        "fiveHourPercent": 44,
+        "sevenDayPercent": 9,
+        "usageCreditsEnabled": null,
+        "spendPercent": null,
+        "note": "cached"
+      },
+      "cooldown": null,
+      "archived": null,
+      "lockRemains": false,
+      "seed": {
+        "cache": {
+          "fetchedAt": 1787290800000,
+          "ageSeconds": 0,
+          "stale": false,
+          "accountFp": "0ee2938d8ee7cd30",
+          "accountUuid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+          "accountLabel": "owner@example.com",
+          "accountTier": "max_20x",
+          "localClaimedLabel": null,
+          "accountLabelSuspect": false,
+          "accountVerified": "yes",
+          "reason": "ok",
+          "limits": [
+            {
+              "kind": "session",
+              "group": "session",
+              "percent": 44,
+              "severity": "normal",
+              "resetsAt": "2099-01-01T00:00:00.000Z",
+              "isActive": true,
+              "scopeLabel": null,
+              "resetsInSeconds": 0
+            }
+          ],
+          "fiveHourPercent": 44,
+          "sevenDayPercent": 9,
+          "usageCreditsEnabled": null,
+          "spendPercent": null,
+          "note": "cached"
+        },
+        "cooldown": null,
+        "lock": null,
+        "lockAgeMs": 0,
+        "credentials": {
+          "claudeAiOauth": {
+            "accessToken": "sk-access-token-fixture",
+            "refreshToken": "sk-refresh-token-fixture"
+          }
+        },
+        "force": false,
+        "plan": {
+          "usage": {
+            "status": 500
+          }
+        }
+      }
+    },
+    "network_throws": {
+      "usage": {
+        "fetchedAt": 1787290800000,
+        "ageSeconds": 1200,
+        "stale": false,
+        "accountFp": "0ee2938d8ee7cd30",
+        "accountUuid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        "accountLabel": "owner@example.com",
+        "accountTier": "max_20x",
+        "localClaimedLabel": null,
+        "accountLabelSuspect": false,
+        "accountVerified": "yes",
+        "reason": "http_error",
+        "limits": [
+          {
+            "kind": "session",
+            "group": "session",
+            "percent": 44,
+            "severity": "normal",
+            "resetsAt": "2099-01-01T00:00:00.000Z",
+            "isActive": true,
+            "scopeLabel": null,
+            "resetsInSeconds": 2283616800
+          }
+        ],
+        "fiveHourPercent": 44,
+        "sevenDayPercent": 9,
+        "usageCreditsEnabled": null,
+        "spendPercent": null,
+        "note": "cached"
+      },
+      "calls": [
+        "https://api.anthropic.com/api/oauth/usage"
+      ],
+      "cache": {
+        "fetchedAt": 1787290800000,
+        "ageSeconds": 0,
+        "stale": false,
+        "accountFp": "0ee2938d8ee7cd30",
+        "accountUuid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        "accountLabel": "owner@example.com",
+        "accountTier": "max_20x",
+        "localClaimedLabel": null,
+        "accountLabelSuspect": false,
+        "accountVerified": "yes",
+        "reason": "ok",
+        "limits": [
+          {
+            "kind": "session",
+            "group": "session",
+            "percent": 44,
+            "severity": "normal",
+            "resetsAt": "2099-01-01T00:00:00.000Z",
+            "isActive": true,
+            "scopeLabel": null,
+            "resetsInSeconds": 0
+          }
+        ],
+        "fiveHourPercent": 44,
+        "sevenDayPercent": 9,
+        "usageCreditsEnabled": null,
+        "spendPercent": null,
+        "note": "cached"
+      },
+      "cooldown": null,
+      "archived": null,
+      "lockRemains": false,
+      "seed": {
+        "cache": {
+          "fetchedAt": 1787290800000,
+          "ageSeconds": 0,
+          "stale": false,
+          "accountFp": "0ee2938d8ee7cd30",
+          "accountUuid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+          "accountLabel": "owner@example.com",
+          "accountTier": "max_20x",
+          "localClaimedLabel": null,
+          "accountLabelSuspect": false,
+          "accountVerified": "yes",
+          "reason": "ok",
+          "limits": [
+            {
+              "kind": "session",
+              "group": "session",
+              "percent": 44,
+              "severity": "normal",
+              "resetsAt": "2099-01-01T00:00:00.000Z",
+              "isActive": true,
+              "scopeLabel": null,
+              "resetsInSeconds": 0
+            }
+          ],
+          "fiveHourPercent": 44,
+          "sevenDayPercent": 9,
+          "usageCreditsEnabled": null,
+          "spendPercent": null,
+          "note": "cached"
+        },
+        "cooldown": null,
+        "lock": null,
+        "lockAgeMs": 0,
+        "credentials": {
+          "claudeAiOauth": {
+            "accessToken": "sk-access-token-fixture",
+            "refreshToken": "sk-refresh-token-fixture"
+          }
+        },
+        "force": false,
+        "plan": {}
+      }
+    },
+    "profile_fails": {
+      "usage": {
+        "fetchedAt": 1787292000000,
+        "ageSeconds": 0,
+        "stale": false,
+        "accountFp": "0ee2938d8ee7cd30",
+        "accountUuid": null,
+        "accountLabel": null,
+        "accountTier": null,
+        "localClaimedLabel": null,
+        "accountLabelSuspect": false,
+        "accountVerified": "yes",
+        "reason": "ok",
+        "limits": [
+          {
+            "kind": "session",
+            "group": "session",
+            "percent": 61,
+            "severity": "normal",
+            "resetsAt": "2099-01-01T00:00:00.000Z",
+            "isActive": true,
+            "scopeLabel": null,
+            "resetsInSeconds": 2283616800
+          }
+        ],
+        "fiveHourPercent": 61,
+        "sevenDayPercent": 12.5,
+        "usageCreditsEnabled": false,
+        "spendPercent": 4.25,
+        "note": "Utilization is Anthropic's own figure for this account (the numbers /usage shows), not a local projection. Endpoint is undocumented and community-reverse-engineered."
+      },
+      "calls": [
+        "https://api.anthropic.com/api/oauth/usage",
+        "https://api.anthropic.com/api/oauth/profile"
+      ],
+      "cache": {
+        "fetchedAt": 1787292000000,
+        "ageSeconds": 0,
+        "stale": false,
+        "accountFp": "0ee2938d8ee7cd30",
+        "accountUuid": null,
+        "accountLabel": null,
+        "accountTier": null,
+        "localClaimedLabel": null,
+        "accountLabelSuspect": false,
+        "accountVerified": "yes",
+        "reason": "ok",
+        "limits": [
+          {
+            "kind": "session",
+            "group": "session",
+            "percent": 61,
+            "severity": "normal",
+            "resetsAt": "2099-01-01T00:00:00.000Z",
+            "isActive": true,
+            "scopeLabel": null,
+            "resetsInSeconds": 2283616800
+          }
+        ],
+        "fiveHourPercent": 61,
+        "sevenDayPercent": 12.5,
+        "usageCreditsEnabled": false,
+        "spendPercent": 4.25,
+        "note": "Utilization is Anthropic's own figure for this account (the numbers /usage shows), not a local projection. Endpoint is undocumented and community-reverse-engineered."
+      },
+      "cooldown": null,
+      "archived": null,
+      "lockRemains": false,
+      "seed": {
+        "cache": null,
+        "cooldown": null,
+        "lock": null,
+        "lockAgeMs": 0,
+        "credentials": {
+          "claudeAiOauth": {
+            "accessToken": "sk-access-token-fixture",
+            "refreshToken": "sk-refresh-token-fixture"
+          }
+        },
+        "force": false,
+        "plan": {
+          "usage": {
+            "status": 200,
+            "body": {
+              "five_hour": {
+                "utilization": 61
+              },
+              "seven_day": {
+                "used_percentage": 12.5
+              },
+              "limits": [
+                {
+                  "kind": "session",
+                  "group": "session",
+                  "percent": 61,
+                  "severity": "normal",
+                  "resets_at": "2099-01-01T00:00:00.000Z",
+                  "is_active": true
+                }
+              ],
+              "extra_usage": {
+                "is_enabled": false
+              },
+              "spend": {
+                "percent": 4.25
+              }
+            }
+          },
+          "profile": {
+            "status": 403
+          }
+        }
+      }
+    },
+    "no_credentials": {
+      "usage": {
+        "fetchedAt": 1787290800000,
+        "ageSeconds": 1200,
+        "stale": false,
+        "accountFp": "0ee2938d8ee7cd30",
+        "accountUuid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        "accountLabel": "owner@example.com",
+        "accountTier": "max_20x",
+        "localClaimedLabel": null,
+        "accountLabelSuspect": false,
+        "accountVerified": "unknown",
+        "reason": "opt_in_required",
+        "limits": [
+          {
+            "kind": "session",
+            "group": "session",
+            "percent": 44,
+            "severity": "normal",
+            "resetsAt": "2099-01-01T00:00:00.000Z",
+            "isActive": true,
+            "scopeLabel": null,
+            "resetsInSeconds": 2283616800
+          }
+        ],
+        "fiveHourPercent": 44,
+        "sevenDayPercent": 9,
+        "usageCreditsEnabled": null,
+        "spendPercent": null,
+        "note": "cached"
+      },
+      "calls": [],
+      "cache": {
+        "fetchedAt": 1787290800000,
+        "ageSeconds": 0,
+        "stale": false,
+        "accountFp": "0ee2938d8ee7cd30",
+        "accountUuid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        "accountLabel": "owner@example.com",
+        "accountTier": "max_20x",
+        "localClaimedLabel": null,
+        "accountLabelSuspect": false,
+        "accountVerified": "yes",
+        "reason": "ok",
+        "limits": [
+          {
+            "kind": "session",
+            "group": "session",
+            "percent": 44,
+            "severity": "normal",
+            "resetsAt": "2099-01-01T00:00:00.000Z",
+            "isActive": true,
+            "scopeLabel": null,
+            "resetsInSeconds": 0
+          }
+        ],
+        "fiveHourPercent": 44,
+        "sevenDayPercent": 9,
+        "usageCreditsEnabled": null,
+        "spendPercent": null,
+        "note": "cached"
+      },
+      "cooldown": null,
+      "archived": null,
+      "lockRemains": false,
+      "seed": {
+        "cache": {
+          "fetchedAt": 1787290800000,
+          "ageSeconds": 0,
+          "stale": false,
+          "accountFp": "0ee2938d8ee7cd30",
+          "accountUuid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+          "accountLabel": "owner@example.com",
+          "accountTier": "max_20x",
+          "localClaimedLabel": null,
+          "accountLabelSuspect": false,
+          "accountVerified": "yes",
+          "reason": "ok",
+          "limits": [
+            {
+              "kind": "session",
+              "group": "session",
+              "percent": 44,
+              "severity": "normal",
+              "resetsAt": "2099-01-01T00:00:00.000Z",
+              "isActive": true,
+              "scopeLabel": null,
+              "resetsInSeconds": 0
+            }
+          ],
+          "fiveHourPercent": 44,
+          "sevenDayPercent": 9,
+          "usageCreditsEnabled": null,
+          "spendPercent": null,
+          "note": "cached"
+        },
+        "cooldown": null,
+        "lock": null,
+        "lockAgeMs": 0,
+        "credentials": null,
+        "force": false,
+        "plan": "ok"
+      }
+    },
+    "expiring_token": {
+      "usage": {
+        "fetchedAt": 1787290800000,
+        "ageSeconds": 1200,
+        "stale": false,
+        "accountFp": "0ee2938d8ee7cd30",
+        "accountUuid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        "accountLabel": "owner@example.com",
+        "accountTier": "max_20x",
+        "localClaimedLabel": null,
+        "accountLabelSuspect": false,
+        "accountVerified": "yes",
+        "reason": "expiring_token",
+        "limits": [
+          {
+            "kind": "session",
+            "group": "session",
+            "percent": 44,
+            "severity": "normal",
+            "resetsAt": "2099-01-01T00:00:00.000Z",
+            "isActive": true,
+            "scopeLabel": null,
+            "resetsInSeconds": 2283616800
+          }
+        ],
+        "fiveHourPercent": 44,
+        "sevenDayPercent": 9,
+        "usageCreditsEnabled": null,
+        "spendPercent": null,
+        "note": "cached"
+      },
+      "calls": [],
+      "cache": {
+        "fetchedAt": 1787290800000,
+        "ageSeconds": 0,
+        "stale": false,
+        "accountFp": "0ee2938d8ee7cd30",
+        "accountUuid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        "accountLabel": "owner@example.com",
+        "accountTier": "max_20x",
+        "localClaimedLabel": null,
+        "accountLabelSuspect": false,
+        "accountVerified": "yes",
+        "reason": "ok",
+        "limits": [
+          {
+            "kind": "session",
+            "group": "session",
+            "percent": 44,
+            "severity": "normal",
+            "resetsAt": "2099-01-01T00:00:00.000Z",
+            "isActive": true,
+            "scopeLabel": null,
+            "resetsInSeconds": 0
+          }
+        ],
+        "fiveHourPercent": 44,
+        "sevenDayPercent": 9,
+        "usageCreditsEnabled": null,
+        "spendPercent": null,
+        "note": "cached"
+      },
+      "cooldown": null,
+      "archived": null,
+      "lockRemains": false,
+      "seed": {
+        "cache": {
+          "fetchedAt": 1787290800000,
+          "ageSeconds": 0,
+          "stale": false,
+          "accountFp": "0ee2938d8ee7cd30",
+          "accountUuid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+          "accountLabel": "owner@example.com",
+          "accountTier": "max_20x",
+          "localClaimedLabel": null,
+          "accountLabelSuspect": false,
+          "accountVerified": "yes",
+          "reason": "ok",
+          "limits": [
+            {
+              "kind": "session",
+              "group": "session",
+              "percent": 44,
+              "severity": "normal",
+              "resetsAt": "2099-01-01T00:00:00.000Z",
+              "isActive": true,
+              "scopeLabel": null,
+              "resetsInSeconds": 0
+            }
+          ],
+          "fiveHourPercent": 44,
+          "sevenDayPercent": 9,
+          "usageCreditsEnabled": null,
+          "spendPercent": null,
+          "note": "cached"
+        },
+        "cooldown": null,
+        "lock": null,
+        "lockAgeMs": 0,
+        "credentials": {
+          "claudeAiOauth": {
+            "accessToken": "sk-access-token-fixture",
+            "refreshToken": "sk-refresh-token-fixture",
+            "expiresAt": 1787292010000
+          }
+        },
+        "force": false,
+        "plan": "ok"
+      }
+    },
+    "token_valid_window": {
+      "usage": {
+        "fetchedAt": 1787292000000,
+        "ageSeconds": 0,
+        "stale": false,
+        "accountFp": "0ee2938d8ee7cd30",
+        "accountUuid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        "accountLabel": "owner@example.com",
+        "accountTier": "max_20x",
+        "localClaimedLabel": null,
+        "accountLabelSuspect": false,
+        "accountVerified": "yes",
+        "reason": "ok",
+        "limits": [
+          {
+            "kind": "session",
+            "group": "session",
+            "percent": 61,
+            "severity": "normal",
+            "resetsAt": "2099-01-01T00:00:00.000Z",
+            "isActive": true,
+            "scopeLabel": null,
+            "resetsInSeconds": 2283616800
+          }
+        ],
+        "fiveHourPercent": 61,
+        "sevenDayPercent": 12.5,
+        "usageCreditsEnabled": false,
+        "spendPercent": 4.25,
+        "note": "Utilization is Anthropic's own figure for this account (the numbers /usage shows), not a local projection. Endpoint is undocumented and community-reverse-engineered."
+      },
+      "calls": [
+        "https://api.anthropic.com/api/oauth/usage",
+        "https://api.anthropic.com/api/oauth/profile"
+      ],
+      "cache": {
+        "fetchedAt": 1787292000000,
+        "ageSeconds": 0,
+        "stale": false,
+        "accountFp": "0ee2938d8ee7cd30",
+        "accountUuid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        "accountLabel": "owner@example.com",
+        "accountTier": "max_20x",
+        "localClaimedLabel": null,
+        "accountLabelSuspect": false,
+        "accountVerified": "yes",
+        "reason": "ok",
+        "limits": [
+          {
+            "kind": "session",
+            "group": "session",
+            "percent": 61,
+            "severity": "normal",
+            "resetsAt": "2099-01-01T00:00:00.000Z",
+            "isActive": true,
+            "scopeLabel": null,
+            "resetsInSeconds": 2283616800
+          }
+        ],
+        "fiveHourPercent": 61,
+        "sevenDayPercent": 12.5,
+        "usageCreditsEnabled": false,
+        "spendPercent": 4.25,
+        "note": "Utilization is Anthropic's own figure for this account (the numbers /usage shows), not a local projection. Endpoint is undocumented and community-reverse-engineered."
+      },
+      "cooldown": null,
+      "archived": {
+        "fetchedAt": 1787292000000,
+        "ageSeconds": 0,
+        "stale": false,
+        "accountFp": "0ee2938d8ee7cd30",
+        "accountUuid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        "accountLabel": "owner@example.com",
+        "accountTier": "max_20x",
+        "localClaimedLabel": null,
+        "accountLabelSuspect": false,
+        "accountVerified": "yes",
+        "reason": "ok",
+        "limits": [
+          {
+            "kind": "session",
+            "group": "session",
+            "percent": 61,
+            "severity": "normal",
+            "resetsAt": "2099-01-01T00:00:00.000Z",
+            "isActive": true,
+            "scopeLabel": null,
+            "resetsInSeconds": 2283616800
+          }
+        ],
+        "fiveHourPercent": 61,
+        "sevenDayPercent": 12.5,
+        "usageCreditsEnabled": false,
+        "spendPercent": 4.25,
+        "note": "Utilization is Anthropic's own figure for this account (the numbers /usage shows), not a local projection. Endpoint is undocumented and community-reverse-engineered."
+      },
+      "lockRemains": false,
+      "seed": {
+        "cache": {
+          "fetchedAt": 1787290800000,
+          "ageSeconds": 0,
+          "stale": false,
+          "accountFp": "0ee2938d8ee7cd30",
+          "accountUuid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+          "accountLabel": "owner@example.com",
+          "accountTier": "max_20x",
+          "localClaimedLabel": null,
+          "accountLabelSuspect": false,
+          "accountVerified": "yes",
+          "reason": "ok",
+          "limits": [
+            {
+              "kind": "session",
+              "group": "session",
+              "percent": 44,
+              "severity": "normal",
+              "resetsAt": "2099-01-01T00:00:00.000Z",
+              "isActive": true,
+              "scopeLabel": null,
+              "resetsInSeconds": 0
+            }
+          ],
+          "fiveHourPercent": 44,
+          "sevenDayPercent": 9,
+          "usageCreditsEnabled": null,
+          "spendPercent": null,
+          "note": "cached"
+        },
+        "cooldown": null,
+        "lock": null,
+        "lockAgeMs": 0,
+        "credentials": {
+          "claudeAiOauth": {
+            "accessToken": "sk-access-token-fixture",
+            "refreshToken": "sk-refresh-token-fixture",
+            "expiresAt": 1787292600000
+          }
+        },
+        "force": false,
+        "plan": "ok"
+      }
+    },
+    "lock_contended": {
+      "usage": {
+        "fetchedAt": 1787290800000,
+        "ageSeconds": 1200,
+        "stale": false,
+        "accountFp": "0ee2938d8ee7cd30",
+        "accountUuid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        "accountLabel": "owner@example.com",
+        "accountTier": "max_20x",
+        "localClaimedLabel": null,
+        "accountLabelSuspect": false,
+        "accountVerified": "yes",
+        "reason": "lock_contended",
+        "limits": [
+          {
+            "kind": "session",
+            "group": "session",
+            "percent": 44,
+            "severity": "normal",
+            "resetsAt": "2099-01-01T00:00:00.000Z",
+            "isActive": true,
+            "scopeLabel": null,
+            "resetsInSeconds": 2283616800
+          }
+        ],
+        "fiveHourPercent": 44,
+        "sevenDayPercent": 9,
+        "usageCreditsEnabled": null,
+        "spendPercent": null,
+        "note": "cached"
+      },
+      "calls": [],
+      "cache": {
+        "fetchedAt": 1787290800000,
+        "ageSeconds": 0,
+        "stale": false,
+        "accountFp": "0ee2938d8ee7cd30",
+        "accountUuid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        "accountLabel": "owner@example.com",
+        "accountTier": "max_20x",
+        "localClaimedLabel": null,
+        "accountLabelSuspect": false,
+        "accountVerified": "yes",
+        "reason": "ok",
+        "limits": [
+          {
+            "kind": "session",
+            "group": "session",
+            "percent": 44,
+            "severity": "normal",
+            "resetsAt": "2099-01-01T00:00:00.000Z",
+            "isActive": true,
+            "scopeLabel": null,
+            "resetsInSeconds": 0
+          }
+        ],
+        "fiveHourPercent": 44,
+        "sevenDayPercent": 9,
+        "usageCreditsEnabled": null,
+        "spendPercent": null,
+        "note": "cached"
+      },
+      "cooldown": null,
+      "archived": null,
+      "lockRemains": true,
+      "seed": {
+        "cache": {
+          "fetchedAt": 1787290800000,
+          "ageSeconds": 0,
+          "stale": false,
+          "accountFp": "0ee2938d8ee7cd30",
+          "accountUuid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+          "accountLabel": "owner@example.com",
+          "accountTier": "max_20x",
+          "localClaimedLabel": null,
+          "accountLabelSuspect": false,
+          "accountVerified": "yes",
+          "reason": "ok",
+          "limits": [
+            {
+              "kind": "session",
+              "group": "session",
+              "percent": 44,
+              "severity": "normal",
+              "resetsAt": "2099-01-01T00:00:00.000Z",
+              "isActive": true,
+              "scopeLabel": null,
+              "resetsInSeconds": 0
+            }
+          ],
+          "fiveHourPercent": 44,
+          "sevenDayPercent": 9,
+          "usageCreditsEnabled": null,
+          "spendPercent": null,
+          "note": "cached"
+        },
+        "cooldown": null,
+        "lock": 424242,
+        "lockAgeMs": 1000,
+        "credentials": {
+          "claudeAiOauth": {
+            "accessToken": "sk-access-token-fixture",
+            "refreshToken": "sk-refresh-token-fixture"
+          }
+        },
+        "force": false,
+        "plan": "ok"
+      }
+    },
+    "stale_lock_reclaimed": {
+      "usage": {
+        "fetchedAt": 1787292000000,
+        "ageSeconds": 0,
+        "stale": false,
+        "accountFp": "0ee2938d8ee7cd30",
+        "accountUuid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        "accountLabel": "owner@example.com",
+        "accountTier": "max_20x",
+        "localClaimedLabel": null,
+        "accountLabelSuspect": false,
+        "accountVerified": "yes",
+        "reason": "ok",
+        "limits": [
+          {
+            "kind": "session",
+            "group": "session",
+            "percent": 61,
+            "severity": "normal",
+            "resetsAt": "2099-01-01T00:00:00.000Z",
+            "isActive": true,
+            "scopeLabel": null,
+            "resetsInSeconds": 2283616800
+          }
+        ],
+        "fiveHourPercent": 61,
+        "sevenDayPercent": 12.5,
+        "usageCreditsEnabled": false,
+        "spendPercent": 4.25,
+        "note": "Utilization is Anthropic's own figure for this account (the numbers /usage shows), not a local projection. Endpoint is undocumented and community-reverse-engineered."
+      },
+      "calls": [
+        "https://api.anthropic.com/api/oauth/usage",
+        "https://api.anthropic.com/api/oauth/profile"
+      ],
+      "cache": {
+        "fetchedAt": 1787292000000,
+        "ageSeconds": 0,
+        "stale": false,
+        "accountFp": "0ee2938d8ee7cd30",
+        "accountUuid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        "accountLabel": "owner@example.com",
+        "accountTier": "max_20x",
+        "localClaimedLabel": null,
+        "accountLabelSuspect": false,
+        "accountVerified": "yes",
+        "reason": "ok",
+        "limits": [
+          {
+            "kind": "session",
+            "group": "session",
+            "percent": 61,
+            "severity": "normal",
+            "resetsAt": "2099-01-01T00:00:00.000Z",
+            "isActive": true,
+            "scopeLabel": null,
+            "resetsInSeconds": 2283616800
+          }
+        ],
+        "fiveHourPercent": 61,
+        "sevenDayPercent": 12.5,
+        "usageCreditsEnabled": false,
+        "spendPercent": 4.25,
+        "note": "Utilization is Anthropic's own figure for this account (the numbers /usage shows), not a local projection. Endpoint is undocumented and community-reverse-engineered."
+      },
+      "cooldown": null,
+      "archived": {
+        "fetchedAt": 1787292000000,
+        "ageSeconds": 0,
+        "stale": false,
+        "accountFp": "0ee2938d8ee7cd30",
+        "accountUuid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        "accountLabel": "owner@example.com",
+        "accountTier": "max_20x",
+        "localClaimedLabel": null,
+        "accountLabelSuspect": false,
+        "accountVerified": "yes",
+        "reason": "ok",
+        "limits": [
+          {
+            "kind": "session",
+            "group": "session",
+            "percent": 61,
+            "severity": "normal",
+            "resetsAt": "2099-01-01T00:00:00.000Z",
+            "isActive": true,
+            "scopeLabel": null,
+            "resetsInSeconds": 2283616800
+          }
+        ],
+        "fiveHourPercent": 61,
+        "sevenDayPercent": 12.5,
+        "usageCreditsEnabled": false,
+        "spendPercent": 4.25,
+        "note": "Utilization is Anthropic's own figure for this account (the numbers /usage shows), not a local projection. Endpoint is undocumented and community-reverse-engineered."
+      },
+      "lockRemains": false,
+      "seed": {
+        "cache": {
+          "fetchedAt": 1787290800000,
+          "ageSeconds": 0,
+          "stale": false,
+          "accountFp": "0ee2938d8ee7cd30",
+          "accountUuid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+          "accountLabel": "owner@example.com",
+          "accountTier": "max_20x",
+          "localClaimedLabel": null,
+          "accountLabelSuspect": false,
+          "accountVerified": "yes",
+          "reason": "ok",
+          "limits": [
+            {
+              "kind": "session",
+              "group": "session",
+              "percent": 44,
+              "severity": "normal",
+              "resetsAt": "2099-01-01T00:00:00.000Z",
+              "isActive": true,
+              "scopeLabel": null,
+              "resetsInSeconds": 0
+            }
+          ],
+          "fiveHourPercent": 44,
+          "sevenDayPercent": 9,
+          "usageCreditsEnabled": null,
+          "spendPercent": null,
+          "note": "cached"
+        },
+        "cooldown": null,
+        "lock": 424242,
+        "lockAgeMs": 60000,
+        "credentials": {
+          "claudeAiOauth": {
+            "accessToken": "sk-access-token-fixture",
+            "refreshToken": "sk-refresh-token-fixture"
+          }
+        },
+        "force": false,
+        "plan": "ok"
+      }
+    },
+    "no_cache_no_token": {
+      "usage": null,
+      "calls": [],
+      "cache": null,
+      "cooldown": null,
+      "archived": null,
+      "lockRemains": false,
+      "seed": {
+        "cache": null,
+        "cooldown": null,
+        "lock": null,
+        "lockAgeMs": 0,
+        "credentials": null,
+        "force": false,
+        "plan": "ok"
+      }
+    }
+  }
+}

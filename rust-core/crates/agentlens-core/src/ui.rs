@@ -1887,6 +1887,62 @@ async fn handle(
                         .map_err(|e| format!("cache-break scan join failed: {e}"))?;
                         crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
                     }
+                    "get_subscription_usage" => {
+                        // The one tool here that talks to the network. Blocking transport + file
+                        // locks, so it runs on spawn_blocking with the state lock released first.
+                        let (data_dir, home) = {
+                            let st = state.lock().map_err(|_| "state poisoned".to_owned())?;
+                            (st.data_dir.clone(), st.log_env.home.clone())
+                        };
+                        let force = args.get("force").and_then(Value::as_bool).unwrap_or(false);
+                        let format = args.get("format").and_then(Value::as_str).unwrap_or("table").to_owned();
+                        let payload = tokio::task::spawn_blocking(move || {
+                            use crate::subscription_usage as su;
+                            let now = crate::now_ms() as f64;
+                            let vars: std::collections::HashMap<String, String> = std::env::vars().collect();
+                            let cfg_dir = vars.get("CLAUDE_CONFIG_DIR").map(std::path::PathBuf::from);
+                            // `allow_keychain` is the per-CALL override the MCP tool never sets
+                            // (the TS handler passes only `force`); consent comes from the durable
+                            // env-or-config knob, which is why it is resolved here and not latched
+                            // at boot.
+                            let loaded = su::load_token(
+                                cfg_dir.as_deref(),
+                                &home,
+                                false,
+                                su::keychain_read_allowed(&data_dir, &vars),
+                                cfg!(target_os = "macos"),
+                            );
+                            // The label the LOCAL config claims, used only to flag a disagreement
+                            // with the token's own identity. The keychain reader is stubbed out: it
+                            // would only fill in the plan type, and an un-ACL'd read pops a
+                            // password prompt on a path that must never block a tool call.
+                            let no_keychain = || None;
+                            let claimed =
+                                crate::burn::account_info::get_current_account(&home, &vars, Some(&no_keychain)).email;
+                            let usage = su::get_subscription_usage(
+                                &su::UsagePaths::under(&data_dir),
+                                &loaded,
+                                now,
+                                force,
+                                claimed.as_deref(),
+                                &su::live_fetch_usage,
+                                &su::live_fetch_identity,
+                            );
+                            if format == "json" {
+                                usage.unwrap_or_else(|| {
+                                    serde_json::json!({"error": "unavailable", "reason": "no_token_or_opt_in_required"})
+                                })
+                            } else {
+                                serde_json::json!({
+                                    "format": "table",
+                                    "text": su::format_subscription_usage(usage.as_ref(), now),
+                                })
+                            }
+                        })
+                        .await
+                        .map_err(|e| format!("subscription usage join failed: {e}"))?;
+                        crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
+                    }
                     "get_rate_limit_report" => {
                         // Reads the hook-event buckets, then deep-attributes the newest episode via
                         // a bounded body scan — spawn_blocking, lock released first.

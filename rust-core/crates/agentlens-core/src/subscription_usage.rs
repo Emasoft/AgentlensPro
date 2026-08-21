@@ -10,7 +10,7 @@
 //! write.
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value};
 
@@ -555,4 +555,368 @@ pub fn format_subscription_usage(u: Option<&Value>, now: f64) -> String {
         ));
     }
     lines.join("\n")
+}
+
+// ── SLICE B: credential loading + the fetch orchestration (TS 205-288, 621-703) ───
+/// One HTTP response, reduced to what this module reads. The caller owns the transport: the TS
+/// calls global `fetch` inline, so a faithful port with a testable oracle has to name the seam.
+pub struct HttpResponse {
+    pub status: u16,
+    pub headers: HashMap<String, String>,
+    pub body: String,
+}
+
+impl HttpResponse {
+    /// `res.ok` — 2xx.
+    fn ok(&self) -> bool {
+        (200..300).contains(&self.status)
+    }
+}
+
+#[derive(Default)]
+pub struct LoadedToken {
+    pub token: Option<String>,
+    pub expires_at: Option<f64>,
+    pub fp: Option<String>,
+    pub reason: Option<&'static str>,
+}
+
+/// Identify the ACCOUNT a credential belongs to, without ever storing or logging the credential.
+///
+/// Prefer the REFRESH token: the access token rotates roughly hourly, so fingerprinting it would
+/// invalidate the cache on every rotation. The refresh token is longer-lived but NOT permanent —
+/// Anthropic rotates it server-side — so this fingerprint can change without an account switch.
+/// That is the SAFE direction and the whole reason to key on it: a change yields a cache MISS and
+/// one extra request, never another account's numbers under this account's name.
+///
+/// COROLLARY, and it is a landmine: this module must NEVER call the token-refresh endpoint with
+/// Claude Code's credential. Reading the access token is inert; refreshing it would invalidate the
+/// session the user is working in.
+fn fingerprint(creds: &Value) -> Option<String> {
+    let basis = creds
+        .get("refreshToken")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .or_else(|| creds.get("accessToken").and_then(Value::as_str).filter(|s| !s.is_empty()))?;
+    Some(agentlens_store::sections::sha256_hex(basis).chars().take(16).collect())
+}
+
+/// `raw.claudeAiOauth` when it is an object, else the record itself.
+fn oauth_inner(raw: &Value) -> &Value {
+    match raw.get("claudeAiOauth") {
+        Some(v) if v.is_object() || v.is_array() => v,
+        _ => raw,
+    }
+}
+
+fn creds_to_loaded(inner: &Value) -> Option<LoadedToken> {
+    let token = inner.get("accessToken").and_then(Value::as_str).filter(|s| !s.is_empty())?;
+    Some(LoadedToken {
+        token: Some(token.to_owned()),
+        expires_at: finite(inner.get("expiresAt")),
+        fp: fingerprint(inner),
+        reason: None,
+    })
+}
+
+/// Read the OAuth credential. The FILE path first (absent on macOS by design), then — on darwin
+/// only, and ONLY behind consent — the keychain.
+///
+/// `keychain_allowed` is `keychainReadAllowed(dataDirFrom(env), env)`, computed by the CALLER: that
+/// consent module is not ported, and re-deriving the precedence here is exactly how the two drift.
+/// `allow_keychain` is the same judgement made per CALL SITE — a command the user typed and is
+/// watching can afford one macOS password prompt, a status line or a hook cannot.
+pub fn load_token(
+    config_dir: Option<&Path>,
+    home: &Path,
+    allow_keychain: bool,
+    keychain_allowed: bool,
+    is_darwin: bool,
+) -> LoadedToken {
+    let base = config_dir.map_or_else(|| home.join(".claude"), Path::to_path_buf);
+    if let Ok(text) = std::fs::read_to_string(base.join(".credentials.json")) {
+        if let Ok(raw) = serde_json::from_str::<Value>(&text) {
+            if let Some(loaded) = creds_to_loaded(oauth_inner(&raw)) {
+                return loaded;
+            }
+        }
+    }
+    if !is_darwin {
+        return LoadedToken { reason: Some("no_token"), ..LoadedToken::default() };
+    }
+    if !keychain_allowed && !allow_keychain {
+        return LoadedToken { reason: Some("opt_in_required"), ..LoadedToken::default() };
+    }
+    let out = std::process::Command::new("security")
+        .args(["find-generic-password", "-s", "Claude Code-credentials", "-w"])
+        .stderr(std::process::Stdio::null())
+        .output();
+    if let Ok(out) = out {
+        if let Ok(raw) = serde_json::from_slice::<Value>(&out.stdout) {
+            // The keychain branch takes ONLY the nested shape — a bare record is not accepted here,
+            // matching the TS (`: {}` rather than `: raw`).
+            let inner = match raw.get("claudeAiOauth") {
+                Some(v) if v.is_object() || v.is_array() => v.clone(),
+                _ => Value::Object(Map::new()),
+            };
+            if let Some(loaded) = creds_to_loaded(&inner) {
+                return loaded;
+            }
+        }
+    }
+    LoadedToken { reason: Some("no_token"), ..LoadedToken::default() }
+}
+
+/// Parse `/api/oauth/profile`. Fail-soft: a null identity is reported as "unresolved" and is NEVER
+/// quietly replaced by the config file's claim — that substitution is the entire bug this module
+/// exists to prevent, the one that printed one account's utilization under another's name.
+pub fn parse_token_identity(res: &HttpResponse) -> Option<TokenIdentity> {
+    if !res.ok() {
+        return None;
+    }
+    let j: Value = serde_json::from_str(&res.body).ok()?;
+    let s = |v: Option<&Value>| v.and_then(Value::as_str).filter(|x| !x.is_empty()).map(str::to_owned);
+    Some(TokenIdentity {
+        email: s(j.pointer("/account/email")).or_else(|| s(j.pointer("/account/full_name"))),
+        account_uuid: s(j.pointer("/account/uuid")),
+        tier: s(j.pointer("/organization/rate_limit_tier")),
+    })
+}
+
+/// A uuid comes from the NETWORK and becomes a path segment. Anything outside hex-and-dashes is
+/// REFUSED rather than sanitized: a value that is not a uuid is not an identity we can file under,
+/// and "clean it up and use it anyway" is how `../` becomes a filename.
+fn is_uuid_shape(s: &str) -> bool {
+    let groups = [8, 4, 4, 4, 12];
+    let parts: Vec<&str> = s.split('-').collect();
+    parts.len() == groups.len()
+        && parts.iter().zip(groups).all(|(p, n)| p.len() == n && p.chars().all(|c| c.is_ascii_hexdigit()))
+}
+
+/// File a reading under its own account. No-op when the account could not be identified: an
+/// unattributed row cannot answer "whose numbers are these", and inventing a key for it would put
+/// one account's figures under a name that means nothing.
+pub fn archive_account_usage(u: Option<&Value>, account_usage_dir: &Path) {
+    let Some(u) = u else { return };
+    let Some(uuid) = u.get("accountUuid").and_then(Value::as_str).filter(|s| !s.is_empty()) else { return };
+    if !is_uuid_shape(uuid) {
+        return;
+    }
+    if std::fs::create_dir_all(account_usage_dir).is_err() {
+        return;
+    }
+    // Write-then-rename: a reader can hit this file at any moment, and a half-written JSON parses
+    // as nothing at all — which would read as "this account was never observed", the one answer
+    // that must never be fabricated.
+    let dest = account_usage_dir.join(format!("{uuid}.json"));
+    let tmp = account_usage_dir.join(format!("{uuid}.json.tmp-{}", std::process::id()));
+    if std::fs::write(&tmp, serde_json::to_string(u).unwrap_or_default()).is_ok() {
+        let _ = std::fs::rename(&tmp, &dest);
+    }
+}
+
+/// Where each on-disk artifact lives. Passed in rather than derived from a global so a test can
+/// point the whole read/write path at a fixture.
+pub struct UsagePaths {
+    pub cache: PathBuf,
+    pub cooldown: PathBuf,
+    pub lock: PathBuf,
+    pub account_dir: PathBuf,
+}
+
+impl UsagePaths {
+    pub fn under(data_dir: &Path) -> Self {
+        Self {
+            cache: data_dir.join("subscription-usage.json"),
+            cooldown: data_dir.join("subscription-usage-cooldown.json"),
+            lock: data_dir.join("subscription-usage.lock"),
+            account_dir: data_dir.join("subscription-usage"),
+        }
+    }
+}
+
+const HTTP_TIMEOUT_MS: f64 = 8_000.0;
+
+/// Fetch (or serve cache) the subscription window utilization. Never fails.
+///
+/// THE ORDER IS THE CONTRACT. `load_token` runs BEFORE any cached reading is trusted: serving a
+/// within-TTL cache without knowing whose token is loaded is precisely how an account switch goes
+/// invisible — the numbers stay put and simply describe the wrong account.
+pub fn get_subscription_usage(
+    paths: &UsagePaths,
+    loaded: &LoadedToken,
+    now: f64,
+    force: bool,
+    claimed_label: Option<&str>,
+    fetch_usage: &dyn Fn(&str) -> Result<HttpResponse, String>,
+    fetch_identity: &dyn Fn(&str) -> Option<TokenIdentity>,
+) -> Option<Value> {
+    let cached = read_cache(&paths.cache);
+    let current_fp = loaded.fp.as_deref();
+    let serve = |c: Option<&Value>, r: &str| -> Option<Value> { c.map(|c| from_cache(c, r, now, current_fp)) };
+    let is_fresh = |c: &Value| {
+        !force
+            && now - finite(c.get("fetchedAt")).unwrap_or(0.0) < TTL_MS
+            && c.get("accountFp").and_then(Value::as_str) == current_fp
+            && current_fp.is_some()
+    };
+
+    if let Some(c) = cached.as_ref().filter(|c| is_fresh(c)) {
+        return serve(Some(c), "fresh");
+    }
+    if read_cooldown(&paths.cooldown).0 > now {
+        return serve(cached.as_ref(), "cooldown");
+    }
+    let Some(token) = loaded.token.as_deref() else {
+        return serve(cached.as_ref(), loaded.reason.unwrap_or("no_token"));
+    };
+    // Expired or about to expire: do not spend a request on a token Claude Code is about to rotate.
+    if loaded.expires_at.is_some_and(|e| e < now + 30_000.0) {
+        return serve(cached.as_ref(), "expiring_token");
+    }
+
+    // Cross-process guard. Two callers can both clear the cooldown check above before either fires;
+    // without this they double-hit the endpoint and, reading the same consecutive-429 count, fail
+    // to escalate the back-off. `create_new` is the atomic create-or-fail primitive; a stale lock
+    // older than twice the HTTP timeout is reclaimed so a crashed holder cannot wedge this forever.
+    let mut held = std::fs::OpenOptions::new().write(true).create_new(true).open(&paths.lock).is_ok();
+    if held {
+        let _ = std::fs::write(&paths.lock, std::process::id().to_string());
+    } else {
+        let age = std::fs::metadata(&paths.lock)
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| now - d.as_millis() as f64);
+        if age.is_some_and(|a| a > HTTP_TIMEOUT_MS * 2.0) && std::fs::write(&paths.lock, std::process::id().to_string()).is_ok() {
+            held = true;
+        }
+        if !held {
+            return serve(cached.as_ref(), "lock_contended");
+        }
+    }
+
+    let out = (|| {
+        // Re-check under the lock: whoever won it may have just refreshed or armed a cooldown.
+        let again = read_cache(&paths.cache);
+        if let Some(c) = again.as_ref().filter(|c| is_fresh(c)) {
+            return serve(Some(c), "fresh");
+        }
+        if read_cooldown(&paths.cooldown).0 > now {
+            return serve(again.as_ref(), "cooldown");
+        }
+        let Ok(res) = fetch_usage(token) else {
+            return serve(cached.as_ref(), "http_error");
+        };
+        if res.status == 429 {
+            arm_cooldown(retry_after_seconds(Some(&res.headers), now), now, &paths.cooldown);
+            return serve(cached.as_ref(), "429");
+        }
+        if !res.ok() {
+            return serve(cached.as_ref(), "http_error");
+        }
+        let Ok(body) = serde_json::from_str::<Value>(&res.body) else {
+            return serve(cached.as_ref(), "http_error");
+        };
+        // Resolve WHOSE numbers these are from the SAME credential that just produced them. One
+        // extra request, cached with the reading, and it is the difference between a labelled
+        // figure and a misattributed one.
+        let identity = fetch_identity(token);
+        let usage = normalize(&body, now, "ok", now, current_fp, identity.as_ref(), claimed_label);
+        let _ = std::fs::write(&paths.cache, serde_json::to_string(&usage).unwrap_or_default());
+        // The SAME reading, also filed under its own account. This is the ONLY moment it can be
+        // kept: the next fetch overwrites the line above, and a reading not archived here is gone.
+        archive_account_usage(Some(&usage), &paths.account_dir);
+        let _ = std::fs::remove_file(&paths.cooldown);
+        Some(usage)
+    })();
+    if held {
+        let _ = std::fs::remove_file(&paths.lock);
+    }
+    out
+}
+
+// ── The live transport (TS `userAgent` + the two inline `fetch` calls) ────────────
+const DEFAULT_UA: &str = "claude-code/2.1.220";
+static UA: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// `userAgent()` — the installed Claude Code version. Memoized because it costs a subprocess, and
+/// a failure to find `claude` is not an error: the pinned fallback is still a valid claude-code UA,
+/// which is all this endpoint looks at.
+pub fn user_agent() -> &'static str {
+    UA.get_or_init(|| {
+        let out = std::process::Command::new("claude")
+            .arg("--version")
+            .stderr(std::process::Stdio::null())
+            .output();
+        let ver = out.ok().and_then(|o| {
+            let text = String::from_utf8_lossy(&o.stdout).into_owned();
+            regex::Regex::new(r"(\d+\.\d+\.\d+)").ok()?.captures(&text)?.get(1).map(|m| m.as_str().to_owned())
+        });
+        ver.map_or_else(|| DEFAULT_UA.to_owned(), |v| format!("claude-code/{v}"))
+    })
+}
+
+/// One authenticated GET. `http_status_as_error(false)` is load-bearing: the 429 branch needs the
+/// RESPONSE (its `Retry-After` header sets the back-off), and a client that turns 4xx into an error
+/// type would collapse every rate-limit into the generic transport failure — the one shape that
+/// does NOT arm a cooldown, so the next call would hit the endpoint again immediately.
+fn http_get(url: &str, token: &str) -> Result<HttpResponse, String> {
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .http_status_as_error(false)
+        .timeout_global(Some(std::time::Duration::from_millis(HTTP_TIMEOUT_MS as u64)))
+        .build()
+        .into();
+    let mut res = agent
+        .get(url)
+        .header("Authorization", format!("Bearer {token}"))
+        .header("anthropic-beta", USAGE_BETA)
+        .header("User-Agent", user_agent())
+        .header("Accept", "application/json")
+        .call()
+        .map_err(|e| e.to_string())?;
+    let status = res.status().as_u16();
+    let headers = res
+        .headers()
+        .iter()
+        .map(|(k, v)| (k.as_str().to_owned(), v.to_str().unwrap_or_default().to_owned()))
+        .collect();
+    let body = res.body_mut().read_to_string().unwrap_or_default();
+    Ok(HttpResponse { status, headers, body })
+}
+
+/// `keychainReadAllowed` (src/keychainConsent.ts) — env > `<data-dir>/config.json` > OFF.
+///
+/// The persisted layer is the point: consent used to live ONLY in the environment, so any restart
+/// that did not carry the variable (a deploy, a hook-triggered server start, a launchd revival)
+/// silently dropped it and the refresh began answering `opt_in_required` — nothing errored, the
+/// numbers just quietly went stale. A typo must never read as consent, so an unrecognized value is
+/// "unset" and falls through rather than being coerced.
+pub fn keychain_read_allowed(data_dir: &Path, vars: &HashMap<String, String>) -> bool {
+    if let Some(v) = parse_consent(vars.get("AGENTLENS_READ_KEYCHAIN_USAGE").map(String::as_str)) {
+        return v;
+    }
+    std::fs::read_to_string(data_dir.join("config.json"))
+        .ok()
+        .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+        .and_then(|o| o.pointer("/usage/readKeychainUsage").and_then(Value::as_bool))
+        .unwrap_or(false)
+}
+
+fn parse_consent(raw: Option<&str>) -> Option<bool> {
+    match raw?.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "on" | "yes" => Some(true),
+        "0" | "false" | "off" | "no" => Some(false),
+        _ => None,
+    }
+}
+
+pub fn live_fetch_usage(token: &str) -> Result<HttpResponse, String> {
+    http_get(USAGE_URL, token)
+}
+
+/// Fail-soft by construction: a transport failure and a non-2xx both yield `None`, which is
+/// reported as an unresolved identity rather than being back-filled from the local config.
+pub fn live_fetch_identity(token: &str) -> Option<TokenIdentity> {
+    parse_token_identity(&http_get(PROFILE_URL, token).ok()?)
 }
