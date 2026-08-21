@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-21T02:13:03+0200
+updated: 2026-08-21T02:49:25+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -1390,13 +1390,57 @@ release-via: publish
   cold full-prefix rewrite (~27× a warm turn); and delegating to a lean-worker is the burn source
   this very card MEASURED at ~$21/hr. Second time this falsification step has paid off — always
   run it before acting on a burn warning.
-- **NEXT (P4x.2d continued): 9 of 53 remain.** Immediate: `burnInvestigator` slice 1 (after the
-  utf16 promotion) — its engine deps are otherwise CLEAR: `shared/pricing` → `pricing.rs` ✓, `hookEventStore` → `hook_events.rs` ✓,
-  `causingToolCall` (`causingToolCalls`/`composition`/`SpawnCall`) → `burn/causing_tool_call.rs` ✓;
-  only `captureConfig.resolveBodiesReadScope` + `dataDir` are unported, and both are the SAME
-  documented parameter pattern as `defaultBodiesDir` (the route resolves the dir once, so a second
-  resolver cannot disagree). It also unblocks `burn_seismic` and is
-  `rateLimitReport`'s dep → `rateLimitReport` (134) → `cacheBreakTimeline` (1,927 → 2 tools:
+- **P4x.2e DONE (commit e1ce274): `burnInvestigator` SLICE 1 — the corpus SCAN half.** Still 44 of
+  53 wired (this slice adds NO tool; slice 2 wires `investigate_burn` + `burn_seismic`). Ports TS
+  112-231 plus the assembly the scan decides alone — `totals`, `attribution`, `coverage`, the
+  3-valued `blind` classification, and the two verdict branches that need no detector (blind, and
+  no-responses). Returns `ScanOutcome { resps, reqs, total_equiv, cc, cr, est_cost_usd,
+  stop_failures, blind, verdict_override, partial }`; slice 2 inserts `findings` + `verdict` into
+  `partial`. `resolveBodiesReadScope`/`dataDir` stay unported as the documented parameter pattern
+  (`BodiesScope { dirs, missing, capture_on }` is passed in). 412 tests, clippy 28.
+  **Non-obvious things that are load-bearing, not style:**
+  - `String::from_utf8_lossy` IS the faithful port of `Buffer.toString('utf-8')` on a split chunk
+    boundary — both emit U+FFFD. Do NOT re-join the boundary to "fix" it; the fingerprints diverge.
+  - `{20000,}` is HAND-ROLLED (`sum_image_bytes`): the regex crate expands that repeat literally
+    and blows its compiled-size limit.
+  - `short_ws` uses `replacen(.., 1)` — JS `String.replace` with a STRING pattern is FIRST-ONLY,
+    and `str::replace` would replace every occurrence.
+  - `clamp`, not `.max().min()`: it PROPAGATES NaN like `Math.min(48, Math.max(0.25, NaN))`,
+    where `f64::max` swallows NaN and silently returns the floor.
+  - `by_model` MUST stay insertion-ordered (a `Vec`, not a map): the total cost is a float sum
+    over it and addition is not associative. `by_hour` is a BTreeMap because the TS reads it back
+    through a default `.sort()`, which on fixed-width 13-char ISO keys is plain lexicographic.
+  - `num()` everywhere, never `json!(f64)` — serde_json Number equality does not bridge PosInt vs
+    Float, so a count emitted as `5.0` compares unequal to the oracle's `5` with every digit equal.
+  **Falsified, 5 rules, each confirmed red then restored:** reversed size sort (7150 vs 7250 bytes
+  — the 101-file cap fixture earned its keep and pins "keep the LARGEST", otherwise untested);
+  first-WS_RE-hit (prints `([^ is the pattern` as a workspace — the historical incident verbatim);
+  byte-indexed fingerprint, BOTH the panicking and the valid-boundary variant; blind-scan-reports-
+  complete.
+  **⚠ THE BYTE-SLICE FALSIFICATION FOUND A REAL HOLE — read this before trusting a fingerprint
+  test.** The panicking variant reddened all 4 tests, which LOOKED like coverage and was not: a
+  valid-boundary byte cut is the realistic bug shape, and nothing could observe it. A fingerprint
+  VALUE never reaches the report (it is only ever compared for equality), and a byte cut can never
+  SPLIT a shared prefix — only MERGE distinct ones. Fixture `q8` closes it: it matches `q1` through
+  byte 2600 but diverges at UTF-16 unit 2000, so only a correct `slice(i, i+2600)` tells them
+  apart. A byte window merges two unrelated transcripts into one "shared transcript" family, which
+  is exactly what slice 2's fork-storm detector counts.
+  **A THIRD assertion of mine was wrong while the port was right:** I asserted `capHit` must have
+  no scan-decided verdict. It has one, correctly — its corpus is 101 REQUEST bodies and zero
+  responses, so it takes the no-responses branch; the cap is incidental. Pinned as the TS has it.
+  **`blind='capture-off'` has NO oracle** — `investigateBurn`'s `bodiesDir` override hardcodes
+  `captureOn:true`, so the branch is unreachable through the TS public API. Pinned by a Rust unit
+  test and labelled as such; do not mistake it for oracle-verified.
+- **NEXT (P4x.2d continued): 9 of 53 remain.** Immediate: **`burnInvestigator` SLICE 2** —
+  detectors + assembly, TS ~235-440 (`clusterSpikes`, `reqsIn`, `detectStormsAndRewrites`,
+  `detectPremiumFanout`, `detectIdleKeepwarm`, `detectImageResidency`, then `investigateBurn`'s
+  findings/verdict composition and `attachCausingCalls`) → wires `investigate_burn` + `burn_seismic`.
+  Build on `burn::investigator_scan::ScanOutcome`; `SPIKE_CC`, `CLUSTER_MS`, `equiv_of` and `fmt_k`
+  are already exported for it. Extend `gen-burnscan-expected.mjs`'s SAME fixture corpus (the oracle
+  already stores the full `investigateBurn` output — `findings`/`verdict` are simply not compared
+  yet), so no fixture regeneration is needed beyond adding cases. `causingToolCall`
+  (`causingToolCalls`/`composition`/`SpawnCall`) → `burn/causing_tool_call.rs` ✓ is its last dep.
+  THEN `rateLimitReport` (134) → `cacheBreakTimeline` (1,927 → 2 tools:
   `get_cache_break_timeline` + `get_cache_break_causes`, and it also unblocks the `groupBy='cause'`
   branch above) → `subscriptionUsage` (976, **NETWORK** — the oracle MUST stub the Anthropic usage
   endpoint; it is also the live TTL-regime oracle) → the 2 sql tools (`run_diagnostics_sql`,
