@@ -70,3 +70,49 @@ export async function rustIngestPass(bin: string, opts: {
   if (stdout === null) return null
   return JSON.parse(stdout) as IngestPassResult
 }
+
+/** How many bodies are PARKED, and how much disk they hold down (TRDD-8TM7I49X).
+ *
+ *  A park is permanent for a durable target: `pass.rs:420-436` `continue`s a parked file with no
+ *  action when `relocate_stranded_to` is None, which is what `standalone/server.ts` passes for the
+ *  legacy dir. So the set only ever grows, and NOTHING reported it — 1045 files / 317.6 MB were
+ *  pinned for days behind a server that printed a healthy status every time it was asked.
+ *
+ *  The existing `PARKED` warning cannot cover this: it fires on `r.strandedTs.length`, the files
+ *  parked during THAT pass, so an already-parked file is silent forever. A monotonic population
+ *  needs a GAUGE; an event log can only report the edge. That distinction is the whole bug.
+ *
+ *  Returns null when the state file is absent or unreadable — an ABSENT reading, never a zero,
+ *  because "0 parked" and "I could not look" are opposite claims and only one of them is
+ *  reassuring. Sizes come from the files still on disk in `liveDirs`; a parked name whose file is
+ *  gone contributes to `files` but not to `bytes` (the name outliving the file is itself worth
+ *  seeing, so it is not silently dropped). */
+export function parkedBodiesGauge(
+  storeDir: string,
+  liveDirs: readonly string[],
+): { files: number; bytes: number; onDisk: number } | null {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(fs.readFileSync(`${storeDir}/.pass-state.json`, 'utf8'))
+  } catch {
+    return null
+  }
+  const names = (parsed as { strandedNames?: unknown })?.strandedNames
+  if (!Array.isArray(names)) return null
+  const remaining = new Set<string>(names.filter((n): n is string => typeof n === 'string'))
+  let bytes = 0
+  let onDisk = 0
+  for (const dir of liveDirs) {
+    if (remaining.size === 0) break
+    for (const name of [...remaining]) {
+      try {
+        bytes += fs.statSync(`${dir}/${name}`).size
+        onDisk++
+        // Each name is stat-ed at most once even when both dirs are scanned: a parked name belongs
+        // to exactly one file, and re-counting it across dirs would inflate the reported bytes.
+        remaining.delete(name)
+      } catch { /* not in this dir, or gone — try the next dir */ }
+    }
+  }
+  return { files: new Set(names).size, bytes, onDisk }
+}

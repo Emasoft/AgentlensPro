@@ -3,7 +3,7 @@ trdd-id: 8TM7I49X
 title: 1045 already-durable legacy body files are permanently parked in the Rust pass stranded set
 column: todo
 created: 2026-08-22T21:12:33+0200
-updated: 2026-08-22T21:50:00+0200
+updated: 2026-08-22T22:20:00+0200
 current-owner: main
 task-type: bugfix
 severity: HIGH
@@ -222,11 +222,26 @@ console.log('stranded',s.size,'legacy',leg.length,'overlap',leg.filter(f=>s.has(
 - [ ] The 1045 files either drain (verified: count falls, store row count rises, bytes
       reconstruct byte-identically) or the reason they must be kept is recorded IN THE CODE, not
       only here. **Blocked on the remedy decision above.**
-- [ ] The park has an operator surface — a parked-file count in `server status` /
+- [x] The park has an operator surface — a parked-file count in `server status` /
       `/api/server-stats`. 1045 permanently-pinned files were invisible for days, and the
       per-pass `PARKED` warning cannot show them because it only counts files parked *this* pass.
       Whatever is added must not turn every idle tick into a log line — a warning nobody can
-      silence is a warning everybody filters.
+      silence is a warning everybody filters. **Done:** `parkedBodiesGauge()`
+      (`src/rustStorePass.ts`) → `bodies.parked` in `/api/server-stats` → the `capture:` line.
+      Verified against the live state:
+
+      ```
+      live  -> {"files":1045,"bytes":333044526,"onDisk":1045}  MB=317.6
+      line  -> 720 live file(s), newest 2s ago | PARKED 1045 file(s) 317.6MB
+               — ts-row mismatch, never reclaimed (TRDD-8TM7I49X)
+      zero  -> 5 live file(s), newest 2s ago            (silent when nothing is parked)
+      ```
+
+      317.6 MB matches the independently-measured figure exactly. An unreadable pass state
+      returns `null` and renders `parked: unknown` — never `0`, because "I could not look" and
+      "nothing is parked" are opposite claims and only one is reassuring. 9 tests
+      (`src/test/parkedBodies.test.ts`), falsified by mutation: making the absent case return
+      `{files:0}` failed exactly the two tests written to catch it, and nothing else.
 - [ ] ~~If the cause is a TS/Rust policy divergence, a test pins the two engines to the same age
       gate~~ — **withdrawn: not the cause.** The age gates are semantically identical
       (`pass.rs:256` vs `ingestPass.ts:224`). The divergence that mattered is that the Rust

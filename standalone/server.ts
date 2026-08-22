@@ -70,7 +70,7 @@ import { SegmentedSpanStore, migrateLegacySpansFile, spanTimestampMs } from '../
 import { purgeArchiveVolumes, archiveDiskUsage, extractArchive, liveBodiesLiveness } from '../src/bodyArchive'
 import { openStore, allOf, type Store } from '../src/store/db'
 import { DEFAULT_MAX_BYTES_PER_PASS, ingestPass } from '../src/store/ingestPass'
-import { alstoreBin, rustIngestPass } from '../src/rustStorePass'
+import { alstoreBin, parkedBodiesGauge, rustIngestPass } from '../src/rustStorePass'
 import { verifyVolumeInStore } from '../src/store/archiveVerify'
 import { rawBodyCaptureEnabled, spoolDirConfigured } from '../src/captureConfig'
 import { ensureRamDisk, ramDiskInfo, spoolSizeMb, SPOOL_MOUNT_POINT } from '../src/ramdisk'
@@ -3334,6 +3334,11 @@ const uiServer = http.createServer(async (req, res) => {
         // and the last purge but never whether anything is still being CAPTURED — which is how
         // capture stayed dead for ~4 days behind a healthy-looking server.
         live: liveBodiesLiveness(PRIMARY_BODIES_DIR),
+        // TRDD-8TM7I49X: parked bodies. A park is PERMANENT on a durable target (pass.rs:420-436
+        // continues with no action when relocate_stranded_to is None, which is what the legacy
+        // target gets), so the set only grows and nothing reported it — 1045 files / 317.6MB sat
+        // pinned for days. Both live dirs are scanned because a parked name can belong to either.
+        parked: parkedBodiesGauge(path.join(DATA_DIR, 'store'), [PRIMARY_BODIES_DIR, LEGACY_BODIES_DIR]),
         // TRDD-KB17X5G2 Option 3: spool health, including whether we are currently spilling new
         // sessions' bodies to the SSD dir and how many times that has happened since boot.
         spool: SPOOL_MODE

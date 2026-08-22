@@ -379,19 +379,45 @@ export async function stopServer(): Promise<void> {
  *
  *  `now` is a parameter so this is testable without waiting for wall-clock. */
 export function bodiesCaptureLine(
-  s: { uptimeSec: number; bodies: { live?: { files: number; newestMs: number | null } } },
+  s: {
+    uptimeSec: number
+    bodies: {
+      live?: { files: number; newestMs: number | null }
+      parked?: { files: number; bytes: number; onDisk: number } | null
+    }
+  },
   now: number = Date.now(),
 ): string {
   const live = s.bodies.live
   // A pre-TRDD-0SA5QZTG server omits the field entirely. Saying "never captured" there would be a
   // confident claim about something that was never measured.
   if (!live) return 'unknown (server predates capture reporting)'
-  if (live.newestMs === null) return `NO BODIES on disk (${live.files} file(s)) — capture has never run, or the live dir was emptied`
+  // TRDD-8TM7I49X: parked bodies are pinned FOREVER on a durable target, so this is a gauge and it
+  // is appended to every branch below — including "NO BODIES", where an empty live dir alongside a
+  // non-zero park is the single most diagnostic pair the line can print.
+  const parked = parkedSuffix(s.bodies.parked)
+  if (live.newestMs === null) return `NO BODIES on disk (${live.files} file(s)) — capture has never run, or the live dir was emptied${parked}`
   const ageSec = Math.max(0, Math.round((now - live.newestMs) / 1000))
   const age = ageSec < 90 ? `${ageSec}s` : ageSec < 5400 ? `${Math.round(ageSec / 60)}m` : `${(ageSec / 3600).toFixed(1)}h`
   const stalled = ageSec > s.uptimeSec
   return `${live.files} live file(s), newest ${age} ago`
     + (stalled ? ` — STALLED: older than this server's ${Math.round(s.uptimeSec / 60)}m uptime, so nothing has been captured since boot` : '')
+    + parked
+}
+
+/** The parked-bodies clause. Silent at zero — a healthy server must not carry a permanent warning,
+ *  or the warning is what gets filtered out on the day it matters. Silent when `undefined` too
+ *  (an older server): absent is not zero. `null` is DIFFERENT and is reported, because it means
+ *  the pass state could not be read at all, and "I could not look" must never render as "0". */
+function parkedSuffix(parked: { files: number; bytes: number; onDisk: number } | null | undefined): string {
+  if (parked === undefined) return ''
+  if (parked === null) return ' | parked: unknown (pass state unreadable)'
+  if (parked.files === 0) return ''
+  const mb = (parked.bytes / 1048576).toFixed(1)
+  // `onDisk < files` means a parked NAME outlived its file — harmless for disk, but it is state
+  // that can never be cleared by a pass that only ever sees files, so it is worth surfacing.
+  const ghosts = parked.onDisk < parked.files ? `, ${parked.files - parked.onDisk} name(s) with no file` : ''
+  return ` | PARKED ${parked.files} file(s) ${mb}MB${ghosts} — ts-row mismatch, never reclaimed (TRDD-8TM7I49X)`
 }
 
 interface ServerStats {
