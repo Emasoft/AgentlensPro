@@ -3,7 +3,7 @@ trdd-id: 8TM7I49X
 title: 1045 already-durable legacy body files are permanently parked in the Rust pass stranded set
 column: todo
 created: 2026-08-22T21:12:33+0200
-updated: 2026-08-22T22:20:00+0200
+updated: 2026-08-22T23:05:00+0200
 current-owner: main
 task-type: bugfix
 severity: HIGH
@@ -158,14 +158,41 @@ Ranked by my reading; box 2 stays open until one is picked.
    `src/store/ingestPass.ts:331` already names as *"the only true capture record"*, and which is
    the very value the verify compares against (`lib.rs:588-593`, `TS_TOLERANCE_MS`).
    Then clear those names from `strandedNames` so the next pass reclaims them normally.
-   Cost: a correction source + an unpark step + tests. Rewrites a 437 MB store, so it inherits
-   that migration's existing abort-if-unprovable rail.
+
+   **The correction source is trivial and the UNPARK is not — scoped 2026-08-22, and this is the
+   part that decides the cost.** `TsCorrections.tsBySrcName` is already a plain
+   `Map<srcName, mtimeMs>` (`src/store/tsRecovery.ts:24`), so the new source is a ~15-line sibling
+   of `parseIdxTsMap` reading the parked files' own mtimes — same rounding, same hard-error-on-
+   malformed discipline. No new migration machinery whatsoever.
+
+   The unpark is the hazard. `strandedNames` lives in `<storeDir>/.pass-state.json`, **owned by
+   the alstore binary across invocations**, and that file's own header says why a second writer is
+   unsafe (`rust-core/crates/agentlens-store/src/pass.rs:63-70`): *"it lives in a FILE because a
+   pass is not [a single process] … two engines can interleave a load and a save, silently
+   dropping skip/stranded names. A dropped skip name means a body is re-examined forever; a
+   dropped stranded name means a body [is re-parked]."* A naive TS read-modify-write of that file
+   is exactly the interleaving it warns about, and the bodies pass runs **every 60 s**, so the
+   race window is not theoretical.
+
+   So the unpark must be EITHER (a) a new `alstore unpark` subcommand — the binary already owns
+   the file and already takes the kernel flock (`acquire_pass_lock`, `pass.rs:46`), so this is the
+   clean option and it is Rust work, not TS; or (b) performed under that same flock from outside.
+   **(a) is the right shape.** Do not let "the correction source is 15 lines" imply the whole
+   remedy is small: the safe half is small, the correct half is a Rust subcommand.
+
+   Cost, honestly: ~15 lines TS + tests for the source, plus a Rust subcommand + tests for the
+   unpark, plus one invocation that rewrites the 437 MB bodies table (inheriting the migration's
+   existing abort-if-unprovable rail).
 2. **Delete a parked file whose BYTES are proven.** Cheapest reclaim, and defensible — the delete
    gate's contract is "prove reconstruction, then unlink", which these already satisfy. But it
    destroys the only remaining source for the ts row, so it forecloses remedy 1 forever. **Do not
    do this before 1 is ruled out** (RULE 0 shape: it is unrecoverable).
 3. **Relocate to a quarantine subdir** (`otel-bodies-stranded/`). Stops the rescan, keeps the
-   bytes, makes the problem visible in a directory listing. Weakest — it moves the pile.
+   bytes, makes the problem visible in a directory listing. Weakest — it moves the pile. **And it
+   is not as cheap as it looks:** moving a file the pass has parked mutates state the binary
+   believes it owns, so it inherits the same flock question as remedy 1's unpark. The
+   already-shipped gauge covers the "make it visible" half of this option's value at zero risk,
+   which leaves it with little to offer.
 4. **Document and accept.** Only honest if paired with a surface that reports the park count, or
    this recurs invisibly.
 
