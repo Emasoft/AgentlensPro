@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-22T18:22:48+0200
+updated: 2026-08-22T18:30:32+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -19,9 +19,9 @@ release-via: publish
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-08-22 (v4)
 
-> **NEXT ACTION (one step):** acceptance box 1 — verify no `/api/*` or MCP consumer changed, the
-> dashboard is unmodified, and existing data dirs are readable. **Box 2 is CLOSED** (D2's class
-> table below).
+> **NEXT ACTION (one step):** box 3 is the ONLY thing left, and it is a SCOPE DECISION for the
+> USER, not a task — see the paragraph below it. **Boxes 1 and 2 are CLOSED** (box 1 verified
+> 2026-08-22 with the evidence recorded beside it; box 2 by D2's class table).
 >
 > **Box 3 is NOT closed, and D1 did not close it** — stated plainly because the opposite is easy
 > to assume from "the cutover landed". `b8addc7` makes alcore *reachable*: `ensureServer` spawns
@@ -2455,7 +2455,27 @@ silently absorbed, because a card that quietly drops its own acceptance criterio
 
 ## Acceptance (whole card)
 
-- [ ] No `/api/*` or MCP consumer changed; dashboard unmodified; existing data dirs readable.
+- [x] No `/api/*` or MCP consumer changed; dashboard unmodified; existing data dirs readable.
+      **VERIFIED 2026-08-22**, each clause against the thing itself, baselined on `3923013` (the
+      commit that ADDED this card — not a same-day commit for another card, which was the first
+      attempt):
+      - **`/api/*`** — route surfaces compared: **33 vs 33, set difference empty**, and
+        `git diff 3923013..HEAD -- standalone/server.ts` touches no route or tool-shape line.
+      - **MCP** — asked both LIVE servers for `tools/list` (the wire, not the source):
+        **53 vs 53, `diff` byte-identical**.
+      - **dashboard** — `git diff --stat 3923013..HEAD -- media/` is empty.
+      - **existing data dirs** — copied 3 REAL pre-card segments (2026-07-23/24/25) to a scratch
+        dir and served them with `alcore`: it built `spans/index.json` itself and reported
+        **676,467 spans, matching an independent `gzcat | wc -l` EXACTLY**. A manifest could not
+        have produced that number — only parsing the content could. The user's live store was
+        never touched (a server owns it; alcore runs deleting chores, so pointing it there would
+        have been reckless).
+
+      Three near-misses died at the check rather than in a report, all the same shape — a proxy
+      standing in for the thing: the wrong base commit; a 404 on `/api/sessions` that was an
+      endpoint name **I invented** (absent from BOTH engines); and `tools/list` returning 0 for
+      the TS server, which was a **406** — it requires `Accept: application/json,
+      text/event-stream` — and would have been reported as 53 phantom differences.
 - [x] Every previously-measured single-core incident class has a benchmark proving multi-core or
       indexed behavior in the Rust core. **The set is the 4-row table above.** Class 1 (32.7s →
       1.1s at 667% CPU) and class 2 (27.0s → 6.7s, binary 4.1s at 462% CPU) are benchmarked;
