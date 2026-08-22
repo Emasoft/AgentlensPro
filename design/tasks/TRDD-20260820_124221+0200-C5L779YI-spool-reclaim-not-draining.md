@@ -4,7 +4,7 @@ trdd-id-full: C5L779YI
 title: A volatile spool holds up to bodiesMaxGb of un-reclaimed bodies because the age gate cannot fire on it
 column: todo
 created: 2026-08-20T12:42:21+0200
-updated: 2026-08-22T21:20:00+0200
+updated: 2026-08-22T21:32:00+0200
 severity: MEDIUM
 spawned: [8TM7I49X]
 current-owner: AgentlensPro session
@@ -25,8 +25,8 @@ verbatim underneath as the audit trail.)*
 
 ## REFUTED 2026-08-22 — the spool IS draining; this card fell into the trap it wrote down
 
-**The premise is false and the evidence is unambiguous.** `~/.agentlens/server.log` carries **278**
-reclaim lines, the most recent from today, every one tagged `[spool]`:
+**The premise is false.** `~/.agentlens/server.log` carries **278** reclaim lines, the most recent
+from today:
 
 ```
 [AgentLens] bodies → store: ingested 1619, reclaimed 1619 file(s) (0 already durable) (0.50GB read → 7.1MB new spans) [spool] [throttled — more next pass]
@@ -50,17 +50,28 @@ card's own closing note said it: *"a reclaim that archives 0 is indistinguishabl
 with nothing to do"* — and then read one as the other anyway. Writing the lesson down is not the
 same as applying it.
 
-Of the four suspects listed below, **all four are wrong**: SPOOL_MODE is active (the `[spool]`
-tag proves it), the flock is not held (its skip logs, and nothing does), the pass scans the spool
-(same tag), and the throttle is working exactly as designed (`[throttled — more next pass]` is
-the 0.5 GB/pass limiter doing its job across a bulk drain).
+**A tag that proves less than it looks like it proves.** Those lines all carry ` [spool]`, and it
+is tempting to read that as "the spool target is what drained". It is not: the tag is
+`${SPOOL_MODE ? ' [spool]' : ''}` (`standalone/server.ts:747`), a per-SERVER-MODE flag, and the
+`console.log` sits OUTSIDE the `for (const target of drainTargets)` loop with counters summed
+across both targets. One line per PASS. It proves **SPOOL_MODE is active** and nothing about
+attribution. (Caught by adversarial review of this very refutation, which had used it as
+attribution — the same class of error as the one being refuted, committed while refuting it.)
+
+Of the four suspects listed below, **all four are still wrong**, on evidence that survives that
+correction: SPOOL_MODE is active (the tag does prove that much), the flock is not held (a flock
+skip logs its own line and none appears), the pass reads 0.50 GB per pass while the legacy dir
+holds 317.6 MB in total — so it cannot be scanning only the legacy dir — and the throttle is
+working exactly as designed (`[throttled — more next pass]` is the 0.5 GB/pass limiter doing its
+job across a bulk drain).
 
 ## What SURVIVES the refutation — two real things, neither the one this card claimed
 
-1. **The legacy target genuinely never reclaims.** Not one of the 278 lines is untagged; every
-   reclaim is `[spool]`. Meanwhile `~/.agentlens/otel-bodies` holds 1045 files, all 96–147 h old,
-   all past the 72 h gate, static across two full 60 s pass intervals. **Split to TRDD-8TM7I49X**
-   with the measurement — this card is not it, and merging them would rebuild the conflation.
+1. **The legacy target genuinely never reclaims.** `~/.agentlens/otel-bodies` holds 1045 files,
+   all 96–147 h old, all past the 72 h gate, **static across two full 60 s pass intervals** while
+   the pass demonstrably ran — and each pass reads 0.50 GB, more than the legacy dir's entire
+   317.6 MB. **Split to TRDD-8TM7I49X** with the measurement; this card is not it, and merging
+   them would rebuild the conflation.
 2. **Up to 512 MB of captured bodies live ONLY in volatile RAM at any moment.** This card's real
    insight, and it survives intact: with the age gate structurally unable to fire on a spool, the
    cap valve is the *only* thing that ever moves a body to durable storage, so an unmount, a
@@ -167,3 +178,15 @@ turned out to be insufficient, in a way worth keeping[^1].
     historical work before believing an instantaneous counter, and DO ask what the trigger
     actually is before assuming the visible knob is it. Tell: a suspect list where every entry is
     a plausible mechanism and none has been measured.
+
+[^2]: [id: mode-flag-is-not-attribution status: active keywords: "[spool] tag" "every line is
+    tagged" which target drained log attribution per-pass vs per-target, ocd: 2026-08-22 lmd:
+    2026-08-22] DO NOT read a status TAG on an aggregate log line as ATTRIBUTION for one of the
+    inputs that line summarizes, BECAUSE `[spool]` here is `SPOOL_MODE ? ' [spool]' : ''` —
+    a per-SERVER-MODE flag on a `console.log` that sits OUTSIDE the `for (const target of
+    drainTargets)` loop with counters summed across every target
+    (`standalone/server.ts:710,747`) — so "all 278 lines are tagged `[spool]`, therefore the
+    legacy target never contributed" is an inference the log cannot support. DO check whether the
+    emitting statement is inside or outside the loop whose items you are trying to distinguish,
+    before treating its output as per-item. This error was committed *inside the refutation of a
+    card that failed the same way*, and was caught only by adversarially reviewing it.

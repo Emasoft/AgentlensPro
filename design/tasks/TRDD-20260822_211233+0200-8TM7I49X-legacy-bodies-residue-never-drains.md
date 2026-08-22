@@ -3,7 +3,7 @@ trdd-id: 8TM7I49X
 title: 1045 legacy body files sit 96-147h past the ingest age gate and never drain
 column: todo
 created: 2026-08-22T21:12:33+0200
-updated: 2026-08-22T21:12:33+0200
+updated: 2026-08-22T21:32:00+0200
 current-owner: main
 task-type: bugfix
 severity: HIGH
@@ -46,16 +46,30 @@ it is the legacy target specifically. (The spool GROWING is not itself evidence 
 there — capture simply outruns it mid-session. The evidence that separates the two targets is
 that one number moves and the other does not, on the same clock.)
 
-**Corroborated from the server's own log, which is stronger than the sampling above.**
-`~/.agentlens/server.log` carries **278** `bodies → store: ingested N, reclaimed M` lines — and
-**every single one is tagged `[spool]`.** The tag is emitted from `SPOOL_MODE`, and the pass logs
-one line per pass covering BOTH targets, so a legacy reclaim would appear in the same line's
-counters. The machinery, the store, the delete gate and the flock all work; 1619, 944 and 831
-files were reclaimed in recent passes. It is this one target that has never contributed.
+**Corroborated from the server's own log — but read it correctly, because the obvious reading is
+wrong.** `~/.agentlens/server.log` carries **278** `bodies → store: ingested N, reclaimed M`
+lines, most recent today, with 1619 / 944 / 831 files reclaimed in recent passes. So the
+machinery, the store, the delete gate and the flock all work; something is definitely being
+reclaimed.
 
-This also means the search space is smaller than it looks: whatever is wrong is specific to a
-target with `durable: true` and `relocateStrandedTo: undefined`, or to how the second iteration
-of the `drainTargets` loop is reached, and NOT to ingestion, verification or deletion in general.
+**What the `[spool]` tag on those lines does NOT mean.** Every line carries ` [spool]`, and the
+first draft of this card read that as "every reclaim came from the spool target, so the legacy
+target has never contributed". **That inference is invalid.** The tag is
+`${SPOOL_MODE ? ' [spool]' : ''}` (`standalone/server.ts:747`) — a per-SERVER-MODE flag — and the
+`console.log` sits **outside** the `for (const target of drainTargets)` loop, printing counters
+summed across both targets (`server.ts:710`). One line per PASS, not per target. **The log cannot
+attribute a reclaim to a target at all**, so "not one line is untagged" says nothing whatsoever.
+
+**What actually separates the two targets, then:**
+
+- the file-count sampling above — legacy static at 1045 while the pass demonstrably ran. This is
+  the direct evidence and it is sufficient on its own;
+- each logged pass reports **0.50 GB read** (the per-pass throttle, saturated). Legacy holds
+  **317.6 MB in total**, so a 0.50 GB pass cannot be legacy-only — it is at minimum mostly spool.
+
+Both are about the CORPUS, not about a log tag. Keeping the distinction is the point: this card's
+parent chain has now produced four wrong inferences about this subsystem, and three of them came
+from reading a status string as if it were a measurement.
 
 ## Why it is not visible
 
