@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-22T18:30:32+0200
+updated: 2026-08-22T19:18:38+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -2461,8 +2461,36 @@ silently absorbed, because a card that quietly drops its own acceptance criterio
       attempt):
       - **`/api/*`** — route surfaces compared: **33 vs 33, set difference empty**, and
         `git diff 3923013..HEAD -- standalone/server.ts` touches no route or tool-shape line.
+
+        **AMENDED 2026-08-22 — the clause above was true but weaker than it read.** It compared
+        route *registration* lines; it said nothing about response *bodies*, and `server.ts` is
+        −179 lines. Settled properly:
+        - The 179 lines MOVED to `src/updatePayload.ts` (new file; `server.ts:23` imports the
+          three functions). Diffed removed-vs-added: of 14 added lines with no counterpart, 13
+          are the header, imports, `type Summary`, and the `export ` prefix on three signatures.
+          **Exactly one is logic** — `Date.now()` → `nowMs`, where the new signature defaults
+          `nowMs = Date.now()` and all four call sites pass 2 args. Same clock, same answer.
+        - **A pathspec bug had hidden 7 of 22 changed files** from the original enumeration:
+          `src/**/*.ts` requires at least one directory after `src/`, so every top-level
+          `src/*.ts` was silently dropped — including `mcpServer.ts`. Use a plain directory
+          pathspec. This is disclosed because the first enumeration was a subset reported as the
+          set, and a later reader would otherwise trust it.
+        - Of the 684 insertions in those 7 files, **4 are new files** (cannot change a consumer
+          unless imported) and the rest are three opt-in engine swaps: `logReader` (cold-file
+          scans), `otelCallIndex` (indexed scan), `logReader` again (OpenCode db). Each keeps the
+          TS path when the binary is absent, and each has a cross-engine parity suite —
+          **all 7 `rust*.test.ts` suites pass**; in a full 2431-test run the sole failure is
+          `bodyStore`'s dedup ratio, unrelated to this card.
+        - Caveat on method, so it is not over-trusted: the move was checked with `sort -u` +
+          `comm`, which is blind to reordering, to a change in a repeated line's multiplicity,
+          and to a line moving between functions. The parity suites, not that diff, are what
+          actually carry the claim.
       - **MCP** — asked both LIVE servers for `tools/list` (the wire, not the source):
-        **53 vs 53, `diff` byte-identical**.
+        **53 vs 53, `diff` byte-identical**. `src/mcpServer.ts` (one of the 7 files the pathspec
+        bug hid) was then read for what `tools/list` cannot see — response BODIES. Filtering its
+        diff down to lines that are neither comments nor `function`→`export function` flips
+        leaves **13 lines**, all one inline result object extracted into
+        `handleGetLifecycleEvents` with a **byte-identical body**. No wire change.
       - **dashboard** — `git diff --stat 3923013..HEAD -- media/` is empty.
       - **existing data dirs** — copied 3 REAL pre-card segments (2026-07-23/24/25) to a scratch
         dir and served them with `alcore`: it built `spans/index.json` itself and reported
