@@ -1,9 +1,10 @@
 ---
 trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
-column: dev
+column: human_review
+pre-block-column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-22T19:27:30+0200
+updated: 2026-08-22T23:15:00+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -2556,5 +2557,18 @@ silently absorbed, because a card that quietly drops its own acceptance criterio
 - 2026-08-18T17:00:52+0200 — Card authored at `todo` under the USER's explicit goal directive.
   Immediate mitigations already landed separately: [[TRDD-7I5805QM]] (call-events index + DuckDB
   machine-scaled threads; all-history 32.7s-per-call → 3.9s indexed).
+- 2026-08-22T23:15:00+0200 — `dev` → **`human_review`** by main (self-orchestrating). Not a
+  status change dressed up as progress: two of three acceptance boxes are closed, and the third
+  is a SCOPE DECISION the STATE block already names as the USER's — so nobody is working this
+  card, and `dev` asserts that somebody is. An untrue column is worse than an unstarted card,
+  because the board is the one view anyone checks. `human_review` is the column for exactly this:
+  escalated, awaiting the USER's verdict.
+
+  **The question, stated so it can be answered in one line:** box 3 asks that the remaining
+  TypeScript serve only the UI. `b8addc7` made alcore *reachable* (`ensureServer` spawns it when
+  `~/.agentlens/bin/alcore` exists), but the TS `standalone/server.ts` still serves everywhere
+  that binary is absent — which is every published install. So closing box 3 means deciding the
+  TS server's FATE, not having an alternative to it. [[TRDD-EAK9R8IY]] (ship the Rust binaries
+  per-platform on npm) is the concrete prerequisite if the answer is "retire it".
 
 ## Notes and lessons learned
