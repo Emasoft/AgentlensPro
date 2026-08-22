@@ -66,7 +66,7 @@ fn main() {
     if bench {
         let t2 = std::time::Instant::now();
         let n = match mode {
-            "traces" => state.process_traces(&payload, &collector_path).len(),
+            "traces" => state.process_traces(payload, &collector_path).len(),
             "logs" => state.process_logs(&payload, now_ms, |_, _, _| false).spans.len(),
             // `process_metrics` already returns its point count as a u64 rather than a Vec.
             _ => agentlens_ingest::process_metrics(&payload).1 as usize,
@@ -87,7 +87,7 @@ fn main() {
         return;
     }
     let out = match mode {
-        "traces" => serde_json::json!({ "spans": state.process_traces(&payload, &collector_path) }),
+        "traces" => serde_json::json!({ "spans": state.process_traces(payload, &collector_path) }),
         "logs" => {
             let r = state.process_logs(&payload, now_ms, |_, _, _| false);
             serde_json::json!({

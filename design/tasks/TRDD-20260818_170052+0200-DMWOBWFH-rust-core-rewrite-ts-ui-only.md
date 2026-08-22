@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-22T13:29:38+0200
+updated: 2026-08-22T15:45:56+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -19,13 +19,20 @@ release-via: publish
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-08-22 (v4)
 
-> **NEXT ACTION (one step):** fix the Rust OTLP transform, which D2 measured as **3.9× SLOWER
-> than the TypeScript one** (154 ms vs 604 ms on 200k spans) — swap `serde_json::Value` walking
-> for typed `#[derive(Deserialize)]` structs with `&str` borrows in `agentlens-ingest`, then
-> re-run `node scripts_dev/bench-ingest-transform.js 200000`. It is the ONLY thing standing
-> between this card and acceptance box 2; the alternative, if the port cannot be made to win, is
-> to revert class 3 to the TS path and record it as deliberately unported. Do not tick the box on
-> two of three classes. **Read the newest bullets at the END of this block first.**
+> **NEXT ACTION (one step):** attack the PARSE stage of the Rust OTLP path — it is now the larger
+> half (1742 ms of the 5.7 s 1M-span total, untouched), so try typed
+> `#[derive(Deserialize)]` structs for the OTLP envelope (which fuses parse and transform into one
+> pass) or `simd-json`, then re-run `node scripts_dev/bench-ingest-transform.js 200000` **three
+> times** and compare against the ±6% run-to-run variance, never a single run. Two allocation
+> fixes already recovered 37% (604 → ~491 ms on 200k) but TS is ~145 ms, so class 3 is still 3.4×
+> behind and acceptance box 2 stays OPEN. If the parse work does not close it, the honest
+> resolution is to revert class 3 to the TS path and record it as deliberately unported — do NOT
+> tick the box on two of three classes. **Read the newest bullets at the END of this block first.**
+>
+> **SUPERSEDED — do NOT carry forward:** "the fix is typed deserialization because the port walks
+> `serde_json::Value`" as a statement about the TRANSFORM — profiling disproved it (the cost was
+> map growth and cloning, both now fixed); typed structs remain a candidate for the PARSE stage
+> only. Also "3.9× slower" — that was the pre-fix number; it is ~3.4× now.
 >
 > **D1 IS DONE** (`a4d1bc6` pid lock, `b8addc7` the spawn seam). **D2 is done as a MEASUREMENT**
 > and its result is negative — see `## The single-core incident classes` before the acceptance
@@ -2266,7 +2273,7 @@ observed burning 100% of one core BEFORE this card existed.
 |---|---|---|---|---|
 | 1 | All-history call-events scan (5.5M-span store walk) | `otelCallEvents.ts` scan loop | **32.7s single-core TS → 1.1s at 667% CPU on 14 threads** (29×), real store, 240,482-event key-normalized parity diff, zero real divergence | ✅ |
 | 2 | Cold-boot log-session scan (13,110-file corpus) | `LogReader` boot scan | **27.0s single-core TS → 6.7s**; binary alone 4.1s at 462% CPU; identical result counts | ✅ |
-| 3 | JSONL/OTLP parsing at ingest | `OtlpCollector.processTraces/processLogs` | **MEASURED — and it is a REGRESSION, not a win: transform 154 ms TS vs 604 ms Rust (0.26×)**, see below | ❌ |
+| 3 | JSONL/OTLP parsing at ingest | `OtlpCollector.processTraces/processLogs` | **MEASURED — a REGRESSION, not a win. 604 ms → ~491 ms after two fixes (37% recovered), but TS is ~145 ms: still 3.4× behind**, see below | ❌ |
 | 4 | DuckDB pinned to 4 threads | `store/db.ts` PRAGMA | **not a port** — fixed in place by machine-scaling the thread PRAGMA. Named here so the set stays complete and nobody later reads its absence as an oversight | n/a |
 
 Class 5 — the bodies→DuckDB store flush (**1033s → 38s, 27×**, same 512 MB / 1,018-body workload,
@@ -2302,12 +2309,74 @@ why `alingest --bench` now exists: same transform, per-phase timings, no seriali
 debug CLI's convenience output is measuring the harness.
 
 **The finding stands after both corrections**, and it inverts this card's premise for one class:
-Rust is not automatically faster. The likely cause is that the port walks `serde_json::Value` — a
-boxed dynamic tree where every attribute read is a `Map<String, Value>` probe returning owned
-Strings — while V8 gives the TS collector hidden-class field access on the same shapes. The fix is
-typed deserialization (`#[derive(Deserialize)]` structs for the OTLP envelope, `&str` borrows
-instead of `String` clones), not more threads: `1.18 user / 1.53 real` shows the transform is
-single-threaded, so this class has no parallelism to claim yet either.
+Rust is not automatically faster.
+
+### PROFILED — and the obvious hypothesis was WRONG
+
+The first guess written here was "the port walks `serde_json::Value`, so dynamic traversal is the
+cost; the fix is typed deserialization". `/usr/bin/sample` on a 1M-span run says otherwise:
+
+```
+1415  main
+ 702    IngestState::process_traces        50% of main
+ 444      to_span_attributes               63% of process_traces
+ 154        filter_map
+  58          IndexMap<String,Value>::insert
+  53            RawVecInner::finish_grow      <- map GROWTH
+  38              malloc
+```
+
+It is not traversal. It is `to_span_attributes` REBUILDING every attribute into a fresh
+`Map::new()` — capacity 0 — which then reallocates on its way to exactly two entries, once per
+attribute, millions of times per ingest. Traversal barely appears. Acting on the hypothesis would
+have meant a large typed-deserialization refactor aimed at the wrong 
+frame. **This is the second
+time on this card that `/usr/bin/sample` overturned a confident guess about a hot path** (the
+first: the bodies store, where the cost was zstd + file opens, not query planning). Profile first.
+
+Note the tooling trap: `sample` on PATH here is a Python shim that shadows the macOS tool and dies
+with `ModuleNotFoundError`. The card's own earlier note writes `/usr/bin/sample` absolute, which
+is why — use the absolute path.
+
+**Fixes applied, in the order the profile justified them:**
+
+| step | transform, 1M spans | transform, 200k |
+|---|---|---|
+| baseline | 4073 ms | 604 ms |
+| `Map::with_capacity(2)` + `Vec::with_capacity(items.len())` | 3353 ms | 549 ms |
+| **payload BY VALUE — move instead of clone** | **~2547 ms** (median of 3) | **~491 ms** (489/491/515) |
+
+**37% recovered.** Taking `payload: Value` is the substantive one: while it was borrowed nothing
+could be moved out, so every span rebuilt its attribute list (a fresh `Map` plus a DEEP clone of
+each value) and copied six more fields out one at a time — roughly 12M allocations per million
+spans that the TS collector never performs, because `JSON.parse` hands it objects and it passes
+them by reference. **That asymmetry, not the language, is the whole answer to "how can Rust be
+slower".** With ownership, `to_span_attributes` stops constructing anything: an OTLP `KeyValue` is
+already `{key, value}`, so it validates, `retain`s in place, and MOVES the map — 0 allocations per
+attribute where there were 5.
+
+Gate at this state: `cargo test --workspace` **580 passed / 0 failed, CARGO_EXIT=0**; clippy 1
+warning (pre-existing `items after a test module`); the 3 TS cross-engine parity tests pass.
+
+**A second optimization was tried and REVERTED — record it so nobody re-derives it.** The next
+profile's top frames were `core::hash::sip` / `RandomState::hash_one` / `IndexMap` lookup
+(serde_json hashes every string key), so replacing the eight `remove()` calls with a single
+`for (k, v) in span { match k.as_str() … }` pass looked certain to win. It **measured neutral**:
+three runs of one unchanged binary span **2546 / 2593 / 2690 ms**, so the ±6% variance is wider
+than the effect, and the single-run "2525 vs 2780" that suggested a regression was noise on both
+ends. **Measure the variance of the unchanged binary before comparing single runs** — and a hot
+frame is not evidence that the alternative is cheaper.
+
+**Still ~3.4x behind TS (145 ms vs ~491 ms on 200k), so box 2 stays OPEN.** The remaining levers,
+in order of expected value: the PARSE stage is now the larger half (1742 ms of the 1M total,
+untouched — `simd-json`, or typed `#[derive(Deserialize)]` structs for the OTLP envelope so parse
+and transform fuse into one pass), then a non-SipHash map. If neither closes the gap, the honest
+resolution is to revert class 3 to the TS path and record it as deliberately unported — the OTLP
+transform may simply be a workload where a dynamic-JSON tree in Rust cannot beat a JIT with hidden
+classes.
+
+Not a threading problem either way: `1.18 user / 1.53 real` — the transform is single-threaded, so
+this class has no parallelism to claim yet.
 
 **Box 2 therefore CANNOT be closed.** It asks for a benchmark *proving* multi-core or indexed
 behaviour; class 3's benchmark proves the opposite. The honest states are (a) fix the port and

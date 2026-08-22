@@ -36,23 +36,47 @@ const DROPPED_EVENTS_MAX_NAMES: usize = 50;
 
 type Attr = Map<String, Value>;
 
-fn to_span_attributes(raw: Option<&Value>) -> Vec<Attr> {
+/// PROFILED, not guessed (TRDD-DMWOBWFH D2, `/usr/bin/sample` on a 1M-span payload): this
+/// function was **63% of `process_traces`**, and inside it the hot frames were
+/// `IndexMap::insert` → `RawVecInner::finish_grow` → `malloc`. The map is known to hold exactly
+/// two entries, so every one of those growth reallocations was avoidable — `Map::new()` starts at
+/// capacity 0 and regrows on the way to 2, once per attribute, millions of times per ingest.
+///
+/// `with_capacity` on the outer Vec matters for the same reason: a span's attribute count is
+/// bounded by the input array's length, so the output vector never needs to double.
+///
+/// Now takes the attribute array BY VALUE, which removes the rebuild entirely: an OTLP `KeyValue`
+/// is already exactly `{key, value}` — the shape this function used to construct — so once the
+/// input is owned there is nothing to build. Validate, drop any field that is not `key`/`value`
+/// (`retain` is in place, so it allocates nothing), and MOVE the map into the output. Per
+/// attribute that is 0 allocations where there were 5, including a deep clone of the value.
+///
+/// `retain` rather than trusting the input: OTLP KeyValue carries only those two fields, but a
+/// pass-through would make the output depend on what the sender happened to include, and the
+/// cross-engine parity tests pin the exact key set against the TS collector.
+/// The borrowing form, for the log and metric paths, which still walk a borrowed payload. It
+/// delegates rather than duplicating the logic — one `cloned()` here is what the owned path used
+/// to pay per attribute, and these callers are not the measured hot path (the traces transform
+/// was; see `process_traces`). If they ever show up in a profile, convert them the same way
+/// instead of forking a second implementation.
+fn to_span_attributes_ref(raw: Option<&Value>) -> Vec<Attr> {
+    to_span_attributes(raw.cloned())
+}
+
+fn to_span_attributes(raw: Option<Value>) -> Vec<Attr> {
     let Some(Value::Array(items)) = raw else { return Vec::new() };
-    items
-        .iter()
-        .filter_map(|item| {
-            let obj = item.as_object()?;
-            let key = obj.get("key").and_then(Value::as_str)?;
-            let value = obj.get("value")?;
-            if key.is_empty() || !value.is_object() {
-                return None;
-            }
-            let mut a = Map::new();
-            a.insert("key".into(), Value::String(key.to_owned()));
-            a.insert("value".into(), value.clone());
-            Some(a)
-        })
-        .collect()
+    let mut out: Vec<Attr> = Vec::with_capacity(items.len());
+    for item in items {
+        let Value::Object(mut obj) = item else { continue };
+        let key_ok = obj.get("key").and_then(Value::as_str).is_some_and(|k| !k.is_empty());
+        let value_ok = obj.get("value").is_some_and(Value::is_object);
+        if !key_ok || !value_ok {
+            continue;
+        }
+        obj.retain(|k, _| k == "key" || k == "value");
+        out.push(obj);
+    }
+    out
 }
 
 fn merge_attributes(lists: &[&[Attr]]) -> Vec<Attr> {
@@ -561,11 +585,11 @@ impl IngestState {
         let resource_logs = payload.get("resourceLogs").and_then(Value::as_array);
         let Some(resource_logs) = resource_logs else { return out };
         for rl in resource_logs.iter().filter_map(Value::as_object) {
-            let resource_attrs = to_span_attributes(rl.get("resource").and_then(Value::as_object).and_then(|r| r.get("attributes")));
+            let resource_attrs = to_span_attributes_ref(rl.get("resource").and_then(Value::as_object).and_then(|r| r.get("attributes")));
             for sl in rl.get("scopeLogs").and_then(Value::as_array).map(Vec::as_slice).unwrap_or(&[]).iter().filter_map(Value::as_object) {
-                let scope_attrs = to_span_attributes(sl.get("scope").and_then(Value::as_object).and_then(|s| s.get("attributes")));
+                let scope_attrs = to_span_attributes_ref(sl.get("scope").and_then(Value::as_object).and_then(|s| s.get("attributes")));
                 for rec in sl.get("logRecords").and_then(Value::as_array).map(Vec::as_slice).unwrap_or(&[]).iter().filter_map(Value::as_object) {
-                    let record_attrs = to_span_attributes(rec.get("attributes"));
+                    let record_attrs = to_span_attributes_ref(rec.get("attributes"));
                     let body_attrs = attrs_from_body_kv(rec.get("body"));
                     let mut attrs = merge_attributes(&[&record_attrs, &body_attrs, &scope_attrs, &resource_attrs]);
 
@@ -755,78 +779,104 @@ impl IngestState {
 
     /// processTraces. Returns the store-ready spans; gen_ai buffered content injects here when
     /// the span arrives after its log event.
-    pub fn process_traces(&mut self, payload: &Value, collector_path: &str) -> Vec<Value> {
+    /// Takes the payload BY VALUE, and that is the performance fix, not a style choice.
+    ///
+    /// Measured (TRDD-DMWOBWFH D2): while the payload was borrowed, nothing could be moved out of
+    /// it, so every span rebuilt its attribute list — a fresh `Map` per attribute plus a DEEP
+    /// clone of each value — and then copied `traceId`/`spanId`/`name`/`startTime`/`endTime`/
+    /// `status` out one field at a time. That is roughly 12 million allocations per million spans
+    /// that the TypeScript collector never performs at all: `JSON.parse` hands it objects and it
+    /// passes them by reference. The Rust port was 3.9x SLOWER than the TS one for exactly that
+    /// reason — same algorithm, one side copying and the other not. Owning the payload turns
+    /// every one of those copies into a move.
+    ///
+    /// Ownership also makes the whole walk a `remove()` chain: taking a field OUT of the map both
+    /// yields it owned and stops it being cloned into the output.
+    pub fn process_traces(&mut self, payload: Value, collector_path: &str) -> Vec<Value> {
         let mut out = Vec::new();
-        let raw_spans: Vec<&Value> = payload
-            .get("resourceSpans")
-            .and_then(Value::as_array)
-            .map(Vec::as_slice)
-            .unwrap_or(&[])
-            .iter()
-            .filter_map(Value::as_object)
-            .flat_map(|rs| rs.get("scopeSpans").and_then(Value::as_array).map(Vec::as_slice).unwrap_or(&[]))
-            .filter_map(Value::as_object)
-            .flat_map(|ss| ss.get("spans").and_then(Value::as_array).map(Vec::as_slice).unwrap_or(&[]))
-            .collect();
+        let Value::Object(mut root) = payload else { return out };
+        let Some(Value::Array(resource_spans)) = root.remove("resourceSpans") else { return out };
 
-        for raw in raw_spans {
-            let Some(span) = raw.as_object() else { continue };
-            let (Some(otlp_trace_id), Some(span_id), Some(name)) = (
-                span.get("traceId").and_then(Value::as_str),
-                span.get("spanId").and_then(Value::as_str),
-                span.get("name").and_then(Value::as_str),
-            ) else {
-                continue;
-            };
-            let mut attrs = to_span_attributes(span.get("attributes"));
-            if self.is_codex_websocket_span(name, &attrs) {
-                continue;
-            }
-            let mut trace_id = otlp_trace_id.to_owned();
-            let parent_span_id = span.get("parentSpanId").and_then(Value::as_str).filter(|s| !s.is_empty());
-            if let Some(mapped) = self.codex_norm.session_by_otel_trace_id(otlp_trace_id).map(str::to_owned) {
-                trace_id = mapped.clone();
-                attrs = set_string_attr(attrs, "codex.session.id", &mapped);
-                attrs = with_string_attr(attrs, "otel.trace_id", otlp_trace_id);
-            } else if self.is_codex_trace_span(name, &attrs) {
-                let conversation_id = get_attr_from(&attrs, &["thread.id", "thread_id", "conversation.id", "conversation_id", "codex.conversation.id"]);
-                let turn_id = get_attr_from(&attrs, &["turn.id", "turn_id", "codex.turn.id"]);
-                if !conversation_id.is_empty() && !turn_id.is_empty() {
-                    let session_id = self.codex_norm.resolve_session_id(&conversation_id, otlp_trace_id, &turn_id, name);
-                    if let Some(sid) = &session_id {
-                        trace_id = sid.clone();
-                        attrs = set_string_attr(attrs, "codex.session.id", sid);
-                        attrs = set_string_attr(attrs, "codex.conversation.id", &conversation_id);
-                        attrs = set_string_attr(attrs, "codex.turn.id", &turn_id);
-                        if otlp_trace_id != trace_id {
-                            attrs = with_string_attr(attrs, "otel.trace_id", otlp_trace_id);
-                        }
-                        if parent_span_id.is_none() && !self.codex_session_root_by_trace.contains_key(&trace_id) {
-                            self.codex_session_root_by_trace.insert(trace_id.clone(), span_id.to_owned());
+        for rs in resource_spans {
+            let Value::Object(mut rs) = rs else { continue };
+            let Some(Value::Array(scope_spans)) = rs.remove("scopeSpans") else { continue };
+            for ss in scope_spans {
+                let Value::Object(mut ss) = ss else { continue };
+                let Some(Value::Array(spans)) = ss.remove("spans") else { continue };
+                for raw in spans {
+                    let Value::Object(mut span) = raw else { continue };
+                    // `remove()` rather than `get()`: it yields the value OWNED, so nothing here
+                    // is cloned into the output span.
+                    //
+                    // A one-pass `for (k, v) in span { match k.as_str() { … } }` was tried here to
+                    // avoid serde_json's per-lookup SipHash — the second profile's top frames were
+                    // `core::hash::sip` / `RandomState::hash_one` / `IndexMap` lookup, so it looked
+                    // like the obvious next win. It MEASURED NEUTRAL (2546/2593/2690 ms across
+                    // three runs of each, i.e. inside the ±6% run-to-run variance) and was
+                    // reverted. Do not re-derive it from the profile alone: a frame being hot does
+                    // not mean the alternative is cheaper, and the variance has to be measured
+                    // before a single-run comparison means anything.
+                    let (Some(Value::String(otlp_trace_id)), Some(Value::String(span_id)), Some(Value::String(name))) =
+                        (span.remove("traceId"), span.remove("spanId"), span.remove("name"))
+                    else {
+                        continue;
+                    };
+                    let mut attrs = to_span_attributes(span.remove("attributes"));
+                    if self.is_codex_websocket_span(&name, &attrs) {
+                        continue;
+                    }
+                    let mut trace_id = otlp_trace_id.clone();
+                    let parent_span_id = match span.remove("parentSpanId") {
+                        Some(Value::String(p)) if !p.is_empty() => Some(p),
+                        _ => None,
+                    };
+                    if let Some(mapped) = self.codex_norm.session_by_otel_trace_id(&otlp_trace_id).map(str::to_owned) {
+                        trace_id = mapped.clone();
+                        attrs = set_string_attr(attrs, "codex.session.id", &mapped);
+                        attrs = with_string_attr(attrs, "otel.trace_id", &otlp_trace_id);
+                    } else if self.is_codex_trace_span(&name, &attrs) {
+                        let conversation_id = get_attr_from(&attrs, &["thread.id", "thread_id", "conversation.id", "conversation_id", "codex.conversation.id"]);
+                        let turn_id = get_attr_from(&attrs, &["turn.id", "turn_id", "codex.turn.id"]);
+                        if !conversation_id.is_empty() && !turn_id.is_empty() {
+                            let session_id = self.codex_norm.resolve_session_id(&conversation_id, &otlp_trace_id, &turn_id, &name);
+                            if let Some(sid) = &session_id {
+                                trace_id = sid.clone();
+                                attrs = set_string_attr(attrs, "codex.session.id", sid);
+                                attrs = set_string_attr(attrs, "codex.conversation.id", &conversation_id);
+                                attrs = set_string_attr(attrs, "codex.turn.id", &turn_id);
+                                if otlp_trace_id != trace_id {
+                                    attrs = with_string_attr(attrs, "otel.trace_id", &otlp_trace_id);
+                                }
+                                if parent_span_id.is_none() && !self.codex_session_root_by_trace.contains_key(&trace_id) {
+                                    self.codex_session_root_by_trace.insert(trace_id.clone(), span_id.clone());
+                                }
+                            }
                         }
                     }
+                    let buf_key = format!("{trace_id}:{span_id}");
+                    if let Some(buffered) = self.gen_ai_buffer.shift_remove(&buf_key) {
+                        attrs = set_string_attr(attrs, "gen_ai.output.messages", &buffered);
+                    }
+                    attrs = set_string_attr(attrs, "_agentlens.collector_path", collector_path);
+
+                    // 7 known keys, so the output map is sized once instead of regrowing — the
+                    // same avoidable-growth defect the profile found inside to_span_attributes.
+                    let mut s = Map::with_capacity(8);
+                    s.insert("traceId".into(), Value::String(trace_id));
+                    s.insert("spanId".into(), Value::String(span_id));
+                    if let Some(p) = parent_span_id {
+                        s.insert("parentSpanId".into(), Value::String(p));
+                    }
+                    s.insert("name".into(), Value::String(name));
+                    s.insert("startTime".into(), span.remove("startTimeUnixNano").unwrap_or(Value::Null));
+                    s.insert("endTime".into(), span.remove("endTimeUnixNano").unwrap_or(Value::Null));
+                    s.insert("attributes".into(), Value::Array(attrs.into_iter().map(Value::Object).collect()));
+                    if let Some(status) = span.remove("status") {
+                        s.insert("status".into(), status);
+                    }
+                    out.push(Value::Object(s));
                 }
             }
-            let buf_key = format!("{trace_id}:{span_id}");
-            if let Some(buffered) = self.gen_ai_buffer.shift_remove(&buf_key) {
-                attrs = set_string_attr(attrs, "gen_ai.output.messages", &buffered);
-            }
-            attrs = set_string_attr(attrs, "_agentlens.collector_path", collector_path);
-
-            let mut s = Map::new();
-            s.insert("traceId".into(), Value::String(trace_id));
-            s.insert("spanId".into(), Value::String(span_id.to_owned()));
-            if let Some(p) = parent_span_id {
-                s.insert("parentSpanId".into(), Value::String(p.to_owned()));
-            }
-            s.insert("name".into(), Value::String(name.to_owned()));
-            s.insert("startTime".into(), span.get("startTimeUnixNano").cloned().unwrap_or(Value::Null));
-            s.insert("endTime".into(), span.get("endTimeUnixNano").cloned().unwrap_or(Value::Null));
-            s.insert("attributes".into(), Value::Array(attrs.into_iter().map(Value::Object).collect()));
-            if let Some(status) = span.get("status") {
-                s.insert("status".into(), status.clone());
-            }
-            out.push(Value::Object(s));
         }
         out
     }
@@ -850,7 +900,11 @@ mod tests {
             "traceId": "g1", "spanId": "gs1", "name": "chat gpt-5",
             "startTimeUnixNano": "1", "endTimeUnixNano": "2", "attributes": [],
         }] }] }] });
-        let spans = state.process_traces(&traces, "/v1/traces");
+        // Cloned explicitly because process_traces now CONSUMES the payload (that is the
+        // optimization — see its doc comment). This test deliberately feeds the same payload
+        // twice to prove the gen_ai buffer is consume-once, so it needs two copies; the clone is
+        // the test paying for what it is testing, not a cost the production path carries.
+        let spans = state.process_traces(traces.clone(), "/v1/traces");
         assert_eq!(spans.len(), 1);
         let attrs = spans[0]["attributes"].as_array().unwrap();
         let injected = attrs.iter().find(|a| a["key"] == "gen_ai.output.messages").expect("injected");
@@ -859,7 +913,7 @@ mod tests {
             r#"[{"role":"assistant","content":[{"type":"text","text":"hello é"}]}]"#
         );
         // Consumed: a second span with the same key gets nothing.
-        let spans2 = state.process_traces(&traces, "/v1/traces");
+        let spans2 = state.process_traces(traces, "/v1/traces");
         assert!(spans2[0]["attributes"].as_array().unwrap().iter().all(|a| a["key"] != "gen_ai.output.messages"));
     }
 
@@ -883,7 +937,7 @@ pub fn process_metrics(payload: &Value) -> (u64, u64, Vec<(String, String)>) {
     let mut pairs: Vec<(String, String)> = Vec::new();
     let rms = payload.get("resourceMetrics").and_then(Value::as_array).map(Vec::as_slice).unwrap_or(&[]);
     for rm in rms.iter().filter_map(Value::as_object) {
-        let res_attrs = to_span_attributes(rm.get("resource").and_then(Value::as_object).and_then(|r| r.get("attributes")));
+        let res_attrs = to_span_attributes_ref(rm.get("resource").and_then(Value::as_object).and_then(|r| r.get("attributes")));
         let res_account = get_attr_from(&res_attrs, &["user.account_uuid", "user_account_uuid"]);
         let res_session = get_attr_from(&res_attrs, &["session.id", "session_id"]);
         if !res_account.is_empty() && !res_session.is_empty() {
@@ -897,7 +951,7 @@ pub fn process_metrics(payload: &Value) -> (u64, u64, Vec<(String, String)>) {
                     let dps = m.get(group).and_then(Value::as_object).and_then(|g| g.get("dataPoints")).and_then(Value::as_array);
                     let Some(dps) = dps else { continue };
                     for dp in dps.iter().filter_map(Value::as_object) {
-                        let point_attrs = to_span_attributes(dp.get("attributes"));
+                        let point_attrs = to_span_attributes_ref(dp.get("attributes"));
                         let account = {
                             let a = get_attr_from(&point_attrs, &["user.account_uuid", "user_account_uuid"]);
                             if a.is_empty() { res_account.clone() } else { a }

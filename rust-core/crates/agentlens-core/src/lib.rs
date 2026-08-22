@@ -578,7 +578,7 @@ pub fn ingest_post(state: &mut CoreState, path: &str, body: &[u8]) {
     let spans: Vec<Value> = match kind {
         "traces" => {
             state.counters.traces_payloads += 1;
-            state.ingest.process_traces(&payload, path)
+            state.ingest.process_traces(payload, path)
         }
         "logs" => {
             state.counters.logs_payloads += 1;
