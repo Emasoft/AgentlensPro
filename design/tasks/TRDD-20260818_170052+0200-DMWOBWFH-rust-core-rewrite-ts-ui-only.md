@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-22T02:00:34+0200
+updated: 2026-08-22T05:33:28+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -19,12 +19,15 @@ release-via: publish
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-08-22 (v3)
 
-> **NEXT ACTION (one step):** write `crates/agentlens-core/src/chores.rs::spawn_all` — arm the
-> ported chore bodies on their confirmed cadences (24h retention→compression, 1h bucket/statusline
-> purge, 30s resident blobs, bodies pass), move the three inline timers out of `bin/alcore.rs`
-> `main()`, and take a `.chores.lock` flock (modelled on `agentlens-store` `pass.rs:46`) around the
-> retention+compression tick. **Read the newest bullets at the END of this block first** — they
-> carry this session's findings and two corrections to the plan of record.
+> **NEXT ACTION (one step):** B3 — the bodies read scope (`ui.rs:2230` flagged, `ui.rs:2172` NOT
+> flagged): mid-drain the Rust scans one dir where the TS scans two, so `windowEstCostUsd` reads
+> low. It is the LAST open item before Tier C, and it is deferred rather than missed: it already
+> reports itself honestly through `coverage.dirsScanned`, and there is NO observable difference
+> when no spool is configured. **Read the newest bullets at the END of this block first** — they
+> carry this session's findings and the corrections to the plan of record.
+>
+> Tier A is DONE (bodies armed, A3 in-process). Tier B is done except B3. Then Tier C, then D1
+> (cutover) and D2 (benchmarks), which are the two acceptance boxes still open.
 
 - **P1 COMPLETE and LIVE.** `agentlens-spanstore` reads the real segment format with a rayon
   parallel walk; `alscan` CLI; the TS server EXECS it for every call-events scan on this machine.
@@ -2011,6 +2014,46 @@ release-via: publish
   Related, and it cost a red test: a `0.55 - 0.10` cost delta is `0.45000000000000007`, not `0.45`,
   in BOTH engines (`0.55-0.10 === 0.45` is FALSE in node). Assert the subtraction, never the
   rounded literal — the literal would assert the port is wrong in exactly the way it is right.
+
+- **TIER A IS COMPLETE — the chores are ARMED, not merely ported.** `chores::spawn_all` now runs
+  every recurring task: span retention→compression (24h, **retention FIRST**), hook/log/statusline
+  purge (1h), the bodies pass (1h), the resident-blob scan (30s), flush (5s), heartbeat (30s),
+  statusline seal (60s). ~70 lines left `bin/alcore.rs::main()`; only `run_push_loop` and
+  `run_burn_tick` stay there (already library-side). Commits `dfda013` (wire), `c7cb71f` (A4),
+  plus A3.
+  **The reason chores are a LIBRARY module:** every background task used to be declared inside
+  `main()`, and the measured consequence is that `run_burn_tick` HAS NO TEST and cannot have one
+  from an integration test. That hole is why the new ones live in `chores.rs`.
+- **A3 DECIDED — the bodies pass runs IN-PROCESS, not by exec'ing `alstore pass`.** The TS shells
+  out because the TS cannot run that code; alcore can. **Deciding factor, and it is repo-specific:**
+  locating our own sibling binary at runtime is genuinely fragile here — the documented trap is
+  that `agentlenspro` resolves to a PUBLISHED GLOBAL npm install rather than the local build, and a
+  bodies pass silently run by a DIFFERENT VERSION of the store engine is a data-integrity problem,
+  not a nuisance. Accepted cost, stated rather than hidden: the pass runs in the server's own
+  address space and DuckDB ingestion is memory-heavy (prior art: an unbounded boot sweep drove RSS
+  to 5.4GB), so `max_bytes_per_pass` is passed EXPLICITLY as the bound rather than left to default.
+  *(A fable-advisor consult was dispatched on exactly this question and never returned — the THIRD
+  advisor call to hang on this card. The decision rests on the verified facts above, not on an
+  unavailable verdict; recorded so a later reader knows which it was.)*
+  To do it, `load_state`/`save_state` moved from the alstore BINARY into the `agentlens-store`
+  library (`load_pass_state`/`save_pass_state`, `PASS_STATE_FILE`), and **the CLI's copies were
+  deleted**: two copies mean two views of which bodies are stranded, and a store cannot have two
+  answers to that.
+- **⚠ THE PASS LOCK MUST SPAN `load_pass_state → ingest_pass → save_pass_state`, not just the
+  ingest.** In `alstore.rs` the `_pass_lock` binding lives for the whole of `main`, which is what
+  makes the read-modify-write on `.pass-state.json` safe. Narrow it and two engines interleave a
+  load and a save: a lost SKIP name re-examines a body forever, and a lost STRANDED name forgets a
+  body that could NOT be reconstructed — that one loses data.
+- **A CONDITIONAL that becomes WRONG the day alcore takes port 4318.** A3 drains ONE dir
+  (`<data>/otel-bodies`) and the bodies pass ticks at 1h, because both the two-target drain and the
+  60s cadence are gated on `SPOOL_MODE`, whose condition is `OTLP_PORT === 4318`. alcore binds
+  **4319**. This is the same gate that got A5 dropped. If alcore ever takes 4318, revisit A3's
+  target list, its cadence, AND A5 together.
+- **Falsification total for this session: 10 mutations, 1 defect** (the A2 floor test, above).
+  The other nine all reddened correctly. Two worth keeping as patterns: a `staged_body_bytes`
+  suffix→substring change counts `*.request.json.tmp` and makes the over-cap valve fire early; and
+  a projection that turns an ABSENT field into `null` is a real wire-shape bug, because a consumer
+  reading `isImage: null` cannot tell it from a real value.
 
 USER directive, verbatim intent: "Goal set: rewrite all in optimized rust and sql. I need the
 agentlenspro server to be blazing fast. Leave typescript only for the ui." Tier-3 approval is the
