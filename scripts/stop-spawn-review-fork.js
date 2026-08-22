@@ -161,7 +161,10 @@ process.stdin.on('end', () => {
   // Breakers, before emitting the demand. Both fail OPEN — the cost of an unwanted review is one
   // review; the cost of a wedged session is the session.
   if (state.consecutive >= MAX_CONSECUTIVE || state.total >= MAX_PER_SESSION) {
-    writeState({ ...state, consecutive: 0 })
+    // Do NOT reset `consecutive` here. Resetting on breaker-fire produces block-block-allow
+    // FOREVER against a non-cooperating agent — 2 turns in 3 still demanding a fork that never
+    // comes — which is an oscillation wearing a breaker's clothes. Only a LANDED fork clears the
+    // streak, so silence earns two demands and then quiet.
     allowStop()
   }
   writeState({ total: (state.total || 0) + 1, consecutive: (state.consecutive || 0) + 1 })

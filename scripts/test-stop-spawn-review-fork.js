@@ -144,10 +144,19 @@ const BREAKERS = []
 {
   const unreviewed = [userText('go'), assistant(edit)]
   const sess = `wedge-${process.pid}`
-  const seq = [verdict(unreviewed, { session: sess }), verdict(unreviewed, { session: sess }), verdict(unreviewed, { session: sess })]
+  // FOUR calls, not three. Three cannot distinguish a real breaker from an oscillation: both
+  // give block,block,allow. The 4th is the discriminator — resetting `consecutive` on
+  // breaker-fire would block again here, i.e. block-block-allow FOREVER against a
+  // non-cooperating agent, which is an oscillation wearing a breaker's clothes.
+  const seq = [
+    verdict(unreviewed, { session: sess }),
+    verdict(unreviewed, { session: sess }),
+    verdict(unreviewed, { session: sess }),
+    verdict(unreviewed, { session: sess }),
+  ]
   BREAKERS.push([
-    JSON.stringify(seq) === JSON.stringify(['block', 'block', 'allow']),
-    'THE WEDGE BREAKER: block twice, then give up — a turn must never be unendable',
+    JSON.stringify(seq) === JSON.stringify(['block', 'block', 'allow', 'allow']),
+    'THE WEDGE BREAKER: two demands, then SILENCE — not block-block-allow forever',
     seq.join(','),
   ])
 
