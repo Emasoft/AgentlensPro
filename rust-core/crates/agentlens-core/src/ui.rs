@@ -2994,6 +2994,56 @@ async fn handle(
 
 /// Serve the UI/API contract on `addr` until the process ends. `hub` is the SSE fan-out the
 /// coalesced pusher (`push_update`) broadcasts into.
+/// The DEDICATED MCP listener (`startMcpHttpServer`, src/mcpServer.ts:4020) — the port a Claude
+/// Code MCP config actually points at.
+///
+/// WHY A SECOND LISTENER AT ALL, when `/mcp` is already routed on the UI listener: at the D1
+/// cutover alcore replaces the TS server, and every client configured for the MCP port would
+/// otherwise find nothing there. Reporting the truth instead ("MCP is on the UI port") is not an
+/// equivalent fix — it still breaks every already-configured client. So this is a D1 PREREQUISITE,
+/// not a tidy-up.
+///
+/// It delegates to the SAME `handle`, so there is exactly one implementation of the 53 tools and
+/// one viewer-role gate. The wrapper only NARROWS the surface to what the TS's dedicated server
+/// exposes — OPTIONS, and POST /mcp — because that server routes nothing else. Serving the whole
+/// API here instead would be a superset of the TS's surface on a port clients treat as MCP-only.
+pub async fn serve_mcp(
+    addr: std::net::SocketAddr,
+    state: Arc<Mutex<CoreState>>,
+    hub: Arc<SseHub>,
+    on_bound: impl FnOnce(std::net::SocketAddr),
+) -> std::io::Result<()> {
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+    on_bound(listener.local_addr()?);
+    loop {
+        let (stream, _) = listener.accept().await?;
+        let io = hyper_util::rt::TokioIo::new(stream);
+        let (state, hub) = (state.clone(), hub.clone());
+        tokio::spawn(async move {
+            let svc = service_fn(move |req: Request<hyper::body::Incoming>| {
+                let (state, hub) = (state.clone(), hub.clone());
+                async move {
+                    let (method, path) = (req.method().clone(), req.uri().path().to_owned());
+                    if method == Method::OPTIONS {
+                        // Preflight, answered before anything else — as the TS does. The CORS
+                        // headers themselves are added by `handle`'s preamble for real requests.
+                        let mut r = Response::new(boxed_full(Bytes::new()));
+                        *r.status_mut() = StatusCode::NO_CONTENT;
+                        return Ok::<_, String>(r);
+                    }
+                    if !(method == Method::POST && path == "/mcp") {
+                        let mut r = Response::new(boxed_full(Bytes::from_static(b"Not found")));
+                        *r.status_mut() = StatusCode::NOT_FOUND;
+                        return Ok(r);
+                    }
+                    handle(req, state, hub).await
+                }
+            });
+            let _ = hyper::server::conn::http1::Builder::new().serve_connection(io, svc).await;
+        });
+    }
+}
+
 pub async fn serve_ui(
     addr: std::net::SocketAddr,
     state: Arc<Mutex<CoreState>>,

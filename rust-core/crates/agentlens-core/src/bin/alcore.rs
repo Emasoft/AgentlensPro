@@ -1,7 +1,7 @@
 //! alcore — the Rust server binary (TRDD-DMWOBWFH P4). P4c: OTLP listener; P4e: the UI/API
 //! listener (`GET /api/summary` over the live span window).
 //!
-//!   alcore serve --data-dir DIR [--otlp-port N] [--ui-port N] [--bind HOST] [--no-log-scan]
+//!   alcore serve --data-dir DIR [--otlp-port N] [--ui-port N] [--mcp-port N] [--bind HOST] [--no-log-scan]
 //!
 //! Spans land in `<data-dir>/spans` (the same segmented NDJSON store both engines read).
 //! P5b: on start the local session logs (Claude/Codex/Copilot/OpenCode) are discovered and
@@ -21,7 +21,7 @@ const LOG_SWEEP_INTERVAL: Duration = Duration::from_secs(5);
 
 fn usage(msg: &str) -> ! {
     eprintln!("alcore: {msg}");
-    eprintln!("usage: alcore serve --data-dir DIR [--otlp-port N] [--ui-port N] [--bind HOST] [--no-log-scan]");
+    eprintln!("usage: alcore serve --data-dir DIR [--otlp-port N] [--ui-port N] [--mcp-port N] [--bind HOST] [--no-log-scan]");
     exit(64);
 }
 
@@ -33,6 +33,11 @@ fn main() {
     let mut data_dir = String::new();
     let mut port: u16 = 4319;
     let mut ui_port: u16 = 3001;
+    // 4317, NOT the TS's 4316 — the same +1 convention as 4318→4319 and 3000→3001, so alcore can
+    // run ALONGSIDE the TS server before the cutover instead of fighting it for a port. At cutover
+    // this becomes 4316 (or the operator passes --mcp-port 4316), because that is the port every
+    // existing Claude Code MCP config points at.
+    let mut mcp_port: u16 = 4317;
     let mut bind = "127.0.0.1".to_owned();
     let mut log_scan = true;
     let mut i = 1;
@@ -50,6 +55,10 @@ fn main() {
             "--ui-port" => {
                 i += 1;
                 ui_port = args.get(i).and_then(|v| v.parse().ok()).unwrap_or_else(|| usage("--ui-port needs a port"));
+            }
+            "--mcp-port" => {
+                i += 1;
+                mcp_port = args.get(i).and_then(|v| v.parse().ok()).unwrap_or_else(|| usage("--mcp-port needs a port"));
             }
             "--bind" => {
                 i += 1;
@@ -88,10 +97,12 @@ fn main() {
     {
         let mut st = state.lock().expect("state");
         st.embed_key = Some(embed_key);
-        // What /api/server-stats reports as `ports` — the listeners this process binds (mcp stays
-        // the configured TS default: no MCP listener in the core yet).
+        // What /api/server-stats reports as `ports` — the listeners this process ACTUALLY binds.
+        // `mcp` used to be left at the env/TS default (4316) while nothing bound it, so the server
+        // reported a port a client would find dead while MCP was in fact served elsewhere.
         st.ports.ui = ui_port;
         st.ports.otlp = port;
+        st.ports.mcp = mcp_port;
         let (segments, total_spans, _) = st.writer.stats();
         println!(
             "alcore: loaded {} span(s) (last {}h window) from {} — store holds {total_spans} span(s) across {segments} segment(s), nothing evicted",
@@ -174,8 +185,12 @@ fn main() {
     // The 4s burn tick (server.ts tickBurn): burnStatus SSE frames + once-per-condition alert
     // frames, and the lastBurnStatus cache the TTL resolver + burn-risk read.
     rt.spawn(agentlens_core::ui::run_burn_tick(state.clone(), hub.clone()));
-    let serve_ui = agentlens_core::ui::serve_ui(ui_addr, state.clone(), hub, |bound| {
+    let serve_ui = agentlens_core::ui::serve_ui(ui_addr, state.clone(), hub.clone(), |bound| {
         println!("alcore: UI/API listening on http://{bound}");
+    });
+    let mcp_addr: std::net::SocketAddr = format!("{bind}:{mcp_port}").parse().unwrap_or_else(|_| usage("bad bind/mcp-port"));
+    let serve_mcp = agentlens_core::ui::serve_mcp(mcp_addr, state.clone(), hub, |bound| {
+        println!("alcore: MCP listening on http://{bound}/mcp");
     });
     rt.block_on(async move {
         tokio::select! {
@@ -188,6 +203,21 @@ fn main() {
             r = serve_ui => {
                 if let Err(e) = r {
                     eprintln!("alcore: UI listener failed: {e}");
+                    exit(1);
+                }
+            }
+            r = serve_mcp => {
+                if let Err(e) = r {
+                    // EADDRINUSE is the expected one and deserves the actionable message the TS
+                    // gives: the MCP port is the one most likely already held (by the TS server
+                    // pre-cutover, or by a VS Code extension on the same port).
+                    if e.kind() == std::io::ErrorKind::AddrInUse {
+                        eprintln!(
+                            "alcore: port {mcp_port} (MCP) already in use — stop the process using it or pass --mcp-port <other>."
+                        );
+                    } else {
+                        eprintln!("alcore: MCP listener failed: {e}");
+                    }
                     exit(1);
                 }
             }
