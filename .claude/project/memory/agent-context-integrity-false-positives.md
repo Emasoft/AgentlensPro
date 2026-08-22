@@ -44,4 +44,24 @@ The second prints the author histogram; anything other than "owner, plus 1 line"
 in provenance and deserves a fresh look. That is the discriminator — not the pattern hits, which
 will fire forever on doctrine that discusses authority and on a page that documents publishing.
 
+
+^ATOM-A6OI-GNPM [desc: "The finding COUNT rising is not signal: documenting a false positive creates new ones, because the note quotes the very strings the detector matches.", keywords: finding_count_went_up agent-context-integrity_count_grew 5_to_7_patterns more_files_flagged is_the_increase_signal self-amplifying_detector, type: reference, ocd: 2026-08-22, lmd: 2026-08-22]
+
+**A rising count is NOT signal here — this note amplifies the detector.** Measured 2026-08-22:
+the finding count went **5 → 7** within an hour, and both new hits were **line 26 of THIS page** —
+the row explaining that `agentlenspro-publish-pipeline.md` is a false positive because it
+documents the publish pipeline. Quoting the flagged string is indistinguishable, to a
+pattern matcher, from being the flagged string. So triaging in writing *manufactures* new
+findings, and the count will keep climbing as this page grows.
+
+**Therefore: do not treat "more findings than last time" as a reason to re-open the triage.**
+The discriminator is the provenance histogram, not the tally:
+
+```bash
+git blame --line-porcelain -- CLAUDE.md | grep "^author " | sort | uniq -c
+```
+
+Stable at **430 owner + 1 upstream (a blank line)** across every re-check so far. A change THERE
+is worth investigating; a change in the count is expected noise.
+
 ## Notes and lessons learned
