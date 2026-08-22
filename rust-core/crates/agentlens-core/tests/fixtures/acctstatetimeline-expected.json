@@ -1,0 +1,400 @@
+{
+ "records": [
+  {
+   "id": "full-subscription",
+   "account": {
+    "accountUuid": "acct-uuid-1",
+    "email": "user@example.com",
+    "organizationName": "Acme",
+    "organizationUuid": "org-1",
+    "billingType": "stripe_subscription",
+    "hasExtraUsageEnabled": false,
+    "organizationRateLimitTier": null,
+    "userRateLimitTier": "default_claude_max_5x",
+    "displayName": "User",
+    "planType": "max",
+    "rateLimitTier": "default_claude_max_5x",
+    "label": "work acct",
+    "source": "claude.json"
+   },
+   "ttlCtx": {
+    "auth": "subscription",
+    "force5m": false,
+    "enable1h": false
+   },
+   "now": 1700000000000,
+   "expected": {
+    "ts": 1700000000000,
+    "accountId": "acct-uuid-1",
+    "email": "user@example.com",
+    "mode": "subscription (within plan)",
+    "plan": "Max 5x",
+    "authRegime": "subscription",
+    "ttlMinutes": 60,
+    "ttlSource": "doc-matrix"
+   }
+  },
+  {
+   "id": "no-account",
+   "account": null,
+   "ttlCtx": null,
+   "now": 1700000000000,
+   "expected": {
+    "ts": 1700000000000,
+    "accountId": null,
+    "email": null,
+    "mode": "unresolved",
+    "plan": "unknown",
+    "authRegime": "unknown",
+    "ttlMinutes": 5,
+    "ttlSource": "assumed"
+   }
+  },
+  {
+   "id": "source-none",
+   "account": {
+    "accountUuid": "acct-uuid-1",
+    "email": "user@example.com",
+    "organizationName": "Acme",
+    "organizationUuid": "org-1",
+    "billingType": "stripe_subscription",
+    "hasExtraUsageEnabled": false,
+    "organizationRateLimitTier": null,
+    "userRateLimitTier": "default_claude_max_5x",
+    "displayName": "User",
+    "planType": "max",
+    "rateLimitTier": "default_claude_max_5x",
+    "label": "work acct",
+    "source": "none"
+   },
+   "ttlCtx": {
+    "auth": "subscription",
+    "force5m": false,
+    "enable1h": false
+   },
+   "now": 1700000000000,
+   "expected": {
+    "ts": 1700000000000,
+    "accountId": "acct-uuid-1",
+    "email": "user@example.com",
+    "mode": "subscription (within plan)",
+    "plan": "unknown",
+    "authRegime": "subscription",
+    "ttlMinutes": 60,
+    "ttlSource": "doc-matrix"
+   }
+  },
+  {
+   "id": "email-falls-back-to-label",
+   "account": {
+    "accountUuid": "acct-uuid-1",
+    "email": null,
+    "organizationName": "Acme",
+    "organizationUuid": "org-1",
+    "billingType": "stripe_subscription",
+    "hasExtraUsageEnabled": false,
+    "organizationRateLimitTier": null,
+    "userRateLimitTier": "default_claude_max_5x",
+    "displayName": "User",
+    "planType": "max",
+    "rateLimitTier": "default_claude_max_5x",
+    "label": "work acct",
+    "source": "claude.json"
+   },
+   "ttlCtx": {
+    "auth": "subscription",
+    "force5m": false,
+    "enable1h": false
+   },
+   "now": 1700000000000,
+   "expected": {
+    "ts": 1700000000000,
+    "accountId": "acct-uuid-1",
+    "email": "work acct",
+    "mode": "subscription (within plan)",
+    "plan": "Max 5x",
+    "authRegime": "subscription",
+    "ttlMinutes": 60,
+    "ttlSource": "doc-matrix"
+   }
+  },
+  {
+   "id": "email-empty-string-kept",
+   "account": {
+    "accountUuid": "acct-uuid-1",
+    "email": "",
+    "organizationName": "Acme",
+    "organizationUuid": "org-1",
+    "billingType": "stripe_subscription",
+    "hasExtraUsageEnabled": false,
+    "organizationRateLimitTier": null,
+    "userRateLimitTier": "default_claude_max_5x",
+    "displayName": "User",
+    "planType": "max",
+    "rateLimitTier": "default_claude_max_5x",
+    "label": "work acct",
+    "source": "claude.json"
+   },
+   "ttlCtx": {
+    "auth": "subscription",
+    "force5m": false,
+    "enable1h": false
+   },
+   "now": 1700000000000,
+   "expected": {
+    "ts": 1700000000000,
+    "accountId": "acct-uuid-1",
+    "email": "",
+    "mode": "subscription (within plan)",
+    "plan": "Max 5x",
+    "authRegime": "subscription",
+    "ttlMinutes": 60,
+    "ttlSource": "doc-matrix"
+   }
+  },
+  {
+   "id": "ttlctx-wins-over-billing",
+   "account": {
+    "accountUuid": "acct-uuid-1",
+    "email": "user@example.com",
+    "organizationName": "Acme",
+    "organizationUuid": "org-1",
+    "billingType": "stripe_subscription",
+    "hasExtraUsageEnabled": false,
+    "organizationRateLimitTier": null,
+    "userRateLimitTier": "default_claude_max_5x",
+    "displayName": "User",
+    "planType": "max",
+    "rateLimitTier": "default_claude_max_5x",
+    "label": "work acct",
+    "source": "claude.json"
+   },
+   "ttlCtx": {
+    "auth": "usage-credits",
+    "force5m": false,
+    "enable1h": false
+   },
+   "now": 1700000000000,
+   "expected": {
+    "ts": 1700000000000,
+    "accountId": "acct-uuid-1",
+    "email": "user@example.com",
+    "mode": "subscription drawing usage credits (over plan limit)",
+    "plan": "Max 5x",
+    "authRegime": "usage-credits",
+    "ttlMinutes": 5,
+    "ttlSource": "doc-matrix"
+   }
+  },
+  {
+   "id": "no-ttlctx-api-billing",
+   "account": {
+    "accountUuid": "acct-uuid-1",
+    "email": "user@example.com",
+    "organizationName": "Acme",
+    "organizationUuid": "org-1",
+    "billingType": "api",
+    "hasExtraUsageEnabled": false,
+    "organizationRateLimitTier": null,
+    "userRateLimitTier": "default_claude_max_5x",
+    "displayName": "User",
+    "planType": "max",
+    "rateLimitTier": "default_claude_max_5x",
+    "label": "work acct",
+    "source": "claude.json"
+   },
+   "ttlCtx": null,
+   "now": 1700000000000,
+   "expected": {
+    "ts": 1700000000000,
+    "accountId": "acct-uuid-1",
+    "email": "user@example.com",
+    "mode": "API key (pay-per-token)",
+    "plan": "Max 5x",
+    "authRegime": "api-key",
+    "ttlMinutes": 5,
+    "ttlSource": "assumed"
+   }
+  },
+  {
+   "id": "unknown-plan-type-echoed",
+   "account": {
+    "accountUuid": "acct-uuid-1",
+    "email": "user@example.com",
+    "organizationName": "Acme",
+    "organizationUuid": "org-1",
+    "billingType": "stripe_subscription",
+    "hasExtraUsageEnabled": false,
+    "organizationRateLimitTier": null,
+    "userRateLimitTier": "default_claude_max_5x",
+    "displayName": "User",
+    "planType": "some-future-plan",
+    "rateLimitTier": "default_claude_max_20x",
+    "label": "work acct",
+    "source": "claude.json"
+   },
+   "ttlCtx": {
+    "auth": "subscription",
+    "force5m": false,
+    "enable1h": false
+   },
+   "now": 1700000000000,
+   "expected": {
+    "ts": 1700000000000,
+    "accountId": "acct-uuid-1",
+    "email": "user@example.com",
+    "mode": "subscription (within plan)",
+    "plan": "some-future-plan 20x",
+    "authRegime": "subscription",
+    "ttlMinutes": 60,
+    "ttlSource": "doc-matrix"
+   }
+  }
+ ],
+ "keys": [
+  {
+   "id": "key-ignores-email",
+   "a": {
+    "ts": 1700000000000,
+    "accountId": "acct-1",
+    "email": "user@example.com",
+    "mode": "subscription (within plan)",
+    "plan": "Max 5x",
+    "authRegime": "subscription",
+    "ttlMinutes": 60,
+    "ttlSource": "doc-matrix"
+   },
+   "b": {
+    "ts": 1700000000000,
+    "accountId": "acct-1",
+    "email": "other@example.com",
+    "mode": "subscription (within plan)",
+    "plan": "Max 5x",
+    "authRegime": "subscription",
+    "ttlMinutes": 60,
+    "ttlSource": "doc-matrix"
+   },
+   "same": true
+  },
+  {
+   "id": "key-ignores-ttlsource",
+   "a": {
+    "ts": 1700000000000,
+    "accountId": "acct-1",
+    "email": "user@example.com",
+    "mode": "subscription (within plan)",
+    "plan": "Max 5x",
+    "authRegime": "subscription",
+    "ttlMinutes": 60,
+    "ttlSource": "doc-matrix"
+   },
+   "b": {
+    "ts": 1700000000000,
+    "accountId": "acct-1",
+    "email": "user@example.com",
+    "mode": "subscription (within plan)",
+    "plan": "Max 5x",
+    "authRegime": "subscription",
+    "ttlMinutes": 60,
+    "ttlSource": "measured"
+   },
+   "same": true
+  },
+  {
+   "id": "key-ignores-ts",
+   "a": {
+    "ts": 1700000000000,
+    "accountId": "acct-1",
+    "email": "user@example.com",
+    "mode": "subscription (within plan)",
+    "plan": "Max 5x",
+    "authRegime": "subscription",
+    "ttlMinutes": 60,
+    "ttlSource": "doc-matrix"
+   },
+   "b": {
+    "ts": 1700000060000,
+    "accountId": "acct-1",
+    "email": "user@example.com",
+    "mode": "subscription (within plan)",
+    "plan": "Max 5x",
+    "authRegime": "subscription",
+    "ttlMinutes": 60,
+    "ttlSource": "doc-matrix"
+   },
+   "same": true
+  },
+  {
+   "id": "key-null-account-is-sentinel",
+   "a": {
+    "ts": 1700000000000,
+    "accountId": null,
+    "email": "user@example.com",
+    "mode": "subscription (within plan)",
+    "plan": "Max 5x",
+    "authRegime": "subscription",
+    "ttlMinutes": 60,
+    "ttlSource": "doc-matrix"
+   },
+   "b": {
+    "ts": 1700000000000,
+    "accountId": "∅",
+    "email": "user@example.com",
+    "mode": "subscription (within plan)",
+    "plan": "Max 5x",
+    "authRegime": "subscription",
+    "ttlMinutes": 60,
+    "ttlSource": "doc-matrix"
+   },
+   "same": true
+  },
+  {
+   "id": "key-mode-differs",
+   "a": {
+    "ts": 1700000000000,
+    "accountId": "acct-1",
+    "email": "user@example.com",
+    "mode": "subscription (within plan)",
+    "plan": "Max 5x",
+    "authRegime": "subscription",
+    "ttlMinutes": 60,
+    "ttlSource": "doc-matrix"
+   },
+   "b": {
+    "ts": 1700000000000,
+    "accountId": "acct-1",
+    "email": "user@example.com",
+    "mode": "API key (pay-per-token)",
+    "plan": "Max 5x",
+    "authRegime": "subscription",
+    "ttlMinutes": 60,
+    "ttlSource": "doc-matrix"
+   },
+   "same": false
+  },
+  {
+   "id": "key-ttlminutes-differs",
+   "a": {
+    "ts": 1700000000000,
+    "accountId": "acct-1",
+    "email": "user@example.com",
+    "mode": "subscription (within plan)",
+    "plan": "Max 5x",
+    "authRegime": "subscription",
+    "ttlMinutes": 60,
+    "ttlSource": "doc-matrix"
+   },
+   "b": {
+    "ts": 1700000000000,
+    "accountId": "acct-1",
+    "email": "user@example.com",
+    "mode": "subscription (within plan)",
+    "plan": "Max 5x",
+    "authRegime": "subscription",
+    "ttlMinutes": 5,
+    "ttlSource": "doc-matrix"
+   },
+   "same": false
+  }
+ ]
+}

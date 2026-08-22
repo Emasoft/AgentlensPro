@@ -1,6 +1,6 @@
 // Regenerates logeventsink-expected.json from the COMPILED TS buildDroppedLogEventRecord (the
 // parity oracle for build_dropped_log_event_record). 18 cases from
-// docs_dev/c2b-log-event-sink-case-matrix.md — same ids, same order, in all three authors (this
+// ./c2b-log-event-sink-case-matrix.md — same ids, same order, in all three authors (this
 // generator, the Rust builder, and logeventsink_parity.rs). ts is ALWAYS explicit — no Date.now().
 // Run from the repo root AFTER `pnpm run compile-tests`:
 //   node rust-core/crates/agentlens-core/tests/fixtures/gen-logeventsink-expected.mjs
@@ -66,6 +66,12 @@ const cases = [
     name: 'claude_code.plugin_loaded',
     bare: 'plugin_loaded',
     attrs: [],
+    // Above 2^53 ON PURPOSE — do NOT "fix" the editor's precision warning by shrinking it. A real
+    // ns-since-epoch IS ~1.7e18, so this is the value the branch actually sees, and the TS reads
+    // it through the same lossy double a JSON parse would produce. JSON.stringify then writes the
+    // rounded double into the fixture, so Rust's `as_f64()` reads the identical double and the two
+    // engines agree. Shrinking it below 2^53 would silence the warning and stop exercising the
+    // path.
     rec: { timeUnixNano: 1700000000123456789 },
     ts: 1700000000000,
   },

@@ -1,5 +1,5 @@
 //! Cross-engine parity for the log-event sink record builder (TRDD-DMWOBWFH C2(b)): 19 cases
-//! from the shared matrix (docs_dev/c2b-log-event-sink-case-matrix.md), each replayed through
+//! from the shared matrix (tests/fixtures/c2b-log-event-sink-case-matrix.md), each replayed through
 //! both engines. Key ORDER is load-bearing (it is what JSON.stringify writes), so the assertion
 //! compares serialized strings, not order-insensitive `serde_json::Value` equality.
 //! After any TS change:

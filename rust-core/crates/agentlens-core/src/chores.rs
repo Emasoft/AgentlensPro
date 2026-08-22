@@ -438,6 +438,34 @@ pub fn spawn_all(rt: &tokio::runtime::Runtime, state: Arc<Mutex<CoreState>>) {
         }
     });
 
+    // The account-state timeline's flush window (TRDD-YQZ9P8IL; the TS's own 60s unref'd timer,
+    // `AGENTLENS_ACCOUNT_STATE_FLUSH_MS`). The 4s burn tick only ENQUEUES on a discrete state
+    // change; the append+fsync happens here, once per window per batch, so a rotation storm costs
+    // one fsync instead of one per change. A kill -9 mid-window loses at most this window's
+    // changes and never a flushed record — alcore's graceful exit flushes again on the way out.
+    let s = state.clone();
+    // `Math.max(1000, Number(env) || 60_000)`, ported exactly. Two JS details are load-bearing and
+    // an obvious-looking Rust version gets both wrong: an explicit `0` is FALSY, so it means the
+    // DEFAULT rather than "no delay"; and a NEGATIVE value is TRUTHY, so it survives the `||` and
+    // is clamped by the floor to 1000 — parsing into an unsigned type would reject it and silently
+    // yield 60_000 instead. `i64` keeps both. ("NaN" fails to parse either way, which is the
+    // correct answer here and is NOT true of `parse::<f64>()`.)
+    let account_flush = std::env::var("AGENTLENS_ACCOUNT_STATE_FLUSH_MS")
+        .ok()
+        .and_then(|v| v.parse::<i64>().ok())
+        .filter(|ms| *ms != 0)
+        .unwrap_or(60_000)
+        .max(1000) as u64;
+    rt.spawn(async move {
+        let mut tick = tokio::time::interval(Duration::from_millis(account_flush));
+        loop {
+            tick.tick().await;
+            if let Ok(mut st) = s.lock() {
+                st.account_timeline.flush();
+            }
+        }
+    });
+
     // The 30s lifecycle heartbeat (server.ts:1730, TRDD-PJC8N1HO spec 2): a crash then leaves
     // lastHeartbeat as a truthful downtime-gap boundary. The TS pairs this with scheduleDurableSave;
     // the Rust durable cadences live on the sweeper thread (P5e), so only the heartbeat is here.

@@ -41,6 +41,12 @@ pub struct BurnRuntime {
     /// server.ts bodiesActivityReport() — the incremental raw-bodies watcher behind
     /// HUGE_REQUEST_BURST + CACHE_THRASH. Polled on the burn tick (O(new files) per poll).
     pub bodies: super::bodies_activity::BodiesActivityTracker,
+    /// server.ts `lastSeenAccountUuid` — the burn tick's rotation edge detector. ROTATION IS THE
+    /// ONE MOMENT A NON-LIVE ACCOUNT CAN BE READ: rate limits are per account and the usage
+    /// endpoint only ever answers for the credential currently installed, so the only chance to
+    /// capture account B's windows is while B is live. Miss the edge and B stays `unreadable`
+    /// until the next rotation, however long that is.
+    pub last_seen_account_uuid: Option<String>,
     slow: Option<Slow>,
 }
 
@@ -51,7 +57,12 @@ impl BurnRuntime {
             super::guard::default_bodies_dir(data_dir),
             super::bodies_activity::BodiesActivityOptions::default(),
         );
-        BurnRuntime { home_dir, vars, config, last_status: None, bodies, slow: None }
+        // `None`, not the current account: the FIRST tick must count as an edge, so a server that
+        // starts while an account is already live still captures that account's windows once.
+        // That first edge IS the port of server.ts's `refreshAccountUsage('startup')` — the TS
+        // fires it explicitly at boot; here it falls out of the seed, which is why the seed is a
+        // decision and not an initialization detail (tests/burn_rotation.rs gates it).
+        BurnRuntime { home_dir, vars, config, last_status: None, bodies, last_seen_account_uuid: None, slow: None }
     }
 
     /// Point the runtime at a different home (tests) — clears every cached slow signal and

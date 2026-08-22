@@ -82,6 +82,12 @@ fn gated_out_log_events_are_persisted_and_counted() {
     );
     assert_eq!(after["logEvents"]["files"], 1);
     assert_eq!(after["logEvents"]["bytes"], text.len() as u64);
+    // The SAME counters appear twice on the wire: the TS spreads the whole persistStats object
+    // into `persistence` (`...p`) as well. Wiring only the `logEvents` row leaves a second,
+    // adjacent field reporting 0 for a subsystem that is demonstrably writing — which is how the
+    // stale "NOT PORTED" comment on this pair survived the C2(a) pass.
+    assert_eq!(after["persistence"]["logEventWrites"], 2);
+    assert_eq!(after["persistence"]["logEventBytes"].as_u64().unwrap(), text.len() as u64);
     // Still tallied as before — the sink ADDS persistence, it does not replace the counter.
     assert_eq!(after["otlpDroppedLogEvents"], json!({ "claude_code.user_prompt": 1, "claude_code.tool_decision": 1 }));
 }

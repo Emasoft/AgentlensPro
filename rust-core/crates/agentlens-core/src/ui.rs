@@ -3066,14 +3066,55 @@ pub async fn serve_ui(
 /// The burn SSE tick (server.ts tickBurn, 4s cadence): compute the burn status, store it as
 /// `burn.last_status` (the TTL usage-credit signal + the P4r.4 burn-risk hot path read it),
 /// push a `burnStatus` frame, and push each NEW alert once until its condition clears
-/// (`firedBurnAlerts` dedupe). NOT PORTED: macNotify (opt-in osascript) and the
-/// account-state-timeline sampler (TRDD-YQZ9P8IL — its store is unported).
+/// (`firedBurnAlerts` dedupe). It also samples the account-state timeline (TRDD-YQZ9P8IL),
+/// fires `mac_notify` for each newly-fired alert, and detects the account-ROTATION edge — the one
+/// moment a non-live account's rate-limit windows can be read at all.
+/// server.ts macNotify — a macOS notification banner for a burn alert, opt-in via
+/// `AGENTLENS_NOTIFY=1` / `notify: true` in the burn config.
+///
+/// Fire-and-forget by design: the TS passes an empty callback, so a missing or failing
+/// `osascript` is silently nothing. Escaping `"` and `\` is not cosmetic — the alert text is
+/// interpolated into an AppleScript string literal, and an unescaped quote there does not merely
+/// garble the banner, it changes what osascript executes.
+///
+/// ONE DELIBERATE DIVERGENCE FROM THE TS, on the safe side. The TS escapes and THEN slices to 240
+/// (`s.replace(/["\\]/g, '\\$&').slice(0, 240)`), so a cut landing between a backslash and the
+/// character it escapes emits a DANGLING escape into the script. Truncating first and escaping
+/// after cannot produce one. The visible result is the same banner for every input that is not
+/// pathological; reproducing the TS byte-for-byte here would mean reproducing an injection edge
+/// on the one path in this function that has security consequences.
+fn mac_notify(enabled: bool, label: &str, detail: &str) {
+    if !enabled || !cfg!(target_os = "macos") {
+        return;
+    }
+    let esc = |s: &str| -> String {
+        s.chars().take(240).flat_map(|c| if c == '"' || c == '\\' { vec!['\\', c] } else { vec![c] }).collect()
+    };
+    let script = format!("display notification \"{}\" with title \"AgentLens: {}\"", esc(detail), esc(label));
+    // spawn(), not output(): waiting on osascript would stall the 4s tick behind a UI call. The
+    // reaper thread is not optional — a dropped `Child` is never waited on, so without it every
+    // alert leaves a zombie for the life of the process.
+    if let Ok(mut child) = std::process::Command::new("osascript").arg("-e").arg(script).spawn() {
+        std::thread::spawn(move || {
+            let _ = child.wait();
+        });
+    }
+}
+
 pub async fn run_burn_tick(state: Arc<Mutex<CoreState>>, hub: Arc<SseHub>) {
     let mut fired: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut tick = tokio::time::interval(std::time::Duration::from_secs(4));
     loop {
         tick.tick().await;
         let mut frames: Vec<String> = Vec::new();
+        // Declared OUTSIDE the lock block (uninitialized — the only path that skips the assignment
+        // is the `continue` below, which also skips every read): the rotation edge is detected
+        // under the lock, and the capture it triggers runs after the lock is released.
+        let rotation_capture: Option<(
+            std::path::PathBuf,
+            std::path::PathBuf,
+            std::collections::HashMap<String, String>,
+        )>;
         {
             let Ok(mut st) = state.lock() else { continue };
             let now = crate::now_ms() as f64;
@@ -3090,6 +3131,22 @@ pub async fn run_burn_tick(state: Arc<Mutex<CoreState>>, hub: Arc<SseHub>) {
             let status = st.live_burn_status(now);
             st.burn.last_status = Some(status.clone());
             let account = st.burn.current_account(now);
+            // TRDD-YQZ9P8IL: sample the subscription state onto the change-detected timeline.
+            // `record` only enqueues on a discrete change (account/mode/plan/ttl), so this 4s call
+            // is a key comparison in the common case and a real write a few times an hour — which
+            // is what makes it safe on the hot tick. The flush is a 60s chore, never here.
+            let ttl_ctx = st.burn.ttl_context(now);
+            let sample = crate::account_state_timeline::build_account_state_record(Some(&account), Some(&ttl_ctx), now);
+            st.account_timeline.record(sample);
+            let notify = st.burn.config.notify;
+            // The rotation EDGE (server.ts:1656). Detected under the lock (a string compare), acted
+            // on outside it — the refresh does network I/O and must never stall the 4s tick or hold
+            // the state mutex across it.
+            let rotated = st.burn.last_seen_account_uuid.as_deref() != account.account_uuid.as_deref();
+            if rotated {
+                st.burn.last_seen_account_uuid = account.account_uuid.clone();
+            }
+            rotation_capture = rotated.then(|| (st.data_dir.clone(), st.burn.home_dir.clone(), st.burn.vars.clone()));
             let enriched = crate::burn::runtime::enrich_burn_status(&status, &account, &st.latest_resident_blobs);
             frames.push(serde_json::json!({ "type": "burnStatus", "burnStatus": enriched }).to_string());
             let mut active: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -3102,11 +3159,58 @@ pub async fn run_burn_tick(state: Arc<Mutex<CoreState>>, hub: Arc<SseHub>) {
                             serde_json::json!({ "type": "alert", "label": a["label"], "detail": a["detail"], "severity": a["severity"] })
                                 .to_string(),
                         );
+                        // server.ts macNotify — the desktop banner for an alert that JUST fired.
+                        // Inside the `fired.insert` guard on purpose: once per condition, not once
+                        // per 4s tick for as long as the condition holds.
+                        mac_notify(
+                            notify,
+                            a.get("label").and_then(Value::as_str).unwrap_or(""),
+                            a.get("detail").and_then(Value::as_str).unwrap_or(""),
+                        );
                     }
                 }
             }
             // Clear fired keys whose condition cleared so the alert can re-fire if it returns.
             fired.retain(|id| active.contains(id));
+        }
+        if let Some((data_dir, home, vars)) = rotation_capture {
+            // Fire-and-forget on the blocking pool, exactly as the TS's `void refreshAccountUsage()`
+            // is fire-and-forget: capturing the window is best-effort, and a failure must not
+            // disturb the tick. `force: true` bypasses the freshness TTL on purpose — the cached
+            // row belongs to the PREVIOUS account, and serving it here is the failure this edge
+            // exists to prevent. The cooldown and the cross-process lock still apply inside.
+            tokio::task::spawn_blocking(move || {
+                // CLAUDE_CONFIG_DIR, not a bare `None`: with the var set, `None` would read
+                // `~/.claude/.credentials.json` — a file belonging to a different install — and
+                // report a confident answer about the wrong account.
+                let cfg_dir = vars.get("CLAUDE_CONFIG_DIR").map(std::path::PathBuf::from);
+                let loaded = crate::subscription_usage::load_token(
+                    cfg_dir.as_deref(),
+                    &home,
+                    false,
+                    crate::subscription_usage::keychain_read_allowed(&data_dir, &vars),
+                    cfg!(target_os = "macos"),
+                );
+                let no_keychain = || None;
+                let claimed = crate::burn::account_info::get_current_account(&home, &vars, Some(&no_keychain)).email;
+                let u = crate::subscription_usage::get_subscription_usage(
+                    &crate::subscription_usage::UsagePaths::under(&data_dir),
+                    &loaded,
+                    crate::now_ms() as f64,
+                    true,
+                    claimed.as_deref(),
+                    &crate::subscription_usage::live_fetch_usage,
+                    &crate::subscription_usage::live_fetch_identity,
+                );
+                // Log EVERY outcome, not just success (server.ts:977's own lesson): a refusal and a
+                // timer that never fired look identical in a log that only records `ok`.
+                let reason = u
+                    .as_ref()
+                    .and_then(|v| v.get("reason").and_then(Value::as_str))
+                    .unwrap_or("no-result")
+                    .to_owned();
+                eprintln!("alcore: usage refresh (account changed): {reason}");
+            });
         }
         if hub.client_count() > 0 {
             for f in &frames {

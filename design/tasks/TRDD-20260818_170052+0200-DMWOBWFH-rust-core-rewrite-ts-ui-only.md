@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-22T05:33:28+0200
+updated: 2026-08-22T09:07:58+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -17,17 +17,24 @@ release-via: publish
 
 # Rust core rewrite — GOAL SET BY THE USER (2026-08-18)
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-08-22 (v3)
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-08-22 (v4)
 
-> **NEXT ACTION (one step):** B3 — the bodies read scope (`ui.rs:2230` flagged, `ui.rs:2172` NOT
-> flagged): mid-drain the Rust scans one dir where the TS scans two, so `windowEstCostUsd` reads
-> low. It is the LAST open item before Tier C, and it is deferred rather than missed: it already
-> reports itself honestly through `coverage.dirsScanned`, and there is NO observable difference
-> when no spool is configured. **Read the newest bullets at the END of this block first** — they
-> carry this session's findings and the corrections to the plan of record.
+> **NEXT ACTION (one step):** D1 — the cutover. Start with the sub-task that has correctness
+> stakes and no design freedom: give `alcore` the single-owner data-dir lock it does NOT have
+> (`<data>/server.pid`, the four-property TRDD-PIDFILEAT protocol spelled out in the D1 bullet
+> below). Then the ports (4318/3000/**4316**), then the `~/.agentlens/bin/alcore` presence-is-the-
+> opt-in spawn in `ensureServer` (`src/cli/serverControl.ts:93`). D2 is smaller than it looks —
+> see its bullet. **Read the newest bullets at the END of this block first.**
 >
-> Tier A is DONE (bodies armed, A3 in-process). Tier B is done except B3. Then Tier C, then D1
-> (cutover) and D2 (benchmarks), which are the two acceptance boxes still open.
+> **SUPERSEDED — do NOT carry forward:** "NEXT ACTION: B3" (B3 landed); "Tier B is done except
+> B3" (Tier B is COMPLETE); "C1 written, not gated" (gated and committed, `8acc985`);
+> `server_stats.rs`'s old claim that the core has no MCP listener (C1 bound one); "C3 needs
+> TRDD-YQZ9P8IL's store, unported" (the READ side was already ported — only the WRITER was
+> missing); and "C4 is blocked because the Rust server has no DuckDB store" (`chores.rs:237`
+> already opens one hourly — the real constraint is `open_store`'s cost, not its availability).
+>
+> Tier A DONE. Tier B DONE. Tier C: C1, C2 (both halves), C3 and the A7 residual DONE; C4 decided
+> (accept the note). **Only D1 (cutover) and D2 (benchmarks) remain, and both are surveyed below.**
 
 - **P1 COMPLETE and LIVE.** `agentlens-spanstore` reads the real segment format with a rayon
   parallel walk; `alscan` CLI; the TS server EXECS it for every call-events scan on this machine.
@@ -2054,6 +2061,145 @@ release-via: publish
   suffix→substring change counts `*.request.json.tmp` and makes the over-cap valve fire early; and
   a projection that turns an ABSENT field into `null` is a real wire-shape bug, because a consumer
   reading `isImage: null` cannot tell it from a real value.
+
+- **C1 DONE — and it is a D1 PREREQUISITE, on a port that must CHANGE at cutover.**
+  `ui::serve_mcp` delegates to the same `handle` behind a wrapper narrowing the surface to
+  OPTIONS + `POST /mcp`; extracting the `/mcp` arm was REJECTED (a 1000+ line inline match over
+  all 53 tools — a large risky refactor to avoid serving extra routes on a loopback port).
+  `alcore --mcp-port` defaults to **4317** (the existing +1 convention: 4318→4319, 3000→3001) so
+  alcore runs ALONGSIDE the TS pre-cutover. **At D1 it must become 4316** — the port every
+  existing Claude Code MCP config points at.
+- **C2 DONE, and it was TWO items, not one — the card's prose undersold the second and oversold
+  the first.**
+  - **(a) was not a port at all.** `otlpDroppedLogEvents` shipped a hard-coded `{}` behind a
+    "NOT PORTED" comment that had gone STALE: `IngestState::dropped_log_events` (incl. the
+    `(other)` overflow bucket) had been counting on every ingest all along, one field from where
+    it was needed. Wiring, not porting.
+  - **(b) was real DATA LOSS.** Gate-rejected OTEL log events were counted and DISCARDED where
+    the TS persists them to `<data>/log-events/` daily buckets (TRDD-AMEA4O4Z; USER 2026-07-16
+    "lose no logged data"). The record is now built at the drop site inside `process_logs` —
+    the only place that still holds the merged wire attrs AND the raw record — and
+    `CoreState::persist_dropped_log_event` appends it. **A1's reaper (`chores.rs:141`) had been
+    reaping `<data>/log-events/` correctly since Tier A, on a directory NOTHING under alcore
+    wrote; it now has something to reap.**
+  - **The sink is deliberately NOT fail-fast, and that is a decision, not an omission.** A sink
+    failure must not reject the OTLP payload — that would lose its SPANS too, trading a disk
+    problem for data loss in a subsystem that was working. Best-effort per record, one warning
+    per distinct error message per boot, and every attempt counted, so a failing disk shows as
+    `persistedSinceBoot` flat while `otlpDroppedLogEvents` climbs.
+- **THE ORDER-INSENSITIVE-ASSERT TRAP, measured.** `assert_eq!` on two `serde_json` objects
+  ignores key order. Swapping the dropped-events map to a `BTreeMap` left the VALUE assertion
+  GREEN; only an explicit `keys()` vector assert caught it. Any wire-shape test that compares
+  `Value` to `Value` and nothing else does not gate key order — compare the SERIALIZED form, or
+  the key vectors, or both.
+- **A 19th parity case I had to add after the workers finished.** My own 18-case matrix missed
+  the one asymmetry in `buildDroppedLogEventRecord`: an empty `traceId`/`spanId`/`severity`/
+  `session` is ABSENT (falsy), but an empty **body** is PRESENT — the guard there is
+  `typeof === 'string'`, not truthiness. A port reusing one "non-empty string" helper for all of
+  them passes all 18 and still drops `body: ""`. Mutation-proven: the reuse reddens ONLY case
+  `body-empty-string`.
+- **Falsification for the C2 slice: 5 mutations, 5 RED, 0 defects.** (a) empty-map revert and
+  BTreeMap reorder; (b) sink call removed, empty-body helper reuse, and a `panic!` in the sink's
+  error arm (which proves the best-effort contract is actually gated, not merely commented).
+
+- **C3 DONE — and the plan's premise for it was STALE, which changed the work.** The plan said C3
+  "needs TRDD-YQZ9P8IL's store, unported". Verified: the store's READ side was already fully ported
+  (`read_timeline`, `resolve_state_at`, `describe_plan`/`describe_account_mode`/
+  `resolve_auth_regime_label`) — B5 needed it. What was missing was the WRITE side. So C3 is
+  `mac_notify` + `discrete_key` + `build_account_state_record` + the `AccountStateTimeline` writer,
+  sampled on the 4s burn tick, flushed by a 60s chore and again on graceful exit.
+  **The sampler is cheap on the hot tick and that is not an accident:** `record` compares a
+  discrete key and returns without allocating in the common case, and `ttl_context` rides the same
+  60s `slow()` cache `current_account` already uses — so a 4s sample adds no I/O.
+- **THE FIREHOSE TRAP, and why the key is written the way it is.** `discreteKey` excludes `email`
+  AND `ttlSource` deliberately. Including `ttlSource` looks harmless and turns a few-writes-per-hour
+  timeline into a per-flip write stream the moment the source moves `assumed`→`measured`.
+  Mutation-proven: adding it reddens ONLY `key-ignores-ttlsource`.
+- **`mac_notify` DIVERGES from the TS on purpose, on the safe side.** The TS escapes `"`/`\` and
+  THEN slices to 240, so a cut landing between a backslash and its escapee emits a DANGLING escape
+  into an AppleScript string literal — the one place in that function where a malformed string is
+  not a cosmetic bug. Truncating first and escaping after cannot produce one. Also: the child is
+  reaped on a thread, because a dropped `Child` is never waited on and every alert would otherwise
+  leave a zombie for the life of the daemon.
+- **A7 RESIDUAL: the ROTATION capture is ported; the hourly refresh is deliberately NOT.**
+  A7's legacy→per-account adoption turned out to be already ported inside
+  `list_observed_account_usage` (it runs on READ). Of what was left, the two halves are not equal
+  in kind: the hourly `refreshAccountUsage` only keeps a row warm, and `get_subscription_usage`
+  owns its own TTL + cooldown, so the archive refreshes on demand and a server nobody queries has
+  no stale row anyone reads. The ROTATION edge is different — **rate limits are per account and
+  the usage endpoint only ever answers for the credential currently INSTALLED**, so the window for
+  account B is readable only while B is live. Miss the edge and B stays `unreadable` until the next
+  rotation, however long that is. Ported: the edge is detected under the state lock (a string
+  compare) and the refresh runs on `spawn_blocking` outside it, `force: true` because the cached row
+  belongs to the PREVIOUS account. **The seed is `None`, and that IS the port of the TS's
+  `refreshAccountUsage('startup')`** — it makes the first tick an edge, so a server that starts
+  while an account is live still captures it once. `tests/burn_rotation.rs` gates exactly that.
+- **`load_token(None, …)` reads the WRONG credentials file when `CLAUDE_CONFIG_DIR` is set** —
+  `~/.claude/.credentials.json` instead of the configured dir — and then answers confidently about
+  the wrong account. The existing MCP call site passes it; the rotation capture now does too.
+- **Falsification for C3 + A7-residual: 4 mutations, 4 RED, 0 defects**, each naming its own case:
+  `ttlSource` into the key → `key-ignores-ttlsource`; a `!s.is_empty()` filter on the email → 
+  `email-empty-string-kept`; dropping the batch on a failed flush → the re-buffer test; seeding the
+  rotation state from the current account → the first-tick-is-an-edge test.
+- **C4 DECIDED: accept the documented note — and the unblock path is now CONCRETE, not vague.**
+  The plan called C4 "blocked because the durable DuckDB store is not held by the Rust server".
+  Verified first-hand, that framing is wrong in a way that matters: `agentlens-store` already has
+  `all_of(store, "body")` and `open_store`, and `chores.rs:237` ALREADY opens a store every hour
+  for the bodies pass. The Rust server CAN reach DuckDB. What it cannot cheaply do is open one
+  PER TOOL CALL: `open_store` loads the whole `body_durable` mirror from the parquet corpus (4,215
+  files on the real store) plus a distinct-sha scan — a boot cost, paid once by design.
+  So the three real options are (a) a long-lived handle on `CoreState` — but the tool deliberately
+  runs on `spawn_blocking` with the state lock RELEASED, so a handle inside that mutex would
+  serialize the slow path it was moved off; (b) compute the three totals inside the hourly bodies
+  pass, which already has a store open, and cache them; (c) keep today's note.
+  **Chosen: (c) for now, with (b) as the recorded unblock.** `get_body_writers` already answers
+  honestly — the payload says "STORE UNAVAILABLE" rather than presenting a live-dir-only total as
+  complete — and the card's two OPEN acceptance boxes are D1 and D2, which C4 does not move.
+  **(b) is not free and the caveat belongs here so it is not rediscovered:** `recentSrcNames`
+  (`bodyWriters.ts:232,240`) is the overlap set that stops a live file being counted twice once it
+  is in the store, so an hour-stale set double-counts whatever was ingested in that hour. Any (b)
+  implementation must either re-derive that set or bound the live scan by the cache's timestamp.
+  **Advisor verdict UNAVAILABLE** (3 consults dispatched on this card, 3 hung, 0 returned);
+  decided on the facts above.
+- **D1 SURVEYED — four gaps, and two of them are NOT what the plan expected.**
+  `ensureServer` (`src/cli/serverControl.ts:93`) spawns `node --max-old-space-size=N
+  standalone/server.js`; readiness is the MCP `init()` handshake and `findServerPid()` reads
+  `/api/server-stats.pid`. alcore already serves all three surfaces, so the probe works unchanged.
+  The gaps:
+  1. **Ports** — alcore must take the canonical 4318/3000/**4316** (C1's default is 4317).
+  2. **`alcore` writes NO `<data>/server.pid`** and takes **NO single-owner data-dir guard** —
+     verified by grep, nothing in `bin/alcore.rs` or the core claims the data dir. The
+     CLAUDE.md sentence about a guard "keyed on the data dir refusing a second claimant whatever
+     its ports" describes **`standalone/server.ts` only**. The destructive work IS locked
+     (`with_chores_lock` + `acquire_pass_lock`), so this is not a live corruption risk today, but
+     the `findServerPid` pidfile fallback and `server stop` both go through that file, and after
+     cutover the TS and alcore could each believe they own the dir.
+     **The protocol alcore must join is not "write a pid file"** (`standalone/server.ts:195-260`,
+     TRDD-PIDFILEAT — the shape was hard-won and the corruption it fixes was observed live): the
+     content is `{pid, start}` where `start` is the process-start reference from `ps -o lstart=`,
+     because `kill(pid,0)` alone LIES under pid churn — a recycled pid answers "alive" for an
+     unrelated process (the measured ≥67s double-owner window). The claim is an ATOMIC EXCLUSIVE
+     write (temp file + `link(2)`, not `wx` + a separate content write — that split produced the
+     interleaved-pid `4676845598` corruption on 2026-08-13), followed by a READ-BACK verification
+     that exits 1 on any mismatch. A stale or recycled lock is taken over by UNLINK-then-reclaim,
+     never by an unconditional overwrite, so two servers racing onto one stale lock cannot both
+     win. Anything less than all four properties reintroduces a bug this file already fixed.
+  3. **Binary distribution** — the npm tarball ships `standalone/*.js`, never a Rust binary. The
+     precedent is already shipped and proven: **`~/.agentlens/bin/alscan`, where PRESENCE IS THE
+     OPT-IN** (`src/rustScan.ts:43-46`). `~/.agentlens/bin/alcore` on the same rule makes cutover
+     safe by construction — no binary, no behaviour change.
+  4. `AGENTLENS_ALSCAN`-style env override for a per-process opt-in, same shape.
+- **D2 SURVEYED — acceptance box 2 is closer than the plan assumed, and the gap is P3/P4, not
+  P1/P2.** The box reads "every previously-measured single-core incident class has a benchmark
+  proving multi-core or indexed behavior". Two classes were measured before this card and BOTH
+  already have their benchmark recorded in this file: the all-history call-events scan (**32.7s
+  single-core TS → 1.1s at 667% CPU on 14 threads**, real 5.5M-span store, with a
+  240,482-event key-normalized parity diff showing zero real divergence) and the cold-boot log
+  scan (**27.0s single-core TS → 6.7s**, binary 4.1s on 14 threads, identical result counts, on
+  the real 13k-file corpus). What box 2 still needs is therefore NOT a re-measurement of those —
+  it is the same treatment for whatever P3/P4 work has no number yet, and an explicit statement
+  of the class list so "every" is checkable rather than rhetorical. Write the list first; a box
+  that quantifies over an unwritten set cannot be closed honestly.
 
 USER directive, verbatim intent: "Goal set: rewrite all in optimized rust and sql. I need the
 agentlenspro server to be blazing fast. Leave typescript only for the ui." Tier-3 approval is the

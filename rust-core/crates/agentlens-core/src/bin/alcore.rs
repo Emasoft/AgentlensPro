@@ -235,6 +235,9 @@ fn main() {
         // StatuslineStore.stop(): flush the buffer to the WAL, deliberately NOT sealing — the
         // WAL is fsynced and every read unions the WALs; the next boot's seal timer converts it.
         st.statusline.flush(None);
+        // AccountStateTimeline.stop() (server.ts pipes SIGTERM here): the last window's state
+        // changes are still in memory, and the 60s chore will never fire again.
+        st.account_timeline.flush();
         // server.ts:4499 recordCollectorStop — a graceful exit marks the run stopped, so the
         // next boot's gap (if any) classifies as "shutdown", not "crash".
         let file = agentlens_core::collector_lifecycle::lifecycle_file(&st.data_dir);

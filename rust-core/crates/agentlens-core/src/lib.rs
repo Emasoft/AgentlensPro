@@ -148,6 +148,10 @@ pub struct CoreState {
     pub ports: server_stats::Ports,
     /// server.ts persistStats — every byte this process writes, counted where it is written.
     pub persist: server_stats::PersistStats,
+    /// TRDD-YQZ9P8IL — the account-state timeline writer, sampled by the 4s burn tick. Change
+    /// detection means a sample is a key comparison in the common case and a real write only a
+    /// few times an hour, so this can sit on the hot tick without touching the disk.
+    pub account_timeline: account_state_timeline::AccountStateTimeline,
     /// server.ts `logSinkWarned` — one warning per distinct sink error per boot. Not a nicety:
     /// without it a failing disk warns once per dropped event (thousands of lines), and with no
     /// set at all the loss is silent. The set is bounded by the number of DISTINCT io error
@@ -437,6 +441,11 @@ impl CoreState {
             started_at_ms: now,
             ports: server_stats::Ports::default(),
             persist: server_stats::PersistStats::default(),
+            // Opened (not created) at boot: `open` seeds its change-detection key from the file's
+            // last line, so a restart into an unchanged subscription state re-logs nothing.
+            account_timeline: account_state_timeline::AccountStateTimeline::open(
+                account_state_timeline::account_state_timeline_path(data_dir),
+            ),
             log_sink_warned: std::collections::HashSet::new(),
             hook_runtime: server_stats::hook_runtime_config(data_dir),
             log_scan: log_reader::LogScanStats::default(),

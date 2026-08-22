@@ -346,9 +346,11 @@ pub fn server_stats(st: &CoreState, now_ms: i64) -> Value {
             "offsetsWrites": p.offsets_writes, "offsetsBytes": p.offsets_bytes,
             "cardsWrites": p.cards_writes, "cardsBytes": p.cards_bytes,
             "hookEventWrites": p.hook_event_writes, "hookEventBytes": p.hook_event_bytes,
-            // NOT PORTED: the log-event sink, the bodies purge, the spool — the TS boot
-            // values (all zero / false).
-            "logEventWrites": 0, "logEventBytes": 0,
+            // The log-event sink IS ported now (C2b). These two are the SAME counters the
+            // `logEvents` row reports as persistedSinceBoot/Bytes — the TS spreads the whole
+            // persistStats object here (`...p`), so both places carry them and a reader may
+            // legitimately use either. NOT PORTED, still: the bodies purge and the spool below.
+            "logEventWrites": p.log_event_writes, "logEventBytes": p.log_event_bytes,
             "statuslineSamples": p.statusline_samples,
             "gateChecks": p.gate_checks, "gateDenies": p.gate_denies, "gateWarns": p.gate_warns, "gateAdvisories": p.gate_advisories,
             "bodiesLastPurge": { "at": 0, "removedFiles": 0, "freedBytes": 0, "keptFiles": 0, "keptBytes": 0 },
