@@ -128,8 +128,15 @@ export function parkedBodiesGauge(
   let parsed: unknown
   try {
     const st = fs.statSync(statePath)
+    // ENTRY COUNT, not mtime alone. POSIX does guarantee an add/unlink bumps the parent's mtime,
+    // so the mechanism is sound — but ext4 stores inode timestamps at 1 s granularity (some CI
+    // overlayfs likewise), so TWO unlinks inside the same second leave mtime unchanged: the first
+    // invalidates, the second is invisible, and the gauge serves bytes that are gone. That is the
+    // identical granularity hole found in this gauge's own test suite one round earlier; fixing it
+    // there and leaving it in the code under test would be the worse half of the lesson. One
+    // readdir per dir still beats the 1045 stats this cache exists to avoid.
     const dirKeys = liveDirs.map((d) => {
-      try { const ds = fs.statSync(d); return `${d}@${ds.mtimeMs}` } catch { return `${d}@absent` }
+      try { return `${d}@${fs.statSync(d).mtimeMs}#${fs.readdirSync(d).length}` } catch { return `${d}@absent` }
     })
     key = `${st.mtimeMs}:${st.size}:${dirKeys.join('|')}`
     if (parkedCache !== null && parkedCache.key === key) return parkedCache.value

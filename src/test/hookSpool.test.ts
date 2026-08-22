@@ -85,22 +85,39 @@ suite('hook spool — forwardHookEvent durability (unit)', () => {
     // already holds those, so the child died on "Port 4316 already in use" — it wrote 309 bytes
     // of error and NEVER a pidfile, so the teardown below found nothing to kill and the suite's
     // "no leak" was luck, not cleanup. On CI those ports are FREE: the child would boot and
-    // SURVIVE, inside publish.yml's pre-publish test gate. Unique high ports make the child
-    // bootable here and killable everywhere — the port env is the isolation the data dir is not.
-    // ASK THE OS, do not compute. Two hand-rolled schemes died here before this line settled on
-    // the helper this very file already imports for its integration suite (`freePort`, line 8;
-    // used at :203). First `45000 + pid % 2000` with ports at base..base+2 — adjacent pids OVERLAP
-    // (pid 100 takes 45100-45102, pid 101 takes 45101-45103; exhaustively: 297,898 clashes across
-    // pids 1..99,999). Then a stride of 4 fixed the arithmetic and left the real problem:
-    // **45000-46996 sits inside Linux's default ephemeral range (32768-60999)**, so on
-    // `ubuntu-latest` — the platform this whole fix exists for — an unrelated process can already
-    // hold the port. macOS starts ephemeral at 49152, which is why both schemes looked clean here.
-    // `freePort()` binds :0 and asks the kernel, so there is no range to be wrong about.
-    const [mcp, ui, otlp] = [await freePort(), await freePort(), await freePort()]
-    const prevPorts = { MCP_PORT: process.env.MCP_PORT, UI_PORT: process.env.UI_PORT, OTLP_PORT: process.env.OTLP_PORT }
-    process.env.MCP_PORT = String(mcp)
-    process.env.UI_PORT = String(ui)
-    process.env.OTLP_PORT = String(otlp)
+    // SURVIVE, inside publish.yml's pre-publish test gate — the gap TRDD-1FSPKQ6C now carries.
+    //
+    // NO PORT OVERRIDE — and this is a RETREAT, recorded as one. Three rounds of fixes tried to
+    // make the revived child BOOT so the teardown could kill a live process: hand-rolled ports
+    // (collided), a stride fix (still inside Linux's ephemeral range), then `freePort()`. The
+    // third worked and cost more than it bought: a real server binding three ports inside the
+    // SHARED mocha process destabilised unrelated suites — measured 2 failures in 8 runs, in
+    // `OtlpCollector` ("socket hang up") and an HTTP body test, neither of which this file touches.
+    // A 25% flake rate across the suite is a worse defect than the one being chased.
+    //
+    // So the child once again binds the DEFAULTS and dies fast when they are taken. What this test
+    // proves is therefore exactly one thing, stated so nobody re-derives more from it: THE REVIVE
+    // REDIRECTS ITS CHILD'S OUTPUT TO server.log INSTEAD OF /dev/null. That claim is fully carried
+    // by the bytes assertion and was falsified by mutation (`stdio: 'ignore'` → 0 bytes → red).
+    //
+    // What it does NOT prove — and the teardown below is defence-in-depth, not evidence:
+    //   * that a LIVE child is reaped. On this machine the canonical server holds 4316, so the
+    //     child dies on a port conflict and there is nothing to reap.
+    //   * anything about CI, where those ports are free and the child WOULD survive. TRDD-1FSPKQ6C
+    //     carries that gap and the `AGENTLENS_WATCHDOG=off` finding, which is the sharper half.
+    const prevPorts = { AGENTLENS_WATCHDOG: process.env.AGENTLENS_WATCHDOG }
+    // AGENTLENS_WATCHDOG=off IS NOT OPTIONAL, and this test had missed it. `spawnServerWithRetry`
+    // (helpers/freePort.ts) sets it at its choke point and records why, from a real incident: the
+    // watchdog's self-heal respawns the server `detached: true` + `unref()` (loopWatchdog.ts:85),
+    // which reparents to PID 1, and the respawned pid is created INSIDE the server — so the
+    // pidfile this test's teardown reads names the ORIGINAL child, and no test code ever holds a
+    // handle on the replacement. Their note: "one such orphan was found alive 54 minutes after a
+    // run, PPID 1, on that run's ephemeral ports (it inherits the test env, so it re-binds them)."
+    //
+    // That is a leak my teardown provably CANNOT reap, so killing the pid it knows would have gone
+    // on looking clean. The revive inherits our env, which is the only channel we have into a
+    // child we do not spawn ourselves.
+    process.env.AGENTLENS_WATCHDOG = 'off'
     try { fs.rmSync(path.join(tmp, '.daemon-revive.lock')) } catch { /* none yet */ }
     const logPath = path.join(tmp, 'server.log')
     const pidPath = path.join(tmp, 'server.pid')
@@ -136,14 +153,16 @@ suite('hook spool — forwardHookEvent durability (unit)', () => {
 
       // WHICH BRANCH DID WE TAKE? The byte assertion above is satisfied identically by a boot
       // banner and by "Port 4316 already in use" — so on its own it cannot tell a healthy child
-      // from a crashed one, and a crashed child means the teardown below never runs and the
-      // "no leak" result is luck. That is the exact failure this suite was fixing, and leaving it
-      // un-discriminated would have nested it inside its own fix. A port conflict is now a hard
-      // failure rather than a silent pass: `freePort()` makes it a real defect if it ever happens.
+      // from a crashed one, and a crashed child means the teardown below never runs.
       const logText = fs.readFileSync(logPath, 'utf-8')
-      assert.ok(!/already in use/i.test(logText),
-        `the revived child hit a port conflict, so this test proved only that errors are captured `
-        + `— not that a LIVE child is killed. freePort() should make this impossible: ${logText.slice(0, 300)}`)
+      // Report WHICH branch produced the bytes, without asserting on it. A port conflict is the
+      // EXPECTED path on a machine already running the canonical server, so asserting against it
+      // would fail for the wrong reason; but leaving it unsaid is how "a crashed child" got read
+      // as "cleanup worked" in the first place. Printing it keeps the distinction visible to
+      // whoever reads the run.
+      const crashed = /already in use/i.test(logText)
+      console.log(`         ↳ redirect proven via ${crashed ? 'the child\'s PORT-CONFLICT error' : 'the child\'s boot output'}`
+        + ` (${logged} bytes). ${crashed ? 'No live child existed, so the teardown below did not run — see TRDD-1FSPKQ6C.' : ''}`)
     } finally {
       // Poll (bounded, never a bare sleep-then-assume) for the pidfile the real spawned server
       // writes on boot, and kill it — otherwise this test leaks a live standalone/server.js process.
