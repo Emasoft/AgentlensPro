@@ -164,3 +164,46 @@ card if this keeps skipping.
   property and prints its reason when the corpus cannot supply one.
 
   Gates: `check-types` 0, `lint` 0 (415 pre-existing warnings, 0 errors), `check-identities` 0.
+
+- 2026-08-22T20:52:00+0200 — **CORRECTIONS after closure** (Approval log is append-only/EXEMPT, so
+  these land here rather than editing a terminal body). Three claims above are wrong or unearned:
+
+  1. **The sweep measured a MODEL, not the assertion.** `est-ratio` is a common-prefix estimate;
+     the test asserts `rawBytes/newBytes` through the real store, which also dedups interior and
+     suffix repeats, works at chunk boundaries, and carries per-chunk overhead. Re-run with BOTH
+     metrics on the SAME input:
+
+     | T | est | **REAL (store)** |
+     |---|---|---|
+     | 0.5 | 1.99 | **1.52** |
+     | 0.6 | 1.99 | **1.52** |
+     | 0.7 | 2.73 | **3.00** |
+
+     The model is NOT calibrated — it is 24% optimistic at T=0.5 and 10% pessimistic at T=0.7.
+     **The verdict survives** (0.70 is still the lowest threshold whose run clears >2×, now
+     against the real assertion) but the phrase "0.60 is under by a hair at 1.99" is wrong: it is
+     1.52, under by a mile. The code comment now carries the REAL figures and tells the next
+     person not to estimate.
+
+  2. **The constant rests on TWO PAIRS, not five samples.** T=0.7/0.8/0.9 print identical numbers
+     because they select the IDENTICAL 3 turns; T=0.5/0.6 likewise share one 7-turn run. So the
+     sweep has two distinct samples and the "sharp cliff" is the gap between them — which is
+     indistinguishable from noise between two samples. Treat 0.70 as provisional.
+
+  3. **"While the server drains live" was ASSERTED, and is FALSE.** Checked after the fact: the
+     server is up (pid 69193), but the spool's newest file is **4 days old**, its count was
+     unchanged across the whole session, and at 320 MB against a `bodiesMaxGb: 0.5` cap no purge
+     valve fires. **The spool is a frozen snapshot, so nothing was draining during any of the four
+     green runs** — that acceptance clause is NOT met, and the runs prove suite stability against
+     a STATIC corpus only.
+
+     This also **retracts the diagnosis**: "the drain removed the adjacency" cannot be the cause
+     when nothing is draining. The gaps are real and measured; their cause is unknown, and the
+     untested alternatives (/clear + compaction boundaries, subagent bodies under the parent's
+     `session_id`, mtime ≠ turn order) are now the leading candidates. The FIX is unaffected —
+     it selects on the measured property, not the story.
+
+  **Net:** the code change stands and is better-evidenced than before; the CARD overstated three
+  things and they are corrected here rather than left for a reader to inherit. The un-met drain
+  clause is the one that should gate any re-closure — re-run the two consecutive suites once body
+  capture is actually live.

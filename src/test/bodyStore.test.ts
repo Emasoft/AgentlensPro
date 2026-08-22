@@ -276,11 +276,19 @@ suite('bodyStore — against REAL captured bodies', () => {
       bySession.set(sid, g)
     }
     // TRDD-R2VF2I53. Picking the LARGEST group and asserting a dedup floor on it was a countdown
-    // to a false failure, and it fired: the live spool is actively DRAINED by another subsystem,
-    // so what survives from a session is often turns with GAPS. The saving asserted below comes
-    // from turn N+1 re-sending turn N's transcript — adjacent turns share almost everything, and
-    // turns either side of a gap share far less. So the test was measuring a mix it was never
-    // about, and failing honest code (observed 1.9x, then 1.4x, against a >2x floor).
+    // to a false failure, and it fired (1.9x, then 1.4x, against a >2x floor). The saving asserted
+    // below comes from turn N+1 re-sending turn N's transcript, so ADJACENT turns share almost
+    // everything while turns either side of a gap share little — and the largest group is not the
+    // same thing as a run of adjacent turns.
+    //
+    // WHY the gaps are there is NOT established, and the first answer written here was wrong.
+    // "The spool is actively drained" was stated as the cause and then measured false: the spool
+    // is a FROZEN snapshot (newest file 4 days old, count unchanged across a session, 320 MB
+    // against a 0.5 GB cap so no purge valve fires). Untested alternatives that produce identical
+    // low sharing: /clear + compaction boundaries, subagent requests filed under the PARENT's
+    // session_id (metadata.user_id — see the cacheBreakTimeline agent-* card), and mtime not
+    // being turn order. This selection is robust to all of them BECAUSE it tests the property
+    // instead of the cause; do not re-introduce a cause-based filter on an unverified story.
     //
     // The fix is to PIN THE INPUT, never to lower the floor — lowering it makes the suite green
     // while destroying the only thing this test can detect. Adjacency is MEASURABLE from the
@@ -298,19 +306,28 @@ suite('bodyStore — against REAL captured bodies', () => {
       while (k < n && a.charCodeAt(k) === b.charCodeAt(k)) k++
       return k / a.length
     }
-    // DERIVED, not chosen: sweeping T and measuring the ratio each admitted run achieves gives
-    // T=0.5 -> 1.99x, T=0.6 -> 1.99x, T=0.7 -> 2.73x. 0.70 is the LOWEST threshold whose run
-    // clears the >2x floor, and the cliff is sharp. Note the naive model `ratio ~ 1/(1-f)` says
-    // f > 0.50 should suffice; measurement says otherwise, because turn 1's constant ~268 KB
-    // tools array plus per-turn unique content eat the margin. Re-derive by sweep if the floor
-    // ever moves — do not reason it out.
+    // DERIVED, not chosen — and derived against THIS assertion, not an estimate of it. Sweeping T
+    // and ingesting each admitted run through the REAL store gives:
+    //     T=0.5 -> 1.52x   T=0.6 -> 1.52x   T=0.7 -> 3.00x
+    // so 0.70 is the LOWEST threshold whose run clears the >2x floor, and the cliff is a cliff.
+    //
+    // Two derivations that LOOK right and are not, kept because each is convincing alone:
+    //   * the distribution's shape — pair-sharing is bimodal with its trough at 30-39%, so a
+    //     shape-derived threshold would be ~0.35, which admits runs measuring 1.52x;
+    //   * the algebra — `ratio ~ 1/(1-f)` predicts f > 0.50 suffices. It does not: turn 1's
+    //     constant ~268 KB tools array plus per-turn unique content eat the margin.
+    // A prefix-overlap ESTIMATE of the ratio is also not the ratio — it read 1.99x where the store
+    // measures 1.52x, i.e. "just under" where the truth is "clearly under". Re-derive by sweeping
+    // T through the real store if the floor ever moves; do not reason it out and do not estimate it.
     const ADJACENT = 0.70
     const ordered = [...bySession.values()]
       .sort((a, b) => b.length - a.length)[0]
       .sort((a, b) => a.mtime - b.mtime)
     let best: typeof ordered = []
-    // `ordered` is non-empty by construction: it came from bySession.values(), whose every group
-    // was created by pushing at least one member. No defensive filter needed.
+    // `ordered` is non-empty because the `all.length === 0` guard above returned already — NOT
+    // because groups are non-empty, which is the wrong invariant: the risk here is an empty MAP
+    // (`[...values()][0]` would be undefined and `.sort()` would throw), and group non-emptiness
+    // says nothing about that. Naming the guard that actually holds, 15 lines up, is the point.
     let run: typeof ordered = [ordered[0]]
     for (let i = 1; i < ordered.length; i++) {
       if (sharedPrefixFrac(ordered[i - 1].raw, ordered[i].raw) >= ADJACENT) run.push(ordered[i])
