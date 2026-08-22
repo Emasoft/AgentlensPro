@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-21T20:00:16+0200
+updated: 2026-08-22T02:00:34+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -17,7 +17,14 @@ release-via: publish
 
 # Rust core rewrite — GOAL SET BY THE USER (2026-08-18)
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-08-18 (v2)
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-08-22 (v3)
+
+> **NEXT ACTION (one step):** write `crates/agentlens-core/src/chores.rs::spawn_all` — arm the
+> ported chore bodies on their confirmed cadences (24h retention→compression, 1h bucket/statusline
+> purge, 30s resident blobs, bodies pass), move the three inline timers out of `bin/alcore.rs`
+> `main()`, and take a `.chores.lock` flock (modelled on `agentlens-store` `pass.rs:46`) around the
+> retention+compression tick. **Read the newest bullets at the END of this block first** — they
+> carry this session's findings and two corrections to the plan of record.
 
 - **P1 COMPLETE and LIVE.** `agentlens-spanstore` reads the real segment format with a rayon
   parallel walk; `alscan` CLI; the TS server EXECS it for every call-events scan on this machine.
@@ -1933,6 +1940,77 @@ release-via: publish
 - Companion mitigations SHIPPED separately ([[TRDD-7I5805QM]], v2.29.0): call-events sidecar
   index (still the no-binary path), get_cache_event_log default 24h, DuckDB threads
   machine-scaled (4 → 12 here).
+
+- **P4x IS NOT THE CARD — the card has THREE open acceptance boxes and P4x closed none of them.**
+  Recorded because I got this wrong on resume: commit `405f0fb` completed P4x.2d (the last 2 of 53
+  MCP tools) and I reported the CARD done. It was not. Plan of record for the remainder:
+  `~/.claude/plans/sorted-nibbling-umbrella.md`.
+  **The card's prose is NOT a reliable work list** — an audit of ~40 "NOT PORTED" claims found ~20
+  already done (`imageReport` / `findResidentBlobs` / `queryBlocks` are called unported in three
+  places and are real implementations). Verify every such claim at a file:line before acting on it.
+  **The CLI (~28 verbs, 16,820 lines in `src/cli/*.ts`) is NOT remaining work** — the acceptance
+  criterion says TS may remain for the UI "and, temporarily, the CLI shell". Ranking the remainder
+  by line count finds the biggest number, not the biggest problem.
+- **TIER A BODIES + TIER B DONE (this session).** Reaper layer and the wrong-answer cluster.
+  A1 `purge_buckets` (hook/log daily buckets) and A2 `run_retention` + the bounded-slice/RSS-pressure
+  halves of `compress_sealed_segments`. B1 `statusline_usage`, B2 the `getLastRequestMs` tail
+  resolver, B4 embed auth **ported fully AND wired**, B5 `all_accounts`. B3 deferred inside the tier:
+  it is the one gap that already reports itself honestly (`coverage.dirsScanned`) and has NO
+  observable difference when no spool is configured.
+  **These are chore FUNCTIONS — nothing new runs on a timer yet.** The scheduler (`chores.rs::
+  spawn_all`, A3/A4/A-wire) is the next slice. Confirmed cadences, read from `standalone/server.ts`:
+  span retention + compression **24h** and **retention runs FIRST** (:476 — an expired segment must
+  be unlinked, never pointlessly gzipped first); hook/log/statusline purge **1h** (:943); resident
+  blobs **30s** (:1497); `archiveOtelBodies` on `BODIES_PASS_INTERVAL_MS` (:853). It also needs a
+  `.chores.lock` flock modelled on `pass.rs:46` — two engines on one data dir would otherwise race
+  their retention passes — and `fs2` is in the workspace but NOT yet a dep of `agentlens-core`.
+- **⚠ A REAPER TEST THAT CANNOT FAIL — the lesson to carry, because BOTH workers hit it
+  independently.** A2's floor test was named `retention_zero_days_floors_to_one_day_not_everything`
+  and **passed with `retention_days.max(1.0)` deleted outright**. It asserted only that TODAY's
+  segment survives, which is true either way: the cutoff is truncated to a UTC day and compared
+  with `>=`, so at retention 0 the cutoff IS today's midnight and today compares EQUAL and is kept.
+  The floor was correct in code and completely ungated — and it is one of the TWO independent floors
+  (`Knob.min` at the config boundary, `Math.max(1, …)` inside `runRetention`) that both have to
+  exist, so a later refactor could have deleted it silently and wiped a span store with a green
+  suite. A1's bucket test had the identical shape, asserting retention 0 REMOVES today's bucket —
+  it does not, in either engine, for the same reason.
+  **RULE: a reaper test must assert on the file ONE DAY OLDER than the cutoff. "Today survives" is
+  true for the wrong reason and gates nothing.** Both rewritten and re-falsified.
+- **The silent-reaper guard, and it differs from the TS deliberately.** `purgeBuckets` derives its
+  cutoff via a UTC day-string round-trip; when that will not parse the TS gets NaN from
+  `Date.parse`, `dayMs >= NaN` is false, and it **deletes EVERY bucket**. The first Rust draft used
+  `.unwrap_or(0)`, which makes `day_ms >= 0` always true and so deletes **NOTHING** for the life of
+  the process behind a normal-looking empty manifest — indistinguishable from "nothing was old
+  enough", the common case. Neither is acceptable on a timer: the pass now REFUSES and logs.
+  Not reachable via `resolve_knob` (it filters both sources to finite, then floors at min 1), but
+  `iso_from_ms` casts with `as i64`, which **saturates** rather than failing, so a direct caller
+  passing a non-finite retention gets a well-formed nonsense day (`2922770265`) that
+  `segment_day_ms` rejects — and a direct caller is exactly the one with no floor.
+- **B4 shipped HALF-DONE once and was caught by re-reading the plan, not by a test.** The plan
+  scopes "the 403 matrix, and `exit(78)` on an unusable key" INTO B4; the module existed and
+  **nothing called it** — `ui.rs` still blanket-403'd every viewer header and `/api/embed-status`
+  still hard-coded `keyLoaded:false`. A verifier nobody calls is not a gate. Now wired end to end
+  (`CoreState.embed_key` → boot load → request gate → probe) with its own real-socket test, because
+  the parity suite exercises the pure verdict function and NEVER the HTTP path, which is where a
+  security mistake actually lives. The gate is ONE BLANKET METHOD CHECK, not per-route, ported with
+  the TS's reasoning: a hidden settings panel is not a restricted one unless its endpoints are dead
+  too, and a per-route allowlist always misses the NEXT route.
+  Also: **no `rand` dependency** — the reference signer's nonce is a PARAMETER because its only
+  callers are tests (the server verifies; ai-maestro's proxy signs). Key GENERATION uses `getrandom`,
+  already in the lock. The key is created at 0600 **at creation** (`OpenOptions::mode`), never
+  create-then-chmod, because that window is precisely what the loader refuses to boot on.
+- **⚠ THE PLAN HAS A FACTUAL ERROR — A6's drop reason #1 is FALSE.** It says `drainHookSpool` "is
+  not a recurring chore at all — it is a *boot* drain". `standalone/server.ts:4425` is
+  `setInterval(… drainHookSpool …, HOOK_SPOOL_DRAIN_MS).unref()`. It IS recurring. A6 stays dropped,
+  but only on reason #2, which I did verify: the write path `append_bucket_line` returns bytes, not
+  an `AppendPosition`, so `verifyAppendedLine` cannot exist yet (TRDD-K3WDPR7M).
+- **Two JS numeric helpers that LOOK identical and are not** — getting these backwards is a silent
+  divergence. `statuslineUsage.ts:62` `num()` is `Number.isFinite(n) ? n : 0`, which DOES collapse
+  ±Infinity. `forensicsCompare.ts`'s is `Number(v) || 0`, which collapses ONLY NaN and 0 and does
+  NOT swallow ±Infinity. Check which file you are porting before reusing a helper.
+  Related, and it cost a red test: a `0.55 - 0.10` cost delta is `0.45000000000000007`, not `0.45`,
+  in BOTH engines (`0.55-0.10 === 0.45` is FALSE in node). Assert the subtraction, never the
+  rounded literal — the literal would assert the port is wrong in exactly the way it is right.
 
 USER directive, verbatim intent: "Goal set: rewrite all in optimized rust and sql. I need the
 agentlenspro server to be blazing fast. Leave typescript only for the ui." Tier-3 approval is the
