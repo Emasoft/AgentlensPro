@@ -86,6 +86,20 @@ pub struct CompressResult {
     pub compressed: Vec<String>,
     pub bytes_saved: i64,
     pub warnings: Vec<String>,
+    /// Sealed segments left uncompressed after this slice — either the `max_segments` budget
+    /// ran out or the sweep paused under RSS pressure. Caller reschedules while this is > 0.
+    pub remaining: usize,
+    /// Set once the moment `under_pressure()` first returned true this call — logged once, not
+    /// once per remaining segment (segmentedSpanStore.ts compressSealedSegments).
+    pub paused_for_pressure: bool,
+}
+
+/// TS `RetentionDeletion` (segmentedSpanStore.ts runRetention).
+#[derive(Debug, Clone, PartialEq)]
+pub struct RetentionDeletion {
+    pub segment: String,
+    pub spans: u64,
+    pub age_days: i64,
 }
 
 /// TS `spanTimestampMs` — the day-bucketing clock.
@@ -511,9 +525,71 @@ impl SpanStoreWriter {
         out
     }
 
+    /// Delete whole EXPIRED segments only (day older than retentionDays). Partial segments are
+    /// never trimmed; every deletion is reported explicitly — a foreign file in the dir is never
+    /// touched (segment_day_ms returns None for it). segmentedSpanStore.ts runRetention.
+    ///
+    /// `retention_days.max(1.0)` is a floor INSIDE this function, deliberately duplicating the
+    /// `Knob.min` floor already applied by the caller (agentlens-core resolve_knob) — two
+    /// independent guards against a misconfigured `retention.spansRetentionDays: 0` wiping the
+    /// whole store: one at the config-resolution boundary, one here at the point of deletion,
+    /// so a caller that forgets/bypasses the first floor still cannot nuke everything.
+    pub fn run_retention(&mut self, retention_days: f64, now_ms: f64) -> Vec<RetentionDeletion> {
+        let mut deleted = Vec::new();
+        let now_ms = now_ms as i64;
+        let retention_ms = (retention_days.max(1.0) * DAY_MS as f64) as i64;
+        // Floor to the UTC day boundary, same value segment_key/civil_from_days would produce
+        // for this instant — the cutoff is a day, not a millisecond.
+        let cutoff_ms = (now_ms - retention_ms).div_euclid(DAY_MS) * DAY_MS;
+        let Ok(rd) = fs::read_dir(&self.dir) else { return deleted };
+        let mut names: Vec<String> = rd.flatten().filter_map(|e| e.file_name().to_str().map(str::to_owned)).collect();
+        names.sort();
+        let mut index_dirty = false;
+        for name in names {
+            let Some(day_ms) = segment_day_ms(&name) else { continue }; // not one of our segments — never delete a foreign file
+            if day_ms >= cutoff_ms {
+                continue;
+            }
+            let key = name[..10].to_owned();
+            let file = self.dir.join(&name);
+            let span_count = match self.index.segments.get(&key) {
+                Some(m) => m.count,
+                None => count_lines_streaming(&file).unwrap_or(0),
+            };
+            if let Err(e) = fs::remove_file(&file) {
+                // Leave the segment AND its index entry alone (retried next sweep) — but say so.
+                // The TS logs here too; a retention pass that quietly fails to delete is how a
+                // store grows forever with a clean-looking empty manifest.
+                eprintln!("alcore: retention could not delete {}: {e}", file.display());
+                continue;
+            }
+            self.index.segments.remove(&key);
+            index_dirty = true;
+            let age_days = (now_ms - day_ms) / DAY_MS;
+            deleted.push(RetentionDeletion { segment: name, spans: span_count, age_days });
+        }
+        if index_dirty {
+            self.write_index();
+        }
+        deleted
+    }
+
     /// Gzip every plain segment whose day is STRICTLY before today; verify before deleting the
     /// plain form. Resumes an interrupted compress; leaves both forms on ANY doubt.
-    pub fn compress_sealed_segments(&mut self, now_ms: i64) -> CompressResult {
+    ///
+    /// `under_pressure` pauses the sweep (segmentedSpanStore.ts: a big backlog's gunzip-verify
+    /// round-trips can ratchet RSS by 1GB+/segment); `max_segments` bounds one call to a slice of
+    /// the backlog so a caller can reschedule between slices instead of blocking on the whole
+    /// thing. `touched` (the budget counter) increments BEFORE the "already-exists" resume branch
+    /// on purpose, matching the TS ordering exactly — a resumed segment still consumes a slot in
+    /// the slice. Get this ordering wrong and a resume-heavy backlog silently never drains: the
+    /// budget looks spent on segments that produced no visible compression this slice.
+    pub fn compress_sealed_segments(
+        &mut self,
+        now_ms: i64,
+        max_segments: usize,
+        under_pressure: &dyn Fn() -> bool,
+    ) -> CompressResult {
         let mut out = CompressResult::default();
         let today_key = segment_key(now_ms);
         let Ok(rd) = fs::read_dir(&self.dir) else { return out };
@@ -524,11 +600,29 @@ impl SpanStoreWriter {
             .collect();
         names.sort();
         let mut index_dirty = false;
+        let mut touched = 0usize;
         for name in names {
             let key = name[..10].to_owned();
             if key.as_str() >= today_key.as_str() {
                 continue; // active/current day — never compress
             }
+            if touched >= max_segments {
+                out.remaining += 1;
+                continue;
+            }
+            if under_pressure() {
+                if !out.paused_for_pressure {
+                    // Log the pause ONCE, not once per remaining segment.
+                    out.warnings.push(format!(
+                        "span store: compression sweep paused under RSS pressure after {} segment(s) — remaining sealed segments compress on the next sweep",
+                        out.compressed.len()
+                    ));
+                }
+                out.paused_for_pressure = true;
+                out.remaining += 1;
+                continue; // keep counting `remaining` so the caller knows work is left
+            }
+            touched += 1;
             let plain_file = self.dir.join(&name);
             let gz_file = self.dir.join(format!("{name}.gz"));
             let Ok(plain) = fs::read(&plain_file) else { continue };

@@ -41,6 +41,59 @@ pub fn append_bucket_line(dir: &Path, ts_ms: i64, line_json: &str) -> std::io::R
     Ok(line.len() as u64)
 }
 
+/// ndjsonBuckets.purgeBuckets — delete daily buckets strictly older than `retention_days`.
+/// `now_ms` is a parameter (never wall-clock read here) so the caller controls the clock and the
+/// function is deterministic under test. Returns the removed filenames + freed bytes; per-file
+/// errors (a raced unlink) are swallowed and the loop continues, matching the TS `catch {}`.
+///
+/// The cutoff is NOT a raw subtraction: it round-trips through a UTC day-string (`iso_from_ms`
+/// truncated to 10 chars, then re-parsed via `segment_day_ms`) exactly as the TS does, which
+/// snaps the cutoff to a UTC day boundary — collapsing a raw-ms subtraction back in changes which
+/// files get deleted.
+///
+/// No floor is applied on `retention_days` here — `retention_config::resolve_knob` applies the
+/// knob's `min` floor at the CALL SITE, the same split as the TS (`purgeBuckets` takes whatever
+/// number it's given). A caller that skips `resolve_knob` and passes 0 or a negative number will
+/// wipe buckets it shouldn't; that is a caller bug, not something this function guards against.
+pub fn purge_buckets(dir: &Path, retention_days: f64, now_ms: f64) -> (Vec<String>, u64) {
+    let mut removed = Vec::new();
+    let mut freed_bytes = 0u64;
+    let cutoff_day = &crate::summarize::helpers::iso_from_ms(now_ms - retention_days * 86_400_000.0)[..10];
+    // An uncomputable cutoff must REFUSE THE PASS OUT LOUD, never degrade into a silent verdict.
+    // `iso_from_ms` casts with `as i64`, which SATURATES instead of failing, so a non-finite or
+    // absurd `retention_days` yields a well-formed but nonsense day ("2922770265") that
+    // `segment_day_ms` rejects. Both silent readings are wrong and in opposite directions:
+    // `unwrap_or(0)` makes `day_ms >= 0` always true, so the reaper deletes NOTHING for the life
+    // of the process while reporting a normal empty manifest — indistinguishable from "nothing
+    // was old enough", which is the common case, so nothing ever notices. The TS fails the other
+    // way and worse: `Date.parse` gives NaN, `dayMs >= NaN` is false, and it deletes EVERY bucket.
+    // Not reachable via `resolve_knob` (it filters both sources to finite, then floors at min 1),
+    // so this guards a direct caller, which is exactly who has no floor.
+    let Some(cutoff_ms) = agentlens_spanstore::segment_day_ms(&format!("{cutoff_day}.ndjson")) else {
+        eprintln!(
+            "alcore: refusing to purge {} — retention_days={retention_days} yields an unparseable \
+             cutoff day '{cutoff_day}'; nothing deleted",
+            dir.display()
+        );
+        return (removed, freed_bytes);
+    };
+    let Ok(rd) = std::fs::read_dir(dir) else { return (removed, freed_bytes) };
+    for entry in rd.flatten() {
+        let Some(name) = entry.file_name().to_str().map(str::to_owned) else { continue };
+        let Some(day_ms) = bucket_day_ms(&name) else { continue }; // not one of our buckets — never delete a foreign file
+        if day_ms >= cutoff_ms {
+            continue;
+        }
+        let p = dir.join(&name);
+        let Ok(meta) = std::fs::metadata(&p) else { continue };
+        if std::fs::remove_file(&p).is_ok() {
+            freed_bytes += meta.len();
+            removed.push(name);
+        }
+    }
+    (removed, freed_bytes)
+}
+
 /// hookEventStore.buildHookEventRecord — the ONE construction point for the record shape:
 /// `{ts, ev, session?, payload}` (session only when the payload carries a string session_id;
 /// the payload verbatim).
