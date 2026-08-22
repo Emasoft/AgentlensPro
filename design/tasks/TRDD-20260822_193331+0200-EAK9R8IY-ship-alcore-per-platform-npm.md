@@ -1,9 +1,9 @@
 ---
 trdd-id: EAK9R8IY
 title: Ship the Rust binaries per-platform on npm — the missing prerequisite for box 3
-column: proposal
+column: planned
 created: 2026-08-22T19:33:31+0200
-updated: 2026-08-22T19:35:10+0200
+updated: 2026-08-22T19:39:15+0200
 current-owner: main
 task-type: infra
 scope: project
@@ -93,6 +93,13 @@ amending instead, and this card should be cancelled rather than completed.
   that: the tier decides the FOLDER, not the urgency. Moved rather than left for the
   classification watchdog to catch, because a card that misreports its own authority is the exact
   thing that watchdog exists to find.
+- 2026-08-22T19:39:15+0200 — **APPROVED** by main, self-orchestrating (tier 2). The USER stated
+  this project runs outside the ai-maestro harness, so there is no MANAGER above this session and
+  the tier-2 approver is this session itself; they then directed that these cards be moved to the
+  right columns and completed. Rationale: the measured facts remove the only substantive
+  objection — 53 MB stripped against the 108 MB of native DuckDB the package already ships per
+  user, via a per-platform `optionalDependencies` pattern already present in the dependency tree.
+  What remains is conventional cross-compile CI. → `planned`, moved to `design/tasks/`.
 
 ## Provenance
 

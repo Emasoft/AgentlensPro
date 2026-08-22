@@ -3,7 +3,7 @@ trdd-id: 0XGU6NE2
 title: Audit response — maintainer claim that the server self-restarts and eats 2G/hr of disk
 column: complete
 created: 2026-08-18T19:55:14+0200
-updated: 2026-08-18T19:55:14+0200
+updated: 2026-08-22T19:39:15+0200
 current-owner: agentlenspro-session
 task-type: audit
 audit-trigger: cross-session message from ai-maestro-maintainer-agent (2026-08-16 host-hygiene audit)
@@ -48,3 +48,8 @@ not attributable to this server.**
 
 - 2026-08-18T19:55:14+0200 — COMPLETED by agentlenspro-session. Investigation-only audit; no code
   change needed; findings relayed to the maintainer agent via SendMessage.
+- 2026-08-22T19:39:15+0200 — ARCHIVED by main (self-orchestrating; USER authorised). Archived AS
+  `complete`, not renamed to `completed` — per the 3-pillars 2.0.0 amendment (3P-ZON-05) every
+  terminal column archives as itself, because the complete→completed dual-write was measured
+  drifting 232 times fleet-wide. It had sat in `design/tasks/` since 2026-08-18, inflating the
+  open-work zone with a card that was already decided.
