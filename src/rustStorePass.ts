@@ -87,19 +87,46 @@ export async function rustIngestPass(bin: string, opts: {
  *  reassuring. Sizes come from the files still on disk in `liveDirs`; a parked name whose file is
  *  gone contributes to `files` but not to `bytes` (the name outliving the file is itself worth
  *  seeing, so it is not silently dropped). */
+interface ParkedGauge { files: number; bytes: number; onDisk: number }
+let parkedCache: { key: string; value: ParkedGauge } | null = null
+
 export function parkedBodiesGauge(
   storeDir: string,
   liveDirs: readonly string[],
-): { files: number; bytes: number; onDisk: number } | null {
+): ParkedGauge | null {
+  const statePath = `${storeDir}/.pass-state.json`
+  // MEMOISED ON THE STATE FILE'S OWN IDENTITY (mtime+size+dirs), because this is NOT a cold path:
+  // /api/server-stats is admission-EXEMPT by design (standalone/server.ts — "an admission slot for
+  // its whole lifetime would drain the pool"), and it is polled every 250 ms by the readiness
+  // loop, the stop loop and findServerPid(). Measured before this cache: 14.7 ms per call — 1045
+  // names × 2 dirs, of which the spool pass throws and catches ~1045 ENOENT exceptions. Putting
+  // the payload's most expensive item on the one endpoint engineered to stay cheap under duress
+  // is precisely backwards, so the stat storm now runs only when the park actually changed.
+  //
+  // mtime+size is the right key, not a TTL: the pass rewrites this file whenever it parks or
+  // unparks, so a change is exactly when the answer can differ, and an unchanged file cannot
+  // produce a different count. A TTL would re-pay the cost on a corpus that never moves.
+  let key: string
   let parsed: unknown
   try {
-    parsed = JSON.parse(fs.readFileSync(`${storeDir}/.pass-state.json`, 'utf8'))
+    const st = fs.statSync(statePath)
+    key = `${st.mtimeMs}:${st.size}:${liveDirs.join('|')}`
+    if (parkedCache !== null && parkedCache.key === key) return parkedCache.value
+    parsed = JSON.parse(fs.readFileSync(statePath, 'utf8'))
   } catch {
+    // Do NOT serve a stale cache here: an unreadable state file is a DIFFERENT answer (null =
+    // "could not look"), and returning the last good gauge would assert a park we can no longer see.
+    parkedCache = null
     return null
   }
   const names = (parsed as { strandedNames?: unknown })?.strandedNames
   if (!Array.isArray(names)) return null
-  const remaining = new Set<string>(names.filter((n): n is string => typeof n === 'string'))
+  // ONE population, filtered ONCE, and `files` counts THAT — not the raw array. Counting the raw
+  // array while stat-ing only the strings makes `onDisk < files` for a reason that is not "a name
+  // outlived its file", so the line would report a fabricated ghost. A non-string in this array is
+  // corruption we cannot act on; excluding it from both numbers keeps them describing one set.
+  const parked = new Set<string>(names.filter((n): n is string => typeof n === 'string'))
+  const remaining = new Set<string>(parked)
   let bytes = 0
   let onDisk = 0
   for (const dir of liveDirs) {
@@ -114,5 +141,7 @@ export function parkedBodiesGauge(
       } catch { /* not in this dir, or gone — try the next dir */ }
     }
   }
-  return { files: new Set(names).size, bytes, onDisk }
+  const value = { files: parked.size, bytes, onDisk }
+  parkedCache = { key, value }
+  return value
 }

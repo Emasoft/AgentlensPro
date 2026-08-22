@@ -84,6 +84,52 @@ suite('parkedBodiesGauge — the stat-once-across-dirs gauge over .pass-state.js
     fs.writeFileSync(path.join(storeDir, '.pass-state.json'), JSON.stringify({}))
     assert.strictEqual(parkedBodiesGauge(storeDir, [liveA, liveB]), null)
   })
+
+  test('non-strings mixed into strandedNames are excluded from BOTH counts, never rendered as a ghost', () => {
+    // The first version counted `files` over the RAW array while stat-ing only the strings, so a
+    // single stray non-string made onDisk < files — which parkedSuffix renders as "N name(s) with
+    // no file", a fabricated ghost. Both numbers must describe ONE set. (Latent, not observed: the
+    // live file holds 0 non-strings — but a corrupt writer is exactly when a gauge must not lie.)
+    fs.writeFileSync(path.join(liveA, 'real.request.json'), 'x'.repeat(11))
+    fs.writeFileSync(path.join(storeDir, '.pass-state.json'),
+      JSON.stringify({ strandedNames: ['real.request.json', 42, null, { n: 'x' }] }))
+    const g = parkedBodiesGauge(storeDir, [liveA, liveB])
+    assert.ok(g !== null)
+    assert.strictEqual(g.files, 1, 'files counts the 1 usable name, not the 4 array entries')
+    assert.strictEqual(g.onDisk, 1, 'onDisk agrees with files — no phantom gap')
+    assert.strictEqual(g.bytes, 11)
+  })
+
+  test('the gauge is memoised on the state file identity — a hot status path must not re-stat 1000+ files', () => {
+    // /api/server-stats is admission-EXEMPT and polled every 250ms, and the uncached gauge measured
+    // 14.7ms against the real corpus. Proven by OBSERVABLE EFFECT, not by timing (a timing
+    // assertion is flaky by construction): mutate a file's size WITHOUT touching the state file,
+    // and a cached answer must be unchanged; then touch the state file and it must refresh.
+    fs.writeFileSync(path.join(liveA, 'm.request.json'), 'x'.repeat(10))
+    const statePath = path.join(storeDir, '.pass-state.json')
+    fs.writeFileSync(statePath, JSON.stringify({ strandedNames: ['m.request.json'] }))
+    const first = parkedBodiesGauge(storeDir, [liveA, liveB])
+    assert.strictEqual(first?.bytes, 10)
+
+    fs.writeFileSync(path.join(liveA, 'm.request.json'), 'x'.repeat(999))
+    assert.strictEqual(parkedBodiesGauge(storeDir, [liveA, liveB])?.bytes, 10, 'served from cache — the state file did not change')
+
+    // Rewrite the state file (same content, new mtime/size is what the pass would produce on a
+    // park/unpark) and the gauge must look again.
+    fs.writeFileSync(statePath, JSON.stringify({ strandedNames: ['m.request.json'], t: Date.now() }))
+    assert.strictEqual(parkedBodiesGauge(storeDir, [liveA, liveB])?.bytes, 999, 'state changed ⇒ re-measured')
+  })
+
+  test('an unreadable state file returns null and does NOT serve the last good gauge', () => {
+    // Serving a stale cache here would assert a park we can no longer see — the opposite of the
+    // "absent is not zero" rule this gauge exists to honour.
+    fs.writeFileSync(path.join(liveA, 'k.request.json'), 'x'.repeat(7))
+    const statePath = path.join(storeDir, '.pass-state.json')
+    fs.writeFileSync(statePath, JSON.stringify({ strandedNames: ['k.request.json'] }))
+    assert.strictEqual(parkedBodiesGauge(storeDir, [liveA, liveB])?.bytes, 7)
+    fs.rmSync(statePath)
+    assert.strictEqual(parkedBodiesGauge(storeDir, [liveA, liveB]), null, 'absent state ⇒ null, not the cached 7')
+  })
 })
 
 suite('bodiesCaptureLine — parkedSuffix rendering', () => {

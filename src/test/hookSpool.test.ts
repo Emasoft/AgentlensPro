@@ -79,6 +79,19 @@ suite('hook spool — forwardHookEvent durability (unit)', () => {
     // test needs the real thing, so it lifts the guard for its own duration only.
     const prevNoRevive = process.env.AGENTLENS_NO_REVIVE
     delete process.env.AGENTLENS_NO_REVIVE
+    // THE CHILD MUST BE ABLE TO BOOT, and giving it a scratch DATA_DIR is not enough to arrange
+    // that. The revive spawns with no port overrides, so the child inherits OUR env and otherwise
+    // binds the DEFAULTS (MCP 4316 / UI 3000 / OTLP 4318). On this machine the canonical server
+    // already holds those, so the child died on "Port 4316 already in use" — it wrote 309 bytes
+    // of error and NEVER a pidfile, so the teardown below found nothing to kill and the suite's
+    // "no leak" was luck, not cleanup. On CI those ports are FREE: the child would boot and
+    // SURVIVE, inside publish.yml's pre-publish test gate. Unique high ports make the child
+    // bootable here and killable everywhere — the port env is the isolation the data dir is not.
+    const portBase = 45_000 + (process.pid % 2_000)
+    const prevPorts = { MCP_PORT: process.env.MCP_PORT, UI_PORT: process.env.UI_PORT, OTLP_PORT: process.env.OTLP_PORT }
+    process.env.MCP_PORT = String(portBase)
+    process.env.UI_PORT = String(portBase + 1)
+    process.env.OTLP_PORT = String(portBase + 2)
     try { fs.rmSync(path.join(tmp, '.daemon-revive.lock')) } catch { /* none yet */ }
     const logPath = path.join(tmp, 'server.log')
     const pidPath = path.join(tmp, 'server.pid')
@@ -123,6 +136,10 @@ suite('hook spool — forwardHookEvent durability (unit)', () => {
       // leaked process if the server did start without ever writing its pidfile in time.
       if (prevNoRevive === undefined) delete process.env.AGENTLENS_NO_REVIVE
       else process.env.AGENTLENS_NO_REVIVE = prevNoRevive
+      for (const [k, v] of Object.entries(prevPorts)) {
+        if (v === undefined) delete process.env[k]
+        else process.env[k] = v
+      }
     }
   })
 

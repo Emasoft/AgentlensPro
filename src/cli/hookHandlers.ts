@@ -154,16 +154,25 @@ function reviveDaemonDetached(): void {
       fs.mkdirSync(dataDir(), { recursive: true })
       outFd = fs.openSync(path.join(dataDir(), 'server.log'), 'a')
     } catch { /* keep 'ignore' — reviving matters more than logging it */ }
-    const child = spawn(process.execPath, ['--max-old-space-size=6144', serverJs], {
-      cwd: path.dirname(path.dirname(serverJs)),
-      detached: true,
-      stdio: ['ignore', outFd, outFd],
-    })
-    child.unref()
-    // The CHILD holds its own duplicate of the descriptor, so the parent must drop its copy or
-    // every hook invocation leaks one — and hooks run on every tool call, which turns a leak into
-    // EMFILE rather than a slow drip.
-    if (typeof outFd === 'number') { try { fs.closeSync(outFd) } catch { /* already gone */ } }
+    try {
+      const child = spawn(process.execPath, ['--max-old-space-size=6144', serverJs], {
+        cwd: path.dirname(path.dirname(serverJs)),
+        detached: true,
+        stdio: ['ignore', outFd, outFd],
+      })
+      child.unref()
+    } finally {
+      // The CHILD holds its own duplicate of the descriptor, so the parent must drop its copy or
+      // every hook invocation leaks one — and hooks run on every tool call, which turns a leak into
+      // EMFILE rather than a slow drip.
+      //
+      // `finally`, NOT a sequential statement: `spawn` can throw synchronously (EMFILE, EAGAIN,
+      // ENOENT on the interpreter), and the outer `catch` swallows it under the hook's
+      // never-throw contract — so a plain next-line close is skipped SILENTLY on exactly the
+      // failure that is already about descriptor exhaustion. The close deserves the guarantee the
+      // comment above claims for it.
+      if (typeof outFd === 'number') { try { fs.closeSync(outFd) } catch { /* already gone */ } }
+    }
   } catch { /* best effort — a hook must never throw */ }
 }
 
