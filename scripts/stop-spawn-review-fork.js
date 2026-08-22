@@ -35,6 +35,29 @@
 // that blocks when it should not can wedge the session, which is worse than a missed review.
 
 const fs = require('fs')
+const os = require('os')
+const path = require('path')
+
+// ── TWO BREAKERS, sized against a MEASURED rate ────────────────────────────────────────────────
+// The first version shipped with no cap at all, and the rate was never measured — the exact
+// mistake (optimise first, size against production later) that this session already paid four
+// hours for, committed inside the hook whose header cites that lesson.
+//
+// Measured on this session's own transcript, replaying the gate over it: 48 real user turns, 29
+// of them containing work, so 29 fires ~= $3.77 at the measured 268k-token cache-read rate. (A
+// first pass counted 443 — that was assistant MESSAGES, not turn-ends, and overstated by 15x.
+// The hook fires per turn end.) Tolerable, but it grows with context: a fork at 658k cost $0.33
+// against $0.13 here, so a long session's tail is the expensive part.
+//
+// MAX is the cost bound. CONSECUTIVE is the safety bound and matters more: if a fork is never
+// spawned — the tool is unavailable, the turn is interrupted, the agent judges it unnecessary —
+// then lastWork stays ahead of lastFork forever and the turn CAN NEVER END. The only documented
+// escape is an env var the wedged session cannot set for itself. So after N consecutive blocks
+// with no fork landing, give up and allow.
+const MAX_PER_SESSION = Number(process.env.AGENTLENS_REVIEW_FORK_MAX) > 0
+  ? Number(process.env.AGENTLENS_REVIEW_FORK_MAX)
+  : 20
+const MAX_CONSECUTIVE = 2
 
 const allowStop = () => process.exit(0)
 
@@ -49,6 +72,17 @@ process.stdin.on('end', () => {
   } catch {
     allowStop()
   }
+
+  // ── MAIN AGENT ONLY ────────────────────────────────────────────────────────────────────────
+  // A subagent must never be told to spawn a reviewer: the reviewer is itself a subagent, so a
+  // subagent that obeyed would spawn one, which would spawn one — a fork storm, at a cache WRITE
+  // each. This is already true by construction (`Stop` fires only when the MAIN agent finishes;
+  // subagents get the distinct `SubagentStop` event, and this hook is registered under `Stop`
+  // alone), so what follows is belt-and-braces on a failure whose cost is unbounded.
+  // The field is only honoured when PRESENT — treating "absent" as "not Stop" would silently
+  // disable the hook, which is the failure mode that looks like success.
+  const evt = input?.hook_event_name ?? input?.hookEventName
+  if (typeof evt === 'string' && evt !== 'Stop') allowStop()
 
   // `transcript_path` verified against a working Stop hook, not assumed.
   const transcript = input?.transcript_path
@@ -85,6 +119,10 @@ process.stdin.on('end', () => {
   for (let i = 0; i < lines.length; i++) {
     let e
     try { e = JSON.parse(lines[i]) } catch { continue }
+    // Second half of MAIN AGENT ONLY: subagent turns are marked `isSidechain: true` (measured —
+    // the main transcript carries 0 true / 261 false). Skipping them means a sidechain transcript
+    // yields no work and no fork, so the hook allows the stop and stays silent.
+    if (e?.isSidechain === true) continue
     if (e?.type !== 'assistant') continue
     const content = e?.message?.content
     if (!Array.isArray(content)) continue
@@ -99,10 +137,34 @@ process.stdin.on('end', () => {
     }
   }
 
+  // Session-scoped breaker state. tmpdir, not the repo: it is per-session and self-cleaning, and
+  // a counter is not a project artifact. Every read/write failure falls through to ALLOW.
+  const key = String(input?.session_id || transcript).replace(/[^A-Za-z0-9]/g, '_').slice(-64)
+  const statePath = path.join(os.tmpdir(), `agentlens-review-fork-${key}.json`)
+  const readState = () => {
+    try { return JSON.parse(fs.readFileSync(statePath, 'utf8')) } catch { return { total: 0, consecutive: 0 } }
+  }
+  const writeState = (s) => { try { fs.writeFileSync(statePath, JSON.stringify(s)) } catch { /* not worth wedging over */ } }
+
   if (lastWork === -1) allowStop()      // nothing claimed this window
   // `>=`, not `>`: an edit and a fork spawn in the SAME assistant message share an index, and a
   // tie must go to the fork or that turn can never end. Caught by the matrix, not by reasoning.
-  if (lastFork >= lastWork) allowStop() // the newest work has already been reviewed
+  if (lastFork >= lastWork) {
+    // The review landed, so the streak is broken. Resetting here is what makes CONSECUTIVE mean
+    // "blocks that produced no fork" rather than "blocks ever".
+    const s = readState()
+    if (s.consecutive !== 0) writeState({ ...s, consecutive: 0 })
+    allowStop()
+  }
+
+  const state = readState()
+  // Breakers, before emitting the demand. Both fail OPEN — the cost of an unwanted review is one
+  // review; the cost of a wedged session is the session.
+  if (state.consecutive >= MAX_CONSECUTIVE || state.total >= MAX_PER_SESSION) {
+    writeState({ ...state, consecutive: 0 })
+    allowStop()
+  }
+  writeState({ total: (state.total || 0) + 1, consecutive: (state.consecutive || 0) + 1 })
 
   process.stderr.write(
     'STOP HOOK — spawn the adversarial review fork before ending this turn.\n\n'

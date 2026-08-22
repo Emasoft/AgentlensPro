@@ -39,12 +39,20 @@ const freshAgent = { name: 'Agent', input: { subagent_type: 'general-purpose', p
 const bash = (command) => ({ name: 'Bash', input: { command } })
 
 // exit 0 = the turn may end; exit 2 = blocked, stderr handed back to the agent.
-function verdict(entries, { env = {}, transcript } = {}) {
+// `session` defaults to a UNIQUE value per call. The breakers are stateful and keyed on
+// session_id, so a shared key would let one case's block-streak disarm the next case's — the
+// matrix would go green while the hook did nothing. Only the BREAKERS pass an explicit key.
+function verdict(entries, { env = {}, transcript, event, session } = {}) {
   const file = path.join(dir, `t-${Math.random().toString(36).slice(2)}.jsonl`)
   if (transcript !== null) fs.writeFileSync(file, entries.map((e) => JSON.stringify(e)).join('\n') + '\n')
+  const payload = {
+    transcript_path: file,
+    session_id: session || `case-${process.pid}-${Math.random().toString(36).slice(2)}`,
+  }
+  if (event) payload.hook_event_name = event
   try {
     execFileSync('node', [HOOK], {
-      input: JSON.stringify({ transcript_path: file, session_id: 'aaaaaaaa' }),
+      input: JSON.stringify(payload),
       encoding: 'utf8',
       env: { ...process.env, ...env },
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -101,6 +109,25 @@ const CASES = [
   [[userText('go'), assistant(bash("echo 'git commit is dangerous'"))], 'allow', 'single-quoted too'],
   [[userText('go'), assistant(bash('git add x.ts && git commit -m "y"'))], 'block', 'a REAL commit behind a quoted message still fires'],
 
+  // ── MAIN AGENT ONLY: a subagent told to spawn a reviewer would spawn a subagent, forever ────
+  [
+    [userText('go'), { ...assistant(edit), isSidechain: true }],
+    'allow',
+    'a SUBAGENT edit must never demand a review — that is a fork storm at a cache WRITE each',
+  ],
+  [
+    [userText('go'), { ...assistant(edit), isSidechain: true }, { ...assistant(bash('git commit -m "x"')), isSidechain: true }],
+    'allow',
+    'nor a subagent commit',
+  ],
+  [
+    [userText('go'), assistant(edit), { ...assistant(fork), isSidechain: true }],
+    'block',
+    'a fork spawned INSIDE a sidechain does not review the MAIN agent\'s work — the guard must not credit it',
+  ],
+  [[userText('go'), assistant(edit)], 'allow', 'a non-Stop event bails', { event: 'SubagentStop' }],
+  [[userText('go'), assistant(edit)], 'block', 'an explicit Stop event still fires', { event: 'Stop' }],
+
   // ── must ALLOW: a hook that cannot read its input must never wedge the session ───────────────
   [[], 'allow', 'an empty transcript'],
   [[meta()], 'allow', 'only a meta entry'],
@@ -109,8 +136,58 @@ const CASES = [
   [[userText('go'), assistant(edit), { broken: true }], 'block', 'an unparseable record is skipped, not fatal', undefined],
 ]
 
+// ── THE BREAKERS. Stateful, so they need repeated invocations under ONE session key. ──────────
+// The wedge is the scenario with unbounded severity: if a fork is never spawned, lastWork stays
+// ahead of lastFork forever, the turn can never end, and the documented escape is an env var the
+// wedged session cannot set for itself. These cases prove the hook gives up instead.
+const BREAKERS = []
+{
+  const unreviewed = [userText('go'), assistant(edit)]
+  const sess = `wedge-${process.pid}`
+  const seq = [verdict(unreviewed, { session: sess }), verdict(unreviewed, { session: sess }), verdict(unreviewed, { session: sess })]
+  BREAKERS.push([
+    JSON.stringify(seq) === JSON.stringify(['block', 'block', 'allow']),
+    'THE WEDGE BREAKER: block twice, then give up — a turn must never be unendable',
+    seq.join(','),
+  ])
+
+  // A fork landing must RESET the streak, or the breaker silently disarms the hook for the rest
+  // of the session after two unrelated blocks.
+  const sess2 = `reset-${process.pid}`
+  const reviewed = [userText('go'), assistant(edit), assistant(fork)]
+  const seq2 = [
+    verdict(unreviewed, { session: sess2 }),   // block 1
+    verdict(reviewed, { session: sess2 }),     // allow — resets the streak
+    verdict(unreviewed, { session: sess2 }),   // block 1 again, NOT 2
+    verdict(unreviewed, { session: sess2 }),   // block 2
+    verdict(unreviewed, { session: sess2 }),   // breaker
+  ]
+  BREAKERS.push([
+    JSON.stringify(seq2) === JSON.stringify(['block', 'allow', 'block', 'block', 'allow']),
+    'a landed fork resets the consecutive streak',
+    seq2.join(','),
+  ])
+
+  // The session cap is the COST bound: measured at 29 fires/session here, so 1 proves the
+  // mechanism without a 20-iteration loop.
+  const sess3 = `cap-${process.pid}`
+  const seq3 = [
+    verdict(unreviewed, { session: sess3, env: { AGENTLENS_REVIEW_FORK_MAX: '1' } }),
+    verdict(unreviewed, { session: sess3, env: { AGENTLENS_REVIEW_FORK_MAX: '1' } }),
+  ]
+  BREAKERS.push([
+    JSON.stringify(seq3) === JSON.stringify(['block', 'allow']),
+    'the session cap stops demanding reviews once spent',
+    seq3.join(','),
+  ])
+}
+
 let pass = 0
 const failures = []
+for (const [ok, why, got] of BREAKERS) {
+  if (ok) pass++
+  else failures.push({ want: 'see why', got, why })
+}
 for (const [entries, want, why, opts] of CASES) {
   const got = verdict(entries, opts)
   if (got === want) pass++
@@ -125,18 +202,35 @@ try {
   failures.push({ want: 'allow', got: `exit ${e.status}`, why: 'unparseable stdin must allow the stop' })
 }
 
-// FALSIFY THE GUARD BY MUTATION. A test that cannot fail on a broken implementation is
-// documentation, not a gate. Invert the comparison that decides "already reviewed" and prove the
-// suite reddens on the case that matters.
+// FALSIFY EACH GUARD BY MUTATION. A test that cannot fail on a broken implementation is
+// documentation, not a gate. Break the predicate, prove the suite reddens on the case that
+// matters. Both guards are safety-critical in opposite directions — the first against an
+// infinite block, the second against a recursive fork storm — so both are falsified.
 const src = fs.readFileSync(HOOK, 'utf8')
-const mutated = path.join(dir, 'mutant.js')
-const mutSrc = src.replace('if (lastFork >= lastWork) allowStop()', 'if (false) allowStop()')
-if (mutSrc === src) {
-  failures.push({ want: 'mutation applied', got: 'predicate not found', why: 'the mutation target moved — this check is no longer falsifying anything' })
-} else {
+const MUTATIONS = [
+  {
+    find: 'if (lastFork >= lastWork) {',
+    replace: 'if (false) {',
+    entries: [userText('go'), assistant(edit), assistant(fork)],
+    why: 'LOOP GUARD: a broken "already reviewed" test must be caught',
+  },
+  {
+    find: 'if (e?.isSidechain === true) continue',
+    replace: 'if (false) continue',
+    entries: [userText('go'), { ...assistant(edit), isSidechain: true }],
+    why: 'SUBAGENT GUARD: crediting sidechain work must be caught — that is the fork storm',
+  },
+]
+for (const m of MUTATIONS) {
+  const mutSrc = src.replace(m.find, m.replace)
+  if (mutSrc === src) {
+    failures.push({ want: 'mutation applied', got: 'predicate not found', why: `the mutation target moved — ${m.why} is no longer falsifying anything` })
+    continue
+  }
+  const mutated = path.join(dir, `mutant-${MUTATIONS.indexOf(m)}.js`)
   fs.writeFileSync(mutated, mutSrc)
-  const f = path.join(dir, 'mut.jsonl')
-  fs.writeFileSync(f, [userText('go'), assistant(edit), assistant(fork)].map((e) => JSON.stringify(e)).join('\n') + '\n')
+  const f = path.join(dir, `mut-${MUTATIONS.indexOf(m)}.jsonl`)
+  fs.writeFileSync(f, m.entries.map((e) => JSON.stringify(e)).join('\n') + '\n')
   let mutantBlocked = false
   try {
     execFileSync('node', [mutated], { input: JSON.stringify({ transcript_path: f }), encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] })
@@ -144,11 +238,17 @@ if (mutSrc === src) {
     if (e.status === 2) mutantBlocked = true
   }
   if (mutantBlocked) pass++
-  else failures.push({ want: 'mutant blocks', got: 'mutant allowed', why: 'MUTATION: a broken guard must be caught by this suite' })
+  else failures.push({ want: 'mutant blocks', got: 'mutant allowed', why: `MUTATION — ${m.why}` })
 }
 
 fs.rmSync(dir, { recursive: true, force: true })
+// The breaker state lives in tmpdir keyed by session, so the suite's own keys must not accumulate.
+for (const f of fs.readdirSync(os.tmpdir())) {
+  if (/^agentlens-review-fork-.*(wedge|reset|cap|case)_?\d*_/.test(f) || f.includes(`_${process.pid}_`)) {
+    try { fs.unlinkSync(path.join(os.tmpdir(), f)) } catch { /* best effort */ }
+  }
+}
 
 for (const f of failures) console.error(`FAIL  want=${f.want} got=${f.got}\n      why: ${f.why}`)
-console.log(`stop-spawn-review-fork: ${pass}/${CASES.length + 2} passed`)
+console.log(`stop-spawn-review-fork: ${pass}/${CASES.length + BREAKERS.length + 1 + MUTATIONS.length} passed`)
 process.exit(failures.length ? 1 : 0)
