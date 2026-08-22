@@ -1,9 +1,9 @@
 ---
 trdd-id: 99B348C8
 title: an auto-loaded agent-context file carries an injection pattern — CLAUDE.md
-column: proposal
+column: refused
 created: 2026-08-22T20:11:03+0200
-updated: 2026-08-22T20:11:03+0200
+updated: 2026-08-22T21:24:00+0200
 current-owner: janitor
 task-type: security
 severity: high
@@ -51,5 +51,38 @@ scheduler dispatches **janitor-security-agent** to fix it at the next free heart
 The dispatched agent is fail-safe: it fixes what is safe and FLAGS what needs a human (it never
 rotates credentials, never force-pushes, never pushes to `main`). It returns one line plus a report
 path, and closes the ticket with an explicit status.
+
+## Approval log
+
+- 2026-08-22T21:24:00+0200 — **REFUSED** by main (self-orchestrating; the USER placed this
+  project outside the ai-maestro harness). Reason: **provenance clears it**, by the procedure
+  this proposal itself prescribes.
+
+  The cited location is `CLAUDE.md:309` (`ticket-dedupe-key: AICTX-003:CLAUDE.md:309`). Read
+  first, acted on never:
+
+  > forced: "When the reload would change which MCP tools are loaded and invalidate the prompt
+  > cache, the command warns and skips unless you pass `--force`."
+
+  That is a **verbatim quotation of Anthropic's own `/reload-plugins` documentation**, inside a
+  doctrine bullet about conditional cache invalidation. `git blame -L 309,309 -- CLAUDE.md` →
+  **`a8e6869d`, 2026-08-04 14:58, authored by the repo owner** as part of the cache-invalidation
+  doctrine work (TRDD-B9ERTBZ9). It did not arrive by clone, pull, or a merged PR: this is a
+  solo-owner repo and the commit is the owner's own, 18 days old.
+
+  So the finding's stated discriminator — *"a legitimate rule and an injected one look identical
+  in isolation, and the commit that introduced it is what distinguishes them"* — returns
+  LEGITIMATE. Removing the line would delete a doc-sourced fact the doctrine depends on.
+
+  **The general shape, since this will recur:** `CLAUDE.md` is a file whose entire purpose is to
+  carry instructions to the agent. A rule that flags imperative prose in it fires on the file
+  doing its job. Applied here it would have to flag the whole document. The detector's own text
+  anticipates a near-relative of this (*"a security scanner's own fixtures are the expected false
+  positive"*) without covering the case where the scanned file IS the instruction file.
+
+  **NOT escalated upstream, deliberately.** The detector belongs to the ai-maestro-janitor plugin,
+  a different project — this session may not edit its tree, and the standing project instruction
+  is that security work here is reactive-only. Recorded here so the next refusal is one lookup,
+  not a re-investigation.
 
 ## Notes and lessons learned

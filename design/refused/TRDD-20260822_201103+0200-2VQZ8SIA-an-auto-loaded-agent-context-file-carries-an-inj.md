@@ -1,9 +1,9 @@
 ---
 trdd-id: 2VQZ8SIA
 title: an auto-loaded agent-context file carries an injection pattern — CLAUDE.md
-column: proposal
+column: refused
 created: 2026-08-22T20:11:03+0200
-updated: 2026-08-22T20:11:03+0200
+updated: 2026-08-22T21:24:00+0200
 current-owner: janitor
 task-type: security
 severity: high
@@ -51,5 +51,27 @@ scheduler dispatches **janitor-security-agent** to fix it at the next free heart
 The dispatched agent is fail-safe: it fixes what is safe and FLAGS what needs a human (it never
 rotates credentials, never force-pushes, never pushes to `main`). It returns one line plus a report
 path, and closes the ticket with an explicit status.
+
+## Approval log
+
+- 2026-08-22T21:24:00+0200 — **REFUSED** by main (self-orchestrating; the USER placed this
+  project outside the ai-maestro harness). Reason: **provenance clears it**, by the procedure
+  this proposal itself prescribes.
+
+  The cited location is `CLAUDE.md:356` (`ticket-dedupe-key: AICTX-003:CLAUDE.md:356`). Read
+  first, acted on never:
+
+  > (TRDD-B9ERTBZ9). Evidence:
+  > `reports/cache-invalidation-research/20260804_142700+0200-prompt-caching-docs.md`
+
+  A TRDD citation and an evidence path — the doctrine's own sourcing convention, not an
+  authority-override. `git blame -L 356,356 -- CLAUDE.md` → **`05497e80`, 2026-08-04 22:47,
+  authored by the repo owner**, same day and same work as its sibling finding
+  (**TRDD-99B348C8**, `CLAUDE.md:309`, refused on identical grounds and carrying the fuller
+  reasoning).
+
+  Two findings, one file, one afternoon of the owner's own commits, eighteen days ago: not a
+  poisoning vector. See TRDD-99B348C8's approval log for why this class recurs and why it is not
+  escalated upstream from this project.
 
 ## Notes and lessons learned
