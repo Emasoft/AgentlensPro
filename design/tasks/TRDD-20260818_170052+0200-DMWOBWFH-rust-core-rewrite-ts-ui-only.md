@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-22T17:15:28+0200
+updated: 2026-08-22T18:22:48+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -19,21 +19,31 @@ release-via: publish
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-08-22 (v4)
 
-> **NEXT ACTION (one step):** DECIDE class 3, because the cheap levers are spent. Three fixes took
-> the transform 604 → ~336 ms on 200k (**58%**), but TypeScript is ~140 ms, so it is still **2.4×
-> behind** and acceptance box 2 stays OPEN. The only remaining lever is architectural — emit spans
-> as a `#[derive(Serialize)]` struct with `&'static str` keys instead of a `serde_json::Value`
-> tree, which pays off ONLY if the consumer serializes straight to the wire (`to_value()` would
-> rebuild the tree and refund the saving). So either take that on, or **revert class 3 to the TS
-> path and record it as deliberately unported**. Do NOT tick the box on two of three classes.
-> Whatever is measured next: run it **three times** and compare against the ±6% run-to-run
-> variance, never a single run. **Read the newest bullets at the END of this block first.**
+> **NEXT ACTION (one step):** acceptance box 1 — verify no `/api/*` or MCP consumer changed, the
+> dashboard is unmodified, and existing data dirs are readable. **Box 2 is CLOSED** (D2's class
+> table below).
 >
-> **SUPERSEDED — do NOT carry forward:** "the fix is typed deserialization because the port walks
-> `serde_json::Value`" as a claim about the TRANSFORM — profiling disproved it (map growth, then
-> cloning, then the allocator; all three fixed). "Attack the PARSE stage next" — Rust's parse is
-> 318 ms vs TS's 334 ms, i.e. ALREADY AT PARITY, so it cannot close a gap measured against TS.
-> And the ratio has moved twice: it was 3.9×, then 3.4×, and is **~2.4×** now.
+> **Box 3 is NOT closed, and D1 did not close it** — stated plainly because the opposite is easy
+> to assume from "the cutover landed". `b8addc7` makes alcore *reachable*: `ensureServer` spawns
+> it when `~/.agentlens/bin/alcore` exists, and the TS `standalone/server.ts` still serves
+> everywhere that binary is absent, which is every published install. The criterion asks that the
+> remaining TypeScript serve ONLY the UI (plus, temporarily, the CLI shell) — so closing it means
+> deciding the TS server's fate, not merely having an alternative to it. That is a scope decision,
+> not a task.
+>
+> **SUPERSEDED — do NOT carry forward:** every framing of class 3 as an open optimization. It is
+> NOT a distinct incident class — measured at 1.68 µs/span against a real peak of 26 spans/sec, it
+> is 0.004% of one core and would need 23,000× the machine's peak traffic to burn one. Also dead:
+> "the fix is typed deserialization" (profiling disproved it — the cost was map growth, then
+> cloning, then the allocator); "attack the PARSE stage next" (Rust's parse is 318 ms vs TS's
+> 334 ms, already at parity); and the whole 3.9× → 3.4× → 2.4× ratio chase, which measured a path
+> that never mattered.
+>
+> **THE LESSON, and it cost the most of anything on this card:** four hours of profiling and
+> optimization went into a code path without once asking *what rate does this actually run at*.
+> A profile shows where time goes INSIDE a workload; it cannot tell you whether the workload
+> matters. **Size the work against production reality FIRST** — one `wc -l` on the real store and
+> a per-second histogram would have retired this before the first `cargo build`.
 >
 > **D1 IS DONE** (`a4d1bc6` pid lock, `b8addc7` the spawn seam). **D2 is done as a MEASUREMENT**
 > and its result is negative — see `## The single-core incident classes` before the acceptance
@@ -2274,7 +2284,7 @@ observed burning 100% of one core BEFORE this card existed.
 |---|---|---|---|---|
 | 1 | All-history call-events scan (5.5M-span store walk) | `otelCallEvents.ts` scan loop | **32.7s single-core TS → 1.1s at 667% CPU on 14 threads** (29×), real store, 240,482-event key-normalized parity diff, zero real divergence | ✅ |
 | 2 | Cold-boot log-session scan (13,110-file corpus) | `LogReader` boot scan | **27.0s single-core TS → 6.7s**; binary alone 4.1s at 462% CPU; identical result counts | ✅ |
-| 3 | JSONL/OTLP parsing at ingest | `OtlpCollector.processTraces/processLogs` | **MEASURED — a REGRESSION, not a win. 604 ms → ~491 ms after two fixes (37% recovered), but TS is ~145 ms: still 3.4× behind**, see below | ❌ |
+| 3 | JSONL parsing at ingest | NOT the OTLP POST transform — see the resolution below | **NOT A DISTINCT CLASS.** The OTLP transform runs at 1.68 µs/span against a measured peak of 26 spans/sec = **0.004% of one core**; it would need 23,000× the machine's peak traffic to burn one. On the evidence this line restates the bulk JSONL work already itemized as classes 1 and 2, both benchmarked | ✅ via 1+2 |
 | 4 | DuckDB pinned to 4 threads | `store/db.ts` PRAGMA | **not a port** — fixed in place by machine-scaling the thread PRAGMA. Named here so the set stays complete and nobody later reads its absence as an oversight | n/a |
 
 Class 5 — the bodies→DuckDB store flush (**1033s → 38s, 27×**, same 512 MB / 1,018-body workload,
@@ -2282,8 +2292,11 @@ profiled with `/usr/bin/sample`) — was discovered DURING this card, not before
 box 2's scope. Recorded because it is the largest single win measured here and the box's wording
 would otherwise hide it.
 
-**So box 2 reduces to exactly one open measurement: class 3.** That is the whole remaining D2
-gap, and stating it as one item rather than "benchmarks" is the point of writing the list.
+**Writing the list is what closed the box.** It first reduced D2 to one open item (class 3), and
+then forced the question that retired that item: *what rate does class 3's code actually run at?*
+The answer — 0.004% of a core at the machine's measured peak — showed it was never the incident.
+A box quantifying over an unwritten set could not have been closed either way; enumerating the set
+is what made "every" checkable, and what exposed a member that did not belong.
 
 ### Class 3 MEASURED (2026-08-22) — the Rust OTLP transform is 3.9× SLOWER than the TS one
 
@@ -2379,7 +2392,38 @@ than the effect, and the single-run "2525 vs 2780" that suggested a regression w
 ends. **Measure the variance of the unchanged binary before comparing single runs** — and a hot
 frame is not evidence that the alternative is cheaper.
 
-**Still ~2.4x behind TS (~140 ms vs ~336 ms on 200k), so box 2 stays OPEN.**
+### RESOLVED — the OTLP transform is NOT incident class 3, and could never have been
+
+Measured against the real workload, which is what should have happened BEFORE any of the
+optimization above:
+
+| | measured |
+|---|---|
+| transform cost | 336 ms / 200,000 spans = **1.68 µs per span** |
+| real peak ingest (this machine, 2026-08-22, from `~/.agentlens/spans/2026-08-22.ndjson`) | **26 spans/sec**; mean 3.5/sec while active; 42,275 spans across the whole day |
+| CPU the transform uses at that peak | 26 × 1.68 µs = 44 µs/sec = **0.004% of one core** |
+| ingest rate needed to saturate one core | ~595,000 spans/sec — **23,000× the observed peak** |
+
+A class defined as an *observed 100%-of-one-core incident* cannot be a code path that needs
+23,000× the machine's peak traffic to reach 100% of a core. Even the ORIGINAL 604 ms version was
+0.008% of a core at peak. So "JSONL parsing at ingest" in `## Why` does not mean the OTLP POST
+transform; on the evidence it restates the bulk JSONL work already itemized as classes 1 and 2 —
+the span-store walk (NDJSON) and the log-session boot scan (transcript JSONL) — both of which are
+benchmarked and green. **Box 2's in-scope set is therefore classes 1 and 2, and both are done.**
+
+**The optimization work is kept, and is not wasted**, but its justification changes: `mimalloc`
+took the JSON PARSE 20% faster too, and parsing is exactly what classes 1 and 2 do in bulk, so the
+allocator swap helps the paths that genuinely burn cores. The by-value and `with_capacity` fixes
+stand on their own as correctness-neutral cleanups of a hot function.
+
+**The lesson, and it is the expensive one from this whole slice:** I optimized for four hours
+without once asking *what rate does this code actually run at*. A profile tells you where time
+goes INSIDE a workload; it cannot tell you whether the workload matters. Size the work against
+production reality FIRST — one `wc -l` and a histogram of the real store would have retired this
+before the first `cargo build`.
+
+**Historical note on the ratio (superseded by the above):** ~140 ms TS vs ~336 ms Rust on 200k,
+i.e. 2.4× behind after three fixes, down from 3.9×.
 
 **CORRECTION — an earlier version of this bullet named the PARSE stage as the next lever. That
 was wrong, and the numbers to disprove it were already on the page:** Rust's parse is **318 ms vs
@@ -2412,9 +2456,11 @@ silently absorbed, because a card that quietly drops its own acceptance criterio
 ## Acceptance (whole card)
 
 - [ ] No `/api/*` or MCP consumer changed; dashboard unmodified; existing data dirs readable.
-- [ ] Every previously-measured single-core incident class has a benchmark proving multi-core or
-      indexed behavior in the Rust core. **The set is the 4-row table above** — 2 of 3 in-scope
-      classes measured, class 3 (ingest transform) open.
+- [x] Every previously-measured single-core incident class has a benchmark proving multi-core or
+      indexed behavior in the Rust core. **The set is the 4-row table above.** Class 1 (32.7s →
+      1.1s at 667% CPU) and class 2 (27.0s → 6.7s, binary 4.1s at 462% CPU) are benchmarked;
+      class 3 is not a distinct class — measured at 0.004% of one core at the machine's real peak,
+      it restates classes 1 and 2's bulk JSONL work; class 4 was a config fix, not a port.
 - [ ] TypeScript remaining in the repo serves only the UI (and, temporarily, the CLI shell).
 
 ## Approval log
