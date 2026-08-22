@@ -62,6 +62,10 @@ base64 = "0.22"
 # `rand` itself uses for seeding, and key material must come from the OS pool directly — a
 # userspace PRNG is a strictly larger thing to trust for a secret written to disk once.
 getrandom = "0.3"
+# The chore scheduler's cross-engine lock. Same crate and same primitive agentlens-store already
+# uses for the bodies pass (pass.rs:46) — a kernel flock, released on ANY process death, so a
+# crashed engine cannot leave a lock nobody can clear. Already in the workspace lock.
+fs2 = "0.4"
 # The ONE outbound call this server makes (the OAuth usage + profile endpoints). Blocking and
 # rustls-only, which is what makes it cheap here: it is already in the lock at this exact version as
 # libduckdb-sys' build dependency, so declaring it adds no new crate, no OpenSSL, and no async

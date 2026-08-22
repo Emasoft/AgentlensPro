@@ -42,6 +42,7 @@ pub mod cache_event_log;
 pub mod heartbeat_cost;
 pub mod session_burn_profile;
 pub mod cache_risk_commands;
+pub mod chores;
 pub mod call_body_registry;
 pub mod collector_lifecycle;
 pub mod context_composition;

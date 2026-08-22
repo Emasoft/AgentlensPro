@@ -157,69 +157,14 @@ fn main() {
         exit(1);
     });
     let addr: std::net::SocketAddr = format!("{bind}:{port}").parse().unwrap_or_else(|_| usage("bad bind/port"));
-    let flush_state = state.clone();
-    rt.spawn(async move {
-        // The flush tick (server.ts flushSpanAppends, SAVE_INTERVAL_MS=5s): settle anything still
-        // buffered (ingest_post already flushes per payload) and prune the summarization window
-        // by time — trimming memory is not data loss, every trimmed span is on disk.
-        let mut tick = tokio::time::interval(std::time::Duration::from_secs(5));
-        loop {
-            tick.tick().await;
-            if let Ok(mut st) = flush_state.lock() {
-                if st.writer.pending_appends() > 0 {
-                    st.flush_spans();
-                }
-                st.prune_window(agentlens_core::now_ms());
-            }
-        }
-    });
-    let hb_state = state.clone();
-    rt.spawn(async move {
-        // server.ts:1730 — the 30s lifecycle heartbeat: a crash then leaves lastHeartbeat as a
-        // truthful downtime-gap boundary (TRDD-PJC8N1HO spec 2). The TS pairs this timer with
-        // scheduleDurableSave; the Rust durable cadences live on the sweeper thread (P5e), so
-        // only the heartbeat lives here.
-        let mut tick = tokio::time::interval(Duration::from_secs(30));
-        tick.tick().await; // the first tick fires immediately — boot just wrote the start marker
-        loop {
-            tick.tick().await;
-            if let Ok(mut st) = hb_state.lock() {
-                let file = agentlens_core::collector_lifecycle::lifecycle_file(&st.data_dir);
-                agentlens_core::collector_lifecycle::record_heartbeat(&file, &mut st.lifecycle, agentlens_core::now_ms());
-            }
-        }
-    });
-    // The statusline store's disk-side chores (row 5). Purge once at boot (server.ts:852
-    // purgeStatusline), then a 60s seal task — sealing runs DuckDB over whole WALs, so it
-    // deliberately shares only the root path + the Arc'd counters with the store, NEVER the
-    // state lock (server.ts:1004 statuslineSealTimer).
-    let (sl_root, sl_counters) = {
-        let st = state.lock().expect("state");
-        (st.statusline.root.clone(), st.statusline.counters.clone())
-    };
-    let sl_vars: std::collections::HashMap<String, String> = std::env::vars().collect();
-    {
-        let (removed, freed) = agentlens_core::statusline_store::purge(
-            &sl_root,
-            agentlens_core::statusline_store::retention_days(&sl_vars),
-            agentlens_core::now_ms() as f64,
-        );
-        if !removed.is_empty() {
-            println!("alcore: statusline retention: purged {} partition(s), {:.1}MB", removed.len(), freed as f64 / 1048576.0);
-        }
-    }
-    rt.spawn(async move {
-        let mut tick = tokio::time::interval(Duration::from_secs(60));
-        loop {
-            tick.tick().await;
-            let (root, counters, vars) = (sl_root.clone(), sl_counters.clone(), sl_vars.clone());
-            // On the blocking pool: a seal decompresses + re-encodes a whole WAL chunk.
-            let _ = tokio::task::spawn_blocking(move || {
-                agentlens_core::statusline_store::maybe_seal(&root, &counters, &vars, agentlens_core::now_ms() as f64)
-            })
-            .await;
-        }
-    });
+    // Every recurring maintenance task, armed in ONE library call. These used to be declared
+    // inline here; they moved to `agentlens_core::chores` so they are reachable from an
+    // integration test — the measured cost of the old shape is that `run_burn_tick`, still
+    // declared below, HAS NO TEST and cannot have one from outside the binary.
+    // `spawn_all` runs the boot passes inline first (as the TS calls each chore once before
+    // setting its interval), so a server restarted more often than a chore's period still
+    // performs it.
+    agentlens_core::chores::spawn_all(&rt, state.clone());
     let ui_addr: std::net::SocketAddr = format!("{bind}:{ui_port}").parse().unwrap_or_else(|_| usage("bad bind/ui-port"));
     let serve = agentlens_core::serve_otlp(addr, state.clone(), |bound| {
         println!("alcore: OTLP listening on http://{bound}");
