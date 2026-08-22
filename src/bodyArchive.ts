@@ -152,6 +152,34 @@ export function extractArchive(
   return { files, bytes }
 }
 
+/** Liveness of the LIVE bodies dir: how many raw files sit there and how old the newest one is.
+ *
+ *  TRDD-0SA5QZTG. Raw-body capture died on this machine and went unnoticed for ~4 days while
+ *  `server status` reported healthy — spans, store size, log sessions, archive footprint, all
+ *  fine — because nothing it printed described CAPTURE. Everything that reads raw bodies
+ *  (`investigate_burn`, `get_cache_event_log`, ctxmap/ctxvis, the real-corpus tests) answered
+ *  from a stale snapshot with no indication it was stale.
+ *
+ *  The newest file's mtime is the cheapest true signal: it needs no counter plumbed through the
+ *  write path, and it is the exact quantity a human checks by hand when they finally suspect
+ *  something. `newestMs` is null for an empty or absent dir — an ABSENT reading, never 0, which
+ *  would render as "captured just now" and state the opposite of the truth. */
+export function liveBodiesLiveness(liveDir: string): { files: number; newestMs: number | null } {
+  let files = 0
+  let newestMs: number | null = null
+  let names: string[]
+  try { names = fs.readdirSync(liveDir) } catch { return { files, newestMs } }
+  for (const f of names) {
+    if (!f.endsWith('.request.json') && !f.endsWith('.response.json')) continue
+    files++
+    try {
+      const m = fs.statSync(path.join(liveDir, f)).mtimeMs
+      if (newestMs === null || m > newestMs) newestMs = m
+    } catch { /* vanished mid-scan — the drain is allowed to race us */ }
+  }
+  return { files, newestMs }
+}
+
 /** Total on-disk footprint of the archive (volumes + indexes). */
 export function archiveDiskUsage(archiveDir: string): { volumes: number; bytes: number; entries: number } {
   let volumes = 0

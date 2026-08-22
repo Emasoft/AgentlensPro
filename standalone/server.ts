@@ -67,7 +67,7 @@ import { SegmentedSpanStore, migrateLegacySpansFile, spanTimestampMs } from '../
 // appendToArchive is GONE: bodies now go into the content-addressed store, not a gzip .wad lump
 // (TRDD-K3WDPR7M Phase 3). The read/purge helpers stay — the existing .wad volumes still hold real
 // history that has not been migrated yet.
-import { purgeArchiveVolumes, archiveDiskUsage, extractArchive } from '../src/bodyArchive'
+import { purgeArchiveVolumes, archiveDiskUsage, extractArchive, liveBodiesLiveness } from '../src/bodyArchive'
 import { openStore, allOf, type Store } from '../src/store/db'
 import { DEFAULT_MAX_BYTES_PER_PASS, ingestPass } from '../src/store/ingestPass'
 import { alstoreBin, rustIngestPass } from '../src/rustStorePass'
@@ -3330,6 +3330,10 @@ const uiServer = http.createServer(async (req, res) => {
       },
       bodies: {
         archive: archiveDiskUsage(BODIES_ARCHIVE_DIR), lastPass: p.bodiesLastPurge,
+        // TRDD-0SA5QZTG: capture liveness. Without this the status surface described the ARCHIVE
+        // and the last purge but never whether anything is still being CAPTURED — which is how
+        // capture stayed dead for ~4 days behind a healthy-looking server.
+        live: liveBodiesLiveness(PRIMARY_BODIES_DIR),
         // TRDD-KB17X5G2 Option 3: spool health, including whether we are currently spilling new
         // sessions' bodies to the SSD dir and how many times that has happened since boot.
         spool: SPOOL_MODE

@@ -1,6 +1,6 @@
 ---
 trdd-id: 0SA5QZTG
-title: Raw body capture has been dead for days and nothing noticed
+title: Real-corpus tests read the LEGACY bodies dir while capture writes to the RAM spool
 column: todo
 created: 2026-08-22T20:46:35+0200
 updated: 2026-08-22T20:46:35+0200
@@ -14,6 +14,58 @@ relevant-files: [src/captureConfig.ts, standalone/server.ts, src/cacheCreationFo
 ---
 
 # Raw body capture has been dead for days and nothing noticed
+
+## CORRECTED 2026-08-22T21:05 — the original premise was FALSE
+
+This card was filed as "raw body capture has been dead for days". **Capture is alive.** It writes
+to a RAM-disk spool at `/Volumes/AgentLensSpool`, not to `~/.agentlens/otel-bodies`, and it is
+producing right now (`capture: 388 live file(s), newest 0s ago`; 316 -> 388 in two minutes).
+
+**How the wrong conclusion was reached — three compounding measurement errors, all mine:**
+
+1. **A failed command read as a measurement.** `find <dir> -newermt "-45 minutes" 2>/dev/null | wc -l`
+   returned `0` and was taken as "nothing captured". This machine's `find` is **bfs**, which
+   REJECTS relative timestamps; the command errored, `2>/dev/null` swallowed it, and `wc -l`
+   counted zero lines of nothing. *The signature failure of this whole session: a proxy read in
+   place of the thing.* Node was eventually used because `date -v` (BSD) and `stat -f` (BSD) also
+   fail here while `find` is bfs — the shell mixes dialects, so portable measurement means Node.
+2. **The wrong directory.** Everything was measured in `~/.agentlens/otel-bodies` — the LEGACY
+   dir. Under `SPOOL_MODE` (`standalone/server.ts:548-563`) `PRIMARY_BODIES_DIR` becomes the
+   configured RAM spool. The legacy dir being frozen at 2026-08-18 is **correct behaviour**, not a
+   fault: nothing has written there since spool mode came on.
+3. **`AGENTLENS_CAPTURE_RAW_BODIES` absent was read as "capture off".** It is not the switch that
+   was being observed; capture runs without it in this configuration.
+
+**What actually revealed the error:** the `capture:` status line added by this very card. It
+reported 316 files with a newest of 3 seconds while the card claimed a 4-day outage — a direct
+contradiction that could not be talked around. The feature caught its own author.
+
+## THE REAL DEFECT (what this card is now about)
+
+**The real-corpus tests read `~/.agentlens/otel-bodies` while capture writes to the spool.**
+`src/test/bodyStore.test.ts:12` hardcodes `REAL_BODIES = ~/.agentlens/otel-bodies`, and
+`cacheBreakTimeline`'s tests resolve `defaultBodiesDir()`. So the "live corpus" those tests
+exercise is a **frozen, partially-drained leftover from before spool mode** — which finally
+explains TRDD-R2VF2I53's adjacency gaps without inventing a drain story: the surviving legacy
+files are the residue the pass had not yet ingested when the spool took over, so they are
+*inherently* non-consecutive.
+
+That also means the "green twice while the server drains live" criterion was never testable the
+way it was written — the tests were not looking at the dir the drain is draining.
+
+## Acceptance
+
+- [x] `server status` reports capture state and the newest body's age (shipped with this card —
+      and it is what exposed the false premise above).
+- [ ] Real-corpus tests resolve the SAME dir the server captures to (spool when in spool mode,
+      legacy otherwise) instead of hardcoding the legacy path — or state explicitly that they
+      test the legacy residue on purpose.
+- [ ] TRDD-R2VF2I53's adjacency finding re-checked against the SPOOL corpus, where turns should
+      actually be consecutive. The 0.70 threshold was derived entirely from legacy residue and
+      may be measuring an artifact.
+- [ ] The archive question separated and answered: newest archive index is 2026-07-14 while
+      `bodiesMaxAgeHours` defaults to 72 h — either the legacy residue should have been archived
+      long ago, or the age knob is not the trigger.
 
 ## What was measured (2026-08-22, first-hand)
 

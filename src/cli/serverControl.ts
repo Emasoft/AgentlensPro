@@ -370,6 +370,30 @@ export async function stopServer(): Promise<void> {
   throw new Error(`server (pid ${pid}) did not stop within 10s — inspect it before escalating to SIGKILL`)
 }
 
+/** The capture-liveness line for `server status` (TRDD-0SA5QZTG).
+ *
+ *  Deliberately does NOT print "BROKEN" on age alone: a machine nobody is using captures nothing,
+ *  and a status line that cries wolf on an idle host gets ignored on the day it matters. The one
+ *  unambiguous case is a newest body OLDER THAN THIS PROCESS — the server has been up that entire
+ *  time and captured nothing, which no amount of idleness explains.
+ *
+ *  `now` is a parameter so this is testable without waiting for wall-clock. */
+export function bodiesCaptureLine(
+  s: { uptimeSec: number; bodies: { live?: { files: number; newestMs: number | null } } },
+  now: number = Date.now(),
+): string {
+  const live = s.bodies.live
+  // A pre-TRDD-0SA5QZTG server omits the field entirely. Saying "never captured" there would be a
+  // confident claim about something that was never measured.
+  if (!live) return 'unknown (server predates capture reporting)'
+  if (live.newestMs === null) return `NO BODIES on disk (${live.files} file(s)) — capture has never run, or the live dir was emptied`
+  const ageSec = Math.max(0, Math.round((now - live.newestMs) / 1000))
+  const age = ageSec < 90 ? `${ageSec}s` : ageSec < 5400 ? `${Math.round(ageSec / 60)}m` : `${(ageSec / 3600).toFixed(1)}h`
+  const stalled = ageSec > s.uptimeSec
+  return `${live.files} live file(s), newest ${age} ago`
+    + (stalled ? ` — STALLED: older than this server's ${Math.round(s.uptimeSec / 60)}m uptime, so nothing has been captured since boot` : '')
+}
+
 interface ServerStats {
   pid: number
   uptimeSec: number
@@ -391,6 +415,10 @@ interface ServerStats {
   bodies: {
     archive: { volumes: number; entries: number; bytes: number }
     lastPass: { removedFiles: number; keptBytes: number }
+    // TRDD-0SA5QZTG. Optional: a server older than this change does not send it, and the renderer
+    // must say "unknown" there rather than print a confident "never" about a field that was
+    // simply not transmitted.
+    live?: { files: number; newestMs: number | null }
   }
   hookEvents?: { receivedSinceBoot: number; files: number; bytes: number }
   // TRDD-AMEA4O4Z: gated-out OTEL log events persisted to the sink (absent on pre-sink servers).
@@ -448,6 +476,12 @@ export async function showStatus(): Promise<void> {
       : `spans:  ${s.spans.inMemory}/${s.spans.cap} in memory, ${s.spans.pendingAppends} pending, store ${fmtMb(s.spans.fileBytes ?? 0)} (${s.spans.fileLines} lines) | log sessions: ${s.logSessions}`,
     `disk writes since boot: ${fmtMb(per.totalBytesWritten)} total — spans ${fmtMb(per.spanAppendBytes)} in ${per.spanAppendWrites} appends${per.spanCompactions !== undefined ? ` + ${per.spanCompactions} compaction(s) ${fmtMb(per.spanCompactBytes ?? 0)}` : ''}; offsets ${fmtMb(per.offsetsBytes)}×${per.offsetsWrites}; cards ${fmtMb(per.cardsBytes)}×${per.cardsWrites}`,
     `bodies: archive ${s.bodies.archive.volumes} volume(s), ${s.bodies.archive.entries} lumps, ${fmtGb(s.bodies.archive.bytes)}; last pass archived ${s.bodies.lastPass.removedFiles} (live kept ${fmtGb(s.bodies.lastPass.keptBytes)})`,
+    // TRDD-0SA5QZTG: the CAPTURE line. Everything above describes what was already collected;
+    // this is the only line that says whether collection is still happening. It states the age
+    // and lets the reader judge, rather than declaring "broken" — an idle machine legitimately
+    // captures nothing — EXCEPT when the newest body predates the server's own boot, which is
+    // not a judgement call: this process has run that whole time and captured nothing.
+    `capture: ${bodiesCaptureLine(s)}`,
     // hookEvents/gate are absent when --status hits a server built before TRDD-Q6ZOUVK5/GOD0108C — skip, don't crash.
     ...(s.hookEvents ? [`hooks:  ${s.hookEvents.receivedSinceBoot} event(s) since boot, ${s.hookEvents.files} bucket(s) ${fmtMb(s.hookEvents.bytes)} on disk`] : []),
     // logEvents is absent when --status hits a server built before TRDD-AMEA4O4Z — skip, don't crash.
