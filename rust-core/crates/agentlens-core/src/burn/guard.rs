@@ -415,18 +415,83 @@ pub fn attach_risk_causing_calls(report: &mut Value, projects_dirs: &[PathBuf]) 
 /// install that redirects bodies to a spool, and a guard reading an empty dir silently reports
 /// "no risk" (TRDD-8N3KQW2R).
 pub fn default_bodies_dir(data_dir: &Path) -> PathBuf {
-    let spool: Option<PathBuf> = std::fs::read_to_string(data_dir.join("config.json"))
+    let legacy = data_dir.join("otel-bodies");
+    let (dirs, _) = bodies_dir_candidates(data_dir);
+    dirs.into_iter().next().unwrap_or(legacy)
+}
+
+/// captureConfig.spoolDirConfigured — the RAM-disk spool path persisted when capture was turned on
+/// with a spool. `None` on any missing/corrupt config: reading config must never crash a reader,
+/// and the absence just means "no spool".
+pub fn spool_dir_configured(data_dir: &Path) -> Option<PathBuf> {
+    std::fs::read_to_string(data_dir.join("config.json"))
         .ok()
         .and_then(|t| serde_json::from_str::<Value>(&t).ok())
-        .and_then(|v| v.get("capture")?.get("spoolDir")?.as_str().map(PathBuf::from));
+        .and_then(|v| v.get("capture")?.get("spoolDir")?.as_str().map(PathBuf::from))
+}
+
+/// The candidate split behind BOTH `default_bodies_dir` (first readable) and
+/// `resolve_bodies_read_scope` (all readable). ONE definition of the candidate list and of what
+/// "readable" means, because the two answers must never disagree about the same disk.
+///
+/// Order matters: the spool comes FIRST, so a single-dir reader picks the live spool over a legacy
+/// dir that is empty on any install redirecting bodies to a spool — a guard reading that empty dir
+/// silently reports "no risk" (TRDD-8N3KQW2R).
+fn bodies_dir_candidates(data_dir: &Path) -> (Vec<PathBuf>, Vec<PathBuf>) {
     let legacy = data_dir.join("otel-bodies");
     let mut candidates: Vec<PathBuf> = Vec::new();
-    if let Some(s) = spool {
+    if let Some(s) = spool_dir_configured(data_dir) {
         candidates.push(s);
     }
     if !candidates.contains(&legacy) {
-        candidates.push(legacy.clone());
+        candidates.push(legacy);
     }
-    // A dir that exists but is unreadable is as blind as an absent one — both count as missing.
-    candidates.into_iter().find(|d| std::fs::metadata(d).is_ok_and(|m| m.is_dir())).unwrap_or(legacy)
+    // A dir that EXISTS but is unreadable is as blind as an absent one — both count as missing.
+    candidates.into_iter().partition(|d| std::fs::metadata(d).is_ok_and(|m| m.is_dir()))
+}
+
+/// captureConfig.rawBodyCaptureEnabled — env > config.json > default, and the DEFAULT IS OFF: a
+/// default that silently costs ~35 GB/day is not one a user consented to.
+///
+/// A typo (`AGENTLENS_CAPTURE_RAW_BODIES=treu`) is NOT consent — it falls through to the file and
+/// then the default, rather than being read as either true or false.
+pub fn raw_body_capture_enabled(data_dir: &Path, vars: &std::collections::HashMap<String, String>) -> bool {
+    fn parse_bool(raw: &str) -> Option<bool> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "1" | "true" | "on" | "yes" => Some(true),
+            "0" | "false" | "off" | "no" => Some(false),
+            _ => None,
+        }
+    }
+    if let Some(v) = vars.get("AGENTLENS_CAPTURE_RAW_BODIES").and_then(|s| parse_bool(s)) {
+        return v;
+    }
+    std::fs::read_to_string(data_dir.join("config.json"))
+        .ok()
+        .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+        .and_then(|v| v.get("capture")?.get("rawBodies")?.as_bool())
+        .unwrap_or(false)
+}
+
+/// captureConfig.resolveBodiesReadScope — EVERY readable bodies dir, not just the first.
+///
+/// The multi-dir case is real and transient: while a drain is in progress the live spool and the
+/// legacy dir BOTH hold bodies, so a reader that sees only one under-counts. That is why this
+/// returns a list and `missing` alongside it — a report can then say what it actually read
+/// (`coverage.dirsScanned`) instead of implying it read everything.
+pub struct BodiesReadScope {
+    pub dirs: Vec<PathBuf>,
+    pub missing: Vec<PathBuf>,
+    pub capture_on: bool,
+    pub spool_configured: bool,
+}
+
+pub fn resolve_bodies_read_scope(data_dir: &Path, vars: &std::collections::HashMap<String, String>) -> BodiesReadScope {
+    let (dirs, missing) = bodies_dir_candidates(data_dir);
+    BodiesReadScope {
+        dirs,
+        missing,
+        capture_on: raw_body_capture_enabled(data_dir, vars),
+        spool_configured: spool_dir_configured(data_dir).is_some(),
+    }
 }

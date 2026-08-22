@@ -2211,15 +2211,24 @@ async fn handle(
                         // Reads the hook-event buckets, then deep-attributes the newest episode via
                         // a bounded body scan — spawn_blocking, lock released first.
                         let now = crate::now_ms() as f64;
-                        let (bodies_dir, hook_dir, home, projects_dirs) = {
+                        let (rl_data_dir, hook_dir, home, projects_dirs) = {
                             let st = state.lock().map_err(|_| "state poisoned".to_owned())?;
                             (
-                                crate::burn::guard::default_bodies_dir(&st.data_dir),
+                                st.data_dir.clone(),
                                 st.data_dir.join("hook-events"),
                                 st.log_env.home.to_string_lossy().into_owned(),
                                 agentlens_logscan::discovery::claude_projects_dirs(&st.log_env),
                             )
                         };
+                        // Resolved ONCE, outside the closure: `investigate` is called per window and
+                        // re-statting the candidate dirs on every call would let the scope shift
+                        // mid-report, so two windows in one report could disagree about coverage.
+                        let rl_scope = crate::burn::guard::resolve_bodies_read_scope(&rl_data_dir, &std::env::vars().collect());
+                        let rl_scope_dirs: Vec<String> =
+                            rl_scope.dirs.iter().map(|p| p.to_string_lossy().into_owned()).collect();
+                        let rl_scope_missing: Vec<String> =
+                            rl_scope.missing.iter().map(|p| p.to_string_lossy().into_owned()).collect();
+                        let rl_capture_on = rl_scope.capture_on;
                         let opts = crate::rate_limit_report::RateLimitReportOptions {
                             window_hours: args.get("windowHours").and_then(Value::as_f64),
                             max_episodes: args.get("maxEpisodes").and_then(Value::as_f64),
@@ -2229,13 +2238,14 @@ async fn handle(
                             // The TS passes the real investigateBurn here; the Result seam exists
                             // for the oracle's stub, so the production closure is always Ok.
                             let investigate = |hours: f64, until: f64, max_files: f64| {
-                                let scope_dir = bodies_dir.to_string_lossy().into_owned();
-                                let exists = bodies_dir.is_dir();
+                                // Same full multi-dir scope as the burn-investigator arm. This site
+                                // carried the identical single-dir shortcut with NO comment marking
+                                // it, which is how a known divergence becomes an unknown one.
                                 let io = crate::burn::investigator_scan::InvestigateOptions {
                                     scope: crate::burn::investigator_scan::BodiesScope {
-                                        dirs: if exists { vec![scope_dir.clone()] } else { vec![] },
-                                        missing: if exists { vec![] } else { vec![scope_dir] },
-                                        capture_on: true,
+                                        dirs: rl_scope_dirs.clone(),
+                                        missing: rl_scope_missing.clone(),
+                                        capture_on: rl_capture_on,
                                     },
                                     hook_events_dir: hook_dir.clone(),
                                     home: home.clone(),
@@ -2269,27 +2279,24 @@ async fn handle(
                         // fallback to "now" — a window the caller did not ask for would be
                         // answered with confident numbers about the wrong hours.
                         let bad_iso = until_iso.as_ref().filter(|_| until_ms.is_none()).cloned();
-                        let (dir, hook_dir, home, projects_dirs) = {
+                        let (data_dir, hook_dir, home, projects_dirs) = {
                             let st = state.lock().map_err(|_| "state poisoned".to_owned())?;
                             (
-                                crate::burn::guard::default_bodies_dir(&st.data_dir),
+                                st.data_dir.clone(),
                                 st.data_dir.join("hook-events"),
                                 st.log_env.home.to_string_lossy().into_owned(),
                                 agentlens_logscan::discovery::claude_projects_dirs(&st.log_env),
                             )
                         };
-                        // KNOWN DIVERGENCE, deliberate: the TS resolves a possibly-MULTI-dir scope
-                        // via captureConfig.resolveBodiesReadScope (live spool + legacy dir during a
-                        // drain). That resolver is not ported yet, so this arm passes the single
-                        // default dir. `coverage.dirsScanned` reports exactly what was read, so the
-                        // report stays honest about it rather than implying wider coverage.
-                        let exists = dir.is_dir();
-                        let d = dir.to_string_lossy().into_owned();
+                        // The full multi-dir scope (captureConfig.resolveBodiesReadScope): during a
+                        // drain the live spool AND the legacy dir both hold bodies, so reading one
+                        // under-counts and windowEstCostUsd comes back low.
+                        let scope = crate::burn::guard::resolve_bodies_read_scope(&data_dir, &std::env::vars().collect());
                         let opts = crate::burn::investigator_scan::InvestigateOptions {
                             scope: crate::burn::investigator_scan::BodiesScope {
-                                dirs: if exists { vec![d.clone()] } else { vec![] },
-                                missing: if exists { vec![] } else { vec![d] },
-                                capture_on: true,
+                                dirs: scope.dirs.iter().map(|p| p.to_string_lossy().into_owned()).collect(),
+                                missing: scope.missing.iter().map(|p| p.to_string_lossy().into_owned()).collect(),
+                                capture_on: scope.capture_on,
                             },
                             hook_events_dir: hook_dir,
                             home: home.clone(),
