@@ -149,10 +149,17 @@ permanently-pinned files with no operator-visible surface is the shape of the bu
 
 Ranked by my reading; box 2 stays open until one is picked.
 
-1. **Repair the `ts` row, then unpark.** Addresses the actual defect. The park comment says
-   *"re-ingest can never repair that row"* — true of re-ingest, not of a targeted UPDATE of the
-   capture-ts column. Needs care: capture-ts is the provenance time-window scans rely on, so the
-   repair must source it from the file's own mtime (the same value the pass compares against).
+1. **Repair the `ts` row, then unpark. FEASIBLE — most of the machinery already exists.**
+   `src/store/tsRecovery.ts` (`makeTsRecoveryMigration`, `parseIdxTsMap`, `TsCorrections`) is a
+   built and adversarially-tested v1→v2 migration that REWRITES the bodies table to correct
+   exactly this column (TRDD-K3WDPR7M #56; tests in `src/test/tsRecovery.test.ts` cover
+   abort-on-missing-body and byte-faithful copy). It sources corrections from `.idx` provenance;
+   what this needs is a second source — **the parked file's own mtime**, which
+   `src/store/ingestPass.ts:331` already names as *"the only true capture record"*, and which is
+   the very value the verify compares against (`lib.rs:588-593`, `TS_TOLERANCE_MS`).
+   Then clear those names from `strandedNames` so the next pass reclaims them normally.
+   Cost: a correction source + an unpark step + tests. Rewrites a 437 MB store, so it inherits
+   that migration's existing abort-if-unprovable rail.
 2. **Delete a parked file whose BYTES are proven.** Cheapest reclaim, and defensible — the delete
    gate's contract is "prove reconstruction, then unlink", which these already satisfy. But it
    destroys the only remaining source for the ts row, so it forecloses remedy 1 forever. **Do not
