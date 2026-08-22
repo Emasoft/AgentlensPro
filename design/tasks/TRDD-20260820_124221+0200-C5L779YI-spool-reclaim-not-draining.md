@@ -1,14 +1,15 @@
 ---
 trdd-id: C5L779YI
 trdd-id-full: C5L779YI
-title: The bodies reclaim pass is not draining a VOLATILE spool — measured 0.82GB live, 0 archived
+title: A volatile spool holds up to bodiesMaxGb of un-reclaimed bodies because the age gate cannot fire on it
 column: todo
 created: 2026-08-20T12:42:21+0200
-updated: 2026-08-20T12:42:21+0200
+updated: 2026-08-22T21:20:00+0200
+severity: MEDIUM
+spawned: [8TM7I49X]
 current-owner: AgentlensPro session
 task-type: bugfix
-severity: HIGH
-priority: 2
+priority: 3
 effort: M
 labels: [bodies, spool, data-loss, reclaim]
 approval-tier: 0
@@ -16,7 +17,59 @@ relevant-files: [standalone/server.ts, src/rustStorePass.ts, rust-core/crates/ag
 release-via: none
 ---
 
-# The bodies reclaim pass is not draining a VOLATILE spool
+# A volatile spool holds up to `bodiesMaxGb` of un-reclaimed bodies
+
+*(Filed 2026-08-20 as "The bodies reclaim pass is not draining a VOLATILE spool". That premise
+was refuted on 2026-08-22 — see below. The title changed with it; the original body is kept
+verbatim underneath as the audit trail.)*
+
+## REFUTED 2026-08-22 — the spool IS draining; this card fell into the trap it wrote down
+
+**The premise is false and the evidence is unambiguous.** `~/.agentlens/server.log` carries **278**
+reclaim lines, the most recent from today, every one tagged `[spool]`:
+
+```
+[AgentLens] bodies → store: ingested 1619, reclaimed 1619 file(s) (0 already durable) (0.50GB read → 7.1MB new spans) [spool] [throttled — more next pass]
+[AgentLens] bodies → store: ingested  944, reclaimed  944 file(s) (0 already durable) (0.50GB read → 5.5MB new spans) [spool] [throttled — more next pass]
+[AgentLens] bodies → store: ingested  831, reclaimed  831 file(s) (0 already durable) (0.50GB read → 5.0MB new spans) [spool] [throttled — more next pass]
+```
+
+**Why `archived 0` was the normal state and not a fault.** The pass has TWO triggers and only one
+of them can ever fire on a spool:
+
+- the **age gate** (`bodiesMaxAgeHours` = 72 h) — measured today, the spool held 986 files
+  spanning **0.42 h**, of which **0** were past 72 h. A RAM spool cannot accumulate 72 h of age;
+  a reboot clears it first. So the age gate never admits a single spool file, by construction.
+- the **over-cap valve** (`overCap ? maxAgeMs = 0`, i.e. ingest everything regardless of age).
+  `bodiesMaxGb` is configured to **0.5 GB** here (not the 8 GB default) and the RAM disk is 2 GB,
+  so `capBytes = min(0.5 GB, 70% × 2 GB) = 512 MB`. Measured today: **473.9 MB — just under it.**
+
+So the spool drains in **0.5 GB bursts at the cap**, and sits at `archived 0` the whole time in
+between. `last pass archived 0 (live kept 0.82GB)` was a snapshot taken between bursts. The
+card's own closing note said it: *"a reclaim that archives 0 is indistinguishable from a reclaim
+with nothing to do"* — and then read one as the other anyway. Writing the lesson down is not the
+same as applying it.
+
+Of the four suspects listed below, **all four are wrong**: SPOOL_MODE is active (the `[spool]`
+tag proves it), the flock is not held (its skip logs, and nothing does), the pass scans the spool
+(same tag), and the throttle is working exactly as designed (`[throttled — more next pass]` is
+the 0.5 GB/pass limiter doing its job across a bulk drain).
+
+## What SURVIVES the refutation — two real things, neither the one this card claimed
+
+1. **The legacy target genuinely never reclaims.** Not one of the 278 lines is untagged; every
+   reclaim is `[spool]`. Meanwhile `~/.agentlens/otel-bodies` holds 1045 files, all 96–147 h old,
+   all past the 72 h gate, static across two full 60 s pass intervals. **Split to TRDD-8TM7I49X**
+   with the measurement — this card is not it, and merging them would rebuild the conflation.
+2. **Up to 512 MB of captured bodies live ONLY in volatile RAM at any moment.** This card's real
+   insight, and it survives intact: with the age gate structurally unable to fire on a spool, the
+   cap valve is the *only* thing that ever moves a body to durable storage, so an unmount, a
+   reboot, or a full volume loses everything written since the last burst. That is a **policy
+   question, not a bug** — and it deserves a deliberate answer rather than being an emergent
+   property of two knobs that were tuned for a different sink.
+
+**This card is retargeted to (2).** The measurements below are kept verbatim as the audit trail
+of how a burst-mode drain was read as a dead one.
 
 ## Why this is not cosmetic
 
@@ -66,17 +119,51 @@ from draining THIS spool.
    it finds nothing eligible while the spool fills.
 4. A throttle (512MB) or skip-name state in `.pass-state.json` parking everything.
 
-## Acceptance
+## Acceptance (ORIGINAL — answered by the refutation above)
 
-- [ ] Root cause NAMED with the measurement that proves it (not a plausible story).
-- [ ] After the fix, `last pass archived N>0` with the spool's live bytes dropping.
-- [ ] A regression check that fails when reclaim stops draining while the spool grows —
-      silence must not read as "nothing to do".
-- [ ] The 512MB throttle and the flock skip stay intact; the delete gate
-      (ingest→FLUSH→fsync→verify→delete) is NOT relaxed to make this pass.
+- [x] Root cause NAMED with the measurement that proves it (not a plausible story). **There was
+      no fault**: burst drain at the 512 MB cap, 278 logged reclaims, spool age span 0.42 h vs a
+      72 h gate.
+- [x] After the fix, `last pass archived N>0` with the spool's live bytes dropping. **Already
+      true, without a fix** — see the three logged bursts above.
+- [~] A regression check that fails when reclaim stops draining while the spool grows — silence
+      must not read as "nothing to do". **Still wanted, moved to TRDD-8TM7I49X** (its acceptance
+      box 3), where the target that IS stuck lives. A check written here would have had nothing
+      to catch.
+- [x] The 512MB throttle and the flock skip stay intact; the delete gate is NOT relaxed.
+      **Nothing was changed** — the correct outcome for a refuted premise.
+
+## Acceptance (RETARGETED — the surviving question)
+
+- [ ] A decision recorded on whether a volatile spool may hold up to `bodiesMaxGb` (512 MB here)
+      of un-reclaimed bodies, WITH the loss window stated. The answer may legitimately be "yes,
+      accepted" — bursting is far cheaper than per-file draining — but it must be a decision, not
+      a side effect of an age gate that cannot fire on this sink.
+- [ ] Whatever is decided is stated where the code makes the trade, next to the `overCap ? 0 :
+      BODIES_MAX_AGE_MS` line (`standalone/server.ts:685,693`). Today nothing there says the age
+      gate is structurally dead for a spool, which is why three suspects were chased instead.
+- [ ] `server status` stops inviting this misreading. `last pass archived 0 (live kept 0.69GB)`
+      uses the retired word "archived", reports only the LAST pass (0 by design between bursts),
+      and calls the backlog "kept". Report reclaim since boot, or the age of the last non-zero
+      pass, beside the backlog — the card's own note asked for exactly this and it is still not
+      there.
 
 ## Notes and lessons learned
 
 The shape to remember: a reclaim that archives 0 is **indistinguishable from a reclaim with
 nothing to do**. Only pairing it with "and the live dir holds 0.82GB" turns it into a defect.
 Any status line reporting work done should report the backlog beside it.
+
+That note was written on 2026-08-20 and was RIGHT — and on 2026-08-22 the pairing it prescribed
+turned out to be insufficient, in a way worth keeping[^1].
+
+[^1]: [id: bursty-pass-reads-as-dead-pass status: active keywords: "archived 0" "last pass did
+    nothing" "live kept" reclaim not draining spool burst cap valve, ocd: 2026-08-22 lmd:
+    2026-08-22] DO NOT conclude a periodic task is broken from ONE sample of a LAST-pass counter
+    plus a non-empty backlog, BECAUSE a task that works in BURSTS reads as dead for the whole
+    interval between bursts — here a 0.5 GB cap valve drained the spool 278 times while every
+    single-moment reading said `archived 0`, and the backlog was non-empty by design because the
+    age gate (72 h) can never fire on a sink whose contents span 0.42 h. DO check the LOG for
+    historical work before believing an instantaneous counter, and DO ask what the trigger
+    actually is before assuming the visible knob is it. Tell: a suspect list where every entry is
+    a plausible mechanism and none has been measured.

@@ -46,6 +46,17 @@ it is the legacy target specifically. (The spool GROWING is not itself evidence 
 there — capture simply outruns it mid-session. The evidence that separates the two targets is
 that one number moves and the other does not, on the same clock.)
 
+**Corroborated from the server's own log, which is stronger than the sampling above.**
+`~/.agentlens/server.log` carries **278** `bodies → store: ingested N, reclaimed M` lines — and
+**every single one is tagged `[spool]`.** The tag is emitted from `SPOOL_MODE`, and the pass logs
+one line per pass covering BOTH targets, so a legacy reclaim would appear in the same line's
+counters. The machinery, the store, the delete gate and the flock all work; 1619, 944 and 831
+files were reclaimed in recent passes. It is this one target that has never contributed.
+
+This also means the search space is smaller than it looks: whatever is wrong is specific to a
+target with `durable: true` and `relocateStrandedTo: undefined`, or to how the second iteration
+of the `drainTargets` loop is reached, and NOT to ingestion, verification or deletion in general.
+
 ## Why it is not visible
 
 A pass that ingests 0 and deletes 0 **logs nothing** — the log line is gated on
