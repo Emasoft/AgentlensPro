@@ -105,6 +105,19 @@ way it was written — the tests were not looking at the dir the drain is draini
 - 2026-08-22T21:14:00+0200 — COMPLETED by main (self-orchestrating, tier 0). All four live
   acceptance boxes ticked with first-hand measurements; the one thing this card surfaced that it
   could not close was split to TRDD-8TM7I49X rather than left in prose.
+- 2026-08-22T21:52:00+0200 — POST-CLOSE CORRECTION (append-only; the card body stays frozen).
+  Adversarial review falsified two claims made above, both fixed in **dd19f98**:
+  (a) box 3's "the adjacency test now RUNS ... 2440 passing" is a SNAPSHOT, not a settled outcome
+  — the bodies pass drains the spool in ~0.5 GB bursts, and a burst between two runs destroys the
+  test's input (reviewer measured a skip, best run 2, minutes after a 914 ms pass). "Sometimes
+  runs" where it used to be "never runs" is the true statement;
+  (b) box 2's fix reintroduced the bug it removed — `realBodies` tops up from a second dir, and
+  "largest session group" can then select the legacy residue (54 turns, best run 3) over the spool
+  (47 turns, best run 40). Now selects the best RUN across all sessions; on the residue alone that
+  is run=12 instead of run=3, i.e. the test runs where it would have skipped.
+  Recorded here rather than in the body because a terminal card is frozen and its approval log is
+  the append-only exception — and because a closed card carrying an overstated claim is exactly
+  the failure mode this card was about.
 
 ## What was measured (2026-08-22, first-hand)
 
