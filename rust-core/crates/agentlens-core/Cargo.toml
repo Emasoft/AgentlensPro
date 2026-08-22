@@ -80,6 +80,7 @@ futures-core = "0.3"
 # /api/server-stats resources (src/resourceMonitor.ts): rss, loadavg, statvfs — already in the
 # lock via tokio; a direct dep so the calls are ours, not a transitive accident.
 libc = "0.2"
+mimalloc = "0.1.52"
 
 [dev-dependencies]
 # forensics_scan's oracle stamps fixture mtimes on both sides: a spool EvidenceRow carries no

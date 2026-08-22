@@ -19,6 +19,19 @@ use std::time::Duration;
 /// the steady state is the targeted sweep + the 60s backstop (log_reader::FULL_RESCAN).
 const LOG_SWEEP_INTERVAL: Duration = Duration::from_secs(5);
 
+/// MEASURED (TRDD-DMWOBWFH D2), not a default anyone should copy without measuring: the OTLP
+/// transform's profile after the by-value fix was dominated by the system allocator —
+/// `_xzm_free`/`malloc`/`free` ≈ 87 samples against 27 for hashing — because building each output
+/// span allocates ~9 times (7 String map keys, a Map, a Vec) and Rust's `String` has no
+/// small-string optimization, so `"traceId".into()` heap-allocates 7 bytes every time. Swapping
+/// the allocator took the transform 2593 -> 1698 ms and the JSON parse 1769 -> 1422 ms on a
+/// 1M-span payload (**35% and 20%**), both far outside the ±6% run-to-run variance.
+///
+/// It belongs in the BINARY, never in a library crate: a global allocator is a process-wide
+/// decision, and a library that imposes one on its dependents is antisocial.
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 fn usage(msg: &str) -> ! {
     eprintln!("alcore: {msg}");
     eprintln!("usage: alcore serve --data-dir DIR [--otlp-port N] [--ui-port N] [--mcp-port N] [--bind HOST] [--no-log-scan]");

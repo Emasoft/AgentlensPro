@@ -15,6 +15,19 @@
 
 use std::process::exit;
 
+/// EXPERIMENT (TRDD-DMWOBWFH D2): after the by-value fix the transform's profile is dominated by
+/// the ALLOCATOR — `_xzm_free`/`malloc`/`free` ≈ 87 samples against 27 for hashing — because the
+/// output side allocates ~9 times per span (7 String map keys, a Map, a Vec) and Rust's `String`
+/// has no small-string optimization, so `"traceId".into()` heap-allocates 7 bytes every time.
+/// V8 bump-allocates the equivalent object in a nursery with a hidden class for the fixed shape,
+/// which is the structural reason the TS collector wins this workload.
+///
+/// Wired into the BINARY only, never the library: a global allocator is a process-wide decision
+/// and a library that imposes one on its dependents is antisocial. If this proves out, the same
+/// three lines belong in `alcore`'s main, not here.
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 fn usage(msg: &str) -> ! {
     eprintln!("alingest: {msg}");
     eprintln!("usage: alingest --traces|--logs|--metrics <payload.json> [--now MS] [--path P]");

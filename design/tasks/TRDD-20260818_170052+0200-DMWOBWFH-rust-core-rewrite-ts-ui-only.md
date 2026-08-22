@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-22T15:45:56+0200
+updated: 2026-08-22T17:15:28+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -19,20 +19,21 @@ release-via: publish
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-08-22 (v4)
 
-> **NEXT ACTION (one step):** attack the PARSE stage of the Rust OTLP path — it is now the larger
-> half (1742 ms of the 5.7 s 1M-span total, untouched), so try typed
-> `#[derive(Deserialize)]` structs for the OTLP envelope (which fuses parse and transform into one
-> pass) or `simd-json`, then re-run `node scripts_dev/bench-ingest-transform.js 200000` **three
-> times** and compare against the ±6% run-to-run variance, never a single run. Two allocation
-> fixes already recovered 37% (604 → ~491 ms on 200k) but TS is ~145 ms, so class 3 is still 3.4×
-> behind and acceptance box 2 stays OPEN. If the parse work does not close it, the honest
-> resolution is to revert class 3 to the TS path and record it as deliberately unported — do NOT
-> tick the box on two of three classes. **Read the newest bullets at the END of this block first.**
+> **NEXT ACTION (one step):** DECIDE class 3, because the cheap levers are spent. Three fixes took
+> the transform 604 → ~336 ms on 200k (**58%**), but TypeScript is ~140 ms, so it is still **2.4×
+> behind** and acceptance box 2 stays OPEN. The only remaining lever is architectural — emit spans
+> as a `#[derive(Serialize)]` struct with `&'static str` keys instead of a `serde_json::Value`
+> tree, which pays off ONLY if the consumer serializes straight to the wire (`to_value()` would
+> rebuild the tree and refund the saving). So either take that on, or **revert class 3 to the TS
+> path and record it as deliberately unported**. Do NOT tick the box on two of three classes.
+> Whatever is measured next: run it **three times** and compare against the ±6% run-to-run
+> variance, never a single run. **Read the newest bullets at the END of this block first.**
 >
 > **SUPERSEDED — do NOT carry forward:** "the fix is typed deserialization because the port walks
-> `serde_json::Value`" as a statement about the TRANSFORM — profiling disproved it (the cost was
-> map growth and cloning, both now fixed); typed structs remain a candidate for the PARSE stage
-> only. Also "3.9× slower" — that was the pre-fix number; it is ~3.4× now.
+> `serde_json::Value`" as a claim about the TRANSFORM — profiling disproved it (map growth, then
+> cloning, then the allocator; all three fixed). "Attack the PARSE stage next" — Rust's parse is
+> 318 ms vs TS's 334 ms, i.e. ALREADY AT PARITY, so it cannot close a gap measured against TS.
+> And the ratio has moved twice: it was 3.9×, then 3.4×, and is **~2.4×** now.
 >
 > **D1 IS DONE** (`a4d1bc6` pid lock, `b8addc7` the spawn seam). **D2 is done as a MEASUREMENT**
 > and its result is negative — see `## The single-core incident classes` before the acceptance
@@ -2344,9 +2345,20 @@ is why — use the absolute path.
 |---|---|---|
 | baseline | 4073 ms | 604 ms |
 | `Map::with_capacity(2)` + `Vec::with_capacity(items.len())` | 3353 ms | 549 ms |
-| **payload BY VALUE — move instead of clone** | **~2547 ms** (median of 3) | **~491 ms** (489/491/515) |
+| payload BY VALUE — move instead of clone | ~2547 ms (2546/2593/2690) | ~491 ms (489/491/515) |
+| **`mimalloc` as the global allocator** | **~1698 ms** (1698/1741/1645) | **~336 ms** (329/336/337) |
 
-**37% recovered.** Taking `payload: Value` is the substantive one: while it was borrowed nothing
+**58% recovered on the transform**, and the JSON parse came down 20% for free (1769 → ~1422 ms)
+because it allocates heavily too. TS comparison on 200k: **~140 ms vs ~336 ms — from 3.9× behind
+down to 2.4×.**
+
+The allocator was the right third lever because the profile said so, not because it is a known
+trick: after the clones were gone, `_xzm_free`/`malloc`/`free` outweighed hashing **87 samples to
+27**. Building ONE output span allocates ~9 times (7 String map keys, a Map, a Vec), and Rust's
+`String` has no small-string optimization — `"traceId".into()` heap-allocates 7 bytes every time.
+V8 bump-allocates the same object in a nursery against a hidden class. Wired into the two
+BINARIES (`alcore`, `alingest`), never a library crate: a global allocator is a process-wide
+decision and a library imposing one on its dependents is antisocial. Taking `payload: Value` is the substantive one: while it was borrowed nothing
 could be moved out, so every span rebuilt its attribute list (a fresh `Map` plus a DEEP clone of
 each value) and copied six more fields out one at a time — roughly 12M allocations per million
 spans that the TS collector never performs, because `JSON.parse` hands it objects and it passes
@@ -2367,13 +2379,25 @@ than the effect, and the single-run "2525 vs 2780" that suggested a regression w
 ends. **Measure the variance of the unchanged binary before comparing single runs** — and a hot
 frame is not evidence that the alternative is cheaper.
 
-**Still ~3.4x behind TS (145 ms vs ~491 ms on 200k), so box 2 stays OPEN.** The remaining levers,
-in order of expected value: the PARSE stage is now the larger half (1742 ms of the 1M total,
-untouched — `simd-json`, or typed `#[derive(Deserialize)]` structs for the OTLP envelope so parse
-and transform fuse into one pass), then a non-SipHash map. If neither closes the gap, the honest
-resolution is to revert class 3 to the TS path and record it as deliberately unported — the OTLP
-transform may simply be a workload where a dynamic-JSON tree in Rust cannot beat a JIT with hidden
-classes.
+**Still ~2.4x behind TS (~140 ms vs ~336 ms on 200k), so box 2 stays OPEN.**
+
+**CORRECTION — an earlier version of this bullet named the PARSE stage as the next lever. That
+was wrong, and the numbers to disprove it were already on the page:** Rust's parse is **318 ms vs
+TypeScript's 334 ms on the same 200k payload — already at parity**, so optimizing it gains nothing
+RELATIVE to TS, which pays the same cost. (It looked like "the larger half" only within Rust's own
+budget, and after mimalloc it is not even that.) The ENTIRE remaining gap is the transform. Naming
+a next action without checking it against the comparison it is supposed to close is how a plan
+sends the next session at the wrong half of the problem.
+
+The real remaining lever is structural: the transform's output is a `serde_json::Value` tree, so
+every span pays ~9 allocations for a map whose 7 keys are the SAME string literals every time.
+A `#[derive(Serialize)]` struct would emit them as `&'static str` with no map and no allocation —
+but only pays off if the CONSUMER serializes straight to the wire, because `serde_json::to_value()`
+would rebuild the tree and give the saving straight back. That is an architectural change to the
+span-emission contract, not a tweak, and it is the decision point for class 3: **make it, or
+revert class 3 to the TS path and record it as deliberately unported.** A dynamic-JSON tree in
+Rust may simply not beat a JIT with hidden classes on this workload, and that would be a finding,
+not a failure.
 
 Not a threading problem either way: `1.18 user / 1.53 real` — the transform is single-threaded, so
 this class has no parallelism to claim yet.
