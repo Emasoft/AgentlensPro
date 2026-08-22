@@ -8,7 +8,7 @@ import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
 import { apiRequest, dataDir, dashboardUrl, fmtGb, fmtMb, init, mcpEndpoint, sleep, CONNECT_TIMEOUT_MS } from './cliCore'
-import { dataDirSource } from '../dataDir'
+import { dataDirSource, dataPath } from '../dataDir'
 import { agentlensDisabled, killSwitchPath } from './killSwitch'
 import { UsageError } from './cliErrors'
 import { assertKnownFlags } from './argHelpers'
@@ -44,6 +44,54 @@ export function findServerJs(): string {
   throw new Error(`server bundle missing (looked near ${__dirname}) — run \`node esbuild.js\` in the AgentlensPro repo first`)
 }
 
+/** The opted-in `alcore` (Rust core) binary, or null when the Rust core is off.
+ *
+ *  Deliberately the SAME two-channel shape as `alscanBin` (src/rustScan.ts), because that one is
+ *  already shipped and proven: `AGENTLENS_ALCORE` names the binary per-process and wins;
+ *  otherwise `<dataDir>/bin/alcore` merely EXISTING is the opt-in. Presence is the only channel
+ *  that survives a hook-revived daemon, which inherits no operator env — and the file is only
+ *  there because someone copied it there, so presence cannot be an accident.
+ *
+ *  Never toolchain auto-detection: a published npm install has no Rust binary, so "detect and
+ *  use" would silently mean "never" there while reading as "on" here. No binary, no behaviour
+ *  change — which is what makes the cutover safe by construction. */
+export function alcoreBin(env: NodeJS.ProcessEnv = process.env, installed = dataPath('bin', 'alcore')): string | null {
+  const v = env.AGENTLENS_ALCORE?.trim()
+  if (v) return v
+  try {
+    return fs.statSync(installed).isFile() ? installed : null
+  } catch {
+    return null
+  }
+}
+
+/** `alcore serve` argv for the CUTOVER, which must bind the ports the rest of the product already
+ *  assumes: `cliCore.mcpEndpoint` defaults to :4316, the dashboard to :3000, and every telemetry
+ *  writer to :4318.
+ *
+ *  These are passed EXPLICITLY rather than by changing alcore's own defaults, and that is the
+ *  point: alcore defaults to 4319/3001/4317 so an operator can run it beside the TS server to
+ *  compare them, and flipping those defaults to canonical would break that the moment both are
+ *  up. The cutover is the caller's decision, so the cutover's ports are the caller's argument.
+ *
+ *  Empty-string env is treated as UNSET. `Number('')` is 0, so the `?? default` spelling in
+ *  setup.ts:109-111 would bind port 0 (kernel-assigned, i.e. unreachable) for an exported-but-
+ *  empty UI_PORT. Unifying those three spellings is worth doing, but it changes setup.ts's
+ *  behaviour and belongs in its own diff, not in the cutover. */
+export function alcoreServeArgs(env: NodeJS.ProcessEnv = process.env, dir: string = dataDir()): string[] {
+  const port = (raw: string | undefined, fallback: number): string => {
+    const n = Number(raw?.trim())
+    return String(raw?.trim() && Number.isInteger(n) && n > 0 && n < 65536 ? n : fallback)
+  }
+  return [
+    'serve',
+    '--data-dir', dir,
+    '--otlp-port', port(env.OTLP_PORT, 4318),
+    '--ui-port', port(env.UI_PORT, 3000),
+    '--mcp-port', port(env.MCP_PORT, 4316),
+  ]
+}
+
 // Paths under the data dir, each named ONCE. They were built inline at several call sites, so a
 // relocated store or a renamed file had to be found by grep rather than by following a symbol.
 function serverLogPath(): string { return path.join(dataDir(), 'server.log') }
@@ -72,7 +120,11 @@ export async function ensureServer(): Promise<void> {
     )
   }
   try { await init(); return } catch { /* not up — start it */ }
-  const serverJs = findServerJs()
+  // Which engine serves this data dir. Resolved BEFORE findServerJs(), which throws when the JS
+  // bundle is missing — an alcore-only install has no bundle to find, and must not be told to
+  // "run node esbuild.js" to start a server it isn't going to use.
+  const alcore = alcoreBin()
+  const serverJs = alcore ? '' : findServerJs()
   // stdout/stderr go to a log file, NOT /dev/null — when the server dies at boot (port
   // conflict, corrupt store) the reason must be readable, or every failure looks like
   // "did not become ready".
@@ -92,11 +144,16 @@ export async function ensureServer(): Promise<void> {
   // offset is ours; everything before it belongs to other processes and other days, and the log has
   // no timestamps to tell the reader which is which.
   const logStart = logSizeNow()
-  const child = spawn(process.execPath, [`--max-old-space-size=${DEFAULT_MAX_OLD_SPACE_MB}`, serverJs], {
-    cwd: path.dirname(path.dirname(serverJs)),
-    detached: true,
-    stdio: ['ignore', outFd, outFd],
-  })
+  // The readiness probe below is engine-agnostic on purpose: alcore serves the same MCP, UI and
+  // /api/server-stats surfaces, so `init()` and `findServerPid()` work unchanged against either.
+  // No --max-old-space-size for alcore — that is a V8 heap cap and means nothing to a Rust process.
+  const child = alcore
+    ? spawn(alcore, alcoreServeArgs(), { cwd: dataDir(), detached: true, stdio: ['ignore', outFd, outFd] })
+    : spawn(process.execPath, [`--max-old-space-size=${DEFAULT_MAX_OLD_SPACE_MB}`, serverJs], {
+      cwd: path.dirname(path.dirname(serverJs)),
+      detached: true,
+      stdio: ['ignore', outFd, outFd],
+    })
   // Without this, an async spawn failure (EMFILE, EAGAIN) emits an unhandled 'error' event and the
   // process dies with a raw stack trace instead of the actionable message below.
   let spawnError: Error | null = null
