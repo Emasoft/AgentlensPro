@@ -281,14 +281,21 @@ suite('bodyStore — against REAL captured bodies', () => {
     // everything while turns either side of a gap share little — and the largest group is not the
     // same thing as a run of adjacent turns.
     //
-    // WHY the gaps are there is NOT established, and the first answer written here was wrong.
-    // "The spool is actively drained" was stated as the cause and then measured false: the spool
-    // is a FROZEN snapshot (newest file 4 days old, count unchanged across a session, 320 MB
-    // against a 0.5 GB cap so no purge valve fires). Untested alternatives that produce identical
-    // low sharing: /clear + compaction boundaries, subagent requests filed under the PARENT's
-    // session_id (metadata.user_id — see the cacheBreakTimeline agent-* card), and mtime not
-    // being turn order. This selection is robust to all of them BECAUSE it tests the property
-    // instead of the cause; do not re-introduce a cause-based filter on an unverified story.
+    // WHY the gaps are there is NOT ESTABLISHED, and two successive answers here were wrong in
+    // OPPOSITE directions — which is why this now names no cause at all:
+    //   1. "The spool is actively drained, so gaps." Asserted, never verified.
+    //   2. "The drain CANNOT be the cause — the spool is frozen." Also wrong, and worse for being
+    //      more confident. The spool being frozen (newest file 4 days old, zero bodies written
+    //      since server boot) is the signature of CAPTURE being off, not of the drain being idle —
+    //      a drain with nothing to drain looks identical. And the corpus was written back WHEN
+    //      capture was on, so a drain running THEN could have made these very gaps.
+    // Untested alternatives that produce identical low sharing: /clear + compaction boundaries,
+    // subagent requests filed under the PARENT's session_id (metadata.user_id — see the
+    // cacheBreakTimeline agent-* card), and mtime not being turn order.
+    //
+    // The selection below is robust to ALL of them because it tests the PROPERTY (do these turns
+    // actually share a transcript?) instead of a story about why they might not. Do not
+    // re-introduce a cause-based filter — the cause has now been guessed wrong twice.
     //
     // The fix is to PIN THE INPUT, never to lower the floor — lowering it makes the suite green
     // while destroying the only thing this test can detect. Adjacency is MEASURABLE from the
