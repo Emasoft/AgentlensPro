@@ -4,7 +4,7 @@ trdd-id-full: 4FMHW124
 title: Raw-body capture has silent multi-hour holes and the server has no supervision
 column: todo
 created: 2026-08-20T12:42:21+0200
-updated: 2026-08-22T22:32:00+0200
+updated: 2026-08-23T00:05:00+0200
 current-owner: AgentlensPro session
 task-type: infra
 severity: MEDIUM
@@ -90,7 +90,37 @@ Measured first-hand while working TRDD-8TM7I49X, so recorded before it is lost:
 
 ### DIAGNOSED, same evening — one reviver, and the log gap is a defect in it
 
-**1. The reviver is OUR OWN HOOK PATH, and it is deliberate.**
+### CORRECTED — `--supervise` ALREADY EXISTS, and finding 1 below asserted a negative it had not earned
+
+The section below concluded the reviver is the hook path, "Not the janitor, not launchd, not a
+test", and added an acceptance box to *identify the existing reviver before designing
+`--supervise`*. **`--supervise` is a shipped feature of this repo**, so the box asked to design
+something that is already built:
+
+- `src/cli/serverControl.ts:1` — the file's own header: `server start|stop|restart|status [--supervise]`
+- `src/cli/serverControl.ts:529` — `// ── Supervisor (absorbed from scripts/agentlens-supervise.js, TRDD-PJC8N1HO spec 1)`
+- `src/cli/serverControl.ts:534` — "the embedded plist that **`daemon install`** writes"
+- `src/cli/serverControl.ts:555` — "**launchd immediately brought back**"
+- `src/cli/main.ts:226` — "**`daemon start --supervise` is what launchd runs**"
+
+And the "Server supervision (the second half)" section above — *"There is no LaunchAgent for the
+server process — pid 73022 dies, it stays dead until a human notices"* — describes an
+**uninstalled** feature, not a missing one. That is a materially different card.
+
+**What survives, because it was measured rather than inferred:** on THIS machine the only
+installed plist is `com.agentlens.spool` (`RunAtLoad`, `agentlenspro spool ensure`, no
+`KeepAlive`) — verified via `launchctl list` and the plist's own `ProgramArguments`. So launchd is
+not supervising the server here, and the hook path remains the best explanation for the 21:51
+restart. The conclusion about this machine stands; the general claim did not.
+
+**The error, stated plainly because it is the third of its kind tonight:** I found one positive
+(the hook reviver) and published a negative ("not launchd") without searching for the others. A
+negative claim needs a search, not a discovery. Also incomplete: any CLI path calling
+`ensureServer` (`serverControl.ts:661,668`, `main.ts:230`, `diagnosticsCli.ts:672`) restarts a
+dead server too, so "hooks" was never the whole list even among the paths I did find.
+
+**1. The reviver is OUR OWN HOOK PATH, and it is deliberate.** *(True of this machine; NOT the
+only revival path in the product — see the correction directly above.)*
 `reviveDaemonDetached()` — `src/cli/hookHandlers.ts:109-142`. `forwardHookEvent` fires it on ANY
 delivery failure (server down, timeout, a 503 shed under load), so the event is spooled and the
 server resurrected; a short-TTL mtime lock (`.daemon-revive.lock`) collapses a burst of hooks into
@@ -140,11 +170,17 @@ replaced roughly hourly, that sample may no longer be reproducible at all.
 - [ ] `investigate_burn` coverage distinguishes "scanned everything present" from
       "everything present, but the corpus has a hole here".
 - [ ] Supervision lands only behind an explicit opt-in.
-- [x] **The EXISTING reviver is identified before any supervisor is designed.** It is our own hook
-      path — `reviveDaemonDetached()`, `src/cli/hookHandlers.ts:109-142`, fired by
+- [x] **The EXISTING revival paths are identified before any supervisor is designed.** THREE, not
+      one: (a) `reviveDaemonDetached()` (`src/cli/hookHandlers.ts:109-142`), fired by
       `forwardHookEvent` on any delivery failure, with `AGENTLENS_NO_REVIVE=1` and an on-disk flag
-      as brakes. A `--supervise` LaunchAgent would therefore be a SECOND supervisor: design it as
-      a replacement with the hook revive disabled, or not at all.
+      as brakes; (b) every CLI path calling `ensureServer` (`serverControl.ts:661,668`,
+      `main.ts:230`, `diagnosticsCli.ts:672`); (c) **launchd, via the plist `daemon install`
+      writes** — `serverControl.ts:529,534,555`, `main.ts:226`. Not installed on this machine
+      (only `com.agentlens.spool` is), which is why the hook path explains the 21:51 restart here.
+- [ ] **This card's `--supervise` proposal is REWRITTEN or CANCELLED**, since the feature it
+      proposes exists (`server|daemon start … [--supervise]` + `daemon install`). The real
+      questions left are whether it should be installed BY DEFAULT, and how it coexists with the
+      hook revive — not whether to build it.
 - [ ] **A hook-revived server no longer discards its output.** Cause found:
       `src/cli/hookHandlers.ts:139` spawns with `stdio: 'ignore'`, while `serverControl.ts:128-133`
       opens `server.log` and documents /dev/null as "the one outcome the log exists to prevent".

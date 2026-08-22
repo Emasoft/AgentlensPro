@@ -3,7 +3,7 @@ trdd-id: EAK9R8IY
 title: Ship the Rust binaries per-platform on npm — the missing prerequisite for box 3
 column: todo
 created: 2026-08-22T19:33:31+0200
-updated: 2026-08-22T23:25:00+0200
+updated: 2026-08-23T00:05:00+0200
 current-owner: main
 task-type: infra
 scope: project
@@ -139,7 +139,7 @@ GitHub-hosted runner**, so this is a plain matrix build, not a cross-compile pro
 | target | native runner | availability |
 |---|---|---|
 | `darwin-arm64` | `macos-14` / `macos-latest` | GA (Apple Silicon) |
-| `darwin-x64` | `macos-13` | GA |
+| `darwin-x64` | **`macos-15-intel`** (or `macos-26-intel`) | GA — **NOT `macos-13`, see below** |
 | `linux-x64` | `ubuntu-latest` | GA |
 | `linux-arm64` | **`ubuntu-24.04-arm`** | **GA for public repos since 2025-08-07**; extended to private repos 2026-01-29 |
 | `win32-x64` | `windows-latest` | GA |
@@ -154,11 +154,26 @@ runner replaces all of it with `cargo build --release` per leg. Combined with th
 **287 s bundled DuckDB build on 14 cores**, and the five legs running in parallel, the matrix is
 ordinary CI work.
 
+**CORRECTED within the hour — the first version of this table said `darwin-x64 → macos-13`, and
+that image was RETIRED 2025-12-04** (deprecation began 2025-09-22), eight months before this card
+was written. Verified against the live GitHub-hosted-runners reference, which no longer lists
+`macos-13` at all; Intel macOS is now **`macos-15-intel`** / `macos-26-intel` (4 CPU, 14 GB). The
+other four labels check out.
+
+This one would have been expensive precisely because of the property this card already records:
+**publishing is tag-driven**, so a job pinned to a removed runner label does not fail in review —
+it fails **at release time**, on the tag, with the package half-published. Caught by adversarial
+review of the commit that introduced it, not by anything in the pipeline; the lesson is that
+"which runner labels exist" is live external state and ages like a dependency version, so it is
+re-checked when the workflow is written, never trusted from a card.
+
 Sources: [arm64 hosted runners for public repositories are now generally
 available](https://github.blog/changelog/2025-08-07-arm64-hosted-runners-for-public-repositories-are-now-generally-available/) ·
 [arm64 standard runners are now available in private
 repositories](https://github.blog/changelog/2026-01-29-arm64-standard-runners-are-now-available-in-private-repositories/) ·
-[GitHub-hosted runners reference](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)
+[GitHub-hosted runners reference](https://docs.github.com/en/actions/reference/runners/github-hosted-runners) ·
+[macOS 13 runner image is closing
+down](https://github.blog/changelog/2025-09-19-github-actions-macos-13-runner-image-is-closing-down/)
 
 **Still not started, deliberately.** `publish.yml` today is two jobs, both `ubuntu-latest`
 (`package` :22, `publish-npm` :142), and it is the single most consequential file in the repo: npm

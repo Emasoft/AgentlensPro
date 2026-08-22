@@ -2,7 +2,6 @@
 trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: human_review
-pre-block-column: dev
 created: 2026-08-18T17:00:52+0200
 updated: 2026-08-22T23:15:00+0200
 current-owner: AgentlensPro session
@@ -2563,6 +2562,13 @@ silently absorbed, because a card that quietly drops its own acceptance criterio
   card, and `dev` asserts that somebody is. An untrue column is worse than an unstarted card,
   because the board is the one view anyone checks. `human_review` is the column for exactly this:
   escalated, awaiting the USER's verdict.
+
+  *Amended minutes later: this transition also set `pre-block-column: dev`, which is schema
+  misuse — `~/.claude/rules/trdd-design-tasks.md` defines that field for ONE situation, a card in
+  `blocked` with a non-empty `blocked-by:`, to be restored when the block clears. This card is in
+  `human_review` with no `blocked-by:`, so there was nothing to restore and a tool keying on the
+  field alone could have acted on it wrongly. Field removed; the prior column is recorded in this
+  log, which is where a one-off fact belongs.*
 
   **The question, stated so it can be answered in one line:** box 3 asks that the remaining
   TypeScript serve only the UI. `b8addc7` made alcore *reachable* (`ensureServer` spawns it when
