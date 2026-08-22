@@ -6,7 +6,9 @@
 
 use std::collections::HashMap;
 
-use agentlens_core::chores::{hook_events_retention_days, project_resident_blobs, with_chores_lock};
+use agentlens_core::chores::{
+    hook_events_retention_days, ingest_max_bytes_per_pass, project_resident_blobs, staged_body_bytes, with_chores_lock,
+};
 use serde_json::json;
 
 fn vars(v: Option<&str>) -> HashMap<String, String> {
@@ -84,6 +86,59 @@ fn resident_blob_projection_caps_at_ten_and_keeps_absent_absent() {
     assert!(project_resident_blobs(&json!({ "blobs": [] })).is_empty());
     assert!(project_resident_blobs(&json!({})).is_empty(), "no `blobs` key at all");
     assert!(project_resident_blobs(&json!({ "blobs": "nonsense" })).is_empty());
+}
+
+/// `stagedBodyBytes` (server.ts:634) — the input to the OVER-CAP emergency valve. Counting the
+/// wrong files makes the valve fire at the wrong time in whichever direction the miscount goes:
+/// too high and every pass drains at age 0, too low and a runaway producer outruns the drain.
+#[test]
+fn staged_body_bytes_counts_only_body_files_and_fails_open() {
+    let dir = std::env::temp_dir().join(format!("al-staged-bytes-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+
+    std::fs::write(dir.join("aaaa.request.json"), vec![b'x'; 100]).unwrap();
+    std::fs::write(dir.join("aaaa.response.json"), vec![b'x'; 250]).unwrap();
+    // Everything else in the dir is NOT ours and must not inflate the figure: the store's own
+    // artifacts, a partial write, a log.
+    std::fs::write(dir.join("bbbb2222.parquet"), vec![b'x'; 9_000]).unwrap();
+    std::fs::write(dir.join("aaaa.request.json.tmp"), vec![b'x'; 9_000]).unwrap();
+    std::fs::write(dir.join("notes.txt"), vec![b'x'; 9_000]).unwrap();
+
+    assert_eq!(staged_body_bytes(&dir), 350, "only .request.json + .response.json");
+
+    // Fails OPEN on a missing dir — it runs on a timer and must never throw. Zero is also the
+    // honest answer: nothing is staged in a dir that does not exist.
+    assert_eq!(staged_body_bytes(&dir.join("gone")), 0);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `INGEST_MAX_BYTES_PER_PASS` (server.ts:597) — the bound on how much one pass ingests, which is
+/// what keeps an in-process DuckDB pass from ratcheting RSS the way the old unbounded boot sweep
+/// did. Same JS truthiness trap as the retention knob, plus a hard floor.
+#[test]
+fn ingest_max_bytes_per_pass_floors_at_16mb_and_treats_zero_as_the_default() {
+    const MB: u64 = 1024 * 1024;
+    let v = |s: Option<&str>| {
+        let mut m = HashMap::new();
+        if let Some(s) = s {
+            m.insert("AGENTLENS_INGEST_MAX_BYTES_PER_PASS".to_owned(), s.to_owned());
+        }
+        ingest_max_bytes_per_pass(&m)
+    };
+
+    assert_eq!(v(None), 512 * MB, "unset ⇒ DEFAULT_MAX_BYTES_PER_PASS");
+    // Falsy ⇒ the default, NOT "ingest nothing" — the failure that would stall the drain silently.
+    assert_eq!(v(Some("0")), 512 * MB);
+    assert_eq!(v(Some("abc")), 512 * MB);
+    assert_eq!(v(Some("NaN")), 512 * MB, "\"NaN\" parses in Rust — the filter is load-bearing");
+
+    assert_eq!(v(Some("33554432")), 32 * MB, "an explicit value passes through");
+    // Below the floor, the floor wins: no configuration may bound a pass so small that the drain
+    // can never keep up.
+    assert_eq!(v(Some("1024")), 16 * MB);
+    assert_eq!(v(Some("-5")), 16 * MB, "negative is truthy, so the FLOOR catches it");
 }
 
 /// The cross-engine guard. If the TS server and alcore share a data dir, their retention passes

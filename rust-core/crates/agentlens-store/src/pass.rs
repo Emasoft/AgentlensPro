@@ -59,6 +59,54 @@ pub fn acquire_pass_lock(store_dir: &Path) -> Result<fs::File, PassLockErr> {
     Ok(f)
 }
 
+/// The pass's cross-invocation memory: names already proven stored (`skipNames`) and names whose
+/// body could not be reconstructed (`strandedNames`). It lives in a FILE because a pass is not
+/// always a long-lived process — the `alstore pass` CLI is one pass per process, so without this
+/// every invocation would re-examine the entire corpus.
+///
+/// MUST be read and written INSIDE the pass lock. `acquire_pass_lock` serializes whole passes, so
+/// load → ingest → save is atomic with respect to another engine; hold the lock only around the
+/// ingest and two engines can interleave a load and a save, silently dropping skip/stranded names.
+/// A dropped skip name means a body is re-examined forever; a dropped stranded name means a body
+/// that could NOT be reconstructed is forgotten, which is the one that loses data.
+///
+/// A missing or unparseable file is EMPTY, not an error: the state is an optimization plus a
+/// quarantine list, and refusing to run because it is corrupt would stop the drain entirely. The
+/// cost of starting empty is one slow pass.
+pub fn load_pass_state(p: &Path) -> (HashSet<String>, HashSet<String>) {
+    let Ok(raw) = fs::read_to_string(p) else { return (Default::default(), Default::default()) };
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) else {
+        return (Default::default(), Default::default());
+    };
+    let set = |k: &str| {
+        v.get(k)
+            .and_then(|a| a.as_array())
+            .map(|a| a.iter().filter_map(|s| s.as_str().map(str::to_owned)).collect())
+            .unwrap_or_default()
+    };
+    (set("skipNames"), set("strandedNames"))
+}
+
+/// Write the pass state. Sorted so the file is diffable and its content is a function of the SET,
+/// not of HashSet iteration order — otherwise every pass rewrites a byte-different file. Temp +
+/// rename so a crash mid-write cannot leave a truncated state that reads back as "nothing is
+/// stranded".
+pub fn save_pass_state(p: &Path, skip: &HashSet<String>, stranded: &HashSet<String>) {
+    let mut skip_v: Vec<&String> = skip.iter().collect();
+    let mut str_v: Vec<&String> = stranded.iter().collect();
+    skip_v.sort();
+    str_v.sort();
+    let json = serde_json::json!({ "skipNames": skip_v, "strandedNames": str_v });
+    let tmp = p.with_extension("json.tmp");
+    if fs::write(&tmp, json.to_string()).is_ok() {
+        let _ = fs::rename(&tmp, p);
+    }
+}
+
+/// The state file's name inside a store dir. ONE definition — the CLI and alcore must not each
+/// spell it, or they would keep separate state for the same store.
+pub const PASS_STATE_FILE: &str = ".pass-state.json";
+
 pub struct PassOptions {
     pub bodies_dir: PathBuf,
     pub max_age_ms: i64,

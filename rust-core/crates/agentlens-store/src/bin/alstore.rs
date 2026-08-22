@@ -158,8 +158,8 @@ fn main() {
             // Skip/stranded state persists across invocations (the TS server holds these in
             // memory for its process lifetime; a CLI's process is one pass, so the state rides
             // a file). fsyncedParts stays per-invocation — correct either way, cheaper with.
-            let state_file = std::path::Path::new(store_dir).join(".pass-state.json");
-            let (mut skip, mut stranded) = load_state(&state_file);
+            let state_file = std::path::Path::new(store_dir).join(agentlens_store::pass::PASS_STATE_FILE);
+            let (mut skip, mut stranded) = agentlens_store::pass::load_pass_state(&state_file);
             let mut fsynced = std::collections::HashSet::new();
             let opts = agentlens_store::pass::PassOptions {
                 bodies_dir: std::path::PathBuf::from(bodies_dir),
@@ -171,33 +171,13 @@ fn main() {
                 ..Default::default()
             };
             let res = agentlens_store::pass::ingest_pass(&mut store, &opts, &mut skip, &mut stranded, &mut fsynced);
-            save_state(&state_file, &skip, &stranded);
+            agentlens_store::pass::save_pass_state(&state_file, &skip, &stranded);
             println!("{}", serde_json::to_string(&res).expect("serializable"));
         }
         other => usage(&format!("unknown command {other}")),
     }
 }
 
-fn load_state(p: &std::path::Path) -> (std::collections::HashSet<String>, std::collections::HashSet<String>) {
-    let Ok(raw) = std::fs::read_to_string(p) else { return (Default::default(), Default::default()) };
-    let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) else { return (Default::default(), Default::default()) };
-    let set = |k: &str| {
-        v.get(k)
-            .and_then(|a| a.as_array())
-            .map(|a| a.iter().filter_map(|s| s.as_str().map(str::to_owned)).collect())
-            .unwrap_or_default()
-    };
-    (set("skipNames"), set("strandedNames"))
-}
-
-fn save_state(p: &std::path::Path, skip: &std::collections::HashSet<String>, stranded: &std::collections::HashSet<String>) {
-    let mut skip_v: Vec<&String> = skip.iter().collect();
-    let mut str_v: Vec<&String> = stranded.iter().collect();
-    skip_v.sort();
-    str_v.sort();
-    let json = serde_json::json!({ "skipNames": skip_v, "strandedNames": str_v });
-    let tmp = p.with_extension("json.tmp");
-    if std::fs::write(&tmp, json.to_string()).is_ok() {
-        let _ = std::fs::rename(&tmp, p);
-    }
-}
+// load_state / save_state moved to agentlens_store::pass (load_pass_state / save_pass_state) so
+// alcore's in-process bodies chore runs the SAME pass state as this CLI. Two copies would keep
+// two views of which names are stranded, and the store cannot have two answers to that.

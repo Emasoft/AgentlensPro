@@ -160,6 +160,128 @@ fn purge_tick(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
     }
 }
 
+/// `stagedBodyBytes` for ONE target (server.ts:634) — the live bytes still staged in the bodies
+/// dir. Only `*.request.json` / `*.response.json` count; anything else in there is not ours.
+/// Fails OPEN (a raced dir or file contributes 0) because it runs on a timer and must never throw.
+pub fn staged_body_bytes(dir: &Path) -> u64 {
+    let Ok(rd) = std::fs::read_dir(dir) else { return 0 };
+    rd.flatten()
+        .filter_map(|e| {
+            let name = e.file_name().to_str()?.to_owned();
+            if !name.ends_with(".request.json") && !name.ends_with(".response.json") {
+                return None;
+            }
+            e.metadata().ok().map(|m| m.len())
+        })
+        .sum()
+}
+
+/// `archiveOtelBodies` (server.ts:648) — ingest raw OTEL bodies into the content-addressed store,
+/// then reclaim their disk space. The pass only deletes a body AFTER proving it reconstructs
+/// byte-for-byte from a DURABLE part, so this is not a delete-on-a-timer in the sense the reaper
+/// chores are; the proof is inside `ingest_pass`.
+///
+/// IN-PROCESS, not an exec of `alstore pass`. The TS shells out because the TS cannot run this
+/// code; alcore can. Deciding factor: locating our own sibling binary at runtime is genuinely
+/// fragile in this repo — the documented trap is that `agentlenspro` resolves to a published
+/// global npm install rather than the local build, and a bodies pass silently run by a DIFFERENT
+/// VERSION of the store engine is a data-integrity problem, not a nuisance. (A fable-advisor
+/// consult was dispatched on exactly this question and did not return — the third advisor call to
+/// hang on this card. The decision rests on the verified facts above, not on an unavailable
+/// verdict; recorded so a later reader knows which it was.)
+/// The cost accepted with it: this pass runs in the server's own address space, and DuckDB
+/// ingestion is memory-heavy — the prior art in this repo is an unbounded boot sweep driving RSS
+/// to 5.4GB. `max_bytes_per_pass` is what bounds it, which is why it is passed explicitly below
+/// rather than left to the default.
+///
+/// SINGLE TARGET, and that is a CONDITIONAL truth worth stating: the TS drains two dirs only in
+/// SPOOL_MODE, and the spool gate is `OTLP_PORT === 4318`, which alcore is not (it binds 4319).
+/// The day alcore takes 4318 this becomes wrong and the spool dir must join the drain.
+fn bodies_pass(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
+    let data_dir = {
+        let Ok(st) = state.lock() else { return };
+        st.data_dir.clone()
+    };
+    // The LEGACY dir specifically, matching the TS's non-spool drain target — NOT
+    // `burn::guard::default_bodies_dir`, which prefers a configured spool and would drain
+    // something this chore has no mandate over.
+    let bodies_dir = data_dir.join("otel-bodies");
+    if !bodies_dir.exists() {
+        return;
+    }
+    let store_dir = data_dir.join("store");
+
+    let max_gb = crate::retention_config::resolve_knob(&data_dir, &crate::retention_config::BODIES_MAX_GB);
+    let max_age_hours = crate::retention_config::resolve_knob(&data_dir, &crate::retention_config::BODIES_MAX_AGE_HOURS);
+    let cap_bytes = (max_gb * 1024.0 * 1024.0 * 1024.0) as u64;
+
+    // THE EMERGENCY VALVE (server.ts:667). Over the cap, ingest EVERYTHING (age 0) rather than
+    // only what has aged out — otherwise a runaway producer outruns the drain and the dir grows
+    // without bound while the pass politely skips every file that is not old enough yet.
+    let over_cap = staged_body_bytes(&bodies_dir) > cap_bytes;
+    let max_age_ms = if over_cap { 0 } else { (max_age_hours * 3_600_000.0) as i64 };
+
+    // The lock spans load → ingest → save. Narrowing it to the ingest alone lets two engines
+    // interleave a load and a save on .pass-state.json and silently drop names: a lost skip name
+    // re-examines a body forever, a lost STRANDED name forgets a body that could not be
+    // reconstructed — and that one loses data.
+    let lock = match agentlens_store::pass::acquire_pass_lock(&store_dir) {
+        Ok(f) => f,
+        Err(agentlens_store::pass::PassLockErr::Busy) => return, // another engine owns this pass
+        Err(agentlens_store::pass::PassLockErr::Io(e)) => {
+            eprintln!("alcore: bodies pass cannot take the store lock: {e}");
+            return;
+        }
+    };
+    let threads = std::thread::available_parallelism().map(|n| n.get().saturating_sub(2).max(4)).unwrap_or(4);
+    let mut store = match agentlens_store::open_store(&store_dir, agentlens_store::DEFAULT_MEMORY_LIMIT, threads) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("alcore: bodies pass cannot open the store: {e}");
+            return;
+        }
+    };
+    let state_file = store_dir.join(agentlens_store::pass::PASS_STATE_FILE);
+    let (mut skip, mut stranded) = agentlens_store::pass::load_pass_state(&state_file);
+    let mut fsynced = std::collections::HashSet::new();
+    let opts = agentlens_store::pass::PassOptions {
+        bodies_dir,
+        max_age_ms,
+        max_bytes_per_pass: ingest_max_bytes_per_pass(&std::env::vars().collect()),
+        // The legacy dir is a DURABLE source (the TS target carries `durable: true`), which gates
+        // the fsync barrier inside the pass: there IS something durable about the source to
+        // protect. Only the volatile RAM spool sets this false.
+        durable_source: true,
+        ..Default::default()
+    };
+    let res = agentlens_store::pass::ingest_pass(&mut store, &opts, &mut skip, &mut stranded, &mut fsynced);
+    agentlens_store::pass::save_pass_state(&state_file, &skip, &stranded);
+    drop(lock);
+
+    if res.ingested > 0 || res.deleted > 0 {
+        println!(
+            "alcore: bodies pass: ingested {}, deleted {}, freed {:.1}MB{}",
+            res.ingested,
+            res.deleted,
+            res.bytes_freed as f64 / 1_048_576.0,
+            if over_cap { " (OVER CAP — drained at age 0)" } else { "" }
+        );
+    }
+    let _ = now_ms;
+}
+
+/// `INGEST_MAX_BYTES_PER_PASS` (server.ts:597) — `Math.max(16MB, Number(env) || DEFAULT)`. Same JS
+/// truthiness as the retention knob: an explicit `0` is FALSY and means the default, not "ingest
+/// nothing". The 16MB floor then applies on top, so no configuration can stall the drain entirely.
+pub fn ingest_max_bytes_per_pass(vars: &std::collections::HashMap<String, String>) -> u64 {
+    let v = vars
+        .get("AGENTLENS_INGEST_MAX_BYTES_PER_PASS")
+        .and_then(|s| s.trim().parse::<f64>().ok())
+        .filter(|v| *v != 0.0 && !v.is_nan())
+        .unwrap_or(agentlens_store::pass::DEFAULT_MAX_BYTES_PER_PASS as f64);
+    (v.max(16.0 * 1024.0 * 1024.0)) as u64
+}
+
 /// The nine fields the TS projects out of each blob (server.ts:1485). A PROJECTION, not the whole
 /// row: this value is re-sent inside every burn-status SSE frame, so carrying the engine's full
 /// row would put the extra fields on the wire four times a minute forever.
@@ -243,6 +365,7 @@ pub fn spawn_all(rt: &tokio::runtime::Runtime, state: Arc<Mutex<CoreState>>) {
     // Boot passes, in the TS's order.
     span_tick(&state, crate::now_ms() as f64);
     purge_tick(&state, crate::now_ms() as f64);
+    bodies_pass(&state, crate::now_ms() as f64);
 
     let s = state.clone();
     rt.spawn(async move {
@@ -264,6 +387,20 @@ pub fn spawn_all(rt: &tokio::runtime::Runtime, state: Arc<Mutex<CoreState>>) {
             tick.tick().await;
             let s2 = s.clone();
             let _ = tokio::task::spawn_blocking(move || purge_tick(&s2, crate::now_ms() as f64)).await;
+        }
+    });
+
+    // The bodies pass (server.ts:853). 1h, not the spool mode's 60s: BODIES_PASS_INTERVAL_MS is
+    // `SPOOL_MODE ? 60_000 : 3600e3`, and alcore is not in spool mode (it binds 4319, not 4318).
+    // On the blocking pool — a pass runs DuckDB ingestion and byte-for-byte reconstruction.
+    let s = state.clone();
+    rt.spawn(async move {
+        let mut tick = tokio::time::interval(Duration::from_secs(3600));
+        tick.tick().await; // boot pass ran inline above
+        loop {
+            tick.tick().await;
+            let s2 = s.clone();
+            let _ = tokio::task::spawn_blocking(move || bodies_pass(&s2, crate::now_ms() as f64)).await;
         }
     });
 
