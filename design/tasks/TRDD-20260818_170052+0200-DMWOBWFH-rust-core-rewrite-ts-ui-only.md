@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-22T19:18:38+0200
+updated: 2026-08-22T19:24:00+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -2475,16 +2475,26 @@ silently absorbed, because a card that quietly drops its own acceptance criterio
           `src/*.ts` was silently dropped — including `mcpServer.ts`. Use a plain directory
           pathspec. This is disclosed because the first enumeration was a subset reported as the
           set, and a later reader would otherwise trust it.
-        - Of the 684 insertions in those 7 files, **4 are new files** (cannot change a consumer
-          unless imported) and the rest are three opt-in engine swaps: `logReader` (cold-file
-          scans), `otelCallIndex` (indexed scan), `logReader` again (OpenCode db). Each keeps the
-          TS path when the binary is absent, and each has a cross-engine parity suite —
-          **all 7 `rust*.test.ts` suites pass**; in a full 2431-test run the sole failure is
-          `bodyStore`'s dedup ratio, unrelated to this card.
-        - Caveat on method, so it is not over-trusted: the move was checked with `sort -u` +
-          `comm`, which is blind to reordering, to a change in a repeated line's multiplicity,
-          and to a line moving between functions. The parity suites, not that diff, are what
-          actually carry the claim.
+        - Of the 684 insertions in those 7 files, 4 are new files — but **"new files cannot
+          change a consumer unless imported" does NOT dispose of them: three of the four ARE
+          imported** by existing code (`logReader`→`rustLogScan`, `otelCallIndex`→`rustScan`,
+          `server.ts`→`updatePayload`). What actually disposes of them is different: each import
+          is behind an **opt-in guard that preserves the TS path when the binary is absent**, and
+          each engine swap has a cross-engine parity suite. **All 7 `rust*.test.ts` suites pass**
+          (full run: 2431 passing, sole failure `bodyStore`'s dedup ratio, unrelated — that run
+          predates only later `scripts/` edits, which no `src/**` test imports).
+        - **What carries the `updatePayload` claim, stated exactly.** NOT the Rust parity suites:
+          those assert Rust ≡ TS, and this is a pure-TS refactor with no Rust engine involved, so
+          they would pass identically whether or not it preserved behaviour. An earlier version of
+          this bullet cited them — the same error as the route-registration grep it was written to
+          amend. **No test exercises the three functions directly** (`grep` of `src/test/` is
+          empty; the only other reference is a Rust oracle generator, and its expected fixture is
+          NEW in this window, so it was generated FROM the post-refactor TS and cannot baseline
+          it). What carries it is a **brace-matched, ORDERED body diff**: all three bodies
+          **identical line-for-line — 73 + 46 + 39 = 158 lines** — after normalising only the two
+          documented changes. That supersedes the earlier `sort -u` + `comm` check, which was
+          blind to reordering, to a repeated line's multiplicity changing, and to a line moving
+          between functions; the ordered diff has none of those blind spots.
       - **MCP** — asked both LIVE servers for `tools/list` (the wire, not the source):
         **53 vs 53, `diff` byte-identical**. `src/mcpServer.ts` (one of the 7 files the pathspec
         bug hid) was then read for what `tools/list` cannot see — response BODIES. Filtering its
