@@ -264,6 +264,75 @@ fn post(addr: std::net::SocketAddr, path: &str, body: &str) -> String {
     request(addr, &format!("POST {path} HTTP/1.1\r\nHost: 127.0.0.1:3000\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()))
 }
 
+/// The viewer-role gate WITH A KEY LOADED — the half `embed_auth_parity.rs` cannot reach. That
+/// suite proves the pure verdict function; this proves the HTTP WIRING consumes it, which is
+/// where a security mistake would actually live (a correct verifier nobody calls is not a gate).
+///
+/// The `restricted` matrix is the point: a viewer must be able to READ but must not mutate, and
+/// must not open /api/hook-config, which leaks settings (capture paths, gate state) — so a hidden
+/// settings panel is genuinely dead rather than merely invisible.
+#[test]
+fn viewer_gate_with_a_key_admits_maestro_reads_and_blocks_restricted_writes() {
+    let (_otlp, ui, state) = start_servers();
+    let key = b"0123456789abcdef0123456789abcdef".to_vec();
+    state.lock().unwrap().embed_key = Some(key.clone());
+
+    let now = agentlens_core::now_ms() as f64;
+    let maestro = agentlens_core::embed_auth::sign_viewer_assertion("maestro", &key, now, 60_000.0, "aaaaaaaaaaaaaaaa");
+    let user = agentlens_core::embed_auth::sign_viewer_assertion("user", &key, now, 60_000.0, "bbbb2222bbbb2222");
+    let hdr = |h: &str| format!("x-agentlens-viewer: {h}\r\n");
+
+    // maestro: full access, and the probe reports the embedded identity back.
+    let r = get(ui, "/api/summary", &hdr(&maestro));
+    assert!(r.starts_with("HTTP/1.1 200"), "maestro reads: {r}");
+    let r = get(ui, "/api/embed-status", &hdr(&maestro));
+    assert_eq!(body_of(&r), r#"{"mode":"embedded","role":"maestro","keyLoaded":true}"#);
+
+    // restricted: reads are allowed...
+    let r = get(ui, "/api/summary", &hdr(&user));
+    assert!(r.starts_with("HTTP/1.1 200"), "restricted still reads: {r}");
+    let r = get(ui, "/api/embed-status", &hdr(&user));
+    assert_eq!(body_of(&r), r#"{"mode":"embedded","role":"user","keyLoaded":true}"#);
+
+    // ...but the settings-leaking read is NOT, and neither is any write.
+    let r = get(ui, "/api/hook-config", &hdr(&user));
+    assert!(r.starts_with("HTTP/1.1 403"), "hook-config leaks settings: {r}");
+    assert_eq!(
+        body_of(&r),
+        r#"{"error":"restricted viewer — this surface requires a maestro assertion (AgentlensPro#4)"}"#
+    );
+    let r = request(
+        ui,
+        &format!(
+            "POST /api/action HTTP/1.1\r\nHost: 127.0.0.1:3000\r\n{}Content-Length: 2\r\nConnection: close\r\n\r\n{{}}",
+            hdr(&user)
+        ),
+    );
+    assert!(r.starts_with("HTTP/1.1 403"), "restricted must not mutate: {r}");
+
+    // maestro may do the same write the restricted viewer was refused — proving the 403 above is
+    // the ROLE gate, not the route simply being closed to everyone.
+    let r = request(
+        ui,
+        &format!(
+            "POST /api/action HTTP/1.1\r\nHost: 127.0.0.1:3000\r\n{}Content-Length: 2\r\nConnection: close\r\n\r\n{{}}",
+            hdr(&maestro)
+        ),
+    );
+    assert!(!r.starts_with("HTTP/1.1 403"), "maestro is not role-blocked: {r}");
+
+    // An EXPIRED assertion is invalid, not a downgrade to standalone: signed correctly, but past
+    // exp. This is the case a naive "is the signature good?" gate would wave through.
+    let stale = agentlens_core::embed_auth::sign_viewer_assertion("maestro", &key, now - 120_000.0, 60_000.0, "aaaaaaaaaaaaaaaa");
+    let r = get(ui, "/api/summary", &hdr(&stale));
+    assert!(r.starts_with("HTTP/1.1 403"), "expired assertion: {r}");
+
+    // A DUPLICATED header is present-but-unverifiable. Sending a valid assertion twice must NOT
+    // authenticate — otherwise appending a second header would override the first.
+    let r = get(ui, "/api/summary", &format!("{}{}", hdr(&maestro), hdr(&maestro)));
+    assert!(r.starts_with("HTTP/1.1 403"), "duplicated header: {r}");
+}
+
 /// The small frozen routes (freeze §1 rows 1, 10, 11, 16, 22, 25): exact status, headers, bodies.
 #[test]
 fn small_routes_embed_status_hook_config_clear_action_and_log_scan_stats() {

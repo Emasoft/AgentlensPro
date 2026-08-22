@@ -193,6 +193,27 @@ pub fn session_id_for_file(path: &Path, source: &LogSource) -> String {
     }
 }
 
+/// The single discovered file backing `session_id`, or None. ONE definition of the walk, shared
+/// by `reparse_session` (which needs the whole `DiscoveredFile`) and `transcript_path_for` (which
+/// needs only its path) — the TS splits the same lookup the same way (logReader.ts:452 "Same
+/// lookup reparseSession uses"). OpenCode is excluded because its db backs MANY sessions, so no
+/// single file "is" the session.
+fn discovered_for_session(env: &Env, session_id: &str) -> Option<DiscoveredFile> {
+    discover_all(env)
+        .into_iter()
+        .filter(|f| f.source != LogSource::OpenCodeDb)
+        .find(|f| session_id_for_file(&f.path, &f.source) == session_id)
+}
+
+/// transcriptPathFor (logReader.ts:452, TRDD-CXPLAT01) — the file backing `session_id` WITHOUT
+/// parsing it, so a caller that only needs a bounded tail read never pays the full parse of a
+/// 60MB+ transcript. None when no single file backs the id (an OTEL-only session, OpenCode, or a
+/// deleted log) — and None must stay distinguishable from "found it, but it records no request":
+/// the first is `verdict: unknown`, the second is a real measurement.
+pub fn transcript_path_for(env: &Env, session_id: &str) -> Option<PathBuf> {
+    discovered_for_session(env, session_id).map(|f| f.path)
+}
+
 /// reparseSession (logReader.ts:434, TRDD-PJC8N1HO) — a fresh FULL parse of the single file
 /// backing `session_id`, the lazy timeline rebuild for a card RESTORED stripped from the
 /// persisted-card log. None when nothing backs the id (an OTEL-only session, OpenCode — a
@@ -205,10 +226,7 @@ pub fn session_id_for_file(path: &Path, source: &LogSource) -> String {
 /// state describes the same fully-consumed file, and the file's next growth re-parses through
 /// the accumulator or from 0, either of which rebuilds the same card.
 pub fn reparse_session(env: &Env, session_id: &str, now_ms: i64) -> Option<ScannedFile> {
-    let f = discover_all(env)
-        .into_iter()
-        .filter(|f| f.source != LogSource::OpenCodeDb)
-        .find(|f| session_id_for_file(&f.path, &f.source) == session_id)?;
+    let f = discovered_for_session(env, session_id)?;
     let st = stat(&f.path)?;
     let p = parse_one(&f)?;
     let state = state_after(&p, st);

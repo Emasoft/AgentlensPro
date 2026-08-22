@@ -30,6 +30,7 @@ use agentlens_spanstore::writer::SpanStoreWriter;
 
 pub mod account_burners;
 pub mod account_registry;
+pub mod all_accounts;
 pub mod account_state_timeline;
 pub mod body_archive;
 pub mod body_writers;
@@ -50,6 +51,8 @@ pub mod context_composition_index;
 pub mod delta_log;
 pub mod derived_cache;
 pub mod effort_transitions;
+pub mod embed_auth;
+pub mod statusline_usage;
 pub mod feed_merge;
 pub mod generated_files;
 pub mod hook_events;
@@ -180,6 +183,13 @@ pub struct CoreState {
     /// a FIELD (not Env::from_process at the call site) so tests can point it at a fixture
     /// home without racing the process environment.
     pub log_env: agentlens_logscan::discovery::Env,
+    /// The shared HMAC key behind the signed viewer-role assertion (embedAuth.ts / AgentlensPro#4).
+    /// `None` means the embed feature is DISABLED, and a present viewer header then resolves to
+    /// `invalid` (403) — never a downgrade to full access. Past boot this is always `Some`: the
+    /// binary refuses to start (exit 78) on an unusable key file, exactly as the TS server does.
+    /// The `Option` is kept only so `resolve_viewer_role`'s pure contract stays defensively total,
+    /// and so a test can construct a keyless state.
+    pub embed_key: Option<Vec<u8>>,
     /// The burn subsystem's stateful glue (P4r.3): config, the tick's lastBurnStatus, the 60s
     /// account/TTL-signal cache. Tests re-point it with set_home_dir.
     pub burn: burn::runtime::BurnRuntime,
@@ -427,6 +437,10 @@ impl CoreState {
             otel_attribution: IndexMap::new(),
             lifecycle: collector_lifecycle::record_start(&collector_lifecycle::lifecycle_file(data_dir), now),
             log_env: agentlens_logscan::discovery::Env::from_process(),
+            // Not loaded here: `open` must not create a key file as a side effect of constructing
+            // state (every test would mint one). The BINARY loads it at boot and refuses to start
+            // if it is unusable — see bin/alcore.rs.
+            embed_key: None,
             burn: {
                 let env = agentlens_logscan::discovery::Env::from_process();
                 burn::runtime::BurnRuntime::new(env.home, std::env::vars().collect(), data_dir)

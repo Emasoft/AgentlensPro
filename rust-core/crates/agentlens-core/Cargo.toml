@@ -48,6 +48,20 @@ rusqlite = { version = "0.40.2", features = ["bundled", "functions"] }
 # is the algorithm that must match, not merely "some digest". RustCrypto, sharing the `digest` stack
 # `sha2` already pulls into the workspace.
 sha1 = "0.10"
+# B4 (embed_auth): the signed viewer-role assertion is HMAC-SHA256 over a base64url payload —
+# the ALGORITHM is the wire contract (AgentlensPro#4 §B4 pins a cross-repo test vector), not an
+# implementation choice. Same RustCrypto `digest` stack sha1 already vendors, and `sha2` is
+# already in the workspace lock via agentlens-store, so this adds a direct edge to what is
+# compiled either way. No `rand`: the reference signer takes its nonce as a parameter because its
+# only callers are tests — see the note at the top of src/embed_auth.rs.
+sha2 = "0.10"
+hmac = "0.12"
+base64 = "0.22"
+# The OS CSPRNG, for GENERATING the embed key on first boot (crypto.randomBytes(32) in the TS).
+# `getrandom` and not `rand`: it is already in the workspace lock, it is the thin syscall wrapper
+# `rand` itself uses for seeding, and key material must come from the OS pool directly — a
+# userspace PRNG is a strictly larger thing to trust for a secret written to disk once.
+getrandom = "0.3"
 # The ONE outbound call this server makes (the OAuth usage + profile endpoints). Blocking and
 # rustls-only, which is what makes it cheap here: it is already in the lock at this exact version as
 # libduckdb-sys' build dependency, so declaring it adds no new crate, no OpenSSL, and no async

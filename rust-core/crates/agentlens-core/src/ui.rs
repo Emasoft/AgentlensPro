@@ -506,13 +506,44 @@ async fn handle(
     let origin = req.headers().get("origin").and_then(|v| v.to_str().ok()).map(str::to_owned);
     let host = req.headers().get("host").and_then(|v| v.to_str().ok()).map(str::to_owned);
     let disallowed = is_disallowed_cross_origin(origin.as_deref(), host.as_deref());
-    let viewer_header_present = req.headers().contains_key("x-agentlens-viewer");
     let method = req.method().clone();
+
+    // The signed viewer-role assertion (embedAuth.ts / AgentlensPro#4 §B5). A DUPLICATED header is
+    // present-but-unverifiable ⇒ invalid: hyper hands back both values, and picking either one
+    // would let a caller append a second header to override the first.
+    let viewer_role = {
+        let mut vals = req.headers().get_all(crate::embed_auth::VIEWER_HEADER).iter();
+        let first = vals.next();
+        let duplicated = vals.next().is_some();
+        let key = state.lock().map_err(|_| "state poisoned".to_owned())?.embed_key.clone();
+        if duplicated {
+            crate::embed_auth::ViewerRole::Invalid
+        } else {
+            crate::embed_auth::resolve_viewer_role(
+                first.and_then(|v| v.to_str().ok()),
+                key.as_deref(),
+                crate::now_ms() as f64,
+            )
+        }
+    };
+    // ONE BLANKET METHOD GATE, not per-route checks — ported deliberately from the TS, whose own
+    // comment gives the reason: a hidden settings panel is not a restricted one unless its
+    // endpoints are dead too, and a per-route allowlist always misses the NEXT route. The single
+    // read-side exception is /api/hook-config, which leaks settings (capture paths, gate state).
+    // Local consumers (CLI, hooks) send no header at all, so they are `standalone` and unaffected.
+    let restricted_block = viewer_role == crate::embed_auth::ViewerRole::Restricted
+        && ((method != Method::GET && method != Method::HEAD && method != Method::OPTIONS)
+            || path == "/api/hook-config");
 
     let mut resp = if method != Method::GET && method != Method::HEAD && disallowed {
         json_response(StatusCode::FORBIDDEN, error_json("cross-origin request refused"))
-    } else if viewer_header_present {
+    } else if viewer_role == crate::embed_auth::ViewerRole::Invalid {
         json_response(StatusCode::FORBIDDEN, error_json("unverifiable viewer assertion — rejected (AgentlensPro#4 §B5)"))
+    } else if restricted_block {
+        json_response(
+            StatusCode::FORBIDDEN,
+            error_json("restricted viewer — this surface requires a maestro assertion (AgentlensPro#4)"),
+        )
     } else if path == "/events" {
         sse_response(&state, &hub, crate::now_ms() as f64)?
     } else if method == Method::GET && path == "/api/summary" {
@@ -528,10 +559,24 @@ async fn handle(
         };
         json_response(StatusCode::OK, body)
     } else if method == Method::GET && path == "/api/embed-status" {
-        // The wiring probe (TRDD-1ZH1D5EG). NOT PORTED: the embed key (src/embedAuth.ts) — with
-        // no key loaded every viewer is `standalone` (a present header already 403'd above) and
-        // keyLoaded is false, exactly what the TS server reports on a machine without the key.
-        let mut r = json_response(StatusCode::OK, r#"{"mode":"standalone","role":null,"keyLoaded":false}"#.to_owned());
+        // The wiring probe (TRDD-1ZH1D5EG, #4 Q9): lets ai-maestro PROVE its proxy stamps
+        // assertions and that this gate consumes them, rather than assuming — a proxy that stamps
+        // nothing would otherwise pass its own tests while the gate never engages.
+        // `keyLoaded` is FALSE only when the key file was unusable at boot, so the embedding side
+        // sees WHY a present header 403s instead of guessing. Vary, so a cache cannot serve one
+        // viewer role's response to another.
+        let key_loaded = state.lock().map_err(|_| "state poisoned".to_owned())?.embed_key.is_some();
+        let body = serde_json::json!({
+            "mode": if viewer_role == crate::embed_auth::ViewerRole::Standalone { "standalone" } else { "embedded" },
+            "role": match viewer_role {
+                crate::embed_auth::ViewerRole::Maestro => Value::from("maestro"),
+                // The wire word is "user"; the internal verdict is Restricted. Same role.
+                crate::embed_auth::ViewerRole::Restricted => Value::from("user"),
+                _ => Value::Null,
+            },
+            "keyLoaded": key_loaded,
+        });
+        let mut r = json_response(StatusCode::OK, body.to_string());
         r.headers_mut().insert("Vary", hyper::header::HeaderValue::from_static("X-Agentlens-Viewer"));
         r
     } else if method == Method::GET && path == "/api/hook-config" {
@@ -2638,6 +2683,11 @@ async fn handle(
                             (sessions, ttl)
                         };
                         let (a, st2) = (args.clone(), state.clone());
+                        // TRDD-CXPLAT01: the bounded last-request resolver (standalone/server.ts:1536).
+                        // Cloned OUT of the state before spawn_blocking — the closure must be 'static,
+                        // and holding the state lock across a 256KB read per candidate would block
+                        // every other reader for the whole scan.
+                        let log_env = state.lock().map_err(|_| "state poisoned".to_owned())?.log_env.clone();
                         let payload = tokio::task::spawn_blocking(move || {
                             let timeline_of = |c: &Value| -> Vec<Value> {
                                 let Some(sid) = c.get("sessionId").and_then(Value::as_str) else { return Vec::new() };
@@ -2646,7 +2696,31 @@ async fn handle(
                                     .and_then(|c| c.get("timeline").and_then(Value::as_array).cloned())
                                     .unwrap_or_default()
                             };
-                            crate::mcp_tools::check_cache_expiry(&sessions, &timeline_of, Some(&ttl), &a, now as f64, 20_000.0, None)
+                            // Without this, a session idle >24h has its timeline stripped, so the
+                            // probe cannot find its last api_request and answers `verdict: unknown`
+                            // with a null idleMs — where the TS answers `expired` with the real
+                            // timestamp. One stat + one bounded tail read per candidate, never a
+                            // full reparse (measured on this machine: a cold probe read 163.6MB of
+                            // JSONL synchronously; the tails total ~1.5MB).
+                            let last_request_ms = |sid: &str| -> Option<f64> {
+                                let p = crate::log_reader::transcript_path_for(&log_env, sid)?;
+                                crate::burn::agent_gate::read_transcript_context(
+                                    &p,
+                                    now as f64,
+                                    crate::burn::agent_gate::TRANSCRIPT_TAIL_BYTES,
+                                )
+                                .get("lastRequestAtMs")
+                                .and_then(Value::as_f64)
+                            };
+                            crate::mcp_tools::check_cache_expiry(
+                                &sessions,
+                                &timeline_of,
+                                Some(&ttl),
+                                &a,
+                                now as f64,
+                                20_000.0,
+                                Some(&last_request_ms),
+                            )
                         })
                         .await
                         .map_err(|e| format!("cache-expiry scan join failed: {e}"))?;

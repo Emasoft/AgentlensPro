@@ -67,9 +67,27 @@ fn main() {
         eprintln!("alcore: cannot create {}: {e}", spans_dir.display());
         exit(1);
     }
+    // The shared embed key (embedAuth.ts / AgentlensPro#4 §B1), loaded BEFORE anything listens.
+    // An unusable key file is a REFUSAL TO BOOT, not a warning: a mode wider than 0600 means
+    // another local account can read the shared secret and mint `maestro` assertions, and corrupt
+    // hex is undecidable rather than regenerable (ai-maestro holds the other copy). Exit 78
+    // (EX_CONFIG) is the same deliberate-refusal code the TS server uses, so a supervisor treats
+    // it as TERMINAL and does not respawn-loop. The normal case — a well-formed 0600 key, created
+    // here on first boot — loads without incident.
+    let embed_key = match agentlens_core::embed_auth::ensure_embed_key(std::path::Path::new(&data_dir)) {
+        Ok(k) => k,
+        Err(e) => {
+            eprintln!("alcore: {e}");
+            eprintln!(
+                "alcore: refusing to boot — chmod 600 the key file or delete it (a fresh 0600 key is created on next boot). See AgentlensPro#4."
+            );
+            exit(78);
+        }
+    };
     let state = Arc::new(Mutex::new(agentlens_core::CoreState::open(std::path::Path::new(&data_dir))));
     {
         let mut st = state.lock().expect("state");
+        st.embed_key = Some(embed_key);
         // What /api/server-stats reports as `ports` — the listeners this process binds (mcp stays
         // the configured TS default: no MCP listener in the core yet).
         st.ports.ui = ui_port;
