@@ -1,9 +1,9 @@
 ---
 trdd-id: N1ASCRM7
 title: The cache-invalidation doctrine's never-invalidate list was FALSE for LSP until CC 2.1.235
-column: backburner
+column: complete
 created: 2026-08-22T19:25:55+0200
-updated: 2026-08-22T19:25:55+0200
+updated: 2026-08-22T19:43:00+0200
 current-owner: main
 task-type: docs
 scope: project
@@ -60,12 +60,25 @@ changelog records that the implementation did not match it.
 
 ## Acceptance
 
-- [ ] `CLAUDE.md`'s never-invalidate list states its provenance and the LSP exception with the
-      version it was fixed in.
-- [ ] The remaining six members are either measured, or explicitly marked as doc-sourced and
-      unmeasured — no unmarked generality.
-- [ ] A decision recorded (either way, with the reason) on whether an `LSP_RECONNECT` cause is
-      warranted, held to the TRDD-B9ERTBZ9 distinguishability bar.
+- [x] `CLAUDE.md`'s never-invalidate list states its provenance and the LSP exception with the
+      version it was fixed in. **The list was also LIFTED OUT of the `/reload-plugins` bullet it
+      was buried in** — it is a claim about seven independent things, and quoting it as a
+      subordinate clause of one of them is why its LSP member went unexamined for so long.
+- [x] The remaining six members are either measured, or explicitly marked as doc-sourced and
+      unmeasured — no unmarked generality. Marked UNMEASURED, in the same emphasis the block
+      already uses for `SKILLS_RELOADED` / `ACCOUNT_SWITCHED`.
+- [x] A decision recorded (either way, with the reason) on whether an `LSP_RECONNECT` cause is
+      warranted, held to the TRDD-B9ERTBZ9 distinguishability bar. **DECIDED: do NOT ship one.**
+      The captured request body carries no LSP state, so the symptom — a full-prefix cold write
+      with no other named cause — cannot be told apart from a CC upgrade or an undocumented
+      cause. Naming it would produce a confident false attribution, which is worse than the
+      honest gap of leaving it unnamed. Recorded in `CLAUDE.md` itself, not only here, because
+      the next person tempted to add it will be reading the doctrine rather than this card.
+
+## Approval log
+
+- 2026-08-22T19:43:00+0200 — COMPLETED by main (self-orchestrating; USER authorised). Doc-only
+  change to `CLAUDE.md`; no code touched, so no test gate applies. `check-identities` green.
 
 ## Provenance
 

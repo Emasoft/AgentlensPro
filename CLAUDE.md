@@ -305,10 +305,23 @@ reload and every MCP blip look like a guaranteed full-prefix rewrite.
   already cached." Involuntary churn counts: a stdio process exiting, an HTTP session expiring, an
   auto-reconnect, or a pushed dynamic tool update.
 - **CONDITIONAL — `/reload-plugins`** resets *only* when a reloaded plugin supplies an MCP server
-  whose tools load into the prefix. "Skills, commands, agents, hooks, LSP servers, monitors, and
-  themes **never** invalidate the cache." Since v2.1.163 the command refuses such a reload unless
+  whose tools load into the prefix. Since v2.1.163 the command refuses such a reload unless
   forced: "When the reload would change which MCP tools are loaded and invalidate the prompt cache,
   the command warns and skips unless you pass `--force`."
+- **THE NEVER-INVALIDATE LIST IS DOC-SOURCED, AND ONE OF ITS SEVEN MEMBERS WAS MEASURABLY FALSE.**
+  The docs say "Skills, commands, agents, hooks, LSP servers, monitors, and themes **never**
+  invalidate the cache." But CC **2.1.235**'s changelog reads: *"Fixed whole-prompt-cache
+  invalidation when a language server disconnected or reconnected mid-session."* So for some
+  window ending at 2.1.235 an **LSP** connect/disconnect blew the **entire** prefix — the most
+  expensive event in this model — while the list said it could not. It is true again from 2.1.235;
+  the durable lesson is about the SOURCE. **The other six members rest on exactly the same
+  authority and have never been measured here — treat them as doc-sourced and UNMEASURED, not as
+  established.** Any burn attribution over a pre-2.1.235 session with a language server attached
+  may name the wrong culprit, or none. **No `LSP_RECONNECT` cause is shipped, deliberately**: the
+  captured request body carries no LSP state, so the symptom (a full-prefix cold write with no
+  other named cause) is indistinguishable from an upgrade or an undocumented cause — and
+  TRDD-B9ERTBZ9's standing bar is that a cause is named only when it can be told apart from the
+  alternatives. Evidence: TRDD-N1ASCRM7, and the CC 2.1.235 changelog entry quoted above.
 - **CONDITIONAL — a tool `deny`** resets only in the **tool-name position** (a bare name, `Bash(*)`,
   or a tool-name glob). Scoped rules like `Bash(rm *)` and all allow/ask rules are cache-safe, and an
   `mcp__*` glob is free while those tools are deferred (they were never in the prefix).
