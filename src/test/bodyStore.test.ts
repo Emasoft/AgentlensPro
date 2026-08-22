@@ -7,25 +7,46 @@ import * as path from 'path'
 import { flush, memoryLimit, openStore, Store } from '../store/db'
 import { bodyIdOf, exportBodiesFromStore, extractMeta, ingestBody, reconstructBody } from '../store/bodyStore'
 import { sha256 } from '../store/sections'
+import { resolveBodiesReadScope } from '../captureConfig'
 import { loadScaledTimeout, skipIfUnmeasurable } from './loadAware'
 
-const REAL_BODIES = path.join(os.homedir(), '.agentlens', 'otel-bodies')
+// TRDD-0SA5QZTG. This used to hardcode `~/.agentlens/otel-bodies` — the LEGACY dir. Under
+// SPOOL_MODE the server captures to a RAM spool instead, so the legacy dir is a frozen,
+// partially-drained residue of whatever the pass had not yet ingested when the spool took over.
+// Testing it looked like testing "the live corpus" and was not, and the difference is not subtle:
+//
+//     legacy residue : mean shared prefix 34%, longest consecutive run 3
+//     live spool     : mean shared prefix 81%, longest consecutive run 26
+//
+// The whole adjacency problem in TRDD-R2VF2I53 was an artifact of reading the wrong directory.
+// `resolveBodiesReadScope` is the server's own resolver (spool first, then legacy), so the test
+// now reads exactly what the server writes.
+const REAL_BODIES_DIRS = resolveBodiesReadScope(path.join(os.homedir(), '.agentlens'), process.env).dirs
 
-/** Real captured bodies, in CAPTURE ORDER (mtime). Order is not cosmetic here: readdir order is
- *  effectively random, and a random slice of one session straddles context compactions — after a
- *  compaction the transcript is rewritten, so those bodies genuinely share little. Measuring that mix
- *  and calling it "the dedup ratio" measures the wrong thing (it read 1.8x; consecutive turns read
- *  6.5x). Turn order is the shape the store actually ingests in. */
+/** Up to `n` real captured request bodies, from every dir a reader can see (spool first).
+ *
+ *  This returns them in READDIR order, NOT capture order — the header said "in CAPTURE ORDER
+ *  (mtime)" for as long as the body has been sorting nothing, which is a comment asserting a
+ *  guarantee the code never gave. Callers that need turn order sort by `mtime` themselves (and
+ *  the adjacency test does, per session). Order is not cosmetic where it matters: a random slice
+ *  of one session straddles context compactions, and after a compaction the transcript is
+ *  rewritten, so those bodies genuinely share little. Measuring that mix and calling it "the
+ *  dedup ratio" measures the wrong thing (it read 1.8x; consecutive turns read 6.5x). */
 function realBodies(n: number): Array<{ name: string; raw: string; mtime: number }> {
-  try {
-    return fs.readdirSync(REAL_BODIES)
-      .filter((f) => f.endsWith('.request.json'))
-      .slice(0, n)
-      .map((f) => {
-        const p = path.join(REAL_BODIES, f)
-        return { name: f, raw: fs.readFileSync(p, 'utf8'), mtime: fs.statSync(p).mtimeMs }
-      })
-  } catch { return [] }
+  const out: Array<{ name: string; raw: string; mtime: number }> = []
+  for (const dir of REAL_BODIES_DIRS) {
+    if (out.length >= n) break
+    let names: string[]
+    try { names = fs.readdirSync(dir) } catch { continue }
+    for (const f of names) {
+      if (out.length >= n) break
+      if (!f.endsWith('.request.json')) continue
+      const p = path.join(dir, f)
+      // The drain is allowed to race us: a body can vanish between readdir and read.
+      try { out.push({ name: f, raw: fs.readFileSync(p, 'utf8'), mtime: fs.statSync(p).mtimeMs }) } catch { /* gone */ }
+    }
+  }
+  return out
 }
 
 /** A synthetic body shaped like the real thing: a huge constant `tools` array (identical every turn)
@@ -302,11 +323,24 @@ suite('bodyStore — against REAL captured bodies', () => {
     // bodies themselves: turn N+1 re-sends turn N's transcript, so an adjacent pair shares a long
     // common PREFIX. Turns either side of a gap share almost nothing.
     //
-    // Measured on the live spool 2026-08-22: largest single session 54 turns, but mean shared
-    // prefix only 34% taking the first 12 by mtime, and 51% on the longest non-shrinking run —
-    // whereas a >2x ratio needs ~85%+. The drain has removed the adjacency, so the spool often
-    // CANNOT supply this test's input at all. Selecting on the property itself, and skipping with
-    // the measurement when it is absent, is what makes the assertion honest either way.
+    // RESOLVED 2026-08-22 (TRDD-0SA5QZTG), and the resolution retracts the paragraph that stood
+    // here: the low sharing was NOT a property of the corpus, it was this test reading the wrong
+    // DIRECTORY. It hardcoded the legacy `~/.agentlens/otel-bodies`, which under SPOOL_MODE holds
+    // only what the pass had not yet drained when the spool took over — a frozen, gap-riddled
+    // residue. Measured the same hour, same code, the two dirs answer differently:
+    //     legacy residue : mean shared prefix 34%, longest run sharing >=70%:  3  (below the floor
+    //                      of 5 — so this test SKIPPED, and the skip message blamed "the drain")
+    //     live spool     : mean shared prefix 81%, longest run sharing >=70%: 26
+    // So there was never a missing-adjacency phenomenon to explain, and the third wrong cause in a
+    // row would have been "the drain removed the adjacency" — which is what the retracted text
+    // said. `realBodies` now resolves through `resolveBodiesReadScope`, the server's own reader
+    // scope, so the test reads exactly what the server writes.
+    //
+    // The property-based selection below is KEPT anyway. It is what made the wrong-directory bug
+    // survivable — the test skipped loudly with a measurement instead of failing a correct store —
+    // and it stays correct whatever the cause of a future gap. Selecting on the property itself,
+    // and skipping with the measurement when it is absent, is what makes the assertion honest
+    // either way.
     const sharedPrefixFrac = (a: string, b: string): number => {
       const n = Math.min(a.length, b.length)
       let k = 0
@@ -345,10 +379,16 @@ suite('bodyStore — against REAL captured bodies', () => {
     // Skip WITH A REASON, never silently: a suite that quietly skips its own subject reports green
     // for a corpus that can no longer answer the question, which is worse than a red test.
     if (turns.length < 5) {
-      console.log(`      ⏭  skipped: the live spool holds no run of >=5 CONSECUTIVE turns for one `
-        + `session (longest run sharing >=${ADJACENT * 100}% prefix: ${best.length}). The bodies `
-        + `pass is draining faster than turns accumulate, so what survives has gaps — and turns `
-        + `across a gap share no transcript, so a dedup floor would measure the wrong thing.`)
+      // Name the DIRS, not a cause. The last version of this message asserted a cause ("the pass
+      // is draining faster than turns accumulate") that turned out to be false — the test was
+      // reading a drained legacy dir instead of the live spool. A skip that prints where it
+      // looked is debuggable; a skip that prints a theory sends the next reader after a phantom.
+      console.log(`      ⏭  skipped: no run of >=5 CONSECUTIVE turns for one session in `
+        + `[${REAL_BODIES_DIRS.join(', ') || 'no readable bodies dir'}] `
+        + `(longest run sharing >=${ADJACENT * 100}% prefix: ${best.length} of ${ordered.length} `
+        + `turns in the largest session, ${all.length} bodies scanned). Turns across a gap share `
+        + `no transcript, so a dedup floor would measure the wrong thing. Check that this is the `
+        + `dir the server is CAPTURING to: agentlenspro server status | grep capture`)
       this.skip(); return
     }
 

@@ -1,9 +1,10 @@
 ---
 trdd-id: 0SA5QZTG
 title: Real-corpus tests read the LEGACY bodies dir while capture writes to the RAM spool
-column: todo
+column: complete
 created: 2026-08-22T20:46:35+0200
-updated: 2026-08-22T20:46:35+0200
+updated: 2026-08-22T21:14:00+0200
+spawned: [8TM7I49X]
 current-owner: main
 task-type: bugfix
 severity: HIGH
@@ -57,15 +58,53 @@ way it was written — the tests were not looking at the dir the drain is draini
 
 - [x] `server status` reports capture state and the newest body's age (shipped with this card —
       and it is what exposed the false premise above).
-- [ ] Real-corpus tests resolve the SAME dir the server captures to (spool when in spool mode,
+- [x] Real-corpus tests resolve the SAME dir the server captures to (spool when in spool mode,
       legacy otherwise) instead of hardcoding the legacy path — or state explicitly that they
-      test the legacy residue on purpose.
-- [ ] TRDD-R2VF2I53's adjacency finding re-checked against the SPOOL corpus, where turns should
+      test the legacy residue on purpose. **Done:** `src/test/bodyStore.test.ts` now resolves
+      through `resolveBodiesReadScope(dataDir, env)` — the server's OWN reader scope
+      (`src/captureConfig.ts:104`), already the resolver `cacheCreationForensics.ts:49` uses, so
+      there is one answer to "where are the bodies" and not a second hardcoded one. Verified live:
+      `dirs = [/Volumes/AgentLensSpool/otel-bodies, ~/.agentlens/otel-bodies]`, `missing = []`.
+- [x] TRDD-R2VF2I53's adjacency finding re-checked against the SPOOL corpus, where turns should
       actually be consecutive. The 0.70 threshold was derived entirely from legacy residue and
-      may be measuring an artifact.
-- [ ] The archive question separated and answered: newest archive index is 2026-07-14 while
+      may be measuring an artifact. **Answer: the threshold is fine; the DIRECTORY was the
+      artifact.** Same algorithm, same hour, the two dirs answer differently:
+
+      | dir | bodies | largest session | longest run sharing >=70% | test |
+      |---|---|---|---|---|
+      | `~/.agentlens/otel-bodies` (legacy residue) | 400 | 54 turns | **3** | SKIPS (floor is 5) |
+      | `/Volumes/AgentLensSpool/otel-bodies` (live) | 383 | 65 turns | **33** | RUNS |
+
+      Mean shared prefix is 34% on the residue and 81% on the live spool. So there was never a
+      missing-adjacency phenomenon to explain — and "the drain removed the adjacency", the text
+      that stood in the test, would have been the THIRD wrong cause in a row for the same
+      artifact. The adjacency test now RUNS (914 ms, asserting the >2x floor) instead of skipping;
+      full suite **2440 passing / 0 failing / 8 pending**.
+- [x] The archive question separated and answered: newest archive index is 2026-07-14 while
       `bodiesMaxAgeHours` defaults to 72 h — either the legacy residue should have been archived
-      long ago, or the age knob is not the trigger.
+      long ago, or the age knob is not the trigger. **Answer: neither. The `.wad` archiver was
+      RETIRED** — `standalone/server.ts:591-597` records that the bodies pass "REPLACES the old
+      .wad archiver", which had no cross-body dedup and an unbounded boot pass (694 MB/min of
+      device writes). Bodies now go into the content-addressed store instead, 167x smaller. So a
+      newest archive index of 2026-07-14 is the DATE THE ARCHIVER WAS RETIRED, not a stalled pass;
+      the archive dir is read-only history (`extractArchive`, server.ts:3685) plus a retention
+      purge (`purgeArchiveVolumes`, server.ts:726). And `bodiesMaxAgeHours` is **not** advisory or
+      dead: it is the ingest pass's age gate (`server.ts:685,693` → `ingestPass.ts:224`,
+      `f.mtime < cutoff`), zeroed to "ingest everything" when a dir is over its size cap.
+
+      **But answering it surfaced a DIFFERENT, real defect, filed separately** rather than folded
+      in here: the legacy dir still holds **1045 files / 317.6 MB, every one of them 96–147 h
+      old** — all past the 72 h gate, in a dir that IS a drain target every 60 s
+      (`drainTargets`, server.ts:580-586). Past the age gate and not draining is not the archive
+      question; conflating them is exactly what this card's own lesson warns against.
+      Filed as **TRDD-8TM7I49X** with the measurement, the four candidate causes (none verified —
+      this card went wrong three times by picking one), and the next runnable check.
+
+## Approval log
+
+- 2026-08-22T21:14:00+0200 — COMPLETED by main (self-orchestrating, tier 0). All four live
+  acceptance boxes ticked with first-hand measurements; the one thing this card surfaced that it
+  could not close was split to TRDD-8TM7I49X rather than left in prose.
 
 ## What was measured (2026-08-22, first-hand)
 
@@ -109,21 +148,32 @@ show up.
   independent defect, or it may be correct behaviour (e.g. the pass is size-driven in practice and
   320 MB is under the 0.5 GB cap). **Do not conflate the two failures** — see the lesson below.
 
-## Acceptance
+## Acceptance (ORIGINAL — SUPERSEDED by the list above; kept as the audit trail)
 
-- [ ] `server status` (or `/api/server-stats`) reports body-capture state and the age of the
-      newest captured body, so this class of silence is visible without a filesystem check.
-- [ ] A decision recorded on whether capture should be on by default on this host, WITH the
-      privacy consideration stated, not just a flag flipped.
-- [ ] The archive-pass question resolved either way: either files past `bodiesMaxAgeHours` are
-      archived, or the age knob is documented as advisory and the real trigger named.
-- [ ] Any tool that answers from raw bodies degrades HONESTLY when the corpus is stale — the
-      existing `coverage.note` pattern is the precedent to follow, not a new mechanism.
+Written against the false "capture is dead" premise. Two boxes survived the correction and are
+resolved in the live list above; two died with the premise. Left here UNCHECKED-AS-WRITTEN on
+purpose — ticking a box whose question turned out not to exist would read as work done. **The
+live acceptance list is the one under `## Acceptance`, above.** A card with two lists is a card
+whose "done" is ambiguous, so this heading now says which one binds.
+
+- [~] `server status` reports body-capture state and the newest body's age → **carried forward**,
+      shipped, and it is what falsified this card's own premise. See box 1 of the live list.
+- [~] A decision on whether capture should be on by default, WITH the privacy consideration →
+      **MOOT.** Capture is ON and producing (`newest 0s ago`); there was never a flag to flip.
+      The privacy question it raised is real but belongs to whoever proposes changing the
+      default, not to a card that mis-measured the current one.
+- [~] The archive-pass question resolved either way → **carried forward and answered.** See box 4
+      of the live list: the `.wad` archiver was retired, so there is no stalled archive pass.
+- [~] Any tool answering from raw bodies degrades HONESTLY when the corpus is stale → **still
+      genuinely open, and not this card's.** The `coverage.note` precedent already does this for
+      dir scope (`ui.rs:2230` reports `dirsScanned`); staleness is a different axis and needs its
+      own card if it is wanted.
 
 ## Notes and lessons learned
 
 Surfaced while closing TRDD-R2VF2I53, whose test depends on this corpus. The reasoning around it
-went wrong twice in opposite directions and both are worth keeping[^1].
+went wrong twice in opposite directions and both are worth keeping[^1]. The root cause turned out
+to be a second copy of a resolution the product already owned[^2].
 
 [^1]: [id: frozen-spool-two-failures status: active keywords: "spool is frozen" "nothing is
     draining" "newest file is days old" "unchanged file count" capture vs drain, ocd: 2026-08-22
@@ -136,3 +186,14 @@ went wrong twice in opposite directions and both are worth keeping[^1].
     retraction ("the drain CANNOT have caused them") was asserted more confidently on evidence
     that pointed at a different subsystem entirely — leaving a worse position than the original
     guess, committed into a code comment as fact.
+
+[^2]: [id: test-hardcodes-a-path-the-product-resolves status: active keywords: "real corpus test"
+    "hardcoded path" "wrong directory" "measuring the wrong thing" test fixture drift spool legacy,
+    ocd: 2026-08-22 lmd: 2026-08-22] DO NOT hardcode a data location in a test when the product
+    itself owns a resolver for it, BECAUSE the resolver gains cases the copy never hears about
+    (here: SPOOL_MODE), and the test then measures a stale location while REPORTING on the live
+    one — which is worse than failing, since three sessions were spent explaining a phenomenon
+    that did not exist. DO resolve through the product's own function
+    (`resolveBodiesReadScope`), so a test can only ever be wrong in the same way the product is.
+    Tell: the explanation for a measurement keeps needing a new story. Two wrong causes about the
+    same number is the signal to check WHAT IS BEING MEASURED, not to find a third cause.
