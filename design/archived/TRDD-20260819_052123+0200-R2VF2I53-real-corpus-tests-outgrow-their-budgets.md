@@ -75,9 +75,12 @@ falsified rather than argued: mutating the adjacency threshold to 0.50 makes a r
 assertion RUNS, and it fails at **1.5×** — proving the floor is still enforced and the skip is
 about input availability, not a bypass. A test that skips must still be able to fail.
 
-### The 70% threshold is NOT derived from the adjacency distribution — stated because it reads as if it were
+### How 0.70 was arrived at — two wrong derivations before the right one
 
-Measured the full distribution rather than assume the number was principled. Consecutive-pair
+The threshold is the fix's one load-bearing constant, so it was chased rather than asserted. Both
+of the obvious derivations are WRONG, and they are recorded because each looks convincing alone.
+
+**Wrong derivation 1 — the distribution's shape.** Consecutive-pair
 prefix share across all sessions (n=363) is genuinely **bimodal**, but the modes do not split at 70:
 
 ```
@@ -89,11 +92,14 @@ prefix share across all sessions (n=363) is genuinely **bimodal**, but the modes
  70–99% : 205 pairs     ← adjacency
 ```
 
-The trough is at **30–39%**, so a threshold derived from the *shape* would sit near 35%, not 70.
-70% sits INSIDE the upper mode and excludes the 60–69% bucket, which is probably adjacent.
+The trough is at **30–39%**, so a shape-derived threshold would sit near 35%, not 70 — and 35
+admits runs that measure 1.5×, i.e. it fails the floor. Bimodality is real here but it separates
+*adjacent from gapped*, which is not the same question as *what the assertion needs*.
 
-**Then DERIVED it properly** — sweep T, and for each, measure the ratio the admitted run actually
-achieves. The threshold should be the lowest T whose run clears the floor:
+**Wrong derivation 2 — the algebra.** For a chain sharing fraction f, ratio ≈ 1/(1−f), so
+`ratio > 2 ⟺ f > 0.50`. Clean, and false: the measured 51%-mean run yields 1.5×, not 2×.
+
+**The right one — sweep T and measure what each admitted run ACHIEVES:**
 
 ```
 T=0.5  run=7  est-ratio=1.99   ← under the floor
