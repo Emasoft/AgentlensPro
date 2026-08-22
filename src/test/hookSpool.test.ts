@@ -55,6 +55,77 @@ suite('hook spool — forwardHookEvent durability (unit)', () => {
     assert.notStrictEqual(fs.readFileSync(lock, 'utf-8'), 'SENTINEL', 'a stale lock re-arms the revive (lock is refreshed)')
   })
 
+  /** The pid the freshly-spawned server wrote, or null if it never wrote one inside `budgetMs`.
+   *  Bounded polling, never a bare sleep-then-assume — and shared by the assertion and the
+   *  teardown so they cannot disagree about whether a child exists. */
+  async function waitForPid(pidPath: string, budgetMs: number): Promise<number | null> {
+    const deadline = Date.now() + budgetMs
+    while (Date.now() < deadline) {
+      try {
+        const raw = fs.readFileSync(pidPath, 'utf-8').trim()
+        const parsed = /^\d+$/.test(raw) ? Number(raw) : Number((JSON.parse(raw) as { pid?: unknown }).pid)
+        if (Number.isFinite(parsed) && parsed > 0) return parsed
+      } catch { /* not written yet */ }
+      await sleep(100)
+    }
+    return null
+  }
+
+  test('a hook-revived server LOGS — its output lands in server.log, not /dev/null', async function () {
+    // Real spawn + real boot: the default 10s mocharc timeout is not enough for a cold server.
+    this.timeout(60_000)
+    // Every other test in this suite runs under AGENTLENS_NO_REVIVE=1, so reviveDaemonDetached()
+    // returns before ever reaching the fs.openSync/spawn code this test exists to prove. This one
+    // test needs the real thing, so it lifts the guard for its own duration only.
+    const prevNoRevive = process.env.AGENTLENS_NO_REVIVE
+    delete process.env.AGENTLENS_NO_REVIVE
+    try { fs.rmSync(path.join(tmp, '.daemon-revive.lock')) } catch { /* none yet */ }
+    const logPath = path.join(tmp, 'server.log')
+    const pidPath = path.join(tmp, 'server.pid')
+    let pid: number | null = null
+    try {
+      await forwardHookEvent(Buffer.from(JSON.stringify({ hook_event_name: 'PreToolUse' })), { baseUrl: DEAD, timeoutMs: 300 })
+      // EXISTENCE IS NOT THE ASSERTION, and the first version of this test made that mistake.
+      // `fs.openSync(<dataDir>/server.log, 'a')` runs synchronously inside reviveDaemonDetached()
+      // BEFORE spawn, so the file appears whatever `stdio` then does with the descriptor. Proven
+      // by mutation: with the fd still opened but `stdio: 'ignore'` restored, an existence-only
+      // assertion PASSED — i.e. it could not fail on the exact regression it names. The claim in
+      // this test's title is that output LANDS there, so the assertion has to be bytes.
+      //
+      // Waiting for bytes is safe here precisely because the teardown below already has to wait
+      // for the pidfile: a server that got far enough to write its pid has printed its boot line.
+      // DO NOT gate this on the child booting SUCCESSFULLY — an earlier version did, waiting for
+      // a pidfile first, and it skipped every run: the child never wrote one within 30s. That gate
+      // was the wrong precondition anyway. The claim under test is "output lands in server.log",
+      // and a child that CRASHES proves it just as well as one that boots — its stderr is exactly
+      // the output that used to vanish into /dev/null, and it is the output an operator most needs
+      // after an unexplained death. Requiring a healthy boot to believe the redirect works confuses
+      // "the server started" with "the server's output was captured", which are different claims.
+      let logged = 0
+      const deadline = Date.now() + 20_000
+      while (Date.now() < deadline) {
+        try { logged = fs.statSync(logPath).size } catch { /* not created yet */ }
+        if (logged > 0) break
+        await sleep(100)
+      }
+      assert.ok(logged > 0,
+        'the revived child wrote to server.log — boot banner or crash output, either proves the '
+        + `stdio redirect. Got ${logged} bytes; with the pre-fix \`stdio: 'ignore'\` this is always 0.`)
+    } finally {
+      // Poll (bounded, never a bare sleep-then-assume) for the pidfile the real spawned server
+      // writes on boot, and kill it — otherwise this test leaks a live standalone/server.js process.
+      pid ??= await waitForPid(pidPath, 5000)
+      if (pid !== null) {
+        try { process.kill(pid) } catch { /* already gone */ }
+        try { fs.unlinkSync(pidPath) } catch { /* best effort */ }
+      }
+      // If no pidfile ever showed up, we have nothing to kill by pid — but note this WOULD be a
+      // leaked process if the server did start without ever writing its pidfile in time.
+      if (prevNoRevive === undefined) delete process.env.AGENTLENS_NO_REVIVE
+      else process.env.AGENTLENS_NO_REVIVE = prevNoRevive
+    }
+  })
+
   test('the spool is bounded — over the cap, the oldest events are dropped, never unbounded', async () => {
     setEnv('AGENTLENS_HOOK_SPOOL_MAX', '3')
     fs.rmSync(spoolDir(), { recursive: true, force: true })

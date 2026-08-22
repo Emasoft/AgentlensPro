@@ -80,9 +80,20 @@ whatever restarts the default one. Identify the reviver first — profiling a pr
 being replaced measures start-up, not the runaway.
 
 Also seen in the same snapshot, unrelated to this card but recorded so it is not lost: an
-`alcore serve` has been running **8h54m** against a `/var/folders/.../tmp.*` data dir at 0.0% CPU
-/ 15 MB RSS — a test-spawned process that outlived its suite. Harmless for CPU, but it is a
-leaked resource and belongs to whichever test spawned it.
+`alcore serve` has been running **9h+** (8h54m, then 9h09m an hour later — still climbing)
+against a `/var/folders/.../tmp.imEiZwa9vD` data dir at 0.0% CPU / 15 MB RSS. An orphan: its data
+dir is temporary, so nothing consumes what it serves.
+
+**Its origin is NOT established, and my first note here overclaimed it as "test-spawned".** The
+correction matters because it changes who owns the fix: the only test that spawns alcore is
+`src/test/alcoreCutover.test.ts` (single `child.kill('SIGTERM')`, :117), but that suite makes its
+temp dirs with node's `mkdtemp` — which yields an `agentlens-*` prefix, **not** the `tmp.XXXXXXXX`
+form of shell `mktemp -d`. So this was more likely started by a script than by mocha, and
+attributing it to the test suite would send someone to harden a teardown that may already be
+correct.
+
+**Deliberately NOT killed.** It costs 0.0% CPU and 15 MB, its origin is unverified, and it is not
+mine to reap on a guess — the cost of being wrong exceeds the 15 MB. Recorded instead.
 
 ## Acceptance criteria
 

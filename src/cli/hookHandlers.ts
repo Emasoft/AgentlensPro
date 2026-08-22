@@ -134,12 +134,36 @@ function reviveDaemonDetached(): void {
     if (reviveDisabledOnDisk()) return
     let serverJs: string
     try { serverJs = findServerJs() } catch { return } // no bundle resolvable — cannot revive
+    // A REVIVED server logs, exactly like a `server start`ed one (TRDD-4FMHW124). This used to be
+    // `stdio: 'ignore'`, and the cost was measured: on 2026-08-22 the server was replaced at
+    // 21:51 while `server.log` still ended at the 20:57 generation's boot — so the death that
+    // triggered the revive, its reason, and everything the replacement did afterwards were all
+    // unrecorded, and a reader consulting the log saw a quiet file.
+    //
+    // The sibling spawn site (`cli/serverControl.ts`) already ruled on this ABOUT ITSELF: "when
+    // the server dies at boot the reason must be readable, or every failure looks like 'did not
+    // become ready'" and sending the streams to /dev/null is "the one outcome the log exists to
+    // prevent". Two spawn sites with opposite policies is the bug; the silent one was the path
+    // taken PRECISELY when the server had just died, which is when the reason is worth most.
+    //
+    // Same fallback as there: if the log cannot be opened we still revive, silently, because a
+    // resurrected-but-unlogged server beats no server. Unlike there we cannot report why — a hook
+    // has no one to report to — so failing to open is simply not allowed to block the spawn.
+    let outFd: number | 'ignore' = 'ignore'
+    try {
+      fs.mkdirSync(dataDir(), { recursive: true })
+      outFd = fs.openSync(path.join(dataDir(), 'server.log'), 'a')
+    } catch { /* keep 'ignore' — reviving matters more than logging it */ }
     const child = spawn(process.execPath, ['--max-old-space-size=6144', serverJs], {
       cwd: path.dirname(path.dirname(serverJs)),
       detached: true,
-      stdio: 'ignore',
+      stdio: ['ignore', outFd, outFd],
     })
     child.unref()
+    // The CHILD holds its own duplicate of the descriptor, so the parent must drop its copy or
+    // every hook invocation leaks one — and hooks run on every tool call, which turns a leak into
+    // EMFILE rather than a slow drip.
+    if (typeof outFd === 'number') { try { fs.closeSync(outFd) } catch { /* already gone */ } }
   } catch { /* best effort — a hook must never throw */ }
 }
 
