@@ -1,21 +1,24 @@
 ---
 trdd-id: 8TM7I49X
-title: 1045 legacy body files sit 96-147h past the ingest age gate and never drain
+title: 1045 already-durable legacy body files are permanently parked in the Rust pass stranded set
 column: todo
 created: 2026-08-22T21:12:33+0200
-updated: 2026-08-22T21:32:00+0200
+updated: 2026-08-22T21:50:00+0200
 current-owner: main
 task-type: bugfix
 severity: HIGH
 priority: 2
 labels: [bodies, ingest, retention, silent-failure]
 approval-tier: 0
-relevant-files: [standalone/server.ts, src/store/ingestPass.ts, rust-core/src/store/pass.rs]
+relevant-files: [standalone/server.ts, src/store/ingestPass.ts, src/rustStorePass.ts, rust-core/crates/agentlens-store/src/pass.rs]
 relevant-rules: []
 created-by: TRDD-0SA5QZTG
 ---
 
-# The legacy bodies dir is a drain target that never drains
+# 1045 already-durable body files are parked forever, and nothing reports it
+
+*(Filed as "the legacy bodies dir is a drain target that never drains" — the symptom. The cause
+was found the same evening and the title now names it; the symptom narrative below is unchanged.)*
 
 Split out of TRDD-0SA5QZTG, which asked "why is the newest archive index 2026-07-14?". That
 question has an innocent answer (the `.wad` archiver was retired — see that card). Answering it
@@ -82,50 +85,146 @@ the 20:57 restart carries no bodies line at all, no `PARKED` warning, and no flo
 `server status` says `bodies: ... (live kept 0.69GB)` — the 317 MB of stuck legacy files are
 inside that number, described as "kept", which reads as a policy decision rather than a stall.
 
-## What is NOT established — candidate causes, none verified
+## ROOT CAUSE — FOUND 2026-08-22T21:45, exact and not inferred
+
+**Every one of the 1045 files is permanently PARKED in the Rust pass's persisted stranded set.**
+The counts are not "consistent with" the hypothesis; they are identical:
+
+```
+strandedNames          = 1045
+legacy files           = 1045   of which stranded = 1045
+spool  files           =  720   of which stranded =    0
+stranded NOT in legacy =    0
+skipNames              = 104314 — and all 1045 legacy files are in it too
+```
+
+Read from `~/.agentlens/store/.pass-state.json`. The stranded set **is** the legacy residue, to
+the file. And because all 1045 are also in `skipNames`, **the store already holds their bytes**:
+this is 317.6 MB of proven-durable data pinned on disk with no path to reclamation.
+
+### The mechanism, at file:line
+
+1. **The park.** `rust-core/crates/agentlens-store/src/pass.rs:386-391` — a body whose BYTES
+   verify but whose stored `ts` row disagrees with capture time is parked:
+   *"The ts-only livelock: bytes proven, row ts wrong — park it; re-ingest can never repair that
+   row."* Correct as a livelock fix (TRDD-P8JGIEOG); re-ingesting cannot change the row.
+2. **The park is permanent for a durable target.** `pass.rs:420-436`:
+
+   ```rust
+   if stranded_names.contains(&f.name) {
+       if let Some(dest) = &opts.relocate_stranded_to { …relocate… }
+       continue;          // no dest ⇒ nothing happens, this pass and every future pass
+   }
+   ```
+
+   and `standalone/server.ts:702` passes
+   `relocateStrandedTo: target.durable ? undefined : LEGACY_BODIES_DIR`. The legacy dir IS the
+   durable target, so its dest is `None` — the spool's escape hatch (move the parked file to
+   durable storage and free the RAM) has no counterpart here, by deliberate design: *"durable→
+   durable relocation is churn, the park alone is correct there."*
+3. **The state SURVIVES RESTARTS.** `pass.rs:94 save_pass_state` writes `.pass-state.json`. This
+   is the difference that made the symptom invisible for days — and the thing I got wrong below.
+
+### Correction to my own reasoning (candidate 2, dismissed on a proxy read)
+
+Candidate 2 below argued the park was unlikely because `ingestStrandedNames` is an in-memory
+`Set` (`standalone/server.ts:616`) emptied by the 20:57 restart. **That is the TypeScript
+engine's set, and this server does not run the TypeScript engine.** `~/.agentlens/bin/alstore`
+exists, so `alstoreBin()` opts in (`src/rustStorePass.ts:33-41`) and every pass goes through the
+Rust binary, whose stranded set is a FILE. I checked the state of the engine that is not running
+— the same class of error as reading the wrong directory, one card earlier.
+
+The absent `PARKED` warning I cited as corroboration is explained too: the warning fires on
+`r.strandedTs.length`, which counts files parked **during this pass**. A file parked days ago is
+silently `continue`d and never re-reported. Silence meant "already parked", not "not parked".
+
+### What this makes the defect
+
+Not "a pass that fails to run" — a pass that runs correctly and has **no recovery path for a
+park**. The set only grows: nothing re-examines a parked file, nothing repairs the `ts` row it is
+parked for, and for a durable target nothing moves it out of the way. A monotonic set of
+permanently-pinned files with no operator-visible surface is the shape of the bug.
+
+## Remedies — a DECISION is needed, and the choice is not obvious
+
+Ranked by my reading; box 2 stays open until one is picked.
+
+1. **Repair the `ts` row, then unpark.** Addresses the actual defect. The park comment says
+   *"re-ingest can never repair that row"* — true of re-ingest, not of a targeted UPDATE of the
+   capture-ts column. Needs care: capture-ts is the provenance time-window scans rely on, so the
+   repair must source it from the file's own mtime (the same value the pass compares against).
+2. **Delete a parked file whose BYTES are proven.** Cheapest reclaim, and defensible — the delete
+   gate's contract is "prove reconstruction, then unlink", which these already satisfy. But it
+   destroys the only remaining source for the ts row, so it forecloses remedy 1 forever. **Do not
+   do this before 1 is ruled out** (RULE 0 shape: it is unrecoverable).
+3. **Relocate to a quarantine subdir** (`otel-bodies-stranded/`). Stops the rescan, keeps the
+   bytes, makes the problem visible in a directory listing. Weakest — it moves the pile.
+4. **Document and accept.** Only honest if paired with a surface that reports the park count, or
+   this recurs invisibly.
+
+Whatever is chosen, **the park needs an operator surface** — a count in `server status` or
+`/api/server-stats`. 1045 permanently-pinned files were invisible for days.
+
+## What was NOT established at filing time — candidate causes (kept; #2 was right)
 
 Listed so the next session does not re-derive them, and explicitly NOT ranked, because this
 card's parent went wrong three times by picking a cause and asserting it:
 
-1. **The Rust pass.** The server runs `rustIngestPass` when `alstore` is present
-   (`server.ts:681`), which takes neither `skipNames` nor `strandedNames`. Whether
-   `rust-core/src/store/pass.rs` applies `maxAgeMs` with the same `f.mtime < cutoff` semantics as
-   `src/store/ingestPass.ts:224` is unchecked. **This is the first thing to check** — the TS and
-   Rust engines are supposed to be byte-identical in policy, and this is exactly where a
-   divergence would hide.
-2. **The stranded-ts park.** `ingestStrandedNames` is an in-memory `Set` (`server.ts:616`), so a
-   restart empties it — and the server restarted at 20:57. Re-parking 1045 files would emit the
-   `PARKED` warning, which is absent. Argues against, does not refute (the Rust path may park
-   without that log).
-3. **The flock.** `r === null` means another pass owns the store; it logs, and that line is
-   absent.
-4. **`skipNames` filtering the reclaim.** `ingestPass.ts:225-230` documents this exact bug
-   ("stranded 3,615 bodies in a full 2 GB RAM spool") and states the skip belongs on the ingest,
-   not the reclaim — so it is fixed in the TS. Unchecked in Rust.
+1. **The Rust pass.** ✗ **CHECKED, and the age gate is NOT the divergence.**
+   `rust-core/crates/agentlens-store/src/pass.rs:256,259` is
+   `let cutoff = if opts.max_age_ms > 0 { now_ms - opts.max_age_ms } else { i64::MAX };` then
+   `.filter(|f| f.mtime_ms < cutoff)` — semantically identical to `src/store/ingestPass.ts:224`.
+   The instinct to look at the Rust engine first was right; the place to look was its
+   **persisted** state, not its age arithmetic.
+2. **The stranded-ts park.** ✓ **RIGHT — and dismissed on a proxy read.** The reasoning
+   ("`ingestStrandedNames` is an in-memory `Set` (`server.ts:616`), so the 20:57 restart emptied
+   it; and re-parking 1045 files would emit the `PARKED` warning, which is absent") checked the
+   TypeScript engine while the Rust engine was running, and misread a per-pass counter as a
+   per-file one. Both halves wrong, same conclusion twice. See the root-cause section.
+3. **The flock.** ✗ Not it. `r === null` logs its own skip line and none appears.
+4. **`skipNames` filtering the reclaim.** ✗ Not it — and the Rust engine is correct here.
+   `pass.rs:437-441` sends a skip-named file *straight to the gate* with `durable: true` rather
+   than excluding it from the pass, exactly as `ingestPass.ts:225-230` prescribes. The park at
+   `:420` is a separate branch that `continue`s BEFORE that one, which is why the same 1045 names
+   sit in both sets while only the park has an effect.
 
 ## NEXT ACTION (runnable as written)
 
-```bash
-# Does the Rust pass see them at all? Run the pass by hand against the legacy dir.
-alstore pass --help    # confirm the flag surface first; do NOT guess it
-```
+**Decide the remedy** (the four options above; 1 is my recommendation and 2 is irreversible).
+The diagnosis is complete — what is missing is a decision, not a measurement.
 
-Then compare `rust-core/src/store/pass.rs` age-gate handling against
-`src/store/ingestPass.ts:224` (`const cutoff = maxAgeMs > 0 ? Date.now() - maxAgeMs : Infinity`;
-`bodyFiles(dir).filter(f => f.mtime < cutoff)`).
+To re-confirm the finding at any time, from a cold start:
+
+```bash
+node -e "
+const fs=require('fs'),os=require('os');
+const j=JSON.parse(fs.readFileSync(os.homedir()+'/.agentlens/store/.pass-state.json','utf8'));
+const s=new Set(j.strandedNames);
+const leg=fs.readdirSync(os.homedir()+'/.agentlens/otel-bodies').filter(f=>/\.(request|response)\.json$/.test(f));
+console.log('stranded',s.size,'legacy',leg.length,'overlap',leg.filter(f=>s.has(f)).length);
+"
+```
 
 ## Acceptance
 
-- [ ] The cause is named with evidence at a `file:line`, not inferred from the symptom.
+- [x] The cause is named with evidence at a `file:line`, not inferred from the symptom.
+      `pass.rs:386-391` parks on a ts-row mismatch; `pass.rs:420-436` `continue`s a parked file
+      forever when `relocate_stranded_to` is `None`; `server.ts:702` passes `undefined` for the
+      durable target; `pass.rs:94` persists the set across restarts. Counts are exact (1045 =
+      1045, overlap 1045, spool 0).
 - [ ] The 1045 files either drain (verified: count falls, store row count rises, bytes
       reconstruct byte-identically) or the reason they must be kept is recorded IN THE CODE, not
-      only here.
-- [ ] A target that does nothing across many consecutive passes is no longer silent. The existing
-      gate keeps a quiet pass quiet; the gap is that "quiet" and "stuck" print the same thing.
+      only here. **Blocked on the remedy decision above.**
+- [ ] The park has an operator surface — a parked-file count in `server status` /
+      `/api/server-stats`. 1045 permanently-pinned files were invisible for days, and the
+      per-pass `PARKED` warning cannot show them because it only counts files parked *this* pass.
       Whatever is added must not turn every idle tick into a log line — a warning nobody can
       silence is a warning everybody filters.
-- [ ] If the cause is a TS/Rust policy divergence, a test pins the two engines to the same age
-      gate so the next divergence fails a build instead of accumulating 317 MB.
+- [ ] ~~If the cause is a TS/Rust policy divergence, a test pins the two engines to the same age
+      gate~~ — **withdrawn: not the cause.** The age gates are semantically identical
+      (`pass.rs:256` vs `ingestPass.ts:224`). The divergence that mattered is that the Rust
+      stranded set is PERSISTED and the TS one is in-memory, which is a deliberate design
+      difference, not a drift a parity test should fail on.
 
 ## Notes and lessons learned
 
@@ -136,3 +235,23 @@ Then compare `rust-core/src/store/pass.rs` age-gate handling against
     with nothing to do — and the stuck one is invisible for as long as it stays stuck (measured:
     317 MB, 1045 files, 4+ days). DO make the two states distinguishable without making the idle
     case noisy: report the backlog a pass DECLINED to act on, not just the work it did.
+
+[^2]: [id: check-the-engine-that-is-running status: active keywords: "in-memory set" "restart
+    clears it" TS vs Rust engine opted in persisted state stranded park wrong engine, ocd:
+    2026-08-22 lmd: 2026-08-22] DO NOT reason about a subsystem's state from the implementation
+    you happen to be reading, BECAUSE this project ships TWO engines for the same pass and the
+    running one is selected at runtime by the mere PRESENCE of a binary
+    (`alstoreBin()`, `src/rustStorePass.ts:33-41` — `~/.agentlens/bin/alstore` existing IS the
+    opt-in, with no env var and no log line to announce it). Here the TS stranded set is in-memory
+    and dies with the process while the Rust one is a FILE that outlives every restart, so
+    "a restart emptied it" was true of the engine that was not running and dismissed the correct
+    cause. DO establish WHICH engine executes before reading its state — one `ls ~/.agentlens/bin`
+    would have done it.
+
+[^3]: [id: per-pass-counter-is-not-a-population status: active keywords: "no PARKED warning" "the
+    log is silent" absent warning means not parked backlog vs event, ocd: 2026-08-22 lmd:
+    2026-08-22] DO NOT read the absence of an EVENT log as the absence of a STATE, BECAUSE the
+    `PARKED` warning fires on `r.strandedTs.length` — files parked *during this pass* — so 1045
+    already-parked files produce silence forever, and silence meant "already parked", the exact
+    opposite of the "not parked" it was read as. DO ask whether a log reports an event or a
+    population before inferring a population from it; a monotonic set needs a gauge, not an event.
