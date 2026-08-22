@@ -76,6 +76,28 @@ fn main() {
         eprintln!("alcore: cannot create {}: {e}", spans_dir.display());
         exit(1);
     }
+    // Single-owner data-dir lock (TRDD-DMWOBWFH D1 prerequisite) — must claim BEFORE anything
+    // else touches the data dir. Two servers appending to the same span store, offsets and cards
+    // corrupt each other; this is the only thing standing between "alcore" and the TS server both
+    // running against one DATA_DIR.
+    match agentlens_core::pid_lock::claim(std::path::Path::new(&data_dir)) {
+        agentlens_core::pid_lock::ClaimOutcome::Claimed => {}
+        agentlens_core::pid_lock::ClaimOutcome::Refused { holder } => {
+            eprintln!(
+                "alcore: Refusing to start: another AgentlensPro server (pid {holder}) already owns this data directory ({data_dir}).\n\
+                 alcore: Only ONE server may run per data directory — two processes appending to the same span store, offsets and cards corrupt each other.\n\
+                 alcore: Use `agentlenspro server status` / `agentlenspro server restart`, or for a genuinely isolated instance set DATA_DIR (and HOME) as well as the ports — changing ports alone does NOT isolate storage."
+            );
+            exit(1);
+        }
+        agentlens_core::pid_lock::ClaimOutcome::VerifyFailed => {
+            eprintln!(
+                "alcore: pidfile verification failed after claim — refusing to trust a lock we cannot read back correctly ({}).",
+                agentlens_core::pid_lock::pidfile_path(std::path::Path::new(&data_dir)).display()
+            );
+            exit(1);
+        }
+    }
     // The shared embed key (embedAuth.ts / AgentlensPro#4 §B1), loaded BEFORE anything listens.
     // An unusable key file is a REFUSAL TO BOOT, not a warning: a mode wider than 0600 means
     // another local account can read the shared secret and mint `maestro` assertions, and corrupt
@@ -243,4 +265,5 @@ fn main() {
         let file = agentlens_core::collector_lifecycle::lifecycle_file(&st.data_dir);
         agentlens_core::collector_lifecycle::record_stop(&file, &mut st.lifecycle, agentlens_core::now_ms());
     };
+    agentlens_core::pid_lock::release(std::path::Path::new(&data_dir));
 }

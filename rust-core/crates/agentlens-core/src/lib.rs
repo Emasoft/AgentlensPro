@@ -65,6 +65,7 @@ pub mod loaded_plugin_versions;
 pub mod log_reader;
 pub mod mcp;
 pub mod mcp_tools;
+pub mod pid_lock;
 pub mod pricing;
 pub mod rate_limit_report;
 pub mod raw_body_context;
