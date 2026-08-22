@@ -21,17 +21,28 @@ import { loadScaledTimeout, skipIfUnmeasurable } from './loadAware'
 // The whole adjacency problem in TRDD-R2VF2I53 was an artifact of reading the wrong directory.
 // `resolveBodiesReadScope` is the server's own resolver (spool first, then legacy), so the test
 // now reads exactly what the server writes.
+//
+// THE NUMBERS ABOVE ARE ONE MOMENT'S READING, NOT CONSTANTS. The live spool's longest run was
+// measured at 26, 33, 40 and 2 within the same hour, because the bodies pass drains it in ~0.5 GB
+// bursts (TRDD-C5L779YI) — a burst can remove most of the corpus between two runs of this file.
+// Do not "fix" a mismatch between these figures and a fresh measurement; both are true, minutes
+// apart. What is NOT expected is the legacy column changing — that dir has been static for days
+// (TRDD-8TM7I49X).
 const REAL_BODIES_DIRS = resolveBodiesReadScope(path.join(os.homedir(), '.agentlens'), process.env).dirs
 
-/** Up to `n` real captured request bodies, from every dir a reader can see (spool first).
+/** Up to `n` real captured request bodies, taken from the FIRST dir that can supply them and
+ *  topped up from the next only when it cannot. `REAL_BODIES_DIRS` is spool-first, so in practice
+ *  a healthy spool answers alone and the legacy dir is reached only just after a drain burst.
  *
- *  This returns them in READDIR order, NOT capture order — the header said "in CAPTURE ORDER
- *  (mtime)" for as long as the body has been sorting nothing, which is a comment asserting a
- *  guarantee the code never gave. Callers that need turn order sort by `mtime` themselves (and
- *  the adjacency test does, per session). Order is not cosmetic where it matters: a random slice
- *  of one session straddles context compactions, and after a compaction the transcript is
- *  rewritten, so those bodies genuinely share little. Measuring that mix and calling it "the
- *  dedup ratio" measures the wrong thing (it read 1.8x; consecutive turns read 6.5x). */
+ *  Saying that precisely matters: an earlier version of this header said "from every dir a reader
+ *  can see", which is the same over-claim as the "in CAPTURE ORDER (mtime)" line it replaced — a
+ *  comment promising a guarantee the code never gave. It stops at `n`.
+ *
+ *  Order is READDIR order, not capture order. Callers that need turn order sort by `mtime`
+ *  themselves (the adjacency test does, per session). That is not cosmetic: a random slice of one
+ *  session straddles context compactions, and after a compaction the transcript is rewritten, so
+ *  those bodies genuinely share little. Measuring that mix and calling it "the dedup ratio"
+ *  measures the wrong thing (it read 1.8x; consecutive turns read 6.5x). */
 function realBodies(n: number): Array<{ name: string; raw: string; mtime: number }> {
   const out: Array<{ name: string; raw: string; mtime: number }> = []
   for (const dir of REAL_BODIES_DIRS) {
@@ -360,21 +371,40 @@ suite('bodyStore — against REAL captured bodies', () => {
     // A prefix-overlap ESTIMATE of the ratio is also not the ratio — it read 1.99x where the store
     // measures 1.52x, i.e. "just under" where the truth is "clearly under". Re-derive by sweeping
     // T through the real store if the floor ever moves; do not reason it out and do not estimate it.
+    //
+    // SCOPE OF THAT DERIVATION, stated because it was briefly overstated: the sweep ran against the
+    // LEGACY corpus. Spool pairs average 81% shared prefix, so the spool CLEARS 0.70 comfortably —
+    // which is not the same as re-establishing that 0.70 is the lowest T that clears >2x THERE.
+    // The honest claim is "0.70 is not an artifact of the legacy residue"; a spool-side sweep has
+    // not been run, and would be the thing to do before moving this constant.
     const ADJACENT = 0.70
-    const ordered = [...bySession.values()]
-      .sort((a, b) => b.length - a.length)[0]
-      .sort((a, b) => a.mtime - b.mtime)
-    let best: typeof ordered = []
-    // `ordered` is non-empty because the `all.length === 0` guard above returned already — NOT
-    // because groups are non-empty, which is the wrong invariant: the risk here is an empty MAP
-    // (`[...values()][0]` would be undefined and `.sort()` would throw), and group non-emptiness
-    // says nothing about that. Naming the guard that actually holds, 15 lines up, is the point.
-    let run: typeof ordered = [ordered[0]]
-    for (let i = 1; i < ordered.length; i++) {
-      if (sharedPrefixFrac(ordered[i - 1].raw, ordered[i].raw) >= ADJACENT) run.push(ordered[i])
-      else { if (run.length > best.length) best = run; run = [ordered[i]] }
+    // SELECT THE BEST RUN ACROSS EVERY SESSION — not the runs inside the LARGEST session, which is
+    // what this did until adversarial review caught it (2026-08-22). "Largest group" was a safe
+    // proxy while one dir supplied the corpus; it stopped being one the moment `realBodies` began
+    // topping up from a second dir. Measured in that state, minutes apart:
+    //
+    //     UNION(spool, legacy) n=400 : largest session 47 turns (spool), longest run 40
+    //     LEGACY ONLY          n=400 : largest session 54 turns,          longest run  3
+    //
+    // Legacy's group is BIGGER and useless. So right after a drain burst, when the spool cannot
+    // fill n and legacy tops it up, "largest group" hands the test back the exact legacy residue
+    // this card removed — the fixed bug, reintroduced by the fix. Scanning every group costs one
+    // loop and removes the proxy: the property the test needs is a RUN, so select on runs.
+    let best: Array<{ name: string; raw: string; mtime: number }> = []
+    let scanned = 0
+    for (const group of bySession.values()) {
+      const ordered = [...group].sort((a, b) => a.mtime - b.mtime)
+      scanned += ordered.length
+      // A copy, so the map's own arrays are not reordered under a later reader — and `ordered[0]`
+      // is safe because a Map only ever holds groups that had a push. (The old code needed a
+      // note here about the empty-MAP risk of `[...values()][0]`; iterating the map has none.)
+      let run = [ordered[0]]
+      for (let i = 1; i < ordered.length; i++) {
+        if (sharedPrefixFrac(ordered[i - 1].raw, ordered[i].raw) >= ADJACENT) run.push(ordered[i])
+        else { if (run.length > best.length) best = run; run = [ordered[i]] }
+      }
+      if (run.length > best.length) best = run
     }
-    if (run.length > best.length) best = run
     const turns = best.slice(0, 12)
     // Skip WITH A REASON, never silently: a suite that quietly skips its own subject reports green
     // for a corpus that can no longer answer the question, which is worse than a red test.
@@ -385,10 +415,14 @@ suite('bodyStore — against REAL captured bodies', () => {
       // looked is debuggable; a skip that prints a theory sends the next reader after a phantom.
       console.log(`      ⏭  skipped: no run of >=5 CONSECUTIVE turns for one session in `
         + `[${REAL_BODIES_DIRS.join(', ') || 'no readable bodies dir'}] `
-        + `(longest run sharing >=${ADJACENT * 100}% prefix: ${best.length} of ${ordered.length} `
-        + `turns in the largest session, ${all.length} bodies scanned). Turns across a gap share `
-        + `no transcript, so a dedup floor would measure the wrong thing. Check that this is the `
-        + `dir the server is CAPTURING to: agentlenspro server status | grep capture`)
+        + `(best run sharing >=${ADJACENT * 100}% prefix: ${best.length}, over ${bySession.size} `
+        + `session(s) / ${scanned} turns / ${all.length} bodies scanned). Turns across a gap share `
+        + `no transcript, so a dedup floor would measure the wrong thing.\n`
+        + `         EXPECTED after a drain burst: the bodies pass empties the spool in ~0.5GB `
+        + `bursts (TRDD-C5L779YI), so the adjacency it needs is periodically destroyed by the `
+        + `product itself — this test runs on a live corpus and legitimately skips some of the `
+        + `time. A PERSISTENT skip is different: check capture with `
+        + `\`agentlenspro server status\` (the \`capture:\` line).`)
       this.skip(); return
     }
 
