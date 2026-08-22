@@ -3,7 +3,7 @@ trdd-id: EAK9R8IY
 title: Ship the Rust binaries per-platform on npm — the missing prerequisite for box 3
 column: todo
 created: 2026-08-22T19:33:31+0200
-updated: 2026-08-22T19:50:00+0200
+updated: 2026-08-22T23:25:00+0200
 current-owner: main
 task-type: infra
 scope: project
@@ -129,6 +129,43 @@ present** afterwards. The clean had removed a great deal, but not the artifacts 
 cargo had nothing to rebuild. The valid number came from deleting exactly those four directories
 and timing the rebuild. **A clean's own byte count is not evidence that the specific thing you
 wanted rebuilt was removed — check for the artifact, not the tonnage.**
+
+## 2026-08-22 — the hardest risk is GONE: no cross-compilation is required
+
+The approach section says "there is no cross-compile release pipeline" and calls that the real
+blocker. **Checked, and the premise is out of date — every one of the five targets has a NATIVE
+GitHub-hosted runner**, so this is a plain matrix build, not a cross-compile problem:
+
+| target | native runner | availability |
+|---|---|---|
+| `darwin-arm64` | `macos-14` / `macos-latest` | GA (Apple Silicon) |
+| `darwin-x64` | `macos-13` | GA |
+| `linux-x64` | `ubuntu-latest` | GA |
+| `linux-arm64` | **`ubuntu-24.04-arm`** | **GA for public repos since 2025-08-07**; extended to private repos 2026-01-29 |
+| `win32-x64` | `windows-latest` | GA |
+
+`Emasoft/AgentlensPro` is **PUBLIC** (`gh repo view --json visibility`), which is the condition
+for the free-tier arm64 runners — so the arm64 Linux leg costs nothing extra.
+
+This matters more than it looks. Cross-compiling a **statically-linked DuckDB** (17,246 symbols,
+the reason `alcore` is 53 MB) to linux-arm64 and win32-x64 from a macOS or x64 host is exactly
+the kind of toolchain work that eats days and fails late. Building each target on its own native
+runner replaces all of it with `cargo build --release` per leg. Combined with the already-measured
+**287 s bundled DuckDB build on 14 cores**, and the five legs running in parallel, the matrix is
+ordinary CI work.
+
+Sources: [arm64 hosted runners for public repositories are now generally
+available](https://github.blog/changelog/2025-08-07-arm64-hosted-runners-for-public-repositories-are-now-generally-available/) ·
+[arm64 standard runners are now available in private
+repositories](https://github.blog/changelog/2026-01-29-arm64-standard-runners-are-now-available-in-private-repositories/) ·
+[GitHub-hosted runners reference](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)
+
+**Still not started, deliberately.** `publish.yml` today is two jobs, both `ubuntu-latest`
+(`package` :22, `publish-npm` :142), and it is the single most consequential file in the repo: npm
+authorizes it BY FILENAME, so a mistake there is discovered at release time, not at edit time. It
+is additive work — a build matrix plus per-platform publish jobs in that same file — and it should
+be done in one sitting with a dry run, not left half-applied. What this entry removes is the
+uncertainty about whether it is feasible at all.
 
 ## Approval log
 
