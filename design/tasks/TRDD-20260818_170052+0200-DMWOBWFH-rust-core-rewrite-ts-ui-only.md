@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-22T19:24:00+0200
+updated: 2026-08-22T19:27:30+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -17,7 +17,7 @@ release-via: publish
 
 # Rust core rewrite — GOAL SET BY THE USER (2026-08-18)
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-08-22 (v4)
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-08-22 (v5)
 
 > **NEXT ACTION (one step):** box 3 is the ONLY thing left, and it is a SCOPE DECISION for the
 > USER, not a task — see the paragraph below it. **Boxes 1 and 2 are CLOSED** (box 1 verified
@@ -30,6 +30,36 @@ release-via: publish
 > remaining TypeScript serve ONLY the UI (plus, temporarily, the CLI shell) — so closing it means
 > deciding the TS server's fate, not merely having an alternative to it. That is a scope decision,
 > not a task.
+>
+> **NEW SINCE v4 — A HOOK WILL BLOCK YOUR TURN, AND THAT IS DELIBERATE.** A `Stop` hook
+> (`scripts/stop-spawn-review-fork.js`, registered in `.claude/settings.json`) refuses to let a
+> turn end when it edited a file or committed, until a `subagent_type: "fork"` review agent
+> appears in the transcript at or after that work. This is not a malfunction — the USER asked for
+> it twice. Spawn the fork, read its findings, act on them. `AGENTLENS_REVIEW_FORK=off` disables
+> it; it is capped at 20 demands per session and gives up after 2 consecutive unmet ones, so it
+> cannot wedge you. **It fires with no session restart on CC 2.1.240** — see
+> `[[hook-registration-live-reload-2-1-240]]`.
+>
+> **BOX 1's EVIDENCE WAS AMENDED TWICE; read `909c1cc`, not `26797e2`.** The original tick rested
+> on a route-REGISTRATION grep and claimed the wire surface unchanged — registration lines say
+> nothing about response bodies. Two defects in that verification were found and are disclosed in
+> the card: a **pathspec bug** (`src/**/*.ts` requires a directory after `src/`, so it silently
+> dropped 7 of 22 changed files, `mcpServer.ts` among them — use a plain directory pathspec), and
+> a **false evidentiary claim** that the Rust parity suites covered the `updatePayload` refactor,
+> which they structurally cannot (they assert Rust ≡ TS; that refactor is pure TS). What carries
+> it now is a brace-matched ORDERED body diff: 73 + 46 + 39 = 158 lines identical. The verdict
+> never changed — only the reasons under it are now true.
+>
+> **THE OTHER EXPENSIVE LESSON OF THIS SESSION, and it is about process, not code.** After the
+> review hook was built, **five consecutive commits were the hook itself and zero were this card**
+> — measured, not felt. A quality apparatus with no scope boundary converges on itself: each
+> plumbing commit is consequential work, so the hook fires, so a fork reviews the plumbing, so it
+> finds a plumbing defect, so you fix the plumbing. Every step is locally justified and the
+> aggregate is wrong. The tool is good enough; **do not keep improving it — use it on the card.**
+>
+> **ALSO FILED:** `TRDD-N1ASCRM7` — `CLAUDE.md`'s doc-sourced "never invalidate the cache" list
+> was measurably FALSE for LSP until CC 2.1.235, which puts the other six members of that list in
+> question. Backburner; unrelated to closing this card.
 >
 > **SUPERSEDED — do NOT carry forward:** every framing of class 3 as an open optimization. It is
 > NOT a distinct incident class — measured at 1.68 µs/span against a real peak of 26 spans/sec, it
