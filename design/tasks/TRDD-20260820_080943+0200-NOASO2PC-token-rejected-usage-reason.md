@@ -1,9 +1,9 @@
 ---
 trdd-id: NOASO2PC
 title: Split a token_rejected reason out of subscriptionUsage's http_error catch-all
-column: todo
+column: complete
 created: 2026-08-20T08:09:43+0200
-updated: 2026-08-20T08:09:43+0200
+updated: 2026-08-22T20:02:00+0200
 current-owner: AgentlensPro session
 task-type: feature
 severity: LOW
@@ -47,12 +47,37 @@ rotation timeline, and nothing on their side depends on it landing.
 
 ## Acceptance
 
-- [ ] A 401 and a 403 each yield `reason: 'token_rejected'`; a 500 still yields `http_error`.
-- [ ] No cooldown file is written on a 401/403 (the 429 path is untouched).
-- [ ] The unit test asserts all three statuses against the same fixture, so a future refactor that
-      re-merges the branches fails loudly.
-- [ ] `agentlenspro help get_subscription_usage` lists the new reason (the description is the
-      contract consumers read).
+- [x] A 401 and a 403 each yield `reason: 'token_rejected'`; a 500 still yields `http_error`.
+- [x] No cooldown file is written on a 401/403 (the 429 path is untouched). The 429 branch sits
+      ABOVE the new one and returns before it, so `armCooldown` is unreachable from a 401/403 by
+      construction rather than by remembering not to call it.
+- [x] The unit test asserts all three statuses against the same fixture, so a future refactor that
+      re-merges the branches fails loudly. Done as a TABLE over 9 statuses in one assertion loop,
+      plus a second test asserting `httpFailureReason(401) !== httpFailureReason(500)` — that
+      second one is what actually fails on a re-merge, since a collapsed branch would still return
+      *a* reason for every status and could pass a per-case check repaired one row at a time.
+- [x] `agentlenspro help get_subscription_usage` lists the new reason. Verified against the LIVE
+      schema after `node esbuild.js` + `agentlenspro server restart` — not by grepping the source,
+      because the description a consumer reads comes from the running server's bundle. Confirmed
+      first that `agentlenspro` on PATH resolves into THIS repo, since CLAUDE.md records that it
+      can be a published global install, in which case deploying here would change nothing.
+
+## Implementation note
+
+The status→reason mapping was extracted into an exported `httpFailureReason(status)` rather than
+left as an inline ternary. Not decoration: this suite tests pure functions and does not stub
+`fetch` (deliberately — the endpoint 429s hard, so driving the HTTP path from tests is the abuse
+the back-off exists to prevent), so an inline branch would have been **untestable**, and the
+card's requirement is precisely a test that fails on a re-merge. A branch with no callable surface
+cannot have one. It returns `null` for 2xx, so a caller that forgets to check `res.ok` cannot
+obtain a failure reason for a success.
+
+## Approval log
+
+- 2026-08-22T20:02:00+0200 — COMPLETED by main (self-orchestrating; USER authorised). Tier 0.
+  Gates: `check-types` 0, `lint` 0, `check-identities` 0; unit suite 2432 passing / 1 failing —
+  that failure is `bodyStore`'s dedup ratio, PRE-EXISTING and identical to the run before these
+  changes.
 
 ## Notes and lessons learned
 

@@ -117,13 +117,18 @@ publish from, because **npm authorizes the workflow FILENAME** and the trusted-p
 names `publish.yml`; a new workflow file would 404 on the OIDC exchange. So this is extra JOBS in
 that file (a build matrix + per-platform publish jobs), not a new workflow.
 
-**THE OPEN QUESTION — how long a bundled DuckDB build takes.** `duckdb = { features =
-["bundled"] }` compiles DuckDB from C++ source, and a 5-platform matrix pays that five times per
-tag. An attempt to measure it **FAILED and its number must not be reused**: `cargo clean -p
-libduckdb-sys` removed 33.4 GiB / 35,156 files, after which the rebuild finished in **12.6 s
-compiling only `agentlens-store`** — i.e. it never rebuilt DuckDB at all, so 12 s measures
-nothing. Measure it properly (a truly cold `target/`, or read the timing off a real CI run)
-before sizing the matrix, and do NOT let "12 s" survive into a plan.
+**MEASURED — a bundled DuckDB build is 287 s (4 m 46 s) on 14 cores.** So the matrix is
+affordable: GitHub runners carry fewer cores, so budget ~10–20 min per platform, and the five run
+in PARALLEL, making wall-clock roughly one platform's time rather than five.
+
+**How the first attempt got this wrong, recorded because the failure is reusable.** `cargo clean
+-p libduckdb-sys` reported removing 33.4 GiB / 35,156 files, after which the rebuild finished in
+**12.6 s compiling only `agentlens-store`** — and 12 s was briefly taken as the answer. It was
+not: `find target/release/build -name 'libduckdb-sys-*'` showed **4 build directories still
+present** afterwards. The clean had removed a great deal, but not the artifacts that mattered, so
+cargo had nothing to rebuild. The valid number came from deleting exactly those four directories
+and timing the rebuild. **A clean's own byte count is not evidence that the specific thing you
+wanted rebuilt was removed — check for the artifact, not the tonnage.**
 
 ## Approval log
 

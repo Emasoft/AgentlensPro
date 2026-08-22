@@ -106,7 +106,7 @@ export interface SubscriptionUsage {
   /** WHY this reading is what it is — never re-derived after the fact, because doing so mislabels
    *  lock contention as "endpoint unreachable" and races the token/cooldown state. */
   reason: 'fresh' | 'ok' | 'cooldown' | 'no_token' | 'expiring_token' | '429' | 'lock_contended'
-        | 'http_error' | 'opt_in_required'
+        | 'http_error' | 'token_rejected' | 'opt_in_required'
   limits: UsageLimit[]
   fiveHourPercent: number | null
   sevenDayPercent: number | null
@@ -307,6 +307,16 @@ export function armCooldown(retryAfterSeconds: number | null, now = Date.now()):
 }
 
 /** Retry-After (delta-seconds or HTTP-date), then Anthropic's own reset headers (epoch or ISO). */
+/** Which failure reason a non-ok HTTP status earns. EXPORTED, and a separate function rather than
+ *  an inline ternary, for one reason: the branch it encodes is the whole point of TRDD-NOASO2PC,
+ *  and a test can only prove a re-merge broke it if there is something to call. `null` means the
+ *  status is not a failure at all, so a caller that forgets to check `res.ok` first cannot get a
+ *  reason for a 200. */
+export function httpFailureReason(status: number): 'token_rejected' | 'http_error' | null {
+  if (status === 401 || status === 403) return 'token_rejected'
+  return status >= 200 && status < 300 ? null : 'http_error'
+}
+
 export function retryAfterSeconds(headers: Headers | null, now = Date.now()): number | null {
   if (!headers) return null
   const ra = headers.get('retry-after')?.trim()
@@ -681,7 +691,13 @@ export async function getSubscriptionUsage(
         armCooldown(retryAfterSeconds(res.headers, now), now)
         return serve(cached, '429')
       }
-      if (!res.ok) return serve(cached, 'http_error')
+      // A 401/403 means the CREDENTIAL was rejected; every other non-ok status is a server or
+      // transport fault. They collapsed into one `http_error` until TRDD-NOASO2PC, which made a
+      // dead token indistinguishable from a 500 — and the two call for OPPOSITE actions: re-auth
+      // or rotate now, vs simply retry later. Deliberately NOT arming the 429 cooldown here: a
+      // rejected token is not rate limiting, and backing off would suppress the immediate retry
+      // that a freshly rotated credential should get.
+      if (!res.ok) return serve(cached, httpFailureReason(res.status) ?? 'http_error')
       // Resolve WHOSE numbers these are from the same credential that just produced them. One extra
       // request, cached with the reading, and it is the difference between a labelled figure and a
       // misattributed one.

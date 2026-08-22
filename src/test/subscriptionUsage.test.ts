@@ -12,6 +12,7 @@ import * as path from 'path'
 import {
   usageBar, retryAfterSeconds, normalize, formatSubscriptionUsage, loadToken,
   archiveAccountUsage, listObservedAccountUsage, windowPct, normalizeResetsAt, deriveStale,
+  httpFailureReason,
   type SubscriptionUsage,
 } from '../subscriptionUsage'
 
@@ -22,6 +23,36 @@ function hdrs(o: Record<string, string>): Headers {
   for (const [k, v] of Object.entries(o)) h.set(k, v)
   return h
 }
+
+suite('subscriptionUsage — a rejected credential is not a server fault (TRDD-NOASO2PC)', () => {
+  // These two failures call for OPPOSITE actions — re-auth/rotate now, vs retry later — and until
+  // this split they were the same `http_error`, so no consumer could tell them apart. The table
+  // form is deliberate: it asserts the three statuses TOGETHER, so a future refactor that
+  // re-merges the branches cannot pass by fixing one case.
+  test('401 and 403 are token_rejected; every other non-ok status stays http_error', () => {
+    const cases: Array<[number, 'token_rejected' | 'http_error' | null]> = [
+      [401, 'token_rejected'],  // the credential was refused
+      [403, 'token_rejected'],  // ditto — forbidden is still "this token will not work"
+      [500, 'http_error'],      // the server broke; the token is probably fine
+      [502, 'http_error'],
+      [503, 'http_error'],
+      [429, 'http_error'],      // reached only if the 429 branch above it is ever removed
+      [418, 'http_error'],
+      [200, null],              // not a failure at all — no reason to report
+      [204, null],
+    ]
+    for (const [status, want] of cases) {
+      assert.strictEqual(httpFailureReason(status), want, `status ${status}`)
+    }
+  })
+
+  test('the reason is one a consumer can act on, not a catch-all', () => {
+    // The regression this guards: someone "simplifies" the branch back to a single return.
+    // If token_rejected and http_error ever collapse, these two differ no more and this fails.
+    assert.notStrictEqual(httpFailureReason(401), httpFailureReason(500))
+    assert.notStrictEqual(httpFailureReason(403), httpFailureReason(503))
+  })
+})
 
 suite('subscriptionUsage', () => {
   test('renders a 10-cell bar without drawing the number inside it', () => {

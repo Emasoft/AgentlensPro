@@ -1606,7 +1606,9 @@ export const TOOLS = [
       'The endpoint is UNDOCUMENTED and community-reverse-engineered, and it 429s hard — results are ' +
       'cached for 10 minutes and a 429 arms an escalating back-off, so `force` is for a deliberate ' +
       'one-off refresh, never a loop. Every failure degrades to the last known reading with an ' +
-      'explicit `reason` (cooldown / no_token / opt_in_required / lock_contended / http_error), and a ' +
+      'explicit `reason` (cooldown / no_token / opt_in_required / lock_contended / token_rejected / ' +
+      'http_error — `token_rejected` is a 401/403, i.e. re-auth or rotate, as against `http_error` ' +
+      'which is a server or transport fault and should simply be retried), and a ' +
       'stale reading suppresses its reset countdowns rather than rendering a rolled window as live.',
     inputSchema: {
       type: 'object' as const,
