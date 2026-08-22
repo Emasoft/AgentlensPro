@@ -90,6 +90,14 @@ export async function rustIngestPass(bin: string, opts: {
 interface ParkedGauge { files: number; bytes: number; onDisk: number }
 let parkedCache: { key: string; value: ParkedGauge } | null = null
 
+/** Drop the memo. Exported for TESTS, which otherwise inherit each other's cache: a module-level
+ *  cache makes an ordered suite pass for reasons unrelated to the code under test. Two of the
+ *  gauge's own tests write same-length JSON into the same temp store, so equal `size` plus a
+ *  coarse-granularity `mtimeMs` (ext4's 1 s inode timestamps, some CI overlayfs) would return the
+ *  PREVIOUS test's bytes. On APFS the sub-millisecond float hides it — i.e. the suite would rest
+ *  on filesystem timestamp resolution, an environmental accident rather than an invariant. */
+export function resetParkedBodiesGaugeCache(): void { parkedCache = null }
+
 export function parkedBodiesGauge(
   storeDir: string,
   liveDirs: readonly string[],
@@ -103,14 +111,27 @@ export function parkedBodiesGauge(
   // the payload's most expensive item on the one endpoint engineered to stay cheap under duress
   // is precisely backwards, so the stat storm now runs only when the park actually changed.
   //
-  // mtime+size is the right key, not a TTL: the pass rewrites this file whenever it parks or
-  // unparks, so a change is exactly when the answer can differ, and an unchanged file cannot
-  // produce a different count. A TTL would re-pay the cost on a corpus that never moves.
+  // THE KEY MUST COVER EVERY INPUT, and the first version did not. It keyed on the state file
+  // alone, justified as "the pass rewrites it exactly when the answer can change" — which is a
+  // PROXY, and false: `bytes`/`onDisk` come from FILES, and files vanish without the pass touching
+  // its state (`/api/bodies/purge`, a manual cleanup, a server killed mid-drain). The line could
+  // then report `PARKED 1045 file(s) 317.6MB` long after the bytes were gone, and the
+  // `onDisk < files` transition this gauge exists to surface would be invisible until the pass
+  // happened to rewrite. Fast and stale-wrong is worse than 14.7 ms and right.
+  //
+  // A DIRECTORY's mtime changes on every entry add or unlink, so stat-ing the dirs is the actual
+  // signal for "files vanished" — 1 + N stats instead of 1045, and it invalidates on the events
+  // the state file cannot see. (Not covered: a parked file whose CONTENT is rewritten in place
+  // without changing the dir. Bodies are immutable once written, so that is not a real state —
+  // said explicitly rather than left as an unstated assumption.)
   let key: string
   let parsed: unknown
   try {
     const st = fs.statSync(statePath)
-    key = `${st.mtimeMs}:${st.size}:${liveDirs.join('|')}`
+    const dirKeys = liveDirs.map((d) => {
+      try { const ds = fs.statSync(d); return `${d}@${ds.mtimeMs}` } catch { return `${d}@absent` }
+    })
+    key = `${st.mtimeMs}:${st.size}:${dirKeys.join('|')}`
     if (parkedCache !== null && parkedCache.key === key) return parkedCache.value
     parsed = JSON.parse(fs.readFileSync(statePath, 'utf8'))
   } catch {

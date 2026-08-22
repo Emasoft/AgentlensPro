@@ -87,11 +87,20 @@ suite('hook spool — forwardHookEvent durability (unit)', () => {
     // "no leak" was luck, not cleanup. On CI those ports are FREE: the child would boot and
     // SURVIVE, inside publish.yml's pre-publish test gate. Unique high ports make the child
     // bootable here and killable everywhere — the port env is the isolation the data dir is not.
-    const portBase = 45_000 + (process.pid % 2_000)
+    // ASK THE OS, do not compute. Two hand-rolled schemes died here before this line settled on
+    // the helper this very file already imports for its integration suite (`freePort`, line 8;
+    // used at :203). First `45000 + pid % 2000` with ports at base..base+2 — adjacent pids OVERLAP
+    // (pid 100 takes 45100-45102, pid 101 takes 45101-45103; exhaustively: 297,898 clashes across
+    // pids 1..99,999). Then a stride of 4 fixed the arithmetic and left the real problem:
+    // **45000-46996 sits inside Linux's default ephemeral range (32768-60999)**, so on
+    // `ubuntu-latest` — the platform this whole fix exists for — an unrelated process can already
+    // hold the port. macOS starts ephemeral at 49152, which is why both schemes looked clean here.
+    // `freePort()` binds :0 and asks the kernel, so there is no range to be wrong about.
+    const [mcp, ui, otlp] = [await freePort(), await freePort(), await freePort()]
     const prevPorts = { MCP_PORT: process.env.MCP_PORT, UI_PORT: process.env.UI_PORT, OTLP_PORT: process.env.OTLP_PORT }
-    process.env.MCP_PORT = String(portBase)
-    process.env.UI_PORT = String(portBase + 1)
-    process.env.OTLP_PORT = String(portBase + 2)
+    process.env.MCP_PORT = String(mcp)
+    process.env.UI_PORT = String(ui)
+    process.env.OTLP_PORT = String(otlp)
     try { fs.rmSync(path.join(tmp, '.daemon-revive.lock')) } catch { /* none yet */ }
     const logPath = path.join(tmp, 'server.log')
     const pidPath = path.join(tmp, 'server.pid')
@@ -124,6 +133,17 @@ suite('hook spool — forwardHookEvent durability (unit)', () => {
       assert.ok(logged > 0,
         'the revived child wrote to server.log — boot banner or crash output, either proves the '
         + `stdio redirect. Got ${logged} bytes; with the pre-fix \`stdio: 'ignore'\` this is always 0.`)
+
+      // WHICH BRANCH DID WE TAKE? The byte assertion above is satisfied identically by a boot
+      // banner and by "Port 4316 already in use" — so on its own it cannot tell a healthy child
+      // from a crashed one, and a crashed child means the teardown below never runs and the
+      // "no leak" result is luck. That is the exact failure this suite was fixing, and leaving it
+      // un-discriminated would have nested it inside its own fix. A port conflict is now a hard
+      // failure rather than a silent pass: `freePort()` makes it a real defect if it ever happens.
+      const logText = fs.readFileSync(logPath, 'utf-8')
+      assert.ok(!/already in use/i.test(logText),
+        `the revived child hit a port conflict, so this test proved only that errors are captured `
+        + `— not that a LIVE child is killed. freePort() should make this impossible: ${logText.slice(0, 300)}`)
     } finally {
       // Poll (bounded, never a bare sleep-then-assume) for the pidfile the real spawned server
       // writes on boot, and kill it — otherwise this test leaks a live standalone/server.js process.

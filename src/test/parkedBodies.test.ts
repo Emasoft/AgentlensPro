@@ -11,7 +11,7 @@ import * as assert from 'assert'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
-import { parkedBodiesGauge } from '../rustStorePass'
+import { parkedBodiesGauge, resetParkedBodiesGaugeCache } from '../rustStorePass'
 import { bodiesCaptureLine } from '../cli/serverControl'
 
 suite('parkedBodiesGauge — the stat-once-across-dirs gauge over .pass-state.json', () => {
@@ -20,6 +20,12 @@ suite('parkedBodiesGauge — the stat-once-across-dirs gauge over .pass-state.js
   let liveB: string
 
   setup(() => {
+    // The gauge memoises at MODULE level, so without this each test inherits its predecessor's
+    // cache. Two tests below write same-length JSON into a same-named state file; on a filesystem
+    // with coarse timestamps (ext4's 1 s inodes, some CI overlayfs) equal size + equal mtime would
+    // serve the earlier test's answer, and the suite would pass here only because APFS keeps a
+    // sub-millisecond float. Resting correctness on timestamp resolution is not an invariant.
+    resetParkedBodiesGaugeCache()
     storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentlens-parked-store-'))
     liveA = fs.mkdtempSync(path.join(os.tmpdir(), 'agentlens-parked-liveA-'))
     liveB = fs.mkdtempSync(path.join(os.tmpdir(), 'agentlens-parked-liveB-'))
@@ -118,6 +124,27 @@ suite('parkedBodiesGauge — the stat-once-across-dirs gauge over .pass-state.js
     // park/unpark) and the gauge must look again.
     fs.writeFileSync(statePath, JSON.stringify({ strandedNames: ['m.request.json'], t: Date.now() }))
     assert.strictEqual(parkedBodiesGauge(storeDir, [liveA, liveB])?.bytes, 999, 'state changed ⇒ re-measured')
+  })
+
+  test('a file DELETED without a state rewrite is noticed — the cache must not report vanished bytes', () => {
+    // The regression this exists to prevent: the cache was first keyed on `.pass-state.json` alone,
+    // justified as "the pass rewrites it exactly when the answer can change". That is a PROXY and
+    // it is false — bytes come from FILES, and files vanish via /api/bodies/purge, a manual
+    // cleanup, or a server killed mid-drain, none of which touch the state file. The gauge would
+    // then keep reporting bytes that are gone, and `onDisk < files` — the state it exists to
+    // surface — would be invisible. Deleting a dir entry changes the DIRECTORY's mtime, which is
+    // why the key covers the dirs too.
+    fs.writeFileSync(path.join(liveA, 'v.request.json'), 'x'.repeat(20))
+    fs.writeFileSync(path.join(storeDir, '.pass-state.json'), JSON.stringify({ strandedNames: ['v.request.json'] }))
+    const before = parkedBodiesGauge(storeDir, [liveA, liveB])
+    assert.strictEqual(before?.bytes, 20)
+    assert.strictEqual(before?.onDisk, 1)
+
+    fs.rmSync(path.join(liveA, 'v.request.json')) // state file untouched, on purpose
+    const after = parkedBodiesGauge(storeDir, [liveA, liveB])
+    assert.strictEqual(after?.bytes, 0, 'the bytes are gone and the gauge says so')
+    assert.strictEqual(after?.onDisk, 0, 'onDisk drops even though .pass-state.json never changed')
+    assert.strictEqual(after?.files, 1, 'the NAME is still parked — that is the ghost the line reports')
   })
 
   test('an unreadable state file returns null and does NOT serve the last good gauge', () => {
