@@ -3,7 +3,7 @@ trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
 column: dev
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-22T09:07:58+0200
+updated: 2026-08-22T13:29:38+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -19,12 +19,17 @@ release-via: publish
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-08-22 (v4)
 
-> **NEXT ACTION (one step):** D1 — the cutover. Start with the sub-task that has correctness
-> stakes and no design freedom: give `alcore` the single-owner data-dir lock it does NOT have
-> (`<data>/server.pid`, the four-property TRDD-PIDFILEAT protocol spelled out in the D1 bullet
-> below). Then the ports (4318/3000/**4316**), then the `~/.agentlens/bin/alcore` presence-is-the-
-> opt-in spawn in `ensureServer` (`src/cli/serverControl.ts:93`). D2 is smaller than it looks —
-> see its bullet. **Read the newest bullets at the END of this block first.**
+> **NEXT ACTION (one step):** fix the Rust OTLP transform, which D2 measured as **3.9× SLOWER
+> than the TypeScript one** (154 ms vs 604 ms on 200k spans) — swap `serde_json::Value` walking
+> for typed `#[derive(Deserialize)]` structs with `&str` borrows in `agentlens-ingest`, then
+> re-run `node scripts_dev/bench-ingest-transform.js 200000`. It is the ONLY thing standing
+> between this card and acceptance box 2; the alternative, if the port cannot be made to win, is
+> to revert class 3 to the TS path and record it as deliberately unported. Do not tick the box on
+> two of three classes. **Read the newest bullets at the END of this block first.**
+>
+> **D1 IS DONE** (`a4d1bc6` pid lock, `b8addc7` the spawn seam). **D2 is done as a MEASUREMENT**
+> and its result is negative — see `## The single-core incident classes` before the acceptance
+> boxes for the class table and the two harness errors that had to be corrected first.
 >
 > **SUPERSEDED — do NOT carry forward:** "NEXT ACTION: B3" (B3 landed); "Tier B is done except
 > B3" (Tier B is COMPLETE); "C1 written, not gated" (gated and committed, `8acc985`);
@@ -2249,11 +2254,74 @@ was on 4 threads (fixed — now machine-scaled).
 | End-to-end `get_cache_event_log` window 0 (live server → alscan) | 3.5s | — | includes bodies scan + MCP round-trip |
 | End-to-end `get_cache_event_log` default 24h | 0.69s | — | segment day-selection skips sealed history |
 
+## The single-core incident classes — the CHECKABLE set for acceptance box 2
+
+Box 2 quantifies over "every previously-measured single-core incident class". Until that set is
+written down the box cannot be closed honestly — "every" over an unenumerated set is rhetoric, and
+a later reader has no way to audit the claim. The set is taken from this card's own `## Why
+(measured, not assumed)` section, which is what "previously-measured" refers to: the classes
+observed burning 100% of one core BEFORE this card existed.
+
+| # | Incident class | Where it burned | Benchmark | Status |
+|---|---|---|---|---|
+| 1 | All-history call-events scan (5.5M-span store walk) | `otelCallEvents.ts` scan loop | **32.7s single-core TS → 1.1s at 667% CPU on 14 threads** (29×), real store, 240,482-event key-normalized parity diff, zero real divergence | ✅ |
+| 2 | Cold-boot log-session scan (13,110-file corpus) | `LogReader` boot scan | **27.0s single-core TS → 6.7s**; binary alone 4.1s at 462% CPU; identical result counts | ✅ |
+| 3 | JSONL/OTLP parsing at ingest | `OtlpCollector.processTraces/processLogs` | **MEASURED — and it is a REGRESSION, not a win: transform 154 ms TS vs 604 ms Rust (0.26×)**, see below | ❌ |
+| 4 | DuckDB pinned to 4 threads | `store/db.ts` PRAGMA | **not a port** — fixed in place by machine-scaling the thread PRAGMA. Named here so the set stays complete and nobody later reads its absence as an oversight | n/a |
+
+Class 5 — the bodies→DuckDB store flush (**1033s → 38s, 27×**, same 512 MB / 1,018-body workload,
+profiled with `/usr/bin/sample`) — was discovered DURING this card, not before it, so it is not in
+box 2's scope. Recorded because it is the largest single win measured here and the box's wording
+would otherwise hide it.
+
+**So box 2 reduces to exactly one open measurement: class 3.** That is the whole remaining D2
+gap, and stating it as one item rather than "benchmarks" is the point of writing the list.
+
+### Class 3 MEASURED (2026-08-22) — the Rust OTLP transform is 3.9× SLOWER than the TS one
+
+Harness: `scripts_dev/bench-ingest-transform.js` (gitignored), 200,000 spans / 81.3 MB in the
+exact node shapes the cross-engine parity suite pins, both engines reading the same file:
+
+| phase | TS `OtlpCollector` | Rust `agentlens_ingest` |
+|---|---|---|
+| JSON parse | 334 ms | **334 ms** |
+| **transform** | **154 ms** | **604 ms** |
+| whole path (read+parse+transform) | 488 ms | 951 ms |
+
+Both emitted 200,000 spans, so the ratio compares equal work; the identical parse times are the
+sanity check that the harness is fair rather than the result being an artifact.
+
+**Two harness errors had to be corrected before this number meant anything, and both flattered
+the conclusion in opposite directions — worth recording so the next measurement does not repeat
+them.** (1) The first run had TS starting from an already-parsed in-memory object while Rust
+parsed 81.3 MB off disk: Rust "lost" 6×, a number about `JSON.parse`. (2) Even after both read
+the same file, the CLI's default output serializes every span back to stdout — **96.6 MB for an
+81.3 MB input, larger than what went in, plus 3.2 GB peak RSS** — which the in-process path never
+pays, because nothing execs `alingest` in production (alcore links the crate directly). That is
+why `alingest --bench` now exists: same transform, per-phase timings, no serialization. Timing a
+debug CLI's convenience output is measuring the harness.
+
+**The finding stands after both corrections**, and it inverts this card's premise for one class:
+Rust is not automatically faster. The likely cause is that the port walks `serde_json::Value` — a
+boxed dynamic tree where every attribute read is a `Map<String, Value>` probe returning owned
+Strings — while V8 gives the TS collector hidden-class field access on the same shapes. The fix is
+typed deserialization (`#[derive(Deserialize)]` structs for the OTLP envelope, `&str` borrows
+instead of `String` clones), not more threads: `1.18 user / 1.53 real` shows the transform is
+single-threaded, so this class has no parallelism to claim yet either.
+
+**Box 2 therefore CANNOT be closed.** It asks for a benchmark *proving* multi-core or indexed
+behaviour; class 3's benchmark proves the opposite. The honest states are (a) fix the port and
+re-measure, or (b) revert class 3 to the TS path and record it as deliberately unported — but not
+(c) leave the box ticked on two of three classes. Recorded as its own follow-up rather than
+silently absorbed, because a card that quietly drops its own acceptance criterion is how the
+"~20 stale NOT PORTED claims" audit finding happened in the first place.
+
 ## Acceptance (whole card)
 
 - [ ] No `/api/*` or MCP consumer changed; dashboard unmodified; existing data dirs readable.
 - [ ] Every previously-measured single-core incident class has a benchmark proving multi-core or
-      indexed behavior in the Rust core.
+      indexed behavior in the Rust core. **The set is the 4-row table above** — 2 of 3 in-scope
+      classes measured, class 3 (ingest transform) open.
 - [ ] TypeScript remaining in the repo serves only the UI (and, temporarily, the CLI shell).
 
 ## Approval log
