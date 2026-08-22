@@ -23,6 +23,8 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use serde_json::Value;
+
 use crate::CoreState;
 
 /// TWO ENGINES, ONE DATA DIR — the risk that does not exist in the TS, because there was only
@@ -158,6 +160,81 @@ fn purge_tick(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
     }
 }
 
+/// The nine fields the TS projects out of each blob (server.ts:1485). A PROJECTION, not the whole
+/// row: this value is re-sent inside every burn-status SSE frame, so carrying the engine's full
+/// row would put the extra fields on the wire four times a minute forever.
+const RESIDENT_BLOB_FIELDS: [&str; 9] = [
+    "sessionId",
+    "project",
+    "kind",
+    "label",
+    "isImage",
+    "peakTokens",
+    "residentTurns",
+    "cumulativeReadTokens",
+    "cumulativeReadCostUsd",
+];
+
+/// `scanResidentBlobs` (server.ts:1480) — refresh the resident-blob cache the burn enrichment
+/// reads. `minResidentTurns: 3` / `minTokens: 20_000` are the TS's own filter, NOT this port's
+/// choice, and they are stricter than the engine's defaults (2 / 0) on purpose: this feed is a
+/// proactive WARNING, so it should surface blobs worth acting on, not every resident block.
+///
+/// Ranking comes from the engine (cumulative read cost, then tokens); the TS takes its default
+/// top-20 and then slices 10, and this mirrors that rather than asking for 10 directly — the two
+/// agree only because the sort is total, and mirroring costs nothing.
+async fn resident_blob_scan(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
+    let (comps, coverage) = match crate::ui::compositions_in_scope(state, None, now_ms).await {
+        Ok(v) => v,
+        Err(e) => {
+            // WARN, never propagate: the TS catches here too. A failed scan must leave the last
+            // good cache in place and let the burn tick keep serving — it must not take down the
+            // scheduler, and it must not blank the feed into a false "no resident blobs".
+            eprintln!("alcore: resident-blob scan error: {e}");
+            return;
+        }
+    };
+    let out = crate::context_composition_index::find_resident_blobs(
+        &comps,
+        None,
+        coverage,
+        None,
+        Some(20_000.0),
+        Some(3.0),
+        None,
+    );
+    let rows = project_resident_blobs(&out);
+    if let Ok(mut st) = state.lock() {
+        st.latest_resident_blobs = rows;
+    }
+}
+
+/// The `.slice(0, 10).map(...)` half of `scanResidentBlobs`, split out because it is the only
+/// part with rules of its own — the rest is one engine call and one assignment.
+pub fn project_resident_blobs(engine_out: &Value) -> Vec<Value> {
+    engine_out
+        .get("blobs")
+        .and_then(Value::as_array)
+        .map(|b| {
+            b.iter()
+                .take(10)
+                .map(|blob| {
+                    let mut m = serde_json::Map::new();
+                    for k in RESIDENT_BLOB_FIELDS {
+                        // ABSENT stays ABSENT. Inserting Null for a missing field would put a key
+                        // on the wire that the TS object spread never produces, and a consumer
+                        // reading `isImage: null` cannot tell it from a real value.
+                        if let Some(v) = blob.get(k) {
+                            m.insert(k.to_owned(), v.clone());
+                        }
+                    }
+                    Value::Object(m)
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// Arm every recurring chore on `rt`. Called once from `main` after the state is built and before
 /// the listeners bind. Boot-time passes run INLINE first (the TS calls each chore once at startup
 /// before setting its interval), so a server that is restarted more often than a chore's period
@@ -187,6 +264,23 @@ pub fn spawn_all(rt: &tokio::runtime::Runtime, state: Arc<Mutex<CoreState>>) {
             tick.tick().await;
             let s2 = s.clone();
             let _ = tokio::task::spawn_blocking(move || purge_tick(&s2, crate::now_ms() as f64)).await;
+        }
+    });
+
+    // The 30s resident-blob scan (server.ts:1497), boot pass included (:1498). 30s and not the
+    // burn tick's 4s for the TS's own stated reason: bodies parse once then hit the LRU cache, so
+    // a 4s recompute would waste the work for no gain.
+    // NON-OVERLAP is by construction here, not by a flag: this is ONE task awaiting each scan
+    // before the next tick, so the TS's `residentScanRunning` guard has nothing to guard. A
+    // `spawn` per tick would need it back.
+    let s = state.clone();
+    rt.spawn(async move {
+        resident_blob_scan(&s, crate::now_ms() as f64).await;
+        let mut tick = tokio::time::interval(Duration::from_secs(30));
+        tick.tick().await; // boot pass just ran
+        loop {
+            tick.tick().await;
+            resident_blob_scan(&s, crate::now_ms() as f64).await;
         }
     });
 

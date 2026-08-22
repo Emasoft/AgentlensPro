@@ -259,7 +259,7 @@ async fn composition_for(state: &Arc<Mutex<CoreState>>, session_id: &str, now: f
 /// Sequential by design: each `composition_for` may parse multi-MB bodies, and the cap (25) is what
 /// bounds the work — fanning them out would just make the same bounded work concurrent while
 /// multiplying peak memory.
-async fn compositions_in_scope(state: &Arc<Mutex<CoreState>>, scope: Option<&str>, now: f64) -> Result<(Vec<Value>, Value), String> {
+pub(crate) async fn compositions_in_scope(state: &Arc<Mutex<CoreState>>, scope: Option<&str>, now: f64) -> Result<(Vec<Value>, Value), String> {
     let (ids, coverage) = {
         let mut st = state.lock().map_err(|_| "state poisoned".to_owned())?;
         let projects = st.composition_project_map(now);
@@ -936,7 +936,7 @@ async fn handle(
             let mut st = state.lock().map_err(|_| "state poisoned".to_owned())?;
             let status = st.live_burn_status(now);
             let account = st.burn.current_account(now);
-            crate::burn::runtime::enrich_burn_status(&status, &account).to_string()
+            crate::burn::runtime::enrich_burn_status(&status, &account, &st.latest_resident_blobs).to_string()
         };
         json_response(StatusCode::OK, body)
     } else if method == Method::GET && path == "/api/burn-risk" {
@@ -3033,7 +3033,7 @@ pub async fn run_burn_tick(state: Arc<Mutex<CoreState>>, hub: Arc<SseHub>) {
             let status = st.live_burn_status(now);
             st.burn.last_status = Some(status.clone());
             let account = st.burn.current_account(now);
-            let enriched = crate::burn::runtime::enrich_burn_status(&status, &account);
+            let enriched = crate::burn::runtime::enrich_burn_status(&status, &account, &st.latest_resident_blobs);
             frames.push(serde_json::json!({ "type": "burnStatus", "burnStatus": enriched }).to_string());
             let mut active: std::collections::HashSet<String> = std::collections::HashSet::new();
             if let Some(alerts) = status.get("alerts").and_then(Value::as_array) {

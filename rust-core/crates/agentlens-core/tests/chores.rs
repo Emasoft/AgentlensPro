@@ -6,7 +6,8 @@
 
 use std::collections::HashMap;
 
-use agentlens_core::chores::{hook_events_retention_days, with_chores_lock};
+use agentlens_core::chores::{hook_events_retention_days, project_resident_blobs, with_chores_lock};
+use serde_json::json;
 
 fn vars(v: Option<&str>) -> HashMap<String, String> {
     let mut m = HashMap::new();
@@ -46,6 +47,43 @@ fn hook_events_retention_ports_js_truthiness_not_parse_or_default() {
     assert_eq!(hook_events_retention_days(&vars(Some("-3"))), 1.0);
     // Below the floor but positive: same floor, different path.
     assert_eq!(hook_events_retention_days(&vars(Some("0.5"))), 1.0);
+}
+
+/// `scanResidentBlobs`'s `.slice(0, 10).map(...)` (server.ts:1485). This value rides inside every
+/// burn-status SSE frame, so both the CAP and the field list are wire-shape rules, not tidiness.
+#[test]
+fn resident_blob_projection_caps_at_ten_and_keeps_absent_absent() {
+    let blob = |i: usize| {
+        json!({
+            "sessionId": format!("aaaa{i:04}"), "project": "p", "kind": "image", "label": "l",
+            "isImage": true, "peakTokens": 30_000, "residentTurns": 5,
+            "cumulativeReadTokens": 120_000, "cumulativeReadCostUsd": 0.6,
+            // Engine-side fields the TS projection does NOT carry — they must not reach the wire.
+            "model": "opus-5", "blockIndex": i,
+        })
+    };
+    let many: Vec<_> = (0..25).map(blob).collect();
+    let rows = project_resident_blobs(&json!({ "blobs": many }));
+
+    assert_eq!(rows.len(), 10, "capped at 10 however many the engine returned");
+    let first = rows[0].as_object().unwrap();
+    assert_eq!(first.len(), 9, "exactly the nine projected fields");
+    assert!(!first.contains_key("model"), "engine-only field must not reach the wire");
+    assert!(!first.contains_key("blockIndex"));
+    assert_eq!(first["sessionId"], json!("aaaa0000"), "engine ranking order is preserved");
+    assert_eq!(rows[9].as_object().unwrap()["sessionId"], json!("aaaa0009"));
+
+    // A blob missing a field yields a row WITHOUT that key — never `null`. A consumer reading
+    // `isImage: null` cannot distinguish it from a real value; an absent key it can.
+    let sparse = project_resident_blobs(&json!({ "blobs": [{ "sessionId": "bbbb2222", "kind": "text" }] }));
+    let only = sparse[0].as_object().unwrap();
+    assert_eq!(only.len(), 2);
+    assert!(!only.contains_key("isImage"), "absent stays absent, not null");
+
+    // Degenerate engine output is an EMPTY feed, not a panic — this runs on a timer forever.
+    assert!(project_resident_blobs(&json!({ "blobs": [] })).is_empty());
+    assert!(project_resident_blobs(&json!({})).is_empty(), "no `blobs` key at all");
+    assert!(project_resident_blobs(&json!({ "blobs": "nonsense" })).is_empty());
 }
 
 /// The cross-engine guard. If the TS server and alcore share a data dir, their retention passes

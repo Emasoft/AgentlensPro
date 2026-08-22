@@ -184,6 +184,12 @@ pub struct CoreState {
     /// a FIELD (not Env::from_process at the call site) so tests can point it at a fixture
     /// home without racing the process environment.
     pub log_env: agentlens_logscan::discovery::Env,
+    /// `latestResidentBlobs` (server.ts:1485) — the top resident blobs, refreshed on a 30s chore
+    /// and READ by the burn-status enrichment. A CACHE on purpose: recomputing it inside the 4s
+    /// burn tick would re-derive every session's composition four times a minute for a value that
+    /// changes far more slowly, which is why the TS puts it on its own 30s timer. Empty until the
+    /// first scan completes — and empty is the honest answer then, not a claim of "no blobs".
+    pub latest_resident_blobs: Vec<Value>,
     /// The shared HMAC key behind the signed viewer-role assertion (embedAuth.ts / AgentlensPro#4).
     /// `None` means the embed feature is DISABLED, and a present viewer header then resolves to
     /// `invalid` (403) — never a downgrade to full access. Past boot this is always `Some`: the
@@ -438,6 +444,7 @@ impl CoreState {
             otel_attribution: IndexMap::new(),
             lifecycle: collector_lifecycle::record_start(&collector_lifecycle::lifecycle_file(data_dir), now),
             log_env: agentlens_logscan::discovery::Env::from_process(),
+            latest_resident_blobs: Vec::new(),
             // Not loaded here: `open` must not create a key file as a side effect of constructing
             // state (every test would mint one). The BINARY loads it at boot and refuses to start
             // if it is unusable — see bin/alcore.rs.

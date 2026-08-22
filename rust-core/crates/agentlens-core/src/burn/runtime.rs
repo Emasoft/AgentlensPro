@@ -133,10 +133,14 @@ pub fn label_burn_status_accounts(status: &Value, account: Option<&AccountInfo>)
 }
 
 /// enrichBurnStatus (server.ts:1514) — labels + the current account + the resident-blob flag.
-pub fn enrich_burn_status(status: &Value, account: &AccountInfo) -> Value {
+///
+/// `resident_blobs` is the 30s chore's CACHE (`CoreState::latest_resident_blobs`), passed in
+/// rather than computed here: this runs on the 4s burn tick, and re-deriving every session's
+/// composition four times a minute for a value that moves far more slowly is precisely what the
+/// TS avoids by giving the scan its own 30s timer.
+pub fn enrich_burn_status(status: &Value, account: &AccountInfo, resident_blobs: &[Value]) -> Value {
     let mut out = label_burn_status_accounts(status, Some(account)).as_object().cloned().unwrap_or_default();
     out.insert("currentAccount".into(), summarize_current_account(account));
-    // NOT PORTED: latestResidentBlobs (composition index) — the TS idle value.
-    out.insert("residentBlobs".into(), Value::Array(Vec::new()));
+    out.insert("residentBlobs".into(), Value::Array(resident_blobs.to_vec()));
     Value::Object(out)
 }
