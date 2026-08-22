@@ -1,9 +1,9 @@
 ---
 trdd-id: EAK9R8IY
 title: Ship the Rust binaries per-platform on npm — the missing prerequisite for box 3
-column: dev
+column: todo
 created: 2026-08-22T19:33:31+0200
-updated: 2026-08-22T19:44:30+0200
+updated: 2026-08-22T19:50:00+0200
 current-owner: main
 task-type: infra
 scope: project
@@ -106,6 +106,24 @@ amending instead, and this card should be cancelled rather than completed.
       binary in addition to `~/.agentlens/bin/alcore`.
 - [ ] A machine with no `~/.agentlens/bin/alcore` runs the Rust server after a plain
       `npm i -g agentlenspro` — measured on a clean environment, not asserted from the manifest.
+
+## Where this stopped, and the one measurement still missing
+
+Returned `dev` → `todo` on 2026-08-22T19:50 when the USER redirected to the review-hook install.
+Queued, not dropped. Nothing is half-applied — no workflow was written.
+
+**What was established:** the existing `publish.yml` is the ONLY place per-platform packages may
+publish from, because **npm authorizes the workflow FILENAME** and the trusted-publisher entry
+names `publish.yml`; a new workflow file would 404 on the OIDC exchange. So this is extra JOBS in
+that file (a build matrix + per-platform publish jobs), not a new workflow.
+
+**THE OPEN QUESTION — how long a bundled DuckDB build takes.** `duckdb = { features =
+["bundled"] }` compiles DuckDB from C++ source, and a 5-platform matrix pays that five times per
+tag. An attempt to measure it **FAILED and its number must not be reused**: `cargo clean -p
+libduckdb-sys` removed 33.4 GiB / 35,156 files, after which the rebuild finished in **12.6 s
+compiling only `agentlens-store`** — i.e. it never rebuilt DuckDB at all, so 12 s measures
+nothing. Measure it properly (a truly cold `target/`, or read the timing off a real CI run)
+before sizing the matrix, and do NOT let "12 s" survive into a plan.
 
 ## Approval log
 
