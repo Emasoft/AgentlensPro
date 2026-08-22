@@ -1,9 +1,9 @@
 ---
 trdd-id: EAK9R8IY
 title: Ship the Rust binaries per-platform on npm — the missing prerequisite for box 3
-column: backburner
+column: proposal
 created: 2026-08-22T19:33:31+0200
-updated: 2026-08-22T19:33:31+0200
+updated: 2026-08-22T19:35:10+0200
 current-owner: main
 task-type: infra
 scope: project
@@ -82,6 +82,17 @@ amending instead, and this card should be cancelled rather than completed.
       binary in addition to `~/.agentlens/bin/alcore`.
 - [ ] A machine with no `~/.agentlens/bin/alcore` runs the Rust server after a plain
       `npm i -g agentlenspro` — measured on a clean environment, not asserted from the manifest.
+
+## Approval log
+
+- 2026-08-22T19:35:10+0200 — Filed as a **proposal** (tier 2), awaiting USER approval. Self-
+  corrected: it was first written into `design/tasks/` at `column: backburner` while declaring
+  `approval-tier: 2`. That combination is incoherent — the approval-tiers rule authorises direct
+  authoring in `design/tasks/` only for Tier 0, and this card's content hits an objective Tier-2
+  floor twice over (`.github/workflows`, and publishing to npm). `backburner` does not soften
+  that: the tier decides the FOLDER, not the urgency. Moved rather than left for the
+  classification watchdog to catch, because a card that misreports its own authority is the exact
+  thing that watchdog exists to find.
 
 ## Provenance
 
