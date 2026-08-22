@@ -71,6 +71,92 @@ fn merge_attributes(lists: &[&[Attr]]) -> Vec<Attr> {
     out
 }
 
+/// TS `unwrapAttrValue`: first present of these wrapper keys wins, inner value verbatim
+/// (intValue stays a STRING — Number() would corrupt 64-bit ids). Unknown wrapper shape → the
+/// whole object cloned, nothing lost.
+fn unwrap_attr_value(v: &Value) -> Value {
+    for k in ["stringValue", "intValue", "doubleValue", "boolValue", "arrayValue", "kvlistValue", "bytesValue"] {
+        if let Some(inner) = v.get(k) {
+            return inner.clone();
+        }
+    }
+    v.clone()
+}
+
+/// Port of `buildDroppedLogEventRecord` (src/logEventSink.ts) — pure, shared by the log-event
+/// sink. Key insertion order is load-bearing (it is what JSON.stringify wrote in TS):
+/// ts, ev, name, session?, traceId?, spanId?, tsEvent?, severity?, attrs, body?.
+pub fn build_dropped_log_event_record(name: &str, bare: &str, attrs: &[Attr], rec: &Map<String, Value>, ts: i64) -> Map<String, Value> {
+    let mut merged: Map<String, Value> = Map::new();
+    for a in attrs {
+        let Some(key) = a.get("key").and_then(Value::as_str) else { continue };
+        let Some(value) = a.get("value").filter(|v| v.is_object()) else { continue };
+        merged.insert(key.to_owned(), unwrap_attr_value(value)); // duplicate key: last wins
+    }
+
+    // Empty string is falsy in TS (`x ? x : undefined`) — an empty session/trace/span/severity
+    // means ABSENT, not present-but-empty.
+    let non_empty_str = |v: Option<&Value>| -> Option<String> {
+        v.and_then(Value::as_str).filter(|s| !s.is_empty()).map(str::to_owned)
+    };
+    let session = non_empty_str(merged.get("session.id")).or_else(|| non_empty_str(merged.get("session_id")));
+
+    let mut ts_event: Option<i64> = None;
+    if let Some(tun) = rec.get("timeUnixNano") {
+        match tun {
+            Value::String(s) if !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()) => {
+                if let Ok(n) = s.parse::<f64>() {
+                    ts_event = Some((n / 1e6).round() as i64);
+                }
+            }
+            Value::Number(n) => {
+                if let Some(n) = n.as_f64() {
+                    if n.is_finite() && n > 0.0 {
+                        ts_event = Some((n / 1e6).round() as i64);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let body_str = rec
+        .get("body")
+        .and_then(Value::as_object)
+        .and_then(|b| b.get("stringValue"))
+        .and_then(Value::as_str)
+        // NOT `non_empty_str`: the TS guard here is `typeof bodyStr === 'string'`, not
+        // truthiness, so an EMPTY body is present as `""` while an empty traceId/session/
+        // severity is absent. Reusing one "non-empty" helper for all of them is the mutation
+        // that passes every other case in the matrix (case `body-empty-string` catches it).
+        .map(str::to_owned);
+
+    let mut out: Map<String, Value> = Map::new();
+    out.insert("ts".into(), json!(ts));
+    out.insert("ev".into(), json!(bare));
+    out.insert("name".into(), json!(name));
+    if let Some(session) = session {
+        out.insert("session".into(), json!(session));
+    }
+    if let Some(trace_id) = non_empty_str(rec.get("traceId")) {
+        out.insert("traceId".into(), json!(trace_id));
+    }
+    if let Some(span_id) = non_empty_str(rec.get("spanId")) {
+        out.insert("spanId".into(), json!(span_id));
+    }
+    if let Some(ts_event) = ts_event {
+        out.insert("tsEvent".into(), json!(ts_event));
+    }
+    if let Some(severity) = non_empty_str(rec.get("severityText")) {
+        out.insert("severity".into(), json!(severity));
+    }
+    out.insert("attrs".into(), Value::Object(merged));
+    if let Some(body) = body_str {
+        out.insert("body".into(), json!(body));
+    }
+    out
+}
+
 /// TS `getAttrFrom`: first non-empty stringValue/intValue/doubleValue across the key list,
 /// String()-coerced.
 fn get_attr_from(attrs: &[Attr], keys: &[&str]) -> String {
@@ -364,8 +450,11 @@ pub struct LogsResult {
     pub spans: Vec<Value>,
     pub account_pairs: Vec<(String, String)>,
     pub body_pointers: Vec<BodyPointer>,
-    /// (eventName, bareEvent, mergedAttrs, record) for the dropped-event sink.
-    pub dropped: Vec<(String, String)>,
+    /// Gate-rejected log events, already built into their persisted sink records
+    /// (`build_dropped_log_event_record`). The record is built HERE, at the drop site, because
+    /// this is the only place that still holds the merged wire attrs and the raw log record —
+    /// the caller sees neither. The caller's job is only to append them.
+    pub dropped: Vec<Map<String, Value>>,
     pub count: u64,
 }
 
@@ -541,7 +630,7 @@ impl IngestState {
 
                     if !is_codex_event && !is_claude_tool_result && !is_claude_rich_event {
                         self.note_dropped(&event_name);
-                        out.dropped.push((event_name.clone(), bare_event.clone()));
+                        out.dropped.push(build_dropped_log_event_record(&event_name, &bare_event, &attrs, rec, now_ms));
                         continue;
                     }
                     if is_codex_event && self.is_codex_websocket_span(&event_name, &attrs) {

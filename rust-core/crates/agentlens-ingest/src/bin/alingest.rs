@@ -53,7 +53,9 @@ fn main() {
                 "spans": r.spans,
                 "accountPairs": r.account_pairs,
                 "bodyPointers": r.body_pointers,
-                "dropped": r.dropped.iter().map(|(n, _)| n).collect::<Vec<_>>(),
+                // The event NAMES only — the drop side channel now carries the full sink record,
+                // but this debug surface has always reported names and nothing reads more.
+                "dropped": r.dropped.iter().filter_map(|rec| rec.get("name")).collect::<Vec<_>>(),
                 "count": r.count,
             })
         }

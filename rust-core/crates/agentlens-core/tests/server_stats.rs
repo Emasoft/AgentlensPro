@@ -152,3 +152,34 @@ fn the_values_the_core_owns_move_with_the_state() {
     assert_eq!(after["logSessions"], 1);
     assert!(after["uptimeSec"].as_u64().unwrap() >= 2, "Math.round of ≥2.4s");
 }
+
+/// `otlpDroppedLogEvents` is the ingest's OWN rejection tally reaching the wire — not a constant.
+/// The idle `{}` in the shape test above is true for a fresh state and therefore gates nothing:
+/// it passes just as happily against a hard-coded empty map, which is exactly what this field
+/// used to be. So drop real events and assert the counts, the per-name split, and the insertion
+/// ORDER (the TS is `Object.fromEntries(Map)`, which is insertion-ordered — a HashMap here would
+/// scramble it and no other assertion would notice).
+#[test]
+fn dropped_log_event_counts_reach_the_wire_per_name_and_in_order() {
+    let data = tmp("dropped");
+    let mut st = CoreState::open(&data);
+    assert_eq!(server_stats(&st, now_ms())["otlpDroppedLogEvents"], json!({}), "nothing ingested yet");
+
+    // Neither name is a codex event, a claude tool result, or a claude rich event, so both take
+    // the `note_dropped` branch. `zebra` twice, `alpha` once — different counts AND a first-seen
+    // order that is the reverse of alphabetical.
+    let dropped = |event: &str| {
+        json!({ "resourceLogs": [{ "scopeLogs": [{ "logRecords": [{
+            "timeUnixNano": (now_ms() as i128 * 1_000_000).to_string(),
+            "attributes": [{ "key": "event.name", "value": { "stringValue": event } }]
+        }] }] }] })
+        .to_string()
+    };
+    ingest_post(&mut st, "/v1/logs", dropped("zebra.unknown").as_bytes());
+    ingest_post(&mut st, "/v1/logs", dropped("alpha.unknown").as_bytes());
+    ingest_post(&mut st, "/v1/logs", dropped("zebra.unknown").as_bytes());
+
+    let body = server_stats(&st, now_ms());
+    assert_eq!(body["otlpDroppedLogEvents"], json!({ "zebra.unknown": 2, "alpha.unknown": 1 }));
+    assert_eq!(keys(&body["otlpDroppedLogEvents"]), ["zebra.unknown", "alpha.unknown"], "first-seen order, not sorted");
+}

@@ -1,0 +1,505 @@
+{
+ "cases": [
+  {
+   "id": "full",
+   "name": "claude_code.user_prompt",
+   "bare": "user_prompt",
+   "attrs": [
+    {
+     "key": "session.id",
+     "value": {
+      "stringValue": "sess-1"
+     }
+    },
+    {
+     "key": "count",
+     "value": {
+      "intValue": "9007199254740993"
+     }
+    },
+    {
+     "key": "ratio",
+     "value": {
+      "doubleValue": 0.5
+     }
+    },
+    {
+     "key": "ok",
+     "value": {
+      "boolValue": true
+     }
+    }
+   ],
+   "rec": {
+    "traceId": "trace-1",
+    "spanId": "span-1",
+    "timeUnixNano": "1700000000123456789",
+    "severityText": "INFO",
+    "body": {
+     "stringValue": "hello world"
+    }
+   },
+   "ts": 1700000000000,
+   "expected": {
+    "ts": 1700000000000,
+    "ev": "user_prompt",
+    "name": "claude_code.user_prompt",
+    "session": "sess-1",
+    "traceId": "trace-1",
+    "spanId": "span-1",
+    "tsEvent": 1700000000123,
+    "severity": "INFO",
+    "attrs": {
+     "session.id": "sess-1",
+     "count": "9007199254740993",
+     "ratio": 0.5,
+     "ok": true
+    },
+    "body": "hello world"
+   }
+  },
+  {
+   "id": "session-fallback",
+   "name": "claude_code.tool_decision",
+   "bare": "tool_decision",
+   "attrs": [
+    {
+     "key": "session_id",
+     "value": {
+      "stringValue": "sess-2"
+     }
+    }
+   ],
+   "rec": {},
+   "ts": 1700000000000,
+   "expected": {
+    "ts": 1700000000000,
+    "ev": "tool_decision",
+    "name": "claude_code.tool_decision",
+    "session": "sess-2",
+    "attrs": {
+     "session_id": "sess-2"
+    }
+   }
+  },
+  {
+   "id": "no-session",
+   "name": "claude_code.tool_decision",
+   "bare": "tool_decision",
+   "attrs": [
+    {
+     "key": "other",
+     "value": {
+      "stringValue": "x"
+     }
+    }
+   ],
+   "rec": {},
+   "ts": 1700000000000,
+   "expected": {
+    "ts": 1700000000000,
+    "ev": "tool_decision",
+    "name": "claude_code.tool_decision",
+    "attrs": {
+     "other": "x"
+    }
+   }
+  },
+  {
+   "id": "session-empty",
+   "name": "claude_code.tool_decision",
+   "bare": "tool_decision",
+   "attrs": [
+    {
+     "key": "session.id",
+     "value": {
+      "stringValue": ""
+     }
+    }
+   ],
+   "rec": {},
+   "ts": 1700000000000,
+   "expected": {
+    "ts": 1700000000000,
+    "ev": "tool_decision",
+    "name": "claude_code.tool_decision",
+    "attrs": {
+     "session.id": ""
+    }
+   }
+  },
+  {
+   "id": "tun-number",
+   "name": "claude_code.plugin_loaded",
+   "bare": "plugin_loaded",
+   "attrs": [],
+   "rec": {
+    "timeUnixNano": 1700000000123456800
+   },
+   "ts": 1700000000000,
+   "expected": {
+    "ts": 1700000000000,
+    "ev": "plugin_loaded",
+    "name": "claude_code.plugin_loaded",
+    "tsEvent": 1700000000123,
+    "attrs": {}
+   }
+  },
+  {
+   "id": "tun-nonnumeric",
+   "name": "claude_code.plugin_loaded",
+   "bare": "plugin_loaded",
+   "attrs": [],
+   "rec": {
+    "timeUnixNano": "12x"
+   },
+   "ts": 1700000000000,
+   "expected": {
+    "ts": 1700000000000,
+    "ev": "plugin_loaded",
+    "name": "claude_code.plugin_loaded",
+    "attrs": {}
+   }
+  },
+  {
+   "id": "tun-zero",
+   "name": "claude_code.plugin_loaded",
+   "bare": "plugin_loaded",
+   "attrs": [],
+   "rec": {
+    "timeUnixNano": 0
+   },
+   "ts": 1700000000000,
+   "expected": {
+    "ts": 1700000000000,
+    "ev": "plugin_loaded",
+    "name": "claude_code.plugin_loaded",
+    "attrs": {}
+   }
+  },
+  {
+   "id": "tun-absent",
+   "name": "claude_code.plugin_loaded",
+   "bare": "plugin_loaded",
+   "attrs": [],
+   "rec": {},
+   "ts": 1700000000000,
+   "expected": {
+    "ts": 1700000000000,
+    "ev": "plugin_loaded",
+    "name": "claude_code.plugin_loaded",
+    "attrs": {}
+   }
+  },
+  {
+   "id": "ids-empty",
+   "name": "claude_code.hook_registered",
+   "bare": "hook_registered",
+   "attrs": [],
+   "rec": {
+    "traceId": "",
+    "spanId": "",
+    "severityText": ""
+   },
+   "ts": 1700000000000,
+   "expected": {
+    "ts": 1700000000000,
+    "ev": "hook_registered",
+    "name": "claude_code.hook_registered",
+    "attrs": {}
+   }
+  },
+  {
+   "id": "body-kvlist",
+   "name": "claude_code.mcp_server_connection",
+   "bare": "mcp_server_connection",
+   "attrs": [],
+   "rec": {
+    "body": {
+     "kvlistValue": {
+      "values": [
+       {
+        "key": "k",
+        "value": {
+         "stringValue": "v"
+        }
+       }
+      ]
+     }
+    }
+   },
+   "ts": 1700000000000,
+   "expected": {
+    "ts": 1700000000000,
+    "ev": "mcp_server_connection",
+    "name": "claude_code.mcp_server_connection",
+    "attrs": {}
+   }
+  },
+  {
+   "id": "body-plain-string",
+   "name": "claude_code.mcp_server_connection",
+   "bare": "mcp_server_connection",
+   "attrs": [],
+   "rec": {
+    "body": "hello"
+   },
+   "ts": 1700000000000,
+   "expected": {
+    "ts": 1700000000000,
+    "ev": "mcp_server_connection",
+    "name": "claude_code.mcp_server_connection",
+    "attrs": {}
+   }
+  },
+  {
+   "id": "attr-array-kvlist-bytes",
+   "name": "claude_code.skill_activated",
+   "bare": "skill_activated",
+   "attrs": [
+    {
+     "key": "arr",
+     "value": {
+      "arrayValue": {
+       "values": [
+        {
+         "stringValue": "a"
+        },
+        {
+         "stringValue": "b"
+        }
+       ]
+      }
+     }
+    },
+    {
+     "key": "kv",
+     "value": {
+      "kvlistValue": {
+       "values": [
+        {
+         "key": "inner",
+         "value": {
+          "stringValue": "x"
+         }
+        }
+       ]
+      }
+     }
+    },
+    {
+     "key": "by",
+     "value": {
+      "bytesValue": "ZGVhZGJlZWY="
+     }
+    }
+   ],
+   "rec": {},
+   "ts": 1700000000000,
+   "expected": {
+    "ts": 1700000000000,
+    "ev": "skill_activated",
+    "name": "claude_code.skill_activated",
+    "attrs": {
+     "arr": {
+      "values": [
+       {
+        "stringValue": "a"
+       },
+       {
+        "stringValue": "b"
+       }
+      ]
+     },
+     "kv": {
+      "values": [
+       {
+        "key": "inner",
+        "value": {
+         "stringValue": "x"
+        }
+       }
+      ]
+     },
+     "by": "ZGVhZGJlZWY="
+    }
+   }
+  },
+  {
+   "id": "attr-unknown-wrapper",
+   "name": "claude_code.skill_activated",
+   "bare": "skill_activated",
+   "attrs": [
+    {
+     "key": "weird",
+     "value": {
+      "weirdValue": 1
+     }
+    }
+   ],
+   "rec": {},
+   "ts": 1700000000000,
+   "expected": {
+    "ts": 1700000000000,
+    "ev": "skill_activated",
+    "name": "claude_code.skill_activated",
+    "attrs": {
+     "weird": {
+      "weirdValue": 1
+     }
+    }
+   }
+  },
+  {
+   "id": "attr-multi-wrapper",
+   "name": "claude_code.skill_activated",
+   "bare": "skill_activated",
+   "attrs": [
+    {
+     "key": "multi",
+     "value": {
+      "intValue": "5",
+      "stringValue": "five"
+     }
+    }
+   ],
+   "rec": {},
+   "ts": 1700000000000,
+   "expected": {
+    "ts": 1700000000000,
+    "ev": "skill_activated",
+    "name": "claude_code.skill_activated",
+    "attrs": {
+     "multi": "five"
+    }
+   }
+  },
+  {
+   "id": "attr-bad-shape",
+   "name": "claude_code.subagent_completed",
+   "bare": "subagent_completed",
+   "attrs": [
+    {
+     "value": {
+      "stringValue": "no-key"
+     }
+    },
+    {
+     "key": "nullval",
+     "value": null
+    },
+    {
+     "key": "numval",
+     "value": 5
+    }
+   ],
+   "rec": {},
+   "ts": 1700000000000,
+   "expected": {
+    "ts": 1700000000000,
+    "ev": "subagent_completed",
+    "name": "claude_code.subagent_completed",
+    "attrs": {}
+   }
+  },
+  {
+   "id": "attr-duplicate-key",
+   "name": "claude_code.subagent_completed",
+   "bare": "subagent_completed",
+   "attrs": [
+    {
+     "key": "dup",
+     "value": {
+      "stringValue": "first"
+     }
+    },
+    {
+     "key": "dup",
+     "value": {
+      "stringValue": "second"
+     }
+    }
+   ],
+   "rec": {},
+   "ts": 1700000000000,
+   "expected": {
+    "ts": 1700000000000,
+    "ev": "subagent_completed",
+    "name": "claude_code.subagent_completed",
+    "attrs": {
+     "dup": "second"
+    }
+   }
+  },
+  {
+   "id": "attrs-empty",
+   "name": "claude_code.subagent_completed",
+   "bare": "subagent_completed",
+   "attrs": [],
+   "rec": {},
+   "ts": 1700000000000,
+   "expected": {
+    "ts": 1700000000000,
+    "ev": "subagent_completed",
+    "name": "claude_code.subagent_completed",
+    "attrs": {}
+   }
+  },
+  {
+   "id": "attr-order",
+   "name": "claude_code.subagent_completed",
+   "bare": "subagent_completed",
+   "attrs": [
+    {
+     "key": "zeta",
+     "value": {
+      "stringValue": "z"
+     }
+    },
+    {
+     "key": "alpha",
+     "value": {
+      "stringValue": "a"
+     }
+    },
+    {
+     "key": "mid",
+     "value": {
+      "stringValue": "m"
+     }
+    }
+   ],
+   "rec": {},
+   "ts": 1700000000000,
+   "expected": {
+    "ts": 1700000000000,
+    "ev": "subagent_completed",
+    "name": "claude_code.subagent_completed",
+    "attrs": {
+     "zeta": "z",
+     "alpha": "a",
+     "mid": "m"
+    }
+   }
+  },
+  {
+   "id": "body-empty-string",
+   "name": "claude_code.assistant_response",
+   "bare": "assistant_response",
+   "attrs": [],
+   "rec": {
+    "body": {
+     "stringValue": ""
+    }
+   },
+   "ts": 1700000000000,
+   "expected": {
+    "ts": 1700000000000,
+    "ev": "assistant_response",
+    "name": "claude_code.assistant_response",
+    "attrs": {},
+    "body": ""
+   }
+  }
+ ]
+}

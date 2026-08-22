@@ -148,6 +148,11 @@ pub struct CoreState {
     pub ports: server_stats::Ports,
     /// server.ts persistStats — every byte this process writes, counted where it is written.
     pub persist: server_stats::PersistStats,
+    /// server.ts `logSinkWarned` — one warning per distinct sink error per boot. Not a nicety:
+    /// without it a failing disk warns once per dropped event (thousands of lines), and with no
+    /// set at all the loss is silent. The set is bounded by the number of DISTINCT io error
+    /// messages, not by traffic.
+    log_sink_warned: std::collections::HashSet<String>,
     /// server.ts `hookRuntime` — loaded at boot, replaced by POST /api/hook-config.
     pub hook_runtime: server_stats::HookRuntime,
     /// LogReader.getLogScanStats — cumulative reader counters, added after every sweep.
@@ -432,6 +437,7 @@ impl CoreState {
             started_at_ms: now,
             ports: server_stats::Ports::default(),
             persist: server_stats::PersistStats::default(),
+            log_sink_warned: std::collections::HashSet::new(),
             hook_runtime: server_stats::hook_runtime_config(data_dir),
             log_scan: log_reader::LogScanStats::default(),
             sweeper: None,
@@ -504,6 +510,32 @@ impl CoreState {
             self.persist.span_append_bytes += r.appended_bytes;
         }
     }
+
+    /// server.ts persistDroppedLogEvent — append ONE gate-rejected log event to its daily bucket
+    /// in `<data>/log-events/`, the same NDJSON-bucket machinery hook-events uses.
+    ///
+    /// The error policy is deliberately NOT this project's usual fail-fast: a sink failure must
+    /// not reject the whole OTLP payload, because that would lose the SPANS in it too — trading a
+    /// disk problem for data loss in a subsystem that was working. So the append is best-effort
+    /// per record. It is not silent either: the first occurrence of each distinct error message
+    /// warns, and every attempt is counted, so a persistently failing disk is visible in the log
+    /// once and in `persistedSinceBoot` staying flat while `otlpDroppedLogEvents` climbs.
+    pub fn persist_dropped_log_event(&mut self, rec: &serde_json::Map<String, Value>) {
+        let ts = rec.get("ts").and_then(Value::as_i64).unwrap_or_else(now_ms);
+        let line = Value::Object(rec.clone()).to_string();
+        match hook_events::append_bucket_line(&self.data_dir.join("log-events"), ts, &line) {
+            Ok(bytes) => {
+                self.persist.log_event_writes += 1;
+                self.persist.log_event_bytes += bytes;
+            }
+            Err(e) => {
+                let msg = e.to_string();
+                if self.log_sink_warned.insert(msg.clone()) {
+                    eprintln!("[AgentLens] log-event sink append FAILED (event lost — disk problem?): {msg}");
+                }
+            }
+        }
+    }
 }
 
 pub fn now_ms() -> i64 {
@@ -556,6 +588,13 @@ pub fn ingest_post(state: &mut CoreState, path: &str, body: &[u8]) {
             // per-session drill-down would have resolved to an empty registry.
             for p in r.body_pointers {
                 state.bodies.record_ingested(p);
+            }
+            // server.ts persistDroppedLogEvent (TRDD-AMEA4O4Z): every event the rich-event gate
+            // REJECTS is persisted to <data>/log-events/ instead of being counted and thrown
+            // away. Several of these (permission decisions, hook/plugin lifecycle) exist nowhere
+            // else — not in the transcripts — so dropping them was real data loss.
+            for rec in r.dropped {
+                state.persist_dropped_log_event(&rec);
             }
             r.spans
         }

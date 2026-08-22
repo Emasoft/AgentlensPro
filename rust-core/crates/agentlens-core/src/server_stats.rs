@@ -32,6 +32,10 @@ pub struct PersistStats {
     pub cards_bytes: u64,
     pub hook_event_writes: u64,
     pub hook_event_bytes: u64,
+    /// The log-event sink (TRDD-AMEA4O4Z): every gate-rejected OTEL log event persisted to
+    /// `<data>/log-events/`, counted where it is written.
+    pub log_event_writes: u64,
+    pub log_event_bytes: u64,
     /// The burn gate's counters (P4r.5): every POST /api/agent-gate that built a state is a
     /// check; denies/warns/advisories count what actually went back to a model.
     pub gate_checks: u64,
@@ -43,9 +47,10 @@ pub struct PersistStats {
     pub statusline_samples: u64,
 }
 
-/// The bound listeners (server.ts UI_PORT / MCP_PORT / OTLP_PORT). `mcp` is the configured
-/// port only: the core has no MCP listener yet (freeze §3 is a later slice), so it reports what
-/// the TS server would — env MCP_PORT, default 4316.
+/// The bound listeners (server.ts UI_PORT / MCP_PORT / OTLP_PORT). All three are now really
+/// bound — `alcore serve` sets `mcp` from `--mcp-port` after `serve_mcp` claims it (C1). Until
+/// then this field carried the env default (4316) while nothing listened on it, so the server
+/// stated a port about itself that a client would find dead.
 #[derive(Clone, Copy, Debug)]
 pub struct Ports {
     pub ui: u16,
@@ -366,7 +371,7 @@ pub fn server_stats(st: &CoreState, now_ms: i64) -> Value {
             "droppedRows": sl["droppedRows"], "corruptWals": sl["corruptWals"],
             "receivedSinceBoot": p.statusline_samples, "retentionDays": statusline_retention_days,
         },
-        "logEvents": { "files": log_ev_files, "bytes": log_ev_bytes, "persistedSinceBoot": 0, "persistedBytesSinceBoot": 0, "retentionDays": log_events_retention_days },
+        "logEvents": { "files": log_ev_files, "bytes": log_ev_bytes, "persistedSinceBoot": p.log_event_writes, "persistedBytesSinceBoot": p.log_event_bytes, "retentionDays": log_events_retention_days },
         // NOT PORTED: the admission controller — idle stats.
         "admission": { "inflight": 0, "queued": 0, "admittedTotal": 0, "shedTotal": 0 },
         "resources": resource_sample(data_dir),
@@ -375,8 +380,14 @@ pub fn server_stats(st: &CoreState, now_ms: i64) -> Value {
             "captureEnabled": hook.capture_enabled, "advisorEnabled": hook.advisor_enabled,
             "checks": p.gate_checks, "denies": p.gate_denies, "warns": p.gate_warns, "advisories": p.gate_advisories,
         },
-        // NOT PORTED: the OTLP log-event ingest gate — nothing rejected yet ⇒ {}.
-        "otlpDroppedLogEvents": Map::new(),
+        // The gate IS ported and HAS been counting all along — `IngestState::dropped_log_events`,
+        // `(other)` overflow bucket included. This line reported `{}` behind a "NOT PORTED"
+        // comment that had gone stale, so a real rejection count was computed on every ingest and
+        // then thrown away one field from where it was needed. Insertion order is preserved
+        // (IndexMap + serde_json preserve_order), so the wire order matches the TS's object.
+        "otlpDroppedLogEvents": st.ingest.dropped_log_events.iter()
+            .map(|(k, v)| (k.clone(), Value::from(*v)))
+            .collect::<Map<String, Value>>(),
         // NOT PORTED: src/shared/fallbackCounters.ts — counters that never fired are absent ⇒ {}.
         "degradations": Map::new(),
     })
