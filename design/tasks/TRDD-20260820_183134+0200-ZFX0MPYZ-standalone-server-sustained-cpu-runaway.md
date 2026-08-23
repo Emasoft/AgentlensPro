@@ -3,7 +3,7 @@ trdd-id: ZFX0MPYZ
 title: Standalone server sustains 150-270 percent CPU and 2.4 GB RSS over an 8-hour uptime
 column: todo
 created: 2026-08-20T18:31:34+0200
-updated: 2026-08-23T05:20:34+0200
+updated: 2026-08-23T05:23:04+0200
 current-owner: unassigned
 task-type: bugfix
 priority: high
@@ -330,11 +330,19 @@ cold memo, never eight in a row — so any pooled median is dominated by the che
 **All that is defensible from these 16: the range is 143–1507 ms and the count is 16.**
 
 A clean single-design measurement (20 fresh-process single-walk runs, 30 s apart) is running as of
-05:19 → `reports/cpu-runaway/walk-clean-20260823_051928+0200.txt`. Its p90 replaces this
-paragraph. **Deliberately started BEFORE writing the conclusion**, because the failure this card
-keeps repeating is not single-sample reasoning — it is reaching for the number that supports the
-sentence already being written (820 supported "latent"; 1507 supported "urgent"; 317 supported
-"comfortable headroom"; each defensible alone, each pre-selected).
+05:19 → `reports/cpu-runaway/walk-clean-20260823_051928+0200.txt`. **Deliberately started BEFORE
+writing the conclusion**, because the failure this card keeps repeating is not single-sample
+reasoning — it is reaching for the number that supports the sentence already being written (820
+supported "latent"; 1507 supported "urgent"; 317 supported "comfortable headroom"; each defensible
+alone, each pre-selected).
+
+> **PRE-REGISTERED 05:24, before the file was read — and starting the run early was NOT enough on
+> its own.** Running the measurement first closes only ONE degree of freedom (which measurement);
+> it leaves open the one where the bias actually operates (which statistic to quote from it). Every
+> fix tonight has been correct and applied one level ABOVE where the selection happens. So, in
+> advance: **the statistic is p90 of the 20 runs, compared against the 2000 ms TTL. Whatever it
+> says goes in, including if it is inconvenient.** n, min, p50, p90 and max all get reported; the
+> VERDICT is keyed to p90.
 
 **The cause of the spread is UNATTRIBUTED — and my refutation of my own explanation ALSO went too
 far.** I wrote it was "OS page-cache warmth and machine load", which I never measured. I then
@@ -411,9 +419,23 @@ former silently measures old code — it cost two failed runs here.
       leak shows as a rising FLOOR, and the floor moves long before the mean does.
       **65-minute read (04:14→05:18, n=65), per-10-minute minima:**
       1.347 → 1.348 → 1.167 → 1.334 → 1.262 → **1.239 GB**. Floor trend **−0.108 GB/h**;
-      first-to-last delta **−0.107 GB**. Against an implied leak of **(2.47−1.36)/8h = 0.139 GB/h**
-      that the card's own observation would require, the floor is **flat-to-falling — no leak
-      signature over 65 minutes.**
+      first-to-last delta **−0.107 GB**.
+      **WITHDRAWN — the "implied leak of (2.47−1.36)/8h = 0.139 GB/h" I compared this against was
+      FABRICATED.** It subtracts the RSS of ONE process from a DIFFERENT process and divides by the
+      first one's uptime, silently assuming the 2026-08-20 process started at the value today's
+      process happens to show. **Nobody measured that process's starting RSS.** Had it started at
+      2.0 GB the rate would be 0.059; at 0.8 GB, 0.209 — a 3.5× range, and I quoted one point from
+      it to three decimals and then measured a verdict against it.
+      **The real quantity, one process, known uptime interval** (pid 21567, uptime 308→375 min,
+      n=68): RSS 1.379 → 1.361 GB, endpoint rate **−0.016 GB/h**, least-squares **−0.046 GB/h**.
+      No cross-process arithmetic anywhere in it.
+      **AND "no leak signature" OVERSTATED what 65 minutes can say.** The floor's own scatter is
+      1.167–1.348 = **0.18 GB**, larger than the ~0.14 GB an 0.139 GB/h leak would add in an hour —
+      so the noise exceeds the signal over this window. The honest statement is **insufficient
+      power at 65 minutes**, not absence of a leak. (The floor remains the right discriminator —
+      a leak does raise it — but six 10-sample minima cannot resolve it, and a per-block minimum is
+      itself an upward-biased, high-variance estimator. That is the same trend-through-a-noisy-
+      statistic construction I retired two commits ago, relocated rather than removed.)
       Two statistics I first published here are WITHDRAWN as non-discriminating: "19 of 24 steps
       reverse direction" (a real leak at this scale — ~2.5 MB/min against tens of MB of jitter —
       would flip direction just as often, so the count measures noise-to-step ratio, not
