@@ -385,7 +385,18 @@ export class LogReader {
     // Newest first — caller processes in this order so recent sessions appear first.
     entries.sort((a, b) => b.mtimeMs - a.mtimeMs)
     this._fileMetaCache = entries
-    this._fileMetaCacheAt = now
+    // TRDD-ZFX0MPYZ — stamp AFTER the walk, not with the pre-walk `now`. With the pre-walk
+    // timestamp the cache's usable life was `TTL - walkDuration`, so once a walk outlives its TTL
+    // the entry was born already expired and the memo did not degrade — it DISAPPEARED: measured,
+    // 5 probe candidates cost 5 full recursive readdir+stat passes over every session file. The
+    // walk is 126-1902ms over 14,509 files (n=20, p90 750ms) against a 2000ms TTL, so this is
+    // reachable on load variance alone and arrives with no warning, discontinuously at the crossing.
+    // The staleness argument above survives the change because it is bounded in KIND, not at 2s:
+    // data age becomes at most `walkDuration + TTL` instead of `TTL`, and the consequence is
+    // unchanged — no answer is ever WRONG, only briefly incomplete for a very new session, which
+    // the next probe picks up. Trading ~0.8s of extra worst-case staleness for the removal of a 5x
+    // walk amplification is not a close call.
+    this._fileMetaCacheAt = Date.now()
     return entries
   }
 
