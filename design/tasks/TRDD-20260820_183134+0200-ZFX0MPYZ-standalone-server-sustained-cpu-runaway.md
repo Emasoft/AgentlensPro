@@ -19,15 +19,27 @@ This card is ~700 lines of append-only investigation across four sessions and tw
 **Read this block, not the body, for what is currently true.** The body is a record of how the
 answers were reached — including several that were WRONG and were corrected in place.
 
-**⚠ THE STANDING LESSON OF 2026-08-23, EARNED OVER FOUR COMMITS EACH CORRECTING THE LAST.** Every
-defect in that chain was a VERDICT WORD attached to a number that did not carry it — "steady state,
-not a leak" (no sensitivity), "reads high in every bucket" (untested, false), "not biased"
+**⚠ THE STANDING LESSON OF 2026-08-23, EARNED OVER FIVE COMMITS EACH CORRECTING THE LAST.** Almost
+every defect in that chain was a VERDICT WORD attached to a number that did not carry it — "steady
+state, not a leak" (no sensitivity), "reads high in every bucket" (untested, false), "not biased"
 (an unsupported null replacing an unsupported positive), "agree inside the uncertainty" (no
-criterion set before looking), "every number from one frozen snapshot" (a method claim, false). The
-numbers were mostly fine; the adjectives were not, and each correction shipped a fresh one.
-**So: publish the number with its derivation and its n, and stop attaching the adjective.** And
-when the question is what a tool MEASURES, read the tool — the `ps` line in the 20-line sampler
-settled in one call what two rounds of argument-from-column-name could not.
+criterion set before looking), "every number from one frozen snapshot" (a method claim, false), "the
+lock guard refusing a second claimant, working as designed" (a mechanism fitted to one row, no log
+checked). **So: publish the number with its derivation and its n, and stop attaching the adjective.**
+
+Two riders, both learned the hard way in the same chain:
+- **The lesson does not protect the commit that adds it.** The commit introducing this paragraph
+  ALSO shipped the lock-guard story and a 61.24 s period derived by mixing one snapshot's row count
+  with another's timestamp — the mixing error a previous commit had already written a lesson
+  against. Writing the rule down is not applying it.
+- **"I removed adjectives this round" is itself an unfalsifiable adjective.** The checkable form is
+  a count: **claims added vs claims withdrawn per commit**, which is why every withdrawal above is
+  written as an explicit WITHDRAWN line rather than by quietly editing the old text away.
+
+And when the question is what a tool MEASURES, **read the tool, then test it on your own data.**
+The `ps` line in the 20-line sampler settled in one call what two rounds of argument-from-column-name
+could not — but the follow-up claim about what `%cpu` *means* was still quoted from memory, and only
+the lifetime-average test on this file actually established it.
 
 **WHERE IT STANDS.** Acceptance boxes **1 ✓ 2 ✓ 4 ✓ 5 ✓**, box **3 answered on a PARTIAL series
 (69.5%) and left open until the full one lands ~16:13**. `column: todo` — one queued read, waiting
@@ -76,17 +88,25 @@ existed for. Worse, it duplicated a real automated control: `trdd-drift` covers 
 default, which is exactly what `review-after:` exists to opt OUT of. A decorative control stacked
 on a working one makes the working one look optional.)
 
-**⚠ THE COMPLETION TIME WAS WRONG, AND SO WAS THE SAMPLE COUNT — corrected 12:55 by READING THE
-SAMPLER** (`…/df3b097d-…/scratchpad/rss-sampler.sh`, pid 82388, ppid 1, alive). It loops
-`seq 1 720`, so the finished file is **720 data rows + 1 header = 721 ROWS**, not "721 samples".
-And each iteration is `ps` + `sleep 60`, so the measured period is **61.24 s**, not 60: over 720
-samples that drift is **+15 minutes**. Completion is **~16:28**, not the ~16:13 this block asserted
-from 04:13 + 720 × 60 s. The follow-up job was set for 16:19 and **would have read an incomplete
-series and reported it as the full one** — the same substitution this card exists to catch, this
-time caught before it fired. Re-armed for 16:37. **Verify the row count is 721 before treating the
-series as complete.**
+**⚠ THE SAMPLE COUNT WAS WRONG; THE COMPLETION TIME WAS RIGHT, AND MY "CORRECTION" TO IT BROKE IT.**
+Reading the sampler (`…/df3b097d-…/scratchpad/rss-sampler.sh`, pid 82388, ppid 1, alive) fixes one
+of these and settles the other:
+- **TRUE:** it loops `seq 1 720`, so the finished file is **720 data rows + 1 header = 721 ROWS**,
+  not "721 samples". Verify the row count before treating the series as complete.
+- **TRUE:** **no rows have been dropped** — all 506 intervals measure 60–61 s — so loop iterations
+  and written rows have stayed 1:1. (This matters because the loop is bounded by ITERATIONS: if the
+  grep ever misses, the file can never reach 721 rows and a row-count precondition would hang.)
+- **WITHDRAWN — "the period is 61.24 s, so completion is ~16:28, +15 min later than the ~16:13 this
+  block said".** The true cadence is **60.06 s** and the last row is due **~16:14:12**, so the
+  original ~16:13 was right to within a minute. I produced 61.24 by **dividing the FROZEN file's
+  row count (508) by the LIVE file's latest timestamp (12:51:02)** — the frozen file ends at
+  12:41:01. That is snapshot-mixing, and it shipped **in the very commit that added the lesson
+  against it**. Two self-consistent snapshots agree: 60.06 s (508 rows) and 60.059 s (526 rows).
+- **WITHDRAWN — "the 16:19 job would have read an incomplete series".** With the true ETA of
+  16:14:12 it would have been fine. The job now sits at 16:26 for margin, with a liveness check so
+  a DEAD sampler yields "final-but-short" rather than "incomplete" forever.
 
-**NEXT ACTION — one step, runnable as written, after ~16:28** (when row 721 lands). Re-run
+**NEXT ACTION — one step, runnable as written, after ~16:14** (when row 721 lands). Re-run
 the floor read on the COMPLETE series to confirm or overturn the partial verdict below. **Filter on
 the pid** — the older block-min command did not, and one transient foreign process fabricated a
 `block23 min_rss=0.028G` that reads exactly like a mid-series restart (see the gotcha below):
@@ -126,13 +146,29 @@ is the reader's call, not a conclusion this data licenses.
 Peaks likewise flat at 1.45–1.63 G. The box stays unticked because the series is 69.5% complete.
 Report: `reports/cpu-runaway/20260823_123633+0200-box3-rss-floor-8h20m-partial.md`.
 
-**CPU, from `cpu_time` DELTAS — and the columns are now VERIFIED FROM THE SAMPLER SOURCE, not from
-their header names.** The sampler runs `ps -eo pid,etime,%cpu,time,rss,command`, so **column 4 is
-BSD `ps %cpu`** (a *decaying* average over up to a minute of real time — the header name
-`pct_cpu_1min` is approximately right but the decay is not a flat window) and **column 5 is `ps
-time`**, cumulative CPU. So they ARE the same quantity differing only as estimators, which two
-turns ago I asserted from a column label and one turn ago adopted from a reviewer. Reading the
-20-line script settled in one call what two rounds of argument could not.
+**CPU, from `cpu_time` DELTAS — and the columns are VERIFIED FROM THE SAMPLER SOURCE plus a test on
+the data, not from their header names and not from a man page quoted from memory.** The sampler
+runs `ps -eo pid,etime,%cpu,time,rss,command` (and `/bin/ps` here is BSD — `ps --version` returns
+the BSD usage string, so the GNU-coreutils shadowing that affects `stat`/`date` on this machine does
+not reach `ps`). Col 4 is `%cpu`, col 5 is `time` (cumulative CPU).
+**Col 4 is NOT a lifetime average — settled on this file rather than on the man page**, since a
+lifetime average would make cols 4 and 5 nearly the same statistic and void the whole distinction:
+
+| row | col 4 | 100×cputime/elapsed | diff |
+|---|---|---|---|
+| 1 | 13.1 | 27.44 | −14.3 |
+| 150 | 6.3 | 27.05 | −20.8 |
+| 300 | 1.5 | 25.99 | −24.5 |
+| 450 | 79.3 | 25.84 | +53.5 |
+
+The lifetime average is nearly flat across 8.4 h while col 4 swings 1.5 → 79.3 between adjacent
+minutes. So col 4 is a short-window/decaying measure and col 5 is cumulative: **same quantity,
+different estimators** — asserted from a column NAME two turns ago, adopted from a reviewer one turn
+ago, and only now actually measured.
+**Free corroboration from that same test:** the lifetime average is **27.4% of a core over the
+process's first 5.15 h**, declining to **25.8%** by 12:41 — so ~26% has been sustained across its
+whole ~13 h life, not merely inside the window I sampled. That is a stronger form of this card's
+headline than the windowed 25.1% alone.
 True CPU per hour (Δcol 5, pid 21567, `p` reset on pid change): 25.8 / 26.7 / 25.7 / 23.8 / 22.0 /
 21.1 / 23.8 / 30.9 / 26.6 **% of one core**; **25.1% overall** across 504 intervals — a tight 21–31
 band, stable while RSS is flat.
@@ -145,13 +181,25 @@ rather than 9 hourly means:
 
 > `n=504  mean(gauge−true) = +2.75 pt  SD=37.08  SE=1.65  t=+1.66  95% CI [−0.49, +5.98]`
 
-**|t| < 2, so a high bias is NOT established — and neither is its absence.** The correct wording is
-**"no bias detectable to ±3 pt"**; a real +2.75 pt lean (≈10% of a 25% base) is entirely consistent
-with this data. Never write "not biased" for a test that failed to reject.
-*One thing the finer test did NOT buy:* the 9-hourly-means test gives SE 1.68 against 1.65 here —
-**essentially identical**, because the per-sample noise is independent and averaging within hours
-already removed it. The claim that aggregating to hours discarded ~98% of the power was itself an
-unverified assertion; measuring it cost one command and it is false.
+**|t| < 2, so a high bias is NOT established — and neither is its absence.** Autocorrelation was
+raised as an objection and MEASURED rather than argued: lag-1 ρ = **+0.032**, AR(1) inflation
+**1.03×**, so SE 1.65 → 1.71 and t 1.66 → **1.61**. Conclusion unchanged. (A ~1-minute decaying
+average sampled at 60 s is very nearly independent, which is why the correlation is negligible —
+the objection assumed it would be large enough to invert the ranking below; it is not.)
+The correct wording is **"no bias detectable to ±3.4 pt"** (MDE = 1.965 × 1.71); a real +2.75 pt
+lean (≈10% of a 25% base) is entirely consistent with this data. Never write "not biased" for a
+test that failed to reject.
+**How much the finer test bought — and my own answer to this was a proxy read too.** I compared the
+two SEs (1.68 hourly vs 1.71 AR-inflated paired) and concluded "essentially nothing". **SE is not
+power**: the critical value differs too, 2.306 at df 8 against 1.965 at df 503. On MDE —
+
+| test | t_crit | SE | MDE |
+|---|---|---|---|
+| 9 hourly means | 2.306 | 1.68 | **3.87 pt** |
+| 504 pairs (AR-inflated) | 1.965 | 1.71 | **3.36 pt** |
+
+**≈13% better, not 98% (as first claimed against me) and not "essentially nothing" (as I claimed
+back).** Two wrong answers, both from comparing one component of a quantity instead of the quantity.
 Also withdrawn: *"exceeding 100 proves it is not the same quantity"* — a `cpu_time` delta is
 thread-summed core-percent too and exceeds 100 above one core. **Prefer col 5 because it is a
 monotone counter, not because col 4 leans one way.**
@@ -169,10 +217,20 @@ than several hours. (Like-for-like: both are floor-minima regressions, hour buck
 **GOTCHA — the sampler is NOT PINNED TO A PID, and this is now READ, not inferred.** Its selector is
 literally `grep 'standalone/server.js' /tmp/rss-snap.$$ | grep -v grep | head -1`: it re-resolves by
 COMMAND STRING every sample and takes whichever process `ps` lists first. Exactly one row of 507
-(239, 08:12:47) carries pid 19113 / `elapsed=00:00` / 28 MB — **a genuine second
-`standalone/server.js` that lived under a minute**, which is the data-dir lock guard refusing a
-second claimant, working as designed. Re-checked on the frozen 508-row file: **still exactly one
-foreign row**, so the drift is a one-off, not recurring. **The server did NOT restart, and this
+(239, 08:12:47) carries pid 19113 / `elapsed=00:00` / 28 MB. **CAUSE UNKNOWN — and the story I
+first published here is WITHDRAWN.** I wrote that it was "a genuine second `standalone/server.js`
+that lived under a minute — the data-dir lock guard refusing a second claimant, working as
+designed": a causal mechanism plus a *working-as-designed* verdict, fitted to ONE row, with no log
+checked, **shipped in the commit that added the rule against exactly that.** Checked now:
+`~/.agentlens/server.log` carries **no data-dir refusal, no "already running", no second-instance
+message**; its only `lock_contended` lines are a *usage-refresh* mutex, a different lock entirely.
+28 MB is also below node's own baseline RSS, so the process plausibly never reached the lock at all.
+Anything whose argv contains `standalone/server.js` matches that grep — a status call, a probe, a
+restart attempt. **Do not cite this row as evidence the lock guard works.**
+Frequency, stated as the count rather than as a verdict: **1 foreign row in 507 samples over
+8.4 h**; that is not enough to call it a one-off (the earlier "one-off, not recurring" was the same
+one-run-for-the-variance error deleted elsewhere in the same commit). **The server did NOT restart,
+and this
 is arithmetic rather than a single-pair inference:** across row 239, wall 04:14:33→08:13:47 and
 pid 21567's own `elapsed` 05:08:47→09:08:01 are both exactly **3h59m14s (14,354 s)** — the process
 clock never reset. A per-block MINIMUM has no resistance to a single outlier by construction, so
@@ -928,23 +986,35 @@ former silently measures old code — it cost two failed runs here.
       **CPU: use `cpu_time` (col 5) DELTAS, never the mean of `pct_cpu_1min` (col 4).** True CPU per
       hour is 25.8 / 26.7 / 25.7 / 23.8 / 22.0 / 21.1 / 23.8 / 30.9 / 26.6 **% of one core**;
       **25.1% overall** over 504 intervals — tight 21–31, stable while RSS is flat.
-      **VERIFIED FROM THE SAMPLER SOURCE** (`ps -eo pid,etime,%cpu,time,rss,command`): col 4 is BSD
-      `ps %cpu`, a DECAYING average over up to a minute of real time; col 5 is `ps time`, cumulative
-      CPU. Same quantity, different estimators — a fact I asserted from a column NAME, then adopted
-      from a reviewer, before finally reading the 20-line script that settles it.
+      **VERIFIED FROM THE SAMPLER SOURCE** (`ps -eo pid,etime,%cpu,time,rss,command`; `/bin/ps` is
+      BSD here, so the GNU shadowing that affects stat/date does not reach it) **AND TESTED ON THIS
+      FILE**: col 4 is not a lifetime average — `100×cputime/elapsed` is nearly flat (27.4→25.8
+      across 8.4 h) while col 4 swings 1.5→79.3 between adjacent minutes. Same quantity, different
+      estimators — asserted from a column NAME, then adopted from a reviewer, then quoted from a
+      remembered man page, and only settled by the test. That test also shows the process averaged
+      **27.4% of a core over its first 5.15 h and 25.8% by 12:41** — ~26% across its whole ~13 h
+      life, a stronger form of this card's headline than the windowed figure alone.
       **Three things I wrote about col 4 are WITHDRAWN**, in order: it does NOT read high in every
       bucket (6 of 9; 07/08/12 read LOW); ">100 proves it is not per-core" is a non-sequitur (col-5
       deltas are thread-summed too); and the replacement claim **"noisy in both directions, not
       biased" was an unsupported NULL** — on all **504 paired observations**, mean(gauge−true) =
       **+2.75 pt, SD 37.08, SE 1.65, t=+1.66, 95% CI [−0.49, +5.98]**. |t|<2, so a high bias is not
-      established AND neither is its absence: the honest wording is **"no bias detectable to ±3 pt"**.
-      (The 9-hourly-means test gives SE 1.68 vs 1.65 — aggregation cost essentially nothing, so the
-      claim that it discarded ~98% of the power was itself wrong.)
+      established AND neither is its absence. Autocorrelation was raised and MEASURED, not argued:
+      lag-1 ρ=+0.032, AR(1) inflation 1.03×, t 1.66→1.61 — unchanged. Honest wording: **"no bias
+      detectable to ±3.4 pt"** (MDE = 1.965 × 1.71).
+      **How much the 504-pair test bought over the 9-hour one — both published answers were wrong,
+      mine included.** SE is not power: MDE is **3.87 pt** (t_crit 2.306 × SE 1.68) vs **3.36 pt**
+      (1.965 × 1.71) ⇒ **≈13% better**, not 98% and not "essentially nothing".
       Also: deltas are exact only with `p` RESET on pid change; carrying it across row 239 divided a
       120 s interval by 60 and understated hour 08 by 0.4 pt (22.4→22.0, n=59 where 58 was right).
-      **The completion time on this card was wrong too** — the sampler loops `seq 1 720` (721 ROWS
-      finished, not 721 samples) at a measured 61.24 s/sample, so it lands **~16:28, not ~16:13**;
-      the follow-up was armed for 16:19 and would have read a short series as complete.
+      **On the completion time: the sample COUNT was wrong, the TIME was right.** `seq 1 720` ⇒ 721
+      ROWS finished, not 721 samples — that stands. But "61.24 s/sample ⇒ ~16:28" is **WITHDRAWN**:
+      the true cadence is **60.06 s** (two self-consistent snapshots) and the last row is due
+      **~16:14:12**, so the original ~16:13 was right. 61.24 came from dividing the FROZEN file's
+      row count by the LIVE file's timestamp — snapshot-mixing, shipped in the very commit that
+      added the lesson against it. No rows have been dropped (506 intervals, all 60–61 s), which
+      matters because the loop is bounded by ITERATIONS: a missed grep would make 721 rows
+      unreachable and hang any row-count precondition.
       **RETRACTS the 65-minute floor trend −0.108 GB/h above.** The 8h20m slope is +0.0001 (7
       complete buckets) — 1000× smaller, opposite sign; sustained, −0.108 drains ~0.9 GB. Like for
       like: both are floor-minima regressions. Third quantity in this box withdrawn for being read
