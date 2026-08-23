@@ -3,7 +3,7 @@ trdd-id: ZFX0MPYZ
 title: Standalone server sustains 150-270 percent CPU and 2.4 GB RSS over an 8-hour uptime
 column: todo
 created: 2026-08-20T18:31:34+0200
-updated: 2026-08-23T04:32:36+0200
+updated: 2026-08-23T04:38:31+0200
 current-owner: unassigned
 task-type: bugfix
 priority: high
@@ -192,10 +192,16 @@ once; the record of all three is deliberate.
 | 4 × `node-V8Worker` | ~98% idle in-window; their lifetime CPU is **V8 concurrent GC** (`ConcurrentMarking::RunMajor`) |
 | main thread | the only meaningfully busy thread |
 
-The fs threadpool does essentially nothing. The 21.6% off-main CPU is **V8 background garbage
-collection**, driven by heap size — which makes it the *"GC pressure from the 2.47 GB heap"*
-candidate box 2 lists, now measured: **~21.6% of process CPU is concurrent GC**, invisible to the
-V8 CPU profile (which shows only 0.98% for main-thread GC).
+The fs threadpool does essentially nothing — that part is a direct read of the sample.
+
+**The GC attribution is WEAKER than I first wrote it, and the overstatement is corrected here.**
+I said this "measures box 2's GC-pressure candidate at ~21.6% of process CPU". It does not. The
+21.6% comes from `ps -M` columns, which say those threads burned CPU but not what they burned it
+on; the GC label comes from a thread NAME (`node-V8Worker`) plus one observed stack frame
+(`ConcurrentMarking::RunMajor`). That is a strong indication, not a measurement — upgrading a
+label into a number is the same move that produced three earlier defects. **To actually measure
+it:** `--trace-gc` on a restarted server, or a `v8.getHeapStatistics()` delta series. Until then:
+~21.6% of process CPU is off-main and *most likely* V8 concurrent GC.
 
 **FALSE — "11.3% of a core, so the profiler is blind to the majority".** I computed that as
 `busy_samples × 100 µs`, assuming the interval I requested. V8 never honoured it — effective
@@ -208,15 +214,33 @@ uniformly spaced (a stalled sampler yields larger deltas on busy samples). The p
 | 45 s | 10.68 s | **23.5%** | (16.7% busy-fraction) |
 | 60 s | 13.29 s | **22.0%** | **11.3% — wrong** |
 
-Against the process's `TIME` delta of 23.0–38.2%, the main thread is **58–96% of process CPU** —
-the majority, consistent with the `ps -M` lifetime split (78.4% main) that appeared one line above
-the contradiction and which I failed to reconcile.
+**The "58–96% of process CPU" band I first published here was itself a window mix and is
+withdrawn.** Its two numerators came from different windows over a bursty process — 22.0/23.5%
+from the profiles' own intervals, 23.0–38.2% from three per-minute `TIME` deltas — so the band's
+WIDTH was an artifact of the mismatch, not real uncertainty.
+
+**Measured properly, both numerators from ONE identical window** (`ps -o time=` read immediately
+before and after a 60 s profile):
+
+| over the same 60.3 s | |
+|---|---|
+| process CPU | 17.56 s = **29.1% of one core** |
+| main-thread busy (summed `timeDeltas`) | 12.01 s = **19.9% of one core** |
+| **main thread share of process CPU** | **68.4%** |
+
+One number, no mixing — and consistent with the `ps -M` lifetime split (78.4% main) that sat one
+line above the contradiction I originally failed to reconcile.
+
+**TRAP, hit while taking exactly this measurement:** `ps -o time=` prints **`MM:SS.ss`** here
+(`90:45.41` = 90 minutes), not `HH:MM:SS`. Parsing it as `HH:MM:SS` yielded "1422 s of CPU in 60 s
+of wall" — impossible, and only caught because it was impossible. A less absurd process would have
+made the same bug invisible. Count the colons (`NF`), never assume the format.
 
 **Box 1 is RE-TICKED with its scope stated:** the main thread is profiled and its frames named,
 and the main thread is where the majority of the CPU is. The remaining ~21.6% is measured and
 attributed to V8 concurrent GC, but not frame-attributed.
 
-## 2026-08-23 04:30 — WHO calls it: the load scales with open sessions, not with uptime
+## 2026-08-23 04:30 — WHO calls it (measured) and a session-scaling HYPOTHESIS (not measured)
 
 Inside AgentlensPro `check_cache_expiry` has exactly one caller — `src/cli/cacheExpiredCli.ts:115`
 → `callTool` → server HTTP. Nothing else in `src/`/`standalone/` calls it; the `agentlenspro gate`
@@ -228,13 +252,33 @@ The verb is driven from **outside this repo**, by **ai-maestro-janitor 3.3.26**:
 `scripts/detectors/window-burn-rate.py:50` and `scripts/detectors/token-usage-anomaly.py:37`,
 plus `scripts/lib/external_clear.py`.
 
-**So the cost is `N_sessions × N_detectors × beat_rate`, and no term is under the server's
-control.** There are **30 `claude` processes** on this machine; measured rate is 147 calls/hour
-(769 over 5h14m), each a full recursive `readdir` + `statSync` over 14,509 files.
+(The version is right for a better reason than the one I first had: the dispatcher stub
+**re-resolves "latest cached version"** by its own documented design, so 3.3.26 — the highest of
+the 11 cached — is what executes. My original basis was that it sorts last, which is the same
+disk-artifact-for-the-thing shape as the retired-log-format defect above.)
 
-**This explains the shape the card opened on:** the burn is not a leak that develops with uptime —
-it scales with how many Claude sessions are open. It also explains the healthy young server on
-2026-08-22 and the 5035 ms vs 947 ms per-call gap between processes.
+**MEASURED:** 769 calls over 5h14m = **147 calls/hour**, each a full recursive `readdir` +
+`statSync` over 14,509 files. That is an average over one window, not an observed rate law.
+
+**HYPOTHESIS, NOT MEASURED — flagged because the first version of this section asserted it as
+fact in its own heading.** The shape `cost = N_sessions × N_detectors × beat_rate` predicts the
+burn scales with how many Claude sessions are open rather than with uptime. **I never measured
+it.** One machine state, one session count, one rate — the causal arrow is asserted. Three
+specific weaknesses, each fatal on its own:
+
+- **`N_sessions` is itself a proxy.** The "30 `claude` processes" is `grep -c claude` over a `ps`
+  snapshot, which counts helper processes, MCP children and this session's own subagents — not
+  janitor-armed sessions.
+- **It is self-undermining.** If load scaled with sessions, the pre-boot processes averaging
+  5035 ms/call would imply MORE sessions then — yet I also explained that same gap by corpus size
+  and by event-loop contention. Three explanations for one observation, none discriminated.
+- **The 08-22 "healthy young server" is not evidence for it.** That process had 24 minutes of
+  uptime, and this card already records that a young process proves nothing — then I reused it as
+  confirming evidence for a different hypothesis.
+
+**The discriminating experiment** (cheap, not yet run): sample the call counter and the
+janitor-armed session count together at two points an hour apart. If calls/hour tracks the armed
+count, the hypothesis holds; if not, this reframing is wrong and the fix target moves again.
 
 **Neither timeout bounds the server:** the janitor abandons at 5 s, the CLI at 1500 ms
 (`src/cli/main.ts:92`), and neither cancels server-side work — hence 25–65 s calls nobody awaited.
@@ -275,11 +319,12 @@ former silently measures old code — it cost two failed runs here.
       inspector) taken against a server reproducing the condition, naming the hot frames.
       2026-08-23: ticked → unticked → RE-TICKED the same night; the untick was an overcorrection
       on two false premises (see the section above). Two inspector profiles (45 s / 257,123 and
-      60 s / 353,511 samples) of pid 21567 name the MAIN-THREAD frames, and by the profiles' own
-      `timeDeltas` (100.0% wall coverage) the main thread runs 23.5% / 22.0% of a core against a
-      process burning 23.0-38.2% — i.e. 58-96% of process CPU, the majority. SCOPE, stated rather
-      than glossed: the remaining ~21.6% is V8 concurrent GC on `node-V8Worker` threads, measured
-      via `/usr/bin/sample` but not frame-attributed; the libuv fs threadpool is 100% idle.
+      60 s / 353,511 samples) of pid 21567 name the MAIN-THREAD frames, and a paired measurement
+      over ONE identical 60.3 s window (both numerators from the same interval) puts the main
+      thread at 12.01 s busy against 17.56 s of process CPU = **68.4% of process CPU**. SCOPE,
+      stated rather than glossed: the other ~31.6% is off-main and MOST LIKELY V8 concurrent GC
+      (thread name + one stack frame — indicated, not measured); the libuv fs threadpool is
+      100% idle, so it is not fs work.
 - [x] The work is attributed to a trigger: a periodic timer, a request path, the log watcher, the
       span-store compaction, or GC pressure from the 2.47 GB heap.
       2026-08-23: on the MAIN THREAD, a REQUEST path (`check_cache_expiry`, 36.6% of busy)
