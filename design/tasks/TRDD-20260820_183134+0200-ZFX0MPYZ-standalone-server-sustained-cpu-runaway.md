@@ -19,6 +19,16 @@ This card is ~700 lines of append-only investigation across four sessions and tw
 **Read this block, not the body, for what is currently true.** The body is a record of how the
 answers were reached — including several that were WRONG and were corrected in place.
 
+**⚠ THE STANDING LESSON OF 2026-08-23, EARNED OVER FOUR COMMITS EACH CORRECTING THE LAST.** Every
+defect in that chain was a VERDICT WORD attached to a number that did not carry it — "steady state,
+not a leak" (no sensitivity), "reads high in every bucket" (untested, false), "not biased"
+(an unsupported null replacing an unsupported positive), "agree inside the uncertainty" (no
+criterion set before looking), "every number from one frozen snapshot" (a method claim, false). The
+numbers were mostly fine; the adjectives were not, and each correction shipped a fresh one.
+**So: publish the number with its derivation and its n, and stop attaching the adjective.** And
+when the question is what a tool MEASURES, read the tool — the `ps` line in the 20-line sampler
+settled in one call what two rounds of argument-from-column-name could not.
+
 **WHERE IT STANDS.** Acceptance boxes **1 ✓ 2 ✓ 4 ✓ 5 ✓**, box **3 answered on a PARTIAL series
 (69.5%) and left open until the full one lands ~16:13**. `column: todo` — one queued read, waiting
 on a clock, nobody working it right now. **Box 3 is the ONLY open box, and when it ticks this card
@@ -66,7 +76,17 @@ existed for. Worse, it duplicated a real automated control: `trdd-drift` covers 
 default, which is exactly what `review-after:` exists to opt OUT of. A decorative control stacked
 on a working one makes the working one look optional.)
 
-**NEXT ACTION — one step, runnable as written, after ~16:13** (when the 721st sample lands). Re-run
+**⚠ THE COMPLETION TIME WAS WRONG, AND SO WAS THE SAMPLE COUNT — corrected 12:55 by READING THE
+SAMPLER** (`…/df3b097d-…/scratchpad/rss-sampler.sh`, pid 82388, ppid 1, alive). It loops
+`seq 1 720`, so the finished file is **720 data rows + 1 header = 721 ROWS**, not "721 samples".
+And each iteration is `ps` + `sleep 60`, so the measured period is **61.24 s**, not 60: over 720
+samples that drift is **+15 minutes**. Completion is **~16:28**, not the ~16:13 this block asserted
+from 04:13 + 720 × 60 s. The follow-up job was set for 16:19 and **would have read an incomplete
+series and reported it as the full one** — the same substitution this card exists to catch, this
+time caught before it fired. Re-armed for 16:37. **Verify the row count is 721 before treating the
+series as complete.**
+
+**NEXT ACTION — one step, runnable as written, after ~16:28** (when row 721 lands). Re-run
 the floor read on the COMPLETE series to confirm or overturn the partial verdict below. **Filter on
 the pid** — the older block-min command did not, and one transient foreign process fabricated a
 `block23 min_rss=0.028G` that reads exactly like a mid-series restart (see the gotcha below):
@@ -98,26 +118,43 @@ invisible.* Against the 65-minute window's 0.3–0.4 that is **roughly an order 
 measured ratio is 14×, but it divides two MDEs whose σ̂ come from 4 and 5 df and are each uncertain
 by ~2×, so it is good to about 4× and must not be quoted as "12×" or "14×". **Independent
 corroboration, which the card had already derived and I failed to use:** SE ∝ σ√Δ/T^1.5 over a
-7.69× longer window predicts **21× finer ⇒ 0.014–0.019 GB/h**, against 0.025 measured. A prediction
-from the card's own scaling law and a direct measurement agreeing inside the σ̂ uncertainty is worth
-more than either alone.
+7.69× longer window predicts **0.014–0.019 GB/h**, against **0.025 measured** — a factor of
+**1.3–1.8 apart**. *Stated as the ratio, with no verdict word attached:* I first wrote that these
+"agree inside the σ̂ uncertainty", having set no agreement criterion before looking — which is
+fitting the word to the gap. Both are the same order of magnitude; whether that counts as agreement
+is the reader's call, not a conclusion this data licenses.
 Peaks likewise flat at 1.45–1.63 G. The box stays unticked because the series is 69.5% complete.
 Report: `reports/cpu-runaway/20260823_123633+0200-box3-rss-floor-8h20m-partial.md`.
 
-**CPU, from `cpu_time` DELTAS — the `pct_cpu_1min` column is a NOISIER ESTIMATOR of the same thing,
-not a different quantity.** True CPU per hour (Δcolumn 5 over the 60 s interval, pid 21567,
-`p` reset on pid change): 25.8 / 26.7 / 25.7 / 23.8 / 22.0 / 21.1 / 23.8 / 30.9 / 26.6 **% of one
-core**; **25.1% overall** across 504 intervals (8.40 h) — a tight 21–31 band, stable while RSS is
-flat. **TWO claims I made about column 4 are WITHDRAWN, both refuted by the table printed beside
-them:**
-- *"It reads high against the truth in every bucket."* **False — 6 of 9 high, 3 LOW** (07: 23.5 vs
-  23.8; 08: 18.1 vs 22.0; 12: 23.1 vs 26.6), deviations spanning **−3.9 to +10.3**. The gauge is
-  not biased, it is NOISY IN BOTH DIRECTIONS. I asserted a direction without checking it against
-  the numbers in the adjacent column.
-- *"Exceeding 100 proves it is not the same quantity."* **Non-sequitur** — a `cpu_time` delta is
-  thread-summed core-percent too and also exceeds 100 whenever the process uses >1 core. Both
-  measure the same thing; they differ as ESTIMATORS (a decayed instantaneous gauge vs an exact
-  interval mean). The conclusion survives, the reason for it did not.
+**CPU, from `cpu_time` DELTAS — and the columns are now VERIFIED FROM THE SAMPLER SOURCE, not from
+their header names.** The sampler runs `ps -eo pid,etime,%cpu,time,rss,command`, so **column 4 is
+BSD `ps %cpu`** (a *decaying* average over up to a minute of real time — the header name
+`pct_cpu_1min` is approximately right but the decay is not a flat window) and **column 5 is `ps
+time`**, cumulative CPU. So they ARE the same quantity differing only as estimators, which two
+turns ago I asserted from a column label and one turn ago adopted from a reviewer. Reading the
+20-line script settled in one call what two rounds of argument could not.
+True CPU per hour (Δcol 5, pid 21567, `p` reset on pid change): 25.8 / 26.7 / 25.7 / 23.8 / 22.0 /
+21.1 / 23.8 / 30.9 / 26.6 **% of one core**; **25.1% overall** across 504 intervals — a tight 21–31
+band, stable while RSS is flat.
+
+**THE BIAS QUESTION, SETTLED PROPERLY — and BOTH of my previous answers were unsupported.** I first
+wrote the gauge "reads high in every bucket" (refuted: 6 of 9). I then wrote it is "noisy in both
+directions, **not biased**" — which replaced an unsupported positive claim with an unsupported
+NULL, in the very entry whose subject was that failure. Tested on all **504 paired observations**
+rather than 9 hourly means:
+
+> `n=504  mean(gauge−true) = +2.75 pt  SD=37.08  SE=1.65  t=+1.66  95% CI [−0.49, +5.98]`
+
+**|t| < 2, so a high bias is NOT established — and neither is its absence.** The correct wording is
+**"no bias detectable to ±3 pt"**; a real +2.75 pt lean (≈10% of a 25% base) is entirely consistent
+with this data. Never write "not biased" for a test that failed to reject.
+*One thing the finer test did NOT buy:* the 9-hourly-means test gives SE 1.68 against 1.65 here —
+**essentially identical**, because the per-sample noise is independent and averaging within hours
+already removed it. The claim that aggregating to hours discarded ~98% of the power was itself an
+unverified assertion; measuring it cost one command and it is false.
+Also withdrawn: *"exceeding 100 proves it is not the same quantity"* — a `cpu_time` delta is
+thread-summed core-percent too and exceeds 100 above one core. **Prefer col 5 because it is a
+monotone counter, not because col 4 leans one way.**
 **The rule that does survive: column 5 is a monotone counter, so prefer its deltas; column 4 is a
 sampled gauge whose hourly mean depends on when the samples landed.** And the deltas are exact only
 if `p` is RESET on a pid change — carrying it across row 239 silently divided a 120 s interval by
@@ -129,9 +166,13 @@ have drained ~0.9 GB. It was one-hour noise. Quote no floor slope, in either dir
 than several hours. (Like-for-like: both are floor-minima regressions, hour buckets here vs
 10-minute blocks there — the comparison is of slopes, not of two different statistics.)
 
-**GOTCHA — the sampler is NOT PINNED TO A PID; it re-resolves its target each sample** (that it
-does so *by name* is inferred from the shape, not read from the sampler). Exactly one row of 501
-(239, 08:12:47) carries pid 19113 / `elapsed=00:00` / 28 MB. **The server did NOT restart, and this
+**GOTCHA — the sampler is NOT PINNED TO A PID, and this is now READ, not inferred.** Its selector is
+literally `grep 'standalone/server.js' /tmp/rss-snap.$$ | grep -v grep | head -1`: it re-resolves by
+COMMAND STRING every sample and takes whichever process `ps` lists first. Exactly one row of 507
+(239, 08:12:47) carries pid 19113 / `elapsed=00:00` / 28 MB — **a genuine second
+`standalone/server.js` that lived under a minute**, which is the data-dir lock guard refusing a
+second claimant, working as designed. Re-checked on the frozen 508-row file: **still exactly one
+foreign row**, so the drift is a one-off, not recurring. **The server did NOT restart, and this
 is arithmetic rather than a single-pair inference:** across row 239, wall 04:14:33→08:13:47 and
 pid 21567's own `elapsed` 05:08:47→09:08:01 are both exactly **3h59m14s (14,354 s)** — the process
 clock never reset. A per-block MINIMUM has no resistance to a single outlier by construction, so
@@ -155,7 +196,12 @@ minimum moved), **but the n column did**: 12:00 is n=41, not the n=35 I publishe
 fitted to the right floors, and the claim about where the numbers came from was false anyway. *A
 conclusion surviving does not make the method claim true, and the method claim is the one a later
 reader relies on.* Freezing the file is not the discipline — re-deriving every published number
-from the frozen file is.
+from the frozen file is. (**No "snapshot-invariant" generalisation is claimed** — two snapshots 7
+rows apart is one run, not a variance estimate. The direct re-derivation licenses the slope; a
+general claim would not have been supported and is not needed.)
+**And the "501/721 samples" label was wrong in BOTH numbers.** The floor table was computed at 500
+pid-samples / 502 rows, not 501, and the target is 720 samples / 721 rows. Arithmetic closes on one
+foreign row: 500 + 1 = 501 samples = 502 rows then; 506 + 1 = 507 = 508 rows now.
 
 **BLOCKED ON THE USER — the actual runaway is NOT fixed.** Everything landed so far removes an
 AMPLIFIER. Even with a perfect memo, 147 calls/hour each pay ONE full 14,509-file walk. The shape
@@ -881,16 +927,24 @@ former silently measures old code — it cost two failed runs here.
       Report: `reports/cpu-runaway/20260823_123633+0200-box3-rss-floor-8h20m-partial.md`.
       **CPU: use `cpu_time` (col 5) DELTAS, never the mean of `pct_cpu_1min` (col 4).** True CPU per
       hour is 25.8 / 26.7 / 25.7 / 23.8 / 22.0 / 21.1 / 23.8 / 30.9 / 26.6 **% of one core**;
-      **25.1% overall** over 504 intervals (8.40 h) — tight 21–31, stable while RSS is flat.
-      Col 5 is a monotone counter; col 4 is a sampled gauge whose mean depends on when the samples
-      landed (it swings 0.0→184.9 inside one hour). **Two things I wrote against col 4 are WRONG and
-      were refuted by the table beside them:** it does NOT "read high in every bucket" (6 of 9 high,
-      **3 LOW** — 07, 08, 12; deviations −3.9 to +10.3, so it is noisy in both directions, not
-      biased), and ">100 proves it is not per-core" is a NON-SEQUITUR (a cpu_time delta is
-      thread-summed core-percent too and also exceeds 100 above one core — same quantity, different
-      estimator). Also: the deltas are exact only with `p` RESET on pid change; carrying it across
-      row 239 divided a 120 s interval by 60 and understated hour 08 by 0.4 pt (22.4→22.0, n=59
-      where 58 was right).
+      **25.1% overall** over 504 intervals — tight 21–31, stable while RSS is flat.
+      **VERIFIED FROM THE SAMPLER SOURCE** (`ps -eo pid,etime,%cpu,time,rss,command`): col 4 is BSD
+      `ps %cpu`, a DECAYING average over up to a minute of real time; col 5 is `ps time`, cumulative
+      CPU. Same quantity, different estimators — a fact I asserted from a column NAME, then adopted
+      from a reviewer, before finally reading the 20-line script that settles it.
+      **Three things I wrote about col 4 are WITHDRAWN**, in order: it does NOT read high in every
+      bucket (6 of 9; 07/08/12 read LOW); ">100 proves it is not per-core" is a non-sequitur (col-5
+      deltas are thread-summed too); and the replacement claim **"noisy in both directions, not
+      biased" was an unsupported NULL** — on all **504 paired observations**, mean(gauge−true) =
+      **+2.75 pt, SD 37.08, SE 1.65, t=+1.66, 95% CI [−0.49, +5.98]**. |t|<2, so a high bias is not
+      established AND neither is its absence: the honest wording is **"no bias detectable to ±3 pt"**.
+      (The 9-hourly-means test gives SE 1.68 vs 1.65 — aggregation cost essentially nothing, so the
+      claim that it discarded ~98% of the power was itself wrong.)
+      Also: deltas are exact only with `p` RESET on pid change; carrying it across row 239 divided a
+      120 s interval by 60 and understated hour 08 by 0.4 pt (22.4→22.0, n=59 where 58 was right).
+      **The completion time on this card was wrong too** — the sampler loops `seq 1 720` (721 ROWS
+      finished, not 721 samples) at a measured 61.24 s/sample, so it lands **~16:28, not ~16:13**;
+      the follow-up was armed for 16:19 and would have read a short series as complete.
       **RETRACTS the 65-minute floor trend −0.108 GB/h above.** The 8h20m slope is +0.0001 (7
       complete buckets) — 1000× smaller, opposite sign; sustained, −0.108 drains ~0.9 GB. Like for
       like: both are floor-minima regressions. Third quantity in this box withdrawn for being read
