@@ -1171,9 +1171,9 @@ former silently measures old code — it cost two failed runs here.
       construction.** Filter on pid; list pid changes first; and **copy the file before analysing
       it** — the sampler is still appending, and the three reads behind this entry hit 501, 503 and
       508 rows without noticing (commands in the STATE block).
-      **⚠ READ `## Approval log` (end of file) BEFORE THIS ENTRY — three of its statements are
-      withdrawn there, including "not an outlier artifact" and both later attempts to fix it. This
-      pointer is the only body edit made after the card went terminal; it asserts nothing new.**
+      **⚠ READ `## Approval log` (end of file) BEFORE THIS ENTRY — statements in this entry are
+      withdrawn there, as are both later attempts to fix them. This pointer is the only body edit
+      made after the card went terminal; it asserts nothing new.**
       **FULL SERIES, 2026-08-23 16:29 — THE BOX'S SETTLED ANSWER. This ticks it.**
       Series complete and clean: **721 rows** (720 data), span 04:14:33→**16:14:14** (43,181 s), 719
       intervals of **679×60 s / 39×61 s / 1×62 s** (mean 60.06 s). Sampler pid 82388 exited. **719
@@ -1339,7 +1339,15 @@ former silently measures old code — it cost two failed runs here.
   on this test. **This was the card's already-withdrawn "not biased" move — an unsupported null
   replacing an unsupported positive — reproduced one entry after quoting the lesson that names it.**
   **THE ONE NUMBER I HAD NEVER PUBLISHED WITH ITS OWN VARIANCE, and the point of this entry:**
-  `floor~hour = −0.01393 ± 0.00460 GB/h, 95% [−0.0243, −0.0035], r = −0.711, n=11.`
+  `floor~hour = −0.01393 GB/h, scatter-implied SE 0.00460, t-bracket [−0.0243, −0.0035], r = −0.711,
+  n=11.` **Those last two are t-based and are shown for SCALE ONLY.** This card rules the
+  block-minimum an **extreme-value** statistic — skewed, left-truncated, no CLT at n=11 — so the
+  bracket's true coverage is unknown and is not 95%. Read it as *scatter-implied scale ≈ 0.005,
+  resolution ≈ 0.01 GB/h, one significant figure*, **never as a calibrated interval**. (Publishing
+  it in bare `±` / `95%` notation was this chain's last defect, caught on review: the card had
+  already withdrawn that exact move once, and I reproduced it in the sentence declaring the chain
+  closed. Fixed in wording, not by a fifth measurement — a bootstrap at n=11 would be its own
+  unreliable proxy.)
   **ALSO WITHDRAWN:** (a) the r-ordering as directional support — floor/mean/peak over the same
   buckets are *dependent* correlations, so marginal Fisher-z SEs are the wrong comparison and at
   n=11 the right one (Steiger) has no power either; (b) citing **mean RSS** (−0.01008 GB/h,
@@ -1350,10 +1358,15 @@ former silently measures old code — it cost two failed runs here.
   stationarity in unmeasured load, a window long against any allocation cycle, and RSS tracking
   retention at all (it carries native buffers, mmap and fragmentation; malloc and V8 release pages
   asynchronously). **None of the five is checkable from this file.**
-  **BOX 3'S ANSWER, FINAL FORM — the residual uncertainty, published once:** *−0.014 ± 0.005 GB/h
-  bounds the OBSERVED FLOOR DRIFT over these 12 h at n=11. No rising floor is visible at ~0.01 GB/h.
-  Calling that a leak bound needs assumptions this file cannot check; calling it confound-free needs
-  a CPU-trend precision this file does not have.* **The tick stands on THAT, and on nothing stronger.**
+  **BOX 3'S ANSWER, FINAL FORM — the residual uncertainty, published once:** *The observed floor
+  drift over these 12 h is −0.014 GB/h at n=11, with a scatter-implied resolution of ~0.01 GB/h (one
+  significant figure). No rising floor is visible at that resolution. Calling it a leak bound needs
+  assumptions this file cannot check; calling it confound-free needs a CPU-trend precision this file
+  does not have.* **The tick stands on THAT, and on nothing stronger.**
+  For the record, the confound test's power stated as a number rather than as a hedge: it could only
+  ever have detected a confound accounting for **more than ~39%** of the slope
+  (t·SE(CPU~hour)·b₂/|b_floor| = 2.262 × 0.324 × 0.0075 / 0.01393), which is what the −38%…+41%
+  interval says.
   What would close the residual: a request-rate or GC-count series from the server's own logs over
   this same window — CPU%-of-core proxies compute, not allocation.
   **META, and the reason this is the last entry.** Three rounds, each correcting the last, each
@@ -1363,3 +1376,14 @@ former silently measures old code — it cost two failed runs here.
   is to publish the uncertainty and stop. **Correction chain CLOSED.** Any further finding is a new
   TRDD, not a fifth append; three rounds of log-only correction reached its limit, which is why a
   single navigational pointer (asserting nothing) was added at the box-3 entry.
+  **CLOSURE IS A DECISION, NOT A FINDING — stated as such so "CLOSED" is not read as something the
+  data established.** The data established none of it. The reason for the decision: rounds 2 and 3
+  each shipped a correction that was itself wrong, so the marginal value of round N is falling while
+  the risk of introducing new error is not. Round 4's own review found one further defect (the `±`
+  notation above) and it was a WORDING fix — the first round in this chain to need no new
+  measurement, which is the signal to stop.
+  One last instance of the shape, recorded because it nearly shipped: the pointer line first claimed
+  "three of its statements are withdrawn"; the body carries **two**. My verifying grep returned **0**
+  for one of them, because the phrase is line-WRAPPED — a grep miss read as an absence, the exact
+  trap `~/.claude/rules/claim-verification.md` names. Caught only by re-running with newlines
+  squashed. The line now states no count.
