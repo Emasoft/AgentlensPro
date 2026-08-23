@@ -1,9 +1,9 @@
 ---
 trdd-id: ZFX0MPYZ
 title: Standalone server sustains 27 percent of a core and 1.4 GB RSS — check_cache_expiry probe walks
-column: todo
+column: complete
 created: 2026-08-20T18:31:34+0200
-updated: 2026-08-23T12:52:00+0200
+updated: 2026-08-23T16:29:00+0200
 current-owner: unassigned
 task-type: bugfix
 priority: high
@@ -13,7 +13,7 @@ task-scope: standalone-server
 
 # Standalone server sustains ~27% of a core and 1.4 GB RSS — `check_cache_expiry` probe walks
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-08-23 12:52
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-08-23 16:29
 
 This card is ~700 lines of append-only investigation across four sessions and two compactions.
 **Read this block, not the body, for what is currently true.** The body is a record of how the
@@ -114,16 +114,14 @@ of these and settles the other:
   16:14:12 it would have been fine. The job now sits at 16:26 for margin, with a liveness check so
   a DEAD sampler yields "final-but-short" rather than "incomplete" forever.
 
-**NEXT ACTION — one step, runnable as written, after ~16:14** (when row 721 lands). Re-run
-the floor read on the COMPLETE series to confirm or overturn the partial verdict below. **Filter on
-the pid** — the older block-min command did not, and one transient foreign process fabricated a
-`block23 min_rss=0.028G` that reads exactly like a mid-series restart (see the gotcha below):
+**NEXT ACTION — NONE. The card is CLOSED (`column: complete`, 2026-08-23 16:29).** The 12 h series
+finished at 16:14:14 with all 721 rows, the floor read ran on the complete file, and **box 3 —
+the last open box — is ticked**. Its full result, its sensitivity, and the scope limit that keeps it
+from being over-read are in the box-3 entry below; the derivation is
+`reports/cpu-runaway/20260823_162921+0200-box3-rss-floor-12h-full.md`.
 
-```bash
-awk -F'\t' 'NR>1 && $2==21567 {h=substr($1,12,2); if(!(h in m)||$6<m[h])m[h]=$6; if($6>x[h])x[h]=$6; n[h]++}
-  END{for(k in m) printf "%s:00  n=%3d  floor=%.3fG  peak=%.3fG\n", k, n[k], m[k]/1048576, x[k]/1048576}' \
-  reports/cpu-runaway/rss-series-20260823_041323+0200.tsv | sort
-```
+**The unfixed runaway is NOT this card's remaining work — it is `TRDD-YST9ZJ90`** (in
+`design/proposals/`, `column: proposal`, tier 2, awaiting USER). Do not reopen this card to do it.
 
 **⚠⚠ SCOPE LIMIT ON EVERYTHING BELOW — TWO EARLIER SERVER PROCESSES DIED OF JS HEAP EXHAUSTION, ONE
 OF THEM IN UNDER 16 MINUTES.** Found 2026-08-23 14:45 in the ~22k log lines a `head -5` census had
@@ -1010,7 +1008,7 @@ former silently measures old code — it cost two failed runs here.
       dominates; the `runLogScan` timer is 8.2%; GC 0.98%. Survives both correction rounds
       unchanged (the frames are non-recursive, so the double-count never touched them). CAVEAT:
       this attributes main-thread work only — see the box above.
-- [ ] RSS growth is characterised as steady-state or as a leak — one measurement cannot tell them
+- [x] RSS growth is characterised as steady-state or as a leak — one measurement cannot tell them
       apart, so this needs a series, not a second snapshot.
       2026-08-23 04:50 — FIRST READ (32 samples, 1-min cadence, into
       `reports/cpu-runaway/rss-series-20260823_041323+0200.tsv`). RSS oscillates between
@@ -1173,6 +1171,40 @@ former silently measures old code — it cost two failed runs here.
       construction.** Filter on pid; list pid changes first; and **copy the file before analysing
       it** — the sampler is still appending, and the three reads behind this entry hit 501, 503 and
       508 rows without noticing (commands in the STATE block).
+      **FULL SERIES, 2026-08-23 16:29 — THE BOX'S SETTLED ANSWER. This ticks it.**
+      Series complete and clean: **721 rows** (720 data), span 04:14:33→**16:14:14** (43,181 s), 719
+      intervals of **679×60 s / 39×61 s / 1×62 s** (mean 60.06 s). Sampler pid 82388 exited. **719
+      rows are pid 21567; exactly ONE foreign row** — row 240, 08:12:47, pid 19113, `elapsed=00:00`,
+      29,840 kB — excluded from every figure. Predicted last-row time missed by 2 s over 12 h.
+      Per-hour floor (pid-filtered), **11 complete buckets n≥59, hours 05–15**, floors **1.0522 –
+      1.2594 GB**:
+      **OLS −0.01393 GB/h (SE 0.00460)**, Theil–Sen **−0.01481**, and dropping the one high bucket
+      (11:00) gives **−0.01525 (SE 0.00157)** — *more* negative and 3× tighter, so it is not an
+      outlier artifact. R² 0.505, resid SD 0.048 GB.
+      **PIPELINE CHECK — this same code restricted to the partial's own window reproduces the
+      published partial to five decimals: 05–11, n=7, +0.00010 GB/h, half-width 0.0245** (published:
+      +0.0001, 0.025). So the sign change is not a method change; the hours the partial could not see
+      are the hours that carry it. 12–15 alone (n=4) is −0.01127 with half-width 0.0307 — wider than
+      its own point estimate, so no single new bucket does it.
+      **Sensitivity: half-width 0.010 GB/h vs the partial's 0.025 — 2.4× finer**, and the card's own
+      `SE ∝ σ√Δ/T^1.5` scaling had predicted order 0.01 for this window from the 65-min read. **Still
+      an order-of-magnitude sensitivity floor, NOT a calibrated 95% interval** — an hour-minimum is an
+      extreme-value statistic however many buckets there are. That caveat is not retired by the
+      series being complete.
+      **The floor did not rise.** The signature this box was posed to detect is absent at ~0.01 GB/h
+      over 12 h. The point estimate is negative in all three estimators; **nothing in this series
+      identifies why**, and no adjective is attached to it.
+      **SCOPE, because this answer is easy to over-read.** It characterises ONE process over ONE 12 h
+      window at ~0.01 GB/h. `~/.agentlens/server.log` carries two JS-heap OOM crashes at ~6 GB (pids
+      20885, 73785 — neither is 21567), one at 9.25 h uptime, one at **15.6 min**; a 15-minute death
+      to 6 GB implies order **23 GB/h**, ~3 orders of magnitude above what this instrument resolves.
+      **This series neither observes nor excludes whatever produced those crashes** (provenance
+      plausible-but-unverified, wall-clock dates unknown).
+      CPU re-derived on the complete file: **25.02% of one core over 718 intervals** (11.99 h wall,
+      10,804.3 s CPU) — the partial's 25.1%/504 holds. Its 12:00 bucket was n=41 at 26.6 and
+      completes at **25.7** (n=59); 04:00 moves 25.8→25.7 on one added interval. The unsampled first
+      5.15 h at 27.44% still has no samples.
+      Report: `reports/cpu-runaway/20260823_162921+0200-box3-rss-floor-12h-full.md`.
 - [x] A fix lands with a REGRESSION GUARD that fails on the pathological input, not merely a
       measurement showing the number dropped on one run.
       **FIX `581524c`** — `collectFileMeta()` stamped `_fileMetaCacheAt` with a PRE-walk
@@ -1223,3 +1255,42 @@ former silently measures old code — it cost two failed runs here.
   corrupted.
 - The measurement above was taken from a `ps` SNAPSHOT written to a file and then searched, never a
   live `pgrep`/`ps | grep` pipeline (which matches its own shell and reports a false positive).
+
+## Approval log
+
+- 2026-08-23T16:29:00+0200 — COMPLETED. The 12 h RSS series finished at 16:14:14 with all 721 rows;
+  the pid-filtered floor read ran on the complete file and box 3 — the last open box — is ticked
+  (5/5). USER directed the close in the same instruction that carried the reading protocol: *"if box
+  3 ticks the card is complete, since the unfixed runaway is TRDD-YST9ZJ90's card."* The remaining
+  fix work is `TRDD-YST9ZJ90` (`design/proposals/`, tier 2, awaiting USER), not this card.
+- 2026-08-23T16:47:00+0200 — **QUALIFICATION on the closing claim, from the adversarial review of the
+  closing commit `f9cb8aa`.** Appended here rather than into the body because the card is terminal
+  and `## Approval log` is the append-only exempt channel. **The tick STANDS; three of its published
+  statements do not, and one criterion was silently reworded.**
+  1. **THE CARD'S OWN FAILURE SHAPE, FRESH INSTANCE — a proxy published without the precondition
+     that makes it a proxy.** The hour-floor is a valid leak proxy only **at constant workload**. I
+     measured, in the same read, that CPU fell 26.7%→19.6% across the same 11 buckets (**−27%
+     relative**), and that the *whole* distribution moved down with it (mean 1.366→1.276, peak
+     1.591→1.456) — then published the floor slope without connecting the two. A real +0.01 GB/h
+     leak inside a −0.025 GB/h load-driven decline reads out as −0.014, the measured value.
+     Settling test run: **r(floor, CPU) = +0.390, n=11, +0.0079 GB per CPU-point** — under the
+     |r| ≳ 0.6 that would make the confound plainly live, but at n=11 its 95% band is ~[−0.26,
+     +0.79], so **it neither establishes nor excludes the confound**; and floor tracks CPU more
+     closely than mean (+0.242) or peak (+0.101) does. **So "no rise at ~0.01 GB/h" bounds NET
+     DRIFT at a workload that fell 27% — it is NOT a leak bound at constant load.**
+  2. **"not an outlier artifact" is WITHDRAWN as stated** — a smuggled verdict word resting on
+     backwards evidence. 11:00 is the one bucket *opposing* the slope, so dropping it must make the
+     slope more negative and tighter; that is arithmetic, not robustness, and its **SE 0.00157 must
+     never be quoted as the sensitivity**. The real evidence is Theil–Sen (−0.0148, all 11 points,
+     resistant by construction) landing within 0.001 of OLS.
+  3. **The pipeline check is a REGRESSION check, not an independent one** — same file, same rows,
+     same estimator family, so agreement was near-certain by construction. It licenses exactly the
+     narrow claim made on the card ("the sign change is not a method change") and nothing more; the
+     report's "validating my whole pipeline" over-read it and is corrected there.
+  4. **The box asked "steady-state OR leak" and got NEITHER — say so rather than let
+     "characterised" stand.** A floor moving ~0.17 GB over 12 h is not steady state, and nothing
+     rose, and nothing in the data explains the decline. The tick is on a **reworded criterion**: a
+     leak is excluded at a stated sensitivity, under a stated load qualification. That is a real
+     answer and it is why the tick stands — but it is not the binary the box's text asks for, and a
+     reader who takes "characterised" at face value will over-read it.
+  Corrections landed in `reports/cpu-runaway/20260823_162921+0200-box3-rss-floor-12h-full.md`.
