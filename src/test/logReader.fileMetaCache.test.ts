@@ -102,6 +102,86 @@ suite('LogReader — reparseSession() must not re-walk the whole log tree on eve
     assert.strictEqual(r.getFileMetaWalkCount(), walksBeforeMiss, 'a lookup MISS must not trigger a fresh walk')
   })
 
+  // TRDD-ZFX0MPYZ — the SETTLING test for the post-walk-stamp fix, and the reason it is not the one
+  // the review proposed. That proposal was `FILE_META_CACHE_TTL_MS = 1` with no stall, on the 5-file
+  // fixture above, on the argument that "any real walk exceeds 1ms". Measured, it does not: a real
+  // readdir+stat over 5 files here is 0.04-0.09ms, so the entry is NOT born expired, the OLD code
+  // passes too, and the test is vacuous — which under the proposal's own stated criterion ("green on
+  // both means the mechanism story is wrong") would have argued the bug away. Measured walk times on
+  // this machine: n=5 0.04-0.09ms, n=200 0.47-1.26ms, n=1000 2.5-3.6ms, n=3000 8.9-9.6ms.
+  //
+  // What this test does instead: reach `walkDuration > TTL` from the CORPUS side, with NO injected
+  // stall anywhere. 6000 files walk in ~17-20ms against a 3ms TTL, so the born-expired condition is real
+  // rather than manufactured — which is what the other guard's 2500ms stall could not establish,
+  // since inflating the walk and then moving the stamp past it share one primitive and the
+  // experiment therefore could not fail.
+  //
+  // It also refuses to pass vacuously: it MEASURES the walk (first call minus a cached call, since
+  // `_sessionIdForFile` is pure path work and a cached lookup is walk-free) and asserts it really did
+  // exceed the TTL. On a machine fast enough that 6000 files walk in under 3ms this goes RED with
+  // "no longer reproduces" instead of green-and-meaningless.
+  test('a real walk slower than the TTL still yields a usable memo (no injected stall)', () => {
+    const cwd = path.join(root, 'workspace')
+    // N=6000, not 3000: at 3000 the mocha-measured walk ranged 3.4-15.4ms across runs as the page
+    // cache warmed, and the low end left only 1.15x over a 3ms TTL — enough to make the precondition
+    // fire spuriously in CI. 6000 doubles the floor without approaching mocha's 10s timeout.
+    const N = 6000
+    const body = sessionBody(cwd, 'bulk')
+    for (let i = 0; i < N; i++) {
+      fs.writeFileSync(path.join(root, 'projects', 'proj', `bulk-${i}.jsonl`), body)
+    }
+
+    // The ids are the NEWEST files, deliberately. Entries come back sorted newest-first, so these hit
+    // the front of the array and each lookup is O(1)-ish. Probing the OLDEST ids instead makes every
+    // lookup a full 3000-entry scan, and six of those outran a 3ms TTL and forced a SECOND walk on
+    // the fixed code — a real measurement of the lookup cost, misreadable as a failure of the stamp.
+    const ids = Array.from({ length: 6 }, (_, k) => `bulk-${N - 1 - k}`)
+
+    // TTL sits well under the walk's WARM floor, not under its cold time. Repeat runs warm the page
+    // cache: the same 3000-file walk measured 15.4ms cold and 6.9ms warm, and an 8ms TTL landed
+    // inside that variance band — the precondition below caught it as "does not exceed the TTL"
+    // rather than letting the run pass on a technicality. 3ms keeps ~2x margin against the warm floor.
+    const TTL_MS = 3
+    const saved = (LogReader as unknown as { FILE_META_CACHE_TTL_MS: number }).FILE_META_CACHE_TTL_MS
+    ;(LogReader as unknown as { FILE_META_CACHE_TTL_MS: number }).FILE_META_CACHE_TTL_MS = TTL_MS
+    try {
+      const r = new LogReader()
+
+      const t0 = Number(process.hrtime.bigint())
+      assert.ok(r.transcriptPathFor(ids[0]!), 'first lookup resolves')
+      const firstMs = (Number(process.hrtime.bigint()) - t0) / 1e6
+      assert.strictEqual(r.getFileMetaWalkCount(), 1, 'the first lookup must perform the one real walk')
+
+      // PRECONDITION, not a result: if the walk is not actually slower than the TTL, this test
+      // reproduces nothing and must say so rather than pass.
+      //
+      // The estimator is the FIRST call's own elapsed time, deliberately, and not the earlier
+      // `firstMs - cachedMs`. That subtraction assumed the second call is a cached lookup — which is
+      // true only on the FIXED code. Under the pre-walk stamp the second call walks too, so the two
+      // terms cancel and the estimate collapses toward zero: falsification runs reported walks of
+      // 1.85ms and 4.25ms for the same corpus and failed the precondition instead of the assertion,
+      // i.e. red for the wrong reason. `firstMs` is walk + one lookup, and the lookup is O(1) here
+      // (newest-first ids hit the front of the array), so it is walk plus microseconds on EITHER
+      // code path. The 2x margin covers that residue without needing to measure it.
+      assert.ok(firstMs > TTL_MS * 2,
+        `precondition failed — first lookup took ${firstMs.toFixed(2)}ms, not comfortably above the ` +
+        `${TTL_MS}ms TTL, so "born expired" is not reproduced and this test proves nothing (raise N above ${N})`)
+
+      for (const id of ids.slice(1)) {
+        assert.ok(r.transcriptPathFor(id), `lookup resolves ${id}`)
+      }
+
+      // THE ASSERTION: with the stamp taken AFTER the walk, a walk that outlives its own TTL still
+      // produces a memo the following lookups hit. With the pre-walk stamp every one of these 6
+      // lookups re-walked (6, not 1) — the cache was expired the instant it was written.
+      assert.strictEqual(r.getFileMetaWalkCount(), 1,
+        `expected 1 walk across ${ids.length} lookups with a ${firstMs.toFixed(2)}ms walk vs a ${TTL_MS}ms TTL, ` +
+        `got ${r.getFileMetaWalkCount()}`)
+    } finally {
+      ;(LogReader as unknown as { FILE_META_CACHE_TTL_MS: number }).FILE_META_CACHE_TTL_MS = saved
+    }
+  })
+
   test('clearFileState() drops the walk cache so a forced rescan sees newly written files', () => {
     const cwd = path.join(root, 'workspace')
     fs.writeFileSync(path.join(root, 'projects', 'proj', 'sess-1.jsonl'), sessionBody(cwd, 'prompt-1'))

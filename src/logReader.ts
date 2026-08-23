@@ -389,13 +389,19 @@ export class LogReader {
     // timestamp the cache's usable life was `TTL - walkDuration`, so once a walk outlives its TTL
     // the entry was born already expired and the memo did not degrade — it DISAPPEARED: measured,
     // 5 probe candidates cost 5 full recursive readdir+stat passes over every session file. The
-    // walk is 126-1902ms over 14,509 files (n=20, p90 750ms) against a 2000ms TTL, so this is
+    // collapse is SELF-SUSTAINING, not per-call bad luck: the replacement walk written by each miss
+    // is itself longer than the TTL, so it is also born expired. While the condition holds, N
+    // candidates cost N walks for any N — 5 was the probe size, not a small-N artifact.
+    // The walk is 126-1902ms over 14,509 files (n=20, p90 750ms) against a 2000ms TTL, so this is
     // reachable on load variance alone and arrives with no warning, discontinuously at the crossing.
     // The staleness argument above survives the change because it is bounded in KIND, not at 2s:
     // data age becomes at most `walkDuration + TTL` instead of `TTL`, and the consequence is
     // unchanged — no answer is ever WRONG, only briefly incomplete for a very new session, which
-    // the next probe picks up. Trading ~0.8s of extra worst-case staleness for the removal of a 5x
-    // walk amplification is not a close call.
+    // the next probe picks up. That extra staleness is `walkDuration`, which is NOT a constant and
+    // NOT the 750ms p90: the measured max on this corpus is 1902ms, so observed worst-case data age
+    // is ~3.9s and it grows with the corpus. Quoting the p90 as a worst case would be the same
+    // central-quantile-for-a-tail error this investigation kept making. The bound is parametric —
+    // trading it for the removal of a 5x walk amplification is still not a close call.
     this._fileMetaCacheAt = Date.now()
     return entries
   }
