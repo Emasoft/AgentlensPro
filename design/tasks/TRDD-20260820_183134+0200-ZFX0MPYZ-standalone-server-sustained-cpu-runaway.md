@@ -3,7 +3,7 @@ trdd-id: ZFX0MPYZ
 title: Standalone server sustains 150-270 percent CPU and 2.4 GB RSS over an 8-hour uptime
 column: todo
 created: 2026-08-20T18:31:34+0200
-updated: 2026-08-23T05:06:36+0200
+updated: 2026-08-23T05:11:26+0200
 current-owner: unassigned
 task-type: bugfix
 priority: high
@@ -305,7 +305,15 @@ across the 30 sessions is not. Full note:
 `collectFileMeta()`'s 2 s TTL is *born expired* because `_fileMetaCacheAt` is stamped with a
 PRE-walk `Date.now()` — the code is exactly that (`src/logReader.ts:324`/`:387`) and the
 arithmetic (`lifetime = TTL − walkDuration`) is real, but the measured walk is **820–879 ms over
-14,509 files**, so it does not trigger at this corpus size. (2) That `transcriptPathFor` is an
+14,509 files**, so it does not trigger at this corpus size.
+**→ AMENDED 05:10: "does not trigger AT THIS CORPUS SIZE" was right; "unproven" was too weak.
+The defect is now CONFIRMED by direct experiment.** Injecting a 2500 ms stall into the walk (TTL
+left at its real 2000 ms) turns 5 probe candidates into **5 full walks** — the memo does not
+degrade past the cliff, it DISAPPEARS. So this is a latent defect that arrives on **corpus growth
+alone**, with no bad edit required and no warning on the way: 820 ms today against a 2000 ms
+cliff, and the failure is discontinuous at the crossing. Evidence:
+`reports/cpu-runaway/20260823_051050+0200-born-expired-confirmed.md`. The FIX is still open — see
+the advisor question on data-age vs cache-lifetime — but the defect is no longer hypothetical. (2) That `transcriptPathFor` is an
 O(all-files) scan run 12× per probe — structurally true, but **measured at 0 ms for 12 lookups
 with 0 extra walks**, because entries are sorted newest-first and the probe ranks the newest
 sessions, so lookups hit the front. Both are recorded in the report so they are not re-derived.

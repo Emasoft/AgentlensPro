@@ -65,7 +65,16 @@ suite('LogReader — reparseSession() must not re-walk the whole log tree on eve
   // that made transcriptPathFor bypass or defeat the memo would cost one full recursive
   // readdir+stat of EVERY session file per probe candidate (14,509 files on the machine where
   // this was measured) and no test would go red.
-  test('a transcriptPathFor probe burst triggers exactly ONE directory walk, not one per candidate', () => {
+  //
+  // FALSIFIED TWO WAYS before being trusted (a green test proves nothing about its teeth):
+  //   1. FILE_META_CACHE_TTL_MS = 0  -> red, "got 5"  (memo ABSENT)
+  //   2. a 2500ms stall inside the walk, TTL left at 2000 -> red, "got 5"  (memo DEFEATED)
+  // (2) is the regression that arrives on its own rather than by someone's edit: `collectFileMeta`
+  // stamps `_fileMetaCacheAt` with a timestamp taken BEFORE the walk, so the cache's usable life
+  // is `TTL - walkDuration` and collapses to nothing once a walk outlives its TTL. Measured
+  // 820ms against a 2000ms budget at 14,509 files — so this fires on corpus growth alone, and
+  // when it does the memo does not degrade, it disappears: 5 candidates cost 5 full walks.
+  test('a transcriptPathFor probe burst triggers at most ONE directory walk, not one per candidate', () => {
     const cwd = path.join(root, 'workspace')
     const ids = ['probe-a', 'probe-b', 'probe-c', 'probe-d', 'probe-e']
     for (const id of ids) {
@@ -79,15 +88,18 @@ suite('LogReader — reparseSession() must not re-walk the whole log tree on eve
       assert.ok(r.transcriptPathFor(id)?.endsWith(`${id}.jsonl`), `transcriptPathFor must resolve ${id} to its file`)
     }
 
-    // THE ASSERTION: N candidates => 1 real walk. This is the invariant the cache-expiry probe
-    // depends on, and it holds under every cause considered for the runaway — so the guard is
-    // valid whichever one wins.
-    assert.strictEqual(r.getFileMetaWalkCount(), 1,
-      `expected exactly 1 directory walk across ${ids.length} transcriptPathFor() calls, got ${r.getFileMetaWalkCount()}`)
+    // THE ASSERTION: N candidates => AT MOST 1 real walk. The intent is "no O(all-files) rescan
+    // per candidate", NOT "a walk must happen" — <= rather than === deliberately, so a future
+    // design that eliminates the walk entirely (an id index built at write time, or per-request
+    // scoping) PASSES instead of being blocked by a guard that pinned the old mechanism. The
+    // correctness assertions above are what stop 0 walks from meaning "returned nothing".
+    assert.ok(r.getFileMetaWalkCount() <= 1,
+      `expected at most 1 directory walk across ${ids.length} transcriptPathFor() calls, got ${r.getFileMetaWalkCount()}`)
 
     // A miss must not walk either — an unresolvable id scans the SAME memoized listing.
+    const walksBeforeMiss = r.getFileMetaWalkCount()
     assert.strictEqual(r.transcriptPathFor('no-such-session'), null, 'unknown id resolves to null')
-    assert.strictEqual(r.getFileMetaWalkCount(), 1, 'a lookup MISS must not trigger a fresh walk')
+    assert.strictEqual(r.getFileMetaWalkCount(), walksBeforeMiss, 'a lookup MISS must not trigger a fresh walk')
   })
 
   test('clearFileState() drops the walk cache so a forced rescan sees newly written files', () => {
