@@ -1,11 +1,9 @@
 ---
 trdd-id: ZFX0MPYZ
 title: Standalone server sustains 27 percent of a core and 1.4 GB RSS — check_cache_expiry probe walks
-column: blocked
-pre-block-column: dev
-blocked-by: [YST9ZJ90]
+column: todo
 created: 2026-08-20T18:31:34+0200
-updated: 2026-08-23T12:38:00+0200
+updated: 2026-08-23T12:52:00+0200
 current-owner: unassigned
 task-type: bugfix
 priority: high
@@ -15,15 +13,16 @@ task-scope: standalone-server
 
 # Standalone server sustains ~27% of a core and 1.4 GB RSS — `check_cache_expiry` probe walks
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-08-23 12:38
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-08-23 12:52
 
 This card is ~700 lines of append-only investigation across four sessions and two compactions.
 **Read this block, not the body, for what is currently true.** The body is a record of how the
 answers were reached — including several that were WRONG and were corrected in place.
 
 **WHERE IT STANDS.** Acceptance boxes **1 ✓ 2 ✓ 4 ✓ 5 ✓**, box **3 answered on a PARTIAL series
-(69.5%) and left open until the full one lands ~16:13**. The card is `column: blocked` on
-`TRDD-YST9ZJ90` (the user's call on the real fix); nobody is working it.
+(69.5%) and left open until the full one lands ~16:13**. `column: todo` — one queued read, waiting
+on a clock, nobody working it right now. **Box 3 is the ONLY open box, and when it ticks this card
+is done:** the unfixed runaway is `TRDD-YST9ZJ90`'s card, not this one's remaining work.
 The MECHANISM is settled: the trigger is an HTTP REQUEST (`check_cache_expiry`, 36.6% of
 main-thread busy), not a timer; the caller is OUTSIDE this repo (ai-maestro-janitor detectors,
 147 calls/hour over the FIRST 5h14m — see the rate warning below); the amplifier was a pre-walk
@@ -43,10 +42,19 @@ belongs to earlier processes never profiled — **51.8% as of 06:58**, and falli
 process accumulates (entry 8 has the timestamped triple and the method; do not quote the older
 68.4% or the derived 769 that appeared here). The rate figure is unaffected by that split.
 
-**COLUMN.** Moved `dev` → `blocked` at 12:38 (`pre-block-column: dev`, `blocked-by: [YST9ZJ90]`)
-because that is what was true: the substantive remainder is a decision only the user can make, and
-`dev` had been asserting active work through an eight-hour gap in which nothing touched the card.
-Restore `dev` when YST9ZJ90 is decided, not before. (A "trip-wire" note lived here for 10 minutes
+**COLUMN — `dev` → `blocked` → `todo`, and the middle step was WRONG TWICE OVER.** `dev` was false
+(it asserted active work across an eight-hour gap in which nothing touched the card), so at 12:38 I
+moved it to `blocked` with `blocked-by: [YST9ZJ90]`. Both parts of that were defects:
+1. **`blocked-by: [YST9ZJ90]` was not true of THIS card.** Its only open box is a measurement that
+   needs nobody's permission. I imported the *project's* blocker onto a card whose own remaining
+   work is unblocked — the honest state is `todo`.
+2. **`blocked` is NOT in `trdd-drift`'s `ACTIVE_COLUMNS`** (`{dev, testing, backburner, todo,
+   dispatch, ai_review, human_review}` — `scripts/lib/trdd_common.py:253`; the detector `continue`s
+   on anything outside it at `detectors/trdd-drift.py:203`). So the move silently switched OFF the
+   one automated control this very block names as covering the card. Verified by reading the set,
+   not assumed. A card can be honestly re-columned into invisibility; **check the detector's column
+   set before any re-column, because the drift nudge is what catches the next stall.**
+`todo` is both true and drift-covered. (A "trip-wire" note lived here for 10 minutes
 and was DELETED: it was prose read only
 on resume, while the failure it guarded is *nobody resuming* — it could not fire in the one case it
 existed for. Worse, it duplicated a real automated control: `trdd-drift` covers this card by
@@ -64,29 +72,59 @@ awk -F'\t' 'NR>1 && $2==21567 {h=substr($1,12,2); if(!(h in m)||$6<m[h])m[h]=$6;
   reports/cpu-runaway/rss-series-20260823_041323+0200.tsv | sort
 ```
 
-**BOX 3, PARTIAL ANSWER (501/721 samples, 04:14→12:34, read 12:36): STEADY STATE, NOT A LEAK.**
-Per-hour RSS floor for pid 21567 over 8h20m of continuous uptime: 1.167 / 1.188 / 1.225 / 1.173 /
-1.151 / 1.143 / 1.133 / 1.259 / 1.099 GB — a 1.10–1.26 G band with **no monotone rise**; peak
-likewise flat at 1.45–1.63 G. Hourly mean `%CPU` stayed at 18–40 (mean ~27) throughout, so **memory
-was never the runaway — the request path is.** The box stays unticked only because the series is
-69.5% complete; the discriminator it asked for (the FLOOR) has already answered.
+**BOX 3, PARTIAL ANSWER (501/721 samples, 04:14→12:34, read 12:36): NO LEAK SIGNATURE DOWN TO
+~0.03 GB/h.** Stated with its sensitivity, because a bare "steady state, not a leak" is the exact
+move this box has already withdrawn four statistics for. Per-hour RSS floor for pid 21567 over
+8h20m of continuous uptime: 1.167 / 1.188 / 1.225 / 1.173 / 1.151 / 1.143 / 1.133 / 1.259 /
+1.099 GB. Regressed on the hour:
+
+| buckets | slope | interval | sensitivity floor |
+|---|---|---|---|
+| all 9 (two partial) | **−0.0045 GB/h** | [−0.020, +0.011] | 0.015 GB/h |
+| 7 complete only (n≥59) | **+0.0001 GB/h** | [−0.024, +0.025] | **0.025 GB/h** |
+
+**Quote the 7-bucket row** — dropping the partial 04:00 (n=46) and 12:00 (n=35) buckets removes the
+unequal-n bias in a MINIMUM statistic (fewer draws ⇒ the min reads high), and it is the weaker,
+therefore honest, claim. **Read these as order-of-magnitude sensitivity floors, one significant
+figure — NOT calibrated 95% intervals**; this box already ruled that a block-minimum is an
+extreme-value quantity and not t-distributed however many buckets there are, and an hour-minimum is
+the same statistic. So: *this window resolves a leak faster than ~0.03 GB/h; anything slower stays
+invisible.* That is **~12×** finer than the 65-minute window's ~0.3–0.4 GB/h.
+Peaks likewise flat at 1.45–1.63 G. The box stays unticked because the series is 69.5% complete.
 Report: `reports/cpu-runaway/20260823_123633+0200-box3-rss-floor-8h20m-partial.md`.
 
-**RETRACTED by this read: the 65-minute "floor trend −0.108 GB/h".** Over 8h20m that slope would
-have drained ~0.9 GB; it did not. It was noise in a one-hour window. Quote no floor slope — in
-either direction — from less than several hours.
+**CPU, from `cpu_time` DELTAS — and the `pct_cpu_1min` column is a PROXY that should not be
+averaged.** True CPU per hour (Δcolumn 5 over the 60 s interval, pid 21567): 25.8 / 26.7 / 25.7 /
+23.8 / 22.4 / 21.1 / 23.8 / 30.9 / 26.6 **% of one core** — a tight 21–31 band, ≈25 overall, and
+notably STABLE while RSS is flat. The hourly *mean of column 4* I first published (18.1…40.2,
+"~27") is a different and worse number: that gauge swings **0.0 → 184.9 within a single hour**, and
+exceeding 100 proves it is not the same quantity (it counts all threads, not one core). It reads
+high against the truth in every bucket. **Column 5 is a monotone counter — always prefer its
+deltas; column 4 is a sampled gauge whose mean is an artifact of when the samples landed.**
 
-**GOTCHA — the sampler re-resolves its target by NAME every sample, so the pid can change under it.**
-Exactly one row (239, 08:12:47) carries pid 19113 / `elapsed=00:00` / 28 MB, and row 240 is back on
-pid 21567 at `elapsed=09:08:01`: the server never restarted, the sampler momentarily caught a
-transient process matching the same selector. A per-block MINIMUM is maximally sensitive to this —
-one bad sample in 501 (0.2%) sets a whole block's floor and invents the analysis's most alarming
-feature. Always list pid changes before trusting any aggregate over this file:
+**RETRACTED by this read: the 65-minute "floor trend −0.108 GB/h".** The 8h20m slope is
++0.0001 GB/h (7 complete buckets), 1000× smaller and of the opposite sign; sustained, −0.108 would
+have drained ~0.9 GB. It was one-hour noise. Quote no floor slope, in either direction, from less
+than several hours. (Like-for-like: both are floor-minima regressions, hour buckets here vs
+10-minute blocks there — the comparison is of slopes, not of two different statistics.)
+
+**GOTCHA — the sampler is NOT PINNED TO A PID; it re-resolves its target each sample** (that it
+does so *by name* is inferred from the shape, not read from the sampler). Exactly one row of 501
+(239, 08:12:47) carries pid 19113 / `elapsed=00:00` / 28 MB. **The server did NOT restart, and this
+is arithmetic rather than a single-pair inference:** across row 239, wall 04:14:33→08:13:47 and
+pid 21567's own `elapsed` 05:08:47→09:08:01 are both exactly **3h59m14s (14,354 s)** — the process
+clock never reset. A per-block MINIMUM has no resistance to a single outlier by construction, so
+0.2% bad data set a whole block's floor and invented `block23 min_rss=0.028G`, a fabricated collapse
+shaped exactly like a restart. Always list pid changes before trusting any aggregate:
 
 ```bash
 awk -F'\t' 'NR>1{if($2!=p){printf "row %d  %s  pid=%s  elapsed=%s\n", NR-1, $1, $2, $3; p=$2}}' \
   reports/cpu-runaway/rss-series-20260823_041323+0200.tsv
 ```
+
+**AND COPY THE FILE FIRST.** The sampler is still appending, so successive awks over the live path
+read successive *different* files — the three reads above were taken at 501, 503 and 508 rows and
+silently mixed. `cp … /tmp/rss-frozen.tsv` and analyse the copy.
 
 **BLOCKED ON THE USER — the actual runaway is NOT fixed.** Everything landed so far removes an
 AMPLIFIER. Even with a perfect memo, 147 calls/hour each pay ONE full 14,509-file walk. The shape
@@ -789,26 +827,43 @@ former silently measures old code — it cost two failed runs here.
       REAPED with the process group. macOS has no `setsid`; use `scripts_dev/detach-run.py`
       (double-fork) and verify **ppid 1**. Already recorded in LOCAL memory as
       `detach-long-jobs-from-session-lifecycle`.
-      **2026-08-23 12:36 — 8h20m READ (501/721 samples, 04:14→12:34): FLAT FLOOR, STEADY STATE.**
-      Per-hour floor for pid 21567: 1.167 / 1.188 / 1.225 / 1.173 / 1.151 / 1.143 / 1.133 / 1.259 /
-      1.099 GB — a 1.10–1.26 G band, **no monotone rise across 8h20m**; peak flat at 1.45–1.63 G.
-      Hourly mean `%CPU` 18–40 (≈27 overall) unchanged throughout: **memory was never the runaway.**
-      This is the answer the box was posed to get; it stays **unticked** only because the series is
-      69.5% complete and the full read is due ~16:13 — a partial series reported as a settled 12 h
-      result would be exactly the proxy-for-the-thing substitution this card keeps catching.
+      **2026-08-23 12:36 — 8h20m READ (501/721 samples, 04:14→12:34): NO LEAK SIGNATURE DOWN TO
+      ~0.03 GB/h.** Per-hour floor for pid 21567: 1.167 / 1.188 / 1.225 / 1.173 / 1.151 / 1.143 /
+      1.133 / 1.259 / 1.099 GB; peak flat at 1.45–1.63 G. Regressed on the hour: all 9 buckets
+      slope **−0.0045 GB/h**, sensitivity ~0.015; the 7 COMPLETE buckets (n≥59, dropping partial
+      04:00/12:00 whose unequal n biases a minimum high) slope **+0.0001 GB/h**, sensitivity
+      **~0.025 GB/h**. **Quote the 7-bucket row — it is the weaker claim.** Per this box's own
+      earlier ruling these are order-of-magnitude sensitivity floors, NOT calibrated 95% intervals:
+      an hour-minimum is the same extreme-value statistic as the block-minimum, and is not
+      t-distributed however many buckets there are. *Resolves a leak faster than ~0.03 GB/h;
+      anything slower is invisible* — ~12× finer than the 65-minute window's 0.3–0.4.
+      **The first version of this entry said "FLAT FLOOR, STEADY STATE" with no sensitivity at
+      all** — a bare null, in the one box whose entire history is four statistics withdrawn for
+      exactly that. Corrected within the hour, on review.
+      Stays **unticked**: the series is 69.5% complete and the full read is due ~16:13. A partial
+      series reported as the settled 12 h result would be the same proxy-for-the-thing substitution
+      this card keeps catching.
       Report: `reports/cpu-runaway/20260823_123633+0200-box3-rss-floor-8h20m-partial.md`.
-      **RETRACTS the 65-minute floor trend −0.108 GB/h above.** Sustained over 8h20m that slope
-      drains ~0.9 GB; the floor did not move. It was one-hour noise, and it is now the third
-      quantity in this box withdrawn for being read off a window too short to carry it. Quote no
-      floor slope, in either direction, from less than several hours.
-      **GOTCHA — the sampler re-resolves its target BY NAME each sample, so the pid can change under
-      it.** Row 239 (08:12:47) carries pid 19113 / `elapsed=00:00` / 28 MB; row 240 is back on pid
-      21567 at `elapsed=09:08:01`. The server never restarted — a transient process matching the
-      same selector was sampled once. The old block-minimum command did not filter on pid, so that
-      single row (0.2% of the series) produced `block23 min_rss=0.028G`: a fabricated floor collapse
-      shaped exactly like a mid-series restart. **A minimum-statistic has no resistance to a single
-      outlier by construction.** Filter on the pid, and list pid changes before trusting any
-      aggregate over this file (both commands are in the STATE block).
+      **CPU: use `cpu_time` (col 5) DELTAS, never the mean of `pct_cpu_1min` (col 4).** True CPU per
+      hour is 25.8 / 26.7 / 25.7 / 23.8 / 22.4 / 21.1 / 23.8 / 30.9 / 26.6 **% of one core** — tight
+      21–31, ≈25, stable while RSS is flat. The col-4 hourly means first published here (18.1…40.2,
+      "~27") are a noisier different quantity: that gauge swings 0.0→184.9 inside one hour, and
+      >100 proves it is not per-core. Col 5 is a monotone counter; col 4 is a sampled gauge whose
+      mean depends on when the samples landed.
+      **RETRACTS the 65-minute floor trend −0.108 GB/h above.** The 8h20m slope is +0.0001 (7
+      complete buckets) — 1000× smaller, opposite sign; sustained, −0.108 drains ~0.9 GB. Like for
+      like: both are floor-minima regressions. Third quantity in this box withdrawn for being read
+      off too short a window. Quote no floor slope, either direction, from under several hours.
+      **GOTCHA — the sampler is not PINNED to a pid; it re-resolves each sample** ("by name" is
+      inferred from the shape, not read from the sampler). Row 239 (08:12:47) carries pid 19113 /
+      `elapsed=00:00` / 28 MB. **The server did NOT restart — arithmetic, not a single-pair
+      inference:** across that row, wall 04:14:33→08:13:47 and pid 21567's own elapsed
+      05:08:47→09:08:01 are both exactly 3h59m14s (14,354 s). The old block-minimum command did not
+      filter on pid, so one row in 501 (0.2%) produced `block23 min_rss=0.028G` — a fabricated
+      collapse shaped exactly like a restart. **A minimum has no resistance to a single outlier by
+      construction.** Filter on pid; list pid changes first; and **copy the file before analysing
+      it** — the sampler is still appending, and the three reads behind this entry hit 501, 503 and
+      508 rows without noticing (commands in the STATE block).
 - [x] A fix lands with a REGRESSION GUARD that fails on the pathological input, not merely a
       measurement showing the number dropped on one run.
       **FIX `581524c`** — `collectFileMeta()` stamped `_fileMetaCacheAt` with a PRE-walk
