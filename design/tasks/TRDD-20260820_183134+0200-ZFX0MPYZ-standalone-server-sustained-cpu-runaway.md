@@ -129,8 +129,20 @@ awk -F'\t' 'NR>1 && $2==21567 {h=substr($1,12,2); if(!(h in m)||$6<m[h])m[h]=$6;
 OF THEM IN UNDER 16 MINUTES.** Found 2026-08-23 14:45 in the ~22k log lines a `head -5` census had
 left unexamined — found by fixing a methodology defect, not by looking for it.
 `~/.agentlens/server.log` carries **2 × `FATAL ERROR: Ineffective mark-compacts near heap limit —
-Allocation failed - JavaScript heap out of memory`**, one per pid (verified by line order: FATAL at
-54164 follows pid 73785, FATAL at 270545 follows pid 20885). **Neither pid is 21567 or 19113.**
+Allocation failed - JavaScript heap out of memory`**, one per pid — **verified by exact adjacency,
+not by "the nearest preceding pid"**: lines 54161–54162 are 73785's two Mark-Compact traces and the
+FATAL is 54164; lines 270543–270544 are 20885's Scavenge + Incremental Mark-Compact and the FATAL is
+270545. Two or three lines apart in both cases, so the attribution is not an inference across
+distance. (This also corrected my own extraction: I had reported "traces=1" per pid, because the
+regex matched only the first form and missed `Mark-Compact (reduce)` / `Incremental Mark-Compact`.
+There are **two** trace lines per pid.) **Neither pid is 21567 or 19113.**
+
+**Whose processes were they? "The server's" is PLAUSIBLE, NOT VERIFIED — say "processes writing to
+the server's log".** That file is a ~6-week append across many restarts and carries **four distinct
+pids** (20885, 25527, 73785, 7186). No line names a non-server entrypoint — 0 hits for
+`standalone/cli.js` or an `agentlenspro <tool>` invocation — which is consistent with server-only
+but does not establish it, since a child or a process inheriting the redirect would not have to
+name itself.
 
 | pid | uptime at its trace | V8 **heap** | implied mean growth |
 |---|---|---|---|
