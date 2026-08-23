@@ -3,7 +3,7 @@ trdd-id: ZFX0MPYZ
 title: Standalone server sustains 150-270 percent CPU and 2.4 GB RSS over an 8-hour uptime
 column: todo
 created: 2026-08-20T18:31:34+0200
-updated: 2026-08-23T04:50:03+0200
+updated: 2026-08-23T05:06:36+0200
 current-owner: unassigned
 task-type: bugfix
 priority: high
@@ -368,15 +368,26 @@ former silently measures old code — it cost two failed runs here.
       real worry is misspecification: a line fitted to an oscillation has a slope set by where the
       window cuts the cycle, and no standard-error adjustment touches that — shrink the SE to zero
       and a biased point estimate stays biased.
-      Tested directly rather than argued: sub-window slopes are **5/5 negative** (no sign
-      alternation, so no phase-artifact signature) — but the windows overlap by 10 of 15 points,
-      and there are only **2 INDEPENDENT** windows in 35 minutes, both negative. k=2 is weak.
-      Net: the drift is probably real, points AWAY from a leak, and is not load-bearing for
-      anything. **Box 3 rests on the FLOOR, not on this.**
-      **STILL OPEN:** 32 minutes cannot exclude an hours-scale leak; the card's own observation
-      was 2.47 GB at 8h12m against 1.36 GB here. Power analysis on the measured residual sd
-      (0.055 GB) says a 60-minute window already detects the 0.136 GB/h leak the card implies, so
-      the 12 h series will settle this decisively. Read the FLOOR when it lands.
+      Tested rather than argued, in two stages, and the second stage RETIRES the first.
+      Sub-window slopes are 5/5 negative — but those windows overlap by 10 of 15 points, leaving
+      only **2 independent** windows in 35 minutes. And the sign test has a precondition I never
+      established: it discriminates drift from cycle-phase ONLY if a window spans a full
+      oscillation. **Measured the autocorrelation to settle it: there is NO coherent period.**
+      Max ACF is +0.37 at lag 2 min and +0.25 at lag 7, everything else below 0.15, decaying to
+      ~0 by lag 11 and mildly negative after — no dominant cycle, so "phase" is not well-defined
+      and the phase-artifact alternative is itself weakly supported. But that does not rescue the
+      slope: **2/2 sign agreement is p = 0.25 under the null**, which is not evidence.
+      **VERDICT: the drift is UNDETERMINED over this window.** Every support for it was removed in
+      sequence — the t-statistic (computed inside a model the data contradicts), then the 5/5
+      (non-independent), then the sign test (no discriminating power without a period) — while the
+      confidence word "probably real" survived each removal unchanged. That is momentum, not
+      evidence, and it was costing nothing to keep, which is exactly why it had to go.
+      **Box 3 rests on the FLOOR, not on any of this.**
+      **STILL OPEN:** ~35 minutes cannot exclude an hours-scale leak; the card's own observation
+      was 2.47 GB at 8h12m against 1.36 GB here. An hour of data is enough to settle it, but state
+      that in terms of the FLOOR, not the slope — an earlier version derived it from a
+      linear-trend power calculation, which is computing power for a statistic this card has since
+      retired as the wrong parameterisation of "leak". Read the FLOOR when the 12 h series lands.
       TRAP, cost one failed start: a `setsid nohup … &` sampler launched from a tool call is
       REAPED with the process group. macOS has no `setsid`; use `scripts_dev/detach-run.py`
       (double-fork) and verify **ppid 1**. Already recorded in LOCAL memory as

@@ -57,6 +57,39 @@ suite('LogReader — reparseSession() must not re-walk the whole log tree on eve
       `expected exactly 1 directory walk across ${ids.length} reparseSession() calls, got ${r.getFileMetaWalkCount()}`)
   })
 
+  // TRDD-ZFX0MPYZ — the CPU profile of the live runaway put 36.6% of main-thread busy time under
+  // handleCheckCacheExpiry, and its hottest leaf chain was
+  //   statSync <- collectFileMeta <- transcriptPathFor <- getLastRequestMs
+  // i.e. the probe reaches collectFileMeta through transcriptPathFor, NOT through reparseSession.
+  // The test above pins the reparseSession path only, so this hot path was unguarded: a change
+  // that made transcriptPathFor bypass or defeat the memo would cost one full recursive
+  // readdir+stat of EVERY session file per probe candidate (14,509 files on the machine where
+  // this was measured) and no test would go red.
+  test('a transcriptPathFor probe burst triggers exactly ONE directory walk, not one per candidate', () => {
+    const cwd = path.join(root, 'workspace')
+    const ids = ['probe-a', 'probe-b', 'probe-c', 'probe-d', 'probe-e']
+    for (const id of ids) {
+      fs.writeFileSync(path.join(root, 'projects', 'proj', `${id}.jsonl`), sessionBody(cwd, `prompt-${id}`))
+    }
+
+    const r = new LogReader()
+    assert.strictEqual(r.getFileMetaWalkCount(), 0, 'no walk has happened yet')
+
+    for (const id of ids) {
+      assert.ok(r.transcriptPathFor(id)?.endsWith(`${id}.jsonl`), `transcriptPathFor must resolve ${id} to its file`)
+    }
+
+    // THE ASSERTION: N candidates => 1 real walk. This is the invariant the cache-expiry probe
+    // depends on, and it holds under every cause considered for the runaway — so the guard is
+    // valid whichever one wins.
+    assert.strictEqual(r.getFileMetaWalkCount(), 1,
+      `expected exactly 1 directory walk across ${ids.length} transcriptPathFor() calls, got ${r.getFileMetaWalkCount()}`)
+
+    // A miss must not walk either — an unresolvable id scans the SAME memoized listing.
+    assert.strictEqual(r.transcriptPathFor('no-such-session'), null, 'unknown id resolves to null')
+    assert.strictEqual(r.getFileMetaWalkCount(), 1, 'a lookup MISS must not trigger a fresh walk')
+  })
+
   test('clearFileState() drops the walk cache so a forced rescan sees newly written files', () => {
     const cwd = path.join(root, 'workspace')
     fs.writeFileSync(path.join(root, 'projects', 'proj', 'sess-1.jsonl'), sessionBody(cwd, 'prompt-1'))
