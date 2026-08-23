@@ -125,8 +125,24 @@ awk -F'\t' 'NR>1 && $2==21567 {h=substr($1,12,2); if(!(h in m)||$6<m[h])m[h]=$6;
   reports/cpu-runaway/rss-series-20260823_041323+0200.tsv | sort
 ```
 
+**⚠⚠ SCOPE LIMIT ON EVERYTHING BELOW — TWO EARLIER SERVER PROCESSES DIED OF JS HEAP EXHAUSTION.**
+Found 2026-08-23 14:45, in the ~22k log lines a `head -5` census had left unexamined — so it was
+found by fixing a methodology defect, not by looking for it. `~/.agentlens/server.log` contains
+**2 × `FATAL ERROR: Ineffective mark-compacts near heap limit — Allocation failed - JavaScript heap
+out of memory`**, with V8 traces from **two pids that are neither 21567 nor 19113** (`[20885:…]`,
+`[73785:…]`) showing the heap at **6041 → 6135 MB**.
+**This does not contradict the box-3 result, it BOUNDS it.** "No leak signature down to
+~0.03 GB/h" is measured on **one process, over 8.4 h, at ~1.2 GB RSS**. Two other processes of this
+same server reached a ~6.1 GB heap and were killed by it. So box 3 answers *"did pid 21567 leak
+during this window"* — it does **not** establish that the server does not leak, and the card must
+not be read as saying so.
+**Undatable** (the log has no per-line timestamps — see the GOTCHA below), so nothing here says
+whether those crashes predate the fix in `581524c`, or how long those processes had run. **That is
+the open question this hands to `TRDD-YST9ZJ90`**, and it is a stronger reason to act than the
+CPU-rate argument that card is currently sized on.
+
 **BOX 3, PARTIAL ANSWER (501/721 samples, 04:14→12:34, read 12:36): NO LEAK SIGNATURE DOWN TO
-~0.03 GB/h.** Stated with its sensitivity, because a bare "steady state, not a leak" is the exact
+~0.03 GB/h — FOR pid 21567's 8.4 h ONLY; see the scope limit above.** Stated with its sensitivity, because a bare "steady state, not a leak" is the exact
 move this box has already withdrawn four statistics for. Per-hour RSS floor for pid 21567 over
 8h20m of continuous uptime: 1.167 / 1.188 / 1.225 / 1.173 / 1.151 / 1.143 / 1.133 / 1.259 /
 1.099 GB. Regressed on the hour:
@@ -219,15 +235,31 @@ FALSE, and asserted from `head -12` of a `cut -c1-130` view: twelve of thirty-se
 Three of them carry **full ISO datetimes with times** (usage-window boundaries in account
 auto-calibration lines), which are not filenames at all.
 
-**(iii) Inspected properly — all 37 matches, untruncated:** 33 are segment names
-(`compressed sealed segment 2026-08-18.ndjson → …`, `retention: deleted segment 2026-07-19`), and
-the rest are usage-window boundary datetimes. **Every one is a date describing DATA — which segment,
-which window — never the time the line was written.**
+(iii) "33 are segment names, the rest usage-window datetimes" — **WRONG NUMBER, and wrong the same
+way again.** I read a `grep -oE … | uniq -c` listing, which counts **MATCHES, not lines**: the 37
+lines yield **78 matches**, because `compressed sealed segment X.ndjson → X.ndjson.gz` carries two
+dates and is listed twice. Counting the LINES:
 
-**The real evidence for "no per-line timestamps" is the line format, not a regex's silence:**
-**348,785 of 394,171 lines begin with the bare `[AgentLens] ` prefix** and the remainder are
-stack-trace continuations (`    at …`). There is no timestamp field. A scan for three formats the
-first regex would have missed — epoch millis, `Aug 23 08:12`, bracketed `[08:12`— returns **0**.
+| category | lines |
+|---|---|
+| `span store: compressed sealed segment …` | **32** |
+| `retention: deleted segment …` | **2** |
+| `window capacity auto-calibrated …` | **3** |
+| | **37 ✓** |
+
+So it is 34 segment names, not 33, and my "33" had also silently dropped the retention pair.
+**Every one is still a date describing DATA — which segment, which window — never the time the line
+was written**, which is the only part of this that ever mattered.
+
+**The evidence for "no per-line timestamps" is the line FORMAT, not a regex's silence.** Full prefix
+census (one read; the log is live, so totals drift by a few lines between reads): **351,534 lines
+begin with `[AgentLens] `**, **42,380** are stack-trace continuations (`    at …`), and the tail is
+~166 blank, 52 `(node:…)`, 15 `Debugger listening…`, 10 `[GATE-PROBE]`, 4 `[LogReader]`, plus a V8
+crash dump. **No category carries a timestamp field** — the V8 lines' `[pid:0xaddr] NNNN ms:` is a
+process-relative counter, not wall clock. (Earlier I gave `348,785 of 394,171` from `head -5` of
+that census, leaving ~22k lines unexamined — head-for-the-file inside the claim replacing
+head-for-the-file. Now enumerated in full.) A scan for three formats the first regex would have
+missed — epoch millis, `Aug 23 08:12`, bracketed `[08:12` — returns **0**.
 ⇒ **The backfill cannot be dated and stays a *candidate* confound.** (The earlier "1 backfill line
 within 50 lines of a timestamp" is **non-probative** and withdrawn: line proximity in an
 untimestamped log says nothing about datability.)
