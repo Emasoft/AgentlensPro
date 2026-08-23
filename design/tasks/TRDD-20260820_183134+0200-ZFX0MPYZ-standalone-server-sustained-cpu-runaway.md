@@ -3,7 +3,7 @@ trdd-id: ZFX0MPYZ
 title: Standalone server sustains 150-270 percent CPU and 2.4 GB RSS over an 8-hour uptime
 column: todo
 created: 2026-08-20T18:31:34+0200
-updated: 2026-08-23T05:39:40+0200
+updated: 2026-08-23T05:42:37+0200
 current-owner: unassigned
 task-type: bugfix
 priority: high
@@ -416,10 +416,22 @@ wanted.** Re-run four ways:
 | exponential, mean-matched | 0.149 |
 | exponential, leave-one-out *(most adverse)* | **0.107** |
 
-Including the outlier inflated σ by **+8%** (0.819 vs 0.760), so the bias was real. **The conclusion
-survives it regardless: every null exceeds 0.10.** A gap that large is ordinary for a right-skewed
-sample of 20, so **1902 ms is an uncharacterised tail value, not evidence of a second mechanism** —
-and that now rests on the harshest null available rather than the flattering one.
+**Reported as a RANGE, not a threshold verdict: p = 0.107–0.226 across four nulls.** The range IS
+the finding. My first phrasing — "every null exceeds 0.10" — smuggled in a cutoff I never justified
+and had picked after seeing the values. The sensitivity analysis itself is sound (two families ×
+with/without the point under test, all specified before their values were known, all reported
+including the one nearest the boundary); compressing it to a threshold was not.
+Monte-Carlo error on p itself is small (40×500 draws: all-20 [0.196, 0.268], LOO [0.122, 0.192]) —
+which establishes that these numbers are precise, **not** that any cutoff applied to them is
+legitimate.
+**Reading: a gap this large is unremarkable for a right-skewed sample of 20 under every null tried,
+so 1902 ms is best treated as an uncharacterised tail value rather than a second mechanism.** Weak
+evidence with a direction — not a verdict.
+σ inflation from including the outlier was **+8%** (0.819 → 0.760 LOO). **I claimed that inflation
+CAUSED the 0.226 → 0.143 shift; I did not isolate it.** The LOO null is fitted on 19 points but
+still compared against a 20-point draw containing the outlier, so the change mixes the σ shift with
+a sample-composition shift. Naming an unseparated mechanism is the same shape as the page-cache
+attribution already withdrawn on this card.
 
 **ALSO WITHDRAWN — "1 run in 20 = 5% of runs".** Exact binomial 95% CI for 1/20 is
 **[0.13%, 24.9%]**, a ~190× range quoted as one number. The rule-of-three bound (0–15% for
@@ -433,9 +445,18 @@ wrote "per-call, not drift" as if it did.
 That distinction is load-bearing here, because the escalation loop above is *precisely* load-driven:
 if fast walks cluster when the machine is quiet, slow walks cluster when it is busy — the
 correlation that would make the cliff dangerous. Five of the six do fall in the second half, so I
-tested it rather than eyeballing: mean position 13.5 vs 10.5 expected, **permutation p = 0.076 —
-not significant at n=20.** So a load-driven pattern is **neither shown nor excluded**. (One
-correction to the review that prompted this: three of six are in the last five slots, not four.)
+tested it rather than eyeballing: mean position 13.5 vs 10.5 expected, **permutation p = 0.076**
+(MC-95% CI [0.069, 0.086]). A load-driven pattern is **neither shown nor excluded**. (One correction
+to the review that prompted this: three of six are in the last five slots, not four.)
+
+> **THRESHOLD DISCIPLINE — the defect this and the bootstrap share.** I first wrote this p as "not
+> significant" while calling p = 0.107 elsewhere a conclusion that "survives". Those are 0.031 apart
+> on a continuous scale, and I read one as absence and the other as support — **against a cutoff
+> stated nowhere in this card, applied each time in the direction that confirmed the sentence I was
+> writing.** Pre-registering the *statistic* closed that loop for statistic-selection; it left
+> threshold-selection wide open, and the habit reappeared there. **Neither number carries a verdict
+> word now.** Both are weak evidence with a stated direction, which is what n=20 supports and what
+> this card already does everywhere else.
 
 Caveat kept: p90 of n=20 is the 18th order statistic and is not a stable estimator. The
 pre-registration discipline worked; the CHOICE was poor, and naming p50 + max would have been
