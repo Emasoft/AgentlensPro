@@ -32,9 +32,15 @@ Two riders, both learned the hard way in the same chain:
   ALSO shipped the lock-guard story and a 61.24 s period derived by mixing one snapshot's row count
   with another's timestamp — the mixing error a previous commit had already written a lesson
   against. Writing the rule down is not applying it.
-- **"I removed adjectives this round" is itself an unfalsifiable adjective.** The checkable form is
-  a count: **claims added vs claims withdrawn per commit**, which is why every withdrawal above is
-  written as an explicit WITHDRAWN line rather than by quietly editing the old text away.
+- **"I removed adjectives this round" is itself an unfalsifiable adjective.** Every withdrawal above
+  is therefore written as an explicit WITHDRAWN line rather than by quietly editing the old text
+  away, so a reader can audit them. **No COUNT is quoted**: I offered "16 withdrawal markers" from a
+  `grep -co`, which counts matching lines (and `grep` here is ugrep, whose `-c` differs again) and
+  sweeps in every meta-sentence that merely mentions withdrawing. A proxy handed over as "the
+  checkable form" is the same defect one level up.
+- **Correcting a verdict with the opposite verdict is not a correction.** "Held steady" → "the rate
+  DECLINED" swapped one two-point story for another; both are withdrawn, and what remains is the
+  two period-means with no trend claimed.
 
 And when the question is what a tool MEASURES, **read the tool, then test it on your own data.**
 The `ps` line in the 20-line sampler settled in one call what two rounds of argument-from-column-name
@@ -170,11 +176,17 @@ different estimators** — asserted from a column NAME two turns ago, adopted fr
 ago, and only now actually measured.
 **From that same test, two results — one solid, one I read backwards.**
 
-*Solid: the 25.1% closes against an independent method.* Endpoint arithmetic (cumulative CPU at the
-last row minus the first, over the elapsed span) gives **25.07%**; the delta-sum gives **25.09%** —
-**0.03 pt apart**, on 504 intervals against 2 whole-file endpoints. (The delta-sum divides each
-interval by exactly 60 s when the cadence is 60.06; using 60.06 gives 25.07% exactly. It also
-misses 28.6 s of CPU in the two intervals dropped at the pid change.)
+***WITHDRAWN — "the 25.1% closes against an independent method."** The two methods are one method.*
+Σdeltas **telescopes** to (cpu_last − cpu_first), which IS the endpoint numerator — measured:
+`sum(deltas)=7588.22`, `(last−first)=7616.86`, gap **28.64 s** = exactly the two intervals dropped
+at the pid change. So both figures divide one numerator; the only differences are −28.6 s on top
+(−0.38%) and 30240 vs 30388 s underneath (−0.49%), **same sign, so they cancel**. The 0.03 pt
+agreement was GUARANTEED — it would hold just as well against a fabricated col 5, provided it were
+monotone. Zero diagnostic power, and I published it as corroboration.
+**The genuinely independent estimator is col 4** — a different measurement, not a rearrangement of
+the same one — and it does NOT closely agree: **+2.75 pt** (that is the bias test above). That
+disagreement is the honest comparison, and it is why col 5 is preferred on the grounds of being a
+monotone counter rather than on the grounds of agreeing with anything.
 
 *Read backwards — **WITHDRAWN**: "~26% has been sustained across its whole ~13 h life".* The
 lifetime average is a CUMULATIVE figure, so splitting it is the whole point:
@@ -185,11 +197,18 @@ lifetime average is a CUMULATIVE figure, so splitting it is the whole point:
 | the measured window | 8.44 h | **25.07%** |
 | whole life (row 1 → 12:41) | 13.59 h | 25.96% |
 
-So the unsampled early period ran **2.4 pt hotter — ~9% relative — and the rate DECLINED.** I
-published the reassuring reading of a number that shows drift, in the commit that added a rider
-about verdict words. The card's headline survives (it is about a *sustained* ~25–27%, and it is
-sustained) but "held steady" is not what this shows, and the decline is unexplained: nothing here
-attributes it, and the early period has no samples to attribute it with.
+**Both of my readings of this table were verdicts on two points with no variance.** First "~26% held
+across its whole life" (the reassuring one); then, correcting it, **"the rate DECLINED, real and
+unexplained"** — which is **also WITHDRAWN**. Two exact period-means cannot distinguish a declining
+rate from a different workload in the unsampled period, and a candidate confound is visible in the
+server log: 289 `bodies → store: ingested N … 0.50GB read` spool-backfill lines. **I cannot date
+them — the log carries no timestamps at all** (its first lines are bare `[AgentLens] …`), so the
+backfill is a *candidate* confound and naming it as the cause would repeat the error a third time.
+**What is measured:** the unsampled first 5.15 h averaged 27.44%, the measured 8.44 h window
+25.07%, whole life 25.96%. **No trend is claimed.**
+On the title: it says *"27 percent of a core"*, from the original 2026-08-20 observation. The
+measured figures here are **25.07% (window)** and **25.96% (life)** — so read the title as ~25–27%
+rather than as 27; not worth a rename, but do not quote 27 as a measurement.
 True CPU per hour (Δcol 5, pid 21567, `p` reset on pid change): 25.8 / 26.7 / 25.7 / 23.8 / 22.0 /
 21.1 / 23.8 / 30.9 / 26.6 **% of one core**; **25.1% overall** across 504 intervals — a tight 21–31
 band, stable while RSS is flat.
@@ -214,14 +233,15 @@ test that failed to reject.
 two SEs (1.68 hourly vs 1.71 AR-inflated paired) and concluded "essentially nothing". **SE is not
 power**: the critical value differs too, 2.306 at df 8 against 1.965 at df 503. On MDE —
 
-| test | t_crit | SE | CI half-width (t·SE) | MDE @80% ((t+0.842)·SE) |
-|---|---|---|---|---|
-| 9 hourly means | 2.306 | 1.68 | 3.87 pt | 5.29 pt |
-| 504 pairs (AR-inflated) | 1.965 | 1.71 | 3.36 pt | 4.80 pt |
+| test | t_crit | t_{.80,df} | SE | CI half-width (t·SE) | MDE @80% ((t+t_{.80})·SE) |
+|---|---|---|---|---|---|
+| 9 hourly means | 2.306 | 0.889 | 1.68 | 3.87 pt | 5.37 pt |
+| 504 pairs (AR-inflated) | 1.965 | 0.8423 | 1.71 | 3.36 pt | 4.80 pt |
 
-**≈13% better on the interval, ≈9% on power — not 98% (as first claimed against me) and not
+**≈13% better on the interval, ≈11% on power — not 98% (as first claimed against me) and not
 "essentially nothing" (as I claimed back).** Two wrong answers, both from comparing one component
-of a quantity instead of the quantity.
+of a quantity instead of the quantity. (The power column uses **t_{1−β,df}**, not z: at df 8 that is
+0.889 rather than 0.842, which is why an earlier "≈9%" here read low.)
 **⚠ LABEL CORRECTION THAT APPLIES TO THIS WHOLE CARD, NOT JUST THIS ENTRY.** What this card has
 called "MDE" throughout — including the original `MDE ≈ 0.39 GB/h` in the box-3 entry below — is
 **t_crit × SE, the CI HALF-WIDTH**: the effect the interval just excludes. The minimum detectable
