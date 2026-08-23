@@ -1,9 +1,9 @@
 ---
 trdd-id: ZFX0MPYZ
-title: Standalone server sustains 150-270 percent CPU and 2.4 GB RSS over an 8-hour uptime
+title: Standalone server sustains 27 percent of a core and 1.4 GB RSS — check_cache_expiry probe walks
 column: todo
 created: 2026-08-20T18:31:34+0200
-updated: 2026-08-23T05:44:57+0200
+updated: 2026-08-23T05:48:39+0200
 current-owner: unassigned
 task-type: bugfix
 priority: high
@@ -11,7 +11,14 @@ severity: high
 task-scope: standalone-server
 ---
 
-# Standalone server sustains 150-270% CPU and 2.4 GB RSS over an 8-hour uptime
+# Standalone server sustains ~27% of a core and 1.4 GB RSS — `check_cache_expiry` probe walks
+
+> **TITLE CORRECTED 2026-08-23.** It read *"sustains 150-270% CPU and 2.4 GB RSS"* — the 268.8%
+> is a **1-minute decaying average**, not a sustained figure, and the body spent a night
+> establishing that. The most-read line of the document asserted the exact reading everything
+> below it corrects. Sustained is **27.4% of one core** (`TIME/ELAPSED`, flat across 94 samples);
+> the 2.47 GB RSS belongs to a different process on 2026-08-20 and is not this one's 1.4 GB.
+> Filename slug left unchanged so existing references still resolve.
 
 ## Observation (2026-08-20, measured, not inferred)
 
@@ -121,11 +128,23 @@ without addressing the contradiction, then built a headline on the contradiction
 | profiled pid 21567 | 5:03:15 (18,195 s) | 83:07 (4,988 s) | **27.4% of one core** |
 | original incident (2026-08-20) | 8:12:40 (29,560 s) | 65:35 (3,935 s) | **13.3%** |
 
-So the profiled process burns **2.1× the original incident's sustained rate**. The burn IS
-sustained; the card's original framing was right and my "bursty" correction was wrong. The 83.3%
-idle reading is a true measurement of a 45 s window that happened to catch a quiet stretch — which
-is precisely the one-snapshot error this card warns about for RSS, committed here for CPU. Minute
-scale is genuinely spiky (93.6% at one sample, 12.9% two hours later); lifetime is not.
+**The burn IS sustained** — the card's original framing was right and my "bursty" correction was
+wrong. The 83.3% idle reading is a true measurement of a 45 s window that caught a quiet stretch,
+which is precisely the one-snapshot error this card warns about for RSS, committed here for CPU.
+Minute scale is genuinely spiky (93.6% at one sample, 12.9% two hours later); lifetime is not.
+
+**27.4% is a STABLE property of that process, measured**: across 94 samples of the series it reads
+27.4, 27.5, 27.5, 27.3, 27.1, 27.1, 27.1% — slope −0.35 pct-points/hour, flat over the observed
+window. That is what carries "sustained".
+
+> **~~The profiled process burns 2.1× the original incident's sustained rate.~~ WITHDRAWN — same
+> defect class I removed for RSS, left standing here.** Killing `(2.47−1.36)/8h` fixed the
+> INSTANCE, not the CLASS: 27.4% ÷ 13.3% is still a cross-process ratio. Different processes,
+> different days, different code (this one runs the 23:00 bundle; whatever ran on 08-20 is
+> unrecorded), different machine load (~30 Claude sessions now, unknown then), a corpus that has
+> grown — divided as if like-for-like, and both quoted to three significant figures from single
+> `ps` readings with no interval. It also earns nothing: "the burn is sustained" follows from
+> 27.4% on one process alone. Deleted rather than qualified.
 
 **~~`_collectJsonlFiles` 72.0% inclusive~~ FALSE — a 4.1× double-count. TRUE value: 17.4%.** My
 inclusive rollup walked each sample's ancestor chain and added to a map keyed by frame LABEL,
@@ -428,12 +447,24 @@ enters the calculation as a fixed constant when it is itself a single draw from 
 statistic (the maximum spacing of 20 points). "Precisely estimated" was true of the estimator and
 false of the estimate.
 **The interval that matters — resampling the 20 observations, refitting the null on each:
-median p = 0.327, 95% [0.117, 0.773].** That is **~9× wider** than the MC interval I published
-(width 0.657 vs 0.072).
-**Conclusion, and it is weaker than anything I wrote before: n=20 cannot settle this either way.**
-The band runs from somewhat-notable to entirely-unremarkable. A gap this size is unremarkable under
-every null tried — that statement stands — but the evidence does not support any characterisation
-of 1902 ms beyond "one observation whose origin is unknown".
+median p = 0.327, 95% [0.117, 0.773].** Note the MC interval was **not a too-narrow version of this
+one — it was an interval on a DIFFERENT QUANTITY**, which is the whole distinction; calling it "9×
+too narrow" blurred exactly the point.
+Two properties of that band worth knowing before leaning on it: ~36% of replicates contain no 1902
+at all ((19/20)²⁰ = 0.358), and those drive the median to 0.327 and stretch the upper tail; ties
+from resampling with replacement also inflate max-spacing. So its width is real but its shape is
+dominated by outlier-PRESENCE, not by anything about the outlier's nature.
+
+**The conclusion needs none of that machinery, and the simple argument is the right one: there is
+exactly ONE observation in the tail, and one point cannot characterise a tail.** That was true
+before the first bootstrap and needed no simulation. A CI on a p-value is generically wide — p near
+0.2 has an interval roughly this wide at any n — so [0.117, 0.773] is *consistent with* "n=20
+cannot settle this", not what establishes it.
+
+> **SCOPE, which matters more than the statistics and should have been asked first:** whether
+> 1902 ms is a separate regime or a tail draw **changes no action on this card**. Either way walks
+> occur near the cliff, the memo collapses if one crosses, and the fix is identical. Several rounds
+> went into a question with no decision attached to it.
 σ inflation from including the outlier was **+8%** (0.819 → 0.760 LOO). **I claimed that inflation
 CAUSED the 0.226 → 0.143 shift; I did not isolate it.** The LOO null is fitted on 19 points but
 still compared against a 20-point draw containing the outlier, so the change mixes the σ shift with
