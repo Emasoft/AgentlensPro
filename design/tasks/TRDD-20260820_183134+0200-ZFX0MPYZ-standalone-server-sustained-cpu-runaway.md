@@ -3,7 +3,7 @@ trdd-id: ZFX0MPYZ
 title: Standalone server sustains 150-270 percent CPU and 2.4 GB RSS over an 8-hour uptime
 column: todo
 created: 2026-08-20T18:31:34+0200
-updated: 2026-08-23T05:32:54+0200
+updated: 2026-08-23T05:35:09+0200
 current-owner: unassigned
 task-type: bugfix
 priority: high
@@ -348,10 +348,26 @@ alone, each pre-selected).
 | **p90 (pre-registered)** | **750** | **38%** |
 | max | **1902** | **95%** |
 
-**VERDICT, keyed to p90 as committed: BELOW the cliff at 38%.** This is the case that justifies
-pre-registering, because the two statistics tell opposite stories: p90 says comfortable, while
-**one run of twenty came within 98 ms of the cliff**. Committed to p90 in advance → the verdict is
-"below"; committed to reporting max → 1902 is stated, not buried.
+**VERDICT, keyed to p90 as committed: p90 = 750 ms, below the 2000 ms cliff.** The pre-registration
+is honoured — but it selected **the wrong FAMILY of statistic**, and that matters more than its
+instability.
+
+> **THE FAILURE IS A THRESHOLD EVENT, so the operative quantity is the EXCEEDANCE PROBABILITY, not
+> a central quantile.** Any SINGLE walk over 2000 ms collapses the memo for that request's whole
+> probe burst. p90 answers "where do most walks land" — a question nobody asked, because 90% of
+> walks finishing comfortably is entirely compatible with the cliff being crossed several times an
+> hour.
+>
+> **What the data actually bounds:** 0 of 20 runs exceeded 2000 ms. By the rule of three, the 95%
+> upper bound on P(walk > TTL) is **3/20 = 15%**. At the measured 147 calls/hour that admits **up
+> to ~22 memo collapses per hour**; even a 1% exceedance rate gives ~1.5/hour, each costing 5×
+> walks by the stall measurement above.
+>
+> **Honest verdict from n=20: the exceedance rate lies somewhere in 0–15%, and this sample cannot
+> distinguish those.** That is a materially different card from "38% of the cliff".
+
+**Stated operationally, so neither number can be taken without the other:** *90% of walks finish
+within 750 ms*, and *1 walk in 20 came within 98 ms of collapsing the memo*.
 
 **The distribution is a MIXTURE, and I checked whether that invalidates the p90 — it does not.**
 Clustering on the gaps (largest 769→1902 = 1133 ms; next 317→586 = 269 ms):
@@ -362,11 +378,16 @@ Clustering on the gaps (largest 769→1902 = 1133 ms; next 317→586 = 269 ms):
 | **MAIN** | **13** | **317–769 ms** | **38%** |
 | OUTLIER | 1 | 1902 ms | **95%** |
 
-**p90 = 750 ms lands INSIDE the MAIN cluster**, so it is not a cross-regime artifact — it describes
-a real operating regime, which is what makes the verdict meaningful. But the 769→1902 gap is the
-largest in the data by 4×, so **the outlier is a distinct event, not the tail of MAIN**: 1 run in
-20 (5%) reached 95% of the cliff while the entire MAIN regime caps at 38%. A quantile cannot
-describe that event, and neither statistic alone is the whole answer — which is why both are here.
+**p90 = 750 ms lands INSIDE the MAIN cluster**, so it is not a cross-regime artifact. And the
+regimes are **NOT a drift over the ten minutes** — I had reported the sample SORTED, which destroyed
+the evidence needed to tell. In temporal order the sub-200 ms runs fall at positions
+**3, 11, 12, 16, 19, 20 — interleaved, not contiguous**. So the bimodality is **per-call, not a
+page-cache warm-up or a regime change**, which is what makes the exceedance framing above the whole
+answer rather than a per-regime split.
+
+The 769→1902 gap is still the largest in the data by 4×, so the outlier is a distinct event rather
+than MAIN's tail. But **"1 run in 20 = 5% of runs" is a rate estimated from a SINGLE event** and its
+interval is enormous — the rule-of-three bound (0–15%) is the defensible statement, not 5%.
 
 Caveat kept: p90 of n=20 is the 18th order statistic and is not a stable estimator. The
 pre-registration discipline worked; the CHOICE was poor, and naming p50 + max would have been
@@ -458,11 +479,20 @@ former silently measures old code — it cost two failed runs here.
       size in a power argument, one paragraph after deleting it — a section that says no legitimate
       target exists, then computes power against one.
       **BOX 3'S ANSWER, stated without any target rate — the MINIMUM DETECTABLE EFFECT.** From the
-      floor's own scatter over 65 min: slope −0.108 GB/h, SE 0.104, **95% CI [−0.316, +0.100] —
-      spans zero**, and **MDE ≈ 0.29 GB/h**. So: *this window can only resolve a leak faster than
-      ~0.29 GB/h; anything slower is invisible here.* That is self-contained, needs no fabricated
-      baseline, and turns "insufficient power" from a hedge into a number. MDE scales ≈1/duration^1.5
-      for a trend, so the 12 h series resolves ~8× finer (~0.04 GB/h).
+      floor's own scatter over 65 min: slope −0.108 GB/h, SE 0.104. With **n=6 the multiplier must
+      be t at df=4** (2.776 + 0.941 = 3.72), not the normal 2.8 I first used: **95% CI
+      [−0.397, +0.181] — spans zero**, and **MDE ≈ 0.39 GB/h**. Both corrections run in the
+      conservative direction: the window is *less* sensitive than I claimed, and the "underpowered"
+      conclusion is stronger, not weaker. σ̂ from 4 df is itself uncertain by ~2×, so quote this as
+      **order 0.3–0.4 GB/h, one significant figure**.
+      *This window can only resolve a leak faster than ~0.4 GB/h; anything slower is invisible.*
+      SE(slope) ∝ σ√Δ/T^1.5, so scaling to the 12 h series is **720/65 = 11.1× the window → 37×
+      finer → MDE ≈ 0.01 GB/h**. (I previously wrote ~8×/0.04 by applying a reviewer's *4× example*
+      ratio to an 11× window — arithmetic on someone else's illustration instead of my own data,
+      and it understated my own instrument by 4.6×.)
+      On the block-minimum estimator I flagged: a CONSTANT block size makes its upward bias roughly
+      constant across blocks, which shifts the intercept and not the slope — so trend estimation
+      here is defensible after all.
       **The per-process rate, for construction not for value** (pid 21567, uptime 308→375 min,
       n=68): RSS 1.379 → 1.361 GB, endpoint **−0.016 GB/h**, least-squares **−0.046 GB/h** —
       **consistent with zero**, as the CI above shows. The contribution is that it uses ONE process
