@@ -3,7 +3,7 @@ trdd-id: ZFX0MPYZ
 title: Standalone server sustains 150-270 percent CPU and 2.4 GB RSS over an 8-hour uptime
 column: todo
 created: 2026-08-20T18:31:34+0200
-updated: 2026-08-23T04:22:21+0200
+updated: 2026-08-23T04:32:36+0200
 current-owner: unassigned
 task-type: bugfix
 priority: high
@@ -176,26 +176,72 @@ most likely belong to those, not to the process the profile describes. Corrobora
 calls captured during a 60 s instrumented window measured 1193/693/1685 ms — the 947 ms regime,
 not the 5035 ms one.
 
-## 2026-08-23 04:20 — BOX 1 IS UNTICKED: the profile cannot see most of the CPU
+## 2026-08-23 04:20 — ~~BOX 1 UNTICKED~~ RETRACTED at 04:31; the off-main CPU is V8 GC, not fs
 
-A V8 CPU profile samples **only the main isolate thread**. `ps -M -p 21567` (per-thread):
+**The untick was an OVERCORRECTION and both of its premises were false.** Established twice
+independently — by a 30 s `/usr/bin/sample` of all threads I ran myself, and by a third
+adversarial review that reached the same two conclusions. Having overclaimed twice, I underclaimed
+once; the record of all three is deliberate.
 
-| threads | cpu time | share of process |
-|---|---|---|
-| main | 67:37 (4,057 s) | **78.4%** |
-| 4 × libuv threadpool | ~4:40 each (~1,120 s) | **21.6%** |
+**FALSE — "the async `readdir`/`stat` load runs on those invisible threads".** All-thread sample
+(`reports/cpu-runaway/20260823_042349+0200-allthreads-sample.txt`):
 
-And in the instrumented 60 s window the gap is far wider than the lifetime ratio: the V8 profile
-measured the main thread at **11.3% of one core**, while the process's own `TIME` delta over the
-same minutes ran **23.0% → 38.2%**. So **the majority of the CPU in the window was burned off the
-main thread, where the profiler is blind** — and node's async fs work (the very
-`readdir`/`stat` load this section attributes) executes on exactly those threadpool threads.
+| thread class | in-window state |
+|---|---|
+| 4 × `libuv-worker` (the actual fs threadpool) | **23338/23338 samples in `uv_cond_wait` — 100% idle**, ~2.1 s lifetime total (0.04%) |
+| 4 × `node-V8Worker` | ~98% idle in-window; their lifetime CPU is **V8 concurrent GC** (`ConcurrentMarking::RunMajor`) |
+| main thread | the only meaningfully busy thread |
 
-This is a larger defect than either earlier correction. Box 1 asks that the busy stack be
-"IDENTIFIED, not guessed". What the profile identifies is the *main thread's* stack, which is a
-minority of the burn in-window. **Box 1 is therefore unticked** until the off-main-thread work is
-measured (`--cpu-prof` does not cover it either; this needs `sample`/Instruments, `dtrace`, or
-libuv-level instrumentation such as `UV_THREADPOOL_SIZE` variation with a controlled load).
+The fs threadpool does essentially nothing. The 21.6% off-main CPU is **V8 background garbage
+collection**, driven by heap size — which makes it the *"GC pressure from the 2.47 GB heap"*
+candidate box 2 lists, now measured: **~21.6% of process CPU is concurrent GC**, invisible to the
+V8 CPU profile (which shows only 0.98% for main-thread GC).
+
+**FALSE — "11.3% of a core, so the profiler is blind to the majority".** I computed that as
+`busy_samples × 100 µs`, assuming the interval I requested. V8 never honoured it — effective
+interval was **170.7 µs**. And the busy *fraction* is also wrong, because samples are NOT
+uniformly spaced (a stalled sampler yields larger deltas on busy samples). The profile carries
+`timeDeltas`; summed, they cover **100.0%** of wall clock, and the correct figure is:
+
+| profile | main-thread busy | share of a core | my published figure |
+|---|---|---|---|
+| 45 s | 10.68 s | **23.5%** | (16.7% busy-fraction) |
+| 60 s | 13.29 s | **22.0%** | **11.3% — wrong** |
+
+Against the process's `TIME` delta of 23.0–38.2%, the main thread is **58–96% of process CPU** —
+the majority, consistent with the `ps -M` lifetime split (78.4% main) that appeared one line above
+the contradiction and which I failed to reconcile.
+
+**Box 1 is RE-TICKED with its scope stated:** the main thread is profiled and its frames named,
+and the main thread is where the majority of the CPU is. The remaining ~21.6% is measured and
+attributed to V8 concurrent GC, but not frame-attributed.
+
+## 2026-08-23 04:30 — WHO calls it: the load scales with open sessions, not with uptime
+
+Inside AgentlensPro `check_cache_expiry` has exactly one caller — `src/cli/cacheExpiredCli.ts:115`
+→ `callTool` → server HTTP. Nothing else in `src/`/`standalone/` calls it; the `agentlenspro gate`
+and `agentlenspro hook` hooks do NOT.
+
+The verb is driven from **outside this repo**, by **ai-maestro-janitor 3.3.26**:
+`scripts/lib/agentlens_probe.py` (`DEFAULT_CACHE_EXPIRED_COMMAND = "agentlenspro cache-expired"`,
+5 s subprocess timeout, fail-open), invoked by the heartbeat detectors
+`scripts/detectors/window-burn-rate.py:50` and `scripts/detectors/token-usage-anomaly.py:37`,
+plus `scripts/lib/external_clear.py`.
+
+**So the cost is `N_sessions × N_detectors × beat_rate`, and no term is under the server's
+control.** There are **30 `claude` processes** on this machine; measured rate is 147 calls/hour
+(769 over 5h14m), each a full recursive `readdir` + `statSync` over 14,509 files.
+
+**This explains the shape the card opened on:** the burn is not a leak that develops with uptime —
+it scales with how many Claude sessions are open. It also explains the healthy young server on
+2026-08-22 and the 5035 ms vs 947 ms per-call gap between processes.
+
+**Neither timeout bounds the server:** the janitor abandons at 5 s, the CLI at 1500 ms
+(`src/cli/main.ts:92`), and neither cancels server-side work — hence 25–65 s calls nobody awaited.
+
+**NOT established:** the per-detector cadence/gating, so 147/hour is measured but its decomposition
+across the 30 sessions is not. Full note:
+`reports/cpu-runaway/20260823_043026+0200-who-calls-check-cache-expiry.md`.
 
 **TWO HYPOTHESES WERE DISPROVED BY MEASUREMENT, and no fix was shipped on them.** (1) That
 `collectFileMeta()`'s 2 s TTL is *born expired* because `_fileMetaCacheAt` is stamped with a
@@ -225,15 +271,15 @@ former silently measures old code — it cost two failed runs here.
 
 ## Acceptance criteria
 
-- [ ] The busy stack is IDENTIFIED, not guessed — a CPU profile (`node --cpu-prof`, or SIGUSR1 +
+- [x] The busy stack is IDENTIFIED, not guessed — a CPU profile (`node --cpu-prof`, or SIGUSR1 +
       inspector) taken against a server reproducing the condition, naming the hot frames.
-      2026-08-23: TICKED, THEN UNTICKED THE SAME NIGHT. Two inspector profiles (45 s / 257,123
-      samples and 60 s / 353,511 samples) of pid 21567 name the MAIN-THREAD frames — but a V8
-      profile is blind to the libuv threadpool, which holds 21.6% of the process's lifetime CPU
-      and the clear majority of it in-window (main thread 11.3% of a core vs the process's
-      23.0-38.2%). The async `readdir`/`stat` work this section attributes runs precisely there.
-      Naming a minority of the burn is not identifying the busy stack. NEEDS: off-main-thread
-      measurement (`sample`/Instruments/dtrace, or UV_THREADPOOL_SIZE variation under load).
+      2026-08-23: ticked → unticked → RE-TICKED the same night; the untick was an overcorrection
+      on two false premises (see the section above). Two inspector profiles (45 s / 257,123 and
+      60 s / 353,511 samples) of pid 21567 name the MAIN-THREAD frames, and by the profiles' own
+      `timeDeltas` (100.0% wall coverage) the main thread runs 23.5% / 22.0% of a core against a
+      process burning 23.0-38.2% — i.e. 58-96% of process CPU, the majority. SCOPE, stated rather
+      than glossed: the remaining ~21.6% is V8 concurrent GC on `node-V8Worker` threads, measured
+      via `/usr/bin/sample` but not frame-attributed; the libuv fs threadpool is 100% idle.
 - [x] The work is attributed to a trigger: a periodic timer, a request path, the log watcher, the
       span-store compaction, or GC pressure from the 2.47 GB heap.
       2026-08-23: on the MAIN THREAD, a REQUEST path (`check_cache_expiry`, 36.6% of busy)
