@@ -3,7 +3,7 @@ trdd-id: ZFX0MPYZ
 title: Standalone server sustains 150-270 percent CPU and 2.4 GB RSS over an 8-hour uptime
 column: todo
 created: 2026-08-20T18:31:34+0200
-updated: 2026-08-23T05:42:37+0200
+updated: 2026-08-23T05:44:57+0200
 current-owner: unassigned
 task-type: bugfix
 priority: high
@@ -421,12 +421,19 @@ the finding. My first phrasing — "every null exceeds 0.10" — smuggled in a c
 and had picked after seeing the values. The sensitivity analysis itself is sound (two families ×
 with/without the point under test, all specified before their values were known, all reported
 including the one nearest the boundary); compressing it to a threshold was not.
-Monte-Carlo error on p itself is small (40×500 draws: all-20 [0.196, 0.268], LOO [0.122, 0.192]) —
-which establishes that these numbers are precise, **not** that any cutoff applied to them is
-legitimate.
-**Reading: a gap this large is unremarkable for a right-skewed sample of 20 under every null tried,
-so 1902 ms is best treated as an uncharacterised tail value rather than a second mechanism.** Weak
-evidence with a direction — not a verdict.
+**I then reported the WRONG ERROR BAR, and it was the flattering one.** I quoted Monte-Carlo
+intervals ([0.196, 0.268], [0.122, 0.192]) — those measure how many draws I took from the
+*simulator*, not how much p would move given 20 *different real walks*. The observed 1133 ms gap
+enters the calculation as a fixed constant when it is itself a single draw from a high-variance
+statistic (the maximum spacing of 20 points). "Precisely estimated" was true of the estimator and
+false of the estimate.
+**The interval that matters — resampling the 20 observations, refitting the null on each:
+median p = 0.327, 95% [0.117, 0.773].** That is **~9× wider** than the MC interval I published
+(width 0.657 vs 0.072).
+**Conclusion, and it is weaker than anything I wrote before: n=20 cannot settle this either way.**
+The band runs from somewhat-notable to entirely-unremarkable. A gap this size is unremarkable under
+every null tried — that statement stands — but the evidence does not support any characterisation
+of 1902 ms beyond "one observation whose origin is unknown".
 σ inflation from including the outlier was **+8%** (0.819 → 0.760 LOO). **I claimed that inflation
 CAUSED the 0.226 → 0.143 shift; I did not isolate it.** The LOO null is fitted on 19 points but
 still compared against a 20-point draw containing the outlier, so the change mixes the σ shift with
@@ -449,14 +456,10 @@ tested it rather than eyeballing: mean position 13.5 vs 10.5 expected, **permuta
 (MC-95% CI [0.069, 0.086]). A load-driven pattern is **neither shown nor excluded**. (One correction
 to the review that prompted this: three of six are in the last five slots, not four.)
 
-> **THRESHOLD DISCIPLINE — the defect this and the bootstrap share.** I first wrote this p as "not
-> significant" while calling p = 0.107 elsewhere a conclusion that "survives". Those are 0.031 apart
-> on a continuous scale, and I read one as absence and the other as support — **against a cutoff
-> stated nowhere in this card, applied each time in the direction that confirmed the sentence I was
-> writing.** Pre-registering the *statistic* closed that loop for statistic-selection; it left
-> threshold-selection wide open, and the habit reappeared there. **Neither number carries a verdict
-> word now.** Both are weak evidence with a stated direction, which is what n=20 supports and what
-> this card already does everywhere else.
+> **No verdict word attaches to either p on this card.** Both are weak evidence with a stated
+> direction, which is what n=20 supports. (I had called p=0.076 "not significant" while treating
+> p=0.107 as a conclusion that "survives" — 0.031 apart, read in opposite directions, against a
+> cutoff stated nowhere. The full account is in commit `6cd3fd0`; it does not belong in the card.)
 
 Caveat kept: p90 of n=20 is the 18th order statistic and is not a stable estimator. The
 pre-registration discipline worked; the CHOICE was poor, and naming p50 + max would have been
