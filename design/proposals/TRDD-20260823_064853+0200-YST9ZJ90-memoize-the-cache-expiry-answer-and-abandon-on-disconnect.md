@@ -3,10 +3,10 @@ trdd-id: YST9ZJ90
 title: Memoize the check_cache_expiry ANSWER and abandon server work on client disconnect
 column: proposal
 created: 2026-08-23T06:48:53+0200
-updated: 2026-08-23T06:56:45+0200
+updated: 2026-08-23T06:59:29+0200
 current-owner: unassigned
 task-type: refactor
-approval-tier: 3
+approval-tier: 2
 priority: high
 severity: high
 task-scope: standalone-server
@@ -39,7 +39,8 @@ From ZFX0MPYZ, all first-hand:
 
 | fact | value |
 |---|---|
-| `check_cache_expiry` call rate | **≥147 calls/hour** (769 / 5h14m); measured at **273/hour** incrementally 2h35m later |
+| `check_cache_expiry` call rate | **≥147/hour** and RISING — 1478 calls / 7h49m37s cumulative (189/hr), **273/hr** incremental over the last 2h35m (06:58) |
+| cost carried by UNPROFILED earlier processes | **1576.1 s over 313 calls = 5036 ms/call**, against the profiled process's 992 ms — 5.1× worse per call |
 | cost of ONE call, minimum | one full recursive `readdir` + `statSync` over **14,509 files** |
 | walk duration | 126–1902 ms (n=20, p50 633, p90 750) |
 | share of main-thread busy | **36.6%**, the single largest attributed trigger |
@@ -50,7 +51,7 @@ After the ZFX0MPYZ fix the memo works correctly *within* one request. It does no
 requests, so 147 times an hour the server still pays a full walk of every session file on the
 machine to answer one boolean.
 
-## The proposed change, and why it is Tier 3
+## The proposed change, and why it is Tier 2
 
 Two parts, both of which alter OBSERVABLE BEHAVIOUR — which is why this waits for the USER rather
 than being self-approved:
@@ -72,7 +73,10 @@ than being self-approved:
   two different session counts. If it is true, memoizing the answer caps a cost that would
   otherwise grow with usage; if false, this is a constant-factor win. The discriminator is written
   into ZFX0MPYZ and has never been run.
-- **147/hour is one window's average, not a rate law.** It is the profiled process's own window.
+- **147/hour is one window's average, not a rate law** — measured at 273/hour incrementally 2h35m
+  later. It is also only the PROFILED process's own window: 313 further calls belong to earlier
+  processes, and those averaged 5036 ms against this one's 992 ms. Both facts cut in this
+  proposal's favour, so the cost argument here is a floor.
 - **Whether the janitor's call frequency is itself the right thing to change** has not been
   considered here. It is a different repo (`how-to-fix-issues-of-other-projects.md` applies: file
   an issue there, never edit it from this session), and reducing OUR cost per call is the fix that
@@ -82,8 +86,13 @@ than being self-approved:
 
 - [ ] The USER has approved the behaviour change, or scoped it down explicitly. Until then this
       card does not leave `design/proposals/`.
-- [ ] A measurement of the call rate at two different open-session counts, settling or refuting the
-      session-scaling hypothesis BEFORE the design is fixed — the shape of the fix depends on it.
+- [ ] ~~A measurement of the call rate at two different open-session counts BEFORE the design is
+      fixed — the shape of the fix depends on it.~~ **DEMOTED to a sizing input, not a blocker.**
+      The justification was false: you memoize the answer under EITHER branch. If the rate scales
+      with sessions, memoization caps a growing cost; if not, it is a constant-factor win. The
+      hypothesis governs URGENCY and SIZING, never shape — so as a blocking criterion it could have
+      stalled a fix that is correct either way. Still worth measuring (cheap, bounded, falsifiable),
+      just not ahead of the work.
 - [ ] The answer cache lands with a regression guard that fails when a probe burst issues more than
       one walk per TTL window, falsified in both directions (red before, green after) the way
       ZFX0MPYZ's guard was.
@@ -96,5 +105,11 @@ than being self-approved:
 
 ## Approval log
 
+- 2026-08-23T07:00:00+0200 — approval-tier corrected 3 → 2. Tier 3 is reserved for golden-rule
+  edits, shared credentials, irreversible destructive ops, first production deploys and breaking
+  public-API changes; changing a diagnostic tool's answer-freshness is a documented-contract change,
+  which is Tier 2. With no MANAGER in this project both resolve to "ask the USER", so the label was
+  imprecise rather than wrong — but a tier inflated "to be safe" teaches the reader that tiers are
+  decorative.
 - 2026-08-23T06:48:53+0200 — FILED as a proposal by the session working TRDD-ZFX0MPYZ. Not
   self-approved: both parts change observable behaviour, so this is the USER's call.

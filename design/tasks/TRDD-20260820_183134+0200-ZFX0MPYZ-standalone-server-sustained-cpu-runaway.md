@@ -3,7 +3,7 @@ trdd-id: ZFX0MPYZ
 title: Standalone server sustains 27 percent of a core and 1.4 GB RSS — check_cache_expiry probe walks
 column: dev
 created: 2026-08-20T18:31:34+0200
-updated: 2026-08-23T06:56:45+0200
+updated: 2026-08-23T06:59:29+0200
 current-owner: unassigned
 task-type: bugfix
 priority: high
@@ -38,9 +38,12 @@ the profile covers ONE process's main thread, and 68.4% of the logged call-cost 
 processes that were never profiled (see SUPERSEDED, entry 8). The 147/hour figure is NOT affected
 — it is 769 calls over 5h14m within the profiled window, counted under the correct marker.
 
-**COLUMN TRIP-WIRE.** `column: dev` is true only while someone is actually working this. If the
-12 h series has been read and nothing has moved since, RE-COLUMN IT — a work column that keeps
-asserting `dev` after work stops is the exact failure the board rules name, and it is invisible.
+**COLUMN.** `column: dev` is true only while someone is actually working this; re-column it when
+that stops. (A "trip-wire" note lived here for 10 minutes and was DELETED: it was prose read only
+on resume, while the failure it guarded is *nobody resuming* — it could not fire in the one case it
+existed for. Worse, it duplicated a real automated control: `trdd-drift` covers this card by
+default, which is exactly what `review-after:` exists to opt OUT of. A decorative control stacked
+on a working one makes the working one look optional.)
 
 **NEXT ACTION — one step, runnable as written.** Read the 12 h RSS series' sawtooth FLOOR; a
 rising floor is a leak, flat/falling is steady state. Completes ~16:13 (720 samples from 04:13):
@@ -81,16 +84,26 @@ real problem would have left the board silently, archived as if solved. Prose is
 - ~~"REFUTED: most of the call-cost does NOT belong to earlier processes (before = 0)"~~ →
   **FALSE, and it was the most dangerous omission in the first version of this block.** The split
   used `Loaded .* spans from`, which the CURRENT build no longer emits (live marker:
-  `OTLP receiver →`). Correct split: after = 769 / 728.8 s, before = 313 / **1576.1 s** → **68.4%
-  of logged call-cost belongs to processes never profiled**, the dismissed review was RIGHT, and
-  the profiled process's consumption was overstated **3.2×**. Grepping for a string that no longer
-  exists returns zero and is indistinguishable from a clean refutation.
-  **…AND THAT 68.4% DECAYS — I corrected a false claim by installing one with an expiry date.**
-  Its numerator is FROZEN (those processes ended) while its denominator GROWS (the profiled one is
-  still running). Re-measured 06:55, same marker, same log: before = 313 / 1576.1 s (reproduced
-  EXACTLY), after = **1478 / 1466.5 s** → the unprofiled share is now **51.8%**, down from 68.4%
-  in 2h35m. Quote it only WITH its timestamp, or re-measure. The earlier `769` vs a review's `770`
-  was never a discrepancy either — both are snapshots of a counter still incrementing.
+  `OTLP receiver →`). The dismissed review was RIGHT: most of the logged call-cost belongs to
+  processes never profiled. Grepping for a string that no longer exists returns zero and is
+  indistinguishable from a clean refutation.
+  **THE ONLY NUMBERS TO QUOTE ARE THESE, WITH THIS TIMESTAMP** (`server.log`, marker
+  `OTLP receiver →` at line 371,025; boundary tested `NR<b` vs `NR<=b` — IDENTICAL, so no call sits
+  on the marker line):
+  **2026-08-23 06:58 — before 313 / 1576.1 s (5036 ms mean) · after 1478 / 1466.5 s (992 ms mean)
+  · total 1791 / 3042.7 s → unprofiled share 51.8%.**
+  **This split is a TIME SERIES, not a constant, and treating it as one produced two artefacts:**
+  (i) the unprofiled share DECAYS — numerator frozen (those processes ended), denominator growing
+  (the profiled one still runs) — so the 68.4% quoted earlier was 51.8% two and a half hours later;
+  (ii) an apparent arithmetic contradiction, `313 + 770 = 1083` against a `total` row of `1082`,
+  which is NOT an off-by-one: the parts were counted after the total, on a counter that had
+  advanced. Nothing was wrong; the readings were simultaneous only in the writing-up. The earlier
+  `after = 769 / 728.8 s` was DERIVED by subtracting two such snapshots and then stated as
+  measured — do not repeat that.
+  The overstatement factor is **3.03×** (`2210.7 / 728.8`), not the 3.2× first written here: 3.2 is
+  `2304.9 / 728.8`, which is "the true TOTAL is 3.2× the profiled process's consumption" — a
+  different quantity from "I overstated that consumption". Arithmetically real, semantically
+  mislabelled — the same collision as the two 68.4%s below, shipped in the commit that flagged them.
 
 **⚠ TWO DIFFERENT NUMBERS ARE BOTH "68.4%" — do not conflate them:**
 `1576.1/2304.9` = cost in **unprofiled earlier processes** (the entry above).
