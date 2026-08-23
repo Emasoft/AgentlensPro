@@ -125,21 +125,35 @@ awk -F'\t' 'NR>1 && $2==21567 {h=substr($1,12,2); if(!(h in m)||$6<m[h])m[h]=$6;
   reports/cpu-runaway/rss-series-20260823_041323+0200.tsv | sort
 ```
 
-**⚠⚠ SCOPE LIMIT ON EVERYTHING BELOW — TWO EARLIER SERVER PROCESSES DIED OF JS HEAP EXHAUSTION.**
-Found 2026-08-23 14:45, in the ~22k log lines a `head -5` census had left unexamined — so it was
-found by fixing a methodology defect, not by looking for it. `~/.agentlens/server.log` contains
-**2 × `FATAL ERROR: Ineffective mark-compacts near heap limit — Allocation failed - JavaScript heap
-out of memory`**, with V8 traces from **two pids that are neither 21567 nor 19113** (`[20885:…]`,
-`[73785:…]`) showing the heap at **6041 → 6135 MB**.
-**This does not contradict the box-3 result, it BOUNDS it.** "No leak signature down to
-~0.03 GB/h" is measured on **one process, over 8.4 h, at ~1.2 GB RSS**. Two other processes of this
-same server reached a ~6.1 GB heap and were killed by it. So box 3 answers *"did pid 21567 leak
-during this window"* — it does **not** establish that the server does not leak, and the card must
-not be read as saying so.
-**Undatable** (the log has no per-line timestamps — see the GOTCHA below), so nothing here says
-whether those crashes predate the fix in `581524c`, or how long those processes had run. **That is
-the open question this hands to `TRDD-YST9ZJ90`**, and it is a stronger reason to act than the
-CPU-rate argument that card is currently sized on.
+**⚠⚠ SCOPE LIMIT ON EVERYTHING BELOW — TWO EARLIER SERVER PROCESSES DIED OF JS HEAP EXHAUSTION, ONE
+OF THEM IN UNDER 16 MINUTES.** Found 2026-08-23 14:45 in the ~22k log lines a `head -5` census had
+left unexamined — found by fixing a methodology defect, not by looking for it.
+`~/.agentlens/server.log` carries **2 × `FATAL ERROR: Ineffective mark-compacts near heap limit —
+Allocation failed - JavaScript heap out of memory`**, one per pid (verified by line order: FATAL at
+54164 follows pid 73785, FATAL at 270545 follows pid 20885). **Neither pid is 21567 or 19113.**
+
+| pid | uptime at its trace | V8 **heap** | implied mean growth |
+|---|---|---|---|
+| 73785 | **9.25 h** | 6135 MB (6191 committed) | ~0.66 GB/h |
+| 20885 | **0.26 h — 15.6 min** | 6080 MB (6108 committed) | **~23 GB/h** |
+
+**I wrote "undatable" and that was too fast.** Wall-clock, yes — but the V8 line's `NNNN ms:` is a
+PROCESS-UPTIME counter, and it answers the question that matters: how long each process survived.
+One died after 9¼ hours; **the other reached a ~6 GB heap in under sixteen minutes.**
+
+**This does not contradict box 3 — it shows box 3's instrument is aimed three orders of magnitude
+away from the failure that actually kills this server.** The floor test resolves a leak faster than
+~0.03 GB/h; pid 20885's average was **~23 GB/h, roughly 780× that**. So "no leak signature" is not
+merely *narrow* — it is measured in a regime unrelated to the observed failure mode. Box 3 answers
+*"did pid 21567 leak slowly during this window"*, and nothing more.
+**Units, stated because the scope sentence crosses them:** 6135 MB is V8 **HEAP**; box 3's
+1.10–1.26 G is process **RSS** (RSS ⊇ heap, so those processes' RSS was ≥ ~6 GB — ~5× the current
+process's entire RSS). Do not read the two figures as the same quantity.
+**Also in the trace: `average mu = 0.080`** — 8% mutator utilisation, i.e. GC consuming ~92% of the
+time. That is a heap-death spiral, and it is the shape a *runaway* takes.
+**Unknown and not to be guessed:** when these happened, whether they predate `581524c`, and what
+those processes were doing. Handed to **`TRDD-YST9ZJ90`** as evidence the user should weigh — stated
+as facts, not as a recommendation to approve.
 
 **BOX 3, PARTIAL ANSWER (501/721 samples, 04:14→12:34, read 12:36): NO LEAK SIGNATURE DOWN TO
 ~0.03 GB/h — FOR pid 21567's 8.4 h ONLY; see the scope limit above.** Stated with its sensitivity, because a bare "steady state, not a leak" is the exact
