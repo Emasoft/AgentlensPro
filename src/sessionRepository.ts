@@ -159,10 +159,17 @@ export function mergeSessions(
   // from the span window; stamping from dataSource keeps this honest even for a synthetic input).
   for (const live of keptLive) { live.tokensSource = live.dataSource }
   const keptLiveIds = new Set(keptLive.map(s => s.sessionId))
+  // Parse once per session, not once per comparison — same fix and same reason as
+  // `standalone/server.ts` (TRDD-ZFX0MPYZ): the comparator form costs 2·n·log₂n date-string parses
+  // where this costs n, and V8's `Date.parse` is a full tokenizer per call. This is THE read
+  // point, so every reader paid it. The per-element expression is copied verbatim, so ordering is
+  // unchanged — a cost change, not a behaviour change.
   return [
     ...keptLive,
     ...dbSessions.filter(s => !keptLiveIds.has(s.sessionId)),
-  ].sort((a, b) => Date.parse(b.startTime) - Date.parse(a.startTime))
+  ].map(s => ({ s, t: Date.parse(s.startTime) }))
+    .sort((a, b) => b.t - a.t)
+    .map(x => x.s)
 }
 
 /**

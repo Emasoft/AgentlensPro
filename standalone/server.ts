@@ -2259,8 +2259,28 @@ function computeSessionSummary(): ReturnType<typeof summarizeSpans> | null {
     // child serves ONCE, with real parsed totals (spawnAsync clears → the rollup's
     // asyncUnreportedChildren decrements). Runs on the merged list because the placeholder (parent
     // transcript) and the twin (child transcript) come from different files/scans.
+    // PARSE ONCE PER SESSION, not once per COMPARISON (decorate-sort-undecorate). The comparator
+    // called `Date.parse` on both operands, so the parse count scaled with COMPARISONS. Measured
+    // at the 23,464 log sessions on the machine this was diagnosed on: **319,894 parses → 23,464
+    // (13.6×), 40 ms → 5 ms (8×), and the resulting order byte-for-byte identical.** (The
+    // arithmetic bound is 2·n·log₂n ≈ 680,000; V8's TimSort does materially fewer comparisons than
+    // the worst case on partially-ordered input, which is why the measured figure is the one
+    // quoted here.) `buildSessionSummary` memoizes on `dataVersion`, which bumps on every ingest,
+    // so "per rebuild" is continuous on a live server.
+    //
+    // Not a guess: a `/usr/bin/sample` of the running server (pid 21567, 4h16m uptime, flagged at
+    // 122% CPU) put the hot stack at `ArrayPrototypeSort → ArrayTimSort → SortCompareUserFn →
+    // Builtin_DateParse → ParseDateTimeString → DateStringTokenizer::Scan`. V8's date parser is a
+    // full tokenizer + keyword-table lookup per call, which is why this dominates rather than
+    // merely showing up. TRDD-ZFX0MPYZ.
+    //
+    // The per-element expression is copied VERBATIM (`|| '0'` included) so ordering — including
+    // whatever `Date.parse` returns for a missing or malformed stamp, NaN and all — is bit-for-bit
+    // what it was. This is a cost change, not a behaviour change.
     const merged = linkSubagentTranscripts(mergeOtelAndLogSessions(summary?.sessions ?? [], [...logSessions.values()]))
-      .sort((a, b) => Date.parse(b.startTime || '0') - Date.parse(a.startTime || '0'))
+      .map((s) => ({ s, t: Date.parse(s.startTime || '0') }))
+      .sort((a, b) => b.t - a.t)
+      .map((x) => x.s)
     summary = { ...(summary ?? { backgroundSpans: [], efficiency: { totalInputTokens: 0, totalOutputTokens: 0, totalLlmCalls: 0, avgInputPerCall: 0, avgTtft: 0, cacheHitRate: 0, toolDefWaste: 0, sysInstructionWaste: 0, topTokenConsumers: [] } }), sessions: merged }
   }
   return summary

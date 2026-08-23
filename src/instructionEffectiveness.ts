@@ -60,10 +60,16 @@ export function computeBaseline(
   appliedAtMs: number,
   windowSize = 20,
 ): BaselineSnapshot {
+  // Parse once per session (TRDD-ZFX0MPYZ) — and here the filter ALREADY parsed each stamp, so the
+  // comparator form parsed the same strings a second, third and log₂n-th time. Reusing the value
+  // the filter computed is strictly less work than either. Ordering is unchanged: the same numbers
+  // are compared, in the same direction.
   const before = sessions
-    .filter(s => s.startTime && Date.parse(s.startTime) < appliedAtMs)
-    .sort((a, b) => Date.parse(b.startTime) - Date.parse(a.startTime))
+    .map(s => ({ s, t: s.startTime ? Date.parse(s.startTime) : NaN }))
+    .filter(x => x.t < appliedAtMs) // NaN < x is false, so a missing/unparseable stamp is dropped exactly as before
+    .sort((a, b) => b.t - a.t)
     .slice(0, windowSize)
+    .map(x => x.s)
 
   if (before.length < 5) {
     return { sessionCount: before.length, costAvg: 0, turnsAvg: 0, errorRate: 0, loopRate: 0, insufficient: true }
