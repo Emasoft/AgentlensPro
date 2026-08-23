@@ -3,7 +3,7 @@ trdd-id: ZFX0MPYZ
 title: Standalone server sustains 150-270 percent CPU and 2.4 GB RSS over an 8-hour uptime
 column: todo
 created: 2026-08-20T18:31:34+0200
-updated: 2026-08-23T05:36:38+0200
+updated: 2026-08-23T05:39:40+0200
 current-owner: unassigned
 task-type: bugfix
 priority: high
@@ -348,12 +348,13 @@ alone, each pre-selected).
 | **p90 (pre-registered)** | **750** | **38%** |
 | max | **1902** | **95%** |
 
-**VERDICT, keyed to p90 as committed: p90 = 750 ms, below the 2000 ms cliff — AND the tail is
-uncharacterised, which is the part that decides anything.** The pre-registration is honoured (the
-verdict stays keyed to p90) but the sentence states both, because a reader takes the verdict line:
-the normal regime is comfortable at 38%, while a walk that crosses 2000 ms collapses the memo into
-5× amplification and is likeliest under load. The pre-registration also selected **the wrong FAMILY
-of statistic**, which matters more than its instability.
+**VERDICT — the tail is UNCHARACTERISED and that is what decides anything; the normal regime is
+comfortable (p90 = 750 ms, 38% of the cliff).** Sentence deliberately inverted: it previously led
+with the reassuring clause and appended the caveat, and a skimmer takes the first half. The
+pre-registration binds which STATISTIC the verdict keys to (p90, honoured above), not which clause
+comes first. A walk crossing 2000 ms collapses the memo into 5× amplification, and the exceedance
+rate that governs how often that happens is bounded only as 0–15%. The pre-registration also
+selected **the wrong FAMILY of statistic**, which matters more than its instability.
 
 > **THE FAILURE IS A THRESHOLD EVENT, so the operative quantity is the EXCEEDANCE PROBABILITY, not
 > a central quantile.** Any SINGLE walk over 2000 ms collapses the memo for that request's whole
@@ -387,6 +388,13 @@ The tell is **317**: its larger adjacent gap is *above* it, so gap-clustering pu
 group — I had assigned it to MAIN (reporting 6/13 instead of 7/12) to make my round-number cut
 work.
 
+**But the gap partition is NOT "the true" one either, and calling it that repeats my own error one
+level down.** Largest-gap clustering has **no stopping rule**: it yields k groups for whatever k you
+ask, and here the 2nd and 3rd gaps (269 and 162) are not well separated. What is actually
+established is only the NEGATIVE — that my round-number cuts were not the algorithm I said they
+were. **No partition of these 20 points is established**; the numbers below are one defensible
+reading, not a discovered structure.
+
 **p90 = 750 ms is nevertheless robust to the partition — CHECKED, not asserted:** pooled n=20 → 750,
 my MAIN → 750, gap-corrected main → 750. Identical under all three. The objection I was answering
 (six fast values dragging the pooled p90 below main's own) is real in general and simply fails
@@ -394,20 +402,40 @@ numerically here. One line of arithmetic would have established that; I reasoned
 
 **WITHDRAWN — "the outlier is a distinct event, not the tail".** That rested on 769→1902 being the
 largest gap, which in a right-skewed sample is the gap below the maximum **by construction** — it
-restates that 1902 is extreme rather than showing a separate mechanism. Tested properly by
-bootstrapping the top gap against a single fitted lognormal: **P(top gap ≥ 1133 ms | one
-distribution, n=20) = 0.226.** A gap that large is ORDINARY here. **1902 ms is an uncharacterised
-tail value, not evidence of a second mechanism.**
+restates that 1902 is extreme rather than showing a separate mechanism. Tested by bootstrapping the
+top gap against a fitted null.
+
+**And the first null I used was the most favourable of four — checked, because fitting σ on a sample
+that CONTAINS the outlier inflates σ and biases the test toward "ordinary", which was the answer I
+wanted.** Re-run four ways:
+
+| null | P(top gap ≥ 1133 ms) |
+|---|---|
+| lognormal, fitted on all 20 *(what I first reported)* | 0.226 |
+| lognormal, leave-one-out | 0.143 |
+| exponential, mean-matched | 0.149 |
+| exponential, leave-one-out *(most adverse)* | **0.107** |
+
+Including the outlier inflated σ by **+8%** (0.819 vs 0.760), so the bias was real. **The conclusion
+survives it regardless: every null exceeds 0.10.** A gap that large is ordinary for a right-skewed
+sample of 20, so **1902 ms is an uncharacterised tail value, not evidence of a second mechanism** —
+and that now rests on the harshest null available rather than the flattering one.
 
 **ALSO WITHDRAWN — "1 run in 20 = 5% of runs".** Exact binomial 95% CI for 1/20 is
 **[0.13%, 24.9%]**, a ~190× range quoted as one number. The rule-of-three bound (0–15% for
 exceedance) is the defensible form.
 
-**What DOES survive, and it is real:** the regimes are not a drift over the ten minutes. I had
-reported the sample SORTED, destroying the evidence needed to tell. In temporal order the sub-200 ms
-runs fall at positions **3, 11, 12, 16, 19, 20 — interleaved, not contiguous** — so the bimodality
-is **per-call, not page-cache warm-up or regime change**, which is exactly why the exceedance
-framing is the whole answer rather than a per-regime split.
+**What survives is narrower than I wrote.** I had reported the sample SORTED, destroying the
+temporal evidence; recovered, the sub-200 ms runs fall at positions **3, 11, 12, 16, 19, 20 —
+interleaved, not contiguous.** That excludes **MONOTONIC** drift (a page-cache warm-up would put
+them contiguously at one end) — **it does not exclude a load-driven or cyclic pattern**, and I
+wrote "per-call, not drift" as if it did.
+That distinction is load-bearing here, because the escalation loop above is *precisely* load-driven:
+if fast walks cluster when the machine is quiet, slow walks cluster when it is busy — the
+correlation that would make the cliff dangerous. Five of the six do fall in the second half, so I
+tested it rather than eyeballing: mean position 13.5 vs 10.5 expected, **permutation p = 0.076 —
+not significant at n=20.** So a load-driven pattern is **neither shown nor excluded**. (One
+correction to the review that prompted this: three of six are in the last five slots, not four.)
 
 Caveat kept: p90 of n=20 is the 18th order statistic and is not a stable estimator. The
 pre-registration discipline worked; the CHOICE was poor, and naming p50 + max would have been
