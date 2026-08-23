@@ -3,7 +3,7 @@ trdd-id: ZFX0MPYZ
 title: Standalone server sustains 150-270 percent CPU and 2.4 GB RSS over an 8-hour uptime
 column: todo
 created: 2026-08-20T18:31:34+0200
-updated: 2026-08-23T05:11:26+0200
+updated: 2026-08-23T05:14:47+0200
 current-owner: unassigned
 task-type: bugfix
 priority: high
@@ -306,14 +306,30 @@ across the 30 sessions is not. Full note:
 PRE-walk `Date.now()` — the code is exactly that (`src/logReader.ts:324`/`:387`) and the
 arithmetic (`lifetime = TTL − walkDuration`) is real, but the measured walk is **820–879 ms over
 14,509 files**, so it does not trigger at this corpus size.
-**→ AMENDED 05:10: "does not trigger AT THIS CORPUS SIZE" was right; "unproven" was too weak.
-The defect is now CONFIRMED by direct experiment.** Injecting a 2500 ms stall into the walk (TTL
-left at its real 2000 ms) turns 5 probe candidates into **5 full walks** — the memo does not
-degrade past the cliff, it DISAPPEARS. So this is a latent defect that arrives on **corpus growth
-alone**, with no bad edit required and no warning on the way: 820 ms today against a 2000 ms
-cliff, and the failure is discontinuous at the crossing. Evidence:
-`reports/cpu-runaway/20260823_051050+0200-born-expired-confirmed.md`. The FIX is still open — see
-the advisor question on data-age vs cache-lifetime — but the defect is no longer hypothetical. (2) That `transcriptPathFor` is an
+**→ AMENDED 05:10, RE-AMENDED 05:20.** Injecting a 2500 ms stall into the walk (TTL left at its
+real 2000 ms) turns 5 probe candidates into **5 full walks** — past the cliff the memo does not
+degrade, it DISAPPEARS. But **"CONFIRMED" overstated it and is withdrawn**: that proves the
+MECHANISM (*if* `walkDuration > TTL` *then* collapse), not that the antecedent has ever held in
+production. The only time it held is when I forced it. Correct phrasing: **reachable and
+mechanically confirmed, not yet reached.**
+
+**THE HEADROOM IS FAR SMALLER THAN THIS CARD HAS BEEN SAYING, and that is the real finding.** I
+quoted "820 ms" as *the* walk time throughout. It is not a constant. On the **same** 14,523-file
+corpus tonight: **143, 172, 187, 199, 209, 229, 244, 310, 325, 721, 741, 820, 863, 879, 1333,
+1507 ms** — a **10.5× spread** on identical input, driven by OS page-cache warmth and machine
+load, not corpus size. Warm repeats land ~200 ms; cold ones reach **1507 ms = 75% of the 2000 ms
+cliff**. So the trigger is NOT only corpus growth as I wrote — **load variance on today's corpus
+already reaches three-quarters of the threshold.**
+
+**Escalation path (mechanism-level inference, NOT measured):** a busy server walks slower → a slow
+enough walk collapses the memo → collapse turns one walk per probe into N → more walks make the
+server busier. Its entry condition is *the server already being under load*, i.e. it would fire
+during exactly the runaway this card is about, not during the quiet periods when the walk measures
+200 ms. **NOT measured:** walk duration as a function of concurrent load — driving load and
+watching the walk slow is what would promote this from plausible to established.
+
+Evidence: `reports/cpu-runaway/20260823_051050+0200-born-expired-confirmed.md`. The FIX is still
+open (the advisor question on data-age vs cache-lifetime). (2) That `transcriptPathFor` is an
 O(all-files) scan run 12× per probe — structurally true, but **measured at 0 ms for 12 lookups
 with 0 extra walks**, because entries are sorted newest-first and the probe ranks the newest
 sessions, so lookups hit the front. Both are recorded in the report so they are not re-derived.
