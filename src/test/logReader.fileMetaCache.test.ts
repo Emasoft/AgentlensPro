@@ -19,7 +19,16 @@ const sessionBody = (cwd: string, prompt: string): string =>
     },
   }) + '\n'
 
-suite('LogReader — reparseSession() must not re-walk the whole log tree on every call', () => {
+suite('LogReader — reparseSession() must not re-walk the whole log tree on every call', function (this: Mocha.Suite) {
+  // SUITE-level, deliberately — a per-test `this.timeout()` does NOT cover hooks, and the hook is
+  // what fails first here. The corpus-side test below writes 6000 files and `teardown()` rmSync's
+  // that tree; on the slow CI filesystem this budget exists for, a test-level timeout leaves the
+  // teardown on mocha's 10s default, so the test PASSES and then the run fails in
+  // `"after each" hook` with no mention of the stamp, the walk, or 6000 files. Verified: with a
+  // per-test timeout of 30000 and `--timeout 50`, the body passed and the hook failed with
+  // "Timeout of 50ms exceeded". Suite scope covers the tests AND their hooks.
+  this.timeout(30000)
+
   let root = ''
   let savedClaudeDir: string | undefined
 
@@ -131,12 +140,11 @@ suite('LogReader — reparseSession() must not re-walk the whole log tree on eve
   // the measured quantity is the first walk on a fresh reader, which is IDENTICAL code on both
   // paths, so the red-path figures characterise the green path too — 27.6-31.6ms against a 6ms bar
   // (TTL x 2), i.e. ~4.6-5.3x. The lookups on the other side of the inequality run ~0.02ms.
-  test('a real walk slower than the TTL still yields a usable memo (no injected stall)', function (this: Mocha.Context) {
+  test('a real walk slower than the TTL still yields a usable memo (no injected stall)', () => {
     // 6000 writes + the walk + a 6000-file teardown is 1.3-1.7s on local NVMe, but many-small-file
-    // I/O on a CI overlayfs commonly runs several times slower and mocha's default here is 10s.
-    // Raised so a slow filesystem fails as a slow filesystem ("timeout exceeded") instead of being
-    // read as a failure of the guard.
-    this.timeout(30000)
+    // I/O on a CI overlayfs commonly runs several times slower against mocha's 10s default. The
+    // budget that covers it is at SUITE level (see the top of this file) because it must cover the
+    // teardown hook too.
     const cwd = path.join(root, 'workspace')
     // N=6000, not 3000: at 3000 the mocha-measured walk ranged 3.4-15.4ms across runs as the page
     // cache warmed, and the low end left only 1.15x over a 3ms TTL — enough to make the precondition
