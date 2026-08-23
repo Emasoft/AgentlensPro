@@ -3,7 +3,7 @@ trdd-id: YST9ZJ90
 title: Memoize the check_cache_expiry ANSWER and abandon server work on client disconnect
 column: proposal
 created: 2026-08-23T06:48:53+0200
-updated: 2026-08-23T06:48:53+0200
+updated: 2026-08-23T06:56:45+0200
 current-owner: unassigned
 task-type: refactor
 approval-tier: 3
@@ -28,9 +28,18 @@ the card is Tier 0 (authoring needs no approval), building it is not.
 
 From ZFX0MPYZ, all first-hand:
 
+> **RATE CORRECTED WITHIN AN HOUR OF FILING (06:55).** The table below was copied from
+> ZFX0MPYZ's STATE block — my own summary — rather than re-measured, which is exactly the
+> laundering risk that let a dead refutation survive 2.5 h in a report header. Re-measuring found
+> the headline figure had moved: **1478 calls over 7h49m37s** (189/hour cumulative), with the
+> INCREMENTAL rate over the 2h35m since the first measurement at **273 calls/hour — 1.86× the
+> 147**. So 147/hour is a LOWER BOUND from one early window, not a steady rate, and every
+> cost argument here is correspondingly conservative. The cause of the increase is UNATTRIBUTED;
+> session counts were not recorded, so it is not evidence for or against session-scaling.
+
 | fact | value |
 |---|---|
-| `check_cache_expiry` call rate | **147 calls/hour** (769 calls / 5h14m, profiled window) |
+| `check_cache_expiry` call rate | **≥147 calls/hour** (769 / 5h14m); measured at **273/hour** incrementally 2h35m later |
 | cost of ONE call, minimum | one full recursive `readdir` + `statSync` over **14,509 files** |
 | walk duration | 126–1902 ms (n=20, p50 633, p90 750) |
 | share of main-thread busy | **36.6%**, the single largest attributed trigger |

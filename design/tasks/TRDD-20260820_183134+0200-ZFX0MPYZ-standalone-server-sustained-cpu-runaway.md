@@ -3,7 +3,7 @@ trdd-id: ZFX0MPYZ
 title: Standalone server sustains 27 percent of a core and 1.4 GB RSS — check_cache_expiry probe walks
 column: dev
 created: 2026-08-20T18:31:34+0200
-updated: 2026-08-23T06:52:02+0200
+updated: 2026-08-23T06:56:45+0200
 current-owner: unassigned
 task-type: bugfix
 priority: high
@@ -22,7 +22,17 @@ answers were reached — including several that were WRONG and were corrected in
 **WHERE IT STANDS.** Acceptance boxes **1 ✓ 2 ✓ 4 ✓ 5 ✓**, box **3 open (measuring)**.
 The MECHANISM is settled: the trigger is an HTTP REQUEST (`check_cache_expiry`, 36.6% of
 main-thread busy), not a timer; the caller is OUTSIDE this repo (ai-maestro-janitor detectors,
-147 calls/hour over the profiled window); the amplifier was a pre-walk cache stamp and is FIXED.
+147 calls/hour over the FIRST 5h14m — see the rate warning below); the amplifier was a pre-walk
+cache stamp and is FIXED.
+
+**⚠ 147 CALLS/HOUR IS NOT A RATE LAW, and both this card and TRDD-YST9ZJ90 size their argument on
+it.** Re-measured 2026-08-23 06:55 on the same log with the same marker: **1478 calls over
+7h49m37s** of uptime. That is 189/hour cumulative, and the INCREMENTAL rate over the 2h35m since
+the first measurement is **273 calls/hour — 1.86× the 147**. Mean duration also drifted, 947 → 992 ms.
+The cause is UNATTRIBUTED: open-session count was not recorded at either point, so this is NOT a
+test of the session-scaling hypothesis (that still needs the rate at two known session counts).
+What it does establish is that a single window's average must not be quoted as a steady rate —
+the sizing in YST9ZJ90 is a LOWER BOUND.
 **Its SCOPE is narrower than "the workload", and box 1 is met as WORDED rather than as a total:**
 the profile covers ONE process's main thread, and 68.4% of the logged call-cost belongs to earlier
 processes that were never profiled (see SUPERSEDED, entry 8). The 147/hour figure is NOT affected
@@ -75,6 +85,12 @@ real problem would have left the board silently, archived as if solved. Prose is
   of logged call-cost belongs to processes never profiled**, the dismissed review was RIGHT, and
   the profiled process's consumption was overstated **3.2×**. Grepping for a string that no longer
   exists returns zero and is indistinguishable from a clean refutation.
+  **…AND THAT 68.4% DECAYS — I corrected a false claim by installing one with an expiry date.**
+  Its numerator is FROZEN (those processes ended) while its denominator GROWS (the profiled one is
+  still running). Re-measured 06:55, same marker, same log: before = 313 / 1576.1 s (reproduced
+  EXACTLY), after = **1478 / 1466.5 s** → the unprofiled share is now **51.8%**, down from 68.4%
+  in 2h35m. Quote it only WITH its timestamp, or re-measure. The earlier `769` vs a review's `770`
+  was never a discrepancy either — both are snapshots of a counter still incrementing.
 
 **⚠ TWO DIFFERENT NUMBERS ARE BOTH "68.4%" — do not conflate them:**
 `1576.1/2304.9` = cost in **unprofiled earlier processes** (the entry above).
