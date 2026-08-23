@@ -1,9 +1,9 @@
 ---
 trdd-id: ZFX0MPYZ
 title: Standalone server sustains 27 percent of a core and 1.4 GB RSS — check_cache_expiry probe walks
-column: todo
+column: dev
 created: 2026-08-20T18:31:34+0200
-updated: 2026-08-23T06:32:10+0200
+updated: 2026-08-23T06:43:40+0200
 current-owner: unassigned
 task-type: bugfix
 priority: high
@@ -12,6 +12,56 @@ task-scope: standalone-server
 ---
 
 # Standalone server sustains ~27% of a core and 1.4 GB RSS — `check_cache_expiry` probe walks
+
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-08-23 06:45
+
+This card is ~700 lines of append-only investigation across four sessions and two compactions.
+**Read this block, not the body, for what is currently true.** The body is a record of how the
+answers were reached — including several that were WRONG and were corrected in place.
+
+**WHERE IT STANDS.** Acceptance boxes **1 ✓ 2 ✓ 4 ✓ 5 ✓**, box **3 open (measuring)**.
+The mechanism is settled: the trigger is an HTTP REQUEST (`check_cache_expiry`, 36.6% of
+main-thread busy), not a timer; the caller is OUTSIDE this repo (ai-maestro-janitor detectors,
+147 calls/hour measured); the amplifier was a pre-walk cache stamp and is FIXED.
+
+**NEXT ACTION — one step, runnable as written.** Read the 12 h RSS series' sawtooth FLOOR; a
+rising floor is a leak, flat/falling is steady state. Completes ~16:13 (720 samples from 04:13):
+
+```bash
+awk -F'\t' 'NR>1{b=int((NR-2)/10); if(!(b in m)||$6<m[b])m[b]=$6; n[b]++} END{for(i=0;i<=b;i++) if(i in m && n[i]==10) printf "block%02d min_rss=%.3fG\n", i, m[i]/1048576}' \
+  reports/cpu-runaway/rss-series-20260823_041323+0200.tsv
+```
+
+**BLOCKED ON THE USER — the actual runaway is NOT fixed.** Everything landed so far removes an
+AMPLIFIER. Even with a perfect memo, 147 calls/hour each pay ONE full 14,509-file walk. The shape
+that follows is: memoize the ANSWER (the tool reports against a 60-minute TTL, so a seconds-fresh
+answer is not required) + abandon server work on client disconnect. That CHANGES OBSERVABLE
+BEHAVIOUR, so it is a PROPOSAL awaiting the user's call — do not build it unprompted.
+
+**LOAD-BEARING GOTCHAS** (each cost real time; the body has the full account):
+- `ps %CPU` is a **1-minute decaying average** on macOS, not a lifetime one. Sustained = `TIME/ELAPSED`.
+- `ps -o time=` prints **`MM:SS.ss`** here, not `HH:MM:SS`. Count the colons.
+- `out/logReader.js` is a STALE artifact; the live test build is **`out/test/logReader.js`**.
+- A Python shim shadows `/usr/bin/sample` — use the absolute path.
+- `setsid nohup &` from a tool call is REAPED; use `scripts_dev/detach-run.py`, verify **ppid 1**.
+- `.mocharc` `spec:` is ADDITIVE with positional args — isolate a test with `--grep`, not a path.
+- A mocha **test's** `this.timeout()` does NOT cover its **hooks**; only the SUITE's does.
+- The walk is **not a constant**: 126–1902 ms over 14,509 files (n=20, p50 633, p90 750).
+
+**SUPERSEDED — do NOT carry forward:**
+- ~~"sustains 150–270% CPU and 2.4 GB RSS"~~ → 27.4% of one core, 1.4 GB (title already corrected).
+- ~~"the process is 83.3% idle, so this is bursty not sustained"~~ → inverted; the burn IS sustained.
+- ~~`_collectJsonlFiles` is 72.0% of busy~~ → **17.4%**; the 72% was a 4.1× recursion double-count.
+- ~~implied leak of `(2.47−1.36)/8h = 0.139 GB/h`~~ → FABRICATED (cross-process); never quote it.
+- ~~`27.4%/13.3% = 2.1×`~~ → same cross-process defect, withdrawn.
+- ~~"~0.8s of extra worst-case staleness"~~ → p90 quoted as a max; observed max walk is 1902 ms.
+- ~~any `95% CI [a,b]` on the RSS floor~~ → a block MINIMUM is not t-distributed; read as
+  "no signature at this resolution".
+
+**ARTIFACTS TO READ FIRST** (all under `reports/cpu-runaway/`, gitignored):
+`20260823_040232+0200-live-profile-check-cache-expiry.md` (the profile, with its own corrections
+header), `20260823_043026+0200-who-calls-check-cache-expiry.md` (the caller), and
+`20260823_041540+0200-box5-disk-attribution.md` (box 5 excluded).
 
 > **TITLE CORRECTED 2026-08-23.** It read *"sustains 150-270% CPU and 2.4 GB RSS"* — the 268.8%
 > is a **1-minute decaying average**, not a sustained figure, and the body spent a night

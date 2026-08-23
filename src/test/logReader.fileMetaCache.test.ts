@@ -27,6 +27,15 @@ suite('LogReader — reparseSession() must not re-walk the whole log tree on eve
   // `"after each" hook` with no mention of the stamp, the walk, or 6000 files. Verified: with a
   // per-test timeout of 30000 and `--timeout 50`, the body passed and the hook failed with
   // "Timeout of 50ms exceeded". Suite scope covers the tests AND their hooks.
+  // VERIFIED IN BOTH DIRECTIONS, because "the hook stopped failing" and "the suite value reaches
+  // the hook" are the same thing under mocha's scoping and different things under "measured":
+  //   negative — per-test 30000 + `--timeout 50`: body passed, `"after each" hook ... Timeout of
+  //              50ms exceeded`. A test's timeout does not cover its hooks.
+  //   positive — suite `this.timeout(1)`: `"after each" hook ... Timeout of 1ms exceeded`. The
+  //              suite value DOES reach the hook.
+  // NOTE it also raises the other three tests in this suite from the .mocharc 10s default, so a
+  // hang in any of them now takes 30s to surface. Accepted: they are sub-second tests, and one
+  // timeout at the covering scope beats two at different ones.
   this.timeout(30000)
 
   let root = ''
