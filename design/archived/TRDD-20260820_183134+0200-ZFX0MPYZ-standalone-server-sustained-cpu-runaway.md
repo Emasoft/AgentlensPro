@@ -1171,6 +1171,9 @@ former silently measures old code — it cost two failed runs here.
       construction.** Filter on pid; list pid changes first; and **copy the file before analysing
       it** — the sampler is still appending, and the three reads behind this entry hit 501, 503 and
       508 rows without noticing (commands in the STATE block).
+      **⚠ READ `## Approval log` (end of file) BEFORE THIS ENTRY — three of its statements are
+      withdrawn there, including "not an outlier artifact" and both later attempts to fix it. This
+      pointer is the only body edit made after the card went terminal; it asserts nothing new.**
       **FULL SERIES, 2026-08-23 16:29 — THE BOX'S SETTLED ANSWER. This ticks it.**
       Series complete and clean: **721 rows** (720 data), span 04:14:33→**16:14:14** (43,181 s), 719
       intervals of **679×60 s / 39×61 s / 1×62 s** (mean 60.06 s). Sampler pid 82388 exited. **719
@@ -1326,3 +1329,37 @@ former silently measures old code — it cost two failed runs here.
   **The honest residual limit that replaces the withdrawn one:** CPU is the only workload proxy this
   frozen file carries; it shows no trend, so the confound asserted on it is withdrawn — whether some
   *unmeasured* load dimension trended is unknown and this file cannot answer it.
+- 2026-08-23T17:22:00+0200 — **FINAL ENTRY. "THE CONFOUND IS NOT LIVE" (previous entry) IS ITSELF
+  WITHDRAWN, and this closes the correction chain.** Measured first-hand before accepting.
+  **The 1.3% rests entirely on a slope whose SE is 13× its own magnitude.**
+  `CPU~hour = −0.0248 ± 0.3237 pt/h, 95% [−0.757, +0.707]`. Propagating that interval through the
+  same decomposition, **the confound share ranges −38% … +41%** — point estimate +1.3%. **So the
+  test can neither establish nor exclude the confound.** Round 2's specific claim still dies, but on
+  its own false premise (a "27% decline" that was endpoint subtraction on a trendless series), not
+  on this test. **This was the card's already-withdrawn "not biased" move — an unsupported null
+  replacing an unsupported positive — reproduced one entry after quoting the lesson that names it.**
+  **THE ONE NUMBER I HAD NEVER PUBLISHED WITH ITS OWN VARIANCE, and the point of this entry:**
+  `floor~hour = −0.01393 ± 0.00460 GB/h, 95% [−0.0243, −0.0035], r = −0.711, n=11.`
+  **ALSO WITHDRAWN:** (a) the r-ordering as directional support — floor/mean/peak over the same
+  buckets are *dependent* correlations, so marginal Fisher-z SEs are the wrong comparison and at
+  n=11 the right one (Steiger) has no power either; (b) citing **mean RSS** (−0.01008 GB/h,
+  r = −0.875) as corroboration — this box's own text says *the discriminator is the sawtooth FLOOR,
+  not the mean*, and a statistic cannot be rejected as an instrument and quoted as support in the
+  same document; (c) **"a leak bound at ~0.01 GB/h"** — dismissing one confound does not license it.
+  That upgrade additionally needs GC completing within every bucket, no heap-limit compaction,
+  stationarity in unmeasured load, a window long against any allocation cycle, and RSS tracking
+  retention at all (it carries native buffers, mmap and fragmentation; malloc and V8 release pages
+  asynchronously). **None of the five is checkable from this file.**
+  **BOX 3'S ANSWER, FINAL FORM — the residual uncertainty, published once:** *−0.014 ± 0.005 GB/h
+  bounds the OBSERVED FLOOR DRIFT over these 12 h at n=11. No rising floor is visible at ~0.01 GB/h.
+  Calling that a leak bound needs assumptions this file cannot check; calling it confound-free needs
+  a CPU-trend precision this file does not have.* **The tick stands on THAT, and on nothing stronger.**
+  What would close the residual: a request-rate or GC-count series from the server's own logs over
+  this same window — CPU%-of-core proxies compute, not allocation.
+  **META, and the reason this is the last entry.** Three rounds, each correcting the last, each
+  shipping a fresh instance of the same defect. The card's standing lesson says *publish the number
+  with its derivation and its n*; I was publishing the number with its derivation and **without its
+  variance** — the same failure in a better disguise. The fix is not a better fourth correction, it
+  is to publish the uncertainty and stop. **Correction chain CLOSED.** Any further finding is a new
+  TRDD, not a fifth append; three rounds of log-only correction reached its limit, which is why a
+  single navigational pointer (asserting nothing) was added at the box-3 entry.
