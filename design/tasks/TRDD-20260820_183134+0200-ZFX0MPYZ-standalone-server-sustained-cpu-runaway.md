@@ -3,7 +3,7 @@ trdd-id: ZFX0MPYZ
 title: Standalone server sustains 150-270 percent CPU and 2.4 GB RSS over an 8-hour uptime
 column: todo
 created: 2026-08-20T18:31:34+0200
-updated: 2026-08-23T05:30:58+0200
+updated: 2026-08-23T05:32:54+0200
 current-owner: unassigned
 task-type: bugfix
 priority: high
@@ -348,14 +348,29 @@ alone, each pre-selected).
 | **p90 (pre-registered)** | **750** | **38%** |
 | max | **1902** | **95%** |
 
-**VERDICT, keyed to p90 as committed: BELOW the cliff at 38%.** And this is exactly the case that
-justifies pre-registering, because the two statistics tell opposite stories: p90 says comfortable,
-while **one run of twenty came within 98 ms of the cliff**. Having committed to p90 in advance, the
-verdict is "below" — and the max is reported rather than buried, because I also committed to that.
-Note the distribution is strongly bimodal (six runs ≤155 ms, then a cluster near 650 ms, then one
-outlier at 1902), so **p90 of n=20 is the 18th order statistic and is not a stable estimator** — the
-discipline of pre-registering worked; the choice of statistic was poor, and a better pre-registration
-would have named p50 and max together.
+**VERDICT, keyed to p90 as committed: BELOW the cliff at 38%.** This is the case that justifies
+pre-registering, because the two statistics tell opposite stories: p90 says comfortable, while
+**one run of twenty came within 98 ms of the cliff**. Committed to p90 in advance → the verdict is
+"below"; committed to reporting max → 1902 is stated, not buried.
+
+**The distribution is a MIXTURE, and I checked whether that invalidates the p90 — it does not.**
+Clustering on the gaps (largest 769→1902 = 1133 ms; next 317→586 = 269 ms):
+
+| regime | n | range | max as % of TTL |
+|---|---|---|---|
+| FAST | 6 | 126–155 ms | 8% |
+| **MAIN** | **13** | **317–769 ms** | **38%** |
+| OUTLIER | 1 | 1902 ms | **95%** |
+
+**p90 = 750 ms lands INSIDE the MAIN cluster**, so it is not a cross-regime artifact — it describes
+a real operating regime, which is what makes the verdict meaningful. But the 769→1902 gap is the
+largest in the data by 4×, so **the outlier is a distinct event, not the tail of MAIN**: 1 run in
+20 (5%) reached 95% of the cliff while the entire MAIN regime caps at 38%. A quantile cannot
+describe that event, and neither statistic alone is the whole answer — which is why both are here.
+
+Caveat kept: p90 of n=20 is the 18th order statistic and is not a stable estimator. The
+pre-registration discipline worked; the CHOICE was poor, and naming p50 + max would have been
+better.
 
 **The cause of the spread is UNATTRIBUTED — and my refutation of my own explanation ALSO went too
 far.** I wrote it was "OS page-cache warmth and machine load", which I never measured. I then
