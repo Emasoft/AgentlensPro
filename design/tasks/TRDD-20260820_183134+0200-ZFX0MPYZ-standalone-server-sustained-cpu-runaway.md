@@ -3,7 +3,7 @@ trdd-id: ZFX0MPYZ
 title: Standalone server sustains 150-270 percent CPU and 2.4 GB RSS over an 8-hour uptime
 column: todo
 created: 2026-08-20T18:31:34+0200
-updated: 2026-08-23T05:17:30+0200
+updated: 2026-08-23T05:20:34+0200
 current-owner: unassigned
 task-type: bugfix
 priority: high
@@ -320,27 +320,34 @@ error**, a single draw from a dispersed quantity, this time the alarming end ins
 convenient one. The defensible form is the distribution. n=16, all on the **same** 14,523-file
 corpus:
 
-| | ms | % of the 2000 ms TTL |
-|---|---|---|
-| min / p25 | 143 / 209 | 7% / 10% |
-| **median** | **317** | **16%** |
-| p75 | 863 | 43% |
-| **max** | **1507** | **75%** |
-| mean / stdev | 555 / 437 | right-skewed (mean 75% above median) |
+**NO SUMMARY STATISTIC IS CLAIMED, and the third attempt at this paragraph is why.** The 16
+observations come from three NON-EXCHANGEABLE designs and pooling them describes no real
+population: 8 in-process repeats (warm process, warm allocator, JIT already compiled — samples 2-8
+are conditioned on sample 1), 5 fresh-process runs (each paying startup + JIT warmup), and 3
+ad-hoc samples taken hours apart. The in-process design contributed HALF the pool and structurally
+cannot occur in production — the server does one walk per request from a long-lived process with a
+cold memo, never eight in a row — so any pooled median is dominated by the cheapest condition.
+**All that is defensible from these 16: the range is 143–1507 ms and the count is 16.**
 
-**The uncertainty IS the finding:** 16 samples cannot say whether 1507 ms is the ceiling or a
-routine excursion, and for a cliff at 2000 ms the unmeasured tail is precisely what matters.
-Typical is ~317 ms with comfortable headroom; the tail is unbounded by any measurement I have.
+A clean single-design measurement (20 fresh-process single-walk runs, 30 s apart) is running as of
+05:19 → `reports/cpu-runaway/walk-clean-20260823_051928+0200.txt`. Its p90 replaces this
+paragraph. **Deliberately started BEFORE writing the conclusion**, because the failure this card
+keeps repeating is not single-sample reasoning — it is reaching for the number that supports the
+sentence already being written (820 supported "latent"; 1507 supported "urgent"; 317 supported
+"comfortable headroom"; each defensible alone, each pre-selected).
 
-**The cause of the spread is UNATTRIBUTED — I withdrew my own explanation.** I wrote it was "OS
-page-cache warmth and machine load". Never measured, and the design could not have shown it: the
-page cache is a KERNEL resource that does not reset at process boundaries, so my "fresh process"
-runs were never a cold-cache condition. My own data refutes the story — fresh-process runs in
-order were 721, **1507**, 325, 172, 143, and a cold-cache effect would put the max FIRST and decay
-from there. It is second. What survives, and is enough: the spread **cannot** be corpus-size
-driven, because the corpus was constant across all 16 observations. (Not run: `sudo purge`-
-separated cold/warm walks — needs an interactive password in an unattended session, so the causal
-half is dropped rather than left unverified.)
+**The cause of the spread is UNATTRIBUTED — and my refutation of my own explanation ALSO went too
+far.** I wrote it was "OS page-cache warmth and machine load", which I never measured. I then
+claimed the ordering (fresh-process runs 721, **1507**, 325, 172, 143) *refuted* page cache since a
+cold-cache effect would put the max first. **That only kills a naive monotonic-decay model, which
+is not how page cache behaves** — eviction is driven by memory pressure from other processes, and
+on a machine running ~30 Claude sessions plus a 1.4 GB-RSS server, cold-warm-cold within five runs
+is ordinary. So page cache is **not ruled out**; it is one of several candidates that **no design
+here can separate**. Replacing an unearned mechanism with an unearned dismissal would leave the
+next reader believing it had been excluded.
+What survives: a 0.1% change in file count (14,509 → 14,523) cannot plausibly explain a 10×
+spread, so the variance is not corpus-size driven. (Not run: `sudo purge`-separated cold/warm
+walks — needs an interactive password in an unattended session.)
 
 **Escalation path — two steps measured, two NOT.** A blanket "inference" label was not enough,
 because this loop is the only thing making the defect urgent rather than merely latent, and its
@@ -401,8 +408,12 @@ former silently measures old code — it cost two failed runs here.
       1.17 and 1.53 GB.
       **THE DISCRIMINATOR IS THE SAWTOOTH FLOOR, not the mean, the slope, or the direction
       changes.** Sawtooth RSS is what ANY garbage-collected runtime produces, leaking or not; a
-      leak shows as a rising FLOOR, and the floor moves long before the mean does. Per-10-minute
-      minima: **1.347 → 1.348 → 1.167 → 1.334 GB — not rising.** No leak signature in this window.
+      leak shows as a rising FLOOR, and the floor moves long before the mean does.
+      **65-minute read (04:14→05:18, n=65), per-10-minute minima:**
+      1.347 → 1.348 → 1.167 → 1.334 → 1.262 → **1.239 GB**. Floor trend **−0.108 GB/h**;
+      first-to-last delta **−0.107 GB**. Against an implied leak of **(2.47−1.36)/8h = 0.139 GB/h**
+      that the card's own observation would require, the floor is **flat-to-falling — no leak
+      signature over 65 minutes.**
       Two statistics I first published here are WITHDRAWN as non-discriminating: "19 of 24 steps
       reverse direction" (a real leak at this scale — ~2.5 MB/min against tens of MB of jitter —
       would flip direction just as often, so the count measures noise-to-step ratio, not
