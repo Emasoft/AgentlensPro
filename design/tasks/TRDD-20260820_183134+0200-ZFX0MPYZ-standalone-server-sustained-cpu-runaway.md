@@ -3,7 +3,7 @@ trdd-id: ZFX0MPYZ
 title: Standalone server sustains 150-270 percent CPU and 2.4 GB RSS over an 8-hour uptime
 column: todo
 created: 2026-08-20T18:31:34+0200
-updated: 2026-08-23T04:38:31+0200
+updated: 2026-08-23T04:43:41+0200
 current-owner: unassigned
 task-type: bugfix
 priority: high
@@ -222,14 +222,24 @@ WIDTH was an artifact of the mismatch, not real uncertainty.
 **Measured properly, both numerators from ONE identical window** (`ps -o time=` read immediately
 before and after a 60 s profile):
 
-| over the same 60.3 s | |
-|---|---|
-| process CPU | 17.56 s = **29.1% of one core** |
-| main-thread busy (summed `timeDeltas`) | 12.01 s = **19.9% of one core** |
-| **main thread share of process CPU** | **68.4%** |
+**Four independent paired windows** (the first at 60 s, three more at 40 s — the harness makes
+extra windows nearly free, so the n=1 version of this table was replaced rather than caveated):
 
-One number, no mixing — and consistent with the `ps -M` lifetime split (78.4% main) that sat one
-line above the contradiction I originally failed to reconcile.
+| window | wall | process CPU | main-thread busy | main share |
+|---|---|---|---|---|
+| 1 | 60.3 s | 17.56 s | 12.01 s | 68.4% |
+| 2 | 40.4 s | 12.09 s | 8.24 s | 68.2% |
+| 3 | 40.4 s | 13.61 s | 9.63 s | 70.8% |
+| 4 | 40.4 s | 8.69 s | 5.92 s | 68.1% |
+
+**Mean 68.9%, range 68.1–70.8%.** The striking part is the stability: process CPU itself swings
+**1.6×** across these windows (8.69 s → 13.61 s), yet the main-thread SHARE barely moves. The
+absolute burn is bursty; the ratio is not — which is why a single window was enough to support
+"the main thread is the majority", though not enough to name the number.
+
+`ps -M` lifetime says 78.4% main, about 10 points higher than the windowed 68.9%. Not glossed:
+the lifetime figure includes process startup, which is main-thread-heavy and would lift the
+share. Both methods agree on the conclusion; they are not the same measurement.
 
 **TRAP, hit while taking exactly this measurement:** `ps -o time=` prints **`MM:SS.ss`** here
 (`90:45.41` = 90 minutes), not `HH:MM:SS`. Parsing it as `HH:MM:SS` yielded "1422 s of CPU in 60 s
@@ -333,11 +343,16 @@ former silently measures old code — it cost two failed runs here.
       this attributes main-thread work only — see the box above.
 - [ ] RSS growth is characterised as steady-state or as a leak — one measurement cannot tell them
       apart, so this needs a series, not a second snapshot.
-      2026-08-23 04:13: a SERIES is now being collected — 1-minute samples of
-      `pid/elapsed/%cpu/TIME/RSS` for 12 h into
-      `reports/cpu-runaway/rss-series-20260823_041323+0200.tsv`. Early rows already show RSS
-      oscillating (1.44 → 1.60 → 1.46 → 1.53 → 1.44 GB), i.e. sawtooth, not monotonic — but four
-      points decide nothing and this box stays open until the series is read.
+      2026-08-23 04:41 — FIRST READ of the series (26 samples, 04:14→04:39, 1-min cadence, into
+      `reports/cpu-runaway/rss-series-20260823_041323+0200.tsv`): **RSS OSCILLATES, it does not
+      climb.** min 1.17 GB, max 1.53 GB, first 1.38 GB → last 1.36 GB; least-squares trend
+      **−0.192 GB/hour** (negative); **19 of 24 steps reverse direction**. That is sawtooth —
+      allocate/collect — and is the signature of steady state, not of a leak. Corroborated by the
+      GC finding above: a ~1.4 GB heap under continuous concurrent marking is exactly what draws
+      a sawtooth.
+      **STILL OPEN, and this is the honest limit:** 25 minutes cannot exclude a leak whose
+      timescale is hours, and the card's own observation was 2.47 GB at 8h12m against 1.36 GB
+      here. The box closes when the 12 h series is read, not on this window.
       TRAP, cost one failed start: a `setsid nohup … &` sampler launched from a tool call is
       REAPED with the process group. macOS has no `setsid`; use `scripts_dev/detach-run.py`
       (double-fork) and verify **ppid 1**. Already recorded in LOCAL memory as
