@@ -399,7 +399,11 @@ export class LogReader {
     // unchanged — no answer is ever WRONG, only briefly incomplete for a very new session, which
     // the next probe picks up. That extra staleness is `walkDuration`, which is NOT a constant and
     // NOT the 750ms p90: the measured max on this corpus is 1902ms, so observed worst-case data age
-    // is ~3.9s and it grows with the corpus. Quoting the p90 as a worst case would be the same
+    // is ~3.9s and it grows with the corpus. That 3.9s is itself a FLOOR on the worst case, not the
+    // worst case — the n=20 sample was taken on a comparatively idle server, and the contention that
+    // stretches a probe also stretches the walk inside it. Quote the bound as parametric in
+    // walkDuration; the 3.9s figure carries its idle-sample provenance with it. Using the p90 would
+    // have been the same
     // central-quantile-for-a-tail error this investigation kept making. The bound is parametric —
     // trading it for the removal of a 5x walk amplification is still not a close call.
     this._fileMetaCacheAt = Date.now()

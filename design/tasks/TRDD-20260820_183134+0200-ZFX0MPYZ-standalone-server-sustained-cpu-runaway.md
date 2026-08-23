@@ -3,7 +3,7 @@ trdd-id: ZFX0MPYZ
 title: Standalone server sustains 27 percent of a core and 1.4 GB RSS — check_cache_expiry probe walks
 column: todo
 created: 2026-08-20T18:31:34+0200
-updated: 2026-08-23T06:20:54+0200
+updated: 2026-08-23T06:32:10+0200
 current-owner: unassigned
 task-type: bugfix
 priority: high
@@ -596,6 +596,12 @@ former silently measures old code — it cost two failed runs here.
       On the block-minimum estimator I flagged: a CONSTANT block size makes its upward bias roughly
       constant across blocks, which shifts the intercept and not the slope — so trend estimation
       here is defensible after all.
+      **INTERIM READ, 2026-08-23 06:25 (12 complete 10-min blocks, ~2 h of the 12 h series).**
+      Floor minima 1.347, 1.348, 1.167, 1.334, 1.262, 1.239, 1.327, 1.331, 1.330, 1.351, 1.188,
+      1.338 GB. **Flat — no rising signature.** Deliberately stated without a rate: the
+      least-squares slope over these blocks is ~5e-4 GB/h, and quoting that to any precision would
+      be spurious against a 0.18 GB band of block-to-block scatter. "No rising floor at this
+      resolution" is the entire content. The 12 h read is what settles the box.
       **BUT THAT DEFENDS THE SLOPE, NOT THE INTERVAL — a later review's point, and it is a
       different one.** Constant bias rescues the *point* estimate; it says nothing about the
       *distribution* of a block-minimum statistic, which is an extreme-value quantity and not
