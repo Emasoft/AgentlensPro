@@ -1294,3 +1294,35 @@ former silently measures old code — it cost two failed runs here.
      answer and it is why the tick stands — but it is not the binary the box's text asks for, and a
      reader who takes "characterised" at face value will over-read it.
   Corrections landed in `reports/cpu-runaway/20260823_162921+0200-box3-rss-floor-12h-full.md`.
+- 2026-08-23T17:05:00+0200 — **POINT 1 ABOVE IS WITHDRAWN. The correction was itself the card's
+  failure shape.** A second adversarial review attacked the qualification and was right; I measured
+  it first-hand before accepting.
+  **"The workload fell 27%" was ENDPOINT ARITHMETIC on a series with no trend.** Measured over the
+  same 11 buckets: **CPU ~ hour = −0.0248 pt/h, r = −0.026, SD 3.22 pt.** The 27% was 26.7→19.6,
+  first bucket to last, where 15:00's 19.6 is the minimum of all 13 buckets and 16:00 — which I had
+  printed and did not mention — bounces back to 29.9. **A first-and-last difference standing in for
+  a slope is the same shape this card withdrew a statistic for once already**, and I reproduced it
+  in the very entry correcting a proxy read.
+  **The decomposition, which I had every number for and did not run:** floor~hour simple
+  **−0.01393**, floor~hour **controlling for CPU −0.01375** (CPU coef +0.0075 GB/pt) → **the CPU
+  variation explains 1.3% of the slope. THE CONFOUND IS NOT LIVE.** A confounder must correlate with
+  the exposure (time) as well as the outcome; CPU does not. I ran a bare correlation instead, got an
+  ambiguous r = +0.390, and published a hedge on it — and with CPU~hour ≈ 0 that correlation is
+  nearly orthogonal to the time trend, so it never could have settled the question.
+  **The evidence in fact runs the OTHER way:** mean RSS falls near-monotonically (**−0.01008 GB/h,
+  r = −0.875**) while CPU has no trend at all — evidence *against* a load-driven decline, from the
+  same two tables I read as evidence for it.
+  **Also withdrawn: the r-ordering as "weak directional support."** At n=11 the Fisher-z SE is
+  1/√8 = 0.354, so +0.390 / +0.242 / +0.101 are mutually indistinguishable and none differs from
+  zero; and a load mechanism would move peak and mean most and the post-GC floor least, so the
+  ordering points against the confound if it points anywhere.
+  **Lesson recorded rather than buried: I published a 95% band ([−0.26, +0.79]) I had NOT computed**,
+  inside a correction whose thesis is that numbers ship with their derivation. Computed properly it
+  is [−0.274, +0.802] — close enough that nothing downstream moved, which is exactly why the habit
+  survives review. The derivation is the deliverable, not the digits.
+  **NET EFFECT ON THE TICK: it stands, and on the STRONGER reading.** With the confound tested and
+  dismissed, −0.014 GB/h is a **leak bound at ~0.01 GB/h**, not merely a net-drift bound. Points 2,
+  3 and 4 of the previous entry are unaffected and stand.
+  **The honest residual limit that replaces the withdrawn one:** CPU is the only workload proxy this
+  frozen file carries; it shows no trend, so the confound asserted on it is withdrawn — whether some
+  *unmeasured* load dimension trended is unknown and this file cannot answer it.
