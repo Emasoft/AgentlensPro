@@ -3,7 +3,7 @@ trdd-id: ZFX0MPYZ
 title: Standalone server sustains 27 percent of a core and 1.4 GB RSS — check_cache_expiry probe walks
 column: dev
 created: 2026-08-20T18:31:34+0200
-updated: 2026-08-23T06:43:40+0200
+updated: 2026-08-23T06:52:02+0200
 current-owner: unassigned
 task-type: bugfix
 priority: high
@@ -20,9 +20,17 @@ This card is ~700 lines of append-only investigation across four sessions and tw
 answers were reached — including several that were WRONG and were corrected in place.
 
 **WHERE IT STANDS.** Acceptance boxes **1 ✓ 2 ✓ 4 ✓ 5 ✓**, box **3 open (measuring)**.
-The mechanism is settled: the trigger is an HTTP REQUEST (`check_cache_expiry`, 36.6% of
+The MECHANISM is settled: the trigger is an HTTP REQUEST (`check_cache_expiry`, 36.6% of
 main-thread busy), not a timer; the caller is OUTSIDE this repo (ai-maestro-janitor detectors,
-147 calls/hour measured); the amplifier was a pre-walk cache stamp and is FIXED.
+147 calls/hour over the profiled window); the amplifier was a pre-walk cache stamp and is FIXED.
+**Its SCOPE is narrower than "the workload", and box 1 is met as WORDED rather than as a total:**
+the profile covers ONE process's main thread, and 68.4% of the logged call-cost belongs to earlier
+processes that were never profiled (see SUPERSEDED, entry 8). The 147/hour figure is NOT affected
+— it is 769 calls over 5h14m within the profiled window, counted under the correct marker.
+
+**COLUMN TRIP-WIRE.** `column: dev` is true only while someone is actually working this. If the
+12 h series has been read and nothing has moved since, RE-COLUMN IT — a work column that keeps
+asserting `dev` after work stops is the exact failure the board rules name, and it is invisible.
 
 **NEXT ACTION — one step, runnable as written.** Read the 12 h RSS series' sawtooth FLOOR; a
 rising floor is a leak, flat/falling is steady state. Completes ~16:13 (720 samples from 04:13):
@@ -37,6 +45,9 @@ AMPLIFIER. Even with a perfect memo, 147 calls/hour each pay ONE full 14,509-fil
 that follows is: memoize the ANSWER (the tool reports against a 60-minute TTL, so a seconds-fresh
 answer is not required) + abandon server work on client disconnect. That CHANGES OBSERVABLE
 BEHAVIOUR, so it is a PROPOSAL awaiting the user's call — do not build it unprompted.
+**IT NOW HAS ITS OWN CARD: `TRDD-YST9ZJ90`** (`design/proposals/`, `column: proposal`). It was
+prose inside THIS block until 2026-08-23 06:50, which meant that when this card goes terminal the
+real problem would have left the board silently, archived as if solved. Prose is not a queue.
 
 **LOAD-BEARING GOTCHAS** (each cost real time; the body has the full account):
 - `ps %CPU` is a **1-minute decaying average** on macOS, not a lifetime one. Sustained = `TIME/ELAPSED`.
@@ -57,6 +68,18 @@ BEHAVIOUR, so it is a PROPOSAL awaiting the user's call — do not build it unpr
 - ~~"~0.8s of extra worst-case staleness"~~ → p90 quoted as a max; observed max walk is 1902 ms.
 - ~~any `95% CI [a,b]` on the RSS floor~~ → a block MINIMUM is not t-distributed; read as
   "no signature at this resolution".
+- ~~"REFUTED: most of the call-cost does NOT belong to earlier processes (before = 0)"~~ →
+  **FALSE, and it was the most dangerous omission in the first version of this block.** The split
+  used `Loaded .* spans from`, which the CURRENT build no longer emits (live marker:
+  `OTLP receiver →`). Correct split: after = 769 / 728.8 s, before = 313 / **1576.1 s** → **68.4%
+  of logged call-cost belongs to processes never profiled**, the dismissed review was RIGHT, and
+  the profiled process's consumption was overstated **3.2×**. Grepping for a string that no longer
+  exists returns zero and is indistinguishable from a clean refutation.
+
+**⚠ TWO DIFFERENT NUMBERS ARE BOTH "68.4%" — do not conflate them:**
+`1576.1/2304.9` = cost in **unprofiled earlier processes** (the entry above).
+`12.01/17.56` = the **main thread's share of the profiled process's CPU** (box 1's scope).
+Numerically identical to one decimal, semantically unrelated. Always say which.
 
 **ARTIFACTS TO READ FIRST** (all under `reports/cpu-runaway/`, gitignored):
 `20260823_040232+0200-live-profile-check-cache-expiry.md` (the profile, with its own corrections

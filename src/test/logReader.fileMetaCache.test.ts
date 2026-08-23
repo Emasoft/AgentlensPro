@@ -32,7 +32,10 @@ suite('LogReader — reparseSession() must not re-walk the whole log tree on eve
   //   negative — per-test 30000 + `--timeout 50`: body passed, `"after each" hook ... Timeout of
   //              50ms exceeded`. A test's timeout does not cover its hooks.
   //   positive — suite `this.timeout(1)`: `"after each" hook ... Timeout of 1ms exceeded`. The
-  //              suite value DOES reach the hook.
+  //              suite value DOES reach the hook. NOTE that run exited 2, not 1: at a 1ms budget
+  //              the test BODY times out as well (it writes 6000 files), so unlike the negative
+  //              control this one does not ISOLATE the hook — the hook line is unambiguous
+  //              evidence on its own, but the run is not a clean single-failure observation.
   // NOTE it also raises the other three tests in this suite from the .mocharc 10s default, so a
   // hang in any of them now takes 30s to surface. Accepted: they are sub-second tests, and one
   // timeout at the covering scope beats two at different ones.
