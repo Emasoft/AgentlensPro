@@ -3,7 +3,7 @@ trdd-id: ZFX0MPYZ
 title: Standalone server sustains 150-270 percent CPU and 2.4 GB RSS over an 8-hour uptime
 column: todo
 created: 2026-08-20T18:31:34+0200
-updated: 2026-08-23T05:14:47+0200
+updated: 2026-08-23T05:17:30+0200
 current-owner: unassigned
 task-type: bugfix
 priority: high
@@ -313,22 +313,47 @@ MECHANISM (*if* `walkDuration > TTL` *then* collapse), not that the antecedent h
 production. The only time it held is when I forced it. Correct phrasing: **reachable and
 mechanically confirmed, not yet reached.**
 
-**THE HEADROOM IS FAR SMALLER THAN THIS CARD HAS BEEN SAYING, and that is the real finding.** I
-quoted "820 ms" as *the* walk time throughout. It is not a constant. On the **same** 14,523-file
-corpus tonight: **143, 172, 187, 199, 209, 229, 244, 310, 325, 721, 741, 820, 863, 879, 1333,
-1507 ms** — a **10.5× spread** on identical input, driven by OS page-cache warmth and machine
-load, not corpus size. Warm repeats land ~200 ms; cold ones reach **1507 ms = 75% of the 2000 ms
-cliff**. So the trigger is NOT only corpus growth as I wrote — **load variance on today's corpus
-already reaches three-quarters of the threshold.**
+**THE WALK TIME IS NOT A CONSTANT — that is the real finding, and my first two attempts to state
+it were both wrong.** I quoted "820 ms" as *the* walk time throughout the night. Then, correcting
+that, I promoted **1507 ms** to the operative headroom number — **the mirror image of the same
+error**, a single draw from a dispersed quantity, this time the alarming end instead of the
+convenient one. The defensible form is the distribution. n=16, all on the **same** 14,523-file
+corpus:
 
-**Escalation path (mechanism-level inference, NOT measured):** a busy server walks slower → a slow
-enough walk collapses the memo → collapse turns one walk per probe into N → more walks make the
-server busier. Its entry condition is *the server already being under load*, i.e. it would fire
-during exactly the runaway this card is about, not during the quiet periods when the walk measures
-200 ms. **NOT measured:** walk duration as a function of concurrent load — driving load and
-watching the walk slow is what would promote this from plausible to established.
+| | ms | % of the 2000 ms TTL |
+|---|---|---|
+| min / p25 | 143 / 209 | 7% / 10% |
+| **median** | **317** | **16%** |
+| p75 | 863 | 43% |
+| **max** | **1507** | **75%** |
+| mean / stdev | 555 / 437 | right-skewed (mean 75% above median) |
 
-Evidence: `reports/cpu-runaway/20260823_051050+0200-born-expired-confirmed.md`. The FIX is still
+**The uncertainty IS the finding:** 16 samples cannot say whether 1507 ms is the ceiling or a
+routine excursion, and for a cliff at 2000 ms the unmeasured tail is precisely what matters.
+Typical is ~317 ms with comfortable headroom; the tail is unbounded by any measurement I have.
+
+**The cause of the spread is UNATTRIBUTED — I withdrew my own explanation.** I wrote it was "OS
+page-cache warmth and machine load". Never measured, and the design could not have shown it: the
+page cache is a KERNEL resource that does not reset at process boundaries, so my "fresh process"
+runs were never a cold-cache condition. My own data refutes the story — fresh-process runs in
+order were 721, **1507**, 325, 172, 143, and a cold-cache effect would put the max FIRST and decay
+from there. It is second. What survives, and is enough: the spread **cannot** be corpus-size
+driven, because the corpus was constant across all 16 observations. (Not run: `sudo purge`-
+separated cold/warm walks — needs an interactive password in an unattended session, so the causal
+half is dropped rather than left unverified.)
+
+**Escalation path — two steps measured, two NOT.** A blanket "inference" label was not enough,
+because this loop is the only thing making the defect urgent rather than merely latent, and its
+measured endpoints made the whole chain read as measured:
+
+| step | status |
+|---|---|
+| a slow enough walk collapses the memo | **MEASURED** (stall experiment) |
+| collapse turns one walk per probe into N | **MEASURED** (5 candidates → 5 walks) |
+| server load slows the walk | **NOT MEASURED** |
+| the extra walks meaningfully raise load | **NOT MEASURED** |
+
+Evidence: `reports/cpu-runaway/20260823_051050+0200-born-expired-mechanism.md`. The FIX is still
 open (the advisor question on data-age vs cache-lifetime). (2) That `transcriptPathFor` is an
 O(all-files) scan run 12× per probe — structurally true, but **measured at 0 ms for 12 lookups
 with 0 extra walks**, because entries are sorted newest-first and the probe ranks the newest
