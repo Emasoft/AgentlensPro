@@ -47,7 +47,12 @@ process accumulates (entry 8 has the timestamped triple and the method; do not q
 moved it to `blocked` with `blocked-by: [YST9ZJ90]`. Both parts of that were defects:
 1. **`blocked-by: [YST9ZJ90]` was not true of THIS card.** Its only open box is a measurement that
    needs nobody's permission. I imported the *project's* blocker onto a card whose own remaining
-   work is unblocked — the honest state is `todo`.
+   work is unblocked — the honest state is `todo`. **Flagged as a UNILATERAL scope narrowing:** it
+   reads box 3's wording (characterise RSS as steady-state or leak) as the card's whole remainder,
+   on a card whose TITLE is about an unfixed runaway. Defensible from the acceptance criteria — all
+   five are characterisation plus the amplifier fix — but it is my reading, and if the user intends
+   this card to stay open until the runaway itself is fixed, it belongs back on `blocked` (and then
+   the drift-coverage loss in 2 must be handled some other way).
 2. **`blocked` is NOT in `trdd-drift`'s `ACTIVE_COLUMNS`** (`{dev, testing, backburner, todo,
    dispatch, ai_review, human_review}` — `scripts/lib/trdd_common.py:253`; the detector `continue`s
    on anything outside it at `detectors/trdd-drift.py:203`). So the move silently switched OFF the
@@ -83,24 +88,40 @@ move this box has already withdrawn four statistics for. Per-hour RSS floor for 
 | all 9 (two partial) | **−0.0045 GB/h** | [−0.020, +0.011] | 0.015 GB/h |
 | 7 complete only (n≥59) | **+0.0001 GB/h** | [−0.024, +0.025] | **0.025 GB/h** |
 
-**Quote the 7-bucket row** — dropping the partial 04:00 (n=46) and 12:00 (n=35) buckets removes the
+**Quote the 7-bucket row** — dropping the partial 04:00 (n=46) and 12:00 (n=41) buckets removes the
 unequal-n bias in a MINIMUM statistic (fewer draws ⇒ the min reads high), and it is the weaker,
 therefore honest, claim. **Read these as order-of-magnitude sensitivity floors, one significant
 figure — NOT calibrated 95% intervals**; this box already ruled that a block-minimum is an
 extreme-value quantity and not t-distributed however many buckets there are, and an hour-minimum is
 the same statistic. So: *this window resolves a leak faster than ~0.03 GB/h; anything slower stays
-invisible.* That is **~12×** finer than the 65-minute window's ~0.3–0.4 GB/h.
+invisible.* Against the 65-minute window's 0.3–0.4 that is **roughly an order of magnitude** — the
+measured ratio is 14×, but it divides two MDEs whose σ̂ come from 4 and 5 df and are each uncertain
+by ~2×, so it is good to about 4× and must not be quoted as "12×" or "14×". **Independent
+corroboration, which the card had already derived and I failed to use:** SE ∝ σ√Δ/T^1.5 over a
+7.69× longer window predicts **21× finer ⇒ 0.014–0.019 GB/h**, against 0.025 measured. A prediction
+from the card's own scaling law and a direct measurement agreeing inside the σ̂ uncertainty is worth
+more than either alone.
 Peaks likewise flat at 1.45–1.63 G. The box stays unticked because the series is 69.5% complete.
 Report: `reports/cpu-runaway/20260823_123633+0200-box3-rss-floor-8h20m-partial.md`.
 
-**CPU, from `cpu_time` DELTAS — and the `pct_cpu_1min` column is a PROXY that should not be
-averaged.** True CPU per hour (Δcolumn 5 over the 60 s interval, pid 21567): 25.8 / 26.7 / 25.7 /
-23.8 / 22.4 / 21.1 / 23.8 / 30.9 / 26.6 **% of one core** — a tight 21–31 band, ≈25 overall, and
-notably STABLE while RSS is flat. The hourly *mean of column 4* I first published (18.1…40.2,
-"~27") is a different and worse number: that gauge swings **0.0 → 184.9 within a single hour**, and
-exceeding 100 proves it is not the same quantity (it counts all threads, not one core). It reads
-high against the truth in every bucket. **Column 5 is a monotone counter — always prefer its
-deltas; column 4 is a sampled gauge whose mean is an artifact of when the samples landed.**
+**CPU, from `cpu_time` DELTAS — the `pct_cpu_1min` column is a NOISIER ESTIMATOR of the same thing,
+not a different quantity.** True CPU per hour (Δcolumn 5 over the 60 s interval, pid 21567,
+`p` reset on pid change): 25.8 / 26.7 / 25.7 / 23.8 / 22.0 / 21.1 / 23.8 / 30.9 / 26.6 **% of one
+core**; **25.1% overall** across 504 intervals (8.40 h) — a tight 21–31 band, stable while RSS is
+flat. **TWO claims I made about column 4 are WITHDRAWN, both refuted by the table printed beside
+them:**
+- *"It reads high against the truth in every bucket."* **False — 6 of 9 high, 3 LOW** (07: 23.5 vs
+  23.8; 08: 18.1 vs 22.0; 12: 23.1 vs 26.6), deviations spanning **−3.9 to +10.3**. The gauge is
+  not biased, it is NOISY IN BOTH DIRECTIONS. I asserted a direction without checking it against
+  the numbers in the adjacent column.
+- *"Exceeding 100 proves it is not the same quantity."* **Non-sequitur** — a `cpu_time` delta is
+  thread-summed core-percent too and also exceeds 100 whenever the process uses >1 core. Both
+  measure the same thing; they differ as ESTIMATORS (a decayed instantaneous gauge vs an exact
+  interval mean). The conclusion survives, the reason for it did not.
+**The rule that does survive: column 5 is a monotone counter, so prefer its deltas; column 4 is a
+sampled gauge whose hourly mean depends on when the samples landed.** And the deltas are exact only
+if `p` is RESET on a pid change — carrying it across row 239 silently divided a 120 s interval by
+60 and understated hour 08 by 0.4 pt (22.4 → 22.0; the giveaway was n=59 where 58 was right).
 
 **RETRACTED by this read: the 65-minute "floor trend −0.108 GB/h".** The 8h20m slope is
 +0.0001 GB/h (7 complete buckets), 1000× smaller and of the opposite sign; sustained, −0.108 would
@@ -122,9 +143,19 @@ awk -F'\t' 'NR>1{if($2!=p){printf "row %d  %s  pid=%s  elapsed=%s\n", NR-1, $1, 
   reports/cpu-runaway/rss-series-20260823_041323+0200.tsv
 ```
 
-**AND COPY THE FILE FIRST.** The sampler is still appending, so successive awks over the live path
-read successive *different* files — the three reads above were taken at 501, 503 and 508 rows and
-silently mixed. `cp … /tmp/rss-frozen.tsv` and analyse the copy.
+**AND COPY THE FILE FIRST — then recompute EVERYTHING from the copy, which the first correction
+said it had done and had not.** The sampler is still appending, so successive awks over the live
+path read successive *different* files (the original three hit 501, 503 and 508 rows). I froze the
+series, re-ran only the REGRESSION against it, and then wrote "every number in this correction came
+from one frozen 508-row snapshot" — while the floor table beside it was still the 501-row read. The
+tell was visible in my own two commits: the 12:00 gauge mean is 22.7 in `925672d` and 23.1 in
+`6f534c1`, disagreeing in exactly the bucket the 7 new rows landed in.
+**Re-run on the frozen copy: the nine floor VALUES are unchanged** (1.167 … 1.099 — no hourly
+minimum moved), **but the n column did**: 12:00 is n=41, not the n=35 I published. So the slope was
+fitted to the right floors, and the claim about where the numbers came from was false anyway. *A
+conclusion surviving does not make the method claim true, and the method claim is the one a later
+reader relies on.* Freezing the file is not the discipline — re-deriving every published number
+from the frozen file is.
 
 **BLOCKED ON THE USER — the actual runaway is NOT fixed.** Everything landed so far removes an
 AMPLIFIER. Even with a perfect memo, 147 calls/hour each pay ONE full 14,509-file walk. The shape
@@ -829,14 +860,18 @@ former silently measures old code — it cost two failed runs here.
       `detach-long-jobs-from-session-lifecycle`.
       **2026-08-23 12:36 — 8h20m READ (501/721 samples, 04:14→12:34): NO LEAK SIGNATURE DOWN TO
       ~0.03 GB/h.** Per-hour floor for pid 21567: 1.167 / 1.188 / 1.225 / 1.173 / 1.151 / 1.143 /
-      1.133 / 1.259 / 1.099 GB; peak flat at 1.45–1.63 G. Regressed on the hour: all 9 buckets
-      slope **−0.0045 GB/h**, sensitivity ~0.015; the 7 COMPLETE buckets (n≥59, dropping partial
-      04:00/12:00 whose unequal n biases a minimum high) slope **+0.0001 GB/h**, sensitivity
-      **~0.025 GB/h**. **Quote the 7-bucket row — it is the weaker claim.** Per this box's own
-      earlier ruling these are order-of-magnitude sensitivity floors, NOT calibrated 95% intervals:
-      an hour-minimum is the same extreme-value statistic as the block-minimum, and is not
-      t-distributed however many buckets there are. *Resolves a leak faster than ~0.03 GB/h;
-      anything slower is invisible* — ~12× finer than the 65-minute window's 0.3–0.4.
+      1.133 / 1.259 / 1.099 GB (verified unchanged when recomputed from the frozen copy); peak flat
+      at 1.45–1.63 G. Regressed on the hour: all 9 buckets slope **−0.0045 GB/h**, sensitivity
+      ~0.015; the 7 COMPLETE buckets (n≥59, dropping partial 04:00 n=46 / 12:00 n=41, whose unequal
+      n biases a minimum high) slope **+0.0001 GB/h**, sensitivity **~0.025 GB/h**. **Quote the
+      7-bucket row — it is the weaker claim.** Per this box's own earlier ruling these are
+      order-of-magnitude sensitivity floors, NOT calibrated 95% intervals: an hour-minimum is the
+      same extreme-value statistic as the block-minimum, and is not t-distributed however many
+      buckets there are. *Resolves a leak faster than ~0.03 GB/h; anything slower is invisible* —
+      **roughly an order of magnitude** finer than the 65-minute window's 0.3–0.4 (measured ratio
+      14×, but two σ̂ at 4 and 5 df make it good to only ~4×; do not quote a two-digit ratio).
+      **Corroborated by the card's own scaling law**, which I had and did not use: SE ∝ σ√Δ/T^1.5
+      over a 7.69× window predicts 21× ⇒ 0.014–0.019, against 0.025 measured.
       **The first version of this entry said "FLAT FLOOR, STEADY STATE" with no sensitivity at
       all** — a bare null, in the one box whose entire history is four statistics withdrawn for
       exactly that. Corrected within the hour, on review.
@@ -845,11 +880,17 @@ former silently measures old code — it cost two failed runs here.
       this card keeps catching.
       Report: `reports/cpu-runaway/20260823_123633+0200-box3-rss-floor-8h20m-partial.md`.
       **CPU: use `cpu_time` (col 5) DELTAS, never the mean of `pct_cpu_1min` (col 4).** True CPU per
-      hour is 25.8 / 26.7 / 25.7 / 23.8 / 22.4 / 21.1 / 23.8 / 30.9 / 26.6 **% of one core** — tight
-      21–31, ≈25, stable while RSS is flat. The col-4 hourly means first published here (18.1…40.2,
-      "~27") are a noisier different quantity: that gauge swings 0.0→184.9 inside one hour, and
-      >100 proves it is not per-core. Col 5 is a monotone counter; col 4 is a sampled gauge whose
-      mean depends on when the samples landed.
+      hour is 25.8 / 26.7 / 25.7 / 23.8 / 22.0 / 21.1 / 23.8 / 30.9 / 26.6 **% of one core**;
+      **25.1% overall** over 504 intervals (8.40 h) — tight 21–31, stable while RSS is flat.
+      Col 5 is a monotone counter; col 4 is a sampled gauge whose mean depends on when the samples
+      landed (it swings 0.0→184.9 inside one hour). **Two things I wrote against col 4 are WRONG and
+      were refuted by the table beside them:** it does NOT "read high in every bucket" (6 of 9 high,
+      **3 LOW** — 07, 08, 12; deviations −3.9 to +10.3, so it is noisy in both directions, not
+      biased), and ">100 proves it is not per-core" is a NON-SEQUITUR (a cpu_time delta is
+      thread-summed core-percent too and also exceeds 100 above one core — same quantity, different
+      estimator). Also: the deltas are exact only with `p` RESET on pid change; carrying it across
+      row 239 divided a 120 s interval by 60 and understated hour 08 by 0.4 pt (22.4→22.0, n=59
+      where 58 was right).
       **RETRACTS the 65-minute floor trend −0.108 GB/h above.** The 8h20m slope is +0.0001 (7
       complete buckets) — 1000× smaller, opposite sign; sustained, −0.108 drains ~0.9 GB. Like for
       like: both are floor-minima regressions. Third quantity in this box withdrawn for being read
