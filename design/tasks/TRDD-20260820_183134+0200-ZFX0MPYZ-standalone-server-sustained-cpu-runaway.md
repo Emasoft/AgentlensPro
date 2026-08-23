@@ -3,7 +3,7 @@ trdd-id: ZFX0MPYZ
 title: Standalone server sustains 150-270 percent CPU and 2.4 GB RSS over an 8-hour uptime
 column: todo
 created: 2026-08-20T18:31:34+0200
-updated: 2026-08-23T04:03:09+0200
+updated: 2026-08-23T04:11:52+0200
 current-owner: unassigned
 task-type: bugfix
 priority: high
@@ -103,24 +103,57 @@ The condition WAS obtainable after all: pid 21567 at **4h48m uptime, `ps %CPU` 9
 running the 23:00 bundle (pre-dating the 03:47 perf commit, so it is the code the original
 observation was made on). SIGUSR1 + inspector, 45 s, 257,123 samples.
 
-**The single most important correction this profile makes: the process was 83.3% IDLE during the
-window.** `ps %CPU` is a LIFETIME AVERAGE (93.6% over 4h48m ≈ 4.5 CPU-hours), so it cannot
-distinguish a sustained burn from a bursty one — and this is bursty. Every framing of this card
-as a *sustained* spin is wrong; the title included.
+> **CORRECTED 2026-08-23 04:12 — two claims in the first version of this section were FALSE and
+> are struck below. An adversarial review caught them and I verified both first-hand. A third
+> defect it alleged is REFUTED, also first-hand. Read the corrections, not the originals:**
+> `reports/cpu-runaway/20260823_040828+0200-adversarial-review-of-033ad2b.md`.
 
-Of the 16.7% busy: `_collectJsonlFiles` 72.0% inclusive, `handleCheckCacheExpiry` 36.6%,
-`getLastRequestMs`→`transcriptPathFor`→`collectFileMeta` 36.1%, `statSync` 25.6%. The top
-self-time chain is `statSync <- collectFileMeta <- transcriptPathFor <- getLastRequestMs` at
-20.3% of busy.
+**~~The process was 83.3% IDLE during the window; `ps %CPU` is a LIFETIME AVERAGE, so this is
+bursty, not sustained.~~ FALSE — INVERTED.** macOS `man ps` is explicit: "%cpu — The CPU
+utilization of the process; this is a **decaying average over up to a minute** of previous (real)
+time." This card's own line 24 already said "1-min decaying avg" and was RIGHT; I contradicted it
+without addressing the contradiction, then built a headline on the contradiction.
+
+**The correct sustained figure comes from `TIME/ELAPSED`, not `%CPU`:**
+
+| process | elapsed | cpu time | sustained |
+|---|---|---|---|
+| profiled pid 21567 | 5:03:15 (18,195 s) | 83:07 (4,988 s) | **27.4% of one core** |
+| original incident (2026-08-20) | 8:12:40 (29,560 s) | 65:35 (3,935 s) | **13.3%** |
+
+So the profiled process burns **2.1× the original incident's sustained rate**. The burn IS
+sustained; the card's original framing was right and my "bursty" correction was wrong. The 83.3%
+idle reading is a true measurement of a 45 s window that happened to catch a quiet stretch — which
+is precisely the one-snapshot error this card warns about for RSS, committed here for CPU. Minute
+scale is genuinely spiky (93.6% at one sample, 12.9% two hours later); lifetime is not.
+
+**~~`_collectJsonlFiles` 72.0% inclusive~~ FALSE — a 4.1× double-count. TRUE value: 17.4%.** My
+inclusive rollup walked each sample's ancestor chain and added to a map keyed by frame LABEL,
+deduping node ids but not labels — so a self-recursive function (`_collectJsonlFiles` recurses per
+directory) was counted once per stack frame instead of once per sample. Verified by re-running
+with per-sample label dedupe: `counted=72.0% TRUE=17.4%`. **My own `roots.mjs` had already printed
+17.4% in the same session and I published both numbers without reconciling them** — the discrepancy
+was in my own output, not hidden.
+
+**The non-recursive figures are UNAFFECTED** (same re-run: `handleCheckCacheExpiry` 36.6%,
+`getLastRequestMs` 36.1%, `statSync` 25.6% — identical before and after dedupe), so the trigger
+attribution below stands. The top self-time chain
+`statSync <- collectFileMeta <- transcriptPathFor <- getLastRequestMs` at 20.3% of busy is a
+leaf-node measurement and was never subject to the double-count.
 
 **Trigger, by root-to-leaf chain:** 36.6% of busy enters through `wrappedHandler →
 handleCheckCacheExpiry` — an HTTP request, i.e. the `check_cache_expiry` MCP tool, reached from
 `agentlenspro cache-expired` (`src/cli/cacheExpiredCli.ts:115` → `callTool`). The periodic
 `runLogScan` timer is only 8.2%. **The dominant trigger is a request path.**
 
-Cost from the server's own log: 897 calls, **2032 s total**, mean 2265 ms, p50 775 ms,
-p90 4142 ms, **p99 25.8 s, max 65 s** — against a CLI budget of 1500 ms, so the CLI abandons the
+Cost from the server's own log: **1022 calls, 2210.7 s total**, mean 2169 ms, p50 771 ms,
+p90 3930 ms, **p99 25.6 s, max 65.1 s** — against a CLI budget of 1500 ms, so the CLI abandons the
 request while the server keeps working.
+
+**This cost belongs to the PROFILED process, verified — the review's contrary claim is REFUTED.**
+The review alleged 78% of it belonged to earlier, never-profiled processes. Split on the last boot
+marker (`Loaded N spans from …`, line 10,753 of 379,175 — i.e. 97% of the log postdates it):
+**after = 1022 calls / 2210.7 s, before = 0 calls / 0.0 s.** Every recorded call is this process's.
 
 **TWO HYPOTHESES WERE DISPROVED BY MEASUREMENT, and no fix was shipped on them.** (1) That
 `collectFileMeta()`'s 2 s TTL is *born expired* because `_fileMetaCacheAt` is stamped with a
@@ -138,7 +171,11 @@ the fix target from "one slow function" to the synchronous fs work blocking the 
 absence of any concurrency control on overlapping probes.
 
 **NOT established:** which call sites produce the p99 (contention is implicated, not proven
-per-call); whether RSS is a leak or steady state (needs the series box 3 asks for); box 5.
+per-call); whether RSS is a leak or steady state (needs the series box 3 asks for); box 5. **And
+the profile is ONE 45 s window** — it names the frames of the work it caught, which is what box 1
+asks, but it is not proof that this mix holds across the other 5 hours. A second window at a
+different hour would cost 45 s and is the cheap way to settle it; until then treat the mix as
+sampled, not characterised.
 
 **Trap recorded:** `out/logReader.js` is a STALE artifact of an older layout and lacks
 `transcriptPathFor`; the live test build is `out/test/logReader.js`. A script requiring the
