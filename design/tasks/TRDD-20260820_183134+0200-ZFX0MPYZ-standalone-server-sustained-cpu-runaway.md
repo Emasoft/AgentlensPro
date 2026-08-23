@@ -3,7 +3,7 @@ trdd-id: ZFX0MPYZ
 title: Standalone server sustains 27 percent of a core and 1.4 GB RSS — check_cache_expiry probe walks
 column: todo
 created: 2026-08-20T18:31:34+0200
-updated: 2026-08-23T05:48:39+0200
+updated: 2026-08-23T06:20:54+0200
 current-owner: unassigned
 task-type: bugfix
 priority: high
@@ -596,6 +596,14 @@ former silently measures old code — it cost two failed runs here.
       On the block-minimum estimator I flagged: a CONSTANT block size makes its upward bias roughly
       constant across blocks, which shifts the intercept and not the slope — so trend estimation
       here is defensible after all.
+      **BUT THAT DEFENDS THE SLOPE, NOT THE INTERVAL — a later review's point, and it is a
+      different one.** Constant bias rescues the *point* estimate; it says nothing about the
+      *distribution* of a block-minimum statistic, which is an extreme-value quantity and not
+      t-distributed however many blocks there are. So the `95% CI [a, b]` notation imports a
+      distributional claim this estimator does not support. **Read every interval in this box as
+      "no leak signature is visible at this resolution", not as a calibrated 95% interval** — the
+      MDE remains useful as an order-of-magnitude sensitivity floor, which is all it was ever used
+      for here.
       **The per-process rate, for construction not for value** (pid 21567, uptime 308→375 min,
       n=68): RSS 1.379 → 1.361 GB, endpoint **−0.016 GB/h**, least-squares **−0.046 GB/h** —
       **consistent with zero**, as the CI above shows. The contribution is that it uses ONE process
@@ -638,8 +646,38 @@ former silently measures old code — it cost two failed runs here.
       REAPED with the process group. macOS has no `setsid`; use `scripts_dev/detach-run.py`
       (double-fork) and verify **ppid 1**. Already recorded in LOCAL memory as
       `detach-long-jobs-from-session-lifecycle`.
-- [ ] A fix lands with a REGRESSION GUARD that fails on the pathological input, not merely a
+- [x] A fix lands with a REGRESSION GUARD that fails on the pathological input, not merely a
       measurement showing the number dropped on one run.
+      **FIX `581524c`** — `collectFileMeta()` stamped `_fileMetaCacheAt` with a PRE-walk
+      `Date.now()`, so the memo's usable life was `TTL − walkDuration`. Once a walk outlives its
+      TTL the entry is born expired, and because the replacement walk each miss writes is ALSO
+      longer than the TTL, the collapse is **self-sustaining**: N probe candidates cost N full
+      recursive readdir+stat passes, for any N. Stamp taken after the walk.
+      **GUARD `ab02e17`** — and the first guard was not good enough. The 2500 ms stall injects the
+      delay INSIDE the walk, so inflating `walkDuration` and then moving the stamp past it share
+      one primitive; that experiment **could not fail**, and showed the guard sensitive to the knob
+      the fix turns rather than showing the fix. The settling test reaches `walkDuration > TTL`
+      from the **corpus** side instead — 6000 files, 3 ms TTL, **no injected stall anywhere**:
+      red on the pre-walk stamp with "got 6" (walk 27.6–31.6 ms), green after, 3/3 each way.
+      It also refuses to pass vacuously — it asserts the walk really did exceed the TTL, so a
+      machine fast enough to walk 6000 files in under 3 ms turns it red with "raise N".
+      **A review proposed a different settling test (TTL = 1 ms, no stall, on the 5-file fixture)
+      and it was VACUOUS**: a real walk over 5 files here is 0.04–0.09 ms, so the entry is not born
+      expired, the OLD code passes too — and under that proposal's own criterion ("green on both
+      means the mechanism story is wrong") shipping it unmeasured would have argued a real bug away.
+      **CONSUMERS OF THE LOOSENED STALENESS BOUND, enumerated rather than asserted** (the previous
+      claim named the batch-loader and then did not analyse it): `standalone/server.ts:1888` is the
+      startup batch — it runs once at boot behind a `restoredFromDisk` early-return, on a **cold**
+      cache, so there is no entry to be stale; `src/cli/searchCli.ts:126` is a one-shot CLI in a
+      fresh process, likewise cold; `transcriptPathFor`/`reparseSession` are the probe itself, which
+      re-runs every request. And the bound that loosened was never being delivered: the old lifetime
+      `TTL − walkDuration` is *smaller* than TTL and shrank as the corpus grew, so no consumer was
+      receiving the tight freshness the comment defended.
+      **STILL UNFIXED, and it is the actual runaway:** this removes an amplifier, not the source.
+      147 `check_cache_expiry` calls/hour each pay ONE full 14,509-file walk even when the memo
+      works perfectly. The shape that follows — memoize the ANSWER (the tool reports against a
+      60-minute TTL) plus abandon server work on client disconnect — changes observable behaviour
+      and is **proposal only, pending the user**.
 - [x] The 96%-disk observation is either attributed to the server or explicitly excluded, with the
       measurement that decided it.
       2026-08-23: **EXCLUDED.** The server's ENTIRE data dir `~/.agentlens` is **6.2 GB** — 0.33%
