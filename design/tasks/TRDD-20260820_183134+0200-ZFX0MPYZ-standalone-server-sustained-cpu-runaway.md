@@ -3,7 +3,7 @@ trdd-id: ZFX0MPYZ
 title: Standalone server sustains 150-270 percent CPU and 2.4 GB RSS over an 8-hour uptime
 column: todo
 created: 2026-08-20T18:31:34+0200
-updated: 2026-08-23T04:43:41+0200
+updated: 2026-08-23T04:46:59+0200
 current-owner: unassigned
 task-type: bugfix
 priority: high
@@ -232,14 +232,18 @@ extra windows nearly free, so the n=1 version of this table was replaced rather 
 | 3 | 40.4 s | 13.61 s | 9.63 s | 70.8% |
 | 4 | 40.4 s | 8.69 s | 5.92 s | 68.1% |
 
-**Mean 68.9%, range 68.1–70.8%.** The striking part is the stability: process CPU itself swings
-**1.6×** across these windows (8.69 s → 13.61 s), yet the main-thread SHARE barely moves. The
-absolute burn is bursty; the ratio is not — which is why a single window was enough to support
-"the main thread is the majority", though not enough to name the number.
+**Mean 68.9%, range 68.1–70.8%** — but stated precisely, because the general form is not what was
+measured: **across a 1.6× swing in absolute process CPU (8.69 s → 13.61 s) within one ~5-minute
+cluster, the main-thread SHARE moved less than 3 points.** That is meaningful precisely because
+the swing was large. It is NOT the claim "the ratio is stable" in general — four windows minutes
+apart on one process are a cluster, not a sample of the regime space, and the series records
+extremes (93.6% vs 5.4% `%CPU`) that no window here spans.
 
-`ps -M` lifetime says 78.4% main, about 10 points higher than the windowed 68.9%. Not glossed:
-the lifetime figure includes process startup, which is main-thread-heavy and would lift the
-share. Both methods agree on the conclusion; they are not the same measurement.
+`ps -M` lifetime says 78.4% main, about 10 points higher than the windowed 68.9%. **Both support
+"the main thread is the majority"; the cause of the gap is UNMEASURED.** An earlier version of
+this line explained it as main-thread-heavy startup — plausible, probably true, and never
+measured. Offering an unmeasured mechanism is worse than stating the bare discrepancy, because it
+closes a question the reader would otherwise check.
 
 **TRAP, hit while taking exactly this measurement:** `ps -o time=` prints **`MM:SS.ss`** here
 (`90:45.41` = 90 minutes), not `HH:MM:SS`. Parsing it as `HH:MM:SS` yielded "1422 s of CPU in 60 s
@@ -343,16 +347,28 @@ former silently measures old code — it cost two failed runs here.
       this attributes main-thread work only — see the box above.
 - [ ] RSS growth is characterised as steady-state or as a leak — one measurement cannot tell them
       apart, so this needs a series, not a second snapshot.
-      2026-08-23 04:41 — FIRST READ of the series (26 samples, 04:14→04:39, 1-min cadence, into
-      `reports/cpu-runaway/rss-series-20260823_041323+0200.tsv`): **RSS OSCILLATES, it does not
-      climb.** min 1.17 GB, max 1.53 GB, first 1.38 GB → last 1.36 GB; least-squares trend
-      **−0.192 GB/hour** (negative); **19 of 24 steps reverse direction**. That is sawtooth —
-      allocate/collect — and is the signature of steady state, not of a leak. Corroborated by the
-      GC finding above: a ~1.4 GB heap under continuous concurrent marking is exactly what draws
-      a sawtooth.
-      **STILL OPEN, and this is the honest limit:** 25 minutes cannot exclude a leak whose
-      timescale is hours, and the card's own observation was 2.47 GB at 8h12m against 1.36 GB
-      here. The box closes when the 12 h series is read, not on this window.
+      2026-08-23 04:50 — FIRST READ (32 samples, 1-min cadence, into
+      `reports/cpu-runaway/rss-series-20260823_041323+0200.tsv`). RSS oscillates between
+      1.17 and 1.53 GB.
+      **THE DISCRIMINATOR IS THE SAWTOOTH FLOOR, not the mean, the slope, or the direction
+      changes.** Sawtooth RSS is what ANY garbage-collected runtime produces, leaking or not; a
+      leak shows as a rising FLOOR, and the floor moves long before the mean does. Per-10-minute
+      minima: **1.347 → 1.348 → 1.167 → 1.334 GB — not rising.** No leak signature in this window.
+      Two statistics I first published here are WITHDRAWN as non-discriminating: "19 of 24 steps
+      reverse direction" (a real leak at this scale — ~2.5 MB/min against tens of MB of jitter —
+      would flip direction just as often, so the count measures noise-to-step ratio, not
+      monotonicity), and the mutual corroboration with the GC finding (circular: that attribution
+      is itself only "indicated, not measured", and sawtooth does not discriminate leak from
+      steady state either way).
+      The trend survives scrutiny but changes nothing: OLS slope **−0.181 GB/h**, and because
+      residuals are NEGATIVELY autocorrelated (Durbin-Watson 2.70, rho −0.36 — mean reversion,
+      i.e. sawtooth) the OLS standard error is conservative, giving corrected |t| ≈ 4.1. So it is
+      distinguishable from zero — but it points AWAY from a leak, and a 32-minute slope cannot be
+      extrapolated to hours regardless.
+      **STILL OPEN:** 32 minutes cannot exclude an hours-scale leak; the card's own observation
+      was 2.47 GB at 8h12m against 1.36 GB here. Power analysis on the measured residual sd
+      (0.055 GB) says a 60-minute window already detects the 0.136 GB/h leak the card implies, so
+      the 12 h series will settle this decisively. Read the FLOOR when it lands.
       TRAP, cost one failed start: a `setsid nohup … &` sampler launched from a tool call is
       REAPED with the process group. macOS has no `setsid`; use `scripts_dev/detach-run.py`
       (double-fork) and verify **ppid 1**. Already recorded in LOCAL memory as
