@@ -1363,10 +1363,17 @@ former silently measures old code — it cost two failed runs here.
   significant figure). No rising floor is visible at that resolution. Calling it a leak bound needs
   assumptions this file cannot check; calling it confound-free needs a CPU-trend precision this file
   does not have.* **The tick stands on THAT, and on nothing stronger.**
-  For the record, the confound test's power stated as a number rather than as a hedge: it could only
-  ever have detected a confound accounting for **more than ~39%** of the slope
-  (t·SE(CPU~hour)·b₂/|b_floor| = 2.262 × 0.324 × 0.0075 / 0.01393), which is what the −38%…+41%
-  interval says.
+  **A "power ≈ 39%" sentence stood here for one commit and is DELETED — the chain's signature defect,
+  in its last instance, in the paragraph that closes it.** It was `t_{α/2}·SE·b₂/|b_floor|`, which is
+  the CI half-width — the **50%**-power point, where a confound is caught half the time — published
+  as the floor the test "could only ever have detected". **This card's own convention is
+  `t_{α/2} + t_β`**, recorded in this very box when it corrected `2.776` to `2.776 + 0.941 = 3.72` at
+  df=4; at df=9 that is `2.262 + 0.883 = 3.145`, giving **~55%**, not 39%. So the sentence made the
+  instrument look *more* sensitive than the card's own corrected standard allows — the same
+  direction as the error already withdrawn here. And it was the one number in round 5 I took from a
+  reviewer **without deriving it myself**, which is precisely the failure the round was written to
+  end. The published **−38%…+41%** share interval already carries the information; nothing replaces
+  the deleted sentence.
   What would close the residual: a request-rate or GC-count series from the server's own logs over
   this same window — CPU%-of-core proxies compute, not allocation.
   **META, and the reason this is the last entry.** Three rounds, each correcting the last, each
