@@ -180,9 +180,18 @@ ago, and only now actually measured.
 Σdeltas **telescopes** to (cpu_last − cpu_first), which IS the endpoint numerator — measured:
 `sum(deltas)=7588.22`, `(last−first)=7616.86`, gap **28.64 s** = exactly the two intervals dropped
 at the pid change. So both figures divide one numerator; the only differences are −28.6 s on top
-(−0.38%) and 30240 vs 30388 s underneath (−0.49%), **same sign, so they cancel**. The 0.03 pt
-agreement was GUARANTEED — it would hold just as well against a fabricated col 5, provided it were
-monotone. Zero diagnostic power, and I published it as corroboration.
+(−0.376%) and 30240 vs 30388 s underneath (−0.487%). *("Same sign, so they cancel" was loose twice
+over and is corrected: the two quantities do both shrink, but shrinking the DENOMINATOR raises the
+ratio, so their **effects oppose** — and they do not cancel, they leave a residual.)* Net
+**+0.112% on the ratio = +0.0280 pt**, against an observed difference of **+0.0280 pt** — predicted
+to four decimals. **That is the finding, not a caveat on it:** the entire gap between the two
+figures is accounted for by two known bookkeeping artifacts, leaving exactly nothing for
+"agreement between methods" to mean. It would hold just as well against a fabricated col 5,
+provided it were monotone — so it carries **no power to corroborate the measurement**, and I
+published it as corroboration. *(Not literally "zero diagnostic power", which overstated it in my
+own favour the other way: a corrupted FIRST or LAST endpoint moves the endpoint numerator but only
+one delta, so the comparison does detect endpoint corruption and non-monotonicity. It just cannot
+say anything about whether col 5 measures CPU.)*
 **The genuinely independent estimator is col 4** — a different measurement, not a rearrangement of
 the same one — and it does NOT closely agree: **+2.75 pt** (that is the bias test above). That
 disagreement is the honest comparison, and it is why col 5 is preferred on the grounds of being a
@@ -201,9 +210,16 @@ lifetime average is a CUMULATIVE figure, so splitting it is the whole point:
 across its whole life" (the reassuring one); then, correcting it, **"the rate DECLINED, real and
 unexplained"** — which is **also WITHDRAWN**. Two exact period-means cannot distinguish a declining
 rate from a different workload in the unsampled period, and a candidate confound is visible in the
-server log: 289 `bodies → store: ingested N … 0.50GB read` spool-backfill lines. **I cannot date
-them — the log carries no timestamps at all** (its first lines are bare `[AgentLens] …`), so the
-backfill is a *candidate* confound and naming it as the cause would repeat the error a third time.
+server log: 289 `bodies → store: ingested N … 0.50GB read` spool-backfill lines.
+**They cannot be dated, and the reason had to be corrected — I first wrote "the log carries no
+timestamps at all", which is FALSE, and I had asserted it from `head -3` of a 394,171-line file.**
+A whole-file scan finds **37 lines carrying a date-or-time string**. But every one is a date *inside
+a value* — segment filenames like `span store: compressed sealed segment 2026-07-14.ndjson` — never
+an emission timestamp, so it dates the segment, not the line, and cannot date a neighbour. Exactly
+**1** backfill line falls within 50 lines of any of the 37, and that one is a segment filename too.
+**So: no per-line timestamps ⇒ the backfill still cannot be dated, and it stays a *candidate*
+confound.** The conclusion survived; the evidence for it was a preview standing in for the file,
+which is this card's own recurring defect committed while documenting it.
 **What is measured:** the unsampled first 5.15 h averaged 27.44%, the measured 8.44 h window
 25.07%, whole life 25.96%. **No trend is claimed.**
 On the title: it says *"27 percent of a core"*, from the original 2026-08-20 observation. The
