@@ -105,10 +105,15 @@ suite('LogReader — reparseSession() must not re-walk the whole log tree on eve
   // TRDD-ZFX0MPYZ — the SETTLING test for the post-walk-stamp fix, and the reason it is not the one
   // the review proposed. That proposal was `FILE_META_CACHE_TTL_MS = 1` with no stall, on the 5-file
   // fixture above, on the argument that "any real walk exceeds 1ms". Measured, it does not: a real
-  // readdir+stat over 5 files here is 0.04-0.09ms, so the entry is NOT born expired, the OLD code
-  // passes too, and the test is vacuous — which under the proposal's own stated criterion ("green on
-  // both means the mechanism story is wrong") would have argued the bug away. Measured walk times on
-  // this machine: n=5 0.04-0.09ms, n=200 0.47-1.26ms, n=1000 2.5-3.6ms, n=3000 8.9-9.6ms.
+  // readdir+stat over 5 files ON THIS DISK is 0.04-0.09ms, so the entry is NOT born expired, the OLD
+  // code passes too, and the test is vacuous — which under the proposal's own stated criterion
+  // ("green on both means the mechanism story is wrong") would have argued the bug away. Measured
+  // walk times here: n=5 0.04-0.09ms, n=200 0.47-1.26ms, n=1000 2.5-3.6ms, n=3000 8.9-9.6ms.
+  // "Vacuous" there is a property of THIS machine, not of that design: on a loaded container or a
+  // cold spinning disk 5 files could exceed 1ms and it would suddenly have teeth. That is not a
+  // rescue — a test whose meaning flips with machine speed is the same flakiness problem in
+  // different clothes — but the corpus-side design below is what makes the margin explicit and
+  // checkable instead of leaving it to the hardware.
   //
   // What this test does instead: reach `walkDuration > TTL` from the CORPUS side, with NO injected
   // stall anywhere. 6000 files walk in ~17-20ms against a 3ms TTL, so the born-expired condition is real
@@ -116,11 +121,22 @@ suite('LogReader — reparseSession() must not re-walk the whole log tree on eve
   // since inflating the walk and then moving the stamp past it share one primitive and the
   // experiment therefore could not fail.
   //
-  // It also refuses to pass vacuously: it MEASURES the walk (first call minus a cached call, since
-  // `_sessionIdForFile` is pure path work and a cached lookup is walk-free) and asserts it really did
-  // exceed the TTL. On a machine fast enough that 6000 files walk in under 3ms this goes RED with
-  // "no longer reproduces" instead of green-and-meaningless.
-  test('a real walk slower than the TTL still yields a usable memo (no injected stall)', () => {
+  // It also refuses to pass vacuously: it MEASURES the walk and asserts it really did exceed the
+  // TTL. On a machine fast enough that 6000 files walk in under 3ms this goes RED with "raise N"
+  // instead of green-and-meaningless. That guard is stronger than it first looks — it also means the
+  // OLD code can never pass SILENTLY here, because a walk fast enough not to be born-expired trips
+  // the precondition before the walk-count assertion is ever reached.
+  //
+  // MARGIN, stated because a passing run prints nothing and an unstated margin is unfalsifiable:
+  // the measured quantity is the first walk on a fresh reader, which is IDENTICAL code on both
+  // paths, so the red-path figures characterise the green path too — 27.6-31.6ms against a 6ms bar
+  // (TTL x 2), i.e. ~4.6-5.3x. The lookups on the other side of the inequality run ~0.02ms.
+  test('a real walk slower than the TTL still yields a usable memo (no injected stall)', function (this: Mocha.Context) {
+    // 6000 writes + the walk + a 6000-file teardown is 1.3-1.7s on local NVMe, but many-small-file
+    // I/O on a CI overlayfs commonly runs several times slower and mocha's default here is 10s.
+    // Raised so a slow filesystem fails as a slow filesystem ("timeout exceeded") instead of being
+    // read as a failure of the guard.
+    this.timeout(30000)
     const cwd = path.join(root, 'workspace')
     // N=6000, not 3000: at 3000 the mocha-measured walk ranged 3.4-15.4ms across runs as the page
     // cache warmed, and the low end left only 1.15x over a 3ms TTL — enough to make the precondition
@@ -167,9 +183,25 @@ suite('LogReader — reparseSession() must not re-walk the whole log tree on eve
         `precondition failed — first lookup took ${firstMs.toFixed(2)}ms, not comfortably above the ` +
         `${TTL_MS}ms TTL, so "born expired" is not reproduced and this test proves nothing (raise N above ${N})`)
 
+      const tL = Number(process.hrtime.bigint())
       for (const id of ids.slice(1)) {
         assert.ok(r.transcriptPathFor(id), `lookup resolves ${id}`)
       }
+      const lookupsMs = (Number(process.hrtime.bigint()) - tL) / 1e6
+
+      // SECOND PRECONDITION — the walk-count assertion below depends on TWO inequalities, and
+      // guarding only the first is how a guard gets believed for something it did not show:
+      //   (i)  walkDuration > TTL          — asserted above; without it nothing is born expired
+      //   (ii) time(these lookups) < TTL   — THIS; without it the memo expires from lookup cost
+      // (ii) is not hypothetical: probing the OLDEST ids at TTL=3ms produced "got 2" on the FIXED
+      // code, because each lookup was a full N-entry scan. That was measured, not imagined. Leaving
+      // it unasserted means a later lookup-cost regression (an fs call added to _sessionIdForFile, a
+      // sort-order change that stops newest ids landing at the front, a slow runner) fails as
+      // "expected 1 walk ... got 2" — which reads as THE STAMP FIX REGRESSED and would send someone
+      // to re-open a closed bug. A comment cannot prevent that misreading; an assertion can.
+      assert.ok(lookupsMs < TTL_MS / 2,
+        `precondition failed — ${ids.length - 1} lookups took ${lookupsMs.toFixed(2)}ms against a ` +
+        `${TTL_MS}ms TTL, so a miss here would measure LOOKUP cost, not the stamp`)
 
       // THE ASSERTION: with the stamp taken AFTER the walk, a walk that outlives its own TTL still
       // produces a memo the following lookups hit. With the pre-walk stamp every one of these 6
