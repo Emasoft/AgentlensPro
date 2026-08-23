@@ -183,8 +183,9 @@ at the pid change. So both figures divide one numerator; the only differences ar
 (−0.376%) and 30240 vs 30388 s underneath (−0.487%). *("Same sign, so they cancel" was loose twice
 over and is corrected: the two quantities do both shrink, but shrinking the DENOMINATOR raises the
 ratio, so their **effects oppose** — and they do not cancel, they leave a residual.)* Net
-**+0.112% on the ratio = +0.0280 pt**, against an observed difference of **+0.0280 pt** — predicted
-to four decimals. **That is the finding, not a caveat on it:** the entire gap between the two
+**+0.112% on the ratio = +0.0280 pt**, matching the observed difference of **+0.0280 pt** to four
+decimals — an algebraic **identity** with that difference, not an independent prediction of it.
+**That is the finding, not a caveat on it:** the entire gap between the two
 figures is accounted for by two known bookkeeping artifacts, leaving exactly nothing for
 "agreement between methods" to mean. It would hold just as well against a fabricated col 5,
 provided it were monotone — so it carries **no power to corroborate the measurement**, and I
@@ -211,15 +212,25 @@ across its whole life" (the reassuring one); then, correcting it, **"the rate DE
 unexplained"** — which is **also WITHDRAWN**. Two exact period-means cannot distinguish a declining
 rate from a different workload in the unsampled period, and a candidate confound is visible in the
 server log: 289 `bodies → store: ingested N … 0.50GB read` spool-backfill lines.
-**They cannot be dated, and the reason had to be corrected — I first wrote "the log carries no
-timestamps at all", which is FALSE, and I had asserted it from `head -3` of a 394,171-line file.**
-A whole-file scan finds **37 lines carrying a date-or-time string**. But every one is a date *inside
-a value* — segment filenames like `span store: compressed sealed segment 2026-07-14.ndjson` — never
-an emission timestamp, so it dates the segment, not the line, and cannot date a neighbour. Exactly
-**1** backfill line falls within 50 lines of any of the 37, and that one is a segment filename too.
-**So: no per-line timestamps ⇒ the backfill still cannot be dated, and it stays a *candidate*
-confound.** The conclusion survived; the evidence for it was a preview standing in for the file,
-which is this card's own recurring defect committed while documenting it.
+**They cannot be dated — but it took THREE attempts to state the evidence correctly, each one the
+same defect one layer down.** (i) "The log carries no timestamps at all" — FALSE, and asserted from
+`head -3` of a 394,171-line file. (ii) "All 37 date-bearing lines are segment filenames" — ALSO
+FALSE, and asserted from `head -12` of a `cut -c1-130` view: twelve of thirty-seven, truncated.
+Three of them carry **full ISO datetimes with times** (usage-window boundaries in account
+auto-calibration lines), which are not filenames at all.
+
+**(iii) Inspected properly — all 37 matches, untruncated:** 33 are segment names
+(`compressed sealed segment 2026-08-18.ndjson → …`, `retention: deleted segment 2026-07-19`), and
+the rest are usage-window boundary datetimes. **Every one is a date describing DATA — which segment,
+which window — never the time the line was written.**
+
+**The real evidence for "no per-line timestamps" is the line format, not a regex's silence:**
+**348,785 of 394,171 lines begin with the bare `[AgentLens] ` prefix** and the remainder are
+stack-trace continuations (`    at …`). There is no timestamp field. A scan for three formats the
+first regex would have missed — epoch millis, `Aug 23 08:12`, bracketed `[08:12`— returns **0**.
+⇒ **The backfill cannot be dated and stays a *candidate* confound.** (The earlier "1 backfill line
+within 50 lines of a timestamp" is **non-probative** and withdrawn: line proximity in an
+untimestamped log says nothing about datability.)
 **What is measured:** the unsampled first 5.15 h averaged 27.44%, the measured 8.44 h window
 25.07%, whole life 25.96%. **No trend is claimed.**
 On the title: it says *"27 percent of a core"*, from the original 2026-08-20 observation. The
