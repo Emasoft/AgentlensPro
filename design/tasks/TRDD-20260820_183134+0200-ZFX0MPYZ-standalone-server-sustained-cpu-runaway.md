@@ -3,7 +3,7 @@ trdd-id: ZFX0MPYZ
 title: Standalone server sustains 150-270 percent CPU and 2.4 GB RSS over an 8-hour uptime
 column: todo
 created: 2026-08-20T18:31:34+0200
-updated: 2026-08-23T04:11:52+0200
+updated: 2026-08-23T04:22:21+0200
 current-owner: unassigned
 task-type: bugfix
 priority: high
@@ -150,10 +150,52 @@ Cost from the server's own log: **1022 calls, 2210.7 s total**, mean 2169 ms, p5
 p90 3930 ms, **p99 25.6 s, max 65.1 s** — against a CLI budget of 1500 ms, so the CLI abandons the
 request while the server keeps working.
 
-**This cost belongs to the PROFILED process, verified — the review's contrary claim is REFUTED.**
-The review alleged 78% of it belonged to earlier, never-profiled processes. Split on the last boot
-marker (`Loaded N spans from …`, line 10,753 of 379,175 — i.e. 97% of the log postdates it):
-**after = 1022 calls / 2210.7 s, before = 0 calls / 0.0 s.** Every recorded call is this process's.
+> **CORRECTED AGAIN 2026-08-23 04:20 — the paragraph that stood here "refuted" the review and was
+> itself WRONG. Third correction on this section; the review was right both times.**
+
+**~~This cost belongs to the profiled process; the review's contrary claim is REFUTED.~~ FALSE.**
+I split the log on `Loaded N spans from …` and found the last at line 10,753 with zero calls
+before it. **That marker is a RETIRED log format.** The current one reads
+`Loaded N span(s) (last 24h window) from …`, so my grep matched only old-format boots and I
+concluded "no boots after line 10,753" about a log with 199 successful boots (counted on the
+`OTLP receiver →` line, which is emitted once per successful start; the 423 `Refusing to start`
+lines are FAILED starts and must not be counted as boots).
+
+**Correct split, on the real last boot (line 371,025 of 379,175):**
+
+| window | calls | total | mean |
+|---|---|---|---|
+| **after last boot — the profiled process** | 769 | **728.7 s** | **947 ms** |
+| before last boot — earlier, never-profiled processes | 313 | **1576.1 s** | 5035 ms |
+| total | 1082 | 2304.9 s | |
+
+So **68.4% of the cost belongs to processes I never profiled**, and I overstated the profiled
+process's own consumption by **3.2×**. Worse for the earlier framing: the earlier processes averaged
+**5035 ms/call against the profiled one's 947 ms**, so the p99/max outliers this card leaned on
+most likely belong to those, not to the process the profile describes. Corroborating: the three
+calls captured during a 60 s instrumented window measured 1193/693/1685 ms — the 947 ms regime,
+not the 5035 ms one.
+
+## 2026-08-23 04:20 — BOX 1 IS UNTICKED: the profile cannot see most of the CPU
+
+A V8 CPU profile samples **only the main isolate thread**. `ps -M -p 21567` (per-thread):
+
+| threads | cpu time | share of process |
+|---|---|---|
+| main | 67:37 (4,057 s) | **78.4%** |
+| 4 × libuv threadpool | ~4:40 each (~1,120 s) | **21.6%** |
+
+And in the instrumented 60 s window the gap is far wider than the lifetime ratio: the V8 profile
+measured the main thread at **11.3% of one core**, while the process's own `TIME` delta over the
+same minutes ran **23.0% → 38.2%**. So **the majority of the CPU in the window was burned off the
+main thread, where the profiler is blind** — and node's async fs work (the very
+`readdir`/`stat` load this section attributes) executes on exactly those threadpool threads.
+
+This is a larger defect than either earlier correction. Box 1 asks that the busy stack be
+"IDENTIFIED, not guessed". What the profile identifies is the *main thread's* stack, which is a
+minority of the burn in-window. **Box 1 is therefore unticked** until the off-main-thread work is
+measured (`--cpu-prof` does not cover it either; this needs `sample`/Instruments, `dtrace`, or
+libuv-level instrumentation such as `UV_THREADPOOL_SIZE` variation with a controlled load).
 
 **TWO HYPOTHESES WERE DISPROVED BY MEASUREMENT, and no fix was shipped on them.** (1) That
 `collectFileMeta()`'s 2 s TTL is *born expired* because `_fileMetaCacheAt` is stamped with a
@@ -183,20 +225,44 @@ former silently measures old code — it cost two failed runs here.
 
 ## Acceptance criteria
 
-- [x] The busy stack is IDENTIFIED, not guessed — a CPU profile (`node --cpu-prof`, or SIGUSR1 +
+- [ ] The busy stack is IDENTIFIED, not guessed — a CPU profile (`node --cpu-prof`, or SIGUSR1 +
       inspector) taken against a server reproducing the condition, naming the hot frames.
-      2026-08-23: 45 s / 257,123-sample inspector profile of pid 21567 at 4h48m uptime; frames
-      and percentages above, raw evidence in the report.
+      2026-08-23: TICKED, THEN UNTICKED THE SAME NIGHT. Two inspector profiles (45 s / 257,123
+      samples and 60 s / 353,511 samples) of pid 21567 name the MAIN-THREAD frames — but a V8
+      profile is blind to the libuv threadpool, which holds 21.6% of the process's lifetime CPU
+      and the clear majority of it in-window (main thread 11.3% of a core vs the process's
+      23.0-38.2%). The async `readdir`/`stat` work this section attributes runs precisely there.
+      Naming a minority of the burn is not identifying the busy stack. NEEDS: off-main-thread
+      measurement (`sample`/Instruments/dtrace, or UV_THREADPOOL_SIZE variation under load).
 - [x] The work is attributed to a trigger: a periodic timer, a request path, the log watcher, the
       span-store compaction, or GC pressure from the 2.47 GB heap.
-      2026-08-23: a REQUEST path (`check_cache_expiry`, 36.6% of busy) dominates; the
-      `runLogScan` timer is 8.2%. GC was 0.98%.
+      2026-08-23: on the MAIN THREAD, a REQUEST path (`check_cache_expiry`, 36.6% of busy)
+      dominates; the `runLogScan` timer is 8.2%; GC 0.98%. Survives both correction rounds
+      unchanged (the frames are non-recursive, so the double-count never touched them). CAVEAT:
+      this attributes main-thread work only — see the box above.
 - [ ] RSS growth is characterised as steady-state or as a leak — one measurement cannot tell them
       apart, so this needs a series, not a second snapshot.
+      2026-08-23 04:13: a SERIES is now being collected — 1-minute samples of
+      `pid/elapsed/%cpu/TIME/RSS` for 12 h into
+      `reports/cpu-runaway/rss-series-20260823_041323+0200.tsv`. Early rows already show RSS
+      oscillating (1.44 → 1.60 → 1.46 → 1.53 → 1.44 GB), i.e. sawtooth, not monotonic — but four
+      points decide nothing and this box stays open until the series is read.
+      TRAP, cost one failed start: a `setsid nohup … &` sampler launched from a tool call is
+      REAPED with the process group. macOS has no `setsid`; use `scripts_dev/detach-run.py`
+      (double-fork) and verify **ppid 1**. Already recorded in LOCAL memory as
+      `detach-long-jobs-from-session-lifecycle`.
 - [ ] A fix lands with a REGRESSION GUARD that fails on the pathological input, not merely a
       measurement showing the number dropped on one run.
-- [ ] The 96%-disk observation is either attributed to the server or explicitly excluded, with the
+- [x] The 96%-disk observation is either attributed to the server or explicitly excluded, with the
       measurement that decided it.
+      2026-08-23: **EXCLUDED.** The server's ENTIRE data dir `~/.agentlens` is **6.2 GB** — 0.33%
+      of a 1.9 TB volume; it cannot produce a 96% figure. This repo's `rust-core/target` is
+      **69 GB**, 11× the server's whole footprint, and the card recorded it at 41 GB on 2026-08-20
+      — so the build cache grew 28 GB in three days while the server held 6.2 GB. The volume has
+      also recovered on its own to 90% / 202 GB free with no server change, which a server-caused
+      figure would not do. Measurement:
+      `reports/cpu-runaway/20260823_041540+0200-box5-disk-attribution.md`.
+      (Noted, not acted on: `store.old-v0` (270 MB) looks like a stale migration artifact.)
 
 ## Notes
 
