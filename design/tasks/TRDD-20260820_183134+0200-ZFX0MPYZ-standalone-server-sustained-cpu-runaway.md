@@ -3,7 +3,7 @@ trdd-id: ZFX0MPYZ
 title: Standalone server sustains 150-270 percent CPU and 2.4 GB RSS over an 8-hour uptime
 column: todo
 created: 2026-08-20T18:31:34+0200
-updated: 2026-08-23T04:46:59+0200
+updated: 2026-08-23T04:50:03+0200
 current-owner: unassigned
 task-type: bugfix
 priority: high
@@ -360,11 +360,19 @@ former silently measures old code — it cost two failed runs here.
       monotonicity), and the mutual corroboration with the GC finding (circular: that attribution
       is itself only "indicated, not measured", and sawtooth does not discriminate leak from
       steady state either way).
-      The trend survives scrutiny but changes nothing: OLS slope **−0.181 GB/h**, and because
-      residuals are NEGATIVELY autocorrelated (Durbin-Watson 2.70, rho −0.36 — mean reversion,
-      i.e. sawtooth) the OLS standard error is conservative, giving corrected |t| ≈ 4.1. So it is
-      distinguishable from zero — but it points AWAY from a leak, and a 32-minute slope cannot be
-      extrapolated to hours regardless.
+      **The slope is REPORTED BUT NOT RELIED ON, and the reason is a modelling point worth
+      keeping.** OLS gives −0.181 GB/h; residuals are NEGATIVELY autocorrelated (Durbin-Watson
+      2.70, rho −0.36 — mean reversion, i.e. sawtooth), which makes the OLS standard error
+      CONSERVATIVE (an alternating series carries more information than n independent points), so
+      corrected |t| ≈ 4.1. **But that is a VARIANCE correction answering a BIAS objection.** The
+      real worry is misspecification: a line fitted to an oscillation has a slope set by where the
+      window cuts the cycle, and no standard-error adjustment touches that — shrink the SE to zero
+      and a biased point estimate stays biased.
+      Tested directly rather than argued: sub-window slopes are **5/5 negative** (no sign
+      alternation, so no phase-artifact signature) — but the windows overlap by 10 of 15 points,
+      and there are only **2 INDEPENDENT** windows in 35 minutes, both negative. k=2 is weak.
+      Net: the drift is probably real, points AWAY from a leak, and is not load-bearing for
+      anything. **Box 3 rests on the FLOOR, not on this.**
       **STILL OPEN:** 32 minutes cannot exclude an hours-scale leak; the card's own observation
       was 2.47 GB at 8h12m against 1.36 GB here. Power analysis on the measured residual sd
       (0.055 GB) says a 60-minute window already detects the 0.136 GB/h leak the card implies, so
