@@ -101,7 +101,9 @@ of these and settles the other:
   original ~16:13 was right to within a minute. I produced 61.24 by **dividing the FROZEN file's
   row count (508) by the LIVE file's latest timestamp (12:51:02)** — the frozen file ends at
   12:41:01. That is snapshot-mixing, and it shipped **in the very commit that added the lesson
-  against it**. Two self-consistent snapshots agree: 60.06 s (508 rows) and 60.059 s (526 rows).
+  against it**. *The real evidence is `min=60, max=61` over all 506 intervals* — the two
+  "self-consistent snapshots" (60.06 s at 508 rows, 60.059 s at 526 rows) share the same anchor row
+  and 96% of the same data, so they are ONE measurement reported twice, not corroboration.
 - **WITHDRAWN — "the 16:19 job would have read an incomplete series".** With the true ETA of
   16:14:12 it would have been fine. The job now sits at 16:26 for margin, with a liveness check so
   a DEAD sampler yields "final-but-short" rather than "incomplete" forever.
@@ -148,9 +150,10 @@ Report: `reports/cpu-runaway/20260823_123633+0200-box3-rss-floor-8h20m-partial.m
 
 **CPU, from `cpu_time` DELTAS — and the columns are VERIFIED FROM THE SAMPLER SOURCE plus a test on
 the data, not from their header names and not from a man page quoted from memory.** The sampler
-runs `ps -eo pid,etime,%cpu,time,rss,command` (and `/bin/ps` here is BSD — `ps --version` returns
-the BSD usage string, so the GNU-coreutils shadowing that affects `stat`/`date` on this machine does
-not reach `ps`). Col 4 is `%cpu`, col 5 is `time` (cumulative CPU).
+runs `ps -eo pid,etime,%cpu,time,rss,command` (`/bin/ps`; `ps --version` errors with a BSD-style
+usage string, which shows it is **not GNU** — that is not the same as proving it is BSD, and it does
+not matter, because the data test below settles the semantics without needing the provenance).
+Col 4 is `%cpu`, col 5 is `time` (cumulative CPU).
 **Col 4 is NOT a lifetime average — settled on this file rather than on the man page**, since a
 lifetime average would make cols 4 and 5 nearly the same statistic and void the whole distinction:
 
@@ -165,10 +168,28 @@ The lifetime average is nearly flat across 8.4 h while col 4 swings 1.5 → 79.3
 minutes. So col 4 is a short-window/decaying measure and col 5 is cumulative: **same quantity,
 different estimators** — asserted from a column NAME two turns ago, adopted from a reviewer one turn
 ago, and only now actually measured.
-**Free corroboration from that same test:** the lifetime average is **27.4% of a core over the
-process's first 5.15 h**, declining to **25.8%** by 12:41 — so ~26% has been sustained across its
-whole ~13 h life, not merely inside the window I sampled. That is a stronger form of this card's
-headline than the windowed 25.1% alone.
+**From that same test, two results — one solid, one I read backwards.**
+
+*Solid: the 25.1% closes against an independent method.* Endpoint arithmetic (cumulative CPU at the
+last row minus the first, over the elapsed span) gives **25.07%**; the delta-sum gives **25.09%** —
+**0.03 pt apart**, on 504 intervals against 2 whole-file endpoints. (The delta-sum divides each
+interval by exactly 60 s when the cadence is 60.06; using 60.06 gives 25.07% exactly. It also
+misses 28.6 s of CPU in the two intervals dropped at the pid change.)
+
+*Read backwards — **WITHDRAWN**: "~26% has been sustained across its whole ~13 h life".* The
+lifetime average is a CUMULATIVE figure, so splitting it is the whole point:
+
+| period | duration | mean CPU |
+|---|---|---|
+| **before my window — NEVER SAMPLED** | 5.15 h | **27.44%** |
+| the measured window | 8.44 h | **25.07%** |
+| whole life (row 1 → 12:41) | 13.59 h | 25.96% |
+
+So the unsampled early period ran **2.4 pt hotter — ~9% relative — and the rate DECLINED.** I
+published the reassuring reading of a number that shows drift, in the commit that added a rider
+about verdict words. The card's headline survives (it is about a *sustained* ~25–27%, and it is
+sustained) but "held steady" is not what this shows, and the decline is unexplained: nothing here
+attributes it, and the early period has no samples to attribute it with.
 True CPU per hour (Δcol 5, pid 21567, `p` reset on pid change): 25.8 / 26.7 / 25.7 / 23.8 / 22.0 /
 21.1 / 23.8 / 30.9 / 26.6 **% of one core**; **25.1% overall** across 504 intervals — a tight 21–31
 band, stable while RSS is flat.
@@ -193,13 +214,21 @@ test that failed to reject.
 two SEs (1.68 hourly vs 1.71 AR-inflated paired) and concluded "essentially nothing". **SE is not
 power**: the critical value differs too, 2.306 at df 8 against 1.965 at df 503. On MDE —
 
-| test | t_crit | SE | MDE |
-|---|---|---|---|
-| 9 hourly means | 2.306 | 1.68 | **3.87 pt** |
-| 504 pairs (AR-inflated) | 1.965 | 1.71 | **3.36 pt** |
+| test | t_crit | SE | CI half-width (t·SE) | MDE @80% ((t+0.842)·SE) |
+|---|---|---|---|---|
+| 9 hourly means | 2.306 | 1.68 | 3.87 pt | 5.29 pt |
+| 504 pairs (AR-inflated) | 1.965 | 1.71 | 3.36 pt | 4.80 pt |
 
-**≈13% better, not 98% (as first claimed against me) and not "essentially nothing" (as I claimed
-back).** Two wrong answers, both from comparing one component of a quantity instead of the quantity.
+**≈13% better on the interval, ≈9% on power — not 98% (as first claimed against me) and not
+"essentially nothing" (as I claimed back).** Two wrong answers, both from comparing one component
+of a quantity instead of the quantity.
+**⚠ LABEL CORRECTION THAT APPLIES TO THIS WHOLE CARD, NOT JUST THIS ENTRY.** What this card has
+called "MDE" throughout — including the original `MDE ≈ 0.39 GB/h` in the box-3 entry below — is
+**t_crit × SE, the CI HALF-WIDTH**: the effect the interval just excludes. The minimum detectable
+effect at 80% power is **(t_crit + 0.842) × SE**, about **37% larger**. The numbers are right for
+what they are; the name was wrong, consistently, from the start. Read every "MDE" on this card as a
+CI half-width, and inflate by ~1.37 if you want the 80%-power figure — so the floor sensitivity is
+**~0.025 GB/h as an interval half-width, ~0.035 GB/h as a true MDE**.
 Also withdrawn: *"exceeding 100 proves it is not the same quantity"* — a `cpu_time` delta is
 thread-summed core-percent too and exceeds 100 above one core. **Prefer col 5 because it is a
 monotone counter, not because col 4 leans one way.**
@@ -221,12 +250,17 @@ COMMAND STRING every sample and takes whichever process `ps` lists first. Exactl
 first published here is WITHDRAWN.** I wrote that it was "a genuine second `standalone/server.js`
 that lived under a minute — the data-dir lock guard refusing a second claimant, working as
 designed": a causal mechanism plus a *working-as-designed* verdict, fitted to ONE row, with no log
-checked, **shipped in the commit that added the rule against exactly that.** Checked now:
+checked, **shipped in the commit that added the rule against exactly that.** Checked since:
 `~/.agentlens/server.log` carries **no data-dir refusal, no "already running", no second-instance
 message**; its only `lock_contended` lines are a *usage-refresh* mutex, a different lock entirely.
-28 MB is also below node's own baseline RSS, so the process plausibly never reached the lock at all.
-Anything whose argv contains `standalone/server.js` matches that grep — a status call, a probe, a
-restart attempt. **Do not cite this row as evidence the lock guard works.**
+**But that absence proves less than I then claimed** — I never confirmed the guard logs anything on
+refusal, and a second process would most likely write to its OWN stdout, not the incumbent's file.
+And my replacement explanation, *"28 MB is below node's baseline RSS so it plausibly never reached
+the lock"*, was **a new unmeasured mechanism swapped in for the old one** — node's baseline RSS on
+this machine was never measured. **WITHDRAWN too.** What is actually known is the row's contents:
+pid 19113, `elapsed=00:00`, 28 MB, argv matching `standalone/server.js`. Anything with that string
+in argv matches the grep — a status call, a probe, a restart attempt. **Do not cite this row as
+evidence the lock guard works, and do not cite the log's silence as evidence it did not fire.**
 Frequency, stated as the count rather than as a verdict: **1 foreign row in 507 samples over
 8.4 h**; that is not enough to call it a one-off (the earlier "one-off, not recurring" was the same
 one-run-for-the-variance error deleted elsewhere in the same commit). **The server did NOT restart,
@@ -991,9 +1025,14 @@ former silently measures old code — it cost two failed runs here.
       FILE**: col 4 is not a lifetime average — `100×cputime/elapsed` is nearly flat (27.4→25.8
       across 8.4 h) while col 4 swings 1.5→79.3 between adjacent minutes. Same quantity, different
       estimators — asserted from a column NAME, then adopted from a reviewer, then quoted from a
-      remembered man page, and only settled by the test. That test also shows the process averaged
-      **27.4% of a core over its first 5.15 h and 25.8% by 12:41** — ~26% across its whole ~13 h
-      life, a stronger form of this card's headline than the windowed figure alone.
+      remembered man page, and only settled by the test.
+      **That test ALSO shows the rate DECLINED, which I first published as "held steady".** Split
+      the cumulative figure: the **unsampled** first **5.15 h ran at 27.44%**, the measured 8.44 h
+      window at **25.07%**, whole life 25.96%. The early period was 2.4 pt (~9%) hotter. The
+      headline survives — it is about a *sustained* ~25–27% and that holds — but the decline is real
+      and unexplained, and the period it happened in has no samples.
+      Independent closure of the window figure: endpoint arithmetic gives **25.07%** against the
+      delta-sum's **25.09%** — 0.03 pt apart by two different methods.
       **Three things I wrote about col 4 are WITHDRAWN**, in order: it does NOT read high in every
       bucket (6 of 9; 07/08/12 read LOW); ">100 proves it is not per-core" is a non-sequitur (col-5
       deltas are thread-summed too); and the replacement claim **"noisy in both directions, not
