@@ -3,7 +3,7 @@ trdd-id: ZFX0MPYZ
 title: Standalone server sustains 27 percent of a core and 1.4 GB RSS — check_cache_expiry probe walks
 column: dev
 created: 2026-08-20T18:31:34+0200
-updated: 2026-08-23T06:59:29+0200
+updated: 2026-08-23T06:59:58+0200
 current-owner: unassigned
 task-type: bugfix
 priority: high
@@ -34,9 +34,10 @@ test of the session-scaling hypothesis (that still needs the rate at two known s
 What it does establish is that a single window's average must not be quoted as a steady rate —
 the sizing in YST9ZJ90 is a LOWER BOUND.
 **Its SCOPE is narrower than "the workload", and box 1 is met as WORDED rather than as a total:**
-the profile covers ONE process's main thread, and 68.4% of the logged call-cost belongs to earlier
-processes that were never profiled (see SUPERSEDED, entry 8). The 147/hour figure is NOT affected
-— it is 769 calls over 5h14m within the profiled window, counted under the correct marker.
+the profile covers ONE process's main thread, while a large and CHANGING share of logged call-cost
+belongs to earlier processes never profiled — **51.8% as of 06:58**, and falling as the live
+process accumulates (entry 8 has the timestamped triple and the method; do not quote the older
+68.4% or the derived 769 that appeared here). The rate figure is unaffected by that split.
 
 **COLUMN.** `column: dev` is true only while someone is actually working this; re-column it when
 that stops. (A "trip-wire" note lived here for 10 minutes and was DELETED: it was prose read only
