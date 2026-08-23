@@ -3,7 +3,7 @@ trdd-id: ZFX0MPYZ
 title: Standalone server sustains 150-270 percent CPU and 2.4 GB RSS over an 8-hour uptime
 column: todo
 created: 2026-08-20T18:31:34+0200
-updated: 2026-08-23T05:35:09+0200
+updated: 2026-08-23T05:36:38+0200
 current-owner: unassigned
 task-type: bugfix
 priority: high
@@ -348,9 +348,12 @@ alone, each pre-selected).
 | **p90 (pre-registered)** | **750** | **38%** |
 | max | **1902** | **95%** |
 
-**VERDICT, keyed to p90 as committed: p90 = 750 ms, below the 2000 ms cliff.** The pre-registration
-is honoured — but it selected **the wrong FAMILY of statistic**, and that matters more than its
-instability.
+**VERDICT, keyed to p90 as committed: p90 = 750 ms, below the 2000 ms cliff — AND the tail is
+uncharacterised, which is the part that decides anything.** The pre-registration is honoured (the
+verdict stays keyed to p90) but the sentence states both, because a reader takes the verdict line:
+the normal regime is comfortable at 38%, while a walk that crosses 2000 ms collapses the memo into
+5× amplification and is likeliest under load. The pre-registration also selected **the wrong FAMILY
+of statistic**, which matters more than its instability.
 
 > **THE FAILURE IS A THRESHOLD EVENT, so the operative quantity is the EXCEEDANCE PROBABILITY, not
 > a central quantile.** Any SINGLE walk over 2000 ms collapses the memo for that request's whole
@@ -369,25 +372,42 @@ instability.
 **Stated operationally, so neither number can be taken without the other:** *90% of walks finish
 within 750 ms*, and *1 walk in 20 came within 98 ms of collapsing the memo*.
 
-**The distribution is a MIXTURE, and I checked whether that invalidates the p90 — it does not.**
-Clustering on the gaps (largest 769→1902 = 1133 ms; next 317→586 = 269 ms):
+**The distribution is a MIXTURE. My first partition of it was NOT the gap-based one I called it.**
+I cut at round numbers (200, 1000) after looking at sorted data and narrated the result as
+clustering. The gaps are 3,4,2,11,9,**162**,**269**,38,9,25,2,6,6,7,55,3,13,19,**1133**; cutting at
+the top two gives:
 
-| regime | n | range | max as % of TTL |
+| | n | range | max as % of TTL |
 |---|---|---|---|
-| FAST | 6 | 126–155 ms | 8% |
-| **MAIN** | **13** | **317–769 ms** | **38%** |
-| OUTLIER | 1 | 1902 ms | **95%** |
+| low | **7** | 126–**317** ms | 16% |
+| main | **12** | 586–769 ms | 38% |
+| tail | 1 | 1902 ms | **95%** |
 
-**p90 = 750 ms lands INSIDE the MAIN cluster**, so it is not a cross-regime artifact. And the
-regimes are **NOT a drift over the ten minutes** — I had reported the sample SORTED, which destroyed
-the evidence needed to tell. In temporal order the sub-200 ms runs fall at positions
-**3, 11, 12, 16, 19, 20 — interleaved, not contiguous**. So the bimodality is **per-call, not a
-page-cache warm-up or a regime change**, which is what makes the exceedance framing above the whole
-answer rather than a per-regime split.
+The tell is **317**: its larger adjacent gap is *above* it, so gap-clustering puts it in the LOW
+group — I had assigned it to MAIN (reporting 6/13 instead of 7/12) to make my round-number cut
+work.
 
-The 769→1902 gap is still the largest in the data by 4×, so the outlier is a distinct event rather
-than MAIN's tail. But **"1 run in 20 = 5% of runs" is a rate estimated from a SINGLE event** and its
-interval is enormous — the rule-of-three bound (0–15%) is the defensible statement, not 5%.
+**p90 = 750 ms is nevertheless robust to the partition — CHECKED, not asserted:** pooled n=20 → 750,
+my MAIN → 750, gap-corrected main → 750. Identical under all three. The objection I was answering
+(six fast values dragging the pooled p90 below main's own) is real in general and simply fails
+numerically here. One line of arithmetic would have established that; I reasoned around it instead.
+
+**WITHDRAWN — "the outlier is a distinct event, not the tail".** That rested on 769→1902 being the
+largest gap, which in a right-skewed sample is the gap below the maximum **by construction** — it
+restates that 1902 is extreme rather than showing a separate mechanism. Tested properly by
+bootstrapping the top gap against a single fitted lognormal: **P(top gap ≥ 1133 ms | one
+distribution, n=20) = 0.226.** A gap that large is ORDINARY here. **1902 ms is an uncharacterised
+tail value, not evidence of a second mechanism.**
+
+**ALSO WITHDRAWN — "1 run in 20 = 5% of runs".** Exact binomial 95% CI for 1/20 is
+**[0.13%, 24.9%]**, a ~190× range quoted as one number. The rule-of-three bound (0–15% for
+exceedance) is the defensible form.
+
+**What DOES survive, and it is real:** the regimes are not a drift over the ten minutes. I had
+reported the sample SORTED, destroying the evidence needed to tell. In temporal order the sub-200 ms
+runs fall at positions **3, 11, 12, 16, 19, 20 — interleaved, not contiguous** — so the bimodality
+is **per-call, not page-cache warm-up or regime change**, which is exactly why the exceedance
+framing is the whole answer rather than a per-regime split.
 
 Caveat kept: p90 of n=20 is the 18th order statistic and is not a stable estimator. The
 pre-registration discipline worked; the CHOICE was poor, and naming p50 + max would have been
