@@ -1,9 +1,11 @@
 ---
 trdd-id: ZFX0MPYZ
 title: Standalone server sustains 27 percent of a core and 1.4 GB RSS — check_cache_expiry probe walks
-column: dev
+column: blocked
+pre-block-column: dev
+blocked-by: [YST9ZJ90]
 created: 2026-08-20T18:31:34+0200
-updated: 2026-08-23T06:59:58+0200
+updated: 2026-08-23T12:38:00+0200
 current-owner: unassigned
 task-type: bugfix
 priority: high
@@ -13,13 +15,15 @@ task-scope: standalone-server
 
 # Standalone server sustains ~27% of a core and 1.4 GB RSS — `check_cache_expiry` probe walks
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-08-23 06:45
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-08-23 12:38
 
 This card is ~700 lines of append-only investigation across four sessions and two compactions.
 **Read this block, not the body, for what is currently true.** The body is a record of how the
 answers were reached — including several that were WRONG and were corrected in place.
 
-**WHERE IT STANDS.** Acceptance boxes **1 ✓ 2 ✓ 4 ✓ 5 ✓**, box **3 open (measuring)**.
+**WHERE IT STANDS.** Acceptance boxes **1 ✓ 2 ✓ 4 ✓ 5 ✓**, box **3 answered on a PARTIAL series
+(69.5%) and left open until the full one lands ~16:13**. The card is `column: blocked` on
+`TRDD-YST9ZJ90` (the user's call on the real fix); nobody is working it.
 The MECHANISM is settled: the trigger is an HTTP REQUEST (`check_cache_expiry`, 36.6% of
 main-thread busy), not a timer; the caller is OUTSIDE this repo (ai-maestro-janitor detectors,
 147 calls/hour over the FIRST 5h14m — see the rate warning below); the amplifier was a pre-walk
@@ -39,18 +43,48 @@ belongs to earlier processes never profiled — **51.8% as of 06:58**, and falli
 process accumulates (entry 8 has the timestamped triple and the method; do not quote the older
 68.4% or the derived 769 that appeared here). The rate figure is unaffected by that split.
 
-**COLUMN.** `column: dev` is true only while someone is actually working this; re-column it when
-that stops. (A "trip-wire" note lived here for 10 minutes and was DELETED: it was prose read only
+**COLUMN.** Moved `dev` → `blocked` at 12:38 (`pre-block-column: dev`, `blocked-by: [YST9ZJ90]`)
+because that is what was true: the substantive remainder is a decision only the user can make, and
+`dev` had been asserting active work through an eight-hour gap in which nothing touched the card.
+Restore `dev` when YST9ZJ90 is decided, not before. (A "trip-wire" note lived here for 10 minutes
+and was DELETED: it was prose read only
 on resume, while the failure it guarded is *nobody resuming* — it could not fire in the one case it
 existed for. Worse, it duplicated a real automated control: `trdd-drift` covers this card by
 default, which is exactly what `review-after:` exists to opt OUT of. A decorative control stacked
 on a working one makes the working one look optional.)
 
-**NEXT ACTION — one step, runnable as written.** Read the 12 h RSS series' sawtooth FLOOR; a
-rising floor is a leak, flat/falling is steady state. Completes ~16:13 (720 samples from 04:13):
+**NEXT ACTION — one step, runnable as written, after ~16:13** (when the 721st sample lands). Re-run
+the floor read on the COMPLETE series to confirm or overturn the partial verdict below. **Filter on
+the pid** — the older block-min command did not, and one transient foreign process fabricated a
+`block23 min_rss=0.028G` that reads exactly like a mid-series restart (see the gotcha below):
 
 ```bash
-awk -F'\t' 'NR>1{b=int((NR-2)/10); if(!(b in m)||$6<m[b])m[b]=$6; n[b]++} END{for(i=0;i<=b;i++) if(i in m && n[i]==10) printf "block%02d min_rss=%.3fG\n", i, m[i]/1048576}' \
+awk -F'\t' 'NR>1 && $2==21567 {h=substr($1,12,2); if(!(h in m)||$6<m[h])m[h]=$6; if($6>x[h])x[h]=$6; n[h]++}
+  END{for(k in m) printf "%s:00  n=%3d  floor=%.3fG  peak=%.3fG\n", k, n[k], m[k]/1048576, x[k]/1048576}' \
+  reports/cpu-runaway/rss-series-20260823_041323+0200.tsv | sort
+```
+
+**BOX 3, PARTIAL ANSWER (501/721 samples, 04:14→12:34, read 12:36): STEADY STATE, NOT A LEAK.**
+Per-hour RSS floor for pid 21567 over 8h20m of continuous uptime: 1.167 / 1.188 / 1.225 / 1.173 /
+1.151 / 1.143 / 1.133 / 1.259 / 1.099 GB — a 1.10–1.26 G band with **no monotone rise**; peak
+likewise flat at 1.45–1.63 G. Hourly mean `%CPU` stayed at 18–40 (mean ~27) throughout, so **memory
+was never the runaway — the request path is.** The box stays unticked only because the series is
+69.5% complete; the discriminator it asked for (the FLOOR) has already answered.
+Report: `reports/cpu-runaway/20260823_123633+0200-box3-rss-floor-8h20m-partial.md`.
+
+**RETRACTED by this read: the 65-minute "floor trend −0.108 GB/h".** Over 8h20m that slope would
+have drained ~0.9 GB; it did not. It was noise in a one-hour window. Quote no floor slope — in
+either direction — from less than several hours.
+
+**GOTCHA — the sampler re-resolves its target by NAME every sample, so the pid can change under it.**
+Exactly one row (239, 08:12:47) carries pid 19113 / `elapsed=00:00` / 28 MB, and row 240 is back on
+pid 21567 at `elapsed=09:08:01`: the server never restarted, the sampler momentarily caught a
+transient process matching the same selector. A per-block MINIMUM is maximally sensitive to this —
+one bad sample in 501 (0.2%) sets a whole block's floor and invents the analysis's most alarming
+feature. Always list pid changes before trusting any aggregate over this file:
+
+```bash
+awk -F'\t' 'NR>1{if($2!=p){printf "row %d  %s  pid=%s  elapsed=%s\n", NR-1, $1, $2, $3; p=$2}}' \
   reports/cpu-runaway/rss-series-20260823_041323+0200.tsv
 ```
 
@@ -755,6 +789,26 @@ former silently measures old code — it cost two failed runs here.
       REAPED with the process group. macOS has no `setsid`; use `scripts_dev/detach-run.py`
       (double-fork) and verify **ppid 1**. Already recorded in LOCAL memory as
       `detach-long-jobs-from-session-lifecycle`.
+      **2026-08-23 12:36 — 8h20m READ (501/721 samples, 04:14→12:34): FLAT FLOOR, STEADY STATE.**
+      Per-hour floor for pid 21567: 1.167 / 1.188 / 1.225 / 1.173 / 1.151 / 1.143 / 1.133 / 1.259 /
+      1.099 GB — a 1.10–1.26 G band, **no monotone rise across 8h20m**; peak flat at 1.45–1.63 G.
+      Hourly mean `%CPU` 18–40 (≈27 overall) unchanged throughout: **memory was never the runaway.**
+      This is the answer the box was posed to get; it stays **unticked** only because the series is
+      69.5% complete and the full read is due ~16:13 — a partial series reported as a settled 12 h
+      result would be exactly the proxy-for-the-thing substitution this card keeps catching.
+      Report: `reports/cpu-runaway/20260823_123633+0200-box3-rss-floor-8h20m-partial.md`.
+      **RETRACTS the 65-minute floor trend −0.108 GB/h above.** Sustained over 8h20m that slope
+      drains ~0.9 GB; the floor did not move. It was one-hour noise, and it is now the third
+      quantity in this box withdrawn for being read off a window too short to carry it. Quote no
+      floor slope, in either direction, from less than several hours.
+      **GOTCHA — the sampler re-resolves its target BY NAME each sample, so the pid can change under
+      it.** Row 239 (08:12:47) carries pid 19113 / `elapsed=00:00` / 28 MB; row 240 is back on pid
+      21567 at `elapsed=09:08:01`. The server never restarted — a transient process matching the
+      same selector was sampled once. The old block-minimum command did not filter on pid, so that
+      single row (0.2% of the series) produced `block23 min_rss=0.028G`: a fabricated floor collapse
+      shaped exactly like a mid-series restart. **A minimum-statistic has no resistance to a single
+      outlier by construction.** Filter on the pid, and list pid changes before trusting any
+      aggregate over this file (both commands are in the STATE block).
 - [x] A fix lands with a REGRESSION GUARD that fails on the pathological input, not merely a
       measurement showing the number dropped on one run.
       **FIX `581524c`** — `collectFileMeta()` stamped `_fileMetaCacheAt` with a PRE-walk
