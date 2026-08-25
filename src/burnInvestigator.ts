@@ -63,6 +63,10 @@ export interface BurnInvestigation {
     dirsMissing: string[]
     /** Set when the scan could not see the corpus. The caller must not read the totals as facts. */
     blind?: 'capture-off' | 'no-bodies-dir' | 'dirs-empty-in-window'
+    /** TRDD-4FMHW124: sub-ranges with hook events but ZERO bodies — measured capture outages.
+     *  Distinct from `complete`: complete means "scanned everything present"; a gap means the
+     *  corpus itself has a hole, so totals under-count whatever burned inside it. */
+    captureGaps?: CaptureGap[]
   }
   totals: {
     calls: number
@@ -137,6 +141,37 @@ function listWindow(dirs: string[], suffix: string, sinceMs: number, untilMs: nu
   // Over cap: keep the LARGEST files (they carry the burn); count the drop in coverage.
   files.sort((a, b) => b.size - a.size)
   return { files: files.slice(0, cap), present }
+}
+
+// TRDD-4FMHW124: capture-gap detection. The exporter drops bodies SILENTLY when the sink is
+// unwritable (unmounted volume, full disk), so a capture outage produces an absence — and an
+// absence looks exactly like idle time. Hook events arrive through a different path
+// (POST /api/hook-events → daily NDJSON, no sink dependency), so a window sub-range with hook
+// events but zero bodies is a MEASURED outage, not a guess about idleness. 30 min floor: shorter
+// body-less stretches are ordinary between-turns quiet, and a threshold low enough to catch them
+// would page on every lunch break.
+const CAPTURE_GAP_MIN_MS = 30 * 60_000
+
+export interface CaptureGap { fromIso: string; untilIso: string; hours: number; hookEventsDuring: number }
+
+export function findCaptureGaps(
+  bodyMtimes: number[], sinceMs: number, untilMs: number, hookDir: string,
+): CaptureGap[] {
+  const ts = [...bodyMtimes].sort((a, b) => a - b)
+  // Window edges count as boundaries: the 37h outage this exists for sat at the leading edge of
+  // every window investigated after it — bodies only AFTER hour 37 must still report the hole.
+  const bounds = [sinceMs, ...ts, untilMs]
+  const out: CaptureGap[] = []
+  for (let i = 1; i < bounds.length; i++) {
+    const from = bounds[i - 1], to = bounds[i]
+    if (to - from < CAPTURE_GAP_MIN_MS) continue
+    // Shrink the probe by a minute each side so activity that PRODUCED the boundary bodies does
+    // not count as activity inside the hole.
+    const ev = readHookEvents(hookDir, { sinceMs: from + 60_000, untilMs: to - 60_000, limit: 100 })
+    if (ev.length === 0) continue // no independent activity signal — idle time, not an outage
+    out.push({ fromIso: iso(from), untilIso: iso(to), hours: (to - from) / 3600_000, hookEventsDuring: ev.length })
+  }
+  return out
 }
 
 function scanResponses(files: { p: string; mtime: number }[]): RespRec[] {
@@ -524,6 +559,18 @@ export function investigateBurn(opts: InvestigateOptions = {}): BurnInvestigatio
           + 'the bounds are wrong. This is NOT evidence that nothing burned — cross-check with '
           + '`agentlenspro --risk` / `get_burn_status` (live feed, never blind).'
 
+  // TRDD-4FMHW124: gap detection needs EVERY mtime in the window, so it is skipped (silently
+  // reporting none would be dishonest — the cap note already discloses truncation) when the file
+  // cap truncated either list: a gap computed on the largest-N subset would hallucinate holes
+  // exactly where the small files were dropped.
+  const capped = reqList.files.length < reqList.present || respList.files.length < respList.present
+  const captureGaps = blind || capped ? [] :
+    findCaptureGaps([...reqList.files, ...respList.files].map(f => f.mtime), sinceMs, untilMs, hookDir)
+  const worstGap = captureGaps.reduce<CaptureGap | undefined>((a, g) => (g.hours > (a?.hours ?? 0) ? g : a), undefined)
+  const gapNote = worstGap
+    ? ` CAPTURE GAP: no bodies for ${worstGap.hours.toFixed(1)}h (${worstGap.fromIso} → ${worstGap.untilIso}) while ${worstGap.hookEventsDuring}${worstGap.hookEventsDuring >= 100 ? '+' : ''} hook event(s) arrived — the corpus has a hole there, not idle time; totals under-count that range${captureGaps.length > 1 ? ` (+${captureGaps.length - 1} more gap(s) in coverage.captureGaps)` : ''} (TRDD-4FMHW124).`
+    : ''
+
   const attributedShare = findings.reduce((a, f) => a + f.shareOfWindow, 0)
   const top = findings.slice(0, 3)
   const verdict = blind
@@ -549,14 +596,15 @@ export function investigateBurn(opts: InvestigateOptions = {}): BurnInvestigatio
       complete: !blind
         && reqList.files.length === reqList.present
         && respList.files.length === respList.present,
-      note: blind
+      note: (blind
         ? `BLIND (${blind}): scanned ${where} — 0 bodies in the window.${absent} Totals are not a measurement.`
         : reqList.files.length === reqList.present
           ? `full coverage of the window (scanned ${where})`
-          : `CAP HIT: scanned the ${reqList.files.length} largest of ${reqList.present} request files (responses ${respList.files.length}/${respList.present}) — totals reflect the scanned set only`,
+          : `CAP HIT: scanned the ${reqList.files.length} largest of ${reqList.present} request files (responses ${respList.files.length}/${respList.present}) — totals reflect the scanned set only`) + gapNote,
       dirsScanned: scope.dirs,
       dirsMissing: scope.missing,
       ...(blind ? { blind } : {}),
+      ...(captureGaps.length ? { captureGaps } : {}),
     },
     totals: {
       calls: resps.length,

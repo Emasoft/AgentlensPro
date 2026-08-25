@@ -384,10 +384,19 @@ export function bodiesCaptureLine(
     bodies: {
       live?: { files: number; newestMs: number | null }
       parked?: { files: number; bytes: number; onDisk: number } | null
+      // TRDD-4FMHW124: absent on an older server — absent is not "healthy", it is "not reported".
+      captureDownSince?: number | null
+      sinkProblem?: string | null
     }
   },
   now: number = Date.now(),
 ): string {
+  // TRDD-4FMHW124: server-detected outage state. Rendered on every branch below — an empty live
+  // dir with capture DOWN is precisely the pair that must not read as "idle".
+  const down = s.bodies.captureDownSince
+    ? ` | CAPTURE DOWN ${Math.max(1, Math.round((now - s.bodies.captureDownSince) / 60000))}m — sessions active, no bodies arriving (TRDD-4FMHW124)`
+    : ''
+  const sink = s.bodies.sinkProblem ? ` | SINK: ${s.bodies.sinkProblem}` : ''
   const live = s.bodies.live
   // A pre-TRDD-0SA5QZTG server omits the field entirely. Saying "never captured" there would be a
   // confident claim about something that was never measured.
@@ -396,13 +405,13 @@ export function bodiesCaptureLine(
   // is appended to every branch below — including "NO BODIES", where an empty live dir alongside a
   // non-zero park is the single most diagnostic pair the line can print.
   const parked = parkedSuffix(s.bodies.parked)
-  if (live.newestMs === null) return `NO BODIES on disk (${live.files} file(s)) — capture has never run, or the live dir was emptied${parked}`
+  if (live.newestMs === null) return `NO BODIES on disk (${live.files} file(s)) — capture has never run, or the live dir was emptied${down}${sink}${parked}`
   const ageSec = Math.max(0, Math.round((now - live.newestMs) / 1000))
   const age = ageSec < 90 ? `${ageSec}s` : ageSec < 5400 ? `${Math.round(ageSec / 60)}m` : `${(ageSec / 3600).toFixed(1)}h`
   const stalled = ageSec > s.uptimeSec
   return `${live.files} live file(s), newest ${age} ago`
     + (stalled ? ` — STALLED: older than this server's ${Math.round(s.uptimeSec / 60)}m uptime, so nothing has been captured since boot` : '')
-    + parked
+    + down + sink + parked
 }
 
 /** The parked-bodies clause. Silent at zero — a healthy server must not carry a permanent warning,
@@ -445,6 +454,8 @@ interface ServerStats {
     // renderer falls back to the legacy last-pass line rather than claiming "0 since boot".
     reclaimedSinceBoot?: number
     lastNonZeroPassAt?: number
+    captureDownSince?: number | null
+    sinkProblem?: string | null
     // TRDD-0SA5QZTG. Optional: a server older than this change does not send it, and the renderer
     // must say "unknown" there rather than print a confident "never" about a field that was
     // simply not transmitted.

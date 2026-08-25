@@ -48,7 +48,7 @@ function fmtStartOrigins(starts: HookEventRecord[], cap = 2): string {
 }
 
 export interface BurnRisk {
-  code: 'FANOUT_BURST' | 'COLD_RESUME_RISK' | 'COMPACTION_REWRITE' | 'HUGE_REQUEST_BURST' | 'BURN_SPIKE' | 'CACHE_THRASH'
+  code: 'FANOUT_BURST' | 'COLD_RESUME_RISK' | 'COMPACTION_REWRITE' | 'HUGE_REQUEST_BURST' | 'BURN_SPIKE' | 'CACHE_THRASH' | 'CAPTURE_DOWN'
   active: boolean
   detail: string
   evidence?: Record<string, unknown>
@@ -101,6 +101,13 @@ export interface BurnGuardOptions {
    * (exact response usage — repeated big prefix writes with ~no cache reads).
    */
   bodiesActivity?: BodiesActivityReport | null
+  /**
+   * TRDD-4FMHW124: server-injected capture-liveness — the bodies pass's own activity-vs-bodies
+   * comparison (the server holds both clocks; the guard cannot derive this from disk without
+   * re-deriving the activity window). ms of the down transition; null/0 = capture is delivering;
+   * undefined = the caller has no server signal, and NO risk row is emitted (absent ≠ healthy).
+   */
+  captureDownSince?: number | null
 }
 
 export function checkBurnRisk(opts: BurnGuardOptions = {}): BurnRiskReport {
@@ -128,6 +135,21 @@ export function checkBurnRisk(opts: BurnGuardOptions = {}): BurnRiskReport {
       : hooksAvailable
         ? readHookEvents(hookDir, { ev, sinceMs, untilMs: now, limit })
         : []
+
+  // TRDD-4FMHW124: capture down means every body-derived check BELOW is going progressively
+  // blind — the one risk that undermines the others, so it leads. Emitted only when the server
+  // actually reported a state (undefined = no signal = no row; a fabricated "healthy" would be
+  // the same lie the capture hole told for 37 hours).
+  if (opts.captureDownSince !== undefined) {
+    risks.push({
+      code: 'CAPTURE_DOWN',
+      active: !!opts.captureDownSince,
+      detail: opts.captureDownSince
+        ? `Raw-body capture is DOWN (${Math.max(1, Math.round((now - opts.captureDownSince) / 60_000))}m): sessions are active but no bodies are arriving, so body-scanning tools (investigate_burn, this guard's huge-request/thrash checks) see a growing hole. Check the spool mount / sink path.`
+        : 'Raw-body capture is delivering.',
+      ...(opts.captureDownSince ? { evidence: { downSinceIso: new Date(opts.captureDownSince).toISOString() } } : {}),
+    })
+  }
 
   // ── hook-event signals (the earliest warnings we have) ──────────────────────
   const starts = events('SubagentStart', now - 120_000, 200)

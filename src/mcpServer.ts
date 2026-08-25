@@ -3378,6 +3378,8 @@ export interface McpServerOptions {
   /** TRDD-GOD0108C — the server's BodiesActivityTracker report (incremental bodies scan). Powers
    *  the CACHE_THRASH risk and replaces the stat-every-file HUGE_REQUEST_BURST pass. */
   getBodiesActivity?: () => BodiesActivityReport | null
+  /** TRDD-4FMHW124: server-injected capture-liveness for the CAPTURE_DOWN risk row. */
+  getCaptureDownSince?: () => number | null
   /** TRDD-1FEIW17E — the server's durable body store (opened lazily). get_body_writers reads
    *  all-time per-session totals from it; a null/absent store degrades to live-dir-only. */
   getStore?: () => Promise<Store | null>
@@ -3767,6 +3769,7 @@ export function createMcpServer(opts: McpServerOptions): Server {
           // bodies tracker — the same call is gate-frequency there, so disk scans are out.
           recentEvents: opts.getRecentHookEvents?.(),
           bodiesActivity: opts.getBodiesActivity?.() ?? null,
+          captureDownSince: opts.getCaptureDownSince?.(), // TRDD-4FMHW124: undefined off-server = no row
         })
         // Name the verbatim spawning call behind an active fan-out risk (reads the JSONL only when a
         // risk fired — the quiet path never opens a transcript).

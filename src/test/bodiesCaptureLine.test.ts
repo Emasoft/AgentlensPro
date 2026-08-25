@@ -61,3 +61,26 @@ suite('bodiesCaptureLine — the line whose absence hid a 4-day outage', () => {
     assert.ok(/3\.0h ago/.test(bodiesCaptureLine(stats(600, { files: 1, newestMs: NOW - 10_800_000 }), NOW)))
   })
 })
+
+// TRDD-4FMHW124 — the server-detected outage clauses. The server compares its own activity clock
+// (spans/hook events arriving) against the freshest body; this suite only asserts the RENDERING,
+// because the detection lives server-side where the clocks are.
+suite('bodiesCaptureLine — capture-down + sink clauses (TRDD-4FMHW124)', () => {
+  test('captureDownSince renders CAPTURE DOWN with its age in minutes', () => {
+    const line = bodiesCaptureLine(
+      { uptimeSec: 3600, bodies: { live: { files: 5, newestMs: NOW - 20 * 60_000 }, captureDownSince: NOW - 15 * 60_000 } }, NOW)
+    assert.ok(/CAPTURE DOWN 15m/.test(line), line)
+  })
+  test('sinkProblem renders a SINK clause; both clauses silent when absent (older server = not reported, not healthy-by-default noise)', () => {
+    const bad = bodiesCaptureLine(
+      { uptimeSec: 3600, bodies: { live: { files: 0, newestMs: null }, sinkProblem: '/Volumes/X does not exist (volume unmounted?)' } }, NOW)
+    assert.ok(/SINK: \/Volumes\/X does not exist/.test(bad), bad)
+    const ok = bodiesCaptureLine(stats(3600, { files: 5, newestMs: NOW - 60_000 }), NOW)
+    assert.ok(!/CAPTURE DOWN|SINK:/.test(ok), ok)
+  })
+  test('NO BODIES + capture down renders BOTH — the exact pair that must not read as idle', () => {
+    const line = bodiesCaptureLine(
+      { uptimeSec: 3600, bodies: { live: { files: 0, newestMs: null }, captureDownSince: NOW - 5 * 60_000 } }, NOW)
+    assert.ok(/NO BODIES/.test(line) && /CAPTURE DOWN/.test(line), line)
+  })
+})

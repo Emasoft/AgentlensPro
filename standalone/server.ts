@@ -622,6 +622,34 @@ let ingestSkipNames: Set<string> | null = null
 const ingestStrandedNames = new Set<string>()
 const ingestFsyncedParts = new Set<string>()
 
+// TRDD-4FMHW124: capture-liveness. The bodies sink is written by Claude Code's OWN exporter —
+// when the path is unwritable the exporter drops the body with no error anywhere, so a capture
+// outage produces an ABSENCE, and an absence looks exactly like idle time (measured: a 37h hole
+// covering real work). The server, however, knows when sessions are active: spans and hook
+// events arrive through paths that do not depend on the sink. Activity + no fresh bodies =
+// capture DOWN, detected the same minute instead of days later.
+let lastIngestActivityAt = 0
+let newestBodyMtimeMs = 0        // max mtime seen across drain targets, refreshed each pass tick
+let captureDownSince = 0         // 0 = up; else when the down transition was detected
+let sinkProblem: string | null = null
+const CAPTURE_ACTIVITY_WINDOW_MS = 10 * 60_000
+
+// TRDD-4FMHW124: sink precondition. Deliberately NO mkdir: with the spool volume unmounted,
+// creating the path would plant a real directory on the mount POINT — bodies would land on the
+// SSD and the next mount would shadow them. The probe observes, it never repairs.
+function probeSink(dir: string): string | null {
+  try {
+    if (!fs.statSync(dir).isDirectory()) return `${dir} exists but is not a directory`
+  } catch { return `${dir} does not exist (volume unmounted?)` }
+  const probe = path.join(dir, '.sink-probe')
+  try { fs.writeFileSync(probe, String(Date.now())); fs.unlinkSync(probe); return null }
+  catch (e) { return `${dir} not writable: ${(e as Error).message}` }
+}
+if (CAPTURE_ON) {
+  sinkProblem = probeSink(PRIMARY_BODIES_DIR)
+  if (sinkProblem) console.warn(`[AgentLens] bodies sink precondition FAILED at boot: ${sinkProblem} (TRDD-4FMHW124)`)
+}
+
 async function seedIngestSkipNames(store: Store): Promise<Set<string>> {
   const set = new Set<string>()
   try {
@@ -675,7 +703,13 @@ async function archiveOtelBodies(): Promise<void> {
       let liveBytes = 0
       for (const f of fs.readdirSync(target.dir)) {
         if (!f.endsWith('.request.json') && !f.endsWith('.response.json')) continue
-        try { liveBytes += fs.statSync(path.join(target.dir, f)).size } catch { /* raced */ }
+        try {
+          const st = fs.statSync(path.join(target.dir, f))
+          liveBytes += st.size
+          // TRDD-4FMHW124: freshest body across targets, taken here because this loop already
+          // stats every file — the liveness check below costs nothing extra.
+          if (st.mtimeMs > newestBodyMtimeMs) newestBodyMtimeMs = st.mtimeMs
+        } catch { /* raced */ }
       }
       liveBytesTotal += liveBytes
       // TRDD-C5L779YI (decision, 2026-08-25): for a VOLATILE spool the 72h age gate below
@@ -738,6 +772,29 @@ async function archiveOtelBodies(): Promise<void> {
     // volume the gate cannot bless is KEPT and named, no matter how old — ageing out is a schedule,
     // not a proof. The .idx sidecar always survives (capture-time provenance).
     const gate = bodyStore
+    // TRDD-4FMHW124: capture-liveness + sink precondition, once per pass tick. Warnings fire on
+    // TRANSITIONS only — a per-tick repeat would be filtered out by the day it matters.
+    {
+      const prevSinkProblem = sinkProblem
+      sinkProblem = probeSink(PRIMARY_BODIES_DIR)
+      if (sinkProblem !== prevSinkProblem) {
+        if (sinkProblem) console.warn(`[AgentLens] bodies sink precondition FAILED: ${sinkProblem} (TRDD-4FMHW124)`)
+        else if (prevSinkProblem) console.log('[AgentLens] bodies sink precondition recovered')
+      }
+      const nowMs = Date.now()
+      const active = lastIngestActivityAt > nowMs - CAPTURE_ACTIVITY_WINDOW_MS
+      const captured = newestBodyMtimeMs > nowMs - CAPTURE_ACTIVITY_WINDOW_MS
+      if (CAPTURE_ON && active && !captured) {
+        if (captureDownSince === 0) {
+          captureDownSince = nowMs
+          console.warn(`[AgentLens] CAPTURE DOWN: sessions are active (spans/hook events within ${CAPTURE_ACTIVITY_WINDOW_MS / 60_000}m) but no body has arrived in any drain target` +
+            (sinkProblem ? ` — ${sinkProblem}` : ' — sink looks writable; the exporter may be pointed elsewhere') + ' (TRDD-4FMHW124)')
+        }
+      } else if (captureDownSince !== 0) {
+        console.log(`[AgentLens] capture recovered after ${Math.round((nowMs - captureDownSince) / 60_000)}m down`)
+        captureDownSince = 0
+      }
+    }
     const purged = await purgeArchiveVolumes(BODIES_ARCHIVE_DIR, BODIES_RETENTION_DAYS, async (volumeName) => {
       const v = await verifyVolumeInStore(gate, BODIES_ARCHIVE_DIR, volumeName)
       if (!v.ok) {
@@ -1602,6 +1659,8 @@ startMcpHttpServer({
   // and the incremental bodies tracker (CACHE_THRASH + huge-request burst without full stats).
   getRecentHookEvents: () => recentHookEvents,
   getBodiesActivity: () => bodiesActivityReport(),
+  getCaptureDownSince: () => captureDownSince || null, // TRDD-4FMHW124
+
   // TRDD-1FEIW17E: get_body_writers reads all-time per-session totals from the durable store —
   // same lazy-open the ingest pass uses, so the first call after boot pays the open, not every call.
   getStore: async () => (bodyStore ??= await openStore({ dir: path.join(DATA_DIR, 'store') })),
@@ -2056,6 +2115,7 @@ function processTraces(payload: unknown, collectorPath = '/v1/traces'): { count:
     })
     count++
   }
+  if (count > 0) lastIngestActivityAt = Date.now() // TRDD-4FMHW124: spans arriving = sessions active
   return { count, agent }
 }
 
@@ -3368,6 +3428,9 @@ const uiServer = http.createServer(async (req, res) => {
       bodies: {
         archive: archiveDiskUsage(BODIES_ARCHIVE_DIR), lastPass: p.bodiesLastPurge,
         reclaimedSinceBoot: p.bodiesReclaimedSinceBoot, lastNonZeroPassAt: p.bodiesLastNonZeroPassAt,
+        // TRDD-4FMHW124: capture-liveness + sink precondition. 0/null ⇒ healthy.
+        captureDownSince: captureDownSince || null,
+        sinkProblem,
         // TRDD-0SA5QZTG: capture liveness. Without this the status surface described the ARCHIVE
         // and the last purge but never whether anything is still being CAPTURED — which is how
         // capture stayed dead for ~4 days behind a healthy-looking server.
@@ -3457,6 +3520,10 @@ const uiServer = http.createServer(async (req, res) => {
         // Parse here (a malformed body is a 400 for the caller); ingestHookEvent owns the rest —
         // the SAME path the boot-time hook-spool drain reingests through (D3K7QM2P/1a).
         const payload = JSON.parse(Buffer.concat(chunks).toString('utf-8'))
+        // TRDD-4FMHW124: bumped HERE, not inside ingestHookEvent — the boot-time spool drain
+        // reingests OLD events through that shared path, and replayed history is not activity
+        // (a boot after a quiet night must not read as "sessions active").
+        lastIngestActivityAt = Date.now()
         const r = ingestHookEvent(payload)
         res.writeHead(r.status, { 'Content-Type': 'application/json' })
         res.end(JSON.stringify(r.body))
@@ -3580,6 +3647,7 @@ const uiServer = http.createServer(async (req, res) => {
         burnStatus: lastBurnStatus,
         recentEvents: recentHookEvents,
         bodiesActivity: bodiesActivityReport(),
+        captureDownSince: captureDownSince || null, // TRDD-4FMHW124
       })
       // Name the verbatim spawning call behind an active fan-out risk (reads the session JSONL —
       // always present, so it works with raw-body capture off — only when a risk actually fired).

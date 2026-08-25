@@ -2,7 +2,7 @@ import * as assert from 'assert'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
-import { investigateBurn, type BurnCause } from '../burnInvestigator'
+import { findCaptureGaps, investigateBurn, type BurnCause } from '../burnInvestigator'
 
 // ── investigate_burn (TRDD-TW14MO7A) — real-filesystem tests ─────────────────
 // Each detector is exercised against a synthetic OTEL bodies corpus in a real tmpdir:
@@ -287,6 +287,56 @@ suite('burnInvestigator — investigate_burn (TRDD-TW14MO7A)', () => {
       assert.strictEqual(r.totals.inputEquivTokens, Math.round(150_000 * 1.25 + 500_000 * 0.1))
       assert.strictEqual(r.totals.byModel.length, 2)
       assert.ok(r.totals.estCostUsd > 0, 'dollar estimate present for known models')
+    } finally { cleanup() }
+  })
+})
+
+// ── findCaptureGaps (TRDD-4FMHW124) ──────────────────────────────────────────
+// A capture outage produces an ABSENCE of bodies, and an absence looks exactly like idle time.
+// Hook events arrive through a sink-independent path, so "hook events present, bodies absent"
+// is a measured outage. These tests pin both directions: gap-with-events reported, gap-without-
+// events (genuine idle) NOT reported.
+suite('findCaptureGaps (TRDD-4FMHW124)', () => {
+  const T0 = Date.parse('2026-08-20T00:00:00Z')
+  const H = 3_600_000
+  function hookBucket(hooks: string, tss: number[]): void {
+    fs.mkdirSync(hooks, { recursive: true })
+    const lines = tss.map(ts => JSON.stringify({ ts, ev: 'PreToolUse', session: 's' })).join('\n') + '\n'
+    fs.appendFileSync(path.join(hooks, '2026-08-20.ndjsonl'), lines)
+  }
+
+  test('a body-less stretch WITH hook events is a capture gap; the same stretch WITHOUT them is idle', () => {
+    const { hooks, cleanup } = corpus()
+    try {
+      hookBucket(hooks, [T0 + 2 * H, T0 + 2.5 * H])
+      const bodies = [T0, T0 + 1 * H, T0 + 4 * H, T0 + 5 * H]
+      const gaps = findCaptureGaps(bodies, T0, T0 + 6 * H, hooks)
+      assert.strictEqual(gaps.length, 1, JSON.stringify(gaps))
+      assert.ok(Math.abs(gaps[0].hours - 3) < 0.01, JSON.stringify(gaps[0]))
+      assert.strictEqual(gaps[0].hookEventsDuring, 2)
+      // Same corpus, empty hook dir: the identical stretch is idle time, not an outage — the
+      // false-positive direction is what would get this signal filtered out and ignored.
+      const idle = findCaptureGaps(bodies, T0, T0 + 6 * H, path.join(hooks, 'nonexistent'))
+      assert.strictEqual(idle.length, 0, JSON.stringify(idle))
+    } finally { cleanup() }
+  })
+
+  test('stretches under 30 minutes are never gaps, whatever the hook traffic', () => {
+    const { hooks, cleanup } = corpus()
+    try {
+      hookBucket(hooks, Array.from({ length: 20 }, (_, i) => T0 + i * 15 * 60_000))
+      const bodies = Array.from({ length: 19 }, (_, i) => T0 + i * 20 * 60_000) // 20m spacing
+      assert.strictEqual(findCaptureGaps(bodies, T0, T0 + 6 * H, hooks).length, 0)
+    } finally { cleanup() }
+  })
+
+  test('a gap at the WINDOW EDGE is reported — the 37h outage sat at the leading edge of every later window', () => {
+    const { hooks, cleanup } = corpus()
+    try {
+      hookBucket(hooks, [T0 + 1 * H])
+      const gaps = findCaptureGaps([T0 + 3 * H, T0 + 3.2 * H], T0, T0 + 4 * H, hooks)
+      assert.strictEqual(gaps.length, 1, JSON.stringify(gaps))
+      assert.strictEqual(gaps[0].fromIso, new Date(T0).toISOString())
     } finally { cleanup() }
   })
 })
