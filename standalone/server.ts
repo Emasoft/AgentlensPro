@@ -399,6 +399,12 @@ const persistStats = {
   statuslineSamples: 0,
   gateChecks: 0, gateDenies: 0, gateWarns: 0, gateAdvisories: 0,
   bodiesLastPurge: { at: 0, removedFiles: 0, freedBytes: 0, keptFiles: 0, keptBytes: 0 },
+  // TRDD-C5L779YI: cumulative reclaim + when a pass last reclaimed anything. The LAST-pass
+  // counter alone reads 0 for the whole interval between cap-valve bursts, which is how a healthy
+  // burst drain was once diagnosed as dead; since-boot + last-non-zero make "bursting" and
+  // "stuck" distinguishable from a single status sample.
+  bodiesReclaimedSinceBoot: 0,
+  bodiesLastNonZeroPassAt: 0,
   // TRDD-KB17X5G2 Option 3: how many times the spool crossed into over-capacity and new sessions
   // were redirected to the legacy SSD bodies dir instead of losing writes. Must stay visible
   // wherever spool health is reported — a silent fallback would hide the same loss it prevents.
@@ -672,6 +678,15 @@ async function archiveOtelBodies(): Promise<void> {
         try { liveBytes += fs.statSync(path.join(target.dir, f)).size } catch { /* raced */ }
       }
       liveBytesTotal += liveBytes
+      // TRDD-C5L779YI (decision, 2026-08-25): for a VOLATILE spool the 72h age gate below
+      // (`overCap ? 0 : BODIES_MAX_AGE_MS`) is structurally dead — a RAM disk's contents span
+      // minutes, never 72h — so this cap check is the ONLY trigger that ever moves a spool body
+      // into the durable store. Consequence, ACCEPTED as policy: up to capBytes
+      // (min(bodiesMaxGb, 70% of the volume); 512MB on the reference machine) of captured bodies
+      // live ONLY in volatile RAM between bursts, and an unmount/reboot/full volume loses all of
+      // them. Accepted because bodies are diagnostic raw captures (every ingested span is already
+      // in the durable store) and bursting at the cap is far cheaper than per-file draining.
+      // Revisit only if bodies ever become the sole copy of something irreplaceable.
       const overCap = liveBytes > target.capBytes
       // Both engines take the same throttle, the same over-cap valve, the same delete-gate
       // ordering and the same stranded-relocation policy; the Rust exec THROWS on failure (never
@@ -738,6 +753,8 @@ async function archiveOtelBodies(): Promise<void> {
       at: Date.now(), removedFiles: deleted, freedBytes: bytesFreed,
       keptFiles: 0, keptBytes: Math.max(0, liveBytesTotal - bytesFreed),
     }
+    persistStats.bodiesReclaimedSinceBoot += deleted
+    if (deleted > 0) persistStats.bodiesLastNonZeroPassAt = Date.now()
     // `deleted > 0` is load-bearing in this gate: a pass that reclaims thousands of already-durable
     // files ingests NOTHING, so gating on `ingested` alone made the whole reclaim path silent.
     if (ingested > 0 || deleted > 0 || purged.removed.length > 0) {
@@ -3350,6 +3367,7 @@ const uiServer = http.createServer(async (req, res) => {
       },
       bodies: {
         archive: archiveDiskUsage(BODIES_ARCHIVE_DIR), lastPass: p.bodiesLastPurge,
+        reclaimedSinceBoot: p.bodiesReclaimedSinceBoot, lastNonZeroPassAt: p.bodiesLastNonZeroPassAt,
         // TRDD-0SA5QZTG: capture liveness. Without this the status surface described the ARCHIVE
         // and the last purge but never whether anything is still being CAPTURED — which is how
         // capture stayed dead for ~4 days behind a healthy-looking server.

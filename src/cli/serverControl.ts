@@ -441,6 +441,10 @@ interface ServerStats {
   bodies: {
     archive: { volumes: number; entries: number; bytes: number }
     lastPass: { removedFiles: number; keptBytes: number }
+    // TRDD-C5L779YI: cumulative reclaim. Absent on an older server — absent is not zero, so the
+    // renderer falls back to the legacy last-pass line rather than claiming "0 since boot".
+    reclaimedSinceBoot?: number
+    lastNonZeroPassAt?: number
     // TRDD-0SA5QZTG. Optional: a server older than this change does not send it, and the renderer
     // must say "unknown" there rather than print a confident "never" about a field that was
     // simply not transmitted.
@@ -501,7 +505,14 @@ export async function showStatus(): Promise<void> {
       ? `spans:  ${s.spans.inMemory} in memory (${Math.round((s.spans.windowMs ?? 0) / 60000)}m window), ${s.spans.pendingAppends} pending, store ${fmtMb(s.spans.store.totalBytes)} (${s.spans.store.totalSpans} spans / ${s.spans.store.segments} segment(s), retention ${s.spans.retentionDays}d) | log sessions: ${s.logSessions}`
       : `spans:  ${s.spans.inMemory}/${s.spans.cap} in memory, ${s.spans.pendingAppends} pending, store ${fmtMb(s.spans.fileBytes ?? 0)} (${s.spans.fileLines} lines) | log sessions: ${s.logSessions}`,
     `disk writes since boot: ${fmtMb(per.totalBytesWritten)} total — spans ${fmtMb(per.spanAppendBytes)} in ${per.spanAppendWrites} appends${per.spanCompactions !== undefined ? ` + ${per.spanCompactions} compaction(s) ${fmtMb(per.spanCompactBytes ?? 0)}` : ''}; offsets ${fmtMb(per.offsetsBytes)}×${per.offsetsWrites}; cards ${fmtMb(per.cardsBytes)}×${per.cardsWrites}`,
-    `bodies: archive ${s.bodies.archive.volumes} volume(s), ${s.bodies.archive.entries} lumps, ${fmtGb(s.bodies.archive.bytes)}; last pass archived ${s.bodies.lastPass.removedFiles} (live kept ${fmtGb(s.bodies.lastPass.keptBytes)})`,
+    // TRDD-C5L779YI: the last-pass counter reads 0 for the whole interval between cap-valve
+    // bursts, so alone it made a healthy burst drain look dead ("last pass archived 0"). Report
+    // cumulative reclaim and the age of the last pass that reclaimed anything, beside the
+    // backlog those passes declined to act on.
+    `bodies: archive ${s.bodies.archive.volumes} volume(s), ${s.bodies.archive.entries} lumps, ${fmtGb(s.bodies.archive.bytes)}; ` +
+      (s.bodies.reclaimedSinceBoot !== undefined
+        ? `reclaimed ${s.bodies.reclaimedSinceBoot} file(s) since boot (last ${s.bodies.lastNonZeroPassAt ? `${Math.max(1, Math.round((Date.now() - s.bodies.lastNonZeroPassAt) / 60000))}m ago` : 'none yet'}); backlog ${fmtGb(s.bodies.lastPass.keptBytes)} not yet reclaimed`
+        : `last pass archived ${s.bodies.lastPass.removedFiles} (live kept ${fmtGb(s.bodies.lastPass.keptBytes)})`),
     // TRDD-0SA5QZTG: the CAPTURE line. Everything above describes what was already collected;
     // this is the only line that says whether collection is still happening. It states the age
     // and lets the reader judge, rather than declaring "broken" — an idle machine legitimately
