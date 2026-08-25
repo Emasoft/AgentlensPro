@@ -464,3 +464,46 @@ pub fn ingest_pass(
     settle!();
     res
 }
+
+/// TRDD-8TM7I49X: remove names from the persisted stranded set — the recovery path a park never
+/// had (for a durable target a parked name is `continue`d forever; the set only grows). MUST be
+/// called with the pass lock held (the bin takes it): the state file is shared with every pass
+/// engine, and an unlocked read-modify-write can interleave with a pass's own load→save,
+/// silently resurrecting or dropping names in either set. Returns (requested, removed,
+/// stranded_remaining). skipNames is preserved untouched — an unparked name stays skip-listed,
+/// which is exactly what routes it to the delete gate instead of a re-ingest.
+pub fn unpark_names(state_file: &Path, names: &[String]) -> (usize, usize, usize) {
+    let (skip, mut stranded) = load_pass_state(state_file);
+    let before = stranded.len();
+    for n in names {
+        stranded.remove(n);
+    }
+    let removed = before - stranded.len();
+    save_pass_state(state_file, &skip, &stranded);
+    (names.len(), removed, stranded.len())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unpark_removes_only_named_stranded_and_preserves_skip() {
+        let dir = std::env::temp_dir().join(format!("al-unpark-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let state = dir.join(PASS_STATE_FILE);
+        let skip: HashSet<String> = ["a.request.json", "b.request.json"].iter().map(|s| s.to_string()).collect();
+        let stranded: HashSet<String> = ["a.request.json", "c.response.json"].iter().map(|s| s.to_string()).collect();
+        save_pass_state(&state, &skip, &stranded);
+
+        // Remove one present name, one absent name — removed counts only what was actually there.
+        let (req, removed, remaining) =
+            unpark_names(&state, &["a.request.json".to_string(), "zzz.request.json".to_string()]);
+        assert_eq!((req, removed, remaining), (2, 1, 1));
+
+        let (skip2, stranded2) = load_pass_state(&state);
+        assert_eq!(skip2, skip, "skipNames must survive an unpark byte-for-byte");
+        assert!(stranded2.contains("c.response.json") && !stranded2.contains("a.request.json"));
+        fs::remove_dir_all(&dir).ok();
+    }
+}

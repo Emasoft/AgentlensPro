@@ -144,8 +144,39 @@ export async function migrateStore(
     return res
   }
 
+  return stagedRewrite(dir, steps, target, `${dir}.old-v${current}`, log, res)
+}
+
+/**
+ * TRDD-8TM7I49X: a SAME-VERSION staged rewrite — the full migration protocol (stage, verify
+ * everything, verify nothing lost, atomic swap, keep the old store) applied to a data REPAIR
+ * that changes no schema. Exists because repairing rows in immutable Parquet needs exactly what
+ * a migration needs, and a machine-local repair must never masquerade as a schema bump —
+ * CURRENT_SCHEMA is about layout semantics every store shares. The backup dir carries
+ * `-prerepair-<ts>` so it can never collide with a real migration's `.old-vN`.
+ */
+export async function repairStore(
+  dir: string, step: Migration, opts: { onProgress?: (m: string) => void } = {},
+): Promise<MigrateResult> {
+  const log = opts.onProgress ?? (() => {})
+  const current = readManifest(dir).schemaVersion
+  const res: MigrateResult = { migrated: false, fromVersion: current, toVersion: current, missing: [] }
+  if (step.from !== current || step.to !== current) {
+    res.error = `repair step is v${step.from}->v${step.to} but the store is v${current} — a repair must be same-version`
+    return res
+  }
+  const backup = `${dir}.old-v${current}-prerepair-${new Date().toISOString().replace(/[:.]/g, '-')}`
+  return stagedRewrite(dir, [step], current, backup, log, res)
+}
+
+/** The staged-rewrite core shared by migrateStore and repairStore — the five-step protocol from
+ *  the file header. `manifestVersion` is what the swapped-in store gets stamped as (the target
+ *  for a migration; the unchanged current version for a repair). */
+async function stagedRewrite(
+  dir: string, steps: Migration[], manifestVersion: number, backup: string,
+  log: (m: string) => void, res: MigrateResult,
+): Promise<MigrateResult> {
   const staging = `${dir}.migrating`
-  const backup = `${dir}.old-v${current}`
   fs.rmSync(staging, { recursive: true, force: true }) // a stale staging dir from a previous crash
 
   let from: Store | null = null
@@ -182,14 +213,14 @@ export async function migrateStore(
     await from.close(); from = null
     await to.close(); to = null
 
-    writeManifest(staging, { schemaVersion: target, createdAt: new Date().toISOString(), migratedFrom: current })
+    writeManifest(staging, { schemaVersion: manifestVersion, createdAt: new Date().toISOString(), migratedFrom: res.fromVersion })
 
     // SWAP — two atomic renames. A crash between them leaves the corpus in `backup`, never a blend.
     fs.renameSync(dir, backup)
     fs.renameSync(staging, dir)
 
-    log(`migrated v${current} -> v${target}. Previous store KEPT at ${backup} (delete it yourself once you are satisfied).`)
-    return { ...res, migrated: true, toVersion: target, backupDir: backup }
+    log(`migrated v${res.fromVersion} -> v${manifestVersion}. Previous store KEPT at ${backup} (delete it yourself once you are satisfied).`)
+    return { ...res, migrated: true, toVersion: manifestVersion, backupDir: backup }
   } catch (e) {
     res.error = `migration failed: ${(e as Error).message} — live store untouched, staging kept at ${staging}`
     return res

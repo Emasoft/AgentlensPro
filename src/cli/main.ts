@@ -21,6 +21,7 @@ import { runHookCommand } from './hookHandlers'
 import { runHeartbeatCost } from './heartbeatCostCli'
 import { runConfigCli } from './configCli'
 import { runSpoolCli } from './spoolCli'
+import { runStoreCli } from './storeAdmin'
 import { runEnvCli } from './envCli'
 import { runDisableCli, runEnableCli } from './disableCli'
 import { ensureServer, openDashboard, serverCommand, daemonCommand } from './serverControl'
@@ -124,6 +125,7 @@ export const LATENCY_EXEMPT: Readonly<Record<string, string>> = {
   ctxmap: 'decomposes captured request bodies with real token counting — inherently slow, and asked once',
   ctxvis: 'SPAWNS an agent and measures two of its turns; it is the slowest verb we ship, deliberately',
   search: 'an investigation verb a human or agent invokes deliberately; DuckDB streams a possibly-60MB transcript',
+  store: 'operator repair verb (repair-parked STAGES and fully re-verifies the whole bodies table) — run with the server stopped, a human watching',
 }
 
 export async function cliMain(argv: string[], startServer: () => Promise<unknown>): Promise<number> {
@@ -263,6 +265,11 @@ export async function cliMain(argv: string[], startServer: () => Promise<unknown
       // Data-retention config (TRDD-ZAV74M8Q): read/write DATA_DIR/config.json directly — no
       // server needed, so it works while the server is down and the values persist across uninstall.
       return runConfigCli(argv.slice(1))
+    case 'store':
+      // Durable-store administration (TRDD-8TM7I49X): `store repair-parked` repairs the ts rows
+      // permanently-parked bodies were parked for (from their files' own mtimes, via the full
+      // staged-migration protocol) and unparks them through the alstore flock.
+      return runStoreCli(argv.slice(1))
     case 'spool':
       // RAM-disk spool for raw-body capture (TRDD-K3WDPR7M Phase 3). `spool ensure` is what the
       // boot-remount LaunchAgent runs at login — re-create the spool iff capture is on, else no-op.

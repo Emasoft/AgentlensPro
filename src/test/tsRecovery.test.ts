@@ -8,8 +8,8 @@ import * as os from 'os'
 import * as path from 'path'
 import { flush, openStore } from '../store/db'
 import { bodyIdOf, ingestBody } from '../store/bodyStore'
-import { CURRENT_SCHEMA, migrateStore, readManifest, writeManifest } from '../store/migrate'
-import { emptyCorrections, makeTsRecoveryMigration, parseIdxTsMap, TsCorrections } from '../store/tsRecovery'
+import { CURRENT_SCHEMA, migrateStore, readManifest, repairStore, writeManifest } from '../store/migrate'
+import { emptyCorrections, makeTsRecoveryMigration, makeTsRepairStep, parkedMtimeTsMap, parseIdxTsMap, TsCorrections } from '../store/tsRecovery'
 import { verifyBodyInStore } from '../store/verifyInStore'
 
 function synthBody(tag: string): string {
@@ -149,5 +149,58 @@ suite('ts-recovery migration — corrects what the .idx proves, refuses what it 
     const r = await migrateStore(dir, { migrations: [makeTsRecoveryMigration(emptyCorrections())] })
     assert.strictEqual(r.error, undefined)
     assert.strictEqual(readManifest(dir).schemaVersion, CURRENT_SCHEMA)
+  })
+})
+
+// TRDD-8TM7I49X — the same-version repair rail. A permanently-parked body's ts row is repaired
+// from the parked file's OWN mtime (the value the verify gate compares against) through the full
+// staged protocol; the schema version must not move, and the rail must refuse a version-mismatched
+// step outright.
+suite('repairStore + parkedMtimeTsMap — same-version ts repair (TRDD-8TM7I49X)', () => {
+  test('parkedMtimeTsMap maps basename -> ROUNDED mtime and hard-errors on a missing file', () => {
+    const d = fs.mkdtempSync(path.join(os.tmpdir(), 'agentlens-parked-'))
+    const f = path.join(d, 'a.request.json')
+    fs.writeFileSync(f, '{}')
+    fs.utimesSync(f, new Date(CAPTURE), new Date(CAPTURE))
+    const m = parkedMtimeTsMap([f])
+    assert.strictEqual(m.get('a.request.json'), CAPTURE)
+    assert.strictEqual(Number.isInteger(m.get('a.request.json')), true)
+    // A missing file must ABORT the map build — this map gates a whole-table rewrite, and a
+    // silent skip would silently not correct that row.
+    assert.throws(() => parkedMtimeTsMap([path.join(d, 'gone.request.json')]))
+  })
+
+  test('repairs a wrong ts row IN PLACE: version unchanged, backup kept, correct rows untouched', async () => {
+    const dir = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'agentlens-repair-')), 'store')
+    await seedStore(dir)
+    // seedStore stamps v1; this store is a CURRENT one that simply carries a wrong row.
+    writeManifest(dir, { schemaVersion: CURRENT_SCHEMA, createdAt: new Date().toISOString() })
+    // The parked file, still on disk, mtime = the true capture time.
+    const parkedDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentlens-parkdir-'))
+    const parked = path.join(parkedDir, 'a.request.json')
+    fs.writeFileSync(parked, synthBody('a'))
+    fs.utimesSync(parked, new Date(CAPTURE), new Date(CAPTURE))
+
+    const c = emptyCorrections()
+    c.tsBySrcName = parkedMtimeTsMap([parked])
+    const res = await repairStore(dir, makeTsRepairStep(c, CURRENT_SCHEMA))
+    assert.strictEqual(res.error, undefined)
+    assert.strictEqual(res.migrated, true)
+    assert.strictEqual(readManifest(dir).schemaVersion, CURRENT_SCHEMA, 'a repair must not move the version')
+    assert.ok(res.backupDir && fs.existsSync(res.backupDir), 'the pre-repair store is KEPT')
+    assert.ok(/prerepair/.test(res.backupDir ?? ''), 'repair backups must never collide with a migration .old-vN')
+    assert.strictEqual(await bodyTs(dir, 'a.request.json'), CAPTURE, 'the parked row now carries capture time')
+    assert.strictEqual(await bodyTs(dir, 'c.request.json'), CAPTURE + 7000, 'an already-correct row is untouched')
+    assert.strictEqual(await bodyTs(dir, 'req_B.response.json'), INGEST, 'an uncorrected row is left as-is, never invented')
+  })
+
+  test('refuses a step whose version does not match the store — no staging, no swap', async () => {
+    const dir = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'agentlens-repair-ref-')), 'store')
+    await seedStore(dir)
+    writeManifest(dir, { schemaVersion: CURRENT_SCHEMA, createdAt: new Date().toISOString() })
+    const res = await repairStore(dir, makeTsRepairStep(emptyCorrections(), CURRENT_SCHEMA + 1))
+    assert.strictEqual(res.migrated, false)
+    assert.ok(/same-version/.test(res.error ?? ''), res.error)
+    assert.ok(!fs.existsSync(`${dir}.migrating`), 'a refused repair must not even stage')
   })
 })

@@ -71,6 +71,23 @@ export async function rustIngestPass(bin: string, opts: {
   return JSON.parse(stdout) as IngestPassResult
 }
 
+/** TRDD-8TM7I49X: remove names from the persisted stranded set through the binary that OWNS the
+ *  state file. Never a TS read-modify-write of .pass-state.json — that is exactly the unlocked
+ *  interleaving pass.rs warns about, and the bodies pass runs every 60s. Returns null on exit 75
+ *  (a pass owns the store's flock right now — benign, retry); throws on everything else. */
+export async function rustUnpark(bin: string, storeDir: string, namesFile: string):
+  Promise<{ requested: number; removed: number; strandedRemaining: number } | null> {
+  const stdout = await new Promise<string | null>((resolve, reject) => {
+    execFile(bin, ['unpark', storeDir, '--names-file', namesFile], { maxBuffer: 1 << 22 }, (err, out, stderr) => {
+      if (err && (err as { code?: unknown }).code === 75) resolve(null)
+      else if (err) reject(new Error(`alstore unpark failed (${bin}): ${err.message}${stderr ? ` — ${stderr.trim()}` : ''}`))
+      else resolve(out)
+    })
+  })
+  if (stdout === null) return null
+  return JSON.parse(stdout) as { requested: number; removed: number; strandedRemaining: number }
+}
+
 /** How many bodies are PARKED, and how much disk they hold down (TRDD-8TM7I49X).
  *
  *  A park is permanent for a durable target: `pass.rs:420-436` `continue`s a parked file with no

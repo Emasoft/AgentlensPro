@@ -54,6 +54,33 @@ export async function parseIdxTsMap(idxPaths: string[]): Promise<Map<string, num
   return map
 }
 
+/** TRDD-8TM7I49X: corrections sourced from parked files' OWN mtimes — the second source this
+ *  machinery was built to accept. A parked file still exists precisely BECAUSE the park refused
+ *  to delete it, its mtime is "the only true capture record" (ingestPass), and that mtime is the
+ *  very value the verify gate compares the row against — so row := mtime is what lets the gate
+ *  pass and the file finally reclaim. A missing/unstatable file is a HARD error, same discipline
+ *  as parseIdxTsMap: this map gates a rewrite of the whole bodies table, and silently skipping an
+ *  entry would mean silently not correcting it. */
+export function parkedMtimeTsMap(files: string[]): Map<string, number> {
+  const map = new Map<string, number>()
+  for (const p of files) {
+    const st = fs.statSync(p)
+    // Same rounding, same reason, as parseIdxTsMap: sub-ms floats abort the appender's BigInt.
+    map.set(path.basename(p), Math.round(st.mtimeMs))
+  }
+  return map
+}
+
+/** TRDD-8TM7I49X: the SAME rewrite as v1→v2, packaged as a same-version step for repairStore —
+ *  a machine-local data repair must never masquerade as a schema bump. */
+export function makeTsRepairStep(c: TsCorrections, atVersion: number): Migration {
+  const m = makeTsRecoveryMigration(c)
+  return {
+    ...m, from: atVersion, to: atVersion,
+    describe: `repair ts rows in place (${c.tsBySrcName.size} corrections, ${c.aliases.length} alias rows)`,
+  }
+}
+
 interface BodyRow {
   body_id: string; src_name: string; kind: string; session_id: string | null
   ts_ms: number; model: string | null; raw_bytes: number; body_sha256: string

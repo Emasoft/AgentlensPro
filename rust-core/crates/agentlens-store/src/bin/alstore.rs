@@ -6,6 +6,9 @@
 //!   alstore pass <storeDir> <bodiesDir> [--no-delete] [--durable-source]
 //!       [--max-bytes N] [--max-age-ms N] [--relocate-to DIR]   one throttled ingest pass;
 //!       skip/stranded state persists in <storeDir>/.pass-state.json across invocations
+//!   alstore unpark <storeDir> --names-file FILE   remove names (one per line) from the
+//!       persisted stranded set, under the pass lock (TRDD-8TM7I49X) — run AFTER the ts rows
+//!       those names were parked for have been repaired, or the next pass re-parks them
 //!
 //! The parity tests drive these against the TS store on the same files/directories: the
 //! Parquet parts are the compatibility boundary (both engines are DuckDB).
@@ -29,6 +32,7 @@ fn main() {
     // 0 = ingest regardless of age — matches PassOptions::default and the TS caller's over-cap mode.
     let mut max_age_ms: i64 = 0;
     let mut relocate_to: Option<String> = None;
+    let mut names_file: Option<String> = None;
     let mut rest: Vec<String> = Vec::new();
     let mut i = 2;
     while i < args.len() {
@@ -51,6 +55,10 @@ fn main() {
                 i += 1;
                 relocate_to = Some(args.get(i).cloned().unwrap_or_else(|| usage("--relocate-to needs a dir")));
             }
+            "--names-file" => {
+                i += 1;
+                names_file = Some(args.get(i).cloned().unwrap_or_else(|| usage("--names-file needs a path")));
+            }
             f if f.starts_with('-') => usage(&format!("unknown flag {f}")),
             f => rest.push(f.to_owned()),
         }
@@ -61,7 +69,7 @@ fn main() {
     // a locked-out tick exits in milliseconds instead of paying the parts-scan open first.
     // Exit 75 = EX_TEMPFAIL: the TS wrapper treats it as "skip this tick", the cross-process
     // twin of its own bodiesPassRunning guard — every other failure stays loud.
-    let _pass_lock = if cmd == "pass" {
+    let _pass_lock = if cmd == "pass" || cmd == "unpark" {
         match agentlens_store::pass::acquire_pass_lock(std::path::Path::new(store_dir)) {
             Ok(f) => Some(f),
             Err(agentlens_store::pass::PassLockErr::Busy) => {
@@ -76,6 +84,23 @@ fn main() {
     } else {
         None
     };
+
+    // TRDD-8TM7I49X: unpark touches ONLY .pass-state.json — same pass lock as a pass (the state
+    // file is the pass's cross-invocation memory), but no store open: a 2.4GB parts scan is the
+    // wrong price for a state-file edit.
+    if cmd == "unpark" {
+        let Some(nf) = names_file else { usage("--names-file required for unpark") };
+        let raw = std::fs::read_to_string(&nf).unwrap_or_else(|e| usage(&format!("cannot read {nf}: {e}")));
+        let names: Vec<String> =
+            raw.lines().map(str::trim).filter(|l| !l.is_empty()).map(str::to_owned).collect();
+        let state_file = std::path::Path::new(store_dir).join(agentlens_store::pass::PASS_STATE_FILE);
+        let (requested, removed, remaining) = agentlens_store::pass::unpark_names(&state_file, &names);
+        println!(
+            "{}",
+            serde_json::json!({ "requested": requested, "removed": removed, "strandedRemaining": remaining })
+        );
+        return;
+    }
 
     let threads = std::thread::available_parallelism().map(|n| n.get().saturating_sub(2).max(4)).unwrap_or(4);
     let mut store = agentlens_store::open_store(std::path::Path::new(store_dir), agentlens_store::DEFAULT_MEMORY_LIMIT, threads)
