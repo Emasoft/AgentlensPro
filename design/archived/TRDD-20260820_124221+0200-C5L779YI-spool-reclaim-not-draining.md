@@ -2,9 +2,10 @@
 trdd-id: C5L779YI
 trdd-id-full: C5L779YI
 title: A volatile spool holds up to bodiesMaxGb of un-reclaimed bodies because the age gate cannot fire on it
-column: todo
+column: complete
 created: 2026-08-20T12:42:21+0200
-updated: 2026-08-22T21:32:00+0200
+updated: 2026-08-25T14:08:08+0200
+implementation-commits: [c367961]
 severity: MEDIUM
 spawned: [8TM7I49X]
 current-owner: AgentlensPro session
@@ -12,7 +13,7 @@ task-type: bugfix
 priority: 3
 effort: M
 labels: [bodies, spool, data-loss, reclaim]
-approval-tier: 0
+min-approval-requirement: none
 relevant-files: [standalone/server.ts, src/rustStorePass.ts, rust-core/crates/agentlens-store/src/pass.rs, src/spoolBackpressure.ts]
 release-via: none
 ---
@@ -146,18 +147,23 @@ from draining THIS spool.
 
 ## Acceptance (RETARGETED — the surviving question)
 
-- [ ] A decision recorded on whether a volatile spool may hold up to `bodiesMaxGb` (512 MB here)
-      of un-reclaimed bodies, WITH the loss window stated. The answer may legitimately be "yes,
-      accepted" — bursting is far cheaper than per-file draining — but it must be a decision, not
-      a side effect of an age gate that cannot fire on this sink.
-- [ ] Whatever is decided is stated where the code makes the trade, next to the `overCap ? 0 :
-      BODIES_MAX_AGE_MS` line (`standalone/server.ts:685,693`). Today nothing there says the age
-      gate is structurally dead for a spool, which is why three suspects were chased instead.
-- [ ] `server status` stops inviting this misreading. `last pass archived 0 (live kept 0.69GB)`
-      uses the retired word "archived", reports only the LAST pass (0 by design between bursts),
-      and calls the backlog "kept". Report reclaim since boot, or the age of the last non-zero
-      pass, beside the backlog — the card's own note asked for exactly this and it is still not
-      there.
+- [x] A decision recorded on whether a volatile spool may hold up to `bodiesMaxGb` (512 MB here)
+      of un-reclaimed bodies, WITH the loss window stated. **DECIDED 2026-08-25 (session, under
+      the USER's standing decide-on-verified-facts delegation): YES, ACCEPTED.** Loss window: up
+      to capBytes = min(bodiesMaxGb, 70% of the volume) — 512 MB on this machine — of raw bodies
+      captured since the last cap burst, lost on unmount/reboot/full volume. Accepted because
+      bodies are diagnostic raw captures (every ingested span is already in the durable store)
+      and bursting at the cap is far cheaper than per-file draining. Revisit only if bodies ever
+      become the sole copy of something irreplaceable.
+- [x] Whatever is decided is stated where the code makes the trade — done in commit `c367961`, a
+      comment block directly above `const overCap = liveBytes > target.capBytes` (the single spot
+      both engine branches derive the `overCap ? 0 : BODIES_MAX_AGE_MS` ternary from), naming the
+      dead age gate, the sole-trigger cap valve, the loss window and the acceptance.
+- [x] `server status` stops inviting this misreading — commit `c367961`: the server tracks
+      `bodiesReclaimedSinceBoot` + `bodiesLastNonZeroPassAt`, serves both on /api/server-stats,
+      and the status line renders `reclaimed N file(s) since boot (last Nm ago); backlog X.XXGB
+      not yet reclaimed`. "archived"/"kept" wording retired; an older server without the fields
+      gets the legacy line (absent is not zero). Type-check + lint clean.
 
 ## Notes and lessons learned
 
