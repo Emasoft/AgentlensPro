@@ -2,16 +2,17 @@
 trdd-id: 4FMHW124
 trdd-id-full: 4FMHW124
 title: Raw-body capture has silent multi-hour holes and the server has no supervision
-column: todo
+column: complete
 created: 2026-08-20T12:42:21+0200
-updated: 2026-08-23T00:05:00+0200
+updated: 2026-08-25T14:40:00+0200
+implementation-commits: [5dfac15]
 current-owner: AgentlensPro session
 task-type: infra
 severity: MEDIUM
 priority: 3
 effort: M
 labels: [bodies, spool, observability, supervision]
-approval-tier: 0
+min-approval-requirement: none
 relevant-files: [standalone/server.ts, src/spoolBackpressure.ts, src/cli/setupCli.ts]
 release-via: none
 blocked-by: []
@@ -165,11 +166,27 @@ replaced roughly hourly, that sample may no longer be reproducible at all.
 
 ## Acceptance
 
-- [ ] Capture down while sessions are active raises a signal within minutes, on stats + alerts.
-- [ ] Sink path preconditions verified and reported at boot and per pass tick.
-- [ ] `investigate_burn` coverage distinguishes "scanned everything present" from
-      "everything present, but the corpus has a hole here".
-- [ ] Supervision lands only behind an explicit opt-in.
+- [x] Capture down while sessions are active raises a signal within minutes, on stats + alerts.
+      **Done, `5dfac15`:** the server compares its own activity clock (spans in `processTraces`;
+      hook events at the POST handler — NOT the boot spool drain, which replays history) against
+      the freshest body mtime each pass tick (60 s in spool mode). Active + no bodies for 10 m ⇒
+      transition-logged WARN, `bodies.captureDownSince` on /api/server-stats, a `CAPTURE DOWN Nm`
+      clause on the `capture:` status line, and a `CAPTURE_DOWN` risk row in `check_burn_risk`
+      (server-injected; no server signal ⇒ no row — absent is never rendered as healthy).
+- [x] Sink path preconditions verified and reported at boot and per pass tick. **Done,
+      `5dfac15`:** `probeSink()` (exists + writable via probe write; deliberately NO mkdir — with
+      the volume unmounted that would plant a shadow dir on the mount point) at boot and each
+      tick; `bodies.sinkProblem` on stats, `SINK:` clause on status, transition-only logging.
+- [x] `investigate_burn` coverage distinguishes "scanned everything present" from
+      "everything present, but the corpus has a hole here". **Done, `5dfac15`:**
+      `coverage.captureGaps` + a `CAPTURE GAP` note clause — sub-ranges ≥30 m with hook events
+      (sink-independent path) but zero bodies; skipped with disclosure when the file cap
+      truncated the listing (a gap computed on the largest-N subset would hallucinate holes).
+      Tests pin both directions: gap-with-events reported, idle-without-events not.
+- [x] Supervision lands only behind an explicit opt-in. **Already true of the shipped feature:**
+      `server|daemon start --supervise` + `daemon install` exist and nothing installs them by
+      default — verified on this machine, where only `com.agentlens.spool` is present in
+      `launchctl list`.
 - [x] **The EXISTING revival paths are identified before any supervisor is designed.** THREE, not
       one: (a) `reviveDaemonDetached()` (`src/cli/hookHandlers.ts:109-142`), fired by
       `forwardHookEvent` on any delivery failure, with `AGENTLENS_NO_REVIVE=1` and an on-disk flag
@@ -177,17 +194,24 @@ replaced roughly hourly, that sample may no longer be reproducible at all.
       `main.ts:230`, `diagnosticsCli.ts:672`); (c) **launchd, via the plist `daemon install`
       writes** — `serverControl.ts:529,534,555`, `main.ts:226`. Not installed on this machine
       (only `com.agentlens.spool` is), which is why the hook path explains the 21:51 restart here.
-- [ ] **This card's `--supervise` proposal is REWRITTEN or CANCELLED**, since the feature it
-      proposes exists (`server|daemon start … [--supervise]` + `daemon install`). The real
-      questions left are whether it should be installed BY DEFAULT, and how it coexists with the
-      hook revive — not whether to build it.
-- [ ] **A hook-revived server no longer discards its output.** Cause found:
-      `src/cli/hookHandlers.ts:139` spawns with `stdio: 'ignore'`, while `serverControl.ts:128-133`
-      opens `server.log` and documents /dev/null as "the one outcome the log exists to prevent".
-      The silent path is the one taken when the server has just died. Fix = the same
-      `fs.openSync(serverLogPath(), 'a')` with the same fallback.
-- [ ] **Why the 20:57 generation died at ~21:51 is answered** — unanswerable today, because of the
-      box above. Not a separate investigation; it is what the log fix makes possible.
+- [x] **This card's `--supervise` proposal is CANCELLED** (decided 2026-08-25, session, under the
+      USER's standing decide-on-verified-facts delegation): the feature it proposes already ships
+      (`server|daemon start … [--supervise]` + `daemon install`). Coexistence doctrine, recorded
+      here as the decision: the hook revive stays the DEFAULT reviver; `daemon install` (launchd)
+      is the explicit opt-in replacement, and an adopter stops the hook revive with the shipped
+      brakes (`AGENTLENS_NO_REVIVE=1` / `server stop --stay-down`) — never two supervisors over
+      one process. Installing launchd supervision BY DEFAULT stays rejected (persistent system
+      state needs the USER's explicit go-ahead, per this card's own filing).
+- [x] **A hook-revived server no longer discards its output.** Landed before this closure: the
+      revive (`src/cli/hookHandlers.ts:~152`) opens `server.log` append-mode with a `finally`
+      descriptor close (EMFILE-safe), same fallback as `serverControl.ts`; regression test in
+      `src/test/hookSpool.test.ts`, falsified by mutation (restoring `stdio: 'ignore'` → red),
+      per TRDD-1FSPKQ6C.
+- [x] **Why the 20:57 generation died at ~21:51** — resolved to the maximum obtainable: the
+      HISTORICAL instance is permanently unanswerable, because the evidence was discarded by the
+      exact defect this card fixed (`stdio: 'ignore'` on the path taken when the server had just
+      died). Every FUTURE death is recorded in `server.log` by the landed fix; asking further
+      would be chasing destroyed evidence.
 
 ## Notes and lessons learned
 
