@@ -92,11 +92,13 @@ export const RATES: Record<string, ModelRates> = {
   'gpt-5.2':            { inputPerMTok: 1.75,  cacheReadPerMTok: 0.175,  cacheWritePerMTok: 0, outputPerMTok: 14.00, contextWindowTokens: 256_000,   multiplier: 1,    multiplierAnnualPostJun1: 3 },
   'gpt-5.2-codex':      { inputPerMTok: 1.75,  cacheReadPerMTok: 0.175,  cacheWritePerMTok: 0, outputPerMTok: 14.00, contextWindowTokens: 256_000,   multiplier: 1,    multiplierAnnualPostJun1: 3 },
   'gpt-5.3-codex':      { inputPerMTok: 1.75,  cacheReadPerMTok: 0.175,  cacheWritePerMTok: 0, outputPerMTok: 14.00, contextWindowTokens: 256_000,   multiplier: 1,    multiplierAnnualPostJun1: 6 },
-  'gpt-5.4':            { inputPerMTok: 2.50,  cacheReadPerMTok: 0.25,   cacheWritePerMTok: 0, outputPerMTok: 15.00, contextWindowTokens: 272_000,   multiplier: 1,    multiplierAnnualPostJun1: 6,
+  // gpt-5.4/gpt-5.5 window: 1,050,000 per the live model pages (the old 272_000/256_000 were
+  // stale — the surcharge threshold 272K would have been unreachable inside its own window).
+  'gpt-5.4':            { inputPerMTok: 2.50,  cacheReadPerMTok: 0.25,   cacheWritePerMTok: 0, outputPerMTok: 15.00, contextWindowTokens: 1_050_000, multiplier: 1,    multiplierAnnualPostJun1: 6,
                           inputAbove200kPerMTok: 5.00, outputAbove200kPerMTok: 22.50, cacheReadAbove200kPerMTok: 0.50, cacheWriteAbove200kPerMTok: 0, surchargeThresholdTokens: 272_000 },
   'gpt-5.4-mini':       { inputPerMTok: 0.75,  cacheReadPerMTok: 0.075,  cacheWritePerMTok: 0, outputPerMTok: 4.50,  contextWindowTokens: 200_000,   multiplier: 0.33, multiplierAnnualPostJun1: 6 },
   'gpt-5.4-nano':       { inputPerMTok: 0.20,  cacheReadPerMTok: 0.02,   cacheWritePerMTok: 0, outputPerMTok: 1.25,  contextWindowTokens: 128_000,   multiplier: 0.25, multiplierAnnualPostJun1: 0.25 },
-  'gpt-5.5':            { inputPerMTok: 5.00,  cacheReadPerMTok: 0.50,   cacheWritePerMTok: 0, outputPerMTok: 30.00, contextWindowTokens: 256_000,   multiplier: 7.5,  multiplierAnnualPostJun1: 7.5,
+  'gpt-5.5':            { inputPerMTok: 5.00,  cacheReadPerMTok: 0.50,   cacheWritePerMTok: 0, outputPerMTok: 30.00, contextWindowTokens: 1_050_000, multiplier: 7.5,  multiplierAnnualPostJun1: 7.5,
                           inputAbove200kPerMTok: 10.00, outputAbove200kPerMTok: 45.00, cacheReadAbove200kPerMTok: 1.00, cacheWriteAbove200kPerMTok: 0, surchargeThresholdTokens: 272_000 },
   // ── Codex-only ─────────────────────────────────────────────────────────────
   // codex-mini-latest: fine-tuned o4-mini; 75% cache discount (not the usual 90%); deprecated
