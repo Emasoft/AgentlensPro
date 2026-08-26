@@ -93,13 +93,19 @@ suite('OtlpCollector', () => {
   let collector: OtlpCollector
   let store: ReturnType<typeof mockStore>
   let output: ReturnType<typeof mockOutputChannel>
-  const TEST_PORT = 14318 + Math.floor(Math.random() * 1000)
+  // Port 0 = let the OS hand out a free one, then read it back. The previous
+  // `14318 + random(1000)` guessed a port and then RE-BOUND that same guess in every setup, which
+  // races the previous listener's release: measured, this spec failed 1 run in 200 with `socket
+  // hang up`, on whichever test hit the race, and a fresh random port each run meant it never
+  // reproduced twice the same way. A guessed port can also collide with anything else on the box.
+  let TEST_PORT = 0
 
   setup(async () => {
     store = mockStore()
     output = mockOutputChannel()
-    collector = new OtlpCollector(TEST_PORT, store as unknown as SessionStore, output)
+    collector = new OtlpCollector(0, store as unknown as SessionStore, output)
     await collector.start()
+    TEST_PORT = collector.boundPort
   })
 
   teardown(async () => {
@@ -650,14 +656,15 @@ suite('OtlpCollector', () => {
 
 // ── TRDD-AMEA4O4Z: the log-event sink — gated-out events are PERSISTED, never discarded ──
 suite('OtlpCollector — log-event sink', () => {
-  const TEST_PORT = 15318 + Math.floor(Math.random() * 1000)
+  let TEST_PORT = 0 // OS-assigned, same reason as the suite above
   let collector: OtlpCollector
   let sinkDir: string
 
   setup(async () => {
     sinkDir = fs.mkdtempSync(path.join(os.tmpdir(), `al-sink-${process.pid}-`))
-    collector = new OtlpCollector(TEST_PORT, mockStore() as unknown as SessionStore, mockOutputChannel(), sinkDir)
+    collector = new OtlpCollector(0, mockStore() as unknown as SessionStore, mockOutputChannel(), sinkDir)
     await collector.start()
+    TEST_PORT = collector.boundPort
   })
 
   teardown(async () => {

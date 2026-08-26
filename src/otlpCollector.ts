@@ -53,6 +53,21 @@ export class OtlpCollector {
     this.ingestionEnabled = on
   }
 
+  /**
+   * The port actually bound, which is only interesting when `port` was 0 — pass 0 to let the OS
+   * pick a free one and read it back here. Callers that need a port nobody else holds should do
+   * exactly that rather than guessing a number: a guess can collide with anything else on the box,
+   * and re-binding one guessed port in a rapid start/stop cycle races the previous listener's
+   * release. Measured: the test suite guessed `14318 + random(1000)` and reused it across every
+   * setup/teardown, which failed 1 run in 200 with `socket hang up` — on whichever test happened to
+   * hit the race, and with a different port each run, so it never reproduced the same way twice.
+   * Returns 0 before `start()` resolves.
+   */
+  get boundPort(): number {
+    const addr = this.server?.address()
+    return addr && typeof addr === 'object' ? addr.port : 0
+  }
+
   /** Dropped log-event name → count since boot (bounded; see droppedLogEvents). */
   getDroppedLogEvents(): Record<string, number> {
     return Object.fromEntries(this.droppedLogEvents)
