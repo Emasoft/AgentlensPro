@@ -621,7 +621,17 @@ export function runSupervise(): void {
    *  RESCHEDULE rather than exit: a brake is a pause, not a shutdown. Exiting here would mean a
    *  stay-down stop permanently kills a launchd-supervised install, and clearing the brake would
    *  not bring it back. Re-checking on the same backoff timer resumes on its own. */
-  const reviveBraked = (): boolean => { try { return fs.existsSync(noRevivePath()) } catch { return false } }
+  /** ENOENT-only-false, NOT existsSync. existsSync never throws — it reads EVERY error (EACCES,
+   *  EIO) as "absent", and here that direction is inverted from the hook path this brake grew out
+   *  of: a hook failing open loses a spawn (missed capture); a supervisor failing open mid-rewrite
+   *  SPAWNS into the swap (corruption). Unreadable therefore means BRAKED — the pause self-heals
+   *  on the next backoff tick, the corruption would not. Proven on this machine: statSync throws
+   *  EACCES on /var/root/x while existsSync returns false for the same path. */
+  const reviveBraked = (): boolean => {
+    try { fs.statSync(noRevivePath()); return true } catch (e) {
+      return (e as NodeJS.ErrnoException).code !== 'ENOENT'
+    }
+  }
   const startUnlessBraked = (): void => {
     if (reviveBraked()) {
       logCrash(`revive brake (NO_REVIVE) is set — NOT restarting the collector; re-checking in ${backoffMs}ms. Clear it with \`agentlenspro server start\`.`)
@@ -687,9 +697,12 @@ export function runSupervise(): void {
   // ENTRY is refused outright when braked — unlike the restart loop, which waits. A launchd
   // KeepAlive respawn invokes the identical argv as a human start, so entry cannot assume an
   // operator meant "override the brake": arming the brake for a store rewrite and having launchd
-  // bounce the supervisor would otherwise spawn a collector straight into the swap. EX_TEMPFAIL
-  // (75), not 78: launchd backs off and retries, and the first respawn after the brake clears
-  // succeeds on its own. The human who really wants supervision back clears the brake first
+  // bounce the supervisor would otherwise spawn a collector straight into the swap. Exit 75, not
+  // 78: 78 is the TERMINAL config-refusal code launchd consumers treat as give-up. launchd does
+  // NOT interpret 75 specially — KeepAlive just rethrottles at its fixed ThrottleInterval
+  // (~10s default), forever. That flat 10s stat+exit spin is bounded and cheap, and the first
+  // respawn after the brake clears succeeds on its own; do not expect escalating backoff here.
+  // The human who really wants supervision back clears the brake first
   // (`agentlenspro server start`, or remove NO_REVIVE) and re-runs.
   if (reviveBraked()) {
     process.stderr.write(`[supervisor] revive brake (NO_REVIVE) is set — refusing to start. Clear it and re-run.\n`)
@@ -758,6 +771,19 @@ export async function serverCommand(argv: string[]): Promise<void> {
         console.log('revive brake set (NO_REVIVE) — hooks and the supervisor will not resurrect the server; `agentlenspro server start` clears it.')
       }
       await stopServer()
+      // A plain stop against a SUPERVISED install is a trap: the supervisor sees the child exit
+      // (its shuttingDown is false — that flag is set only by its own signal handler) and
+      // respawns in ~1s, right after we printed "server stopped". Warn instead of silently
+      // losing the fight; --stay-down is the stop that actually holds. Snapshot-then-scan so
+      // the scanner cannot match itself.
+      if (!stayDown) {
+        try {
+          const table = execFileSync('ps', ['-eo', 'pid,command'], { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 })
+          if (table.split('\n').some((l) => /server\s+start\b.*--supervise/.test(l) && Number(l.trim().split(/\s+/)[0]) !== process.pid)) {
+            console.error('WARNING: a supervisor is running — it will respawn the collector in seconds. Use `server stop --stay-down` to hold it down, or stop the supervisor itself.')
+          }
+        } catch { /* advisory only — a failed scan must not fail the stop */ }
+      }
       return
     case 'restart':
       await stopServer()
