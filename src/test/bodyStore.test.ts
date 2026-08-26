@@ -4,7 +4,7 @@ import * as assert from 'assert'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
-import { flush, memoryLimit, openStore, Store } from '../store/db'
+import { DEFAULT_MEMORY_LIMIT, flush, memoryLimit, openStore, Store } from '../store/db'
 import { bodyIdOf, exportBodiesFromStore, extractMeta, ingestBody, reconstructBody } from '../store/bodyStore'
 import { sha256 } from '../store/sections'
 import { resolveBodiesReadScope } from '../captureConfig'
@@ -252,7 +252,9 @@ suite('bodyStore — metadata kept IN CLEAR (no decompression to answer "what is
 
 suite('bodyStore — DuckDB is configured so it can never quietly burn the SSD', () => {
   test('memory_limit: env > option > default', () => {
-    assert.strictEqual(memoryLimit({ dir: '/x' }, {}), '8GB')
+    // Default is now machine-scaled (TRDD-IXVHM52P) — assert against DEFAULT_MEMORY_LIMIT
+    // itself, not a hardcoded '8GB', since the real value depends on this machine's RAM.
+    assert.strictEqual(memoryLimit({ dir: '/x' }, {}), DEFAULT_MEMORY_LIMIT)
     assert.strictEqual(memoryLimit({ dir: '/x', memoryLimit: '2GB' }, {}), '2GB')
     assert.strictEqual(memoryLimit({ dir: '/x', memoryLimit: '2GB' }, { AGENTLENS_DUCKDB_MEMORY_LIMIT: '16GB' }), '16GB')
   })

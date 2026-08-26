@@ -222,7 +222,11 @@ async function stagedRewrite(
     log(`migrated v${res.fromVersion} -> v${manifestVersion}. Previous store KEPT at ${backup} (delete it yourself once you are satisfied).`)
     return { ...res, migrated: true, toVersion: manifestVersion, backupDir: backup }
   } catch (e) {
-    res.error = `migration failed: ${(e as Error).message} — live store untouched, staging kept at ${staging}`
+    const msg = (e as Error).message
+    // TRDD-IXVHM52P: DuckDB's own OOM text never mentions the knob that fixes it — name it here,
+    // the one place every migrate/repair failure funnels through, rather than in every caller.
+    const hint = msg.includes('Out of Memory') ? ' (try AGENTLENS_DUCKDB_MEMORY_LIMIT=<bigger>, e.g. 24GB)' : ''
+    res.error = `migration failed: ${msg}${hint} — live store untouched, staging kept at ${staging}`
     return res
   } finally {
     await from?.close()

@@ -3,7 +3,7 @@ trdd-id: IXVHM52P
 title: The 8GB DuckDB ceiling OOMs a full-store validate — repair-parked fails out of the box
 column: todo
 created: 2026-08-26T04:25:32+0200
-updated: 2026-08-26T04:34:15+0200
+updated: 2026-08-26T05:24:10+0200
 current-owner: AgentlensPro session
 task-type: bugfix
 min-approval-requirement: none
@@ -80,7 +80,21 @@ that fixes it.
 
 - [ ] `store repair-parked` completes on a store of at least this size with NO
       env override — measured, not argued.
-- [ ] An over-limit failure names the env knob in its message.
-- [ ] `DEFAULT_MEMORY_LIMIT` either scales with the machine the way
+- [x] An over-limit failure names the env knob in its message. Implemented in
+      `src/store/migrate.ts`'s `migrateStore`/`repairStore` catch block (the one
+      funnel every migrate/repair failure passes through): when the caught
+      error text contains `Out of Memory`, the operator-facing `res.error`
+      (surfaced verbatim by `storeAdmin.ts`'s `repair FAILED:` line) now appends
+      `(try AGENTLENS_DUCKDB_MEMORY_LIMIT=<bigger>, e.g. 24GB)`.
+- [x] `DEFAULT_MEMORY_LIMIT` either scales with the machine the way
       `DEFAULT_THREADS` already does, or its fixed-ness is justified in a comment
-      that names the store size it is known to survive.
+      that names the store size it is known to survive. Implemented: in
+      `src/store/db.ts` it now scales off `os.totalmem()` (half, floored at the
+      old 8GB) the same way `DEFAULT_THREADS` scales off
+      `availableParallelism()` — the env > option > default cascade in
+      `memoryLimit()` is unchanged. `src/test/bodyStore.test.ts`'s cascade test
+      updated to assert against the (now machine-dependent)
+      `DEFAULT_MEMORY_LIMIT` export instead of a hardcoded `'8GB'`.
+      `pnpm run check-types` and `pnpm run lint` both exit 0; scoped
+      `mocha --grep "DuckDB is configured"` on `bodyStore.test.js`: 2 passing.
+      Remedy (3) (streaming V2 validate) explicitly out of scope for this pass.

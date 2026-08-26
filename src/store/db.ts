@@ -60,7 +60,13 @@ function partName(seq: number): string {
   return `part-${Date.now()}-${process.pid}-${seq}.parquet`
 }
 
-export const DEFAULT_MEMORY_LIMIT = '8GB'
+// TRDD-IXVHM52P: was a flat '8GB' — on a 64GB machine a full-store validate (every blob, every
+// body, in one working set) OOMed at the 7.4GB watermark while DEFAULT_THREADS below correctly
+// scaled to the machine's cores. Half of totalmem, floored at the old 8GB so a small box never
+// regresses, keeps plenty of headroom for the OS + Node's own heap while giving validate/migrate
+// room to actually finish. AGENTLENS_DUCKDB_MEMORY_LIMIT (see memoryLimit() below) always wins —
+// this is only the default when neither the env var nor an explicit option is set.
+export const DEFAULT_MEMORY_LIMIT = `${Math.max(8, Math.floor(os.totalmem() / 2 / 1024 ** 3))}GB`
 // TRDD-7I5805QM: was a flat 4 — on a 16-core machine every DuckDB query (forensics SQL, verify
 // scans, run_diagnostics_sql) ran on a quarter of the cores while the user watched one Node core
 // peg. Scale to the machine, leave 2 cores for Node's own event loop + the OS; floor 4 so a small
