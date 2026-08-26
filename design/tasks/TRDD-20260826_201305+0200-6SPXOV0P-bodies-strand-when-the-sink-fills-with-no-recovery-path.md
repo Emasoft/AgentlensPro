@@ -106,10 +106,30 @@ disagree → park. It also means the repair's remedy overwrites the TRUE capture
 mtime the file happens to carry, which is why the card it came from records ghosts as
 "capture time unrecoverable".
 
-**Still open, and NOT to be guessed:** WHAT re-materialised 1032 bodies into
-`~/.agentlens/otel-bodies` at boot. `exportBodiesFromStore` and `extractArchive` exist
-(`standalone/server.ts:3799-3810`) but are the `/api/bodies/export` path, not a boot path. The
-producer has not been found; nothing below should assume it.
+**ANSWERED — the producer is NOT in this repository.** Body files are written by Claude Code
+itself. AgentlensPro only tells it where: `ownedKeys()` writes
+`OTEL_LOG_RAW_API_BODIES=file:${bodiesDir}` into the harness's settings
+(`src/telemetryConfig.ts:162`, key at `src/captureConfig.ts:24`), and the dir follows "MOUNT truth,
+not config truth" (`standalone/server.ts:4487-4491`) — so when the spool RAM disk fails, the
+harness is repointed at the legacy dir and writes there.
+
+There is therefore **no line in this codebase that writes those 1032 files**, and searching for one
+is why the earlier hypotheses kept inventing internal restore paths that do not exist
+(`exportBodiesFromStore`/`extractArchive` at `standalone/server.ts:3799-3810` are the
+`/api/bodies/export` request path, not a boot path).
+
+**This is the load-bearing consequence:** the writer is outside our control, and the parking rule
+depends on a property only the writer sets. If the harness re-emits a body it already wrote — same
+name, same bytes, new mtime — the store's row (holding the FIRST mtime) is instantly and
+permanently wrong by the pass's own test, through no fault of the store. Every remedy that repairs
+the row from the current mtime is a race against the next re-emit.
+
+So the fix cannot be "stop the re-write". It has to be one of:
+1. stop anchoring capture time to mtime — carry it in something the writer cannot reset (the body's
+   own content, a sidecar, or the ingest-time row treated as authoritative once set); or
+2. treat "durable bytes, disagreeing ts" as BENIGN rather than park-forever — the bytes are proven,
+   which is what the store exists to guarantee, and the ts is metadata that a re-emit can legitimately
+   move.
 
 ### Candidates ELIMINATED (so the next person does not re-walk them)
 
@@ -180,8 +200,10 @@ Sizing is the USER's call regardless, and no agent should reclaim space to paper
 - [x] The discriminator is named with evidence at `file:line` (see above): park iff
       `|stored_ts − file mtime| > 2 s` on a durable body, and all 307 were files CREATED at boot
       (mtime == birthtime, one minute) carrying bodies whose rows hold the PREVIOUS day's ts.
-- [ ] The boot-time producer of those 1032 files is identified at a `file:line`. Measured that it
-      happens; not yet what does it.
+- [x] The boot-time producer is identified: **Claude Code**, not this codebase. We only set
+      `OTEL_LOG_RAW_API_BODIES=file:${bodiesDir}` (`src/telemetryConfig.ts:162`,
+      `src/captureConfig.ts:24`) and repoint it on mount truth
+      (`standalone/server.ts:4487-4491`). No internal restore path is involved.
 - [ ] The design question this exposes gets an answer: **mtime is a proxy for capture time, and it
       is invalid for any body that is re-materialised.** Either capture time stops being carried by
       a resettable file attribute, or every restore path is made to preserve it — otherwise the
