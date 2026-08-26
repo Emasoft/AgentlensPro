@@ -1,9 +1,10 @@
 ---
 trdd-id: 8TM7I49X
 title: 1045 already-durable legacy body files are permanently parked in the Rust pass stranded set
-column: todo
+column: complete
 created: 2026-08-22T21:12:33+0200
-updated: 2026-08-22T23:05:00+0200
+updated: 2026-08-26T20:10:48+0200
+implementation-commits: [1614a9d]
 current-owner: main
 task-type: bugfix
 severity: HIGH
@@ -246,9 +247,22 @@ console.log('stranded',s.size,'legacy',leg.length,'overlap',leg.filter(f=>s.has(
       forever when `relocate_stranded_to` is `None`; `server.ts:702` passes `undefined` for the
       durable target; `pass.rs:94` persists the set across restarts. Counts are exact (1045 =
       1045, overlap 1045, spool 0).
-- [ ] The 1045 files either drain (verified: count falls, store row count rises, bytes
+- [x] The 1045 files either drain (verified: count falls, store row count rises, bytes
       reconstruct byte-identically) or the reason they must be kept is recorded IN THE CODE, not
-      only here. **Blocked on the remedy decision above.**
+      only here. **DRAINED 2026-08-26.** `agentlenspro store repair-parked` completed in ~13 min:
+      `repaired 1045 ts row(s)`, `verified: 757092 bodies, 2326679 spans, 0 lost`, store swapped,
+      previous store kept at `store.old-v2-prerepair-2026-08-26T17-54-31-937Z`.
+      Count falls, measured in the pass state itself — `strandedNames` **1045 → 0** of the legacy
+      set (307 present afterwards are unrelated residue from an ENOSPC window on the spool volume,
+      and were flat across 90 s, not growing); `skipNames` 135,190 → 2,337; the `parked:` clause is
+      gone from `server status`. Bytes reconstruct byte-identically — that is what
+      `verified: … 0 lost` asserts, and it is now a real assertion rather than an unreachable one.
+
+      WHY THIS TOOK FOUR DAYS AND ONE FALSE START: the first attempt ran 12h38m and was ~0.5%
+      done. It was never going to finish OR succeed — `validateStore` cost ~12.8 s per body
+      (months for 757k), and it would then have REFUSED the swap regardless, because 493 bodies
+      could not be reconstructed at all. Both were fixed in `1614a9d`; this drain is the first
+      time the repair could complete. Details: `reports/store-validate/20260826_173403+0200-*.md`.
 - [x] The park has an operator surface — a parked-file count in `server status` /
       `/api/server-stats`. 1045 permanently-pinned files were invisible for days, and the
       per-pass `PARKED` warning cannot show them because it only counts files parked *this* pass.
