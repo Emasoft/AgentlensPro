@@ -14,6 +14,7 @@ relevant-files: [src/shared/pricing.ts]
 labels: [pricing, cost-accuracy]
 npt: []
 eht: []
+implementation-commits: [31e1d24]
 ---
 
 # Long-context surcharge: 4 models unencoded, threshold hardcoded, semantics unverified
