@@ -9,7 +9,7 @@ import * as os from 'os'
 import * as path from 'path'
 import { apiRequest, dataDir, dashboardUrl, fmtGb, fmtMb, init, mcpEndpoint, sleep, CONNECT_TIMEOUT_MS } from './cliCore'
 import { dataDirSource, dataPath } from '../dataDir'
-import { agentlensDisabled, killSwitchPath } from './killSwitch'
+import { agentlensDisabled, killSwitchPath, noRevivePath } from './killSwitch'
 import { UsageError } from './cliErrors'
 import { assertKnownFlags } from './argHelpers'
 import { parsePidLock } from '../serverRuntime'
@@ -667,10 +667,17 @@ export async function serverCommand(argv: string[]): Promise<void> {
   // `server status --x` used to be silently ignored and exit 0 (TRDD-PIB6T4RU) — the only flag any
   // verb here understands is --supervise (start-only, but harmless to accept everywhere), so anything
   // else flag-shaped is a typo, not a no-op.
-  assertKnownFlags(argv.slice(1), new Set(['--supervise']), new Set(), 'agentlenspro server start|stop|restart|status [--supervise]')
+  assertKnownFlags(argv.slice(1), new Set(['--supervise', '--stay-down']), new Set(), 'agentlenspro server start|stop|restart|status [--supervise] [--stay-down]')
   const supervise = argv.includes('--supervise')
+  const stayDown = argv.includes('--stay-down')
+  if (stayDown && verb !== 'stop') {
+    throw new UsageError('--stay-down only applies to `server stop` — it sets the on-disk revive brake so no hook resurrects the server until the next `server start`.')
+  }
   switch (verb) {
     case 'start':
+      // A deliberate start lifts the stop-time brake — otherwise the server runs now but the
+      // first crash after this point is never revived, silently ending capture.
+      try { fs.rmSync(noRevivePath(), { force: true }) } catch { /* fail-open: brake reader tolerates it */ }
       if (supervise) {
         // Refuse a second collector: both would bind the same ports and the second EADDRINUSEs.
         if (await mcpServed()) {
@@ -683,10 +690,15 @@ export async function serverCommand(argv: string[]): Promise<void> {
       await ensureServer()
       return
     case 'stop':
+      // Brake BEFORE the SIGTERM: a hook landing in the stop window must already see the flag,
+      // or it revives the server the instant it dies (the exact race the brake exists for).
+      if (stayDown) fs.writeFileSync(noRevivePath(), `server stop --stay-down ${new Date().toISOString()}\n`)
       await stopServer()
+      if (stayDown) console.log('revive brake set (NO_REVIVE) — hooks will not resurrect the server; `agentlenspro server start` clears it.')
       return
     case 'restart':
       await stopServer()
+      try { fs.rmSync(noRevivePath(), { force: true }) } catch { /* fail-open */ }
       await ensureServer()
       return
     case 'status':

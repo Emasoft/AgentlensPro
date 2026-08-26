@@ -17,6 +17,38 @@ import { makeTsRepairStep, parkedMtimeTsMap, emptyCorrections } from '../store/t
 import { alstoreBin, rustUnpark } from '../rustStorePass'
 import { reviveDisabledOnDisk } from './hookHandlers'
 import { apiRequest } from './cliCore'
+import { execFileSync } from 'child_process'
+
+/** Names of processes that can WRITE the store, found by snapshotting the process table.
+ *
+ *  WHY this exists next to the HTTP ping: the ping answers "is the server SERVING", which is a
+ *  PROXY for the thing that actually matters — "can anything write the store dir during the swap".
+ *  They come apart in both directions that matter: a wedged-but-alive server (mid-boot, stalled
+ *  event loop, misconfigured port) fails the ping exactly like a dead one, and an `alstore pass`
+ *  child spawned before the stop survives `server stop` entirely. Either one flushes new parts
+ *  into the live dir mid-stage, and after the atomic swap those parts are stranded in the backup —
+ *  silent divergence, the precise hazard the gate exists to prevent. The stay-down brake stops
+ *  FUTURE revives, never a writer that is already live.
+ *
+ *  Snapshot-then-scan (never `pgrep -f`): the scanning process has the pattern in its own argv and
+ *  matches itself. A snapshot taken before the scan cannot contain the scanner. */
+function liveStoreWriters(): string[] {
+  let table: string
+  try {
+    table = execFileSync('ps', ['-eo', 'pid,command'], { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 })
+  } catch {
+    // Fail CLOSED. Unlike the revive brake (whose absence must never stop ingestion), an unreadable
+    // process table here means we cannot prove the store is quiescent — and the cost of guessing
+    // wrong is silent data loss, not a missed span.
+    return ['<could not read the process table — cannot prove the store is quiescent>']
+  }
+  const self = process.pid
+  return table.split('\n').slice(1).filter((line) => {
+    const pid = Number(line.trim().split(/\s+/)[0])
+    if (!Number.isFinite(pid) || pid === self) return false
+    return /standalone\/server\.js|alcore\s+serve|alstore\s+pass/.test(line)
+  }).map((l) => l.trim())
+}
 
 export async function runStoreCli(argv: string[]): Promise<number> {
   const sub = argv[0]
@@ -47,10 +79,22 @@ export async function runStoreCli(argv: string[]): Promise<number> {
   const dirs = resolveBodiesReadScope(dataDir(), process.env).dirs
   const found: string[] = []
   const ghosts: string[] = []
+  const ambiguous: string[] = []
   for (const n of stranded) {
-    const hit = dirs.map((d) => path.join(d, n)).find((p) => fs.existsSync(p))
-    if (hit) found.push(hit)
-    else ghosts.push(n)
+    const hits = dirs.map((d) => path.join(d, n)).filter((p) => fs.existsSync(p))
+    if (hits.length === 0) { ghosts.push(n); continue }
+    // A name present in MORE than one read dir (spool and legacy) has two candidate mtimes, and
+    // taking the first dir's silently picks one capture time over another — a fabricated ts with
+    // no signal that a choice was made. Report and leave parked instead: same rule as a ghost.
+    if (hits.length > 1 && new Set(hits.map((p) => fs.statSync(p).mtimeMs)).size > 1) {
+      ambiguous.push(`${n} (${hits.join(', ')})`)
+      continue
+    }
+    found.push(hits[0])
+  }
+  if (ambiguous.length > 0) {
+    console.error(`AMBIGUOUS: ${ambiguous.length} name(s) exist in more than one read dir with DIFFERENT mtimes — left parked (which mtime is the capture time is unknowable here):`)
+    for (const a of ambiguous.slice(0, 10)) console.error(`  ${a}`)
   }
   console.log(`parked: ${stranded.length} name(s) — ${found.length} with a live file (repairable), ${ghosts.length} ghost(s) (left parked; capture time unrecoverable)`)
   if (found.length === 0) {
@@ -69,6 +113,13 @@ export async function runStoreCli(argv: string[]): Promise<number> {
   try { await apiRequest('GET', '/api/server-stats'); serverUp = true } catch { /* down — good */ }
   if (serverUp) {
     console.error('REFUSED: the server is running — it would keep writing into the swapped-out store. Run `agentlenspro server stop --stay-down` first.')
+    return 1
+  }
+  const writers = liveStoreWriters()
+  if (writers.length > 0) {
+    console.error('REFUSED: a process that can write the store is still alive — it would flush parts into the swapped-out store:')
+    for (const w of writers) console.error(`  ${w}`)
+    console.error('Wait for it to exit (or stop it) and re-run. The HTTP ping alone cannot see a wedged server or an already-spawned pass child.')
     return 1
   }
   if (!reviveDisabledOnDisk()) {
