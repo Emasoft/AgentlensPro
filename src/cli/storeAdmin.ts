@@ -58,7 +58,9 @@ function liveStoreWriters(): string[] {
     // A RENAMED shim (`alens -> cli.js`) is out-of-contract by decision, not accident: argv is
     // shown as invoked, not resolved, so name-matching cannot follow an alias — and the spawned
     // collector still matches the standalone/server.js arm the moment it exists.
-    return /standalone\/server\.js|(standalone\/cli\.js|out\/(test\/)?cli\/[^ ]+\.js|agentlenspro)\s+server\s+start\b.*--supervise|alcore\s+serve|alstore\s+(pass|unpark)/.test(line)
+    // \b before out/ — without it "checkout/cli/…" is a substring hit, and this gate fail-closed
+    // over a stranger's path is the exact false positive the anchoring exists to prevent.
+    return /standalone\/server\.js|(standalone\/cli\.js|\bout\/(test\/)?cli\/[^ ]+\.js|agentlenspro)\s+server\s+start\b.*--supervise|alcore\s+serve|alstore\s+(pass|unpark)/.test(line)
   }).map((l) => l.trim())
 }
 
