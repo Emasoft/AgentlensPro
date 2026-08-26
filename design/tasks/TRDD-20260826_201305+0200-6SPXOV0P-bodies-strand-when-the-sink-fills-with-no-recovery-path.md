@@ -68,6 +68,49 @@ nothing parked". An operator reading `unparked 0` reasonably concludes the repai
 anything, when in fact the swap had already discarded the set. That wording is worth fixing on its
 own.
 
+## THE DISCRIMINATOR — measured 2026-08-26 21:1x
+
+The parking rule, at `file:line`:
+
+- `rust-core/crates/agentlens-store/src/lib.rs:589` — park when `|stored_ts − want| > TS_TOLERANCE_MS`
+  (2000 ms, `lib.rs:40`);
+- `rust-core/crates/agentlens-store/src/pass.rs:351` — **`want` is the file's `mtime_ms`**;
+- `rust-core/crates/agentlens-store/src/pass.rs:386` — and it parks only when `b.durable`, i.e. the
+  bytes are already proven in the store.
+
+So a body parks exactly when its FILE MTIME drifts >2 s from the capture ts stored at ingest. Now
+the 307:
+
+| measurement | value |
+|---|---|
+| `mtime − stored_ts`, 40 sampled | 83,618 – 84,422 s (**23.2–23.5 h**), spread only ~800 s |
+| mtime vs birthtime | **equal** — these files were CREATED, never modified |
+| birth minute, all 307 | `2026-08-26T18:07` UTC — one single minute |
+| birth minute, ALL 1032 files in the local bodies dir | `18:07` UTC — the same minute |
+| stored ts of those bodies | `2026-08-25 20:40`–`20:53` — the previous evening |
+| stranded names also present on the spool volume | **0 / 50** |
+
+18:07 UTC is 20:07 local — the moment the server was started after the repair. Before that restart
+`server status` read `NO BODIES on disk (0 file(s)) — capture has never run, or the live dir was
+emptied`; after it, 4187 live files.
+
+**So the invariant is anchored to a file attribute that any file-recreating operation resets.** The
+repair writes each store row's ts FROM the parked file's own mtime (`storeAdmin.ts` header:
+"repair the ts rows from the parked files' own mtimes"). Something then re-materialised those
+bodies at boot with fresh mtimes — 1032 files, one minute, matching the 1045 the repair had just
+processed — and 307 of them immediately violated the rule again, because the row now holds
+yesterday's mtime while the file carries today's.
+
+That is a loop, not a residue: repair sets rows from mtimes → a restore resets mtimes → the rows
+disagree → park. It also means the repair's remedy overwrites the TRUE capture time with whatever
+mtime the file happens to carry, which is why the card it came from records ghosts as
+"capture time unrecoverable".
+
+**Still open, and NOT to be guessed:** WHAT re-materialised 1032 bodies into
+`~/.agentlens/otel-bodies` at boot. `exportBodiesFromStore` and `extractArchive` exist
+(`standalone/server.ts:3799-3810`) but are the `/api/bodies/export` path, not a boot path. The
+producer has not been found; nothing below should assume it.
+
 ## What this card must establish
 
 1. **Why a pass over a post-downtime backlog parks ~307 of ~4,000 files.** Same pass, same store,
@@ -87,11 +130,18 @@ Sizing is the USER's call regardless, and no agent should reclaim space to paper
 
 - [x] The 307 are characterised against the drained 1045 by NAME, not by count: zero overlap, all
       newly parked, flat for ~57 minutes. TRDD-8TM7I49X drained its backlog completely.
-- [ ] The discriminator is named — why a post-downtime pass parks ~307 of ~4,000 files and leaves
-      the rest — with evidence at a `file:line`, not inferred from the symptom.
+- [x] The discriminator is named with evidence at `file:line` (see above): park iff
+      `|stored_ts − file mtime| > 2 s` on a durable body, and all 307 were files CREATED at boot
+      (mtime == birthtime, one minute) carrying bodies whose rows hold the PREVIOUS day's ts.
+- [ ] The boot-time producer of those 1032 files is identified at a `file:line`. Measured that it
+      happens; not yet what does it.
+- [ ] The design question this exposes gets an answer: **mtime is a proxy for capture time, and it
+      is invalid for any body that is re-materialised.** Either capture time stops being carried by
+      a resettable file attribute, or every restore path is made to preserve it — otherwise the
+      repair verb and the restore path will keep undoing each other.
 - [ ] Established whether newly parked files can drain without an operator running the repair verb.
-      If they cannot, the parked set refills after every extended downtime and TRDD-8TM7I49X fixed
-      an instance rather than the mechanism.
+      If they cannot, the parked set refills on this loop and TRDD-8TM7I49X fixed an instance
+      rather than the mechanism.
 - [ ] `unparked N name(s) (M still stranded)` distinguishes "unparked nothing because the swap
       already discarded the set" from "nothing was parked" — today both print `0`
       (`src/cli/storeAdmin.ts:165-173`).
