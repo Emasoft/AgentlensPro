@@ -10,6 +10,7 @@ import * as path from 'path'
 import { apiRequest, dataDir, dashboardUrl, fmtGb, fmtMb, init, mcpEndpoint, sleep, CONNECT_TIMEOUT_MS } from './cliCore'
 import { dataDirSource, dataPath } from '../dataDir'
 import { agentlensDisabled, killSwitchPath, noRevivePath } from './killSwitch'
+import { reviveDisabledOnDisk } from './hookHandlers'
 import { UsageError } from './cliErrors'
 import { assertKnownFlags } from './argHelpers'
 import { parsePidLock } from '../serverRuntime'
@@ -599,6 +600,28 @@ export function runSupervise(): void {
     process.stderr.write(`[supervisor] ${line}`)
   }
 
+  /** Every scheduled restart goes through here, never straight to start().
+   *
+   *  WHY: `server stop --stay-down` arms the on-disk NO_REVIVE brake so nothing resurrects the
+   *  collector during a staged store rewrite — and the supervisor was the one process class that
+   *  ignored it. stopServer() SIGTERMs the child, `shuttingDown` is false (it is only set by the
+   *  supervisor's OWN signal handler, not by an external stop), so the exit handler cheerfully
+   *  respawned a collector straight into the store dir mid-swap. Worse, it was TIMING-dependent:
+   *  a repair whose quiescence scan landed in the backoff gap saw a clean process table, staged,
+   *  and then had a collector appear underneath it — silent divergence that looks intermittent.
+   *
+   *  RESCHEDULE rather than exit: a brake is a pause, not a shutdown. Exiting here would mean a
+   *  stay-down stop permanently kills a launchd-supervised install, and clearing the brake would
+   *  not bring it back. Re-checking on the same backoff timer resumes on its own. */
+  const startUnlessBraked = (): void => {
+    if (reviveDisabledOnDisk()) {
+      logCrash(`revive brake (NO_REVIVE) is set — NOT restarting the collector; re-checking in ${backoffMs}ms. Clear it with \`agentlenspro server start\`.`)
+      setTimeout(startUnlessBraked, backoffMs)
+      return
+    }
+    start()
+  }
+
   const start = (): void => {
     const started = Date.now()
     // Inherit env so isolated-port / no-telemetry overrides pass through. stdout inherits
@@ -631,13 +654,13 @@ export function runSupervise(): void {
       logCrash(`collector exited code=${code} signal=${signal} uptime=${uptimeS}s — restarting in ${backoffMs}ms. stderr-tail: ${tail || '(none)'}`)
       // A child that ran healthily before dying gets a fresh backoff; a crash-loop backs off geometrically.
       if (Date.now() - started > HEALTHY_MS) backoffMs = 1000
-      setTimeout(start, backoffMs)
+      setTimeout(startUnlessBraked, backoffMs)
       backoffMs = Math.min(backoffMs * 2, maxBackoffMs)
     })
 
     child.on('error', (err) => {
       logCrash(`failed to spawn collector: ${err.message} — retrying in ${backoffMs}ms`)
-      setTimeout(start, backoffMs)
+      setTimeout(startUnlessBraked, backoffMs)
       backoffMs = Math.min(backoffMs * 2, maxBackoffMs)
     })
   }
@@ -661,6 +684,14 @@ async function mcpServed(): Promise<boolean> {
   try { await init(); return true } catch { return false }
 }
 
+/** Lift the stop-time revive brake. A deliberate start means the operator wants capture back —
+ *  leaving the brake set would run the server now but never revive it after its first crash,
+ *  silently ending capture. Fail-open on an unlink error: the brake READER already tolerates a
+ *  stat failure, so a hiccup here must not become a permanent un-revivable state. */
+function clearReviveBrake(): void {
+  try { fs.rmSync(noRevivePath(), { force: true }) } catch { /* fail-open — see above */ }
+}
+
 /** Dispatcher for `agentlenspro server <start|stop|restart|status> [--supervise]`. */
 export async function serverCommand(argv: string[]): Promise<void> {
   const verb = argv[0]
@@ -675,31 +706,42 @@ export async function serverCommand(argv: string[]): Promise<void> {
   }
   switch (verb) {
     case 'start':
-      // A deliberate start lifts the stop-time brake — otherwise the server runs now but the
-      // first crash after this point is never revived, silently ending capture.
-      try { fs.rmSync(noRevivePath(), { force: true }) } catch { /* fail-open: brake reader tolerates it */ }
       if (supervise) {
         // Refuse a second collector: both would bind the same ports and the second EADDRINUSEs.
         if (await mcpServed()) {
           console.log(`server: MCP endpoint ${mcpEndpoint()} already served — refusing to start a second collector.`)
           return
         }
+        // Cleared here rather than after runSupervise(), which never returns. The supervisor
+        // re-reads the brake on every restart anyway, so a later stay-down still stops it.
+        clearReviveBrake()
         runSupervise() // foreground; never returns until signalled
         return
       }
+      // Clear AFTER the server is actually up, so the invariant reads "brake cleared ⟺ a server
+      // is running". Clearing first meant a FAILED start left no server AND no brake — the one
+      // state where anything may freely spawn a collector — and a stray failed `start` in another
+      // shell would silently disarm a brake an operator had armed for a store rewrite.
       await ensureServer()
+      clearReviveBrake()
       return
     case 'stop':
       // Brake BEFORE the SIGTERM: a hook landing in the stop window must already see the flag,
       // or it revives the server the instant it dies (the exact race the brake exists for).
-      if (stayDown) fs.writeFileSync(noRevivePath(), `server stop --stay-down ${new Date().toISOString()}\n`)
+      if (stayDown) {
+        fs.writeFileSync(noRevivePath(), `server stop --stay-down ${new Date().toISOString()}\n`)
+        // Report the brake the moment it is TRUE, not after the stop. stopServer() throws on its
+        // 10s timeout (and process.kill can throw ESRCH/EPERM), and a confirmation printed after
+        // it would be skipped on exactly those paths — leaving server up + brake armed + the
+        // operator never told the brake exists, so the next crash is silently never revived.
+        console.log('revive brake set (NO_REVIVE) — hooks and the supervisor will not resurrect the server; `agentlenspro server start` clears it.')
+      }
       await stopServer()
-      if (stayDown) console.log('revive brake set (NO_REVIVE) — hooks will not resurrect the server; `agentlenspro server start` clears it.')
       return
     case 'restart':
       await stopServer()
-      try { fs.rmSync(noRevivePath(), { force: true }) } catch { /* fail-open */ }
       await ensureServer()
+      clearReviveBrake()
       return
     case 'status':
       await showStatus()

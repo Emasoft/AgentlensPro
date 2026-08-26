@@ -46,7 +46,11 @@ function liveStoreWriters(): string[] {
   return table.split('\n').slice(1).filter((line) => {
     const pid = Number(line.trim().split(/\s+/)[0])
     if (!Number.isFinite(pid) || pid === self) return false
-    return /standalone\/server\.js|alcore\s+serve|alstore\s+pass/.test(line)
+    // The supervisor is matched by its OWN argv (`… standalone/cli.js server start --supervise`),
+    // not by the collector's: it respawns the collector after a backoff, so a scan landing in that
+    // gap sees an empty table while a writer is seconds from existing. `alstore unpark` mutates the
+    // pass state file, so it counts as a writer too.
+    return /standalone\/server\.js|server\s+start\b.*--supervise|alcore\s+serve|alstore\s+(pass|unpark)/.test(line)
   }).map((l) => l.trim())
 }
 
@@ -86,7 +90,14 @@ export async function runStoreCli(argv: string[]): Promise<number> {
     // A name present in MORE than one read dir (spool and legacy) has two candidate mtimes, and
     // taking the first dir's silently picks one capture time over another — a fabricated ts with
     // no signal that a choice was made. Report and leave parked instead: same rule as a ghost.
-    if (hits.length > 1 && new Set(hits.map((p) => fs.statSync(p).mtimeMs)).size > 1) {
+    // statSync (unlike existsSync) THROWS on ENOENT, and this scan runs BEFORE the quiescence
+    // gates — so it reads a tree a live pass may still be deleting from. An uncaught throw here
+    // would abort the whole repair over a file that simply moved on. A missing candidate is not
+    // ambiguous, it is gone: drop it and judge on what remains.
+    const mtimes = hits.map((p) => { try { return fs.statSync(p).mtimeMs } catch { return null } })
+                       .filter((m): m is number => m !== null)
+    if (mtimes.length === 0) { ghosts.push(n); continue }
+    if (new Set(mtimes).size > 1) {
       ambiguous.push(`${n} (${hits.join(', ')})`)
       continue
     }
