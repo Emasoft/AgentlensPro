@@ -700,7 +700,8 @@ export function runSupervise(): void {
   // bounce the supervisor would otherwise spawn a collector straight into the swap. Exit 75, not
   // 78: 78 is the TERMINAL config-refusal code launchd consumers treat as give-up. launchd does
   // NOT interpret 75 specially — KeepAlive just rethrottles at its fixed ThrottleInterval
-  // (~10s default), forever. That flat 10s stat+exit spin is bounded and cheap, and the first
+  // (~10s default; doc-sourced, not measured on this machine), forever. That flat 10s
+  // stat+exit spin is bounded and cheap, and the first
   // respawn after the brake clears succeeds on its own; do not expect escalating backoff here.
   // The human who really wants supervision back clears the brake first
   // (`agentlenspro server start`, or remove NO_REVIVE) and re-runs.
@@ -779,7 +780,10 @@ export async function serverCommand(argv: string[]): Promise<void> {
       if (!stayDown) {
         try {
           const table = execFileSync('ps', ['-eo', 'pid,command'], { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 })
-          if (table.split('\n').some((l) => /server\s+start\b.*--supervise/.test(l) && Number(l.trim().split(/\s+/)[0]) !== process.pid)) {
+          // Anchored to this product's argv shapes — a bare `server start --supervise` pattern
+          // would fire the warning on a stranger's process, and a warning that can lie erodes
+          // the trust it exists to build.
+          if (table.split('\n').some((l) => /(standalone\/cli\.js|agentlenspro)\s+server\s+start\b.*--supervise/.test(l) && Number(l.trim().split(/\s+/)[0]) !== process.pid)) {
             console.error('WARNING: a supervisor is running — it will respawn the collector in seconds. Use `server stop --stay-down` to hold it down, or stop the supervisor itself.')
           }
         } catch { /* advisory only — a failed scan must not fail the stop */ }

@@ -50,7 +50,11 @@ function liveStoreWriters(): string[] {
     // not by the collector's: it respawns the collector after a backoff, so a scan landing in that
     // gap sees an empty table while a writer is seconds from existing. `alstore unpark` mutates the
     // pass state file, so it counts as a writer too.
-    return /standalone\/server\.js|server\s+start\b.*--supervise|alcore\s+serve|alstore\s+(pass|unpark)/.test(line)
+    // The supervisor arm is anchored to THIS product's invocations (the cli.js bundle or the
+    // linked `agentlenspro` name): the bare `server start --supervise` token pattern would match a
+    // stranger's argv, and this gate is fail-CLOSED — a false positive here refuses a legitimate
+    // repair over someone else's process. Measured before tightening: 0 hits either way today.
+    return /standalone\/server\.js|(standalone\/cli\.js|agentlenspro)\s+server\s+start\b.*--supervise|alcore\s+serve|alstore\s+(pass|unpark)/.test(line)
   }).map((l) => l.trim())
 }
 
