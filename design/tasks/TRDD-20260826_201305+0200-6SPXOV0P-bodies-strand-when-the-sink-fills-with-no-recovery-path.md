@@ -1,9 +1,9 @@
 ---
 trdd-id: 6SPXOV0P
-title: Bodies strand permanently when the spool volume fills and nothing drains them once it recovers
-column: backburner
+title: 307 files remain parked with a ts-row mismatch after the TRDD-8TM7I49X repair
+column: todo
 created: 2026-08-26T20:13:05+0200
-updated: 2026-08-26T20:13:05+0200
+updated: 2026-08-26T21:05:00+0200
 current-owner: main
 task-type: bugfix
 severity: MEDIUM
@@ -12,55 +12,64 @@ labels: [bodies, ingest, silent-failure, capacity]
 relevant-rules: []
 ---
 
-## Symptom
+## CORRECTION — this card's first version blamed the wrong cause
 
-After the TRDD-8TM7I49X repair swapped in a clean store on 2026-08-26, the pass state carried
-**307 stranded names** within ~2 minutes of the server restarting. Measured over 90 s they were
-FLAT (307 / 307 / 307), so this is residue from a past window, not an active leak:
+**Authored 2026-08-26 20:13 claiming these 307 were ENOSPC residue from the spool volume filling.
+That was a GUESS from coincidence — the volume had hit ENOSPC in the same window — and it was
+wrong.** The server attributes them itself, and it says something else:
 
 ```
-20:08:39 stranded=307 skip=2337
-20:09:24 stranded=307 skip=4532
-20:10:09 stranded=307 skip=4532
+capture: 597 live file(s), newest 0s ago | PARKED 307 file(s) 144.3MB — ts-row mismatch,
+never reclaimed (TRDD-8TM7I49X)
 ```
 
-The window is identified: the spool volume `/Volumes/AgentLensSpool` (2.0 GB) hit ENOSPC — the
-server logged `bodies sink precondition FAILED at boot … ENOSPC`. It has since drained to 20%
-used on its own.
+`ts-row mismatch` is the SAME cause as the 1045 that card was about — not a sink failure. The
+correction matters because the two lead opposite ways: an ENOSPC story ends in "size the volume
+and add backpressure", and none of that would have touched this.
 
-## The defect this points at
+## What is actually true (measured 2026-08-26 20:08-21:05)
 
-Stranding on a full sink is arguably correct — better than losing bytes. What is NOT correct is
-that it appears to be **terminal**: the volume recovered, and the 307 did not drain. That is the
-same shape TRDD-8TM7I49X just spent four days on, at 1/3 the scale — a set that only ever grows,
-whose only exit was an operator running a repair verb by hand.
+| fact | evidence |
+|---|---|
+| 307 parked, 144.3 MB | `server status`, twice 70 s apart — **stable, not growing** |
+| present ~2 min after the repair's server restart | pass state `strandedNames=307` at 20:08:39 |
+| the repair reduced but did not clear the set | `strandedNames` 1045 → 307, and the repair's own line read `unparked 0 name(s)` |
+| same cause as the drained set | the server's own `ts-row mismatch` attribution |
 
-Two questions this card must answer before proposing a fix, in order:
+So the TRDD-8TM7I49X repair corrected **1045 ts rows in the store** and left **307 files that
+still fail the ts check**. The backlog shrank by 738; it did not go to zero.
 
-1. **Do stranded-on-ENOSPC names have a drain path at all?** If `relocate_stranded_to` is `None`
-   for this case too (`pass.rs:420-436` is the equivalent site from the sibling card), then the
-   answer is no and it is the same bug in a second dress.
-2. **Is there backpressure?** A sink that cannot accept writes should slow or stop the producer,
-   not accumulate names in a set. If ingest keeps accepting while the sink is dead, the stranded
-   set is a queue with no consumer.
+## What this card must establish
 
-## Why the volume's size is not the fix
+1. **Why these 307 differ from the 738 the repair resolved.** Same verb, same run, two outcomes —
+   that difference is the whole finding, and it is checkable against the files themselves.
+2. **Whether `repaired 1045 ts row(s); unparked 0 name(s)` is consistent.** The repair reports
+   repairing rows and unparking nothing; the set nonetheless fell 1045 → 307 on restart. One of
+   those two numbers is measuring something other than what its wording implies.
+3. **Whether the set can still only shrink by hand.** If the answer is yes, the shape TRDD-8TM7I49X
+   documented is intact and only its backlog was drained.
 
-It is tempting to call this a capacity problem and enlarge the volume. That would move the
-threshold, not remove the failure: any finite sink fills eventually, and the defect is what
-happens *after* it does. Sizing is the USER's call and no agent should be reclaiming space to
-paper over it (`~/.claude/rules/never_free_space.md`).
+## Not the fix
+
+Enlarging `/Volumes/AgentLensSpool` — that was this card's original premise and it is withdrawn.
+Sizing is the USER's call regardless, and no agent should reclaim space to paper over a defect
+(`~/.claude/rules/never_free_space.md`).
 
 ## Acceptance
 
-- [ ] Determined and recorded IN THE CODE whether stranded-on-sink-failure names can drain, with
-      a `file:line` for the decision point.
-- [ ] Once the sink recovers, previously stranded names drain without an operator running a repair
-      verb — or the reason they cannot is recorded at that `file:line`.
-- [ ] The 307 currently stranded either drain or are explained.
-- [ ] A test that fills (or fakes a full) sink, recovers it, and asserts the set returns to 0.
+- [ ] The difference between the 738 the repair resolved and the 307 it did not is named with
+      evidence from the files themselves, not inferred from the counts.
+- [ ] `repaired N ts row(s); unparked M name(s)` is shown to mean what it says, or its wording is
+      corrected — `unparked 0` alongside a set that fell by 738 cannot both be right as read.
+- [ ] The 307 either drain or the reason they must stay is recorded IN THE CODE at a `file:line`.
+- [ ] A test that produces a ts-row mismatch, runs the repair, and asserts the parked set reaches 0
+      — the gap this card exists because nothing covered.
 
 ## Related
 
-- [[TRDD-8TM7I49X]] — the 1045-name instance of "a stranded set with no exit", now drained.
-- [[TRDD-Z8WJZV8E]] — why the operator surface kept reporting the sink as dead after it recovered.
+- [[TRDD-8TM7I49X]] — the 1045-name instance, drained 2026-08-26. **Its closure counted
+  `strandedNames 1045 → 0 of the legacy set`, which read the residual 307 as unrelated. That
+  reading came from this card's original ENOSPC guess and is withdrawn here.** The card stays
+  complete — its 1045 did drain and its acceptance was met — but the "0 of the legacy set" phrasing
+  claims more than was measured, and this card is the honest continuation.
+- [[TRDD-Z8WJZV8E]] — the sink-status card, whose own premise also needed correcting.

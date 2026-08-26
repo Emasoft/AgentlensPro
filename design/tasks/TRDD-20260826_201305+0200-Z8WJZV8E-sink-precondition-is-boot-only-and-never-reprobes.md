@@ -1,9 +1,9 @@
 ---
 trdd-id: Z8WJZV8E
-title: The bodies-sink precondition is checked once at boot and never re-probed, so status reports a volume that has since recovered
+title: The bodies-sink status can be stale for a full pass interval, which is one hour outside spool mode
 column: backburner
 created: 2026-08-26T20:13:05+0200
-updated: 2026-08-26T20:13:05+0200
+updated: 2026-08-26T21:05:00+0200
 current-owner: main
 task-type: bugfix
 severity: LOW
@@ -31,40 +31,53 @@ while the volume is, at that same moment, **writable with 652 MB free**. Measure
 | `df -i` | inodes 1% used |
 | `server status` | still ENOSPC |
 
-## Cause (named, from the log)
+## CORRECTION — this card's first version was WRONG about the cause
 
-`~/.agentlens/server.log`:
+**It claimed the probe "runs at boot and its result is cached for the process lifetime … nothing
+re-probes". That is false, and reading the source disproves it in one place:**
+`standalone/server.ts:775-782` re-probes on EVERY pass tick and logs
+`bodies sink precondition recovered` on the transition back. The recovery path exists and works —
+confirmed by observation: ~50 minutes after boot the `SINK:` clause was gone from `server status`
+on its own, with no restart.
+
+The claim came from seeing a stale value twice within three minutes of a server start and
+concluding "never" from "not yet". That is the identical mistake this project's own doctrine warns
+about, made while writing a card about someone else's stale state.
+
+## What is actually true
+
+The staleness window is **one pass interval**, and that interval is the finding:
 
 ```
-[AgentLens] bodies sink precondition FAILED at boot: /Volumes/AgentLensSpool/otel-bodies not
-writable: ENOSPC … (TRDD-4FMHW124)
+standalone/server.ts:926
+const BODIES_PASS_INTERVAL_MS = SPOOL_MODE ? 60_000 : 3600e3
 ```
 
-The probe runs **at boot** and its result is cached for the process lifetime. The volume was
-genuinely full at that instant; it drained afterwards (2.0 GB volume, 76% → 20% within minutes
-as reclaim ran). Nothing re-probes, so the operator surface keeps asserting a condition that
-stopped being true, and it can only be cleared by restarting the server.
+- in spool mode: 60 s — fine, nobody will misread a minute-old probe;
+- otherwise: **3,600,000 ms — one hour.**
 
-## Why it is worth fixing rather than ignoring
+So outside spool mode the operator surface can assert a dead sink for up to an hour after it
+recovered, and — the direction that actually costs something — can assert a healthy sink for up to
+an hour after it died. The boot probe narrows only the first tick; it does not change the interval.
 
-A status line that is wrong in the SAFE direction is worse than no line: it trains its reader to
-discount it. This one says a sink is dead while bodies are being written to it. The next time
-the sink really is dead, the message will read identically to the false one that has been sitting
-there for hours.
+## Why it is still worth something (much smaller than first claimed)
 
-Note the inverse is also unhandled: a sink that was writable at boot and fills later is never
-re-probed either, so that failure is invisible until something else notices.
+A status line an hour behind reality is a line whose reader cannot tell "now" from "some time in
+the last hour". That is tolerable for a slow-moving condition and misleading for the fast one it
+is most needed for — a volume that just filled. Whether an hour is the right coupling is a real
+question; "it never re-probes" was not.
 
 ## Acceptance
 
-- [ ] The sink status reflects a probe no older than one pass tick, not the boot result — or the
-      cached value is labelled with its age so a reader can tell "dead now" from "was dead at 04:12".
-- [ ] A sink that recovers clears the condition without a server restart; a sink that fails after
-      boot raises it without one.
-- [ ] A test that fails if the probe result is cached for the process lifetime — the shape of the
-      defect, not the specific ENOSPC string.
+- [ ] Decided and recorded whether the sink probe should stay coupled to `BODIES_PASS_INTERVAL_MS`
+      (one hour outside spool mode) or get its own shorter cadence — with the reason, either way.
+- [ ] If it stays coupled, the served value carries its AGE so a reader can tell "dead now" from
+      "was dead when we last looked, up to an hour ago". A timestamp is cheaper than a faster probe
+      and removes the ambiguity that motivates this card at all.
+- [ ] A test pinning whichever is chosen, so the next person to change the pass interval finds out
+      they also changed how fresh the sink status is.
 
 ## Not in scope
 
-The volume's own sizing — see [[TRDD-6SPXOV0P]]. This card is only about the staleness of the
-report.
+The volume's own sizing. Also NOT in scope: the "never re-probes" defect this card was opened for —
+it does not exist (see the correction above), and nothing should be built to fix it.
