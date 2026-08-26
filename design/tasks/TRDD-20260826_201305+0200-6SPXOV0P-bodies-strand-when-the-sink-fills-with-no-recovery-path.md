@@ -126,14 +126,37 @@ producer has not been found; nothing below should assume it.
   redirect writes to the legacy dir. But that produces NEW bodies, and these carry bodies whose
   store rows date from the previous evening.
 
-### The reading the evidence best supports (still a hypothesis, flagged as one)
+### A THIRD hypothesis, raised and REFUTED at a file:line in the same pass
 
-A body's TRUE capture time and the moment its FILE lands are different events, and the store row
-holds the former while the pass compares the latter. A body buffered by the producer and flushed
-later — across a restart, across a spool failure — lands as a file whose mtime is "now" and whose
-row says "yesterday". That needs no restore path to exist, and it explains the 23.4 h offset, the
-single birth minute, and `mtime == birthtime` together. It is consistent with everything measured;
-it is not yet confirmed, and the box above stays open until the producer is found at a `file:line`.
+Raised: "a body's true capture time and the moment its file lands are different events — the row
+holds the former, the pass compares the latter", which would need no restore path at all.
+
+Refuted by `src/store/bodyStore.ts:47-52`, which states the contract outright:
+
+> `tsMs` is the body's CAPTURE time (**the source file's mtime** / the archive entry's mtimeMs) and
+> the caller must pass it whenever it knows it: defaulting to "now" stamps a backfilled body with
+> its INGEST time, which silently breaks every time-window query over the store.
+
+The row's ts is taken FROM THAT SAME FILE'S MTIME at ingest. They agree by construction, so a body
+that merely lands late cannot produce the offset. Hypothesis dead.
+
+### What that leaves — narrower, and it is a deduction rather than a story
+
+If ts == mtime at ingest, then a later disagreement means the FILE CHANGED after it was ingested.
+And the pass only parks `b.durable` bodies, i.e. ones whose bytes still verify against the store.
+So the surviving description is forced:
+
+**the same name was written again, with the same bytes, at a new mtime.**
+
+That is what "mtime == birthtime == one single minute, bytes still durable, row from yesterday"
+means, and it is now a deduction from the parking rule plus `extractMeta`'s contract, not a guess
+about who did it.
+
+The ENOSPC on the spool becomes relevant again, though NOT the way this card first claimed: not
+"bodies strand because the sink filled", but "after a sink failure something re-wrote bodies that
+were already durable". Whether that is the exporter retrying, a fallback path, or something else is
+exactly the open box — and it is the FOURTH mechanism this card has considered, so it gets named
+only when someone can point at the line that writes the file.
 
 ## What this card must establish
 
