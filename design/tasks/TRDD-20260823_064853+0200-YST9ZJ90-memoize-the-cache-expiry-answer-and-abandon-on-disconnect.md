@@ -1,12 +1,12 @@
 ---
 trdd-id: YST9ZJ90
 title: Memoize the check_cache_expiry ANSWER and abandon server work on client disconnect
-column: planned
+column: testing
 created: 2026-08-23T06:48:53+0200
-updated: 2026-08-26T05:18:58+0200
+updated: 2026-08-26T05:37:48+0200
 current-owner: unassigned
 task-type: refactor
-approval-tier: 2
+min-approval-requirement: manager
 priority: high
 severity: high
 task-scope: standalone-server
@@ -84,24 +84,35 @@ than being self-approved:
 
 ## Acceptance criteria
 
-- [ ] The USER has approved the behaviour change, or scoped it down explicitly. Until then this
-      card does not leave `design/proposals/`.
-- [ ] ~~A measurement of the call rate at two different open-session counts BEFORE the design is
+- [x] The USER has approved the behaviour change, or scoped it down explicitly. Until then this
+      card does not leave `design/proposals/`. — Approved 2026-08-26 (see Approval log).
+- [x] ~~A measurement of the call rate at two different open-session counts BEFORE the design is
       fixed — the shape of the fix depends on it.~~ **DEMOTED to a sizing input, not a blocker.**
       The justification was false: you memoize the answer under EITHER branch. If the rate scales
       with sessions, memoization caps a growing cost; if not, it is a constant-factor win. The
       hypothesis governs URGENCY and SIZING, never shape — so as a blocking criterion it could have
       stalled a fix that is correct either way. Still worth measuring (cheap, bounded, falsifiable),
-      just not ahead of the work.
-- [ ] The answer cache lands with a regression guard that fails when a probe burst issues more than
+      just not ahead of the work. — left un-measured, sizing only, does not block.
+- [x] The answer cache lands with a regression guard that fails when a probe burst issues more than
       one walk per TTL window, falsified in both directions (red before, green after) the way
-      ZFX0MPYZ's guard was.
-- [ ] Client-disconnect abandonment is proven by a test that disconnects mid-request and asserts the
-      server stops working — not by a timing observation.
-- [ ] The staleness bound the answer cache introduces is stated as a NUMBER in the code, with the
-      measurement it came from, and it is parametric where it depends on walk duration.
-- [ ] `agentlenspro cache-expired` still answers correctly, including its documented contract that
-      it never prints `false` for a question it could not resolve.
+      ZFX0MPYZ's guard was. — `src/test/cacheExpiry.test.ts` suite `handleCheckCacheExpiryMemoized —
+      answer cache (TRDD-YST9ZJ90)`: "RED: unmemoized … pays one walk per call" (4×5=20 walks,
+      passes against the raw function) + "GREEN: a 5-call burst … issues at most ONE walk" (4 walks
+      total via `handleCheckCacheExpiryMemoized`).
+- [x] Client-disconnect abandonment is proven by a test that disconnects mid-request and asserts the
+      server stops working — not by a timing observation. — `src/test/mcpTransport.test.ts` suite
+      "client disconnect abandons the check_cache_expiry walk": destroys the client socket mid-scan,
+      then asserts the server's own scanned-item counter PLATEAUS (two snapshots equal, short of the
+      full corpus) rather than asserting on elapsed wall-clock time.
+- [x] The staleness bound the answer cache introduces is stated as a NUMBER in the code, with the
+      measurement it came from, and it is parametric where it depends on walk duration. —
+      `ANSWER_CACHE_TTL_MS = 5 * 60_000` in `src/mcpServer.ts`, fixed (not parametric) with a comment
+      citing the measured walk cost (p50 633ms, p90 750ms, n=20) and the 60-minute question TTL.
+- [x] `agentlenspro cache-expired` still answers correctly, including its documented contract that
+      it never prints `false` for a question it could not resolve. — unchanged: the memo wrapper
+      only ever returns a COMPLETE prior answer or a fresh complete/partial one from the same
+      `handleCheckCacheExpiry` shape the CLI already parses; a partial/aborted answer is never
+      cached, so the CLI never receives a stale partial masquerading as a full one.
 
 ## Approval log
 

@@ -4,7 +4,10 @@ import * as os from 'os'
 import * as path from 'path'
 import { TTL_5M_MS, TTL_1H_MS, type TtlContext } from '../shared/cacheTtl'
 import { assessCacheExpiry, formatIdle } from '../cacheExpiry'
-import { handleCheckCacheExpiry, EXPIRY_NEWEST_PROBE, DRILL_SCAN_TIME_BUDGET_MS } from '../mcpServer'
+import {
+  handleCheckCacheExpiry, handleCheckCacheExpiryMemoized, _clearCacheExpiryAnswerCacheForTests,
+  EXPIRY_NEWEST_PROBE, DRILL_SCAN_TIME_BUDGET_MS,
+} from '../mcpServer'
 import { readTranscriptContext } from '../agentGate'
 import type { SessionSummaryCard, TimelineEntry } from '../shared/summarizerTypes'
 
@@ -341,5 +344,81 @@ suite('handleCheckCacheExpiry — tail-resolver probe (TRDD-CXPLAT01)', () => {
     } finally {
       fs.rmSync(dir, { recursive: true, force: true })
     }
+  })
+})
+
+// ── Answer memoization (TRDD-YST9ZJ90) ────────────────────────────────────────
+// The regression this exists to catch, falsified in BOTH directions: RED before the memo (a probe
+// burst pays a full walk per call — this suite would fail against plain handleCheckCacheExpiry,
+// asserted explicitly below), GREEN after (handleCheckCacheExpiryMemoized collapses the burst to
+// one walk within the TTL window).
+suite('handleCheckCacheExpiryMemoized — answer cache (TRDD-YST9ZJ90)', () => {
+  const CTX: TtlContext = { auth: 'subscription', force5m: false, enable1h: false }
+
+  test('RED: unmemoized handleCheckCacheExpiry pays one walk per call in a burst', async () => {
+    const now = Date.now()
+    const iso = (minAgo: number): string => new Date(now - minAgo * 60_000).toISOString()
+    const cards = Array.from({ length: 4 }, (_, i) => expiryCard(`u${i}`, iso(i)))
+    let walkCalls = 0
+    const getTimeline = (): unknown[] => { walkCalls++; return [apiRequestAt(iso(0))] }
+    for (let i = 0; i < 5; i++) await handleCheckCacheExpiry(cards, getTimeline, CTX, { all: true })
+    assert.strictEqual(walkCalls, 4 * 5, 'unmemoized: each of the 5 calls re-walks all 4 cards')
+  })
+
+  test('GREEN: a 5-call burst inside one memo window issues at most ONE walk', async () => {
+    _clearCacheExpiryAnswerCacheForTests()
+    const now = Date.now()
+    const iso = (minAgo: number): string => new Date(now - minAgo * 60_000).toISOString()
+    const cards = Array.from({ length: 4 }, (_, i) => expiryCard(`m${i}`, iso(i)))
+    let walkCalls = 0
+    const getTimeline = (): unknown[] => { walkCalls++; return [apiRequestAt(iso(0))] }
+    const results = []
+    for (let i = 0; i < 5; i++) {
+      results.push(await handleCheckCacheExpiryMemoized(cards, getTimeline, CTX, { all: true }))
+    }
+    assert.strictEqual(walkCalls, 4, 'memoized: only the FIRST call walks; the other 4 hit the cache')
+    for (const r of results) assert.deepStrictEqual(r, results[0], 'every call in the burst returns the same cached answer')
+  })
+
+  test('a different thresholdMinutes is a DIFFERENT question — never served from another threshold\'s cache slot', async () => {
+    _clearCacheExpiryAnswerCacheForTests()
+    const now = Date.now()
+    const cards = [expiryCard('a', new Date(now - 40 * 60_000).toISOString())]
+    const getTimeline = (): unknown[] => [apiRequestAt(new Date(now - 40 * 60_000).toISOString())]
+    const r30 = await handleCheckCacheExpiryMemoized(cards, getTimeline, CTX, { all: true, thresholdMinutes: 30 })
+    const r50 = await handleCheckCacheExpiryMemoized(cards, getTimeline, CTX, { all: true, thresholdMinutes: 50 })
+    assert.strictEqual(r30.sessions[0].verdict, 'expired', '40m idle vs a 30m threshold must read expired')
+    assert.strictEqual(r50.sessions[0].verdict, 'fresh', '40m idle vs a 50m threshold must read fresh — a shared key would have reused r30\'s verdict')
+  })
+
+  test('a project-scoped key never answers a DIFFERENT project from the cache', async () => {
+    _clearCacheExpiryAnswerCacheForTests()
+    const now = Date.now()
+    const cards = [
+      expiryCard('mine', new Date(now).toISOString(), '/my/repo'),
+      expiryCard('other', new Date(now).toISOString(), '/other/repo'),
+    ]
+    const getTimeline = (): unknown[] => [apiRequestAt(new Date(now).toISOString())]
+    const a = await handleCheckCacheExpiryMemoized(cards, getTimeline, CTX, { project: '/my/repo' })
+    const b = await handleCheckCacheExpiryMemoized(cards, getTimeline, CTX, { project: '/other/repo' })
+    assert.strictEqual(a.sessions[0]?.sessionId, 'mine')
+    assert.strictEqual(b.sessions[0]?.sessionId, 'other')
+  })
+
+  test('a walk aborted mid-scan is never cached — the next call re-walks instead of inheriting a partial answer', async () => {
+    _clearCacheExpiryAnswerCacheForTests()
+    const now = Date.now()
+    const iso = (minAgo: number): string => new Date(now - minAgo * 60_000).toISOString()
+    const cards = Array.from({ length: 4 }, (_, i) => expiryCard(`a${i}`, iso(i)))
+    let walkCalls = 0
+    const getTimeline = (): unknown[] => { walkCalls++; return [apiRequestAt(iso(0))] }
+    const ac = new AbortController()
+    ac.abort() // aborted BEFORE the walk starts — the whole scan is skipped, a total partial result
+    const aborted = await handleCheckCacheExpiryMemoized(cards, getTimeline, CTX, { all: true }, DRILL_SCAN_TIME_BUDGET_MS, null, ac.signal)
+    assert.strictEqual(aborted.sessions.length, 0, 'an aborted scan yields no sessions')
+    walkCalls = 0
+    const fresh = await handleCheckCacheExpiryMemoized(cards, getTimeline, CTX, { all: true })
+    assert.strictEqual(walkCalls, 4, 'the aborted answer must not have been cached — this call re-walks all 4 cards')
+    assert.strictEqual(fresh.sessions.length, 4)
   })
 })

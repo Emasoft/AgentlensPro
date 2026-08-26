@@ -2099,6 +2099,9 @@ export async function handleCheckCacheExpiry(
   args: { sessionId?: string; all?: boolean; project?: string; thresholdMinutes?: number },
   timeBudgetMs: number = DRILL_SCAN_TIME_BUDGET_MS,
   getLastRequestMs: ((sessionId: string) => number | null) | null = null,
+  // TRDD-YST9ZJ90: threaded into scanWithBudget so a disconnected caller stops the walk instead of
+  // the server paying for a result nobody will read.
+  signal?: AbortSignal,
 ): Promise<{
   sessions: CacheExpiryRow[]
   scope?: { project: string | null; sessionsInScope: number }
@@ -2137,7 +2140,7 @@ export async function handleCheckCacheExpiry(
     // replaced was a full wedge (O(corpus) synchronous work inline in one request).
     const pool = [...sessions].sort((a, b) => lastActivityMs(b) - lastActivityMs(a))
     const { results, scanned, stoppedEarly } =
-      await scanWithBudget(pool, timeBudgetMs, c => assessOneSession(c, getTimeline, ctx, nowMs, thresholdMs))
+      await scanWithBudget(pool, timeBudgetMs, c => assessOneSession(c, getTimeline, ctx, nowMs, thresholdMs), signal)
     return {
       sessions: results,
       scope,
@@ -2176,7 +2179,7 @@ export async function handleCheckCacheExpiry(
       return { s, tailMs, ms: tailMs ?? lastActivityMs(s) }
     }
     return { s, tailMs: null, ms: lastLlmRequestMs(asTimeline(getTimeline, s.sessionId, s)) ?? Date.parse(s.startTime) }
-  })
+  }, signal)
   let newest: SessionSummaryCard | null = null
   let newestMs = -1
   let newestTailMs: number | null = null
@@ -2195,6 +2198,66 @@ export async function handleCheckCacheExpiry(
     // pick as the corpus-wide newest.
     ...(stoppedEarly ? { note: 'Newest-session probe stopped early on the scan time budget — the pick is from the probed subset only.' } : {}),
   }
+}
+
+// ── Answer memoization (TRDD-YST9ZJ90) ────────────────────────────────────────
+// check_cache_expiry answers against a 60-minute TTL, so a few-minutes-stale ANSWER is fine for the
+// question being asked. Measured cost of NOT memoizing: a full walk of ~14.5k session files, 126-
+// 1902ms (p50 633, p90 750; n=20), against a caller poll rate of 147-273/hour — i.e. the server was
+// paying a full walk on nearly every poll. FIXED at 5 minutes (not parametric): sized against the
+// measured walk cost above and the 60-minute question TTL that makes 5-minute staleness tolerable —
+// it is not a knob callers should be able to widen or narrow per call.
+const ANSWER_CACHE_TTL_MS = 5 * 60_000 // 300_000ms
+
+interface CachedCacheExpiryAnswer {
+  expiresAt: number
+  value: Awaited<ReturnType<typeof handleCheckCacheExpiry>>
+}
+const cacheExpiryAnswerCache = new Map<string, CachedCacheExpiryAnswer>()
+
+// The FULL normalized args tuple, not just `project` — a caller asking with a different
+// thresholdMinutes (or sessionId, or all) is asking a DIFFERENT question, and a project-only key
+// would silently answer it with someone else's threshold.
+function cacheExpiryAnswerKey(args: { sessionId?: string; all?: boolean; project?: string; thresholdMinutes?: number }): string {
+  return JSON.stringify([args.sessionId ?? null, !!args.all, args.project ?? null, args.thresholdMinutes ?? null])
+}
+
+/** True when the underlying walk did not finish (a time-budget stop, or a client-disconnect
+ *  abort) — such an answer must never be cached, or every later caller within the TTL window would
+ *  silently inherit one caller's truncated/abandoned coverage instead of getting its own full walk. */
+function isPartialCacheExpiryAnswer(result: Awaited<ReturnType<typeof handleCheckCacheExpiry>>, signal?: AbortSignal): boolean {
+  if (signal?.aborted) return true
+  if (result.coverage?.stoppedEarly) return true
+  return typeof result.note === 'string' && result.note.includes('stopped early')
+}
+
+// Exported for tests only — forces the next call to recompute instead of waiting out the TTL.
+export function _clearCacheExpiryAnswerCacheForTests(): void {
+  cacheExpiryAnswerCache.clear()
+}
+
+/** check_cache_expiry, memoized by the full args tuple with a fixed 5-minute answer TTL. Wraps
+ *  (never replaces) handleCheckCacheExpiry — the raw function stays directly testable and always
+ *  fresh; this is the entry point the MCP tool call site uses. */
+export async function handleCheckCacheExpiryMemoized(
+  sessions: SessionSummaryCard[],
+  getTimeline: ((id: string) => unknown[]) | null,
+  ctx: TtlContext | null,
+  args: { sessionId?: string; all?: boolean; project?: string; thresholdMinutes?: number },
+  timeBudgetMs: number = DRILL_SCAN_TIME_BUDGET_MS,
+  getLastRequestMs: ((sessionId: string) => number | null) | null = null,
+  signal?: AbortSignal,
+): ReturnType<typeof handleCheckCacheExpiry> {
+  const key = cacheExpiryAnswerKey(args)
+  const now = Date.now()
+  const hit = cacheExpiryAnswerCache.get(key)
+  if (hit && hit.expiresAt > now) return hit.value
+
+  const result = await handleCheckCacheExpiry(sessions, getTimeline, ctx, args, timeBudgetMs, getLastRequestMs, signal)
+  if (!isPartialCacheExpiryAnswer(result, signal)) {
+    cacheExpiryAnswerCache.set(key, { expiresAt: now + ANSWER_CACHE_TTL_MS, value: result })
+  }
+  return result
 }
 
 // Per-turn context size + cache split from a session timeline. Entries carry the FOUR DISJOINT
@@ -3075,17 +3138,23 @@ export const DRILL_SCAN_TIME_BUDGET_MS = 20_000
 // only drains microtasks and would still starve I/O, so queued HTTP requests could never
 // interleave. The deadline bounds the worst case. Never fold such a loop back into a map/flatMap —
 // the unyielding 50-reparse flatMap was the exact 2026-07-16 wedge this replaced.
+// `signal` (TRDD-YST9ZJ90): checked at the SAME yield boundary the time-budget deadline already
+// uses — between items, never mid-item — so a client that disconnects stops the walk at the next
+// macrotask instead of paying for sessions nobody will read the answer for. A synchronous perItem
+// (e.g. a pathological transcript reparse) still runs to completion once started; the abort only
+// skips items not yet begun.
 async function scanWithBudget<T, R>(
   pool: T[],
   timeBudgetMs: number,
   perItem: (item: T) => R | Promise<R>,
+  signal?: AbortSignal,
 ): Promise<{ results: R[]; scanned: T[]; stoppedEarly: boolean }> {
   const results: R[] = []
   const scanned: T[] = []
   const deadline = Date.now() + timeBudgetMs
   let stoppedEarly = false
   for (const item of pool) {
-    if (Date.now() > deadline) { stoppedEarly = true; break }
+    if (Date.now() > deadline || signal?.aborted) { stoppedEarly = true; break }
     results.push(await perItem(item))
     scanned.push(item)
     await new Promise<void>(resolve => setImmediate(resolve))
@@ -3409,7 +3478,11 @@ const HEAVY_MCP_TOOLS = new Set<string>([
   'run_diagnostics_sql',
 ])
 
-export function createMcpServer(opts: McpServerOptions): Server {
+// `signal` (TRDD-YST9ZJ90): aborts when the calling HTTP client disconnects — wired by
+// handleMcpRequest, since the MCP SDK's own per-request abort controller (extra.signal) is never
+// fired by this transport on a raw req/res close (verified: no such wiring exists in
+// StreamableHTTPServerTransport). Only check_cache_expiry's walk currently honours it.
+export function createMcpServer(opts: McpServerOptions, signal?: AbortSignal): Server {
   const server = new Server(
     { name: 'agentlens', version: '1.0.0' },
     { capabilities: { tools: {} } },
@@ -3630,10 +3703,10 @@ export function createMcpServer(opts: McpServerOptions): Server {
           )
         break
       case 'check_cache_expiry':
-        result = await handleCheckCacheExpiry(
+        result = await handleCheckCacheExpiryMemoized(
           sessions, getTimeline, getTtlContext?.() ?? null,
           args as { sessionId?: string; all?: boolean; project?: string; thresholdMinutes?: number },
-          DRILL_SCAN_TIME_BUDGET_MS, opts.getLastRequestMs ?? null,
+          DRILL_SCAN_TIME_BUDGET_MS, opts.getLastRequestMs ?? null, signal,
         )
         break
       case 'get_account_state_at':
@@ -3932,7 +4005,7 @@ export function createMcpServer(opts: McpServerOptions): Server {
 const MCP_BODY_MAX_BYTES = 4 * 1024 * 1024
 
 export function handleMcpRequest(
-  makeServer: () => Server,
+  makeServer: (signal: AbortSignal) => Server,
   req: http.IncomingMessage,
   res: http.ServerResponse,
 ): void {
@@ -3979,8 +4052,17 @@ export function handleMcpRequest(
       })
     }
 
+    // TRDD-YST9ZJ90: abandon in-flight server work (currently: check_cache_expiry's walk) when the
+    // client disconnects — the CLI already gives up on its own timeout while the server used to keep
+    // walking to completion for an answer nobody would read. 'close' fires on a NORMAL finish too,
+    // so it must be guarded by !writableFinished or every request would abort itself right after
+    // succeeding.
+    const abortController = new AbortController()
+    res.once('close', () => {
+      if (!res.writableFinished) abortController.abort()
+    })
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined })
-    const server = makeServer()
+    const server = makeServer(abortController.signal)
     // Close transport AND the per-request server when the RESPONSE is done, whatever path got it
     // there. 'close' fires after a normal finish AND on client abort, and attaching it BEFORE
     // handling fixes two leaks the previous shape had: on handleRequest rejection the transport
@@ -4011,7 +4093,7 @@ export function startMcpHttpServer(
   bindHost = '127.0.0.1',
 ): http.Server {
   // A FACTORY, not a shared instance — see handleMcpRequest's header for the wedge this prevents.
-  const makeServer = (): Server => createMcpServer(opts)
+  const makeServer = (signal: AbortSignal): Server => createMcpServer(opts, signal)
   const httpServer = http.createServer((req, res) => {
     // ACAO only for same-origin/loopback origins — never the wildcard. MCP responses carry the
     // user's session data (prompts, costs, project paths), so ACAO:* let ANY browsed page read
