@@ -1,16 +1,16 @@
 ---
 trdd-id: 1FSPKQ6C
 title: The revive-log test cannot exercise a live child, and CI is where that matters
-column: todo
+column: complete
 created: 2026-08-23T01:39:56+0200
-updated: 2026-08-23T01:39:56+0200
+updated: 2026-08-26T05:36:57+0200
 current-owner: main
 task-type: infra
 severity: MEDIUM
 priority: 3
 labels: [tests, hooks, ci, leak]
-approval-tier: 0
-relevant-files: [src/test/hookSpool.test.ts, src/test/helpers/freePort.ts, src/cli/hookHandlers.ts]
+min-approval-requirement: none
+relevant-files: [src/test/hookSpool.test.ts, src/test/helpers/freePort.ts, src/test/helpers/reviveHarness.ts, src/cli/hookHandlers.ts]
 created-by: TRDD-4FMHW124
 ---
 
@@ -74,16 +74,34 @@ TRDD-ZFX0MPYZ, whose provenance was left unestablished there.
 
 ## Acceptance
 
-- [ ] A live revived child is reaped, PROVEN on every run rather than inferred from a mutation —
+- [x] A live revived child is reaped, PROVEN on every run rather than inferred from a mutation —
       the one-line form is `assert.ok(pid !== null)` before the kill, which turns "did a live child
-      exist?" into a checked fact instead of something re-derived by hand.
-- [ ] Whatever achieves that does NOT destabilise the shared mocha process. Measure it: ≥8
-      consecutive runs of the whole file, 0 failing, and a `ps` snapshot with no orphan. A single
-      green run is not evidence — that claim has been wrong four times on this work.
-- [ ] `AGENTLENS_WATCHDOG=off` stays set wherever a real server can be spawned.
-- [ ] If the answer is a retry seam in the revive itself (`spawnServerWithRetry`'s shape, which
-      cannot wrap a spawn the product owns), that is a PRODUCT change and needs its own card —
-      do not smuggle it in as test scaffolding.
+      exist?" into a checked fact instead of something re-derived by hand. Implemented as an
+      ISOLATED SUBPROCESS (`src/test/helpers/reviveHarness.ts`, spawned by a new suite in
+      `src/test/hookSpool.test.ts`): a separate node process gets its own `DATA_DIR`+`HOME`+fresh
+      ports, calls `forwardHookEvent` for real, waits for the pidfile, SIGKILLs the child, verifies
+      death via a snapshotted `ps -eo pid` (never `pgrep`-by-name), and reports
+      `{revivedPid, reaped}` as one JSON line. The mocha test asserts `revivedPid !== null` before
+      asserting `reaped`, plus a belt-and-braces `finally` that re-reads the SAME pidfile straight
+      off disk and SIGKILLs it again, independent of the harness's own exit status or JSON.
+- [x] Whatever achieves that does NOT destabilise the shared mocha process — no port is bound
+      inside mocha's own process; the harness is a wholly separate node process. Measured: ≥8
+      consecutive runs of `out/test/test/hookSpool.test.js` alone (the file, not the whole suite),
+      6/6 tests passing every time, 0 failing, and a `ps -eo pid,ppid,etime,command` snapshot after
+      EVERY run showing no orphaned `standalone/server.js` or `reviveHarness.js` process. Report:
+      `reports/fix-1FSPKQ6C/20260826_053700+0200-build.md`.
+      One real (pre-existing) orphan was found and fixed along the way: the OLDER
+      "a hook-revived server LOGS" test's teardown used bare `process.kill(pid)` (SIGTERM) — on a
+      machine with the default ports genuinely FREE (the exact CI condition this card is about) the
+      revived child boots instead of crashing on a port conflict, and a graceful SIGTERM was
+      measured to leave it alive over a minute past the test's own exit. Changed to `SIGKILL`; 0
+      orphans across all 8 runs afterward.
+- [x] `AGENTLENS_WATCHDOG=off` stays set wherever a real server can be spawned — set in
+      `reviveHarness.ts` (the new isolated child) same as it already was in the older in-process test
+      and in `spawnServerWithRetry`.
+- [x] The gap did NOT need a product change — `reviveDaemonDetached` itself needed nothing new;
+      the fix was purely in test isolation + the SIGKILL teardown above. No product code was
+      touched.
 
 ## Notes and lessons learned
 

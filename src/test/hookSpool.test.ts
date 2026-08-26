@@ -3,7 +3,7 @@ import * as http from 'http'
 import * as os from 'os'
 import * as fs from 'fs'
 import * as path from 'path'
-import type { ChildProcess } from 'child_process'
+import { spawn, type ChildProcess } from 'child_process'
 import { forwardHookEvent } from '../cli/hookHandlers'
 import { freePort, spawnServerWithRetry } from './helpers/freePort'
 
@@ -168,7 +168,12 @@ suite('hook spool — forwardHookEvent durability (unit)', () => {
       // writes on boot, and kill it — otherwise this test leaks a live standalone/server.js process.
       pid ??= await waitForPid(pidPath, 5000)
       if (pid !== null) {
-        try { process.kill(pid) } catch { /* already gone */ }
+        // SIGKILL, not the default SIGTERM: on a machine with the default ports genuinely free
+        // (the exact CI condition this file is about) the revived child BOOTS instead of crashing
+        // on a port conflict, and a graceful SIGTERM was measured to leave it alive for well over a
+        // minute (server shutdown draining timers/sockets) — long enough to show up as a live
+        // orphan in the very next ps snapshot this suite's acceptance criteria check for.
+        try { process.kill(pid, 'SIGKILL') } catch { /* already gone */ }
         try { fs.unlinkSync(pidPath) } catch { /* best effort */ }
       }
       // If no pidfile ever showed up, we have nothing to kill by pid — but note this WOULD be a
@@ -194,6 +199,60 @@ suite('hook spool — forwardHookEvent durability (unit)', () => {
     assert.ok(!files.includes('100-old.json'), 'the oldest spooled event was dropped')
     assert.ok(files.includes('200-old.json') && files.includes('300-old.json'), 'the newer pre-existing events survive')
     delete process.env.AGENTLENS_HOOK_SPOOL_MAX
+  })
+})
+
+// ── TRDD-1FSPKQ6C — a live revived child is reaped, proven from an ISOLATED subprocess ────────────
+// The test above only proves the redirect (see its own comment for why). This suite closes the
+// real gap it leaves — "does a LIVE revived child actually get reaped?" — without repeating any of
+// the card's three failed attempts to answer that INSIDE the shared mocha process. `reviveHarness.ts`
+// is a separate node process this test spawns: it binds real ports, revives a real detached server,
+// kills it, and reports the outcome as JSON. Nothing here binds a port inside mocha's own process,
+// so the isolation that destabilised the suite in attempt 3 never happens.
+suite('hook spool — a live revived child is reaped (isolated subprocess)', () => {
+  test('reviveDaemonDetached spawns a real child that gets killed — proven as a checked fact, not inferred', async function () {
+    this.timeout(60_000)
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'al-revive-harness-'))
+    const home = path.join(tmp, 'home')
+    const data = path.join(tmp, 'data')
+    fs.mkdirSync(home, { recursive: true })
+    fs.mkdirSync(data, { recursive: true })
+    const pidPath = path.join(data, 'server.pid')
+    const harnessJs = path.resolve(__dirname, 'helpers', 'reviveHarness.js')
+
+    const env = { ...process.env, DATA_DIR: data, HOME: home, AGENTLENS_WATCHDOG: 'off' } as NodeJS.ProcessEnv
+    delete env.AGENTLENS_NO_REVIVE // the harness must be free to actually spawn the revive
+
+    try {
+      const child = spawn(process.execPath, [harnessJs], { env, stdio: ['ignore', 'pipe', 'pipe'] })
+      let out = ''
+      let err = ''
+      child.stdout?.on('data', (d: Buffer) => { out += d.toString() })
+      child.stderr?.on('data', (d: Buffer) => { err += d.toString() })
+      const exitCode = await new Promise<number>((resolve) => child.on('close', (code) => resolve(code ?? -1)))
+
+      assert.strictEqual(exitCode, 0, `harness exited ${exitCode} — stderr: ${err.slice(-2000)}\nstdout: ${out.slice(-2000)}`)
+      const lines = out.trim().split('\n').filter(Boolean)
+      const last = lines[lines.length - 1] ?? ''
+      const result = JSON.parse(last) as { revivedPid: number | null; reaped: boolean }
+
+      // THE ONE-LINE FORM THE CARD NAMES: proving a live child existed is a checked fact, not
+      // re-derived by hand from a mutation or inferred from "no orphan showed up".
+      assert.ok(result.revivedPid !== null, `no live child was ever revived (harness result: ${last})`)
+      assert.ok(result.reaped, `the harness's own kill did not reap pid ${result.revivedPid}`)
+    } finally {
+      // BELT-AND-BRACES: re-read the pidfile straight off disk and kill on it directly — independent
+      // of whether the harness process crashed, hung, or lied in its own JSON. The revived child is
+      // detached + reparented to PID 1, so if this doesn't reap it, nothing else will.
+      try {
+        if (fs.existsSync(pidPath)) {
+          const raw = fs.readFileSync(pidPath, 'utf-8').trim()
+          const pid = /^\d+$/.test(raw) ? Number(raw) : Number((JSON.parse(raw) as { pid?: unknown }).pid)
+          if (Number.isFinite(pid) && pid > 0) { try { process.kill(pid, 'SIGKILL') } catch { /* already gone */ } }
+        }
+      } catch { /* best effort */ }
+      try { fs.rmSync(tmp, { recursive: true, force: true }) } catch { /* best effort */ }
+    }
   })
 })
 
