@@ -16,7 +16,7 @@ import { DuckDBTimestampValue } from '@duckdb/node-api'
 import { createHash } from 'crypto'
 import * as fs from 'fs'
 import * as path from 'path'
-import { allOf, flush, Store } from './db'
+import { allOf, dedupedParts, flush, Store } from './db'
 import { Part, reassemble, sectionize, sha256 } from './sections'
 
 export interface IngestResult {
@@ -185,11 +185,18 @@ export async function ingestBody(store: Store, srcName: string, raw: string, tsM
  * handing back a body we cannot prove is the original would defeat the point of storing it.
  */
 export async function reconstructBody(store: Store, bodyId: string): Promise<string> {
+  // Deduped, not raw: a part re-written into a later Parquet generation comes back TWICE from
+  // `allOf`, and concatenating both copies doubles the body. See dedupedParts() for the measurement.
   const rows = (await store.con.runAndReadAll(`
-    SELECT pos, kind, lit, sha FROM ${allOf(store, 'part')}
-    WHERE body_id = '${bodyId}' ORDER BY pos
+    SELECT pos, kind, lit, sha, conflicting FROM ${dedupedParts(store, `body_id = '${bodyId}'`)}
+    ORDER BY pos
   `)).getRowObjects()
   if (rows.length === 0) throw new Error(`unknown body ${bodyId}`)
+  // Fail fast: collapsing duplicates is only sound while they agree. Two DIFFERENT parts at one
+  // position mean the store cannot say what this body is, and returning either one would be a guess
+  // dressed up as data.
+  const clash = rows.find((r) => r.conflicting === true)
+  if (clash) throw new Error(`body ${bodyId}: position ${clash.pos} has conflicting parts — cannot reconstruct`)
 
   const shas = [...new Set(rows.filter((r) => r.sha !== null).map((r) => `'${String(r.sha)}'`))]
   const spans = new Map<string, string>()

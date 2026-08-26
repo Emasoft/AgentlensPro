@@ -287,3 +287,61 @@ export function allOf(store: Store, table: 'blob' | 'body' | 'part'): string {
   // and that failure has no symptom at all.
   return scan ? `(SELECT * FROM ${scan} UNION ALL BY NAME SELECT * FROM ${table})` : `(SELECT * FROM ${table})`
 }
+
+/**
+ * The parts of a body, with EXACT duplicate rows collapsed — the ONE definition of "what a body is
+ * made of", shared by the read path (reconstructBody) and the validator, because a validator that
+ * disagrees with the reader about that is worse than no validator at all.
+ *
+ * WHY THIS EXISTS (measured 2026-08-26 on the real 757,092-body corpus): a part row re-written into a
+ * later Parquet generation is not replaced — `allOf` UNIONs every generation, so BOTH copies come
+ * back. Concatenating them doubles the text and the body no longer hashes to its own id, which is
+ * exactly how 493 bodies became "unreadable" while their bytes were never lost: 220,133 duplicate
+ * (body_id,pos) groups, ALL of them byte-identical, ZERO conflicting. Collapsing them recovered
+ * 40/40 sampled bodies to a correct sha256.
+ *
+ * `conflicting` is the fail-fast half and must not be dropped: any_value() is lossless ONLY while the
+ * duplicates agree. If a (body_id,pos) ever carries two DIFFERENT parts, picking one silently would
+ * invent a body, so callers MUST reject a conflicting position rather than trust the pick.
+ *
+ * Two details in the signature are load-bearing, both chosen against a specific way of being wrong:
+ *
+ *  - `lit` is LENGTH-PREFIXED and placed last. It is the only free-text field, so plain concatenation
+ *    aliases: ('lit', 'a|b', NULL) and ('lit', 'a', 'b') would produce the same string and a genuine
+ *    conflict would read as a duplicate. `kind` is 'lit'|'blob' and `sha` is hex, so neither can
+ *    contain the separator; prefixing the one field that can removes the ambiguity entirely. A NULL
+ *    `lit` and an empty `lit` deliberately collapse together — the reader materializes both as '',
+ *    so rows differing only that way ARE byte-identical and must not be reported as a conflict.
+ *  - `min(sig) <> max(sig)`, NOT `count(DISTINCT sig) > 1`. Same verdict, but a DISTINCT set is built
+ *    per group and its memory is unbounded in the group's size, which is exactly how an earlier
+ *    probe OOM'd at 11.1 GiB on this corpus. Two scalar aggregates cannot.
+ *  - the `coalesce(..., TRUE)` makes the column TOTAL, and the default is `true` because this guard
+ *    must fail CLOSED. `<>` is NULL-propagating and min/max skip NULLs, so without it `conflicting`
+ *    is three-valued — and NULL reads as "clean" in every consumer: `=== true` is false in JS,
+ *    `bool_or` ignores NULLs, and a `WHERE conflicting` filter silently drops those rows and returns
+ *    the reassuring 0 it was looking for. A guard that reports success when it cannot tell is worse
+ *    than no guard. `allOf` UNIONs Parquet generations BY NAME and fills absent columns with NULL,
+ *    so a NULL arriving from a shape this code did not anticipate is the expected surprise, not an
+ *    impossible one.
+ */
+export const PART_SIGNATURE_SQL = `md5(coalesce(kind,'') || '|' || coalesce(sha,'') || '|' ||
+                                       strlen(coalesce(lit,'')) || ':' || coalesce(lit,''))`
+
+/**
+ * ALWAYS pass a `where` that bounds this to a page of bodies. Unscoped, the aggregate carries
+ * `any_value(lit)` — the full body text — in the group state for every one of the corpus's 370M part
+ * rows, and the store deliberately runs with `temp_directory = ''` so an over-limit query FAILS rather
+ * than spilling. Measured: unscoped it dies at 29.8 GiB; scoped to 2,000 bodies it is ~2.6 s.
+ * To ask a corpus-wide question about duplicates, aggregate PART_SIGNATURE_SQL alone (two md5 strings
+ * per group) instead of calling this.
+ */
+export function dedupedParts(store: Store, where: string): string {
+  const sig = PART_SIGNATURE_SQL
+  // `where` is REQUIRED, not defaulted: the unscoped call is the one that dies, so forgetting the
+  // argument must be a compile error rather than the default you fall into. Pass 'true' deliberately
+  // if you really mean the whole corpus. It is spliced in as raw SQL, so callers must pass trusted
+  // text — every current one interpolates a sha256 hex id, which cannot carry a quote.
+  return `(SELECT body_id, pos, any_value(kind) AS kind, any_value(lit) AS lit, any_value(sha) AS sha,
+                  coalesce(min(${sig}) <> max(${sig}), true) AS conflicting
+           FROM ${allOf(store, 'part')} WHERE ${where} GROUP BY body_id, pos)`
+}
