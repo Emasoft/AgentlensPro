@@ -3495,6 +3495,9 @@ const uiServer = http.createServer(async (req, res) => {
         // `stream` rides in the payload (the capture stamps it) so the endpoint stays a single route.
         const stream: StatuslineStream = payload.statusline_stream === 'subagent' ? 'subagent' : 'main'
         ingestStatuslineSample(payload, stream)
+        // TRDD-8ADTIGKT: statusline samples are a live capture feed same as OTEL spans (:2118) and
+        // hook events (:3526) — bumped only after a successful parse+ingest, not on malformed input.
+        lastIngestActivityAt = Date.now()
         res.writeHead(200, { 'Content-Type': 'application/json' })
         res.end(JSON.stringify({ ok: true }))
       } catch (e) {
@@ -4097,6 +4100,14 @@ const uiServer = http.createServer(async (req, res) => {
       // session is appended to (it re-walks the OS temp roots only when their listing really changed).
       scratchListing: scratchListingStats(),
     }))
+    return
+  }
+
+  // TRDD-8ADTIGKT: the capture-liveness clock is otherwise only observable indirectly (10-minute
+  // window, console.warn on transition) — this makes the bump itself directly testable per feed.
+  if (req.method === 'GET' && url === '/api/debug/capture-activity') {
+    res.writeHead(200, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({ lastIngestActivityAt }))
     return
   }
 

@@ -3,7 +3,7 @@ trdd-id: 8ADTIGKT
 title: The capture-liveness clock ignores statusline samples so a statusline-only machine never raises CAPTURE DOWN
 column: todo
 created: 2026-08-26T04:26:17+0200
-updated: 2026-08-26T04:34:15+0200
+updated: 2026-08-26T05:19:33+0200
 current-owner: AgentlensPro session
 task-type: bugfix
 severity: LOW
@@ -47,8 +47,17 @@ against the diff rather than against the card's prose.
 
 ## Acceptance
 
-- [ ] Either the statusline sample path bumps the same activity clock, or the
+- [x] Either the statusline sample path bumps the same activity clock, or the
       card's own list of what counts as capture is corrected to the two feeds
       that actually do — one source of truth, not two descriptions.
-- [ ] Whichever way it goes, a test pins it, so the list and the code cannot
+      Evidence: `standalone/server.ts` POST `/api/statusline-samples` handler
+      now sets `lastIngestActivityAt = Date.now()` after a successful
+      `ingestStatuslineSample` call (same variable, same post-success placement
+      as the `/api/hook-events` handler at :3529, now :3532 after the insert).
+- [x] Whichever way it goes, a test pins it, so the list and the code cannot
       drift apart again silently.
+      Evidence: `src/test/serverEndpoints.test.ts` — new test
+      `POST /api/statusline-samples bumps the capture-liveness clock same as
+      hook-events (TRDD-8ADTIGKT)`, reading the clock via a new debug endpoint
+      `GET /api/debug/capture-activity`; `npx mocha
+      out/test/test/serverEndpoints.test.js --grep TRDD-8ADTIGKT` → 1 passing.

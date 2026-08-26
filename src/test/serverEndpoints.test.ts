@@ -119,6 +119,19 @@ suite('standalone server — hook/gate/burn endpoints (real boot)', () => {
     assert.strictEqual(await receivedCounter(), before + 1, 'the accepted event must be counted')
   })
 
+  test('POST /api/statusline-samples bumps the capture-liveness clock same as hook-events (TRDD-8ADTIGKT)', async () => {
+    // Before this fix the statusline endpoint never touched lastIngestActivityAt, so a
+    // statusline-only machine could never trip CAPTURE DOWN (:786) — under-detection, not a false
+    // alarm, but a silent blind spot. Assert the bump directly via the debug endpoint rather than
+    // waiting out the 10-minute activity window.
+    const before = (await httpReq(uiPort, 'GET', '/api/debug/capture-activity')).json as { lastIngestActivityAt: number }
+    await sleep(5) // guarantee Date.now() advances past the pre-sample reading
+    const r = await httpReq(uiPort, 'POST', '/api/statusline-samples', { session_id: 'ep-statusline-1', model: { display_name: 'test' } })
+    assert.ok(r.status >= 200 && r.status < 300, `expected 2xx, got ${r.status}`)
+    const after = (await httpReq(uiPort, 'GET', '/api/debug/capture-activity')).json as { lastIngestActivityAt: number }
+    assert.ok(after.lastIngestActivityAt > before.lastIngestActivityAt, 'a statusline sample must bump the capture-liveness clock')
+  })
+
   test('GET /api/hook-config returns the built-in defaults', async () => {
     // A fresh DATA_DIR has no hook-config.json, so the server reports the compiled defaults.
     const r = await httpReq(uiPort, 'GET', '/api/hook-config')
