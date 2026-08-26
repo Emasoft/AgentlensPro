@@ -465,10 +465,21 @@ suite('FAL Phase 1 — 🐌 real machine data (skips when ~/.agentlens absent)',
   test('indexApiCalls over the real ~/.agentlens degrades honestly whether or not bodies exist', async function () {
     // 🐌 real-machine slow test: indexes up to REQUEST_INDEX_CAP request bodies off disk (each up to
     // 64MB) — far past the 10s default. Skipped entirely in CI (no ~/.agentlens/otel-bodies there).
-    this.timeout(180000)
     // Follows the resolved bodies dir, not a hardcoded home path — on a machine with a spool this
     // test used to skip while a live corpus sat elsewhere, so it silently never ran.
     if (!fs.existsSync(defaultBodiesDir())) { this.skip() }
+    // TRDD-JQ4R8ZKN: a FIXED 180s ceiling hit 3/4 timeouts under ordinary load. The scan's real cost
+    // is a readdirSync + per-entry statSync over the WHOLE spool dir (listBodyEvidence in
+    // src/store/bodiesEvidence.ts — unbounded by windowHours/scanCap, since a spool row's ts is
+    // unknown until parsed), so runtime tracks the LIVE corpus size, not a constant. Derive the
+    // ceiling from the measured spool entry count instead: ~5ms/entry is a generous stat+readdir
+    // budget under contention (a store repair may be hammering the same disk); floor at the old
+    // 180s so a small corpus keeps its old bound, cap at 10 minutes so a runaway corpus fails loudly
+    // rather than hanging mocha forever.
+    let spoolEntryCount = 0
+    try { spoolEntryCount = fs.readdirSync(defaultBodiesDir()).length } catch { /* measured as 0 below */ }
+    const derivedTimeoutMs = Math.min(600_000, Math.max(180_000, spoolEntryCount * 5))
+    this.timeout(derivedTimeoutMs)
     const tmpDb = path.join(tmpRoot, 'real-forensics.db')
     // windowHours bounds the evidence-base scan the SAME way cacheBreakTimeline.test.ts's own real-
     // machine test does (its comment: "an uncapped scan makes this test's runtime a function of the
