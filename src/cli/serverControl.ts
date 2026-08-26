@@ -10,7 +10,6 @@ import * as path from 'path'
 import { apiRequest, dataDir, dashboardUrl, fmtGb, fmtMb, init, mcpEndpoint, sleep, CONNECT_TIMEOUT_MS } from './cliCore'
 import { dataDirSource, dataPath } from '../dataDir'
 import { agentlensDisabled, killSwitchPath, noRevivePath } from './killSwitch'
-import { reviveDisabledOnDisk } from './hookHandlers'
 import { UsageError } from './cliErrors'
 import { assertKnownFlags } from './argHelpers'
 import { parsePidLock } from '../serverRuntime'
@@ -610,11 +609,21 @@ export function runSupervise(): void {
    *  a repair whose quiescence scan landed in the backoff gap saw a clean process table, staged,
    *  and then had a collector appear underneath it — silent divergence that looks intermittent.
    *
+   *  Checks NO_REVIVE ONLY — deliberately NOT reviveDisabledOnDisk(), which ORs in the global
+   *  DISABLED switch. For the supervisor those two must not be equal: NO_REVIVE is a pause,
+   *  DISABLED is terminal. Under DISABLED the spawn must PROCEED so the child refuses with
+   *  EX_CONFIG 78 and the isTerminalExit path ends the supervisor; swallowing the spawn here
+   *  would make a DISABLED supervisor immortal — a perpetual backed-off loop that never
+   *  converges, the exact shape TRDD-F1VX3M7C's comment below was written to kill. (Reading the
+   *  flag directly also keeps this module out of hookHandlers, which imports findServerJs from
+   *  HERE — importing reviveDisabledOnDisk back created a CJS cycle tsc reports as clean.)
+   *
    *  RESCHEDULE rather than exit: a brake is a pause, not a shutdown. Exiting here would mean a
    *  stay-down stop permanently kills a launchd-supervised install, and clearing the brake would
    *  not bring it back. Re-checking on the same backoff timer resumes on its own. */
+  const reviveBraked = (): boolean => { try { return fs.existsSync(noRevivePath()) } catch { return false } }
   const startUnlessBraked = (): void => {
-    if (reviveDisabledOnDisk()) {
+    if (reviveBraked()) {
       logCrash(`revive brake (NO_REVIVE) is set — NOT restarting the collector; re-checking in ${backoffMs}ms. Clear it with \`agentlenspro server start\`.`)
       setTimeout(startUnlessBraked, backoffMs)
       return
@@ -675,6 +684,17 @@ export function runSupervise(): void {
   process.on('SIGINT', () => shutdown('SIGINT'))
   process.on('SIGTERM', () => shutdown('SIGTERM'))
 
+  // ENTRY is refused outright when braked — unlike the restart loop, which waits. A launchd
+  // KeepAlive respawn invokes the identical argv as a human start, so entry cannot assume an
+  // operator meant "override the brake": arming the brake for a store rewrite and having launchd
+  // bounce the supervisor would otherwise spawn a collector straight into the swap. EX_TEMPFAIL
+  // (75), not 78: launchd backs off and retries, and the first respawn after the brake clears
+  // succeeds on its own. The human who really wants supervision back clears the brake first
+  // (`agentlenspro server start`, or remove NO_REVIVE) and re-runs.
+  if (reviveBraked()) {
+    process.stderr.write(`[supervisor] revive brake (NO_REVIVE) is set — refusing to start. Clear it and re-run.\n`)
+    process.exit(75)
+  }
   process.stderr.write(`[supervisor] starting AgentlensPro collector (max-old-space=${maxOldSpace}MB, crash log ${crashLog})\n`)
   start()
 }
@@ -712,9 +732,10 @@ export async function serverCommand(argv: string[]): Promise<void> {
           console.log(`server: MCP endpoint ${mcpEndpoint()} already served — refusing to start a second collector.`)
           return
         }
-        // Cleared here rather than after runSupervise(), which never returns. The supervisor
-        // re-reads the brake on every restart anyway, so a later stay-down still stops it.
-        clearReviveBrake()
+        // Deliberately does NOT clear the brake: a launchd KeepAlive respawn runs this exact
+        // argv, so clearing here would let a supervisor bounce wipe a brake an operator armed
+        // for a store rewrite — then spawn into the swap. runSupervise itself refuses (exit 75)
+        // while braked; lift the brake with a plain `server start` first.
         runSupervise() // foreground; never returns until signalled
         return
       }
