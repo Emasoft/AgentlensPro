@@ -220,6 +220,22 @@ jobs:
       - name: Stage agentlenspro-${{ matrix.suffix }}
         run: node scripts/gen-platform-packages.js ${{ matrix.suffix }}
 
+      # The resolver (src/rustBinResolve.ts) require.resolves `<pkg>/bin/<name>` — this pins that
+      # layout contract against the STAGED package before publishing, because the resolver's unit
+      # test exercises injected fakes and cannot catch the generator drifting from the layout.
+      # matrix.suffix is a repo-controlled literal from the matrix above, not event input.
+      - name: Verify staged layout matches the resolver contract
+        run: |
+          node -e '
+            const fs = require("fs"), path = require("path");
+            const dir = path.resolve("npm-platform-packages", "agentlenspro-" + process.argv[1]);
+            for (const b of ["alcore", "alstore", "alscan", "allogscan"]) {
+              const p = path.join(dir, "bin", b);
+              fs.accessSync(p, fs.constants.X_OK);  // throws (fails the job) if missing or non-executable
+            }
+            console.log("staged layout OK: bin/{alcore,alstore,alscan,allogscan} present+executable");
+          ' "${{ matrix.suffix }}"
+
       - name: Verify toolchain versions
         run: |
           NODE_VER=$(node --version | sed 's/v//')

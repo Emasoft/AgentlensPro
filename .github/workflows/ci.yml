@@ -84,6 +84,13 @@ jobs:
       - name: Check no personal identities
         run: node scripts/check-no-identities.js
 
+      # TRDD-EAK9R8IY: ci.yml enumerates checks individually rather than running `pnpm run
+      # compile`, so a guard wired only into compile/package silently never runs on PRs — this
+      # one was, until a review caught it. Keep this list and package.json's compile script in
+      # sync when adding guards.
+      - name: Check platform-package version pins (lockstep with main version)
+        run: node scripts/check-platform-package-pins.js
+
       # Bundles MUST be built BEFORE the unit suite: the server integration
       # tests boot the bundled standalone/server.js, which is an esbuild output
       # (only the .ts sources are tracked). Running mocha first fails with

@@ -3,7 +3,7 @@ trdd-id: YST9ZJ90
 title: Memoize the check_cache_expiry ANSWER and abandon server work on client disconnect
 column: testing
 created: 2026-08-23T06:48:53+0200
-updated: 2026-08-26T05:37:48+0200
+updated: 2026-08-26T05:45:06+0200
 current-owner: unassigned
 task-type: refactor
 min-approval-requirement: manager
@@ -113,6 +113,20 @@ than being self-approved:
       only ever returns a COMPLETE prior answer or a fresh complete/partial one from the same
       `handleCheckCacheExpiry` shape the CLI already parses; a partial/aborted answer is never
       cached, so the CLI never receives a stale partial masquerading as a full one.
+
+## Record correction (2026-08-26)
+
+Commit `6a48c48`'s message describes the advisor's exact-flip design ("the
+walk's DISCOVERED FACT (per-session lastRequestAt) is cached … the flip is
+computed exactly"). **The shipped code is the plain answer-memo** — verified at
+`src/mcpServer.ts:2253-2258`: the read path returns `hit.value` verbatim; no
+per-session fact map, no recompute at read time. Card-conformant (this card
+proposed the answer memo; the exact-flip was advisor gold-plating the worker
+did not build), but the commit message is a false record of WHICH design
+shipped — corrected here rather than by amend, per the audit-trail rule. Two
+correctness points verified in the shipped shape's favor: partial/aborted
+answers are never cached (`isPartialCacheExpiryAnswer` gate), and the
+AbortController is per-request (`:4060`, inside the handler).
 
 ## Approval log
 
