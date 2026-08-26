@@ -111,6 +111,30 @@ mtime the file happens to carry, which is why the card it came from records ghos
 (`standalone/server.ts:3799-3810`) but are the `/api/bodies/export` path, not a boot path. The
 producer has not been found; nothing below should assume it.
 
+### Candidates ELIMINATED (so the next person does not re-walk them)
+
+- **Stranded relocation — NOT it, twice over.** `relocate_stranded_file` (`pass.rs:197-219`) copies
+  a stranded body off the spool, and it deliberately **preserves mtime**:
+  `set_mtime_ms(&tmp, f.mtime_ms)` at `pass.rs:209`, tmp-then-rename, read-back verify, fsync. The
+  authors already saw this hazard. It is also inert here — `relocate_stranded_to` is `None` from
+  the server (`standalone/server.ts:3439`, `src/rustStorePass.ts:98`). And the measurement rules it
+  out independently: our files have `mtime == birthtime`, so mtime was NOT preserved.
+- **A spool→legacy fallback write is not disproved but does not fit alone.** The spool
+  `/Volumes/AgentLensSpool` is a volatile **RAM disk** (`ensureRamDisk`/`ramDiskInfo`,
+  `standalone/server.ts:552-568`), recreated at boot, and the exporter is pointed at
+  `PRIMARY_BODIES_DIR` on "MOUNT truth, not config truth" (`:4487-4491`) — so a failed spool does
+  redirect writes to the legacy dir. But that produces NEW bodies, and these carry bodies whose
+  store rows date from the previous evening.
+
+### The reading the evidence best supports (still a hypothesis, flagged as one)
+
+A body's TRUE capture time and the moment its FILE lands are different events, and the store row
+holds the former while the pass compares the latter. A body buffered by the producer and flushed
+later — across a restart, across a spool failure — lands as a file whose mtime is "now" and whose
+row says "yesterday". That needs no restore path to exist, and it explains the 23.4 h offset, the
+single birth minute, and `mtime == birthtime` together. It is consistent with everything measured;
+it is not yet confirmed, and the box above stays open until the producer is found at a `file:line`.
+
 ## What this card must establish
 
 1. **Why a pass over a post-downtime backlog parks ~307 of ~4,000 files.** Same pass, same store,
