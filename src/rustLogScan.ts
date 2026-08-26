@@ -21,6 +21,7 @@ import { attachGeneratedFiles, type HarvestedGeneratedFile } from './generatedFi
 import { stripTimeline, timelineHotAgeMs, timelineMaxBytes, timelineMaxEntries } from './timelineRetention'
 import { callBodyRegistry } from './rawBodyContext'
 import { dataPath } from './dataDir'
+import { npmPlatformBin } from './rustBinResolve'
 
 interface RustBlendTurn {
   model: string
@@ -42,16 +43,19 @@ interface RustParsedTranscript {
   fileSizeBytes: number
 }
 
-/** The opted-in binary path, or null when the Rust log engine is off. Same two explicit channels
- *  as alscanBin (env wins; the installed file at <dataDir>/bin/allogscan IS the durable opt-in). */
+/** The opted-in binary path, or null when the Rust log engine is off. Same three channels as
+ *  alscanBin: env wins; the installed file at <dataDir>/bin/allogscan is the durable dev opt-in;
+ *  the `agentlenspro-<platform>` optionalDependency (TRDD-EAK9R8IY) is what a plain
+ *  `npm i -g agentlenspro` resolves. */
 export function allogscanBin(env: NodeJS.ProcessEnv = process.env, installed = dataPath('bin', 'allogscan')): string | null {
   const v = env.AGENTLENS_ALLOGSCAN?.trim()
   if (v) return v
   try {
-    return fs.statSync(installed).isFile() ? installed : null
+    if (fs.statSync(installed).isFile()) return installed
   } catch {
-    return null
+    // fall through to the npm platform package
   }
+  return npmPlatformBin('allogscan')
 }
 
 /** Post-process ONE Rust result into the exact shape _parseClaudeFile returns. Exported so the

@@ -13,6 +13,7 @@ import { agentlensDisabled, killSwitchPath, noRevivePath } from './killSwitch'
 import { UsageError } from './cliErrors'
 import { assertKnownFlags } from './argHelpers'
 import { parsePidLock } from '../serverRuntime'
+import { npmPlatformBin } from '../rustBinResolve'
 
 /** Count of hook events durably spooled to disk but not yet reingested (server was down / shedding).
  *  Zero in the healthy case; a non-zero, non-shrinking value means the daemon isn't draining. */
@@ -46,23 +47,26 @@ export function findServerJs(): string {
 
 /** The opted-in `alcore` (Rust core) binary, or null when the Rust core is off.
  *
- *  Deliberately the SAME two-channel shape as `alscanBin` (src/rustScan.ts), because that one is
- *  already shipped and proven: `AGENTLENS_ALCORE` names the binary per-process and wins;
- *  otherwise `<dataDir>/bin/alcore` merely EXISTING is the opt-in. Presence is the only channel
- *  that survives a hook-revived daemon, which inherits no operator env — and the file is only
- *  there because someone copied it there, so presence cannot be an accident.
+ *  Deliberately the SAME shape as `alscanBin` (src/rustScan.ts), because that one is already
+ *  shipped and proven: `AGENTLENS_ALCORE` names the binary per-process and wins; otherwise
+ *  `<dataDir>/bin/alcore` merely EXISTING is the opt-in for a locally-copied dev binary. Presence
+ *  is the only channel that survives a hook-revived daemon, which inherits no operator env — and
+ *  the file is only there because someone copied it there, so presence cannot be an accident.
  *
- *  Never toolchain auto-detection: a published npm install has no Rust binary, so "detect and
- *  use" would silently mean "never" there while reading as "on" here. No binary, no behaviour
- *  change — which is what makes the cutover safe by construction. */
+ *  THIRD channel (TRDD-EAK9R8IY): the `agentlenspro-<platform>` optionalDependency, resolved via
+ *  `npmPlatformBin`. This is what makes a plain `npm i -g agentlenspro` run the Rust server with
+ *  no operator action — `alcore` ships in the box now, so "detect and use" is no longer a lie for
+ *  a published install; only `--omit=optional` or an unsupported platform falls through to null,
+ *  and the TS server remains that fallback. */
 export function alcoreBin(env: NodeJS.ProcessEnv = process.env, installed = dataPath('bin', 'alcore')): string | null {
   const v = env.AGENTLENS_ALCORE?.trim()
   if (v) return v
   try {
-    return fs.statSync(installed).isFile() ? installed : null
+    if (fs.statSync(installed).isFile()) return installed
   } catch {
-    return null
+    // fall through to the npm platform package
   }
+  return npmPlatformBin('alcore')
 }
 
 /** `alcore serve` argv for the CUTOVER, which must bind the ports the rest of the product already

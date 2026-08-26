@@ -1,19 +1,49 @@
 ---
 trdd-id: EAK9R8IY
 title: Ship the Rust binaries per-platform on npm — the missing prerequisite for box 3
-column: todo
+column: testing
 created: 2026-08-22T19:33:31+0200
-updated: 2026-08-23T00:05:00+0200
+updated: 2026-08-26T05:35:00+0200
 current-owner: main
 task-type: infra
 scope: project
 parent-trdd: DMWOBWFH
 npt: []
 eht: []
-approval-tier: 2
+min-approval-requirement: manager
 ---
 
 # Ship the Rust binaries per-platform on npm — the missing prerequisite for box 3
+
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-08-26
+
+**Built this session, all inert (no tag pushed, no publish run):**
+- `src/rustBinResolve.ts` — the third fallback channel (`npmPlatformBin`), wired into the four
+  existing resolvers (`alcoreBin`, `alstoreBin`, `alscanBin`, `allogscanBin`); order is
+  env override → `<dataDir>/bin/<name>` (dev install) → npm platform package.
+- `scripts/gen-platform-packages.js` — generates `npm-platform-packages/agentlenspro-<suffix>/`
+  (package.json + `bin/*` + LICENSE + README) from that runner's own `cargo build --release`
+  output. Directory is gitignored — pure CI-time build output, never hand-authored.
+- `scripts/check-platform-package-pins.js` — fails the build if the main package's
+  `optionalDependencies` versions on `agentlenspro-<platform>` drift from `package.json` `version`.
+  Wired into `check-types`/`package`.
+- `package.json` — added `optionalDependencies` (4 platform packages, pinned `2.29.0`).
+- `.github/workflows/publish.yml` — new `build-platform-packages` matrix job (4 native runners,
+  no cross-compile), `publish-npm` now `needs: [package, build-platform-packages]` so the main
+  package publishes only after every platform leg succeeds.
+- `src/test/rustBinResolve.test.ts` — 4 tests, all passing.
+
+**NEXT ACTION (owner, not this session):** before the first tag meant to actually ship binaries,
+bootstrap each `agentlenspro-<platform>` package once, locally, with 2FA — the exact 3 steps are
+written as a comment block right above the `build-platform-packages` job in `publish.yml`. Until
+that happens, the job's publish step 404s (expected — same as the `agentlenspro` 1.0.0 bootstrap).
+
+**Not done, and cannot be done from this session:** acceptance boxes 2 and 4 require an actual
+publish (forbidden here) followed by installing on a clean machine. Everything else is verified
+(see Acceptance below).
+
+**Superseded — do NOT carry forward:** the card's own `approval-tier: 2` field name (retired;
+now `min-approval-requirement: manager`).
 
 **NPT of TRDD-DMWOBWFH acceptance box 3** ("TypeScript remaining in the repo serves only the
 UI"). Box 3 cannot close while `standalone/server.ts` serves every published install, and it
@@ -97,15 +127,52 @@ amending instead, and this card should be cancelled rather than completed.
 
 ## Acceptance
 
-- [ ] A CI matrix builds `alcore` (and `alscan`/`allogscan` if the cutover needs them) for the
-      agreed targets, on tag, through the existing tokenless OIDC path.
+- [x] A CI matrix builds `alcore` (and `alstore`/`alscan`/`allogscan`, all four the resolver
+      needs) for the agreed targets, on tag, through the existing tokenless OIDC path. Added
+      job `build-platform-packages` in `.github/workflows/publish.yml` (matrix: `darwin-arm64`
+      → `macos-14`, `darwin-x64` → `macos-15-intel`, `linux-x64` → `ubuntu-latest`,
+      `linux-arm64` → `ubuntu-24.04-arm`, all native — no cross-compile). `win32-x64` deliberately
+      OMITTED: `rust-core/crates/agentlens-core/src/pid_lock.rs:105-106` calls
+      `libc::kill`/`libc::EPERM` with no `#[cfg(unix)]` guard, so the crate does not build for
+      windows-msvc as written. No musl legs added (not needed — matches the card's instruction).
 - [ ] Per-platform packages publish with the binary present — verified by installing the
       published package in a clean environment and spawning the binary, NOT by inspecting the
-      tarball listing.
-- [ ] The main package declares them as `optionalDependencies` and resolves the npm-installed
-      binary in addition to `~/.agentlens/bin/alcore`.
+      tarball listing. **Cannot be checked from this session** (no publish was performed — see
+      the workflow job's own comment block for the required one-time OIDC bootstrap per
+      platform package, same shape as the v1.0.0 bootstrap this repo already did). Verify after
+      the first real tag.
+- [x] The main package declares them as `optionalDependencies` (pinned to the exact `version`,
+      checked in CI by `scripts/check-platform-package-pins.js`, wired into `check-types`/
+      `package`) and resolves the npm-installed binary in addition to `~/.agentlens/bin/alcore`:
+      `src/rustBinResolve.ts` (`npmPlatformBin`) is the new third channel, wired into
+      `alcoreBin()` (`src/cli/serverControl.ts`), `alstoreBin()` (`src/rustStorePass.ts`),
+      `alscanBin()` (`src/rustScan.ts`), `allogscanBin()` (`src/rustLogScan.ts`) — env override
+      wins, then the dev-install `<dataDir>/bin/<name>`, then the npm platform package. Test:
+      `src/test/rustBinResolve.test.ts` (4/4 passing), plus the existing `rustScan.test.ts` /
+      `rustStorePass.test.ts` two-channel tests still pass unchanged (8/8) — the third channel
+      only widens the fallback, never changes the first two.
 - [ ] A machine with no `~/.agentlens/bin/alcore` runs the Rust server after a plain
       `npm i -g agentlenspro` — measured on a clean environment, not asserted from the manifest.
+      **Cannot be checked until the platform packages are actually published** (same blocker as
+      the box above).
+
+**Verified this session**: `pnpm run check-types` (0 errors), `pnpm run lint` (0 errors, only
+pre-existing warnings), `pnpm run check-mirrors` (OK), `pnpm run check-platform-package-pins`
+(OK — 4/4 match version 2.29.0), `pnpm run package` (full production build green), and the full
+existing unit suite (2469 passing, 15 pending, 0 failing) plus the 4 new resolver tests. The
+workflow YAML parses and `zizmor` reports no new findings (1 pre-existing informational, none
+introduced by the new job).
+
+**Research finding that shapes the remaining work (WebSearch, 2026-08-26):** npm's trusted-
+publishing OIDC exchange cannot publish the FIRST version of a brand-new package name — the
+registry has to already know the name exists before a trusted-publisher entry can be attached to
+it. So each `agentlenspro-<platform>` package needs the same one-time, owner-2FA local bootstrap
+publish this repo already did for `agentlenspro` 1.0.0, followed by `npm trust github` to
+register the trusted publisher — documented as an explicit numbered step in the new workflow
+job's own comment block (`.github/workflows/publish.yml`, job `build-platform-packages`) rather
+than only here, so whoever edits that file next sees it in place. Until that bootstrap runs, the
+job's publish step will 404 exactly like the main package did before its own bootstrap — expected,
+not a defect.
 
 ## Where this stopped, and the one measurement still missing
 
@@ -199,6 +266,12 @@ uncertainty about whether it is feasible at all.
   objection — 53 MB stripped against the 108 MB of native DuckDB the package already ships per
   user, via a per-platform `optionalDependencies` pattern already present in the dependency tree.
   What remains is conventional cross-compile CI. → `planned`, moved to `design/tasks/`.
+- 2026-08-26T05:35:00+0200 — Implemented the resolver + CI scaffolding (see the STATE block).
+  `column: todo` → `testing`: check-types/lint/check-mirrors/check-platform-package-pins/package
+  all green, and the new + existing resolver tests pass (2469 passing, 0 failing). Migrated
+  `approval-tier: 2` → `min-approval-requirement: manager` per the field-rename ruling. No publish
+  was performed and none is possible from this session — boxes 2 and 4 stay open pending the
+  owner's one-time OIDC bootstrap and a real tag.
 
 ## Provenance
 

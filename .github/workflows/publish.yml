@@ -139,8 +139,109 @@ jobs:
   # the workflow FILENAME — this file was renamed release.yml → publish.yml to
   # match the registered trusted-publisher entry (and the SVG-BBOX convention);
   # renaming either side alone breaks the OIDC claim match.
-  publish-npm:
+  # Per-platform Rust binary packages (TRDD-EAK9R8IY, NPT of DMWOBWFH box 3): `alcore` and its
+  # sidecars (`alstore`, `alscan`, `allogscan`) are built and published as `agentlenspro-<target>`
+  # optionalDependencies, one per native runner — no cross-compilation, matching the pattern
+  # `@duckdb/node-bindings` already uses in this dependency tree.
+  #
+  # win32-x64 is deliberately absent: rust-core/crates/agentlens-core/src/pid_lock.rs calls
+  # `libc::kill`/`libc::EPERM` with no `#[cfg(unix)]` guard, so the crate does not build for
+  # windows-msvc as written — see src/rustBinResolve.ts. Add a windows leg only after that is
+  # fixed and verified, not speculatively.
+  #
+  # `fail-fast: false` + a single `needs: [package, build-platform-packages]` on publish-npm below
+  # is what makes "main package publishes LAST, only if every leg succeeded" hold: `needs` on a
+  # matrix job blocks until ALL matrix combinations finish, and only proceeds if all of them
+  # succeeded — one failed leg blocks the main publish rather than shipping a half-covered release.
+  #
+  # FIRST PUBLISH OF EACH agentlenspro-<target> PACKAGE CANNOT GO THROUGH THIS JOB. npm's OIDC
+  # trusted-publishing exchange only works against a package name that already exists on the
+  # registry (verified 2026-08-26 against npm's own trusted-publishers docs — there is no
+  # "publish a brand-new name via OIDC" path). Before the first tag that is meant to actually
+  # publish, the repo OWNER must, once per platform package:
+  #   1. `cd npm-platform-packages/agentlenspro-<target>` after running
+  #      `cargo build --release --manifest-path rust-core/Cargo.toml` locally and
+  #      `node scripts/gen-platform-packages.js <target>` (mirrors what this job does in CI).
+  #   2. `npm publish --access public` — a LOCAL, INTERACTIVE publish requiring the owner's own
+  #      npm 2FA tap, exactly like the one-time v1.0.0 bootstrap this repo already did for the
+  #      main `agentlenspro` package (CLAUDE.md "Releases").
+  #   3. `npm trust github agentlenspro-<target> --repo Emasoft/AgentlensPro --workflow publish.yml`
+  #      to register the trusted publisher for that name (npm >= 11.15, one interactive 2FA tap —
+  #      see CLAUDE.md's `npm trust list|github|revoke` note).
+  # Until that bootstrap runs for a given platform package, this job's publish step for that
+  # target will fail with the same E404 the main package hit before its own bootstrap — that is
+  # expected, not a bug in the workflow, and is why this whole job is additive/inert until the
+  # owner acts.
+  build-platform-packages:
     needs: package
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Native runners only — no cross-compiling a statically-linked DuckDB (17k+ symbols).
+          - suffix: darwin-arm64
+            runner: macos-14
+          - suffix: darwin-x64
+            runner: macos-15-intel
+          - suffix: linux-x64
+            runner: ubuntu-latest
+          - suffix: linux-arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    permissions:
+      id-token: write   # npm Trusted Publishing (OIDC) for this platform's package
+      contents: read
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master (stable toolchain)
+        with:
+          toolchain: stable
+
+      - name: Build alcore/alstore/alscan/allogscan (release)
+        run: cargo build --release --manifest-path rust-core/Cargo.toml
+
+      - name: Enable corepack (pnpm)
+        run: corepack enable
+
+      # Node 24 for the same reason as publish-npm below: its bundled npm (>= 11.5.1) does the
+      # OIDC exchange natively.
+      - name: Setup Node.js 24 (bundled npm has OIDC support)
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0  # zizmor: ignore[cache-poisoning]
+        with:
+          node-version: 24
+
+      - name: Stage agentlenspro-${{ matrix.suffix }}
+        run: node scripts/gen-platform-packages.js ${{ matrix.suffix }}
+
+      - name: Verify toolchain versions
+        run: |
+          NODE_VER=$(node --version | sed 's/v//')
+          NPM_VER=$(npm --version)
+          echo "Node.js: $NODE_VER — npm: $NPM_VER"
+          if [[ ! "$NODE_VER" =~ ^24\. ]]; then
+            echo "::error::Expected Node.js 24.x, got $NODE_VER"
+            exit 1
+          fi
+          NPM_MAJOR=$(echo "$NPM_VER" | cut -d. -f1)
+          NPM_MINOR=$(echo "$NPM_VER" | cut -d. -f2)
+          if [ "$NPM_MAJOR" -lt 11 ] || { [ "$NPM_MAJOR" -eq 11 ] && [ "$NPM_MINOR" -lt 5 ]; }; then
+            echo "::error::npm >= 11.5.1 required for OIDC trusted publishing (got $NPM_VER)"
+            exit 1
+          fi
+
+      - name: Publish agentlenspro-${{ matrix.suffix }} (OIDC trusted publishing)
+        working-directory: npm-platform-packages/agentlenspro-${{ matrix.suffix }}
+        run: npm publish --access public
+
+  publish-npm:
+    needs: [package, build-platform-packages]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     # Tag pushes publish; workflow_dispatch re-runs a publish without re-tagging

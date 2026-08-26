@@ -52,7 +52,7 @@
   ],
   "scripts": {
     "prepublishOnly": "pnpm run package",
-    "compile": "pnpm run check-types && pnpm run lint && pnpm run check-mirrors && pnpm run check-pricing-export && pnpm run check-identities && pnpm run check-guards && node esbuild.js",
+    "compile": "pnpm run check-types && pnpm run lint && pnpm run check-mirrors && pnpm run check-pricing-export && pnpm run check-identities && pnpm run check-guards && pnpm run check-platform-package-pins && node esbuild.js",
     "local": "node esbuild.js && node --max-old-space-size=6144 standalone/server.js",
     "up": "node esbuild.js && node standalone/cli.js dashboard",
     "up:supervised": "node esbuild.js && node standalone/cli.js server start --supervise",
@@ -72,7 +72,7 @@
     "watch": "npm-run-all -p watch:*",
     "watch:esbuild": "node esbuild.js --watch",
     "watch:tsc": "tsc --noEmit --watch --project tsconfig.json",
-    "package": "pnpm run check-types && pnpm run lint && pnpm run check-mirrors && pnpm run check-pricing-export && pnpm run check-identities && pnpm run check-guards && node esbuild.js --production",
+    "package": "pnpm run check-types && pnpm run lint && pnpm run check-mirrors && pnpm run check-pricing-export && pnpm run check-identities && pnpm run check-guards && pnpm run check-platform-package-pins && node esbuild.js --production",
     "deploy:safe": "bash scripts/safe-deploy.sh",
     "compile-tests": "tsc -p tsconfig.test.json",
     "watch-tests": "tsc -p tsconfig.test.json -w",
@@ -82,6 +82,7 @@
     "check-memory": "node scripts/check-memory-lessons.js",
     "check-identities": "node scripts/check-no-identities.js",
     "check-guards": "node scripts/test-deny-playwright-init-agents.js && node scripts/test-deny-identity-leak-to-github.js && node scripts/test-deny-unscoped-measurement.js && node scripts/test-stop-spawn-review-fork.js",
+    "check-platform-package-pins": "node scripts/check-platform-package-pins.js",
     "lint": "eslint src media/src",
     "test:unit": "pnpm run compile-tests && mocha",
     "test:browser": "pnpm run compile-tests && node esbuild.js && AGENTLENSPRO_BROWSER_TESTS=1 mocha --no-config --ui tdd out/test/test/browser/dashboardSmoke.test.js"
@@ -106,5 +107,11 @@
     "fflate": "^0.8.3",
     "preact": "^10.29.1",
     "sql.js": "^1.14.1"
+  },
+  "optionalDependencies": {
+    "agentlenspro-darwin-arm64": "2.29.0",
+    "agentlenspro-darwin-x64": "2.29.0",
+    "agentlenspro-linux-x64": "2.29.0",
+    "agentlenspro-linux-arm64": "2.29.0"
   }
 }

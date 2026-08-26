@@ -12,6 +12,7 @@ import { execFile } from 'child_process'
 import * as fs from 'fs'
 import type { OtelCallEvent, OtelCompactionEvent, OtelScanCoverage } from './otelCallEvents'
 import { dataPath } from './dataDir'
+import { npmPlatformBin } from './rustBinResolve'
 
 /** The Rust ScanResult wire shape (serde field names — see rust-core/crates/agentlens-spanstore). */
 interface RustScanResult {
@@ -38,19 +39,22 @@ interface RustScanResult {
 /** The opted-in binary path, or null when the Rust engine is off. Read per call, not at module
  *  load, so tests (and a daemon restarted with new env) see the current value.
  *
- *  Two opt-in channels, both explicit operator acts (never toolchain auto-detection):
+ *  Three opt-in channels:
  *  - AGENTLENS_ALSCAN=/path — per-process override, wins;
  *  - `<dataDir>/bin/alscan` existing — the durable install location, so hook-REVIVED daemons
  *    (which inherit no operator env) keep the engine across restarts. The file only exists
- *    because the operator copied it there, so presence IS the opt-in. */
+ *    because the operator copied it there, so presence IS the opt-in;
+ *  - the `agentlenspro-<platform>` optionalDependency (TRDD-EAK9R8IY) — what a plain
+ *    `npm i -g agentlenspro` resolves with no operator action at all. */
 export function alscanBin(env: NodeJS.ProcessEnv = process.env, installed = dataPath('bin', 'alscan')): string | null {
   const v = env.AGENTLENS_ALSCAN?.trim()
   if (v) return v
   try {
-    return fs.statSync(installed).isFile() ? installed : null
+    if (fs.statSync(installed).isFile()) return installed
   } catch {
-    return null
+    // fall through to the npm platform package
   }
+  return npmPlatformBin('alscan')
 }
 
 /** Same answer shape as scanOtelCallEvents, computed by the Rust binary. Throws on any exec or

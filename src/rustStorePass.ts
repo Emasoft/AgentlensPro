@@ -20,24 +20,28 @@ import { execFile } from 'child_process'
 import * as fs from 'fs'
 import type { IngestPassResult } from './store/ingestPass'
 import { dataPath } from './dataDir'
+import { npmPlatformBin } from './rustBinResolve'
 
 /** The opted-in binary path, or null when the Rust pass engine is off. Read per call, not at
  *  module load, so tests (and a daemon restarted with new env) see the current value.
  *
- *  Two opt-in channels, both explicit operator acts (never toolchain auto-detection):
+ *  Three channels, checked in order:
  *  - AGENTLENS_ALSTORE=/path — per-process override, wins;
- *  - `<dataDir>/bin/alstore` existing — the durable install location. `dataPath` follows the
+ *  - `<dataDir>/bin/alstore` existing — the durable dev-install location. `dataPath` follows the
  *    test-overridden data dir, so fixture-driven tests keep exercising the TS pass on machines
  *    that have the binary installed in the REAL data dir. The file only exists because the
- *    operator copied it there, so presence IS the opt-in. */
+ *    operator copied it there, so presence IS the opt-in;
+ *  - the `agentlenspro-<platform>` optionalDependency (TRDD-EAK9R8IY) — what a plain
+ *    `npm i -g agentlenspro` resolves with no operator action at all. */
 export function alstoreBin(env: NodeJS.ProcessEnv = process.env, installed = dataPath('bin', 'alstore')): string | null {
   const v = env.AGENTLENS_ALSTORE?.trim()
   if (v) return v
   try {
-    return fs.statSync(installed).isFile() ? installed : null
+    if (fs.statSync(installed).isFile()) return installed
   } catch {
-    return null
+    // fall through to the npm platform package
   }
+  return npmPlatformBin('alstore')
 }
 
 /** One throttled ingest pass through the Rust binary — same option meanings and the same result
