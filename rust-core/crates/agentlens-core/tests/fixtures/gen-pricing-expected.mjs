@@ -20,7 +20,9 @@ const BUCKETS = [
   { i: 1234, r: 50000, w: 3000, o: 456, w1h: 1000 },    // 1h split
   { i: 1234, r: 50000, w: 3000, o: 456, w1h: 99999 },   // clamp: w1h > w
   { i: 1234, r: 50000, w: 3000, o: 456, w1h: -5 },      // clamp: negative
-  { i: 250000, r: 300000, w: 210000, o: 201000, w1h: 205000 }, // >200K tiers on every bucket
+  { i: 250000, r: 300000, w: 210000, o: 201000, w1h: 205000 }, // far above every threshold — whole-request step
+  { i: 150000, r: 150000, w: 0, o: 5000, w1h: 0 },     // >200K COMBINED, each bucket under — step vs marginal diverge
+  { i: 250000, r: 0, w: 0, o: 10000, w1h: 0 },         // between 200K and gpt-5.x's 272K threshold
 ]
 const cases = []
 for (const model of Object.keys(RATES)) {

@@ -9,7 +9,7 @@
 //   Request multipliers (pre Jun 1, 2026): https://docs.github.com/en/copilot/concepts/billing/copilot-requests
 //   Annual-plan multipliers (post Jun 1):  https://docs.github.com/en/copilot/reference/copilot-billing/model-multipliers-for-annual-plans
 //   Per-provider rate URLs: PRICING_SOURCES.md
-export const PRICING_LAST_UPDATED = '2026-07-07'
+export const PRICING_LAST_UPDATED = '2026-08-26'
 
 // Three Copilot billing modes (webview cost toggle):
 //   'token'          — new token-based AI Credits billing, effective Jun 1, 2026
@@ -31,13 +31,31 @@ export interface ModelRates {
   contextWindowTokens: number       // max context window for Projection estimates; 0 = unknown
   multiplier: number                // Pre-Jun 1 Copilot request multiplier × $0.04/prompt (0 = included/free)
   multiplierAnnualPostJun1: number  // Post-Jun 1 multiplier for annual plan holders staying on request billing
-  // Optional tiered rates for the >200K tokens-per-call surcharge. When absent, flat rates apply.
+  // Optional long-context surcharge rates. When absent, flat rates apply.
+  //
+  // SEMANTICS (settled from the LIVE provider rate pages, 2026-08-26 — TRDD-R4DHDK7L): every
+  // provider that tiers prices it as a WHOLE-REQUEST STEP keyed on the request's total input size
+  // (input + cacheRead + cacheWrite; output does not count toward the threshold). Once the total
+  // crosses `surchargeThresholdTokens`, ALL buckets of that request — including output — bill at
+  // the Above rates; below it, everything bills flat. It is NOT marginal per-bucket tiering.
+  //   - Gemini: "$1.25, prompts <= 200k tokens / $2.50, prompts > 200k" — rate keyed by prompt size
+  //     (ai.google.dev/gemini-api/docs/pricing)
+  //   - OpenAI: rate tables keyed "(<272K context length)" vs long-context
+  //     (developers.openai.com/api/docs/pricing)
+  //   - Anthropic (historical Sonnet 4 1M beta): premium keyed on requests exceeding 200K input
+  //     tokens. Current Claude models have NO surcharge: "Claude 4.6 and later models include the
+  //     full 1M token context window at standard pricing. (A 900k-token request is billed at the
+  //     same per-token rate as a 9k-token request.)"
+  //     (platform.claude.com/docs/en/about-claude/pricing#long-context-pricing)
+  // Field names keep the historical "Above200k" spelling for 1:1 Rust field mapping; the actual
+  // threshold is `surchargeThresholdTokens` (default 200_000 when absent).
   // Applied per call by calcTokenCostUsd; NOT applied by calcTokenCost (which operates on session
   // totals and cannot reconstruct per-turn call sizes).
   inputAbove200kPerMTok?: number
   outputAbove200kPerMTok?: number
   cacheReadAbove200kPerMTok?: number
   cacheWriteAbove200kPerMTok?: number
+  surchargeThresholdTokens?: number
   // An ANNOUNCED future rate change, applied by lookupRates once the CALL's own timestamp reaches
   // `from` (an ISO date, UTC). This exists because a promotional rate with a published end date is
   // the one pricing error that arrives on a schedule with no code change and no signal: the number
@@ -74,10 +92,12 @@ export const RATES: Record<string, ModelRates> = {
   'gpt-5.2':            { inputPerMTok: 1.75,  cacheReadPerMTok: 0.175,  cacheWritePerMTok: 0, outputPerMTok: 14.00, contextWindowTokens: 256_000,   multiplier: 1,    multiplierAnnualPostJun1: 3 },
   'gpt-5.2-codex':      { inputPerMTok: 1.75,  cacheReadPerMTok: 0.175,  cacheWritePerMTok: 0, outputPerMTok: 14.00, contextWindowTokens: 256_000,   multiplier: 1,    multiplierAnnualPostJun1: 3 },
   'gpt-5.3-codex':      { inputPerMTok: 1.75,  cacheReadPerMTok: 0.175,  cacheWritePerMTok: 0, outputPerMTok: 14.00, contextWindowTokens: 256_000,   multiplier: 1,    multiplierAnnualPostJun1: 6 },
-  'gpt-5.4':            { inputPerMTok: 2.50,  cacheReadPerMTok: 0.25,   cacheWritePerMTok: 0, outputPerMTok: 15.00, contextWindowTokens: 272_000,   multiplier: 1,    multiplierAnnualPostJun1: 6 },  // long-context surcharge (>272K tokens) not implemented
+  'gpt-5.4':            { inputPerMTok: 2.50,  cacheReadPerMTok: 0.25,   cacheWritePerMTok: 0, outputPerMTok: 15.00, contextWindowTokens: 272_000,   multiplier: 1,    multiplierAnnualPostJun1: 6,
+                          inputAbove200kPerMTok: 5.00, outputAbove200kPerMTok: 22.50, cacheReadAbove200kPerMTok: 0.50, cacheWriteAbove200kPerMTok: 0, surchargeThresholdTokens: 272_000 },
   'gpt-5.4-mini':       { inputPerMTok: 0.75,  cacheReadPerMTok: 0.075,  cacheWritePerMTok: 0, outputPerMTok: 4.50,  contextWindowTokens: 200_000,   multiplier: 0.33, multiplierAnnualPostJun1: 6 },
   'gpt-5.4-nano':       { inputPerMTok: 0.20,  cacheReadPerMTok: 0.02,   cacheWritePerMTok: 0, outputPerMTok: 1.25,  contextWindowTokens: 128_000,   multiplier: 0.25, multiplierAnnualPostJun1: 0.25 },
-  'gpt-5.5':            { inputPerMTok: 5.00,  cacheReadPerMTok: 0.50,   cacheWritePerMTok: 0, outputPerMTok: 30.00, contextWindowTokens: 256_000,   multiplier: 7.5,  multiplierAnnualPostJun1: 7.5 },  // TBD per docs; long-context surcharge (>unknown threshold) not implemented
+  'gpt-5.5':            { inputPerMTok: 5.00,  cacheReadPerMTok: 0.50,   cacheWritePerMTok: 0, outputPerMTok: 30.00, contextWindowTokens: 256_000,   multiplier: 7.5,  multiplierAnnualPostJun1: 7.5,
+                          inputAbove200kPerMTok: 10.00, outputAbove200kPerMTok: 45.00, cacheReadAbove200kPerMTok: 1.00, cacheWriteAbove200kPerMTok: 0, surchargeThresholdTokens: 272_000 },
   // ── Codex-only ─────────────────────────────────────────────────────────────
   // codex-mini-latest: fine-tuned o4-mini; 75% cache discount (not the usual 90%); deprecated
   'codex-mini-latest':  { inputPerMTok: 1.50,  cacheReadPerMTok: 0.375,  cacheWritePerMTok: 0, outputPerMTok: 6.00,  contextWindowTokens: 200_000,   multiplier: 0,    multiplierAnnualPostJun1: 0 },
@@ -129,10 +149,16 @@ export const RATES: Record<string, ModelRates> = {
   'claude-opus-5-fast': { inputPerMTok: 10.00, cacheReadPerMTok: 1.00, cacheWritePerMTok: 12.50, outputPerMTok:  50.00, contextWindowTokens: 1_000_000, multiplier: 0,   multiplierAnnualPostJun1: 0 },
   'claude-fable-5':      { inputPerMTok: 10.00, cacheReadPerMTok: 1.00, cacheWritePerMTok: 12.50, outputPerMTok:  50.00, contextWindowTokens: 1_000_000, multiplier: 0,   multiplierAnnualPostJun1: 0 },  // not yet in Copilot billing docs
   // ── Google ─────────────────────────────────────────────────────────────────
-  'gemini-2.5-pro':  { inputPerMTok: 1.25, cacheReadPerMTok: 0.125, cacheWritePerMTok: 0, outputPerMTok: 10.00, contextWindowTokens: 1_000_000, multiplier: 1,    multiplierAnnualPostJun1: 1 },  // long-context surcharge (>200K tokens) not implemented
+  'gemini-2.5-pro':  { inputPerMTok: 1.25, cacheReadPerMTok: 0.125, cacheWritePerMTok: 0, outputPerMTok: 10.00, contextWindowTokens: 1_000_000, multiplier: 1,    multiplierAnnualPostJun1: 1,
+                       inputAbove200kPerMTok: 2.50, outputAbove200kPerMTok: 15.00, cacheReadAbove200kPerMTok: 0.25, cacheWriteAbove200kPerMTok: 0 },
   'gemini-3-flash':  { inputPerMTok: 0.50, cacheReadPerMTok: 0.05,  cacheWritePerMTok: 0, outputPerMTok:  3.00, contextWindowTokens: 1_000_000, multiplier: 0.33, multiplierAnnualPostJun1: 0.33 },
-  'gemini-3-pro':    { inputPerMTok: 2.00, cacheReadPerMTok: 0.20,  cacheWritePerMTok: 0, outputPerMTok: 12.00, contextWindowTokens: 1_000_000, multiplier: 1,    multiplierAnnualPostJun1: 6 },
-  'gemini-3.1-pro':  { inputPerMTok: 2.00, cacheReadPerMTok: 0.20,  cacheWritePerMTok: 0, outputPerMTok: 12.00, contextWindowTokens: 1_000_000, multiplier: 1,    multiplierAnnualPostJun1: 6 },  // long-context surcharge (>200K tokens) not implemented
+  // gemini-3-pro is DELISTED from the live pricing page (superseded by 3.1); it launched with the
+  // identical <=200k / >200k tier split 3.1 still shows. Retained with that tiering so recorded
+  // sessions keep pricing at what they actually cost (same precedent as claude-opus-4-7-fast).
+  'gemini-3-pro':    { inputPerMTok: 2.00, cacheReadPerMTok: 0.20,  cacheWritePerMTok: 0, outputPerMTok: 12.00, contextWindowTokens: 1_000_000, multiplier: 1,    multiplierAnnualPostJun1: 6,
+                       inputAbove200kPerMTok: 4.00, outputAbove200kPerMTok: 18.00, cacheReadAbove200kPerMTok: 0.40, cacheWriteAbove200kPerMTok: 0 },
+  'gemini-3.1-pro':  { inputPerMTok: 2.00, cacheReadPerMTok: 0.20,  cacheWritePerMTok: 0, outputPerMTok: 12.00, contextWindowTokens: 1_000_000, multiplier: 1,    multiplierAnnualPostJun1: 6,
+                       inputAbove200kPerMTok: 4.00, outputAbove200kPerMTok: 18.00, cacheReadAbove200kPerMTok: 0.40, cacheWriteAbove200kPerMTok: 0 },
   'gemini-3.5-flash':{ inputPerMTok: 1.50, cacheReadPerMTok: 0.15,  cacheWritePerMTok: 0, outputPerMTok:  9.00, contextWindowTokens: 1_000_000, multiplier: 14,   multiplierAnnualPostJun1: 14 },
   // ── Fine-tuned ─────────────────────────────────────────────────────────────
   // raptor-mini uses GPT-5 mini pricing per footnote 5 — included ($0) in token mode, same annual multiplier
@@ -187,13 +213,12 @@ export function lookupRates(modelId: string, atIso?: string): ModelRates | null 
   return best ? applyScheduledChange(RATES[best], atIso) : null
 }
 
-// Applies two-tier pricing: tokens up to the threshold at baseRate, remainder at aboveRate.
-function tieredCost(tokens: number, baseRatePerMTok: number, aboveRatePerMTok: number): number {
-  const THRESHOLD = 200_000
-  if (tokens <= THRESHOLD) return (tokens / 1_000_000) * baseRatePerMTok
-  return (THRESHOLD / 1_000_000) * baseRatePerMTok
-       + ((tokens - THRESHOLD) / 1_000_000) * aboveRatePerMTok
-}
+// The long-context surcharge is a WHOLE-REQUEST STEP, not marginal per-bucket tiering: once the
+// request's total input size (input + cacheRead + cacheWrite) crosses the threshold, EVERY bucket
+// bills at the Above rates. Settled from the live provider rate pages (see the ModelRates field
+// comment); the previous per-bucket marginal tieredCost under-billed — e.g. 150K input + 150K
+// cacheRead never tripped any bucket's 200K even though the provider bills the whole request at
+// the premium rate.
 
 /** The 1-HOUR cache-write rate for a model.
  *
@@ -241,12 +266,21 @@ export function calcTokenCostUsd(
   const w1h = Math.max(0, Math.min(cacheWrite1hTokens, cacheWriteTokens))
   const w5m = cacheWriteTokens - w1h
   const rate1h = cacheWrite1hRate(rates)
-  if (rates.inputAbove200kPerMTok !== undefined) {
-    return tieredCost(inputTokens,     rates.inputPerMTok,      rates.inputAbove200kPerMTok)
-         + tieredCost(cacheReadTokens,  rates.cacheReadPerMTok,  rates.cacheReadAbove200kPerMTok!)
-         + tieredCost(w5m,              rates.cacheWritePerMTok, rates.cacheWriteAbove200kPerMTok!)
-         + tieredCost(w1h,              rate1h,                  rates.cacheWriteAbove200kPerMTok!)
-         + tieredCost(outputTokens,     rates.outputPerMTok,     rates.outputAbove200kPerMTok!)
+  const totalInput = inputTokens + cacheReadTokens + cacheWriteTokens
+  const threshold = rates.surchargeThresholdTokens ?? 200_000
+  if (rates.inputAbove200kPerMTok !== undefined && totalInput > threshold) {
+    // Whole-request step (see tieredCost comment above): every bucket at the premium rate.
+    // Premium 1h write: same derivation rule as cacheWrite1hRate — 2x premium input only when the
+    // premium 5m write has the Anthropic 1.25x shape (sonnet-4's 7.50 = 1.25 x 6.00); a provider
+    // that does not price writes (Above 0) must never be handed a derived rate it does not charge.
+    const wAbove = rates.cacheWriteAbove200kPerMTok!
+    const anthropicShape = wAbove > 0 && Math.abs(wAbove - rates.inputAbove200kPerMTok * 1.25) < 1e-9
+    const w1hAboveRate = anthropicShape ? rates.inputAbove200kPerMTok * 2 : wAbove
+    return (inputTokens     / 1_000_000) * rates.inputAbove200kPerMTok
+         + (cacheReadTokens / 1_000_000) * rates.cacheReadAbove200kPerMTok!
+         + (w5m             / 1_000_000) * wAbove
+         + (w1h             / 1_000_000) * w1hAboveRate
+         + (outputTokens    / 1_000_000) * rates.outputAbove200kPerMTok!
   }
   return (inputTokens     / 1_000_000) * rates.inputPerMTok
        + (cacheReadTokens / 1_000_000) * rates.cacheReadPerMTok

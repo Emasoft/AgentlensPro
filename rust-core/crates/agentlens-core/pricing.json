@@ -1,5 +1,5 @@
 {
- "lastUpdated": "2026-07-07",
+ "lastUpdated": "2026-08-26",
  "rates": {
   "gpt-4.1": {
    "inputPerMTok": 0,
@@ -116,7 +116,12 @@
    "outputPerMTok": 15,
    "contextWindowTokens": 272000,
    "multiplier": 1,
-   "multiplierAnnualPostJun1": 6
+   "multiplierAnnualPostJun1": 6,
+   "inputAbove200kPerMTok": 5,
+   "outputAbove200kPerMTok": 22.5,
+   "cacheReadAbove200kPerMTok": 0.5,
+   "cacheWriteAbove200kPerMTok": 0,
+   "surchargeThresholdTokens": 272000
   },
   "gpt-5.4-mini": {
    "inputPerMTok": 0.75,
@@ -143,7 +148,12 @@
    "outputPerMTok": 30,
    "contextWindowTokens": 256000,
    "multiplier": 7.5,
-   "multiplierAnnualPostJun1": 7.5
+   "multiplierAnnualPostJun1": 7.5,
+   "inputAbove200kPerMTok": 10,
+   "outputAbove200kPerMTok": 45,
+   "cacheReadAbove200kPerMTok": 1,
+   "cacheWriteAbove200kPerMTok": 0,
+   "surchargeThresholdTokens": 272000
   },
   "codex-mini-latest": {
    "inputPerMTok": 1.5,
@@ -346,7 +356,11 @@
    "outputPerMTok": 10,
    "contextWindowTokens": 1000000,
    "multiplier": 1,
-   "multiplierAnnualPostJun1": 1
+   "multiplierAnnualPostJun1": 1,
+   "inputAbove200kPerMTok": 2.5,
+   "outputAbove200kPerMTok": 15,
+   "cacheReadAbove200kPerMTok": 0.25,
+   "cacheWriteAbove200kPerMTok": 0
   },
   "gemini-3-flash": {
    "inputPerMTok": 0.5,
@@ -364,7 +378,11 @@
    "outputPerMTok": 12,
    "contextWindowTokens": 1000000,
    "multiplier": 1,
-   "multiplierAnnualPostJun1": 6
+   "multiplierAnnualPostJun1": 6,
+   "inputAbove200kPerMTok": 4,
+   "outputAbove200kPerMTok": 18,
+   "cacheReadAbove200kPerMTok": 0.4,
+   "cacheWriteAbove200kPerMTok": 0
   },
   "gemini-3.1-pro": {
    "inputPerMTok": 2,
@@ -373,7 +391,11 @@
    "outputPerMTok": 12,
    "contextWindowTokens": 1000000,
    "multiplier": 1,
-   "multiplierAnnualPostJun1": 6
+   "multiplierAnnualPostJun1": 6,
+   "inputAbove200kPerMTok": 4,
+   "outputAbove200kPerMTok": 18,
+   "cacheReadAbove200kPerMTok": 0.4,
+   "cacheWriteAbove200kPerMTok": 0
   },
   "gemini-3.5-flash": {
    "inputPerMTok": 1.5,

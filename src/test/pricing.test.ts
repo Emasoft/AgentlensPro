@@ -70,18 +70,66 @@ suite('pricing', () => {
     assert.ok(Math.abs(cost - expected) < 0.0001, `Expected $${expected}, got $${cost}`)
   })
 
-  test('calcTokenCostUsd applies tiered rate for claude-sonnet-4 above 200K input', () => {
-    // 300K input, 0 output: first 200K at $3, next 100K at $6
-    const cost = calcTokenCostUsd(300_000, 0, 0, 0, 'claude-sonnet-4')
-    const expected = (200_000 / 1_000_000) * 3.00 + (100_000 / 1_000_000) * 6.00
+  // The surcharge is a WHOLE-REQUEST STEP on total input size (input + cacheRead + cacheWrite),
+  // never per-bucket marginal tiering — settled from the live provider rate pages (TRDD-R4DHDK7L).
+  test('calcTokenCostUsd whole-request step for claude-sonnet-4 above 200K input', () => {
+    // 300K input, 50K output: total input > 200K, so EVERYTHING at premium ($6 in / $22.50 out)
+    const cost = calcTokenCostUsd(300_000, 0, 0, 50_000, 'claude-sonnet-4')
+    const expected = (300_000 / 1_000_000) * 6.00 + (50_000 / 1_000_000) * 22.50
     assert.ok(Math.abs(cost - expected) < 0.0001, `Expected $${expected}, got $${cost}`)
   })
 
-  test('calcTokenCostUsd tiered output for claude-sonnet-4', () => {
-    // 0 input, 250K output: first 200K at $15, next 50K at $22.50
-    const cost = calcTokenCostUsd(0, 0, 0, 250_000, 'claude-sonnet-4')
-    const expected = (200_000 / 1_000_000) * 15.00 + (50_000 / 1_000_000) * 22.50
+  test('calcTokenCostUsd step trips on COMBINED buckets even when each is under 200K', () => {
+    // 150K input + 150K cacheRead = 300K total: the exact case where marginal per-bucket tiering
+    // (the old, wrong model) would have billed everything flat.
+    const cost = calcTokenCostUsd(150_000, 150_000, 0, 0, 'claude-sonnet-4')
+    const expected = (150_000 / 1_000_000) * 6.00 + (150_000 / 1_000_000) * 0.60
     assert.ok(Math.abs(cost - expected) < 0.0001, `Expected $${expected}, got $${cost}`)
+  })
+
+  test('calcTokenCostUsd output alone never trips the step for claude-sonnet-4', () => {
+    // 0 input, 250K output: output does not count toward the threshold — all flat $15
+    const cost = calcTokenCostUsd(0, 0, 0, 250_000, 'claude-sonnet-4')
+    const expected = (250_000 / 1_000_000) * 15.00
+    assert.ok(Math.abs(cost - expected) < 0.0001, `Expected $${expected}, got $${cost}`)
+  })
+
+  test('calcTokenCostUsd gpt-5.4 uses its own 272K threshold', () => {
+    // 250K input is above 200K but BELOW gpt-5.4's 272K threshold — flat $2.50
+    const under = calcTokenCostUsd(250_000, 0, 0, 10_000, 'gpt-5.4')
+    const expectedUnder = (250_000 / 1_000_000) * 2.50 + (10_000 / 1_000_000) * 15.00
+    assert.ok(Math.abs(under - expectedUnder) < 0.0001, `Expected $${expectedUnder}, got $${under}`)
+    // 300K input crosses 272K — whole request at $5 in / $22.50 out
+    const over = calcTokenCostUsd(300_000, 0, 0, 10_000, 'gpt-5.4')
+    const expectedOver = (300_000 / 1_000_000) * 5.00 + (10_000 / 1_000_000) * 22.50
+    assert.ok(Math.abs(over - expectedOver) < 0.0001, `Expected $${expectedOver}, got $${over}`)
+  })
+
+  test('calcTokenCostUsd gpt-5.5 below and above its 272K threshold', () => {
+    const under = calcTokenCostUsd(100_000, 0, 0, 20_000, 'gpt-5.5')
+    const expectedUnder = (100_000 / 1_000_000) * 5.00 + (20_000 / 1_000_000) * 30.00
+    assert.ok(Math.abs(under - expectedUnder) < 0.0001, `Expected $${expectedUnder}, got $${under}`)
+    const over = calcTokenCostUsd(200_000, 100_000, 0, 20_000, 'gpt-5.5')
+    const expectedOver = (200_000 / 1_000_000) * 10.00 + (100_000 / 1_000_000) * 1.00 + (20_000 / 1_000_000) * 45.00
+    assert.ok(Math.abs(over - expectedOver) < 0.0001, `Expected $${expectedOver}, got $${over}`)
+  })
+
+  test('calcTokenCostUsd gemini-2.5-pro below and above 200K', () => {
+    const under = calcTokenCostUsd(150_000, 0, 0, 5_000, 'gemini-2.5-pro')
+    const expectedUnder = (150_000 / 1_000_000) * 1.25 + (5_000 / 1_000_000) * 10.00
+    assert.ok(Math.abs(under - expectedUnder) < 0.0001, `Expected $${expectedUnder}, got $${under}`)
+    const over = calcTokenCostUsd(250_000, 0, 0, 5_000, 'gemini-2.5-pro')
+    const expectedOver = (250_000 / 1_000_000) * 2.50 + (5_000 / 1_000_000) * 15.00
+    assert.ok(Math.abs(over - expectedOver) < 0.0001, `Expected $${expectedOver}, got $${over}`)
+  })
+
+  test('calcTokenCostUsd gemini-3.1-pro below and above 200K', () => {
+    const under = calcTokenCostUsd(100_000, 50_000, 0, 8_000, 'gemini-3.1-pro')
+    const expectedUnder = (100_000 / 1_000_000) * 2.00 + (50_000 / 1_000_000) * 0.20 + (8_000 / 1_000_000) * 12.00
+    assert.ok(Math.abs(under - expectedUnder) < 0.0001, `Expected $${expectedUnder}, got $${under}`)
+    const over = calcTokenCostUsd(150_000, 100_000, 0, 8_000, 'gemini-3.1-pro')
+    const expectedOver = (150_000 / 1_000_000) * 4.00 + (100_000 / 1_000_000) * 0.40 + (8_000 / 1_000_000) * 18.00
+    assert.ok(Math.abs(over - expectedOver) < 0.0001, `Expected $${expectedOver}, got $${over}`)
   })
 
   test('calcTokenCostUsd flat rate for claude-sonnet-4-5 (no tiered rates)', () => {

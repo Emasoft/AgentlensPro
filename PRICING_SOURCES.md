@@ -253,6 +253,20 @@ OpenCode uses token-based pricing for third-party models (routed through its pro
 
 ---
 
+## Long-context surcharge (whole-request STEP — settled 2026-08-26, TRDD-R4DHDK7L)
+
+Every provider that tiers long-context pricing keys the rate on the REQUEST's total input size
+(input + cache read + cache write; output does not count toward the threshold): once the total
+crosses the threshold, ALL buckets of that request — including output — bill at the premium
+rates. It is never marginal per-bucket tiering. Encoded via `inputAbove200kPerMTok` (+ siblings)
+and `surchargeThresholdTokens` (default 200,000) in `pricing.ts`; applied by `calcTokenCostUsd`.
+
+| Provider | Threshold | Models encoded | Source |
+| --- | --- | --- | --- |
+| OpenAI | 272,000 | gpt-5.4, gpt-5.5 | <https://developers.openai.com/api/docs/pricing> (rate tables keyed "(<272K context length)" vs long-context) |
+| Google | 200,000 | gemini-2.5-pro, gemini-3-pro (delisted; launch-published tiers retained for recorded sessions), gemini-3.1-pro | <https://ai.google.dev/gemini-api/docs/pricing> ("$1.25, prompts <= 200k tokens / $2.50, prompts > 200k") — Flash models are flat |
+| Anthropic | 200,000 (historical) | claude-sonnet-4 only (1M-beta era) | <https://platform.claude.com/docs/en/about-claude/pricing#long-context-pricing> — current models have NO surcharge: "Claude 4.6 and later models include the full 1M token context window at standard pricing. (A 900k-token request is billed at the same per-token rate as a 9k-token request.)" Never add Above rates to a current Claude model. |
+
 ## Notes for maintainers
 
 - The `PRICING_LAST_UPDATED` constant in `src/shared/pricing.ts` surfaces in the UI. Update it whenever rates change.

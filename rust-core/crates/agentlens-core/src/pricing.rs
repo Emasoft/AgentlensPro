@@ -38,6 +38,7 @@ pub struct ModelRates {
     pub output_above_200k: Option<f64>,
     pub cache_read_above_200k: Option<f64>,
     pub cache_write_above_200k: Option<f64>,
+    pub surcharge_threshold_tokens: Option<f64>,
 }
 
 fn num(v: &Value, k: &str) -> f64 {
@@ -60,6 +61,7 @@ fn rates_from(v: &Value) -> ModelRates {
         output_above_200k: opt(v, "outputAbove200kPerMTok"),
         cache_read_above_200k: opt(v, "cacheReadAbove200kPerMTok"),
         cache_write_above_200k: opt(v, "cacheWriteAbove200kPerMTok"),
+        surcharge_threshold_tokens: opt(v, "surchargeThresholdTokens"),
     }
 }
 
@@ -130,14 +132,6 @@ pub fn lookup_rates(model_id: &str, at_iso: Option<&str>, now_ms: f64) -> Option
     best.map(|k| apply_scheduled_change(&map[k], at_iso, now_ms))
 }
 
-fn tiered_cost(tokens: f64, base_rate: f64, above_rate: f64) -> f64 {
-    const THRESHOLD: f64 = 200_000.0;
-    if tokens <= THRESHOLD {
-        return (tokens / 1_000_000.0) * base_rate;
-    }
-    (THRESHOLD / 1_000_000.0) * base_rate + ((tokens - THRESHOLD) / 1_000_000.0) * above_rate
-}
-
 /// cacheWrite1hRate — explicit wins; else 2× input ONLY for the Anthropic 1.25× shape.
 pub fn cache_write_1h_rate(r: &ModelRates) -> f64 {
     if let Some(x) = r.cache_write_1h_per_mtok {
@@ -147,7 +141,10 @@ pub fn cache_write_1h_rate(r: &ModelRates) -> f64 {
     if anthropic_shape { r.input_per_mtok * 2.0 } else { r.cache_write_per_mtok }
 }
 
-/// calcTokenCostUsd — the write-time per-call path with the >200K tiered surcharge.
+/// calcTokenCostUsd — the write-time per-call path with the long-context surcharge: a
+/// WHOLE-REQUEST STEP on total input size (input + cacheRead + cacheWrite), never marginal
+/// per-bucket tiering — every provider that tiers keys the rate on the request's size
+/// (TRDD-R4DHDK7L; sources in pricing.ts's ModelRates comment).
 pub fn calc_token_cost_usd(
     input_tokens: f64,
     cache_read_tokens: f64,
@@ -162,13 +159,20 @@ pub fn calc_token_cost_usd(
     let w1h = cache_write_1h_tokens.min(cache_write_tokens).max(0.0);
     let w5m = cache_write_tokens - w1h;
     let rate_1h = cache_write_1h_rate(&r);
-    if let Some(input_above) = r.input_above_200k {
-        // The TS `!` non-null assertions: a table row with inputAbove200k carries all four.
-        return tiered_cost(input_tokens, r.input_per_mtok, input_above)
-            + tiered_cost(cache_read_tokens, r.cache_read_per_mtok, r.cache_read_above_200k.unwrap_or(0.0))
-            + tiered_cost(w5m, r.cache_write_per_mtok, r.cache_write_above_200k.unwrap_or(0.0))
-            + tiered_cost(w1h, rate_1h, r.cache_write_above_200k.unwrap_or(0.0))
-            + tiered_cost(output_tokens, r.output_per_mtok, r.output_above_200k.unwrap_or(0.0));
+    let total_input = input_tokens + cache_read_tokens + cache_write_tokens;
+    let threshold = r.surcharge_threshold_tokens.unwrap_or(200_000.0);
+    if let (Some(input_above), true) = (r.input_above_200k, total_input > threshold) {
+        // Whole-request step: every bucket at the premium rate. Premium 1h write derives 2x the
+        // premium input only for the Anthropic 1.25x shape — mirrors cache_write_1h_rate and the
+        // TS body exactly.
+        let w_above = r.cache_write_above_200k.unwrap_or(0.0);
+        let anthropic_shape = w_above > 0.0 && (w_above - input_above * 1.25).abs() < 1e-9;
+        let w1h_above_rate = if anthropic_shape { input_above * 2.0 } else { w_above };
+        return (input_tokens / 1_000_000.0) * input_above
+            + (cache_read_tokens / 1_000_000.0) * r.cache_read_above_200k.unwrap_or(0.0)
+            + (w5m / 1_000_000.0) * w_above
+            + (w1h / 1_000_000.0) * w1h_above_rate
+            + (output_tokens / 1_000_000.0) * r.output_above_200k.unwrap_or(0.0);
     }
     (input_tokens / 1_000_000.0) * r.input_per_mtok
         + (cache_read_tokens / 1_000_000.0) * r.cache_read_per_mtok

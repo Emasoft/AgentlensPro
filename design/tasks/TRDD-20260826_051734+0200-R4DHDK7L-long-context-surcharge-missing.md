@@ -1,9 +1,9 @@
 ---
 trdd-id: R4DHDK7L
 title: Long-context surcharge is unencoded for 4 models and its threshold is hardcoded 200k with unverified semantics
-column: todo
+column: complete
 created: 2026-08-26T05:17:34+0200
-updated: 2026-08-26T05:23:29+0200
+updated: 2026-08-26T08:05:00+0200
 current-owner: main
 task-type: feature
 severity: MEDIUM
@@ -67,15 +67,40 @@ fixtures must move in the same commit or parity goes red.**
 - Verify current provider rates from the LIVE rate pages before encoding them —
   the sweep found gpt-5.5's base rate is itself marked "TBD per docs".
 
+## SETTLEMENT (2026-08-26, from the LIVE rate pages)
+
+**Whole-request STEP on total input size (input + cacheRead + cacheWrite; output
+excluded from the threshold), never per-bucket marginal.** All buckets — output
+included — bill at premium once the total crosses the threshold.
+
+- Gemini: rates keyed "prompts <= 200k / > 200k" — <https://ai.google.dev/gemini-api/docs/pricing>
+- OpenAI: tables keyed "(<272K context length)" vs long-context — <https://developers.openai.com/api/docs/pricing>
+- Anthropic: NO surcharge on any current model — "Claude 4.6 and later models
+  include the full 1M token context window at standard pricing. (A 900k-token
+  request is billed at the same per-token rate as a 9k-token request.)" —
+  <https://platform.claude.com/docs/en/about-claude/pricing#long-context-pricing>.
+  claude-sonnet-4's Above fields are historical (1M-beta) and were corrected to
+  step semantics.
+
+The shipped per-bucket marginal `tieredCost` DID disagree and was replaced with
+the step in both TS and Rust. gemini-3-pro (delisted live, launched with the
+identical tier 3.1 shows) was also encoded, under the retained-historical-pricing
+precedent (claude-opus-4-7-fast). gpt-5.5's base rates are now published and
+match the table ($5/$0.50/$30).
+
 ## Acceptance
 
-- [ ] Surcharge SEMANTICS (whole-request step on total input vs per-bucket
-      marginal) settled from the LIVE provider rate pages and recorded here with
-      the URLs; the shipped tieredCost corrected if it disagrees.
-- [ ] `surchargeThresholdTokens?` (default 200_000) added to the existing flat
-      shape, TS and Rust in the same commit, parity fixtures regenerated.
-- [ ] The four models carry their real, source-verified thresholds and surcharge
-      rates, with the rate URLs recorded in PRICING_SOURCES.md.
-- [ ] A unit test pins one below-threshold and one above-threshold cost per
-      surcharged model, plus one model WITHOUT a surcharge asserting unchanged math.
-- [ ] check-mirrors and check-types stay green.
+- [x] Surcharge SEMANTICS settled from the LIVE provider rate pages and recorded
+      (above + PRICING_SOURCES.md); the shipped tieredCost corrected (step).
+- [x] `surchargeThresholdTokens?` (default 200_000) added to the flat shape, TS
+      and Rust in the same commit, parity fixtures regenerated (409 cases +
+      2 new divergence buckets; Rust oracle parity exact, 2/2).
+- [x] gpt-5.4 (272K), gpt-5.5 (272K), gemini-2.5-pro, gemini-3.1-pro (+
+      gemini-3-pro) carry source-verified thresholds/rates; URLs in
+      PRICING_SOURCES.md.
+- [x] Unit tests pin below/above threshold per surcharged model, the
+      combined-buckets divergence case, output-alone-never-trips, and
+      claude-sonnet-4-5 flat (no surcharge) unchanged.
+- [x] check-mirrors green (121 exports), check-types green, export --check in
+      lockstep (44 models), full mocha suite green (1 load-flake timeout in
+      cacheBreakTimeline passed clean standalone).

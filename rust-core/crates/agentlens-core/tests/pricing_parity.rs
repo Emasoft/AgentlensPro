@@ -33,7 +33,7 @@ fn calc_token_cost_usd_reproduces_the_ts_oracle_exactly() {
 fn the_embedded_table_is_the_generated_artifact() {
     // A regenerated export must equal the committed file — the Rust side never carries its own
     // rates (the build's check-pricing-export enforces the same from the TS side).
-    assert_eq!(agentlens_core::pricing::pricing_last_updated(), "2026-07-07");
+    assert_eq!(agentlens_core::pricing::pricing_last_updated(), "2026-08-26");
     assert!(agentlens_core::pricing::lookup_rates("claude-opus-5", None, 0.0).is_some());
     assert!(agentlens_core::pricing::lookup_rates("no-such-model", None, 0.0).is_none());
 }
