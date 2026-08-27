@@ -49,16 +49,23 @@ suite('global kill-switch', () => {
     // — every rejection test goes green for the wrong reason, intermittently), and an OS-assigned
     // port bound-then-RELEASED (the number is free again the instant close() returns; "the OS gave
     // it to me" is not a reservation — verified: it rebinds immediately). An OPEN listener is the
-    // only thing nothing else can bind. It also makes the rejection DETERMINISTIC: rpc() fails on
-    // the non-JSON body, instead of relying on a fast ECONNREFUSED that a DROP-ing firewall would
-    // turn into a CONNECT_TIMEOUT_MS hang.
+    // only thing nothing else can bind — that is the property this buys, unconditionally.
+    // A narrower second one: ensureServer()'s probe SWALLOWS the rejection reason, so "500 body"
+    // vs ECONNREFUSED is invisible to every test here; its only payoff is a DROP-ing firewall,
+    // where refused would become a CONNECT_TIMEOUT_MS hang and a listening decoy never hangs.
     notAnMcpServer = http.createServer((_req, res) => { res.writeHead(500); res.end('not an mcp server') })
     await new Promise<void>(resolve => notAnMcpServer!.listen(0, '127.0.0.1', resolve))
     const port = (notAnMcpServer.address() as { port: number }).port
     process.env.AGENTLENS_MCP_URL = `http://127.0.0.1:${port}/mcp`
   })
   suiteTeardown(async () => {
-    if (notAnMcpServer) await new Promise<void>(resolve => notAnMcpServer!.close(() => resolve()))
+    // closeAllConnections() FIRST: close() alone waits for idle keep-alive sockets to time out,
+    // which was ~700ms of a 900ms suite — the teardown was the slowest thing in it (measured:
+    // tests summed to ~210ms, suite reported 911ms).
+    if (notAnMcpServer) {
+      notAnMcpServer.closeAllConnections()
+      await new Promise<void>(resolve => notAnMcpServer!.close(() => resolve()))
+    }
     if (savedDataDir === undefined) delete process.env.AGENTLENS_DATA_DIR
     else process.env.AGENTLENS_DATA_DIR = savedDataDir
     if (savedGeneric === undefined) delete process.env.DATA_DIR
@@ -196,6 +203,7 @@ suite('global kill-switch', () => {
       // Always restore and always close — a leaked listener would let a later test reach this stub.
       if (saved === undefined) delete process.env.AGENTLENS_MCP_URL
       else process.env.AGENTLENS_MCP_URL = saved
+      srv.closeAllConnections()  // same keep-alive drain as the suite listener; see suiteTeardown
       await new Promise<void>(resolve => srv.close(() => resolve()))
     }
   })
