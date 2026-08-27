@@ -1,9 +1,12 @@
 ---
 trdd-id: BSDR4TRM
 title: server stop from an isolated DATA_DIR stopped the LIVE server
-column: testing
+column: ai_review
 created: 2026-08-27T16:07:07+0200
-updated: 2026-08-27T18:07:49+0200
+updated: 2026-08-27T18:13:38+0200
+implementation-commits: [2853862]
+last-test-result: pass
+last-test-at: 2026-08-27T18:13:38+0200
 current-owner: main
 task-type: bugfix
 severity: HIGH
@@ -41,11 +44,18 @@ never consulted. Not "a data-dir-blind port lookup" — an env split between wha
 | `src/test/serverSingleInstance.test.ts` | 4th test: two real servers, CLI in-process with UI/MCP pointed at A while asking about B → B's pid; B's lock removed → null (never A); `stopServer()` ends B, A alive. Mutation-verified: disabling the lock rung fails exactly this test |
 | bare command | `agentlenspro server start/status/stop` in the isolated recipe: child pid reported, child stopped, live pidfile identical before/after |
 
-**NEXT ACTION:** full suite result (running) → `ai_review`.
+**Gates on `2853862`:** `pnpm run compile` exit 0 (both tsconfigs, mirrors 121/0, pricing,
+identities, guards, platform pins, esbuild); full mocha **2489 passing / 8 pending / exit 0**.
+Review-fork (adversarial) found no code defect.
 
-**Known limit, accepted:** a server predating both the pidfile and the `dataDir` stats field is
-invisible to the CLI (`stop` prints "already stopped"); `server status` already has an "older
-build?" line for that case.
+**NEXT ACTION:** ai_review round 1 (report under `reports/code-review/`).
+
+**Known limits, accepted:** (1) a server predating both the pidfile and the `dataDir` stats field
+is invisible to the CLI (`stop` prints "already stopped"); `server status` already has an "older
+build?" line for that case. (2) The REST rung compares `path.resolve`, not realpath — a genuine
+owner is missed only when its lock is ALSO missing AND the operator spelled the data dir
+differently (a symlink) than the server received it: a double fault, same env string in every
+real recipe.
 
 ## Observation (measured 2026-08-27, during TRDD-8VGQK9L9 round-2 verification)
 
