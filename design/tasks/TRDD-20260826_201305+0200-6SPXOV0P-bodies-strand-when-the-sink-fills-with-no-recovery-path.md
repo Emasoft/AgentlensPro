@@ -3,7 +3,8 @@ trdd-id: 6SPXOV0P
 title: 307 files remain parked with a ts-row mismatch after the TRDD-8TM7I49X repair
 column: todo
 created: 2026-08-26T20:13:05+0200
-updated: 2026-08-27T17:58:24+0200
+updated: 2026-08-27T19:50:55+0200
+eht: [7NHUU6GK]
 current-owner: main
 task-type: bugfix
 severity: MEDIUM
@@ -30,9 +31,35 @@ not a corruption. So: a ts-only disagreement on a durable body is BENIGN — rec
 current path. This also retires the "repair rows from mtimes" remedy, which overwrote the true
 capture time with a re-emit's mtime.
 
-**NEXT ACTION:** after TRDD-BSDR4TRM (HIGH) — implement the benign branch in `pass.rs`, the
-`unparked 0` wording (`storeAdmin.ts:165-173`), and the mismatch→repair→0 test; then verify the
-307 drain on the live server.
+**ADVISOR CONSULTED 2026-08-27; its two load-bearing claims re-verified by main at `file:line`
+before acting** (an advisor is a second opinion, not a source of truth):
+
+1. *"the byte proof is already complete at the park site"* — ✓ TRUE. In `lib.rs` the ts check
+   (`:586`) runs strictly AFTER the sha256 reconstruction check (`:569`) and the row-existence
+   check (`:578`), each with its own `continue`. So a "stored ts != capture time" reason implies
+   the store reproduces the file bit-exact, and reclaiming there is exactly as safe as the normal
+   `v.ok` delete.
+2. *"the retention gate will keep such a volume forever"* — ✓ TRUE, and it is a real second site:
+   `server.ts:833` purges only when `verifyVolumeInStore` passes, and `:806` states the contract as
+   "bytes + capture-ts row". Filed as the EHT [[TRDD-7NHUU6GK]] rather than widened into this card.
+
+**Scope narrowed on that advice:** the change lives in `pass.rs`'s park branch ONLY. `TS_TOLERANCE_MS`
+and `verify_bodies_in_store_cached` stay strict — other proofs (the retention gate above) depend on
+them, so loosening either would trade one silent defect for a wider one.
+
+**The ROW is left alone.** It holds the ORIGINAL capture time; the re-emitted FILE carries the
+impostor mtime. "Take the earlier of the two" would be wrong for rows the old repair verb already
+overwrote with mtimes, and row-authoritative-once-set is the only rule that does not loop.
+
+**NEXT ACTION:** implementation in flight — the benign branch + a `reclaimedReemitted` counter in
+`pass.rs`, plus the falsifying test (ingest → rewrite same name+bytes at mtime +24h → pass with
+`delete_after` → file deleted, stranded set empty, ROW ts UNCHANGED, counter 1, second pass a
+no-op). Then the `unparked 0` wording (`storeAdmin.ts:165-173`), then verify the 307 drain.
+
+**Migration (advisor, NOT yet verified by main — verify before relying on it):** the 307 are
+expected to drain on a server restart with no verb, because the server holds `strandedNames` in
+memory while only the CLI persists `.pass-state.json`. Confirm that against the code before
+telling an operator so.
 
 ## CORRECTION — this card's first version blamed the wrong cause
 
