@@ -857,6 +857,9 @@ const stepServer: StepDef = {
     // The NO_REVIVE brake refuses this spawn too: `setup` is idempotent and re-run casually, so a
     // silent override here would resurrect a server mid store-swap exactly like the hook path did
     // (TRDD-8VGQK9L9). Reported, not skipped — a setup step that quietly does nothing looks healthy.
+    // Sits BELOW the graceful stop of a mismatched/unresponsive server on purpose, beside the
+    // DISABLED gate: the brake forbids a SPAWN, not a stop, and "braked ⇒ no server" is the state
+    // an operator armed it for — leaving a stale server up would be the surprising outcome.
     if (reviveBraked()) {
       return { result: { step: this.name, found, action: 'start server', verify: 'FAIL', detail: `revive brake is set (${noRevivePath()}) — \`agentlenspro server start\` clears it` }, acted: false }
     }

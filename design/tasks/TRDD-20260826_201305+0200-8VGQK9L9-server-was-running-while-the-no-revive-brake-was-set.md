@@ -21,7 +21,7 @@ last-test-at: 2026-08-27T15:52:36+0200
 `reports/code-review/20260827_155559+0200-trdd-8VGQK9L9-ai-review.md`) — all fixed in `d12f590`.
 Round-2 full `pnpm run test:unit` in flight; killSwitch 16/16, loopWatchdog 3/3, tsc + eslint clean.**
 
-Round-1 findings (for the round-2 reviewer): C1 the gate made the brake un-liftable → `ensureServer(startedBy, { overrideBrake })`, passed only by `server start`/`restart`; I2 `reviveDisabledOnDisk()` was a fail-open second predicate → delegates to `reviveBraked()`; I3 `setup` now refuses when braked; I4 loop-watchdog respawn stats `brakePath` before spawn. Unreachable+override cannot be unit-tested: it spawns the real bundle (measured).
+Round-1 findings (for the round-2 reviewer): C1 the gate made the brake un-liftable → `ensureServer(startedBy, { overrideBrake })`, passed only by `server start`/`restart`; I2 `reviveDisabledOnDisk()` was a fail-open second predicate → delegates to `reviveBraked()`; I3 `setup` now refuses when braked; I4 loop-watchdog respawn stats `brakePath` before spawn. Round 2 REJECTED once more (F1): the C1 test hit only the reachable path and passed with the override deleted; the STATE claim "unreachable+override cannot be unit-tested" was FALSE — a closed port + a bogus `AGENTLENS_ALCORE` reaches the gate and fails at spawn ENOENT without starting anything (reviewer measured 256 ms). Fixed: the test now has a gate half and a contract half. Also F2 (`NO_REVIVE` literal now `dataDir.NO_REVIVE_FILE`, one name for cli + server), F3 (comment), round-1 nits (stale "four paths" comments, double JSDoc).
 
 | component | state |
 |---|---|

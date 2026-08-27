@@ -213,12 +213,38 @@ suite('global kill-switch', () => {
     // reached clearReviveBrake(), so the one command every message names as the way out failed with
     // "clear it with: agentlenspro server start" — a dead end with rm as the only escape.
     //
-    // This pins the CONTRACT (`start` lifts the brake) against a reachable stub. It does NOT reach
-    // the gate itself: the gate sits below the probe, and the only way to hit it is an UNREACHABLE
-    // endpoint — which makes ensureServer() spawn the real in-repo bundle (tried: it did, and the
-    // developer's live server won the single-instance race). No unit test may spawn a server, so
-    // the ordering is guarded by the comment at the gate, and this test by the command's outcome.
+    // Two halves. FIRST the gate itself, on the UNREACHABLE path (the gate sits below the probe,
+    // so a reachable stub never reaches it — round 2 of review showed the contract half alone
+    // passes with the override deleted). Reaching the gate without spawning the real bundle: a
+    // closed port forces the probe past init(), and a bogus AGENTLENS_ALCORE makes the spawn fail
+    // ENOENT one tick later (alcoreBin() returns the env value verbatim, no existence check). On
+    // the pre-fix code the override call rejects with /revive brake/; now it must get PAST it.
     armBrake()
+    const savedUrl = process.env.AGENTLENS_MCP_URL
+    const savedAlcore = process.env.AGENTLENS_ALCORE
+    process.env.AGENTLENS_MCP_URL = 'http://127.0.0.1:1/mcp'
+    process.env.AGENTLENS_ALCORE = path.join(os.tmpdir(), 'agentlens-no-such-alcore-' + process.pid)
+    try {
+      await assert.rejects(() => ensureServer('test'), /revive brake/, 'no override ⇒ the gate refuses')
+      await assert.rejects(
+        () => ensureServer('test', { overrideBrake: true }),
+        (e: Error) => !/revive brake/.test(e.message) && /spawn|ENOENT/.test(e.message),
+        'override ⇒ past the gate, failing only at the (deliberately impossible) spawn',
+      )
+      assert.strictEqual(reviveBraked(), true, 'a failed start must leave the brake armed')
+      // And the CALL SITE: `server start` must pass the override (this is the line the round-1
+      // regression lived on). Same env ⇒ it must fail at the spawn, never at the brake.
+      await assert.rejects(
+        () => serverCommand(['start']),
+        (e: Error) => !/revive brake/.test(e.message) && /spawn|ENOENT/.test(e.message),
+        '`server start` must reach the spawn through the brake',
+      )
+      assert.strictEqual(reviveBraked(), true, 'a failed `server start` must leave the brake armed')
+    } finally {
+      if (savedUrl === undefined) delete process.env.AGENTLENS_MCP_URL; else process.env.AGENTLENS_MCP_URL = savedUrl
+      if (savedAlcore === undefined) delete process.env.AGENTLENS_ALCORE; else process.env.AGENTLENS_ALCORE = savedAlcore
+    }
+    // SECOND the contract: the whole `server start` command against a reachable stub lifts the brake.
     const srv = http.createServer((_req, res) => {
       res.writeHead(200, { 'Content-Type': 'application/json' })
       res.end(JSON.stringify({ jsonrpc: '2.0', id: 1, result: {} }))

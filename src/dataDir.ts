@@ -33,6 +33,12 @@ export const DATA_DIR_ENV = 'AGENTLENS_DATA_DIR'
 /** The legacy generic override — still honoured, but collision-prone. See the header. */
 export const DATA_DIR_ENV_GENERIC = 'DATA_DIR'
 
+/** Basename of the on-disk revive brake, `<dataDir>/NO_REVIVE`. Lives HERE (runtime-neutral, no
+ *  cli/ import) because the server bundle reads it too — at boot for the provenance line and for the
+ *  loop-watchdog respawn gate — and a drifted copy at the gate fails OPEN (stat misses ⇒ respawn).
+ *  `cli/killSwitch.noRevivePath()` resolves the full path for the CLI (TRDD-8VGQK9L9). */
+export const NO_REVIVE_FILE = 'NO_REVIVE'
+
 export type DataDirSource = 'agentlens-env' | 'generic-env' | 'default'
 
 /** The data directory: `$AGENTLENS_DATA_DIR`, else `$DATA_DIR`, else `~/.agentlens`. */

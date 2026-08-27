@@ -14,7 +14,7 @@ import * as os from 'os'
 import { exec, execFile } from 'child_process'
 import { summarizeSpans } from '../src/spanSummarizer'
 import { packageVersion } from '../src/packageVersion'
-import { dataDir as agentlensDataDir } from '../src/dataDir'
+import { dataDir as agentlensDataDir, NO_REVIVE_FILE } from '../src/dataDir'
 import { normalizeBasePath, stripBasePath } from '../src/basePath'
 import { VersionedCache } from '../src/derivedCache'
 import { startLoopWatchdog } from '../src/loopWatchdog'
@@ -276,8 +276,9 @@ function releasePidFile(): void {
   // BOOT PROVENANCE (TRDD-8VGQK9L9). One line, right after the lock is ours, answering the two
   // questions that cost a day of inference when a server was found running with the NO_REVIVE
   // brake in place: WHO started this process, and WAS THE BRAKE SET when it did. The starter's
-  // identity arrives via AGENTLENS_STARTED_BY, stamped by every spawner in cli/ (ensureServer,
-  // `server start|restart`, the supervisor, the hook reviver); absent means launched by hand or
+  // identity arrives via AGENTLENS_STARTED_BY, stamped by every spawner (ensureServer — which
+  // `server start|restart` go through — the supervisor, the hook reviver, `setup`, and the
+  // loop-watchdog respawn below, which OVERWRITES it); absent means launched by hand or
   // by a spawner older than the stamp, and is reported as exactly that — never guessed.
   //
   // The brake is read HERE, by the server, at its own boot — not trusted from the spawner. A
@@ -290,7 +291,7 @@ function releasePidFile(): void {
   {
     const startedBy = process.env.AGENTLENS_STARTED_BY?.trim() || 'unknown (no AGENTLENS_STARTED_BY — launched by hand, or by a spawner without the stamp)'
     let brake = 'absent'
-    try { fs.statSync(path.join(DATA_DIR, 'NO_REVIVE')); brake = 'PRESENT' } catch (e) {
+    try { fs.statSync(path.join(DATA_DIR, NO_REVIVE_FILE)); brake = 'PRESENT' } catch (e) {
       if ((e as NodeJS.ErrnoException).code !== 'ENOENT') brake = `unreadable (${(e as NodeJS.ErrnoException).code}) — treated as PRESENT`
     }
     console.log(`[AgentlensPro] boot provenance: started-by=${startedBy} ppid=${process.ppid} pid=${process.pid} brake=${brake} data=${DATA_DIR}`)
@@ -4621,7 +4622,7 @@ uiServer.listen(UI_PORT, BIND_HOST, () => {
       log: (m) => console.warn(m),
       // Same file the boot-provenance line above stats: the respawn must not resurrect a server
       // the operator braked (TRDD-8VGQK9L9).
-      brakePath: path.join(DATA_DIR, 'NO_REVIVE'),
+      brakePath: path.join(DATA_DIR, NO_REVIVE_FILE),
     })
   }
 })

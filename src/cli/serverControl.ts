@@ -113,8 +113,9 @@ export const DEFAULT_MAX_OLD_SPACE_MB = 6144
  *  project CLAUDE.md tells every Claude session to run diagnostics BEFORE any task — so a disabled
  *  install came straight back the next time any of the ~16 running sessions started work (observed
  *  2026-07-14: the server was stopped at 15:07 and was found alive again at 17:43). The hook path was
- *  already gated; the CLI path was not. A kill-switch with a bypass is not a kill-switch. */
-/** `startedBy` names the PATH that reached this function, for the server's boot-provenance line
+ *  already gated; the CLI path was not. A kill-switch with a bypass is not a kill-switch.
+ *
+ *  `startedBy` names the PATH that reached this function, for the server's boot-provenance line
  *  (TRDD-8VGQK9L9). This function cannot know it by itself — `server start`, `restart`, `dashboard`
  *  and the diagnostics `--start-server`/`--dashboard` globals all land here — so the caller says.
  *  The default is a truthful "unknown", never a guess: an unlabelled path in the log is a lead, a
@@ -666,8 +667,9 @@ export function runSupervise(): void {
    *
    *  RESCHEDULE rather than exit: a brake is a pause, not a shutdown. Exiting here would mean a
    *  stay-down stop permanently kills a launchd-supervised install, and clearing the brake would
-   *  not bring it back. Re-checking on the same backoff timer resumes on its own. */
-  /** The predicate itself now lives in killSwitch.ts so this loop and `ensureServer()` share ONE
+   *  not bring it back. Re-checking on the same backoff timer resumes on its own.
+   *
+   *  The predicate itself now lives in killSwitch.ts so this loop and `ensureServer()` share ONE
    *  definition — they did not, and `ensureServer()` had none at all (TRDD-8VGQK9L9). Its comment
    *  there carries the ENOENT-only-false rationale and the pause-vs-kill split; the reschedule
    *  below is what makes the pause self-healing here. */
