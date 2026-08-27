@@ -197,6 +197,12 @@ jobs:
           toolchain: stable
           components: clippy
 
+      # `workspaces:` takes `$workspace -> $target`, and the bare left side IS legal —
+      # verified in the action's own src/config.ts at this pinned SHA, not from docs:
+      #   let [root, target = "target"] = workspace.split("->").map(s => s.trim())
+      # so `rust-core` resolves to root=rust-core, target=rust-core/target. Worth
+      # pinning here because a `workspaces:` value the action cannot resolve caches
+      # NOTHING and still reports success — a green step doing no work.
       - name: Cache cargo registry + target
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
