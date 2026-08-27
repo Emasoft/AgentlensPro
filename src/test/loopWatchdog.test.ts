@@ -49,6 +49,41 @@ suite('loopWatchdog — worker-thread self-heal (TRDD-X2E6OSWK)', () => {
     fs.rmSync(dir, { recursive: true, force: true })
   })
 
+  test('with the NO_REVIVE brake present the starved loop is still KILLED but NOT respawned (TRDD-8VGQK9L9)', async function () {
+    this.timeout(40_000)
+    // Same wedge as above, plus a brake file. The respawn is a resurrection path like the hook
+    // reviver and the supervisor; without this check it was the one spawner that ignored the brake.
+    // The kill must still happen (a starved server is useless either way) — only the spawn is
+    // withheld, so the discriminator is "SIGKILL observed AND no marker".
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'al-watchdog-brake-'))
+    const marker = path.join(dir, 'respawned.marker')
+    const brake = path.join(dir, 'NO_REVIVE')
+    fs.writeFileSync(brake, 'test\n')
+    const childSrc = `
+      const { startLoopWatchdog } = require(${JSON.stringify(path.resolve(__dirname, '..', 'loopWatchdog.js'))})
+      startLoopWatchdog({
+        stallSeconds: 2, minUptimeSeconds: 0, checkMs: 500,
+        brakePath: ${JSON.stringify(brake)},
+        respawn: { execPath: process.execPath, argv: ['-e', 'require("fs").writeFileSync(' + ${JSON.stringify(JSON.stringify(marker))} + ', "healed")'], cwd: process.cwd() },
+        log: () => {},
+      })
+      setTimeout(() => {
+        const until = Date.now() + 30_000
+        while (Date.now() < until) { /* the wedge: synchronous starvation */ }
+      }, 1500)
+      setInterval(() => {}, 1000)
+    `
+    const child = spawn(process.execPath, ['-e', childSrc], { stdio: 'ignore' })
+    const exited = new Promise<NodeJS.Signals | null>(resolve => child.on('close', (_c, sig) => resolve(sig)))
+    const signal = await Promise.race([exited, sleep(25_000).then(() => 'TIMEOUT' as const)])
+    assert.strictEqual(signal, 'SIGKILL', 'the brake withholds the RESPAWN, not the kill')
+    // Wait past the restarter's 2s respawn delay + its 4s self-exit: a marker appearing in this
+    // window would mean the brake was ignored.
+    await sleep(5_000)
+    assert.ok(!fs.existsSync(marker), 'no respawn while NO_REVIVE exists')
+    fs.rmSync(dir, { recursive: true, force: true })
+  })
+
   test('a healthy loop is never killed, and stop() tears the watchdog down cleanly', async function () {
     this.timeout(15_000)
     // In-process this time: beats flow normally, so nothing may happen within several check cycles.
