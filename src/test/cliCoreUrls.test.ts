@@ -4,7 +4,10 @@
 // server happened to answer :4316 on the reviewer's machine.
 
 import * as assert from 'assert'
+import * as os from 'os'
+import * as path from 'path'
 import { dashboardUrl, envPort, mcpEndpoint, uiBaseUrl } from '../cli/cliCore'
+import { statsOwnership } from '../cli/serverControl'
 
 const KEYS = ['UI_PORT', 'MCP_PORT', 'AGENTLENS_UI_URL', 'AGENTLENS_MCP_URL', 'AGENTLENS_DASHBOARD_URL'] as const
 
@@ -44,5 +47,21 @@ suite('cliCore — endpoint defaults follow the port env', () => {
       assert.strictEqual(mcpEndpoint(), 'http://localhost:4316/mcp', `MCP_PORT=${JSON.stringify(bad)}`)
       assert.strictEqual(envPort(bad, 4318), '4318')
     }
+  })
+})
+
+suite('serverControl — statsOwnership: whose data dir answered', () => {
+  const mine = path.join(os.tmpdir(), 'agentlens-owner-mine')
+
+  test('the same dir is ours, a different one is foreign', () => {
+    assert.strictEqual(statsOwnership(mine, mine), 'ours')
+    assert.strictEqual(statsOwnership(path.join(mine, '..', 'agentlens-owner-mine'), mine), 'ours')
+    assert.strictEqual(statsOwnership(path.join(os.tmpdir(), 'agentlens-owner-theirs'), mine), 'foreign')
+  })
+
+  test('a server that reports NO data dir is unknown — never silently ours', () => {
+    // The failure that matters: `unknown` collapsed into `ours` would print the confident status
+    // line for a server we cannot prove owns this dir, which is the defect the verdict exists for.
+    assert.strictEqual(statsOwnership(undefined, mine), 'unknown')
   })
 })

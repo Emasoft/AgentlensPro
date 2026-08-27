@@ -533,6 +533,21 @@ interface ServerStats {
   dataDir?: string
 }
 
+/** Whose data dir did the server that answered `/api/server-stats` actually serve?
+ *
+ *  THREE states, not two. The stats call is reached by a URL derived from ports, which says nothing
+ *  about ownership — the whole point of TRDD-BSDR4TRM. So a server that does not report a data dir
+ *  at all (a build predating 82d3776, 2026-07-10, verified by `git log -S`) is the case with the
+ *  LEAST evidence that it is ours, and collapsing it into `ours` re-creates the defect. The
+ *  `typeof` guard is load-bearing twice over: `path.resolve(undefined)` throws.
+ *
+ *  Extracted so it can be asserted without a server: the first cut of this verdict shipped with no
+ *  test, and a revert of it left the whole suite green (ai_review round 2, NEW-2). */
+export function statsOwnership(reported: string | undefined, mine: string): 'ours' | 'foreign' | 'unknown' {
+  if (typeof reported !== 'string') return 'unknown'
+  return path.resolve(reported) === path.resolve(mine) ? 'ours' : 'foreign'
+}
+
 export async function showStatus(): Promise<void> {
   let s: ServerStats
   try { s = await apiRequest('GET', '/api/server-stats') as unknown as ServerStats } catch (e) {
@@ -571,20 +586,30 @@ export async function showStatus(): Promise<void> {
   // The stats endpoint is reached by URL, which says nothing about WHOSE data dir answered. Without
   // this line status printed `RUNNING pid=…` for a data dir that has no server, and then printed
   // the two disagreeing `data:` lines below it without comment (TRDD-BSDR4TRM ai_review IMPORTANT-2).
-  // THREE states, not two. Reaching here means the stats call succeeded against a URL derived from
-  // ports — which says nothing about WHOSE data dir answered, the whole point of TRDD-BSDR4TRM. So
-  // "the server did not report a data dir" (a build predating 82d3776, 2026-07-10, verified by
-  // `git log -S`) is the case with the LEAST evidence that it is ours, and collapsing it into the
-  // confident line would re-create the defect this branch exists to fix. `path.resolve(undefined)`
-  // also throws, so the guard is load-bearing twice over.
-  const ownership = typeof s.dataDir !== 'string' ? 'unknown'
-    : path.resolve(s.dataDir) === path.resolve(dataDir()) ? 'ours' : 'foreign'
+  const ownership = statsOwnership(s.dataDir, dataDir())
+  if (ownership !== 'ours') {
+    // Everything below this point — memory, spans, disk writes, bodies, capture, hooks, gate — is
+    // THAT server's, and printing it unlabelled under a data dir it does not serve invites the
+    // reader to attribute another store's numbers to their own. The two lines here are the only
+    // ones that are true of the caller's data dir.
+    const owner = await findServerPid().catch(() => null)
+    console.log([
+      ownership === 'foreign'
+        // Only what was measured. "Nothing serves this data dir" was an over-claim: it was derived
+        // from a PORT answering, which is precisely the evidence this card established says nothing
+        // about ownership — and `findServerPid()`, which does answer it, could contradict it in the
+        // same process.
+        ? `server: RUNNING pid=${s.pid} — but it serves ${s.dataDir}, NOT ${dataDir()}.`
+        : `server: RUNNING pid=${s.pid} — it does not report its data dir (build predates 2026-07-10); cannot confirm it serves ${dataDir()}`,
+      owner === null
+        ? `        nothing holds this data dir's lock — no server for ${dataDir()}`
+        : `        the server for ${dataDir()} is pid ${owner}`,
+      `data:   ${dataDirSource()}`,
+    ].join('\n'))
+    return
+  }
   console.log([
-    ownership === 'foreign'
-      ? `server: RUNNING pid=${s.pid} — but it serves ${s.dataDir}, NOT ${dataDir()}. Nothing serves this data dir.`
-      : ownership === 'unknown'
-        ? `server: RUNNING pid=${s.pid} — it does not report its data dir (build predates 2026-07-10); cannot confirm it serves ${dataDir()}`
-        : `server: RUNNING pid=${s.pid} uptime=${uptime} canonical=${s.canonical} (ui:${s.ports.ui} mcp:${s.ports.mcp} otlp:${s.ports.otlp})`,
+    `server: RUNNING pid=${s.pid} uptime=${uptime} canonical=${s.canonical} (ui:${s.ports.ui} mcp:${s.ports.mcp} otlp:${s.ports.otlp})`,
     // WHICH store, and which input chose it. A relocated data dir is invisible otherwise: every
     // reader just reports an empty result, and the generic $DATA_DIR can be set by unrelated
     // tooling, so "why is my history gone" needs an answer on the first line of status.
