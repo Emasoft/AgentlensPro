@@ -22,7 +22,7 @@ import * as path from 'path'
 // call rather than capturing it at import time.
 const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'agentlens-ks-'))
 
-import { agentlensDisabled, armKillSwitch, disarmKillSwitch, killSwitchPath } from '../cli/killSwitch'
+import { agentlensDisabled, armKillSwitch, disarmKillSwitch, killSwitchPath, noRevivePath, reviveBraked } from '../cli/killSwitch'
 import { runHookCommand, reviveDisabledOnDisk } from '../cli/hookHandlers'
 import { ensureServer, runSupervise } from '../cli/serverControl'
 
@@ -40,8 +40,15 @@ suite('global kill-switch', () => {
     if (savedGeneric === undefined) delete process.env.DATA_DIR
     else process.env.DATA_DIR = savedGeneric
   })
-  setup(() => { delete process.env.AGENTLENS_DISABLED; disarmKillSwitch() })
-  teardown(() => { delete process.env.AGENTLENS_DISABLED; disarmKillSwitch() })
+  // The brake is cleared around EVERY test, not just the brake ones: it lives in the same tmp data
+  // dir, and a leaked NO_REVIVE would make an unrelated ensureServer test pass for the wrong reason.
+  const clearBrake = (): void => { try { fs.unlinkSync(noRevivePath()) } catch { /* absent is fine */ } }
+  const armBrake = (): void => {
+    fs.mkdirSync(path.dirname(noRevivePath()), { recursive: true })
+    fs.writeFileSync(noRevivePath(), `server stop --stay-down ${new Date().toISOString()}\n`)
+  }
+  setup(() => { delete process.env.AGENTLENS_DISABLED; disarmKillSwitch(); clearBrake() })
+  teardown(() => { delete process.env.AGENTLENS_DISABLED; disarmKillSwitch(); clearBrake() })
 
   test('absent flag means enabled — the default must never be "silently off"', () => {
     assert.strictEqual(agentlensDisabled(), false)
@@ -122,6 +129,30 @@ suite('global kill-switch', () => {
     // task — so a disabled install came straight back the next time any running session started work.
     armKillSwitch()
     await assert.rejects(() => ensureServer(), /DISABLED/, 'a disabled AgentlensPro must not spawn a server')
+  })
+
+  test('the revive brake reads armed the moment the file exists — no restart, like the switch', () => {
+    assert.strictEqual(reviveBraked(), false)
+    armBrake()
+    assert.strictEqual(reviveBraked(), true)
+  })
+
+  test('ensureServer REFUSES while the revive brake is set — TRDD-8VGQK9L9 regression', async () => {
+    // `server stop --stay-down` promises "hooks and the supervisor will not resurrect the server",
+    // and for 1h53m on 2026-08-26 that promise was false: ensureServer() gated only on DISABLED, so
+    // any diagnostics command carrying the GLOBAL --start-server/--dashboard flags revived a braked
+    // server while the operator swapped the store underneath it.
+    armBrake()
+    await assert.rejects(() => ensureServer(), /revive brake/, 'a braked AgentlensPro must not spawn a server')
+  })
+
+  test('brake and switch stay DISTINCT — a pause is not a kill', async () => {
+    // The supervisor depends on the difference (under DISABLED its spawn must proceed so the child
+    // exits EX_CONFIG 78 and the loop terminates). If ensureServer collapsed the two into
+    // reviveDisabledOnDisk(), this assertion would report the wrong reason and the split would rot.
+    armBrake()
+    assert.strictEqual(agentlensDisabled(), false, 'arming the brake must not arm the global switch')
+    await assert.rejects(() => ensureServer(), (e: Error) => /revive brake/.test(e.message) && !/DISABLED/.test(e.message))
   })
 
   test('runSupervise REFUSES while disabled — a supervisor would out-stubborn the switch', () => {

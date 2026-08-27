@@ -40,6 +40,29 @@ export function noRevivePath(): string {
   return path.join(dataDir(), 'NO_REVIVE')
 }
 
+/** Is the narrow revive brake armed? Checks NO_REVIVE ONLY — deliberately NOT the global DISABLED
+ *  switch. The two must not be equal: NO_REVIVE is a PAUSE, DISABLED is TERMINAL, and the
+ *  supervisor depends on the difference (under DISABLED its spawn must PROCEED so the child
+ *  refuses with EX_CONFIG 78 and the terminal-exit path ends the loop; swallowing that spawn
+ *  would make a DISABLED supervisor immortal). Callers that also want to refuse under DISABLED
+ *  check `agentlensDisabled()` separately, ahead of this — that ordering is what keeps the split.
+ *
+ *  Lives HERE, not in serverControl, so the supervisor and `ensureServer()` share ONE definition:
+ *  they had drifted, and `ensureServer()` consulted no brake at all (TRDD-8VGQK9L9 — a server ran
+ *  1h53m with the brake in place, because `--start-server`/`--dashboard` are global flags and any
+ *  diagnostics command carrying one revived it).
+ *
+ *  ENOENT-only-false, NOT existsSync. existsSync never throws — it reads EVERY error (EACCES, EIO)
+ *  as "absent", and here that direction is inverted from the hook path this brake grew out of: a
+ *  hook failing open loses a spawn (missed capture); a start failing open mid-rewrite SPAWNS into
+ *  the swap (corruption). Unreadable therefore means BRAKED. Proven on this machine: statSync
+ *  throws EACCES on /var/root/x while existsSync returns false for the same path. */
+export function reviveBraked(): boolean {
+  try { fs.statSync(noRevivePath()); return true } catch (e) {
+    return (e as NodeJS.ErrnoException).code !== 'ENOENT'
+  }
+}
+
 /**
  * Is AgentlensPro globally disabled? Checked at the top of EVERY entry point, before any work,
  * any network call and any read of stdin — a disabled AgentlensPro must cost the host session

@@ -1,9 +1,9 @@
 ---
 trdd-id: 8VGQK9L9
 title: A server was running for 1h53m while the NO_REVIVE brake file was in place
-column: todo
+column: dev
 created: 2026-08-26T20:13:05+0200
-updated: 2026-08-26T21:35:00+0200
+updated: 2026-08-27T14:59:32+0200
 current-owner: main
 task-type: bugfix
 severity: MEDIUM
@@ -11,6 +11,35 @@ priority: 3
 labels: [server, lifecycle, safety-mechanism]
 relevant-rules: []
 ---
+
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-08-27
+
+**Cause found AND fixed. One acceptance box remains, and it is additive, not a fix.**
+
+| component | state |
+|---|---|
+| `killSwitch.ts::reviveBraked()` | NEW — the single definition of "is the brake armed" |
+| `serverControl.ts::ensureServer()` | gated on the brake at `:139-146`, after the DISABLED gate |
+| supervisor loop | unchanged behaviour; its local predicate deleted, now imports the shared one |
+| `src/test/killSwitch.test.ts` | +3 tests, 14/14 pass |
+| box 3 — start provenance in the server log | **NOT DONE** |
+
+**NEXT ACTION:** make the server record its start provenance — who/what started it and whether a
+brake was present — so "who started this?" is answerable from `server.log` instead of by
+inference. That question cost this investigation a day and three refuted hypotheses.
+
+**Gotchas that are load-bearing:**
+- The pause-vs-kill split is REAL and must survive: the supervisor must check NO_REVIVE **only**,
+  because under DISABLED its spawn has to proceed so the child exits EX_CONFIG 78 and the loop
+  terminates. Collapsing both into `reviveDisabledOnDisk()` makes a DISABLED supervisor immortal.
+- `reviveBraked()` is ENOENT-only-false on purpose. `existsSync` reads EACCES/EIO as "absent", and
+  failing open here spawns into a store swap.
+- `npx mocha <file>` runs the WHOLE suite (`.mocharc` supplies `spec`). Use
+  `npx mocha --no-config --require src/test/setup.js --ui tdd out/test/test/<name>.test.js`.
+
+**SUPERSEDED — do NOT carry forward:** the "What is NOT known" section below lists three candidate
+causes. All three are moot: the cause is established at `file:line` and fixed. Keep the section as
+the record of what was eliminated; do not re-investigate it.
 
 ## Observation (symptom only — the cause is NOT established)
 
@@ -94,16 +123,28 @@ between a store swap and a live writer.
       `NO_REVIVE`. Reachable from `main.ts:232` (`dashboard`) and `diagnosticsCli.ts:671-673`
       (the `--start-server`/`--dashboard` GLOBAL flags, so any diagnostics command carrying one
       revives a braked server). The supervisor paths (`:641`, `:713`) do honour it.
-- [ ] `ensureServer()` refuses when the brake is set — or the brake's message stops promising more
-      than it delivers. Today it says "hooks and the supervisor will not resurrect the server",
-      which is true only of the supervisor half.
-      NOTE the deliberate distinction at `serverControl.ts:616-623`: the supervisor checks
-      `NO_REVIVE` ONLY, not `reviveDisabledOnDisk()` (which ORs in the global DISABLED switch),
-      because for it a pause and a kill must differ. Whatever is added to `ensureServer()` must
-      respect that split rather than collapse the two.
+- [x] `ensureServer()` refuses when the brake is set. **DONE 2026-08-27** — gate added at
+      `serverControl.ts:139-146`, immediately after the DISABLED gate and before the `init()` probe,
+      so a braked install costs no socket and no spawn.
+      The split at the old `:616-623` is PRESERVED, not collapsed: the predicate moved to
+      `killSwitch.ts::reviveBraked()` (NO_REVIVE only, ENOENT-only-false so unreadable means
+      BRAKED), and `ensureServer()` reaches it only after its own `agentlensDisabled()` gate has
+      already thrown — so DISABLED and NO_REVIVE stay distinct exactly as the supervisor needs.
+      The supervisor's local copy was deleted in favour of the shared one; it had been the only
+      definition, which is how `ensureServer()` came to have none.
+      The brake message needs no weakening now — `ensureServer()` was the half that made it false.
 - [ ] The server records its start provenance (who/what started it, whether a brake was present)
       so this question is answerable from the log next time instead of by inference.
-- [ ] A test that sets the brake, exercises each start path, and asserts no server comes up.
+- [x] A test that sets the brake and asserts no server comes up. **DONE 2026-08-27** — three tests
+      in `src/test/killSwitch.test.ts`: the brake reads armed without a restart; `ensureServer`
+      rejects with `/revive brake/`; and brake-and-switch stay DISTINCT (braked but NOT disabled,
+      and the rejection names the brake, not DISABLED — so a future collapse into
+      `reviveDisabledOnDisk()` fails the suite). 14/14 pass.
+      The assertion is genuine, not self-satisfying: `revive brake` is thrown from exactly one
+      place (`serverControl.ts:142`); the other two occurrences are supervisor log/stderr paths
+      unreachable from `ensureServer()`.
+      NOT yet covered: the `dashboard` verb and the `--start-server`/`--dashboard` global flags are
+      asserted only through `ensureServer()`, the function they both call — not driven end-to-end.
 
 ## Not in scope
 

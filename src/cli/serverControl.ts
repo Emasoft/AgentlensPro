@@ -9,7 +9,7 @@ import * as os from 'os'
 import * as path from 'path'
 import { apiRequest, dataDir, dashboardUrl, fmtGb, fmtMb, init, mcpEndpoint, sleep, CONNECT_TIMEOUT_MS } from './cliCore'
 import { dataDirSource, dataPath } from '../dataDir'
-import { agentlensDisabled, killSwitchPath, noRevivePath } from './killSwitch'
+import { agentlensDisabled, killSwitchPath, noRevivePath, reviveBraked } from './killSwitch'
 import { UsageError } from './cliErrors'
 import { assertKnownFlags } from './argHelpers'
 import { parsePidLock } from '../serverRuntime'
@@ -121,6 +121,26 @@ export async function ensureServer(): Promise<void> {
     throw new Error(
       `AgentlensPro is DISABLED (${killSwitchPath()}) — refusing to start the server.\n` +
       'Re-enable with:  agentlenspro enable',
+    )
+  }
+  // SECOND, and for the same reason: no probe, no spawn. `server stop --stay-down` arms this brake
+  // so an operator can swap the store with nothing writing into it, and its own message promises
+  // "hooks and the supervisor will not resurrect the server" — but until TRDD-8VGQK9L9 that promise
+  // held only for the supervisor. THIS function never consulted the brake, and it is reachable from
+  // `dashboard` (main.ts) and from the `--start-server`/`--dashboard` GLOBAL flags in
+  // diagnosticsCli, so any ordinary diagnostics command carrying one silently revived a braked
+  // server (measured: up 1h53m on the default data dir, brake file still present).
+  //
+  // ORDER IS LOAD-BEARING: DISABLED is handled by the gate above, so this one checks NO_REVIVE
+  // ONLY. That preserves the pause-vs-kill split the supervisor depends on (see reviveBraked's
+  // comment in killSwitch.ts) instead of collapsing the two into reviveDisabledOnDisk().
+  //
+  // REFUSE rather than fall through to a probe: an already-running server still answers init() and
+  // this returns normally — the brake stops us STARTING one, it does not pretend none exists.
+  if (reviveBraked()) {
+    throw new Error(
+      `the server revive brake is set (${noRevivePath()}) — refusing to start the server.\n` +
+      'Clear it with:  agentlenspro server start',
     )
   }
   try { await init(); return } catch { /* not up — start it */ }
@@ -625,17 +645,10 @@ export function runSupervise(): void {
    *  RESCHEDULE rather than exit: a brake is a pause, not a shutdown. Exiting here would mean a
    *  stay-down stop permanently kills a launchd-supervised install, and clearing the brake would
    *  not bring it back. Re-checking on the same backoff timer resumes on its own. */
-  /** ENOENT-only-false, NOT existsSync. existsSync never throws — it reads EVERY error (EACCES,
-   *  EIO) as "absent", and here that direction is inverted from the hook path this brake grew out
-   *  of: a hook failing open loses a spawn (missed capture); a supervisor failing open mid-rewrite
-   *  SPAWNS into the swap (corruption). Unreadable therefore means BRAKED — the pause self-heals
-   *  on the next backoff tick, the corruption would not. Proven on this machine: statSync throws
-   *  EACCES on /var/root/x while existsSync returns false for the same path. */
-  const reviveBraked = (): boolean => {
-    try { fs.statSync(noRevivePath()); return true } catch (e) {
-      return (e as NodeJS.ErrnoException).code !== 'ENOENT'
-    }
-  }
+  /** The predicate itself now lives in killSwitch.ts so this loop and `ensureServer()` share ONE
+   *  definition — they did not, and `ensureServer()` had none at all (TRDD-8VGQK9L9). Its comment
+   *  there carries the ENOENT-only-false rationale and the pause-vs-kill split; the reschedule
+   *  below is what makes the pause self-healing here. */
   const startUnlessBraked = (): void => {
     if (reviveBraked()) {
       logCrash(`revive brake (NO_REVIVE) is set — NOT restarting the collector; re-checking in ${backoffMs}ms. Clear it with \`agentlenspro server start\`.`)
