@@ -3,7 +3,7 @@ trdd-id: EAK9R8IY
 title: Ship the Rust binaries per-platform on npm — the missing prerequisite for box 3
 column: testing
 created: 2026-08-22T19:33:31+0200
-updated: 2026-08-26T05:35:00+0200
+updated: 2026-08-27T20:24:45+0200
 current-owner: main
 task-type: infra
 scope: project
@@ -279,3 +279,29 @@ Facts gathered 2026-08-22 after the USER's standing directive to decide on verif
 than ask. The investigation was prompted by box 3 having sat un-actioned as "a USER decision"
 while nobody had established what closing it would cost — the decision was blocked on missing
 facts, not on the USER.
+
+## Registry state re-measured 2026-08-27T20:24:45+0200 (still unbootstrapped)
+
+```
+npm view agentlenspro version            -> 2.29.0        (published)
+npm view agentlenspro-darwin-arm64 ...   -> E404 Not Found (never published)
+```
+
+So the predicted 404 above is CONFIRMED five days on: the optionalDependencies are declared and
+pinned at 2.29.0, the publish workflow builds them, and the packages do not exist on the registry.
+The consequence is the one that matters for TRDD-DMWOBWFH: `npmPlatformBin('alcore')` returns null
+on every published install, so **every published install runs the TypeScript server** — the Rust
+core is reachable today only through `AGENTLENS_ALCORE` or a hand-copied `<dataDir>/bin/alcore`,
+both of which are DEV channels.
+
+This is why the TS core cannot simply be deleted yet, and it is a single owner action (the 2FA
+bootstrap) rather than any amount of engineering.
+
+**A caution for whoever reads this next.** `<dataDir>/bin/` is a DEV opt-in, NOT an install
+location, and `~/.agentlens` is a DATA dir shared by both. Inspecting it tells you nothing about
+what a published install does — that question is answered by the REGISTRY (`npm view`) and by
+`npmPlatformBin`'s resolution, never by `ls`. On a machine where the CLI is `npm link`-ed, the
+"installed" `agentlenspro` IS the dev tree (`readlink -f $(command -v agentlenspro)` →
+`<repo>/standalone/cli.js`), so the two are the same file and nothing on disk can distinguish
+them. A claim about published installs drawn from this machine's disk is unfounded even when it
+happens to land on the right answer.

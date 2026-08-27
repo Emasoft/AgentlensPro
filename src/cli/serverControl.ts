@@ -54,10 +54,17 @@ export function findServerJs(): string {
  *  the file is only there because someone copied it there, so presence cannot be an accident.
  *
  *  THIRD channel (TRDD-EAK9R8IY): the `agentlenspro-<platform>` optionalDependency, resolved via
- *  `npmPlatformBin`. This is what makes a plain `npm i -g agentlenspro` run the Rust server with
- *  no operator action — `alcore` ships in the box now, so "detect and use" is no longer a lie for
- *  a published install; only `--omit=optional` or an unsupported platform falls through to null,
- *  and the TS server remains that fallback. */
+ *  `npmPlatformBin`. This is what WILL make a plain `npm i -g agentlenspro` run the Rust server
+ *  with no operator action — `--omit=optional` or an unsupported platform falls through to null,
+ *  and the TS server remains that fallback.
+ *
+ *  NOT TRUE YET, and this comment said it was: `npm view agentlenspro-darwin-arm64` is a **404**
+ *  (measured 2026-08-27, while `agentlenspro` itself is published at 2.29.0). The dependency is
+ *  DECLARED but the packages were never bootstrapped — EAK9R8IY's open owner step, a one-time 2FA
+ *  publish. Until then npm silently skips the optional dep, this channel returns null, and EVERY
+ *  published install runs the TypeScript server. The sentence that used to sit here ("alcore ships
+ *  in the box now, so detect-and-use is no longer a lie") described the intended end state as
+ *  though it were the current one — the exact shape of claim this project keeps paying for. */
 export function alcoreBin(env: NodeJS.ProcessEnv = process.env, installed = dataPath('bin', 'alcore')): string | null {
   const v = env.AGENTLENS_ALCORE?.trim()
   if (v) return v
