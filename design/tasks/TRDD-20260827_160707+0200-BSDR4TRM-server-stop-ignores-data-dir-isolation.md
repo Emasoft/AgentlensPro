@@ -3,10 +3,10 @@ trdd-id: BSDR4TRM
 title: server stop from an isolated DATA_DIR stopped the LIVE server
 column: ai_review
 created: 2026-08-27T16:07:07+0200
-updated: 2026-08-27T18:13:38+0200
-implementation-commits: [2853862]
+updated: 2026-08-27T18:43:00+0200
+implementation-commits: [2853862, a38c959]
 last-test-result: pass
-last-test-at: 2026-08-27T18:13:38+0200
+last-test-at: 2026-08-27T18:41:00+0200
 current-owner: main
 task-type: bugfix
 severity: HIGH
@@ -48,14 +48,33 @@ never consulted. Not "a data-dir-blind port lookup" — an env split between wha
 identities, guards, platform pins, esbuild); full mocha **2489 passing / 8 pending / exit 0**.
 Review-fork (adversarial) found no code defect.
 
-**NEXT ACTION:** ai_review round 1 (report under `reports/code-review/`).
+**ROUND 1: PASS with findings** (`reports/code-review/20260827_182432+0200-trdd-BSDR4TRM-ai-review-round1.md`).
+All addressed in `a38c959`; full suite **2492 passing / 8 pending / exit 0**, `pnpm run compile` 0.
+
+| finding | disposition |
+|---|---|
+| IMPORTANT-1 — reverting `defaultUiUrl()` left the suite GREEN (surviving mutation M4) | `src/test/cliCoreUrls.test.ts`, 3 asserts; that revert now fails it |
+| IMPORTANT-2 — `server status` reported a FOREIGN server for this data dir | three-state verdict (ours / foreign / unknown). Unknown is NOT collapsed into ours: reaching that line proves only that a port answered |
+| MINOR-1 — stop resolved by data dir, confirmed by PORT | confirms with the same resolver; the timeout message now names process death, since a large flush can legitimately outlast 10 s |
+| MINOR-3 — a malformed port env threw `Invalid URL` / `8080/evil` injected a path | reused the validator that already existed inside `alcoreServeArgs` → `cliCore.envPort`, one definition |
+| NIT-1/-2/-3 | stale prose; the test now clears an inherited `AGENTLENS_DATA_DIR` BEFORE spawning |
+| MINOR-2, MINOR-4 | accepted limits, below |
+
+Defect I introduced and the review fork caught: `path.resolve(undefined)` THROWS, so the first
+cut of the IMPORTANT-2 guard crashed `server status` against a server that omits `dataDir` —
+breaking the very fallback known-limit 1 cites. `ServerStats.dataDir` is now `?: string`, because
+declaring it required made tsc bless the throwing call.
+
+**NEXT ACTION:** ai_review round 2 on `a38c959`.
 
 **Known limits, accepted:** (1) a server predating both the pidfile and the `dataDir` stats field
-is invisible to the CLI (`stop` prints "already stopped"); `server status` already has an "older
-build?" line for that case. (2) The REST rung compares `path.resolve`, not realpath — a genuine
-owner is missed only when its lock is ALSO missing AND the operator spelled the data dir
+is invisible to the CLI (`stop` prints "already stopped") — both landed in `82d3776` (2026-07-10,
+verified by `git log -S`), so it is ONE condition, not two; `status` now says it cannot confirm
+ownership instead of implying it. (2) The REST rung compares `path.resolve`, not realpath — a
+genuine owner is missed only when its lock is ALSO missing AND the operator spelled the data dir
 differently (a symlink) than the server received it: a double fault, same env string in every
-real recipe.
+real recipe. (3) `legacy-kill0-only` (a bare-numeric lock, or no `ps`) plus a recycled pid can
+still name a stranger — a double fault, and strictly better than the pre-fix bare `kill(pid,0)`.
 
 ## Observation (measured 2026-08-27, during TRDD-8VGQK9L9 round-2 verification)
 
