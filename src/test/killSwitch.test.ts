@@ -31,6 +31,7 @@ suite('global kill-switch', () => {
   let savedDataDir: string | undefined
   let savedGeneric: string | undefined
   let savedMcpUrl: string | undefined
+  let notAnMcpServer: http.Server | undefined
   suiteSetup(async () => {
     savedDataDir = process.env.AGENTLENS_DATA_DIR
     savedGeneric = process.env.DATA_DIR
@@ -43,16 +44,21 @@ suite('global kill-switch', () => {
     // The pre-existing tests hid this: every gate they exercised sat ABOVE the probe, so no test
     // had ever reached the network.
     //
-    // A PROVABLY-FREE port, not a hardcoded one: bind port 0, read back what the OS handed out,
-    // release it. A hardcoded "surely unused" port that something does listen on turns every
-    // rejection test green for the wrong reason — silently and intermittently, the worst shape.
-    const probe = http.createServer()
-    await new Promise<void>(resolve => probe.listen(0, '127.0.0.1', resolve))
-    const freePort = (probe.address() as { port: number }).port
-    await new Promise<void>(resolve => probe.close(() => resolve()))
-    process.env.AGENTLENS_MCP_URL = `http://127.0.0.1:${freePort}/mcp`
+    // A port WE HOLD for the suite's lifetime, answering something that is not MCP. Two weaker
+    // shapes were tried and rejected: a hardcoded "surely unused" port (something may listen on it
+    // — every rejection test goes green for the wrong reason, intermittently), and an OS-assigned
+    // port bound-then-RELEASED (the number is free again the instant close() returns; "the OS gave
+    // it to me" is not a reservation — verified: it rebinds immediately). An OPEN listener is the
+    // only thing nothing else can bind. It also makes the rejection DETERMINISTIC: rpc() fails on
+    // the non-JSON body, instead of relying on a fast ECONNREFUSED that a DROP-ing firewall would
+    // turn into a CONNECT_TIMEOUT_MS hang.
+    notAnMcpServer = http.createServer((_req, res) => { res.writeHead(500); res.end('not an mcp server') })
+    await new Promise<void>(resolve => notAnMcpServer!.listen(0, '127.0.0.1', resolve))
+    const port = (notAnMcpServer.address() as { port: number }).port
+    process.env.AGENTLENS_MCP_URL = `http://127.0.0.1:${port}/mcp`
   })
-  suiteTeardown(() => {
+  suiteTeardown(async () => {
+    if (notAnMcpServer) await new Promise<void>(resolve => notAnMcpServer!.close(() => resolve()))
     if (savedDataDir === undefined) delete process.env.AGENTLENS_DATA_DIR
     else process.env.AGENTLENS_DATA_DIR = savedDataDir
     if (savedGeneric === undefined) delete process.env.DATA_DIR
