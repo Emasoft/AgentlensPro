@@ -3,10 +3,11 @@
 //! THIS DELETES THE USER'S FILES, so the ordering IS the contract and must not be "simplified":
 //!   1. ingest  — GATE 1 already refuses anything that does not reconstruct byte-identically.
 //!   2. FLUSH   — the spans reach an immutable Parquet part. durableSource additionally fsyncs
-//!                every part file + the part dirs BEFORE any delete (the page-cache hole).
+//!      every part file + the part dirs BEFORE any delete (the page-cache hole).
 //!   3. verify  — reconstruct FROM THE FLUSHED STORE and compare against the file's own bytes,
-//!                plus the (src_name, ts) row — metadata is data too.
+//!      plus the (src_name, ts) row — metadata is data too.
 //!   4. delete  — and only now.
+//!
 //! A crash loses at most the un-flushed batch; sources are still there. It is also THROTTLED
 //! (512MB/pass default): the archiver this replaced burned 694 MB/min of device writes on boot.
 //!

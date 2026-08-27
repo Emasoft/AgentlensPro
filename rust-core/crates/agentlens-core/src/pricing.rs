@@ -145,6 +145,10 @@ pub fn cache_write_1h_rate(r: &ModelRates) -> f64 {
 /// WHOLE-REQUEST STEP on total input size (input + cacheRead + cacheWrite), never marginal
 /// per-bucket tiering — every provider that tiers keys the rate on the request's size
 /// (TRDD-R4DHDK7L; sources in pricing.ts's ModelRates comment).
+// 8 positional args is over clippy's 7, deliberately: this signature is argument-for-argument
+// the TS `calcTokenCostUsd`, and the two are diffed against each other whenever a rate changes.
+// Bundling them into a struct here would break that line-by-line comparison for no caller gain.
+#[allow(clippy::too_many_arguments)]
 pub fn calc_token_cost_usd(
     input_tokens: f64,
     cache_read_tokens: f64,

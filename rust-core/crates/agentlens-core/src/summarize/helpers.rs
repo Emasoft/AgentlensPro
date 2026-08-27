@@ -645,8 +645,8 @@ pub fn common_path_prefix(paths: &[String]) -> String {
     }
     let first = &abs[0];
     let mut common = 0;
-    for i in 0..first.len() {
-        if abs.iter().all(|parts| parts.get(i) == Some(&first[i])) {
+    for (i, part) in first.iter().enumerate() {
+        if abs.iter().all(|parts| parts.get(i) == Some(part)) {
             common = i + 1;
         } else {
             break;
@@ -807,7 +807,7 @@ pub fn summarize_tool_args(tool_name: &str, args_json: &str) -> String {
         }
         "list_dir" => {
             let p = args.get("path").and_then(Value::as_str).unwrap_or("");
-            let last = p.split('/').filter(|s| !s.is_empty()).next_back().unwrap_or(p);
+            let last = p.split('/').rfind(|s| !s.is_empty()).unwrap_or(p);
             last.to_owned()
         }
         "manage_todo_list" => {

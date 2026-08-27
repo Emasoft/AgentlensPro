@@ -70,7 +70,7 @@ fn finish_step_matches_the_ts_oracle_hot_and_cold() {
     // its 9 entries while hot.
     let parent = &hot["cccccccc-1111-2222-3333-444444444444"];
     assert!(parent["speedBlendedCostUsd"].as_f64().unwrap() > 0.0);
-    assert_eq!(parent.as_object().unwrap().keys().last().unwrap(), "speedBlendedCostUsd");
+    assert_eq!(parent.as_object().unwrap().keys().next_back().unwrap(), "speedBlendedCostUsd");
     assert_eq!(parent["timeline"].as_array().unwrap().len(), 9);
 
     let cold = cards_by_id(&env, e["nowColdMs"].as_i64().unwrap());

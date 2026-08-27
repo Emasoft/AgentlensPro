@@ -72,5 +72,7 @@ fn summary_window_hours_resolves_env_then_file_then_default_with_the_floor() {
     assert_eq!(summary_window_ms(&data), 6 * 3_600_000);
     std::fs::write(data.join("config.json"), r#"{"retention":{"summaryWindowHours":0.01}}"#).unwrap();
     assert_eq!(summary_window_ms(&data), 3_600_000);
-    assert!(SUMMARY_WINDOW_FLOOR_MS < 3_600_000);
+    // Both sides are constants, so this is a compile-time claim, not a test assertion: the
+    // 1-hour clamp above is only meaningful while the floor sits strictly below it.
+    const { assert!(SUMMARY_WINDOW_FLOOR_MS < 3_600_000) };
 }

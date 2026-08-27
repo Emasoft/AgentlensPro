@@ -147,6 +147,10 @@ pub fn link_subagent_transcripts(sessions: Vec<Value>) -> Vec<Value> {
         }
         let t_traffic = f(t, "inputTokens") + f(t, "outputTokens") + f(t, "cacheReadTokens") + f(t, "cacheCreateTokens");
         let p_traffic = f(p, "inputTokens") + f(p, "outputTokens") + f(p, "cacheReadTokens") + f(p, "cacheCreateTokens");
+        // `!(x > 0.0)` is NOT `x <= 0.0` here and must not be "simplified" into it: the
+        // negated form is TRUE for NaN, which is the TS `!(t > 0)` this ports and the only
+        // reason a NaN-token feed loses to a real-traffic one instead of winning by accident.
+        #[allow(clippy::neg_cmp_op_on_partial_ord)]
         if !(t_traffic > 0.0) && p_traffic > 0.0 {
             continue;
         }

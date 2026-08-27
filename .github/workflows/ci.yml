@@ -161,3 +161,53 @@ jobs:
         env:
           AGENTLENSPRO_BROWSER_TESTS: '1'
         run: npx mocha --no-config --ui tdd out/test/test/browser/dashboardSmoke.test.js
+
+  # ── Rust core (TRDD-DMWOBWFH) ────────────────────────────────────────────────
+  # Until this job existed, rust-core/ was NEVER built or tested by CI: publish.yml
+  # compiled it only on a release tag, so a broken crate reached `main` green and
+  # surfaced at publish time. The workspace is the gate: the "-p agentlens-store
+  # only" habit is a LOCAL cost optimisation, never a correctness limit — on macOS
+  # each freshly built test binary stalls ~70s before its harness starts (measured:
+  # 0% CPU, no open files; the same binary run standalone finishes in 0.04s), and
+  # with ~100 binaries that stall IS the local runtime. Linux runners don't pay it.
+  #
+  # Caching is safe HERE and deliberately absent from publish.yml: a poisoned cache
+  # entry in a release path would be baked into a published artifact, whereas CI
+  # only reports a signal (zizmor cache-poisoning). Swatinem/rust-cache keys on the
+  # lockfile + rustc version and never caches the workspace crates themselves, so a
+  # source change still rebuilds — it is the statically-linked duckdb dependency
+  # that the cache is actually buying back.
+  rust:
+    runs-on: ubuntu-latest
+    # Cold (cache miss) the duckdb static link dominates; warm runs are minutes.
+    timeout-minutes: 40
+    # `cargo test` needs no network once vendored deps are fetched, and nothing here
+    # reads event data — this job takes no untrusted input.
+
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      # Same pin as publish.yml's build-platform-packages leg — one toolchain
+      # across CI and release, so a crate that compiles here compiles there.
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master (stable toolchain)
+        with:
+          toolchain: stable
+          components: clippy
+
+      - name: Cache cargo registry + target
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: rust-core
+
+      # No `cargo fmt --check` step: the tree is 3564 hunks across 200 files away
+      # from rustfmt's output, so adding the gate today means a mechanical reformat
+      # that would bury every real Rust diff for the rest of the port. Add it as the
+      # FIRST commit of the cutover (TRDD-DMWOBWFH), not as a side effect of wiring CI.
+      - name: Clippy (warnings are errors)
+        run: cargo clippy --manifest-path rust-core/Cargo.toml --workspace --all-targets -- -D warnings
+
+      - name: Tests
+        run: cargo test --manifest-path rust-core/Cargo.toml --workspace

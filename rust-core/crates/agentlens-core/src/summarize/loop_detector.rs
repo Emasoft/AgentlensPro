@@ -65,7 +65,7 @@ fn detect_exact_tool_repeat(session: &Value, signals: &mut Vec<Value>) {
         }
     }
     let mut repeated: Vec<&(String, u64)> = counts.iter().filter(|(_, n)| *n >= 3).collect();
-    repeated.sort_by(|a, b| b.1.cmp(&a.1));
+    repeated.sort_by_key(|e| std::cmp::Reverse(e.1));
     if repeated.is_empty() {
         return;
     }
@@ -164,7 +164,7 @@ fn detect_error_recurrence(session: &Value, signals: &mut Vec<Value>) {
         }
     }
     let mut recurring: Vec<&(String, u64)> = counts.iter().filter(|(_, n)| *n >= 3).collect();
-    recurring.sort_by(|a, b| b.1.cmp(&a.1));
+    recurring.sort_by_key(|e| std::cmp::Reverse(e.1));
     if recurring.is_empty() {
         return;
     }

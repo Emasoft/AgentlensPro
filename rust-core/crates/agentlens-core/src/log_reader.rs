@@ -9,7 +9,8 @@
 //!     LAST key (TS assigns it onto the finished card object).
 //!   - hot-age strip — the PARENT card loses its timeline when the session's last activity is
 //!     older than timeline_hot_age_ms (child cards keep their one tiny entry, as in TS).
-//!   DEFERRED (recorded in the TRDD STATE, not bugs): accountId (needs the call-body registry the
+//!
+//! DEFERRED (recorded in the TRDD STATE, not bugs): accountId (needs the call-body registry the
 //!   core does not have yet), generated-files attach (src/generatedFiles.ts fs heuristics), the
 //!   statusline overlay (a separate subsystem), and the OpenCode per-message JSON fallback
 //!   (TS takes it on a db error; here the error is logged and the db skipped).
@@ -269,6 +270,10 @@ const ACCUM_CACHE_MAX: usize = 24;
 /// TS MAX_ARRAY_READ_BYTES — the whole-file re-read path (Copilot logs) refuses oversized files.
 const MAX_ARRAY_READ_BYTES: u64 = 256 * 1024 * 1024;
 
+// Variants differ a lot in size, but at most ACCUM_CACHE_MAX (24) of these ever exist at
+// once, so boxing the big one would trade ~1 KB of stack for 24 heap allocations and an
+// indirection on the hot per-line parse path. Revisit only if the cache bound grows.
+#[allow(clippy::large_enum_variant)]
 enum Accum {
     Claude(ClaudeAccum),
     Codex(CodexAccum),

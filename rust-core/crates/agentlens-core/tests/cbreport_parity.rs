@@ -74,6 +74,13 @@ fn same(got: &Value, exp: &Value, label: &str) {
     }
 }
 
+/// An EXISTING but empty bodies dir. Created on demand (see the `empty_spool` case below).
+fn empty_spool(root: &Path) -> PathBuf {
+    let p = root.join("empty-spool");
+    std::fs::create_dir_all(&p).unwrap();
+    p
+}
+
 fn opts(case: &str) -> CacheBreakTimelineOptions {
     let root = fixtures().join("cbreport");
     let mut o = CacheBreakTimelineOptions::new(&root);
@@ -113,9 +120,13 @@ fn opts(case: &str) -> CacheBreakTimelineOptions {
         }
         "unknown_session" => o.session_id = Some("sess-nope".to_owned()),
         "no_evidence" => o.bodies_dir = Some(root.join("no-such-spool")),
-        "empty_spool" => o.bodies_dir = Some(root.join("empty-spool")),
+        // The empty-spool cases MUST create the directory: they assert coverage.dirExists ==
+        // true against a spool with no bodies in it, and git cannot track an empty directory —
+        // so a committed fixture would silently vanish on every fresh clone (and in CI) and
+        // turn "present but empty" into "absent", which is the opposite branch.
+        "empty_spool" => o.bodies_dir = Some(empty_spool(&root)),
         "window_echo" => {
-            o.bodies_dir = Some(root.join("empty-spool"));
+            o.bodies_dir = Some(empty_spool(&root));
             o.window_hours = Some(24.0);
         }
         other => panic!("unknown case {other} — add it here when the generator gains one"),

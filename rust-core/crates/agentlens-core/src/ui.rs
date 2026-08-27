@@ -23,6 +23,7 @@
 //!     update payload is update_payload::build_update_payload). sessionChanged / burnStatus /
 //!     alert frames are later slices (log-scan wiring, burn investigator).
 //!   - fallback → 404, NO Content-Type, body `Not found`.
+//!
 //! Deferred (documented, not silently dropped): admission-control 503s, base-path strip.
 
 use std::sync::{Arc, Mutex};

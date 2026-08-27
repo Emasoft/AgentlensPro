@@ -882,6 +882,51 @@ impl IngestState {
     }
 }
 
+/// processMetrics: harvest (session, account) pairs; return (metricCount, pointCount, pairs).
+pub fn process_metrics(payload: &Value) -> (u64, u64, Vec<(String, String)>) {
+    let mut metric_count = 0u64;
+    let mut point_count = 0u64;
+    let mut pairs: Vec<(String, String)> = Vec::new();
+    let rms = payload.get("resourceMetrics").and_then(Value::as_array).map(Vec::as_slice).unwrap_or(&[]);
+    for rm in rms.iter().filter_map(Value::as_object) {
+        let res_attrs = to_span_attributes_ref(rm.get("resource").and_then(Value::as_object).and_then(|r| r.get("attributes")));
+        let res_account = get_attr_from(&res_attrs, &["user.account_uuid", "user_account_uuid"]);
+        let res_session = get_attr_from(&res_attrs, &["session.id", "session_id"]);
+        if !res_account.is_empty() && !res_session.is_empty() {
+            pairs.push((res_session.clone(), res_account.clone()));
+        }
+        for sm in rm.get("scopeMetrics").and_then(Value::as_array).map(Vec::as_slice).unwrap_or(&[]).iter().filter_map(Value::as_object) {
+            let metrics = sm.get("metrics").and_then(Value::as_array).map(Vec::as_slice).unwrap_or(&[]);
+            metric_count += metrics.len() as u64;
+            for m in metrics.iter().filter_map(Value::as_object) {
+                for group in ["sum", "gauge", "histogram", "exponentialHistogram"] {
+                    let dps = m.get(group).and_then(Value::as_object).and_then(|g| g.get("dataPoints")).and_then(Value::as_array);
+                    let Some(dps) = dps else { continue };
+                    for dp in dps.iter().filter_map(Value::as_object) {
+                        let point_attrs = to_span_attributes_ref(dp.get("attributes"));
+                        let account = {
+                            let a = get_attr_from(&point_attrs, &["user.account_uuid", "user_account_uuid"]);
+                            if a.is_empty() { res_account.clone() } else { a }
+                        };
+                        let session = {
+                            let s = get_attr_from(&point_attrs, &["session.id", "session_id"]);
+                            if s.is_empty() { res_session.clone() } else { s }
+                        };
+                        if !account.is_empty() && !session.is_empty() {
+                            pairs.push((session, account));
+                        }
+                    }
+                    point_count += dps.len() as u64;
+                }
+            }
+        }
+    }
+    (metric_count, point_count, pairs)
+}
+
+// The test module stays LAST in this file: clippy's items_after_test_module denies
+// any item declared after it (a `#[cfg(test)]` block visually ends the file, so a
+// definition below it reads as dead code and gets skipped in review).
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -928,46 +973,4 @@ mod tests {
         assert_eq!(s2, "codex:conv-1:prompt-2", "a second prompt opens a new cycle");
         assert_eq!(n.session_by_otel_trace_id("t1"), Some(s1.as_str()));
     }
-}
-
-/// processMetrics: harvest (session, account) pairs; return (metricCount, pointCount, pairs).
-pub fn process_metrics(payload: &Value) -> (u64, u64, Vec<(String, String)>) {
-    let mut metric_count = 0u64;
-    let mut point_count = 0u64;
-    let mut pairs: Vec<(String, String)> = Vec::new();
-    let rms = payload.get("resourceMetrics").and_then(Value::as_array).map(Vec::as_slice).unwrap_or(&[]);
-    for rm in rms.iter().filter_map(Value::as_object) {
-        let res_attrs = to_span_attributes_ref(rm.get("resource").and_then(Value::as_object).and_then(|r| r.get("attributes")));
-        let res_account = get_attr_from(&res_attrs, &["user.account_uuid", "user_account_uuid"]);
-        let res_session = get_attr_from(&res_attrs, &["session.id", "session_id"]);
-        if !res_account.is_empty() && !res_session.is_empty() {
-            pairs.push((res_session.clone(), res_account.clone()));
-        }
-        for sm in rm.get("scopeMetrics").and_then(Value::as_array).map(Vec::as_slice).unwrap_or(&[]).iter().filter_map(Value::as_object) {
-            let metrics = sm.get("metrics").and_then(Value::as_array).map(Vec::as_slice).unwrap_or(&[]);
-            metric_count += metrics.len() as u64;
-            for m in metrics.iter().filter_map(Value::as_object) {
-                for group in ["sum", "gauge", "histogram", "exponentialHistogram"] {
-                    let dps = m.get(group).and_then(Value::as_object).and_then(|g| g.get("dataPoints")).and_then(Value::as_array);
-                    let Some(dps) = dps else { continue };
-                    for dp in dps.iter().filter_map(Value::as_object) {
-                        let point_attrs = to_span_attributes_ref(dp.get("attributes"));
-                        let account = {
-                            let a = get_attr_from(&point_attrs, &["user.account_uuid", "user_account_uuid"]);
-                            if a.is_empty() { res_account.clone() } else { a }
-                        };
-                        let session = {
-                            let s = get_attr_from(&point_attrs, &["session.id", "session_id"]);
-                            if s.is_empty() { res_session.clone() } else { s }
-                        };
-                        if !account.is_empty() && !session.is_empty() {
-                            pairs.push((session, account));
-                        }
-                    }
-                    point_count += dps.len() as u64;
-                }
-            }
-        }
-    }
-    (metric_count, point_count, pairs)
 }
