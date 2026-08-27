@@ -1,9 +1,11 @@
 ---
 trdd-id: EAK9R8IY
 title: Ship the Rust binaries per-platform on npm — the missing prerequisite for box 3
-column: testing
+column: blocked
+pre-block-column: testing
+blocked-by: [user-publish-route-decision]
 created: 2026-08-22T19:33:31+0200
-updated: 2026-08-27T20:24:45+0200
+updated: 2026-08-27T23:16:11+0200
 current-owner: main
 task-type: infra
 scope: project
@@ -15,9 +17,47 @@ min-approval-requirement: manager
 
 # Ship the Rust binaries per-platform on npm — the missing prerequisite for box 3
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-08-26
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-08-27
 
-**Built this session, all inert (no tag pushed, no publish run):**
+### BLOCKED ON THE USER, and it blocks MORE than this card
+
+`column: blocked` (was `testing` — that column asserted active work while nothing was moving,
+which is worse than an unstarted card because it hides the stall from the one view anyone reads).
+The blocker is a person, not a card, hence the non-card `blocked-by: user-publish-route-decision`.
+
+**The consequence that was NOT recorded here before, and is the whole reason this matters:**
+`publish-npm` declares `needs: [package, build-platform-packages]` (`publish.yml:260`). The four
+`agentlenspro-<platform>` names have **never existed** (`npm view agentlenspro-darwin-arm64` →
+**404**, measured 2026-08-27), and npm's OIDC **cannot create a brand-new name**. So all four
+matrix legs fail and **the main `agentlenspro` package never publishes at all.** This card is not
+just "binaries not shipped yet" — until it is resolved, *no release of anything can go out*, which
+is what stalled 2.30.0.
+
+**Three routes, for the USER to pick (measured tonight, not estimated):**
+
+- **(a)** Bootstrap the four names once, locally, with 2FA — the exact 3 steps are the comment
+  block above the `build-platform-packages` job. Best size story: only the matching platform
+  installs (~30 MB download / ~96 MB on disk).
+- **(b)** Drop `build-platform-packages` from `publish-npm`'s `needs:` (or mark it
+  `continue-on-error`) ⇒ a TS-only release ships on the existing OIDC with no 2FA. **Verified
+  safe, not assumed:** a 404 `optionalDependency` exits `npm install` with **0** and prints no
+  error and no warning (probed directly), and `src/rustBinResolve.ts:39-40` returns `null` on a
+  failed resolve. One line, plus the tag push.
+- **(c)** Put all four platforms' binaries in the ONE existing package. **Re-priced with
+  `gzip -9`:** `alcore` 52.6→17.0 MB, `alstore` 39.9→11.8 MB, `allogscan` 2.7→1.3, `alscan`
+  0.8→0.4 ⇒ one platform 96 MB raw / 30.4 MB gz, **four = ~384 MB unpacked on disk / ~121.5 MB
+  downloaded**. npm unpacks everything, so this is **4× (a) on BOTH axes**. `strip -S` saves
+  **0 bytes** (DuckDB's static link is the size). And it buys nothing today: nothing in the
+  shipped path uses the binaries yet.
+
+**Recommendation on record: (b) now, (a) when the USER is at the keyboard for the 2FA taps,
+(c) probably never.**
+
+**Correction to this card's earlier text:** `optionalDependencies` are pinned **2.30.0**, not
+`2.29.0` — `scripts/check-platform-package-pins.js` keeps them in lockstep with `version`, so
+they moved with the release bump.
+
+### Built earlier, all still inert (no tag pushed, no publish run):
 - `src/rustBinResolve.ts` — the third fallback channel (`npmPlatformBin`), wired into the four
   existing resolvers (`alcoreBin`, `alstoreBin`, `alscanBin`, `allogscanBin`); order is
   env override → `<dataDir>/bin/<name>` (dev install) → npm platform package.
@@ -27,16 +67,21 @@ min-approval-requirement: manager
 - `scripts/check-platform-package-pins.js` — fails the build if the main package's
   `optionalDependencies` versions on `agentlenspro-<platform>` drift from `package.json` `version`.
   Wired into `check-types`/`package`.
-- `package.json` — added `optionalDependencies` (4 platform packages, pinned `2.29.0`).
+- `package.json` — added `optionalDependencies` (4 platform packages; pinned `2.29.0` when this
+  line was written, **`2.30.0` now** — the pin-check script moves them with `version`).
 - `.github/workflows/publish.yml` — new `build-platform-packages` matrix job (4 native runners,
   no cross-compile), `publish-npm` now `needs: [package, build-platform-packages]` so the main
   package publishes only after every platform leg succeeds.
 - `src/test/rustBinResolve.test.ts` — 4 tests, all passing.
 
-**NEXT ACTION (owner, not this session):** before the first tag meant to actually ship binaries,
-bootstrap each `agentlenspro-<platform>` package once, locally, with 2FA — the exact 3 steps are
-written as a comment block right above the `build-platform-packages` job in `publish.yml`. Until
-that happens, the job's publish step 404s (expected — same as the `agentlenspro` 1.0.0 bootstrap).
+**This was the NEXT ACTION as written on 2026-08-26; it is route (a) above, and it is now ONE of
+three options, not the only one:** before the first tag meant to actually ship binaries, bootstrap
+each `agentlenspro-<platform>` package once, locally, with 2FA — the exact 3 steps are written as a
+comment block right above the `build-platform-packages` job in `publish.yml`. Until that happens,
+the job's publish step 404s (expected — same as the `agentlenspro` 1.0.0 bootstrap). What this
+paragraph did NOT say, and what the STATE block above now does, is that the failing leg takes the
+**main package's publish down with it** — so "not yet shipping binaries" was in fact "not shipping
+anything".
 
 **Not done, and cannot be done from this session:** acceptance boxes 2 and 4 require an actual
 publish (forbidden here) followed by installing on a clean machine. Everything else is verified
