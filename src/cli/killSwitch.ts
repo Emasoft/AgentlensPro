@@ -47,6 +47,11 @@ export function noRevivePath(): string {
  *  would make a DISABLED supervisor immortal). Callers that also want to refuse under DISABLED
  *  check `agentlensDisabled()` separately, ahead of this — that ordering is what keeps the split.
  *
+ *  THE TWO CALLERS FAIL DIFFERENTLY ON PURPOSE, and nothing else records it: the supervisor
+ *  RESCHEDULES on a set brake (a pause self-heals on the next backoff tick), while `ensureServer()`
+ *  THROWS (its caller wanted a server now and cannot have one). Both are "refuse to spawn"; only
+ *  the recovery differs. Do not unify them into one reaction.
+ *
  *  Lives HERE, not in serverControl, so the supervisor and `ensureServer()` share ONE definition:
  *  they had drifted, and `ensureServer()` consulted no brake at all (TRDD-8VGQK9L9 — a server ran
  *  1h53m with the brake in place, because `--start-server`/`--dashboard` are global flags and any

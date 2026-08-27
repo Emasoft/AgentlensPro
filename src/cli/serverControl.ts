@@ -123,27 +123,32 @@ export async function ensureServer(): Promise<void> {
       'Re-enable with:  agentlenspro enable',
     )
   }
-  // SECOND, and for the same reason: no probe, no spawn. `server stop --stay-down` arms this brake
-  // so an operator can swap the store with nothing writing into it, and its own message promises
-  // "hooks and the supervisor will not resurrect the server" — but until TRDD-8VGQK9L9 that promise
-  // held only for the supervisor. THIS function never consulted the brake, and it is reachable from
-  // `dashboard` (main.ts) and from the `--start-server`/`--dashboard` GLOBAL flags in
-  // diagnosticsCli, so any ordinary diagnostics command carrying one silently revived a braked
-  // server (measured: up 1h53m on the default data dir, brake file still present).
+  try { await init(); return } catch { /* not up — start it */ }
+  // THE BRAKE REFUSES THE SPAWN, NOT THE SERVER — hence BELOW the probe, unlike the DISABLED gate
+  // above it. `server stop --stay-down` arms this brake so an operator can swap the store with
+  // nothing writing into it, and its message promises "hooks and the supervisor will not resurrect
+  // the server"; until TRDD-8VGQK9L9 that held only for the supervisor, because THIS function never
+  // consulted the brake and is reachable from `dashboard` (main.ts) and from the
+  // `--start-server`/`--dashboard` GLOBAL flags in diagnosticsCli — so any ordinary diagnostics
+  // command carrying one silently revived a braked server (measured: up 1h53m on the default data
+  // dir, brake file still present).
   //
-  // ORDER IS LOAD-BEARING: DISABLED is handled by the gate above, so this one checks NO_REVIVE
-  // ONLY. That preserves the pause-vs-kill split the supervisor depends on (see reviveBraked's
-  // comment in killSwitch.ts) instead of collapsing the two into reviveDisabledOnDisk().
+  // PLACEMENT IS THE FIX, and it was wrong in the first cut of this gate (caught in review before
+  // it shipped): sitting ABOVE the probe, it threw whenever the brake was set even though a healthy
+  // server was already answering. That prevents nothing — the writer the store was being protected
+  // from is already running — while breaking every diagnostics call against it. It also inherited
+  // the DISABLED gate's "cost nothing, not even a socket" rationale, which does not transfer:
+  // DISABLED is terminal and global, NO_REVIVE is a pause whose stated scope is resurrection.
   //
-  // REFUSE rather than fall through to a probe: an already-running server still answers init() and
-  // this returns normally — the brake stops us STARTING one, it does not pretend none exists.
+  // NO_REVIVE ONLY, never reviveDisabledOnDisk(): DISABLED is handled by the gate above, so the
+  // pause-vs-kill split the supervisor depends on survives (see reviveBraked in killSwitch.ts).
   if (reviveBraked()) {
     throw new Error(
-      `the server revive brake is set (${noRevivePath()}) — refusing to start the server.\n` +
+      `the server revive brake is set (${noRevivePath()}) — refusing to START a server.\n` +
+      '(An already-running server is still used; the brake only blocks starting a new one.)\n' +
       'Clear it with:  agentlenspro server start',
     )
   }
-  try { await init(); return } catch { /* not up — start it */ }
   // Which engine serves this data dir. Resolved BEFORE findServerJs(), which throws when the JS
   // bundle is missing — an alcore-only install has no bundle to find, and must not be told to
   // "run node esbuild.js" to start a server it isn't going to use.

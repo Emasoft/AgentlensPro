@@ -8,6 +8,7 @@
 // ALREADY RUNNING, because every hook is a fresh process that re-reads the filesystem.
 import * as assert from 'assert'
 import * as fs from 'fs'
+import * as http from 'http'
 import * as os from 'os'
 import * as path from 'path'
 
@@ -29,16 +30,27 @@ import { ensureServer, runSupervise } from '../cli/serverControl'
 suite('global kill-switch', () => {
   let savedDataDir: string | undefined
   let savedGeneric: string | undefined
+  let savedMcpUrl: string | undefined
   suiteSetup(() => {
     savedDataDir = process.env.AGENTLENS_DATA_DIR
     savedGeneric = process.env.DATA_DIR
+    savedMcpUrl = process.env.AGENTLENS_MCP_URL
     process.env.AGENTLENS_DATA_DIR = tmpHome
+    // THE DATA DIR IS NOT ENOUGH — the endpoint is resolved by PORT, not by data dir, so a suite
+    // isolated only by AGENTLENS_DATA_DIR still probes localhost:4316 and the DEVELOPER'S OWN
+    // running server answers it. Measured 2026-08-27: with the brake armed, ensureServer() returned
+    // instead of throwing because a real server (18h uptime, different data dir) satisfied init().
+    // The pre-existing tests hid this: every gate they exercised sat ABOVE the probe, so no test
+    // had ever reached the network. Point at a port nothing listens on.
+    process.env.AGENTLENS_MCP_URL = 'http://127.0.0.1:45917/mcp'
   })
   suiteTeardown(() => {
     if (savedDataDir === undefined) delete process.env.AGENTLENS_DATA_DIR
     else process.env.AGENTLENS_DATA_DIR = savedDataDir
     if (savedGeneric === undefined) delete process.env.DATA_DIR
     else process.env.DATA_DIR = savedGeneric
+    if (savedMcpUrl === undefined) delete process.env.AGENTLENS_MCP_URL
+    else process.env.AGENTLENS_MCP_URL = savedMcpUrl
   })
   // The brake is cleared around EVERY test, not just the brake ones: it lives in the same tmp data
   // dir, and a leaked NO_REVIVE would make an unrelated ensureServer test pass for the wrong reason.
@@ -144,6 +156,34 @@ suite('global kill-switch', () => {
     // server while the operator swapped the store underneath it.
     armBrake()
     await assert.rejects(() => ensureServer(), /revive brake/, 'a braked AgentlensPro must not spawn a server')
+  })
+
+  test('a REACHABLE server is still used while braked — the brake refuses the SPAWN, not the server', async () => {
+    // REGRESSION for the first cut of this gate (caught in review, never shipped): it sat ABOVE the
+    // init() probe, so it threw whenever the brake was set — even with a healthy server answering.
+    // That prevents nothing (the writer the store was being protected from is already running) while
+    // breaking every diagnostics call against it.
+    //
+    // THIS is the test that discriminates. The two rejection tests around it pass under BOTH
+    // orderings, because they run with nothing listening; only a reachable server tells the two
+    // apart. A stub MCP endpoint is enough — init() needs one successful JSON-RPC `initialize`.
+    const srv = http.createServer((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ jsonrpc: '2.0', id: 1, result: {} }))
+    })
+    await new Promise<void>(resolve => srv.listen(0, '127.0.0.1', resolve))
+    const port = (srv.address() as { port: number }).port
+    const saved = process.env.AGENTLENS_MCP_URL
+    process.env.AGENTLENS_MCP_URL = `http://127.0.0.1:${port}/mcp`
+    try {
+      armBrake()
+      await ensureServer()  // must RETURN: the brake blocks starting a server, not using one
+    } finally {
+      // Always restore and always close — a leaked listener would let a later test reach this stub.
+      if (saved === undefined) delete process.env.AGENTLENS_MCP_URL
+      else process.env.AGENTLENS_MCP_URL = saved
+      await new Promise<void>(resolve => srv.close(() => resolve()))
+    }
   })
 
   test('brake and switch stay DISTINCT — a pause is not a kill', async () => {

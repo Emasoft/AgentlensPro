@@ -143,8 +143,17 @@ between a store swap and a live writer.
       The assertion is genuine, not self-satisfying: `revive brake` is thrown from exactly one
       place (`serverControl.ts:142`); the other two occurrences are supervisor log/stderr paths
       unreachable from `ensureServer()`.
-      NOT yet covered: the `dashboard` verb and the `--start-server`/`--dashboard` global flags are
-      asserted only through `ensureServer()`, the function they both call — not driven end-to-end.
+      **Review found the first cut wrong, and it was fixed before shipping:** the gate sat ABOVE the
+      `init()` probe, so a set brake threw even with a healthy server answering — blinding every
+      diagnostics call while doing nothing about the live writer. Now probe first, refuse only the
+      spawn. A 4th test (stub MCP endpoint, brake armed, `ensureServer()` must RETURN) discriminates
+      the orderings; mutation-verified: with the gate moved above the probe in the compiled file the
+      test imports, it fails (1/15) and passes when restored (15/15). The suite also gained
+      `AGENTLENS_MCP_URL` isolation — the data dir alone left it probing the developer's live
+      server on :4316, which is how the wrong ordering had passed.
+      **Verified LIVE through the real binary 2026-08-27:** brake armed with the 19h-uptime server
+      running — `agentlenspro get_burn_status --start-server` exit 0 (server used); `agentlenspro
+      dashboard` against a dead port exit 1 with the brake message, 0 new `server.js` processes.
 
 ## Not in scope
 
