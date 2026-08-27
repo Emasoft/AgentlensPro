@@ -35,6 +35,16 @@ export function killSwitchPath(): string {
   return path.join(dataDir(), 'DISABLED')
 }
 
+/** Env var every server spawner stamps on the child, naming the PATH that started it. The server
+ *  logs it at boot beside the brake state it observed. WHY (TRDD-8VGQK9L9): a server was found
+ *  running 1h53m with the NO_REVIVE brake in place, and the log carried nothing to say WHO started
+ *  it or WHETHER the brake was consulted — the answer took a day and three refuted hypotheses.
+ *  Four spawn paths exist (ensureServer, `server start`, the supervisor, the hook reviver); the env
+ *  is the one channel every one of them already controls. Values are the short path names below,
+ *  so a log line stays greppable across versions. Absent ⇒ "unknown" (launched by hand, or by a
+ *  spawner older than this stamp). */
+export const STARTED_BY_ENV = 'AGENTLENS_STARTED_BY'
+
 /** Path of the narrow server-revive brake (hooks may still spool; they just won't spawn a server). */
 export function noRevivePath(): string {
   return path.join(dataDir(), 'NO_REVIVE')

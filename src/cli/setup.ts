@@ -21,7 +21,7 @@
 import { spawn, spawnSync, execFileSync } from 'child_process'
 import * as crypto from 'crypto'
 import * as fs from 'fs'
-import { agentlensDisabled } from './killSwitch'
+import { agentlensDisabled, STARTED_BY_ENV } from './killSwitch'
 import { UsageError } from './cliErrors'
 import * as http from 'http'
 import * as os from 'os'
@@ -865,6 +865,7 @@ const stepServer: StepDef = {
       stdio: ['ignore', outFd, outFd],
       env: {
         ...process.env,
+        [STARTED_BY_ENV]: 'setup',  // boot-provenance stamp (TRDD-8VGQK9L9); the fifth spawn path, found by sweep
         HOME: ctx.home,
         DATA_DIR: ctx.dataDir,
         UI_PORT: String(ctx.uiPort),

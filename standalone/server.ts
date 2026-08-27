@@ -272,6 +272,32 @@ function releasePidFile(): void {
   // Release on the way out so the next start is not left diagnosing a stale lock. The explicit
   // shutdown/crash paths call releasePidFile() too; this covers every other exit.
   process.once('exit', releasePidFile)
+
+  // BOOT PROVENANCE (TRDD-8VGQK9L9). One line, right after the lock is ours, answering the two
+  // questions that cost a day of inference when a server was found running with the NO_REVIVE
+  // brake in place: WHO started this process, and WAS THE BRAKE SET when it did. The starter's
+  // identity arrives via AGENTLENS_STARTED_BY, stamped by every spawner in cli/ (ensureServer,
+  // `server start|restart`, the supervisor, the hook reviver); absent means launched by hand or
+  // by a spawner older than the stamp, and is reported as exactly that — never guessed.
+  //
+  // The brake is read HERE, by the server, at its own boot — not trusted from the spawner. A
+  // spawner that consulted the brake would say so; the one that did NOT is the one whose child
+  // needs to record it. `statSync` and not `existsSync`, same as every other brake read in the
+  // product: an unreadable flag is reported as PRESENT (the reader cannot prove it absent).
+  //
+  // ppid is logged too: it is the only field an operator can cross-check against `ps` while the
+  // starter is still alive, and it costs nothing.
+  {
+    const startedBy = process.env.AGENTLENS_STARTED_BY?.trim() || 'unknown (no AGENTLENS_STARTED_BY — launched by hand, or by a spawner without the stamp)'
+    let brake = 'absent'
+    try { fs.statSync(path.join(DATA_DIR, 'NO_REVIVE')); brake = 'PRESENT' } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== 'ENOENT') brake = `unreadable (${(e as NodeJS.ErrnoException).code}) — treated as PRESENT`
+    }
+    console.log(`[AgentlensPro] boot provenance: started-by=${startedBy} ppid=${process.ppid} pid=${process.pid} brake=${brake} data=${DATA_DIR}`)
+    if (brake !== 'absent') {
+      console.warn(`[AgentlensPro] WARNING: this server started while the NO_REVIVE brake was ${brake}. The starter above did not honour it. Clear the brake with \`agentlenspro server start\`, or stop this server with \`agentlenspro server stop --stay-down\`.`)
+    }
+  }
 }
 
 // TRDD-K3WDPR7M Phase 4: delta-log persistence for the two heaviest sidecars — append-only NDJSON

@@ -20,7 +20,7 @@ import * as path from 'path'
 import { isImageReadPath } from '../shared/imageReads'
 import { uiBaseUrl, dataDir } from './cliCore'
 import { findServerJs } from './serverControl'
-import { agentlensDisabled, noRevivePath } from './killSwitch'
+import { agentlensDisabled, noRevivePath, STARTED_BY_ENV } from './killSwitch'
 
 // D3K7QM2P/1a — hook durability. When the server can't take a hook event (down, or shedding under
 // load), we must NOT lose it: durably spool the payload to disk (the server's boot/periodic drain
@@ -157,6 +157,9 @@ function reviveDaemonDetached(): void {
     try {
       const child = spawn(process.execPath, ['--max-old-space-size=6144', serverJs], {
         cwd: path.dirname(path.dirname(serverJs)),
+        // Provenance stamp for the server's boot line (TRDD-8VGQK9L9): of the four spawn paths this
+        // is the one a human never invoked, so it is the one most worth naming in the log.
+        env: { ...process.env, [STARTED_BY_ENV]: 'hook-revive' },
         detached: true,
         stdio: ['ignore', outFd, outFd],
       })

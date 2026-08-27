@@ -669,7 +669,9 @@ export async function runDiagnosticsCli(argv: string[]): Promise<void> {
   }
 
   if (globals.startServer || globals.dashboard) {
-    await ensureServer()
+    // Name the FLAG, not just the file: these are globals any diagnostics command can carry, which
+    // is the path that revived a braked server unnoticed for 1h53m (TRDD-8VGQK9L9).
+    await ensureServer(globals.dashboard ? 'diagnostics --dashboard' : 'diagnostics --start-server')
     if (globals.dashboard) openDashboard()
     if (rest.length === 0) return // ops-only invocation
   }

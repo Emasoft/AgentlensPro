@@ -3,7 +3,7 @@ trdd-id: 8VGQK9L9
 title: A server was running for 1h53m while the NO_REVIVE brake file was in place
 column: dev
 created: 2026-08-26T20:13:05+0200
-updated: 2026-08-27T14:59:32+0200
+updated: 2026-08-27T15:43:05+0200
 current-owner: main
 task-type: bugfix
 severity: MEDIUM
@@ -14,19 +14,20 @@ relevant-rules: []
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-08-27
 
-**Cause found AND fixed. One acceptance box remains, and it is additive, not a fix.**
+**All four acceptance boxes DONE. Ready for `testing` → `ai_review`.**
 
 | component | state |
 |---|---|
-| `killSwitch.ts::reviveBraked()` | NEW — the single definition of "is the brake armed" |
-| `serverControl.ts::ensureServer()` | gated on the brake at `:139-146`, after the DISABLED gate |
-| supervisor loop | unchanged behaviour; its local predicate deleted, now imports the shared one |
-| `src/test/killSwitch.test.ts` | +3 tests, 14/14 pass |
-| box 3 — start provenance in the server log | **NOT DONE** |
+| `killSwitch.ts::reviveBraked()` | the single definition of "is the brake armed" |
+| `killSwitch.ts::STARTED_BY_ENV` | the provenance stamp every spawner sets |
+| `serverControl.ts::ensureServer(startedBy)` | brake gate AFTER the probe (refuses the spawn, not a live server); stamps the child |
+| six spawn paths | all stamped; loop-watchdog overwrites rather than inherits |
+| `standalone/server.ts` boot line | logs starter + brake state it observed itself; WARNs if braked |
+| `src/test/killSwitch.test.ts` | 15/15, held decoy port, mutation-verified discriminator |
+| bundles | `node esbuild.js` clean; live CLI verified against the real server with brake armed |
 
-**NEXT ACTION:** make the server record its start provenance — who/what started it and whether a
-brake was present — so "who started this?" is answerable from `server.log` instead of by
-inference. That question cost this investigation a day and three refuted hypotheses.
+**NEXT ACTION:** move to `testing`; a full `pnpm run test:unit` has NOT been run this session
+(only the two affected suites) — run it before `ai_review`.
 
 **Gotchas that are load-bearing:**
 - The pause-vs-kill split is REAL and must survive: the supervisor must check NO_REVIVE **only**,
@@ -133,8 +134,19 @@ between a store swap and a live writer.
       The supervisor's local copy was deleted in favour of the shared one; it had been the only
       definition, which is how `ensureServer()` came to have none.
       The brake message needs no weakening now — `ensureServer()` was the half that made it false.
-- [ ] The server records its start provenance (who/what started it, whether a brake was present)
-      so this question is answerable from the log next time instead of by inference.
+- [x] The server records its start provenance. **DONE 2026-08-27.** One line at boot, right after
+      the pidfile claim (`standalone/server.ts`):
+      `[AgentlensPro] boot provenance: started-by=<path> ppid=<n> pid=<n> brake=<absent|PRESENT|unreadable> data=<dir>`
+      plus a WARNING line when the brake was present. The starter's identity arrives via
+      `AGENTLENS_STARTED_BY` (`killSwitch.ts::STARTED_BY_ENV`); the brake is read by the SERVER at
+      its own boot, never trusted from the spawner. Absent stamp ⇒ reported as unknown, never guessed.
+      **Six spawn paths stamped** — the card's "enumerate every start path" box found four; a
+      `grep -rn "spawn("` sweep found two more: `ensureServer` (threaded `startedBy` from its four
+      callers: `server start`, `server restart`, `dashboard`, `diagnostics --start-server|--dashboard`),
+      the supervisor, the hook reviver, `setup`, and the loop-watchdog respawn — which had to
+      OVERWRITE rather than inherit, or a respawned server would claim its predecessor's starter.
+      Verified live in an isolated data dir, three boots: stamped+absent, stamped+PRESENT (WARNING
+      emitted), unstamped (reports unknown). 15/15 killSwitch, 3/3 loopWatchdog.
 - [x] A test that sets the brake and asserts no server comes up. **DONE 2026-08-27** — three tests
       in `src/test/killSwitch.test.ts`: the brake reads armed without a restart; `ensureServer`
       rejects with `/revive brake/`; and brake-and-switch stay DISTINCT (braked but NOT disabled,

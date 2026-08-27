@@ -9,7 +9,7 @@ import * as os from 'os'
 import * as path from 'path'
 import { apiRequest, dataDir, dashboardUrl, fmtGb, fmtMb, init, mcpEndpoint, sleep, CONNECT_TIMEOUT_MS } from './cliCore'
 import { dataDirSource, dataPath } from '../dataDir'
-import { agentlensDisabled, killSwitchPath, noRevivePath, reviveBraked } from './killSwitch'
+import { agentlensDisabled, killSwitchPath, noRevivePath, reviveBraked, STARTED_BY_ENV } from './killSwitch'
 import { UsageError } from './cliErrors'
 import { assertKnownFlags } from './argHelpers'
 import { parsePidLock } from '../serverRuntime'
@@ -114,7 +114,12 @@ export const DEFAULT_MAX_OLD_SPACE_MB = 6144
  *  install came straight back the next time any of the ~16 running sessions started work (observed
  *  2026-07-14: the server was stopped at 15:07 and was found alive again at 17:43). The hook path was
  *  already gated; the CLI path was not. A kill-switch with a bypass is not a kill-switch. */
-export async function ensureServer(): Promise<void> {
+/** `startedBy` names the PATH that reached this function, for the server's boot-provenance line
+ *  (TRDD-8VGQK9L9). This function cannot know it by itself — `server start`, `restart`, `dashboard`
+ *  and the diagnostics `--start-server`/`--dashboard` globals all land here — so the caller says.
+ *  The default is a truthful "unknown", never a guess: an unlabelled path in the log is a lead, a
+ *  wrong label is a dead end. */
+export async function ensureServer(startedBy = 'ensureServer:unknown'): Promise<void> {
   // FIRST — before we even probe the network. A disabled AgentlensPro must cost nothing: no socket,
   // no retry timeout, and above all no spawn.
   if (agentlensDisabled()) {
@@ -176,10 +181,15 @@ export async function ensureServer(): Promise<void> {
   // The readiness probe below is engine-agnostic on purpose: alcore serves the same MCP, UI and
   // /api/server-stats surfaces, so `init()` and `findServerPid()` work unchanged against either.
   // No --max-old-space-size for alcore — that is a V8 heap cap and means nothing to a Rust process.
+  // The child inherits our env PLUS the provenance stamp; the server logs it at boot next to the
+  // brake state it observes, so "who started this server, and was the brake set?" is answered by
+  // one grep of server.log instead of a day of inference (TRDD-8VGQK9L9).
+  const env = { ...process.env, [STARTED_BY_ENV]: startedBy }
   const child = alcore
-    ? spawn(alcore, alcoreServeArgs(), { cwd: dataDir(), detached: true, stdio: ['ignore', outFd, outFd] })
+    ? spawn(alcore, alcoreServeArgs(), { cwd: dataDir(), env, detached: true, stdio: ['ignore', outFd, outFd] })
     : spawn(process.execPath, [`--max-old-space-size=${DEFAULT_MAX_OLD_SPACE_MB}`, serverJs], {
       cwd: path.dirname(path.dirname(serverJs)),
+      env,
       detached: true,
       stdio: ['ignore', outFd, outFd],
     })
@@ -669,7 +679,7 @@ export function runSupervise(): void {
     // (logs flow to the launchd/terminal sink); stderr is teed so we keep its tail for the
     // crash record.
     child = spawn(process.execPath, [`--max-old-space-size=${maxOldSpace}`, serverJs],
-      { cwd: path.dirname(path.dirname(serverJs)), env: process.env, stdio: ['ignore', 'inherit', 'pipe'] })
+      { cwd: path.dirname(path.dirname(serverJs)), env: { ...process.env, [STARTED_BY_ENV]: 'supervisor' }, stdio: ['ignore', 'inherit', 'pipe'] })
 
     let stderrTail = Buffer.alloc(0)
     child.stderr?.on('data', (chunk: Buffer) => {
@@ -779,7 +789,7 @@ export async function serverCommand(argv: string[]): Promise<void> {
       // is running". Clearing first meant a FAILED start left no server AND no brake — the one
       // state where anything may freely spawn a collector — and a stray failed `start` in another
       // shell would silently disarm a brake an operator had armed for a store rewrite.
-      await ensureServer()
+      await ensureServer('server start')
       clearReviveBrake()
       return
     case 'stop':
@@ -813,7 +823,7 @@ export async function serverCommand(argv: string[]): Promise<void> {
       return
     case 'restart':
       await stopServer()
-      await ensureServer()
+      await ensureServer('server restart')
       clearReviveBrake()
       return
     case 'status':

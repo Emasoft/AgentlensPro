@@ -229,7 +229,7 @@ export async function cliMain(argv: string[], startServer: () => Promise<unknown
       await daemonCommand(argv.slice(1))
       return 0
     case 'dashboard':
-      await ensureServer()
+      await ensureServer('dashboard')
       openDashboard()
       return 0
     case 'cache-expired':

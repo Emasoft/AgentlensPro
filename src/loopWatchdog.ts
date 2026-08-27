@@ -77,8 +77,13 @@ function workerSource(): string {
         'try { process.kill(' + pid + ', "SIGKILL") } catch {}\\n' +
         'setTimeout(() => {\\n' +
         '  const { spawn } = require("child_process")\\n' +
+        // AGENTLENS_STARTED_BY is OVERWRITTEN, not inherited (TRDD-8VGQK9L9): this helper carries the
+        // dying server's env, so inheriting would make the respawn claim its predecessor's starter —
+        // a "server start"ed process would be reborn still saying "server start". The literal here
+        // must match killSwitch.STARTED_BY_ENV; this worker source is one big template literal, so it
+        // can neither import the constant nor contain a backtick (one did, and closed the literal).
         '  const c = spawn(' + JSON.stringify(execPath) + ', ' + JSON.stringify(argv) + ',\\n' +
-        '    { detached: true, stdio: "ignore", env: process.env, cwd: ' + JSON.stringify(cwd) + ' })\\n' +
+        '    { detached: true, stdio: "ignore", env: { ...process.env, AGENTLENS_STARTED_BY: "loop-watchdog-respawn" }, cwd: ' + JSON.stringify(cwd) + ' })\\n' +
         '  c.unref()\\n' +
         '}, 2000)\\n' +
         'setTimeout(() => process.exit(0), 4000)'
