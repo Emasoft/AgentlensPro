@@ -3,10 +3,11 @@ trdd-id: BSDR4TRM
 title: server stop from an isolated DATA_DIR stopped the LIVE server
 column: ai_review
 created: 2026-08-27T16:07:07+0200
-updated: 2026-08-27T18:43:00+0200
-implementation-commits: [2853862, a38c959]
+updated: 2026-08-27T19:20:35+0200
+implementation-commits: [2853862, a38c959, ba345e9]
 last-test-result: pass
-last-test-at: 2026-08-27T18:41:00+0200
+last-test-at: 2026-08-27T19:18:00+0200
+eht: [99HUNXJS]
 current-owner: main
 task-type: bugfix
 severity: HIGH
@@ -65,7 +66,24 @@ cut of the IMPORTANT-2 guard crashed `server status` against a server that omits
 breaking the very fallback known-limit 1 cites. `ServerStats.dataDir` is now `?: string`, because
 declaring it required made tsc bless the throwing call.
 
-**NEXT ACTION:** ai_review round 2 on `a38c959`.
+**ROUND 2: PASS with findings** (`reports/code-review/20260827_185610+0200-trdd-BSDR4TRM-ai-review-round2.md`).
+All 8 round-1 findings verified fixed or explicitly accepted; both required mutations KILLED. Four
+new findings, addressed in `ba345e9`; clean full suite **2494 passing / 8 pending / exit 0**.
+
+| finding | disposition |
+|---|---|
+| NEW-1 — the foreign line asserted "Nothing serves this data dir." on PORT evidence, which `findServerPid()` could contradict in the same process | states only the measured half, then asks the resolver: names the lock owner, or says nothing holds the lock |
+| NEW-2 — the three-state verdict and the stop-confirmation had ZERO tests (reverting either left the suite green) | extracted `statsOwnership()`; 3 asserts; mutation `unknown→ours` KILLED |
+| NEW-3 — a foreign server's 8 stat lines printed unlabelled under our data dir | non-`ours` stops after the headline + lock owner + `data:` |
+| NEW-4 — server (`parseInt`) / setup (`Number`) / CLI (`envPort`) parse ports by three rules | **NOT fixed here** → [[TRDD-99HUNXJS]]. It changes server+setup behaviour, and `alcoreServeArgs`'s own comment already says it belongs in its own diff; refuse-vs-fallback must be decided first |
+
+A 1-failure full run preceded the clean one: a 10 s mocha timeout in
+`cacheBreakTimeline` under concurrent load (the reviewer's own suites). That file is 67/67 in 55 s
+alone. The first isolation attempt was itself invalid — `--no-config` drops `.mocharc.cjs`'s
+`timeout: 10000` for mocha's 2 s default, which manufactured a second "failure"; pass
+`--timeout 10000` when running one file.
+
+**NEXT ACTION:** ai_review round 3 on `ba345e9`.
 
 **Known limits, accepted:** (1) a server predating both the pidfile and the `dataDir` stats field
 is invisible to the CLI (`stop` prints "already stopped") — both landed in `82d3776` (2026-07-10,
