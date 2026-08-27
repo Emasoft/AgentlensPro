@@ -1,9 +1,9 @@
 ---
 trdd-id: BSDR4TRM
 title: server stop from an isolated DATA_DIR stopped the LIVE server
-column: todo
+column: dev
 created: 2026-08-27T16:07:07+0200
-updated: 2026-08-27T16:08:50+0200
+updated: 2026-08-27T17:58:24+0200
 current-owner: main
 task-type: bugfix
 severity: HIGH
@@ -12,6 +12,28 @@ labels: [server, lifecycle, isolation]
 relevant-rules: []
 created-by: TRDD-8VGQK9L9 ai_review live verification
 ---
+
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-08-27
+
+**Reproduced first-hand at 17:57 on `113d24a` and the CAUSE is now VERIFIED — it is not what the
+Observation below says.** Scratch env exactly as the recipe (`AGENTLENS_DATA_DIR=DATA_DIR=HOME=
+<scratch>`, ports 39001–3, `AGENTLENS_MCP_URL=:39002`, brake armed): `server start` spawned child
+61378, which bound :39002 and logged `started-by=server start brake=PRESENT data=<scratch>`, and the
+brake was cleared — yet the CLI printed `pid 92105 — an already-running server won the
+single-instance race`, and `server status` in the same env printed the live server. Live pidfile
+unchanged before/after; the child was ended with a direct `kill -TERM`. `stop` was NOT run.
+
+**Mechanism (`file:line`):** `findServerPid()` (`src/cli/serverControl.ts:378`) asks
+`/api/server-stats` FIRST, and `apiRequest` resolves that REST route through `uiBaseUrl()` =
+`AGENTLENS_UI_URL || http://localhost:3000` (`src/cli/cliCore.ts:30`). The isolation recipe sets the
+server-side `UI_PORT` but nothing sets the client-side `AGENTLENS_UI_URL`, so the first lookup hits
+the LIVE server on :3000, which reports its own `process.pid`, and the data-dir-keyed pidfile is
+never consulted. Not "a data-dir-blind port lookup" — an env split between what the server binds
+(`UI_PORT`) and what the CLI dials (`AGENTLENS_UI_URL`). `stopServer()` (`:406`) inherits it.
+
+**NEXT ACTION:** implement per Acceptance — pidfile of `dataDir()` FIRST in `findServerPid()`; the
+REST/lsof fallbacks may only confirm a pid that the lock names (or run when no lock exists); `stop`
+refuses a pid whose lock/data dir is foreign; add the two-data-dir test; re-run the recipe.
 
 ## Observation (measured 2026-08-27, during TRDD-8VGQK9L9 round-2 verification)
 

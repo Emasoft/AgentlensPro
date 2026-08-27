@@ -3,7 +3,7 @@ trdd-id: 6SPXOV0P
 title: 307 files remain parked with a ts-row mismatch after the TRDD-8TM7I49X repair
 column: todo
 created: 2026-08-26T20:13:05+0200
-updated: 2026-08-26T21:05:00+0200
+updated: 2026-08-27T17:58:24+0200
 current-owner: main
 task-type: bugfix
 severity: MEDIUM
@@ -11,6 +11,28 @@ priority: 3
 labels: [bodies, ingest, silent-failure, capacity]
 relevant-rules: []
 ---
+
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-08-27
+
+**DESIGN DECISION: option A — capture time stops being anchored to the file's mtime.** Decided
+2026-08-27 by main under USER delegation ("decide yourself … on verified facts"). Option B (make
+every restore path preserve mtime) is not available: the files are written by Claude Code
+(`~/.claude/settings.json` env `OTEL_LOG_RAW_API_BODIES=file:/Volumes/AgentLensSpool/otel-bodies`,
+re-verified 17:5x), and no restore path in this repository produces them — there is nothing on our
+side to make preserve anything. Still 307 parked at 17:5x (`server status`), flat since 08-26.
+
+**Shape of A (smallest that closes the loop):** the ingest-time row is authoritative once set.
+`pass.rs:351` passes `ts_ms: Some(b.mtime_ms)` to verify; `lib.rs:589` fails a body whose row ts
+differs from that by >2 s; `pass.rs:386` then parks it when `b.durable`. For a durable body the
+bytes are proven — the only thing the store exists to guarantee — and a later mtime is a re-emit,
+not a corruption. So: a ts-only disagreement on a durable body is BENIGN — reclaim it, do not park
+(count it, so the pass can report "N re-emitted bodies reclaimed"). Non-durable bodies keep the
+current path. This also retires the "repair rows from mtimes" remedy, which overwrote the true
+capture time with a re-emit's mtime.
+
+**NEXT ACTION:** after TRDD-BSDR4TRM (HIGH) — implement the benign branch in `pass.rs`, the
+`unparked 0` wording (`storeAdmin.ts:165-173`), and the mismatch→repair→0 test; then verify the
+307 drain on the live server.
 
 ## CORRECTION — this card's first version blamed the wrong cause
 
