@@ -107,6 +107,57 @@ fn stranded_names_relocate_off_the_spool_with_mtime_preserved() {
     assert!(d.as_millis() < 1500, "the mtime IS the capture record and must survive");
 }
 
+/// The row's stored capture ts for a src_name — queried the same way the verify gate does
+/// (`all_of(store, "body")`, the durable+staging union), so the assertion checks the same value
+/// the pass itself acts on.
+fn row_ts_ms(store: &agentlens_store::Store, src_name: &str) -> i64 {
+    let sql = format!(
+        "SELECT CAST(epoch_ms(ts) AS BIGINT) FROM {} WHERE src_name = '{src_name}'",
+        agentlens_store::all_of(store, "body")
+    );
+    store.con.query_row(&sql, [], |r| r.get::<_, i64>(0)).expect("row must exist")
+}
+
+#[test]
+fn ts_only_mismatch_on_a_reemitted_file_reclaims_not_parks_and_leaves_the_row_alone() {
+    // TRDD-6SPXOV0P option A: Claude Code re-emits the same name+bytes under a fresh mtime.
+    // That must RECLAIM (delete + count), never park — parking here is the livelock the card
+    // describes (re-ingest can never repair a stranded row, so the file sits forever).
+    let (bodies, store_dir) = fixture("reemit");
+    let raw = body("reemit");
+    write_body(&bodies, "reemit.request.json", &raw, 60_000);
+
+    let mut store = agentlens_store::open_store(&store_dir, "1GB", 4).expect("open");
+    let opts = PassOptions { bodies_dir: bodies.clone(), ..Default::default() };
+    let (mut skip, mut stranded, mut fsynced) = (HashSet::new(), HashSet::new(), HashSet::new());
+
+    // Pass 1: ingest, verify clean, delete. Establishes the row's true capture ts.
+    let r1 = ingest_pass(&mut store, &opts, &mut skip, &mut stranded, &mut fsynced);
+    assert_eq!(r1.ingested, 1);
+    assert_eq!(r1.deleted, 1, "first pass: {:?}", r1.failed);
+    let original_ts = row_ts_ms(&store, "reemit.request.json");
+
+    // Re-emit: same name, same bytes, mtime +24h (well past TS_TOLERANCE_MS).
+    let p = bodies.join("reemit.request.json");
+    fs::write(&p, &raw).expect("re-emit write");
+    let future = std::time::SystemTime::now() + std::time::Duration::from_secs(24 * 3600);
+    let f = fs::OpenOptions::new().write(true).open(&p).expect("open");
+    f.set_times(fs::FileTimes::new().set_modified(future)).expect("set future mtime");
+
+    // Pass 2: the re-emit hits the fast (skip_names) path and the ts-only mismatch.
+    let r2 = ingest_pass(&mut store, &opts, &mut skip, &mut stranded, &mut fsynced);
+    assert!(!p.exists(), "the re-emitted file must be reclaimed, not left on the spool");
+    assert!(stranded.is_empty(), "must never park a ts-only mismatch on a durable body");
+    assert!(r2.stranded_ts.is_empty());
+    assert_eq!(r2.reclaimed_reemitted, 1, "counted as a reclaim, not a failure: {:?}", r2.failed);
+    assert_eq!(r2.deleted, 1);
+    assert_eq!(row_ts_ms(&store, "reemit.request.json"), original_ts, "the row is the truer value — never overwritten by the impostor mtime");
+
+    // Pass 3: nothing left on the spool — a true no-op.
+    let r3 = ingest_pass(&mut store, &opts, &mut skip, &mut stranded, &mut fsynced);
+    assert_eq!(r3.ingested + r3.deleted + r3.reclaimed_reemitted, 0, "an empty dir is a no-op pass");
+}
+
 #[test]
 fn pass_lock_is_exclusive_and_dies_with_its_holder() {
     // One pass per store, machine-wide: a second acquire on the SAME store must refuse while the

@@ -114,6 +114,13 @@ export interface IngestPassResult {
    *  gigabyte and verifies none of it frees nothing, and reporting the read as "freed" would show
    *  a healthy drain while the disk never moves. */
   bytesFreed: number
+  /** Of `deleted`, how many were RE-EMITTED bodies: bytes proven bit-exact, but the file's mtime has
+   *  moved away from the row's capture ts (TRDD-6SPXOV0P). OPTIONAL because only the Rust engine
+   *  emits it — this interface also types `alstore pass`'s JSON (see src/rustStorePass.ts), and the
+   *  TS pass is not gaining the behaviour: it is being deleted with the rest of the TS core
+   *  (TRDD-DMWOBWFH, USER decision 2026-08-27). An older sidecar omits it too, so read it as
+   *  `?? 0` — `undefined` in a running total silently becomes NaN. */
+  reclaimedReemitted?: number
   /** Files that could NOT be verified. They are NOT deleted, and they are named. */
   failed: string[]
   /** Names newly parked this pass because the store's ts row is wrong while the bytes are proven —

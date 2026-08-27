@@ -730,7 +730,7 @@ async function archiveOtelBodies(): Promise<void> {
     const alstore = alstoreBin()
     const skip = alstore ? new Set<string>() : (ingestSkipNames ??= await seedIngestSkipNames(bodyStore))
 
-    let ingested = 0, deleted = 0, reclaimedDurable = 0, bytesIn = 0, bytesFreed = 0, bytesStored = 0, liveBytesTotal = 0, throttled = false
+    let ingested = 0, deleted = 0, reclaimedDurable = 0, reclaimedReemitted = 0, bytesIn = 0, bytesFreed = 0, bytesStored = 0, liveBytesTotal = 0, throttled = false
     const failed: string[] = []
     for (const target of targets) {
       // The size cap is the emergency valve: over it, ingest EVERYTHING (age 0) rather than only what
@@ -791,6 +791,10 @@ async function archiveOtelBodies(): Promise<void> {
         continue
       }
       ingested += r.ingested; deleted += r.deleted; reclaimedDurable += r.reclaimedDurable; bytesFreed += r.bytesFreed
+      // `?? 0`: an older alstore sidecar does not emit this field, and `undefined` would turn the
+      // whole running total into NaN — a silent corruption of the one number that shows the parked
+      // set draining (TRDD-6SPXOV0P).
+      reclaimedReemitted += r.reclaimedReemitted ?? 0
       bytesIn += r.bytesIn; bytesStored += r.bytesStored
       throttled ||= r.throttled
       for (const f of r.failed) failed.push(f)
@@ -851,7 +855,10 @@ async function archiveOtelBodies(): Promise<void> {
     // files ingests NOTHING, so gating on `ingested` alone made the whole reclaim path silent.
     if (ingested > 0 || deleted > 0 || purged.removed.length > 0) {
       console.log(`[AgentLens] bodies → store: ingested ${ingested}, reclaimed ${deleted} file(s) ` +
-        `(${reclaimedDurable} already durable) ` +
+        `(${reclaimedDurable} already durable` +
+        // Surfaced, not just counted: these are the bodies that used to park forever, so an
+        // operator watching the parked set shrink needs to see WHY it is shrinking.
+        `${reclaimedReemitted > 0 ? `, ${reclaimedReemitted} re-emitted` : ''}) ` +
         `(${(bytesIn / 1024 ** 3).toFixed(2)}GB read → ${(bytesStored / 1048576).toFixed(1)}MB new spans)` +
         `${SPOOL_MODE ? ' [spool]' : ''}${throttled ? ' [throttled — more next pass]' : ''}` +
         `${purged.removed.length > 0 ? `; purged legacy volume(s) ${purged.removed.join(', ')} (${(purged.freedBytes / 1024 ** 3).toFixed(2)}GB, verified in store first)` : ''}`)

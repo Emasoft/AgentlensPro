@@ -2550,6 +2550,11 @@ silently absorbed, because a card that quietly drops its own acceptance criterio
       class 3 is not a distinct class — measured at 0.004% of one core at the machine's real peak,
       it restates classes 1 and 2's bulk JSONL work; class 4 was a config fix, not a port.
 - [ ] TypeScript remaining in the repo serves only the UI (and, temporarily, the CLI shell).
+      **SCOPE DECIDED BY THE USER 2026-08-27: DELETE the TypeScript core — Rust only.** TypeScript
+      remains for the **web UI alone** (`media/src/**`). The server core, the store/ingest path, the
+      log readers and the summarizers all move to Rust and the TS originals are removed, not frozen
+      and not kept as a fallback. Prerequisite: TRDD-EAK9R8IY must ship the per-platform binaries
+      first, or published installs would have no engine at all.
 
 ## Approval log
 
@@ -2578,3 +2583,12 @@ silently absorbed, because a card that quietly drops its own acceptance criterio
   per-platform on npm) is the concrete prerequisite if the answer is "retire it".
 
 ## Notes and lessons learned
+
+- 2026-08-27T20:14:24+0200 — **USER DECISION on box 3** (the card's only open box, waiting since
+  2026-08-22): *delete the TypeScript core; leave TypeScript only for the web UI part.* Recorded
+  verbatim because the card had classified this as "a SCOPE DECISION for the USER, not a task" and
+  it was the single thing blocking the card. Consequence, effective immediately: no further work
+  goes into the TS server core, the TS ingest pass, or their tests — a defect found in both engines
+  is fixed in Rust ONLY. The first application of that rule was the same day: TRDD-6SPXOV0P's fix
+  landed in `pass.rs`, and the parallel TS change in `src/store/ingestPass.ts` was REVERTED rather
+  than maintained.

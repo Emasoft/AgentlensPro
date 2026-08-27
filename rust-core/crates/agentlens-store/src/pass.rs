@@ -139,6 +139,11 @@ pub struct PassResult {
     pub bytes_in: u64,
     pub bytes_stored: u64,
     pub reclaimed_durable: u64,
+    /// TRDD-6SPXOV0P option A: a durable body whose ONLY verify failure was `stored ts !=
+    /// capture time` — a re-emit of the same bytes under a fresh mtime, not a corruption (see
+    /// the reclaim comment below). Counted separately from `reclaimed_durable` so a pass report
+    /// can say "N re-emitted bodies reclaimed" instead of collapsing it into the ordinary path.
+    pub reclaimed_reemitted: u64,
     pub bytes_freed: u64,
     pub failed: Vec<String>,
     pub stranded_ts: Vec<String>,
@@ -381,12 +386,32 @@ pub fn ingest_pass(
                                         }
                                         Some(v) => {
                                             let reason = v.reason.clone().unwrap_or_else(|| b.name.clone());
-                                            // The ts-only livelock: bytes proven, row ts wrong —
-                                            // park it; re-ingest can never repair that row.
+                                            // TRDD-6SPXOV0P option A: a ts-only failure on a durable
+                                            // body is BENIGN, not a park case. `verify_bodies_in_store_cached`
+                                            // runs the sha256-reconstruction check and the row-existence
+                                            // check strictly BEFORE the ts check (each with its own
+                                            // `continue` on failure — lib.rs), so reaching "stored ts !=
+                                            // capture time" mathematically implies the store already
+                                            // reproduces this file bit-exact. The row is the truer value
+                                            // (it holds the ORIGINAL capture time); the file's mtime is the
+                                            // impostor — Claude Code re-emitted the same name+bytes at a
+                                            // new mtime. So: reclaim like an ok verify, leave the row
+                                            // alone, and do NOT park (parking here is what looped: the
+                                            // "repair rows from mtimes" remedy would overwrite the true
+                                            // capture time with the re-emit's mtime, then next pass parks
+                                            // it again forever).
                                             if b.durable && reason.contains("stored ts ") && reason.contains("!= capture time") {
-                                                stranded_names.insert(b.name.clone());
-                                                res.stranded_ts.push(b.name.clone());
-                                                res.failed.push(reason);
+                                                if opts.delete_after {
+                                                    match fs::remove_file(&b.p) {
+                                                        Ok(()) => {
+                                                            res.deleted += 1;
+                                                            res.bytes_freed += b.size;
+                                                            res.reclaimed_reemitted += 1;
+                                                        }
+                                                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                                                        Err(e) => res.failed.push(format!("{}: {e}", b.name)),
+                                                    }
+                                                }
                                                 continue;
                                             }
                                             res.failed.push(reason);
