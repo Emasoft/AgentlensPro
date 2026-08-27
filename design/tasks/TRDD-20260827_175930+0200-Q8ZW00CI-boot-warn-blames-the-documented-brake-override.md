@@ -1,9 +1,11 @@
 ---
 trdd-id: Q8ZW00CI
 title: The boot WARN says the starter did not honour the brake even for the documented server start override
-column: backburner
+column: testing
 created: 2026-08-27T17:59:30+0200
-updated: 2026-08-27T17:59:30+0200
+updated: 2026-08-27T19:42:16+0200
+last-test-result: pass
+last-test-at: 2026-08-27T19:42:00+0200
 current-owner: main
 task-type: bugfix
 severity: LOW
@@ -39,7 +41,13 @@ the invariant "brake cleared ⟺ a server is running" is untouched.
 
 ## Acceptance
 
-- [ ] A scratch start with the brake armed logs the INFO line, not the WARN.
-- [ ] A hook/supervisor/setup/watchdog spawn with the brake armed still logs the WARN (the
-      `killSwitch.test.ts` gate tests already prove those paths refuse; this only covers wording
-      when one gets through).
+- [x] A scratch start with the brake armed logs the INFO line, not the WARN.
+      Measured: `[AgentlensPro] brake PRESENT — being lifted by ``server start``.` (same for
+      `server restart`), observed in an isolated scratch dir on ports 39011-3 with `NO_REVIVE`
+      armed, launching `node standalone/server.js` directly — never the live server.
+- [x] A hook/supervisor/setup/watchdog spawn with the brake armed still logs the WARN — the second
+      arm was observed in the same scratch run with `AGENTLENS_STARTED_BY=hook-revive`, text
+      unchanged byte-for-byte.
+
+Gates: `check-types` 0, `eslint` 0, `node esbuild.js` 0 (checked, not assumed — a failed esbuild
+silently leaves the stale bundle).

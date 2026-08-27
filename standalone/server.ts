@@ -296,7 +296,15 @@ function releasePidFile(): void {
     }
     console.log(`[AgentlensPro] boot provenance: started-by=${startedBy} ppid=${process.ppid} pid=${process.pid} brake=${brake} data=${DATA_DIR}`)
     if (brake !== 'absent') {
-      console.warn(`[AgentlensPro] WARNING: this server started while the NO_REVIVE brake was ${brake}. The starter above did not honour it. Clear the brake with \`agentlenspro server start\`, or stop this server with \`agentlenspro server stop --stay-down\`.`)
+      // `server start`/`server restart` are the ONE documented override — ensureServer spawns them
+      // with overrideBrake and clears the flag once this server answers — so for those two starters
+      // the brake being PRESENT here is expected, not a violation; WARNing would blame the starter
+      // for the exact contract it honoured and tell the operator to re-run the command already running.
+      if (startedBy === 'server start' || startedBy === 'server restart') {
+        console.log(`[AgentlensPro] brake ${brake} — being lifted by \`${startedBy}\`.`)
+      } else {
+        console.warn(`[AgentlensPro] WARNING: this server started while the NO_REVIVE brake was ${brake}. The starter above did not honour it. Clear the brake with \`agentlenspro server start\`, or stop this server with \`agentlenspro server stop --stay-down\`.`)
+      }
     }
   }
 }

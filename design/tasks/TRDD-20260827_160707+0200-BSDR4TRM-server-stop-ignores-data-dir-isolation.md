@@ -83,7 +83,19 @@ alone. The first isolation attempt was itself invalid — `--no-config` drops `.
 `timeout: 10000` for mocha's 2 s default, which manufactured a second "failure"; pass
 `--timeout 10000` when running one file.
 
-**NEXT ACTION:** ai_review round 3 on `ba345e9`.
+**ROUND 3: PASS** (`reports/code-review/20260827_193309+0200-trdd-BSDR4TRM-ai-review-round3.md`).
+NEW-1 and NEW-3 fixed and verified live on the same recipe; NEW-4's deferral legitimate and the
+tree not worse. NEW-2 was only PARTIAL — two residuals, both now closed:
+
+| residual | fix |
+|---|---|
+| R3-2 — the normalisation assert was a TAUTOLOGY: `path.join` already normalises, so dropping both `path.resolve` calls in `statsOwnership` still passed | the input is now built by CONCATENATION (`mine + '/sub/../'`), which only `path.resolve` collapses. Mutation `reported === mine` → **KILLED** |
+| R3-3 — reverting `stopServer`'s confirmation to `init()` still passed the whole suite | new test: a FOREIGN server answers the port while B is the stop target, so the old port-based confirmation times out where the data-dir-keyed one succeeds. Mutation → **KILLED** |
+
+Both mutations were re-run independently by main before accepting the worker's report; `out/`
+restored byte-identical after each.
+
+**NEXT ACTION:** ai_review round 4 on the residual-closing commit.
 
 **Known limits, accepted:** (1) a server predating both the pidfile and the `dataDir` stats field
 is invisible to the CLI (`stop` prints "already stopped") — both landed in `82d3776` (2026-07-10,

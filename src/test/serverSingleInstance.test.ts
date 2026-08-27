@@ -178,4 +178,43 @@ suite('standalone server — exactly one instance per data directory', function 
       await stop(b)
     }
   })
+
+  test('stopServer() confirms via the DATA-DIR-keyed lock, not via whatever answers the port (TRDD-BSDR4TRM)', async () => {
+    // Same adversarial recipe as the previous test, but this time the port env stays pointed at the
+    // FOREIGN server (A) all the way through stopServer() — never switched to B's own ports. A
+    // confirmation loop that re-probes `init()` (the MCP endpoint reached via UI_PORT/MCP_PORT) would
+    // keep hitting A, which never stops, so the loop would exhaust its 10s budget and throw even
+    // though B (the actual stop target) died on the first SIGTERM. findServerPid() is keyed on the
+    // data dir's own pidfile and is blind to which port env happens to be set, so it must succeed.
+    const mk = (tag: string): string => fs.mkdtempSync(path.join(os.tmpdir(), `agentlens-singleton-${tag}-`))
+    const dataA = mk('stopgap-a'), homeA = mk('stopgap-ahome'), dataB = mk('stopgap-b'), homeB = mk('stopgap-bhome')
+    const portsA = { MCP_PORT: String(await freePort()), UI_PORT: String(await freePort()), OTLP_PORT: String(await freePort()) }
+    const portsB = { MCP_PORT: String(await freePort()), UI_PORT: String(await freePort()), OTLP_PORT: String(await freePort()) }
+    const ENV_KEYS = ['AGENTLENS_DATA_DIR', 'DATA_DIR', 'UI_PORT', 'MCP_PORT', 'AGENTLENS_UI_URL', 'AGENTLENS_MCP_URL'] as const
+    const saved = Object.fromEntries(ENV_KEYS.map(k => [k, process.env[k]]))
+    let a: Started | null = null, b: Started | null = null
+    try {
+      for (const k of ENV_KEYS) delete process.env[k]
+      a = await start({ HOME: homeA, DATA_DIR: dataA, ...portsA })
+      b = await start({ HOME: homeB, DATA_DIR: dataB, ...portsB })
+      assert.strictEqual(a.exited, null, `server A should stay up; it exited ${a.exited}. stderr: ${a.stderr.slice(0, 400)}`)
+      assert.strictEqual(b.exited, null, `server B should stay up; it exited ${b.exited}. stderr: ${b.stderr.slice(0, 400)}`)
+      // The CLI is aimed at data dir B, but the port env still resolves to A — a FOREIGN server keeps
+      // answering the whole time stopServer() confirms the stop.
+      process.env.AGENTLENS_DATA_DIR = dataB
+      process.env.UI_PORT = portsA.UI_PORT
+      process.env.MCP_PORT = portsA.MCP_PORT
+      await stopServer()
+      for (let i = 0; i < 60 && b.exited === null; i++) await new Promise(r => setTimeout(r, 250))
+      assert.notStrictEqual(b.exited, null, 'server B did not exit after stopServer(), even though it targeted data dir B')
+      const aPid = a.proc.pid as number
+      assert.doesNotThrow(() => process.kill(aPid, 0), 'server A was signalled by a stop aimed at data dir B')
+    } finally {
+      for (const k of ENV_KEYS) {
+        if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]
+      }
+      await stop(a)
+      await stop(b)
+    }
+  })
 })

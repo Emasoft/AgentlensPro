@@ -55,7 +55,11 @@ suite('serverControl — statsOwnership: whose data dir answered', () => {
 
   test('the same dir is ours, a different one is foreign', () => {
     assert.strictEqual(statsOwnership(mine, mine), 'ours')
-    assert.strictEqual(statsOwnership(path.join(mine, '..', 'agentlens-owner-mine'), mine), 'ours')
+    // Built by CONCATENATION, never path.join — path.join already normalizes, so a mutant that
+    // drops both path.resolve() calls in statsOwnership and compares raw strings would still pass
+    // a path.join-built input. Only path.resolve collapses a literal `/sub/../` segment, so this
+    // fails the moment the resolve calls are removed.
+    assert.strictEqual(statsOwnership(mine + '/sub/../', mine), 'ours')
     assert.strictEqual(statsOwnership(path.join(os.tmpdir(), 'agentlens-owner-theirs'), mine), 'foreign')
   })
 
