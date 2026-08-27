@@ -12,7 +12,7 @@ labels: [server, lifecycle, safety-mechanism]
 relevant-rules: []
 implementation-commits: [98190f4, 35489dc, 1f1ec52, c92b3d2, 30ad311, 5aef35e, d12f590, 1b77c22, f346f96]
 last-test-result: pass
-last-test-at: 2026-08-27T15:52:36+0200
+last-test-at: 2026-08-27T16:20:49+0200
 ---
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-08-27
