@@ -34,6 +34,7 @@ import { rawBodyCaptureEnabled, effectiveBodiesDir, RAW_BODIES_KEY } from '../ca
 import { sleep } from './cliCore'
 import {
   CLI_BIN, GATE_CMD, GATE_EVENTS, GATE_MATCHER, HOOK_CMD, HOOK_EVENTS, HookMatcher,
+  REVIEW_CMD, REVIEW_EVENTS,
   installHooks, installSkill, isOurHookCommand, rebuildEventMatchers, resolveOnPath,
   sha256File, SKILL_NAMES, findPackageRoot, skillTreeHash, installAgents, AGENT_NAMES,
 } from './hookInstall'
@@ -227,10 +228,10 @@ function settingsHooks(s: Settings): Record<string, HookMatcher[]> {
 /** Would installHooks change anything? Mirrors the installer's change detection without writing. */
 function hooksConverged(s: Settings): boolean {
   const hooks = settingsHooks(s)
-  const events = new Set([...Object.keys(hooks), ...HOOK_EVENTS, ...GATE_EVENTS])
+  const events = new Set([...Object.keys(hooks), ...HOOK_EVENTS, ...GATE_EVENTS, ...REVIEW_EVENTS])
   for (const ev of events) {
     const matchers = Array.isArray(hooks[ev]) ? hooks[ev] : []
-    const r = rebuildEventMatchers(matchers, ev, false, HOOK_CMD, GATE_CMD)
+    const r = rebuildEventMatchers(matchers, ev, false, HOOK_CMD, GATE_CMD, REVIEW_CMD)
     if (JSON.stringify(r.rebuilt) !== JSON.stringify(matchers)) return false
   }
   const env = s.env as Record<string, unknown> | undefined
@@ -251,10 +252,14 @@ function verifyHooksState(s: Settings): string | null {
       .flatMap(m => (m.hooks ?? []).map(h => h.command)).filter(c => c === GATE_CMD)
     if (gates.length !== 1) return `${ev}: expected exactly one '${GATE_CMD}' gate entry, found ${gates.length}`
   }
+  for (const ev of REVIEW_EVENTS) {
+    const reviews = (hooks[ev] ?? []).flatMap(m => (m.hooks ?? []).map(h => h.command)).filter(c => c === REVIEW_CMD)
+    if (reviews.length !== 1) return `${ev}: expected exactly one '${REVIEW_CMD}' entry, found ${reviews.length}`
+  }
   for (const [ev, matchers] of Object.entries(hooks)) {
     for (const m of matchers ?? []) {
       for (const h of m.hooks ?? []) {
-        if (isOurHookCommand(h.command) && h.command !== HOOK_CMD && h.command !== GATE_CMD) {
+        if (isOurHookCommand(h.command) && h.command !== HOOK_CMD && h.command !== GATE_CMD && h.command !== REVIEW_CMD) {
           return `${ev}: stale previous-generation registration survived: ${h.command}`
         }
       }
@@ -531,7 +536,7 @@ const stepHooks: StepDef = {
     const converged = state !== 'absent' && hooksConverged(settings)
     const staleCount = Object.values(settingsHooks(settings)).flat()
       .flatMap(m => m.hooks ?? [])
-      .filter(h => isOurHookCommand(h.command) && h.command !== HOOK_CMD && h.command !== GATE_CMD).length
+      .filter(h => isOurHookCommand(h.command) && h.command !== HOOK_CMD && h.command !== GATE_CMD && h.command !== REVIEW_CMD).length
     const found = state === 'absent'
       ? 'no settings.json'
       : converged ? 'registrations current' : `needs converge (${staleCount} stale/legacy entr${staleCount === 1 ? 'y' : 'ies'})`
@@ -540,7 +545,7 @@ const stepHooks: StepDef = {
       return {
         result: {
           step: this.name, found,
-          action: converged ? 'none' : `would: register '${HOOK_CMD}' + '${GATE_CMD}' via safeConfigEdit`,
+          action: converged ? 'none' : `would: register '${HOOK_CMD}' + '${GATE_CMD}' + '${REVIEW_CMD}' via safeConfigEdit`,
           verify: 'SKIP', detail: 'dry-run',
         },
         acted: false,
@@ -572,6 +577,13 @@ const stepHooks: StepDef = {
       JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Task', tool_input: {} }), false)
     if (gateErr) {
       return { result: { step: this.name, found, action: acted ? 'installed' : 'none', verify: 'FAIL', detail: `'${GATE_CMD}' ${gateErr}` }, acted }
+    }
+    // No transcript_path resolves ⇒ nothing to scan ⇒ allow silently (exit 0, no stdout) — same
+    // contract as hook/gate's synthetic-payload check above.
+    const reviewErr = execRegisteredCommand(ctx, REVIEW_CMD,
+      JSON.stringify({ hook_event_name: 'Stop', session_id: 'setup-verify', transcript_path: '/nonexistent' }), true)
+    if (reviewErr) {
+      return { result: { step: this.name, found, action: acted ? 'installed' : 'none', verify: 'FAIL', detail: `'${REVIEW_CMD}' ${reviewErr}` }, acted }
     }
     return {
       result: {
@@ -1017,7 +1029,7 @@ function printDetection(ctx: Ctx): void {
   else {
     const allHooks = Object.values(settingsHooks(state)).flat().flatMap(m => m.hooks ?? [])
     const ours = allHooks.filter(h => isOurHookCommand(h.command)).length
-    const stale = allHooks.filter(h => isOurHookCommand(h.command) && h.command !== HOOK_CMD && h.command !== GATE_CMD).length
+    const stale = allHooks.filter(h => isOurHookCommand(h.command) && h.command !== HOOK_CMD && h.command !== GATE_CMD && h.command !== REVIEW_CMD).length
     lines.push(`  settings: ${ours} agentlens hook entr${ours === 1 ? 'y' : 'ies'} (${stale} stale generation(s))`)
   }
   lines.push(`  data:     ${ctx.dataDir} — ${fs.existsSync(ctx.dataDir) ? `${storeSpanCount(ctx.dataDir)} stored span(s)` : 'absent'}`)

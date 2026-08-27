@@ -63,11 +63,18 @@ export const HOOK_EVENTS = [
 export const GATE_MATCHER = '^(Task|Agent|Workflow|SendMessage|Read)$'
 export const GATE_EVENTS = ['PreToolUse', 'PostToolUse']
 
+// The adversarial-review gate (ai-review-gate-cli-verb): SYNC, like the burn gate, because an
+// async hook cannot deny. Registered on Stop/SubagentStop ALONGSIDE the async lifecycle
+// forwarder those two already carry (HOOK_EVENTS above) — two independent matcher entries on the
+// same event, exactly like PreToolUse carries the gate matcher beside any foreign tool's hooks.
+export const REVIEW_EVENTS = ['Stop', 'SubagentStop']
+
 /** The ONE published bin (package.json "bin") — what must resolve on PATH. */
 export const CLI_BIN = 'agentlenspro'
 /** v2 registration command strings (shell command strings; args are valid in hook commands). */
 export const HOOK_CMD = 'agentlenspro hook'
 export const GATE_CMD = 'agentlenspro gate'
+export const REVIEW_CMD = 'agentlenspro review-gate'
 // v1 PATH-bin names — recognised as ours for migration/uninstall, never registered anymore.
 export const LEGACY_HOOK_BIN = 'agentlenspro-hook'
 export const LEGACY_GATE_BIN = 'agentlenspro-gate'
@@ -93,7 +100,7 @@ export function isOurHookCommand(command: unknown): boolean {
     || command.includes(LEGACY_GATE_BIN)
     // \b keeps a hypothetical foreign "agentlensprod hookx" from matching; the space
     // between bin and verb is what distinguishes the v2 command-string generation.
-    || /\bagentlenspro\s+(hook|gate)\b/.test(command)
+    || /\bagentlenspro\s+(hook|gate|review-gate)\b/.test(command)
 }
 
 const isSpyglass = (h: HookCommandEntry): boolean =>
@@ -128,8 +135,17 @@ export function gateMatcher(gateCmd: string): HookMatcher {
   return { matcher: GATE_MATCHER, hooks: [{ type: 'command', command: gateCmd, timeout: 5 }] }
 }
 
+/** The adversarial-review gate: SYNC (an async hook cannot deny), no `matcher` field (Stop/
+ *  SubagentStop fire unconditionally, unlike PreToolUse/PostToolUse which are tool-scoped).
+ *  Timeout 10s: unlike the burn gate it makes no network round trip — it reads a local transcript
+ *  tail (capped at 4MB) — so the ceiling only needs to cover local disk I/O, not a possibly-down
+ *  server. */
+export function reviewGateMatcher(reviewCmd: string): HookMatcher {
+  return { hooks: [{ type: 'command', command: reviewCmd, timeout: 10 }] }
+}
+
 export function rebuildEventMatchers(
-  matchers: HookMatcher[], ev: string, uninstall: boolean, cmd: string, gateCmd: string
+  matchers: HookMatcher[], ev: string, uninstall: boolean, cmd: string, gateCmd: string, reviewCmd: string = REVIEW_CMD
 ): RebuildResult {
   const out: RebuildResult = { rebuilt: [], removedOurs: 0, removedSpyglass: 0, installed: false, removedCommands: [] }
   for (const m of matchers) {
@@ -148,13 +164,17 @@ export function rebuildEventMatchers(
     out.rebuilt.push(gateMatcher(gateCmd))
     out.installed = true
   }
+  if (!uninstall && REVIEW_EVENTS.includes(ev)) {
+    out.rebuilt.push(reviewGateMatcher(reviewCmd))
+    out.installed = true
+  }
   return out
 }
 
 // ── The strip, expressed as a FILTER instead of a result (TRDD-T0CT9U4X) ────────────────────────
 // Every generation this project ever registered, as a plain literal. A needle is matched against
 // json.dumps(element) inside the lock, so it must be a literal JSON cannot escape — all of these are.
-const GENERATION_NEEDLES = ['spy-agentlens', LEGACY_HOOK_BIN, LEGACY_GATE_BIN, HOOK_CMD, GATE_CMD, 'spyglass-collect.sh']
+const GENERATION_NEEDLES = ['spy-agentlens', LEGACY_HOOK_BIN, LEGACY_GATE_BIN, HOOK_CMD, GATE_CMD, REVIEW_CMD, 'spyglass-collect.sh']
 
 /** A needle that identifies this command inside the transaction, or null when none can. The known
  *  generation literals come first (one op removes every entry of that generation); an unrecognised
@@ -176,9 +196,9 @@ function removalNeedle(command: string): string | null {
  *  a file: the ops are computed from a pre-lock read and applied to whatever the file holds at
  *  commit time, so the test applies them to a tree carrying an entry they never saw. */
 export function buildEventOps(
-  ev: string, matchers: HookMatcher[], uninstall: boolean, cmd = HOOK_CMD, gateCmd = GATE_CMD
+  ev: string, matchers: HookMatcher[], uninstall: boolean, cmd = HOOK_CMD, gateCmd = GATE_CMD, reviewCmd = REVIEW_CMD
 ): SafeEditOp[] {
-  const r = rebuildEventMatchers(matchers, ev, uninstall, cmd, gateCmd)
+  const r = rebuildEventMatchers(matchers, ev, uninstall, cmd, gateCmd, reviewCmd)
   if (JSON.stringify(r.rebuilt) === JSON.stringify(matchers)) return []
 
   const ops: SafeEditOp[] = []
@@ -208,6 +228,9 @@ export function buildEventOps(
   }
   if (!uninstall && GATE_EVENTS.includes(ev)) {
     ops.push({ op: 'append_unique', path: ['hooks', ev], value: gateMatcher(gateCmd), unique_by_substring: gateCmd })
+  }
+  if (!uninstall && REVIEW_EVENTS.includes(ev)) {
+    ops.push({ op: 'append_unique', path: ['hooks', ev], value: reviewGateMatcher(reviewCmd), unique_by_substring: reviewCmd })
   }
   return ops
 }
@@ -276,10 +299,10 @@ export async function installHooks(uninstall: boolean, opts: InstallHooksOptions
   let removedSpyglass = 0
   let removedOurs = 0
   let added = 0
-  const events = new Set([...Object.keys(hooks), ...(uninstall ? [] : [...HOOK_EVENTS, ...GATE_EVENTS])])
+  const events = new Set([...Object.keys(hooks), ...(uninstall ? [] : [...HOOK_EVENTS, ...GATE_EVENTS, ...REVIEW_EVENTS])])
   for (const ev of events) {
     const matchers = Array.isArray(hooks[ev]) ? hooks[ev] : []
-    const r = rebuildEventMatchers(matchers, ev, uninstall, HOOK_CMD, GATE_CMD)
+    const r = rebuildEventMatchers(matchers, ev, uninstall, HOOK_CMD, GATE_CMD, REVIEW_CMD)
     // Counters reflect only events that actually change — an already-current event (ours
     // present, nothing stripped) must not inflate "installed on N events" to a lie.
     if (JSON.stringify(r.rebuilt) === JSON.stringify(matchers)) continue
@@ -292,7 +315,7 @@ export async function installHooks(uninstall: boolean, opts: InstallHooksOptions
     // another tool appends between that read and the commit would be silently deleted from the
     // user's own settings.json (S3-F5 TOCTOU, TRDD-T0CT9U4X). The one exception is an entry no
     // literal needle can express; buildEventOps says so explicitly rather than stripping nothing.
-    ops.push(...buildEventOps(ev, matchers, uninstall, HOOK_CMD, GATE_CMD))
+    ops.push(...buildEventOps(ev, matchers, uninstall, HOOK_CMD, GATE_CMD, REVIEW_CMD))
   }
   // env.SPYGLASS_DIR only feeds the spyglass hook commands — dead once those are removed.
   const env = settings.env as Record<string, unknown> | undefined
@@ -308,7 +331,7 @@ export async function installHooks(uninstall: boolean, opts: InstallHooksOptions
   if (uninstall) {
     log(`removed ${removedOurs} agentlens hook entr${removedOurs === 1 ? 'y' : 'ies'} from ${settingsFile}`)
   } else {
-    log(`installed agentlens hooks on ${added} event(s) in ${settingsFile} (lifecycle forwarder '${HOOK_CMD}' + burn-gate '${GATE_CMD}' on ${GATE_MATCHER})`)
+    log(`installed agentlens hooks on ${added} event(s) in ${settingsFile} (lifecycle forwarder '${HOOK_CMD}' + burn-gate '${GATE_CMD}' on ${GATE_MATCHER} + review gate '${REVIEW_CMD}' on ${REVIEW_EVENTS.join('/')})`)
     if (removedSpyglass > 0) log(`removed ${removedSpyglass} dead claude-spyglass hook entr${removedSpyglass === 1 ? 'y' : 'ies'} (+ env.SPYGLASS_DIR)`)
     if (removedOurs > 0) log(`migrated ${removedOurs} previous-generation agentlens entr${removedOurs === 1 ? 'y' : 'ies'}`)
   }

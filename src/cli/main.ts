@@ -18,6 +18,7 @@ import { packageVersion } from '../packageVersion'
 import { runTelemetryCli } from '../telemetryConfig'
 import { runDiagnosticsCli, USAGE } from './diagnosticsCli'
 import { runHookCommand } from './hookHandlers'
+import { runReviewGate } from './reviewGate'
 import { runHeartbeatCost } from './heartbeatCostCli'
 import { runConfigCli } from './configCli'
 import { runSpoolCli } from './spoolCli'
@@ -100,7 +101,7 @@ export const HOT_PATH_BUDGET_MS: Readonly<Record<string, number>> = {
 // help lives in the server's schema. Keep in lockstep with the switch — a verb added there but
 // not here still gets safe help (USAGE covers it), just after one wasted server probe.
 export const MANAGEMENT_VERBS: ReadonlySet<string> = new Set([
-  'hook', 'gate', 'statusline', 'statusline-history', 'get_account_status', 'disable', 'enable',
+  'hook', 'gate', 'review-gate', 'statusline', 'statusline-history', 'get_account_status', 'disable', 'enable',
   'telemetry', 'setup', 'server', 'daemon', 'dashboard', 'cache-expired', 'last-compact',
   'budget', 'watch', 'heartbeat-cost', 'config', 'spool', 'env', 'ctxmap', 'ctxvis', 'list',
   'search',
@@ -125,6 +126,7 @@ export const LATENCY_EXEMPT: Readonly<Record<string, string>> = {
   ctxmap: 'decomposes captured request bodies with real token counting — inherently slow, and asked once',
   ctxvis: 'SPAWNS an agent and measures two of its turns; it is the slowest verb we ship, deliberately',
   search: 'an investigation verb a human or agent invokes deliberately; DuckDB streams a possibly-60MB transcript',
+  'review-gate': 'a Stop/SubagentStop hook that never touches the network — it reads a local transcript tail off disk, so the DROP-address hang this table guards against cannot occur here',
   store: 'operator repair verb (repair-parked STAGES and fully re-verifies the whole bodies table) — run with the server stopped, a human watching',
 }
 
@@ -188,6 +190,9 @@ export async function cliMain(argv: string[], startServer: () => Promise<unknown
       return exitNow(await runHookCommand('hook'))
     case 'gate':
       return exitNow(await runHookCommand('gate'))
+    case 'review-gate':
+      // The adversarial-review Stop/SubagentStop gate — local-only, no network round trip.
+      return exitNow(await runReviewGate(argv.slice(1)))
     case 'statusline':
       // The status-line capture wrapper. Sits on the RENDER path (every assistant message plus a
       // refreshInterval timer), so it belongs beside hook/gate in the hot-path band: read stdin,

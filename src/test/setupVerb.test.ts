@@ -6,7 +6,7 @@ import * as path from 'path'
 import { spawn } from 'child_process'
 import { freePort } from './helpers/freePort'
 import { runSetup, runSetupCli, SetupOutcome } from '../cli/setup'
-import { GATE_CMD, GATE_MATCHER, HOOK_CMD, HOOK_EVENTS } from '../cli/hookInstall'
+import { GATE_CMD, GATE_MATCHER, HOOK_CMD, HOOK_EVENTS, REVIEW_CMD } from '../cli/hookInstall'
 import { ownedTelemetryKeys } from '../telemetryConfig'
 
 // ── `agentlenspro setup` — real-fs converge/verify tests (TRDD-7284WCW7) ───────────────────
@@ -258,7 +258,7 @@ suite('setup — repair matrix (broken fixtures, real converge)', () => {
   test('duplicated + stale registrations (v0 spy path, v1 PATH bins, dup gate) converge to exactly one v2 entry each', () => {
     const hooks = (readSettings(f).hooks ?? {}) as Record<string, Array<{ matcher?: string; hooks: Array<{ command: string }> }>>
     const stopCmds = (hooks.Stop ?? []).flatMap(m => m.hooks.map(h => h.command))
-    assert.deepStrictEqual(stopCmds, [HOOK_CMD], 'Stop must carry ONLY the single v2 forwarder')
+    assert.deepStrictEqual(stopCmds, [HOOK_CMD, REVIEW_CMD], 'Stop must carry the v2 forwarder + the review gate, nothing else')
     const gateCmds = (hooks.PreToolUse ?? []).filter(m => m.matcher === GATE_MATCHER).flatMap(m => m.hooks.map(h => h.command))
     assert.deepStrictEqual(gateCmds.filter(c => c === GATE_CMD), [GATE_CMD], 'the duplicated gate entries must collapse to one')
     const foreign = (hooks.Notification ?? []).flatMap(m => m.hooks.map(h => h.command))

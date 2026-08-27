@@ -1,7 +1,7 @@
 import * as assert from 'assert'
 import {
   rebuildEventMatchers, isOurHookCommand, resolveOnPath,
-  GATE_MATCHER, HOOK_CMD, GATE_CMD, CLI_BIN, LEGACY_HOOK_BIN, LEGACY_GATE_BIN,
+  GATE_MATCHER, HOOK_CMD, GATE_CMD, REVIEW_CMD, CLI_BIN, LEGACY_HOOK_BIN, LEGACY_GATE_BIN,
   type HookMatcher,
 } from '../cli/hookInstall'
 
@@ -113,7 +113,8 @@ suite('agentlenspro — v2 command-string hook registration', () => {
     ]
     const rStop = rebuildEventMatchers(legacyStop, 'Stop', false, HOOK_CMD, GATE_CMD)
     assert.strictEqual(rStop.removedOurs, 1, 'legacy absolute-path forwarder must be stripped')
-    assert.deepStrictEqual(rStop.rebuilt.flatMap(m => m.hooks.map(h => h.command)), [HOOK_CMD])
+    // Stop also carries the review gate (REVIEW_EVENTS) alongside the lifecycle forwarder.
+    assert.deepStrictEqual(rStop.rebuilt.flatMap(m => m.hooks.map(h => h.command)), [HOOK_CMD, REVIEW_CMD])
 
     const legacyGate: HookMatcher[] = [
       { matcher: GATE_MATCHER, hooks: [{ type: 'command', command: 'bash /usr/local/lib/node_modules/agentlenspro/scripts/spy-agentlens-gate.sh', timeout: 3 }] },
@@ -131,7 +132,7 @@ suite('agentlenspro — v2 command-string hook registration', () => {
     ]
     const r = rebuildEventMatchers(v1, 'Stop', false, HOOK_CMD, GATE_CMD)
     assert.strictEqual(r.removedOurs, 1, 'v1 PATH-bin forwarder must be stripped')
-    assert.deepStrictEqual(r.rebuilt.flatMap(m => m.hooks.map(h => h.command)), [HOOK_CMD])
+    assert.deepStrictEqual(r.rebuilt.flatMap(m => m.hooks.map(h => h.command)), [HOOK_CMD, REVIEW_CMD])
   })
 
   test('uninstall strips ALL THREE generations — v0 absolute paths, v1 PATH bins, v2 command strings', () => {
