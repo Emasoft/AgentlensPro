@@ -4,6 +4,66 @@ All notable changes to AgentlensPro are documented here.
 
 > **Lineage note:** AgentlensPro continues the history of [AgentLens](https://github.com/RogerReed/agentlens), from which it was forked. Entries below that predate the fork refer to the original AgentLens lineage.
 
+## [2.30.0] - 2026-08-27
+
+### Added
+
+- **`agentlenspro review-gate`** — a new CLI verb implementing the adversarial review gates for
+  both the main agent (`Stop`) and subagents (`SubagentStop`), registered by `--install-hooks`
+  and removed by `--uninstall-hooks`. Previously these gates existed only as loose per-machine
+  scripts the package neither shipped nor installed. The `Stop` half forces an adversarial review
+  fork after a claim-making turn before the agent may stop; the `SubagentStop` half is
+  observe-only until `AGENTLENS_SUBAGENT_REVIEW=on`. `agentlenspro review-gate --directive` prints
+  the directive the gate points at; the whole gate is sync (reads a local transcript tail off
+  disk — no network) and disables with `AGENTLENS_REVIEW_FORK=off`.
+- **`agentlenspro server stop --stay-down`** and a repair/unpark path for permanently-parked
+  bodies (TRDD-8TM7I49X). A launchd-supervised server used to be revived out from under a
+  deliberate stop; `--stay-down` now braces the supervisor's own entry point too, and 1,045
+  bodies that were durably written but permanently stuck get an explicit repair pass. Server
+  status also reports a `PARKED` bodies gauge and a `capture:` line showing the directory the
+  server is actually capturing to (TRDD-0SA5QZTG).
+- **Capture-liveness detection and honest burn-coverage gaps** (TRDD-4FMHW124): the server now
+  tracks whether log capture is actually alive (statusline samples count as liveness signal,
+  TRDD-8ADTIGKT) instead of silently reporting stale coverage as current.
+- **A rejected credential is no longer indistinguishable from a server fault** (TRDD-NOASO2PC) —
+  `get_account_status` and related usage tools now surface an auth-rejected state explicitly.
+- **Pricing: long-context surcharge extended to 5 more models, and the GPT-5.4/5.5 context window
+  corrected to 1,050,000** (TRDD-R4DHDK7L) — the surcharge is now encoded as a whole-request step
+  rather than a per-token multiplier, matching how providers actually bill it.
+- Internal: a from-scratch Rust core (`alcore`) reimplementing the server's ingest, storage, and
+  MCP surface has been under active development this cycle (TRDD-DMWOBWFH, the bulk of this
+  release's commit volume) as an opt-in sidecar behind explicit cutover flags. **It does not ship
+  to users in this release** — the `agentlenspro-<platform>` companion packages are built but not
+  yet published to npm, so every install still runs the TypeScript engine exclusively.
+
+### Fixed
+
+- **A kill-switch / brake bug where stopping the server could leave it un-liftable, or leave the
+  brake silently unhonored on the next boot** (TRDD-8VGQK9L9). `ensureServer()` now honors the
+  `NO_REVIVE` brake, the brake gate refuses the spawn rather than a still-reachable server, and
+  boot logs record who started the server and whether the brake was set.
+- **`server stop` from an isolated `DATA_DIR` could stop the wrong (live) server** (TRDD-BSDR4TRM).
+  The server is now resolved by its own data directory — lock file first, PID cross-checked only
+  on a data-dir match — instead of trusting a bare PID/port lookup that could hit a sibling
+  instance.
+- **The DuckDB memory ceiling no longer OOMs a full-store validate on smaller machines**
+  (TRDD-IXVHM52P) — the default now scales to the machine's available memory, and the knob is
+  named on the OOM error instead of failing silently.
+- **A hook-revived server now logs** — it was being spawned with stdio set to `'ignore'`, so a
+  supervisor-triggered restart left zero trace (TRDD-4FMHW124).
+- **Burst-mode body reclaim is now distinguishable from a genuinely stuck spool** (TRDD-C5L779YI).
+- **`validateStore` was unrunnable, leaving 493 bodies reported as unreadable for a fixable
+  reason** — now fixed and runnable.
+- Supervisor/writer-gate matching bugs that could leave `--stay-down` braking nothing: an
+  `out/`-layout arm matched on an unrelated substring (`checkout/cli`), and the writers gate
+  now also recognizes `out/`-layout supervisors, anchored to this product's own argv
+  (TRDD-8TM7I49X).
+
+### Performance
+
+- **`check_cache_expiry` is memoized and abandons its walk on client disconnect** (TRDD-YST9ZJ90),
+  cutting redundant work on repeated calls.
+
 ## [2.29.0] - 2026-08-18
 
 ### Added

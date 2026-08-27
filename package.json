@@ -2,7 +2,7 @@
   "name": "agentlenspro",
   "displayName": "AgentlensPro — Professional AI Agent Observability",
   "description": "AgentlensPro — professional observability for AI agent sessions: OTEL traces and local log file ingestion, CLI + server + skills. Standalone (npx) and Docker.",
-  "version": "2.29.0",
+  "version": "2.30.0",
   "publisher": "agentlens",
   "license": "MIT",
   "engines": {
@@ -109,9 +109,9 @@
     "sql.js": "^1.14.1"
   },
   "optionalDependencies": {
-    "agentlenspro-darwin-arm64": "2.29.0",
-    "agentlenspro-darwin-x64": "2.29.0",
-    "agentlenspro-linux-x64": "2.29.0",
-    "agentlenspro-linux-arm64": "2.29.0"
+    "agentlenspro-darwin-arm64": "2.30.0",
+    "agentlenspro-darwin-x64": "2.30.0",
+    "agentlenspro-linux-x64": "2.30.0",
+    "agentlenspro-linux-arm64": "2.30.0"
   }
 }
