@@ -232,6 +232,13 @@ workflow — a present auth token silently masks OIDC. Load-bearing facts:
   `standalone/server.ts` is keyed on the data dir and refuses a second claimant whatever its ports
   (atomic `wx`, stale-lock takeover, ownership-checked release). Evidence:
   `reports/window-capacity-investigation/20260726_195540+0200-inferred-vs-actual-capacity.md`.
+  **The CLI side of that recipe is keyed on the data dir too** (TRDD-BSDR4TRM): `findServerPid()`
+  reads `<dataDir>/server.pid` FIRST and accepts a REST-reported pid only when that server reports
+  the same data dir, and the CLI's default URLs follow the same `MCP_PORT`/`UI_PORT` the server
+  binds. Before 2026-08-27 the first lookup dialled `localhost:3000` regardless, so `server stop`
+  from an isolated env SIGTERMed the LIVE collector. Measured: the isolated recipe now starts,
+  reports and stops ONLY its own child with the live pidfile untouched; the two-server test is
+  `src/test/serverSingleInstance.test.ts` (mutation-verified: disabling the lock rung fails it).
 - **Check WHICH agentlenspro you are about to test.** `agentlenspro` may be a real global npm install
   (`/opt/homebrew/lib/node_modules/agentlenspro`, a published version) rather than an `npm link` to
   this repo — in which case `node esbuild.js` + `agentlenspro server restart` does **not** deploy your

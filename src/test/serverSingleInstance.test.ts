@@ -5,6 +5,7 @@ import * as os from 'os'
 import * as path from 'path'
 import { freePort } from './helpers/freePort'
 import { parsePidLock } from '../serverRuntime'
+import { findServerPid, stopServer } from '../cli/serverControl'
 
 // EXACTLY ONE server may own a data directory. Real processes, real ports, real filesystem — no
 // mocks: the thing under test is what a second `node standalone/server.js` actually does.
@@ -124,5 +125,52 @@ suite('standalone server — exactly one instance per data directory', function 
       const holder = parsePidLock(fs.readFileSync(path.join(staleData, 'server.pid'), 'utf-8'))?.pid
       assert.strictEqual(holder, s.proc.pid, 'the stale lock was not taken over')
     } finally { await stop(s) }
+  })
+
+  test('the CLI resolves and stops the server of ITS data dir, never a foreign one (TRDD-BSDR4TRM)', async () => {
+    // Two real servers, two data dirs. The CLI is then run IN-PROCESS with the env shape that
+    // took down the live collector on 2026-08-27: it asks about data dir B while its UI/MCP ports
+    // point at A — the isolation recipe sets the server's UI_PORT/MCP_PORT, and used to set nothing
+    // on the CLI side, so every REST lookup dialled the default (live) server.
+    const mk = (tag: string): string => fs.mkdtempSync(path.join(os.tmpdir(), `agentlens-singleton-${tag}-`))
+    const dataA = mk('cli-a'), homeA = mk('cli-ahome'), dataB = mk('cli-b'), homeB = mk('cli-bhome')
+    const portsA = { MCP_PORT: String(await freePort()), UI_PORT: String(await freePort()), OTLP_PORT: String(await freePort()) }
+    const portsB = { MCP_PORT: String(await freePort()), UI_PORT: String(await freePort()), OTLP_PORT: String(await freePort()) }
+    const a = await start({ HOME: homeA, DATA_DIR: dataA, ...portsA })
+    const b = await start({ HOME: homeB, DATA_DIR: dataB, ...portsB })
+    const ENV_KEYS = ['AGENTLENS_DATA_DIR', 'DATA_DIR', 'UI_PORT', 'MCP_PORT', 'AGENTLENS_UI_URL', 'AGENTLENS_MCP_URL'] as const
+    const saved = Object.fromEntries(ENV_KEYS.map(k => [k, process.env[k]]))
+    try {
+      assert.strictEqual(a.exited, null, `server A should stay up; it exited ${a.exited}. stderr: ${a.stderr.slice(0, 400)}`)
+      assert.strictEqual(b.exited, null, `server B should stay up; it exited ${b.exited}. stderr: ${b.stderr.slice(0, 400)}`)
+      for (const k of ENV_KEYS) delete process.env[k]
+      process.env.AGENTLENS_DATA_DIR = dataB
+      process.env.UI_PORT = portsA.UI_PORT     // adversarial: the REST base reaches A …
+      process.env.MCP_PORT = portsA.MCP_PORT   // … and so does the MCP probe
+      assert.strictEqual(await findServerPid(), b.proc.pid,
+        'findServerPid() must answer from data dir B’s lock, not from whatever server the UI port reaches')
+
+      // Without B's lock the only remaining rung is the REST probe — which reaches A. A serves
+      // data dir A, so the honest answer for data dir B is "nothing", never A's pid.
+      const lockPath = path.join(dataB, 'server.pid')
+      const lock = fs.readFileSync(lockPath, 'utf-8')
+      fs.unlinkSync(lockPath)
+      assert.strictEqual(await findServerPid(), null, 'a foreign server’s pid must never be returned for this data dir')
+      fs.writeFileSync(lockPath, lock)
+
+      // The honest recipe (ports pointed at B too): stop must end B and leave A untouched.
+      process.env.UI_PORT = portsB.UI_PORT
+      process.env.MCP_PORT = portsB.MCP_PORT
+      await stopServer()
+      for (let i = 0; i < 60 && b.exited === null; i++) await new Promise(r => setTimeout(r, 250))
+      assert.notStrictEqual(b.exited, null, 'server B did not exit after stopServer()')
+      assert.doesNotThrow(() => process.kill(a.proc.pid as number, 0), 'server A was signalled by a stop aimed at data dir B')
+    } finally {
+      for (const k of ENV_KEYS) {
+        if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]
+      }
+      await stop(a)
+      await stop(b)
+    }
   })
 })

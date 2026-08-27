@@ -12,7 +12,7 @@ import { dataDirSource, dataPath } from '../dataDir'
 import { agentlensDisabled, killSwitchPath, noRevivePath, reviveBraked, STARTED_BY_ENV } from './killSwitch'
 import { UsageError } from './cliErrors'
 import { assertKnownFlags } from './argHelpers'
-import { parsePidLock } from '../serverRuntime'
+import { lockTakeoverVerdict, parsePidLock, processStartRef } from '../serverRuntime'
 import { npmPlatformBin } from '../rustBinResolve'
 
 /** Count of hook events durably spooled to disk but not yet reingested (server was down / shedding).
@@ -373,33 +373,42 @@ export function logTail(lines = 8, fromOffset = 0): string {
   }
 }
 
-/** The server's PID, through a fallback chain that also covers builds predating
- *  /api/server-stats: stats endpoint → pidfile → lsof on the MCP port. Null when nothing runs. */
+/** The pid of the server that owns THIS data dir — `dataDir()` — or null when none runs.
+ *
+ *  Data-dir FIRST (TRDD-BSDR4TRM). The old chain asked /api/server-stats before anything else, and
+ *  that call dials the UI base URL, which has no relation to the data dir: from an isolated env
+ *  (own DATA_DIR, overridden ports) it reached the LIVE server, so `server start` announced a lost
+ *  race that never happened and `server stop` SIGTERMed the real collector. The lock the server
+ *  writes at boot (`<dataDir>/server.pid`) is keyed on exactly the thing this function is asked
+ *  about, so it is consulted first and decides whenever it names a live owner. The REST fallback
+ *  (a build predating the pidfile, or a lock the server could not write) is accepted ONLY when the
+ *  server it reaches reports the same data dir. There is no port-based rung any more: `lsof` on a
+ *  port can never say whose data dir the listener owns, which is the question. */
 export async function findServerPid(): Promise<number | null> {
-  // Guard the conversion: a stats payload without `pid` yields NaN, and NaN is not null, so every
-  // downstream `pid === null` check passes it straight through to process.kill(NaN) — an obscure
-  // throw instead of the pidfile/lsof fallbacks that would have found the process.
-  try {
-    const pid = Number((await apiRequest('GET', '/api/server-stats')).pid)
-    if (Number.isFinite(pid) && pid > 0) return pid
-  } catch { /* older build or down */ }
-  // Is anything answering MCP at all? If not, the server is genuinely down.
-  try { await init() } catch { return null }
   try {
     // TRDD-PIDFILEAT: parsePidLock understands both the current JSON {pid,start} lock shape and the
-    // legacy bare-numeric one — a plain Number(...) on the JSON shape would read NaN and silently
-    // fall through to lsof on every up-to-date install.
+    // legacy bare-numeric one. lockTakeoverVerdict is the server's own takeover rule, reused so the
+    // CLI and the boot guard cannot disagree about whether a lock names a live owner: a recycled pid
+    // (alive, different start reference) is NOT the server, and signalling it would hit a stranger.
     const lock = parsePidLock(fs.readFileSync(pidfilePath(), 'utf-8'))
-    if (lock !== null) { process.kill(lock.pid, 0); return lock.pid }
-  } catch { /* no/stale pidfile (pre-pidfile build) — fall through to lsof */ }
-  const port = new URL(mcpEndpoint()).port
-  for (const lsof of ['lsof', '/usr/sbin/lsof']) { // /usr/sbin is often absent from a child PATH
-    try {
-      const out = execFileSync(lsof, ['-ti', `:${port}`], { encoding: 'utf8' })
-      const pid = Number(out.split('\n').find(Boolean))
-      if (pid > 0) return pid
-    } catch { /* try the next candidate */ }
-  }
+    if (lock !== null) {
+      const verdict = lockTakeoverVerdict({
+        lockPid: lock.pid,
+        lockStartRef: lock.start,
+        pidAlive: processAlive(lock.pid),
+        currentStartRef: lock.start === null ? null : processStartRef(lock.pid),
+      })
+      if (verdict === 'live-owner' || verdict === 'legacy-kill0-only') return lock.pid
+    }
+  } catch { /* no/unreadable pidfile — fall through to the data-dir-checked REST probe */ }
+  try {
+    const stats = await apiRequest('GET', '/api/server-stats') as { pid?: unknown; dataDir?: unknown }
+    // Guard the conversion: a payload without `pid` yields NaN, and NaN is not null, so a downstream
+    // `pid === null` check would pass it straight through to process.kill(NaN).
+    const pid = Number(stats.pid)
+    const sameDataDir = typeof stats.dataDir === 'string' && path.resolve(stats.dataDir) === path.resolve(dataDir())
+    if (Number.isFinite(pid) && pid > 0 && sameDataDir) return pid
+  } catch { /* down, or an older build — nothing owns this data dir that we can prove */ }
   return null
 }
 

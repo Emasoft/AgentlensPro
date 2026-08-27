@@ -12,23 +12,31 @@ import * as os from 'os'
 import * as path from 'path'
 import { UsageError } from './cliErrors'
 
+// The fallback ports below are the SAME `MCP_PORT` / `UI_PORT` the server binds, not literals. The
+// isolation recipe ("own DATA_DIR + own ports") sets those two for the server, and nothing sets the
+// CLI-side URL overrides — so a literal default made every REST call from an isolated env dial the
+// LIVE server on :3000: `findServerPid()` reported the live pid and `server stop` SIGTERMed it
+// (TRDD-BSDR4TRM, measured 2026-08-27). An explicit AGENTLENS_*_URL still wins.
+
 /** MCP JSON-RPC endpoint of the running server. */
 export function mcpEndpoint(): string {
-  return process.env.AGENTLENS_MCP_URL || 'http://localhost:4316/mcp'
+  return process.env.AGENTLENS_MCP_URL || `http://localhost:${process.env.MCP_PORT || 4316}/mcp`
 }
 
 /** The UI/dashboard server's default base — ONE definition so dashboardUrl and uiBaseUrl can never
  *  drift on the fallback port. Each still honors its own env override. */
-const DEFAULT_UI_URL = 'http://localhost:3000'
+function defaultUiUrl(): string {
+  return `http://localhost:${process.env.UI_PORT || 3000}`
+}
 
 /** Dashboard URL (UI port). */
 export function dashboardUrl(): string {
-  return process.env.AGENTLENS_DASHBOARD_URL || DEFAULT_UI_URL
+  return process.env.AGENTLENS_DASHBOARD_URL || defaultUiUrl()
 }
 
 /** Base URL for the server's plain REST /api/* routes (UI port). */
 export function uiBaseUrl(): string {
-  return process.env.AGENTLENS_UI_URL || DEFAULT_UI_URL
+  return process.env.AGENTLENS_UI_URL || defaultUiUrl()
 }
 
 /** The AgentlensPro data directory (span store, logs, pidfile, forensics.db).

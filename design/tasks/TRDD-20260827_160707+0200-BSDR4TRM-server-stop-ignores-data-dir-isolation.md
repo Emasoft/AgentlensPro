@@ -1,9 +1,9 @@
 ---
 trdd-id: BSDR4TRM
 title: server stop from an isolated DATA_DIR stopped the LIVE server
-column: dev
+column: testing
 created: 2026-08-27T16:07:07+0200
-updated: 2026-08-27T17:58:24+0200
+updated: 2026-08-27T18:07:49+0200
 current-owner: main
 task-type: bugfix
 severity: HIGH
@@ -31,9 +31,21 @@ the LIVE server on :3000, which reports its own `process.pid`, and the data-dir-
 never consulted. Not "a data-dir-blind port lookup" — an env split between what the server binds
 (`UI_PORT`) and what the CLI dials (`AGENTLENS_UI_URL`). `stopServer()` (`:406`) inherits it.
 
-**NEXT ACTION:** implement per Acceptance — pidfile of `dataDir()` FIRST in `findServerPid()`; the
-REST/lsof fallbacks may only confirm a pid that the lock names (or run when no lock exists); `stop`
-refuses a pid whose lock/data dir is foreign; add the two-data-dir test; re-run the recipe.
+**IMPLEMENTED 18:07 (fable-advisor consulted; its four file:line claims re-read before acting):**
+
+| component | state |
+|---|---|
+| `cliCore.ts::mcpEndpoint/uiBaseUrl/dashboardUrl` | defaults derive from `MCP_PORT`/`UI_PORT` — the SAME vars the server binds; explicit `AGENTLENS_*_URL` still wins. Fixes every REST caller, not just the pid lookup |
+| `serverControl.ts::findServerPid()` | lock FIRST, judged by the server's own `lockTakeoverVerdict` (a recycled pid is not the server); REST fallback accepted only when `stats.dataDir` resolves equal to `dataDir()`; `lsof` rung deleted (a port never says whose data dir) |
+| `stopServer()` | unchanged — inherits the resolver |
+| `src/test/serverSingleInstance.test.ts` | 4th test: two real servers, CLI in-process with UI/MCP pointed at A while asking about B → B's pid; B's lock removed → null (never A); `stopServer()` ends B, A alive. Mutation-verified: disabling the lock rung fails exactly this test |
+| bare command | `agentlenspro server start/status/stop` in the isolated recipe: child pid reported, child stopped, live pidfile identical before/after |
+
+**NEXT ACTION:** full suite result (running) → `ai_review`.
+
+**Known limit, accepted:** a server predating both the pidfile and the `dataDir` stats field is
+invisible to the CLI (`stop` prints "already stopped"); `server status` already has an "older
+build?" line for that case.
 
 ## Observation (measured 2026-08-27, during TRDD-8VGQK9L9 round-2 verification)
 
@@ -69,14 +81,16 @@ developer's real collector (it did).
 
 ## Acceptance
 
-- [ ] `findServerPid()` resolves the server of the data dir it is invoked for (the `server.pid`
+- [x] `findServerPid()` resolves the server of the data dir it is invoked for (the `server.pid`
       lock the guard writes is already keyed on DATA_DIR — read it FIRST, never fall through to a
-      port/name lookup that can return a foreign server).
-- [ ] `stopServer()` resolves its target from the SAME data dir it was invoked for; refuses to
+      port/name lookup that can return a foreign server). — lock first; lsof rung removed.
+- [x] `stopServer()` resolves its target from the SAME data dir it was invoked for; refuses to
       signal a pid whose data dir differs (verify via the boot-provenance line / lock file owner).
-- [ ] A test: two data dirs, two servers, `stop` in one never touches the other.
-- [ ] Re-run the exact recipe above; expect: child stays up on :39002, brake cleared, `stop` stops
-      ONLY it, live server pid unchanged.
+      — via the resolver: a REST pid is accepted only on a `dataDir` match.
+- [x] A test: two data dirs, two servers, `stop` in one never touches the other.
+      — `serverSingleInstance.test.ts`, mutation-verified.
+- [x] Re-run the exact recipe above; expect: child stays up on :39002, brake cleared, `stop` stops
+      ONLY it, live server pid unchanged. — measured 18:07 through the bare `agentlenspro`.
 
 ## Not in scope
 
