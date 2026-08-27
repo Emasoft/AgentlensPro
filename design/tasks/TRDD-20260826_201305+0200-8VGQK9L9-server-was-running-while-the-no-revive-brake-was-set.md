@@ -3,7 +3,7 @@ trdd-id: 8VGQK9L9
 title: A server was running for 1h53m while the NO_REVIVE brake file was in place
 column: human_review
 created: 2026-08-26T20:13:05+0200
-updated: 2026-08-27T16:33:00+0200
+updated: 2026-08-27T16:41:00+0200
 current-owner: main
 task-type: bugfix
 severity: MEDIUM
@@ -19,7 +19,7 @@ last-test-at: 2026-08-27T16:20:49+0200
 
 **All four acceptance boxes DONE. ai_review round 1 REJECTED (C1 + I2–I4, report
 `reports/code-review/20260827_155559+0200-trdd-8VGQK9L9-ai-review.md`) — all fixed in `d12f590`.
-Round-2 full `pnpm run test:unit` in flight; killSwitch 16/16, loopWatchdog 3/3, tsc + eslint clean.**
+Rounds 2 and 3 followed (below); ai_review PASSED at round 3. Full suite green on `f346f96`; killSwitch 16/16, loopWatchdog 4/4, tsc + eslint clean. In `human_review`.**
 
 Round-1 findings (for the round-2 reviewer): C1 the gate made the brake un-liftable → `ensureServer(startedBy, { overrideBrake })`, passed only by `server start`/`restart`; I2 `reviveDisabledOnDisk()` was a fail-open second predicate → delegates to `reviveBraked()`; I3 `setup` now refuses when braked; I4 loop-watchdog respawn stats `brakePath` before spawn. Round 2 REJECTED once more (F1): the C1 test hit only the reachable path and passed with the override deleted; the STATE claim "unreachable+override cannot be unit-tested" was FALSE — a closed port + a bogus `AGENTLENS_ALCORE` reaches the gate and fails at spawn ENOENT without starting anything (reviewer measured 256 ms). Fixed: the test now has a gate half and a contract half. Also F2 (`NO_REVIVE` literal now `dataDir.NO_REVIVE_FILE`, one name for cli + server), F3 (comment), round-1 nits (stale "four paths" comments, double JSDoc).
 
