@@ -3,33 +3,37 @@ trdd-id: 8VGQK9L9
 title: A server was running for 1h53m while the NO_REVIVE brake file was in place
 column: ai_review
 created: 2026-08-26T20:13:05+0200
-updated: 2026-08-27T15:52:36+0200
+updated: 2026-08-27T16:12:00+0200
 current-owner: main
 task-type: bugfix
 severity: MEDIUM
 priority: 3
 labels: [server, lifecycle, safety-mechanism]
 relevant-rules: []
-implementation-commits: [98190f4, 35489dc, 1f1ec52, c92b3d2, 30ad311, 5aef35e]
+implementation-commits: [98190f4, 35489dc, 1f1ec52, c92b3d2, 30ad311, 5aef35e, d12f590]
 last-test-result: pass
 last-test-at: 2026-08-27T15:52:36+0200
 ---
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-08-27
 
-**All four acceptance boxes DONE. Full `pnpm run test:unit` green 2026-08-27 (2486 passing, 8 pending, 0 failing). In `ai_review`.**
+**All four acceptance boxes DONE. ai_review round 1 REJECTED (C1 + I2–I4, report
+`reports/code-review/20260827_155559+0200-trdd-8VGQK9L9-ai-review.md`) — all fixed in `d12f590`.
+Round-2 full `pnpm run test:unit` in flight; killSwitch 16/16, loopWatchdog 3/3, tsc + eslint clean.**
+
+Round-1 findings (for the round-2 reviewer): C1 the gate made the brake un-liftable → `ensureServer(startedBy, { overrideBrake })`, passed only by `server start`/`restart`; I2 `reviveDisabledOnDisk()` was a fail-open second predicate → delegates to `reviveBraked()`; I3 `setup` now refuses when braked; I4 loop-watchdog respawn stats `brakePath` before spawn. Unreachable+override cannot be unit-tested: it spawns the real bundle (measured).
 
 | component | state |
 |---|---|
 | `killSwitch.ts::reviveBraked()` | the single definition of "is the brake armed" |
 | `killSwitch.ts::STARTED_BY_ENV` | the provenance stamp every spawner sets |
 | `serverControl.ts::ensureServer(startedBy)` | brake gate AFTER the probe (refuses the spawn, not a live server); stamps the child |
-| six spawn paths | all stamped; loop-watchdog overwrites rather than inherits |
+| six spawn paths | all stamped AND all brake-gated (ensureServer, supervisor, hook reviver, setup, loop-watchdog respawn; `server start`/`restart` override then clear) |
 | `standalone/server.ts` boot line | logs starter + brake state it observed itself; WARNs if braked |
 | `src/test/killSwitch.test.ts` | 15/15, held decoy port, mutation-verified discriminator |
 | bundles | `node esbuild.js` clean; live CLI verified against the real server with brake armed |
 
-**NEXT ACTION:** AI review of the six implementation commits; on pass → `human_review` (USER verdict).
+**NEXT ACTION:** round-2 full suite green → AI review of `d12f590` (diff `5aef35e..d12f590`); on pass → `human_review` (USER verdict).
 
 **Gotchas that are load-bearing:**
 - The pause-vs-kill split is REAL and must survive: the supervisor must check NO_REVIVE **only**,
