@@ -20,7 +20,7 @@ import * as path from 'path'
 import { isImageReadPath } from '../shared/imageReads'
 import { uiBaseUrl, dataDir } from './cliCore'
 import { findServerJs } from './serverControl'
-import { agentlensDisabled, noRevivePath, STARTED_BY_ENV } from './killSwitch'
+import { agentlensDisabled, reviveBraked, STARTED_BY_ENV } from './killSwitch'
 
 // D3K7QM2P/1a — hook durability. When the server can't take a hook event (down, or shedding under
 // load), we must NOT lose it: durably spool the payload to disk (the server's boot/periodic drain
@@ -92,15 +92,16 @@ function spoolHookEvent(payload: Buffer): void {
  *  server. Needed because AGENTLENS_NO_REVIVE only reaches a hook that the agent spawned with it
  *  already in its env — an operator facing a runaway server cannot retrofit env onto a running agent,
  *  and `kill` alone is futile when the very next hook spawns it again. A file any shell can touch is
- *  the only brake that actually reaches the hook. Fail-OPEN (a stat error ⇒ not disabled): a
- *  filesystem hiccup must not silently stop ingestion. */
+ *  the only brake that actually reaches the hook. The brake predicate is reviveBraked() — the ONE
+ *  definition, fail-CLOSED on an unreadable file: this function guards a SPAWN, and a spawn during
+ *  a store swap corrupts the store, while a skipped revive costs one hook's worth of latency. (An
+ *  earlier fail-open existsSync here was the second, opposite-direction copy of the predicate.) */
 export function reviveDisabledOnDisk(): boolean {
   // Either brake stops a revive: the NARROW one (NO_REVIVE — keep ingesting, just don't spawn a
   // server) or the GLOBAL one (DISABLED — stop everything). Checked here as well as at the hook
   // entry point on purpose: reviveDaemonDetached() spawns a detached process, and that is the one
   // side-effect that must never slip through a missed guard.
-  if (agentlensDisabled()) { return true }
-  try { return fs.existsSync(noRevivePath()) } catch { return false }
+  return agentlensDisabled() || reviveBraked()
 }
 
 /** Fire a DETACHED server revive without waiting (the hook must exit 0 fast). A short-TTL mtime lock

@@ -43,6 +43,10 @@ export interface LoopWatchdogOptions {
   log?: (msg: string) => void
   /** Test hook: worker check cadence in ms. Default 5000. */
   checkMs?: number
+  /** Absolute path of the NO_REVIVE brake file. When set, the restarter still SIGKILLs a starved
+   *  server but does NOT respawn it while the file exists (or is unreadable) — a respawn is a
+   *  resurrection path like any other and must honour the brake (TRDD-8VGQK9L9). */
+  brakePath?: string
 }
 
 export interface LoopWatchdogHandle {
@@ -56,7 +60,7 @@ function workerSource(): string {
     const { workerData, parentPort } = require('worker_threads')
     const { spawn } = require('child_process')
     const beat = new BigInt64Array(workerData.sab)
-    const { stallMs, checkMs, minUptimeMs, pid, execPath, argv, cwd, startedAt } = workerData
+    const { stallMs, checkMs, minUptimeMs, pid, execPath, argv, cwd, startedAt, brakePath } = workerData
     let lastWorkerTick = Date.now()
     let healed = false
     const timer = setInterval(() => {
@@ -76,6 +80,13 @@ function workerSource(): string {
       const restarter =
         'try { process.kill(' + pid + ', "SIGKILL") } catch {}\\n' +
         'setTimeout(() => {\\n' +
+        // Brake check mirrors killSwitch.reviveBraked(): ENOENT alone means "absent"; any other
+        // stat error is treated as PRESENT, because failing open here spawns into a store swap.
+        // Emitted only when a brakePath was given — stat(undefined) would throw a non-ENOENT
+        // TypeError and silently disable every respawn. No backticks in this source (see above).
+        (typeof brakePath === 'string'
+          ? '  try { require("fs").statSync(' + JSON.stringify(brakePath) + '); return } catch (e) { if (e.code !== "ENOENT") return }\\n'
+          : '') +
         '  const { spawn } = require("child_process")\\n' +
         // AGENTLENS_STARTED_BY is OVERWRITTEN, not inherited (TRDD-8VGQK9L9): this helper carries the
         // dying server's env, so inheriting would make the respawn claim its predecessor's starter —
@@ -120,6 +131,7 @@ export function startLoopWatchdog(opts: LoopWatchdogOptions = {}): LoopWatchdogH
         argv: respawn.argv,
         cwd: respawn.cwd,
         startedAt: Date.now(),
+        brakePath: opts.brakePath,
       },
     })
     worker.on('message', (m: { starvedMs?: number }) => {

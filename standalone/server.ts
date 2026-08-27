@@ -4619,6 +4619,9 @@ uiServer.listen(UI_PORT, BIND_HOST, () => {
     startLoopWatchdog({
       stallSeconds: Number.isFinite(stallEnv) && stallEnv > 0 ? stallEnv : 60,
       log: (m) => console.warn(m),
+      // Same file the boot-provenance line above stats: the respawn must not resurrect a server
+      // the operator braked (TRDD-8VGQK9L9).
+      brakePath: path.join(DATA_DIR, 'NO_REVIVE'),
     })
   }
 })

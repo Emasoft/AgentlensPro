@@ -21,7 +21,7 @@
 import { spawn, spawnSync, execFileSync } from 'child_process'
 import * as crypto from 'crypto'
 import * as fs from 'fs'
-import { agentlensDisabled, STARTED_BY_ENV } from './killSwitch'
+import { agentlensDisabled, noRevivePath, reviveBraked, STARTED_BY_ENV } from './killSwitch'
 import { UsageError } from './cliErrors'
 import * as http from 'http'
 import * as os from 'os'
@@ -853,6 +853,12 @@ const stepServer: StepDef = {
     // the refusal honestly instead of spawning a child that immediately exits 78.
     if (agentlensDisabled()) {
       return { result: { step: this.name, found, action: 'start server', verify: 'FAIL', detail: 'AgentlensPro is DISABLED — run `agentlenspro enable` first' }, acted: false }
+    }
+    // The NO_REVIVE brake refuses this spawn too: `setup` is idempotent and re-run casually, so a
+    // silent override here would resurrect a server mid store-swap exactly like the hook path did
+    // (TRDD-8VGQK9L9). Reported, not skipped — a setup step that quietly does nothing looks healthy.
+    if (reviveBraked()) {
+      return { result: { step: this.name, found, action: 'start server', verify: 'FAIL', detail: `revive brake is set (${noRevivePath()}) — \`agentlenspro server start\` clears it` }, acted: false }
     }
     const serverJs = findServerJs()
     fs.mkdirSync(ctx.dataDir, { recursive: true })

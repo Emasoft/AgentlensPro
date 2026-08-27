@@ -119,7 +119,7 @@ export const DEFAULT_MAX_OLD_SPACE_MB = 6144
  *  and the diagnostics `--start-server`/`--dashboard` globals all land here — so the caller says.
  *  The default is a truthful "unknown", never a guess: an unlabelled path in the log is a lead, a
  *  wrong label is a dead end. */
-export async function ensureServer(startedBy = 'ensureServer:unknown'): Promise<void> {
+export async function ensureServer(startedBy = 'ensureServer:unknown', opts: { overrideBrake?: boolean } = {}): Promise<void> {
   // FIRST — before we even probe the network. A disabled AgentlensPro must cost nothing: no socket,
   // no retry timeout, and above all no spawn.
   if (agentlensDisabled()) {
@@ -147,7 +147,14 @@ export async function ensureServer(startedBy = 'ensureServer:unknown'): Promise<
   //
   // NO_REVIVE ONLY, never reviveDisabledOnDisk(): DISABLED is handled by the gate above, so the
   // pause-vs-kill split the supervisor depends on survives (see reviveBraked in killSwitch.ts).
-  if (reviveBraked()) {
+  //
+  // `overrideBrake` is passed ONLY by the explicit operator commands `server start`/`restart`, the
+  // two that then clearReviveBrake() on success. Without it this gate made the brake un-liftable:
+  // `start` ran ensureServer() first (so the spawn refused here) and clearReviveBrake() second
+  // (never reached), while three messages told the operator to run exactly that command — caught
+  // in ai_review, verified live (exit 1, NO_REVIVE still on disk). Every implicit spawner
+  // (diagnostics --start-server/--dashboard, hooks, the supervisor, setup) leaves it unset.
+  if (reviveBraked() && !opts.overrideBrake) {
     throw new Error(
       `the server revive brake is set (${noRevivePath()}) — refusing to START a server.\n` +
       '(An already-running server is still used; the brake only blocks starting a new one.)\n' +
@@ -789,7 +796,9 @@ export async function serverCommand(argv: string[]): Promise<void> {
       // is running". Clearing first meant a FAILED start left no server AND no brake — the one
       // state where anything may freely spawn a collector — and a stray failed `start` in another
       // shell would silently disarm a brake an operator had armed for a store rewrite.
-      await ensureServer('server start')
+      // overrideBrake: this is the one command documented to lift the brake, so it must be allowed
+      // to spawn through it — see the gate in ensureServer() for the regression this avoids.
+      await ensureServer('server start', { overrideBrake: true })
       clearReviveBrake()
       return
     case 'stop':
@@ -823,7 +832,7 @@ export async function serverCommand(argv: string[]): Promise<void> {
       return
     case 'restart':
       await stopServer()
-      await ensureServer('server restart')
+      await ensureServer('server restart', { overrideBrake: true })  // same contract as `start`
       clearReviveBrake()
       return
     case 'status':

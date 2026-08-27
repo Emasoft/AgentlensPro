@@ -25,7 +25,7 @@ const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'agentlens-ks-'))
 
 import { agentlensDisabled, armKillSwitch, disarmKillSwitch, killSwitchPath, noRevivePath, reviveBraked } from '../cli/killSwitch'
 import { runHookCommand, reviveDisabledOnDisk } from '../cli/hookHandlers'
-import { ensureServer, runSupervise } from '../cli/serverControl'
+import { ensureServer, runSupervise, serverCommand } from '../cli/serverControl'
 
 suite('global kill-switch', () => {
   let savedDataDir: string | undefined
@@ -204,6 +204,36 @@ suite('global kill-switch', () => {
       if (saved === undefined) delete process.env.AGENTLENS_MCP_URL
       else process.env.AGENTLENS_MCP_URL = saved
       srv.closeAllConnections()  // same keep-alive drain as the suite listener; see suiteTeardown
+      await new Promise<void>(resolve => srv.close(() => resolve()))
+    }
+  })
+
+  test('the brake can still be LIFTED: ensureServer honours overrideBrake and `server start` clears it', async () => {
+    // ai_review regression (never shipped): the gate above refused the spawn BEFORE `server start`
+    // reached clearReviveBrake(), so the one command every message names as the way out failed with
+    // "clear it with: agentlenspro server start" — a dead end with rm as the only escape.
+    //
+    // This pins the CONTRACT (`start` lifts the brake) against a reachable stub. It does NOT reach
+    // the gate itself: the gate sits below the probe, and the only way to hit it is an UNREACHABLE
+    // endpoint — which makes ensureServer() spawn the real in-repo bundle (tried: it did, and the
+    // developer's live server won the single-instance race). No unit test may spawn a server, so
+    // the ordering is guarded by the comment at the gate, and this test by the command's outcome.
+    armBrake()
+    const srv = http.createServer((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ jsonrpc: '2.0', id: 1, result: {} }))
+    })
+    await new Promise<void>(resolve => srv.listen(0, '127.0.0.1', resolve))
+    const port = (srv.address() as { port: number }).port
+    const saved = process.env.AGENTLENS_MCP_URL
+    process.env.AGENTLENS_MCP_URL = `http://127.0.0.1:${port}/mcp`
+    try {
+      await serverCommand(['start'])
+      assert.strictEqual(reviveBraked(), false, '`server start` must lift the brake it is documented to lift')
+    } finally {
+      if (saved === undefined) delete process.env.AGENTLENS_MCP_URL
+      else process.env.AGENTLENS_MCP_URL = saved
+      srv.closeAllConnections()
       await new Promise<void>(resolve => srv.close(() => resolve()))
     }
   })
