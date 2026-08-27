@@ -18,15 +18,26 @@ import { UsageError } from './cliErrors'
 // LIVE server on :3000: `findServerPid()` reported the live pid and `server stop` SIGTERMed it
 // (TRDD-BSDR4TRM, measured 2026-08-27). An explicit AGENTLENS_*_URL still wins.
 
+/** A port env var, or the fallback when it is unset/empty/not a usable port number. Lives here
+ *  because BOTH the CLI's default URLs and `alcoreServeArgs` need the same reading of the same
+ *  three variables, and a second spelling is how they drift apart. Rejecting the junk matters:
+ *  `Number('')` is 0 (binds a kernel-assigned port that answers nothing), and interpolating an
+ *  unvalidated value into a URL turns `UI_PORT=abc` into an `Invalid URL` throw and
+ *  `UI_PORT=8080/evil` into a silent path injection. */
+export function envPort(raw: string | undefined, fallback: number): string {
+  const n = Number(raw?.trim())
+  return String(raw?.trim() && Number.isInteger(n) && n > 0 && n < 65536 ? n : fallback)
+}
+
 /** MCP JSON-RPC endpoint of the running server. */
 export function mcpEndpoint(): string {
-  return process.env.AGENTLENS_MCP_URL || `http://localhost:${process.env.MCP_PORT || 4316}/mcp`
+  return process.env.AGENTLENS_MCP_URL || `http://localhost:${envPort(process.env.MCP_PORT, 4316)}/mcp`
 }
 
 /** The UI/dashboard server's default base — ONE definition so dashboardUrl and uiBaseUrl can never
  *  drift on the fallback port. Each still honors its own env override. */
 function defaultUiUrl(): string {
-  return `http://localhost:${process.env.UI_PORT || 3000}`
+  return `http://localhost:${envPort(process.env.UI_PORT, 3000)}`
 }
 
 /** Dashboard URL (UI port). */

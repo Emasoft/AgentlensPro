@@ -136,14 +136,18 @@ suite('standalone server — exactly one instance per data directory', function 
     const dataA = mk('cli-a'), homeA = mk('cli-ahome'), dataB = mk('cli-b'), homeB = mk('cli-bhome')
     const portsA = { MCP_PORT: String(await freePort()), UI_PORT: String(await freePort()), OTLP_PORT: String(await freePort()) }
     const portsB = { MCP_PORT: String(await freePort()), UI_PORT: String(await freePort()), OTLP_PORT: String(await freePort()) }
-    const a = await start({ HOME: homeA, DATA_DIR: dataA, ...portsA })
-    const b = await start({ HOME: homeB, DATA_DIR: dataB, ...portsB })
     const ENV_KEYS = ['AGENTLENS_DATA_DIR', 'DATA_DIR', 'UI_PORT', 'MCP_PORT', 'AGENTLENS_UI_URL', 'AGENTLENS_MCP_URL'] as const
     const saved = Object.fromEntries(ENV_KEYS.map(k => [k, process.env[k]]))
+    // Cleared BEFORE the spawns, not after: the children inherit this process's env, and
+    // AGENTLENS_DATA_DIR outranks the DATA_DIR passed here — so a developer with it exported would
+    // otherwise point both real servers at their live store.
+    let a: Started | null = null, b: Started | null = null
     try {
+      for (const k of ENV_KEYS) delete process.env[k]
+      a = await start({ HOME: homeA, DATA_DIR: dataA, ...portsA })
+      b = await start({ HOME: homeB, DATA_DIR: dataB, ...portsB })
       assert.strictEqual(a.exited, null, `server A should stay up; it exited ${a.exited}. stderr: ${a.stderr.slice(0, 400)}`)
       assert.strictEqual(b.exited, null, `server B should stay up; it exited ${b.exited}. stderr: ${b.stderr.slice(0, 400)}`)
-      for (const k of ENV_KEYS) delete process.env[k]
       process.env.AGENTLENS_DATA_DIR = dataB
       process.env.UI_PORT = portsA.UI_PORT     // adversarial: the REST base reaches A …
       process.env.MCP_PORT = portsA.MCP_PORT   // … and so does the MCP probe
@@ -164,7 +168,8 @@ suite('standalone server — exactly one instance per data directory', function 
       await stopServer()
       for (let i = 0; i < 60 && b.exited === null; i++) await new Promise(r => setTimeout(r, 250))
       assert.notStrictEqual(b.exited, null, 'server B did not exit after stopServer()')
-      assert.doesNotThrow(() => process.kill(a.proc.pid as number, 0), 'server A was signalled by a stop aimed at data dir B')
+      const aPid = a.proc.pid as number   // captured: inside the callback TS cannot narrow the outer `a`
+      assert.doesNotThrow(() => process.kill(aPid, 0), 'server A was signalled by a stop aimed at data dir B')
     } finally {
       for (const k of ENV_KEYS) {
         if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]

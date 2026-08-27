@@ -126,8 +126,9 @@ export function parkedBodiesGauge(
   const statePath = `${storeDir}/.pass-state.json`
   // MEMOISED ON THE STATE FILE'S OWN IDENTITY (mtime+size+dirs), because this is NOT a cold path:
   // /api/server-stats is admission-EXEMPT by design (standalone/server.ts — "an admission slot for
-  // its whole lifetime would drain the pool"), and it is polled every 250 ms by the readiness
-  // loop, the stop loop and findServerPid(). Measured before this cache: 14.7 ms per call — 1045
+  // its whole lifetime would drain the pool"), and dashboards and monitors poll it freely.
+  // (`findServerPid` reads the pidfile first since TRDD-BSDR4TRM and normally never reaches this
+  // route; the readiness and stop loops poll MCP, not this one.) Measured before this cache: 14.7 ms per call — 1045
   // names × 2 dirs, of which the spool pass throws and catches ~1045 ENOENT exceptions. Putting
   // the payload's most expensive item on the one endpoint engineered to stay cheap under duress
   // is precisely backwards, so the stat storm now runs only when the park actually changed.

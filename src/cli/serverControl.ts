@@ -7,7 +7,7 @@ import { spawn, execFileSync } from 'child_process'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
-import { apiRequest, dataDir, dashboardUrl, fmtGb, fmtMb, init, mcpEndpoint, sleep, CONNECT_TIMEOUT_MS } from './cliCore'
+import { apiRequest, dataDir, dashboardUrl, envPort, fmtGb, fmtMb, init, mcpEndpoint, sleep, CONNECT_TIMEOUT_MS } from './cliCore'
 import { dataDirSource, dataPath } from '../dataDir'
 import { agentlensDisabled, killSwitchPath, noRevivePath, reviveBraked, STARTED_BY_ENV } from './killSwitch'
 import { UsageError } from './cliErrors'
@@ -70,8 +70,9 @@ export function alcoreBin(env: NodeJS.ProcessEnv = process.env, installed = data
 }
 
 /** `alcore serve` argv for the CUTOVER, which must bind the ports the rest of the product already
- *  assumes: `cliCore.mcpEndpoint` defaults to :4316, the dashboard to :3000, and every telemetry
- *  writer to :4318.
+ *  assumes: with `MCP_PORT`/`UI_PORT` unset, `cliCore.mcpEndpoint` resolves :4316 and the dashboard
+ *  :3000; every telemetry writer uses :4318. When they ARE set, both sides read them through the
+ *  same `envPort` (TRDD-BSDR4TRM), so the CLI dials whatever this binds.
  *
  *  These are passed EXPLICITLY rather than by changing alcore's own defaults, and that is the
  *  point: alcore defaults to 4319/3001/4317 so an operator can run it beside the TS server to
@@ -83,16 +84,12 @@ export function alcoreBin(env: NodeJS.ProcessEnv = process.env, installed = data
  *  empty UI_PORT. Unifying those three spellings is worth doing, but it changes setup.ts's
  *  behaviour and belongs in its own diff, not in the cutover. */
 export function alcoreServeArgs(env: NodeJS.ProcessEnv = process.env, dir: string = dataDir()): string[] {
-  const port = (raw: string | undefined, fallback: number): string => {
-    const n = Number(raw?.trim())
-    return String(raw?.trim() && Number.isInteger(n) && n > 0 && n < 65536 ? n : fallback)
-  }
   return [
     'serve',
     '--data-dir', dir,
-    '--otlp-port', port(env.OTLP_PORT, 4318),
-    '--ui-port', port(env.UI_PORT, 3000),
-    '--mcp-port', port(env.MCP_PORT, 4316),
+    '--otlp-port', envPort(env.OTLP_PORT, 4318),
+    '--ui-port', envPort(env.UI_PORT, 3000),
+    '--mcp-port', envPort(env.MCP_PORT, 4316),
   ]
 }
 
@@ -421,9 +418,18 @@ export async function stopServer(): Promise<void> {
   process.kill(pid, 'SIGTERM') // graceful — the server flushes every store on SIGTERM
   for (let i = 0; i < 40; i++) {
     await sleep(250)
-    try { await init() } catch { console.log(`server stopped (pid ${pid})`); return }
+    // Confirm with the SAME data-dir-keyed resolver that chose the target. The old loop asked
+    // `init()` — "is anything answering the MCP port?" — which is a different question: with a
+    // foreign server on that port the CLI reported "did not stop within 10s" about a process it
+    // had already killed, and with the port free but the target alive it would report success.
+    if (await findServerPid() === null) { console.log(`server stopped (pid ${pid})`); return }
   }
-  throw new Error(`server (pid ${pid}) did not stop within 10s — inspect it before escalating to SIGKILL`)
+  // Says PROCESS, deliberately. This loop now waits for the process to be gone, not for the MCP
+  // port to stop accepting — the port closes early in shutdown, so the old wording could report
+  // success while the server was still flushing. The honest consequence is that a big store
+  // (the live collector's flush of ~1.8 GB) can legitimately outlast this budget: that is a slow
+  // stop in progress, NOT the foreign-server bug this budget's message used to be confused with.
+  throw new Error(`server (pid ${pid}) is still running 10s after SIGTERM — a large store can take longer to flush; watch it before escalating to SIGKILL`)
 }
 
 /** The capture-liveness line for `server status` (TRDD-0SA5QZTG).
@@ -521,7 +527,10 @@ interface ServerStats {
   // TRDD-AMEA4O4Z: gated-out OTEL log events persisted to the sink (absent on pre-sink servers).
   logEvents?: { persistedSinceBoot: number; files: number; bytes: number; retentionDays: number }
   gate?: { mode: string; checks: number; denies: number; warns: number; advisories: number }
-  dataDir: string
+  // Optional because the WIRE can omit it: a server predating 82d3776 (2026-07-10) answers this
+  // route without it. Declaring it required made tsc bless `path.resolve(s.dataDir)`, which throws
+  // on undefined — the type has to admit what the payload actually is.
+  dataDir?: string
 }
 
 export async function showStatus(): Promise<void> {
@@ -559,8 +568,23 @@ export async function showStatus(): Promise<void> {
   const up = s.uptimeSec
   const uptime = up >= 3600 ? `${Math.floor(up / 3600)}h${Math.floor((up % 3600) / 60)}m` : `${Math.floor(up / 60)}m${up % 60}s`
   const per = s.persistence
+  // The stats endpoint is reached by URL, which says nothing about WHOSE data dir answered. Without
+  // this line status printed `RUNNING pid=…` for a data dir that has no server, and then printed
+  // the two disagreeing `data:` lines below it without comment (TRDD-BSDR4TRM ai_review IMPORTANT-2).
+  // THREE states, not two. Reaching here means the stats call succeeded against a URL derived from
+  // ports — which says nothing about WHOSE data dir answered, the whole point of TRDD-BSDR4TRM. So
+  // "the server did not report a data dir" (a build predating 82d3776, 2026-07-10, verified by
+  // `git log -S`) is the case with the LEAST evidence that it is ours, and collapsing it into the
+  // confident line would re-create the defect this branch exists to fix. `path.resolve(undefined)`
+  // also throws, so the guard is load-bearing twice over.
+  const ownership = typeof s.dataDir !== 'string' ? 'unknown'
+    : path.resolve(s.dataDir) === path.resolve(dataDir()) ? 'ours' : 'foreign'
   console.log([
-    `server: RUNNING pid=${s.pid} uptime=${uptime} canonical=${s.canonical} (ui:${s.ports.ui} mcp:${s.ports.mcp} otlp:${s.ports.otlp})`,
+    ownership === 'foreign'
+      ? `server: RUNNING pid=${s.pid} — but it serves ${s.dataDir}, NOT ${dataDir()}. Nothing serves this data dir.`
+      : ownership === 'unknown'
+        ? `server: RUNNING pid=${s.pid} — it does not report its data dir (build predates 2026-07-10); cannot confirm it serves ${dataDir()}`
+        : `server: RUNNING pid=${s.pid} uptime=${uptime} canonical=${s.canonical} (ui:${s.ports.ui} mcp:${s.ports.mcp} otlp:${s.ports.otlp})`,
     // WHICH store, and which input chose it. A relocated data dir is invisible otherwise: every
     // reader just reports an empty result, and the generic $DATA_DIR can be set by unrelated
     // tooling, so "why is my history gone" needs an answer on the first line of status.
@@ -591,7 +615,7 @@ export async function showStatus(): Promise<void> {
     // logEvents is absent when --status hits a server built before TRDD-AMEA4O4Z — skip, don't crash.
     ...(s.logEvents ? [`log-events sink: ${s.logEvents.persistedSinceBoot} persisted since boot, ${s.logEvents.files} bucket(s) ${fmtMb(s.logEvents.bytes)} on disk (retention ${s.logEvents.retentionDays}d)`] : []),
     ...(s.gate ? [`gate:   mode=${s.gate.mode} — ${s.gate.checks} check(s), ${s.gate.denies} deny, ${s.gate.warns} warn, ${s.gate.advisories} advisories since boot`] : []),
-    `data:   ${s.dataDir} (spans ${fmtMb(per.files.spans)}, cards ${fmtMb(per.files.cards)}, offsets ${fmtMb(per.files.offsets)})`,
+    `data:   ${s.dataDir ?? 'not reported by this server'} (spans ${fmtMb(per.files.spans)}, cards ${fmtMb(per.files.cards)}, offsets ${fmtMb(per.files.offsets)})`,
   ].join('\n'))
 }
 
