@@ -874,7 +874,7 @@ const stepServer: StepDef = {
       stdio: ['ignore', outFd, outFd],
       env: {
         ...process.env,
-        [STARTED_BY_ENV]: 'setup',  // boot-provenance stamp (TRDD-8VGQK9L9); the fifth spawn path, found by sweep
+        [STARTED_BY_ENV]: 'setup',  // boot-provenance stamp (TRDD-8VGQK9L9); found by sweep
         HOME: ctx.home,
         DATA_DIR: ctx.dataDir,
         UI_PORT: String(ctx.uiPort),

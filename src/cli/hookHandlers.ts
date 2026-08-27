@@ -158,7 +158,7 @@ function reviveDaemonDetached(): void {
     try {
       const child = spawn(process.execPath, ['--max-old-space-size=6144', serverJs], {
         cwd: path.dirname(path.dirname(serverJs)),
-        // Provenance stamp for the server's boot line (TRDD-8VGQK9L9): of the four spawn paths this
+        // Provenance stamp for the server's boot line (TRDD-8VGQK9L9): of the spawn paths this
         // is the one a human never invoked, so it is the one most worth naming in the log.
         env: { ...process.env, [STARTED_BY_ENV]: 'hook-revive' },
         detached: true,

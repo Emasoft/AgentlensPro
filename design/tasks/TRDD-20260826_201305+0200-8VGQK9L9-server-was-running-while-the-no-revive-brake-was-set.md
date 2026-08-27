@@ -1,16 +1,16 @@
 ---
 trdd-id: 8VGQK9L9
 title: A server was running for 1h53m while the NO_REVIVE brake file was in place
-column: ai_review
+column: human_review
 created: 2026-08-26T20:13:05+0200
-updated: 2026-08-27T16:12:00+0200
+updated: 2026-08-27T16:33:00+0200
 current-owner: main
 task-type: bugfix
 severity: MEDIUM
 priority: 3
 labels: [server, lifecycle, safety-mechanism]
 relevant-rules: []
-implementation-commits: [98190f4, 35489dc, 1f1ec52, c92b3d2, 30ad311, 5aef35e, d12f590]
+implementation-commits: [98190f4, 35489dc, 1f1ec52, c92b3d2, 30ad311, 5aef35e, d12f590, 1b77c22, f346f96]
 last-test-result: pass
 last-test-at: 2026-08-27T15:52:36+0200
 ---
@@ -33,7 +33,7 @@ Round-1 findings (for the round-2 reviewer): C1 the gate made the brake un-lifta
 | `src/test/killSwitch.test.ts` | 15/15, held decoy port, mutation-verified discriminator |
 | bundles | `node esbuild.js` clean; live CLI verified against the real server with brake armed |
 
-**NEXT ACTION:** round-2 full suite green → AI review of `d12f590` (diff `5aef35e..d12f590`); on pass → `human_review` (USER verdict).
+**NEXT ACTION:** USER verdict in `human_review`. ai_review PASSED at round 3 (`reports/code-review/20260827_162444+0200-trdd-8VGQK9L9-ai-review-round3.md`); full suite green on `f346f96` (2488 passing, 8 pending, exit 0). Round 2 recorded above; the round-3 comment drift (M1–M3) is fixed in the commit that moved this card.
 
 **Gotchas that are load-bearing:**
 - The pause-vs-kill split is REAL and must survive: the supervisor must check NO_REVIVE **only**,
