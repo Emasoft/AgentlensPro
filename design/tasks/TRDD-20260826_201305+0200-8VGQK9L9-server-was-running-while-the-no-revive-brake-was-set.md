@@ -1,20 +1,23 @@
 ---
 trdd-id: 8VGQK9L9
 title: A server was running for 1h53m while the NO_REVIVE brake file was in place
-column: dev
+column: ai_review
 created: 2026-08-26T20:13:05+0200
-updated: 2026-08-27T15:43:05+0200
+updated: 2026-08-27T15:52:36+0200
 current-owner: main
 task-type: bugfix
 severity: MEDIUM
 priority: 3
 labels: [server, lifecycle, safety-mechanism]
 relevant-rules: []
+implementation-commits: [98190f4, 35489dc, 1f1ec52, c92b3d2, 30ad311, 5aef35e]
+last-test-result: pass
+last-test-at: 2026-08-27T15:52:36+0200
 ---
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-08-27
 
-**All four acceptance boxes DONE. Ready for `testing` → `ai_review`.**
+**All four acceptance boxes DONE. Full `pnpm run test:unit` green 2026-08-27 (2486 passing, 8 pending, 0 failing). In `ai_review`.**
 
 | component | state |
 |---|---|
@@ -26,8 +29,7 @@ relevant-rules: []
 | `src/test/killSwitch.test.ts` | 15/15, held decoy port, mutation-verified discriminator |
 | bundles | `node esbuild.js` clean; live CLI verified against the real server with brake armed |
 
-**NEXT ACTION:** move to `testing`; a full `pnpm run test:unit` has NOT been run this session
-(only the two affected suites) — run it before `ai_review`.
+**NEXT ACTION:** AI review of the six implementation commits; on pass → `human_review` (USER verdict).
 
 **Gotchas that are load-bearing:**
 - The pause-vs-kill split is REAL and must survive: the supervisor must check NO_REVIVE **only**,
