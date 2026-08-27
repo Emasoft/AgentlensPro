@@ -31,7 +31,7 @@ suite('global kill-switch', () => {
   let savedDataDir: string | undefined
   let savedGeneric: string | undefined
   let savedMcpUrl: string | undefined
-  suiteSetup(() => {
+  suiteSetup(async () => {
     savedDataDir = process.env.AGENTLENS_DATA_DIR
     savedGeneric = process.env.DATA_DIR
     savedMcpUrl = process.env.AGENTLENS_MCP_URL
@@ -41,8 +41,16 @@ suite('global kill-switch', () => {
     // running server answers it. Measured 2026-08-27: with the brake armed, ensureServer() returned
     // instead of throwing because a real server (18h uptime, different data dir) satisfied init().
     // The pre-existing tests hid this: every gate they exercised sat ABOVE the probe, so no test
-    // had ever reached the network. Point at a port nothing listens on.
-    process.env.AGENTLENS_MCP_URL = 'http://127.0.0.1:45917/mcp'
+    // had ever reached the network.
+    //
+    // A PROVABLY-FREE port, not a hardcoded one: bind port 0, read back what the OS handed out,
+    // release it. A hardcoded "surely unused" port that something does listen on turns every
+    // rejection test green for the wrong reason — silently and intermittently, the worst shape.
+    const probe = http.createServer()
+    await new Promise<void>(resolve => probe.listen(0, '127.0.0.1', resolve))
+    const freePort = (probe.address() as { port: number }).port
+    await new Promise<void>(resolve => probe.close(() => resolve()))
+    process.env.AGENTLENS_MCP_URL = `http://127.0.0.1:${freePort}/mcp`
   })
   suiteTeardown(() => {
     if (savedDataDir === undefined) delete process.env.AGENTLENS_DATA_DIR
