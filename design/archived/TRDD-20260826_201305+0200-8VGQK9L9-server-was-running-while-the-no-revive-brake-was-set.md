@@ -1,9 +1,9 @@
 ---
 trdd-id: 8VGQK9L9
 title: A server was running for 1h53m while the NO_REVIVE brake file was in place
-column: human_review
+column: complete
 created: 2026-08-26T20:13:05+0200
-updated: 2026-08-27T16:29:10+0200
+updated: 2026-08-27T17:58:24+0200
 current-owner: main
 task-type: bugfix
 severity: MEDIUM
@@ -176,3 +176,13 @@ between a store swap and a live writer.
 ## Not in scope
 
 The repair's refusal behaviour — that worked correctly and needs no change.
+
+## Approval log
+
+- 2026-08-27T17:58:24+0200 — COMPLETED by main (USER delegated the verdict: "decide yourself …
+  on verified facts"). Re-verified first-hand on `113d24a`: `check-types` 0, `lint` 0,
+  mirrors/pricing/identities/guards 0, full mocha 2488 passing / 8 pending / exit 0; round-3 M1–M3
+  landed in `5f0abbd`. Live check in a scratch data dir: `server start` spawned through the armed
+  brake (boot line `started-by=server start … brake=PRESENT`) and cleared it afterwards — the C1
+  override contract holds. One wording defect found and carded separately (the boot WARN says the
+  starter "did not honour" the brake even for the documented `server start` override).
