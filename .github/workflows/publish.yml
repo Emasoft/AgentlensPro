@@ -149,10 +149,17 @@ jobs:
   # windows-msvc as written — see src/rustBinResolve.ts. Add a windows leg only after that is
   # fixed and verified, not speculatively.
   #
-  # `fail-fast: false` + a single `needs: [package, build-platform-packages]` on publish-npm below
-  # is what makes "main package publishes LAST, only if every leg succeeded" hold: `needs` on a
-  # matrix job blocks until ALL matrix combinations finish, and only proceeds if all of them
-  # succeeded — one failed leg blocks the main publish rather than shipping a half-covered release.
+  # THIS JOB IS GATED OFF (`if: false && …` below) AND IS NOT IN publish-npm's `needs:`.
+  # That pairing is deliberate and the two halves must move together — see the bootstrap note
+  # further down. The design it replaces was: `fail-fast: false` + `needs: [package,
+  # build-platform-packages]` on publish-npm, so the main package published LAST and only if every
+  # leg succeeded (`needs` on a matrix job waits for ALL combinations and proceeds only if all
+  # passed). That invariant is correct AND was the bug: with zero of the four names bootstrapped,
+  # every leg fails, so "one failed leg blocks the main publish" meant the MAIN PACKAGE COULD NEVER
+  # PUBLISH AT ALL — measured 2026-08-28, all four `npm view agentlenspro-<target>` → 404 while the
+  # registry sat a release behind at 2.29.0. Restoring the invariant is one commit (flip `false &&`
+  # to `true &&` here, put `build-platform-packages` back in `needs:`) and is correct the moment
+  # the bootstrap has run — not before.
   #
   # FIRST PUBLISH OF EACH agentlenspro-<target> PACKAGE CANNOT GO THROUGH THIS JOB. npm's OIDC
   # trusted-publishing exchange only works against a package name that already exists on the
@@ -174,7 +181,12 @@ jobs:
   # owner acts.
   build-platform-packages:
     needs: package
-    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
+    # BOOTSTRAP GATE. `false &&` keeps the real trigger condition visible and restorable: flip it
+    # to `true &&` in the same commit that puts this job back into publish-npm's `needs:`, once
+    # every agentlenspro-<target> name exists on the registry. Left enabled it would spend four
+    # native runners on an uncached `cargo build --release` (the DuckDB static link dominates)
+    # per release, to produce four guaranteed E404s.
+    if: false && (github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v'))
     strategy:
       fail-fast: false
       matrix:
@@ -257,7 +269,11 @@ jobs:
         run: npm publish --access public
 
   publish-npm:
-    needs: [package, build-platform-packages]
+    # `build-platform-packages` deliberately absent — see its bootstrap gate above. Put it back
+    # here in the same commit that flips that gate on, never separately: enabling the job without
+    # this `needs:` ships a release that does not wait for its binaries, and adding this `needs:`
+    # while the job is gated off makes publish-npm wait on a job that never runs.
+    needs: [package]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     # Tag pushes publish; workflow_dispatch re-runs a publish without re-tagging
