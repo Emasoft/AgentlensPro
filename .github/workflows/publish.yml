@@ -20,6 +20,10 @@ env:
 
 jobs:
   package:
+    # Waits for every native runner's binaries — the tarball packed below CONTAINS them, so a
+    # missing leg must block the release rather than ship a package that silently falls back to
+    # the TS server on that platform.
+    needs: [build-binaries]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -82,8 +86,47 @@ jobs:
       # attach it to the GitHub Release with a SLSA build-provenance attestation
       # (janitor audit — release-path provenance). `npm publish --provenance`
       # below covers the registry copy; this covers the GitHub Release copy.
+      # The Rust binaries built by build-binaries, unpacked back into the layout
+      # src/rustBinResolve.ts expects: bin-native/<platform>-<arch>/{alcore,alstore,alscan,allogscan}.
+      - name: Download every platform's binaries
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: bin-native
+          pattern: bin-native-*
+          merge-multiple: false
+
+      # download-artifact restores `bin-native/bin-native-<suffix>/…` (the artifact NAME becomes
+      # the directory), and the zip round-trip has dropped the executable bit. Flatten to the
+      # resolver's layout and restore the mode — then PROVE both, because a wrong layout or a
+      # lost x-bit produces a package that installs cleanly and fails only at spawn time.
+      - name: Normalize layout and restore the executable bit
+        run: |
+          set -euo pipefail
+          for d in bin-native/bin-native-*; do
+            mv "$d" "bin-native/$(basename "$d" | sed 's/^bin-native-//')"
+          done
+          chmod +x bin-native/*/*
+          node scripts/verify-bin-native.js bin-native
+
       - name: Pack npm tarball
         run: npm pack
+
+      # npm's tar writer is what actually decides the mode inside the tarball, so checking the
+      # working tree above is not enough — assert on the ARTIFACT. A binary that ships 0644
+      # installs without error and fails at spawn on the user's machine.
+      - name: Verify the binaries are executable INSIDE the tarball
+        run: |
+          set -euo pipefail
+          tgz=$(ls agentlenspro-*.tgz)
+          tar -tvzf "$tgz" | grep 'package/bin-native/' > /tmp/binlist.txt
+          echo "--- bin-native entries in $tgz ---"; cat /tmp/binlist.txt
+          count=$(grep -c '^-rwxr-xr-x' /tmp/binlist.txt || true)
+          total=$(grep -cv '^d' /tmp/binlist.txt || true)
+          if [ "$count" -ne 16 ] || [ "$total" -ne 16 ]; then
+            echo "::error::expected 16 executable binaries in the tarball, found $count executable of $total files"
+            exit 1
+          fi
+          echo "tarball OK: 16/16 binaries present and mode 755"
 
       # Release-asset integrity (TRDD-OMMPS5TF, janitor provenance-audit): consumers verifying a
       # downloaded tarball need a checksum file NEXT TO the asset — the in-toto attestation covers
@@ -149,44 +192,25 @@ jobs:
   # windows-msvc as written — see src/rustBinResolve.ts. Add a windows leg only after that is
   # fixed and verified, not speculatively.
   #
-  # THIS JOB IS GATED OFF (`if: false && …` below) AND IS NOT IN publish-npm's `needs:`.
-  # That pairing is deliberate and the two halves must move together — see the bootstrap note
-  # further down. The design it replaces was: `fail-fast: false` + `needs: [package,
-  # build-platform-packages]` on publish-npm, so the main package published LAST and only if every
-  # leg succeeded (`needs` on a matrix job waits for ALL combinations and proceeds only if all
-  # passed). That invariant is correct AND was the bug: with zero of the four names bootstrapped,
-  # every leg fails, so "one failed leg blocks the main publish" meant the MAIN PACKAGE COULD NEVER
-  # PUBLISH AT ALL — measured 2026-08-28, all four `npm view agentlenspro-<target>` → 404 while the
-  # registry sat a release behind at 2.29.0. Restoring the invariant is one commit (flip `false &&`
-  # to `true &&` here, put `build-platform-packages` back in `needs:`) and is correct the moment
-  # the bootstrap has run — not before.
+  # ONE PACKAGE, EVERY PLATFORM (owner ruling 2026-08-28). This job BUILDS the Rust binaries on
+  # four native runners and uploads them as workflow artifacts; the `package` job downloads all
+  # four into `bin-native/<platform>-<arch>/` and packs them INTO the single `agentlenspro`
+  # tarball. It publishes nothing and creates no package name.
   #
-  # FIRST PUBLISH OF EACH agentlenspro-<target> PACKAGE CANNOT GO THROUGH THIS JOB. npm's OIDC
-  # trusted-publishing exchange only works against a package name that already exists on the
-  # registry (verified 2026-08-26 against npm's own trusted-publishers docs — there is no
-  # "publish a brand-new name via OIDC" path). Before the first tag that is meant to actually
-  # publish, the repo OWNER must, once per platform package:
-  #   1. `cd npm-platform-packages/agentlenspro-<target>` after running
-  #      `cargo build --release --manifest-path rust-core/Cargo.toml` locally and
-  #      `node scripts/gen-platform-packages.js <target>` (mirrors what this job does in CI).
-  #   2. `npm publish --access public` — a LOCAL, INTERACTIVE publish requiring the owner's own
-  #      npm 2FA tap, exactly like the one-time v1.0.0 bootstrap this repo already did for the
-  #      main `agentlenspro` package (CLAUDE.md "Releases").
-  #   3. `npm trust github agentlenspro-<target> --repo Emasoft/AgentlensPro --workflow publish.yml`
-  #      to register the trusted publisher for that name (npm >= 11.15, one interactive 2FA tap —
-  #      see CLAUDE.md's `npm trust list|github|revoke` note).
-  # Until that bootstrap runs for a given platform package, this job's publish step for that
-  # target will fail with the same E404 the main package hit before its own bootstrap — that is
-  # expected, not a bug in the workflow, and is why this whole job is additive/inert until the
-  # owner acts.
-  build-platform-packages:
-    needs: package
-    # BOOTSTRAP GATE. `false &&` keeps the real trigger condition visible and restorable: flip it
-    # to `true &&` in the same commit that puts this job back into publish-npm's `needs:`, once
-    # every agentlenspro-<target> name exists on the registry. Left enabled it would spend four
-    # native runners on an uncached `cargo build --release` (the DuckDB static link dominates)
-    # per release, to produce four guaranteed E404s.
-    if: false && (github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v'))
+  # It replaces a design that published four separate `agentlenspro-<target>` optionalDependency
+  # packages (the esbuild/swc pattern). That design could not ship at all: npm's OIDC
+  # trusted-publishing exchange only works against a name that ALREADY EXISTS on the registry, so
+  # every leg 404'd — and because publish-npm waited on them, the MAIN package never published
+  # either. Measured 2026-08-28: all four `npm view agentlenspro-<target>` → 404 while the registry
+  # sat a release behind at 2.29.0. Bootstrapping four new names needs an interactive local 2FA
+  # publish per name, which is exactly what the owner ruled out.
+  #
+  # The cost is known and accepted, not discovered later: gzip -9 gives alcore 52.6→17.0 MB and
+  # alstore 39.9→11.8 MB, so four targets are ~121.5 MB downloaded / ~384 MB unpacked per install,
+  # versus ~30 MB / ~96 MB if only the matching platform were fetched. `strip -S` was measured to
+  # save 0 bytes — the statically linked DuckDB is the size and it does not compress away.
+  build-binaries:
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
     strategy:
       fail-fast: false
       matrix:
@@ -203,8 +227,8 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     permissions:
-      id-token: write   # npm Trusted Publishing (OIDC) for this platform's package
-      contents: read
+      contents: read    # this job only builds and uploads an artifact — it publishes nothing,
+                        # so it needs neither id-token nor write anywhere.
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -219,60 +243,32 @@ jobs:
       - name: Build alcore/alstore/alscan/allogscan (release)
         run: cargo build --release --manifest-path rust-core/Cargo.toml
 
-      - name: Enable corepack (pnpm)
-        run: corepack enable
+      # No Node/pnpm on this runner: it builds Rust and uploads bytes. Nothing here runs npm.
+      #
+      # matrix.suffix is a repo-controlled literal from the matrix above, never event input.
+      - name: Stage bin-native/${{ matrix.suffix }}
+        run: |
+          set -euo pipefail
+          dest="bin-native/${{ matrix.suffix }}"
+          mkdir -p "$dest"
+          for b in alcore alstore alscan allogscan; do
+            cp "rust-core/target/release/$b" "$dest/$b"
+            chmod +x "$dest/$b"
+          done
+          ls -l "$dest"
 
-      # Node 24 for the same reason as publish-npm below: its bundled npm (>= 11.5.1) does the
-      # OIDC exchange natively.
-      - name: Setup Node.js 24 (bundled npm has OIDC support)
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0  # zizmor: ignore[cache-poisoning]
+      # upload-artifact zips its input, and ZIP DOES NOT CARRY THE UNIX EXECUTABLE BIT — the
+      # `package` job re-chmods after download for exactly this reason. Do not "simplify" that
+      # away: without it the tarball ships binaries that resolve but cannot be spawned.
+      - name: Upload bin-native/${{ matrix.suffix }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          node-version: 24
-
-      - name: Stage agentlenspro-${{ matrix.suffix }}
-        run: node scripts/gen-platform-packages.js ${{ matrix.suffix }}
-
-      # The resolver (src/rustBinResolve.ts) require.resolves `<pkg>/bin/<name>` — this pins that
-      # layout contract against the STAGED package before publishing, because the resolver's unit
-      # test exercises injected fakes and cannot catch the generator drifting from the layout.
-      # matrix.suffix is a repo-controlled literal from the matrix above, not event input.
-      - name: Verify staged layout matches the resolver contract
-        run: |
-          node -e '
-            const fs = require("fs"), path = require("path");
-            const dir = path.resolve("npm-platform-packages", "agentlenspro-" + process.argv[1]);
-            for (const b of ["alcore", "alstore", "alscan", "allogscan"]) {
-              const p = path.join(dir, "bin", b);
-              fs.accessSync(p, fs.constants.X_OK);  // throws (fails the job) if missing or non-executable
-            }
-            console.log("staged layout OK: bin/{alcore,alstore,alscan,allogscan} present+executable");
-          ' "${{ matrix.suffix }}"
-
-      - name: Verify toolchain versions
-        run: |
-          NODE_VER=$(node --version | sed 's/v//')
-          NPM_VER=$(npm --version)
-          echo "Node.js: $NODE_VER — npm: $NPM_VER"
-          if [[ ! "$NODE_VER" =~ ^24\. ]]; then
-            echo "::error::Expected Node.js 24.x, got $NODE_VER"
-            exit 1
-          fi
-          NPM_MAJOR=$(echo "$NPM_VER" | cut -d. -f1)
-          NPM_MINOR=$(echo "$NPM_VER" | cut -d. -f2)
-          if [ "$NPM_MAJOR" -lt 11 ] || { [ "$NPM_MAJOR" -eq 11 ] && [ "$NPM_MINOR" -lt 5 ]; }; then
-            echo "::error::npm >= 11.5.1 required for OIDC trusted publishing (got $NPM_VER)"
-            exit 1
-          fi
-
-      - name: Publish agentlenspro-${{ matrix.suffix }} (OIDC trusted publishing)
-        working-directory: npm-platform-packages/agentlenspro-${{ matrix.suffix }}
-        run: npm publish --access public
+          name: bin-native-${{ matrix.suffix }}
+          path: bin-native/${{ matrix.suffix }}
+          if-no-files-found: error
+          retention-days: 1
 
   publish-npm:
-    # `build-platform-packages` deliberately absent — see its bootstrap gate above. Put it back
-    # here in the same commit that flips that gate on, never separately: enabling the job without
-    # this `needs:` ships a release that does not wait for its binaries, and adding this `needs:`
-    # while the job is gated off makes publish-npm wait on a job that never runs.
     needs: [package]
     runs-on: ubuntu-latest
     timeout-minutes: 15

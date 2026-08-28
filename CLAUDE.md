@@ -223,6 +223,40 @@ workflow — a present auth token silently masks OIDC. Load-bearing facts:
   silently overrides `.gitignore` and once shipped private reports); build outputs must be
   built before `npm pack` or they are silently skipped.
 
+### DISTRIBUTION vs DEVELOPMENT — one package, compiled artifacts only
+
+Owner ruling 2026-08-28, and both halves are enforced, not remembered:
+
+- **The npm package ships COMPILED ARTIFACTS ONLY** — the esbuild bundles (`standalone/*.js`,
+  `media/*.js|css`), the runtime helper `scripts/safe_config_edit.py`, `skills/`, `agents/`, and
+  the four platforms' Rust binaries under **`bin-native/<platform>-<arch>/`**. No `src/`, no
+  `rust-core/`, no `media/src/`, no maps, no build inputs. `scripts/check-dist-contents.js`
+  (`pnpm run check-dist-contents`, wired into `compile`, `package`, and CI) asserts this against
+  `npm pack --dry-run --json` — the ACTUAL file list, not the intent, because a directory entry in
+  `files` ships whatever is inside it.
+- **Development is by cloning the repo**, which carries the full source and builds the binaries.
+
+**There is exactly ONE package name, `agentlenspro`, and no other is ever created.** An earlier
+design published four `agentlenspro-<platform>` optionalDependency packages (the esbuild/swc
+pattern) and could not ship at all: npm's OIDC cannot create a name that does not already exist,
+so every leg 404'd — and because `publish-npm` waited on them, the MAIN package never published
+either. Measured 2026-08-28: all four `npm view agentlenspro-<target>` → 404 while the registry sat
+a release behind at 2.29.0. `publish.yml`'s `build-binaries` matrix now only BUILDS and uploads
+artifacts; `package` downloads all four, flattens them into `bin-native/`, and packs them into the
+one tarball.
+
+Two traps that make a broken package install cleanly and fail only at spawn time, both now gated:
+**ZIP carries no unix executable bit**, so `upload-artifact` → `download-artifact` loses it (the
+`package` job re-`chmod +x`es and then runs `scripts/verify-bin-native.js`); and **npm's tar writer
+decides the final mode**, so the workflow also asserts `-rwxr-xr-x` on all 16 entries *inside* the
+packed `.tgz`. `src/rustBinResolve.ts` treats a present-but-not-executable binary as not shipped
+and falls back to the TS server rather than crashing.
+
+The size is measured and accepted: `gzip -9` gives `alcore` 52.6→17.0 MB and `alstore` 39.9→11.8 MB,
+so four targets are **~121.5 MB downloaded / ~384 MB unpacked** per install, versus ~30/~96 MB if
+only the matching platform were fetched. `strip -S` saves **0 bytes** — the statically linked
+DuckDB is the size and it does not compress away.
+
 ## Operations — deploy, install, repair
 
 - **EXACTLY ONE server may own a data directory — and changing ports does NOT isolate an instance.**

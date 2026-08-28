@@ -19,6 +19,26 @@ AgentlensPro keeps the following surfaces byte-compatible with AgentLens so exis
 - **`AGENTLENS_*` environment variables** — all server/gate/retention tuning vars keep their names.
 - **Hook registrations self-migrate** — since v2.0.0 hooks are registered as the command strings `agentlenspro hook` / `agentlenspro gate` (see [the single-executable contract](#the-single-executable-contract)). `agentlenspro setup` (or a re-run of `--install-hooks`) rewrites every previous generation found in `~/.claude/settings.json`: the v1 `agentlenspro-hook`/`agentlenspro-gate` PATH bins and the v0 absolute-path `spy-agentlens*` entries.
 
+## Installing vs developing
+
+These are two different things and the project keeps them strictly apart.
+
+| | you get | how |
+| --- | --- | --- |
+| **Install** (`npm i -g agentlenspro`) | compiled artifacts only — the bundled server/CLI, the built dashboard, `skills/`, `agents/`, and the native Rust binaries for **all four supported targets** under `bin-native/<platform>-<arch>/` | one package, `agentlenspro`. There is no separate per-platform package to install, and none is ever published. |
+| **Develop** (`git clone`) | the full source: `src/`, `media/src/`, `rust-core/`, tests, workflows | build with `pnpm run compile` (TypeScript) and `cargo build --release --manifest-path rust-core/Cargo.toml` (Rust) |
+
+No source code, source maps, or build inputs are in the published tarball —
+`scripts/check-dist-contents.js` runs in CI and fails the build if any appear.
+
+Because one package carries every platform's binaries, the download is larger than a
+per-platform install would be: roughly **120 MB compressed / 380 MB on disk**. That is a
+deliberate trade for a single package name and a single install command.
+
+Supported binary targets are `darwin-arm64`, `darwin-x64`, `linux-x64` and `linux-arm64`.
+On any other platform the binaries are simply absent and AgentlensPro falls back to the
+TypeScript server automatically — nothing to configure.
+
 ## Getting Started
 
 **Supported platforms: macOS and Linux. On Windows, run inside WSL2 only** — install Node ≥ 20.9
