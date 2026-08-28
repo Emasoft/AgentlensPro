@@ -43,6 +43,21 @@ interface ReviewGateInput {
   agent_id?: unknown
   agent_type?: unknown
   agent_transcript_path?: unknown
+  /** Set by Claude Code when a Stop hook already blocked this same stop — the harness's own
+   *  loop breaker. Honoured before anything else: with it ignored, an unwritable tmpdir (the
+   *  counter never persists) blocked every fire forever (review of dca6c45, F1). */
+  stop_hook_active?: unknown
+}
+
+/** True when the agent's definition lists a `tools:` line WITHOUT the Agent tool — it cannot
+ *  spawn a reviewer, so a demand costs it a full turn to say so (review F2). Absent or unreadable
+ *  definition ⇒ unknown ⇒ demand as usual. */
+export function agentCannotSpawn(agentType: string, agentsDir = path.join(os.homedir(), '.claude', 'agents')): boolean {
+  if (!/^[A-Za-z0-9_-]+$/.test(agentType)) return false
+  let text: string
+  try { text = fs.readFileSync(path.join(agentsDir, `${agentType}.md`), 'utf8') } catch { return false }
+  const m = /^tools:\s*(.+)$/m.exec(text.split('\n---')[0] ?? '')
+  return m ? !m[1].split(',').map(s => s.trim()).includes('Agent') : false
 }
 
 interface AssistantContentBlock {
@@ -149,8 +164,11 @@ function mainStatePath(key: string): string {
 function readMainState(p: string): MainBreakerState {
   try { return JSON.parse(fs.readFileSync(p, 'utf8')) as MainBreakerState } catch { return { total: 0, consecutive: 0 } }
 }
-function writeMainState(p: string, s: MainBreakerState): void {
-  try { fs.writeFileSync(p, JSON.stringify(s)) } catch { /* not worth wedging over */ }
+/** False when the breaker could not be persisted — the caller must then NOT block: a demand that
+ *  cannot be counted is a demand repeated forever (review of dca6c45, F1: an unwritable tmpdir
+ *  blocked every fire with `demands` stuck at 0). */
+function writeMainState(p: string, s: MainBreakerState): boolean {
+  try { fs.writeFileSync(p, JSON.stringify(s)); return true } catch { return false }
 }
 
 const MAIN_BLOCK_REASON = 'Review-fork gate: this turn edited or committed. Run `agentlenspro '
@@ -166,8 +184,8 @@ async function runMainGate(input: ReviewGateInput): Promise<string | null> {
   const statePath = mainStatePath(key)
   const state = readMainState(statePath)
   const verdict = decideMainGate(scan, state, { maxPerSession: mainGateMaxPerSession(), maxConsecutive: MAIN_MAX_CONSECUTIVE })
-  if (verdict.nextState !== state) writeMainState(statePath, verdict.nextState)
-  if (!verdict.block) return null
+  const persisted = verdict.nextState === state || writeMainState(statePath, verdict.nextState)
+  if (!verdict.block || !persisted) return null
   return JSON.stringify({ decision: 'block', suppressOutput: true, reason: MAIN_BLOCK_REASON })
 }
 
@@ -229,8 +247,8 @@ function subagentStatePath(key: string): string {
 function readSubagentState(p: string): SubagentState {
   try { return JSON.parse(fs.readFileSync(p, 'utf8')) as SubagentState } catch { return { demands: 0 } }
 }
-function writeSubagentState(p: string, s: SubagentState): void {
-  try { fs.writeFileSync(p, JSON.stringify(s)) } catch { /* not worth wedging over */ }
+function writeSubagentState(p: string, s: SubagentState): boolean {
+  try { fs.writeFileSync(p, JSON.stringify(s)); return true } catch { return false }
 }
 
 function readSubagentScan(transcriptPath: string): { didWork: boolean; reviewed: boolean } | null {
@@ -242,7 +260,9 @@ const SUBAGENT_BLOCK_REASON = 'Subagent review gate: before returning, run `agen
   + 'If you have no Agent tool, state that in one line and return — this is asked once.'
 
 async function runSubagentGate(input: ReviewGateInput): Promise<string | null> {
+  if (input?.stop_hook_active === true) return null
   const type = String(input?.agent_type ?? '')
+  if (agentCannotSpawn(type)) return null
   // Same polarity as the main gate's AGENTLENS_REVIEW_FORK: on unless explicitly `off`. Measured
   // 2026-08-29: a subagent whose transcript held one Write and no fork review was allowed live AND
   // on replay, solely because this read `=== 'on'` and nothing sets the variable (TRDD-6QV50JNN).
@@ -257,8 +277,8 @@ async function runSubagentGate(input: ReviewGateInput): Promise<string | null> {
   const statePath = subagentStatePath(agentKey)
   const state = readSubagentState(statePath)
   const verdict = decideSubagentGate(type, enforceOn, scan, state.demands, SUBAGENT_MAX_DEMANDS_PER_AGENT)
-  if (!verdict.block) return null
-  writeSubagentState(statePath, { demands: verdict.nextDemands })
+  // Same rule as the main gate: an uncounted demand is never issued.
+  if (!verdict.block || !writeSubagentState(statePath, { demands: verdict.nextDemands })) return null
   return JSON.stringify({ decision: 'block', suppressOutput: true, reason: SUBAGENT_BLOCK_REASON })
 }
 

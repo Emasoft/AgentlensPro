@@ -51,6 +51,16 @@ missing file looks alarming in the capture.
 **Not live until published:** the hook runs the INSTALLED `agentlenspro` (2.31.1), so on this
 machine the subagent gate enforces only from the next release.
 
+**Review of the fixes** (`reports/review-fork/20260829_003119+0200-hook-gate-review.md`): F1
+(unwritable tmpdir → infinite block, both gates ignored `stop_hook_active`) and F2 (a demand to
+agents with no `Agent` tool — 50 lean-workers = 50 wasted turns) FIXED: both gates honour
+`stop_hook_active`, never block on an unpersisted counter, and skip agents whose definition's
+`tools:` lacks `Agent`; replay-verified for all three plus a blocking control. F3 (redundant
+needle) deleted. F4 (whole-transcript read on the subagent path, no 4 MiB tail cap) and F5
+(`agent_id` → `session_id` fallback would collapse siblings onto one breaker) recorded, latent,
+not fixed. Note: `setupVerb` "real converge" tests fail spuriously under heavy machine load — the
+hook step's `spawnSync` has a 15 s timeout and the bin answers in 70 ms idle.
+
 **NEXT ACTION:** ship it (release with the HFV4AIT7 work), then re-run the Write-tool probe
 against the installed package: expect the block and a `agentlens-subagent-review-<agent>.json`
 with `demands:1`. Then the (b7)/(b13) `.js` divergences are moot — the scripts are unregistered.

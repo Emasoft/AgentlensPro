@@ -1,7 +1,10 @@
 import * as assert from 'assert'
+import * as fs from 'fs'
+import * as os from 'os'
+import * as path from 'path'
 import {
   scanMainTranscriptLines, decideMainGate,
-  scanSubagentTranscriptLines, decideSubagentGate,
+  scanSubagentTranscriptLines, decideSubagentGate, agentCannotSpawn,
   REVIEW_GATE_DIRECTIVE,
 } from '../cli/reviewGate'
 
@@ -68,6 +71,18 @@ suite('reviewGate — subagent (SubagentStop) gate', () => {
   test('decideSubagentGate SKIPS a fork (the recursion guard)', () => {
     const v = decideSubagentGate('fork', true, { didWork: true, reviewed: false }, 0, 1)
     assert.strictEqual(v.block, false)
+  })
+
+  test('agentCannotSpawn reads the agent definition: a tools line without Agent means no demand (review F2)', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'al-agents-'))
+    fs.writeFileSync(path.join(dir, 'lean.md'), '---\nname: lean\ntools: Bash, Read, Write, Edit\n---\nbody')
+    fs.writeFileSync(path.join(dir, 'full.md'), '---\nname: full\ntools: Bash, Agent\n---\nbody')
+    fs.writeFileSync(path.join(dir, 'star.md'), '---\nname: star\n---\ntools: Agent mentioned only in the body')
+    assert.strictEqual(agentCannotSpawn('lean', dir), true)
+    assert.strictEqual(agentCannotSpawn('full', dir), false)
+    assert.strictEqual(agentCannotSpawn('star', dir), false, 'no tools line ⇒ unknown ⇒ demand')
+    assert.strictEqual(agentCannotSpawn('missing', dir), false)
+    assert.strictEqual(agentCannotSpawn('../etc/passwd', dir), false, 'a type is a bare name, never a path')
   })
 
   test('decideSubagentGate never blocks when enforcement is switched OFF (AGENTLENS_SUBAGENT_REVIEW=off)', () => {

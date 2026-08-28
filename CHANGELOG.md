@@ -12,7 +12,10 @@ All notable changes to AgentlensPro are documented here.
   `SubagentStop` was observe-only unless `AGENTLENS_SUBAGENT_REVIEW=on`, and no hook environment
   sets that — so a subagent that edited files and returned without a review was always allowed
   (measured: one `Write`, no fork, allowed live and on replay). It now has the main gate's
-  polarity: enforced unless `AGENTLENS_SUBAGENT_REVIEW=off` (TRDD-6QV50JNN).
+  polarity: enforced unless `AGENTLENS_SUBAGENT_REVIEW=off` (TRDD-6QV50JNN). Two guards came
+  with the flip: both gates honour Claude Code's `stop_hook_active` and never issue a demand they
+  could not persist (an unwritable tmpdir used to block every fire, forever), and a subagent whose
+  definition lists `tools:` without `Agent` is not asked to spawn a reviewer it cannot spawn.
 - **`--install-hooks` removes the loose review-gate `.js` scripts the verb replaced.** Both were
   wired to the same events and shared the same tmp state files, so every Stop/SubagentStop ran the
   gate twice and burned the breakers at double rate.

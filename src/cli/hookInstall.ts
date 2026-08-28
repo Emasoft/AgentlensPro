@@ -83,8 +83,9 @@ export const LEGACY_GATE_BIN = 'agentlenspro-gate'
 // them either — and with both wired to the same event and sharing the same tmp state files, one
 // Stop/SubagentStop fire ran the gate TWICE and burned the breakers at double rate
 // (MAX_CONSECUTIVE=2 spent after ONE unmet turn; TRDD-6QV50JNN). Recognised as ours for
-// migration/uninstall, never registered.
-export const LEGACY_REVIEW_SCRIPTS = ['stop-spawn-review-fork.js', 'subagent-stop-spawn-review-fork.js']
+// migration/uninstall, never registered. ONE needle: `subagent-stop-spawn-review-fork.js` is a
+// superstring of `stop-spawn-review-fork.js`, so it matches both scripts (review F3).
+export const LEGACY_REVIEW_SCRIPTS = ['stop-spawn-review-fork.js']
 
 export interface HookCommandEntry { type: string; command: string; timeout?: number; async?: boolean }
 export interface HookMatcher { matcher?: string; hooks: HookCommandEntry[] }
