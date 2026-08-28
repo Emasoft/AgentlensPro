@@ -201,7 +201,9 @@ export function scanSubagentTranscriptLines(lines: string[]): { didWork: boolean
 
 /** Pure decision: demand a review from a subagent at most once, and only when it (a) is not the
  *  reviewer itself (recursion guard on `agent_type`), (b) enforcement is armed
- *  (AGENTLENS_SUBAGENT_REVIEW=on — default observe-only), (c) its own transcript proves it did
+ *  (AGENTLENS_SUBAGENT_REVIEW=off disables it — ENFORCED by default, like the main gate;
+ *  it shipped observe-only-unless-`on`, and since no hook environment ever set that, the
+ *  subagent gate had never blocked once — TRDD-6QV50JNN), (c) its own transcript proves it did
  *  work and has not already reviewed itself, (d) it has not already been asked. */
 export function decideSubagentGate(
   agentType: string,
@@ -241,7 +243,10 @@ const SUBAGENT_BLOCK_REASON = 'Subagent review gate: before returning, run `agen
 
 async function runSubagentGate(input: ReviewGateInput): Promise<string | null> {
   const type = String(input?.agent_type ?? '')
-  const enforceOn = (process.env.AGENTLENS_SUBAGENT_REVIEW || '').trim() === 'on'
+  // Same polarity as the main gate's AGENTLENS_REVIEW_FORK: on unless explicitly `off`. Measured
+  // 2026-08-29: a subagent whose transcript held one Write and no fork review was allowed live AND
+  // on replay, solely because this read `=== 'on'` and nothing sets the variable (TRDD-6QV50JNN).
+  const enforceOn = (process.env.AGENTLENS_SUBAGENT_REVIEW || '').trim() !== 'off'
   const own = input?.agent_transcript_path
   // `agent_transcript_path` is the subagent's OWN file — `transcript_path` names the PARENT's and
   // would measure the wrong agent entirely.

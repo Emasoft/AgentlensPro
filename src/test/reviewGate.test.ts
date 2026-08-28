@@ -70,7 +70,10 @@ suite('reviewGate — subagent (SubagentStop) gate', () => {
     assert.strictEqual(v.block, false)
   })
 
-  test('decideSubagentGate is observe-only by default (enforceOn=false never blocks)', () => {
+  test('decideSubagentGate never blocks when enforcement is switched OFF (AGENTLENS_SUBAGENT_REVIEW=off)', () => {
+    // enforceOn=false is the explicit OFF switch, no longer the default: the gate shipped
+    // observe-only-unless-`on`, nothing ever set `on`, and a subagent with one Write and no fork
+    // review was allowed live and on replay (TRDD-6QV50JNN). The default is now the main gate's.
     const v = decideSubagentGate('lean-worker', false, { didWork: true, reviewed: false }, 0, 1)
     assert.strictEqual(v.block, false)
   })

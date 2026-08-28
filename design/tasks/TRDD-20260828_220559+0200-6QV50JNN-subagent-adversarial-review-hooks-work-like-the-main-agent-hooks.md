@@ -33,9 +33,27 @@ test in `cliMatchers.test.ts`. Applied to this machine with `node standalone/cli
 write failure aborts the subagent demand but not the main one. Check whether `reviewGate.ts`
 inherited either before touching the scripts.
 
-**NEXT ACTION:** step 2 of the Method — spawn a real subagent that edits a throwaway file in an
-isolated worktree and capture the SubagentStop fire (`agentlenspro hook-events`), the demand,
-and the `review-gate` verdict; then the no-edit control.
+**Step 2 done — and it found the real defect (2026-08-29):** three real subagents (Bash-write,
+no-edit, Write-tool), each `SubagentStop` fire captured in `~/.agentlens/hook-events/` with
+`agent_transcript_path` present. The Write-tool subagent (1 `Write`, no fork review) was
+ALLOWED, live and on replay of its exact payload. Cause, `reviewGate.ts:244`: the subagent gate
+was observe-only unless `AGENTLENS_SUBAGENT_REVIEW=on`, and no hook environment sets it — so it
+had NEVER blocked, anywhere. The main gate is on-unless-`off`. Fixed to the same polarity;
+replay now: Write-tool probe → `{"decision":"block"}` + state `{"demands":1}`; `=off` → allow;
+no-edit probe → allow. (The first "edit" probe was invalid — the worker wrote via Bash, no
+editor tool_use — the gate's allow there was correct.)
+
+**Observation, not a defect:** the Rust refactor agent's inner turns fire `SubagentStop` with an
+EMPTY `agent_type` and a `agent_transcript_path` that does not exist at fire time — the gate
+skips empty types by design (internal micro-lookups), so nothing is lost; recorded because the
+missing file looks alarming in the capture.
+
+**Not live until published:** the hook runs the INSTALLED `agentlenspro` (2.31.1), so on this
+machine the subagent gate enforces only from the next release.
+
+**NEXT ACTION:** ship it (release with the HFV4AIT7 work), then re-run the Write-tool probe
+against the installed package: expect the block and a `agentlens-subagent-review-<agent>.json`
+with `demands:1`. Then the (b7)/(b13) `.js` divergences are moot — the scripts are unregistered.
 
 USER goal (2026-08-28): *"ensure the new hooks for adversarial review of the last turn for the
 subagents are working fine like the existing hooks for the main agent."*

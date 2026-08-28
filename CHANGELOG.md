@@ -4,6 +4,23 @@ All notable changes to AgentlensPro are documented here.
 
 > **Lineage note:** AgentlensPro continues the history of [AgentLens](https://github.com/RogerReed/agentlens), from which it was forked. Entries below that predate the fork refer to the original AgentLens lineage.
 
+## [2.31.2] - 2026-08-29
+
+### Fixed
+
+- **The subagent adversarial-review gate never enforced.** `agentlenspro review-gate` on
+  `SubagentStop` was observe-only unless `AGENTLENS_SUBAGENT_REVIEW=on`, and no hook environment
+  sets that — so a subagent that edited files and returned without a review was always allowed
+  (measured: one `Write`, no fork, allowed live and on replay). It now has the main gate's
+  polarity: enforced unless `AGENTLENS_SUBAGENT_REVIEW=off` (TRDD-6QV50JNN).
+- **`--install-hooks` removes the loose review-gate `.js` scripts the verb replaced.** Both were
+  wired to the same events and shared the same tmp state files, so every Stop/SubagentStop ran the
+  gate twice and burned the breakers at double rate.
+- **OTLP ingest no longer serialises behind one fsync per payload** (TRDD-HFV4AIT7): the JSON parse
+  runs before the state lock on the request's worker thread, and durability is the existing 5 s
+  flush tick. Measured 131 → 300 req/s on the flood benchmark (`scripts/bench/`); the remaining
+  one-core ceiling is the summary rebuild under the same lock, addressed next.
+
 ## [2.31.1] - 2026-08-28
 
 ### Fixed
