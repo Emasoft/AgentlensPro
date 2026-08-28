@@ -356,10 +356,16 @@ jobs:
           echo "publishing $tgz — 16/16 binaries present and mode 755"
 
       - name: Publish to npm (OIDC trusted publishing)
-        # Publishing a prebuilt tarball deliberately skips prepublishOnly (measured: `npm publish
-        # --dry-run <tgz>` runs no lifecycle script). These bytes were already type-checked,
-        # linted, bundled and verified by the package job; rebuilding here would produce DIFFERENT
-        # bytes than the ones that were attested.
+        # These bytes were already type-checked, linted, bundled, verified and ATTESTED by the
+        # package job — publishing them unchanged is the whole point, since rebuilding here would
+        # produce different bytes than the ones that were signed.
+        #
+        # Whether prepublishOnly fires on a tarball publish is DOCUMENTED-BUT-UNMEASURED. The
+        # obvious probe does not answer it: `--dry-run` suppresses lifecycle scripts outright
+        # (measured — an instrumented prepublishOnly stayed silent for BOTH the tarball and the
+        # directory form), so its silence says nothing about a real publish. It is harmless
+        # either way: the tarball argument is already built, so a stray `pnpm run package` here
+        # would burn minutes without touching what gets published.
         #
         # Glob into an array and require exactly one match — a bare `ls agentlenspro-*.tgz` in a
         # step without `set -euo pipefail` would silently pick the first of several and publish
