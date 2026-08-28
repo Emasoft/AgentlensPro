@@ -16,6 +16,7 @@ import { summarizeSpans } from '../src/spanSummarizer'
 import { packageVersion } from '../src/packageVersion'
 import { dataDir as agentlensDataDir, NO_REVIVE_FILE } from '../src/dataDir'
 import { normalizeBasePath, stripBasePath } from '../src/basePath'
+import { substituteTokens } from '../src/shellTemplate'
 import { VersionedCache } from '../src/derivedCache'
 import { startLoopWatchdog } from '../src/loopWatchdog'
 import { capTimeline, timelineMaxEntries } from '../src/timelineRetention'
@@ -2551,16 +2552,17 @@ function getHtml(restrictedViewer: boolean): string {
   // The template is media/index.html — ONE file read by BOTH servers (TRDD-VHH7FXGC). It used to be
   // a 540-line literal here, which alcore would have had to mirror; check-no-mirrors cannot see Rust,
   // so the only drift-proof shape is a shared asset. Read per request: it is 28 KB and lets a dev edit
-  // it without a restart, the same way the bundles are served. Function replacements, not strings:
-  // a string replacement interprets dollar-ampersand / dollar-digit sequences in the inlined JSON
-  // as substitution patterns (this very comment was mangled by that once).
-  return fs.readFileSync(path.join(mediaDir, 'index.html'), 'utf8')
-    .replaceAll('@@VIEWER_META@@', () => viewerMeta)
-    .replaceAll('@@BASE_PATH_JSON@@', () => JSON.stringify(BASE_PATH))
-    .replaceAll('@@BASE_PATH@@', () => BASE_PATH)
-    .replaceAll('@@SESSION_SUMMARY_JSON@@', () => sessionSummaryJson)
-    .replaceAll('@@BUILD_ID_JSON@@', () => JSON.stringify(BUILD_ID))
-    .replaceAll('@@SIDEBAR_INIT_JSON@@', () => sidebarInitJson)
+  // it without a restart, the same way the bundles are served. ONE scan (src/shellTemplate.ts), never
+  // a chain of replaces: the summary JSON is session data, and a prompt containing a later token
+  // would be substituted into — a JSON-string breakout in the dashboard's origin (review F1).
+  return substituteTokens(fs.readFileSync(path.join(mediaDir, 'index.html'), 'utf8'), {
+    '@@VIEWER_META@@': viewerMeta,
+    '@@BASE_PATH_JSON@@': JSON.stringify(BASE_PATH),
+    '@@BASE_PATH@@': BASE_PATH,
+    '@@SESSION_SUMMARY_JSON@@': sessionSummaryJson,
+    '@@BUILD_ID_JSON@@': JSON.stringify(BUILD_ID),
+    '@@SIDEBAR_INIT_JSON@@': sidebarInitJson,
+  })
 }
 
 // ── Static file serving ───────────────────────────────────────────────────────

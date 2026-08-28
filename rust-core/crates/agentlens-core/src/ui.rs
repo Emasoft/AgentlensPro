@@ -30,7 +30,8 @@
 //!     `CoreState.media_dir`; without it they are the 404 below.
 //!   - fallback → 404, NO Content-Type, body `Not found`.
 //!
-//! Deferred (documented, not silently dropped): admission-control 503s, base-path strip.
+//! Deferred (documented, not silently dropped): admission-control 503s, base-path (BOTH the
+//! strip in handle() and the prefix in the shell — dashboard_html emits root-absolute URLs).
 
 use std::sync::{Arc, Mutex};
 
@@ -503,15 +504,17 @@ fn safe_json(v: &Value) -> String {
     v.to_string().replace("</", "<\\/").replace("<!--", "<\\!--").replace("${", "\\${")
 }
 
-/// src/basePath.ts normalizeBasePath: `''` (off) or `/x` — leading slash, no trailing slash;
-/// a bare `/` is OFF, not a prefix.
-fn normalize_base_path(raw: Option<String>) -> String {
-    let v = raw.unwrap_or_default().trim().to_owned();
-    if v.is_empty() || v == "/" {
-        return String::new();
-    }
-    let with_lead = if v.starts_with('/') { v } else { format!("/{v}") };
-    with_lead.trim_end_matches('/').to_owned()
+/// src/shellTemplate.ts substituteTokens — ONE left-to-right scan. A chain of `replace` calls
+/// rescans each step's output, so a session whose prompt is the literal `@@SIDEBAR_INIT_JSON@@`
+/// would have the sidebar JSON spliced INTO the summary JSON string — a breakout of the string
+/// literal, executed in the dashboard's origin (review of 85f0b08, F1). Unknown tokens stay verbatim.
+fn substitute_tokens(template: &str, values: &[(&str, &str)]) -> String {
+    let re = regex::Regex::new(r"@@[A-Z_]+@@").expect("static pattern");
+    re.replace_all(template, |c: &regex::Captures| {
+        let t = &c[0];
+        values.iter().find(|(k, _)| *k == t).map(|(_, v)| (*v).to_owned()).unwrap_or_else(|| t.to_owned())
+    })
+    .into_owned()
 }
 
 /// `GET /` — server.ts getHtml + the route's two contract headers (server.ts:4407).
@@ -532,17 +535,25 @@ fn dashboard_html(state: &Arc<Mutex<CoreState>>, media_dir: &std::path::Path, re
         // different fingerprint here (the TS's bundle mtimes) would reload it on first connect.
         (safe_json(&stripped), safe_json(&sidebar), st.build_id.clone())
     };
-    let base = normalize_base_path(std::env::var("AGENTLENS_BASE_PATH").ok());
+    // The mount prefix is EMPTY here, deliberately, and not read from AGENTLENS_BASE_PATH: the
+    // base-path STRIP in handle() is still on this module's deferred list, and a shell that emits
+    // `/lens/dashboard.js` to a router that only knows `/dashboard.js` is a 200 page that can never
+    // load (review F2) — worse than the honest root-only behaviour. Port both halves together.
+    let base = "";
     // TRDD-1ZH1D5EG: the RESTRICTED verdict reaches the webview through this meta tag.
     let viewer_meta = if restricted { "\n  <meta name=\"agentlens-viewer\" content=\"restricted\">" } else { "" };
-    // BASE_PATH_JSON before BASE_PATH: the shorter token is a prefix of the longer one.
-    let html = tmpl
-        .replace("@@VIEWER_META@@", viewer_meta)
-        .replace("@@BASE_PATH_JSON@@", &Value::from(base.as_str()).to_string())
-        .replace("@@BASE_PATH@@", &base)
-        .replace("@@SESSION_SUMMARY_JSON@@", &summary_json)
-        .replace("@@BUILD_ID_JSON@@", &Value::from(build_id).to_string())
-        .replace("@@SIDEBAR_INIT_JSON@@", &sidebar_json);
+    let build_id_json = Value::from(build_id).to_string();
+    let html = substitute_tokens(
+        &tmpl,
+        &[
+            ("@@VIEWER_META@@", viewer_meta),
+            ("@@BASE_PATH_JSON@@", "\"\""),
+            ("@@BASE_PATH@@", base),
+            ("@@SESSION_SUMMARY_JSON@@", &summary_json),
+            ("@@BUILD_ID_JSON@@", &build_id_json),
+            ("@@SIDEBAR_INIT_JSON@@", &sidebar_json),
+        ],
+    );
     let mut r = Response::new(boxed_full(Bytes::from(html)));
     let h = r.headers_mut();
     h.insert("Content-Type", hyper::header::HeaderValue::from_static("text/html"));
@@ -562,7 +573,14 @@ fn dashboard_html(state: &Arc<Mutex<CoreState>>, media_dir: &std::path::Path, re
 
 /// The static route (server.ts:4428): a file under `media_dir` with a known extension, or None.
 fn static_asset(media_dir: &std::path::Path, path: &str) -> Option<Response<SseBody>> {
-    let mime = match path.rsplit_once('.')?.1 {
+    // Node's path.extname: the suffix of the LAST component, and a dotfile (`/.js`) has NO
+    // extension — a bare rsplit on the whole path would serve a file literally named `.js`
+    // that the TS 404s (review F3).
+    let (stem, ext) = path.rsplit('/').next().unwrap_or("").rsplit_once('.')?;
+    if stem.is_empty() {
+        return None;
+    }
+    let mime = match ext {
         "css" => "text/css",
         "js" => "application/javascript",
         "png" => "image/png",
@@ -3346,5 +3364,17 @@ pub async fn run_push_loop(state: Arc<Mutex<CoreState>>, hub: Arc<SseHub>) {
             last_pushed = version;
             push_update(&state, &hub, crate::now_ms() as f64);
         }
+    }
+}
+
+#[cfg(test)]
+mod shell_tests {
+    use super::substitute_tokens;
+
+    #[test]
+    fn a_value_carrying_a_token_is_never_rescanned() {
+        assert_eq!(substitute_tokens("a=@@A@@;b=@@B@@", &[("@@A@@", "\"@@B@@\""), ("@@B@@", "INJECTED")]), "a=\"@@B@@\";b=INJECTED");
+        assert_eq!(substitute_tokens("@@NOPE@@ @@P@@/a @@P@@/b", &[("@@P@@", "/lens")]), "@@NOPE@@ /lens/a /lens/b");
+        assert_eq!(substitute_tokens("x=@@V@@", &[("@@V@@", "$& $1 $$")]), "x=$& $1 $$");
     }
 }

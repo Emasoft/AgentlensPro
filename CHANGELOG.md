@@ -4,6 +4,28 @@ All notable changes to AgentlensPro are documented here.
 
 > **Lineage note:** AgentlensPro continues the history of [AgentLens](https://github.com/RogerReed/agentlens), from which it was forked. Entries below that predate the fork refer to the original AgentLens lineage.
 
+## [2.31.1] - 2026-08-28
+
+### Fixed
+
+- **Shell-template injection (both servers, introduced in 2.31.0).** The six `@@TOKENS@@` were
+  filled by a CHAIN of replaces, so each step rescanned the previous step's output — including the
+  inlined session JSON. A session whose prompt was the literal `@@SIDEBAR_INIT_JSON@@` had the
+  sidebar JSON spliced into the summary JSON string, terminating the literal and running the rest
+  as JavaScript in the dashboard's origin. The first victim would have been a maintainer working
+  on this repo, whose transcripts contain exactly those tokens. Substitution is now ONE scan
+  (`src/shellTemplate.ts` / `ui.rs::substitute_tokens`), unit-tested with a token-carrying value.
+- **alcore emitted base-path-prefixed asset URLs it could not route.** With `AGENTLENS_BASE_PATH`
+  set, the Rust shell said `src="/lens/dashboard.js"` while `handle()` still routes the unstripped
+  path — a 200 page that never loads. alcore now emits root-absolute URLs until the strip is ported
+  too (both halves are on `ui.rs`'s deferred list; the TS server is unchanged).
+- **Dotfile extension parity.** alcore's static route derived the extension from the whole path,
+  so a media file literally named `.js` served where Node's `path.extname` (and the TS route) sees
+  no extension and 404s. Now derived from the last component with a non-empty stem.
+
+  All three were found by the adversarial review fork on the 2.31.0 commit
+  (`reports/review-fork/20260828_223718+0200-85f0b08-review.md`).
+
 ## [2.31.0] - 2026-08-28
 
 ### Added

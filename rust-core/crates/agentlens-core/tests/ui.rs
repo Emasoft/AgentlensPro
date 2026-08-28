@@ -258,6 +258,7 @@ fn root_serves_the_dashboard_shell_and_static_assets_stay_contained() {
     let repo_tmpl = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../media/index.html");
     std::fs::copy(&repo_tmpl, media.join("index.html")).unwrap();
     std::fs::write(media.join("dashboard.js"), b"console.log(1)").unwrap();
+    std::fs::write(media.join(".js"), b"dotfile").unwrap(); // path.extname('/.js') === '' → 404
     // A sibling that shares the string prefix `<media>` but not the component (server.ts:4431).
     let sibling = std::path::PathBuf::from(format!("{}-assets", media.display()));
     std::fs::create_dir_all(&sibling).unwrap();
@@ -291,7 +292,7 @@ fn root_serves_the_dashboard_shell_and_static_assets_stay_contained() {
     assert!(r.to_lowercase().contains("content-type: application/javascript"), "{r}");
     assert_eq!(body_of(&r), "console.log(1)");
     // Refused: unknown extension, `..` escape, the sibling directory, a missing file.
-    for path in ["/index.html.bak", "/../al-core-escape.css", "/../al-core-media-0-assets/x.js", "/nope.js"] {
+    for path in ["/index.html.bak", "/../al-core-escape.css", "/../al-core-media-0-assets/x.js", "/nope.js", "/.js"] {
         let r = request(ui, &format!("GET {path} HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n"));
         assert!(r.starts_with("HTTP/1.1 404"), "{path}: {r}");
         assert_eq!(body_of(&r), "Not found", "{path}");
