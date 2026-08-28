@@ -354,6 +354,10 @@ fn durable_state_round_trips_offsets_and_stripped_cards_and_skips_the_cold_resca
     let mut tailer3 = LogTailer::default();
     let mut durable3 = DurableState::open(&data);
     let (_, imported, skipped) = durable3.restore(&mut tailer3, &mut CoreState::open(&data.join("spans"))).unwrap();
+    // Per-case first: the tuple alone says "one file that should have skipped did not" without
+    // saying WHICH, and guessing between the two cost a full CI round-trip once already.
+    assert!(!tailer3.file_state.contains_key(&codex), "rotated file was resumed");
+    assert!(!tailer3.file_state.contains_key(&cp), "truncated file was resumed");
     assert_eq!((imported, skipped), (3, 2));
 
     // A version-stale stamp restores NOTHING (cold rescan), whatever the logs hold.
