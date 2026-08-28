@@ -50,6 +50,10 @@ suite('alcore cutover seam', () => {
     const argv = alcoreServeArgs({}, '/data')
     assert.strictEqual(argv[0], 'serve')
     assert.strictEqual(valueOf(argv, '--data-dir'), '/data')
+    // The dashboard assets: alcore refuses to boot without them (TRDD-VHH7FXGC), and the ONLY
+    // place that knows the package root is this spawn site.
+    const media = valueOf(argv, '--media-dir') ?? ''
+    assert.ok(fs.existsSync(path.join(media, 'index.html')), `--media-dir ${media} must hold the dashboard shell`)
     // Canonical, NOT alcore's own 4319/3001/4317 side-by-side defaults: cliCore.mcpEndpoint
     // defaults to :4316, the dashboard to :3000, every telemetry writer to :4318.
     assert.strictEqual(valueOf(argv, '--otlp-port'), '4318')
@@ -92,7 +96,8 @@ suite('alcore cutover seam', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'al-cutover-data-'))
     // Ports well away from both the canonical set and alcore's side-by-side defaults, so this
     // test cannot collide with either a real server or a second copy of itself.
-    const child = spawn(ALCORE, ['serve', '--data-dir', dir, '--otlp-port', '44318', '--ui-port', '43000', '--mcp-port', '44316', '--no-log-scan'],
+    // --media-dir is REQUIRED (TRDD-VHH7FXGC): the repo's own media/, the same dir the spawn site resolves.
+    const child = spawn(ALCORE, ['serve', '--data-dir', dir, '--media-dir', path.join(__dirname, '..', '..', '..', 'media'), '--otlp-port', '44318', '--ui-port', '43000', '--mcp-port', '44316', '--no-log-scan'],
       { stdio: ['ignore', 'ignore', 'ignore'] })
     try {
       const pidfile = path.join(dir, 'server.pid')

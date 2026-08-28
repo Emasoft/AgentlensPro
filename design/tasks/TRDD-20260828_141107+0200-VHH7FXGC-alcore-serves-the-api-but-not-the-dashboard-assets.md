@@ -1,9 +1,9 @@
 ---
 trdd-id: VHH7FXGC
 title: alcore serves the API and SSE but not the dashboard's HTML/JS, so the web UI is dark when the Rust core is the server
-column: todo
+column: complete
 created: 2026-08-28T14:11:07+0200
-updated: 2026-08-28T21:14:38+0200
+updated: 2026-08-28T21:55:03+0200
 current-owner: claude-agentlenspro
 task-type: feature
 project-id: agentlenspro
@@ -85,9 +85,42 @@ package, so the npm transition is unaffected either way.
 
 ## Acceptance criteria
 
-- [ ] `curl -fsS http://localhost:3000/` returns the dashboard HTML while `alcore` is serving
-- [ ] the dashboard loads and renders live data end to end against the Rust core
-- [ ] a test asserts the root route, so this cannot regress silently again
+- [x] `curl -fsS http://localhost:3000/` returns the dashboard HTML while `alcore` is serving
+- [x] the dashboard loads and renders live data end to end against the Rust core
+- [x] a test asserts the root route, so this cannot regress silently again
+
+## Done — 2026-08-28 (version 2.31.0)
+
+**Shape (advisor-confirmed, Fable 5):** the 540-line `getHtml` literal moved to **`media/index.html`**
+with six `@@TOKENS@@`; `server.ts::getHtml` reads and substitutes it (function replacements — a
+string replacement interprets dollar-patterns in the inlined JSON, and that trap bit the first
+edit), and `ui.rs::dashboard_html` does the same on the Rust side. One template, two servers —
+the alternative was a Rust copy that `check-no-mirrors` cannot see. `static_asset` ports the MIME
+map and containment (`Path::starts_with` is component-wise, i.e. the TS's `mediaDir + sep`).
+`alcore serve` requires `--media-dir` and refuses to boot without `index.html` there;
+`serverControl.findMediaDir()` resolves it by the same layout walk as `findServerJs`.
+
+**Evidence, all measured on isolated instances (never the live :3000):**
+
+- TS `getHtml` before/after: byte-identical on fixed inputs (`old==new: true`, 28411 bytes),
+  including a payload carrying `$&`, `$1` and `<\/`.
+- alcore vs TS `GET /`: identical after normalizing the 3 inlined data lines; both send
+  `text/html`, `Vary: X-Agentlens-Viewer`, the loopback `frame-ancestors` CSP. `/dashboard.js`
+  200 `application/javascript` 758388 bytes from both. `/../package.json` → 404, bogus viewer
+  header → 403 on alcore.
+- Headless Chrome against alcore with one OTLP-seeded session: `{"sessionRows":1,"errors":[]}`,
+  sidebar Active, screenshot `reports/screenshots/20260828_214317+0200-alcore-dashboard.png`.
+- Tests: `tests/ui.rs` +1 (`root_serves_the_dashboard_shell_and_static_assets_stay_contained`:
+  both routes, headers, tokens all substituted, build id = the update frames' id, restricted meta
+  absent for standalone, static 200, and four refusals incl. the `<media>-assets` sibling and a
+  `..` escape); 40/40 in the file; cutover suite 7/7 (`--media-dir` asserted, real alcore boots).
+  `check-types`, `lint`, `clippy --all-targets`, `check-mirrors`, `check-dist-contents`,
+  `check-identities` clean; `media/index.html` confirmed in `npm pack --dry-run`.
+
+**Not done here (own cards):** the restricted-viewer meta-tag path is exercised only by the
+`restricted` boolean plumbed from the existing verified gate — no signed-header test for `/`;
+the P9 browser smoke suite still boots `server.js` only. `standalone/server.js` stays in `files`
+until DMWOBWFH box 3 drops it.
 
 ## Notes
 

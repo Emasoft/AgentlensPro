@@ -134,6 +134,10 @@ pub struct CoreState {
     /// The dashboard live-reload fingerprint carried in every update frame (server.ts BUILD_ID —
     /// bundle mtimes there; here the process start, the same "changes on restart" contract).
     pub build_id: String,
+    /// Where the dashboard's built assets live (server.ts `mediaDir`): `index.html` + the bundles
+    /// served by `GET /` and the static route (TRDD-VHH7FXGC). Set by the binary from
+    /// `--media-dir`; `None` (tests that never touch the UI) keeps those routes at the 404 fallback.
+    pub media_dir: Option<std::path::PathBuf>,
     /// Log-derived session cards keyed by sessionId (server.ts `logSessions`), merged into the
     /// served summary under the feed-collision doctrine (feed_merge.rs). Fed by the log reader
     /// (log_reader.rs); `put_log_session` is the one write path and bumps data_version. An
@@ -437,6 +441,7 @@ impl CoreState {
             window,
             data_version: 0,
             build_id: now.to_string(),
+            media_dir: None,
             log_sessions: IndexMap::new(),
             data_dir: data_dir.to_path_buf(),
             started_at_ms: now,

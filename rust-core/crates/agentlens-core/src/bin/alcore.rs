@@ -34,7 +34,7 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 fn usage(msg: &str) -> ! {
     eprintln!("alcore: {msg}");
-    eprintln!("usage: alcore serve --data-dir DIR [--otlp-port N] [--ui-port N] [--mcp-port N] [--bind HOST] [--no-log-scan]");
+    eprintln!("usage: alcore serve --data-dir DIR --media-dir DIR [--otlp-port N] [--ui-port N] [--mcp-port N] [--bind HOST] [--no-log-scan]");
     exit(64);
 }
 
@@ -44,6 +44,11 @@ fn main() {
         usage("command required (serve)");
     }
     let mut data_dir = String::new();
+    // REQUIRED, never guessed from the exe location: the binary reaches this process through three
+    // layouts (bin-native/<plat>/ in the tarball, <dataDir>/bin/ as a dev copy, target/debug/ under
+    // cargo) and an exe-relative `../../media` is right for exactly one of them. The spawn site
+    // (serverControl.ts alcoreServeArgs) knows the package root; a cargo dev passes it by hand.
+    let mut media_dir = String::new();
     let mut port: u16 = 4319;
     let mut ui_port: u16 = 3001;
     // 4317, NOT the TS's 4316 — the same +1 convention as 4318→4319 and 3000→3001, so alcore can
@@ -60,6 +65,10 @@ fn main() {
             "--data-dir" => {
                 i += 1;
                 data_dir = args.get(i).cloned().unwrap_or_else(|| usage("--data-dir needs a path"));
+            }
+            "--media-dir" => {
+                i += 1;
+                media_dir = args.get(i).cloned().unwrap_or_else(|| usage("--media-dir needs a path"));
             }
             "--otlp-port" => {
                 i += 1;
@@ -83,6 +92,15 @@ fn main() {
     }
     if data_dir.is_empty() {
         usage("--data-dir is required");
+    }
+    if media_dir.is_empty() {
+        usage("--media-dir is required");
+    }
+    // Boot-time check, not first-request: a wrong dir would otherwise report "UI/API listening"
+    // and hand every browser a bare 404 — the exact silent-dark-dashboard failure of VHH7FXGC.
+    let media_dir = std::fs::canonicalize(&media_dir).unwrap_or_else(|e| usage(&format!("--media-dir {media_dir}: {e}")));
+    if !media_dir.join("index.html").is_file() {
+        usage(&format!("--media-dir {}: no index.html there", media_dir.display()));
     }
     let spans_dir = std::path::Path::new(&data_dir).join("spans");
     if let Err(e) = std::fs::create_dir_all(&spans_dir) {
@@ -135,6 +153,7 @@ fn main() {
         // What /api/server-stats reports as `ports` — the listeners this process ACTUALLY binds.
         // `mcp` used to be left at the env/TS default (4316) while nothing bound it, so the server
         // reported a port a client would find dead while MCP was in fact served elsewhere.
+        st.media_dir = Some(media_dir);
         st.ports.ui = ui_port;
         st.ports.otlp = port;
         st.ports.mcp = mcp_port;

@@ -2,7 +2,7 @@
   "name": "agentlenspro",
   "displayName": "AgentlensPro — Professional AI Agent Observability",
   "description": "AgentlensPro — professional observability for AI agent sessions: OTEL traces and local log file ingestion, CLI + server + skills. Standalone (npx) and Docker.",
-  "version": "2.30.1",
+  "version": "2.31.0",
   "publisher": "agentlens",
   "license": "MIT",
   "engines": {
@@ -41,6 +41,7 @@
     "standalone/cli.js",
     "standalone/server.js",
     "scripts/safe_config_edit.py",
+    "media/index.html",
     "media/dashboard.js",
     "media/dashboard.css",
     "media/sidebar.js",

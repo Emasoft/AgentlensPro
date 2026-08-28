@@ -1,0 +1,543 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">@@VIEWER_META@@
+  <title>AgentLens</title>
+  <link rel="icon" href="@@BASE_PATH@@/mascot.png" type="image/png">
+  <link rel="stylesheet" href="@@BASE_PATH@@/dashboard.css">
+  <!-- AgentlensPro#4: the mount prefix, read by media/src/apiBase.ts. A <base> tag cannot do this
+       job — it rewrites RELATIVE urls, and every fetch here is root-absolute. -->
+  <script>window.__AGENTLENS_BASE__ = @@BASE_PATH_JSON@@;</script>
+  <style>
+    /* ── VS Code theme variable shim ─────────────────────────────────────── */
+    :root {
+      --vscode-editor-background:       #1e1e1e;
+      --vscode-foreground:              #cccccc;
+      --vscode-panel-border:            #3e3e42;
+      --vscode-textLink-foreground:     #4fc3f7;
+      --vscode-descriptionForeground:   #9d9d9d;
+      --vscode-list-hoverBackground:    #2a2d2e;
+      --vscode-editorWidget-background: #252526;
+      --vscode-testing-iconFailed:      #f44747;
+      --vscode-testing-iconPassed:      #4ec994;
+      --vscode-font-family:             -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+      --vscode-dropdown-background:     #3c3c3c;
+      --vscode-dropdown-border:         #616161;
+      --vscode-dropdown-foreground:     #f0f0f0;
+      --vscode-button-background:       #0e639c;
+      --vscode-button-foreground:       #ffffff;
+      --vscode-button-hoverBackground:  #1177bb;
+    }
+
+    /* ── Standalone layout ───────────────────────────────────────────────── */
+    html, body { height: 100%; overflow: hidden; margin: 0; padding: 0; }
+    body { padding: 0; }
+    #sa-wrap { display: flex; height: 100vh; width: 100vw; overflow: hidden; }
+
+    /* ── Sidebar panel ───────────────────────────────────────────────────── */
+    #sa-sidebar {
+      width: 260px;
+      min-width: 260px;
+      background: var(--vscode-editorWidget-background);
+      border-right: 1px solid var(--vscode-panel-border);
+      display: flex;
+      flex-direction: column;
+      flex-shrink: 0;
+      overflow: hidden;
+      transition: width 0.15s ease, min-width 0.15s ease;
+    }
+    #sa-sidebar.sa-collapsed { width: 0; min-width: 0; }
+
+    /* Sidebar content — shared CSS classes with sidebarWebview.ts */
+    .sb-card { background: var(--vscode-editor-background); border: 1px solid var(--vscode-panel-border); border-radius: 4px; padding: 8px 10px; margin-bottom: 6px; }
+    .sb-section-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.4px; color: var(--vscode-descriptionForeground); margin-bottom: 4px; }
+    .sb-row { display: flex; align-items: center; gap: 6px; }
+    .sb-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+    .sb-dot.active { background: #56D364; animation: sbPulse 1.5s ease-in-out infinite; }
+    .sb-dot.idle { background: var(--vscode-descriptionForeground); opacity: 0.5; }
+    @keyframes sbPulse { 0%,100% { opacity:1;transform:scale(1); } 50% { opacity:0.5;transform:scale(1.4); } }
+    .sb-status { font-size: 12px; font-weight: 600; }
+    .sb-muted { color: var(--vscode-descriptionForeground); font-size: 11px; }
+    .sb-prompt { font-size: 10px; color: var(--vscode-foreground); opacity: 0.8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin: 3px 0 2px; font-style: italic; }
+    .sb-model { font-size: 10px; color: var(--vscode-textLink-foreground); margin-bottom: 4px; }
+    #sa-sidebar canvas { display: block; width: 100%; height: 80px; }
+    .sb-turn-label { font-size: 10px; color: var(--vscode-descriptionForeground); margin-top: 3px; }
+    .sb-burn { font-size: 12px; font-weight: 600; color: var(--vscode-charts-green, #81c784); }
+    .sb-counters { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; text-align: center; }
+    .sb-counter-val { font-size: 16px; font-weight: 700; color: var(--vscode-textLink-foreground); }
+    .sb-counter-key { font-size: 9px; color: var(--vscode-descriptionForeground); text-transform: uppercase; letter-spacing: 0.3px; }
+.sb-footer { display: flex; align-items: center; justify-content: space-between; padding: 6px 8px 8px; font-size: 11px; color: var(--vscode-descriptionForeground); border-top: 1px solid var(--vscode-panel-border); }
+#sa-toast { position:fixed; bottom:20px; left:50%; transform:translateX(-50%); background:#333; color:#fff; padding:8px 16px; border-radius:4px; font-size:12px; z-index:9999; opacity:0; transition:opacity 0.2s; pointer-events:none; white-space:nowrap; box-shadow:0 2px 8px rgba(0,0,0,0.4); }
+    #sa-toast.visible { opacity:1; }
+
+    /* ── Main panel ──────────────────────────────────────────────────────── */
+    #sa-main { flex: 1; overflow-y: auto; min-width: 0; padding: 0 18px 16px; }
+    #app { min-height: 100%; }
+  </style>
+</head>
+<body>
+  <script>
+    console.log('[AgentLens] HTML received', Date.now());
+    window.__INITIAL_TOOL_CALLS__ = {};
+    window.__INITIAL_SESSION_SUMMARY__ = @@SESSION_SUMMARY_JSON@@;
+    window.__MASCOT_URI__ = '/help-mascot.png';
+    window.__STANDALONE__ = true;
+    window.__BUILD_ID__ = @@BUILD_ID_JSON@@;
+
+    // ── Client-side search support ────────────────────────────────────────────
+    var __latestSessions__ = (window.__INITIAL_SESSION_SUMMARY__ && window.__INITIAL_SESSION_SUMMARY__.sessions) || [];
+    window.addEventListener('message', function(e) {
+      if (e.data && e.data.type === 'update' && e.data.sessionSummary && e.data.sessionSummary.sessions) {
+        __latestSessions__ = e.data.sessionSummary.sessions;
+      }
+    });
+
+    var _toastTimer;
+    function showToast(msg) {
+      var el = document.getElementById('sa-toast');
+      if (!el) { el = document.createElement('div'); el.id = 'sa-toast'; document.body.appendChild(el); }
+      el.textContent = msg;
+      el.classList.add('visible');
+      clearTimeout(_toastTimer);
+      _toastTimer = setTimeout(function() { el.classList.remove('visible'); }, 3000);
+    }
+
+    function getNotifContainer() {
+      var el = document.getElementById('sa-notif-container');
+      if (!el) {
+        el = document.createElement('div');
+        el.id = 'sa-notif-container';
+        el.style.cssText = 'position:fixed;bottom:20px;right:16px;z-index:9998;display:flex;flex-direction:column;gap:8px;max-width:320px;';
+        document.body.appendChild(el);
+      }
+      return el;
+    }
+
+    // showActionNotification(label, prompt, color, preview, secondaryAction, dismissMs)
+    // secondaryAction: { label: string, onClick: function } | null — rendered before Copy Prompt
+    function showActionNotification(label, prompt, color, preview, secondaryAction, dismissMs) {
+      color = color || '#f6a623';
+      var container = getNotifContainer();
+      var notif = document.createElement('div');
+      notif.style.cssText = 'background:#252526;border:1px solid #3e3e42;border-left:3px solid ' + color + ';border-radius:4px;padding:10px 12px;font-size:12px;color:#ccc;box-shadow:0 2px 8px rgba(0,0,0,0.4);';
+
+      var header = document.createElement('div');
+      header.style.cssText = 'display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:6px;';
+
+      var labelEl = document.createElement('span');
+      labelEl.style.cssText = 'font-weight:600;color:' + color + ';line-height:1.3;';
+      labelEl.textContent = label;
+
+      var closeBtn = document.createElement('button');
+      closeBtn.textContent = '×';
+      closeBtn.style.cssText = 'background:none;border:none;color:#888;cursor:pointer;font-size:16px;padding:0;line-height:1;flex-shrink:0;';
+      closeBtn.onclick = function() { notif.remove(); };
+
+      header.appendChild(labelEl);
+      header.appendChild(closeBtn);
+      notif.appendChild(header);
+
+      if (preview) {
+        var previewEl = document.createElement('div');
+        previewEl.style.cssText = 'font-size:11px;color:#999;margin-bottom:8px;line-height:1.4;max-height:56px;overflow:hidden;';
+        previewEl.textContent = preview;
+        notif.appendChild(previewEl);
+      }
+
+      var actions = document.createElement('div');
+      actions.style.cssText = 'display:flex;gap:6px;flex-wrap:wrap;';
+
+      if (secondaryAction) {
+        var secBtn = document.createElement('button');
+        secBtn.textContent = secondaryAction.label;
+        secBtn.style.cssText = 'background:none;border:1px solid #555;border-radius:3px;color:#ccc;cursor:pointer;font-size:11px;padding:4px 10px;';
+        secBtn.onclick = function() { secondaryAction.onClick(); notif.remove(); };
+        actions.appendChild(secBtn);
+      }
+
+      var copyBtn = document.createElement('button');
+      copyBtn.textContent = 'Copy Prompt';
+      copyBtn.style.cssText = 'background:none;border:1px solid ' + color + ';border-radius:3px;color:' + color + ';cursor:pointer;font-size:11px;padding:4px 10px;';
+      copyBtn.onclick = function() {
+        navigator.clipboard.writeText(prompt).then(function() {
+          copyBtn.textContent = 'Copied!';
+          copyBtn.style.borderColor = '#56D364';
+          copyBtn.style.color = '#56D364';
+          setTimeout(function() { notif.remove(); }, 1500);
+        }).catch(function() {
+          showToast('Could not copy — check browser clipboard permissions');
+        });
+      };
+      actions.appendChild(copyBtn);
+
+      notif.appendChild(actions);
+      container.appendChild(notif);
+      setTimeout(function() { notif.remove(); }, dismissMs || 30000);
+    }
+
+    window.acquireVsCodeApi = function() {
+      return {
+        getState: function() { return null; },
+        setState: function() {},
+        postMessage: function(msg) {
+          if (msg.type === 'confirmClear') {
+            if (confirm('Clear all AgentLens data? OTEL session data is deleted permanently. AgentLens log cache is cleared and will be rebuilt from your local agent log files (the log files themselves are not deleted).')) {
+              fetch('/api/clear', { method: 'POST' });
+              window.dispatchEvent(new MessageEvent('message', { data: { type: 'clearAll' } }));
+            }
+          } else if (msg.type === 'clearAll') {
+            fetch('/api/clear', { method: 'POST' });
+          } else if (msg.type === 'automation' && msg.prompt) {
+            // Build full prompt matching VS Code format: [label] + session ID + body
+            var sessionLine = msg.sessionId ? 'Session ID: ' + msg.sessionId + '\n' : '';
+            var autoFull = '[' + (msg.label || 'Automation') + ']\n\n' + sessionLine + msg.prompt;
+            var autoPreview = msg.prompt.length > 160 ? msg.prompt.slice(0, 160) + '…' : msg.prompt;
+            var autoLabel = 'Automation: ' + (msg.label || 'Automation');
+            var viewAutomations = {
+              label: 'View Automations',
+              onClick: function() {
+                window.dispatchEvent(new MessageEvent('message', { data: { type: 'switchTab', tab: 'settings-automation' } }));
+              }
+            };
+            if (msg.writePromptsFile) {
+              fetch('/api/write-prompts-file', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ agent: msg.agent, label: msg.label, prompt: autoFull })
+              }).then(function() {
+                var slug = msg.agent === 'claude_code' ? 'claude' : msg.agent === 'codex' ? 'codex' : 'copilot';
+                showToast('Prompt written to agentlens-prompts-' + slug + '.md');
+              }).catch(function() {
+                showActionNotification(autoLabel, autoFull, '#f6a623', autoPreview, viewAutomations, 30000);
+              });
+            } else {
+              showActionNotification(autoLabel, autoFull, '#f6a623', autoPreview, viewAutomations, 30000);
+            }
+          } else if (msg.type === 'askAI' && msg.prompt) {
+            navigator.clipboard.writeText(msg.prompt).then(function() {
+              showToast('Prompt copied to clipboard');
+            }).catch(function() {
+              showToast('Could not copy — check browser clipboard permissions');
+            });
+          } else if (msg.type === 'exportSessionData' || msg.type === 'exportSessionDataRedacted') {
+            var redact = msg.type === 'exportSessionDataRedacted';
+            var exportIds = Array.isArray(msg.sessionIds) ? new Set(msg.sessionIds) : null;
+            var exportSessions = exportIds
+              ? (__latestSessions__ || []).filter(function(s) { return exportIds.has(s.sessionId); })
+              : (__latestSessions__ || []);
+            var exportable = exportSessions.map(function(s) {
+              return {
+                sessionId:         s.sessionId,
+                traceId:           s.traceId,
+                source:            s.source,
+                model:             s.model,
+                startTime:         s.startTime,
+                durationMs:        s.durationMs,
+                turns:             s.totalLlmCalls,
+                totalToolCalls:    s.totalToolCalls,
+                inputTokens:       s.inputTokens,
+                outputTokens:      s.outputTokens,
+                cacheReadTokens:   s.cacheReadTokens,
+                cacheCreateTokens: s.cacheCreateTokens,
+                cacheHitRate:      s.cacheHitRate,
+                errors:            s.errors,
+                outcome:           s.outcome,
+                toolCounts:        s.toolCounts,
+                filesRead:    redact ? (s.filesRead    || []).map(function() { return '[redacted]'; }) : s.filesRead,
+                filesChanged: redact ? (s.filesChanged || []).map(function() { return '[redacted]'; }) : s.filesChanged,
+                loopSignals:  s.loopSignals,
+                userRequest:  redact ? '[redacted]' : (s.userRequest || null),
+              };
+            });
+            var now = new Date();
+            var pad = function(n) { return String(n).padStart(2, '0'); };
+            var ts = '' + now.getFullYear() + pad(now.getMonth() + 1) + pad(now.getDate()) +
+                     '_' + pad(now.getHours()) + pad(now.getMinutes()) + pad(now.getSeconds());
+            var filename = (redact ? 'export_redacted' : 'export') + '_sessions_' + ts + '.json';
+            var blob = new Blob([JSON.stringify(exportable, null, 2)], { type: 'application/json' });
+            var url = URL.createObjectURL(blob);
+            var a = document.createElement('a');
+            a.href = url; a.download = filename; a.click();
+            URL.revokeObjectURL(url);
+            showToast('Downloaded ' + filename);
+          } else if (msg.type === 'openSidebar' || msg.type === 'closeSidebar') {
+            window.dispatchEvent(new CustomEvent('agentlens:sidebar', { detail: { open: msg.type === 'openSidebar' } }));
+          } else if (msg.type === 'searchSessions' && msg.query) {
+            var q = msg.query;
+            var filtered = __latestSessions__.filter(function(s) {
+              if (q.text) {
+                var t = q.text.toLowerCase();
+                if (!(s.userRequest || '').toLowerCase().includes(t) && !(s.model || '').toLowerCase().includes(t)) return false;
+              }
+              if (q.source && s.source !== q.source) return false;
+              if (q.since) { var ms = s.startTime ? new Date(s.startTime).getTime() : 0; if (ms < q.since) return false; }
+              if (q.until) { var ms2 = s.startTime ? new Date(s.startTime).getTime() : 0; if (ms2 > q.until) return false; }
+              return true;
+            });
+            var dir = q.orderDir === 'ASC' ? 1 : -1;
+            filtered.sort(function(a, b) {
+              if (q.orderBy === 'start_time') return dir * (new Date(a.startTime).getTime() - new Date(b.startTime).getTime());
+              if (q.orderBy === 'total_tokens') return dir * ((a.inputTokens + a.outputTokens) - (b.inputTokens + b.outputTokens));
+              if (q.orderBy === 'duration_ms') return dir * (a.durationMs - b.durationMs);
+              if (q.orderBy === 'errors') return dir * (a.errors - b.errors);
+              if (q.orderBy === 'cost_usd') return 0;
+              return 0;
+            });
+            var offset = q.offset || 0; var limit = q.limit || 50;
+            var page = filtered.slice(offset, offset + limit);
+            setTimeout(function() {
+              window.dispatchEvent(new MessageEvent('message', {
+                data: { type: 'searchResults', sessions: page, totalCount: filtered.length, offset: offset, context: msg.context || 'search' }
+              }));
+            }, 0);
+          } else if (msg.type === 'alert' && msg.label) {
+            var alertColor = msg.severity === 'error' ? '#f44747' : msg.severity === 'info' ? '#4fc3f7' : '#f6a623';
+            var alertPrompt = [
+              "An alert was triggered in my AI coding session. Please explain what's happening and how I should respond.",
+              '',
+              'Alert: ' + msg.label,
+            ].concat(msg.detail ? ['Detail: ' + msg.detail] : []).join('\n');
+            showActionNotification(
+              'Alert: ' + msg.label,
+              alertPrompt,
+              alertColor,
+              msg.detail || null,
+              {
+                label: 'View Alerts',
+                onClick: function() {
+                  window.dispatchEvent(new MessageEvent('message', { data: { type: 'switchTab', tab: 'alerts' } }));
+                }
+              },
+              30000
+            );
+          } else if (msg.type === 'loadSessionDetail' && msg.sessionId) {
+            fetch('/api/timeline/' + encodeURIComponent(msg.sessionId))
+              .then(function(r) { return r.json(); })
+              .then(function(data) {
+                window.dispatchEvent(new MessageEvent('message', {
+                  data: { type: 'sessionDetail', sessionId: msg.sessionId, timeline: data.timeline || [], fileOps: data.fileOps || [], generatedFiles: data.generatedFiles || [], generatedFilesTruncated: !!data.generatedFilesTruncated }
+                }));
+              })
+              .catch(function(e) { console.warn('[AgentLens] timeline fetch failed', e); });
+          } else if (msg.type === 'loadGeneratedFile' && msg.path) {
+            fetch('/api/generated-file?path=' + encodeURIComponent(msg.path))
+              .then(function(r) { return r.json(); })
+              .then(function(data) {
+                window.dispatchEvent(new MessageEvent('message', {
+                  data: Object.assign({ type: 'generatedFileContent', path: msg.path }, data)
+                }));
+              })
+              .catch(function(e) { console.warn('[AgentLens] generated-file fetch failed', e); });
+          } else if (msg.type === 'loadContextComposition' && msg.sessionId) {
+            var _compUrl = '/api/composition/' + encodeURIComponent(msg.sessionId);
+            if (msg.parentSessionId) _compUrl += '?parent=' + encodeURIComponent(msg.parentSessionId);
+            fetch(_compUrl)
+              .then(function(r) { return r.json(); })
+              .then(function(data) {
+                window.dispatchEvent(new MessageEvent('message', {
+                  data: { type: 'contextComposition', sessionId: msg.sessionId, composition: data.composition || null }
+                }));
+              })
+              .catch(function(e) { console.warn('[AgentLens] composition fetch failed', e); });
+          } else if (msg.type === 'loadContextHistory' && msg.sessionId) {
+            // TRDD-W0RRL2FZ: uniform history loading — the webview always posts loadContextHistory
+            // (VS Code: dashboardPanel handles it; standalone: this shim proxies the existing
+            // /api/history route, which resolves the logged ancestor server-side). A failed fetch
+            // dispatches history:null so the UI shows its honest "no transcript" message, never a
+            // perpetual spinner.
+            var _histUrl = '/api/history/' + encodeURIComponent(msg.sessionId);
+            if (msg.parentSessionId) _histUrl += '?parent=' + encodeURIComponent(msg.parentSessionId);
+            fetch(_histUrl)
+              .then(function(r) { return r.json(); })
+              .then(function(data) {
+                window.dispatchEvent(new MessageEvent('message', {
+                  data: { type: 'contextHistory', sessionId: msg.sessionId, history: data.history || null }
+                }));
+              })
+              .catch(function(e) {
+                console.warn('[AgentLens] history fetch failed', e);
+                window.dispatchEvent(new MessageEvent('message', {
+                  data: { type: 'contextHistory', sessionId: msg.sessionId, history: null }
+                }));
+              });
+          }
+        }
+      };
+    };
+
+    // SSE → dispatch as window message (picked up by Preact app AND sidebar handler below)
+    // Falls back to polling /api/summary every 2s if EventSource fails (e.g. Safari private mode).
+    var _sseOk = false;
+    var _pollTimer = null;
+    function _startPolling() {
+      if (_pollTimer) return;
+      console.warn('[AgentLens] SSE unavailable — falling back to polling');
+      _pollTimer = setInterval(function() {
+        fetch('/api/summary')
+          .then(function(r) { return r.json(); })
+          .then(function(summary) {
+            window.dispatchEvent(new MessageEvent('message', {
+              data: { type: 'update', sessionSummary: summary }
+            }));
+          })
+          .catch(function(e) { console.warn('[AgentLens] poll failed', e); });
+      }, 2000);
+    }
+    var _es = new EventSource('/events');
+    _es.onopen = function() {
+      console.log('[AgentLens] SSE connected', Date.now());
+      _sseOk = true;
+      if (_pollTimer) { clearInterval(_pollTimer); _pollTimer = null; }
+    };
+    _es.onmessage = function(e) {
+      var data = JSON.parse(e.data);
+      // Live-reload: after a rebuild+restart the reconnecting SSE carries a new build id → refresh
+      // once. Guarded on __BUILD_ID__ being set and actually differing so it can never loop.
+      if (data && data.buildId && window.__BUILD_ID__ && data.buildId !== window.__BUILD_ID__) {
+        console.log('[AgentLens] New build detected — reloading', data.buildId);
+        location.reload();
+        return;
+      }
+      // Server-pushed burn alert (TRDD-OG9PARZQ) → render as a dashboard banner. Only SERVER alerts
+      // arrive over SSE; the Preact app SENDS client-alert messages, it doesn't receive them, so
+      // rendering here (not dispatching to the app) avoids a double banner.
+      if (data && data.type === 'alert' && data.label) {
+        var burnColor = data.severity === 'error' ? '#f44747' : data.severity === 'info' ? '#4fc3f7' : '#f6a623';
+        var burnPrompt = 'AgentLens burn alert: ' + data.label + (data.detail ? '\n' + data.detail : '');
+        showActionNotification('Alert: ' + data.label, burnPrompt, burnColor, data.detail || null, {
+          label: 'View Alerts',
+          onClick: function() { window.dispatchEvent(new MessageEvent('message', { data: { type: 'switchTab', tab: 'alerts' } })); }
+        }, 30000);
+        window.dispatchEvent(new MessageEvent('message', { data: data }));
+        return;
+      }
+      window.dispatchEvent(new MessageEvent('message', { data: data }));
+    };
+    _es.onerror = function() {
+      if (!_sseOk) {
+        // Never connected — start polling immediately
+        _startPolling();
+      }
+      // If it was connected before, browser will auto-reconnect; don't start polling yet
+    };
+  </script>
+
+  <div id="sa-wrap">
+    <!-- ── Sidebar (live session monitor) ────────────────────────────────── -->
+    <div id="sa-sidebar">
+      <div style="flex:1;overflow-y:auto;padding:8px 8px 8px;font-family:var(--vscode-font-family);color:var(--vscode-foreground)">
+        <!-- Status row -->
+        <div class="sb-card" style="margin-bottom:6px">
+          <div class="sb-row" style="margin-bottom:2px">
+            <span class="sb-dot idle" id="sb-dot"></span>
+            <span class="sb-status" id="sb-status-text">Idle</span>
+            <span style="flex:1"></span>
+            <span id="sb-agent" class="sb-muted" style="display:flex;align-items:center"></span>
+            <span id="sb-dur" class="sb-muted"></span>
+          </div>
+          <div id="sb-prompt" class="sb-prompt"></div>
+          <div id="sb-model" class="sb-model"></div>
+          <span id="sb-ago" class="sb-muted" style="font-size:10px"></span>
+        </div>
+
+        <!-- Session block (hidden when no sessions) -->
+        <div id="sb-session-block" style="display:none">
+
+          <!-- Key counters (shown first) -->
+          <div class="sb-card">
+            <div class="sb-counters">
+              <div>
+                <div class="sb-counter-val" id="sb-turns">—</div>
+                <div class="sb-counter-key">Turns</div>
+              </div>
+              <div>
+                <div class="sb-counter-val" id="sb-tools">—</div>
+                <div class="sb-counter-key">Tools</div>
+              </div>
+              <div>
+                <div class="sb-counter-val" id="sb-errors">—</div>
+                <div class="sb-counter-key">Errors</div>
+              </div>
+              <div>
+                <div class="sb-counter-val" id="sb-cache">—</div>
+                <div class="sb-counter-key">Cache</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Context growth sparkline -->
+          <div class="sb-card">
+            <div class="sb-section-label">Context Growth</div>
+            <canvas id="sb-sparkline"></canvas>
+            <div id="sb-turn-label" class="sb-turn-label"></div>
+            <div id="sb-sparkline-waiting" class="sb-muted" style="display:none;font-size:10px;font-style:italic;padding:2px 0">Waiting for data…</div>
+          </div>
+
+          <!-- Token breakdown (input / output) -->
+          <div class="sb-card" id="sb-tokens-card">
+            <div class="sb-section-label">Tokens</div>
+            <div id="sb-token-bars" style="margin-top:4px"></div>
+            <div id="sb-token-waiting" class="sb-muted" style="display:none;font-size:10px;font-style:italic;padding:2px 0">Waiting for data…</div>
+          </div>
+
+          <!-- Estimated cost -->
+          <div class="sb-card" id="sb-cost-card">
+            <div class="sb-section-label">Estimated Cost</div>
+            <div id="sb-cost-val" style="font-size:16px;font-weight:700;color:var(--vscode-charts-green,#81c784)">—</div>
+          </div>
+
+          <!-- Burn rate -->
+          <div class="sb-card" id="sb-burn-row">
+            <div class="sb-section-label">Burn Rate</div>
+            <div id="sb-burn" class="sb-burn"></div>
+            <div id="sb-burn-waiting" class="sb-muted" style="display:none;font-size:10px;font-style:italic">Waiting for data…</div>
+          </div>
+
+        </div>
+
+        <!-- Empty state (shown by render() when currentSession is null) -->
+        <div id="sb-empty" class="sb-muted" style="text-align:center;padding:24px 0;font-size:11px;display:none">
+          No sessions recorded yet
+        </div>
+
+
+      </div>
+
+      <!-- Footer -->
+      <div class="sb-footer">
+        <span><span id="sb-session-count">0</span> sessions stored</span>
+      </div>
+    </div>
+
+    <!-- ── Main dashboard ─────────────────────────────────────────────────── -->
+    <div id="sa-main">
+      <div id="app"></div>
+    </div>
+  </div>
+
+  <script>
+    console.log('[AgentLens] Inline setup done', Date.now());
+    window.onerror = function(msg, src, line, col, err) {
+      console.error('[AgentLens] JS error:', msg, src + ':' + line + ':' + col, err);
+      var app = document.getElementById('app');
+      if (app) {
+        app.style.cssText = 'padding:20px;color:red;font-family:monospace;white-space:pre-wrap';
+        app.textContent = 'JS ERROR: ' + msg + ' | At: ' + src + ':' + line + ':' + col + ' | ' + (err ? err.stack : '');
+      }
+    };
+  </script>
+
+  <script src="@@BASE_PATH@@/dashboard.js" onload="console.log('[AgentLens] dashboard.js loaded', Date.now())"></script>
+
+  <script>
+    // Sidebar collapse driven by dashboard toggle
+    var _sidebarEl = document.getElementById('sa-sidebar');
+    window.addEventListener('agentlens:sidebar', function(e) {
+      _sidebarEl.classList.toggle('sa-collapsed', !e.detail.open);
+    });
+</script>
+  <script>var __SIDEBAR_INIT__ = @@SIDEBAR_INIT_JSON@@;</script>
+  <script src="@@BASE_PATH@@/sidebar.js"></script>
+</body>
+</html>

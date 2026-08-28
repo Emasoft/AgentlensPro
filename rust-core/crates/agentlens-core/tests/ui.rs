@@ -245,6 +245,60 @@ fn summary_merges_log_sessions_under_the_feed_doctrine() {
     assert_eq!(claude["timeline"], serde_json::json!([]), "still stripped on the wire");
 }
 
+/// `GET /` is the dashboard shell (TRDD-VHH7FXGC): the shared `media/index.html` with every token
+/// substituted, both contract headers, the restricted meta tag only for a restricted viewer, and
+/// the static route serving a bundle while refusing a `..` escape and a sibling-dir lookalike.
+#[test]
+fn root_serves_the_dashboard_shell_and_static_assets_stay_contained() {
+    let (_otlp, ui, state) = start_servers();
+    let media = std::env::temp_dir().join(format!("al-core-media-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&media);
+    std::fs::create_dir_all(&media).unwrap();
+    // The real template, not a stand-in: the substitution contract is what is under test.
+    let repo_tmpl = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../media/index.html");
+    std::fs::copy(&repo_tmpl, media.join("index.html")).unwrap();
+    std::fs::write(media.join("dashboard.js"), b"console.log(1)").unwrap();
+    // A sibling that shares the string prefix `<media>` but not the component (server.ts:4431).
+    let sibling = std::path::PathBuf::from(format!("{}-assets", media.display()));
+    std::fs::create_dir_all(&sibling).unwrap();
+    std::fs::write(sibling.join("x.js"), b"leak").unwrap();
+    std::fs::write(std::env::temp_dir().join("al-core-escape.css"), b"leak").unwrap();
+    // Canonical, as alcore.rs sets it — /tmp is a symlink on macOS.
+    state.lock().unwrap().media_dir = Some(std::fs::canonicalize(&media).unwrap());
+    let build_id = state.lock().unwrap().build_id.clone();
+
+    for path in ["/", "/index.html"] {
+        let r = request(ui, &format!("GET {path} HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n"));
+        assert!(r.starts_with("HTTP/1.1 200"), "{path}: {r}");
+        let (head, body) = r.split_once("\r\n\r\n").unwrap();
+        let head = head.to_lowercase();
+        assert!(head.contains("content-type: text/html"), "{head}");
+        assert!(head.contains("vary: x-agentlens-viewer"), "{head}");
+        assert!(head.contains("content-security-policy: frame-ancestors 'self' http://localhost:* http://127.0.0.1:* https://localhost:* https://127.0.0.1:*"), "{head}");
+        assert!(body.starts_with("<!DOCTYPE html>"), "{}", &body[..40.min(body.len())]);
+        assert!(!body.contains("@@"), "an unsubstituted token survived");
+        assert!(body.contains(&format!("window.__BUILD_ID__ = \"{build_id}\";")), "the shell must carry the update frames' build id");
+        assert!(body.contains("window.__AGENTLENS_BASE__ = \"\";"), "base path OFF by default");
+        assert!(body.contains("src=\"/dashboard.js\""), "root-absolute asset urls with no base");
+        // summarizeSpans([]) is the frozen empty shape, not null (null is only its exception path).
+        assert!(body.contains("window.__INITIAL_SESSION_SUMMARY__ = {") && body.contains("\"sessions\":[]"), "the stripped summary is inlined");
+        assert!(body.contains("var __SIDEBAR_INIT__ = {\"isActive\":false,"), "computeSidebarPayload over the empty summary");
+        assert!(!body.contains("agentlens-viewer"), "standalone viewer gets no restricted meta tag");
+    }
+    // The static route.
+    let r = request(ui, "GET /dashboard.js HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+    assert!(r.starts_with("HTTP/1.1 200"), "{r}");
+    assert!(r.to_lowercase().contains("content-type: application/javascript"), "{r}");
+    assert_eq!(body_of(&r), "console.log(1)");
+    // Refused: unknown extension, `..` escape, the sibling directory, a missing file.
+    for path in ["/index.html.bak", "/../al-core-escape.css", "/../al-core-media-0-assets/x.js", "/nope.js"] {
+        let r = request(ui, &format!("GET {path} HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n"));
+        assert!(r.starts_with("HTTP/1.1 404"), "{path}: {r}");
+        assert_eq!(body_of(&r), "Not found", "{path}");
+    }
+    let _ = std::fs::remove_dir_all(&sibling);
+}
+
 #[test]
 fn unknown_routes_and_options_fall_through_to_the_bare_404() {
     let (_otlp, ui, _state) = start_servers();

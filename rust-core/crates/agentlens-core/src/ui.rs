@@ -22,6 +22,12 @@
 //!     `data: <update payload>\n\n` on connect and on every coalesced push (report §1.3; the
 //!     update payload is update_payload::build_update_payload). sessionChanged / burnStatus /
 //!     alert frames are later slices (log-scan wiring, burn investigator).
+//!   - `GET /` + `/index.html` (server.ts:4407): the dashboard shell, `media/index.html` with its
+//!     six `@@TOKENS@@` substituted (the SAME file the TS getHtml reads — one template, two servers,
+//!     TRDD-VHH7FXGC), `Content-Type: text/html`, `Vary: X-Agentlens-Viewer` (1ZH1D5EG) and the
+//!     loopback-only `frame-ancestors` CSP (FMIZO8Y4). Static assets under `media_dir` by the
+//!     4-entry MIME map with the separator-terminated containment check. Both need
+//!     `CoreState.media_dir`; without it they are the 404 below.
 //!   - fallback → 404, NO Content-Type, body `Not found`.
 //!
 //! Deferred (documented, not silently dropped): admission-control 503s, base-path strip.
@@ -489,6 +495,94 @@ impl futures_core::Stream for SseStream {
         }
         self.frames.poll_recv(cx).map(|o| o.map(|b| Ok(Frame::data(b))))
     }
+}
+
+/// server.ts safeJson — JSON inlined into a `<script>` must not be able to close that script,
+/// open a comment, or start a template expression.
+fn safe_json(v: &Value) -> String {
+    v.to_string().replace("</", "<\\/").replace("<!--", "<\\!--").replace("${", "\\${")
+}
+
+/// src/basePath.ts normalizeBasePath: `''` (off) or `/x` — leading slash, no trailing slash;
+/// a bare `/` is OFF, not a prefix.
+fn normalize_base_path(raw: Option<String>) -> String {
+    let v = raw.unwrap_or_default().trim().to_owned();
+    if v.is_empty() || v == "/" {
+        return String::new();
+    }
+    let with_lead = if v.starts_with('/') { v } else { format!("/{v}") };
+    with_lead.trim_end_matches('/').to_owned()
+}
+
+/// `GET /` — server.ts getHtml + the route's two contract headers (server.ts:4407).
+fn dashboard_html(state: &Arc<Mutex<CoreState>>, media_dir: &std::path::Path, restricted: bool) -> Result<Response<SseBody>, String> {
+    let now = crate::now_ms() as f64;
+    // Read per request, like the TS: 28 KB, and a dev can edit the shell without a restart.
+    let tmpl = std::fs::read_to_string(media_dir.join("index.html")).map_err(|e| format!("index.html: {e}"))?;
+    let (summary_json, sidebar_json, build_id) = {
+        let mut st = state.lock().map_err(|_| "state poisoned".to_owned())?;
+        let summary = st.build_session_summary(now);
+        let stripped = st.build_stripped_summary(now);
+        let sidebar = if summary.is_null() {
+            serde_json::json!({ "isActive": false, "lastActivityMs": 0, "sessionCount": 0, "agentSources": [], "currentSession": null, "burnRate": null })
+        } else {
+            crate::update_payload::compute_sidebar_payload(&summary, &st.window.spans, now)
+        };
+        // The SAME build_id the update frames carry — the dashboard reloads on a mismatch, so a
+        // different fingerprint here (the TS's bundle mtimes) would reload it on first connect.
+        (safe_json(&stripped), safe_json(&sidebar), st.build_id.clone())
+    };
+    let base = normalize_base_path(std::env::var("AGENTLENS_BASE_PATH").ok());
+    // TRDD-1ZH1D5EG: the RESTRICTED verdict reaches the webview through this meta tag.
+    let viewer_meta = if restricted { "\n  <meta name=\"agentlens-viewer\" content=\"restricted\">" } else { "" };
+    // BASE_PATH_JSON before BASE_PATH: the shorter token is a prefix of the longer one.
+    let html = tmpl
+        .replace("@@VIEWER_META@@", viewer_meta)
+        .replace("@@BASE_PATH_JSON@@", &Value::from(base.as_str()).to_string())
+        .replace("@@BASE_PATH@@", &base)
+        .replace("@@SESSION_SUMMARY_JSON@@", &summary_json)
+        .replace("@@BUILD_ID_JSON@@", &Value::from(build_id).to_string())
+        .replace("@@SIDEBAR_INIT_JSON@@", &sidebar_json);
+    let mut r = Response::new(boxed_full(Bytes::from(html)));
+    let h = r.headers_mut();
+    h.insert("Content-Type", hyper::header::HeaderValue::from_static("text/html"));
+    // TRDD-1ZH1D5EG (WYC4KB50 #4): the HTML differs by viewer role, so a cache keyed on the URL
+    // alone could hand a maestro the restricted page. Vary on the header the verdict derives from.
+    h.insert("Vary", hyper::header::HeaderValue::from_static("X-Agentlens-Viewer"));
+    // TRDD-FMIZO8Y4: loopback-served apps MAY iframe the dashboard; a remote page framing
+    // http://localhost:<UI_PORT> (drive-by clickjack of the local dashboard) is refused.
+    h.insert(
+        "Content-Security-Policy",
+        hyper::header::HeaderValue::from_static(
+            "frame-ancestors 'self' http://localhost:* http://127.0.0.1:* https://localhost:* https://127.0.0.1:*",
+        ),
+    );
+    Ok(r)
+}
+
+/// The static route (server.ts:4428): a file under `media_dir` with a known extension, or None.
+fn static_asset(media_dir: &std::path::Path, path: &str) -> Option<Response<SseBody>> {
+    let mime = match path.rsplit_once('.')?.1 {
+        "css" => "text/css",
+        "js" => "application/javascript",
+        "png" => "image/png",
+        "svg" => "image/svg+xml",
+        _ => return None,
+    };
+    // canonicalize resolves `..` (the TS relies on path.join's normalization) and fails on a
+    // missing file (its existsSync). `media_dir` is canonical too (alcore.rs canonicalizes it at
+    // boot), so the two sides compare in the same namespace even when /tmp is a symlink.
+    let file = std::fs::canonicalize(media_dir.join(path.trim_start_matches('/'))).ok()?;
+    // Containment. Path::starts_with is COMPONENT-wise, which is exactly the TS's separator-
+    // terminated prefix (server.ts:4431): a sibling `<media_dir>-assets/x.js` shares the string
+    // prefix but not the component, so it is rejected here as it is there.
+    if !file.starts_with(media_dir) {
+        return None;
+    }
+    let bytes = std::fs::read(&file).ok()?;
+    let mut r = Response::new(boxed_full(Bytes::from(bytes)));
+    r.headers_mut().insert("Content-Type", hyper::header::HeaderValue::from_static(mime));
+    Some(r)
 }
 
 fn error_json(msg: &str) -> String {
@@ -2965,9 +3059,24 @@ async fn handle(
         };
         json_response(StatusCode::OK, body)
     } else {
-        let mut r = Response::new(boxed_full(Bytes::from_static(b"Not found")));
-        *r.status_mut() = StatusCode::NOT_FOUND;
-        r
+        // The dashboard shell and its assets (server.ts:4407-4439). Neither TS branch checks the
+        // method, so neither does this one; the CSRF/viewer gates above already ran.
+        let media_dir = state.lock().map_err(|_| "state poisoned".to_owned())?.media_dir.clone();
+        let served = match media_dir {
+            Some(dir) if path == "/" || path == "/index.html" => {
+                Some(dashboard_html(&state, &dir, viewer_role == crate::embed_auth::ViewerRole::Restricted)?)
+            }
+            Some(dir) => static_asset(&dir, &path),
+            None => None,
+        };
+        match served {
+            Some(r) => r,
+            None => {
+                let mut r = Response::new(boxed_full(Bytes::from_static(b"Not found")));
+                *r.status_mut() = StatusCode::NOT_FOUND;
+                r
+            }
+        }
     };
 
     // setAllowedOriginCors — runs in the preamble for every response, 403s and 404s included.

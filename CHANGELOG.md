@@ -4,6 +4,29 @@ All notable changes to AgentlensPro are documented here.
 
 > **Lineage note:** AgentlensPro continues the history of [AgentLens](https://github.com/RogerReed/agentlens), from which it was forked. Entries below that predate the fork refer to the original AgentLens lineage.
 
+## [2.31.0] - 2026-08-28
+
+### Added
+
+- **The Rust core serves the dashboard.** `alcore` answered `/api/*`, `/events` and MCP but had no
+  route for `/` or the static assets, so with the Rust core selected (the default once real
+  binaries ship inside the package, as of 2.30.1) `http://localhost:3000/` was a bare 404 while
+  every programmatic surface reported healthy — a dark dashboard that looked like a dead server
+  (TRDD-VHH7FXGC). `GET /` and `/index.html` now render the shell with the same two contract
+  headers the TypeScript server sends (`Vary: X-Agentlens-Viewer`, the loopback-only
+  `frame-ancestors` CSP), and the static route serves `media/` through the same 4-entry MIME map
+  and the same separator-terminated containment check.
+
+  The shell itself moved out of `server.ts` into **`media/index.html`**, one template with six
+  `@@TOKENS@@` that BOTH servers read and substitute — the alternative was a 540-line copy inside
+  the Rust crate that `check-no-mirrors` cannot see. The TypeScript server's output is byte-identical
+  to before; the two servers' `/` responses are byte-identical after normalizing the three inlined
+  data lines (build id, summary, sidebar).
+
+  `alcore serve` now REQUIRES `--media-dir` and refuses to boot without an `index.html` there —
+  a wrong dir would otherwise report "UI/API listening" and hand every browser the same silent
+  404. The CLI passes it from the package root; a `cargo run` dev passes `--media-dir ../media`.
+
 ## [2.30.1] - 2026-08-28
 
 ### Fixed

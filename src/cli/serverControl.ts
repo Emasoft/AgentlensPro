@@ -45,6 +45,23 @@ export function findServerJs(): string {
   throw new Error(`server bundle missing (looked near ${__dirname}) — run \`node esbuild.js\` in the AgentlensPro repo first`)
 }
 
+/** The dashboard's built assets (`media/`), the dir alcore serves `/` from (TRDD-VHH7FXGC). Same
+ *  layout walk as findServerJs: the package root is one level up from the bundled cli.js but two
+ *  up from out/cli/. Keyed on index.html, the one asset that is tracked source rather than a build
+ *  output, so a checkout that has not run esbuild still resolves (and alcore then 404s the bundles
+ *  loudly instead of refusing to boot). */
+export function findMediaDir(): string {
+  const candidates = [
+    path.resolve(__dirname, '..', 'media'),             // bundled: standalone/ · src/cli/ in-place
+    path.resolve(__dirname, '..', '..', 'media'),       // out/cli/
+    path.resolve(__dirname, '..', '..', '..', 'media'), // out/test/cli/
+  ]
+  for (const c of candidates) {
+    if (fs.existsSync(path.join(c, 'index.html'))) return c
+  }
+  throw new Error(`media/index.html missing (looked near ${__dirname}) — the dashboard shell is tracked source; is this a complete checkout or install?`)
+}
+
 /** The opted-in `alcore` (Rust core) binary, or null when the Rust core is off.
  *
  *  Deliberately the SAME shape as `alscanBin` (src/rustScan.ts), because that one is already
@@ -94,6 +111,8 @@ export function alcoreServeArgs(env: NodeJS.ProcessEnv = process.env, dir: strin
   return [
     'serve',
     '--data-dir', dir,
+    // alcore refuses to boot without the dashboard assets (TRDD-VHH7FXGC).
+    '--media-dir', findMediaDir(),
     '--otlp-port', envPort(env.OTLP_PORT, 4318),
     '--ui-port', envPort(env.UI_PORT, 3000),
     '--mcp-port', envPort(env.MCP_PORT, 4316),
