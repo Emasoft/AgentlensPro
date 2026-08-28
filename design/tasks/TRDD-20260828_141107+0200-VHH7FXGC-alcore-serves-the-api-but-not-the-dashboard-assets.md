@@ -1,9 +1,9 @@
 ---
 trdd-id: VHH7FXGC
 title: alcore serves the API and SSE but not the dashboard's HTML/JS, so the web UI is dark when the Rust core is the server
-column: backburner
+column: todo
 created: 2026-08-28T14:11:07+0200
-updated: 2026-08-28T14:11:07+0200
+updated: 2026-08-28T21:14:38+0200
 current-owner: claude-agentlenspro
 task-type: feature
 project-id: agentlenspro
@@ -53,15 +53,29 @@ Note also that probing this wrongly is easy: `/api/health` and `/api/state` do n
 EITHER implementation, so a `curl` against invented paths returns 404 and looks like a total
 outage. Probe `/api/summary`.
 
-## Options (not yet decided)
+## This is NOT a scope decision — TRDD-DMWOBWFH already decided it
 
-1. **Serve the assets from Rust** — add a static-file branch to `serve_ui` for the four
-   built artifacts. Smallest change; keeps one process.
-2. **Keep the TS server for the UI** — run it alongside on a different port. Costs a second
-   process and re-opens the one-server-per-data-dir question, so probably not.
-3. **Serve the UI separately** (any static host) and point it at the Rust API.
+An earlier revision of this card offered three options and handed the choice to whoever owns
+the migration. **That framing was wrong and is retracted** (USER, 2026-08-28): it invited a
+re-decision of something the migration plan settles explicitly. TRDD-DMWOBWFH's scope
+section reads:
 
-Option 1 looks right, but the decision belongs with whoever owns the migration sequencing.
+> **TypeScript keeps**: `media/src/**` (Preact dashboard — unchanged), the thin CLI shell
+> may remain TS initially… **Parity law**: the wire protocol and the on-disk formats are the
+> compatibility boundary — **the dashboard and existing data must work unmodified against
+> either core.**
+
+So TypeScript keeps the dashboard's *Preact source*; SERVING the built assets is the Rust
+core's job, and the parity law requires the dashboard to work unmodified against alcore.
+Keeping a second TS server, or hosting the UI elsewhere, both contradict that. **The only
+conforming outcome is a static-asset route in `serve_ui`.**
+
+**Why the gap exists** (worth recording, because it is not an oversight anyone made): P4e
+ported the UI listener against a FROZEN wire contract, slice by slice. `ui.rs`'s own module
+doc enumerates what it reproduces — CORS, the viewer gate, CSRF, `GET /api/summary`,
+`/events`, and `fallback → 404, NO Content-Type, body "Not found"`. The freeze list was
+built from the `/api/*` + MCP contract, and static assets are not part of that contract, so
+they were never a slice. The port is still walking that list (P4x: 21 of 53 tools).
 
 ## Workaround available today
 
