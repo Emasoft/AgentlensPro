@@ -13,6 +13,61 @@ blocked-by: []
 
 # alcore must use all CPU cores
 
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-08-28
+
+**Measured (isolated instance, 14-core machine, 32 concurrent posters, 30 s):**
+
+| path | before | after the ingest split | reading |
+| --- | --- | --- | --- |
+| OTLP `/v1/traces` | 131 req/s (2.7k spans/s), 29% mean / 97% max CPU | 201 req/s, 96% mean / 109% max CPU | disk serialisation removed; now CPU-bound on ONE core |
+| hook events | 17,081 req/s, 123% mean CPU | (unchanged) | cheap; the 32-client generator is the bottleneck |
+| cold JSONL load (real 19 GB corpus) | 15,424 sessions in 20.5 s, **9.9% mean / 54% max CPU**, `/api/summary` p99 473 ms | — | one core, mostly waiting; no API stall |
+
+Reports: `reports/bench/20260828_230236+0200-alcore-ingest-baseline.md`,
+`reports/bench/20260828_230856+0200-alcore-cold-jsonl-load.md`. Generator:
+`scripts/bench/alcore-ingest-flood.mjs` + `scripts/bench/cpu-sample.sh`.
+
+**Root cause 1 (fixed, uncommitted at the time of writing):** `ingest_post` parsed the JSON AND
+called `flush_spans()` → index `sync_all()` per payload, all under the global `Mutex<CoreState>`
+(`lib.rs`). Split into `parse_payload` (off-lock, on the worker thread) + `ingest_parsed`
+(lock: buffer append + window insert only); the HTTP path leaves the flush to the existing 5 s
+tick in `chores.rs:426-438`. `ingest_post` keeps parse+ingest+flush for its 14 direct callers.
+Two socket tests that read the segment right after a POST now flush explicitly.
+
+**Root cause 2 (PROFILED, design decided, implementation OPEN):** `/usr/bin/sample` under the
+flood (release build with symbols): 83,061 samples in `__psynch_mutexwait`; the lock-holder's CPU
+is `summarize_spans` / `build_interaction_card` / IndexMap<String,Value> hashing — the FULL
+summary rebuild `run_push_loop` triggers every 4 s (and `/api/summary`, `/events`, `GET /`)
+under the SAME mutex ingest needs. Ingest is not slow; it is starved. `window.add` is O(1).
+
+**Design (advisor verdict, Fable 5 — option B):**
+1. `SpanWindow.spans: Vec<Arc<Value>>` (add wraps; prune unchanged); readers move to
+   `&[Arc<Value>]` — 12 sites in 7 files (`summarizer.rs:69`, `update_payload.rs:260`,
+   `codex.rs`, `server_stats.rs`, `ui.rs`, `lib.rs`, `bin/alcore.rs`); no reader mutates a
+   stored span (no `iter_mut`), so `Arc<Value>` is safe by construction.
+2. `log_sessions: IndexMap<String, Arc<Value>>` (`summary_over` already clones every card at
+   ~lib.rs:312; `demote_cold_timelines` uses `Arc::make_mut` on the hot few).
+3. ONE rebuilder: `push_update` locks, clones the two containers + `data_version`, unlocks,
+   `spawn_blocking(summary_over)`, re-locks and stores via `VersionedCache::store_if_newer`.
+   Single in-flight rebuild. `/api/summary`, `/events`, `GET /` serve the LATEST CACHED summary
+   (≤ one rebuild stale — say so in the TRDD and in a `ponytail:` comment naming incremental
+   summarize as the upgrade). `otel_attribution` is written in the same store step.
+4. Rejected: (A) `Arc<Vec<Value>>` COW (a 200k deep clone under the lock per rebuild — moves
+   the stall, does not remove it); (C) a second mutex (lock-order risk, only if B still shows
+   waiting — then the holder is `writer.append`); (D) rate-limiting (hides the symptom);
+   `im`/`rpds` (dependency for nothing — the Arc snapshot is ~1-2 ms).
+
+**PASS CRITERION (the one measurement):** rerun `scripts/bench/alcore-ingest-flood.mjs
+--mix otlp --concurrency 32 --seconds 40` with `/usr/bin/sample` (memory:
+`sample-on-path-is-a-python-shim`): `__psynch_mutexwait` samples drop from 83k to near zero AND
+req/s scales past 300 (expect > 2k) AND mean %cpu well past 100%.
+
+**NEXT ACTION:** implement 1-3 on top of the committed ingest split, run the whole crate suite,
+then the pass measurement; record numbers here.
+
+**Memory (belongs to YU8QPU89, recorded here because it was measured here):** RSS 3.4 GB after
+the baseline runs, **9.6 GB** after 289k spans — the window keeps every span as a `serde_json::Value`.
+
 USER goal (2026-08-28): *"test that it actually uses all cpu cores when ingesting all the data
 from claude code telemetry and hooks and when loading the data from the jsonl via the duckdb."*
 The reason the Rust rewrite exists at all (USER, same day): *"the typescript was unable to use all

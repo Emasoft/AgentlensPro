@@ -562,24 +562,43 @@ pub fn now_ms() -> i64 {
 
 /// One POST body through the transforms into the store. Never fails toward the wire — the
 /// frozen contract answers 200 whatever happens; failures are counted, not surfaced.
-pub fn ingest_post(state: &mut CoreState, path: &str, body: &[u8]) {
-    let Ok(text) = std::str::from_utf8(body) else {
-        state.counters.parse_errors += 1;
-        return;
-    };
-    let Ok(payload) = serde_json::from_str::<Value>(text) else {
-        // Counted like the TS collector's otlpIngestError fallback (a protobuf export lands
-        // here) — and still 200 on the wire.
-        state.counters.parse_errors += 1;
-        return;
-    };
-    let now = now_ms();
+/// The parse half of an OTLP POST — pure, so the HTTP handler runs it BEFORE taking the state
+/// lock. Measured before this split (TRDD-HFV4AIT7 baseline): with parse + append + flush all
+/// under the one `Mutex<CoreState>`, 32 concurrent posters reached 131 req/s at 29% mean CPU on
+/// a 14-core machine — every request serialised behind the previous one's disk write, and the
+/// parse (the CPU-heavy part) never ran on more than one core. Err = unparseable (the TS
+/// collector's otlpIngestError fallback, e.g. a protobuf export) — counted by the caller, still
+/// 200 on the wire.
+pub fn parse_payload(path: &str, body: &[u8]) -> Result<(&'static str, Value), ()> {
+    let text = std::str::from_utf8(body).map_err(|_| ())?;
+    let payload = serde_json::from_str::<Value>(text).map_err(|_| ())?;
     let kind = match path {
         "/v1/traces" => "traces",
         "/v1/logs" => "logs",
         "/v1/metrics" => "metrics",
         _ => classify(&payload),
     };
+    Ok((kind, payload))
+}
+
+/// Parse + ingest + flush in one call, for callers that hold the state directly (tests, the
+/// import paths): the flush makes the segment readable the moment this returns. The HTTP
+/// handler does NOT use this — it parses off-lock and leaves the flush to the 5 s tick
+/// (chores.rs), so a burst of posters is bounded by CPU, not by one fsync per payload.
+pub fn ingest_post(state: &mut CoreState, path: &str, body: &[u8]) {
+    match parse_payload(path, body) {
+        Ok((kind, payload)) => ingest_parsed(state, kind, payload, path),
+        Err(()) => state.counters.parse_errors += 1,
+    }
+    if state.writer.pending_appends() > 0 {
+        state.flush_spans();
+    }
+}
+
+/// The ingest half: process the parsed payload into the store buffer and the live window.
+/// Holds the lock for serialisation + window insert only — no disk.
+pub fn ingest_parsed(state: &mut CoreState, kind: &'static str, payload: Value, path: &str) {
+    let now = now_ms();
     let spans: Vec<Value> = match kind {
         "traces" => {
             state.counters.traces_payloads += 1;
@@ -630,11 +649,6 @@ pub fn ingest_post(state: &mut CoreState, path: &str, body: &[u8]) {
     for span in spans {
         state.window.add(span, now);
     }
-    if state.writer.pending_appends() > 0 {
-        // Flush per payload for now: durable and deterministic for tests; batching cadence is
-        // internal (not wire-frozen) and can move to a timer when rates justify it.
-        state.flush_spans();
-    }
 }
 
 async fn handle(
@@ -668,9 +682,15 @@ async fn handle(
         }
     }
 
+    // Parse on THIS worker thread, before the lock: N connections parse on N cores. The lock
+    // then covers only the buffer append + window insert; durability is the 5 s flush tick.
+    let parsed = parse_payload(&path, &buf);
     {
         let mut st = state.lock().map_err(|_| "state poisoned".to_owned())?;
-        ingest_post(&mut st, &path, &buf);
+        match parsed {
+            Ok((kind, payload)) => ingest_parsed(&mut st, kind, payload, &path),
+            Err(()) => st.counters.parse_errors += 1,
+        }
     }
     Ok(Response::new(Full::new(Bytes::new())))
 }

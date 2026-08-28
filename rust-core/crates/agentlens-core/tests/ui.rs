@@ -449,8 +449,11 @@ fn small_routes_embed_status_hook_config_clear_action_and_log_scan_stats() {
     request(otlp, &format!("POST /v1/traces HTTP/1.1\r\nHost: x\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()));
     state.lock().unwrap().put_log_session(serde_json::json!({ "sessionId": "log-1", "source": "codex", "timeline": [] }));
     {
-        let st = state.lock().unwrap();
+        let mut st = state.lock().unwrap();
         assert_eq!(st.window.spans.len(), 2, "the payload's two spans");
+        // The HTTP path buffers; the 5 s chores tick (not run by this harness) flushes. Flush
+        // through the same handle so the on-disk assertions below are about clearAll, not timing.
+        st.flush_spans();
         assert_eq!(st.writer.stats().1, 2);
         assert!(data_dir.join("spans").join("index.json").exists());
     }

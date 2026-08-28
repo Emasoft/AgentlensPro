@@ -509,7 +509,9 @@ fn safe_json(v: &Value) -> String {
 /// would have the sidebar JSON spliced INTO the summary JSON string — a breakout of the string
 /// literal, executed in the dashboard's origin (review of 85f0b08, F1). Unknown tokens stay verbatim.
 fn substitute_tokens(template: &str, values: &[(&str, &str)]) -> String {
-    let re = regex::Regex::new(r"@@[A-Z_]+@@").expect("static pattern");
+    // Compiled once (review of 0eb2cf9, G3) — the TS twin's regex is module-level too.
+    static TOKEN: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let re = TOKEN.get_or_init(|| regex::Regex::new(r"@@[A-Z_]+@@").expect("static pattern"));
     re.replace_all(template, |c: &regex::Captures| {
         let t = &c[0];
         values.iter().find(|(k, _)| *k == t).map(|(_, v)| (*v).to_owned()).unwrap_or_else(|| t.to_owned())

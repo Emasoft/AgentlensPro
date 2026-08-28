@@ -106,8 +106,12 @@ fn post_traces_lands_spans_in_the_store_and_answers_empty_200() {
     let r = post(addr, "/v1/traces", &trace_payload("sess-core-1"));
     assert!(r.starts_with("HTTP/1.1 200"), "POST answers 200: {r}");
     assert!(r.ends_with("\r\n\r\n") || r.contains("content-length: 0"), "empty body: {r}");
-    // Flushed per payload — the day segment holds the span, keyed on the span's own startTime
-    // (1755504000000000000 ns = 2025-08-18T08:00:00Z).
+    // The HTTP path no longer flushes per payload (TRDD-HFV4AIT7: one fsync per request under
+    // the state lock capped ingest at ~131 req/s on one core); durability is the 5 s tick in
+    // chores.rs, which this harness does not run — so flush through the same state handle the
+    // tick would, then read the day segment (keyed on the span's own startTime,
+    // 1755504000000000000 ns = 2025-08-18T08:00:00Z).
+    state.lock().unwrap().flush_spans();
     let seg = dir.path.join("spans").join("2025-08-18.ndjson");
     let text = std::fs::read_to_string(&seg).expect("segment written");
     assert!(text.contains("sess-core-1"), "span persisted: {text}");
