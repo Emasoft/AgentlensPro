@@ -78,6 +78,13 @@ export const REVIEW_CMD = 'agentlenspro review-gate'
 // v1 PATH-bin names — recognised as ours for migration/uninstall, never registered anymore.
 export const LEGACY_HOOK_BIN = 'agentlenspro-hook'
 export const LEGACY_GATE_BIN = 'agentlenspro-gate'
+// The loose user-scope review-gate scripts `agentlenspro review-gate` was written to REPLACE
+// (reviewGate.ts header). They were never registered by this installer, so it never removed
+// them either — and with both wired to the same event and sharing the same tmp state files, one
+// Stop/SubagentStop fire ran the gate TWICE and burned the breakers at double rate
+// (MAX_CONSECUTIVE=2 spent after ONE unmet turn; TRDD-6QV50JNN). Recognised as ours for
+// migration/uninstall, never registered.
+export const LEGACY_REVIEW_SCRIPTS = ['stop-spawn-review-fork.js', 'subagent-stop-spawn-review-fork.js']
 
 export interface HookCommandEntry { type: string; command: string; timeout?: number; async?: boolean }
 export interface HookMatcher { matcher?: string; hooks: HookCommandEntry[] }
@@ -98,6 +105,7 @@ export function isOurHookCommand(command: unknown): boolean {
   return command.includes('spy-agentlens')
     || command.includes(LEGACY_HOOK_BIN)
     || command.includes(LEGACY_GATE_BIN)
+    || LEGACY_REVIEW_SCRIPTS.some(s => command.includes(s))
     // \b keeps a hypothetical foreign "agentlensprod hookx" from matching; the space
     // between bin and verb is what distinguishes the v2 command-string generation.
     || /\bagentlenspro\s+(hook|gate|review-gate)\b/.test(command)
@@ -174,7 +182,7 @@ export function rebuildEventMatchers(
 // ── The strip, expressed as a FILTER instead of a result (TRDD-T0CT9U4X) ────────────────────────
 // Every generation this project ever registered, as a plain literal. A needle is matched against
 // json.dumps(element) inside the lock, so it must be a literal JSON cannot escape — all of these are.
-const GENERATION_NEEDLES = ['spy-agentlens', LEGACY_HOOK_BIN, LEGACY_GATE_BIN, HOOK_CMD, GATE_CMD, REVIEW_CMD, 'spyglass-collect.sh']
+const GENERATION_NEEDLES = ['spy-agentlens', LEGACY_HOOK_BIN, LEGACY_GATE_BIN, ...LEGACY_REVIEW_SCRIPTS, HOOK_CMD, GATE_CMD, REVIEW_CMD, 'spyglass-collect.sh']
 
 /** A needle that identifies this command inside the transaction, or null when none can. The known
  *  generation literals come first (one op removes every entry of that generation); an unrecognised

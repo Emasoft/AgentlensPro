@@ -135,6 +135,23 @@ suite('agentlenspro — v2 command-string hook registration', () => {
     assert.deepStrictEqual(r.rebuilt.flatMap(m => m.hooks.map(h => h.command)), [HOOK_CMD, REVIEW_CMD])
   })
 
+  test('migration: install over the loose review-gate .js scripts removes them — the verb replaced them (TRDD-6QV50JNN)', () => {
+    // Both the loose script and `agentlenspro review-gate` on one event run the same gate twice
+    // against the same tmp state file, so the breakers burn at double rate. The installer never
+    // registered the scripts, so until this needle existed it never removed them either.
+    for (const [ev, script] of [['Stop', 'stop-spawn-review-fork.js'], ['SubagentStop', 'subagent-stop-spawn-review-fork.js']] as const) {
+      const live: HookMatcher[] = [
+        { hooks: [{ type: 'command', command: `node "$HOME/.claude/hooks/${script}"` }] },
+        { hooks: [{ type: 'command', command: HOOK_CMD, timeout: 2, async: true }] },
+        { hooks: [{ type: 'command', command: REVIEW_CMD, timeout: 10 }] },
+      ]
+      const r = rebuildEventMatchers(live, ev, false, HOOK_CMD, GATE_CMD)
+      assert.strictEqual(r.removedOurs, 3, `${ev}: the loose script must be stripped along with our two entries`)
+      assert.deepStrictEqual(r.rebuilt.flatMap(m => m.hooks.map(h => h.command)), [HOOK_CMD, REVIEW_CMD], `${ev}: exactly one gate remains`)
+      assert.ok(!isOurHookCommand('node "$HOME/.claude/hooks/cvoice_stop.sh"'), 'a neighbouring user hook is not ours')
+    }
+  })
+
   test('uninstall strips ALL THREE generations — v0 absolute paths, v1 PATH bins, v2 command strings', () => {
     const mixed: HookMatcher[] = [
       { hooks: [{ type: 'command', command: 'bash /old/prefix/spy-agentlens.sh', timeout: 2, async: true }] },
