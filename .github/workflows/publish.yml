@@ -356,10 +356,23 @@ jobs:
           echo "publishing $tgz — 16/16 binaries present and mode 755"
 
       - name: Publish to npm (OIDC trusted publishing)
-        # Publishing a prebuilt tarball deliberately skips prepublishOnly: these bytes were
-        # already type-checked, linted, bundled and verified by the package job. Re-running the
-        # build here would produce DIFFERENT bytes than the ones that were attested.
-        run: npm publish ./"$(ls agentlenspro-*.tgz)" --access public
+        # Publishing a prebuilt tarball deliberately skips prepublishOnly (measured: `npm publish
+        # --dry-run <tgz>` runs no lifecycle script). These bytes were already type-checked,
+        # linted, bundled and verified by the package job; rebuilding here would produce DIFFERENT
+        # bytes than the ones that were attested.
+        #
+        # Glob into an array and require exactly one match — a bare `ls agentlenspro-*.tgz` in a
+        # step without `set -euo pipefail` would silently pick the first of several and publish
+        # the wrong artifact.
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          tgz=(agentlenspro-*.tgz)
+          if [ "${#tgz[@]}" -ne 1 ]; then
+            echo "::error::expected exactly 1 tarball to publish, found ${#tgz[@]}: ${tgz[*]-none}"
+            exit 1
+          fi
+          npm publish "./${tgz[0]}" --access public
 
       # The only check that can actually catch a mis-published artifact: read it back from the
       # REGISTRY. Every guard above measures a local file; this measures what users will install.
