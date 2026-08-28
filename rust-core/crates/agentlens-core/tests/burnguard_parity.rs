@@ -48,6 +48,14 @@ fn burn_guard_feeds_reproduce_the_ts_oracle_exactly() {
     let root = dir.join("burnguard-tree");
     let expected: Value = serde_json::from_str(&std::fs::read_to_string(dir.join("burnguard-expected.json")).unwrap()).unwrap();
 
+    // Re-pin the mtimes the oracle recorded — git checkout clobbers them, and "newest response"
+    // is decided by mtime, so a fresh clone would rank by readdir order instead.
+    for (name, ms) in expected["mtimes"].as_object().unwrap() {
+        let t = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_millis(ms.as_u64().unwrap());
+        let f = std::fs::OpenOptions::new().append(true).open(root.join(name)).unwrap();
+        f.set_times(std::fs::FileTimes::new().set_modified(t)).unwrap();
+    }
+
     // BodiesActivityTracker: one incremental poll over the committed bodies dir.
     let mut tracker = BodiesActivityTracker::new(root.join("bodies"), BodiesActivityOptions::default());
     tracker.poll(NOW);

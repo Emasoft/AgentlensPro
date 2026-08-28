@@ -5,7 +5,7 @@
 //   node rust-core/crates/agentlens-core/tests/fixtures/gen-burnguard-expected.mjs
 import { createRequire } from 'module'
 import { mkdirSync, writeFileSync, rmSync, utimesSync } from 'fs'
-import { join } from 'path'
+import { join, relative } from 'path'
 const require = createRequire(import.meta.url)
 const { BodiesActivityTracker, fmtFatSenders, extractResponseUsage } = require('../../../../../out/test/bodiesActivity.js')
 const { checkBurnRisk } = require('../../../../../out/test/burnGuard.js')
@@ -23,7 +23,9 @@ const proj = join(projects, '-tmp-wsA')
 rmSync(root, { recursive: true, force: true })
 mkdirSync(bodies, { recursive: true }); mkdirSync(hooks, { recursive: true }); mkdirSync(proj, { recursive: true })
 
-const touch = (p, ms) => utimesSync(p, new Date(ms), new Date(ms))
+// Pinned mtimes are fixture DATA: git checkout clobbers them, so record them for the Rust test to re-pin.
+const mtimes = {}
+const touch = (p, ms) => { utimesSync(p, new Date(ms), new Date(ms)); mtimes[relative(root, p)] = ms }
 // A fat request from session S1 chaining to msg_a, and a huge one; plus a same-size request
 // from S2 on a different model (the model-mismatch suspect filter).
 const fatBody = (session, model, prevMsg, pad) =>
@@ -89,6 +91,7 @@ const risk = checkBurnRisk({
 })
 const causing = await causingToolCalls({ workspace: '/tmp/wsA', atMs: NOW - 60_000, projectsDirs: [projects] })
 const expected = {
+  mtimes,
   report,
   warmSince: {
     s1: tracker.sessionWarmSince('11111111-aaaa-bbbb-cccc-000000000001', NOW - 600_000),
