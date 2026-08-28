@@ -336,8 +336,18 @@ fn durable_state_round_trips_offsets_and_stripped_cards_and_skips_the_cold_resca
     // A rotated file (new inode at the same path) and a truncated one are NOT resumed.
     let codex = home.join(".codex/sessions/2026/08/01/ffffffff-1111-2222-3333-444444444444.jsonl");
     let body = std::fs::read(&codex).unwrap();
-    std::fs::remove_file(&codex).unwrap();
-    std::fs::write(&codex, &body).unwrap(); // same bytes, new inode
+    // Write-then-rename, NOT remove-then-write: the replacement is created while the original
+    // still holds its inode, so a different one is guaranteed on every POSIX fs. Deleting first
+    // frees the inode for immediate reuse -- ext4 hands the same number straight back, so on CI
+    // the "rotated" file looked unrotated and resumed (macOS never reuses, so this passed here).
+    let rotated = codex.with_extension("jsonl.rotated");
+    let ino_before = { use std::os::unix::fs::MetadataExt; std::fs::metadata(&codex).unwrap().ino() };
+    std::fs::write(&rotated, &body).unwrap();
+    std::fs::rename(&rotated, &codex).unwrap(); // same bytes, new inode
+    // Assert the PRECONDITION, so a filesystem that defeats it fails here by name instead of as
+    // an opaque (4, 1) ten lines below.
+    let ino_after = { use std::os::unix::fs::MetadataExt; std::fs::metadata(&codex).unwrap().ino() };
+    assert_ne!(ino_before, ino_after, "rotation must yield a new inode for this case to mean anything");
     let cp = home.join(".copilot/session-state/abababab-1111-2222-3333-444444444444/events.jsonl");
     let cp_body = std::fs::read_to_string(&cp).unwrap();
     std::fs::write(&cp, cp_body.lines().next().unwrap().to_owned() + "\n").unwrap(); // shrunk
