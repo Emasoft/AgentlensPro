@@ -4,6 +4,29 @@ All notable changes to AgentlensPro are documented here.
 
 > **Lineage note:** AgentlensPro continues the history of [AgentLens](https://github.com/RogerReed/agentlens), from which it was forked. Entries below that predate the fork refer to the original AgentLens lineage.
 
+## [2.30.1] - 2026-08-28
+
+### Fixed
+
+- **v2.30.0 shipped to npm with none of its Rust binaries.** The registry tarball was 23 files /
+  3.75 MB while the attested GitHub Release asset for the same tag was 144 MB. Cause: the
+  `publish-npm` job did a fresh checkout and ran `npm publish`, packing its own copy from a tree
+  with no `bin-native/` — so every guard in the `package` job (`verify-bin-native.js`, the
+  16-executables-inside-the-tarball assertion, the SLSA attestation) passed against an artifact
+  that was never published. Two different artifacts under one version, and the verified one was
+  not the one users installed.
+
+  `package` now uploads the tarball it verified, and `publish-npm` downloads and publishes
+  exactly those bytes — which also means the published bytes are the attested bytes. Publishing
+  a prebuilt tarball deliberately skips `prepublishOnly`: re-running the build there would
+  produce different bytes than the ones that were signed.
+
+  Two new gates, because the old ones could not have caught this: the binaries are re-asserted
+  after the upload/download round-trip, and — the only check that actually measures what users
+  get — the published tarball is read back **from the registry** and must carry 16 `bin-native`
+  files. Anyone on 2.30.0 gets a working CLI that silently falls back to the TypeScript server;
+  upgrade to 2.30.1 for the native core.
+
 ## [2.30.0] - 2026-08-27
 
 ### Added
