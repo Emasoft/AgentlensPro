@@ -27,7 +27,9 @@ fn update_payload_derivations_reproduce_the_ts_oracle_exactly() {
     let expected: Value =
         serde_json::from_str(&std::fs::read_to_string(dir.join("update-payload-expected.json")).unwrap()).unwrap();
     let now = expected["nowMs"].as_f64().unwrap();
-    let spans: Vec<Value> = expected["spans"].as_array().unwrap().clone();
+    // Shared spans, as the live window holds them (TRDD-HFV4AIT7).
+    let spans: Vec<std::sync::Arc<Value>> =
+        expected["spans"].as_array().unwrap().iter().cloned().map(std::sync::Arc::new).collect();
     let summary = summarize_spans(&spans, &|_| None);
     let sessions: Vec<Value> = summary["sessions"].as_array().unwrap().clone();
 
@@ -36,7 +38,8 @@ fn update_payload_derivations_reproduce_the_ts_oracle_exactly() {
     check("full.analyticsData", &compute_analytics_data(&sessions), &expected["full"]["analyticsData"]);
 
     let crafted = &expected["crafted"]["summary"];
-    let crafted_spans: Vec<Value> = expected["crafted"]["spans"].as_array().unwrap().clone();
+    let crafted_spans: Vec<std::sync::Arc<Value>> =
+        expected["crafted"]["spans"].as_array().unwrap().iter().cloned().map(std::sync::Arc::new).collect();
     let crafted_sessions: Vec<Value> = crafted["sessions"].as_array().unwrap().clone();
     check("crafted.sidebarPayload", &compute_sidebar_payload(crafted, &crafted_spans, now), &expected["crafted"]["sidebarPayload"]);
     check("crafted.sidebarData", &compute_sidebar_data(crafted), &expected["crafted"]["sidebarData"]);

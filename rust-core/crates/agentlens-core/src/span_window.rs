@@ -11,6 +11,7 @@
 //! STATE as a deliberate gap; a Rust-native memory guard belongs with the resource monitor.
 
 use std::path::Path;
+use std::sync::Arc;
 
 use agentlens_spanstore::writer::{span_timestamp_ms, SpanStoreWriter};
 use serde_json::Value;
@@ -26,7 +27,12 @@ pub fn summary_window_ms(data_dir: &Path) -> i64 {
 }
 
 pub struct SpanWindow {
-    pub spans: Vec<Value>,
+    /// `Arc` per span, not `Value` (TRDD-HFV4AIT7): the summary rebuild has to run OFF the state
+    /// mutex, and that needs a SNAPSHOT of the window. With plain `Value`s the snapshot is a deep
+    /// clone of every span under the lock — which just moves the stall. With `Arc`s it is one
+    /// pointer copy per span (~1-2 ms at 289k spans). Nothing mutates a stored span after `add`
+    /// (no reader takes `iter_mut`), so sharing is safe by construction.
+    pub spans: Vec<Arc<Value>>,
     pub configured_ms: i64,
     pub effective_ms: i64,
 }
@@ -38,7 +44,7 @@ impl SpanWindow {
 
     /// Boot load: ONLY the segments overlapping the window — never the whole store.
     pub fn boot_load(&mut self, writer: &mut SpanStoreWriter, now_ms: i64) -> usize {
-        self.spans = writer.load_range(now_ms - self.configured_ms, i64::MAX, now_ms);
+        self.spans = writer.load_range(now_ms - self.configured_ms, i64::MAX, now_ms).into_iter().map(Arc::new).collect();
         self.spans.len()
     }
 
@@ -49,14 +55,14 @@ impl SpanWindow {
                 obj.insert("receivedAt".into(), Value::from(now_ms));
             }
         }
-        self.spans.push(span);
+        self.spans.push(Arc::new(span));
     }
 
     /// The flush-tick prune: drop spans older than the effective window by their own timestamp.
     /// Returns true when the window shrank (every derived view must be rebuilt).
     pub fn prune(&mut self, now_ms: i64) -> bool {
         let cutoff = now_ms - self.effective_ms;
-        let first_old = self.spans.first().and_then(Value::as_object).is_some_and(|s| span_timestamp_ms(s, now_ms) < cutoff);
+        let first_old = self.spans.first().and_then(|s| s.as_object()).is_some_and(|s| span_timestamp_ms(s, now_ms) < cutoff);
         if !first_old {
             return false;
         }

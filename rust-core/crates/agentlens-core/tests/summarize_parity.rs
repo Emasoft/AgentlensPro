@@ -36,8 +36,14 @@ fn diff_cards(kind: &str, got: &Value, expected: &Value) {
 #[test]
 fn summarize_spans_reproduces_the_ts_oracle_exactly() {
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
-    let spans: Vec<Value> =
-        serde_json::from_str(&std::fs::read_to_string(dir.join("summarize-spans.json")).unwrap()).unwrap();
+    // The window hands the summarizer shared spans (TRDD-HFV4AIT7) — the fixture is wrapped the
+    // same way so this stays a test of the ENGINE, not of the container.
+    let spans: Vec<std::sync::Arc<Value>> =
+        serde_json::from_str::<Vec<Value>>(&std::fs::read_to_string(dir.join("summarize-spans.json")).unwrap())
+            .unwrap()
+            .into_iter()
+            .map(std::sync::Arc::new)
+            .collect();
     let expected: Value =
         serde_json::from_str(&std::fs::read_to_string(dir.join("summarize-expected.json")).unwrap()).unwrap();
 

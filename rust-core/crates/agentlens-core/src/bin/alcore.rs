@@ -32,6 +32,28 @@ const LOG_SWEEP_INTERVAL: Duration = Duration::from_secs(5);
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
+/// SIGTERM as a future, so the shutdown `select!` can await it beside `ctrl_c()`. Non-unix has no
+/// SIGTERM: return a future that never completes, so the arm is simply inert there rather than
+/// resolving immediately and killing the server the moment it starts.
+async fn terminate_signal() {
+    #[cfg(unix)]
+    {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut sig) => {
+                sig.recv().await;
+            }
+            // Registration failed: fall back to never firing. Exiting here would turn a signal
+            // problem into an immediate shutdown.
+            Err(e) => {
+                eprintln!("alcore: SIGTERM handler not installed ({e}) — stop will not flush");
+                std::future::pending::<()>().await;
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    std::future::pending::<()>().await;
+}
+
 fn usage(msg: &str) -> ! {
     eprintln!("alcore: {msg}");
     eprintln!("usage: alcore serve --data-dir DIR --media-dir DIR [--otlp-port N] [--ui-port N] [--mcp-port N] [--bind HOST] [--no-log-scan]");
@@ -276,10 +298,16 @@ fn main() {
                 }
             }
             _ = tokio::signal::ctrl_c() => {}
+            // SIGTERM, not just SIGINT (ctrl_c). `agentlenspro server stop` sends SIGTERM, which
+            // is therefore the NORMAL stop path — and since the OTLP HTTP handler stopped
+            // flushing per payload (TRDD-HFV4AIT7 root cause 1), the 5 s chores tick is the
+            // durability boundary: without this arm the process dies on the default disposition
+            // and the flush block below never runs, losing up to 5 s of spans on every stop.
+            _ = terminate_signal() => {}
         }
     });
-    // Flush on the way out — the writer buffers, and losing the tail on SIGINT would be a
-    // silent hole the store cannot detect. The sweeper flushes the durable state (offsets +
+    // Flush on the way out — the writer buffers, and losing the tail on SIGINT/SIGTERM would be
+    // a silent hole the store cannot detect. The sweeper flushes the durable state (offsets +
     // cards) the same way: a graceful stop loses nothing.
     if let Some(h) = sweeper.take() {
         h.stop();

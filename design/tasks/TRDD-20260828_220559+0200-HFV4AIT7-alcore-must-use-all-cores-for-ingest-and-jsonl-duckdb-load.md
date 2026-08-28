@@ -3,7 +3,7 @@ trdd-id: HFV4AIT7
 title: Measure and guarantee that alcore uses all CPU cores for telemetry and hook ingest and for the JSONL to DuckDB load
 column: todo
 created: 2026-08-28T22:05:59+0200
-updated: 2026-08-28T22:05:59+0200
+updated: 2026-08-29T01:23:27+0200
 current-owner: claude-agentlenspro
 task-type: audit
 project-id: agentlenspro
@@ -13,15 +13,15 @@ blocked-by: []
 
 # alcore must use all CPU cores
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-08-28
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-08-29
 
-**Measured (isolated instance, 14-core machine, 32 concurrent posters, 30 s):**
+**Measured (isolated instance, 14-core machine, 32 concurrent posters):**
 
-| path | before | after the ingest split | reading |
-| --- | --- | --- | --- |
-| OTLP `/v1/traces` | 131 req/s (2.7k spans/s), 29% mean / 97% max CPU | 201 req/s, 96% mean / 109% max CPU | disk serialisation removed; now CPU-bound on ONE core |
-| hook events | 17,081 req/s, 123% mean CPU | (unchanged) | cheap; the 32-client generator is the bottleneck |
-| cold JSONL load (real 19 GB corpus) | 15,424 sessions in 20.5 s, **9.9% mean / 54% max CPU**, `/api/summary` p99 473 ms | — | one core, mostly waiting; no API stall |
+| path | before | after the ingest split | after the off-lock rebuild | reading |
+| --- | --- | --- | --- | --- |
+| OTLP `/v1/traces` | 131 req/s (2.7k spans/s), 29% mean / 97% max CPU | 201 req/s, 96% mean / 109% max CPU | **949 req/s (11.0k spans/s), 168.8% mean / 216.8% max CPU**; `__psynch_mutexwait` **83,061 → 70,909** | the summarize left the lock; ingest now serialises on ITSELF (see root cause 3) |
+| hook events | 17,081 req/s, 123% mean CPU | (unchanged) | (unchanged) | cheap; the 32-client generator is the bottleneck |
+| cold JSONL load (real 19 GB corpus) | 15,424 sessions in 20.5 s, **9.9% mean / 54% max CPU**, `/api/summary` p99 473 ms | — | — | one core, mostly waiting; no API stall |
 
 Reports: `reports/bench/20260828_230236+0200-alcore-ingest-baseline.md`,
 `reports/bench/20260828_230856+0200-alcore-cold-jsonl-load.md`. Generator:
@@ -34,7 +34,28 @@ called `flush_spans()` → index `sync_all()` per payload, all under the global 
 tick in `chores.rs:426-438`. `ingest_post` keeps parse+ingest+flush for its 14 direct callers.
 Two socket tests that read the segment right after a POST now flush explicitly.
 
-**Root cause 2 (PROFILED, design decided, implementation OPEN):** `/usr/bin/sample` under the
+**Root cause 2 (FIXED — option B landed):** implemented as decided below, with ONE deliberate
+deviation: `/api/summary`, `/events` and `GET /` serve an EXACTLY-CURRENT summary rather than a
+≤1-rebuild-stale one — `ui::summary_now` does the rebuild off the lock ON the read path (snapshot
+under the lock → summarize outside → `store_if_newer`), which buys the same lock behaviour with no
+staleness AND keeps every existing test's contract intact. A GET/HEAD preamble on `/`, `/events`,
+`/api/*` warms the memo so the ~25 drill-down routes that reach `build_session_summary` under the
+lock find a pointer clone. `run_burn_tick` uses it too (`burn_status_over`), and both burn paths
+now BORROW `summary["sessions"]` instead of deep-cloning the card array under the lock.
+Report: `reports/hfv4ait7/20260829_012200+0200-off-lock-rebuild.md`. 544 tests pass; clippy clean.
+
+**Root cause 3 (OPEN — the new top-of-stack holder):** `ingest_parsed` holds the one
+`Mutex<CoreState>` across its per-span `writer.append` loop. Call graph: ~300 samples per tokio
+worker in `ingest_parsed`, **~296 of them in `SpanStoreWriter::append`** (serde serialization;
+leaves `_platform_memmove` 5,098, `IndexMap::get_index_of` 1,785, `SipHasher::write` 787) — ×14
+workers ≈ 4,300 samples of serialized work, which is why 70,909 mutexwait samples remain. Ingest is
+no longer starved by a summarize; it is bounded by itself. That is why the PASS criterion's
+"mutexwait near zero" was NOT met even though req/s (949 > 300) and CPU (168.8% ≫ 100%) were.
+Per the stop rule, option (C) was NOT started. Smaller residual, named for honesty: the snapshot
+clones a `Vec<Arc<Value>>` that reached ~480k entries (~3.8 MB memcpy + 480k atomic increments) on
+each rebuild miss — ~15 times over the run, negligible against `append`, but it grows with the window.
+
+**Root cause 2 (as PROFILED before the fix — kept for provenance):** `/usr/bin/sample` under the
 flood (release build with symbols): 83,061 samples in `__psynch_mutexwait`; the lock-holder's CPU
 is `summarize_spans` / `build_interaction_card` / IndexMap<String,Value> hashing — the FULL
 summary rebuild `run_push_loop` triggers every 4 s (and `/api/summary`, `/events`, `GET /`)
@@ -62,11 +83,31 @@ under the SAME mutex ingest needs. Ingest is not slow; it is starved. `window.ad
 `sample-on-path-is-a-python-shim`): `__psynch_mutexwait` samples drop from 83k to near zero AND
 req/s scales past 300 (expect > 2k) AND mean %cpu well past 100%.
 
-**NEXT ACTION:** implement 1-3 on top of the committed ingest split, run the whole crate suite,
-then the pass measurement; record numbers here.
+**NEXT ACTION:** decide whether root cause 3 is worth pursuing — the honest question is whether
+949 req/s (11k spans/s) against a measured real peak of 26 spans/s is already 400× headroom, i.e.
+whether the remaining mutexwait is a number to fix or a number to record. If it IS pursued, the
+target is the `writer.append` loop inside `ingest_parsed` (append into a per-request buffer merged
+under the lock, or a dedicated writer mutex — note the card's own rejection note for (C): lock-order
+risk), NOT more summary work.
+
+**OPEN follow-ups from the adversarial review of ae513a4** (`reports/review-fork/20260829_000443+0200-ae513a4-review.md`):
+- **F1 (HIGH) — FIXED in this commit.** The shutdown `select!` awaited only `ctrl_c()` (SIGINT), yet
+  `agentlenspro server stop` sends SIGTERM — so on the NORMAL stop path the flush block never ran and
+  up to 5 s of spans died in the writer buffer (the 5 s chores tick became the durability boundary the
+  moment the HTTP path stopped flushing per payload). A `SignalKind::terminate()` arm now sits beside
+  `ctrl_c()`; `tests/shutdown_flush.rs` proves it and is mutation-verified (removing the arm fails it,
+  SIGKILL must not flush). Confirmed live: the SIGTERM ending the bench flushed 481,200 spans.
+- **F2 (MEDIUM) — OPEN, not implemented.** 14 concurrent 8 MB payloads parsed on the shared tokio
+  runtime stalled `/api/summary` to 2.38 s (idle 0.5 ms). A body above ~1 MB should parse on
+  `spawn_blocking` rather than on a runtime worker.
+- **F3 (LOW) — OPEN, not implemented.** The 5 s durability contract is documented in `lib.rs` but not
+  where it is DEPENDED ON — the `chores.rs` tick and the `alcore.rs` shutdown block both need the
+  comment, since F1 was exactly the failure of nobody reading it there.
 
 **Memory (belongs to YU8QPU89, recorded here because it was measured here):** RSS 3.4 GB after
-the baseline runs, **9.6 GB** after 289k spans — the window keeps every span as a `serde_json::Value`.
+the baseline runs, **9.6 GB** after 289k spans, **15.0 GB** after 481k spans (2026-08-29 run) — the
+window keeps every span as a `serde_json::Value`; the `Arc` wrapper adds 8 bytes + a refcount per
+span and changes nothing about that.
 
 USER goal (2026-08-28): *"test that it actually uses all cpu cores when ingesting all the data
 from claude code telemetry and hooks and when loading the data from the jsonl via the duckdb."*

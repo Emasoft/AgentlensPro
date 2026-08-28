@@ -80,20 +80,67 @@ fn sse_frame(payload: &str) -> Bytes {
     Bytes::from(format!("data: {payload}\n\n"))
 }
 
+/// THE summary rebuilder — the one path that never holds the state lock across the build
+/// (TRDD-HFV4AIT7). Under the lock: a version check and, on a miss, a pointer snapshot of the
+/// window + the log cards. The summarize itself runs on the caller's own thread.
+///
+/// Measured before this split: 32 concurrent OTLP posters reached only 201 req/s at 96% mean CPU
+/// (one core) on a 14-core machine, and `/usr/bin/sample` put **83,061** samples in
+/// `__psynch_mutexwait` — every poster queued behind the 4 s ticks rebuilding a whole-window
+/// summary while holding the mutex that `ingest_parsed` needs.
+///
+/// Returns the data version the summary was built for, so a derived view (the stripped body)
+/// memoizes against the SAME version rather than whatever `data_version` reads afterwards.
+///
+/// ponytail: the ceiling is that a rebuild is still the WHOLE window, and two readers arriving at
+/// the same new version both compute it (`store_if_newer` keeps one, discards the loser). That is
+/// wasted CPU, never a stalled ingest. The upgrade is an incremental summarizer — per-session
+/// invalidation instead of a full pass — not more locking.
+pub fn summary_now(state: &Arc<Mutex<CoreState>>, now_ms: f64) -> Result<(u64, Arc<Value>), String> {
+    let inputs = {
+        let mut st = state.lock().map_err(|_| "state poisoned".to_owned())?;
+        let version = st.data_version;
+        if let Some(cached) = st.summary_cache.current(version) {
+            return Ok((version, cached));
+        }
+        st.summary_snapshot()
+    };
+    let (summary, attribution) = CoreState::summary_from(&inputs, now_ms);
+    let mut st = state.lock().map_err(|_| "state poisoned".to_owned())?;
+    Ok((inputs.version, st.store_summary(inputs.version, summary, attribution)))
+}
+
+/// `/api/summary`'s body and the shell's inlined copy: strip_session_detail over `summary_now`,
+/// memoized on the summary's OWN version and — like the summary — computed off the lock. The
+/// strip clones every card, so doing it under the lock was the same stall one layer down.
+pub fn stripped_now(state: &Arc<Mutex<CoreState>>, now_ms: f64) -> Result<Arc<Value>, String> {
+    let (version, summary) = summary_now(state, now_ms)?;
+    {
+        let mut st = state.lock().map_err(|_| "state poisoned".to_owned())?;
+        if let Some(cached) = st.stripped_cache.current(version) {
+            return Ok(cached);
+        }
+    }
+    let stripped = strip_session_detail(&summary);
+    let mut st = state.lock().map_err(|_| "state poisoned".to_owned())?;
+    Ok(st.stripped_cache.store_if_newer(version, stripped))
+}
+
 /// pushUpdate — ONE full rebuild broadcast to every client. Called from the coalesced timer.
 pub fn push_update(state: &Arc<Mutex<CoreState>>, hub: &SseHub, now_ms: f64) {
     if hub.client_count() == 0 {
         return;
     }
-    let payload = {
-        let mut st = match state.lock() {
-            Ok(s) => s,
-            Err(_) => return,
-        };
-        let summary = st.build_session_summary(now_ms);
+    let Ok((_, summary)) = summary_now(state, now_ms) else { return };
+    // The lock covers ONLY the three cheap reads; the payload assembly (which walks every span
+    // and re-strips every card) runs after it is released.
+    let Ok((spans, gaps, build_id)) = state.lock().map(|st| {
         let gaps = crate::collector_lifecycle::compute_gaps(&st.lifecycle, crate::collector_lifecycle::MIN_GAP_MS);
-        build_update_payload(&summary, &st.window.spans, &st.build_id, gaps, now_ms).to_string()
+        (st.window.spans.clone(), gaps, st.build_id.clone())
+    }) else {
+        return;
     };
+    let payload = build_update_payload(&summary, &spans, &build_id, gaps, now_ms).to_string();
     hub.broadcast(sse_frame(&payload));
 }
 
@@ -448,12 +495,13 @@ fn json_response(status: StatusCode, body: String) -> Response<SseBody> {
 /// frame for as long as the client stays connected.
 fn sse_response(state: &Arc<Mutex<CoreState>>, hub: &SseHub, now_ms: f64) -> Result<Response<SseBody>, String> {
     use http_body_util::BodyExt;
-    let first = {
-        let mut st = state.lock().map_err(|_| "state poisoned".to_owned())?;
-        let summary = st.build_session_summary(now_ms);
+    let (_, summary) = summary_now(state, now_ms)?;
+    let (spans, gaps, build_id) = {
+        let st = state.lock().map_err(|_| "state poisoned".to_owned())?;
         let gaps = crate::collector_lifecycle::compute_gaps(&st.lifecycle, crate::collector_lifecycle::MIN_GAP_MS);
-        build_update_payload(&summary, &st.window.spans, &st.build_id, gaps, now_ms).to_string()
+        (st.window.spans.clone(), gaps, st.build_id.clone())
     };
+    let first = build_update_payload(&summary, &spans, &build_id, gaps, now_ms).to_string();
     let mut rx = hub.subscribe();
     let (tx, frames) = tokio::sync::mpsc::unbounded_channel::<Bytes>();
     // Pump the broadcast into this client's own queue; the pump ends when the client drops the
@@ -524,19 +572,20 @@ fn dashboard_html(state: &Arc<Mutex<CoreState>>, media_dir: &std::path::Path, re
     let now = crate::now_ms() as f64;
     // Read per request, like the TS: 28 KB, and a dev can edit the shell without a restart.
     let tmpl = std::fs::read_to_string(media_dir.join("index.html")).map_err(|e| format!("index.html: {e}"))?;
-    let (summary_json, sidebar_json, build_id) = {
-        let mut st = state.lock().map_err(|_| "state poisoned".to_owned())?;
-        let summary = st.build_session_summary(now);
-        let stripped = st.build_stripped_summary(now);
-        let sidebar = if summary.is_null() {
-            serde_json::json!({ "isActive": false, "lastActivityMs": 0, "sessionCount": 0, "agentSources": [], "currentSession": null, "burnRate": null })
-        } else {
-            crate::update_payload::compute_sidebar_payload(&summary, &st.window.spans, now)
-        };
+    let (_, summary) = summary_now(state, now)?;
+    let stripped = stripped_now(state, now)?;
+    let (spans, build_id) = {
+        let st = state.lock().map_err(|_| "state poisoned".to_owned())?;
         // The SAME build_id the update frames carry — the dashboard reloads on a mismatch, so a
         // different fingerprint here (the TS's bundle mtimes) would reload it on first connect.
-        (safe_json(&stripped), safe_json(&sidebar), st.build_id.clone())
+        (st.window.spans.clone(), st.build_id.clone())
     };
+    let sidebar = if summary.is_null() {
+        serde_json::json!({ "isActive": false, "lastActivityMs": 0, "sessionCount": 0, "agentSources": [], "currentSession": null, "burnRate": null })
+    } else {
+        crate::update_payload::compute_sidebar_payload(&summary, &spans, now)
+    };
+    let (summary_json, sidebar_json) = (safe_json(&stripped), safe_json(&sidebar));
     // The mount prefix is EMPTY here, deliberately, and not read from AGENTLENS_BASE_PATH: the
     // base-path STRIP in handle() is still on this module's deferred list, and a shell that emits
     // `/lens/dashboard.js` to a router that only knows `/dashboard.js` is a 200 page that can never
@@ -650,6 +699,21 @@ async fn handle(
         && ((method != Method::GET && method != Method::HEAD && method != Method::OPTIONS)
             || path == "/api/hook-config");
 
+    // TRDD-HFV4AIT7 — refresh the memoized summary HERE, off the lock. Two dozen read routes
+    // below reach it through `CoreState::build_session_summary`, which rebuilds INLINE under the
+    // state lock; at 13.5k cards that is ~1s of `summarize_spans` with every ingest POST queued
+    // behind it. Warming the memo first turns each of those calls into a pointer clone.
+    // A PREFIX, not a per-route allowlist, for the reason the method gate above gives: an
+    // allowlist always misses the NEXT route. The cost on a route that never reads the summary is
+    // one version compare (a hit) or one off-lock rebuild — never a held lock.
+    let reads_summary = (method == Method::GET || method == Method::HEAD)
+        && (path == "/" || path == "/events" || path.starts_with("/api/"))
+        && viewer_role != crate::embed_auth::ViewerRole::Invalid
+        && !restricted_block;
+    if reads_summary {
+        let _ = summary_now(&state, crate::now_ms() as f64);
+    }
+
     let mut resp = if method != Method::GET && method != Method::HEAD && disallowed {
         json_response(StatusCode::FORBIDDEN, error_json("cross-origin request refused"))
     } else if viewer_role == crate::embed_auth::ViewerRole::Invalid {
@@ -662,11 +726,7 @@ async fn handle(
     } else if path == "/events" {
         sse_response(&state, &hub, crate::now_ms() as f64)?
     } else if method == Method::GET && path == "/api/summary" {
-        let body = {
-            let mut st = state.lock().map_err(|_| "state poisoned".to_owned())?;
-            st.build_stripped_summary(crate::now_ms() as f64).to_string()
-        };
-        json_response(StatusCode::OK, body)
+        json_response(StatusCode::OK, stripped_now(&state, crate::now_ms() as f64)?.to_string())
     } else if method == Method::GET && path == "/api/server-stats" {
         let body = {
             let st = state.lock().map_err(|_| "state poisoned".to_owned())?;
@@ -967,7 +1027,7 @@ async fn handle(
                 .window
                 .spans
                 .iter()
-                .filter_map(Value::as_object)
+                .filter_map(|s| s.as_object())
                 .filter(|s| s.get("name").and_then(Value::as_str).is_some_and(|n| n.starts_with("codex.")))
                 .filter_map(|s| s.get("traceId").and_then(Value::as_str))
                 .collect();
@@ -3237,6 +3297,11 @@ pub async fn run_burn_tick(state: Arc<Mutex<CoreState>>, hub: Arc<SseHub>) {
     loop {
         tick.tick().await;
         let mut frames: Vec<String> = Vec::new();
+        // TRDD-HFV4AIT7: build the summary BEFORE taking the lock. This tick fired every 4 s on
+        // every install, with or without a dashboard connected, and `live_burn_status` rebuilt the
+        // whole window inside the lock — the single biggest source of the 83k `__psynch_mutexwait`
+        // samples under an ingest flood. `burn_status_over` below now gets a ready summary.
+        let Ok((_, tick_summary)) = summary_now(&state, crate::now_ms() as f64) else { continue };
         // Declared OUTSIDE the lock block (uninitialized — the only path that skips the assignment
         // is the `continue` below, which also skips every read): the rotation edge is detected
         // under the lock, and the capture it triggers runs after the lock is released.
@@ -3258,7 +3323,7 @@ pub async fn run_burn_tick(state: Arc<Mutex<CoreState>>, hub: Arc<SseHub>) {
             // the same ≤5s durability window with one fewer task). Sealing is NOT here — it
             // runs DuckDB over whole WALs and lives on alcore's own 60s task, outside the lock.
             st.statusline.flush(None);
-            let status = st.live_burn_status(now);
+            let status = st.burn_status_over(&tick_summary, now);
             st.burn.last_status = Some(status.clone());
             let account = st.burn.current_account(now);
             // TRDD-YQZ9P8IL: sample the subscription state onto the change-detected timeline.
@@ -3364,6 +3429,9 @@ pub async fn run_push_loop(state: Arc<Mutex<CoreState>>, hub: Arc<SseHub>) {
         };
         if version != last_pushed {
             last_pushed = version;
+            // push_update does the rebuild + the payload assembly off the lock (summary_now); the
+            // sequential loop is what keeps a single rebuild in flight — a tick that fires while
+            // one is running simply finds the memo current when it gets there.
             push_update(&state, &hub, crate::now_ms() as f64);
         }
     }

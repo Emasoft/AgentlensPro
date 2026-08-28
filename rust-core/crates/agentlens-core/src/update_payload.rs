@@ -51,7 +51,7 @@ fn agent_sources(ordered: &[&Value]) -> Vec<Value> {
     seen.into_iter().map(Value::from).collect()
 }
 
-pub fn compute_sidebar_payload(summary: &Value, all_spans: &[Value], now_ms: f64) -> Value {
+pub fn compute_sidebar_payload(summary: &Value, all_spans: &[std::sync::Arc<Value>], now_ms: f64) -> Value {
     let sessions: Vec<&Value> = summary.get("sessions").and_then(Value::as_array).map(|a| a.iter().collect()).unwrap_or_default();
     let mut sorted = sessions.clone();
     sorted.sort_by(|a, b| {
@@ -257,7 +257,7 @@ pub fn compute_analytics_data(sessions: &[Value]) -> Value {
 
 /// buildUpdatePayload — the `update` SSE frame body. `collector_gaps` is the lifecycle-derived
 /// downtime list (collector_lifecycle::compute_gaps — both frame sites pass it).
-pub fn build_update_payload(summary: &Value, all_spans: &[Value], build_id: &str, collector_gaps: Vec<Value>, now_ms: f64) -> Value {
+pub fn build_update_payload(summary: &Value, all_spans: &[std::sync::Arc<Value>], build_id: &str, collector_gaps: Vec<Value>, now_ms: f64) -> Value {
     let sessions: Vec<Value> = summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
     let mut p = Map::new();
     p.insert("type".into(), "update".into());

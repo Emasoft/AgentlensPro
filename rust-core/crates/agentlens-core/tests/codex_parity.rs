@@ -9,8 +9,13 @@ use serde_json::Value;
 #[test]
 fn codex_builder_reproduces_the_ts_oracle_exactly() {
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
-    let spans: Vec<Value> =
-        serde_json::from_str(&std::fs::read_to_string(dir.join("codex-spans.json")).unwrap()).unwrap();
+    // Shared spans, as the live window holds them (TRDD-HFV4AIT7).
+    let spans: Vec<std::sync::Arc<Value>> =
+        serde_json::from_str::<Vec<Value>>(&std::fs::read_to_string(dir.join("codex-spans.json")).unwrap())
+            .unwrap()
+            .into_iter()
+            .map(std::sync::Arc::new)
+            .collect();
     let expected: Value =
         serde_json::from_str(&std::fs::read_to_string(dir.join("codex-expected.json")).unwrap()).unwrap();
 

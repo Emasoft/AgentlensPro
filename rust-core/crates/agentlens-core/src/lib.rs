@@ -120,6 +120,15 @@ pub struct Counters {
     pub spans_appended: u64,
 }
 
+/// A copy of everything a summary rebuild reads, taken under the state lock so the rebuild can
+/// run outside it (TRDD-HFV4AIT7). Both fields hold `Arc`s, so building one is a pointer copy per
+/// span/card — never a deep clone of the window.
+pub struct SummaryInputs {
+    pub version: u64,
+    pub spans: Vec<Arc<Value>>,
+    pub log_sessions: IndexMap<String, Arc<Value>>,
+}
+
 pub struct CoreState {
     pub ingest: IngestState,
     pub writer: SpanStoreWriter,
@@ -142,8 +151,10 @@ pub struct CoreState {
     /// served summary under the feed-collision doctrine (feed_merge.rs). Fed by the log reader
     /// (log_reader.rs); `put_log_session` is the one write path and bumps data_version. An
     /// IndexMap: insertion order kept like the JS Map, O(1) upsert (a 13k-card boot would be
-    /// quadratic on a Vec).
-    pub log_sessions: IndexMap<String, Value>,
+    /// quadratic on a Vec). `Arc` per card for the same reason the window holds `Arc`s
+    /// (TRDD-HFV4AIT7): `summary_snapshot` has to copy this map under the lock so the rebuild can
+    /// run outside it, and a deep clone of 13k cards there would be the stall it removes.
+    pub log_sessions: IndexMap<String, Arc<Value>>,
     /// The data dir this process owns (server.ts DATA_DIR) — the sidecar paths `/api/server-stats`
     /// measures hang off it.
     pub data_dir: std::path::PathBuf,
@@ -232,7 +243,7 @@ impl CoreState {
     /// putLogSession — upsert by sessionId.
     pub fn put_log_session(&mut self, card: Value) {
         let id = card.get("sessionId").and_then(Value::as_str).unwrap_or("").to_owned();
-        self.log_sessions.insert(id, card);
+        self.log_sessions.insert(id, Arc::new(card));
         self.data_version += 1;
     }
 
@@ -248,7 +259,11 @@ impl CoreState {
         // Newest first; a stable sort keeps insertion order among ties, as the JS sort does.
         order.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
         for (_, i) in order.into_iter().skip(hot_cards) {
-            if let Some(obj) = self.log_sessions.get_index_mut(i).and_then(|(_, c)| c.as_object_mut()) {
+            // `Arc::make_mut` — copy-on-write, so a card a rebuild in flight is still reading is
+            // cloned before it is stripped instead of being mutated underneath it. The clone hits
+            // only the cards actually demoted (the tail past `hot_cards`), and only while a
+            // snapshot still holds them.
+            if let Some(obj) = self.log_sessions.get_index_mut(i).and_then(|(_, c)| Arc::make_mut(c).as_object_mut()) {
                 log_reader::strip_timeline_value(obj);
             }
         }
@@ -282,15 +297,41 @@ impl CoreState {
     /// computeSessionSummary (server.ts:2240) — summarizeSpans over the live window, then, when
     /// any log session exists, the feed-collision merge + the subagent link, sorted newest-first.
     pub fn session_summary(&self, now_ms: f64) -> Value {
-        Self::summary_over(&self.window, &self.log_sessions, now_ms).0
+        Self::summary_over(&self.window.spans, &self.log_sessions, now_ms).0
+    }
+
+    /// The inputs of one summary rebuild, copied under the state lock so the rebuild itself runs
+    /// OUTSIDE it (TRDD-HFV4AIT7). Both containers hold `Arc`s, so this is a pointer copy per
+    /// element, not a deep clone of the window.
+    pub fn summary_snapshot(&self) -> SummaryInputs {
+        SummaryInputs { version: self.data_version, spans: self.window.spans.clone(), log_sessions: self.log_sessions.clone() }
+    }
+
+    /// The off-lock half: `summary_over` on a snapshot. Free function shape on purpose — it takes
+    /// no `&self`, so it cannot accidentally be called while the lock is held.
+    pub fn summary_from(inputs: &SummaryInputs, now_ms: f64) -> (Value, IndexMap<String, Vec<Value>>) {
+        Self::summary_over(&inputs.spans, &inputs.log_sessions, now_ms)
+    }
+
+    /// Store a summary built off the lock, together with the attribution map built WITH it. The
+    /// two must move as one — the `/api/timeline` graft reads the map for the cards the summary
+    /// serves — so the map is replaced only when the summary actually lands (a rebuild that lost
+    /// the race is discarded whole).
+    pub fn store_summary(&mut self, version: u64, summary: Value, attribution: IndexMap<String, Vec<Value>>) -> std::sync::Arc<Value> {
+        let will_store = self.summary_cache.is_empty() || version > self.summary_cache.version();
+        let stored = self.summary_cache.store_if_newer(version, summary);
+        if will_store {
+            self.otel_attribution = attribution;
+        }
+        stored
     }
 
     /// Returns the merged summary AND `otelAttributionBySession` (server.ts:2245) — the OTEL
     /// api_request entries per claude_code session, captured off the PRE-merge sessions so the
     /// `/api/timeline` graft still has them after the merge displaces the OTEL twin.
-    fn summary_over(window: &span_window::SpanWindow, log_sessions: &IndexMap<String, Value>, now_ms: f64) -> (Value, IndexMap<String, Vec<Value>>) {
+    fn summary_over(spans: &[Arc<Value>], log_sessions: &IndexMap<String, Arc<Value>>, now_ms: f64) -> (Value, IndexMap<String, Vec<Value>>) {
         let _ = now_ms;
-        let mut summary = summarize::summarizer::summarize_spans(&window.spans, &|_| None);
+        let mut summary = summarize::summarizer::summarize_spans(spans, &|_| None);
         let mut attribution: IndexMap<String, Vec<Value>> = IndexMap::new();
         for s in summary.get("sessions").and_then(Value::as_array).map(Vec::as_slice).unwrap_or(&[]) {
             if s.get("source").and_then(Value::as_str) != Some("claude_code") {
@@ -309,7 +350,9 @@ impl CoreState {
         }
         if !log_sessions.is_empty() {
             let otel: Vec<Value> = summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
-            let logs: Vec<Value> = log_sessions.iter().map(|(_, c)| c.clone()).collect();
+            // The merge REWRITES the cards it keeps, so this deep clone stays — but it now runs
+            // off the state lock (ui::summary_now), which is what made it affordable.
+            let logs: Vec<Value> = log_sessions.values().map(|c| (**c).clone()).collect();
             let mut merged = feed_merge::link_subagent_transcripts(feed_merge::merge_otel_and_log_sessions(otel, logs));
             // Date.parse(b.startTime || '0') - Date.parse(a.startTime || '0'), newest first.
             merged.sort_by(|a, b| {
@@ -327,11 +370,16 @@ impl CoreState {
     /// buildSessionSummary — the merged summary, rebuilt only when data_version moved. The
     /// attribution side-map is replaced in the same compute (the TS rebuilds the module-level
     /// Map inside the memoized computeSessionSummary), so map and summary always share a version.
+    ///
+    /// **This rebuilds INLINE, under whatever lock the caller holds.** Every server path that can
+    /// run while ingest is hot goes through `ui::summary_now` instead, which does the same work
+    /// off the lock and leaves this a pointer clone (TRDD-HFV4AIT7). It stays inline for callers
+    /// that own the state outright — tests, the CLI/MCP surfaces, and the cold-boot first build.
     pub fn build_session_summary(&mut self, now_ms: f64) -> std::sync::Arc<Value> {
         // Disjoint field borrows: the cache + side-map are written, the inputs are read.
         let Self { summary_cache, window, log_sessions, data_version, otel_attribution, .. } = self;
         summary_cache.get(*data_version, || {
-            let (summary, attribution) = Self::summary_over(window, log_sessions, now_ms);
+            let (summary, attribution) = Self::summary_over(&window.spans, log_sessions, now_ms);
             *otel_attribution = attribution;
             summary
         })
@@ -350,11 +398,21 @@ impl CoreState {
     /// stream carries the api_request events only, statusline sessions contribute nothing yet.
     pub fn live_burn_status(&mut self, now_ms: f64) -> Value {
         let summary = self.build_session_summary(now_ms);
-        let sessions: Vec<Value> = summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
-        drop(summary);
-        let events = burn::monitor::gather_consumption_events(&sessions, &[], now_ms);
+        self.burn_status_over(&summary, now_ms)
+    }
+
+    /// The same computation against a summary the caller already has — what the 4 s burn tick
+    /// uses, so the tick's summary REBUILD happens off the state lock (ui::summary_now) and only
+    /// this comparatively cheap gather/compute runs under it (TRDD-HFV4AIT7).
+    ///
+    /// The sessions are BORROWED out of the summary rather than deep-cloned into a `Vec<Value>`:
+    /// the old clone copied every card, with its timeline, on every 4 s fire while holding the
+    /// lock ingest needs.
+    pub fn burn_status_over(&mut self, summary: &Value, now_ms: f64) -> Value {
+        let sessions = summary.get("sessions").and_then(Value::as_array).map(Vec::as_slice).unwrap_or(&[]);
+        let events = burn::monitor::gather_consumption_events(sessions, &[], now_ms);
         let ttl = self.burn.ttl_context(now_ms);
-        burn::monitor::compute_burn_status(&events, &sessions, &self.burn.config, now_ms, Some(&ttl))
+        burn::monitor::compute_burn_status(&events, sessions, &self.burn.config, now_ms, Some(&ttl))
     }
 
     /// `compositionProjectResolver` (server.ts:1462) — sessionId → `projectPath ?? workspace ??
@@ -387,11 +445,10 @@ impl CoreState {
     /// compares the caller's session to its predecessors in the same workspace).
     pub fn live_session_status(&mut self, session_id: Option<&str>, workspace: Option<&str>, now_ms: f64) -> Value {
         let summary = self.build_session_summary(now_ms);
-        let sessions: Vec<Value> = summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
-        drop(summary);
-        let events = burn::monitor::gather_consumption_events(&sessions, &[], now_ms);
+        let sessions = summary.get("sessions").and_then(Value::as_array).map(Vec::as_slice).unwrap_or(&[]);
+        let events = burn::monitor::gather_consumption_events(sessions, &[], now_ms);
         let ttl = self.burn.ttl_context(now_ms);
-        burn::monitor::compute_session_status(&sessions, &events, &self.burn.config, session_id, workspace, now_ms, Some(&ttl))
+        burn::monitor::compute_session_status(sessions, &events, &self.burn.config, session_id, workspace, now_ms, Some(&ttl))
     }
 
     /// The `/api/burn-risk` body (freeze row 12): poll the bodies watcher, then checkBurnRisk
@@ -568,17 +625,18 @@ pub fn now_ms() -> i64 {
 /// a 14-core machine — every request serialised behind the previous one's disk write, and the
 /// parse (the CPU-heavy part) never ran on more than one core. Err = unparseable (the TS
 /// collector's otlpIngestError fallback, e.g. a protobuf export) — counted by the caller, still
-/// 200 on the wire.
-pub fn parse_payload(path: &str, body: &[u8]) -> Result<(&'static str, Value), ()> {
-    let text = std::str::from_utf8(body).map_err(|_| ())?;
-    let payload = serde_json::from_str::<Value>(text).map_err(|_| ())?;
+/// 200 on the wire. `Option`, not `Result<_, ()>`: there is exactly one failure and it carries no
+/// information, and clippy's `result_unit_err` is right that a unit error is a worse `None`.
+pub fn parse_payload(path: &str, body: &[u8]) -> Option<(&'static str, Value)> {
+    let text = std::str::from_utf8(body).ok()?;
+    let payload = serde_json::from_str::<Value>(text).ok()?;
     let kind = match path {
         "/v1/traces" => "traces",
         "/v1/logs" => "logs",
         "/v1/metrics" => "metrics",
         _ => classify(&payload),
     };
-    Ok((kind, payload))
+    Some((kind, payload))
 }
 
 /// Parse + ingest + flush in one call, for callers that hold the state directly (tests, the
@@ -587,8 +645,8 @@ pub fn parse_payload(path: &str, body: &[u8]) -> Result<(&'static str, Value), (
 /// (chores.rs), so a burst of posters is bounded by CPU, not by one fsync per payload.
 pub fn ingest_post(state: &mut CoreState, path: &str, body: &[u8]) {
     match parse_payload(path, body) {
-        Ok((kind, payload)) => ingest_parsed(state, kind, payload, path),
-        Err(()) => state.counters.parse_errors += 1,
+        Some((kind, payload)) => ingest_parsed(state, kind, payload, path),
+        None => state.counters.parse_errors += 1,
     }
     if state.writer.pending_appends() > 0 {
         state.flush_spans();
@@ -688,8 +746,8 @@ async fn handle(
     {
         let mut st = state.lock().map_err(|_| "state poisoned".to_owned())?;
         match parsed {
-            Ok((kind, payload)) => ingest_parsed(&mut st, kind, payload, &path),
-            Err(()) => st.counters.parse_errors += 1,
+            Some((kind, payload)) => ingest_parsed(&mut st, kind, payload, &path),
+            None => st.counters.parse_errors += 1,
         }
     }
     Ok(Response::new(Full::new(Bytes::new())))

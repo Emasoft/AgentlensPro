@@ -10,6 +10,7 @@
 
 use serde_json::{Map, Value};
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use super::claude::build_claude_sessions;
 use super::codex::build_codex_sessions;
@@ -66,7 +67,10 @@ fn int_attr(key: &str, value: f64) -> Value {
     Value::Object(a)
 }
 
-pub fn summarize_spans(spans: &[Value], account_for: &dyn Fn(&str) -> Option<String>) -> Value {
+/// `&[Arc<Value>]`, not `&[Value]`: the caller is the live span window, which hands out a shared
+/// snapshot so this (the expensive pass) runs off the state lock — TRDD-HFV4AIT7. Read-only, so
+/// the sharing is invisible here.
+pub fn summarize_spans(spans: &[Arc<Value>], account_for: &dyn Fn(&str) -> Option<String>) -> Value {
     if spans.is_empty() {
         let mut r = Map::new();
         r.insert("sessions".into(), Value::Array(Vec::new()));

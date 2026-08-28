@@ -57,7 +57,7 @@ fn received_or(s: &Value, from_nano: f64) -> f64 {
     if r != 0.0 { r } else { 0.0 }
 }
 
-pub fn build_codex_sessions(spans: &[Value]) -> Vec<Value> {
+pub fn build_codex_sessions(spans: &[std::sync::Arc<Value>]) -> Vec<Value> {
     group_codex_spans_by_session(spans)
         .into_iter()
         .map(|(key, group)| build_codex_card(&key, &group))
@@ -105,7 +105,7 @@ fn get_group<'a>(groups: &mut Vec<WorkingGroup<'a>>, index: &mut HashMap<String,
 
 /// groupCodexSpansBySession — insertion-ordered (group key, spans) pairs; the key becomes the
 /// card's traceId.
-pub fn group_codex_spans_by_session(spans: &[Value]) -> Vec<(String, Vec<&Value>)> {
+pub fn group_codex_spans_by_session(spans: &[std::sync::Arc<Value>]) -> Vec<(String, Vec<&Value>)> {
     let mut groups: Vec<WorkingGroup> = Vec::new();
     let mut index_by_key: HashMap<String, usize> = HashMap::new();
     let mut current_by_conversation: HashMap<String, usize> = HashMap::new();
@@ -135,6 +135,7 @@ pub fn group_codex_spans_by_session(spans: &[Value]) -> Vec<(String, Vec<&Value>
 
     let mut codex_spans: Vec<&Value> = spans
         .iter()
+        .map(|s| &**s)
         .filter(|s| {
             is_codex_span(s) || {
                 let t = s.get("traceId").and_then(Value::as_str).unwrap_or("");

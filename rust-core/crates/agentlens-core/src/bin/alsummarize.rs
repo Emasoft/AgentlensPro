@@ -23,10 +23,14 @@ fn main() {
             s
         }
     };
-    let spans: Vec<serde_json::Value> = serde_json::from_str(&text).unwrap_or_else(|e| {
-        eprintln!("alsummarize: parse: {e}");
-        std::process::exit(2);
-    });
+    let spans: Vec<std::sync::Arc<serde_json::Value>> = serde_json::from_str::<Vec<serde_json::Value>>(&text)
+        .unwrap_or_else(|e| {
+            eprintln!("alsummarize: parse: {e}");
+            std::process::exit(2);
+        })
+        .into_iter()
+        .map(std::sync::Arc::new)
+        .collect();
     let result = agentlens_core::summarize::summarizer::summarize_spans(&spans, &|_| None);
     println!("{}", serde_json::to_string(&result).expect("result serializes"));
 }
