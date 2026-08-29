@@ -92,14 +92,53 @@ fn sse_frame(payload: &str) -> Bytes {
 /// Returns the data version the summary was built for, so a derived view (the stripped body)
 /// memoizes against the SAME version rather than whatever `data_version` reads afterwards.
 ///
-/// ponytail: the ceiling is that a rebuild is still the WHOLE window, and two readers arriving at
-/// the same new version both compute it (`store_if_newer` keeps one, discards the loser). That is
-/// wasted CPU, never a stalled ingest. The upgrade is an incremental summarizer — per-session
-/// invalidation instead of a full pass — not more locking.
+/// SINGLE-FLIGHT: at most one rebuild runs at a time. This gate was review F1 of `5e7f455`, was
+/// assigned to an agent that stalled before landing it, and its absence was measured on 2026-08-29
+/// as the process's dominant memory holder (TRDD-YU8QPU89).
+///
+/// The comment this replaces said two readers computing the same version was "wasted CPU, never a
+/// stalled ingest". The CPU half was right and the cost was wrong: each in-flight rebuild holds its
+/// own `SummaryInputs` snapshot (a `Vec<Arc<Value>>` over the whole window plus a clone of
+/// `log_sessions`) AND the per-session card set it is building, while the previous summary stays
+/// alive until `store_summary` swaps it. So concurrent rebuilds cost N COMPLETE COPIES of the
+/// derived state, not N times the CPU. Measured: `MIMALLOC_SHOW_STATS=1` reported **26.3 GiB
+/// committed** with the window capped at 200,000 spans (~300 MB) and the writer buffer empty —
+/// every bounded structure eliminated by inspection (`VersionedCache` is one slot;
+/// `otel_attribution` is replaced wholesale), leaving this.
+///
+/// LOCK ORDER IS GATE-THEN-STATE, ALWAYS. The fast path takes the state lock and RELEASES it before
+/// touching the gate, so the two are never held in the opposite order and this cannot deadlock.
+/// After winning the gate the cache is re-checked, because the usual outcome is that the rebuild we
+/// queued behind already produced exactly what we wanted — waiters then pay a pointer clone instead
+/// of a second full pass.
+///
+/// ponytail: one process-global gate rather than a per-state lock, because there is one server per
+/// process and threading a second lock through ~25 call sites buys nothing. The remaining ceiling is
+/// unchanged — a rebuild is still the WHOLE window — and the upgrade is still an incremental
+/// summarizer, not more locking.
+fn rebuild_gate() -> &'static Mutex<()> {
+    static GATE: std::sync::OnceLock<Mutex<()>> = std::sync::OnceLock::new();
+    GATE.get_or_init(|| Mutex::new(()))
+}
+
 pub fn summary_now(state: &Arc<Mutex<CoreState>>, now_ms: f64) -> Result<(u64, Arc<Value>), String> {
+    // Fast path: a warm cache never queues behind a rebuild.
+    {
+        let mut st = state.lock().map_err(|_| "state poisoned".to_owned())?;
+        let version = st.data_version;
+        if let Some(cached) = st.summary_cache.current(version) {
+            return Ok((version, cached));
+        }
+    }
+
+    // A poisoned gate is not fatal: the guard protects no data, only admission, so recover the
+    // guard and proceed rather than failing a read because some other thread panicked.
+    let _flight = rebuild_gate().lock().unwrap_or_else(|e| e.into_inner());
+
     let inputs = {
         let mut st = state.lock().map_err(|_| "state poisoned".to_owned())?;
         let version = st.data_version;
+        // Re-check under the gate — the rebuild we waited for very likely stored this version.
         if let Some(cached) = st.summary_cache.current(version) {
             return Ok((version, cached));
         }
