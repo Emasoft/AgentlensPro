@@ -124,6 +124,45 @@ fn main() {
     if !media_dir.join("index.html").is_file() {
         usage(&format!("--media-dir {}: no index.html there", media_dir.display()));
     }
+    // BOOT PROVENANCE + THE NO_REVIVE BRAKE WARN (TRDD-Q8ZW00CI, ported from standalone/server.ts
+    // :293-307 as part of TRDD-1B98LCVR).
+    //
+    // WHY THIS HAD TO MOVE. Enforcement of the brake is CLI-side (`src/cli/serverControl.ts`), and
+    // that is TypeScript which stays. This server-side line is the DEFENCE IN DEPTH: it is the only
+    // thing that speaks up when a spawner bypasses the CLI entirely, which is precisely the case the
+    // brake exists for. alcore had NONE of it — verified by grep, zero hits for NO_REVIVE /
+    // STARTED_BY anywhere under rust-core — while the CLI has been stamping AGENTLENS_STARTED_BY on
+    // the alcore spawn all along (serverControl.ts:218-220). So the stamp was arriving and being
+    // dropped on the floor, and the shipped backend was the silent one.
+    //
+    // The Q8ZW00CI correction is the branch below, not the WARN itself: `server start` and
+    // `server restart` are the SANCTIONED overrides — they lift the brake by design — so telling
+    // that operator "the starter did not honour it, clear the brake with `server start`" both
+    // accuses the wrong party and advises the command that just ran. Provenance-blind wording is
+    // the bug; the WARN stays verbatim for every other starter, where it is true and wanted.
+    {
+        let started_by = std::env::var("AGENTLENS_STARTED_BY").ok().map(|s| s.trim().to_owned()).filter(|s| !s.is_empty()).unwrap_or_else(|| {
+            "unknown (no AGENTLENS_STARTED_BY — launched by hand, or by a spawner without the stamp)".to_owned()
+        });
+        // NO_REVIVE only, never the global DISABLED switch: DISABLED is terminal and is handled by
+        // the CLI gate; NO_REVIVE is a pause whose stated scope is resurrection (killSwitch.ts:56).
+        let brake_present = std::path::Path::new(&data_dir).join("NO_REVIVE").exists();
+        let brake = if brake_present { "PRESENT" } else { "absent" };
+        println!(
+            "[AgentlensPro] boot provenance: started-by={started_by} pid={} brake={brake} data={data_dir}",
+            std::process::id()
+        );
+        if brake_present {
+            if agentlens_core::brake_lift_is_sanctioned(&started_by) {
+                println!("[AgentlensPro] brake {brake} — being lifted by `{started_by}`.");
+            } else {
+                eprintln!(
+                    "[AgentlensPro] WARNING: this server started while the NO_REVIVE brake was {brake}. The starter above did not honour it. Clear the brake with `agentlenspro server start`, or stop this server with `agentlenspro server stop --stay-down`."
+                );
+            }
+        }
+    }
+
     let spans_dir = std::path::Path::new(&data_dir).join("spans");
     if let Err(e) = std::fs::create_dir_all(&spans_dir) {
         eprintln!("alcore: cannot create {}: {e}", spans_dir.display());

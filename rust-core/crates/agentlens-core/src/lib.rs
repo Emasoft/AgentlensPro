@@ -654,6 +654,20 @@ pub fn rss_budget_bytes() -> u64 {
     }
 }
 
+/// Is `started_by` a SANCTIONED lift of the NO_REVIVE brake (TRDD-Q8ZW00CI)?
+///
+/// `server start` and `server restart` are the documented overrides — the CLI arms the spawn with
+/// them and clears the brake once the server answers — so for those two the starter DID honour the
+/// brake's contract. Every other starter (a hook, the supervisor, a hand-launch, an unstamped
+/// spawner) reaching a braked data dir is the case the WARN exists to surface.
+///
+/// A free function with a test rather than an `if` inside `alcore.rs`'s `main`: a binary's main is
+/// not reachable from a test, and this predicate decides whether an operator is accused of
+/// ignoring a brake they actually honoured. The original bug was exactly this branch missing.
+pub fn brake_lift_is_sanctioned(started_by: &str) -> bool {
+    matches!(started_by.trim(), "server start" | "server restart")
+}
+
 pub fn now_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
