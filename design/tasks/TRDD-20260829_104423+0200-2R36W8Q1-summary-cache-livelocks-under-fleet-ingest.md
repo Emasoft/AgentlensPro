@@ -39,8 +39,30 @@ implementation-commits: []
 - A pure staleness TOLERANCE was rejected and must not be retried: it controls how
   often a rebuild STARTS, not how long a reader WAITS, so a 1 s tolerance in front of
   a 20 s rebuild changes nothing a caller can observe.
-- **NEXT ACTION**: the only open acceptance box is the fleet re-run — require
-  `/api/server-stats` to answer in under 1 s while ingesting 2,600 spans/s.
+- **FLEET RE-RUN DONE 2026-08-29, AND THE ACCEPTANCE BOX IS NOT MET.** Isolated alcore
+  (own DATA_DIR + ports 4981/3981/4982, `--no-log-scan`), 100 sessions × 26 spans/s
+  for 247 s. Six `/api/server-stats` probes spread through the run:
+
+  | probe | 1 | 2 | 3 | 4 | 5 | 6 |
+  |---|---|---|---|---|---|---|
+  | seconds | 0.50 | 0.60 | 0.50 | **10.53** | 0.50 | **13.25** |
+
+  Four of six are at ~0.5 s — that is `STALE_BUDGET_MS` doing exactly its job (budget
+  expires, serve stale). **The two outliers are the remaining hole, and it is a
+  DESIGN limit, not a regression: the fix protects the readers that LOSE the gate,
+  and does nothing for the one that WINS it.** The winner still runs the whole
+  rebuild synchronously and waits ~10-13 s for it. Every probe is one such winner
+  eventually, so the criterion "under 1 s" cannot be met while any request can be
+  elected to do a full O(window) rebuild on the request path.
+- Also measured and NOT yet explained: **64 non-2xx of 16,285** requests (0.4%), and
+  actual throughput **1,313 spans/s against the 2,600 target** — so the run did not
+  reach fleet rate either. Do not close this card on the latency box alone; those two
+  numbers are unexplained and may share a cause.
+- **NEXT ACTION**: take the rebuild OFF the request path entirely — a background
+  rebuild task owns the gate, and EVERY reader (winner or not) is served the last
+  good summary. That makes the read path O(1) and bounded by construction rather
+  than by a budget. The incremental summarizer named in `ui.rs` remains the larger,
+  separate upgrade.
 - **DO NOT build/test while a soak is running** — `cargo build` contends for the
   same cores and invalidates the measurement in flight.
 
