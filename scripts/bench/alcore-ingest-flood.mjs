@@ -6,6 +6,10 @@
 // No deps — plain Node http, keep-alive agents.
 import http from 'node:http';
 
+/** Per-request ceiling. Above this the server is not "slow", it is not answering — and the run
+ *  must still terminate and report that. */
+const REQUEST_TIMEOUT_MS = Number(process.env.BENCH_REQUEST_TIMEOUT_MS) || 10_000;
+
 function parseArgs(argv) {
   const out = { otlpPort: 4901, uiPort: 3901, seconds: 30, concurrency: 32, mix: 'both' };
   for (let i = 0; i < argv.length; i++) {
@@ -93,6 +97,16 @@ function post(agent, port, path, body) {
         res.on('end', () => resolve(res.statusCode));
       },
     );
+    // A wedged server otherwise hangs the whole run: sockets stay open with no response, workers
+    // block forever on `await post`, and a `--seconds 20` bench runs past 500s. Measured on
+    // 2026-08-29 — the run had to be killed (exit 144) and produced no output at all, so a real
+    // finding (the server stalling under load) was nearly lost to a harness that could not report
+    // it. A timed-out request resolves 0, which counts as nonOk and is excluded from the
+    // percentiles, so a stall shows up as failures rather than as a flattering latency figure.
+    req.setTimeout(REQUEST_TIMEOUT_MS, () => {
+      req.destroy();
+      resolve(0);
+    });
     req.on('error', () => resolve(0));
     req.end(body);
   });
