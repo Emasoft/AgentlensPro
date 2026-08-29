@@ -901,6 +901,22 @@ fn error_json(msg: &str) -> String {
     Value::Object(m).to_string()
 }
 
+/// The process-wide admission controller.
+///
+/// One controller, not one per server: the OTLP, UI and MCP listeners share a machine, so bounding
+/// them independently would let three separate pools each admit up to the ceiling and blow through
+/// the resource wall the ceiling exists to defend. The TS twin is a single module-level instance
+/// for exactly this reason ("one resource monitor + one admission controller shared by BOTH HTTP
+/// servers", standalone/server.ts:2744).
+pub fn admission_controller() -> &'static crate::admission::Admission {
+    static A: std::sync::OnceLock<crate::admission::Admission> = std::sync::OnceLock::new();
+    A.get_or_init(|| {
+        crate::admission::Admission::new(crate::admission::AdmissionLimits::from_env(
+            std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1),
+        ))
+    })
+}
+
 async fn handle(
     req: Request<hyper::body::Incoming>,
     state: Arc<Mutex<CoreState>>,
@@ -939,6 +955,51 @@ async fn handle(
     let restricted_block = viewer_role == crate::embed_auth::ViewerRole::Restricted
         && ((method != Method::GET && method != Method::HEAD && method != Method::OPTIONS)
             || path == "/api/hook-config");
+
+    // ADMISSION CONTROL (D3K7QM2P/1c, ported in TRDD-465EXTJ6). Bound in-flight work, queue the
+    // overflow briefly, shed at a hard resource wall. Placed HERE — before the summary warm below
+    // and before any route body — because the whole point is to not do the work: warming a summary
+    // or rebuilding a window for a request that is about to be shed spends exactly the resource the
+    // wall is protecting.
+    //
+    // `_admit` is held for the rest of the function. The slot is returned when it drops, i.e. when
+    // the response has been built, which is why there is no explicit release and no way to leak one.
+    let _admit = if crate::admission::Admission::is_exempt(method.as_str(), &path) {
+        None
+    } else {
+        // ONE sampler, reused: `resource_sample` is the port of src/resourceMonitor.ts and is
+        // already what /api/server-stats reports, so admission decisions and the numbers an
+        // operator reads to explain them can never disagree.
+        let sample = {
+            let data_dir = state.lock().map_err(|_| "state poisoned".to_owned())?.data_dir.clone();
+            let v = crate::server_stats::resource_sample(&data_dir);
+            crate::admission::ResourceSample {
+                rss_mb: v.get("rssMb").and_then(Value::as_f64).unwrap_or(0.0),
+                // null ⇒ statvfs failed ⇒ treat as INFINITE free space, matching the TS (which
+                // yields Infinity there). Shedding every request because a disk query failed would
+                // turn an unreadable stat into a total outage.
+                free_disk_mb: v.get("freeDiskMb").and_then(Value::as_f64).unwrap_or(f64::INFINITY),
+                load_per_core: v.get("loadPerCore").and_then(Value::as_f64).unwrap_or(0.0),
+            }
+        };
+        match admission_controller().enter(sample).await {
+            crate::admission::Admit::Ok(g) => Some(g),
+            crate::admission::Admit::Shed(reason) => {
+                // 503 + Retry-After, with the reason in the body: "server busy" alone cannot tell a
+                // memory wall from a full queue, and that distinction is what an operator acts on.
+                let mut resp = json_response(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    format!(r#"{{"error":"server busy — backpressure","reason":"{}"}}"#, reason.as_str()),
+                );
+                resp.headers_mut().insert(
+                    "Retry-After",
+                    hyper::header::HeaderValue::from_str(&reason.retry_after_sec().to_string())
+                        .unwrap_or_else(|_| hyper::header::HeaderValue::from_static("1")),
+                );
+                return Ok(resp);
+            }
+        }
+    };
 
     // TRDD-HFV4AIT7 — refresh the memoized summary HERE, off the lock. Two dozen read routes
     // below reach it through `CoreState::build_session_summary`, which rebuilds INLINE under the

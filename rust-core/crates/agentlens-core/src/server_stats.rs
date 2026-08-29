@@ -294,6 +294,9 @@ pub fn free_disk_bytes(path: &Path) -> Option<u64> {
 
 /// The frozen §1.4 body over the live state. `now_ms` is the request clock.
 pub fn server_stats(st: &CoreState, now_ms: i64) -> Value {
+    // Read from the ONE process-wide controller the HTTP handlers admit through, so these counters
+    // describe the sheds that actually happened rather than a second, separately-kept tally.
+    let adm = crate::ui::admission_controller().stats();
     let data_dir = st.data_dir.as_path();
     let (segments, total_spans, total_bytes) = st.writer.stats();
     let p = st.persist;
@@ -380,8 +383,11 @@ pub fn server_stats(st: &CoreState, now_ms: i64) -> Value {
             "receivedSinceBoot": p.statusline_samples, "retentionDays": statusline_retention_days,
         },
         "logEvents": { "files": log_ev_files, "bytes": log_ev_bytes, "persistedSinceBoot": p.log_event_writes, "persistedBytesSinceBoot": p.log_event_bytes, "retentionDays": log_events_retention_days },
-        // NOT PORTED: the admission controller — idle stats.
-        "admission": { "inflight": 0, "queued": 0, "admittedTotal": 0, "shedTotal": 0 },
+        // The LIVE admission counters (TRDD-465EXTJ6). These were hard-coded zeros while the
+        // controller existed only in the TypeScript server — which meant a shipped alcore reported
+        // "no backpressure ever" whether or not any occurred, and there was no way to tell an
+        // idle server from one shedding every request.
+        "admission": { "inflight": adm.0, "queued": adm.1, "admittedTotal": adm.2, "shedTotal": adm.3 },
         "resources": resource_sample(data_dir),
         "gate": {
             "mode": hook.gate_mode, "enabled": hook.gate_enabled,
