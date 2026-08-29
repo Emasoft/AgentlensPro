@@ -7,8 +7,9 @@ updated: 2026-08-29T07:54:47+0200
 current-owner: claude-agentlenspro
 task-type: refactor
 project-id: agentlenspro
-parent-trdd: ZW4APOPI
-blocked-by: []
+parent-trdd: DMWOBWFH
+npt: [ZW4APOPI]
+blocked-by: [ZW4APOPI]
 ---
 
 # Redesign the spool — no loss, ever; continuous background digestion
@@ -28,9 +29,12 @@ Two requirements, and they are separate:
 100% full ~18 h; **117 of 122 request bodies since the fill were written as ZERO BYTES**, size-
 dependent (1 KB responses fit, 867 KB requests did not). Recovered by hand with repeated
 `alstore pass ~/.agentlens/store /Volumes/AgentLensSpool/otel-bodies` — 4,154 bodies ingested,
-0 failed, 0 stranded, spool back to 1%. A byte-identical backup was taken first to
+0 failed, 0 stranded, spool back to 1%. A full copy was taken first to
 `~/.agentlens/spool-backup-20260829_075138+0200` (4,271 files) so the reclaiming pass could not
-lose anything. **That was a manual recovery of a symptom; this card is the cause.**
+lose anything. (**"byte-identical" was overclaimed** in the first revision: file count and `du -sk`
+totals matched, which is not a checksum — `du` reports allocated blocks, so on one filesystem it is
+nearly a tautology. `cp -a` is very likely exact; it was not proven.) **That was a manual recovery
+of a symptom; this card is the cause.**
 
 ## The constraint that makes this hard — state it before proposing anything
 
@@ -44,10 +48,26 @@ That is wrong, and wrong in the direction that would have built the wrong system
 is capped by **API round-trip latency**: one request body per API call, and a call cannot complete
 faster than its round trip. So the ceiling is roughly `N_sessions × (1 / RTT)` bodies/sec.
 
-Measured inputs already in hand: `spoolBackpressure.ts` recorded 162 MB → 1.4 MB free in ~2 min from
-**one** subagent ≈ **1.3 MB/s per session**; the ingest bench measured 949 req/s and 11k spans/s on
-this machine, orders of magnitude above that. **A continuous drain sustaining more than
-`N × 1.3 MB/s` provably keeps up.**
+Measured inputs, and **both must be measurements of the BODIES path — do not borrow a span number**:
+
+- **Arrival — a LOWER BOUND, not a rate.** `spoolBackpressure.ts` recorded 162 MB → 1.4 MB free in
+  ~2 min from one subagent ≈ 1.33 MB/s. That is *net accumulation*: gross arrival = net + whatever
+  drained concurrently, so true arrival is **≥ 1.33 MB/s**. Understating the numerator flatters the
+  headroom conclusion, so size the drain against a **multiple** of it, never against it.
+- **Drain — from today's actual recovery, on the actual path**: ~536 MB in one pass and the full
+  ~2 GB across ~5 passes in ~2 min of wall clock ⇒ **order 10-20 MB/s**.
+
+**An earlier revision cited the 949 req/s OTLP ingest bench as the drain rate. That was a category
+error** — a different subsystem doing different work per item (span parse + append, vs read an
+867 KB file, chunk, hash, write chunks, update the index, fsync, delete). Same family as the 400× →
+36× → withdrawn headroom mistakes earlier in this work; the third instance, which is why it is
+called out rather than quietly fixed. The conclusion survives on the real number: ~10-20 MB/s beats
+1.33 MB/s per session by roughly 10×.
+
+**Per-session is also the wrong sizing unit.** One subagent produced that figure, and body size
+scales with conversation length — a long-context session emits far larger requests at similar
+cadence. Size against aggregate MB/s measured at the spool, or bytes/s/session at the p95 of body
+size.
 
 **So the primary guarantee is a continuous drain sized against a measured worst-case arrival rate,
 and spill-to-SSD is the BACKSTOP** for when that assumption is violated — a drain stalled on store
@@ -86,9 +106,11 @@ which is an argument for continuous digestion independent of the fill level.
 
 ## Plan — ship the hole-closing part first, then the guarantee
 
-1. **Close the loss hole** (inherits ZW4APOPI's acceptance): `bodies_pass` iterates
-   `resolve_bodies_read_scope`, with per-dir cap + `durable`; interval to 60 s in spool mode.
-   Blocked only on the rc3 agent's `rust-core/` tree landing.
+1. **Close the loss hole — OWNED BY TRDD-ZW4APOPI, not duplicated here.** `bodies_pass` iterates
+   `resolve_bodies_read_scope` (per-dir cap + `durable`), interval to 60 s in spool mode. Blocked
+   only on the rc3 agent's `rust-core/` tree landing. This card does not restate its acceptance;
+   two cards carrying the same checkbox is how work gets done twice or not at all. **5YL1OQV1
+   starts where ZW4APOPI ends** — treat ZW4APOPI as an NPT.
 2. **Continuous digestion**: replace the fixed tick with a loop that keeps passing while
    `throttled:true` and backs off only when the spool is actually empty.
 3. **The durability guarantee**: the spill-to-SSD (or equivalent) design, pending the advisor
@@ -134,6 +156,23 @@ it. What actually proves it is a round-trip: `alstore verify <store> <name> <fil
 SSD backup returned `ok:true` for 58/58 sampled bodies including the largest (2.06 MB). Audit the
 step that can silently discard, not only the step that can corrupt — the lock was checked first
 because corruption is scarier, while discard was the likelier failure.
+
+**And `verify` was itself checked, because a verb named "verify" beside one named "reconstruct"
+could plausibly have been an index-existence test.** It is not: `verify_bodies_in_store_cached`
+(`agentlens-store/src/lib.rs:517`) calls `reconstruct_chunk` and fails with
+`"reconstruction != source bytes"` on mismatch — a genuine byte-for-byte rebuild out of the store,
+compared against the source file. It *requires* the original file precisely because it compares
+against it, so needing that argument is not evidence of an index-only check. **A review argued the
+opposite from the three-verb usage string alone and was wrong** — worth recording, because reading
+the implementation beat reasoning about the CLI surface, which is the same proxy-for-the-thing
+failure in the other direction.
+
+**Caveat kept honest: 58 of 4,154 is a 1.4% sample** — enough for "the ingest path is sound" (~95%
+confidence the failure rate is under ~5%), NOT for "no body was lost", which is a claim about all
+4,154. The backup is still on SSD, so the strong claim is a minutes-long loop away if wanted.
+`bytesStored`/`bytesIn` dedup theorising was **dropped from this card**: nothing distinguishes dedup
+from a new-chunks-only delta without reading what the field counts, so it was worth zero as evidence
+either way, and the round-trip makes it moot.
 
 **117 bodies are permanently gone.** They were destroyed at write time, hours before this session's
 recovery began — nothing here lost them and nothing could have recovered them. The backup preserves
