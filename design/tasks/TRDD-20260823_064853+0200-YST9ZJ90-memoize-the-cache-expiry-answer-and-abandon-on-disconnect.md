@@ -1,9 +1,9 @@
 ---
 trdd-id: YST9ZJ90
 title: Memoize the check_cache_expiry ANSWER and abandon server work on client disconnect
-column: testing
+column: complete
 created: 2026-08-23T06:48:53+0200
-updated: 2026-08-26T05:45:06+0200
+updated: 2026-08-29T15:34:00+0200
 current-owner: unassigned
 task-type: refactor
 min-approval-requirement: manager
@@ -15,6 +15,35 @@ relevant-rules: []
 ---
 
 # Memoize the `check_cache_expiry` ANSWER and abandon server work on client disconnect
+
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-08-29
+
+**BOTH HALVES ARE IMPLEMENTED IN THIS CARD'S SCOPE (the TypeScript MCP server), verified by
+reading the code rather than by accepting a verification agent's summary:**
+
+- memoization — `src/mcpServer.ts:2242` `handleCheckCacheExpiryMemoized`, which WRAPS (never
+  replaces) `handleCheckCacheExpiry` at `:2095`, so the raw function stays directly testable;
+- disconnect abandonment — `src/mcpServer.ts:2228`
+  `isPartialCacheExpiryAnswer(result, signal?: AbortSignal)`; a partial answer produced after the
+  client went away is not memoized as if it were complete.
+
+**THE RUNAWAY IS NOT REPRODUCIBLE ON THE SHIPPED BACKEND, and the reason matters more than the
+number.** Measured on the live alcore: **0 calls in 4,058 s of uptime**. That zero is NOT evidence
+the Rust path is fixed — it is evidence there is no DRIVER: this project ships with **no
+`.mcp.json`** (CLAUDE.md: the MCP server is deliberately not registered), so nothing calls the tool
+at all. The 10,530 historical hits in `~/.agentlens/server.log` are all `[AgentLens] tool …`, the
+OLD TypeScript server's log prefix.
+
+**KNOWN GAP, deliberately not closed here.** alcore's `check_cache_expiry`
+(`rust-core/.../mcp_tools.rs:3389`, called from `ui.rs:2994`) has NEITHER memoization NOR
+disconnect abandonment. Porting them now would be speculative work against a load that does not
+exist on the live path. Its own call site already documents a second divergence:
+`get_last_request_ms` is `None` because the bounded tail resolver (TRDD-CXPLAT01) is not ported.
+
+**THE TRIGGER THAT REOPENS THIS:** register an MCP server against alcore. The moment anything
+drives that tool on the Rust path, the memoization gap becomes live and this needs a fresh card —
+do not assume the TS fix protects it, because none of that code runs in alcore.
+
 
 ## Why this card exists at all
 
@@ -140,3 +169,10 @@ AbortController is per-request (`:4060`, inside the handler).
   decorative.
 - 2026-08-23T06:48:53+0200 — FILED as a proposal by the session working TRDD-ZFX0MPYZ. Not
   self-approved: both parts change observable behaviour, so this is the USER's call.
+
+## Approval log
+
+- 2026-08-29T15:34:00+0200 — COMPLETE for its stated scope (the TypeScript MCP server), both halves
+  present and verified by direct code reading. The Rust gap is recorded above with an explicit
+  reopen trigger rather than being closed silently or padded into this card. Closed by the project
+  session under the USER's 2026-08-29 delegation to decide on verified facts and tests.
