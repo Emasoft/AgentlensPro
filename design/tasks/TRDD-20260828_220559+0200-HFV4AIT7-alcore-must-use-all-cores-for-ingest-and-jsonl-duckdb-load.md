@@ -3,7 +3,7 @@ trdd-id: HFV4AIT7
 title: Measure and guarantee that alcore uses all CPU cores for telemetry and hook ingest and for the JSONL to DuckDB load
 column: todo
 created: 2026-08-28T22:05:59+0200
-updated: 2026-08-29T01:23:27+0200
+updated: 2026-08-29T16:09:31+0200
 current-owner: claude-agentlenspro
 task-type: audit
 project-id: agentlenspro
@@ -14,6 +14,42 @@ blocked-by: []
 # alcore must use all CPU cores
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-08-29
+
+> **⛔ STOP — THE JSONL-CORES CAUSE IS UNKNOWN. Every "ROOT CAUSE ISOLATED" claim below is
+> SUPERSEDED (2026-08-29 16:10).** Five candidate fixes have now been implemented and measured on
+> `(user+sys)/real` (the only load-stable metric on this machine — wall clock gave 28.4 s and
+> 103.0 s for the SAME binary). Baseline **3.05 / 3.13 / 3.47** cores; `allogscan`'s ceiling on the
+> same corpus is **8.67**.
+>
+> | mechanism removed | cores after | verdict |
+> |---|---|---|
+> | I/O held across the LISTING lock | ~baseline | kept on principle, no gain (`ac812b01`) |
+> | LISTING mutex sharded 64 ways, capacity HELD at 5000 | 3.16 / 3.17 / 3.21 | **lock RULED OUT** |
+> | mimalloc in the bench, matching the shipped binary | 2.17 / 2.58 / 3.03 | **allocator RULED OUT** (bench fix kept, `b2ae70b6`) |
+> | `RAYON_NUM_THREADS` 4 vs 14 | 4 beat 14 | **thread count RULED OUT** |
+> | listing-membership instead of a per-(session × slug) stat | 3.49 / 3.18 / 2.24, sys 37-72 s | reverted — thrashes the wholesale-`clear()` cache |
+> | **hoisted scan-invariant `(uid, slug)` index — removes the stat fan-out entirely** | **3.10 / 3.08 / 3.06** | **stat fan-out RULED OUT** |
+>
+> **The last row is the one that changes the diagnosis.** The 405,436 `filesStatted` arithmetic
+> (÷ 26,377 sessions = 15.4 = exactly the uid×slug fan-out in `find_session_scratch_dirs`) was
+> correct as arithmetic, and the previous STATE blocks promoted it to a cause. Attempt 5 removed
+> that fan-out outright — the enumeration is hoisted into one mtime-fingerprinted index per scan
+> instead of a stat per session — and cores moved by **0.0**. So the stat count is a **correlate,
+> not the constraint**. The patch is preserved at
+> `reports_dev/scan-perf-attempts/20260829_160649+0200-attempt5-hoisted-scratch-index.patch`
+> (gitignored) and reverted from the tree; it is correct code that buys nothing.
+>
+> **NEXT ACTION FOR ITEM 3 — a MEASUREMENT, not a sixth fix.** Do not propose another change from
+> inspection: five inspection-derived fixes have now each cost a build + 3 runs and returned
+> nothing. Instrument the scan with per-thread busy/idle accounting (how many rayon workers are
+> executing at each instant, and what the ones that are idle are waiting for) so the remaining
+> candidates can be told apart: per-thread work-distribution skew in the rayon split, a serialising
+> section inside the card builder, or a kernel per-directory vnode lock. `/usr/bin/sample` cannot
+> settle this — 100% of its attributed `__psynch_mutexwait` samples sat under `list_dir_cached`,
+> and sharding that lock 64 ways then changed nothing, which is exactly how a symptom reads as a
+> cause.
+>
+> **Everything below this block is retained for provenance and must NOT be read as current.**
 
 > **ITEM 3 — ROOT CAUSE ISOLATED (2026-08-29). It is NOT rayon-vs-tokio, and it is NOT the parser.**
 > Measured with `/usr/bin/time -l`, same corpus, same machine:
