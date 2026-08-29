@@ -16,6 +16,39 @@ eht: []
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-08-29
 
+> **MEMORY — TWO HYPOTHESES KILLED, AND THE REAL LOCATION IS A SURPRISE. 2026-08-29.**
+>
+> 1. **Allocator retention: RULED OUT.** Re-ran the identical concurrency-16 flood with
+>    `MIMALLOC_PURGE_DELAY=0 MIMALLOC_RESET_DELAY=0 MIMALLOC_ABANDONED_PAGE_PURGE=1`. RSS came out
+>    **28.30 GB against 28.66 GB** without them — a 1.3% difference. mimalloc holding freed pages
+>    does not explain this, so the memory is held by real references or by something that is not the
+>    Rust heap at all.
+> 2. **The Rust heap: RULED OUT, and this is the surprise.** `vmmap` on the live process (verified
+>    by pid against `ps`: alcore, RSS 25.6 GB) attributes the memory as:
+>
+>    | region type | virtual | **resident** | regions |
+>    |---|---:|---:|---:|
+>    | **IOAccelerator** | 38.5 G | **26.5 G** | 387 |
+>    | all MALLOC zones | 12.8 M | **320 K** | 6 |
+>
+>    **`IOAccelerator` is the GPU/Metal allocator.** The entire malloc surface is 320 KB. So the
+>    27-28 GB is NOT the span window, NOT derived caches, NOT a leak in any structure this card has
+>    been blaming, and NOT the Rust heap — `/usr/bin/heap` also reported only 120 KB, because
+>    mimalloc bypasses the system malloc zone.
+>
+> **DO NOT act on this yet — it is an OBSERVATION, not a diagnosis.** Nothing in alcore's code
+> obviously uses the GPU. The plausible sources, none verified: DuckDB (`duckdb 1.10505.0`,
+> `features = ["bundled"]`) doing something Metal-backed, a transitive dependency, or `vmmap`
+> mislabelling large anonymous mmap regions on this macOS version. That last possibility matters —
+> it would mean the label is wrong rather than the memory being GPU-resident — and it is exactly the
+> proxy-for-the-thing trap, so the label must be corroborated before anyone optimises against it.
+>
+> **NEXT (cheap, in order):** (a) run with `MIMALLOC_SHOW_STATS=1` and read mimalloc's own accounting
+> — if it claims ~27 GB the label is wrong and it IS the heap; (b) if it claims little, check whether
+> a DuckDB connection is open during ingest and whether RSS tracks connection count; (c) only then
+> decide. **Every previous memory conclusion on this card was drawn before this measurement and
+> should be treated as unverified.**
+
 > **VERIFIED 2026-08-29 WITH ALL FIXES ACTIVE — throughput and responsiveness PASS; memory does
 > NOT, and for a reason that falsifies this card's own earlier premise.**
 >
