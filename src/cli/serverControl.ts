@@ -42,7 +42,25 @@ export function findServerJs(): string {
   for (const c of candidates) {
     if (fs.existsSync(c)) return c
   }
-  throw new Error(`server bundle missing (looked near ${__dirname}) — run \`node esbuild.js\` in the AgentlensPro repo first`)
+  // TWO DIFFERENT SITUATIONS REACH HERE, and telling a user the wrong one wastes their day.
+  //
+  // In a DEV CHECKOUT the bundle simply has not been built — `node esbuild.js` is the fix.
+  //
+  // In a PUBLISHED INSTALL the bundle is not missing, it is GONE ON PURPOSE: `standalone/server.js`
+  // was removed from package.json `files` (TRDD-1B98LCVR box 2, on the USER's 2026-08-27 ruling
+  // that TypeScript remains only for the UI). Reaching this point there means `alcoreBin()`
+  // returned null, which happens only on a platform `bin-native/` does not cover — today that is
+  // Windows, because rust-core does not build for windows-msvc (`pid_lock.rs` calls `libc::kill`
+  // with no `#[cfg(unix)]` guard). Telling that user to "run node esbuild.js" would send them to
+  // build a server this package deliberately no longer ships.
+  const platform = `${process.platform}-${process.arch}`
+  throw new Error(
+    `No server available for ${platform}. AgentlensPro ships a Rust backend (bin-native/<platform>-<arch>/alcore) ` +
+    `and no longer ships a TypeScript one; ${platform} has no prebuilt binary. ` +
+    `Supported: darwin-arm64, darwin-x64, linux-x64, linux-arm64. ` +
+    `Set AGENTLENS_ALCORE to a binary you built yourself, or run from a git checkout (\`node esbuild.js\`) ` +
+    `if this is a development tree. (looked near ${__dirname})`,
+  )
 }
 
 /** The dashboard's built assets (`media/`), the dir alcore serves `/` from (TRDD-VHH7FXGC). Same

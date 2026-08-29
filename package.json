@@ -39,7 +39,6 @@
   "files": [
     "CHANGELOG.md",
     "standalone/cli.js",
-    "standalone/server.js",
     "scripts/safe_config_edit.py",
     "media/index.html",
     "media/dashboard.js",
