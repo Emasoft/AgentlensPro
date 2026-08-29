@@ -16,6 +16,39 @@ eht: []
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-08-29
 
+> **MEMORY DIAGNOSED — IT IS THE RUST HEAP, AND THE PREVIOUS ENTRY SAYING OTHERWISE IS WRONG.**
+> `MIMALLOC_SHOW_STATS=1` on the same concurrency-16 flood, mimalloc's own accounting:
+>
+> ```
+> reserved (17 events, 1-4 GB arenas)   28.00 GB
+> committed                             26.3 GiB
+> purged                                65.1 GiB
+> resets                                0
+> elapsed                               52.6 s
+> ```
+>
+> **`vmmap`'s `IOAccelerator` attribution was a MISLABEL** of mimalloc's large anonymous arenas on
+> this macOS version — the exact possibility the previous entry listed third and did not test before
+> concluding. `/usr/bin/heap` agreed only because mimalloc bypasses the system malloc zone it
+> inspects. Two tools, both blind in the same direction, and I believed them.
+>
+> **The number is LIVE, not retained.** mimalloc purged 65.1 GiB during the run and still holds
+> 26.3 GiB committed — which is also why the eager-purge experiment moved nothing (28.30 vs
+> 28.66 GB). Something holds real references to ~26 GB while the span window is capped at 200,000
+> (~300 MB) and the writer buffer is empty.
+>
+> **So the open question is finally the right one:** what in the Rust heap holds ~26 GB during
+> sustained ingest? Candidates, none yet measured — the derived structures the off-lock rebuild
+> creates (`summary_cache`, `otel_attribution`, `stripped_cache`), each of which holds a full
+> per-session card set and is versioned rather than bounded; and the transient 2-3 copies a rebuild
+> makes while the OLD summary is still alive. At 162k spans/s a rebuild's inputs are enormous even
+> with a small window, because the rebuild is triggered per version bump rather than per unit of
+> time.
+>
+> **The measurement that would settle it:** cap or instrument those three caches and re-run. If RSS
+> tracks cache count, they are the holder. Do NOT reach for the window again — it is already bounded
+> on two axes and neither moved this number.
+
 > **MEMORY — TWO HYPOTHESES KILLED, AND THE REAL LOCATION IS A SURPRISE. 2026-08-29.**
 >
 > 1. **Allocator retention: RULED OUT.** Re-ran the identical concurrency-16 flood with
