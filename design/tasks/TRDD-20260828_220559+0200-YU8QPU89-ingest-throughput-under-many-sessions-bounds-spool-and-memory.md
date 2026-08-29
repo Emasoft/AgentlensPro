@@ -16,6 +16,34 @@ eht: []
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-08-29
 
+> **`log_sessions` FALSIFIED TOO — MEASURED, NOT ARGUED. STOP GUESSING AND PROFILE.**
+> The previous entry called `log_sessions` "the only unbounded structure left" and proposed a count
+> ceiling. Measured before building it, per this card's own rule: `GET /api/summary` on the live
+> server returns **42.8 MB** for **19,105 cards** — median 1,675 B, mean 2,298 B, max 317,569 B,
+> **41.9 MB of card bytes total**. Even at a 5-10x `serde_json::Value` expansion that is ~200-400 MB.
+> It is unbounded in COUNT and that is still worth a ceiling eventually, but it is NOT the 5.3 GB.
+>
+> **FOUR hypotheses have now been falsified by measurement**, every one plausible when written:
+>
+> | # | hypothesis | killed by |
+> |---|---|---|
+> | 1 | mimalloc retaining freed pages | eager-purge run: 28.30 vs 28.66 GB |
+> | 2 | not the Rust heap (GPU/`IOAccelerator`) | `MIMALLOC_SHOW_STATS`: 26.3 GiB committed |
+> | 3 | concurrent summary rebuilds | single-flight landed: 26.4 vs 26.3 GiB |
+> | 4 | `log_sessions` card accumulation | `/api/summary`: 41.9 MB |
+>
+> **Accounted at real load: well under 1 GB.** Window 62,970 spans, cards ~42 MB serialized, both
+> derived caches one slot, `otel_attribution` one generation, accums ≤24, timelines demoted past 50.
+> **Resident heap: 5.3 GB. ~4.5 GB is unexplained by every structure this codebase names.**
+>
+> **STATIC INSPECTION IS EXHAUSTED — the next step is a real heap profile, not a fifth hypothesis.**
+> `vmmap` and `/usr/bin/heap` are both blind to mimalloc (they see 320 KB of malloc zones) and one of
+> them already produced a confident wrong answer here. Options, in order of cost: build with
+> `mimalloc` extended stats / `mi_heap_visit_blocks` behind a debug feature; or swap the global
+> allocator to the system one for a single profiling build so `heap`/Instruments can see it. Do NOT
+> propose another structure from reading code — four such proposals were wrong, and each cost a
+> build-measure cycle.
+
 > **REAL-LOAD MEMORY: 5.3 GB IS THE RUST HEAP, AND `log_sessions` IS THE ONLY UNBOUNDED STRUCTURE
 > LEFT.** `vmmap` on the LIVE server (pid 14665, real traffic, 33 min uptime): `IOAccelerator`
 > 6.3 G virtual / **5.3 G resident** / 4.3 G dirty — and that label is mimalloc's arenas, per the
