@@ -1,9 +1,11 @@
 ---
 trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
-column: human_review
+column: blocked
+pre-block-column: human_review
+blocked-by: [1B98LCVR]
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-22T23:15:00+0200
+updated: 2026-08-29T17:02:00+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -19,7 +21,26 @@ release-via: publish
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-08-22 (v5)
 
-> **NEXT ACTION (one step):** box 3 is the ONLY thing left, and it is a SCOPE DECISION for the
+> **⚠ THE "SCOPE DECISION FOR THE USER" BELOW IS ANSWERED — the card was sitting in
+> `human_review` waiting for a decision that had already been made (corrected 2026-08-29).** The
+> USER decided box 3 on **2026-08-27T20:14:24+0200**, recorded verbatim in `## Notes and lessons
+> learned`: *delete the TypeScript core; leave TypeScript only for the web UI part.* Nothing here
+> needs a human. `human_review` therefore asserted something untrue for two days, which is the
+> worse failure — an unstarted card is visible, a card claiming to await a human is not.
+>
+> **Column is now `blocked` on TRDD-1B98LCVR**, which is the card that DOES the deletion. Box 3
+> closes when 1B98LCVR does, not by a further decision. Its box 1 landed 2026-08-29 (`48a154a`).
+>
+> **NEXT ACTION (one step):** none on this card — work 1B98LCVR. When it completes, tick box 3
+> here citing it, clear `blocked-by:`, and move this card to `complete`.
+>
+> **SUPERSEDED — do NOT carry forward:** every sentence below calling box 3 "a SCOPE DECISION for
+> the USER, not a task", and the `approval-tier: 3` in the frontmatter as a reason to wait. The
+> decision exists; only the execution is outstanding.
+>
+> ---
+>
+> **(historical) NEXT ACTION (one step):** box 3 is the ONLY thing left, and it is a SCOPE DECISION for the
 > USER, not a task — see the paragraph below it. **Boxes 1 and 2 are CLOSED** (box 1 verified
 > 2026-08-22 with the evidence recorded beside it; box 2 by D2's class table).
 >
