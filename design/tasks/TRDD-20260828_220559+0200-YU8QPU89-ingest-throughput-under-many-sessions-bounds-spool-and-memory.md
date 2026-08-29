@@ -16,6 +16,20 @@ eht: []
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-08-29
 
+> **THE 42% SPAN LOSS IS FIXED IN `bba537c0`** — committed, not deployed. `append` now FLUSHES at
+> `PENDING_HIGH_WATER` (50k) instead of evicting the oldest span, with the check INSIDE `append`
+> (a between-payloads check would leave a 180k-span hole, since one 64 MB body holds ~180,400
+> realistic spans). The 100k failsafe STAYS and now means what its name says — `flush()` retains a
+> bucket whose append errored, so a buffer still growing past the bound can only be a disk fault.
+> `dropped_on_failure` is now exposed via `/api/server-stats`; it had been written and read
+> nowhere, so the "counted, never silently" contract was false as shipped.
+> Mutation-verified: removing the high-water flush drops exactly 50,000 of 150,000 spans.
+>
+> **Every throughput figure below was measured while 42% of the work was being discarded and must
+> be RE-TAKEN against `bba537c0`.** The re-measurement is the next action for this card, together
+> with the `POST /api/hook-events` p99 (the generator now reports per-kind p50/p95/p99/max, and
+> excludes non-2xx so a fast-failing server cannot flatter the percentile).
+
 > **THERE ARE TWO SPOOLS, AND THIS CARD ANSWERED THE WRONG ONE — see TRDD-ZW4APOPI.**
 > `<dataDir>/hook-spool` (undeliverable hook events, 20k-file cap) is what the reframing below
 > analyses, correctly. The other is the **2 GB RAM disk** `/Volumes/AgentLensSpool/otel-bodies`

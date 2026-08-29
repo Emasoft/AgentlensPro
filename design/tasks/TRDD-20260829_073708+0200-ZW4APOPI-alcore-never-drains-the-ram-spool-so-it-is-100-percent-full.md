@@ -1,7 +1,7 @@
 ---
 trdd-id: ZW4APOPI
 title: alcore never drains the RAM-disk spool so it is 100 percent full and capture is silently losing bodies
-column: todo
+column: testing
 created: 2026-08-29T07:37:08+0200
 updated: 2026-08-29T07:37:08+0200
 current-owner: claude-agentlenspro
@@ -14,6 +14,21 @@ blocked-by: []
 # alcore never drains the RAM spool — it is full, and capture is losing data now
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-08-29
+
+> **FIXED IN `58070386` — committed, NOT yet deployed.** `bodies_pass` now iterates
+> `resolve_bodies_read_scope` (spool first), drains the spool at **age 0** unconditionally, and
+> keeps passing until each dir reports empty (bounded `DRAIN_MAX_PASSES = 16`). Interval 1 h → 60 s
+> when a spool is configured; `durable_source` per-dir so only the legacy dir takes the fsync
+> barrier. Test `chores_bodies_spool_drain.rs` is mutation-verified.
+>
+> **The second defect would have made the first fix INERT, and only the test caught it:** defaults
+> are `bodiesMaxAgeHours: 72` and `bodiesMaxGb: 8`, but the spool is a 2 GB RAM disk — it can never
+> exceed an 8 GB cap, so the over-cap valve never fires for it and every body would have waited 72 h
+> on a disk that fills in ~7 at the measured ~5 MB/min. Pointing the drain at the right directory
+> was necessary and not sufficient.
+>
+> **Still running against the PUBLISHED global install**, so the spool is draining only by manual
+> `alstore pass` (3 passes on 2026-08-29). Deploy = build + `agentlenspro server restart`.
 
 **THIS DOES NOT ANSWER THE USER'S RATE QUESTION — read that before quoting this card.** The USER
 asked whether ingestion is *fast enough* to avoid filling the spool. What is wrong here is that
