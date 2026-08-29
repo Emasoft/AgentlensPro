@@ -15,6 +15,34 @@ blocked-by: []
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-08-29
 
+> **THE JSONL LOAD IS NOT A MISSING-PARALLELISM DEFECT — corrected 2026-08-29.** The table below
+> records "9.9% mean / 54% max CPU" for the cold JSONL load and it was read as "one core, not
+> parallel". The code says otherwise: `log_reader::cold_scan` maps over discovered files with
+> **`par_iter()`** (rayon, declared in `agentlens-core/Cargo.toml:26`) — the scan is parallel by
+> construction. Only the OpenCode SQLite dbs are sequential, and deliberately (rusqlite, native WAL
+> read).
+>
+> The low CPU is what an **I/O-bound** parallel scan looks like:
+>
+> | | |
+> |---|---:|
+> | corpus (`~/.claude/projects`) | **18.19 GB** |
+> | cold scan | 15,424 sessions in **20.5 s** |
+> | implied read throughput | **~909 MB/s** sustained |
+> | warm page-cache read (521 MB file) | **4,428 MB/s** |
+> | CPU during scan | 9.9% mean of 14 cores ≈ **1.4 cores** |
+>
+> Memory bandwidth is not the limit (4.4 GB/s warm), and parsing is not the limit (1.4 cores busy —
+> a CPU-bound parse would saturate many). What remains is cold device reads. **More cores cannot
+> speed up a disk-bound scan**, so "uses all cores" is the wrong success criterion for this path;
+> the right one is whether it saturates the DEVICE.
+>
+> **HONEST LIMIT:** `sudo purge` was unavailable, so there is no measured COLD-read ceiling for this
+> disk — 909 MB/s is compared against a warm figure and against CPU headroom, not against a measured
+> cold baseline. To settle it: purge the cache, `cat` a few GB of the corpus, and compare that
+> MB/s against 909. If cold reads measure ~900 MB/s the scan is at device speed and this item is
+> DONE; if they measure much higher, the scan has a real serialization point and this stays open.
+
 **Measured (isolated instance, 14-core machine, 32 concurrent posters):**
 
 | path | before | after the ingest split | after the off-lock rebuild | reading |
