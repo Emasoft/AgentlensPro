@@ -45,7 +45,13 @@ fn body_matches_the_frozen_key_order_exactly() {
     ]);
     assert_eq!(keys(&body["ports"]), ["ui", "mcp", "otlp"]);
     assert_eq!(keys(&body["memory"]), ["rssMb", "heapUsedMb", "heapLimitMb"]);
-    assert_eq!(keys(&body["spans"]), ["inMemory", "windowMs", "configuredWindowMs", "retentionDays", "pendingAppends", "store"]);
+    // `droppedOnFailure` was ADDED to the frozen shape on 2026-08-29 (TRDD-YU8QPU89). It is a
+    // deliberate extension, not drift: the span writer can drop on a failing disk, and before this
+    // key there was NO way to observe that from outside the process — a silent loss. The freeze
+    // caught the addition, which is the test working; it is updated here rather than the key being
+    // removed, because the counter is the point. Additive only: every pre-existing key keeps its
+    // name and relative position, so a consumer reading the old keys is unaffected.
+    assert_eq!(keys(&body["spans"]), ["inMemory", "windowMs", "configuredWindowMs", "retentionDays", "pendingAppends", "droppedOnFailure", "store"]);
     assert_eq!(keys(&body["spans"]["store"]), ["segments", "totalSpans", "totalBytes"]);
     assert_eq!(keys(&body["persistence"]), [
         "spanAppendWrites", "spanAppendBytes", "offsetsWrites", "offsetsBytes", "cardsWrites", "cardsBytes",
