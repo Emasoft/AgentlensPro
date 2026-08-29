@@ -1,9 +1,9 @@
 ---
 trdd-id: Q8ZW00CI
 title: The boot WARN says the starter did not honour the brake even for the documented server start override
-column: testing
+column: ai_review
 created: 2026-08-27T17:59:30+0200
-updated: 2026-08-27T19:42:16+0200
+updated: 2026-08-29T15:25:18+0200
 last-test-result: pass
 last-test-at: 2026-08-27T19:42:00+0200
 current-owner: main
@@ -14,6 +14,34 @@ labels: [server, lifecycle, wording]
 relevant-rules: []
 created-by: TRDD-8VGQK9L9 closing verification
 ---
+
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-08-29
+
+**Implemented and verified on the SHIPPED backend, which is not where this card was originally
+aimed.** The fix landed in `standalone/server.ts:304-307` on 2026-08-27 — but alcore is the shipped
+server now, and alcore had NO brake WARN and no boot-provenance line at all (grep: zero hits for
+`NO_REVIVE` / `STARTED_BY` under `rust-core/`). So the card's fix lived only in the server being
+retired, and the live path warned about nothing. Meanwhile the CLI had been stamping
+`AGENTLENS_STARTED_BY` on the alcore spawn all along (`serverControl.ts:218-220`) — the stamp
+arrived and was dropped.
+
+Ported in `952357e8`. Verified by running the real binary twice against an isolated data dir with
+`NO_REVIVE` armed:
+
+| `started-by` | output |
+| --- | --- |
+| `server start` | `[AgentlensPro] brake PRESENT — being lifted by \`server start\`.` — and NO warn |
+| `hook` | the WARNING, verbatim |
+
+The predicate is `agentlens_core::brake_lift_is_sanctioned`, in the LIBRARY rather than inside
+`alcore.rs`'s `main`, because a binary's main is unreachable from a test. Its test
+(`tests/brake_provenance.rs`) pins BOTH directions — a one-sided test of a predicate is satisfied
+by a constant.
+
+**NOT DONE:** no test asserts the two boot LINES themselves (only the predicate behind them); that
+was verified by hand. And the TS branch at `standalone/server.ts:304` remains untested — it is
+deliberately left alone because that file is slated for removal under TRDD-1B98LCVR, and adding a
+test to code being deleted is work with a known expiry.
 
 ## Observation (measured 2026-08-27 17:57, scratch data dir, brake armed)
 
