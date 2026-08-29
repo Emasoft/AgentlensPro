@@ -43,8 +43,11 @@ hook events 17k req/s. Spool behaviour under N parallel sessions is still UNMEAS
 > **SETTLED 2026-08-29, and the answer is the bad one: REAL DATA LOSS.** A 20 s re-run with a
 > drain posted **863,520** spans, appended **500,000**, on disk 500,000 — **42.1% dropped, with
 > HTTP 200 returned for every one of them** (`reports/bench/20260829_072821+0200-span-gap.md`).
-> Cause, verified in code: `agentlens-spanstore/src/writer.rs`, in **`append_line`** (cite it by
-> name — at f85300e's HEAD it is `:457`; `:475` matched only the dirty working tree of the moment)
+> Cause, verified in code: `agentlens-spanstore/src/writer.rs`, in **`pub fn append`** (`:436` at
+> HEAD, with the eviction at `:457`). Cite it that way: the original `:475` matched only a dirty
+> working tree, and the first "correction" to `append_line` was itself wrong — that function does
+> not exist at HEAD, so it paired a dirty-tree name with a HEAD line number and reproduced the very
+> error it was fixing.
 > evicts the OLDEST buffered span whenever `pending_count > PENDING_FAILSAFE_MAX` (100k). That guard
 > exists for a FAILING DISK. **`ae513a4` made the 5 s tick the only flush, so any burst above 100k
 > spans per tick now evicts real data.** Precision the review forced (F2): the failsafe was not

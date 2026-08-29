@@ -132,10 +132,18 @@ async function worker(agentOtlp, agentUi, deadline, mix, counters) {
     // the AGENTLENS_HOOK_TIMEOUT (1000 ms default). So "does the spool fill?" is
     // "does /api/hook-events p99 stay under 1 s?" — an aggregate percentile mixed
     // with /v1/traces would not answer it.
-    counters.lat[kind].push(performance.now() - t0);
+    const elapsed = performance.now() - t0;
     counters.requests++;
-    if (status >= 200 && status < 300) counters.ok++;
-    else counters.bad++;
+    if (status >= 200 && status < 300) {
+      counters.ok++;
+      // ONLY successful requests enter the percentiles. `post` resolves 0 on a socket error,
+      // and a connection refused returns in ~0.1 ms — so timing failures alongside successes
+      // makes p99 IMPROVE as the server degrades, which is exactly backwards for a threshold
+      // check. Failures are counted separately; a run with nonOk > 0 has no valid percentile.
+      counters.lat[kind].push(elapsed);
+    } else {
+      counters.bad++;
+    }
   }
 }
 

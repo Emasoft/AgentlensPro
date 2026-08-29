@@ -129,9 +129,14 @@ It has no drain under alcore:
 - `standalone/server.ts:620-624` — the TS drained **two** dirs in `SPOOL_MODE`: the spool
   (`PRIMARY_BODIES_DIR`, `durable: false`) **and** the legacy dir. `SPOOL_MODE` was a condition on
   the **TS server's own** env, deciding whether *it* drained both.
-- So `OTLP_PORT === 4318` is a **historical marker, not a trigger**: it is why the TS server is no
-  longer the thing serving, and therefore why its two-dir drain stopped running. The live process is
-  `alcore serve … --otlp-port 4318 --ui-port 3000 --mcp-port 4316`.
+- **`OTLP_PORT === 4318` WAS NEVER THE SPOOL GATE — the comment was wrong when it was written, and
+  two revisions of this card repeated it.** Verified at `standalone/server.ts:588-600`: `SPOOL_MODE`
+  is set from `CAPTURE_ON && spoolDirConfigured(DATA_DIR)`. The port appears nowhere in it. So the
+  `chores.rs:197-199` comment was not prescient — it named a trigger that never existed, and the
+  drain gap did not begin the day alcore took 4318. It has been there since `bodies_pass` was
+  written. Drop the "the day arrived" framing entirely; the defect is older and simpler than that
+  story. The live process is `alcore serve … --otlp-port 4318 --ui-port 3000 --mcp-port 4316`, which
+  matters only as *when the TS drain stopped running at all*.
 
 `chores.rs:197-199` predicted this day **in writing**: *"the spool gate is `OTLP_PORT === 4318`,
 which alcore is not (it binds 4319). **The day alcore takes 4318 this becomes wrong and the spool
@@ -175,10 +180,33 @@ is the true reading, and the two disagreeing is what caught it. **Do not use `fi
 bucket with `stat`.** Fifth member of this machine's PATH-shadowing class — see the LOCAL memory
 note `find-on-path-is-bfs-not-gnu-find`, and its siblings for `stat`/`date`/`sample`.
 
-**NEXT ACTION:** blocked only on the rc3 agent (`aaa93e1d302fbdefb`) committing its `rust-core/`
-tree; then edit `bodies_pass` to iterate `resolve_bodies_read_scope`. Verify by `df` going below
-100%, and by a request body larger than the current free space landing non-empty — the count going
-flat is NOT a pass on its own, since it is flat right now with the bug fully present.
+**⚠ "BLOCKED" WAS FALSE — a recovery exists TODAY and needs no source change.** `alstore pass
+<storeDir> <bodiesDir>` takes the bodies dir as a **positional argument**, defaults `max_age_ms` to
+0 ("ingest regardless of age") and `durable_source` to false — exactly the spool's semantics
+(`alstore.rs:6-8,31-32`). It ships in the same `bin-native/` as the running `alcore` and takes the
+same `acquire_pass_lock`. So the card parked a live-data-loss finding behind an unrelated agent's
+tree when a one-command drain was available the whole time.
+
+**NOT RUN — it needs USER authorization.** A pass ingests each body into the store and then
+DELETES it to reclaim space. The spool is untracked data outside the repo, so RULE 0 requires
+explicit permission before any command that deletes it, even one whose whole purpose is a
+preserving migration. `--no-delete` ingests without reclaiming, but leaves the disk full and the
+loss continuing, so it is not a substitute. **Ask, then run.**
+
+**NEXT ACTION (two independent tracks — the first is not blocked on the second):**
+1. **Recovery:** get USER authorization, then `alstore pass ~/.agentlens/store
+   /Volumes/AgentLensSpool/otel-bodies`. Reclaims ~2 GB and stops the loss immediately.
+2. **The permanent fix** (needs the rc3 agent's `rust-core/` tree to land first): make
+   `bodies_pass` iterate `resolve_bodies_read_scope`. **Also carry the drain INTERVAL** — it is
+   hardcoded to 1 h (`chores.rs:393-396`) on the same false premise, while the TS used **60 s** in
+   spool mode. A correct target dir on a 1-hour timer still lets a 2 GB RAM disk fill between
+   passes, so the interval is part of the fix, not a follow-up. `resolve_bodies_read_scope` also
+   supplies no per-dir cap or `durable` flag, which the TS drain distinguished — the port must add
+   them rather than treat every dir alike.
+
+**Verify by** `df` going below 100% AND a request body larger than the free space landing non-empty.
+The zero-byte count going flat is NOT a pass on its own — it is flat right now with the bug fully
+present, during an idle window.
 
 ## Second, separate regression — the hook-spool drain was never ported either
 
@@ -215,10 +243,13 @@ does not.
 
 ## Notes and lessons learned
 
-A comment that correctly predicts its own future breakage prevents nothing on its own — this one
-named the exact condition (`OTLP_PORT === 4318`) and was still read by no one on the day it became
-true. The port move and the drain target are coupled facts; only an executable check ties them
-together.
+**A confident comment is not a source of truth, and this card believed one for three revisions.**
+`chores.rs:197-199` states "the spool gate is `OTLP_PORT === 4318`". It is not, and never was —
+`server.ts:588-600` gates `SPOOL_MODE` on `CAPTURE_ON && spoolDirConfigured`, with no port
+anywhere. The comment reads as prescient, which is exactly why nobody checked it: a wrong fact that
+*predicts its own breakage* is more persuasive than a plain wrong fact, and it seeded a whole false
+narrative ("the day arrived") into this card twice. Verify a comment against the code it describes
+before building on it, especially when it flatters the story you are already telling.
 
 Two lessons from reviewing this card's own first revision, both the same shape — a PROXY read in
 place of the thing:
