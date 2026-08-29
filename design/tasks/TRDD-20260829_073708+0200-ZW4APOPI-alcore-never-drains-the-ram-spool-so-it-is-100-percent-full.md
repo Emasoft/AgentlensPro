@@ -33,9 +33,20 @@ $ find /Volumes/AgentLensSpool/otel-bodies -maxdepth 1 -type f -size 0 | wc -l  
 oldest queued: 2026-08-28 13:40  (~18 h)   newest: 2026-08-29 07:06, ZERO BYTES
 ```
 
-**117 zero-byte files is live, ongoing, silent loss.** The zero-byte count alone would be weak
-evidence — it has innocent explanations (two-phase create-then-fill, crash residue). The
-DISTRIBUTION is what settles it, and it is unambiguous:
+**117 raw bodies have been silently lost to a full disk. The mechanism is settled; whether it is
+still happening RIGHT NOW is NOT — see the sampling note below.**
+
+The discriminating evidence is **size-dependent censoring by file kind**:
+
+| kind | non-empty | ZERO bytes |
+|---|---:|---:|
+| `.request.json` (large — a whole conversation prefix) | 2,020 | **117** |
+| `.response.json` (~1 KB) | 2,134 | **0** |
+
+Every single truncation is on the large kind, against two near-equal populations. A create-then-write
+race is **size-blind** and would censor both kinds roughly in proportion; a full disk is not. 117-to-0
+is not a ratio chance produces. That is what makes ENOSPC the mechanism rather than a write-pattern
+artifact — and it is a stronger argument than the time distribution, which merely *corroborates*:
 
 | hour | written non-empty | truncated to 0 |
 |---|---:|---:|
@@ -44,16 +55,31 @@ DISTRIBUTION is what settles it, and it is unambiguous:
 | 08-28 18:00 | 8 | 8 |
 | 08-29 06:00–07:00 | 66 | **61** |
 
-Zero zero-byte files across ~4,000 writes before the disk filled; **~48% of writes lost in the
-last two hours**. Small responses (~1 KB) still squeeze into the remaining slack, larger request
-bodies do not. `src/spoolBackpressure.ts:1-4` names this exact outcome: *"At 100% the spool cannot
-accept a write, so raw bodies are DROPPED — silent data loss, the exact failure the whole capture
-feature exists to prevent."*
+Zero zero-byte files across ~4,000 writes before the disk filled; **~48% of writes truncated in the
+last active hour**. The buckets are arithmetically COMPLETE — 117 zero-byte + 4,154 non-empty =
+4,271, the exact total file count — so nothing was silently dropped by the `stat` pass that built
+them. (Worth stating: the "an artifact would spread evenly over 18 h" reasoning an earlier revision
+used is close to circular, because a create/write race is expected to be near-zero in *any* healthy
+hour. The kind-split above is the argument that actually discriminates; this table corroborates.)
 
-**The producer is Claude Code itself, not this repo** — every `.request.json` / `.response.json`
-reference under `src/` and `rust-core/` is a READER (verified: no writer exists here). So the
-producer cannot be stopped or fixed from inside AgentlensPro; only the drain can keep up with it.
-That is also why the loss continues while alcore is up and healthy.
+`src/spoolBackpressure.ts:1-4` names this exact outcome: *"At 100% the spool cannot accept a write,
+so raw bodies are DROPPED — silent data loss, the exact failure the whole capture feature exists to
+prevent."*
+
+**⚠ "ONGOING" IS NOT ESTABLISHED — a second sample says otherwise.** Two counts 15 min apart
+(07:27 and 07:42) both read **117**, and no file of any size has been written since **07:06**, 36
+minutes earlier, with `capture.rawBodies: true`. So the producer is currently idle, not currently
+being denied. The honest claim is: **117 bodies were lost during the last active window, and the
+spool remains full, so loss resumes whenever the producer does.** An earlier revision of this card
+said "silently and currently dropping"; that was asserted from one `ls -lt` snapshot standing in for
+a rate, and the rate sample did not support it.
+
+**The producer is Claude Code itself, not this repo.** No writer was FOUND here — every
+`.request.json` / `.response.json` reference under `src/` and `rust-core/` that a literal-string
+grep locates is a reader. That is an observation plus a positive account (it matches how
+`--install-otel` wires capture), **not a proof of absence**: a writer composing the name by
+concatenation would carry neither literal and the grep would miss it. Either way the consequence
+holds — the producer cannot be throttled from inside AgentlensPro, so only the drain can keep up.
 
 **ROOT CAUSE (verified in code, both halves).** A 2 GB RAM disk is simultaneously "the spool" and
 "memory", and its fill rate is governed by ingestion speed — so it is the spool the USER means.
@@ -142,13 +168,22 @@ together.
 Two lessons from reviewing this card's own first revision, both the same shape — a PROXY read in
 place of the thing:
 
-1. **A count is not a mechanism; a distribution is.** "117 zero-byte files" has innocent readings
-   (two-phase create-then-fill, crash residue) and on its own proved nothing. What settled it was
-   that **zero** appeared across ~4,000 writes before the disk filled and ~48% after — an artifact
-   of the write pattern would be spread evenly over all 18 h, not correlated with the fill point.
-   The reviewer's suggested settling command (grep `src/` for the writer) could not have worked:
-   there is no writer in this repo to read. The distribution answered what reading the writer would
-   have.
-2. **"The resolver exists" is not "the resolver resolves."** The fix's whole viability rested on a
+1. **A count is not a mechanism, and neither is a distribution — the discriminator is.** "117
+   zero-byte files" has innocent readings (create-then-fill, crash residue). The first fix reached
+   for a time distribution and argued "an artifact would spread evenly over 18 h" — which is close
+   to circular, since a create/write race is near-zero in any healthy hour, so "0 before" is exactly
+   what the innocent explanation ALSO predicts. What actually settled it was finding the variable
+   the two explanations disagree on: **size**. All 117 empties are the large `.request.json`, none
+   are the ~1 KB `.response.json`, against near-equal populations. A race is size-blind; a full disk
+   is not. Look for the axis on which the competing hypotheses make *different* predictions, not the
+   one on which your favoured hypothesis looks good.
+2. **A snapshot is not a rate.** "Currently dropping" was asserted from one `ls -lt` reading of the
+   newest file. Two samples 15 min apart both read 117, with nothing written for 36 min — so the
+   loss is real and past, not demonstrably live. One extra `wc -l` fifteen minutes later was the
+   whole cost of not overstating it.
+3. **"The resolver exists" is not "the resolver resolves."** The fix's whole viability rested on a
    `config.json` key that `spool_dir_configured` silently degrades to `None`. It was asserted in the
    committed card and verified afterwards. One `cat` before the claim, not after.
+4. **One grep pattern is not an absence proof.** "No writer exists in this repo" came from grepping
+   two literal filename suffixes; a writer building the name by concatenation carries neither. The
+   conclusion is likely right, but it is an observation, and the card now says so.
