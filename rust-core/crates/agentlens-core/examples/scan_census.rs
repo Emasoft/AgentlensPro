@@ -7,6 +7,20 @@
 //!
 //! Close to 6 s  => the loss is CONTENTION with the tokio runtime.
 //! Close to 20 s => the loss is the post-parse card work, and rayon is innocent.
+// THE HARNESS MUST USE THE SAME ALLOCATOR AS THE SERVER, or it measures a different program.
+//
+// `#[global_allocator]` applies to the crate being linked as the final binary, and it is declared
+// in `src/bin/alcore.rs` — NOT in the library. An EXAMPLE is its own binary, so without this line
+// scan_census ran on the macOS system allocator while the production server ran on mimalloc. The
+// profile said so and it was missed: `_xzm_free`, `_xzm_xzone_malloc` and `_malloc_zone_malloc`
+// are libsystem_malloc frames, and macOS's allocator serialises far more aggressively under a
+// parallel allocation storm than mimalloc's per-thread heaps.
+//
+// So every cold_scan core figure taken before this line describes the HARNESS, not the shipped
+// scan. Any future harness added here must carry the same declaration.
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 fn main() {
     let env = agentlens_logscan::discovery::Env::from_process();
     let t0 = std::time::Instant::now();
