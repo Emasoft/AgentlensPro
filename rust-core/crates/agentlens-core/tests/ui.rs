@@ -2129,3 +2129,35 @@ fn mcp_get_session_detail_serves_the_resolved_card() {
     let miss = call(r#"{"verbosity":"full","sessionId":"ghost"}"#);
     assert!(miss["error"].as_str().unwrap().contains("ghost"), "{miss}");
 }
+
+/// `/api/debug/capture-activity` — the capture-liveness clock, ported from the TS server
+/// (TRDD-1B98LCVR). This endpoint existed ONLY in `standalone/server.ts`, so it was the one real
+/// blocker on retiring that server; a port with no test would have re-created the same situation
+/// in the other direction.
+///
+/// Asserts the BUMP, not just the route. A route that always answers `0` would satisfy a
+/// shape-only test while telling every caller the capture feed is dead — the precise failure this
+/// clock exists to detect, so the test has to observe the value actually move on ingest.
+#[test]
+fn capture_activity_reports_zero_until_an_ingest_produces_spans() {
+    let (otlp, ui, _state) = start_servers();
+
+    // Nothing ingested yet: 0, NOT the process start time. A server that has never received
+    // anything must be distinguishable from one that just received something.
+    let before = get(ui, "/api/debug/capture-activity", "");
+    assert!(before.starts_with("HTTP/1.1 200"), "{before}");
+    let v: serde_json::Value = serde_json::from_str(body_of(&before)).unwrap();
+    assert_eq!(v["lastIngestActivityAt"], 0, "no ingest yet must read 0: {v}");
+
+    let body = trace_payload();
+    let r = request(
+        otlp,
+        &format!("POST /v1/traces HTTP/1.1\r\nHost: x\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()),
+    );
+    assert!(r.starts_with("HTTP/1.1 200"), "{r}");
+
+    let after = get(ui, "/api/debug/capture-activity", "");
+    let v: serde_json::Value = serde_json::from_str(body_of(&after)).unwrap();
+    let at = v["lastIngestActivityAt"].as_i64().expect("a bare number, the TS shape");
+    assert!(at > 0, "spans arrived, so the liveness clock must have moved off 0: {v}");
+}

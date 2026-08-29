@@ -1195,6 +1195,21 @@ async fn handle(
             serde_json::json!({ "found": span.is_some(), "value": value.unwrap_or(Value::Null) }).to_string()
         };
         json_response(StatusCode::OK, body)
+    } else if method == Method::GET && path == "/api/debug/capture-activity" {
+        // Ported from standalone/server.ts:3622 (TRDD-1B98LCVR). This endpoint existed ONLY in the
+        // TypeScript server, so retiring that server without porting it would have deleted a live
+        // endpoint and broken its two tests — the one real blocker the retire-the-TS-backend
+        // scoping pass turned up.
+        //
+        // Shape is byte-for-byte the TS one: `{"lastIngestActivityAt": <ms>}`, a bare number, `0`
+        // when nothing has ever been ingested. Do NOT "improve" it into an object or add an
+        // `active` boolean — the consumers are tests that assert the raw bump, and the window
+        // comparison belongs to the caller (server.ts kept CAPTURE_ACTIVITY_WINDOW_MS on its side).
+        let body = {
+            let st = state.lock().map_err(|_| "state poisoned".to_owned())?;
+            serde_json::json!({ "lastIngestActivityAt": st.last_ingest_activity_ms }).to_string()
+        };
+        json_response(StatusCode::OK, body)
     } else if method == Method::GET && path == "/api/debug/requests" {
         // Row 26: the recent-request ring + heap pressure. No V8 ⇒ the heap object is honest
         // zeros (over: false), as /api/server-stats reports; rssMb per row carries the story.

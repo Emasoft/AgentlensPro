@@ -140,6 +140,17 @@ pub struct CoreState {
     /// Bumped on every data change; the coalesced SSE pusher rebuilds only when it moved
     /// (server.ts dataVersion).
     pub data_version: u64,
+    /// server.ts `lastIngestActivityAt` (TRDD-4FMHW124 / TRDD-8ADTIGKT): the wall-clock ms of the
+    /// last ingest that actually produced spans — the CAPTURE-LIVENESS clock. `0` means nothing
+    /// has ever been ingested in this process, which is why it is `0` and not `now` at boot:
+    /// initialising it to the start time would make a server that has never received anything
+    /// look freshly active, and this value's only job is to distinguish those two states.
+    ///
+    /// Ported from the TS server (TRDD-1B98LCVR): `/api/debug/capture-activity` existed ONLY there,
+    /// so retiring `standalone/server.js` would have deleted a live endpoint. The liveness clock is
+    /// otherwise observable only indirectly (a 10-minute window and a warning on transition), which
+    /// is exactly why the endpoint exists — it makes the bump itself directly testable per feed.
+    pub last_ingest_activity_ms: i64,
     /// The dashboard live-reload fingerprint carried in every update frame (server.ts BUILD_ID —
     /// bundle mtimes there; here the process start, the same "changes on restart" contract).
     pub build_id: String,
@@ -497,6 +508,7 @@ impl CoreState {
             counters: Counters::default(),
             window,
             data_version: 0,
+            last_ingest_activity_ms: 0,
             build_id: now.to_string(),
             media_dir: None,
             log_sessions: IndexMap::new(),
@@ -735,6 +747,11 @@ pub fn ingest_parsed(state: &mut CoreState, kind: &'static str, payload: Value, 
     }
     if !spans.is_empty() {
         state.data_version += 1;
+        // server.ts:2161 `if (count > 0) lastIngestActivityAt = Date.now()` — spans arriving mean
+        // sessions are active. Same condition deliberately: a payload that parsed but yielded no
+        // spans is NOT capture activity, and counting it would make a feed that is connected but
+        // producing nothing look alive, which is the one thing this clock exists to detect.
+        state.last_ingest_activity_ms = now;
     }
     for span in spans {
         state.window.add(span, now);
