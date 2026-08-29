@@ -2,7 +2,7 @@
 name: agentlenspro-ops-lessons
 description: "how to deploy agentlenspro on a machine / setup vs manual install / hooks stopped firing after an upgrade / config file wiped or corrupted after an edit / which file does pnpm read its settings from / minimumReleaseAge or trustPolicy is set but not taking effect / is this supply-chain knob actually live / a guard blocks me editing package.json / is agentlenspro npm-linked or registry-installed / does switching the cli to an ordinary npm install lose my db or settings / where does the data live / can other agents on this machine use the cli / does the dev npm link affect normal published users / background agent shows running but does nothing / a fork started acting like the orchestrator / does agentlenspro run on Windows / setup fails with unsupported platform or node too old / server hangs at 100% cpu and every request times out or SIGTERM is ignored / a settings.json env key keeps reverting or getting overwritten after every server restart / the diagnostics skill shows a stale tool count or drifted from the live CLI surface / how many diagnostic tools are there / keeping the skill and the CLI --help in sync / can I run a second server for testing / two servers at once / I changed the ports so it is isolated right / dev instance wrote to my live data dir / invalid log tail offsets after a restart / I rebuilt and restarted but nothing changed / my fix is not live even though esbuild succeeded / am I testing the repo build or the published one — operational doctrine and field lessons"
 ocd: 2026-07-11
-lmd: 2026-07-30
+lmd: 2026-08-29
 metadata:
   node_type: memory
   type: project
@@ -584,6 +584,7 @@ DO NOT read a background pipeline's '20 minutes, empty output' as a hung test ru
 
 - [[ssd-write-economics]] — what the drain is ultimately protecting: the SSD write budget, why the
   RAM spool is the whole margin, and why batching is only the enabler of compression.
+- [[log-scan-performance]]
 
 ## Notes and lessons learned
 
