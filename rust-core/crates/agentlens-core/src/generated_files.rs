@@ -31,18 +31,31 @@ struct ListingCache {
 
 static LISTING: LazyLock<Mutex<ListingCache>> = LazyLock::new(|| Mutex::new(ListingCache::default()));
 
-// SHARDING WAS TRIED HERE AND IS DELIBERATELY NOT PRESENT (TRDD-HFV4AIT7).
+// SHARDING WAS TRIED TWICE AND IS REJECTED ON MEASUREMENT (TRDD-HFV4AIT7). Do not try it a third
+// time without reading this, because the profile LOOKS like it should work.
 //
-// 64 path-hashed shards were implemented and measured. The measurement was WORTHLESS, so the
-// change was reverted: two consecutive identical runs of the same binary produced 28.4 s and
-// 103.0 s, because a live alcore server had been restarted and was boot-scanning the same ~8.78 GB
-// corpus. Every timing taken in that window — including the ones that looked like an improvement —
-// was competing with it.
+// The profile says 100% of attributed `__psynch_mutexwait` samples (25,614 of 25,614) sit under
+// `list_dir_cached`. That is real, and it is a SYMPTOM, not the cause: threads park on this lock
+// because something else has already serialised them, not the other way round.
 //
-// So sharding is not rejected on merit; it is UNPROVEN, and unproven complexity does not get to
-// stay. Re-measure on a QUIESCED machine (no server running, no other scan) before reintroducing
-// it, and keep the cap in mind: `LISTING_CACHE_MAX` is a whole-cache budget, so applying it per
-// shard silently raises the ceiling 64x (5,000 -> 320,000 cached listings).
+// ATTEMPT 1 was INVALID and its result must not be cited: it changed TWO variables at once —
+// sharding AND capacity — because `LISTING_CACHE_MAX` is a whole-cache budget, so applying it per
+// shard cut effective capacity 5,000 -> 128 (39x) and turned cache hits into real `read_dir`
+// syscalls. It measured 2.75/2.69/3.02 cores, i.e. WORSE, for that reason and not because sharding
+// is bad.
+//
+// ATTEMPT 2 held capacity constant at 5,000 per shard. Result: **3.16 / 3.17 / 3.21 cores** against
+// an unsharded baseline of **3.05 / 3.13 / 3.47**. Statistically identical. Sixty-four independent
+// locks changed nothing, which is what rules the lock out as the limiter.
+//
+// WHAT THE LIMIT ACTUALLY IS: syscalls. The runs spend 22-32 s of SYS against 48-54 s of USER, the
+// live server reports **405,436 `filesStatted`**, and the listing cache is already working well
+// (88.3% hit rate: 19,850 hits / 2,635 readdirs). The scan is stat-bound, and the kernel does not
+// go faster because more threads ask it — which is also why `RAYON_NUM_THREADS=4` beats 14.
+//
+// So the lever is FEWER stat calls (batch/opportunistic statting, or trusting the parsed
+// transcript for sizes), not more parallelism and not less locking. That is a design change, not a
+// tuning knob, and it belongs in its own card.
 
 /// isClaudeScratchPath — the `claude-<x>` prefix must sit directly under a recognised temp
 /// root (/tmp, /private/tmp, or a macOS /var/folders/.../T), so an unrelated directory
