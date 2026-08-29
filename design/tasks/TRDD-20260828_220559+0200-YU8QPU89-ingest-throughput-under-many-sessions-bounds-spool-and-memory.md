@@ -14,6 +14,34 @@ eht: []
 
 # Ingest throughput vs spool and memory under parallel sessions
 
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-08-29
+
+**Measured so far (HFV4AIT7's benches, isolated instances, 14 cores):** ingest 131 → 949 req/s
+(11.0k spans/s) against a real machine peak of **26 spans/s** — 400× headroom, so the USER's
+"fast enough to avoid filling the spool" half is answered for OTLP; hook events sustain 17k req/s.
+Spool behaviour under N parallel sessions is still UNMEASURED. **Memory is the open half:** RSS
+15.0 GB at 481k spans (~31 KB/span), vs ~1.5 GB for the TS server on the same data.
+
+**Advisor verdict (Fable 5) — do NOT refactor the span representation on that number:**
+1. **The 31 KB/span figure conflates window and derived state.** Per rebuild, `lib.rs` produces a
+   full summary with per-session `timeline` arrays, clones those entries again into
+   `otel_attribution`, keeps a third derivative in `stripped_cache`, and the off-lock rebuild holds
+   the OLD summary alive while building the NEW one — 3-4 span-sized copies plus a transient 2×, on
+   top of the window. macOS malloc also rarely returns freed pages.
+2. **Ship the guard the port DROPPED, first.** `span_window.rs:9-11` records that the TS's
+   `effectiveWindowMs` halving under memory pressure was deliberately not ported — so alcore has
+   LESS protection than the TS it replaced. ~20 lines: sample `server_stats::rss_bytes()` (already
+   exists, proc_pidinfo) on the 5 s tick, halve `effective_ms` over budget, step back under it;
+   `prune()` already evicts, and `windowMs` is already in `/api/server-stats`, so the cut is visible.
+3. **The ONE measurement before any Value/struct refactor** (macOS-native, no heaptrack): run
+   `alsummarize` under `/usr/bin/time -l` twice on the same 481k-span file — once returning right
+   after the `Vec<Arc<Value>>` is built, once after `summarize_spans`. Run 1 minus file size =
+   window cost; the delta = derived-state cost. If run 1 is ~3-5 KB/span, shrinking the span
+   representation is dead on arrival.
+
+**NEXT ACTION:** the two-run `/usr/bin/time -l` measurement (3), then the pressure guard (2),
+then the spool half of this card's Method under 32× session load.
+
 USER goal (2026-08-28): *"verify that the speed of ingestion in rust even when running many
 claude code sessions in parallel is enough to avoid filling the spool and using too much memory."*
 
