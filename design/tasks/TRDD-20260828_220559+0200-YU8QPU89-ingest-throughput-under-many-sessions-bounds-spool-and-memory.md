@@ -16,6 +16,33 @@ eht: []
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-08-29
 
+> **THE USER'S ACTUAL SCENARIO, MEASURED AT LAST: 100 PARALLEL SESSIONS, SUSTAINED.**
+> `scripts/bench/alcore-ingest-flood.mjs` now takes `--sessions N [--spans-per-session 26]`, which
+> models N Claude Code sessions at this machine's measured per-session peak instead of running
+> flat-out. Every earlier number on this card came from flat-out, i.e. ~6,250x a real fleet.
+>
+> | | |
+> |---|---:|
+> | modelled | **100 sessions x 26 spans/s** |
+> | sustained | 90 s |
+> | achieved | **2,368 spans/s** (target 2,600) |
+> | failures | **0** |
+> | p99 | **104.5 ms** |
+> | RSS | **5.51 GB** after ~213,000 spans |
+>
+> **Throughput and reliability PASS decisively** — 2,368 spans/s with zero failures, and the spool
+> question is answered: nothing spooled.
+>
+> **Two results that need follow-up, and neither is what the floods showed:**
+> 1. **p99 is 104 ms at fleet load versus 2.5 ms under the flood.** Almost certainly the 4 s summary
+>    rebuild: at low request rates a single stalled request is a much larger fraction of the
+>    percentile. Worth confirming, because 104 ms is still far under the 1 s hook timeout but it is
+>    the wrong direction and the flood hid it.
+> 2. **RSS 5.51 GB from only ~213,000 spans in 90 s.** Consistent with the churn model above, but
+>    90 s is far too short to say whether it PLATEAUS. **That is the one measurement still missing
+>    from this card: run `--sessions 100` for 30-60 min and sample RSS every minute.** If it
+>    plateaus the migration is fine; if it climbs linearly the fleet case has a real ceiling.
+
 > **MEMORY RESOLVED: RSS TRACKS ALLOCATION CHURN, NOT ANY RESIDENT STRUCTURE. The "leak" framing
 > was wrong, and so was my falsification of hypothesis #1.**
 >

@@ -11,7 +11,7 @@ import http from 'node:http';
 const REQUEST_TIMEOUT_MS = Number(process.env.BENCH_REQUEST_TIMEOUT_MS) || 10_000;
 
 function parseArgs(argv) {
-  const out = { otlpPort: 4901, uiPort: 3901, seconds: 30, concurrency: 32, mix: 'both' };
+  const out = { otlpPort: 4901, uiPort: 3901, seconds: 30, concurrency: 32, mix: 'both', sessions: 0, spansPerSession: 26 };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     const next = () => argv[++i];
@@ -20,6 +20,11 @@ function parseArgs(argv) {
     else if (a === '--seconds') out.seconds = Number(next());
     else if (a === '--concurrency') out.concurrency = Number(next());
     else if (a === '--mix') out.mix = next();
+    // Sessions, not raw throughput. The USER's question is "many Claude Code sessions in
+    // parallel", and a flat-out flood answers a different one: it runs ~6,250x this machine's
+    // measured 26 spans/s peak, which manufactures allocator behaviour no fleet produces.
+    else if (a === '--sessions') out.sessions = Number(next());
+    else if (a === '--spans-per-session') out.spansPerSession = Number(next());
   }
   return out;
 }
@@ -134,8 +139,24 @@ function pick(mix) {
   return Math.random() < 0.5 ? 'otlp' : 'hooks';
 }
 
-async function worker(agentOtlp, agentUi, deadline, mix, counters) {
+/** Target spans/sec across the whole run, or 0 for flat-out. `--sessions N` models N Claude Code
+ *  sessions each emitting `--spans-per-session` spans/sec (default 26, this machine's measured
+ *  peak for ONE session). */
+function targetSpansPerSec() {
+  return args.sessions > 0 ? args.sessions * args.spansPerSession : 0;
+}
+
+async function worker(agentOtlp, agentUi, deadline, mix, counters, paceMsPerReq) {
+  let nextAt = Date.now();
   while (Date.now() < deadline) {
+    if (paceMsPerReq > 0) {
+      nextAt += paceMsPerReq;
+      const wait = nextAt - Date.now();
+      // Behind schedule: do not try to catch up, or a stall becomes a burst that measures
+      // something the fleet would never do.
+      if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+      else nextAt = Date.now();
+    }
     const kind = pick(mix);
     const t0 = performance.now();
     const status = kind === 'otlp'
@@ -191,7 +212,10 @@ async function main() {
   const counters = { requests: 0, ok: 0, bad: 0, lat: { otlp: [], hooks: [] } };
   const deadline = Date.now() + args.seconds * 1000;
   const started = Date.now();
-  const workers = Array.from({ length: args.concurrency }, () => worker(agentOtlp, agentUi, deadline, args.mix, counters));
+  const target = targetSpansPerSec();
+  // 20 spans per OTLP payload (makeOtlpBody), divided across the worker pool.
+  const paceMsPerReq = target > 0 ? (1000 * 20 * args.concurrency) / target : 0;
+  const workers = Array.from({ length: args.concurrency }, () => worker(agentOtlp, agentUi, deadline, args.mix, counters, paceMsPerReq));
   await Promise.all(workers);
   const elapsedSec = (Date.now() - started) / 1000;
   const statsAfter = await getJson(args.uiPort, '/api/server-stats');
@@ -199,6 +223,8 @@ async function main() {
   const result = {
     mix: args.mix,
     concurrency: args.concurrency,
+    targetSpansPerSec: target,
+    sessionsModelled: args.sessions || null,
     seconds: elapsedSec,
     requests: counters.requests,
     reqPerSec: counters.requests / elapsedSec,
