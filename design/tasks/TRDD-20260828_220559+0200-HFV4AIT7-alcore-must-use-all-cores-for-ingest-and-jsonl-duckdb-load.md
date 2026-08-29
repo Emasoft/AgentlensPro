@@ -15,6 +15,31 @@ blocked-by: []
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-08-29
 
+> **ITEM 3 DIAGNOSED — the parse is fine; the SERVER INTEGRATION loses 3.4x. Measured 2026-08-29.**
+>
+> | path | throughput |
+> |---|---:|
+> | raw single-threaded read of the 15,496 files | 1,533 MB/s |
+> | **`allogscan --dir ~/.claude/projects`** (the shipped standalone parallel scanner) | **1,439 MB/s** (8.78 GB in **6.1 s**) |
+> | **server boot scan** (the 20.5 s figure below) | **428 MB/s** |
+>
+> The parallel parse runs at **94% of raw sequential read speed** when run on its own, so
+> `par_iter()` IS realised and the library is not the problem. The server does the same work over
+> the same corpus **3.4x slower**, at ~1.4 of 14 cores.
+>
+> **Candidates, now narrowed to the server path** (`log_reader::cold_scan` → `sweep` → boot):
+> - `discover_all` — **ELIMINATED**: 0.26 s including process start (~1% of 20.5 s), measured via
+>   the shipped `disc_census` example. It is sequential (`discovery.rs:204`, chained `read_dir`
+>   loops) and inside the timed window, but far too cheap to matter.
+> - rayon's pool competing with the tokio runtime the server is already running.
+> - the post-parse work the standalone binary does NOT do: `finish_transcript` / card building /
+>   the `!Send` `LogTailer` collect, which forces results back onto one thread.
+>
+> **CAVEAT, stated rather than glossed:** `allogscan` parses but does not build session cards or
+> seed `file_state`, so the two are not doing byte-identical work — some of the 3.4x is real extra
+> work, not pure overhead. The next measurement should time `cold_scan` itself (it already returns
+> `elapsed_ms`) split against `parse_one` alone, which separates "extra work" from "serialization".
+
 > **CORRECTION TO THE CORRECTION (2026-08-29, and this one is measured on both axes).** An earlier
 > revision of this block declared the load "I/O-bound, not a defect" using **18.19 GB** as the
 > corpus size. That number came from `du -sk ~/.claude/projects`, i.e. the WHOLE directory; the
