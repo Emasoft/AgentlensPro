@@ -3,7 +3,7 @@ trdd-id: YU8QPU89
 title: Verify alcore ingest keeps up with many parallel Claude Code sessions without filling the spool or growing memory
 column: todo
 created: 2026-08-28T22:05:59+0200
-updated: 2026-08-29T07:37:08+0200
+updated: 2026-08-29T10:47:16+0200
 current-owner: claude-agentlenspro
 task-type: audit
 project-id: agentlenspro
@@ -42,6 +42,34 @@ eht: []
 >    90 s is far too short to say whether it PLATEAUS. **That is the one measurement still missing
 >    from this card: run `--sessions 100` for 30-60 min and sample RSS every minute.** If it
 >    plateaus the migration is fine; if it climbs linearly the fleet case has a real ceiling.
+>
+> **ANSWERED 2026-08-29 — IT PLATEAUS. Follow-up #2 above is CLOSED.** The 40-minute
+> `--sessions 100` soak (`scripts_dev/soak-fleet.sh`, isolated `DATA_DIR` + ports 4991/3991/4992,
+> `--no-log-scan`) sampled RSS every minute:
+>
+> | min | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 |
+> |---|---|---|---|---|---|---|---|---|---|---|
+> | RSS GB | 4.29 | 7.50 | 9.22 | 13.28 | **17.05** | **17.05** | **17.05** | **17.07** | **17.07** | **17.07** |
+>
+> Flat from minute 5 onward — and minute 5 is where the 1M span cap binds at 2,600 spans/s
+> (predicted 6.4, observed 5). So the climb in minutes 1-4 is the WINDOW FILLING, not a leak, and
+> the count ceiling `f106e493` is what stops it. Pacing was exact (min 1: 156,400 spans = 2,607/s
+> against a 2,600 target). `droppedOnFailure: 0` throughout.
+>
+> **Read the plateau HEIGHT honestly: 17 GB is a plateau, not a good number.** It is ~17 KB per
+> resident span. Bounded is what was asked and bounded is what was measured; whether 17 GB is
+> ACCEPTABLE at 100 sessions is a separate question this card does not answer and should not be
+> quoted as having answered.
+>
+> **The soak also found a defect the throughput benches structurally could not see** — while
+> ingest stayed at HTTP 200 in 0.3 ms, `/api/server-stats` stopped answering entirely (>20 s, zero
+> bytes) at 101.9% CPU. That is **TRDD-2R36W8Q1** (summary cache keyed on a `data_version` that
+> moves faster than a rebuild completes). It is a READ-path failure and does not retract any
+> throughput or memory result on this card — the two paths were probed independently.
+>
+> This also RESOLVES follow-up #1 above with a correction: the 104 ms p99 was blamed on "the 4 s
+> summary rebuild". The rebuild is not 4 s at fleet scale, it is over 20 s and never completes, so
+> the mechanism was right and the magnitude was wrong by 5x.
 
 > **MEMORY RESOLVED: RSS TRACKS ALLOCATION CHURN, NOT ANY RESIDENT STRUCTURE. The "leak" framing
 > was wrong, and so was my falsification of hypothesis #1.**
