@@ -70,9 +70,22 @@ hook events 17k req/s. Spool behaviour under N parallel sessions is still UNMEAS
    `Vec<Arc<Value>>`, so run 1's peak includes a transient copy the server never holds — the one
    that moves the decision number.
 
-**NEXT ACTION:** settle the 42% span gap (in flight) — it decides whether the throughput half is
-answered or a data-loss bug is open. Then the pressure guard (2), then the two-run measurement (3,
-after adding the flag), then the spool half of this card's Method under 32× session load.
+**THE SPOOL QUESTION IS NOT A THROUGHPUT RATIO — it is one latency percentile, and it is cheap.**
+The spool is not a backlog queue: `src/cli/hookHandlers.ts:70-73` calls it an *undeliverable*-event
+sink, and its only caller `forwardHookEvent` (`:200-226`) spools **only** when the POST fails —
+`res.ok` returns without spooling, and the binding threshold is the per-request timeout
+(`AGENTLENS_HOOK_TIMEOUT`, default 1000 ms, floor 200 ms), a connection failure, or a non-2xx. So
+the USER's "fast enough to avoid filling the spool" is exactly: **does `POST /api/hook-events` p99
+stay under 1 s with N sessions posting?** Measured at 17,081 req/s single-client, the answer is
+almost certainly yes — but it is unmeasured at the percentile that matters, and it is one bench run
+(the generator already exists; add a p99 to its output), not the 1-hour 32× soak this card's Method
+describes.
+
+**NEXT ACTION (reordered — the goal's own question first):**
+1. the hook-events p99 under N sessions (above) — answers the USER's spool half directly;
+2. the span-loss fix (in flight with the rc3 agent) and the re-measurement it invalidates;
+3. the memory-pressure guard;
+4. the two-run memory measurement (after adding `--stop-after-load`).
 
 USER goal (2026-08-28): *"verify that the speed of ingestion in rust even when running many
 claude code sessions in parallel is enough to avoid filling the spool and using too much memory."*
