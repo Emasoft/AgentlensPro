@@ -1,9 +1,9 @@
 ---
 trdd-id: HFV4AIT7
 title: Measure and guarantee that alcore uses all CPU cores for telemetry and hook ingest and for the JSONL to DuckDB load
-column: todo
+column: ai_review
 created: 2026-08-28T22:05:59+0200
-updated: 2026-08-29T16:09:31+0200
+updated: 2026-08-29T19:35:05+0200
 current-owner: claude-agentlenspro
 task-type: audit
 project-id: agentlenspro
@@ -15,7 +15,12 @@ blocked-by: []
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-08-29
 
-> **⛔ STOP — THE JSONL-CORES CAUSE IS UNKNOWN. Every "ROOT CAUSE ISOLATED" claim below is
+> **▶ CURRENT STATE IS THE "BOTH ITEMS RESOLVED" BLOCK FURTHER DOWN (2026-08-29 18:30). Everything
+> from here to it is the investigation trail, kept for provenance, and it contains two conclusions
+> that were later overturned — that the cause was unknown, and that ingest was capped at ~1 core.
+> Do not act on this section.**
+>
+> **(superseded) ⛔ STOP — THE JSONL-CORES CAUSE IS UNKNOWN. Every "ROOT CAUSE ISOLATED" claim below is
 > SUPERSEDED (2026-08-29 16:10).** Five candidate fixes have now been implemented and measured on
 > `(user+sys)/real` (the only load-stable metric on this machine — wall clock gave 28.4 s and
 > 103.0 s for the SAME binary). Baseline **3.05 / 3.13 / 3.47** cores; `allogscan`'s ceiling on the
@@ -39,7 +44,68 @@ blocked-by: []
 > `reports_dev/scan-perf-attempts/20260829_160649+0200-attempt5-hoisted-scratch-index.patch`
 > (gitignored) and reverted from the tree; it is correct code that buys nothing.
 >
-> **⚠ ITEM 2 (INGEST CORES) IS NOT ✅ — IT WAS NEVER MEASURED IN CORES, AND IT IS ~1 CORE.**
+> **✅✅ BOTH ITEMS RESOLVED 2026-08-29 18:30. Read this block; the two below it are the trail and
+> both contain conclusions this one overturns.**
+>
+> ### ITEM 3 — FIXED. ~3.2 → up to 6.81 cores (`a852281`)
+>
+> `list_dir_cached` stored `Vec<String>` and a cache **HIT** did `names.clone()` — a deep clone of
+> every `String` in the listing — **while holding the process-global `LISTING` mutex**. Hits are
+> 88.3% of calls, so the lock was held for allocations proportional to directory size, once per
+> session, ~26k times. Fix: `Arc<Vec<String>>`, so a hit is a refcount bump.
+>
+> | | cores | parallel-region time |
+> |---|---|---|
+> | before | 3.05 / 3.13 / 3.47 (2.58 / 2.74 / 3.05 profiled) | 23.0–44.2 s |
+> | after (7 runs) | **4.23 / 3.66 / 5.12 / 6.14 / 5.27 / 6.78 / 6.81** | **7.8–19.7 s** |
+>
+> Every run after beats every run before; `allogscan`'s ceiling on this corpus is 8.67, so most of
+> the gap is closed. 453 tests pass, clippy `-D warnings` clean.
+>
+> **WHY SIX ATTEMPTS MISSED IT, because this is the reusable part.** The earlier fix moved the
+> SYSCALLS out of the lock and left behind the comment *"the lock now covers only the map
+> operations"* — true of `read_dir`, false of the clone a map operation **returns**. And the 64-way
+> shard test looked like it exonerated the lock outright; it does not, because sharding gives no
+> relief when the hot directories concentrate on a few shards, which they do. **Both measurements
+> were correct and the conclusion drawn from them was wrong** — the trap was a true sentence in a
+> comment, not a bad measurement.
+>
+> ### ITEM 2 — the "~1 core ceiling" WAS A BENCHMARK ARTIFACT. Retraction retracted.
+>
+> Every earlier run drove the server from ONE node process. node is single-threaded, so a flood
+> that saturates its own event loop produces exactly the server-side signature of serialization —
+> flat throughput, rising latency, one busy core. Driving the SAME server from N independent
+> clients:
+>
+> | clients × conc | spans/s | server cores |
+> |---|---|---|
+> | 1 × 16 | 1,656 | 0.63 |
+> | 4 × 16 | 12,697 | 0.84 |
+> | 8 × 32 | 86,552 | 1.35 |
+> | **14 × 32** | **170,561** | **1.19** |
+>
+> At peak: `droppedOnFailure: 0`, `spoolBackpressureSpills: 0`, `spoolBackpressureActive: false`,
+> `shedTotal: 0`, no server-side errors logged, 1,000,080 spans in memory (the 1M cap), RSS 20 GB.
+>
+> **So the 162–174k spans/s figure I retracted an hour earlier was CORRECT** — it just needed
+> enough client parallelism to reach. The retraction is itself retracted, and the reason is worth
+> keeping: I replaced a right number with a wrong one because my measurement had a bottleneck I
+> had not looked for. **170,561 ÷ 26 spans/s per session ≈ 6,560 concurrent Claude Code sessions**,
+> not the 87 I reported.
+>
+> **The in-server profile is what exposed it** (`AGENTLENS_INGEST_PROFILE=1`, kept): `parse` 0.1
+> ms/req, `held_lock` **0.1 ms/req** (0.665 s across a 100 s run — 0.67% of the time), while
+> callers waited 12–22 ms/req. A lock held 0.67% of the time cannot be the constraint, and
+> parse+lock together were 1.4 s of 77.6 CPU-seconds. That ruled the server out from the inside
+> and pointed at the harness.
+>
+> **Honest limit:** the server never saturates on this machine — at 14 clients the *generators*
+> take the cores (server cores fell 1.35 → 1.19 as client count rose). So "uses all 14 cores" is
+> not demonstrable for ingest, because ingest needs ~1.2 cores to absorb more load than this
+> machine can generate. `nonOk` scales with total sockets and is **0** at any duration with one
+> client — client-side connection churn, matching zero server errors/shed/drops.
+>
+> **(superseded) ⚠ ITEM 2 (INGEST CORES) IS NOT ✅ — IT WAS NEVER MEASURED IN CORES, AND IT IS ~1 CORE.**
 > Measured 2026-08-29 17:45 with `scripts_dev/ingest-cores.sh` (isolated `DATA_DIR` + HOME + ports
 > 4971/3971/4972, `--no-log-scan`, 100 sessions, 120 s), CPU read straight off the live server
 > process (`ps -o time=`), not off the flood:
