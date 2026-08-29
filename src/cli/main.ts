@@ -36,6 +36,7 @@ import { runStatuslineHistoryCli } from './statuslineHistoryCli'
 import { runAllAccountsCli } from './allAccountsCli'
 import { runCacheExpiredCli } from './cacheExpiredCli'
 import { runLastCompactCli } from './lastCompactCli'
+import { runModelHeadroomCli } from './modelHeadroomCli'
 import { runSearchCli } from './searchCli'
 
 /** CLI entry. `startServer` lazily imports standalone/server (injected by the shim — src/
@@ -104,7 +105,7 @@ export const MANAGEMENT_VERBS: ReadonlySet<string> = new Set([
   'hook', 'gate', 'review-gate', 'statusline', 'statusline-history', 'get_account_status', 'disable', 'enable',
   'telemetry', 'setup', 'server', 'daemon', 'dashboard', 'cache-expired', 'last-compact',
   'budget', 'watch', 'heartbeat-cost', 'config', 'spool', 'env', 'ctxmap', 'ctxvis', 'list',
-  'search',
+  'search', 'model-headroom',
 ])
 
 export const LATENCY_EXEMPT: Readonly<Record<string, string>> = {
@@ -127,6 +128,7 @@ export const LATENCY_EXEMPT: Readonly<Record<string, string>> = {
   ctxvis: 'SPAWNS an agent and measures two of its turns; it is the slowest verb we ship, deliberately',
   search: 'an investigation verb a human or agent invokes deliberately; DuckDB streams a possibly-60MB transcript',
   'review-gate': 'a Stop/SubagentStop hook that never touches the network — it reads a local transcript tail off disk, so the DROP-address hang this table guards against cannot occur here',
+  'model-headroom': 'FETCHES the OAuth usage endpoint (10-minute cached), so it is network-bound by design and cannot carry a hot-path ceiling. It is not on any per-turn path: an agent calls it ONCE before deciding whether to spawn the advisor, which is itself a minutes-long operation — the check cannot be the expensive half',
   store: 'operator repair verb (repair-parked STAGES and fully re-verifies the whole bodies table) — run with the server stopped, a human watching',
 }
 
@@ -249,6 +251,14 @@ export async function cliMain(argv: string[], startServer: () => Promise<unknown
       // cache-expired: the delta on stdout, the WHICH on stderr, and a never-compacted project
       // exits 2 with stdout empty rather than reporting an age of zero.
       return runLastCompactCli(argv.slice(1))
+    case 'model-headroom':
+      // "Is THIS model's own weekly window spent?" — a per-model sibling of cache-expired, for the
+      // models metered separately from weekly_all (Fable). Exists so an agent can decide whether
+      // consulting the advisor is even possible BEFORE spawning it: the aggregate window cannot
+      // answer that, and spawning against an exhausted window costs the full wait for a verdict
+      // that never arrives. Same contract as its siblings — one word, and cannot-answer is exit 2,
+      // never a confident `ok`.
+      return runModelHeadroomCli(argv.slice(1))
     case 'search':
       // Grep a session's transcript jsonl (tool outputs, agent responses) via DuckDB's streaming
       // NDJSON reader (TRDD-P31SWA8I). Disk-only — works with the server down, like its siblings.
