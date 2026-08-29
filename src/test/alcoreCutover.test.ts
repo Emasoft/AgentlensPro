@@ -46,6 +46,34 @@ suite('alcore cutover seam', () => {
     assert.strictEqual(alcoreBin({}, asDir), null)
   })
 
+  test('alcoreBin: unsupported platform falls back to null, never throws', () => {
+    const missing = path.join(tmpDir, 'no-such-alcore-2')
+    // win32-x64 has no binary in SHIPPED_TARGETS at all — a documented gap, not a corrupt install
+    // — even though `binNative` below exists and holds OTHER platforms' binaries.
+    const binNative = path.join(tmpDir, 'bin-native-a')
+    fs.mkdirSync(path.join(binNative, 'darwin-arm64'), { recursive: true })
+    assert.strictEqual(alcoreBin({}, missing, 'win32-x64', binNative), null)
+  })
+
+  test('alcoreBin: bin-native/ absent (dev checkout) falls back to null, never throws', () => {
+    const missing = path.join(tmpDir, 'no-such-alcore-3')
+    const binNative = path.join(tmpDir, 'bin-native-never-created')
+    assert.strictEqual(alcoreBin({}, missing, 'darwin-arm64', binNative), null)
+  })
+
+  test('alcoreBin: bin-native/ present but this platform\'s binary missing THROWS, naming the platform', () => {
+    const missing = path.join(tmpDir, 'no-such-alcore-4')
+    const binNative = path.join(tmpDir, 'bin-native-b')
+    // The directory exists (this package DID ship binaries) but darwin-arm64's file does not —
+    // the corrupt-install case that must not silently fall back to the TS server.
+    fs.mkdirSync(path.join(binNative, 'linux-x64'), { recursive: true })
+    assert.throws(
+      () => alcoreBin({}, missing, 'darwin-arm64', binNative),
+      /darwin-arm64/,
+      'the error must name the platform key so the operator knows what to repair',
+    )
+  })
+
   test('alcoreServeArgs: binds the ports the rest of the product already assumes', () => {
     const argv = alcoreServeArgs({}, '/data')
     assert.strictEqual(argv[0], 'serve')

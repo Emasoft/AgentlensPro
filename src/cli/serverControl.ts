@@ -81,8 +81,23 @@ export function findMediaDir(): string {
  *  publish. Until then npm silently skips the optional dep, this channel returns null, and EVERY
  *  published install runs the TypeScript server. The sentence that used to sit here ("alcore ships
  *  in the box now, so detect-and-use is no longer a lie") described the intended end state as
- *  though it were the current one — the exact shape of claim this project keeps paying for. */
-export function alcoreBin(env: NodeJS.ProcessEnv = process.env, installed = dataPath('bin', 'alcore')): string | null {
+ *  though it were the current one — the exact shape of claim this project keeps paying for.
+ *
+ *  `null` here means "run the TS server instead", and that fallback must stay silent for exactly
+ *  two reasons: an unsupported `platformArch` (a documented gap, e.g. win32-x64), and a dev
+ *  checkout / pruned install where `bin-native/` was never staged. A THIRD case looks the same to
+ *  `npmPlatformBin` but is not the same at all: `bin-native/` exists — this package DID ship
+ *  binaries — yet this platform's file is missing or lost its exec bit in transit. That is a
+ *  corrupt install, and folding it into the silent-null fallback is exactly how the live backend
+ *  regressed to the TS server with nobody noticing (the incident this three-way split exists to
+ *  stop). So that case THROWS instead. `platformArch`/`baseDir` are injectable so tests can drive
+ *  every branch without a real cross-platform install or a real corrupt one. */
+export function alcoreBin(
+  env: NodeJS.ProcessEnv = process.env,
+  installed = dataPath('bin', 'alcore'),
+  platformArch: string = `${process.platform}-${process.arch}`,
+  baseDir: string = path.join(__dirname, '..', 'bin-native'),
+): string | null {
   const v = env.AGENTLENS_ALCORE?.trim()
   if (v) return v
   try {
@@ -90,7 +105,24 @@ export function alcoreBin(env: NodeJS.ProcessEnv = process.env, installed = data
   } catch {
     // fall through to the npm platform package
   }
-  return npmPlatformBin('alcore')
+  const found = npmPlatformBin('alcore', platformArch, undefined, baseDir)
+  if (found) return found
+  // `found` is null — figure out WHY, without duplicating rustBinResolve's SHIPPED_TARGETS set
+  // (which is not exported): probing with an `exists` that always answers "yes" makes
+  // `npmPlatformBin` return null for ONE reason only — an unsupported platformArch.
+  const platformShipped = npmPlatformBin('alcore', platformArch, () => true, baseDir) !== null
+  if (!platformShipped) return null // documented gap — the TS server is the only option here
+  if (!fs.existsSync(baseDir)) return null // dev checkout / pruned install — nothing staged yet
+  // bin-native/ EXISTS and this platform IS shipped, yet the real check still failed: the file is
+  // missing or not executable. That is a corrupt/half-unpacked install, not a deliberate absence
+  // — throw instead of silently falling back to the TS server.
+  throw new Error(
+    `alcore binary for ${platformArch} is missing or not executable at ${path.join(baseDir, platformArch, 'alcore')}. ` +
+    'bin-native/ exists, so this package DID ship binaries — this install is incomplete (a lost ' +
+    'exec bit survives npm install and fails only at spawn). Repair: reinstall agentlenspro, or ' +
+    'chmod +x the file. To run the TypeScript server deliberately instead, set AGENTLENS_ALCORE ' +
+    'to a working binary.',
+  )
 }
 
 /** `alcore serve` argv for the CUTOVER, which must bind the ports the rest of the product already
