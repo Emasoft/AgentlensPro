@@ -124,6 +124,15 @@ fn sse_frame(payload: &str) -> Bytes {
 /// cycle knob would be a second tunable in front of the same O(whole window) rebuild. The upgrade
 /// is still the incremental summarizer named above, which removes the cost rather than rationing
 /// it. Responsiveness was the failure; CPU share is a known, bounded ceiling.
+/// How long a reader waits for an in-flight rebuild before serving stale (TRDD-2R36W8Q1).
+///
+/// Sized against BOTH failure modes rather than picked. Long enough that an ordinary rebuild
+/// (milliseconds at normal window sizes) is WAITED FOR, so `POST /v1/traces` then `GET
+/// /api/summary` still sees its own write. Short enough that the pathological case — a rebuild
+/// over ~1M spans, measured at over 20 s — cannot hold a reader long enough to time out its HTTP
+/// client, which is what made the server look dead while ingest was healthy.
+const STALE_BUDGET_MS: u64 = 500;
+
 fn rebuild_gate() -> &'static Mutex<()> {
     static GATE: std::sync::OnceLock<Mutex<()>> = std::sync::OnceLock::new();
     GATE.get_or_init(|| Mutex::new(()))
@@ -166,13 +175,54 @@ pub fn summary_now(state: &Arc<Mutex<CoreState>>, now_ms: f64) -> Result<(u64, A
         Ok(g) => g,
         Err(std::sync::TryLockError::Poisoned(e)) => e.into_inner(),
         Err(std::sync::TryLockError::WouldBlock) => {
-            if let Some(pair) = stale {
-                return Ok(pair);
+            // A rebuild is in flight. Wait for it, but only for STALE_BUDGET_MS.
+            //
+            // WHY A BUDGET AND NOT AN IMMEDIATE STALE ANSWER. Returning stale the instant the gate
+            // is taken breaks READ-YOUR-WRITES, and it broke it in CI: `POST /v1/traces` then
+            // `GET /api/summary` returned `sessions: []`, because a concurrent warm rebuild held
+            // the gate and the only cached value was the empty pre-ingest summary. That is a
+            // correctness regression, not a freshness trade — the caller asked about data it had
+            // just written.
+            //
+            // At normal sizes a rebuild is milliseconds, so the waiter almost always gets the
+            // FRESH summary and the fast path below returns it. The budget only binds in the
+            // pathological case this whole change exists for — a rebuild over ~1M spans taking
+            // >20 s — where waiting is what wedged the server. So: correct when it can be, live
+            // when it cannot.
+            let deadline = std::time::Instant::now() + std::time::Duration::from_millis(STALE_BUDGET_MS);
+            loop {
+                std::thread::sleep(std::time::Duration::from_millis(2));
+                // The rebuild we are waiting on may have stored exactly the version we want.
+                {
+                    let mut st = state.lock().map_err(|_| "state poisoned".to_owned())?;
+                    let version = st.data_version;
+                    if let Some(cached) = st.summary_cache.current(version) {
+                        return Ok((version, cached));
+                    }
+                }
+                match rebuild_gate().try_lock() {
+                    Ok(g) => break g,
+                    Err(std::sync::TryLockError::Poisoned(e)) => break e.into_inner(),
+                    Err(std::sync::TryLockError::WouldBlock) => {}
+                }
+                if std::time::Instant::now() >= deadline {
+                    // Budget spent: the rebuild is genuinely slow. Serve the freshest value that
+                    // exists rather than queueing behind it. Re-read it here instead of reusing
+                    // the snapshot taken before the wait — one may have landed meanwhile, and
+                    // serving the newer one is free.
+                    let newest = {
+                        let mut st = state.lock().map_err(|_| "state poisoned".to_owned())?;
+                        st.summary_cache.cached_any()
+                    };
+                    if let Some(pair) = newest.or(stale) {
+                        return Ok(pair);
+                    }
+                    // COLD BOOT ONLY: no summary has ever been built, so there is nothing to
+                    // serve and waiting is the only correct answer. It can happen at most once per
+                    // process — after the first store `cached_any` always succeeds.
+                    break rebuild_gate().lock().unwrap_or_else(|e| e.into_inner());
+                }
             }
-            // COLD BOOT ONLY: no summary has ever been built, so there is nothing to serve and
-            // waiting is the only correct answer. Bounded by construction — it can happen at most
-            // once per process, because after the first store `cached_any` always succeeds.
-            rebuild_gate().lock().unwrap_or_else(|e| e.into_inner())
         }
     };
 
@@ -3533,7 +3583,7 @@ mod rebuild_admission_tests {
     use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
 
-    use super::{rebuild_gate, summary_now};
+    use super::{rebuild_gate, summary_now, STALE_BUDGET_MS};
     use crate::CoreState;
 
     fn state_with_a_warm_summary(tag: &str) -> (Arc<Mutex<CoreState>>, u64) {
@@ -3573,6 +3623,28 @@ mod rebuild_admission_tests {
             waited < Duration::from_secs(2),
             "reader waited {waited:?} behind the gate — admission is blocking again (the 2R36W8Q1 livelock)"
         );
+        // The budget must actually have been spent: an INSTANT stale answer is the regression CI
+        // caught (read-your-writes broken — `POST /v1/traces` then `GET /api/summary` returned
+        // `sessions: []`). Serving stale is only correct AFTER waiting for the in-flight rebuild.
+        assert!(
+            waited >= Duration::from_millis(STALE_BUDGET_MS / 2),
+            "returned stale after only {waited:?} — the reader must WAIT out its budget before giving up on fresh data"
+        );
+    }
+
+    /// Read-your-writes: with NO rebuild in flight, a reader whose cache missed gets a summary
+    /// built from the CURRENT data version — never a stale one. This is the property that
+    /// `try_lock`-and-immediately-serve-stale destroyed, and it is the reason the budget exists.
+    #[test]
+    fn an_uncontended_reader_gets_fresh_data_not_stale() {
+        let (state, warm_version) = state_with_a_warm_summary("fresh");
+        state.lock().unwrap().data_version += 1;
+        let current = state.lock().unwrap().data_version;
+
+        // Nobody holds the gate here — the reader must rebuild rather than serve the warm value.
+        let (served_version, _) = summary_now(&state, crate::now_ms() as f64).expect("served");
+        assert_eq!(served_version, current, "an uncontended reader must serve the CURRENT version");
+        assert_ne!(served_version, warm_version, "serving the pre-bump summary is the read-your-writes bug");
     }
 
     /// The cold-boot carve-out: with nothing ever built there is nothing to serve stale, so
