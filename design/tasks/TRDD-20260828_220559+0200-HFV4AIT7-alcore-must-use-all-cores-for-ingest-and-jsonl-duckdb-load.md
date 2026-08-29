@@ -15,6 +15,33 @@ blocked-by: []
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-08-29
 
+> **CORRECTION TO THE CORRECTION (2026-08-29, and this one is measured on both axes).** An earlier
+> revision of this block declared the load "I/O-bound, not a defect" using **18.19 GB** as the
+> corpus size. That number came from `du -sk ~/.claude/projects`, i.e. the WHOLE directory; the
+> actual `.jsonl` payload the scan reads is **8.78 GB** across 15,496 files. With the right
+> numerator the conclusion reverses:
+>
+> | | |
+> |---|---:|
+> | raw single-threaded read of the SAME 15,496 files (per-file open overhead included) | **1,533 MB/s** |
+> | cold scan — 8.78 GB / 20.5 s | **428 MB/s** |
+> | cores busy during the scan | ~1.4 of 14 |
+>
+> **The scan is ~3.6x slower than a plain sequential read of the same files, with ~90% of the CPU
+> idle.** So it is neither disk-bound nor CPU-bound, and something serializes it. `cold_scan` DOES
+> use `par_iter()` (rayon, `Cargo.toml:26`) — so the parallelism is declared but not realised, which
+> is a more interesting defect than "nobody parallelised it". Candidates, none yet checked: the
+> rayon pool competing with the tokio runtime; `discover_all` running sequentially before the
+> par_iter and counted inside the 20.5 s; per-file `stat` on the same thread as the parse; or the
+> `!Send` `LogTailer` forcing a collect back onto one thread.
+>
+> **Lesson, because this item has now been scored three different ways:** the first read ("9.9% CPU
+> = one core = not parallel") ignored the code; the second ("I/O-bound, not a defect") used a
+> corpus size from the wrong directory. Both were confident. The number that settled it was a
+> like-for-like comparison — the same files, read the same way, timed against the scan.
+
+> **SUPERSEDED — kept for provenance; the block above corrects it.**
+>
 > **THE JSONL LOAD IS NOT A MISSING-PARALLELISM DEFECT — corrected 2026-08-29.** The table below
 > records "9.9% mean / 54% max CPU" for the cold JSONL load and it was read as "one core, not
 > parallel". The code says otherwise: `log_reader::cold_scan` maps over discovered files with
