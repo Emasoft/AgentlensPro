@@ -386,11 +386,30 @@ jobs:
         run: |
           set -euo pipefail
           VER=$(node -p "require('./package.json').version")
+          # RETRY THE TARBALL FETCH, NOT JUST THE METADATA LOOKUP (TRDD-IXMB2JVD).
+          #
+          # The metadata and the tarball propagate on DIFFERENT schedules, and the metadata wins.
+          # This loop used to retry only `npm view … dist.tarball`, which succeeds within seconds,
+          # and then curl'd the tarball ONCE — so a tarball that had not reached the CDN edge yet
+          # failed the step outright. Measured on the v2.32.0 publish: `npm view` returned 2.32.0
+          # with OIDC provenance and attestations (the publish was completely successful) while
+          # both `curl` and `npm pack` still 404'd on the tarball for minutes afterwards.
+          #
+          # Under `set -euo pipefail` that made a SUCCESSFUL release report as a failed workflow
+          # run — the dangerous direction, because the obvious reaction is to re-run the publish,
+          # which then dies on E403 cannot-republish and looks like a second, different failure.
           for i in 1 2 3 4 5; do
             npm view "agentlenspro@$VER" dist.tarball > /tmp/url.txt 2>/dev/null && break
-            echo "registry not ready yet (attempt $i) — CDN propagation"; sleep 15
+            echo "metadata not ready yet (attempt $i) — CDN propagation"; sleep 15
           done
-          curl -fsSL "$(cat /tmp/url.txt)" -o /tmp/published.tgz
+          for i in 1 2 3 4 5 6 7 8 9 10; do
+            curl -fsSL "$(cat /tmp/url.txt)" -o /tmp/published.tgz && break
+            echo "tarball not on the CDN edge yet (attempt $i) — retrying"; sleep 20
+          done
+          if [ ! -s /tmp/published.tgz ]; then
+            echo "::error::agentlenspro@$VER metadata is live but its tarball never became fetchable"
+            exit 1
+          fi
           n=$(tar -tzf /tmp/published.tgz | grep -c 'package/bin-native/.*/' || true)
           if [ "$n" -ne 16 ]; then
             echo "::error::published agentlenspro@$VER carries $n bin-native files, expected 16"
