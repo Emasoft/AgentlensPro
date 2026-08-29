@@ -18,6 +18,7 @@
 use std::collections::HashMap;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Instant;
 
 use agentlens_logscan::discovery::{discover_all, DiscoveredFile, Env, LogSource};
@@ -155,10 +156,51 @@ fn parse_one(f: &DiscoveredFile) -> Option<ParsedTranscript> {
 /// order. OpenCode dbs are parsed sequentially (rusqlite, native WAL read).
 pub fn cold_scan(env: &Env, now_ms: i64) -> (Vec<ScannedFile>, ScanStats) {
     let t0 = Instant::now();
+    // WHY THIS IS INSTRUMENTED (TRDD-HFV4AIT7). The scan uses ~3.2 of 14 cores, and SIX candidate
+    // causes have now been ruled out by removing them and re-measuring: the LISTING mutex, the
+    // allocator, the rayon thread count, and the per-session stat fan-out. Every one of those was
+    // a guess about the INSIDE of the parallel region — but `discover_all` runs SEQUENTIALLY here,
+    // before `par_iter` starts, and no measurement has ever separated the two. Amdahl caps the
+    // whole scan at `1 / serial_fraction` cores no matter how perfect the parallel half is, so the
+    // serial fraction has to be known before any further work goes into the parallel half.
+    //
+    // `AGENTLENS_SCAN_PROFILE=1` also samples how many workers are actually inside the body at
+    // once, which is the number the core count is a proxy for. Off by default: an env read once
+    // per scan, and a sampler thread only when asked.
+    let profile = std::env::var("AGENTLENS_SCAN_PROFILE").is_ok_and(|v| v != "0" && !v.is_empty());
+    let t_discover = Instant::now();
     let files = discover_all(env);
+    let discover_ms = t_discover.elapsed().as_millis();
+
+    // Live count of workers inside the parallel body. Relaxed is right: this is a statistical
+    // sample, not a synchronisation point, and making it stronger would perturb what it measures.
+    let inflight = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let sampling = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let sampler = if profile {
+        let inflight = inflight.clone();
+        let sampling = sampling.clone();
+        Some(std::thread::spawn(move || {
+            // Histogram of concurrency, indexed by worker count. 128 is above any plausible
+            // rayon pool here; a wider pool saturates the last bucket rather than panicking.
+            let mut hist = vec![0u64; 128];
+            while sampling.load(std::sync::atomic::Ordering::Relaxed) {
+                let n = inflight.load(std::sync::atomic::Ordering::Relaxed).min(127);
+                hist[n] += 1;
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
+            hist
+        }))
+    } else {
+        None
+    };
+
+    let t_par = Instant::now();
     let mut out: Vec<ScannedFile> = files
         .par_iter()
         .filter_map(|f| {
+            // Counted around the WHOLE body, so "inside" means the same thing as the work the
+            // core count is measuring — including the time a worker sits blocked in a syscall.
+            let _guard = profile.then(|| InflightGuard::new(&inflight));
             // Stat BEFORE the parse: a file that grows while we read it then shows a newer
             // mtime/size than the state we record, and the next sweep re-reads it — the
             // conservative-safe direction (TS seeds fileState from the sidecar's fileSizeBytes).
@@ -169,14 +211,60 @@ pub fn cold_scan(env: &Env, now_ms: i64) -> (Vec<ScannedFile>, ScanStats) {
             })
         })
         .collect();
+    let par_ms = t_par.elapsed().as_millis();
+    sampling.store(false, std::sync::atomic::Ordering::Relaxed);
+    let t_seq = Instant::now();
     for f in files.iter().filter(|f| f.source == LogSource::OpenCodeDb) {
         if let Some((_, scanned)) = parse_opencode(&f.path, now_ms) {
             out.extend(scanned);
         }
     }
+    let opencode_ms = t_seq.elapsed().as_millis();
+    if let Some(h) = sampler {
+        let hist = h.join().unwrap_or_default();
+        let total: u64 = hist.iter().sum();
+        // Mean concurrency INCLUDING idle samples — this is the number the "3 of 14 cores" figure
+        // is a proxy for, and it is what tells a starved pool apart from a serial phase.
+        let weighted: u64 = hist.iter().enumerate().map(|(n, c)| n as u64 * c).sum();
+        let mean = if total > 0 { weighted as f64 / total as f64 } else { 0.0 };
+        let zero_pct = if total > 0 { 100.0 * hist[0] as f64 / total as f64 } else { 0.0 };
+        let top: Vec<String> = {
+            let mut idx: Vec<usize> = (0..hist.len()).filter(|&i| hist[i] > 0).collect();
+            idx.sort_by_key(|&i| std::cmp::Reverse(hist[i]));
+            idx.iter().take(6).map(|&i| format!("{}:{:.1}%", i, 100.0 * hist[i] as f64 / total as f64)).collect()
+        };
+        println!(
+            "scan-profile: total={}ms discover={}ms (serial {:.1}%) par={}ms opencode={}ms | mean_inflight={:.2} zero={:.1}% top={}",
+            t0.elapsed().as_millis(),
+            discover_ms,
+            100.0 * discover_ms as f64 / t0.elapsed().as_millis().max(1) as f64,
+            par_ms,
+            opencode_ms,
+            mean,
+            zero_pct,
+            top.join(" "),
+        );
+    }
     let cards = out.iter().map(|s| s.cards.len()).sum();
     let stats = ScanStats { files: files.len(), parsed: out.len(), cards, elapsed_ms: t0.elapsed().as_millis() };
     (out, stats)
+}
+
+/// Increments a live-worker counter for the lifetime of the value. A guard rather than a manual
+/// pair, because the body it wraps has `?`/`None` early exits — a hand-written decrement would be
+/// skipped on exactly the paths (unreadable file, unparseable transcript) most likely to be slow,
+/// and the counter would drift upward and overstate concurrency forever.
+struct InflightGuard<'a>(&'a std::sync::atomic::AtomicUsize);
+impl<'a> InflightGuard<'a> {
+    fn new(c: &'a Arc<std::sync::atomic::AtomicUsize>) -> Self {
+        c.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Self(c)
+    }
+}
+impl Drop for InflightGuard<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+    }
 }
 
 /// _sessionIdForFile (logReader.ts:418) — the per-agent filename/dirname stem convention. Like

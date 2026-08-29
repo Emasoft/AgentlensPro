@@ -39,7 +39,86 @@ blocked-by: []
 > `reports_dev/scan-perf-attempts/20260829_160649+0200-attempt5-hoisted-scratch-index.patch`
 > (gitignored) and reverted from the tree; it is correct code that buys nothing.
 >
-> **NEXT ACTION FOR ITEM 3 — a MEASUREMENT, not a sixth fix.** Do not propose another change from
+> **⚠ ITEM 2 (INGEST CORES) IS NOT ✅ — IT WAS NEVER MEASURED IN CORES, AND IT IS ~1 CORE.**
+> Measured 2026-08-29 17:45 with `scripts_dev/ingest-cores.sh` (isolated `DATA_DIR` + HOME + ports
+> 4971/3971/4972, `--no-log-scan`, 100 sessions, 120 s), CPU read straight off the live server
+> process (`ps -o time=`), not off the flood:
+>
+> | flood concurrency | server cores | req/s | spans/s | OTLP p50 | OTLP p99 | dropped | spool | RSS |
+> |---|---|---|---|---|---|---|---|---|
+> | 8 | **0.90** | 89.4 | 1,787 | 0.55 ms | 109 ms | 0 | 0 | 6.4 GB |
+> | **64** (8×) | **1.02** | 114.1 | 2,271 | 1.46 ms | **904 ms** | 0 | 0 | 7.1 GB |
+>
+> **Eight times the offered load bought 8% more throughput and 0.12 more cores, while p99 latency
+> went up 8×.** Throughput flat + latency rising linearly with concurrency + one core busy is the
+> signature of a SERIALIZED path, not of a server with spare capacity. The first row on its own
+> reads as "0.9 cores, zero drops, comfortably keeping up"; only the second row shows it cannot go
+> faster. **A single load point can never answer "does it use all cores" — it only shows whether it
+> NEEDED to.** That is why both rows are here.
+>
+> **THE ✅ ON ITEM 2 IN THE HANDOFF WAS WRONG, and specifically it was a THROUGHPUT number
+> answering a CORES question**: "162–174k spans/s, 0 drops". Over HTTP the measured rate is
+> **~2,270 spans/s**, ~75× lower — so that figure cannot have come from this path (an in-process
+> or batched benchmark, not the OTLP listener). Do not reinstate it without saying which path it
+> measured.
+>
+> **WHAT THIS DOES AND DOES NOT MEAN FOR THE USER'S QUESTION.** The goal asks whether ingest keeps
+> up "when running many claude code sessions in parallel" without filling the spool. At the
+> measured real per-session peak of 26 spans/s, 2,271 spans/s is **~87 concurrent sessions** —
+> with `droppedOnFailure: 0`, `spoolBackpressureSpills: 0`, `spoolBackpressureActive: false` and
+> `hookEvents.spooled: 0` at every load tried. So the spool and memory halves of the goal are MET
+> at this rate; the "uses all cores" half is NOT, and the ceiling is ~87 sessions rather than the
+> ~6,000 the retracted figure would have implied.
+>
+> **NEXT MEASUREMENT for item 2 (same discipline — no fix from inspection):** find the serialized
+> section. Sample the server under the concurrency-64 flood and attribute the ~1 core: if it is one
+> mutex, name it; if it is the single-threaded HTTP accept path or a per-request write lock, name
+> that. `spoolBackpressureSpills: 0` rules the spool out as the constraint already.
+>
+> **THE MEASUREMENT WAS TAKEN (2026-08-29 17:30) AND IT ANSWERS THE STRUCTURAL QUESTION.**
+> `AGENTLENS_SCAN_PROFILE=1` now splits the scan into its serial and parallel halves and samples,
+> every 2 ms, how many rayon workers are actually inside the parallel body. Three runs:
+>
+> | run | total | discover (SERIAL) | par | mean workers inside | samples at 0 | cores `(user+sys)/real` |
+> |---|---|---|---|---|---|---|
+> | 1 | 44,949 ms | 547 ms — **1.2%** | 44,161 ms | **13.98** | 0.0% | 2.58 |
+> | 2 | 31,304 ms | 163 ms — **0.5%** | 30,965 ms | **13.88** | 0.0% | 2.74 |
+> | 3 | 23,424 ms | 280 ms — **1.2%** | 23,007 ms | **13.94** | 0.0% | 3.05 |
+>
+> Concurrency histogram, run 3: **14 workers inside 99.5% of the time**, 1 worker 0.4%, zero 0.0%.
+>
+> **TWO CANDIDATE EXPLANATIONS DIE HERE.** (a) **Amdahl / a serial phase** — `discover_all` runs
+> sequentially before `par_iter`, which would cap the whole scan no matter how good the parallel
+> half is. It is **~1%**. (b) **A starved or under-filled pool** — the pool is never idle; all 14
+> workers are inside the body essentially always.
+>
+> **WHAT IT LEAVES, stated precisely because this is now a narrow question rather than a hunt:**
+> 14 threads are *inside the body* while the process consumes ~3 cores of CPU. Those two facts
+> together mean **~11 threads are PARKED — blocked in the kernel, not running.** Not waiting for
+> work; waiting *inside* the work. The question is no longer "why is the scan not parallel" (it is
+> fully parallel) but **"what are 11 of 14 threads blocked ON?"**
+>
+> **The suspect list, and the one thing that must be explained about it.** `/usr/bin/sample`
+> attributed **100% (25,614/25,614)** of `__psynch_mutexwait` under `list_dir_cached` — but
+> sharding that mutex 64 ways with capacity held constant changed cores by nothing (3.16/3.17/3.21
+> vs 3.05/3.13/3.47). A shard test that gives no relief is what you would ALSO see if the shard
+> KEY is concentrated — nearly every session lives under a handful of hot slug directories, so 64
+> shards can still put every thread on one or two of them. That reconciles the two measurements
+> instead of dismissing either, and it is a hypothesis, **not** a finding.
+>
+> **NEXT MEASUREMENT (not a fix — the sixth guess is not owed a build):** instrument the blocked
+> time itself — accumulate, per worker, nanoseconds spent waiting to acquire the listing lock, and
+> the per-shard acquisition counts. If blocked-time ≈ (14−3)/14 of wall, the lock is confirmed and
+> the concentrated-key hypothesis is testable from the shard histogram in the same run. If it is
+> not, the threads are blocked on the filesystem and "use all CPU cores" is the wrong goal for
+> this workload — which would itself be the answer to give the USER.
+>
+> **NOTE ON THE GOAL WORDING:** if the scan turns out to be disk-blocked rather than CPU-blocked,
+> more cores cannot help and the honest report is that the ingest path (item 2) parallelises and
+> the JSONL load is I/O-bound. Do not manufacture core utilisation that the hardware is not able
+> to deliver.
+>
+> **(superseded) NEXT ACTION FOR ITEM 3 — a MEASUREMENT, not a sixth fix.** Do not propose another change from
 > inspection: five inspection-derived fixes have now each cost a build + 3 runs and returned
 > nothing. Instrument the scan with per-thread busy/idle accounting (how many rayon workers are
 > executing at each instant, and what the ones that are idle are waiting for) so the remaining
