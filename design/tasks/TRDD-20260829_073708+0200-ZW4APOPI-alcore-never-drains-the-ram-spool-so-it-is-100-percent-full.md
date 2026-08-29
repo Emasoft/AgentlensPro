@@ -45,8 +45,30 @@ The discriminating evidence is **size-dependent censoring by file kind**:
 
 Every single truncation is on the large kind, against two near-equal populations. A create-then-write
 race is **size-blind** and would censor both kinds roughly in proportion; a full disk is not. 117-to-0
-is not a ratio chance produces. That is what makes ENOSPC the mechanism rather than a write-pattern
-artifact — and it is a stronger argument than the time distribution, which merely *corroborates*:
+is not a ratio chance produces.
+
+**"Large" is measured, not assumed** (it was assumed for one revision, on a glance at three response
+files):
+
+| kind | min | median | max |
+|---|---:|---:|---:|
+| `.request.json` | 4,549 | **867,236** | 2,063,958 |
+| `.response.json` | 829 | **1,092** | 20,290 |
+
+A **794× median gap**, with the distributions essentially disjoint. On a disk with 0 bytes free a
+~867 KB request cannot land while a ~1 KB response still slots into leftover slack — which is
+precisely the observed pattern.
+
+**This also refutes the competing "write-ORDER" explanation** (empties on requests because the
+producer writes request-then-response, so calls in flight when the disk filled left a created-but-
+unwritten request and no response). Two independent facts kill it: the disk filled **once**, yet the
+117 empties are spread across **four separate hours** (48 / 8 / 19 / 42) — in-flight calls at one
+instant cannot do that; and the files **pair 1:1**, 2,137 request files (2,020 + 117) against 2,134
+responses, a gap of 3. If ordering were the cause, the truncated requests would have no responses and
+the gap would be ~117. Instead every truncated request has its small response safely on disk — the
+signature of size, not sequence.
+
+The time distribution merely *corroborates*:
 
 | hour | written non-empty | truncated to 0 |
 |---|---:|---:|
@@ -66,13 +88,28 @@ hour. The kind-split above is the argument that actually discriminates; this tab
 so raw bodies are DROPPED — silent data loss, the exact failure the whole capture feature exists to
 prevent."*
 
-**⚠ "ONGOING" IS NOT ESTABLISHED — a second sample says otherwise.** Two counts 15 min apart
-(07:27 and 07:42) both read **117**, and no file of any size has been written since **07:06**, 36
-minutes earlier, with `capture.rawBodies: true`. So the producer is currently idle, not currently
-being denied. The honest claim is: **117 bodies were lost during the last active window, and the
-spool remains full, so loss resumes whenever the producer does.** An earlier revision of this card
-said "silently and currently dropping"; that was asserted from one `ls -lt` snapshot standing in for
-a rate, and the rate sample did not support it.
+**ONGOING — during every ACTIVE window, and the last one lost 100% of request bodies.** Per-hour,
+by kind (verified GNU `stat`, see the tooling warning below):
+
+| hour | request EMPTY | request ok | response ok |
+|---|---:|---:|---:|
+| 08-29 06:00 | 19 | 3 | 22 |
+| 08-29 07:00 | **42** | **0** | 41 |
+
+**This is also the direct refutation of the write-ORDER hypothesis, and it is cleaner than the
+pairing argument below.** In the 07:00 hour the same calls wrote both kinds against the same full
+disk: the request (first, ~867 KB) failed 42 times out of 42, and the response (second, ~1 KB)
+written immediately afterwards succeeded 41 times. An order-dependent failure — "the first write
+after the disk fills fails" — would have killed the second write too. It did not, every time. The
+only variable that differs between the failing and succeeding write **within a single call** is
+size.
+
+**This corrects a retraction that was itself wrong.** A prior revision withdrew "ongoing" because
+two counts 15 minutes apart (07:27, 07:42) both read 117 with nothing written since 07:06. That
+observation was true and the inference from it was not: the window sampled was simply one in which
+the producer made no calls. It had written 83 files in the preceding hour and lost every request
+among them. The lesson is not "don't retract" — it is that a flat count over an idle window is no
+more evidence of safety than a single snapshot was evidence of loss.
 
 **The producer is Claude Code itself, not this repo.** No writer was FOUND here — every
 `.request.json` / `.response.json` reference under `src/` and `rust-core/` that a literal-string
@@ -121,9 +158,27 @@ its cap is `min(BODIES_MAX_BYTES, 70% of spool size)`, not the legacy cap.
 and their space reclaimed. **Do NOT delete spool files to free space** — that is the data the
 feature exists to capture, and RULE 0 forbids it.
 
+**PRIORITY — does this still outrank the rate question now that "ongoing" is retracted? YES, and
+not for the reason the first revision gave.** The retraction removes the urgency of *this minute*,
+not the defect: the spool is at 0 bytes free and **nothing will ever reclaim it**, so every future
+request body is lost on arrival, permanently, until the drain lands. Capture is not degraded, it is
+non-functional for the large half — and per `CLAUDE.md` the captured raw body is the ground truth
+behind `ctxmap` and `ctxvis`, the two things that answer "what is in the context" and "what does
+this agent cost to keep running". A defect that silently zeroes their input outranks a throughput
+measurement whose own denominators are still unsettled.
+
+**⚠ TOOLING TRAP THAT ALMOST INVERTED THIS CARD'S CONCLUSION.** `find` on this machine is **`bfs`
+4.1.1**, not GNU or BSD find. A `find … -newermt "2026-08-29 06:00"` pass reported **0 empty
+requests and 64 non-empty ones** after the fill — the exact opposite of the truth — which would have
+"proved" writes were all succeeding and killed this card. The verified GNU `stat -c '%y'` pass above
+is the true reading, and the two disagreeing is what caught it. **Do not use `find -newermt` here;
+bucket with `stat`.** Fifth member of this machine's PATH-shadowing class — see the LOCAL memory
+note `find-on-path-is-bfs-not-gnu-find`, and its siblings for `stat`/`date`/`sample`.
+
 **NEXT ACTION:** blocked only on the rc3 agent (`aaa93e1d302fbdefb`) committing its `rust-core/`
 tree; then edit `bodies_pass` to iterate `resolve_bodies_read_scope`. Verify by `df` going below
-100% and the zero-byte count ceasing to grow.
+100%, and by a request body larger than the current free space landing non-empty — the count going
+flat is NOT a pass on its own, since it is flat right now with the bug fully present.
 
 ## Second, separate regression — the hook-spool drain was never ported either
 
