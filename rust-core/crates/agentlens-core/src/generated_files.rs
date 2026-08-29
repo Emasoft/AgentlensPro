@@ -31,6 +31,19 @@ struct ListingCache {
 
 static LISTING: LazyLock<Mutex<ListingCache>> = LazyLock::new(|| Mutex::new(ListingCache::default()));
 
+// SHARDING WAS TRIED HERE AND IS DELIBERATELY NOT PRESENT (TRDD-HFV4AIT7).
+//
+// 64 path-hashed shards were implemented and measured. The measurement was WORTHLESS, so the
+// change was reverted: two consecutive identical runs of the same binary produced 28.4 s and
+// 103.0 s, because a live alcore server had been restarted and was boot-scanning the same ~8.78 GB
+// corpus. Every timing taken in that window — including the ones that looked like an improvement —
+// was competing with it.
+//
+// So sharding is not rejected on merit; it is UNPROVEN, and unproven complexity does not get to
+// stay. Re-measure on a QUIESCED machine (no server running, no other scan) before reintroducing
+// it, and keep the cap in mind: `LISTING_CACHE_MAX` is a whole-cache budget, so applying it per
+// shard silently raises the ceiling 64x (5,000 -> 320,000 cached listings).
+
 /// isClaudeScratchPath — the `claude-<x>` prefix must sit directly under a recognised temp
 /// root (/tmp, /private/tmp, or a macOS /var/folders/.../T), so an unrelated directory
 /// literally named "claude-foo" is NOT mistaken for scratch.
@@ -105,28 +118,54 @@ fn node_mtime_ms(m: &std::fs::Metadata) -> f64 {
         .map_or(0.0, |d| d.as_secs() as f64 * 1000.0 + d.subsec_nanos() as f64 / 1e6)
 }
 
+/// NEVER HOLD `LISTING` ACROSS A SYSCALL (TRDD-HFV4AIT7).
+///
+/// This function used to take the global lock ONCE at the top and keep it for the whole body —
+/// across `fs::metadata`, across `fs::read_dir`, and across the full directory iteration. `LISTING`
+/// is process-global, so every parallel scan worker queued behind one mutex while its holder did
+/// directory I/O. That is a lock convoy, and it is why the cold scan reached only **3.09 CPU cores
+/// / 25.9 s** while `allogscan` over the same corpus reached **8.02 cores at 1,439 MB/s**, and why
+/// `RAYON_NUM_THREADS=4` measured FASTER than the default 14 — more threads meant a longer queue,
+/// not more work done. Profile: 64,827 `__psynch_mutexwait` samples top-of-stack.
+///
+/// The lock now covers only the map operations. Two threads that miss on the same directory may
+/// both `read_dir` it; that race is BENIGN and deliberately accepted — they compute identical
+/// listings, the second insert overwrites an equal value, and the alternative (holding the lock
+/// while one of them does I/O) is the bug being fixed. Duplicated work on a cache miss is far
+/// cheaper than serialising every worker.
 fn list_dir_cached(dir: &Path) -> Vec<String> {
-    let mut c = LISTING.lock().expect("listing cache");
+    // stat OUTSIDE the lock.
     let Ok(m) = std::fs::metadata(dir) else {
-        c.map.shift_remove(dir);
+        LISTING.lock().expect("listing cache").map.shift_remove(dir);
         return Vec::new();
     };
     let mtime = node_mtime_ms(&m);
-    let hit = c.map.get(dir).filter(|(cached_mtime, _)| *cached_mtime == mtime).map(|(_, names)| names.clone());
-    if let Some(names) = hit {
-        c.hits += 1;
-        return names;
+
+    // Cache probe: lock held for one map lookup and a clone, nothing else.
+    {
+        let mut c = LISTING.lock().expect("listing cache");
+        if let Some(names) = c.map.get(dir).filter(|(cached_mtime, _)| *cached_mtime == mtime).map(|(_, names)| names.clone()) {
+            c.hits += 1;
+            return names;
+        }
     }
+
+    // read_dir + iteration OUTSIDE the lock — this is the expensive part, and the whole point.
     let Ok(rd) = std::fs::read_dir(dir) else {
-        c.map.shift_remove(dir);
+        LISTING.lock().expect("listing cache").map.shift_remove(dir);
         return Vec::new();
     };
     let names: Vec<String> = rd.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
-    c.readdirs += 1;
-    if c.map.len() >= LISTING_CACHE_MAX {
-        c.map.clear();
+
+    // Publish: lock held for the insert only.
+    {
+        let mut c = LISTING.lock().expect("listing cache");
+        c.readdirs += 1;
+        if c.map.len() >= LISTING_CACHE_MAX {
+            c.map.clear();
+        }
+        c.map.insert(dir.to_path_buf(), (mtime, names.clone()));
     }
-    c.map.insert(dir.to_path_buf(), (mtime, names.clone()));
     names
 }
 
