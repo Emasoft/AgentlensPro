@@ -736,6 +736,46 @@ pub fn ingest_post(state: &mut CoreState, path: &str, body: &[u8]) {
 
 /// The ingest half: process the parsed payload into the store buffer and the live window.
 /// Holds the lock for serialisation + window insert only — no disk.
+/// `AGENTLENS_INGEST_PROFILE=1` — read once, because this is on the per-request path and an env
+/// lookup per request would itself be part of what it measures.
+fn ingest_profile_on() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("AGENTLENS_INGEST_PROFILE").is_ok_and(|v| v != "0" && !v.is_empty()))
+}
+
+/// Accumulate the three phases of an ingest request and print a summary every 2,000 of them.
+///
+/// The number that decides whether ingest can ever use more than one core is `held` — time inside
+/// the global state lock. Wall-clock throughput cannot distinguish "the server is slow" from "the
+/// server is serialized"; a held-time that approaches the wall time per request can only mean the
+/// latter. `parse` is the off-lock half and is the control: if parse is large and held is small,
+/// the current shape is already right and the ceiling is elsewhere.
+fn record_ingest_profile(parse_ns: u64, wait_ns: u64, held_ns: u64) {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static N: AtomicU64 = AtomicU64::new(0);
+    static PARSE: AtomicU64 = AtomicU64::new(0);
+    static WAIT: AtomicU64 = AtomicU64::new(0);
+    static HELD: AtomicU64 = AtomicU64::new(0);
+    PARSE.fetch_add(parse_ns, Ordering::Relaxed);
+    WAIT.fetch_add(wait_ns, Ordering::Relaxed);
+    HELD.fetch_add(held_ns, Ordering::Relaxed);
+    let n = N.fetch_add(1, Ordering::Relaxed) + 1;
+    if n % 2000 == 0 {
+        let (p, w, h) = (PARSE.load(Ordering::Relaxed), WAIT.load(Ordering::Relaxed), HELD.load(Ordering::Relaxed));
+        let ms = |x: u64| x as f64 / 1e6;
+        println!(
+            "ingest-profile: n={} parse={:.1}ms/req wait_for_lock={:.1}ms/req held_lock={:.1}ms/req | totals parse={:.0}ms wait={:.0}ms held={:.0}ms",
+            n,
+            ms(p) / n as f64,
+            ms(w) / n as f64,
+            ms(h) / n as f64,
+            ms(p),
+            ms(w),
+            ms(h),
+        );
+    }
+}
+
 pub fn ingest_parsed(state: &mut CoreState, kind: &'static str, payload: Value, path: &str) {
     let now = now_ms();
     let spans: Vec<Value> = match kind {
@@ -826,14 +866,31 @@ async fn handle(
         }
     }
 
-    // Parse on THIS worker thread, before the lock: N connections parse on N cores. The lock
-    // then covers only the buffer append + window insert; durability is the 5 s flush tick.
+    // Parse on THIS worker thread, before the lock: N connections parse on N cores.
+    //
+    // THE COMMENT HERE USED TO SAY the lock "covers only the buffer append + window insert". That
+    // is not what it covers: `ingest_parsed` runs `process_traces` — the whole OTLP→span
+    // transform, the expensive part — INSIDE it. Measured 2026-08-29: the server sits at 1.02
+    // cores under a concurrency-64 flood (0.90 at concurrency 8), i.e. 8× the offered load buys
+    // 8% more throughput and an 8× worse p99. That is one serialized section, and this is it.
+    // `AGENTLENS_INGEST_PROFILE=1` splits the per-request cost so the claim is measured rather
+    // than argued.
+    let profile = ingest_profile_on();
+    let t_parse = profile.then(std::time::Instant::now);
     let parsed = parse_payload(&path, &buf);
+    let parse_ns = t_parse.map(|t| t.elapsed().as_nanos() as u64).unwrap_or(0);
+    let t_wait = profile.then(std::time::Instant::now);
     {
         let mut st = state.lock().map_err(|_| "state poisoned".to_owned())?;
+        let wait_ns = t_wait.map(|t| t.elapsed().as_nanos() as u64).unwrap_or(0);
+        let t_held = profile.then(std::time::Instant::now);
         match parsed {
             Some((kind, payload)) => ingest_parsed(&mut st, kind, payload, &path),
             None => st.counters.parse_errors += 1,
+        }
+        if profile {
+            let held_ns = t_held.map(|t| t.elapsed().as_nanos() as u64).unwrap_or(0);
+            record_ingest_profile(parse_ns, wait_ns, held_ns);
         }
     }
     Ok(Response::new(Full::new(Bytes::new())))

@@ -14,7 +14,7 @@
 //! process-wide singleton (as the TS module state), bounded, cleared whole on overflow.
 
 use std::path::{Path, PathBuf};
-use std::sync::{LazyLock, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 
 use indexmap::IndexMap;
 use serde_json::{json, Map, Value};
@@ -24,7 +24,13 @@ const LISTING_CACHE_MAX: usize = 5000;
 
 #[derive(Default)]
 struct ListingCache {
-    map: IndexMap<PathBuf, (f64, Vec<String>)>,
+    /// `Arc<Vec<String>>`, NOT `Vec<String>` (TRDD-HFV4AIT7). A cache HIT used to `.clone()` the
+    /// whole listing — every `String` in it — while holding this mutex, and hits are 88.3% of
+    /// calls. So the lock was held for an unbounded number of allocations proportional to the
+    /// directory's size, on the hot path, for every one of ~26k sessions. Moving the I/O out of
+    /// the lock (the comment on `list_dir_cached`) fixed the syscall half of that convoy and left
+    /// this half in place. An `Arc` makes a hit a refcount bump.
+    map: IndexMap<PathBuf, (f64, Arc<Vec<String>>)>,
     readdirs: u64,
     hits: u64,
 }
@@ -146,18 +152,20 @@ fn node_mtime_ms(m: &std::fs::Metadata) -> f64 {
 /// listings, the second insert overwrites an equal value, and the alternative (holding the lock
 /// while one of them does I/O) is the bug being fixed. Duplicated work on a cache miss is far
 /// cheaper than serialising every worker.
-fn list_dir_cached(dir: &Path) -> Vec<String> {
+fn list_dir_cached(dir: &Path) -> Arc<Vec<String>> {
     // stat OUTSIDE the lock.
     let Ok(m) = std::fs::metadata(dir) else {
         LISTING.lock().expect("listing cache").map.shift_remove(dir);
-        return Vec::new();
+        return Arc::new(Vec::new());
     };
     let mtime = node_mtime_ms(&m);
 
     // Cache probe: lock held for one map lookup and a clone, nothing else.
     {
         let mut c = LISTING.lock().expect("listing cache");
-        if let Some(names) = c.map.get(dir).filter(|(cached_mtime, _)| *cached_mtime == mtime).map(|(_, names)| names.clone()) {
+        // `Arc::clone`, not a deep clone: a refcount bump, so the lock is held for a map lookup
+        // and one atomic increment regardless of how many entries the directory has.
+        if let Some(names) = c.map.get(dir).filter(|(cached_mtime, _)| *cached_mtime == mtime).map(|(_, names)| Arc::clone(names)) {
             c.hits += 1;
             return names;
         }
@@ -166,9 +174,9 @@ fn list_dir_cached(dir: &Path) -> Vec<String> {
     // read_dir + iteration OUTSIDE the lock — this is the expensive part, and the whole point.
     let Ok(rd) = std::fs::read_dir(dir) else {
         LISTING.lock().expect("listing cache").map.shift_remove(dir);
-        return Vec::new();
+        return Arc::new(Vec::new());
     };
-    let names: Vec<String> = rd.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+    let names: Arc<Vec<String>> = Arc::new(rd.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect());
 
     // Publish: lock held for the insert only.
     {
@@ -177,7 +185,7 @@ fn list_dir_cached(dir: &Path) -> Vec<String> {
         if c.map.len() >= LISTING_CACHE_MAX {
             c.map.clear();
         }
-        c.map.insert(dir.to_path_buf(), (mtime, names.clone()));
+        c.map.insert(dir.to_path_buf(), (mtime, Arc::clone(&names)));
     }
     names
 }
@@ -221,13 +229,14 @@ pub fn default_tmp_roots() -> Vec<PathBuf> {
 fn find_session_scratch_dirs(session_uuid: &str, roots: &[PathBuf]) -> Vec<PathBuf> {
     let mut dirs = Vec::new();
     for root in roots {
-        for uid in list_dir_cached(root) {
+        // `.iter()` — the listing is shared, so it is borrowed rather than consumed.
+        for uid in list_dir_cached(root).iter() {
             if !uid.starts_with("claude-") {
                 continue;
             }
-            let uid_path = root.join(&uid);
-            for slug in list_dir_cached(&uid_path) {
-                let candidate = uid_path.join(&slug).join(session_uuid);
+            let uid_path = root.join(uid);
+            for slug in list_dir_cached(&uid_path).iter() {
+                let candidate = uid_path.join(slug).join(session_uuid);
                 if std::fs::metadata(&candidate).is_ok_and(|m| m.is_dir()) {
                     dirs.push(candidate);
                 }
@@ -254,8 +263,8 @@ pub fn index_scratch_tree(session_uuid: &str, tmp_roots: Option<&[PathBuf]>, max
     let mut files = Vec::new();
     let mut truncated = false;
     'walk: while let Some(dir) = queue.pop_front() {
-        for name in list_dir_cached(&dir) {
-            let full = dir.join(&name);
+        for name in list_dir_cached(&dir).iter() {
+            let full = dir.join(name);
             let Ok(m) = std::fs::metadata(&full) else { continue };
             if m.is_dir() {
                 queue.push_back(full);
