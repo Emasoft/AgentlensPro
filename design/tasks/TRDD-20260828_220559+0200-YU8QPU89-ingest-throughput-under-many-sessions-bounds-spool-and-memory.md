@@ -16,6 +16,34 @@ eht: []
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-08-29
 
+> **SINGLE-FLIGHT HYPOTHESIS FALSIFIED, AND THE 26 GB WAS THE WRONG NUMBER TO CHASE.**
+>
+> `463f4802` gated `summary_now` to one rebuild at a time. Re-ran the identical concurrency-16
+> flood with `MIMALLOC_SHOW_STATS=1`: **committed 26.4 GiB against a 26.3 GiB baseline** — no change.
+> Concurrent rebuilds were NOT the holder. The fix is still correct (it removes duplicate whole-window
+> passes) but it does not touch memory, and this card should stop crediting it with that.
+>
+> **The number that actually answers the USER's question is 5 GB, not 26.** The live server, on
+> REAL traffic:
+>
+> | | live (real) | synthetic flood |
+> |---|---:|---:|
+> | RSS | **5.00 GB** | 26.4 GB |
+> | spans resident | 62,970 | 200,000 (at the cap) |
+> | store | 3,980,903 | — |
+> | ingest rate | ~26 spans/s | **162,549 spans/s = 6,250x real** |
+>
+> The 26 GB appears only at ~6,250x this machine's measured peak. Every memory conclusion on this
+> card — including three of my own hypotheses — was drawn from that synthetic figure, which is an
+> allocator arena high-water mark under extreme churn, not a steady-state cost.
+>
+> **THE REMAINING, REAL GAP IS 5.0 GB vs the TS server's ~1.5 GB — about 3.3x, at 63k resident
+> spans.** That is the number worth investigating, and it has never been measured directly. Do NOT
+> keep optimising against the flood: it produced three plausible, testable, and WRONG diagnoses
+> (allocator retention, GPU/IOAccelerator, concurrent rebuilds) at the cost of most of a session.
+> Measure the 5 GB instead, at real load, where a 3.3x regression against the thing being replaced
+> is both credible and actionable.
+
 > **MEMORY — HOLDER IDENTIFIED IN CODE: `summary_now` has NO SINGLE-FLIGHT.** Bounded structures
 > eliminated by reading them: `summary_cache` / `stripped_cache` are `VersionedCache<T>` = one
 > `Option<Arc<T>>` slot each (`derived_cache.rs:10-15`), and `otel_attribution` is REPLACED wholesale
