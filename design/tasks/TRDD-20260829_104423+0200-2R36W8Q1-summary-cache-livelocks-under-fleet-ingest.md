@@ -3,7 +3,7 @@ trdd-id: 2R36W8Q1
 title: The summary cache is keyed on a version that moves faster than a rebuild completes, so the UI path livelocks under fleet ingest
 column: testing
 created: 2026-08-29T10:44:23+0200
-updated: 2026-08-29T15:38:00+0200
+updated: 2026-08-29T16:50:19+0200
 current-owner: main-session
 task-type: bugfix
 scope: project
@@ -58,11 +58,36 @@ implementation-commits: []
   actual throughput **1,313 spans/s against the 2,600 target** — so the run did not
   reach fleet rate either. Do not close this card on the latency box alone; those two
   numbers are unexplained and may share a cause.
-- **NEXT ACTION**: take the rebuild OFF the request path entirely — a background
-  rebuild task owns the gate, and EVERY reader (winner or not) is served the last
-  good summary. That makes the read path O(1) and bounded by construction rather
-  than by a budget. The incremental summarizer named in `ui.rs` remains the larger,
-  separate upgrade.
+- **THE GATE-WINNER HOLE IS NOW CLOSED IN CODE (2026-08-29 16:45) — but NOT yet
+  re-measured under a fleet soak, so this card stays in `testing`.** `ui.rs` gained
+  `run_summary_rebuild`, a background task that owns rebuilds, spawned by
+  `alcore.rs` next to `run_burn_tick`. With it running, `summary_now` never builds:
+  a reader waits up to `STALE_BUDGET_MS` for the version it wants and otherwise
+  serves the freshest cached value. The election that produced the 10.53 s and
+  13.25 s probes cannot happen, because the winner is always the task.
+- **Why a flag (`REBUILDER_ACTIVE`) and not an unconditional rule.** `summary_now`
+  is a library function; the unit tests and any embedder call it with no task
+  running. An unconditional "readers never build" would serve those callers the
+  first summary forever, silently — a staleness bug strictly worse than the latency
+  it fixes. The task sets the flag itself, so the contract is: rebuilder present ⇒
+  readers only wait and serve; absent ⇒ the previous self-healing behaviour,
+  byte-for-byte unchanged.
+- **Mutation-verified, both directions.** `a_reader_never_rebuilds_when_the_background_rebuilder_owns_it`
+  (in `ui.rs`) fails — and ONLY it, the other three still pass — when the early-return
+  block is disabled. `cargo clippy -p agentlens-core --all-targets -- -D warnings`
+  exits 0 with a `Finished` marker.
+- **The three tests share a process-global flag, so they take a `serial()` mutex.**
+  Without it `an_uncontended_reader_gets_fresh_data_not_stale` (whose whole assertion
+  is that an uncontended reader BUILDS) fails whenever the new test happens to run
+  beside it. That is a real hazard of the flag design, handled rather than hoped away.
+- **NEXT ACTION**: re-run the fleet soak (isolated `DATA_DIR` + own ports 4981/3981/4982,
+  `--no-log-scan`, 100 sessions × 26 spans/s) and re-take the six `/api/server-stats`
+  probes. Acceptance box 1 is met only if the two >10 s outliers are gone. **Measure
+  the other two open numbers in the SAME run** — the 64 non-2xx of 16,285, and the
+  1,313 spans/s actual against the 2,600 target — because they are still unexplained
+  and may share a cause with each other.
+- The incremental summarizer named in `ui.rs` remains the larger, separate upgrade:
+  this change moves WHO pays the O(window) cost, it does not remove the cost.
 - **DO NOT build/test while a soak is running** — `cargo build` contends for the
   same cores and invalidates the measurement in flight.
 

@@ -300,6 +300,11 @@ fn main() {
     // The 4s burn tick (server.ts tickBurn): burnStatus SSE frames + once-per-condition alert
     // frames, and the lastBurnStatus cache the TTL resolver + burn-risk read.
     rt.spawn(agentlens_core::ui::run_burn_tick(state.clone(), hub.clone()));
+    // Owns summary rebuilds so no HTTP request ever runs one (TRDD-2R36W8Q1). Spawning this is
+    // what flips `summary_now` from "the gate winner rebuilds synchronously" to "readers wait and
+    // serve" — without it the read path silently keeps the old shape, which is why the flag is set
+    // by the task itself rather than by a config knob nobody would remember to turn on.
+    rt.spawn(agentlens_core::ui::run_summary_rebuild(state.clone()));
     let serve_ui = agentlens_core::ui::serve_ui(ui_addr, state.clone(), hub.clone(), |bound| {
         println!("alcore: UI/API listening on http://{bound}");
     });

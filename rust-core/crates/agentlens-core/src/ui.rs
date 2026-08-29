@@ -138,6 +138,82 @@ fn rebuild_gate() -> &'static Mutex<()> {
     GATE.get_or_init(|| Mutex::new(()))
 }
 
+/// Set by `run_summary_rebuild` while a dedicated background task owns rebuilding.
+///
+/// WHY A FLAG AND NOT AN UNCONDITIONAL RULE (TRDD-2R36W8Q1). Taking the rebuild off the request
+/// path is only safe when SOMETHING ELSE is doing it. `summary_now` is a library function: the
+/// unit tests, and any embedder that never spawns the task, call it with no rebuilder running. If
+/// readers unconditionally refused to build, those callers would be served the first summary
+/// forever and nothing would say why — a silent staleness bug, worse than the latency it fixes.
+/// So the flag makes the contract explicit: rebuilder present ⇒ readers only ever WAIT and serve;
+/// rebuilder absent ⇒ the previous self-healing inline-build behaviour, unchanged.
+static REBUILDER_ACTIVE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Owns summary rebuilds so no HTTP request ever runs one (TRDD-2R36W8Q1).
+///
+/// THE HOLE THIS CLOSES. `STALE_BUDGET_MS` protects every reader that LOSES the admission gate,
+/// and does nothing for the one that WINS it: that request ran the whole O(window) rebuild on the
+/// request path. Measured under a 100-session fleet soak, six `/api/server-stats` probes came back
+/// 0.50 / 0.60 / 0.50 / **10.53** / 0.50 / **13.25** s — the ~0.5 s cluster is the budget working,
+/// and the two outliers are gate winners. Every request is eventually elected winner, so no budget
+/// could fix them; only removing the election can. With this task running, the winner is always
+/// this task, and the read path is O(1) by construction rather than by a timeout.
+///
+/// The poll interval is deliberately far below `STALE_BUDGET_MS`: a reader that misses must see
+/// the rebuild it needs START well inside its budget, or read-your-writes degrades from "correct"
+/// to "usually correct". At normal window sizes the rebuild itself is milliseconds, so a caller
+/// doing `POST /v1/traces` then `GET /api/summary` still sees its own write.
+///
+/// `spawn_blocking` because `summary_from` is CPU-bound over the whole span window — running it on
+/// a tokio worker thread would stall every other task on that worker, which is the same class of
+/// bug as holding a lock across a syscall.
+pub async fn run_summary_rebuild(state: Arc<Mutex<CoreState>>) {
+    REBUILDER_ACTIVE.store(true, std::sync::atomic::Ordering::Relaxed);
+    let mut tick = tokio::time::interval(std::time::Duration::from_millis(25));
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        tick.tick().await;
+        let state = state.clone();
+        // A rebuild that panics must not silently stop the loop — the flag would stay true and
+        // every reader would then serve stale forever with nothing rebuilding. Errors from
+        // spawn_blocking (panic or runtime shutdown) fall through to the next tick.
+        let _ = tokio::task::spawn_blocking(move || rebuild_once(&state)).await;
+    }
+}
+
+/// One rebuild pass, or nothing if the cache is already current. Blocking; the gate is held only
+/// for the duration of THIS pass, and `summary_from` runs off the state lock.
+fn rebuild_once(state: &Arc<Mutex<CoreState>>) {
+    // Cheap pre-check before touching the gate: under fleet ingest this is a miss and we proceed,
+    // but on an idle server it is a hit and the task costs one version compare per tick.
+    {
+        let Ok(mut st) = state.lock() else { return };
+        let version = st.data_version;
+        if st.summary_cache.current(version).is_some() {
+            return;
+        }
+    }
+    let _flight = match rebuild_gate().try_lock() {
+        Ok(g) => g,
+        // Someone is already rebuilding (a cold-boot reader, or a previous pass that outran the
+        // tick). Skipping is correct: the in-flight rebuild produces the same value.
+        Err(std::sync::TryLockError::WouldBlock) => return,
+        Err(std::sync::TryLockError::Poisoned(e)) => e.into_inner(),
+    };
+    let inputs = {
+        let Ok(mut st) = state.lock() else { return };
+        let version = st.data_version;
+        if st.summary_cache.current(version).is_some() {
+            return;
+        }
+        st.summary_snapshot()
+    };
+    let (summary, attribution) = CoreState::summary_from(&inputs, crate::now_ms() as f64);
+    if let Ok(mut st) = state.lock() {
+        st.store_summary(inputs.version, summary, attribution);
+    }
+}
+
 pub fn summary_now(state: &Arc<Mutex<CoreState>>, now_ms: f64) -> Result<(u64, Arc<Value>), String> {
     // Fast path: a warm cache never queues behind a rebuild. Under sustained ingest this misses
     // essentially always (see `cached_any`), so `stale` is what actually answers the request.
@@ -171,6 +247,41 @@ pub fn summary_now(state: &Arc<Mutex<CoreState>>, now_ms: f64) -> Result<(u64, A
     //
     // A poisoned gate is not fatal: the guard protects no data, only admission, so recover the
     // guard and proceed rather than failing a read because some other thread panicked.
+    // THE READ PATH, when a background rebuilder owns rebuilds (TRDD-2R36W8Q1). A reader WAITS and
+    // SERVES; it never builds. That is what makes this path O(1) instead of O(window): the 10.53 s
+    // and 13.25 s probes in the fleet soak were requests that won the admission gate and ran the
+    // whole rebuild themselves, which no budget can bound because every request eventually wins.
+    //
+    // Cold boot is the one exception and falls through below: with nothing ever cached there is no
+    // stale value to serve, so waiting is the only correct answer. It can happen at most once per
+    // process.
+    if REBUILDER_ACTIVE.load(std::sync::atomic::Ordering::Relaxed) {
+        if let Some(stale_pair) = stale.clone() {
+            let deadline =
+                std::time::Instant::now() + std::time::Duration::from_millis(STALE_BUDGET_MS);
+            loop {
+                std::thread::sleep(std::time::Duration::from_millis(2));
+                {
+                    let mut st = state.lock().map_err(|_| "state poisoned".to_owned())?;
+                    let version = st.data_version;
+                    if let Some(cached) = st.summary_cache.current(version) {
+                        return Ok((version, cached));
+                    }
+                }
+                if std::time::Instant::now() >= deadline {
+                    // Budget spent. Serve the freshest value that EXISTS — re-read rather than
+                    // reusing the pre-wait snapshot, since a newer one may have landed meanwhile
+                    // and serving it is free.
+                    let newest = {
+                        let mut st = state.lock().map_err(|_| "state poisoned".to_owned())?;
+                        st.summary_cache.cached_any()
+                    };
+                    return Ok(newest.unwrap_or(stale_pair));
+                }
+            }
+        }
+    }
+
     let _flight = match rebuild_gate().try_lock() {
         Ok(g) => g,
         Err(std::sync::TryLockError::Poisoned(e)) => e.into_inner(),
@@ -3598,8 +3709,40 @@ mod rebuild_admission_tests {
     use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
 
-    use super::{rebuild_gate, summary_now, STALE_BUDGET_MS};
+    use super::{rebuild_gate, summary_now, REBUILDER_ACTIVE, STALE_BUDGET_MS};
     use crate::CoreState;
+
+    /// `REBUILDER_ACTIVE` is process-global and cargo runs these tests on parallel threads, so a
+    /// test that flips it would otherwise change the behaviour under a test that assumes it clear
+    /// — specifically `an_uncontended_reader_gets_fresh_data_not_stale`, whose whole assertion is
+    /// that an uncontended reader BUILDS. Every test that reads or writes the flag takes this
+    /// first, which is cheaper and far more obvious than making the flag injectable through a
+    /// function that has a dozen call sites.
+    fn serial() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::OnceLock<Mutex<()>> = std::sync::OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(())).lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Sets `REBUILDER_ACTIVE` for the life of the guard and always clears it, including on a
+    /// panicking assertion — a leaked `true` would make later runs of the sibling tests fail for a
+    /// reason that has nothing to do with them.
+    struct RebuilderActive {
+        /// Never read — held purely so the serial lock lives exactly as long as the flag does.
+        /// Underscore-named because rustc's dead-code pass does not count a Drop-only field.
+        _serial: std::sync::MutexGuard<'static, ()>,
+    }
+    impl RebuilderActive {
+        fn on() -> Self {
+            let _serial = serial();
+            REBUILDER_ACTIVE.store(true, std::sync::atomic::Ordering::Relaxed);
+            Self { _serial }
+        }
+    }
+    impl Drop for RebuilderActive {
+        fn drop(&mut self) {
+            REBUILDER_ACTIVE.store(false, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
 
     fn state_with_a_warm_summary(tag: &str) -> (Arc<Mutex<CoreState>>, u64) {
         let dir = std::env::temp_dir().join(format!("al-admission-{}-{}", tag, std::process::id()));
@@ -3652,6 +3795,9 @@ mod rebuild_admission_tests {
     /// `try_lock`-and-immediately-serve-stale destroyed, and it is the reason the budget exists.
     #[test]
     fn an_uncontended_reader_gets_fresh_data_not_stale() {
+        // Held for the whole test: this asserts the NO-rebuilder shape, so it must not run while
+        // a sibling has the flag set.
+        let _serial = serial();
         let (state, warm_version) = state_with_a_warm_summary("fresh");
         state.lock().unwrap().data_version += 1;
         let current = state.lock().unwrap().data_version;
@@ -3660,6 +3806,49 @@ mod rebuild_admission_tests {
         let (served_version, _) = summary_now(&state, crate::now_ms() as f64).expect("served");
         assert_eq!(served_version, current, "an uncontended reader must serve the CURRENT version");
         assert_ne!(served_version, warm_version, "serving the pre-bump summary is the read-your-writes bug");
+    }
+
+    /// THE FIX FOR THE GATE WINNER (TRDD-2R36W8Q1). With a background rebuilder owning rebuilds,
+    /// a reader whose cache missed must NOT build even when the gate is completely free — it waits
+    /// out its budget and serves the last good summary.
+    ///
+    /// MUTATION CHECK: delete the `REBUILDER_ACTIVE` early-return block in `summary_now` and this
+    /// test MUST fail — the reader wins the free gate, rebuilds, and returns `current` instead of
+    /// `warm_version`. That is precisely the request that measured 10.53 s and 13.25 s in the
+    /// fleet soak while its five siblings, which lost the gate, came back in ~0.5 s.
+    ///
+    /// No rebuilder is actually spawned here, so the wait always runs to the full budget and the
+    /// stale value is what gets served. That is the pessimistic end of the behaviour; in the
+    /// server the task lands the fresh version within ~30 ms, which is what keeps read-your-writes
+    /// intact and is covered by `tests/ui.rs`.
+    #[test]
+    fn a_reader_never_rebuilds_when_the_background_rebuilder_owns_it() {
+        let _active = RebuilderActive::on();
+        let (state, warm_version) = state_with_a_warm_summary("owned");
+
+        state.lock().unwrap().data_version += 1;
+        let current = state.lock().unwrap().data_version;
+        assert_ne!(current, warm_version, "the cache key must have moved, or this proves nothing");
+
+        // Deliberately NOT holding the gate: the winner is the case the budget cannot fix.
+        assert!(rebuild_gate().try_lock().is_ok(), "the gate must be free — that is the case under test");
+
+        let began = Instant::now();
+        let (served_version, _) = summary_now(&state, crate::now_ms() as f64).expect("served");
+        let waited = began.elapsed();
+
+        assert_eq!(
+            served_version, warm_version,
+            "the reader rebuilt on the request path — with a rebuilder active it must serve the last good summary"
+        );
+        assert!(
+            waited < Duration::from_secs(2),
+            "reader took {waited:?} — it is doing rebuild-shaped work instead of serving"
+        );
+        assert!(
+            waited >= Duration::from_millis(STALE_BUDGET_MS / 2),
+            "gave up after only {waited:?} — it must wait for the rebuilder before serving stale, or read-your-writes breaks"
+        );
     }
 
     /// The cold-boot carve-out: with nothing ever built there is nothing to serve stale, so
