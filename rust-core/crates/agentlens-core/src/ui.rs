@@ -116,24 +116,65 @@ fn sse_frame(payload: &str) -> Bytes {
 /// process and threading a second lock through ~25 call sites buys nothing. The remaining ceiling is
 /// unchanged — a rebuild is still the WHOLE window — and the upgrade is still an incremental
 /// summarizer, not more locking.
+///
+/// ponytail (TRDD-2R36W8Q1): admission is now `try_lock`, so readers never block — but rebuilds
+/// still run BACK-TO-BACK under sustained ingest, because the moment one finishes the next
+/// cache-missing request starts another. That is a steady 100% of ONE core (measured: 101.9%) and
+/// it is the allocation churn behind the 17 GB plateau. It is deliberately NOT fixed here: a duty
+/// cycle knob would be a second tunable in front of the same O(whole window) rebuild. The upgrade
+/// is still the incremental summarizer named above, which removes the cost rather than rationing
+/// it. Responsiveness was the failure; CPU share is a known, bounded ceiling.
 fn rebuild_gate() -> &'static Mutex<()> {
     static GATE: std::sync::OnceLock<Mutex<()>> = std::sync::OnceLock::new();
     GATE.get_or_init(|| Mutex::new(()))
 }
 
 pub fn summary_now(state: &Arc<Mutex<CoreState>>, now_ms: f64) -> Result<(u64, Arc<Value>), String> {
-    // Fast path: a warm cache never queues behind a rebuild.
-    {
+    // Fast path: a warm cache never queues behind a rebuild. Under sustained ingest this misses
+    // essentially always (see `cached_any`), so `stale` is what actually answers the request.
+    let stale = {
         let mut st = state.lock().map_err(|_| "state poisoned".to_owned())?;
         let version = st.data_version;
         if let Some(cached) = st.summary_cache.current(version) {
             return Ok((version, cached));
         }
-    }
+        st.summary_cache.cached_any()
+    };
 
+    // ADMISSION IS NON-BLOCKING — `try_lock`, never `lock`. This is the whole fix for
+    // TRDD-2R36W8Q1 and the reason the gate alone was not enough.
+    //
+    // The gate (463f4802) already bounded rebuild CONCURRENCY to one, which is why only ONE core
+    // was ever pegged. What it did not bound is how long a READER waits: every request that
+    // missed the cache queued on `lock()` behind a rebuild that takes over 20 s at 1M spans, so
+    // the UI path stopped answering while ingest stayed healthy at 0.3 ms.
+    //
+    // The tempting fix — a staleness TOLERANCE, "serve the cache if it is younger than N ms" —
+    // does not work, and it is worth writing down why so it is not tried again. A tolerance only
+    // controls how often a rebuild STARTS. Once one is running, every other reader is still
+    // parked on the mutex for the full rebuild, so requests still time out; a 1 s tolerance in
+    // front of a 20 s rebuild changes nothing a caller can observe. The blocking is the defect,
+    // not the cadence.
+    //
+    // So: at most ONE request ever pays for a rebuild, and everyone else is answered immediately
+    // from the last good summary. The cost is that the served summary can be one rebuild behind —
+    // which is strictly better than the status quo of not being served at all.
+    //
     // A poisoned gate is not fatal: the guard protects no data, only admission, so recover the
     // guard and proceed rather than failing a read because some other thread panicked.
-    let _flight = rebuild_gate().lock().unwrap_or_else(|e| e.into_inner());
+    let _flight = match rebuild_gate().try_lock() {
+        Ok(g) => g,
+        Err(std::sync::TryLockError::Poisoned(e)) => e.into_inner(),
+        Err(std::sync::TryLockError::WouldBlock) => {
+            if let Some(pair) = stale {
+                return Ok(pair);
+            }
+            // COLD BOOT ONLY: no summary has ever been built, so there is nothing to serve and
+            // waiting is the only correct answer. Bounded by construction — it can happen at most
+            // once per process, because after the first store `cached_any` always succeeds.
+            rebuild_gate().lock().unwrap_or_else(|e| e.into_inner())
+        }
+    };
 
     let inputs = {
         let mut st = state.lock().map_err(|_| "state poisoned".to_owned())?;
@@ -3473,6 +3514,77 @@ pub async fn run_push_loop(state: Arc<Mutex<CoreState>>, hub: Arc<SseHub>) {
             // one is running simply finds the memo current when it gets there.
             push_update(&state, &hub, crate::now_ms() as f64);
         }
+    }
+}
+
+/// TRDD-2R36W8Q1: a reader must NOT block behind an in-flight summary rebuild.
+///
+/// These live in-file because the discriminator is the private `rebuild_gate()`. The property is
+/// "a reader whose cache missed returns immediately while a rebuild is running", and the only way
+/// to test that deterministically is to HOLD the gate — a timing race against a real rebuild would
+/// be flaky, and a flaky guard on a livelock is worse than none.
+///
+/// MUTATION CHECK (do this if you touch `summary_now`): change the `try_lock` admission back to
+/// `rebuild_gate().lock()` and `reader_does_not_block_behind_an_in_flight_rebuild` MUST hang (the
+/// harness will time it out) rather than pass. A test that still passes with the blocking
+/// admission reinstated is guarding nothing.
+#[cfg(test)]
+mod rebuild_admission_tests {
+    use std::sync::{Arc, Mutex};
+    use std::time::{Duration, Instant};
+
+    use super::{rebuild_gate, summary_now};
+    use crate::CoreState;
+
+    fn state_with_a_warm_summary(tag: &str) -> (Arc<Mutex<CoreState>>, u64) {
+        let dir = std::env::temp_dir().join(format!("al-admission-{}-{}", tag, std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let state = Arc::new(Mutex::new(CoreState::open(&dir)));
+        let (version, _) = summary_now(&state, crate::now_ms() as f64).expect("warm the cache");
+        (state, version)
+    }
+
+    /// The fix. With the gate held by someone else, a cache-missing reader is answered from the
+    /// last good summary instead of queueing — promptly, and with the version that summary was
+    /// actually built for (never the current `data_version`, which is what keeps `stripped_cache`
+    /// keyed to inputs it really derives from).
+    #[test]
+    fn reader_does_not_block_behind_an_in_flight_rebuild() {
+        let (state, warm_version) = state_with_a_warm_summary("nonblock");
+
+        // Force the fast path to miss exactly the way sustained ingest does: bump the key.
+        state.lock().unwrap().data_version += 1;
+        let current = state.lock().unwrap().data_version;
+        assert_ne!(current, warm_version, "the cache key must have moved, or this proves nothing");
+
+        // Stand in for a 20-second rebuild.
+        let held = rebuild_gate().lock().unwrap_or_else(|e| e.into_inner());
+
+        let began = Instant::now();
+        let (served_version, _summary) = summary_now(&state, crate::now_ms() as f64).expect("served");
+        let waited = began.elapsed();
+        drop(held);
+
+        assert_eq!(
+            served_version, warm_version,
+            "a blocked-then-fresh answer means admission still queues; the served version must be the STALE one"
+        );
+        assert!(
+            waited < Duration::from_secs(2),
+            "reader waited {waited:?} behind the gate — admission is blocking again (the 2R36W8Q1 livelock)"
+        );
+    }
+
+    /// The cold-boot carve-out: with nothing ever built there is nothing to serve stale, so
+    /// waiting is correct. Asserted so a future "never block" simplification cannot quietly start
+    /// returning an empty summary on the very first request.
+    #[test]
+    fn cold_boot_has_no_stale_value_to_serve() {
+        let dir = std::env::temp_dir().join(format!("al-admission-cold-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut st = CoreState::open(&dir);
+        assert!(st.summary_cache.is_empty(), "a fresh CoreState has no summary yet");
+        assert!(st.summary_cache.cached_any().is_none(), "nothing to serve stale before the first store");
     }
 }
 

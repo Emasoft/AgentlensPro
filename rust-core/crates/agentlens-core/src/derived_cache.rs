@@ -60,6 +60,29 @@ impl<T> VersionedCache<T> {
         value
     }
 
+    /// The cached value and the version it was built for, WHATEVER that version is — the
+    /// serve-stale half of a non-blocking rebuild (TRDD-2R36W8Q1).
+    ///
+    /// WHY THIS EXISTS. `current` demands an exact version match, and `data_version` bumps on
+    /// EVERY ingest (lib.rs:247, :554, :603, :737). Measured 2026-08-29 at 2,600 spans/s (100
+    /// sessions x 26/s): the key moves ~130x/second while one rebuild over the 1M-span window
+    /// takes over 20 s, so `current` misses essentially every time and the exact-match contract
+    /// alone can never be satisfied under sustained load. `/api/server-stats` stopped answering
+    /// entirely (>20 s, zero bytes) while ingest stayed healthy at 0.3 ms.
+    ///
+    /// Returns the PAIR, not just the value: the caller must report the version the summary was
+    /// actually built for, never the current `data_version`. `stripped_cache` is keyed on the
+    /// version `summary_now` returns, so reporting a version the body does not match would key a
+    /// derived value to inputs it was not derived from. Returning the real pair keeps the two
+    /// caches coherent — both describe the same snapshot, merely an older one.
+    ///
+    /// Counts a HIT: serving this is a reuse, which is exactly what the hit/miss ratio measures.
+    pub fn cached_any(&mut self) -> Option<(u64, Arc<T>)> {
+        let v = self.cached.as_ref()?.clone();
+        self.hits += 1;
+        Some((self.version, v))
+    }
+
     /// True until the first value of any version lands — the cold-boot discriminator (nothing to
     /// serve stale yet, so a reader may build one itself).
     pub fn is_empty(&self) -> bool {
