@@ -16,6 +16,38 @@ eht: []
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-08-29
 
+> **VERIFIED 2026-08-29 WITH ALL FIXES ACTIVE — throughput and responsiveness PASS; memory does
+> NOT, and for a reason that falsifies this card's own earlier premise.**
+>
+> Isolated instance, `AGENTLENS_MAX_WINDOW_SPANS=200000`, release build carrying `bba537c0`
+> (back-pressure), `65d3018c` (RSS guard) and `f106e493` (count ceiling):
+>
+> | concurrency | result | spans/s | nonOk | p50 | p99 | `/api/server-stats` |
+> |---|---|---:|---:|---:|---:|---|
+> | 4 | **completed** (was: never finished) | **173,930** | **0** | 0.25 ms | 0.67 ms | 200 in 6.1 s |
+> | 16 | **completed** | **162,389** | **0** | 0.91 ms | 3.03 ms | 200 in 3.7 s |
+>
+> **Responsiveness is FIXED.** `__psynch_mutexwait` fell from 33,000–39,000 samples to **32**. The
+> window pinned at exactly 200,000, `dropped_on_failure` stayed 0, and 14,179,940 spans landed
+> durably in the store. Ingest is 162–174k spans/s against a real peak of 26 — the rate question is
+> answered several times over.
+>
+> **MEMORY IS NOT FIXED, and the window was the wrong suspect.** After the run: RSS **27.91 GB**,
+> still held 20 s after load stopped, with `inMemory` 200,000 (~300 MB), `pendingAppends` 0, and
+> `windowMs` already cut to the **5-minute floor** by the RSS guard. So the guard fired as designed,
+> shrank the window as far as it can go, and RSS did not move — because ~27 GB is not in the window,
+> the writer buffer, or any structure this card previously blamed. A `/usr/bin/sample` shows the
+> process IDLE (46,478 in `__psynch_cvwait`, 32 in mutexwait): the memory is RETAINED, not in use.
+>
+> **Leading hypothesis, NOT yet verified:** allocator retention — mimalloc holding freed pages after
+> 14.2M spans churned through, which `span_window.rs` and this card have both noted macOS does. The
+> alternative is a real leak in a derived structure (`otel_attribution` / `stripped_cache` /
+> `summary_cache`). These are distinguishable and the discriminator is cheap: run the same flood
+> with `MIMALLOC_PURGE_DELAY=0` (or the build's equivalent eager-purge knob) and re-read RSS. If it
+> falls, it is retention and the fix is an allocator setting; if it stays, something holds real
+> references and the fix is in the code. **Do not add another window guard for this — two axes
+> already bound the window and neither touched this number.**
+
 > **ANSWERED 2026-08-29 — THE RATE QUESTION IS SETTLED, AND THE BOTTLENECK IS ELSEWHERE.**
 > Report (gitignored): `reports/bench/20260829_094332+0200-ingest-ceiling-is-window-size-not-rate.md`
 >
