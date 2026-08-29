@@ -16,11 +16,18 @@ eht: []
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-08-29
 
-**Measured so far (HFV4AIT7's benches, isolated instances, 14 cores):** ingest 131 → 949 req/s
-(11.0k spans/s) against a real machine peak of **26 spans/s** — 400× headroom, so the USER's
-"fast enough to avoid filling the spool" half is answered for OTLP; hook events sustain 17k req/s.
-Spool behaviour under N parallel sessions is still UNMEASURED. **Memory is the open half:** RSS
-15.0 GB at 481k spans (~31 KB/span), vs ~1.5 GB for the TS server on the same data.
+**Measured so far (HFV4AIT7's benches, isolated instances, 14 cores):** ingest 131 → **949 req/s**;
+hook events 17k req/s. Spool behaviour under N parallel sessions is still UNMEASURED.
+**Memory is the open half:** RSS 15,034 MB at 481k spans (~31 KB/span in decimal GB), vs ~1.5 GB
+for the TS server on the same data.
+
+> **The spans/s figure is UNSETTLED and must not be quoted until it is.** The flood posted
+> 41,689 × 20 = **833,780** spans with 0 non-2xx, but `spansAppendedDelta` read **481,200** (57.7%)
+> — 42% unaccounted. Either the counter was sampled before the run drained (throughput is
+> *understated*, ~19k spans/s) or spans are silently dropped by the transform (a data-loss bug).
+> One re-run with a 10 s drain decides it; measurement in flight. The headroom claim rests on this,
+> so it is stated only on the axis that is settled: **949 req/s vs a real machine peak of 26
+> spans/s ⇒ ~36× on the request axis** (400× on the spans axis, if the larger reading holds).
 
 **Advisor verdict (Fable 5) — do NOT refactor the span representation on that number:**
 1. **The 31 KB/span figure conflates window and derived state.** Per rebuild, `lib.rs` produces a
@@ -31,16 +38,24 @@ Spool behaviour under N parallel sessions is still UNMEASURED. **Memory is the o
 2. **Ship the guard the port DROPPED, first.** `span_window.rs:9-11` records that the TS's
    `effectiveWindowMs` halving under memory pressure was deliberately not ported — so alcore has
    LESS protection than the TS it replaced. ~20 lines: sample `server_stats::rss_bytes()` (already
-   exists, proc_pidinfo) on the 5 s tick, halve `effective_ms` over budget, step back under it;
-   `prune()` already evicts, and `windowMs` is already in `/api/server-stats`, so the cut is visible.
+   exists, and it is PORTABLE — proc_pidinfo on macOS, /proc on Linux — which matters because the
+   package ships Linux binaries) on the 5 s tick, halve `effective_ms` over budget, step back under
+   it; `prune()` already evicts, and `windowMs` is already in `/api/server-stats`, so the cut is
+   visible rather than silent.
 3. **The ONE measurement before any Value/struct refactor** (macOS-native, no heaptrack): run
-   `alsummarize` under `/usr/bin/time -l` twice on the same 481k-span file — once returning right
+   `alsummarize` under `/usr/bin/time -l` twice on the same 481k-span file — once stopping right
    after the `Vec<Arc<Value>>` is built, once after `summarize_spans`. Run 1 minus file size =
    window cost; the delta = derived-state cost. If run 1 is ~3-5 KB/span, shrinking the span
    representation is dead on arrival.
+   **`alsummarize` cannot do this as it stands** (`src/bin/alsummarize.rs` is 25 lines, one
+   straight path, no flag and no early return) — the measurement needs a small `--stop-after-load`
+   flag added first. Two confounds to state in the result: the file is read into a `String` before
+   parsing (its bytes are in RSS too), and mimalloc rarely returns freed pages, so run 2's max-RSS
+   is a high-water mark, not a steady state.
 
-**NEXT ACTION:** the two-run `/usr/bin/time -l` measurement (3), then the pressure guard (2),
-then the spool half of this card's Method under 32× session load.
+**NEXT ACTION:** settle the 42% span gap (in flight) — it decides whether the throughput half is
+answered or a data-loss bug is open. Then the pressure guard (2), then the two-run measurement (3,
+after adding the flag), then the spool half of this card's Method under 32× session load.
 
 USER goal (2026-08-28): *"verify that the speed of ingestion in rust even when running many
 claude code sessions in parallel is enough to avoid filling the spool and using too much memory."*
