@@ -596,6 +596,17 @@ pub fn rss_budget_bytes() -> u64 {
     /// The flush tick's prune (server.ts flushSpanAppends): the window shrank ⇒ every derived
     /// view must be rebuilt.
     pub fn prune_window(&mut self, now_ms: i64) {
+        // HOW LONG THIS HOLDS THE STATE LOCK IS THE MEASUREMENT (TRDD-2R36W8Q1). `prune_window`
+        // runs with `&mut self`, i.e. under the state lock, over the whole span window. Every
+        // reader's poll loop calls `state.lock()`, so a long hold here is UNBOUNDED latency that
+        // `STALE_BUDGET_MS` cannot see: that budget bounds the wait for a REBUILD, not the wait
+        // for the lock. Measured 2026-08-29: the two >6 s `/api/server-stats` probes landed
+        // exactly on the burst where the memory-pressure valve shrank the window 24h -> 300 s
+        // (window_shrinks_so_far went 2 -> 9 between the fast probe and the slow one), and the
+        // probe after the burst was back to 0.50 s. That is a CORRELATION; this log is what turns
+        // it into a measurement, because this session has already spent five attempts on causes
+        // that were inferred from a number that merely fit.
+        let began = std::time::Instant::now();
         // Memory pressure FIRST: narrowing the window is what makes the following prune evict.
         // Order is load-bearing — halving after the prune would defer every cut by a full tick,
         // and the tick is 5s while a flood can add ~11k spans/s.
@@ -613,6 +624,18 @@ pub fn rss_budget_bytes() -> u64 {
         }
         if self.window.prune(now_ms) || narrowed {
             self.data_version += 1;
+        }
+        // Only when it is long enough to be someone else's latency. A per-tick line would be noise
+        // on an idle server and would itself cost more than the pass it reports.
+        let held = began.elapsed();
+        if held >= std::time::Duration::from_millis(250) {
+            println!(
+                "alcore: prune_window held the state lock for {} ms ({} spans, window {}ms{})",
+                held.as_millis(),
+                self.window.spans.len(),
+                self.window.effective_ms,
+                if narrowed { ", NARROWED" } else { "" }
+            );
         }
     }
 

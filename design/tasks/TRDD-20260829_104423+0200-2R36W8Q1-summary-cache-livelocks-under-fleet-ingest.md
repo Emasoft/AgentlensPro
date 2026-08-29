@@ -80,12 +80,54 @@ implementation-commits: []
   Without it `an_uncontended_reader_gets_fresh_data_not_stale` (whose whole assertion
   is that an uncontended reader BUILDS) fails whenever the new test happens to run
   beside it. That is a real hazard of the flag design, handled rather than hoped away.
-- **NEXT ACTION**: re-run the fleet soak (isolated `DATA_DIR` + own ports 4981/3981/4982,
-  `--no-log-scan`, 100 sessions × 26 spans/s) and re-take the six `/api/server-stats`
-  probes. Acceptance box 1 is met only if the two >10 s outliers are gone. **Measure
-  the other two open numbers in the SAME run** — the 64 non-2xx of 16,285, and the
-  1,313 spans/s actual against the 2,600 target — because they are still unexplained
-  and may share a cause with each other.
+- **RE-MEASURED FOUR TIMES 2026-08-29. ACCEPTANCE BOX 1 IS STILL NOT MET, and the
+  headline number is now trustworthy for the first time.** Isolated alcore (own
+  `DATA_DIR`, ports 4981/3981/4982, `--no-log-scan`), 100 sessions, ~260 s per run:
+
+  | run | probes | result |
+  |---|---|---|
+  | 1 | 6 | 0.52 / 0.50 / 0.53 / 0.50 / **8.15** / 0.50 |
+  | 2 | 6 | 0.52 / 0.53 / 0.52 / **6.90** / **12.64** / 0.50 |
+  | 3 | 6 | 0.52 / 0.58 / 0.50 / 0.60 / 0.94 / 1.62 — **no outliers at all** |
+  | 4 | **130** (1/s) | **p50 0.503 · p95 2.657 · p99 14.104 · max 16.292 · over-1 s 8 (6.2%) · all HTTP 200** |
+
+  **SIX PROBES COULD NOT SCORE THIS CRITERION, and nearly did — twice.** Same binary,
+  same script, same machine: run 2 said "worse than before", run 3 said "fixed". Either
+  could have been written up as the answer. Only run 4, sampling every second for the
+  whole soak, is decidable — and it says **6.2% of reads exceed 1 s with a 14 s p99**.
+  **RETRACTED: the claim (from run 1) that the fix "removed one of two outliers and cut
+  the worst from 13.25 s to 8.15 s".** That was one sample against one historical sample
+  and it does not survive run 3 or run 4. The commit message `481c94e` carries the same
+  over-read; this card is the correction.
+- **The unit-level fix is real and is NOT what is being questioned here.** With a
+  rebuilder active a reader provably never rebuilds — mutation-verified in `ui.rs`. What
+  run 4 shows is that removing the gate winner did not, on its own, get the READ path
+  under 1 s. Both things are true.
+- **HYPOTHESIS FALSIFIED BY DIRECT MEASUREMENT — do not retry it.** I proposed that
+  `prune_window` holds the state lock across the whole window (it runs `&mut self`, and a
+  reader's poll loop calls `state.lock()`, so a long hold is latency `STALE_BUDGET_MS`
+  cannot bound), because the run-2 outliers landed exactly on the memory-pressure burst
+  (`window_shrinks_so_far` 2 → 9 between the fast probe and the slow one). Instrumented
+  it — `prune_window held the state lock for N ms`, logged at ≥250 ms — and across two
+  full soaks it printed **`(none)`**. The correlation was real and the mechanism was
+  wrong. That instrumentation is KEPT (`lib.rs`): it is cheap, it is silent when healthy,
+  and it now permanently rules out this explanation instead of leaving it to be
+  re-proposed.
+- **The other two open numbers, measured in the same runs.** Throughput **1,851 spans/s**
+  against the 2,600 target (481,280 spans in 260 s). Non-2xx **24 of 24,093** here, but
+  **64** in each of the two earlier runs — so it is NOT the deterministic constant those
+  two identical counts suggested, and any explanation resting on that must be dropped.
+- **Ingest spikes TOO, and that is the most useful clue on the card.** The flood's own
+  OTLP latency reports p50 0.615 ms, p99 164 ms, **max 7,571 ms**. A read path and a
+  write path that both stall for seconds are stalling on something they SHARE. `summary_now`
+  is no longer on the write path at all, so the remaining suspect list is the state lock
+  held by some third site, or an allocator/RSS effect at 10.5 GB — not the summary rebuild.
+- **NEXT ACTION — a MEASUREMENT, and specifically NOT another fix.** Five inspection-derived
+  fixes were falsified on the sibling card today and one more here; the pattern is the
+  lesson. Time the `/api/server-stats` handler END TO END and separately time every
+  `state.lock()` acquisition in it, so a 14 s response is attributed to a named holder
+  rather than assumed to be the summary. Run it under the same 1/s × 260 s protocol —
+  never six probes again.
 - The incremental summarizer named in `ui.rs` remains the larger, separate upgrade:
   this change moves WHO pays the O(window) cost, it does not remove the cost.
 - **DO NOT build/test while a soak is running** — `cargo build` contends for the
@@ -179,8 +221,23 @@ version.
 
 ## Acceptance
 
-- [ ] `/api/server-stats` answers in under 1 s while ingesting 2,600 spans/s.
-- [ ] `/v1/traces` stays at HTTP 200 with p99 unchanged (no ingest regression).
-- [ ] Zero spans dropped (`droppedOnFailure: 0`).
-- [ ] A mutation-verified test: revert the fix and the test must fail.
-- [ ] RSS bounded — record the number, do not assert a target that was not measured.
+**Box 1 is restated as a percentile, because the original wording was not decidable.**
+"Answers in under 1 s" over six samples is a coin flip on this machine — runs 2 and 3 gave
+opposite verdicts from the same binary. A criterion that cannot distinguish a fix from luck
+is not a criterion, so it now names the sample size and the statistic.
+
+- [ ] `/api/server-stats` p99 under 1 s, sampled 1/s for a full ≥250 s soak at fleet rate
+      (n≥130), with the over-1 s share reported. **Measured 2026-08-29: p50 0.503, p95 2.657,
+      p99 14.104, max 16.292, over-1 s 6.2% — NOT met.**
+- [x] `/v1/traces` stays at HTTP 200 with p99 unchanged (no ingest regression). Measured:
+      24,069 of 24,093 2xx, OTLP p50 0.615 ms / p99 164 ms. **Recorded with its caveat: max
+      7,571 ms.** The p99 is fine and the tail is not, and reporting only the p99 here would
+      hide the one clue that read and write stall together.
+- [x] Zero spans dropped (`droppedOnFailure: 0`) — confirmed in `/api/server-stats` on every run.
+- [x] A mutation-verified test: revert the fix and the test must fail. `a_reader_never_rebuilds_when_the_background_rebuilder_owns_it`
+      fails, and only it (3 passed / 1 failed), when the `REBUILDER_ACTIVE` early return is disabled.
+- [x] RSS bounded — record the number, do not assert a target that was not measured.
+      **10.29–11.78 GB** across the runs, at a 300,000 ms window the memory-pressure valve had
+      narrowed from the configured 86,400,000 ms. Not comparable to the earlier 17.08 GB figure:
+      different run length and a different effective window, so it is recorded, not claimed as
+      an improvement.
