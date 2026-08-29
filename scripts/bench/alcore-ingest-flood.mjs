@@ -139,6 +139,10 @@ async function worker(agentOtlp, agentUi, deadline, mix, counters) {
   }
 }
 
+// ponytail: retains every sample (~7 MB of doubles at 43k req/s × 20 s). The push is
+// amortised O(1) and the sort happens after the timed window, so the throughput number
+// beside it is unaffected — but the array is unbounded, so a multi-minute soak needs a
+// streaming digest (t-digest / fixed reservoir) rather than this.
 // Nearest-rank percentile on an already-sorted array.
 function pct(sorted, p) {
   if (sorted.length === 0) return null;
