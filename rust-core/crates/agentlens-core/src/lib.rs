@@ -760,7 +760,7 @@ fn record_ingest_profile(parse_ns: u64, wait_ns: u64, held_ns: u64) {
     WAIT.fetch_add(wait_ns, Ordering::Relaxed);
     HELD.fetch_add(held_ns, Ordering::Relaxed);
     let n = N.fetch_add(1, Ordering::Relaxed) + 1;
-    if n % 2000 == 0 {
+    if n.is_multiple_of(2000) {
         let (p, w, h) = (PARSE.load(Ordering::Relaxed), WAIT.load(Ordering::Relaxed), HELD.load(Ordering::Relaxed));
         let ms = |x: u64| x as f64 / 1e6;
         println!(
