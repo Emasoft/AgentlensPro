@@ -48,3 +48,37 @@ fn zero_budget_is_disabled_not_maximum_pressure() {
     assert!(!w.apply_memory_pressure(u64::MAX, 0));
     assert_eq!(w.effective_ms, DAY);
 }
+
+/// TRDD-YU8QPU89: the span-COUNT ceiling. The time cutoff and the RSS guard bound BYTES; the
+/// summary rebuild's cost follows COUNT, and a guarded instance was measured holding RSS down
+/// while still wedging. Nothing is lost — every span is already durable in the span store.
+#[test]
+fn count_ceiling_keeps_the_newest_and_reports_the_cut() {
+    let mut w = SpanWindow::new(DAY);
+    w.max_spans = 10;
+    // All in-window by time, so ONLY the count axis can evict them.
+    let now = 1_787_000_000_000i64;
+    for i in 0..25 {
+        w.add(serde_json::json!({ "receivedAt": now, "marker": i }), now);
+    }
+    assert!(w.prune(now), "over the ceiling must report a cut");
+    assert_eq!(w.spans.len(), 10);
+    // The NEWEST are kept: `add` appends, so the front is the oldest arrival.
+    let first = w.spans.first().unwrap().get("marker").unwrap().as_i64().unwrap();
+    let last = w.spans.last().unwrap().get("marker").unwrap().as_i64().unwrap();
+    assert_eq!((first, last), (15, 24), "kept the wrong end of the window");
+    assert!(!w.prune(now), "at the ceiling with nothing aged out there is nothing to cut");
+}
+
+/// A zero ceiling DISABLES the cap. A misconfigured 0 must not empty the window.
+#[test]
+fn zero_ceiling_is_disabled_not_empty() {
+    let mut w = SpanWindow::new(DAY);
+    w.max_spans = 0;
+    let now = 1_787_000_000_000i64;
+    for i in 0..50 {
+        w.add(serde_json::json!({ "receivedAt": now, "marker": i }), now);
+    }
+    assert!(!w.prune(now));
+    assert_eq!(w.spans.len(), 50);
+}

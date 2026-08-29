@@ -22,6 +22,21 @@ use serde_json::Value;
 /// server.ts SUMMARY_WINDOW_FLOOR_MS.
 pub const SUMMARY_WINDOW_FLOOR_MS: i64 = 5 * 60_000;
 
+/// Resident span ceiling: `AGENTLENS_MAX_WINDOW_SPANS` overrides, `0` disables, default 1,000,000.
+///
+/// Sized against BOTH measurements rather than picked. Wedging was observed above ~1.5M spans, so
+/// the cap must sit below that to protect anything. At this machine's measured real peak of 26
+/// spans/s, 1M spans is ~10.7 HOURS of history — and typical load is far under peak, so an ordinary
+/// day never reaches the cap and the dashboard still shows its full 24h. A cap that never binds in
+/// normal use and binds before the pathology is the whole design goal; do not lower it to "save
+/// memory" (the RSS guard owns that axis) or raise it past the wedge point.
+pub fn max_spans_default() -> usize {
+    std::env::var("AGENTLENS_MAX_WINDOW_SPANS")
+        .ok()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .unwrap_or(1_000_000)
+}
+
 /// server.ts SUMMARY_WINDOW_MS: the `summaryWindowHours` knob (retention_config.rs — env > the
 /// data dir's `config.json` > 24, min 1 hour) in ms, then the 5-minute floor.
 pub fn summary_window_ms(data_dir: &Path) -> i64 {
@@ -38,11 +53,13 @@ pub struct SpanWindow {
     pub spans: Vec<Arc<Value>>,
     pub configured_ms: i64,
     pub effective_ms: i64,
+    /// Hard ceiling on resident span COUNT; 0 disables. See `prune` for why a second axis exists.
+    pub max_spans: usize,
 }
 
 impl SpanWindow {
     pub fn new(configured_ms: i64) -> SpanWindow {
-        SpanWindow { spans: Vec::new(), configured_ms, effective_ms: configured_ms }
+        SpanWindow { spans: Vec::new(), configured_ms, effective_ms: configured_ms, max_spans: max_spans_default() }
     }
 
     /// Boot load: ONLY the segments overlapping the window — never the whole store.
@@ -102,15 +119,36 @@ impl SpanWindow {
         false
     }
 
-    /// The flush-tick prune: drop spans older than the effective window by their own timestamp.
-    /// Returns true when the window shrank (every derived view must be rebuilt).
+    /// The flush-tick prune: drop spans older than the effective window by their own timestamp,
+    /// THEN cap the window by span COUNT. Returns true when the window shrank (every derived view
+    /// must be rebuilt).
+    ///
+    /// WHY A SECOND AXIS (TRDD-YU8QPU89). The time cutoff — and the RSS guard that shortens it —
+    /// bound BYTES. They do not bound the thing the cost actually follows: every summary rebuild is
+    /// O(span count), so a window holding millions of spans wedges the server even while memory is
+    /// under control. Measured 2026-08-29: a guarded instance kept RSS falling (18.2 -> 3.6 GB)
+    /// and still stopped answering `/api/server-stats`, with 33-39k samples parked in
+    /// `__psynch_mutexwait` behind the summarize path. Bytes were fine; the count was not.
+    ///
+    /// NO DATA IS LOST. This module's contract is "memory is the time window, disk is everything" —
+    /// every span is already durable in the segmented store, and `load_range` reads back whatever a
+    /// query needs. The cap costs dashboard RECENCY DEPTH under extreme load, nothing else, which
+    /// is the same trade `apply_memory_pressure` already makes by shortening the window.
     pub fn prune(&mut self, now_ms: i64) -> bool {
         let cutoff = now_ms - self.effective_ms;
         let first_old = self.spans.first().and_then(|s| s.as_object()).is_some_and(|s| span_timestamp_ms(s, now_ms) < cutoff);
-        if !first_old {
-            return false;
+        let mut changed = false;
+        if first_old {
+            self.spans.retain(|s| s.as_object().is_none_or(|o| span_timestamp_ms(o, now_ms) >= cutoff));
+            changed = true;
         }
-        self.spans.retain(|s| s.as_object().is_none_or(|o| span_timestamp_ms(o, now_ms) >= cutoff));
-        true
+        // Keep the NEWEST `max_spans`. `add` appends, so the front is the oldest arrival — the same
+        // end the time cutoff removes.
+        if self.max_spans > 0 && self.spans.len() > self.max_spans {
+            let excess = self.spans.len() - self.max_spans;
+            self.spans.drain(0..excess);
+            changed = true;
+        }
+        changed
     }
 }
