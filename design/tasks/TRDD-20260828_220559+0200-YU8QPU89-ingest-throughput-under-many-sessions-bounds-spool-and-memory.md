@@ -22,11 +22,18 @@ hook events 17k req/s. Spool behaviour under N parallel sessions is still UNMEAS
 (10^6), ~33 KB/span if it is MiB; the bench's own unit is unverified, so treat the figure as
 "~30 KB/span, order of magnitude". The TS server sits at ~1.5 GB on the same data.
 
-> **The spans/s figure is UNSETTLED and must not be quoted until it is.** The flood posted
-> 41,689 × 20 = **833,780** spans with 0 non-2xx, but `spansAppendedDelta` read **481,200** (57.7%)
-> — 42% unaccounted. Either the counter was sampled before the run drained (throughput is
-> *understated*, ~19k spans/s) or spans are silently dropped by the transform (a data-loss bug).
-> One re-run with a 10 s drain decides it; measurement in flight.
+> **SETTLED 2026-08-29, and the answer is the bad one: REAL DATA LOSS.** A 20 s re-run with a
+> drain posted **863,520** spans, appended **500,000**, on disk 500,000 — **42.1% dropped, with
+> HTTP 200 returned for every one of them** (`reports/bench/20260829_072821+0200-span-gap.md`).
+> Cause, verified in code: `agentlens-spanstore/src/writer.rs:475` evicts the OLDEST buffered span
+> whenever `pending_count > PENDING_FAILSAFE_MAX` (100k). That guard exists for a FAILING DISK and
+> was unreachable while the HTTP path flushed per payload; **`ae513a4` made the 5 s tick the only
+> flush, so any burst above 100k spans per tick now evicts real data.** A regression introduced by
+> this card's own sibling (HFV4AIT7 root cause 1), not a pre-existing defect.
+> Fix in flight with the rc3 agent: back-pressure (flush at a high-water mark under the same lock)
+> instead of eviction; the failsafe stays reachable only when a flush actually failed;
+> `dropped_on_failure == 0` becomes the assertion. **Every throughput figure measured before that
+> fix was measured while 42% of the work was being thrown away and must be re-taken.**
 >
 > **There is currently NO stated headroom figure, because neither axis has a valid denominator.**
 > The spans axis is blocked on the gap above. The request axis has no measured comparand at all:
