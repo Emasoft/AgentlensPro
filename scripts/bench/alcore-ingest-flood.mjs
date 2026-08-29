@@ -123,20 +123,46 @@ function pick(mix) {
 async function worker(agentOtlp, agentUi, deadline, mix, counters) {
   while (Date.now() < deadline) {
     const kind = pick(mix);
+    const t0 = performance.now();
     const status = kind === 'otlp'
       ? await post(agentOtlp, args.otlpPort, '/v1/traces', makeOtlpBody())
       : await post(agentUi, args.uiPort, '/api/hook-events', makeHookBody());
+    // Per-kind, because the question this bench answers is about ONE route:
+    // hookHandlers.ts spools only when the POST fails, and its failure threshold is
+    // the AGENTLENS_HOOK_TIMEOUT (1000 ms default). So "does the spool fill?" is
+    // "does /api/hook-events p99 stay under 1 s?" — an aggregate percentile mixed
+    // with /v1/traces would not answer it.
+    counters.lat[kind].push(performance.now() - t0);
     counters.requests++;
     if (status >= 200 && status < 300) counters.ok++;
     else counters.bad++;
   }
 }
 
+// Nearest-rank percentile on an already-sorted array.
+function pct(sorted, p) {
+  if (sorted.length === 0) return null;
+  const i = Math.min(sorted.length - 1, Math.ceil((p / 100) * sorted.length) - 1);
+  return Math.round(sorted[i] * 1000) / 1000;
+}
+
+function latencySummary(samples) {
+  if (samples.length === 0) return null;
+  const sorted = samples.slice().sort((a, b) => a - b);
+  return {
+    n: sorted.length,
+    p50: pct(sorted, 50),
+    p95: pct(sorted, 95),
+    p99: pct(sorted, 99),
+    max: pct(sorted, 100),
+  };
+}
+
 async function main() {
   const statsBefore = await getJson(args.uiPort, '/api/server-stats');
   const agentOtlp = new http.Agent({ keepAlive: true, maxSockets: args.concurrency });
   const agentUi = new http.Agent({ keepAlive: true, maxSockets: args.concurrency });
-  const counters = { requests: 0, ok: 0, bad: 0 };
+  const counters = { requests: 0, ok: 0, bad: 0, lat: { otlp: [], hooks: [] } };
   const deadline = Date.now() + args.seconds * 1000;
   const started = Date.now();
   const workers = Array.from({ length: args.concurrency }, () => worker(agentOtlp, agentUi, deadline, args.mix, counters));
@@ -152,6 +178,10 @@ async function main() {
     reqPerSec: counters.requests / elapsedSec,
     ok2xx: counters.ok,
     nonOk: counters.bad,
+    latencyMs: {
+      otlp: latencySummary(counters.lat.otlp),
+      hooks: latencySummary(counters.lat.hooks),
+    },
     spansAppendedDelta: statsAfter.spans.store.totalSpans - statsBefore.spans.store.totalSpans,
     hookEventsReceivedDelta: statsAfter.hookEvents.receivedSinceBoot - statsBefore.hookEvents.receivedSinceBoot,
   };

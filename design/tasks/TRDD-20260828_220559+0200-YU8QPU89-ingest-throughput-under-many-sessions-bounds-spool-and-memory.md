@@ -3,7 +3,7 @@ trdd-id: YU8QPU89
 title: Verify alcore ingest keeps up with many parallel Claude Code sessions without filling the spool or growing memory
 column: todo
 created: 2026-08-28T22:05:59+0200
-updated: 2026-08-28T22:05:59+0200
+updated: 2026-08-29T07:37:08+0200
 current-owner: claude-agentlenspro
 task-type: audit
 project-id: agentlenspro
@@ -16,6 +16,24 @@ eht: []
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-08-29
 
+> **THERE ARE TWO SPOOLS, AND THIS CARD ANSWERED THE WRONG ONE — see TRDD-ZW4APOPI.**
+> `<dataDir>/hook-spool` (undeliverable hook events, 20k-file cap) is what the reframing below
+> analyses, correctly. The other is the **2 GB RAM disk** `/Volumes/AgentLensSpool/otel-bodies`
+> holding raw OTEL bodies — and *that* is the one whose fill rate is governed by ingestion speed,
+> which makes it the one the USER's words name. Measured first-hand 2026-08-29 07:37: **100% full,
+> 0 bytes free, 4,271 files, 117 of them ZERO BYTES** — live silent loss, because `bodies_pass`
+> (`chores.rs:208`) drains only the legacy SSD dir while the TS drained both in `SPOOL_MODE`.
+> A `POST /api/hook-events` p99 cannot observe any of it. Keep the reframing; it is right about the
+> hook-spool. Read ZW4APOPI before quoting this card's spool conclusions.
+>
+> Two further limits on the p99 as a *sufficient* answer, even for the hook-spool: the boot-time
+> hook-spool drain was never ported either (`hook_events.rs:10-11`), so under alcore that spool is
+> monotonic — 2,400 files and growing — and at the 20k cap `spoolHookEvent` deletes the oldest
+> (`hookHandlers.ts:79-84`), which a latency percentile cannot see. The honest minimum is the p99
+> **plus** depth samples (`hookEvents.spooled`, `df /Volumes/AgentLensSpool`) either side of the
+> load. Still minutes, so this card's rejection of the 1-hour soak stands; only its sufficiency
+> claim does not.
+
 **Measured so far (HFV4AIT7's benches, isolated instances, 14 cores):** ingest 131 → **949 req/s**;
 hook events 17k req/s. Spool behaviour under N parallel sessions is still UNMEASURED.
 **Memory is the open half:** RSS 15,034 MB at 481k spans — ~31 KB/span if that MB is decimal
@@ -25,10 +43,16 @@ hook events 17k req/s. Spool behaviour under N parallel sessions is still UNMEAS
 > **SETTLED 2026-08-29, and the answer is the bad one: REAL DATA LOSS.** A 20 s re-run with a
 > drain posted **863,520** spans, appended **500,000**, on disk 500,000 — **42.1% dropped, with
 > HTTP 200 returned for every one of them** (`reports/bench/20260829_072821+0200-span-gap.md`).
-> Cause, verified in code: `agentlens-spanstore/src/writer.rs:475` evicts the OLDEST buffered span
-> whenever `pending_count > PENDING_FAILSAFE_MAX` (100k). That guard exists for a FAILING DISK and
-> was unreachable while the HTTP path flushed per payload; **`ae513a4` made the 5 s tick the only
-> flush, so any burst above 100k spans per tick now evicts real data.** A regression introduced by
+> Cause, verified in code: `agentlens-spanstore/src/writer.rs`, in **`append_line`** (cite it by
+> name — at f85300e's HEAD it is `:457`; `:475` matched only the dirty working tree of the moment)
+> evicts the OLDEST buffered span whenever `pending_count > PENDING_FAILSAFE_MAX` (100k). That guard
+> exists for a FAILING DISK. **`ae513a4` made the 5 s tick the only flush, so any burst above 100k
+> spans per tick now evicts real data.** Precision the review forced (F2): the failsafe was not
+> *absolutely* unreachable before — the pre-image appended a whole payload before flushing, and one
+> 64 MB body holds ~180,400 realistic spans — so what `ae513a4` changed is PRACTICAL reachability,
+> from "only via an oversized payload real telemetry never sends" to "routinely, under ordinary
+> burst". Consequence for the fix, not pedantry: a high-water flush placed only AFTER the append
+> loop leaves that 180k-span hole open. A regression introduced by
 > this card's own sibling (HFV4AIT7 root cause 1), not a pre-existing defect.
 > Fix in flight with the rc3 agent: back-pressure (flush at a high-water mark under the same lock)
 > instead of eviction; the failsafe stays reachable only when a flush actually failed;
