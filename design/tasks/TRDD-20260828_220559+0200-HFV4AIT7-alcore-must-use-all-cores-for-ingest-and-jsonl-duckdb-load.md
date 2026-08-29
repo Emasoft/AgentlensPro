@@ -15,6 +15,34 @@ blocked-by: []
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-08-29
 
+> **ITEM 3 — ROOT CAUSE ISOLATED (2026-08-29). It is NOT rayon-vs-tokio, and it is NOT the parser.**
+> Measured with `/usr/bin/time -l`, same corpus, same machine:
+>
+> | path | wall | CPU-s | cores busy | work done |
+> |---|---:|---:|---:|---|
+> | `allogscan --dir ~/.claude/projects` | 4.8 s | 38.7 | **8.02** of 14 | parse only |
+> | `cold_scan` standalone (`examples/scan_census`) | 25.9 s | 80.0 | **3.09** of 14 | parse + cards |
+> | server boot scan | 20.5 s | — | ~1.4 of 14 | parse + cards + tokio |
+>
+> **Tokio contention is ELIMINATED as the cause:** `cold_scan` run with NO tokio runtime at all takes
+> **25.9 s — slower than the server's 20.5 s**. rayon is innocent, and `rayon::current_num_threads()`
+> reports the full 14.
+>
+> **The defect is inside `cold_scan`'s own per-item path.** It does ~2x the CPU work of the parser
+> (80 vs 38.7 CPU-s — the card building is real work) but achieves **2.6x WORSE parallelism**
+> (3.09 vs 8.02 cores). At `allogscan`'s efficiency those same 80 CPU-seconds would finish in ~10 s
+> instead of 26. Two separable costs, and only the second is a bug.
+>
+> **The strongest lead is the sys time: 10.2 s vs 1.8 s — 5.7x.** That is syscall/page-fault
+> pressure, not user-space compute, and it scales with the 20,557 cards built rather than with the
+> 15,505 files parsed. Hypothesis to test next (NOT yet verified): allocator contention building
+> large `serde_json::Value` card trees on 14 threads, which would cap parallelism exactly this way.
+> Cheap discriminator: re-run `scan_census` with `RAYON_NUM_THREADS=4` — if wall time barely moves,
+> the limit is shared (allocator/syscalls), not thread count.
+>
+> Reproduce: `cargo build --release -p agentlens-core --example scan_census` then
+> `/usr/bin/time -l ./target/release/examples/scan_census`.
+
 > **ITEM 3 DIAGNOSED — the parse is fine; the SERVER INTEGRATION loses 3.4x. Measured 2026-08-29.**
 >
 > | path | throughput |
