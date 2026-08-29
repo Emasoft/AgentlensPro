@@ -4,10 +4,31 @@ All notable changes to AgentlensPro are documented here.
 
 > **Lineage note:** AgentlensPro continues the history of [AgentLens](https://github.com/RogerReed/agentlens), from which it was forked. Entries below that predate the fork refer to the original AgentLens lineage.
 
-## [2.31.2] - 2026-08-29
+## [2.32.0] - 2026-08-29
+
+### Added
+
+- **`agentlenspro model-headroom <model>` — is THIS model's own weekly window spent?** Some models
+  (Fable) are metered by a weekly window separate from `weekly_all`, so the aggregate cannot answer
+  whether that one model is callable: at `weekly_all` 37% and Fable 100% the account looks healthy
+  and the advisor is unreachable. The interface is the exit code — `0` ok, `1` exhausted (at/above
+  95% of its own window), `2` unknown — so an agent can branch on it before spawning a minutes-long
+  consultation: `agentlenspro model-headroom fable -q && …`. It never reports `ok` for a question it
+  could not answer: a payload carrying only `weekly_all` is `unknown`, not headroom (TRDD-VNKPUAY4).
 
 ### Fixed
 
+- **The dashboard/API stopped answering under a parallel-session fleet, while ingest stayed
+  healthy.** `summary_cache` is keyed on `data_version`, which bumps on every ingest — so at
+  2,600 spans/s (100 sessions × 26/s) the key moved ~130×/s while one rebuild over the 1M-span
+  window took over 20 s. The exact-match key could never be satisfied, every reader missed, and
+  every reader then *queued on the rebuild mutex*: `/api/server-stats` returned nothing at 20 s
+  while `/v1/traces` answered HTTP 200 in 0.3 ms. Admission is now `try_lock` — a reader whose
+  cache missed while a rebuild is in flight is served the last good summary instead of blocking,
+  so at most one request ever pays for a rebuild (TRDD-2R36W8Q1). A staleness *tolerance* was
+  rejected as a non-fix: it controls how often a rebuild starts, not how long a reader waits.
+  Rebuilds still run back-to-back at one core under sustained ingest; the upgrade for that is an
+  incremental summarizer, tracked separately.
 - **The subagent adversarial-review gate never enforced.** `agentlenspro review-gate` on
   `SubagentStop` was observe-only unless `AGENTLENS_SUBAGENT_REVIEW=on`, and no hook environment
   sets that — so a subagent that edited files and returned without a review was always allowed
