@@ -38,12 +38,25 @@ lose anything. **That was a manual recovery of a symptom; this card is the cause
 in this repo is in that write path (verified: every `.request.json` reference under `src/` and
 `rust-core/` is a reader). So there is no backpressure channel and no way to make the producer wait.
 
-**Therefore "no data must ever be lost" is NOT achievable by draining faster.** A fixed-size buffer
-plus an unthrottleable producer means some burst always wins the race; a faster drain only moves the
-burst size that breaks it. The guarantee has to come from somewhere that does not depend on winning
-a race — the leading candidate being **spill to SSD at a high-water mark**, converting the failure
-mode from *silent loss* into *degraded write latency*. Awaiting the advisor verdict before
-committing to that shape.
+**But the producer is UNTHROTTLEABLE, not UNBOUNDED — and that distinction sets the architecture.**
+An earlier revision of this card said no-loss "is NOT achievable by draining faster", full stop.
+That is wrong, and wrong in the direction that would have built the wrong system. The arrival rate
+is capped by **API round-trip latency**: one request body per API call, and a call cannot complete
+faster than its round trip. So the ceiling is roughly `N_sessions × (1 / RTT)` bodies/sec.
+
+Measured inputs already in hand: `spoolBackpressure.ts` recorded 162 MB → 1.4 MB free in ~2 min from
+**one** subagent ≈ **1.3 MB/s per session**; the ingest bench measured 949 req/s and 11k spans/s on
+this machine, orders of magnitude above that. **A continuous drain sustaining more than
+`N × 1.3 MB/s` provably keeps up.**
+
+**So the primary guarantee is a continuous drain sized against a measured worst-case arrival rate,
+and spill-to-SSD is the BACKSTOP** for when that assumption is violated — a drain stalled on store
+contention, a disk hiccup, or an N far above provisioning. Building spill as *the* architecture
+would also mask a drain that is simply mis-sized.
+
+**THE NUMBER THIS CARD STILL LACKS, and it decides the design:** worst-case bodies/sec/session ×
+max expected concurrent sessions, versus sustained drain bytes/sec. Measure it before building
+either mechanism.
 
 **Second-order constraint:** the spool is a **RAM disk**, deliberately `durable: false`. A reboot
 takes everything still in it, so "no loss" also implies bounding how long a body may sit there —
@@ -86,19 +99,46 @@ which is an argument for continuous digestion independent of the fill level.
 
 ## Advisor verdict
 
-_Pending — fable-advisor consulted 2026-08-29T07:54. Record the ranked design here before writing
-any code._
+**NOT OBTAINED — Fable exhausted its token window on 2026-08-29 and the consult was killed
+mid-flight.** Per the advisor rule, proceeding with this recorded explicitly rather than implying a
+verdict exists. **Re-consult before implementing step 3 (the durability mechanism)** — steps 1 and 2
+are hole-closing and rate-sizing, and do not need it.
+
+## `alstore pass` reports total success over destroyed bodies — a second observability hole
+
+The recovery pass reported `ingested:4154, failed:[], strandedTs:[]` for a directory that contained
+**117 zero-byte corpses**. The arithmetic reconciles exactly (4,271 − 4,154 = 117), so the pass
+processed every non-empty file and skipped every empty one — defensible in itself, since an empty
+file has no content to ingest and so is neither `failed` (nothing was attempted) nor `stranded`
+(nothing to strand). **But it means a drain can encounter 117 destroyed bodies and report total
+success.** A zero-length body is the on-disk signature of a prior full-spool loss and the only
+forensic trace that the loss ever happened. Same class as `dropped_on_failure` being written and
+never read (ZW4APOPI). Surface it as a distinct count.
 
 ## Acceptance
 
+- [ ] the arrival-vs-drain rate measurement above is taken and recorded, BEFORE either mechanism
 - [ ] a burst larger than the spool's free space loses **zero** bodies (test: write past the
       high-water mark, assert every body is later present in the store)
+- [ ] a zero-length body is surfaced as its own count, never folded into silent success
 - [ ] with the producer stopped, the spool drains to empty without operator action
 - [ ] the spool's fill level and any drop counter are exposed in `/api/server-stats` and non-stubbed
 - [ ] a reboot-while-full scenario has a stated, tested outcome rather than an assumed one
 
 ## Notes and lessons learned
 
-The manual recovery worked and proves the ingest path is sound — 4,154 bodies, 0 failed, 0 stranded.
-The defect was never in the digestion; it was that nothing pointed it at the spool, and that the
-timer was an order of magnitude too slow for the buffer it guarded.
+The manual recovery worked and the ingest path is sound — but note HOW that was established, because
+the first version of this sentence cited `alstore pass`'s own `0 failed, 0 stranded`, which is the
+deleting tool grading its own homework. The originals had already been deleted on the strength of
+it. What actually proves it is a round-trip: `alstore verify <store> <name> <file>` against the
+SSD backup returned `ok:true` for 58/58 sampled bodies including the largest (2.06 MB). Audit the
+step that can silently discard, not only the step that can corrupt — the lock was checked first
+because corruption is scarier, while discard was the likelier failure.
+
+**117 bodies are permanently gone.** They were destroyed at write time, hours before this session's
+recovery began — nothing here lost them and nothing could have recovered them. The backup preserves
+that loss, it does not repair it; it exists so the *reclaiming pass* could not add to it. Say this
+plainly rather than letting "recovered, 0 failed" imply the incident was made whole.
+
+The defect was never in the digestion: nothing pointed it at the spool, and the timer was an order
+of magnitude too slow for the buffer it guarded.
