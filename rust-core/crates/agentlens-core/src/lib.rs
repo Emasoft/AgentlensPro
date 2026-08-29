@@ -564,10 +564,42 @@ impl CoreState {
         }
     }
 
+/// RSS budget for the summarization window, in bytes. `AGENTLENS_RSS_BUDGET_MB` overrides;
+/// default 4096 MB.
+///
+/// Chosen against measurement, not taste: the TS server sat at ~1.5 GB on this machine's real
+/// corpus, and an alcore flood reached 10.25 GB before wedging. 4 GB leaves generous headroom over
+/// normal operation while cutting in well before the window can take the process down. A budget
+/// this guard never reaches would be decoration.
+pub fn rss_budget_bytes() -> u64 {
+    std::env::var("AGENTLENS_RSS_BUDGET_MB")
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(4096)
+        * 1024
+        * 1024
+}
+
     /// The flush tick's prune (server.ts flushSpanAppends): the window shrank ⇒ every derived
     /// view must be rebuilt.
     pub fn prune_window(&mut self, now_ms: i64) {
-        if self.window.prune(now_ms) {
+        // Memory pressure FIRST: narrowing the window is what makes the following prune evict.
+        // Order is load-bearing — halving after the prune would defer every cut by a full tick,
+        // and the tick is 5s while a flood can add ~11k spans/s.
+        let narrowed = self
+            .window
+            .apply_memory_pressure(crate::server_stats::rss_bytes(), Self::rss_budget_bytes());
+        if narrowed {
+            // Said out loud: a silently shrinking window looks identical to "no traffic", and the
+            // whole point of porting this guard is that the cut is visible. `windowMs` in
+            // /api/server-stats carries the current value.
+            println!(
+                "alcore: memory pressure — summarization window now {}ms (configured {}ms)",
+                self.window.effective_ms, self.window.configured_ms
+            );
+        }
+        if self.window.prune(now_ms) || narrowed {
             self.data_version += 1;
         }
     }

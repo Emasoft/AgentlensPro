@@ -6,9 +6,12 @@
 //! span is appended, and the flush tick prunes by the span's own timestamp — "memory is the time
 //! window, disk is everything". Nothing is evicted from disk.
 //!
-//! The TS heap/rss-pressure halving of `effectiveWindowMs` is a V8-specific heuristic (heap limit
-//! vs used); it is NOT ported — `effective_ms` stays the configured value. Recorded in the TRDD
-//! STATE as a deliberate gap; a Rust-native memory guard belongs with the resource monitor.
+//! The TS heap/rss-pressure halving of `effectiveWindowMs` IS now ported, as
+//! `apply_memory_pressure` below — keyed on RSS (portable: proc_pidinfo on macOS, /proc on Linux)
+//! rather than the TS's V8 heap heuristic, which has no Rust analogue. It was deliberately skipped
+//! at port time, and that gap left alcore with strictly LESS protection than the server it
+//! replaced: measured 2026-08-29, a flood drove RSS to 10.25 GB and wedged the process in the
+//! summary rebuild over the window.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -56,6 +59,47 @@ impl SpanWindow {
             }
         }
         self.spans.push(Arc::new(span));
+    }
+
+    /// Halve `effective_ms` while RSS is over budget; step it back toward the configured value
+    /// when memory recovers. The TS did this with a V8 heap heuristic (heap limit vs used) and the
+    /// port deliberately dropped it — which left alcore with STRICTLY LESS protection than the
+    /// server it replaced, since the window evicts on time alone and nothing else bounds it.
+    ///
+    /// MEASURED WHY (2026-08-29, TRDD-YU8QPU89): an isolated instance flooded for ~9 min ingested
+    /// ~6M spans, reached **10.25 GB RSS**, and stopped answering `/api/server-stats` for over a
+    /// minute after the load stopped. A `/usr/bin/sample` of the wedged process showed 42,991
+    /// samples in `__psynch_cvwait` behind `IndexMap::get_index_of` / `clone` / `parse_iso_ms` —
+    /// the summary rebuild over the window, with ZERO writer/flush/fsync frames. So the window's
+    /// size is what takes the server down, and bounding it is the fix that matters.
+    ///
+    /// Returns true when the window was narrowed, so the caller can log a cut that would otherwise
+    /// be invisible — `windowMs` is already in `/api/server-stats`, which is what makes this
+    /// observable rather than a silent data cut.
+    ///
+    /// ponytail: halve/restore on a fixed budget rather than a controller. A PID loop over RSS is
+    /// exactly the speculative machinery this does not need — the TS shipped the same crude shape
+    /// for years.
+    pub fn apply_memory_pressure(&mut self, rss: u64, budget: u64) -> bool {
+        if budget == 0 {
+            return false;
+        }
+        if rss > budget {
+            let narrowed = (self.effective_ms / 2).max(SUMMARY_WINDOW_FLOOR_MS);
+            if narrowed < self.effective_ms {
+                self.effective_ms = narrowed;
+                return true;
+            }
+            return false;
+        }
+        // Recovered: step back toward the configured window, never past it. Doubling (not a jump
+        // straight back) so a workload hovering at the budget does not oscillate between the full
+        // window and the floor every tick.
+        if self.effective_ms < self.configured_ms {
+            self.effective_ms = (self.effective_ms.saturating_mul(2)).min(self.configured_ms);
+            return true;
+        }
+        false
     }
 
     /// The flush-tick prune: drop spans older than the effective window by their own timestamp.
