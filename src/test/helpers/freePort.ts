@@ -23,6 +23,8 @@
 
 import * as net from 'net'
 import * as http from 'http'
+import * as fs from 'fs'
+import * as path from 'path'
 import type { AddressInfo } from 'net'
 import { spawn, type ChildProcess, type SpawnOptions } from 'child_process'
 
@@ -125,6 +127,77 @@ export interface SpawnedServer {
  * the server) propagates immediately on the first attempt — this must never mask the behaviour
  * under test, only the port-allocation race around it.
  */
+/** The alcore binary the suite should boot, or null to keep booting `node server.js`.
+ *
+ *  Opt-in via `AGENTLENS_TEST_ENGINE=alcore`, resolved in the order a developer would expect:
+ *  an explicit `AGENTLENS_ALCORE` override, then the release build a `cargo build --release`
+ *  produces, then the packaged binary. Returns null — not a throw — when the engine is requested
+ *  but no binary exists, because a suite that cannot find a Rust build must fall back and say so
+ *  rather than fail 15 files with a spawn error that looks like a product bug.
+ */
+/** The repo's built `media/` — same two-layout candidate walk as `alcoreTestBin`, for the same
+ *  reason (this file runs from `src/test/helpers/` and from `out/test/test/helpers/`). */
+function repoMediaDir(): string {
+  for (const up of [['..', '..', '..'], ['..', '..', '..', '..']]) {
+    const c = path.resolve(__dirname, ...up, 'media')
+    if (fs.existsSync(path.join(c, 'index.html'))) return c
+  }
+  // Return the likelier path rather than throwing: alcore's own "--media-dir is required" /
+  // missing-dir error names the problem better than a helper's guess would.
+  return path.resolve(__dirname, '..', '..', '..', 'media')
+}
+
+export function alcoreTestBin(): string | null {
+  if ((process.env.AGENTLENS_TEST_ENGINE ?? '').trim() !== 'alcore') return null
+  // A LIST of repo roots, not one guess. This file runs from TWO layouts — `src/test/helpers/`
+  // (3 up) and the compiled `out/test/test/helpers/` (4 up) — and a single `'..','..','..'`
+  // resolved to `out/` under mocha, so this returned null with the engine explicitly requested and
+  // the whole suite quietly ran on server.js instead. It looked like a clean parity result: 2527
+  // passing against an engine that was never started. Same failure shape `findServerJs` already
+  // guards against a few files over, which is why it enumerates candidates too.
+  const roots = [
+    path.resolve(__dirname, '..', '..', '..'),
+    path.resolve(__dirname, '..', '..', '..', '..'),
+  ]
+  const candidates = [
+    process.env.AGENTLENS_ALCORE?.trim(),
+    ...roots.flatMap((r) => [
+      path.join(r, 'rust-core', 'target', 'release', 'alcore'),
+      path.join(r, 'bin-native', `${process.platform}-${process.arch}`, 'alcore'),
+    ]),
+  ].filter((p): p is string => Boolean(p))
+  for (const c of candidates) {
+    try {
+      fs.accessSync(c, fs.constants.X_OK)
+      return c
+    } catch { /* try the next candidate */ }
+  }
+  return null
+}
+
+/** Translate the env contract every test already builds (DATA_DIR / *_PORT / BIND_HOST) into
+ *  alcore's flags. alcore reads NO env vars for these — it is flags-only — so without this the
+ *  child would silently bind its defaults (3000/4316/4318) and stomp the developer's live server
+ *  instead of the ephemeral ports the test allocated. That failure would not look like a
+ *  misconfiguration; it would look like passing tests plus a corrupted live data dir.
+ */
+export function alcoreArgsFromEnv(env: NodeJS.ProcessEnv): string[] {
+  const args = ['serve']
+  const push = (flag: string, v: string | undefined): void => { if (v) args.push(flag, v) }
+  push('--data-dir', env.DATA_DIR)
+  // `--media-dir` is REQUIRED by alcore (it exits 64 without it) and the TS server defaults it, so
+  // no existing test sets MEDIA_DIR. Defaulting it here rather than editing 15 test files is the
+  // point of routing every boot through this helper — and it is a test-harness default, not a
+  // product one: alcore keeps requiring the flag explicitly, which is the safer contract for a
+  // server that otherwise serves whatever happens to be next to it.
+  push('--media-dir', env.MEDIA_DIR ?? repoMediaDir())
+  push('--otlp-port', env.OTLP_PORT)
+  push('--ui-port', env.UI_PORT)
+  push('--mcp-port', env.MCP_PORT)
+  push('--bind', env.BIND_HOST)
+  return args
+}
+
 export async function spawnServerWithRetry(opts: SpawnServerRetryOptions): Promise<SpawnedServer> {
   const maxAttempts = opts.maxAttempts ?? 3
   const readyTimeoutMs = opts.readyTimeoutMs ?? 30_000
@@ -142,7 +215,24 @@ export async function spawnServerWithRetry(opts: SpawnServerRetryOptions): Promi
     // the orphan it then cannot reap. Verified: one such orphan was found alive 54 minutes after a
     // run, PPID 1, on that run's ephemeral ports (it inherits the test env, so it re-binds them).
     const env = { ...(await opts.buildEnv()), AGENTLENS_WATCHDOG: 'off' }
-    const child = spawn(process.execPath, [opts.serverJs], { env, stdio: ['ignore', 'pipe', 'pipe'], ...opts.spawnOptions })
+    // WHICH ENGINE THE SUITE BOOTS (TRDD-1B98LCVR box 3). Every test that starts a real server
+    // routes through this ONE line, so the whole suite migrates from the TypeScript bundle to
+    // alcore here rather than in 15 separate files — and, more importantly, it can only ever be
+    // one of the two, which is the property box 4 (deleting standalone/server.ts) depends on.
+    //
+    // Opt-IN for now (`AGENTLENS_TEST_ENGINE=alcore`). The engines are not yet proven at parity —
+    // two TS-only behaviours have already been found and ported this week, and both were invisible
+    // to an endpoint diff — so flipping the default before the suite has run green against alcore
+    // would convert an unknown number of real parity gaps into one undifferentiated red suite.
+    // Substitute ONLY for the real bundle. `spawnServerWithRetry` is also used to launch
+    // deliberately fake server scripts (freePortRetry.test.ts spawns a stub to prove the port-race
+    // retry), and swapping alcore in there replaced the subject of the test with a different
+    // program — it failed with "alcore: --data-dir is required", which reads like a parity gap and
+    // is not one.
+    const useAlcore = /(^|[\\/])standalone[\\/]server\.js$/.test(opts.serverJs) ? alcoreTestBin() : null
+    const child = useAlcore
+      ? spawn(useAlcore, alcoreArgsFromEnv(env), { env, stdio: ['ignore', 'pipe', 'pipe'], ...opts.spawnOptions })
+      : spawn(process.execPath, [opts.serverJs], { env, stdio: ['ignore', 'pipe', 'pipe'], ...opts.spawnOptions })
     let log = ''
     child.stdout?.on('data', (d: Buffer) => { log += d.toString() })
     child.stderr?.on('data', (d: Buffer) => { log += d.toString() })
