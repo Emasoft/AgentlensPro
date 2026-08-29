@@ -1,9 +1,9 @@
 ---
 trdd-id: 465EXTJ6
 title: alcore is not at parity with the TypeScript server on 14 measured behaviours and it is the only backend that ships
-column: todo
+column: dev
 created: 2026-08-29T20:43:34+0200
-updated: 2026-08-29T20:43:34+0200
+updated: 2026-08-29T21:35:00+0200
 current-owner: main-session
 task-type: bugfix
 scope: project
@@ -69,6 +69,7 @@ safe.
 
 ## Acceptance
 
+- [x] **3 of 14 done — admission control** (`admission.rs`, mutation-verified; failure count 15 → 11).
 - [ ] All 14 pass under `AGENTLENS_TEST_ENGINE=alcore`, each mutation-verified.
 - [ ] The suite is green under BOTH engines simultaneously (no gap closed by weakening a test).
 - [ ] `AGENTLENS_TEST_ENGINE=alcore` becomes the default and the opt-in is removed.
