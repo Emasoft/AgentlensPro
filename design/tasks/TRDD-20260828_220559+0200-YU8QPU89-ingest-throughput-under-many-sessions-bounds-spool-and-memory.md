@@ -16,6 +16,39 @@ eht: []
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-08-29
 
+> **REAL-LOAD MEMORY: 5.3 GB IS THE RUST HEAP, AND `log_sessions` IS THE ONLY UNBOUNDED STRUCTURE
+> LEFT.** `vmmap` on the LIVE server (pid 14665, real traffic, 33 min uptime): `IOAccelerator`
+> 6.3 G virtual / **5.3 G resident** / 4.3 G dirty — and that label is mimalloc's arenas, per the
+> `MIMALLOC_SHOW_STATS` correlation established above, not the GPU.
+>
+> **Everything nameable is bounded — verified by reading each one:**
+>
+> | structure | bound | at real load |
+> |---|---|---:|
+> | span window | time cutoff + RSS guard + count ceiling (3 axes) | 62,970 spans |
+> | `summary_cache` / `stripped_cache` | one `Option<Arc<T>>` slot each | 1 each |
+> | `otel_attribution` | replaced wholesale per rebuild | 1 generation |
+> | `LogTailer.accums` | `ACCUM_CACHE_MAX = 24` | ≤24 |
+> | card timelines | `demote_cold_timelines`, `AGENTLENS_TIMELINE_HOT_CARDS = 50` | 50 hot |
+> | **`log_sessions`** | **NONE** | **26,256 cards** |
+>
+> **`log_sessions` is the gap.** Its only mutations are `put_log_session` (upsert) and a single
+> `clear()` at `lib.rs:561` (full rescan). No eviction, no LRU, no count ceiling — it holds one card
+> per session EVER SEEN on disk and grows monotonically with the corpus. Timelines are demoted past
+> the 50 hottest, but the CARD COUNT itself has no ceiling, and each surviving card still carries
+> per-session metadata. 26,256 cards is already ~400x the hot-card bound.
+>
+> **This is a genuine scaling defect and it is not load-dependent** — it grows with how long the
+> user has used Claude Code, not with ingest rate, which is why no flood surfaced it and why it
+> persists at idle.
+>
+> **NEXT — measure before fixing, the lesson of this whole card:** instrument the byte size of
+> `log_sessions` (sum `serde_json::to_string(card).len()` across the map, logged once at boot and on
+> the 1 h tick). If it is multiple GB, the fix is a count ceiling with LRU-by-`last_active_ms`,
+> mirroring what `demote_cold_timelines` already does for timelines. If it is small, the 5.3 GB is
+> elsewhere and mimalloc-level heap profiling is required — `vmmap` and `/usr/bin/heap` are both
+> blind to mimalloc and have already produced one confident wrong answer on this card.
+
 > **SINGLE-FLIGHT HYPOTHESIS FALSIFIED, AND THE 26 GB WAS THE WRONG NUMBER TO CHASE.**
 >
 > `463f4802` gated `summary_now` to one rebuild at a time. Re-ran the identical concurrency-16
