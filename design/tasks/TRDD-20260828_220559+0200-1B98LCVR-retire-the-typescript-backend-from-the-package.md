@@ -3,13 +3,14 @@ trdd-id: 1B98LCVR
 title: Retire the TypeScript backend from the package so Rust is the only server that ships
 column: dev
 created: 2026-08-28T22:05:59+0200
-updated: 2026-08-29T15:38:00+0200
+updated: 2026-08-29T16:58:00+0200
 current-owner: claude-agentlenspro
 task-type: refactor
 project-id: agentlenspro
 parent-trdd: DMWOBWFH
 blocked-by: []
 npt: [VHH7FXGC]
+implementation-commits: [eec7bb36, 952357e8, 48a154a]
 ---
 
 # Retire the TypeScript backend from the package
@@ -51,10 +52,29 @@ a complete inventory.** Grep for BEHAVIOUR that exists only in `standalone/serve
 guards, env reads), not only for routes — two of the two gaps found so far were of that shape, and
 the second was invisible to an endpoint-diff.
 
-**NEXT ACTION**: `alcoreBin()` — make a missing or non-executable binary a boot ERROR naming the
-platform instead of a silent fallback to TS. That is the first Work box and the one that makes
-every later removal safe; v2.32.0's packaging gate already proves all 16 `bin-native` entries ship
-`-rwxr-xr-x` inside the tarball, which was its precondition.
+**BOX 1 IS DONE (`48a154a`, 2026-08-29).** `alcoreBin()` now separates the three cases the single
+`null` used to conflate, because only ONE of them is a fault:
+
+| situation | answer | why |
+|---|---|---|
+| platform not in `SHIPPED_TARGETS` (win32) | `null` | a documented gap — TS is the only option there |
+| `bin-native/` absent entirely | `null` | a dev checkout or pruned install; throwing would break every fresh clone |
+| `bin-native/` present, this platform's binary missing or non-executable | **throws**, naming platform + path + repair | an incomplete install, and the silent downgrade is how the live backend got regressed to TS |
+
+`SHIPPED_TARGETS` is not exported, so "is this platform shipped at all" is answered by probing
+`npmPlatformBin` with an `exists` that always returns true — that makes a `null` mean exactly one
+thing. Cheaper than exporting the set and keeping two copies of the answer in sync.
+`npmPlatformBin` itself is deliberately untouched: alscan/allogscan/alstore keep optional-tool
+semantics, and the hard error belongs only where the server ENGINE is chosen. 3 new cases in
+`src/test/alcoreCutover.test.ts` cover every branch; `check-types` and `compile-tests` exit 0 and
+the `alcore cutover seam` suite is 9/9.
+
+**NEXT ACTION**: box 2 — remove `standalone/server.js` from `package.json` `files`, the `server`
+esbuild target, and `findServerJs`, and make `check-dist-contents` assert the bundle is ABSENT from
+the tarball. Box 1 is its precondition and is now met. **Before starting it, re-read the lesson two
+paragraphs up**: both gaps found so far were BEHAVIOUR that existed only in `standalone/server.ts`
+(a log line, an env read), not routes — so grep for behaviour, not only for filenames, or box 4
+will delete something nothing was watching for.
 
 **Do NOT treat this card as blocked on nothing.** `blocked-by:` is empty in the frontmatter but the
 endpoint gap is a genuine prerequisite; it is recorded here rather than as a fabricated card id.
@@ -74,9 +94,10 @@ downgrade on any other.
 
 ## Work
 
-- [ ] `alcoreBin()`: the Rust core is the default on every platform `bin-native/` covers; a
+- [x] `alcoreBin()`: the Rust core is the default on every platform `bin-native/` covers; a
       missing/non-executable binary is a **boot error** naming the platform, not a fallback to TS
-      (fail-fast; no second server to drift against).
+      (fail-fast; no second server to drift against). — `48a154a`; the two legitimate `null` cases
+      (unsupported platform, absent `bin-native/`) are preserved deliberately, see the STATE table.
 - [ ] Remove `standalone/server.js` from `package.json` `files`, the `server` esbuild target, and
       `findServerJs`; `check-dist-contents` asserts the bundle is ABSENT from the tarball.
 - [ ] Every test that boots `server.js` (the P9 browser smoke, `spawnServerWithRetry` users) boots
