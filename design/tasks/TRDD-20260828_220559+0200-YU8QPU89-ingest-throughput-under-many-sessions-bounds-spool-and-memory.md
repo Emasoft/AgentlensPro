@@ -16,6 +16,42 @@ eht: []
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-08-29
 
+> **ANSWERED 2026-08-29 — THE RATE QUESTION IS SETTLED, AND THE BOTTLENECK IS ELSEWHERE.**
+> Report (gitignored): `reports/bench/20260829_094332+0200-ingest-ceiling-is-window-size-not-rate.md`
+>
+> | concurrency | req/s | spans/s | p50 | p99 | `/api/server-stats` after |
+> |---|---:|---:|---:|---:|---|
+> | 1 | 3,041 | **60,829** | 0.182 ms | 0.366 ms | 200 in **0.68 ms** |
+> | 4 | — | — | — | — | **never completed** (25 s bench killed at 8 min) |
+>
+> **Ingestion is fast enough, by ~2,300x.** 60,829 spans/s against this machine's real measured
+> peak of 26 spans/s. The USER's "speed of ingestion … even when running many sessions in
+> parallel" half is answered YES.
+>
+> **What breaks is the in-memory WINDOW, and the variable is span COUNT, not arrival RATE.**
+> Concurrency 4 failed because the concurrency-1 run had already left ~1.5M spans in the window
+> and every summary rebuild is O(window). Two `/usr/bin/sample` captures of wedged processes
+> agree: 33,804–39,192 samples in `__psynch_mutexwait`, holder in `IndexMap::get_index_of` /
+> `clone` / `build_interaction_card` / `attr_value`, and **ZERO writer/flush/fsync frames** — so
+> neither `bba537c0` (span back-pressure) nor `58070386` (bodies drain) is implicated.
+> `ui::summary_now` genuinely rebuilds off-lock (`ui.rs:99-111`); the residual under-lock cost is
+> the SNAPSHOT — a `Vec<Arc<Value>>` clone plus one atomic per span. HFV4AIT7 called that
+> "negligible against append" at 480k spans; at 5.26M it is ~42 MB memcpy + 5.26M atomics per
+> rebuild miss, and the 4 s SSE push triggers rebuilds on its own.
+>
+> **NOT purely synthetic.** At 26 spans/s a 24 h window holds **~2.25M spans** — the same order
+> where these runs wedge. A busy production day reaches it with no unusual load.
+>
+> **The memory guard works and is NOT sufficient.** Re-measured under the same flood with a
+> 1500 MB budget: window cut 24h→12h→6h→3h→1.5h (each logged), RSS **declining under sustained
+> load** 18.2→8.2→4.7→3.6 GB, versus 10.25 GB and climbing unguarded. Memory is bounded;
+> responsiveness is not — the guard cuts by TIME while the rebuild cost follows SPAN COUNT.
+>
+> **NEXT (decision, not measurement):** bound what the cost actually follows. The smallest change
+> is a span-COUNT ceiling on the window beside the existing time ceiling; the alternatives are
+> incremental summarization or rebuilding on elapsed time rather than every version bump. Do not
+> re-measure first — the evidence above is sufficient to choose.
+
 > **THE 42% SPAN LOSS IS FIXED IN `bba537c0`** — committed, not deployed. `append` now FLUSHES at
 > `PENDING_HIGH_WATER` (50k) instead of evicting the oldest span, with the check INSIDE `append`
 > (a between-payloads check would leave a 180k-span hole, since one 64 MB body holds ~180,400
