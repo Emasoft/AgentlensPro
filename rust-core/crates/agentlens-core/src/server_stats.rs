@@ -338,6 +338,12 @@ pub fn server_stats(st: &CoreState, now_ms: i64) -> Value {
             "configuredWindowMs": st.window.configured_ms,
             "retentionDays": spans_retention_days,
             "pendingAppends": st.writer.pending_appends(),
+            // Spans lost to the failing-disk failsafe. MUST stay exposed: the writer's contract
+            // promises drops are "counted, never silently", and for the whole life of that comment
+            // nothing read the counter — so an operator who lost 42% of their telemetry
+            // (TRDD-YU8QPU89) could not discover it from the HTTP response, from here, or from a
+            // log line. Non-zero means a real disk fault, not a burst.
+            "droppedOnFailure": st.writer.dropped_on_failure(),
             "store": { "segments": segments, "totalSpans": total_spans, "totalBytes": total_bytes },
         },
         "logSessions": st.log_sessions.len(),

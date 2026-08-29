@@ -219,3 +219,36 @@ fn retention_zero_days_floors_to_one_day_not_everything() {
     assert!(dir.join(format!("{DAY18}.ndjson")).exists());
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// TRDD-YU8QPU89: arrival rate ALONE must never drop a span.
+///
+/// The regression: `ae513a4` made the 5s chores tick the only flush on the HTTP path, so the
+/// 100k failing-disk failsafe became reachable by ordinary burst. Measured — 863,520 spans posted,
+/// 500,000 appended, 42.1% dropped, HTTP 200 returned for every one. The buffer pinned at exactly
+/// 100,000 because each eviction decremented `pending_count` straight back.
+///
+/// MUTATION CHECK: remove the `PENDING_HIGH_WATER` flush from `append` and this MUST fail.
+#[test]
+fn burst_past_the_failsafe_bound_drops_nothing() {
+    let dir = fixture_dir("no-drop-burst");
+    let mut w = SpanStoreWriter::open(&dir);
+
+    // Well past PENDING_FAILSAFE_MAX (100k) with NO explicit flush — exactly the shape that lost
+    // 42% of a real flood. Back-pressure must flush on its own as the buffer fills.
+    let n = 150_000;
+    for i in 0..n {
+        w.append(&api_span(&format!("r{i}"), "2026-08-29T07:00:00.000Z", 1_787_000_000_000), 1_787_000_000_000);
+    }
+    w.flush();
+
+    assert_eq!(
+        w.dropped_on_failure(),
+        0,
+        "spans were evicted by arrival rate — the failsafe is reachable without a disk fault (the YU8QPU89 regression)"
+    );
+
+    let (_segments, spans, _bytes) = w.stats();
+    assert_eq!(spans, n as u64, "appended {n} spans but the store holds {spans}");
+
+    let _ = fs::remove_dir_all(&dir);
+}

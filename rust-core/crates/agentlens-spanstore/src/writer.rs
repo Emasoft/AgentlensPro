@@ -28,6 +28,13 @@ use serde_json::Value;
 use crate::{civil_from_days, parse_iso_ms, segment_day_ms};
 
 const PENDING_FAILSAFE_MAX: usize = 100_000;
+
+/// Flush when the buffer reaches this many spans. Half the failsafe bound, so a burst has to
+/// outrun a *flushing* writer by 2x before the failsafe is even in play — and under a healthy
+/// disk it never is, because each flush empties the buffer. Deliberately not tunable: it is a
+/// back-pressure threshold, not a policy, and the one number a wrong value would silently
+/// re-open the TRDD-YU8QPU89 data-loss window.
+const PENDING_HIGH_WATER: usize = 50_000;
 const DAY_MS: i64 = 86_400_000;
 pub const INDEX_FILE: &str = "index.json";
 
@@ -454,6 +461,32 @@ impl SpanStoreWriter {
             bucket.max_ts = tsf;
         }
         self.pending_count += 1;
+
+        // BACK-PRESSURE, NOT EVICTION (TRDD-YU8QPU89). At the high-water mark, FLUSH — do not
+        // throw away the caller's data. This check lives INSIDE `append`, not after a payload's
+        // append loop, because one 64MB body holds ~180,400 realistic spans: a check that only
+        // ran between payloads would leave a 180k-span hole.
+        //
+        // Measured why this exists: `ae513a4` moved the HTTP path's per-payload flush onto the 5s
+        // chores tick, which made the failsafe below REACHABLE under ordinary burst for the first
+        // time — 863,520 spans posted, 500,000 appended, 42.1% dropped with HTTP 200 returned for
+        // every one of them. The buffer pinned at exactly 100,000 because each eviction decremented
+        // pending_count right back.
+        //
+        // The flush is cheap enough to sit here: it performs exactly ONE fsync regardless of buffer
+        // size (the segment append is a plain buffered write_all; the only sync_all is the atomic
+        // index write). At 43k spans/s that is ~0.9 fsync/s at this threshold, against ~2,150/s for
+        // the per-payload flush this replaced.
+        if self.pending_count >= PENDING_HIGH_WATER {
+            self.flush();
+        }
+
+        // THE FAILING-DISK FAILSAFE, and now it means what its name says. `flush` RETAINS a bucket
+        // whose append errored (`continue; // keep the buffer — retried next tick`), so after the
+        // back-pressure above, a buffer that keeps growing past this bound can only mean flushes
+        // are failing — a real disk fault, where dropping the oldest is the least-bad option and
+        // the alternative is unbounded memory growth until OOM. It is no longer reachable by mere
+        // arrival rate, which is what made it a data-loss bug rather than a safety net.
         if self.pending_count > PENDING_FAILSAFE_MAX {
             // Drop the OLDEST buffered span — loud (counted), never silent.
             if let Some((_, oldest)) = self.pending.iter_mut().next() {
@@ -465,6 +498,14 @@ impl SpanStoreWriter {
                 }
             }
         }
+    }
+
+    /// Spans dropped by the failing-disk failsafe. EXPOSED because the module contract promises
+    /// drops are "counted, never silently" and, until TRDD-YU8QPU89, nothing read this counter —
+    /// not `stats()`, not `/api/server-stats`, not the CLI. A guarantee nobody can observe is not
+    /// a guarantee: an operator who lost 42% of their telemetry had no way to discover it.
+    pub fn dropped_on_failure(&self) -> u64 {
+        self.dropped_on_failure
     }
 
     /// Append every buffered span to its segment file and refresh the index (atomic write).
