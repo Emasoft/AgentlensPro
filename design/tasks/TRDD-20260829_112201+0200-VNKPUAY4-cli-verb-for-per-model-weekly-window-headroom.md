@@ -1,9 +1,9 @@
 ---
 trdd-id: VNKPUAY4
 title: A CLI verb answering whether one model's own weekly window is spent, so an agent can decide before spawning the advisor
-column: dev
+column: complete
 created: 2026-08-29T11:22:01+0200
-updated: 2026-08-29T11:22:01+0200
+updated: 2026-08-29T15:38:00+0200
 current-owner: main-session
 task-type: feature
 scope: project

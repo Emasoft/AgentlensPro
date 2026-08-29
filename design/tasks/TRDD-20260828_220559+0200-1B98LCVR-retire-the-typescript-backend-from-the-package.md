@@ -1,9 +1,9 @@
 ---
 trdd-id: 1B98LCVR
 title: Retire the TypeScript backend from the package so Rust is the only server that ships
-column: todo
+column: dev
 created: 2026-08-28T22:05:59+0200
-updated: 2026-08-29T12:01:56+0200
+updated: 2026-08-29T15:38:00+0200
 current-owner: claude-agentlenspro
 task-type: refactor
 project-id: agentlenspro
@@ -36,10 +36,25 @@ until that blocker is closed.** Full evidence:
   binaries are proven to ship executable — which v2.32.0's packaging gate now asserts inside the
   tarball (16 entries, `-rwxr-xr-x`).
 
-**NEXT ACTION**: port `/api/debug/capture-activity` to `rust-core` (or decide, explicitly, to drop
-it and its two tests). Everything else on this card is mechanical reference removal and should NOT
-start before that decision — deleting references while an endpoint gap is open produces a package
-that installs and then 404s.
+**BLOCKER CLEARED 2026-08-29 (`eec7bb36`).** `/api/debug/capture-activity` is ported to alcore —
+and it needed a real capture-liveness clock, not just a route: `CoreState.last_ingest_activity_ms`,
+bumped in `ingest_parsed` under exactly the TS condition (`server.ts:2161` `if (count > 0)` →
+`if !spans.is_empty()`), initialised to 0 so "never ingested" stays distinguishable from "just
+ingested". Mutation-verified: deleting the bump fails the test.
+
+**A SECOND TS-ONLY GAP WAS FOUND AND CLOSED WHILE HERE (`952357e8`, TRDD-Q8ZW00CI):** alcore had
+NO boot-provenance line and NO `NO_REVIVE` brake WARN at all — zero grep hits for `NO_REVIVE` /
+`STARTED_BY` under `rust-core/` — while the CLI had been stamping `AGENTLENS_STARTED_BY` onto the
+alcore spawn the whole time (`serverControl.ts:218-220`). The stamp was arriving and being dropped.
+**The lesson generalises to the rest of this card: the scope report's endpoint list is a FLOOR, not
+a complete inventory.** Grep for BEHAVIOUR that exists only in `standalone/server.ts` (log lines,
+guards, env reads), not only for routes — two of the two gaps found so far were of that shape, and
+the second was invisible to an endpoint-diff.
+
+**NEXT ACTION**: `alcoreBin()` — make a missing or non-executable binary a boot ERROR naming the
+platform instead of a silent fallback to TS. That is the first Work box and the one that makes
+every later removal safe; v2.32.0's packaging gate already proves all 16 `bin-native` entries ship
+`-rwxr-xr-x` inside the tarball, which was its precondition.
 
 **Do NOT treat this card as blocked on nothing.** `blocked-by:` is empty in the frontmatter but the
 endpoint gap is a genuine prerequisite; it is recorded here rather than as a fabricated card id.

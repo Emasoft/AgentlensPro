@@ -1,9 +1,9 @@
 ---
 trdd-id: 2R36W8Q1
 title: The summary cache is keyed on a version that moves faster than a rebuild completes, so the UI path livelocks under fleet ingest
-column: dev
+column: testing
 created: 2026-08-29T10:44:23+0200
-updated: 2026-08-29T10:44:23+0200
+updated: 2026-08-29T15:38:00+0200
 current-owner: main-session
 task-type: bugfix
 scope: project
@@ -24,11 +24,23 @@ implementation-commits: []
   HTTP 200 in 0.3 ms while `/api/server-stats` was timing out. Do not let a later
   reading of this card turn "the server wedges" into "ingestion is broken" — the
   two paths were measured independently and only the READ path fails.
-- **NEXT ACTION**: the advisor verdict on the fix ordering was requested
-  (bounded-staleness vs lower span cap vs incremental summarizer vs attacking the
-  per-span `IndexMap<String, Value>` attribute lookup). Apply the fix it endorses,
-  then re-run the fleet soak and require `/api/server-stats` to answer in under
-  1 s at 2,600 spans/s.
+- **FIXED AND SHIPPED in v2.32.0** (`8e4f6b25` then `02d25450`). No advisor verdict was
+  obtained — that consult was killed by the USER because Fable's weekly window was
+  spent, which is what TRDD-VNKPUAY4 (`agentlenspro model-headroom`) now makes
+  checkable before spawning one.
+- **The first fix was WRONG and CI caught it — keep this, it is the load-bearing
+  lesson.** Making admission `try_lock` stopped readers blocking, but a reader that
+  LOST the gate then returned stale data instantly, which broke READ-YOUR-WRITES:
+  `POST /v1/traces` followed by `GET /api/summary` answered `sessions: []`
+  (tests/ui.rs:112). The shipped design is a BOUNDED wait — `STALE_BUDGET_MS = 500`:
+  wait for the in-flight rebuild (milliseconds at normal sizes, so callers see their
+  own writes) and fall back to stale only when the rebuild is pathologically slow,
+  which is the >20 s fleet case. Correct when it can be, live when it cannot.
+- A pure staleness TOLERANCE was rejected and must not be retried: it controls how
+  often a rebuild STARTS, not how long a reader WAITS, so a 1 s tolerance in front of
+  a 20 s rebuild changes nothing a caller can observe.
+- **NEXT ACTION**: the only open acceptance box is the fleet re-run — require
+  `/api/server-stats` to answer in under 1 s while ingesting 2,600 spans/s.
 - **DO NOT build/test while a soak is running** — `cargo build` contends for the
   same cores and invalidates the measurement in flight.
 
