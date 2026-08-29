@@ -18,16 +18,24 @@ eht: []
 
 **Measured so far (HFV4AIT7's benches, isolated instances, 14 cores):** ingest 131 → **949 req/s**;
 hook events 17k req/s. Spool behaviour under N parallel sessions is still UNMEASURED.
-**Memory is the open half:** RSS 15,034 MB at 481k spans (~31 KB/span in decimal GB), vs ~1.5 GB
-for the TS server on the same data.
+**Memory is the open half:** RSS 15,034 MB at 481k spans — ~31 KB/span if that MB is decimal
+(10^6), ~33 KB/span if it is MiB; the bench's own unit is unverified, so treat the figure as
+"~30 KB/span, order of magnitude". The TS server sits at ~1.5 GB on the same data.
 
 > **The spans/s figure is UNSETTLED and must not be quoted until it is.** The flood posted
 > 41,689 × 20 = **833,780** spans with 0 non-2xx, but `spansAppendedDelta` read **481,200** (57.7%)
 > — 42% unaccounted. Either the counter was sampled before the run drained (throughput is
 > *understated*, ~19k spans/s) or spans are silently dropped by the transform (a data-loss bug).
-> One re-run with a 10 s drain decides it; measurement in flight. The headroom claim rests on this,
-> so it is stated only on the axis that is settled: **949 req/s vs a real machine peak of 26
-> spans/s ⇒ ~36× on the request axis** (400× on the spans axis, if the larger reading holds).
+> One re-run with a 10 s drain decides it; measurement in flight.
+>
+> **There is currently NO stated headroom figure, because neither axis has a valid denominator.**
+> The spans axis is blocked on the gap above. The request axis has no measured comparand at all:
+> dividing 949 req/s by the 26 spans/s peak (TRDD-DMWOBWFH) is req/s ÷ spans/s — a category error,
+> and its implicit premise (one POST per span) is false, since `src/telemetryConfig.ts:156` sets
+> `OTEL_TRACES_EXPORT_INTERVAL: '1000'`, i.e. ~one POST per second per exporting session. The
+> honest denominator is observed OTLP POSTs/s on this machine; `counters.traces_payloads` already
+> counts them (`lib.rs:116,698`) but `/api/server-stats` does not expose it — one line of exposure
+> plus two samples over a known interval settles it. Do not quote a multiple until then.
 
 **Advisor verdict (Fable 5) — do NOT refactor the span representation on that number:**
 1. **The 31 KB/span figure conflates window and derived state.** Per rebuild, `lib.rs` produces a
@@ -47,11 +55,13 @@ for the TS server on the same data.
    after the `Vec<Arc<Value>>` is built, once after `summarize_spans`. Run 1 minus file size =
    window cost; the delta = derived-state cost. If run 1 is ~3-5 KB/span, shrinking the span
    representation is dead on arrival.
-   **`alsummarize` cannot do this as it stands** (`src/bin/alsummarize.rs` is 25 lines, one
-   straight path, no flag and no early return) — the measurement needs a small `--stop-after-load`
-   flag added first. Two confounds to state in the result: the file is read into a `String` before
-   parsing (its bytes are in RSS too), and mimalloc rarely returns freed pages, so run 2's max-RSS
-   is a high-water mark, not a steady state.
+   **`alsummarize` cannot do this as it stands** (`src/bin/alsummarize.rs`, one straight path, no
+   flag and no early return) — the measurement needs a small `--stop-after-load` flag added first.
+   THREE confounds to state in the result: the file is read into a `String` that stays in scope for
+   all of `main`; mimalloc rarely returns freed pages, so run 2's max-RSS is a high-water mark, not
+   a steady state; and the load path materialises a full `Vec<Value>` and THEN collects a second
+   `Vec<Arc<Value>>`, so run 1's peak includes a transient copy the server never holds — the one
+   that moves the decision number.
 
 **NEXT ACTION:** settle the 42% span gap (in flight) — it decides whether the throughput half is
 answered or a data-loss bug is open. Then the pressure guard (2), then the two-run measurement (3,
