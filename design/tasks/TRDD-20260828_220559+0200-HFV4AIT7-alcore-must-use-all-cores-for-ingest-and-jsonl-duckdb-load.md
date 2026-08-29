@@ -40,6 +40,19 @@ blocked-by: []
 > Cheap discriminator: re-run `scan_census` with `RAYON_NUM_THREADS=4` — if wall time barely moves,
 > the limit is shared (allocator/syscalls), not thread count.
 >
+> **DISCRIMINATOR RUN — the limit IS shared, not thread count. `RAYON_NUM_THREADS=4` gives
+> real 23.0 s / 2.67 cores, versus 14 threads at 25.9 s / 3.09 cores: 3.5x fewer threads is
+> slightly FASTER.** More parallelism buys nothing, so the ceiling is a shared resource the threads
+> contend on — matching the 5.7x sys-time gap (10.2 s vs 1.8 s for the parse-only path). The
+> remaining candidates are allocator contention on the large `serde_json::Value` card trees and
+> per-file syscalls; the parse itself already proved it can hit 8 cores in `allogscan`, so the
+> contention is introduced by the card-building half.
+>
+> **This also sets the realistic target.** The work is ~80 CPU-seconds; at `allogscan`'s 8-core
+> efficiency that is ~10 s against today's 26 s. Not a 14x win — a ~2.5x one, and only if the
+> shared bottleneck is removed rather than more threads added. Do NOT "fix" this by raising the
+> thread count.
+>
 > Reproduce: `cargo build --release -p agentlens-core --example scan_census` then
 > `/usr/bin/time -l ./target/release/examples/scan_census`.
 
