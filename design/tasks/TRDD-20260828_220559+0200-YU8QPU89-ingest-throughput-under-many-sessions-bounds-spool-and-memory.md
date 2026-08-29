@@ -16,6 +16,34 @@ eht: []
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-08-29
 
+> **MEMORY — HOLDER IDENTIFIED IN CODE: `summary_now` has NO SINGLE-FLIGHT.** Bounded structures
+> eliminated by reading them: `summary_cache` / `stripped_cache` are `VersionedCache<T>` = one
+> `Option<Arc<T>>` slot each (`derived_cache.rs:10-15`), and `otel_attribution` is REPLACED wholesale
+> on each rebuild (`lib.rs:324,383`), never accumulated. Neither can hold 26 GB.
+>
+> `ui.rs:99-111` is the shape that can:
+>
+> ```
+> lock → check cache → UNLOCK → CoreState::summary_from(&inputs) → lock → store_summary
+> ```
+>
+> The lock is released between the miss and the rebuild, so **every concurrent caller misses and
+> rebuilds simultaneously**. Each in-flight rebuild holds its own `SummaryInputs` snapshot (a
+> `Vec<Arc<Value>>` of the whole window plus a clone of `log_sessions`) AND the full per-session card
+> set it is building — so N concurrent readers hold N complete copies at once, on top of the previous
+> summary still alive until `store_summary` swaps it. `grep -n "single.flight\|in_flight" ui.rs`
+> returns nothing.
+>
+> **This fix was written and never landed.** Single-flight for `summary_now` was review F1 of
+> `5e7f455` and one of the three items handed to the rc3 agent (`aaa93e1d302fbdefb`), which stalled
+> at 01:26 with a non-compiling tree — preserved as `stash@{0}`. The other two items of that batch
+> were re-done directly (`bba537c0`, `58070386`); this one was not.
+>
+> **NEXT — this is now a bounded code change, not an investigation:** gate `summary_now` so one
+> rebuild runs at a time and late arrivals wait for its result instead of starting their own. Then
+> re-run the concurrency-16 flood with `MIMALLOC_SHOW_STATS=1` and compare `committed` against the
+> 26.3 GiB baseline recorded above. That single number is the pass/fail.
+
 > **MEMORY DIAGNOSED — IT IS THE RUST HEAP, AND THE PREVIOUS ENTRY SAYING OTHERWISE IS WRONG.**
 > `MIMALLOC_SHOW_STATS=1` on the same concurrency-16 flood, mimalloc's own accounting:
 >
