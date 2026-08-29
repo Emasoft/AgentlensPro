@@ -16,6 +16,39 @@ eht: []
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-08-29
 
+> **MEMORY RESOLVED: RSS TRACKS ALLOCATION CHURN, NOT ANY RESIDENT STRUCTURE. The "leak" framing
+> was wrong, and so was my falsification of hypothesis #1.**
+>
+> The control I should have taken first — boot the server against the real corpus and ingest
+> NOTHING:
+>
+> | scenario | RSS | mimalloc committed | spans ingested | cards |
+> |---|---:|---:|---:|---:|
+> | **boot scan only, idle** | **1.32 GB** | **1.8 GiB** | **0** | 20,469 |
+> | live server, 33 min real traffic | 5.00 GB | — | ~63,000 | 26,256 |
+> | synthetic flood | 26 GB | 26.4 GiB | 200,000 @ 162k/s | — |
+>
+> RSS scales with **cumulative allocation churn**, not with anything resident. That is exactly why
+> every structure audited came back correctly small — the window, both single-slot caches,
+> `otel_attribution`, the 24-entry accum LRU, and `log_sessions` at 41.9 MB were all accurate
+> measurements of things that were never the cause. There is no missing 4.5 GB of live data; there
+> is a high-water mark of transient allocation that mimalloc keeps in its arenas.
+>
+> **HYPOTHESIS #1 WAS PROBABLY RIGHT AND I KILLED IT ON A PROXY.** I "falsified" allocator retention
+> because `MIMALLOC_PURGE_DELAY=0 / RESET_DELAY=0 / ABANDONED_PAGE_PURGE=1` did not lower RSS
+> (28.30 vs 28.66 GB) — but I never verified those variables had any effect, and the stats show
+> mimalloc purged 65.1 GiB in the run WITHOUT them. Purging was already happening; the env vars were
+> redundant, so the experiment tested nothing. Setting a knob is not evidence the knob did something
+> — the same proxy-for-the-thing failure this card has now recorded five times.
+>
+> **CONSEQUENCE FOR THE USER'S QUESTION.** "Using too much memory" is answered: at real load the
+> floor is ~1.3 GB from the boot scan, rising with churn. The TS comparison (~1.5 GB) was measured
+> against a server doing the same boot scan, so the honest gap at idle is roughly PARITY, not 3.3x —
+> the earlier 3.3x compared a 33-minute-old alcore mid-ingest against a TS figure of unknown
+> provenance. **Do not "fix" a leak that does not exist.** If the arena high-water is genuinely
+> unacceptable, the levers are allocator configuration (arena reuse / eager decommit, VERIFIED to
+> take effect this time) or reducing per-span transient allocation — not another structure hunt.
+
 > **`log_sessions` FALSIFIED TOO — MEASURED, NOT ARGUED. STOP GUESSING AND PROFILE.**
 > The previous entry called `log_sessions` "the only unbounded structure left" and proposed a count
 > ceiling. Measured before building it, per this card's own rule: `GET /api/summary` on the live
