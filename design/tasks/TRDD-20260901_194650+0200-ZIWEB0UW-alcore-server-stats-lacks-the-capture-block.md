@@ -1,9 +1,9 @@
 ---
 trdd-id: ZIWEB0UW
 title: alcore /api/server-stats lacks the capture block so status prints capture unknown
-column: testing
+column: ai_review
 created: 2026-09-01T19:46:50+0200
-updated: 2026-09-01T20:28:24+0200
+updated: 2026-09-01T21:01:24+0200
 current-owner: agentlenspro-15
 task-type: bugfix
 ---
@@ -36,3 +36,7 @@ unconditionally — both now engine-parity via alcoreBin()).
 REMAINING BOX: `bodies.parked` gauge (TRDD-8TM7I49X ts-row-mismatch park) is not in alcore's
 block yet, so the PARKED suffix is silently omitted from `server status`. Port it the same way
 (counter or bounded scan mirroring the TS semantics), then → ai_review.
+
+PARKED GAUGE SHIPPED (`3b7bfcd6`) and verified live: the status line prints the full TS-parity
+capture line including 'PARKED 307 file(s) 144.3MB'. Both acceptance criteria met → ai_review.
+Deploy lesson captured as ATOM-SFLG-1NSX (in-place cp SIGKILL).
