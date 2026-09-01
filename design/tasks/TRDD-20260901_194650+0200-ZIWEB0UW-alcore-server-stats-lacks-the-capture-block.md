@@ -1,9 +1,9 @@
 ---
 trdd-id: ZIWEB0UW
 title: alcore /api/server-stats lacks the capture block so status prints capture unknown
-column: todo
+column: testing
 created: 2026-09-01T19:46:50+0200
-updated: 2026-09-01T19:46:50+0200
+updated: 2026-09-01T20:28:24+0200
 current-owner: agentlenspro-15
 task-type: bugfix
 ---
@@ -26,3 +26,13 @@ statusline `prompt_cache_ttl` ground truth is a separate concern — keep it its
 
 Acceptance: `agentlenspro server status` against a live alcore prints a real capture line;
 mutation check — zeroing the counter changes the line.
+
+## STATE — 2026-09-01 — SHIPPED (`0c19090d`), one gauge remaining
+
+`bodies.live {files,newestMs}` shipped and verified end-to-end against the live server
+("328 live file(s), newest 1s ago"). Cargo gates 0/0/0, mutation-tested. The same deploy
+exposed and fixed the TS-resurrection gap (hook-revive + setup spawning server.js
+unconditionally — both now engine-parity via alcoreBin()).
+REMAINING BOX: `bodies.parked` gauge (TRDD-8TM7I49X ts-row-mismatch park) is not in alcore's
+block yet, so the PARKED suffix is silently omitted from `server status`. Port it the same way
+(counter or bounded scan mirroring the TS semantics), then → ai_review.
