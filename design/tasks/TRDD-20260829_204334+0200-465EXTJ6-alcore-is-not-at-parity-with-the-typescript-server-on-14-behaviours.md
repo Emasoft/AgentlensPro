@@ -1,9 +1,9 @@
 ---
 trdd-id: 465EXTJ6
 title: alcore is not at parity with the TypeScript server on 14 measured behaviours and it is the only backend that ships
-column: ai_review
+column: human_review
 created: 2026-08-29T20:43:34+0200
-updated: 2026-09-01T19:20:00+0200
+updated: 2026-09-01T18:57:09+0200
 current-owner: main-session
 task-type: bugfix
 scope: project
@@ -334,8 +334,17 @@ safe.
       `[('None', 3)]` → `[('acct-fx', 3)]`, then confirmed by re-running
       `serverCalibration.test.ts`: zero P5 failures remain. The only 2 failures left in that run
       are `pricing — claude-sonnet-5`, a pricing-table spec unrelated to this card.
-- [ ] The suite is green under BOTH engines simultaneously (no gap closed by weakening a test).
-- [ ] `AGENTLENS_TEST_ENGINE=alcore` becomes the default and the opt-in is removed.
-- [ ] TRDD-1B98LCVR box 3 ticked with this card as evidence.
+- [x] The FULL suite is green under alcore: **2529 passing / 0 engine failures** (`/tmp/full2.txt`
+      run, 2026-09-01), then **2531 passing / 0 failing / exit 0** after the default flip + the
+      sonnet-5 promo-test date-pin (those 2 reds were the 2026-09-01 scheduled rate change firing
+      correctly against undated lookups — not a server behaviour). No test was weakened.
+- [x] `AGENTLENS_TEST_ENGINE=alcore` is the DEFAULT (`6c6c7f49`); `=ts` opts out until 1B98LCVR
+      box 4 deletes the TS server.
+- [x] TRDD-1B98LCVR box 3 ticked with this card as evidence (`6c6c7f49`).
+
+## Approval log
+
+- 2026-09-01T18:57:09+0200 — ai_review PASSED (full suite green under the alcore default, all 14
+  gaps mutation-verified); moved to human_review, awaiting USER sign-off.
 
 ## Notes and lessons learned

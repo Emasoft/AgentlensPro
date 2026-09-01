@@ -3,7 +3,7 @@ trdd-id: 1B98LCVR
 title: Retire the TypeScript backend from the package so Rust is the only server that ships
 column: dev
 created: 2026-08-28T22:05:59+0200
-updated: 2026-08-29T16:58:00+0200
+updated: 2026-09-01T18:56:54+0200
 current-owner: claude-agentlenspro
 task-type: refactor
 project-id: agentlenspro
@@ -69,12 +69,20 @@ semantics, and the hard error belongs only where the server ENGINE is chosen. 3 
 `src/test/alcoreCutover.test.ts` cover every branch; `check-types` and `compile-tests` exit 0 and
 the `alcore cutover seam` suite is 9/9.
 
-**NEXT ACTION**: box 2 — remove `standalone/server.js` from `package.json` `files`, the `server`
-esbuild target, and `findServerJs`, and make `check-dist-contents` assert the bundle is ABSENT from
-the tarball. Box 1 is its precondition and is now met. **Before starting it, re-read the lesson two
-paragraphs up**: both gaps found so far were BEHAVIOUR that existed only in `standalone/server.ts`
-(a log line, an env read), not routes — so grep for behaviour, not only for filenames, or box 4
-will delete something nothing was watching for.
+**BOXES 2+3 DONE (2026-09-01, `d58d6e1` + `6c6c7f49`).** Nothing TS ships (`files` + FORBIDDEN
+gate), and the suite boots alcore BY DEFAULT — all 14 parity gaps of TRDD-465EXTJ6 closed, full
+suite 2531 passing / 0 failing under the default. The esbuild `server` target and `findServerJs`
+survive only as the no-Rust-binary fallback (CI, fresh clones).
+
+**NEXT ACTION**: box 4 — delete `standalone/server.ts` + the `src/**` modules only it imports +
+the esbuild `server` target + `findServerJs`. HARD PRECONDITION discovered while flipping box 3:
+CI (`ci.yml` node job, `publish.yml:83`) runs `test:unit` with NO Rust build, so today it silently
+falls back to `server.js`; deleting server.ts without first making CI build release alcore (or
+download the bin-native artifact) before `test:unit` turns every CI server test into a spawn
+error. Order: (1) CI builds/provides alcore before test:unit, (2) verify CI green — REQUIRES
+PUSHING the ~34 unpushed commits, which the USER has not yet authorized, (3) then delete. **And
+re-read the behaviour-not-routes lesson above before deleting**: grep for log lines, env reads,
+guards that exist only in server.ts, not just for filenames.
 
 **Do NOT treat this card as blocked on nothing.** `blocked-by:` is empty in the frontmatter but the
 endpoint gap is a genuine prerequisite; it is recorded here rather than as a fabricated card id.
@@ -98,10 +106,15 @@ downgrade on any other.
       missing/non-executable binary is a **boot error** naming the platform, not a fallback to TS
       (fail-fast; no second server to drift against). — `48a154a`; the two legitimate `null` cases
       (unsupported platform, absent `bin-native/`) are preserved deliberately, see the STATE table.
-- [ ] Remove `standalone/server.js` from `package.json` `files`, the `server` esbuild target, and
-      `findServerJs`; `check-dist-contents` asserts the bundle is ABSENT from the tarball.
-- [ ] Every test that boots `server.js` (the P9 browser smoke, `spawnServerWithRetry` users) boots
-      `alcore` instead — the smoke suite then IS the end-to-end proof the USER asked for.
+- [x] Remove `standalone/server.js` from `package.json` `files`; `check-dist-contents` asserts the
+      bundle is ABSENT from the tarball (FORBIDDEN regex) — `d58d6e1`. The esbuild target and
+      `findServerJs` are RETAINED deliberately: they are the test/CI fallback when no Rust binary
+      exists (CI runs `test:unit` with no cargo build), so they can only go with box 4.
+- [x] Every test that boots `server.js` boots `alcore` instead: `AGENTLENS_TEST_ENGINE` now
+      DEFAULTS to alcore (`6c6c7f49`), after the full suite ran green under it — 2529 passing,
+      0 engine failures (the only 2 reds were undated sonnet-5 promo-pricing tests that the
+      2026-09-01 scheduled rate change correctly flipped; pinned in the same commit). Re-run
+      after the flip: 2531 passing, 0 failing, exit 0. `=ts` opts out; no-binary still falls back.
 - [ ] `standalone/server.ts` is deleted only after the above is green; the `src/**` modules it alone
       imported go with it (`scripts/check-no-mirrors.js` and `check-types` stay green).
 - [ ] `agentlenspro setup` / `server start|restart|status|stop` verified against the installed
