@@ -3,7 +3,7 @@ trdd-id: SIGBCMGL
 title: Align agentlenspro taxonomies and diagnostics with Claude Code 2.1.233→2.1.252
 column: dev
 created: 2026-09-01T19:20:48+0200
-updated: 2026-09-01T19:25:03+0200
+updated: 2026-09-01T19:38:10+0200
 current-owner: agentlenspro-15
 task-type: feature
 ---
@@ -34,25 +34,26 @@ Done this session (commits named below); remaining boxes are docs/design work, n
 - [ ] **`rate_limits.spend_limit` (2.1.251)** — deliberately NOT guaranteed yet: no gateway on
       this machine, so the flattened shape is unverifiable. Add from a REAL captured row only
       (the YE15B2JK step-1 rule). A comment in `GUARANTEED_COLUMNS` records this.
-- [ ] **TTL-regime matrix update (TRDD-VY1IUVUM consumer)** — 2.1.243/248 broke "fresh subagents
+- [x] **TTL-regime matrix update (TRDD-VY1IUVUM consumer)** — 2.1.243/248 broke "fresh subagents
       are ALWAYS 5m" open: `promptCacheTtl` + `subagentPromptCacheTtl` settings (API-key/cloud
       users) and per-agent `experimental.cacheTtl` frontmatter now set the tier explicitly. The
       statusline `prompt_cache_ttl` column is the per-session ground truth and should be preferred
-      over regime inference wherever a session has samples. Update `cache-ttl-model` memory page +
-      the ttl-regime resolution code to consult it.
+      over regime inference wherever a session has samples. DONE: `cache-ttl-model` memory page
+      atom (ATOM-N9P1-MNYD, `f36a934d`). REMAINING (own follow-up): the server-side ttl-regime
+      resolution code does not yet consult `prompt_cache_ttl` — a Rust change in alcore.
 - [x] **`modelPricing` managed setting (2.1.243) + 1.1× data-residency premium (2.1.239)** —
       documented in `pricing.ts` (`46576993`): both are sanctioned harness-vs-list divergences;
       diagnostics comparing the two must label a systematic org-wide offset as contracted/premium
       rates, never a pricing-table bug. No rate substitution implemented (neither applies to this
       machine; doctrine already prefers harness `cost_usd`).
-- [ ] **Version-gated cache-miss causes** (docs only, per the TRDD-B9ERTBZ9 bar — name a cause
+- [x] **Version-gated cache-miss causes** (docs only, per the TRDD-B9ERTBZ9 bar — name a cause
       only when distinguishable): pre-2.1.248 hourly OAuth-refresh tool-def re-render; ScheduleWakeup
       def change on overage resume (fixed 2.1.248); OTEL trace fragmentation from PreToolUse-deferred
       tools (fixed 2.1.239 — affects span-store session stitching for older captures). Record in
       the cache-invalidation research page.
 - [x] **Sonnet 5 auto-compact at ~967K on the 1M window (2.1.247)** — verified no-op: grep found
       no 934K/967K constant anywhere in `src/`; nothing keys on the old figure.
-- [ ] **Statusline data-quality caveat**: pre-2.1.243 samples can carry a stale pre-reset
+- [x] **Statusline data-quality caveat**: pre-2.1.243 samples can carry a stale pre-reset
       `rate_limits` percentage after an idle window reset (fixed since). Note on the
       statusline-capture-and-store memory page for anyone querying historical windows.
 - [x] **Todo-tool taxonomy (2.1.233)**: verified no-op — grep found zero TaskCreate/TodoWrite
