@@ -52,6 +52,34 @@ in the window at peak. The spool drain is data-loss-shaped (events accepted, the
 The MCP CORS gaps are a read-scope hardening (TRDD-F6BM1BDI) that alcore does not enforce. P5
 calibration is a feature that silently does nothing.
 
+## 2026-09-01 — 7 of 14 CLOSED (`0c1edbe`, `ba3e180b`); MCP CORS narrowed with file:line
+
+Closed: admission control ×3, hook-spool drain, statusline liveness clock, `degradations` counter,
+P5 calibration ×5 → **14 gaps became 7**.
+
+**MCP CORS — NARROWED, not started. The assigned worker landed NOTHING; `serve_mcp` is untouched.**
+Read before writing code — this is the analysis that would otherwise be redone:
+
+`serve_mcp` (`ui.rs:3540`) routes `/mcp` GET and POST to the SHARED `handle`, which already applies
+`is_disallowed_cross_origin` and the ACAO policy. So the gap is **not** a missing origin policy —
+it is what happens on the two paths that never reach that preamble:
+
+1. **The OPTIONS preflight returns early at `ui.rs:3557-3562`** with `204` and NO CORS headers at
+   all. The code's own comment concedes it: *"The CORS headers themselves are added by `handle`'s
+   preamble for real requests."* A preflight that carries no ACAO is exactly the "no scoped ACAO"
+   the test reports.
+2. **The 4 MB cap is absent on this listener.** `handle` uses `MAX_BODY_BYTES` = 64 MB (the OTLP
+   contract). POST /mcp EXECUTES a tool, and its cap is 4 MB precisely because uncapped buffering
+   there was an OOM vector — so the cap has to be applied per-listener, not inherited from OTLP.
+
+**Do NOT write a second origin policy.** `is_disallowed_cross_origin` and `read_body_capped` are
+already in `ui.rs`; the fix is to apply them on these two paths.
+
+**One caution about reading the test output:** the first ACAO failure asserts *"health check still
+responds"*, which reads like a CORS assertion but is a LIVENESS one — it means the server died
+earlier in the file. Fix the cap first and re-read the list; the three may not be three independent
+bugs.
+
 ## NEXT ACTION
 
 Work them in risk order, not list order: **admission/RSS shedding + the body cap first** (bounded
