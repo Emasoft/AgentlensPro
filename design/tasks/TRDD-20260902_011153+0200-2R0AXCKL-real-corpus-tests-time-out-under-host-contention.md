@@ -22,7 +22,7 @@ Two consecutive full unit-suite runs on the SAME tree (the 2.33.2 gate, alcore b
 
 | run | load at launch | verdict |
 |---|---|---|
-| full5, 2026-09-01 23:06 | ~20 (this repo's cargo build finishing) | 2536 passing / 0 failing / 9 pending |
+| full5, 2026-09-01 23:06 | ~20 (this repo's cargo build finishing) | 2536 passing / 0 failing / 9 pending — both tests `✔` (read from the per-test lines; a `comm` diff of the two runs' pass lists differs by exactly these two, and the pending 9→8 delta is a different real-machine test) |
 | full6, 2026-09-02 01:00 | ~10 (a foreign `cargo build` — vectrace — saturating CPU; live alcore at 7.4 GB RSS working the same bodies dir) | 2535 passing / **2 failing** / 8 pending, EXIT=2 |
 
 Both failures are mocha TIMEOUTS, not assertions:

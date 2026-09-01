@@ -33,12 +33,15 @@ caught that the gate above had none):** `timeout 1500 pnpm run test:unit` → **
 2535 passing / 2 failing / 8 pending. Both failures are TIMEOUTS in the two 🐌 real-machine tests
 that read `~/.agentlens/otel-bodies` (`cacheBreakTimeline.test.ts:697`, 120 s load-scaled;
 `forensicsIndex.test.ts:465`, 180 s) — both `this.skip()` when that dir is absent (`:698`,
-`:470`), so CI never runs them; both PASSED in full5 40 min earlier. Everything CI actually runs
-passed in both runs. What differed: a foreign `cargo build` (vectrace, another project) was
+`:470`), so CI never runs them; both were `✔` in full5 40 min earlier (READ from the per-test
+lines, not inferred from `0 failing`: a `comm` diff of the two runs' `✔` lists differs by exactly
+those two, and the 9→8 pending delta is a third real-machine test that skipped in full5 and passed
+in full6). Everything CI actually runs passed in both runs — list-level, not count-level. What differed: a foreign `cargo build` (vectrace, another project) was
 saturating the CPU during full6, and the live alcore (7.4 GB RSS) was working the same bodies dir.
 Tracked as TRDD-2R0AXCKL; NOT a release blocker.
-The 90-min post-summary linger seen after full5 did NOT recur: full6's process exited within seconds
-of its summary. INFERRED, unmeasured: the open handle belongs to those two real-corpus tests
+The 90-min post-summary linger seen after full5 did NOT recur: full6's process exit is BOUNDED to
+under a minute after its summary (launch 01:00:28 → `EXIT=2 at 01:10:51`, against mocha's rounded
+"10m" plus the tsc step — arithmetic, not a read of the summary's own timestamp). INFERRED, unmeasured: the open handle belongs to those two real-corpus tests
 COMPLETING (they timed out here, so nothing was left open) — which would also mean CI, where they
 skip, never sees it. The first CI on the pushed tree is the only measurement; if its node job
 (15-min cap) times out, the leak is real and `mocha --exit` would be the mask, not the fix.
