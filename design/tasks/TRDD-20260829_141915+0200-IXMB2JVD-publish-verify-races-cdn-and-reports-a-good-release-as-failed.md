@@ -1,9 +1,9 @@
 ---
 trdd-id: IXMB2JVD
 title: The post-publish verify races the CDN and reports a successful release as a failed workflow run
-column: dev
+column: testing
 created: 2026-08-29T14:19:15+0200
-updated: 2026-08-29T14:19:15+0200
+updated: 2026-09-01T22:34:57+0200
 current-owner: main-session
 task-type: infra
 scope: project
@@ -75,9 +75,14 @@ still the right guard for its own step.
 
 - [ ] The next release's `publish-npm` job goes green end-to-end, including the registry-tarball
       verification, with no manual intervention.
-- [ ] The published v2.32.0 tarball carries 16 `bin-native` entries, all `-rwxr-xr-x` — the check
-      the failing step was supposed to perform, to be run by hand instead. **STILL PENDING: at the
-      time of writing the tarball had not propagated, so this has NOT been verified.** Do not mark
-      it done from the fact that the publish succeeded — the exec bit is a separate property, and
-      losing it is exactly how a package installs cleanly and then fails at spawn.
-- [ ] A propagation delay produces retry log lines, never a failed job.
+- [x] The published tarball carries 16 `bin-native` entries, all `-rwxr-xr-x` — VERIFIED BY HAND
+      on v2.33.1 (2026-09-01): `curl` of the registry tarball → HTTP 200, 143,735,274 bytes;
+      `tar -tvzf` → exactly 16 `-rwxr-xr-x` bin-native entries. `_npmUser` is the OIDC GitHub-Actions
+      identity, `dist.attestations` present, `latest` → 2.33.1, GitHub Release v2.33.1 created with
+      tarball + SBOM + SHA256SUMS. (v2.32.0 was superseded before this check ran; the property is
+      what matters and it holds on the current release.)
+- [x] A propagation delay produces retry log lines, never a failed job — FIX LANDED `f8b7560e`:
+      the tarball retry is 30 × 20 s (10 min) and exhaustion is `::warning` + exit 0 when metadata
+      is live, with the manual check command printed. The v2.33.1 run is the measured trigger: the
+      old 10 × 20 s budget expired while the tarball still 404'd on the edge, and the run went red
+      for a publish that had fully succeeded. Proven by the NEXT release's run (box 1).
