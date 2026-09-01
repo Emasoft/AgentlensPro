@@ -136,6 +136,31 @@ precondition fails if alcore's session cards do not carry `timeline[]` entries o
 `type: "api_request"` (with `inputTokens`/`outputTokens`/`cacheReadTokens`/`cacheCreateTokens`
 and an `accountUuid`) after the fixture's consumption is ingested.
 
+**MEASURED AGAINST THE LIVE SERVER — alcore POPULATES `accountWindows` CORRECTLY:**
+
+```
+$ curl -s localhost:3000/api/burn-status   (the live alcore, real data, 9h+ uptime)
+accountWindows count: 2
+  acct=75099fe9  events=134
+  acct=None      events=2
+```
+
+**So the whole chain WORKS in production.** `api_request_events` → `compute_account_window_budgets`
+→ `accountWindows` produces real per-account windows with real event counts against real ingested
+data. The product is not broken here.
+
+⇒ **The remaining 5 are very likely a FIXTURE problem, not an alcore parity gap** — which is
+exactly what the test's own comment predicts: *"a failure here means the fixture broke, not the
+calibration."* `ingestAccountConsumption` posts a synthetic shape that the TS server accepted and
+that alcore does not turn into a card timeline (e.g. it posts raw consumption where alcore needs
+`api_request` timeline entries on a session card).
+
+**RECLASSIFY BEFORE FIXING.** Do not "port" anything until this is settled: compare what
+`ingestAccountConsumption` posts against what the LIVE feed produces for one card
+(`/api/sessions` → a card's `timeline[]`). If the fixture's shape is simply one alcore never
+supported, the honest resolution is to fix the FIXTURE, and the parity count drops from 5 to 0 —
+the TypeScript server would then be blocking on nothing.
+
 **START HERE:** ingest the fixture, then dump one session card and check whether `timeline[]`
 contains `api_request` entries at all. That single observation splits the remaining work in two:
 cards have no timeline ⇒ the card builder is the gap; cards have a timeline but no `accountUuid`
