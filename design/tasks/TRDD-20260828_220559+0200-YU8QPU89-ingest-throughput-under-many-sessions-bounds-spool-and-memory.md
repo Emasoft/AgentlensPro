@@ -1,9 +1,9 @@
 ---
 trdd-id: YU8QPU89
 title: Verify alcore ingest keeps up with many parallel Claude Code sessions without filling the spool or growing memory
-column: todo
+column: testing
 created: 2026-08-28T22:05:59+0200
-updated: 2026-08-29T10:47:16+0200
+updated: 2026-09-01T22:00:21+0200
 current-owner: claude-agentlenspro
 task-type: audit
 project-id: agentlenspro
@@ -490,8 +490,12 @@ highest rate: spool file count + bytes, RSS, spans/s ingested, `/api/summary` la
 ## Acceptance
 
 - [ ] at 32× the spool stays bounded (steady-state file count does not trend up over the hour)
-- [ ] RSS plateaus and the plateau is EXPLAINED (which structure holds it, measured — heap profile
-      or a size accounting of the span window), with a cap or eviction if it is not the window
+- [x] RSS plateaus and the plateau is EXPLAINED — 2026-09-01 sustained soak (22.5 min, ≈1,234
+      session-equivalents, 32,082 spans/s): RSS 14.8 → 26–27 GB then 22 GB while load continued;
+      the holder IS the span window — the memory valve narrowed it 86,400 s → 300 s in 9 steps and
+      held ~1.0 M in-window spans throughout (eviction = the valve). 0 spills / 0 dropped / 0 shed.
+      Report: reports/spool-backpressure/20260901_192500+0200-sustained-soak-alcore-spool-memory.md;
+      generator committed at scripts/bench/alcore-ingest-flood.mjs (the soak wrapper is scripts_dev).
 - [ ] the numbers and the generator are committed (report path recorded here); any fix is an NPT
 
 ## Notes and lessons learned

@@ -1,9 +1,9 @@
 ---
 trdd-id: NDKKOABG
 title: rust-core was never built or tested by CI — add the job, with caching
-column: dev
+column: ai_review
 created: 2026-08-27T22:45:45+0200
-updated: 2026-08-27T22:45:45+0200
+updated: 2026-09-01T22:00:21+0200
 current-owner: main-session
 task-type: infra
 scope: project

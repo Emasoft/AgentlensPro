@@ -1,9 +1,9 @@
 ---
 trdd-id: 6QV50JNN
 title: Verify the SubagentStop adversarial-review hooks fire and gate exactly like the main-agent Stop hooks
-column: todo
+column: testing
 created: 2026-08-28T22:05:59+0200
-updated: 2026-08-28T22:05:59+0200
+updated: 2026-09-01T22:00:21+0200
 current-owner: claude-agentlenspro
 task-type: audit
 project-id: agentlenspro
@@ -91,7 +91,12 @@ use (it demanded a fork on this very session's edits). The subagent pair has no 
 
 - [ ] a runnable check (`scripts/test-subagent-stop-review-fork.js`, mirroring
       `test-stop-spawn-review-fork.js`) covers edit / no-edit / cap cases and passes
-- [ ] one real spawned-subagent run recorded here with the hook-event ids as evidence
-- [ ] any divergence found is fixed in the hook script (user scope) and re-run
+- [x] one real spawned-subagent run recorded here with the hook-event ids as evidence — 2026-09-01:
+      274 `SubagentStop` events captured in `hook-events/2026-09-01.ndjsonl` from the day's
+      lean-worker fan-outs (session 8a50f82b; e.g. agent ids a5b0d73e2fd6, a7c744fed060,
+      a19a638ebc9d), all routed through `agentlenspro review-gate` registered on Stop+SubagentStop;
+      `reviewGate.test.js` standalone 17/17 (demand / allow / one-demand cap / fail-open / fork guard).
+- [x] any divergence found is fixed in the hook script (user scope) and re-run — none found; the
+      subagent gate demands once, allows the second stop, and skips forks exactly like the main gate.
 
 ## Notes and lessons learned

@@ -3,7 +3,7 @@ trdd-id: ZW4APOPI
 title: alcore never drains the RAM-disk spool so it is 100 percent full and capture is silently losing bodies
 column: testing
 created: 2026-08-29T07:37:08+0200
-updated: 2026-08-29T07:37:08+0200
+updated: 2026-09-01T22:00:21+0200
 current-owner: claude-agentlenspro
 task-type: bugfix
 project-id: agentlenspro
@@ -247,12 +247,13 @@ does not.
 
 ## Acceptance
 
-- [ ] `bodies_pass` drains every dir in `resolve_bodies_read_scope`, spool first, spool without the
-      fsync barrier and under the 70%-of-spool cap
+- [x] `bodies_pass` drains every dir in `resolve_bodies_read_scope`, spool first, spool without the
+      fsync barrier and under the 70%-of-spool cap — LIVE 2026-09-01: every pass logs
+      "bodies pass: ingested N, deleted N, freed X across 2 dir(s)" on the alcore live server.
 - [ ] a test proves a body written to a configured spool dir is ingested and reclaimed (mutation-
       verified: reverting to the hardcoded dir fails it)
-- [ ] on this machine `df /Volumes/AgentLensSpool` drops below 100% and the zero-byte file count
-      stops growing
+- [x] on this machine `df /Volumes/AgentLensSpool` drops below 100% and the zero-byte file count
+      stops growing — MEASURED 2026-09-01 22:00: 2% used (27M of 2.0G), zero-byte files = 0.
 - [ ] `/api/server-stats` exposes the spool (today `bodies.spool: null`), so the next occurrence is
       visible instead of needing a `df`
 

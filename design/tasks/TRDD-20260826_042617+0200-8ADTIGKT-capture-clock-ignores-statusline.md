@@ -1,9 +1,9 @@
 ---
 trdd-id: 8ADTIGKT
 title: The capture-liveness clock ignores statusline samples so a statusline-only machine never raises CAPTURE DOWN
-column: todo
+column: ai_review
 created: 2026-08-26T04:26:17+0200
-updated: 2026-08-26T05:19:33+0200
+updated: 2026-09-01T22:00:21+0200
 current-owner: AgentlensPro session
 task-type: bugfix
 severity: LOW
