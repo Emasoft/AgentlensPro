@@ -38,7 +38,7 @@ import {
   installHooks, installSkill, isOurHookCommand, rebuildEventMatchers, resolveOnPath,
   sha256File, SKILL_NAMES, findPackageRoot, skillTreeHash, installAgents, AGENT_NAMES,
 } from './hookInstall'
-import { findServerJs } from './serverControl'
+import { alcoreBin, alcoreServeArgs, findServerJs } from './serverControl'
 import { parsePidLock } from '../serverRuntime'
 
 export interface SetupOptions {
@@ -875,26 +875,34 @@ const stepServer: StepDef = {
     if (reviveBraked()) {
       return { result: { step: this.name, found, action: 'start server', verify: 'FAIL', detail: `revive brake is set (${noRevivePath()}) — \`agentlenspro server start\` clears it` }, acted: false }
     }
-    const serverJs = findServerJs()
+    // ENGINE PARITY WITH `server start` (TRDD-1B98LCVR): pick alcore exactly like serverControl —
+    // this used to spawn `node server.js` unconditionally, one of the two paths that kept
+    // resurrecting the TS backend after the Rust cutover (the other was the hook revive).
+    const alcore = alcoreBin()
+    const serverJs = alcore ? '' : findServerJs()
     fs.mkdirSync(ctx.dataDir, { recursive: true })
     const logFile = path.join(ctx.dataDir, 'server.log')
     let outFd: number | 'ignore'
     try { outFd = fs.openSync(logFile, 'a') } catch { outFd = 'ignore' }
-    const child = spawn(process.execPath, ['--max-old-space-size=6144', serverJs], {
-      cwd: path.dirname(path.dirname(serverJs)),
-      detached: true,
-      stdio: ['ignore', outFd, outFd],
-      env: {
-        ...process.env,
-        [STARTED_BY_ENV]: 'setup',  // boot-provenance stamp (TRDD-8VGQK9L9); found by sweep
-        HOME: ctx.home,
-        DATA_DIR: ctx.dataDir,
-        UI_PORT: String(ctx.uiPort),
-        MCP_PORT: String(ctx.mcpPort),
-        OTLP_PORT: String(ctx.otlpPort),
-        AGENTLENS_OPEN_BROWSER: '0', // setup verifies with HTTP probes; a browser popup is noise
-      },
-    })
+    const spawnEnv = {
+      ...process.env,
+      [STARTED_BY_ENV]: 'setup',  // boot-provenance stamp (TRDD-8VGQK9L9); found by sweep
+      HOME: ctx.home,
+      DATA_DIR: ctx.dataDir,
+      UI_PORT: String(ctx.uiPort),
+      MCP_PORT: String(ctx.mcpPort),
+      OTLP_PORT: String(ctx.otlpPort),
+      AGENTLENS_OPEN_BROWSER: '0', // setup verifies with HTTP probes; a browser popup is noise
+    }
+    // alcore reads NO env for ports/data-dir — flags only — so the ctx values go on the argv.
+    const child = alcore
+      ? spawn(alcore, alcoreServeArgs(spawnEnv, ctx.dataDir), { cwd: ctx.dataDir, detached: true, stdio: ['ignore', outFd, outFd], env: spawnEnv })
+      : spawn(process.execPath, ['--max-old-space-size=6144', serverJs], {
+        cwd: path.dirname(path.dirname(serverJs)),
+        detached: true,
+        stdio: ['ignore', outFd, outFd],
+        env: spawnEnv,
+      })
     child.unref()
     if (typeof outFd === 'number') fs.closeSync(outFd)
 

@@ -212,6 +212,34 @@ pub fn archive_disk_usage(dir: &Path) -> (u64, u64, u64) {
     (volumes, bytes, entries)
 }
 
+/// src/bodyArchive.ts `liveBodiesLiveness`, generalized over every readable capture dir (spool +
+/// legacy — `burn::guard::resolve_bodies_read_scope`) rather than the TS's single
+/// `PRIMARY_BODIES_DIR`: alcore has both dirs live during a spool drain and the TS's single-dir
+/// read would under-count exactly then. `newestMs` is `None` for an empty/absent scope — an
+/// ABSENT reading, never 0, which would render as "captured just now" (TRDD-ZIWEB0UW).
+pub fn live_bodies_liveness(dirs: &[std::path::PathBuf]) -> (u64, Option<f64>) {
+    let (mut files, mut newest_ms) = (0u64, None::<f64>);
+    for dir in dirs {
+        let Ok(rd) = std::fs::read_dir(dir) else { continue };
+        for e in rd.flatten() {
+            let name = e.file_name();
+            let Some(name) = name.to_str() else { continue };
+            if !name.ends_with(".request.json") && !name.ends_with(".response.json") {
+                continue;
+            }
+            files += 1;
+            let Ok(meta) = e.metadata() else { continue };
+            let Ok(modified) = meta.modified() else { continue };
+            let Ok(since_epoch) = modified.duration_since(std::time::UNIX_EPOCH) else { continue };
+            let ms = since_epoch.as_secs_f64() * 1000.0;
+            if newest_ms.is_none_or(|n| ms > n) {
+                newest_ms = Some(ms);
+            }
+        }
+    }
+    (files, newest_ms)
+}
+
 /// Resident set size of this process, bytes. macOS: proc_pidinfo(PROC_PIDTASKINFO); Linux:
 /// /proc/self/statm × page size; elsewhere 0 (unknown, not a guess).
 pub fn rss_bytes() -> u64 {
@@ -324,6 +352,12 @@ pub fn server_stats(st: &CoreState, now_ms: i64) -> Value {
     let (hook_files, hook_bytes) = buckets_disk_usage(&data_dir.join("hook-events"));
     let (log_ev_files, log_ev_bytes) = buckets_disk_usage(&data_dir.join("log-events"));
     let (volumes, archive_bytes, entries) = archive_disk_usage(&data_dir.join("otel-bodies-archive"));
+    // TRDD-ZIWEB0UW: capture WORKS (bodies land on disk) but this endpoint never said so — the CLI
+    // rendered "capture: unknown (server predates capture reporting)" for every alcore boot because
+    // `bodies.live` was absent. Every readable capture dir (spool + legacy), same low-frequency
+    // scan cost as the TS's single-dir version this mirrors (bodyArchive.ts `liveBodiesLiveness`).
+    let bodies_scope = crate::burn::guard::resolve_bodies_read_scope(data_dir, &std::env::vars().collect());
+    let (live_files, live_newest_ms) = live_bodies_liveness(&bodies_scope.dirs);
     let hook_spooled = std::fs::read_dir(data_dir.join("hook-spool"))
         .map(|rd| rd.flatten().filter(|e| e.file_name().to_str().is_some_and(|n| n.ends_with(".json"))).count())
         .unwrap_or(0);
@@ -387,6 +421,10 @@ pub fn server_stats(st: &CoreState, now_ms: i64) -> Value {
         "bodies": {
             "archive": { "volumes": volumes, "bytes": archive_bytes, "entries": entries },
             "lastPass": { "at": 0, "removedFiles": 0, "freedBytes": 0, "keptFiles": 0, "keptBytes": 0 },
+            "live": { "files": live_files, "newestMs": live_newest_ms.map(num).unwrap_or(Value::Null) },
+            // NOT PORTED: PARKED count/bytes (TRDD-8TM7I49X pass-state cross-reference) — key
+            // absent, same convention as every other not-yet-ported row in this file; the CLI's
+            // `parkedSuffix` already renders nothing for an absent field (never "0 parked").
             // NOT PORTED: the spool (TRDD-KB17X5G2) — SPOOL_MODE off ⇒ null, as the TS server
             // reports on a machine without a spool mount.
             "spool": Value::Null,
@@ -430,4 +468,46 @@ pub fn server_stats(st: &CoreState, now_ms: i64) -> Value {
         // then dropped. It just never surfaced it, so a swallowed payload was invisible.
         "degradations": degradations,
     })
+}
+
+#[cfg(test)]
+mod capture_block_tests {
+    use super::*;
+    use std::time::{Duration, SystemTime};
+
+    /// TRDD-ZIWEB0UW: `bodies.live` must report the real file count and newest mtime — a zeroed
+    /// count (empty dir) must NOT report the same `files`/`newestMs` as a populated one, which is
+    /// exactly what a stub returning constants would fail to catch.
+    #[test]
+    fn live_bodies_liveness_counts_request_response_files_and_finds_the_newest() {
+        let dir = std::env::temp_dir().join(format!("alcore-capture-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.request.json"), b"{}").unwrap();
+        std::fs::write(dir.join("a.response.json"), b"{}").unwrap();
+        std::fs::write(dir.join("ignored.txt"), b"not a body").unwrap();
+        // Backdate the first pair so the second write is unambiguously the newest even on a
+        // coarse-granularity filesystem clock.
+        let old = SystemTime::now() - Duration::from_secs(3600);
+        filetime::set_file_mtime(dir.join("a.request.json"), filetime::FileTime::from_system_time(old)).unwrap();
+        filetime::set_file_mtime(dir.join("a.response.json"), filetime::FileTime::from_system_time(old)).unwrap();
+        std::fs::write(dir.join("b.request.json"), b"{}").unwrap();
+
+        let (files, newest_ms) = live_bodies_liveness(std::slice::from_ref(&dir));
+        assert_eq!(files, 3, "counts only *.request.json/*.response.json, not the .txt file");
+        let newest_ms = newest_ms.expect("non-empty dir must report a newest mtime");
+        let b_mtime_ms = std::fs::metadata(dir.join("b.request.json")).unwrap().modified().unwrap()
+            .duration_since(std::time::UNIX_EPOCH).unwrap().as_secs_f64() * 1000.0;
+        assert!((newest_ms - b_mtime_ms).abs() < 1.0, "newest must be b.request.json's mtime, not a.*'s backdated one");
+
+        // Mutation check: an empty dir must report ZERO files and NO newest reading — not the same
+        // numbers as the populated case above, which is what proves the counter is really counting.
+        let empty_dir = std::env::temp_dir().join(format!("alcore-capture-test-empty-{}", std::process::id()));
+        std::fs::create_dir_all(&empty_dir).unwrap();
+        let (empty_files, empty_newest) = live_bodies_liveness(std::slice::from_ref(&empty_dir));
+        assert_eq!(empty_files, 0);
+        assert!(empty_newest.is_none());
+
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::remove_dir_all(&empty_dir).ok();
+    }
 }

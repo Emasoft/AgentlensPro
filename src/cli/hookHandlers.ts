@@ -19,7 +19,7 @@ import * as fs from 'fs'
 import * as path from 'path'
 import { isImageReadPath } from '../shared/imageReads'
 import { uiBaseUrl, dataDir } from './cliCore'
-import { findServerJs } from './serverControl'
+import { alcoreBin, alcoreServeArgs, findServerJs } from './serverControl'
 import { agentlensDisabled, reviveBraked, STARTED_BY_ENV } from './killSwitch'
 
 // D3K7QM2P/1a — hook durability. When the server can't take a hook event (down, or shedding under
@@ -133,8 +133,17 @@ function reviveDaemonDetached(): void {
     // every future hook process because each one re-reads it from the filesystem.
     if (process.env.AGENTLENS_NO_REVIVE === '1') return
     if (reviveDisabledOnDisk()) return
-    let serverJs: string
-    try { serverJs = findServerJs() } catch { return } // no bundle resolvable — cannot revive
+    // ENGINE PARITY WITH `server start` (TRDD-1B98LCVR): this revive used to spawn `node server.js`
+    // unconditionally, which made the TS backend RESURRECT ITSELF on this machine — measured
+    // 2026-09-01: two consecutive `server restart`s onto alcore each lost the single-instance race
+    // to a hook-revived TS server within seconds, because hooks fire from every live Claude session
+    // the moment the server is down. The revive must choose the engine exactly like serverControl.
+    let alcore: string | null = null
+    try { alcore = alcoreBin() } catch { return } // corrupt install: startServer reports it; a hook cannot
+    let serverJs = ''
+    if (!alcore) {
+      try { serverJs = findServerJs() } catch { return } // no engine resolvable — cannot revive
+    }
     // A REVIVED server logs, exactly like a `server start`ed one (TRDD-4FMHW124). This used to be
     // `stdio: 'ignore'`, and the cost was measured: on 2026-08-22 the server was replaced at
     // 21:51 while `server.log` still ended at the 20:57 generation's boot — so the death that
@@ -156,14 +165,17 @@ function reviveDaemonDetached(): void {
       outFd = fs.openSync(path.join(dataDir(), 'server.log'), 'a')
     } catch { /* keep 'ignore' — reviving matters more than logging it */ }
     try {
-      const child = spawn(process.execPath, ['--max-old-space-size=6144', serverJs], {
-        cwd: path.dirname(path.dirname(serverJs)),
-        // Provenance stamp for the server's boot line (TRDD-8VGQK9L9): of the spawn paths this
-        // is the one a human never invoked, so it is the one most worth naming in the log.
-        env: { ...process.env, [STARTED_BY_ENV]: 'hook-revive' },
-        detached: true,
-        stdio: ['ignore', outFd, outFd],
-      })
+      // Provenance stamp for the server's boot line (TRDD-8VGQK9L9): of the spawn paths this
+      // is the one a human never invoked, so it is the one most worth naming in the log.
+      const env = { ...process.env, [STARTED_BY_ENV]: 'hook-revive' }
+      const child = alcore
+        ? spawn(alcore, alcoreServeArgs(), { cwd: dataDir(), env, detached: true, stdio: ['ignore', outFd, outFd] })
+        : spawn(process.execPath, ['--max-old-space-size=6144', serverJs], {
+          cwd: path.dirname(path.dirname(serverJs)),
+          env,
+          detached: true,
+          stdio: ['ignore', outFd, outFd],
+        })
       child.unref()
     } finally {
       // The CHILD holds its own duplicate of the descriptor, so the parent must drop its copy or
