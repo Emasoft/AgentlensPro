@@ -6,7 +6,14 @@ All notable changes to AgentlensPro are documented here.
 
 ## [2.33.1] - 2026-09-01
 
+> 2.33.0 was tagged but never reached npm: its publish run failed in the unit-test gate because the
+> workflow restored the executable bit on `alcore` only, and the cross-engine parity tests — which
+> now find the other three Rust binaries — failed with `EACCES`. 2.33.1 is the first published build
+> of this line and carries everything listed under 2.33.0.
+
 ### Fixed
+
+- The publish workflow restores the executable bit on all four downloaded Rust binaries.
 
 - **`claude-fable-5-1` (Claude Code 2.1.257's new default Fable) now has its own rate-table entry**
   — $10/$50 per MTok with the documented $0.25/MTok cache read. Without an explicit key the

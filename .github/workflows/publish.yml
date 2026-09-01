@@ -90,8 +90,11 @@ jobs:
           path: rust-core/target/release
 
       # ZIP round-trips (upload-artifact/download-artifact) drop the unix executable bit.
-      - name: Make alcore executable
-        run: chmod +x rust-core/target/release/alcore
+      # ALL FOUR binaries, not just alcore: the artifact carries alstore/alscan/allogscan too, and
+      # the 🐌 cross-engine parity tests run whenever they FIND those binaries — chmod'ing alcore
+      # alone turned 15 previously-skipped tests into EACCES failures (v2.33.0's publish run).
+      - name: Make the Rust binaries executable
+        run: chmod +x rust-core/target/release/alcore rust-core/target/release/alstore rust-core/target/release/alscan rust-core/target/release/allogscan
 
       - name: Unit tests
         run: pnpm run test:unit
