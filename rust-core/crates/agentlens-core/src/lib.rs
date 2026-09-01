@@ -129,6 +129,17 @@ pub struct SummaryInputs {
     pub version: u64,
     pub spans: Vec<Arc<Value>>,
     pub log_sessions: IndexMap<String, Arc<Value>>,
+    /// The session→account map the summarizer resolves `accountId` through (TRDD-465EXTJ6).
+    ///
+    /// It has to travel IN the snapshot: `summary_over` is deliberately a free function with no
+    /// `&self` so the rebuild runs OFF the state lock (TRDD-HFV4AIT7), which means it cannot reach
+    /// `CoreState::accounts` on its own. Before this it was handed `&|_| None`, so the registry was
+    /// never consulted and EVERY card came out with no `accountId` — measured as
+    /// `accountWindows = [('None', 3)]` on an OTEL-only server.
+    ///
+    /// `Arc`, matching the two fields above, so building a snapshot stays a pointer copy — a deep
+    /// clone here would reintroduce the under-lock stall HFV4AIT7 removed.
+    pub accounts: Arc<IndexMap<String, String>>,
 }
 
 pub struct CoreState {
@@ -310,20 +321,25 @@ impl CoreState {
     /// computeSessionSummary (server.ts:2240) — summarizeSpans over the live window, then, when
     /// any log session exists, the feed-collision merge + the subagent link, sorted newest-first.
     pub fn session_summary(&self, now_ms: f64) -> Value {
-        Self::summary_over(&self.window.spans, &self.log_sessions, now_ms).0
+        Self::summary_over(&self.window.spans, &self.log_sessions, &self.accounts.snapshot(), now_ms).0
     }
 
     /// The inputs of one summary rebuild, copied under the state lock so the rebuild itself runs
     /// OUTSIDE it (TRDD-HFV4AIT7). Both containers hold `Arc`s, so this is a pointer copy per
     /// element, not a deep clone of the window.
     pub fn summary_snapshot(&self) -> SummaryInputs {
-        SummaryInputs { version: self.data_version, spans: self.window.spans.clone(), log_sessions: self.log_sessions.clone() }
+        SummaryInputs {
+            version: self.data_version,
+            spans: self.window.spans.clone(),
+            log_sessions: self.log_sessions.clone(),
+            accounts: Arc::new(self.accounts.snapshot()),
+        }
     }
 
     /// The off-lock half: `summary_over` on a snapshot. Free function shape on purpose — it takes
     /// no `&self`, so it cannot accidentally be called while the lock is held.
     pub fn summary_from(inputs: &SummaryInputs, now_ms: f64) -> (Value, IndexMap<String, Vec<Value>>) {
-        Self::summary_over(&inputs.spans, &inputs.log_sessions, now_ms)
+        Self::summary_over(&inputs.spans, &inputs.log_sessions, &inputs.accounts, now_ms)
     }
 
     /// Store a summary built off the lock, together with the attribution map built WITH it. The
@@ -342,9 +358,21 @@ impl CoreState {
     /// Returns the merged summary AND `otelAttributionBySession` (server.ts:2245) — the OTEL
     /// api_request entries per claude_code session, captured off the PRE-merge sessions so the
     /// `/api/timeline` graft still has them after the merge displaces the OTEL twin.
-    fn summary_over(spans: &[Arc<Value>], log_sessions: &IndexMap<String, Arc<Value>>, now_ms: f64) -> (Value, IndexMap<String, Vec<Value>>) {
+    fn summary_over(
+        spans: &[Arc<Value>],
+        log_sessions: &IndexMap<String, Arc<Value>>,
+        accounts: &IndexMap<String, String>,
+        now_ms: f64,
+    ) -> (Value, IndexMap<String, Vec<Value>>) {
         let _ = now_ms;
-        let mut summary = summarize::summarizer::summarize_spans(spans, &|_| None);
+        // THE ACCOUNT JOIN (TRDD-465EXTJ6). This was `&|_| None`, which meant the summarizer could
+        // never resolve `accountId` for a span whose own attrs carry no `user.account_uuid` — and
+        // Claude Code's `api_request` records carry none: the uuid arrives on a SEPARATE
+        // `api_request_body` record and is joined by `session.id`, which is exactly what this
+        // registry holds. With the closure stubbed, every card came out account-less, so
+        // `/api/burn-status` reported one `accountUuid: null` bucket instead of per-account
+        // windows, and anything keyed on the account (P5 capacity calibration) silently never ran.
+        let mut summary = summarize::summarizer::summarize_spans(spans, &|sid| accounts.get(sid).cloned());
         let mut attribution: IndexMap<String, Vec<Value>> = IndexMap::new();
         for s in summary.get("sessions").and_then(Value::as_array).map(Vec::as_slice).unwrap_or(&[]) {
             if s.get("source").and_then(Value::as_str) != Some("claude_code") {
@@ -390,9 +418,12 @@ impl CoreState {
     /// that own the state outright — tests, the CLI/MCP surfaces, and the cold-boot first build.
     pub fn build_session_summary(&mut self, now_ms: f64) -> std::sync::Arc<Value> {
         // Disjoint field borrows: the cache + side-map are written, the inputs are read.
-        let Self { summary_cache, window, log_sessions, data_version, otel_attribution, .. } = self;
+        // `accounts` joins the disjoint-borrow list for the same reason as the rest: it is READ
+        // here while the cache + side-map are written (TRDD-465EXTJ6).
+        let Self { summary_cache, window, log_sessions, data_version, otel_attribution, accounts, .. } = self;
+        let accounts = accounts.snapshot();
         summary_cache.get(*data_version, || {
-            let (summary, attribution) = Self::summary_over(&window.spans, log_sessions, now_ms);
+            let (summary, attribution) = Self::summary_over(&window.spans, log_sessions, &accounts, now_ms);
             *otel_attribution = attribution;
             summary
         })

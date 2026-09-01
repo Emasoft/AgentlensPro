@@ -29,6 +29,14 @@ impl AccountRegistry {
     }
 
     /// accountFor — the account_uuid recorded for a session, or None when unknown.
+    /// The whole session→account map, for a caller that must resolve accounts OUTSIDE the state
+    /// lock (TRDD-465EXTJ6). `summary_over` is a free function by design (TRDD-HFV4AIT7) and so
+    /// cannot borrow the registry; it carries this snapshot in `SummaryInputs` instead. The map is
+    /// capped at `MAX_SESSIONS` (200), so cloning it is bounded and small.
+    pub fn snapshot(&self) -> IndexMap<String, String> {
+        self.session_accounts.clone()
+    }
+
     pub fn account_for(&self, session_id: &str) -> Option<&str> {
         self.session_accounts.get(session_id).map(String::as_str)
     }
