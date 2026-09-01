@@ -6,7 +6,7 @@ lmd: 2026-09-01
 metadata:
   node_type: memory
   type: project
-  tier: component
+  tier: aspect
 publish-globally: false
 ---
 
