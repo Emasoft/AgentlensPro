@@ -45,6 +45,11 @@ pub struct PersistStats {
     /// Row 5: samples accepted into the statusline store (both routes — the dedicated endpoint
     /// and the legacy hook-events divert).
     pub statusline_samples: u64,
+    /// spool_backpressure::tick's transition count — how many times the RAM-disk spool has
+    /// crossed into its back-pressure floor since boot.
+    pub spool_backpressure_spills: u64,
+    /// spool_backpressure::tick's current reading — is the spool over its floor RIGHT NOW.
+    pub spool_backpressure_active: bool,
 }
 
 /// The bound listeners (server.ts UI_PORT / MCP_PORT / OTLP_PORT). All three are now really
@@ -480,8 +485,8 @@ pub fn server_stats(st: &CoreState, now_ms: i64) -> Value {
             "statuslineSamples": p.statusline_samples,
             "gateChecks": p.gate_checks, "gateDenies": p.gate_denies, "gateWarns": p.gate_warns, "gateAdvisories": p.gate_advisories,
             "bodiesLastPurge": { "at": 0, "removedFiles": 0, "freedBytes": 0, "keptFiles": 0, "keptBytes": 0 },
-            "spoolBackpressureSpills": 0,
-            "spoolBackpressureActive": false,
+            "spoolBackpressureSpills": p.spool_backpressure_spills,
+            "spoolBackpressureActive": p.spool_backpressure_active,
             "totalBytesWritten": p.span_append_bytes + p.offsets_bytes + p.cards_bytes + p.hook_event_bytes,
             "files": { "spans": total_bytes, "offsets": offsets_bytes_on_disk, "cards": cards_bytes_on_disk },
         },

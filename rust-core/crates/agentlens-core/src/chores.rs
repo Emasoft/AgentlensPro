@@ -194,9 +194,10 @@ pub fn staged_body_bytes(dir: &Path) -> u64 {
 /// to 5.4GB. `max_bytes_per_pass` is what bounds it, which is why it is passed explicitly below
 /// rather than left to the default.
 ///
-/// SINGLE TARGET, and that is a CONDITIONAL truth worth stating: the TS drains two dirs only in
-/// SPOOL_MODE, and the spool gate is `OTLP_PORT === 4318`, which alcore is not (it binds 4319).
-/// The day alcore takes 4318 this becomes wrong and the spool dir must join the drain.
+/// (An earlier paragraph here justified draining a SINGLE target because "alcore binds 4319, not
+/// the TS's 4318 spool gate". That was false the day alcore became the live server on 4318, and
+/// the drain below has since moved to every dir in `resolve_bodies_read_scope` — TRDD-5PUD8RKE /
+/// TRDD-ZW4APOPI. The justification is removed rather than left to outlive the code it excused.)
 /// How many throttled `ingest_pass` calls one tick may chain per dir before yielding. Bounds the
 /// time the store lock is held and the blocking-pool thread is occupied; the next tick resumes
 /// where this one stopped, so a backlog larger than this still drains, just over several ticks.
@@ -221,6 +222,26 @@ pub fn bodies_pass(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
     // (server.ts:588-600), no port anywhere. So the gap was never about which port we bind.
     let legacy_dir = data_dir.join("otel-bodies");
     let scope = crate::burn::guard::resolve_bodies_read_scope(&data_dir, &std::env::vars().collect());
+
+    // Spool free-space back-pressure (TRDD-5PUD8RKE box 3, port of spoolBackpressure.ts's
+    // checkSpoolCapacity/applySpoolBackpressure). Only meaningful when capture is on AND a spool
+    // is configured — same SPOOL_MODE gate the TS uses. `free_disk_bytes` fails open (None), so a
+    // transient statvfs hiccup never falsely reports pressure.
+    if scope.capture_on {
+        if let Some(spool_dir) = crate::burn::guard::spool_dir_configured(&data_dir) {
+            let vars: std::collections::HashMap<String, String> = std::env::vars().collect();
+            let floor = crate::spool_backpressure::spool_floor_bytes(&vars);
+            let free = crate::server_stats::free_disk_bytes(&spool_dir);
+            let over = crate::spool_backpressure::over_capacity(free, floor);
+            if let Ok(mut st) = state.lock() {
+                let (active, spills) =
+                    crate::spool_backpressure::tick(over, st.persist.spool_backpressure_active, st.persist.spool_backpressure_spills);
+                st.persist.spool_backpressure_active = active;
+                st.persist.spool_backpressure_spills = spills;
+            }
+        }
+    }
+
     if scope.dirs.is_empty() {
         return;
     }
