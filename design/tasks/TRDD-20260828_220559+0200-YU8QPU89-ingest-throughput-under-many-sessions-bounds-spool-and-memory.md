@@ -493,7 +493,10 @@ highest rate: spool file count + bytes, RSS, spans/s ingested, `/api/summary` la
 - [x] RSS plateaus and the plateau is EXPLAINED — 2026-09-01 sustained soak (22.5 min, ≈1,234
       session-equivalents, 32,082 spans/s): RSS 14.8 → 26–27 GB then 22 GB while load continued;
       the holder IS the span window — the memory valve narrowed it 86,400 s → 300 s in 9 steps and
-      held ~1.0 M in-window spans throughout (eviction = the valve). 0 spills / 0 dropped / 0 shed.
+      held ~1.0 M in-window spans throughout (eviction = the valve). 0 dropped / 0 shed; the
+      spool-volume fill stayed at 2% (df) — NOTE the `spoolBackpressureSpills=0` field in that
+      run was a hardcoded stub in alcore (no Rust backpressure port existed), not a measurement;
+      corrected in the report, port tracked on TRDD-5PUD8RKE box 3.
       Report: reports/spool-backpressure/20260901_192500+0200-sustained-soak-alcore-spool-memory.md;
       generator committed at scripts/bench/alcore-ingest-flood.mjs (the soak wrapper is scripts_dev).
 - [ ] the numbers and the generator are committed (report path recorded here); any fix is an NPT
