@@ -1,21 +1,56 @@
 ---
 trdd-id: 1B98LCVR
 title: Retire the TypeScript backend from the package so Rust is the only server that ships
-column: dev
+column: testing
 created: 2026-08-28T22:05:59+0200
-updated: 2026-09-01T18:56:54+0200
+updated: 2026-09-02T00:52:51+0200
 current-owner: claude-agentlenspro
 task-type: refactor
 project-id: agentlenspro
 parent-trdd: DMWOBWFH
 blocked-by: []
 npt: [VHH7FXGC]
-implementation-commits: [eec7bb36, 952357e8, 48a154a]
+implementation-commits: [eec7bb36, 952357e8, 48a154a, d58d6e1, 6c6c7f49, d7684513, 567fc5c2]
 ---
 
 # Retire the TypeScript backend from the package
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-08-29
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-09-02
+
+**BOX 4 LANDED AND GATED (2026-09-02).** `standalone/server.ts`, the `src/**` modules only it
+imported, the esbuild `server` target and `findServerJs` are gone (`567fc5c2`); every spawn path
+is alcore-only. The 2.33.2 gate ran ONCE, on the FINAL binary (the spool-backpressure port
+`d1e6e08d` included — `bin-native/darwin-arm64/alcore` sha `d93d698c…` == `rust-core/target/release/alcore`):
+full unit suite **2536 passing / 0 failing / 9 pending, 14 min** (`/tmp/full5.txt`, summary at
+2026-09-01 23:20). On the same tree: `check-types` 0, `check-no-mirrors` OK (121 shared exports),
+`check-dist-contents` OK (25 files, no source). The live server (pid 73156) runs that binary.
+CI is ready for the push — read from the workflow files, not from the older note below: `ci.yml`
+has a `build-alcore` job the node job `needs`, and `publish.yml` downloads `bin-native-linux-x64`
+and `chmod +x`es all four binaries BEFORE `pnpm run test:unit`. Last CI (`f8b7560e`) green in 8 min.
+
+Observed, NOT a blocker: locally the `pnpm run test:unit` process outlived the mocha summary by
+~90 min (summary 23:20:52, process gone 00:50:43) — an open handle after the run, or the launcher's
+`timeout`. CI's 15-min node job has never hit it. Watch the first CI on the pushed commits; if it
+times out there the leak is real, and `mocha --exit` would be the mask, not the fix.
+
+**NEXT ACTION**: the release. `git push origin main` (10 ahead, 0 behind) → CI green →
+`git tag -a v2.33.2 -m "…" <sha> && git push origin v2.33.2` → monitor `publish.yml` → verify
+`npm view agentlenspro@2.33.2 _npmUser dist.attestations.url` + 16 exec entries in the tarball →
+`npm install -g agentlenspro@2.33.2` (replaces the dev link; NEVER 2.33.1, it predates the RSS-wall
+fix `d7684513`) → `agentlenspro server restart` → box 5. **The push needs the USER's go** (standing
+rule: never push unless told); everything before it is done.
+
+**DMWOBWFH box 3 deliberately NOT ticked** (see box 6): it claims the remaining TS "serves only the
+UI (and the CLI shell)", but `src/database/*`, `sessionRepository.ts`, `vscodeCompat.ts` and their
+importers `otlpCollector.ts` / `exportData.ts` survive as TEST-ONLY code — 0 mentions of
+`SessionRepository` / `DatabaseWriter` / `vscodeCompat` in `standalone/cli.js`. True of the shipped
+package, false of the repo; that residue is DMWOBWFH's own pass, not this card's.
+
+**SUPERSEDED — do NOT carry forward:** the 2026-08-29 "NOT ready to execute" verdict, and the box-4
+HARD PRECONDITION that CI runs `test:unit` with no Rust build — both closed (see the CI paragraph
+above). The 2026-08-29 block below is history.
+
+## ⏵ STATE (history) — 2026-08-29
 
 **A scoping pass ran 2026-08-29. It found ONE real blocker, and the card is NOT ready to execute
 until that blocker is closed.** Full evidence:
@@ -115,11 +150,15 @@ downgrade on any other.
       0 engine failures (the only 2 reds were undated sonnet-5 promo-pricing tests that the
       2026-09-01 scheduled rate change correctly flipped; pinned in the same commit). Re-run
       after the flip: 2531 passing, 0 failing, exit 0. `=ts` opts out; no-binary still falls back.
-- [ ] `standalone/server.ts` is deleted only after the above is green; the `src/**` modules it alone
-      imported go with it (`scripts/check-no-mirrors.js` and `check-types` stay green).
+- [x] `standalone/server.ts` is deleted only after the above is green; the `src/**` modules it alone
+      imported go with it (`scripts/check-no-mirrors.js` and `check-types` stay green). —
+      `567fc5c2`; gated 2026-09-02 on the final binary: full suite 2536 passing / 0 failing,
+      `check-types` 0, `check-no-mirrors` OK, `check-dist-contents` OK (STATE block has the detail).
 - [ ] `agentlenspro setup` / `server start|restart|status|stop` verified against the installed
       package on this machine, both Claude sessions that depend on the server unaffected.
-- [ ] CHANGELOG + version bump; DMWOBWFH box 3 ticked with this card as evidence.
+- [x] CHANGELOG + version bump — `6f74b51f` (2.33.2) + the backpressure line `6b878638`.
+      DMWOBWFH box 3 is NOT ticked from here: its wording is false of the repo while test-only
+      persistence TS remains (STATE block, "deliberately NOT ticked"); DMWOBWFH owns that residue.
 
 ## Verification the USER asked for
 
