@@ -80,6 +80,37 @@ responds"*, which reads like a CORS assertion but is a LIVENESS one — it means
 earlier in the file. Fix the cap first and re-read the list; the three may not be three independent
 bugs.
 
+## 2026-09-01 (later) — MCP CORS CLOSED; the 5 P5 failures are ONE upstream cause
+
+**9 of 14 closed.** `06febeae` fixed the MCP preflight and ALL THREE ACAO failures went with it —
+the card's prediction held: the first one asserts *"health check still responds"*, a LIVENESS
+assertion, so the file was dying early and taking the other two with it. Three symptoms, one bug.
+
+**COUNT CORRECTION: 5 remain, not 4** (an earlier summary said 4). 14 − 9 = 5, all P5.
+
+**THE 5 P5 FAILURES ARE NOT A CALIBRATION BUG. Do not debug `burn_calibration.rs` — it is fine.**
+Only the FIRST one is real; the other four are `ENOENT ... burn-config.json`, i.e. downstream of it
+never being written. And the first fails on a PRECONDITION, before calibration is ever reached:
+
+```
+AssertionError: account window must exist before the stall. accounts: <server boot log>
+```
+
+The test establishes an account window by ingesting, THEN sends the rate-limit StopFailure. Under
+alcore the account window is not there when it checks — so the stall has nothing to measure and
+`calibrate_from_stop_failure` correctly declines. The gap is in the **account registry / window
+establishment** path, a different subsystem entirely.
+
+Two things worth noting in that assertion: the `accounts:` value printed the SERVER BOOT LOG rather
+than an account list, which suggests the test is reading a stream it did not expect — worth
+checking whether the precondition is even querying what it thinks it is before assuming alcore is
+at fault.
+
+**NEXT: verify the account window independently** — boot alcore on a scratch dir, ingest the same
+fixture the test uses, and query the account registry directly. That answers "is alcore not
+populating it" vs "is the test reading it wrong" without touching either the calibration port or
+the test.
+
 ## NEXT ACTION
 
 Work them in risk order, not list order: **admission/RSS shedding + the body cap first** (bounded
