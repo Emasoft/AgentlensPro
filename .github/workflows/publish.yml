@@ -419,13 +419,19 @@ jobs:
             npm view "agentlenspro@$VER" dist.tarball > /tmp/url.txt 2>/dev/null && break
             echo "metadata not ready yet (attempt $i) — CDN propagation"; sleep 15
           done
-          for i in 1 2 3 4 5 6 7 8 9 10; do
+          # 30 × 20 s = 10 minutes. v2.33.1 (2026-09-01) measured the old 10 × 20 s budget as too
+          # short: the tarball 404'd on the edge for the whole 200 s, the job went red, and the
+          # package was fetchable (HTTP 200, 16/16 executable binaries) minutes later. Propagation
+          # is not a publish failure — so exhausting even this budget is a WARNING, not an error:
+          # metadata being live already proves the publish landed, and a red run here invites the
+          # one reaction that IS destructive (a re-run that dies on cannot-republish).
+          for i in $(seq 1 30); do
             curl -fsSL "$(cat /tmp/url.txt)" -o /tmp/published.tgz && break
-            echo "tarball not on the CDN edge yet (attempt $i) — retrying"; sleep 20
+            echo "tarball not on the CDN edge yet (attempt $i/30) — retrying"; sleep 20
           done
           if [ ! -s /tmp/published.tgz ]; then
-            echo "::error::agentlenspro@$VER metadata is live but its tarball never became fetchable"
-            exit 1
+            echo "::warning::agentlenspro@$VER metadata is live but its tarball was not fetchable within 10 min — CDN propagation; verify later with: npm view agentlenspro@$VER dist.tarball && curl -fsSLo /dev/null \$(npm view agentlenspro@$VER dist.tarball)"
+            exit 0
           fi
           n=$(tar -tzf /tmp/published.tgz | grep -c 'package/bin-native/.*/' || true)
           if [ "$n" -ne 16 ]; then
