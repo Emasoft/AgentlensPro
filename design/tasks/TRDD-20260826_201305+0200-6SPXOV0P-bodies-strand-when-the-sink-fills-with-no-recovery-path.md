@@ -3,7 +3,7 @@ trdd-id: 6SPXOV0P
 title: 307 files remain parked with a ts-row mismatch after the TRDD-8TM7I49X repair
 column: todo
 created: 2026-08-26T20:13:05+0200
-updated: 2026-08-27T19:50:55+0200
+updated: 2026-09-01T23:07:22+0200
 eht: [7NHUU6GK]
 current-owner: main
 task-type: bugfix
@@ -257,7 +257,14 @@ Sizing is the USER's call regardless, and no agent should reclaim space to paper
       is invalid for any body that is re-materialised.** Either capture time stops being carried by
       a resettable file attribute, or every restore path is made to preserve it — otherwise the
       repair verb and the restore path will keep undoing each other.
-- [ ] Established whether newly parked files can drain without an operator running the repair verb.
+- [x] Established whether newly parked files can drain without an operator running the repair verb
+      — YES for the re-emit class since `aa0caa40` (benign reclaim in the ordinary Rust pass,
+      `pass.rs:373-416`): the live alcore logs "ingested N, reclaimed N file(s)" every pass. NO for the
+      legacy 307 (TRDD-8TM7I49X class): still `PARKED 307 file(s) 144.3MB` after multiple restarts on
+      2026-09-01; `store repair-parked --dry-run` reports 307 repairable / 0 ghosts, but the real run
+      swaps the store directory and REFUSES while the server runs (`server stop --stay-down` first) —
+      a downtime + data-store operation awaiting the USER's go. Scoping:
+      reports/parked-bodies-repair/20260901_230204+0200-scoping.md.
       If they cannot, the parked set refills on this loop and TRDD-8TM7I49X fixed an instance
       rather than the mechanism.
 - [ ] `unparked N name(s) (M still stranded)` distinguishes "unparked nothing because the swap

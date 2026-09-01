@@ -3,7 +3,7 @@ trdd-id: IXVHM52P
 title: The 8GB DuckDB ceiling OOMs a full-store validate — repair-parked fails out of the box
 column: todo
 created: 2026-08-26T04:25:32+0200
-updated: 2026-08-26T05:24:10+0200
+updated: 2026-09-01T23:07:22+0200
 current-owner: AgentlensPro session
 task-type: bugfix
 min-approval-requirement: none
@@ -79,7 +79,10 @@ that fixes it.
 ## Acceptance
 
 - [ ] `store repair-parked` completes on a store of at least this size with NO
-      env override — measured, not argued.
+      env override — measured, not argued. STATUS 2026-09-01: the fix (`dd442d81`, ceiling scaled
+      to the machine — 64 GB here) is committed and in the live binary; the MEASUREMENT needs the
+      real run, which stops the live server (`server stop --stay-down`) and swaps the store
+      directory — awaiting the USER's go. Dry-run inventory: 307 repairable, 0 ghosts.
 - [x] An over-limit failure names the env knob in its message. Implemented in
       `src/store/migrate.ts`'s `migrateStore`/`repairStore` catch block (the one
       funnel every migrate/repair failure passes through): when the caught
