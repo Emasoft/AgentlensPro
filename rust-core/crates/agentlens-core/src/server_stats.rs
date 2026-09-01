@@ -273,6 +273,36 @@ pub fn parked_bodies_gauge(store_dir: &Path, live_dirs: &[std::path::PathBuf]) -
     Some((files, bytes, on_disk))
 }
 
+/// Physical RAM of the host, bytes. macOS: sysctl `hw.memsize`; Linux: /proc/meminfo MemTotal;
+/// elsewhere (or on any read failure) 0 = unknown, never a guess — callers must treat 0 as
+/// "no RAM-relative default available" and keep their absolute floor.
+pub fn total_memory_bytes() -> u64 {
+    #[cfg(target_os = "macos")]
+    {
+        let mut size: u64 = 0;
+        let mut len = std::mem::size_of::<u64>() as libc::size_t;
+        let name = b"hw.memsize\0";
+        // SAFETY: `name` is NUL-terminated, `size` is a valid out-buffer of exactly `len` bytes.
+        let rc = unsafe {
+            libc::sysctlbyname(name.as_ptr() as *const libc::c_char, &mut size as *mut u64 as *mut libc::c_void, &mut len, std::ptr::null_mut(), 0)
+        };
+        return if rc == 0 { size } else { 0 };
+    }
+    #[cfg(target_os = "linux")]
+    {
+        return std::fs::read_to_string("/proc/meminfo")
+            .ok()
+            .and_then(|s| {
+                let line = s.lines().find(|l| l.starts_with("MemTotal:"))?;
+                let kb = line.split_whitespace().nth(1)?.parse::<u64>().ok()?;
+                Some(kb * 1024)
+            })
+            .unwrap_or(0);
+    }
+    #[allow(unreachable_code)]
+    0
+}
+
 /// Resident set size of this process, bytes. macOS: proc_pidinfo(PROC_PIDTASKINFO); Linux:
 /// /proc/self/statm × page size; elsewhere 0 (unknown, not a guess).
 pub fn rss_bytes() -> u64 {

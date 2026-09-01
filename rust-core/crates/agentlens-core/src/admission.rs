@@ -81,11 +81,42 @@ impl AdmissionLimits {
             soft_inflight: soft as usize,
             max_inflight: n("AGENTLENS_MAX_INFLIGHT", (soft * 2.0).max(cpus as f64 * 8.0)) as usize,
             max_queue: n("AGENTLENS_ADMIT_MAX_QUEUE", 256.0) as usize,
-            max_rss_mb: n("AGENTLENS_MAX_RSS_MB", 5120.0),
+            // RAM-RELATIVE, not the TS server's absolute 5120. That constant was tuned for a Node
+            // process whose RSS tracks its V8 heap; alcore's steady RSS is dominated by structures
+            // the memory valve CANNOT shrink (the parsed log-session corpus — 27k sessions ≈ 7 GB
+            // on the reference machine). Measured 2026-09-01 live: window already narrowed to 300 s,
+            // 14.8k spans in memory, RSS 7.1 GB > 5120 ⇒ the UI/hook/MCP surfaces were shed 95% of
+            // the time (7,896 shed vs 378 admitted), the dashboard answered 503 "reason: rss", and
+            // every hook's 503 fired a revive attempt — the Rust server shedding ITSELF for good.
+            // Half of physical RAM keeps the wall above everything the valve controls while still
+            // catching a real runaway; the 5120 floor covers hosts where RAM is unknown (0) or tiny.
+            // The env name stays the TS contract; an operator's explicit tuning still wins.
+            max_rss_mb: n("AGENTLENS_MAX_RSS_MB", Self::default_max_rss_mb(crate::server_stats::total_memory_bytes())),
             min_free_disk_mb: n("AGENTLENS_MIN_FREE_DISK_MB", 200.0),
             load_per_core_max: n("AGENTLENS_LOADAVG_MAX", 4.0),
             queue_wait_ms: n("AGENTLENS_ADMIT_QUEUE_WAIT_MS", 750.0) as u64,
         }
+    }
+
+    /// The RSS wall's default: half the host's RAM, never below the historical 5120 floor.
+    /// `total_bytes == 0` means "unknown" (see server_stats::total_memory_bytes) ⇒ the floor.
+    pub fn default_max_rss_mb(total_bytes: u64) -> f64 {
+        let half_ram_mb = (total_bytes / 2 / 1024 / 1024) as f64;
+        half_ram_mb.max(5120.0)
+    }
+}
+
+#[cfg(test)]
+mod rss_default_tests {
+    use super::AdmissionLimits;
+
+    /// TRDD-1B98LCVR follow-up: the wall must scale with the host — a 64 GB machine gets 32 GB,
+    /// not the Node-era 5 GB that shed alcore's own dashboard; unknown RAM keeps the floor.
+    #[test]
+    fn rss_wall_default_is_half_ram_with_a_5120_floor() {
+        assert_eq!(AdmissionLimits::default_max_rss_mb(64 * 1024 * 1024 * 1024), 32768.0);
+        assert_eq!(AdmissionLimits::default_max_rss_mb(8 * 1024 * 1024 * 1024), 5120.0);
+        assert_eq!(AdmissionLimits::default_max_rss_mb(0), 5120.0);
     }
 }
 
