@@ -1133,8 +1133,14 @@ async fn handle(
                     let stream = if v.get("statusline_stream").and_then(Value::as_str) == Some("subagent") { "subagent" } else { "main" };
                     {
                         let mut st = state.lock().map_err(|_| "state poisoned".to_owned())?;
-                        st.statusline.append(payload, stream, crate::now_ms() as f64);
+                        let now = crate::now_ms();
+                        st.statusline.append(payload, stream, now as f64);
                         st.persist.statusline_samples += 1;
+                        // A statusline sample IS capture activity (TRDD-8ADTIGKT, TRDD-465EXTJ6).
+                        // Without this bump a statusline-only machine could never trip CAPTURE
+                        // DOWN — a silent blind spot rather than a false alarm, which is the
+                        // harder kind to notice: the feed looks connected and produces nothing.
+                        st.last_ingest_activity_ms = now;
                     }
                     json_response(StatusCode::OK, r#"{"ok":true}"#.to_owned())
                 }
@@ -1744,15 +1750,32 @@ async fn handle(
         .await
         .map_err(|e| format!("history build join failed: {e}"))?;
         json_response(StatusCode::OK, serde_json::json!({ "history": history.unwrap_or(Value::Null) }).to_string())
+    } else if method == Method::GET && path == "/mcp" {
+        // mcpServer.ts handleMcpRequest's GET branch — a plain health check so opening the MCP
+        // URL in a browser (or this test's ACAO probe) gets a clear 200 instead of the generic
+        // 404 every other unmatched route returns. `disallowed`/CORS are already computed above
+        // and applied in the shared postamble below, so this arm needs no CORS logic of its own.
+        json_response(
+            StatusCode::OK,
+            serde_json::json!({
+                "status": "ok",
+                "server": "agentlens-mcp",
+                "transport": "streamable-http",
+                "endpoint": req.uri().to_string(),
+            })
+            .to_string(),
+        )
     } else if method == Method::POST && path == "/mcp" {
         // P4x — the MCP JSON-RPC endpoint. Served on THIS listener for now; the dedicated
         // :4316 listener the CLI defaults to is a separate wiring step (point it here meanwhile
         // with AGENTLENS_MCP_URL). See mcp.rs for why plain JSON is sufficient for our CLI and
         // where that stops being true.
         // The TS caps the MCP body and DESTROYS the socket on overflow (no response at all), so a
-        // client cannot mistake a too-large request for a rejected one.
-        let Some(buf) = read_body_capped(req.into_body(), 8 * 1024 * 1024).await? else {
-            return Err("/mcp body over 8MB cap — connection aborted".to_owned());
+        // client cannot mistake a too-large request for a rejected one. 4 MB matches
+        // mcpServer.ts's MCP_BODY_MAX_BYTES exactly — tool-call requests are small JSON, only a
+        // hostile or broken client exceeds this.
+        let Some(buf) = read_body_capped(req.into_body(), 4 * 1024 * 1024).await? else {
+            return Err("/mcp body over 4MB cap — connection aborted".to_owned());
         };
         // An unparseable body becomes Null, which handle_rpc answers with a proper JSON-RPC error
         // rather than a transport failure.
@@ -3538,7 +3561,9 @@ pub async fn serve_mcp(
                         *r.status_mut() = StatusCode::NO_CONTENT;
                         return Ok::<_, String>(r);
                     }
-                    if !(method == Method::POST && path == "/mcp") {
+                    // GET is the plain health check (mcpServer.ts handleMcpRequest); POST is the
+                    // JSON-RPC tool endpoint. Both, and only those, route to the shared `handle`.
+                    if !(path == "/mcp" && (method == Method::POST || method == Method::GET)) {
                         let mut r = Response::new(boxed_full(Bytes::from_static(b"Not found")));
                         *r.status_mut() = StatusCode::NOT_FOUND;
                         return Ok(r);

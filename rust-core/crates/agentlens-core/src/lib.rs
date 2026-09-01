@@ -36,6 +36,7 @@ pub mod account_state_timeline;
 pub mod body_archive;
 pub mod body_writers;
 pub mod burn;
+pub mod burn_calibration;
 pub mod cache_break;
 pub mod cache_break_timeline;
 pub mod cache_creation_forensics;

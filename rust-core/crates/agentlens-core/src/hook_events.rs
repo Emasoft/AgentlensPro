@@ -8,9 +8,10 @@
 //! pattern that destroyed 420GB of SSD in 4 hours — never reintroduce it here either.
 //!
 //! NOT PORTED (each has its own TS subsystem, deferred): the boot-time hook-spool drain + its
-//! byte-for-byte durability verification (TRDD-K3WDPR7M); the StopFailure capacity
-//! auto-calibration. The in-memory recent-events ring IS ported (P4r.5 — it feeds the burn
-//! gate), and the statusline divert now lands in the ported store (row 5) instead of dropping.
+//! byte-for-byte durability verification (TRDD-K3WDPR7M). The in-memory recent-events ring IS
+//! ported (P4r.5 — it feeds the burn gate), the statusline divert lands in the ported store
+//! (row 5) instead of dropping, and (P5) the StopFailure capacity auto-calibration now runs
+//! through `crate::burn_calibration` too — see the bottom of `ingest_hook_event`.
 
 use std::path::{Path, PathBuf};
 
@@ -187,8 +188,8 @@ pub fn statusline_stream(ev: &str) -> Option<&'static str> {
     }
 }
 
-/// server.ts ingestHookEvent — validate → route/divert → append → ring → stats. Returns the
-/// HTTP-shaped (status, body). NOT PORTED inside: the StopFailure calibration.
+/// server.ts ingestHookEvent — validate → route/divert → append → ring → stats → (P5) StopFailure
+/// capacity auto-calibration. Returns the HTTP-shaped (status, body).
 pub fn ingest_hook_event(st: &mut crate::CoreState, payload: &Value, now_ms: i64) -> (u16, Value) {
     let Some(p) = payload.as_object() else {
         return (400, json!({ "error": "payload must be a JSON object with hook_event_name" }));
@@ -211,13 +212,155 @@ pub fn ingest_hook_event(st: &mut crate::CoreState, payload: &Value, now_ms: i64
     }
     match append_hook_event(&st.data_dir.join("hook-events"), p, now_ms) {
         Ok((rec, bytes)) => {
+            // Cloned before the ring takes ownership — the calibration branch below needs the
+            // record's own ts/session/payload after this push.
+            let rec_for_calibration = rec.clone();
             push_recent_hook_event(&mut st.recent_hook_events, rec);
             st.persist.hook_event_writes += 1;
             st.persist.hook_event_bytes += bytes;
+            // P5 auto-calibration: a rate-limit StopFailure is the ONE moment the undisclosed
+            // window cap is observable — snapshot the hot account's consumed figures into
+            // burn-config.json as observed capacity. Run AFTER the record is persisted/ringed
+            // (ingestion is the priority); `calibrate_from_stop_failure` never panics, so a bad
+            // calibration can never break hook ingestion.
+            if ev == "StopFailure" {
+                let sessions = st.build_session_summary(now_ms as f64);
+                let sessions = sessions.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
+                let events = crate::burn::monitor::gather_consumption_events(&sessions, &[], now_ms as f64);
+                let current_account_uuid = st.burn.current_account(now_ms as f64).account_uuid;
+                let outcome = crate::burn_calibration::calibrate_from_stop_failure(
+                    &rec_for_calibration,
+                    &events,
+                    &sessions,
+                    current_account_uuid.as_deref(),
+                    &st.burn.vars,
+                    &st.burn.home_dir,
+                );
+                if outcome.calibrated {
+                    // Reload so the next burn tick + every budget read projects against the new cap.
+                    st.burn.config = crate::burn::monitor::load_burn_config(&st.burn.vars, &st.burn.home_dir);
+                    println!("[AgentlensPro] window capacity auto-calibrated: {}", outcome.reason);
+                } else {
+                    println!("[AgentlensPro] capacity calibration skipped: {}", outcome.reason);
+                }
+            }
             (200, json!({ "ok": true }))
         }
         Err(e) => (500, json!({ "error": e.to_string() })),
     }
+}
+
+/// What one drain pass did. Reported so a boot line can say it, and so the test can assert on it.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct SpoolDrain {
+    pub drained: usize,
+    pub rejected: usize,
+    pub unverified: usize,
+    pub kept: usize,
+}
+
+/// Drain the durable hook-spool on boot (D3K7QM2P/1a) — the port of `drainHookSpool`
+/// (standalone/server.ts:1205), which existed ONLY in the TypeScript server (TRDD-465EXTJ6).
+///
+/// When the server was DOWN or shedding, `agentlenspro hook` writes each raw payload to
+/// `<data>/hook-spool/<ts>-<rand>.json` instead of losing it. Until this port, alcore never read
+/// that directory: the events were written and then sat there forever, which is data loss with
+/// extra steps — the spool exists precisely so they are NOT lost.
+///
+/// **VERIFY BEFORE DELETE (TRDD-K3WDPR7M, USER directive 2026-07-15: a source file may be deleted
+/// ONLY after the durable destination is confirmed to hold ALL its data).** A 200 is NOT trusted —
+/// the appended line is read back out of its bucket and compared byte-for-byte before the spool
+/// file is unlinked. The four outcomes are deliberately different:
+///
+/// - **drained** — appended AND read back identical ⇒ the spool copy is redundant, unlink it.
+/// - **rejected** — unparseable, or a non-200 (a bad payload can never ingest). QUARANTINED into
+///   `hook-spool/rejected/`, never deleted: it is still DATA, and keeping it there unwedges the
+///   spool without destroying anything.
+/// - **kept** — a 200 that appended NOTHING (capture disabled by policy, or routed to the
+///   statusline store). Not an error and not bad data; a later boot with capture on will ingest
+///   it. Deleting it would silently drop the event.
+/// - **unverified** — 200 but the read-back did not match. The durable copy is NOT proven, so the
+///   only guaranteed copy is kept for the next boot.
+///
+/// Idempotent: a crash mid-drain leaves the remaining files for the next boot.
+pub fn drain_hook_spool(st: &mut crate::CoreState, now_ms: i64) -> SpoolDrain {
+    let spool_dir = st.data_dir.join("hook-spool");
+    let mut names: Vec<String> = match std::fs::read_dir(&spool_dir) {
+        Ok(rd) => rd
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".json"))
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect(),
+        // No spool dir — nothing to drain. Not an error; the common case on a clean install.
+        Err(_) => return SpoolDrain::default(),
+    };
+    // Sorted so the oldest spooled event is reingested first — the filenames lead with a timestamp,
+    // so lexical order IS chronological order, and replaying out of order would scramble a session's
+    // lifecycle sequence.
+    names.sort();
+    let mut out = SpoolDrain::default();
+    let rejected_dir = spool_dir.join("rejected");
+    let events_dir = st.data_dir.join("hook-events");
+    for name in names {
+        let file = spool_dir.join(&name);
+        let Ok(raw) = std::fs::read_to_string(&file) else { continue }; // vanished / unreadable — skip
+        let Ok(payload) = serde_json::from_str::<Value>(&raw) else {
+            quarantine(&file, &rejected_dir, &mut out);
+            continue;
+        };
+        // The record the append WOULD write, computed before ingesting so the read-back has an
+        // exact byte string to look for. `build_hook_event_record` is pure and takes the same
+        // `now_ms` the ingest below uses, so the two cannot disagree.
+        let expected_line = payload.as_object().map(|p| build_hook_event_record(p, now_ms).to_string());
+        let (status, body) = ingest_hook_event(st, &payload, now_ms);
+        if status != 200 {
+            quarantine(&file, &rejected_dir, &mut out);
+            continue;
+        }
+        // A 200 that appended nothing: routed to the statusline store, or dropped because capture
+        // is off. Distinguished by the response body, which is the only signal `ingest_hook_event`
+        // gives — it returns `{"ok":true}` alone ONLY on the append path.
+        let appended = body.get("routed").is_none() && body.get("dropped").is_none();
+        let Some(expected) = expected_line.filter(|_| appended) else {
+            out.kept += 1;
+            continue;
+        };
+        if bucket_contains_line(&events_dir, now_ms, &expected) {
+            // Durable copy PROVEN — now, and only now, is the spool copy redundant.
+            let _ = std::fs::remove_file(&file);
+            out.drained += 1;
+        } else {
+            out.unverified += 1;
+            eprintln!("[AgentlensPro] hook-spool: append NOT verified for {name} — keeping spool file (durable copy unproven)");
+        }
+    }
+    out
+}
+
+/// Move a spool file into `rejected/` rather than deleting it. A payload that can never ingest is
+/// still DATA; quarantining keeps the spool unwedged WITHOUT destroying it (TRDD-K3WDPR7M). If the
+/// move itself fails the file stays where it is and is counted as kept — never dropped.
+fn quarantine(file: &Path, rejected_dir: &Path, out: &mut SpoolDrain) {
+    if std::fs::create_dir_all(rejected_dir).is_err() {
+        out.kept += 1;
+        return;
+    }
+    let dest = rejected_dir.join(file.file_name().unwrap_or_default());
+    if std::fs::rename(file, &dest).is_ok() {
+        out.rejected += 1;
+    } else {
+        out.kept += 1;
+    }
+}
+
+/// Read the day-bucket back and look for `line` verbatim. This is the "prove it is durable" half
+/// of verify-before-delete: a 200 from the ingest path is a claim, and the whole point of the rule
+/// is that the claim is not accepted as proof before the only other copy is destroyed.
+fn bucket_contains_line(events_dir: &Path, ts_ms: i64, line: &str) -> bool {
+    let Ok(contents) = std::fs::read_to_string(bucket_path(events_dir, ts_ms)) else { return false };
+    // Scanned rather than "is the last line", because a concurrent append would make the last-line
+    // check spuriously fail and keep a spool file whose data IS durable.
+    contents.lines().any(|l| l == line)
 }
 
 /// server.ts RECENT_EVENTS_CAP — the in-memory ring the gate + buildGateState read.

@@ -297,6 +297,22 @@ pub fn server_stats(st: &CoreState, now_ms: i64) -> Value {
     // Read from the ONE process-wide controller the HTTP handlers admit through, so these counters
     // describe the sheds that actually happened rather than a second, separately-kept tally.
     let adm = crate::ui::admission_controller().stats();
+    // src/shared/fallbackCounters.ts `fallbackTotals()` — every counter that FIRED since boot,
+    // name-sorted. A name that never fired is ABSENT, deliberately: honest absence beats zero-noise
+    // for paths that never degraded, and it is what lets a reader tell "this never happened" from
+    // "this is not instrumented" (TRDD-465EXTJ6).
+    //
+    // alcore already counted the event — `counters.parse_errors`, incremented on exactly the path
+    // the TS calls `countFallback('standalone.otlpIngestError')` on: an OTLP payload that could not
+    // be parsed, ACKed 200 (fail-open — an exporter must never error-loop on us) and then dropped.
+    // It just never surfaced it, so every swallowed payload was invisible.
+    let degradations = {
+        let mut d = Map::new();
+        if st.counters.parse_errors > 0 {
+            d.insert("standalone.otlpIngestError".into(), Value::from(st.counters.parse_errors));
+        }
+        d
+    };
     let data_dir = st.data_dir.as_path();
     let (segments, total_spans, total_bytes) = st.writer.stats();
     let p = st.persist;
@@ -403,6 +419,15 @@ pub fn server_stats(st: &CoreState, now_ms: i64) -> Value {
             .map(|(k, v)| (k.clone(), Value::from(*v)))
             .collect::<Map<String, Value>>(),
         // NOT PORTED: src/shared/fallbackCounters.ts — counters that never fired are absent ⇒ {}.
-        "degradations": Map::new(),
+        // src/shared/fallbackCounters.ts `fallbackTotals()` — every counter that FIRED since boot,
+        // name-sorted. A name that never fired is ABSENT, deliberately: honest absence beats
+        // zero-noise for paths that never degraded, and it is what lets a reader tell "this never
+        // happened" from "this is not instrumented" (TRDD-465EXTJ6).
+        //
+        // alcore already counted the event — `counters.parse_errors`, incremented on exactly the
+        // path the TS calls `countFallback('standalone.otlpIngestError')` on: an OTLP payload that
+        // could not be parsed, ACKed 200 (fail-open, an exporter must never error-loop on us) and
+        // then dropped. It just never surfaced it, so a swallowed payload was invisible.
+        "degradations": degradations,
     })
 }

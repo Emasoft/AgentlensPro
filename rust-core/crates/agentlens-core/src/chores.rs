@@ -420,6 +420,22 @@ pub fn project_resident_blobs(engine_out: &Value) -> Vec<Value> {
 /// still performs it.
 pub fn spawn_all(rt: &tokio::runtime::Runtime, state: Arc<Mutex<CoreState>>) {
     // Boot passes, in the TS's order.
+    //
+    // The hook-spool drain runs FIRST (TRDD-465EXTJ6). Events spooled while the server was down
+    // are the oldest data in the system and the only copy of themselves; reingesting them before
+    // the purge pass means a bucket-retention sweep can never delete the bucket they are about to
+    // land in. It is also idempotent, so a crash mid-drain simply leaves the rest for next boot.
+    {
+        let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let now = crate::now_ms();
+        let d = crate::hook_events::drain_hook_spool(&mut st, now);
+        if d != crate::hook_events::SpoolDrain::default() {
+            println!(
+                "alcore: hook-spool: drained {} event(s), quarantined {} bad, kept {} unverified, kept {} for retry",
+                d.drained, d.rejected, d.unverified, d.kept
+            );
+        }
+    }
     span_tick(&state, crate::now_ms() as f64);
     purge_tick(&state, crate::now_ms() as f64);
     bodies_pass(&state, crate::now_ms() as f64);
