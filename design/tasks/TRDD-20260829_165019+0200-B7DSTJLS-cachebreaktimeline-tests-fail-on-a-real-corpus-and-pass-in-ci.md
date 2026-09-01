@@ -1,9 +1,9 @@
 ---
 trdd-id: B7DSTJLS
 title: cacheBreakTimeline tests pass in CI and fail on a developer machine, and fail differently depending on run order
-column: todo
+column: testing
 created: 2026-08-29T16:50:19+0200
-updated: 2026-08-29T16:50:19+0200
+updated: 2026-09-01T19:54:09+0200
 current-owner: main-session
 task-type: bugfix
 scope: project
@@ -78,3 +78,13 @@ Find what is unbounded, before changing any timeout. In order:
       re-derive it a third time.
 
 ## Notes and lessons learned
+
+## ⏵ STATE — 2026-09-01 — FIX LANDED, verification pending
+
+Root cause found and fixed in `aef94208`: 12 fixture calls passed `storeDir: noStore` but not
+`hookEventsDir`, so `loadCompactionHookInfo` (cacheBreakTimeline.ts:1369/1718) scanned the LIVE
+229MB `~/.agentlens/hook-events` synchronously inside mocha's fixed timeout — load-dependent by
+construction. All 12 sites now pass `hookEventsDir: noStore`. NOT a timeout raise.
+Analysis: reports/cachebreak-flake/20260901_195900+0200-load-dependence-analysis.md.
+NEXT ACTION: after the in-flight full-suite gate finishes, `pnpm run compile-tests` and run
+cacheBreakTimeline.test.js alone under load to confirm the flake is gone; then → ai_review.
