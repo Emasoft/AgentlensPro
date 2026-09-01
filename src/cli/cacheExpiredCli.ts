@@ -16,9 +16,12 @@
 // so an unresolvable question exits 2 (the house EX_UNKNOWN) with stdout EMPTY, and never prints a
 // word a caller could read as a verdict.
 
+import * as fs from 'fs'
+import * as path from 'path'
 import { callTool } from './cliCore'
 import { EXIT, UsageError } from './cliErrors'
 import { assertKnownFlags } from './argHelpers'
+import { statuslineRoot } from './statuslineHistoryCli'
 
 export const CACHE_EXPIRED_USAGE = `agentlenspro cache-expired [flags]
 
@@ -27,6 +30,11 @@ Has this project's MAIN conversation outlived its prompt-cache TTL? Prints one w
 
 Scoped to the current project by default, because "my cache" is the only question worth a boolean;
 the resolved session is announced on stderr so a piped stdout stays exactly one word.
+
+On Claude Code >=2.1.252 the answer is AUTHORITATIVE, not inferred: the harness reports the cache
+deadline itself (prompt_cache.expires_at in the statusline payload) and this verb reads the newest
+captured sample off disk — no server needed. Older payloads fall back to the server's idle-time
+inference, as does --threshold-minutes (an explicit inference override).
 
 flags:
   --project DIR        scope to DIR instead of the current directory
@@ -61,6 +69,80 @@ interface ExpiryPayload {
 /** Exit codes in --quiet mode. 0/1 is the universal predicate convention (`test`, `grep -q`), and
  *  2 keeps "cannot answer" distinct from "fresh" — the distinction the whole command exists for. */
 const QUIET = { EXPIRED: 0, FRESH: 1 } as const
+
+/** The AUTHORITATIVE answer, when Claude Code ≥2.1.252 has said it outright. The statusline payload
+ *  now carries a `prompt_cache` block — `expires_at` (epoch SECONDS), `ttl`, `warm` — computed by
+ *  the harness itself, so "is the cache expired?" needs no idle-time inference at all: it is a
+ *  clock comparison against the newest sample's `expires_at`. Read off DISK (the capture WALs), so
+ *  it works with the server down; older payloads without the block fall back to the server tool.
+ *  Field names verified against a LIVE row on 2026-09-01 (TRDD-YE15B2JK step 1), flattened by
+ *  `flattenSample` to `prompt_cache_expires_at` etc. */
+interface AuthoritativeVerdict {
+  expired: boolean
+  sessionId: string
+  workspace: string
+  expiresAtMs: number
+  ttl: string
+  sampleTs: number
+  warm: boolean
+}
+
+export function authoritativeFromWals(project: string | undefined, session: string | undefined): AuthoritativeVerdict | null {
+  // WALs only: the newest sample of any RUNNING session is in a WAL within seconds (~3 s cadence).
+  // A session whose newest row was already sealed into parquet has been idle long enough that the
+  // server-side inference answers it fine — not worth a DuckDB dependency here. Scan the TWO newest
+  // day partitions, not one: batches are filed by WRITE day, so a row can sit in the neighbouring
+  // partition around midnight (the measured partition-slack trap).
+  const streamDir = path.join(statuslineRoot(), 'main')
+  let days: string[]
+  try {
+    days = fs.readdirSync(streamDir).filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d)).sort().slice(-2)
+  } catch {
+    return null // no store at all — fall back
+  }
+  const wantProject = project ? path.resolve(project) : undefined
+  let best: AuthoritativeVerdict | null = null
+  for (const day of days) {
+    const dir = path.join(streamDir, day)
+    let wals: string[]
+    try {
+      wals = fs.readdirSync(dir).filter((f) => f.startsWith('wal-') && f.endsWith('.ndjson'))
+    } catch { continue }
+    for (const wal of wals) {
+      let text: string
+      try {
+        text = fs.readFileSync(path.join(dir, wal), 'utf8')
+      } catch { continue }
+      for (const line of text.split('\n')) {
+        if (!line) continue
+        let row: Record<string, unknown>
+        // The writer appends live; the LAST line can be mid-write. A torn line is skipped, never
+        // fatal — every complete row before it still counts.
+        try { row = JSON.parse(line) as Record<string, unknown> } catch { continue }
+        const expSec = row.prompt_cache_expires_at
+        const ts = row.ts
+        if (typeof expSec !== 'number' || typeof ts !== 'number') continue // pre-2.1.252 payload
+        if (session) {
+          if (row.session_id !== session) continue
+        } else if (wantProject) {
+          const rowProject = typeof row.workspace_project_dir === 'string' ? path.resolve(row.workspace_project_dir) : null
+          if (rowProject !== wantProject) continue
+        }
+        if (best && ts <= best.sampleTs) continue
+        best = {
+          expired: Date.now() >= expSec * 1000,
+          sessionId: String(row.session_id ?? '?'),
+          workspace: String(row.workspace_project_dir ?? row.cwd ?? '?'),
+          expiresAtMs: expSec * 1000,
+          ttl: String(row.prompt_cache_ttl ?? '?'),
+          sampleTs: ts,
+          warm: row.prompt_cache_warm === true,
+        }
+      }
+    }
+  }
+  return best
+}
 
 function flagValue(argv: string[], name: string): string | undefined {
   const i = argv.indexOf(name)
@@ -97,10 +179,33 @@ export async function runCacheExpiredCli(argv: string[]): Promise<number> {
   // The project arg is passed EXPLICITLY (never left to the diagnostics cwd-forwarding) so this
   // verb's scope is decided in one readable place. `--session` addresses a session directly, so a
   // project filter there could only contradict it — omit it and let the id win.
+  const project = flagValue(argv, '--project') ?? process.cwd()
   const args: Record<string, unknown> = session
     ? { sessionId: session }
-    : { project: flagValue(argv, '--project') ?? process.cwd() }
+    : { project }
   if (thresholdMinutes !== undefined) args.thresholdMinutes = thresholdMinutes
+
+  // AUTHORITATIVE PATH FIRST (Claude Code ≥2.1.252): the harness states the expiry outright in the
+  // statusline payload, so when a sample carrying it exists, no inference and no server is needed.
+  // `--threshold-minutes` is an explicit request for the idle-cutoff INFERENCE, so it keeps the
+  // server path — an override the harness's own deadline would silently ignore is worse than none.
+  if (thresholdMinutes === undefined) {
+    const auth = authoritativeFromWals(session ? undefined : project, session)
+    if (auth) {
+      if (asJson) {
+        console.log(JSON.stringify({ source: 'statusline-prompt-cache', ...auth }, null, 2))
+        return EXIT.OK
+      }
+      if (quiet) return auth.expired ? QUIET.EXPIRED : QUIET.FRESH
+      const mins = Math.round(Math.abs(auth.expiresAtMs - Date.now()) / 60000)
+      console.error(
+        `session ${auth.sessionId.slice(0, 8)} in ${auth.workspace} — harness-reported ` +
+        `(ttl ${auth.ttl}) ${auth.expired ? `expired ${mins}min ago` : `expires in ${mins}min`}`,
+      )
+      console.log(auth.expired ? 'true' : 'false')
+      return EXIT.OK
+    }
+  }
 
   // A cannot-answer, in the ONE shape every failure must take: stdout untouched, the WHY on stderr,
   // EX_UNKNOWN. Never a word on stdout — a caller reading stdout must never mistake a diagnosis for
