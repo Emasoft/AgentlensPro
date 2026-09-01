@@ -2,7 +2,7 @@
 name: otlp-ingest-topology
 description: "which OTLP ingest path is actually live / codex sessions grouped wrong / grouped by conversation not per prompt / multiple otlp parsers or processLogs copies / where does the shipped ingest live / second router is a second truth / why did an ingest fix not take effect / how many places parse the OTLP wire format / what OTEL attributes does Claude Code emit / which telemetry fields are we not reading / where does client_request_id or tool_source go"
 ocd: 2026-07-11
-lmd: 2026-07-30
+lmd: 2026-09-01
 metadata:
   node_type: memory
   tier: hub
@@ -11,11 +11,13 @@ metadata:
 publish-globally: false
 ---
 
+^1BSF2RBB [desc:"AgentlensPro parses OTLP in more than one place; only ONE copy is live in the shipped npx/Docker product", keywords:"multiple_otlp_parsers_exist only_one_copy_is_live_in_shipped_product second_router_is_a_second_truth fix_applied_to_wrong_copy_does_nothing which_otlp_ingest_path_is_actually_live how_many_places_parse_the_otlp_wire_format", ocd:2026-07-11, lmd:2026-07-30]
 AgentlensPro parses the OTLP wire format in **more than one place**, and only ONE is
 live in the shipped npx/Docker product. Before touching ingest, know the full set — a
 fix applied to the wrong copy silently does nothing (the "second router is a second
 truth" trap, see [[agentlens-burn-token-model]] lesson on rich-event drift).
 
+^3L66SYOZ [desc:"Three OTLP-log ingest code paths exist; only standalone/server.ts processLogs is the shipped path — otlpCollector.ts and otlpParser.ts's parse functions are dead in prod", keywords:"which_otlp_ingest_path_is_shipped standalone_server_processLogs_is_the_live_path otlpCollector_is_dead_in_prod otlpParser_parseLogPayload_is_dead_but_tested where_does_the_shipped_ingest_live how_many_places_parse_the_otlp_wire_format segmented_span_store gen_ai_response_content_injection", ocd:2026-07-11, lmd:2026-07-30]
 **The OTLP-log ingest implementations (verified 2026-07-11, TRDD-4AFOFVFD / S3-F3a):**
 1. **`standalone/server.ts` `processLogs` — THE SHIPPED PATH.** The standalone server has
    its OWN inline `processLogs`/`processTraces`; it persists to `SegmentedSpanStore`. This
@@ -36,6 +38,7 @@ truth" trap, see [[agentlens-burn-token-model]] lesson on rich-event drift).
 3. **`src/otlpParser.ts` — only `classifyOtlpPayload` is used in prod.** Its
    `parseLogPayload`/`parseTracePayload` are dead-but-tested.
 
+^3NI1EKHC [desc:"Codex per-prompt session grouping (codex:<conv>:prompt-N) is single-sourced in CodexSessionNormalizer, shared by otlpParser/otlpCollector/standalone server", keywords:"codex_per_prompt_session_grouping codexSessionNormalizer_shared_grouper codex_conv_prompt_n_key shipped_processLogs_had_drifted_to_group_by_conversation_id_alone where_does_codex_grouping_live codex_sessions_grouped_wrong grouped_by_conversation_not_per_prompt", ocd:2026-07-11, lmd:2026-07-30]
 **Codex per-prompt session grouping (`codex:<conv>:prompt-N`) — the shared normalizer.**
 The per-prompt grouping is the design intent (asserted across otlpCollector/otlpParser/
 spanSummarizer tests). It now lives ONCE in `src/codexSessionNormalizer.ts`
@@ -44,6 +47,7 @@ collector + the standalone server each hold one long-lived instance (state persi
 across payloads/requests). Before S3-F3a the shipped `processLogs` had drifted to group
 Codex by conversation-id alone.
 
+^7VDN6TUV [desc:"src/summarizers/codex.ts groupCodexSpansBySession is a FOURTH, separate re-derivation of codex prompt grouping that determines the user-visible /api/summary grouping", keywords:"fourth_copy_of_codex_grouping groupCodexSpansBySession summarizer_grouper user_visible_api_summary_grouping ingest_grouping_change_has_zero_summary_effect how_many_places_parse_the_otlp_wire_format", ocd:2026-07-11, lmd:2026-07-30]
 **THE FOURTH copy — the summarizer.** `src/summarizers/codex.ts` `groupCodexSpansBySession`
 re-derives the SAME `codex:<conv>:prompt-N` grouping from stored spans (honoring an
 explicit `codex.session.id` first, else re-deriving via its own ordinal). It is a fourth
@@ -51,6 +55,7 @@ grouper — and the one that determines the **user-visible** `/api/summary` grou
 ingest store-key (impls 1-3) and the summarized view (impl 4) are grouped by SEPARATE
 logic, so an ingest-side grouping change (S3-F3a) has ~zero `/api/summary` effect.
 
+^CGMU661G [desc:"Phase 0b unified only the shared atoms (prompt-event predicate + key format) between the batch summarizer grouper and the streaming normalizer; a full algorithmic fold was rejected because it would change user-visible grouping", keywords:"phase_0b_partial_unification full_fold_rejected batch_grouper_vs_streaming_resolver isCodexPromptEventName isCodexPromptSpanName codexPromptSessionId characterization_test_codexGrouping_test_ts why_was_the_fourth_copy_not_merged", ocd:2026-07-11, lmd:2026-07-30]
 **Phase 0b (2026-07-11) — analyzed and PARTIALLY unified; full fold REJECTED.** impl 4 is a
 BATCH grouper (takes the whole stored-span list, time-SORTS it, honors an explicit
 `codex.session.id` AS the key, absorbs same-trace non-prompt spans); the normalizer is a
@@ -64,6 +69,7 @@ FORMAT (`codexPromptSessionId(conv, n)`), both single-sourced in `codexSessionNo
 `groupCodexSpansBySession` is now covered by a characterization test
 (`src/test/codexGrouping.test.ts`) that locks its output.[^3]
 
+^G2K0B67C [desc:"Full inventory of Claude Code's OTEL metrics/log-events/spans/attributes as of 2026-07-26, listing what we read and what attrs exist", keywords:"what_otel_attributes_does_claude_code_emit claude_code_otel_metrics_list claude_code_log_events_list claude_code_spans_list token_cost_attrs identity_route_attrs correlation_attrs prompt_id message_uuid client_request_id which_telemetry_fields_are_we_not_reading", ocd:2026-07-26, lmd:2026-07-30]
 **The Claude Code OTEL surface — what it emits, and what we do NOT read** (source:
 code.claude.com/docs/en/monitoring-usage.md, verified 2026-07-26). Metrics:
 `claude_code.{session,lines_of_code,pull_request,commit}.count`, `claude_code.cost.usage`,
@@ -78,6 +84,7 @@ Token/cost attrs: `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_c
 `workflow.name`, `skill_name`, `tool_name`, `tool_use_id`, `mcp_server_name`, `mcp_tool_name`.
 Correlation attrs: `prompt.id`, `message.uuid`, `client_request_id`.
 
+^JE493SWP [desc:"request_id (not client_request_id) is the real OTEL-to-raw-body join key; client_request_id matched 0/1993 body filenames while request_id matched 482/2046", keywords:"request_id_is_the_real_join_key client_request_id_does_not_match_body_files otel_to_raw_body_join_key where_does_client_request_id_or_tool_source_go api_request_event_carries_session_id_directly query_source_labels_compact claude_code_compaction_event trigger_pre_tokens_post_tokens content_max_length_truncation_knob", ocd:2026-07-26, lmd:2026-07-30]
 **`request_id` — NOT `client_request_id` — is the OTEL↔raw-body join key** (measured 2026-07-26 over
 one day's events: `request_id` matched a body filename 482/2046, `client_request_id` **0/1993**).
 `request_id` carries the API id (`req_011C…`) that names the body files; the 482/2046 shortfall is
@@ -92,6 +99,7 @@ distribution: `repl_main_thread`, `agent:*`, `agent_summary`, `away_summary`, `c
 `workflow.run_id`/`workflow.name` ARE already ingested (spanSummarizer.ts). Content-size knob we do
 not set: `CLAUDE_CODE_OTEL_CONTENT_MAX_LENGTH` (default 60 KB truncation).[^4]
 
+^NBI50WYE [desc:"Claude Code sends the anthropic-beta cache-diagnosis header; response bodies carry a ground-truth diagnostics.cache_miss_reason field we currently only infer statistically", keywords:"cache_diagnosis_beta_header diagnostics_cache_miss_reason ground_truth_cache_miss_reason messages_changed model_changed system_changed tools_changed previous_message_not_found burnSeismic_cold_rewrite_is_a_guess", ocd:2026-07-26, lmd:2026-07-30]
 **The raw responses carry the cache-diagnostics beta.** Claude Code sends
 `anthropic-beta: cache-diagnosis-2026-04-07`, so response bodies have a top-level `diagnostics`:
 `null` when the prefix held, else `cache_miss_reason: {type, cache_missed_input_tokens}` with type ∈
@@ -100,12 +108,14 @@ unavailable`. Measured over 350 recent bodies: 347 `null`, 3 `messages_changed` 
 missed tokens). This is a GROUND-TRUTH cache-miss reason per call — we currently infer the reason
 statistically (burnSeismic's COLD_REWRITE tag, the gap-bucket heuristic) when the API states it.
 
+^NJZZ75O3 [desc:"v2.16.0 (ba5a432) wired otelCallEvents.ts to read claude_code.api_request/compaction from the span store; get_cache_event_log unattributable dropped from 91 to 0", keywords:"acted_on_in_v2_16_0 otelCallEvents_ts get_cache_event_log unattributable_dropped_to_zero cache_miss_reason_surfaced_as_column compaction_call_query_source_compact still_unread_message_uuid_tool_source", ocd:2026-07-26, lmd:2026-07-30]
 **ACTED ON in v2.16.0** (`ba5a432`): `src/otelCallEvents.ts` reads `claude_code.api_request` +
 `claude_code.compaction` from the span store, and `get_cache_event_log` now sources from it first
 (raw bodies became enrichment + fallback). Live result: `unattributable` **91 → 0**, cost from the
 harness, and the compaction call visible as `query_source: compact`. `cache_miss_reason` is surfaced
 as a column. Still unread: `message.uuid`, `tool_source`.
 
+^Q3X5UXRZ [desc:"Prefer the OTEL event's own cost_usd/cost_usd_micros over recomputing from pricing.ts, because Claude Code's price table is TTL-tier-aware and ours is not; verified to the cent", keywords:"prefer_cost_usd_over_recomputing pricing_ts_is_not_ttl_tier_aware verified_to_the_cent ephemeral_1h_rate_10_per_mtok flat_6_25_rate_is_wrong recompute_only_needed_on_jsonl_only_path", ocd:2026-07-26, lmd:2026-07-30]
 **Prefer OTEL `cost_usd` over recomputing from pricing.ts.** The event carries `cost_usd` +
 `cost_usd_micros`, and Claude Code's own price table is TTL-tier-aware where ours is not (see
 [[cache-ttl-model]] [^3]). Verified to the cent on a live call: in=2, cache_read=62,610,
