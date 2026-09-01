@@ -172,7 +172,36 @@ therefore no `accountWindows`, exactly as the test reports.
 That would be a REAL parity gap (the TS server built these from OTEL), and it is one cause behind
 all 5 — not five separate ports.
 
-**DECIDING TEST, cheap and unambiguous:** boot alcore on a scratch dir with `--no-log-scan`, POST
+**RUN. HYPOTHESIS 3 CONFIRMED, AND NARROWED ONE STEP FURTHER (2026-09-01).**
+
+Scratch alcore, `--no-log-scan`, OTEL-only, POST `/v1/logs` with one `user_account` record +
+three `api_request` records carrying `user.account_uuid=acct-otel-x`, then `GET /api/burn-status`:
+
+```
+ingest_http=200
+accountWindows = 1  ['None']        ← built, but the account is the UNKNOWN bucket
+```
+
+**The window IS built from OTEL — so "alcore ignores OTEL for card timelines" is WRONG too
+(hypothesis 3 as originally worded).** What is actually broken is narrower and exact: the
+**per-event ACCOUNT ATTRIBUTION is lost**. Every `api_request` lands in the `accountUuid: null`
+bucket instead of `acct-otel-x`, so `burnStatusAccount('acct-cal-a')` finds nothing and the
+precondition fails.
+
+⇒ **THE BUG: `user.account_uuid` on an OTLP `api_request` log record is not carried onto the
+event that `compute_account_window_budgets` groups by** (`s(e,"accountUuid")`,
+`burn/monitor.rs:633`). Either the ingest transform drops the attribute, or the card timeline
+entry stores it under a different key than `api_request_events` reads
+(`burn/monitor.rs:247-258`).
+
+**START HERE, and it is a 2-file read:** compare the attribute name the ingest transform writes
+against the key `api_request_events` reads. On the live server the accounts resolve because the
+JSONL scan supplies them by another route — which is exactly why this stayed invisible in
+production and only shows up OTEL-only.
+
+**This is now a single, located defect behind all 5 failures — not five ports.**
+
+**(superseded) DECIDING TEST, cheap and unambiguous:** boot alcore on a scratch dir with `--no-log-scan`, POST
 the fixture's own `/v1/logs` payload, then `GET /api/burn-status`. Empty `accountWindows` confirms
 the OTEL path is the gap; populated means the difference is elsewhere and this hypothesis dies too.
 **Run that before writing any code** — this is the third hypothesis in this card, and the first two
