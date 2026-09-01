@@ -61,7 +61,12 @@ fn body_matches_the_frozen_key_order_exactly() {
     ]);
     assert_eq!(keys(&body["persistence"]["bodiesLastPurge"]), ["at", "removedFiles", "freedBytes", "keptFiles", "keptBytes"]);
     assert_eq!(keys(&body["persistence"]["files"]), ["spans", "offsets", "cards"]);
-    assert_eq!(keys(&body["bodies"]), ["archive", "lastPass", "spool"]);
+    // `live` and `parked` were ADDED to the frozen shape on 2026-09-01 (TRDD-ZIWEB0UW) — the same
+    // deliberate-extension precedent as `droppedOnFailure` above: the capture gauges the CLI's
+    // status line reads (`bodies.live {files,newestMs}`, `bodies.parked {files,bytes,onDisk}`)
+    // existed only in the TS server, so `server status` printed "capture: unknown" against alcore.
+    // Additive only; every pre-existing key keeps its name.
+    assert_eq!(keys(&body["bodies"]), ["archive", "lastPass", "live", "parked", "spool"]);
     assert_eq!(keys(&body["bodies"]["archive"]), ["volumes", "bytes", "entries"]);
     assert_eq!(body["bodies"]["spool"], Value::Null, "SPOOL_MODE off ⇒ null");
     assert_eq!(keys(&body["hookEvents"]), ["files", "bytes", "receivedSinceBoot", "spooled"]);
