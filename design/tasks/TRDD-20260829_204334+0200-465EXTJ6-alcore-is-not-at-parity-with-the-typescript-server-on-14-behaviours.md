@@ -155,6 +155,29 @@ calibration."* `ingestAccountConsumption` posts a synthetic shape that the TS se
 that alcore does not turn into a card timeline (e.g. it posts raw consumption where alcore needs
 `api_request` timeline entries on a session card).
 
+**CORRECTION (same session, minutes later): the FIXTURE hypothesis is WRONG — I read it.**
+
+`ingestAccountConsumption` (`serverCalibration.test.ts:102-109`) posts **real OTLP**:
+`POST /v1/logs` with `{resourceLogs:[{scopeLogs:[{logRecords}]}]}`, carrying one `accountRecord`
+plus one `apiRequestRecord` per event. That is the SAME wire path Claude Code's own telemetry uses
+— not a synthetic shape alcore never supported. So "fix the fixture" is off the table.
+
+**THE SHARPER HYPOTHESIS, and it fits every observation:** the test boots with `--no-log-scan` and
+feeds **OTEL only**. The live server that DOES populate `accountWindows` runs **with** the JSONL
+log scan. So alcore may build session-card `timeline[]` entries from **transcripts** but not from
+**OTEL `api_request` log records** — and `api_request_events` (`burn/monitor.rs:247`) reads only
+`card["timeline"]`. An OTEL-only alcore would then have cards with no `api_request` timeline, and
+therefore no `accountWindows`, exactly as the test reports.
+
+That would be a REAL parity gap (the TS server built these from OTEL), and it is one cause behind
+all 5 — not five separate ports.
+
+**DECIDING TEST, cheap and unambiguous:** boot alcore on a scratch dir with `--no-log-scan`, POST
+the fixture's own `/v1/logs` payload, then `GET /api/burn-status`. Empty `accountWindows` confirms
+the OTEL path is the gap; populated means the difference is elsewhere and this hypothesis dies too.
+**Run that before writing any code** — this is the third hypothesis in this card, and the first two
+were both wrong.
+
 **RECLASSIFY BEFORE FIXING.** Do not "port" anything until this is settled: compare what
 `ingestAccountConsumption` posts against what the LIVE feed produces for one card
 (`/api/sessions` → a card's `timeline[]`). If the fixture's shape is simply one alcore never
