@@ -1,9 +1,9 @@
 ---
 trdd-id: B7DSTJLS
 title: cacheBreakTimeline tests pass in CI and fail on a developer machine, and fail differently depending on run order
-column: testing
+column: ai_review
 created: 2026-08-29T16:50:19+0200
-updated: 2026-09-01T19:54:09+0200
+updated: 2026-09-01T19:59:51+0200
 current-owner: main-session
 task-type: bugfix
 scope: project
@@ -86,5 +86,6 @@ Root cause found and fixed in `aef94208`: 12 fixture calls passed `storeDir: noS
 229MB `~/.agentlens/hook-events` synchronously inside mocha's fixed timeout — load-dependent by
 construction. All 12 sites now pass `hookEventsDir: noStore`. NOT a timeout raise.
 Analysis: reports/cachebreak-flake/20260901_195900+0200-load-dependence-analysis.md.
-NEXT ACTION: after the in-flight full-suite gate finishes, `pnpm run compile-tests` and run
-cacheBreakTimeline.test.js alone under load to confirm the flake is gone; then → ai_review.
+VERIFIED 2026-09-01: compile-tests 0; cacheBreakTimeline.test.js alone = 67 passing / 0 failing,
+exit 0, INCLUDING the real-corpus cost-peak test that was the full-suite run's one red (that run
+used the pre-fix out/ and ran under a deliberate load storm). → ai_review.
