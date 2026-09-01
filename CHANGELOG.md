@@ -4,6 +4,42 @@ All notable changes to AgentlensPro are documented here.
 
 > **Lineage note:** AgentlensPro continues the history of [AgentLens](https://github.com/RogerReed/agentlens), from which it was forked. Entries below that predate the fork refer to the original AgentLens lineage.
 
+## [2.33.0] - 2026-09-01
+
+### Changed
+
+- **The Rust server (alcore) is now the backend everywhere on a machine.** All 14 measured parity
+  gaps vs the TypeScript server are closed (admission control + body cap, hook-spool drain, MCP
+  CORS, P5 burn calibration, the account join in span summaries); the full unit suite runs green
+  against alcore and boots it BY DEFAULT (`AGENTLENS_TEST_ENGINE=ts` opts out); and every server
+  spawn path — `server start`, the hook auto-revive, and `setup` — now picks the engine through the
+  same resolver, so the TS bundle can no longer resurrect itself after a restart.
+- CI builds a release `alcore` before running the unit suite (and the publish workflow reuses the
+  linux-x64 binary artifact), so CI exercises the Rust engine instead of silently riding the TS
+  fallback.
+
+### Added
+
+- **`agentlenspro cache-expired` is now authoritative on Claude Code ≥2.1.252**: the harness
+  states the prompt-cache deadline itself (`prompt_cache.expires_at` in the statusline payload),
+  and the verb reads the newest captured sample off disk — no server, no idle-time inference.
+  Older payloads and `--threshold-minutes` keep the server-side inference.
+- The statusline store guarantees all 12 flattened `prompt_cache_*` columns, and
+  `statusline-history cache` resolves its 5m/1h cost bracket to ONE figure from the harness's own
+  `ttl` field, printing the harness `misses` counter beside the computed verdict.
+- `PreModelSwitch`/`PostModelSwitch` lifecycle hooks (Claude Code 2.1.251) are captured — the
+  automatic model switches (safety-classifier fallback, plan-mode toggles) that invalidate the
+  prompt cache with no transcript trace now get timestamped.
+- alcore's `/api/server-stats` reports the capture gauges (`bodies.live`, `bodies.parked`), so
+  `server status` prints the full capture line against the Rust server.
+
+### Fixed
+
+- The `cacheBreakTimeline` unit tests no longer scan the live hook-events store through an
+  unset `hookEventsDir` — the source of their load-dependent timeouts.
+- Two sonnet-5 pricing tests are pinned to a promo-era timestamp; the scheduled 2026-09-01 rate
+  change (intro → sticker) fires correctly and no longer fails undated lookups.
+
 ## [2.32.0] - 2026-08-29
 
 ### Added
