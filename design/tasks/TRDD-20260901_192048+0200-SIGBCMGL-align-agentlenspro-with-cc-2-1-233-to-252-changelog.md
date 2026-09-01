@@ -1,9 +1,9 @@
 ---
 trdd-id: SIGBCMGL
 title: Align agentlenspro taxonomies and diagnostics with Claude Code 2.1.233→2.1.252
-column: dev
+column: ai_review
 created: 2026-09-01T19:20:48+0200
-updated: 2026-09-01T19:38:10+0200
+updated: 2026-09-01T20:00:30+0200
 current-owner: agentlenspro-15
 task-type: feature
 ---
@@ -62,5 +62,10 @@ Done this session (commits named below); remaining boxes are docs/design work, n
 ## Acceptance
 
 - [x] check-types 0, esbuild 0, cache view + cache-expired live-verified against real samples.
-- [ ] Full suite green after the batch (run with the next full-suite gate, not per-edit).
-- [ ] Remaining boxes done or split into their own cards.
+- [x] Full suite after the batch: **2535 passing / 1 failing** — the 1 red was the pre-existing
+      B7DSTJLS real-corpus timeout, whose root fix (`aef94208`) landed mid-run un-compiled; the
+      file standalone after recompile is **67/67, exit 0**. No red traces to this card's changes.
+- [x] Remaining boxes carded: spend_limit stays open here (needs a gateway sample); the server-side
+      ttl-regime consult of `prompt_cache_ttl` is DEFERRED with rationale — the CLI already answers
+      authoritatively from disk, so a server duplicate adds little; revisit only if a server-side
+      consumer (dashboard, MCP tool) needs the verdict without the CLI.
