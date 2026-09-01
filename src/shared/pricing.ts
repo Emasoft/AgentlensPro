@@ -69,6 +69,15 @@ export interface ModelRates {
   scheduledChange?: { from: string; rates: Partial<ModelRates>; note: string }
 }
 
+// TWO documented ways the harness's own `cost_usd` legitimately diverges from this table
+// (CC 2.1.239/2.1.243, TRDD-SIGBCMGL) — neither is an anomaly and neither should be "fixed" here:
+//  * a `modelPricing` managed setting substitutes an org's CONTRACTED per-model rates and discount
+//    multiplier into /cost, the status line, and telemetry cost figures;
+//  * data-residency (US-only inference) workspaces carry a 1.1x premium the harness includes.
+// This table stays LIST price. Doctrine already prefers a harness-reported cost_usd over
+// recomputing; a diagnostic comparing the two must label a systematic org-wide offset as
+// contracted/premium rates rather than flagging a pricing-table bug.
+
 // Keyed by normalized model ID (lowercase, no date suffix).
 // Exported ONLY for scripts/export-pricing.js, which derives rust-core's embedded pricing.json
 // from this table (TRDD-DMWOBWFH): the Rust core must never carry a hand-maintained rates
