@@ -2,7 +2,7 @@
 name: cache-ttl-model
 description: "keepWarm says cold turns but the session felt warm / is the cache TTL 5 minutes or 1 hour / why did the heartbeat look like it was rewriting the cache / do fork pingers save money / when is cache_creation a real cold rewrite / are our cache-write dollar figures too low / why is a 1-hour cache write more expensive / what is the minimum prefix size that caches at all — the verified TTL-regime matrix, the tiered write rate, and measured keep-warm economics"
 ocd: 2026-07-11
-lmd: 2026-07-30
+lmd: 2026-09-01
 metadata:
   node_type: memory
   type: project
@@ -79,6 +79,11 @@ wrong number (measured: a 300x one).
 ^ATOM-A6WK-Q4YG [desc:"why does a fan-out now show one cold write plus N reads / fork storm detector quiet on modern Claude Code", keywords: fork_storm_stopped_firing_on_new_claude_code workflow_fan_out_cheaper_than_expected why_only_one_cold_write_in_a_fan-out workflow_siblings_read_cached_prefix CLAUDE_CODE_WORKFLOW_PREFIX_STAGGER_MS subagent_fork_default_inherits_prompt_cache 200_subagent_cap_removed, type: project, ocd: 2026-08-14, lmd: 2026-08-14]
 
 The N-cold-writes fan-out cost is VERSION-CONDITIONAL since Claude Code 2.1.229/2.1.232: >=2.1.229 staggers WORKFLOW same-prefix siblings (first sibling pays the cache write, later ones read it; CLAUDE_CODE_WORKFLOW_PREFIX_STAGGER_MS=0 disables), and >=2.1.232 makes fork spawning the default with the fork inheriting the conversation AND its prompt cache (2.1.224 removed the 200-subagent cap). The N x full-prefix-write cost survives only for parallel Agent-tool forks issued in one message, a disabled stagger, or older CC. AgentlensPro detection (FORK_STORM / FORK_STORM_FORMING) keys on OBSERVED writes, so it goes quieter, never wrong (TRDD-0YG37FXM, commit 1a9fe56).
+
+
+^ATOM-N9P1-MNYD [desc: "TTL regime became configurable in CC 2.1.243/248 (settings + per-agent frontmatter) so subagents-always-5m is only the default; prompt_cache_ttl is per-session ground truth; three version-gated miss/t", keywords: subagent_ttl_not_5m promptCacheTtl_setting subagentPromptCacheTtl experimental.cacheTtl_per_agent ttl_regime_configurable hourly_cache_miss_cause oauth_token_refresh_cache_miss ScheduleWakeup_resume_cache_miss overage_resume_cold_first_turn trace_fragmented_mid_turn PreToolUse_defer_new_trace_id prompt_cache_ttl_ground_truth, trdd: TRDD-SIGBCMGL, ocd: 2026-09-01, lmd: 2026-09-01]
+
+The TTL regime is no longer fixed by turn location alone (CC 2.1.243/248, TRDD-SIGBCMGL): promptCacheTtl and subagentPromptCacheTtl settings let API-key/cloud users pick the tier per conversation vs subagent, and an agent definition's experimental.cacheTtl frontmatter sets a PER-AGENT TTL — so 'main=1h, fresh subagents=ALWAYS 5m' is now only the subscription DEFAULT, not an invariant. Where a session has statusline samples, prompt_cache_ttl is the per-session ground truth and beats any regime inference. Version-gated cache-miss causes for historical attribution: CC < 2.1.248 sessions had (a) an hourly full cache miss from tool definitions re-rendered on OAuth token refresh and (b) a ScheduleWakeup tool-def change between a session and its --resume under usage overage — both fixed in 2.1.248, so an unexplained hourly-cadence cold write in an older capture has a named cause. CC < 2.1.239 also fragmented OTEL traces when a PreToolUse hook deferred a tool (a new trace id mid-turn), which affects span-store session stitching of older captures.
 
 ## Notes and lessons learned
 
