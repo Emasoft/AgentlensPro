@@ -148,7 +148,10 @@ function repoMediaDir(): string {
 }
 
 export function alcoreTestBin(): string | null {
-  if ((process.env.AGENTLENS_TEST_ENGINE ?? '').trim() !== 'alcore') return null
+  // DEFAULT engine since 2026-09-01 (TRDD-1B98LCVR box 3): the full suite ran green against alcore
+  // (2529 passing; the only 2 failures were date-pinned pricing tests unrelated to any server).
+  // `AGENTLENS_TEST_ENGINE=ts` opts back into the TypeScript bundle until box 4 deletes it.
+  if ((process.env.AGENTLENS_TEST_ENGINE ?? 'alcore').trim() !== 'alcore') return null
   // A LIST of repo roots, not one guess. This file runs from TWO layouts — `src/test/helpers/`
   // (3 up) and the compiled `out/test/test/helpers/` (4 up) — and a single `'..','..','..'`
   // resolved to `out/` under mocha, so this returned null with the engine explicitly requested and
@@ -220,10 +223,9 @@ export async function spawnServerWithRetry(opts: SpawnServerRetryOptions): Promi
     // alcore here rather than in 15 separate files — and, more importantly, it can only ever be
     // one of the two, which is the property box 4 (deleting standalone/server.ts) depends on.
     //
-    // Opt-IN for now (`AGENTLENS_TEST_ENGINE=alcore`). The engines are not yet proven at parity —
-    // two TS-only behaviours have already been found and ported this week, and both were invisible
-    // to an endpoint diff — so flipping the default before the suite has run green against alcore
-    // would convert an unknown number of real parity gaps into one undifferentiated red suite.
+    // alcore is the DEFAULT since 2026-09-01: all 14 measured parity gaps were closed and the full
+    // suite ran green under it (2529 passing). `AGENTLENS_TEST_ENGINE=ts` opts out, and the
+    // no-binary case still falls back to server.js rather than failing 15 files with spawn errors.
     // Substitute ONLY for the real bundle. `spawnServerWithRetry` is also used to launch
     // deliberately fake server scripts (freePortRetry.test.ts spawns a stub to prove the port-race
     // retry), and swapping alcore in there replaced the subject of the test with a different

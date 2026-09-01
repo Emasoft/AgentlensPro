@@ -20,7 +20,9 @@ function makeCard(id: string, startTime: string, overrides: Partial<SessionSumma
 
 suite('pricing — claude-sonnet-5 (TRDD-ZK37VG4X spec 1)', () => {
   test('claude-sonnet-5 has a rate-table entry (was missing → silent $0 sessions)', () => {
-    const rates = lookupRates('claude-sonnet-5')
+    // Pinned to a promo-era timestamp: from 2026-09-01 the scheduled change bills $3/$15, so an
+    // undated lookup (= today) would correctly return sticker rates and fail these intro asserts.
+    const rates = lookupRates('claude-sonnet-5', '2026-08-15T12:00:00Z')
     assert.ok(rates, 'claude-sonnet-5 must resolve to rates')
     // Introductory pricing through 2026-08-31: $2/$10 per MTok, cache 0.1x/1.25x of input.
     assert.strictEqual(rates!.inputPerMTok, 2.00)
@@ -32,7 +34,7 @@ suite('pricing — claude-sonnet-5 (TRDD-ZK37VG4X spec 1)', () => {
 
   test('claude-sonnet-5 session cost is non-zero and matches the intro rates', () => {
     // 1M tokens in each bucket → 2 + 0.2 + 2.5 + 10 = 14.7 USD at intro pricing.
-    const cost = calcTokenCostUsd(1_000_000, 1_000_000, 1_000_000, 1_000_000, 'claude-sonnet-5')
+    const cost = calcTokenCostUsd(1_000_000, 1_000_000, 1_000_000, 1_000_000, 'claude-sonnet-5', 0, '2026-08-15T12:00:00Z')
     assert.ok(Math.abs(cost - 14.7) < 1e-9, `expected 14.7, got ${cost}`)
   })
 
