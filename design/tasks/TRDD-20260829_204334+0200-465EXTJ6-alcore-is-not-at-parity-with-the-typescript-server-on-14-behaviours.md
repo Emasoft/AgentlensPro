@@ -120,6 +120,27 @@ burn-event list, or the per-event account attribution (`accountUuid`) is not bei
 it. **Investigate the event SOURCE, not `compute_account_window_budgets` and not
 `burn_calibration.rs` — both are correct.**
 
+**THE CHAIN, TRACED TO ITS SOURCE (2026-09-01, final narrowing):**
+
+```
+GET /api/burn-status → accountWindows[]            (test asserts this is non-empty)
+  ← compute_account_window_budgets(events,…)        burn/monitor.rs:630, wired :889
+      groups by  s(e,"accountUuid")                 :633  — empty events ⇒ empty output
+  ← events                                          built at burn/monitor.rs:307
+  ← api_request_events(card)                        burn/monitor.rs:247
+      reads card["timeline"][] where type=="api_request"   :250-253
+```
+
+⇒ **The burn events are derived from SESSION CARDS' `timeline[]`, not from raw spans.** So the
+precondition fails if alcore's session cards do not carry `timeline[]` entries of
+`type: "api_request"` (with `inputTokens`/`outputTokens`/`cacheReadTokens`/`cacheCreateTokens`
+and an `accountUuid`) after the fixture's consumption is ingested.
+
+**START HERE:** ingest the fixture, then dump one session card and check whether `timeline[]`
+contains `api_request` entries at all. That single observation splits the remaining work in two:
+cards have no timeline ⇒ the card builder is the gap; cards have a timeline but no `accountUuid`
+⇒ the attribution is the gap. Everything downstream of it is already verified correct.
+
 **NEXT: verify the account window independently** — boot alcore on a scratch dir, ingest the same
 fixture the test uses, and query the account registry directly. That answers "is alcore not
 populating it" vs "is the test reading it wrong" without touching either the calibration port or
