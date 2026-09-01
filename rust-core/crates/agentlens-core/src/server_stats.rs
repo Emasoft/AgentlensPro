@@ -240,6 +240,39 @@ pub fn live_bodies_liveness(dirs: &[std::path::PathBuf]) -> (u64, Option<f64>) {
     (files, newest_ms)
 }
 
+/// src/rustStorePass.ts `parkedBodiesGauge` — cross-references the pass's persisted
+/// `strandedNames` (TRDD-8TM7I49X: bodies whose store row failed verify and were never deleted)
+/// against the live capture dirs. `None` = pass-state file missing/corrupt ("could not look" —
+/// the CLI renders this as `unknown`, never as zero). `Some((files, bytes, onDisk))` mirrors the
+/// TS shape: `files` is the persisted stranded-name count, `bytes`/`onDisk` only what is still
+/// found on disk (a name can outlive its file — the `onDisk < files` "ghost" case).
+///
+/// ponytail: no mtime/readdir-count cache like the TS's `parkedCache` — this endpoint is
+/// admission-exempt and dashboards poll it, so add the cache if a profile ever shows this stat
+/// path hot enough to matter (TS added its cache after measuring 14.7ms/call at ~1000 names).
+pub fn parked_bodies_gauge(store_dir: &Path, live_dirs: &[std::path::PathBuf]) -> Option<(u64, u64, u64)> {
+    let raw = std::fs::read_to_string(store_dir.join(agentlens_store::pass::PASS_STATE_FILE)).ok()?;
+    let parsed: Value = serde_json::from_str(&raw).ok()?;
+    let names = parsed.get("strandedNames")?.as_array()?;
+    let mut remaining: std::collections::HashSet<String> =
+        names.iter().filter_map(|v| v.as_str().map(str::to_string)).collect();
+    let files = remaining.len() as u64;
+    let (mut bytes, mut on_disk) = (0u64, 0u64);
+    for dir in live_dirs {
+        if remaining.is_empty() {
+            break;
+        }
+        for name in remaining.clone() {
+            if let Ok(meta) = std::fs::metadata(dir.join(&name)) {
+                bytes += meta.len();
+                on_disk += 1;
+                remaining.remove(&name);
+            }
+        }
+    }
+    Some((files, bytes, on_disk))
+}
+
 /// Resident set size of this process, bytes. macOS: proc_pidinfo(PROC_PIDTASKINFO); Linux:
 /// /proc/self/statm × page size; elsewhere 0 (unknown, not a guess).
 pub fn rss_bytes() -> u64 {
@@ -358,6 +391,10 @@ pub fn server_stats(st: &CoreState, now_ms: i64) -> Value {
     // scan cost as the TS's single-dir version this mirrors (bodyArchive.ts `liveBodiesLiveness`).
     let bodies_scope = crate::burn::guard::resolve_bodies_read_scope(data_dir, &std::env::vars().collect());
     let (live_files, live_newest_ms) = live_bodies_liveness(&bodies_scope.dirs);
+    // TRDD-ZIWEB0UW remainder: the `live` gauge above shipped without its `parked` sibling, so
+    // `server status` silently dropped the PARKED suffix that warns of TRDD-8TM7I49X bodies
+    // pinned forever. Both live dirs are scanned — a parked name can belong to either.
+    let parked = parked_bodies_gauge(&data_dir.join("store"), &bodies_scope.dirs);
     let hook_spooled = std::fs::read_dir(data_dir.join("hook-spool"))
         .map(|rd| rd.flatten().filter(|e| e.file_name().to_str().is_some_and(|n| n.ends_with(".json"))).count())
         .unwrap_or(0);
@@ -422,9 +459,10 @@ pub fn server_stats(st: &CoreState, now_ms: i64) -> Value {
             "archive": { "volumes": volumes, "bytes": archive_bytes, "entries": entries },
             "lastPass": { "at": 0, "removedFiles": 0, "freedBytes": 0, "keptFiles": 0, "keptBytes": 0 },
             "live": { "files": live_files, "newestMs": live_newest_ms.map(num).unwrap_or(Value::Null) },
-            // NOT PORTED: PARKED count/bytes (TRDD-8TM7I49X pass-state cross-reference) — key
-            // absent, same convention as every other not-yet-ported row in this file; the CLI's
-            // `parkedSuffix` already renders nothing for an absent field (never "0 parked").
+            "parked": match parked {
+                Some((files, bytes, on_disk)) => json!({ "files": files, "bytes": bytes, "onDisk": on_disk }),
+                None => Value::Null,
+            },
             // NOT PORTED: the spool (TRDD-KB17X5G2) — SPOOL_MODE off ⇒ null, as the TS server
             // reports on a machine without a spool mount.
             "spool": Value::Null,
@@ -509,5 +547,35 @@ mod capture_block_tests {
 
         std::fs::remove_dir_all(&dir).ok();
         std::fs::remove_dir_all(&empty_dir).ok();
+    }
+
+    /// TRDD-ZIWEB0UW remainder: `bodies.parked` must distinguish "no pass-state file" (`None` —
+    /// renders `unknown`) from "a real, populated stranded set" — a stub returning `None` always,
+    /// or `Some((0,0,0))` always, would pass a same-shape-only check.
+    #[test]
+    fn parked_bodies_gauge_reads_stranded_names_and_reports_ghosts() {
+        let store_dir = std::env::temp_dir().join(format!("alcore-parked-test-{}", std::process::id()));
+        let live_dir = std::env::temp_dir().join(format!("alcore-parked-test-live-{}", std::process::id()));
+        std::fs::create_dir_all(&store_dir).unwrap();
+        std::fs::create_dir_all(&live_dir).unwrap();
+
+        // No pass-state file yet ⇒ None ("could not look"), never a fabricated zero.
+        assert!(parked_bodies_gauge(&store_dir, std::slice::from_ref(&live_dir)).is_none());
+
+        // One stranded name present on disk, one whose file already vanished (a "ghost").
+        std::fs::write(live_dir.join("a.request.json"), b"12345").unwrap();
+        agentlens_store::pass::save_pass_state(
+            &store_dir.join(agentlens_store::pass::PASS_STATE_FILE),
+            &std::collections::HashSet::new(),
+            &["a.request.json".to_string(), "gone.request.json".to_string()].into_iter().collect(),
+        );
+
+        let (files, bytes, on_disk) = parked_bodies_gauge(&store_dir, std::slice::from_ref(&live_dir)).unwrap();
+        assert_eq!(files, 2, "files counts the persisted stranded-name set, not just what's on disk");
+        assert_eq!(bytes, 5, "bytes sums only the names actually found on disk");
+        assert_eq!(on_disk, 1, "onDisk < files is the ghost case — the missing name must not count");
+
+        std::fs::remove_dir_all(&store_dir).ok();
+        std::fs::remove_dir_all(&live_dir).ok();
     }
 }
