@@ -213,7 +213,34 @@ match the attribute shape alcore's log transform expects (I guessed `stringValue
 event-name body). **A hand-built payload proving "attribution is lost" proves nothing if the
 payload itself is wrong** — that is the same class of error as reading a half-written output file.
 
-**NEXT, and do it in this order:**
+**STEP 1 RUN — the probe was NOT the bug. Measured with the fixture's EXACT record shape:**
+
+```
+ingest=200
+accountWindows = [('None', 3)]      ← all 3 api_request events landed; account still unknown
+```
+
+My earlier hand-rolled probe differed in two real ways (I had put `user.account_uuid` directly on
+the `api_request` record, and used `stringValue` for token attrs). The fixture does neither: tokens
+are `intValue`, and **the account arrives on a SEPARATE record** —
+`event.name = claude_code.api_request_body` carrying `session.id` + `user.account_uuid`
+(`serverCalibration.test.ts:74-83`). Rebuilt to match exactly; same result, so this is a real
+defect and not a probe artifact.
+
+**THE DEFECT, located:** the events ingest fine (3 of 3), so the loss is purely the account JOIN.
+In TS the `api_request` record has no uuid of its own and resolves it through
+`callBodyRegistry.accountFor(session.id)` (`claude.ts:587`, the `||` fallback). alcore has both
+halves — `ingest_parsed` records the pairs (`for (sid, acct) in &r.account_pairs {
+state.accounts.record(sid, acct) }`, `lib.rs`) and the summarizer takes an `account_for` closure
+(`summarize/claude.rs:692`) — so the suspect is the WIRING between them: whether the closure the
+card-building path is handed actually consults `state.accounts`, or is a stub that always returns
+empty.
+
+**START HERE (one grep, no guessing):** find every construction site of the `account_for` closure
+passed into the Claude summarizer and check what it reads. A closure returning empty explains this
+result exactly, with every other link on the chain already verified present.
+
+**(superseded) NEXT, and do it in this order:**
 1. Re-run the probe using the FIXTURE's own record builders (`accountRecord` / `apiRequestRecord`
    in `serverCalibration.test.ts`), not a hand-rolled payload. If `accountWindows` then carries the
    uuid, my probe was the bug and the real failure is elsewhere in the test's setup.
