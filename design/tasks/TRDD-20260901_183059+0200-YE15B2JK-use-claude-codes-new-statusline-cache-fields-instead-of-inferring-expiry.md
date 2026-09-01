@@ -1,20 +1,33 @@
 ---
 trdd-id: YE15B2JK
 title: Claude Code now reports cache state in the statusline payload so cache-expired should read it instead of inferring
-column: todo
+column: ai_review
 created: 2026-09-01T18:30:59+0200
-updated: 2026-09-01T18:30:59+0200
+updated: 2026-09-01T19:50:43+0200
 current-owner: main-session
 task-type: feature
 scope: project
 project-id: agentlenspro
 relevant-rules: []
-implementation-commits: []
+implementation-commits: [494eb779, 2d06942b]
 ---
 
 # Read the statusline's own cache fields instead of inferring expiry
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-09-01T18:30:59+0200
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-09-01T19:50:43+0200
+
+**Shipped and live-verified this session:**
+- `494eb779` — `agentlenspro cache-expired` now answers AUTHORITATIVELY from the statusline
+  payload's `prompt_cache` block (CC 2.1.252): reads the newest captured WAL row off disk (works
+  with the server down); `prompt_cache_expires_at` is epoch SECONDS. Field names were dumped from
+  a LIVE row (NEXT ACTION step 1, done). 5 unit tests in `src/test/cacheExpiredAuthoritative.test.ts`.
+- `2d06942b` — all 12 flattened `prompt_cache_*` columns added to `GUARANTEED_COLUMNS` in
+  `src/statuslineStore.ts`; the `statusline-history cache` view resolves its 5m/1h cost bracket to
+  one figure via `prompt_cache_ttl` and shows the harness misses counter.
+
+**Remaining (open box, not blocking):** `rate_limits.spend_limit` column awaits a real
+gateway-captured row; server-side ttl-regime resolution consulting `prompt_cache_ttl` is tracked
+on TRDD-SIGBCMGL, not here.
 
 **USER directive, 2026-09-01T18:30:59+0200:** *"the new claude code added fields with input info about the
 cache state in the statusline json data, so if you capture the statusline like now, you need to use
@@ -52,9 +65,10 @@ Code is at 2.1.252 here. The field names in the directive are described, not quo
 
 ## Acceptance
 
-- [ ] The exact field names are recorded here, quoted from a live captured row.
-- [ ] `cache-expired` prefers the captured field and says so in its output.
-- [ ] With the field absent, the old inference still answers and is labelled as an inference.
-- [ ] Mutation-verified: remove the field-reading branch and a test must fail.
+- [x] The exact field names are recorded here, quoted from a live captured row.
+- [x] `cache-expired` prefers the captured field and says so in its output.
+- [x] With the field absent, the old inference still answers and is labelled as an inference.
+- [x] Mutation-verified: remove the field-reading branch and a test must fail (5 unit tests, `src/test/cacheExpiredAuthoritative.test.ts`).
+- [ ] `rate_limits.spend_limit` column populated from a real gateway-captured row (not yet observed).
 
 ## Notes and lessons learned
