@@ -194,7 +194,37 @@ event that `compute_account_window_budgets` groups by** (`s(e,"accountUuid")`,
 entry stores it under a different key than `api_request_events` reads
 (`burn/monitor.rs:247-258`).
 
-**START HERE, and it is a 2-file read:** compare the attribute name the ingest transform writes
+**CORRECTION — the attribution code IS PRESENT on both levels. Do not "add" it.**
+
+Traced both ends before writing any fix, and every link exists:
+- interaction card: `summarize/claude.rs:687-696` sets `accountId` from `user.account_uuid`,
+  falling back to the session registry — the exact shape of `claude.ts:587`.
+- session rollup: `summarize/claude.rs:876` —
+  `ordered.iter().find_map(|s| s.get("accountId").filter(truthy))` — the exact shape of
+  `claude.ts:140`'s `ordered.find(s => s.accountId)?.accountId`.
+- reader: `burn/monitor.rs:262-264` copies `card["accountId"]` onto the event as `accountUuid`.
+
+So "the Rust summarizer never sets accountId" would have been a FALSE diagnosis, and I nearly
+recorded it. The chain is complete.
+
+**WHAT THAT MEANS FOR MY OWN PROBE — read this before trusting it.** The `accountWindows = 1
+['None']` result came from a payload I HAND-ROLLED, not from the fixture. My records may simply not
+match the attribute shape alcore's log transform expects (I guessed `stringValue` attrs and an
+event-name body). **A hand-built payload proving "attribution is lost" proves nothing if the
+payload itself is wrong** — that is the same class of error as reading a half-written output file.
+
+**NEXT, and do it in this order:**
+1. Re-run the probe using the FIXTURE's own record builders (`accountRecord` / `apiRequestRecord`
+   in `serverCalibration.test.ts`), not a hand-rolled payload. If `accountWindows` then carries the
+   uuid, my probe was the bug and the real failure is elsewhere in the test's setup.
+2. Only if it STILL comes back `None`, compare the fixture's attribute keys against
+   `get_attr_str(interaction, "user.account_uuid")` and the log→interaction transform — the defect
+   is then in that mapping, with all three links above verified present.
+
+**FOUR hypotheses have now been wrong on this card** (stat-bound, fixture-broken, OTEL-ignored,
+attribution-missing). Every one died to a measurement. Run step 1 before writing a line of code.
+
+**(superseded) START HERE, and it is a 2-file read:** compare the attribute name the ingest transform writes
 against the key `api_request_events` reads. On the live server the accounts resolve because the
 JSONL scan supplies them by another route — which is exactly why this stayed invisible in
 production and only shows up OTEL-only.
