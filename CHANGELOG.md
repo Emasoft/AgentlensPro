@@ -4,6 +4,28 @@ All notable changes to AgentlensPro are documented here.
 
 > **Lineage note:** AgentlensPro continues the history of [AgentLens](https://github.com/RogerReed/agentlens), from which it was forked. Entries below that predate the fork refer to the original AgentLens lineage.
 
+## [2.33.2] - 2026-09-01
+
+### Changed
+
+- **The TypeScript server is gone.** `standalone/server.ts` (4,177 lines) and its private modules
+  are deleted; alcore is the only backend on every spawn path (`server start`, the hook revive,
+  `setup`, bare `agentlenspro`). A platform without a prebuilt binary gets a clear error naming
+  it — there is no degraded TypeScript mode. `AGENTLENS_TEST_ENGINE=ts` no longer exists.
+
+### Fixed
+
+- **alcore was shedding its own dashboard, hooks and MCP on machines with a large log corpus.**
+  The admission controller's RSS wall was the Node server's absolute 5120 MB default; alcore's
+  steady RSS is dominated by the parsed session corpus (~7 GB for 27k sessions), which the memory
+  valve cannot shrink, so every non-exempt request answered `503 {reason: rss}` and each hook's
+  503 fired a revive attempt. The wall is now half of physical RAM (5120 MB floor);
+  `AGENTLENS_MAX_RSS_MB` still overrides.
+- The publish workflow's registry-tarball verification retries for 10 minutes and warns instead
+  of failing on CDN propagation — 2.33.1's run went red for a publish that had fully succeeded.
+- `agentlenspro setup` recognised only the Node server in its PID-signature check, so a live alcore
+  read as a foreign process.
+
 ## [2.33.1] - 2026-09-01
 
 > 2.33.0 was tagged but never reached npm: its publish run failed in the unit-test gate because the
