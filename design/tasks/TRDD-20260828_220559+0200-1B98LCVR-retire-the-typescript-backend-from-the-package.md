@@ -3,7 +3,7 @@ trdd-id: 1B98LCVR
 title: Retire the TypeScript backend from the package so Rust is the only server that ships
 column: testing
 created: 2026-08-28T22:05:59+0200
-updated: 2026-09-02T00:52:51+0200
+updated: 2026-09-02T01:11:53+0200
 current-owner: claude-agentlenspro
 task-type: refactor
 project-id: agentlenspro
@@ -28,10 +28,20 @@ CI is ready for the push — read from the workflow files, not from the older no
 has a `build-alcore` job the node job `needs`, and `publish.yml` downloads `bin-native-linux-x64`
 and `chmod +x`es all four binaries BEFORE `pnpm run test:unit`. Last CI (`f8b7560e`) green in 8 min.
 
-Observed, NOT a blocker: locally the `pnpm run test:unit` process outlived the mocha summary by
-~90 min (summary 23:20:52, process gone 00:50:43) — an open handle after the run, or the launcher's
-`timeout`. CI's 15-min node job has never hit it. Watch the first CI on the pushed commits; if it
-times out there the leak is real, and `mocha --exit` would be the mask, not the fix.
+**SETTLING RUN 2026-09-02 01:00–01:10 (`/tmp/full6.txt`, EXIT CODE OBSERVED — the review fork
+caught that the gate above had none):** `timeout 1500 pnpm run test:unit` → **EXIT=2 in 10m23s**,
+2535 passing / 2 failing / 8 pending. Both failures are TIMEOUTS in the two 🐌 real-machine tests
+that read `~/.agentlens/otel-bodies` (`cacheBreakTimeline.test.ts:697`, 120 s load-scaled;
+`forensicsIndex.test.ts:465`, 180 s) — both `this.skip()` when that dir is absent (`:698`,
+`:470`), so CI never runs them; both PASSED in full5 40 min earlier. Everything CI actually runs
+passed in both runs. What differed: a foreign `cargo build` (vectrace, another project) was
+saturating the CPU during full6, and the live alcore (7.4 GB RSS) was working the same bodies dir.
+Tracked as TRDD-2R0AXCKL; NOT a release blocker.
+The 90-min post-summary linger seen after full5 did NOT recur: full6's process exited within seconds
+of its summary. INFERRED, unmeasured: the open handle belongs to those two real-corpus tests
+COMPLETING (they timed out here, so nothing was left open) — which would also mean CI, where they
+skip, never sees it. The first CI on the pushed tree is the only measurement; if its node job
+(15-min cap) times out, the leak is real and `mocha --exit` would be the mask, not the fix.
 
 **NEXT ACTION**: the release. `git push origin main` (10 ahead, 0 behind) → CI green →
 `git tag -a v2.33.2 -m "…" <sha> && git push origin v2.33.2` → monitor `publish.yml` → verify
