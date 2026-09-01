@@ -1,9 +1,9 @@
 ---
 trdd-id: 5PUD8RKE
 title: alcore's bodies chore drains only the legacy dir and would abandon the RAM spool
-column: todo
+column: dev
 created: 2026-08-27T20:31:38+0200
-updated: 2026-08-27T20:31:38+0200
+updated: 2026-09-01T22:46:29+0200
 current-owner: main
 task-type: bugfix
 severity: HIGH
@@ -66,14 +66,22 @@ backpressure cluster (`ensureRamDisk`/`ramDiskInfo`/`spoolSizeMb`, `applySpoolBa
 
 ## Acceptance
 
-- [ ] `bodies_pass` drains both targets exactly when the TS would, decided by the same three
-      conditions — not by a port, and not by a hard-coded path.
-- [ ] A test with a configured spool proves BOTH dirs drain, and one without proves only the legacy
-      dir does (the conditional half must survive, or the fix trades one wrong constant for another).
+- [x] `bodies_pass` drains both targets exactly when the TS would, decided by the same three
+      conditions — not by a port, and not by a hard-coded path. VERIFIED 2026-09-01: `bodies_pass`
+      iterates every dir of `resolve_bodies_read_scope` (spool first); live server logs
+      "bodies pass: … across 2 dir(s)" every tick; the spool volume sits at 2% (was 100%).
+- [x] A test with a configured spool proves BOTH dirs drain, and one without proves only the legacy
+      dir does — `tests/chores_bodies_spool_drain.rs::spool_body_is_drained` plus
+      `tests/bodies_read_scope.rs::{with_no_spool_the_scope_is_the_legacy_dir_alone,
+      during_a_drain_both_the_spool_and_the_legacy_dir_are_in_scope_spool_first}`.
 - [ ] Spool backpressure exists in Rust before any cutover on a spool machine, or the cutover
-      refuses to run there and says why.
-- [ ] The `chores.rs:197-199` comment is corrected — a false justification outlives the code it
-      justifies.
+      refuses to run there and says why. FOUND OPEN 2026-09-01: alcore's server-stats emitted
+      `spoolBackpressureSpills: 0 / spoolBackpressureActive: false` as HARDCODED constants — no
+      port existed, and the cutover HAD run on this spool machine. A worker is porting
+      `src/spoolBackpressure.ts` (64 MiB free-floor, spill to the legacy dir, real counters) now.
+- [x] The `chores.rs` "SINGLE TARGET … alcore binds 4319" paragraph is replaced by a note saying
+      why it was false and that it was removed rather than left to outlive the code (working tree;
+      commits with the backpressure batch).
 
 ## Related
 
