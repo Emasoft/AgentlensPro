@@ -3555,10 +3555,29 @@ pub async fn serve_mcp(
                 async move {
                     let (method, path) = (req.method().clone(), req.uri().path().to_owned());
                     if method == Method::OPTIONS {
-                        // Preflight, answered before anything else — as the TS does. The CORS
-                        // headers themselves are added by `handle`'s preamble for real requests.
+                        // Preflight, answered before anything else — as the TS does.
+                        //
+                        // IT MUST CARRY THE CORS HEADERS ITSELF (TRDD-465EXTJ6). This used to
+                        // return a bare 204 and note that "the CORS headers are added by
+                        // `handle`'s preamble for real requests" — true, and precisely the bug:
+                        // a preflight never reaches that preamble, so the browser got NO
+                        // Access-Control-Allow-Origin and the actual request was never sent. Same
+                        // scoped policy as the preamble: echo an allowed origin, send NOTHING for
+                        // a disallowed one, never the wildcard (TRDD-F6BM1BDI).
+                        let origin = req.headers().get("origin").and_then(|v| v.to_str().ok()).map(str::to_owned);
+                        let host = req.headers().get("host").and_then(|v| v.to_str().ok()).map(str::to_owned);
                         let mut r = Response::new(boxed_full(Bytes::new()));
                         *r.status_mut() = StatusCode::NO_CONTENT;
+                        if let Some(o) = origin.as_deref().filter(|o| !o.is_empty()) {
+                            if !is_disallowed_cross_origin(Some(o), host.as_deref()) {
+                                if let Ok(v) = hyper::header::HeaderValue::from_str(o) {
+                                    r.headers_mut().insert("Access-Control-Allow-Origin", v);
+                                    r.headers_mut().insert("Vary", hyper::header::HeaderValue::from_static("Origin"));
+                                    r.headers_mut().insert("Access-Control-Allow-Methods", hyper::header::HeaderValue::from_static("GET, POST, OPTIONS"));
+                                    r.headers_mut().insert("Access-Control-Allow-Headers", hyper::header::HeaderValue::from_static("Content-Type"));
+                                }
+                            }
+                        }
                         return Ok::<_, String>(r);
                     }
                     // GET is the plain health check (mcpServer.ts handleMcpRequest); POST is the
