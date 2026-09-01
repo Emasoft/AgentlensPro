@@ -3,7 +3,7 @@ trdd-id: 1B98LCVR
 title: Retire the TypeScript backend from the package so Rust is the only server that ships
 column: testing
 created: 2026-08-28T22:05:59+0200
-updated: 2026-09-02T01:11:53+0200
+updated: 2026-09-02T01:17:53+0200
 current-owner: claude-agentlenspro
 task-type: refactor
 project-id: agentlenspro
@@ -36,7 +36,16 @@ that read `~/.agentlens/otel-bodies` (`cacheBreakTimeline.test.ts:697`, 120 s lo
 `:470`), so CI never runs them; both were `✔` in full5 40 min earlier (READ from the per-test
 lines, not inferred from `0 failing`: a `comm` diff of the two runs' `✔` lists differs by exactly
 those two, and the 9→8 pending delta is a third real-machine test that skipped in full5 and passed
-in full6). Everything CI actually runs passed in both runs — list-level, not count-level. What differed: a foreign `cargo build` (vectrace, another project) was
+in full6). Everything that RAN locally and that CI runs passed in both runs — list-level, not
+count-level, and not CI-equivalent: 8 tests were pending locally. Five of them are the browser-smoke
+suite, CI's own required check, so it was run here EXACTLY as `ci.yml` runs it
+(`AGENTLENSPRO_BROWSER_TESTS=1 npx mocha --no-config --ui tdd out/test/test/browser/dashboardSmoke.test.js`):
+**5 passing, EXIT=0, 14 s** (`/tmp/smoke1.txt`, 01:17) against the alcore-only tree. The remaining
+three (real RAM disk, >512 MiB JSONL, an ANIME2SVG-style real body) are machine/flag-gated and
+not CI checks. The mid-suite `.git/index.lock` (0 bytes, 01:06:14) was NOT the suite's: the only
+git in `src/` is `filesystem.ts`'s read-only `git rev-parse` and no test spawns git; its author is
+unread (a heartbeat fired 01:05:30 and the memory-split agent was live) — remove such a lock only
+after a ps snapshot shows no git process. What differed: a foreign `cargo build` (vectrace, another project) was
 saturating the CPU during full6, and the live alcore (7.4 GB RSS) was working the same bodies dir.
 Tracked as TRDD-2R0AXCKL; NOT a release blocker.
 The 90-min post-summary linger seen after full5 did NOT recur: full6's process exit is BOUNDED to
