@@ -46,6 +46,15 @@ export const HOOK_EVENTS = [
   // fire constantly (exactly the per-turn cost this list exists to avoid), and InstructionsLoaded
   // duplicates what ctxmap already reads out of the captured request body.
   'DirectoryAdded', 'CwdChanged',
+  // PreModelSwitch + PostModelSwitch (Claude Code 2.1.251) — the AUTHORITATIVE model-switch
+  // record. A `/model` switch is an unconditional whole-prefix invalidator, and the transcript
+  // only shows the USER-typed ones: the automatic switches (safety-classifier fallback, opusplan
+  // plan-mode toggles, gateway-forced fallbacks) invalidate the cache with NO transcript trace,
+  // and until these events existed they were exactly the "full cold write with no named cause"
+  // hole in cache-break attribution. Rare, deliberate-or-exceptional moments → the per-turn
+  // overhead rule above holds. Post is the record that a switch HAPPENED; Pre also carries the
+  // blocked/confirmed cases, which distinguish "a switch was attempted" from "the model changed".
+  'PreModelSwitch', 'PostModelSwitch',
 ]
 
 // The burn gate (TRDD-GOD0108C) is the ONE narrow exception to the no-PreToolUse rule: it is

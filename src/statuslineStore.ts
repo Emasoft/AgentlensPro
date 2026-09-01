@@ -211,6 +211,26 @@ const GUARANTEED_COLUMNS: ReadonlyArray<[string, string]> = [
   ['thinking_enabled', 'BOOLEAN'],
   ['exceeds_200k_tokens', 'BOOLEAN'],
   ['rate_limits_seven_day_resets_at', 'BIGINT'],
+  // The prompt_cache block (Claude Code 2.1.251/252) — the harness's OWN cache verdict, per turn.
+  // These are the authoritative columns behind `cache-expired` and the cache view's harness-said
+  // columns; every pre-2.1.252 sample lacks the whole block, which is exactly the trap-5 shape
+  // (a window of only old samples would otherwise kill any view referencing them).
+  ['prompt_cache_warm', 'BOOLEAN'],
+  ['prompt_cache_caching_observed', 'BOOLEAN'],
+  ['prompt_cache_ttl', 'VARCHAR'],
+  ['prompt_cache_expires_at', 'BIGINT'],
+  ['prompt_cache_requests', 'BIGINT'],
+  ['prompt_cache_misses', 'BIGINT'],
+  ['prompt_cache_expected_rebuilds', 'BIGINT'],
+  ['prompt_cache_hit_ratio', 'DOUBLE'],
+  ['prompt_cache_cache_write_tokens', 'BIGINT'],
+  ['prompt_cache_miss_recache_tokens', 'BIGINT'],
+  ['prompt_cache_last_miss_at', 'BIGINT'],
+  ['prompt_cache_recache_tokens_if_cold', 'BIGINT'],
+  // rate_limits.spend_limit (2.1.251) is deliberately NOT here: it only appears behind a Claude
+  // apps gateway with spend limits, no sample of its flattened shape has been captured on this
+  // machine, and a guessed column name is worse than none (it would bind NULL forever while the
+  // real column sat unguaranteed). Add it from a REAL captured row, per TRDD-YE15B2JK step 1.
 ]
 
 /** The zero-row template: guarantees every GUARANTEED_COLUMNS name binds, whatever the files hold. */

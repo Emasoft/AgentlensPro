@@ -467,7 +467,10 @@ export const VIEWS: Record<string, ViewSpec> = {
              context_window_current_usage_cache_creation_input_tokens AS cache_write,
              context_window_current_usage_cache_read_input_tokens     AS cache_read,
              max(context_window_current_usage_output_tokens)          AS out_tok,
-             count(*)                                                 AS renders
+             count(*)                                                 AS renders,
+             any_value(prompt_cache_ttl)                              AS cache_ttl,
+             max(prompt_cache_misses)                                 AS h_miss,
+             max(prompt_cache_hit_ratio)                              AS h_hit
       FROM samples ${whereOf(f, 'context_window_current_usage_cache_read_input_tokens IS NOT NULL')}
       GROUP BY session_id, in_tok, cache_write, cache_read
       ORDER BY cache_write DESC NULLS LAST LIMIT ${limit}`,
@@ -483,12 +486,18 @@ export const VIEWS: Record<string, ViewSpec> = {
       // inside the bracket, and when the bracket is narrow the tier does not matter to the verdict.
       const cost5m = priced ? calcTokenCostUsd(n(r.in_tok), read, write, n(r.out_tok), model, 0) : null
       const cost1h = priced ? calcTokenCostUsd(n(r.in_tok), read, write, n(r.out_tok), model, write) : null
+      // Since CC 2.1.252 the payload CARRIES the write tier (`prompt_cache.ttl`), so the 5m/1h
+      // bracket collapses to one figure when the harness said which tier this session is on.
+      // Pre-2.1.252 samples have no ttl and keep the honest bracket — never guess the tier.
+      const ttl = r.cache_ttl === '1h' || r.cache_ttl === '5m' ? String(r.cache_ttl) : null
       const total = write + read
       return {
         ...r,
         write_pct: total > 0 ? (100 * write) / total : null,
         cost_5m: cost5m,
         cost_1h: cost1h,
+        ttl,
+        cost: ttl === '1h' ? cost1h : ttl === '5m' ? cost5m : null,
         // WARM is the claim worth being able to make: the prefix was re-read, not re-written.
         verdict: total === 0 ? 'no-cache' : write / total >= 0.5 ? 'COLD-WRITE' : write / total >= 0.05 ? 'mixed' : 'warm',
       }
@@ -504,6 +513,9 @@ export const VIEWS: Record<string, ViewSpec> = {
       { key: 'write_pct', label: 'write%', fmt: fmtNum },
       { key: 'cost_5m', label: '$ 5m', fmt: fmtCost },
       { key: 'cost_1h', label: '$ 1h', fmt: fmtCost },
+      { key: 'ttl', label: 'ttl', fmt: v => String(v ?? '-') },
+      { key: 'cost', label: '$', fmt: fmtCost },
+      { key: 'h_miss', label: 'miss', fmt: fmtNum },
       { key: 'verdict', label: 'verdict' },
     ],
   },
