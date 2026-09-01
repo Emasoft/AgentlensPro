@@ -9,7 +9,7 @@
 //   Request multipliers (pre Jun 1, 2026): https://docs.github.com/en/copilot/concepts/billing/copilot-requests
 //   Annual-plan multipliers (post Jun 1):  https://docs.github.com/en/copilot/reference/copilot-billing/model-multipliers-for-annual-plans
 //   Per-provider rate URLs: PRICING_SOURCES.md
-export const PRICING_LAST_UPDATED = '2026-08-26'
+export const PRICING_LAST_UPDATED = '2026-09-01'
 
 // Three Copilot billing modes (webview cost toggle):
 //   'token'          — new token-based AI Credits billing, effective Jun 1, 2026
@@ -159,6 +159,13 @@ export const RATES: Record<string, ModelRates> = {
   // stay at the standard 1.25x / 0.1x of THIS (premium) input rate, not of the standard one.
   'claude-opus-5-fast': { inputPerMTok: 10.00, cacheReadPerMTok: 1.00, cacheWritePerMTok: 12.50, outputPerMTok:  50.00, contextWindowTokens: 1_000_000, multiplier: 0,   multiplierAnnualPostJun1: 0 },
   'claude-fable-5':      { inputPerMTok: 10.00, cacheReadPerMTok: 1.00, cacheWritePerMTok: 12.50, outputPerMTok:  50.00, contextWindowTokens: 1_000_000, multiplier: 0,   multiplierAnnualPostJun1: 0 },  // not yet in Copilot billing docs
+  // claude-fable-5-1 (CC 2.1.257, 2026-09-01, the new default Fable): $10/$50 with a $0.25/MTok cache
+  // READ — 2.5% of input, NOT the usual 10% — per the changelog (DOC-SOURCED; too few local samples to
+  // solve it from cost_usd yet — re-verify with `statusline-history cache` once a session has turns).
+  // The key MUST exist explicitly: lookupRates prefix-matches a LONGER id onto a shorter family key,
+  // so without it `claude-fable-5-1` silently billed at fable-5's $1.00 reads (4x high). Write stays
+  // the 1.25x shape so the 1h tier derives to 2x like every other Anthropic entry.
+  'claude-fable-5-1':    { inputPerMTok: 10.00, cacheReadPerMTok: 0.25, cacheWritePerMTok: 12.50, outputPerMTok:  50.00, contextWindowTokens: 1_000_000, multiplier: 0,   multiplierAnnualPostJun1: 0 },
   // ── Google ─────────────────────────────────────────────────────────────────
   'gemini-2.5-pro':  { inputPerMTok: 1.25, cacheReadPerMTok: 0.125, cacheWritePerMTok: 0, outputPerMTok: 10.00, contextWindowTokens: 1_000_000, multiplier: 1,    multiplierAnnualPostJun1: 1,
                        inputAbove200kPerMTok: 2.50, outputAbove200kPerMTok: 15.00, cacheReadAbove200kPerMTok: 0.25, cacheWriteAbove200kPerMTok: 0 },

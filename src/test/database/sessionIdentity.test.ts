@@ -45,6 +45,17 @@ suite('pricing — claude-sonnet-5 (TRDD-ZK37VG4X spec 1)', () => {
     assert.strictEqual(rates!.outputPerMTok, 50.00)
   })
 
+  test('claude-fable-5-1 has its OWN entry and does not prefix-match onto fable-5 rates (CC 2.1.257)', () => {
+    // lookupRates prefix-matches a longer id onto a shorter family key, so without an explicit key
+    // fable-5-1 silently billed at fable-5's $1.00 cache read — 4x the documented $0.25.
+    const rates = lookupRates('claude-fable-5-1')
+    assert.ok(rates)
+    assert.strictEqual(rates!.cacheReadPerMTok, 0.25)
+    assert.strictEqual(rates!.inputPerMTok, 10.00)
+    assert.strictEqual(rates!.outputPerMTok, 50.00)
+    assert.notStrictEqual(rates!.cacheReadPerMTok, lookupRates('claude-fable-5')!.cacheReadPerMTok)
+  })
+
   test('a dated claude-sonnet-5 model id normalizes onto the same entry', () => {
     assert.ok(lookupRates('claude-sonnet-5-20260601'))
   })
