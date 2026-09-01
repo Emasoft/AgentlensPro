@@ -4,6 +4,15 @@ All notable changes to AgentlensPro are documented here.
 
 > **Lineage note:** AgentlensPro continues the history of [AgentLens](https://github.com/RogerReed/agentlens), from which it was forked. Entries below that predate the fork refer to the original AgentLens lineage.
 
+## [2.33.1] - 2026-09-01
+
+### Fixed
+
+- **`claude-fable-5-1` (Claude Code 2.1.257's new default Fable) now has its own rate-table entry**
+  — $10/$50 per MTok with the documented $0.25/MTok cache read. Without an explicit key the
+  longest-prefix lookup silently priced it at `claude-fable-5`'s $1.00 cache read (4× high). Rates
+  are doc-sourced from the changelog; a test pins the entry as distinct from fable-5.
+
 ## [2.33.0] - 2026-09-01
 
 ### Changed
