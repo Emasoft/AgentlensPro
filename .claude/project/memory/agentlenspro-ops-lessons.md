@@ -2,7 +2,7 @@
 name: agentlenspro-ops-lessons
 description: "how to deploy agentlenspro on a machine / setup vs manual install / hooks stopped firing after an upgrade / config file wiped or corrupted after an edit / which file does pnpm read its settings from / minimumReleaseAge or trustPolicy is set but not taking effect / is this supply-chain knob actually live / a guard blocks me editing package.json / is agentlenspro npm-linked or registry-installed / does switching the cli to an ordinary npm install lose my db or settings / where does the data live / can other agents on this machine use the cli / does the dev npm link affect normal published users / background agent shows running but does nothing / a fork started acting like the orchestrator / does agentlenspro run on Windows / setup fails with unsupported platform or node too old / server hangs at 100% cpu and every request times out or SIGTERM is ignored / a settings.json env key keeps reverting or getting overwritten after every server restart / the diagnostics skill shows a stale tool count or drifted from the live CLI surface / how many diagnostic tools are there / keeping the skill and the CLI --help in sync / can I run a second server for testing / two servers at once / I changed the ports so it is isolated right / dev instance wrote to my live data dir / invalid log tail offsets after a restart / I rebuilt and restarted but nothing changed / my fix is not live even though esbuild succeeded / am I testing the repo build or the published one — operational doctrine and field lessons"
 ocd: 2026-07-11
-lmd: 2026-08-29
+lmd: 2026-09-01
 metadata:
   node_type: memory
   type: project
@@ -579,6 +579,11 @@ DO NOT stop hunting a recurring RangeError 'Maximum call stack size exceeded' af
 ^ATOM-KH8H-N8RH [desc:"tail-terminated pipelines look hung when a leaked child holds the pipe; green-on-CI/red-locally means hidden local-state dependency", keywords: background_test_run_empty_output_hang tail_no_output_until_exit pipe_held_open_by_leaked_child green_on_CI_fails_locally timeout_only_on_my_machine, type: project, ocd: 2026-08-14, lmd: 2026-08-14]
 
 DO NOT read a background pipeline's '20 minutes, empty output' as a hung test run when the pipeline ends in `| tail`: tail withholds EVERYTHING until EOF, and EOF never comes while ANY process keeps the pipe's write end open — a test-spawned child that outlived mocha held it here, so a suite that had finished looked permanently hung and nearly got misdiagnosed as a code regression. DO capture to a file (`cmd > f 2>&1`) and read the file; and when a test is 'green on CI but times out locally', suspect a hidden dependency on local state CI lacks (here: a builder's storeDir defaulting to the developer's real 18-month store).
+
+
+^ATOM-SFLG-1NSX [desc: "cp over an existing Mach-O in place gets every exec SIGKILLed (exit 137, silent) on macOS — deploy with rm+cp (fresh inode), verify codesign -v", keywords: server_exited_during_startup_wrote_nothing exit_137_no_output sigkill_on_exec_after_cp code_signature_invalid_kill cp_over_binary_breaks_signature deploy_alcore_binary_rm_first bin-native_copy_dies_silently macos_kills_replaced_mach-o fresh_inode_fixes_signature codesign_-v_after_deploy, trdd: TRDD-ZIWEB0UW, ocd: 2026-09-01, lmd: 2026-09-01]
+
+In-place cp over an existing signed Mach-O binary (cp src bin-native/darwin-arm64/alcore onto the OLD inode) makes macOS SIGKILL every subsequent exec of it with ZERO output (exit 137, nothing on stdout/stderr) — the kernel's cached code-signature no longer matches the rewritten pages. The failure masquerades as 'the server exited during startup and wrote nothing to server.log'. Deploy binaries by rm + cp (fresh inode: the ad-hoc signature is re-associated and codesign -v passes) or cp to a temp name + mv. Diagnosed 2026-09-01: the first deploy of the day worked by luck; the second left the live server unstartable until the fresh-inode copy.
 
 ## See also
 
