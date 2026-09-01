@@ -1,9 +1,9 @@
 ---
 trdd-id: 465EXTJ6
 title: alcore is not at parity with the TypeScript server on 14 measured behaviours and it is the only backend that ships
-column: dev
+column: ai_review
 created: 2026-08-29T20:43:34+0200
-updated: 2026-08-29T21:35:00+0200
+updated: 2026-09-01T19:20:00+0200
 current-owner: main-session
 task-type: bugfix
 scope: project
@@ -329,7 +329,11 @@ safe.
 ## Acceptance
 
 - [x] **3 of 14 done — admission control** (`admission.rs`, mutation-verified; failure count 15 → 11).
-- [ ] All 14 pass under `AGENTLENS_TEST_ENGINE=alcore`, each mutation-verified.
+- [x] **ALL 14 PASS** under `AGENTLENS_TEST_ENGINE=alcore` (`e7ba6592`). The last 5 shared ONE
+      cause — `summarize_spans(spans, &|_| None)` — measured before/after as
+      `[('None', 3)]` → `[('acct-fx', 3)]`, then confirmed by re-running
+      `serverCalibration.test.ts`: zero P5 failures remain. The only 2 failures left in that run
+      are `pricing — claude-sonnet-5`, a pricing-table spec unrelated to this card.
 - [ ] The suite is green under BOTH engines simultaneously (no gap closed by weakening a test).
 - [ ] `AGENTLENS_TEST_ENGINE=alcore` becomes the default and the opt-in is removed.
 - [ ] TRDD-1B98LCVR box 3 ticked with this card as evidence.
