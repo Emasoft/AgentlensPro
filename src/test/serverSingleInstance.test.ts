@@ -3,12 +3,12 @@ import { spawn, type ChildProcess } from 'child_process'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
-import { freePort } from './helpers/freePort'
+import { freePort, alcoreTestBin, alcoreArgsFromEnv } from './helpers/freePort'
 import { parsePidLock } from '../serverRuntime'
 import { findServerPid, stopServer } from '../cli/serverControl'
 
 // EXACTLY ONE server may own a data directory. Real processes, real ports, real filesystem — no
-// mocks: the thing under test is what a second `node standalone/server.js` actually does.
+// mocks: the thing under test is what a second alcore instance actually does.
 //
 // The guard used to key on `OTLP_PORT === 4318`, so overriding the ports opted OUT of it entirely.
 // That is not isolation: the ports isolate the LISTENERS while both processes keep appending to one
@@ -18,8 +18,6 @@ import { findServerPid, stopServer } from '../cli/serverControl'
 //
 // The lock is now keyed on the DATA DIR, so these tests assert both halves of the contract: same data
 // dir is refused however different the ports, and a different data dir still starts freely.
-
-const SERVER = path.resolve(__dirname, '../../../standalone/server.js')
 
 interface Started { proc: ChildProcess; stdout: string; stderr: string; exited: number | null }
 
@@ -32,12 +30,14 @@ interface Started { proc: ChildProcess; stdout: string; stderr: string; exited: 
  * effect — which is the property under test.
  */
 function start(env: NodeJS.ProcessEnv): Promise<Started> {
+  const alcore = alcoreTestBin()
+  if (!alcore) throw new Error('no alcore binary found — build rust-core or set AGENTLENS_ALCORE')
   return new Promise((resolve) => {
-    const proc = spawn(process.execPath, [SERVER], { env: { ...process.env, ...env }, stdio: ['ignore', 'pipe', 'pipe'] })
+    const proc = spawn(alcore, alcoreArgsFromEnv(env), { env: { ...process.env, ...env }, stdio: ['ignore', 'pipe', 'pipe'] })
     const rec: Started = { proc, stdout: '', stderr: '', exited: null }
     let settled = false
     const done = (): void => { if (!settled) { settled = true; resolve(rec) } }
-    proc.stdout.on('data', d => { rec.stdout += String(d); if (/MCP server\s+→/.test(rec.stdout)) done() })
+    proc.stdout.on('data', d => { rec.stdout += String(d); if (/alcore: MCP listening/.test(rec.stdout)) done() })
     proc.stderr.on('data', d => { rec.stderr += String(d) })
     proc.on('exit', code => { rec.exited = code; done() })
     setTimeout(done, 25000)
@@ -58,10 +58,10 @@ suite('standalone server — exactly one instance per data directory', function 
   let first: Started | null = null
 
   suiteSetup(() => {
-    // These tests exercise the BUNDLE, not src/ — `pnpm run test:unit` compiles tests but does not
-    // run esbuild, so a stale or absent bundle would silently test the wrong code. Say so plainly.
-    assert.ok(fs.existsSync(SERVER),
-      `${SERVER} is missing — run \`node esbuild.js\` first; this suite spawns the built server.`)
+    // These tests exercise the real alcore binary, not src/ — say so plainly rather than let every
+    // test in the suite fail with an opaque spawn error.
+    assert.ok(alcoreTestBin(),
+      'no alcore binary found — build rust-core (cargo build --release --manifest-path rust-core/Cargo.toml -p agentlens-core --bin alcore) or set AGENTLENS_ALCORE; this suite spawns it.')
     dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentlens-singleton-data-'))
     home = fs.mkdtempSync(path.join(os.tmpdir(), 'agentlens-singleton-home-'))
   })

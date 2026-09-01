@@ -30,10 +30,10 @@ const FORBIDDEN = [
   { re: /(^|\/)tsconfig[^/]*\.json$/, why: 'build configuration' },
   { re: /(^|\/)(Cargo\.toml|Cargo\.lock|esbuild\.js)$/, why: 'build input' },
   { re: /(^|\/)\.env/, why: 'environment file — never ship one' },
-  // TRDD-1B98LCVR box 2 — the USER's ruling 2026-08-27: "delete the TypeScript core; leave
-  // TypeScript only for the web UI part." Rust is the ONLY backend that ships. server.js is still
-  // BUILT (15 test files boot it, and box 3 migrates them), so `files` alone would silently start
-  // shipping it again the moment someone re-added the entry; this makes that a build failure.
+  // TRDD-1B98LCVR box 2/4 — the USER's ruling 2026-08-27: "delete the TypeScript core; leave
+  // TypeScript only for the web UI part." Rust is the ONLY backend that ships; standalone/server.ts
+  // is deleted and esbuild no longer builds server.js at all. Kept as a shape (not "today's
+  // directories") so a re-added TS server entrypoint is caught as a build failure, not shipped.
   { re: /^standalone\/server\.js$/, why: 'the TypeScript backend — alcore is the only server that ships' },
 ]
 

@@ -27,7 +27,7 @@ import type { Browser, Page } from 'puppeteer-core' with { 'resolution-mode': 'i
 // Shared helper (TRDD-1QFP73WA): in-process claimed-port set + a bounded spawn-retry that
 // re-picks fresh ports on the "already in use" early-exit — closes the probe→close→re-hand
 // TOCTOU race a local probe-then-close freePort() cannot.
-import { freePort, spawnServerWithRetry } from '../helpers/freePort'
+import { freePort, spawnServerWithRetry, alcoreTestBin } from '../helpers/freePort'
 
 const ENABLED = process.env['AGENTLENSPRO_BROWSER_TESTS'] === '1'
 
@@ -218,7 +218,8 @@ const TAB_CONTENT: Array<{ id: string; contentSel: string }> = [
       return
     }
 
-    assert.ok(fs.existsSync(SERVER_JS), `standalone/server.js missing — run \`node esbuild.js\` first (${SERVER_JS})`)
+    assert.ok(alcoreTestBin(),
+      'no alcore binary found — build rust-core (cargo build --release --manifest-path rust-core/Cargo.toml -p agentlens-core --bin alcore) or set AGENTLENS_ALCORE; this suite spawns it.')
 
     // ── Isolated server workspace: temp HOME (log scan sees ONLY our fixtures),
     // temp DATA_DIR, ephemeral ports (non-4318 OTLP ⇒ non-canonical ⇒ no pidfile,

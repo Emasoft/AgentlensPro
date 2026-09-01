@@ -29,42 +29,24 @@ export function hookSpoolDepth(): number {
   }
 }
 
-/** Locate the standalone/server.js bundle. The CLI bundle lives NEXT TO it
- *  (<pkg>/standalone/cli.js), the test build three levels under out/test/, so a single
- *  fixed relative path would be wrong in one layout — walk the candidates. */
-export function findServerJs(): string {
-  const candidates = [
-    path.join(__dirname, 'server.js'),                                  // bundled: standalone/
-    path.resolve(__dirname, '..', 'standalone', 'server.js'),           // src/cli/ compiled in-place
-    path.resolve(__dirname, '..', '..', 'standalone', 'server.js'),     // out/cli/
-    path.resolve(__dirname, '..', '..', '..', 'standalone', 'server.js'), // out/test/cli/
-  ]
-  for (const c of candidates) {
-    if (fs.existsSync(c)) return c
-  }
-  // TWO DIFFERENT SITUATIONS REACH HERE, and telling a user the wrong one wastes their day.
-  //
-  // In a DEV CHECKOUT the bundle simply has not been built — `node esbuild.js` is the fix.
-  //
-  // In a PUBLISHED INSTALL the bundle is not missing, it is GONE ON PURPOSE: `standalone/server.js`
-  // was removed from package.json `files` (TRDD-1B98LCVR box 2, on the USER's 2026-08-27 ruling
-  // that TypeScript remains only for the UI). Reaching this point there means `alcoreBin()`
-  // returned null, which happens only on a platform `bin-native/` does not cover — today that is
-  // Windows, because rust-core does not build for windows-msvc (`pid_lock.rs` calls `libc::kill`
-  // with no `#[cfg(unix)]` guard). Telling that user to "run node esbuild.js" would send them to
-  // build a server this package deliberately no longer ships.
+/** Throws with a platform-specific, actionable message when `alcoreBin()` returned null because
+ *  this platform has no prebuilt binary (bin-native/ exists but does not cover it — today only
+ *  Windows, because rust-core does not build for windows-msvc: `pid_lock.rs` calls `libc::kill`
+ *  with no `#[cfg(unix)]` guard). AgentlensPro no longer ships a TypeScript fallback (TRDD-1B98LCVR
+ *  box 4), so a missing binary here is a hard stop, not a degraded mode. */
+function noServerAvailableError(): Error {
   const platform = `${process.platform}-${process.arch}`
-  throw new Error(
-    `No server available for ${platform}. AgentlensPro ships a Rust backend (bin-native/<platform>-<arch>/alcore) ` +
-    `and no longer ships a TypeScript one; ${platform} has no prebuilt binary. ` +
+  return new Error(
+    `No server available for ${platform}. AgentlensPro ships a Rust backend only ` +
+    `(bin-native/<platform>-<arch>/alcore); ${platform} has no prebuilt binary. ` +
     `Supported: darwin-arm64, darwin-x64, linux-x64, linux-arm64. ` +
-    `Set AGENTLENS_ALCORE to a binary you built yourself, or run from a git checkout (\`node esbuild.js\`) ` +
-    `if this is a development tree. (looked near ${__dirname})`,
+    'Set AGENTLENS_ALCORE to a binary you built yourself, or build one from a git checkout ' +
+    '(`cargo build --release --manifest-path rust-core/Cargo.toml -p agentlens-core --bin alcore`).',
   )
 }
 
 /** The dashboard's built assets (`media/`), the dir alcore serves `/` from (TRDD-VHH7FXGC). Same
- *  layout walk as findServerJs: the package root is one level up from the bundled cli.js but two
+ *  layout walk as `cliJsPath`: the package root is one level up from the bundled cli.js but two
  *  up from out/cli/. Keyed on index.html, the one asset that is tracked source rather than a build
  *  output, so a checkout that has not run esbuild still resolves (and alcore then 404s the bundles
  *  loudly instead of refusing to boot). */
@@ -80,36 +62,44 @@ export function findMediaDir(): string {
   throw new Error(`media/index.html missing (looked near ${__dirname}) — the dashboard shell is tracked source; is this a complete checkout or install?`)
 }
 
-/** The opted-in `alcore` (Rust core) binary, or null when the Rust core is off.
+/** The `alcore` (Rust core) binary — the ONLY server this package ships (TRDD-1B98LCVR box 4;
+ *  standalone/server.ts is deleted). Returns null only for a documented, non-fault gap: an
+ *  unsupported `platformArch` (e.g. win32-x64, which rust-core does not build for) or a dev
+ *  checkout / pruned install where `bin-native/` was never staged — a caller must treat either
+ *  as "no server available here", never silently proceed.
  *
- *  Deliberately the SAME shape as `alscanBin` (src/rustScan.ts), because that one is already
- *  shipped and proven: `AGENTLENS_ALCORE` names the binary per-process and wins; otherwise
- *  `<dataDir>/bin/alcore` merely EXISTING is the opt-in for a locally-copied dev binary. Presence
+ *  Resolution order: `AGENTLENS_ALCORE` names the binary per-process and wins; otherwise
+ *  `<dataDir>/bin/alcore` merely EXISTING is the opt-in for a locally-copied dev binary (presence
  *  is the only channel that survives a hook-revived daemon, which inherits no operator env — and
- *  the file is only there because someone copied it there, so presence cannot be an accident.
+ *  the file is only there because someone copied it there, so presence cannot be an accident);
+ *  otherwise the packaged `bin-native/<platform>-<arch>/alcore` this package ships (TRDD-EAK9R8IY),
+ *  resolved via `npmPlatformBin`.
  *
- *  THIRD channel (TRDD-EAK9R8IY): the `agentlenspro-<platform>` optionalDependency, resolved via
- *  `npmPlatformBin`. This is what WILL make a plain `npm i -g agentlenspro` run the Rust server
- *  with no operator action — `--omit=optional` or an unsupported platform falls through to null,
- *  and the TS server remains that fallback.
- *
- *  NOT TRUE YET, and this comment said it was: `npm view agentlenspro-darwin-arm64` is a **404**
- *  (measured 2026-08-27, while `agentlenspro` itself is published at 2.29.0). The dependency is
- *  DECLARED but the packages were never bootstrapped — EAK9R8IY's open owner step, a one-time 2FA
- *  publish. Until then npm silently skips the optional dep, this channel returns null, and EVERY
- *  published install runs the TypeScript server. The sentence that used to sit here ("alcore ships
- *  in the box now, so detect-and-use is no longer a lie") described the intended end state as
- *  though it were the current one — the exact shape of claim this project keeps paying for.
- *
- *  `null` here means "run the TS server instead", and that fallback must stay silent for exactly
- *  two reasons: an unsupported `platformArch` (a documented gap, e.g. win32-x64), and a dev
- *  checkout / pruned install where `bin-native/` was never staged. A THIRD case looks the same to
- *  `npmPlatformBin` but is not the same at all: `bin-native/` exists — this package DID ship
- *  binaries — yet this platform's file is missing or lost its exec bit in transit. That is a
- *  corrupt install, and folding it into the silent-null fallback is exactly how the live backend
- *  regressed to the TS server with nobody noticing (the incident this three-way split exists to
- *  stop). So that case THROWS instead. `platformArch`/`baseDir` are injectable so tests can drive
- *  every branch without a real cross-platform install or a real corrupt one. */
+ *  A THIRD case looks like the unsupported-platform gap but is not: `bin-native/` exists — this
+ *  package DID ship binaries — yet this platform's file is missing or lost its exec bit in
+ *  transit. That is a corrupt install, and folding it into the silent-null case is exactly how
+ *  the live backend regressed to the (now-deleted) TS server with nobody noticing (the incident
+ *  this three-way split exists to stop). So that case THROWS instead. `platformArch`/`baseDir`
+ *  are injectable so tests can drive every branch without a real cross-platform install or a real
+ *  corrupt one. */
+/** `bin-native/` sits at the package root, one level up from `__dirname` in a bundled install
+ *  (`standalone/cli.js`) or `src/cli/` compiled in-place — the layout `alcoreBin`'s default
+ *  `baseDir` assumes. A REAL functional test that spawns a real server through `alcoreBin()`'s own
+ *  default (rather than the unit-test injected `baseDir`) compiles several directories deeper
+ *  (`out/test/cli/`), where that single-level default silently resolves to nowhere — callers doing
+ *  that (setup.ts's real-server step) pass this instead. Deliberately NOT folded into `alcoreBin`'s
+ *  own default: `alcoreCutover.test.ts`'s unit tests rely on the default staying "not found" under
+ *  mocha so `baseDir` overrides are what makes each branch reachable — widening the default here
+ *  would make it find the REAL project `bin-native/` and break that isolation. */
+export function resolveBinNativeDir(): string {
+  const candidates = [
+    path.resolve(__dirname, '..', 'bin-native'),
+    path.resolve(__dirname, '..', '..', 'bin-native'),
+    path.resolve(__dirname, '..', '..', '..', 'bin-native'),
+  ]
+  return candidates.find((c) => fs.existsSync(c)) ?? candidates[0]
+}
+
 export function alcoreBin(
   env: NodeJS.ProcessEnv = process.env,
   installed = dataPath('bin', 'alcore'),
@@ -129,17 +119,16 @@ export function alcoreBin(
   // (which is not exported): probing with an `exists` that always answers "yes" makes
   // `npmPlatformBin` return null for ONE reason only — an unsupported platformArch.
   const platformShipped = npmPlatformBin('alcore', platformArch, () => true, baseDir) !== null
-  if (!platformShipped) return null // documented gap — the TS server is the only option here
+  if (!platformShipped) return null // documented gap — this platform has no server at all
   if (!fs.existsSync(baseDir)) return null // dev checkout / pruned install — nothing staged yet
   // bin-native/ EXISTS and this platform IS shipped, yet the real check still failed: the file is
   // missing or not executable. That is a corrupt/half-unpacked install, not a deliberate absence
-  // — throw instead of silently falling back to the TS server.
+  // — throw instead of silently returning null.
   throw new Error(
     `alcore binary for ${platformArch} is missing or not executable at ${path.join(baseDir, platformArch, 'alcore')}. ` +
     'bin-native/ exists, so this package DID ship binaries — this install is incomplete (a lost ' +
     'exec bit survives npm install and fails only at spawn). Repair: reinstall agentlenspro, or ' +
-    'chmod +x the file. To run the TypeScript server deliberately instead, set AGENTLENS_ALCORE ' +
-    'to a working binary.',
+    'chmod +x the file, or set AGENTLENS_ALCORE to a working binary you built yourself.',
   )
 }
 
@@ -149,9 +138,9 @@ export function alcoreBin(
  *  same `envPort` (TRDD-BSDR4TRM), so the CLI dials whatever this binds.
  *
  *  These are passed EXPLICITLY rather than by changing alcore's own defaults, and that is the
- *  point: alcore defaults to 4319/3001/4317 so an operator can run it beside the TS server to
- *  compare them, and flipping those defaults to canonical would break that the moment both are
- *  up. The cutover is the caller's decision, so the cutover's ports are the caller's argument.
+ *  point: alcore's own default ports (4319/3001/4317) are non-canonical by design, so it never
+ *  collides with a caller who runs it unmanaged for local testing. The cutover is the caller's
+ *  decision, so the cutover's ports are the caller's argument.
  *
  *  Empty-string env is treated as UNSET. `Number('')` is 0, so the `?? default` spelling in
  *  setup.ts:109-111 would bind port 0 (kernel-assigned, i.e. unreachable) for an exported-but-
@@ -235,11 +224,10 @@ export async function ensureServer(startedBy = 'ensureServer:unknown', opts: { o
       'Clear it with:  agentlenspro server start',
     )
   }
-  // Which engine serves this data dir. Resolved BEFORE findServerJs(), which throws when the JS
-  // bundle is missing — an alcore-only install has no bundle to find, and must not be told to
-  // "run node esbuild.js" to start a server it isn't going to use.
-  const alcore = alcoreBin()
-  const serverJs = alcore ? '' : findServerJs()
+  // alcore is the only server this package ships (TRDD-1B98LCVR box 4) — a missing binary is a
+  // hard stop, not a fallback to a TS bundle that no longer exists.
+  const alcore = alcoreBin(process.env, undefined, undefined, resolveBinNativeDir())
+  if (!alcore) throw noServerAvailableError()
   // stdout/stderr go to a log file, NOT /dev/null — when the server dies at boot (port
   // conflict, corrupt store) the reason must be readable, or every failure looks like
   // "did not become ready".
@@ -259,21 +247,11 @@ export async function ensureServer(startedBy = 'ensureServer:unknown', opts: { o
   // offset is ours; everything before it belongs to other processes and other days, and the log has
   // no timestamps to tell the reader which is which.
   const logStart = logSizeNow()
-  // The readiness probe below is engine-agnostic on purpose: alcore serves the same MCP, UI and
-  // /api/server-stats surfaces, so `init()` and `findServerPid()` work unchanged against either.
-  // No --max-old-space-size for alcore — that is a V8 heap cap and means nothing to a Rust process.
   // The child inherits our env PLUS the provenance stamp; the server logs it at boot next to the
   // brake state it observes, so "who started this server, and was the brake set?" is answered by
   // one grep of server.log instead of a day of inference (TRDD-8VGQK9L9).
   const env = { ...process.env, [STARTED_BY_ENV]: startedBy }
-  const child = alcore
-    ? spawn(alcore, alcoreServeArgs(), { cwd: dataDir(), env, detached: true, stdio: ['ignore', outFd, outFd] })
-    : spawn(process.execPath, [`--max-old-space-size=${DEFAULT_MAX_OLD_SPACE_MB}`, serverJs], {
-      cwd: path.dirname(path.dirname(serverJs)),
-      env,
-      detached: true,
-      stdio: ['ignore', outFd, outFd],
-    })
+  const child = spawn(alcore, alcoreServeArgs(), { cwd: dataDir(), env, detached: true, stdio: ['ignore', outFd, outFd] })
   // Without this, an async spawn failure (EMFILE, EAGAIN) emits an unhandled 'error' event and the
   // process dies with a raw stack trace instead of the actionable message below.
   let spawnError: Error | null = null
@@ -763,9 +741,9 @@ export function runSupervise(): void {
       'Re-enable with:  agentlenspro enable',
     )
   }
-  const serverJs = findServerJs()
+  const alcore = alcoreBin(process.env, undefined, undefined, resolveBinNativeDir())
+  if (!alcore) throw noServerAvailableError()
   const crashLog = path.join(dataDir(), 'crash.log')
-  const maxOldSpace = String(Number(process.env.AGENTLENS_MAX_OLD_SPACE_MB) || DEFAULT_MAX_OLD_SPACE_MB)
   const maxBackoffMs = Number(process.env.AGENTLENS_SUPERVISE_MAX_BACKOFF_MS) || 30_000
 
   try { fs.mkdirSync(dataDir(), { recursive: true }) } catch { /* best effort */ }
@@ -796,7 +774,7 @@ export function runSupervise(): void {
    *  EX_CONFIG 78 and the isTerminalExit path ends the supervisor; swallowing the spawn here
    *  would make a DISABLED supervisor immortal — a perpetual backed-off loop that never
    *  converges, the exact shape TRDD-F1VX3M7C's comment below was written to kill. (Reading the
-   *  flag directly also keeps this module out of hookHandlers, which imports findServerJs from
+   *  flag directly also keeps this module out of hookHandlers, which imports alcoreBin from
    *  HERE — importing reviveDisabledOnDisk back created a CJS cycle tsc reports as clean.)
    *
    *  RESCHEDULE rather than exit: a brake is a pause, not a shutdown. Exiting here would mean a
@@ -821,8 +799,8 @@ export function runSupervise(): void {
     // Inherit env so isolated-port / no-telemetry overrides pass through. stdout inherits
     // (logs flow to the launchd/terminal sink); stderr is teed so we keep its tail for the
     // crash record.
-    child = spawn(process.execPath, [`--max-old-space-size=${maxOldSpace}`, serverJs],
-      { cwd: path.dirname(path.dirname(serverJs)), env: { ...process.env, [STARTED_BY_ENV]: 'supervisor' }, stdio: ['ignore', 'inherit', 'pipe'] })
+    child = spawn(alcore, alcoreServeArgs(),
+      { cwd: dataDir(), env: { ...process.env, [STARTED_BY_ENV]: 'supervisor' }, stdio: ['ignore', 'inherit', 'pipe'] })
 
     let stderrTail = Buffer.alloc(0)
     child.stderr?.on('data', (chunk: Buffer) => {
@@ -884,7 +862,7 @@ export function runSupervise(): void {
     process.stderr.write(`[supervisor] revive brake (NO_REVIVE) is set — refusing to start. Clear it and re-run.\n`)
     process.exit(75)
   }
-  process.stderr.write(`[supervisor] starting AgentlensPro collector (max-old-space=${maxOldSpace}MB, crash log ${crashLog})\n`)
+  process.stderr.write(`[supervisor] starting AgentlensPro collector (crash log ${crashLog})\n`)
   start()
 }
 
@@ -1121,7 +1099,17 @@ export function daemonUninstall(opts: { launchAgentsDir?: string } = {}): { path
   return { path: plistPath, removed }
 }
 
-/** The bundled CLI entry (standalone/cli.js) — sibling of the server bundle. */
+/** The bundled CLI entry (standalone/cli.js). Same layout walk as `findMediaDir` — the package
+ *  root is one level up from the bundled cli.js but two up from out/cli/. */
 function cliJsPath(): string {
-  return path.join(path.dirname(findServerJs()), 'cli.js')
+  const candidates = [
+    path.join(__dirname, 'cli.js'),                              // bundled: standalone/
+    path.resolve(__dirname, '..', 'standalone', 'cli.js'),       // src/cli/ compiled in-place
+    path.resolve(__dirname, '..', '..', 'standalone', 'cli.js'), // out/cli/
+    path.resolve(__dirname, '..', '..', '..', 'standalone', 'cli.js'), // out/test/cli/
+  ]
+  for (const c of candidates) {
+    if (fs.existsSync(c)) return c
+  }
+  throw new Error(`standalone/cli.js missing (looked near ${__dirname}) — run \`node esbuild.js\` first.`)
 }

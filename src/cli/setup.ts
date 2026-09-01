@@ -38,7 +38,7 @@ import {
   installHooks, installSkill, isOurHookCommand, rebuildEventMatchers, resolveOnPath,
   sha256File, SKILL_NAMES, findPackageRoot, skillTreeHash, installAgents, AGENT_NAMES,
 } from './hookInstall'
-import { alcoreBin, alcoreServeArgs, findServerJs } from './serverControl'
+import { alcoreBin, alcoreServeArgs, resolveBinNativeDir } from './serverControl'
 import { parsePidLock } from '../serverRuntime'
 
 export interface SetupOptions {
@@ -824,7 +824,10 @@ const stepServer: StepDef = {
           // which refuses the duplicate spawn cleanly — the safe failure direction).
           const cmd = execFileSync('ps', ['-p', String(pid), '-o', 'command='],
             { encoding: 'utf-8', timeout: 5_000 }).trim()
-          if (/standalone[/\\]server\.js|agentlenspro/.test(cmd)) stalePid = pid
+          // `[/\\]alcore(\s|$)` catches the Rust server (TRDD-1B98LCVR box 4 — standalone/server.js
+          // no longer exists); the other two arms stay for a legacy TS-server pidfile and a
+          // `agentlenspro` CLI process encountered on an install this check hasn't caught up to.
+          if (/standalone[/\\]server\.js|agentlenspro|[/\\]alcore(?:\s|$)/.test(cmd)) stalePid = pid
         }
       } catch { /* no pidfile, a dead pid, or ps failed — genuinely not running */ }
     }
@@ -875,11 +878,16 @@ const stepServer: StepDef = {
     if (reviveBraked()) {
       return { result: { step: this.name, found, action: 'start server', verify: 'FAIL', detail: `revive brake is set (${noRevivePath()}) — \`agentlenspro server start\` clears it` }, acted: false }
     }
-    // ENGINE PARITY WITH `server start` (TRDD-1B98LCVR): pick alcore exactly like serverControl —
-    // this used to spawn `node server.js` unconditionally, one of the two paths that kept
-    // resurrecting the TS backend after the Rust cutover (the other was the hook revive).
-    const alcore = alcoreBin()
-    const serverJs = alcore ? '' : findServerJs()
+    // alcore is the only server this package ships (TRDD-1B98LCVR box 4) — no binary means the
+    // step fails honestly rather than spawning a TS bundle that no longer exists.
+    const platform = `${process.platform}-${process.arch}`
+    let alcore: string | null
+    try { alcore = alcoreBin(process.env, undefined, undefined, resolveBinNativeDir()) } catch (e) {
+      return { result: { step: this.name, found, action: 'start server', verify: 'FAIL', detail: (e as Error).message }, acted: false }
+    }
+    if (!alcore) {
+      return { result: { step: this.name, found, action: 'start server', verify: 'FAIL', detail: `no server available for ${platform} — set AGENTLENS_ALCORE or build rust-core` }, acted: false }
+    }
     fs.mkdirSync(ctx.dataDir, { recursive: true })
     const logFile = path.join(ctx.dataDir, 'server.log')
     let outFd: number | 'ignore'
@@ -895,14 +903,7 @@ const stepServer: StepDef = {
       AGENTLENS_OPEN_BROWSER: '0', // setup verifies with HTTP probes; a browser popup is noise
     }
     // alcore reads NO env for ports/data-dir — flags only — so the ctx values go on the argv.
-    const child = alcore
-      ? spawn(alcore, alcoreServeArgs(spawnEnv, ctx.dataDir), { cwd: ctx.dataDir, detached: true, stdio: ['ignore', outFd, outFd], env: spawnEnv })
-      : spawn(process.execPath, ['--max-old-space-size=6144', serverJs], {
-        cwd: path.dirname(path.dirname(serverJs)),
-        detached: true,
-        stdio: ['ignore', outFd, outFd],
-        env: spawnEnv,
-      })
+    const child = spawn(alcore, alcoreServeArgs(spawnEnv, ctx.dataDir), { cwd: ctx.dataDir, detached: true, stdio: ['ignore', outFd, outFd], env: spawnEnv })
     child.unref()
     if (typeof outFd === 'number') fs.closeSync(outFd)
 

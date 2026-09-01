@@ -52,24 +52,6 @@ async function main() {
 		plugins: [esbuildProblemMatcherPlugin],
 	});
 
-	const standaloneCtx = await esbuild.context({
-		entryPoints: ['standalone/server.ts'],
-		bundle: true,
-		format: 'cjs',
-		minify: false,
-		sourcemap: !production,
-		sourcesContent: false,
-		platform: 'node',
-		outfile: 'standalone/server.js',
-		logLevel: 'silent',
-		// @duckdb/node-api loads prebuilt platform-specific .node binaries via optionalDependencies —
-		// native addons CANNOT be bundled, so it must resolve from node_modules at runtime (it is a
-		// declared runtime dependency, same stance as sql.js's dynamic require). Without this the
-		// whole build fails on the .node loader, which is how the store code silently never shipped.
-		external: ['@duckdb/node-api'],
-		plugins: [esbuildProblemMatcherPlugin],
-	});
-
 	const cliCtx = await esbuild.context({
 		entryPoints: ['standalone/cli.ts'],
 		bundle: true,
@@ -80,37 +62,23 @@ async function main() {
 		platform: 'node',
 		outfile: 'standalone/cli.js',
 		logLevel: 'silent',
-		// sql.js resolves from node_modules at runtime (same stance as the server bundle) —
-		// inlining its WASM loader would bloat the CLI for a path only `setup` touches.
-		// @duckdb/node-api: native .node addon, unbundlable — see the server target above.
+		// sql.js resolves from node_modules at runtime — inlining its WASM loader would bloat the
+		// CLI for a path only `setup` touches. @duckdb/node-api loads prebuilt platform-specific
+		// .node binaries via optionalDependencies — native addons CANNOT be bundled, so both must
+		// resolve from node_modules at runtime (declared runtime dependencies).
 		external: ['sql.js', '@duckdb/node-api'],
-		plugins: [
-			esbuildProblemMatcherPlugin,
-			{
-				// cli.ts lazily imports ./server on the bare no-args path. Left to esbuild, that
-				// dynamic import would INLINE the entire server into cli.js (a second full copy of
-				// the collector). Marking it external keeps cli.js the thin dispatcher: at runtime
-				// require('./server') resolves the sibling standalone/server.js bundle instead.
-				name: 'external-sibling-server',
-				setup(build) {
-					build.onResolve({ filter: /^\.\/server$/ }, () => ({ path: './server', external: true }));
-				},
-			},
-		],
+		plugins: [esbuildProblemMatcherPlugin],
 	});
 
 	if (watch) {
 		await mediaCtx.watch();
 		await sidebarCtx.watch();
-		await standaloneCtx.watch();
 		await cliCtx.watch();
 	} else {
 		await mediaCtx.rebuild();
 		await mediaCtx.dispose();
 		await sidebarCtx.rebuild();
 		await sidebarCtx.dispose();
-		await standaloneCtx.rebuild();
-		await standaloneCtx.dispose();
 		await cliCtx.rebuild();
 		await cliCtx.dispose();
 	}

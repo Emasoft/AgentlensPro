@@ -51,13 +51,15 @@ function liveStoreWriters(): string[] {
     // gap sees an empty table while a writer is seconds from existing. `alstore unpark` mutates the
     // pass state file, so it counts as a writer too.
     // The supervisor arm is anchored to THIS product's invocations: the cli.js bundle, the
-    // compiled out/ layouts (out/cli/, out/test/cli/ — findServerJs's own candidate list, so a
-    // dev-build supervisor is a real shape), or the linked `agentlenspro` name. The bare
-    // `server start --supervise` token pattern would match a stranger's argv, and this gate is
-    // fail-CLOSED — a false positive refuses a legitimate repair over someone else's process.
+    // compiled out/ layouts (out/cli/, out/test/cli/ — a dev-build supervisor is a real shape),
+    // or the linked `agentlenspro` name. The bare `server start --supervise` token pattern would
+    // match a stranger's argv, and this gate is fail-CLOSED — a false positive refuses a
+    // legitimate repair over someone else's process.
     // A RENAMED shim (`alens -> cli.js`) is out-of-contract by decision, not accident: argv is
-    // shown as invoked, not resolved, so name-matching cannot follow an alias — and the spawned
-    // collector still matches the standalone/server.js arm the moment it exists.
+    // shown as invoked, not resolved, so name-matching cannot follow an alias. The spawned
+    // collector matches the `alcore\s+serve` arm (the standalone/server.js arm is legacy — the
+    // TS server was retired in TRDD-1B98LCVR box 4, this pattern just still recognizes an old
+    // pidfile/argv from before the cutover).
     // \b before out/ — without it "checkout/cli/…" is a substring hit, and this gate fail-closed
     // over a stranger's path is the exact false positive the anchoring exists to prevent.
     return /standalone\/server\.js|(standalone\/cli\.js|\bout\/(test\/)?cli\/[^ ]+\.js|agentlenspro)\s+server\s+start\b.*--supervise|alcore\s+serve|alstore\s+(pass|unpark)/.test(line)

@@ -148,16 +148,14 @@ function repoMediaDir(): string {
 }
 
 export function alcoreTestBin(): string | null {
-  // DEFAULT engine since 2026-09-01 (TRDD-1B98LCVR box 3): the full suite ran green against alcore
-  // (2529 passing; the only 2 failures were date-pinned pricing tests unrelated to any server).
-  // `AGENTLENS_TEST_ENGINE=ts` opts back into the TypeScript bundle until box 4 deletes it.
-  if ((process.env.AGENTLENS_TEST_ENGINE ?? 'alcore').trim() !== 'alcore') return null
+  // alcore is the ONLY server this package ships (TRDD-1B98LCVR box 4 — standalone/server.ts is
+  // deleted), so every real-server test boots it; null means no binary was found at all.
+  //
   // A LIST of repo roots, not one guess. This file runs from TWO layouts — `src/test/helpers/`
   // (3 up) and the compiled `out/test/test/helpers/` (4 up) — and a single `'..','..','..'`
-  // resolved to `out/` under mocha, so this returned null with the engine explicitly requested and
-  // the whole suite quietly ran on server.js instead. It looked like a clean parity result: 2527
-  // passing against an engine that was never started. Same failure shape `findServerJs` already
-  // guards against a few files over, which is why it enumerates candidates too.
+  // resolved to `out/` under mocha, so this once returned null under mocha even with a built
+  // binary present. It looked like a clean parity result: 2527 passing against an engine that was
+  // never started. Enumerate candidates across both layouts to guard against that.
   const roots = [
     path.resolve(__dirname, '..', '..', '..'),
     path.resolve(__dirname, '..', '..', '..', '..'),
@@ -218,23 +216,23 @@ export async function spawnServerWithRetry(opts: SpawnServerRetryOptions): Promi
     // the orphan it then cannot reap. Verified: one such orphan was found alive 54 minutes after a
     // run, PPID 1, on that run's ephemeral ports (it inherits the test env, so it re-binds them).
     const env = { ...(await opts.buildEnv()), AGENTLENS_WATCHDOG: 'off' }
-    // WHICH ENGINE THE SUITE BOOTS (TRDD-1B98LCVR box 3). Every test that starts a real server
-    // routes through this ONE line, so the whole suite migrates from the TypeScript bundle to
-    // alcore here rather than in 15 separate files — and, more importantly, it can only ever be
-    // one of the two, which is the property box 4 (deleting standalone/server.ts) depends on.
-    //
-    // alcore is the DEFAULT since 2026-09-01: all 14 measured parity gaps were closed and the full
-    // suite ran green under it (2529 passing). `AGENTLENS_TEST_ENGINE=ts` opts out, and the
-    // no-binary case still falls back to server.js rather than failing 15 files with spawn errors.
-    // Substitute ONLY for the real bundle. `spawnServerWithRetry` is also used to launch
-    // deliberately fake server scripts (freePortRetry.test.ts spawns a stub to prove the port-race
-    // retry), and swapping alcore in there replaced the subject of the test with a different
-    // program — it failed with "alcore: --data-dir is required", which reads like a parity gap and
-    // is not one.
-    const useAlcore = /(^|[\\/])standalone[\\/]server\.js$/.test(opts.serverJs) ? alcoreTestBin() : null
-    const child = useAlcore
-      ? spawn(useAlcore, alcoreArgsFromEnv(env), { env, stdio: ['ignore', 'pipe', 'pipe'], ...opts.spawnOptions })
-      : spawn(process.execPath, [opts.serverJs], { env, stdio: ['ignore', 'pipe', 'pipe'], ...opts.spawnOptions })
+    // WHICH ENGINE THE SUITE BOOTS. Every test that boots the REAL product server routes through
+    // this ONE line, so alcore is substituted here rather than in 15 separate files — since
+    // TRDD-1B98LCVR box 4, alcore is the ONLY server (standalone/server.ts is deleted), so a
+    // missing binary is a hard failure, never a silent fallback. Substitute ONLY for the real
+    // bundle's path: `spawnServerWithRetry` is also used to launch deliberately fake server
+    // scripts (freePortRetry.test.ts spawns a stub to prove the port-race retry), and those must
+    // keep spawning their own script unmodified — swapping alcore in there would replace the
+    // subject of the test with a different program.
+    const isRealServer = /(^|[\\/])standalone[\\/]server\.js$/.test(opts.serverJs)
+    let child: ChildProcess
+    if (isRealServer) {
+      const alcore = alcoreTestBin()
+      if (!alcore) throw new Error('no alcore binary found — build rust-core (cargo build --release --manifest-path rust-core/Cargo.toml -p agentlens-core --bin alcore) or set AGENTLENS_ALCORE')
+      child = spawn(alcore, alcoreArgsFromEnv(env), { env, stdio: ['ignore', 'pipe', 'pipe'], ...opts.spawnOptions })
+    } else {
+      child = spawn(process.execPath, [opts.serverJs], { env, stdio: ['ignore', 'pipe', 'pipe'], ...opts.spawnOptions })
+    }
     let log = ''
     child.stdout?.on('data', (d: Buffer) => { log += d.toString() })
     child.stderr?.on('data', (d: Buffer) => { log += d.toString() })
