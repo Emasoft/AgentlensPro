@@ -3,7 +3,7 @@ trdd-id: YBJGIYI1
 title: FORK_STORM cannot be distinguished from one fat session rewriting its own prefix
 column: todo
 created: 2026-08-27T22:50:06+0200
-updated: 2026-08-27T22:50:06+0200
+updated: 2026-09-01T22:58:02+0200
 current-owner: unassigned
 task-type: bugfix
 scope: project
@@ -99,3 +99,25 @@ A fixture with 3 cold full-prefix spikes, one fingerprint, ONE session id must c
 - 2026-08-27T22:50:06+0200 — Filed from a peer report, then confirmed first-hand at
   `src/burnInvestigator.ts:304-306`, `:328`, `:107`. Queued to `todo`, not started: it is Rust
   cutover work and the USER's sequencing is publish → install → Rust.
+
+## ⏵ STATE — 2026-09-01 — SCOPED, ready to implement (Rust)
+
+**Discriminator (verified against the code, not the report alone):** the number of DISTINCT
+`session_id`s inside the biggest prefix-fingerprint family. ≥2 distinct sessions paying a cold
+write of the same fingerprint = FORK_STORM; exactly 1 = a fat session rewriting its own prefix
+(name it `FAT_SESSION_REWRITES`). The extractor already exists —
+`rust-core/crates/agentlens-core/src/burn/bodies_activity.rs:143 fn find_session_id` — but the
+investigator's `ReqRec` (`burn/investigator_scan.rs:57-65`) never carries it and the FORK_STORM
+branch (`burn/investigator.rs:148`, gate ~`:328` `spikes >= 3 && biggestFam >= 3 && coldSpikes >= 2`)
+never gates on it. Scoping: `reports/fork-storm-discrimination/20260901_225709+0200-scoping.md`.
+
+**NEXT ACTION (one Rust change, do it when cargo is free — another Rust worker owns the build):**
+1. `pub session_id: Option<String>` on `ReqRec`; `scan_request` (`investigator_scan.rs:278-334`)
+   fills it once via a shared `pub(crate) fn find_session_id` (move the regex out of
+   `bodies_activity.rs`; do NOT duplicate it a third time).
+2. In `investigator.rs` where `fams`/`by_fam` are tallied by fingerprint (~`:105`, ~`:328`), collect
+   the distinct-session set per family; gate FORK_STORM on `>= 2`, else emit `FAT_SESSION_REWRITES`
+   with the same evidence (add the enum value on the TS side `src/shared/cacheBreak.ts` +
+   `cacheRiskKinds.ts` and the remedy text: "/compact or /clear the fat parent" vs "stop the fan-out").
+3. Mutation-verified test: two synthetic bodies, same fingerprint, (a) two session ids → FORK_STORM,
+   (b) one session id → FAT_SESSION_REWRITES; reverting the gate must fail (b).
