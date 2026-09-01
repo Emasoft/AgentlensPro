@@ -101,10 +101,24 @@ alcore the account window is not there when it checks — so the stall has nothi
 `calibrate_from_stop_failure` correctly declines. The gap is in the **account registry / window
 establishment** path, a different subsystem entirely.
 
-Two things worth noting in that assertion: the `accounts:` value printed the SERVER BOOT LOG rather
-than an account list, which suggests the test is reading a stream it did not expect — worth
-checking whether the precondition is even querying what it thinks it is before assuming alcore is
-at fault.
+**RETRACTED — my own caution above was wrong.** I suggested the `accounts:` value printing the
+server boot log meant the test was reading the wrong stream. It is not: the assertion is
+`` `account window must exist before the stall. accounts: ${getLog().slice(-500)}` `` — the test
+DELIBERATELY dumps the last 500 bytes of the server log into its own failure message for diagnosis.
+Reading the test settled it; guessing from the output shape did not.
+
+**NARROWED FURTHER — the computation is present, so look at its INPUT, not the maths.**
+- The test's precondition is `GET /api/burn-status` → `accountWindows[]`, found by `accountUuid`
+  (`serverCalibration.test.ts:119-124`), after `ingestAccountConsumption` posts three consumption
+  events. The test's own comment: *"a failure here means the fixture broke, not the calibration."*
+- alcore **does** compute that field: `compute_account_window_budgets`
+  (`burn/monitor.rs:630`), wired at `burn/monitor.rs:889`, and labelled in `burn/runtime.rs:141`.
+  So `accountWindows` is neither missing nor stubbed.
+
+⇒ The failure is in **what feeds those events** — the ingested consumption is not reaching the
+burn-event list, or the per-event account attribution (`accountUuid`) is not being extracted from
+it. **Investigate the event SOURCE, not `compute_account_window_budgets` and not
+`burn_calibration.rs` — both are correct.**
 
 **NEXT: verify the account window independently** — boot alcore on a scratch dir, ingest the same
 fixture the test uses, and query the account registry directly. That answers "is alcore not
