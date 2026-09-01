@@ -1,9 +1,9 @@
 ---
 trdd-id: 5PUD8RKE
 title: alcore's bodies chore drains only the legacy dir and would abandon the RAM spool
-column: dev
+column: ai_review
 created: 2026-08-27T20:31:38+0200
-updated: 2026-09-01T22:46:29+0200
+updated: 2026-09-01T23:06:30+0200
 current-owner: main
 task-type: bugfix
 severity: HIGH
@@ -74,11 +74,14 @@ backpressure cluster (`ensureRamDisk`/`ramDiskInfo`/`spoolSizeMb`, `applySpoolBa
       dir does — `tests/chores_bodies_spool_drain.rs::spool_body_is_drained` plus
       `tests/bodies_read_scope.rs::{with_no_spool_the_scope_is_the_legacy_dir_alone,
       during_a_drain_both_the_spool_and_the_legacy_dir_are_in_scope_spool_first}`.
-- [ ] Spool backpressure exists in Rust before any cutover on a spool machine, or the cutover
-      refuses to run there and says why. FOUND OPEN 2026-09-01: alcore's server-stats emitted
-      `spoolBackpressureSpills: 0 / spoolBackpressureActive: false` as HARDCODED constants — no
-      port existed, and the cutover HAD run on this spool machine. A worker is porting
-      `src/spoolBackpressure.ts` (64 MiB free-floor, spill to the legacy dir, real counters) now.
+- [x] Spool backpressure exists in Rust — PORTED `d1e6e08d` (`spool_backpressure.rs`, wired into
+      the bodies-pass tick under the same SPOOL_MODE gate as the TS): the 64 MiB free-space floor
+      (`AGENTLENS_SPOOL_FLOOR_MB`) is probed per tick, `spoolBackpressureSpills` counts floor
+      transitions and `spoolBackpressureActive` is the live reading — replacing the HARDCODED
+      0/false found on 2026-09-01. Scope note: alcore does not WRITE bodies (Claude Code does),
+      so the behavioural lever is the drain itself (spool first, no fsync barrier, 70% cap — box 1);
+      this box makes the pressure MEASURED and reported, no longer a stub. Live after deploy:
+      spills 0 / active false at 2% spool fill — real readings, not constants.
 - [x] The `chores.rs` "SINGLE TARGET … alcore binds 4319" paragraph is replaced by a note saying
       why it was false and that it was removed rather than left to outlive the code (working tree;
       commits with the backpressure batch).

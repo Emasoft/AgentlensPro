@@ -25,6 +25,8 @@ All notable changes to AgentlensPro are documented here.
   of failing on CDN propagation — 2.33.1's run went red for a publish that had fully succeeded.
 - `agentlenspro setup` recognised only the Node server in its PID-signature check, so a live alcore
   read as a foreign process.
+- alcore reported spool backpressure as hardcoded `0 / false`; the free-space floor
+  (`AGENTLENS_SPOOL_FLOOR_MB`, 64 MiB) is now probed every bodies pass and the counters are real.
 
 ## [2.33.1] - 2026-09-01
 
