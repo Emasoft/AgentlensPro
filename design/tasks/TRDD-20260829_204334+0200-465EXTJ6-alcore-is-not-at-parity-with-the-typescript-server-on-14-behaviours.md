@@ -236,7 +236,38 @@ state.accounts.record(sid, acct) }`, `lib.rs`) and the summarizer takes an `acco
 card-building path is handed actually consults `state.accounts`, or is a stub that always returns
 empty.
 
-**START HERE (one grep, no guessing):** find every construction site of the `account_for` closure
+**FOUND — `lib.rs:347` passes a closure that ALWAYS returns None:**
+
+```rust
+let mut summary = summarize::summarizer::summarize_spans(spans, &|_| None);
+```
+
+Both live call sites do it (`lib.rs:347`, `bin/alsummarize.rs:34`). So the account registry is
+never consulted during summarization, every card gets no `accountId`, the rollup at
+`summarize/claude.rs:876` finds nothing to roll up, and `api_request_events` copies an absent value
+— exactly the measured `accountWindows = [('None', 3)]`. Every other link was verified present;
+this is the single break.
+
+**WHY IT IS NOT A ONE-LINE FIX.** `summary_over` (`lib.rs:345`) is deliberately a FREE function
+with no `&self`: TRDD-HFV4AIT7 made it take a snapshot so the rebuild runs OFF the state lock.
+So it has no `self.accounts` to consult, and the registry must travel IN the snapshot.
+
+**THE FIX — 5 touch points, all in `lib.rs`:**
+1. `SummaryInputs` (`lib.rs:128`) — add an accounts field. Use `Arc` / a cheap clone, per the
+   struct's existing doc: both current fields hold `Arc`s so building one is a pointer copy, and a
+   deep clone here would reintroduce the stall that TRDD-HFV4AIT7 removed.
+2. `summary_snapshot()` (`lib.rs:317`) — populate it from `self.accounts` under the lock.
+3. `summary_over(...)` (`lib.rs:345`) — take the accounts argument.
+4. `summary_from(...)` (`lib.rs:~323`) — forward `inputs.accounts`.
+5. Replace `&|_| None` with a closure reading that map. `bin/alsummarize.rs:34` legitimately keeps
+   `&|_| None` (a standalone file summarizer with no registry) — do NOT "fix" it.
+
+**MUTATION CHECK:** restore `&|_| None` at the `lib.rs` site and the P5 precondition must fail
+again. **VERIFY WITH:** the probe already in this card — scratch alcore, `--no-log-scan`, POST the
+fixture-shaped payload, `GET /api/burn-status`. Expect `[('acct-fx', 3)]` instead of
+`[('None', 3)]`.
+
+**(superseded) START HERE (one grep, no guessing):** find every construction site of the `account_for` closure
 passed into the Claude summarizer and check what it reads. A closure returning empty explains this
 result exactly, with every other link on the chain already verified present.
 
