@@ -1,9 +1,9 @@
 ---
 trdd-id: ZW4APOPI
 title: alcore never drains the RAM-disk spool so it is 100 percent full and capture is silently losing bodies
-column: dev
+column: ai_review
 created: 2026-08-29T07:37:08+0200
-updated: 2026-09-02T08:05:01+0200
+updated: 2026-09-02T08:29:30+0200
 current-owner: claude-agentlenspro
 task-type: bugfix
 project-id: agentlenspro
@@ -208,6 +208,25 @@ explicit permission before any command that deletes it, even one whose whole pur
 preserving migration. `--no-delete` ingests without reclaiming, but leaves the disk full and the
 loss continuing, so it is not a substitute. **Ask, then run.**
 
+**2026-09-02 — boxes 1 and 3 closed; the section below is the 08-29/09-01 record.**
+Box 3: `bodies.spool` was a hardcoded `null`; `spool_gauge` (`server_stats.rs`, `79b7b379` →
+`44c0ef5c` → `9e81f89b`) now reports dir / `exists` / `ownVolume` / files / stagedBytes /
+free+total from statvfs (null when unknown) / floor / the chore's backpressure state. Two reviews
+moved `ownVolume` from a path-exists check to a device-id check to a MOUNT-BOUNDARY walk on the
+path (a plain directory left where the RAM disk was must not read as a volume; the data-dir
+reference broke the moment `DATA_DIR` lived elsewhere). LIVE (pid 74955, the `44c0ef5c` build):
+`{"exists":true,"ownVolume":true,"files":12,"stagedBytes":4535512,"freeBytes":2124046336,
+"totalBytes":2147483648,"floorBytes":67108864,"backpressure":{"active":false,"spills":0}}` —
+the `df` question this card opened with, answered by the endpoint. Topology read: `/`,
+`/Volumes`, `~/.agentlens` share dev 16777234; the spool and its `otel-bodies` are 16777285.
+Box 1: `tests/chores_spool_drain.rs` — a seconds-old spool body and a 73 h-old legacy body,
+one `bodies_pass` → both reclaimed, second pass → both dirs empty; reviewed to fail on the spool
+assertion under a legacy-only drain (mutation reasoned, NOT run).
+Not this card: the leaked twin `/Volumes/AgentLensSpool 1` (`mount | grep -c` = 2) is a wasted
+RAM disk + an ensure-time race, not a gauge lie — Claude Code writes to the primary path only;
+the detach decision + the `ramdisk.ts` name-match guard remain the handoff's open item. A cheap
+future detector: `bodies.spool.files == 0` while `bodies.live.files > 0` = draining the wrong dir.
+
 **NEXT ACTION (two independent tracks — the first is not blocked on the second):**
 1. **Recovery:** get USER authorization, then `alstore pass ~/.agentlens/store
    /Volumes/AgentLensSpool/otel-bodies`. Reclaims ~2 GB and stops the loss immediately.
@@ -250,12 +269,13 @@ does not.
 - [x] `bodies_pass` drains every dir in `resolve_bodies_read_scope`, spool first, spool without the
       fsync barrier and under the 70%-of-spool cap — LIVE 2026-09-01: every pass logs
       "bodies pass: ingested N, deleted N, freed X across 2 dir(s)" on the alcore live server.
-- [ ] a test proves a body written to a configured spool dir is ingested and reclaimed (mutation-
-      verified: reverting to the hardcoded dir fails it)
+- [x] a test proves a body written to a configured spool dir is ingested and reclaimed (mutation-
+      verified: reverting to the hardcoded dir fails it) — `tests/chores_spool_drain.rs`
+      (`44c0ef5c`, 1/1); the mutation was reviewed to fail the spool assertion, not run.
 - [x] on this machine `df /Volumes/AgentLensSpool` drops below 100% and the zero-byte file count
       stops growing — MEASURED 2026-09-01 22:00: 2% used (27M of 2.0G), zero-byte files = 0.
-- [ ] `/api/server-stats` exposes the spool (today `bodies.spool: null`), so the next occurrence is
-      visible instead of needing a `df`
+- [x] `/api/server-stats` exposes the spool (today `bodies.spool: null`), so the next occurrence is
+      visible instead of needing a `df` — live 2026-09-02 08:27 (see STATE addendum).
 
 ## Notes and lessons learned
 
