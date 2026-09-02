@@ -368,6 +368,55 @@ pub fn resource_sample(data_dir: &Path) -> Value {
     json!({ "rssMb": num(rss_mb), "loadPerCore": num(load_per_core), "freeDiskMb": free_disk_mb, "cpuCount": cpu_count })
 }
 
+/// `bodies.spool` (TRDD-ZW4APOPI box 3): the RAM-disk spool as an operator would read it with
+/// `df` + `ls`, so "the spool is 100% full and capture is silently losing bodies" is visible in
+/// `/api/server-stats` instead of needing a shell on the box. `null` when no spool is configured
+/// (the legacy single-dir install). `mounted: false` is its own state, not an error: the config
+/// still names the dir but a reboot dropped the RAM disk — the `spool ensure` LaunchAgent's
+/// case. Free/total are `null` when statvfs cannot answer, never a fabricated 0 (a 0 here would
+/// read as "full"). Back-pressure figures are the chore's own controller state, passed in.
+pub fn spool_gauge(data_dir: &Path, backpressure_active: bool, backpressure_spills: u64) -> Value {
+    let Some(dir) = crate::burn::guard::spool_dir_configured(data_dir) else { return Value::Null };
+    let mounted = std::fs::metadata(&dir).is_ok_and(|m| m.is_dir());
+    let (files, staged_bytes, free, total) = if mounted {
+        let (files, _) = live_bodies_liveness(std::slice::from_ref(&dir));
+        (files, crate::chores::staged_body_bytes(&dir), free_disk_bytes(&dir), total_disk_bytes(&dir))
+    } else {
+        (0, 0, None, None)
+    };
+    let vars: std::collections::HashMap<String, String> = std::env::vars().collect();
+    json!({
+        "dir": dir.to_string_lossy(),
+        "mounted": mounted,
+        "files": files,
+        "stagedBytes": staged_bytes,
+        "freeBytes": free.map(|b| json!(b)).unwrap_or(Value::Null),
+        "totalBytes": total.map(|b| json!(b)).unwrap_or(Value::Null),
+        "floorBytes": crate::spool_backpressure::spool_floor_bytes(&vars),
+        "backpressure": { "active": backpressure_active, "spills": backpressure_spills },
+    })
+}
+
+/// statvfs(path): blocks × frsize — the volume's size, the denominator `df` prints; None when unknown.
+pub fn total_disk_bytes(path: &Path) -> Option<u64> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        let c = std::ffi::CString::new(path.as_os_str().as_bytes()).ok()?;
+        let mut st: libc::statvfs = unsafe { std::mem::zeroed() };
+        // SAFETY: valid NUL-terminated path, zeroed out-struct.
+        if unsafe { libc::statvfs(c.as_ptr(), &mut st) } != 0 {
+            return None;
+        }
+        Some(st.f_blocks as u64 * st.f_frsize as u64)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        None
+    }
+}
+
 /// statvfs(dataDir): bavail × frsize (Node's statfsSync bavail × bsize); None when unknown.
 pub fn free_disk_bytes(path: &Path) -> Option<u64> {
     #[cfg(unix)]
@@ -498,9 +547,9 @@ pub fn server_stats(st: &CoreState, now_ms: i64) -> Value {
                 Some((files, bytes, on_disk)) => json!({ "files": files, "bytes": bytes, "onDisk": on_disk }),
                 None => Value::Null,
             },
-            // NOT PORTED: the spool (TRDD-KB17X5G2) — SPOOL_MODE off ⇒ null, as the TS server
-            // reports on a machine without a spool mount.
-            "spool": Value::Null,
+            // TRDD-ZW4APOPI box 3: null only when no spool is configured; a configured-but-
+            // unmounted spool is reported as such (see `spool_gauge`).
+            "spool": spool_gauge(data_dir, p.spool_backpressure_active, p.spool_backpressure_spills),
         },
         "hookEvents": { "files": hook_files, "bytes": hook_bytes, "receivedSinceBoot": p.hook_event_writes, "spooled": hook_spooled },
         "statusline": {
@@ -612,5 +661,45 @@ mod capture_block_tests {
 
         std::fs::remove_dir_all(&store_dir).ok();
         std::fs::remove_dir_all(&live_dir).ok();
+    }
+
+    /// TRDD-ZW4APOPI box 3: `bodies.spool` must distinguish "no spool configured" (null) from
+    /// "configured but not mounted" from a live spool with real file/byte/df figures — a stub
+    /// returning null always (what shipped) passed every same-shape check while the RAM disk sat
+    /// at 100%.
+    #[test]
+    fn spool_gauge_null_unmounted_and_live_are_three_different_answers() {
+        let data_dir = std::env::temp_dir().join(format!("alcore-spool-gauge-{}", std::process::id()));
+        let spool = data_dir.join("spool");
+        std::fs::create_dir_all(&data_dir).unwrap();
+
+        // No config ⇒ no spool ⇒ null, the legacy single-dir install.
+        assert!(spool_gauge(&data_dir, false, 0).is_null());
+
+        // Configured but the dir is gone (a reboot dropped the RAM disk): its own state, no numbers.
+        std::fs::write(
+            data_dir.join("config.json"),
+            format!(r#"{{"capture":{{"spoolDir":"{}"}}}}"#, spool.to_string_lossy()),
+        )
+        .unwrap();
+        let g = spool_gauge(&data_dir, true, 3);
+        assert_eq!(g["mounted"], false);
+        assert_eq!(g["files"], 0);
+        assert!(g["freeBytes"].is_null() && g["totalBytes"].is_null(), "never a fabricated 0 for an absent volume");
+        assert_eq!(g["backpressure"]["active"], true);
+        assert_eq!(g["backpressure"]["spills"], 3);
+
+        // Mounted with one body: counted, sized, and the volume's df figures are real numbers.
+        std::fs::create_dir_all(&spool).unwrap();
+        std::fs::write(spool.join("a.request.json"), b"12345").unwrap();
+        let g = spool_gauge(&data_dir, false, 3);
+        assert_eq!(g["mounted"], true);
+        assert_eq!(g["files"], 1);
+        assert_eq!(g["stagedBytes"], 5);
+        assert!(g["freeBytes"].as_u64().is_some() && g["totalBytes"].as_u64().is_some());
+        assert!(g["totalBytes"].as_u64() >= g["freeBytes"].as_u64());
+        assert_eq!(g["floorBytes"], crate::spool_backpressure::DEFAULT_SPOOL_FLOOR_BYTES);
+
+        std::fs::remove_dir_all(&data_dir).ok();
     }
 }
