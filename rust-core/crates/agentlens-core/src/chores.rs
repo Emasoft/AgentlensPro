@@ -25,7 +25,7 @@ use std::time::Duration;
 
 use serde_json::Value;
 
-use crate::CoreState;
+use crate::{CoreState, LockTimed};
 
 /// TWO ENGINES, ONE DATA DIR — the risk that does not exist in the TS, because there was only
 /// ever one server. If the TS server and alcore run against the same data dir, their retention
@@ -66,7 +66,7 @@ pub fn with_chores_lock<T>(data_dir: &Path, body: impl FnOnce() -> T) -> Option<
 /// segment enumeration outside the lock and re-acquire per file, which is only safe once the
 /// index is separable from the writer.
 fn span_tick(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
-    let Ok(mut st) = state.lock() else { return };
+    let Ok(mut st) = state.lock_timed() else { return };
     let data_dir = st.data_dir.clone();
     let days = crate::retention_config::resolve_knob(&data_dir, &crate::retention_config::SPANS_RETENTION_DAYS);
     let ran = with_chores_lock(&data_dir, || {
@@ -126,7 +126,7 @@ pub fn hook_events_retention_days(vars: &std::collections::HashMap<String, Strin
 /// straight through would let `logEventsRetentionDays: 0` wipe the store.
 fn purge_tick(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
     let (data_dir, sl_root) = {
-        let Ok(st) = state.lock() else { return };
+        let Ok(st) = state.lock_timed() else { return };
         (st.data_dir.clone(), st.statusline.root.clone())
     };
 
@@ -207,7 +207,7 @@ const DRAIN_MAX_PASSES: usize = 16;
 
 pub fn bodies_pass(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
     let data_dir = {
-        let Ok(st) = state.lock() else { return };
+        let Ok(st) = state.lock_timed() else { return };
         st.data_dir.clone()
     };
     // EVERY configured bodies dir, SPOOL FIRST — not just the legacy one. This chore used to
@@ -233,7 +233,7 @@ pub fn bodies_pass(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
             let floor = crate::spool_backpressure::spool_floor_bytes(&vars);
             let free = crate::server_stats::free_disk_bytes(&spool_dir);
             let over = crate::spool_backpressure::over_capacity(free, floor);
-            if let Ok(mut st) = state.lock() {
+            if let Ok(mut st) = state.lock_timed() {
                 let (active, spills) =
                     crate::spool_backpressure::tick(over, st.persist.spool_backpressure_active, st.persist.spool_backpressure_spills);
                 st.persist.spool_backpressure_active = active;
@@ -263,8 +263,17 @@ pub fn bodies_pass(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
             return;
         }
     };
-    let threads = std::thread::available_parallelism().map(|n| n.get().saturating_sub(2).max(4)).unwrap_or(4);
-    let mut store = match agentlens_store::open_store(&store_dir, agentlens_store::DEFAULT_MEMORY_LIMIT, threads) {
+    // TRDD-768NEX6E: this chore runs every 60s INSIDE the resident server, not as an offline
+    // CLI pass — `DEFAULT_MEMORY_LIMIT` ("8GB") + available_parallelism() is the `alstore pass`
+    // CLI's sizing. Measured 2026-09-02: at that sizing the pass's DuckDB scans became the
+    // machine's dominant IO/CPU load (stall samples: 10,694 DuckDB frames, all inside
+    // `MultiFileFunction<Parquet>` waits). Match the server's other two in-process DuckDB uses
+    // (statusline_store.rs, bodies_evidence.rs): threads=2, memory_limit="2GB".
+    let threads = 2;
+    // Timed from the store open, not the tick: TRDD-768NEX6E's acceptance wants one pass's wall
+    // time on the log line, and the open is where the per-pass parquet rebuild scans happen.
+    let started = std::time::Instant::now();
+    let mut store = match agentlens_store::open_store(&store_dir, "2GB", threads) {
         Ok(s) => s,
         Err(e) => {
             eprintln!("alcore: bodies pass cannot open the store: {e}");
@@ -344,13 +353,14 @@ pub fn bodies_pass(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
     // PARKED gauge reads the state file, which the drain empties BEFORE the gate decides.
     if ingested > 0 || deleted > 0 || failed > 0 {
         println!(
-            "alcore: bodies pass: ingested {}, deleted {} ({} of them re-emitted), failed {}, freed {:.1}MB across {} dir(s){}",
+            "alcore: bodies pass: ingested {}, deleted {} ({} of them re-emitted), failed {}, freed {:.1}MB across {} dir(s) in {} ms{}",
             ingested,
             deleted,
             reemitted,
             failed,
             bytes_freed as f64 / 1_048_576.0,
             scope.dirs.len(),
+            started.elapsed().as_millis(),
             if any_over_cap { " (OVER CAP — drained at age 0)" } else { "" }
         );
     }
@@ -413,7 +423,7 @@ async fn resident_blob_scan(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
         None,
     );
     let rows = project_resident_blobs(&out);
-    if let Ok(mut st) = state.lock() {
+    if let Ok(mut st) = state.lock_timed() {
         st.latest_resident_blobs = rows;
     }
 }
@@ -444,6 +454,16 @@ pub fn project_resident_blobs(engine_out: &Value) -> Vec<Value> {
         .unwrap_or_default()
 }
 
+/// Shared by the boot drain and the periodic tick (TRDD-L6V1UUW0) so the two report identically.
+fn log_spool_drain(d: &crate::hook_events::SpoolDrain) {
+    if *d != crate::hook_events::SpoolDrain::default() {
+        println!(
+            "alcore: hook-spool: drained {} event(s), quarantined {} bad, kept {} unverified, kept {} for retry",
+            d.drained, d.rejected, d.unverified, d.kept
+        );
+    }
+}
+
 /// Arm every recurring chore on `rt`. Called once from `main` after the state is built and before
 /// the listeners bind. Boot-time passes run INLINE first (the TS calls each chore once at startup
 /// before setting its interval), so a server that is restarted more often than a chore's period
@@ -456,15 +476,11 @@ pub fn spawn_all(rt: &tokio::runtime::Runtime, state: Arc<Mutex<CoreState>>) {
     // the purge pass means a bucket-retention sweep can never delete the bucket they are about to
     // land in. It is also idempotent, so a crash mid-drain simply leaves the rest for next boot.
     {
-        let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut st = state.lock_timed().unwrap_or_else(|e| e.into_inner());
         let now = crate::now_ms();
-        let d = crate::hook_events::drain_hook_spool(&mut st, now);
-        if d != crate::hook_events::SpoolDrain::default() {
-            println!(
-                "alcore: hook-spool: drained {} event(s), quarantined {} bad, kept {} unverified, kept {} for retry",
-                d.drained, d.rejected, d.unverified, d.kept
-            );
-        }
+        // Boot pass has no lock contention yet — drain the whole backlog, unbounded.
+        let d = crate::hook_events::drain_hook_spool(&mut st, now, usize::MAX);
+        log_spool_drain(&d);
     }
     span_tick(&state, crate::now_ms() as f64);
     purge_tick(&state, crate::now_ms() as f64);
@@ -501,7 +517,7 @@ pub fn spawn_all(rt: &tokio::runtime::Runtime, state: Arc<Mutex<CoreState>>) {
     // On the blocking pool — a pass runs DuckDB ingestion and byte-for-byte reconstruction.
     let s = state.clone();
     let bodies_interval = {
-        let data_dir = state.lock().ok().map(|st| st.data_dir.clone());
+        let data_dir = state.lock_timed().ok().map(|st| st.data_dir.clone());
         match data_dir {
             Some(d) if crate::burn::guard::spool_dir_configured(&d).is_some() => 60,
             _ => 3600,
@@ -542,7 +558,7 @@ pub fn spawn_all(rt: &tokio::runtime::Runtime, state: Arc<Mutex<CoreState>>) {
         let mut tick = tokio::time::interval(Duration::from_secs(5));
         loop {
             tick.tick().await;
-            if let Ok(mut st) = s.lock() {
+            if let Ok(mut st) = s.lock_timed() {
                 if st.writer.pending_appends() > 0 {
                     st.flush_spans();
                 }
@@ -573,7 +589,7 @@ pub fn spawn_all(rt: &tokio::runtime::Runtime, state: Arc<Mutex<CoreState>>) {
         let mut tick = tokio::time::interval(Duration::from_millis(account_flush));
         loop {
             tick.tick().await;
-            if let Ok(mut st) = s.lock() {
+            if let Ok(mut st) = s.lock_timed() {
                 st.account_timeline.flush();
             }
         }
@@ -588,7 +604,7 @@ pub fn spawn_all(rt: &tokio::runtime::Runtime, state: Arc<Mutex<CoreState>>) {
         tick.tick().await; // boot just wrote the start marker
         loop {
             tick.tick().await;
-            if let Ok(mut st) = s.lock() {
+            if let Ok(mut st) = s.lock_timed() {
                 let file = crate::collector_lifecycle::lifecycle_file(&st.data_dir);
                 crate::collector_lifecycle::record_heartbeat(&file, &mut st.lifecycle, crate::now_ms());
             }
@@ -599,7 +615,7 @@ pub fn spawn_all(rt: &tokio::runtime::Runtime, state: Arc<Mutex<CoreState>>) {
     // deliberately shares only the root path + the Arc'd counters with the store, NEVER the state
     // lock — a seal must not stall every reader for the length of a re-encode.
     let (sl_root, sl_counters) = {
-        let Ok(st) = state.lock() else { return };
+        let Ok(st) = state.lock_timed() else { return };
         (st.statusline.root.clone(), st.statusline.counters.clone())
     };
     let sl_vars: std::collections::HashMap<String, String> = std::env::vars().collect();
@@ -612,6 +628,32 @@ pub fn spawn_all(rt: &tokio::runtime::Runtime, state: Arc<Mutex<CoreState>>) {
                 crate::statusline_store::maybe_seal(&root, &counters, &vars, crate::now_ms() as f64)
             })
             .await;
+        }
+    });
+
+    // Periodic hook-spool drain (TRDD-L6V1UUW0): the boot-only drain above never re-runs while
+    // the server stays up, so an event spooled AFTER boot (e.g. `agentlenspro hook` hitting a
+    // 1s timeout during a stall, TRDD-2R36W8Q1) sat forever until the next restart — measured
+    // 2026-09-02: 28 files spooled, 0 drained in 40 minutes of uptime. Parity with the retired TS
+    // server's `HOOK_SPOOL_DRAIN_MS` (default 30s, `Math.max(5_000, ...)` floor), same env-parsing
+    // shape as `account_flush` above. The 200-file-per-tick cap (see `drain_hook_spool`'s doc) is
+    // what keeps this safe to run on the same lock the request handlers use.
+    let hook_spool_drain_ms = std::env::var("AGENTLENS_HOOK_SPOOL_DRAIN_MS")
+        .ok()
+        .and_then(|v| v.parse::<i64>().ok())
+        .filter(|ms| *ms != 0)
+        .unwrap_or(30_000)
+        .max(5_000) as u64;
+    let s = state.clone();
+    rt.spawn(async move {
+        let mut tick = tokio::time::interval(Duration::from_millis(hook_spool_drain_ms));
+        tick.tick().await; // boot pass already drained; wait a full period before the first tick
+        loop {
+            tick.tick().await;
+            let mut st = s.lock_timed().unwrap_or_else(|e| e.into_inner());
+            let now = crate::now_ms();
+            let d = crate::hook_events::drain_hook_spool(&mut st, now, 200);
+            log_spool_drain(&d);
         }
     });
 }

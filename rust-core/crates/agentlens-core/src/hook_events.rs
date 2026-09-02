@@ -283,7 +283,15 @@ pub struct SpoolDrain {
 ///   only guaranteed copy is kept for the next boot.
 ///
 /// Idempotent: a crash mid-drain leaves the remaining files for the next boot.
-pub fn drain_hook_spool(st: &mut crate::CoreState, now_ms: i64) -> SpoolDrain {
+///
+/// `max_files` bounds how many spool files one call processes. The state lock (`st`) is held by
+/// the caller across the whole loop, and each event costs a file read plus a bucket read-back —
+/// on the boot path (`usize::MAX`) that is fine, nothing else needs the lock yet. On the periodic
+/// drain tick added for TRDD-L6V1UUW0 (the server is up and serving requests), an unbounded loop
+/// over a large backlog would hold the lock for multiple seconds and stall every request in
+/// flight — exactly TRDD-2R36W8Q1's failure shape. Bounding the batch keeps each tick short; a
+/// backlog bigger than the cap just drains over several ticks.
+pub fn drain_hook_spool(st: &mut crate::CoreState, now_ms: i64, max_files: usize) -> SpoolDrain {
     let spool_dir = st.data_dir.join("hook-spool");
     let mut names: Vec<String> = match std::fs::read_dir(&spool_dir) {
         Ok(rd) => rd
@@ -298,6 +306,7 @@ pub fn drain_hook_spool(st: &mut crate::CoreState, now_ms: i64) -> SpoolDrain {
     // so lexical order IS chronological order, and replaying out of order would scramble a session's
     // lifecycle sequence.
     names.sort();
+    names.truncate(max_files);
     let mut out = SpoolDrain::default();
     let rejected_dir = spool_dir.join("rejected");
     let events_dir = st.data_dir.join("hook-events");
