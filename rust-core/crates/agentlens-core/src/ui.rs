@@ -367,6 +367,28 @@ pub fn stripped_now(state: &Arc<Mutex<CoreState>>, now_ms: f64) -> Result<Arc<Va
     Ok(st.stripped_cache.store_if_newer(version, stripped))
 }
 
+/// The request-path twin of the 4 s tick's off-lock compute (TRDD-O3ICDRLO): the burn status
+/// for a route, computed with the state lock RELEASED. Every route that used to call
+/// `CoreState::live_burn_status` under its guard goes through here instead.
+///
+/// TRDD-XX1UAZHS: with the tick off the lock, the worst hold left on pid 54270 was a single
+/// 4,894 ms inside the `get_burn_status` tool route — `live_burn_status` is a whole-window
+/// `build_session_summary` PLUS the gather + `compute_burn_status`, all under the lock, and the
+/// sweeper's `save_cards` (4.7 s) and the rebuilder (2.9 s) queued behind that one request. The
+/// summary comes from `summary_now` (cache-served, off-lock; the same slightly-stale-under-rebuild
+/// trade the tick already makes), the only two lock-guarded inputs are snapshotted in a short
+/// hold, and `burn_status_for` runs released. Callers hold the lock again only for what they
+/// store or read next (`current_account`, `latest_resident_blobs`) — do not fold the compute
+/// back under a guard.
+pub fn burn_status_now(state: &Arc<Mutex<CoreState>>, now_ms: f64) -> Result<Value, String> {
+    let (_, summary) = summary_now(state, now_ms)?;
+    let (ttl, config) = {
+        let mut st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
+        (st.burn.ttl_context(now_ms), st.burn.config.clone())
+    };
+    Ok(crate::burn_status_for(&summary, &config, &ttl, now_ms))
+}
+
 /// pushUpdate — ONE full rebuild broadcast to every client. Called from the coalesced timer.
 pub fn push_update(state: &Arc<Mutex<CoreState>>, hub: &SseHub, now_ms: f64) {
     if hub.client_count() == 0 {
@@ -1450,9 +1472,11 @@ async fn handle(
         // always. The TS catch answers {"error":…} at 200 for a V8 throw; the Rust compute
         // cannot throw, so only the success shape is reachable.
         let now = crate::now_ms() as f64;
+        // TRDD-XX1UAZHS: the status is computed OFF the lock; the guard below only reads the
+        // account and the resident blobs.
+        let status = burn_status_now(&state, now)?;
         let body = {
             let mut st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
-            let status = st.live_burn_status(now);
             let account = st.burn.current_account(now);
             crate::burn::runtime::enrich_burn_status(&status, &account, &st.latest_resident_blobs).to_string()
         };
@@ -1830,11 +1854,13 @@ async fn handle(
                         // when no live source is wired; in this core the monitor is always present,
                         // so that branch is unreachable rather than omitted.
                         let now = crate::now_ms() as f64;
+                        // TRDD-XX1UAZHS: this guard held 4,894 ms with the compute inside it.
+                        // The status is computed off the lock; the hold is the account read only.
+                        let status = burn_status_now(&state, now)?;
                         let mut st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
-                        let status = st.live_burn_status(now);
                         let account = st.burn.current_account(now);
-                        let payload = crate::burn::runtime::label_burn_status_accounts(&status, Some(&account));
                         drop(st);
+                        let payload = crate::burn::runtime::label_burn_status_accounts(&status, Some(&account));
                         crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
                     }
                     "get_session_status" => {
@@ -1850,8 +1876,9 @@ async fn handle(
                     }
                     "get_window_budget" => {
                         let now = crate::now_ms() as f64;
+                        // TRDD-XX1UAZHS: compute off the lock, hold only for the account read.
+                        let status = burn_status_now(&state, now)?;
                         let mut st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
-                        let status = st.live_burn_status(now);
                         let account = st.burn.current_account(now);
                         drop(st);
                         let payload = crate::mcp_tools::get_window_budget(Some(&status), Some(&account), s("accountId").as_deref());
@@ -3280,8 +3307,9 @@ async fn handle(
                             crate::mcp::not_implemented(&id, "get_account_status(all: true)")
                         } else {
                             let now = crate::now_ms() as f64;
+                            // TRDD-XX1UAZHS: compute off the lock, hold only for account + TTL.
+                            let status = burn_status_now(&state, now)?;
                             let mut st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
-                            let status = st.live_burn_status(now);
                             let account = st.burn.current_account(now);
                             let ttl = st.burn.ttl_context(now);
                             drop(st);
