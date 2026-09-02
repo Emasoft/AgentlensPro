@@ -58,7 +58,11 @@ hypothesis, a per-statement split is the answer.
   500237. Shape: hold A = bodies poll + WAL flush + `ttl_context`/`config` snapshot; the status is
   computed OFF the lock by the new pure `burn_status_for` (lib.rs, split out of
   `burn_status_over`); hold B = store `last_status`, account/timeline sample, rotation edge,
-  frames. `ttl_context` is re-read in hold B after the store, matching the TS order.
+  frames. `ttl_context` is re-read in hold B after the store, matching the TS order. One
+  deliberate drift (review fork, 20:16): `now` is taken BEFORE hold A's lock wait, so under
+  contention the stored status is older by that wait — harmless for a ≤4 s-stale status, and
+  the wait is what the fix shrinks. Running binary confirmed by `ps -o command= -p 54270`
+  (`bin-native/darwin-arm64/alcore serve`), not by the pidfile.
 - Box 3 partial: `agentlenspro get_burn_status` answers on pid 54270 (20:12:51). The rotation
   edge has not been exercised since the deploy; it is verified only when the next account switch
   logs `usage refresh (account changed)` exactly once.
