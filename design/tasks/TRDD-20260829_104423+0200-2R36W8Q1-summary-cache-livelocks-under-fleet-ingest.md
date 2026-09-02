@@ -3,7 +3,7 @@ trdd-id: 2R36W8Q1
 title: The summary cache is keyed on a version that moves faster than a rebuild completes, so the UI path livelocks under fleet ingest
 column: testing
 created: 2026-08-29T10:44:23+0200
-updated: 2026-09-02T14:25:52+0200
+updated: 2026-09-02T14:28:44+0200
 current-owner: main-session
 task-type: bugfix
 scope: project
@@ -149,8 +149,10 @@ implementation-commits: []
   5,512, 5,336, 5,253 ms** — every one of the top twelve is the SAME site, `compositions_in_scope`'s
   guard. **Site proven, dominant call NOT yet isolated** (review-fork finding, settled by reading
   14:25): the guard runs `composition_project_map` → `build_session_summary` — which short-circuits on
-  `summary_cache` when the version matches, and live it does 99.2 % of the time (hits 76,902 / misses
-  608 on pid 53886 at 14:24) — then `session_ids()` and `resolve_scope` over every id; which of the
+  `summary_cache` only when the version matches; how often THIS caller matches is unresolved, because
+  the live hit/miss counters (76,902 / 608 on pid 53886 at 14:24) also count the off-lock
+  `rebuild_once` path, so inline rebuilds under this guard are ≤ 608 in 74 min and possibly every
+  call — then `session_ids()` and `resolve_scope` over every id; which of the
   three holds is TRDD-UTFVMVT8 box 1's per-statement timing to answer. `ui.rs:534`
   (`composition_for`, the same shape minus the scope resolution) held 3,936 ms. Waiters: the log
   sweeper waited **72,944 ms** (`log_reader.rs:1052`), the OTLP ingest handler 8,842 ms
@@ -158,7 +160,8 @@ implementation-commits: []
   (`ui.rs:212`). This is the shared holder the STATE predicted: not the summary rebuild task, but a
   REQUEST route holding the lock across composition scope resolution — an inline summary rebuild on a
   cache miss being one of its three candidates. The `sample`-invisible fact the instrumentation
-  existed to find. Since then the same site has held **273,893 ms** (pid 53886, read 14:24).
+  existed to find. Since then, on pid 53886 alone (1h14m), the same site held ≥ 10 s sixteen times,
+  the worst **273,893 ms**, with a 2.2–3.0 s floor on most of its 82 `held` lines.
 - **Defect in the first build, fixed the same hour:** every `waited` line read "holder unknown" — the
   holder slot was read AFTER `lock()` returned, by which time the holder had released and cleared it.
   Fixed by snapshotting the slot before blocking (deployed 13:09 as pid 53886); the `held` lines were

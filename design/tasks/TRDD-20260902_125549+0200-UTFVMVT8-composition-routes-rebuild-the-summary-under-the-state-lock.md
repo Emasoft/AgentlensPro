@@ -3,7 +3,7 @@ trdd-id: UTFVMVT8
 title: The composition routes hold the state lock for seconds at ui.rs:560 and the dominant statement is not yet isolated
 column: backburner
 created: 2026-09-02T12:55:49+0200
-updated: 2026-09-02T14:25:52+0200
+updated: 2026-09-02T14:28:44+0200
 current-owner: main-session
 task-type: bugfix
 priority: high
@@ -26,18 +26,23 @@ related: [2R36W8Q1, 768NEX6E, L6V1UUW0]
   instead of 14–23 s (TRDD-768NEX6E) — CPU contention from the same holds is INFERRED from
   co-occurrence, not measured. A read path and a write path stalling together on ONE holder is
   exactly the shape 2R36W8Q1's STATE predicted.
-- **Still holding on the redeployed pid 53886 (read 14:24, 1h14m uptime):** the whole `server.log`
-  now carries 24 holds ≥ 10 s at `ui.rs:560`, the worst **273,893 ms**, then 74,709, 62,228, 55,851,
-  54,119, 34,793 ms; behind the 274 s hold a reader at `ui.rs:265` waited 273,887 ms and the log
-  sweeper 29,555 ms. The tail of the log is a run of back-to-back 2.3–2.5 s holds at the same site.
+- **Still holding on the redeployed pid 53886 alone (log from its boot marker, `server.log` line
+  497616, 1h14m to 14:28):** 104 `held` lines, **82 at `ui.rs:560`** — 16 of them ≥ 10 s (10.9, 11.0,
+  13.6, 15.2, 18.5, 19.9, 20.9, 23.0, 26.1, 31.3, 31.6, 33.5, 54.1, 55.9, 62.2 and **273.9 s**) and a
+  floor of 2.2–3.0 s on most of the rest; every other site is under 1 s except one 2.3 s at
+  `ui.rs:3200`. Behind the 274 s hold a reader at `ui.rs:265` waited 273,887 ms and the log sweeper
+  29,555 ms. The log carries no timestamps, so the partition is by boot marker, not by time.
 - **The holder SITE is proven; the dominant CALL is NOT (review-fork finding, settled by reading
   2026-09-02 14:25).** `ui.rs:560` is `compositions_in_scope`'s lock and `ui.rs:534` is
   `composition_for`'s. A `held` line names the guard, not what ran under it, and the 560 guard runs
   THREE statements: (1) `st.composition_project_map(now)` (`lib.rs:470`), whose first line is
   `self.build_session_summary(now_ms)` — which SHORT-CIRCUITS through `summary_cache.get(data_version,
-  …)` (`derived_cache.rs:26`) whenever the version matches, and live it almost always does:
-  `/api/debug/log-scan-stats` at 14:24 read **summary hits 76,902 / misses 608** on pid 53886, so
-  the inline O(window) rebuild ran on at most 608 calls in 74 min; (2) `st.bodies.session_ids()`
+  …)` (`derived_cache.rs:26`) whenever the version matches. How often THIS caller matches is NOT
+  resolved by the live counters: `/api/debug/log-scan-stats` at 14:24 read summary hits 76,902 /
+  misses 608 on pid 53886, but `current()` and `cached_any()` — the off-lock `rebuild_once` path —
+  count hits and `store_if_newer()` counts misses too (`derived_cache.rs`), so the only bound is
+  that inline `get()` rebuilds under this guard numbered ≤ 608 in 74 min, which still allows EVERY
+  composition call to have missed (`data_version` bumped 29,632 times on this pid); (2) `st.bodies.session_ids()`
   collected into a `Vec<String>`; (3) `resolve_scope` over EVERY id with a per-id project closure
   (27,689 log sessions on this machine). Which of the three carries the steady 2.3 s holds and the
   274 s outlier is unmeasured: a cache miss inside (1) is the natural suspect for the outliers and
