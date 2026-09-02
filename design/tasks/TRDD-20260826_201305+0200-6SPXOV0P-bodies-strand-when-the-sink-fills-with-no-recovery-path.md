@@ -1,9 +1,9 @@
 ---
 trdd-id: 6SPXOV0P
 title: 307 files remain parked with a ts-row mismatch after the TRDD-8TM7I49X repair
-column: testing
+column: ai_review
 created: 2026-08-26T20:13:05+0200
-updated: 2026-09-02T07:37:02+0200
+updated: 2026-09-02T07:54:25+0200
 eht: [7NHUU6GK]
 current-owner: main
 task-type: bugfix
@@ -28,9 +28,20 @@ option) still wins. Test `legacy_stranded_name_drains_through_the_gate_and_the_p
 `storeAdmin.ts` (`nothing is parked` :88 · `parked: N — F repairable, G ghost(s)` :122 · `unparked N
 (M still stranded)` :175) — stale box text, ticked on read.
 
-**NEXT ACTION:** deploy + verify live: release `alcore` build (running) → `rm` + `cp` into
-`bin-native/darwin-arm64/` (fresh inode) → `agentlenspro server restart` → after the next bodies
-pass, `server status` must show PARKED 0 (307 → 0) → `ai_review`.
+**LIVE, 2026-09-02 07:53 — settled on the FILES, not on the gauge** (the adversarial review's
+point: the drain empties `strandedNames` BEFORE the gate decides, so "PARKED 0" alone would also
+read 0 if all 307 had failed verify and were being re-examined every tick). Deployed `f9605164`'s
+alcore (fresh inode, new pid 31959 started 07:53:12, binary written 07:53:10). Boot pass line in
+`server.log`: **`ingested 9, deleted 316, freed 148.1MB across 2 dir(s)`** — 316 = the 307 legacy
+parks + 9 fresh; `capture:` went 308 live files (PARKED 307, 144.3 MB) → 4 → 21 (fresh capture,
+no PARKED suffix); `.pass-state.json` strandedNames 307 → 0. A body is deleted only after the
+store reproduces it bit-exact, so 316 deletions are 316 proofs. The chore's log line now also
+prints `(N re-emitted), failed M` so a future silent-failure loop is visible in the log (this
+last change is NOT in the deployed binary; it ships with 2.33.2).
+
+**NEXT ACTION:** none — `ai_review`. Follow-up noted, not carded: `PassResult.stranded_ts` is
+written by nothing now but still serialized/read (`src/rustStorePass.ts:102`); retire it with
+the TS mirror in a later sweep.
 
 ### 08-27 design record (superseded where the paragraph above says so)
 
@@ -288,9 +299,10 @@ Sizing is the USER's call regardless, and no agent should reclaim space to paper
       rather than the mechanism.
 - [x] `unparked N name(s) (M still stranded)` distinguishes "unparked nothing because the swap
       already discarded the set" from "nothing was parked" — today both print `0`
-      (`src/cli/storeAdmin.ts:165-173`). (Already distinct on read 2026-09-02: `:88` "nothing is
-      parked — the stranded set is empty", `:122` "parked: N — F repairable, G ghost(s)", `:175`
-      "unparked N (M still stranded, G ghost(s))".)
+      (`src/cli/storeAdmin.ts:165-173`). (Distinguishable on read 2026-09-02 by `:122` + `:175`
+      TOGETHER — `:122` prints the pre-swap count, `:175` the post-unpark count, and `:88` exits
+      early on an empty set — while `:175` alone still reads `unparked 0 (0 still stranded)` in
+      both cases. With the pass draining parks itself, the verb is the rare operator path.)
 - [x] A test that produces a ts-row mismatch, runs the repair, and asserts the parked set reaches 0
       — the gap this card exists because nothing covered. (`tests/pass.rs`
       `legacy_stranded_name_drains_through_the_gate_and_the_parked_set_reaches_zero`, `f9605164`;
