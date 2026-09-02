@@ -1,9 +1,9 @@
 ---
 trdd-id: 2C23ROPZ
 title: rust-core debug builds are the host's dominant disk writer — bound the dev profile
-column: todo
+column: dev
 created: 2026-09-01T22:05:22+0200
-updated: 2026-09-01T22:05:22+0200
+updated: 2026-09-02T06:52:29+0200
 current-owner: agentlenspro-15
 task-type: infra
 external-refs: [https://github.com/Emasoft/AgentlensPro/issues/18]
