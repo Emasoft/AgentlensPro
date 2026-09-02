@@ -1021,32 +1021,31 @@ impl LockTimed for Mutex<CoreState> {
     #[track_caller]
     fn lock_timed(&self) -> LockResult<StateGuard<'_>> {
         let site = Location::caller();
+        // Snapshot the holder BEFORE blocking. By the time `lock()` returns, the holder that
+        // made us wait has released and CLEARED the slot, so a read after acquisition can only
+        // ever say "unknown" — measured on the first deployed build (2026-09-02): all 13 waited
+        // lines read "holder unknown" while the matching `held` lines named ui.rs:560. The site
+        // holding the lock at the instant we queue is the one we are queued behind (a later
+        // holder that also delayed us is not attributed here — the `held` line covers it).
+        let holder_ptr = HOLDER_SITE.load(Ordering::Acquire);
+        let holder_since_ns = HOLDER_SINCE_NS.load(Ordering::Acquire);
+        let queued_ns = now_ns();
         let wait_started = std::time::Instant::now();
         let result = self.lock();
         let waited = wait_started.elapsed();
         if waited >= std::time::Duration::from_millis(lock_trace_threshold_ms()) {
-            let holder_ptr = HOLDER_SITE.load(Ordering::Acquire);
-            let (hfile, hline, hheld_ms): (&str, u32, u64) = if holder_ptr.is_null() {
-                ("holder unknown", 0, 0)
+            let holder = if holder_ptr.is_null() {
+                "unknown".to_owned()
             } else {
                 // SAFETY: every stored pointer came from `Location::caller()`, which is a
                 // `&'static Location<'static>` — 'static, never freed, so dereferencing it here
                 // is always valid. Cast const->mut only to satisfy `AtomicPtr`'s API; nothing
                 // ever writes through it.
                 let loc: &'static Location<'static> = unsafe { &*holder_ptr };
-                let since_ns = HOLDER_SINCE_NS.load(Ordering::Acquire);
-                let held_ms = (now_ns().saturating_sub(since_ns)) / 1_000_000;
-                (loc.file(), loc.line(), held_ms)
+                let held_ms = queued_ns.saturating_sub(holder_since_ns) / 1_000_000;
+                format!("{}:{} (holding for {held_ms} ms when we queued)", loc.file(), loc.line())
             };
-            eprintln!(
-                "alcore: state lock waited {} ms at {}:{}; holder {}:{} for {} ms",
-                waited.as_millis(),
-                site.file(),
-                site.line(),
-                hfile,
-                hline,
-                hheld_ms,
-            );
+            eprintln!("alcore: state lock waited {} ms at {}:{}; holder {holder}", waited.as_millis(), site.file(), site.line());
         }
         match result {
             Ok(guard) => {
