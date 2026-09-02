@@ -1,9 +1,9 @@
 ---
 trdd-id: 6SPXOV0P
 title: 307 files remain parked with a ts-row mismatch after the TRDD-8TM7I49X repair
-column: todo
+column: testing
 created: 2026-08-26T20:13:05+0200
-updated: 2026-09-01T23:07:22+0200
+updated: 2026-09-02T07:37:02+0200
 eht: [7NHUU6GK]
 current-owner: main
 task-type: bugfix
@@ -13,7 +13,26 @@ labels: [bodies, ingest, silent-failure, capacity]
 relevant-rules: []
 ---
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-08-27
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-02
+
+**2026-09-02 — the drain, landed `f9605164` (Rust `pass.rs`); the 08-27 text below is the design
+record.** Option A shipped in `aa0caa40` (benign reclaim + `reclaimed_reemitted`), but the live
+server still reported **PARKED 307 files / 144.3 MB** a week later, after restarts: a name already
+in `.pass-state.json`'s `strandedNames` was `continue`d BEFORE the gate on every pass, so the
+reclaim branch never saw it. Live state read: skip 122,770 · stranded 307 · overlap 307 — every
+parked name is durable, parked for exactly the now-benign reason. Fix: a stranded name with no
+`relocate_stranded_to` is removed from the stranded set and routed to the gate as a skip name; the
+gate reclaims (clean or ts-only) or drops the skip name for re-ingest. Relocation (operator
+option) still wins. Test `legacy_stranded_name_drains_through_the_gate_and_the_parked_set_reaches_zero`
+(box 3). Store crate 7/7, clippy `--all-targets -D warnings` 0. Box 2 was already true in
+`storeAdmin.ts` (`nothing is parked` :88 · `parked: N — F repairable, G ghost(s)` :122 · `unparked N
+(M still stranded)` :175) — stale box text, ticked on read.
+
+**NEXT ACTION:** deploy + verify live: release `alcore` build (running) → `rm` + `cp` into
+`bin-native/darwin-arm64/` (fresh inode) → `agentlenspro server restart` → after the next bodies
+pass, `server status` must show PARKED 0 (307 → 0) → `ai_review`.
+
+### 08-27 design record (superseded where the paragraph above says so)
 
 **DESIGN DECISION: option A — capture time stops being anchored to the file's mtime.** Decided
 2026-08-27 by main under USER delegation ("decide yourself … on verified facts"). Option B (make
@@ -253,7 +272,7 @@ Sizing is the USER's call regardless, and no agent should reclaim space to paper
       `OTEL_LOG_RAW_API_BODIES=file:${bodiesDir}` (`src/telemetryConfig.ts:162`,
       `src/captureConfig.ts:24`) and repoint it on mount truth
       (`standalone/server.ts:4487-4491`). No internal restore path is involved.
-- [ ] The design question this exposes gets an answer: **mtime is a proxy for capture time, and it
+- [x] (option A, decided 2026-08-27, shipped `aa0caa40` + the drain `f9605164`) The design question this exposes gets an answer: **mtime is a proxy for capture time, and it
       is invalid for any body that is re-materialised.** Either capture time stops being carried by
       a resettable file attribute, or every restore path is made to preserve it — otherwise the
       repair verb and the restore path will keep undoing each other.
@@ -267,11 +286,15 @@ Sizing is the USER's call regardless, and no agent should reclaim space to paper
       reports/parked-bodies-repair/20260901_230204+0200-scoping.md.
       If they cannot, the parked set refills on this loop and TRDD-8TM7I49X fixed an instance
       rather than the mechanism.
-- [ ] `unparked N name(s) (M still stranded)` distinguishes "unparked nothing because the swap
+- [x] `unparked N name(s) (M still stranded)` distinguishes "unparked nothing because the swap
       already discarded the set" from "nothing was parked" — today both print `0`
-      (`src/cli/storeAdmin.ts:165-173`).
-- [ ] A test that produces a ts-row mismatch, runs the repair, and asserts the parked set reaches 0
-      — the gap this card exists because nothing covered.
+      (`src/cli/storeAdmin.ts:165-173`). (Already distinct on read 2026-09-02: `:88` "nothing is
+      parked — the stranded set is empty", `:122` "parked: N — F repairable, G ghost(s)", `:175`
+      "unparked N (M still stranded, G ghost(s))".)
+- [x] A test that produces a ts-row mismatch, runs the repair, and asserts the parked set reaches 0
+      — the gap this card exists because nothing covered. (`tests/pass.rs`
+      `legacy_stranded_name_drains_through_the_gate_and_the_parked_set_reaches_zero`, `f9605164`;
+      the "repair" is the ordinary pass now.)
 
 ## Related
 
