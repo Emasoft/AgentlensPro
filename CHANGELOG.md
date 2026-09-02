@@ -39,7 +39,7 @@ All notable changes to AgentlensPro are documented here.
 
 ### Fixed
 
-- **Bodies parked before 2.31's re-emit fix stayed parked forever** (TRDD-6SPXOV0P): a name already
+- **Bodies parked before 2.30.0's re-emit fix stayed parked forever** (TRDD-6SPXOV0P): a name already
   in `.pass-state.json`'s `strandedNames` was skipped before the verify gate on every pass, so the
   reclaim that makes a ts-only mismatch benign could never see it — 307 files (144 MB) sat
   "PARKED" on the reference machine a week after the fix shipped, across restarts. The pass now

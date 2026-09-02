@@ -18,7 +18,9 @@
 //! `.pass-state.json` from before is routed back through the gate and forgotten (see the loop),
 //! unless the operator asked to RELOCATE parked files off a volatile spool
 //! (`relocate_stranded_to`: verify-before-unlink, mtime preserved — the mtime IS the capture
-//! record — with a 3-strike per-pass breaker on relocation failures), which still wins.
+//! record — with a 3-strike per-pass breaker on relocation failures), which still wins. Only the
+//! `alstore` CLI ever sets that option; the server's chore never does, so on a server every
+//! legacy stranded name drains.
 
 use std::collections::HashSet;
 use std::fs;

@@ -279,6 +279,8 @@ pub fn bodies_pass(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
     let mut ingested = 0u64;
     let mut deleted = 0u64;
     let mut bytes_freed = 0u64;
+    let mut reemitted = 0u64;
+    let mut failed = 0u64;
     let mut any_over_cap = false;
 
     for bodies_dir in &scope.dirs {
@@ -327,6 +329,8 @@ pub fn bodies_pass(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
             ingested += res.ingested;
             deleted += res.deleted;
             bytes_freed += res.bytes_freed;
+            reemitted += res.reclaimed_reemitted;
+            failed += res.failed.len() as u64;
             if !res.throttled {
                 break;
             }
@@ -335,11 +339,16 @@ pub fn bodies_pass(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
     agentlens_store::pass::save_pass_state(&state_file, &skip, &stranded);
     drop(lock);
 
-    if ingested > 0 || deleted > 0 {
+    // `failed` is in the line because "deleted" alone cannot distinguish a drained legacy park
+    // from one that failed verify and is now re-examined every tick (TRDD-6SPXOV0P review): the
+    // PARKED gauge reads the state file, which the drain empties BEFORE the gate decides.
+    if ingested > 0 || deleted > 0 || failed > 0 {
         println!(
-            "alcore: bodies pass: ingested {}, deleted {}, freed {:.1}MB across {} dir(s){}",
+            "alcore: bodies pass: ingested {}, deleted {} ({} re-emitted), failed {}, freed {:.1}MB across {} dir(s){}",
             ingested,
             deleted,
+            reemitted,
+            failed,
             bytes_freed as f64 / 1_048_576.0,
             scope.dirs.len(),
             if any_over_cap { " (OVER CAP — drained at age 0)" } else { "" }
