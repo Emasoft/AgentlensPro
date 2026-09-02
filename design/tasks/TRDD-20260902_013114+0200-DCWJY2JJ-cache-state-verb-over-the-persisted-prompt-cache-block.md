@@ -1,9 +1,9 @@
 ---
 trdd-id: DCWJY2JJ
 title: Expose a cache-state verb (warm or cold) over the already-persisted status-line prompt_cache block
-column: todo
+column: dev
 created: 2026-09-02T01:31:14+0200
-updated: 2026-09-02T02:00:20+0200
+updated: 2026-09-02T06:42:14+0200
 current-owner: claude-agentlenspro
 task-type: feature
 project-id: agentlenspro
