@@ -35,6 +35,7 @@ import { runStatuslineCommand } from './statuslineCapture'
 import { runStatuslineHistoryCli } from './statuslineHistoryCli'
 import { runAllAccountsCli } from './allAccountsCli'
 import { runCacheExpiredCli } from './cacheExpiredCli'
+import { runCacheStateCli } from './cacheStateCli'
 import { runLastCompactCli } from './lastCompactCli'
 import { runModelHeadroomCli } from './modelHeadroomCli'
 import { runSearchCli } from './searchCli'
@@ -93,6 +94,7 @@ export const HOT_PATH_BUDGET_MS: Readonly<Record<string, number>> = {
   // answer with the server DOWN. Neither touches the network today; the budget is what catches the
   // day one of them grows a fetch.
   'cache-expired': 1_500,
+  'cache-state': 1_500,
   'last-compact': 1_500,
 }
 
@@ -103,7 +105,7 @@ export const HOT_PATH_BUDGET_MS: Readonly<Record<string, number>> = {
 // not here still gets safe help (USAGE covers it), just after one wasted server probe.
 export const MANAGEMENT_VERBS: ReadonlySet<string> = new Set([
   'hook', 'gate', 'review-gate', 'statusline', 'statusline-history', 'get_account_status', 'disable', 'enable',
-  'telemetry', 'setup', 'server', 'daemon', 'dashboard', 'cache-expired', 'last-compact',
+  'telemetry', 'setup', 'server', 'daemon', 'dashboard', 'cache-expired', 'cache-state', 'last-compact',
   'budget', 'watch', 'heartbeat-cost', 'config', 'spool', 'env', 'ctxmap', 'ctxvis', 'list',
   'search', 'model-headroom',
 ])
@@ -245,6 +247,11 @@ export async function cliMain(argv: string[], startServer: () => Promise<unknown
       // predicate) plus the project scoping that makes "my" mean this repo and not the busiest one
       // on the machine. It never prints a verdict it could not verify: cannot-answer is exit 2.
       return runCacheExpiredCli(argv.slice(1))
+    case 'cache-state':
+      // "Is MY cache warm or cold RIGHT NOW?" — the same harness-reported row cache-expired reads,
+      // projected to one word with the predicate exit codes (0 warm / 1 cold / 2 cannot answer).
+      // Disk-only, never the server: a session with no recent sample is exit 2, never `cold`.
+      return runCacheStateCli(argv.slice(1))
     case 'last-compact':
       // "How long ago did this project compact?" — the age of the newest PreCompact (manual OR
       // auto), read off the hook store, so it answers with the server down. Sibling of

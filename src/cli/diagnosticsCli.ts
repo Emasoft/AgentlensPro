@@ -53,6 +53,13 @@ usage:
                                               (-q prints nothing: exit 0 = EXPIRED, 1 = fresh).
                                               Cannot-answer is exit 2 with stdout EMPTY — it never
                                               prints 'false' for a question it could not resolve
+  agentlenspro cache-state [--project DIR] [--session ID] [--json]
+                                              is THIS project's main conversation's prompt cache
+                                              warm or cold RIGHT NOW? Prints one word, 'warm' or
+                                              'cold', and exits 0 = warm, 1 = cold, 2 = cannot
+                                              answer (stdout EMPTY — never 'cold' for a question
+                                              it could not resolve). Same harness-reported row as
+                                              cache-expired, off disk, no server
   agentlenspro last-compact [--seconds] [--project DIR] [--trigger manual|auto] [--json]
                                               how long ago did THIS project compact? Prints the age
                                               of the newest compaction — manual /compact OR auto —

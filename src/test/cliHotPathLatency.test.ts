@@ -76,6 +76,7 @@ const RECIPES: Record<string, { args: string[]; stdin: string }> = {
   gate: { args: ['gate'], stdin: HOOK_PAYLOAD },
   statusline: { args: ['statusline'], stdin: STATUSLINE_PAYLOAD },
   'cache-expired': { args: ['cache-expired', '-q'], stdin: '' },
+  'cache-state': { args: ['cache-state'], stdin: '' },
   'last-compact': { args: ['last-compact', '--seconds'], stdin: '' },
 }
 

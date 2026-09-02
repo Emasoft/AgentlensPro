@@ -77,7 +77,7 @@ const QUIET = { EXPIRED: 0, FRESH: 1 } as const
  *  it works with the server down; older payloads without the block fall back to the server tool.
  *  Field names verified against a LIVE row on 2026-09-01 (TRDD-YE15B2JK step 1), flattened by
  *  `flattenSample` to `prompt_cache_expires_at` etc. */
-interface AuthoritativeVerdict {
+export interface AuthoritativeVerdict {
   expired: boolean
   sessionId: string
   workspace: string
@@ -85,6 +85,10 @@ interface AuthoritativeVerdict {
   ttl: string
   sampleTs: number
   warm: boolean
+  /** Every `prompt_cache_*` key of the row, VERBATIM as the store flattened it. `cache-state --json`
+   *  prints these so a consumer pins its reader to the fields the harness actually sends; a field
+   *  added upstream (e.g. `prompt_cache_probe`, seen NULL on 2026-09-02) rides through untouched. */
+  promptCache: Record<string, unknown>
 }
 
 export function authoritativeFromWals(project: string | undefined, session: string | undefined): AuthoritativeVerdict | null {
@@ -137,6 +141,7 @@ export function authoritativeFromWals(project: string | undefined, session: stri
           ttl: String(row.prompt_cache_ttl ?? '?'),
           sampleTs: ts,
           warm: row.prompt_cache_warm === true,
+          promptCache: Object.fromEntries(Object.entries(row).filter(([k]) => k.startsWith('prompt_cache_'))),
         }
       }
     }
