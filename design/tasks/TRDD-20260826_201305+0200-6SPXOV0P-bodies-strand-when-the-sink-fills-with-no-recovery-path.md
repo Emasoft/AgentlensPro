@@ -35,7 +35,13 @@ alcore (fresh inode, new pid 31959 started 07:53:12, binary written 07:53:10). B
 `server.log`: **`ingested 9, deleted 316, freed 148.1MB across 2 dir(s)`** — 316 = the 307 legacy
 parks + 9 fresh; `capture:` went 308 live files (PARKED 307, 144.3 MB) → 4 → 21 (fresh capture,
 no PARKED suffix); `.pass-state.json` strandedNames 307 → 0. A body is deleted only after the
-store reproduces it bit-exact, so 316 deletions are 316 proofs. The chore's log line now also
+store reproduces it bit-exact — but "316" alone cannot say how many of the 307 it covers (a
+SIGTERMed old tick can leave ingested-not-yet-deleted files for the boot pass to delete
+uncounted). The proof that CAN'T lie (review): a legacy file that fails verify is KEPT and
+re-examined every 60 s, and it is days old while fresh captures are seconds old — **files older
+than 1 h left in either bodies dir at 08:06: 0** (legacy dir 0 files, spool 37 fresh); the three
+passes after boot each read `ingested N, deleted N` (no failed loop). Live exe pinned with
+`lsof -p 31959`: `bin-native/darwin-arm64/alcore`. The chore's log line now also
 prints `(N re-emitted), failed M` so a future silent-failure loop is visible in the log (this
 last change is NOT in the deployed binary; it ships with 2.33.2).
 

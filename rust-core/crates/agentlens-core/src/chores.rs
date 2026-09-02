@@ -344,7 +344,7 @@ pub fn bodies_pass(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
     // PARKED gauge reads the state file, which the drain empties BEFORE the gate decides.
     if ingested > 0 || deleted > 0 || failed > 0 {
         println!(
-            "alcore: bodies pass: ingested {}, deleted {} ({} re-emitted), failed {}, freed {:.1}MB across {} dir(s){}",
+            "alcore: bodies pass: ingested {}, deleted {} ({} of them re-emitted), failed {}, freed {:.1}MB across {} dir(s){}",
             ingested,
             deleted,
             reemitted,
