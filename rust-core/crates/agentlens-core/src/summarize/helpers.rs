@@ -788,6 +788,57 @@ fn basename(p: &str) -> &str {
     p.rsplit('/').next().unwrap_or(p)
 }
 
+/// `\\?"session_id\\?":\\?"([0-9a-fA-F-]{8,36})` — no whitespace allowance, optional backslash
+/// before each quote (the `metadata.user_id` field is an ESCAPED JSON string), greedy up to 36
+/// uuid chars. Shared by `bodies_activity` (fat-request-sender attribution) and
+/// `investigator_scan` (FORK_STORM vs FAT_SESSION_REWRITES discrimination, TRDD-YBJGIYI1) — both
+/// read the identical `metadata.user_id`/session_id shape out of the same OTEL request-body
+/// files, so the extractor must not be duplicated a third time.
+pub fn find_session_id(hay: &str) -> Option<String> {
+    let b = hay.as_bytes();
+    let mut i = 0usize;
+    while let Some(hit) = hay[i..].find("session_id") {
+        let start_key = i + hit;
+        // The preceding `\?"` — the key must be quoted.
+        let quote_ok = start_key > 0 && b[start_key - 1] == b'"';
+        if !quote_ok {
+            i = start_key + "session_id".len();
+            continue;
+        }
+        let mut p = start_key + "session_id".len();
+        if p < b.len() && b[p] == b'\\' {
+            p += 1;
+        }
+        if p < b.len() && b[p] == b'"' {
+            p += 1;
+        }
+        if p < b.len() && b[p] == b':' {
+            p += 1;
+        } else {
+            i = start_key + "session_id".len();
+            continue;
+        }
+        if p < b.len() && b[p] == b'\\' {
+            p += 1;
+        }
+        if p < b.len() && b[p] == b'"' {
+            p += 1;
+        } else {
+            i = start_key + "session_id".len();
+            continue;
+        }
+        let start = p;
+        while p < b.len() && p - start < 36 && (b[p].is_ascii_hexdigit() || b[p] == b'-') {
+            p += 1;
+        }
+        if p - start >= 8 {
+            return Some(hay[start..p].to_owned());
+        }
+        i = start_key + "session_id".len();
+    }
+    None
+}
+
 /// summarizeToolArgs — port of the per-tool switch, JS-quirks included.
 pub fn summarize_tool_args(tool_name: &str, args_json: &str) -> String {
     static PATCH_LINE: OnceLock<regex::Regex> = OnceLock::new();

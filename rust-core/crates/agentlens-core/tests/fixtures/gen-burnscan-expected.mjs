@@ -137,8 +137,14 @@ for (let i = 0; i < 101; i++) {
 const spike = (model, cc, cr, out) => resp(model, cc, cr, out, 4)
 // >200_000 bytes (the `nearby` filter is SPIKE_CC*2) with a shared 2600-unit head, so `lead`
 // alone decides whether two requests hash into the same transcript family.
-const bigReq = (model, ws, lead, tail) =>
-  `{"model":"${model}","messages":[{"role":"user","content":"${lead}${'Z'.repeat(200000)}"}],"env":"${ws ? ENV(ws) : ''}","tail":"${tail}"}`
+// `sid`, when given, embeds `metadata.user_id` in the exact escaped-JSON-string shape the real
+// OTEL capture uses (see gen-burnguard-expected.mjs's `metadata` line) — the FORK_STORM vs
+// FAT_SESSION_REWRITES discriminator (TRDD-YBJGIYI1) reads it out with the shared
+// `find_session_id` extractor. TS ignores it entirely (it has no session-id gate), so this is
+// invisible to the oracle — Rust is the only reader.
+const sidMeta = (sid) => sid ? `,"metadata":{"user_id":"\\"session_id\\":\\"${sid}\\""}` : ''
+const bigReq = (model, ws, lead, tail, sid) =>
+  `{"model":"${model}","messages":[{"role":"user","content":"${lead}${'Z'.repeat(200000)}"}],"env":"${ws ? ENV(ws) : ''}","tail":"${tail}"${sidMeta(sid)}}`
 
 // FORK_STORM (+ RATE_LIMIT_COLD_RESUME): ≥3 spikes in one 10-min cluster, ≥2 fully cold, and ≥3
 // nearby fat requests sharing ONE inherited transcript — plus a StopFailure ≤15min before it.
@@ -146,8 +152,13 @@ fs.rmSync(STORM, { recursive: true, force: true }); fs.mkdirSync(STORM, { recurs
 write(STORM, 's1.response.json', spike('claude-opus-5', 300000, 0, 100), '2026-08-20T09:00:00Z')
 write(STORM, 's2.response.json', spike('claude-opus-5', 320000, 0, 100), '2026-08-20T09:02:00Z')
 write(STORM, 's3.response.json', spike('claude-opus-5', 310000, 0, 100), '2026-08-20T09:04:00Z')
+// Three DISTINCT session ids: 3 real forked siblings each cold-wrote the same inherited
+// transcript, which is what makes this a genuine FORK_STORM under the session-id gate.
+// The ids MUST be hex/dash only and ≥8 chars — `find_session_id` accepts `[0-9a-fA-F-]{8,36}`
+// and returns None on anything else, silently: an earlier `storm-sid-N` extracted as no session
+// at all and the whole storm reclassified as FAT_SESSION_REWRITES (6 parity tests red).
 for (let i = 1; i <= 3; i++) {
-  write(STORM, `f${i}.request.json`, bigReq('claude-opus-5', '/w/storm', 'SAME', `t${i}`), `2026-08-20T09:0${i - 1}:30Z`)
+  write(STORM, `f${i}.request.json`, bigReq('claude-opus-5', '/w/storm', 'SAME', `t${i}`, `aaaaaaaa-0${i}`), `2026-08-20T09:0${i - 1}:30Z`)
 }
 
 // SUBAGENT_BOOT_TAX: the same spike shape, but ≥3 DISTINCT fingerprints and none shared >2 — the

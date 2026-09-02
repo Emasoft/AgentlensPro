@@ -662,7 +662,7 @@
       "coverage": {
         "requestFilesScanned": 3,
         "responseFilesScanned": 3,
-        "bytesOnDisk": 600513,
+        "bytesOnDisk": 600681,
         "complete": true,
         "note": "full coverage of the window (scanned ~/burnscan-storm)",
         "dirsScanned": [
@@ -704,7 +704,7 @@
           "model": "claude-opus-5",
           "kind": "interactive",
           "requests": 3,
-          "bytesSent": 600513,
+          "bytesSent": 600681,
           "firstIso": "2026-08-20T09:00:30.000Z",
           "lastIso": "2026-08-20T09:02:30.000Z"
         }

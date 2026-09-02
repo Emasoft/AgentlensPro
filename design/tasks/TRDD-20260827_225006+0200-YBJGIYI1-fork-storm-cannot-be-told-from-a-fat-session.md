@@ -1,10 +1,10 @@
 ---
 trdd-id: YBJGIYI1
 title: FORK_STORM cannot be distinguished from one fat session rewriting its own prefix
-column: todo
+column: ai_review
 created: 2026-08-27T22:50:06+0200
-updated: 2026-09-01T22:58:02+0200
-current-owner: unassigned
+updated: 2026-09-02T05:13:54+0200
+current-owner: claude-session-2026-09-02
 task-type: bugfix
 scope: project
 project-id: agentlenspro
@@ -100,7 +100,36 @@ A fixture with 3 cold full-prefix spikes, one fingerprint, ONE session id must c
   `src/burnInvestigator.ts:304-306`, `:328`, `:107`. Queued to `todo`, not started: it is Rust
   cutover work and the USER's sequencing is publish → install → Rust.
 
-## ⏵ STATE — 2026-09-01 — SCOPED, ready to implement (Rust)
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-09-02
+
+**LANDED (2026-09-02), all gates green, → ai_review.** `ReqRec.session_id` filled once per
+request by the now-shared `summarize::helpers::find_session_id` (moved out of `bodies_activity.rs`,
+one copy); `detect_storms_and_rewrites` tallies DISTINCT session ids per fingerprint family and
+gates `FORK_STORM` on `biggest_fam_sessions >= 2`, else falls through to the existing
+`FAT_SESSION_REWRITES` branch. Three unit tests (`fork_storm_discriminator_tests`), mutation-verified
+by the worker (gate reverted → exit 101, 2 of 3 fail; restored → exit 0) and re-run first-hand.
+`cargo clippy --workspace --all-targets -D warnings` 0 · `burnscan_parity` 9/9 · `check-types` 0 ·
+`check-mirrors` OK. Report: `reports/YBJGIYI1/20260902_050600+0200-fork-storm-discriminator.md`.
+
+**Two things the NEXT ACTION below got wrong, kept as guardrails:** (1) the TS enum step was
+already done — `src/burnInvestigator.ts` enumerates both causes and has the (formerly unreachable)
+`FAT_SESSION_REWRITES` branch; no `src/shared/` file needed a change and none was touched. (2) The
+storm fixture's session ids MUST be hex/dash and ≥8 chars — `find_session_id` accepts only
+`[0-9a-fA-F-]{8,36}` and returns None otherwise, silently; the worker's first `storm-sid-N` ids
+extracted as no session at all, the storm reclassified as FAT_SESSION_REWRITES, and 6 parity
+tests went red. Now `aaaaaaaa-0N`, with a comment at the generator site.
+
+**Oracle caveat:** `burnscan-expected.json` was restored from HEAD and only the two storm byte
+counts hand-applied (`600513 → 600681`), because regenerating it pulls in TS features Rust has not
+ported (captureGaps, the sonnet-5 scheduled price) — filed as TRDD-MF4YQWWA. The one-session-
+many-rewrites fixture case (sketch step 4) is deliberately NOT added: the TS oracle cannot
+distinguish it, so it would be an oracle entry the generator could never produce; the Rust unit
+tests pin that shape instead.
+
+**SUPERSEDED — do NOT carry forward:** the NEXT ACTION list below (done); its claim that
+`src/shared/cacheBreak.ts` needs the enum value (it never held it).
+
+## STATE — 2026-09-01 — SCOPED, ready to implement (Rust) — HISTORICAL
 
 **Discriminator (verified against the code, not the report alone):** the number of DISTINCT
 `session_id`s inside the biggest prefix-fingerprint family. ≥2 distinct sessions paying a cold

@@ -99,15 +99,34 @@ fn detect_storms_and_rewrites(
         // the one that wrote it.
         let nearby: Vec<&ReqRec> =
             reqs_in(reqs, c.from_ts, c.to_ts, 60_000.0).into_iter().filter(|r| r.size > SPIKE_CC * 2.0).collect();
-        // Insertion-ordered tally: `fams.size` and `biggestFam` are both read below.
-        let mut fams: Vec<(String, f64)> = Vec::new();
+        // Insertion-ordered tally: `fams.size` and `biggestFam` are both read below. Each family
+        // also carries the DISTINCT session ids seen in it — the FORK_STORM vs
+        // FAT_SESSION_REWRITES discriminator (TRDD-YBJGIYI1): sharing a fingerprint only proves a
+        // shared transcript, not who wrote it. `>=2` distinct sessions means real siblings each
+        // cold-wrote the inherited prefix; exactly 1 (or none extractable) means one session paid
+        // the same write repeatedly, which is a fat session, not a fan-out.
+        let mut fams: Vec<(String, f64, std::collections::HashSet<&str>)> = Vec::new();
         for r in &nearby {
-            match fams.iter_mut().find(|(f, _)| *f == r.fingerprint) {
-                Some((_, n)) => *n += 1.0,
-                None => fams.push((r.fingerprint.clone(), 1.0)),
+            match fams.iter_mut().find(|(f, _, _)| *f == r.fingerprint) {
+                Some((_, n, sids)) => {
+                    *n += 1.0;
+                    if let Some(sid) = r.session_id.as_deref() {
+                        sids.insert(sid);
+                    }
+                }
+                None => {
+                    let mut sids = std::collections::HashSet::new();
+                    if let Some(sid) = r.session_id.as_deref() {
+                        sids.insert(sid);
+                    }
+                    fams.push((r.fingerprint.clone(), 1.0, sids));
+                }
             }
         }
-        let biggest_fam = fams.iter().map(|(_, n)| *n).fold(0.0f64, f64::max);
+        let biggest_fam = fams.iter().map(|(_, n, _)| *n).fold(0.0f64, f64::max);
+        // Sessions in the biggest family (ties: the widest span — the strongest storm evidence).
+        let biggest_fam_sessions =
+            fams.iter().filter(|(_, n, _)| *n == biggest_fam).map(|(_, _, s)| s.len()).max().unwrap_or(0);
         let mut wss: Vec<&str> = Vec::new();
         for r in &nearby {
             if !r.workspace.is_empty() && !wss.contains(&r.workspace.as_str()) {
@@ -135,7 +154,13 @@ fn detect_storms_and_rewrites(
         });
         let n_spikes = c.spikes.len() as f64;
 
-        if n_spikes >= 3.0 && biggest_fam >= 3.0 && c.cold_spikes >= 2.0 {
+        // TRDD-YBJGIYI1: sharing a fingerprint only proves a shared transcript, not who wrote it —
+        // a SESSION shares a fingerprint with its own earlier self just as readily as N forked
+        // siblings do. `>=2` distinct session ids in the biggest family is the only thing that
+        // tells "many agents forked one parent" apart from "one fat session rewrote its own
+        // prefix repeatedly"; `biggest_fam_sessions == 0` (extraction failed on the body shape) is
+        // treated the same as `== 1` — the honest fallback, never the flattering label.
+        if n_spikes >= 3.0 && biggest_fam >= 3.0 && c.cold_spikes >= 2.0 && biggest_fam_sessions >= 2 {
             // Many simultaneous full writes of the SAME inherited transcript = a fork storm. CC
             // ≥2.1.229 staggers WORKFLOW same-prefix siblings, so on a current harness this points
             // at un-staggered spawns — parallel Agent-tool forks in one message, the stagger
@@ -506,5 +531,59 @@ pub fn attach_causing_calls(inv: &mut Value, home: &str, projects_dirs: &[std::p
     if let Some(tail) = appended {
         let v = inv["verdict"].as_str().unwrap_or("").to_owned();
         inv["verdict"] = Value::String(v + &tail);
+    }
+}
+
+#[cfg(test)]
+mod fork_storm_discriminator_tests {
+    //! TRDD-YBJGIYI1: FORK_STORM cannot be told from one fat session rewriting its own prefix
+    //! unless the biggest fingerprint family is checked for distinct session ids, not just count.
+    //! Mutation-verified: reverting the `biggest_fam_sessions >= 2` gate in
+    //! `detect_storms_and_rewrites` makes case (b) below misclassify as FORK_STORM again.
+    use super::*;
+
+    fn synth(session_ids: &[Option<&str>]) -> (Vec<RespRec>, Vec<ReqRec>) {
+        // 3 full-prefix spikes, 2 min apart (inside CLUSTER_MS), all fully cold (cr=0) — the
+        // exact shape the FORK_STORM/FAT_SESSION_REWRITES branch splits on.
+        let resps: Vec<RespRec> = (0..3)
+            .map(|i| RespRec { ts: i as f64 * 120_000.0, model: "claude-opus-5".into(), cc: 300_000.0, cr: 0.0, out: 100.0, inp: 4.0 })
+            .collect();
+        // 3 requests > SPIKE_CC*2 bytes, ONE shared fingerprint (the "inherited transcript"),
+        // each carrying the caller-supplied session id (or none, simulating extraction failure).
+        let reqs: Vec<ReqRec> = session_ids
+            .iter()
+            .enumerate()
+            .map(|(i, sid)| ReqRec {
+                ts: i as f64 * 120_000.0,
+                size: 250_000.0,
+                model: "claude-opus-5".into(),
+                workspace: String::new(),
+                fingerprint: "FP-SHARED".into(),
+                image_bytes: 0.0,
+                session_id: sid.map(str::to_owned),
+            })
+            .collect();
+        (resps, reqs)
+    }
+
+    fn cause_of(session_ids: &[Option<&str>]) -> String {
+        let (resps, reqs) = synth(session_ids);
+        let findings = detect_storms_and_rewrites(&resps, &reqs, 10_000_000.0, &[]);
+        findings[0]["cause"].as_str().unwrap().to_owned()
+    }
+
+    #[test]
+    fn two_distinct_sessions_sharing_a_fingerprint_is_a_real_fork_storm() {
+        assert_eq!(cause_of(&[Some("sess-A"), Some("sess-A"), Some("sess-B")]), "FORK_STORM");
+    }
+
+    #[test]
+    fn one_session_repeating_a_fingerprint_is_a_fat_session_not_a_storm() {
+        assert_eq!(cause_of(&[Some("sess-A"), Some("sess-A"), Some("sess-A")]), "FAT_SESSION_REWRITES");
+    }
+
+    #[test]
+    fn unextractable_session_ids_fall_to_the_honest_label_not_the_flattering_one() {
+        assert_eq!(cause_of(&[None, None, None]), "FAT_SESSION_REWRITES");
     }
 }

@@ -14,7 +14,7 @@ use serde_json::{Map, Value};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use crate::summarize::helpers::{js_slice, js_to_fixed_num, num};
+use crate::summarize::helpers::{find_session_id, js_slice, js_to_fixed_num, num};
 
 const RESPONSE_PARSE_CAP: u64 = 5 * 1024 * 1024;
 const HUGE_REQUEST_BYTES: u64 = 1_000_000;
@@ -134,53 +134,6 @@ fn find_json_string(hay: &str, quoted_key: &str) -> Option<String> {
             return Some(hay[start..p].to_owned());
         }
         from = from + i + quoted_key.len();
-    }
-    None
-}
-
-/// `\\?"session_id\\?":\\?"([0-9a-fA-F-]{8,36})` — no whitespace allowance (the TS regex has
-/// none either), optional backslash before each quote, greedy up to 36 uuid chars.
-fn find_session_id(hay: &str) -> Option<String> {
-    let b = hay.as_bytes();
-    let mut i = 0usize;
-    while let Some(hit) = hay[i..].find("session_id") {
-        let start_key = i + hit;
-        // The preceding `\?"` — the key must be quoted.
-        let quote_ok = start_key > 0 && b[start_key - 1] == b'"';
-        if !quote_ok {
-            i = start_key + "session_id".len();
-            continue;
-        }
-        let mut p = start_key + "session_id".len();
-        if p < b.len() && b[p] == b'\\' {
-            p += 1;
-        }
-        if p < b.len() && b[p] == b'"' {
-            p += 1;
-        }
-        if p < b.len() && b[p] == b':' {
-            p += 1;
-        } else {
-            i = start_key + "session_id".len();
-            continue;
-        }
-        if p < b.len() && b[p] == b'\\' {
-            p += 1;
-        }
-        if p < b.len() && b[p] == b'"' {
-            p += 1;
-        } else {
-            i = start_key + "session_id".len();
-            continue;
-        }
-        let start = p;
-        while p < b.len() && p - start < 36 && (b[p].is_ascii_hexdigit() || b[p] == b'-') {
-            p += 1;
-        }
-        if p - start >= 8 {
-            return Some(hay[start..p].to_owned());
-        }
-        i = start_key + "session_id".len();
     }
     None
 }

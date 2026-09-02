@@ -31,7 +31,9 @@ use serde_json::{json, Map, Value};
 
 use crate::hook_events::{read_hook_events, HookEventFilter};
 use crate::pricing::calc_token_cost_usd;
-use crate::summarize::helpers::{iso_from_ms, js_math_round, js_slice, js_slice_from, js_to_fixed_num, num, utf16_len};
+use crate::summarize::helpers::{
+    find_session_id, iso_from_ms, js_math_round, js_slice, js_slice_from, js_to_fixed_num, num, utf16_len,
+};
 
 /// A cache_creation this large is a full-prefix (re)write. Shared with slice 2's detectors.
 pub const SPIKE_CC: f64 = 100_000.0;
@@ -63,6 +65,10 @@ pub struct ReqRec {
     /// First-message identity — same value ⇒ same inherited transcript.
     pub fingerprint: String,
     pub image_bytes: f64,
+    /// `metadata.user_id`'s session_id, when found — the FORK_STORM vs FAT_SESSION_REWRITES
+    /// discriminator (TRDD-YBJGIYI1): ≥2 distinct ids sharing one fingerprint means the fingerprint
+    /// was inherited by real siblings; exactly 1 means one session paid the write repeatedly.
+    pub session_id: Option<String>,
 }
 
 /// What `resolveBodiesReadScope` returns in the TS. Resolved by the caller and passed in.
@@ -284,6 +290,7 @@ fn scan_request(f: &FileRec, max_scan_bytes: usize) -> Option<ReqRec> {
     let mut workspace = String::new();
     let mut fingerprint = String::new();
     let mut image_bytes = 0f64;
+    let mut session_id: Option<String> = None;
     let mut carry = String::new();
     let size = f.size as usize;
     while offset < size && offset < max_scan_bytes {
@@ -323,6 +330,13 @@ fn scan_request(f: &FileRec, max_scan_bytes: usize) -> Option<ReqRec> {
                 }
             }
         }
+        // `metadata.user_id`'s session_id — same extractor `bodies_activity` uses on the same
+        // OTEL body shape. Captured once, like fingerprint/workspace above; needed downstream to
+        // tell a real fork storm (>=2 distinct sessions sharing a fingerprint) from one session
+        // rewriting its own prefix repeatedly (TRDD-YBJGIYI1).
+        if session_id.is_none() {
+            session_id = find_session_id(&text);
+        }
         image_bytes += sum_image_bytes(&text);
         if !workspace.is_empty()
             && !fingerprint.is_empty()
@@ -335,7 +349,7 @@ fn scan_request(f: &FileRec, max_scan_bytes: usize) -> Option<ReqRec> {
         carry = js_slice_from(&text, utf16_len(&text).saturating_sub(256)).to_owned();
         offset += n;
     }
-    Some(ReqRec { ts: f.mtime, size: f.size, model, workspace, fingerprint, image_bytes })
+    Some(ReqRec { ts: f.mtime, size: f.size, model, workspace, fingerprint, image_bytes, session_id })
 }
 
 // ── assembly ──────────────────────────────────────────────────────────────────
