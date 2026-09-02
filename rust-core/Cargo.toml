@@ -12,3 +12,15 @@ license = "MIT"
 [profile.release]
 lto = "thin"
 codegen-units = 1
+
+# TRDD-2C23ROPZ (issue #18): rust-core debug builds were the host's dominant disk writer
+# (+30.8 GB in 3 days). Bound what a dev build writes, measured before/after on the card:
+# line tables keep backtraces and panic locations, full DWARF for ~200 workspace files
+# does not earn its bytes; dependencies (the statically linked DuckDB is the bulk) get
+# no debuginfo at all — nobody steps into them. Incremental stays ON: it REDUCES rewrites
+# for a source-local edit. Release is untouched (it ships the binaries).
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false

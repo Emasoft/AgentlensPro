@@ -199,6 +199,12 @@ jobs:
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: rust-core
+          # The root manifest is a VIRTUAL workspace root, so rust-cache never hashes it (it
+          # hashes member manifests + Cargo.lock + toolchain). A `[profile.*]` change there
+          # would otherwise restore old-profile artifacts on every run and, because the
+          # action saves only on a miss, pay the cold dep rebuild on EVERY run until the
+          # lockfile or rustc rotates the key (TRDD-2C23ROPZ).
+          key: ${{ hashFiles('rust-core/Cargo.toml') }}
 
       - name: Build release alcore
         run: cargo build --release --manifest-path rust-core/Cargo.toml -p agentlens-core --bin alcore
@@ -256,6 +262,12 @@ jobs:
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: rust-core
+          # The root manifest is a VIRTUAL workspace root, so rust-cache never hashes it (it
+          # hashes member manifests + Cargo.lock + toolchain). A `[profile.*]` change there
+          # would otherwise restore old-profile artifacts on every run and, because the
+          # action saves only on a miss, pay the cold dep rebuild on EVERY run until the
+          # lockfile or rustc rotates the key (TRDD-2C23ROPZ).
+          key: ${{ hashFiles('rust-core/Cargo.toml') }}
 
       # No `cargo fmt --check` step: the tree is 3564 hunks across 200 files away
       # from rustfmt's output, so adding the gate today means a mechanical reformat

@@ -18,10 +18,20 @@ All notable changes to AgentlensPro are documented here.
   session (the status line refreshes only on activity) — and the formula was checked against
   26,690 live rows before shipping. `--json` echoes the stored `prompt_cache_*` fields verbatim
   plus `state`, `session_id` and `captured_at`; `cache-expired --json` now carries the same
-  `promptCache` object additively.
+  `promptCache` object additively, and its `warm` field is tri-state (`null` for a sample that
+  states the deadline but no warm bit — a shape no captured row has had, but the verb refuses to
+  read it as `false`).
 
 ### Changed
 
+- **rust-core dev builds write far less, for contributors building from the clone** (issue #18,
+  TRDD-2C23ROPZ): `[profile.dev]` is now `debug = "line-tables-only"` and dependencies get no
+  debuginfo at all. Measured like-for-like on the same target dir (decimal units): the statically
+  linked DuckDB's C++ build output 3.10 GB → 0.47 GB per full rebuild (`libduckdb.a` 1.57 GB →
+  0.25 GB), its rlib 5.7 → 3.3 MB, the `agentlens-core` test binary 39.4 → 34.0 MB. Workspace
+  backtraces keep file:line; the shipped `--release` binaries are untouched. CI's rust-cache is
+  now keyed on the root manifest too, so a profile change rotates the cache instead of restoring
+  stale artifacts on every run.
 - **The TypeScript server is gone.** `standalone/server.ts` (4,177 lines) and its private modules
   are deleted; alcore is the only backend on every spawn path (`server start`, the hook revive,
   `setup`, bare `agentlenspro`). A platform without a prebuilt binary gets a clear error naming
