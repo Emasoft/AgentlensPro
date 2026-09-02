@@ -21,6 +21,12 @@ All notable changes to AgentlensPro are documented here.
   `promptCache` object additively, and its `warm` field is tri-state (`null` for a sample that
   states the deadline but no warm bit — a shape no captured row has had, but the verb refuses to
   read it as `false`).
+- **alcore names the holder of a slow state lock** (TRDD-2R36W8Q1): every acquisition of the core
+  state mutex records its call site, and a waiter that blocks for ≥ `AGENTLENS_LOCK_TRACE_MS`
+  (default 250) logs `state lock waited N ms at file:line; holder file:line for M ms`; a guard held
+  that long logs `state lock held N ms by file:line` on release. Profiler captures of a stalled
+  server showed handlers parked on the lock with no holder in any stack — the holder had already
+  returned by the time the sampler walked it — so the lock now attributes itself.
 
 ### Changed
 
@@ -39,6 +45,32 @@ All notable changes to AgentlensPro are documented here.
 
 ### Fixed
 
+- **The hook spool never drained while the server stayed up** (TRDD-L6V1UUW0): alcore drained
+  `<dataDir>/hook-spool` once at boot and never again, so a hook event spooled after boot (a 1 s
+  delivery timeout during a stall is enough) sat there until the next restart — measured: 28 files
+  spooled, 0 drained over 40 minutes of uptime. The drain now runs every 30 s
+  (`AGENTLENS_HOOK_SPOOL_DRAIN_MS`, 5 s floor — the retired TypeScript server's cadence) with a
+  200-file cap per tick so it never holds the state lock across an unbounded backlog. And a hook
+  whose delivery fails no longer spawns a revive when `server.pid` names a live owner: 781
+  `Refusing to start: another AgentlensPro server … already owns this data directory` lines in
+  `server.log` were doomed twins launched by timed-out hooks against a server that was merely slow.
+- **The in-server bodies pass was sized like the offline CLI and re-read the blob corpus on every
+  verify** (TRDD-768NEX6E): each 60 s pass opened DuckDB with `memory_limit` 8 GB and
+  `available_parallelism()-2` threads, and the verify-before-delete read `sha, data` from EVERY
+  blob part file ever written (15k file opens, ~1.3 GB decompressed per minute on the reference
+  store); five profiler captures of a stalled alcore were nearly all inside that multi-file parquet
+  scan. The pass now runs at 2 threads / 2 GB like the server's other resident DuckDB uses, keeps
+  a sha→owning-part-file index (built from the scan `open_store` already does, kept current on
+  every flush), and scopes the verify read to only the files that own this pass's shas — falling
+  back to the full scan whenever a sha is not yet indexed, so the delete gate never skips one. The
+  `bodies pass:` log line now carries the pass's wall time.
+- **`ensureRamDisk` leaked a twin RAM volume on a name collision** (TRDD-UIDUVNY8): when two callers
+  raced (the login LaunchAgent's `spool ensure` against a `setup`/`config set`), both saw the mount
+  point empty, both attached a device, and `diskutil erasevolume` mounted the loser at
+  `/Volumes/AgentLensSpool 1`; the post-check then threw without detaching it, leaving a 2 GB RAM
+  disk holding nothing but `.fseventsd` (and 1.4 GB of `diskimages-helper` RSS) for three days.
+  The loser now detaches its own device and, if the winner's volume is visible on re-check,
+  returns that mount — the race is idempotent instead of a leak.
 - **`/api/server-stats` now reports the RAM-disk spool** (`bodies.spool`, TRDD-ZW4APOPI): dir,
   mounted, files, staged bytes, free/total bytes from `statvfs`, the back-pressure floor and the
   chore's active/spills state — it was a hardcoded `null`, so a spool at 100% (capture silently

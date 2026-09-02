@@ -1,9 +1,10 @@
 ---
 trdd-id: IXVHM52P
 title: The 8GB DuckDB ceiling OOMs a full-store validate — repair-parked fails out of the box
-column: todo
+column: backburner
+review-after: 2026-09-16
 created: 2026-08-26T04:25:32+0200
-updated: 2026-09-01T23:07:22+0200
+updated: 2026-09-02T10:55:15+0200
 current-owner: AgentlensPro session
 task-type: bugfix
 min-approval-requirement: none
@@ -15,6 +16,16 @@ eht: []
 ---
 
 # The 8GB DuckDB ceiling OOMs a full-store validate
+
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-02
+
+- **Parked to `backburner` (USER delegated the call 2026-09-02).** The fix (`dd442d81`, ceiling scaled
+  to the machine) is committed and in the live binary. Box 1's real-run measurement is NOT reproducible
+  today: `agentlenspro store repair-parked --dry-run` at 10:50 reports "nothing is parked — the stranded
+  set is empty" (the 307-name legacy set drained through the gate at 07:53, TRDD-6SPXOV0P). With no
+  stranded names the command exits before the full-store validate, so stopping the server would measure
+  nothing. `review-after` set; NEXT ACTION on resume: re-run the dry-run; if the stranded set is non-empty
+  again, do the real run with the server stopped and record the wall time and peak RSS.
 
 ## The measurement
 

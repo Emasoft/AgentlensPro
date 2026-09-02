@@ -3,7 +3,7 @@ trdd-id: 2R36W8Q1
 title: The summary cache is keyed on a version that moves faster than a rebuild completes, so the UI path livelocks under fleet ingest
 column: testing
 created: 2026-08-29T10:44:23+0200
-updated: 2026-08-29T16:50:19+0200
+updated: 2026-09-02T12:06:50+0200
 current-owner: main-session
 task-type: bugfix
 scope: project
@@ -15,7 +15,7 @@ implementation-commits: []
 
 # Summary cache livelocks under fleet ingest
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-08-29
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-02
 
 - **Measured, profile-confirmed.** Not a hypothesis. Evidence is in this card's
   "Measurement" section; the `sample` output is `/tmp/soak-sample.txt` (ephemeral —
@@ -132,6 +132,21 @@ implementation-commits: []
   this change moves WHO pays the O(window) cost, it does not remove the cost.
 - **DO NOT build/test while a soak is running** — `cargo build` contends for the
   same cores and invalidates the measurement in flight.
+- **2026-09-02 — the NEXT ACTION's instrumentation is IN THE CODE (built, tested, committed this
+  session):** `agentlens_core::LockTimed` (`lib.rs`, after `serve_otlp`) wraps `Mutex<CoreState>`
+  in `lock_timed()`, a `#[track_caller]` drop-in for `lock()`. Every one of the 106 `state.lock()`
+  sites in `ui.rs`, plus `chores.rs`, `log_reader.rs`, `bin/alcore.rs` and the OTLP handler in
+  `lib.rs`, now goes through it. A waiter that blocks ≥ `AGENTLENS_LOCK_TRACE_MS` (default 250)
+  prints `alcore: state lock waited N ms at file:line; holder file:line for M ms` — the holder is
+  the site that last acquired (a global `HOLDER_SITE` slot), not a stack guess; a guard held ≥ the
+  threshold prints `alcore: state lock held N ms by file:line` on drop. Two unit tests
+  (`lock_timed_tests::*`) prove the record/clear and the poisoned-recovery path. Five `sample`
+  captures on 2026-09-02 (TRDD-768NEX6E) showed handlers parked on the lock with NO holder in the
+  stack — the profiler walks it after the holder returned — which is why the lock names itself.
+- **NEXT ACTION (updated 2026-09-02):** after this binary is deployed, read `server.log` for the
+  `state lock waited` / `state lock held` lines under the sessions already running (NO fleet soak —
+  USER constraint 2026-09-02, "100 instances will crash this machine"). The named holders ARE the
+  measurement the previous NEXT ACTION asked for; rank them by held-ms and card the top holder.
 
 ## Symptom
 
