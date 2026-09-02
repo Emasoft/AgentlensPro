@@ -1,9 +1,9 @@
 ---
 trdd-id: ZW4APOPI
 title: alcore never drains the RAM-disk spool so it is 100 percent full and capture is silently losing bodies
-column: testing
+column: dev
 created: 2026-08-29T07:37:08+0200
-updated: 2026-09-01T22:00:21+0200
+updated: 2026-09-02T08:05:01+0200
 current-owner: claude-agentlenspro
 task-type: bugfix
 project-id: agentlenspro
