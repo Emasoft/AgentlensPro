@@ -379,8 +379,12 @@ pub fn resource_sample(data_dir: &Path) -> Value {
 /// when the primary path was already OCCUPIED at attach time) it can resolve to a plain
 /// directory on the boot volume — then a path check reports a healthy spool with the SSD's
 /// terabyte of free space while bodies land on the disk the spool exists to protect. The
-/// discriminator is the device id: `ownVolume` is `dev(dir) != dev(data_dir)`. `exists: false`
-/// is the `spool ensure` LaunchAgent's case. Free/total are `null` when statvfs cannot answer,
+/// discriminator is a MOUNT BOUNDARY ON THE PATH: `ownVolume` is true when some `child/parent`
+/// pair on the way from the dir up to `/` sits on different device ids, with the pair at `/`
+/// itself excluded (on macOS `/` ↔ the Data volume is a firmlink, not a spool). Not "a different
+/// device from the data dir": that reads right only while `DATA_DIR` shares the boot volume's
+/// Data side, and misreads the same plain directory as a volume the moment the data dir is moved
+/// to another disk (second review). `exists: false` is the `spool ensure` LaunchAgent's case. Free/total are `null` when statvfs cannot answer,
 /// never a fabricated 0 (a 0 here would read as "full"); they are `df`'s Size and Avail columns
 /// (`f_blocks`/`f_bavail` × `f_frsize`). Back-pressure figures are the chore's own controller
 /// state, passed in. `files` and `stagedBytes` use the same `*.request.json`/`*.response.json`
@@ -389,7 +393,7 @@ pub fn resource_sample(data_dir: &Path) -> Value {
 pub fn spool_gauge(data_dir: &Path, backpressure_active: bool, backpressure_spills: u64) -> Value {
     let Some(dir) = crate::burn::guard::spool_dir_configured(data_dir) else { return Value::Null };
     let exists = std::fs::metadata(&dir).is_ok_and(|m| m.is_dir());
-    let own_volume = exists && device_id(&dir).zip(device_id(data_dir)).is_some_and(|(a, b)| a != b);
+    let own_volume = exists && has_mount_boundary_below_root(&dir);
     let (files, staged_bytes, free, total) = if exists {
         let (files, _) = live_bodies_liveness(std::slice::from_ref(&dir));
         (files, crate::chores::staged_body_bytes(&dir), free_disk_bytes(&dir), total_disk_bytes(&dir))
@@ -424,6 +428,26 @@ fn device_id(path: &Path) -> Option<u64> {
         let _ = path;
         None
     }
+}
+
+/// Is there a mount boundary strictly below `/` on the way from `dir` up? Walks `child → parent`
+/// comparing device ids; the pair whose parent IS `/` is skipped (the macOS root ↔ Data firmlink
+/// would otherwise make every path "its own volume"). Any stat failure reads as no boundary —
+/// an unknown must never report a spool that is not there.
+fn has_mount_boundary_below_root(dir: &Path) -> bool {
+    let mut child = dir.to_path_buf();
+    while let Some(parent) = child.parent() {
+        if parent.as_os_str().is_empty() || parent == Path::new("/") {
+            return false;
+        }
+        match (device_id(&child), device_id(parent)) {
+            (Some(a), Some(b)) if a != b => return true,
+            (Some(_), Some(_)) => {}
+            _ => return false,
+        }
+        child = parent.to_path_buf();
+    }
+    false
 }
 
 /// statvfs(path): blocks × frsize — the volume's size, the denominator `df` prints; None when unknown.
@@ -720,10 +744,11 @@ mod capture_block_tests {
         assert_eq!(g["backpressure"]["active"], true);
         assert_eq!(g["backpressure"]["spills"], 3);
 
-        // Present with one body — but a temp dir under the SAME device as the data dir, which is
-        // exactly the lying case: the path exists, the df figures are the data volume's, and
-        // `ownVolume` must say so. (A real RAM disk reads `ownVolume: true`; measured live on the
-        // reference machine: dev 16777285 vs 16777234.)
+        // Present with one body — but a plain temp directory with no mount boundary below `/` on
+        // its path, which is exactly the lying case: the path exists, the df figures are the temp
+        // volume's, and `ownVolume` must say so. (A real RAM disk at /Volumes/<name>/… reads
+        // `ownVolume: true`: measured live, /Volumes/AgentLensSpool dev 16777285 vs /Volumes
+        // 16777234.)
         std::fs::create_dir_all(&spool).unwrap();
         std::fs::write(spool.join("a.request.json"), b"12345").unwrap();
         let g = spool_gauge(&data_dir, false, 3);
