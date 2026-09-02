@@ -3,14 +3,14 @@ trdd-id: O3ICDRLO
 title: The 4-second burn tick holds the state lock for up to 2.3 s and is now the top holder
 column: dev
 created: 2026-09-02T16:52:57+0200
-updated: 2026-09-02T17:08:28+0200
+updated: 2026-09-02T20:12:51+0200
 current-owner: main-session
 task-type: bugfix
 priority: high
 min-approval-requirement: none
 created-by: UTFVMVT8
 related: [UTFVMVT8, 2R36W8Q1, HFV4AIT7, N60JUWU3]
-implementation-commits: [ec96d8af]
+implementation-commits: [ec96d8af, 4b878fd7]
 ---
 
 # The 4-second burn tick holds the state lock for up to 2.3 s and is now the top holder
@@ -41,23 +41,34 @@ hypothesis, a per-statement split is the answer.
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-02
 
-- **Box 1 instrumentation IN CODE 16:56 (build/clippy/tests running):** the guard prints
-  `alcore: burn tick guard split: bodies_poll N ms, statusline_flush N ms, burn_status N ms,
-  account_timeline N ms, alerts_notify N ms` whenever its total reaches `AGENTLENS_LOCK_TRACE_MS`
-  (250) — the same threshold as the `held` line beside it. Five groups, in statement order; the
-  `alerts_notify` group includes `enrich_burn_status`, the frame push and `mac_notify` (a process
-  spawn under the lock when an alert fires — rare, but it is in there).
-- Also by TOTAL lock time in the same 15 min: this guard 34,555 ms (44 holds), the sweeper's
-  `save_cards` 26,143 ms (52), the boot scan 6,724 ms (1), the rebuilder's `ui.rs:212` 4,322 ms (8).
-- **DEPLOYED 17:08:28 as pid 71093 (commit ec96d8af; build 0 / clippy 0 / lib tests 37/37; fresh
-  inode, `codesign -v`; split symbol present in the shipped binary). The stop of pid 18695 was
-  GRACEFUL this time — the post-UTFVMVT8 binary's shutdown was not starved.** Boot marker:
-  `server.log` line 499710. `mac_notify` is `spawn()` + a detached waiter thread, so it is not the
-  suspect for the `alerts_notify` group.
-- **NEXT ACTION:** read 15 min of `server.log` from line 499710:
-  `tail -n +499710 ~/.agentlens/server.log | grep -a 'burn tick guard split'` — read each split by
-  its OWN SUM (the five numbers add up to the hold), never by the adjacent `held` line — then move
-  the statement the numbers name off the lock.
+- **Box 1 MEASURED (pid 71093, commit ec96d8af, 17:08–19:56 = 2h49m, 41 split lines, each read
+  by its OWN sum, never the adjacent `held` line):** `burn_status` = 25,812 of the guard's
+  26,907 ms (96%), max 1,520 ms, 39 of 41 lines ≥ 250 ms; `statusline_flush` max 317 ms (one line
+  ≥ 250, total 375); `bodies_poll` max 47 ms (total 358); `account_timeline` max 7 ms;
+  `alerts_notify` max 37 ms. The 41 row sums reconcile with the guard's 41 `held` lines to within
+  1–51 ms. The WAL-flush suspect is cleared: the gather + `compute_burn_status` behind
+  `burn_status_over` was the whole hold.
+- Same window, whole-server ranking by TOTAL lock time: the sweeper's `save_cards`
+  (`log_reader.rs:1052`) 61,659 ms over 115 holds (max 5,442 ms) — now the top holder by every
+  measure; this guard 26,907 ms (41); the rebuilder's `ui.rs:212` 15,067 ms (13, max 8,690 ms).
+  `save_cards` is outside this card's scope and needs its own.
+- **Box 2 FIX DEPLOYED 20:12:17 as pid 54270 (commit 4b878fd7; build 0 / clippy 0 / lib tests
+  37/37; fresh inode, `codesign -v`; the new split line `lock_a … off_lock burn_status … lock_b`
+  is in the shipped binary). Graceful stop of 71093 in 15 s.** Boot marker: `server.log` line
+  500237. Shape: hold A = bodies poll + WAL flush + `ttl_context`/`config` snapshot; the status is
+  computed OFF the lock by the new pure `burn_status_for` (lib.rs, split out of
+  `burn_status_over`); hold B = store `last_status`, account/timeline sample, rotation edge,
+  frames. `ttl_context` is re-read in hold B after the store, matching the TS order.
+- Box 3 partial: `agentlenspro get_burn_status` answers on pid 54270 (20:12:51). The rotation
+  edge has not been exercised since the deploy; it is verified only when the next account switch
+  logs `usage refresh (account changed)` exactly once.
+- **NEXT ACTION (not before 20:27; no `cargo`/`pnpm` in flight during the window):**
+  `tail -n +500237 ~/.agentlens/server.log | grep -a -E 'burn tick guard split|state lock (held|waited)'`
+  — the burn tick's two guards are the two `state.lock_timed()` calls inside `run_burn_tick`
+  (`grep -n lock_timed ui.rs` on the deployed source gives their numbers; they moved again). Box 2
+  passes when no `held ≥ 1000 ms` comes from either and the OTLP handler's worst `waited` is
+  under 1 s; then `→ testing`. If a `lock_b` split is ever large, the suspect is
+  `enrich_burn_status` + the frame `to_string`, not `mac_notify` (`spawn()` + detached waiter).
 
 ## Fix shape
 
@@ -69,7 +80,8 @@ hypothesis, a per-statement split is the answer.
 
 ## Acceptance
 
-- [ ] The split names the dominant statement from 15 min of `server.log`, not from reading.
+- [x] The split names the dominant statement from 15 min of `server.log`, not from reading —
+      `burn_status`, 96% of the guard's lock time over 2h49m (STATE, box 1).
 - [ ] After the fix, 15 min of `server.log` shows no `state lock held ≥ 1000 ms` by the burn tick's
       guard, and the OTLP handler's worst wait is under 1 s.
 - [ ] `/api/burn-status`, the burn risk gate and the account-rotation capture still behave
