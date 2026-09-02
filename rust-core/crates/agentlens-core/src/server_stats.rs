@@ -430,23 +430,33 @@ fn device_id(path: &Path) -> Option<u64> {
     }
 }
 
-/// Is there a mount boundary strictly below `/` on the way from `dir` up? Walks `child → parent`
-/// comparing device ids; the pair whose parent IS `/` is skipped (the macOS root ↔ Data firmlink
-/// would otherwise make every path "its own volume"). Any stat failure reads as no boundary —
-/// an unknown must never report a spool that is not there.
-///
-/// ponytail: a mount DIRECTLY under `/` (a Linux `/ramdisk`) is skipped with the firmlink and
-/// reads `false`. Unreachable today — the spool is macOS-only by design (`src/ramdisk.ts`
-/// refuses any other platform) and `hdiutil` mounts under `/Volumes/<name>`, one level down.
-/// If a Linux spool ever exists, skip only the child that IS the Data firmlink instead.
+/// Is there a mount boundary on the way from `dir` up to `/`? Walks `child → parent` comparing
+/// device ids. The dir is canonicalized first: `parent()` is lexical while `metadata()` follows
+/// links, so a symlinked intermediate pointing OUTSIDE the mount would otherwise pair a Data-volume
+/// child with a RAM-disk parent and fabricate a boundary (review). The ONE pair skipped is a
+/// child directly under `/` whose device is the macOS Data volume's (`/System/Volumes/Data`) —
+/// the root ↔ Data firmlink, not a mount. It is anchored on a MEASURED id, not on "parent is
+/// `/`": on the reference box `/`, `/System/Volumes/Data`, `/Users` and `/Volumes` all report
+/// one device, so a blanket skip there guarded nothing and would have hidden a mount placed
+/// directly under `/` (`hdiutil attach -mountpoint /spool`, a Linux `/ramdisk` — the product's
+/// own `spool ensure` mounts under `/Volumes/<name>`, so that is a hand-edited config, but it
+/// must still read true). On Linux the Data path does not exist ⇒ nothing is ever skipped.
+/// An unreadable parent reads as no boundary — an unknown must never report a spool that is
+/// not there.
 fn has_mount_boundary_below_root(dir: &Path) -> bool {
-    let mut child = dir.to_path_buf();
+    let data_volume = device_id(Path::new("/System/Volumes/Data"));
+    let mut child = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
     while let Some(parent) = child.parent() {
-        if parent.as_os_str().is_empty() || parent == Path::new("/") {
+        if parent.as_os_str().is_empty() {
             return false;
         }
         match (device_id(&child), device_id(parent)) {
-            (Some(a), Some(b)) if a != b => return true,
+            (Some(a), Some(b)) if a != b => {
+                if parent == Path::new("/") && Some(a) == data_volume {
+                    return false;
+                }
+                return true;
+            }
             (Some(_), Some(_)) => {}
             _ => return false,
         }
