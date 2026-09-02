@@ -1,9 +1,9 @@
 ---
 trdd-id: O3ICDRLO
 title: The 4-second burn tick holds the state lock for up to 2.3 s and is now the top holder
-column: todo
+column: dev
 created: 2026-09-02T16:52:57+0200
-updated: 2026-09-02T16:52:57+0200
+updated: 2026-09-02T16:58:13+0200
 current-owner: main-session
 task-type: bugfix
 priority: high
@@ -17,9 +17,10 @@ related: [UTFVMVT8, 2R36W8Q1, HFV4AIT7, N60JUWU3]
 ## Measured (2026-09-02 16:36–16:51, pid 18695, the binary with TRDD-UTFVMVT8 deployed)
 
 With the composition routes off the lock, the 15-min read shows 120 `state lock held` lines
-≥ 250 ms; the top site is the burn tick's guard, `ui.rs:3698` on that binary (`run_burn_tick`,
-the 4 s interval): **44 holds, max 2,263 ms**, then the sweeper's `save_cards`
-(`log_reader.rs:1052`, 52 holds, max 1,648 ms). The OTLP ingest handler waited 2,361 / 1,612 /
+≥ 250 ms; the burn tick's guard, `ui.rs:3698` on that binary (`run_burn_tick`, the 4 s interval),
+is the worst holder by MAX (**2,263 ms**) and by TOTAL lock time (**34,555 ms** over 44 holds);
+by COUNT the sweeper's `save_cards` (`log_reader.rs:1052`, 52 holds, max 1,648 ms, total
+26,143 ms) edges it. The OTLP ingest handler waited 2,361 / 1,612 /
 1,582 ms behind the burn tick and 1,663 ms behind the span flush tick. Before UTFVMVT8 the same
 handler waited 145 s, so this is the residual, not the incident — but a 4 s tick that holds the
 lock for 2.3 s means the lock is unavailable more than half the time at the worst, and every
@@ -36,6 +37,20 @@ already read OFF the lock (`tick_summary` from `summary_now`, TRDD-HFV4AIT7). Wh
 the 2.3 s is NOT known; the two natural suspects are the WAL flush (an fsync under the lock) and
 `gather_consumption_events` over 27.7k cards, and the UTFVMVT8 lesson applies: a source read is a
 hypothesis, a per-statement split is the answer.
+
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-02
+
+- **Box 1 instrumentation IN CODE 16:56 (build/clippy/tests running):** the guard prints
+  `alcore: burn tick guard split: bodies_poll N ms, statusline_flush N ms, burn_status N ms,
+  account_timeline N ms, alerts_notify N ms` whenever its total reaches `AGENTLENS_LOCK_TRACE_MS`
+  (250) — the same threshold as the `held` line beside it. Five groups, in statement order; the
+  `alerts_notify` group includes `enrich_burn_status`, the frame push and `mac_notify` (a process
+  spawn under the lock when an alert fires — rare, but it is in there).
+- Also by TOTAL lock time in the same 15 min: this guard 34,555 ms (44 holds), the sweeper's
+  `save_cards` 26,143 ms (52), the boot scan 6,724 ms (1), the rebuilder's `ui.rs:212` 4,322 ms (8).
+- **NEXT ACTION:** deploy (fresh-inode rm+cp, `codesign -v`, `agentlenspro server restart` — if the
+  stop starves again, that is TRDD-N60JUWU3 repeating), read 15 min of `server.log` from the new
+  pid's boot marker for `burn tick guard split:` lines, then move the named statement off the lock.
 
 ## Fix shape
 
