@@ -434,6 +434,11 @@ fn device_id(path: &Path) -> Option<u64> {
 /// comparing device ids; the pair whose parent IS `/` is skipped (the macOS root ↔ Data firmlink
 /// would otherwise make every path "its own volume"). Any stat failure reads as no boundary —
 /// an unknown must never report a spool that is not there.
+///
+/// ponytail: a mount DIRECTLY under `/` (a Linux `/ramdisk`) is skipped with the firmlink and
+/// reads `false`. Unreachable today — the spool is macOS-only by design (`src/ramdisk.ts`
+/// refuses any other platform) and `hdiutil` mounts under `/Volumes/<name>`, one level down.
+/// If a Linux spool ever exists, skip only the child that IS the Data firmlink instead.
 fn has_mount_boundary_below_root(dir: &Path) -> bool {
     let mut child = dir.to_path_buf();
     while let Some(parent) = child.parent() {

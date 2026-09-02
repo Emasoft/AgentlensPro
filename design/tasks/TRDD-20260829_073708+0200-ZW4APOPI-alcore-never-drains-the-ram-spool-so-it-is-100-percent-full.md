@@ -3,7 +3,7 @@ trdd-id: ZW4APOPI
 title: alcore never drains the RAM-disk spool so it is 100 percent full and capture is silently losing bodies
 column: ai_review
 created: 2026-08-29T07:37:08+0200
-updated: 2026-09-02T08:29:30+0200
+updated: 2026-09-02T08:31:22+0200
 current-owner: claude-agentlenspro
 task-type: bugfix
 project-id: agentlenspro
@@ -219,6 +219,11 @@ reference broke the moment `DATA_DIR` lived elsewhere). LIVE (pid 74955, the `44
 "totalBytes":2147483648,"floorBytes":67108864,"backpressure":{"active":false,"spills":0}}` —
 the `df` question this card opened with, answered by the endpoint. Topology read: `/`,
 `/Volumes`, `~/.agentlens` share dev 16777234; the spool and its `otel-bodies` are 16777285.
+Redeployed the WALK build (`9e81f89b`) at 08:30 — pid 82098, exe pinned to
+`bin-native/darwin-arm64/alcore` (inode 1505864872), dashboard 200, capture live:
+`{"exists":true,"ownVolume":true,"files":6,"stagedBytes":2451198,"freeBytes":2126143488,…}`.
+Ceiling noted in code: a mount DIRECTLY under `/` reads `ownVolume: false` (unreachable — the
+spool is macOS-only by design and `hdiutil` mounts under `/Volumes/<name>`).
 Box 1: `tests/chores_spool_drain.rs` — a seconds-old spool body and a 73 h-old legacy body,
 one `bodies_pass` → both reclaimed, second pass → both dirs empty; reviewed to fail on the spool
 assertion under a legacy-only drain (mutation reasoned, NOT run).
