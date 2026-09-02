@@ -227,11 +227,25 @@
         "responseFilesScanned": 7,
         "bytesOnDisk": 51063,
         "complete": true,
-        "note": "full coverage of the window (scanned ~/burnscan-bodies)",
+        "note": "full coverage of the window (scanned ~/burnscan-bodies) CAPTURE GAP: no bodies for 1.5h (2026-08-20T07:00:00.000Z → 2026-08-20T08:30:00.000Z) while 1 hook event(s) arrived — the corpus has a hole there, not idle time; totals under-count that range (+1 more gap(s) in coverage.captureGaps) (TRDD-4FMHW124).",
         "dirsScanned": [
           "<BODIES>"
         ],
-        "dirsMissing": []
+        "dirsMissing": [],
+        "captureGaps": [
+          {
+            "fromIso": "2026-08-20T07:00:00.000Z",
+            "untilIso": "2026-08-20T08:30:00.000Z",
+            "hours": 1.5,
+            "hookEventsDuring": 1
+          },
+          {
+            "fromIso": "2026-08-20T08:40:00.000Z",
+            "untilIso": "2026-08-20T09:10:00.000Z",
+            "hours": 0.5,
+            "hookEventsDuring": 1
+          }
+        ]
       },
       "totals": {
         "calls": 6,
@@ -359,11 +373,25 @@
         "responseFilesScanned": 8,
         "bytesOnDisk": 56740,
         "complete": true,
-        "note": "full coverage of the window (scanned ~/burnscan-bodies)",
+        "note": "full coverage of the window (scanned ~/burnscan-bodies) CAPTURE GAP: no bodies for 2.0h (2026-08-20T06:30:00.000Z → 2026-08-20T08:30:00.000Z) while 1 hook event(s) arrived — the corpus has a hole there, not idle time; totals under-count that range (+1 more gap(s) in coverage.captureGaps) (TRDD-4FMHW124).",
         "dirsScanned": [
           "<BODIES>"
         ],
-        "dirsMissing": []
+        "dirsMissing": [],
+        "captureGaps": [
+          {
+            "fromIso": "2026-08-20T06:30:00.000Z",
+            "untilIso": "2026-08-20T08:30:00.000Z",
+            "hours": 2,
+            "hookEventsDuring": 1
+          },
+          {
+            "fromIso": "2026-08-20T08:40:00.000Z",
+            "untilIso": "2026-08-20T09:10:00.000Z",
+            "hours": 0.5,
+            "hookEventsDuring": 1
+          }
+        ]
       },
       "totals": {
         "calls": 7,
@@ -550,11 +578,19 @@
         "responseFilesScanned": 0,
         "bytesOnDisk": 5775,
         "complete": true,
-        "note": "full coverage of the window (scanned ~/burnscan-noresp)",
+        "note": "full coverage of the window (scanned ~/burnscan-noresp) CAPTURE GAP: no bodies for 2.0h (2026-08-20T07:00:00.000Z → 2026-08-20T09:00:00.000Z) while 2 hook event(s) arrived — the corpus has a hole there, not idle time; totals under-count that range (TRDD-4FMHW124).",
         "dirsScanned": [
           "<NORESP>"
         ],
-        "dirsMissing": []
+        "dirsMissing": [],
+        "captureGaps": [
+          {
+            "fromIso": "2026-08-20T07:00:00.000Z",
+            "untilIso": "2026-08-20T09:00:00.000Z",
+            "hours": 2,
+            "hookEventsDuring": 2
+          }
+        ]
       },
       "totals": {
         "calls": 0,
@@ -664,11 +700,19 @@
         "responseFilesScanned": 3,
         "bytesOnDisk": 600681,
         "complete": true,
-        "note": "full coverage of the window (scanned ~/burnscan-storm)",
+        "note": "full coverage of the window (scanned ~/burnscan-storm) CAPTURE GAP: no bodies for 2.0h (2026-08-20T07:00:00.000Z → 2026-08-20T09:00:00.000Z) while 2 hook event(s) arrived — the corpus has a hole there, not idle time; totals under-count that range (TRDD-4FMHW124).",
         "dirsScanned": [
           "<STORM>"
         ],
-        "dirsMissing": []
+        "dirsMissing": [],
+        "captureGaps": [
+          {
+            "fromIso": "2026-08-20T07:00:00.000Z",
+            "untilIso": "2026-08-20T09:00:00.000Z",
+            "hours": 2,
+            "hookEventsDuring": 2
+          }
+        ]
       },
       "totals": {
         "calls": 3,
@@ -760,11 +804,19 @@
         "responseFilesScanned": 3,
         "bytesOnDisk": 600276,
         "complete": true,
-        "note": "full coverage of the window (scanned ~/burnscan-boot)",
+        "note": "full coverage of the window (scanned ~/burnscan-boot) CAPTURE GAP: no bodies for 2.0h (2026-08-20T07:00:00.000Z → 2026-08-20T09:00:00.000Z) while 2 hook event(s) arrived — the corpus has a hole there, not idle time; totals under-count that range (TRDD-4FMHW124).",
         "dirsScanned": [
           "<BOOT>"
         ],
-        "dirsMissing": []
+        "dirsMissing": [],
+        "captureGaps": [
+          {
+            "fromIso": "2026-08-20T07:00:00.000Z",
+            "untilIso": "2026-08-20T09:00:00.000Z",
+            "hours": 2,
+            "hookEventsDuring": 2
+          }
+        ]
       },
       "totals": {
         "calls": 3,
@@ -840,11 +892,19 @@
         "responseFilesScanned": 55,
         "bytesOnDisk": 11374,
         "complete": true,
-        "note": "full coverage of the window (scanned ~/burnscan-premium)",
+        "note": "full coverage of the window (scanned ~/burnscan-premium) CAPTURE GAP: no bodies for 2.0h (2026-08-20T07:00:00.000Z → 2026-08-20T09:00:00.000Z) while 2 hook event(s) arrived — the corpus has a hole there, not idle time; totals under-count that range (TRDD-4FMHW124).",
         "dirsScanned": [
           "<PREMIUM>"
         ],
-        "dirsMissing": []
+        "dirsMissing": [],
+        "captureGaps": [
+          {
+            "fromIso": "2026-08-20T07:00:00.000Z",
+            "untilIso": "2026-08-20T09:00:00.000Z",
+            "hours": 2,
+            "hookEventsDuring": 2
+          }
+        ]
       },
       "totals": {
         "calls": 55,
@@ -916,11 +976,19 @@
         "responseFilesScanned": 3,
         "bytesOnDisk": 69192,
         "complete": true,
-        "note": "full coverage of the window (scanned ~/burnscan-idle)",
+        "note": "full coverage of the window (scanned ~/burnscan-idle) CAPTURE GAP: no bodies for 2.0h (2026-08-20T07:00:00.000Z → 2026-08-20T09:00:00.000Z) while 2 hook event(s) arrived — the corpus has a hole there, not idle time; totals under-count that range (TRDD-4FMHW124).",
         "dirsScanned": [
           "<IDLE>"
         ],
-        "dirsMissing": []
+        "dirsMissing": [],
+        "captureGaps": [
+          {
+            "fromIso": "2026-08-20T07:00:00.000Z",
+            "untilIso": "2026-08-20T09:00:00.000Z",
+            "hours": 2,
+            "hookEventsDuring": 2
+          }
+        ]
       },
       "totals": {
         "calls": 3,
@@ -1008,11 +1076,19 @@
         "responseFilesScanned": 1,
         "bytesOnDisk": 600378,
         "complete": true,
-        "note": "full coverage of the window (scanned ~/burnscan-image)",
+        "note": "full coverage of the window (scanned ~/burnscan-image) CAPTURE GAP: no bodies for 2.0h (2026-08-20T07:00:00.000Z → 2026-08-20T09:00:00.000Z) while 2 hook event(s) arrived — the corpus has a hole there, not idle time; totals under-count that range (TRDD-4FMHW124).",
         "dirsScanned": [
           "<IMAGE>"
         ],
-        "dirsMissing": []
+        "dirsMissing": [],
+        "captureGaps": [
+          {
+            "fromIso": "2026-08-20T07:00:00.000Z",
+            "untilIso": "2026-08-20T09:00:00.000Z",
+            "hours": 2,
+            "hookEventsDuring": 2
+          }
+        ]
       },
       "totals": {
         "calls": 1,
@@ -1080,11 +1156,19 @@
         "responseFilesScanned": 5,
         "bytesOnDisk": 0,
         "complete": true,
-        "note": "full coverage of the window (scanned ~/burnscan-partial)",
+        "note": "full coverage of the window (scanned ~/burnscan-partial) CAPTURE GAP: no bodies for 2.0h (2026-08-20T07:00:00.000Z → 2026-08-20T09:00:00.000Z) while 2 hook event(s) arrived — the corpus has a hole there, not idle time; totals under-count that range (TRDD-4FMHW124).",
         "dirsScanned": [
           "<PARTIAL>"
         ],
-        "dirsMissing": []
+        "dirsMissing": [],
+        "captureGaps": [
+          {
+            "fromIso": "2026-08-20T07:00:00.000Z",
+            "untilIso": "2026-08-20T09:00:00.000Z",
+            "hours": 2,
+            "hookEventsDuring": 2
+          }
+        ]
       },
       "totals": {
         "calls": 5,

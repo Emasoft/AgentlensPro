@@ -382,7 +382,8 @@ function detectPremiumFanout(resps: RespRec[], reqs: ReqRec[], totalEquiv: numbe
       .filter(r => r.model === model)
     const noWs = subagentReqs.filter(r => !r.workspace).length
     if (subagentReqs.length === 0 || noWs / subagentReqs.length < 0.5) continue
-    const usd = calcTokenCostUsd(0, cr, cc, outT, model)
+    // Priced per-call at each call's own timestamp — see the scan-loop comment above for why.
+    const usd = calls.reduce((a, r) => a + calcTokenCostUsd(0, r.cr, r.cc, r.out, r.model, 0, iso(r.ts)), 0)
     findings.push({
       cause: 'PREMIUM_MODEL_FANOUT',
       equivTokens: Math.round(equiv),
@@ -492,20 +493,23 @@ export function investigateBurn(opts: InvestigateOptions = {}): BurnInvestigatio
   // Totals — exact billed usage from the responses.
   let cc = 0; let cr = 0; let outT = 0
   const byHour = new Map<string, { calls: number; cc: number; cr: number }>()
-  const byModel = new Map<string, { calls: number; cc: number; cr: number; out: number }>()
+  const byModel = new Map<string, { calls: number; cc: number; cr: number; out: number; usd: number }>()
   for (const r of resps) {
     cc += r.cc; cr += r.cr; outT += r.out
     const h = new Date(r.ts).toISOString().slice(0, 13)
     const hb = byHour.get(h) ?? { calls: 0, cc: 0, cr: 0 }
     hb.calls++; hb.cc += r.cc; hb.cr += r.cr
     byHour.set(h, hb)
-    const mb = byModel.get(r.model) ?? { calls: 0, cc: 0, cr: 0, out: 0 }
+    const mb = byModel.get(r.model) ?? { calls: 0, cc: 0, cr: 0, out: 0, usd: 0 }
     mb.calls++; mb.cc += r.cc; mb.cr += r.cr; mb.out += r.out
+    // Priced per-RESPONSE at that response's OWN timestamp, not aggregated-then-priced: a window
+    // can straddle a scheduledChange boundary, and aggregating cc/cr/out first would price the
+    // whole model bucket at one rate (today's, if atIso were omitted) instead of each call's own.
+    mb.usd += calcTokenCostUsd(0, r.cr, r.cc, r.out, r.model, 0, iso(r.ts))
     byModel.set(r.model, mb)
   }
   const totalEquiv = equivOf(cc, cr)
-  const estCostUsd = [...byModel.entries()]
-    .reduce((a, [m, v]) => a + calcTokenCostUsd(0, v.cr, v.cc, v.out, m), 0)
+  const estCostUsd = [...byModel.values()].reduce((a, v) => a + v.usd, 0)
 
   // Hook-event correlation (optional store — absent when --install-hooks was never run).
   const stopFailures = readHookEvents(hookDir, { ev: 'StopFailure', sinceMs, untilMs, limit: 100 })
@@ -620,7 +624,10 @@ export function investigateBurn(opts: InvestigateOptions = {}): BurnInvestigatio
         .map(([model, v]) => ({
           model, calls: v.calls, cacheCreation: v.cc, cacheRead: v.cr, outputTokens: v.out,
           equiv: Math.round(equivOf(v.cc, v.cr)),
-          estCostUsd: Number(calcTokenCostUsd(0, v.cr, v.cc, v.out, model).toFixed(2)),
+          // Sum of per-response costs already priced at each response's own timestamp (see the
+          // scan loop above) — never recomputed from the aggregated cc/cr/out, which would price
+          // the whole bucket at one (wrong, wall-clock-if-omitted) rate.
+          estCostUsd: Number(v.usd.toFixed(2)),
         }))
         .sort((a, b) => b.equiv - a.equiv),
     },

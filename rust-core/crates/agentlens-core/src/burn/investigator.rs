@@ -268,7 +268,12 @@ fn detect_premium_fanout(resps: &[RespRec], reqs: &[ReqRec], total_equiv: f64, n
         if subagent_reqs.is_empty() || no_ws / (subagent_reqs.len() as f64) < 0.5 {
             continue;
         }
-        let usd = calc_token_cost_usd(0.0, cr, cc, out_t, model, 0.0, None, now_ms);
+        // Priced per-call at each call's own timestamp — see investigator_scan.rs's scan-loop
+        // comment for why (a window can straddle a scheduledChange boundary).
+        let usd = calls.iter().fold(0.0, |a, r| {
+            let at_iso = iso_from_ms(r.ts);
+            a + calc_token_cost_usd(0.0, r.cr, r.cc, r.out, &r.model, 0.0, Some(&at_iso), now_ms)
+        });
         findings.push(json!({
             "cause": "PREMIUM_MODEL_FANOUT",
             "equivTokens": num(js_math_round(equiv)),

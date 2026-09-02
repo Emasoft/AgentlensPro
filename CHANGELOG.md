@@ -27,6 +27,19 @@ All notable changes to AgentlensPro are documented here.
   read as a foreign process.
 - alcore reported spool backpressure as hardcoded `0 / false`; the free-space floor
   (`AGENTLENS_SPOOL_FLOOR_MB`, 64 MiB) is now probed every bodies pass and the counters are real.
+- `investigate_burn` named `FORK_STORM` for one fat session rewriting its own prefix: sharing a
+  transcript fingerprint only proves a shared transcript, not who wrote it. The storm verdict now
+  requires ≥2 distinct session ids in the biggest fingerprint family; one id (or none extractable)
+  is reported as `FAT_SESSION_REWRITES`, whose remedy is the opposite one (`/compact` the parent,
+  not "stop the fan-out").
+- `investigate_burn` priced every call at today's rate instead of the rate in force at the call's
+  own timestamp, so a window straddling a scheduled price change (claude-sonnet-5's introductory
+  rate ended 2026-08-31) was mis-costed, and re-running the same window on a later day changed its
+  dollar total. Each response is now priced at its own timestamp, on both the TS and Rust sides.
+- alcore's `investigate_burn` coverage lacked the `captureGaps` report (bodies silent ≥30 min while
+  hook events kept arriving) that the TypeScript investigator had shipped in 2.32; ported.
+- alcore's embedded rates table had fallen behind `pricing.ts` (no `claude-fable-5-1` row, so that
+  model priced by prefix match); re-exported.
 
 ## [2.33.1] - 2026-09-01
 

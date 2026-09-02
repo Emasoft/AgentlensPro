@@ -1,5 +1,5 @@
 {
- "lastUpdated": "2026-08-26",
+ "lastUpdated": "2026-09-01",
  "rates": {
   "gpt-4.1": {
    "inputPerMTok": 0,
@@ -343,6 +343,15 @@
   "claude-fable-5": {
    "inputPerMTok": 10,
    "cacheReadPerMTok": 1,
+   "cacheWritePerMTok": 12.5,
+   "outputPerMTok": 50,
+   "contextWindowTokens": 1000000,
+   "multiplier": 0,
+   "multiplierAnnualPostJun1": 0
+  },
+  "claude-fable-5-1": {
+   "inputPerMTok": 10,
+   "cacheReadPerMTok": 0.25,
    "cacheWritePerMTok": 12.5,
    "outputPerMTok": 50,
    "contextWindowTokens": 1000000,

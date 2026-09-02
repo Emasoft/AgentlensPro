@@ -1,9 +1,9 @@
 ---
 trdd-id: MF4YQWWA
 title: The burnscan TS oracle can no longer be regenerated — Rust investigate_burn is behind it on captureGaps and on the sonnet-5 scheduled price
-column: dev
+column: ai_review
 created: 2026-09-02T05:13:54+0200
-updated: 2026-09-02T05:17:03+0200
+updated: 2026-09-02T06:10:52+0200
 current-owner: claude-session-2026-09-02
 task-type: bugfix
 scope: project
@@ -16,6 +16,22 @@ implementation-commits: []
 ---
 
 # The burnscan TS oracle can no longer be regenerated — Rust investigate_burn is behind it on captureGaps and on the sonnet-5 scheduled price
+
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-09-02
+
+**LANDED, all three boxes, → ai_review.** Box 2's root cause was NOT "one side applies the
+scheduled rate by wall clock" — BOTH investigators omitted the call's timestamp at every
+`calcTokenCostUsd` / `calc_token_cost_usd` site, so both priced at "now"; the committed oracle only
+looked stable because it predated the 2026-09-01 boundary. Fix on both sides: price each response
+at its own `iso(ts)` and sum per model (never re-price the aggregated bucket). Determinism proven:
+a clean regen today reproduces the originally committed totals (main 2.87, clampedHigh 9.12, idle
+0.31), and a two-response window straddling 2026-09-01 totals $25 ($10 + $15) on both sides —
+`src/test/burnInvestigator.test.ts` and `investigator_scan.rs::tests`. `captureGaps` ported
+(`find_capture_gaps`, skipped when blind or file-capped, same reason as TS). `pricing.json`
+re-exported (`lastUpdated` 2026-09-01, adds `claude-fable-5-1`). Oracle regenerated with zero hand
+edits. Gates: `burnscan_parity` 9/9, mocha burnInvestigator 18/18, clippy 0, check-types 0,
+check-mirrors 0, check-pricing-export 0. Report:
+`reports/MF4YQWWA/20260902_060917+0200-oracle-regen-parity.md`. CI gap → proposal TRDD-I5O38KKP.
 
 ## The defect (VERIFIED first-hand, 2026-09-02, while landing TRDD-YBJGIYI1)
 
@@ -45,13 +61,14 @@ generator exists to prevent.
 
 ## Acceptance
 
-- [ ] Rust `investigate_burn` emits `coverage.captureGaps` and the `note` suffix byte-identical to
+- [x] Rust `investigate_burn` emits `coverage.captureGaps` and the `note` suffix byte-identical to
       the TS oracle for every fixture case (port the TRDD-4FMHW124 logic; TS is the spec).
-- [ ] The scheduled-price divergence is settled with evidence: which side applies
+- [x] The scheduled-price divergence is settled with evidence: which side applies
       `scheduledChange` by wall clock, why the other is right, and the wrong side fixed. If TS is
       wrong it is fixed in `src/shared/pricing.ts`'s lookup (the oracle must be deterministic
-      across regeneration dates); if Rust is wrong, `pricing.rs`.
-- [ ] `node gen-burnscan-expected.mjs` regenerated from a clean tree, committed with ZERO hand
+      across regeneration dates); if Rust is wrong, `pricing.rs`. — BOTH sides were wrong, at the
+      investigator call sites, not in the lookups; see STATE.
+- [x] `node gen-burnscan-expected.mjs` regenerated from a clean tree, committed with ZERO hand
       edits, and `cargo test -p agentlens-core --test burnscan_parity` exits 0 on it.
 
 ## Evidence

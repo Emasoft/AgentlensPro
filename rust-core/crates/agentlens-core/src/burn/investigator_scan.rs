@@ -45,6 +45,62 @@ pub fn equiv_of(cc: f64, cr: f64) -> f64 {
     cc * 1.25 + cr * 0.1
 }
 
+/// TRDD-4FMHW124: a sub-range with hook events but ZERO bodies — a measured capture outage,
+/// distinct from ordinary idle time.
+#[derive(Clone, Debug)]
+pub struct CaptureGap {
+    pub from_iso: String,
+    pub until_iso: String,
+    pub hours: f64,
+    pub hook_events_during: usize,
+}
+
+/// Bodies going quiet for ≥30 min while hook events keep arriving means the corpus has a hole,
+/// not idle time. 30 min floor: shorter body-less stretches are ordinary between-turns quiet, and
+/// a threshold low enough to catch them would page on every lunch break. Port of
+/// `src/burnInvestigator.ts` `CAPTURE_GAP_MIN_MS`.
+const CAPTURE_GAP_MIN_MS: f64 = 30.0 * 60_000.0;
+
+/// Port of `src/burnInvestigator.ts` `findCaptureGaps`. Window edges count as boundaries — a body
+/// gap that runs to the leading/trailing edge of the investigated window must still be reported.
+fn find_capture_gaps(body_mtimes: &[f64], since_ms: f64, until_ms: f64, hook_dir: &Path) -> Vec<CaptureGap> {
+    let mut ts: Vec<f64> = body_mtimes.to_vec();
+    ts.sort_by(|a, b| a.total_cmp(b));
+    let mut bounds: Vec<f64> = Vec::with_capacity(ts.len() + 2);
+    bounds.push(since_ms);
+    bounds.extend(ts);
+    bounds.push(until_ms);
+    let mut out = Vec::new();
+    for i in 1..bounds.len() {
+        let from = bounds[i - 1];
+        let to = bounds[i];
+        if to - from < CAPTURE_GAP_MIN_MS {
+            continue;
+        }
+        // Shrink the probe by a minute each side so the activity that PRODUCED the boundary
+        // bodies does not itself count as activity inside the hole.
+        let ev = read_hook_events(
+            hook_dir,
+            &HookEventFilter {
+                since_ms: Some((from + 60_000.0) as i64),
+                until_ms: Some((to - 60_000.0) as i64),
+                limit: Some(100),
+                ..Default::default()
+            },
+        );
+        if ev.is_empty() {
+            continue; // no independent activity signal — idle time, not an outage
+        }
+        out.push(CaptureGap {
+            from_iso: iso_from_ms(from),
+            until_iso: iso_from_ms(to),
+            hours: (to - from) / 3_600_000.0,
+            hook_events_during: ev.len(),
+        });
+    }
+    out
+}
+
 #[derive(Clone, Debug)]
 pub struct RespRec {
     pub ts: f64,
@@ -388,8 +444,11 @@ pub fn scan_window(opts: &InvestigateOptions, now_ms: f64) -> ScanOutcome {
     let (mut cc, mut cr, mut out_t) = (0f64, 0f64, 0f64);
     // byHour is read back in sorted-key order; byModel must keep INSERTION order, because the
     // total cost is a float sum over it and addition order is not associative.
+    // v[4] is the running USD cost, priced PER-RESPONSE at that response's own timestamp (never
+    // recomputed from the aggregated cc/cr/out afterward) — a window can straddle a
+    // `scheduledChange` boundary, and aggregating first would price the whole bucket at one rate.
     let mut by_hour: BTreeMap<String, (f64, f64, f64)> = BTreeMap::new();
-    let mut by_model: Vec<(String, [f64; 4])> = Vec::new();
+    let mut by_model: Vec<(String, [f64; 5])> = Vec::new();
     for r in &resps {
         cc += r.cc;
         cr += r.cr;
@@ -399,20 +458,21 @@ pub fn scan_window(opts: &InvestigateOptions, now_ms: f64) -> ScanOutcome {
         hb.0 += 1.0;
         hb.1 += r.cc;
         hb.2 += r.cr;
+        let at_iso = iso_from_ms(r.ts);
+        let usd = calc_token_cost_usd(0.0, r.cr, r.cc, r.out, &r.model, 0.0, Some(&at_iso), now_ms);
         match by_model.iter_mut().find(|(m, _)| *m == r.model) {
             Some((_, v)) => {
                 v[0] += 1.0;
                 v[1] += r.cc;
                 v[2] += r.cr;
                 v[3] += r.out;
+                v[4] += usd;
             }
-            None => by_model.push((r.model.clone(), [1.0, r.cc, r.cr, r.out])),
+            None => by_model.push((r.model.clone(), [1.0, r.cc, r.cr, r.out, usd])),
         }
     }
     let total_equiv = equiv_of(cc, cr);
-    let est_cost_usd = by_model
-        .iter()
-        .fold(0.0, |a, (m, v)| a + calc_token_cost_usd(0.0, v[2], v[1], v[3], m, 0.0, None, now_ms));
+    let est_cost_usd = by_model.iter().fold(0.0, |a, (_, v)| a + v[4]);
 
     // Hook-event correlation (optional store — absent when --install-hooks was never run).
     let stop_failures: Vec<f64> = read_hook_events(
@@ -504,6 +564,31 @@ the totals below are not a burn measurement.",
         None
     };
 
+    // TRDD-4FMHW124: gap detection needs EVERY mtime in the window, so it is skipped (silently
+    // reporting none would be dishonest — the cap note already discloses truncation) when the file
+    // cap truncated either list: a gap computed on the largest-N subset would hallucinate holes
+    // exactly where the small files were dropped.
+    let capped = req_files.len() < req_present || resp_files.len() < resp_present;
+    let capture_gaps: Vec<CaptureGap> = if blind.is_some() || capped {
+        Vec::new()
+    } else {
+        let mtimes: Vec<f64> = req_files.iter().chain(resp_files.iter()).map(|f| f.mtime).collect();
+        find_capture_gaps(&mtimes, since_ms, until_ms, &opts.hook_events_dir)
+    };
+    let worst_gap = capture_gaps.iter().max_by(|a, b| a.hours.total_cmp(&b.hours));
+    let gap_note = match worst_gap {
+        Some(g) => format!(
+            " CAPTURE GAP: no bodies for {:.1}h ({} → {}) while {}{} hook event(s) arrived — the corpus has a hole there, not idle time; totals under-count that range{} (TRDD-4FMHW124).",
+            g.hours,
+            g.from_iso,
+            g.until_iso,
+            g.hook_events_during,
+            if g.hook_events_during >= 100 { "+" } else { "" },
+            if capture_gaps.len() > 1 { format!(" (+{} more gap(s) in coverage.captureGaps)", capture_gaps.len() - 1) } else { String::new() },
+        ),
+        None => String::new(),
+    };
+
     let mut coverage = Map::new();
     // `num()`, never `json!(f64)`: serde_json Number equality does NOT bridge PosInt vs Float, so a
     // count emitted as 5.0 compares unequal to the oracle's 5 while every digit matches.
@@ -517,22 +602,39 @@ the totals below are not a burn measurement.",
     );
     coverage.insert(
         "note".into(),
-        json!(if let Some(b) = blind {
-            format!("BLIND ({b}): scanned {where_s} — 0 bodies in the window.{absent} Totals are not a measurement.")
-        } else if req_files.len() == req_present {
-            format!("full coverage of the window (scanned {where_s})")
-        } else {
-            format!(
-                "CAP HIT: scanned the {} largest of {req_present} request files (responses {}/{resp_present}) — totals reflect the scanned set only",
-                req_files.len(),
-                resp_files.len()
-            )
-        }),
+        json!(format!(
+            "{}{gap_note}",
+            if let Some(b) = blind {
+                format!("BLIND ({b}): scanned {where_s} — 0 bodies in the window.{absent} Totals are not a measurement.")
+            } else if req_files.len() == req_present {
+                format!("full coverage of the window (scanned {where_s})")
+            } else {
+                format!(
+                    "CAP HIT: scanned the {} largest of {req_present} request files (responses {}/{resp_present}) — totals reflect the scanned set only",
+                    req_files.len(),
+                    resp_files.len()
+                )
+            }
+        )),
     );
     coverage.insert("dirsScanned".into(), json!(opts.scope.dirs));
     coverage.insert("dirsMissing".into(), json!(opts.scope.missing));
     if let Some(b) = blind {
         coverage.insert("blind".into(), json!(b));
+    }
+    if !capture_gaps.is_empty() {
+        coverage.insert(
+            "captureGaps".into(),
+            json!(capture_gaps
+                .iter()
+                .map(|g| json!({
+                    "fromIso": g.from_iso,
+                    "untilIso": g.until_iso,
+                    "hours": num(g.hours),
+                    "hookEventsDuring": num(g.hook_events_during as f64),
+                }))
+                .collect::<Vec<_>>()),
+        );
     }
 
     let mut by_model_rows: Vec<Value> = by_model
@@ -542,7 +644,8 @@ the totals below are not a burn measurement.",
                 "model": model, "calls": num(v[0]), "cacheCreation": num(v[1]), "cacheRead": num(v[2]),
                 "outputTokens": num(v[3]),
                 "equiv": num(js_math_round(equiv_of(v[1], v[2]))),
-                "estCostUsd": num(js_to_fixed_num(calc_token_cost_usd(0.0, v[2], v[1], v[3], model, 0.0, None, now_ms), 2)),
+                // Sum of per-response costs already priced above — see the scan-loop comment.
+                "estCostUsd": num(js_to_fixed_num(v[4], 2)),
             })
         })
         .collect();
@@ -628,5 +731,55 @@ mod tests {
         // occurrences to "~/x/~". The home string is the sanctioned placeholder shape on purpose —
         // check-no-identities is shape-based and rejects a concrete-looking home path even in a test.
         assert_eq!(short_ws("/Users/<name>/x/Users/<name>", "/Users/<name>"), "~/x/Users/<name>");
+    }
+
+    fn write_resp(dir: &Path, name: &str, ts_ms: f64, model: &str, cc: f64, cr: f64, out: f64) {
+        let p = dir.join(name);
+        std::fs::write(
+            &p,
+            format!(
+                r#"{{"body":{{"model":"{model}","usage":{{"cache_creation_input_tokens":{cc},"cache_read_input_tokens":{cr},"output_tokens":{out},"input_tokens":5}}}}}}"#
+            ),
+        )
+        .unwrap();
+        let t = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_millis(ts_ms as u64);
+        let f = std::fs::OpenOptions::new().write(true).open(&p).unwrap();
+        f.set_times(std::fs::FileTimes::new().set_modified(t)).unwrap();
+    }
+
+    /// TRDD-MF4YQWWA: claude-sonnet-5's introductory rate ($2/$10 per MTok) reverts to its $3/$15
+    /// sticker on 2026-09-01 (`scheduledChange` in pricing.json/pricing.ts). A response must be
+    /// priced at the rate in force at ITS OWN timestamp, not at `now_ms` — the whole point of an
+    /// oracle that stays reproducible across regeneration dates. Two responses in one scan,
+    /// straddling the boundary, prove each is priced independently rather than the aggregated
+    /// cc/cr/out being priced once.
+    #[test]
+    fn est_cost_usd_prices_each_response_at_its_own_timestamp() {
+        let dir = std::env::temp_dir().join(format!("al-burnscan-scheduled-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // Kept ≤48h apart (the window's own cap) so both calls land in one scan.
+        let before = 1_788_213_600_000.0; // 2026-08-31T22:00:00Z — introductory: $10/MTok output
+        let after = 1_788_228_000_000.0; // 2026-09-01T02:00:00Z — sticker: $15/MTok output
+        write_resp(&dir, "r0.response.json", before, "claude-sonnet-5", 0.0, 0.0, 1_000_000.0);
+        write_resp(&dir, "r1.response.json", after, "claude-sonnet-5", 0.0, 0.0, 1_000_000.0);
+        let opts = InvestigateOptions {
+            scope: BodiesScope { dirs: vec![dir.to_string_lossy().into_owned()], missing: vec![], capture_on: true },
+            hook_events_dir: dir.join("hook-events"),
+            home: dir.to_string_lossy().into_owned(),
+            window_hours: Some(48.0),
+            until_ms: Some(after + 60_000.0),
+            max_files: None,
+        };
+        let outcome = scan_window(&opts, after + 60_000.0);
+        std::fs::remove_dir_all(&dir).ok();
+        let by_model = outcome.partial["totals"]["byModel"].as_array().unwrap();
+        assert_eq!(by_model.len(), 1);
+        // $10 (pre-change) + $15 (post-change) = $25 — NOT $15×2=$30 (today's rate for both) nor
+        // $10×2=$20 (the pre-change rate for both).
+        let expected = 25.0;
+        let got = by_model[0]["estCostUsd"].as_f64().unwrap();
+        assert!((got - expected).abs() < 0.01, "expected ~${expected}, got ${got}");
+        let total = outcome.partial["totals"]["estCostUsd"].as_f64().unwrap();
+        assert!((total - expected).abs() < 0.01, "window total must match the per-response sum, got ${total}");
     }
 }
