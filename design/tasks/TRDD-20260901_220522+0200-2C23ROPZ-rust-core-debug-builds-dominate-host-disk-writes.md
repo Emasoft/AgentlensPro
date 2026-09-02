@@ -24,7 +24,11 @@ alone: `unpacked` is already the macOS default for a debug-info profile.
 - **Full rebuild, like-for-like per artifact:** DuckDB C++ out dir **3.10 GB → 0.47 GB**
   (`libduckdb.a` 1.57 GB → 0.25 GB), `libduckdb` rlib 5.7 → 3.3 MB, `agentlens-core` lib-test
   binary 39.4 → 34.0 MB. One full rebuild under the new profile writes **1,464 MB / 7,303 files**
-  into this target (bounded to the cargo window: deps 789.6, build 523.7, incremental 142.2 MB).
+  into this target — the script's scan at 07:13, taken BEFORE the touch cycle. A re-scan at 07:28
+  bounded to the same cargo window gives deps 789.6 + build 523.7 + incremental 142.2 = 1,456 MB:
+  the 8 MB gap is settle-window files the touch cycle then rewrote IN PLACE (the test binary, its
+  `.d`, the fingerprints), which moved them out of the window. Two scans, two populations — the
+  headline is the one to quote.
   The OLD full-rebuild total is NOT measurable from this target (it accumulates generations —
   below); the per-artifact pairs are the honest before/after.
 - **Touch cycle (`touch lib.rs` → `cargo test --lib --no-run`), the NO-OP-EDIT FLOOR:** 100.7 →
