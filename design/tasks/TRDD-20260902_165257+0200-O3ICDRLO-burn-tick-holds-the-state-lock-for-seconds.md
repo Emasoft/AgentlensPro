@@ -1,9 +1,9 @@
 ---
 trdd-id: O3ICDRLO
 title: The 4-second burn tick holds the state lock for up to 2.3 s and is now the top holder
-column: dev
+column: testing
 created: 2026-09-02T16:52:57+0200
-updated: 2026-09-02T20:12:51+0200
+updated: 2026-09-02T20:24:56+0200
 current-owner: main-session
 task-type: bugfix
 priority: high
@@ -66,12 +66,17 @@ hypothesis, a per-statement split is the answer.
 - Box 3 partial: `agentlenspro get_burn_status` answers on pid 54270 (20:12:51). The rotation
   edge has not been exercised since the deploy; it is verified only when the next account switch
   logs `usage refresh (account changed)` exactly once.
-- **NEXT ACTION (not before 20:27; no `cargo`/`pnpm` in flight during the window):**
-  `tail -n +500237 ~/.agentlens/server.log | grep -a -E 'burn tick guard split|state lock (held|waited)'`
-  — the burn tick's two guards are the two `state.lock_timed()` calls inside `run_burn_tick`
-  (`grep -n lock_timed ui.rs` on the deployed source gives their numbers; they moved again). Box 2
-  passes when no `held ≥ 1000 ms` comes from either and the OTLP handler's worst `waited` is
-  under 1 s; then `→ testing`. If a `lock_b` split is ever large, the suspect is
+- **Box 2 MEASURED on pid 54270, 20:12:17–20:24:56 (12.6 min, no `cargo`/`pnpm` in flight):**
+  the burn tick's two guards (`ui.rs:3707` hold A, `ui.rs:3728` hold B on the deployed source)
+  produced ZERO `held` lines ≥ 250 ms and ZERO split lines; the previous binary logged 41 holds
+  ≥ 250 ms (max 1,520 ms) and the one before it 44 in 15 min. No ingest-path `waited` line was
+  logged at all. The three waits in the window (4,697 ms at `save_cards`, 2,860 ms at the
+  rebuilder, 261 ms at `handle`) sat behind ONE 4,894 ms hold at `ui.rs:1833` — the
+  burn-monitor ROUTE computing `live_burn_status` under the lock, the tick's twin — carded as
+  TRDD-XX1UAZHS, outside this card. `→ testing`.
+- **NEXT ACTION:** box 3's rotation edge — on the next account switch, `server.log` must show
+  `usage refresh (account changed)` exactly once and `agentlenspro get_burn_status` must still
+  answer; then `→ ai_review`. If a `lock_b` split is ever large, the suspect is
   `enrich_burn_status` + the frame `to_string`, not `mac_notify` (`spawn()` + detached waiter).
 
 ## Fix shape
@@ -86,8 +91,9 @@ hypothesis, a per-statement split is the answer.
 
 - [x] The split names the dominant statement from 15 min of `server.log`, not from reading —
       `burn_status`, 96% of the guard's lock time over 2h49m (STATE, box 1).
-- [ ] After the fix, 15 min of `server.log` shows no `state lock held ≥ 1000 ms` by the burn tick's
-      guard, and the OTLP handler's worst wait is under 1 s.
+- [x] After the fix, 15 min of `server.log` shows no `state lock held ≥ 1000 ms` by the burn tick's
+      guard, and the OTLP handler's worst wait is under 1 s — 12.6 min read, zero holds ≥ 250 ms
+      from either guard, no ingest wait logged (STATE, box 2).
 - [ ] `/api/burn-status`, the burn risk gate and the account-rotation capture still behave
       (the rotation edge is still detected once per switch; `agentlenspro get_burn_status` answers).
 
