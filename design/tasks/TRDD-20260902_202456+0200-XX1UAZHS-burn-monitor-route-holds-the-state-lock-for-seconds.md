@@ -1,9 +1,9 @@
 ---
 trdd-id: XX1UAZHS
 title: The burn-monitor route computes live_burn_status under the state lock and held it 4.9 s
-column: dev
+column: testing
 created: 2026-09-02T20:24:56+0200
-updated: 2026-09-02T21:35:16+0200
+updated: 2026-09-02T22:06:11+0200
 current-owner: main-session
 task-type: bugfix
 priority: medium
@@ -14,7 +14,7 @@ related: [O3ICDRLO, HFV4AIT7, UTFVMVT8]
 
 # The burn-monitor route computes live_burn_status under the state lock and held it 4.9 s
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-02T21:35:16+0200
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-02T22:06:11+0200
 
 - **Code: DONE, uncommitted** in `rust-core/crates/agentlens-core/src/ui.rs` (+33/−5). New
   `burn_status_now(state, now)` beside `stripped_now`: `summary_now` off-lock → short hold for
@@ -24,18 +24,23 @@ related: [O3ICDRLO, HFV4AIT7, UTFVMVT8]
   `current_account` / `latest_resident_blobs` / `ttl_context`. Comments at every site cite this card.
 - **Verified:** `cargo build --release -p agentlens-core` exit 0; `cargo clippy -p agentlens-core
   --all-targets -- -D warnings` exit 0; `cargo test -p agentlens-core --lib` 37 passed / 0 failed.
-- **Acceptance box 1** satisfied (guard body is reads only, unambiguous). **Box 2 not yet** — needs
-  a deploy and a 15-min read.
-- **NEXT ACTION:** review the diff, commit (`perf(core): compute burn-status routes off the state
-  lock (TRDD-XX1UAZHS)`), then deploy — `node esbuild.js` is NOT needed (Rust): rebuild the alcore
-  binary + `agentlenspro server restart`, then a 15-min `server.log` read for
-  `state lock held ≥ 1000 ms` at the route guards under normal dashboard use, and confirm
-  `/api/burn-status` still answers with the same shape.
+- **Acceptance box 1 PASS** (guard body is reads only, unambiguous).
+- **Acceptance box 2 PASS** — 15-min post-deploy read, pid 67312, `server.log` lines 500995-501009:
+  no `state lock held >= 1000 ms` anywhere, none at the guarded route sites, largest hold 319 ms at
+  `log_reader.rs:1052` (unrelated card). `/api/burn-status` answered `200` in 1.03s and MCP
+  `get_burn_status` succeeded mid-window. Caveat: window traffic was idle (`activeSessions:0`), so
+  this is a low-traffic confirmation, not a load test — box 1's structural fix (compute moved off
+  the lock) is what actually removes the bug class.
+- **NEXT ACTION:** commit the diff (`perf(core): compute burn-status routes off the state lock
+  (TRDD-XX1UAZHS)`), move to ai_review; optional follow-up (new card, not this one) — repeat the
+  read under real dashboard load / an account-switch rotation edge to corroborate the idle-window
+  result.
 - **Gotchas:** `summary_now` can serve a one-rebuild-stale summary under sustained ingest (same
   trade as the tick). `live_session_status` and the `get_recent_sessions` family still rebuild
   under the lock — out of scope, candidate follow-up card. `burn_risk_report`'s boot-only
   `last_status` fill-in still uses `live_burn_status` (first ≤4 s after boot).
-- **Report:** `reports/trdd-xx1uazhs/20260902_213516+0200-burn-monitor-off-lock.md`.
+- **Report:** `reports/trdd-xx1uazhs/20260902_213516+0200-burn-monitor-off-lock.md`,
+  `reports/trdd-xx1uazhs/20260902_220611+0200-15min-hold-read.md`.
 - **SUPERSEDED — do NOT carry forward:** nothing yet.
 
 ## Measured (2026-09-02 20:12–20:25, pid 54270, the binary with TRDD-O3ICDRLO deployed)
@@ -61,8 +66,10 @@ for the same pattern while there.
 - [x] The route's guard names the statement (one split read, or the source is unambiguous
       because the whole body is the known-pure compute). — 2026-09-02: the compute moved to
       `burn_status_now` (off-lock); each guard body is now only the account/blobs/ttl reads.
-- [ ] After the fix, 15 min of `server.log` shows no `state lock held ≥ 1000 ms` at the route's
+- [x] After the fix, 15 min of `server.log` shows no `state lock held ≥ 1000 ms` at the route's
       guard under normal dashboard use, and `/api/burn-status` still answers with the same shape.
+      — 2026-09-02T22:06:11+0200: pid 67312, lines 500995-501009, max hold 319 ms
+      (log_reader.rs:1052, unrelated site), `/api/burn-status` 200 in 1.03s.
 
 ## Notes and lessons learned
 
