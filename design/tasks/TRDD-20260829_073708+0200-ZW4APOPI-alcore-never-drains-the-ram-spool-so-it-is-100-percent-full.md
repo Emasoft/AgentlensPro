@@ -3,7 +3,7 @@ trdd-id: ZW4APOPI
 title: alcore never drains the RAM-disk spool so it is 100 percent full and capture is silently losing bodies
 column: ai_review
 created: 2026-08-29T07:37:08+0200
-updated: 2026-09-02T08:31:22+0200
+updated: 2026-09-02T08:40:22+0200
 current-owner: claude-agentlenspro
 task-type: bugfix
 project-id: agentlenspro
@@ -222,8 +222,16 @@ the `df` question this card opened with, answered by the endpoint. Topology read
 Redeployed the WALK build (`9e81f89b`) at 08:30 — pid 82098, exe pinned to
 `bin-native/darwin-arm64/alcore` (inode 1505864872), dashboard 200, capture live:
 `{"exists":true,"ownVolume":true,"files":6,"stagedBytes":2451198,"freeBytes":2126143488,…}`.
-Ceiling noted in code: a mount DIRECTLY under `/` reads `ownVolume: false` (unreachable — the
-spool is macOS-only by design and `hdiutil` mounts under `/Volumes/<name>`).
+Fifth review moved the firmlink skip from "parent is `/`" to "child's device == the Data
+volume's" (`d2c42c1d`), so a mount directly under `/` now reads true, and the path is
+canonicalized first (a symlinked intermediate can no longer fabricate a boundary). Measured:
+GNU and BSD `stat` both report ONE id (16777234) for `/`, `/System/Volumes/Data`, `/Volumes`,
+`$TMPDIR` while `df` names two device nodes (disk3s1s1 / disk3s5) — the guard has never been
+observed to fire and stays as a cheap safety. The unit test's "present" case asserts
+`ownVolume == has_mount_boundary_below_root(data_dir)`, not a literal, so a tmpfs `$TMPDIR` on
+a Linux runner cannot fail right code. Final redeploy 08:40: pid 95443, exe pinned to
+`bin-native/darwin-arm64/alcore` (inode 1505926493), dashboard 200, live
+`{"exists":true,"ownVolume":true,"files":0,"stagedBytes":0,"freeBytes":2128609280,…}`.
 Box 1: `tests/chores_spool_drain.rs` — a seconds-old spool body and a 73 h-old legacy body,
 one `bodies_pass` → both reclaimed, second pass → both dirs empty; reviewed to fail on the spool
 assertion under a legacy-only drain (mutation reasoned, NOT run).

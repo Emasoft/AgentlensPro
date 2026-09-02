@@ -441,8 +441,11 @@ fn device_id(path: &Path) -> Option<u64> {
 /// directly under `/` (`hdiutil attach -mountpoint /spool`, a Linux `/ramdisk` — the product's
 /// own `spool ensure` mounts under `/Volumes/<name>`, so that is a hand-edited config, but it
 /// must still read true). On Linux the Data path does not exist ⇒ nothing is ever skipped.
-/// An unreadable parent reads as no boundary — an unknown must never report a spool that is
-/// not there.
+/// The guard has never been OBSERVED to fire: both GNU and BSD `stat` report one id for `/`
+/// and `/System/Volumes/Data` on the reference box even though `df` names two device nodes,
+/// i.e. the kernel presents the volume group as one st_dev there; it stays because it is
+/// correct in both worlds and costs one stat. An unreadable parent reads as no boundary — an
+/// unknown must never report a spool that is not there.
 fn has_mount_boundary_below_root(dir: &Path) -> bool {
     let data_volume = device_id(Path::new("/System/Volumes/Data"));
     let mut child = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
@@ -768,7 +771,15 @@ mod capture_block_tests {
         std::fs::write(spool.join("a.request.json"), b"12345").unwrap();
         let g = spool_gauge(&data_dir, false, 3);
         assert_eq!(g["exists"], true);
-        assert_eq!(g["ownVolume"], false, "a directory on the data volume is not a spool volume");
+        // Not a literal `false`: that would assert the RUNNER's layout (a tmpfs `$TMPDIR` on a
+        // Linux box is legitimately its own volume). The spool here is a plain subdirectory of
+        // the data dir, so it is exactly as much its own volume as the data dir is — and a
+        // reverted path-exists `ownVolume` still fails this on macOS (true vs the data dir's false).
+        assert_eq!(
+            g["ownVolume"],
+            has_mount_boundary_below_root(&data_dir),
+            "a plain subdirectory of the data dir is its own volume iff the data dir is"
+        );
         assert_eq!(g["files"], 1);
         assert_eq!(g["stagedBytes"], 5);
         assert!(g["freeBytes"].as_u64().is_some() && g["totalBytes"].as_u64().is_some());
