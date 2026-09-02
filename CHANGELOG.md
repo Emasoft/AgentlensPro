@@ -27,11 +27,6 @@ All notable changes to AgentlensPro are documented here.
   queued)`; a guard held that long logs `state lock held N ms by file:line` on release. Profiler captures of a stalled
   server showed handlers parked on the lock with no holder in any stack — the holder had already
   returned by the time the sampler walked it — so the lock now attributes itself.
-- **alcore times the three statements under the scoped-compositions guard** (TRDD-UTFVMVT8): that
-  guard was the top holder the attribution above named (82 holds on one pid, 16 of them ≥ 10 s,
-  the worst 274 s), and a `held` line proves the site, not the statement. When the guard's total
-  reaches the same threshold it now also logs `compositions_in_scope guard split: project_map N ms,
-  session_ids N ms (K ids), resolve_scope N ms`, so the fix moves the statement the numbers name.
 
 ### Changed
 
@@ -50,6 +45,23 @@ All notable changes to AgentlensPro are documented here.
 
 ### Fixed
 
+- **The composition routes and the `check_cache_expiry` tool no longer rebuild the session
+  summary under the state lock** (TRDD-UTFVMVT8): the lock attribution above named the scoped
+  compositions guard as the top holder on the live server — 82 holds on one pid, 16 of them ≥ 10 s,
+  the worst 274 s, with the log sweeper queued 273 s behind it — and a per-statement split then
+  measured 100 % of each hold in the inline summary rebuild the project-map resolver ran on a cache
+  miss (12.6 s and 30.1 s per call at 27.7k sessions), with the other two statements at 0 ms. The
+  three routes now read the summary through the off-lock path every other server route already
+  uses (warm hit, else the freshest stale value, cold boot builds once) and take the lock only for
+  the body refs, the scope resolution and the TTL context; the `check_cache_expiry` handler also
+  clones its cards off the lock. The trade is stated, not hidden: the old path was always current
+  at the price of that hold; the new one serves the snapshot the last completed rebuild started
+  from, so its data age is up to about two rebuild durations — and a rebuild on the machine this
+  was measured on (27.7k log sessions, 145k spans) takes about 6 s at its quietest, not
+  milliseconds. A session younger than that answers `project: "unknown"` on a single-session
+  composition (served, not cached — the next call resolves it) and is silently omitted from a
+  project-scoped composition query until the next rebuild lands. Eighteen MCP tool handlers keep
+  the old shape (TRDD-QE114936).
 - **The hook spool never drained while the server stayed up** (TRDD-L6V1UUW0): alcore drained
   `<dataDir>/hook-spool` once at boot and never again, so a hook event spooled after boot (a 1 s
   delivery timeout during a stall is enough) sat there until the next restart — measured: 28 files

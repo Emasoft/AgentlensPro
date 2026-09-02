@@ -530,24 +530,38 @@ async fn composition_for(state: &Arc<Mutex<CoreState>>, session_id: &str, now: f
     if let Some(c) = cached {
         return Ok(c);
     }
-    let (refs, project) = {
-        let mut st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
-        let refs = crate::context_composition_index::resolve_refs(&st.bodies, session_id);
-        // The project HINT is load-bearing, not decoration: it fills every composition's `project`
-        // and is what a `scope` string is matched against. Omitting it (as this route did until
-        // P4x.2c) makes every composition read `project: "unknown"` and every project-scoped query
-        // match nothing — while still answering 200.
-        let project = st.composition_project_map(now).get(session_id).cloned();
-        (refs, project)
+    // The project HINT is load-bearing, not decoration: it fills every composition's `project`
+    // and is what a `scope` string is matched against. Omitting it (as this route did until
+    // P4x.2c) makes every composition read `project: "unknown"` and every project-scoped query
+    // match nothing — while still answering 200.
+    //
+    // Read the summary OFF the lock (TRDD-UTFVMVT8): resolving it under the guard rebuilt the whole
+    // summary inline on a cache miss, and this guard held the state lock for seconds doing it.
+    let (_, summary) = summary_now(state, now)?;
+    let project = crate::composition_project_map(&summary).remove(session_id);
+    let refs = {
+        let st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
+        crate::context_composition_index::resolve_refs(&st.bodies, session_id)
     };
     let sid = session_id.to_owned();
+    let project_known = project.is_some();
     let built = tokio::task::spawn_blocking(move || {
         crate::context_composition_index::build_session_composition(&sid, &refs, project.as_deref(), now)
     })
     .await
     .map_err(|e| format!("composition build join failed: {e}"))?;
-    let mut st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
-    st.composition.put(session_id, built.clone());
+    // The served summary can be one rebuild behind (that is what keeps the read off the lock,
+    // TRDD-UTFVMVT8), so a session younger than one rebuild is ABSENT from it and its project is
+    // None. The composition cache is keyed on session id alone (LRU 64, no data_version), so
+    // caching that build would pin `project: "unknown"` for the session until eviction — the
+    // P4x.2c failure where a project-scoped query matches nothing while answering 200. Serve it,
+    // do not cache it; the next call resolves against a newer summary.
+    // ponytail: a session whose card NEVER appears re-parses its bodies on every call — key the
+    // cache on data_version if that ever shows up in the timings.
+    if project_known {
+        let mut st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
+        st.composition.put(session_id, built.clone());
+    }
     Ok(built)
 }
 
@@ -556,35 +570,23 @@ async fn composition_for(state: &Arc<Mutex<CoreState>>, session_id: &str, now: f
 /// bounds the work — fanning them out would just make the same bounded work concurrent while
 /// multiplying peak memory.
 pub(crate) async fn compositions_in_scope(state: &Arc<Mutex<CoreState>>, scope: Option<&str>, now: f64) -> Result<(Vec<Value>, Value), String> {
+    // The project map comes from the summary read OFF the lock (TRDD-UTFVMVT8). This guard was
+    // the top state-lock holder on the live server — 82 `held` lines on one pid, 16 of them ≥ 10 s,
+    // the worst 274 s — and a per-statement split measured 100 % of it in the inline summary
+    // rebuild the old `CoreState::composition_project_map` ran under the lock (12.6 s and 30.1 s),
+    // with the id collect and `resolve_scope` at 0 ms. Only those two run under the guard now.
+    let (_, summary) = summary_now(state, now)?;
+    let projects = crate::composition_project_map(&summary);
     let (ids, coverage) = {
-        let mut st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
-        // TRDD-UTFVMVT8: this guard is the top state-lock holder on the live server (82 `held`
-        // lines on one pid, 16 of them ≥ 10 s, worst 274 s) and the `held` line names only the
-        // SITE. Three statements run under it; which one dominates is what these splits log, so
-        // the fix moves the statement the numbers name, not the one a source read guessed.
-        let t0 = std::time::Instant::now();
-        let projects = st.composition_project_map(now);
-        let t_map = t0.elapsed();
+        let st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
         let ids: Vec<String> = st.bodies.session_ids().iter().map(|s| (*s).to_owned()).collect();
-        let t_ids = t0.elapsed() - t_map;
         let refs: Vec<&str> = ids.iter().map(String::as_str).collect();
-        let resolved = crate::context_composition_index::resolve_scope(
+        crate::context_composition_index::resolve_scope(
             &refs,
             scope,
             &|id| projects.get(id).cloned(),
             crate::context_composition_index::DEFAULT_SCOPE_CAP,
-        );
-        let total = t0.elapsed();
-        if total >= std::time::Duration::from_millis(crate::lock_trace_threshold_ms()) {
-            eprintln!(
-                "alcore: compositions_in_scope guard split: project_map {} ms, session_ids {} ms ({} ids), resolve_scope {} ms",
-                t_map.as_millis(),
-                t_ids.as_millis(),
-                ids.len(),
-                (total - t_map - t_ids).as_millis()
-            );
-        }
-        resolved
+        )
     };
     let mut comps = Vec::with_capacity(ids.len());
     for id in ids {
@@ -3214,13 +3216,16 @@ async fn handle(
                         // "without a resolver the previous reparse-per-candidate behavior is
                         // preserved unchanged" — rather than a different answer.
                         let now = crate::now_ms();
-                        let (sessions, ttl) = {
+                        // Summary read OFF the lock, and the per-card clone too (TRDD-UTFVMVT8):
+                        // this guard rebuilt the summary inline on a miss and then deep-cloned
+                        // every card while holding the state lock — 10.2 s measured live. Only
+                        // the TTL context still needs the guard.
+                        let (_, summary) = summary_now(&state, now as f64)?;
+                        let sessions: Vec<Value> = summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
+                        drop(summary);
+                        let ttl = {
                             let mut st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
-                            let summary = st.build_session_summary(now as f64);
-                            let sessions: Vec<Value> = summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
-                            drop(summary);
-                            let ttl = st.burn.ttl_context(now as f64);
-                            (sessions, ttl)
+                            st.burn.ttl_context(now as f64)
                         };
                         let (a, st2) = (args.clone(), state.clone());
                         // TRDD-CXPLAT01: the bounded last-request resolver (standalone/server.ts:1536).

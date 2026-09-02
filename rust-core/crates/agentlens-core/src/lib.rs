@@ -460,29 +460,6 @@ impl CoreState {
         burn::monitor::compute_burn_status(&events, sessions, &self.burn.config, now_ms, Some(&ttl))
     }
 
-    /// `compositionProjectResolver` (server.ts:1462) — sessionId → `projectPath ?? workspace ??
-    /// 'unknown'`, built from the live summary.
-    ///
-    /// Not optional decoration: it is what fills the `project` field of every composition and what
-    /// a `scope` string is matched against in `resolve_scope`. Without it every composition reads
-    /// `project: "unknown"` and a project-scoped query matches NOTHING while still answering 200 —
-    /// the row-36 route omitted it until P4x.2c and had exactly that divergence from the TS.
-    pub fn composition_project_map(&mut self, now_ms: f64) -> std::collections::HashMap<String, String> {
-        let summary = self.build_session_summary(now_ms);
-        let mut map = std::collections::HashMap::new();
-        for s in summary.get("sessions").and_then(Value::as_array).unwrap_or(&Vec::new()) {
-            let Some(id) = s.get("sessionId").and_then(Value::as_str) else { continue };
-            // `projectPath ?? workspace ?? 'unknown'` — NULLISH, so an empty string is kept.
-            let project = s
-                .get("projectPath")
-                .and_then(Value::as_str)
-                .or_else(|| s.get("workspace").and_then(Value::as_str))
-                .unwrap_or("unknown");
-            map.insert(id.to_owned(), project.to_owned());
-        }
-        map
-    }
-
     /// `getSessionStatus` (server.ts:1573) — the same gatherBurn stream as `live_burn_status`,
     /// answered for ONE resolved session instead of the whole machine. Split out rather than
     /// folded into `live_burn_status` because the two return different shapes from the same
@@ -960,13 +937,42 @@ pub async fn serve_otlp(
 // records its call site in a global slot, and anyone that has to WAIT past the threshold prints
 // that recorded site, not a guess.
 use std::panic::Location;
+
+/// `compositionProjectResolver` (server.ts:1462) — sessionId → `projectPath ?? workspace ??
+/// 'unknown'`, over a summary the caller already holds.
+///
+/// Not optional decoration: it is what fills the `project` field of every composition and what
+/// a `scope` string is matched against in `resolve_scope`. Without it every composition reads
+/// `project: "unknown"` and a project-scoped query matches NOTHING while still answering 200 —
+/// the row-36 route omitted it until P4x.2c and had exactly that divergence from the TS.
+///
+/// A pure function over the summary, NOT a `CoreState` method, on purpose (TRDD-UTFVMVT8): the
+/// method form called `build_session_summary` under the state lock, and on a cache miss that is
+/// the whole O(window) rebuild while every ingest and read path queues — measured on the live
+/// server at 12.6 s and 30.1 s per call with the other two statements under that guard at 0 ms.
+/// Callers get the summary from `ui::summary_now` (off-lock; warm, stale, or the one cold-boot
+/// build) and take the lock only for what actually needs it.
+pub fn composition_project_map(summary: &Value) -> std::collections::HashMap<String, String> {
+    let mut map = std::collections::HashMap::new();
+    for s in summary.get("sessions").and_then(Value::as_array).unwrap_or(&Vec::new()) {
+        let Some(id) = s.get("sessionId").and_then(Value::as_str) else { continue };
+        // `projectPath ?? workspace ?? 'unknown'` — NULLISH, so an empty string is kept.
+        let project = s
+            .get("projectPath")
+            .and_then(Value::as_str)
+            .or_else(|| s.get("workspace").and_then(Value::as_str))
+            .unwrap_or("unknown");
+        map.insert(id.to_owned(), project.to_owned());
+    }
+    map
+}
 use std::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
 use std::sync::{LockResult, MutexGuard, PoisonError};
 
 static HOLDER_SITE: AtomicPtr<Location<'static>> = AtomicPtr::new(std::ptr::null_mut());
 static HOLDER_SINCE_NS: AtomicU64 = AtomicU64::new(0);
 
-pub(crate) fn lock_trace_threshold_ms() -> u64 {
+fn lock_trace_threshold_ms() -> u64 {
     static THRESHOLD: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
     *THRESHOLD.get_or_init(|| {
         std::env::var("AGENTLENS_LOCK_TRACE_MS")
