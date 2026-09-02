@@ -558,15 +558,33 @@ async fn composition_for(state: &Arc<Mutex<CoreState>>, session_id: &str, now: f
 pub(crate) async fn compositions_in_scope(state: &Arc<Mutex<CoreState>>, scope: Option<&str>, now: f64) -> Result<(Vec<Value>, Value), String> {
     let (ids, coverage) = {
         let mut st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
+        // TRDD-UTFVMVT8: this guard is the top state-lock holder on the live server (82 `held`
+        // lines on one pid, 16 of them ≥ 10 s, worst 274 s) and the `held` line names only the
+        // SITE. Three statements run under it; which one dominates is what these splits log, so
+        // the fix moves the statement the numbers name, not the one a source read guessed.
+        let t0 = std::time::Instant::now();
         let projects = st.composition_project_map(now);
+        let t_map = t0.elapsed();
         let ids: Vec<String> = st.bodies.session_ids().iter().map(|s| (*s).to_owned()).collect();
+        let t_ids = t0.elapsed() - t_map;
         let refs: Vec<&str> = ids.iter().map(String::as_str).collect();
-        crate::context_composition_index::resolve_scope(
+        let resolved = crate::context_composition_index::resolve_scope(
             &refs,
             scope,
             &|id| projects.get(id).cloned(),
             crate::context_composition_index::DEFAULT_SCOPE_CAP,
-        )
+        );
+        let total = t0.elapsed();
+        if total >= std::time::Duration::from_millis(crate::lock_trace_threshold_ms()) {
+            eprintln!(
+                "alcore: compositions_in_scope guard split: project_map {} ms, session_ids {} ms ({} ids), resolve_scope {} ms",
+                t_map.as_millis(),
+                t_ids.as_millis(),
+                ids.len(),
+                (total - t_map - t_ids).as_millis()
+            );
+        }
+        resolved
     };
     let mut comps = Vec::with_capacity(ids.len());
     for id in ids {

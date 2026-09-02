@@ -27,6 +27,11 @@ All notable changes to AgentlensPro are documented here.
   queued)`; a guard held that long logs `state lock held N ms by file:line` on release. Profiler captures of a stalled
   server showed handlers parked on the lock with no holder in any stack — the holder had already
   returned by the time the sampler walked it — so the lock now attributes itself.
+- **alcore times the three statements under the scoped-compositions guard** (TRDD-UTFVMVT8): that
+  guard was the top holder the attribution above named (82 holds on one pid, 16 of them ≥ 10 s,
+  the worst 274 s), and a `held` line proves the site, not the statement. When the guard's total
+  reaches the same threshold it now also logs `compositions_in_scope guard split: project_map N ms,
+  session_ids N ms (K ids), resolve_scope N ms`, so the fix moves the statement the numbers name.
 
 ### Changed
 

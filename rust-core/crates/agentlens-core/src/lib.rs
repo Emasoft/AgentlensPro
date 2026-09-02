@@ -966,7 +966,7 @@ use std::sync::{LockResult, MutexGuard, PoisonError};
 static HOLDER_SITE: AtomicPtr<Location<'static>> = AtomicPtr::new(std::ptr::null_mut());
 static HOLDER_SINCE_NS: AtomicU64 = AtomicU64::new(0);
 
-fn lock_trace_threshold_ms() -> u64 {
+pub(crate) fn lock_trace_threshold_ms() -> u64 {
     static THRESHOLD: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
     *THRESHOLD.get_or_init(|| {
         std::env::var("AGENTLENS_LOCK_TRACE_MS")
