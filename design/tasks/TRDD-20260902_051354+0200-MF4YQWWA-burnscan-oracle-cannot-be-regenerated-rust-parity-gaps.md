@@ -12,7 +12,7 @@ parent-trdd: DMWOBWFH
 min-approval-requirement: none
 priority: high
 blocked-by: []
-implementation-commits: []
+implementation-commits: [532baacb]
 ---
 
 # The burnscan TS oracle can no longer be regenerated — Rust investigate_burn is behind it on captureGaps and on the sonnet-5 scheduled price
