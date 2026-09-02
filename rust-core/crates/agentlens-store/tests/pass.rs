@@ -159,6 +159,47 @@ fn ts_only_mismatch_on_a_reemitted_file_reclaims_not_parks_and_leaves_the_row_al
 }
 
 #[test]
+fn legacy_stranded_name_drains_through_the_gate_and_the_parked_set_reaches_zero() {
+    // TRDD-6SPXOV0P box 3: a name parked BEFORE the reclaim fix (persisted in `.pass-state.json`,
+    // always also a skip name — 307/307 overlapped on the machine that surfaced this) must not
+    // stay parked forever once the reason it was parked for is benign. No repair verb, no
+    // server restart: the next ordinary pass drains it.
+    let (bodies, store_dir) = fixture("legacy-stranded");
+    let raw = body("legacy");
+    write_body(&bodies, "legacy.request.json", &raw, 60_000);
+    let mut store = agentlens_store::open_store(&store_dir, "1GB", 4).expect("open");
+    let opts = PassOptions { bodies_dir: bodies.clone(), ..Default::default() };
+    let (mut skip, mut stranded, mut fsynced) = (HashSet::new(), HashSet::new(), HashSet::new());
+
+    // Pass 1 establishes the durable row (and the skip name), exactly as the old parks did.
+    let r1 = ingest_pass(&mut store, &opts, &mut skip, &mut stranded, &mut fsynced);
+    assert_eq!(r1.deleted, 1, "first pass: {:?}", r1.failed);
+    let original_ts = row_ts_ms(&store, "legacy.request.json");
+
+    // The pre-fix world: the file was re-emitted at a fresh mtime and the old pass PARKED it.
+    let p = bodies.join("legacy.request.json");
+    fs::write(&p, &raw).expect("re-emit write");
+    let future = std::time::SystemTime::now() + std::time::Duration::from_secs(24 * 3600);
+    fs::OpenOptions::new().write(true).open(&p).expect("open")
+        .set_times(fs::FileTimes::new().set_modified(future)).expect("set future mtime");
+    stranded.insert("legacy.request.json".to_owned());
+    assert!(skip.contains("legacy.request.json"), "a parked name is always a skip name too");
+
+    // Pass 2: the park is forgotten, the gate reclaims, the row keeps its true capture time.
+    let r2 = ingest_pass(&mut store, &opts, &mut skip, &mut stranded, &mut fsynced);
+    assert!(!p.exists(), "the legacy-parked file must be reclaimed: {:?}", r2.failed);
+    assert!(stranded.is_empty(), "the parked set must reach 0 — this is the whole card");
+    assert_eq!(r2.reclaimed_reemitted, 1, "reclaimed as a re-emit, not failed: {:?}", r2.failed);
+    assert_eq!(r2.stranded_relocated, 0, "no relocate target ⇒ the gate, not a move");
+    assert_eq!(row_ts_ms(&store, "legacy.request.json"), original_ts);
+
+    // And the drained state is what a pass persists: nothing to re-park on the next run.
+    let r3 = ingest_pass(&mut store, &opts, &mut skip, &mut stranded, &mut fsynced);
+    assert_eq!(r3.ingested + r3.deleted + r3.reclaimed_reemitted, 0);
+    assert!(stranded.is_empty());
+}
+
+#[test]
 fn pass_lock_is_exclusive_and_dies_with_its_holder() {
     // One pass per store, machine-wide: a second acquire on the SAME store must refuse while the
     // first is held (BSD flock is per-open-file, so two opens conflict even in one process), and

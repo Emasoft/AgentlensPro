@@ -11,10 +11,14 @@
 //! A crash loses at most the un-flushed batch; sources are still there. It is also THROTTLED
 //! (512MB/pass default): the archiver this replaced burned 694 MB/min of device writes on boot.
 //!
-//! Stranded parking (the livelock fix): a durable-named file failing ONLY on capture-ts can
-//! never be repaired by re-ingest (dedup never updates ts) — park it (zero I/O next pass),
-//! optionally RELOCATE it off the volatile spool (verify-before-unlink, mtime preserved — the
-//! mtime IS the capture record), with a 3-strike per-pass breaker on relocation failures.
+//! Stranded parking is LEGACY (TRDD-6SPXOV0P option A). It was the livelock fix: a durable-named
+//! file failing ONLY on capture-ts could never be repaired by re-ingest (dedup never updates
+//! ts), so it was parked (zero I/O next pass). That failure is now recognised at the gate as a
+//! benign re-emit and RECLAIMED, so nothing parks any more; a stranded name still persisted in
+//! `.pass-state.json` from before is routed back through the gate and forgotten (see the loop),
+//! unless the operator asked to RELOCATE parked files off a volatile spool
+//! (`relocate_stranded_to`: verify-before-unlink, mtime preserved — the mtime IS the capture
+//! record — with a 3-strike per-pass breaker on relocation failures), which still wins.
 
 use std::collections::HashSet;
 use std::fs;
@@ -457,8 +461,18 @@ pub fn ingest_pass(
                         }
                     }
                 }
+                continue;
             }
-            continue;
+            // TRDD-6SPXOV0P: a persisted stranded name is a LEGACY park. The only thing a durable
+            // body was ever parked for — `stored ts != capture time` — is reclaimed at the gate
+            // below now, so the park has no reason left: route the file to the gate as the durable
+            // body it is (every stranded name was a skip name first; on this machine 307/307
+            // overlapped) and forget the park. A clean or ts-only verify reclaims it; a byte
+            // mismatch drops the skip name so the next pass re-ingests — the same convergence every
+            // other durable body gets. Keeping the old `continue` here is exactly what left 307
+            // files parked for a week AFTER the reclaim fix landed: the fix could never see them.
+            stranded_names.remove(&f.name);
+            skip_names.insert(f.name.clone());
         }
         if skip_names.contains(&f.name) {
             // Already durable: straight to the gate — the verify still re-reads and re-proves.
@@ -491,8 +505,9 @@ pub fn ingest_pass(
     res
 }
 
-/// TRDD-8TM7I49X: remove names from the persisted stranded set — the recovery path a park never
-/// had (for a durable target a parked name is `continue`d forever; the set only grows). MUST be
+/// TRDD-8TM7I49X: remove names from the persisted stranded set — the operator's recovery path
+/// (the pass itself now drains a stranded name through the gate on sight, TRDD-6SPXOV0P; this
+/// verb remains for a store whose pass is not running, and for `store repair-parked`). MUST be
 /// called with the pass lock held (the bin takes it): the state file is shared with every pass
 /// engine, and an unlocked read-modify-write can interleave with a pass's own load→save,
 /// silently resurrecting or dropping names in either set. Returns (requested, removed,
