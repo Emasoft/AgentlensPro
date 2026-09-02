@@ -32,6 +32,14 @@ a snapshot of the clock comparison, so `cold iff now >= expires_at OR warm !== t
 every observed row and reads cold in the one unobserved combination. 151 rows had no block
 (other projects' sessions) — the exit-2 case, live.
 
+**Adversarial-review finding, FIXED in the follow-up commit after `4c3480eb`:** the `warm` bit was
+read through a proxy — `authoritativeFromWals` collapsed it to `=== true`, so a row carrying a
+deadline but NO bit became `warm:false` and the verb printed `cold`/exit 1 where the contract says
+exit 2. Settled first-hand with a one-row fixture store (before: `cold`/1; after: exit 2, stdout
+empty). `warm` is now tri-state (`boolean | null`); a PASSED deadline still settles `cold` alone.
+Unreachable on every captured row so far (the 151 bit-less rows also lacked the deadline), which is
+exactly why the unit tests were green around it — 7th test added.
+
 **Deliberately NOT built:** a parquet/DuckDB fall-through (WAL-only by design, per the body) and a
 server-inference fall-through (unlike `cache-expired`) — an idle session is exit 2, never `cold`.
 

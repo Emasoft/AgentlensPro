@@ -85,6 +85,18 @@ suite('cache-state — warm/cold verb over the persisted prompt_cache block (TRD
     assert.ok(err[0].startsWith('cannot answer:'))
   })
 
+  test('exit 2, not cold: a row with a live deadline but NO warm bit cannot be answered (adversarial-review finding)', () => {
+    // The proxy trap: collapsing the bit to `=== true` turned "no bit" into "not warm" → `cold`.
+    const future = Date.now() + 60_000
+    assert.strictEqual(cacheStateOf({ expiresAtMs: future, warm: null }), null)
+    assert.strictEqual(cacheStateOf({ expiresAtMs: future - 120_000, warm: null }), 'cold', 'a PASSED deadline settles it alone')
+    writeWal([JSON.stringify({ session_id: SID, workspace_project_dir: '/proj/alpha', prompt_cache_ttl: '1h',
+      prompt_cache_expires_at: Math.floor(future / 1000), ts: Date.now() })])
+    assert.strictEqual(runCacheStateCli(['--project', '/proj/alpha']), EXIT.UNKNOWN)
+    assert.deepStrictEqual(out, [])
+    assert.ok(err[0].includes('no warm bit'))
+  })
+
   test('exit 64: an unknown flag is refused, never silently ignored', () => {
     writeWal([row({})])
     assert.throws(() => runCacheStateCli(['--sesion', SID]), UsageError)

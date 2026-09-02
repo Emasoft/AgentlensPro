@@ -84,7 +84,12 @@ export interface AuthoritativeVerdict {
   expiresAtMs: number
   ttl: string
   sampleTs: number
-  warm: boolean
+  /** The harness's own warm bit, TRI-STATE: `null` when the row carries a deadline but no bit. It
+   *  used to be collapsed to `=== true`, which turned "no bit" into "not warm" — and `cache-state`
+   *  then printed `cold` for a question it could not resolve (the adversarial review of
+   *  TRDD-DCWJY2JJ caught it; unreachable on every captured row so far, but the published contract
+   *  said never). `cache-expired` itself never branches on this — it reads `expired`. */
+  warm: boolean | null
   /** Every `prompt_cache_*` key of the row, VERBATIM as the store flattened it. `cache-state --json`
    *  prints these so a consumer pins its reader to the fields the harness actually sends; a field
    *  added upstream (e.g. `prompt_cache_probe`, seen NULL on 2026-09-02) rides through untouched. */
@@ -140,7 +145,7 @@ export function authoritativeFromWals(project: string | undefined, session: stri
           expiresAtMs: expSec * 1000,
           ttl: String(row.prompt_cache_ttl ?? '?'),
           sampleTs: ts,
-          warm: row.prompt_cache_warm === true,
+          warm: typeof row.prompt_cache_warm === 'boolean' ? row.prompt_cache_warm : null,
           promptCache: Object.fromEntries(Object.entries(row).filter(([k]) => k.startsWith('prompt_cache_'))),
         }
       }

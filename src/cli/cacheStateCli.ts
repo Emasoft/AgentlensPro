@@ -54,11 +54,15 @@ exit:
  *  distinct from cold — the distinction the whole verb exists for. */
 export const CACHE_STATE_EXIT = { WARM: 0, COLD: 1 } as const
 
-/** The one-word verdict. Exported so the unit test pins the formula itself, not just the CLI shell
- *  around it: `warm !== true` (not `!warm`) so an absent bit on a row that somehow carried a deadline
- *  still reads cold rather than warm. */
-export function cacheStateOf(row: Pick<AuthoritativeVerdict, 'expiresAtMs' | 'warm'>, nowMs = Date.now()): 'warm' | 'cold' {
-  return nowMs >= row.expiresAtMs || row.warm !== true ? 'cold' : 'warm'
+/** The one-word verdict, or `null` for "cannot answer". Exported so the unit test pins the formula
+ *  itself, not just the CLI shell around it. A PASSED deadline settles it alone (cold, whatever the
+ *  bit says); a live deadline needs the harness's bit — `true` warm, `false` cold, and a row that
+ *  carries the deadline but NO bit is `null`, never cold: the contract is that an unresolvable
+ *  question exits 2, and "cold" is a verdict a caller acts on. */
+export function cacheStateOf(row: Pick<AuthoritativeVerdict, 'expiresAtMs' | 'warm'>, nowMs = Date.now()): 'warm' | 'cold' | null {
+  if (nowMs >= row.expiresAtMs) return 'cold'
+  if (row.warm === null) return null
+  return row.warm ? 'warm' : 'cold'
 }
 
 const KNOWN = new Set(['--project', '--session', '--json', '--help', '-h'])
@@ -93,6 +97,15 @@ export function runCacheStateCli(argv: string[]): number {
   }
 
   const state = cacheStateOf(row)
+  if (state === null) {
+    // A deadline with no warm bit: the harness said WHEN the cache lapses but not whether it is
+    // warm now. Printing `cold` here would be the proxy read the contract forbids.
+    console.error(
+      `cannot answer: the newest sample for session ${row.sessionId.slice(0, 8)} carries a prompt_cache ` +
+      `deadline (${row.ttl}, expires in ${Math.round((row.expiresAtMs - Date.now()) / 60000)}min) but no warm bit`,
+    )
+    return EXIT.UNKNOWN
+  }
   if (asJson) {
     // The stored fields VERBATIM (flattened `prompt_cache_*` keys exactly as captured), so the
     // consumer pins its reader to what the harness actually sends, not to changelog prose.
