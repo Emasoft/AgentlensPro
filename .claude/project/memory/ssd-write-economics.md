@@ -60,7 +60,7 @@ Judge this work as a DISK-SPACE win — the atom above is why it is not a longev
 
 ## See also
 
-- [[agentlenspro-ops-lessons]] — the drain/reclaim behaviour this page's budget depends on, including
-  the measured reclaim rate against arrival rate.
+- [[agentlenspro-ops-lessons-store-durability-and-memory]] — the drain/reclaim behaviour this page's
+  budget depends on, including the measured reclaim rate against arrival rate.
 
 ## Notes and lessons learned

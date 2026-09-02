@@ -46,7 +46,7 @@ inside the scan), not with another fix aimed at the same call site.
 
 ## See also
 
-- [[agentlenspro-ops-lessons]]
+- [[agentlenspro-ops-lessons-store-durability-and-memory]]
 
 ## Notes and lessons learned
 
