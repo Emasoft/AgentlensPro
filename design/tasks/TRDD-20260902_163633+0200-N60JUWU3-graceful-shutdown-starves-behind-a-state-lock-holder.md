@@ -3,7 +3,7 @@ trdd-id: N60JUWU3
 title: The graceful shutdown needs the state lock and has no timeout, so a long holder starves the stop into a SIGKILL
 column: todo
 created: 2026-09-02T16:36:33+0200
-updated: 2026-09-02T16:36:33+0200
+updated: 2026-09-02T16:38:34+0200
 current-owner: main-session
 task-type: bugfix
 priority: high
@@ -25,14 +25,29 @@ pass that took 190 s. A 2 s `/usr/bin/sample` showed every tokio worker parked i
 account timeline, and record a clean stop — so it queues behind whichever request path currently
 holds the state lock, with no timeout, and `std::sync::Mutex` gives it no priority over the next
 request that wants the same lock. With the pre-fix composition routes holding it for 60–110 s per
-call and being called continuously, the stop never got its turn. It was SIGKILLed at 16:34:22,
-losing at most the last 5 s of spans (the chores tick is the durability boundary per the comment
-at that site), the statusline buffer, the account-timeline window, and the "clean stop" lifecycle
-marker (the next boot classifies the gap as a crash).
+call and being called continuously, the stop never got its turn. It was SIGKILLed at 16:34:22.
 
-The holder thread's frames were NOT captured — the `sample` grep for `agentlens_core::` symbols
-matched nothing, so "starved behind ui.rs:560" is inferred from the shutdown code path, the
-all-workers-waiting sample, and the 145 s wait line naming 560, not from a stack of the holder.
+**The holder is proven by stack.** The same 2 s `sample` (Rust symbols are mangled — grep
+`14agentlens_core`, not `agentlens_core::`) shows one tokio worker (Thread_264829945) in
+`CoreState::composition_project_map → build_session_summary → summary_over` for all 1,413 samples:
+the pre-fix inline rebuild TRDD-UTFVMVT8 removed. The `pid_lock::release` at the end of the stop
+path never ran either; the next start's stale-lock takeover handled it (`canonical=true`).
+
+**What the kill cost, MEASURED, not the "5 s" the code comment promises.** The 5 s flush tick
+(`chores.rs:561`) needs the SAME lock — it waited 8,842 ms behind this holder on pid 26060 and was
+queued again in pid 6978's final tail — so "durability boundary = the last tick" really means "the
+last tick that WON the lock". Spans stored per minute (by span `startTime`, from the store file):
+~2.0–3.5k for 16:20–16:29, then **1 / 9 / 3 / 475 / 7 / 5 / 1 / 7** for 16:30–16:37, recovering to
+2,947 at 16:39. About nine minutes of OTEL-only detail is gone, and most of it was lost BEFORE the
+kill, at the source: the OTLP handler itself waited 145 s behind the holder, so exporters timed
+out and dropped. Claude-session spans backfill from the JSONL transcript (log wins on collision);
+the `cost_usd`-class OTEL-only fields in that interval do not. The near-empty 16:35–16:37 on the
+NEW pid is the exporters' back-off after those timeouts, not a second defect (unverified — the
+buckets are by span start time, so late arrivals would have filled them).
+
+**Scope of this card therefore includes the flush tick and the sweeper**, not only the SIGTERM
+path: all three lose durability to the same lock, and a stop that cannot flush is only the most
+visible of the three.
 
 ## Why it matters
 

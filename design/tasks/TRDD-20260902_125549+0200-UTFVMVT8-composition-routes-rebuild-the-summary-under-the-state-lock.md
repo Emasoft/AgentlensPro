@@ -3,7 +3,7 @@ trdd-id: UTFVMVT8
 title: The composition routes hold the state lock for seconds at ui.rs:560 and the dominant statement is not yet isolated
 column: dev
 created: 2026-09-02T12:55:49+0200
-updated: 2026-09-02T16:22:42+0200
+updated: 2026-09-02T16:38:34+0200
 current-owner: main-session
 task-type: bugfix
 priority: high
@@ -117,6 +117,23 @@ related: [2R36W8Q1, 768NEX6E, L6V1UUW0, QE114936]
   project-scoped answer until the next rebuild — FULLY silently: the `coverage` text still reads
   "Scanned all N live-registry session(s) in scope". Neither has a guard beyond the rebuild cadence.
   "Fresh-but-blocking became stale-but-free" is the accurate sentence.
+- **DEPLOYED 16:34:30 as pid 18695 (commit 428a1dec; build 0 / clippy 0 / lib tests 37/37; fresh
+  inode, `codesign -v`; symbol check: the removed split string is absent from the shipped binary).**
+  The stop of the pre-fix pid 6978 STARVED: SIGTERM at 16:28:37, still alive and HTTP-dead six
+  minutes later, every tokio worker parked on the state mutex, and a 2 s `sample` finally caught
+  the HOLDER BY STACK — one worker spent all 1,413 samples in `composition_project_map →
+  build_session_summary → summary_over`, the exact call this card names. SIGKILLed 16:34:22; the
+  shutdown defect is TRDD-N60JUWU3. Spans stored per minute (by span `startTime`) fell from ~2.5k
+  to 1/9/3/475/7/5/1/7 for 16:30–16:37 and recovered at 16:39 — about nine minutes of OTEL-only
+  detail lost, mostly to the wedge (exporters timing out behind 145 s handler waits), not to the
+  kill; Claude-session spans backfill from the transcript. LINE NUMBERS on pid 18695's binary:
+  `composition_for` guards at `ui.rs:527` (cache get) / `543` (resolve_refs) / `562` (cache put),
+  `compositions_in_scope` at `581`, the `check_cache_expiry` TTL guard at `3227`. Key the post-fix
+  read on these, or on the function names.
+- **Box 4 steady-state probes PASS on pid 18695 (16:37):** `GET /api/composition-index/<this
+  session>` → 200 in 0.5 s with `project: /Users/…/AgentlensPro`; `query_context_blocks --project
+  <this repo>` → "Scanned all 1 live-registry session(s) in scope", 564 blocks. The young-session
+  probe is still owed.
 - **What this card does NOT fix, on purpose:** inside the same `check_cache_expiry` handler the
   per-candidate `timeline_of` closure takes its own guard and calls `resolve_session_card` →
   `st.build_session_summary` (`ui.rs:599` at this commit) — a rebuild under the lock per candidate
