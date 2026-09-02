@@ -35,6 +35,10 @@ agentlenspro cache-expired [-q]                  # has THIS project's main conve
                                                  # cache TTL? one word, `true`/`false` (-q: exit
                                                  # 0=expired 1=fresh 2=cannot answer). Never prints
                                                  # `false` for a question it could not resolve
+agentlenspro cache-state [--json]                # is THIS project's cache warm or cold RIGHT NOW?
+                                                 # one word, `warm`/`cold`; exit 0=warm 1=cold
+                                                 # 2=cannot answer (stdout EMPTY, never `cold`).
+                                                 # Same harness-reported row as cache-expired
 ```
 
 Both `--install-*` settings flags go through `safeConfigEdit`; they never clobber other tools'

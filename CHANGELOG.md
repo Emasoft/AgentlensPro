@@ -6,6 +6,20 @@ All notable changes to AgentlensPro are documented here.
 
 ## [2.33.2] - 2026-09-01
 
+### Added
+
+- **`agentlenspro cache-state [--project DIR] [--session ID] [--json]`** — is this project's main
+  conversation's prompt cache warm or cold *right now*? Prints exactly `warm` or `cold` and exits
+  0/1; a question it cannot resolve (no recent status-line sample carrying the `prompt_cache` block)
+  exits 2 with stdout EMPTY, never `cold`. Issue #19 asked for a one-word verb over the persisted
+  block; the block was already stored and `cache-expired --json` already resolved the row, so this
+  is that row projected to one word through the same WAL reader. The verdict is anchored on the
+  harness-reported `expires_at` and the `warm` bit together — the bit alone goes stale on an idle
+  session (the status line refreshes only on activity) — and the formula was checked against
+  26,690 live rows before shipping. `--json` echoes the stored `prompt_cache_*` fields verbatim
+  plus `state`, `session_id` and `captured_at`; `cache-expired --json` now carries the same
+  `promptCache` object additively.
+
 ### Changed
 
 - **The TypeScript server is gone.** `standalone/server.ts` (4,177 lines) and its private modules

@@ -930,6 +930,8 @@ agentlenspro get_cache_break_gap_report              # TTL-expiry vs real prefix
 agentlenspro get_cache_break_causes                  # what breaks the cache machine-wide
 agentlenspro cache-expired                           # → the WORD 'true' or 'false' (this project)
 agentlenspro cache-expired -q                        # → nothing; exit 0 = EXPIRED, 1 = fresh
+agentlenspro cache-state                             # → the WORD 'warm' or 'cold'; exit 0 = warm, 1 = cold, 2 = cannot answer
+agentlenspro cache-state --json                      # → the stored prompt_cache_* fields verbatim + state/session_id/captured_at
 agentlenspro last-compact                            # → how long ago this project compacted ("2h 14m")
 agentlenspro last-compact --seconds                  # → a bare integer for arithmetic
 agentlenspro check_cache_expiry                      # the full verdict object (this project's main)
@@ -1189,6 +1191,7 @@ genuinely excluded everything. Flags: `--since H|ISO` (default 24h) · `--until`
 | Per-turn break diagnosis of one session | `get_cache_break_timeline --sessionId <id>` |
 | TTL expiry vs real prefix change? | `get_cache_break_gap_report` |
 | **Has a session's cache EXPIRED (idle > its TTL)?** | **`agentlenspro cache-expired`** for a plain `true`/`false` a shell can branch on (`-q` → exit 0 = expired, 1 = fresh, 2 = cannot answer; it never prints `false` for a question it could not resolve). `check_cache_expiry` for the full object — idle since the last LLM request vs the per-session TTL (1h subscription-main, 5min subagent/usage-credits). Per session: `verdict` fresh\|expired\|unknown, `idleHuman`, `ttlMin`/`ttlSource`/`ttlBasis`, `lastRequestAt`. Default = **this project's** newest main session; `--all` = every session; `--sessionId <id>` = one; `--project ''` = machine-wide; `--thresholdMinutes N` overrides the TTL (e.g. `60` = "> 1h idle"). `unknown` = no LLM request recorded |
+| **Is a session's cache WARM or COLD right now?** | **`agentlenspro cache-state`** — one word, `warm`/`cold`, and the exit code IS the answer (0 = warm, 1 = cold, 2 = cannot answer with stdout EMPTY — it never prints `cold` for a question it could not resolve). Cold iff the harness-reported `expires_at` has passed OR the harness itself said not-warm; the raw `warm` bit alone goes stale on an idle session. `--json` echoes the stored `prompt_cache_*` fields verbatim. |
 | Biggest single cache writes + contents | `trace_expensive_writes` |
 | What did the last janitor heartbeat cost? | `get_heartbeat_cost` |
 | Which config (model/spawn/effort) costs most? | `compare_configs --groupBy <dim>` |
