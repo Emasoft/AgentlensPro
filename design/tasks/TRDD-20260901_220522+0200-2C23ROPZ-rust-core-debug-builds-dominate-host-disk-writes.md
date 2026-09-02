@@ -1,9 +1,9 @@
 ---
 trdd-id: 2C23ROPZ
 title: rust-core debug builds are the host's dominant disk writer — bound the dev profile
-column: testing
+column: ai_review
 created: 2026-09-01T22:05:22+0200
-updated: 2026-09-02T07:20:41+0200
+updated: 2026-09-02T07:34:07+0200
 current-owner: agentlenspro-15
 task-type: infra
 external-refs: [https://github.com/Emasoft/AgentlensPro/issues/18]
@@ -44,11 +44,14 @@ alone: `unpacked` is already the macOS default for a debug-info profile.
 - Backtrace claim settled on this toolchain: `rustc -C debuginfo=line-tables-only` panic
   backtrace frame reads `at ./lt.rs:1:46`.
 
-**Gate on the new profile (running detached at 07:20, `gate-rust.sh`):** `cargo test -p
-agentlens-core --lib` then `cargo clippy --workspace --all-targets -- -D warnings`. The full
-workspace `cargo test` is left to CI (it does not complete locally under this load — 1B98LCVR).
+**Gate on the new profile — GREEN, read from the exit codes:** `cargo test -p agentlens-core
+--lib` rc 0 (34 passed, 0 failed — the DuckDB-linked test binary built with `debug=false` deps
+links and runs) and `cargo clippy --workspace --all-targets -- -D warnings` rc 0, 0 warnings,
+12m37s at load ~20 (a check build of every target: proves the profile breaks no compilation, not
+that every dep links — the lib-test run is what proved that). The full workspace `cargo test` is
+left to CI's `rust` job on the push (it does not complete locally under this load — 1B98LCVR).
 
-**NEXT ACTION:** read the gate file; rc 0/0 → `ai_review`, note the results here. Ships with 2.33.2.
+**NEXT ACTION:** none — in `ai_review`. Ships with 2.33.2; #18 auto-closes on the push.
 
 GitHub issue #18 (2026-08-25) measured `rust-core/target/` debug artifacts as the host's dominant
 disk writer: +30.8 GB in 3 days. `rust-core/Cargo.toml` today carries only a `[profile.release]`
