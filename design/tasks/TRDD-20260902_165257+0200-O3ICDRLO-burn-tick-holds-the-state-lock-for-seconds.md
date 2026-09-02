@@ -3,13 +3,14 @@ trdd-id: O3ICDRLO
 title: The 4-second burn tick holds the state lock for up to 2.3 s and is now the top holder
 column: dev
 created: 2026-09-02T16:52:57+0200
-updated: 2026-09-02T16:58:13+0200
+updated: 2026-09-02T17:08:28+0200
 current-owner: main-session
 task-type: bugfix
 priority: high
 min-approval-requirement: none
 created-by: UTFVMVT8
 related: [UTFVMVT8, 2R36W8Q1, HFV4AIT7, N60JUWU3]
+implementation-commits: [ec96d8af]
 ---
 
 # The 4-second burn tick holds the state lock for up to 2.3 s and is now the top holder
@@ -48,9 +49,15 @@ hypothesis, a per-statement split is the answer.
   spawn under the lock when an alert fires — rare, but it is in there).
 - Also by TOTAL lock time in the same 15 min: this guard 34,555 ms (44 holds), the sweeper's
   `save_cards` 26,143 ms (52), the boot scan 6,724 ms (1), the rebuilder's `ui.rs:212` 4,322 ms (8).
-- **NEXT ACTION:** deploy (fresh-inode rm+cp, `codesign -v`, `agentlenspro server restart` — if the
-  stop starves again, that is TRDD-N60JUWU3 repeating), read 15 min of `server.log` from the new
-  pid's boot marker for `burn tick guard split:` lines, then move the named statement off the lock.
+- **DEPLOYED 17:08:28 as pid 71093 (commit ec96d8af; build 0 / clippy 0 / lib tests 37/37; fresh
+  inode, `codesign -v`; split symbol present in the shipped binary). The stop of pid 18695 was
+  GRACEFUL this time — the post-UTFVMVT8 binary's shutdown was not starved.** Boot marker:
+  `server.log` line 499710. `mac_notify` is `spawn()` + a detached waiter thread, so it is not the
+  suspect for the `alerts_notify` group.
+- **NEXT ACTION:** read 15 min of `server.log` from line 499710:
+  `tail -n +499710 ~/.agentlens/server.log | grep -a 'burn tick guard split'` — read each split by
+  its OWN SUM (the five numbers add up to the hold), never by the adjacent `held` line — then move
+  the statement the numbers name off the lock.
 
 ## Fix shape
 
