@@ -36,9 +36,10 @@ All notable changes to AgentlensPro are documented here.
   own timestamp, so a window straddling a scheduled price change (claude-sonnet-5's introductory
   rate ended 2026-08-31) was mis-costed, and re-running the same window on a later day changed its
   dollar total. Each response is now priced at its own timestamp, on both the TS and Rust sides.
-  The same change fixes the >200K-input surcharge, which is a per-request step: pricing a model's
-  summed cache/output buckets applied it whenever the SUM crossed the threshold, even when no single
-  call did, so big-context sessions were over-estimated.
+  The same change fixes the >200K long-context surcharge for the models that carry one (gpt-5.4 and
+  gpt-5.5 today; current Claude models have none): it is a per-request step keyed on one call's
+  input + cache tokens, and pricing a model's summed buckets applied it whenever the SUM crossed the
+  threshold, even when no single call did.
 - alcore's `investigate_burn` coverage lacked the `captureGaps` report (bodies silent ≥30 min while
   hook events kept arriving) that the TypeScript investigator had shipped in 2.30.0; ported.
 - alcore's embedded rates table had fallen behind `pricing.ts` (no `claude-fable-5-1` row, so that
