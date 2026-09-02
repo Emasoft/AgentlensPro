@@ -3,7 +3,7 @@ trdd-id: N60JUWU3
 title: The graceful shutdown needs the state lock and has no timeout, so a long holder starves the stop into a SIGKILL
 column: todo
 created: 2026-09-02T16:36:33+0200
-updated: 2026-09-02T16:38:34+0200
+updated: 2026-09-02T16:46:41+0200
 current-owner: main-session
 task-type: bugfix
 priority: high
@@ -33,17 +33,27 @@ call and being called continuously, the stop never got its turn. It was SIGKILLe
 the pre-fix inline rebuild TRDD-UTFVMVT8 removed. The `pid_lock::release` at the end of the stop
 path never ran either; the next start's stale-lock takeover handled it (`canonical=true`).
 
-**What the kill cost, MEASURED, not the "5 s" the code comment promises.** The 5 s flush tick
+**What the kill cost: UNMEASURED, and unknowable from the code alone.** The 5 s flush tick
 (`chores.rs:561`) needs the SAME lock — it waited 8,842 ms behind this holder on pid 26060 and was
 queued again in pid 6978's final tail — so "durability boundary = the last tick" really means "the
-last tick that WON the lock". Spans stored per minute (by span `startTime`, from the store file):
-~2.0–3.5k for 16:20–16:29, then **1 / 9 / 3 / 475 / 7 / 5 / 1 / 7** for 16:30–16:37, recovering to
-2,947 at 16:39. About nine minutes of OTEL-only detail is gone, and most of it was lost BEFORE the
-kill, at the source: the OTLP handler itself waited 145 s behind the holder, so exporters timed
-out and dropped. Claude-session spans backfill from the JSONL transcript (log wins on collision);
-the `cost_usd`-class OTEL-only fields in that interval do not. The near-empty 16:35–16:37 on the
-NEW pid is the exporters' back-off after those timeouts, not a second defect (unverified — the
-buckets are by span start time, so late arrivals would have filled them).
+last tick that WON the lock"; how many spans sat unflushed at 16:34:22 was never read
+(`pendingAppends` was not sampled before the kill). CORRECTION of the first version of this
+paragraph (commit d723650b): it reported a "16:30–16:37 hole" that was a hand-computed epoch range
+one hour EARLY — the dip it described is 15:30–15:37, coincident with the account-cap episode the
+user reported at 15:48, a separate unexplained dip (card it only if it recurs).
+
+**What the WEDGE cost, measured on the store (spans per minute by span `startTime`, epochs derived
+from local-time strings, buckets re-read 20 min apart and unchanged):** normal 0.8–2.6k/min through
+16:11, then **5 / 12 / 3 / 4 / 6 / 10 / 20 / 29 / 38 / 8 / 39 / 32 / 28 / 115 / 145 / 63 / 47 / 1**
+for 16:12–16:29, nothing 16:30–16:33, 2 at 16:34, 28–53/min for 16:36–16:42, and back to 1,886 at
+16:43. Thirty minutes of OTEL-only detail across the active sessions is gone at the SOURCE: the
+holds at the composition guard reached 82 / 85 / 67 s from about 16:10 (TRDD-UTFVMVT8), the OTLP
+handler waited 145 s behind them, the exporters timed out and dropped their batches
+(`droppedOnFailure` on the server is 0 — nothing was refused, it never arrived), and they resumed
+only at 16:43, nine minutes after the new binary was serving OTLP again in 0.5 ms — an exporter
+back-off, inferred from the timing, not read from the exporters. Claude-session spans backfill from
+the JSONL transcript (log wins on collision); the `cost_usd`-class OTEL-only fields in that
+interval do not. This is the actual size of the incident this card and UTFVMVT8 describe.
 
 **Scope of this card therefore includes the flush tick and the sweeper**, not only the SIGTERM
 path: all three lose durability to the same lock, and a stop that cannot flush is only the most

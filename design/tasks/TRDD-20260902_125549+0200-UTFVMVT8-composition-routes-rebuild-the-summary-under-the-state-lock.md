@@ -3,7 +3,7 @@ trdd-id: UTFVMVT8
 title: The composition routes hold the state lock for seconds at ui.rs:560 and the dominant statement is not yet isolated
 column: dev
 created: 2026-09-02T12:55:49+0200
-updated: 2026-09-02T16:38:34+0200
+updated: 2026-09-02T16:46:41+0200
 current-owner: main-session
 task-type: bugfix
 priority: high
@@ -123,10 +123,12 @@ related: [2R36W8Q1, 768NEX6E, L6V1UUW0, QE114936]
   minutes later, every tokio worker parked on the state mutex, and a 2 s `sample` finally caught
   the HOLDER BY STACK — one worker spent all 1,413 samples in `composition_project_map →
   build_session_summary → summary_over`, the exact call this card names. SIGKILLed 16:34:22; the
-  shutdown defect is TRDD-N60JUWU3. Spans stored per minute (by span `startTime`) fell from ~2.5k
-  to 1/9/3/475/7/5/1/7 for 16:30–16:37 and recovered at 16:39 — about nine minutes of OTEL-only
-  detail lost, mostly to the wedge (exporters timing out behind 145 s handler waits), not to the
-  kill; Claude-session spans backfill from the transcript. LINE NUMBERS on pid 18695's binary:
+  shutdown defect is TRDD-N60JUWU3. CORRECTED (the first version here had the window an hour
+  early): spans stored per minute fell from 0.8–2.6k to single digits at **16:12** — when this
+  guard's holds reached 82/85/67 s and the OTLP handler waited 145 s — stayed near zero through
+  16:42, and recovered only at **16:43**, nine minutes after the new binary was serving OTLP in
+  0.5 ms. Thirty minutes of OTEL-only detail lost at the source (exporter timeouts and back-off,
+  inferred from timing); the numbers are on N60JUWU3. LINE NUMBERS on pid 18695's binary:
   `composition_for` guards at `ui.rs:527` (cache get) / `543` (resolve_refs) / `562` (cache put),
   `compositions_in_scope` at `581`, the `check_cache_expiry` TTL guard at `3227`. Key the post-fix
   read on these, or on the function names.
