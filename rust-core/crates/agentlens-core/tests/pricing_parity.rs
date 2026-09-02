@@ -32,8 +32,18 @@ fn calc_token_cost_usd_reproduces_the_ts_oracle_exactly() {
 #[test]
 fn the_embedded_table_is_the_generated_artifact() {
     // A regenerated export must equal the committed file — the Rust side never carries its own
-    // rates (the build's check-pricing-export enforces the same from the TS side).
-    assert_eq!(agentlens_core::pricing::pricing_last_updated(), "2026-08-26");
+    // rates (the build's check-pricing-export enforces the same from the TS side). The expected
+    // date is READ from pricing.ts, the one table, not written here: a literal copy rotted on the
+    // 2026-09-01 bump (525bbcf8 moved PRICING_LAST_UPDATED and regenerated pricing.json; this
+    // test kept asserting the previous date and failed for a day).
+    let ts = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../src/shared/pricing.ts");
+    let src = std::fs::read_to_string(&ts).expect("src/shared/pricing.ts is readable from the workspace");
+    let expected = src
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("export const PRICING_LAST_UPDATED = '"))
+        .and_then(|rest| rest.split('\'').next())
+        .expect("pricing.ts declares PRICING_LAST_UPDATED = '<date>'");
+    assert_eq!(agentlens_core::pricing::pricing_last_updated(), expected);
     assert!(agentlens_core::pricing::lookup_rates("claude-opus-5", None, 0.0).is_some());
     assert!(agentlens_core::pricing::lookup_rates("no-such-model", None, 0.0).is_none());
 }
