@@ -1,10 +1,10 @@
 ---
 trdd-id: MF4YQWWA
 title: The burnscan TS oracle can no longer be regenerated — Rust investigate_burn is behind it on captureGaps and on the sonnet-5 scheduled price
-column: todo
+column: dev
 created: 2026-09-02T05:13:54+0200
-updated: 2026-09-02T05:13:54+0200
-current-owner: unassigned
+updated: 2026-09-02T05:17:03+0200
+current-owner: claude-session-2026-09-02
 task-type: bugfix
 scope: project
 project-id: agentlenspro
