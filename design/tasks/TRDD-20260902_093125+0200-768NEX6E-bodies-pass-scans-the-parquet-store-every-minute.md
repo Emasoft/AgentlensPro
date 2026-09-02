@@ -3,7 +3,7 @@ trdd-id: 768NEX6E
 title: What does the 60 s bodies pass cost the machine, and why is alcore 7 GB resident
 column: dev
 created: 2026-09-02T09:31:25+0200
-updated: 2026-09-02T14:25:52+0200
+updated: 2026-09-02T21:22:46+0200
 current-owner: main-session
 task-type: spike
 priority: high
@@ -65,9 +65,30 @@ related: [2R36W8Q1, YU8QPU89, ZW4APOPI]
   loading the 1,843 bodies parts — which step 2 does not touch: the index makes the VERIFY read
   O(pass) but the DEDUP-SET rebuild is still O(corpus) every minute. Step 3's "only safe with an
   inventory check" is therefore the next lever → carded as TRDD-2TQHNMEC.
-- **NEXT ACTION:** box 3 — decompose alcore's resident set (8,081 MB at the 12:52 boot per `server
-  status`) with `vmmap`/`footprint` on the live pid, attributing the span window, log-session cards,
-  summary cache and the three DuckDB pools; then decide the `memory_limit` defaults from numbers.
+- **Box 3 MEASURED 2026-09-02 21:18 (pid 54270, build 4b878fd7, up 1h05m): RSS 11.6 GB;
+  `footprint`/`vmmap` phys_footprint 9347 MB (peak 11 GB); vmmap resident 11.6 G / dirty 9.0 G.**
+  vmmap's "IOAccelerator" category is **8.8 GB resident / 6.5 GB dirty, 94 regions (74×128 MB + one
+  8.0 GB arena) — this IS the Rust heap, not GPU memory.** agentlens-core sets `mimalloc` 0.1.52
+  (`libmimalloc-sys` 0.1.49) as the global allocator, and mimalloc tags every mmap it makes with VM
+  tag 100 (`c_src/mimalloc/v2/src/options.c:147` default `os_tag=100`;
+  `prim/unix/prim.c:309` `VM_MAKE_TAG(os_tag)`); macOS names VM tag 100 `VM_MEMORY_IOACCELERATOR`
+  (`mach/vm_statistics.h:642`). The system-malloc zones (MALLOC_SMALL ≈1.9 GB resident/311 KB live/
+  2.3 GB reclaimable; MALLOC_LARGE 562 MB) are the separate C/C++ side — DuckDB's own allocations,
+  which don't route through Rust's global allocator. Metal/MPS/IOKit frameworks are transitively
+  mapped but `alcore` links none of them (`otool -L` shows 6 libs) — irrelevant to RSS. Conclusion:
+  Rust-heap ≈8.8 GB resident (6.5 GB dirty) vs DuckDB/C heap ≈2.5 GB — the card's hypothesis (span
+  window, log-session cards, summary cache dominate) is SUPPORTED, not refuted; DuckDB pools are the
+  smaller share. Full report: `reports/trdd-768nex6e/20260902_211803+0200-box3-vmmap-footprint.md`
+  (see its own `## CORRECTION` section — the report's original "IOAccelerator = GPU, not
+  application heap" reading is superseded by the mimalloc VM-tag fact above).
+- **SUPERSEDED — do NOT carry forward:** any reading of vmmap's "IOAccelerator" region as GPU
+  memory, a macOS VM-accounting artifact, or "not attributable to the DuckDB pools/span
+  window/caches the card asked about" (the report's original box-3 conclusion, before the mimalloc
+  VM-tag fact was found).
+- **NEXT ACTION:** attribute the 8.8 GB Rust heap by structure — restart alcore with
+  `MIMALLOC_SHOW_STATS=1` (mimalloc prints per-size-class stats at exit) or add a
+  `/api/debug/heap` endpoint that reports span-window / log-session-card / summary-cache byte
+  estimates, then compare the sum to the mimalloc total to see what's unaccounted for.
 
 ## Acceptance
 
