@@ -39,6 +39,11 @@ All notable changes to AgentlensPro are documented here.
 
 ### Fixed
 
+- **`/api/server-stats` now reports the RAM-disk spool** (`bodies.spool`, TRDD-ZW4APOPI): dir,
+  mounted, files, staged bytes, free/total bytes from `statvfs`, the back-pressure floor and the
+  chore's active/spills state — it was a hardcoded `null`, so a spool at 100% (capture silently
+  losing bodies) needed a `df` on the box to notice. `null` only when no spool is configured; a
+  configured-but-unmounted spool is `mounted: false`.
 - **Bodies parked before 2.30.0's re-emit fix stayed parked forever** (TRDD-6SPXOV0P): a name already
   in `.pass-state.json`'s `strandedNames` was skipped before the verify gate on every pass, so the
   reclaim that makes a ts-only mismatch benign could never see it — 307 files (144 MB) sat
