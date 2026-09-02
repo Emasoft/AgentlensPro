@@ -3,7 +3,7 @@ trdd-id: 1B98LCVR
 title: Retire the TypeScript backend from the package so Rust is the only server that ships
 column: testing
 created: 2026-08-28T22:05:59+0200
-updated: 2026-09-02T01:17:53+0200
+updated: 2026-09-02T02:00:20+0200
 current-owner: claude-agentlenspro
 task-type: refactor
 project-id: agentlenspro
@@ -40,9 +40,21 @@ in full6). Everything that RAN locally and that CI runs passed in both runs — 
 count-level, and not CI-equivalent: 8 tests were pending locally. Five of them are the browser-smoke
 suite, CI's own required check, so it was run here EXACTLY as `ci.yml` runs it
 (`AGENTLENSPRO_BROWSER_TESTS=1 npx mocha --no-config --ui tdd out/test/test/browser/dashboardSmoke.test.js`):
-**5 passing, EXIT=0, 14 s** (`/tmp/smoke1.txt`, 01:17) against the alcore-only tree. The remaining
-three (real RAM disk, >512 MiB JSONL, an ANIME2SVG-style real body) are machine/flag-gated and
-not CI checks. The mid-suite `.git/index.lock` (0 bytes, 01:06:14) was NOT the suite's: the only
+**5 passing, EXIT=0, 14 s** (`/tmp/smoke1.txt`, 01:17) against the alcore-only tree — and again
+with CI's LITERAL command, without the `-r src/test/setup.js` the first run added (setup.js pins
+`AGENTLENS_TIMELINE_HOT_AGE_HOURS`, which CI does not): 5 passing, EXIT=0 (`/tmp/smoke2.txt`).
+`out/test` was current for both: `git diff --stat 9e133fc9..HEAD -- src standalone rust-core media`
+is empty. The remaining three (real RAM disk, >512 MiB JSONL, an ANIME2SVG-style real body) are
+machine/flag-gated and not CI checks.
+**The `rust` required check, run locally at CI's exact scope (2026-09-02 01:18–02:00):**
+`cargo clippy --workspace --all-targets -- -D warnings` → **EXIT=0** on the post-port tree (the
+prior session's `/tmp/sb-c.txt` was a single-crate `cargo check`, not this). `cargo test
+--workspace` → **PARTIAL**: killed by the local 40-min cap (`EXIT=124`) at 66 of ~107 test targets,
+**354 passed / 0 failed / 0 ignored** (`/tmp/rust-test.txt`); compile took 5 min, the rest was
+test RUN time at ~30 s/target under load ~10 (a foreign `cargo build` plus the 7.4 GB live alcore),
+whereas CI's whole rust job took 8m20s on `f8b7560e`. The 41 unrun targets have no local verdict;
+CI on the pushed tree is the rust gate — the same statement as for the node job, now with clippy
+and 66 targets read rather than assumed. The mid-suite `.git/index.lock` (0 bytes, 01:06:14) was NOT the suite's: the only
 git in `src/` is `filesystem.ts`'s read-only `git rev-parse` and no test spawns git; its author is
 unread (a heartbeat fired 01:05:30 and the memory-split agent was live) — remove such a lock only
 after a ps snapshot shows no git process. What differed: a foreign `cargo build` (vectrace, another project) was
