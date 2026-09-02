@@ -3,7 +3,7 @@ trdd-id: 2R36W8Q1
 title: The summary cache is keyed on a version that moves faster than a rebuild completes, so the UI path livelocks under fleet ingest
 column: testing
 created: 2026-08-29T10:44:23+0200
-updated: 2026-09-02T13:10:29+0200
+updated: 2026-09-02T14:25:52+0200
 current-owner: main-session
 task-type: bugfix
 scope: project
@@ -147,20 +147,30 @@ implementation-commits: []
   running — no soak):** 33 `state lock held` lines and 84 `state lock waited` lines in 15 min. Ranked by
   hold: **ui.rs:560 held 74,709 ms, 34,793, 27,155, 17,944, 15,620, 14,919, 13,719, 13,362, 6,853,
   5,512, 5,336, 5,253 ms** — every one of the top twelve is the SAME site, `compositions_in_scope`'s
-  guard, which calls `composition_project_map` → `build_session_summary` (the full O(window) summary)
-  under the lock. `ui.rs:534` (`composition_for`, same call) held 3,936 ms. Waiters: the log sweeper
-  waited **72,944 ms** (`log_reader.rs:1052`), the OTLP ingest handler 8,842 ms (`lib.rs:918`), the
-  span flush tick 8,842 ms (`chores.rs:561`), the summary rebuild 8,768 ms (`ui.rs:212`). This is the
-  shared holder the STATE predicted: not the summary rebuild task, but a REQUEST route rebuilding the
-  summary inline under the lock. The one `sample`-invisible fact the instrumentation existed to find.
+  guard. **Site proven, dominant call NOT yet isolated** (review-fork finding, settled by reading
+  14:25): the guard runs `composition_project_map` → `build_session_summary` — which short-circuits on
+  `summary_cache` when the version matches, and live it does 99.2 % of the time (hits 76,902 / misses
+  608 on pid 53886 at 14:24) — then `session_ids()` and `resolve_scope` over every id; which of the
+  three holds is TRDD-UTFVMVT8 box 1's per-statement timing to answer. `ui.rs:534`
+  (`composition_for`, the same shape minus the scope resolution) held 3,936 ms. Waiters: the log
+  sweeper waited **72,944 ms** (`log_reader.rs:1052`), the OTLP ingest handler 8,842 ms
+  (`lib.rs:918`), the span flush tick 8,842 ms (`chores.rs:561`), the summary rebuild 8,768 ms
+  (`ui.rs:212`). This is the shared holder the STATE predicted: not the summary rebuild task, but a
+  REQUEST route holding the lock across composition scope resolution — an inline summary rebuild on a
+  cache miss being one of its three candidates. The `sample`-invisible fact the instrumentation
+  existed to find. Since then the same site has held **273,893 ms** (pid 53886, read 14:24).
 - **Defect in the first build, fixed the same hour:** every `waited` line read "holder unknown" — the
   holder slot was read AFTER `lock()` returned, by which time the holder had released and cleared it.
   Fixed by snapshotting the slot before blocking (deployed 13:09 as pid 53886); the `held` lines were
   unaffected and are the ranking above.
-- **NEXT ACTION:** TRDD-UTFVMVT8 (the top holder, carded) — take `build_session_summary` out from
-  under the lock in the composition routes. Then re-read `server.log` for 15 min; this card's own
-  acceptance is the disappearance of ≥1 s holds at ui.rs:534/560 and of the multi-second waits on the
-  ingest and sweeper sites.
+- **Cosmetic, note when `lock_timed` is next touched:** `HOLDER_SITE` and `HOLDER_SINCE_NS` are two
+  unsynchronised stores, so a waiter snapshotting between the two writes pairs the NEW site with the
+  OLD since — right site, wrong "holding for N ms when we queued". Explains a "0 ms" on a long hold;
+  never a wrong site. Put this in the code comment on the slot pair, not in a fix.
+- **NEXT ACTION:** TRDD-UTFVMVT8 (the top holder, carded) — FIRST isolate the dominant statement inside
+  the ui.rs:560 guard with per-statement timing (its box 1), THEN move that statement off the lock.
+  Re-read `server.log` for 15 min after; this card's own acceptance is the disappearance of ≥1 s holds
+  at ui.rs:534/560 and of the multi-second waits on the ingest and sweeper sites.
 
 ## Symptom
 

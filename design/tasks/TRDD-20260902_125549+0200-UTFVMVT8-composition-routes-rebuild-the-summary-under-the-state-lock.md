@@ -1,9 +1,9 @@
 ---
 trdd-id: UTFVMVT8
-title: The composition routes rebuild the whole session summary under the state lock, holding it for 4-7 s
+title: The composition routes hold the state lock for seconds at ui.rs:560 and the dominant statement is not yet isolated
 column: backburner
 created: 2026-09-02T12:55:49+0200
-updated: 2026-09-02T12:55:49+0200
+updated: 2026-09-02T14:25:52+0200
 current-owner: main-session
 task-type: bugfix
 priority: high
@@ -12,7 +12,7 @@ parent-trdd: 2R36W8Q1
 related: [2R36W8Q1, 768NEX6E, L6V1UUW0]
 ---
 
-# The composition routes rebuild the whole session summary under the state lock, holding it for 4-7 s
+# The composition routes hold the state lock for seconds at ui.rs:560 and the dominant statement is not yet isolated
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-02
 
@@ -23,24 +23,43 @@ related: [2R36W8Q1, 768NEX6E, L6V1UUW0]
   for 72,944 ms (`log_reader.rs:1052`), the OTLP ingest handler 8,842 ms (`lib.rs:918`), the span
   flush tick 8,842 ms (`chores.rs:561`), the summary rebuild task 8,768 ms (`ui.rs:212`), the
   data-version poller 8,871 ms (`ui.rs:3787`). Three bodies passes in the same window ran 55–141 s
-  instead of 14–23 s (TRDD-768NEX6E) — CPU contention from the same rebuilds. A read path and a
-  write path stalling together on ONE holder is exactly the shape 2R36W8Q1's STATE predicted.
-- **The holder:** `ui.rs:560` is `compositions_in_scope`'s lock and `ui.rs:534` is
-  `composition_for`'s; both call `st.composition_project_map(now)` while holding the guard, and
-  `composition_project_map` (`lib.rs:470`) begins with `self.build_session_summary(now_ms)` — the
-  full O(window) summary build — to derive a `sessionId → projectPath ?? workspace ?? "unknown"`
-  map. The summary is built, discarded, and rebuilt on the next request.
-- **NEXT ACTION:** derive the project map WITHOUT the full summary build — the two fields it reads
-  (`projectPath`, `workspace`) exist on the session cards / the summary cache already
-  (`summary_cache.current(version)` in `rebuild_once`, `ui.rs:190`); read the cached summary when
-  its version matches, else build it OFF the lock (`summary_snapshot` + `CoreState::summary_from`,
-  the same split `rebuild_once` uses) and take the lock only to read the map. Then re-read
-  `server.log` for `state lock held … ui.rs:5xx` lines: the acceptance is their disappearance.
+  instead of 14–23 s (TRDD-768NEX6E) — CPU contention from the same holds is INFERRED from
+  co-occurrence, not measured. A read path and a write path stalling together on ONE holder is
+  exactly the shape 2R36W8Q1's STATE predicted.
+- **Still holding on the redeployed pid 53886 (read 14:24, 1h14m uptime):** the whole `server.log`
+  now carries 24 holds ≥ 10 s at `ui.rs:560`, the worst **273,893 ms**, then 74,709, 62,228, 55,851,
+  54,119, 34,793 ms; behind the 274 s hold a reader at `ui.rs:265` waited 273,887 ms and the log
+  sweeper 29,555 ms. The tail of the log is a run of back-to-back 2.3–2.5 s holds at the same site.
+- **The holder SITE is proven; the dominant CALL is NOT (review-fork finding, settled by reading
+  2026-09-02 14:25).** `ui.rs:560` is `compositions_in_scope`'s lock and `ui.rs:534` is
+  `composition_for`'s. A `held` line names the guard, not what ran under it, and the 560 guard runs
+  THREE statements: (1) `st.composition_project_map(now)` (`lib.rs:470`), whose first line is
+  `self.build_session_summary(now_ms)` — which SHORT-CIRCUITS through `summary_cache.get(data_version,
+  …)` (`derived_cache.rs:26`) whenever the version matches, and live it almost always does:
+  `/api/debug/log-scan-stats` at 14:24 read **summary hits 76,902 / misses 608** on pid 53886, so
+  the inline O(window) rebuild ran on at most 608 calls in 74 min; (2) `st.bodies.session_ids()`
+  collected into a `Vec<String>`; (3) `resolve_scope` over EVERY id with a per-id project closure
+  (27,689 log sessions on this machine). Which of the three carries the steady 2.3 s holds and the
+  274 s outlier is unmeasured: a cache miss inside (1) is the natural suspect for the outliers and
+  (2)+(3) for the steady holds, but that is inference — the earlier "built, discarded, and rebuilt
+  on the next request" sentence overstated (1) and is retracted.
+- **NEXT ACTION:** per-statement timing INSIDE the `ui.rs:560` guard — three `Instant` splits (map /
+  ids / resolve_scope) printed alongside the `held` line whenever the hold is ≥ the trace threshold —
+  deployed and read from 15 min of `server.log`. Then fix the statement the numbers name: if (1) on a
+  miss → derive the project map WITHOUT the full summary build (the two fields it reads, `projectPath`
+  and `workspace`, are on the cached summary already — `summary_cache.current(version)` as in
+  `rebuild_once`, `ui.rs:190`; build OFF the lock via `summary_snapshot` + `CoreState::summary_from`
+  when stale); if (2)/(3) → collect the ids and resolve the scope off the lock, or index them.
+  Acceptance either way is the disappearance of `state lock held … ui.rs:5xx` lines.
 
 ## Acceptance
 
+- [ ] Per-statement timing inside `compositions_in_scope`'s guard (`ui.rs:560`) — map / ids /
+      resolve_scope — is logged on every traced hold, deployed, and 15 min of `server.log` names the
+      dominant statement from numbers, not from source reading.
 - [ ] `composition_project_map` (or its callers) no longer calls `build_session_summary` under the
-      state lock; the map comes from the summary cache or an off-lock build.
+      state lock; the map comes from the summary cache or an off-lock build — IF box 1 names (1);
+      otherwise the named statement is what moves off the lock.
 - [ ] After deploy, 15 min of `server.log` under normal load shows no `state lock held ≥ 1000 ms
       by ui.rs:<composition_for | compositions_in_scope>` line.
 - [ ] `/api/context-compositions` (scoped and single-session) still fills `project` — the P4x.2c

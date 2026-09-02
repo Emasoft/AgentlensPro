@@ -3,7 +3,7 @@ trdd-id: 768NEX6E
 title: What does the 60 s bodies pass cost the machine, and why is alcore 7 GB resident
 column: dev
 created: 2026-09-02T09:31:25+0200
-updated: 2026-09-02T13:10:29+0200
+updated: 2026-09-02T14:25:52+0200
 current-owner: main-session
 task-type: spike
 priority: high
@@ -59,7 +59,8 @@ related: [2R36W8Q1, YU8QPU89, ZW4APOPI]
   `bodies pass:` lines: 2–17 files ingested per pass, wall time **14.0, 13.8, 13.8, 14.1, 15.4, 16.2, 17.1,
   19.7, 23.0 s** typical and **55.6, 69.0, 141.4 s** for three passes that overlapped the state-lock
   holds TRDD-2R36W8Q1's instrumentation named in the same window (ui.rs:560 held 74.7 s / 34.8 s /
-  27.2 s — the CPU was contended, the pass does not take that lock). A 14 s floor for a 2-file pass is
+  27.2 s — CPU contention INFERRED from co-occurrence; the pass does not take that lock and no CPU
+  measurement was taken). A 14 s floor for a 2-file pass is
   the `open_store` rebuild — `SELECT DISTINCT sha, filename FROM read_parquet([6,798 blob parts])` plus
   loading the 1,843 bodies parts — which step 2 does not touch: the index makes the VERIFY read
   O(pass) but the DEDUP-SET rebuild is still O(corpus) every minute. Step 3's "only safe with an
