@@ -39,6 +39,12 @@ All notable changes to AgentlensPro are documented here.
 
 ### Fixed
 
+- **Bodies parked before 2.31's re-emit fix stayed parked forever** (TRDD-6SPXOV0P): a name already
+  in `.pass-state.json`'s `strandedNames` was skipped before the verify gate on every pass, so the
+  reclaim that makes a ts-only mismatch benign could never see it — 307 files (144 MB) sat
+  "PARKED" on the reference machine a week after the fix shipped, across restarts. The pass now
+  routes a legacy stranded name through the gate as the durable body it is (reclaimed, or
+  re-ingested on a byte mismatch) and drops the park; an operator `--relocate-to` still wins.
 - **alcore was shedding its own dashboard, hooks and MCP on machines with a large log corpus.**
   The admission controller's RSS wall was the Node server's absolute 5120 MB default; alcore's
   steady RSS is dominated by the parsed session corpus (~7 GB for 27k sessions), which the memory
