@@ -371,14 +371,26 @@ pub fn resource_sample(data_dir: &Path) -> Value {
 /// `bodies.spool` (TRDD-ZW4APOPI box 3): the RAM-disk spool as an operator would read it with
 /// `df` + `ls`, so "the spool is 100% full and capture is silently losing bodies" is visible in
 /// `/api/server-stats` instead of needing a shell on the box. `null` when no spool is configured
-/// (the legacy single-dir install). `mounted: false` is its own state, not an error: the config
-/// still names the dir but a reboot dropped the RAM disk — the `spool ensure` LaunchAgent's
-/// case. Free/total are `null` when statvfs cannot answer, never a fabricated 0 (a 0 here would
-/// read as "full"). Back-pressure figures are the chore's own controller state, passed in.
+/// (the legacy single-dir install).
+///
+/// TWO booleans, because "the path exists" is NOT "the RAM disk is there" (adversarial review):
+/// the configured path sits INSIDE the mount (`/Volumes/AgentLensSpool/otel-bodies`), and after
+/// a reboot, an unclean eject, or a leaked twin mount (`/Volumes/AgentLensSpool 1` appears only
+/// when the primary path was already OCCUPIED at attach time) it can resolve to a plain
+/// directory on the boot volume — then a path check reports a healthy spool with the SSD's
+/// terabyte of free space while bodies land on the disk the spool exists to protect. The
+/// discriminator is the device id: `ownVolume` is `dev(dir) != dev(data_dir)`. `exists: false`
+/// is the `spool ensure` LaunchAgent's case. Free/total are `null` when statvfs cannot answer,
+/// never a fabricated 0 (a 0 here would read as "full"); they are `df`'s Size and Avail columns
+/// (`f_blocks`/`f_bavail` × `f_frsize`). Back-pressure figures are the chore's own controller
+/// state, passed in. `files` and `stagedBytes` use the same `*.request.json`/`*.response.json`
+/// filter (`live_bodies_liveness` / `staged_body_bytes`), so the two never disagree over a
+/// half-written temp file.
 pub fn spool_gauge(data_dir: &Path, backpressure_active: bool, backpressure_spills: u64) -> Value {
     let Some(dir) = crate::burn::guard::spool_dir_configured(data_dir) else { return Value::Null };
-    let mounted = std::fs::metadata(&dir).is_ok_and(|m| m.is_dir());
-    let (files, staged_bytes, free, total) = if mounted {
+    let exists = std::fs::metadata(&dir).is_ok_and(|m| m.is_dir());
+    let own_volume = exists && device_id(&dir).zip(device_id(data_dir)).is_some_and(|(a, b)| a != b);
+    let (files, staged_bytes, free, total) = if exists {
         let (files, _) = live_bodies_liveness(std::slice::from_ref(&dir));
         (files, crate::chores::staged_body_bytes(&dir), free_disk_bytes(&dir), total_disk_bytes(&dir))
     } else {
@@ -387,7 +399,8 @@ pub fn spool_gauge(data_dir: &Path, backpressure_active: bool, backpressure_spil
     let vars: std::collections::HashMap<String, String> = std::env::vars().collect();
     json!({
         "dir": dir.to_string_lossy(),
-        "mounted": mounted,
+        "exists": exists,
+        "ownVolume": own_volume,
         "files": files,
         "stagedBytes": staged_bytes,
         "freeBytes": free.map(|b| json!(b)).unwrap_or(Value::Null),
@@ -395,6 +408,22 @@ pub fn spool_gauge(data_dir: &Path, backpressure_active: bool, backpressure_spil
         "floorBytes": crate::spool_backpressure::spool_floor_bytes(&vars),
         "backpressure": { "active": backpressure_active, "spills": backpressure_spills },
     })
+}
+
+/// The device id a path lives on (`st_dev`); None when it cannot be stat'ed. Two paths on
+/// different ids are on different volumes — the only honest "is this a mount" a userland reader
+/// has without parsing `mount`.
+fn device_id(path: &Path) -> Option<u64> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        std::fs::metadata(path).ok().map(|m| m.dev())
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        None
+    }
 }
 
 /// statvfs(path): blocks × frsize — the volume's size, the denominator `df` prints; None when unknown.
@@ -547,8 +576,8 @@ pub fn server_stats(st: &CoreState, now_ms: i64) -> Value {
                 Some((files, bytes, on_disk)) => json!({ "files": files, "bytes": bytes, "onDisk": on_disk }),
                 None => Value::Null,
             },
-            // TRDD-ZW4APOPI box 3: null only when no spool is configured; a configured-but-
-            // unmounted spool is reported as such (see `spool_gauge`).
+            // TRDD-ZW4APOPI box 3: null only when no spool is configured; a configured path that
+            // is absent, or present but NOT its own volume, is reported as such (see `spool_gauge`).
             "spool": spool_gauge(data_dir, p.spool_backpressure_active, p.spool_backpressure_spills),
         },
         "hookEvents": { "files": hook_files, "bytes": hook_bytes, "receivedSinceBoot": p.hook_event_writes, "spooled": hook_spooled },
@@ -664,11 +693,12 @@ mod capture_block_tests {
     }
 
     /// TRDD-ZW4APOPI box 3: `bodies.spool` must distinguish "no spool configured" (null) from
-    /// "configured but not mounted" from a live spool with real file/byte/df figures — a stub
-    /// returning null always (what shipped) passed every same-shape check while the RAM disk sat
-    /// at 100%.
+    /// "configured but absent" from "present but a plain directory on the data volume" from a
+    /// live spool with real file/byte/df figures — a stub returning null always (what shipped)
+    /// passed every same-shape check while the RAM disk sat at 100%, and a path-exists check
+    /// would pass the leaked-twin-mount case with the boot volume's figures.
     #[test]
-    fn spool_gauge_null_unmounted_and_live_are_three_different_answers() {
+    fn spool_gauge_null_absent_same_volume_and_live_are_different_answers() {
         let data_dir = std::env::temp_dir().join(format!("alcore-spool-gauge-{}", std::process::id()));
         let spool = data_dir.join("spool");
         std::fs::create_dir_all(&data_dir).unwrap();
@@ -683,17 +713,22 @@ mod capture_block_tests {
         )
         .unwrap();
         let g = spool_gauge(&data_dir, true, 3);
-        assert_eq!(g["mounted"], false);
+        assert_eq!(g["exists"], false);
+        assert_eq!(g["ownVolume"], false);
         assert_eq!(g["files"], 0);
         assert!(g["freeBytes"].is_null() && g["totalBytes"].is_null(), "never a fabricated 0 for an absent volume");
         assert_eq!(g["backpressure"]["active"], true);
         assert_eq!(g["backpressure"]["spills"], 3);
 
-        // Mounted with one body: counted, sized, and the volume's df figures are real numbers.
+        // Present with one body — but a temp dir under the SAME device as the data dir, which is
+        // exactly the lying case: the path exists, the df figures are the data volume's, and
+        // `ownVolume` must say so. (A real RAM disk reads `ownVolume: true`; measured live on the
+        // reference machine: dev 16777285 vs 16777234.)
         std::fs::create_dir_all(&spool).unwrap();
         std::fs::write(spool.join("a.request.json"), b"12345").unwrap();
         let g = spool_gauge(&data_dir, false, 3);
-        assert_eq!(g["mounted"], true);
+        assert_eq!(g["exists"], true);
+        assert_eq!(g["ownVolume"], false, "a directory on the data volume is not a spool volume");
         assert_eq!(g["files"], 1);
         assert_eq!(g["stagedBytes"], 5);
         assert!(g["freeBytes"].as_u64().is_some() && g["totalBytes"].as_u64().is_some());
