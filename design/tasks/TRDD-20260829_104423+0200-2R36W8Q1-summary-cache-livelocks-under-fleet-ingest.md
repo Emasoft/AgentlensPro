@@ -3,7 +3,7 @@ trdd-id: 2R36W8Q1
 title: The summary cache is keyed on a version that moves faster than a rebuild completes, so the UI path livelocks under fleet ingest
 column: testing
 created: 2026-08-29T10:44:23+0200
-updated: 2026-09-02T14:28:44+0200
+updated: 2026-09-02T16:51:58+0200
 current-owner: main-session
 task-type: bugfix
 scope: project
@@ -170,10 +170,22 @@ implementation-commits: []
   unsynchronised stores, so a waiter snapshotting between the two writes pairs the NEW site with the
   OLD since — right site, wrong "holding for N ms when we queued". Explains a "0 ms" on a long hold;
   never a wrong site. Put this in the code comment on the slot pair, not in a fix.
-- **NEXT ACTION:** TRDD-UTFVMVT8 (the top holder, carded) — FIRST isolate the dominant statement inside
-  the ui.rs:560 guard with per-statement timing (its box 1), THEN move that statement off the lock.
-  Re-read `server.log` for 15 min after; this card's own acceptance is the disappearance of ≥1 s holds
-  at ui.rs:534/560 and of the multi-second waits on the ingest and sweeper sites.
+- **UTFVMVT8 LANDED AND MEASURED (2026-09-02 16:51):** the per-statement split proved the hold was
+  the inline summary rebuild under the composition guard (19 of 19 traced holds, 100 %; the holder
+  thread caught by stack as `composition_project_map → build_session_summary → summary_over`);
+  commit 428a1dec moved it off the lock via `summary_now`; deployed as pid 18695 at 16:34:30. The
+  15-min read after (16:36–16:51, sessions already running, no builds): **zero holds at ui.rs:534/560
+  or their successors**, worst hold on the server **2,263 ms** (was 273,893), and the OTLP ingest
+  handler's worst wait **2,361 ms** (was 145,456) — behind the 4 s burn tick's guard (`ui.rs:3698`,
+  44 holds ≤ 2.3 s in 15 min), which is now the top holder, then the sweeper's `save_cards`
+  (`log_reader.rs:1052`, 52 holds ≤ 1.6 s). This card's acceptance sentence — "disappearance of ≥ 1 s
+  holds at 534/560 and of the MULTI-SECOND waits on the ingest and sweeper sites" — is met for the
+  first half and met to within 2.4 s for the second: the remaining ingest waits are seconds, not
+  minutes, and belong to the burn tick's card. The user-visible incident behind all of it is
+  recorded on TRDD-N60JUWU3 (30 min of OTEL spans lost at the source while the handler was blocked).
+- **NEXT ACTION:** the burn tick's guard is the next holder (carded separately — see UTFVMVT8's
+  STATE for the numbers). This card moves to `ai_review` once UTFVMVT8's young-session probe passes;
+  the fleet-soak acceptance box stays open under the USER's no-soak constraint.
 
 ## Symptom
 

@@ -1,15 +1,16 @@
 ---
 trdd-id: UTFVMVT8
 title: The composition routes hold the state lock for seconds at ui.rs:560 and the dominant statement is not yet isolated
-column: dev
+column: testing
 created: 2026-09-02T12:55:49+0200
-updated: 2026-09-02T16:46:41+0200
+updated: 2026-09-02T16:51:58+0200
 current-owner: main-session
 task-type: bugfix
 priority: high
 min-approval-requirement: none
 parent-trdd: 2R36W8Q1
-related: [2R36W8Q1, 768NEX6E, L6V1UUW0, QE114936]
+related: [2R36W8Q1, 768NEX6E, L6V1UUW0, QE114936, N60JUWU3]
+implementation-commits: [4e19ed4b, 428a1dec]
 ---
 
 # The composition routes hold the state lock for seconds at ui.rs:560 and the dominant statement is not yet isolated
@@ -136,6 +137,22 @@ related: [2R36W8Q1, 768NEX6E, L6V1UUW0, QE114936]
   session>` → 200 in 0.5 s with `project: /Users/…/AgentlensPro`; `query_context_blocks --project
   <this repo>` → "Scanned all 1 live-registry session(s) in scope", 564 blocks. The young-session
   probe is still owed.
+- **POST-FIX 15-MIN READ, pid 18695, 16:36–16:51, no cargo/pnpm of mine in flight (other sessions'
+  load is the workload):** 120 `held` lines ≥ 250 ms, 20 of them ≥ 1 s, and **NONE at any
+  composition site (527/543/562/581) or at the `check_cache_expiry` guard (3227)**. The worst hold
+  anywhere is **2,263 ms** (was 273,893 ms before the fix — a 120× drop in the maximum). Holders
+  now, by site: the 4 s burn tick's guard `ui.rs:3698` (44 holds, max 2,263 ms — it detects the
+  rotation edge, polls the bodies watcher and computes burn status under the lock), the log
+  sweeper's `save_cards` `log_reader.rs:1052` (52, max 1,648) and `:775` (2, max 2,196), the boot
+  scan `log_reader.rs:966` (1, 6,724 ms at startup), the OTLP handler `lib.rs:895` (3, max 1,011).
+  Waits ≥ 1 s: the OTLP handler waited 2,361 / 1,612 / 1,582 ms behind the burn tick and 1,663 ms
+  behind the span flush tick (was 145,456 ms behind this card's guard). Boxes 2 and 3 pass; box 4's
+  steady-state half passes; the young-session half is still owed. The burn tick is the next holder
+  to card, not this card's scope.
+- **NEXT ACTION:** the young-session probe for box 4 — the next time a NEW Claude session starts
+  on this machine, within ~10 s call `GET /api/composition-index/<new id>` (expect `project:
+  "unknown"` or a resolved project), then again after ≥ 15 s and expect the real project; then run
+  `query_context_blocks --project <its repo>` and expect it in scope. Then `testing → ai_review`.
 - **What this card does NOT fix, on purpose:** inside the same `check_cache_expiry` handler the
   per-candidate `timeline_of` closure takes its own guard and calls `resolve_session_card` →
   `st.build_session_summary` (`ui.rs:599` at this commit) — a rebuild under the lock per candidate
@@ -154,15 +171,17 @@ related: [2R36W8Q1, 768NEX6E, L6V1UUW0, QE114936]
       resolve_scope — is logged on every traced hold, deployed, and names the dominant statement
       from numbers, not from source reading. DONE 16:07 on pid 6978: 100 % `project_map`
       (12,584 and 30,126 ms), 0 ms for the other two, 0–2 ids.
-- [ ] `composition_project_map` (or its callers) no longer calls `build_session_summary` under the
-      state lock; the map comes from the summary cache or an off-lock build. IN CODE 16:08
-      (`summary_now` before the guard, pure `composition_project_map(&summary)`); box closes on the
-      deploy read.
-- [ ] After deploy, 15 min of `server.log` under normal load shows no `state lock held ≥ 1000 ms`
+- [x] `composition_project_map` (or its callers) no longer calls `build_session_summary` under the
+      state lock; the map comes from the summary cache or an off-lock build. DONE — commit
+      428a1dec (`summary_now` before the guard, pure `composition_project_map(&summary)`), deployed
+      16:34:30 as pid 18695.
+- [x] After deploy, 15 min of `server.log` under normal load shows no `state lock held ≥ 1000 ms`
       line by `compositions_in_scope`, `composition_for`, or the `check_cache_expiry` handler's
-      OWN guard (`ui.rs:3200` on pid 53886, `ui.rs:3218` on pid 6978 — key on the function, the
-      number shifts per binary), the second holder of the same shape. The handler's per-candidate
-      `timeline_of` guard (site 599) is TRDD-QE114936's, not this box's.
+      OWN guard (`ui.rs:3200` on pid 53886, `ui.rs:3218` on pid 6978, `3227` on 18695 — key on the
+      function, the number shifts per binary), the second holder of the same shape. The handler's
+      per-candidate `timeline_of` guard (site 599) is TRDD-QE114936's, not this box's.
+      DONE — 16:36–16:51 on pid 18695: zero holds ≥ 250 ms at any of those sites (STATE has the
+      per-site table); the worst hold on the server fell from 273,893 ms to 2,263 ms.
 - [ ] `/api/context-compositions` (scoped and single-session) still fills `project` — the P4x.2c
       parity note on `composition_project_map` explains why a wrong map answers 200 with nothing.
       Probe BOTH a steady-state session AND a session started after the last rebuild: the second
