@@ -65,6 +65,10 @@ agent-lens-export-*.json
 # it was investigated and dismissed. The verdicts belong in the pages themselves as dated
 # lessons (see ATOM-DETECTOR-MATCHED-ITS-OWN-VOCABULARY); the scratch file does not.
 .claude/project/memory/*-proposed.md
+# The janitor memory chore's crash-safe transaction staging (a page mid-edit lives here between
+# write and finalize). It is empty between chores and must never ride into a commit: a staged
+# copy committed beside the live page would duplicate every atom id for cloners.
+.claude/project/memory/.maint-staging/
 /.trashcan/*
 !/.trashcan/.gitkeep
 !/.trashcan/README.txt
