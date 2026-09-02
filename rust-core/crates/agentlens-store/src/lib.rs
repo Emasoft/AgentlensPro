@@ -22,7 +22,7 @@ pub mod bodies_evidence;
 pub mod sections;
 pub mod transcript_sql;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -45,6 +45,11 @@ pub struct Store {
     /// sha256 of every span already durable — the cross-part dedup set (Parquet has no
     /// cross-file content addressing, so the dedup is OURS).
     pub known: HashSet<String>,
+    /// sha256 → the parquet part file that owns it (durable blobs only — a sha still sitting
+    /// in RAM staging has no entry). TRDD-768NEX6E: lets the verify-before-delete query read
+    /// only the files this pass's blobs actually live in, instead of every blob part ever
+    /// written (O(this pass) instead of O(corpus)).
+    pub blob_files: HashMap<String, String>,
     /// Every body_id with at least one row, and every (body_id, src_name) pair — the same
     /// seed-once-then-mutate design as `known`, and for the same measured reason: an
     /// `all_of("body")` query re-binds the full parquet file LIST (4,215 files on the real
@@ -94,6 +99,18 @@ pub fn parquet_scan(dir: &Path, sub: &str) -> Option<String> {
     Some(format!("read_parquet([{list}], union_by_name := true)"))
 }
 
+/// Same as `parquet_scan` but with `filename := true` — each row carries the source part file
+/// path in a `filename` column. Used only to build the sha→owning-file index at open time;
+/// everywhere else reads via the plain `parquet_scan`/`all_of` forms.
+fn parquet_scan_with_filenames(dir: &Path, sub: &str) -> Option<String> {
+    let files = part_files(dir, sub);
+    if files.is_empty() {
+        return None;
+    }
+    let list = files.iter().filter_map(|p| p.to_str()).map(q).collect::<Vec<_>>().join(",");
+    Some(format!("read_parquet([{list}], union_by_name := true, filename := true)"))
+}
+
 /// Durable parts + staging as one relation — `UNION ALL BY NAME` (see module doc).
 pub fn all_of(store: &Store, table: &str) -> String {
     if table == "body" {
@@ -134,11 +151,15 @@ pub fn open_store(dir: &Path, memory_limit: &str, threads: usize) -> duckdb::Res
          );"
     ))?;
     let mut known = HashSet::new();
-    if let Some(scan) = parquet_scan(dir, BLOBS_DIR) {
-        let mut stmt = con.prepare(&format!("SELECT DISTINCT sha FROM {scan}"))?;
-        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
-        for r in rows.flatten() {
-            known.insert(r);
+    let mut blob_files = HashMap::new();
+    if let Some(scan) = parquet_scan_with_filenames(dir, BLOBS_DIR) {
+        let mut stmt = con.prepare(&format!("SELECT DISTINCT sha, filename FROM {scan}"))?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+        for (sha, file) in rows.flatten() {
+            known.insert(sha.clone());
+            // First file wins — a sha only ever lives in one part (ingest dedups against
+            // `known` before ever writing it a second time).
+            blob_files.entry(sha).or_insert(file);
         }
     }
     // `body_durable` — a native mirror of the bodies parquet corpus, loaded ONCE here and kept
@@ -161,7 +182,7 @@ pub fn open_store(dir: &Path, memory_limit: &str, threads: usize) -> duckdb::Res
             body_ids.insert(id);
         }
     }
-    Ok(Store { con, dir: dir.to_path_buf(), known, body_ids, bodies_named, next_part: 0 })
+    Ok(Store { con, dir: dir.to_path_buf(), known, blob_files, body_ids, bodies_named, next_part: 0 })
 }
 
 #[derive(Debug, Default)]
@@ -202,6 +223,17 @@ pub fn flush_detailed(store: &mut Store) -> Result<FlushResult, String> {
             return Err(format!("refusing to overwrite existing part {} — part naming must be collision-free", out.display()));
         }
         let out_str = out.to_str().ok_or("non-utf8 store path")?;
+        // Capture which shas this flush is about to move to `out` — BEFORE the COPY+DELETE
+        // below clears the staging table — so `blob_files` stays in sync with what's actually
+        // on disk. Read from staging, never from `known` (which also holds shas dedup'd away
+        // to an EARLIER part); only rows still in `blob` staging go into THIS part file.
+        let flushed_shas: Vec<String> = if table == "blob" {
+            let mut stmt = store.con.prepare("SELECT DISTINCT sha FROM blob").map_err(|e| e.to_string())?;
+            let rows = stmt.query_map([], |r| r.get::<_, String>(0)).map_err(|e| e.to_string())?;
+            rows.flatten().collect()
+        } else {
+            Vec::new()
+        };
         // The body table is additionally MIRRORED into the native `body_durable` by READING BACK
         // the parquet just written — the read-back is the encoding proof (the flushed part
         // parses to rows), durability stays the fsync barrier's job, and all_of("body") never
@@ -223,6 +255,11 @@ pub fn flush_detailed(store: &mut Store) -> Result<FlushResult, String> {
                 q(out_str)
             ))
             .map_err(|e| e.to_string())?;
+        if table == "blob" {
+            for sha in flushed_shas {
+                store.blob_files.entry(sha).or_insert_with(|| out_str.to_owned());
+            }
+        }
         part_paths.push(out);
     }
     Ok(FlushResult { n, part_paths })
@@ -417,6 +454,32 @@ pub fn reconstruct_body(store: &Store, body_id: &str) -> Result<String, String> 
 /// bytes (512MB default, typically far less — the cross-turn overlap is the point).
 pub type SpanCache = std::collections::HashMap<String, String>;
 
+/// Builds the SQL for the verify gate's blob fetch, scoped to just the parquet part files that
+/// own the requested shas (`store.blob_files`) instead of the whole blob corpus. The bytes still
+/// come from the same durable parquet file(s) on disk — only the file SET shrinks — so the
+/// delete-gate proof (a verify reads DURABLE bytes, never ingest RAM) is unchanged.
+///
+/// Falls back to the full `all_of("blob")` scan when ANY requested sha is missing from the
+/// index (e.g. it is still sitting in RAM staging, not yet flushed to a part file). Never
+/// silently drops a sha from the query — the delete gate must still be a real read of every
+/// requested sha, so an unindexed sha widens the whole query rather than being skipped.
+pub(crate) fn blob_fetch_sql(store: &Store, shas: &[String]) -> String {
+    let list = shas.iter().map(|s| q(s)).collect::<Vec<_>>().join(",");
+    let mut files: Vec<&str> = Vec::new();
+    for sha in shas {
+        match store.blob_files.get(sha) {
+            Some(f) => {
+                if !files.contains(&f.as_str()) {
+                    files.push(f.as_str());
+                }
+            }
+            None => return format!("SELECT sha, data FROM {} WHERE sha IN ({list})", all_of(store, "blob")),
+        }
+    }
+    let file_list = files.iter().map(|f| q(f)).collect::<Vec<_>>().join(",");
+    format!("SELECT sha, data FROM read_parquet([{file_list}], union_by_name := true) WHERE sha IN ({list})")
+}
+
 fn reconstruct_chunk(
     store: &Store,
     ids: &[&String],
@@ -452,8 +515,7 @@ fn reconstruct_chunk(
             .collect()
     };
     if !shas.is_empty() {
-        let list = shas.iter().map(|s| q(s)).collect::<Vec<_>>().join(",");
-        let sql = format!("SELECT sha, data FROM {} WHERE sha IN ({list})", all_of(store, "blob"));
+        let sql = blob_fetch_sql(store, &shas);
         let mut stmt = store.con.prepare(&sql).map_err(|e| e.to_string())?;
         let got = stmt
             .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
@@ -600,3 +662,49 @@ pub fn verify_bodies_in_store_cached(
     Ok(results)
 }
 
+
+#[cfg(test)]
+mod blob_fetch_sql_tests {
+    use super::*;
+
+    fn tmp_store(tag: &str) -> Store {
+        let dir = std::env::temp_dir().join(format!("al-store-blobsql-{}-{tag}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        open_store(&dir, "256MB", 2).expect("open")
+    }
+
+    /// TRDD-768NEX6E box 4: once shas are indexed, the verify fetch reads only their owning
+    /// part file(s) — not the whole blob corpus (`all_of("blob")`).
+    #[test]
+    fn indexed_shas_scope_the_query_to_their_owning_files() {
+        let mut store = tmp_store("indexed");
+        store.blob_files.insert("sha-a".into(), "/store/blobs/part-1.parquet".into());
+        store.blob_files.insert("sha-b".into(), "/store/blobs/part-1.parquet".into());
+        store.blob_files.insert("sha-c".into(), "/store/blobs/part-2.parquet".into());
+
+        let sql = blob_fetch_sql(&store, &["sha-a".to_owned(), "sha-c".to_owned()]);
+        assert!(sql.contains("part-1.parquet"), "must scan sha-a's owning file: {sql}");
+        assert!(sql.contains("part-2.parquet"), "must scan sha-c's owning file: {sql}");
+        assert!(!sql.contains("all_of") && !sql.contains(" body "), "scoped query, not the all-parts scan: {sql}");
+
+        let _ = fs::remove_dir_all(&store.dir);
+    }
+
+    /// A sha absent from the index (e.g. still in RAM staging, never flushed) must widen the
+    /// whole query to the full blob corpus rather than being silently skipped — the delete
+    /// gate must still read every requested sha from a real source.
+    #[test]
+    fn a_missing_sha_falls_back_to_the_full_corpus_scan() {
+        let mut store = tmp_store("fallback");
+        store.blob_files.insert("sha-a".into(), "/store/blobs/part-1.parquet".into());
+
+        let sql = blob_fetch_sql(&store, &["sha-a".to_owned(), "sha-unindexed".to_owned()]);
+        // No parquet parts exist in this fixture, so all_of("blob") degrades to the bare
+        // staging table — still the whole-corpus form (`all_of`), not the file-scoped one.
+        assert!(sql.contains("FROM (SELECT * FROM blob)"), "must fall back to all_of('blob'): {sql}");
+        assert!(!sql.contains("part-1.parquet"), "must not name the file-scoped index: {sql}");
+        assert!(sql.contains("sha-a") && sql.contains("sha-unindexed"), "must still ask for every sha: {sql}");
+
+        let _ = fs::remove_dir_all(&store.dir);
+    }
+}

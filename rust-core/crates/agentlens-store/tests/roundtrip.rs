@@ -53,6 +53,35 @@ fn ingest_flush_reopen_reconstructs_byte_identically_and_dedups() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// TRDD-768NEX6E box 4: `blob_files` must map every flushed sha to an existing part file on
+/// disk, both right after flush and after a reopen (which rebuilds the index from scratch via
+/// `filename := true`).
+#[test]
+fn blob_files_indexes_every_durable_sha_to_an_existing_part_file() {
+    let dir = fixture_dir("blobidx");
+    let raw = body("idx");
+    let ts = 1_787_000_000_000_i64;
+
+    let mut store = agentlens_store::open_store(&dir, "1GB", 4).expect("open");
+    assert!(store.blob_files.is_empty(), "nothing durable yet");
+    agentlens_store::ingest_body(&mut store, "idx.request.json", &raw, ts).expect("ingest");
+    agentlens_store::flush_detailed(&mut store).expect("flush");
+
+    assert!(!store.blob_files.is_empty(), "flush must populate the index");
+    for (sha, path) in &store.blob_files {
+        assert!(store.known.contains(sha), "every indexed sha must also be in `known`");
+        assert!(std::path::Path::new(path).is_file(), "indexed path must exist on disk: {path}");
+        assert!(path.ends_with(".parquet"));
+    }
+    let after_flush = store.blob_files.clone();
+    drop(store);
+
+    // Reopen rebuilds the index purely from the parquet scan — must match.
+    let store2 = agentlens_store::open_store(&dir, "1GB", 4).expect("reopen");
+    assert_eq!(store2.blob_files.len(), after_flush.len(), "reopen must rebuild the same index");
+    let _ = fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn verify_gate_checks_bytes_row_and_ts() {
     let dir = fixture_dir("verify");
