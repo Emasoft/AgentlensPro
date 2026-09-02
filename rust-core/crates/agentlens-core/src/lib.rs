@@ -446,18 +446,13 @@ impl CoreState {
         self.burn_status_over(&summary, now_ms)
     }
 
-    /// The same computation against a summary the caller already has — what the 4 s burn tick
-    /// uses, so the tick's summary REBUILD happens off the state lock (ui::summary_now) and only
-    /// this comparatively cheap gather/compute runs under it (TRDD-HFV4AIT7).
-    ///
-    /// The sessions are BORROWED out of the summary rather than deep-cloned into a `Vec<Value>`:
-    /// the old clone copied every card, with its timeline, on every 4 s fire while holding the
-    /// lock ingest needs.
+    /// The same computation against a summary the caller already has (TRDD-HFV4AIT7 moved the
+    /// summary REBUILD off the state lock; TRDD-O3ICDRLO then moved the gather/compute itself off
+    /// it — see `burn_status_for`, which this only feeds with the two lock-guarded inputs).
+    /// `live_burn_status` and the tests still take this path; the 4 s tick does not.
     pub fn burn_status_over(&mut self, summary: &Value, now_ms: f64) -> Value {
-        let sessions = summary.get("sessions").and_then(Value::as_array).map(Vec::as_slice).unwrap_or(&[]);
-        let events = burn::monitor::gather_consumption_events(sessions, &[], now_ms);
         let ttl = self.burn.ttl_context(now_ms);
-        burn::monitor::compute_burn_status(&events, sessions, &self.burn.config, now_ms, Some(&ttl))
+        burn_status_for(summary, &self.burn.config, &ttl, now_ms)
     }
 
     /// `getSessionStatus` (server.ts:1573) — the same gatherBurn stream as `live_burn_status`,
@@ -503,6 +498,21 @@ impl CoreState {
         burn::guard::attach_risk_causing_calls(&mut report, &dirs);
         report
     }
+}
+
+/// The pure half of `CoreState::burn_status_over` — the gather over the summary's session cards
+/// plus `compute_burn_status` — taking the only two lock-guarded inputs (a TTL snapshot and the
+/// config) by reference so the 4 s burn tick can run it with the state lock RELEASED.
+///
+/// TRDD-O3ICDRLO: the tick guard's per-statement split measured this call at 96% of the guard's
+/// lock time (25.8 of 26.9 s over 2h49m, max 1.5 s in one hold), with every ingest and read path
+/// queued behind it. The sessions are BORROWED out of the summary rather than deep-cloned into a
+/// `Vec<Value>`: the old clone copied every card, with its timeline, on every 4 s fire. Nothing
+/// here may touch `CoreState` — that is the whole point of the function.
+pub fn burn_status_for(summary: &Value, config: &burn::monitor::BurnConfig, ttl: &burn::cache_ttl::TtlContext, now_ms: f64) -> Value {
+    let sessions = summary.get("sessions").and_then(Value::as_array).map(Vec::as_slice).unwrap_or(&[]);
+    let events = burn::monitor::gather_consumption_events(sessions, &[], now_ms);
+    burn::monitor::compute_burn_status(&events, sessions, config, now_ms, Some(ttl))
 }
 
 impl CoreState {

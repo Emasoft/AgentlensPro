@@ -3686,20 +3686,25 @@ pub async fn run_burn_tick(state: Arc<Mutex<CoreState>>, hub: Arc<SseHub>) {
         // whole window inside the lock — the single biggest source of the 83k `__psynch_mutexwait`
         // samples under an ingest flood. `burn_status_over` below now gets a ready summary.
         let Ok((_, tick_summary)) = summary_now(&state, crate::now_ms() as f64) else { continue };
-        // Declared OUTSIDE the lock block (uninitialized — the only path that skips the assignment
-        // is the `continue` below, which also skips every read): the rotation edge is detected
-        // under the lock, and the capture it triggers runs after the lock is released.
+        // Declared OUTSIDE the lock blocks (uninitialized — the only paths that skip the
+        // assignment are the `continue`s below, which also skip every read): the rotation edge is
+        // detected under the lock, and the capture it triggers runs after the lock is released.
         let rotation_capture: Option<(
             std::path::PathBuf,
             std::path::PathBuf,
             std::collections::HashMap<String, String>,
         )>;
-        {
+        let now = crate::now_ms() as f64;
+        // TRDD-O3ICDRLO: the lock is taken TWICE, briefly, around an OFF-lock compute. The guard's
+        // per-statement split (41 holds over 2h49m on pid 71093) put 96% of its lock time —
+        // 25.8 of 26.9 s, max 1.5 s inside one 4 s tick — in `burn_status_over`, whose gather +
+        // compute needs nothing the lock protects beyond a TTL snapshot and the config; the bodies
+        // poll, the WAL flush and the timeline sample together never reached 50 ms. So the first
+        // hold snapshots those two inputs, the status is computed with the lock RELEASED, and the
+        // second hold stores it and does the rest. Every ingest and read path was queued behind
+        // that 1.5 s four times a minute — do not fold the compute back under either guard.
+        let (ttl, config, t_poll, t_flush, held_a) = {
             let Ok(mut st) = state.lock_timed() else { continue };
-            let now = crate::now_ms() as f64;
-            // TRDD-O3ICDRLO: this guard is the top state-lock holder after UTFVMVT8 (44 holds
-            // ≤ 2.3 s in 15 min, 34.6 s of lock time). The `held` line names the site only; these
-            // splits name the statement, so the fix moves what the numbers say, not a guess.
             let t0 = std::time::Instant::now();
             // The bodies watcher's poll cadence (the TS runs a dedicated 5s timer; folding it
             // into this 4s tick keeps the same ≤5s staleness with one fewer task). The gate's
@@ -3713,18 +3718,28 @@ pub async fn run_burn_tick(state: Arc<Mutex<CoreState>>, hub: Arc<SseHub>) {
             // runs DuckDB over whole WALs and lives on alcore's own 60s task, outside the lock.
             st.statusline.flush(None);
             let t_flush = t0.elapsed();
-            let status = st.burn_status_over(&tick_summary, now);
-            let t_status = t0.elapsed();
+            let ttl = st.burn.ttl_context(now);
+            (ttl, st.burn.config.clone(), t_poll, t_flush, t0.elapsed())
+        };
+        let t_off = std::time::Instant::now();
+        let status = crate::burn_status_for(&tick_summary, &config, &ttl, now);
+        let off_lock = t_off.elapsed();
+        {
+            let Ok(mut st) = state.lock_timed() else { continue };
+            let t1 = std::time::Instant::now();
             st.burn.last_status = Some(status.clone());
             let account = st.burn.current_account(now);
             // TRDD-YQZ9P8IL: sample the subscription state onto the change-detected timeline.
             // `record` only enqueues on a discrete change (account/mode/plan/ttl), so this 4s call
             // is a key comparison in the common case and a real write a few times an hour — which
             // is what makes it safe on the hot tick. The flush is a 60s chore, never here.
+            // Re-read here rather than reusing the snapshot above: the TS samples the TTL context
+            // AFTER storing the fresh status, and `ttl_context` reads `last_status` (a cached key
+            // compare, not a cost).
             let ttl_ctx = st.burn.ttl_context(now);
             let sample = crate::account_state_timeline::build_account_state_record(Some(&account), Some(&ttl_ctx), now);
             st.account_timeline.record(sample);
-            let t_account = t0.elapsed();
+            let t_account = t1.elapsed();
             let notify = st.burn.config.notify;
             // The rotation EDGE (server.ts:1656). Detected under the lock (a string compare), acted
             // on outside it — the refresh does network I/O and must never stall the 4s tick or hold
@@ -3759,15 +3774,22 @@ pub async fn run_burn_tick(state: Arc<Mutex<CoreState>>, hub: Arc<SseHub>) {
             }
             // Clear fired keys whose condition cleared so the alert can re-fire if it returns.
             fired.retain(|id| active.contains(id));
-            let total = t0.elapsed();
-            if total >= std::time::Duration::from_millis(crate::lock_trace_threshold_ms()) {
+            let held_b = t1.elapsed();
+            // Printed beside the `held` line(s) at the same threshold, one line for both holds plus
+            // the off-lock compute, so a regression that drags work back under a guard is named by
+            // the statement group, not inferred from the site.
+            let threshold = std::time::Duration::from_millis(crate::lock_trace_threshold_ms());
+            if held_a >= threshold || held_b >= threshold {
                 eprintln!(
-                    "alcore: burn tick guard split: bodies_poll {} ms, statusline_flush {} ms, burn_status {} ms, account_timeline {} ms, alerts_notify {} ms",
+                    "alcore: burn tick guard split: lock_a {} ms (bodies_poll {} ms, statusline_flush {} ms, ttl_config {} ms), off_lock burn_status {} ms, lock_b {} ms (account_timeline {} ms, alerts_notify {} ms)",
+                    held_a.as_millis(),
                     t_poll.as_millis(),
                     (t_flush - t_poll).as_millis(),
-                    (t_status - t_flush).as_millis(),
-                    (t_account - t_status).as_millis(),
-                    (total - t_account).as_millis()
+                    (held_a - t_flush).as_millis(),
+                    off_lock.as_millis(),
+                    held_b.as_millis(),
+                    t_account.as_millis(),
+                    (held_b - t_account).as_millis()
                 );
             }
         }
