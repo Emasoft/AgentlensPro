@@ -43,8 +43,9 @@ related: [2R36W8Q1, 768NEX6E, L6V1UUW0]
   count hits and `store_if_newer()` counts misses too (`derived_cache.rs`), so the only bound is
   that inline `get()` rebuilds under this guard numbered ≤ 608 in 74 min, which still allows EVERY
   composition call to have missed (`data_version` bumped 29,632 times on this pid); (2) `st.bodies.session_ids()`
-  collected into a `Vec<String>`; (3) `resolve_scope` over EVERY id with a per-id project closure
-  (27,689 log sessions on this machine). Which of the three carries the steady 2.3 s holds and the
+  collected into a `Vec<String>`; (3) `resolve_scope` over EVERY id with a per-id project closure.
+  Those ids are the BODIES index (`st.bodies`), whose size has not been read — not the 27,689 log
+  sessions `server status` reports, a different set. Which of the three carries the steady 2.3 s holds and the
   274 s outlier is unmeasured: a cache miss inside (1) is the natural suspect for the outliers and
   (2)+(3) for the steady holds, but that is inference — the earlier "built, discarded, and rebuilt
   on the next request" sentence overstated (1) and is retracted.
