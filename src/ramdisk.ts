@@ -71,11 +71,14 @@ function assertMac(): void {
  * differs from mountPoint — which is exactly how we distinguish a real mount from a leftover plain dir.
  * Never throws: an absent path / df failure reads as "not mounted".
  */
-export function ramDiskInfo(mountPoint: string = SPOOL_MOUNT_POINT): RamDiskInfo {
+export function ramDiskInfo(
+  mountPoint: string = SPOOL_MOUNT_POINT,
+  exec: typeof execFileSync = execFileSync,
+): RamDiskInfo {
   const out: RamDiskInfo = { mounted: false, mountPoint, sizeBytes: null, freeBytes: null }
   let raw: string
   try {
-    raw = execFileSync('df', ['-k', mountPoint], { encoding: 'utf8' })
+    raw = exec('df', ['-k', mountPoint], { encoding: 'utf8' })
   } catch {
     return out // df exits non-zero when the path does not exist → not mounted
   }
@@ -108,9 +111,9 @@ function dirHasFiles(dir: string): boolean {
  * volume at "<name> 1" instead — a silent split-brain. Remove it ONLY when it is not a mount and holds
  * no regular files; if it holds real data, refuse loudly (RULE 0 — never delete data on a guess).
  */
-function removeStaleMountDir(mountPoint: string): void {
+function removeStaleMountDir(mountPoint: string, exec: typeof execFileSync = execFileSync): void {
   if (!fs.existsSync(mountPoint)) return
-  if (ramDiskInfo(mountPoint).mounted) return // it IS a mount — never touch a mounted volume
+  if (ramDiskInfo(mountPoint, exec).mounted) return // it IS a mount — never touch a mounted volume
   if (dirHasFiles(mountPoint)) {
     throw new Error(`refusing to create the spool: ${mountPoint} exists, is not a mount, and holds files — remove it by hand`)
   }
@@ -124,37 +127,56 @@ function removeStaleMountDir(mountPoint: string): void {
  */
 export function ensureRamDisk(
   sizeMb: number = spoolSizeMb(),
-  opts: { volumeName?: string } = {},
+  opts: { volumeName?: string; exec?: typeof execFileSync; mkdirSpoolDir?: (mountPoint: string) => void } = {},
 ): EnsureRamDiskResult {
   assertMac()
   const volumeName = opts.volumeName ?? SPOOL_VOLUME_NAME
   const mountPoint = `/Volumes/${volumeName}`
+  // Injection seams for tests (TRDD-UIDUVNY8): let a unit test stub `hdiutil`/`diskutil` and the
+  // otel-bodies mkdir to simulate the name-collision race below without a real RAM disk (a real
+  // mkdirSync under an unmounted `/Volumes/<name>` is EACCES for a non-root process). Both default
+  // to the real thing.
+  const exec = opts.exec ?? execFileSync
+  const mkdirSpoolDir = opts.mkdirSpoolDir ?? ((mp: string) => fs.mkdirSync(spoolDir(mp), { recursive: true }))
 
-  const existing = ramDiskInfo(mountPoint)
+  const existing = ramDiskInfo(mountPoint, exec)
   if (existing.mounted) {
-    fs.mkdirSync(spoolDir(mountPoint), { recursive: true })
+    mkdirSpoolDir(mountPoint)
     return { mountPoint, sizeBytes: existing.sizeBytes ?? sizeMb * 1024 * 1024 }
   }
 
-  removeStaleMountDir(mountPoint)
+  removeStaleMountDir(mountPoint, exec)
 
   // 1 MB = 2048 × 512-byte sectors. hdiutil prints the new "/dev/diskN" on stdout.
   const sectors = Math.floor(sizeMb) * 2048
-  const dev = execFileSync('hdiutil', ['attach', '-nomount', `ram://${sectors}`], { encoding: 'utf8' })
+  const dev = exec('hdiutil', ['attach', '-nomount', `ram://${sectors}`], { encoding: 'utf8' })
     .trim().split(/\s+/)[0]
   if (!dev.startsWith('/dev/')) {
     throw new Error(`hdiutil did not return a device node (got: ${JSON.stringify(dev)})`)
   }
   try {
-    execFileSync('diskutil', ['erasevolume', 'HFS+', volumeName, dev], { encoding: 'utf8' })
+    exec('diskutil', ['erasevolume', 'HFS+', volumeName, dev], { encoding: 'utf8' })
   } catch (e) {
     // Formatting failed — detach the raw device so we do not leak an unformatted ram disk.
-    try { execFileSync('hdiutil', ['detach', dev], { encoding: 'utf8' }) } catch { /* best effort */ }
+    try { exec('hdiutil', ['detach', dev], { encoding: 'utf8' }) } catch { /* best effort */ }
     throw e
   }
-  fs.mkdirSync(spoolDir(mountPoint), { recursive: true })
-  const post = ramDiskInfo(mountPoint)
+  mkdirSpoolDir(mountPoint)
+  const post = ramDiskInfo(mountPoint, exec)
   if (!post.mounted) {
+    // TRDD-UIDUVNY8 — a race, not a genuine mount failure: `diskutil erasevolume` mounted OUR device
+    // at "<name> 1" because `mountPoint` was already claimed by a caller that won the race (the login
+    // LaunchAgent's `spool ensure` vs. a concurrent `setup`/`config set`). Leaving `dev` attached
+    // there leaked a real 2 GB RAM volume (`/dev/disk29`, "AgentLensSpool 1") for three days, holding
+    // nothing but `.fseventsd` and 1.4 GB of RSS in `diskimages-helper`. Detach the LOSING device
+    // (best effort — it never mounted, so there is nothing on it to lose) and re-check: if the
+    // winner's volume is now visible at `mountPoint`, this call is simply idempotent and reuses it.
+    try { exec('hdiutil', ['detach', dev], { encoding: 'utf8' }) } catch { /* best effort */ }
+    const retry = ramDiskInfo(mountPoint, exec)
+    if (retry.mounted) {
+      mkdirSpoolDir(mountPoint)
+      return { mountPoint, sizeBytes: retry.sizeBytes ?? sizeMb * 1024 * 1024 }
+    }
     throw new Error(`RAM disk ${volumeName} did not mount at ${mountPoint} after erasevolume`)
   }
   return { mountPoint, sizeBytes: post.sizeBytes ?? sizeMb * 1024 * 1024 }
