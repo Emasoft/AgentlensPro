@@ -4,7 +4,7 @@ import * as os from 'os'
 import * as fs from 'fs'
 import * as path from 'path'
 import { spawn, type ChildProcess } from 'child_process'
-import { forwardHookEvent } from '../cli/hookHandlers'
+import { forwardHookEvent, pidfileOwnerAlive } from '../cli/hookHandlers'
 import { freePort, spawnServerWithRetry } from './helpers/freePort'
 
 // ── D3K7QM2P/1a — hook durability: spool-on-failure + boot/periodic drain ────────────────────────
@@ -199,6 +199,27 @@ suite('hook spool — forwardHookEvent durability (unit)', () => {
     assert.ok(!files.includes('100-old.json'), 'the oldest spooled event was dropped')
     assert.ok(files.includes('200-old.json') && files.includes('300-old.json'), 'the newer pre-existing events survive')
     delete process.env.AGENTLENS_HOOK_SPOOL_MAX
+  })
+
+  // TRDD-L6V1UUW0/2 — pidfileOwnerAlive() is the exact decision point reviveDaemonDetached() checks
+  // before spawning: live owner ⇒ no spawn (the 781-refusal-line waste this card measured), dead/no
+  // pidfile ⇒ spawn proceeds as before. Testing the predicate directly is equivalent to testing the
+  // spawn decision without paying for a real alcore process per case.
+  test('pidfileOwnerAlive: a live pid in server.pid is an owner', () => {
+    fs.writeFileSync(path.join(tmp, 'server.pid'), String(process.pid))
+    assert.strictEqual(pidfileOwnerAlive(), true, 'our own live pid must read as an owner')
+  })
+
+  test('pidfileOwnerAlive: a dead pid in server.pid is NOT an owner', async () => {
+    const child = spawn(process.execPath, ['-e', 'process.exit(0)'])
+    await new Promise<void>((r) => child.on('exit', () => r()))
+    fs.writeFileSync(path.join(tmp, 'server.pid'), String(child.pid))
+    assert.strictEqual(pidfileOwnerAlive(), false, 'a dead pidfile owner must not block a revive')
+  })
+
+  test('pidfileOwnerAlive: no pidfile is NOT an owner', () => {
+    try { fs.unlinkSync(path.join(tmp, 'server.pid')) } catch { /* already absent */ }
+    assert.strictEqual(pidfileOwnerAlive(), false, 'an absent pidfile must not block a revive')
   })
 })
 

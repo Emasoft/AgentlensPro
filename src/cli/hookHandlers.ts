@@ -21,6 +21,7 @@ import { isImageReadPath } from '../shared/imageReads'
 import { uiBaseUrl, dataDir } from './cliCore'
 import { alcoreBin, alcoreServeArgs, resolveBinNativeDir } from './serverControl'
 import { agentlensDisabled, reviveBraked, STARTED_BY_ENV } from './killSwitch'
+import { lockTakeoverVerdict, parsePidLock, processStartRef } from '../serverRuntime'
 
 // D3K7QM2P/1a — hook durability. When the server can't take a hook event (down, or shedding under
 // load), we must NOT lose it: durably spool the payload to disk (the server's boot/periodic drain
@@ -104,6 +105,33 @@ export function reviveDisabledOnDisk(): boolean {
   return agentlensDisabled() || reviveBraked()
 }
 
+/** True when `<dataDir>/server.pid` names a process that is genuinely alive right now — the SAME
+ *  lock-parsing + takeover verdict `findServerPid()` (serverControl.ts) uses, so a hook and the CLI
+ *  can never disagree about who owns this data dir. Deliberately pidfile-only (no REST fallback):
+ *  a hook must never make a network round trip just to decide whether to skip a revive.
+ *
+ *  TRDD-L6V1UUW0/2 — measured 2026-09-02: 781 lines in server.log read "Refusing to start: another
+ *  AgentlensPro server (pid N) already owns this data directory". Every one of those was a revive
+ *  spawned by a timed-out hook while the real server was alive and merely slow/shedding under load —
+ *  a wasted process spawn landing exactly when the machine was already stalling. That refusal line
+ *  IS the proof the spawn was pointless, so this check short-circuits it before the spawn happens. */
+export function pidfileOwnerAlive(): boolean {
+  try {
+    const lock = parsePidLock(fs.readFileSync(path.join(dataDir(), 'server.pid'), 'utf-8'))
+    if (lock === null) return false
+    const alive = (() => { try { process.kill(lock.pid, 0); return true } catch { return false } })()
+    const verdict = lockTakeoverVerdict({
+      lockPid: lock.pid,
+      lockStartRef: lock.start,
+      pidAlive: alive,
+      currentStartRef: lock.start === null ? null : processStartRef(lock.pid),
+    })
+    return verdict === 'live-owner' || verdict === 'legacy-kill0-only'
+  } catch {
+    return false // no/unreadable pidfile — cannot prove an owner is alive, so proceed as before
+  }
+}
+
 /** Fire a DETACHED server revive without waiting (the hook must exit 0 fast). A short-TTL mtime lock
  *  collapses a burst of N hooks into ONE spawn; the server's own pidfile guard rejects a second
  *  canonical instance if two race. Never throws, never blocks. */
@@ -121,6 +149,10 @@ function reviveDaemonDetached(): void {
       if (age > -REVIVE_LOCK_SKEW_MS && age < REVIVE_LOCK_TTL_MS) return
     } catch { /* no lock — proceed to claim it */ }
     try { fs.mkdirSync(dataDir(), { recursive: true }); fs.writeFileSync(lock, String(Date.now())) } catch { /* best effort */ }
+    // The pidfile already names a live owner ⇒ the delivery failure was a timeout/503 while the
+    // server was up, not a dead server — spawning a doomed twin only adds a refusal line. See
+    // pidfileOwnerAlive() above for the measured cost this guard removes.
+    if (pidfileOwnerAlive()) return
     // Spool-only mode: record the event to disk for the drain but do NOT auto-spawn the server.
     // Used by tests, and by anyone who supervises the daemon externally (launchd) and doesn't want
     // hooks spawning it. The lock is still written above so the stampede semantics are unchanged.
