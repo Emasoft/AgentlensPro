@@ -3,7 +3,7 @@ trdd-id: N60JUWU3
 title: The graceful shutdown needs the state lock and has no timeout, so a long holder starves the stop into a SIGKILL
 column: todo
 created: 2026-09-02T16:36:33+0200
-updated: 2026-09-02T16:46:41+0200
+updated: 2026-09-02T16:50:12+0200
 current-owner: main-session
 task-type: bugfix
 priority: high
@@ -46,14 +46,21 @@ user reported at 15:48, a separate unexplained dip (card it only if it recurs).
 from local-time strings, buckets re-read 20 min apart and unchanged):** normal 0.8–2.6k/min through
 16:11, then **5 / 12 / 3 / 4 / 6 / 10 / 20 / 29 / 38 / 8 / 39 / 32 / 28 / 115 / 145 / 63 / 47 / 1**
 for 16:12–16:29, nothing 16:30–16:33, 2 at 16:34, 28–53/min for 16:36–16:42, and back to 1,886 at
-16:43. Thirty minutes of OTEL-only detail across the active sessions is gone at the SOURCE: the
-holds at the composition guard reached 82 / 85 / 67 s from about 16:10 (TRDD-UTFVMVT8), the OTLP
-handler waited 145 s behind them, the exporters timed out and dropped their batches
-(`droppedOnFailure` on the server is 0 — nothing was refused, it never arrived), and they resumed
-only at 16:43, nine minutes after the new binary was serving OTLP again in 0.5 ms — an exporter
-back-off, inferred from the timing, not read from the exporters. Claude-session spans backfill from
-the JSONL transcript (log wins on collision); the `cost_usd`-class OTEL-only fields in that
-interval do not. This is the actual size of the incident this card and UTFVMVT8 describe.
+16:43. Thirty minutes of OTEL-only detail across the active sessions is gone, and the SINK half is
+bounded: the store file is append-ordered, the first span with `startTime` ≥ 16:34:30 marks the
+old/new pid boundary, and the newest `startTime` appended BEFORE it is **16:34:22** — the kill
+second — so the flush tick was still winning the lock in the old pid's last minutes (the 16:25–16:28
+buckets of 115/145/63/47 are its flushes) and what the SIGKILL discarded is at most one tick's
+worth. The 16:12–16:42 hole is therefore at the SOURCE: the holds at the composition guard reached
+82 / 85 / 67 s from about 16:10 (TRDD-UTFVMVT8, coincident within the 15-min window — the split
+lines carry no timestamps), the OTLP handler waited 145 s behind them, and the exporters' batches
+timed out and were dropped — INFERRED from OTel batch-exporter semantics and from the fact that
+exactly ONE span with a 16:12–16:28 start was appended after the boundary (no late retries came
+in), not observed at the exporters. The new pid's `droppedOnFailure = 0` says nothing about the
+old pid and is not evidence here. Export resumed only at 16:43, nine minutes after the new binary
+was answering OTLP in 0.5 ms (a back-off, same inference). Claude-session spans backfill from the
+JSONL transcript (log wins on collision); the `cost_usd`-class OTEL-only fields in that interval do
+not. This is the actual size of the incident this card and UTFVMVT8 describe.
 
 **Scope of this card therefore includes the flush tick and the sweeper**, not only the SIGTERM
 path: all three lose durability to the same lock, and a stop that cannot flush is only the most
