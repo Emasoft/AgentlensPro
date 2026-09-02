@@ -3697,17 +3697,24 @@ pub async fn run_burn_tick(state: Arc<Mutex<CoreState>>, hub: Arc<SseHub>) {
         {
             let Ok(mut st) = state.lock_timed() else { continue };
             let now = crate::now_ms() as f64;
+            // TRDD-O3ICDRLO: this guard is the top state-lock holder after UTFVMVT8 (44 holds
+            // ≤ 2.3 s in 15 min, 34.6 s of lock time). The `held` line names the site only; these
+            // splits name the statement, so the fix moves what the numbers say, not a guess.
+            let t0 = std::time::Instant::now();
             // The bodies watcher's poll cadence (the TS runs a dedicated 5s timer; folding it
             // into this 4s tick keeps the same ≤5s staleness with one fewer task). The gate's
             // buildGateState reads the report WITHOUT polling — a poll landing on new multi-MB
             // response files costs 100-400ms of parsing, the TRDD-9CNHP8CN request-latency
             // outlier — so this tick is what keeps its snapshot fresh.
             st.burn.bodies.poll(now);
+            let t_poll = t0.elapsed();
             // The statusline WAL flush (the TS runs a dedicated 5s timer; this 4s tick gives
             // the same ≤5s durability window with one fewer task). Sealing is NOT here — it
             // runs DuckDB over whole WALs and lives on alcore's own 60s task, outside the lock.
             st.statusline.flush(None);
+            let t_flush = t0.elapsed();
             let status = st.burn_status_over(&tick_summary, now);
+            let t_status = t0.elapsed();
             st.burn.last_status = Some(status.clone());
             let account = st.burn.current_account(now);
             // TRDD-YQZ9P8IL: sample the subscription state onto the change-detected timeline.
@@ -3717,6 +3724,7 @@ pub async fn run_burn_tick(state: Arc<Mutex<CoreState>>, hub: Arc<SseHub>) {
             let ttl_ctx = st.burn.ttl_context(now);
             let sample = crate::account_state_timeline::build_account_state_record(Some(&account), Some(&ttl_ctx), now);
             st.account_timeline.record(sample);
+            let t_account = t0.elapsed();
             let notify = st.burn.config.notify;
             // The rotation EDGE (server.ts:1656). Detected under the lock (a string compare), acted
             // on outside it — the refresh does network I/O and must never stall the 4s tick or hold
@@ -3751,6 +3759,17 @@ pub async fn run_burn_tick(state: Arc<Mutex<CoreState>>, hub: Arc<SseHub>) {
             }
             // Clear fired keys whose condition cleared so the alert can re-fire if it returns.
             fired.retain(|id| active.contains(id));
+            let total = t0.elapsed();
+            if total >= std::time::Duration::from_millis(crate::lock_trace_threshold_ms()) {
+                eprintln!(
+                    "alcore: burn tick guard split: bodies_poll {} ms, statusline_flush {} ms, burn_status {} ms, account_timeline {} ms, alerts_notify {} ms",
+                    t_poll.as_millis(),
+                    (t_flush - t_poll).as_millis(),
+                    (t_status - t_flush).as_millis(),
+                    (t_account - t_status).as_millis(),
+                    (total - t_account).as_millis()
+                );
+            }
         }
         if let Some((data_dir, home, vars)) = rotation_capture {
             // Fire-and-forget on the blocking pool, exactly as the TS's `void refreshAccountUsage()`
