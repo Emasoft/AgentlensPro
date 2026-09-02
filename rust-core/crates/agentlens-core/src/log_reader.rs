@@ -29,6 +29,7 @@ use rayon::prelude::*;
 use serde_json::{Map, Value};
 
 use crate::pricing::calc_token_cost_usd;
+use crate::LockTimed;
 use crate::summarize::helpers;
 use crate::summarize::retention::{timeline_hot_age_ms, timeline_max_bytes, timeline_max_entries};
 
@@ -759,7 +760,7 @@ impl DurableState {
         match self.offsets.save(&tailer.export_file_state()) {
             Ok(r) if r.bytes > 0 => {
                 self.stamp_version();
-                if let Ok(mut st) = state.lock() {
+                if let Ok(mut st) = state.lock_timed() {
                     st.persist.offsets_writes += 1;
                     st.persist.offsets_bytes += r.bytes;
                 }
@@ -771,13 +772,13 @@ impl DurableState {
 
     fn save_cards(&mut self, state: &std::sync::Mutex<crate::CoreState>) {
         let records: IndexMap<String, Value> = {
-            let st = state.lock().expect("core state");
+            let st = state.lock_timed().expect("core state");
             st.log_sessions.iter().map(|(id, c)| (id.clone(), strip_card_for_persist(c))).collect()
         };
         match self.cards.save(&records) {
             Ok(r) if r.bytes > 0 => {
                 self.stamp_version();
-                if let Ok(mut st) = state.lock() {
+                if let Ok(mut st) = state.lock_timed() {
                     st.persist.cards_writes += 1;
                     st.persist.cards_bytes += r.bytes;
                 }
@@ -962,7 +963,7 @@ pub fn start_sweeper(
             let mut tailer = LogTailer::default();
             let mut durable = DurableState::open(&data_dir);
             let restored = {
-                let mut st = state.lock().expect("core state");
+                let mut st = state.lock_timed().expect("core state");
                 durable.restore(&mut tailer, &mut st)
             };
             let (restored_cards, offsets_imported, offsets_skipped) = match restored {
@@ -980,7 +981,7 @@ pub fn start_sweeper(
                 durable.mark_dirty();
             }
             {
-                let mut st = state.lock().expect("core state");
+                let mut st = state.lock_timed().expect("core state");
                 st.log_scan.add(&sweep);
                 st.ingest_scanned(scanned);
                 st.sweeper = Some(SweeperControl { tx });
@@ -1048,7 +1049,7 @@ pub fn start_sweeper(
                     tailer.sweep_paths(&env, &paths, crate::now_ms())
                 };
                 {
-                    let mut st = state.lock().expect("core state");
+                    let mut st = state.lock_timed().expect("core state");
                     st.log_scan.add(&sweep);
                     if !scanned.is_empty() {
                         durable.mark_dirty();

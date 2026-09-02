@@ -915,7 +915,7 @@ async fn handle(
     let parse_ns = t_parse.map(|t| t.elapsed().as_nanos() as u64).unwrap_or(0);
     let t_wait = profile.then(std::time::Instant::now);
     {
-        let mut st = state.lock().map_err(|_| "state poisoned".to_owned())?;
+        let mut st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
         let wait_ns = t_wait.map(|t| t.elapsed().as_nanos() as u64).unwrap_or(0);
         let t_held = profile.then(std::time::Instant::now);
         match parsed {
@@ -948,5 +948,170 @@ pub async fn serve_otlp(
             // An Err from the service aborts this connection — exactly the overflow contract.
             let _ = hyper::server::conn::http1::Builder::new().serve_connection(io, svc).await;
         });
+    }
+}
+
+// --- state-lock wait/hold attribution (TRDD-2R36W8Q1) -----------------------------------------
+//
+// WHY this exists: five `sample` captures on 2026-09-02 showed HTTP handlers parked waiting on
+// `state.lock()` with no holder identifiable from the stack (the holder had already returned by
+// the time the profiler walked it). The card's own NEXT ACTION forbids guessing which call site
+// is responsible — so the lock itself now names its holder: whoever is inside `lock_timed()`
+// records its call site in a global slot, and anyone that has to WAIT past the threshold prints
+// that recorded site, not a guess.
+use std::panic::Location;
+use std::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
+use std::sync::{LockResult, MutexGuard, PoisonError};
+
+static HOLDER_SITE: AtomicPtr<Location<'static>> = AtomicPtr::new(std::ptr::null_mut());
+static HOLDER_SINCE_NS: AtomicU64 = AtomicU64::new(0);
+
+fn lock_trace_threshold_ms() -> u64 {
+    static THRESHOLD: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    *THRESHOLD.get_or_init(|| {
+        std::env::var("AGENTLENS_LOCK_TRACE_MS")
+            .ok()
+            .and_then(|v| v.trim().parse::<u64>().ok())
+            .unwrap_or(250)
+    })
+}
+
+/// A `MutexGuard<CoreState>` that records its own acquisition site as the global "current
+/// holder" for as long as it lives, and logs how long it was held if that's ≥ the threshold.
+pub struct StateGuard<'a> {
+    guard: MutexGuard<'a, CoreState>,
+    site: &'static Location<'static>,
+    since: std::time::Instant,
+}
+
+impl<'a> std::ops::Deref for StateGuard<'a> {
+    type Target = CoreState;
+    fn deref(&self) -> &CoreState {
+        &self.guard
+    }
+}
+
+impl<'a> std::ops::DerefMut for StateGuard<'a> {
+    fn deref_mut(&mut self) -> &mut CoreState {
+        &mut self.guard
+    }
+}
+
+impl<'a> Drop for StateGuard<'a> {
+    fn drop(&mut self) {
+        let held = self.since.elapsed();
+        // Clear the holder record ONLY if it's still us — a poisoned-then-recovered guard built
+        // via `into_inner()` (see LockTimed::lock_timed below) never set the record, and clearing
+        // it unconditionally there would erase whoever's actually still holding it.
+        let ptr = self.site as *const Location<'static> as *mut Location<'static>;
+        let _ = HOLDER_SITE.compare_exchange(ptr, std::ptr::null_mut(), Ordering::AcqRel, Ordering::Relaxed);
+        if held >= std::time::Duration::from_millis(lock_trace_threshold_ms()) {
+            eprintln!("alcore: state lock held {} ms by {}:{}", held.as_millis(), self.site.file(), self.site.line());
+        }
+    }
+}
+
+/// `state.lock()` that attributes a long WAIT to whoever is currently holding it, and records
+/// itself as the new holder for the next waiter. Drop-in replacement for `Mutex::lock()`.
+pub trait LockTimed {
+    fn lock_timed(&self) -> LockResult<StateGuard<'_>>;
+}
+
+impl LockTimed for Mutex<CoreState> {
+    #[track_caller]
+    fn lock_timed(&self) -> LockResult<StateGuard<'_>> {
+        let site = Location::caller();
+        let wait_started = std::time::Instant::now();
+        let result = self.lock();
+        let waited = wait_started.elapsed();
+        if waited >= std::time::Duration::from_millis(lock_trace_threshold_ms()) {
+            let holder_ptr = HOLDER_SITE.load(Ordering::Acquire);
+            let (hfile, hline, hheld_ms): (&str, u32, u64) = if holder_ptr.is_null() {
+                ("holder unknown", 0, 0)
+            } else {
+                // SAFETY: every stored pointer came from `Location::caller()`, which is a
+                // `&'static Location<'static>` — 'static, never freed, so dereferencing it here
+                // is always valid. Cast const->mut only to satisfy `AtomicPtr`'s API; nothing
+                // ever writes through it.
+                let loc: &'static Location<'static> = unsafe { &*holder_ptr };
+                let since_ns = HOLDER_SINCE_NS.load(Ordering::Acquire);
+                let held_ms = (now_ns().saturating_sub(since_ns)) / 1_000_000;
+                (loc.file(), loc.line(), held_ms)
+            };
+            eprintln!(
+                "alcore: state lock waited {} ms at {}:{}; holder {}:{} for {} ms",
+                waited.as_millis(),
+                site.file(),
+                site.line(),
+                hfile,
+                hline,
+                hheld_ms,
+            );
+        }
+        match result {
+            Ok(guard) => {
+                HOLDER_SITE.store(site as *const _ as *mut _, Ordering::Release);
+                HOLDER_SINCE_NS.store(now_ns(), Ordering::Release);
+                Ok(StateGuard { guard, site, since: std::time::Instant::now() })
+            }
+            Err(poisoned) => {
+                // Poisoned: still hand back a usable guard (matches every existing call site's
+                // recovery pattern — `unwrap_or_else(|e| e.into_inner())` etc.) but do NOT claim
+                // the holder record, since this guard never went through the "we're now holding
+                // it" path above.
+                let guard = poisoned.into_inner();
+                Err(PoisonError::new(StateGuard { guard, site, since: std::time::Instant::now() }))
+            }
+        }
+    }
+}
+
+fn now_ns() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(0)
+}
+
+#[cfg(test)]
+mod lock_timed_tests {
+    use super::*;
+
+    fn fresh_state() -> CoreState {
+        let dir = std::env::temp_dir().join(format!("agentlens-lock-timed-test-{}", now_ns()));
+        CoreState::open(&dir)
+    }
+
+    #[test]
+    fn records_and_clears_the_holder() {
+        let m: Mutex<CoreState> = Mutex::new(fresh_state());
+        let line_of_lock;
+        {
+            let _g = m.lock_timed().unwrap();
+            line_of_lock = line!() - 1;
+            let ptr = HOLDER_SITE.load(Ordering::Acquire);
+            assert!(!ptr.is_null(), "holder should be recorded while the guard is alive");
+            let loc: &'static Location<'static> = unsafe { &*ptr };
+            assert!(loc.file().ends_with("lib.rs"));
+            assert_eq!(loc.line(), line_of_lock);
+        }
+        assert!(HOLDER_SITE.load(Ordering::Acquire).is_null(), "holder should clear on drop");
+    }
+
+    #[test]
+    fn poisoned_mutex_still_yields_a_usable_guard() {
+        let m: Mutex<CoreState> = Mutex::new(fresh_state());
+        {
+            let wrapped = std::panic::AssertUnwindSafe(&m);
+            let _ = std::panic::catch_unwind(|| {
+                let _g = wrapped.0.lock().unwrap();
+                panic!("poison it");
+            });
+        }
+        match m.lock_timed() {
+            Ok(_) => panic!("expected poisoned"),
+            Err(poisoned) => {
+                let guard = poisoned.into_inner();
+                // Just needs to deref to a CoreState without panicking.
+                let _ = guard.data_version;
+            }
+        };
     }
 }

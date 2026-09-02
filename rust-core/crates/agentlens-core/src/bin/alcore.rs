@@ -15,6 +15,8 @@ use std::process::exit;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use agentlens_core::LockTimed;
+
 /// server.ts falls back to a 5s full poll when fs.watch attaches to NO log dir; with watchers
 /// the steady state is the targeted sweep + the 60s backstop (log_reader::FULL_RESCAN).
 const LOG_SWEEP_INTERVAL: Duration = Duration::from_secs(5);
@@ -209,7 +211,7 @@ fn main() {
     };
     let state = Arc::new(Mutex::new(agentlens_core::CoreState::open(std::path::Path::new(&data_dir))));
     {
-        let mut st = state.lock().expect("state");
+        let mut st = state.lock_timed().expect("state");
         st.embed_key = Some(embed_key);
         // What /api/server-stats reports as `ports` — the listeners this process ACTUALLY binds.
         // `mcp` used to be left at the env/TS default (4316) while nothing bound it, so the server
@@ -356,7 +358,7 @@ fn main() {
     if let Some(h) = sweeper.take() {
         h.stop();
     }
-    if let Ok(mut st) = state.lock() {
+    if let Ok(mut st) = state.lock_timed() {
         st.flush_spans();
         // StatuslineStore.stop(): flush the buffer to the WAL, deliberately NOT sealing — the
         // WAL is fsynced and every read unions the WALs; the next boot's seal timer converts it.
