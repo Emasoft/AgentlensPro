@@ -3,7 +3,7 @@ trdd-id: N60JUWU3
 title: The graceful shutdown needs the state lock and has no timeout, so a long holder starves the stop into a SIGKILL
 column: todo
 created: 2026-09-02T16:36:33+0200
-updated: 2026-09-02T16:58:13+0200
+updated: 2026-09-02T17:01:17+0200
 current-owner: main-session
 task-type: bugfix
 priority: high
@@ -52,14 +52,15 @@ arrived) is MEASURED from the store's byte layout, not from start times — a st
 cannot separate the two pids, since both flush spans that started earlier (a first draft here used
 one and got 16:34:22, a number capped by its own construction). The old pid's last append ends at
 byte `size − spanAppendBytes(new pid)` = 340,795,194; the newest span start in the 3 MB before that
-offset is **16:28:57** and the oldest in the 3 MB after it is 16:27:58 (in-flight client batches
-the new pid flushed). How exact the boundary is: `spanAppendBytes` sums exactly `chunk.len()` of
-each `write_all` to `<day>.ndjson` (`agentlens-spanstore/src/writer.rs`), no other day's file was
-touched today, and a counter-first re-read moved the offset by 30 KB ≈ one tick's append — so the
-boundary is good to one in-flight append (a `stat` taken during a `write_all` is why the first
-read landed mid-line). Note the 16:27:58 minimum after the boundary: the new pid DID flush spans
-that started 6.5 min before its boot, so late client batches were still arriving after the
-restart — the 16:34:30–16:42 window is partly backlog fill, not only fresh export. So:
+offset is **16:28:57**. How exact the boundary is: `spanAppendBytes` sums exactly `chunk.len()`
+of each `write_all` to `<day>.ndjson` (`agentlens-spanstore/src/writer.rs`), only today's segment
+is uncompressed so no other file received appends, and the two reads bracket it — the first
+(`stat` before `curl`, biased EARLY, offset 340,795,194, landed mid-line, cause not established)
+and the second (counter first, biased LATE, offset 340,825,965, landed on a line boundary) differ
+by 30 KB ≈ one tick's append, so the true boundary lies between them. The oldest span start AFTER
+the late-biased boundary is **16:34:22** (an in-flight batch from the kill second, flushed by the
+new pid); an earlier draft read 16:27:58 after the early-biased one, which was the old pid's last
+chunk on the wrong side — no late client backlog arrived after the restart. So:
   - **16:12–16:28 — SOURCE loss, measured.** The tick was still flushing (spans up to 16:28:57
     reached disk) and the buckets are empty anyway: nothing arrived. The holds at the composition
     guard reached 82 / 85 / 67 s from about 16:10 (TRDD-UTFVMVT8, coincident within the 15-min
@@ -73,8 +74,9 @@ restart — the 16:34:30–16:42 window is partly backlog fill, not only fresh e
     READ window, the writer's `pending` buckets are separate), so the sink share is bounded by
     that interval, not by one tick.
   - **16:34:30–16:42 — SOURCE loss, measured.** The new pid flushed from its first ticks (its
-    oldest flushed start is 16:27:58) and answered OTLP in 0.5 ms; the exporters resumed at 16:43 —
-    a back-off, inferred.
+    oldest flushed start is 16:34:22) and answered OTLP in 0.5 ms; the 16:12–16:28 buckets did not
+    fill on a later read, so no backlog was delivered; the exporters resumed at 16:43 — a
+    back-off, inferred.
 The new pid's `droppedOnFailure = 0` says nothing about the old pid and is not evidence here.
 Claude-session spans backfill from the JSONL transcript (log wins on collision); the
 `cost_usd`-class OTEL-only fields in those intervals do not. This is the actual size of the
