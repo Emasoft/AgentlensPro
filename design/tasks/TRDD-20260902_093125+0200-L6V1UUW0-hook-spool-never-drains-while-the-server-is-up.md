@@ -1,9 +1,9 @@
 ---
 trdd-id: L6V1UUW0
 title: The hook-spool never drains while the server is up, and every spooled hook spawns a doomed revive
-column: dev
+column: ai_review
 created: 2026-09-02T09:31:25+0200
-updated: 2026-09-02T11:46:12+0200
+updated: 2026-09-02T13:10:29+0200
 current-owner: main-session
 task-type: bugfix
 priority: high
@@ -29,10 +29,10 @@ related: [465EXTJ6, 2R36W8Q1, D3K7QM2P]
   781 such refusals in `server.log`. The storm is pure waste and lands on the machine exactly when it is
   already stalling.
 - **Why hooks time out at all** is TRDD-2R36W8Q1's problem (server stalls), not this card's.
-- **NEXT ACTION:** (1) alcore: a 30 s drain tick calling `drain_hook_spool` with a per-tick file cap so the
-  state lock is never held across an unbounded file loop; (2) CLI: skip the revive when
-  `<dataDir>/server.pid` names a live process (the ownership refusal proves the spawn is pointless);
-  (3) tests for both; (4) verify live: spool count drops to 0 within 60 s of deploy without a restart.
+- **DONE 2026-09-02 (commits f5926457 core tick, 6b6a37f2 CLI guard; deployed 12:52 as pid 26060, again
+  13:09 as pid 53886).** All four boxes hold — see Acceptance. The spool had grown to 300 files by the
+  deploy (28 at 09:23) and `server.log` to 7,360 refusals; both stopped at the deploy. Nothing left on this
+  card but review.
 
 ## Acceptance
 
@@ -53,8 +53,14 @@ related: [465EXTJ6, 2R36W8Q1, D3K7QM2P]
       `src/test/hookSpool.test.ts` 3 new cases (`pidfileOwnerAlive: a live pid…`, `a dead pid…`, `no
       pidfile…`); `npx mocha --no-config --require src/test/setup.js --ui tdd out/test/test/hookSpool.test.js`
       → 11 passing (2026-09-02).
-- [ ] Live: after deploy, `hookEvents.spooled` in `/api/server-stats` reaches 0 without a server restart and
+- [x] Live: after deploy, `hookEvents.spooled` in `/api/server-stats` reaches 0 without a server restart and
       `server.log` gains no new `started-by=hook-revive` refusals over 15 min.
+      Evidence (12:53:09 → 13:08:13, pid 26060, the sessions already running): `hookEvents.spooled` 0 at
+      both ends, `find hook-spool -name '*.json' | wc -l` 0 at both ends; `Refusing to start` count in
+      `server.log` 7,360 → 7,360; SEVEN `alcore: hook-spool: drained 1–2 event(s)` lines AFTER the boot
+      drain — those are the 30 s tick draining events spooled post-boot, the thing that never happened
+      before (28 files, 0 drained, 40 min). The boot drain itself swallowed the 300-file backlog
+      (`hooks: 302 event(s) since boot` at +42 s).
 
 ## Notes and lessons learned
 

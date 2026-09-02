@@ -23,8 +23,8 @@ All notable changes to AgentlensPro are documented here.
   read it as `false`).
 - **alcore names the holder of a slow state lock** (TRDD-2R36W8Q1): every acquisition of the core
   state mutex records its call site, and a waiter that blocks for ≥ `AGENTLENS_LOCK_TRACE_MS`
-  (default 250) logs `state lock waited N ms at file:line; holder file:line for M ms`; a guard held
-  that long logs `state lock held N ms by file:line` on release. Profiler captures of a stalled
+  (default 250) logs `state lock waited N ms at file:line; holder file:line (holding for M ms when we
+  queued)`; a guard held that long logs `state lock held N ms by file:line` on release. Profiler captures of a stalled
   server showed handlers parked on the lock with no holder in any stack — the holder had already
   returned by the time the sampler walked it — so the lock now attributes itself.
 

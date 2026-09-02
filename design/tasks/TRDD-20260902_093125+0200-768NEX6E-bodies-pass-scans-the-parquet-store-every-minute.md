@@ -3,7 +3,7 @@ trdd-id: 768NEX6E
 title: What does the 60 s bodies pass cost the machine, and why is alcore 7 GB resident
 column: dev
 created: 2026-09-02T09:31:25+0200
-updated: 2026-09-02T11:35:15+0200
+updated: 2026-09-02T13:10:29+0200
 current-owner: main-session
 task-type: spike
 priority: high
@@ -54,15 +54,31 @@ related: [2R36W8Q1, YU8QPU89, ZW4APOPI]
      part files; a cached `known` sha set would then claim a blob exists that is gone, dedup would skip
      writing it, and the new body would reference a missing blob — data loss. Only safe with an inventory
      check; card separately if step 2 is not enough.
-- **NEXT ACTION:** step 1 + step 2 in `agentlens-store/src/lib.rs` and `chores.rs` with a test that a
-  verify touches only the owning part files (count files opened, or assert the generated SQL's file list).
-  Then measure one pass: add a duration to the `bodies pass:` log line.
+- **Steps 1 + 2 LANDED (commits ef60b90f store index, f5926457 chores sizing + timing) and MEASURED
+  2026-09-02 12:53–13:08 (pid 26060, 2 threads / 2 GB, sessions already running, no soak).** Twelve
+  `bodies pass:` lines: 2–17 files ingested per pass, wall time **14.0, 13.8, 13.8, 14.1, 15.4, 16.2, 17.1,
+  19.7, 23.0 s** typical and **55.6, 69.0, 141.4 s** for three passes that overlapped the state-lock
+  holds TRDD-2R36W8Q1's instrumentation named in the same window (ui.rs:560 held 74.7 s / 34.8 s /
+  27.2 s — the CPU was contended, the pass does not take that lock). A 14 s floor for a 2-file pass is
+  the `open_store` rebuild — `SELECT DISTINCT sha, filename FROM read_parquet([6,798 blob parts])` plus
+  loading the 1,843 bodies parts — which step 2 does not touch: the index makes the VERIFY read
+  O(pass) but the DEDUP-SET rebuild is still O(corpus) every minute. Step 3's "only safe with an
+  inventory check" is therefore the next lever → carded as TRDD-2TQHNMEC.
+- **NEXT ACTION:** box 3 — decompose alcore's resident set (8,081 MB at the 12:52 boot per `server
+  status`) with `vmmap`/`footprint` on the live pid, attributing the span window, log-session cards,
+  summary cache and the three DuckDB pools; then decide the `memory_limit` defaults from numbers.
 
 ## Acceptance
 
-- [ ] The exact SQL each bodies pass runs is quoted with file:line, and the number of parquet files it opens
+- [x] The exact SQL each bodies pass runs is quoted with file:line, and the number of parquet files it opens
       per pass is measured (DuckDB `EXPLAIN ANALYZE` or the file cache counters).
+      Evidence: STATE "Box 1 ANSWERED" (the three statements with `lib.rs` lines); file count per pass
+      is the part-file list `open_store` binds by construction — 6,798 blob parts + 1,843 bodies parts
+      (`part_files()`), every pass, before the index shrinks the verify read. Not `EXPLAIN ANALYZE`; the
+      SQL names every file, so the count is exact without it.
 - [ ] One pass's wall time, CPU time and bytes read are measured on this machine under normal load.
+      Wall time IS measured (STATE: 14–23 s typical, 55–141 s under lock-hold contention, 12 passes);
+      CPU time and bytes read are NOT — they belong with TRDD-2TQHNMEC's before/after.
 - [ ] alcore's resident set is decomposed (span window, log-session cards, summary cache, DuckDB pools) with
       a measurement, not an estimate; a decision on the DuckDB `memory_limit` defaults follows from it.
 - [x] If a pass scans the whole store: a partition-scoped rewrite is carded (or done here if ≤ 3 files).

@@ -1,9 +1,9 @@
 ---
 trdd-id: UIDUVNY8
 title: ensureRamDisk leaks a twin volume when the spool name is already taken
-column: dev
+column: ai_review
 created: 2026-09-02T09:31:25+0200
-updated: 2026-09-02T11:46:12+0200
+updated: 2026-09-02T13:10:29+0200
 current-owner: main-session
 task-type: bugfix
 priority: normal
@@ -30,6 +30,10 @@ related: [ZW4APOPI, 5PUD8RKE]
 - **NEXT ACTION:** in `ensureRamDisk`, on a failed post-check detach `dev`, re-read `ramDiskInfo(mountPoint)`,
   and return the first caller's mount if it is now present (idempotent race), else throw. Unit test with an
   injected `execFileSync` that mounts at `<name> 1`.
+- **DONE 2026-09-02 (commit 5bb076c8; in the CLI bundle since the 12:5x `node esbuild.js`).** Boxes 1–2
+  hold at the unit level; box 3 (a real `spool ensure` + `setup` race on this machine) was deliberately
+  NOT run — it mutates the live RAM disk. Review decides whether that is acceptable evidence.
+  `mount | grep -c AgentLensSpool` is 1 since the hand detach at 09:27.
 
 ## Acceptance
 
