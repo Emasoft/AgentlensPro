@@ -18,7 +18,7 @@ external-refs: [https://github.com/Emasoft/AgentlensPro/actions/runs/33667160582
 Not started. **NEXT ACTION:** await MANAGER/USER approval (`min-approval-requirement:
 manager` — this edits `.github/workflows/ci.yml`, a Tier-2 baseline/workflow surface). On
 approval: `git mv` this file to `design/tasks/`, set `column: planned`, then apply the two
-edits below, push a commit, and verify a fresh `main` CI run is green.
+edits below, commit (the USER pushes — never push unprompted), and verify the next `main` CI run is green.
 
 ## Why
 
