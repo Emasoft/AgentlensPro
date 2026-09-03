@@ -168,6 +168,37 @@ construction, so it compresses worse than this drift-free test.
 What the idea gets right is query locality, and that is answered by sorting the long form on
 `(position, body_id)` without paying 1.22× on every byte.
 
+**Correction 2e — split each message body by its section markers into typed SUB-ELEMENTS (owner,
+adopted).** A message body is not one thing: it carries delimited sections with recognisable
+prefixes. Measured over 300,000 sampled message blobs (bytes are of the whole blob carrying the
+marker, so they overlap — the point is that the sections exist and are large):
+
+| marker | blobs | bytes |
+|---|---|---|
+| `tool_use` | 229,140 | 443 MB |
+| `tool_result` | 114,841 | 183 MB |
+| `<persisted-output>` | 21,422 | 26 MB |
+| `<system-reminder>` | 10,381 | 299 MB |
+| skills catalog (`The following skills are available`) | 4,743 | 79 MB |
+| `<command-name>` | 2,683 | 65 MB |
+| `[janitor-memory]` | 2,528 | 147 MB |
+| `<local-command-stdout>` | 1,944 | 14 MB |
+| `<task-notification>` | 1,653 | 270 MB |
+| CLAUDE.md injection (`# claudeMd`) | 989 | 265 MB |
+| agent catalog (`Available agent types`) | 986 | 102 MB |
+
+Each becomes its own row with an `element_type` (skill_catalog, agent_catalog, claude_md,
+system_reminder, hook_injection, tool_use, tool_result, persisted_output, command, prose) plus
+`name` and `bytes` — which is what makes "bytes added by hooks this week" or "turns carrying the
+agent catalog" a plain SQL query instead of a re-parse.
+
+**HARD LIMIT on what the split may claim.** The cache boundary operates on TOP-LEVEL wire elements,
+because those are the array entries the API sees. A `<system-reminder>` inside `messages[143]` is not
+separately cacheable: if it changes, the whole of `messages[143]` diverges. Sub-elements therefore
+INHERIT their parent element's read/write classification and never carry a boundary of their own.
+Treating a sub-section as its own cache unit is the same class of error as the two the validation
+caught, and would over-report cache hits on exactly the blocks the owner cares most about.
+
 **Correction 3 — 273 million rows of JSON punctuation are waste, and that is the owner's point
 landing.** Of 457.7M part rows only 184.6M carry content; the rest are commas, braces and field
 names stored one row each — 60% of the largest table holding syntax that is reconstructable from the
@@ -191,6 +222,10 @@ column is null and a backfill pass fills it. Null means "not yet computed", neve
 - [ ] A null boundary is rendered as "not computed", distinct from a computed zero.
 - [ ] Round-trip: every body used rebuilds to a matching sha256.
 - [ ] Typed columns: numeric/enum/timestamp fields are real typed columns, never JSON text.
+- [ ] Message bodies split by section marker into typed sub-elements, each with `element_type`,
+      `name` and `bytes`, and each INHERITING its parent element's cache classification.
+- [ ] An unrecognised section is typed `prose` and still accounted — the split never drops bytes,
+      and the sum of a message's sub-elements equals the message's own byte count.
 - [ ] Schema guard: a check fails the build when any column has more than one physical type across
       the store's files, and a new API field cannot land in an existing typed column.
 
