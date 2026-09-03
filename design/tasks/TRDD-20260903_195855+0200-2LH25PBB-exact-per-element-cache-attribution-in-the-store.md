@@ -168,6 +168,27 @@ construction, so it compresses worse than this drift-free test.
 What the idea gets right is query locality, and that is answered by sorting the long form on
 `(position, body_id)` without paying 1.22× on every byte.
 
+**Re-tested narrowly, with the `body_id` confound removed** (the owner rightly noted the first test
+could have masked the effect). 94,974 rows holding only 114 distinct tool texts, measuring the TEXT
+column alone:
+
+| layout | bytes |
+|---|---|
+| A — one column, interleaved in natural body order | 234,051 |
+| B — one column, identical values sorted ADJACENT | 234,211 |
+| C — wide, one column per tool slot | 413,871 |
+
+**A ≈ B is the finding.** Sorting identical values together gains nothing, because dictionary
+encoding stores each distinct value ONCE per column chunk and leaves each row holding a small code —
+"only the first instance is kept" is already true and is ORDER-INDEPENDENT. The arithmetic confirms
+it: 114 schemas at ~1.5 KB ≈ 171 KB of dictionary plus ~95 KB of codes ≈ the 234 KB measured. And C
+is now 1.77× worse with the confound gone: 32 columns each carry their own dictionary, and 4,000
+bodies × 32 slots make 128,000 cells against 94,974 rows, nulls padding the short ones.
+
+The premise that mixing values costs compression is true in general and does not bite here: a
+114-entry dictionary is tiny and shared. Vertical similarity is delivered by the ENCODING
+automatically; hand-arranging the data to produce it costs 1.77× and buys nothing.
+
 **Correction 2e — split each message body by its section markers into typed SUB-ELEMENTS (owner,
 adopted).** A message body is not one thing: it carries delimited sections with recognisable
 prefixes. Measured over 300,000 sampled message blobs (bytes are of the whole blob carrying the
