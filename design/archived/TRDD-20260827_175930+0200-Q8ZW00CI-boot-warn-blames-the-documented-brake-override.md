@@ -1,9 +1,9 @@
 ---
 trdd-id: Q8ZW00CI
 title: The boot WARN says the starter did not honour the brake even for the documented server start override
-column: human_review
+column: complete
 created: 2026-08-27T17:59:30+0200
-updated: 2026-09-01T19:51:30+0200
+updated: 2026-09-03T11:08:50+0200
 last-test-result: pass
 last-test-at: 2026-08-27T19:42:00+0200
 current-owner: main
@@ -13,6 +13,7 @@ priority: 4
 labels: [server, lifecycle, wording]
 relevant-rules: []
 created-by: TRDD-8VGQK9L9 closing verification
+implementation-commits: [952357e8]
 ---
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-08-29
@@ -79,3 +80,9 @@ the invariant "brake cleared ⟺ a server is running" is untouched.
 
 Gates: `check-types` 0, `eslint` 0, `node esbuild.js` 0 (checked, not assumed — a failed esbuild
 silently leaves the stale bundle).
+
+## Approval log
+
+- 2026-09-03T11:08:50+0200 — COMPLETED by main-session (human_review delegated by USER
+  2026-09-03). Both boxes verified in code (alcore.rs:156-164) and pinned by
+  tests/brake_provenance.rs; port confirmed live (boot-provenance lines in server.log).
