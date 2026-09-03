@@ -3,7 +3,7 @@ trdd-id: HSPUF5XH
 title: Bump and publish agentlenspro only after every open card is terminal and every known issue is fixed
 column: blocked
 created: 2026-09-03T10:48:30+0200
-updated: 2026-09-03T10:48:30+0200
+updated: 2026-09-03T11:15:00+0200
 current-owner: main-session
 task-type: infra
 min-approval-requirement: user
@@ -12,7 +12,7 @@ created-by: main-session
 npt: []
 eht: []
 pre-block-column: todo
-blocked-by: [EAK9R8IY, DMWOBWFH, 2R36W8Q1, IXMB2JVD, N60JUWU3, UTFVMVT8, CAJ5RCP9, 9SYRK6SW, QE114936, POLG0613, 768NEX6E, 7YPQWKPG]
+blocked-by: [EAK9R8IY, DMWOBWFH, 2R36W8Q1, IXMB2JVD, N60JUWU3, UTFVMVT8, CAJ5RCP9, 9SYRK6SW, QE114936, POLG0613, 768NEX6E, 7YPQWKPG, 99HUNXJS, 7NHUU6GK, ZSX34J8F, 2R0AXCKL, TP3BA3ED, 2TQHNMEC, 70D0TUBZ]
 ---
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-03
@@ -23,6 +23,19 @@ whose card has reached a terminal column (`complete`, `cancelled`,
 `superseded`) or moved out of the gating set (`dev|testing|todo|blocked|plan|dispatch`).
 When `blocked-by` is empty, restore `column: pre-block-column` value (`todo`),
 then proceed to run the acceptance gates below before touching version/tag.
+
+**Backburner triage 2026-09-03** (report:
+`reports/board-sweep/20260903_111058+0200-backburner-triage.md`): WORK NOW → 99HUNXJS, 7NHUU6GK,
+ZSX34J8F, 2R0AXCKL, TP3BA3ED, 2TQHNMEC are added to `blocked-by`; Z8WJZV8E archived superseded
+(re-filed as TRDD-70D0TUBZ, itself added to `blocked-by`).
+
+**ACCEPTED NON-BLOCKING by main-session:** E32TO0XC (explicit future-scope research, no defect),
+IXVHM52P (fix landed, verification has a `review-after:` date and no repro set).
+
+**ZSX34J8F is USER-GATED on the disk action:** 98 GB in `rust-core/target/debug`;
+`~/.claude/rules/never_free_space.md` forbids the agent freeing disk space unilaterally — the
+main session will propose the retention rule and the exact command and wait for the user before
+this card can close.
 
 ## User order (verbatim, 2026-09-03)
 
