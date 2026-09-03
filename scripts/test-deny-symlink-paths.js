@@ -50,6 +50,19 @@ check(run(`ls ${spaced.replace(' ', '\\ ')}/x`).denied, 'backslash-escaped space
 // AND their SUBTREES must still be inspected. Listing /tmp and /var as PREFIXES excluded every
 // scratch dir and worktree — including the incident path — and the matrix only noticed because its
 // fixture happens to live in a temp dir. This case makes that explicit instead of accidental.
+// The owner's own example, on a LITERAL /tmp path — not under mkdtemp, so it cannot pass by an
+// accident of where fixtures happen to live: "/tmp is a known symlink, so it's ignored. but if
+// after tmp there is a non whitelisted symlink folder (i.e. /tmp/this-is-a-symlink/) then it must
+// trigger the protection."
+const litReal = `/tmp/symguard-real-${process.pid}`
+const litLink = `/tmp/symguard-link-${process.pid}`
+fs.mkdirSync(path.join(litReal, 'sub'), { recursive: true })
+fs.symlinkSync(litReal, litLink)
+check(run(`ls ${litLink}/`).denied, 'a symlink COMPONENT under /tmp triggers, though /tmp itself does not')
+check(run(`cat ${litLink}/sub/f.txt`).denied, '...at any depth beneath it')
+check(!run(`ls ${litReal}/sub`).denied, 'a real path under /tmp stays allowed')
+fs.unlinkSync(litLink); fs.rmSync(litReal, { recursive: true, force: true })
+
 const tmpLink = path.join(os.tmpdir(), `symguard-probe-${process.pid}`)
 try { fs.symlinkSync(real, tmpLink) } catch { /* leftover from a crashed run */ }
 check(run(`ls ${tmpLink}`).denied, 'a symlink UNDER the excluded /var|/tmp root is still caught')
