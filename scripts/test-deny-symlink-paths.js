@@ -38,7 +38,22 @@ check(!run(`ls ${real}`).denied, 'the real path behind the link is allowed')
 check(!run('echo hello').denied, 'a command with no path is allowed')
 check(!run('git status').denied, 'an ordinary command is allowed')
 
+// --- paths with SPACES. Routine on macOS; all three spellings silently bypassed the guard until
+// --- quoted segments were extracted whole (measured 2026-09-03).
+const spaced = path.join(root, 'My Project')
+fs.symlinkSync(real, spaced)
+check(run(`ls "${spaced}/x"`).denied, 'double-quoted spaced path')
+check(run(`ls '${spaced}/x'`).denied, 'single-quoted spaced path')
+check(run(`ls ${spaced.replace(' ', '\\ ')}/x`).denied, 'backslash-escaped spaced path')
+
 // --- the exclusions: platform symlinks must NOT cost an OTP -----------------------------------
+// AND their SUBTREES must still be inspected. Listing /tmp and /var as PREFIXES excluded every
+// scratch dir and worktree — including the incident path — and the matrix only noticed because its
+// fixture happens to live in a temp dir. This case makes that explicit instead of accidental.
+const tmpLink = path.join(os.tmpdir(), `symguard-probe-${process.pid}`)
+try { fs.symlinkSync(real, tmpLink) } catch { /* leftover from a crashed run */ }
+check(run(`ls ${tmpLink}`).denied, 'a symlink UNDER the excluded /var|/tmp root is still caught')
+try { fs.unlinkSync(tmpLink) } catch { /* already gone */ }
 check(!run('ls /tmp/whatever').denied, 'macOS /tmp (itself a symlink) is excluded')
 check(!run('cat /etc/hosts').denied, 'macOS /etc is excluded')
 check(!run('ls /opt/homebrew/bin/node').denied, 'homebrew bin shims are excluded')

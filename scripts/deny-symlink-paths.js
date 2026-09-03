@@ -96,12 +96,28 @@ function expand(tok) {
  *  `"/a/b"` is inspected; a token with no `/` at all is not a path worth walking. */
 function pathTokens(cmd) {
   const out = []
-  for (const raw of cmd.split(/[\s;|&<>()]+/)) {
-    const tok = raw.replace(/^['"]+|['"]+$/g, '')
-    if (!tok || tok.startsWith('-')) continue
-    if (!tok.includes('/') && !tok.startsWith('~') && !tok.startsWith('$')) continue
+  const seen = new Set()
+  const add = (tok) => {
+    if (!tok || tok.startsWith('-') || seen.has(tok)) return
+    seen.add(tok)
+    if (!tok.includes('/') && !tok.startsWith('~') && !tok.startsWith('$')) return
     const e = expand(tok)
     if (e && e.includes('/')) out.push({ raw: tok, resolved: e })
+  }
+
+  // QUOTED SEGMENTS FIRST, whole. Splitting on whitespace destroys `"/Users/me/My Project/x"` into
+  // two tokens, neither of which exists, so a symlinked path is silently ALLOWED — measured
+  // 2026-09-03 for all three spellings (double-quoted, single-quoted, backslash-escaped). Paths with
+  // spaces are routine on macOS (iCloud Drive, anything named in a GUI), so this was not an edge
+  // case; it was a hole under the most ordinary directory names a person has.
+  const rest = cmd.replace(/(['"])((?:\\.|(?!\1)[^\\])*)\1/g, (_m, _q, inner) => {
+    add(inner)
+    return ' '
+  })
+
+  // Then unquoted tokens, joining backslash-escaped spaces (`My\ Project`) before splitting.
+  for (const raw of rest.replace(/\\ /g, '\u0000').split(/[\s;|&<>()]+/)) {
+    add(raw.replace(/\u0000/g, ' '))
   }
   return out
 }
