@@ -3,7 +3,7 @@ trdd-id: CAJ5RCP9
 title: Durable cache-event history that joins the OTEL ledger with the statusline feed
 column: todo
 created: 2026-09-02T21:52:02+0200
-updated: 2026-09-03T04:20:46+0200
+updated: 2026-09-03T04:47:31+0200
 current-owner: main-session
 task-type: feature
 priority: high
@@ -11,9 +11,10 @@ min-approval-requirement: none
 blocked-by: []
 related: [6SPXOV0P, 5PUD8RKE, B9ERTBZ9]
 requested-by: user
+eht: [9SYRK6SW, IRNHEN4Z, GVA8TTJF, QSFYIHUO]
 ---
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-02
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-03
 
 - Investigation done (`reports/cache-history/20260902_224603+0200-storage-and-join-investigation.md`):
   the forensics fact DB is sql.js SQLite, NOT DuckDB, 5,730 rows, last indexed 2026-08-12
@@ -22,10 +23,26 @@ requested-by: user
   the durable table must be built fresh in DuckDB at ingest (bodies pass), not extended from the
   fact DB. Fable advisor's 7YPQWKPG verdict notes `forensics.db` is on-disk data read outside
   DuckDB and must be routed through this card.
-- NEXT ACTION: design the `api_calls` table schema (session_id, ts, model, buckets, ttl tier,
-  cache_miss_reason, previous_message_id, query-source label, request fingerprint, cost) + the
-  statusline join view; write at the bodies-pass ingest BEFORE delete; child of 7YPQWKPG's
-  DuckDB instance (one connection).
+- Design done (`reports/trdd-caj5rcp9/20260903_044515+0200-api-calls-table-design.md`): write
+  site is `ingest_body` (`agentlens-store/src/lib.rs:323`, called from `pass.rs:486` before the
+  settle/delete gate); `api_call` schema is one row per ingested FILE (request XOR response),
+  keyed by `call_id` = filename stem (NOT `previous_message_id` — measured-dead for pairing);
+  storage rides the existing store's single DuckDB connection as a 5th staging table, flushed by
+  the existing `flush_detailed` loop, ≈20.5 MB/30 days, negligible vs the SSD budget; 90-day
+  filename-epoch retention sweep (no existing store prunes today, per doctrine); `api_calls`
+  (coalesced per-call) and `cache_turns` (statusline join) views with `union_by_name := true`
+  load-bearing; three raw-body scanners (`cache_event_log.rs`, `cache_break_timeline.rs`,
+  `burn/investigator_scan.rs::scan_window`) migrate to SELECT off the durable table.
+  Split into 4 depth-1 EHT children, order 1→2→3→4:
+  - **9SYRK6SW** — writer at the bodies-pass ingest site (first, unblocks everything, dispatchable now).
+  - **IRNHEN4Z** — retention chore + 24h-survives-restart size verification (blocked-by 9SYRK6SW).
+  - **GVA8TTJF** — coalesced view + statusline join view + acceptance SQL (blocked-by 9SYRK6SW;
+    measures the real join match rate the investigation had 0 rows to test).
+  - **QSFYIHUO** — migrate the 3 consumers off raw-body scanning, one file at a time (blocked-by
+    9SYRK6SW and GVA8TTJF; satisfies acceptance box 2 literally — zero bodies on disk).
+- NEXT ACTION: dispatch 9SYRK6SW (the writer) — it is unblocked and everything else depends on
+  its output. Parent stays `column: todo` until all 4 EHTs are terminal (per NPT/EHT rule:
+  parent cannot reach `complete` until every EHT is terminal).
 
 ## WHY
 
