@@ -69,6 +69,13 @@ export function cacheOrder(elements: readonly RequestElement[]): RequestElement[
 export interface Divergence {
   /** Index into the cache-ordered CURRENT elements, or -1 when the two are identical so far. */
   index: number
+  /**
+   * The same point expressed in the PREVIOUS request's coordinates. The two differ whenever the
+   * requests hold a different number of key-excluded elements, because the walk skips those
+   * independently on each side. `survivingBoundary` scans the previous request, so it must be given
+   * this one; passing `index` there silently mixes coordinate systems and mis-places the boundary.
+   */
+  prevIndex: number
   /** The element that differs, when there is one. */
   element?: RequestElement
   /** Its counterpart in the previous request, when the position existed there. */
@@ -91,7 +98,7 @@ export function firstDivergence(
     if (prevOrdered[i].keyExcluded) { i++; continue }
     if (curOrdered[j].keyExcluded) { j++; continue }
     if (prevOrdered[i].key !== curOrdered[j].key) {
-      return { index: j, element: curOrdered[j], previous: prevOrdered[i], appendOnly: false }
+      return { index: j, prevIndex: i, element: curOrdered[j], previous: prevOrdered[i], appendOnly: false }
     }
     i++; j++
   }
@@ -99,10 +106,11 @@ export function firstDivergence(
   while (i < prevOrdered.length && prevOrdered[i].keyExcluded) i++
   if (i < prevOrdered.length) {
     // The current request is SHORTER — content was removed, which breaks the prefix at that point.
-    return { index: curOrdered.length, previous: prevOrdered[i], appendOnly: false }
+    return { index: curOrdered.length, prevIndex: i, previous: prevOrdered[i], appendOnly: false }
   }
   while (j < curOrdered.length && curOrdered[j].keyExcluded) j++
-  return { index: j < curOrdered.length ? j : -1, element: curOrdered[j], appendOnly: true }
+  const appended = j < curOrdered.length
+  return { index: appended ? j : -1, prevIndex: appended ? i : -1, element: curOrdered[j], appendOnly: true }
 }
 
 /**
@@ -169,9 +177,16 @@ export function classifyTurn(
   const prevOrdered = prev ? cacheOrder(prev) : null
   const divergence = prevOrdered
     ? firstDivergence(prevOrdered, curOrdered)
-    : { index: 0, element: curOrdered[0], appendOnly: false }
-  const boundary = prevOrdered ? survivingBoundary(prevOrdered, divergence.index) : -1
-  const lastBp = lastBreakpoint(curOrdered)
+    : { index: 0, prevIndex: 0, element: curOrdered[0], appendOnly: false }
+  // Scanned in the PREVIOUS request's coordinates, then clamped into the current one: the boundary
+  // is used to classify current positions, and the previous request can be longer (content removed),
+  // which would otherwise mark positions that do not exist here.
+  const rawBoundary = prevOrdered ? survivingBoundary(prevOrdered, divergence.prevIndex) : -1
+  const boundary = Math.min(rawBoundary, curOrdered.length - 1)
+  // A breakpoint can only extend the cacheable region, never shrink what already survived, so the
+  // cacheable end is at least the boundary. Without this, a previous request whose trailing marker
+  // sat past this request's own last marker would classify surviving elements as fresh input.
+  const lastBp = Math.max(lastBreakpoint(curOrdered), boundary)
 
   const elements: ClassifiedElement[] = curOrdered.map((el, position) => ({
     ...el,
@@ -210,6 +225,13 @@ export interface Reconciliation {
  *
  * Shares are compared rather than absolute counts because the structural side is measured in bytes
  * and the billed side in tokens. `tolerance` is the share difference treated as agreement.
+ *
+ * KNOWN BIAS, stated rather than hidden: bytes-per-token is not constant across content. Dense JSON
+ * tool schemas tokenize at a different rate than prose, so a turn whose cached region is mostly
+ * schema and whose written region is mostly prose can differ by a few points while the
+ * classification is perfectly correct. The tolerance absorbs that; it does not remove it. The exact
+ * comparison needs measured per-region token counts (`count_tokens` differencing) and is why the
+ * trace offers that on demand instead of pretending bytes are tokens.
  */
 export function reconcile(
   c: TurnClassification,
