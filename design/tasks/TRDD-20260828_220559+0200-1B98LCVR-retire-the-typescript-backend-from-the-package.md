@@ -3,7 +3,7 @@ trdd-id: 1B98LCVR
 title: Retire the TypeScript backend from the package so Rust is the only server that ships
 column: testing
 created: 2026-08-28T22:05:59+0200
-updated: 2026-09-02T02:00:20+0200
+updated: 2026-09-03T06:08:16+0200
 current-owner: claude-agentlenspro
 task-type: refactor
 project-id: agentlenspro
@@ -15,7 +15,17 @@ implementation-commits: [eec7bb36, 952357e8, 48a154a, d58d6e1, 6c6c7f49, d768451
 
 # Retire the TypeScript backend from the package
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-09-02
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-09-03T06:08:16+0200
+
+**Last owed Work item CLOSED — box ticked below.** `agentlenspro server status` (RUNNING,
+canonical=true), `stop` (7s, exit 0, clean), auto-revive + `start` (no-op, exit 0), `status`
+(RUNNING, healthy) all verified against the installed package on this machine; `restart` was
+already exercised cleanly during this deploy (17s, exit 0,
+`reports/deploy/20260903_053800+0200-deploy-420e6bb9-step0.md`). Disruption window ~1-40s; the
+other Claude session sharing this server was unaffected (auto-revive restored it before the
+manual `start` even ran). Report: `reports/board-sweep/20260903_060822+0200-soak-and-restart-checks.md`.
+
+## ⏵ STATE (history) — 2026-09-02
 
 **BOX 4 LANDED AND GATED (2026-09-02).** `standalone/server.ts`, the `src/**` modules only it
 imported, the esbuild `server` target and `findServerJs` are gone (`567fc5c2`); every spawn path
@@ -188,8 +198,11 @@ downgrade on any other.
       imported go with it (`scripts/check-no-mirrors.js` and `check-types` stay green). —
       `567fc5c2`; gated 2026-09-02 on the final binary: full suite 2536 passing / 0 failing,
       `check-types` 0, `check-no-mirrors` OK, `check-dist-contents` OK (STATE block has the detail).
-- [ ] `agentlenspro setup` / `server start|restart|status|stop` verified against the installed
-      package on this machine, both Claude sessions that depend on the server unaffected.
+- [x] `agentlenspro setup` / `server start|restart|status|stop` verified against the installed
+      package on this machine, both Claude sessions that depend on the server unaffected. —
+      2026-09-03: `status`/`stop` (7s)/`start`/`status` cycle verified (auto-revive restored the
+      server in ~1s); `restart` already verified at deploy time (17s, exit 0). Report:
+      `reports/board-sweep/20260903_060822+0200-soak-and-restart-checks.md`.
 - [x] CHANGELOG + version bump — `6f74b51f` (2.33.2) + the backpressure line `6b878638`.
       DMWOBWFH box 3 is NOT ticked from here: its wording is false of the repo while test-only
       persistence TS remains (STATE block, "deliberately NOT ticked"); DMWOBWFH owns that residue.

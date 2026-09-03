@@ -3,7 +3,7 @@ trdd-id: N60JUWU3
 title: The graceful shutdown needs the state lock and has no timeout, so a long holder starves the stop into a SIGKILL
 column: testing
 created: 2026-09-02T16:36:33+0200
-updated: 2026-09-03T05:36:55+0200
+updated: 2026-09-03T06:08:16+0200
 current-owner: main-session
 task-type: bugfix
 priority: high
@@ -15,13 +15,21 @@ implementation-commits: [420e6bb9]
 
 # The graceful shutdown needs the state lock and has no timeout, so a long holder starves the stop into a SIGKILL
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-03T05:36:55+0200
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-03T06:08:16+0200
+
+**Owed post-deploy check DONE — PASS, but it closes no acceptance box.** `agentlenspro server
+stop` on pid 2074 (the new binary, 60+ min uptime) returned in **7s** (exit 0, well under the 15s
+bound). `server.log` tail after the stop showed only a `bodies pass` completion + the mimalloc
+exit-stats dump — **no `alcore: stop (waiting on|timed out …)` line**, i.e. a clean immediate stop
+(the lock-holder-naming message only fires when the stop actually queues, which it did not here
+at real traffic). The dataDir's `hook-revive` mechanism auto-restarted the server within ~1s
+(`started-by=hook-revive`); `agentlenspro server start`/`status` afterward confirmed a healthy
+canonical server. **None of the three `## Acceptance` boxes are satisfied by this** — all three
+need a synthetic 120s lock-holder (a test-only hook, not yet built) or a real starvation event.
+Report: `reports/board-sweep/20260903_060822+0200-soak-and-restart-checks.md`.
 
 Deployed 420e6bb9 (via HEAD acaf82e8) as pid 2074, inode 1514169484, clean `agentlenspro server
-restart` in 17s, exit 0. Bounded-stop path NOT yet exercised — the OLD binary performed this
-restart's stop, so it runs on the NEXT `agentlenspro server stop` of pid 2074. Owed check: on
-that stop, `server.log` must show the bounded-wait path (or a clean immediate stop) and the CLI
-must return within 15s. Report: `reports/deploy/20260903_053800+0200-deploy-420e6bb9-step0.md`.
+restart` in 17s, exit 0. Report: `reports/deploy/20260903_053800+0200-deploy-420e6bb9-step0.md`.
 
 - **Implemented, reworked per advisor verdict** (committed, deployed per above):
   - `src/shutdown.rs` (new module) — `pub fn flush_with_deadline(&Mutex<CoreState>, Duration) ->

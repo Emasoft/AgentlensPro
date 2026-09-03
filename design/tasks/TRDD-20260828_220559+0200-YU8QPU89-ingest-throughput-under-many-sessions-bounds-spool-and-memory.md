@@ -3,7 +3,7 @@ trdd-id: YU8QPU89
 title: Verify alcore ingest keeps up with many parallel Claude Code sessions without filling the spool or growing memory
 column: testing
 created: 2026-08-28T22:05:59+0200
-updated: 2026-09-03T04:58:45+0200
+updated: 2026-09-03T06:08:16+0200
 current-owner: claude-agentlenspro
 task-type: audit
 project-id: agentlenspro
@@ -14,7 +14,20 @@ eht: []
 
 # Ingest throughput vs spool and memory under parallel sessions
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-08-29
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-09-03T06:08:16+0200
+
+**BOX 1 STILL OPEN — a real-traffic 1h observation is NOT the same test as the 32× flood, and did
+not close it.** Watched pid 2074 (deployed 420e6bb9) go from 42:39 to 60:51 uptime under ordinary
+(~1×) production load: `~/.agentlens/hook-spool` stayed at 4 files, `/Volumes/AgentLensSpool`
+stayed at 1% used (19→20 MB) and `otel-bodies` file count 1→4 — no upward trend at this rate. RSS
+grew 6.15→6.98 GB over the 18-minute observed window (consistent with the window still filling
+post-restart per this card's own churn finding, not new evidence of a leak). **This is supporting
+evidence only** — box 1 explicitly requires the 32× rate sustained for a full hour, which this did
+not exercise (the existing 22.5-min 32× soak above is still the only synthetic-rate evidence, and
+it is short of the hour). Box left unchecked. Report:
+`reports/board-sweep/20260903_060822+0200-soak-and-restart-checks.md`.
+
+## ⏵ STATE (history) — 2026-08-29
 
 > **THE USER'S ACTUAL SCENARIO, MEASURED AT LAST: 100 PARALLEL SESSIONS, SUSTAINED.**
 > `scripts/bench/alcore-ingest-flood.mjs` now takes `--sessions N [--spans-per-session 26]`, which
