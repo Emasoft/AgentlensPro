@@ -1,0 +1,74 @@
+#!/usr/bin/env node
+// Matrix for scripts/deny-symlink-paths.js. Real dirs, real symlinks — the guard's whole job is a
+// filesystem judgement, so a mocked fs would test nothing.
+//
+// The load-bearing halves: an agent-created symlink in a NAMED path is stopped once with an OTP,
+// and the platform's own symlinks (/tmp, homebrew) are NOT — a guard that demanded a password for
+// every command touching /tmp would be switched off within the hour.
+
+const { execFileSync } = require('child_process')
+const fs = require('fs')
+const os = require('os')
+const path = require('path')
+
+const GUARD = path.join(__dirname, 'deny-symlink-paths.js')
+const root = fs.mkdtempSync(path.join(os.tmpdir(), 'symguard-'))
+const real = path.join(root, 'real')
+const link = path.join(root, 'linked')
+const deep = path.join(link, 'a', 'b')
+fs.mkdirSync(path.join(real, 'a', 'b'), { recursive: true })
+fs.symlinkSync(real, link)
+fs.writeFileSync(path.join(real, 'file.txt'), 'x')
+
+const run = (command) => {
+  const out = execFileSync('node', [GUARD], {
+    input: JSON.stringify({ tool_input: { command }, cwd: root }), encoding: 'utf8',
+  })
+  return { denied: out.includes('"deny"'), otp: (/SYMLINK_OTP=([0-9A-F]{8})/.exec(out) || [])[1], out }
+}
+
+let failed = 0
+const check = (ok, desc) => { if (!ok) failed++; console.log(`${ok ? 'PASS' : 'FAIL'}  ${desc}`) }
+
+// --- the point of the guard -------------------------------------------------------------------
+check(run(`ls ${link}`).denied, 'a named symlink is stopped')
+check(run(`cat ${deep}/../file.txt`).denied, 'a symlink as an ANCESTOR of the named path is stopped')
+check(run(`rm -rf ${link}/a`).denied, 'the destructive shape that motivated this is stopped')
+check(!run(`ls ${real}`).denied, 'the real path behind the link is allowed')
+check(!run('echo hello').denied, 'a command with no path is allowed')
+check(!run('git status').denied, 'an ordinary command is allowed')
+
+// --- the exclusions: platform symlinks must NOT cost an OTP -----------------------------------
+check(!run('ls /tmp/whatever').denied, 'macOS /tmp (itself a symlink) is excluded')
+check(!run('cat /etc/hosts').denied, 'macOS /etc is excluded')
+check(!run('ls /opt/homebrew/bin/node').denied, 'homebrew bin shims are excluded')
+
+// --- env / ~ / composite resolution ------------------------------------------------------------
+check(run(`ls $\{SYMGUARD_T\}/linked`.replace('${SYMGUARD_T}', root)).denied, 'literal composite path')
+process.env.SYMGUARD_T = root
+check(run('ls $SYMGUARD_T/linked').denied, '$VAR is resolved before checking')
+check(run('ls ${SYMGUARD_T}/linked').denied, '${VAR} is resolved before checking')
+check(!run('ls $SYMGUARD_UNSET_VAR/x').denied, 'an unresolvable $VAR is skipped, never guessed')
+
+// --- the OTP contract --------------------------------------------------------------------------
+const first = run(`ls ${link}`)
+check(!!first.otp, 'a denial issues an OTP')
+check(!run(`SYMLINK_OTP=${first.otp} ls ${link}`).denied, 'the OTP lets the SAME command through')
+
+const second = run(`ls ${link}`)
+check(!run(`SYMLINK_OTP=${second.otp} ls ${link}`).denied, 'a fresh OTP works once')
+check(run(`SYMLINK_OTP=${second.otp} ls ${link}`).denied, 'the SAME OTP does not work twice')
+
+const third = run(`ls ${link}`)
+check(run(`SYMLINK_OTP=${third.otp} rm -rf ${link}`).denied, 'an OTP is bound to its command, not reusable for another')
+check(run(`SYMLINK_OTP=DEADBEEF ls ${link}`).denied, 'a fabricated OTP does not pass')
+
+// --- fail-open ---------------------------------------------------------------------------------
+try {
+  const out = execFileSync('node', [GUARD], { input: 'not json', encoding: 'utf8' })
+  check(!out.includes('deny'), 'unparseable payload falls through silently')
+} catch (e) { check(false, `unparseable payload: ${e.message}`) }
+
+fs.rmSync(root, { recursive: true, force: true })
+console.log(failed === 0 ? '\nOK — all cases' : `\n${failed} FAILING`)
+process.exit(failed === 0 ? 0 : 1)
