@@ -628,14 +628,18 @@ pub(crate) async fn compositions_in_scope(state: &Arc<Mutex<CoreState>>, scope: 
 ///
 /// NOT PORTED: statuslineReader.overlay on the reparsed card (the statusline store is unported —
 /// the P4m note).
-fn resolve_session_card(st: &mut CoreState, session_id: &str, now: i64) -> Option<Value> {
-    let summary = st.build_session_summary(now as f64);
+///
+/// TRDD-QE114936: `summary` is now READ IN by the caller (via `summary_now`, off the state lock)
+/// instead of being rebuilt here under `st`'s guard — this call previously ran the whole O(window)
+/// `build_session_summary` PER INVOCATION while already holding the lock; one caller (the
+/// per-candidate `timeline_of` closure in `get_cache_break_report`) measured a single 64.5 s hold
+/// this way. `st` is kept `&mut` only for the reparse-on-demand fallback's `put_log_session`.
+fn resolve_session_card(st: &mut CoreState, summary: &Value, session_id: &str, now: i64) -> Option<Value> {
     let mut session: Option<Value> = summary
         .get("sessions")
         .and_then(Value::as_array)
         .and_then(|ss| ss.iter().find(|s| s.get("sessionId").and_then(Value::as_str) == Some(session_id)))
         .cloned();
-    drop(summary);
     let timeline_empty = session
         .as_ref()
         .is_some_and(|s| s.get("timeline").and_then(Value::as_array).is_none_or(Vec::is_empty));
@@ -2016,6 +2020,9 @@ async fn handle(
                             let summary = st.build_session_summary(now as f64);
                             summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default()
                         };
+                        // TRDD-QE114936: ONE off-lock summary read for the whole scan, not one
+                        // rebuild per candidate inside `timeline_of` below.
+                        let (_, timeline_summary) = summary_now(&state, now as f64)?;
                         let (a, st2) = (args.clone(), state.clone());
                         let payload = tokio::task::spawn_blocking(move || {
                             let timeline_of = |c: &Value| -> Vec<Value> {
@@ -2024,7 +2031,7 @@ async fn handle(
                                 // reparse a multi-MB transcript and one held lock would stall every
                                 // other request for the whole scan.
                                 let Ok(mut st) = st2.lock_timed() else { return Vec::new() };
-                                resolve_session_card(&mut st, sid, now)
+                                resolve_session_card(&mut st, &timeline_summary, sid, now)
                                     .and_then(|c| c.get("timeline").and_then(Value::as_array).cloned())
                                     .unwrap_or_default()
                             };
@@ -2043,7 +2050,6 @@ async fn handle(
                             let mut st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
                             let summary = st.build_session_summary(now as f64);
                             let sessions: Vec<Value> = summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
-                            drop(summary);
                             // The matched card is not known until the shaper runs, so resolve only
                             // the ONE id the query can possibly name — the normalized equivalence
                             // class is a pure string test, so it is safe to precompute here.
@@ -2059,8 +2065,10 @@ async fn handle(
                                 })
                                 .map(str::to_owned)
                                 .collect();
+                            // TRDD-QE114936: `summary` (built above, once) is passed IN rather than
+                            // resolve_session_card rebuilding it per id.
                             for id in ids {
-                                let tl = resolve_session_card(&mut st, &id, now)
+                                let tl = resolve_session_card(&mut st, &summary, &id, now)
                                     .and_then(|c| c.get("timeline").and_then(Value::as_array).cloned())
                                     .unwrap_or_default();
                                 timelines.insert(id, tl);
@@ -2161,8 +2169,8 @@ async fn handle(
                                 .get("sessions")
                                 .and_then(Value::as_array)
                                 .and_then(|v| v.iter().find(|c| c.get("sessionId").and_then(Value::as_str) == Some(session_id.as_str())).cloned());
-                            drop(summary);
-                            let timeline: Vec<Value> = resolve_session_card(&mut st, &session_id, now)
+                            // TRDD-QE114936: reuse `summary` (built above) instead of resolve_session_card rebuilding it.
+                            let timeline: Vec<Value> = resolve_session_card(&mut st, &summary, &session_id, now)
                                 .and_then(|c| c.get("timeline").and_then(Value::as_array).cloned())
                                 .unwrap_or_default();
                             (card, timeline)
@@ -2253,8 +2261,8 @@ async fn handle(
                             let mut st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
                             let summary = st.build_session_summary(now as f64);
                             let sessions: Vec<Value> = summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
-                            drop(summary);
-                            let timeline: Vec<Value> = resolve_session_card(&mut st, &session_id, now)
+                            // TRDD-QE114936: reuse `summary` (built above) instead of resolve_session_card rebuilding it.
+                            let timeline: Vec<Value> = resolve_session_card(&mut st, &summary, &session_id, now)
                                 .and_then(|c| c.get("timeline").and_then(Value::as_array).cloned())
                                 .unwrap_or_default();
                             let parent_of = |sid: &str| -> Option<String> {
@@ -3143,6 +3151,9 @@ async fn handle(
                             drop(summary);
                             (sessions, st.log_env.clone())
                         };
+                        // TRDD-QE114936: ONE off-lock summary read for the whole scan, not one
+                        // rebuild per candidate inside `timeline_of` below.
+                        let (_, timeline_summary) = summary_now(&state, now as f64)?;
                         let (a, st2) = (args.clone(), state.clone());
                         let payload = tokio::task::spawn_blocking(move || {
                             let file_ids = crate::context_composition::list_session_file_ids(&env);
@@ -3161,7 +3172,7 @@ async fn handle(
                             let timeline_of = |c: &Value| -> Vec<Value> {
                                 let Some(sid) = c.get("sessionId").and_then(Value::as_str) else { return Vec::new() };
                                 let Ok(mut st) = st2.lock_timed() else { return Vec::new() };
-                                resolve_session_card(&mut st, sid, now)
+                                resolve_session_card(&mut st, &timeline_summary, sid, now)
                                     .and_then(|c| c.get("timeline").and_then(Value::as_array).cloned())
                                     .unwrap_or_default()
                             };
@@ -3198,6 +3209,15 @@ async fn handle(
                             drop(summary);
                             (sessions, st.log_env.clone())
                         };
+                        // TRDD-QE114936: this closure's `resolve_session_card` call (below) was
+                        // measured live holding the state lock for 64,494 ms — the worst of the
+                        // 18-site pattern (reports/trdd-qe114936/20260902_224726+0200-investigation.md)
+                        // — because it rebuilt the whole-window summary INLINE, under the lock, once
+                        // PER CANDIDATE. `summary_now` is read OFF the lock, ONCE, before the scan
+                        // starts (cache-served under sustained ingest; `data_version` moves ~6.7×/s
+                        // here, so a per-candidate re-fetch would still pay N cache lookups for no
+                        // benefit) and threaded into every candidate instead.
+                        let (_, timeline_summary) = summary_now(&state, now as f64)?;
                         let (a, st2) = (args.clone(), state.clone());
                         let payload = tokio::task::spawn_blocking(move || {
                             let file_ids = crate::context_composition::list_session_file_ids(&env);
@@ -3214,8 +3234,10 @@ async fn handle(
                             };
                             let timeline_of = |c: &Value| -> Vec<Value> {
                                 let Some(sid) = c.get("sessionId").and_then(Value::as_str) else { return Vec::new() };
+                                // Lock is now held only long enough to snapshot/reparse THIS
+                                // candidate — the summary itself is no longer rebuilt in here.
                                 let Ok(mut st) = st2.lock_timed() else { return Vec::new() };
-                                resolve_session_card(&mut st, sid, now)
+                                resolve_session_card(&mut st, &timeline_summary, sid, now)
                                     .and_then(|c| c.get("timeline").and_then(Value::as_array).cloned())
                                     .unwrap_or_default()
                             };
@@ -3249,7 +3271,6 @@ async fn handle(
                         // the TTL context still needs the guard.
                         let (_, summary) = summary_now(&state, now as f64)?;
                         let sessions: Vec<Value> = summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
-                        drop(summary);
                         let ttl = {
                             let mut st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
                             st.burn.ttl_context(now as f64)
@@ -3260,11 +3281,14 @@ async fn handle(
                         // and holding the state lock across a 256KB read per candidate would block
                         // every other reader for the whole scan.
                         let log_env = state.lock_timed().map_err(|_| "state poisoned".to_owned())?.log_env.clone();
+                        // TRDD-QE114936: `summary` (already read off-lock above) is moved into the
+                        // closure and threaded into resolve_session_card, instead of it rebuilding
+                        // its own copy under st2's per-candidate guard.
                         let payload = tokio::task::spawn_blocking(move || {
                             let timeline_of = |c: &Value| -> Vec<Value> {
                                 let Some(sid) = c.get("sessionId").and_then(Value::as_str) else { return Vec::new() };
                                 let Ok(mut st) = st2.lock_timed() else { return Vec::new() };
-                                resolve_session_card(&mut st, sid, now)
+                                resolve_session_card(&mut st, &summary, sid, now)
                                     .and_then(|c| c.get("timeline").and_then(Value::as_array).cloned())
                                     .unwrap_or_default()
                             };
@@ -3513,9 +3537,12 @@ async fn handle(
         // strip_session_detail drops it from /api/summary (TRDD-ZS1GDXVY).
         let session_id = percent_decode(&path["/api/timeline/".len()..]);
         let now = crate::now_ms();
+        // TRDD-QE114936: summary read OFF the lock before the guard below, instead of
+        // resolve_session_card rebuilding it inline while holding `st`.
+        let (_, summary) = summary_now(&state, now as f64)?;
         let body = {
             let mut st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
-            let session = resolve_session_card(&mut st, &session_id, now);
+            let session = resolve_session_card(&mut st, &summary, &session_id, now);
             // `session?.<k> ?? <default>` — nullish: an explicit null falls back too.
             let field = |k: &str, default: Value| {
                 session.as_ref().and_then(|s| s.get(k)).filter(|v| !v.is_null()).cloned().unwrap_or(default)

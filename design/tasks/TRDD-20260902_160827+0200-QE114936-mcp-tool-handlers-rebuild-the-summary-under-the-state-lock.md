@@ -1,9 +1,9 @@
 ---
 trdd-id: QE114936
 title: Eighteen MCP tool handlers still rebuild the session summary under the state lock
-column: todo
+column: dev
 created: 2026-09-02T16:08:27+0200
-updated: 2026-09-03T04:20:46+0200
+updated: 2026-09-03T04:38:25+0200
 current-owner: main-session
 task-type: bugfix
 priority: high
@@ -14,19 +14,28 @@ related: [UTFVMVT8, 2R36W8Q1, HFV4AIT7]
 
 # Eighteen MCP tool handlers still rebuild the session summary under the state lock
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-03
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-03T04:38:25+0200
 
-Investigation done: `reports/trdd-qe114936/20260902_224726+0200-investigation.md`. Findings: the
-18-site pattern confirmed across `resolve_session_card`'s 8 callers (ui.rs:2027, 2063, 2165,
-2257, 3164, 3218, 3267, 3518) plus the other inline-summary sites; a LIVE 64.5 s lock hold
-measured at `ui.rs:3218` (`resolve_session_card` inside `get_cache_break_report`'s `timeline_of`
-closure) — 13 distinct `state lock held`/`waited …; holder ui.rs:3218` lines in the current
-server run, one hold of 64,494 ms, more than double UTFVMVT8's worst measured case (30.1 s).
+Site 1 DONE (code only — not committed, not deployed). `resolve_session_card` (ui.rs, was :631,
+now :637) no longer rebuilds the summary itself: signature is now
+`(st: &mut CoreState, summary: &Value, session_id: &str, now: i64)`. All 8 callers updated
+(2034, 2071, 2173, 2265, 3175, 3240, 3291, 3542 — line numbers shifted from the investigation's
+baseline by the edits themselves). The worst-hold site (`ui.rs:3218` in `get_cache_break_report`'s
+per-candidate `timeline_of` closure, measured live at 64,494 ms) now hoists ONE `summary_now`
+call before `spawn_blocking` instead of rebuilding per candidate. Report:
+`reports/trdd-qe114936/20260903_043913+0200-site1-off-lock.md` — has the full per-site table and
+the 17-site survey (all 17 confirmed mechanically fixable; two, lines 3044/3095, need
+`summary_now` called BEFORE their multi-arm guard to avoid a self-deadlock).
 
-NEXT ACTION: apply the XX1UAZHS shape (compute off the lock, guard only for the snapshot) to the
-worst site first: `ui.rs:3218`; then the remaining 17 in one pass; each with a 15-min hold read.
+Verified: `cargo build --release -p agentlens-core` exit 0, `cargo clippy -p agentlens-core
+--all-targets -- -D warnings` exit 0, `cargo test -p agentlens-core --lib` 38/39 pass (the 1
+failure is in `shutdown.rs`, an untracked file the OTHER worker is editing — not touched here).
 
-Column stays `todo` (not started).
+NEXT ACTION: review this diff → commit (with the survey) → deploy with N60JUWU3's binary → do the
+card's 15-min hold read (re-invoke `get_cache_break_report` while ingest is hot, confirm no new
+`state lock held ≥ 1000 ms by ui.rs:<that site>` line) → then apply the same mechanical shape to
+the remaining 17 direct sites in one pass (per the report's table; two need the `summary_now`
+call hoisted above a multi-arm guard, the rest are trivial swaps).
 
 ## Why this card exists
 
