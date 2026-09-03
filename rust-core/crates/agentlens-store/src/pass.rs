@@ -26,7 +26,7 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::{flush_detailed, ingest_body, Store, VerifyItem, BLOBS_DIR, BODIES_DIR, PARTS_DIR};
+use crate::{flush_detailed, ingest_body, Store, VerifyItem, API_CALLS_DIR, BLOBS_DIR, BODIES_DIR, PARTS_DIR};
 
 pub const DEFAULT_MAX_BYTES_PER_PASS: u64 = 512 * 1024 * 1024;
 pub const DEFAULT_BATCH: usize = 200;
@@ -288,7 +288,7 @@ pub fn ingest_pass(
                             // a reclaimed body's parts were flushed in an EARLIER settle and
                             // flushed.part_paths never names them.
                             let mut dirs: HashSet<PathBuf> = HashSet::new();
-                            'barrier: for sub in [BLOBS_DIR, BODIES_DIR, PARTS_DIR] {
+                            'barrier: for sub in [BLOBS_DIR, BODIES_DIR, PARTS_DIR, API_CALLS_DIR] {
                                 let d = store.dir.join(sub);
                                 let Ok(rd) = fs::read_dir(&d) else { continue };
                                 let mut any = false;

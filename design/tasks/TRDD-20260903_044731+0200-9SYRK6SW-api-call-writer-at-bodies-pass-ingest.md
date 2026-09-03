@@ -1,9 +1,9 @@
 ---
 trdd-id: 9SYRK6SW
 title: api_call staging table writer at the bodies-pass ingest site
-column: planned
+column: testing
 created: 2026-09-03T04:47:31+0200
-updated: 2026-09-03T04:59:59+0200
+updated: 2026-09-03T08:32:43+0200
 current-owner: main-session
 task-type: feature
 priority: high
@@ -25,9 +25,93 @@ blocked-by: []
 - Design source: `reports/trdd-caj5rcp9/20260903_044515+0200-api-calls-table-design.md` §1-2-3
   (superseded on the `call_id`/`cost_usd` points by the advisor verdict above — everything else
   in the design doc still applies).
-- NEXT ACTION: add the `api_call` staging table (two row kinds) + writer, wired into the existing
-  bodies-pass ingest and flush loop. First of 4 children (1→2→3→4); nothing else in the CAJ5RCP9
-  split can start until this lands.
+
+- **IMPLEMENTED 2026-09-03** (not committed — the main session commits). Report:
+  `reports/trdd-9syrk6sw/20260903_061039+0200-writer-implementation.md`.
+  Files: `rust-core/crates/agentlens-store/src/api_call.rs` (NEW — row struct + pure extractor +
+  9 unit tests), `…/src/lib.rs` (`API_CALLS_DIR`, `CREATE TABLE api_call`, `all_of` arm,
+  `open_store` dir, `append_api_call_row`, `flush_detailed` list, `extract_meta` now takes the
+  already-parsed `Value`), `…/src/pass.rs` (fsync barrier + import),
+  `…/tests/api_call.rs` (NEW — 5 real end-to-end pass tests),
+  `…/tests/roundtrip.rs` (part count 3 → 4).
+  Gates, all run on the FINAL tree: `cargo test -p agentlens-store` **38 PASS / 0 fail** (cargo's
+  own `$?` written to its OWN file, log read whole); `cargo clippy -p agentlens-store
+  -p agentlens-core --all-targets -- -D warnings` CLEAN (same, both packages in one invocation);
+  `cargo test -p agentlens-core` 102 suites across two independent
+  runs with `grep -cE "FAILED|^error|test result: FAILED"` = 0 over the COMPLETE log — note its
+  background-task "exit code 0" is the trailing grep's, NOT cargo's, so the log grep is the
+  evidence, not that number; `node scripts/check-no-identities.js` OK. All 6 acceptance boxes
+  pass ⇒ `testing`. NOT deployed and NOT committed (another agent is deploying from this tree).
+- **Bug found on recheck and closed BEFORE it shipped** (latent, would have been silent): the
+  advisor's literal three-substring AgentMeta test SELF-MATCHES any injected block that merely
+  QUOTES `cc_version=` — a CLAUDE.md, a rule file, a memory page about this mechanism. That block
+  would have lost its real hash to the `agentmeta` placeholder (blinding `system_fps` to changes
+  in the LARGEST block in the prefix) and had its whole ~65k-token text copied into
+  `billing_header` on every request row. `is_agent_meta` now also bounds the block at 4096 bytes
+  — the real header measures 195 B across all 39 captures, so the SIZE is the discriminator, and
+  nothing is truncated. Measured 0 divergent blocks today, i.e. latent, which is why it would
+  have shipped.
+
+- **THREE SCHEMA DEVIATIONS from WHAT below, all from the 2026-09-03 Fable-advisor verdict and
+  each verified first-hand against the 39 real captured requests in
+  `reports/cache-coldwrite/bodies-20260903_044257+0200/`** — the WHAT section is left as it was
+  written so the change is visible; THIS block is authoritative:
+  1. `cc_version` + `cc_is_subagent` columns REPLACED by **`billing_header`** — the
+     `x-anthropic-billing-header` block stored VERBATIM (~195 B, ZSTD-cheap). Measured: the
+     header carries SEVEN keys (`cc_version` 39/39, `cc_entrypoint` 39, `cch` 39, `cc_prev_req`
+     39, `cc_prompt_id` 39, `cc_is_subagent` **24**, `cc_workload` **8**) and `cc_workload`
+     appears nowhere in `rust-core` — a column set fixed today goes blind on the eighth key.
+     DuckDB reads any of them with `regexp_extract(billing_header,'cc_workload=([^;]+)',1)`,
+     which IS the 7YPQWKPG principle. `cc_prev_req` keeps its own column because it is a JOIN
+     KEY, not a datum. Bonus: `cc_is_subagent` is ABSENT on a main-thread request, not `false` —
+     a typed column would have erased that.
+  2. `system_fp` → **`system_fps`**, a comma-joined list with ONE ENTRY PER SYSTEM BLOCK IN
+     ORDER (same VARCHAR-list shape as `breakpoint_positions`). A scalar can only say "the
+     system region changed"; the list says WHICH block diverged. A block classified AgentMeta
+     (same three-substring test as `agentlens-core`'s `classify_content_kind`) contributes the
+     literal `agentmeta` instead of a hash — it mutates every turn yet sits before every
+     breakpoint and is cache-NEUTRAL (TRDD-POLG0613), so hashing it would make the column differ
+     on every single turn and answer nothing. Positions stay intact because the placeholder sits
+     at the block's own index.
+  3. The card's "move `compute_frontmatter_fp` into `agentlens-store`" is NOT done, deliberately:
+     that function hashes block IDENTITY (`rule:<file>`/`claudemd`/`system`), so a CLAUDE.md or
+     rule-text EDIT — a real byte-level break — leaves it unchanged. The fingerprints here are
+     over the block TEXT, which is what the prompt cache keys on. No `regex` dep was added.
+
+- Also per the verdict: the extractor takes `&Value` (an unparseable body gets NO api_call row —
+  its `body` row still lands and the bytes stay reconstructible, so the facts are re-derivable),
+  the row is appended INSIDE `append_body_row` (the one place a body row is created, so the
+  content-dedup path is covered by construction) and BEFORE the body INSERT and the set inserts
+  (failing after them would let the sets claim the file, short-circuit the next pass as
+  `existed`, and strand the delete gate); the `flush_detailed` early-return guard is NOT changed
+  (a stranded row simply flushes with the next batch).
+
+- **Review-gate pass (adversarial fork over the 10 claims).** Three things it hardened:
+  (a) the appender writes 26 values POSITIONALLY into 26 columns, and
+  `system_fps`/`tools_fp`/`first_user_fp` are three ADJACENT VARCHARs all holding bare 16-hex —
+  a transposition there compiles, runs, and passes any `is_some()` check silently and
+  permanently. Now pinned two ways in `tests/api_call.rs`: each fp asserted against the hash of
+  its own canonical string, and a behavioural test (change only the tools ⇒ only `tools_fp`
+  moves; change only the first user message ⇒ only `first_user_fp` moves).
+  (b) "parsed exactly once" re-verified AT SOURCE — all four `from_str` sites in the crate read:
+  `lib.rs:375` is the one whole-body parse, `lib.rs:319` is the embedded `metadata.user_id`
+  string, `pass.rs:85` is the pass STATE FILE, `sections.rs:137` is a single key token in the
+  pre-existing sectionizer.
+  (c) "purely additive" re-verified against the TS twin: `src/store/db.ts` creates three dirs and
+  flushes three tables and `src/store/validate.ts` queries named tables rather than enumerating
+  directories, so a fourth dir cannot fail it.
+- **ONE REAL ASYMMETRY, deliberately not fixed here** (belongs to whichever card owns the TS
+  store's fate): the Rust engine now writes a table its TypeScript twin does not, so if the TS
+  pass ever runs over this store, `api_calls` has a HOLE for that period — bodies deleted with no
+  per-call row behind them. Silent gap, not an error. Porting the writer to TS would contradict
+  "the server is Rust now", so it is recorded rather than patched.
+
+- NEXT ACTION: none in this card beyond the main session committing it and deploying. Then
+  CAJ5RCP9's siblings unblock: **GVA8TTJF must read `system_fps`/`billing_header`, not
+  `system_fp`/`cc_version`/`cc_is_subagent`.** Day-one watch items from the verdict: any NULL
+  `cc_prev_req` on a request row means a CC release moved the header out of `system[0]` and the
+  chain key is dead; `max(length(system_fps))` on the first flush shows whether a wide `system[]`
+  widens rows (measured today: 3 or 5 blocks).
 
 ## WHY
 
@@ -103,19 +187,33 @@ doesn't have) — union_by_name at read time (GVA8TTJF) coalesces them per call.
 
 ## ACCEPTANCE
 
-- [ ] `api_call` table exists in the store schema; a new response body ingested during a normal
+- [x] `api_call` table exists in the store schema; a new response body ingested during a normal
       bodies-pass tick produces one response-kind row with response-only fields populated and
       NULL request-only fields (no `cost_usd` column at all).
-- [ ] A new request body produces one request-kind row with `cc_prev_req`/`previous_message_id`/
+      — `tests/api_call.rs::a_bodies_pass_leaves_one_row_per_kind_and_the_bodies_are_gone`, which
+      also asserts the bodies are DELETED afterwards (the whole point of the card).
+- [x] A new request body produces one request-kind row with `cc_prev_req`/`previous_message_id`/
       fingerprint fields populated (where present in the source body) and NULL response-only
-      fields.
-- [ ] `flush_detailed` writes `store/api_calls/*.parquet` parts on the same cadence as `body`/`part`.
-- [ ] `open_store` creates the `api_calls` directory and the fsync barrier covers it (verify both
+      fields. — same test; fingerprints are `system_fps`/`tools_fp`/`first_user_fp` (deviation 2).
+- [x] `flush_detailed` writes `store/api_calls/*.parquet` parts on the same cadence as `body`/`part`.
+      — `tests/api_call.rs::the_rows_flush_to_parquet_and_survive_a_reopen` (reopens the store and
+      reads the rows back out of the part with staging empty); `tests/roundtrip.rs` part count 4.
+- [x] `open_store` creates the `api_calls` directory and the fsync barrier covers it (verify both
       call sites were touched, not just the schema).
-- [ ] No change in behavior/output for any existing consumer (`get_cache_event_log`,
+      — `tests/api_call.rs::the_fsync_barrier_covers_the_new_api_calls_directory` asserts the
+      pass's own `fsynced` set contains a path under `store/api_calls/` (needs
+      `durable_source: true`, which the default PassOptions does NOT set — the server does).
+- [x] No change in behavior/output for any existing consumer (`get_cache_event_log`,
       `get_cache_break_timeline`, `investigate_burn`) — this child is additive only.
-- [ ] `raw = fs::read_to_string` is parsed as JSON exactly once per file (verify no second
+      — purely additive: one new table, one new dir, one new module; the only edit to an existing
+      signature is `extract_meta` taking the already-parsed `Value` (same return, same call site).
+      `cargo test -p agentlens-core` green.
+- [x] `raw = fs::read_to_string` is parsed as JSON exactly once per file (verify no second
       `serde_json::from_str` call was introduced for the new extraction).
+      — `append_body_row` does the ONE `from_str` and hands the same `&Value` to both extractors;
+      `extract_api_call_meta` takes a `&Value` and cannot parse. The only other `from_str` in the
+      path is `extract_meta`'s pre-existing parse of the EMBEDDED `metadata.user_id` string, a
+      different string, unchanged.
 
 ## VERIFICATION
 

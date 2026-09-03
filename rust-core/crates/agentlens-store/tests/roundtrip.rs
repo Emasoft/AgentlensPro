@@ -39,7 +39,9 @@ fn ingest_flush_reopen_reconstructs_byte_identically_and_dedups() {
 
     let flushed = agentlens_store::flush_detailed(&mut store).expect("flush");
     assert!(flushed.n > 0);
-    assert_eq!(flushed.part_paths.len(), 3, "one part per non-empty table");
+    // 4 since TRDD-9SYRK6SW: blob + body + part + api_call (these fixture bodies parse, so each
+    // body row is accompanied by an api_call row).
+    assert_eq!(flushed.part_paths.len(), 4, "one part per non-empty table");
     drop(store);
 
     // Reopen: the dedup set reloads from the durable parts; reconstruction is end-to-end proven.

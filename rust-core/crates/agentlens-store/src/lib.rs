@@ -17,6 +17,7 @@
 //!   re-ingesting the same bytes writes nothing (the `known` sha set reloads from durable
 //!   parts at open).
 
+pub mod api_call;
 pub mod pass;
 pub mod bodies_evidence;
 pub mod sections;
@@ -36,6 +37,8 @@ use sections::{reassemble, sectionize, sha256_hex, Part};
 pub const BLOBS_DIR: &str = "blobs";
 pub const BODIES_DIR: &str = "bodies";
 pub const PARTS_DIR: &str = "parts";
+/// TRDD-9SYRK6SW — the per-call cache facts captured before the bodies pass deletes a body.
+pub const API_CALLS_DIR: &str = "api_calls";
 pub const DEFAULT_MEMORY_LIMIT: &str = "8GB";
 pub const TS_TOLERANCE_MS: i64 = 2000;
 
@@ -121,6 +124,9 @@ pub fn all_of(store: &Store, table: &str) -> String {
     let sub = match table {
         "blob" => BLOBS_DIR,
         "body" => BODIES_DIR,
+        // Explicit, because the fallthrough is PARTS_DIR: without this arm `all_of(store,
+        // "api_call")` would silently read the parts corpus and return plausible-looking rows.
+        "api_call" => API_CALLS_DIR,
         _ => PARTS_DIR,
     };
     match parquet_scan(&store.dir, sub) {
@@ -130,7 +136,7 @@ pub fn all_of(store: &Store, table: &str) -> String {
 }
 
 pub fn open_store(dir: &Path, memory_limit: &str, threads: usize) -> duckdb::Result<Store> {
-    for sub in [BLOBS_DIR, BODIES_DIR, PARTS_DIR] {
+    for sub in [BLOBS_DIR, BODIES_DIR, PARTS_DIR, API_CALLS_DIR] {
         let _ = fs::create_dir_all(dir.join(sub));
     }
     let con = Connection::open_in_memory()?;
@@ -148,6 +154,26 @@ pub fn open_store(dir: &Path, memory_limit: &str, threads: usize) -> duckdb::Res
          CREATE TABLE part (
            body_id VARCHAR, pos INTEGER, kind VARCHAR, lit VARCHAR,
            sha VARCHAR, path VARCHAR, idx INTEGER, n INTEGER
+         );
+         -- TRDD-9SYRK6SW. TWO ROW KINDS in ONE table (nullable columns for the other kind's
+         -- fields), coalesced by union_by_name at read time. Types are load-bearing:
+         --   session_id VARCHAR — SEALED, never left to DuckDB's per-file UUID inference (one
+         --     non-UUID id then kills every view that unions two parts);
+         --   ts_ms BIGINT epoch ms — the statusline store's own `ts` unit, so the join needs no
+         --     epoch conversion;
+         --   breakpoint_positions VARCHAR — a comma-joined list, never a STRUCT, so
+         --     `union_by_name := true` stays stable as the schema grows.
+         -- No cost_usd (pricing lives in agentlens-core, which depends on THIS crate) and no
+         -- device_id/account_uuid (no-identities doctrine).
+         CREATE TABLE api_call (
+           stem VARCHAR, kind VARCHAR, ts_ms BIGINT, model VARCHAR, raw_bytes BIGINT,
+           session_id VARCHAR, billing_header VARCHAR, cc_prev_req VARCHAR,
+           previous_message_id VARCHAR, system_fps VARCHAR, tools_fp VARCHAR, first_user_fp VARCHAR,
+           breakpoint_positions VARCHAR, tool_choice VARCHAR, thinking_config VARCHAR,
+           msg_id VARCHAR, stop_reason VARCHAR, input_tokens BIGINT, output_tokens BIGINT,
+           cache_read_tokens BIGINT, cache_creation_tokens BIGINT, tier_5m_tokens BIGINT,
+           tier_1h_tokens BIGINT, cache_missed_input_tokens BIGINT, cache_miss_reason VARCHAR,
+           service_tier VARCHAR
          );"
     ))?;
     let mut known = HashSet::new();
@@ -212,7 +238,7 @@ pub fn flush_detailed(store: &mut Store) -> Result<FlushResult, String> {
     let tag = format!("part-{now_ms}-{}-{}.parquet", std::process::id(), store.next_part);
     store.next_part += 1;
     let mut part_paths = Vec::new();
-    for (table, sub) in [("blob", BLOBS_DIR), ("body", BODIES_DIR), ("part", PARTS_DIR)] {
+    for (table, sub) in [("blob", BLOBS_DIR), ("body", BODIES_DIR), ("part", PARTS_DIR), ("api_call", API_CALLS_DIR)] {
         let c = count(store, table).map_err(|e| e.to_string())?;
         if c == 0 {
             continue;
@@ -281,11 +307,12 @@ pub fn body_id_of(raw: &str) -> String {
 }
 
 /// extractMeta: tolerant by design — an unparseable body still stores; it just gets null metadata.
-fn extract_meta(raw: &str, src_name: &str) -> (Option<String>, Option<String>, &'static str) {
+/// Takes the ALREADY-PARSED value so one file is never parsed twice (TRDD-9SYRK6SW).
+fn extract_meta(parsed: Option<&serde_json::Value>, src_name: &str) -> (Option<String>, Option<String>, &'static str) {
     let kind = if src_name.contains(".response.") { "response" } else { "request" };
     let mut session_id = None;
     let mut model = None;
-    if let Ok(d) = serde_json::from_str::<serde_json::Value>(raw) {
+    if let Some(d) = parsed {
         model = d.get("model").and_then(|m| m.as_str()).map(str::to_owned);
         // The session id hides in metadata.user_id as an EMBEDDED JSON STRING.
         if let Some(uid) = d.get("metadata").and_then(|m| m.get("user_id")).and_then(|u| u.as_str()) {
@@ -297,8 +324,66 @@ fn extract_meta(raw: &str, src_name: &str) -> (Option<String>, Option<String>, &
     (session_id, model, kind)
 }
 
+/// The api_call row for one ingested FILE (TRDD-9SYRK6SW). Reuses the caller's parsed `Value` —
+/// `raw` is never parsed a second time.
+fn append_api_call_row(
+    store: &mut Store,
+    parsed: &serde_json::Value,
+    src_name: &str,
+    raw_bytes: u64,
+    ts_ms: i64,
+    session_id: Option<&str>,
+) -> Result<(), String> {
+    let r = api_call::extract_api_call_meta(parsed, src_name, ts_ms, raw_bytes, session_id);
+    let mut app = store.con.appender("api_call").map_err(|e| e.to_string())?;
+    app.append_row(duckdb::params![
+        r.stem,
+        r.kind,
+        r.ts_ms,
+        r.model,
+        r.raw_bytes,
+        r.session_id,
+        r.billing_header,
+        r.cc_prev_req,
+        r.previous_message_id,
+        r.system_fps,
+        r.tools_fp,
+        r.first_user_fp,
+        r.breakpoint_positions,
+        r.tool_choice,
+        r.thinking_config,
+        r.msg_id,
+        r.stop_reason,
+        r.input_tokens,
+        r.output_tokens,
+        r.cache_read_tokens,
+        r.cache_creation_tokens,
+        r.tier_5m_tokens,
+        r.tier_1h_tokens,
+        r.cache_missed_input_tokens,
+        r.cache_miss_reason,
+        r.service_tier,
+    ])
+    .map_err(|e| e.to_string())?;
+    app.flush().map_err(|e| e.to_string())
+}
+
 fn append_body_row(store: &mut Store, body_id: &str, src_name: &str, raw: &str, raw_bytes: u64, ts_ms: i64) -> Result<(), String> {
-    let (session_id, model, kind) = extract_meta(raw, src_name);
+    // ONE parse per file, shared by both extractors — never a second `serde_json::from_str` over
+    // `raw` (TRDD-9SYRK6SW acceptance). The nested parse inside `extract_meta` is a DIFFERENT
+    // string (the embedded `metadata.user_id` JSON), not a re-parse of the body.
+    let parsed = serde_json::from_str::<serde_json::Value>(raw).ok();
+    let (session_id, model, kind) = extract_meta(parsed.as_ref(), src_name);
+    // Written HERE, not at `ingest_body`'s two call sites, so the content-dedup path is covered
+    // by construction and a future third caller cannot forget it — and written BEFORE the body
+    // INSERT and the set inserts below: if it failed AFTER them, the sets would claim the file,
+    // the next pass would short-circuit as `existed`, and the delete gate would never see a
+    // complete body. Failing first leaves the store un-ingested and the retry is clean.
+    // A body that is not JSON gets no api_call row (its bytes stay reconstructible from the
+    // store, so the facts are re-derivable); the `body` row still lands, as it always has.
+    if let Some(p) = parsed.as_ref() {
+        append_api_call_row(store, p, src_name, raw_bytes, ts_ms, session_id.as_deref())?;
+    }
     let sql = format!(
         "INSERT INTO body VALUES ({}, {}, {}, {}, make_timestamp({}), {}, {}, {})",
         q(body_id),
