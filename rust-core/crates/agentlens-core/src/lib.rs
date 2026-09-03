@@ -76,6 +76,7 @@ pub mod resident_cost;
 pub mod retention_config;
 pub mod runtime_inventory;
 pub mod server_stats;
+pub mod shutdown;
 pub mod skill_attribution;
 pub mod span_window;
 pub mod spawn_rollup;
@@ -1083,6 +1084,22 @@ impl LockTimed for Mutex<CoreState> {
 
 fn now_ns() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(0)
+}
+
+/// Snapshot of who currently holds `state`'s mutex, if anyone — for a `try_lock`-failure path
+/// (TRDD-N60JUWU3's bounded shutdown wait) that needs to name the holder without itself blocking
+/// on `lock_timed`'s wait-then-attribute flow. Returns `(file:line, held_for_ms)`.
+pub fn current_lock_holder() -> Option<(String, u64)> {
+    let ptr = HOLDER_SITE.load(Ordering::Acquire);
+    if ptr.is_null() {
+        return None;
+    }
+    // SAFETY: same invariant as `lock_timed`'s read above — every stored pointer came from
+    // `Location::caller()`, a `&'static Location<'static>`, so dereferencing it is always valid.
+    let loc: &'static Location<'static> = unsafe { &*ptr };
+    let since_ns = HOLDER_SINCE_NS.load(Ordering::Acquire);
+    let held_ms = now_ns().saturating_sub(since_ns) / 1_000_000;
+    Some((format!("{}:{}", loc.file(), loc.line()), held_ms))
 }
 
 #[cfg(test)]

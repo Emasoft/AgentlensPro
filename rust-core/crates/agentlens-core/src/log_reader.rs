@@ -887,10 +887,34 @@ pub struct SweeperHandle {
 }
 
 impl SweeperHandle {
-    pub fn stop(mut self) {
+    /// Wake the sweeper thread without waiting for it — the first half of a bounded stop
+    /// (TRDD-N60JUWU3): the caller can `signal()` every long-running stop step up front, then
+    /// join each one within its own slice of one shared shutdown budget.
+    pub fn signal(&self) {
         let _ = self.stop.send(Msg::Stop);
-        if let Some(j) = self.join.take() {
-            let _ = j.join();
+    }
+
+    /// Wait up to `budget` for the (already `signal()`ed) sweeper thread to finish, polling
+    /// `is_finished()` rather than blocking on `join()` — `join()` would wait unboundedly on
+    /// `save_cards`'s own `lock_timed()` (TRDD-N60JUWU3 root cause #2: the sweeper's final flush
+    /// can itself be stuck behind the same contended state lock the caller is also waiting on).
+    /// Returns `true` if the thread finished in time.
+    pub fn join_within(mut self, budget: std::time::Duration) -> bool {
+        let deadline = std::time::Instant::now() + budget;
+        loop {
+            match self.join.as_ref() {
+                None => return true,
+                Some(j) if j.is_finished() => {
+                    let _ = self.join.take().unwrap().join();
+                    return true;
+                }
+                Some(_) => {
+                    if std::time::Instant::now() >= deadline {
+                        return false;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+            }
         }
     }
 }

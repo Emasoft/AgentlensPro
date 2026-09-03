@@ -170,6 +170,21 @@ fn main() {
         eprintln!("alcore: cannot create {}: {e}", spans_dir.display());
         exit(1);
     }
+    // TRDD-N60JUWU3: parsed at BOOT, not at stop time. Parsing it in the shutdown path meant a
+    // malformed value could fail-fast (`usage()` -> exit(64)) AFTER the listeners were torn down
+    // and BEFORE `pid_lock::release` — the worst possible moment to discover a config typo, since
+    // it would exit without ever releasing the lock. Server default 8s; the CLI's own wait
+    // (serverControl.ts stopServer) is 15s, comfortably above so a real timeout is already logged
+    // by the time the CLI gives up.
+    let stop_timeout: Duration = std::env::var("AGENTLENS_STOP_LOCK_TIMEOUT_MS")
+        .ok()
+        .map(|v| {
+            v.trim()
+                .parse::<u64>()
+                .map(Duration::from_millis)
+                .unwrap_or_else(|_| usage("AGENTLENS_STOP_LOCK_TIMEOUT_MS must be a number of milliseconds"))
+        })
+        .unwrap_or(Duration::from_secs(8));
     // Single-owner data-dir lock (TRDD-DMWOBWFH D1 prerequisite) — must claim BEFORE anything
     // else touches the data dir. Two servers appending to the same span store, offsets and cards
     // corrupt each other; this is the only thing standing between "alcore" and the TS server both
@@ -355,21 +370,69 @@ fn main() {
     // Flush on the way out — the writer buffers, and losing the tail on SIGINT/SIGTERM would be
     // a silent hole the store cannot detect. The sweeper flushes the durable state (offsets +
     // cards) the same way: a graceful stop loses nothing.
-    if let Some(h) = sweeper.take() {
-        h.stop();
+    //
+    // TRDD-N60JUWU3: every step below shares ONE stop budget (`stop_deadline`, from `stop_timeout`
+    // parsed at boot, above) instead of each getting its own — a slow flush must not leave the
+    // sweeper join or the runtime shutdown with no time at all. Order matters: flush -> sweeper
+    // join -> tokio runtime shutdown -> pid_lock::release, in exactly that order, because
+    // releasing the pid lock before the runtime (and its background chores — e.g. the DuckDB
+    // bodies pass `chores.rs` spawns via `spawn_blocking`) has actually stopped reopens the
+    // double-owner window `pid_lock::claim` guards against, above: a second `claim()` between
+    // release and process exit would find the data dir "free" while this process is still running.
+    let stop_deadline = std::time::Instant::now() + stop_timeout;
+    let remaining = |deadline: std::time::Instant| deadline.saturating_duration_since(std::time::Instant::now());
+
+    // Signal the sweeper right away (never blocks) — its own final flush (`log_reader.rs`'s
+    // `save_cards`, which takes the SAME state lock) then runs concurrently with the state flush
+    // below instead of waiting for it to go first.
+    let sweeper = sweeper.take();
+    if let Some(h) = &sweeper {
+        h.signal();
     }
-    if let Ok(mut st) = state.lock_timed() {
-        st.flush_spans();
-        // StatuslineStore.stop(): flush the buffer to the WAL, deliberately NOT sealing — the
-        // WAL is fsynced and every read unions the WALs; the next boot's seal timer converts it.
-        st.statusline.flush(None);
-        // AccountStateTimeline.stop() (server.ts pipes SIGTERM here): the last window's state
-        // changes are still in memory, and the 60s chore will never fire again.
-        st.account_timeline.flush();
-        // server.ts:4499 recordCollectorStop — a graceful exit marks the run stopped, so the
-        // next boot's gap (if any) classifies as "shutdown", not "crash".
-        let file = agentlens_core::collector_lifecycle::lifecycle_file(&st.data_dir);
-        agentlens_core::collector_lifecycle::record_stop(&file, &mut st.lifecycle, agentlens_core::now_ms());
-    };
+
+    match agentlens_core::shutdown::flush_with_deadline(&state, remaining(stop_deadline)) {
+        agentlens_core::shutdown::Outcome::Flushed(mut st) => {
+            st.flush_spans();
+            // StatuslineStore.stop(): flush the buffer to the WAL, deliberately NOT sealing — the
+            // WAL is fsynced and every read unions the WALs; the next boot's seal timer converts it.
+            st.statusline.flush(None);
+            // AccountStateTimeline.stop() (server.ts pipes SIGTERM here): the last window's state
+            // changes are still in memory, and the 60s chore will never fire again.
+            st.account_timeline.flush();
+            // server.ts:4499 recordCollectorStop — a graceful exit marks the run stopped, so the
+            // next boot's gap (if any) classifies as "shutdown", not "crash".
+            let file = agentlens_core::collector_lifecycle::lifecycle_file(&st.data_dir);
+            agentlens_core::collector_lifecycle::record_stop(&file, &mut st.lifecycle, agentlens_core::now_ms());
+        }
+        agentlens_core::shutdown::Outcome::TimedOut { holder } => {
+            let holder = holder.unwrap_or_else(|| "unknown".to_owned());
+            // The CLI's own timeout message (serverControl.ts stopServer) greps server.log for
+            // exactly this shape to name the holder in ITS error — keep the two in lockstep.
+            eprintln!(
+                "alcore: stop timed out after {} ms waiting on {holder} — skipping the flush, releasing the pid lock anyway",
+                stop_timeout.as_millis()
+            );
+        }
+        // `flush_with_deadline` recovers a poisoned mutex via `into_inner()` and returns
+        // `Flushed` instead — this arm exists only for the enum's API completeness (see
+        // `shutdown::Outcome::Poisoned`'s doc comment for why nothing constructs it today).
+        agentlens_core::shutdown::Outcome::Poisoned => {}
+    }
+
+    if let Some(h) = sweeper {
+        if !h.join_within(remaining(stop_deadline)) {
+            eprintln!("alcore: stop gave up waiting on the sweeper thread's own flush — the shared stop budget elapsed");
+        }
+    }
+
+    // Explicit bounded shutdown, not an implicit drop at the end of `main` — an implicit drop
+    // blocks UNBOUNDED on every still-running background task (the DuckDB bodies pass `chores.rs`
+    // runs via `spawn_blocking` can take tens of seconds), so dropping `rt` implicitly was itself
+    // a SECOND, unbounded starvation point behind the state-lock one this change fixes.
+    rt.shutdown_timeout(remaining(stop_deadline));
+
+    // Released LAST, after the runtime (and everything it was running) has actually stopped —
+    // releasing it any earlier reopens the double-owner window `pid_lock::claim` guards against:
+    // a second server could claim this data dir as "free" while this process is still finishing.
     agentlens_core::pid_lock::release(std::path::Path::new(&data_dir));
 }

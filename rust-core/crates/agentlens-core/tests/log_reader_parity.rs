@@ -420,7 +420,10 @@ fn watcher_advances_a_card_on_growth_without_waiting_for_the_backstop() {
     }
 
     // A graceful stop flushes the durable state (offsets for the file that grew).
-    handle.stop();
+    // `SweeperHandle::stop()` was split into `signal()` + `join_within(Duration)` (TRDD-N60JUWU3)
+    // so a real stop can bound the join; a test can just ask for a generous budget.
+    handle.signal();
+    assert!(handle.join_within(std::time::Duration::from_secs(10)), "sweeper did not finish its final flush in time");
     let offsets = DeltaLog::new(&data, "log-offsets").load().unwrap();
     assert_eq!(offsets[claude.to_str().unwrap()]["bytesRead"], std::fs::metadata(&claude).unwrap().len());
 }

@@ -469,8 +469,12 @@ export async function stopServer(): Promise<void> {
     console.log('server already stopped')
     return
   }
+  // TRDD-N60JUWU3: the server's own stop budget defaults to 8s (AGENTLENS_STOP_LOCK_TIMEOUT_MS)
+  // — this loop's 15s must stay comfortably above it, or a real timeout on the server side would
+  // still read here as "did not stop", losing the holder name the server already logged.
+  const logStart = logSizeNow()
   process.kill(pid, 'SIGTERM') // graceful — the server flushes every store on SIGTERM
-  for (let i = 0; i < 40; i++) {
+  for (let i = 0; i < 60; i++) {
     await sleep(250)
     // Confirm with the SAME data-dir-keyed resolver that chose the target. The old loop asked
     // `init()` — "is anything answering the MCP port?" — which is a different question: with a
@@ -483,7 +487,12 @@ export async function stopServer(): Promise<void> {
   // success while the server was still flushing. The honest consequence is that a big store
   // (the live collector's flush of ~1.8 GB) can legitimately outlast this budget: that is a slow
   // stop in progress, NOT the foreign-server bug this budget's message used to be confused with.
-  throw new Error(`server (pid ${pid}) is still running 10s after SIGTERM — a large store can take longer to flush; watch it before escalating to SIGKILL`)
+  // Name the lock holder if the server's own bounded-wait poll (TRDD-N60JUWU3) already logged
+  // one for this attempt — scoped to bytes written since our own SIGTERM (logTail's fromOffset),
+  // never a stale holder from an earlier, unrelated stop.
+  const holderLine = logTail(40, logStart).match(/alcore: stop (?:waiting on|timed out .*waiting on) (.+)/)
+  const holderNote = holderLine ? ` — stuck behind ${holderLine[1]}` : ''
+  throw new Error(`server (pid ${pid}) is still running 15s after SIGTERM${holderNote} — a large store can take longer to flush; watch it before escalating to SIGKILL (see server.log for "alcore: stop waiting on <holder>")`)
 }
 
 /** The capture-liveness line for `server status` (TRDD-0SA5QZTG).
