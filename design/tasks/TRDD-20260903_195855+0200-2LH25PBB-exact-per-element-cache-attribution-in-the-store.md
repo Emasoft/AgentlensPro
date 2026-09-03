@@ -101,6 +101,25 @@ columns** — `element_type, name, role, breakpoint, key_excluded, position, cls
 all low-cardinality and integer, i.e. exactly the RLE / bit-packing / dictionary cases the article
 describes. Complex queries then run without touching the text; the blob join is display-only.
 
+**Correction 2b — TYPED columns per data kind, measured at 8.2×.** The owner's sharper point: a raw
+body mixes hashes, integer token counts, URLs, enum-ish strings and prose, and `blobs.data` puts all
+of it in ONE VARCHAR, so DuckDB cannot adapt its scheme to the data. Measured over 200,000 real
+`usage` records:
+
+| storage | bytes |
+|---|---|
+| one heterogeneous VARCHAR of JSON (today) | 14,061,053 |
+| typed columns | 1,722,860 |
+| **reduction** | **8.2×** |
+
+DuckDB then chose per column, exactly as predicted: dictionary for `cache_creation` /
+`output_tokens` / `input_tokens`, plain for the high-cardinality `cache_read`, dictionary for
+`service_tier` — **122 bytes for 200,000 rows**. Inside a JSON string those same values are
+incompressible noise. So numeric and enum fields become real typed columns (`input_tokens`,
+`cache_read_tokens`, `cache_creation_tokens`, `output_tokens`, `cost_usd`, `duration_ms`, `model`,
+`role`, `stop_reason`, `service_tier`, `ttl_5m`, `ttl_1h`), timestamps become TIMESTAMP (delta), and
+`blobs.data` is left holding ONLY homogeneous text — which also improves its own ratio.
+
 **Correction 3 — 273 million rows of JSON punctuation are waste, and that is the owner's point
 landing.** Of 457.7M part rows only 184.6M carry content; the rest are commas, braces and field
 names stored one row each — 60% of the largest table holding syntax that is reconstructable from the
@@ -125,6 +144,13 @@ column is null and a backfill pass fills it. Null means "not yet computed", neve
 - [ ] Round-trip: every body used rebuilds to a matching sha256.
 
 ## Notes and lessons learned
+
+- **Heterogeneous data in one column defeats the database's main strength.** DuckDB adapts its
+  compression per column, so a VARCHAR holding hashes, integers, URLs and prose together gets the
+  scheme for "mixed text" — the worst available. Splitting by data kind measured 8.2× on real usage
+  records, and the enum column fell to 122 bytes for 200,000 rows. The rule that follows: never
+  store a value as JSON text when it has a type, and never mix types in one column to keep a schema
+  simple. The schema is where the compression decision is made.
 
 - **A mutating element is not necessarily a cache-breaking element.** The billing header changes on
   every request and costs nothing. Any attribution that assumes "changed ⇒ invalidated" reports a
