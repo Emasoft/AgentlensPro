@@ -75,6 +75,27 @@ fs.mkdirSync(path.join(strayTop, 'sibling-nm'), { recursive: true })
 fs.writeFileSync(path.join(strayTop, 'package.json'), '{}')   // NOT a workspace declaration
 fs.symlinkSync(path.join(strayTop, 'sibling-nm'), path.join(strayScratch, 'node_modules'))
 
+// An npm/yarn workspace: the root declares `workspaces` INSIDE package.json rather than in a
+// sibling file. This branch of the boundary logic had no fixture and no mutation, so it was
+// unpinned while the two beside it were verified — "all fixes pinned" was true of the mutations
+// run, not of the code.
+const npmWs = path.join(root, 'npm-workspace')
+const npmWsPkg = path.join(npmWs, 'packages', 'a')
+fs.mkdirSync(path.join(npmWs, 'node_modules', 'dep'), { recursive: true })
+fs.mkdirSync(npmWsPkg, { recursive: true })
+fs.writeFileSync(path.join(npmWs, 'package.json'), JSON.stringify({ workspaces: ['packages/*'] }))
+fs.writeFileSync(path.join(npmWsPkg, 'package.json'), '{}')
+fs.symlinkSync(path.join(npmWs, 'node_modules', 'dep'), path.join(npmWsPkg, 'node_modules'))
+
+// A package.json that merely CONTAINS the word — a dependency named `workspaces`. A text match
+// would treat this as a root and widen the boundary; parsing does not.
+const fakeWs = path.join(root, 'fake-ws')
+const fakeWsInner = path.join(fakeWs, 'inner')
+fs.mkdirSync(fakeWsInner, { recursive: true })
+fs.mkdirSync(path.join(fakeWs, 'sibling-nm'), { recursive: true })
+fs.writeFileSync(path.join(fakeWs, 'package.json'), JSON.stringify({ dependencies: { workspaces: '^1.0.0' } }))
+fs.symlinkSync(path.join(fakeWs, 'sibling-nm'), path.join(fakeWsInner, 'node_modules'))
+
 const run = (command, cwd) => {
   const out = execFileSync('node', [GUARD], {
     input: JSON.stringify({ tool_input: { command }, cwd }),
@@ -96,8 +117,14 @@ const cases = [
 
   [true, 'pnpm install', bare, 'NO .git: an escaping node_modules is still an escape'],
   [true, `cd ${worktree} && FOO=1 env corepack pnpm install`, repo, 'VAR= + env + corepack chain is skipped to reach the command word'],
+  // Every launcher, one case: each was a measured false negative before it was in the set.
+  ...['time', 'exec', 'command', 'nice', 'sudo', 'npx'].map((l) => (
+    [true, `cd ${worktree} && ${l} pnpm install`, repo, `launcher '${l}' is stepped over, not mistaken for the command`]
+  )),
+  [true, 'pnpm install', fakeWsInner, 'a dependency NAMED workspaces is not a workspace root'],
   [true, 'pnpm install', strayScratch, 'a stray ancestor package.json must NOT widen the boundary'],
 
+  [false, 'npm install', npmWsPkg, 'npm/yarn workspace: root declares workspaces IN package.json'],
   [false, 'pnpm install', wsNoGitPkg, 'workspace WITHOUT .git: still not an escape (outermost project marker)'],
 
   [false, 'pnpm install', repo, 'REAL node_modules is allowed — this is the remedy, never block it'],

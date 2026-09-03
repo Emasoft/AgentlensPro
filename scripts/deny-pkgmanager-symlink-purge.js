@@ -66,6 +66,14 @@ const path = require('path')
 // `/opt/homebrew/bin/pnpm` and `corepack pnpm` all match.
 const MANAGERS = new Set(['pnpm', 'npm', 'yarn', 'bun'])
 
+// Words that PRECEDE the real command word and must be stepped over to find it. Every one is a
+// measured gap, not a guess: on 2026-09-03 `time`/`exec`/`command`/`nice`/`sudo pnpm install` all
+// slipped through, because the command word was the launcher. An earlier round DELETED three of
+// these as "speculative and unpinned" — that was wrong. They are ordinary shell idioms, and
+// removing them traded an untested claim for a silent false negative. The whole set is exercised
+// by one matrix case, so none of them is a claim without a check.
+const LAUNCHERS = new Set(['env', 'corepack', 'npx', 'time', 'exec', 'command', 'nice', 'sudo'])
+
 /** The command's effective working directory: an explicit `cd <path>` in the same segment wins
  *  over the session cwd, because that is the shape the real incident took. */
 function effectiveCwd(segment, sessionCwd) {
@@ -100,10 +108,14 @@ function checkoutRoot(dir) {
     if (fs.existsSync(path.join(cur, '.git'))) return cur
     if (fs.existsSync(path.join(cur, 'pnpm-workspace.yaml'))) return cur
     // npm/yarn workspaces declare the root inside package.json instead of a sibling file.
+    // PARSED, never regex-matched. A text match on `"workspaces"` also hits a dependency named
+    // `workspaces` or the word inside any string, and a false positive here WIDENS the boundary —
+    // the same failure that let an escape into a sibling project be allowed. Parsing is shorter and
+    // has no such surface; an unparseable file is simply not a root claim.
     try {
-      const pkg = path.join(cur, 'package.json')
-      if (fs.existsSync(pkg) && /"workspaces"\s*:/.test(fs.readFileSync(pkg, 'utf8'))) return cur
-    } catch { /* unreadable package.json is not a root claim */ }
+      const pkg = JSON.parse(fs.readFileSync(path.join(cur, 'package.json'), 'utf8'))
+      if (pkg && pkg.workspaces) return cur
+    } catch { /* absent or unreadable package.json is not a root claim */ }
     const parent = path.dirname(cur)
     if (parent === cur) return null // no root found: caller falls back to the cwd
     cur = parent
@@ -209,7 +221,7 @@ process.stdin.on('end', () => {
     // this file has already shipped twice (the comment listed `npx` while the array did not).
     const tokens = trimmed.split(/\s+/)
     let i = 0
-    while (i < tokens.length && (/^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i]) || ['env', 'corepack', 'npx'].includes(tokens[i]))) i++
+    while (i < tokens.length && (/^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i]) || LAUNCHERS.has(tokens[i]))) i++
     const word = tokens[i]
     // A quoted command word is not a command word — it is prose inside someone's argument.
     if (!word || /^['"]/.test(word)) continue
