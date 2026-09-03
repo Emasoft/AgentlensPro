@@ -3,7 +3,7 @@ trdd-id: GVA8TTJF
 title: api_calls coalesced view, cache_turns statusline join, and the acceptance SQL
 column: planned
 created: 2026-09-03T04:47:31+0200
-updated: 2026-09-03T04:59:59+0200
+updated: 2026-09-03T08:34:55+0200
 current-owner: main-session
 task-type: feature
 priority: high
@@ -17,6 +17,10 @@ blocked-by: [9SYRK6SW, N6A8VX3G]
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-03
 
+- 2026-09-03T08:34:55+0200 — column names in the landed api_call table are `system_fps` and
+  `billing_header` (there is no `system_fp`, `cc_version` or `cc_is_subagent` column); the join
+  view must read those — see
+  `reports/trdd-9syrk6sw/20260903_061039+0200-writer-implementation.md`.
 - **RE-SPEC per Fable advisor verdict on CAJ5RCP9 (2026-09-03):** `api_calls` must coalesce TWO
   row kinds keyed by DIFFERENT stems (request stem = uuid, response stem = `request_id`) — no
   shared `call_id` to `GROUP BY` on directly. And response rows carry no `session_id` on their
