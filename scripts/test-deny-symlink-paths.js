@@ -63,6 +63,20 @@ check(run(`cat ${link}/f | xargs rm`).denied, 'cat piped into xargs rm')
 check(!run(`ls ${link} | grep foo`).denied, 'a pipeline of ALL-known-read-only stages stays exempt')
 check(!run(`cat ${link}/f | head -5 | wc -l`).denied, 'three read-only stages stay exempt')
 
+// A quoted `|` is DATA. Splitting on it invented a stage whose command word was `b"` — unknown, so
+// the pipeline re-armed and a plain grep was denied.
+check(!run(`grep "a|b" ${link}/f`).denied, 'a | inside a quoted pattern is not a pipe')
+
+// LONG-FORM mutating flags. `-o` alone missed `sort --output=`, which writes — a mutating
+// invocation classified read-only, i.e. a bypass (found by security review 2026-09-03).
+check(run(`sort --output=${link}/o ${link}/i`).denied, 'sort --output= writes, like -o')
+check(run(`find ${link} -execdir rm {} +`).denied, 'find -execdir mutates')
+
+// An UNKNOWN binary is the common real shape — a project script, a tool the guard has never heard
+// of. It is caught by being absent from READONLY, with or without a pipe.
+check(run(`oppa ${link}/f`).denied, 'an unknown binary with a symlink arg is denied')
+check(run(`./scripts/ci.sh ${link}`).denied, 'a project script is denied')
+
 // The flag letters mean OPPOSITE things per command, and a global list denied the two most common
 // read-only invocations an agent runs. Measured 2026-09-03; pinned so it cannot regress.
 check(!run(`grep -i foo ${link}/f`).denied, 'grep -i is IGNORE-CASE, not in-place')

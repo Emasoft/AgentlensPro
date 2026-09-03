@@ -110,9 +110,14 @@ const READONLY = new Set([
 // IGNORE-CASE for grep and diff; `-o` writes a file for sort but means only-matching for grep.
 // A global flag list denied `grep -i foo <path>` and `diff -i a b` — measured 2026-09-03, and those
 // are among the most common commands an agent runs, so the exemption would have been worthless.
+// LONG FORMS TOO. `-o` alone missed `sort --output=<path>`, which writes — a mutating invocation
+// classified read-only, i.e. a bypass, found by a security review 2026-09-03. Any short flag with a
+// GNU long equivalent needs both spellings, and `=` must be accepted as the value separator.
 const MUTATING_FLAGS = {
-  find: /(?:^|\s)-(?:delete|exec|execdir|fprint|fls|ok|okdir)\b/,
-  sort: /(?:^|\s)-o\b/,
+  find: /(?:^|\s)-(?:delete|exec|execdir|fprint|fls|fprintf|ok|okdir)\b/,
+  sort: /(?:^|\s)(?:-o\b|--output(?:=|\b))/,
+  jq:   /(?:^|\s)(?:-i\b|--in-place\b)/,
+  yq:   /(?:^|\s)(?:-i\b|--inplace\b)/,
 }
 
 /** Redirects that WRITE. `2>&1` merges stderr into stdout and creates nothing; a `>` inside a
@@ -285,7 +290,12 @@ process.stdin.on('end', () => {
     // `2>` and `1`, and the orphaned `2>` then reads as a bare writing redirect. Measured
     // 2026-09-03 — `ls <symlink> 2>&1` was denied, which is a pure stderr merge that creates
     // nothing.
-    const segmentable = cmd.replace(/\d?>&\d?/g, ' ')
+    // Mask QUOTED spans before any splitting: a `|` inside `grep "a|b" path` is data, and splitting
+    // on it invented a stage whose command word was `b"` — unknown, so the whole pipeline re-armed
+    // and a plain grep was denied. Masking preserves length so the extracted path tokens still line
+    // up with the original text.
+    const masked = cmd.replace(/'[^']*'|"[^"]*"/g, (m) => ' '.repeat(m.length))
+    const segmentable = masked.replace(/\d?>&\d?/g, ' ')
     // PIPELINES FIRST. A read-only command is only harmless if its OUTPUT goes nowhere dangerous:
     // `ls /tmp/link | oppa` reads through the symlink and hands the result to a binary we know
     // nothing about (owner, 2026-09-03: "you don't know what oppa does, but since ls pipes its
@@ -294,7 +304,16 @@ process.stdin.on('end', () => {
     // EVERY stage of its pipeline is itself known-read-only: `ls x | grep y` stays quiet, and one
     // unknown command anywhere in the chain re-arms the whole pipeline.
     for (const pipeline of segmentable.split(/(?:\|\||&&|[;&\n])+/)) {
-      const stages = pipeline.split('|').map((x) => x.trim()).filter(Boolean)
+      // Stage boundaries come from the MASKED text; the stage CONTENT is sliced from the original
+      // so quoted paths are still extractable.
+      const base = segmentable.indexOf(pipeline)
+      const stages = []
+      let off = 0
+      for (const part of pipeline.split('|')) {
+        const orig = base >= 0 ? cmd.substr(base + off, part.length) : part
+        if (orig.trim()) stages.push(orig.trim())
+        off += part.length + 1
+      }
       if (!stages.length) continue
       const commandWord = (seg) => {
         const t = seg.split(/\s+/)
