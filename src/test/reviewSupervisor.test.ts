@@ -98,31 +98,25 @@ suite('reviewSupervisor — judgement', () => {
   })
 })
 
-// The Stop-blocking branch had ZERO tests when its own review ran, which is how the wedge below
-// survived to production. These cover the decision the branch makes, via `judge`'s contract.
-suite('reviewSupervisor — the Stop block must always have an exit', () => {
-  test('the unregistered-gate alarm is flagged as NOT fixable by spawning a fork', () => {
-    const v = judge({ work: 1, forks: 0, unreviewed: 1 }, false, true)
-    assert.strictEqual(v.level, 'alarm')
-    assert.strictEqual(v.unsatisfiableByFork, true,
-      'a settings-derived alarm cannot be cleared from the transcript; blocking on it repeatedly is a deadlock')
-  })
-
-  test('its message names the remedy that actually works, and warns off the one that does not', () => {
+// The supervisor NEVER blocks (owner order): it injects. These pin that contract, because a
+// blocking supervisor could deadlock a session on a condition the agent cannot clear.
+suite('reviewSupervisor — warns without ever blocking', () => {
+  test('an unregistered gate names the remedy that actually works', () => {
     const m = judge({ work: 1, forks: 0, unreviewed: 1 }, false, true).message
-    assert.ok(/--install-hooks/.test(m), 'must name the fix')
-    assert.ok(/will NOT/i.test(m), 'must say a fork will not clear it')
+    assert.ok(/--install-hooks/.test(m), 'a fork cannot fix a settings-derived condition; say what can')
   })
 
-  test('the backlog alarm IS fork-clearable, so it may block repeatedly', () => {
-    const v = judge({ work: 9, forks: 1, unreviewed: 4 }, true, true)
-    assert.strictEqual(v.level, 'alarm')
-    assert.ok(!v.unsatisfiableByFork, 'a fork clears it, so repeating the block is correct')
-  })
-
-  test('spawning a fork clears the backlog — the exit is real', () => {
+  test('spawning a fork clears the backlog — the warning is actionable', () => {
     const withFork = scanSupervision([assistant([edit]), assistant([edit]), assistant([edit]), assistant([fork])])
     assert.strictEqual(withFork.unreviewed, 0)
     assert.strictEqual(judge(withFork, true, true).level, 'ok')
+  })
+
+  test('a verdict carries no blocking instruction of any kind', () => {
+    for (const v of [judge({ work: 1, forks: 0, unreviewed: 1 }, false, true),
+                     judge({ work: 9, forks: 1, unreviewed: 4 }, true, true),
+                     judge({ work: 2, forks: 0, unreviewed: 2 }, true, true)]) {
+      assert.ok(!('decision' in v), 'the verdict must never carry a block decision')
+    }
   })
 })

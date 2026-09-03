@@ -12,9 +12,11 @@
 //
 // It runs on UserPromptSubmit AND Stop. The Stop registration is the load-bearing one: a warning the
 // USER reads is worthless while the user is away, and on 2026-09-03 the agent finished turn after
-// turn without ever being told. On Stop it therefore BLOCKS on alarm, which is the only channel an
-// agent reliably reads at a stop. That is a backstop for a gate that has failed, not a second gate:
-// with the gate working, the supervisor's alarm conditions never hold.
+// turn without ever being told. It NEVER BLOCKS — it injects the warning into the agent's context
+// and shows it to the user. Blocking was tried and removed the same day: a blocking supervisor can
+// deadlock a session on a condition no action of the agent's can clear, which is worse than the
+// unreviewed turn it guards against. Enforcement is the gate's job; this one only has to be
+// impossible to silence.
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
@@ -80,14 +82,6 @@ export const UNREVIEWED_ALARM = 3
 export interface Verdict {
   level: 'ok' | 'warn' | 'alarm'
   message: string
-  /**
-   * True when spawning a review fork CANNOT clear this alarm — the condition comes from the settings
-   * file, not the transcript. Blocking on it with the fork instruction is a deadlock: the agent does
-   * the thing it is told and the condition is untouched. Such a block must name the remedy that does
-   * work (`agentlenspro --install-hooks`, re-read from disk on the next fire) and must release
-   * rather than repeat if that did not help.
-   */
-  unsatisfiableByFork?: boolean
 }
 
 /**
@@ -101,7 +95,6 @@ export function judge(scan: SupervisorScan, registered: boolean, transcriptReada
       message: 'THE REVIEW GATE IS NOT REGISTERED. No Stop/SubagentStop hook runs `agentlenspro review-gate`, '
         + 'so no turn is being reviewed. Run `agentlenspro --install-hooks` NOW — spawning a review fork will NOT '
         + 'fix this, because the condition is in the settings file, not the transcript.',
-      unsatisfiableByFork: true,
     }
   }
   if (!transcriptReadable) {
@@ -129,7 +122,7 @@ export function judge(scan: SupervisorScan, registered: boolean, transcriptReada
   return { level: 'ok', message: `review supervisor: ${scan.forks} review(s) for ${scan.work} change(s) in the scanned window, ${scan.unreviewed} unreviewed.` }
 }
 
-interface SupervisorInput { transcript_path?: unknown; session_id?: unknown; hook_event_name?: unknown; hookEventName?: unknown; stop_hook_active?: unknown }
+interface SupervisorInput { transcript_path?: unknown; session_id?: unknown; hook_event_name?: unknown; hookEventName?: unknown }
 
 function settingsCascade(cwd: string): string[] {
   return [
@@ -173,34 +166,14 @@ export async function runReviewSupervisor(): Promise<number> {
   const event = String(input?.hook_event_name ?? input?.hookEventName ?? '')
   const tag = verdict.level === 'alarm' ? '🚨 REVIEW SUPERVISOR' : '⚠ Review supervisor'
 
-  if (event === 'Stop' || event === 'SubagentStop') {
-    // A block whose remedy the agent has ALREADY attempted must not repeat: `stop_hook_active` means
-    // a Stop hook blocked this same stop before. For the backlog alarm the remedy is a fork and the
-    // scan proves whether it landed, so repeating is correct and this flag is ignored. For a
-    // settings-derived alarm nothing in the transcript can ever clear it, so repeating is a DEADLOCK
-    // — release with the warning still shown. (review: "no in-session exit".)
-    const alreadyBlocked = input?.stop_hook_active === true
-    if (verdict.level === 'alarm' && verdict.unsatisfiableByFork && alreadyBlocked) {
-      process.stdout.write(JSON.stringify({
-        systemMessage: `${tag}: ${verdict.message} — STILL UNRESOLVED after a block; releasing the stop so the session is not wedged. THE REVIEW IS NOT RUNNING.`,
-      }))
-      return 0
-    }
-    if (verdict.level === 'alarm') {
-      process.stdout.write(JSON.stringify({
-        decision: 'block',
-        reason: `${tag}: ${verdict.message} (review-supervisor — this fires when the review gate itself is not doing its job)`,
-      }))
-      return 0
-    }
-    // A warn at a stop still reaches the user, but must not hold the turn.
-    process.stdout.write(JSON.stringify({ systemMessage: `${tag}: ${verdict.message}` }))
-    return 0
-  }
-
+  // NEVER BLOCKS (owner, 2026-09-03: "the supervisor does not need to be blocking. it just need to
+  // inject the warning in the context for the agent to read"). Injecting is enough and it removes an
+  // entire failure class: a blocking supervisor could deadlock a session on a condition no action of
+  // the agent's could clear, which is a worse outcome than the unreviewed turn it was guarding
+  // against. Enforcement stays the gate's job; this one only has to be impossible to silence.
   process.stdout.write(JSON.stringify({
     systemMessage: `${tag}: ${verdict.message}`,
-    hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: `[review-supervisor] ${verdict.message}` },
+    hookSpecificOutput: { hookEventName: event || 'UserPromptSubmit', additionalContext: `[review-supervisor] ${verdict.message}` },
   }))
   return 0
 }
