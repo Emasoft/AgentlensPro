@@ -198,6 +198,41 @@ export function survivingBoundary(
   return last
 }
 
+/**
+ * The surviving boundary expressed in the CURRENT request's coordinates — what `classifyTurn` must
+ * use, because it thresholds `curOrdered` positions.
+ *
+ * `survivingBoundary` scans the PREVIOUS request and returns an index into it. Clamping that number
+ * into range does NOT translate it: the two coordinate systems drift by exactly the difference in
+ * key-excluded elements before the divergence. Measured by the review fork on a pair whose content
+ * was entirely identical — every element had to be `cache-read`, and the last one came back
+ * `cache-write` because prev's index for it was cur's index for its predecessor.
+ *
+ * Dormant in production today (a request carries exactly one billing header, so the drift is 0) and
+ * live the moment a second key-excluded element type exists, which `keyExcluded` is designed to
+ * allow. Translating is cheap; relying on the drift staying 0 is not.
+ */
+export function survivingBoundaryInCur(
+  prevOrdered: readonly RequestElement[],
+  curOrdered: readonly RequestElement[],
+  divergence: Divergence,
+): number {
+  const prevLimit = divergence.prevIndex < 0 ? prevOrdered.length : divergence.prevIndex
+  const curLimit = divergence.index < 0 ? curOrdered.length : divergence.index
+  let i = 0
+  let j = 0
+  let lastCur = -1
+  // Walk the aligned region the same way the divergence walk did, so element i of prev is paired
+  // with element j of cur, and record the CUR index of the last prev-side breakpoint.
+  while (i < prevLimit && j < curLimit && i < prevOrdered.length && j < curOrdered.length) {
+    if (prevOrdered[i].keyExcluded) { i++; continue }
+    if (curOrdered[j].keyExcluded) { j++; continue }
+    if (prevOrdered[i].breakpoint) lastCur = j
+    i++; j++
+  }
+  return lastCur
+}
+
 /** The last `cache_control` marker in the request: content beyond it is never cached this turn. */
 export function lastBreakpoint(curOrdered: readonly RequestElement[]): number {
   for (let i = curOrdered.length - 1; i >= 0; i--) if (curOrdered[i].breakpoint) return i
@@ -233,10 +268,10 @@ export function classifyTurn(
   const divergence = prevOrdered
     ? firstDivergence(prevOrdered, curOrdered)
     : { index: 0, prevIndex: 0, element: curOrdered[0], appendOnly: false }
-  // Scanned in the PREVIOUS request's coordinates, then clamped into the current one: the boundary
-  // is used to classify current positions, and the previous request can be longer (content removed),
-  // which would otherwise mark positions that do not exist here.
-  const rawBoundary = prevOrdered ? survivingBoundary(prevOrdered, divergence.prevIndex) : -1
+  // TRANSLATED into the current request's coordinates, not merely clamped into range. Clamping a
+  // prev-coordinate index leaves it off by the number of extra key-excluded elements, which
+  // misclassifies the last element of an otherwise unchanged request (review-fork finding F1).
+  const rawBoundary = prevOrdered ? survivingBoundaryInCur(prevOrdered, curOrdered, divergence) : -1
   const boundary = Math.min(rawBoundary, curOrdered.length - 1)
   // A breakpoint can only extend the cacheable region, never shrink what already survived, so the
   // cacheable end is at least the boundary. Without this, a previous request whose trailing marker

@@ -30,6 +30,26 @@ suite('cacheClassification — coordinate and clamping edges', () => {
     assert.notStrictEqual(d.index, d.prevIndex, 'the drift this test exists for')
   })
 
+  // F1 from the review fork: the earlier fix corrected where the boundary was SCANNED but not how it
+  // was CONSUMED, so a prev-coordinate index was thresholded against cur positions. With identical
+  // content and an extra key-excluded element in cur, the last element came back cache-write.
+  test('an unchanged request with more key-excluded elements is entirely cache-read', () => {
+    const prev = [
+      el('system', 0, 'hdr-a', { keyExcluded: true }),
+      el('system', 2, 'S2'), el('system', 3, 'S3', { breakpoint: true }),
+      el('messages', 0, 'M0'), el('messages', 1, 'M1', { breakpoint: true }),
+    ]
+    const cur = [
+      el('system', 0, 'hdr-b', { keyExcluded: true }),
+      el('system', 1, 'hdr-extra', { keyExcluded: true }), // one MORE than prev — the drift
+      el('system', 2, 'S2'), el('system', 3, 'S3', { breakpoint: true }),
+      el('messages', 0, 'M0'), el('messages', 1, 'M1', { breakpoint: true }),
+    ]
+    const c = classifyTurn(prev, cur)
+    const notRead = c.elements.filter(e => e.cls !== 'cache-read').map(e => `${e.path}[${e.idx}]=${e.cls}`)
+    assert.deepStrictEqual(notRead, [], 'nothing changed, so nothing may be re-written')
+  })
+
   // DEFECT 2a: a shorter current request must never receive a boundary naming a position it lacks.
   test('the boundary is clamped into the current request when content was removed', () => {
     const prev = [

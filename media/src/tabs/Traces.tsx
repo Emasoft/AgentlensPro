@@ -315,7 +315,7 @@ function CallContextTree({ sessionId, entry }: { sessionId: string; entry: Timel
 // them, each block drilling to its real excerpt text at a leaf. The un-itemized base system prompt +
 // prior transcript is shown as an explicit remainder so the children reconcile to the exact bucket
 // value — never fabricated. No inner scrollbar — the tree grows the page.
-function LlmContextBreakdown({ entry, hostSources, compNote, hasCallContext }: { entry: TimelineEntry; hostSources?: ContextSource[]; compNote?: string; hasCallContext?: boolean }) {
+function LlmContextBreakdown({ entry, hostSources, sourcesInherited, compNote, hasCallContext }: { entry: TimelineEntry; hostSources?: ContextSource[]; sourcesInherited?: boolean; compNote?: string; hasCallContext?: boolean }) {
   const cacheRead = entry.cacheReadTokens ?? 0
   const cacheCreate = entry.cacheCreateTokens ?? 0
   // Entries carry disjoint buckets: inputTokens IS the fresh uncached share (the old subtraction
@@ -327,12 +327,17 @@ function LlmContextBreakdown({ entry, hostSources, compNote, hasCallContext }: {
   // big enough to contain them (the classic first-turn 100k+ write); on later turns cache_creation is
   // just the small changed delta and those same blocks are being RE-READ, so they nest under cache-read
   // instead. This keeps each block under the bucket that actually accounts for its tokens.
-  const blocksAreNewWrites = injectedNodes.length > 0 && cacheCreate >= itemizedSum
+  // INHERITED sources are the union of every turn of a PARENT transcript (a fork or sub-agent with no
+  // log of its own), so they are not this call's injections and must never nest under a billing
+  // bucket here. 574eeba5 fixed this in the turn-grouped view only; the ungrouped StepRow path
+  // reaches this component and had no inherited awareness at all (review-fork finding F2).
+  const blocksAreNewWrites = !sourcesInherited && injectedNodes.length > 0 && cacheCreate >= itemizedSum
+  const nestInjected = !sourcesInherited && injectedNodes.length > 0
 
   const nodes: BarNode[] = []
 
   if (cacheRead > 0) {
-    if (injectedNodes.length > 0 && !blocksAreNewWrites) {
+    if (nestInjected && !blocksAreNewWrites) {
       const kids = budgetedKids(injectedNodes, cacheRead, 'cr-rem')
       nodes.push({ key: 'cacheread', label: 'Cache-read (resident prefix reused)', colorKind: 'cacheRead', weight: cacheRead, value: tokValue(cacheRead, false), children: kids })
     } else {
@@ -383,9 +388,9 @@ function LlmContextBreakdown({ entry, hostSources, compNote, hasCallContext }: {
 // the cache-bucket summary → the FULL literal context tree of this call (reconstructed from the raw
 // OTEL body, so it works even for OTEL-only sessions with no .jsonl) → cost → response + reasoning →
 // timing. response/thinking are resolved by the parent (inline or blob) and passed in.
-function LlmDetail({ entry, step, sessIdx, idx, sessionModel, hostSources, compNote, responseText, thinking, sessionId }: {
+function LlmDetail({ entry, step, sessIdx, idx, sessionModel, hostSources, sourcesInherited, compNote, responseText, thinking, sessionId }: {
   entry: TimelineEntry; step: Step; sessIdx: number; idx: number; sessionModel: string
-  hostSources?: ContextSource[]; compNote?: string; responseText: string; thinking: string; sessionId?: string
+  hostSources?: ContextSource[]; sourcesInherited?: boolean; compNote?: string; responseText: string; thinking: string; sessionId?: string
 }) {
   const [showOutput, setShowOutput] = useState(false)
   const PREVIEW_LEN = 400
@@ -415,7 +420,7 @@ function LlmDetail({ entry, step, sessIdx, idx, sessionModel, hostSources, compN
         </LlmField>
       )}
       <LlmField heading="Context composition (this call)">
-        <LlmContextBreakdown entry={entry} hostSources={hostSources} compNote={compNote} hasCallContext={hasCallContext} />
+        <LlmContextBreakdown entry={entry} hostSources={hostSources} sourcesInherited={sourcesInherited} compNote={compNote} hasCallContext={hasCallContext} />
       </LlmField>
       {sessionId && (
         <LlmField heading="Full context of this call">
@@ -451,7 +456,7 @@ function LlmDetail({ entry, step, sessIdx, idx, sessionModel, hostSources, compN
 // full response/reasoning, tool calls show the FULL output, user/message steps show their full
 // text. Blob fields absent from DB rows are lazy-fetched via loadBlob (live sessions carry them
 // inline). All hooks run unconditionally at the top so hook order is stable across renders.
-function StepDetail({ step, idx, sessIdx, sessionModel, hostSources, compNote, sessionId }: { step: Step; idx: number; sessIdx: number; sessionModel: string; hostSources?: ContextSource[]; compNote?: string; sessionId?: string }) {
+function StepDetail({ step, idx, sessIdx, sessionModel, hostSources, sourcesInherited, compNote, sessionId }: { step: Step; idx: number; sessIdx: number; sessionModel: string; hostSources?: ContextSource[]; sourcesInherited?: boolean; compNote?: string; sessionId?: string }) {
   const entry = step.entry
   const blobs = blobCache.value
   // Lazy-fetch any blob fields this entry needs but didn't ship inline (DB-loaded sessions strip
@@ -471,7 +476,7 @@ function StepDetail({ step, idx, sessIdx, sessionModel, hostSources, compNote, s
 
   if (entry.type === 'llm') {
     return <LlmDetail entry={entry} step={step} sessIdx={sessIdx} idx={idx} sessionModel={sessionModel}
-      hostSources={hostSources} compNote={compNote} sessionId={sessionId} responseText={entry.responseText || blobs[`${entry.spanId}:response`] || ''}
+      hostSources={hostSources} sourcesInherited={sourcesInherited} compNote={compNote} sessionId={sessionId} responseText={entry.responseText || blobs[`${entry.spanId}:response`] || ''}
       thinking={entry.thinking || blobs[`${entry.spanId}:thinking`] || ''} />
   }
 
@@ -580,7 +585,7 @@ function LongTextSection({ heading, text, id: _id, isJson }: { heading: string; 
   )
 }
 
-export function StepRow({ step, idx, sessIdx, sessionDur, sessionModel, metric, maxMetric, highlightSpanId, hostSources, compNote, sessionId }: { step: Step; idx: number; sessIdx: number; sessionDur: number; sessionModel: string; metric: TimelineMetric; maxMetric: number; highlightSpanId?: string; hostSources?: ContextSource[]; compNote?: string; sessionId?: string }) {
+export function StepRow({ step, idx, sessIdx, sessionDur, sessionModel, metric, maxMetric, highlightSpanId, hostSources, sourcesInherited, compNote, sessionId }: { step: Step; idx: number; sessIdx: number; sessionDur: number; sessionModel: string; metric: TimelineMetric; maxMetric: number; highlightSpanId?: string; hostSources?: ContextSource[]; sourcesInherited?: boolean; compNote?: string; sessionId?: string }) {
   const entry = step.entry
   // When the user clicks a point in the Growth chart we focus that exact turn (by spanId). The
   // matching row auto-expands so its token breakdown is immediately visible, and scrolls into view.
@@ -695,7 +700,7 @@ export function StepRow({ step, idx, sessIdx, sessionDur, sessionModel, metric, 
       </div>
       {open && (
         <div class="sw-detail open">
-          <StepDetail step={step} idx={idx} sessIdx={sessIdx} sessionModel={sessionModel} hostSources={hostSources} compNote={compNote} sessionId={sessionId} />
+          <StepDetail step={step} idx={idx} sessIdx={sessIdx} sessionModel={sessionModel} hostSources={hostSources} sourcesInherited={sourcesInherited} compNote={compNote} sessionId={sessionId} />
         </div>
       )}
     </>
@@ -1655,7 +1660,7 @@ export function TimelineWaterfall({ steps, sessionDur, sessionModel, sessIdx = 0
                 <div class={stepDividers[oi].beforeWindow ? 'wf-before-window' : undefined}>
                   <StepRow step={step} idx={i} sessIdx={sessIdx}
                     sessionDur={sessionDur} sessionModel={sessionModel} metric={metric} maxMetric={maxMetric}
-                    highlightSpanId={highlightSpanId} hostSources={resolveHostSources(step.entry.turn)} compNote={compNote} sessionId={sessionId} />
+                    highlightSpanId={highlightSpanId} hostSources={resolveHostSources(step.entry.turn)} sourcesInherited={sourcesAreInherited(step.entry.turn)} compNote={compNote} sessionId={sessionId} />
                 </div>
               </div>
             ))

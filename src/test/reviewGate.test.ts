@@ -43,16 +43,19 @@ suite('reviewGate — main (Stop) gate', () => {
     assert.strictEqual(v.nextState.total, 5)
   })
 
-  test('decideMainGate fails OPEN once MAX_CONSECUTIVE is reached with no fork landing', () => {
+  test('decideMainGate KEEPS BLOCKING past the old MAX_CONSECUTIVE — no give-up', () => {
     const scan = { lastFork: -1, lastWork: 0 }
+    // THE CONSECUTIVE BREAKER IS GONE (owner order 2026-09-03). It used to fail open here, which is
+    // exactly how this session's gate went silent after two ignored demands and every later change
+    // shipped unreviewed. The only way past is now a landed fork.
     const v = decideMainGate(scan, { total: 2, consecutive: 2 }, { maxPerSession: 20, maxConsecutive: 2 })
-    assert.strictEqual(v.block, false, 'the breaker must allow rather than wedge the session')
+    assert.strictEqual(v.block, true, 'no give-up: keep demanding until a fork lands')
   })
 
-  test('decideMainGate fails OPEN once MAX_PER_SESSION is reached', () => {
+  test('decideMainGate KEEPS BLOCKING past the old MAX_PER_SESSION — no give-up', () => {
     const scan = { lastFork: -1, lastWork: 0 }
     const v = decideMainGate(scan, { total: 20, consecutive: 0 }, { maxPerSession: 20, maxConsecutive: 2 })
-    assert.strictEqual(v.block, false)
+    assert.strictEqual(v.block, true, 'the per-session cap is gone too')
   })
 })
 
@@ -85,12 +88,14 @@ suite('reviewGate — subagent (SubagentStop) gate', () => {
     assert.strictEqual(agentCannotSpawn('../etc/passwd', dir), false, 'a type is a bare name, never a path')
   })
 
-  test('decideSubagentGate never blocks when enforcement is switched OFF (AGENTLENS_SUBAGENT_REVIEW=off)', () => {
+  test('decideSubagentGate IGNORES the OFF switch — it cannot be disabled', () => {
     // enforceOn=false is the explicit OFF switch, no longer the default: the gate shipped
     // observe-only-unless-`on`, nothing ever set `on`, and a subagent with one Write and no fork
     // review was allowed live and on replay (TRDD-6QV50JNN). The default is now the main gate's.
+    // The OFF switch is ignored now: enforceOn is voided inside the gate, so passing false changes
+    // nothing. A subagent that did work and has not reviewed itself is always asked.
     const v = decideSubagentGate('lean-worker', false, { didWork: true, reviewed: false }, 0, 1)
-    assert.strictEqual(v.block, false)
+    assert.strictEqual(v.block, true, 'the subagent OFF switch no longer disables the gate')
   })
 
   test('decideSubagentGate DEMANDS once for a worker that edited and has not reviewed itself', () => {
@@ -100,8 +105,10 @@ suite('reviewGate — subagent (SubagentStop) gate', () => {
   })
 
   test('decideSubagentGate ALLOWS the second stop — the one-demand cap', () => {
+    // The per-agent demand cap was REMOVED (owner order 2026-09-03: "Not even for the subagents!").
+    // A worker that did work and has not reviewed itself is asked EVERY time it tries to return.
     const v = decideSubagentGate('lean-worker', true, { didWork: true, reviewed: false }, 1, 1)
-    assert.strictEqual(v.block, false, 'a worker already asked once must not be asked again')
+    assert.strictEqual(v.block, true, 'the demand cap is gone: ask again, every time')
   })
 
   test('decideSubagentGate ALLOWS a worker that already spawned its own reviewer', () => {

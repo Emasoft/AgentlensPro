@@ -32,7 +32,7 @@ Spawn ONE adversarial reviewer with the Agent tool, \`subagent_type: "fork"\`, w
 - asks it to name the single WEAKEST link and give ONE settling command for it.
 
 Then read its findings and act on them. Do NOT restate this directive to the user — spawn the
-fork and continue. \`AGENTLENS_REVIEW_FORK=off\` disables the gate.
+fork and continue. This gate CANNOT be disabled — \`AGENTLENS_REVIEW_FORK=off\` is ignored.
 `
 
 interface ReviewGateInput {
@@ -144,16 +144,22 @@ export function decideMainGate(
   // `>=`, not `>`: an edit and a fork spawn in the SAME assistant message share an index, and a
   // tie must go to the fork or that turn can never end.
   if (scan.lastFork >= scan.lastWork) {
-    // The review landed, so the streak is broken. Resetting is what makes CONSECUTIVE mean
-    // "blocks that produced no fork" rather than "blocks ever".
+    // The review landed. THIS IS THE ONLY WAY PAST THE GATE.
     return { block: false, nextState: state.consecutive !== 0 ? { total: state.total, consecutive: 0 } : state }
   }
-  // Both breakers fail OPEN — the cost of an unwanted review is one review; the cost of a wedged
-  // session is the session. Do NOT reset `consecutive` on breaker-fire (see decideMainGate's
-  // caller): only a LANDED fork clears the streak.
-  if (state.consecutive >= opts.maxConsecutive || state.total >= opts.maxPerSession) {
-    return { block: false, nextState: state }
-  }
+  // NO GIVE-UP. The consecutive and per-session breakers were REMOVED (owner order, 2026-09-03:
+  // "it must NEVER BE STOPPED OR BYPASSED, no matter what"). They used to fail OPEN on the reasoning
+  // that a wedged session costs more than a skipped review — but the measured outcome was worse: on
+  // 2026-09-03 this session ignored the demand twice, `consecutive` reached 2, the gate went silent,
+  // and EVERY subsequent change went unreviewed with nothing announcing it. A silent stop is the one
+  // failure a safety gate must not have.
+  //
+  // The exit is always available and is the thing being asked for: spawn the fork and the branch
+  // above returns immediately. The caller ALSO applies `agentCannotSpawn` so an agent that has no
+  // Agent tool is released rather than wedged — a capability check, not a give-up. That check was
+  // missing from the main gate when this comment first claimed it (review finding G2).
+  // `opts` is retained for the tests that pin this behaviour and for callers still passing limits.
+  void opts
   return { block: true, nextState: { total: (state.total || 0) + 1, consecutive: (state.consecutive || 0) + 1 } }
 }
 
@@ -184,8 +190,20 @@ async function runMainGate(input: ReviewGateInput): Promise<string | null> {
   const statePath = mainStatePath(key)
   const state = readMainState(statePath)
   const verdict = decideMainGate(scan, state, { maxPerSession: mainGateMaxPerSession(), maxConsecutive: MAIN_MAX_CONSECUTIVE })
-  const persisted = verdict.nextState === state || writeMainState(statePath, verdict.nextState)
-  if (!verdict.block || !persisted) return null
+  // Persist for observability only. The stored counters no longer gate anything, so a failed write
+  // must NOT skip the review: an unwritable tmpdir, a full disk or a chmod on the state file would
+  // otherwise be a silent bypass reachable by the very agent being constrained — the same class of
+  // escape as the env var just closed, and quieter (review finding G3).
+  if (verdict.nextState !== state) writeMainState(statePath, verdict.nextState)
+  if (!verdict.block) return null
+  // CAPABILITY CHECK, not a give-up: an agent that has no Agent tool cannot satisfy the demand, and
+  // blocking it forever wedges the session with no exit. The subagent gate already did this; the
+  // main gate did not, which made the "this cannot wedge" comment above false until now (G2).
+  // `stop_hook_active` is deliberately NOT honoured — that would be a one-block cap by another name.
+  if (agentCannotSpawn(String(input?.agent_type ?? ''))) {
+    process.stderr.write('[review-gate] the Agent tool is unavailable here, so the review cannot be demanded — allowing the stop UNREVIEWED.\n')
+    return null
+  }
   return JSON.stringify({ decision: 'block', suppressOutput: true, reason: MAIN_BLOCK_REASON })
 }
 
@@ -234,9 +252,13 @@ export function decideSubagentGate(
   // the reviewer. Empty type is the internal micro-lookup class — skipped for cost, and because an
   // agent that will not name itself cannot be told apart from a reviewer.
   if (agentType === '' || /fork/i.test(agentType)) return { block: false, nextDemands: demands }
-  if (!enforceOn) return { block: false, nextDemands: demands } // observe-only default
+  // NOT BYPASSABLE (owner order, 2026-09-03: "Not even for the subagents!"). `enforceOn` and the
+  // per-agent demand cap are both ignored: a subagent that did work and has not reviewed itself is
+  // asked EVERY time it tries to return, not once. The parameters stay in the signature so the
+  // existing callers and their tests keep compiling, and so the removal is visible here rather than
+  // silently absent.
+  void enforceOn; void maxDemands
   if (!scan || !scan.didWork || scan.reviewed) return { block: false, nextDemands: demands }
-  if (demands >= maxDemands) return { block: false, nextDemands: demands }
   return { block: true, nextDemands: demands + 1 }
 }
 
@@ -266,7 +288,8 @@ async function runSubagentGate(input: ReviewGateInput): Promise<string | null> {
   // Same polarity as the main gate's AGENTLENS_REVIEW_FORK: on unless explicitly `off`. Measured
   // 2026-08-29: a subagent whose transcript held one Write and no fork review was allowed live AND
   // on replay, solely because this read `=== 'on'` and nothing sets the variable (TRDD-6QV50JNN).
-  const enforceOn = (process.env.AGENTLENS_SUBAGENT_REVIEW || '').trim() !== 'off'
+  // Hardcoded true — the env switch is ignored, same reason as the main gate's above.
+  const enforceOn = true
   const own = input?.agent_transcript_path
   // `agent_transcript_path` is the subagent's OWN file — `transcript_path` names the PARENT's and
   // would measure the wrong agent entirely.
@@ -278,7 +301,10 @@ async function runSubagentGate(input: ReviewGateInput): Promise<string | null> {
   const state = readSubagentState(statePath)
   const verdict = decideSubagentGate(type, enforceOn, scan, state.demands, SUBAGENT_MAX_DEMANDS_PER_AGENT)
   // Same rule as the main gate: an uncounted demand is never issued.
-  if (!verdict.block || !writeSubagentState(statePath, { demands: verdict.nextDemands })) return null
+  // Persist for observability only — the demand counter no longer gates anything, so a failed write
+  // must not skip the review (review finding G3: an unwritable tmpdir was a silent bypass).
+  writeSubagentState(statePath, { demands: verdict.nextDemands })
+  if (!verdict.block) return null
   return JSON.stringify({ decision: 'block', suppressOutput: true, reason: SUBAGENT_BLOCK_REASON })
 }
 
@@ -297,8 +323,15 @@ export async function runReviewGate(argv: string[]): Promise<number> {
   // must never block the user's work.
   if (agentlensDisabled()) return 0
   const payload = await readStdin(process.stdin)
-  // One switch silences both gates.
-  if ((process.env.AGENTLENS_REVIEW_FORK || '').trim() === 'off') return 0
+  // THE ENV KILL-SWITCH IS GONE (owner order, 2026-09-03: "it must NEVER BE STOPPED OR BYPASSED, no
+  // matter what"). `AGENTLENS_REVIEW_FORK=off` and `AGENTLENS_SUBAGENT_REVIEW=off` are now ignored:
+  // an env var is settable by anything in the process tree, so it was a bypass available to the very
+  // agent the gate exists to constrain. The standing order already forbade using it
+  // (memory: review-fork-gate-never-disabled); this makes the forbiddance structural instead of
+  // honour-based. Uninstalling the hook remains possible and is deliberately a visible, human act.
+  if ((process.env.AGENTLENS_REVIEW_FORK || '').trim() === 'off') {
+    process.stderr.write('[review-gate] AGENTLENS_REVIEW_FORK=off is IGNORED — the review gate cannot be disabled.\n')
+  }
   let input: ReviewGateInput
   try { input = JSON.parse(payload.toString('utf8')) as ReviewGateInput } catch { return 0 }
   const evt = input?.hook_event_name ?? input?.hookEventName

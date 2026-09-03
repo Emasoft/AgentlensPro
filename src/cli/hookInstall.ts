@@ -84,6 +84,12 @@ export const CLI_BIN = 'agentlenspro'
 export const HOOK_CMD = 'agentlenspro hook'
 export const GATE_CMD = 'agentlenspro gate'
 export const REVIEW_CMD = 'agentlenspro review-gate'
+
+// The METAHOOK over the review gate. UserPromptSubmit deliberately — a DIFFERENT event from the
+// gate's Stop, so a gate that has stopped firing is exactly what this still detects. It only
+// reports (never blocks), so it is registered unconditionally alongside the gate.
+export const SUPERVISOR_CMD = 'agentlenspro review-supervisor'
+export const SUPERVISOR_EVENTS = ['UserPromptSubmit']
 // v1 PATH-bin names — recognised as ours for migration/uninstall, never registered anymore.
 export const LEGACY_HOOK_BIN = 'agentlenspro-hook'
 export const LEGACY_GATE_BIN = 'agentlenspro-gate'
@@ -118,7 +124,7 @@ export function isOurHookCommand(command: unknown): boolean {
     || LEGACY_REVIEW_SCRIPTS.some(s => command.includes(s))
     // \b keeps a hypothetical foreign "agentlensprod hookx" from matching; the space
     // between bin and verb is what distinguishes the v2 command-string generation.
-    || /\bagentlenspro\s+(hook|gate|review-gate)\b/.test(command)
+    || /\bagentlenspro\s+(hook|gate|review-gate|review-supervisor)\b/.test(command)
 }
 
 const isSpyglass = (h: HookCommandEntry): boolean =>
@@ -162,6 +168,10 @@ export function reviewGateMatcher(reviewCmd: string): HookMatcher {
   return { hooks: [{ type: 'command', command: reviewCmd, timeout: 10 }] }
 }
 
+export function reviewSupervisorMatcher(cmd: string): HookMatcher {
+  return { hooks: [{ type: 'command', command: cmd, timeout: 5 }] }
+}
+
 export function rebuildEventMatchers(
   matchers: HookMatcher[], ev: string, uninstall: boolean, cmd: string, gateCmd: string, reviewCmd: string = REVIEW_CMD
 ): RebuildResult {
@@ -186,13 +196,17 @@ export function rebuildEventMatchers(
     out.rebuilt.push(reviewGateMatcher(reviewCmd))
     out.installed = true
   }
+  if (!uninstall && SUPERVISOR_EVENTS.includes(ev)) {
+    out.rebuilt.push(reviewSupervisorMatcher(SUPERVISOR_CMD))
+    out.installed = true
+  }
   return out
 }
 
 // ── The strip, expressed as a FILTER instead of a result (TRDD-T0CT9U4X) ────────────────────────
 // Every generation this project ever registered, as a plain literal. A needle is matched against
 // json.dumps(element) inside the lock, so it must be a literal JSON cannot escape — all of these are.
-const GENERATION_NEEDLES = ['spy-agentlens', LEGACY_HOOK_BIN, LEGACY_GATE_BIN, ...LEGACY_REVIEW_SCRIPTS, HOOK_CMD, GATE_CMD, REVIEW_CMD, 'spyglass-collect.sh']
+const GENERATION_NEEDLES = ['spy-agentlens', LEGACY_HOOK_BIN, LEGACY_GATE_BIN, ...LEGACY_REVIEW_SCRIPTS, HOOK_CMD, GATE_CMD, REVIEW_CMD, SUPERVISOR_CMD, 'spyglass-collect.sh']
 
 /** A needle that identifies this command inside the transaction, or null when none can. The known
  *  generation literals come first (one op removes every entry of that generation); an unrecognised
@@ -249,6 +263,9 @@ export function buildEventOps(
   }
   if (!uninstall && REVIEW_EVENTS.includes(ev)) {
     ops.push({ op: 'append_unique', path: ['hooks', ev], value: reviewGateMatcher(reviewCmd), unique_by_substring: reviewCmd })
+  }
+  if (!uninstall && SUPERVISOR_EVENTS.includes(ev)) {
+    ops.push({ op: 'append_unique', path: ['hooks', ev], value: reviewSupervisorMatcher(SUPERVISOR_CMD), unique_by_substring: SUPERVISOR_CMD })
   }
   return ops
 }
@@ -317,7 +334,7 @@ export async function installHooks(uninstall: boolean, opts: InstallHooksOptions
   let removedSpyglass = 0
   let removedOurs = 0
   let added = 0
-  const events = new Set([...Object.keys(hooks), ...(uninstall ? [] : [...HOOK_EVENTS, ...GATE_EVENTS, ...REVIEW_EVENTS])])
+  const events = new Set([...Object.keys(hooks), ...(uninstall ? [] : [...HOOK_EVENTS, ...GATE_EVENTS, ...REVIEW_EVENTS, ...SUPERVISOR_EVENTS])])
   for (const ev of events) {
     const matchers = Array.isArray(hooks[ev]) ? hooks[ev] : []
     const r = rebuildEventMatchers(matchers, ev, uninstall, HOOK_CMD, GATE_CMD, REVIEW_CMD)
