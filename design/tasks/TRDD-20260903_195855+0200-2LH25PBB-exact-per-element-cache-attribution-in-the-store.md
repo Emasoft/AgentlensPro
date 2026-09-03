@@ -1,0 +1,134 @@
+---
+trdd-id: 2LH25PBB
+title: Store the cache read-write boundary per body so every element is classified exactly
+column: dev
+created: 2026-09-03T19:58:55+0200
+updated: 2026-09-03T19:58:55+0200
+current-owner: claude-code
+task-type: feature
+severity: HIGH
+labels: [store, duckdb, cache, attribution, trace]
+relevant-files: [rust-core/crates/agentlens-store/src/api_call.rs, rust-core/crates/agentlens-store/src/lib.rs, rust-core/crates/agentlens-store/src/pass.rs, src/shared/tokenBuckets.ts]
+parent-trdd:
+npt: []
+eht: []
+release-via: publish
+---
+
+# Store the cache read-write boundary per body so every element is classified exactly
+
+Phase 1 of the approved trace redesign (plan: redesign the trace around exact, reconciled token
+accounting). Supersedes nothing; TRDD-0Y8BMVK2 fixed the three presentation defects that exposed
+the underlying design flaw.
+
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-03 20:00
+
+Design settled and measured; implementation starting. The owner's storage proposal is adopted in
+its load-bearing part (precompute and store the boundary; never recompute per query) with two
+corrections recorded below. NEXT ACTION: add the boundary columns to the store schema and the
+ingest pass, with the key-aware snap, plus the classification unit tests.
+
+## The rule, as measured
+
+Classify every element of a request as cache-READ, cache-WRITE, fresh INPUT or OUTPUT by diffing
+against the previous request of the same stream. Four facts establish it, all measured 2026-09-03:
+
+1. **Stream identity is `session_id` + sha of `messages[0]`.** One session id interleaves parent and
+   sub-agent streams; keying on the id alone produced a confident false verdict ("the model flipped
+   and the whole 840 KB prefix was lost") that dissolved under the correct key.
+2. **The diff walks cache order, `tools → system → messages`, not wire order.** The wire body puts
+   messages first (`messages[476]` at byte 1,581,228; `system[2]` at 1,582,883; `system[3]` at
+   1,598,483). Diffing wire order would report a changed early message as invalidating all 84 tool
+   schemas, which is false.
+3. **THE BILLING HEADER IS NOT PART OF THE CACHE KEY.** `system[0]` carries
+   `x-anthropic-billing-header: … cc_prev_req=…` and changes on **738/738** consecutive main-thread
+   pairs, yet `cache_read` is never 0 on any of them — min 55,547, median 457,521, max 658,929, mean
+   hit 0.99235. In cache order it sits at index 84, two elements before the earliest breakpoint
+   (`system[3]`). A naive first-divergence index would therefore be 84 on EVERY turn and would mark
+   every later element a burn. Key-excluded elements must be skipped.
+4. **The boundary snaps back to a breakpoint.** `cache_control` markers sit on `system[3]`,
+   `system[4]` and the last message. What survives is the prefix up to the last breakpoint at or
+   before the first real divergence, not up to the divergence itself.
+
+Reconciliation table (20 consecutive pairs, one linear stream): first divergence `system[0]` on
+20/20 while `cache_read` climbs 303,201 → 315,507 and `cache_creation` stays 208–1,275.
+
+## Pairing, which was the blocker
+
+- **Response body → usage: exact, universal.** A response body's `src_name` is
+  `<request_id>.response.json`, and `claude_code.api_request` spans carry that `request_id` plus
+  `session.id`, usage and `cost_usd`. Joined 9,846 / 9,848 = **99.98%**.
+- **Request body → its own request id: exact, conditional.** The successor rule
+  `rid(Q_k) = cc_prev_req(Q_{k+1})` holds on a linear stream — 717/841 validated, every failure
+  explained (missing span, or genuine fan-out where 17 siblings name one parent). The naive
+  nearest-preceding heuristic is worse: 806 assigned, 206 conflicts.
+- **No direct link exists between a request body and its response body.** The response carries only
+  a `msg_` id, no session id, and shares no stem with the request. Sha-matching the response's
+  content blocks against the next request's messages cannot work — different granularity.
+
+## Storage decision (owner's proposal, adopted with corrections)
+
+The owner proposed storing each element in its own parquet column so DuckDB's column compression
+dedups unchanged values, with per-element order indices and a `cache_break_index` column.
+
+**Adopted:** precompute the boundary once at ingest and store it, so a query classifies any element
+by one integer comparison instead of re-diffing. This is the right call and it is what gets built.
+
+**Measured before deciding** (2026-09-03, the whole store):
+
+| measurement | value |
+|---|---|
+| raw bytes ingested | 469,253,051,136 (469 GB) |
+| unique content after dedup (`Σ blobs.n`) | 6,279,012,480 (6.28 GB) |
+| store on disk | 3.4 GB |
+| blob references vs distinct shas | 184,591,743 vs 2,825,622 = **65.3×** |
+| bodies | 930,109 |
+| parts rows | 457,672,204, of which only 184,591,743 are blob refs |
+
+**Correction 1 — keep content-addressing; column compression cannot replace it.** DuckDB chooses
+compression **per column segment**, and dictionary/FSST extract repetitions *within* a segment
+(<https://duckdb.org/2022/10/28/lightweight-compression>). The 84-tool catalog re-sent across 930,109
+bodies over weeks would be re-dictionaried in every row group; content-addressing stores it once
+across all of them. That is the measured 65.3× and it is not recoverable from RLE or FSST.
+
+**Correction 2 — a column per element is not expressible, but the owner's real complaint is valid.**
+Parquet needs a fixed schema while the element count is unbounded (84 tools, a few system blocks,
+messages growing every turn), so a column per message cannot exist. The long form is how a
+variable-length ordered list is expressed columnar. BUT the current long form stores only
+`(sha, path, idx, n)` and leaves the content opaque, so no query can ask "group by tool name" or
+"every request carrying skill X" without re-parsing JSON. **The element table gains semantic
+columns** — `element_type, name, role, breakpoint, key_excluded, position, cls, cache_break_index` —
+all low-cardinality and integer, i.e. exactly the RLE / bit-packing / dictionary cases the article
+describes. Complex queries then run without touching the text; the blob join is display-only.
+
+**Correction 3 — 273 million rows of JSON punctuation are waste, and that is the owner's point
+landing.** Of 457.7M part rows only 184.6M carry content; the rest are commas, braces and field
+names stored one row each — 60% of the largest table holding syntax that is reconstructable from the
+element list. Drop them.
+
+**Correction 4 — the stored index must be key-aware.** Per fact 3 above, storing a raw
+first-difference index would be wrong on every turn. The column stores the snapped, key-aware
+boundary; the raw divergence index is stored beside it so the snap is auditable, never hidden.
+
+**Tension named:** computing the boundary needs the predecessor, so it IS a diff — moved from query
+time to ingest time, which is the owner's actual point. When the predecessor is not yet ingested the
+column is null and a backfill pass fills it. Null means "not yet computed", never "no break".
+
+## Acceptance
+
+- [ ] Boundary columns land in the store schema and are written by the ingest pass.
+- [ ] Classification is key-aware (skips the billing header) and breakpoint-snapped.
+- [ ] Over a corpus of consecutive pairs, the structural boundary reconciles with the billed
+      `cache_read`/`cache_creation`; disagreements are surfaced, never resolved silently.
+- [ ] A change confined to messages does not move tools or system out of the cached region.
+- [ ] A null boundary is rendered as "not computed", distinct from a computed zero.
+- [ ] Round-trip: every body used rebuilds to a matching sha256.
+
+## Notes and lessons learned
+
+- **A mutating element is not necessarily a cache-breaking element.** The billing header changes on
+  every request and costs nothing. Any attribution that assumes "changed ⇒ invalidated" reports a
+  total prefix loss every turn while the account is measurably at 99% hit.
+- **Two false verdicts this session came from the same class of error**: reasoning from structure
+  without reconciling against the billed numbers. The billed usage is the oracle; the structural
+  diff explains it. When they disagree, the disagreement is the finding.
