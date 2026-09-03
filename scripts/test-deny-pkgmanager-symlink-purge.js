@@ -51,6 +51,19 @@ const bare = path.join(root, 'bare-scratch')
 fs.mkdirSync(bare, { recursive: true })
 fs.symlinkSync(path.join(repo, 'node_modules'), path.join(bare, 'node_modules'))
 
+// A pnpm workspace that is NOT a git checkout — a vendored copy, a docker build context, an
+// extracted tarball. Keying the boundary on `.git` alone denied every pnpm command here, which is
+// the workspace false positive returning by another door (measured 2026-09-03, after the no-.git
+// fallback was added). The boundary is the OUTERMOST project marker, so this stays allowed.
+const wsNoGit = path.join(root, 'ws-nogit')
+const wsNoGitPkg = path.join(wsNoGit, 'packages', 'a')
+fs.mkdirSync(path.join(wsNoGit, 'node_modules', '.pnpm', 'dep'), { recursive: true })
+fs.mkdirSync(wsNoGitPkg, { recursive: true })
+fs.writeFileSync(path.join(wsNoGit, 'package.json'), '{}')
+fs.writeFileSync(path.join(wsNoGit, 'pnpm-workspace.yaml'), 'packages:\n  - packages/*\n')
+fs.writeFileSync(path.join(wsNoGitPkg, 'package.json'), '{}')
+fs.symlinkSync(path.join(wsNoGit, 'node_modules', '.pnpm', 'dep'), path.join(wsNoGitPkg, 'node_modules'))
+
 const run = (command, cwd) => {
   const out = execFileSync('node', [GUARD], {
     input: JSON.stringify({ tool_input: { command }, cwd }),
@@ -71,6 +84,7 @@ const cases = [
   [true, `cd '${worktree}' && pnpm i`, repo, 'quoted cd target'],
 
   [true, 'pnpm install', bare, 'NO .git: an escaping node_modules is still an escape'],
+  [false, 'pnpm install', wsNoGitPkg, 'workspace WITHOUT .git: still not an escape (outermost project marker)'],
 
   [false, 'pnpm install', repo, 'REAL node_modules is allowed — this is the remedy, never block it'],
   [false, 'pnpm install', selfLink, 'a symlink that stays inside the checkout is not an escape'],
@@ -112,13 +126,24 @@ for (const [expectDeny, command, cwd, desc] of cases) {
 // diverge silently and the tests go on passing against the copy nobody executes — the same shape as
 // a stale bundle passing checks that never build it. Skipped (not failed) when no copy is installed,
 // so this suite still passes on a machine that never ran the install.
-const installed = path.join(os.homedir(), '.claude', 'hooks', 'deny-pkgmanager-symlink-purge.js')
-if (fs.existsSync(installed)) {
-  const same = fs.readFileSync(installed, 'utf8') === fs.readFileSync(GUARD, 'utf8')
-  if (!same) failed++
-  console.log(`${same ? 'PASS' : 'FAIL'}  ----   installed copy at ~/.claude/hooks is byte-identical to this one`)
-} else {
-  console.log('SKIP  ----   no installed copy at ~/.claude/hooks (nothing to drift from)')
+// WARNS by default, FAILS only under GUARD_CHECK_INSTALL=1. `check-guards` runs from `compile`, and
+// a build gate must assert properties of the REPO, not of one machine's config: making a stale
+// install fail the build breaks the ordinary edit loop (edit guard -> compile fails -> sync ->
+// compile), which is every iteration of guard work. The deploy path sets the env var; the build
+// does not. Both files are compared — checking only the guard is how "both copies identical" got
+// claimed on the evidence of one.
+const enforce = process.env.GUARD_CHECK_INSTALL === '1'
+for (const [label, local] of [['guard', GUARD], ['matrix', __filename]]) {
+  const installed = path.join(os.homedir(), '.claude', 'hooks', path.basename(local))
+  if (!fs.existsSync(installed)) {
+    console.log(`SKIP  ----   ${label}: not installed at ~/.claude/hooks (nothing to drift from)`)
+    continue
+  }
+  const same = fs.readFileSync(installed, 'utf8') === fs.readFileSync(local, 'utf8')
+  if (!same && enforce) failed++
+  const tag = same ? 'PASS' : (enforce ? 'FAIL' : 'WARN')
+  const note = same ? 'matches the repo source of truth' : 'installed copy is STALE — re-run the install; the REPO is source of truth'
+  console.log(`${tag}  ----   ${label}: ${note}`)
 }
 
 // Unparseable stdin must not block: a guard that denies every Bash call because it could not read
