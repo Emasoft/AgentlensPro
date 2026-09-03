@@ -475,7 +475,7 @@ culprits by cache-**weighted** equiv (`investigate_burn`), never by request byte
 Diagnostics encode this as the TTL-regime matrix (TRDD-VY1IUVUM); the full model with measured
 costs: `.claude/project/memory/cache-ttl-model.md`.
 
-<+-+-JANITOR-WIKIMEM-INDEX-START-(do-not-modify)-+-+> v1 digest=3ef8c996b064 generated=2026-09-01T18:50:32+0200
+<+-+-JANITOR-WIKIMEM-INDEX-START-(do-not-modify)-+-+> v1 digest=7f65769f9c3d generated=2026-09-03T05:07:05+0200
 ## Wikimem index (PROJECT scope) — recall by symptom, read on demand
 
 Deep knowledge lives in these pages, not in this file. Search: `memgrep recall "<symptom>" .claude/project/memory`.
@@ -507,15 +507,19 @@ Deep knowledge lives in these pages, not in this file. Search: `memgrep recall "
 
 **Other topics**
 - [agent-context-integrity-false-positives](.claude/project/memory/agent-context-integrity-false-positives.md) — the janitor flags injection/authority-override patterns in CLAUDE.md or .claude/project/memory and says conte…
+- [agentlenspro-ops-lessons-concurrency-and-event-loop](.claude/project/memory/agentlenspro-ops-lessons-concurrency-and-event-loop.md) — server hangs at 100% cpu and every request times out or SIGTERM is ignored
+- [agentlenspro-ops-lessons-deploy-and-install](.claude/project/memory/agentlenspro-ops-lessons-deploy-and-install.md) — how to deploy agentlenspro on a machine
+- [agentlenspro-ops-lessons-store-durability-and-memory](.claude/project/memory/agentlenspro-ops-lessons-store-durability-and-memory.md) — a span segment over 512MB breaks setup or silently drops a day of results
+- [agentlenspro-ops-lessons-testing-and-process-hygiene](.claude/project/memory/agentlenspro-ops-lessons-testing-and-process-hygiene.md) — background agent shows running but does nothing
 - [ctxmap-exact-measurement-cost](.claude/project/memory/ctxmap-exact-measurement-cost.md) — ctxmap/ctxvis exact token measurement is slow
 - [dependency-typosquat-alerts-are-false-positives](.claude/project/memory/dependency-typosquat-alerts-are-false-positives.md) — janitor says preact is a typosquat of react
 - [hook-events-pipeline](.claude/project/memory/hook-events-pipeline.md) — how does AgentLens capture Claude Code lifecycle events
 - [loaded-plugin-version-detection](.claude/project/memory/loaded-plugin-version-detection.md) — which plugin version is a session actually running
 - [log-scan-performance](.claude/project/memory/log-scan-performance.md) — the boot scan of the jsonl corpus is slow
 - [memory-scope-leak-proposed](.claude/project/memory/memory-scope-leak-proposed.md)
-- [multi-account-window-status](.claude/project/memory/multi-account-window-status.md) — how do I see every account's rate-limit windows not just the live one
 - [rust-fixture-filesystem-portability](.claude/project/memory/rust-fixture-filesystem-portability.md) — the test passes locally but fails only on CI
 - [ssd-write-economics](.claude/project/memory/ssd-write-economics.md) — is SSD life spent by write operations or by bytes
 - [standalone-server-security-model](.claude/project/memory/standalone-server-security-model.md) — can a website read my local agentlens data
 - [statusline-capture-and-store](.claude/project/memory/statusline-capture-and-store.md) — how do I get rate_limits without hitting the usage endpoint
+- [vmmap-ioaccelerator-is-the-mimalloc-heap](.claude/project/memory/vmmap-ioaccelerator-is-the-mimalloc-heap.md) — vmmap says IOAccelerator dominates alcore's memory
 <+-+-JANITOR-WIKIMEM-INDEX-END-(do-not-modify)-+-+>
