@@ -120,6 +120,25 @@ incompressible noise. So numeric and enum fields become real typed columns (`inp
 `role`, `stop_reason`, `service_tier`, `ttl_5m`, `ttl_1h`), timestamps become TIMESTAMP (delta), and
 `blobs.data` is left holding ONLY homogeneous text — which also improves its own ratio.
 
+**Correction 2c — a column's type is fixed once and forever, and that must be ENFORCED.** Per-column
+compression is chosen from the column's type and content; a column whose type drifts across files
+loses its scheme and the parquet grows. Verified 2026-09-03: no drift exists today — `bodies` 8
+columns, `parts` 8, `blobs` 3, each with exactly one physical type across every file — but nothing
+guards it, and the surface is about to widen. The Anthropic response shape keeps gaining fields
+(`ephemeral_1h_input_tokens` arrived with the 1h tier, then `stop_details`, `inference_geo`,
+`iterations`), so the rules are:
+
+1. A column's type is set at creation and NEVER changed. Nullability may change; the type may not.
+2. New semantics get a NEW column. A name is never reused for a different meaning or type.
+3. An unknown or newly-appearing API field NEVER goes into an existing typed column. It lands in a
+   dedicated overflow that is itself homogeneous (one JSON-text column), or in a typed key/value
+   side table — never widened into a neighbour.
+4. A migration that would re-type a column instead adds a new one and backfills.
+
+Enforced by a schema guard that scans every parquet file and fails when any column carries more than
+one physical type — the check run by hand above, made permanent, because an unguarded invariant of
+this kind fails silently and only shows up as a store that quietly stopped compressing.
+
 **Correction 3 — 273 million rows of JSON punctuation are waste, and that is the owner's point
 landing.** Of 457.7M part rows only 184.6M carry content; the rest are commas, braces and field
 names stored one row each — 60% of the largest table holding syntax that is reconstructable from the
@@ -142,6 +161,9 @@ column is null and a backfill pass fills it. Null means "not yet computed", neve
 - [ ] A change confined to messages does not move tools or system out of the cached region.
 - [ ] A null boundary is rendered as "not computed", distinct from a computed zero.
 - [ ] Round-trip: every body used rebuilds to a matching sha256.
+- [ ] Typed columns: numeric/enum/timestamp fields are real typed columns, never JSON text.
+- [ ] Schema guard: a check fails the build when any column has more than one physical type across
+      the store's files, and a new API field cannot land in an existing typed column.
 
 ## Notes and lessons learned
 
