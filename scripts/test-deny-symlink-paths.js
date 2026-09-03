@@ -96,6 +96,19 @@ check(!run(`grep "a > b" ${link}/f`).denied, 'a > inside a quoted ARGUMENT is da
 // the HOOK's cwd ancestors, so on a machine whose project sits under a symlinked path this would
 // deny every command carrying a quoted slash-containing string.
 check(!run(`grep "src/foo bar" ${real}/f`).denied, 'a nonexistent RELATIVE token is not a path candidate')
+
+// THE ORIGINATING INCIDENT'S SHAPE. This guard shipped with no cd tracking, so a relative path
+// after a `cd` resolved against the HOOK's cwd — and if a same-named directory happened to exist
+// there (`node_modules` in the repo root, which it does) the guard confirmed a path the command
+// never touched and ALLOWED. Deferred four turns while patching around it.
+const wtDir = path.join(root, 'wt')
+fs.mkdirSync(wtDir, { recursive: true })
+fs.symlinkSync(real, path.join(wtDir, 'node_modules'))
+check(run(`cd ${wtDir} && cp x node_modules/`).denied, 'cd then a RELATIVE symlinked path: the incident shape')
+check(run(`pushd ${wtDir} && mv a node_modules/b`).denied, 'pushd form')
+check(run(`cd ${wtDir} ; cp x node_modules/`).denied, 'cd carried across ; into a later pipeline')
+check(run(`cd ${wtDir} && cp x ./node_modules/notyet`).denied, 'a symlinked ANCESTOR counts even when the leaf does not exist yet')
+check(!run(`cd ${wtDir} && ls node_modules/`).denied, 'read-only after a cd is still exempt')
 check(run(`sort -o ${link}/out ${link}/in`).denied, 'sort -o DOES write in place')
 check(run(`sed -i s/a/b/ ${link}/f`).denied, 'sed is not read-only at all')
 

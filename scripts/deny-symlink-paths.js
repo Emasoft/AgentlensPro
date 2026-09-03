@@ -156,7 +156,7 @@ function expand(tok) {
 /** Every token in the command that could name a path. Deliberately generous — a token that is not a
  *  path simply will not exist on disk and is skipped by the caller. Quotes are stripped so
  *  `"/a/b"` is inspected; a token with no `/` at all is not a path worth walking. */
-function pathTokens(cmd) {
+function pathTokens(cmd, baseDir, baseIsExplicit) {
   const out = []
   const seen = new Set()
   const add = (tok) => {
@@ -171,8 +171,16 @@ function pathTokens(cmd) {
     // path (`~/Code -> /Volumes/dev/Code`) that fires on every quoted slash-containing string.
     // Absolute and ~/$-rooted tokens are still checked whether they exist or not: a symlinked
     // ANCESTOR of a not-yet-created file is exactly the case worth catching.
-    if (!path.isAbsolute(e) && !fs.existsSync(e)) return
-    out.push({ raw: tok, resolved: e })
+    // Resolve against the EFFECTIVE cwd (after any `cd` in this pipeline), not the hook's.
+    const abs = path.isAbsolute(e) ? e : path.resolve(baseDir, e)
+    // The existence gate applies ONLY when no `cd` established the base. Without one, a relative
+    // token resolves against the session cwd and walking up reaches ITS ancestors — reporting a
+    // symlink the command never referenced (the machine-dependent cliff on a project under a
+    // symlinked path). After an explicit `cd`, the base is intentional and the path is meaningful
+    // whether or not its leaf exists yet: `cd <wt> && cp x ./node_modules/f` must be caught on the
+    // symlinked ANCESTOR, and requiring `f` to exist misses exactly that.
+    if (!path.isAbsolute(e) && !baseIsExplicit && !fs.existsSync(abs)) return
+    out.push({ raw: tok, resolved: abs })
   }
 
   // QUOTED SEGMENTS FIRST, whole. Splitting on whitespace destroys `"/Users/me/My Project/x"` into
@@ -190,6 +198,20 @@ function pathTokens(cmd) {
     add(raw.replace(/\u0000/g, ' '))
   }
   return out
+}
+
+/** The command's effective working directory: a `cd`/`pushd` in the same pipeline wins over the
+ *  session cwd. LIFTED VERBATIM from deny-pkgmanager-symlink-purge.js, where it is
+ *  mutation-verified — this guard shipped without it, so `cd <worktree> && cp x node_modules/`
+ *  resolved the relative path against the HOOK's cwd, found nothing, and allowed. That is the
+ *  original incident's exact shape, uncaught, in the guard built to generalise it. */
+function effectiveCwd(segment, sessionCwd) {
+  const m = /(?:^|\s)(?:cd|pushd)\s+(?:--\s+)?(['"]?)([^'"&;|]+)\1(?:\s|$)/.exec(segment)
+  if (!m) return sessionCwd
+  const target = m[2].trim()
+  if (!target || target === '-') return sessionCwd
+  const expanded = target.startsWith('~') ? path.join(process.env.HOME || '', target.slice(1)) : target
+  return path.isAbsolute(expanded) ? expanded : path.resolve(sessionCwd, expanded)
 }
 
 /** The first symlink at or above `p`, or null. Walks ancestors because `/tmp/x/y` is a symlinked
@@ -277,8 +299,15 @@ let raw = ''
 process.stdin.on('data', (d) => { raw += d })
 process.stdin.on('end', () => {
   let cmd = ''
+  // The session's cwd, which relative paths resolve against. Lazy and guarded: `process.cwd()`
+  // THROWS when the session's directory has been deleted — the post-worktree-removal state this
+  // guard exists for.
+  let sessionCwd = ''
+  const safeCwd = () => { try { return process.cwd() } catch { return '/' } }
   try {
-    cmd = String(JSON.parse(raw)?.tool_input?.command ?? '')
+    const payload = JSON.parse(raw)
+    cmd = String(payload?.tool_input?.command ?? '')
+    sessionCwd = (typeof payload?.cwd === 'string' && payload.cwd) ? payload.cwd : safeCwd()
   } catch {
     process.exit(0) // unreadable payload: a guard that blocks every call because it cannot read its
                     // own input is worse than the thing it guards against
@@ -316,6 +345,13 @@ process.stdin.on('end', () => {
     // ALLOW — `ls` was exempt and `oppa` named no path. So a stage keeps its exemption only when
     // EVERY stage of its pipeline is itself known-read-only: `ls x | grep y` stays quiet, and one
     // unknown command anywhere in the chain re-arms the whole pipeline.
+    // `dir` lives ACROSS pipelines: `cd <wt> && cp x node_modules/` splits into TWO pipelines, so a
+    // `dir` scoped inside the loop resets before the command that matters and the cd is lost — which
+    // is exactly how this guard shipped without cd tracking at all. Carried across `;`/`&&`/newline;
+    // the split does not distinguish `||`/`&` here, so this is deliberately more eager than the
+    // sibling guard: over-resolving a relative path can only produce an extra OTP prompt, never a
+    // missed symlink, and a miss is the failure that matters.
+    let dir = sessionCwd
     for (const pipeline of segmentable.split(/(?:\|\||&&|[;&\n])+/)) {
       // Stage boundaries come from the MASKED text; the stage CONTENT is sliced from the original
       // so quoted paths are still extractable.
@@ -336,10 +372,11 @@ process.stdin.on('end', () => {
       }
       const wholePipelineReadOnly = stages.every((st) => isReadOnlySegment(st, commandWord(st)))
       for (const segment of stages) {
+        dir = effectiveCwd(segment, dir)
         const trimmed = segment.trim()
         if (!trimmed) continue
         if (wholePipelineReadOnly) continue
-        for (const tok of pathTokens(trimmed)) {
+        for (const tok of pathTokens(trimmed, dir, dir !== sessionCwd)) {
           const found = firstSymlink(tok.resolved)
           if (found) { hit = { ...found, raw: tok.raw }; break }
         }
