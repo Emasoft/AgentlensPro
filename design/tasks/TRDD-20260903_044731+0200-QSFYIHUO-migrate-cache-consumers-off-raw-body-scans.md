@@ -3,7 +3,7 @@ trdd-id: QSFYIHUO
 title: Migrate cache-history consumers off raw-body scanning onto api_calls/cache_turns
 column: planned
 created: 2026-09-03T04:47:31+0200
-updated: 2026-09-03T04:47:31+0200
+updated: 2026-09-03T04:59:59+0200
 current-owner: main-session
 task-type: refactor
 priority: high
@@ -17,11 +17,16 @@ blocked-by: [9SYRK6SW, GVA8TTJF]
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-03
 
+- **Per Fable advisor verdict on CAJ5RCP9 (2026-09-03):** step 1's `enrich_from_body`
+  (`cache_event_log.rs:189-192`) must become a `request_id` lookup, not a `call_id` lookup — there
+  is no shared `call_id` between request and response rows. This alone satisfies the parent's
+  acceptance box 2 first-pass consumer.
 - Design source: `reports/trdd-caj5rcp9/20260903_044515+0200-api-calls-table-design.md` §5.
 - Blocked on 9SYRK6SW (writer) and GVA8TTJF (views) — schema + view must be stable and
   proven-matching before any consumer switches.
-- NEXT ACTION: migrate the three call sites one file at a time, starting with
-  `cache_event_log.rs` (simplest — direct SELECT, no body reconstruction needed).
+- NEXT ACTION: migrate the three call sites one file at a time, starting with replacing
+  `enrich_from_body` (`cache_event_log.rs:189-192`) with a `request_id` lookup (simplest — direct
+  SELECT, no body reconstruction needed).
 
 ## WHY
 
@@ -34,8 +39,11 @@ bodies present on disk" — unreachable until this migration lands.
 ## WHAT (one file at a time — do not batch)
 
 1. **`cache_event_log.rs` / `cache_creation_forensics.rs::scan_cache_creation_events`** — replace
-   the raw-body evidence-store scan with a direct `SELECT call_id, ts, session_id, model,
-   cache_read_tokens, cache_creation_tokens, cache_miss_reason, cost_usd FROM api_calls`.
+   `enrich_from_body`'s raw-body evidence-store scan (`cache_event_log.rs:189-192`) with a direct
+   `SELECT` off the `api_calls` relation keyed by `request_id` (not `call_id` — see STATE): `ts,
+   session_id, model, cache_read_tokens, cache_creation_tokens, cache_miss_reason`. No `cost_usd`
+   column exists (9SYRK6SW dropped it); prefer the harness-reported cost already carried elsewhere
+   per CLAUDE.md doctrine 2 if this consumer needs a cost figure.
 2. **`cache_break_timeline.rs`** (`extract_turn_prefix`) — replace body-derived prefix
    reconstruction with `frontmatter_fp`, `previous_message_id`, `ts`, `tier_5m_tokens`/
    `tier_1h_tokens` columns off `api_calls`. This is the one that satisfies acceptance box 2 —
