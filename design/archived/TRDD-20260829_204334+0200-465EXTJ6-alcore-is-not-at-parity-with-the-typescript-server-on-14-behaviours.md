@@ -1,9 +1,9 @@
 ---
 trdd-id: 465EXTJ6
 title: alcore is not at parity with the TypeScript server on 14 measured behaviours and it is the only backend that ships
-column: human_review
+column: complete
 created: 2026-08-29T20:43:34+0200
-updated: 2026-09-01T18:57:09+0200
+updated: 2026-09-03T11:08:50+0200
 current-owner: main-session
 task-type: bugfix
 scope: project
@@ -11,7 +11,7 @@ project-id: agentlenspro
 parent-trdd: 1B98LCVR
 severity: HIGH
 relevant-rules: []
-implementation-commits: []
+implementation-commits: [f2f81c5, d58d6e1, ba3e180b, 0c1edbe, 06febeae, e7ba6592, 6c6c7f49]
 ---
 
 # alcore is not at parity with the TypeScript server on 14 behaviours
@@ -346,5 +346,8 @@ safe.
 
 - 2026-09-01T18:57:09+0200 — ai_review PASSED (full suite green under the alcore default, all 14
   gaps mutation-verified); moved to human_review, awaiting USER sign-off.
+- 2026-09-03T11:08:50+0200 — COMPLETED by main-session (human_review delegated by USER
+  2026-09-03). All 5 boxes verified in the review sweep; the =ts opt-out named in box 4 is gone
+  because 1B98LCVR deleted the TS server.
 
 ## Notes and lessons learned
