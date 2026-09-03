@@ -2,7 +2,7 @@
 name: agent-fleet-cache-economics
 description: "a wave of subagents burned way more than expected / do parallel agents share the prompt cache / concurrent identical spawns all paid the full cold write / should skills be inlined in the agent body or loaded with the Skill tool / cheapest way to run a skill pipeline over hundreds of items / workflow fan-out cost model"
 ocd: 2026-07-24
-lmd: 2026-08-02
+lmd: 2026-09-02
 metadata:
   node_type: memory
   type: project
@@ -15,10 +15,12 @@ publish-globally: false
 Two controlled experiments run via the Workflow tool, measured by reading each spawned agent's
 `message.usage` from its transcript (the same extraction burn_seismic uses). Load-bearing results:
 
+^Q93AY33J [desc:"a default workflow subagent boots with a ~186k-token prefix paid as a cold cache write, so shrinking the lean agent base is the bigger lever since it is re-read on every request", keywords:"fresh_agent_boot_tax cold_cache_write_on_spawn subagent_186k_prefix lean_agent_base_size why_do_fresh_subagents_cost_so_much", ocd:2026-07-24, lmd:2026-09-02]
 - **Fresh-agent boot tax:** a default workflow subagent boots with a ~186k-token prefix
   (system + CLAUDE.md + rules + tool surface) paid as a cold cache WRITE (1.25×) — even for a
   one-word task. Lean agent types shrink the base itself, which is the bigger lever because the
   base is re-read (0.1×) on EVERY request of EVERY worker.
+^NF8NEA3K [desc:"identical agents launched together each pay the full cold-write boot tax because the cache entry only exists after the first request completes; await one warm completion then fan out", keywords:"concurrent_spawns_race_the_cache do_parallel_agents_share_the_prompt_cache identical_agents_all_cold_write await_warm_completion_before_fanout launch_stagger_does_not_help time_to_first_response_variance", ocd:2026-07-24, lmd:2026-09-02]
 - **Concurrent identical spawns RACE the cache:** 3 byte-identical agents launched within ~1 s
   EACH paid the full 186k cold write (cache_read 0) — the cache entry only exists once the first
   request *completes*. A 4th identical agent launched 5 s AFTER the wave COMPLETED hit 100%:
@@ -28,6 +30,7 @@ Two controlled experiments run via the Workflow tool, measured by reading each s
   so no real item is serialized; a fixed launch stagger is NOT equivalent — it races the first
   request's time-to-first-response (10–60s+, variable), and Workflow scripts have no
   sleep/timer anyway (an awaited `agent()` completion is the only wait primitive).
+^VZCH5Y5P [desc:"inlining always-used skills is only ~12% cheaper than lazy Skill-tool loading; request count dominates cost, so prompt discipline outranks the loading strategy", keywords:"inline_vs_skill_tool_loading should_skills_be_inlined_in_agent_body request_count_dominates_cost wandering_worker_extra_requests prompt_discipline_batching", ocd:2026-07-24, lmd:2026-09-02]
 - **Inline vs Skill-tool loading (A/B, 6 agents, mock 4-skill pipeline with a forced retry):**
   warm steady-state ≈ 699k (inline) vs ≈ 795k (lazy) weighted/agent → **inlining always-used
   skills is ~12% cheaper** and makes the request count deterministic (17 vs 20–30). But the
@@ -35,11 +38,13 @@ Two controlled experiments run via the Workflow tool, measured by reading each s
   — one wandering worker's 10 extra requests cost more than all four skill loads combined, and
   one tight lazy worker beat the warm inline workers. Prompt discipline ("one Bash per stage,
   never print file bodies, batch independent calls") outranks the loading strategy.
+^QP1XD7G9 [desc:"prompt-cache keys are org-scoped on the byte-exact prefix, so workers share cache only up to the first differing byte — keep skill set/order identical and put per-item variables last", keywords:"prefix_sharing_preconditions byte_exact_prefix_cache_key identical_skill_set_and_order fixed_first_prompt_layout per_item_variables_last deterministic_stage_sequence", ocd:2026-07-24, lmd:2026-09-02]
 - **Prefix-sharing preconditions:** org-scoped cache keys on the byte-exact prefix — workers
   share up to the first differing byte. So: identical skill SET and ORDER in agent definitions,
   fixed-first prompt layout with per-item variables as the LAST lines, deterministic stage
   sequence.
 
+^NB2RJUES [desc:"the recipe is operationalized as the user-scope /cheap-flow command (skills inlined, verify gates, lean worker, prime-then-pipeline); use fork instead of fresh spawns when the parent context is needed", keywords:"cheapest_way_to_run_a_skill_pipeline cheap_flow_command prime_then_pipeline fork_vs_fresh_spawn workflow_fan_out_cost_model lean_worker_cheap_model", ocd:2026-07-24, lmd:2026-09-02]
 **How to apply:** the whole recipe is operationalized as the user-scope `/cheap-flow` command
 (`~/.claude/commands/cheap-flow.md`): skills resolved once and inlined, `-verify` gates with
 bounded retries, lean worker + cheap model, prime-then-pipeline, schema outputs, paths not

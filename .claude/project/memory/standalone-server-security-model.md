@@ -2,7 +2,7 @@
 name: standalone-server-security-model
 description: "can a website read my local agentlens data / is the dashboard server exposed / cross-origin CORS localhost security / why does a POST from another origin get 403 / drive-by localhost exfiltration / ACAO wildcard vs scoped / how is the standalone server protected against a browsed page / CSRF on the local server / who may iframe the dashboard / 403 unverifiable viewer assertion / settings gear missing in embed / bad embed-key refuses to boot fail-closed / why won't the server start with a corrupt or wide-perms embed-key / EX_CONFIG 78 refuse to boot / embed-key wider than 0600 exposed shared secret / (earlier the bad key disabled the feature and kept running — now reversed) / restrict settings panel per user"
 ocd: 2026-07-11
-lmd: 2026-07-30
+lmd: 2026-09-02
 metadata:
   node_type: memory
   tier: component
@@ -11,20 +11,24 @@ metadata:
 publish-globally: false
 ---
 
+^8J0CDL2H [desc:"the standalone server's threat model is a browsed web page reaching localhost, not a remote attacker, since it binds 127.0.0.1 by default", keywords:"can_a_website_read_my_agentlens_data is_the_dashboard_exposed threat_model_localhost drive_by_localhost_attack browser_reaches_localhost not_a_remote_attacker loopback_only_by_default", ocd:2026-07-11, lmd:2026-09-02]
 The standalone server exposes a UI/API server (`UI_PORT`, default 3000) and an OTLP
 receiver (`OTLP_PORT`, default 4318). Its threat model is NOT a remote attacker (it binds
 `127.0.0.1` by default, unreachable from the network) but a **web page the user is
 browsing**, which can reach `localhost` from the user's own browser. Three layers defend
 the local data (all in `standalone/server.ts`, `uiServer`):
 
+^YJD7Z8W4 [desc:"layer 1: BIND_HOST defaults to 127.0.0.1 so the server has no network exposure unless the user opts into 0.0.0.0 for LAN", keywords:"loopback_bind BIND_HOST_env_var no_network_exposure LAN_opt_in_0.0.0.0 is_the_server_reachable_from_the_network", ocd:2026-07-11, lmd:2026-09-02]
 1. **Loopback bind** (`BIND_HOST`, default `127.0.0.1`) — no network exposure unless the
    user opts into `0.0.0.0` for LAN.
+^FDG5PL7Z [desc:"layer 2: isDisallowedCrossOrigin refuses any state-changing request whose Origin is cross-origin, closing the arbitrary-file-write RCE vector on write endpoints", keywords:"CSRF_write_gate isDisallowedCrossOrigin cross_origin_POST_gets_403 arbitrary_file_write_RCE api_instructions_apply api_bodies_export_endpoint why_does_a_cross_origin_post_fail cli_hook_clients_send_no_origin", ocd:2026-07-11, lmd:2026-09-02]
 2. **CSRF write gate** (`isDisallowedCrossOrigin`, guards non-GET/HEAD) — several handlers
    turn request fields into filesystem writes (`/api/instructions/apply`,
    `/api/bodies/export`, `/action`), so a cross-origin browser POST was an arbitrary-file-
    write → RCE vector. The gate refuses any state-changing request whose `Origin` is
    present and neither same-origin nor loopback. CLI/hook Node clients send no Origin →
    allowed.
+^ISCCEQ2C [desc:"layer 3: setAllowedOriginCors scopes Access-Control-Allow-Origin to same-origin/loopback only, never a wildcard, closing the cross-origin read-exfil hole on session-data endpoints", keywords:"CORS_read_scope setAllowedOriginCors ACAO_wildcard_vs_scoped cross_origin_read_exfil api_summary_endpoint api_sessions_endpoint Vary_Origin_header TRDD-F6BM1BDI", ocd:2026-07-11, lmd:2026-09-02]
 3. **CORS read scope** (`setAllowedOriginCors`, TRDD-F6BM1BDI, shipped v2.4.0) — the read
    endpoints (`/api/summary`, `/api/sessions`, `/api/session/*`, `/api/debug/*`) return
    session data (prompts, costs, file paths). The server now echoes
@@ -32,12 +36,14 @@ the local data (all in `standalone/server.ts`, `uiServer`):
    never the wildcard — so a cross-origin page gets no CORS header and the browser blocks
    it from reading the response. Reuses the layer-2 predicate (one place decides "allowed
    origin").
+^5RYAQLEM [desc:"layer 4: a CSP frame-ancestors contract lets a local app iframe the dashboard while blocking a remote page from framing it (clickjack defense)", keywords:"framing_contract CSP_frame_ancestors who_may_iframe_the_dashboard clickjack_defense embed_query_param embedParams_ts TRDD-FMIZO8Y4", ocd:2026-07-11, lmd:2026-09-02]
 4. **Framing contract** (TRDD-FMIZO8Y4, v2.9.0) — the dashboard HTML carries
    `Content-Security-Policy: frame-ancestors 'self' + any loopback port`, so a LOCAL app
    (the ai-maestro UI) may iframe it as a guaranteed contract while a remote page cannot
    frame the local dashboard (clickjack counterpart of layer 3). The iframe's `/api` calls
    are same-origin inside the frame — layer 3 never blocks embedding. `?embed=1` /
    `?tab=<id>` parse in `src/shared/embedParams.ts`.
+^UH1N4WMF [desc:"layer 5: an HMAC-signed viewer header restricts access; any unverifiable header is 403 rather than downgraded, and a bad embed-key at boot makes the server refuse to boot fail-closed (exit 78)", keywords:"viewer_role_gate X-Agentlens-Viewer_header 403_unverifiable_viewer_assertion settings_gear_missing_in_embed bad_embed_key_refuses_to_boot why_wont_the_server_start EX_CONFIG_78_refuse_to_boot embed_key_wider_than_0600 chmod_600_remediation TRDD-1ZH1D5EG TRDD-F1VX3M7C", ocd:2026-07-11, lmd:2026-09-02]
 5. **Viewer-role gate** (TRDD-1ZH1D5EG, post-2.9.0, contract on AgentlensPro#4) — a trusted
    reverse proxy (ai-maestro) stamps an HMAC-signed `X-Agentlens-Viewer` header per request
    ({v:1, role maestro|user, iat, exp, nonce}, signed over the b64url payload with
@@ -56,6 +62,7 @@ the local data (all in `standalone/server.ts`, `uiServer`):
    cannot respawn-loop (`isTerminalExit`, `src/cli/serverControl.ts`). On Windows the 0600 mode check
    is skipped (Node reports 0600 as 0666 there).
 
+^PIH4TGA6 [desc:"the OTLP receiver sets no CORS header because it is reached server-to-server by agent SDK exporters, never a browser", keywords:"OTLP_receiver_no_CORS otlpServer server_to_server_only agent_sdk_exporters does_otlp_port_need_cors", ocd:2026-07-11, lmd:2026-09-02]
 The OTLP receiver (`otlpServer`) sets NO CORS header — it is reached server-to-server by
 agent SDK exporters, never a browser.
 

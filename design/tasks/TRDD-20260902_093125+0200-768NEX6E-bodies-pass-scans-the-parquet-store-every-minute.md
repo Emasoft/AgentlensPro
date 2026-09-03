@@ -3,7 +3,7 @@ trdd-id: 768NEX6E
 title: What does the 60 s bodies pass cost the machine, and why is alcore 7 GB resident
 column: dev
 created: 2026-09-02T09:31:25+0200
-updated: 2026-09-02T21:22:46+0200
+updated: 2026-09-02T22:14:22+0200
 current-owner: main-session
 task-type: spike
 priority: high
@@ -85,10 +85,22 @@ related: [2R36W8Q1, YU8QPU89, ZW4APOPI]
   memory, a macOS VM-accounting artifact, or "not attributable to the DuckDB pools/span
   window/caches the card asked about" (the report's original box-3 conclusion, before the mimalloc
   VM-tag fact was found).
-- **NEXT ACTION:** attribute the 8.8 GB Rust heap by structure — restart alcore with
-  `MIMALLOC_SHOW_STATS=1` (mimalloc prints per-size-class stats at exit) or add a
-  `/api/debug/heap` endpoint that reports span-window / log-session-card / summary-cache byte
-  estimates, then compare the sum to the mimalloc total to see what's unaccounted for.
+- **Box 4 DONE 2026-09-02.** Bounded resident structures (335k-span window as `Arc<Value>`,
+  27,918 stripped + 50 hot cards, overlay ≤500) sum to **< 1 GB** — not the culprit. The 7–8 GB
+  mimalloc heap is **churn from back-to-back whole-window `summarize_spans` rebuilds that mimalloc
+  never decommits** (no `mi_collect`/purge call exists; `ui.rs:83-126` comment documents a prior
+  26 GiB-committed measurement, TRDD-YU8QPU89, and defers an incremental summarizer). DuckDB's C
+  heap is a separate 3.6 GB resident from parquet decompression. RSS grew 7.9 GB → 13.3 GB in
+  15 min at 218–294% CPU on pid 67312; `sample` hottest frames: `summarize_spans` +
+  `IndexMap` clone/`get_index_of` + duckdb zstd decompress. Full report:
+  `reports/trdd-768nex6e/20260902_220716+0200-box4-heap-by-structure.md`.
+- **SUPERSEDED — do NOT carry forward:** "the RSS is a retained data model" (box 3's framing) —
+  it is allocator churn from repeated whole-window rebuilds plus DuckDB's own heap, not a growing
+  resident structure.
+- **NEXT ACTION:** the memory_limit-defaults question is now downstream of TRDD-7YPQWKPG's
+  migration-order decision (advisor consult in flight). On the advisor's verdict, either close
+  this card as complete with the box 1–4 measurements, or move its remaining memory_limit box
+  into a child of 7YPQWKPG.
 
 ## Acceptance
 
