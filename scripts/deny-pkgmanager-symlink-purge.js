@@ -21,8 +21,12 @@
 // (`confirmModulesPurge`) and never consults linkage, so a stale REAL node_modules is purged too.
 // But a purge confined to the tree destroys only reinstallable files. The damage requires the
 // removal to ESCAPE the checkout, so the predicate is realpath containment against the checkout
-// root — which also covers a bind-mount or any other escape a symlink test would miss, and leaves
-// the contained case (correctly) alone.
+// root — and leaves the contained case (correctly) alone.
+//
+// UNMEASURED: containment SHOULD also catch a bind-mount or any other escape a symlink test would
+// miss, because realpath resolves them. That has never been tested — every run has been on darwin,
+// which has no Linux-style bind mounts — so treat it as a property of the predicate's shape, not as
+// a verified behaviour.
 //
 // The destructive target never appears in the command text — `pnpm run compile-tests` names no
 // path — so this cannot be an argument matcher like the `rm -rf` guards. It has to inspect the
@@ -72,6 +76,8 @@ const MANAGERS = new Set(['pnpm', 'npm', 'yarn', 'bun'])
 // these as "speculative and unpinned" — that was wrong. They are ordinary shell idioms, and
 // removing them traded an untested claim for a silent false negative. The whole set is exercised
 // by one matrix case, so none of them is a claim without a check.
+// `sudo` is here deliberately: a root-privileged purge is the WORST case, not an exempt one, so the
+// guard must see through it rather than treat `sudo` as an unknown command and stand aside.
 const LAUNCHERS = new Set(['env', 'corepack', 'npx', 'time', 'exec', 'command', 'nice', 'sudo'])
 
 /** The command's effective working directory: an explicit `cd <path>` in the same segment wins
