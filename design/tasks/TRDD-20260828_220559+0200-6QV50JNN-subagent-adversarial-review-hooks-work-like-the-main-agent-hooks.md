@@ -3,7 +3,7 @@ trdd-id: 6QV50JNN
 title: Verify the SubagentStop adversarial-review hooks fire and gate exactly like the main-agent Stop hooks
 column: testing
 created: 2026-08-28T22:05:59+0200
-updated: 2026-09-01T22:00:21+0200
+updated: 2026-09-03T05:43:35+0200
 current-owner: claude-agentlenspro
 task-type: audit
 project-id: agentlenspro
@@ -65,6 +65,17 @@ hook step's `spawnSync` has a 15 s timeout and the bin answers in 70 ms idle.
 against the installed package: expect the block and a `agentlens-subagent-review-<agent>.json`
 with `demands:1`. Then the (b7)/(b13) `.js` divergences are moot — the scripts are unregistered.
 
+**Box 1 done (2026-09-03):** `scripts/test-subagent-stop-review-fork.js` — a real matrix (no
+mocks) against `~/.claude/hooks/subagent-stop-spawn-review-fork.js`, mirroring
+`test-stop-spawn-review-fork.js`'s structure but for the subagent gate's own contract (ONE demand
+per `agent_id`, JSON-stdout `decision:block` not stderr+exit2, `agent_transcript_path` not
+`transcript_path`, observe-only unless `AGENTLENS_SUBAGENT_REVIEW=on`). 16/16: edit→block,
+no-edit→allow, fork-type/empty-type recursion guard→allow, off-switch/observe-only-default→allow,
+missing-transcript→allow, non-SubagentStop-event→allow, unparseable-stdin→allow, the cap sequence
+(block, allow, allow) for repeat calls on one `agent_id`, and 2 mutation-falsified guards
+(recursion-type check, demand cap). Report:
+`reports/trdd-6qv50jnn/20260903_054335+0200-test-script.md`.
+
 USER goal (2026-08-28): *"ensure the new hooks for adversarial review of the last turn for the
 subagents are working fine like the existing hooks for the main agent."*
 
@@ -89,7 +100,7 @@ use (it demanded a fork on this very session's edits). The subagent pair has no 
 
 ## Acceptance
 
-- [ ] a runnable check (`scripts/test-subagent-stop-review-fork.js`, mirroring
+- [x] a runnable check (`scripts/test-subagent-stop-review-fork.js`, mirroring
       `test-stop-spawn-review-fork.js`) covers edit / no-edit / cap cases and passes
 - [x] one real spawned-subagent run recorded here with the hook-event ids as evidence — 2026-09-01:
       274 `SubagentStop` events captured in `hook-events/2026-09-01.ndjsonl` from the day's
