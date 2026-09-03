@@ -3,7 +3,7 @@ trdd-id: 7YPQWKPG
 title: DuckDB is the memory and alcore keeps no resident data model
 column: todo
 created: 2026-09-02T22:05:41+0200
-updated: 2026-09-03T04:20:46+0200
+updated: 2026-09-03T05:36:55+0200
 current-owner: main-session
 task-type: refactor
 priority: high
@@ -207,6 +207,15 @@ children."
 NEXT ACTION (advisor): "USER answers: does 'read only via duckdb' include
 the JSONL transcript sweeper (rewrite) or only queries (sweeper stays)?
 then step 0, then children 1→4 each with a 15-min footprint read".
+
+### STEP 0 RESULT (2026-09-03, non-regression only)
+
+`MIMALLOC_SHOW_STATS=1 AGENTLENS_MAX_WINDOW_SPANS=100000` confirmed live on pid 2074 (`ps eww`).
+Footprint did NOT climb over a 28-minute window (2712 MB → 2608 MB, RSS 9182 → 6490 MB,
+declining). Spans-in-memory at start was 12,346 — well under the 100k cap, so the cap's
+BINDING behaviour at the ceiling is still unexercised by this short window; only the
+no-climb non-regression is verified here. Report:
+`reports/deploy/20260903_053800+0200-deploy-420e6bb9-step0.md`.
 
 ## Approval log
 

@@ -3,7 +3,7 @@ trdd-id: QE114936
 title: Eighteen MCP tool handlers still rebuild the session summary under the state lock
 column: dev
 created: 2026-09-02T16:08:27+0200
-updated: 2026-09-03T04:38:25+0200
+updated: 2026-09-03T05:36:55+0200
 current-owner: main-session
 task-type: bugfix
 priority: high
@@ -14,7 +14,11 @@ related: [UTFVMVT8, 2R36W8Q1, HFV4AIT7]
 
 # Eighteen MCP tool handlers still rebuild the session summary under the state lock
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-03T04:38:25+0200
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-03T05:36:55+0200
+
+Site 1 deployed as pid 2074 (acaf82e8, contains 420e6bb9); 15-min read PASS (max ui.rs hold
+506 ms, 0 holds ≥1000 ms; report
+`reports/deploy/20260903_053800+0200-deploy-420e6bb9-step0.md`).
 
 Site 1 DONE (code only — not committed, not deployed). `resolve_session_card` (ui.rs, was :631,
 now :637) no longer rebuilds the summary itself: signature is now
@@ -31,11 +35,11 @@ Verified: `cargo build --release -p agentlens-core` exit 0, `cargo clippy -p age
 --all-targets -- -D warnings` exit 0, `cargo test -p agentlens-core --lib` 38/39 pass (the 1
 failure is in `shutdown.rs`, an untracked file the OTHER worker is editing — not touched here).
 
-NEXT ACTION: review this diff → commit (with the survey) → deploy with N60JUWU3's binary → do the
-card's 15-min hold read (re-invoke `get_cache_break_report` while ingest is hot, confirm no new
-`state lock held ≥ 1000 ms by ui.rs:<that site>` line) → then apply the same mechanical shape to
-the remaining 17 direct sites in one pass (per the report's table; two need the `summary_now`
-call hoisted above a multi-arm guard, the rest are trivial swaps).
+NEXT ACTION: site 1 deployed and 15-min hold read passed. Apply the same mechanical shape to
+the remaining 17 direct sites (ui.rs:599, 1630, 1854, 1978, 2006, 2052, 2086, 2121, 2144, 2197,
+2216, 2277, 2859, 2998, 3049, 3103, 3158, 3334 per the investigation's baseline) in one pass
+(per the report's table; two need the `summary_now` call hoisted above a multi-arm guard, the
+rest are trivial swaps), then commit, deploy, and re-run the 15-min hold read for those sites.
 
 ## Why this card exists
 

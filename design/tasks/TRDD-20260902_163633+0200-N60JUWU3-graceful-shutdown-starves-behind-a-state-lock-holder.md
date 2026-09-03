@@ -1,22 +1,29 @@
 ---
 trdd-id: N60JUWU3
 title: The graceful shutdown needs the state lock and has no timeout, so a long holder starves the stop into a SIGKILL
-column: dev
+column: testing
 created: 2026-09-02T16:36:33+0200
-updated: 2026-09-03T05:00:47+0200
+updated: 2026-09-03T05:36:55+0200
 current-owner: main-session
 task-type: bugfix
 priority: high
 min-approval-requirement: none
 created-by: UTFVMVT8
 related: [UTFVMVT8, 2R36W8Q1, HFV4AIT7]
+implementation-commits: [420e6bb9]
 ---
 
 # The graceful shutdown needs the state lock and has no timeout, so a long holder starves the stop into a SIGKILL
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-03
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-03T05:36:55+0200
 
-- **Implemented, reworked per advisor verdict** (not yet committed/deployed):
+Deployed 420e6bb9 (via HEAD acaf82e8) as pid 2074, inode 1514169484, clean `agentlenspro server
+restart` in 17s, exit 0. Bounded-stop path NOT yet exercised — the OLD binary performed this
+restart's stop, so it runs on the NEXT `agentlenspro server stop` of pid 2074. Owed check: on
+that stop, `server.log` must show the bounded-wait path (or a clean immediate stop) and the CLI
+must return within 15s. Report: `reports/deploy/20260903_053800+0200-deploy-420e6bb9-step0.md`.
+
+- **Implemented, reworked per advisor verdict** (committed, deployed per above):
   - `src/shutdown.rs` (new module) — `pub fn flush_with_deadline(&Mutex<CoreState>, Duration) ->
     Outcome<'a>` where `Outcome` is `Flushed(MutexGuard)` / `TimedOut { holder: Option<String> }`
     / `Poisoned` (never constructed — a poisoned mutex is recovered via `into_inner()`, the
