@@ -91,9 +91,35 @@ export const REVIEW_CMD = 'agentlenspro review-gate'
 export const SUPERVISOR_CMD = 'agentlenspro review-supervisor'
 // Stop is deliberate and load-bearing: on 2026-09-03 a whole session ran unreviewed and the AGENT
 // never noticed, because nothing told it at the moment it was finishing. A UserPromptSubmit-only
-// supervisor warns the USER, which is worthless while the user is away. On Stop the supervisor
-// blocks with a reason, but ONLY on alarm, so a working gate never sees it.
+// supervisor warns the USER, which is worthless while the user is away.
+//
+// IT NEVER BLOCKS, ON EITHER EVENT (owner, 2026-09-03: "the supervisor must not block anything.
+// only reporting to the claude agent that the per-turn review are not happening"). It reports on
+// two channels and exits 0 — `systemMessage` for the user, `hookSpecificOutput.additionalContext`
+// for the model, which a NON-blocking Stop hook may emit and the agent still reads. Enforcement is
+// the review GATE's job; the supervisor only has to be impossible to silence. This comment said
+// "blocks with a reason" until the block was measured gone (exit 0, no `decision` key, even with
+// `stop_hook_active: true`) — the third time in this component a comment outlived the behaviour it
+// described, so verify against the binary before trusting any claim here.
 export const SUPERVISOR_EVENTS = ['UserPromptSubmit', 'Stop']
+
+// EVERY command this generation registers. `isStaleGeneration` is what setup uses to decide an
+// entry is a leftover to strip, and it MUST be derived from this set rather than re-spelled as a
+// chain of `!==` at each call site. It was three such chains, and when SUPERVISOR_CMD was added
+// none of them learned about it — so setup classified the supervisor it had just installed as a
+// stale previous-generation entry, failed its own convergence check, and cascaded 9 test failures
+// whose messages (missing skill, undefined telemetry env) named everything except the cause.
+//
+// Adding a command here also feeds GENERATION_NEEDLES below, which was a SECOND hand-maintained
+// copy of the same list until it was made to spread this one. That is two consumers, not "every"
+// consumer — the sites that name commands individually (setup's per-command verify steps, the
+// install log line) still need their own edit, because they say something different about each
+// command rather than treating them as a set. Checked by enumerating every reference to the *_CMD
+// constants across src/, standalone/ and skills/; do that again rather than trusting this sentence.
+export const CURRENT_CMDS: readonly string[] = [HOOK_CMD, GATE_CMD, REVIEW_CMD, SUPERVISOR_CMD]
+export function isStaleGeneration(command: string): boolean {
+  return isOurHookCommand(command) && !CURRENT_CMDS.includes(command)
+}
 // v1 PATH-bin names — recognised as ours for migration/uninstall, never registered anymore.
 export const LEGACY_HOOK_BIN = 'agentlenspro-hook'
 export const LEGACY_GATE_BIN = 'agentlenspro-gate'
@@ -210,7 +236,7 @@ export function rebuildEventMatchers(
 // ── The strip, expressed as a FILTER instead of a result (TRDD-T0CT9U4X) ────────────────────────
 // Every generation this project ever registered, as a plain literal. A needle is matched against
 // json.dumps(element) inside the lock, so it must be a literal JSON cannot escape — all of these are.
-const GENERATION_NEEDLES = ['spy-agentlens', LEGACY_HOOK_BIN, LEGACY_GATE_BIN, ...LEGACY_REVIEW_SCRIPTS, HOOK_CMD, GATE_CMD, REVIEW_CMD, SUPERVISOR_CMD, 'spyglass-collect.sh']
+const GENERATION_NEEDLES = ['spy-agentlens', LEGACY_HOOK_BIN, LEGACY_GATE_BIN, ...LEGACY_REVIEW_SCRIPTS, ...CURRENT_CMDS, 'spyglass-collect.sh']
 
 /** A needle that identifies this command inside the transaction, or null when none can. The known
  *  generation literals come first (one op removes every entry of that generation); an unrecognised
@@ -370,7 +396,9 @@ export async function installHooks(uninstall: boolean, opts: InstallHooksOptions
   if (uninstall) {
     log(`removed ${removedOurs} agentlens hook entr${removedOurs === 1 ? 'y' : 'ies'} from ${settingsFile}`)
   } else {
-    log(`installed agentlens hooks on ${added} event(s) in ${settingsFile} (lifecycle forwarder '${HOOK_CMD}' + burn-gate '${GATE_CMD}' on ${GATE_MATCHER} + review gate '${REVIEW_CMD}' on ${REVIEW_EVENTS.join('/')})`)
+    // The supervisor was missing from this line, so the installer's own success message under-reported
+    // what it had registered — the kind of gap that makes a later "why is this hook here?" unanswerable.
+    log(`installed agentlens hooks on ${added} event(s) in ${settingsFile} (lifecycle forwarder '${HOOK_CMD}' + burn-gate '${GATE_CMD}' on ${GATE_MATCHER} + review gate '${REVIEW_CMD}' on ${REVIEW_EVENTS.join('/')} + review supervisor '${SUPERVISOR_CMD}' on ${SUPERVISOR_EVENTS.join('/')}, warn-only)`)
     if (removedSpyglass > 0) log(`removed ${removedSpyglass} dead claude-spyglass hook entr${removedSpyglass === 1 ? 'y' : 'ies'} (+ env.SPYGLASS_DIR)`)
     if (removedOurs > 0) log(`migrated ${removedOurs} previous-generation agentlens entr${removedOurs === 1 ? 'y' : 'ies'}`)
   }

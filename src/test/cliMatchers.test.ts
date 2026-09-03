@@ -1,7 +1,7 @@
 import * as assert from 'assert'
 import {
   rebuildEventMatchers, isOurHookCommand, resolveOnPath,
-  GATE_MATCHER, HOOK_CMD, GATE_CMD, REVIEW_CMD, CLI_BIN, LEGACY_HOOK_BIN, LEGACY_GATE_BIN,
+  GATE_MATCHER, HOOK_CMD, GATE_CMD, REVIEW_CMD, SUPERVISOR_CMD, SUPERVISOR_EVENTS, CLI_BIN, LEGACY_HOOK_BIN, LEGACY_GATE_BIN,
   type HookMatcher,
 } from '../cli/hookInstall'
 
@@ -114,7 +114,7 @@ suite('agentlenspro — v2 command-string hook registration', () => {
     const rStop = rebuildEventMatchers(legacyStop, 'Stop', false, HOOK_CMD, GATE_CMD)
     assert.strictEqual(rStop.removedOurs, 1, 'legacy absolute-path forwarder must be stripped')
     // Stop also carries the review gate (REVIEW_EVENTS) alongside the lifecycle forwarder.
-    assert.deepStrictEqual(rStop.rebuilt.flatMap(m => m.hooks.map(h => h.command)), [HOOK_CMD, REVIEW_CMD])
+    assert.deepStrictEqual(rStop.rebuilt.flatMap(m => m.hooks.map(h => h.command)), [HOOK_CMD, REVIEW_CMD, SUPERVISOR_CMD])
 
     const legacyGate: HookMatcher[] = [
       { matcher: GATE_MATCHER, hooks: [{ type: 'command', command: 'bash /usr/local/lib/node_modules/agentlenspro/scripts/spy-agentlens-gate.sh', timeout: 3 }] },
@@ -132,7 +132,7 @@ suite('agentlenspro — v2 command-string hook registration', () => {
     ]
     const r = rebuildEventMatchers(v1, 'Stop', false, HOOK_CMD, GATE_CMD)
     assert.strictEqual(r.removedOurs, 1, 'v1 PATH-bin forwarder must be stripped')
-    assert.deepStrictEqual(r.rebuilt.flatMap(m => m.hooks.map(h => h.command)), [HOOK_CMD, REVIEW_CMD])
+    assert.deepStrictEqual(r.rebuilt.flatMap(m => m.hooks.map(h => h.command)), [HOOK_CMD, REVIEW_CMD, SUPERVISOR_CMD])
   })
 
   test('migration: install over the loose review-gate .js scripts removes them — the verb replaced them (TRDD-6QV50JNN)', () => {
@@ -147,7 +147,11 @@ suite('agentlenspro — v2 command-string hook registration', () => {
       ]
       const r = rebuildEventMatchers(live, ev, false, HOOK_CMD, GATE_CMD)
       assert.strictEqual(r.removedOurs, 3, `${ev}: the loose script must be stripped along with our two entries`)
-      assert.deepStrictEqual(r.rebuilt.flatMap(m => m.hooks.map(h => h.command)), [HOOK_CMD, REVIEW_CMD], `${ev}: exactly one gate remains`)
+      // The supervisor rides SUPERVISOR_EVENTS (UserPromptSubmit + Stop), NOT SubagentStop — so the
+      // expected set is event-dependent. Asserting it flat on both arms is how a blanket edit turns
+      // a green test red: SubagentStop legitimately has no supervisor entry to find.
+      const expected = [HOOK_CMD, REVIEW_CMD, ...(SUPERVISOR_EVENTS.includes(ev) ? [SUPERVISOR_CMD] : [])]
+      assert.deepStrictEqual(r.rebuilt.flatMap(m => m.hooks.map(h => h.command)), expected, `${ev}: exactly one gate remains`)
       assert.ok(!isOurHookCommand('node "$HOME/.claude/hooks/cvoice_stop.sh"'), 'a neighbouring user hook is not ours')
     }
   })

@@ -31,10 +31,10 @@ import { countNdjsonLinesAuto } from '../ndjsonLines'
 import { readFsMarkers } from '../environment/runtime'
 import { ensureTelemetryConfig, ownedTelemetryKeys } from '../telemetryConfig'
 import { rawBodyCaptureEnabled, effectiveBodiesDir, RAW_BODIES_KEY } from '../captureConfig'
-import { sleep } from './cliCore'
+import { envPort, sleep } from './cliCore'
 import {
   CLI_BIN, GATE_CMD, GATE_EVENTS, GATE_MATCHER, HOOK_CMD, HOOK_EVENTS, HookMatcher,
-  REVIEW_CMD, REVIEW_EVENTS,
+  REVIEW_CMD, REVIEW_EVENTS, SUPERVISOR_CMD, SUPERVISOR_EVENTS, isStaleGeneration,
   installHooks, installSkill, isOurHookCommand, rebuildEventMatchers, resolveOnPath,
   sha256File, SKILL_NAMES, findPackageRoot, skillTreeHash, installAgents, AGENT_NAMES,
 } from './hookInstall'
@@ -77,7 +77,7 @@ export interface SetupOutcome {
   serverPid: number | null
 }
 
-interface Ctx {
+export interface Ctx {
   dryRun: boolean
   yes: boolean
   home: string
@@ -94,7 +94,7 @@ interface Ctx {
   serverPid: number | null
 }
 
-function resolveCtx(opts: SetupOptions): Ctx {
+export function resolveCtx(opts: SetupOptions): Ctx {
   const home = opts.home ?? os.homedir()
   const repoRoot = opts.repoRoot ?? findPackageRoot(__dirname)
   if (!repoRoot) throw new Error(`cannot locate the agentlenspro package root above ${__dirname}`)
@@ -107,9 +107,13 @@ function resolveCtx(opts: SetupOptions): Ctx {
     skillsDir: opts.skillsDir ?? path.join(home, '.claude', 'skills'),
     agentsDir: opts.agentsDir ?? path.join(home, '.claude', 'agents'),
     repoRoot,
-    uiPort: opts.uiPort ?? Number(process.env.UI_PORT ?? 3000),
-    mcpPort: opts.mcpPort ?? Number(process.env.MCP_PORT ?? 4316),
-    otlpPort: opts.otlpPort ?? Number(process.env.OTLP_PORT ?? 4318),
+    // TRDD-99HUNXJS: was `Number(process.env.UI_PORT ?? 3000)` — `Number('')` is 0, so
+    // `UI_PORT=''` silently bound the health-check/status URLs to a kernel-assigned port
+    // while the real server (serverControl.ts, same `envPort`) fell back to 3000. `envPort`
+    // is the one validated parser shared with the spawn path; use it here too.
+    uiPort: opts.uiPort ?? Number(envPort(process.env.UI_PORT, 3000)),
+    mcpPort: opts.mcpPort ?? Number(envPort(process.env.MCP_PORT, 4316)),
+    otlpPort: opts.otlpPort ?? Number(envPort(process.env.OTLP_PORT, 4318)),
     pathEnv: opts.pathEnv ?? process.env.PATH ?? '',
     log: opts.log ?? ((line: string) => console.log(line)),
     serverPid: null,
@@ -256,10 +260,17 @@ function verifyHooksState(s: Settings): string | null {
     const reviews = (hooks[ev] ?? []).flatMap(m => (m.hooks ?? []).map(h => h.command)).filter(c => c === REVIEW_CMD)
     if (reviews.length !== 1) return `${ev}: expected exactly one '${REVIEW_CMD}' entry, found ${reviews.length}`
   }
+  // The supervisor was registered by the installer but never VERIFIED here, so a converge that
+  // silently dropped it still reported "registrations current". The supervisor exists to notice a
+  // gate that has stopped firing; an unverified supervisor is a watchdog nobody watches.
+  for (const ev of SUPERVISOR_EVENTS) {
+    const sups = (hooks[ev] ?? []).flatMap(m => (m.hooks ?? []).map(h => h.command)).filter(c => c === SUPERVISOR_CMD)
+    if (sups.length !== 1) return `${ev}: expected exactly one '${SUPERVISOR_CMD}' entry, found ${sups.length}`
+  }
   for (const [ev, matchers] of Object.entries(hooks)) {
     for (const m of matchers ?? []) {
       for (const h of m.hooks ?? []) {
-        if (isOurHookCommand(h.command) && h.command !== HOOK_CMD && h.command !== GATE_CMD && h.command !== REVIEW_CMD) {
+        if (isStaleGeneration(h.command)) {
           return `${ev}: stale previous-generation registration survived: ${h.command}`
         }
       }
@@ -536,7 +547,7 @@ const stepHooks: StepDef = {
     const converged = state !== 'absent' && hooksConverged(settings)
     const staleCount = Object.values(settingsHooks(settings)).flat()
       .flatMap(m => m.hooks ?? [])
-      .filter(h => isOurHookCommand(h.command) && h.command !== HOOK_CMD && h.command !== GATE_CMD && h.command !== REVIEW_CMD).length
+      .filter(h => isStaleGeneration(h.command)).length
     const found = state === 'absent'
       ? 'no settings.json'
       : converged ? 'registrations current' : `needs converge (${staleCount} stale/legacy entr${staleCount === 1 ? 'y' : 'ies'})`
@@ -1038,7 +1049,7 @@ function printDetection(ctx: Ctx): void {
   else {
     const allHooks = Object.values(settingsHooks(state)).flat().flatMap(m => m.hooks ?? [])
     const ours = allHooks.filter(h => isOurHookCommand(h.command)).length
-    const stale = allHooks.filter(h => isOurHookCommand(h.command) && h.command !== HOOK_CMD && h.command !== GATE_CMD && h.command !== REVIEW_CMD).length
+    const stale = allHooks.filter(h => isStaleGeneration(h.command)).length
     lines.push(`  settings: ${ours} agentlens hook entr${ours === 1 ? 'y' : 'ies'} (${stale} stale generation(s))`)
   }
   lines.push(`  data:     ${ctx.dataDir} — ${fs.existsSync(ctx.dataDir) ? `${storeSpanCount(ctx.dataDir)} stored span(s)` : 'absent'}`)
