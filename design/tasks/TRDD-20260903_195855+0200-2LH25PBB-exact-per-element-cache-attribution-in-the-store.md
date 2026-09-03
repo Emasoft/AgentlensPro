@@ -199,6 +199,28 @@ INHERIT their parent element's read/write classification and never carry a bound
 Treating a sub-section as its own cache unit is the same class of error as the two the validation
 caught, and would over-report cache hits on exactly the blocks the owner cares most about.
 
+**Correction 2f — vertical similarity by PARTITIONING and DENORMALIZATION, not by a column buffer.**
+The owner's principle ("columns must contain the same element at every row") is right; the question
+is how to obtain it. Three measurements decide the layout:
+
+| question | measurement |
+|---|---|
+| partition rows by `element_type`? | one mixed file 13,624,143 B vs partitioned 13,170,963 B — **1.03×**, not worth it |
+| do cross-parquet joins slow queries? | 1 table 0.16s · 2 tables 1.71s · 3 tables 3.17s · 3 + text filter 3.32s |
+| partition by DAY (time pruning)? | scanning all 8,338 parts files 0.68s vs the 259 recent ones **0.02s — 34×** |
+
+So: **partition by day**, because every diagnostic query filters by time and pruning is the only
+change worth 34×. **Denormalize the hot columns onto the element row** (session, ts, model,
+element_type, name, bytes, position, cls, cache_break_index) so ordinary questions hit ONE table at
+the 0.16s tier instead of a three-way join at 3.17s — this is the owner's "aggregate the info usually
+queried together", and the join timings price it at ~3s per query. **Join to `blobs` only to display
+text**, the one case that needs the bytes and the only one with a human waiting.
+
+Vertical similarity pays enormously on structured, low-cardinality columns (Correction 2b, 8.2×) and
+almost nothing on free-text bodies, whose entropy is in the content rather than the schema. That is
+why the ~600-column buffer is unnecessary to achieve the principle, on top of measuring 1.22× worse
+(Correction 2d).
+
 **Correction 3 — 273 million rows of JSON punctuation are waste, and that is the owner's point
 landing.** Of 457.7M part rows only 184.6M carry content; the rest are commas, braces and field
 names stored one row each — 60% of the largest table holding syntax that is reconstructable from the
@@ -226,6 +248,11 @@ column is null and a backfill pass fills it. Null means "not yet computed", neve
       `name` and `bytes`, and each INHERITING its parent element's cache classification.
 - [ ] An unrecognised section is typed `prose` and still accounted — the split never drops bytes,
       and the sum of a message's sub-elements equals the message's own byte count.
+- [ ] Files are partitioned by day and a time-filtered query prunes to that day's files.
+- [ ] The common diagnostic queries (per-turn classification, bytes by element type, catalog
+      presence) answer from the element table ALONE, with no join to `blobs`.
+- [ ] The store is COMPLETE: every captured body is represented, nothing sampled or dropped, so a
+      cross-parquet query can diagnose an incident after the fact.
 - [ ] Schema guard: a check fails the build when any column has more than one physical type across
       the store's files, and a new API field cannot land in an existing typed column.
 
