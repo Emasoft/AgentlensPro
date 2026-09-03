@@ -1,9 +1,10 @@
 ---
 trdd-id: Z8WJZV8E
 title: The bodies-sink status can be stale for a full pass interval, which is one hour outside spool mode
-column: backburner
+column: superseded
+superseded-by: [70D0TUBZ]
 created: 2026-08-26T20:13:05+0200
-updated: 2026-08-26T21:05:00+0200
+updated: 2026-09-03T11:13:50+0200
 current-owner: main
 task-type: bugfix
 severity: LOW
@@ -81,3 +82,16 @@ question; "it never re-probes" was not.
 
 The volume's own sizing. Also NOT in scope: the "never re-probes" defect this card was opened for —
 it does not exist (see the correction above), and nothing should be built to fix it.
+
+## Superseded note (2026-09-03)
+
+Code path deleted in the TS→Rust cutover (commit `567fc5c2`, "alcore is the only backend"):
+`standalone/server.ts` and its `BODIES_PASS_INTERVAL_MS` re-probe loop no longer exist. Verified
+`rg -n "sink_problem|sinkProblem" rust-core/crates src/cli/serverControl.ts` — only the CLI render
+(`src/cli/serverControl.ts:514,524,583`) remains; alcore never emits the field. The capability
+itself is re-filed as TRDD-70D0TUBZ.
+
+## Approval log
+
+- 2026-09-03T11:13:50+0200 — SUPERSEDED by main-session. The TS-only sink-probe path died in the
+  cutover; capability re-filed as TRDD-70D0TUBZ.
