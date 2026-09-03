@@ -3,14 +3,16 @@ trdd-id: 7YPQWKPG
 title: DuckDB is the memory and alcore keeps no resident data model
 column: todo
 created: 2026-09-02T22:05:41+0200
-updated: 2026-09-02T22:05:41+0200
+updated: 2026-09-03T04:20:46+0200
 current-owner: main-session
 task-type: refactor
 priority: high
-min-approval-requirement: none
+min-approval-requirement: user
 requested-by: user
 blocked-by: []
 related: [768NEX6E, CAJ5RCP9, O3ICDRLO, XX1UAZHS, N60JUWU3]
+approved-by: user
+approved-at: 2026-09-02T22:05:41+0200
 ---
 
 ## WHY
@@ -112,7 +114,8 @@ Known resident structures (rust-core/crates/agentlens-core/src/):
 ## ACCEPTANCE
 
 - [ ] Steady-state RSS after a 24 h run stays under a bound the advisor sets
-      (proposed ≤ 512 MB, excluding DuckDB's own configured `memory_limit`).
+      (proposed — advisor sets the final number — ≤ 512 MB, excluding DuckDB's own configured
+      `memory_limit`).
 - [ ] Every existing `agentlenspro` tool still answers with identical shape,
       measured against the fixtures.
 - [ ] No "state lock held ≥ 250 ms" in a 15-min read, because there is no
@@ -126,10 +129,89 @@ Known resident structures (rust-core/crates/agentlens-core/src/):
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-02
 
+EVIDENCE (768NEX6E box 4, 2026-09-02): bounded resident structures (335k-span
+window as `Arc<Value>`, 27,918 stripped + 50 hot cards, overlay ≤ 500) sum to
+< 1 GB; the 7–8 GB mimalloc heap is churn from back-to-back whole-window
+`summarize_spans` rebuilds that mimalloc never decommits (no `mi_collect`/
+purge call exists); DuckDB's own C heap is a separate 3.6 GB resident from
+parquet decompression. Under this ruling the whole-window summarizer becomes
+a DuckDB query / materialized table instead of a Rust-side rebuild, which
+removes the churn and the pinned cores at the source. Full report:
+`reports/trdd-768nex6e/20260902_220716+0200-box4-heap-by-structure.md`.
+
 NEXT ACTION: wait for the TRDD-768NEX6E box-4 per-structure sizing, then get
 advisor review of the migration order (which structure first), then split
 this TRDD into per-structure child TRDDs (NPT/EHT).
 
+### ADVISOR VERDICT (Fable 5.1, 2026-09-02)
+
+(a) Fix two card contradictions before splitting children: PRINCIPLE 1 "never
+parsed directly by Rust" vs NON-GOALS "log readers stay as-is"; PRINCIPLE 5
+"paged" vs the frozen wire contract `ui.rs:1-3` + acceptance "identical
+shape" — and decide the freshness contract (read-your-writes case
+`ui.rs:291-296` CI test: POST /v1/traces → GET /api/summary within 500 ms).
+
+(b) Migration order:
+- step 0 — zero-code today: restart with `MIMALLOC_SHOW_STATS=1`; A/B
+  `MIMALLOC_PURGE_DELAY=0`; `AGENTLENS_MAX_WINDOW_SPANS=100000` (the RSS
+  valve is exhausted at the 5-min floor, `span_window.rs:105`).
+- step 1 — move the rebuild trigger from the 25 ms poll (`ui.rs:170-182`,
+  rebuild on every `data_version` bump: `lib.rs:847/272/647`) onto the 5 s
+  chores tick (`chores.rs:558`) and serve `cached_any` — kills the pinned
+  cores, churn ≥10× lower.
+- step 2 — cards → ONE long-lived in-memory DuckDB connection
+  (`cards(session_id PK, start_ms, card JSON)` upserted in `put_log_session`,
+  boot-restored from the delta log `log_reader.rs:689` via `read_ndjson_auto`,
+  precedent `transcript_sql.rs:413`), `feed_merge.rs` stays Rust over the
+  colliding ids only.
+- step 3 — split `summarize_spans`: per-session aggregates → SQL over
+  `read_ndjson_auto(today+yesterday)` into `session_summary` on the tick;
+  timeline/synth-root/subagent logic stays Rust but per session on demand
+  (`/api/timeline/:id`).
+- step 4 — delete `boot_load` (`span_window.rs:66-69`) and `window.spans`;
+  5-min burn window = flushed buffer + today's segment query; convert sealed
+  segments to parquet.
+- step 5 — `mi_collect(true)` only if step 0 shows purge works AND RSS still
+  climbs after step 1.
+
+(c) The ruling does not forbid a bytes-bounded ingest buffer (spanstore
+`pending` `writer.rs:443-501` exists, bounded by COUNT 50k/100k — make it
+bytes) nor a materialized DuckDB table, but it is RAM in DuckDB's heap and
+counts; inventory MISSES to add: SSE ring `ui.rs:63` (64 frames × a full
+stripped summary, bytes-unbounded with a lagging client),
+`StatuslineUsageReader` HashMaps `statusline_usage.rs:303-308`,
+`otel_attribution`, composition LRU, `recent_hook_events`, `forensics.db`
+(SQLite via rusqlite `forensics_db.rs:1-7` — on-disk data read NOT via
+DuckDB: exempt or route through CAJ5RCP9).
+
+(d) DuckDB: FOUR independent 2 GB instances (`chores.rs:276`,
+`statusline_store.rs:235`, `bodies_evidence.rs:76`, `transcript_sql.rs:402`;
+CLI default 8 GB `lib.rs:39`) — `memory_limit` caps the buffer pool not
+resident; ACCEPTANCE becomes: Rust heap (mimalloc committed) ≤ 512 MB AND
+`phys_footprint` ≤ 512 MB + 1×`memory_limit` + ~1 GB slack (≈3.5 GB at
+2 GB, ≈2.5 GB at 1 GB); name `phys_footprint` not RSS.
+
+(e) Frontmatter: add `approved-by: user` and
+`approved-at: 2026-09-02T22:05:41+0200`; the log line cites a PRRD proposal
+but the repo has NO `design/requirements/PRRD.md` — add "PRRD absent;
+ratification is a separate USER action" to the log line.
+
+RISKS (verbatim): "(1) A SQL rewrite of summarize_spans (455 lines of
+TS-parity logic) breaks the frozen contract; early signal = first fixture
+diff on one aggregate column. (2) Tick-driven refresh breaks read-your-writes
+(ui.rs:291-296). (3) If the USER means 'never parse JSONL directly'
+literally, the sweeper (log_reader.rs 1086 lines + agentlens-logscan) is a
+rewrite the card excludes — ask that one question before splitting
+children."
+
+NEXT ACTION (advisor): "USER answers: does 'read only via duckdb' include
+the JSONL transcript sweeper (rewrite) or only queries (sweeper stays)?
+then step 0, then children 1→4 each with a 15-min footprint read".
+
 ## Approval log
+
+- 2026-09-02T22:05:41+0200 — APPROVED by USER (Tier 3: architecture ruling + PRRD golden-rule
+  proposal); directive quoted verbatim in ## WHY. PRRD absent; ratification is a separate USER
+  action (repo has no design/requirements/PRRD.md).
 
 ## Notes and lessons learned

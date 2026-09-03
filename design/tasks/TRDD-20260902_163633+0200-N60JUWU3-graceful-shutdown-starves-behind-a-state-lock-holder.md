@@ -1,9 +1,9 @@
 ---
 trdd-id: N60JUWU3
 title: The graceful shutdown needs the state lock and has no timeout, so a long holder starves the stop into a SIGKILL
-column: todo
+column: dev
 created: 2026-09-02T16:36:33+0200
-updated: 2026-09-02T17:01:17+0200
+updated: 2026-09-03T04:20:46+0200
 current-owner: main-session
 task-type: bugfix
 priority: high
@@ -13,6 +13,51 @@ related: [UTFVMVT8, 2R36W8Q1, HFV4AIT7]
 ---
 
 # The graceful shutdown needs the state lock and has no timeout, so a long holder starves the stop into a SIGKILL
+
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-02
+
+- **Implemented** (not yet committed/deployed): `bin/alcore.rs:358-421` now polls
+  `state.try_lock()` in a loop up to `AGENTLENS_STOP_LOCK_TIMEOUT_MS` (default 10_000, parse
+  failure fail-fasts via `usage()`), eprintln-ing "alcore: stop waiting on <holder> for N ms"
+  every 5 s and, on final timeout, "alcore: stop timed out … skipping the flush, releasing the
+  pid lock anyway" — then `pid_lock::release` always runs (outside the loop, unconditionally),
+  matching the acceptance box "stop returns ≤10s and the pid lock is released". On success the
+  flush sequence (`flush_spans`, `statusline.flush`, `account_timeline.flush`,
+  `collector_lifecycle::record_stop`) is unchanged.
+- New `pub fn current_lock_holder() -> Option<(String, u64)>` in `lib.rs` (after `now_ns()`)
+  reads the same `HOLDER_SITE`/`HOLDER_SINCE_NS` globals `lock_timed` already maintains, so a
+  `try_lock` failure can name the holder without itself blocking.
+- `src/cli/serverControl.ts:486` timeout message now points at "server.log for `alcore: stop
+  waiting on <holder>`" (acceptance box 3 — text only, no logic change; the CLI still can't read
+  the Rust stderr string itself, it just tells the operator where to look).
+- New test `src/test/serverStopBoundedWait.test.ts` — real alcore spawn, `AGENTLENS_STOP_LOCK_
+  TIMEOUT_MS=1`, asserts SIGTERM→exit(0) ≤10s and `server.pid` is gone. **This does NOT
+  reproduce the 120s-holder starvation scenario** — no production hook exists to hold
+  `CoreState`'s mutex from outside the process, and the investigation report explicitly said not
+  to invent one. It exercises the added mechanism (env knob honored, release always runs) on the
+  uncontended path only.
+- Verified GREEN: `cargo build --release -p agentlens-core`, `cargo clippy --all-targets -D
+  warnings`, `cargo test --lib` (37 passed, incl. `lock_timed_tests`), `pnpm run check-types`,
+  the new mocha test (passed in 1818ms) plus the full `pnpm run test:unit` suite (2543 passing /
+  7 failing, all 7 pre-existing in `serverCalibration.test.js` — unrelated `burn-config.json`
+  ENOENT, not touched by this change).
+- Acceptance box 2 ("next boot classifies the gap as shutdown, not crash") is **unaffected** —
+  `record_stop` still runs on the success path exactly as before; on a timeout it does NOT run
+  (the flush is skipped), so a timed-out stop still classifies as a gap on next boot, same as
+  today's SIGKILL case. Not a regression, but also not newly fixed — out of this change's scope.
+- **SUPERSEDED — do NOT carry forward:** the investigation's proposed STATE block's plan to
+  "move `:374` outside the `if let Ok` block it is already outside of" — that observation was
+  already true pre-fix (`pid_lock::release` was always outside); this fix keeps that property
+  under the new loop shape.
+- **NEXT ACTION:** review this diff → commit → deploy (`node esbuild.js` is irrelevant here,
+  this is the Rust binary — `cargo build --release` + restart the server) alongside XX1UAZHS →
+  then design a real 120s-holder acceptance test (needs a test-only hook to hold `CoreState`'s
+  mutex, e.g. a debug-build-only env-gated endpoint) to close acceptance box 1 for real.
+- **ADVISOR VERDICT (Fable 5.1):** do not land as-is; rework in flight per 7 findings (extract
+  `flush_with_deadline` into `agentlens_core` + 2 real Rust tests; boot-time knob parse; bounded
+  sweeper join; `rt.shutdown_timeout` before `pid_lock::release`; server 8 s / CLI 15 s; CLI
+  names the holder from logTail; poison arm `into_inner`). The runtime-drop path is a second root
+  cause under the same acceptance.
 
 ## What happened (2026-09-02 16:28–16:34, pid 6978, the pre-fix binary)
 

@@ -3,7 +3,7 @@ trdd-id: CAJ5RCP9
 title: Durable cache-event history that joins the OTEL ledger with the statusline feed
 column: todo
 created: 2026-09-02T21:52:02+0200
-updated: 2026-09-02T21:52:02+0200
+updated: 2026-09-03T04:20:46+0200
 current-owner: main-session
 task-type: feature
 priority: high
@@ -15,12 +15,17 @@ requested-by: user
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-02
 
-- NEXT ACTION: read-only investigation of the forensics fact DB (`run_diagnostics_sql`) schema
-  + retention, and the statusline parquet schema (`statusline_usage.rs`) — establish whether
-  per-call cache facts (cache_creation/cache_read buckets, TTL tier, `cache_miss_reason`,
-  `previous_message_id`, session id) are ALREADY durably stored anywhere before designing a new
-  table. Then get advisor review of the design. Then implement.
-- Nothing implemented yet. This card is intake only.
+- Investigation done (`reports/cache-history/20260902_224603+0200-storage-and-join-investigation.md`):
+  the forensics fact DB is sql.js SQLite, NOT DuckDB, 5,730 rows, last indexed 2026-08-12
+  (18 days stale), `break_cause`/`gap_minutes` always NULL, no `cache_miss_reason` /
+  `previous_message_id` columns, join match 0/0 for this session, re-index hangs >8.5 min. So
+  the durable table must be built fresh in DuckDB at ingest (bodies pass), not extended from the
+  fact DB. Fable advisor's 7YPQWKPG verdict notes `forensics.db` is on-disk data read outside
+  DuckDB and must be routed through this card.
+- NEXT ACTION: design the `api_calls` table schema (session_id, ts, model, buckets, ttl tier,
+  cache_miss_reason, previous_message_id, query-source label, request fingerprint, cost) + the
+  statusline join view; write at the bodies-pass ingest BEFORE delete; child of 7YPQWKPG's
+  DuckDB instance (one connection).
 
 ## WHY
 

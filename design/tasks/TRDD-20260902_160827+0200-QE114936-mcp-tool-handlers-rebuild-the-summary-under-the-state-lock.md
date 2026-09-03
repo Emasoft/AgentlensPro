@@ -3,7 +3,7 @@ trdd-id: QE114936
 title: Eighteen MCP tool handlers still rebuild the session summary under the state lock
 column: todo
 created: 2026-09-02T16:08:27+0200
-updated: 2026-09-02T16:08:27+0200
+updated: 2026-09-03T04:20:46+0200
 current-owner: main-session
 task-type: bugfix
 priority: high
@@ -13,6 +13,20 @@ related: [UTFVMVT8, 2R36W8Q1, HFV4AIT7]
 ---
 
 # Eighteen MCP tool handlers still rebuild the session summary under the state lock
+
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-03
+
+Investigation done: `reports/trdd-qe114936/20260902_224726+0200-investigation.md`. Findings: the
+18-site pattern confirmed across `resolve_session_card`'s 8 callers (ui.rs:2027, 2063, 2165,
+2257, 3164, 3218, 3267, 3518) plus the other inline-summary sites; a LIVE 64.5 s lock hold
+measured at `ui.rs:3218` (`resolve_session_card` inside `get_cache_break_report`'s `timeline_of`
+closure) — 13 distinct `state lock held`/`waited …; holder ui.rs:3218` lines in the current
+server run, one hold of 64,494 ms, more than double UTFVMVT8's worst measured case (30.1 s).
+
+NEXT ACTION: apply the XX1UAZHS shape (compute off the lock, guard only for the snapshot) to the
+worst site first: `ui.rs:3218`; then the remaining 17 in one pass; each with a 15-min hold read.
+
+Column stays `todo` (not started).
 
 ## Why this card exists
 
