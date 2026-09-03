@@ -1,15 +1,16 @@
 ---
 trdd-id: YU8QPU89
 title: Verify alcore ingest keeps up with many parallel Claude Code sessions without filling the spool or growing memory
-column: testing
+column: complete
 created: 2026-08-28T22:05:59+0200
-updated: 2026-09-03T07:25:34+0200
+updated: 2026-09-03T07:27:02+0200
 current-owner: claude-agentlenspro
 task-type: audit
 project-id: agentlenspro
 parent-trdd: DMWOBWFH
 blocked-by: []
 eht: []
+implementation-commits: [56229f8e]
 ---
 
 # Ingest throughput vs spool and memory under parallel sessions
@@ -529,5 +530,10 @@ highest rate: spool file count + bytes, RSS, spans/s ingested, `/api/summary` la
       — 2026-09-03: generator committed at `b8a61496` (scripts/bench/alcore-ingest-flood.mjs);
       `reports/` is gitignored per project convention, so the report path recorded above IS the
       durable record of the numbers.
+
+## Approval log
+
+- 2026-09-03T07:27:02+0200 — COMPLETED by main-session. All acceptance boxes verified; 32×
+  flood measured in 56229f8e.
 
 ## Notes and lessons learned
