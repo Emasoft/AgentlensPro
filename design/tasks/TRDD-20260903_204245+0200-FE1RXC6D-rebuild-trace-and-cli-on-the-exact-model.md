@@ -1,7 +1,8 @@
 ---
 trdd-id: FE1RXC6D
 title: Rebuild the dashboard trace and the CLI views on the exact turn model
-column: todo
+column: blocked
+pre-block-column: todo
 created: 2026-09-03T20:42:45+0200
 updated: 2026-09-03T20:42:45+0200
 current-owner: unassigned
