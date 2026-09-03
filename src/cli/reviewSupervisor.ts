@@ -10,8 +10,11 @@
 // cannot: this runs on UserPromptSubmit, a different event from the gate's Stop, so a gate that
 // never fires is exactly the condition this still detects.
 //
-// It NEVER blocks and never enforces — it observes and reports. Blocking is the gate's job; being
-// impossible to silence is this one's.
+// It runs on UserPromptSubmit AND Stop. The Stop registration is the load-bearing one: a warning the
+// USER reads is worthless while the user is away, and on 2026-09-03 the agent finished turn after
+// turn without ever being told. On Stop it therefore BLOCKS on alarm, which is the only channel an
+// agent reliably reads at a stop. That is a backstop for a gate that has failed, not a second gate:
+// with the gate working, the supervisor's alarm conditions never hold.
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
@@ -91,27 +94,29 @@ export function judge(scan: SupervisorScan, registered: boolean, transcriptReada
   if (!transcriptReadable) {
     // Say so rather than report a reassuring zero — an unreadable transcript is exactly how a
     // supervisor lies by omission.
-    return { level: 'warn', message: 'Review supervisor could not read the transcript, so it cannot confirm any review ran this session. Treat the review as UNVERIFIED.' }
+    return { level: 'warn', message: 'Review supervisor could not read the transcript, so it cannot confirm any review ran. Treat the review as UNVERIFIED.' }
   }
   if (scan.unreviewed >= UNREVIEWED_ALARM) {
     return {
       level: 'alarm',
-      message: `${scan.unreviewed} changes have landed with no adversarial review after them `
-        + `(${scan.forks} review fork(s) this session, ${scan.work} consequential action(s)). `
+      // 'in the scanned window', never 'this session': the scan reads a bounded transcript TAIL, so
+      // a long session's earlier turns are simply not in view and a session-wide claim would be false.
+      message: `${scan.unreviewed} change(s) have landed with no adversarial review after them `
+        + `(in the scanned window: ${scan.forks} review fork(s), ${scan.work} consequential action(s)). `
         + 'Spawn the review fork now — the per-turn review is the check that catches what tests and types cannot.',
     }
   }
   if (scan.work > 0 && scan.forks === 0) {
     return {
       level: 'warn',
-      message: `${scan.work} change(s) this session and NO adversarial review fork has run yet. `
+      message: `${scan.work} change(s) in the scanned window with NO adversarial review fork after them. `
         + 'The gate should have demanded one — if it has not, it is not working.',
     }
   }
-  return { level: 'ok', message: `review supervisor: ${scan.forks} review(s) for ${scan.work} change(s), ${scan.unreviewed} unreviewed.` }
+  return { level: 'ok', message: `review supervisor: ${scan.forks} review(s) for ${scan.work} change(s) in the scanned window, ${scan.unreviewed} unreviewed.` }
 }
 
-interface SupervisorInput { transcript_path?: unknown; session_id?: unknown }
+interface SupervisorInput { transcript_path?: unknown; session_id?: unknown; hook_event_name?: unknown; hookEventName?: unknown }
 
 function settingsCascade(cwd: string): string[] {
   return [
@@ -128,11 +133,20 @@ async function readStdin(stream: NodeJS.ReadStream): Promise<Buffer> {
 }
 
 /**
- * Entry point. Emits BOTH channels on anything but `ok`:
- *   - `systemMessage` — the USER sees it
- *   - `hookSpecificOutput.additionalContext` — the AGENT sees it
- * so a silent review cannot be silent for either party. Always exits 0: a supervisor that can break
- * the session is a liability, and its whole job is to be the thing that still works.
+ * Entry point. Registered on BOTH `UserPromptSubmit` and `Stop`, and the channel differs because
+ * what reaches the agent differs:
+ *
+ *   - UserPromptSubmit → `systemMessage` (the USER sees it) + `additionalContext` (the AGENT sees
+ *     it). Non-blocking; this is the routine heartbeat.
+ *   - Stop → on ALARM, a `decision: "block"` with a reason, because at a stop that is the only
+ *     channel the AGENT reliably reads. THIS IS THE POINT: on 2026-09-03 an entire session ran with
+ *     no review and the agent never noticed, because nothing told it at the moment it was finishing.
+ *     Warning the user alone is useless when the user is asleep.
+ *
+ * The Stop block is a BACKSTOP, not a second gate: it fires only on ALARM (the gate is not
+ * registered at all, or the unreviewed backlog has piled up), so a working gate means this never
+ * blocks. Its exit is the same as the gate's — spawn the review — so it cannot demand something
+ * unachievable, and a `warn` never blocks anything.
  */
 export async function runReviewSupervisor(): Promise<number> {
   let input: SupervisorInput = {}
@@ -143,7 +157,22 @@ export async function runReviewSupervisor(): Promise<number> {
   const registered = gateIsRegistered(settingsCascade(process.cwd()), p => fs.readFileSync(p, 'utf8'))
   const verdict = judge(scan, registered, lines !== null)
   if (verdict.level === 'ok') return 0
+  const event = String(input?.hook_event_name ?? input?.hookEventName ?? '')
   const tag = verdict.level === 'alarm' ? '🚨 REVIEW SUPERVISOR' : '⚠ Review supervisor'
+
+  if (event === 'Stop' || event === 'SubagentStop') {
+    if (verdict.level === 'alarm') {
+      process.stdout.write(JSON.stringify({
+        decision: 'block',
+        reason: `${tag}: ${verdict.message} (review-supervisor — this fires when the review gate itself is not doing its job)`,
+      }))
+      return 0
+    }
+    // A warn at a stop still reaches the user, but must not hold the turn.
+    process.stdout.write(JSON.stringify({ systemMessage: `${tag}: ${verdict.message}` }))
+    return 0
+  }
+
   process.stdout.write(JSON.stringify({
     systemMessage: `${tag}: ${verdict.message}`,
     hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: `[review-supervisor] ${verdict.message}` },

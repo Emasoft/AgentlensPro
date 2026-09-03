@@ -89,7 +89,11 @@ export const REVIEW_CMD = 'agentlenspro review-gate'
 // gate's Stop, so a gate that has stopped firing is exactly what this still detects. It only
 // reports (never blocks), so it is registered unconditionally alongside the gate.
 export const SUPERVISOR_CMD = 'agentlenspro review-supervisor'
-export const SUPERVISOR_EVENTS = ['UserPromptSubmit']
+// Stop is deliberate and load-bearing: on 2026-09-03 a whole session ran unreviewed and the AGENT
+// never noticed, because nothing told it at the moment it was finishing. A UserPromptSubmit-only
+// supervisor warns the USER, which is worthless while the user is away. On Stop the supervisor
+// blocks with a reason, but ONLY on alarm, so a working gate never sees it.
+export const SUPERVISOR_EVENTS = ['UserPromptSubmit', 'Stop']
 // v1 PATH-bin names — recognised as ours for migration/uninstall, never registered anymore.
 export const LEGACY_HOOK_BIN = 'agentlenspro-hook'
 export const LEGACY_GATE_BIN = 'agentlenspro-gate'
