@@ -86,6 +86,33 @@ const SAFE_PREFIX = [
   '/usr/local/opt', '/usr/local/Cellar', '/usr/local/bin', // intel-mac prefix
 ]
 
+// READ-ONLY COMMANDS never need the OTP: following a symlink to LOOK at something destroys nothing,
+// and these are the bulk of what an agent runs. Owner: "you must also exclude readonly commands like
+// ls, cat, find, etc."
+//
+// The exemption is ARG-AWARE, because read-only-ness is a property of the invocation, not the name:
+//   - `cat x > y` and `ls > out` WRITE through a redirect;
+//   - `find . -delete`, `-exec`, `-execdir`, `-fprint`, `-fls` mutate or write;
+//   - `sed -i`, `sort -o`, `tee`, `rsync` are not on the list at all.
+// A name-only exemption would be a hole an agent walks through by accident, so any redirect or any
+// mutating flag drops the segment back into the checked path.
+const READONLY = new Set([
+  'ls', 'cat', 'bat', 'head', 'tail', 'less', 'more', 'file', 'stat', 'wc', 'du', 'df',
+  'find', 'grep', 'rg', 'ag', 'ack', 'fd', 'diff', 'cmp', 'md5', 'shasum', 'sha256sum',
+  'realpath', 'readlink', 'dirname', 'basename', 'pwd', 'echo', 'printf', 'which', 'type',
+  'tree', 'jq', 'yq', 'awk', 'cut', 'sort', 'uniq', 'nl', 'strings', 'xxd', 'od',
+])
+const MUTATING_FLAGS = /(?:^|\s)-(?:delete|exec|execdir|fprint|fls|ok|okdir|i|o)\b/
+
+/** True when this segment only READS. A redirect or a mutating flag disqualifies it regardless of
+ *  the command name. */
+function isReadOnlySegment(segment, word) {
+  if (!READONLY.has(word)) return false
+  if (/[><]/.test(segment)) return false          // any redirect can write
+  if (MUTATING_FLAGS.test(segment)) return false  // find -delete/-exec, sed -i, sort -o
+  return true
+}
+
 const isExcluded = (p) => SAFE_EXACT.has(p) || SAFE_PREFIX.some((r) => p === r || p.startsWith(r + path.sep))
 
 const OTP_DIR = path.join(os.tmpdir(), 'agentlens-symlink-otp')
@@ -158,14 +185,35 @@ function firstSymlink(p) {
 
 function otpPath(token) { return path.join(OTP_DIR, token + '.json') }
 
+/** Drop tokens past their TTL. Without this the store grows without bound — a token is now consumed
+ *  only on a SUCCESSFUL match, so every abandoned or mistyped retry leaves a file behind forever.
+ *  Measured 2026-09-03: 110 files had accumulated from test runs alone. Expiry is already enforced
+ *  at verify time, so this reclaims space rather than adding a security property. */
+function purgeExpired() {
+  try {
+    const now = Date.now()
+    for (const f of fs.readdirSync(OTP_DIR)) {
+      const full = path.join(OTP_DIR, f)
+      try {
+        if (now - fs.statSync(full).mtimeMs > OTP_TTL_MS) fs.unlinkSync(full)
+      } catch { /* raced with another hook run: it is gone either way */ }
+    }
+  } catch { /* unreadable store: never let housekeeping break the guard */ }
+}
+
 /** Issue a single-use, time-limited password bound to THIS command text. Binding matters: an OTP
  *  that authorises any command would let one approval carry a different, unreviewed action. */
 function issueOtp(cmd) {
   const token = crypto.randomBytes(4).toString('hex').toUpperCase()
   try {
-    // 0o700: the token IS the filename, so mode on the FILE protects nothing — anyone able to list
-    // this directory reads the secret. Default 0o755 would allow exactly that if TMPDIR is shared.
+    // 0o700: the token IS the filename, so mode on the FILE protects nothing — anyone able to LIST
+    // this directory reads the secret. mkdirSync's `mode` is ignored when the directory already
+    // exists, so a dir created by an earlier version keeps its 0o755 forever; measured 2026-09-03,
+    // the option was passed and the mode was still 755. chmod unconditionally instead of trusting
+    // the create.
     fs.mkdirSync(OTP_DIR, { recursive: true, mode: 0o700 })
+    try { fs.chmodSync(OTP_DIR, 0o700) } catch { /* not ours to chmod: the token still expires */ }
+    purgeExpired()
     fs.writeFileSync(otpPath(token), JSON.stringify({ cmd, at: Date.now() }), { mode: 0o600 })
   } catch { /* cannot persist: the OTP simply will not verify, and the guard stays closed-but-passable */ }
   return token
@@ -210,9 +258,23 @@ process.stdin.on('end', () => {
   // looks normal, so every failure path here allows and says so on stderr.
   try {
     if (consumeOtp(cmd)) process.exit(0)
-    for (const tok of pathTokens(cmd)) {
-      const found = firstSymlink(tok.resolved)
-      if (found) { hit = { ...found, raw: tok.raw }; break }
+    // PER SEGMENT, because read-only-ness is not a property of the whole command line:
+    // `ls /tmp/link && cp x /tmp/link/y` is half read-only, and exempting the line would exempt the
+    // half that writes. Splitting on the same separators the shell uses keeps each verb judged on
+    // its own arguments.
+    for (const segment of cmd.split(/(?:\|\||&&|[;&|\n])+/)) {
+      const trimmed = segment.trim()
+      if (!trimmed) continue
+      const tokens = trimmed.split(/\s+/)
+      let i = 0
+      while (i < tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i])) i++
+      const word = (tokens[i] || '').replace(/^['"]+/, '').split('/').pop()
+      if (isReadOnlySegment(trimmed, word)) continue
+      for (const tok of pathTokens(trimmed)) {
+        const found = firstSymlink(tok.resolved)
+        if (found) { hit = { ...found, raw: tok.raw }; break }
+      }
+      if (hit) break
     }
   } catch (e) {
     process.stderr.write(`[deny-symlink-paths] check failed, allowing: ${e.message}\n`)
