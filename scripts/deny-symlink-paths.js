@@ -164,7 +164,15 @@ function pathTokens(cmd) {
     seen.add(tok)
     if (!tok.includes('/') && !tok.startsWith('~') && !tok.startsWith('$')) return
     const e = expand(tok)
-    if (e && e.includes('/')) out.push({ raw: tok, resolved: e })
+    if (!e || !e.includes('/')) return
+    // A RELATIVE token that does not exist is not a path this command means. Walking up from it
+    // reaches the ancestors of the HOOK's cwd, so `grep "src/foo bar" <path>` would report a
+    // symlink the command never referenced — and on a machine whose project sits under a symlinked
+    // path (`~/Code -> /Volumes/dev/Code`) that fires on every quoted slash-containing string.
+    // Absolute and ~/$-rooted tokens are still checked whether they exist or not: a symlinked
+    // ANCESTOR of a not-yet-created file is exactly the case worth catching.
+    if (!path.isAbsolute(e) && !fs.existsSync(e)) return
+    out.push({ raw: tok, resolved: e })
   }
 
   // QUOTED SEGMENTS FIRST, whole. Splitting on whitespace destroys `"/Users/me/My Project/x"` into
@@ -295,7 +303,12 @@ process.stdin.on('end', () => {
     // and a plain grep was denied. Masking preserves length so the extracted path tokens still line
     // up with the original text.
     const masked = cmd.replace(/'[^']*'|"[^"]*"/g, (m) => ' '.repeat(m.length))
-    const segmentable = masked.replace(/\d?>&\d?/g, ' ')
+    // LENGTH-PRESERVING, like the quote mask above. Collapsing `2>&1` to a single space shifted
+    // every offset after it, so the stage sliced from the original text was misaligned and its
+    // paths were never extracted — measured 2026-09-03: `cp a b 2>&1 ; cp x <symlink>` was ALLOWED.
+    // That is a MISS, not friction: any command with a redirect before the dangerous one went
+    // unchecked. Every mask in this path must keep the string the same length as `cmd`.
+    const segmentable = masked.replace(/\d?>&\d?/g, (m) => ' '.repeat(m.length))
     // PIPELINES FIRST. A read-only command is only harmless if its OUTPUT goes nowhere dangerous:
     // `ls /tmp/link | oppa` reads through the symlink and hands the result to a binary we know
     // nothing about (owner, 2026-09-03: "you don't know what oppa does, but since ls pipes its

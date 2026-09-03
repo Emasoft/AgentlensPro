@@ -75,6 +75,15 @@ check(run(`find ${link} -execdir rm {} +`).denied, 'find -execdir mutates')
 // An UNKNOWN binary is the common real shape — a project script, a tool the guard has never heard
 // of. It is caught by being absent from READONLY, with or without a pipe.
 check(run(`oppa ${link}/f`).denied, 'an unknown binary with a symlink arg is denied')
+check(run(`oppa ${link}`).denied, '...symlink as the FINAL component too')
+
+// OFFSET ALIGNMENT. Stage content is sliced from the ORIGINAL text by offset, so every mask applied
+// before splitting MUST preserve length. Collapsing `2>&1` to one space shifted everything after
+// it and the misaligned stage's paths were never extracted — a MISS, not friction: any command with
+// a redirect before the dangerous one went unchecked.
+check(run(`cp a b 2>&1 ; cp x ${link}`).denied, 'a fd-dup BEFORE the dangerous command must not shift offsets')
+check(run(`ls ${link} 2>&1 | oppa`).denied, 'fd-dup inside a pipeline into an unknown binary')
+check(run(`cp x ${link} ; cp x ${link}`).denied, 'two identical pipelines: indexOf must not mis-slice')
 check(run(`./scripts/ci.sh ${link}`).denied, 'a project script is denied')
 
 // The flag letters mean OPPOSITE things per command, and a global list denied the two most common
@@ -83,6 +92,10 @@ check(!run(`grep -i foo ${link}/f`).denied, 'grep -i is IGNORE-CASE, not in-plac
 check(!run(`diff -i ${link}/a ${link}/b`).denied, 'diff -i is ignore-case too')
 check(!run(`ls ${link} 2>&1`).denied, '2>&1 merges stderr and creates nothing')
 check(!run(`grep "a > b" ${link}/f`).denied, 'a > inside a quoted ARGUMENT is data, not a redirect')
+// A RELATIVE token that does not exist is not a path the command means. Walking up from it reaches
+// the HOOK's cwd ancestors, so on a machine whose project sits under a symlinked path this would
+// deny every command carrying a quoted slash-containing string.
+check(!run(`grep "src/foo bar" ${real}/f`).denied, 'a nonexistent RELATIVE token is not a path candidate')
 check(run(`sort -o ${link}/out ${link}/in`).denied, 'sort -o DOES write in place')
 check(run(`sed -i s/a/b/ ${link}/f`).denied, 'sed is not read-only at all')
 
