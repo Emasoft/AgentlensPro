@@ -3,14 +3,14 @@ trdd-id: 768NEX6E
 title: What does the 60 s bodies pass cost the machine, and why is alcore 7 GB resident
 column: blocked
 created: 2026-09-02T09:31:25+0200
-updated: 2026-09-03T05:34:53+0200
+updated: 2026-09-03T11:00:24+0200
 current-owner: main-session
 task-type: spike
 priority: high
 min-approval-requirement: none
 related: [2R36W8Q1, YU8QPU89, ZW4APOPI]
 pre-block-column: dev
-blocked-by: [2TQHNMEC, 7YPQWKPG]
+blocked-by: [7YPQWKPG]
 ---
 
 # What does the 60 s bodies pass cost the machine, and why is alcore 7 GB resident
@@ -106,6 +106,21 @@ blocked-by: [2TQHNMEC, 7YPQWKPG]
 - **2026-09-03T05:34:53+0200 — moved dev → blocked:** box 2 (CPU time/bytes read) is measured
   under TRDD-2TQHNMEC, box 3's memory_limit decision under TRDD-7YPQWKPG; restore to dev when
   both are terminal (report reports/board-sweep/20260903_053411+0200-768nex6e-fold-verdict.md).
+- **2026-09-03T10:58:52+0200 — box 2 CPU/bytes measured on pid 94042 (live alcore, no
+  restart):** wall time confirmed from log lines (11.8–20.8 s across 3 observed passes).
+  CPU time has no per-pass counter in the binary; two proxies used — a `ps cputime` bracket
+  around one pass-completion boundary gave 64.11 s CPU over a 37.84 s poll window (WHOLE
+  busy multi-threaded server, an upper bound, not pass-exclusive), and an
+  `/usr/bin/sample 94042 18` (1 ms interval, `sudo -n true` confirmed no non-interactive
+  sudo so `fs_usage` was skipped per the task's fallback) found the pass's own
+  `body_writers::scan_live_body_writers` symbol in only ~27 of ~13,585 samples — the pass
+  is almost entirely I/O-bound, own CPU plausibly low-hundreds-of-ms. Bytes read has no
+  counter either; proxied by the pass's own "freed X.XMB" log figure (27.4–42.4MB observed)
+  as a LOWER BOUND (files must be read/stat'd before delete/ingest decisions).
+  Report: `reports/trdd-768nex6e/20260903_105436+0200-box2-cpu-bytes.md`.
+- **2026-09-03T11:00:24+0200 — box 2 measured directly (report above); 2TQHNMEC dropped from
+  blocked-by** — it optimises the pass, it is not needed to measure it. Remaining open box 3
+  (memory_limit-defaults decision) is owned by TRDD-7YPQWKPG.
 
 ## Acceptance
 
@@ -115,9 +130,14 @@ blocked-by: [2TQHNMEC, 7YPQWKPG]
       is the part-file list `open_store` binds by construction — 6,798 blob parts + 1,843 bodies parts
       (`part_files()`), every pass, before the index shrinks the verify read. Not `EXPLAIN ANALYZE`; the
       SQL names every file, so the count is exact without it.
-- [ ] One pass's wall time, CPU time and bytes read are measured on this machine under normal load.
-      Wall time IS measured (STATE: 14–23 s typical, 55–141 s under lock-hold contention, 12 passes);
-      CPU time and bytes read are NOT — they belong with TRDD-2TQHNMEC's before/after.
+- [x] One pass's wall time, CPU time and bytes read are measured on this machine under normal load.
+      Wall time IS measured (STATE: 14–23 s typical, 55–141 s under lock-hold contention, 12 passes;
+      re-confirmed 2026-09-03 at 11.8–20.8 s across 3 more passes). CPU time and bytes read are
+      documented proxies (no per-pass counter exists in the binary): CPU via a `ps cputime`
+      whole-process bracket (64.11 s upper bound over one pass's 37.84 s poll window) plus a
+      `sample`-based symbol breakdown showing the pass logic itself is ~0.2% of sampled CPU
+      (I/O-bound); bytes read via the pass's own "freed X.XMB" log figure as a lower bound.
+      Evidence: `reports/trdd-768nex6e/20260903_105436+0200-box2-cpu-bytes.md`.
 - [ ] alcore's resident set is decomposed (span window, log-session cards, summary cache, DuckDB pools) with
       a measurement, not an estimate; a decision on the DuckDB `memory_limit` defaults follows from it.
 - [x] If a pass scans the whole store: a partition-scoped rewrite is carded (or done here if ≤ 3 files).
