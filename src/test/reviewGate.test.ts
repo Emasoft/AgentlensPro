@@ -5,7 +5,7 @@ import * as path from 'path'
 import {
   scanMainTranscriptLines, decideMainGate,
   scanSubagentTranscriptLines, decideSubagentGate, agentCannotSpawn,
-  REVIEW_GATE_DIRECTIVE,
+  REVIEW_GATE_DIRECTIVE, ONE_TURN_RULE, MAIN_BLOCK_REASON, SUBAGENT_BLOCK_REASON,
 } from '../cli/reviewGate'
 
 // `agentlenspro review-gate` — pure decision-function tests, ported faithfully from
@@ -131,5 +131,49 @@ suite('reviewGate — directive', () => {
   test('REVIEW_GATE_DIRECTIVE carries the fork-spawn instructions and the off-switch', () => {
     assert.ok(REVIEW_GATE_DIRECTIVE.includes('subagent_type: "fork"'))
     assert.ok(REVIEW_GATE_DIRECTIVE.includes('AGENTLENS_REVIEW_FORK=off'))
+  })
+})
+
+// The fork reads ONLY the prompt its parent writes — never a hook's block reason. So a channel that
+// states the one-turn rule to the parent without ordering it PASTED reaches the fork not at all,
+// which is how six review forks took second turns and cost ~4.6M tokens (2026-09-03).
+suite('reviewGate — the one-turn rule reaches the fork', () => {
+  const channels: [string, string][] = [
+    ['MAIN_BLOCK_REASON', MAIN_BLOCK_REASON],
+    ['SUBAGENT_BLOCK_REASON', SUBAGENT_BLOCK_REASON],
+    ['REVIEW_GATE_DIRECTIVE', REVIEW_GATE_DIRECTIVE],
+  ]
+
+  test('every channel carries ONE_TURN_RULE verbatim, so none can drift out of sync', () => {
+    for (const [name, text] of channels) {
+      assert.ok(text.includes(ONE_TURN_RULE), `${name} lost the verbatim one-turn rule`)
+    }
+  })
+
+  test('every channel orders the rule COPIED VERBATIM into the fork prompt, not merely stated', () => {
+    for (const [name, text] of channels) {
+      assert.ok(/VERBATIM/.test(text), `${name} states the rule but never orders it pasted`)
+    }
+  })
+
+  // A REGRESSION PIN FOR ONE HISTORICAL BUG — not a general carve-out guard, and it must not be
+  // described as one. Measured 2026-09-03: 186 fork prompts pasted the directive's own "except a
+  // single SendMessage" carve-out, and 177 of them then made exactly one tool call, buying a second
+  // turn. This pins THAT regression by name. It cannot catch a carve-out that names a different
+  // tool ("except one Read"), or none at all ("one verification step is permitted") — expressing
+  // "the rule admits no exception" is beyond a substring test, and the earlier /except/i attempt
+  // was worse: it missed re-wordings AND reddened on innocent prose like "exception handling".
+  // Only the REVIEW_GATE_DIRECTIVE arm has real freedom; the other two interpolate ONE_TURN_RULE,
+  // so their counts are near-guaranteed by construction. Effective new coverage is one assertion.
+  const countOf = (needle: string, hay: string): number => hay.split(needle).length - 1
+
+  test('no channel names a sanctioned tool call — the only "SendMessage" is the one being forbidden', () => {
+    assert.strictEqual(countOf('SendMessage', ONE_TURN_RULE), 1, 'the rule forbids SendMessage exactly once')
+    for (const [name, text] of channels) {
+      assert.strictEqual(
+        countOf('SendMessage', text), countOf('SendMessage', ONE_TURN_RULE),
+        `${name} mentions SendMessage outside the prohibition — a named tool reads as a licence`,
+      )
+    }
   })
 })

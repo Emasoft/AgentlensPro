@@ -19,13 +19,38 @@ import { readStdin } from './hookHandlers'
 // Both gates' block reason used to point at ~/.claude/hooks/review-fork-directive.md, which the
 // package would not ship either. `agentlenspro review-gate --directive` prints this instead, and
 // the block reason below points at that command.
+// THE ONE-TURN RULE. It admits NO exception, because the previous wording did and that was the
+// defect: REVIEW_GATE_DIRECTIVE used to order "NO tool calls except a single SendMessage to main".
+// Measured over this project's fork corpus (2026-09-03, 209 of 216 spawns joined to their usage;
+// evidence: reports/review-fork-economics/): 186 fork prompts carried that carve-out and 177 of
+// them made exactly one tool call — the sanctioned one. A tool_result must be answered, and that
+// answer is a second assistant turn. So the forks obeyed; naming a permitted tool reads as a
+// licence, not an exception.
+//
+// WHAT IS NOT ESTABLISHED, so the next reader does not inherit it as fact:
+//   - The COST of that second turn. `subagent_tokens` is dominated by the context a fork inherits
+//     at spawn, not by its turn count — the one fork ever given a proper one-turn rule used MORE
+//     (819k, zero tool calls) than the SENDMSG median (373k). A fork's second turn re-reads a warm
+//     prefix at 0.1x, so this may be untidy rather than expensive. Unmeasured either way; the
+//     "~6 forks / ~4.6M tokens" figure from a session handoff is not restated because nothing here
+//     confirms it.
+//   - That parents fail to transcribe the rule. That was the first diagnosis and it is not
+//     supported: 186/216 transcribed it faithfully, in broken form. The 23 prompts carrying no
+//     turn constraint were read in full and are mostly review forks deliberately told to `git show`
+//     a commit they did not inherit — their tool calls are the task, not a missing constraint.
+//     The channels below still order the rule PASTED, because a fork is bound only by the prompt
+//     its parent writes; that is cheap insurance, not a measured repair.
+export const ONE_TURN_RULE = 'Answer in ONE turn. Make ZERO tool calls — no SendMessage, no Read, '
+  + 'no Bash, none. Put every finding INLINE in your final message and stop.'
+
 export const REVIEW_GATE_DIRECTIVE = `# Review-fork gate directive (read on every Stop-hook fire)
 
 Spawn ONE adversarial reviewer with the Agent tool, \`subagent_type: "fork"\`, with a prompt that:
 
 - states what you did this turn and every claim you are asserting;
-- orders it to make NO tool calls except a single SendMessage to "main", then stop (a second
-  turn rewrites the shared prefix at the cache-WRITE rate and destroys the economics);
+- carries THIS LINE VERBATIM, because the fork reads nothing else you were told:
+  "${ONE_TURN_RULE}"
+  (a second turn rewrites the shared prefix at the cache-WRITE rate and destroys the economics);
 - tells it to hunt the recurring failure shape — a PROXY read in place of the thing (a pipe's
   exit status for the tool's, a preview for the file, a profile for the workload rate, one run
   for the variance, an assumed format for the real one);
@@ -183,9 +208,10 @@ function writeMainState(p: string, s: MainBreakerState): boolean {
 // `subagent_type: 'fork'`), and it would not have prevented turn 2 anyway — the deny returns as a
 // tool RESULT and reacting to it is the cold request. Measured 2026-09-03: six multi-turn review
 // forks cost ~4.6M tokens; the first zero-tool-call fork answered in 18s off one warm read.
-const MAIN_BLOCK_REASON = 'Review-fork gate: this turn edited or committed. Spawn ONE adversarial '
-  + 'fork (Agent tool, subagent_type "fork") that makes ZERO tool calls and puts its findings INLINE '
-  + 'in its final message — it inherits your context, so a tool call only buys a second turn that '
+export const MAIN_BLOCK_REASON = 'Review-fork gate: this turn edited or committed. Spawn ONE adversarial '
+  + 'fork (Agent tool, subagent_type "fork"), and COPY THIS LINE VERBATIM INTO ITS PROMPT: "'
+  + ONE_TURN_RULE + '" The fork cannot see this message, so a rule you do not paste into its prompt '
+  + 'never reaches it; it inherits your context, so any tool call only buys a second turn that '
   + 'rewrites the whole prefix at the cache-WRITE rate. Run `agentlenspro review-gate --directive` '
   + 'for the full directive, then act on the findings.'
 
@@ -286,9 +312,14 @@ function readSubagentScan(transcriptPath: string): { didWork: boolean; reviewed:
   try { return scanSubagentTranscriptLines(fs.readFileSync(transcriptPath, 'utf8').split('\n')) } catch { return null }
 }
 
-const SUBAGENT_BLOCK_REASON = 'Subagent review gate: before returning, run `agentlenspro review-gate '
-  + '--directive` and follow it (spawn ONE adversarial fork over your work) and act on its findings. '
-  + 'If you have no Agent tool, state that in one line and return — this is asked once.'
+// Carries the same pasted rule as the main gate. It did not until 2026-09-03, which made every
+// subagent-spawned review a multi-turn one by default — the gate that costs the most forks was the
+// one channel that never stated the constraint.
+export const SUBAGENT_BLOCK_REASON = 'Subagent review gate: before returning, spawn ONE adversarial fork '
+  + '(Agent tool, subagent_type "fork") over your work and COPY THIS LINE VERBATIM INTO ITS PROMPT: "'
+  + ONE_TURN_RULE + '" The fork cannot see this message, so a rule you do not paste into its prompt '
+  + 'never reaches it. Run `agentlenspro review-gate --directive` for the full directive, then act '
+  + 'on its findings. If you have no Agent tool, state that in one line and return — asked once.'
 
 async function runSubagentGate(input: ReviewGateInput): Promise<string | null> {
   if (input?.stop_hook_active === true) return null
