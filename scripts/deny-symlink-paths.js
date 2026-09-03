@@ -2,6 +2,10 @@
 // PreToolUse(Bash) guard: stop a command the FIRST time it names a path containing a symlink, hand
 // the agent a one-time password, and let it proceed only by re-issuing the command with that OTP.
 //
+// NOT REGISTERED as of 89383dd4 — deny-pkgmanager-symlink-purge.js holds the user-scope slot, and
+// running both double-prompts. The two do NOT subsume each other (see below), so the
+// replace/alongside/merge call is the owner's.
+//
 // OWNER DIRECTIVE, 2026-09-03: "checking all paths (relative or absolute, simple or composite with
 // env and var resolution) to verify if they are symlinks or not. and stop the command the first
 // time if there are symlinks in it, warning the agent and giving it a one time password. if the
@@ -33,6 +37,13 @@
 // `node build.js` name no path, so a package manager reached through one of them is invisible here
 // exactly as it is to the narrower guard. That gap needs a check at CHECKOUT-CREATION time and is
 // TRDD-SVCUAPES, not this file. Do not read this guard as closing it.
+//
+// AND IT DOES NOT SUBSUME THE PNPM GUARD, despite covering more commands. That one fires on
+// `pnpm install` in a directory whose node_modules escapes — where NO path appears in the command
+// text at all, so there is nothing here to extract. This one fires on `rm -rf /tmp/wt/node_modules`
+// — a named path, no package manager. Neither contains the other. Replacing one with the other
+// loses real coverage; the honest end state is ONE file with both checks, which is a card, not a
+// silent deletion.
 
 const fs = require('fs')
 const os = require('os')
@@ -152,7 +163,9 @@ function otpPath(token) { return path.join(OTP_DIR, token + '.json') }
 function issueOtp(cmd) {
   const token = crypto.randomBytes(4).toString('hex').toUpperCase()
   try {
-    fs.mkdirSync(OTP_DIR, { recursive: true })
+    // 0o700: the token IS the filename, so mode on the FILE protects nothing — anyone able to list
+    // this directory reads the secret. Default 0o755 would allow exactly that if TMPDIR is shared.
+    fs.mkdirSync(OTP_DIR, { recursive: true, mode: 0o700 })
     fs.writeFileSync(otpPath(token), JSON.stringify({ cmd, at: Date.now() }), { mode: 0o600 })
   } catch { /* cannot persist: the OTP simply will not verify, and the guard stays closed-but-passable */ }
   return token
@@ -169,8 +182,12 @@ function consumeOtp(cmd) {
     const rec = JSON.parse(fs.readFileSync(file, 'utf8'))
     const sameCmd = String(rec.cmd ?? '').replace(/\s+/g, ' ').trim() === bare
     const fresh = Date.now() - Number(rec.at ?? 0) < OTP_TTL_MS
-    fs.unlinkSync(file) // consume on ANY attempt, valid or not — a guessable retry loop is worse
-    return sameCmd && fresh
+    // Consume ONLY on success. Burning the token on a failed attempt destroys one the agent could
+    // still have used correctly — the common failure is a retry whose command text changed, not an
+    // attacker. Guessing is already impractical: 4 billion tokens, a 15-minute TTL, and every guess
+    // costs a full hook round-trip.
+    if (sameCmd && fresh) { fs.unlinkSync(file); return true }
+    return false
   } catch {
     return false
   }
