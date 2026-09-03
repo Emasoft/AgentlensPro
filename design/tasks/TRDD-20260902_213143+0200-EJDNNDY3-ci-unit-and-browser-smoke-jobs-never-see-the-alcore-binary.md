@@ -1,9 +1,10 @@
 ---
 trdd-id: EJDNNDY3
 title: CI unit and browser-smoke jobs never see the alcore binary
-column: planned
+column: testing
 created: 2026-09-02T21:31:43+0200
 updated: 2026-09-03T11:08:50+0200
+implementation-commits: [48e8193a]
 current-owner: main-session
 task-type: infra
 priority: high
@@ -13,12 +14,11 @@ related: [1B98LCVR]
 external-refs: [https://github.com/Emasoft/AgentlensPro/actions/runs/33667160582]
 ---
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-02
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-03
 
-Not started. **NEXT ACTION:** await MANAGER/USER approval (`min-approval-requirement:
-manager` — this edits `.github/workflows/ci.yml`, a Tier-2 baseline/workflow surface). On
-approval: `git mv` this file to `design/tasks/`, set `column: planned`, then apply the two
-edits below, commit (the USER pushes — never push unprompted), and verify the next `main` CI run is green.
+Approved and implemented (`48e8193a`). **NEXT ACTION:** the USER pushes to `main`; verify
+the next CI run is green (`gh run view <run-id> --repo Emasoft/AgentlensPro --json jobs
+--jq '.jobs[] | {name,conclusion}'`), then tick the remaining Acceptance boxes and close.
 
 ## Why
 
