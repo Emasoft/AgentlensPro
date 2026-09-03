@@ -102,10 +102,9 @@ jobs:
       - name: Compile tests
         run: npx tsc -p tsconfig.test.json
 
-      # src/test/helpers/freePort.ts boots `rust-core/target/release/alcore` by DEFAULT
-      # (AGENTLENS_TEST_ENGINE=alcore) and falls back to the TS server SILENTLY when the
-      # binary is missing — download the one the build-alcore job already built rather
-      # than let this ride the TS fallback with no signal.
+      # alcore is the only server that ships (TRDD-1B98LCVR box 4 deleted standalone/server.ts) —
+      # a missing binary is a hard test failure now, not a silent TS fallback. Download the one
+      # the build-alcore job already built.
       - name: Download alcore binary
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -119,7 +118,12 @@ jobs:
       # Full unit suite under the matrix node — mocha directly (out/test via .mocharc.cjs).
       # The P9 browser smoke suite stays PENDING here (gated on AGENTLENSPRO_BROWSER_TESTS=1)
       # so this matrix is untouched; the dedicated browser-smoke job below runs it.
+      # AGENTLENS_ALCORE names the binary for alcoreBin() (src/rustBinResolve.ts), which
+      # setupVerb/hookSpool tests spawn directly — freePort.ts's own fallback path finds it
+      # by relative path, but alcoreBin() does not (TRDD-EJDNNDY3).
       - name: Unit tests
+        env:
+          AGENTLENS_ALCORE: ${{ github.workspace }}/rust-core/target/release/alcore
         run: npx mocha
 
   # ── P9 dashboard browser smoke suite ─────────────────────────────────────────
@@ -128,6 +132,7 @@ jobs:
   # ephemeral ports with a temp data dir, then drives the served dashboard with
   # puppeteer-core against a system Chrome/Chromium.
   browser-smoke:
+    needs: [build-alcore]
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -163,18 +168,32 @@ jobs:
           echo "Resolved browser: $BIN"
           echo "CHROME_PATH=$BIN" >> "$GITHUB_ENV"
 
-      # The suite boots the BUILT standalone/server.js — bundles must exist first.
+      # The suite spawns the alcore binary and serves the dashboard it bundles here —
+      # bundles must exist first (media/dashboard.js, media/sidebar.js are esbuild outputs).
       - name: Build bundles
         run: node esbuild.js
 
       - name: Compile tests
         run: npx tsc -p tsconfig.test.json
 
+      # alcore is the only server that ships (TRDD-1B98LCVR box 4) — the suite's own
+      # `before all` hook asserts the binary is present and spawns it directly.
+      - name: Download alcore binary
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: alcore-linux-x64
+          path: rust-core/target/release
+
+      # ZIP round-trips (upload-artifact/download-artifact) drop the unix executable bit.
+      - name: Make alcore executable
+        run: chmod +x rust-core/target/release/alcore
+
       # --no-config: .mocharc.cjs would union its spec glob (the whole unit suite)
       # with the positional file; the isolated invocation needs only this suite.
       - name: Browser smoke suite
         env:
           AGENTLENSPRO_BROWSER_TESTS: '1'
+          AGENTLENS_ALCORE: ${{ github.workspace }}/rust-core/target/release/alcore
         run: npx mocha --no-config --ui tdd out/test/test/browser/dashboardSmoke.test.js
 
   # ── alcore release build for the unit suite (TRDD-1B98LCVR box 4 prerequisite) ──
