@@ -1,11 +1,10 @@
 ---
 trdd-id: EAK9R8IY
 title: Ship the Rust binaries per-platform on npm — the missing prerequisite for box 3
-column: blocked
-pre-block-column: testing
-blocked-by: [user-publish-route-decision]
+column: superseded
+superseded-by: [1B98LCVR]
 created: 2026-08-22T19:33:31+0200
-updated: 2026-08-27T23:16:11+0200
+updated: 2026-09-03T10:55:14+0200
 current-owner: main
 task-type: infra
 scope: project
@@ -16,6 +15,16 @@ min-approval-requirement: manager
 ---
 
 # Ship the Rust binaries per-platform on npm — the missing prerequisite for box 3
+
+**SUPERSEDED 2026-09-03** — this card's per-platform `agentlenspro-<platform>` optionalDependency
+design was replaced by the owner's 2026-08-28 ruling in `CLAUDE.md` §"DISTRIBUTION vs
+DEVELOPMENT": *"There is exactly ONE package name, `agentlenspro`, and no other is ever
+created."* The four per-platform names could never be created via OIDC trusted publishing (npm
+cannot create a brand-new name that way), so [[TRDD-1B98LCVR]] shipped the Rust binaries inside
+the ONE `agentlenspro` tarball under `bin-native/<platform>-<arch>/` instead. Verified live:
+`bin-native` is wired through `package.json` `files` and `.github/workflows/publish.yml`'s
+`build-binaries`/`package` jobs; `package.json` carries no `agentlenspro-darwin*` name and no
+`optionalDependencies`.
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-08-27
 
@@ -350,3 +359,9 @@ what a published install does — that question is answered by the REGISTRY (`np
 `<repo>/standalone/cli.js`), so the two are the same file and nothing on disk can distinguish
 them. A claim about published installs drawn from this machine's disk is unfounded even when it
 happens to land on the right answer.
+- 2026-09-03T10:55:14+0200 — **SUPERSEDED** by main-session. The per-platform optionalDependency
+  design this card proposed was replaced by the owner's 2026-08-28 one-tarball ruling
+  (`CLAUDE.md` §"DISTRIBUTION vs DEVELOPMENT"); [[TRDD-1B98LCVR]] shipped the binaries under
+  `bin-native/` inside the single `agentlenspro` package instead. Verified `bin-native` wiring in
+  `package.json`/`publish.yml` and the absence of any `agentlenspro-<platform>` name or
+  `optionalDependencies`.

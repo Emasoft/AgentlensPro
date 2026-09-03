@@ -1,11 +1,9 @@
 ---
 trdd-id: DMWOBWFH
 title: Rewrite the server core in Rust with optimized SQL — TypeScript remains only for the UI
-column: blocked
-pre-block-column: human_review
-blocked-by: [1B98LCVR]
+column: complete
 created: 2026-08-18T17:00:52+0200
-updated: 2026-08-29T17:02:00+0200
+updated: 2026-09-03T10:54:10+0200
 current-owner: AgentlensPro session
 task-type: refactor
 severity: HIGH
@@ -2570,12 +2568,15 @@ silently absorbed, because a card that quietly drops its own acceptance criterio
       1.1s at 667% CPU) and class 2 (27.0s → 6.7s, binary 4.1s at 462% CPU) are benchmarked;
       class 3 is not a distinct class — measured at 0.004% of one core at the machine's real peak,
       it restates classes 1 and 2's bulk JSONL work; class 4 was a config fix, not a port.
-- [ ] TypeScript remaining in the repo serves only the UI (and, temporarily, the CLI shell).
+- [x] TypeScript remaining in the repo serves only the UI (and, temporarily, the CLI shell).
       **SCOPE DECIDED BY THE USER 2026-08-27: DELETE the TypeScript core — Rust only.** TypeScript
       remains for the **web UI alone** (`media/src/**`). The server core, the store/ingest path, the
       log readers and the summarizers all move to Rust and the TS originals are removed, not frozen
       and not kept as a fallback. Prerequisite: TRDD-EAK9R8IY must ship the per-platform binaries
       first, or published installs would have no engine at all.
+      **Closed 2026-09-03 by [[TRDD-1B98LCVR]] (complete, all boxes `[x]`)** — verified
+      `find standalone -name 'server.ts'` prints nothing and no `standalone/server` reference
+      remains in `package.json`/`esbuild.js`.
 
 ## Approval log
 
@@ -2602,6 +2603,9 @@ silently absorbed, because a card that quietly drops its own acceptance criterio
   that binary is absent — which is every published install. So closing box 3 means deciding the
   TS server's FATE, not having an alternative to it. [[TRDD-EAK9R8IY]] (ship the Rust binaries
   per-platform on npm) is the concrete prerequisite if the answer is "retire it".
+- 2026-09-03T10:54:10+0200 — COMPLETED by main-session. Box 3 satisfied by [[TRDD-1B98LCVR]]
+  reaching `complete` with all boxes `[x]`; verified no `standalone/server.ts` remains and no
+  live server entry in `package.json`/`esbuild.js`.
 
 ## Notes and lessons learned
 
