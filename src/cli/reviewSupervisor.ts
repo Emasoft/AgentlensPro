@@ -77,7 +77,18 @@ export function gateIsRegistered(settingsPaths: string[], readFile: (p: string) 
 /** How many unreviewed changes before the supervisor shouts. One is normal mid-turn; a pile is not. */
 export const UNREVIEWED_ALARM = 3
 
-export interface Verdict { level: 'ok' | 'warn' | 'alarm'; message: string }
+export interface Verdict {
+  level: 'ok' | 'warn' | 'alarm'
+  message: string
+  /**
+   * True when spawning a review fork CANNOT clear this alarm — the condition comes from the settings
+   * file, not the transcript. Blocking on it with the fork instruction is a deadlock: the agent does
+   * the thing it is told and the condition is untouched. Such a block must name the remedy that does
+   * work (`agentlenspro --install-hooks`, re-read from disk on the next fire) and must release
+   * rather than repeat if that did not help.
+   */
+  unsatisfiableByFork?: boolean
+}
 
 /**
  * The judgement. Deliberately loud in the two cases that were previously silent: the gate missing
@@ -88,7 +99,9 @@ export function judge(scan: SupervisorScan, registered: boolean, transcriptReada
     return {
       level: 'alarm',
       message: 'THE REVIEW GATE IS NOT REGISTERED. No Stop/SubagentStop hook runs `agentlenspro review-gate`, '
-        + 'so no turn is being reviewed. Re-install it with `agentlenspro --install-hooks` before continuing.',
+        + 'so no turn is being reviewed. Run `agentlenspro --install-hooks` NOW — spawning a review fork will NOT '
+        + 'fix this, because the condition is in the settings file, not the transcript.',
+      unsatisfiableByFork: true,
     }
   }
   if (!transcriptReadable) {
@@ -116,7 +129,7 @@ export function judge(scan: SupervisorScan, registered: boolean, transcriptReada
   return { level: 'ok', message: `review supervisor: ${scan.forks} review(s) for ${scan.work} change(s) in the scanned window, ${scan.unreviewed} unreviewed.` }
 }
 
-interface SupervisorInput { transcript_path?: unknown; session_id?: unknown; hook_event_name?: unknown; hookEventName?: unknown }
+interface SupervisorInput { transcript_path?: unknown; session_id?: unknown; hook_event_name?: unknown; hookEventName?: unknown; stop_hook_active?: unknown }
 
 function settingsCascade(cwd: string): string[] {
   return [
@@ -161,6 +174,18 @@ export async function runReviewSupervisor(): Promise<number> {
   const tag = verdict.level === 'alarm' ? '🚨 REVIEW SUPERVISOR' : '⚠ Review supervisor'
 
   if (event === 'Stop' || event === 'SubagentStop') {
+    // A block whose remedy the agent has ALREADY attempted must not repeat: `stop_hook_active` means
+    // a Stop hook blocked this same stop before. For the backlog alarm the remedy is a fork and the
+    // scan proves whether it landed, so repeating is correct and this flag is ignored. For a
+    // settings-derived alarm nothing in the transcript can ever clear it, so repeating is a DEADLOCK
+    // — release with the warning still shown. (review: "no in-session exit".)
+    const alreadyBlocked = input?.stop_hook_active === true
+    if (verdict.level === 'alarm' && verdict.unsatisfiableByFork && alreadyBlocked) {
+      process.stdout.write(JSON.stringify({
+        systemMessage: `${tag}: ${verdict.message} — STILL UNRESOLVED after a block; releasing the stop so the session is not wedged. THE REVIEW IS NOT RUNNING.`,
+      }))
+      return 0
+    }
     if (verdict.level === 'alarm') {
       process.stdout.write(JSON.stringify({
         decision: 'block',
