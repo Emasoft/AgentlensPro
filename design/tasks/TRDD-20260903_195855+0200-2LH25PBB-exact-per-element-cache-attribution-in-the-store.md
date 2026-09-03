@@ -139,6 +139,35 @@ Enforced by a schema guard that scans every parquet file and fails when any colu
 one physical type — the check run by hand above, made permanent, because an unguarded invariant of
 this kind fails silently and only shows up as a store that quietly stopped compressing.
 
+**Correction 2d — a wide buffer of pre-allocated column pairs is MEASURABLY WORSE, tested on its own
+best case.** The proposal: reserve ~60 skill and ~40 agent column pairs (value + order index),
+assigning each element to the column that held it in the row above, so every column becomes
+near-constant and compresses ~90%. Tested on `tools`, the ideal fit (26,258,956 rows, only 1,029
+distinct values, and `tools[i]` is the same tool every turn, so assignment is perfectly stable with
+zero drift). 1,023,755 tool elements over 19,307 bodies, 96 columns:
+
+| form | bytes |
+|---|---|
+| long, one row per element | 1,871,899 |
+| wide, 96 stable columns | 2,275,728 |
+| **long smaller by** | **1.22×** |
+
+Why the intuition inverts: repetition DOWN a column is what columnar compression eats, so
+concentrating identical values into long vertical runs beats spreading them across many columns. In
+the long form `body_id` repeats a million times and RLE crushes it; in the wide form its single
+column holds 19,307 distinct keys with no run to exploit and costs 1,185,814 bytes on its own —
+more than all 96 dictionary-encoded tool columns together (1,089,914). The wide table also holds
+96 × 19,307 = 1.85M cells against 1.02M rows, since short bodies pad with nulls.
+
+Two further reasons it cannot be built as described: the wire body has **no skills or agents array**
+(elements are `messages`, `tools`, `system`, `metadata`; skills and agents are text INSIDE a system
+block or message), so those columns would bind to nothing; and a reused buffer violates Correction 2c
+— a column holding skill A for one session and skill B for the next is heterogeneous by
+construction, so it compresses worse than this drift-free test.
+
+What the idea gets right is query locality, and that is answered by sorting the long form on
+`(position, body_id)` without paying 1.22× on every byte.
+
 **Correction 3 — 273 million rows of JSON punctuation are waste, and that is the owner's point
 landing.** Of 457.7M part rows only 184.6M carry content; the rest are commas, braces and field
 names stored one row each — 60% of the largest table holding syntax that is reconstructable from the
