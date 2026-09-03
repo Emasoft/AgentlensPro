@@ -100,17 +100,36 @@ const READONLY = new Set([
   'ls', 'cat', 'bat', 'head', 'tail', 'less', 'more', 'file', 'stat', 'wc', 'du', 'df',
   'find', 'grep', 'rg', 'ag', 'ack', 'fd', 'diff', 'cmp', 'md5', 'shasum', 'sha256sum',
   'realpath', 'readlink', 'dirname', 'basename', 'pwd', 'echo', 'printf', 'which', 'type',
-  'tree', 'jq', 'yq', 'awk', 'cut', 'sort', 'uniq', 'nl', 'strings', 'xxd', 'od',
+  'tree', 'jq', 'yq', 'cut', 'sort', 'uniq', 'nl', 'strings', 'xxd', 'od',
+  // NOT here, deliberately: sed/perl/python/ruby/node/tee/rsync/tar/install/truncate write by
+  // design. `awk` was in this set and was REMOVED — it looks like a text filter but is a
+  // general-purpose language with `system()` and `print > file`, so `awk '{system("rm " $0)}' path`
+  // is a write with no redirect character anywhere for the redirect check to catch.
 ])
-const MUTATING_FLAGS = /(?:^|\s)-(?:delete|exec|execdir|fprint|fls|ok|okdir|i|o)\b/
+// PER-COMMAND, because the same letter means opposite things. `-i` is IN-PLACE for sed and perl but
+// IGNORE-CASE for grep and diff; `-o` writes a file for sort but means only-matching for grep.
+// A global flag list denied `grep -i foo <path>` and `diff -i a b` — measured 2026-09-03, and those
+// are among the most common commands an agent runs, so the exemption would have been worthless.
+const MUTATING_FLAGS = {
+  find: /(?:^|\s)-(?:delete|exec|execdir|fprint|fls|ok|okdir)\b/,
+  sort: /(?:^|\s)-o\b/,
+}
 
-/** True when this segment only READS. A redirect or a mutating flag disqualifies it regardless of
- *  the command name. */
+/** Redirects that WRITE. `2>&1` merges stderr into stdout and creates nothing; a `>` inside a
+ *  quoted argument (`grep "a > b" f`) is data, not syntax — both were denied before quotes were
+ *  stripped and the fd-dup form excluded. */
+function hasWritingRedirect(segment) {
+  const unquoted = segment.replace(/'[^']*'|"[^"]*"/g, ' ')
+  return /(?:^|\s)\d?>>?(?!&\d)/.test(unquoted)
+}
+
+/** True when this segment only READS. Read-only-ness is a property of the INVOCATION, not the name:
+ *  a writing redirect or a command-specific mutating flag disqualifies it. */
 function isReadOnlySegment(segment, word) {
   if (!READONLY.has(word)) return false
-  if (/[><]/.test(segment)) return false          // any redirect can write
-  if (MUTATING_FLAGS.test(segment)) return false  // find -delete/-exec, sed -i, sort -o
-  return true
+  if (hasWritingRedirect(segment)) return false
+  const flags = MUTATING_FLAGS[word]
+  return !(flags && flags.test(segment))
 }
 
 const isExcluded = (p) => SAFE_EXACT.has(p) || SAFE_PREFIX.some((r) => p === r || p.startsWith(r + path.sep))
@@ -262,17 +281,37 @@ process.stdin.on('end', () => {
     // `ls /tmp/link && cp x /tmp/link/y` is half read-only, and exempting the line would exempt the
     // half that writes. Splitting on the same separators the shell uses keeps each verb judged on
     // its own arguments.
-    for (const segment of cmd.split(/(?:\|\||&&|[;&|\n])+/)) {
-      const trimmed = segment.trim()
-      if (!trimmed) continue
-      const tokens = trimmed.split(/\s+/)
-      let i = 0
-      while (i < tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i])) i++
-      const word = (tokens[i] || '').replace(/^['"]+/, '').split('/').pop()
-      if (isReadOnlySegment(trimmed, word)) continue
-      for (const tok of pathTokens(trimmed)) {
-        const found = firstSymlink(tok.resolved)
-        if (found) { hit = { ...found, raw: tok.raw }; break }
+    // `2>&1` must be neutralised BEFORE segmenting: `&` is a separator, so the split tears it into
+    // `2>` and `1`, and the orphaned `2>` then reads as a bare writing redirect. Measured
+    // 2026-09-03 — `ls <symlink> 2>&1` was denied, which is a pure stderr merge that creates
+    // nothing.
+    const segmentable = cmd.replace(/\d?>&\d?/g, ' ')
+    // PIPELINES FIRST. A read-only command is only harmless if its OUTPUT goes nowhere dangerous:
+    // `ls /tmp/link | oppa` reads through the symlink and hands the result to a binary we know
+    // nothing about (owner, 2026-09-03: "you don't know what oppa does, but since ls pipes its
+    // output into oppa, you must trigger the protection"). Judging stages independently made this
+    // ALLOW — `ls` was exempt and `oppa` named no path. So a stage keeps its exemption only when
+    // EVERY stage of its pipeline is itself known-read-only: `ls x | grep y` stays quiet, and one
+    // unknown command anywhere in the chain re-arms the whole pipeline.
+    for (const pipeline of segmentable.split(/(?:\|\||&&|[;&\n])+/)) {
+      const stages = pipeline.split('|').map((x) => x.trim()).filter(Boolean)
+      if (!stages.length) continue
+      const commandWord = (seg) => {
+        const t = seg.split(/\s+/)
+        let i = 0
+        while (i < t.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(t[i])) i++
+        return (t[i] || '').replace(/^['"]+/, '').split('/').pop()
+      }
+      const wholePipelineReadOnly = stages.every((st) => isReadOnlySegment(st, commandWord(st)))
+      for (const segment of stages) {
+        const trimmed = segment.trim()
+        if (!trimmed) continue
+        if (wholePipelineReadOnly) continue
+        for (const tok of pathTokens(trimmed)) {
+          const found = firstSymlink(tok.resolved)
+          if (found) { hit = { ...found, raw: tok.raw }; break }
+        }
+        if (hit) break
       }
       if (hit) break
     }

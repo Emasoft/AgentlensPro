@@ -50,6 +50,27 @@ check(run(`ls ${link} >> log`).denied, 'append redirect too')
 check(run(`find ${link} -delete`).denied, 'find -delete mutates')
 check(run(`find ${link} -exec rm {} ;`).denied, 'find -exec mutates')
 check(run(`cp x ${link} && ls ${link}`).denied, 'a mixed line is judged per segment, not as a whole')
+// The case above passes under BOTH per-segment and judge-by-first-word, so it pins nothing. This
+// one distinguishes them: read-only FIRST, mutating second. First-word judgement would allow it.
+check(run(`ls ${link} && cp x ${link}`).denied, 'read-only first, mutating second: still denied')
+check(run(`awk '{system("rm " $0)}' ${link}/f`).denied, 'awk is a language with system(), not a read-only filter')
+
+// PIPING re-arms the exemption. A read-only command is harmless only if its OUTPUT goes nowhere
+// dangerous — `ls <symlink> | oppa` reads through the link and hands the result to an unknown
+// binary. Judging stages independently allowed exactly this.
+check(run(`ls ${link} | oppa`).denied, 'read-only piped into an UNKNOWN binary re-arms the guard')
+check(run(`cat ${link}/f | xargs rm`).denied, 'cat piped into xargs rm')
+check(!run(`ls ${link} | grep foo`).denied, 'a pipeline of ALL-known-read-only stages stays exempt')
+check(!run(`cat ${link}/f | head -5 | wc -l`).denied, 'three read-only stages stay exempt')
+
+// The flag letters mean OPPOSITE things per command, and a global list denied the two most common
+// read-only invocations an agent runs. Measured 2026-09-03; pinned so it cannot regress.
+check(!run(`grep -i foo ${link}/f`).denied, 'grep -i is IGNORE-CASE, not in-place')
+check(!run(`diff -i ${link}/a ${link}/b`).denied, 'diff -i is ignore-case too')
+check(!run(`ls ${link} 2>&1`).denied, '2>&1 merges stderr and creates nothing')
+check(!run(`grep "a > b" ${link}/f`).denied, 'a > inside a quoted ARGUMENT is data, not a redirect')
+check(run(`sort -o ${link}/out ${link}/in`).denied, 'sort -o DOES write in place')
+check(run(`sed -i s/a/b/ ${link}/f`).denied, 'sed is not read-only at all')
 
 // --- paths with SPACES. Routine on macOS; all three spellings silently bypassed the guard until
 // --- quoted segments were extracted whole (measured 2026-09-03).
