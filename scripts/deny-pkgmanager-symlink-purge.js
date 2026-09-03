@@ -86,10 +86,19 @@ function effectiveCwd(segment, sessionCwd) {
  *  allowed. */
 function checkoutRoot(dir) {
   let cur = path.resolve(dir)
+  // The OUTERMOST project marker, not the nearest: in a monorepo `packages/a` has its own
+  // package.json, but the store its node_modules links into lives at the WORKSPACE root. Anchoring
+  // on the nearest marker makes that legitimate link an escape and denies every pnpm command in
+  // the repo. Measured 2026-09-03: keying only on `.git` did exactly this to a workspace that is
+  // not a git checkout (a vendored copy, a docker build context, an extracted tarball).
+  let outermostProject = null
   for (;;) {
-    if (fs.existsSync(path.join(cur, '.git'))) return cur
+    if (fs.existsSync(path.join(cur, '.git'))) return cur // a checkout boundary wins outright
+    if (fs.existsSync(path.join(cur, 'pnpm-workspace.yaml')) || fs.existsSync(path.join(cur, 'package.json'))) {
+      outermostProject = cur
+    }
     const parent = path.dirname(cur)
-    if (parent === cur) return null
+    if (parent === cur) return outermostProject
     cur = parent
   }
 }
