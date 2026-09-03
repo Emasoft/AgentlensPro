@@ -21,7 +21,10 @@ export interface RequestElement {
   path: CachePath
   /** Index within its own field, as sent. */
   idx: number
-  /** Content identity — a sha256 for a stored blob, or the literal text for an inline element. */
+  /**
+   * Content identity. MUST be built with `elementKey()` (or a hash of its output) — raw bytes are
+   * not the identity here, and using them agreed with billed usage on 0 of 300 measured turns.
+   */
   key: string
   /** Exact byte length. Never an estimate. */
   bytes: number
@@ -49,7 +52,59 @@ export type ElementClass =
  * re-write and report a total prefix loss on an account measurably running at 99% hit.
  */
 export function isKeyExcludedText(text: string): boolean {
-  return text.trimStart().toLowerCase().startsWith('x-anthropic-billing-header')
+  // Accepts the STORED form too. The element as captured is the whole JSON block,
+  // `{"type":"text","text":"x-anthropic-billing-header: …"}`, so a prefix test on the raw block
+  // returns false and the exclusion silently does nothing — measured during validation.
+  return /x-anthropic-billing-header/i.test(text.slice(0, 200))
+}
+
+const CACHE_CONTROL = 'cache_control'
+
+function stripCacheControl(v: unknown): unknown {
+  if (Array.isArray(v)) return v.map(stripCacheControl)
+  if (v && typeof v === 'object') {
+    const out: Record<string, unknown> = {}
+    for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
+      if (k === CACHE_CONTROL) continue
+      out[k] = stripCacheControl(val)
+    }
+    return out
+  }
+  return v
+}
+
+/**
+ * Content identity for an element — the value `RequestElement.key` MUST be built from.
+ *
+ * Raw bytes are NOT the identity, and using them falsifies the whole classifier: measured over 300
+ * real turns, raw-byte identity agreed with billed usage on 0 of them (median structural read share
+ * 0.267 against a billed 0.998), while this normalization agrees on 296 (median error 1.6e-4).
+ *
+ * The reason is that Claude Code moves its trailing `cache_control` marker onto each new last
+ * message, and the move mutates that message TWICE:
+ *   (a) the key toggles: `…,"is_error":false,"cache_control":{…}}` <-> `…,"is_error":false}`
+ *   (b) the shape changes: `content:"…"` <-> `content:[{"type":"text","text":"…","cache_control":{…}}]`
+ *       — a bare string has nowhere to hang a marker, so it gets wrapped.
+ * A purely textual strip fixes (a) only and still fails 176 of 300 turns; both must be normalized.
+ *
+ * Anthropic does not bill either mutation as a change — the billed read share stays at 0.998 through
+ * them — so the marker and its wrapper are outside the cache key, the same status the billing header
+ * has. Unparseable input falls back to the raw text rather than throwing, so a capture oddity
+ * degrades to byte identity instead of losing the element.
+ */
+export function elementKey(raw: string): string {
+  try {
+    const parsed = JSON.parse(raw) as unknown
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      const obj = parsed as Record<string, unknown>
+      if (typeof obj['content'] === 'string') {
+        obj['content'] = [{ type: 'text', text: obj['content'] }]
+      }
+    }
+    return JSON.stringify(stripCacheControl(parsed))
+  } catch {
+    return raw
+  }
 }
 
 const rankOf = (p: CachePath): number => CACHE_ORDER.indexOf(p)
@@ -225,6 +280,14 @@ export interface Reconciliation {
  *
  * Shares are compared rather than absolute counts because the structural side is measured in bytes
  * and the billed side in tokens. `tolerance` is the share difference treated as agreement.
+ *
+ * KNOWN GAP, measured: on 4 of 300 validated turns the structural boundary is right and billed still
+ * disagrees, in two shapes. Two were TTL/eviction — one pair was BYTE-IDENTICAL (same body_id) after
+ * a 1,422 s idle gap and still paid a ~600k full-prefix write, which no content diff can ever
+ * explain. The other two hit a cache entry written by an EARLIER turn whose trailing marker sat
+ * before a mid-list edit, so `survivingBoundary(prev, …)` cannot see the entry that was actually
+ * used and falls back to the system head. Both are why billed is the oracle and why a disagreement
+ * must be shown rather than smoothed away.
  *
  * KNOWN BIAS, stated rather than hidden: bytes-per-token is not constant across content. Dense JSON
  * tool schemas tokenize at a different rate than prose, so a turn whose cached region is mostly
