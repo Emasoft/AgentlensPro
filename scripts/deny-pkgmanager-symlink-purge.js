@@ -107,8 +107,11 @@ function checkoutRoot(dir) {
  *    at user scope means every project on the machine. A guard that reddens on correct work gets
  *    disabled, and then it protects nothing. */
 function escapingModules(dir) {
-  const root = checkoutRoot(dir)
-  if (!root) return null // outside any checkout: no tree to escape from
+  // No `.git` ancestor is NOT a reason to allow: a plain scratch dir, an extracted tarball or a
+  // `cp -r` of a project can all hold an escaping node_modules, and that is the original incident
+  // with one file removed. Fall back to the cwd as the boundary — the workspace false positive that
+  // forced the checkout-root anchor only arises INSIDE a checkout, so this cannot resurrect it.
+  const root = checkoutRoot(dir) ?? path.resolve(dir)
   let realRoot
   try { realRoot = fs.realpathSync(root) } catch { return null }
   let cur = path.resolve(dir)

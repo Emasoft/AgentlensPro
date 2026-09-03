@@ -45,6 +45,12 @@ fs.mkdirSync(path.join(ws, '.git'), { recursive: true })
 fs.mkdirSync(wsPkg, { recursive: true })
 fs.symlinkSync(path.join(ws, 'node_modules', '.pnpm', 'dep'), path.join(wsPkg, 'node_modules'))
 
+// NO .git ANYWHERE: a plain scratch dir, an extracted tarball, a `cp -r` of a project. This is the
+// original incident with one file removed, and it was ALLOWED until the checkout-root fallback.
+const bare = path.join(root, 'bare-scratch')
+fs.mkdirSync(bare, { recursive: true })
+fs.symlinkSync(path.join(repo, 'node_modules'), path.join(bare, 'node_modules'))
+
 const run = (command, cwd) => {
   const out = execFileSync('node', [GUARD], {
     input: JSON.stringify({ tool_input: { command }, cwd }),
@@ -64,6 +70,8 @@ const cases = [
   [true, '/opt/homebrew/bin/pnpm install', worktree, 'matched by basename, not by bare name'],
   [true, `cd '${worktree}' && pnpm i`, repo, 'quoted cd target'],
 
+  [true, 'pnpm install', bare, 'NO .git: an escaping node_modules is still an escape'],
+
   [false, 'pnpm install', repo, 'REAL node_modules is allowed — this is the remedy, never block it'],
   [false, 'pnpm install', selfLink, 'a symlink that stays inside the checkout is not an escape'],
   [false, 'pnpm install', root, 'no node_modules anywhere above: nothing to purge'],
@@ -74,6 +82,18 @@ const cases = [
   [false, `cd ${worktree} && node_modules/.bin/tsc -p tsconfig.test.json`, repo, 'ditto for tsc'],
   [false, `cd ${worktree} || pnpm install`, repo, 'cd FAILED branch: pnpm never enters the worktree'],
   [false, `( cd ${worktree} && true ) ; pnpm install`, repo, 'subshell cd does not affect the parent'],
+  // SHELL-SEMANTICS ROW SET. Each expectation was verified against a REAL bash on 2026-09-03 by
+  // printing the pwd the second command actually sees — not inferred from this guard's code, which
+  // is what makes them capable of finding its bugs. They found four: `npx` missing from the
+  // launcher skip-list, `&` denying a command that never enters the dir, `pushd` invisible, and a
+  // reset-on-`(` that discarded a cd genuinely in effect.
+  [true, `cd ${worktree} && npx pnpm install`, repo, 'npx launcher is skipped to reach the real command word'],
+  [true, `pushd ${worktree} && pnpm install`, repo, 'pushd changes dir exactly like cd'],
+  [true, `( cd ${worktree} && pnpm install )`, repo, 'whole command inside a subshell'],
+  [true, `cd ${worktree} ; ( pnpm install )`, repo, 'a subshell INHERITS the parent cwd'],
+  [true, `{ cd ${worktree} && pnpm install; }`, repo, 'a brace group runs in the CURRENT shell'],
+  [false, `cd ${worktree} & pnpm install`, repo, '`&` backgrounds the cd: pnpm runs in the original dir'],
+  [false, `cd ${worktree} | pnpm install`, repo, 'a pipe stage is a subshell: cwd does not propagate'],
   [false, 'echo "pnpm run build"', worktree, 'prose mentioning pnpm inside quotes'],
   [false, 'git commit -m "fix pnpm purge guard"', worktree, 'a commit message naming pnpm'],
 ]
@@ -85,6 +105,20 @@ for (const [expectDeny, command, cwd, desc] of cases) {
   const ok = got === expectDeny
   if (!ok) failed++
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${expectDeny ? 'deny ' : 'allow'}  ${desc}`)
+}
+
+// DRIFT GUARD. The live copy is installed at ~/.claude/hooks/ and is the one that actually runs;
+// this repo copy is the source of truth. Nothing else links them, so without this assertion the two
+// diverge silently and the tests go on passing against the copy nobody executes — the same shape as
+// a stale bundle passing checks that never build it. Skipped (not failed) when no copy is installed,
+// so this suite still passes on a machine that never ran the install.
+const installed = path.join(os.homedir(), '.claude', 'hooks', 'deny-pkgmanager-symlink-purge.js')
+if (fs.existsSync(installed)) {
+  const same = fs.readFileSync(installed, 'utf8') === fs.readFileSync(GUARD, 'utf8')
+  if (!same) failed++
+  console.log(`${same ? 'PASS' : 'FAIL'}  ----   installed copy at ~/.claude/hooks is byte-identical to this one`)
+} else {
+  console.log('SKIP  ----   no installed copy at ~/.claude/hooks (nothing to drift from)')
 }
 
 // Unparseable stdin must not block: a guard that denies every Bash call because it could not read
