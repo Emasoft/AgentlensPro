@@ -1,5 +1,5 @@
 import * as assert from 'assert'
-import { judge, scanSupervision, gateIsRegistered, UNREVIEWED_ALARM } from '../cli/reviewSupervisor'
+import { judge, scanSupervision, gateIsRegistered, contextEvent, UNREVIEWED_ALARM } from '../cli/reviewSupervisor'
 
 // The supervisor's whole purpose is to be the check that STILL WORKS when the review gate does not,
 // so shipping it untested would have been the same mistake it exists to catch. Its own review said
@@ -117,6 +117,23 @@ suite('reviewSupervisor — warns without ever blocking', () => {
                      judge({ work: 9, forks: 1, unreviewed: 4 }, true, true),
                      judge({ work: 2, forks: 0, unreviewed: 2 }, true, true)]) {
       assert.ok(!('decision' in v), 'the verdict must never carry a block decision')
+    }
+  })
+})
+
+// The harness pins hookEventName per event schema, so echoing an unexpected value makes the whole
+// hookSpecificOutput fail validation and the injection vanish SILENTLY — the failure this component
+// exists to catch, in the component itself.
+suite('reviewSupervisor — the injection channel cannot be silently dropped', () => {
+  const supported = ['Stop', 'SubagentStop', 'UserPromptSubmit']
+
+  test('only events whose schema accepts additionalContext are echoed back', () => {
+    for (const e of supported) assert.strictEqual(contextEvent(e), e)
+  })
+
+  test('an unsupported or empty event falls back to a channel known to work', () => {
+    for (const e of ['SessionStart', 'PreToolUse', 'Bogus', '']) {
+      assert.strictEqual(contextEvent(e), 'UserPromptSubmit', `${e} must not be echoed back`)
     }
   })
 })

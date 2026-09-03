@@ -132,6 +132,21 @@ function settingsCascade(cwd: string): string[] {
   ]
 }
 
+/**
+ * The events whose schema accepts `additionalContext` — the MODEL-facing channel. Verified against
+ * the harness binary's own hook schemas: Stop, SubagentStop and UserPromptSubmit each pin
+ * `hookEventName` to their own literal, so echoing an unexpected value makes the whole
+ * `hookSpecificOutput` fail its schema and the injection is dropped SILENTLY.
+ *
+ * Registering the supervisor on a fourth event would therefore make it look installed and deliver
+ * nothing — the exact silent failure this component exists to catch. Falling back keeps the warning
+ * flowing on a channel that is known to work, instead of guessing with the caller's value.
+ */
+const CONTEXT_EVENTS = new Set(['Stop', 'SubagentStop', 'UserPromptSubmit'])
+export function contextEvent(event: string): string {
+  return CONTEXT_EVENTS.has(event) ? event : 'UserPromptSubmit'
+}
+
 async function readStdin(stream: NodeJS.ReadStream): Promise<Buffer> {
   const chunks: Buffer[] = []
   for await (const c of stream) chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(String(c)))
@@ -139,21 +154,17 @@ async function readStdin(stream: NodeJS.ReadStream): Promise<Buffer> {
 }
 
 /**
- * Entry point. Registered on BOTH `UserPromptSubmit` and `Stop`, and the channel differs because
- * what reaches the agent differs:
+ * Entry point. Registered on BOTH `UserPromptSubmit` and `Stop`, and it NEVER blocks on either.
  *
- *   - UserPromptSubmit → `systemMessage` (the USER sees it) + `additionalContext` (the AGENT sees
- *     it). Non-blocking; this is the routine heartbeat.
- *   - Stop → on ALARM, a `decision: "block"` with a reason, because at a stop that is the only
- *     channel the AGENT reliably reads. THIS IS THE POINT: on 2026-09-03 an entire session ran with
- *     no review and the agent never noticed, because nothing told it at the moment it was finishing.
- *     Warning the user alone is useless when the user is asleep.
+ * Both channels are emitted every time the verdict is not `ok`:
+ *   - `systemMessage` — the USER sees it.
+ *   - `hookSpecificOutput.additionalContext` — the MODEL sees it. Verified against the harness's own
+ *     hook schemas: Stop, SubagentStop and UserPromptSubmit each accept `additionalContext` from a
+ *     NON-blocking hook, so injecting reaches the agent without holding the turn.
  *
- * The Stop block is a BACKSTOP, not a second gate: it fires only on ALARM (the gate is not
- * registered at all, or the unreviewed backlog has piled up), so a working gate means this never
- * blocks. Its exit is the same as the gate's — spawn the review — so it cannot demand something
- * unachievable, and a `warn` never blocks anything.
- */
+ * Blocking was tried and removed the same day. It could deadlock a session on a condition no action
+ * of the agent's could clear, which is worse than the unreviewed turn it guards. Enforcement is the
+ * gate's job; this one only has to be impossible to silence. */
 export async function runReviewSupervisor(): Promise<number> {
   let input: SupervisorInput = {}
   try { input = JSON.parse((await readStdin(process.stdin)).toString('utf8')) as SupervisorInput } catch { /* keep defaults */ }
@@ -173,7 +184,7 @@ export async function runReviewSupervisor(): Promise<number> {
   // against. Enforcement stays the gate's job; this one only has to be impossible to silence.
   process.stdout.write(JSON.stringify({
     systemMessage: `${tag}: ${verdict.message}`,
-    hookSpecificOutput: { hookEventName: event || 'UserPromptSubmit', additionalContext: `[review-supervisor] ${verdict.message}` },
+    hookSpecificOutput: { hookEventName: contextEvent(event), additionalContext: `[review-supervisor] ${verdict.message}` },
   }))
   return 0
 }
