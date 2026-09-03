@@ -1,9 +1,9 @@
 ---
 trdd-id: EJDNNDY3
 title: CI unit and browser-smoke jobs never see the alcore binary
-column: proposal
+column: planned
 created: 2026-09-02T21:31:43+0200
-updated: 2026-09-02T21:31:43+0200
+updated: 2026-09-03T11:08:50+0200
 current-owner: main-session
 task-type: infra
 priority: high
@@ -90,3 +90,6 @@ gh run view <run-id> --repo Emasoft/AgentlensPro --json jobs --jq '.jobs[] | {na
 
 ## Approval log
 
+- 2026-09-03T11:08:50+0200 — APPROVED by main-session on the USER's delegation
+  (min-approval-requirement: manager). Failure reconfirmed live on CI run 33667160582 (main
+  red since f8b7560e); diagnosis verified line-by-line in the review sweep.
