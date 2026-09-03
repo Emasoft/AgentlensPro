@@ -43,6 +43,7 @@ interface ReviewGateInput {
   agent_id?: unknown
   agent_type?: unknown
   agent_transcript_path?: unknown
+  tool_name?: unknown
   /** Set by Claude Code when a Stop hook already blocked this same stop — the harness's own
    *  loop breaker. Honoured before anything else: with it ignored, an unwritable tmpdir (the
    *  counter never persists) blocked every fire forever (review of dca6c45, F1). */
@@ -310,10 +311,51 @@ async function runSubagentGate(input: ReviewGateInput): Promise<string | null> {
 
 // ── Process entry for `agentlenspro review-gate` ───────────────────────────────────────────────
 
+/**
+ * ONE TURN, ENFORCED — a review fork may never take a second turn (owner order, 2026-09-03:
+ * "it must NEVER run a second turn").
+ *
+ * The economics, measured tonight: a fork inherits the parent's WARM prefix, so a single turn that
+ * answers inline costs almost nothing. Every tool call is another turn, and a subagent's turn 2 goes
+ * COLD — Claude Code appends `cc_prev_req=` to `system[0]`, which sits BEFORE the cache breakpoints,
+ * so the entire prefix is re-written at the cache-WRITE rate (measured on this machine: 89 identical
+ * tool schemas re-written, `cache_read` 0, 84,158 tokens written). Six multi-turn review forks in one
+ * evening cost ~4.6M tokens; the first zero-tool-call fork cost one warm read and answered in 18s.
+ *
+ * WHAT THIS DOES AND DOES NOT DO — stated exactly, because the distinction is the whole point.
+ * A PreToolUse deny does NOT prevent a second turn: the fork emits the tool_use in turn 1, the deny
+ * returns as a tool RESULT, and reacting to it costs one more request — the cold one. This is damage
+ * LIMITATION, capping a runaway 23-tool-call review at two turns, not a guarantee of one.
+ *
+ * `maxTurns` is the only mechanism that truly stops turn 2, and it is unavailable for a reason worth
+ * recording: a fork is free on turn 1 only while its request is byte-identical to the parent's, and
+ * anything that perturbs the spawn risks breaking that prefix — trading the guarantee for the very
+ * cost it was meant to avoid. Until that is measured rather than assumed, one turn is achieved by
+ * the PROMPT (answer inline, no tool calls) and this deny is the backstop for when it is ignored.
+ *
+ * FAIL-OPEN on an absent `agent_type`: only a payload that positively identifies a fork is denied, so
+ * a harness that does not carry the field degrades to today's behaviour instead of blocking the main
+ * agent's every tool call.
+ */
+export function denyForkToolCall(agentType: string, toolName: string): string | null {
+  if (!/fork/i.test(agentType)) return null
+  return JSON.stringify({
+    hookSpecificOutput: {
+      hookEventName: 'PreToolUse',
+      permissionDecision: 'deny',
+      permissionDecisionReason:
+        `Review forks answer in ONE turn with NO tool calls — ${toolName} is denied. A fork inherits the `
+        + 'parent context, so everything needed is already in it; a second turn re-writes the whole prefix at '
+        + 'the cache-WRITE rate. Put your findings inline in your final message and stop.',
+    },
+  })
+}
+
 /** `agentlenspro review-gate [--directive]`. Always resolves 0 — a Stop/SubagentStop hook that
  *  can throw or hang can wedge the session, which is worse than a missed review. Dispatches on
- *  `hook_event_name`: `SubagentStop` -> the subagent gate, `Stop` (or an absent field, honored the
- *  same way the ported scripts did) -> the main gate. Any other event is a silent allow. */
+ *  `hook_event_name`: `PreToolUse` -> the fork one-turn deny, `SubagentStop` -> the subagent gate,
+ *  `Stop` (or an absent field, honored the same way the ported scripts did) -> the main gate. Any
+ *  other event is a silent allow. */
 export async function runReviewGate(argv: string[]): Promise<number> {
   if (argv[0] === '--directive') {
     process.stdout.write(REVIEW_GATE_DIRECTIVE)
@@ -336,6 +378,11 @@ export async function runReviewGate(argv: string[]): Promise<number> {
   try { input = JSON.parse(payload.toString('utf8')) as ReviewGateInput } catch { return 0 }
   const evt = input?.hook_event_name ?? input?.hookEventName
   let out: string | null = null
+  if (evt === 'PreToolUse') {
+    out = denyForkToolCall(String(input?.agent_type ?? ''), String(input?.tool_name ?? 'that tool'))
+    if (out) process.stdout.write(out)
+    return 0
+  }
   if (evt === 'SubagentStop') {
     out = await runSubagentGate(input)
   } else if (typeof evt !== 'string' || evt === 'Stop') {
