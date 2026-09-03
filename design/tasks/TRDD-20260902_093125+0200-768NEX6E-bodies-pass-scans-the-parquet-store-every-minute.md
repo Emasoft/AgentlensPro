@@ -1,14 +1,16 @@
 ---
 trdd-id: 768NEX6E
 title: What does the 60 s bodies pass cost the machine, and why is alcore 7 GB resident
-column: dev
+column: blocked
 created: 2026-09-02T09:31:25+0200
-updated: 2026-09-02T22:14:22+0200
+updated: 2026-09-03T05:34:53+0200
 current-owner: main-session
 task-type: spike
 priority: high
 min-approval-requirement: none
 related: [2R36W8Q1, YU8QPU89, ZW4APOPI]
+pre-block-column: dev
+blocked-by: [2TQHNMEC, 7YPQWKPG]
 ---
 
 # What does the 60 s bodies pass cost the machine, and why is alcore 7 GB resident
@@ -101,6 +103,9 @@ related: [2R36W8Q1, YU8QPU89, ZW4APOPI]
   migration-order decision (advisor consult in flight). On the advisor's verdict, either close
   this card as complete with the box 1–4 measurements, or move its remaining memory_limit box
   into a child of 7YPQWKPG.
+- **2026-09-03T05:34:53+0200 — moved dev → blocked:** box 2 (CPU time/bytes read) is measured
+  under TRDD-2TQHNMEC, box 3's memory_limit decision under TRDD-7YPQWKPG; restore to dev when
+  both are terminal (report reports/board-sweep/20260903_053411+0200-768nex6e-fold-verdict.md).
 
 ## Acceptance
 
