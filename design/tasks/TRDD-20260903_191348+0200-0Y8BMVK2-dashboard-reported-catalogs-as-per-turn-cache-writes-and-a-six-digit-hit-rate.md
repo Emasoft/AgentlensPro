@@ -1,0 +1,90 @@
+---
+trdd-id: 0Y8BMVK2
+title: The dashboard reported skill and agent catalogs as per-turn cache writes and a six-digit hit rate
+column: testing
+created: 2026-09-03T19:13:48+0200
+updated: 2026-09-03T19:13:48+0200
+current-owner: claude-code
+task-type: bugfix
+severity: HIGH
+labels: [dashboard, cache, metrics, attribution, false-positive]
+relevant-files: [media/src/tabs/Agents.tsx, media/src/tabs/Traces.tsx, src/shared/tokenBuckets.ts, src/test/cacheHitRate.test.ts]
+release-via: publish
+---
+
+# The dashboard reported catalogs as per-turn cache writes and a six-digit hit rate
+
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-03 19:13
+
+**Implemented, gated, deployed.** Three reporting defects fixed; the underlying cache behaviour was
+never broken. Gates: `check-types` 0, `check-mirrors` OK (122 shared exports), `compile-tests` 0,
+5/5 new unit tests passing, `node esbuild.js` 0, server restarted and the served bundle verified to
+carry the change. NEXT ACTION: commit the four files by name, then fold the remaining two items
+(burn-gate wording, PostToolUse:Agent advisory size) into their own cards.
+
+## The report
+
+The owner observed the dashboard trace showing, under one turn, `Cache-created (newly written to
+cache) 19.4K` with children `Hook injections 70.9K`, `Agent catalog 21.3K`, `Skill catalog 10.5K`
+— 102.7K of children under a 19.4K parent — and concluded skills and agents were being re-injected
+and re-billed on every turn. A separate observation: cache hit rates rendered as six-digit
+percentages such as 200000%.
+
+## What was actually true (measured first-hand, 2026-09-03)
+
+Cache behaviour is healthy and the catalogs are NOT re-sent per turn:
+
+- Response usage over 3h from the captured bodies: opus-5 216 calls, cache_read 70.31M vs
+  cache_write 1.18M (98.4% hit); sonnet-5 122 calls, 94.4%.
+- Structural check over the DuckDB/parquet body store, grouping requests by TRUE stream identity
+  (`session_id` + sha of `messages[0]`): the four busiest Fable conversations show 39/39 consecutive
+  pairs APPEND-ONLY, zero prefix breaks. System blocks, all 33 tool schemas and every earlier
+  message are byte-identical between turns; only appended messages differ.
+- Catalog injections in this session appear on 8 turns out of 86 (turns 2, 4, 10, 78, 349, 862,
+  907, 908) — session start, compact and resume boundaries.
+
+## The three defects
+
+1. **`media/src/tabs/Agents.tsx:32` — hit rate compared unrelated quantities.**
+   `cacheHitRate: totalCache / totalInput` divided cache traffic by FRESH input. Under the
+   disjoint-buckets convention `inputTokens` is only the uncached share, so the ratio is unbounded
+   above. Live totals across 20,475 cards: fresh 211,420,856 vs cache 348,130,168,141 → **164662%**
+   where the true rate is **98.0%**.
+2. **`media/src/tabs/Agents.tsx:28` — "Fresh Input" always rendered 0.** `totalFresh = max(0,
+   totalInput - totalCache)` subtracted cache from a bucket that never contained it, so the display
+   floored at 0 on every agent group. Fresh IS `totalInput`.
+3. **`media/src/tabs/Traces.tsx:955` — injected blocks nested under Cache-created unconditionally.**
+   The composition blocks were attached as CHILDREN of the cache-created node whose weight is the
+   real `cacheWrite`, two unrelated quantities in a parent/child relation. `LlmContextBreakdown`
+   (same file, line 326) already had the correct guard — drill the blocks there only when the write
+   is large enough to contain them — and the turn-level builder never received it.
+4. **`media/src/tabs/Traces.tsx:1466` — the inherited union was presented as each turn's own.**
+   For a fork or sub-agent with no transcript of its own, `resolveHostSources` falls back to the
+   UNION of every turn's blocks. That union contains the catalogs and was rendered under EVERY turn,
+   which is what made the catalogs look re-injected turn after turn.
+
+## The fix
+
+- `src/shared/tokenBuckets.ts`: new `cacheHitRate(read, write)` — the ONE derivation, denominator
+  `read + write` and nothing else, so the value is structurally a fraction. Both runtimes import it
+  (the project's single-source rule; `check-mirrors` enforces no duplicate).
+- `Agents.tsx`: uses the shared helper; `totalFresh` is `totalInput`.
+- `Traces.tsx`: cache-created drills the blocks only when `cacheWrite >= itemizedSum` and the
+  sources are not inherited; the inherited case is labelled "Inherited context blocks (from the
+  parent transcript — not injected this turn)".
+- `src/test/cacheHitRate.test.ts`: 5 tests pinning the shape, including the exact live totals that
+  produced 164662%.
+
+## Notes and lessons learned
+
+- **A ratio whose two terms sit on different axes is a bug waiting for scale.** Both percentage
+  defects came from dividing cache tokens by fresh input. The guard is structural, not numeric:
+  keep both terms on the same axis and a value over 100% becomes impossible rather than unlikely.
+- **Attribution keyed on `session_id` alone is wrong on this machine.** One session id carries
+  interleaved parent and sub-agent streams. Diffing consecutive requests under that key produced a
+  confident false verdict ("the model flipped and the whole 840KB prefix was lost") that dissolved
+  once the stream key included the first-message sha. Any future attribution work must key on the
+  conversation, not the session.
+- **A parent/child bar chart asserts that children compose the parent.** Hanging identity-of-content
+  rows under a billing-partition row makes the UI state something false even when every number in
+  it is individually correct.

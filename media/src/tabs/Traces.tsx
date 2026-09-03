@@ -893,7 +893,7 @@ function remainderNode(key: string, tokens: number): BarNode {
 // produced it) plus the injected-context blocks. Every branch ends at a LEAF that renders actual
 // bytes — the user's ask: "each bar expandable into its component bars, and so on, until the actual
 // content (input, output, etc.) is shown as a final leaf".
-function buildTurnNodes(tSteps: Step[], totals: TurnTotals, hostSources: ContextSource[], sessionModel: string): BarNode[] {
+function buildTurnNodes(tSteps: Step[], totals: TurnTotals, hostSources: ContextSource[], sessionModel: string, sourcesInherited = false): BarNode[] {
   const nodes: BarNode[] = []
   const llmSteps = tSteps.filter(s => s.entry.type === 'llm')
   const toolSteps = tSteps.filter(s => s.entry.type === 'tool')
@@ -950,12 +950,19 @@ function buildTurnNodes(tSteps: Step[], totals: TurnTotals, hostSources: Context
   if (totals.cacheRead > 0) nodes.push({ key: 'cacheread', label: 'Cache-read (resident prefix reused)', colorKind: 'cacheRead', weight: totals.cacheRead, value: tokValue(totals.cacheRead, false),
     leaf: { kind: 'text', text: `${totals.cacheRead.toLocaleString()} tokens were re-read from the prompt cache this turn — the resident transcript accumulated over the prior turns (billed ≈10% of the input rate). Its bytes are the earlier turns' content; open the preceding turns to inspect them. The bytes NEWLY added this turn are under "New input"; the blocks (re)written to the cache are under "Cache-created".` } })
 
-  // 4. CACHE-CREATED → newly written to cache. Drill the injected blocks that (re)entered the prefix.
+  // 4. CACHE-CREATED → newly written to cache. The injected blocks may be drilled here ONLY when the
+  //    write is actually large enough to contain them — the same guard LlmContextBreakdown already
+  //    applies per call. Without it the blocks hang under cache-created unconditionally, so a turn
+  //    that wrote 19.4k renders 102.7k of children (measured: hooks 70.9k + agent catalog 21.3k +
+  //    skill catalog 10.5k under a 19.4k parent) and reads as "the catalogs were re-written this
+  //    turn" when they were re-READ from the warm prefix. They are always listed, correctly, under
+  //    "Injected context" below.
   if (totals.cacheWrite > 0) {
-    const compKids = compositionNodes(hostSources)
+    const itemizedSum = hostSources.reduce((n, s) => n + s.tokens, 0)
+    const compKids = !sourcesInherited && itemizedSum > 0 && totals.cacheWrite >= itemizedSum ? compositionNodes(hostSources) : []
     nodes.push({ key: 'cachewrite', label: 'Cache-created (newly written to cache)', colorKind: 'cacheWrite', weight: totals.cacheWrite, value: tokValue(totals.cacheWrite, false),
       children: compKids.length ? compKids : undefined,
-      leaf: compKids.length ? undefined : { kind: 'text', text: `${totals.cacheWrite.toLocaleString()} tokens were newly written to the prompt cache this turn (full write rate) — the prefix content that changed or first appeared. The identifiable injected blocks are listed under "Injected context" when the local log is available.` } })
+      leaf: compKids.length ? undefined : { kind: 'text', text: `${totals.cacheWrite.toLocaleString()} tokens were newly written to the prompt cache this turn (full write rate) — the prefix content that changed or first appeared. This write is smaller than the injected blocks listed under "Injected context", so those blocks were re-read from the warm prefix, not re-written.` } })
   }
 
   // 5. COST → what the turn cost, drilled per LLM call (each → its response content).
@@ -977,7 +984,13 @@ function buildTurnNodes(tSteps: Step[], totals: TurnTotals, hostSources: Context
   const injected = compositionNodes(hostSources)
   if (injected.length) {
     const sum = hostSources.reduce((n, s) => n + s.tokens, 0)
-    nodes.push({ key: 'injected', label: 'Injected context (parsed blocks)', colorKind: 'file', weight: sum, value: tokValue(sum, true), children: injected })
+    // When the blocks came from the UNION fallback (a fork/sub-agent with no transcript of its own),
+    // they are NOT this turn's injections — the same union is attached to every turn of that session,
+    // which is what made the catalogs look re-injected on each turn. Say so in the label.
+    const label = sourcesInherited
+      ? 'Inherited context blocks (from the parent transcript — not injected this turn)'
+      : 'Injected context (parsed blocks)'
+    nodes.push({ key: 'injected', label, colorKind: 'file', weight: sum, value: tokValue(sum, true), children: injected })
   }
 
   return nodes
@@ -1166,7 +1179,7 @@ function CacheBreakModal({ cb, turn, prevTurn, prevSources, curSources, onClose 
   )
 }
 
-function TurnGroup({ turn, tSteps, sessIdx, sessionModel, metric, maxTurnMetric, highlightSpanId, subAgents, cacheBreak, hostSources, prevTurn, prevSources }: {
+function TurnGroup({ turn, tSteps, sessIdx, sessionModel, metric, maxTurnMetric, highlightSpanId, subAgents, cacheBreak, hostSources, sourcesInherited, prevTurn, prevSources }: {
   turn: number
   tSteps: Array<{ step: Step; i: number }>
   sessIdx: number; sessionModel: string
@@ -1175,6 +1188,7 @@ function TurnGroup({ turn, tSteps, sessIdx, sessionModel, metric, maxTurnMetric,
   subAgents?: SessionSummaryCard[]
   cacheBreak?: CacheBreakTurn
   hostSources?: ContextSource[]
+  sourcesInherited?: boolean
   prevTurn?: number
   prevSources?: ContextSource[]
 }) {
@@ -1229,7 +1243,7 @@ function TurnGroup({ turn, tSteps, sessIdx, sessionModel, metric, maxTurnMetric,
           {(() => {
             // The recursive P5 drill-tree: this turn's component bars (5 usage values + injected
             // blocks), each expanding down to the actual content bytes at a leaf.
-            const nodes = buildTurnNodes(tSteps.map(x => x.step), totals, hostSources ?? [], sessionModel)
+            const nodes = buildTurnNodes(tSteps.map(x => x.step), totals, hostSources ?? [], sessionModel, sourcesInherited ?? false)
             const max = Math.max(0, ...nodes.map(n => n.weight))
             const ordered = timelineSortByValue.value && metric !== 'time' ? [...nodes].sort((a, b) => b.weight - a.weight) : nodes
             return ordered.map(n => <TreeBar key={n.key} node={n} depth={0} siblingMax={max} />)
@@ -1467,6 +1481,13 @@ export function TimelineWaterfall({ steps, sessionDur, sessionModel, sessIdx = 0
     const own = turn !== undefined ? hostSourcesByTurn.get(turn) : undefined
     return own && own.length ? own : inheritedSources
   }
+  // Did this turn fall back to the inherited UNION above? The union is the same set for every turn,
+  // so presenting it as the turn's own injections is what made the skill/agent catalogs appear on
+  // each turn of a fork or sub-agent. The renderer labels it as inherited instead.
+  const sourcesAreInherited = (turn: number | undefined): boolean => {
+    const own = turn !== undefined ? hostSourcesByTurn.get(turn) : undefined
+    return !(own && own.length) && (inheritedSources?.length ?? 0) > 0
+  }
   // Honest terminal note for a call whose injected blocks could NOT be itemized — never a perpetual
   // "loading". undefined composition = still loading; reconstructedFrom = fork/sub-agent whose blocks
   // come from the parent's transcript; null = OTEL-only/no local log at all.
@@ -1622,6 +1643,7 @@ export function TimelineWaterfall({ steps, sessionDur, sessionModel, sessIdx = 0
                     maxTurnMetric={maxTurnMetric} highlightSpanId={highlightSpanId}
                     subAgents={subsByTurn.get(g.turn)} cacheBreak={breaksByTurn.get(g.turn)}
                     hostSources={resolveHostSources(g.turn)}
+                    sourcesInherited={sourcesAreInherited(g.turn)}
                     prevTurn={prevTurnByTurn.get(g.turn)}
                     prevSources={composition?.reconstructedFrom ? undefined : resolveHostSources(prevTurnByTurn.get(g.turn))} />
                 </div>

@@ -1,14 +1,18 @@
 import { sessionSummary, timeRange } from '../state'
 import { formatMs, formatCompact } from '../utils'
+import { cacheHitRate } from '../../../src/shared/tokenBuckets'
 import type { SessionSummaryCard } from '../types'
 
 export function computeStats(sessions: SessionSummaryCard[]) {
   let totalInput = 0, totalOutput = 0, totalCache = 0
+  let cacheRead = 0, cacheWrite = 0
   let totalLlm = 0, totalTools = 0, ttftSum = 0, ttftCount = 0, durSum = 0
   const toolCounts: Record<string, number> = {}
   sessions.forEach(s => {
     totalInput += s.inputTokens ?? 0
     totalOutput += s.outputTokens ?? 0
+    cacheRead += s.cacheReadTokens ?? 0
+    cacheWrite += s.cacheCreateTokens ?? 0
     totalCache += (s.cacheReadTokens ?? 0) + (s.cacheCreateTokens ?? 0)
     totalLlm += s.totalLlmCalls ?? 0
     totalTools += s.totalToolCalls ?? 0
@@ -22,14 +26,18 @@ export function computeStats(sessions: SessionSummaryCard[]) {
   })
   return {
     sessions: sessions.length,
-    // totalInput is the raw total-context sum (fresh + cache read + cache create); keep it for the
-    // cacheHitRate denominator. totalFresh subtracts cache so the displayed "Fresh Input" matches the
-    // headline used everywhere else and never re-introduces the per-turn cache-read inflation (#7).
-    totalInput, totalFresh: Math.max(0, totalInput - totalCache),
+    // Card buckets are DISJOINT: `inputTokens` is already the fresh uncached share, so it is NOT a
+    // total-context sum and subtracting cache from it only floors the display at 0 (measured: fresh
+    // 211M vs cache 348,130M => "Fresh Input" rendered 0 on every agent group). Fresh IS totalInput.
+    totalInput, totalFresh: totalInput,
     totalOutput, totalCache, totalLlm, totalTools,
     avgTtft: ttftCount > 0 ? Math.round(ttftSum / ttftCount) : 0,
     avgDuration: sessions.length > 0 ? Math.round(durSum / sessions.length) : 0,
-    cacheHitRate: totalInput > 0 ? totalCache / totalInput : 0,
+    // A HIT RATE IS A SHARE OF CACHE TRAFFIC, never cache-over-fresh-input: the old
+    // `totalCache / totalInput` divided ~348bn cached tokens by ~211M fresh ones and rendered
+    // 164662% (a six-digit "percentage") where the true rate is 98.0%. The one derivation lives in
+    // src/shared/tokenBuckets so both runtimes share it and it is covered by a unit test.
+    cacheHitRate: cacheHitRate(cacheRead, cacheWrite),
     toolCounts,
   }
 }

@@ -79,3 +79,19 @@ export function disjointBuckets(usage: RawUsage, shape: UsageShape): TokenBucket
 export function contextTokens(b: { inputTokens?: number; cacheReadTokens?: number; cacheCreateTokens?: number }): number {
   return (b.inputTokens ?? 0) + (b.cacheReadTokens ?? 0) + (b.cacheCreateTokens ?? 0)
 }
+
+/**
+ * Prompt-cache HIT RATE, 0..1 — the share of CACHE traffic that was re-read instead of re-written.
+ *
+ * The denominator is cache-read + cache-write and nothing else. Fresh input is NOT a term: under the
+ * disjoint-buckets convention `inputTokens` is only the uncached share, so dividing cache tokens by
+ * it compares two unrelated quantities and is unbounded above. The Agents tab did exactly that and
+ * rendered 164662% against a true 98.0% (measured 2026-09-03 over 20,475 live cards: fresh 211M vs
+ * cache 348,130M). Keeping both terms on the same axis is what makes the result structurally a
+ * fraction, so a percentage over 100 becomes impossible rather than merely unlikely.
+ */
+export function cacheHitRate(cacheReadTokens: number, cacheCreateTokens: number): number {
+  const read = clamp(cacheReadTokens)
+  const total = read + clamp(cacheCreateTokens)
+  return total > 0 ? read / total : 0
+}
