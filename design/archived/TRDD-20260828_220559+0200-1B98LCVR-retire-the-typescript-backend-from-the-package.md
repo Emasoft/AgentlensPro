@@ -1,16 +1,16 @@
 ---
 trdd-id: 1B98LCVR
 title: Retire the TypeScript backend from the package so Rust is the only server that ships
-column: testing
+column: complete
 created: 2026-08-28T22:05:59+0200
-updated: 2026-09-03T06:08:16+0200
+updated: 2026-09-03T06:13:05+0200
 current-owner: claude-agentlenspro
 task-type: refactor
 project-id: agentlenspro
 parent-trdd: DMWOBWFH
 blocked-by: []
 npt: [VHH7FXGC]
-implementation-commits: [eec7bb36, 952357e8, 48a154a, d58d6e1, 6c6c7f49, d7684513, 567fc5c2]
+implementation-commits: [eec7bb36, 952357e8, 48a154a, d58d6e1, 6c6c7f49, d7684513, 567fc5c2, 53628973]
 ---
 
 # Retire the TypeScript backend from the package
@@ -215,3 +215,7 @@ against `alcore` (every tab renders live data), the MCP tool surface answering f
 `npm pack --dry-run` showing no `standalone/server.js`.
 
 ## Notes and lessons learned
+
+## Approval log
+
+- 2026-09-03T06:13:05+0200 — COMPLETED by main-session. All acceptance boxes verified; restart cycle measured in 53628973.
