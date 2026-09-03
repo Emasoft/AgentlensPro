@@ -64,6 +64,17 @@ fs.writeFileSync(path.join(wsNoGit, 'pnpm-workspace.yaml'), 'packages:\n  - pack
 fs.writeFileSync(path.join(wsNoGitPkg, 'package.json'), '{}')
 fs.symlinkSync(path.join(wsNoGit, 'node_modules', '.pnpm', 'dep'), path.join(wsNoGitPkg, 'node_modules'))
 
+// A STRAY ANCESTOR package.json must not widen the boundary. `~/package.json` is common, and
+// accepting a bare package.json as a root made $HOME the boundary for every non-git dir beneath it
+// — so an escape into a SIBLING project's node_modules under $HOME was allowed (measured
+// 2026-09-03). Only .git / pnpm-workspace.yaml / a package.json declaring "workspaces" is a root.
+const strayTop = path.join(root, 'stray')
+const strayScratch = path.join(strayTop, 'scratch')
+fs.mkdirSync(strayScratch, { recursive: true })
+fs.mkdirSync(path.join(strayTop, 'sibling-nm'), { recursive: true })
+fs.writeFileSync(path.join(strayTop, 'package.json'), '{}')   // NOT a workspace declaration
+fs.symlinkSync(path.join(strayTop, 'sibling-nm'), path.join(strayScratch, 'node_modules'))
+
 const run = (command, cwd) => {
   const out = execFileSync('node', [GUARD], {
     input: JSON.stringify({ tool_input: { command }, cwd }),
@@ -84,6 +95,9 @@ const cases = [
   [true, `cd '${worktree}' && pnpm i`, repo, 'quoted cd target'],
 
   [true, 'pnpm install', bare, 'NO .git: an escaping node_modules is still an escape'],
+  [true, `cd ${worktree} && FOO=1 env corepack pnpm install`, repo, 'VAR= + env + corepack chain is skipped to reach the command word'],
+  [true, 'pnpm install', strayScratch, 'a stray ancestor package.json must NOT widen the boundary'],
+
   [false, 'pnpm install', wsNoGitPkg, 'workspace WITHOUT .git: still not an escape (outermost project marker)'],
 
   [false, 'pnpm install', repo, 'REAL node_modules is allowed — this is the remedy, never block it'],

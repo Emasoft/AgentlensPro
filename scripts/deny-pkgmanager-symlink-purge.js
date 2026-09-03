@@ -79,26 +79,33 @@ function effectiveCwd(segment, sessionCwd) {
   return path.isAbsolute(expanded) ? expanded : path.resolve(sessionCwd, expanded)
 }
 
-/** The checkout `dir` belongs to: nearest ancestor holding `.git` (a dir in a normal clone, a FILE
- *  in a worktree — both count). Null when outside any checkout. This, not the cwd, is the boundary
- *  that matters: a purge confined to the tree you are working in destroys only reinstallable
- *  files, and the very fix this guard steers people toward (`pnpm install` right there) must stay
- *  allowed. */
+/** The project root `dir` belongs to: the nearest ancestor carrying a DEFINITIVE root marker —
+ *  `.git` (a dir in a clone, a FILE in a worktree), `pnpm-workspace.yaml`, or a package.json that
+ *  declares `"workspaces"`. Null when none is found; the caller then falls back to the cwd.
+ *
+ *  This, not the cwd, is the boundary that matters: a purge confined to the tree you are working in
+ *  destroys only reinstallable files, and the fix this guard steers people toward (`pnpm install`
+ *  right there) must stay allowed. In a monorepo `packages/a`'s node_modules links into the store
+ *  at the WORKSPACE root, so anchoring on the package would make that legitimate link an escape and
+ *  deny every command in the repo — measured 2026-09-03 for a workspace that is not a git checkout.
+ *
+ *  Why only definitive markers, and never a bare package.json: it appears in every package of a
+ *  monorepo AND in stray places like `~/package.json`. Accepting it made the boundary the outermost
+ *  such ancestor, so on a machine with a home-directory package.json every non-git tree beneath it
+ *  got `$HOME` as its boundary — and an escape into a sibling project's node_modules was ALLOWED,
+ *  which is the original incident re-enabled. Measured 2026-09-03. */
 function checkoutRoot(dir) {
   let cur = path.resolve(dir)
-  // The OUTERMOST project marker, not the nearest: in a monorepo `packages/a` has its own
-  // package.json, but the store its node_modules links into lives at the WORKSPACE root. Anchoring
-  // on the nearest marker makes that legitimate link an escape and denies every pnpm command in
-  // the repo. Measured 2026-09-03: keying only on `.git` did exactly this to a workspace that is
-  // not a git checkout (a vendored copy, a docker build context, an extracted tarball).
-  let outermostProject = null
   for (;;) {
-    if (fs.existsSync(path.join(cur, '.git'))) return cur // a checkout boundary wins outright
-    if (fs.existsSync(path.join(cur, 'pnpm-workspace.yaml')) || fs.existsSync(path.join(cur, 'package.json'))) {
-      outermostProject = cur
-    }
+    if (fs.existsSync(path.join(cur, '.git'))) return cur
+    if (fs.existsSync(path.join(cur, 'pnpm-workspace.yaml'))) return cur
+    // npm/yarn workspaces declare the root inside package.json instead of a sibling file.
+    try {
+      const pkg = path.join(cur, 'package.json')
+      if (fs.existsSync(pkg) && /"workspaces"\s*:/.test(fs.readFileSync(pkg, 'utf8'))) return cur
+    } catch { /* unreadable package.json is not a root claim */ }
     const parent = path.dirname(cur)
-    if (parent === cur) return outermostProject
+    if (parent === cur) return null // no root found: caller falls back to the cwd
     cur = parent
   }
 }
@@ -195,11 +202,14 @@ process.stdin.on('end', () => {
 
     // Only the COMMAND WORD counts, never any token. Matching anywhere makes prose match: with
     // quotes stripped, `echo "pnpm run build"` and `git commit -m "fix pnpm guard"` both contain a
-    // bare `pnpm`. Leading `VAR=value` assignments and `env`/`corepack`/`npx` launchers are skipped
-    // so the real command word is still found underneath them.
+    // bare `pnpm`. Leading `VAR=value` assignments and the `env`/`corepack`/`npx` launchers are
+    // skipped so the real command word is found underneath them — all three are exercised by one
+    // matrix case. `command`/`exec`/`time` were listed here speculatively and are now REMOVED: an
+    // entry no case pins is a claim the comment makes and nothing backs, which is the exact defect
+    // this file has already shipped twice (the comment listed `npx` while the array did not).
     const tokens = trimmed.split(/\s+/)
     let i = 0
-    while (i < tokens.length && (/^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i]) || ['env', 'corepack', 'command', 'exec', 'time', 'npx'].includes(tokens[i]))) i++
+    while (i < tokens.length && (/^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i]) || ['env', 'corepack', 'npx'].includes(tokens[i]))) i++
     const word = tokens[i]
     // A quoted command word is not a command word — it is prose inside someone's argument.
     if (!word || /^['"]/.test(word)) continue
