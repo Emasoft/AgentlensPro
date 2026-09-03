@@ -3,7 +3,7 @@ trdd-id: YU8QPU89
 title: Verify alcore ingest keeps up with many parallel Claude Code sessions without filling the spool or growing memory
 column: testing
 created: 2026-08-28T22:05:59+0200
-updated: 2026-09-03T06:08:16+0200
+updated: 2026-09-03T07:25:34+0200
 current-owner: claude-agentlenspro
 task-type: audit
 project-id: agentlenspro
@@ -14,18 +14,27 @@ eht: []
 
 # Ingest throughput vs spool and memory under parallel sessions
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-09-03T06:08:16+0200
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-09-03T07:25:34+0200
 
-**BOX 1 STILL OPEN — a real-traffic 1h observation is NOT the same test as the 32× flood, and did
-not close it.** Watched pid 2074 (deployed 420e6bb9) go from 42:39 to 60:51 uptime under ordinary
-(~1×) production load: `~/.agentlens/hook-spool` stayed at 4 files, `/Volumes/AgentLensSpool`
-stayed at 1% used (19→20 MB) and `otel-bodies` file count 1→4 — no upward trend at this rate. RSS
-grew 6.15→6.98 GB over the 18-minute observed window (consistent with the window still filling
-post-restart per this card's own churn finding, not new evidence of a leak). **This is supporting
-evidence only** — box 1 explicitly requires the 32× rate sustained for a full hour, which this did
-not exercise (the existing 22.5-min 32× soak above is still the only synthetic-rate evidence, and
-it is short of the hour). Box left unchecked. Report:
-`reports/board-sweep/20260903_060822+0200-soak-and-restart-checks.md`.
+**BOX 1 CLOSED — full 60-minute 32× flood run, card's own Method.** Isolated instance
+(`/tmp/al-sustain-16096`, unmodified `rust-core/target/release/alcore`), same 8-client × 32-conc
+shape as the 2026-09-01 "32× soak", this time the full hour instead of 22.5 min. All 60 one-minute
+samples read `dropped=0 spooled=0 spill=0 shed=0`; in-memory span count held 1.00M–1.10M with no
+upward trend (min 1 = 1.02M, min 60 = 1.00M) under the memory valve (11 narrowing steps, floor
+300,000 ms). RSS noisy but bounded 4.9–20.8 GB, no monotonic climb. `equivalent_concurrent_sessions
+=6172`, `spans_per_sec=160472`, `reqPerSec=1003.2`, 3,650,497 ok / 39 nonOk over the hour. Live
+server (pid 94042, port 3000) untouched throughout. Report:
+`reports/trdd-yu8qpu89/20260903_072503+0200-32x-flood.md`.
+
+## ⏵ STATE (history) — 2026-09-03T06:08:16+0200
+
+**Superseded by the run above.** A real-traffic 1h observation is NOT the same test as the 32×
+flood, and did not close box 1. Watched pid 2074 (deployed 420e6bb9) go from 42:39 to 60:51 uptime
+under ordinary (~1×) production load: `~/.agentlens/hook-spool` stayed at 4 files,
+`/Volumes/AgentLensSpool` stayed at 1% used (19→20 MB) and `otel-bodies` file count 1→4 — no
+upward trend at this rate. RSS grew 6.15→6.98 GB over the 18-minute observed window (consistent
+with the window still filling post-restart per this card's own churn finding, not new evidence of
+a leak). Report: `reports/board-sweep/20260903_060822+0200-soak-and-restart-checks.md`.
 
 ## ⏵ STATE (history) — 2026-08-29
 
@@ -502,7 +511,11 @@ highest rate: spool file count + bytes, RSS, spans/s ingested, `/api/summary` la
 
 ## Acceptance
 
-- [ ] at 32× the spool stays bounded (steady-state file count does not trend up over the hour)
+- [x] at 32× the spool stays bounded (steady-state file count does not trend up over the hour)
+      — 2026-09-03: full 60-min run of the same 8×32-conc flood, all 60 one-minute samples read
+      `spooled=0 spill=0 shed=0 dropped=0`; in-window span count held 1.00–1.10M with no upward
+      trend (1.02M at min 1, 1.00M at min 60). Report:
+      reports/trdd-yu8qpu89/20260903_072503+0200-32x-flood.md.
 - [x] RSS plateaus and the plateau is EXPLAINED — 2026-09-01 sustained soak (22.5 min, ≈1,234
       session-equivalents, 32,082 spans/s): RSS 14.8 → 26–27 GB then 22 GB while load continued;
       the holder IS the span window — the memory valve narrowed it 86,400 s → 300 s in 9 steps and
