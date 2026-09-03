@@ -1,9 +1,9 @@
 ---
 trdd-id: POLG0613
 title: One unexplained early-break cold write after a heartbeat fire
-column: todo
+column: testing
 created: 2026-09-03T04:22:28+0200
-updated: 2026-09-03T04:22:28+0200
+updated: 2026-09-03T04:46:59+0200
 current-owner: main-session
 task-type: spike
 priority: normal
@@ -14,13 +14,31 @@ related: [B9ERTBZ9]
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-03
 
-NEXT ACTION: on the next heartbeat fire, run the H1 capture (one bash: copy
-the newest bodies within 5 s of the fire to
-`reports/cache-coldwrite/bodies-<ts>/`) then diff against the previous
-turn's body. then diff `system[]`/`tools[]` against the previous turn's body.
+H1 CAPTURE DONE (2026-09-03 04:42, live heartbeat fire). Three consecutive
+main-thread fable calls (2.0 MB requests) were all WARM: `cache_read`
+755,568 / 756,027 / 757,733 vs `cache_creation` 459 / 1,706 / 259 (1h tier).
+`system[1..4]`, the 33-tool list, and `messages[0]` were byte-identical
+across all three. The only diff was `system[0]` — the 174-byte
+`x-anthropic-billing-header` line carrying `cc_prev_req=` — which carries
+no `cache_control` marker and sits before the real breakpoints at
+`system[3]`/`system[4]`, so it is cache-neutral. Zero fable responses in
+the capture had `cache_creation` >= 50k. Sonnet subagent families showed
+the same `system[0]`-only churn (10 of 12 distinct stamps) with no cold
+rewrite either.
+Conclusion: a heartbeat cron turn does NOT rewrite the prefix on CC
+2.1.258. The 21:29:49 cold write from the original report remains
+unexplained and cannot be reconstructed (its bodies are gone).
+SUPERSEDED: "heartbeat correlation" as a hypothesis for H1 — falsified for
+this build.
+NEXT ACTION: close this card as complete once CAJ5RCP9 child 1 (the
+api_calls writer) lands, since any future early-break write will then be
+diffable from the table; until then no further action.
 `blocked-by: CAJ5RCP9` because the durable per-call table would
-make this trivial and repeatable, but a manual capture can settle it sooner
-— do not wait if a fire happens first.
+make this trivial and repeatable; H1 itself is now settled via manual
+capture, so remaining work waits on the table for the residual.
+
+Evidence: `reports/cache-coldwrite/20260903_044659+0200-polg0613-body-diff.md`
+and `reports/cache-coldwrite/bodies-20260903_044257+0200/` (80 bodies).
 
 ## WHY
 
