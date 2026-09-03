@@ -1,9 +1,9 @@
 ---
 trdd-id: XX1UAZHS
 title: The burn-monitor route computes live_burn_status under the state lock and held it 4.9 s
-column: testing
+column: complete
 created: 2026-09-02T20:24:56+0200
-updated: 2026-09-02T22:06:11+0200
+updated: 2026-09-03T04:58:45+0200
 current-owner: main-session
 task-type: bugfix
 priority: medium
@@ -16,7 +16,7 @@ related: [O3ICDRLO, HFV4AIT7, UTFVMVT8]
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-02T22:06:11+0200
 
-- **Code: DONE, uncommitted** in `rust-core/crates/agentlens-core/src/ui.rs` (+33/−5). New
+- **Code: DONE, committed** in `rust-core/crates/agentlens-core/src/ui.rs` (+33/−5). New
   `burn_status_now(state, now)` beside `stripped_now`: `summary_now` off-lock → short hold for
   `ttl_context` + `config.clone()` → `crate::burn_status_for` released. All four route callers of
   `live_burn_status` (`GET /api/burn-status`, MCP `get_burn_status` — the 4,894 ms site —,
@@ -70,6 +70,12 @@ for the same pattern while there.
       guard under normal dashboard use, and `/api/burn-status` still answers with the same shape.
       — 2026-09-02T22:06:11+0200: pid 67312, lines 500995-501009, max hold 319 ms
       (log_reader.rs:1052, unrelated site), `/api/burn-status` 200 in 1.03s.
+
+## Approval log
+
+- 2026-09-03T04:58:45+0200 — COMPLETED by main-session. Both acceptance boxes pass; fix committed
+  5abb5349 (verified via `git log --oneline -1 -- rust-core/crates/agentlens-core/src/ui.rs`, not
+  the card's stale "uncommitted" claim — 2b38a39b is a later, unrelated commit on the same file).
 
 ## Notes and lessons learned
 

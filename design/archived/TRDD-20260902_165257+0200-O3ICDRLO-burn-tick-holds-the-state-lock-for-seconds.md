@@ -1,9 +1,9 @@
 ---
 trdd-id: O3ICDRLO
 title: The 4-second burn tick holds the state lock for up to 2.3 s and is now the top holder
-column: testing
+column: complete
 created: 2026-09-02T16:52:57+0200
-updated: 2026-09-02T20:24:56+0200
+updated: 2026-09-03T04:58:45+0200
 current-owner: main-session
 task-type: bugfix
 priority: high
@@ -94,8 +94,17 @@ hypothesis, a per-statement split is the answer.
 - [x] After the fix, 15 min of `server.log` shows no `state lock held ≥ 1000 ms` by the burn tick's
       guard, and the OTLP handler's worst wait is under 1 s — 12.6 min read, zero holds ≥ 250 ms
       from either guard, no ingest wait logged (STATE, box 2).
-- [ ] `/api/burn-status`, the burn risk gate and the account-rotation capture still behave
+- [x] `/api/burn-status`, the burn risk gate and the account-rotation capture still behave
       (the rotation edge is still detected once per switch; `agentlenspro get_burn_status` answers).
+      — 2026-09-03T04:58:45+0200: `server.log:500988` shows "usage refresh (account changed): ok"
+      exactly once post-deploy (boot marker line 500237); `agentlenspro get_burn_status` answered
+      live (pid 67312).
+
+## Approval log
+
+- 2026-09-03T04:58:45+0200 — COMPLETED by main-session. Box 3 verified: server.log:500988 shows
+  "usage refresh (account changed): ok" exactly once post-deploy, and get_burn_status answers live
+  (pid 67312).
 
 ## Notes and lessons learned
 

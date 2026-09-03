@@ -3,7 +3,7 @@ trdd-id: YU8QPU89
 title: Verify alcore ingest keeps up with many parallel Claude Code sessions without filling the spool or growing memory
 column: testing
 created: 2026-08-28T22:05:59+0200
-updated: 2026-09-01T22:00:21+0200
+updated: 2026-09-03T04:58:45+0200
 current-owner: claude-agentlenspro
 task-type: audit
 project-id: agentlenspro
@@ -499,6 +499,9 @@ highest rate: spool file count + bytes, RSS, spans/s ingested, `/api/summary` la
       corrected in the report, port tracked on TRDD-5PUD8RKE box 3.
       Report: reports/spool-backpressure/20260901_192500+0200-sustained-soak-alcore-spool-memory.md;
       generator committed at scripts/bench/alcore-ingest-flood.mjs (the soak wrapper is scripts_dev).
-- [ ] the numbers and the generator are committed (report path recorded here); any fix is an NPT
+- [x] the numbers and the generator are committed (report path recorded here); any fix is an NPT
+      — 2026-09-03: generator committed at `b8a61496` (scripts/bench/alcore-ingest-flood.mjs);
+      `reports/` is gitignored per project convention, so the report path recorded above IS the
+      durable record of the numbers.
 
 ## Notes and lessons learned

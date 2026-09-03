@@ -3,7 +3,7 @@ trdd-id: 2R36W8Q1
 title: The summary cache is keyed on a version that moves faster than a rebuild completes, so the UI path livelocks under fleet ingest
 column: testing
 created: 2026-08-29T10:44:23+0200
-updated: 2026-09-02T16:51:58+0200
+updated: 2026-09-03T04:58:45+0200
 current-owner: main-session
 task-type: bugfix
 scope: project
@@ -11,6 +11,7 @@ project-id: agentlenspro
 parent-trdd: YU8QPU89
 relevant-rules: []
 implementation-commits: []
+blocked-by: [UTFVMVT8]
 ---
 
 # Summary cache livelocks under fleet ingest
