@@ -1,12 +1,13 @@
 ---
 trdd-id: 6QV50JNN
 title: Verify the SubagentStop adversarial-review hooks fire and gate exactly like the main-agent Stop hooks
-column: testing
+column: complete
 created: 2026-08-28T22:05:59+0200
-updated: 2026-09-03T05:43:35+0200
+updated: 2026-09-03T05:45:02+0200
 current-owner: claude-agentlenspro
 task-type: audit
 project-id: agentlenspro
+implementation-commits: [b480d349]
 ---
 
 # Subagent adversarial-review hooks must work like the main agent's
@@ -109,5 +110,10 @@ use (it demanded a fork on this very session's edits). The subagent pair has no 
       `reviewGate.test.js` standalone 17/17 (demand / allow / one-demand cap / fail-open / fork guard).
 - [x] any divergence found is fixed in the hook script (user scope) and re-run — none found; the
       subagent gate demands once, allows the second stop, and skips forks exactly like the main gate.
+
+## Approval log
+
+- 2026-09-03T05:45:02+0200 — COMPLETED by main-session. All three acceptance boxes verified;
+  test script b480d349 passes 16/16.
 
 ## Notes and lessons learned
