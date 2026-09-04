@@ -282,8 +282,17 @@ narrower than their own claim:**
 - `sum(raw_bytes), max(length(stem))` opened only **2 of the table's 26 columns**. Parquet stores
   each column's pages independently, so a part corrupt only in `billing_header` still passed clean.
   Same defect one rung less severe.
-- `SELECT *` with `getRowObjects()` forces **every** column's pages open, is shorter than either,
-  and avoids a numeric-overflow risk in `sum(raw_bytes)` (already 5.6e9 across 509 parts).
+- `SELECT *` with `getRowObjects()` forces **every** column's pages open and is shorter than either.
+  (`runAndReadAll` materialises the result rather than returning a lazy handle, so nothing defers.
+  It establishes the pages DECOMPRESS, not that the values are semantically right — which is the
+  correct bar for a criterion whose word is "readable".)
+
+**THE ACTUAL LESSON — the trajectory above had one cause, and it was not the reviews.** Existence →
+`count(*)` → 2 columns → 26 columns is four checks, each closing exactly the hole the last review
+named. The question that would have produced `SELECT *` on the first attempt — **"what does
+*readable* mean here?"** — was answerable in one pass from the criterion's own three words, before
+any check was written. **Define the property before instrumenting it.** "Respond to reviews less
+literally" is the symptom and is not actionable; the omitted definition is the cause and is.
 
 The loop is per-file, so one bad part is attributed to itself rather than depending on whether
 DuckDB aborts a whole multi-file scan.
