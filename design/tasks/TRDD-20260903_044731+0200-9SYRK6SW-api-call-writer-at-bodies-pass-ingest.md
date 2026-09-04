@@ -3,7 +3,7 @@ trdd-id: 9SYRK6SW
 title: api_call staging table writer at the bodies-pass ingest site
 column: testing
 created: 2026-09-03T04:47:31+0200
-updated: 2026-09-04T17:48:16+0200
+updated: 2026-09-04T17:50:14+0200
 current-owner: main-session
 task-type: feature
 priority: high
@@ -227,18 +227,39 @@ doesn't have) — union_by_name at read time (GVA8TTJF) coalesces them per call.
 `~/.agentlens/store/api_calls/` and is actively growing (495 → 497 in three minutes), so the writer
 half is well supported.
 
-**The decisive fact is the mtime, not the filename.** The earliest part by mtime is
-**08:56:13 — the server's own start time** (uptime 7h34m as of 16:30). So no part predates the
-running process, and that holds whatever the `<pid>` field in `part-<ts>-<pid>-<n>.parquet`
-actually means; the mtime evidence does not depend on my reading of the filename at all.
+**The decisive fact is the mtime.** The earliest part by mtime is **08:56:13**, consistent with the
+server's start (`uptime=7h34m` displayed at 16:30 → ~08:56). Stated as an INEQUALITY, which is all
+the argument needs and all the measurement supports: **the earliest part is AFTER the process
+started, so no part predates it.** An earlier version claimed 08:56:13 *is* the boot time — a
+to-the-second equality drawn from a to-the-minute display, which brackets the start to ±30s at
+best.
+Two weak signals AGREE here and the conclusion rests on the agreement, not on either alone: the
+mtime ordering, and every filename's `<pid>` field reading 37180. An earlier version also claimed
+the mtime evidence "does not depend on my reading of the filename at all" — true of the raw fact,
+FALSE of the argument as built, since that same paragraph uses pid uniformity as corroboration.
 
-**The competing explanation is ruled out, not merely unmentioned.** A first version of this note
-enumerated two readings ("feature landed after this server started" / "earlier parts were removed")
-and presented the list as complete. It was not: a **compaction chore rewriting surviving parts
-under the current pid** would produce the same observation and would mean restart-survival WORKS.
-Checked — `grep -rln 'api_call'` across `rust-core/crates` finds no file mentioning `compact`, and
-TRDD-IRNHEN4Z ("api_calls part compaction by count…") is `column: planned`, i.e. unimplemented.
-So no rewrite path exists today.
+**The competing explanation is ruled out.** A first version of this note enumerated two readings
+("feature landed after this server started" / "earlier parts were removed") and presented the list
+as complete. It was not: a **compaction chore rewriting surviving parts under the current pid**
+would produce the same observation and would mean restart-survival WORKS.
+
+**The first rule-out was mis-scoped and is replaced.** It ran `grep -rln 'api_call'` and then looked
+for `compact` among those hits — which can only find a compactor that also contains the literal
+`api_call`. A generic chore iterating `store/<table>/` would name a directory variable instead, and
+that is precisely the shape TRDD-TP3BA3ED documents for the sibling `body`/`part`/`blob` dirs. The
+search's scope had silently become the claim's scope: the 99HUNXJS error again. Replaced with the
+inverted search:
+
+- `grep -rn 'fn .*compact\|compact_\|\.compact('` over ALL of `rust-core/crates` returns only
+  unrelated senses — `delta_log.rs::compact` (compacts an `IndexMap` of records, not parquet),
+  and Claude Code's own `compact_boundary` / `compact_file_reference` / PreCompact-hook readers.
+  Nothing iterates store directories.
+- **`agentlens-store` — the crate that owns the parquet store — contains `compact` ZERO times.**
+- No `rename` / `remove_file` path over parquet parts exists in that crate.
+- Independently: TRDD-IRNHEN4Z ("api_calls part compaction by count…") is `column: planned`. **This
+  is the STRONGER of the two facts** and the first version cited it only as corroboration.
+
+So no rewrite path exists today — and the mtime result below makes the question moot regardless.
 
 **What that leaves, stated precisely:** the store has never been through a restart WITH api_calls
 parts present — the parts begin at this server's boot. Step 3 has not failed; it has never had the
@@ -254,18 +275,25 @@ performed here — restarting the user's live collector is an action on a runnin
 asked for, and this session has already learned what an unrequested state change costs
 (TRDD-BSDR4TRM's `server stop` hitting the wrong process).
 
-**COLUMN NOT CHANGED — and the warrant is NOT the one first recorded.** That version said the table-A
-exemption's "precondition is not met" because a verification step has no result. **Wrong object:**
-table A keys on the FRONTMATTER fields `test-requirements:` / `audit-requirements:`, and this card
-carries NEITHER. `## VERIFICATION` is prose, not that field. With no `test-requirements:` to fail,
-the enumerated condition is VACUOUSLY SATISFIED and the rule as literally written would permit the
-move.
+**COLUMN NOT CHANGED. The ground is simpler than either version I first recorded.**
 
-The correct ground is the one that rule states for exactly this case: **"When unsure whether a
-transition is exempt, the agent MUST treat it as non-exempt."** Advancing a card that gates
-TRDD-HSPUF5XH on a vacuous precondition would drain a release blocker on a technicality — which is
-the failure the conservative principle exists to prevent. All six ACCEPTANCE boxes being ticked is a
-separate claim: they were ticked against the implementation, and step 3 is the one that outlives it.
+Table A's row — *`testing → ai_review`: All `test-requirements:` + `audit-requirements:` PASSED* —
+is a description of the situation in which the transition is MECHANICAL: a card that declared those
+frontmatter fields and saw them pass. **This card carries neither field** (`## VERIFICATION` is
+prose, not a field), so it never enters that situation and falls **OUTSIDE table A's scope**.
+`manager-approval-defaults.md` then settles it directly: *"Anything not on the exempt list is
+non-exempt."* No appeal to conservatism is needed; the conservative principle is a backstop here,
+not the reason.
+
+**Both earlier framings are withdrawn.** The first said the exemption's "precondition is not met"
+(wrong object — it keyed on prose, not on the fields the rule names). The second said the condition
+was **VACUOUSLY SATISFIED** so *"the rule as literally written would permit the move"* — that is
+FALSE, and dangerously so: it imports predicate-logic semantics into a table of worked examples,
+under which any card would become auto-exempt by declaring FEWER requirements. No rule is written
+to reward declaring less.
+
+All six ACCEPTANCE boxes being ticked is a separate claim: they were ticked against the
+implementation, and step 3 is the one that outlives it.
 
 ## Approval log
 
