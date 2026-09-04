@@ -1,6 +1,6 @@
 ---
 trdd-id: KBK9J59Y
-title: Six WORK-column cards have no acceptance criteria and a seventh has prose ones that box-count triage cannot see
+title: Six of seven WORK-column cards have no acceptance-shaped section and the seventh has prose criteria box-count triage cannot see
 column: todo
 created: 2026-09-04T18:19:29+0200
 updated: 2026-09-04T18:19:29+0200
