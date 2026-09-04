@@ -98,8 +98,18 @@ const ALLOW = new Map([
 
 // The RATCHET. Without this, "the budget can only go down" was just a sentence in a comment: adding
 // an ALLOW entry made the guard pass silently, so the exemption list could grow forever and the
-// guard would still print OK. The number below is the high-water mark; exceeding it fails. Lower it
-// as phases land — never raise it.
+// guard would still print OK.
+//
+// It counts the LIST LENGTH, not how many entries the current tree happens to exercise. Counting
+// live matches instead would let a deleted file — or a spelling drifting out of pattern range —
+// silently free budget, so the list could grow while the number stayed flat: exactly the silent
+// growth this exists to stop. It also made the ratchet depend on the filesystem walk, which made a
+// mutation test run from /tmp pass vacuously against 0 scanned files. The ratchet governs the
+// PROMISE; the stale-entry note governs the BOOKKEEPING. Two mechanisms, two jobs.
+//
+// Raising this is ALLOWED but must be deliberate and justified in the commit message: a phase in
+// flight can legitimately need a transitional file. The friction is the point — an edit here is a
+// decision someone has to defend, which is exactly what a silent `ALLOW.push` was not.
 const MAX_EXEMPTIONS = 34
 
 // Sibling guards ENUMERATE the patterns they ban, so they trip each other by construction. Excluded
