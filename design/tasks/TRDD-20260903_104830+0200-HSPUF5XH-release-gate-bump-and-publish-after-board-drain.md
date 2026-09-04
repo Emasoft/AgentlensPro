@@ -3,7 +3,7 @@ trdd-id: HSPUF5XH
 title: Bump and publish agentlenspro only after every open card is terminal and every known issue is fixed
 column: blocked
 created: 2026-09-03T10:48:30+0200
-updated: 2026-09-03T11:15:00+0200
+updated: 2026-09-04T13:45:49+0200
 current-owner: main-session
 task-type: infra
 min-approval-requirement: user
@@ -12,7 +12,7 @@ created-by: main-session
 npt: []
 eht: []
 pre-block-column: todo
-blocked-by: [EAK9R8IY, DMWOBWFH, 2R36W8Q1, IXMB2JVD, N60JUWU3, UTFVMVT8, CAJ5RCP9, 9SYRK6SW, QE114936, POLG0613, 768NEX6E, 7YPQWKPG, 99HUNXJS, 7NHUU6GK, ZSX34J8F, 2R0AXCKL, TP3BA3ED, 2TQHNMEC, 70D0TUBZ]
+blocked-by: [2R36W8Q1, IXMB2JVD, N60JUWU3, UTFVMVT8, CAJ5RCP9, 9SYRK6SW, QE114936, POLG0613, 768NEX6E, 7YPQWKPG, 99HUNXJS, 7NHUU6GK, ZSX34J8F, 2R0AXCKL, TP3BA3ED, 2TQHNMEC, 70D0TUBZ]
 ---
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-03
@@ -23,6 +23,15 @@ whose card has reached a terminal column (`complete`, `cancelled`,
 `superseded`) or moved out of the gating set (`dev|testing|todo|blocked|plan|dispatch`).
 When `blocked-by` is empty, restore `column: pre-block-column` value (`todo`),
 then proceed to run the acceptance gates below before touching version/tag.
+
+**Drain 2026-09-04T13:45:49+0200 — 19 → 17.** Removed `EAK9R8IY` and `DMWOBWFH` per this
+card's own NEXT ACTION (both terminal AND in `design/archived/`, so the column claim is
+corroborated by the folder). `DMWOBWFH` is `complete`. `EAK9R8IY` is `superseded`, which is
+NOT self-evidently dischargeable — superseded work does not vanish, it MOVES — so its
+`superseded-by: [1B98LCVR]` was followed: `1B98LCVR` is itself `column: complete` with
+`blocked-by: []` in `design/archived/`. The successor is done, so the dependency is genuinely
+discharged rather than silently dropped. Had `1B98LCVR` been open, the correct edit would have
+been to SWAP the id, not remove it.
 
 **Backburner triage 2026-09-03** (report:
 `reports/board-sweep/20260903_111058+0200-backburner-triage.md`): WORK NOW → 99HUNXJS, 7NHUU6GK,
