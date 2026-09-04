@@ -237,7 +237,11 @@ function effectiveCwd(segment, baseCwd) {
   const visible = segment
     .replace(/\$\([^()]*\)|`[^`]*`/g, (s) => ' '.repeat(s.length))
     .replace(/\$\([\s\S]*$|`[\s\S]*$/, (s) => ' '.repeat(s.length))
-  const m = /(?:^|[\s(])(?:cd|pushd)\s+(?:--\s+)?(['"]?)([^'"&;|]+)\1(?:\s|$)/.exec(visible)
+  // `)` is excluded from the target for the same reason `&;|` are: it is shell syntax, and a
+  // segmentation split can leave it trailing. `cd /tmp/other )` took the `)` as part of the name,
+  // giving the fictional base `/tmp/other )` — the invented-directory bypass, arriving by a route
+  // the glob and `$var` bailouts do not cover. Measured 2026-09-04.
+  const m = /(?:^|[\s(])(?:cd|pushd)\s+(?:--\s+)?(['"]?)([^'"&;|)]+)\1(?:\s|$)/.exec(visible)
   if (!m) return { dir: baseCwd, matched: false }
   const target = m[2].trim()
   if (!target || target === '-') return { dir: baseCwd, matched: false }
@@ -428,6 +432,8 @@ process.stdin.on('end', () => {
     // cannot reach — the same wrong-file verdict as the `||` case above, one separator over.
     let dir = sessionCwd
     let dirExplicit = false
+    // A second base to check when the depth is a guess — see the `bases` comment below.
+    let altDir = null
     const parts = segmentable.split(/(\|\||&&|[;&\n])/)
     // A capturing split keeps every piece in order, so a part's offset is the running sum of the
     // ones before it — exact, and it must advance past the separators too. The earlier
@@ -443,8 +449,16 @@ process.stdin.on('end', () => {
     // that prefix hid a real symlink. Counting bare `)` also closes a plain `(subshell)`, which is
     // safe in one direction only: it can make depth SMALLER, i.e. more cds visible, never fewer.
     let subDepth = 0
-    const quotesUnbalanced = ((cmd.match(/'/g) || []).length % 2 !== 0)
-      || ((cmd.match(/"/g) || []).length % 2 !== 0)
+    // Count on the MASKED view, and count LEFTOVERS rather than parity. A successful mask blanks
+    // every quoted span, so a quote still present in `segmentable` IS the evidence the mask failed
+    // — a detection, not a proxy. Parity on the RAW command was a proxy, and a wrong one in both
+    // directions: `echo "it's fine"` masks perfectly yet has an odd `'` count, so ANY apostrophe or
+    // nested quote — `git commit -m "don't"` — disabled the depth gate for the whole command line
+    // and re-opened the nesting bypass 880b5deb closed. Measured 2026-09-04.
+    //
+    // This is 1c337d57's lesson one layer over: that commit moved the depth count off the raw
+    // string, and this check was then added on the raw string. Same mistake, same fix.
+    const quotesUnbalanced = /['"]/.test(segmentable)
     for (const part of parts) {
       const base = cursor
       cursor += part.length
@@ -466,11 +480,11 @@ process.stdin.on('end', () => {
       // that cannot report its own failure is the recurring hazard here (the length assertion
       // above is the same idea); when it failed, stop trusting the depth and let every cd through.
       // That is the over-resolving direction — it costs an OTP prompt, never a miss.
-      const insideSubst = !quotesUnbalanced && subDepth > 0
+      const insideSubst = subDepth > 0
       subDepth = Math.max(0, subDepth
         + (partSyntax.match(/\$\(/g) || []).length
         - (partSyntax.match(/\)/g) || []).length)
-      if (part === '||' || part === '&') { dir = sessionCwd; dirExplicit = false; continue }
+      if (part === '||' || part === '&') { dir = sessionCwd; dirExplicit = false; altDir = null; continue }
       if (/^(?:&&|[;\n])$/.test(part)) continue
       const pipeline = part
       // Stage boundaries come from the MASKED text; the stage CONTENT is sliced from the original
@@ -499,18 +513,31 @@ process.stdin.on('end', () => {
         // asymmetry governs `explicit`: a stage sees its OWN cd and one from a previous split part
         // (entryExplicit), never a sibling stage's — that cd ran in a different subshell.
         // A cd in a part that is INSIDE an unclosed substitution moves only that subshell.
-        const ec = insideSubst
-          ? { dir: multi ? entryDir : dir, matched: false }
-          : effectiveCwd(segment, multi ? entryDir : dir)
-        const stageDir = ec.dir
-        const stageExplicit = ec.matched || (multi ? entryExplicit : dirExplicit)
+        const ec = effectiveCwd(segment, multi ? entryDir : dir)
+        const chosen = insideSubst ? { dir: multi ? entryDir : dir, matched: false } : ec
+        const stageDir = chosen.dir
+        const stageExplicit = chosen.matched || (multi ? entryExplicit : dirExplicit)
         if (!multi) { dir = stageDir; dirExplicit = stageExplicit }
         const trimmed = segment.trim()
         if (!trimmed) continue
         if (wholePipelineReadOnly) continue
-        for (const tok of pathTokens(trimmed, stageDir, stageExplicit)) {
-          const found = firstSymlink(tok.resolved)
-          if (found) { hit = { ...found, raw: tok.raw }; break }
+        // With a leftover quote the depth is a guess, so BOTH readings of this cd are plausible and
+        // picking one is wrong half the time — in the direction that misses. Forcing the gate off
+        // was the first attempt and it re-opened the nesting bypass; forcing it on is the bug this
+        // check was added for. So try both bases and deny if EITHER names a symlink: over-resolving
+        // costs an OTP prompt, and the alternative is a miss.
+        // The alternate base has to PERSIST, not just apply to the stage whose cd was skipped: an
+        // unclosed `$(` keeps the depth open, so the dangerous command lands in a LATER stage that
+        // names no cd of its own. Remember the skipped target until a `||`/`&` resets the base.
+        if (quotesUnbalanced && insideSubst && ec.matched && ec.dir !== stageDir) altDir = ec.dir
+        const bases = [[stageDir, stageExplicit]]
+        if (altDir && altDir !== stageDir) bases.push([altDir, true])
+        for (const [b, explicit] of bases) {
+          for (const tok of pathTokens(trimmed, b, explicit)) {
+            const found = firstSymlink(tok.resolved)
+            if (found) { hit = { ...found, raw: tok.raw }; break }
+          }
+          if (hit) break
         }
         if (hit) break
       }

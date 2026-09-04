@@ -174,7 +174,16 @@ check(run(`grep 'a)' f && cd ${wtDir} && cp x node_modules/`).denied, '...and a 
 // sees a quoted `$(` as a real opener — sticking open and skipping every later cd.
 check(run(`echo "$( && cd ${wtDir} && cp x node_modules/`).denied, 'an unbalanced double quote does not disable cd tracking')
 check(run(`echo '$( && cd ${wtDir} && cp x node_modules/`).denied, '...nor an unbalanced single quote')
+// NOT a pin on the leftover-quote check — the mask blanks this span, so it denies with or without
+// it. A mask regression guard, like `grep 'a)'` above.
 check(run(`echo "$( x " && cd ${wtDir} && cp x node_modules/`).denied, '...and a BALANCED quoted $( is still just an argument')
+// An apostrophe is not a broken quote to the DEPTH counter, and treating it as one vetoed the gate
+// for the whole command line — re-opening the nesting bypass behind `echo it's` or `-m "don't"`.
+check(run(`echo it's $( echo $(date) && cd ${sub} ) && cp x ${path.basename(link)}/`).denied, "an apostrophe does not disable the nesting defence")
+check(run(`git commit -m "don't" && echo $( echo $(date) && cd ${sub} ) && cp x ${path.basename(link)}/`).denied, '...nor a contraction inside a balanced quote')
+// `)` is shell syntax, so it must not be swallowed into a cd target: `cd <dir> )` took the paren
+// as part of the name and resolved against the fictional `<dir> )`.
+check(run(`(cd ${wtDir} ) && cp x node_modules/`).denied, 'a trailing ) is not part of the directory name')
 // A glob char in a name that REALLY EXISTS is a name, not a pattern. A blanket character test
 // stopped tracking these, trading a real regression for a `cd *` improvement worth nothing.
 const bracket = path.join(root, 'My Docs [2026]')
