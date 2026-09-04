@@ -17,6 +17,16 @@ blocked-by: [7YPQWKPG]
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-02
 
+- **2026-09-04 — TRDD-H5G9RRF3 FOLDED IN HERE (it was cancelled).** This card's title says 7 GB;
+  the machine now reads **~15 GB**. New material sits in the resident-set acceptance box, not in
+  this STATE block, so look there: (a) the guard-has-no-lever finding —
+  `apply_memory_pressure` only halves the summarization window and it is pinned at
+  `SUMMARY_WINDOW_FLOOR_MS`, a 288-fold clamp from the configured 24 h, with nothing responding
+  past that; (b) live RSS readings and a quiet-sampling band of 28 MB over 9 samples; (c) a killed
+  hypothesis (high RSS does NOT stall the compression sweep — 30 of 31 segments are `.gz`, and
+  that sweep is TypeScript while the live server is Rust); (d) the `server status` observability
+  gap. Pointer recorded here because a resuming session reads STATE first and would otherwise miss
+  an annotation buried in an acceptance box.
 - **USER constraint 2026-09-02:** no fleet soak ("100 instances will crash this machine"); measure only
   under the sessions already running.
 - **Measured:** five `/usr/bin/sample` captures of alcore (pid 95443) taken the instant
