@@ -45,24 +45,52 @@ passes after boot each read `ingested N, deleted N` (no failed loop). Live exe p
 prints `(N re-emitted), failed M` so a future silent-failure loop is visible in the log (this
 last change is NOT in the deployed binary; it ships with 2.33.2).
 
-**AI_REVIEW RE-VERIFIED LIVE 2026-09-04T16:30+0200 — acceptance still holds, on evidence the
-original run could not have had.** The 09-02 measurement was taken minutes after deploying
-`f9605164` on pid 31959. It has now been re-run two days later against a DIFFERENT process
-(pid 37180, uptime 7h34m — so at least one full restart cycle has intervened), which is the
-condition the original could not test: `capture: 11 live file(s), newest 2s ago` with **no PARKED
-suffix**; the legacy dir `~/.agentlens/otel-bodies` holds **0 files**; and the review's own
-non-fakeable falsifier — *a legacy file that fails verify is KEPT and re-examined every 60 s, so
-it would age* — reads **0 files older than 1 h in EITHER bodies dir** (spool 11 files, all fresh).
-The drain is durable across restarts, not just true at deploy time.
+**AI_REVIEW 2026-09-04T16:30+0200 — what was established, and what was NOT.** An earlier version
+of this block claimed the acceptance was "re-verified ... on evidence the original run could not
+have had". **That was overstated and is corrected here**; adversarial review caught three defects
+and two commands settled them.
+
+ESTABLISHED (measured 16:30–16:34):
+- **The drain is ALIVE and succeeding, not idle.** This is the check that carries the weight, and
+  it replaces the one below that does not: consecutive `bodies pass` lines in `~/.agentlens/server.log`
+  read `ingested 12, deleted 12 (0 of them re-emitted), failed 0` — and `ingested N, deleted N,
+  failed 0` on every pass. A dead or silently-failing chore cannot print that.
+- **The serving binary is alcore, not the TS twin** — `lsof -p 37180` txt → 
+  `bin-native/darwin-arm64/alcore`. Worth pinning because `rustBinResolve` falls back to the TS
+  server SILENTLY, and TRDD-M2VK8T4P (a codesign SIGKILL) landed today, making that fallback a live
+  possibility rather than a theoretical one. It is at least as new as f9605164: it prints the
+  `(N re-emitted), failed M` instrumentation the 09-02 note said was NOT yet deployed.
+- **No new stranding in two days**: legacy dir `~/.agentlens/otel-bodies` 0 files, `capture:` shows
+  no PARKED suffix (was 308 live / PARKED 307 / 144.3 MB), 0 files older than 1 h in either dir.
+- A process boundary exists (pid 37180, uptime 7h34m; the 09-02 run was pid 31959).
+
+NOT ESTABLISHED — do not read this run as a re-test of the fix:
+- **The 307-file backlog drain was NOT re-tested.** No legacy backlog remains, so the card's aging
+  falsifier (*a file that fails verify is KEPT and re-examined every 60 s, so it would age*) has
+  nothing left to falsify. Today's "0 files older than 1 h" is equally consistent with a working
+  drain and with a drain that never ran — fresh captures never reach 1 h either way. It tests
+  ABSENCE OF BACKLOG, not DRAIN OF BACKLOG. The pass-log lines above are what rescue this.
+- The matching `capture: 11` on both dates was struck from the record: two instantaneous samples of
+  a rolling window that turns over in seconds ("newest 2s ago"). Equality there is coincidence, and
+  presenting it beside two real findings lends it unearned weight.
 
 **COLUMN NOT CHANGED, deliberately.** `ai_review → complete` is not on
 `manager-approval-defaults.md`'s exempt list, so it is non-exempt and not mine to perform
 unilaterally. This session already made that exact error on TRDD-99HUNXJS (closed while an
 adversarial verdict said NOT COMPLETE, and the reviewer's objection proved correct within the
 hour). Recording a verified review verdict IS exempt (table E, runtime evidence); moving the card
-is not. **This card is ready to close on a USER/MANAGER decision — the evidence is above.**
+is not.
 
-**NEXT ACTION:** await approval for `ai_review → complete`. Follow-up noted, not carded: `PassResult.stranded_ts` is
+**AND APPROVAL ALONE WOULD NOT BE ENOUGH — this card CANNOT reach `complete` yet.** `eht:
+[7NHUU6GK]` is `column: backburner`, i.e. not terminal, and a parent may not reach `complete`
+until every EHT is terminal. An earlier version of this block said the card was "ready to close on
+a USER/MANAGER decision"; that was **false**, and it is the worse kind of false — a correctly
+cautious process decision (not moving the column) carrying an incorrectly confident claim about
+what a human's approval would achieve.
+
+**NEXT ACTION:** none on this card. It is genuinely blocked on EHT 7NHUU6GK reaching a terminal
+column; only then does `ai_review → complete` become an approval question. Follow-up noted, not
+carded: `PassResult.stranded_ts` is
 written by nothing now but still serialized/read (`src/rustStorePass.ts:102`); retire it with
 the TS mirror in a later sweep.
 
