@@ -250,7 +250,7 @@ find "$D" -name '*.parquet' > /tmp/p.raw && sort /tmp/p.raw > /tmp/parts-before.
 agentlenspro server restart
 find "$D" -name '*.parquet' > /tmp/p.raw && sort /tmp/p.raw > /tmp/parts-after.txt \
   || echo "AFTER: find FAILED — this is NOT data loss; re-run the find"
-[ -f /tmp/parts-before.txt ] && [ -f /tmp/parts-after.txt ] \
+[ -s /tmp/parts-before.txt ] && [ -s /tmp/parts-after.txt ] \
   && comm -23 /tmp/parts-before.txt /tmp/parts-after.txt \
   || echo "a snapshot is missing (see above) — comparison SKIPPED, not passed"
 # then (b), the readability half — the node block below
