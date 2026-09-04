@@ -156,7 +156,17 @@ check(run(`(cd ${wtDir} && cp x node_modules/)`).denied, 'a plain subshell is NO
 // Nesting puts the inner `)` in the OPENER's part, so the cd lands in a part with no opener and
 // reads as top-level. Per-part blanking cannot see two parts back; only depth counted across parts
 // can. This is the shape blanking alone missed.
+// `sub` gets a REAL directory of the same name, so the two bases give opposite verdicts: resolved
+// against root, `linked/` is a symlink and denies; against sub it is an ordinary dir and allows.
+// That pins the base itself. Naming a nonexistent leaf would NOT work — with the cd correctly
+// skipped there is no explicit base, so the existence gate drops it and the case allows for a
+// reason that has nothing to do with nesting.
+fs.mkdirSync(path.join(sub, path.basename(link)), { recursive: true })
 check(run(`echo $( echo $(date) && cd ${sub} ) && cp x ${path.basename(link)}/`).denied, 'a NESTED substitution does not let its cd escape')
+// Depth counts SYNTAX, so a paren inside a quoted argument is not an opener. Counting it left the
+// counter stuck open and skipped every later cd — the same class as the nesting bug, mirrored.
+check(run(`grep '$(' f && cd ${wtDir} && cp x node_modules/`).denied, "a quoted $( is an argument, not a substitution opener")
+check(run(`grep 'a)' f && cd ${wtDir} && cp x node_modules/`).denied, '...and a quoted ) is not a closer')
 // A glob char in a name that REALLY EXISTS is a name, not a pattern. A blanket character test
 // stopped tracking these, trading a real regression for a `cd *` improvement worth nothing.
 const bracket = path.join(root, 'My Docs [2026]')

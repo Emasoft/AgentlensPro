@@ -441,11 +441,22 @@ process.stdin.on('end', () => {
     for (const part of parts) {
       const base = cursor
       cursor += part.length
-      const partOrig = cmd.slice(base, base + part.length)
+      // Count on the MASKED text. Stage CONTENT is sliced from `cmd` on purpose — a quoted path
+      // must stay extractable — but depth wants SYNTAX, and `grep '$(' f` is an argument, not an
+      // opener. Reading `cmd` here counted it, left subDepth stuck at 1, and every later part was
+      // treated as inside a subshell: measured 2026-09-04, prefixing `grep '$(' f &&` skipped a
+      // real cd and turned a DENY into an ALLOW. `segmentable` is length-preserving (asserted
+      // above), so the same offsets index it.
+      //
+      // Known and deliberately unfixed: `$((` counts one open and two closes, a net -1 the clamp
+      // absorbs. Masking does not help — arithmetic is not quoted. No reachable exploit was found,
+      // because over-closing only makes MORE cds visible; but that safety is the clamp's doing, so
+      // do not remove the clamp without revisiting this.
+      const partSyntax = segmentable.slice(base, base + part.length)
       const insideSubst = subDepth > 0
       subDepth = Math.max(0, subDepth
-        + (partOrig.match(/\$\(/g) || []).length
-        - (partOrig.match(/\)/g) || []).length)
+        + (partSyntax.match(/\$\(/g) || []).length
+        - (partSyntax.match(/\)/g) || []).length)
       if (part === '||' || part === '&') { dir = sessionCwd; dirExplicit = false; continue }
       if (/^(?:&&|[;\n])$/.test(part)) continue
       const pipeline = part
