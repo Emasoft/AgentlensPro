@@ -224,6 +224,11 @@ function effectiveCwd(segment, baseCwd) {
   // prefixing `echo $( cd /elsewhere && pwd ) &&` turned a DENY into an ALLOW. Blanking the region
   // needs no boundary trickery and covers every spelling of the inside. Length does not matter
   // here: this function extracts a target, it computes no offsets.
+  //
+  // NOTE this reads the CONTENT slice, so it treats a QUOTED `$(` as an opener where the depth
+  // counter (reading the masked syntax view) does not. The two deliberately disagree; what makes
+  // that unreachable is segmentation — a `cd` always starts its own stage, so a quoted `$(` and an
+  // applying `cd` can never share one. Loosen the split and this becomes live.
   // The second replace is the load-bearing one: segmentation splits on `&&`/`;`/`|`, which are
   // ordinary characters INSIDE a substitution, so `echo $( cd x && pwd ) && cp …` reaches this
   // function already torn into `echo $( cd x ` — an unbalanced `$(` whose cd looks top-level. Blank
@@ -438,6 +443,8 @@ process.stdin.on('end', () => {
     // that prefix hid a real symlink. Counting bare `)` also closes a plain `(subshell)`, which is
     // safe in one direction only: it can make depth SMALLER, i.e. more cds visible, never fewer.
     let subDepth = 0
+    const quotesUnbalanced = ((cmd.match(/'/g) || []).length % 2 !== 0)
+      || ((cmd.match(/"/g) || []).length % 2 !== 0)
     for (const part of parts) {
       const base = cursor
       cursor += part.length
@@ -453,7 +460,13 @@ process.stdin.on('end', () => {
       // because over-closing only makes MORE cds visible; but that safety is the clamp's doing, so
       // do not remove the clamp without revisiting this.
       const partSyntax = segmentable.slice(base, base + part.length)
-      const insideSubst = subDepth > 0
+      // The quote mask needs a CLOSING quote, so an unbalanced one masks nothing and leaves a
+      // quoted `$(` visible in the syntax view — subDepth then sticks open and every later cd is
+      // skipped. Measured 2026-09-04: `echo "$( && cd <wt> && cp x node_modules/` ALLOWED. A mask
+      // that cannot report its own failure is the recurring hazard here (the length assertion
+      // above is the same idea); when it failed, stop trusting the depth and let every cd through.
+      // That is the over-resolving direction — it costs an OTP prompt, never a miss.
+      const insideSubst = !quotesUnbalanced && subDepth > 0
       subDepth = Math.max(0, subDepth
         + (partSyntax.match(/\$\(/g) || []).length
         - (partSyntax.match(/\)/g) || []).length)

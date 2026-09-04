@@ -161,12 +161,20 @@ check(run(`(cd ${wtDir} && cp x node_modules/)`).denied, 'a plain subshell is NO
 // That pins the base itself. Naming a nonexistent leaf would NOT work — with the cd correctly
 // skipped there is no explicit base, so the existence gate drops it and the case allows for a
 // reason that has nothing to do with nesting.
+// MUST stay after the three substitution checks above — they need `sub/linked` ABSENT.
 fs.mkdirSync(path.join(sub, path.basename(link)), { recursive: true })
 check(run(`echo $( echo $(date) && cd ${sub} ) && cp x ${path.basename(link)}/`).denied, 'a NESTED substitution does not let its cd escape')
 // Depth counts SYNTAX, so a paren inside a quoted argument is not an opener. Counting it left the
 // counter stuck open and skipped every later cd — the same class as the nesting bug, mirrored.
 check(run(`grep '$(' f && cd ${wtDir} && cp x node_modules/`).denied, "a quoted $( is an argument, not a substitution opener")
+// NOT a pin on the masked-count fix — under that mutation the lone `)` clamps to 0 and the cd is
+// still tracked. It is a regression guard for a future change that removes the clamp.
 check(run(`grep 'a)' f && cd ${wtDir} && cp x node_modules/`).denied, '...and a quoted ) is not a closer')
+// The quote mask needs a CLOSING quote, so an unbalanced one masks nothing and the depth counter
+// sees a quoted `$(` as a real opener — sticking open and skipping every later cd.
+check(run(`echo "$( && cd ${wtDir} && cp x node_modules/`).denied, 'an unbalanced double quote does not disable cd tracking')
+check(run(`echo '$( && cd ${wtDir} && cp x node_modules/`).denied, '...nor an unbalanced single quote')
+check(run(`echo "$( x " && cd ${wtDir} && cp x node_modules/`).denied, '...and a BALANCED quoted $( is still just an argument')
 // A glob char in a name that REALLY EXISTS is a name, not a pattern. A blanket character test
 // stopped tracking these, trading a real regression for a `cd *` improvement worth nothing.
 const bracket = path.join(root, 'My Docs [2026]')
