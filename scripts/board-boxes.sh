@@ -14,7 +14,7 @@
 # the cost of the first is one card opened for nothing, the cost of the second is a
 # defect report against a card that was fine.
 #
-# `criteria=prose` therefore means "a heading in the criteria POSITION exists", NOT
+# `criteria=heading?` therefore means "a heading in the criteria POSITION exists", NOT
 # "criteria were written". Measured false positives: TRDD-Q9WD3K5R matches on a
 # `### Measured … VERIFIED` heading that is evidence, and TRDD-YBJGIYI1's FIRST
 # match is `## The defect (VERIFIED at file:line…)`, which is about the defect. Both
@@ -51,14 +51,14 @@ for f in design/tasks/*.md; do
   tick=$(grep -c '^ *- \[x\]' "$f" || true)
 
   if grep -qiE '^#{1,3} .*(accept|verif|done|criteri|proof|pass|check)' "$f"; then
-    head='prose'
+    head='heading?'
   else
     head='-'
   fi
 
   # The interesting state: no boxes at all. Say which kind it is.
   if [ "$open" = 0 ] && [ "$tick" = 0 ]; then
-    note="NO BOXES ($([ "$head" = prose ] && echo 'prose criteria — assessable, just uncountable' || echo 'and no criteria heading — REVIEW'))"
+    note="NO BOXES ($([ "$head" = 'heading?' ] && echo 'has a criteria heading — open it' || echo 'and NO criteria heading — REVIEW'))"
   elif [ "$open" = 0 ]; then
     # NOT "close-out candidate" — that is a verdict this script has no evidence for.
     # `ticked=N` says every box that was WRITTEN is ticked; it says nothing about
