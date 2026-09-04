@@ -112,3 +112,22 @@ by an engine that never runs here".
 - 2026-09-04T14:09:41+0200 — COMPLETED by main-session. Option 2 recorded; all four layout
   sites documented; `storeApiCallsDir.test.ts` 3/3 green including the migration silent-loss
   case. `min-approval-requirement: none`, so no external approver was required.
+- 2026-09-04T14:14+0200 — **CORRECTION to the lesson in `## Notes and lessons learned` above.**
+  That section is body text on a terminal card and is frozen, so the correction lands here (the
+  Approval log is the append-only exempt section). The lesson as written blames the wrong cause
+  and is too kind to me. It says a grep for a SYMBOL cannot find documentation ABOUT that symbol.
+  **That is false, and my own first command disproves it:** `grep -rn "blobs\|bodies\|parts\|api_call"
+  src/store/*.ts` matches `api_calls` in prose and DID contain `ingestPass.ts:270`. Re-run to settle
+  it: `grep -rn "api_call" src/store/*.ts > /tmp/g.txt; grep -c ingestPass /tmp/g.txt` → 1.
+  What actually happened: that grep returned 9.2 KB, the harness truncated it to a ~2 KB preview
+  and persisted the remainder to a file, and I never read the file — I ran a narrower
+  `API_CALLS_DIR`-only grep and treated the narrower result as authoritative. **The real failure is
+  acting on a TRUNCATED tool result, which violates the standing "Tool Result Blindness" rule
+  verbatim ("never measure or summarize a command's output from a truncated tool result — capture
+  to a file first, then inspect the file").** An adversarial review fork caught this; I had recorded
+  the flattering version, in which I merely picked an unlucky search token rather than skipped a
+  measurement I had already taken.
+  Two corollaries worth carrying: a null result is a **failed measurement** until shown otherwise,
+  never an absence; and the misattribution is costlier than the original slip, because a lesson
+  that names the wrong cause teaches the next session to vary its grep tokens when the transferable
+  rule it should reinforce is "never trust a truncated result."
