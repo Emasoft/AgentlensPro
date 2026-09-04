@@ -3,7 +3,7 @@ trdd-id: IXMB2JVD
 title: The post-publish verify races the CDN and reports a successful release as a failed workflow run
 column: testing
 created: 2026-08-29T14:19:15+0200
-updated: 2026-09-01T22:34:57+0200
+updated: 2026-09-04T15:13:48+0200
 current-owner: main-session
 task-type: infra
 scope: project
@@ -73,8 +73,19 @@ still the right guard for its own step.
 
 ## Acceptance
 
-- [ ] The next release's `publish-npm` job goes green end-to-end, including the registry-tarball
-      verification, with no manual intervention.
+- [ ] **POST-RELEASE — this box does NOT gate the release, and cannot.** The next release's
+      `publish-npm` job goes green end-to-end, including the registry-tarball verification, with no
+      manual intervention.
+
+      Reclassified 2026-09-04 by USER decision. This card was in `HSPUF5XH`'s `blocked-by` while
+      this box requires a release to have happened — and `HSPUF5XH` IS the release. The gate was
+      therefore unsatisfiable: every other blocker could drain and the publish would still be
+      blocked by a card only the publish could clear. Box 3 below states the same circularity in
+      its own words ("Proven by the NEXT release's run (box 1)"), which is the tell that it was
+      always a post-release check written into a pre-release position.
+
+      `HSPUF5XH` now carries `post-release-verification: [IXMB2JVD]` instead. Nothing is weakened —
+      tick this from the publish run's own log once it exists, then close the card.
 - [x] The published tarball carries 16 `bin-native` entries, all `-rwxr-xr-x` — VERIFIED BY HAND
       on v2.33.1 (2026-09-01): `curl` of the registry tarball → HTTP 200, 143,735,274 bytes;
       `tar -tvzf` → exactly 16 `-rwxr-xr-x` bin-native entries. `_npmUser` is the OIDC GitHub-Actions

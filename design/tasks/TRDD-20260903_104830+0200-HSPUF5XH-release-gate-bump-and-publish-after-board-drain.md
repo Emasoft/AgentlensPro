@@ -3,7 +3,7 @@ trdd-id: HSPUF5XH
 title: Bump and publish agentlenspro only after every open card is terminal and every known issue is fixed
 column: blocked
 created: 2026-09-03T10:48:30+0200
-updated: 2026-09-04T13:45:49+0200
+updated: 2026-09-04T15:13:48+0200
 current-owner: main-session
 task-type: infra
 min-approval-requirement: user
@@ -12,7 +12,8 @@ created-by: main-session
 npt: []
 eht: []
 pre-block-column: todo
-blocked-by: [2R36W8Q1, IXMB2JVD, N60JUWU3, UTFVMVT8, CAJ5RCP9, 9SYRK6SW, QE114936, POLG0613, 768NEX6E, 7YPQWKPG, 99HUNXJS, 7NHUU6GK, ZSX34J8F, 2R0AXCKL, 2TQHNMEC, 70D0TUBZ, CS2W7E77]
+blocked-by: [2R36W8Q1, N60JUWU3, UTFVMVT8, CAJ5RCP9, 9SYRK6SW, QE114936, POLG0613, 768NEX6E, 7YPQWKPG, 99HUNXJS, 7NHUU6GK, ZSX34J8F, 2R0AXCKL, 2TQHNMEC, 70D0TUBZ, CS2W7E77]
+post-release-verification: [IXMB2JVD]
 ---
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-03
@@ -23,6 +24,23 @@ whose card has reached a terminal column (`complete`, `cancelled`,
 `superseded`) or moved out of the gating set (`dev|testing|todo|blocked|plan|dispatch`).
 When `blocked-by` is empty, restore `column: pre-block-column` value (`todo`),
 then proceed to run the acceptance gates below before touching version/tag.
+
+**DEADLOCK BROKEN 2026-09-04T15:13:48+0200 — 17 → 16, by USER decision.**
+
+`IXMB2JVD` was in `blocked-by` while its only open acceptance box reads *"The next release's
+`publish-npm` job goes green end-to-end"* — which REQUIRES a release. This card IS the release. So
+the gate could never be satisfied: draining all sixteen other blockers would still leave a
+seventeenth that only a publish can clear. **The board could not authorize a publish at all, and
+that — not any individual defect — is why this card had not moved.** The card's own box 3 states
+the circularity outright: "Proven by the NEXT release's run (box 1)."
+
+Moved to a new `post-release-verification:` field, which gates nothing. Nothing is weakened: the fix
+IXMB2JVD covers already landed (`f8b7560e`, the 30 × 20 s tarball retry), its tarball-property box
+was verified by hand on v2.33.1, and box 1 still gets ticked from the publish run's own log — just
+AFTER the event it verifies, which is the only order in which it can be checked.
+
+USER decision, asked because this is a release-gate change and the second gate edit of the day:
+"Unlink it — it verifies, not gates."
 
 **Drain 2026-09-04T13:45:49+0200 — 19 → 17.** Removed `EAK9R8IY` and `DMWOBWFH` per this
 card's own NEXT ACTION (both terminal AND in `design/archived/`, so the column claim is
