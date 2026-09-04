@@ -164,9 +164,39 @@ blocked-by: [7YPQWKPG]
       256 MB** of the 303. DuckDB query buffers, background chores, and a 91.7 MB `/api/summary`
       response fetched minutes earlier were all uncontrolled.
 
-      Also note `configuredWindowMs` is 86,400,000 (24 h) against an effective 300,000 — the guard
-      has clamped the window 288-fold and has no further lever. That structural half is carded
-      separately as TRDD-H5G9RRF3, which explicitly does NOT duplicate this box.
+      **THE GUARD HAS NO LEVER PAST THE WINDOW FLOOR** (folded in from TRDD-H5G9RRF3, which was
+      cancelled 2026-09-04 as too thin to stand alone — see its Approval log). Read from source:
+
+      - `apply_memory_pressure` (`span_window.rs:100-111`) responds to `rss > budget` by HALVING
+        `effective_ms`, floored at `SUMMARY_WINDOW_FLOOR_MS` (`span_window.rs:23` = `5 * 60_000`).
+        That is its ONLY response; nothing else in the codebase reacts to memory pressure.
+      - Live: `configuredWindowMs` 86,400,000 (24 h) vs `windowMs` 300,000 — the floor exactly. The
+        guard has clamped the window **288-fold** and has no further move.
+      - It IS wired (`lib.rs:663`, on the flush tick) and announces each narrowing on stdout.
+
+      **Why this matters to this card's decomposition:** the process is degraded-but-stable rather
+      than failing, and the clamped window is why. It also means the span window is unlikely to be
+      the dominant term in the resident set — it is pinned at its smallest legal size while RSS
+      sits at ~15 GB.
+
+      **Quiet-sampling band, 9 samples over 4.1 min** (`/api/server-stats`, 30 s apart): 15,109 →
+      15,137 MB, **band 28 MB**, band FLOOR +2 MB across the window (noise, no leak signal), while
+      `spans.inMemory` rose +308. Compare the 373 MB spread (15,085 / 14,712 / 15,015) recorded
+      earlier the same day.
+
+      **State that comparison precisely:** under quiet 30-second sampling the band is 28 MB; the
+      373 MB spread was measured under heavy ad-hoc tool traffic and **was never re-run**. Do NOT
+      say the larger band "does not reproduce" — nothing attempted to reproduce it, the two series
+      differ in sample count, method and concurrent load, and 4 minutes is far short of the 15–30
+      minute window a leak claim would need. Consistent with the swings having been self-inflicted
+      traffic; not established.
+
+      A small observability gap this exposed, worth fixing wherever it lands:
+      `agentlenspro server status` prints `spans: … (5m window)` with NO indication that the
+      configured value is 24 h and the process has been cut 288-fold. I read that line during this
+      session and took it for normal operation. `/api/server-stats` should carry an explicit
+      at-floor signal rather than requiring a reader to know `SUMMARY_WINDOW_FLOOR_MS` and compare
+      by hand.
 
       Method already recorded and not to be re-derived:
       `[[vmmap-ioaccelerator-is-the-mimalloc-heap]]` (ATOM-WA0C-AO6Q) — macOS labels the ENTIRE
