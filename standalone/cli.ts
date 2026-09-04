@@ -11,6 +11,7 @@ import { spawn, exec } from 'child_process'
 import { cliMain, exitNow } from '../src/cli/main'
 import { EXIT, UsageError } from '../src/cli/cliErrors'
 import { alcoreBin, alcoreServeArgs } from '../src/cli/serverControl'
+import { envPort } from '../src/cli/cliCore'
 
 // Bare `agentlenspro` / `npx agentlenspro`: run the Rust server in the foreground, forwarding
 // its stdio, and open the browser once it is listening — the same opt-in contract
@@ -35,7 +36,7 @@ function runServerForeground(): Promise<void> {
       process.stdout.write(chunk)
       if (!opened && /UI\/API listening/.test(chunk.toString())) {
         opened = true
-        const url = `http://localhost:${process.env.UI_PORT ?? '3000'}`
+        const url = `http://localhost:${envPort(process.env.UI_PORT, 3000)}`
         const cmd = process.platform === 'darwin' ? `open "${url}"`
                   : process.platform === 'win32' ? `start "" "${url}"`
                   : `xdg-open "${url}"`

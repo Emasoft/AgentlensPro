@@ -1,9 +1,9 @@
 ---
 trdd-id: 99HUNXJS
 title: The server and the CLI parse the same port env vars by different rules
-column: backburner
+column: testing
 created: 2026-08-27T19:03:03+0200
-updated: 2026-08-27T19:03:03+0200
+updated: 2026-09-04T10:00:39+0200
 current-owner: main
 task-type: bugfix
 severity: LOW
@@ -51,9 +51,49 @@ start (exit non-zero, naming the variable and its value) may beat any silent fal
 
 ## Acceptance
 
-- [ ] One port parser, imported by `standalone/server.ts`, `src/cli/setup.ts` and `src/cli/cliCore.ts`.
-- [ ] A test table asserting all three sites agree on `['', '   ', 'abc', '0', '-1', '65536', '80.5', '3e3', '8080/evil']`.
-- [ ] The refuse-vs-fallback decision recorded here before the code lands.
+- [x] One port parser, imported by `standalone/server.ts`, `src/cli/setup.ts` and `src/cli/cliCore.ts`.
+- [x] A test table asserting all three sites agree on `['', '   ', 'abc', '0', '-1', '65536', '80.5', '3e3', '8080/evil']`.
+- [x] The refuse-vs-fallback decision recorded here before the code lands.
+
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-03
+
+`standalone/server.ts` is gone (deleted in 567fc5c2) — the acceptance box literally naming it is
+satisfied vacuously; the fix landed against the two sites that still existed.
+
+**What moved:** `src/cli/setup.ts::resolveCtx` — its three `Number(process.env.X ?? default)`
+port reads (`uiPort`/`mcpPort`/`otlpPort`, was `Number('')===0`) now call the same validated
+`envPort()` from `src/cli/cliCore.ts` that `serverControl.ts::alcoreServeArgs` already used, so
+setup's health-check/status URLs and the spawned server can no longer disagree on a malformed
+port. Also fixed `standalone/cli.ts`'s post-spawn "open browser" URL (`process.env.UI_PORT ??
+'3000'`, same `Number('')` shape), same call. Exported `resolveCtx` + `Ctx` (were file-private) so
+the new test can assert them directly instead of running the whole multi-step `runSetup` flow.
+
+**Refuse-vs-fallback decision:** kept `envPort`'s existing fallback-on-malformed semantics
+(no refuse-and-exit). `envPort` was already the ratified parser from TRDD-BSDR4TRM's ai_review;
+introducing a NEW refuse-vs-fallback split in this bugfix would re-litigate that decision on a
+LOW-severity card whose acceptance only asked for one shared parser, not a behavior change.
+
+**Gates:** `pnpm run check-types` exit 0. `npx eslint src/cli/setup.ts src/cli/serverControl.ts
+standalone/cli.ts src/test/setupPortEnv.test.ts --quiet` exit 0. New suite
+`src/test/setupPortEnv.test.ts` (11 tests, all `resolveCtx`-level, no mocks) — 11 passing, exit 0.
+
+Run ONE suite with the repo's own idiom, the one `package.json::test:browser` already uses:
+
+```
+npx mocha --no-config --ui tdd --require ./src/test/setup.js out/test/test/setupPortEnv.test.js
+```
+
+The config is `.mocharc.cjs` (not `.mocharc.js`), and its `spec` glob is indeed why a positional
+file arg alone still runs the ~8min repo-wide suite. But this STATE block previously prescribed
+`--config <empty.json>` for that, and **that recipe cannot work**: an empty config drops
+`ui: 'tdd'` along with the glob, so the file fails to load with `ReferenceError: suite is not
+defined` before a single test runs — verified 2026-09-04, exit 1. `--no-config --ui tdd` drops the
+glob and keeps the interface. The lesson is the reusable part: a config file carries more than the
+one setting you are trying to defeat, so replace it selectively rather than emptying it.
+
+**Files:** `src/cli/setup.ts`, `standalone/cli.ts`, `src/test/setupPortEnv.test.ts` (new).
+
+**NEXT ACTION:** none — ready for ai_review / merge into `testing`.
 
 ## Related
 
