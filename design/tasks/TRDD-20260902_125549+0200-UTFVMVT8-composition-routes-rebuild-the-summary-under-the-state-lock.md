@@ -252,11 +252,20 @@ implementation-commits: [4e19ed4b, 428a1dec]
       *"`callsTotal` counts the REFS, not the parsed calls. That gap is not a bug — it IS the
       coverage honesty."*
 
-      So a session reporting `callsTotal: 0` has no refs in the registry, which is why 26M-input-token
-      sessions in other workspaces report 0: their bodies were ingested and reclaimed. **A
-      "post-rebuild session with calls" is therefore a narrow window between capture and the bodies
-      pass, not something findable by scanning history** — plan the probe around a session captured
-      minutes ago, not around picking a big one out of the corpus.
+      And `resolve_refs` itself (`:576-580`) reads `registry.request_pointers(session_id)` from the
+      **in-memory `CallBodyRegistry`**, keeping only pointers with a non-empty `body_ref`. So
+      `callsTotal` is "request pointers this process currently holds for that session", which is why
+      26M-input-token sessions in other workspaces report 0.
+
+      **The alternative this EXCLUDES, and it was the one worth excluding:** a reviewer raised that
+      `callsTotal: 0` everywhere might be a SYMPTOM — the `api_call` table TRDD-9SYRK6SW added not
+      being populated — in which case a re-spec of this box would bury a real defect. It is not
+      that: the path is `summary → resolve_refs → CallBodyRegistry`, and the `api_call` table is
+      not read anywhere in it. Excluded by the code path, not by argument.
+
+      **A "post-rebuild session with calls" is therefore a narrow window between capture and body
+      reclamation, not something findable by scanning history** — plan the probe around a session
+      captured minutes ago, not around picking a big one out of the corpus.
 
       (An earlier version of this paragraph asserted `callsTotal` counts "CAPTURED BODIES, which the
       bodies pass deletes". Right family, wrong mechanism, and asserted from four probes without
