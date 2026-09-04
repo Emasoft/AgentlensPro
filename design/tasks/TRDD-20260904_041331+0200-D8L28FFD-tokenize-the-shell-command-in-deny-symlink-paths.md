@@ -89,10 +89,19 @@ Replace the regex layers with **one pass that produces a token stream**, so "syn
       **`probe-ad.js` NOW READ (17:22) — it is not a case list at all**, which is why the extractor
       returned nothing. It is a MUTATION-COVERAGE probe: `AD5` deletes `effectiveCwd`'s `cd`/`pushd`
       match and counts failing matrix cases (it is the precedent for this card's criterion 3, and it
-      already carries the `ANCHOR MISS` guard that criterion describes). Its only case list is `AD2`
-      — three separator cases (`||`, `&`, `&&`) that ARE pinned in the matrix (13 hits). So it
-      contributes **no missing cases**. Six of seven probes now genuinely examined; the case-by-case
-      diff of the other six is what remains.
+      carries an `ANCHOR MISS` guard of the same spirit). Its only case list is `AD2` — three
+      separator cases (`||`, `&`, `&&`) that appear pinned in the matrix, though that rests on the
+      same token-counting this box disclaims, so treat it as provisional. It contributes no missing
+      cases. **ALL SEVEN probes are now read** (a 17:22 version said "six of seven" and carried that
+      count past the turn that read the seventh); the case-by-case diff is owed on all of them.
+      **RETRACTED 17:25 — a 17:22 version claimed "the warning I strengthened was derived from a
+      probe I had not read". That self-criticism was INVENTED.** Criterion 3's own wording names a
+      **`perl`** mutation; `probe-ad.js` is Node using `String.replace`, so "derived from" was my
+      inference between similar ideas, not a fact. And the timeline runs the other way: the probe is
+      Sep 3 23:49, this card was authored Sep 4 04:13 — AFTER — so its author could simply have read
+      it. I conflated "not in this session's working set" with "never read". Manufacturing a
+      self-indictment is as much a factual error as manufacturing a credit, and this is the second
+      one today (see the `open=2` retraction on TRDD-4MJT92J7).
 - [ ] Mutation-verified per layer, and **every mutation diff-confirmed before its count is
       believed** — a `perl` mutation that silently fails to match reports zero failures and reads
       exactly like "this test pins nothing" (this nearly cost a real finding on 2026-09-04).
@@ -144,23 +153,29 @@ Replace the regex layers with **one pass that produces a token stream**, so "syn
   a command start and end, what is quoted, what is nested, and which words are paths.
 - Do NOT merge the pnpm guard into this one here — that is separate pending work.
 
-## ⚠ HAZARD FOUND 2026-09-04T17:22 — a STALE backup of this guard is sitting in `/tmp`
+## A stale copy of this guard sits in `/tmp` — clutter, NOT the hazard I first called it
 
-`/tmp/ad-g.bak` — **24,189 bytes against the current guard's 49,675.** The guard has more than
-DOUBLED since that backup was taken (Sep 3 23:49), because the five bypass fixes landed afterwards.
-392 diff lines.
+`/tmp/ad-g.bak` is **24,189 bytes against the current guard's 49,675**, 392 diff lines apart, taken
+Sep 3 23:49 by `probe-ad.js` (the mutation probe above), which mutates
+`scripts/deny-symlink-paths.js` **IN PLACE**. The guard is currently byte-identical to HEAD.
 
-**Why it exists:** `probe-ad.js` (the mutation probe, above) writes the guard to `/tmp/ad-g.bak`
-before mutating `scripts/deny-symlink-paths.js` **IN PLACE**, then restores it. Verified 17:22 —
-the guard is currently byte-identical to HEAD, so the last run's restore succeeded, and the restore
-path reads the in-memory `src` rather than the `.bak`, so a fresh run is safe on its own.
+**RETRACTED 17:25 — a 17:22 version of this section called it a `⚠ HAZARD` and gave a causal story
+that CANNOT HAPPEN.** The claim was: someone finds the guard mutated by an interrupted run,
+restores from the obvious backup, and silently reverts the bypass fixes. `probe-ad.js` refutes it
+in its own first three lines — **it rewrites `.bak` from the CURRENT guard BEFORE it mutates
+anything.** So the two halves are mutually exclusive: if the probe runs again the `.bak` becomes
+correct, and if it never runs the guard is never mutated and nobody goes looking for a backup. **A
+stale `.bak` is positive evidence the probe has not run since Sep 3** — precisely the case where no
+mutated guard exists to mis-restore. I picked the one mechanism that cannot produce the trap.
 
-**The hazard is the file, not the script.** It is a plausible-looking backup of a safety guard,
-named as one, sitting next to a probe that mutates that guard in place. Anyone — human or agent —
-who finds the guard mutated by an interrupted run and restores from the obvious backup **silently
-reverts all five bypass fixes**, and the matrix would then fail loudly, which is the only reason
-this would be caught at all. Left in place rather than deleted: `/tmp` is RULE-0-exempt, but this
-is evidence and the call to remove it is the owner's.
+What actually remains: a stale, plausibly-named copy of a safety file, i.e. clutter someone could
+misuse for unrelated reasons. A "delete this artifact" note, not a hazard. Left in place — `/tmp`
+is RULE-0-exempt, but removing it is the owner's call.
+
+**The design consequence stands on its own and never needed the hazard:** mutation runs must not
+write into the repo's guard. `66052519`/`ab8bc616` mutated `/tmp` COPIES and pointed a harness at
+them, so an interrupted run leaves the repo untouched. Adopt that shape; retire the in-place
+pattern.
 
 **Design consequence for the rewrite:** mutation runs must never write into the repo's guard. The
 verification this session did (`66052519`) mutated a `/tmp` COPY and pointed a harness at it, so an
