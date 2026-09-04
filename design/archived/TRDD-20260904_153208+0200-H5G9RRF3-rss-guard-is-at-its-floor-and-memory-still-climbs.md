@@ -1,9 +1,10 @@
 ---
 trdd-id: H5G9RRF3
 title: The alcore RSS guard has bottomed out at its window floor with no second lever
-column: todo
+column: cancelled
 created: 2026-09-04T15:32:08+0200
-updated: 2026-09-04T15:39:00+0200
+updated: 2026-09-04T15:45:53+0200
+superseded-by: [768NEX6E]
 current-owner: main-session
 task-type: bugfix
 project-id: agentlenspro
@@ -72,10 +73,12 @@ with `windowMs` pinned at the floor. Two reasons that is not a finding:
   the 91.7 MB `/api/summary` response this session pulled minutes earlier, and none of it was
   controlled for.
 
-**PARTIAL RESULT — 7 samples over 3.5 min (2026-09-04 ~15:47–15:50), server otherwise quiet:**
+**PARTIAL RESULT — 9 samples over 4.1 min (2026-09-04 ~15:47–15:51):**
 
 ```
-15109 15111 15117 15110 15111 15132 15132   → band = 23 MB
+15109 15111 15117 15110 15111 15132 15132 …   band = 28 MB, net +28 MB
+spans.inMemory 418,456 → 418,764 (+308)
+band FLOOR: first-half min 15,109 → second-half min 15,111  (+2 MB — noise, no leak signal)
 ```
 
 **A 23 MB band, not 300–400 MB.** Over the same interval `spans.inMemory` rose 418,456 → 418,710
@@ -225,7 +228,33 @@ true regardless of what the 15 GB turns out to be made of.
       a reader must know `SUMMARY_WINDOW_FLOOR_MS` and compare by hand to tell "degraded to the
       floor" from "configured that way".
 
+## Approval log
+
+- 2026-09-04T15:45:53+0200 — **CANCELLED by main-session, folded into TRDD-768NEX6E.**
+  Filed at 15:32 and cancelled 14 minutes later, after three successive deflations
+  (HIGH→MEDIUM; "still climbing"→oscillating; oscillating→a 28 MB band). What survived was three
+  sentences read from source — the guard has one lever, it is at its floor, nothing responds past
+  it — with no measurement pending and no acceptance box workable before 768NEX6E's decomposition
+  closes. **A card that cannot be started is a queue entry, not a task**, and this one was the
+  17th on a board the USER is waiting to see drained.
+  768NEX6E already owned "why is alcore N GB resident" (its title says 7 GB; the machine is at
+  ~15 GB), so the guard finding lands inside an active investigation instead of beside it, and the
+  two halves finally read as one coherent story: the process is degraded-but-stable, and the
+  288-fold window clamp is the mechanism.
+  Everything of value — the source reading, the live numbers, the quiet-sampling band, the
+  observability gap in `server status`, and the killed compression hypothesis — was copied to
+  768NEX6E before this card was closed. Nothing was dropped.
+
 ## Notes and lessons learned
+
+- **The whole card is a worked example of the modality failure recorded as `ATOM-4C5N-32AS`.**
+  Filed HIGH one turn after a reviewer said I under-react to real findings; deflated three times
+  in three commits; cancelled. Every underlying measurement was sound — the window really is at
+  its floor, RSS really is ~15 GB, the band really is 28 MB. Every sentence *about* those
+  measurements was too strong, in both directions: first inflating ("still climbing", "47% past
+  wedging"), then over-deflating ("does not reproduce" — nothing attempted to reproduce it).
+  Over-correction is the same error as over-claiming, and being told you under-react is not
+  evidence that the next thing you find is severe.
 
 - **The reported "5m window" is a DEGRADED value, and nothing says so.** `agentlenspro server
   status` prints `spans: … (5m window)` with no indication that the configured value is 24 h and
