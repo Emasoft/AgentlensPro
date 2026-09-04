@@ -9,7 +9,7 @@
 //   Request multipliers (pre Jun 1, 2026): https://docs.github.com/en/copilot/concepts/billing/copilot-requests
 //   Annual-plan multipliers (post Jun 1):  https://docs.github.com/en/copilot/reference/copilot-billing/model-multipliers-for-annual-plans
 //   Per-provider rate URLs: PRICING_SOURCES.md
-export const PRICING_LAST_UPDATED = '2026-09-01'
+export const PRICING_LAST_UPDATED = '2026-09-04'
 
 // Three Copilot billing modes (webview cost toggle):
 //   'token'          — new token-based AI Credits billing, effective Jun 1, 2026
@@ -123,16 +123,18 @@ export const RATES: Record<string, ModelRates> = {
                           inputAbove200kPerMTok: 6.00, outputAbove200kPerMTok: 22.50, cacheReadAbove200kPerMTok: 0.60, cacheWriteAbove200kPerMTok: 7.50 },
   'claude-sonnet-4-5':  { inputPerMTok:  3.00, cacheReadPerMTok: 0.30,  cacheWritePerMTok:  3.75, outputPerMTok: 15.00, contextWindowTokens: 1_000_000, multiplier: 1,    multiplierAnnualPostJun1: 6 },
   'claude-sonnet-4-6':  { inputPerMTok:  3.00, cacheReadPerMTok: 0.30,  cacheWritePerMTok:  3.75, outputPerMTok: 15.00, contextWindowTokens: 1_000_000, multiplier: 1,    multiplierAnnualPostJun1: 9 },
-  // Sonnet 5 INTRODUCTORY pricing ($2/$10 per MTok, cache 0.1x/1.25x of input) bills through
-  // 2026-08-31; sticker is $3/$15. The flip is now DATA (`scheduledChange`), not a comment asking a
-  // future human to hand-edit these four numbers on the right morning — that comment was here, was
-  // correct, and would still have under-reported every sonnet-5 call by 50% from 2026-09-01 because
-  // nothing fires on a date. Was MISSING entirely until 2026-07-07 — lookupRates returned null and
-  // 14 real sessions silently billed $0 (the exact failure the unpriced flag now surfaces). Not yet
-  // in Copilot billing docs.
-  'claude-sonnet-5':    { inputPerMTok:  2.00, cacheReadPerMTok: 0.20,  cacheWritePerMTok:  2.50, outputPerMTok: 10.00, contextWindowTokens: 1_000_000, multiplier: 0,    multiplierAnnualPostJun1: 0,
-                          scheduledChange: { from: '2026-09-01', note: 'introductory pricing ends 2026-08-31; reverts to $3/$15 sticker',
-                                             rates: { inputPerMTok: 3.00, cacheReadPerMTok: 0.30, cacheWritePerMTok: 3.75, outputPerMTok: 15.00 } } },
+  // Sonnet 5 is $2/$10 per MTok PERMANENTLY (cache 0.1x/1.25x of input). It was announced as
+  // introductory pricing reverting to a $3/$15 sticker on 2026-09-01, and this entry carried a
+  // `scheduledChange` encoding that flip — until CC 2.1.243 (2026-08-25) retracted it: "Updated the
+  // /model picker and the bundled claude-api skill to show Sonnet 5's $2/$10 per Mtok pricing as its
+  // standard list price rather than a limited-time promo." The flip had already FIRED by the time we
+  // read that (removed 2026-09-04), so for three days every sonnet-5 call was priced 50% HIGH. That
+  // is the cost of encoding an announced future as data and then not re-reading the announcement:
+  // the mechanism fired exactly as designed, on a fact that had been withdrawn. `scheduledChange`
+  // stays in the type and the resolver for the next real one — no live entry uses it today.
+  // Was MISSING entirely until 2026-07-07 — lookupRates returned null and 14 real sessions silently
+  // billed $0 (the exact failure the unpriced flag now surfaces). Not yet in Copilot billing docs.
+  'claude-sonnet-5':    { inputPerMTok:  2.00, cacheReadPerMTok: 0.20,  cacheWritePerMTok:  2.50, outputPerMTok: 10.00, contextWindowTokens: 1_000_000, multiplier: 0,    multiplierAnnualPostJun1: 0 },
   // Mythos 5 (Project Glasswing) — same pricing/limits as Fable 5. Not yet in Copilot billing docs.
   'claude-mythos-5':    { inputPerMTok: 10.00, cacheReadPerMTok: 1.00,  cacheWritePerMTok: 12.50, outputPerMTok:  50.00, contextWindowTokens: 1_000_000, multiplier: 0,   multiplierAnnualPostJun1: 0 },
   'claude-opus-4-5':    { inputPerMTok:  5.00, cacheReadPerMTok: 0.50,  cacheWritePerMTok:  6.25, outputPerMTok: 25.00, contextWindowTokens: 1_000_000, multiplier: 3,    multiplierAnnualPostJun1: 15 },
@@ -203,7 +205,10 @@ function normalizeModelId(modelId: string): string {
  *  knows when the call happened must pass it. An unparseable value is treated as absent rather than
  *  as epoch 0, because NaN comparisons are false and would silently pin such a call to the pre-change
  *  rate forever — the exact silent-wrong-number failure this whole mechanism exists to prevent. */
-function applyScheduledChange(rates: ModelRates, atIso?: string): ModelRates {
+// Exported ONLY so its behaviour stays pinned: no live RATES entry carries a `scheduledChange`
+// today (sonnet-5's was retracted upstream — see its comment), so testing this through
+// `lookupRates` would test nothing. Production callers go through `lookupRates`.
+export function applyScheduledChange(rates: ModelRates, atIso?: string): ModelRates {
   const change = rates.scheduledChange
   if (!change) return rates
   const at = atIso === undefined ? Date.now() : Date.parse(atIso)

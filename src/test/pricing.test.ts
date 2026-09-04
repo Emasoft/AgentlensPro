@@ -1,5 +1,5 @@
 import * as assert from 'assert'
-import { lookupRates, calcTokenCostUsd } from '../shared/pricing'
+import { lookupRates, calcTokenCostUsd, applyScheduledChange, type ModelRates } from '../shared/pricing'
 
 suite('pricing', () => {
   test('lookupRates returns rates for known model', () => {
@@ -139,49 +139,63 @@ suite('pricing', () => {
     assert.ok(Math.abs(cost - expected) < 0.0001, `Expected $${expected}, got $${cost}`)
   })
 
-  // ── Announced rate changes (sonnet-5 introductory pricing ends 2026-08-31) ──────────────────
+  // ── Announced rate changes (`scheduledChange`) ──────────────────────────────────────────────
   // Before this gate existed the table carried a COMMENT telling a future human to hand-edit four
-  // numbers on the right morning. Nothing fires on a date, so from 2026-09-01 every sonnet-5 call
-  // would have billed at $2/$10 against a real $3/$15 — a silent 50% under-report, with no error,
-  // no unpriced flag, and no way to notice from the output.
+  // numbers on the right morning. Nothing fires on a date, so an announced change would have gone
+  // unapplied — a silent under-report, with no error, no unpriced flag, and nothing in the output
+  // to notice it by.
+  //
+  // These exercise `applyScheduledChange` DIRECTLY on a synthetic entry rather than through
+  // `lookupRates` on a live model, because NO live model carries a `scheduledChange` today:
+  // sonnet-5's was retracted upstream by CC 2.1.243 and removed on 2026-09-04. Pinning the
+  // mechanism to whichever model happens to have a promo is what left these tests asserting a
+  // withdrawn fact for three days — a synthetic fixture cannot go stale when a vendor changes
+  // their mind.
 
-  test('a call DURING the promo bills at the introductory rate', () => {
-    const rates = lookupRates('claude-sonnet-5', '2026-08-15T12:00:00Z')
-    assert.strictEqual(rates!.inputPerMTok, 2.00)
-    assert.strictEqual(rates!.outputPerMTok, 10.00)
+  const promo: ModelRates = {
+    inputPerMTok: 2.00, cacheReadPerMTok: 0.20, cacheWritePerMTok: 2.50, outputPerMTok: 10.00,
+    contextWindowTokens: 1_000_000, multiplier: 0, multiplierAnnualPostJun1: 0,
+    scheduledChange: {
+      from: '2026-09-01', note: 'test fixture',
+      rates: { inputPerMTok: 3.00, cacheReadPerMTok: 0.30, cacheWritePerMTok: 3.75, outputPerMTok: 15.00 },
+    },
+  }
+
+  test('a call BEFORE the change date keeps the pre-change rate', () => {
+    const rates = applyScheduledChange(promo, '2026-08-15T12:00:00Z')
+    assert.strictEqual(rates.inputPerMTok, 2.00)
+    assert.strictEqual(rates.outputPerMTok, 10.00)
   })
 
-  test('a call ON OR AFTER the end date bills at the sticker rate', () => {
-    const rates = lookupRates('claude-sonnet-5', '2026-09-01T00:00:00Z')
-    assert.strictEqual(rates!.inputPerMTok, 3.00, 'input must revert to $3/MTok')
-    assert.strictEqual(rates!.cacheReadPerMTok, 0.30)
-    assert.strictEqual(rates!.cacheWritePerMTok, 3.75)
-    assert.strictEqual(rates!.outputPerMTok, 15.00, 'output must revert to $15/MTok')
-  })
-
-  test('calcTokenCostUsd applies the scheduled change via the call timestamp', () => {
-    const during = calcTokenCostUsd(1_000_000, 0, 0, 0, 'claude-sonnet-5', 0, '2026-08-15T12:00:00Z')
-    const after  = calcTokenCostUsd(1_000_000, 0, 0, 0, 'claude-sonnet-5', 0, '2026-09-01T00:00:00Z')
-    assert.ok(Math.abs(during - 2.00) < 1e-9, `promo: expected $2.00, got $${during}`)
-    assert.ok(Math.abs(after  - 3.00) < 1e-9, `post-promo: expected $3.00, got $${after}`)
+  test('a call ON OR AFTER the change date gets the new rate', () => {
+    const rates = applyScheduledChange(promo, '2026-09-01T00:00:00Z')
+    assert.strictEqual(rates.inputPerMTok, 3.00)
+    assert.strictEqual(rates.cacheReadPerMTok, 0.30)
+    assert.strictEqual(rates.cacheWritePerMTok, 3.75)
+    assert.strictEqual(rates.outputPerMTok, 15.00)
   })
 
   test('a historical call keeps its ORIGINAL rate no matter when it is read', () => {
     // The whole point of gating on the CALL's timestamp rather than on today's date. A session
-    // recorded during the promo cost $2/MTok and must report $2/MTok forever — the same reason
+    // recorded at the old rate must report the old rate forever — the same reason
     // `claude-opus-4-7-fast` is retained at its old premium rates. A table that only knows
     // "the current rate" rewrites history on every rate change.
-    const asRecorded = calcTokenCostUsd(1_000_000, 0, 0, 0, 'claude-sonnet-5', 0, '2026-07-01T00:00:00Z')
-    assert.ok(Math.abs(asRecorded - 2.00) < 1e-9, `Expected the promo rate $2.00, got $${asRecorded}`)
+    const asRecorded = applyScheduledChange(promo, '2026-07-01T00:00:00Z')
+    assert.strictEqual(asRecorded.inputPerMTok, 2.00)
   })
 
   test('an unparseable timestamp falls back to today, never to the pre-change rate', () => {
     // Date.parse() returns NaN, and every NaN comparison is false — so a naive `when >= effective`
     // would pin a garbage timestamp to the OLD rate permanently, which is precisely the silent
     // wrong number this mechanism exists to prevent. It must resolve like an absent timestamp.
-    const garbage = lookupRates('claude-sonnet-5', 'not-a-date')
-    const absent  = lookupRates('claude-sonnet-5')
-    assert.strictEqual(garbage!.inputPerMTok, absent!.inputPerMTok)
+    const garbage = applyScheduledChange(promo, 'not-a-date')
+    const absent  = applyScheduledChange(promo)
+    assert.strictEqual(garbage.inputPerMTok, absent.inputPerMTok)
+  })
+
+  test('an unparseable change date leaves the rates untouched', () => {
+    const broken: ModelRates = { ...promo, scheduledChange: { ...promo.scheduledChange!, from: 'whenever' } }
+    assert.strictEqual(applyScheduledChange(broken, '2027-01-01T00:00:00Z').inputPerMTok, 2.00)
   })
 
   test('a model with no scheduled change is unaffected by a timestamp', () => {
@@ -189,5 +203,21 @@ suite('pricing', () => {
     const b = lookupRates('claude-sonnet-4-5', '2027-01-01T00:00:00Z')
     assert.strictEqual(a!.inputPerMTok, b!.inputPerMTok)
     assert.strictEqual(a!.outputPerMTok, b!.outputPerMTok)
+  })
+
+  // The retraction itself, pinned. CC 2.1.243 (2026-08-25) made $2/$10 sonnet-5's standard list
+  // price, not a promo — but the `scheduledChange` encoding the withdrawn $3/$15 reversion had
+  // already fired on 2026-09-01, so from then until 2026-09-04 every sonnet-5 call was priced 50%
+  // HIGH. Reading a date past the old flip is what makes this test catch a re-introduction.
+  test('sonnet-5 is $2/$10 at every timestamp — the reverted reversion stays reverted', () => {
+    for (const at of ['2026-07-01T00:00:00Z', '2026-09-01T00:00:00Z', '2027-01-01T00:00:00Z']) {
+      const rates = lookupRates('claude-sonnet-5', at)
+      assert.strictEqual(rates!.inputPerMTok, 2.00, `input at ${at}`)
+      assert.strictEqual(rates!.cacheReadPerMTok, 0.20, `cacheRead at ${at}`)
+      assert.strictEqual(rates!.cacheWritePerMTok, 2.50, `cacheWrite at ${at}`)
+      assert.strictEqual(rates!.outputPerMTok, 10.00, `output at ${at}`)
+    }
+    const cost = calcTokenCostUsd(1_000_000, 0, 0, 0, 'claude-sonnet-5', 0, '2026-09-01T00:00:00Z')
+    assert.ok(Math.abs(cost - 2.00) < 1e-9, `expected $2.00/MTok input, got $${cost}`)
   })
 })

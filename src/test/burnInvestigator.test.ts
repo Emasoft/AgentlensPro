@@ -290,27 +290,35 @@ suite('burnInvestigator — investigate_burn (TRDD-TW14MO7A)', () => {
     } finally { cleanup() }
   })
 
-  // TRDD-MF4YQWWA: claude-sonnet-5's introductory rate ($2/$10) reverts to its $3/$15 sticker on
-  // 2026-09-01 (`scheduledChange` in src/shared/pricing.ts). A call must be priced at the rate in
-  // force AT THE CALL'S OWN TIMESTAMP, not at whatever day the tool happens to run on — the whole
-  // point of an oracle that stays reproducible across regeneration dates. Two responses in ONE
-  // window straddling the boundary prove the investigator threads each response's own ts through
-  // (not the aggregated cc/cr/out priced once at "now"): the pre-change call must total exactly
-  // the introductory rate and the post-change call exactly the sticker rate.
-  test('estCostUsd prices each sonnet-5 response at ITS OWN timestamp, not wall-clock-of-the-scan', () => {
+  // TRDD-MF4YQWWA: a call must be priced at the rate in force AT THE CALL'S OWN TIMESTAMP, not at
+  // whatever day the tool happens to run on — the point of an oracle that stays reproducible across
+  // regeneration dates. This used to be pinned END-TO-END with two sonnet-5 responses straddling
+  // its announced 2026-09-01 rate change, which is the strongest form: it proved investigateBurn
+  // threads each response's own ts into calcTokenCostUsd rather than pricing the aggregated
+  // cc/cr/out once at "now".
+  //
+  // THAT COVERAGE IS GONE and this test is the weaker replacement. CC 2.1.243 retracted the sonnet-5
+  // change (see src/shared/pricing.ts) and no live model carries a `scheduledChange` any more, so
+  // there is no straddle to build from real rates — every timestamp now yields the same rate, and a
+  // version of this test that ignored `iso(r.ts)` entirely would still pass. What survives here is
+  // per-RESPONSE summation (byModel and the window total are the sum of individually-priced calls);
+  // the timestamp threading itself is pinned only at the unit level, in pricing.test.ts's
+  // `applyScheduledChange` block. Restore the straddle the next time a real rate change is
+  // announced — and re-read the announcement before trusting it.
+  test('estCostUsd is the sum of per-response prices, not one price over the aggregate', () => {
     const { dir, hooks, cleanup } = corpus()
     try {
       // Kept ≤48h apart (the window's own cap) so BOTH calls fall inside one investigateBurn scan.
-      const before = Date.parse('2026-08-31T22:00:00Z') // introductory: $2 in / $10 out per MTok
-      const after = Date.parse('2026-09-01T02:00:00Z')  // sticker: $3 in / $15 out per MTok
-      resp(dir, before, 'claude-sonnet-5', 0, 0, 1_000_000) // 1M output tokens, no cache
-      resp(dir, after, 'claude-sonnet-5', 0, 0, 1_000_000)
-      const r = investigateBurn({ bodiesDir: dir, hookEventsDir: hooks, untilMs: after + 60_000, windowHours: 48 })
+      const first = Date.parse('2026-08-31T22:00:00Z')
+      const second = Date.parse('2026-09-01T02:00:00Z')
+      resp(dir, first, 'claude-sonnet-5', 0, 0, 1_000_000) // 1M output tokens, no cache
+      resp(dir, second, 'claude-sonnet-5', 0, 0, 1_000_000)
+      const r = investigateBurn({ bodiesDir: dir, hookEventsDir: hooks, untilMs: second + 60_000, windowHours: 48 })
       assert.strictEqual(r.totals.byModel.length, 1)
-      const expected = 1_000_000 * 10 / 1_000_000 + 1_000_000 * 15 / 1_000_000 // $10 + $15 = $25
+      const expected = 2 * (1_000_000 * 10 / 1_000_000) // sonnet-5 output is $10/MTok, permanently
       assert.ok(
         Math.abs(r.totals.byModel[0].estCostUsd - expected) < 0.01,
-        `expected ~$${expected} (pre-change $10 + post-change $15), got $${r.totals.byModel[0].estCostUsd}`,
+        `expected ~$${expected} (two 1M-output calls), got $${r.totals.byModel[0].estCostUsd}`,
       )
       assert.ok(
         Math.abs(r.totals.estCostUsd - expected) < 0.01,
