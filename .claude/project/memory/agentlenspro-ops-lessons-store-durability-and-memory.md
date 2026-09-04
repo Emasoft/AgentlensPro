@@ -2,11 +2,11 @@
 name: agentlenspro-ops-lessons-store-durability-and-memory
 description: "a span segment over 512MB breaks setup or silently drops a day of results / the server hit an out-of-memory heap error / is the parquet part actually durable before we delete the source / does fsync guarantee data is on disk on macOS / the RAM-disk spool never drains and fills to 100% / raw body capture stops silently / a drain looks stalled but is actually working / DuckDB ignore_errors silently degrades bad NDJSON lines into all-NULL rows / a diagnostics answer changes between runs or a session's turn count shrinks / sync streaming gunzip needed for a huge gz segment / MaxListenersExceededWarning on Gunzip or an uncaught unexpected end of file / heap looks healthy but the server was still killed / how much of the footprint is off-heap"
 ocd: 2026-07-11
-lmd: 2026-09-02
+lmd: 2026-09-04
 metadata:
   node_type: memory
   type: project
-  tier: aspect
+  tier: component
 publish-globally: false
 split-lineage: 266022327e5e4d3796245d2d1a921c06
 ---

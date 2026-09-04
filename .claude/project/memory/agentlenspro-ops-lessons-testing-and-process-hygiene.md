@@ -2,11 +2,11 @@
 name: agentlenspro-ops-lessons-testing-and-process-hygiene
 description: "background agent shows running but does nothing / a fork started acting like the orchestrator / does cache-expired or last-compact cost tokens / is a cache-liveness check free / a free-port probe is flaky in CI but passes on rerun / mocha does not isolate a single test file / a test is flaky under load but fails in isolation too / CI is red while local slices were green / a background pipeline shows no output for 20 minutes and looks hung / recurring maximum call stack size exceeded RangeError / an identity check is green but an address leaked into a github comment / a bare @handle paged a stranger on github / what may a hook say to a model / removed a hook advisory but it still fires / a baseline ruleset restore reverted an owner-approved bypass"
 ocd: 2026-07-11
-lmd: 2026-09-02
+lmd: 2026-09-04
 metadata:
   node_type: memory
   type: project
-  tier: aspect
+  tier: component
 publish-globally: false
 split-lineage: 266022327e5e4d3796245d2d1a921c06
 ---
