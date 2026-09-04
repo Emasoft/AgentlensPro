@@ -191,6 +191,10 @@ suite('pricing', () => {
     const garbage = applyScheduledChange(promo, 'not-a-date')
     const absent  = applyScheduledChange(promo)
     assert.strictEqual(garbage.inputPerMTok, absent.inputPerMTok)
+    // The equality alone is VACUOUS: if both wrongly pinned to the pre-change rate they would still
+    // be equal and this would pass. The absolute value is what bites. Today is past the fixture's
+    // 2026-09-01, and the clock only moves forward, so post-change is the permanent right answer.
+    assert.strictEqual(garbage.inputPerMTok, 3.00, 'both must resolve to now, which is post-change')
   })
 
   test('an unparseable change date leaves the rates untouched', () => {

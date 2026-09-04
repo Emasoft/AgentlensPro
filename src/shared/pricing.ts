@@ -145,8 +145,9 @@ export const RATES: Record<string, ModelRates> = {
   // could make a real $3 look like $2. The tell was in the data: R sorted inversely by each
   // session's thinking share. Corrected, the spread collapses to zero. And all 7 sessions measured
   // 100% 5m tier, so the `2*cw1h` term was never exercised — the $2 base is measured, sonnet-5's
-  // DERIVED 1h write rate ($4.00/MTok) is not. That the 5m weighting is what yields exactly 2.0000
-  // is itself the corroboration that the tier split was real rather than an empty column.
+  // DERIVED 1h write rate ($4.00/MTok) is not. The exact fit under 1.25x weighting confirms the
+  // traffic really was all-5m; it does NOT prove the tier columns were populated rather than empty,
+  // since an empty column over genuinely all-5m traffic fits identically.
   // Evidence: reports/pricing-measurement/20260904_061757+0200-sonnet5-billed-rate.md
   //
   // The flip had already FIRED by the time this was read (removed 2026-09-04), so any sonnet-5 call

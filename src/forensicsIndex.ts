@@ -573,7 +573,7 @@ const AC_INSERT_SQL = `INSERT OR REPLACE INTO api_calls (
   :break_cause, :culprit_fingerprint, :gap_minutes, :frontmatter_fp, :cost_usd, :billable_weight, :indexed_at
 )`
 
-function apiCallParams(ev: ApiCallEvent, spawn: ResolvedSpawn, now: number): Record<string, unknown> {
+export function apiCallParams(ev: ApiCallEvent, spawn: ResolvedSpawn, now: number): Record<string, unknown> {
   const model = ev.model ?? null
   // Priced at the CALL's own timestamp, never at index time. Without the trailing `atIso` an
   // announced rate change (`scheduledChange` in shared/pricing) reprices historical rows by the
@@ -582,8 +582,16 @@ function apiCallParams(ev: ApiCallEvent, spawn: ResolvedSpawn, now: number): Rec
   // exact failure the mechanism exists to prevent, and this call site — the one that writes every
   // api_calls.cost_usd row — was not passing it. No live entry carries a scheduledChange today, so
   // this changes no number now; it means the next real change lands correctly instead of silently.
+  //
+  // `new Date(x).toISOString()` THROWS RangeError on NaN or |x| > 8.64e15, and this runs inside the
+  // indexer loop, so an unguarded conversion turns one corrupt ts into a dead ingest run — strictly
+  // worse than the mispricing it fixes. `ts` can reach here non-finite: resolveTs returns
+  // `Number(r.ts_ms)` and only a literal `null` is filtered downstream (`NaN < tsFromMs` is false,
+  // so selectRecent's window check does not drop it either). Falling back to `undefined` is exactly
+  // the previous behaviour — price at today's rate — so a bad timestamp degrades instead of failing.
+  const atIso = Number.isFinite(ev.ts) && Math.abs(ev.ts) <= 8.64e15 ? new Date(ev.ts).toISOString() : undefined
   const costUsd = model
-    ? calcTokenCostUsd(ev.inputTokens, ev.cacheReadTokens, ev.cacheCreationTokens, ev.outputTokens, model, 0, new Date(ev.ts).toISOString())
+    ? calcTokenCostUsd(ev.inputTokens, ev.cacheReadTokens, ev.cacheCreationTokens, ev.outputTokens, model, 0, atIso)
     : 0
   // billable_weight is built from the tier split (5m/1h), but a response can carry a flat
   // cache_creation total with NO tier sub-object (both tiers 0) — see cacheCreationForensics. In that

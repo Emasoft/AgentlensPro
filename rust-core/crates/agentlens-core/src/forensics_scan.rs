@@ -38,6 +38,28 @@ use crate::summarize::helpers::num;
 
 const EVIDENCE_LOAD_CHUNK: usize = 32;
 
+/// The timestamp a forensics row is priced at: the CALL's own, falling back to the clock only when
+/// the event's ts is unusable.
+///
+/// `calc_token_cost_usd` threads `now_ms` to exactly one place — `apply_scheduled_change`, which
+/// does `at_iso.and_then(parse_iso_ms).unwrap_or(now_ms)` — so with `at_iso = None` this IS the
+/// "price at the call's own time" contract, and it skips the ms->ISO->ms round-trip the TS side is
+/// forced through (its `calcTokenCostUsd` takes only a string). Passing the wall clock instead
+/// repriced historical rows by whenever the indexer happened to run, so one call cost a different
+/// amount per pass and a reindex silently rewrote history — the exact failure `scheduledChange`
+/// exists to prevent, at the site that writes every forensics `cost_usd` row.
+///
+/// Both guards are load-bearing, for different reasons. Non-finite: `at >= effective` is FALSE for
+/// NaN, so a corrupt ts would silently pin to the PRE-change rate — wrong-forever rather than an
+/// honest fall back to today. Out-of-range: this exists ONLY for parity with
+/// `src/forensicsIndex.ts`, where `new Date(x).toISOString()` throws past ±8.64e15 and so falls
+/// back to "now". Rust compares floats and would happily use `-9e15`, which resolves PRE-change
+/// where TS resolves post-change — a divergence that stays dormant until a `scheduledChange` exists
+/// again, i.e. surfaces exactly when the mechanism matters. Keep the two in step.
+fn pricing_at_ms(ev_ts: f64, now_ms: f64) -> f64 {
+    if ev_ts.is_finite() && ev_ts.abs() <= 8.64e15 { ev_ts } else { now_ms }
+}
+
 fn str_or_undef(v: Option<&Value>) -> Option<String> {
     v.and_then(Value::as_str).filter(|s| !s.is_empty()).map(str::to_owned)
 }
@@ -306,6 +328,7 @@ pub fn index_api_calls(
     for ev in &events {
         let spawn = resolve_spawn(ev.session_id.as_deref(), &spawn_map);
         let model = ev.model.as_deref();
+        let at_ms = pricing_at_ms(ev.ts, now_ms);
         let cost_usd = match model {
             // The TS calls the 5-ARG calcTokenCostUsd, whose trailing 1h argument defaults to 0.
             Some(m) => calc_token_cost_usd(
@@ -316,7 +339,7 @@ pub fn index_api_calls(
                 m,
                 0.0,
                 None,
-                now_ms,
+                at_ms,
             ),
             None => 0.0,
         };
@@ -630,4 +653,45 @@ pub fn scan_api_call_events(opts: &ScanApiCallOptions, now_ms: f64) -> (Vec<ApiC
             note,
         },
     )
+}
+
+#[cfg(test)]
+mod pricing_ts_tests {
+    use super::pricing_at_ms;
+
+    // Pins the guard directly, because NOTHING ELSE CAN pin it right now. With no live
+    // `scheduledChange` anywhere, every rate is constant in time, so an end-to-end assertion on a
+    // priced row is identical whether the call's ts is threaded through or dropped — it passes with
+    // the fix reverted. The parity fixtures are generated from the same time-invariant table and
+    // cannot catch it either. That is the third time in this change set that a test built on a rate
+    // which no longer varies turned out to assert nothing; testing the pure guard is the form that
+    // actually bites, and it stays true when a real rate change lands.
+    const NOW: f64 = 9.0;
+
+    #[test]
+    fn a_usable_call_timestamp_is_preferred_over_the_clock() {
+        assert_eq!(pricing_at_ms(1_788_213_600_000.0, NOW), 1_788_213_600_000.0);
+        assert_eq!(pricing_at_ms(0.0, NOW), 0.0, "epoch 0 is a real timestamp, not a missing one");
+        assert_eq!(pricing_at_ms(-1.0, NOW), -1.0, "pre-epoch is in range and must not fall back");
+    }
+
+    // Each of these resolves to "now" in src/forensicsIndex.ts — NaN/Infinity because
+    // `new Date(x).toISOString()` throws, out-of-range because the Date is Invalid. Rust reaches
+    // the same answer by explicit guard rather than by exception, so the two stay in step.
+    #[test]
+    fn an_unusable_call_timestamp_falls_back_to_the_clock() {
+        for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, 9e15, -9e15] {
+            assert_eq!(pricing_at_ms(bad, NOW), NOW, "{bad} must fall back to now");
+        }
+    }
+
+    // The boundary itself: 8.64e15 is the largest value `new Date()` accepts, so it is USABLE on
+    // both sides; one millisecond past it is not.
+    #[test]
+    fn the_range_boundary_matches_the_javascript_date_limit() {
+        assert_eq!(pricing_at_ms(8.64e15, NOW), 8.64e15);
+        assert_eq!(pricing_at_ms(-8.64e15, NOW), -8.64e15);
+        assert_eq!(pricing_at_ms(8.64e15 + 1.0, NOW), NOW);
+        assert_eq!(pricing_at_ms(-8.64e15 - 1.0, NOW), NOW);
+    }
 }
