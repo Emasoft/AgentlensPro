@@ -258,9 +258,8 @@ const { DuckDBInstance } = require("@duckdb/node-api"); const fs = require("fs")
   const con = await (await DuckDBInstance.create(":memory:")).connect();
   let bad = 0, rows = 0;
   for (const f of files) {
-    try { const r = await con.runAndReadAll(
-            `SELECT count(*) n, sum(raw_bytes) b, max(length(stem)) s FROM read_parquet('"'"'${f}'"'"')`);
-          rows += Number(r.getRowObjects()[0].n); }
+    try { const r = await con.runAndReadAll(`SELECT * FROM read_parquet('"'"'${f}'"'"')`);
+          rows += r.getRowObjects().length; }
     catch (e) { bad++; console.log("UNREADABLE", f); }
   }
   console.log(`checked ${files.length} parts, unreadable=${bad}, rows=${rows}`);
@@ -271,13 +270,20 @@ const { DuckDBInstance } = require("@duckdb/node-api"); const fs = require("fs")
 (`sum(raw_bytes)` = 5,630,947,899). After the restart, the same command over the same
 `/tmp/parts-before.txt` must still report **unreadable=0**.
 
-**Why it aggregates `raw_bytes`/`stem` and NOT `count(*)`.** DuckDB answers `count(*)` over parquet
-from the **footer's row-group metadata — it never opens the data pages.** A part whose footer
-survived while its data pages were truncated mid-flush (precisely the corruption a restart can
-cause) returns its row count happily. An earlier version of this recipe used `count(*)` and was
-therefore the one query LEAST able to detect the damage it was added to catch. Aggregating real
-columns forces the pages open. The loop is also per-file, so one bad part is attributed to itself
-rather than depending on whether DuckDB aborts a whole multi-file scan.
+**Why `SELECT *` with the rows CONSUMED, and not a narrower query — two earlier versions were both
+narrower than their own claim:**
+- `count(*)` is answered from the **footer's row-group metadata; it opens no data pages at all.** A
+  part whose footer survived while its pages were truncated mid-flush — precisely what a restart can
+  cause — returns its row count happily. It was the one query least able to see the damage it was
+  added to catch.
+- `sum(raw_bytes), max(length(stem))` opened only **2 of the table's 26 columns**. Parquet stores
+  each column's pages independently, so a part corrupt only in `billing_header` still passed clean.
+  Same defect one rung less severe.
+- `SELECT *` with `getRowObjects()` forces **every** column's pages open, is shorter than either,
+  and avoids a numeric-overflow risk in `sum(raw_bytes)` (already 5.6e9 across 509 parts).
+
+The loop is per-file, so one bad part is attributed to itself rather than depending on whether
+DuckDB aborts a whole multi-file scan.
 
 **BOTH halves are required — step 3 says "survives AND is readable".** (a) empty output ⇒ every
 pre-restart part still exists; (b) unreadable=0 ⇒ those same parts still parse. A part that
