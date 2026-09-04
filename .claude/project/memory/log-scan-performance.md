@@ -2,7 +2,7 @@
 name: log-scan-performance
 description: "the boot scan of the jsonl corpus is slow / the cold scan only uses 3 of 14 cpu cores / why is RAYON_NUM_THREADS=4 faster than the default 14 / the scan spends most of its time in sys not user / how do I make the log scan use all cpu cores / adding more rayon threads does not speed up the scan / the profile says every thread is waiting on a mutex / sharding the listing cache did not help / is the allocator the bottleneck in the scan / mimalloc vs system allocator for the scanner / allogscan is much faster than cold_scan on the same files / why does parse-only beat parse-plus-cards / the scan does hundreds of thousands of stat syscalls / filesStatted is huge / wall clock timings for the scan are wildly inconsistent / how do I benchmark the scan on a busy machine / why did the obvious optimisation change nothing / the arithmetic matches the call site so it must be the cause / how do I know what is actually serialising / a correlate is not a cause / I found the hot call site but removing it did not help / the perf hypothesis was falsified / how do I rule a mechanism out"
 ocd: 2026-08-29
-lmd: 2026-08-29
+lmd: 2026-09-04
 publish-globally: false
 metadata:
   node_type: memory
@@ -11,12 +11,6 @@ metadata:
 ---
 
 # log-scan-performance
-
-
-^ATOM-CLZH-GLU8 [desc: "The cold scan's 3.2-of-14-core ceiling is stat-syscall-bound (405k filesStatted), not lock- or allocator-bound; sharding the mutex with capacity held constant changed nothing.", keywords: the_scan_only_uses_3_of_14_cores more_rayon_threads_do_not_help RAYON_NUM_THREADS=4_faster_than_14 every_thread_parked_on_a_mutex_in_the_profile sharding_the_cache_did_not_help is_the_allocator_the_bottleneck allogscan_faster_than_cold_scan hundreds_of_thousands_of_stat_syscalls filesStatted_is_huge high_sys_time_low_user_time how_to_benchmark_a_scan_on_a_busy_machine wall_clock_timings_wildly_inconsistent, ocd: 2026-08-29, lmd: 2026-08-29, status: superseded, superseded-by: ATOM-LLRH-P4JA]
-
-The cold scan's ~3.2-of-14-cores ceiling is STAT-SYSCALL-BOUND, not lock-bound. Measured 2026-08-29 on the same ~8.78 GB corpus, same machine, same minute. Use CPU CORES = (user+sys)/real as the metric, NOT wall clock: two runs of the SAME binary gave 28.4 s and 103.0 s under background load, while the core count stays stable under exactly that load. allogscan (parse only, no card building) reached 5.27/7.29/8.67 cores; cold_scan (parse + cards) reached 3.05/3.13/3.47. THREE CAUSES ELIMINATED BY CONTROLLED EXPERIMENT: (a) the global LISTING mutex in generated_files.rs — sharding it 64 ways with capacity HELD CONSTANT gave 3.16/3.17/3.21, i.e. identical, which is what rules the lock out; (b) the allocator — adding mimalloc to the bench to match the shipped binary gave 2.17/2.58/3.03, no better; (c) rayon thread count — RAYON_NUM_THREADS=4 beats the default 14. THE ACTUAL LIMIT: 22-32 s SYS against 48-54 s USER, 405,436 filesStatted reported by the live server, and a listing cache already at an 88.3% hit rate (19,850 hits / 2,635 readdirs). generated_files.rs::index_scratch_tree stats EVERY directory entry (fs::metadata on the joined path) purely to classify dir-vs-file, while read_dir's DirEntry::file_type() carries that classification for free from d_type. The lever is FEWER stat calls — not more parallelism and not less locking. [^1] [^2] [^3]
-
 
 
 ^ATOM-L1SN-FI52 [desc: "Attempt 5 falsified the stat-syscall-bound verdict: hoisting the (uid,slug) enumeration removed the per-session stat fan-out entirely and cores did not move. Cause is now UNKNOWN.", keywords: cold_scan_only_uses_3_of_14_cores jsonl_scan_slow scan_does_not_parallelise filesStatted_405436 stat_syscall_bound_was_wrong removing_the_stat_fan-out_changed_nothing hoisted_scratch_index_no_gain scan_census_cores_unchanged what_is_serialising_the_scan scan_cause_unknown do_not_re-try_the_lock do_not_re-try_the_allocator, ocd: 2026-08-29, lmd: 2026-08-29]
@@ -47,6 +41,12 @@ inside the scan), not with another fix aimed at the same call site.
 ## See also
 
 - [[agentlenspro-ops-lessons-store-durability-and-memory]]
+
+## Superseded
+
+^ATOM-CLZH-GLU8 [desc: "The cold scan's 3.2-of-14-core ceiling is stat-syscall-bound (405k filesStatted), not lock- or allocator-bound; sharding the mutex with capacity held constant changed nothing.", keywords: the_scan_only_uses_3_of_14_cores more_rayon_threads_do_not_help RAYON_NUM_THREADS=4_faster_than_14 every_thread_parked_on_a_mutex_in_the_profile sharding_the_cache_did_not_help is_the_allocator_the_bottleneck allogscan_faster_than_cold_scan hundreds_of_thousands_of_stat_syscalls filesStatted_is_huge high_sys_time_low_user_time how_to_benchmark_a_scan_on_a_busy_machine wall_clock_timings_wildly_inconsistent, ocd: 2026-08-29, lmd: 2026-08-29, status: superseded, superseded-by: ATOM-LLRH-P4JA]
+
+The cold scan's ~3.2-of-14-cores ceiling is STAT-SYSCALL-BOUND, not lock-bound. Measured 2026-08-29 on the same ~8.78 GB corpus, same machine, same minute. Use CPU CORES = (user+sys)/real as the metric, NOT wall clock: two runs of the SAME binary gave 28.4 s and 103.0 s under background load, while the core count stays stable under exactly that load. allogscan (parse only, no card building) reached 5.27/7.29/8.67 cores; cold_scan (parse + cards) reached 3.05/3.13/3.47. THREE CAUSES ELIMINATED BY CONTROLLED EXPERIMENT: (a) the global LISTING mutex in generated_files.rs — sharding it 64 ways with capacity HELD CONSTANT gave 3.16/3.17/3.21, i.e. identical, which is what rules the lock out; (b) the allocator — adding mimalloc to the bench to match the shipped binary gave 2.17/2.58/3.03, no better; (c) rayon thread count — RAYON_NUM_THREADS=4 beats the default 14. THE ACTUAL LIMIT: 22-32 s SYS against 48-54 s USER, 405,436 filesStatted reported by the live server, and a listing cache already at an 88.3% hit rate (19,850 hits / 2,635 readdirs). generated_files.rs::index_scratch_tree stats EVERY directory entry (fs::metadata on the joined path) purely to classify dir-vs-file, while read_dir's DirEntry::file_type() carries that classification for free from d_type. The lever is FEWER stat calls — not more parallelism and not less locking. [^1] [^2] [^3]
 
 ## Notes and lessons learned
 

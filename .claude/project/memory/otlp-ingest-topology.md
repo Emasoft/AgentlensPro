@@ -2,7 +2,7 @@
 name: otlp-ingest-topology
 description: "which OTLP ingest path is actually live / codex sessions grouped wrong / grouped by conversation not per prompt / multiple otlp parsers or processLogs copies / where does the shipped ingest live / second router is a second truth / why did an ingest fix not take effect / how many places parse the OTLP wire format / what OTEL attributes does Claude Code emit / which telemetry fields are we not reading / where does client_request_id or tool_source go"
 ocd: 2026-07-11
-lmd: 2026-09-01
+lmd: 2026-09-04
 metadata:
   node_type: memory
   tier: hub
@@ -55,7 +55,7 @@ grouper — and the one that determines the **user-visible** `/api/summary` grou
 ingest store-key (impls 1-3) and the summarized view (impl 4) are grouped by SEPARATE
 logic, so an ingest-side grouping change (S3-F3a) has ~zero `/api/summary` effect.
 
-^CGMU661G [desc:"Phase 0b unified only the shared atoms (prompt-event predicate + key format) between the batch summarizer grouper and the streaming normalizer; a full algorithmic fold was rejected because it would change user-visible grouping", keywords:"phase_0b_partial_unification full_fold_rejected batch_grouper_vs_streaming_resolver isCodexPromptEventName isCodexPromptSpanName codexPromptSessionId characterization_test_codexGrouping_test_ts why_was_the_fourth_copy_not_merged", ocd:2026-07-11, lmd:2026-07-30]
+^CGMU661G [desc:"Phase 0b unified only the shared atoms (prompt-event predicate + key format) between the batch grouper and the streaming normalizer; a full fold was rejected — it would change user-visible grouping", keywords:"phase_0b_partial_unification full_fold_rejected batch_grouper_vs_streaming_resolver isCodexPromptEventName isCodexPromptSpanName codexPromptSessionId characterization_test_codexGrouping_test_ts why_was_the_fourth_copy_not_merged", ocd:2026-07-11, lmd:2026-07-30]
 **Phase 0b (2026-07-11) — analyzed and PARTIALLY unified; full fold REJECTED.** impl 4 is a
 BATCH grouper (takes the whole stored-span list, time-SORTS it, honors an explicit
 `codex.session.id` AS the key, absorbs same-trace non-prompt spans); the normalizer is a

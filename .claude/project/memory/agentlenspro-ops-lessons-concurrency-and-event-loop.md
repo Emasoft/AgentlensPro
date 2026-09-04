@@ -2,11 +2,11 @@
 name: agentlenspro-ops-lessons-concurrency-and-event-loop
 description: "server hangs at 100% cpu and every request times out or SIGTERM is ignored / a settings.json env key keeps reverting or getting overwritten after every server restart / the CLI hangs for 75 seconds when the server is unreachable / cache-expired takes forever / a setup detector reports drift every run but the repair never lands / a green setup proves nothing about the repairer / the mocha suite dies at exit 139 SIGSEGV in duckdb.node / all MCP calls fail with rpc error undefined while server logs show 200s / already connected to a transport / a test times out under load but is actually scanning the real live store / an rss sampler goes dark during a scan / a server pidfile is corrupted or two servers own one data dir / a restart looks like it failed but another server already owns the data directory / server.log shows another process's history"
 ocd: 2026-07-11
-lmd: 2026-09-02
+lmd: 2026-09-04
 metadata:
   node_type: memory
   type: project
-  tier: aspect
+  tier: component
 publish-globally: false
 split-lineage: 266022327e5e4d3796245d2d1a921c06
 ---

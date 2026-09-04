@@ -2,7 +2,7 @@
 name: burn-seismic-statistical-model
 description: "burn_seismic reports wrong/implausible p-values / which null model does the burn anomaly detection use / why was v1 mis-calibrated / calibration self-check says 13% when 5% expected / detector flags every busy minute / PELT shatters the series into singletons / spawn list shows calls from hours outside the event / how are burn root causes (fan-out vs thrash vs marathon) decided statistically"
 ocd: 2026-07-24
-lmd: 2026-09-01
+lmd: 2026-09-04
 metadata:
   node_type: memory
   type: project
@@ -48,7 +48,7 @@ a heuristic verdict. The load-bearing design facts:
 - **The decomposition IS the root cause:** rate evidence ⇒ `FANOUT_RATE` (spawn storm); intensity
   evidence ⇒ `FAT_TURN_THRASH` (excess cold-write) or `FAT_TURN_MARATHON` (excess read); both ⇒
   `COMPOUND`. Dominance rule: −ln(min p) of one factor ≥ 2× the other.
-^4GVQ7OVZ [desc:"significance uses BH-FDR (by-method for arbitrary dependence) and the calibration self-check reports Storey's pi-hat-0 plus upper-half histogram uniformity to separate real signal from mis-specification", keywords:"calibration_self_check_says_13_percent_when_5_percent_expected storeys_pi_hat_0_null_attributable_share upper_half_histogram_uniformity_test bh_fdr_default_by_method benjamini_yekutieli_prds_valid confounded_by_real_signal_metric", ocd:2026-07-25, lmd:2026-07-25]
+^4GVQ7OVZ [desc:"significance uses BH-FDR (by-method, arbitrary dependence); the calibration self-check reports Storey's pi-hat-0 + upper-half histogram uniformity to separate signal from mis-specification", keywords:"calibration_self_check_says_13_percent_when_5_percent_expected storeys_pi_hat_0_null_attributable_share upper_half_histogram_uniformity_test bh_fdr_default_by_method benjamini_yekutieli_prds_valid confounded_by_real_signal_metric", ocd:2026-07-25, lmd:2026-07-25]
 - **Significance:** BH-FDR default (PRDS-valid per Benjamini–Yekutieli 2001), `fdrMethod: 'by'`
   for arbitrary dependence. The **calibration self-check reports what it can actually measure**:
   the raw "background share with p<0.05" is CONFOUNDED by real signal (a better detector finds
@@ -64,7 +64,7 @@ a heuristic verdict. The load-bearing design facts:
 - **Attribution:** per event, per-session excess vs that session's own out-of-event rate, with
   `COLD_REWRITE` (single-turn cache_creation ≥ 80% of the session's max prefix, ≥50k floor) and
   `MODEL_SWITCH` tags; spawn calls inside the mainshock verbatim.
-^5EIKA7DX [desc:"every seismicStats.ts primitive is unit-tested against a textbook constant and cross-checked against the stochastic DuckDB extension, since no general DuckDB stats extension ships STA/LTA, CUSUM, or BH-FDR", keywords:"provability_contract_unit_tested_primitives stochastic_duckdb_extension_cross_check textbook_hand_computed_constant no_duckdb_extension_ships_sta_lta_cusum_bh_fdr which_engine_computed_this_result", ocd:2026-07-24, lmd:2026-07-24]
+^5EIKA7DX [desc:"every seismicStats.ts primitive is unit-tested against a textbook constant and cross-checked against the stochastic DuckDB extension — no general DuckDB stats extension ships STA/LTA/CUSUM/BH-FDR", keywords:"provability_contract_unit_tested_primitives stochastic_duckdb_extension_cross_check textbook_hand_computed_constant no_duckdb_extension_ships_sta_lta_cusum_bh_fdr which_engine_computed_this_result", ocd:2026-07-24, lmd:2026-07-24]
 - **Provability contract:** every primitive in src/seismicStats.ts is unit-tested against a
   hand-computed textbook constant, and the distribution tails are cross-checked against the
   `stochastic` DuckDB community extension (Δ≤2e-16 Poisson, ≤7e-8 normal); the engine used is

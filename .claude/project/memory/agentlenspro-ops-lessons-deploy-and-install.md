@@ -2,11 +2,11 @@
 name: agentlenspro-ops-lessons-deploy-and-install
 description: "how to deploy agentlenspro on a machine / setup vs manual install / hooks stopped firing after an upgrade / config file wiped or corrupted after an edit / which file does pnpm read its settings from / minimumReleaseAge or trustPolicy is set but not taking effect / is this supply-chain knob actually live / a guard blocks me editing package.json / is agentlenspro npm-linked or registry-installed / does switching the cli to an ordinary npm install lose my db or settings / where does the data live / can other agents on this machine use the cli / does the dev npm link affect normal published users / does agentlenspro run on Windows / setup fails with unsupported platform or node too old / a settings.json env key keeps reverting / can I run a second server for testing / two servers at once / I changed the ports so it is isolated right / dev instance wrote to my live data dir / invalid log tail offsets after a restart / I rebuilt and restarted but nothing changed / my fix is not live even though esbuild succeeded / am I testing the repo build or the published one / a server exited silently after deploying a new binary / the exec gate said the binary still does not exec but it was only a usage error / exit 64 after a deploy is not a kill, only exit 137 means the kernel killed it / codesign says valid on disk but every exec is still killed / the same cp-over-binary trap hit twice because the deploy page was not recalled first / how many diagnostic tools are there / keeping the skill and the CLI --help in sync / the CLI --help flag ran the command instead of showing help / a baseline ruleset restore reverted the owner's force-push bypass"
 ocd: 2026-07-11
-lmd: 2026-09-02
+lmd: 2026-09-04
 metadata:
   node_type: memory
   type: project
-  tier: aspect
+  tier: component
 publish-globally: false
 split-lineage: 266022327e5e4d3796245d2d1a921c06
 ---
