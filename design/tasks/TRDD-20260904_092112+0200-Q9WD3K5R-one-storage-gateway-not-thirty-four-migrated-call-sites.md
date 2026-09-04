@@ -1,14 +1,14 @@
 ---
 trdd-id: Q9WD3K5R
-title: One storage gateway — the exemption count is the architecture defect, not the engine
+title: DuckDB is the gateway — delete the layers between callers and it
 column: todo
 created: 2026-09-04T09:21:12+0200
-updated: 2026-09-04T09:21:12+0200
+updated: 2026-09-04T09:28:40+0200
 current-owner: main-session
 task-type: refactor
 project-id: agentlenspro
 scope: project
-min-approval-requirement: user
+min-approval-requirement: manager
 labels: [architecture, storage, duckdb]
 priority: high
 severity: high
@@ -19,7 +19,7 @@ implementation-commits: []
 external-refs: []
 ---
 
-# One storage gateway, not thirty-four migrated call sites
+# DuckDB is the gateway — the work is deletion, not a new abstraction
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-09-04
 
@@ -28,8 +28,9 @@ external-refs: []
 low, and shipping it would have produced a green guard over an unchanged architecture. The guard,
 the ratchet and the phase tags all stay — what changes is what "done" means.
 
-**NEXT ACTION:** decide gateway shape (below), then move callers onto it. Do NOT start by swapping
-engines file-by-file.
+**NEXT ACTION:** answer the rebuild-vs-convert question (bottom), then delete handle-passing so
+callers query DuckDB directly. Do NOT start by swapping engines file-by-file, and do NOT build a
+gateway object — DuckDB already is one.
 
 ## Why this exists
 
@@ -37,12 +38,33 @@ USER, 2026-09-04, on being shown a 34-entry exemption allowlist:
 
 > exemptions are code smells. they are the clear sign of a bad architecture.
 
-Correct, and it exposes an error in the plan those exemptions encoded. **34 exemptions means 34
-files that reach disk directly.** The engine those files use is a symptom; the count is the defect.
+Correct in direction. The engine a file uses is a symptom; the number of places that reach disk is
+the defect.
 
-The P2/P3/P4 plan would have migrated each file from sql.js/rusqlite to DuckDB one-for-one. That
-lands **34 files each opening their own DuckDB connection** — exemption count zero, guard green,
-architecture identical. Worse, it would have *looked* like completion.
+**But the "34" is NOT that number, and the first version of this card said it was.** Measured
+2026-09-04 by counting actual open sites (`initSqlJs(`/`new SQL.Database` in TS, `Connection::open`
+in Rust) rather than files that merely mention SQLite:
+
+| | count | files |
+|---|---|---|
+| TS, opens a SQLite store | **5** | `forensicsDb.ts`, `forensicsIndex.ts`, `database/db.ts`, `database/reader.ts`, `cli/setup.ts` |
+| Rust, opens a SQLite store | **2** | `forensics_db.rs`, `opencode.rs` (the latter is OpenCode's own file) |
+| Rust, opens **DuckDB** | 3 | `agentlens-store/{bodies_evidence,lib,transcript_sql}.rs` — already correct |
+
+So **~7 real SQLite open sites, not 34.** The other 27 exemptions are callers holding a handle
+someone else opened, or files whose only SQLite mention is a doc comment. The defect is real and the
+USER's point stands — 7 is still not 1 — but it is roughly a fifth the size this card first claimed,
+and asserting 34 without counting openers was the same unverified-number habit this session has been
+correcting elsewhere.
+
+**And a gateway PARTLY EXISTS.** `agentlens-store` is already a DuckDB layer over parquet with three
+open sites and a documented division of labour ("SELECTION is DuckDB over Parquet (pushdown on
+session/ts/kind)"). This card is therefore **extend and route through the existing store crate**, not
+build a new abstraction beside it — a materially smaller and less speculative job.
+
+The P2/P3/P4 plan would still have been wrong in shape: migrating each file's engine one-for-one
+lands N files each opening their own DuckDB connection — exemption count zero, guard green,
+architecture unchanged. It would have *looked* like completion.
 
 This is the same defect class the guard itself hit twice while being written (see its header): **a
 check whose scope is narrower than the invariant it claims to guard.** `check-duckdb-only.js` asks
@@ -58,20 +80,42 @@ That is one storage boundary. It was flattened into a per-database checklist.
 
 ## What to build
 
-- **ONE gateway owns every on-disk read** — parquet, JSONL, the fact table, everything. It exposes
-  SQL and nothing else. No other file opens any store.
+- **`agentlens-store` owns every on-disk read** — parquet, JSONL, the fact table, everything. It
+  already owns parquet; extend it rather than introduce a second abstraction. It exposes SQL and
+  nothing else. No other file opens any store.
+- **THE GATEWAY IS DUCKDB ITSELF — there is nothing to build.** Two thin bindings over one engine,
+  one schema, one set of SQL. "One gateway" means one set of QUERIES both languages execute against
+  the same parquet, not one code object. So this card is **deletion, not addition**: remove the
+  layers sitting between callers and DuckDB. Two readings must be ruled out explicitly, because both
+  are the obvious interpretation of "one gateway" in a two-language repo and both are worse than
+  today:
+  - **NOT two gateway objects that must agree.** That adds a second parity surface (gateway
+    semantics) on top of the existing one (query results) — strictly worse on the axis this card
+    cares about.
+  - **NOT TS calling into Rust.** The parity fixtures work BECAUSE the TS side is an independent
+    reimplementation. Route it through Rust's store and `forensicsindexer_parity` compares Rust
+    against itself — a green suite proving nothing, which is the exact failure this session caught
+    four times in tests and would here be baked into the architecture. The first draft of this card
+    listed that as the PREFERRED option; it is disqualifying.
+  - **Open question, do not answer now:** if the shared artifact is SQL text, where does it live — a
+    `.sql` file both languages load, or duplicated strings that can drift?
 - **Callers hold no handle and no resident data.** They ask a question, get an ephemeral answer, and
   keep nothing — which is the half of the directive about memory residency, not about engines.
-- **The engine swap becomes a one-line change inside the gateway**, not 34 coordinated edits across
-  two languages.
-- **Endpoint: 1 exemption (the gateway) or 0.** If the endpoint is not 1, the exercise was
-  bookkeeping. That number is the acceptance test for this card.
+- **The engine swap becomes a schema change in one place**, not coordinated edits across two languages.
+- **Endpoint: the openers ratchet toward 1.** Stated as a target, not a pass/fail oath — ~14 of the
+  34 exemptions are tests and parity fixtures, which may legitimately need to CONSTRUCT a store, and
+  whether they can route through the gateway is an open question. Committing to "1 or it was
+  bookkeeping" would set a future session up to either declare failure or quietly redefine the
+  metric — the same trap the ratchet in `check-duckdb-only.js` had before it was corrected. Decide
+  the test/fixture question as part of this card; until then the honest target is "no NON-TEST file
+  outside the store crate opens anything".
 
 ## Derived work this exposes
 
 - **`check-duckdb-only.js` measures the wrong invariant** and must gain a second cap: how many files
-  may open a store AT ALL, regardless of engine. Without it the guard cannot distinguish "migrated"
-  from "fixed". Ratchet that cap to 1 alongside the migration.
+  may OPEN a store at all, regardless of engine. Without it the guard cannot distinguish "migrated"
+  from "fixed". Seed the cap at the measured 7 and ratchet down — that number is immediately
+  actionable and is a better framing than the 34 this card first led with.
 - **The allowlist is defensible only as a countdown.** As a migration ledger with a ratchet to zero
   it earns its place; as a standing list of 34 permanent carve-outs it is exactly the smell the USER
   named. Keep it only while it is shrinking.
