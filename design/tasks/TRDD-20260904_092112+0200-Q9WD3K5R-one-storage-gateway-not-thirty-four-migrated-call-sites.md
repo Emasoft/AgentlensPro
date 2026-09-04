@@ -56,11 +56,75 @@ column that cannot be re-derived, this card does NOT silently continue:
 | derivable only by widening the parquet writer | widen the writer FIRST, backfill, re-run the matrix — still a rebuild |
 | derivable from nothing on disk | **STOP and re-decide.** The column is a fact only SQLite holds, which falsifies "parquet is the memory" for that field. Options are: capture it at ingest going forward and accept a gap for history, or keep a DuckDB-native table fed by the same pass — NOT "keep forensics.db" |
 
+**THIS TABLE IS COLUMN-ONLY, AND THAT IS A HOLE — added 2026-09-04 after an adversarial review
+found it.** Every row above asks "can this FIELD be derived". None asks "do the ROWS exist", and a
+rebuild can lose history without losing a single column. It is not hypothetical here:
+
+| grain check | measured |
+|---|---|
+| forensics.db `api_calls` rows | **14,285** |
+| parquet `api_calls` rows | **3,769** and rising (live writer) |
+| forensics.db rows claimed for sonnet-5 alone | 3,283 |
+| parquet rows for `claude-sonnet-5` | **639** |
+
+So the parquet table holds **~19% of the sonnet-5 rows** and ~12% of the corpus overall (the
+matrix's independent figure). A column-complete rebuild off `api_calls` alone would silently
+discard ~88% of history. **The fourth branch row, therefore:**
+
+| row coverage < 100% | the rebuild sources from `body`+`part`+`blob` (which DO span the corpus), NOT from the `api_calls` parquet table. Coverage must be proven by a row count per source, per model, before any deletion — not assumed from a column matrix |
+
 Reason 3 above says a non-derivable column is a finding worth having on day one. A finding is not a
 plan; this table is the plan.
 
-**NEXT ACTION:** land the derivability matrix
-(`reports/duckdb-gateway/*-forensics-derivability-matrix.md`), take the branch it selects, then
+## ⏵ THE MATRIX LANDED AND THE BRANCH FIRED — re-decision, 2026-09-04T12:1x
+
+`reports/duckdb-gateway/20260904_121036+0200-forensics-derivability-matrix.md`: **34 columns —
+6 derivable, 10 conditional, 18 NOT derivable.** That is the STOP-and-re-decide row of the branch
+table below, not "proceed". Writing the branch before running the matrix is the only reason this
+is a decision and not a surprise.
+
+**REBUILD STANDS. What was wrong is the word "parquet", not the word "rebuild".** The 18 split into
+two classes that need opposite treatment, and averaging them into one "18 not derivable" would have
+killed a decision that is actually sound:
+
+- **7 spawn/session columns** (`spawn_kind`, `subagent_type`, `spawn_model_override`,
+  `spawn_isolation`, `is_sidechain`, `parent_session`, `spawn_resolution`) are read from the
+  **`agentlens.db` SQLite `sessions` table**. They are not missing from disk — they are in a
+  SECOND database **we own**, which this card had not counted. So they are not a reason to abandon
+  the rebuild; they are the discovery that the migration's scope is `forensics.db` **and**
+  `agentlens.db`. A rebuild sourced from "the DuckDB store" reaches them; a rebuild sourced from
+  "parquet" does not. The directive said "duckdb is your memory", not "parquet is your memory".
+- **11 columns** (break/culprit/gap/frontmatter/composition, incl. all 6 of `call_content` /
+  `call_injections`) need TS heuristic engines ported to SQL — **and are 0% populated today.**
+  There is no data to lose and nothing to validate a port against. They are a FORWARD capability
+  question, not a migration blocker. Deriving them needs raw-body reconstruction over the
+  467.7M-row `parts` table, so the port is a real project; it is simply not this one.
+
+**So the corrected decision: REBUILD, sourced from the DuckDB store as a whole — parquet
+(`body`/`part`/`blob`/`api_call`) PLUS `agentlens.db` absorbed into it.** The 11 unpopulated
+columns are dropped from the rebuild and re-filed as forward work; dropping a column that is 0%
+populated loses nothing, and carrying it would mean porting a heuristic engine to reproduce
+`NULL`.
+
+### Three facts the matrix produced that change other cards
+
+1. **The `api_calls` parquet table is WRITTEN AND NEVER READ.** VERIFIED independently:
+   `src/forensicsSql.ts` queries `api_calls` as a **SQLite table inside `forensics.db`**; the only
+   code touching the parquet `API_CALLS_DIR` is the Rust writer (`agentlens-store`) and a
+   file-copy in `src/store/migrate.ts`. It covers 12% of forensics.db's 14,285 rows and no reader
+   consumes it. That is a parallel unconsumed implementation — either wire it up or delete the
+   writer, but it must not stay a third source of truth. **Derived card required.**
+2. **`forensicsIndex.ts`'s real source is `body`+`part`+`blob` union'd with the JSONL spool**, not
+   the pre-extracted table. Any plan written against "the api_calls table" was aimed at the wrong
+   source.
+3. **The row count is NOT stable and must never be quoted as a constant.** Three measurements
+   minutes apart: **3,483 → 3,624 → 3,769 rows** (184 → 187 files). The store is live and `alcore`
+   is writing to it. An earlier commit on this card quoted "3,624 rows" as a fixed fact; it was
+   true only at its instant. Any acceptance test that pins a row count will fail for the right
+   reason and be "fixed" for the wrong one.
+
+**NEXT ACTION:** file the derived card for the unconsumed `api_calls` writer, bring `agentlens.db`
+into this card's scope explicitly, then build the shared-SQL artifact over the corrected source and
 build the shared-SQL artifact and delete handle-passing so callers query DuckDB directly. Do NOT
 start by swapping engines file-by-file, and do NOT build a gateway object — DuckDB already is one.
 Read the resident-data inventory (`*-alcore-resident-data-inventory.md`, TRDD-7YPQWKPG's evidence)
@@ -76,10 +140,18 @@ if read afterwards.
   filename=true)`. The earlier "182 parts" in this card was `ls -la`'s **link count** read as a
   file count — a directory listing standing in for a measurement, which is the exact defect class
   this card is about.
-- **The schema is HOMOGENEOUS across all 184 parts.** `DESCRIBE` without `union_by_name` binds
-  successfully at 26 columns, so no generation carries a different column set. Schema drift across
-  writer generations would have broken a rebuild specifically (a rebuild reads every part; a
-  conversion reads only today's rows) — it does not exist here.
+- **The schema is HOMOGENEOUS across every part — VERIFIED, but NOT by the command this card first
+  cited.** The right method is `parquet_schema()`, which reads EVERY file's footer:
+  group `list(name||':'||type ORDER BY column_id)` per `file_name`, then count distinct signatures.
+  Result: **1 signature group covering all 188 files** — identical names, types AND ordinals.
+  **The first attempt used `DESCRIBE` without `union_by_name` and read its success as proof.** It
+  is not: with `union_by_name=false` DuckDB binds the schema from the FIRST file the glob resolves
+  and reads the rest POSITIONALLY, and `DESCRIBE` only needs the binder, so it never opens the
+  other 187 files at all. That test would have waved through a later generation with a column
+  added, a column re-ordered, or a type changed — and the re-ordering case is the one that
+  matters, because positional reads corrupt a rebuild **without erroring**. Right conclusion,
+  wrong evidence; recorded because the next person to check this will otherwise reach for
+  `DESCRIBE` too.
 - Columns: `stem, kind, ts_ms, model, raw_bytes, session_id, billing_header, cc_prev_req,
   previous_message_id, system_fps, tools_fp, first_user_fp, breakpoint_positions, tool_choice,
   thinking_config, msg_id, stop_reason, input_tokens, output_tokens, cache_read_tokens,
@@ -90,14 +162,27 @@ if read afterwards.
   Every DuckDB measurement here ran through the repo's own `@duckdb/node-api`, and the import only
   resolves from the repo root. Any future card that writes `duckdb -c …` as a verification step is
   writing a command that cannot run here.
-- **There are THREE SQLite databases, not one:** `forensics.db`, `agentlens.db` (ours) and
+- **At least THREE SQLite databases, not one:** `forensics.db`, `agentlens.db` (ours) and
   `opencode.db` (OpenCode's — explicitly out of scope, see Non-goals). This card's "the fact table"
   phrasing hid the second one. Any deletion plan that names only `forensics.db` is incomplete.
+  **"At least", not "exactly": the method was a grep for `.db`/`.sqlite` STRING LITERALS in
+  `.ts`/`.rs`/`.js` only.** It cannot see a path built from a variable or a constant defined
+  elsewhere (the guard's own header records missing `OpenCodeSqlFactory` for exactly this reason),
+  nor a path in a `.json`/`.toml`/shell file, nor a `-wal`/`-shm` sibling reached without the `.db`
+  suffix. Treat 3 as a floor.
+  **And `agentlens.db` may be DEAD in production:** its openers are in `src/database/*`, which
+  CLAUDE.md describes as persistence modules retained from the removed VS Code extension host that
+  "run only under tests". If that holds, it is deletable rather than migratable — an open question
+  this card must settle BEFORE scoping a migration around it, because the two answers give opposite
+  work.
 - **`.pass-state.json` (8.7 MB) is read and written directly, not through DuckDB** — by
   `src/rustStorePass.ts:126`, `src/cli/storeAdmin.ts:77` and Rust `agentlens-store/src/pass.rs`
   (`PASS_STATE_FILE`). It is on-disk state under the store root that the directive's "read only via
   DuckDB" would cover on a plain reading. This card does NOT resolve it; it is filed separately so
-  it is not lost.
+  it is not lost. **Method caveat: the grep was for the STRING `pass-state`, so it finds the
+  constant's DEFINITION but not callers that use the `PASS_STATE_FILE` identifier.** The reader set
+  is therefore a lower bound. The "never through DuckDB" half is nonetheless sound — it is an 8.7 MB
+  JSON and `rustStorePass.ts:79` carries a comment forbidding TS read-modify-write of it.
 
 ## Why this exists
 
