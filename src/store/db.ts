@@ -89,6 +89,13 @@ export function threadCount(opts: StoreOptions, env: NodeJS.ProcessEnv = process
 export const BLOBS_DIR = 'blobs'
 export const BODIES_DIR = 'bodies'
 export const PARTS_DIR = 'parts'
+// TRDD-TP3BA3ED: the fourth table dir, written ONLY by the Rust engine (agentlens-store's
+// API_CALLS_DIR / `api_call` table). Decision recorded on the card: option 2 — the USER's standing
+// ruling is that DuckDB/parquet via Rust IS the memory, so this twin is read-and-PRESERVE only. It
+// must never create, write, verify or delete `api_calls`; every place that enumerates the layout
+// treats it as OPTIONAL (present-or-absent are both valid). The constant exists so the one place
+// that must NOT lose it — the migration swap in migrate.ts — can name it.
+export const API_CALLS_DIR = 'api_calls'
 
 function partFiles(dir: string, sub: string): string[] {
   try {
@@ -128,6 +135,9 @@ export async function openStore(opts: StoreOptions): Promise<Store> {
   // top-level import would make every CLI invocation (--version, hook, gate) pay for loading it.
   const { DuckDBInstance } = await import('@duckdb/node-api')
 
+  // Deliberately NOT API_CALLS_DIR: this engine never writes that table, and creating an empty dir
+  // for it would assert a writer that does not exist. An `api_calls` dir left by the Rust engine is
+  // simply ignored here — nothing below globs the store root, so an extra sub-dir is inert.
   for (const sub of [BLOBS_DIR, BODIES_DIR, PARTS_DIR]) {
     fs.mkdirSync(path.join(opts.dir, sub), { recursive: true })
   }

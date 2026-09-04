@@ -68,6 +68,11 @@ export interface ValidateOptions {
 /**
  * Validate a store. Returns a report — it NEVER throws on invalid data (an exception would be
  * indistinguishable from a bug in the validator itself; the caller must see the counts and decide).
+ *
+ * TRDD-TP3BA3ED: every check below is TABLE-driven (`allOf` over blob/body/part), never a listing of
+ * the store root, so the Rust engine's optional `api_calls` dir is neither validated nor counted nor
+ * reported as unexpected — present or absent are both valid, and no count double-counts because
+ * nothing here globs a directory.
  */
 export async function validateStore(store: Store, opts: ValidateOptions = {}): Promise<ValidationReport> {
   const r: ValidationReport = { bodies: 0, bodiesOk: 0, blobs: 0, blobsOk: 0, danglingRefs: 0, errors: [], valid: false }

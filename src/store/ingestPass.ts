@@ -267,6 +267,10 @@ export async function ingestPass(opts: IngestPassOptions): Promise<IngestPassRes
       // exists to close (review finding on KB17X5G2-P0.5). Walk all three part dirs; the process-
       // lifetime cache makes the steady-state cost one fsync per NEW part file, and an fsync of an
       // already-clean file is nearly free besides.
+      // TRDD-TP3BA3ED: three dirs, NOT four. `api_calls` is optional here in the strong sense — it
+      // is the Rust engine's table and holds no body bytes, so it can neither authorize nor block a
+      // delete, and fsyncing another writer's parts from this pass would be a barrier over files
+      // this process never wrote. Present or absent, this loop is unaffected.
       try {
         const dirs = new Set<string>()
         for (const sub of [BLOBS_DIR, BODIES_DIR, PARTS_DIR]) {

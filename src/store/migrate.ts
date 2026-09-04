@@ -22,7 +22,7 @@
 // "Migration failed" must always be strictly better than "migration half-succeeded".
 import * as fs from 'fs'
 import * as path from 'path'
-import { allOf, openStore, Store } from './db'
+import { allOf, API_CALLS_DIR, openStore, Store } from './db'
 import { emptyCorrections, makeTsRecoveryMigration } from './tsRecovery'
 import { validateStore, ValidationReport } from './validate'
 
@@ -212,6 +212,15 @@ async function stagedRewrite(
 
     await from.close(); from = null
     await to.close(); to = null
+
+    // TRDD-TP3BA3ED: `api_calls` is the Rust engine's table — no migration step reads or writes it,
+    // so staging has none. But the swap below replaces the WHOLE directory, which would leave the
+    // table behind in `backup` and hand the live store one with no api_call rows at all (silently:
+    // both verifies are body/blob-only and would still pass). Carry the parts across verbatim.
+    // Copy, never move: the live store must stay complete until the swap, and the parts are
+    // immutable content-named Parquet, so a copy is exact and nothing here rewrites them.
+    const apiCalls = path.join(dir, API_CALLS_DIR)
+    if (fs.existsSync(apiCalls)) fs.cpSync(apiCalls, path.join(staging, API_CALLS_DIR), { recursive: true })
 
     writeManifest(staging, { schemaVersion: manifestVersion, createdAt: new Date().toISOString(), migratedFrom: res.fromVersion })
 
