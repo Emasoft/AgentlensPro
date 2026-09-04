@@ -245,7 +245,7 @@ D=~/.agentlens/store/api_calls
 find "$D" -name '*.parquet' | sort > /tmp/parts-before.txt        # BEFORE
 agentlenspro server restart
 comm -23 /tmp/parts-before.txt <(find "$D" -name '*.parquet' | sort)   # (a) SURVIVES
-node -e '...'  < see (b) below >                                  # (b) IS READABLE
+# then (b), the readability half — the node block below
 ```
 
 **(b), verified working against the live store 2026-09-04T17:5x — run from the repo root:**
