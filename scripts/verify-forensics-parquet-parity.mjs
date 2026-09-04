@@ -56,15 +56,20 @@ const QUERIES = [
    `SELECT cc.tag, count(*) n, sum(cc.tokens) tok FROM api_calls a JOIN call_content cc ON cc.call_id=a.call_id GROUP BY 1 ORDER BY 1`],
   // TOLERANCE, and only here. Every other check demands exact equality. A sum of 4,061 doubles is
   // ORDER-DEPENDENT: sql.js accumulates left-to-right in JS, DuckDB vectorises and accumulates in
-  // lanes, so the last ULPs differ by construction — measured 356.050454 vs 356.050453, ~1e-6 on a
-  // $356 total, ~3e-9 relative. That is arithmetic, not data: the per-value comparison elsewhere
-  // proves every stored cost is byte-identical to the source. Demanding bit-identical float sums
-  // across two engines is not achievable, and a check that cannot pass gets deleted — so this one
-  // states its tolerance instead of pretending. If a REAL corruption ever lands, it will exceed
-  // 1e-9 relative by orders of magnitude; this does not hide it.
-  ['cost by model (float sums, 1e-9 relative tolerance)',
+  // lanes, so the last ULPs differ by construction. That is arithmetic, not data — the per-value
+  // comparison elsewhere proves every stored cost is byte-identical to the source.
+  //
+  // 1e-12, and the number is MEASURED, not guessed. The first version said 1e-9 "because the
+  // measured divergence is ~3e-9" — which was wrong twice over: the real worst-case relative
+  // divergence across all six models is 2.2e-15 (356.0504535 vs 356.0504534999999 is 3.2e-16
+  // relative, not 1e-6), and a tolerance BELOW the claimed divergence could not have passed at all.
+  // The stated justification and the stated number contradicted each other and both were wrong.
+  // 1e-12 sits ~450x above the observed noise floor — loose enough that ULP jitter can never
+  // redden it, and ~1,000,000x tighter than the 1e-9 it replaces, which would have waved through
+  // a corruption of nearly a microdollar per dollar.
+  ['cost by model (float sums, 1e-12 relative tolerance)',
    `SELECT a.model, count(*) n, sum(a.cost_usd) usd FROM api_calls a GROUP BY 1 ORDER BY 1`,
-   null, { tolerant: ['usd'], rel: 1e-9 }],
+   null, { tolerant: ['usd'], rel: 1e-12 }],
   // The ${TIME} predicate every preset carries. v1 could not run this at all; leaving `ts` as
   // VARCHAR (an over-strict type planner) made it fail to BIND ("Cannot compare VARCHAR and
   // INTEGER_LITERAL"). It is here so neither regression can return silently.
