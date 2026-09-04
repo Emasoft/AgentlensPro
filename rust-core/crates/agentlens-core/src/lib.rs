@@ -416,8 +416,12 @@ impl CoreState {
     ///
     /// **This rebuilds INLINE, under whatever lock the caller holds.** Every server path that can
     /// run while ingest is hot goes through `ui::summary_now` instead, which does the same work
-    /// off the lock and leaves this a pointer clone (TRDD-HFV4AIT7). It stays inline for callers
-    /// that own the state outright — tests, the CLI/MCP surfaces, and the cold-boot first build.
+    /// off the lock and leaves this a pointer clone (TRDD-HFV4AIT7). It stays inline only for
+    /// callers that own the state outright — tests, the CLI, and the cold-boot first build.
+    /// The MCP tool handlers are NO LONGER among them (TRDD-QE114936): they run inside the
+    /// serving process while ingest is hot, so every one of them now reads `ui::summary_now`
+    /// before taking its guard. `ui.rs` is asserted free of this call by
+    /// `ui::rebuild_admission_tests::mcp_handlers_never_rebuild_the_summary_under_the_lock`.
     pub fn build_session_summary(&mut self, now_ms: f64) -> std::sync::Arc<Value> {
         // Disjoint field borrows: the cache + side-map are written, the inputs are read.
         // `accounts` joins the disjoint-borrow list for the same reason as the rest: it is READ
@@ -461,8 +465,19 @@ impl CoreState {
     /// folded into `live_burn_status` because the two return different shapes from the same
     /// inputs, and `compute_session_status` needs the SESSION CARDS as well as the events (it
     /// compares the caller's session to its predecessors in the same workspace).
-    pub fn live_session_status(&mut self, session_id: Option<&str>, workspace: Option<&str>, now_ms: f64) -> Value {
-        let summary = self.build_session_summary(now_ms);
+    ///
+    /// TRDD-QE114936: `summary` is READ IN by the caller (via `ui::summary_now`, off the state
+    /// lock) rather than rebuilt here under the caller's guard. This was the same
+    /// rebuild-under-the-lock as the eighteen direct `build_session_summary` sites in `ui.rs`,
+    /// hidden one call deep — a grep for the rebuild at the call site could not see it. Named
+    /// `_over` like `burn_status_over` for exactly that reason: the name says it does not build.
+    pub fn session_status_over(
+        &mut self,
+        summary: &Value,
+        session_id: Option<&str>,
+        workspace: Option<&str>,
+        now_ms: f64,
+    ) -> Value {
         let sessions = summary.get("sessions").and_then(Value::as_array).map(Vec::as_slice).unwrap_or(&[]);
         let events = burn::monitor::gather_consumption_events(sessions, &[], now_ms);
         let ttl = self.burn.ttl_context(now_ms);
@@ -478,10 +493,21 @@ impl CoreState {
     /// `fanout_threshold` / `spike_tokens_per_min` are the TS `checkBurnRisk` defaults when None —
     /// only the MCP tool exposes them, and `check_burn_risk` floors both anyway (2 / 10k), so a
     /// caller cannot disable a risk row by passing an absurdly low threshold.
-    pub fn burn_risk_report(&mut self, now_ms: f64, fanout_threshold: Option<f64>, spike_tokens_per_min: Option<f64>) -> Value {
+    ///
+    /// TRDD-QE114936 site 20: the fill-in used to call `live_burn_status` — a whole-window summary
+    /// rebuild — RIGHT HERE, under the caller's guard, on every request in the first ≤4 s after a
+    /// restart (before the burn tick has stored a status). The value is now computed OFF the lock
+    /// by the caller (`ui::burn_status_now`) and passed in; the caller peeks `last_status` first,
+    /// so it computes one only when there is genuinely none.
+    pub fn burn_risk_report(
+        &mut self,
+        now_ms: f64,
+        status_when_unset: Option<Value>,
+        fanout_threshold: Option<f64>,
+        spike_tokens_per_min: Option<f64>,
+    ) -> Value {
         if self.burn.last_status.is_none() {
-            let s = self.live_burn_status(now_ms);
-            self.burn.last_status = Some(s);
+            self.burn.last_status = status_when_unset;
         }
         self.burn.bodies.poll(now_ms);
         let bodies = self.burn.bodies.report(now_ms);
