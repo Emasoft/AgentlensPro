@@ -3,7 +3,7 @@ trdd-id: 4MJT92J7
 title: alcore reads MCP_PORT from env with parse rules that differ from the TypeScript envPort
 column: todo
 created: 2026-09-04T16:04:40+0200
-updated: 2026-09-04T16:04:40+0200
+updated: 2026-09-04T16:39:18+0200
 current-owner: main-session
 task-type: bugfix
 project-id: agentlenspro
@@ -128,8 +128,18 @@ is the first task, not a formality — the whole severity of this card depends o
       `:55-58` already describes ("stated a port about itself that a client would find dead").
 - [ ] A decision is recorded: delete the env read in favour of the flag, OR align its parse
       semantics with `envPort`. Not "it's probably fine".
-- [ ] `freePort.ts`'s `alcoreArgsFromEnv` comment is corrected or narrowed to what is true. It
+- [x] `freePort.ts`'s `alcoreArgsFromEnv` comment is corrected or narrowed to what is true. It
       currently states a blanket flags-only property that one grep disproves.
+      **DONE 2026-09-04T16:39+0200.** NARROWED, not deleted — the comment's operational point (pass
+      the flags or the child stomps the developer's live server) is still true and still load-bearing,
+      so only the false universal was replaced. It now states the property that IS true and is the one
+      isolation depends on — **for BINDING alcore is flags-only; no listener is bound from an
+      env-derived value, and UI_PORT/OTLP_PORT have zero `env::var` reads in the Rust tree** — then
+      names the exception explicitly (`server_stats.rs`'s `impl Default for Ports` reads `MCP_PORT`,
+      with the divergent parse rules tabled above) and records WHY the correction matters: this
+      comment was the only evidence anyone had that the Rust env boundary was airtight, and a false
+      "I checked, there is no other site" is the same shape that was already wrong once in
+      TRDD-99HUNXJS's commit `44fcd56f`. `npx tsc --noEmit` exit 0.
 - [ ] A check that would FAIL if a future Rust site reads a port env var directly — the TypeScript
       side got one shared parser, the Rust side has no equivalent guard.
 

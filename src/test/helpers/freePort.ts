@@ -177,10 +177,20 @@ export function alcoreTestBin(): string | null {
 }
 
 /** Translate the env contract every test already builds (DATA_DIR / *_PORT / BIND_HOST) into
- *  alcore's flags. alcore reads NO env vars for these — it is flags-only — so without this the
- *  child would silently bind its defaults (3000/4316/4318) and stomp the developer's live server
- *  instead of the ephemeral ports the test allocated. That failure would not look like a
- *  misconfiguration; it would look like passing tests plus a corrupted live data dir.
+ *  alcore's flags. Without this the child would silently bind its defaults (3000/4316/4318) and
+ *  stomp the developer's live server instead of the ephemeral ports the test allocated. That
+ *  failure would not look like a misconfiguration; it would look like passing tests plus a
+ *  corrupted live data dir.
+ *
+ *  For BINDING, alcore is flags-only: nothing in the Rust tree reads UI_PORT or OTLP_PORT from the
+ *  environment at all, and no listener is bound from an env-derived value. But the blanket claim
+ *  this comment used to make — "alcore reads NO env vars for these" — is FALSE for MCP_PORT:
+ *  `server_stats.rs`'s `impl Default for Ports` reads it via `std::env::var`, with parse rules that
+ *  differ from the TS `envPort` (`'3e3'` → TS 3000 / Rust fallback; `'0'` → TS rejected / Rust
+ *  Some(0)). That value reaches `/api/server-stats` but never a socket, so passing the flags below
+ *  is still sufficient for isolation — the correction matters because this comment was the ONLY
+ *  evidence anyone had that the Rust env boundary was airtight, and a false "I checked, there is no
+ *  other site" is exactly the shape that was already wrong once in TRDD-99HUNXJS. See TRDD-4MJT92J7.
  */
 export function alcoreArgsFromEnv(env: NodeJS.ProcessEnv): string[] {
   const args = ['serve']
