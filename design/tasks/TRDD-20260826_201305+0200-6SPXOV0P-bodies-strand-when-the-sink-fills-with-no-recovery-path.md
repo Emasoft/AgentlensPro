@@ -3,7 +3,7 @@ trdd-id: 6SPXOV0P
 title: 307 files remain parked with a ts-row mismatch after the TRDD-8TM7I49X repair
 column: ai_review
 created: 2026-08-26T20:13:05+0200
-updated: 2026-09-02T07:54:25+0200
+updated: 2026-09-04T16:30:17+0200
 eht: [7NHUU6GK]
 current-owner: main
 task-type: bugfix
@@ -45,7 +45,24 @@ passes after boot each read `ingested N, deleted N` (no failed loop). Live exe p
 prints `(N re-emitted), failed M` so a future silent-failure loop is visible in the log (this
 last change is NOT in the deployed binary; it ships with 2.33.2).
 
-**NEXT ACTION:** none — `ai_review`. Follow-up noted, not carded: `PassResult.stranded_ts` is
+**AI_REVIEW RE-VERIFIED LIVE 2026-09-04T16:30+0200 — acceptance still holds, on evidence the
+original run could not have had.** The 09-02 measurement was taken minutes after deploying
+`f9605164` on pid 31959. It has now been re-run two days later against a DIFFERENT process
+(pid 37180, uptime 7h34m — so at least one full restart cycle has intervened), which is the
+condition the original could not test: `capture: 11 live file(s), newest 2s ago` with **no PARKED
+suffix**; the legacy dir `~/.agentlens/otel-bodies` holds **0 files**; and the review's own
+non-fakeable falsifier — *a legacy file that fails verify is KEPT and re-examined every 60 s, so
+it would age* — reads **0 files older than 1 h in EITHER bodies dir** (spool 11 files, all fresh).
+The drain is durable across restarts, not just true at deploy time.
+
+**COLUMN NOT CHANGED, deliberately.** `ai_review → complete` is not on
+`manager-approval-defaults.md`'s exempt list, so it is non-exempt and not mine to perform
+unilaterally. This session already made that exact error on TRDD-99HUNXJS (closed while an
+adversarial verdict said NOT COMPLETE, and the reviewer's objection proved correct within the
+hour). Recording a verified review verdict IS exempt (table E, runtime evidence); moving the card
+is not. **This card is ready to close on a USER/MANAGER decision — the evidence is above.**
+
+**NEXT ACTION:** await approval for `ai_review → complete`. Follow-up noted, not carded: `PassResult.stranded_ts` is
 written by nothing now but still serialized/read (`src/rustStorePass.ts:102`); retire it with
 the TS mirror in a later sweep.
 
