@@ -1,9 +1,9 @@
 ---
 trdd-id: UTFVMVT8
 title: The composition routes hold the state lock for seconds at ui.rs:560 and the dominant statement is not yet isolated
-column: testing
+column: ai_review
 created: 2026-09-02T12:55:49+0200
-updated: 2026-09-02T16:51:58+0200
+updated: 2026-09-04T15:25:08+0200
 current-owner: main-session
 task-type: bugfix
 priority: high
@@ -182,12 +182,36 @@ implementation-commits: [4e19ed4b, 428a1dec]
       per-candidate `timeline_of` guard (site 599) is TRDD-QE114936's, not this box's.
       DONE — 16:36–16:51 on pid 18695: zero holds ≥ 250 ms at any of those sites (STATE has the
       per-site table); the worst hold on the server fell from 273,893 ms to 2,263 ms.
-- [ ] `/api/context-compositions` (scoped and single-session) still fills `project` — the P4x.2c
+- [x] `/api/context-compositions` (scoped and single-session) still fills `project` — the P4x.2c
       parity note on `composition_project_map` explains why a wrong map answers 200 with nothing.
       Probe BOTH a steady-state session AND a session started after the last rebuild: the second
       must answer `project` correctly on a later call, not stay `"unknown"` (the uncached-build
       guard above), and a project-scoped query must include it once the next rebuild has landed
       (the accepted `resolve_scope` omission above is bounded, not permanent).
+
+      **PROBED LIVE 2026-09-04T15:25 against the running server (pid 37180, uptime 6h22m):**
+
+      | probe | result |
+      |---|---|
+      | steady-state session (`ad59356f-…`) | `project = "/Users/…/Code/AgentlensPro"` — filled, NOT `"unknown"` |
+      | session started AFTER the last rebuild (`agent-a0fcb107…`) | `project` correct |
+      | second post-rebuild session (`agent-af113d64…`) | `project` correct |
+      | project-scoped query (`query_context_blocks --project …`) | **1,269 blocks matched**, 10 groups — NOT the empty-200 failure |
+
+      **The route name in this box is STALE and cost a false 404.** `/api/context-compositions`
+      does not exist in the Rust core — it is the pre-1B98LCVR TypeScript name. The live routes are
+      `GET /api/composition/<sessionId>` (`ui.rs:1799`) and `GET /api/composition-index/<sessionId>`
+      (`ui.rs:3534`). Note `project` is NOT on the composition payload at all (that returns
+      `{estimated, sessionId, truncated, turns}`); it surfaces on the **composition-index summary**,
+      which is where `ui.rs:583`'s `composition_project_map(&summary).remove(session_id)` hint lands.
+      Anyone re-running this box against the name written above will get a 404 and may conclude the
+      feature is gone — it is not.
+
+      **CAVEAT, stated rather than glossed:** both post-rebuild sessions had `callsTotal: 0` (agent
+      sessions with no captured bodies), so they exercise the project-hint path but not a populated
+      composition. The steady-state session and the 1,269-block scoped query cover the populated
+      case. A post-rebuild session WITH calls would be a strictly stronger probe; if one is to hand
+      later, re-run it.
 
 ## Notes and lessons learned
 
