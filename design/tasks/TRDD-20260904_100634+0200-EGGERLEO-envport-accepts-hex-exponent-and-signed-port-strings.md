@@ -3,7 +3,7 @@ trdd-id: EGGERLEO
 title: envPort accepts hex exponent and signed forms that nobody types as a port
 column: todo
 created: 2026-09-04T10:06:34+0200
-updated: 2026-09-04T16:52:56+0200
+updated: 2026-09-04T16:56:24+0200
 current-owner: main-session
 task-type: bugfix
 project-id: agentlenspro
@@ -94,9 +94,14 @@ proposed `/^\d+$/` guard:
 | `'08080'` | `Some(8080)` | ACCEPT 8080 | yes |
 | `'-1'` | `None` | REJECT | yes |
 
-**Scope of the table: `MCP_PORT` only.** `UI_PORT` and `OTLP_PORT` have no Rust reader at all
-(TRDD-4MJT92J7), so there is nothing for them to diverge from; the table names no variable and must
-not be read as covering all three.
+**Scope of the table: `MCP_PORT` only.** No Rust reader of `UI_PORT`/`OTLP_PORT` was found, so
+there is nothing for them to diverge from; the table names no variable and must not be read as
+covering all three. **Carrying the scope rather than restating the universal** (this is the third
+card to state this fact and the first two dropped the scope): the literals occur 4× in `rust-core`,
+all in comments, and no port name is built by string formatting — so no `env::vars()` map lookup or
+`env::var(key)` helper in that tree can name them. A key arriving from a config file or CLI string
+would evade that check, and the `target/` exclusion is safe only because no `build.rs` exists.
+Full derivation on TRDD-4MJT92J7 / TRDD-VDQ2N8PX.
 
 **This is an argument for rejecting non-decimal literals** — decimal-only is what the Rust half
 already enforces by construction, so the change makes the two engines agree rather than imposing a
@@ -107,19 +112,23 @@ the same env var, **one live port and one wrong report**.
 That is FALSE and contradicts TRDD-4MJT92J7's own retraction, made hours earlier the same day:**
 `Ports` is a REPORTING struct, `Ports::default()` has one caller, and the only reads of
 `st.ports.*` are the `/api/server-stats` payload. The Rust 4316 never reaches a socket — the
-listener binds from `--mcp-port`. I deflated that exact overstatement on 4MJT92J7 and then
-re-inflated it here in the opposite direction, on the card where it made my own contribution look
-weightier. Worth naming because it is not a memory failure: the corrected text was in front of me.
+listener binds from `--mcp-port` — and the trace shows binding code never reads `Ports` at all, so
+this holds whether or not the flag is passed.
+**One nuance the flat phrasing hides:** `server_stats.rs:55-58` says `alcore serve` OVERWRITES `mcp`
+from `--mcp-port` once `serve_mcp` claims the port, calling the bad value what the field carried
+*"until then"*. So the wrong report may exist only in a startup window rather than as an ongoing
+property of `/api/server-stats`. Which one is NOT established — do not quote "one wrong report" as
+a steady-state claim.
 
 **The `+8080` rejection was ALREADY KNOWN — this card said so this morning**, in the very sentence
 proposing the fix: *"This rejects `3e3`, `0x1F80`, `0b11` and `+8080` while accepting every input
 the current parser accepts that is actually a port."* Only *Rust accepts it* is new here, so the
 contribution is narrower than "catching it before it lands" implies.
 
-**And that sentence was already false on its own terms, before Rust entered the argument:** `+8080`
-IS currently accepted and IS actually a port, so "rejects `+8080`" and "accepts every input the
-current parser accepts that is actually a port" cannot both hold. The card was refuting itself in
-plain sight and I reached for a cross-engine argument instead of reading it.
+**And that sentence is false on its own terms, before Rust enters the argument:** `+8080` IS
+currently accepted and IS actually a port, so "rejects `+8080`" and "accepts every input the
+current parser accepts that is actually a port" cannot both hold. The defect in the proposed fix
+was visible on this card without any cross-engine evidence.
 
 **The one-line fix as written is WRONG, and this is the part worth catching before it lands.**
 Rust's integer `FromStr` accepts a leading `+`, so `/^\d+$/` would reject an input Rust accepts —
@@ -152,8 +161,16 @@ makes the decision look foreclosed, which has the same effect by a slower route.
 - **BSDR4TRM RATIFIED the current fallback semantics deliberately.** This card exists to revisit an
   approved decision; "the parser is loose" was a choice, not an oversight.
 - **Nothing is broken.** `severity: low`, and every accepted oddity resolves to a real, in-range
-  port. There is no reported incident, and no evidence in this repository that any config sets
-  `3e3`, `0x1F80` or `+8080` for any port variable — the divergence is real but **unreached**.
+  port. There is no reported incident.
+  **On "unreached" — searched 2026-09-04T16:54, and the search cannot settle the question.** In
+  THIS repository every occurrence of `3e3`/`0x1F80`/`+8080` is TRDD prose documenting the
+  divergence itself; the only real port config is `Dockerfile` (`OTLP_PORT=4318`, `UI_PORT=3000`)
+  and `README.md` (`OTLP_PORT=4319 UI_PORT=3001`), all plain decimal. **But a port env var lives in
+  a DEPLOYED ENVIRONMENT, not in a repo**, so this is the wrong universe for the question and no
+  grep here can answer it. An earlier version of this bullet asserted the negative flatly, and
+  before that asserted it without searching at all. The supportable claim is narrow: *no
+  odd-shaped port value appears in this repository's own configs; what any user's environment sets
+  is not observable from here.*
 - **A strict patch could move a live port silently.** Any existing config using `3e3` binds 3000
   today and would bind the fallback after the change. That is a behaviour change to a shipped
   product in service of a shape nobody has complained about.
@@ -161,6 +178,10 @@ makes the decision look foreclosed, which has the same effect by a slower route.
   above), which is the impact TRDD-4MJT92J7 already records — and which could equally be fixed on
   the Rust side by deleting the env read in favour of the flag (4MJT92J7 box 2), touching no TS at
   all and leaving ratified semantics alone.
+  **This argument answers only HALF of this card, and the half it does not answer is the original
+  complaint.** A Rust-side fix disposes of the *divergence*; it does nothing about `envPort`
+  accepting `0x1F80` → 8064 on the TS side, which predates Rust entirely. Do not read this bullet
+  as "nothing needs doing here".
 
 **`min-approval-requirement: manager`, not `none`** — this card exists to revisit a decision
 ratified in TRDD-BSDR4TRM's ai_review. It was filed as `none` on 2026-09-04 and corrected the same
