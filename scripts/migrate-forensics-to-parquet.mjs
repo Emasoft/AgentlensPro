@@ -53,27 +53,76 @@ if (!fs.existsSync(SRC)) {
 // instants of a moving database, and the verification compares two moving targets and prints a
 // green PASS. The directive is "do not lose any data"; a warning above a PASS line is not
 // protection, because the line the reader believes is the last one.
-const FORCE = process.argv.includes('--force')
+// TWO SEPARATE OVERRIDES, deliberately not one `--force`. The WAL abort is the one a user hits
+// routinely (see below — a checkpointed WAL is often left on disk at full size), while the shrink
+// abort should essentially never fire. A single flag would mean that routinely forcing past the
+// common, usually-benign case ALSO silently disables the protection against overwriting good data
+// with a degraded source. Overriding the noisy guard must not disarm the quiet one.
+const has = (f) => process.argv.includes(f)
+const FORCE_WAL = has('--force-wal') || has('--force')
+const FORCE_SHRINK = has('--force-shrink') || has('--force')
+
 const wal = `${SRC}-wal`
 const walBytes = fs.existsSync(wal) ? fs.statSync(wal).size : 0
-if (walBytes > 0 && !FORCE) {
+if (walBytes > 0 && !FORCE_WAL) {
   console.error(`migrate-forensics: ABORT — ${path.basename(wal)} is ${walBytes} bytes.`)
-  console.error('  Committed data lives outside the .db file and a writer may be active, so source')
-  console.error('  and destination would be snapshots of different instants and the content hash')
-  console.error('  would compare two moving targets. Stop the writer (or checkpoint), then re-run.')
-  console.error('  --force overrides, and accepts that the verification proves less than it says.')
+  console.error('  Data may live outside the .db file and a writer may be active, so source and')
+  console.error('  destination would be snapshots of different instants and the content hash would')
+  console.error('  compare two moving targets. Stop the writer (or checkpoint), then re-run.')
+  console.error('')
+  console.error('  KNOWN FALSE POSITIVE: SQLite does not truncate the -wal on checkpoint by default,')
+  console.error('  so a perfectly quiescent database can sit here with a large, EMPTY-of-frames WAL.')
+  console.error('  Size is a proxy for "pending frames" and it is a poor one — it cannot distinguish')
+  console.error('  a live writer from a leftover file. It errs toward refusing, which is the correct')
+  console.error('  direction for a data migration, but it means --force-wal is an ordinary thing to')
+  console.error('  need, NOT an admission of risk. That is exactly why it does not also disable the')
+  console.error('  shrink guard (--force-shrink), which is a different and much stronger claim.')
   process.exit(2)
 }
 
 const inst = await DuckDBInstance.create(':memory:')
 const con = await inst.connect()
 const q = async (sql) => (await (await con.run(sql)).getRowObjectsJson())
-await con.run('INSTALL sqlite; LOAD sqlite; SET sqlite_all_varchar=true;')
+// READ-ONLY IS NOT THE DEFAULT, and assuming it was is how this tool spent three commits printing
+// "the SQLite source is untouched" while its own reads moved the -shm sidecar's mtime (measured:
+// .db md5 identical before and after, -shm mtime +12s). DuckDB's sqlite reader OPENS the database
+// rather than byte-copying it, and a read-write open of a WAL-mode database maps the -shm and can
+// checkpoint the -wal on close. Two things follow, and the second is the nastier one:
+//   - a tool that promises not to touch the source must not take a write lock on it, least of all
+//     while a collector may be writing;
+//   - the WAL guard above would otherwise be measuring state THIS TOOL created — a previous run
+//     checkpointing the WAL to empty makes the next run's "quiescent" verdict self-fulfilling.
+// Read-only makes the promise true by construction instead of by hope.
+await con.run('INSTALL sqlite; LOAD sqlite;')
 
-const scan = (t) => `sqlite_scan('${SRC}','${t}')`
-const tables = (await q(`SELECT name FROM ${scan('sqlite_master')} WHERE type='table' ORDER BY name`))
-  .map((r) => r.name)
-  .filter((n) => !n.startsWith('sqlite_'))
+// PASS 1 — READ-ONLY ATTACH, no all_varchar: the DECLARED types, straight from the source catalog.
+// This is both the read-only fix and a better answer than parsing DDL text: `sqlite_scan()` opens
+// the database READ-WRITE (there is no read-only flag for it), which is how this tool printed "the
+// source is untouched" for three commits while its own reads moved the -shm mtime. Worse, a
+// read-write open of a WAL-mode database can checkpoint the -wal on close, so the WAL guard above
+// was liable to be measuring state THIS TOOL created — a previous run quiescing the database makes
+// the next run's "quiescent" verdict self-fulfilling. ATTACH ... READ_ONLY takes no write lock, so
+// the promise holds by construction rather than by hope.
+await con.run(`ATTACH '${SRC}' AS ro (TYPE sqlite, READ_ONLY)`)
+const typed = await q(
+  `SELECT table_name, column_name, data_type FROM duckdb_columns() WHERE database_name='ro' ORDER BY table_name, column_index`
+)
+await con.run('DETACH ro')
+
+const tables = [...new Set(typed.map((r) => r.table_name))].filter((n) => !n.startsWith('sqlite_')).sort()
+if (!tables.length) {
+  console.error(`migrate-forensics: FAIL — no tables found in ${SRC}. Delete NOTHING.`)
+  process.exit(1)
+}
+
+// PASS 2 — READ-ONLY ATTACH with all_varchar for the DATA. Needed because SQLite is dynamically
+// typed and this database proves it: `api_calls.ts` is declared INTEGER (BIGINT above) and stores
+// 1783602300487.7, which a typed scan refuses with "Mismatch Type Error" rather than coercing. Two
+// attaches rather than one because the setting is applied when the tables are bound, so the typed
+// view and the text view cannot coexist on the same alias.
+await con.run('SET sqlite_all_varchar=true;')
+await con.run(`ATTACH '${SRC}' AS rov (TYPE sqlite, READ_ONLY)`)
+const scan = (t) => `rov."${t}"`
 
 fs.mkdirSync(OUT, { recursive: true })
 console.log(`migrate-forensics: ${SRC} -> ${OUT}`)
@@ -108,13 +157,19 @@ for (const t of tables) {
   // growth is normal and passes untouched.
   if (fs.existsSync(dest)) {
     const prior = (await q(`SELECT count(*) AS n FROM read_parquet('${dest}')`))[0].n
-    if (Number(prior) > Number(before.__rows) && !FORCE) {
+    if (Number(prior) > Number(before.__rows) && !FORCE_SHRINK) {
       console.error(`migrate-forensics: ABORT — ${t}: existing parquet has ${prior} rows, source has ${before.__rows}.`)
       console.error('  Overwriting would replace migrated data with a smaller source. The hash check')
       console.error('  cannot catch this: it compares source to destination, and they would agree.')
-      console.error('  Investigate the source, or pass --force if the shrink is intended.')
+      console.error('  Investigate the source, or pass --force-shrink if the shrink is intended.')
       process.exit(2)
     }
+    // Keep the previous export. The count guard above only catches a SHRINKING source; an
+    // equal-count source with corrupted values overwrites good data and both sides agree, so the
+    // hash cannot see it. Making every overwrite recoverable is strictly better than making the
+    // guard cleverer, and much smaller: one rename covers the whole class of "the new copy is
+    // worse than the old one", including the cases nobody predicted.
+    fs.renameSync(dest, `${dest}.prev`)
   }
 
   await con.run(`COPY (SELECT * FROM ${scan(t)}) TO '${dest}' (FORMAT PARQUET, COMPRESSION ZSTD)`)
@@ -146,36 +201,48 @@ for (const t of tables) {
 // The declared SQLite types, kept because reading as VARCHAR deliberately discarded them. Without
 // this file the migration is lossy in a way no row count reveals: the values survive, the intent
 // does not.
-// Read the CREATE TABLE text from the source's own sqlite_master. Two earlier attempts were wrong
-// in ways that both LOOKED fine:
-//   - `pragma_table_info('<t>')` resolves against DUCKDB's catalog, not the attached SQLite file,
-//     so it finds nothing for a table that only exists over there;
-//   - and it was wrapped in `.catch(() => [])`, so that nothing became an empty array, silently.
-// The result shipped as a `_schema.json` whose `declared` map was `{}` for all four tables — a
-// file whose entire job is preserving the types `all_varchar` discarded, preserving none of them.
-// A swallowed error in a data-preservation path is data loss with a success message on top.
-// sqlite_master.sql is the authoritative DDL and cannot be empty for a table that exists, so a
-// blank here is a real failure and is treated as one.
+// Types come from PASS 1's typed read-only catalog (above). Three attempts, and the first two both
+// LOOKED fine while preserving nothing:
+//   - `pragma_table_info('<t>')` resolves against DUCKDB's catalog, not a database reached by the
+//     `sqlite_scan()` table function, so it found nothing for tables that only existed over there;
+//   - and it was wrapped in `.catch(() => [])`, turning that nothing into an empty array, silently.
+//     `_schema.json` shipped with `declared: {}` for all four tables — a file whose entire job is
+//     preserving the types `all_varchar` discards, preserving none of them. A swallowed error in a
+//     data-preservation path is data loss with a success message on top.
+//   - reading `sqlite_master.sql` fixed that but kept `sqlite_scan()`, which opens READ-WRITE.
+// The catalog of a READ_ONLY attach fixes both at once, and is stricter than parsing DDL text: an
+// empty column list for a table that exists is impossible, so a blank here is a real failure.
 const declared = {}
 const undeclared = []
 for (const t of tables) {
-  const rows = await q(`SELECT sql FROM ${scan('sqlite_master')} WHERE type='table' AND name='${t}'`)
-  const ddl = rows.length ? rows[0].sql : null
-  if (!ddl) undeclared.push(t)
-  declared[t] = ddl
+  const cols = typed.filter((r) => r.table_name === t).map((r) => ({ name: r.column_name, type: r.data_type }))
+  if (!cols.length) undeclared.push(t)
+  declared[t] = cols
 }
 if (undeclared.length) {
-  console.error(`\nmigrate-forensics: FAIL — no CREATE TABLE recovered for: ${undeclared.join(', ')}.`)
-  console.error('  Reading every column as VARCHAR discards the declared types, so this DDL is the')
-  console.error('  ONLY record of them. Migrating without it is lossy. Delete NOTHING.')
+  console.error(`\nmigrate-forensics: FAIL — no declared columns recovered for: ${undeclared.join(', ')}.`)
+  console.error('  Reading every column as VARCHAR discards the declared types, so this record is')
+  console.error('  the ONLY copy of them. Migrating without it is lossy. Delete NOTHING.')
   process.exit(1)
 }
 
 // A BLOB read through all_varchar is not guaranteed to round-trip: the bytes go through a text
 // decode, and a hash computed on both sides of the SAME lossy decode matches while the data is
-// destroyed — the check would confirm the corruption rather than catch it. So refuse outright
+// destroyed — the check would CONFIRM the corruption rather than catch it. So refuse outright
 // rather than migrate a BLOB and report OK.
-const blobbed = Object.entries(declared).filter(([, ddl]) => /\bBLOB\b/i.test(ddl || ''))
+//
+// WHAT THIS CHECK CANNOT DO, stated because the temptation is to read it as "no BLOBs here":
+// it reads DECLARATIONS, and in this database declarations demonstrably lie — `api_calls.ts` is
+// declared INTEGER and stores a float. SQLite is dynamically typed, so ANY column can hold a blob
+// value whatever its declared type, and a column declared with NO type at all has BLOB affinity
+// while containing the string "BLOB" nowhere. This regex is a cheap first line that catches the
+// honest case; it is NOT proof of absence. A migration that must be certain has to inspect
+// typeof() per value at the SQLite level, which this tool does not do.
+// Read from the CATALOG of the typed read-only attach, not by regexing DDL text. The earlier
+// version tested /\bBLOB\b/i against the CREATE TABLE string, which misses a column declared with
+// no type at all (BLOB affinity in SQLite, and the word appears nowhere) and misses VARBINARY /
+// BYTEA. Asking the catalog for the resolved type has neither blind spot.
+const blobbed = Object.entries(declared).filter(([, cols]) => cols.some((c) => /BLOB/i.test(c.type)))
 if (blobbed.length) {
   console.error(`\nmigrate-forensics: FAIL — BLOB column(s) in: ${blobbed.map(([t]) => t).join(', ')}.`)
   console.error('  all_varchar routes values through a text decode, and the content hash is computed')
@@ -196,4 +263,10 @@ if (failed.length) {
   process.exit(1)
 }
 console.log(`\nmigrate-forensics: OK — ${results.length} table(s) migrated and verified CONTENT-IDENTICAL (md5 over every value).`)
-console.log('The SQLite source is untouched. Deleting it is a separate decision this run does not make.')
+// Precisely: the .db BYTES are unchanged — verified by md5 before and after a run (identical).
+// The `-shm` sidecar's mtime DOES move, because DuckDB's sqlite reader opens the database rather
+// than byte-copying it, and opening touches shared-memory coordination state. That is not data,
+// and no row is altered — but "untouched" was the wrong word and a migration tool is the last
+// place to be loose about what it did to the source.
+console.log('The SQLite source data is unmodified (.db bytes identical; the -shm sidecar is touched by opening).')
+console.log('Deleting it is a separate decision this run does not make.')
