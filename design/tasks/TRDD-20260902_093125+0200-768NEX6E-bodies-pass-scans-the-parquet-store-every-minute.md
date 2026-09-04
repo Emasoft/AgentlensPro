@@ -140,6 +140,39 @@ blocked-by: [7YPQWKPG]
       Evidence: `reports/trdd-768nex6e/20260903_105436+0200-box2-cpu-bytes.md`.
 - [ ] alcore's resident set is decomposed (span window, log-session cards, summary cache, DuckDB pools) with
       a measurement, not an estimate; a decision on the DuckDB `memory_limit` defaults follows from it.
+
+      **NEW DATA 2026-09-04 (pid 37180, uptime 6h22m) — this card's title says 7 GB; it is now ~15 GB.**
+      Measured on `/api/server-stats`, same endpoint and field each time:
+
+      | reading | `memory.rssMb` |
+      |---|---|
+      | ~15:26 | 15,085 |
+      | ~15:36 | 14,712 |
+      | ~15:37 (+57 s) | 15,015 |
+
+      RSS **oscillates** in a ~300–400 MB band around ~14.9 GB — it is NOT monotonically climbing
+      (an earlier claim that it was differenced two different instruments and is withdrawn).
+
+      The datum most useful to THIS box: over the 57-second pair, RSS moved **+303 MB** while
+      `spans.inMemory` moved **+25** (418,178 → 418,203) and `spans.windowMs` stayed pinned at
+      300,000 (= `SUMMARY_WINDOW_FLOOR_MS`, `span_window.rs:23`) throughout. **So the swings do not
+      track the span window** — a weak hint about where the decomposition might look first, and
+      nothing more. **Do not treat it as an anomaly.** The comparison is rigged by construction (the
+      window is clamped, so span count is near-constant by definition — a noisy numerator over a
+      deliberately-constant denominator always looks dramatic), and ordinary causes cover the
+      magnitude: this card's own note records 74 × 128 MB mimalloc arenas, so **two arena commits is
+      256 MB** of the 303. DuckDB query buffers, background chores, and a 91.7 MB `/api/summary`
+      response fetched minutes earlier were all uncontrolled.
+
+      Also note `configuredWindowMs` is 86,400,000 (24 h) against an effective 300,000 — the guard
+      has clamped the window 288-fold and has no further lever. That structural half is carded
+      separately as TRDD-H5G9RRF3, which explicitly does NOT duplicate this box.
+
+      Method already recorded and not to be re-derived:
+      `[[vmmap-ioaccelerator-is-the-mimalloc-heap]]` (ATOM-WA0C-AO6Q) — macOS labels the ENTIRE
+      Rust heap `IOAccelerator` (mimalloc VM tag 100), so `IOAccelerator` = Rust side and `MALLOC_*`
+      = C/C++ side (DuckDB, which does not route through Rust's global allocator). Attribute with
+      `MIMALLOC_SHOW_STATS=1`; do NOT chase Metal/GPU, those are transitive dyld loads.
 - [x] If a pass scans the whole store: a partition-scoped rewrite is carded (or done here if ≤ 3 files).
       DONE HERE 2026-09-02T11:35:15+0200 — fix steps 1+2. Step 1: `chores.rs:266-267` no longer sizes
       the in-server chore like the offline CLI (`available_parallelism()-2 min 4` threads,

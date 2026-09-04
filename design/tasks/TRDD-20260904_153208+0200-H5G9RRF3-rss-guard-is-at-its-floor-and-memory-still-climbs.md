@@ -59,11 +59,24 @@ Re-measured properly — same endpoint, same field, three points:
 monotonically growing. Any remediation reasoning built on "it is climbing and will eventually
 die" is unfounded.
 
-**What the 57-second pair DOES establish, and it is the sharper finding:** RSS moved **+303 MB**
-while `spans.inMemory` moved **+25** (418,178 → 418,203) and `windowMs` stayed pinned at the floor.
-So the ~300 MB swings are NOT tracking span ingestion. Whatever moves that memory, it is not the
-span window the guard controls — which is exactly why narrowing the window to its floor has not
-stabilised anything.
+**The 57-second pair — NOT evidence of anything, and an earlier version of this card called it
+"the sharper finding".** RSS moved +303 MB while `spans.inMemory` moved +25 (418,178 → 418,203)
+with `windowMs` pinned at the floor. Two reasons that is not a finding:
+
+- **The comparison is rigged by construction.** The window is CLAMPED at its floor, so span count
+  is near-constant by definition. Any noisy numerator over a deliberately-constant denominator
+  looks anomalous. I built a ratio from a variable I had just established was pinned.
+- **Ordinary causes account for the magnitude.** `[[vmmap-ioaccelerator-is-the-mimalloc-heap]]`
+  measured 74 × 128 MB mimalloc arenas on this binary — **two arena commits is 256 MB**, most of
+  the 303. Add DuckDB query buffers (outside the Rust allocator entirely), background chores, and
+  the 91.7 MB `/api/summary` response this session pulled minutes earlier, and none of it was
+  controlled for.
+
+**What would make it evidence:** sample `memory.rssMb` every 30 s for 15–30 minutes with no tool
+traffic against the server. If the band oscillates and returns, it is allocator noise and this
+paragraph should be deleted. If the FLOOR of the band rises monotonically, that is a leak signal.
+A sampler was started 2026-09-04 15:44 writing to `/tmp/rss-band.txt` (30 samples × 30 s);
+`/tmp/` is ephemeral, so re-run it rather than trusting that file to exist.
 
 **Severity accordingly re-rated HIGH → MEDIUM.** The structural finding stands (the guard's only
 lever is exhausted and nothing else responds to memory pressure), but the alarm figures around it
@@ -157,10 +170,25 @@ This also means the seven `segmentedSpanStore` gzip test failures on TRDD-2R0AXC
 explained by the live server's RSS — those tests run in their own mocha process. That remains
 open there, and this card does not claim it.
 
-## Acceptance
+## SCOPE NARROWED 2026-09-04 — the RSS-decomposition half is a DUPLICATE of TRDD-768NEX6E
 
-- [ ] The cause of the 15 GB RSS is identified by measurement (heap profile, allocator stats, or
-      a component-by-component accounting), NOT by inference from the number.
+`768NEX6E` is titled *"What does the 60 s bodies pass cost the machine, **and why is alcore 7 GB
+resident**"*, and its one remaining open box is *"alcore's resident set is decomposed (span window,
+log-session cards, summary cache, DuckDB pools) with a measurement, not an estimate; a decision on
+the DuckDB `memory_limit` defaults follows from it."* That is verbatim what this card's original
+acceptance box 1 asked for. It is a release blocker already (currently `blocked` by 7YPQWKPG).
+
+**So the "why is RSS 15 GB" question is NOT this card's** — it is 768NEX6E's, has been since
+2026-09-02, and duplicating it would split the investigation across two cards and two owners. That
+box is removed here and the measurement handed over (below).
+
+**What remains genuinely THIS card's, and is not in 768NEX6E:** the guard has exhausted its only
+lever. `apply_memory_pressure`'s sole response to `rss > budget` is halving the summarization
+window; the window is pinned at `SUMMARY_WINDOW_FLOOR_MS` exactly; and past that point the system
+has **no defined behaviour for continued memory pressure**. That is a structural gap in the guard,
+true regardless of what the 15 GB turns out to be made of.
+
+## Acceptance
 - [ ] A decision is recorded on whether the guard needs a second lever once the window floor is
       reached, or whether the floor/budget pair is simply mis-set for this corpus.
 - [ ] `/api/server-stats` exposes whether the window is at its floor as an explicit signal — today
