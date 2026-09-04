@@ -34,9 +34,20 @@ binary would not start.** Sequence:
 
 **137 is 128+9 = SIGKILL**, and the process died before `main` — no error, no log line, no stderr.
 The usual cause on Apple Silicon is a missing or invalid code signature, and that is the working
-hypothesis. **It is NOT established.** What was measured is only: exit 137 before, runs after. The
-command below `--force`-rewrites the file, so a quarantine xattr or a stale code-signing cache entry
-would be cleared by exactly the same action. The remedy is verified; the mechanism is inferred.
+hypothesis. **It is NOT established.** What was measured is only: exit 137 before, runs after.
+The genuine competitor: the `cp` wrote over a binary that was RUNNING and mapped, leaving a stale
+cached mapping that fails validation at exec — and `codesign --force` fixes that too, by rewriting
+the file. Both stories predict exactly what was seen. (Quarantine is NOT a candidate: `codesign`
+does not touch xattrs, and quarantine produces a Gatekeeper prompt or EPERM, not a silent SIGKILL.)
+
+Three commands would settle it, none of them run:
+- `codesign -dv --verbose=4 <binary>` on a FRESH `cargo build` output, before any copy — if cargo
+  already ad-hoc signed it, the unsigned hypothesis dies outright.
+- `codesign --verify --verbose` on the copied-but-not-yet-re-signed binary.
+- Reproduce with `rm` + `cp` instead of `cp` over the live file.
+
+No `reports/` artifact was written for this incident; the narrative here and the CLAUDE.md bullet
+are the whole record.
 The fix was one command:
 
 ```
