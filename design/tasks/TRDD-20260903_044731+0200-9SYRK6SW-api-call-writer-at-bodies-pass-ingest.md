@@ -320,7 +320,12 @@ for content survival, not a substitute.
   could carry the query while an old one was corrupt. (b) iterates the pre-restart list
   file-by-file, so each surviving part is judged on its own.
 
-**One false-FAILURE to rule out before believing (a).** Retention machinery is live in this repo
+**One false-FAILURE to rule out before believing (a). The class is ANY CONCURRENT MUTATION of `$D`
+between the two snapshots** — a bodies-pass flush landing mid-window, a manual deletion, anything
+that changes the directory for reasons unrelated to the restart. Each snapshot is faithful to the
+moment it was taken; `comm -23` cannot tell "lost to the restart" from "changed underneath us".
+Retention is the instance worth naming because it is machinery that fires on its own schedule, but
+it is an instance, not the class:
 (`retention_config.rs`, `summarize/retention.rs`, `AGENTLENS_STATUSLINE_RETENTION_DAYS`); whether
 any of it targets `store/api_calls/` is UNESTABLISHED. If (a) lists parts, confirm they were lost
 to the RESTART and not deleted on a retention schedule that happened to fire in the same window —
