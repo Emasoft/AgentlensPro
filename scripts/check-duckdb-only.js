@@ -107,6 +107,11 @@ const ALLOW = new Map([
   // a READ_ONLY attach), so this is not a file reaching around DuckDB — it is the file that proves
   // DuckDB can replace it. Deleted together with the source database.
   ['scripts/verify-forensics-parquet-parity.mjs', 'P2'],
+  // NOTE: `scripts/build-forensics-views.mjs` deliberately has NO entry. It reads only parquet
+  // through DuckDB and names no SQLite path, so it needs no exemption — the guard's own
+  // stale-entry note caught the entry added here and said so. It still counts against the OPENER
+  // cap, which is the correct split: it opens a store (so the cap sees it) without reaching around
+  // DuckDB (so the exemption list should not).
 ])
 
 // The RATCHET. Without this, "the budget can only go down" was just a sentence in a comment: adding
@@ -188,7 +193,15 @@ const isTestPath = (rel) =>
 //     it is counted rather than excused. Both migration-phase tools sit ABOVE this line on purpose:
 //     they are the only two entries here whose deletion is already scheduled — they go when the
 //     source database goes, taking the cap from 21 to 19 and the exemptions from 36 to 34.
-const MAX_NON_TEST_OPENERS = 21
+//   +1 non-test — `scripts/build-forensics-views.mjs`, the typed-view layer. THREE raises this
+//     session (18 -> 20 -> 21 -> 22) and every one was a tool added to serve the migration, so the
+//     number has moved the WRONG WAY all session. Stated plainly rather than buried: this cap has
+//     not yet done the job it was written for. Two of the three (`migrate-*`, `verify-*-parity`)
+//     die with the source database; the repoint they enable is what removes `forensicsDb.ts`,
+//     `forensicsIndex.ts`, `database/db.ts` and `database/reader.ts` — a drop of 4 against the 3
+//     added. The ratchet only becomes real at that step, and until then the honest reading of
+//     "22/22" is a debt, not progress.
+const MAX_NON_TEST_OPENERS = 22
 const MAX_TEST_OPENERS = 14
 
 // WHAT THIS CAP DOES NOT MEASURE — stated here because the commit that added it overclaimed.

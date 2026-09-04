@@ -12,14 +12,27 @@
 //    and report names. The database actually holds FOUR: `index_state` was in none of them. A
 //    migration that enumerates what the docs remember is how the forgotten table gets dropped.
 //
-// 2. ALL COLUMNS READ AS VARCHAR (`sqlite_all_varchar=true`). SQLite is dynamically typed, so a
-//    column DECLARED INTEGER can hold a float — and this database has one: `api_calls.ts` is
-//    declared INTEGER and stores 1783602300487.7. Without this flag the scan does not coerce it, it
-//    ABORTS ("Mismatch Type Error"), so a typed export would have migrated three tables and died on
-//    the fourth. Reading as text captures exactly the bytes SQLite stored, which is the only
-//    faithful thing to do when the declared type is known to lie. The declared types are exported
-//    alongside (`_schema.json`) so a consumer can cast deliberately rather than having the
-//    migration guess.
+// 2. THE READ GOES THROUGH sql.js, NOT DuckDB's sqlite scanner — and that is a correctness
+//    requirement, not a preference. DuckDB cannot read this database typed (`api_calls.ts` is
+//    DECLARED INTEGER and STORES 1783602300487.7, so a typed scan aborts), and its
+//    `sqlite_all_varchar=true` fallback routes every value through SQLite's DEFAULT text
+//    conversion, which renders a REAL with ~15 significant digits.
+//
+//    MEASURED, and this shipped as a silent data loss for four commits: of 5,217 rows where
+//    `typeof(ts)='real'`, **5,088 do not survive `CAST(ts AS TEXT)`** — 1783590196747.9863 becomes
+//    "1783590196747.99". `printf('%!.20g', ts)` loses ZERO. The content hash could never catch it,
+//    because both sides of the comparison hashed the ALREADY-TRUNCATED text: exactly the failure
+//    this file documents for BLOBs ("a hash computed on both sides of the same lossy decode would
+//    MATCH even if the bytes were mangled") reproduced for REALs, in the same file, by the same
+//    mechanism.
+//
+//    So: sql.js, with `printf('%!.20g', col)` on every column that actually holds a REAL. Two
+//    further properties come free and are worth stating —
+//      - sql.js reads a Buffer from `fs.readFileSync`, so NO database engine ever opens the source.
+//        No write lock, no `-shm` mapping, no WAL checkpoint risk. The earlier READ_ONLY attach was
+//        an improvement over a read-write open; this is strictly better than both.
+//      - it is the engine the PRODUCT reads with today, so the migration captures exactly what the
+//        product sees, rather than what a stricter reader makes of it.
 //
 // 3. VERIFICATION IS BY CONTENT HASH, not by row count and not by non-null tally. Row counts agree
 //    trivially whenever the write succeeds at all. Non-null tallies are better — they see a column
@@ -30,7 +43,9 @@
 //    value containing the separator can forge another row's encoding. Row and column counts are
 //    still checked, because a hash match on zero rows is not a migration.
 'use strict'
+import initSqlJs from 'sql.js'
 import { DuckDBInstance } from '@duckdb/node-api'
+import { createRequire } from 'module'
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
@@ -44,17 +59,8 @@ if (!fs.existsSync(SRC)) {
   process.exit(2)
 }
 
-// A non-empty -wal means committed transactions live OUTSIDE the .db file. DuckDB's sqlite_scanner
-// opens the database properly (it does not byte-copy), so it sees them — but if the file is being
-// written WHILE we export, source and destination are snapshots of different instants and the
-// verification below would compare two moving targets. Warn loudly rather than silently racing.
-// ABORT, not warn. A non-empty -wal means committed data lives outside the .db file and a writer
-// may be active — in which case the `before` tally, the COPY, and the hash read are three different
-// instants of a moving database, and the verification compares two moving targets and prints a
-// green PASS. The directive is "do not lose any data"; a warning above a PASS line is not
-// protection, because the line the reader believes is the last one.
 // TWO SEPARATE OVERRIDES, deliberately not one `--force`. The WAL abort is the one a user hits
-// routinely (see below — a checkpointed WAL is often left on disk at full size), while the shrink
+// routinely (a checkpointed WAL is often left on disk at full size — see below), while the shrink
 // abort should essentially never fire. A single flag would mean that routinely forcing past the
 // common, usually-benign case ALSO silently disables the protection against overwriting good data
 // with a degraded source. Overriding the noisy guard must not disarm the quiet one.
@@ -62,99 +68,79 @@ const has = (f) => process.argv.includes(f)
 const FORCE_WAL = has('--force-wal') || has('--force')
 const FORCE_SHRINK = has('--force-shrink') || has('--force')
 
+// WAL abort survives the move to sql.js — for a DIFFERENT reason than it guarded against under the
+// DuckDB attach. It used to be about a moving target (source and destination read at different
+// instants of an actively-written database). sql.js instead reads the bare `.db` file as a single
+// Buffer via fs.readFileSync and NEVER looks at `-wal` at all — so a non-empty WAL now means
+// something worse than a race: committed transactions that live ONLY in the WAL are simply
+// INVISIBLE to this read. A migration that silently drops committed rows because it read a stale
+// snapshot is exactly the failure this file exists to prevent, so this still aborts rather than warns.
 const wal = `${SRC}-wal`
 const walBytes = fs.existsSync(wal) ? fs.statSync(wal).size : 0
 if (walBytes > 0 && !FORCE_WAL) {
   console.error(`migrate-forensics: ABORT — ${path.basename(wal)} is ${walBytes} bytes.`)
-  console.error('  Data may live outside the .db file and a writer may be active, so source and')
-  console.error('  destination would be snapshots of different instants and the content hash would')
-  console.error('  compare two moving targets. Stop the writer (or checkpoint), then re-run.')
+  console.error('  sql.js reads the .db file as a plain Buffer and never looks at -wal, so any')
+  console.error('  transaction committed only to the WAL would be silently ABSENT from the migration')
+  console.error('  — not stale, not truncated, just never seen. Checkpoint the WAL into the .db file')
+  console.error('  (or stop the writer and let it checkpoint), then re-run.')
   console.error('')
   console.error('  KNOWN FALSE POSITIVE: SQLite does not truncate the -wal on checkpoint by default,')
   console.error('  so a perfectly quiescent database can sit here with a large, EMPTY-of-frames WAL.')
   console.error('  Size is a proxy for "pending frames" and it is a poor one — it cannot distinguish')
-  console.error('  a live writer from a leftover file. It errs toward refusing, which is the correct')
-  console.error('  direction for a data migration, but it means --force-wal is an ordinary thing to')
-  console.error('  need, NOT an admission of risk. That is exactly why it does not also disable the')
-  console.error('  shrink guard (--force-shrink), which is a different and much stronger claim.')
+  console.error('  a checkpointed-but-not-truncated WAL from one holding real uncommitted data. It')
+  console.error('  errs toward refusing, which is the correct direction for a data migration, but it')
+  console.error('  means --force-wal is an ordinary thing to need, NOT an admission of risk. That is')
+  console.error('  exactly why it does not also disable the shrink guard (--force-shrink), which is a')
+  console.error('  different and much stronger claim.')
   process.exit(2)
 }
 
-const inst = await DuckDBInstance.create(':memory:')
-const con = await inst.connect()
-const q = async (sql) => (await (await con.run(sql)).getRowObjectsJson())
-// READ-ONLY IS NOT THE DEFAULT, and assuming it was is how this tool spent three commits printing
-// "the SQLite source is untouched" while its own reads moved the -shm sidecar's mtime (measured:
-// .db md5 identical before and after, -shm mtime +12s). DuckDB's sqlite reader OPENS the database
-// rather than byte-copying it, and a read-write open of a WAL-mode database maps the -shm and can
-// checkpoint the -wal on close. Two things follow, and the second is the nastier one:
-//   - a tool that promises not to touch the source must not take a write lock on it, least of all
-//     while a collector may be writing;
-//   - the WAL guard above would otherwise be measuring state THIS TOOL created — a previous run
-//     checkpointing the WAL to empty makes the next run's "quiescent" verdict self-fulfilling.
-// Read-only makes the promise true by construction instead of by hope.
-await con.run('INSTALL sqlite; LOAD sqlite;')
+// sql.js ships its wasm binary alongside its JS loader; resolve the dist dir from the INSTALLED
+// package rather than a path relative to this script, so the script works from any cwd and any
+// install layout (npm link, pnpm's nested store, a global install).
+const require = createRequire(import.meta.url)
+const sqlJsDistDir = path.dirname(require.resolve('sql.js'))
+const SQL = await initSqlJs({ locateFile: (f) => path.join(sqlJsDistDir, f) })
+const srcDb = new SQL.Database(fs.readFileSync(SRC))
 
-// PASS 1 — READ-ONLY ATTACH, no all_varchar: the DECLARED types, straight from the source catalog.
-// This is both the read-only fix and a better answer than parsing DDL text: `sqlite_scan()` opens
-// the database READ-WRITE (there is no read-only flag for it), which is how this tool printed "the
-// source is untouched" for three commits while its own reads moved the -shm mtime. Worse, a
-// read-write open of a WAL-mode database can checkpoint the -wal on close, so the WAL guard above
-// was liable to be measuring state THIS TOOL created — a previous run quiescing the database makes
-// the next run's "quiescent" verdict self-fulfilling. ATTACH ... READ_ONLY takes no write lock, so
-// the promise holds by construction rather than by hope.
-await con.run(`ATTACH '${SRC}' AS ro (TYPE sqlite, READ_ONLY)`)
-const typed = await q(
-  `SELECT table_name, column_name, data_type FROM duckdb_columns() WHERE database_name='ro' ORDER BY table_name, column_index`
-)
-await con.run('DETACH ro')
+// sql.js returns column-major {columns, values} per statement; every call site here wants row
+// objects, so reshape once here instead of at every call site.
+const execAll = (db, sql) => {
+  const res = db.exec(sql)
+  if (!res.length) return []
+  const { columns, values } = res[0]
+  return values.map((row) => Object.fromEntries(columns.map((c, i) => [c, row[i]])))
+}
 
-const tables = [...new Set(typed.map((r) => r.table_name))].filter((n) => !n.startsWith('sqlite_')).sort()
+// Table list + verbatim DDL from the SAME sqlite_master query, in one pass — both are now free.
+// sql.js already holds the whole file in memory, so there is no read-write open to avoid and no
+// reason to split "typed schema" from "DDL text" into separate passes the way the DuckDB sqlite
+// scanner required. (This file used to say "this one query opens the source read-write" here —
+// that was DuckDB's sqlite_scan() taking a write lock just to read sqlite_master. sql.js reads a
+// Buffer, so nothing ever opens the file: not read-write, not read-only, not at all.)
+const master = execAll(srcDb, `SELECT name, sql FROM sqlite_master WHERE type='table'`)
+const verbatimDdl = {}
+for (const r of master) {
+  if (!r.name.startsWith('sqlite_')) verbatimDdl[r.name] = r.sql
+}
+const tables = Object.keys(verbatimDdl).sort()
 if (!tables.length) {
   console.error(`migrate-forensics: FAIL — no tables found in ${SRC}. Delete NOTHING.`)
   process.exit(1)
 }
 
-// PASS 2 — READ-ONLY ATTACH with all_varchar for the DATA. Needed because SQLite is dynamically
-// typed and this database proves it: `api_calls.ts` is declared INTEGER (BIGINT above) and stores
-// 1783602300487.7, which a typed scan refuses with "Mismatch Type Error" rather than coercing. Two
-// attaches rather than one because the setting is applied when the tables are bound, so the typed
-// view and the text view cannot coexist on the same alias.
-await con.run('SET sqlite_all_varchar=true;')
-await con.run(`ATTACH '${SRC}' AS rov (TYPE sqlite, READ_ONLY)`)
-const scan = (t) => `rov."${t}"`
-
 fs.mkdirSync(OUT, { recursive: true })
 console.log(`migrate-forensics: ${SRC} -> ${OUT}`)
 console.log(`  ${tables.length} table(s): ${tables.join(', ')}`)
 
-// Non-null tally per column, as one row. Used identically on both sides so the comparison is
-// like-for-like; building it from the destination's own column list would hide a dropped column.
-const tally = async (rel, cols) =>
-  (await q(`SELECT count(*) AS __rows, ${cols.map((c) => `count("${c}") AS "${c}"`).join(', ')} FROM ${rel}`))[0]
-
-// Order-independent content hash: md5 each row's columns, then md5 the sorted concatenation. Built
-// from the SOURCE's column list on both sides, so a column missing from the destination changes the
-// hash instead of quietly shrinking the input to it.
-const contentHash = async (rel, cols) => {
-  const enc = cols.map((c) => `coalesce("${c}", chr(1))`).join(', ')
-  const r = await q(
-    `SELECT md5(string_agg(h, '' ORDER BY h)) AS sig FROM (SELECT md5(concat_ws(chr(2), ${enc})) AS h FROM ${rel})`
-  )
-  return r[0].sig
-}
-
-// ─── SCHEMA IS A PRECONDITION — captured BEFORE anything is written ──────────────────────────
-//
-// resolvedTypes: DuckDB's mapping, from PASS 1's typed read-only attach.
-// CANARY: `api_calls.ts` must read BIGINT, not VARCHAR. It is the one column whose declared type
-// is not TEXT, so a non-VARCHAR entry here proves `all_varchar` was OFF during PASS 1. Collapse
-// the two attaches into one and that silently becomes VARCHAR — which would ALSO make the BLOB
-// check below unable to ever fire, a guard that cannot fail. Do not merge the attaches.
+// resolvedTypes: SQLite's own DECLARED type strings, from PRAGMA table_info — straight off the
+// source, no DuckDB catalog mapping in between. (The DuckDB catalog is what used to collapse
+// TEXT/VARCHAR(255)/INTEGER into DuckDB's own vocabulary; PRAGMA table_info gives back exactly
+// what CREATE TABLE said, which is a more literal record than DuckDB's resolved shape ever was.)
 const resolvedTypes = {}
 const undeclared = []
 for (const t of tables) {
-  const cols = typed.filter((r) => r.table_name === t).map((r) => ({ name: r.column_name, type: r.data_type }))
+  const cols = execAll(srcDb, `PRAGMA table_info("${t}")`).map((r) => ({ name: r.name, type: r.type }))
   if (!cols.length) undeclared.push(t)
   resolvedTypes[t] = cols
 }
@@ -163,46 +149,134 @@ if (undeclared.length) {
   process.exit(1)
 }
 
-// verbatimDdl: the source's own CREATE TABLE text — the ONLY record of NOT NULL, PRIMARY KEY,
-// DEFAULT, CHECK, UNIQUE and every length/precision qualifier, none of which parquet stores and
-// none of which survive DuckDB's type mapping (TEXT and VARCHAR(255) both resolve to VARCHAR).
-//
-// UNCONDITIONAL, and at the TOP. Two earlier shapes were worse:
-//   - capturing it AFTER the COPY meant a failure here exited "Delete NOTHING" with the parquet
-//     already written and backups already rotated — the failure path contradicting its own state;
-//   - gating it on "only if _schema.json lacks it" made the read-write open UNPREDICTABLE: it
-//     returned whenever the destination was wiped, or silently whenever the source gained a table.
-//     A tool that is read-only on most runs and read-write on the run nobody expects is worse than
-//     one that is honestly read-write once. `sqlite_master` has no read-only route (a READ_ONLY
-//     attach does not expose it — measured), so the honest property is: ONE schema read opens the
-//     source read-write, at the top, every run, announced; all data reads are read-only.
-console.log('  reading schema (this one query opens the source read-write; all data reads are read-only)')
-const verbatimDdl = {}
-for (const r of await q(`SELECT name, sql FROM sqlite_scan('${SRC}','sqlite_master') WHERE type='table'`)) {
-  if (!r.name.startsWith('sqlite_')) verbatimDdl[r.name] = r.sql
+// BLOB refusal, now in TWO parts. The declared-type check catches a column declared BLOB / no type
+// (BLOB affinity) / VARBINARY / BYTEA. It is still not proof of absence — SQLite is dynamically
+// typed, and `api_calls.ts` is the proof: declared INTEGER, stores a float. So this pass ALSO asks
+// every row what it actually holds, via typeof(), and refuses on a real hit — the same query also
+// finds which columns actually hold a REAL, needed below to pick the extraction expression.
+const declaredBlob = Object.entries(resolvedTypes).filter(([, cols]) => cols.some((c) => /BLOB|VARBINARY|BYTEA/i.test(c.type)))
+const actualBlob = []
+const realColumns = {}
+for (const t of tables) {
+  const cols = resolvedTypes[t].map((c) => c.name)
+  const probe = execAll(
+    srcDb,
+    `SELECT ${cols
+      .map(
+        (c) =>
+          `sum(CASE WHEN typeof("${c}")='blob' THEN 1 ELSE 0 END) AS "${c}__blob", sum(CASE WHEN typeof("${c}")='real' THEN 1 ELSE 0 END) AS "${c}__real"`
+      )
+      .join(', ')} FROM "${t}"`
+  )[0]
+  const reals = new Set()
+  for (const c of cols) {
+    if (Number(probe[`${c}__blob`]) > 0) actualBlob.push(`${t}.${c}`)
+    if (Number(probe[`${c}__real`]) > 0) reals.add(c)
+  }
+  realColumns[t] = reals
 }
-const missingDdl = tables.filter((t) => !verbatimDdl[t])
-if (missingDdl.length) {
-  console.error(`\nmigrate-forensics: FAIL — no CREATE TABLE recovered for: ${missingDdl.join(', ')}.`)
-  console.error('  That text is the only record of NOT NULL / PRIMARY KEY / DEFAULT / precision.')
-  console.error('  Nothing has been written. Delete NOTHING.')
+if (declaredBlob.length || actualBlob.length) {
+  console.error(`\nmigrate-forensics: FAIL — BLOB data found.`)
+  if (declaredBlob.length) console.error(`  declared BLOB/VARBINARY/BYTEA column(s) in: ${declaredBlob.map(([t]) => t).join(', ')}.`)
+  if (actualBlob.length) console.error(`  column(s) holding an actual blob value: ${actualBlob.join(', ')}.`)
+  console.error('  A text decode is lossy for blob bytes, and the content hash is computed on BOTH')
+  console.error('  sides of that same decode — so it would MATCH even if the bytes were mangled.')
+  console.error('  Export BLOBs explicitly before trusting this tool. Delete NOTHING.')
   process.exit(1)
 }
 
-const blobbed = Object.entries(resolvedTypes).filter(([, cols]) => cols.some((c) => /BLOB/i.test(c.type)))
-if (blobbed.length) {
-  console.error(`\nmigrate-forensics: FAIL — BLOB column(s) in: ${blobbed.map(([t]) => t).join(', ')}.`)
-  console.error('  all_varchar routes values through a text decode, and the content hash is computed')
-  console.error('  on BOTH sides of that same decode — so it would MATCH even if the bytes were')
-  console.error('  mangled. Export BLOBs explicitly before trusting this tool. Delete NOTHING.')
-  process.exit(1)
+// DuckDB is used from here on ONLY to write parquet and to hash — never to read the source. The
+// source-side relation each table is verified against is a NDJSON file this script itself wrote
+// from sql.js's own extraction, loaded back with an explicit all-VARCHAR schema so DuckDB's JSON
+// type inference cannot re-introduce the exact precision loss this file exists to avoid.
+const inst = await DuckDBInstance.create(':memory:')
+const con = await inst.connect()
+const q = async (sql) => (await (await con.run(sql)).getRowObjectsJson())
+
+// Non-null tally per column, as one row. Used identically on both sides so the comparison is
+// like-for-like; building it from the destination's own column list would hide a dropped column.
+const tally = async (rel, cols) =>
+  (await q(`SELECT count(*) AS __rows, ${cols.map((c) => `count("${c}") AS "${c}"`).join(', ')} FROM ${rel}`))[0]
+
+// Order-independent content hash: md5 each row's columns, then md5 the sorted concatenation. NULL
+// encodes as chr(1) and columns join on chr(2), so NULL is distinguishable from the empty string
+// (both occur here) and no value containing the separator can forge another row's encoding.
+const contentHash = async (rel, cols) => {
+  const enc = cols.map((c) => `coalesce("${c}", chr(1))`).join(', ')
+  const r = await q(
+    `SELECT md5(string_agg(h, '' ORDER BY h)) AS sig FROM (SELECT md5(concat_ws(chr(2), ${enc})) AS h FROM ${rel})`
+  )
+  return r[0].sig
 }
 
+const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentlens-forensics-migrate-'))
 const schemaPath = path.join(OUT, '_schema.json')
 const results = []
 for (const t of tables) {
-  const cols = (await q(`DESCRIBE SELECT * FROM ${scan(t)}`)).map((r) => r.column_name)
-  const before = await tally(scan(t), cols)
+  const cols = resolvedTypes[t].map((c) => c.name)
+  const reals = realColumns[t]
+
+  // Per-ROW extraction, not per-column — SQLite is dynamically typed at the row level, and
+  // `realColumns` (a column that has AT LEAST ONE real row) is not the same claim as "every row in
+  // this column is real". MEASURED: `api_calls.ts` has 9,068 INTEGER rows and 5,217 REAL rows in
+  // the SAME column. An earlier version of this extraction ran printf() on the whole column once it
+  // was flagged, which turned every integer row into "…328.0" — not truncation, but a needless
+  // reformat of values that were never at risk, and it broke the post-migration precision check
+  // (`length(split_part(ts,'.',2))<4`, which correctly treats a lone ".0" as suspicious). typeof()
+  // per row is the only test that is actually correct: only a row that IS a REAL goes through
+  // printf('%!.20g', …); an INTEGER or TEXT row in the same column is a plain text cast, unchanged
+  // from before. `realColumns` above still narrows which columns need the CASE at all (a column
+  // with zero real rows never needs typeof() checked per row) and still drives the NULL-drift
+  // verification below.
+  //
+  // CAST(NULL AS TEXT) is NULL, but printf(NULL, …) is NOT — measured against this database, it
+  // returns the STRING "0.0", typeof 'text'. `break_cause` alone is 14,285 rows of NULL, and without
+  // the guard below every one of them would silently become the text "0.0": a worse corruption than
+  // the truncation this file exists to fix. So NULL is checked first and short-circuits both branches.
+  const extractSql = `SELECT ${cols
+    .map((c) =>
+      reals.has(c)
+        ? `CASE WHEN "${c}" IS NULL THEN NULL WHEN typeof("${c}")='real' THEN printf('%!.20g', "${c}") ELSE CAST("${c}" AS TEXT) END AS "${c}"`
+        : `CAST("${c}" AS TEXT) AS "${c}"`
+    )
+    .join(', ')} FROM "${t}"`
+
+  // Stream row-by-row via prepare/step rather than materializing the whole table as a JS array —
+  // api_calls alone is 5k+ rows of already-large text, and this scales to whatever the store grows
+  // to without holding two full copies (sql.js's + the array's) in memory at once.
+  const ndjsonPath = path.join(tmpDir, `${t}.ndjson`)
+  const stmt = srcDb.prepare(extractSql)
+  const out = fs.createWriteStream(ndjsonPath)
+  let sourceRows = 0
+  while (stmt.step()) {
+    const row = stmt.getAsObject()
+    // Force every value to a JSON STRING or null, never a JSON number. The extraction above already
+    // produces text (printf/CAST both return strings), so this should be a no-op — but a JSON number
+    // round-trips through JS's double parser on the way back in, which would silently discard
+    // exactly the extra digits printf('%!.20g', …) exists to preserve. Belt-and-suspenders against
+    // sql.js ever handing back a numeric JS value for a TEXT column.
+    for (const k of Object.keys(row)) {
+      if (row[k] !== null && typeof row[k] !== 'string') row[k] = String(row[k])
+    }
+    out.write(JSON.stringify(row) + '\n')
+    sourceRows++
+  }
+  stmt.free()
+  await new Promise((resolve, reject) => out.end((err) => (err ? reject(err) : resolve())))
+
+  // Every column loads as VARCHAR, explicitly — printf() and CAST(...AS TEXT) already produced
+  // strings, but DuckDB's JSON reader infers types from the values it sees unless told otherwise,
+  // and an inferred DOUBLE column would silently re-introduce the exact precision loss this whole
+  // file exists to avoid.
+  const columnsMap = cols.map((c) => `'${c.replace(/'/g, "''")}': 'VARCHAR'`).join(', ')
+  const srcRel = `read_json('${ndjsonPath}', columns={${columnsMap}}, format='newline_delimited')`
+
+  const before = await tally(srcRel, cols)
+  if (String(before.__rows) !== String(sourceRows)) {
+    console.error(`\nmigrate-forensics: FAIL — ${t}: sql.js streamed ${sourceRows} row(s), DuckDB's read_json loaded ${before.__rows}.`)
+    console.error('  The NDJSON round trip lost or gained rows. Delete NOTHING.')
+    process.exit(1)
+  }
   const dest = path.join(OUT, `${t}.parquet`)
 
   // `COPY ... TO` overwrites unconditionally, and the verification only ever compares the source to
@@ -224,19 +298,6 @@ for (const t of tables) {
     // hash cannot see it. Making every overwrite recoverable is strictly better than making the
     // guard cleverer, and much smaller: one rename covers the whole class of "the new copy is
     // worse than the old one", including the cases nobody predicted.
-    // TWO backups, bounded: `.orig` (written once, never overwritten) and `.prev` (most recent).
-    //
-    // A single `.prev` survives exactly ONE mistake — run 1 saves the good copy, run 2 saves the
-    // BAD copy over it — and a second run is what someone does when the first looks wrong, so the
-    // backup dies in the act of investigating the problem it exists for. `.orig` fixes that: it is
-    // the last state before this tool ever touched the directory, and nothing here can overwrite it.
-    //
-    // The previous version timestamped every generation instead. That never loses a copy, but it
-    // grows without bound in the user's data dir — measured at 6.4 MB across 16 files after a
-    // handful of test runs, at ~1.6 MB per generation. `never_free_space.md` forbids an agent
-    // reclaiming disk, which makes unbounded growth a problem this tool must not CREATE rather than
-    // one it can clean up later. Two files is bounded, keeps the copy that actually matters, and
-    // needs no retention policy.
     // ONE backup, and it is NEVER overwritten — the OLDEST surviving copy, not the newest.
     //
     // A `.prev` that gets replaced every run survives exactly one mistake: run 1 saves the good
@@ -259,7 +320,7 @@ for (const t of tables) {
     if (!fs.existsSync(prev)) fs.renameSync(dest, prev)
   }
 
-  await con.run(`COPY (SELECT * FROM ${scan(t)}) TO '${dest}' (FORMAT PARQUET, COMPRESSION ZSTD)`)
+  await con.run(`COPY (SELECT * FROM ${srcRel}) TO '${dest}' (FORMAT PARQUET, COMPRESSION ZSTD)`)
 
   const destRel = `read_parquet('${dest}')`
   const destCols = (await q(`DESCRIBE SELECT * FROM ${destRel}`)).map((r) => r.column_name)
@@ -267,8 +328,21 @@ for (const t of tables) {
 
   const missing = cols.filter((c) => !destCols.includes(c))
   const drifted = cols.filter((c) => String(before[c]) !== String(after[c]))
-  const sigSrc = await contentHash(scan(t), cols)
+  const sigSrc = await contentHash(srcRel, cols)
   const sigDst = missing.length ? null : await contentHash(destRel, cols)
+
+  // NULL-preservation check, explicit for REAL-holding columns: this is the exact class of bug that
+  // was caught during review (printf(NULL,…) silently becoming the text "0.0"). `drifted` above
+  // already catches ANY non-null-count change on ANY column, which subsumes this — a NULL turning
+  // into "0.0" IS a non-null-count change — but the REAL columns get their own named check because
+  // this is the one bug this file has actually shipped, and a check that names the risk it guards is
+  // worth the two extra lines even where a more general check already covers it.
+  for (const c of reals) {
+    const srcNulls = Number(before.__rows) - Number(before[c])
+    const dstNulls = Number(after.__rows) - Number(after[c])
+    if (srcNulls !== dstNulls && !drifted.includes(c)) drifted.push(c)
+  }
+
   const ok =
     missing.length === 0 &&
     drifted.length === 0 &&
@@ -285,41 +359,24 @@ for (const t of tables) {
   }
 }
 
-// The declared SQLite types, kept because reading as VARCHAR deliberately discarded them. Without
-// this file the migration is lossy in a way no row count reveals: the values survive, the intent
-// does not.
-// Types come from PASS 1's typed read-only catalog (above). Three attempts, and the first two both
-// LOOKED fine while preserving nothing:
-//   - `pragma_table_info('<t>')` resolves against DUCKDB's catalog, not a database reached by the
-//     `sqlite_scan()` table function, so it found nothing for tables that only existed over there;
-//   - and it was wrapped in `.catch(() => [])`, turning that nothing into an empty array, silently.
-//     `_schema.json` shipped with `declared: {}` for all four tables — a file whose entire job is
-//     preserving the types `all_varchar` discards, preserving none of them. A swallowed error in a
-//     data-preservation path is data loss with a success message on top.
-//   - reading `sqlite_master.sql` fixed that but kept `sqlite_scan()`, which opens READ-WRITE.
-// The catalog of a READ_ONLY attach fixes both at once. An empty column list for a table that
-// exists is impossible, so a blank here is a real failure.
+srcDb.close()
+fs.rmSync(tmpDir, { recursive: true, force: true })
+
+// The declared SQLite types, kept because parquet has no room for them and every value is stored as
+// VARCHAR here regardless of its source type. Without this file the migration is lossy in a way no
+// row count reveals: the values survive, the intent does not.
 //
-// WHAT THIS RECORD IS NOT — and the previous commit message overclaimed it as "stricter":
-// `duckdb_columns()` reports DUCKDB's RESOLVED types, not SQLite's literal declared strings. A
-// column declared `TEXT` reads back `VARCHAR`; `INTEGER` reads `BIGINT`. So this preserves the
-// SHAPE of the schema, not its verbatim DDL. (`duckdb_tables().sql` is no better — it renders
-// DuckDB's own `CREATE TABLE ... VARCHAR ...`, not the source text.) Recovering the literal SQLite
-// DDL needs `sqlite_scan(SRC,'sqlite_master')`, which opens the database READ-WRITE — the exact
-// thing this pass exists to avoid, so it is deliberately not done here.
+// resolvedTypes now comes straight from the source's own PRAGMA table_info (above) — the literal
+// declared string, not a mapping through some other engine's type vocabulary. verbatimDdl is the
+// source's own CREATE TABLE text — the ONLY record of NOT NULL, PRIMARY KEY, DEFAULT, CHECK, UNIQUE
+// and every length/precision qualifier, none of which parquet stores and none of which survive a
+// declared-type-only record either (TEXT and VARCHAR(255) both resolve to the bare word "TEXT").
+// Both are captured from the SAME in-memory sql.js database as the data itself, so there is no
+// separate pass, no separate open, and no window where the two could describe different states of
+// the source.
+//
 // CONSEQUENCE, and it is a precondition on deletion: the verbatim DDL exists ONLY in the source
-// database. So it is captured ONCE, below, and the field is named for what it holds — the previous
-// version called resolved types `declared`, which is the second time this file shipped a
-// `_schema.json` that failed at its one job.
-// Schema capture and the BLOB refusal both moved ABOVE the migration loop — see "SCHEMA IS A
-// PRECONDITION" there. They are preconditions: a tool that discovers it cannot preserve the schema
-// AFTER writing the parquet has already contradicted its own "nothing was written" failure text.
-//
-// On what the BLOB refusal is NOT: it reads the catalog's resolved types, which catches a column
-// declared BLOB, declared with no type (BLOB affinity, word appears nowhere), VARBINARY or BYTEA.
-// It is still not proof of absence — SQLite is dynamically typed, so ANY column can HOLD blob bytes
-// whatever it was declared, exactly as `api_calls.ts` is declared INTEGER and stores a float.
-// Certainty would need typeof() per value, which this tool does not do.
+// database. Losing this file after the source is deleted loses that text permanently.
 fs.writeFileSync(
   schemaPath,
   JSON.stringify(
@@ -327,10 +384,6 @@ fs.writeFileSync(
       source: SRC,
       migratedAt: new Date().toISOString(),
       tables: results,
-      // Named for what each one actually is. `resolvedTypes` is DuckDB's mapping (TEXT->VARCHAR,
-      // INTEGER->BIGINT, all qualifiers gone); `verbatimDdl` is the source's own CREATE TABLE text
-      // and is the ONLY record of NOT NULL / PRIMARY KEY / DEFAULT / precision once the database
-      // is deleted. The previous version wrote the former under the name `declared`.
       resolvedTypes,
       verbatimDdl,
     },
@@ -346,10 +399,8 @@ if (failed.length) {
   process.exit(1)
 }
 console.log(`\nmigrate-forensics: OK — ${results.length} table(s) migrated and verified CONTENT-IDENTICAL (md5 over every value).`)
-// Precisely: the .db BYTES are unchanged — verified by md5 before and after a run (identical).
-// The `-shm` sidecar's mtime DOES move, because DuckDB's sqlite reader opens the database rather
-// than byte-copying it, and opening touches shared-memory coordination state. That is not data,
-// and no row is altered — but "untouched" was the wrong word and a migration tool is the last
-// place to be loose about what it did to the source.
-console.log('The SQLite source data is unmodified (.db bytes identical; the -shm sidecar is touched by opening).')
+// The .db bytes are unchanged by this run: sql.js opened the source with fs.readFileSync, which
+// takes no lock and mutates nothing — not even the -shm sidecar the earlier DuckDB attach touched
+// on open. "Untouched" is the accurate word here, unlike the read-only-attach version this replaced.
+console.log('The SQLite source data is unmodified (sql.js reads a Buffer snapshot; nothing was opened).')
 console.log('Deleting it is a separate decision this run does not make.')
