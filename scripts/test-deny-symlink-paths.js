@@ -133,13 +133,17 @@ check(!run(`cd ${wtDir} | cp x node_modules/`).denied, '| : each pipeline stage 
 // separator semantics (TRDD-D8L28FFD box 2); the matrix had only the cd-carrying `&` case, so
 // nothing pinned the segment-after-& behaviour and a regression there would have passed green.
 // MUTATION-VERIFIED 2026-09-04 against `parts.slice(0, 1)` at the `for (const part of parts)` loop
-// (:604) — the mutation that literally implements "nothing after a separator is judged". The DENY
-// case flips to allow under it; a single-part control still denies, proving the mutation is
-// targeted rather than blanket. Two EARLIER mutations reported "pins nothing" and were WRONG: they
-// hit `stages` (:664), the pipeline split INSIDE a part, while `&` splits PARTS at :579. Both
-// matched their needle and produced a real diff — so diff-confirmation is necessary and NOT
-// sufficient. A mutation needs a POSITIVE control (something it is known to break) or it can test
-// a layer the behaviour never reaches and read exactly like a vacuous test.
+// (:604) — the mutation that implements "nothing after a separator is judged". The DENY case flips
+// to allow under it, with BOTH controls run: a POSITIVE one (`cd <wt> && cp x node_modules/`, an
+// existing case known to depend on that loop) also flips, proving the mutation is LIVE independent
+// of the cases under test; a NEGATIVE one (`cp x <link>/ & ls file` — multi-part, danger in part 1)
+// stays DENY, proving it is targeted rather than blanket. Two EARLIER mutations reported "pins
+// nothing" and were WRONG: they hit `stages` (:664), the pipeline split INSIDE a part, while `&`
+// splits PARTS at :579. Both matched their needle and produced a real diff — so diff-confirmation
+// is necessary and NOT sufficient; without a positive control on an INDEPENDENT case, a non-flip
+// cannot be told apart from a mutation that is inert on the path under test.
+// Scope of the pin, exactly: these cover "parts after the first are judged", a superset of the
+// after-& regression. They do not isolate `&` from `&&`/`;`/`||`.
 check(!run(`ls ${link} & cat ${link}/file.txt`).denied, '& : both sides read-only, nothing to deny')
 check(run(`ls ${link} & cp x ${link}/`).denied, '& : the segment AFTER an & is still judged — it mutates through the link')
 check(run(`cd ${wtDir} && cp x node_modules/ | cat`).denied, '...but a cd BEFORE the pipeline still reaches it')

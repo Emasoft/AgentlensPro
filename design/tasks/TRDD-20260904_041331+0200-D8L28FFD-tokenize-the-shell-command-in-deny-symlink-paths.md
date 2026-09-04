@@ -103,13 +103,36 @@ Replace the regex layers with **one pass that produces a token stream**, so "syn
       criterion currently demands was satisfied and the conclusion was still false: `&` splits
       **PARTS** at `:579`, so the mutated layer is not on the path that behaviour takes. The third
       mutation (`parts.slice(0, 1)` at the `for (const part of parts)` loop, `:604`) flipped the
-      DENY case to `allow`, proving the pin. **So a mutation ALSO needs a POSITIVE CONTROL — a case
-      it is known to break — or it can exercise a layer the behaviour never reaches and be
-      indistinguishable from a vacuous test.** Here the single-part control (`cp x <link>/`, still
-      DENY under the mutation) is what shows the mutation is targeted rather than blanket; without
-      that pair the run says nothing. Note this is the SAME failure the card already warns about,
-      arriving through a door the warning did not cover: not "the mutation failed to apply" but
-      "the mutation applied cleanly to the wrong layer".
+      DENY case to `allow`, proving the pin. **So a mutation ALSO needs CONTROLS — otherwise it can
+      exercise a layer the behaviour never reaches and be indistinguishable from a vacuous test.**
+      Note this is the SAME failure the card already warns about, arriving through a door the
+      warning did not cover: not "the mutation failed to apply" but "the mutation applied cleanly to
+      the WRONG LAYER".
+
+      **TWO controls, and they are DIFFERENT INSTRUMENTS — corrected 17:24 after a first attempt
+      used one degenerate case and called it both.**
+      - **POSITIVE control** — a case that SHOULD flip and does ⇒ *the mutation is LIVE on the
+        layer under test.* It MUST be INDEPENDENT of the tests being verified: if the only thing
+        that flips is the test under verification, a non-flip cannot separate "the test pins
+        nothing" from "the mutation is inert here" — which is precisely the ambiguity that produced
+        two false verdicts. Used here: `cd <wt> && cp x node_modules/`, an existing matrix case
+        known to depend on the parts loop → flips to `allow`.
+      - **NEGATIVE control** — a case that should NOT flip and doesn't ⇒ *the mutation is TARGETED,
+        not blanket.* It must be MULTI-PART with its danger in part 1. Used here:
+        `cp x <link>/ & ls file` → stays DENY, so the mutation removes later parts while preserving
+        judgement of the first.
+      - **The first attempt's control was DEGENERATE and its claim was FALSE.** `cp x <link>/` has
+        no separator, so `parts` is a one-element array and `parts.slice(0, 1)` is a literal no-op
+        on it — it stayed DENY because the mutant was byte-identical in behaviour for that input.
+        That is a tautology, not evidence, and "proves the mutation is targeted" was wrong.
+
+      **What the pin actually covers, stated exactly:** the two `&` cases pin *"parts after the
+      first must be judged"* — a SUPERSET of the regression the card describes. They do not isolate
+      `&` from `&&`/`;`/`||`, and they do not simulate the specific degradation named above ("the cd
+      does not reach here" becoming "nothing after an & is checked"), which would be a change in the
+      separator-CARRY logic (`dir`/`dirExplicit` propagation), not in whether the loop enumerates
+      parts. Catching the superset is a real pin; claiming it isolates the named regression is one
+      step further than the evidence goes.
 - [ ] The known-unfixed `$((` miscount (1 open, 2 closes, absorbed by the `Math.max(0, …)` clamp)
       is either fixed by construction or re-documented with its new reasoning.
 - [ ] `cd *` remains an accepted, documented miss unless the tokenizer makes it cheap to resolve.
