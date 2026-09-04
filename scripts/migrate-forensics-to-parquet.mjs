@@ -249,9 +249,14 @@ for (const t of tables) {
     // test runs. `never_free_space.md` forbids an agent reclaiming disk, so unbounded growth is a
     // problem this tool must not CREATE, not one someone can tidy later. Bounded at 1x, no
     // retention policy needed.
+    // NOTE the missing `else fs.unlinkSync(dest)`. An earlier version deleted the current parquet
+    // when a `.prev` already existed, then let COPY recreate it — which opened a window where the
+    // ONLY surviving copy was a stale backup from run 1. A crash, SIGINT, disk-full, or a COPY
+    // error in that window leaves the user with an old backup and no current file. The unlink was
+    // also gratuitous: `COPY ... TO` overwrites unconditionally. Doing nothing is both safer and
+    // less code.
     const prev = `${dest}.prev`
-    if (fs.existsSync(prev)) fs.unlinkSync(dest)
-    else fs.renameSync(dest, prev)
+    if (!fs.existsSync(prev)) fs.renameSync(dest, prev)
   }
 
   await con.run(`COPY (SELECT * FROM ${scan(t)}) TO '${dest}' (FORMAT PARQUET, COMPRESSION ZSTD)`)
