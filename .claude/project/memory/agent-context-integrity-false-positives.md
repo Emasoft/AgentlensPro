@@ -2,7 +2,7 @@
 name: agent-context-integrity-false-positives
 description: "the janitor flags injection/authority-override patterns in CLAUDE.md or .claude/project/memory and says content arrived from outside this repo's identity / AICTX-003 ticket offered / should I open it"
 ocd: 2026-08-22
-lmd: 2026-08-22
+lmd: 2026-09-04
 metadata:
   node_type: memory
   type: reference
@@ -13,7 +13,7 @@ publish-globally: false
 # agent-context-integrity-false-positives
 
 
-^ATOM-SKK6-Q2ET [desc: "All 5 recurring agent-context-integrity findings on this repo are false positives; the 'arrived from outside' claim resolves to ONE BLANK LINE.", keywords: agent-context-integrity injection_pattern_in_CLAUDE.md authority-override_HIGH worm-self-propagation_npm_publish AICTX-003 content_arrived_from_outside Roger_Reed_author, type: reference, ocd: 2026-08-22, lmd: 2026-08-22]
+^ATOM-SKK6-Q2ET [desc: "All 5 recurring agent-context-integrity findings on this repo are false positives; the 'arrived from outside' claim resolves to ONE BLANK LINE.", keywords: agent-context-integrity injection_pattern_in_CLAUDE.md authority-override_HIGH worm-self-propagation_npm_publish AICTX-003 content_arrived_from_outside Roger_Reed_author, type: reference, ocd: 2026-08-22, lmd: 2026-09-04]
 
 The heartbeat's `[agent-context-integrity]` detector repeatedly reports **5 injection/authority
 patterns in 3 files** here, and offers an `AICTX-003` ticket. **Triaged 2026-08-22 — all five are
@@ -25,6 +25,9 @@ re-investigating from scratch.**
 | `CLAUDE.md:309`, `:356` | project doctrine ABOUT documentation reliability, authored by the repo owner 2026-08-04. It uses words like *supersedes* / *sole authority* / *false*, which is what the `authority-override` pattern matches. |
 | `.claude/project/memory/agentlenspro-publish-pipeline.md:3,:31` | a page that DOCUMENTS the npm publish pipeline, so it necessarily contains `npm publish` — the shai-hulud `worm-self-propagation` signature. Owner-authored. |
 | `.claude/project/memory/image-resident-cost-guard.md:17` | owner-authored doctrine. |
+
+
+^ATOM-MFDX-VWA6 [desc: "The 'arrived from outside' provenance claim is technically true but practically empty: only one blank line in CLAUDE.md is not owner-authored; re-confirm with git blame, not the pattern hits.", keywords: arrived_from_outside_content_claim provenance_claim_justify_alarm git_blame_outside_author one_blank_line_attributed_to_outside_author AICTX-003_re-confirm_cheaply author_histogram_git_blame_line-porcelain fork_inherits_upstream_commits technically_true_practically_empty CLAUDE.md_431_lines_one_attributed re-confirm_before_opening_ticket, type: reference, ocd: 2026-09-04, lmd: 2026-09-04]
 
 **The load-bearing part is the provenance claim**, because it is the only sentence that would
 justify alarm: *"1 of them carry commits by an author other than this repo's own identity, so that
