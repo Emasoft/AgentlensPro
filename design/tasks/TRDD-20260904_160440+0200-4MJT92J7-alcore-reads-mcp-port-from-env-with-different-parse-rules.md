@@ -22,7 +22,12 @@ related: [99HUNXJS, BSDR4TRM, EGGERLEO, 1B98LCVR]
 
 ## The site (measured 2026-09-04, one grep over the whole Rust tree)
 
-`grep -rn 'env::var' rust-core/crates --include=*.rs | grep -i port` returns **exactly one** hit —
+`grep -rn 'env::var' rust-core/crates --include=*.rs | grep -i port` returns **exactly one** hit.
+**State that positively, because the absence is the useful half:** the grep covered all three port
+variables, and `UI_PORT` and `OTLP_PORT` have **ZERO** `env::var` reads anywhere in the Rust tree
+(`grep -cE 'UI_PORT|OTLP_PORT'` over the same output → 0). So the Rust side takes those two from
+flags only, exactly as `freePort.ts` claims; `MCP_PORT` is the single exception, and the helper's
+comment is wrong only about that one variable. The hit is —
 `rust-core/crates/agentlens-core/src/server_stats.rs:68`, inside `impl Default for Ports`:
 
 ```rust
@@ -39,11 +44,34 @@ survives in the half the acceptance did not cover.
 
 The two parsers genuinely disagree:
 
-| input | TS `envPort` (bare `Number()`) | Rust `.trim().parse()` |
-|---|---|---|
-| `'3e3'` | **3000** (accepted) | rejected → 4316 |
-| `'0x1F80'` | **8064** (accepted) | rejected → 4316 |
-| `'+8080'` | **8080** (accepted) | rejected → 4316 |
+**Both columns are RUN, not derived.** Rust column = `rustc`-compiled output of
+`s.trim().parse::<u16>().ok()`, the exact expression at `server_stats.rs:68`. TS column = `node -e`
+output of `Number(s)`, which is what `envPort` delegates to — with the caveat that `envPort` then
+applies its own accept/reject predicate on top (that is why `'0'` and `'65536'` show a raw
+`Number()` value here but are REJECTED by `envPort`, per `setupPortEnv.test.ts`'s `REJECTED`
+vector). Raw `Number()` results: `'3e3'`→3000, `'0x1F80'`→8064, `'+8080'`→8080, `'0'`→0,
+`' 8080 '`→8080, `'65536'`→65536.
+
+| input | TS `envPort` (bare `Number()`) | Rust `.trim().parse::<u16>()` | diverge? |
+|---|---|---|---|
+| `'3e3'` | **3000** (accepted) | `None` → 4316 | **YES** |
+| `'0x1F80'` | **8064** (accepted) | `None` → 4316 | **YES** |
+| `'0'` | **rejected** → fallback | **`Some(0)`** | **YES — see below** |
+| `'+8080'` | 8080 | `Some(8080)` | no |
+| `' 8080 '` | 8080 | `Some(8080)` | no |
+| `'65536'` | rejected | `None` | no |
+
+**`'0'` is the dangerous row, and it inverts the usual direction.** TS `envPort` REJECTS `'0'`
+(it is in `setupPortEnv.test.ts`'s `REJECTED` vector) and falls back; Rust ACCEPTS it as a valid
+`u16`. At the socket layer **port 0 means "bind any free port"**, so `MCP_PORT=0` would have the
+TS side reporting 4316 while the Rust side takes an arbitrary ephemeral port — a disagreement that
+is not merely cosmetic, because the CLI's `server stop` path resolves a port to decide what to
+signal. (Whether `Ports::default()`'s value can actually reach a bound listener is acceptance box
+1 and is NOT established — see below. This row is what makes that trace worth doing first.)
+
+An earlier version of this table claimed `'+8080'` diverged. It does not — Rust's integer
+`FromStr` accepts a leading `+`. That row was asserted from intuition about Rust rather than run,
+and the run that corrected it is what surfaced `'0'`.
 
 So `MCP_PORT=3e3` gives 3000 on the TS side and 4316 on the Rust side. That is the exact class of
 divergence 99HUNXJS exists to eliminate. (TS accepting those forms is deliberate and pinned by
