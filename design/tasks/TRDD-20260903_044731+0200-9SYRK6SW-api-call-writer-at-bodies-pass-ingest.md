@@ -3,7 +3,7 @@ trdd-id: 9SYRK6SW
 title: api_call staging table writer at the bodies-pass ingest site
 column: testing
 created: 2026-09-03T04:47:31+0200
-updated: 2026-09-03T08:32:43+0200
+updated: 2026-09-04T17:44:07+0200
 current-owner: main-session
 task-type: feature
 priority: high
@@ -221,6 +221,27 @@ doesn't have) — union_by_name at read time (GVA8TTJF) coalesces them per call.
 2. Drop a synthetic request+response pair into the bodies watch dir, let one bodies-pass tick run,
    query `SELECT * FROM api_call` (pre-flush) or the flushed parquet part — confirm both rows.
 3. Restart the server, confirm the parquet part under `store/api_calls/` survives and is readable.
+
+**STEP 3 IS UNEVIDENCED ON THIS MACHINE — measured 2026-09-04T17:44, read-only.** The live store
+holds **495 parquet parts / 5.0 MB** under `~/.agentlens/store/api_calls/`, so the writer half is
+well supported. But part filenames encode the writing pid (`part-<ts>-<pid>-<n>.parquet`), and
+**all 495 carry pid 37180 — the CURRENTLY RUNNING server. Zero parts predate it.** So nothing in
+the store demonstrates survival across a restart: the data is equally consistent with "the feature
+landed after this server started" (earliest part 10:33; the process started ~08:56) and with
+"earlier parts were removed". This step is not merely untested — the evidence that WOULD settle it
+is absent by construction.
+
+**Settling it costs one restart and one `find`**, and the card should not be advanced before that:
+restart the collector, then confirm parts bearing the OLD pid are still present and readable. Not
+performed here — restarting the user's live collector is an action on a running system that was not
+asked for, and this session has already learned what an unrequested state change costs
+(TRDD-BSDR4TRM's `server stop` hitting the wrong process).
+
+**COLUMN NOT CHANGED.** `testing → ai_review` IS exempt (`manager-approval-defaults.md` table A)
+*when all test-requirements have PASSED* — and on the evidence above one verification step has no
+result at all, so the precondition for the exemption is not met. All six ACCEPTANCE boxes being
+ticked is not the same claim: they were ticked against the implementation, and step 3 is the one
+that outlives it.
 
 ## Approval log
 
