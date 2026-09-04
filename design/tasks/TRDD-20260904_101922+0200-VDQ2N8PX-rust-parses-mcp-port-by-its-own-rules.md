@@ -3,7 +3,8 @@ trdd-id: VDQ2N8PX
 title: Rust parses MCP_PORT by its own rules so the server and the CLI can still disagree
 column: todo
 created: 2026-09-04T10:19:22+0200
-updated: 2026-09-04T10:19:22+0200
+updated: 2026-09-04T16:54:56+0200
+duplicated-by: 4MJT92J7
 current-owner: main-session
 task-type: bugfix
 project-id: agentlenspro
@@ -20,6 +21,27 @@ external-refs: []
 ---
 
 # TRDD-99HUNXJS unified the TypeScript spellings. Rust was never in the census.
+
+## ⚠ A DUPLICATE OF THIS CARD WAS FILED AT 16:04 — TRDD-4MJT92J7
+
+Noted 2026-09-04T16:54. `4MJT92J7` covers the same site (`server_stats.rs:68`), the same two-engine
+divergence, and the same EGGERLEO hand-off; it was filed 5h45m after this card by a session that
+did not check the board first. **This card is the survivor** — earlier, and
+`min-approval-requirement: none` against 4MJT92J7's `medium`.
+
+The supersede transition is NOT performed here (`<any non-design> → superseded` is non-exempt).
+**But 4MJT92J7 is not empty, and its content must not be lost if it is archived:**
+
+- **A real code fix already landed under it** (`c17ef591`, corrected by `0f1e9433`):
+  `src/test/helpers/freePort.ts`'s `alcoreArgsFromEnv` doc comment asserted *"alcore reads NO env
+  vars for these — it is flags-only"*, which this very defect falsifies. It now states the scoped
+  truth instead. That comment was the only evidence anyone had that the Rust env boundary was
+  airtight.
+- **The `Ports::default()` caller trace**, which settles severity for BOTH cards: one caller
+  (`lib.rs:565`), and the only reads of `st.ports.*` are `server_stats.rs:574-575`. `Ports` is a
+  REPORTING struct — nothing binds a listener from it — so `MCP_PORT=0` yields a wrong number in
+  `/api/server-stats`, never a dead bound socket. This card's own box *"`MCP_PORT=0` does not yield
+  `Ports.mcp == 0`"* is still the right fix, but the impact is a false self-report, not a hazard.
 
 `rust-core/crates/agentlens-core/src/server_stats.rs:68`, in `impl Default for Ports`:
 

@@ -3,7 +3,8 @@ trdd-id: 4MJT92J7
 title: alcore reads MCP_PORT from env with parse rules that differ from the TypeScript envPort
 column: todo
 created: 2026-09-04T16:04:40+0200
-updated: 2026-09-04T16:39:18+0200
+updated: 2026-09-04T16:54:56+0200
+duplicate-of: VDQ2N8PX
 current-owner: main-session
 task-type: bugfix
 project-id: agentlenspro
@@ -19,6 +20,34 @@ related: [99HUNXJS, BSDR4TRM, EGGERLEO, 1B98LCVR]
 ---
 
 # alcore reads MCP_PORT from env, with different parse rules than the TS parser
+
+## ⚠ DUPLICATE — TRDD-VDQ2N8PX ALREADY CARDED THIS, 5h45m EARLIER THE SAME DAY
+
+Found 2026-09-04T16:54 while grepping for something else. `VDQ2N8PX`
+(*"Rust parses MCP_PORT by its own rules so the server and the CLI can still disagree"*, created
+**10:19:22**; this card **16:04:40**) covers the same site, the same two-engine divergence, the
+`'0'` row, and hands the `'3e3'` question to EGGERLEO exactly as this card does. **This card should
+be SUPERSEDED into VDQ2N8PX**, which is both earlier and `min-approval-requirement: none`.
+
+**Not doing that transition here:** `<any non-design> → superseded` is NON-EXEMPT under
+`manager-approval-defaults.md` §W. Recording the duplication is exempt (table E); force-superseding
+is not, and this session already closed one contested card on its own authority today (99HUNXJS).
+
+**What must MIGRATE if the supersede is approved** — this card holds work VDQ2N8PX does not:
+- **Box 3 is DONE and the code has landed** (`c17ef591`, corrected by `0f1e9433`): `freePort.ts`'s
+  `alcoreArgsFromEnv` comment no longer claims alcore is flags-only, and now carries the scoped
+  evidence (the literals `UI_PORT`/`OTLP_PORT` occur 4× in `rust-core`, all in comments).
+- **The `Ports::default()` caller trace** (one caller `lib.rs:565`; only reads `server_stats.rs:574-575`)
+  and the conclusion it supports: `Ports` is a reporting struct, so the impact is a wrong number in
+  `/api/server-stats`, never a bound socket.
+- The retractions recorded below (the `server stop` scenario; the inverted BSDR4TRM citation; the
+  `'+8080'` row asserted from intuition).
+
+**The lesson, and it is the fifth of its kind today.** An adversarial reviewer told me my search
+scope could not see Rust. I ran the grep, found the site, and filed a card — without once checking
+whether the board already had one. `find design -iname '*MCP_PORT*'` finds nothing (ids are
+opaque); the check that works is a title/content grep over `design/`, and it takes one command.
+Recall-before-acting applies to the BOARD, not only to the memory corpus.
 
 ## The site (measured 2026-09-04, one grep over the whole Rust tree)
 
