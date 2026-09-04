@@ -61,13 +61,33 @@ vector). Raw `Number()` results: `'3e3'`→3000, `'0x1F80'`→8064, `'+8080'`→
 | `' 8080 '` | 8080 | `Some(8080)` | no |
 | `'65536'` | rejected | `None` | no |
 
-**`'0'` is the dangerous row, and it inverts the usual direction.** TS `envPort` REJECTS `'0'`
-(it is in `setupPortEnv.test.ts`'s `REJECTED` vector) and falls back; Rust ACCEPTS it as a valid
-`u16`. At the socket layer **port 0 means "bind any free port"**, so `MCP_PORT=0` would have the
-TS side reporting 4316 while the Rust side takes an arbitrary ephemeral port — a disagreement that
-is not merely cosmetic, because the CLI's `server stop` path resolves a port to decide what to
-signal. (Whether `Ports::default()`'s value can actually reach a bound listener is acceptance box
-1 and is NOT established — see below. This row is what makes that trace worth doing first.)
+**`'0'` inverts the usual direction:** TS `envPort` REJECTS `'0'` (it is in
+`setupPortEnv.test.ts`'s `REJECTED` vector) and falls back to 4316; Rust ACCEPTS it as a valid
+`u16` `Some(0)`. So the two engines report different numbers for the same input.
+
+**ACCEPTANCE BOX 1 IS NOW ANSWERED, and it DEFLATES this row — recorded because an earlier version
+of this card inflated it.** `Ports::default()` has exactly ONE caller: `lib.rs:565`, initializing
+`CoreState.ports`. The only reads of `st.ports.*` anywhere are `server_stats.rs:574-575` — the
+`/api/server-stats` JSON payload and a `canonical` flag (`st.ports.otlp == 4318`). **`Ports` is a
+REPORTING struct. Nothing binds a listener from it.** The listeners bind from flags; `alcore serve`
+additionally overwrites `mcp` from `--mcp-port` once `serve_mcp` claims the port.
+
+So the real impact is **a reporting inaccuracy, not a binding hazard**: `/api/server-stats` can
+state an `mcp` port that nothing is listening on. That is precisely what the struct's own doc
+comment at `:55-58` already says — *"this field carried the env default (4316) while nothing
+listened on it, so the server stated a port about itself that a client would find dead."*
+
+**RETRACTED from an earlier version of this card:** that `MCP_PORT=0` could make the CLI's
+`server stop` signal the wrong process. The scenario needed three links and had one — the parser
+divergence. It was constructed from a plausible-sounding mechanism without tracing whether the
+value could reach it. It cannot.
+
+**And the citation was INVERTED, which is the worse half.** I invoked CLAUDE.md's account of
+`findServerPid` as evidence the hazard was live. CLAUDE.md records that passage as TRDD-BSDR4TRM's
+**FIX**: `findServerPid` reads `<dataDir>/server.pid` FIRST and accepts a REST-reported pid only
+when that server reports the same data dir, landed precisely so port confusion could not misdirect
+a signal. So I cited the remedy as the disease. A citation that names a real document and reverses
+its sense is harder to catch than an unsourced claim, because the reference makes it look checked.
 
 An earlier version of this table claimed `'+8080'` diverged. It does not — Rust's integer
 `FromStr` accepts a leading `+`. That row was asserted from intuition about Rust rather than run,
@@ -97,8 +117,15 @@ is the first task, not a formality — the whole severity of this card depends o
 
 ## Acceptance
 
-- [ ] Every caller of `Ports::default()` is traced and listed. Decide from that list whether the
+- [x] Every caller of `Ports::default()` is traced and listed. Decide from that list whether the
       env-derived `mcp` can reach a served response or a bound listener, or is always overwritten.
+      **ANSWERED 2026-09-04:** exactly ONE caller — `lib.rs:565`, initializing `CoreState.ports`.
+      The only reads of `st.ports.*` are `server_stats.rs:574-575` (the `/api/server-stats` JSON
+      and a `canonical` flag). **`Ports` is a reporting struct; nothing binds a listener from it**,
+      and `alcore serve` overwrites `mcp` from `--mcp-port` once `serve_mcp` claims the port. So the
+      env-derived value can reach a SERVED RESPONSE but never a bound socket — the impact is a
+      wrong number in `/api/server-stats`, which is the failure the struct's own doc comment at
+      `:55-58` already describes ("stated a port about itself that a client would find dead").
 - [ ] A decision is recorded: delete the env read in favour of the flag, OR align its parse
       semantics with `envPort`. Not "it's probably fine".
 - [ ] `freePort.ts`'s `alcoreArgsFromEnv` comment is corrected or narrowed to what is true. It
