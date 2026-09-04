@@ -72,9 +72,30 @@ with `windowMs` pinned at the floor. Two reasons that is not a finding:
   the 91.7 MB `/api/summary` response this session pulled minutes earlier, and none of it was
   controlled for.
 
-**What would make it evidence:** sample `memory.rssMb` every 30 s for 15–30 minutes with no tool
-traffic against the server. If the band oscillates and returns, it is allocator noise and this
-paragraph should be deleted. If the FLOOR of the band rises monotonically, that is a leak signal.
+**PARTIAL RESULT — 7 samples over 3.5 min (2026-09-04 ~15:47–15:50), server otherwise quiet:**
+
+```
+15109 15111 15117 15110 15111 15132 15132   → band = 23 MB
+```
+
+**A 23 MB band, not 300–400 MB.** Over the same interval `spans.inMemory` rose 418,456 → 418,710
+(+254) and RSS rose 23 MB. That is a quiet, nearly-flat process — nothing like the swings recorded
+above.
+
+**The honest reading, stated to the standard this card keeps failing:** the two series differ, and
+the difference is CONSISTENT WITH the earlier ~373 MB "oscillation" being my own tool traffic — the
+15,085 / 14,712 / 15,015 reads were taken while this session was repeatedly curling the server,
+including one `/api/summary` fetch that pulls **91.7 MB** through it. That is a candidate, not a
+cause: the sampler itself curls, other session activity was not controlled, and 7 samples is a
+short window. **What it does establish is that the earlier band is not reproducible under quieter
+conditions**, so no remediation should be designed against it.
+
+If the completed 30-sample run holds a ~20 MB band, the "oscillation" paragraph above should be
+deleted outright and this card reduced to its one durable claim: the guard has no lever past the
+window floor.
+
+**What would still make a leak claim evidence:** the FLOOR of the band rising monotonically across
+a 15–30 minute window with no tool traffic. Nothing here shows that.
 A sampler was started 2026-09-04 ~15:44 (pid 46514, `nohup`) writing to `/tmp/rss-band.txt` —
 30 samples × 30 s, so it completes ~16:00. **It was IN FLIGHT when the session that started it
 ended.** Consequences for whoever reads this next:
