@@ -117,6 +117,14 @@ check(!run(`cd ${wtDir} || cp x node_modules/`).denied, '|| : the cd did NOT run
 check(!run(`cd ${wtDir} & cp x node_modules/`).denied, '& : the cd is backgrounded in a subshell')
 check(!run(`cd ${wtDir} | cp x node_modules/`).denied, '| : each pipeline stage is its own subshell')
 check(run(`cd ${wtDir} && cp x node_modules/ | cat`).denied, '...but a cd BEFORE the pipeline still reaches it')
+check(run(`cd ${wtDir} && cat f | cp x node_modules/`).denied, '...and reaches a LATER stage, not just the first')
+// `(` is a boundary. Without this the paren form ALLOWED while the brace form denied — the brace
+// only ever worked because `{` happens to be followed by a space, which is not a design.
+check(run(`(cd ${wtDir} && cp x node_modules/)`).denied, 'a subshell in parens is still the incident shape')
+// The one case that distinguishes an explicit cd from a CHANGED dir. `cd .` changes nothing, so a
+// guard inferring "a cd occurred" from `dir !== sessionCwd` gates this relative nonexistent leaf
+// away and ALLOWS — which is why effectiveCwd reports `matched` instead of the caller guessing.
+check(run(`cd . && cp x linked/notyet`).denied, 'cd . is an explicit cd even though the dir is unchanged')
 check(run(`sort -o ${link}/out ${link}/in`).denied, 'sort -o DOES write in place')
 check(run(`sed -i s/a/b/ ${link}/f`).denied, 'sed is not read-only at all')
 

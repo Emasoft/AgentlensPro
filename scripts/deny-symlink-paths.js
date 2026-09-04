@@ -212,7 +212,11 @@ function pathTokens(cmd, baseDir, baseIsExplicit) {
  *  is still worth resolving. Inferring it from the dir answers that question wrong in exactly the
  *  case where a worktree and the hook cwd happen to coincide. */
 function effectiveCwd(segment, baseCwd) {
-  const m = /(?:^|\s)(?:cd|pushd)\s+(?:--\s+)?(['"]?)([^'"&;|]+)\1(?:\s|$)/.exec(segment)
+  // `(` is a boundary, not text: `(cd <wt> && cp x node_modules/)` is the incident shape wearing
+  // parentheses, and a `\s`-only boundary rejected the cd, resolved the relative path against the
+  // HOOK's cwd, found nothing, and ALLOWED. Measured 2026-09-04 — the brace form `{ cd … ; }` was
+  // caught the whole time only because `{` happens to be followed by a space.
+  const m = /(?:^|[\s(])(?:cd|pushd)\s+(?:--\s+)?(['"]?)([^'"&;|]+)\1(?:\s|$)/.exec(segment)
   if (!m) return { dir: baseCwd, matched: false }
   const target = m[2].trim()
   if (!target || target === '-') return { dir: baseCwd, matched: false }
@@ -370,19 +374,27 @@ process.stdin.on('end', () => {
     let dir = sessionCwd
     let dirExplicit = false
     const parts = segmentable.split(/(\|\||&&|[;&\n])/)
+    // A capturing split keeps every piece in order, so a part's offset is the running sum of the
+    // ones before it — exact, and it must advance past the separators too. The earlier
+    // `indexOf(pipeline)` returned the FIRST match, so two parts with equal masked text sliced
+    // their content from the same place; that was harmless only because the mask is
+    // length-preserving and covers no path characters, which is an invariant elsewhere in this
+    // file, not a property of the slicing.
+    let cursor = 0
     for (const part of parts) {
+      const base = cursor
+      cursor += part.length
       if (part === '||' || part === '&') { dir = sessionCwd; dirExplicit = false; continue }
       if (/^(?:&&|[;\n])$/.test(part)) continue
       const pipeline = part
       // Stage boundaries come from the MASKED text; the stage CONTENT is sliced from the original
       // so quoted paths are still extractable.
-      const base = segmentable.indexOf(pipeline)
       const stages = []
       let off = 0
-      for (const part of pipeline.split('|')) {
-        const orig = base >= 0 ? cmd.substr(base + off, part.length) : part
+      for (const stage of pipeline.split('|')) {
+        const orig = cmd.slice(base + off, base + off + stage.length)
         if (orig.trim()) stages.push(orig.trim())
-        off += part.length + 1
+        off += stage.length + 1
       }
       if (!stages.length) continue
       const commandWord = (seg) => {
@@ -397,7 +409,9 @@ process.stdin.on('end', () => {
       const entryExplicit = dirExplicit
       for (const segment of stages) {
         // A multi-stage pipeline's stages are siblings, not a sequence: each resolves against the
-        // directory the PIPELINE was entered in, and none of their cds survive past it.
+        // directory the PIPELINE was entered in, and none of their cds survive past it. The same
+        // asymmetry governs `explicit`: a stage sees its OWN cd and one from a previous split part
+        // (entryExplicit), never a sibling stage's — that cd ran in a different subshell.
         const ec = effectiveCwd(segment, multi ? entryDir : dir)
         const stageDir = ec.dir
         const stageExplicit = ec.matched || (multi ? entryExplicit : dirExplicit)
