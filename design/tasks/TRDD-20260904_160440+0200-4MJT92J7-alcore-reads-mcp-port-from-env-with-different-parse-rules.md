@@ -3,7 +3,7 @@ trdd-id: 4MJT92J7
 title: alcore reads MCP_PORT from env with parse rules that differ from the TypeScript envPort
 column: todo
 created: 2026-09-04T16:04:40+0200
-updated: 2026-09-04T17:02:43+0200
+updated: 2026-09-04T17:05:00+0200
 current-owner: main-session
 task-type: bugfix
 project-id: agentlenspro
@@ -48,16 +48,17 @@ is not, and this session already closed one contested card on its own authority 
 - **Box 3 is DONE and the code has landed** (`c17ef591`, corrected by `0f1e9433`): `freePort.ts`'s
   `alcoreArgsFromEnv` comment no longer claims alcore is flags-only, and now carries the scoped
   evidence (the literals `UI_PORT`/`OTLP_PORT` occur 4× in `rust-core`, all in comments).
-- **The READ-side half of the `Ports` trace.** Corrected 17:02 — a 16:58 version struck this as
-  "nothing to migrate", which was FALSE and was itself the disown-without-rehome failure
-  TRDD-CS2W7E77 exists to repair. The two traces are **complementary, not nested**: VDQ2N8PX is
-  better on the WRITE path (it found the overwrite site `alcore.rs:235-237` this card never
-  located, ruled out a `..Default::default()` spread, and honestly flags that guard as UNVERIFIED
-  where this card asserted it flatly), but **this card is the only one establishing that
-  `server_stats.rs:574-575` are the ONLY readers of `st.ports.*`**, plus the `canonical` flag —
-  and that exhaustive reader set is what makes "nothing binds from `Ports`" hold independently of
-  the unverified overwrite. "Rediscovery" is fair for the `lib.rs:565` half, overstated for the
-  whole.
+- **`server_stats.rs:575` and the `canonical` flag** (`st.ports.otlp == 4318`) — the ONLY genuine
+  migration, and it is minor: a second field on the same status endpoint.
+  **SETTLED 17:05 after three wrong versions.** Both cards reach the same severity conclusion by
+  different routes; neither trace is load-bearing for the other. VDQ2N8PX already asserts the
+  no-binding conclusion directly AND already decouples it from the unverified overwrite guard —
+  *"What keeps it low EVEN IN THE WORST CASE: nothing BINDS `ports.mcp`."* So the 17:02 claim that
+  this card's exhaustive reader set "licenses that conclusion independently of the overwrite" was
+  false; VDQ2N8PX needed no such licence. Prior wrong versions: 16:54 "holds work VDQ2N8PX does
+  not" (written from a 60% read of VDQ2N8PX); 16:58 "nothing to migrate" (discarded `:575`).
+  Each was written from whichever card I had read most recently; **the two texts were never
+  compared side by side**, which is what the claim was about.
 - The retractions recorded below (the `server stop` scenario; the inverted BSDR4TRM citation; the
   `'+8080'` row asserted from intuition).
 
@@ -186,12 +187,15 @@ is the first task, not a formality — the whole severity of this card depends o
       "caveat under a ticked box is a lie" failure this session committed as a lesson in
       `2dc56a9b` and applied on 6SPXOV0P. It is not cosmetic: `grep -c '\- \[ \]'` is how this
       board's remaining work is counted, and a wrong tick makes the card read one box nearer done.
-      **What this box DID establish, and it is unique to this card — do not discard it:**
-      `server_stats.rs:574-575` are the ONLY readers of `st.ports.*` (VDQ2N8PX claims only that
-      `ports` *feeds* `:574`, never exhaustiveness), plus the `canonical` flag at `:575`. That
-      exhaustive reader set is what makes "nothing binds a listener from `Ports`" hold INDEPENDENTLY
-      of the overwrite — VDQ2N8PX's low severity merely assumes the overwrite. Migrated to
-      VDQ2N8PX's duplicate note; keep both halves.
+      **What this box DID establish:** `server_stats.rs:574-575` as the readers of `st.ports.*`,
+      phrased exhaustively, plus the `canonical` flag at `:575`. **Only `:575`/`canonical` is
+      genuinely unique** — VDQ2N8PX reaches the same no-binding conclusion by its own route and
+      states it holds *"even in the worst case"*, so it does not depend on this box's reader set.
+      A 17:02 version of this note claimed otherwise; corrected 17:05. Migrated to VDQ2N8PX.
+      **Unticking makes this card read `open=3`, i.e. FURTHER from done, on a card recommended for
+      merging.** That is the honest count — the decide clause is genuinely open — but a decider
+      triaging by open-box count should read it as *this work exists on the other card*, not as
+      *more work remains here*.
 - [ ] A decision is recorded: delete the env read in favour of the flag, OR align its parse
       semantics with `envPort`. Not "it's probably fine".
 - [x] `freePort.ts`'s `alcoreArgsFromEnv` comment is corrected or narrowed to what is true. It
