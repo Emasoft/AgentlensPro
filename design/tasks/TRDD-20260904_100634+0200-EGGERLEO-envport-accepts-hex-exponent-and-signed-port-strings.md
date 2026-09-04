@@ -3,12 +3,12 @@ trdd-id: EGGERLEO
 title: envPort accepts hex exponent and signed forms that nobody types as a port
 column: todo
 created: 2026-09-04T10:06:34+0200
-updated: 2026-09-04T10:06:34+0200
+updated: 2026-09-04T10:11:41+0200
 current-owner: main-session
 task-type: bugfix
 project-id: agentlenspro
 scope: project
-min-approval-requirement: none
+min-approval-requirement: manager
 labels: [cli, config, validation]
 priority: low
 severity: low
@@ -65,6 +65,17 @@ const n = /^\d+$/.test(t ?? '') ? Number(t) : NaN
 
 This rejects `3e3`, `0x1F80`, `0b11` and `+8080` while accepting every input the current parser
 accepts that is actually a port. `Number.isInteger`/range checks stay as they are.
+
+**The regex MUST test the TRIMMED string, and the ordering above is what makes it safe.**
+`/^\d+$/.test(' 8080 ')` is `false`, so testing `raw` directly would reject a currently-valid
+input — a real regression. Checked for other legitimate inputs the guard would break and found
+none: `'08080'` (leading zero) passes the regex and `Number` still gives 8080; a 20-digit string
+passes the regex and is then rejected by `n < 65536`, exactly as it is today.
+
+**`min-approval-requirement: manager`, not `none`** — this card exists to revisit a decision
+ratified in TRDD-BSDR4TRM's ai_review. It was filed as `none` on 2026-09-04 and corrected the same
+day: a card whose prose concedes it overturns a prior approval cannot also declare itself
+self-approvable. That field is what a future session greps to decide whether it may just do this.
 
 ## Acceptance
 

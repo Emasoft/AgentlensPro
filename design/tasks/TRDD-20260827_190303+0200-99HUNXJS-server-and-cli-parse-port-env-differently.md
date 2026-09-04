@@ -1,9 +1,10 @@
 ---
 trdd-id: 99HUNXJS
 title: The server and the CLI parse the same port env vars by different rules
-column: testing
+column: ai_review
 created: 2026-08-27T19:03:03+0200
-updated: 2026-09-04T10:08:46+0200
+updated: 2026-09-04T10:11:41+0200
+implementation-commits: [a77ca36a, 35118d19, f5cabd35, 9147d608]
 current-owner: main
 task-type: bugfix
 severity: LOW
@@ -51,9 +52,18 @@ start (exit non-zero, naming the variable and its value) may beat any silent fal
 
 ## Acceptance
 
-- [x] One port parser, imported by `standalone/server.ts`, `src/cli/setup.ts` and `src/cli/cliCore.ts`.
-- [x] A test table asserting all three sites agree on `['', '   ', 'abc', '0', '-1', '65536', '80.5', '3e3', '8080/evil']`.
-      (Checked WRONGLY on 2026-09-03 against a tautological table, un-checked, re-earned 2026-09-04 — see STATE.)
+- [x] One port parser, imported by every site that reads a port env var — `src/cli/cliCore.ts`
+      (which defines it), `src/cli/setup.ts`, `src/cli/serverControl.ts`, `standalone/cli.ts`.
+      (Originally named `standalone/server.ts`, deleted in 567fc5c2 before this card landed. That
+      box was left checked-but-vacuous until 2026-09-04; naming the sites that exist is greppable,
+      "satisfied vacuously" is not.)
+- [x] A test table pinning the parser's behaviour LITERALLY at `resolveCtx`, plus a cross-site
+      check that `alcoreServeArgs` is wired to the same values, over
+      `['', '   ', 'abc', '0', '-1', '65536', '80.5', '3e3', '8080/evil']` on all three variables.
+      (Reworded from "all three sites agree": there are TWO sites, not three, and the cross-site
+      half is tautological w.r.t. parsing — it catches wiring drift, the literal table catches
+      parser regressions. Checked WRONGLY on 2026-09-03 against a table that could not fail;
+      re-earned 2026-09-04 under mutation. See STATE.)
 - [x] The refuse-vs-fallback decision recorded here before the code lands.
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-03
@@ -134,6 +144,15 @@ glob and keeps the interface. The lesson is the reusable part: a config file car
 one setting you are trying to defeat, so replace it selectively rather than emptying it.
 
 **Files:** `src/cli/setup.ts`, `standalone/cli.ts`, `src/test/setupPortEnv.test.ts` (new).
+
+**`implementation-commits:` starts with `a77ca36a`, and that SHA will surprise you.** Its subject
+is *"fix(setup): stop classifying the review supervisor as a stale registration"* — nothing to do
+with ports. But `git blame -L 112,116 src/cli/setup.ts` puts this card's three `envPort` lines
+there, so it IS where the code landed: the setup.ts half of this fix was swept into an unrelated
+commit and the card's trail pointed nowhere near it until 2026-09-04. Listed deliberately, with
+this note, because a SHA a reader cannot make sense of is worse than one they were warned about.
+The lesson is the reusable part: a commit that carries two unrelated changes breaks backtracking
+for BOTH of them, and only the one named in the subject is findable afterwards.
 
 **NEXT ACTION:** none — ready for ai_review / merge into `testing`.
 

@@ -31,41 +31,32 @@ const PORT_VARS: readonly PortVar[] = VARS.map(v => v.env)
 const REJECTED = ['', '   ', 'abc', '0', '-1', '65536', '80.5', '8080/evil']
 
 // Accepted -> the number itself, regardless of that variable's fallback.
-const ACCEPTED: Array<[string, number]> = [
+const ACCEPTED_TODAY: Array<[string, number]> = [
   ['8080', 8080], // positive control: a table of nothing but fallbacks is satisfied by a parser
   //                 that ignores its argument entirely, so one valid input must survive intact.
-  ['3e3', 3000], // see the note below — accepted today, not necessarily correctly.
+  ['3e3', 3000], // ACCEPTED_TODAY (Number('3e3') === 3000). Only carries information on MCP/OTLP, where
+  //                accepted (3000) differs from the fallback. Whether it SHOULD be: TRDD-EGGERLEO.
   ['1', 1], // boundary: with '0'/'-1' above, the only rows exercising `n > 0`.
   ['65535', 65535], // boundary: with '65536' above, the only rows exercising `n < 65536`.
 ]
 
-// `3e3` is ACCEPTED, not rejected: `Number('3e3')` is 3000, an integer in range. On UI_PORT that
-// is indistinguishable from the 3000 fallback, which is why the row is also checked on MCP_PORT
-// and OTLP_PORT — there, accepted yields 3000 and rejected would yield 4316/4318, so those two
-// rows are the ones carrying information.
-//
-// Whether it SHOULD be accepted is NOT settled, and this row is a record of today's behaviour,
-// not an endorsement of it. Measured: `envPort` also accepts '0x1F80' -> 8064, '0b11' -> 3 and
-// '+8080' -> 8080, because it delegates to bare `Number()`. A `/^\d+$/` guard would reject all
-// of them. That is a behaviour change to a ratified parser, so it is TRDD-EGGERLEO, not this
-// card. If EGGERLEO lands, this row moves to REJECTED.
-
-/** Set exactly the three port vars for the duration of `fn`, restoring whatever was there.
- *  All three are always captured, so an ambient MCP_PORT in the developer's shell cannot leak
- *  into a case that only names UI_PORT. */
-function withPortEnv(vars: Partial<Record<PortVar, string>>, fn: () => void) {
-  const saved: Partial<Record<PortVar, string | undefined>> = {}
-  for (const k of PORT_VARS) saved[k] = process.env[k]
+/** Set exactly the named port vars for the duration of `fn`, clearing the others and restoring
+ *  all three afterwards — so an ambient MCP_PORT in the developer's shell cannot leak into a case
+ *  that only names UI_PORT.
+ *
+ *  Takes TUPLES, not an object, because a computed key erases the type constraint: with
+ *  `Partial<Record<PortVar, string>>`, `{ [someString]: v }` compiles and `{ LITERAL_TYPO: v }`
+ *  does not — so the object form silently accepts a key `PORT_VARS` then ignores, i.e. a typo
+ *  yields a test that sets nothing and still passes. Verified with tsc: the computed-key case
+ *  raises no error, the literal-key case raises TS2353. A tuple's element type IS checked. */
+function withPortEnv(set: ReadonlyArray<readonly [PortVar, string]>, fn: () => void) {
+  const saved = PORT_VARS.map(k => [k, process.env[k]] as const)
   try {
-    for (const k of PORT_VARS) {
-      const v = vars[k]
-      if (v === undefined) delete process.env[k]
-      else process.env[k] = v
-    }
+    for (const k of PORT_VARS) delete process.env[k]
+    for (const [k, v] of set) process.env[k] = v
     fn()
   } finally {
-    for (const k of PORT_VARS) {
-      const v = saved[k]
+    for (const [k, v] of saved) {
       if (v === undefined) delete process.env[k]
       else process.env[k] = v
     }
@@ -73,7 +64,12 @@ function withPortEnv(vars: Partial<Record<PortVar, string>>, fn: () => void) {
 }
 
 /** The port `alcoreServeArgs` would hand the spawned server for `flag`. Reads the argv it builds
- *  rather than re-deriving it, so this really is the other site's answer. */
+ *  rather than re-deriving it, so this really is the other site's answer.
+ *
+ *  `alcoreServeArgs` calls `findMediaDir()`, which resolves here via its third candidate
+ *  (`../../../media`, present for the `out/test/cli/` layout) against `media/index.html` —
+ *  TRACKED source, so this works on a fresh clone with no build. An `out/` depth change would
+ *  break it; a missing bundle would not. */
 function spawnedPort(flag: string): number {
   const argv = alcoreServeArgs(process.env, '/tmp/agentlenspro-test-data')
   const i = argv.indexOf(flag)
@@ -87,12 +83,12 @@ suite('port env vars resolve identically at every site (TRDD-99HUNXJS)', () => {
   for (const { env, field, flag, fallback } of VARS) {
     const rows: Array<[string, number]> = [
       ...REJECTED.map((raw): [string, number] => [raw, fallback]),
-      ...ACCEPTED,
+      ...ACCEPTED_TODAY,
     ]
 
     for (const [raw, expected] of rows) {
       test(`${env}=${JSON.stringify(raw)} -> ${expected} at both setup and the spawn path`, () => {
-        withPortEnv({ [env]: raw }, () => {
+        withPortEnv([[env, raw]], () => {
           const ctx = resolveCtx({ home: '/tmp/agentlenspro-test-home', repoRoot: process.cwd() })
 
           // 1. LITERAL — hardcoded expected value, so a regression INSIDE the parser fails here.
@@ -112,7 +108,7 @@ suite('port env vars resolve identically at every site (TRDD-99HUNXJS)', () => {
     }
 
     test(`an unset ${env} resolves to the documented default ${fallback} at both sites`, () => {
-      withPortEnv({}, () => {
+      withPortEnv([], () => {
         const ctx = resolveCtx({ home: '/tmp/agentlenspro-test-home', repoRoot: process.cwd() })
         assert.strictEqual(ctx[field], fallback)
         assert.strictEqual(spawnedPort(flag), fallback)
@@ -121,7 +117,7 @@ suite('port env vars resolve identically at every site (TRDD-99HUNXJS)', () => {
   }
 
   test('an explicit opts port still wins over the env var', () => {
-    withPortEnv({ UI_PORT: '9999', MCP_PORT: '9998', OTLP_PORT: '9997' }, () => {
+    withPortEnv([['UI_PORT', '9999'], ['MCP_PORT', '9998'], ['OTLP_PORT', '9997']], () => {
       const ctx = resolveCtx({
         home: '/tmp/agentlenspro-test-home',
         repoRoot: process.cwd(),
