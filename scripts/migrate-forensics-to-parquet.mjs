@@ -121,9 +121,42 @@ for (const t of tables) {
 // The declared SQLite types, kept because reading as VARCHAR deliberately discarded them. Without
 // this file the migration is lossy in a way no row count reveals: the values survive, the intent
 // does not.
+// Read the CREATE TABLE text from the source's own sqlite_master. Two earlier attempts were wrong
+// in ways that both LOOKED fine:
+//   - `pragma_table_info('<t>')` resolves against DUCKDB's catalog, not the attached SQLite file,
+//     so it finds nothing for a table that only exists over there;
+//   - and it was wrapped in `.catch(() => [])`, so that nothing became an empty array, silently.
+// The result shipped as a `_schema.json` whose `declared` map was `{}` for all four tables — a
+// file whose entire job is preserving the types `all_varchar` discarded, preserving none of them.
+// A swallowed error in a data-preservation path is data loss with a success message on top.
+// sqlite_master.sql is the authoritative DDL and cannot be empty for a table that exists, so a
+// blank here is a real failure and is treated as one.
 const declared = {}
+const undeclared = []
 for (const t of tables) {
-  declared[t] = (await q(`SELECT name, type, "notnull", pk FROM pragma_table_info('${t}')`).catch(() => []))
+  const rows = await q(`SELECT sql FROM ${scan('sqlite_master')} WHERE type='table' AND name='${t}'`)
+  const ddl = rows.length ? rows[0].sql : null
+  if (!ddl) undeclared.push(t)
+  declared[t] = ddl
+}
+if (undeclared.length) {
+  console.error(`\nmigrate-forensics: FAIL — no CREATE TABLE recovered for: ${undeclared.join(', ')}.`)
+  console.error('  Reading every column as VARCHAR discards the declared types, so this DDL is the')
+  console.error('  ONLY record of them. Migrating without it is lossy. Delete NOTHING.')
+  process.exit(1)
+}
+
+// A BLOB read through all_varchar is not guaranteed to round-trip: the bytes go through a text
+// decode, and a hash computed on both sides of the SAME lossy decode matches while the data is
+// destroyed — the check would confirm the corruption rather than catch it. So refuse outright
+// rather than migrate a BLOB and report OK.
+const blobbed = Object.entries(declared).filter(([, ddl]) => /\bBLOB\b/i.test(ddl || ''))
+if (blobbed.length) {
+  console.error(`\nmigrate-forensics: FAIL — BLOB column(s) in: ${blobbed.map(([t]) => t).join(', ')}.`)
+  console.error('  all_varchar routes values through a text decode, and the content hash is computed')
+  console.error('  on BOTH sides of that same decode — so it would MATCH even if the bytes were')
+  console.error('  mangled. Export BLOBs explicitly before trusting this tool. Delete NOTHING.')
+  process.exit(1)
 }
 const schemaPath = path.join(OUT, '_schema.json')
 fs.writeFileSync(
