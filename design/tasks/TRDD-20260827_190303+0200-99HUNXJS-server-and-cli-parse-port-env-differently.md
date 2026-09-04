@@ -3,7 +3,7 @@ trdd-id: 99HUNXJS
 title: The server and the CLI parse the same port env vars by different rules
 column: testing
 created: 2026-08-27T19:03:03+0200
-updated: 2026-09-04T10:00:39+0200
+updated: 2026-09-04T10:05:31+0200
 current-owner: main
 task-type: bugfix
 severity: LOW
@@ -53,6 +53,7 @@ start (exit non-zero, naming the variable and its value) may beat any silent fal
 
 - [x] One port parser, imported by `standalone/server.ts`, `src/cli/setup.ts` and `src/cli/cliCore.ts`.
 - [x] A test table asserting all three sites agree on `['', '   ', 'abc', '0', '-1', '65536', '80.5', '3e3', '8080/evil']`.
+      (Checked WRONGLY on 2026-09-03 against a tautological table, un-checked, re-earned 2026-09-04 — see STATE.)
 - [x] The refuse-vs-fallback decision recorded here before the code lands.
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-03
@@ -73,9 +74,50 @@ the new test can assert them directly instead of running the whole multi-step `r
 introducing a NEW refuse-vs-fallback split in this bugfix would re-litigate that decision on a
 LOW-severity card whose acceptance only asked for one shared parser, not a behavior change.
 
-**Gates:** `pnpm run check-types` exit 0. `npx eslint src/cli/setup.ts src/cli/serverControl.ts
-standalone/cli.ts src/test/setupPortEnv.test.ts --quiet` exit 0. New suite
-`src/test/setupPortEnv.test.ts` (11 tests, all `resolveCtx`-level, no mocks) — 11 passing, exit 0.
+**Gates:** `pnpm run check-types` exit 0, `eslint --quiet` exit 0, `src/test/setupPortEnv.test.ts`
+**40 passing** exit 0 — and, the only number that means anything here, **11 FAILING under mutation**
+(see below).
+
+### The first version of this test could not fail — 2026-09-04
+
+The 2026-09-03 suite (11 tests) asserted, for each malformed input:
+
+```ts
+assert.strictEqual(ctx.uiPort, Number(envPort(bad, 3000)))   // WRONG
+```
+
+`resolveCtx` IS `Number(envPort(process.env.UI_PORT, 3000))` (setup.ts:114). The oracle was the
+subject, so the assertion reduced to `f(x) === f(x)`: it held for every input AND for every
+possible behaviour of `envPort`. Stub the parser to `return '9999'` and all nine rows stayed
+green. Acceptance box 2 — "a test table asserting all three sites agree" — was checked on the
+strength of it, while what shipped asserted ONE site was consistent with ITSELF on ONE variable.
+A nine-row table of alarming inputs (`'8080/evil'`, `'65536'`) is what made it read as rigorous;
+that is what makes this worse than having written no table at all.
+
+**Rewritten** with two oracles, neither of which calls `envPort`:
+
+1. **Literal table** — each raw value maps to a hardcoded expected port, so a regression *in the
+   parser* fails the suite. Includes a **positive control** (`'8080' -> 8080`): a table of nothing
+   but fallbacks is satisfied by a parser that ignores its argument entirely.
+2. **Cross-site** — `resolveCtx` vs the argv `alcoreServeArgs` actually hands the spawned server.
+   This is the "sites agree" half, and it is the bug the card exists for: the two disagreeing is
+   what pointed status at port 0 while the server bound 3000.
+
+Extended to all three variables (`resolveCtx` reads all three; the card names all three).
+
+**MUTATION-VERIFIED, because a passing test proves nothing here — the old one passed too.** With
+`envPort` stubbed to `return String(fallback)`: **11 failing, exit 11.** The failures land exactly
+where the design predicts, and one ABSENCE confirms the reasoning: `UI_PORT="3e3"` did NOT fail,
+because `Number('3e3')` is 3000 which is also UI's fallback — accept and reject are
+indistinguishable on that variable. `MCP_PORT="3e3"` and `OTLP_PORT="3e3"` both DID fail (3000 vs
+4316/4318). That is the whole reason the row is checked on all three, and it is why `3e3` is
+listed under ACCEPTED, not REJECTED: scientific notation is *accepted* by `envPort` today.
+
+**Not covered:** the one production line this card changed in `standalone/cli.ts` has no test. It
+lives in `runServerForeground`'s stdout handler, reachable only after spawning a real server and
+matching `/UI\/API listening/`. It is a one-call substitution to the same parser the suite
+exercises through `resolveCtx`; spawning a server to cover it would cost more than it proves. Say
+so rather than letting the 40-test count imply coverage it does not have.
 
 Run ONE suite with the repo's own idiom, the one `package.json::test:browser` already uses:
 
