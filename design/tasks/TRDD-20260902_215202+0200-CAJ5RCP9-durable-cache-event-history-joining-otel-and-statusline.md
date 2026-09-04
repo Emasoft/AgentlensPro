@@ -11,7 +11,7 @@ min-approval-requirement: none
 blocked-by: []
 related: [6SPXOV0P, 5PUD8RKE, B9ERTBZ9]
 requested-by: user
-eht: [9SYRK6SW, IRNHEN4Z, GVA8TTJF, QSFYIHUO, N6A8VX3G]
+eht: [9SYRK6SW, IRNHEN4Z, GVA8TTJF, QSFYIHUO, N6A8VX3G, TP3BA3ED]
 ---
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-03
