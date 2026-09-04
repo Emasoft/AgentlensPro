@@ -136,6 +136,23 @@ check(run(`cd \${PWD} && cp x ${path.basename(link)}/f`).denied, '...brace form 
 // NOT claim `matched`, so a nonexistent leaf still gets gated — we do not know where that cd went,
 // and guessing a directory is how the $PWD bypass worked.
 check(run(`cd $NOPE_UNSET && cp x ${path.basename(link)}/`).denied, 'an unexpandable cd target leaves the base where it was')
+check(!run(`cd $NOPE_UNSET && cp x ${path.basename(link)}/notyet`).denied, '...and claims no explicit base, so a nonexistent leaf stays gated')
+// DOCUMENTS AN ACCEPTED MISS, and pins nothing: `cd *` lands wherever the shell's glob lands, so
+// `cd * && cp x <symlink>/` is not caught. Treating the glob as unresolvable stops the guard
+// INVENTING `<cwd>/*` as a base, but that is a narrowing with no observable verdict change — the
+// gate skips the nonexistent leaf either way. Resolving it would mean running the glob.
+check(!run(`cd * && cp x ${path.basename(link)}/notyet`).denied, 'a glob is a directory only the shell knows')
+// A cd inside a command substitution runs in a subshell. Segmentation splits on the `&&` INSIDE
+// it, so effectiveCwd sees a torn `echo $( cd x ` whose cd looks top-level — prefixing that to any
+// command moved the base and hid the real symlink. All three spellings, because the first fix was
+// a lookbehind on `(` and one space walked straight past it.
+const sub = path.join(root, 'elsewhere')
+fs.mkdirSync(sub, { recursive: true })
+check(run(`cp x ${path.basename(link)}/`).denied, 'baseline for the substitution cases')
+check(run(`echo $( cd ${sub} && pwd ) && cp x ${path.basename(link)}/`).denied, 'a spaced $( cd … ) prefix does not move the base')
+check(run(`echo $(cd ${sub} && pwd) && cp x ${path.basename(link)}/`).denied, '...nor an unspaced one')
+check(run('echo `cd ' + sub + ' && pwd` && cp x ' + path.basename(link) + '/').denied, '...nor a backtick one')
+check(run(`(cd ${wtDir} && cp x node_modules/)`).denied, 'a plain subshell is NOT a substitution: its cd still counts')
 check(run(`sort -o ${link}/out ${link}/in`).denied, 'sort -o DOES write in place')
 check(run(`sed -i s/a/b/ ${link}/f`).denied, 'sed is not read-only at all')
 

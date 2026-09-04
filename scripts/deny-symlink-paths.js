@@ -215,9 +215,24 @@ function effectiveCwd(segment, baseCwd) {
   // `(` is a boundary, not text: `(cd <wt> && cp x node_modules/)` is the incident shape wearing
   // parentheses, and a `\s`-only boundary rejected the cd, resolved the relative path against the
   // HOOK's cwd, found nothing, and ALLOWED. Measured 2026-09-04 — the brace form `{ cd … ; }` was
-  // caught the whole time only because `{` happens to be followed by a space. `$(` is excluded: a
-  // cd inside a command substitution runs in a subshell and never moves the parent.
-  const m = /(?:^|\s|(?<!\$)\()(?:cd|pushd)\s+(?:--\s+)?(['"]?)([^'"&;|]+)\1(?:\s|$)/.exec(segment)
+  // caught the whole time only because `{` happens to be followed by a space.
+  //
+  // A cd inside a command substitution runs in a subshell and never moves the parent, so blank
+  // those spans before looking. The first attempt was a `(?<!\$)\(` lookbehind on the boundary,
+  // which is a character-level guard on a REGION-level problem: `$( cd x && …)`, with one space,
+  // matched the `\s` branch instead and the lookbehind was never consulted. Measured 2026-09-04 —
+  // prefixing `echo $( cd /elsewhere && pwd ) &&` turned a DENY into an ALLOW. Blanking the region
+  // needs no boundary trickery and covers every spelling of the inside. Length does not matter
+  // here: this function extracts a target, it computes no offsets.
+  // The second replace is the load-bearing one: segmentation splits on `&&`/`;`/`|`, which are
+  // ordinary characters INSIDE a substitution, so `echo $( cd x && pwd ) && cp …` reaches this
+  // function already torn into `echo $( cd x ` — an unbalanced `$(` whose cd looks top-level. Blank
+  // from an unclosed opener to the end of the segment; a plain `(cd wt && …)` subshell has no `$`
+  // and stays visible, which is the shape the `(` boundary above exists for.
+  const visible = segment
+    .replace(/\$\([^()]*\)|`[^`]*`/g, (s) => ' '.repeat(s.length))
+    .replace(/\$\([\s\S]*$|`[\s\S]*$/, (s) => ' '.repeat(s.length))
+  const m = /(?:^|[\s(])(?:cd|pushd)\s+(?:--\s+)?(['"]?)([^'"&;|]+)\1(?:\s|$)/.exec(visible)
   if (!m) return { dir: baseCwd, matched: false }
   const target = m[2].trim()
   if (!target || target === '-') return { dir: baseCwd, matched: false }
@@ -231,9 +246,11 @@ function effectiveCwd(segment, baseCwd) {
   const expanded = target
     .replace(/^\$\{?PWD\}?(?=\/|$)/, baseCwd)
     .replace(/^(?:~|\$\{?HOME\}?)(?=\/|$)/, process.env.HOME || '')
-  // Same rule for a leftover `~`: `~otheruser` is a home this guard cannot resolve, and resolving
-  // it against baseCwd would invent `<cwd>/~otheruser` — the same fictional-directory bypass.
-  if (expanded.includes('$') || expanded.includes('`') || expanded.startsWith('~')) {
+  // Same rule for a leftover `~` and for a GLOB: `~otheruser` is a home this guard cannot resolve,
+  // and `cd *` is a directory only the shell knows. Both would invent `<cwd>/~otheruser` or
+  // `<cwd>/*` — the same fictional-directory bypass. Measured 2026-09-04: in a directory with one
+  // subdirectory holding a symlinked node_modules, `cd * && cp x node_modules/` ALLOWED.
+  if (/[$`*?[\]]/.test(expanded) || expanded.startsWith('~')) {
     return { dir: baseCwd, matched: false }
   }
   return { dir: path.isAbsolute(expanded) ? expanded : path.resolve(baseCwd, expanded), matched: true }
@@ -340,6 +357,7 @@ process.stdin.on('end', () => {
   if (!cmd) process.exit(0)
 
   let hit = null
+  let maskBroken = null
   // FAIL OPEN on any internal error. A PreToolUse hook that throws stops guarding while the session
   // looks normal, so every failure path here allows and says so on stderr.
   try {
@@ -368,20 +386,12 @@ process.stdin.on('end', () => {
     // length would extract a DIFFERENT path than the one the command names — a wrong answer with
     // full confidence, the worst shape a guard has. Unlike the catch below this does NOT fail open:
     // it stops analysing and reports what it cannot check, because "I could not read this command"
-    // is a true statement and "no symlink here" would not be.
+    // is a true statement and "no symlink here" would not be. It only RAISES the flag here and
+    // writes its verdict outside the try — writing it in place put the one branch designed to fail
+    // CLOSED inside the catch that fails OPEN, so an EPIPE on its own stdout would have reverted it.
     if (segmentable.length !== cmd.length) {
-      process.stdout.write(JSON.stringify({
-        hookSpecificOutput: {
-          hookEventName: 'PreToolUse',
-          permissionDecision: 'deny',
-          permissionDecisionReason:
-            `deny-symlink-paths.js cannot check this command: masking changed its length `
-            + `(${cmd.length} -> ${segmentable.length}), so every path it extracted would come from `
-            + `the wrong offset. This is a bug in the guard, not in your command — report it. `
-            + `Every mask in this guard must be length-preserving.`,
-        },
-      }))
-      process.exit(0)
+      maskBroken = `${cmd.length} -> ${segmentable.length}`
+      throw new Error('mask length invariant broken')
     }
     // PIPELINES FIRST. A read-only command is only harmless if its OUTPUT goes nowhere dangerous:
     // `ls /tmp/link | oppa` reads through the symlink and hands the result to a binary we know
@@ -463,7 +473,23 @@ process.stdin.on('end', () => {
       if (hit) break
     }
   } catch (e) {
-    process.stderr.write(`[deny-symlink-paths] check failed, allowing: ${e.message}\n`)
+    if (!maskBroken) {
+      process.stderr.write(`[deny-symlink-paths] check failed, allowing: ${e.message}\n`)
+      process.exit(0)
+    }
+  }
+  if (maskBroken) {
+    process.stdout.write(JSON.stringify({
+      hookSpecificOutput: {
+        hookEventName: 'PreToolUse',
+        permissionDecision: 'deny',
+        permissionDecisionReason:
+          `deny-symlink-paths.js cannot check this command: masking changed its length `
+          + `(${maskBroken}), so every path it extracted would come from the wrong offset. This is a `
+          + `bug in the guard, not in your command — report it. Every mask here must be `
+          + `length-preserving.`,
+      },
+    }))
     process.exit(0)
   }
   if (!hit) process.exit(0)
