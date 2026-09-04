@@ -3,7 +3,7 @@ trdd-id: EGGERLEO
 title: envPort accepts hex exponent and signed forms that nobody types as a port
 column: todo
 created: 2026-09-04T10:06:34+0200
-updated: 2026-09-04T10:28:30+0200
+updated: 2026-09-04T16:50:24+0200
 current-owner: main-session
 task-type: bugfix
 project-id: agentlenspro
@@ -71,6 +71,52 @@ accepts that is actually a port. `Number.isInteger`/range checks stay as they ar
 input — a real regression. Checked for other legitimate inputs the guard would break and found
 none: `'08080'` (leading zero) passes the regex and `Number` still gives 8080; a 20-digit string
 passes the regex and is then rejected by `n < 65536`, exactly as it is today.
+
+## NEW EVIDENCE 2026-09-04T16:50+0200 — a second engine now has a vote, and it BREAKS the proposed fix
+
+Filed as evidence only. **The decision is untouched and still `manager`** — this section adds an
+argument the card did not have and corrects the one-line fix; it does not exercise box 1.
+
+Since TRDD-1B98LCVR the server is Rust, and TRDD-4MJT92J7 established that `alcore` reads
+`MCP_PORT` itself (`server_stats.rs:68`, `s.trim().parse::<u16>()`). So `envPort` is no longer the
+only port parser in the product, and "what shape is a port" is now a question two engines answer
+differently. **Both columns below were RUN** — Rust via `rustc`, TS via `node -e` on the card's own
+proposed `/^\d+$/` guard:
+
+| input | Rust `.trim().parse::<u16>()` | proposed TS `/^\d+$/` | agree? |
+|---|---|---|---|
+| `'8080'` | `Some(8080)` | ACCEPT 8080 | yes |
+| `'3e3'` | `None` | REJECT | **yes — fix removes a divergence** |
+| `'0x1F80'` | `None` | REJECT | **yes — fix removes a divergence** |
+| `'0b11'` | `None` | REJECT | **yes — fix removes a divergence** |
+| `'+8080'` | **`Some(8080)`** | **REJECT** | **NO — fix CREATES a divergence** |
+| `' 8080 '` | `Some(8080)` | ACCEPT 8080 | yes |
+| `'08080'` | `Some(8080)` | ACCEPT 8080 | yes |
+| `'-1'` | `None` | REJECT | yes |
+
+**This strengthens the case for rejecting non-decimal literals** — decimal-only is what the Rust
+half already enforces by construction, so the change makes the two engines agree rather than
+imposing a new opinion. Today they disagree on `3e3` (TS 3000 / Rust 4316) and `0x1F80`
+(TS 8064 / Rust 4316): the same env var, two different live ports.
+
+**But the one-line fix as written is WRONG, and this is the part worth catching before it lands.**
+Rust's integer `FromStr` accepts a leading `+`, so `/^\d+$/` would reject an input Rust accepts —
+trading three divergences for a fourth instead of eliminating all four. The alignment-preserving
+guard is:
+
+```ts
+const t = raw?.trim()
+const n = /^\+?\d+$/.test(t ?? '') ? Number(t) : NaN
+```
+
+`Number('+8080')` is `8080`, so accepting the sign costs nothing and keeps the two engines
+byte-identical on all eight vectors above. (Note `-8080` stays rejected by both — the regex has no
+`-`, and a negative fails the range check regardless.)
+
+**Whichever way box 1 is decided, the Rust side must be decided WITH it.** If TS goes decimal-only,
+Rust already matches (modulo the `+`); if TS keeps `Number()`'s looseness, then TRDD-4MJT92J7's box
+2 has to make Rust loose to match, which is far harder — `str::parse` has no hex/exponent mode.
+That asymmetry is itself an argument for the strict direction.
 
 **`min-approval-requirement: manager`, not `none`** — this card exists to revisit a decision
 ratified in TRDD-BSDR4TRM's ai_review. It was filed as `none` on 2026-09-04 and corrected the same
