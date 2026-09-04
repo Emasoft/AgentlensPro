@@ -218,6 +218,14 @@ check(run(`cd $PWD/a(b)/sub && cp x node_modules/`).denied, 'a $PWD prefix and a
 // different question and lost the symlink entirely — in the ARGUMENT position, not just after a cd.
 check(runFromElsewhere(`cp x ${path.basename(link)}/`).denied, 'control: a relative arg still resolves against the session cwd')
 check(runFromElsewhere(`cp x $PWD/${path.basename(link)}/`).denied, '$PWD in an argument is the session cwd, not the hook process cwd')
+// A variable the COMMAND assigns makes our inherited copy stale. Reading ours claimed a base the
+// command never used — and claiming ANY base disables the existence gate downstream.
+process.env.SYMGUARD_STALE = path.join(root, 'elsewhere')
+check(run(`SYMGUARD_STALE=${wtDir} && cd $SYMGUARD_STALE && cp x ${path.basename(link)}/`).denied, 'a variable the command reassigns is not read from our environment')
+// And the rule those bypasses all reduced to: never claim a base that does not exist, because that
+// claim is what turns the gate off.
+check(!run(`cd ${root}/does-not-exist && cp x ${path.basename(link)}/notyet`).denied, 'a nonexistent cd target claims nothing')
+check(run(`cd ${root}/does-not-exist && cp x ${path.basename(link)}/`).denied, '...so the REAL cwd is still checked')
 // The conservative half. Asserting DENY, not ALLOW: an allow-side assertion here is vacuous —
 // both the right answer and the fictional base produce "no symlink found". Claiming nothing leaves
 // the base at the real cwd, where `linked/` IS a symlink; claiming the fictional base hides it.

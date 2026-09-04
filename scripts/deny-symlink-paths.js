@@ -145,6 +145,11 @@ const OTP_TTL_MS = 15 * 60 * 1000
 /** Expand ~ and $VAR / ${VAR} from the hook's environment. A token that still contains an
  *  unresolved `$` after this is dropped: guessing at a variable we cannot see would produce a
  *  verdict about a path that does not exist. */
+/** Variables the COMMAND assigns, so `expand` knows our copy of them is stale. Module-level because
+ *  this is a one-shot hook process that handles exactly one command; it is filled once, before any
+ *  analysis, and never mutated again. */
+const assignedInCommand = new Set()
+
 function expand(tok, baseDir) {
   let s = tok
   if (s.startsWith('~/') || s === '~') s = path.join(os.homedir(), s.slice(1))
@@ -153,9 +158,19 @@ function expand(tok, baseDir) {
   // generic env pass below must not answer this one. Measured 2026-09-04 with the hook running
   // outside the session cwd: `cp x $PWD/<symlink>/` resolved under the HOOK's directory, found
   // nothing, and ALLOWED, while the same command without the prefix denied.
-  if (baseDir) s = s.replace(/^\$\{?PWD\}?(?=\/|$)/, baseDir)
+  s = s.replace(/^\$\{?PWD\}?(?=\/|$)/, baseDir)
+  // Every other `$VAR` comes from this process's environment, which is Claude Code's launch
+  // environment — usually the same one the command inherits, which is why resolving them is worth
+  // doing. But the command can REASSIGN one, and then our copy is stale: measured 2026-09-04,
+  // `REPO=<wt> && cd $REPO && cp x node_modules/` with a different `REPO` already in the hook's
+  // environment resolved against the STALE value and claimed `matched: true` on it — which
+  // DISABLES the existence gate, so the real symlink was never examined. ALLOW.
+  //
+  // So a variable the command assigns is treated as unknowable rather than read from our copy.
+  // Leaving the `$` in place makes this return null, and null means "I cannot read this", which
+  // keeps the gate on. The failure to avoid is "I read this, trust me", which turns it off.
   s = s.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)/g,
-    (m, a, b) => process.env[a || b] ?? m)
+    (m, a, b) => (assignedInCommand.has(a || b) ? m : process.env[a || b] ?? m))
   return s.includes('$') ? null : s
 }
 
@@ -294,6 +309,9 @@ function effectiveCwd(segment, baseCwd) {
   // improvement the tests showed was worth nothing. Ask the filesystem instead of guessing: if the
   // literal name exists, it is a directory, not a pattern.
   const isDirectory = (p) => { try { return fs.statSync(p).isDirectory() } catch { return false } }
+  // Kept even though the general existence rule below now covers every case the matrix reaches: it
+  // still guards the one this cannot, a directory whose literal name IS a glob character, where
+  // `cd *` would glob elsewhere while `<cwd>/*` really exists.
   if (/[*?[\]]/.test(expanded) && !isDirectory(resolved)) return { dir: baseCwd, matched: false }
   // A `)` TERMINATOR can cut a real name short: `cd /tmp/a(b)/sub` stops the unquoted branch at the
   // `(`-less `)`, yielding `/tmp/a(b` — a directory that does not exist — and `matched: true` then
@@ -321,8 +339,17 @@ function effectiveCwd(segment, baseCwd) {
       const wholeResolved = path.isAbsolute(whole) ? whole : path.resolve(baseCwd, whole)
       if (whole !== expanded && isDirectory(wholeResolved)) return { dir: wholeResolved, matched: true }
     }
-    if (!isDirectory(resolved)) return { dir: baseCwd, matched: false }
+    // No fallback here any more: the general existence rule below says the same thing for every
+    // path into this function, and mutation-testing confirmed this copy had become unreachable.
   }
+  // ONE rule, replacing what had become three case-by-case versions of it (the glob check, the
+  // paren repair's fallback, and the `$var` bailout's motivation): never claim `matched: true` for
+  // a base that does not exist. `matched: true` is what DISABLES the existence gate for every
+  // relative path after it, so asserting a fictional base is the single mechanism behind the
+  // `cd $PWD`, `cd *`, `cd %CD%` and mid-string `$HOME` bypasses — each of which was fixed
+  // separately before this. A directory the command is about to create cannot hold a symlink yet,
+  // so there is nothing to miss by declining here.
+  if (!isDirectory(resolved)) return { dir: baseCwd, matched: false }
   return { dir: resolved, matched: true }
 }
 
@@ -425,6 +452,11 @@ process.stdin.on('end', () => {
                     // own input is worse than the thing it guards against
   }
   if (!cmd) process.exit(0)
+
+  // Collected from the RAW command, before any masking: an assignment inside a quoted string is not
+  // an assignment, but over-collecting here only ever makes a variable unresolvable, which is the
+  // conservative direction.
+  for (const a of cmd.matchAll(/(?:^|[\s;&|(])([A-Za-z_][A-Za-z0-9_]*)=/g)) assignedInCommand.add(a[1])
 
   let hit = null
   let maskBroken = null
