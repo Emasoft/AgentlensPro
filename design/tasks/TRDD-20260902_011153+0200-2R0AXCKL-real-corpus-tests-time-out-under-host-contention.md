@@ -3,7 +3,7 @@ trdd-id: 2R0AXCKL
 title: The two real-corpus slow tests time out under host contention and turn a green gate red
 column: backburner
 created: 2026-09-02T01:11:53+0200
-updated: 2026-09-04T14:12:33+0200
+updated: 2026-09-04T14:17:45+0200
 implementation-commits: [84d6f500]
 current-owner: claude-agentlenspro
 task-type: bugfix
@@ -67,8 +67,20 @@ Two full-suite runs, **same tree, same commit, no source change between them**:
 |---|---|---|---|
 | `standalone server — P5 window auto-calibration` (5 tests) | 5 fail | 5 fail | DETERMINISTIC, pre-existing — not this card |
 | real-corpus timeouts (`cacheBreakTimeline`, `forensicsIndex`/FAL) | 2 fail | 3 fail | flaky — **this card's known pair** |
-| `segmentedSpanStore — compressSealedSegments` gzip (7 tests) | **7 fail** | **0 fail** | **flaky — vanished entirely** |
-| `serverRuntime — rssPressure` default HWM (1 test) | **1 fail** | **0 fail** | **flaky — vanished entirely** |
+| `segmentedSpanStore — compressSealedSegments` gzip (7 tests) | **7 fail** | **0 fail** | differs between runs — cause UNESTABLISHED |
+| `serverRuntime — rssPressure` default HWM (1 test) | **1 fail** | **0 fail** | differs between runs — cause UNESTABLISHED |
+
+**Do NOT read those two rows as "flaky" — that word was in an earlier draft of this section and
+is not supported.** N=2 with at least three uncontrolled variables between the runs: run A was
+preceded by `pnpm run compile-tests` and run B reused the existing `out/` (so run A may not have
+tested the same bytes); host load differed and was measured in neither (run A shared the machine
+with a `du -sh` over a 98 GB tree, run B with a live review fork); and these tests write real
+segments into temp dirs, so run-A residue could have changed run B's starting ground. "Flaky"
+names a cause. The measurement supports only the difference.
+
+**The claim that IS supported, and it is the one that mattered:** these failures are not caused by
+the 2026-09-04 session's commits, none of which touch `segmentedSpanStore.ts` or
+`serverRuntime.ts`. Stopping at that negative was the correct move; naming a class was not.
 
 Totals 15 vs 8. **Eight tests in two clusters this card does not name flipped from fail to pass
 with nothing changed.** A plausible mechanism for the gzip seven is that
@@ -88,17 +100,29 @@ criterion is widened below.
 ## Acceptance
 
 - [ ] Three consecutive full-suite runs on one tree, one of them under a deliberate foreign CPU load
-      (`yes > /dev/null &` ×cores), agree on the verdict for **every** test — not merely the two
-      named above. Widened 2026-09-04 on the measurement in the section above: the original
+      (`yes > /dev/null &` ×cores), reach the **SAME** verdict for **every** test — not merely the
+      two named above. Widened 2026-09-04 on the measurement in the section above: the original
       two-test wording would have been satisfiable while the gzip seven and the `rssPressure` one
       still flipped.
+      **"Same verdict" means DETERMINISM, not green.** The five `serverCalibration` tests fail in
+      every run; three runs agreeing they fail SATISFIES this box. This card is about a suite that
+      cannot make up its mind, not about a suite that passes — do not block it on unrelated
+      pre-existing failures. Spelled out because the earlier wording ("agree on the verdict") read
+      naturally as "green three times", which would have coupled this card to five failures it does
+      not own and made a release blocker unclosable by accident.
 - [ ] A skipped run prints WHY it skipped (no silent skip).
 - [ ] The `segmentedSpanStore` gzip tests do not depend on the live process RSS: they pass an
       explicit `underPressure` (and, where relevant, an explicit `nowMs`) rather than taking the
       default that reads `rssPressure()`. A test whose outcome depends on how much memory the
       suite happened to be using is not a test of the code under test.
-- [ ] The `serverRuntime — rssPressure` HWM-selection failure is explained. It is NOT covered by
-      the sweep-pause story and must not be closed by assuming it is.
+- [ ] The `serverRuntime — rssPressure` HWM-selection failure is triaged. It is NOT covered by the
+      sweep-pause story and must not be closed by assuming it is.
+      **This box is discharged EITHER by explaining it OR by filing it as its own card** — it must
+      not hold this one hostage. Added 2026-09-04 after a review pointed out the first wording
+      ("is explained") required solving an investigation this very card records as unresolved,
+      which is not a checkbox, it is an open question wearing one. A box that can only be ticked by
+      finishing unscoped work is how a bounded card silently becomes unclosable, and this card sits
+      on the release gate.
 
 ## Notes and lessons learned
 

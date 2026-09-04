@@ -87,6 +87,13 @@ by an engine that never runs here".
 
 ## Notes and lessons learned
 
+> **⚠ THE LESSON BELOW IS SUPERSEDED AND NAMES THE WRONG CAUSE — see the correction in
+> `## Approval log`, entry 2026-09-04T14:14+0200.** The transferable version lives in USER memory
+> at `debugging-methodology-verification-process-integrity` (atom `ATOM-WFQG-Y1CL`): the real
+> failure was acting on a TRUNCATED tool result, not choosing an unlucky grep token. This pointer
+> is here because a reader looking for lessons greps THIS heading and would otherwise never open
+> the Approval log.
+
 - **A grep for a SYMBOL cannot find documentation ABOUT that symbol.** Verifying this
   card's box 3, both I and an adversarial reviewer ran `grep API_CALLS_DIR src/`, got
   hits in only `db.ts` and `migrate.ts`, and concluded the fsync and verify passes were
