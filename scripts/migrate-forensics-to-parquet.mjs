@@ -48,12 +48,21 @@ if (!fs.existsSync(SRC)) {
 // opens the database properly (it does not byte-copy), so it sees them — but if the file is being
 // written WHILE we export, source and destination are snapshots of different instants and the
 // verification below would compare two moving targets. Warn loudly rather than silently racing.
+// ABORT, not warn. A non-empty -wal means committed data lives outside the .db file and a writer
+// may be active — in which case the `before` tally, the COPY, and the hash read are three different
+// instants of a moving database, and the verification compares two moving targets and prints a
+// green PASS. The directive is "do not lose any data"; a warning above a PASS line is not
+// protection, because the line the reader believes is the last one.
+const FORCE = process.argv.includes('--force')
 const wal = `${SRC}-wal`
 const walBytes = fs.existsSync(wal) ? fs.statSync(wal).size : 0
-if (walBytes > 0) {
-  console.warn(`migrate-forensics: WARNING — ${path.basename(wal)} is ${walBytes} bytes (uncommitted`)
-  console.warn('  or un-checkpointed data). Stop the writer and re-run, or the verify step compares')
-  console.warn('  two different instants of a moving database.')
+if (walBytes > 0 && !FORCE) {
+  console.error(`migrate-forensics: ABORT — ${path.basename(wal)} is ${walBytes} bytes.`)
+  console.error('  Committed data lives outside the .db file and a writer may be active, so source')
+  console.error('  and destination would be snapshots of different instants and the content hash')
+  console.error('  would compare two moving targets. Stop the writer (or checkpoint), then re-run.')
+  console.error('  --force overrides, and accepts that the verification proves less than it says.')
+  process.exit(2)
 }
 
 const inst = await DuckDBInstance.create(':memory:')
@@ -91,6 +100,22 @@ for (const t of tables) {
   const cols = (await q(`DESCRIBE SELECT * FROM ${scan(t)}`)).map((r) => r.column_name)
   const before = await tally(scan(t), cols)
   const dest = path.join(OUT, `${t}.parquet`)
+
+  // `COPY ... TO` overwrites unconditionally, and the verification only ever compares the source to
+  // what was just written — never to what was ALREADY there. So a source that lost rows (truncated,
+  // half-written, restored from an older backup) migrates cleanly OVER a good parquet and reports
+  // OK, because both sides genuinely agree. Refuse to shrink an existing export unless forced;
+  // growth is normal and passes untouched.
+  if (fs.existsSync(dest)) {
+    const prior = (await q(`SELECT count(*) AS n FROM read_parquet('${dest}')`))[0].n
+    if (Number(prior) > Number(before.__rows) && !FORCE) {
+      console.error(`migrate-forensics: ABORT — ${t}: existing parquet has ${prior} rows, source has ${before.__rows}.`)
+      console.error('  Overwriting would replace migrated data with a smaller source. The hash check')
+      console.error('  cannot catch this: it compares source to destination, and they would agree.')
+      console.error('  Investigate the source, or pass --force if the shrink is intended.')
+      process.exit(2)
+    }
+  }
 
   await con.run(`COPY (SELECT * FROM ${scan(t)}) TO '${dest}' (FORMAT PARQUET, COMPRESSION ZSTD)`)
 
