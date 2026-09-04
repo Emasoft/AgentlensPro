@@ -1,9 +1,9 @@
 ---
 trdd-id: 2R0AXCKL
-title: The two real-corpus slow tests time out under host contention and turn a green gate red
+title: The two real-corpus slow tests flip between runs and turn a green gate red
 column: backburner
 created: 2026-09-02T01:11:53+0200
-updated: 2026-09-04T14:17:45+0200
+updated: 2026-09-04T14:23:13+0200
 implementation-commits: [84d6f500]
 current-owner: claude-agentlenspro
 task-type: bugfix
@@ -36,8 +36,21 @@ Both failures are mocha TIMEOUTS, not assertions:
 Both read the machine's real `~/.agentlens/otel-bodies` (thousands of files) and `this.skip()` when
 it is absent (`:698`, `:470`), so CI never runs them. `DELEGATION.md` already listed
 `cacheBreakTimeline` as a known-unrelated failure on 2026-09-01. The load-scaled budgets did not
-cover the contention: the load average was LOWER on the failing run, so a load-average scale is the
-wrong knob — the cost is IO/CPU contention on the bodies dir and the CPU, not runnable-queue depth.
+cover it: the load average was LOWER on the failing run, so a load-average scale is the wrong knob.
+
+**DOWNGRADED 2026-09-04 — the cause of the original two failures is UNESTABLISHED, exactly as for
+the eight in the section below.** This paragraph used to continue "…the cost is IO/CPU contention
+on the bodies dir and the CPU, not runnable-queue depth." That sentence is retracted: it names a
+mechanism nothing here measured, and it was written as a *substitute* for the load-average
+hypothesis the same paragraph had just disproved — swapping one unmeasured cause for another is
+not a correction. The evidence supports one claim: **two runs on the same tree disagreed.** That is
+N=2 with the single measured proxy pointing the WRONG way (lower load on the failing run), which is
+weaker than the gzip evidence retracted below, not stronger.
+
+The card was retitled the same day for the same reason: it asserted "time out under host
+contention" — a cause — in the most prominent field in the file, where a reader takes it before
+reading any of this. The filename still carries the old slug; renaming it would break every
+`TRDD-2R0AXCKL` path reference for no gain, and the `title:` field is the authoritative one.
 
 ## Why it matters
 
@@ -47,9 +60,14 @@ teaches the reader to shrug at a non-zero exit — the exact habit that lets a r
 
 ## Options (decide when picked up)
 
-1. Skip both under contention explicitly — e.g. when `os.loadavg()[0] / os.cpus().length > 1` or
+1. ⚠ **CONTRADICTED BY THIS CARD'S OWN DATA — do not implement as written.** The load-average gate
+   below cannot discriminate: the failing run had the LOWER load average (see the Symptom table),
+   so this skip would fire on the passing run and not the failing one. Kept, struck, as the record
+   of a fix that looked obvious and was disproved by evidence already in the file — the live-pid
+   half may still be worth something, the loadavg half is not.
+   ~~Skip both under contention explicitly — e.g. when `os.loadavg()[0] / os.cpus().length > 1` or
    when the live server pid is present — and PRINT the skip reason, so a skip is visible, never
-   silent.
+   silent.~~
 2. Bound the WORK instead of the time: cap the number of bodies files scanned (the tests assert
    "without crashing" and "honest coverage", not completeness), so the runtime is O(cap) regardless
    of corpus size.
@@ -65,7 +83,7 @@ Two full-suite runs, **same tree, same commit, no source change between them**:
 
 | cluster | run A | run B | verdict |
 |---|---|---|---|
-| `standalone server — P5 window auto-calibration` (5 tests) | 5 fail | 5 fail | DETERMINISTIC, pre-existing — not this card |
+| `standalone server — P5 window auto-calibration` (5 tests) | 5 fail | 5 fail | DETERMINISTIC, pre-existing — **now owned by TRDD-CS2W7E77** |
 | real-corpus timeouts (`cacheBreakTimeline`, `forensicsIndex`/FAL) | 2 fail | 3 fail | flaky — **this card's known pair** |
 | `segmentedSpanStore — compressSealedSegments` gzip (7 tests) | **7 fail** | **0 fail** | differs between runs — cause UNESTABLISHED |
 | `serverRuntime — rssPressure` default HWM (1 test) | **1 fail** | **0 fail** | differs between runs — cause UNESTABLISHED |
