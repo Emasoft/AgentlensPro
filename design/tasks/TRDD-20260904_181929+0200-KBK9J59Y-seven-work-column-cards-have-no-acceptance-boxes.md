@@ -37,6 +37,21 @@ Q9WD3K5R  todo       updated=2026-09-04  one-storage-gateway-not-thirty-four-mig
 **Seven cards have ZERO acceptance boxes — neither `- [ ]` nor `- [x]`.** `grep -c '^ *- \[ \]'`
 returns 0 for each, which is the same value it returns for a card whose every box is ticked.
 
+**CORRECTED 18:2x — "no criterion was ever written" was FALSE for one of them, and I asserted it
+without opening any.** A checkbox grep sees checkbox syntax; it says nothing about prose criteria.
+Checked afterwards for acceptance-shaped headings (`acceptance|verification|definition of done|
+criteria`, case-insensitive):
+
+- **`POLG0613` HAS `## ACCEPTANCE`** — criteria in prose, no checkboxes. It is assessable, and the
+  scan called it uncriteria'd.
+- The other **six** have no such heading at all: `NDKKOABG`, `YBJGIYI1`, `ZIWEB0UW`, `2C23ROPZ`,
+  `0Y8BMVK2`, `Q9WD3K5R`.
+
+So the supportable claim is the narrow one, and it still justifies this card: **seven cards have no
+checkboxes, so a checkbox count cannot triage them; six of those also have no acceptance-shaped
+section.** Even that is a heading grep — prose criteria under some other heading would evade it.
+The scope-inherits-the-search failure, committed in the card documenting a triage blind spot.
+
 ## Why this is worth a card and not just a note
 
 **A box-count scan is how this board actually gets triaged, including by me this session.** I ran
