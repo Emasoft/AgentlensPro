@@ -241,12 +241,13 @@ would all be invisible to them. Do not cite those searches as a rule-out.
 **TO SETTLE IT — snapshot, restart, compare THE SAME FILES:**
 
 ```bash
-set -e            # REQUIRED: without it a failing `find` truncates its output file
 D=~/.agentlens/store/api_calls
 rm -f /tmp/parts-before.txt /tmp/parts-after.txt
 find "$D" -name '*.parquet' | sort > /tmp/parts-before.txt        # BEFORE
+[ -s /tmp/parts-before.txt ] || { echo "BEFORE snapshot EMPTY — find failed; abort"; exit 1; }
 agentlenspro server restart
 find "$D" -name '*.parquet' | sort > /tmp/parts-after.txt         # AFTER
+[ -s /tmp/parts-after.txt ] || { echo "AFTER snapshot EMPTY — find failed, NOT data loss"; exit 1; }
 comm -23 /tmp/parts-before.txt /tmp/parts-after.txt               # (a) SURVIVES
 # then (b), the readability half — the node block below
 ```
