@@ -25,14 +25,39 @@ whose card has reached a terminal column (`complete`, `cancelled`,
 When `blocked-by` is empty, restore `column: pre-block-column` value (`todo`),
 then proceed to run the acceptance gates below before touching version/tag.
 
+**AFTER THE PUBLISH RUNS — do not close this card without doing this:** tick
+`IXMB2JVD` box 1 from that run's `publish-npm` log, then move IXMB2JVD to
+`complete`. It was removed from `blocked-by` on 2026-09-04 because its box can
+only be checked after a publish exists; it now sits in `post-release-verification:`.
+That field is a name of my own invention and **nothing parses it** (verified: no
+script under `scripts/` reads these frontmatter fields at all — this board is
+grep-and-human driven), so the reminder has to live HERE, in the block a resuming
+session is instructed to read first, and in the release recipe at the bottom.
+Removing a blocker without putting the work somewhere a human actually reaches is
+how a deadlock becomes a silently-dropped verification instead — the same
+disown-without-rehome failure that TRDD-CS2W7E77 was filed to repair.
+
 **DEADLOCK BROKEN 2026-09-04T15:13:48+0200 — 17 → 16, by USER decision.**
 
 `IXMB2JVD` was in `blocked-by` while its only open acceptance box reads *"The next release's
 `publish-npm` job goes green end-to-end"* — which REQUIRES a release. This card IS the release. So
-the gate could never be satisfied: draining all sixteen other blockers would still leave a
-seventeenth that only a publish can clear. **The board could not authorize a publish at all, and
-that — not any individual defect — is why this card had not moved.** The card's own box 3 states
+draining all sixteen other blockers would still leave a seventeenth that only a publish can clear,
+and that — not any individual defect — is why this card had not moved. The card's own box 3 states
 the circularity outright: "Proven by the NEXT release's run (box 1)."
+
+**CORRECTION 2026-09-04, same day: an earlier version of this paragraph said the gate "could never
+be satisfied" and "the board could not authorize a publish at all". That is OVERSTATED and is
+withdrawn.** There was a path that needed no gate change: publish a PRE-RELEASE (the pipeline is
+tag-driven, so `v2.33.3-rc.0` triggers `publish.yml`), watch `publish-npm` go green, tick
+IXMB2JVD box 1 from that run, then cut the real release. An RC run *is* "the next release's
+`publish-npm` job". The accurate diagnosis is therefore: **the gate required one publish to have
+occurred, and the board offered no way to distinguish a proving publish from the real one.** That
+is a genuine problem — it is not an impossibility.
+
+This matters beyond wording: the USER's decision to unlink was taken on the "impossible" framing,
+and the RC option was never put in front of them. The unlink may still be the better call (an RC
+burns a public version number on npm, permanently, to prove a pipeline). But it was presented as
+the only way out, and it was not.
 
 Moved to a new `post-release-verification:` field, which gates nothing. Nothing is weakened: the fix
 IXMB2JVD covers already landed (`f8b7560e`, the 30 × 20 s tarball retry), its tarball-property box
@@ -150,6 +175,17 @@ Per `.claude/project/memory/agentlenspro-publish-pipeline.md` and
    fallback fired — investigate before declaring done.
 5. Refresh local install (`npm link` / global reinstall as applicable),
    then `agentlenspro setup` to converge hooks/config to the new version.
+6. **Close out `post-release-verification: [IXMB2JVD]`** — tick that card's box 1
+   from THIS run's `publish-npm` log (green end-to-end, tarball verification
+   included, no manual intervention), then move IXMB2JVD to `complete`.
+   This step exists because IXMB2JVD was removed from `blocked-by` on
+   2026-09-04: its box can only be checked AFTER a publish, so leaving it as a
+   pre-release blocker made the gate unsatisfiable. Removing a blocker without
+   putting the work somewhere a human will actually reach it is how a deadlock
+   becomes a silently-dropped verification instead — the recipe is where a
+   publisher looks, so the reminder lives here, not only in a frontmatter field
+   that no tooling reads (verified: nothing under `scripts/` parses these
+   fields; this board is grep-and-human driven).
 
 **NEVER** publish locally (the 1.0.0 bootstrap is the only sanctioned
 exception, already done), and **NEVER** add a `registry-url:` / auth token
