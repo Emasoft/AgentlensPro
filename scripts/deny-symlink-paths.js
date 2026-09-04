@@ -367,9 +367,12 @@ function effectiveCwd(segment, baseCwd) {
     // token continues somewhere we cannot follow, so claim nothing.
     //
     // The stop class below is doing DOUBLE DUTY — token boundary and shell separator — and those
-    // are not the same set under escaping. `cd <dir>/sub\ dir` is ONE word, but the scan ends at
-    // the space, so `whole` keeps a trailing `\`. Measured 2026-09-04: still DENY, because a name
-    // ending in `\` resolves to nothing and the general rule declines. That is luck, not design —
+    // are not the same set under escaping. `cd <dir>/a(b)/sub\ dir` is ONE word — the `)` matters,
+    // because this scan only runs on the `)`-terminated path — but the scan ends at the space, so
+    // `whole` keeps a trailing `\`. Measured 2026-09-04: still DENY, because no directory is named
+    // `sub\` so the repair cannot rescue it and the general rule declines on the truncated
+    // `resolved`. Note `\` IS a legal filename byte: were `sub\` to exist we would claim it while
+    // the shell went to `sub dir` — a wrong base with the gate off. That is luck, not design —
     // any upstream unescaping would turn the truncated word into a real directory and make this a
     // live claim on the wrong base. This is the assumption an escaping-related change will trip on.
     if (end < visible.length && /['"]/.test(visible[end])) return { dir: baseCwd, matched: false }
