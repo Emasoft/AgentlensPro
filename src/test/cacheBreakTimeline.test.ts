@@ -9,6 +9,7 @@ import {
   type RawRequestForBreak, type BreakTiming,
 } from '../cacheBreakTimeline'
 import { loadScaledTimeout, skipIfUnmeasurable } from './loadAware'
+import { derivedTimeoutMs } from './helpers/derivedTimeout'
 
 // TRDD-6TQ2FBUR — REAL tests for the cache-break ROOT-CAUSE timeline. The classifier tests build a
 // synthetic before/after request pair per cause code and prove the classifier names the right culprit.
@@ -695,13 +696,16 @@ suite('cacheBreakTimeline — buildCauseCostPeakReport (cross-session cause cost
   // 🐌 slow — scans the real ~/.agentlens/otel-bodies directory (thousands of files). Skips when the
   // directory is absent (CI / a machine that never enabled OTEL_LOG_RAW_API_BODIES).
   test('builds a cause cost-peak report from the REAL OTEL bodies without crashing', async function () {
-    if (!fs.existsSync(defaultBodiesDir())) { this.skip(); return }
-    if (skipIfUnmeasurable(this)) return
-    this.timeout(loadScaledTimeout(120_000))
-    // scanCap is not decoration: this reads a LIVE capture directory that grows all day (measured
-    // 1,377 → 5,467 files in one evening on this machine), so an uncapped scan is a test whose
-    // runtime is set by how busy the user was — it passed for weeks and then blew a 120 s timeout
-    // with no code change. The cap makes the cost of this test a constant.
+    if (!fs.existsSync(defaultBodiesDir())) { this.skip() }
+    // TRDD-2R0AXCKL: load-average scaling was the wrong knob — this test timed out on a run whose
+    // load average was LOWER than a passing run, because the real cost is a readdirSync + per-entry
+    // scan over the WHOLE spool dir (unbounded by scanCap, same defect as TRDD-JQ4R8ZKN), not
+    // runnable-queue depth. Derive the ceiling from the measured spool size instead (see
+    // helpers/derivedTimeout.ts). scanCap below is not decoration: this reads a LIVE capture
+    // directory that grows all day (measured 1,377 → 5,467 files in one evening on this machine), so
+    // an uncapped scan is a test whose runtime is set by how busy the user was. The cap makes the
+    // cost of PARSING this test a constant; the derived timeout accounts for the LISTING cost.
+    this.timeout(derivedTimeoutMs(defaultBodiesDir(), 120_000))
     const report = await buildCauseCostPeakReport({ windowHours: 5, minTokens: 50_000, scanCap: 300 })
     assert.ok(report.coverage.note.length > 0)
     assert.strictEqual(report.groupBy, 'cause')
@@ -783,7 +787,7 @@ suite('cacheBreakTimeline — real machine data', () => {
   // 🐌 slow — scans the real ~/.agentlens/otel-bodies directory (thousands of files). Skips when the
   // directory is absent (CI / a machine that never enabled OTEL_LOG_RAW_API_BODIES).
   test('🐌 builds a timeline from the REAL OTEL bodies without crashing and reports honest coverage', async function () {
-    if (!fs.existsSync(defaultBodiesDir())) { this.skip(); return }
+    if (!fs.existsSync(defaultBodiesDir())) { this.skip() }
     // 4 minutes, not 2: this scans every captured body in the window, and on a machine with a live
     // capture spool it shares the run with the second real-corpus test below. It timed out at 120s
     // in a full-suite run while passing in 58s alone — a harness bound, not a product property.
@@ -813,11 +817,13 @@ suite('cacheBreakTimeline — real machine data', () => {
   // every other test green while WORKING_DIR_CHANGED / GIT_STATE_CHANGED became unemittable.
   test('🐌 the env + git region extractors actually match the REAL captured system prompts', async function () {
     const dir = defaultBodiesDir()
-    if (!fs.existsSync(dir)) { this.skip(); return }
-    if (skipIfUnmeasurable(this)) return
-    this.timeout(loadScaledTimeout(120_000))
+    if (!fs.existsSync(dir)) { this.skip() }
+    // TRDD-2R0AXCKL: same defect as the cause-cost-peak test above — the readdirSync below scans the
+    // WHOLE spool dir before the `.slice(0, 200)` bounds anything, so runtime tracks the live corpus
+    // size, not load average. Derive the ceiling from the measured spool size instead.
+    this.timeout(derivedTimeoutMs(dir, 120_000))
     const files = fs.readdirSync(dir).filter(f => f.endsWith('.request.json')).slice(0, 200)
-    if (files.length === 0) { this.skip(); return }
+    if (files.length === 0) { this.skip() }
     let withEnv = 0, withGit = 0, parsed = 0
     for (const f of files) {
       let body: RawRequestForBreak

@@ -14,6 +14,7 @@ import {
 import { defaultBodiesDir } from '../cacheCreationForensics'
 import { flush, openStore, Store } from '../store/db'
 import { ingestBody } from '../store/bodyStore'
+import { derivedTimeoutMs } from './helpers/derivedTimeout'
 
 // TRDD-FB5RG4P1 Phase 1 — REAL tests: no mocked bodies, no mocked join, no mocked DB. Every test
 // writes real request/response JSON to a tmp otel-bodies dir + a real sql.js main DB with a sessions
@@ -472,14 +473,11 @@ suite('FAL Phase 1 — 🐌 real machine data (skips when ~/.agentlens absent)',
     // is a readdirSync + per-entry statSync over the WHOLE spool dir (listBodyEvidence in
     // src/store/bodiesEvidence.ts — unbounded by windowHours/scanCap, since a spool row's ts is
     // unknown until parsed), so runtime tracks the LIVE corpus size, not a constant. Derive the
-    // ceiling from the measured spool entry count instead: ~5ms/entry is a generous stat+readdir
-    // budget under contention (a store repair may be hammering the same disk); floor at the old
-    // 180s so a small corpus keeps its old bound, cap at 10 minutes so a runaway corpus fails loudly
-    // rather than hanging mocha forever.
-    let spoolEntryCount = 0
-    try { spoolEntryCount = fs.readdirSync(defaultBodiesDir()).length } catch { /* measured as 0 below */ }
-    const derivedTimeoutMs = Math.min(600_000, Math.max(180_000, spoolEntryCount * 5))
-    this.timeout(derivedTimeoutMs)
+    // ceiling from the measured spool entry count instead (see helpers/derivedTimeout.ts): ~5ms/entry
+    // is a generous stat+readdir budget under contention (a store repair may be hammering the same
+    // disk); floor at the old 180s so a small corpus keeps its old bound, cap at 10 minutes so a
+    // runaway corpus fails loudly rather than hanging mocha forever.
+    this.timeout(derivedTimeoutMs(defaultBodiesDir(), 180_000))
     const tmpDb = path.join(tmpRoot, 'real-forensics.db')
     // windowHours bounds the evidence-base scan the SAME way cacheBreakTimeline.test.ts's own real-
     // machine test does (its comment: "an uncapped scan makes this test's runtime a function of the
