@@ -222,78 +222,41 @@ doesn't have) — union_by_name at read time (GVA8TTJF) coalesces them per call.
    query `SELECT * FROM api_call` (pre-flush) or the flushed parquet part — confirm both rows.
 3. Restart the server, confirm the parquet part under `store/api_calls/` survives and is readable.
 
-**STEP 3 IS UNEVIDENCED ON THIS MACHINE — measured 2026-09-04T17:44, corrected and completed
-17:48. All read-only.** The live store holds **497 parquet parts / 5.0 MB** under
-`~/.agentlens/store/api_calls/` and is actively growing (495 → 497 in three minutes), so the writer
-half is well supported.
+**STEP 3 HAS NEVER HAD THE OPPORTUNITY TO RUN — measured 2026-09-04, read-only.** The live store
+holds **497 parquet parts / 5.0 MB** under `~/.agentlens/store/api_calls/`, actively growing
+(495 → 497 in three minutes), so the WRITER half is well supported. But the earliest part by mtime
+is 08:56:13, after the running server started (`uptime=7h34m` at 16:30), and every filename's
+`<pid>` field reads 37180 — the live pid. **No part predates the process**, so the store has never
+been through a restart with `api_calls` parts present. Step 3 has not failed; there has been
+nothing for it to test.
 
-**The decisive fact is the mtime.** The earliest part by mtime is **08:56:13**, consistent with the
-server's start (`uptime=7h34m` displayed at 16:30 → ~08:56). Stated as an INEQUALITY, which is all
-the argument needs and all the measurement supports: **the earliest part is AFTER the process
-started, so no part predates it.** An earlier version claimed 08:56:13 *is* the boot time — a
-to-the-second equality drawn from a to-the-minute display, which brackets the start to ±30s at
-best.
-Two weak signals AGREE here and the conclusion rests on the agreement, not on either alone: the
-mtime ordering, and every filename's `<pid>` field reading 37180. An earlier version also claimed
-the mtime evidence "does not depend on my reading of the filename at all" — true of the raw fact,
-FALSE of the argument as built, since that same paragraph uses pid uniformity as corroboration.
+**Basis for "nothing rewrote the older parts", stated with its real warrant:** TRDD-IRNHEN4Z — the
+card that would implement `api_calls` part compaction — is `column: planned`, i.e. unbuilt. Code
+searches for a compactor were run and are NOT the warrant: they were scoped to one crate's flat
+`src/*.rs` glob and to the literal word `compact`, so a nested module, a merger named
+`merge`/`consolidate`/`gc`, or the TypeScript store writer (`src/store/*.ts`, per TRDD-TP3BA3ED)
+would all be invisible to them. Do not cite those searches as a rule-out.
 
-**The competing explanation is ruled out.** A first version of this note enumerated two readings
-("feature landed after this server started" / "earlier parts were removed") and presented the list
-as complete. It was not: a **compaction chore rewriting surviving parts under the current pid**
-would produce the same observation and would mean restart-survival WORKS.
+**TO SETTLE IT — one restart plus one command:**
 
-**The first rule-out was mis-scoped and is replaced.** It ran `grep -rln 'api_call'` and then looked
-for `compact` among those hits — which can only find a compactor that also contains the literal
-`api_call`. A generic chore iterating `store/<table>/` would name a directory variable instead, and
-that is precisely the shape TRDD-TP3BA3ED documents for the sibling `body`/`part`/`blob` dirs. The
-search's scope had silently become the claim's scope: the 99HUNXJS error again. Replaced with the
-inverted search:
+```bash
+agentlenspro server restart
+find ~/.agentlens/store/api_calls -name '*.parquet' | sed -E 's/.*part-[0-9]+-([0-9]+)-.*/\1/' | sort -u
+```
 
-- `grep -rn 'fn .*compact\|compact_\|\.compact('` over ALL of `rust-core/crates` returns only
-  unrelated senses — `delta_log.rs::compact` (compacts an `IndexMap` of records, not parquet),
-  and Claude Code's own `compact_boundary` / `compact_file_reference` / PreCompact-hook readers.
-  Nothing iterates store directories.
-- **`agentlens-store` — the crate that owns the parquet store — contains `compact` ZERO times.**
-- No `rename` / `remove_file` path over parquet parts exists in that crate.
-- Independently: TRDD-IRNHEN4Z ("api_calls part compaction by count…") is `column: planned`. **This
-  is the STRONGER of the two facts** and the first version cited it only as corroboration.
+More than one distinct pid ⇒ parts survived the restart ⇒ step 3 PASSES. Not performed here:
+restarting the live collector is an unrequested state change on a running system (TRDD-BSDR4TRM is
+the precedent for what those cost).
 
-So no rewrite path exists today — and the mtime result below makes the question moot regardless.
-
-**What that leaves, stated precisely:** the store has never been through a restart WITH api_calls
-parts present — the parts begin at this server's boot. Step 3 has not failed; it has never had the
-opportunity to run. That is still "unevidenced", but for a cleaner reason than first recorded.
-
-**Also corrected:** the first version cited "earliest part 10:33". That came from `ls | tail -3`,
-which is DIRECTORY order over 495 files, not time order — the true earliest is 08:56:13. A `tail`
-on unsorted output reported as an extreme.
-
-**Settling it costs one restart and one `find`**, and the card should not be advanced before that:
-restart the collector, then confirm parts bearing the OLD pid are still present and readable. Not
-performed here — restarting the user's live collector is an action on a running system that was not
-asked for, and this session has already learned what an unrequested state change costs
-(TRDD-BSDR4TRM's `server stop` hitting the wrong process).
-
-**COLUMN NOT CHANGED. The ground is simpler than either version I first recorded.**
-
-Table A's row — *`testing → ai_review`: All `test-requirements:` + `audit-requirements:` PASSED* —
-is a description of the situation in which the transition is MECHANICAL: a card that declared those
-frontmatter fields and saw them pass. **This card carries neither field** (`## VERIFICATION` is
-prose, not a field), so it never enters that situation and falls **OUTSIDE table A's scope**.
-`manager-approval-defaults.md` then settles it directly: *"Anything not on the exempt list is
-non-exempt."* No appeal to conservatism is needed; the conservative principle is a backstop here,
-not the reason.
-
-**Both earlier framings are withdrawn.** The first said the exemption's "precondition is not met"
-(wrong object — it keyed on prose, not on the fields the rule names). The second said the condition
-was **VACUOUSLY SATISFIED** so *"the rule as literally written would permit the move"* — that is
-FALSE, and dangerously so: it imports predicate-logic semantics into a table of worked examples,
-under which any card would become auto-exempt by declaring FEWER requirements. No rule is written
-to reward declaring less.
-
-All six ACCEPTANCE boxes being ticked is a separate claim: they were ticked against the
+**COLUMN NOT CHANGED.** Table A's `testing → ai_review` row describes a card whose
+`test-requirements:`/`audit-requirements:` FRONTMATTER fields passed. This card carries neither
+(`## VERIFICATION` is prose, not a field), so it never enters that row's situation and
+`manager-approval-defaults.md`'s default governs: *"Anything not on the exempt list is
+non-exempt."* Six ticked ACCEPTANCE boxes is a separate claim — they were ticked against the
 implementation, and step 3 is the one that outlives it.
+
+*(The record of four self-corrections that produced this section lives in the commit history —
+`b69cb30d`, `7ce2f279`, `c9ac8efe` and this one — not on the card.)*
 
 ## Approval log
 
