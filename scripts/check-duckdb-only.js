@@ -94,6 +94,13 @@ const ALLOW = new Map([
   ['src/test/setupVerb.test.ts', 'P3'],
   ['src/test/logReader.opencode.test.ts', 'P4'], ['src/test/rustOpenCode.test.ts', 'P4'],
   ['src/test/helpers/opencodeParseChild.ts', 'P4'],
+  // P2 — the migration TOOL itself. It names forensics.db because its whole job is emptying it
+  // into parquet, and it reads that file through DuckDB's sqlite_scanner, which is the sanctioned
+  // path. Exempted by name rather than by loosening the `.db`-path pattern: the pattern is what
+  // catches the next file that reaches for SQLite directly, and a tool that migrates SQLite is
+  // exactly the one case that must not become a hole in it. This entry is DELETED with the file,
+  // once the source database is gone.
+  ['scripts/migrate-forensics-to-parquet.mjs', 'P2'],
 ])
 
 // The RATCHET. Without this, "the budget can only go down" was just a sentence in a comment: adding
@@ -110,7 +117,12 @@ const ALLOW = new Map([
 // Raising this is ALLOWED but must be deliberate and justified in the commit message: a phase in
 // flight can legitimately need a transitional file. The friction is the point — an edit here is a
 // decision someone has to defend, which is exactly what a silent `ALLOW.push` was not.
-const MAX_EXEMPTIONS = 34
+// 35, raised by one for `scripts/migrate-forensics-to-parquet.mjs` — the tool that EMPTIES
+// forensics.db into parquet. Raising the ratchet is the thing this number exists to make hard, so:
+// the exemption is temporary by construction (it dies with the source database), and the migration
+// it performs is what lowers the other entries. A budget raised to admit the tool that shrinks the
+// budget is the one increase that pays for itself.
+const MAX_EXEMPTIONS = 35
 
 // ─── THE OPENER CAP (TRDD-Q9WD3K5R) ──────────────────────────────────────────────────────────
 //
@@ -145,15 +157,38 @@ const OPENERS = [
 // gateway at all is an OPEN QUESTION this card must decide (a test may legitimately need to
 // CONSTRUCT a store). Reporting one blended number would let test scaffolding mask real progress,
 // or make legitimate fixtures look like regressions.
+// A `gen-*` file under fixtures/ is a GENERATOR — a program that opens a store and writes the
+// expected output a parity suite compares against. Classifying it as "test" put the one class of
+// file that MUST migrate in lockstep with its subject into the bucket explicitly described as
+// "not aimed at 1", where a generator still opening SQLite after its subject moved to DuckDB
+// would be invisible to both caps. It counts as non-test, which is where the pressure is.
 const isTestPath = (rel) =>
-  /(^|\/)tests?\//.test(rel) || /\.test\./.test(rel) || /__mocks__/.test(rel) || /fixtures\//.test(rel)
+  !/(^|\/)gen-/.test(rel) &&
+  (/(^|\/)tests?\//.test(rel) || /\.test\./.test(rel) || /__mocks__/.test(rel) || /fixtures\//.test(rel))
 
 // Ratchet targets. NON_TEST ratchets toward 1 (the store crate). TEST is frozen at today's count —
 // it may only go DOWN, and the question of what its floor SHOULD be is deliberately unanswered
 // here rather than guessed. Raising either is allowed but must be justified in the commit message,
 // exactly like MAX_EXEMPTIONS.
-const MAX_NON_TEST_OPENERS = 18
-const MAX_TEST_OPENERS = 15
+// 20/14, from a measured 18/15, and both changes are deliberate:
+//   +1 non-test / -1 test — reclassifying `gen-*` fixture generators as non-test (see isTestPath).
+//     Same 33 openers, one boundary corrected. A re-seed, not a raised budget.
+//   +1 non-test — `scripts/migrate-forensics-to-parquet.mjs` genuinely opens a store, so it is
+//     counted rather than excused. It is the tool whose whole purpose is to let the other openers
+//     be deleted, and it dies with the source database; the honest accounting is to count it now
+//     and drop the cap by one when it goes.
+const MAX_NON_TEST_OPENERS = 20
+const MAX_TEST_OPENERS = 14
+
+// WHAT THIS CAP DOES NOT MEASURE — stated here because the commit that added it overclaimed.
+// It counts CONSTRUCTION (`X::open`, `new SQL.Database`, `DuckDBInstance.create`). The card says
+// the real coupling is handle-PASSING, and those are different: move all 19 opens into one factory
+// and pass handles to the other 18 files and this cap reads 1/19 while 18 files still hold a live
+// store handle and still reach disk through it — "guard green, architecture unchanged" reproduced
+// by the very guard written to prevent it. So the cap catches the NAIVE one-for-one migration
+// (which is what was actually about to happen) and not the sophisticated one. Catching that needs
+// a check on handle-typed parameters and struct fields, which is a real piece of work and is not
+// this. Do not read a green cap as "the gateway exists".
 
 // Sibling guards ENUMERATE the patterns they ban, so they trip each other by construction. Excluded
 // by name, deliberately narrow — only files whose whole job is pattern-matching.
@@ -236,7 +271,10 @@ const capFail = (label, list, max, note) => {
   console.error('\n' + note)
   return true
 }
-if (
+// Array literal, NOT `||`: short-circuiting would evaluate the second cap only when the first
+// passed, so a tree breaching both would report one, get fixed, and breach again on the next run.
+// Both must be evaluated so both are printed.
+const capFailures = [
   capFail(
     'non-test', openers.nonTest, MAX_NON_TEST_OPENERS,
     'This cap counts files that OPEN a store — ANY engine, DuckDB included. Migrating a file from\n' +
@@ -244,14 +282,15 @@ if (
     'PLACES that reach disk, not which library they reach it with. Route the new caller through the\n' +
     'store crate instead of opening its own handle. Raising this number is a decision to defend in\n' +
     'the commit message.'
-  ) ||
+  ),
   capFail(
     'test', openers.test, MAX_TEST_OPENERS,
     'Test scaffolding may legitimately CONSTRUCT a store, so this cap is frozen rather than aimed\n' +
     'at 1 — but it may only go DOWN. A new test that opens its own handle should ask first whether\n' +
     'it can use the same entry point the product uses.'
-  )
-) process.exit(1)
+  ),
+]
+if (capFailures.some(Boolean)) process.exit(1)
 
 console.log(`OK — DuckDB-only guard: ${files.length} files scanned, ${usedAllow.size} known exemption(s) awaiting migration (budget ${ALLOW.size}/${MAX_EXEMPTIONS})`)
 console.log(`     store openers: ${openers.nonTest.length}/${MAX_NON_TEST_OPENERS} non-test (target 1), ${openers.test.length}/${MAX_TEST_OPENERS} test (frozen)`)
