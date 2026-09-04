@@ -241,7 +241,9 @@ would all be invisible to them. Do not cite those searches as a rule-out.
 **TO SETTLE IT — snapshot, restart, compare THE SAME FILES:**
 
 ```bash
+set -e            # REQUIRED: without it a failing `find` truncates its output file
 D=~/.agentlens/store/api_calls
+rm -f /tmp/parts-before.txt /tmp/parts-after.txt
 find "$D" -name '*.parquet' | sort > /tmp/parts-before.txt        # BEFORE
 agentlenspro server restart
 find "$D" -name '*.parquet' | sort > /tmp/parts-after.txt         # AFTER
