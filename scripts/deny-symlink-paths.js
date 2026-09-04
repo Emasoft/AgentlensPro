@@ -248,7 +248,13 @@ function effectiveCwd(segment, baseCwd) {
   // and parenthesised directory names are routine (`Screenshot (1)`, `Backup (old)`). Same shape as
   // the `[`/`]` regression one commit earlier: a character that is syntax in one view and a name in
   // the other, judged by a single predicate.
-  const m = /(?:^|[\s(])(?:cd|pushd)\s+(?:--\s+)?(?:'([^']+)'|"([^"]+)"|([^'"&;|)]+))(?:\s|$)/.exec(visible)
+  // `)` must also TERMINATE the match, not merely be excluded from the name. Excluding it without
+  // accepting it as a boundary left `(cd /tmp/wt)` — no space — matching NOTHING at all: the class
+  // stops at `)`, the trailing `(?:\s|$)` cannot match there, and every backtrack fails the same
+  // way. Measured 2026-09-04. Pre-existing, but it is the mirror of the bug one commit earlier:
+  // there `)` was unreachable for a QUOTED target, here it is unreachable as a TERMINATOR for an
+  // unquoted one. Both come from treating `)` as a character to exclude rather than a boundary.
+  const m = /(?:^|[\s(])(?:cd|pushd)\s+(?:--\s+)?(?:'([^']+)'|"([^"]+)"|([^'"&;|)]+))(?:\s|\)|$)/.exec(visible)
   if (!m) return { dir: baseCwd, matched: false }
   const target = (m[1] ?? m[2] ?? m[3] ?? '').trim()
   if (!target || target === '-') return { dir: baseCwd, matched: false }
@@ -491,6 +497,12 @@ process.stdin.on('end', () => {
       subDepth = Math.max(0, subDepth
         + (partSyntax.match(/\$\(/g) || []).length
         - (partSyntax.match(/\)/g) || []).length)
+      // The count is per-part NET, so a part spelling `) … $(` nets zero and is indistinguishable
+      // from a balanced one: the clear below fires and the depth reads 0 while the shell is inside
+      // a NEW substitution. That is the under-tracking direction, and no reachable shape was found
+      // (the per-part blanking covers the ones that get there) — but it is the seam to look at
+      // first if a nesting bypass ever comes back.
+      //
       // The alternate base exists only while the base is IN DOUBT. Once the substitution closes the
       // doubt is over, and keeping it would deny on a path the command cannot reach — the
       // wrong-file verdict this file has twice refused to ship. It survives an unclosed `$(`,

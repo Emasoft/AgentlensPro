@@ -184,6 +184,10 @@ check(run(`git commit -m "don't" && echo $( echo $(date) && cd ${sub} ) && cp x 
 // `)` is shell syntax, so it must not be swallowed into a cd target: `cd <dir> )` took the paren
 // as part of the name and resolved against the fictional `<dir> )`.
 check(run(`(cd ${wtDir} ) && cp x node_modules/`).denied, 'a trailing ) is not part of the directory name')
+// ...and it must TERMINATE the target, not merely be excluded from it: with no space the class
+// stops at `)`, the trailing context could not match there, and the whole regex found no cd at all.
+// `(cd dir)` with no inner space is how most people write a one-shot subshell.
+check(run(`(cd ${wtDir}) && cp x node_modules/`).denied, 'a ) with no space before it still ends the target')
 // ...but INSIDE quotes a paren is a name, and excluding it everywhere left the closing quote
 // unreachable, so the regex matched nothing and no cd was seen at all. `Screenshot (1)` is routine.
 const paren = path.join(root, 'My Docs (2026)')
