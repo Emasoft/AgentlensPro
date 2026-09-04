@@ -4,6 +4,23 @@ All notable changes to AgentlensPro are documented here.
 
 > **Lineage note:** AgentlensPro continues the history of [AgentLens](https://github.com/RogerReed/agentlens), from which it was forked. Entries below that predate the fork refer to the original AgentLens lineage.
 
+## [Unreleased]
+
+### Fixed
+
+- **`claude-sonnet-5` was being priced 50% high since 2026-09-01.** Its entry carried a
+  `scheduledChange` reverting the $2/$10 per-MTok introductory rate to a $3/$15 sticker on that
+  date; the reversion was withdrawn upstream (CC 2.1.243, 2026-08-25) but the flip had already
+  fired, so every sonnet-5 cost figure — `/cost`-style rollups, `investigate_burn`, the dashboard,
+  and the Rust core's embedded copy of the table — read high for three days. Now $2/$10 at every
+  timestamp, **measured** rather than taken from the changelog: 7 real post-2026-09-01 sessions
+  solved to a median $1.956/MTok against Claude Code's OWN reported `costUSD` and token counts
+  (at $3 the largest sampled session would have cost $47.35 against the $31.00 actually reported).
+  The `scheduledChange` mechanism itself is retained for the next real rate change; no entry uses
+  it today, so its behaviour is now pinned directly rather than through whichever model happens to
+  have a promo. Also regenerates `rust-core/.../pricing.json` and the pricing parity fixture, which
+  had additionally been stale for `claude-fable-5-1`.
+
 ## [2.33.2] - 2026-09-01
 
 ### Added

@@ -297,31 +297,38 @@ suite('burnInvestigator — investigate_burn (TRDD-TW14MO7A)', () => {
   // threads each response's own ts into calcTokenCostUsd rather than pricing the aggregated
   // cc/cr/out once at "now".
   //
-  // THAT COVERAGE IS GONE and this test is the weaker replacement. CC 2.1.243 retracted the sonnet-5
-  // change (see src/shared/pricing.ts) and no live model carries a `scheduledChange` any more, so
-  // there is no straddle to build from real rates — every timestamp now yields the same rate, and a
-  // version of this test that ignored `iso(r.ts)` entirely would still pass. What survives here is
-  // per-RESPONSE summation (byModel and the window total are the sum of individually-priced calls);
-  // the timestamp threading itself is pinned only at the unit level, in pricing.test.ts's
-  // `applyScheduledChange` block. Restore the straddle the next time a real rate change is
-  // announced — and re-read the announcement before trusting it.
-  test('estCostUsd is the sum of per-response prices, not one price over the aggregate', () => {
+  // The straddle is UNBUILDABLE now: CC 2.1.243 retracted the sonnet-5 change (see
+  // src/shared/pricing.ts) and no live model carries a `scheduledChange`, so every timestamp yields
+  // the same rate. Rebuilt here on the LONG-CONTEXT STEP instead, which keeps the property really
+  // pinned and cannot go stale when a vendor changes its mind, because the step is arithmetic and
+  // not an announcement: claude-sonnet-4's >200K surcharge reprices the WHOLE request once its
+  // total input crosses the threshold, so two 150K cache-read responses priced individually
+  // ($0.30/MTok, each under) and the same 300K priced as one aggregate ($0.60/MTok, over) differ
+  // by exactly 2x.
+  //
+  // Do NOT weaken this back to two same-rate calls. Rates are LINEAR below the step, so
+  // 2 x price(N) == price(2N) exactly, and an assertion built on them passes identically against an
+  // implementation that hoists the pricing out of the loop or drops `iso(r.ts)` — it pins nothing.
+  // That is what the first replacement for the straddle did, while its comment claimed otherwise.
+  test('estCostUsd prices each response separately — the >200K step must NOT see the aggregate', () => {
     const { dir, hooks, cleanup } = corpus()
     try {
       // Kept ≤48h apart (the window's own cap) so BOTH calls fall inside one investigateBurn scan.
       const first = Date.parse('2026-08-31T22:00:00Z')
       const second = Date.parse('2026-09-01T02:00:00Z')
-      resp(dir, first, 'claude-sonnet-5', 0, 0, 1_000_000) // 1M output tokens, no cache
-      resp(dir, second, 'claude-sonnet-5', 0, 0, 1_000_000)
+      resp(dir, first, 'claude-sonnet-4', 0, 150_000, 0)  // 150K cache-read each: under the step
+      resp(dir, second, 'claude-sonnet-4', 0, 150_000, 0) // aggregated they are 300K: over it
       const r = investigateBurn({ bodiesDir: dir, hookEventsDir: hooks, untilMs: second + 60_000, windowHours: 48 })
       assert.strictEqual(r.totals.byModel.length, 1)
-      const expected = 2 * (1_000_000 * 10 / 1_000_000) // sonnet-5 output is $10/MTok, permanently
+      const perResponse = 2 * (150_000 * 0.30 / 1_000_000) // $0.09 — flat cache-read rate, twice
+      const asAggregate = 300_000 * 0.60 / 1_000_000       // $0.18 — the surcharged rate, once
       assert.ok(
-        Math.abs(r.totals.byModel[0].estCostUsd - expected) < 0.01,
-        `expected ~$${expected} (two 1M-output calls), got $${r.totals.byModel[0].estCostUsd}`,
+        Math.abs(r.totals.byModel[0].estCostUsd - perResponse) < 0.001,
+        `expected $${perResponse} (each response under the step); $${asAggregate} would mean the `
+        + `window was priced as one aggregate, got $${r.totals.byModel[0].estCostUsd}`,
       )
       assert.ok(
-        Math.abs(r.totals.estCostUsd - expected) < 0.01,
+        Math.abs(r.totals.estCostUsd - perResponse) < 0.001,
         `window total must match the per-response sum, got $${r.totals.estCostUsd}`,
       )
     } finally { cleanup() }

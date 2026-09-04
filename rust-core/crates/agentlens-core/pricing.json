@@ -1,5 +1,5 @@
 {
- "lastUpdated": "2026-09-01",
+ "lastUpdated": "2026-09-04",
  "rates": {
   "gpt-4.1": {
    "inputPerMTok": 0,
@@ -238,17 +238,7 @@
    "outputPerMTok": 10,
    "contextWindowTokens": 1000000,
    "multiplier": 0,
-   "multiplierAnnualPostJun1": 0,
-   "scheduledChange": {
-    "from": "2026-09-01",
-    "note": "introductory pricing ends 2026-08-31; reverts to $3/$15 sticker",
-    "rates": {
-     "inputPerMTok": 3,
-     "cacheReadPerMTok": 0.3,
-     "cacheWritePerMTok": 3.75,
-     "outputPerMTok": 15
-    }
-   }
+   "multiplierAnnualPostJun1": 0
   },
   "claude-mythos-5": {
    "inputPerMTok": 10,

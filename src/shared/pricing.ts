@@ -123,17 +123,29 @@ export const RATES: Record<string, ModelRates> = {
                           inputAbove200kPerMTok: 6.00, outputAbove200kPerMTok: 22.50, cacheReadAbove200kPerMTok: 0.60, cacheWriteAbove200kPerMTok: 7.50 },
   'claude-sonnet-4-5':  { inputPerMTok:  3.00, cacheReadPerMTok: 0.30,  cacheWritePerMTok:  3.75, outputPerMTok: 15.00, contextWindowTokens: 1_000_000, multiplier: 1,    multiplierAnnualPostJun1: 6 },
   'claude-sonnet-4-6':  { inputPerMTok:  3.00, cacheReadPerMTok: 0.30,  cacheWritePerMTok:  3.75, outputPerMTok: 15.00, contextWindowTokens: 1_000_000, multiplier: 1,    multiplierAnnualPostJun1: 9 },
-  // Sonnet 5 is $2/$10 per MTok PERMANENTLY (cache 0.1x/1.25x of input). It was announced as
-  // introductory pricing reverting to a $3/$15 sticker on 2026-09-01, and this entry carried a
-  // `scheduledChange` encoding that flip — until CC 2.1.243 (2026-08-25) retracted it: "Updated the
-  // /model picker and the bundled claude-api skill to show Sonnet 5's $2/$10 per Mtok pricing as its
-  // standard list price rather than a limited-time promo." The flip had already FIRED by the time we
-  // read that (removed 2026-09-04), so for three days every sonnet-5 call was priced 50% HIGH. That
-  // is the cost of encoding an announced future as data and then not re-reading the announcement:
-  // the mechanism fired exactly as designed, on a fact that had been withdrawn. `scheduledChange`
-  // stays in the type and the resolver for the next real one — no live entry uses it today.
-  // Was MISSING entirely until 2026-07-07 — lookupRates returned null and 14 real sessions silently
-  // billed $0 (the exact failure the unpriced flag now surfaces). Not yet in Copilot billing docs.
+  // Sonnet 5 is $2/$10 per MTok (cache 0.1x/1.25x of input) — MEASURED, not doc-sourced. It was
+  // announced as introductory pricing reverting to a $3/$15 sticker on 2026-09-01, and this entry
+  // carried a `scheduledChange` encoding that flip; CC 2.1.243 (2026-08-25) then retracted it:
+  // "Updated the /model picker and the bundled claude-api skill to show Sonnet 5's $2/$10 per Mtok
+  // pricing as its standard list price rather than a limited-time promo."
+  //
+  // Note what that sentence actually says: the PICKER's label changed. It is evidence about a
+  // display, not about a billed rate, and reading it as "the reversion was cancelled" is an
+  // inference — the same shape of inference that put the withdrawn flip here in the first place. So
+  // it was measured before this entry was trusted: 7 real post-2026-09-01 sessions, solving for R in
+  // cost = R*(in + 0.1*cacheRead + 1.25*cw5m + 2*cw1h + 5*out) against CLAUDE CODE's OWN costUSD and
+  // token counts (never our own figure — that would test this table against itself), with the 5m/1h
+  // split taken from the raw OTEL bodies' ephemeral_* fields rather than assumed. Median R =
+  // $1.956/MTok; at $3 the largest sampled session would have cost $47.35 against the $31.00 Claude
+  // Code reported. Evidence: reports/pricing-measurement/20260904_061757+0200-sonnet5-billed-rate.md
+  //
+  // The flip had already FIRED by the time this was read (removed 2026-09-04), so any sonnet-5 call
+  // priced in that window came out 50% high. That is the cost of encoding an announced future as
+  // data and then not re-reading the announcement: the mechanism fired exactly as designed, on a
+  // fact that had been withdrawn. `scheduledChange` stays in the type and the resolver for the next
+  // real one — no live entry uses it today. Was MISSING entirely until 2026-07-07 — lookupRates
+  // returned null and 14 real sessions silently billed $0 (the exact failure the unpriced flag now
+  // surfaces). Not yet in Copilot billing docs.
   'claude-sonnet-5':    { inputPerMTok:  2.00, cacheReadPerMTok: 0.20,  cacheWritePerMTok:  2.50, outputPerMTok: 10.00, contextWindowTokens: 1_000_000, multiplier: 0,    multiplierAnnualPostJun1: 0 },
   // Mythos 5 (Project Glasswing) — same pricing/limits as Fable 5. Not yet in Copilot billing docs.
   'claude-mythos-5':    { inputPerMTok: 10.00, cacheReadPerMTok: 1.00,  cacheWritePerMTok: 12.50, outputPerMTok:  50.00, contextWindowTokens: 1_000_000, multiplier: 0,   multiplierAnnualPostJun1: 0 },
