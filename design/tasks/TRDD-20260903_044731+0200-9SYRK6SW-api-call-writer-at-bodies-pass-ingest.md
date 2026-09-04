@@ -267,8 +267,11 @@ const { DuckDBInstance } = require("@duckdb/node-api"); const fs = require("fs")
 ```
 
 **BASELINE, measured pre-restart:** `checked 509 parts, unreadable=0, rows=10444`
-(`sum(raw_bytes)` = 5,630,947,899). After the restart, the same command over the same
+— all 26 columns read per part. After the restart, the same command over the same
 `/tmp/parts-before.txt` must still report **unreadable=0**.
+(An intermediate version of this recipe also reported `sum(raw_bytes)` = 5,630,947,899; the
+current command does not compute it, so it is recorded here as a one-off measurement rather than
+left in the baseline line describing output the command no longer produces.)
 
 **Why `SELECT *` with the rows CONSUMED, and not a narrower query — two earlier versions were both
 narrower than their own claim:**
