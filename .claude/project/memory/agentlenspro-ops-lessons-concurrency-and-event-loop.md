@@ -162,7 +162,9 @@ Three things that generalize:
 
 1. **A `held` line names the GUARD, not what ran under it.** Timing each statement separately
    showed 19/19 traced holds were 100% `project_map`; `session_ids` and `resolve_scope` — the two
-   expensive-looking suspects — were 0 ms.
+   expensive-looking suspects — were 0 ms. (Those holds' DURATIONS were inflated by concurrent
+   cargo builds; the ATTRIBUTION is independent of that, which is why it is quoted and they are
+   not.)
 2. **The holder slot names the holder AT QUEUE TIME**, not the site you actually waited behind. A
    26 s wait blamed `chores.rs:653`, which had no `held` line at all.
 3. **Line numbers are PER BINARY** — the instrumentation shifted every later site by +18. Key reads
@@ -171,9 +173,11 @@ Three things that generalize:
 **Fix and its honest cost:** build off-lock (`ui::summary_now`) before taking the guard, clone cards
 off-lock too. Worst hold anywhere then 2,263 ms (120x drop), zero at any composition site. But the
 old path was always CURRENT, while the new one serves the last COMPLETED rebuild's snapshot — data
-age up to ~2 rebuild durations, and a rebuild is **5.9-7.1 s** at 27.7k sessions, not the
-"milliseconds" the doc comment claimed. A younger session resolves to `project: unknown` and is
-silently omitted from a project-scoped answer while coverage still reads "Scanned all N sessions".
+age up to ~2 rebuild durations, and a rebuild is **≥5.9 s** at 27.7k sessions (5.9-7.1 s were the
+four QUIETEST traced rebuilds, with no build running — a FLOOR, not a typical range; size the
+staleness window above it, never at it). Not the "milliseconds" the doc comment claimed. A younger
+session resolves to `project: unknown` and is silently omitted from a project-scoped answer while
+coverage still reads "Scanned all N sessions".
 Say "fresh-but-blocking became stale-but-free", not "pure win".
 
 **A graceful stop STARVED:** SIGTERM, then HTTP-dead six minutes later, every tokio worker parked
