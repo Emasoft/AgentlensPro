@@ -211,6 +211,18 @@ const pdir = path.join(root, 'a(b)', 'sub')
 fs.mkdirSync(pdir, { recursive: true })
 fs.symlinkSync(real, path.join(pdir, 'node_modules'))
 check(run(`cd ${pdir} && cp x node_modules/`).denied, 'an UNQUOTED directory name containing parens is not truncated')
+// Glob AND paren together: the only shape that reaches the `)`-repair's early return, so neither
+// the main bailout nor the general rule at the end of the function ever sees it. That is the path
+// a deletion justified as "same predicate, one line later" did not account for.
+const gdir = path.join(root, 'a*b(c)', 'sub')
+fs.mkdirSync(gdir, { recursive: true })
+check(run(`cd ${root}/a*b(c)/sub && cp x ${path.basename(link)}/`).denied, 'a glob-bearing target claims no base, even when the literal spelling exists')
+// The glob AFTER the paren, so the truncated `expanded` carries none and only the repair's own
+// copy of the bailout list can catch it. Two gates, and this is the one that isolates the second:
+// without it the repair returns matched:true on a literal name the shell would have globbed.
+const gdir2 = path.join(root, 'a(b)*x', 'sub')
+fs.mkdirSync(gdir2, { recursive: true })
+check(run(`cd ${root}/a(b)*x/sub && cp x ${path.basename(link)}/`).denied, '...including a glob that only survives in the whole-word spelling')
 // Both spellings must go through the SAME expansion: the truncated one had `$PWD` substituted and
 // the whole-word one did not, so the correct `<cwd>/a(b)` was never built out of the two halves.
 check(run(`cd $PWD/a(b)/sub && cp x node_modules/`).denied, 'a $PWD prefix and a paren name are fixed together, not separately')

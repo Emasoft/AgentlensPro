@@ -277,6 +277,9 @@ function effectiveCwd(segment, baseCwd) {
   // unquoted one. Both come from treating `)` as a character to exclude rather than a boundary.
   const m = /(?:^|[\s(])(?:cd|pushd)\s+(?:--\s+)?(?:'([^']+)'|"([^"]+)"|([^'"&;|)]+))(?:\s|\)|$)/.exec(visible)
   if (!m) return { dir: baseCwd, matched: false }
+  // Which branch matched is load-bearing: the shell globs an unquoted target and does not glob a
+  // quoted one, so `*` is a wildcard in the first and a filename character in the second.
+  const unquotedTarget = m[3] !== undefined
   const target = (m[1] ?? m[2] ?? m[3] ?? '').trim()
   if (!target || target === '-') return { dir: baseCwd, matched: false }
   // A `$var` this guard cannot expand must NOT move the base. `cd $PWD && cp x node_modules/`
@@ -309,12 +312,20 @@ function effectiveCwd(segment, baseCwd) {
   // improvement the tests showed was worth nothing. Ask the filesystem instead of guessing: if the
   // literal name exists, it is a directory, not a pattern.
   const isDirectory = (p) => { try { return fs.statSync(p).isDirectory() } catch { return false } }
-  // (The glob check that stood here is gone. It tested `!isDirectory(resolved)` under a narrower
-  //  condition than the general rule below tests it — same predicate, same value — so it could only
-  //  ever fire where that one also fires. Dead by construction, not merely unreached. It was kept
-  //  one commit ago on the claim that it guarded a directory literally named `*`; in that case the
-  //  directory EXISTS, so it is precisely the case the check stays silent on. The comment inverted
-  //  the behaviour, which is worse than no comment.)
+  // A glob in an UNQUOTED target means the shell picks the directory, not us — and it may pick a
+  // sibling, or several, or none. So we cannot know the base, whether or not the literal spelling
+  // happens to exist on disk. Quoted targets are exempt because the shell does not glob inside
+  // quotes, which is why `cd 'My Docs [2026]'` stays tracked.
+  //
+  // The check this replaces tested `!isDirectory(resolved)` and was deleted one commit ago as
+  // "dead by construction — the general rule below tests the same predicate". That argument was
+  // wrong, and wrong in the way this file keeps being wrong: the two positions are NOT straight-line
+  // code. The `)`-repair between them RETURNS, so a target that is both glob-bearing and
+  // `)`-terminated reaches neither test. Measured 2026-09-04: with `<base>/a*b(c)/sub` present,
+  // `cd <base>/a*b(c)/sub && cp x node_modules/` claimed that base, disabled the existence gate,
+  // and ALLOWED — where before the deletion it denied. An algebraic claim about two lines has to
+  // account for every path between them.
+  if (unquotedTarget && /[*?[\]]/.test(expanded)) return { dir: baseCwd, matched: false }
   // A `)` TERMINATOR can cut a real name short: `cd /tmp/a(b)/sub` stops the unquoted branch at the
   // `(`-less `)`, yielding `/tmp/a(b` — a directory that does not exist — and `matched: true` then
   // disables the existence gate, which is the `cd $PWD` bug arriving by a new route. Measured
@@ -337,7 +348,10 @@ function effectiveCwd(segment, baseCwd) {
     // `whole` skips the bailouts above, so re-apply them here rather than leaning on isDirectory to
     // catch everything: hoisting the expansion to both spellings and leaving the VALIDATION on one
     // is the same half-symmetry, one step down.
-    if (whole !== null && !/[$`]/.test(whole) && !whole.startsWith('~')) {
+    // Same list as the main bailout above, INCLUDING the glob test — `whole` is by definition the
+    // unquoted branch. Keeping the two lists in step by hand is what let a glob through here; the
+    // next change to either should collapse them into one predicate.
+    if (whole !== null && !/[$`*?[\]]/.test(whole) && !whole.startsWith('~')) {
       const wholeResolved = path.isAbsolute(whole) ? whole : path.resolve(baseCwd, whole)
       if (whole !== expanded && isDirectory(wholeResolved)) return { dir: wholeResolved, matched: true }
     }
