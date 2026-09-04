@@ -3,7 +3,7 @@ trdd-id: 9SYRK6SW
 title: api_call staging table writer at the bodies-pass ingest site
 column: testing
 created: 2026-09-03T04:47:31+0200
-updated: 2026-09-04T17:44:07+0200
+updated: 2026-09-04T17:48:16+0200
 current-owner: main-session
 task-type: feature
 priority: high
@@ -222,14 +222,31 @@ doesn't have) — union_by_name at read time (GVA8TTJF) coalesces them per call.
    query `SELECT * FROM api_call` (pre-flush) or the flushed parquet part — confirm both rows.
 3. Restart the server, confirm the parquet part under `store/api_calls/` survives and is readable.
 
-**STEP 3 IS UNEVIDENCED ON THIS MACHINE — measured 2026-09-04T17:44, read-only.** The live store
-holds **495 parquet parts / 5.0 MB** under `~/.agentlens/store/api_calls/`, so the writer half is
-well supported. But part filenames encode the writing pid (`part-<ts>-<pid>-<n>.parquet`), and
-**all 495 carry pid 37180 — the CURRENTLY RUNNING server. Zero parts predate it.** So nothing in
-the store demonstrates survival across a restart: the data is equally consistent with "the feature
-landed after this server started" (earliest part 10:33; the process started ~08:56) and with
-"earlier parts were removed". This step is not merely untested — the evidence that WOULD settle it
-is absent by construction.
+**STEP 3 IS UNEVIDENCED ON THIS MACHINE — measured 2026-09-04T17:44, corrected and completed
+17:48. All read-only.** The live store holds **497 parquet parts / 5.0 MB** under
+`~/.agentlens/store/api_calls/` and is actively growing (495 → 497 in three minutes), so the writer
+half is well supported.
+
+**The decisive fact is the mtime, not the filename.** The earliest part by mtime is
+**08:56:13 — the server's own start time** (uptime 7h34m as of 16:30). So no part predates the
+running process, and that holds whatever the `<pid>` field in `part-<ts>-<pid>-<n>.parquet`
+actually means; the mtime evidence does not depend on my reading of the filename at all.
+
+**The competing explanation is ruled out, not merely unmentioned.** A first version of this note
+enumerated two readings ("feature landed after this server started" / "earlier parts were removed")
+and presented the list as complete. It was not: a **compaction chore rewriting surviving parts
+under the current pid** would produce the same observation and would mean restart-survival WORKS.
+Checked — `grep -rln 'api_call'` across `rust-core/crates` finds no file mentioning `compact`, and
+TRDD-IRNHEN4Z ("api_calls part compaction by count…") is `column: planned`, i.e. unimplemented.
+So no rewrite path exists today.
+
+**What that leaves, stated precisely:** the store has never been through a restart WITH api_calls
+parts present — the parts begin at this server's boot. Step 3 has not failed; it has never had the
+opportunity to run. That is still "unevidenced", but for a cleaner reason than first recorded.
+
+**Also corrected:** the first version cited "earliest part 10:33". That came from `ls | tail -3`,
+which is DIRECTORY order over 495 files, not time order — the true earliest is 08:56:13. A `tail`
+on unsorted output reported as an extreme.
 
 **Settling it costs one restart and one `find`**, and the card should not be advanced before that:
 restart the collector, then confirm parts bearing the OLD pid are still present and readable. Not
@@ -237,11 +254,18 @@ performed here — restarting the user's live collector is an action on a runnin
 asked for, and this session has already learned what an unrequested state change costs
 (TRDD-BSDR4TRM's `server stop` hitting the wrong process).
 
-**COLUMN NOT CHANGED.** `testing → ai_review` IS exempt (`manager-approval-defaults.md` table A)
-*when all test-requirements have PASSED* — and on the evidence above one verification step has no
-result at all, so the precondition for the exemption is not met. All six ACCEPTANCE boxes being
-ticked is not the same claim: they were ticked against the implementation, and step 3 is the one
-that outlives it.
+**COLUMN NOT CHANGED — and the warrant is NOT the one first recorded.** That version said the table-A
+exemption's "precondition is not met" because a verification step has no result. **Wrong object:**
+table A keys on the FRONTMATTER fields `test-requirements:` / `audit-requirements:`, and this card
+carries NEITHER. `## VERIFICATION` is prose, not that field. With no `test-requirements:` to fail,
+the enumerated condition is VACUOUSLY SATISFIED and the rule as literally written would permit the
+move.
+
+The correct ground is the one that rule states for exactly this case: **"When unsure whether a
+transition is exempt, the agent MUST treat it as non-exempt."** Advancing a card that gates
+TRDD-HSPUF5XH on a vacuous precondition would drain a release blocker on a technicality — which is
+the failure the conservative principle exists to prevent. All six ACCEPTANCE boxes being ticked is a
+separate claim: they were ticked against the implementation, and step 3 is the one that outlives it.
 
 ## Approval log
 
