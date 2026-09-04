@@ -245,16 +245,54 @@ D=~/.agentlens/store/api_calls
 find "$D" -name '*.parquet' | sort > /tmp/parts-before.txt        # BEFORE
 agentlenspro server restart
 comm -23 /tmp/parts-before.txt <(find "$D" -name '*.parquet' | sort)   # (a) SURVIVES
-agentlenspro sql "SELECT count(*) FROM read_parquet('$D/*.parquet')"   # (b) IS READABLE
+node -e '...'  < see (b) below >                                  # (b) IS READABLE
 ```
 
+**(b), verified working against the live store 2026-09-04T17:5x — run from the repo root:**
+
+```bash
+node -e '
+const { DuckDBInstance } = require("@duckdb/node-api"); const fs = require("fs");
+(async () => {
+  const files = fs.readFileSync("/tmp/parts-before.txt","utf8").split("\n").filter(Boolean);
+  const con = await (await DuckDBInstance.create(":memory:")).connect();
+  let bad = 0, rows = 0;
+  for (const f of files) {
+    try { const r = await con.runAndReadAll(
+            `SELECT count(*) n, sum(raw_bytes) b, max(length(stem)) s FROM read_parquet('"'"'${f}'"'"')`);
+          rows += Number(r.getRowObjects()[0].n); }
+    catch (e) { bad++; console.log("UNREADABLE", f); }
+  }
+  console.log(`checked ${files.length} parts, unreadable=${bad}, rows=${rows}`);
+})();'
+```
+
+**BASELINE, measured pre-restart:** `checked 509 parts, unreadable=0, rows=10444`
+(`sum(raw_bytes)` = 5,630,947,899). After the restart, the same command over the same
+`/tmp/parts-before.txt` must still report **unreadable=0**.
+
+**Why it aggregates `raw_bytes`/`stem` and NOT `count(*)`.** DuckDB answers `count(*)` over parquet
+from the **footer's row-group metadata — it never opens the data pages.** A part whose footer
+survived while its data pages were truncated mid-flush (precisely the corruption a restart can
+cause) returns its row count happily. An earlier version of this recipe used `count(*)` and was
+therefore the one query LEAST able to detect the damage it was added to catch. Aggregating real
+columns forces the pages open. The loop is also per-file, so one bad part is attributed to itself
+rather than depending on whether DuckDB aborts a whole multi-file scan.
+
 **BOTH halves are required — step 3 says "survives AND is readable".** (a) empty output ⇒ every
-pre-restart part still exists. (b) must return a count without a parquet error ⇒ the surviving
-parts are actually readable. An earlier version ran only (a) and declared "⇒ step 3 PASSES": a part
-that persists TRUNCATED OR CORRUPT passes an existence check and fails the criterion, so filename
-identity is a proxy for content survival, not a substitute. (If `agentlenspro sql` is not the right
-verb here, any DuckDB `read_parquet` over the directory does the same job — the point is that
-something must PARSE the bytes.)
+pre-restart part still exists; (b) unreadable=0 ⇒ those same parts still parse. A part that
+persists TRUNCATED OR CORRUPT passes (a) and fails the criterion, so filename identity is a proxy
+for content survival, not a substitute.
+
+**Two fixes to earlier versions of this recipe, both mine:**
+- It invoked **`agentlenspro sql`, WHICH DOES NOT EXIST.** `agentlenspro list --desc` has no `sql`
+  verb — the real ones are `run_diagnostics_sql` (the forensics fact DB) and `run_transcript_sql`
+  (over `.jsonl` transcripts); neither reads store parquet. I hedged the invented command instead
+  of checking it, in a recipe written to be pasted. There is also no `duckdb` CLI on this machine;
+  `@duckdb/node-api` is a declared runtime dep and loads, which is why (b) is written in node.
+- It globbed `$D/*.parquet`, which reads the parts the NEW server wrote too — so a healthy new part
+  could carry the query while an old one was corrupt. (b) iterates the pre-restart list
+  file-by-file, so each surviving part is judged on its own.
 
 **One false-FAILURE to rule out before believing (a).** Retention machinery is live in this repo
 (`retention_config.rs`, `summarize/retention.rs`, `AGENTLENS_STATUSLINE_RETENTION_DAYS`); whether
