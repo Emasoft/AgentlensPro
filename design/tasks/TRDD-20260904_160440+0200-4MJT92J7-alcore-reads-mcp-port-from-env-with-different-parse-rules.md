@@ -3,7 +3,7 @@ trdd-id: 4MJT92J7
 title: alcore reads MCP_PORT from env with parse rules that differ from the TypeScript envPort
 column: todo
 created: 2026-09-04T16:04:40+0200
-updated: 2026-09-04T16:58:30+0200
+updated: 2026-09-04T17:02:43+0200
 current-owner: main-session
 task-type: bugfix
 project-id: agentlenspro
@@ -25,8 +25,13 @@ related: [VDQ2N8PX, 99HUNXJS, BSDR4TRM, EGGERLEO, 1B98LCVR]
 Found 2026-09-04T16:54 while grepping for something else. `VDQ2N8PX`
 (*"Rust parses MCP_PORT by its own rules so the server and the CLI can still disagree"*, created
 **10:19:22**; this card **16:04:40**) covers the same site, the same two-engine divergence, the
-`'0'` row, and hands the `'3e3'` question to EGGERLEO exactly as this card does. **This card should
-be SUPERSEDED into VDQ2N8PX**, which is earlier and better developed.
+`'0'` row, and hands the `'3e3'` question to EGGERLEO exactly as this card does. **A merge is warranted; the DIRECTION is
+weaker than an earlier version of this note claimed.** It said "this card should be SUPERSEDED into
+VDQ2N8PX ... earlier and better developed". With `min-approval-requirement` equal (both `none`) and
+the content comparison below showing the two traces are COMPLEMENTARY rather than one dominating,
+**the only surviving ground is creation order — which this same note concedes is not a convention
+stated anywhere in this project's rules.** Recorded as: merge yes, direction is the decider's call,
+and whichever way it goes both halves of the `Ports` trace must survive.
 
 **CORRECTED 16:58 — an earlier version of this note said VDQ2N8PX wins partly on
 `min-approval-requirement: none` "against 4MJT92J7's `medium`". FALSE: this card is ALSO
@@ -43,15 +48,16 @@ is not, and this session already closed one contested card on its own authority 
 - **Box 3 is DONE and the code has landed** (`c17ef591`, corrected by `0f1e9433`): `freePort.ts`'s
   `alcoreArgsFromEnv` comment no longer claims alcore is flags-only, and now carries the scoped
   evidence (the literals `UI_PORT`/`OTLP_PORT` occur 4× in `rust-core`, all in comments).
-- ~~The `Ports::default()` caller trace~~ — **STRUCK 16:58. VDQ2N8PX ALREADY HAD IT, measured the
-  same morning, and its version is BETTER.** VDQ2N8PX's "Why severity is low — MEASURED rather than
-  assumed" section carries `lib.rs:565` as the only construction site AND names the overwrite site
-  `alcore.rs:235-237`, which this card never found. It then flags what this card asserted flatly:
-  *"`severity: low` ASSUMES the overwrite at `alcore.rs:235-237` runs unconditionally on the serve
-  path — that guard is UNVERIFIED."* This card's box 1 "ANSWERED 2026-09-04" was therefore a
-  REDISCOVERY of VDQ2N8PX's morning finding, arrived at ~6h later and less carefully. It also rules
-  out a hazard this card never considered (no `..Default::default()` spread of `Ports` exists).
-  **Nothing to migrate; read VDQ2N8PX's section instead of this card's box 1.**
+- **The READ-side half of the `Ports` trace.** Corrected 17:02 — a 16:58 version struck this as
+  "nothing to migrate", which was FALSE and was itself the disown-without-rehome failure
+  TRDD-CS2W7E77 exists to repair. The two traces are **complementary, not nested**: VDQ2N8PX is
+  better on the WRITE path (it found the overwrite site `alcore.rs:235-237` this card never
+  located, ruled out a `..Default::default()` spread, and honestly flags that guard as UNVERIFIED
+  where this card asserted it flatly), but **this card is the only one establishing that
+  `server_stats.rs:574-575` are the ONLY readers of `st.ports.*`**, plus the `canonical` flag —
+  and that exhaustive reader set is what makes "nothing binds from `Ports`" hold independently of
+  the unverified overwrite. "Rediscovery" is fair for the `lib.rs:565` half, overstated for the
+  whole.
 - The retractions recorded below (the `server stop` scenario; the inverted BSDR4TRM citation; the
   `'+8080'` row asserted from intuition).
 
@@ -158,7 +164,7 @@ is the first task, not a formality — the whole severity of this card depends o
 
 ## Acceptance
 
-- [x] Every caller of `Ports::default()` is traced and listed. Decide from that list whether the
+- [ ] Every caller of `Ports::default()` is traced and listed. Decide from that list whether the
       env-derived `mcp` can reach a served response or a bound listener, or is always overwritten.
       **ANSWERED 2026-09-04:** exactly ONE caller — `lib.rs:565`, initializing `CoreState.ports`.
       The only reads of `st.ports.*` are `server_stats.rs:574-575` (the `/api/server-stats` JSON
@@ -172,8 +178,20 @@ is the first task, not a formality — the whole severity of this card depends o
       written, ALSO found the overwrite site `alcore.rs:235-237` which this box never located, and
       explicitly marks as UNVERIFIED the guard this box asserts flatly ("`alcore serve` overwrites
       `mcp` from `--mcp-port` once `serve_mcp` claims the port"). Whether that overwrite runs
-      unconditionally is NOT established, and the severity rating depends on it. Do not cite this
-      box; cite VDQ2N8PX.
+      unconditionally is NOT established, and the severity rating depends on it.
+      **UNTICKED 2026-09-04T17:02.** The box has TWO clauses: *trace and list* (satisfied) and
+      *DECIDE whether the value can reach a served response or a bound listener, or is always
+      overwritten* (NOT satisfied — "always overwritten" rests on the guard VDQ2N8PX marks
+      unverified). A `[x]` above a note saying its own answer is unverified is exactly the
+      "caveat under a ticked box is a lie" failure this session committed as a lesson in
+      `2dc56a9b` and applied on 6SPXOV0P. It is not cosmetic: `grep -c '\- \[ \]'` is how this
+      board's remaining work is counted, and a wrong tick makes the card read one box nearer done.
+      **What this box DID establish, and it is unique to this card — do not discard it:**
+      `server_stats.rs:574-575` are the ONLY readers of `st.ports.*` (VDQ2N8PX claims only that
+      `ports` *feeds* `:574`, never exhaustiveness), plus the `canonical` flag at `:575`. That
+      exhaustive reader set is what makes "nothing binds a listener from `Ports`" hold INDEPENDENTLY
+      of the overwrite — VDQ2N8PX's low severity merely assumes the overwrite. Migrated to
+      VDQ2N8PX's duplicate note; keep both halves.
 - [ ] A decision is recorded: delete the env read in favour of the flag, OR align its parse
       semantics with `envPort`. Not "it's probably fine".
 - [x] `freePort.ts`'s `alcoreArgsFromEnv` comment is corrected or narrowed to what is true. It

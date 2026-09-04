@@ -3,8 +3,8 @@ trdd-id: VDQ2N8PX
 title: Rust parses MCP_PORT by its own rules so the server and the CLI can still disagree
 column: todo
 created: 2026-09-04T10:19:22+0200
-updated: 2026-09-04T16:58:30+0200
-related: [4MJT92J7, 99HUNXJS, EGGERLEO, Q9WD3K5R]
+updated: 2026-09-04T17:02:43+0200
+related: [4MJT92J7, 99HUNXJS, EGGERLEO, Q9WD3K5R, 1B98LCVR]
 current-owner: main-session
 task-type: bugfix
 project-id: agentlenspro
@@ -39,16 +39,23 @@ The supersede transition is NOT performed here (`<any non-design> → superseded
   vars for these — it is flags-only"*, which this very defect falsifies. It now states the scoped
   truth instead. That comment was the only evidence anyone had that the Rust env boundary was
   airtight.
-- ~~The `Ports::default()` caller trace~~ — **STRUCK 16:58: THIS CARD ALREADY HAD IT AND HAS IT
-  BETTER.** The claim that 4MJT92J7 contributed this was written after reading only the first 60
-  lines of this card — a completeness assertion over a partial read, which is the same failure
-  shape as the port-site claims, applied to a card instead of a source tree. This card's
-  *"Why severity is low — MEASURED rather than assumed"* section already carried `lib.rs:565`,
-  ALSO located the overwrite site `alcore.rs:235-237` that 4MJT92J7 never found, ruled out a
-  `..Default::default()` spread, and — decisively — flags the guard on `alcore.rs:235-237` as
-  **UNVERIFIED**, where 4MJT92J7's box 1 asserts the overwrite flatly. So 4MJT92J7's box-1 work was
-  a ~6h-later rediscovery of this section, and the duplication is DEEPER than first recorded, not
-  shallower. Nothing to migrate here.
+- **The READ-SIDE half of the `Ports` trace — GENUINELY UNIQUE to 4MJT92J7, and it must migrate.**
+  The two traces are **COMPLEMENTARY, not nested** (corrected 17:02; a 16:58 version struck this
+  bullet entirely as "nothing to migrate", which was the disown-without-rehome failure
+  TRDD-CS2W7E77 exists to repair, committed one commit after citing that lesson):
+  - **This card is better on the WRITE path** — it has `lib.rs:565` as the only construction site,
+    ALSO locates the overwrite at `alcore.rs:235-237` (4MJT92J7 never found it), rules out a
+    `..Default::default()` spread, and honestly flags the guard on `alcore.rs:235-237` as
+    **UNVERIFIED**.
+  - **4MJT92J7 is better on the READ path** — it establishes that `server_stats.rs:574-575` are the
+    **ONLY** readers of `st.ports.*` (an exhaustiveness claim this card never makes; this card says
+    only that `ports` *feeds* `:574`), and names the `canonical` flag (`st.ports.otlp == 4318`)
+    at `:575`, which appears nowhere here.
+  **Why the read-side half is load-bearing and cannot be dropped:** the exhaustive reader set is
+  what licenses *"nothing binds a listener from `Ports`"* INDEPENDENTLY of the overwrite. This
+  card's `severity: low` explicitly ASSUMES the overwrite runs; 4MJT92J7's reader set makes the
+  conclusion hold whether or not it does. Keep both halves.
+  So "rediscovery" is fair for the `lib.rs:565` half and overstated for the whole.
 
 `rust-core/crates/agentlens-core/src/server_stats.rs:68`, in `impl Default for Ports`:
 
