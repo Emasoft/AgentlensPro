@@ -1,6 +1,6 @@
 ---
 trdd-id: KBK9J59Y
-title: Seven cards in WORK columns have no acceptance boxes so every box-count triage reads them as done
+title: Six WORK-column cards have no acceptance criteria and a seventh has prose ones that box-count triage cannot see
 column: todo
 created: 2026-09-04T18:19:29+0200
 updated: 2026-09-04T18:19:29+0200
@@ -36,6 +36,15 @@ Q9WD3K5R  todo       updated=2026-09-04  one-storage-gateway-not-thirty-four-mig
 
 **Seven cards have ZERO acceptance boxes — neither `- [ ]` nor `- [x]`.** `grep -c '^ *- \[ \]'`
 returns 0 for each, which is the same value it returns for a card whose every box is ticked.
+
+**THE TWO CASES, and they need DIFFERENT remedies — read this before the framing below.**
+- **Six cards have no acceptance-shaped section at all** (`NDKKOABG`, `YBJGIYI1`, `ZIWEB0UW`,
+  `2C23ROPZ`, `0Y8BMVK2`, `Q9WD3K5R`) → criteria may genuinely be MISSING. A real gap.
+- **`POLG0613` has `## ACCEPTANCE` with criteria in PROSE** → nothing is missing; it is perfectly
+  assessable, and the only problem is that a checkbox scan cannot COUNT it. That is an argument for
+  a CONVENTION (write criteria as checkboxes so they are machine-countable), not a defect report.
+
+Conflating those two is what the original framing did, and it would misroute whoever picks this up.
 
 **CORRECTED 18:2x — "no criterion was ever written" was FALSE for one of them, and I asserted it
 without opening any.** A checkbox grep sees checkbox syntax; it says nothing about prose criteria.
@@ -82,8 +91,10 @@ card, by whoever owns it. Filing seven derived cards from one scan would be wors
       `ticked` together (`open=0 ticked=0` vs `open=0 ticked=6`) wherever a box count is used for
       triage — the distinction costs one extra `grep -c` and is what the scans this session already
       printed once the second column was added.
-- [ ] Confirm the count is still seven at the time of the fix; three of these were last updated
-      2026-09-01/02 and the set will drift.
+- [ ] Confirm the counts still hold at the time of the fix; FOUR of these were last updated
+      2026-09-01/02 (`NDKKOABG` 09-01, `ZIWEB0UW` 09-01, `YBJGIYI1` 09-02, `2C23ROPZ` 09-02) and
+      the set will drift. An earlier version said "three" — miscounted from the same listing that
+      shows four.
 
 ## Notes and lessons learned
 
