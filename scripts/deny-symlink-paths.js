@@ -215,12 +215,27 @@ function effectiveCwd(segment, baseCwd) {
   // `(` is a boundary, not text: `(cd <wt> && cp x node_modules/)` is the incident shape wearing
   // parentheses, and a `\s`-only boundary rejected the cd, resolved the relative path against the
   // HOOK's cwd, found nothing, and ALLOWED. Measured 2026-09-04 — the brace form `{ cd … ; }` was
-  // caught the whole time only because `{` happens to be followed by a space.
-  const m = /(?:^|[\s(])(?:cd|pushd)\s+(?:--\s+)?(['"]?)([^'"&;|]+)\1(?:\s|$)/.exec(segment)
+  // caught the whole time only because `{` happens to be followed by a space. `$(` is excluded: a
+  // cd inside a command substitution runs in a subshell and never moves the parent.
+  const m = /(?:^|\s|(?<!\$)\()(?:cd|pushd)\s+(?:--\s+)?(['"]?)([^'"&;|]+)\1(?:\s|$)/.exec(segment)
   if (!m) return { dir: baseCwd, matched: false }
   const target = m[2].trim()
   if (!target || target === '-') return { dir: baseCwd, matched: false }
-  const expanded = target.startsWith('~') ? path.join(process.env.HOME || '', target.slice(1)) : target
+  // A `$var` this guard cannot expand must NOT move the base. `cd $PWD && cp x node_modules/`
+  // resolved to `<cwd>/$PWD/node_modules` — a directory that does not exist — and `matched: true`
+  // then waved the relative path past the existence gate, so the REAL `<cwd>/node_modules` symlink
+  // was never looked at. Measured 2026-09-04: adding a no-op `cd $PWD &&` turned a DENY into an
+  // ALLOW. A guard defeated by a no-op prefix is not a guard, so an unresolvable target leaves the
+  // base exactly where it was and claims nothing. PWD and HOME are expanded because they are the
+  // two we can know; anything else stays put.
+  const expanded = target
+    .replace(/^\$\{?PWD\}?(?=\/|$)/, baseCwd)
+    .replace(/^(?:~|\$\{?HOME\}?)(?=\/|$)/, process.env.HOME || '')
+  // Same rule for a leftover `~`: `~otheruser` is a home this guard cannot resolve, and resolving
+  // it against baseCwd would invent `<cwd>/~otheruser` — the same fictional-directory bypass.
+  if (expanded.includes('$') || expanded.includes('`') || expanded.startsWith('~')) {
+    return { dir: baseCwd, matched: false }
+  }
   return { dir: path.isAbsolute(expanded) ? expanded : path.resolve(baseCwd, expanded), matched: true }
 }
 
@@ -348,6 +363,26 @@ process.stdin.on('end', () => {
     // That is a MISS, not friction: any command with a redirect before the dangerous one went
     // unchecked. Every mask in this path must keep the string the same length as `cmd`.
     const segmentable = masked.replace(/\d?>&\d?/g, (m) => ' '.repeat(m.length))
+    // ...and this is what keeps that sentence true rather than merely asserted in a comment. Stage
+    // offsets are computed on `segmentable` and used to slice `cmd`, so a mask that ever changed
+    // length would extract a DIFFERENT path than the one the command names — a wrong answer with
+    // full confidence, the worst shape a guard has. Unlike the catch below this does NOT fail open:
+    // it stops analysing and reports what it cannot check, because "I could not read this command"
+    // is a true statement and "no symlink here" would not be.
+    if (segmentable.length !== cmd.length) {
+      process.stdout.write(JSON.stringify({
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse',
+          permissionDecision: 'deny',
+          permissionDecisionReason:
+            `deny-symlink-paths.js cannot check this command: masking changed its length `
+            + `(${cmd.length} -> ${segmentable.length}), so every path it extracted would come from `
+            + `the wrong offset. This is a bug in the guard, not in your command — report it. `
+            + `Every mask in this guard must be length-preserving.`,
+        },
+      }))
+      process.exit(0)
+    }
     // PIPELINES FIRST. A read-only command is only harmless if its OUTPUT goes nowhere dangerous:
     // `ls /tmp/link | oppa` reads through the symlink and hands the result to a binary we know
     // nothing about (owner, 2026-09-03: "you don't know what oppa does, but since ls pipes its

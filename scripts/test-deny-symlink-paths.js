@@ -125,6 +125,17 @@ check(run(`(cd ${wtDir} && cp x node_modules/)`).denied, 'a subshell in parens i
 // guard inferring "a cd occurred" from `dir !== sessionCwd` gates this relative nonexistent leaf
 // away and ALLOWS — which is why effectiveCwd reports `matched` instead of the caller guessing.
 check(run(`cd . && cp x linked/notyet`).denied, 'cd . is an explicit cd even though the dir is unchanged')
+// ...and its complement, which is what stops `matched` from being hardcoded true: with NO cd, a
+// relative leaf that does not exist is gated away instead of resolved.
+check(!run(`cp x linked/notyet`).denied, 'no cd: a nonexistent relative leaf stays gated')
+// A no-op prefix must not defeat the guard. `cd $PWD` used to resolve to `<cwd>/$PWD` — fictional —
+// and then wave the relative path past the existence gate, so the real symlink was never examined.
+check(run(`cd $PWD && cp x ${path.basename(link)}/f`).denied, 'cd $PWD does not redirect the search into a fictional dir')
+check(run(`cd \${PWD} && cp x ${path.basename(link)}/f`).denied, '...brace form too')
+// An unexpandable target leaves the base where it was rather than inventing `<cwd>/$NOPE`. It does
+// NOT claim `matched`, so a nonexistent leaf still gets gated — we do not know where that cd went,
+// and guessing a directory is how the $PWD bypass worked.
+check(run(`cd $NOPE_UNSET && cp x ${path.basename(link)}/`).denied, 'an unexpandable cd target leaves the base where it was')
 check(run(`sort -o ${link}/out ${link}/in`).denied, 'sort -o DOES write in place')
 check(run(`sed -i s/a/b/ ${link}/f`).denied, 'sed is not read-only at all')
 
