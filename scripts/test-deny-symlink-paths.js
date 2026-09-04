@@ -184,6 +184,17 @@ check(run(`git commit -m "don't" && echo $( echo $(date) && cd ${sub} ) && cp x 
 // `)` is shell syntax, so it must not be swallowed into a cd target: `cd <dir> )` took the paren
 // as part of the name and resolved against the fictional `<dir> )`.
 check(run(`(cd ${wtDir} ) && cp x node_modules/`).denied, 'a trailing ) is not part of the directory name')
+// ...but INSIDE quotes a paren is a name, and excluding it everywhere left the closing quote
+// unreachable, so the regex matched nothing and no cd was seen at all. `Screenshot (1)` is routine.
+const paren = path.join(root, 'My Docs (2026)')
+fs.mkdirSync(paren, { recursive: true })
+fs.symlinkSync(real, path.join(paren, 'node_modules'))
+check(run(`cd 'My Docs (2026)' && cp x node_modules/`).denied, 'a QUOTED directory name may contain parentheses')
+// The alternate base is checked only while the base is IN DOUBT. Here the substitution CLOSES, so
+// the cd is known not to apply and naming `<wt>/node_modules` would be a verdict about a file this
+// command cannot reach. The unclosed form above it must still deny — that is the case it exists for.
+check(!run(`echo $( grep "a && cd ${wtDir} ) && cp x node_modules/`).denied, 'a closed substitution ends the doubt: no stale alternate base')
+check(run(`echo $( grep "a && cd ${wtDir} && cp x node_modules/`).denied, '...while an UNCLOSED one keeps it')
 // A glob char in a name that REALLY EXISTS is a name, not a pattern. A blanket character test
 // stopped tracking these, trading a real regression for a `cd *` improvement worth nothing.
 const bracket = path.join(root, 'My Docs [2026]')

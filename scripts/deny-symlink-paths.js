@@ -241,9 +241,16 @@ function effectiveCwd(segment, baseCwd) {
   // segmentation split can leave it trailing. `cd /tmp/other )` took the `)` as part of the name,
   // giving the fictional base `/tmp/other )` — the invented-directory bypass, arriving by a route
   // the glob and `$var` bailouts do not cover. Measured 2026-09-04.
-  const m = /(?:^|[\s(])(?:cd|pushd)\s+(?:--\s+)?(['"]?)([^'"&;|)]+)\1(?:\s|$)/.exec(visible)
+  // ...but ONLY in the unquoted branch, which is why the alternation is spelled out instead of one
+  // class with an optional quote around it. `)` is syntax OUTSIDE quotes and content INSIDE them:
+  // excluding it everywhere meant `cd 'My Docs (2026)'` matched nothing at all — the closing quote
+  // could no longer be reached — so no cd was seen and the base never moved. Measured 2026-09-04,
+  // and parenthesised directory names are routine (`Screenshot (1)`, `Backup (old)`). Same shape as
+  // the `[`/`]` regression one commit earlier: a character that is syntax in one view and a name in
+  // the other, judged by a single predicate.
+  const m = /(?:^|[\s(])(?:cd|pushd)\s+(?:--\s+)?(?:'([^']+)'|"([^"]+)"|([^'"&;|)]+))(?:\s|$)/.exec(visible)
   if (!m) return { dir: baseCwd, matched: false }
-  const target = m[2].trim()
+  const target = (m[1] ?? m[2] ?? m[3] ?? '').trim()
   if (!target || target === '-') return { dir: baseCwd, matched: false }
   // A `$var` this guard cannot expand must NOT move the base. `cd $PWD && cp x node_modules/`
   // resolved to `<cwd>/$PWD/node_modules` — a directory that does not exist — and `matched: true`
@@ -484,6 +491,11 @@ process.stdin.on('end', () => {
       subDepth = Math.max(0, subDepth
         + (partSyntax.match(/\$\(/g) || []).length
         - (partSyntax.match(/\)/g) || []).length)
+      // The alternate base exists only while the base is IN DOUBT. Once the substitution closes the
+      // doubt is over, and keeping it would deny on a path the command cannot reach — the
+      // wrong-file verdict this file has twice refused to ship. It survives an unclosed `$(`,
+      // which is the case it was added for.
+      if (subDepth === 0) altDir = null
       if (part === '||' || part === '&') { dir = sessionCwd; dirExplicit = false; altDir = null; continue }
       if (/^(?:&&|[;\n])$/.test(part)) continue
       const pipeline = part
