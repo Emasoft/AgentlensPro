@@ -4,7 +4,7 @@ title: The server and the CLI parse the same port env vars by different rules
 column: ai_review
 created: 2026-08-27T19:03:03+0200
 updated: 2026-09-04T10:28:30+0200
-implementation-commits: [a77ca36a, 35118d19, f5cabd35, 9147d608]
+implementation-commits: [a77ca36a, 35118d19, f5cabd35, 9147d608, 44fcd56f, 80485086]
 current-owner: main
 task-type: bugfix
 severity: LOW
