@@ -3,7 +3,7 @@ trdd-id: 4MJT92J7
 title: alcore reads MCP_PORT from env with parse rules that differ from the TypeScript envPort
 column: todo
 created: 2026-09-04T16:04:40+0200
-updated: 2026-09-04T17:05:00+0200
+updated: 2026-09-04T17:08:00+0200
 current-owner: main-session
 task-type: bugfix
 project-id: agentlenspro
@@ -25,24 +25,17 @@ related: [VDQ2N8PX, 99HUNXJS, BSDR4TRM, EGGERLEO, 1B98LCVR]
 Found 2026-09-04T16:54 while grepping for something else. `VDQ2N8PX`
 (*"Rust parses MCP_PORT by its own rules so the server and the CLI can still disagree"*, created
 **10:19:22**; this card **16:04:40**) covers the same site, the same two-engine divergence, the
-`'0'` row, and hands the `'3e3'` question to EGGERLEO exactly as this card does. **A merge is warranted; the DIRECTION is
-weaker than an earlier version of this note claimed.** It said "this card should be SUPERSEDED into
-VDQ2N8PX ... earlier and better developed". With `min-approval-requirement` equal (both `none`) and
-the content comparison below showing the two traces are COMPLEMENTARY rather than one dominating,
-**the only surviving ground is creation order — which this same note concedes is not a convention
-stated anywhere in this project's rules.** Recorded as: merge yes, direction is the decider's call,
-and whichever way it goes both halves of the `Ports` trace must survive.
+`'0'` row, and hands the `'3e3'` question to EGGERLEO exactly as this card does.
 
-**CORRECTED 16:58 — an earlier version of this note said VDQ2N8PX wins partly on
-`min-approval-requirement: none` "against 4MJT92J7's `medium`". FALSE: this card is ALSO
-`min-approval-requirement: none`.** `medium`/`MEDIUM` are its `priority` and `severity` — three
-frontmatter fields collapsed into one. That deleted one of the two stated grounds; what remains is
-creation order plus the content comparison below, and "earlier wins" is not a convention stated
-anywhere in this project's rules.
-
-**Not doing that transition here:** `<any non-design> → superseded` is NON-EXEMPT under
-`manager-approval-defaults.md` §W. Recording the duplication is exempt (table E); force-superseding
-is not, and this session already closed one contested card on its own authority today (99HUNXJS).
+**THE DECISION, in three lines** (the reasoning history is in `## Notes and lessons learned`):
+- **Merge: YES. Direction: the decider's call** — `min-approval-requirement` is equal (both
+  `none`), and the two `Ports` traces reach the same conclusion by different routes, so neither
+  card dominates. The only asymmetry left is creation order, which is not a convention stated
+  anywhere in this project's rules.
+- **The transition is NOT performed here** — `<any non-design> → superseded` is NON-EXEMPT
+  (`manager-approval-defaults.md` §W). Recording the duplication is exempt (table E).
+- **Whichever way it goes, this must survive:** box 3's landed code fix, and
+  `server_stats.rs:575` + the `canonical` flag.
 
 **What must MIGRATE if the supersede is approved** — this card holds work VDQ2N8PX does not:
 - **Box 3 is DONE and the code has landed** (`c17ef591`, corrected by `0f1e9433`): `freePort.ts`'s
@@ -229,6 +222,29 @@ is the first task, not a formality — the whole severity of this card depends o
 
 ## Notes and lessons learned
 
+- **The merge-note reasoning history, moved here 17:08 so the DECISION leads the card.** Three
+  corrections landed on the duplicate note above: (i) it claimed VDQ2N8PX wins partly on
+  `min-approval-requirement: none` "against 4MJT92J7's `medium`" — FALSE, this card is also `none`;
+  `medium`/`MEDIUM` are its `priority` and `severity`, three frontmatter fields collapsed into one.
+  (ii) It claimed VDQ2N8PX is "strictly better, nothing to migrate" — false, that discarded
+  `:575`/`canonical`. (iii) It claimed this card's reader set is "load-bearing and unique" — false;
+  VDQ2N8PX reaches the no-binding conclusion by its own route (from the BIND site, rather than by
+  reader enumeration) and states it holds *"even in the worst case"*.
+- **The retraction in `13572798` was ITSELF wrong — corrected 17:08.** It retracted an inflated
+  self-criticism ("box counts are how I picked cards") by arguing *"both box-count scans ran BEFORE
+  box 1 was ticked at 16:04"*. **False, and the scan's own output disproves it:** the `todo`/`testing`
+  scan printed `4MJT92J7 … open=2`, a count reachable ONLY with box 1 already ticked (four boxes;
+  box 3 ticked at 16:39 leaves two) — so it ran after 16:04, and after this turn's untick the same
+  command prints `open=3`. Only the `ai_review` scan predates the tick. **The conclusion still
+  stands on other evidence:** `open=` was not the selector, because `EGGERLEO` was picked at
+  `open=3` over `Q9WD3K5R` at `open=0`, on the stated ground that it is the question this card
+  hands off. A retraction that overshoots into a second false claim is worse than the overstatement
+  it removes.
+- **"The two texts were never compared side by side" — attribution correction.** True of every
+  version through 17:02, but the comparison that finally settled it was performed side by side by
+  an adversarial review fork holding both texts in one context, not by this session. As written the
+  sentence implies the author eventually did it. Recorded because it is the same shape as the
+  errors it documents.
 - **Found by running the one grep an adversarial reviewer asked for and I had skipped.** I closed
   99HUNXJS reporting an "EMPTY set difference — no sixth site", which was true of TypeScript and
   false of the premise: my scope (`src standalone media/src scripts`) could not match a Rust file
