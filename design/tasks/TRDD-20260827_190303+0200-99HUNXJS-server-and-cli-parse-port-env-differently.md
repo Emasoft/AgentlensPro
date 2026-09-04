@@ -3,7 +3,7 @@ trdd-id: 99HUNXJS
 title: The server and the CLI parse the same port env vars by different rules
 column: testing
 created: 2026-08-27T19:03:03+0200
-updated: 2026-09-04T10:05:31+0200
+updated: 2026-09-04T10:08:46+0200
 current-owner: main
 task-type: bugfix
 severity: LOW
@@ -140,3 +140,6 @@ one setting you are trying to defeat, so replace it selectively rather than empt
 ## Related
 
 - [[TRDD-BSDR4TRM]] — fixed the CLI half and created this card.
+- [[TRDD-EGGERLEO]] — surfaced while writing this card's test table: `envPort` delegates to bare
+  `Number()`, so `'0x1F80'`, `'0b11'`, `'+8080'` and `'3e3'` are all accepted as ports. This
+  card's suite PINS that as today's behaviour on purpose; EGGERLEO is where it gets decided.
