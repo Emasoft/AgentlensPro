@@ -207,6 +207,20 @@ The soak's own per-minute sampler shows the same thing from the outside: minutes
 
 ## Measurement
 
+**The payload size, measured 2026-09-04 on the live server (pid 37180) — recorded because it
+existed nowhere on the board and the next session would have to rediscover it:**
+
+`GET /api/summary` returns **91,687,199 bytes (91.7 MB)** carrying **21,179 sessions**, in one
+response. Session rows are keyed `sessionId` / `workspace` (NOT `id` / `project` — a probe guessing
+the latter reads `None` for every row and looks like empty data; that cost a wrong turn today).
+
+Why it belongs on THIS card: the acceptance box measures `/api/server-stats` p99 (14.104 s, 6.2%
+over 1 s). `/api/summary` is the fat endpoint and is built from the same summary the livelock is
+about — a ~92 MB serialize on every cache miss is a plausible contributor to the p99 on any route
+that waits behind a rebuild. **Not established as the cause** — it is one observation of a payload
+size, with no attribution of the p99 to it. Treat it as the first thing to measure, not as the
+answer.
+
 `/usr/bin/sample <pid> 6`, top-of-stack, all frames inside the summary rebuild:
 
 ```

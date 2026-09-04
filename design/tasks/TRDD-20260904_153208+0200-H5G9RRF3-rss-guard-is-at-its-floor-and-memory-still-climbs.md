@@ -75,8 +75,17 @@ with `windowMs` pinned at the floor. Two reasons that is not a finding:
 **What would make it evidence:** sample `memory.rssMb` every 30 s for 15–30 minutes with no tool
 traffic against the server. If the band oscillates and returns, it is allocator noise and this
 paragraph should be deleted. If the FLOOR of the band rises monotonically, that is a leak signal.
-A sampler was started 2026-09-04 15:44 writing to `/tmp/rss-band.txt` (30 samples × 30 s);
-`/tmp/` is ephemeral, so re-run it rather than trusting that file to exist.
+A sampler was started 2026-09-04 ~15:44 (pid 46514, `nohup`) writing to `/tmp/rss-band.txt` —
+30 samples × 30 s, so it completes ~16:00. **It was IN FLIGHT when the session that started it
+ended.** Consequences for whoever reads this next:
+
+- The file may be PARTIAL or ABSENT. `/tmp` is ephemeral and the pid died with its session's
+  machine state; do not read a short file and conclude the band is narrow.
+- Do not assume a run is still going. Re-run it rather than waiting on a pid from a dead session.
+- The command, so it need not be reconstructed:
+  `for i in $(seq 1 30); do curl -s http://127.0.0.1:3000/api/server-stats | python3 -c "import json,sys,time;d=json.load(sys.stdin);print(int(time.time()),d['memory']['rssMb'],d['spans']['inMemory'])"; sleep 30; done > /tmp/rss-band.txt`
+- Read it with NO other tool traffic against the server — a single `/api/summary` fetch pulls
+  91.7 MB through it and will show up in the band.
 
 **Severity accordingly re-rated HIGH → MEDIUM.** The structural finding stands (the guard's only
 lever is exhausted and nothing else responds to memory pressure), but the alarm figures around it
