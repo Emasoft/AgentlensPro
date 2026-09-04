@@ -291,6 +291,18 @@ installs, and NEVER wipes `~/.agentlens` data. Deploy on this machine = `node es
 (or `pnpm run package`) + `agentlenspro server restart` (graceful: flushes spans, verifies
 dashboard/OTLP). Hook registration changes need a Claude session restart to take effect.
 
+- **Deploying the RUST core needs an ad-hoc `codesign` that no script performs — and skipping it
+  looks exactly like a startup crash.** After `cargo build --release` + copying into
+  `bin-native/<platform>/`, run `codesign -s - --force bin-native/darwin-arm64/alcore`. Without it
+  macOS SIGKILLs the binary before `main`, so `server restart` prints *"the server exited during
+  startup — it never answered"*, `server.log` is empty, and nothing indicates a signature problem.
+  **The tell is `./bin-native/darwin-arm64/alcore --version` returning exit 137** (128+9 = SIGKILL).
+  This took down a working collector on 2026-09-04; `grep -rn codesign scripts/ package.json
+  .github/workflows/` returns nothing, so the documented deploy path still reproduces it.
+  Also note `bin-native/` is gitignored, so the running binary has no recorded link to a commit.
+  Card: TRDD-M2VK8T4P (includes the unverified question of whether the published tarball is
+  affected — `rustBinResolve` would fall back to the TS server silently if it were).
+
 ## HOW TOKEN USAGE / CACHE ECONOMICS WORK — read before reasoning about burn OR writing any cost/attribution code (doc-verified 2026-07-11, re-affirmed after a live mis-scaling)
 
 This is the model both the human AND the code must obey. Getting it wrong produces confident

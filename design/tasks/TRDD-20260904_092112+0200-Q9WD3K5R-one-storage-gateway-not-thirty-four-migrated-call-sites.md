@@ -3,7 +3,7 @@ trdd-id: Q9WD3K5R
 title: DuckDB is the gateway — delete the layers between callers and it
 column: todo
 created: 2026-09-04T09:21:12+0200
-updated: 2026-09-04T09:28:40+0200
+updated: 2026-09-04T09:31:10+0200
 current-owner: main-session
 task-type: refactor
 project-id: agentlenspro
@@ -51,8 +51,13 @@ in Rust) rather than files that merely mention SQLite:
 | Rust, opens a SQLite store | **2** | `forensics_db.rs`, `opencode.rs` (the latter is OpenCode's own file) |
 | Rust, opens **DuckDB** | 3 | `agentlens-store/{bodies_evidence,lib,transcript_sql}.rs` — already correct |
 
-So **~7 real SQLite open sites, not 34.** The other 27 exemptions are callers holding a handle
-someone else opened, or files whose only SQLite mention is a doc comment. The defect is real and the
+So **~7 real SQLite open sites, not 34** — and more precisely: **4 files OWN the construction**
+(`forensicsDb.ts`, `database/db.ts`, `forensics_db.rs`, `opencode.rs`), **3 open through those
+helpers** (`forensicsIndex.ts`, `database/reader.ts`, `cli/setup.ts`), **~14 are tests and parity
+fixtures** that construct stores because that is what test setup does, and the rest hold a handle
+someone else opened or mention SQLite only in a doc comment. That split drives the plan: the 4
+owners are what changes, the 3 become query sites, the handle-holders are the ACTUAL coupling, and
+the test scaffolding is a separate question. The defect is real and the
 USER's point stands — 7 is still not 1 — but it is roughly a fifth the size this card first claimed,
 and asserting 34 without counting openers was the same unverified-number habit this session has been
 correcting elsewhere.
@@ -83,10 +88,19 @@ That is one storage boundary. It was flattened into a per-database checklist.
 - **`agentlens-store` owns every on-disk read** — parquet, JSONL, the fact table, everything. It
   already owns parquet; extend it rather than introduce a second abstraction. It exposes SQL and
   nothing else. No other file opens any store.
-- **THE GATEWAY IS DUCKDB ITSELF — there is nothing to build.** Two thin bindings over one engine,
+- **THE GATEWAY IS DUCKDB ITSELF — there is no gateway OBJECT to build.** Two thin bindings over one engine,
   one schema, one set of SQL. "One gateway" means one set of QUERIES both languages execute against
-  the same parquet, not one code object. So this card is **deletion, not addition**: remove the
-  layers sitting between callers and DuckDB. Two readings must be ruled out explicitly, because both
+  the same parquet, not one code object.
+  **But the shared schema and query set IS an artifact, and it does not maintain itself** — that is
+  this card's real work, and calling the job purely subtractive would mislead whoever picks it up.
+  Today each side holds its own SQL strings; after the deletion they still will, unless something
+  makes them share. Open design content: where the SQL text lives, how a schema change reaches both
+  sides in one commit, and what stops drift BETWEEN commits — currently nothing, since the parity
+  fixtures catch drift in RESULTS, never in queries. The predictable failure is someone reading
+  "deletion", removing the handle-passing, and ending with two languages issuing independently
+  authored SQL against the same parquet — the same "guard green, architecture unchanged" outcome
+  this card exists to prevent, one level up.
+  So: **delete the handle-passing, BUILD the shared-SQL artifact.** Two readings must be ruled out explicitly, because both
   are the obvious interpretation of "one gateway" in a two-language repo and both are worse than
   today:
   - **NOT two gateway objects that must agree.** That adds a second parity surface (gateway
