@@ -101,9 +101,14 @@ were left rather than fixed.
    present identically in both and hashes equal. What it actually proves is that DuckDB's parquet
    writer round-trips a relation. **The verification that genuinely covered this migration was done
    by hand and is NOT in the script**: 33,787 REAL values compared against the source's own
-   `printf('%!.20g')` output (0 mismatches) plus per-column NULL counts (identical everywhere). Fix
-   by hashing the NDJSON line bytes JS-side as they are written and comparing that to DuckDB's
-   digest over the parquet — then the two sides share only the format, not the parse.
+   `printf('%!.20g')` output (0 mismatches) plus per-column NULL counts (identical everywhere).
+   ~~Fix by hashing the NDJSON line bytes JS-side.~~ **That proposal was itself wrong** — a JS-side
+   hash of the lines shares the SERIALISER with the writer, so it would verify sql.js→JSON and
+   still not verify sql.js→values. It is the same mirror one layer down, which is how easy this
+   mistake is to make even while writing the rule against it. The right fix is to compare **sql.js
+   query results** against the parquet, which is what `verify-forensics-parquet-parity.mjs` already
+   does — so the work is to fold a per-column value comparison into the migration's own run, not to
+   invent a new digest.
 2. **`new URL(import.meta.url).pathname`** in `verify-forensics-parquet-parity.mjs` yields
    `/C:/...` on Windows. Should be `fileURLToPath`. Also, the dynamic sibling-import it feeds is a
    pattern this repo does not otherwise use — a static `import { createViews } from
