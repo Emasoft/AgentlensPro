@@ -76,6 +76,51 @@ discard ~88% of history. **The fourth branch row, therefore:**
 Reason 3 above says a non-derivable column is a finding worth having on day one. A finding is not a
 plan; this table is the plan.
 
+## ⏵ STOPPING POINT — 2026-09-04T13:0x, read this before touching any storage script
+
+**`forensics.db` is MIGRATED and VERIFIED. Nothing reads the parquet. That is a coherent place to
+stop, and it is where this session stops.** Nothing is half-migrated, no reader points at an
+unfinished target, no data is at risk. The source database is intact and is still live.
+
+Commits: `a53af76d` (migration) → `47c6b2b4` → `b0d953fc` → `d8829c78` → `336e1273` → `752a392a`
+→ `59b8fc01` → `0caeae53` (sql.js precision fix) → `dd37cf60` (tolerance).
+
+**NEXT STEP is the repoint** — `forensicsSql.ts` + `forensicsDb.ts` + `forensicsIndex.ts` onto the
+parquet views. That removes 4 openers against the 3 this session added, which is the point at which
+the guard's ratchet becomes real rather than debt. `scripts/build-forensics-views.mjs` exists to
+serve exactly that.
+
+### THREE KNOWN DEFECTS, recorded so the next session inherits them instead of rediscovering them
+
+None is load-bearing today — they are defects in tooling that nothing depends on, which is why they
+were left rather than fixed.
+
+1. **The migration's content hash is TAUTOLOGICAL.** Extraction is sql.js → NDJSON → DuckDB
+   `read_json` → relation R → `COPY R TO parquet`, and the hash compares R against the parquet
+   written FROM R. Both operands descend from the same NDJSON parse, so an extraction bug is
+   present identically in both and hashes equal. What it actually proves is that DuckDB's parquet
+   writer round-trips a relation. **The verification that genuinely covered this migration was done
+   by hand and is NOT in the script**: 33,787 REAL values compared against the source's own
+   `printf('%!.20g')` output (0 mismatches) plus per-column NULL counts (identical everywhere). Fix
+   by hashing the NDJSON line bytes JS-side as they are written and comparing that to DuckDB's
+   digest over the parquet — then the two sides share only the format, not the parse.
+2. **`new URL(import.meta.url).pathname`** in `verify-forensics-parquet-parity.mjs` yields
+   `/C:/...` on Windows. Should be `fileURLToPath`. Also, the dynamic sibling-import it feeds is a
+   pattern this repo does not otherwise use — a static `import { createViews } from
+   './build-forensics-views.mjs'` is simpler and idiomatic.
+3. **Invalid UTF-8 in a TEXT column is unmeasured.** sql.js converts SQLite TEXT to a JS string at
+   the wasm boundary, so invalid bytes become U+FFFD BEFORE anything serialises them — and the
+   BLOB refusal cannot catch it, because the column is declared TEXT. Settle with
+   `SELECT count(*) FROM t WHERE typeof(c)='blob'` across every column, and a UTF-8 validity check.
+
+### THE PATTERN WORTH NAMING, because it recurred three times in one session
+
+**A verification must not share its suspect stage with the thing it verifies.** Every failed check
+here had that shape: a typed-vs-text oracle, then an all_varchar-vs-all_varchar oracle, then an
+NDJSON-vs-NDJSON hash. Each looked like a comparison and was a mirror. The one that finally worked
+compares sql.js (what the product runs) against the parquet — two paths that share nothing but the
+question.
+
 ## ⏵ THE MATRIX LANDED AND THE BRANCH FIRED — re-decision, 2026-09-04T12:1x
 
 `reports/duckdb-gateway/20260904_121036+0200-forensics-derivability-matrix.md`: **34 columns —
