@@ -80,9 +80,16 @@ Claude Code CLI uses Anthropic API token-based pricing only — no request-multi
 
 **Source:** <https://platform.claude.com/docs/en/about-claude/pricing> (verified 2026-06-08; sonnet-5/mythos-5 added 2026-07-07)
 
-> **claude-sonnet-5 introductory pricing:** $2/$10 per MTok (cache read $0.20, cache write $2.50)
-> bills through **2026-08-31**; sticker is $3/$15 ($0.30/$3.75). The rate tables carry the intro
-> rates until then — flip both `pricing.ts` files to sticker after that date.
+> **claude-sonnet-5 is $2/$10 per MTok** (cache read $0.20, cache write $2.50) — **MEASURED**
+> 2026-09-04 against Claude Code's own reported `costUSD` over 7 real post-2026-09-01 sessions,
+> median implied $1.956/MTok. This paragraph used to announce a reversion to a $3/$15 "sticker"
+> after 2026-08-31 and to instruct the reader to "flip both `pricing.ts` files to sticker after
+> that date". **Do not do that.** The reversion was withdrawn upstream (CC 2.1.243, 2026-08-25);
+> `pricing.ts` had encoded it as a `scheduledChange`, it fired on schedule, and every sonnet-5
+> cost figure read 50% high until 2026-09-04. There is also no longer a second `pricing.ts` to
+> flip: `rust-core/crates/agentlens-core/pricing.json` is GENERATED from the TS table by
+> `scripts/export-pricing.js`, and `pnpm run check-pricing-export` fails the build if they drift.
+> Evidence: `reports/pricing-measurement/20260904_061757+0200-sonnet5-billed-rate.md`.
 > **Unknown models fail loud:** a model with no table entry renders an UNPRICED badge (cost is
 > unknown, not $0) instead of silently pricing at zero.
 

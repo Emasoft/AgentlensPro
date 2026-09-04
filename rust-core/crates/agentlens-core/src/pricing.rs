@@ -184,3 +184,92 @@ pub fn calc_token_cost_usd(
         + (w1h / 1_000_000.0) * rate_1h
         + (output_tokens / 1_000_000.0) * r.output_per_mtok
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // The Rust half of the `scheduledChange` contract. It exists because NO entry in pricing.json
+    // carries a scheduledChange any more — sonnet-5's was withdrawn upstream (CC 2.1.243) and
+    // removed 2026-09-04 — so nothing in the generated table or the parity fixtures exercises this
+    // branch, and it would have gone dark on the Rust side while TS kept coverage. Mirrors the
+    // `applyScheduledChange` block in src/test/pricing.test.ts; keep the two in step.
+    //
+    // Pinning it against a SYNTHETIC entry rather than whichever model happens to have a promo is
+    // the point: a test aimed at a live promo asserts a vendor's announcement, and this one was
+    // asserting a withdrawn one for three days.
+    fn promo() -> Value {
+        serde_json::json!({
+            "inputPerMTok": 2.0, "cacheReadPerMTok": 0.2, "cacheWritePerMTok": 2.5,
+            "outputPerMTok": 10.0, "contextWindowTokens": 1_000_000,
+            "multiplier": 0, "multiplierAnnualPostJun1": 0,
+            "scheduledChange": {
+                "from": "2026-09-01T00:00:00Z", "note": "test fixture",
+                "rates": { "inputPerMTok": 3.0, "cacheReadPerMTok": 0.3,
+                           "cacheWritePerMTok": 3.75, "outputPerMTok": 15.0 }
+            }
+        })
+    }
+    const NOW: f64 = 1_788_228_000_000.0; // 2026-09-01T02:00:00Z — after the fixture's change
+
+    #[test]
+    fn before_the_change_date_keeps_the_pre_change_rate() {
+        let r = apply_scheduled_change(&promo(), Some("2026-08-15T12:00:00Z"), NOW);
+        assert_eq!(r.input_per_mtok, 2.0);
+        assert_eq!(r.output_per_mtok, 10.0);
+    }
+
+    #[test]
+    fn on_or_after_the_change_date_gets_the_new_rate() {
+        let r = apply_scheduled_change(&promo(), Some("2026-09-01T00:00:00Z"), NOW);
+        assert_eq!(r.input_per_mtok, 3.0);
+        assert_eq!(r.cache_read_per_mtok, 0.3);
+        assert_eq!(r.cache_write_per_mtok, 3.75);
+        assert_eq!(r.output_per_mtok, 15.0);
+    }
+
+    // A call recorded at the old rate must report the old rate forever. A table that only knows
+    // "the current rate" rewrites history on every rate change.
+    #[test]
+    fn a_historical_call_keeps_its_original_rate() {
+        assert_eq!(apply_scheduled_change(&promo(), Some("2026-07-01T00:00:00Z"), NOW).input_per_mtok, 2.0);
+    }
+
+    // An unparseable timestamp must resolve like an ABSENT one (fall back to `now`), never pin to
+    // the pre-change rate. In TS this guards a NaN comparison that silently returns false forever;
+    // Rust's Option makes the same mistake available as `unwrap_or(pre_change)`.
+    #[test]
+    fn an_unparseable_timestamp_falls_back_to_now_not_to_the_old_rate() {
+        let garbage = apply_scheduled_change(&promo(), Some("not-a-date"), NOW);
+        let absent = apply_scheduled_change(&promo(), None, NOW);
+        assert_eq!(garbage.input_per_mtok, absent.input_per_mtok);
+        assert_eq!(garbage.input_per_mtok, 3.0, "NOW is after the change, so both must be post-change");
+    }
+
+    #[test]
+    fn an_unparseable_change_date_leaves_the_rates_untouched() {
+        let mut broken = promo();
+        broken["scheduledChange"]["from"] = serde_json::json!("whenever");
+        assert_eq!(apply_scheduled_change(&broken, Some("2027-01-01T00:00:00Z"), NOW).input_per_mtok, 2.0);
+    }
+
+    #[test]
+    fn an_entry_with_no_scheduled_change_is_unaffected_by_a_timestamp() {
+        let mut plain = promo();
+        plain.as_object_mut().unwrap().remove("scheduledChange");
+        let a = apply_scheduled_change(&plain, Some("2026-01-01T00:00:00Z"), NOW);
+        let b = apply_scheduled_change(&plain, Some("2027-01-01T00:00:00Z"), NOW);
+        assert_eq!(a.input_per_mtok, b.input_per_mtok);
+    }
+
+    // The retraction itself, pinned on the real table: sonnet-5 must be $2/$10 at EVERY timestamp,
+    // including dates past the flip that was removed.
+    #[test]
+    fn sonnet_5_is_two_and_ten_at_every_timestamp() {
+        for at in ["2026-07-01T00:00:00Z", "2026-09-01T00:00:00Z", "2027-01-01T00:00:00Z"] {
+            let r = lookup_rates("claude-sonnet-5", Some(at), NOW).expect("sonnet-5 is in the table");
+            assert_eq!(r.input_per_mtok, 2.0, "input at {at}");
+            assert_eq!(r.output_per_mtok, 10.0, "output at {at}");
+        }
+    }
+}

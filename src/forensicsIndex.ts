@@ -575,7 +575,16 @@ const AC_INSERT_SQL = `INSERT OR REPLACE INTO api_calls (
 
 function apiCallParams(ev: ApiCallEvent, spawn: ResolvedSpawn, now: number): Record<string, unknown> {
   const model = ev.model ?? null
-  const costUsd = model ? calcTokenCostUsd(ev.inputTokens, ev.cacheReadTokens, ev.cacheCreationTokens, ev.outputTokens, model) : 0
+  // Priced at the CALL's own timestamp, never at index time. Without the trailing `atIso` an
+  // announced rate change (`scheduledChange` in shared/pricing) reprices historical rows by the
+  // wall clock of whenever the indexer happened to run — so the same call costs a different amount
+  // depending on the day it was indexed, and a re-index silently rewrites history. That is the
+  // exact failure the mechanism exists to prevent, and this call site — the one that writes every
+  // api_calls.cost_usd row — was not passing it. No live entry carries a scheduledChange today, so
+  // this changes no number now; it means the next real change lands correctly instead of silently.
+  const costUsd = model
+    ? calcTokenCostUsd(ev.inputTokens, ev.cacheReadTokens, ev.cacheCreationTokens, ev.outputTokens, model, 0, new Date(ev.ts).toISOString())
+    : 0
   // billable_weight is built from the tier split (5m/1h), but a response can carry a flat
   // cache_creation total with NO tier sub-object (both tiers 0) — see cacheCreationForensics. In that
   // case attribute the flat total to the 5-min tier (its default weight) so the priciest bucket is

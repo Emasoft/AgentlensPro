@@ -13,13 +13,25 @@ All notable changes to AgentlensPro are documented here.
   date; the reversion was withdrawn upstream (CC 2.1.243, 2026-08-25) but the flip had already
   fired, so every sonnet-5 cost figure — `/cost`-style rollups, `investigate_burn`, the dashboard,
   and the Rust core's embedded copy of the table — read high for three days. Now $2/$10 at every
-  timestamp, **measured** rather than taken from the changelog: 7 real post-2026-09-01 sessions
-  solved to a median $1.956/MTok against Claude Code's OWN reported `costUSD` and token counts
-  (at $3 the largest sampled session would have cost $47.35 against the $31.00 actually reported).
-  The `scheduledChange` mechanism itself is retained for the next real rate change; no entry uses
-  it today, so its behaviour is now pinned directly rather than through whichever model happens to
-  have a promo. Also regenerates `rust-core/.../pricing.json` and the pricing parity fixture, which
-  had additionally been stale for `claude-fable-5-1`.
+  timestamp, **measured** rather than taken from the changelog: 7 real post-2026-09-01 sessions each
+  solved to exactly $2.0000/MTok against Claude Code's OWN reported `costUSD` and token counts
+  (at $3 the largest sampled session would have cost $60.58 against the $40.39 actually reported).
+  **Rows already written are not healed** — `api_calls.cost_usd` / `sessions.cost_usd` indexed
+  between 2026-09-01 and 2026-09-04 keep their high figures until reindexed; only future
+  computation is corrected. The `scheduledChange` mechanism itself is retained for the next real
+  rate change; no entry uses it today, so its behaviour is now pinned directly in both languages
+  rather than through whichever model happens to have a promo. Also regenerates
+  `rust-core/.../pricing.json` and the pricing parity fixture, which had additionally been stale for
+  `claude-fable-5-1`.
+
+### Fixed (latent)
+
+- **`forensicsIndex` priced every `api_calls` row at index time, not call time.** `calcTokenCostUsd`
+  was called without its trailing `atIso` although the call's own `ev.ts` was in scope, so a
+  historical row's cost depended on the day the indexer ran and a reindex would silently rewrite
+  history — the exact failure the `scheduledChange` mechanism exists to prevent, unwired at the one
+  call site that writes every cost row. No number changes today (no entry carries a scheduled
+  change); the next real rate change now lands correctly.
 
 ## [2.33.2] - 2026-09-01
 

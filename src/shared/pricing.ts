@@ -134,10 +134,20 @@ export const RATES: Record<string, ModelRates> = {
   // inference — the same shape of inference that put the withdrawn flip here in the first place. So
   // it was measured before this entry was trusted: 7 real post-2026-09-01 sessions, solving for R in
   // cost = R*(in + 0.1*cacheRead + 1.25*cw5m + 2*cw1h + 5*out) against CLAUDE CODE's OWN costUSD and
-  // token counts (never our own figure — that would test this table against itself), with the 5m/1h
-  // split taken from the raw OTEL bodies' ephemeral_* fields rather than assumed. Median R =
-  // $1.956/MTok; at $3 the largest sampled session would have cost $47.35 against the $31.00 Claude
-  // Code reported. Evidence: reports/pricing-measurement/20260904_061757+0200-sonnet5-billed-rate.md
+  // token counts (never our own figure — that would test this table against itself). R = $2.0000 on
+  // all 7, to 6 significant figures; at $3 the largest sampled session would have cost $60.58
+  // against the $40.39 Claude Code reported.
+  //
+  // Two caveats the fit itself supplies, worth keeping because each was nearly a wrong conclusion.
+  // The first solve added thinking tokens ON TOP of output and got a median $1.956 with a 2.7%
+  // spread that I dismissed as rounding — but Anthropic bills thinking AS output and counts it in
+  // output_tokens, so the denominators were inflated and R was biased LOW, the one direction that
+  // could make a real $3 look like $2. The tell was in the data: R sorted inversely by each
+  // session's thinking share. Corrected, the spread collapses to zero. And all 7 sessions measured
+  // 100% 5m tier, so the `2*cw1h` term was never exercised — the $2 base is measured, sonnet-5's
+  // DERIVED 1h write rate ($4.00/MTok) is not. That the 5m weighting is what yields exactly 2.0000
+  // is itself the corroboration that the tier split was real rather than an empty column.
+  // Evidence: reports/pricing-measurement/20260904_061757+0200-sonnet5-billed-rate.md
   //
   // The flip had already FIRED by the time this was read (removed 2026-09-04), so any sonnet-5 call
   // priced in that window came out 50% high. That is the cost of encoding an announced future as

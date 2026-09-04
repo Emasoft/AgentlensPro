@@ -747,21 +747,32 @@ mod tests {
         f.set_times(std::fs::FileTimes::new().set_modified(t)).unwrap();
     }
 
-    /// TRDD-MF4YQWWA: claude-sonnet-5's introductory rate ($2/$10 per MTok) reverts to its $3/$15
-    /// sticker on 2026-09-01 (`scheduledChange` in pricing.json/pricing.ts). A response must be
-    /// priced at the rate in force at ITS OWN timestamp, not at `now_ms` — the whole point of an
-    /// oracle that stays reproducible across regeneration dates. Two responses in one scan,
-    /// straddling the boundary, prove each is priced independently rather than the aggregated
-    /// cc/cr/out being priced once.
+    /// TRDD-MF4YQWWA: a response must be priced at the rate in force at ITS OWN timestamp, not at
+    /// `now_ms` — the whole point of an oracle that stays reproducible across regeneration dates.
+    ///
+    /// This was a straddle over claude-sonnet-5's announced 2026-09-01 rate change, which is the
+    /// strongest form of the proof. That change was withdrawn upstream (CC 2.1.243) and removed on
+    /// 2026-09-04, and no entry in pricing.json carries a `scheduledChange` any more, so the
+    /// straddle is unbuildable and this asserted $25 against a rate that no longer exists.
+    ///
+    /// Rebuilt on the LONG-CONTEXT STEP, which is arithmetic rather than an announcement and so
+    /// cannot be retracted: claude-sonnet-4's >200K surcharge reprices the WHOLE request once its
+    /// total input crosses the threshold, so two 150K cache-read responses priced individually
+    /// ($0.30/MTok, each under) and the same 300K priced as one aggregate ($0.60/MTok, over) differ
+    /// by exactly 2x. Do NOT weaken this back to two same-rate calls: rates are LINEAR below the
+    /// step, so 2 * price(N) == price(2N) and such an assertion passes identically against an
+    /// implementation that prices the aggregate once — it would pin nothing. Mirrors
+    /// `src/test/burnInvestigator.test.ts`; keep the two in step.
     #[test]
     fn est_cost_usd_prices_each_response_at_its_own_timestamp() {
         let dir = std::env::temp_dir().join(format!("al-burnscan-scheduled-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         // Kept ≤48h apart (the window's own cap) so both calls land in one scan.
-        let before = 1_788_213_600_000.0; // 2026-08-31T22:00:00Z — introductory: $10/MTok output
-        let after = 1_788_228_000_000.0; // 2026-09-01T02:00:00Z — sticker: $15/MTok output
-        write_resp(&dir, "r0.response.json", before, "claude-sonnet-5", 0.0, 0.0, 1_000_000.0);
-        write_resp(&dir, "r1.response.json", after, "claude-sonnet-5", 0.0, 0.0, 1_000_000.0);
+        let before = 1_788_213_600_000.0; // 2026-08-31T22:00:00Z
+        let after = 1_788_228_000_000.0; // 2026-09-01T02:00:00Z
+        // 150K cache-read each: under the 200K step. Aggregated they are 300K: over it.
+        write_resp(&dir, "r0.response.json", before, "claude-sonnet-4", 0.0, 150_000.0, 0.0);
+        write_resp(&dir, "r1.response.json", after, "claude-sonnet-4", 0.0, 150_000.0, 0.0);
         let opts = InvestigateOptions {
             scope: BodiesScope { dirs: vec![dir.to_string_lossy().into_owned()], missing: vec![], capture_on: true },
             hook_events_dir: dir.join("hook-events"),
@@ -774,12 +785,17 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
         let by_model = outcome.partial["totals"]["byModel"].as_array().unwrap();
         assert_eq!(by_model.len(), 1);
-        // $10 (pre-change) + $15 (post-change) = $25 — NOT $15×2=$30 (today's rate for both) nor
-        // $10×2=$20 (the pre-change rate for both).
-        let expected = 25.0;
+        // $0.09 = 2 × (150K × $0.30/MTok), each response under the step. Pricing the aggregate
+        // instead gives $0.18 = 300K × $0.60/MTok — the surcharged rate applied once.
+        let expected = 0.09;
+        let as_aggregate = 0.18;
         let got = by_model[0]["estCostUsd"].as_f64().unwrap();
-        assert!((got - expected).abs() < 0.01, "expected ~${expected}, got ${got}");
+        assert!(
+            (got - expected).abs() < 0.001,
+            "expected ${expected} (each response under the step); ${as_aggregate} would mean the \
+             window was priced as one aggregate, got ${got}"
+        );
         let total = outcome.partial["totals"]["estCostUsd"].as_f64().unwrap();
-        assert!((total - expected).abs() < 0.01, "window total must match the per-response sum, got ${total}");
+        assert!((total - expected).abs() < 0.001, "window total must match the per-response sum, got ${total}");
     }
 }
