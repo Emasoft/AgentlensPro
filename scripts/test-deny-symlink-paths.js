@@ -152,7 +152,10 @@ check(run(`cp x ${path.basename(link)}/`).denied, 'baseline for the substitution
 check(run(`echo $( cd ${sub} && pwd ) && cp x ${path.basename(link)}/`).denied, 'a spaced $( cd … ) prefix does not move the base')
 check(run(`echo $(cd ${sub} && pwd) && cp x ${path.basename(link)}/`).denied, '...nor an unspaced one')
 check(run('echo `cd ' + sub + ' && pwd` && cp x ' + path.basename(link) + '/').denied, '...nor a backtick one')
-check(run(`(cd ${wtDir} && cp x node_modules/)`).denied, 'a plain subshell is NOT a substitution: its cd still counts')
+// Correct for the RIGHT reason: the cp is inside the same subshell as the cd, so the cd really
+// does apply to it. A `( … )` subshell does NOT move the parent — same as `$( … )` — so the case
+// just below, where the cp is OUTSIDE, is deliberate OVER-RESOLUTION and not a semantic claim.
+check(run(`(cd ${wtDir} && cp x node_modules/)`).denied, 'a subshell cd applies to commands INSIDE the same subshell')
 // Nesting puts the inner `)` in the OPENER's part, so the cd lands in a part with no opener and
 // reads as top-level. Per-part blanking cannot see two parts back; only depth counted across parts
 // can. This is the shape blanking alone missed.
@@ -187,7 +190,17 @@ check(run(`(cd ${wtDir} ) && cp x node_modules/`).denied, 'a trailing ) is not p
 // ...and it must TERMINATE the target, not merely be excluded from it: with no space the class
 // stops at `)`, the trailing context could not match there, and the whole regex found no cd at all.
 // `(cd dir)` with no inner space is how most people write a one-shot subshell.
+// DELIBERATE OVER-RESOLUTION, recorded so nobody "corrects" it: the cp runs in the PARENT, where
+// the subshell's cd never applied, so this DENY names a path the command does not reach. Accepted
+// because the alternative — not matching at all — was the shape that let `(cd <wt>) && cp x
+// node_modules/` through entirely, and an extra OTP prompt is the cheaper error.
 check(run(`(cd ${wtDir}) && cp x node_modules/`).denied, 'a ) with no space before it still ends the target')
+// A name that really contains parens must survive the terminator: stopping at the `)` yields
+// `<base>/a(b`, which does not exist, and claiming it would disable the existence gate.
+const pdir = path.join(root, 'a(b)', 'sub')
+fs.mkdirSync(pdir, { recursive: true })
+fs.symlinkSync(real, path.join(pdir, 'node_modules'))
+check(run(`cd ${pdir} && cp x node_modules/`).denied, 'an UNQUOTED directory name containing parens is not truncated')
 // ...but INSIDE quotes a paren is a name, and excluding it everywhere left the closing quote
 // unreachable, so the regex matched nothing and no cd was seen at all. `Screenshot (1)` is routine.
 const paren = path.join(root, 'My Docs (2026)')

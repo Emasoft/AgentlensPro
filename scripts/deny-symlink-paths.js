@@ -280,6 +280,25 @@ function effectiveCwd(segment, baseCwd) {
   // literal name exists, it is a directory, not a pattern.
   const isDirectory = (p) => { try { return fs.statSync(p).isDirectory() } catch { return false } }
   if (/[*?[\]]/.test(expanded) && !isDirectory(resolved)) return { dir: baseCwd, matched: false }
+  // A `)` TERMINATOR can cut a real name short: `cd /tmp/a(b)/sub` stops the unquoted branch at the
+  // `(`-less `)`, yielding `/tmp/a(b` — a directory that does not exist — and `matched: true` then
+  // disables the existence gate, which is the `cd $PWD` bug arriving by a new route. Measured
+  // 2026-09-04. Note the harm is not the truncation itself (the old regex matched nothing here,
+  // also a miss) but the flip from the conservative `matched: false` to an active gate-disable.
+  // So when a `)` ended the match, put the `)` back if THAT is the real directory, and claim
+  // nothing when neither spelling exists. Only ever narrows: it cannot turn false into true.
+  // Reattaching a single `)` is not enough — the truncation loses everything after it too
+  // (`/tmp/a(b)/sub` stops at `/tmp/a(b`), so take the WHOLE unquoted word from the original text,
+  // up to the next real separator, and prefer it when it is a real directory.
+  if (m[0].endsWith(')') && m[3] !== undefined) {
+    const start = m.index + m[0].lastIndexOf(m[3])
+    let end = start
+    while (end < visible.length && !/[\s&;|'"]/.test(visible[end])) end += 1
+    const whole = visible.slice(start, end)
+    const wholeResolved = path.isAbsolute(whole) ? whole : path.resolve(baseCwd, whole)
+    if (whole !== expanded && isDirectory(wholeResolved)) return { dir: wholeResolved, matched: true }
+    if (!isDirectory(resolved)) return { dir: baseCwd, matched: false }
+  }
   return { dir: resolved, matched: true }
 }
 
@@ -497,11 +516,12 @@ process.stdin.on('end', () => {
       subDepth = Math.max(0, subDepth
         + (partSyntax.match(/\$\(/g) || []).length
         - (partSyntax.match(/\)/g) || []).length)
-      // The count is per-part NET, so a part spelling `) … $(` nets zero and is indistinguishable
-      // from a balanced one: the clear below fires and the depth reads 0 while the shell is inside
-      // a NEW substitution. That is the under-tracking direction, and no reachable shape was found
-      // (the per-part blanking covers the ones that get there) — but it is the seam to look at
-      // first if a nesting bypass ever comes back.
+      // The count is per-part NET and clamped at 0, so ANY part whose `)` count reaches its `$(`
+      // count reads as balanced — `) … $(` is only the shortest spelling; a stray `)` from a `case`
+      // arm does it too. The clear below then fires while the shell is inside a NEW substitution.
+      // That is the under-tracking direction, and no reachable shape was found (the per-part
+      // blanking covers the ones that get there) — but it is the seam to check first if a nesting
+      // bypass ever comes back. The clamp, not the spelling, is what makes it possible.
       //
       // The alternate base exists only while the base is IN DOUBT. Once the substitution closes the
       // doubt is over, and keeping it would deny on a path the command cannot reach — the
