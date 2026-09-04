@@ -145,9 +145,15 @@ const OTP_TTL_MS = 15 * 60 * 1000
 /** Expand ~ and $VAR / ${VAR} from the hook's environment. A token that still contains an
  *  unresolved `$` after this is dropped: guessing at a variable we cannot see would produce a
  *  verdict about a path that does not exist. */
-function expand(tok) {
+function expand(tok, baseDir) {
   let s = tok
   if (s.startsWith('~/') || s === '~') s = path.join(os.homedir(), s.slice(1))
+  // `$PWD` is the COMMAND's directory, not this hook process's. They differ routinely — a worktree,
+  // an --add-dir, a session that cd-ed — which is why the payload carries `cwd` at all and why the
+  // generic env pass below must not answer this one. Measured 2026-09-04 with the hook running
+  // outside the session cwd: `cp x $PWD/<symlink>/` resolved under the HOOK's directory, found
+  // nothing, and ALLOWED, while the same command without the prefix denied.
+  if (baseDir) s = s.replace(/^\$\{?PWD\}?(?=\/|$)/, baseDir)
   s = s.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)/g,
     (m, a, b) => process.env[a || b] ?? m)
   return s.includes('$') ? null : s
@@ -163,7 +169,7 @@ function pathTokens(cmd, baseDir, baseIsExplicit) {
     if (!tok || tok.startsWith('-') || seen.has(tok)) return
     seen.add(tok)
     if (!tok.includes('/') && !tok.startsWith('~') && !tok.startsWith('$')) return
-    const e = expand(tok)
+    const e = expand(tok, baseDir)
     if (!e || !e.includes('/')) return
     // A RELATIVE token that does not exist is not a path this command means. Walking up from it
     // reaches the ancestors of the HOOK's cwd, so `grep "src/foo bar" <path>` would report a
@@ -270,13 +276,16 @@ function effectiveCwd(segment, baseCwd) {
   // neither carried both fixes: `cd $PWD/a(b)` truncated to `<cwd>/a(b` on one side and stayed
   // `$PWD/a(b)` on the other, so the correct `<cwd>/a(b)` was never constructed and the symlink was
   // never examined. Measured 2026-09-04 — an ALLOW built from two half-right strings.
-  const expand = (s) => s
-    .replace(/^\$\{?PWD\}?(?=\/|$)/, baseCwd)
-    .replace(/^(?:~|\$\{?HOME\}?)(?=\/|$)/, process.env.HOME || '')
-  const expanded = expand(target)
-  // Same rule for a leftover `~`: `~otheruser` is a home this guard cannot resolve, and resolving
-  // it against baseCwd would invent `<cwd>/~otheruser` — the same fictional-directory bypass.
-  if (/[$`]/.test(expanded) || expanded.startsWith('~')) return { dir: baseCwd, matched: false }
+  // The SAME expand() the argument side uses. This was briefly a second, weaker copy living here —
+  // PWD and HOME only, no general `$VAR` — which is the defect this file keeps producing: one rule,
+  // two implementations, drifting. The shared one also resolves real env vars and returns null for
+  // anything it cannot, so `null` here means exactly what the old `/[$`]/` bailout meant.
+  const expanded = expand(target, baseCwd)
+  // A leftover `~` gets the same treatment: `~otheruser` is a home this guard cannot resolve, and
+  // resolving it against baseCwd would invent `<cwd>/~otheruser` — the fictional-directory bypass.
+  if (expanded === null || /[$`]/.test(expanded) || expanded.startsWith('~')) {
+    return { dir: baseCwd, matched: false }
+  }
   const resolved = path.isAbsolute(expanded) ? expanded : path.resolve(baseCwd, expanded)
   // A glob is a directory only the shell knows, so `cd *` must not invent `<cwd>/*` as a base. But
   // glob characters are also ordinary characters in a real directory name — `My Docs [2026]` is
@@ -304,9 +313,14 @@ function effectiveCwd(segment, baseCwd) {
     while (end < visible.length && !/[\s&;|'"]/.test(visible[end])) end += 1
     // `whole` comes from `visible`, where a `$( … )` is blanked to spaces — so a substitution
     // abutting the name reads as a separator and ends the word early. Gated by isDirectory below.
-    const whole = expand(visible.slice(start, end))
-    const wholeResolved = path.isAbsolute(whole) ? whole : path.resolve(baseCwd, whole)
-    if (whole !== expanded && isDirectory(wholeResolved)) return { dir: wholeResolved, matched: true }
+    const whole = expand(visible.slice(start, end), baseCwd)
+    // `whole` skips the bailouts above, so re-apply them here rather than leaning on isDirectory to
+    // catch everything: hoisting the expansion to both spellings and leaving the VALIDATION on one
+    // is the same half-symmetry, one step down.
+    if (whole !== null && !/[$`]/.test(whole) && !whole.startsWith('~')) {
+      const wholeResolved = path.isAbsolute(whole) ? whole : path.resolve(baseCwd, whole)
+      if (whole !== expanded && isDirectory(wholeResolved)) return { dir: wholeResolved, matched: true }
+    }
     if (!isDirectory(resolved)) return { dir: baseCwd, matched: false }
   }
   return { dir: resolved, matched: true }

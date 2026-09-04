@@ -26,6 +26,16 @@ const run = (command) => {
   })
   return { denied: out.includes('"deny"'), otp: (/SYMLINK_OTP=([0-9A-F]{8})/.exec(out) || [])[1], out }
 }
+// Same, but with the HOOK process deliberately running somewhere other than the session cwd. That
+// is the normal case in a worktree or after an --add-dir, and it is what makes `$PWD` ambiguous:
+// the hook's own environment answers a question that is about the COMMAND's directory.
+const runFromElsewhere = (command) => {
+  const out = execFileSync('node', [GUARD], {
+    input: JSON.stringify({ tool_input: { command }, cwd: root }),
+    encoding: 'utf8', cwd: os.tmpdir(), env: { ...process.env, PWD: os.tmpdir() },
+  })
+  return { denied: out.includes('"deny"') }
+}
 
 let failed = 0
 const check = (ok, desc) => { if (!ok) failed++; console.log(`${ok ? 'PASS' : 'FAIL'}  ${desc}`) }
@@ -204,6 +214,10 @@ check(run(`cd ${pdir} && cp x node_modules/`).denied, 'an UNQUOTED directory nam
 // Both spellings must go through the SAME expansion: the truncated one had `$PWD` substituted and
 // the whole-word one did not, so the correct `<cwd>/a(b)` was never built out of the two halves.
 check(run(`cd $PWD/a(b)/sub && cp x node_modules/`).denied, 'a $PWD prefix and a paren name are fixed together, not separately')
+// `$PWD` means the COMMAND's directory. Resolving it from the hook's own environment answered a
+// different question and lost the symlink entirely — in the ARGUMENT position, not just after a cd.
+check(runFromElsewhere(`cp x ${path.basename(link)}/`).denied, 'control: a relative arg still resolves against the session cwd')
+check(runFromElsewhere(`cp x $PWD/${path.basename(link)}/`).denied, '$PWD in an argument is the session cwd, not the hook process cwd')
 // The conservative half. Asserting DENY, not ALLOW: an allow-side assertion here is vacuous —
 // both the right answer and the fictional base produce "no symlink found". Claiming nothing leaves
 // the base at the real cwd, where `linked/` IS a symlink; claiming the fictional base hides it.
