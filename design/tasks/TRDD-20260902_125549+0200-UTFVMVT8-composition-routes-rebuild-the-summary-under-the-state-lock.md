@@ -1,7 +1,7 @@
 ---
 trdd-id: UTFVMVT8
 title: The composition routes hold the state lock for seconds at ui.rs:560 and the dominant statement is not yet isolated
-column: ai_review
+column: testing
 created: 2026-09-02T12:55:49+0200
 updated: 2026-09-04T15:25:08+0200
 current-owner: main-session
@@ -182,7 +182,11 @@ implementation-commits: [4e19ed4b, 428a1dec]
       per-candidate `timeline_of` guard (site 599) is TRDD-QE114936's, not this box's.
       DONE — 16:36–16:51 on pid 18695: zero holds ≥ 250 ms at any of those sites (STATE has the
       per-site table); the worst hold on the server fell from 273,893 ms to 2,263 ms.
-- [x] `/api/context-compositions` (scoped and single-session) still fills `project` — the P4x.2c
+- [ ] `/api/composition-index/<sessionId>` (scoped and single-session) still fills `project` —
+      route name CORRECTED 2026-09-04; this box was written as `/api/context-compositions`, the
+      pre-1B98LCVR TypeScript name, which now 404s. Leaving the dead name on the box's first line
+      meant an auditor reading only that line would hit a 404 and could conclude the feature was
+      lost. The P4x.2c
       parity note on `composition_project_map` explains why a wrong map answers 200 with nothing.
       Probe BOTH a steady-state session AND a session started after the last rebuild: the second
       must answer `project` correctly on a later call, not stay `"unknown"` (the uncached-build
@@ -207,11 +211,45 @@ implementation-commits: [4e19ed4b, 428a1dec]
       Anyone re-running this box against the name written above will get a 404 and may conclude the
       feature is gone — it is not.
 
-      **CAVEAT, stated rather than glossed:** both post-rebuild sessions had `callsTotal: 0` (agent
-      sessions with no captured bodies), so they exercise the project-hint path but not a populated
-      composition. The steady-state session and the 1,269-block scoped query cover the populated
-      case. A post-rebuild session WITH calls would be a strictly stronger probe; if one is to hand
-      later, re-run it.
+      **BOX RE-OPENED 2026-09-04T15:32 — I ticked this and should not have.** What is verified
+      above is real and stands. What is NOT verified is the half this box was written for.
+
+      The box requires that a project-scoped query **include IT** — "it" being the session started
+      after the last rebuild. Measured directly:
+      `agentlenspro query_context_blocks --sessionId agent-a0fcb107106fd7c86` → **`matchedBlocks: 0`**.
+      So the 1,269 blocks do NOT include the post-rebuild session. I measured "the scoped query
+      returns non-zero for this project" and reported "the scoped path includes post-rebuild
+      sessions" — a strictly stronger claim than the measurement supports.
+
+      0 blocks is very likely CORRECT here (those sessions have `callsTotal: 0`, no captured
+      bodies, so there is nothing to match) — but that is the point: a session with no content
+      cannot exercise the uncached-build guard this box names. **The hard half is untested, not
+      passed.** I had written the 0-call problem as a "caveat" under a ticked box, which is how a
+      known gap gets laundered into a green criterion — the same move I criticised on
+      TRDD-2R0AXCKL's load-average option earlier the same day.
+
+      **Cross-workspace evidence, which DOES settle one sub-question.** A reviewer objected that
+      both `agent-*` probes are children of this conversation whose `workspace` is already this
+      project, so `project` could be resolving through the parent rather than through the map.
+      Probed two populated sessions in OTHER workspaces:
+
+      | session | project resolved |
+      |---|---|
+      | `4eb7bf5d-…` | `/Users/…/AI-MAESTRO-JANITOR/ai-maestro-janitor` |
+      | `e1b4c900-…` | `/Users/…/ai-maestro` |
+
+      Each resolves to its OWN workspace, not this one, so the map is genuinely per-session and the
+      parent-inheritance explanation is refuted.
+
+      TO CLOSE: probe a session started after the last summary rebuild that HAS made API calls
+      (`callsTotal > 0`), confirm its `project` resolves and that a project-scoped query returns its
+      blocks. **This may be harder than it reads:** every session probed so far reports
+      `callsTotal: 0`, including 26M-token sessions in other workspaces — consistent with
+      `callsTotal` counting CAPTURED BODIES, which the bodies pass deletes. If that is so, a
+      "post-rebuild session with calls" is a narrow window right after capture, not something
+      findable by scanning history, and this box may need re-specifying against what the field
+      actually counts rather than against what its name suggests. Establish that before spending
+      long hunting for a session that may not persist.
 
 ## Notes and lessons learned
 
