@@ -36,8 +36,14 @@ binary would not start.** Sequence:
 The usual cause on Apple Silicon is a missing or invalid code signature, and that is the working
 hypothesis. **It is NOT established.** What was measured is only: exit 137 before, runs after.
 The genuine competitor: the `cp` wrote over a binary that was RUNNING and mapped, leaving a stale
-cached mapping that fails validation at exec — and `codesign --force` fixes that too, by rewriting
-the file. Both stories predict exactly what was seen. (Quarantine is NOT a candidate: `codesign`
+cached verdict against the replaced file — and `codesign --force` fixes that too, by rewriting it.
+Both stories predict exactly what was seen.
+
+**ORDERING MATTERS AND IS EASY TO MISREAD, so it is recorded here:** the copy came FIRST, while the
+old server was still up; `server restart` ran afterwards and printed `server stopped (pid 52561)`,
+which is itself the proof that 52561 was alive — and therefore mapped — at copy time. A review of
+this card read the sequence the other way round and concluded the stale-mapping story had no
+premise. It does. This does not make it the cause; it means the evidence does not rule it out. (Quarantine is NOT a candidate: `codesign`
 does not touch xattrs, and quarantine produces a Gatekeeper prompt or EPERM, not a silent SIGKILL.)
 
 Three commands would settle it, none of them run:

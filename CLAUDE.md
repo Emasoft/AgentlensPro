@@ -300,8 +300,10 @@ dashboard/OTLP). Hook registration changes need a Claude session restart to take
   This took down a working collector on 2026-09-04; `grep -rn codesign scripts/ package.json
   .github/workflows/` returns nothing, so the documented deploy path still reproduces it.
   **MEASURED: exit 137 before, runs after. The MECHANISM is inferred, not established** — the
-  competing explanation is that `cp` over a RUNNING, mapped binary leaves a stale cached mapping,
-  which `codesign --force` also fixes by rewriting the file. (Not quarantine: `codesign` does not
+  competing explanation is that `cp` over a RUNNING, mapped binary leaves a stale cached verdict
+  against the replaced file, which `codesign --force` also fixes by rewriting it. (The copy DID
+  precede the restart — `server stopped (pid 52561)` proves the old process was still alive when
+  the file was overwritten.) (Not quarantine: `codesign` does not
   touch xattrs, and quarantine gives a Gatekeeper prompt, not a silent kill.) The remedy is
   verified; the cause is not. Do not build on the cause without checking it — TRDD-M2VK8T4P lists
   the three commands that would settle it.
