@@ -32,9 +32,12 @@ binary would not start.** Sequence:
 2. Nothing in `~/.agentlens/server.log` (the process died before it could log).
 3. Running the binary directly: `./bin-native/darwin-arm64/alcore --version` → **exit 137**.
 
-**137 is 128+9 = SIGKILL.** On Apple Silicon macOS kills a binary whose code signature is missing or
-invalid, before `main` runs — so there is no error message, no log line, and no stderr. The fix was
-one command:
+**137 is 128+9 = SIGKILL**, and the process died before `main` — no error, no log line, no stderr.
+The usual cause on Apple Silicon is a missing or invalid code signature, and that is the working
+hypothesis. **It is NOT established.** What was measured is only: exit 137 before, runs after. The
+command below `--force`-rewrites the file, so a quarantine xattr or a stale code-signing cache entry
+would be cleared by exactly the same action. The remedy is verified; the mechanism is inferred.
+The fix was one command:
 
 ```
 codesign -s - --force bin-native/darwin-arm64/alcore

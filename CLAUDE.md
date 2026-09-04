@@ -299,6 +299,10 @@ dashboard/OTLP). Hook registration changes need a Claude session restart to take
   **The tell is `./bin-native/darwin-arm64/alcore --version` returning exit 137** (128+9 = SIGKILL).
   This took down a working collector on 2026-09-04; `grep -rn codesign scripts/ package.json
   .github/workflows/` returns nothing, so the documented deploy path still reproduces it.
+  **MEASURED: exit 137 before, runs after. The signature MECHANISM is inferred, not established** —
+  `codesign --force` also rewrites the file, so a quarantine xattr or a stale signing-cache entry
+  would be cleared by the same command. The remedy is verified; the explanation is the most likely
+  of several. Do not build anything that depends on the cause without checking it first.
   Also note `bin-native/` is gitignored, so the running binary has no recorded link to a commit.
   Card: TRDD-M2VK8T4P (includes the unverified question of whether the published tarball is
   affected — `rustBinResolve` would fall back to the TS server silently if it were).
