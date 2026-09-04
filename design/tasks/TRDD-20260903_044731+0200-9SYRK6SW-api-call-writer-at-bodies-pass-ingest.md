@@ -242,13 +242,17 @@ would all be invisible to them. Do not cite those searches as a rule-out.
 
 ```bash
 D=~/.agentlens/store/api_calls
-rm -f /tmp/parts-before.txt /tmp/parts-after.txt
-find "$D" -name '*.parquet' | sort > /tmp/parts-before.txt        # BEFORE
-[ -s /tmp/parts-before.txt ] || { echo "BEFORE snapshot EMPTY — find failed; abort"; exit 1; }
+rm -f /tmp/parts-before.txt /tmp/parts-after.txt /tmp/p.raw
+# find's OWN exit status is captured (a pipeline would discard it), and no `exit` —
+# this block is meant to be PASTED, and `exit` closes an interactive shell.
+find "$D" -name '*.parquet' > /tmp/p.raw && sort /tmp/p.raw > /tmp/parts-before.txt \
+  || echo "BEFORE: find FAILED — fix that first, do NOT restart"
 agentlenspro server restart
-find "$D" -name '*.parquet' | sort > /tmp/parts-after.txt         # AFTER
-[ -s /tmp/parts-after.txt ] || { echo "AFTER snapshot EMPTY — find failed, NOT data loss"; exit 1; }
-comm -23 /tmp/parts-before.txt /tmp/parts-after.txt               # (a) SURVIVES
+find "$D" -name '*.parquet' > /tmp/p.raw && sort /tmp/p.raw > /tmp/parts-after.txt \
+  || echo "AFTER: find FAILED — this is NOT data loss; re-run the find"
+[ -f /tmp/parts-before.txt ] && [ -f /tmp/parts-after.txt ] \
+  && comm -23 /tmp/parts-before.txt /tmp/parts-after.txt \
+  || echo "a snapshot is missing (see above) — comparison SKIPPED, not passed"
 # then (b), the readability half — the node block below
 ```
 
