@@ -168,16 +168,39 @@ becomes correct, and if it never runs the guard is never mutated and nobody goes
 backup. The mutation step ALWAYS follows a `.bak` refresh, so I picked the one mechanism that
 cannot produce the trap.
 
-**Stated exactly, because a 17:25 version of this line over-corrected in its turn.** It said a
-stale `.bak` "is positive evidence the probe has not run since Sep 3" — too strong.
-`fs.writeFileSync` is NOT atomic, so a crash mid-write leaves a short file, and a byte count cannot
-distinguish an old complete backup from a new partial one. What the code licenses is narrower: *a
-stale `.bak` is inconsistent with a COMPLETED run since Sep 3, and the hazard's mechanism requires
-a mutation that always follows a `.bak` refresh.* That is sufficient to retract the hazard, and the
-guard being byte-identical to HEAD settles the practical question regardless of which branch is
-true. Recording it because it is `ATOM-4C5N-32AS` again — the same modality overreach in the
-RETRACTION as in the thing being retracted, which is the failure mode of a correction layer: every
-retraction is itself a new claim, and it needs the same discipline as the claim it replaces.
+**AND THE PROBE CAN NO LONGER MUTATE THE GUARD AT ALL — measured 17:28, and this kills the hazard
+independently of any `.bak` reasoning.** `probe-ad.js`'s mutation anchor is a VERBATIM line of the
+Sep-3 guard. Checked against both files:
+
+```
+anchor matches CURRENT guard : false
+anchor matches Sep-3 .bak    : true
+```
+
+So a run today writes the `.bak`, hits its own `ANCHOR MISS` branch, and `process.exit(1)`s —
+**before** `fs.writeFileSync(G, mutated)` is ever reached. The guard cannot be left mutated. This
+also gives the sharpest form of the `.bak` argument: a stale `.bak` is inconsistent with **any run
+that reached line 3**, completed or not, since the guard last changed — and the `.bak` is still
+24,189, so none has.
+
+**One correction to the 17:25 retraction, which manufactured a self-criticism.** It called
+"positive evidence the probe has not run" a modality overreach. It was not: *"positive evidence
+for X"* claims SUPPORT, not proof, and a short `.bak` genuinely is support — the partial-write case
+is the single competing explanation and it is rare. I paraphrased my own hedged wording as
+"proves" and then retracted the harsher paraphrase. The narrowing to "completed run" is still a
+precision gain, but the stated reason does not bite: `fs.writeFileSync` being non-atomic produces a
+partial `.bak` only when the process died mid-write, which is by definition **not a completed run**,
+so "completed" already excluded it.
+
+**Also dropped: the claim that this was `ATOM-4C5N-32AS` "a third time in one card".** Asserted
+without a tally, and it does not survive one — depending where the line is drawn the count is two,
+three or five (the two wrong-layer "pins nothing" verdicts are a wrong MEASUREMENT, not an
+overclaimed modality; the `⚠ HAZARD` was a false MECHANISM). That is the same miscounting shape as
+"three rounds of reasoning", retracted two commits earlier in this sequence.
+
+**What survives, and it is the durable one:** a correction layer is not automatically more reliable
+than what it corrects. Every retraction is a new claim and needs the same discipline — including
+the discipline of not inventing a fault to retract.
 
 What actually remains: a stale, plausibly-named copy of a safety file, i.e. clutter someone could
 misuse for unrelated reasons. A "delete this artifact" note, not a hazard. Left in place — `/tmp`
