@@ -36,7 +36,11 @@ const OFFENDERS = [
   // outing — `sql.js` missed `sql-wasm`, and both missed `OpenCodeSqlFactory`, which spells the
   // engine nowhere. A SQLite database is reached by its PATH, and a `.db` literal is that path
   // whatever the wrapper is called. `.duckdb` is deliberately not matched: that is the destination.
-  { re: /['"][^'"\n]*\.db['"]/, what: 'a .db file path (SQLite database opened by path)' },
+  // Backticks are in the delimiter class because `${dir}/forensics.db` is idiomatic TS here and the
+  // quote-only version missed it. The extension alternation exists because hardcoding `.db` would
+  // wave through `forensics.sqlite` — the exact name someone reaches for mid-migration to mean
+  // "obviously not the old one", which is when the guard most needs to fire.
+  { re: /['"`][^'"`\n]*\.(?:db|sqlite3?|db3)['"`]/, what: 'a SQLite database file path' },
 ]
 
 // Matching runs on COMMENT-STRIPPED source. A comment that merely NAMES sqlite (this file is full
@@ -55,22 +59,18 @@ function stripComments(text) {
 // phase and a reason.
 const ALLOW = new Map([
   // Phase 2 — forensics.db (the fact table holding cost_usd) -> DuckDB
-  ['src/forensicsDb.ts', 'P2'], ['src/forensicsSql.ts', 'P2'], ['src/forensicsIndex.ts', 'P2'],
-  ['src/forensicsCompare.ts', 'P2'], ['src/mcpServer.ts', 'P2'],
-  ['rust-core/crates/agentlens-core/src/forensics_db.rs', 'P2'],
+  ['src/forensicsDb.ts', 'P2'], ['src/forensicsIndex.ts', 'P2'],
+    ['rust-core/crates/agentlens-core/src/forensics_db.rs', 'P2'],
   ['rust-core/crates/agentlens-core/src/forensics_scan.rs', 'P2'],
   ['rust-core/crates/agentlens-core/src/forensics_sql.rs', 'P2'],
   ['rust-core/crates/agentlens-core/src/forensics_compare.rs', 'P2'],
   // Phase 3 — agentlens.db (the session store) -> DuckDB
-  ['src/database/db.ts', 'P3'], ['src/database/writer.ts', 'P3'], ['src/database/reader.ts', 'P3'],
-  ['src/database/retention.ts', 'P3'], ['src/database/instructionRepository.ts', 'P3'],
-  ['src/cli/setup.ts', 'P3'],
+  ['src/database/db.ts', 'P3'], ['src/database/reader.ts', 'P3'],
+    ['src/cli/setup.ts', 'P3'],
   // Phase 4 — opencode.db is NOT ours (OpenCode owns the file). It stays SQLite on disk; the fix
   // is to read it through DuckDB's sqlite_scanner rather than sql.js/rusqlite.
   ['src/logReader.ts', 'P4'],
-  ['rust-core/crates/agentlens-core/src/log_reader.rs', 'P4'],
   ['rust-core/crates/agentlens-logscan/src/opencode.rs', 'P4'],
-  ['rust-core/crates/agentlens-logscan/src/bin/allogscan.rs', 'P4'],
   // Parity oracles + their generators. These follow the phase of the code they pin: they must keep
   // reading the SAME engine as the implementation, or the parity suite stops comparing like with
   // like. They migrate in the SAME commit as their subject, never before it.
@@ -84,7 +84,23 @@ const ALLOW = new Map([
   // Phase 4 — discovery locates opencode.db on disk before anything opens it.
   ['rust-core/crates/agentlens-logscan/src/discovery.rs', 'P4'],
   ['rust-core/crates/agentlens-logscan/tests/discovery.rs', 'P4'],
+  // TESTS. Tagged with the phase of the code they exercise, and they migrate in the SAME commit —
+  // a suite still opening SQLite after its subject moved to DuckDB is a green test proving nothing.
+  ['src/test/forensicsIndex.test.ts', 'P2'], ['src/test/forensicsAnalytics.test.ts', 'P2'],
+  ['src/test/database/generatedFiles.test.ts', 'P3'], ['src/test/database/migration.test.ts', 'P3'],
+  ['src/test/database/reader.analytics.test.ts', 'P3'], ['src/test/database/reader.test.ts', 'P3'],
+  ['src/test/database/reingest.test.ts', 'P3'], ['src/test/database/retention.test.ts', 'P3'],
+  ['src/test/database/writer.test.ts', 'P3'], ['src/test/setupEnvironment.test.ts', 'P3'],
+  ['src/test/setupVerb.test.ts', 'P3'],
+  ['src/test/logReader.opencode.test.ts', 'P4'], ['src/test/rustOpenCode.test.ts', 'P4'],
+  ['src/test/helpers/opencodeParseChild.ts', 'P4'],
 ])
+
+// The RATCHET. Without this, "the budget can only go down" was just a sentence in a comment: adding
+// an ALLOW entry made the guard pass silently, so the exemption list could grow forever and the
+// guard would still print OK. The number below is the high-water mark; exceeding it fails. Lower it
+// as phases land — never raise it.
+const MAX_EXEMPTIONS = 34
 
 // Sibling guards ENUMERATE the patterns they ban, so they trip each other by construction. Excluded
 // by name, deliberately narrow — only files whose whole job is pattern-matching.
@@ -103,7 +119,11 @@ function walk(dir, out) {
   for (const e of entries) {
     const p = path.join(dir, e.name)
     if (e.isDirectory()) {
-      if (e.name === 'node_modules' || e.name === 'target' || e.name === 'test') continue
+      // `test` is NOT skipped. Skipping it hid 14 files that open SQLite — including the very
+      // suites that must migrate alongside their subject. A test still opening SQLite after its
+      // source moved to DuckDB is the exact regression this guard exists to catch, and it is
+      // invisible to a scan that walks past the directory.
+      if (e.name === 'node_modules' || e.name === 'target') continue
       walk(p, out)
     } else if (EXTS.has(path.extname(e.name))) out.push(p)
   }
@@ -141,5 +161,12 @@ if (violations.length) {
   process.exit(1)
 }
 
-console.log(`OK — DuckDB-only guard: ${files.length} files scanned, ${usedAllow.size} known exemption(s) awaiting migration`)
+if (ALLOW.size > MAX_EXEMPTIONS) {
+  console.error(`check-duckdb-only: FAIL — exemption budget exceeded: ${ALLOW.size} > ${MAX_EXEMPTIONS}.`)
+  console.error('The allowlist is a RATCHET. A phase landing lowers MAX_EXEMPTIONS; nothing raises it')
+  console.error('without an explicit decision, which is the whole point of the number being here.')
+  process.exit(1)
+}
+
+console.log(`OK — DuckDB-only guard: ${files.length} files scanned, ${usedAllow.size} known exemption(s) awaiting migration (budget ${ALLOW.size}/${MAX_EXEMPTIONS})`)
 if (stale.length) console.log(`  note: ${stale.length} allowlist entr(y/ies) no longer needed: ${stale.join(', ')}`)
