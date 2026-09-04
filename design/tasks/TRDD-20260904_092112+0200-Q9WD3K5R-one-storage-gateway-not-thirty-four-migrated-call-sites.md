@@ -64,7 +64,7 @@ rebuild can lose history without losing a single column. It is not hypothetical 
 |---|---|
 | forensics.db `api_calls` rows | **14,285** |
 | parquet `api_calls` rows | **3,769** and rising (live writer) |
-| forensics.db rows claimed for sonnet-5 alone | 3,283 |
+| forensics.db rows for `claude-sonnet-5` | **3,932** (measured — the long-quoted "3,283" was stale prose) |
 | parquet rows for `claude-sonnet-5` | **639** |
 
 So the parquet table holds **~19% of the sonnet-5 rows** and ~12% of the corpus overall (the
@@ -94,11 +94,64 @@ killed a decision that is actually sound:
   the rebuild; they are the discovery that the migration's scope is `forensics.db` **and**
   `agentlens.db`. A rebuild sourced from "the DuckDB store" reaches them; a rebuild sourced from
   "parquet" does not. The directive said "duckdb is your memory", not "parquet is your memory".
-- **11 columns** (break/culprit/gap/frontmatter/composition, incl. all 6 of `call_content` /
-  `call_injections`) need TS heuristic engines ported to SQL — **and are 0% populated today.**
-  There is no data to lose and nothing to validate a port against. They are a FORWARD capability
-  question, not a migration blocker. Deriving them needs raw-body reconstruction over the
-  467.7M-row `parts` table, so the port is a real project; it is simply not this one.
+- **11 columns** (break/culprit/gap/frontmatter/composition) need TS heuristic engines ported to
+  SQL. ~~They are 0% populated, so there is nothing to lose.~~ **THAT WAS FALSE AND IT WOULD HAVE
+  DELETED LIVE DATA — corrected below.**
+
+### ⚠ CORRECTION 2026-09-04T12:1x — the "0% populated" claim was wrong, and I nearly dropped populated columns on it
+
+The "0% populated" figure came from a subagent report I did not verify before using it to justify
+DROPPING columns from the rebuild. Measured directly against the live `forensics.db` (14,285 rows,
+via DuckDB `sqlite_scan` with `sqlite_all_varchar=true` — the scan otherwise dies on a `ts` column
+declared INTEGER that holds a float):
+
+| column | populated | matrix said | reality |
+|---|---|---|---|
+| `spawn_kind`, `subagent_type`, `spawn_model_override`, `spawn_isolation`, `parent_session` | **0%** | N | safe to drop |
+| `break_cause`, `culprit_fingerprint`, `gap_minutes` | **0%** | N/C | safe to drop |
+| **`is_sidechain`** | **100%** | N (agentlens.db) | **POPULATED — dropping it loses data** |
+| **`spawn_resolution`** | **100%** | N (agentlens.db) | **POPULATED — dropping it loses data** |
+| **`frontmatter_fp`** | **83.2%** (11,890) | C | **POPULATED** |
+| `account_uuid` | 83.2% (11,890) | N | POPULATED |
+| `request_ref`, `session_id` | 83.2% | — | note the same 83.2%: one cohort lacks a request side |
+| **`call_content`** | **66,283 rows** | N ×3 | **NOT EMPTY** |
+| **`call_injections`** | **48,037 rows** | N ×3 | **NOT EMPTY** |
+
+**So the safe-to-drop set is 8 columns, not 11, and the composition tables hold 114,320 rows of
+real data that the re-decision above proposed to discard.** Two of the seven "spawn columns live in
+agentlens.db" are in fact populated IN forensics.db — so for those the question is not "migrate the
+other database", it is "what wrote them, and can that writer be re-pointed".
+
+**The defect in my own reasoning, named so it is not repeated:** I treated a subagent's summary
+line as a measurement and used it to authorize a deletion. A subagent report is a lead. The rule
+already exists — decisions rest on facts verified first-hand — and a deletion decision is the last
+place to relax it.
+
+**Consequence for the plan:** the drop set shrinks to the 8 genuinely-empty columns; `is_sidechain`,
+`spawn_resolution`, `frontmatter_fp`, `account_uuid` and both composition tables stay in scope and
+must be derivable or carried. That makes the rebuild harder, which is the correct answer rather
+than the convenient one.
+
+### The stale figure this card kept quoting
+
+`3,283 sonnet-5 rows overstated by $104.60` is **prose inherited from an earlier card and never
+re-measured.** Live count: **`claude-sonnet-5` = 3,932 rows** in forensics.db. The whole model
+spread also shows the coverage gap is far worse than a percentage suggests — forensics.db's
+dominant models are nearly ABSENT from the parquet table:
+
+| model | forensics.db | parquet `api_calls` |
+|---|---|---|
+| `claude-opus-4-8` | 4,150 | **0** |
+| `claude-fable-5-1` | 4,061 | **2** |
+| `claude-sonnet-5` | 3,932 | 639 |
+| `claude-opus-5` | 1,466 | 3,144 |
+| `claude-fable-5` | 652 | **0** |
+| `claude-haiku-4-5` | 24 | 2 |
+
+`opus-5` is the ONLY model where parquet exceeds forensics.db — consistent with the parquet table
+being a recent capture and forensics.db spanning history. A rebuild off `api_calls` would erase
+three models entirely. The 88%-of-history figure understates it; for `opus-4-8` and `fable-5` the
+loss is total.
 
 **So the corrected decision: REBUILD, sourced from the DuckDB store as a whole — parquet
 (`body`/`part`/`blob`/`api_call`) PLUS `agentlens.db` absorbed into it.** The 11 unpopulated
@@ -143,7 +196,15 @@ if read afterwards.
 - **The schema is HOMOGENEOUS across every part — VERIFIED, but NOT by the command this card first
   cited.** The right method is `parquet_schema()`, which reads EVERY file's footer:
   group `list(name||':'||type ORDER BY column_id)` per `file_name`, then count distinct signatures.
-  Result: **1 signature group covering all 188 files** — identical names, types AND ordinals.
+  Result: **1 signature group covering all 188 files** — identical names, PHYSICAL types and
+  ordinals. **"Physical" is load-bearing:** `parquet_schema()`'s `type` is the Thrift footer's
+  physical type (`BYTE_ARRAY`, `INT64`), not the logical/converted annotation, which lives in
+  separate columns. So this rules out an added, removed, re-ordered or physically-retyped column;
+  it does NOT rule out an annotation change on the same physical type (`INT64` plain vs
+  `INT64`+`TIMESTAMP(MICROS)` on `ts_ms` is the realistic one). Low probability from a single Rust
+  writer with a fixed `CREATE TABLE` — stated rather than quietly folded into "VERIFIED", because
+  the earlier `DESCRIBE` returned `VARCHAR`/`BIGINT` for the same columns and that difference is
+  exactly this distinction.
   **The first attempt used `DESCRIBE` without `union_by_name` and read its success as proof.** It
   is not: with `union_by_name=false` DuckDB binds the schema from the FIRST file the glob resolves
   and reads the rest POSITIONALLY, and `DESCRIBE` only needs the binder, so it never opens the

@@ -112,6 +112,49 @@ const ALLOW = new Map([
 // decision someone has to defend, which is exactly what a silent `ALLOW.push` was not.
 const MAX_EXEMPTIONS = 34
 
+// ─── THE OPENER CAP (TRDD-Q9WD3K5R) ──────────────────────────────────────────────────────────
+//
+// Everything above asks WHICH ENGINE a file uses. That is the wrong invariant, and shipping only
+// it would have produced a green guard over an unchanged architecture: migrate every file from
+// SQLite to DuckDB one-for-one and you land N files each opening their own DuckDB connection —
+// exemptions zero, guard green, and the USER's actual complaint ("exemptions are code smells...
+// the clear sign of a bad architecture") untouched. The defect is not the engine. It is HOW MANY
+// PLACES REACH DISK AT ALL.
+//
+// So this second cap counts files that OPEN a store — any engine, DuckDB INCLUDED. A DuckDB
+// handle opened in eighteen places is the same architecture as a SQLite handle opened in eighteen
+// places; only the spelling changed. The directive is "duckdb is your memory", which means one
+// place asks and everyone else queries — not "say duckdb more often".
+//
+// MEASURED 2026-09-04 with these patterns over this guard's own walk: 18 non-test, 15 test.
+// Note the card that specified this cap guessed "~7", because it counted only SQLite openers.
+// Counting every engine — which is the point — gives 33. Seeded at the measured values so the
+// ratchet starts from the truth rather than from the estimate.
+const OPENERS = [
+  // TS/JS — constructing a database handle, whatever the engine.
+  { re: /\binitSqlJs\s*\(|new\s+SQL\.Database\b/, what: 'sql.js handle' },
+  { re: /\bDuckDBInstance\.create\s*\(/, what: 'DuckDB handle' },
+  // Rust — both engines expose the same constructor name, which is precisely why the cap must
+  // count them together rather than trying to tell them apart.
+  { re: /\bConnection::open|duckdb::Connection/, what: 'Rust DB connection' },
+]
+
+// A file is TEST-side if it lives in a test tree, is named *.test.*, mocks, or generates fixtures.
+// The split exists because the two halves have different targets and merging them hides both: the
+// non-test count must ratchet toward 1, while whether test scaffolding can route through the
+// gateway at all is an OPEN QUESTION this card must decide (a test may legitimately need to
+// CONSTRUCT a store). Reporting one blended number would let test scaffolding mask real progress,
+// or make legitimate fixtures look like regressions.
+const isTestPath = (rel) =>
+  /(^|\/)tests?\//.test(rel) || /\.test\./.test(rel) || /__mocks__/.test(rel) || /fixtures\//.test(rel)
+
+// Ratchet targets. NON_TEST ratchets toward 1 (the store crate). TEST is frozen at today's count —
+// it may only go DOWN, and the question of what its floor SHOULD be is deliberately unanswered
+// here rather than guessed. Raising either is allowed but must be justified in the commit message,
+// exactly like MAX_EXEMPTIONS.
+const MAX_NON_TEST_OPENERS = 18
+const MAX_TEST_OPENERS = 15
+
 // Sibling guards ENUMERATE the patterns they ban, so they trip each other by construction. Excluded
 // by name, deliberately narrow — only files whose whole job is pattern-matching.
 const GUARD_SCRIPTS = new Set(['scripts/check-no-identities.js', 'scripts/deny-identity-leak-to-github.js'])
@@ -143,6 +186,7 @@ function walk(dir, out) {
 const files = SCAN_DIRS.flatMap((d) => walk(path.join(ROOT, d), []))
 const violations = []
 const usedAllow = new Set()
+const openers = { test: [], nonTest: [] }
 
 for (const abs of files) {
   const rel = path.relative(ROOT, abs)
@@ -155,6 +199,10 @@ for (const abs of files) {
     if (ALLOW.has(rel)) { usedAllow.add(rel); continue }
     violations.push(`${rel}: ${what}`)
   }
+  // Counted per FILE, not per pattern: a file opening two engines is still one place that reaches
+  // disk, and double-counting it would make a migration that removes one of the two look like
+  // progress toward a cap it never moved.
+  if (OPENERS.some(({ re }) => re.test(text))) (isTestPath(rel) ? openers.test : openers.nonTest).push(rel)
 }
 
 // A stale allowlist entry is its own defect: it hides a file that no longer needs the exemption and
@@ -178,5 +226,33 @@ if (ALLOW.size > MAX_EXEMPTIONS) {
   process.exit(1)
 }
 
+// The opener caps are checked AFTER the engine checks, and fail independently. A tree can be
+// perfectly DuckDB-only and still be wrong in the way that matters, which is the whole reason this
+// cap exists — so it must be able to fail on its own, on a tree where `violations` is empty.
+const capFail = (label, list, max, note) => {
+  if (list.length <= max) return false
+  console.error(`check-duckdb-only: FAIL — ${label} opener cap exceeded: ${list.length} > ${max}.`)
+  for (const f of list) console.error('  ' + f)
+  console.error('\n' + note)
+  return true
+}
+if (
+  capFail(
+    'non-test', openers.nonTest, MAX_NON_TEST_OPENERS,
+    'This cap counts files that OPEN a store — ANY engine, DuckDB included. Migrating a file from\n' +
+    'SQLite to DuckDB does not lower it, and it is not supposed to: the defect is the NUMBER OF\n' +
+    'PLACES that reach disk, not which library they reach it with. Route the new caller through the\n' +
+    'store crate instead of opening its own handle. Raising this number is a decision to defend in\n' +
+    'the commit message.'
+  ) ||
+  capFail(
+    'test', openers.test, MAX_TEST_OPENERS,
+    'Test scaffolding may legitimately CONSTRUCT a store, so this cap is frozen rather than aimed\n' +
+    'at 1 — but it may only go DOWN. A new test that opens its own handle should ask first whether\n' +
+    'it can use the same entry point the product uses.'
+  )
+) process.exit(1)
+
 console.log(`OK — DuckDB-only guard: ${files.length} files scanned, ${usedAllow.size} known exemption(s) awaiting migration (budget ${ALLOW.size}/${MAX_EXEMPTIONS})`)
+console.log(`     store openers: ${openers.nonTest.length}/${MAX_NON_TEST_OPENERS} non-test (target 1), ${openers.test.length}/${MAX_TEST_OPENERS} test (frozen)`)
 if (stale.length) console.log(`  note: ${stale.length} allowlist entr(y/ies) no longer needed: ${stale.join(', ')}`)
