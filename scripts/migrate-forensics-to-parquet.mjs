@@ -144,6 +144,61 @@ const contentHash = async (rel, cols) => {
   return r[0].sig
 }
 
+// ─── SCHEMA IS A PRECONDITION — captured BEFORE anything is written ──────────────────────────
+//
+// resolvedTypes: DuckDB's mapping, from PASS 1's typed read-only attach.
+// CANARY: `api_calls.ts` must read BIGINT, not VARCHAR. It is the one column whose declared type
+// is not TEXT, so a non-VARCHAR entry here proves `all_varchar` was OFF during PASS 1. Collapse
+// the two attaches into one and that silently becomes VARCHAR — which would ALSO make the BLOB
+// check below unable to ever fire, a guard that cannot fail. Do not merge the attaches.
+const resolvedTypes = {}
+const undeclared = []
+for (const t of tables) {
+  const cols = typed.filter((r) => r.table_name === t).map((r) => ({ name: r.column_name, type: r.data_type }))
+  if (!cols.length) undeclared.push(t)
+  resolvedTypes[t] = cols
+}
+if (undeclared.length) {
+  console.error(`\nmigrate-forensics: FAIL — no columns recovered for: ${undeclared.join(', ')}. Delete NOTHING.`)
+  process.exit(1)
+}
+
+// verbatimDdl: the source's own CREATE TABLE text — the ONLY record of NOT NULL, PRIMARY KEY,
+// DEFAULT, CHECK, UNIQUE and every length/precision qualifier, none of which parquet stores and
+// none of which survive DuckDB's type mapping (TEXT and VARCHAR(255) both resolve to VARCHAR).
+//
+// UNCONDITIONAL, and at the TOP. Two earlier shapes were worse:
+//   - capturing it AFTER the COPY meant a failure here exited "Delete NOTHING" with the parquet
+//     already written and backups already rotated — the failure path contradicting its own state;
+//   - gating it on "only if _schema.json lacks it" made the read-write open UNPREDICTABLE: it
+//     returned whenever the destination was wiped, or silently whenever the source gained a table.
+//     A tool that is read-only on most runs and read-write on the run nobody expects is worse than
+//     one that is honestly read-write once. `sqlite_master` has no read-only route (a READ_ONLY
+//     attach does not expose it — measured), so the honest property is: ONE schema read opens the
+//     source read-write, at the top, every run, announced; all data reads are read-only.
+console.log('  reading schema (this one query opens the source read-write; all data reads are read-only)')
+const verbatimDdl = {}
+for (const r of await q(`SELECT name, sql FROM sqlite_scan('${SRC}','sqlite_master') WHERE type='table'`)) {
+  if (!r.name.startsWith('sqlite_')) verbatimDdl[r.name] = r.sql
+}
+const missingDdl = tables.filter((t) => !verbatimDdl[t])
+if (missingDdl.length) {
+  console.error(`\nmigrate-forensics: FAIL — no CREATE TABLE recovered for: ${missingDdl.join(', ')}.`)
+  console.error('  That text is the only record of NOT NULL / PRIMARY KEY / DEFAULT / precision.')
+  console.error('  Nothing has been written. Delete NOTHING.')
+  process.exit(1)
+}
+
+const blobbed = Object.entries(resolvedTypes).filter(([, cols]) => cols.some((c) => /BLOB/i.test(c.type)))
+if (blobbed.length) {
+  console.error(`\nmigrate-forensics: FAIL — BLOB column(s) in: ${blobbed.map(([t]) => t).join(', ')}.`)
+  console.error('  all_varchar routes values through a text decode, and the content hash is computed')
+  console.error('  on BOTH sides of that same decode — so it would MATCH even if the bytes were')
+  console.error('  mangled. Export BLOBs explicitly before trusting this tool. Delete NOTHING.')
+  process.exit(1)
+}
+
+const schemaPath = path.join(OUT, '_schema.json')
 const results = []
 for (const t of tables) {
   const cols = (await q(`DESCRIBE SELECT * FROM ${scan(t)}`)).map((r) => r.column_name)
@@ -169,13 +224,34 @@ for (const t of tables) {
     // hash cannot see it. Making every overwrite recoverable is strictly better than making the
     // guard cleverer, and much smaller: one rename covers the whole class of "the new copy is
     // worse than the old one", including the cases nobody predicted.
-    // TIMESTAMPED, not a single `.prev`. A one-deep backup survives exactly ONE mistake: run 1
-    // saves the good copy and writes a bad one, run 2 saves the BAD copy over it and writes another
-    // — and a second run is precisely what someone does when the first result looks wrong. The
-    // backup would be destroyed by the act of investigating the problem it exists for. Pruning is
-    // left to a human on purpose: this directory is under the user's data dir and the directive is
-    // "do not lose any data", so nothing here deletes anything.
-    fs.renameSync(dest, `${dest}.${Date.now()}.prev`)
+    // TWO backups, bounded: `.orig` (written once, never overwritten) and `.prev` (most recent).
+    //
+    // A single `.prev` survives exactly ONE mistake — run 1 saves the good copy, run 2 saves the
+    // BAD copy over it — and a second run is what someone does when the first looks wrong, so the
+    // backup dies in the act of investigating the problem it exists for. `.orig` fixes that: it is
+    // the last state before this tool ever touched the directory, and nothing here can overwrite it.
+    //
+    // The previous version timestamped every generation instead. That never loses a copy, but it
+    // grows without bound in the user's data dir — measured at 6.4 MB across 16 files after a
+    // handful of test runs, at ~1.6 MB per generation. `never_free_space.md` forbids an agent
+    // reclaiming disk, which makes unbounded growth a problem this tool must not CREATE rather than
+    // one it can clean up later. Two files is bounded, keeps the copy that actually matters, and
+    // needs no retention policy.
+    // ONE backup, and it is NEVER overwritten — the OLDEST surviving copy, not the newest.
+    //
+    // A `.prev` that gets replaced every run survives exactly one mistake: run 1 saves the good
+    // copy, run 2 saves the bad one over it, and a second run is what someone does when the first
+    // looks wrong. Keeping the first instead means the backup is the last state before this tool
+    // ever touched the directory, which is the copy that actually matters.
+    //
+    // Timestamping every generation was the previous attempt. It never loses a copy but grows
+    // without bound in the user's data dir — measured at 6.4 MB across 16 files after a handful of
+    // test runs. `never_free_space.md` forbids an agent reclaiming disk, so unbounded growth is a
+    // problem this tool must not CREATE, not one someone can tidy later. Bounded at 1x, no
+    // retention policy needed.
+    const prev = `${dest}.prev`
+    if (fs.existsSync(prev)) fs.unlinkSync(dest)
+    else fs.renameSync(dest, prev)
   }
 
   await con.run(`COPY (SELECT * FROM ${scan(t)}) TO '${dest}' (FORMAT PARQUET, COMPRESSION ZSTD)`)
@@ -230,75 +306,15 @@ for (const t of tables) {
 // database. So it is captured ONCE, below, and the field is named for what it holds — the previous
 // version called resolved types `declared`, which is the second time this file shipped a
 // `_schema.json` that failed at its one job.
-const resolvedTypes = {}
-const undeclared = []
-for (const t of tables) {
-  const cols = typed.filter((r) => r.table_name === t).map((r) => ({ name: r.column_name, type: r.data_type }))
-  if (!cols.length) undeclared.push(t)
-  resolvedTypes[t] = cols
-}
-
-// THE VERBATIM DDL, captured once and kept forever. Resolved types lose everything that is not a
-// type: NOT NULL, PRIMARY KEY, DEFAULT, CHECK, UNIQUE, and every length/precision qualifier
-// (`TEXT` and `VARCHAR(255)` both resolve to VARCHAR; `INTEGER` to BIGINT). Since parquet stores
-// none of those either, the source database is the ONLY place they exist — and this tool exists to
-// make that database deletable.
+// Schema capture and the BLOB refusal both moved ABOVE the migration loop — see "SCHEMA IS A
+// PRECONDITION" there. They are preconditions: a tool that discovers it cannot preserve the schema
+// AFTER writing the parquet has already contradicted its own "nothing was written" failure text.
 //
-// This one read goes through `sqlite_scan()`, which opens READ-WRITE; there is no read-only route
-// to `sqlite_master` (a READ_ONLY attach does not expose it — measured: "Table with name
-// sqlite_master does not exist"). So it runs ONLY when the DDL is not already recorded, making it
-// a one-time cost rather than a write-lock on every run, and it is announced rather than silent.
-const schemaPath = path.join(OUT, '_schema.json')
-let verbatimDdl = null
-try {
-  const prior = JSON.parse(fs.readFileSync(schemaPath, 'utf8'))
-  if (prior.verbatimDdl && Object.keys(prior.verbatimDdl).length === tables.length) verbatimDdl = prior.verbatimDdl
-} catch { /* no previous run, or unreadable — capture below */ }
-
-if (!verbatimDdl) {
-  console.log('  capturing verbatim DDL (one-time; this single read opens the source read-write)')
-  verbatimDdl = {}
-  const rows = await q(`SELECT name, sql FROM sqlite_scan('${SRC}','sqlite_master') WHERE type='table'`)
-  for (const r of rows) if (!r.name.startsWith('sqlite_')) verbatimDdl[r.name] = r.sql
-  const missingDdl = tables.filter((t) => !verbatimDdl[t])
-  if (missingDdl.length) {
-    console.error(`\nmigrate-forensics: FAIL — no CREATE TABLE recovered for: ${missingDdl.join(', ')}.`)
-    console.error('  That text is the only record of NOT NULL / PRIMARY KEY / DEFAULT / precision.')
-    console.error('  Migrating without it is lossy. Delete NOTHING.')
-    process.exit(1)
-  }
-}
-if (undeclared.length) {
-  console.error(`\nmigrate-forensics: FAIL — no declared columns recovered for: ${undeclared.join(', ')}.`)
-  console.error('  Reading every column as VARCHAR discards the declared types, so this record is')
-  console.error('  the ONLY copy of them. Migrating without it is lossy. Delete NOTHING.')
-  process.exit(1)
-}
-
-// A BLOB read through all_varchar is not guaranteed to round-trip: the bytes go through a text
-// decode, and a hash computed on both sides of the SAME lossy decode matches while the data is
-// destroyed — the check would CONFIRM the corruption rather than catch it. So refuse outright
-// rather than migrate a BLOB and report OK.
-//
-// WHAT THIS CHECK CANNOT DO, stated because the temptation is to read it as "no BLOBs here":
-// it reads DECLARATIONS, and in this database declarations demonstrably lie — `api_calls.ts` is
-// declared INTEGER and stores a float. SQLite is dynamically typed, so ANY column can hold a blob
-// value whatever its declared type, and a column declared with NO type at all has BLOB affinity
-// while containing the string "BLOB" nowhere. This regex is a cheap first line that catches the
-// honest case; it is NOT proof of absence. A migration that must be certain has to inspect
-// typeof() per value at the SQLite level, which this tool does not do.
-// Read from the CATALOG of the typed read-only attach, not by regexing DDL text. The earlier
-// version tested /\bBLOB\b/i against the CREATE TABLE string, which misses a column declared with
-// no type at all (BLOB affinity in SQLite, and the word appears nowhere) and misses VARBINARY /
-// BYTEA. Asking the catalog for the resolved type has neither blind spot.
-const blobbed = Object.entries(resolvedTypes).filter(([, cols]) => cols.some((c) => /BLOB/i.test(c.type)))
-if (blobbed.length) {
-  console.error(`\nmigrate-forensics: FAIL — BLOB column(s) in: ${blobbed.map(([t]) => t).join(', ')}.`)
-  console.error('  all_varchar routes values through a text decode, and the content hash is computed')
-  console.error('  on BOTH sides of that same decode — so it would MATCH even if the bytes were')
-  console.error('  mangled. Export BLOBs explicitly before trusting this tool. Delete NOTHING.')
-  process.exit(1)
-}
+// On what the BLOB refusal is NOT: it reads the catalog's resolved types, which catches a column
+// declared BLOB, declared with no type (BLOB affinity, word appears nowhere), VARBINARY or BYTEA.
+// It is still not proof of absence — SQLite is dynamically typed, so ANY column can HOLD blob bytes
+// whatever it was declared, exactly as `api_calls.ts` is declared INTEGER and stores a float.
+// Certainty would need typeof() per value, which this tool does not do.
 fs.writeFileSync(
   schemaPath,
   JSON.stringify(

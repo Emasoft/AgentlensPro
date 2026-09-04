@@ -101,6 +101,12 @@ const ALLOW = new Map([
   // exactly the one case that must not become a hole in it. This entry is DELETED with the file,
   // once the source database is gone.
   ['scripts/migrate-forensics-to-parquet.mjs', 'P2'],
+  // P2 — the parity oracle for that migration. It names forensics.db because its whole job is
+  // running the same query against the SQLite source and the parquet copy and comparing, which is
+  // the precondition for repointing any reader. Both sides go through DuckDB (the SQLite side via
+  // a READ_ONLY attach), so this is not a file reaching around DuckDB — it is the file that proves
+  // DuckDB can replace it. Deleted together with the source database.
+  ['scripts/verify-forensics-parquet-parity.mjs', 'P2'],
 ])
 
 // The RATCHET. Without this, "the budget can only go down" was just a sentence in a comment: adding
@@ -122,7 +128,7 @@ const ALLOW = new Map([
 // the exemption is temporary by construction (it dies with the source database), and the migration
 // it performs is what lowers the other entries. A budget raised to admit the tool that shrinks the
 // budget is the one increase that pays for itself.
-const MAX_EXEMPTIONS = 35
+const MAX_EXEMPTIONS = 36
 
 // ─── THE OPENER CAP (TRDD-Q9WD3K5R) ──────────────────────────────────────────────────────────
 //
@@ -177,7 +183,12 @@ const isTestPath = (rel) =>
 //     counted rather than excused. It is the tool whose whole purpose is to let the other openers
 //     be deleted, and it dies with the source database; the honest accounting is to count it now
 //     and drop the cap by one when it goes.
-const MAX_NON_TEST_OPENERS = 20
+//   +1 non-test — `scripts/verify-forensics-parquet-parity.mjs`, the oracle that runs the same
+//     query against forensics.db and its parquet copy and compares. It genuinely opens a store, so
+//     it is counted rather than excused. Both migration-phase tools sit ABOVE this line on purpose:
+//     they are the only two entries here whose deletion is already scheduled — they go when the
+//     source database goes, taking the cap from 21 to 19 and the exemptions from 36 to 34.
+const MAX_NON_TEST_OPENERS = 21
 const MAX_TEST_OPENERS = 14
 
 // WHAT THIS CAP DOES NOT MEASURE — stated here because the commit that added it overclaimed.
