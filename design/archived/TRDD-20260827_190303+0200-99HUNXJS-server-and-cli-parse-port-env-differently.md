@@ -266,6 +266,40 @@ so every gate stays green over a stale bundle. Rebuilt (`node esbuild.js`, exit 
 rebuilds. Only this machine's installed CLI was running stale code. (An earlier note in this
 session claimed the shipped artifact was affected; that was wrong and is corrected here.)
 
+## Approval log
+
+- 2026-09-04T16:01:34+0200 — COMPLETED by main-session after the ai_review above. Three blockers
+  settled by measurement; empty set difference over three orthogonal greps.
+- 2026-09-04T16:0x+0200 — **A SIXTH SITE EXISTS, IN RUST, and it was outside this card's scope.**
+  Found by running the one grep the reviewer asked for and I had skipped
+  (`grep -rnE 'env::var[^)]*PORT|UI_PORT|MCP_PORT|OTLP_PORT' rust-core/crates --include=*.rs`):
+
+  `rust-core/crates/agentlens-core/src/server_stats.rs:68`, in `impl Default for Ports`:
+  `let mcp = std::env::var("MCP_PORT").ok().and_then(|s| s.trim().parse().ok()).unwrap_or(4316);`
+
+  **Why this does not reopen this card:** the acceptance is explicitly "every **TypeScript** site",
+  so Rust was out of scope by the card's own wording, and the TS set difference really is empty.
+  **Why it still matters:** this card's TITLE is "the server and the CLI parse the same port env
+  vars by different rules", and since TRDD-1B98LCVR the SERVER IS RUST — so the titled problem
+  survives in a form the acceptance excluded. The semantics genuinely diverge: Rust
+  `.trim().parse()` rejects `'3e3'`, `'0x1F80'`, `'+8080'`, while TS `envPort` delegates to bare
+  `Number()` and ACCEPTS all three (that acceptance is pinned deliberately by this card's suite and
+  is TRDD-EGGERLEO's to decide). So `MCP_PORT=3e3` yields 3000 on the TS side and 4316 on the Rust
+  side — the exact class of divergence this card exists to eliminate.
+
+  **A load-bearing comment is falsified as written.** `src/test/helpers/freePort.ts`'s
+  `alcoreArgsFromEnv` justifies itself with "alcore reads NO env vars for these — it is flags-only",
+  and that claim is what licensed excluding the Rust boundary. alcore DOES read `MCP_PORT`.
+
+  **What is NOT established:** whether any live path uses the Default's env-derived `mcp`. The doc
+  comment at `:55-58` says `alcore serve` overwrites it from `--mcp-port` once `serve_mcp` claims
+  the port, so flags-only may well hold for the SERVE path specifically — in which case the
+  comment needs narrowing, not the code. Nobody has traced `Ports::default()`'s callers.
+
+  **NEEDS A FOLLOW-UP CARD** (not filed here — this card is terminal): trace `Ports::default()`
+  callers; decide whether the Rust read should be deleted in favour of the flag, or aligned with
+  `envPort`'s semantics; narrow or fix the freePort.ts comment either way.
+
 ## Related
 
 - [[TRDD-BSDR4TRM]] — fixed the CLI half and created this card.
