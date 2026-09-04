@@ -3,7 +3,7 @@ trdd-id: 2LH25PBB
 title: Store the cache read-write boundary per body so every element is classified exactly
 column: dev
 created: 2026-09-03T19:58:55+0200
-updated: 2026-09-03T19:58:55+0200
+updated: 2026-09-04T19:01:56+0200
 current-owner: claude-code
 task-type: feature
 severity: HIGH
@@ -27,6 +27,28 @@ Design settled and measured; implementation starting. The owner's storage propos
 its load-bearing part (precompute and store the boundary; never recompute per query) with two
 corrections recorded below. NEXT ACTION: add the boundary columns to the store schema and the
 ingest pass, with the key-aware snap, plus the classification unit tests.
+
+**STALL RECORDED 2026-09-04T19:01:56+0200 — this card has not moved since it was written.**
+`updated:` still equals `created:` (2026-09-03T19:58:55), 13 acceptance boxes are open and 0 are
+ticked, and the line above still says "implementation starting" a day later. So `column: dev`
+asserts that someone is working this right now, and nobody is — the untrue-column failure that
+`the-kanban-is-a-pipeline-that-must-drain.md` calls worse than an unstarted card, because it hides
+the stall from the one view anyone consults. Both of the board's `dev` cards are in this state:
+the other, `QE114936`, is waiting on a disk decision only the USER can make.
+
+**The column was NOT changed.** `dev → todo` is not a row on `manager-approval-defaults.md`'s
+table A either, and this session already made one off-table transition today (TRDD-KBK9J59Y) whose
+rationale turned out to be post-hoc. Recording runtime evidence IS exempt (table E); moving the
+card is not. So the stall is now visible in the STATE block a resuming session reads first, which
+is the part that was missing — an accurate record beats a convenient column.
+
+**Not started deliberately, and this is a judgement worth contesting:** the NEXT ACTION is a
+multi-file Rust schema + ingest change, phase 1 of a redesign with `release-via: publish`, and all
+four EHTs (`3UJB4MN3`, `AS5DZJRC`, `HCK5162J` in `todo`; `FE1RXC6D` `blocked`) are non-terminal —
+so the parent cannot reach `complete` regardless of how much of it gets built now. Starting it
+late in a session that has already spent its capacity would produce a half-implemented schema, and
+a partial store schema is worse than none. Whoever picks this up should start from the NEXT ACTION
+above, not from this note.
 
 ## The rule, as measured
 
