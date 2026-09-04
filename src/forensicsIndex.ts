@@ -281,8 +281,16 @@ function refFor(row: EvidenceRow, spool: string | null): string {
 // and appeared inside live burn windows with wrong culprit attribution. A null row is dropped by
 // selectRecent — the drain put its bytes in the store, so the next pass indexes it with its TRUE
 // capture ts; skipping one pass is honest, back-dating history to the scan time is not.
+// A NON-FINITE ts is unknowable too, and takes the same exit. `tsMs` is `Number(r.ts_ms)`, and
+// Number('NaN')/Number('Infinity') both produce non-finite values, so this is reachable — the Rust
+// port's `s.parse::<f64>()` accepts "nan"/"inf" for the same reason (measured). Only `=== null` was
+// filtered here, and `NaN < tsFromMs` is false, so such a row passed the window check too and
+// reached pricing, where `at >= effective` is false for NaN and would silently pin it to the
+// PRE-change rate of any announced change. Dropping is the policy this function already documents
+// two paragraphs up; substituting a clock at the pricing site instead is the back-dating it
+// refuses, and worse there because the resulting row is durable and carries no `unpriced` marker.
 function resolveTs(row: EvidenceRow, spool: string | null): number | null {
-  if (row.tsMs !== null) { return row.tsMs }
+  if (row.tsMs !== null) { return Number.isFinite(row.tsMs) ? row.tsMs : null }
   if (spool) {
     try { return fs.statSync(path.join(spool, row.srcName)).mtimeMs } catch { /* drained mid-scan */ }
   }
@@ -583,12 +591,13 @@ export function apiCallParams(ev: ApiCallEvent, spawn: ResolvedSpawn, now: numbe
   // api_calls.cost_usd row — was not passing it. No live entry carries a scheduledChange today, so
   // this changes no number now; it means the next real change lands correctly instead of silently.
   //
-  // `new Date(x).toISOString()` THROWS RangeError on NaN or |x| > 8.64e15, and this runs inside the
-  // indexer loop, so an unguarded conversion turns one corrupt ts into a dead ingest run — strictly
-  // worse than the mispricing it fixes. `ts` can reach here non-finite: resolveTs returns
-  // `Number(r.ts_ms)` and only a literal `null` is filtered downstream (`NaN < tsFromMs` is false,
-  // so selectRecent's window check does not drop it either). Falling back to `undefined` is exactly
-  // the previous behaviour — price at today's rate — so a bad timestamp degrades instead of failing.
+  // `new Date(x).toISOString()` THROWS RangeError on a non-finite or out-of-range value, and this
+  // runs inside the indexer loop, so an unguarded conversion would turn one corrupt ts into a dead
+  // ingest run — strictly worse than the mispricing it fixes. `resolveTs` now drops a non-finite ts
+  // (see there), which removes the reachable case; the range check is what remains, and it is kept
+  // deliberately rather than trusted away, because this function is exported and the throw is a
+  // hard failure rather than a wrong number. Falling back to `undefined` means "price at today's
+  // rate" — the pre-change behaviour, and a degradation rather than a crash.
   const atIso = Number.isFinite(ev.ts) && Math.abs(ev.ts) <= 8.64e15 ? new Date(ev.ts).toISOString() : undefined
   const costUsd = model
     ? calcTokenCostUsd(ev.inputTokens, ev.cacheReadTokens, ev.cacheCreationTokens, ev.outputTokens, model, 0, atIso)
