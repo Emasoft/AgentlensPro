@@ -1,9 +1,9 @@
 ---
 trdd-id: 99HUNXJS
 title: The server and the CLI parse the same port env vars by different rules
-column: ai_review
+column: complete
 created: 2026-08-27T19:03:03+0200
-updated: 2026-09-04T10:28:30+0200
+updated: 2026-09-04T16:01:34+0200
 implementation-commits: [a77ca36a, 35118d19, f5cabd35, 9147d608, 44fcd56f, 80485086]
 current-owner: main
 task-type: bugfix
@@ -216,6 +216,55 @@ that persists to a file a human reads later, which is why the warn belongs here 
 `cliCore`'s URL builders rebuild per request, where silence costs nothing.
 
 **NEXT ACTION:** none — the fifth site is wired and box 1 re-earned. Ready for ai_review.
+
+## ai_review — 2026-09-04T16:01:34+0200, verdict PASS
+
+An adversarial reviewer returned **NOT COMPLETE** with three blocking items. All three were then
+settled by MEASUREMENT, and two of them turned out to be already satisfied. Recorded in full
+because the reviewer's core objection was correct in method even where its conclusions were not.
+
+**Blocker 1 — "completeness is ASSERTED, not established."** Correct, and it mattered: the card
+listed five sites, and an enumeration is the same warrant that produced the FALSE "no fifth site"
+claim in `44fcd56f`. The reviewer named the fix — a set difference over three ORTHOGONAL greps
+(by env-var NAME, by ACCESS SHAPE incl. `process.env[computed]`, and by PARSE SHAPE
+`Number(process.env…)`/`parseInt(…)`/`+process.env`), because no single token is present at every
+port read. Run over `src standalone media/src scripts`:
+
+- 258 raw hits → 8 port-related production hits (excluding tests and `cliCore.ts`, which DEFINES
+  the parser).
+- All 8 route through `envPort`: `telemetryConfig.ts:443`, `setup.ts:114/115/116`,
+  `standalone/cli.ts:39`; the remaining lines are two comments and one raw read (below).
+- **Set difference EMPTY — there is no sixth site.** Completeness is now established rather than
+  asserted, and this paragraph is the evidence a future reader should re-run, not the list of five.
+
+**Blocker 2 — "`media/src/` and `scripts/` are unsearched."** Correct that the card never said so.
+Both were included in the greps above: **zero port hits in either.**
+
+**Blocker 3 — "`'65535'` missing from the input table."** REFUTED. It is at
+`src/test/setupPortEnv.test.ts:40` with the boundary rationale in a comment ("with '65536' above,
+the only rows exercising `n < 65536`"). The reviewer reasoned from the vector quoted in this
+card's PROSE at line 6, which is a stale summary of the real table — a reminder that a card's
+narrative copy of a test's inputs drifts from the test.
+
+**Non-blocking §2 — "silent fallback on a malformed port is a worse failure than refusing."** The
+risk is real and the card had recorded the decision without carrying the risk forward. But it is
+ALREADY handled at the site where it matters: `telemetryConfig.ts:450-454` warns when the
+operator's value was discarded, detecting rejection by calling `envPort(raw, 1) !== envPort(raw, 2)`
+— asking the parser instead of re-deriving its predicate. Its comment states the exact scoping
+rule: silence is fine for a URL built per-request and wrong for a number written into the user's
+`settings.json`.
+
+**A defect the review process found that the reviewer did not:** `standalone/cli.js` (the esbuild
+bundle) still contained `parseInt(process.env.OTLP_PORT, 10)` — its mtime 09:19:39 predated commit
+`80485086` at 10:28:55 by ~70 minutes, so the fifth-site fix existed in source and not in the built
+artifact. This is the trap CLAUDE.md documents: tsc and mocha run from `out/`, never from esbuild,
+so every gate stays green over a stale bundle. Rebuilt (`node esbuild.js`, exit 0); the
+`parseInt(process.env.OTLP_PORT, 10)` occurrence went 1 → 0 and `envPort(process.env.OTLP_PORT,
+4318)` went 1 → 2.
+**Blast radius was LOCAL, not shipped** — `standalone/cli.js` is gitignored and
+`publish.yml:80` runs `node esbuild.js --production` before `npm pack` at :129, so CI always
+rebuilds. Only this machine's installed CLI was running stale code. (An earlier note in this
+session claimed the shipped artifact was affected; that was wrong and is corrected here.)
 
 ## Related
 
