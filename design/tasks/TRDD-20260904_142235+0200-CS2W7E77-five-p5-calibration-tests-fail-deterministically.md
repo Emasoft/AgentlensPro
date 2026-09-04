@@ -3,7 +3,7 @@ trdd-id: CS2W7E77
 title: The five P5 window auto-calibration tests fail deterministically on a burn-config ENOENT
 column: todo
 created: 2026-09-04T14:22:35+0200
-updated: 2026-09-04T14:22:35+0200
+updated: 2026-09-04T14:30:12+0200
 current-owner: main-session
 task-type: bugfix
 project-id: agentlenspro
@@ -67,19 +67,36 @@ asking why the store is empty would produce four green tests that assert nothing
    with no skip guard in any of them).
 5. **So the defect is specific to the calibration path, not to booting or ingest in general.**
 
-**A near-miss worth recording, because it nearly became this card's stated root cause:** the first
-reading of fact 2 was "`server.js` is missing, so the child never starts" — a tidy, complete,
-WRONG explanation. It was caught only because it contradicted a number already in hand: 2,652 tests
-passed, including a dozen suites that boot the same "missing" file. The contradiction, not the
-investigation, is what falsified it.
+**A false root cause I PUBLISHED and then retracted one message later — recorded honestly, because
+an earlier draft of this paragraph called it a "near-miss", which claimed more credit than the
+sequence supports.** What actually happened: `ls -la standalone/*.js` showed only `cli.js`, and I
+immediately wrote, to the user, *"Root cause found, and it's definitive — not a hypothesis."* It
+was neither. I kept investigating, hit the contradiction (2,652 tests passing, a dozen suites
+booting the same "missing" file), and retracted it in the next message.
+
+So this is not an example of catching an error before asserting it. It is an example of asserting
+first and being rescued by a number that happened to already be in hand. Had the suite been smaller,
+or had I not had the passing count in front of me, "server.js is missing" would have been committed
+into this card as its established root cause, and it is wrong. **The word "definitive" is the
+defect** — the measurement (`ls`) was sound; the certainty attached to it was not, and nothing
+about a single directory listing licensed the leap to a five-step causal chain.
 
 ## Candidate causes, none yet tested
 
 - The P5 window auto-calibration was never ported to Rust in the TRDD-1B98LCVR rewrite — i.e. a
   missed EHT of that card, and a genuine PRODUCT gap rather than a fixture defect.
-- The `alcore` binary under test is STALE relative to `rust-core/` source. Note TRDD-QE114936 is
-  committed but NOT deployed, and `bin-native/` is gitignored, so the binary has no recorded link
-  to a commit. Check what `alcoreTestBin()` resolves to and how old it is BEFORE blaming the code.
+- ~~The `alcore` binary under test is STALE relative to `rust-core/` source.~~ **ELIMINATED
+  2026-09-04 by measurement.** `alcoreTestBin()` (`freePort.ts:150-177`) returns the first
+  EXECUTABLE candidate, which here is `rust-core/target/release/alcore` — built **08:54:18**, while
+  the newest `.rs` under `rust-core/crates` is **08:31:39**. The binary post-dates every source
+  file, so the tests are not running old code.
+  Checked two independent ways on purpose: `find -newer` returned 0 files, and a `stat -c %Y` epoch
+  comparison agreed. The corroboration is not ceremony — a LOCAL memory note records that `find` on
+  this machine is **bfs, not GNU find**, and that its time predicates can return the OPPOSITE
+  answer, so a bare `find -newer` result is not by itself evidence here.
+  (This does NOT contradict "TRDD-QE114936 is committed but not deployed": that concerns the LIVE
+  server process and the `bin-native/` copy the installed CLI spawns, not the binary this suite
+  resolves.)
 - The suiteSetup strips a long list of `AGENTLENS_*` capacity vars (`:152-161`) so an inherited cap
   cannot make calibration refuse to run. If alcore reads a differently-named var, the strip misses
   it and calibration correctly declines — a fixture defect that looks like a product one.
