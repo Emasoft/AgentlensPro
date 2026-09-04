@@ -246,14 +246,19 @@ function effectiveCwd(segment, baseCwd) {
   const expanded = target
     .replace(/^\$\{?PWD\}?(?=\/|$)/, baseCwd)
     .replace(/^(?:~|\$\{?HOME\}?)(?=\/|$)/, process.env.HOME || '')
-  // Same rule for a leftover `~` and for a GLOB: `~otheruser` is a home this guard cannot resolve,
-  // and `cd *` is a directory only the shell knows. Both would invent `<cwd>/~otheruser` or
-  // `<cwd>/*` — the same fictional-directory bypass. Measured 2026-09-04: in a directory with one
-  // subdirectory holding a symlinked node_modules, `cd * && cp x node_modules/` ALLOWED.
-  if (/[$`*?[\]]/.test(expanded) || expanded.startsWith('~')) {
-    return { dir: baseCwd, matched: false }
-  }
-  return { dir: path.isAbsolute(expanded) ? expanded : path.resolve(baseCwd, expanded), matched: true }
+  // Same rule for a leftover `~`: `~otheruser` is a home this guard cannot resolve, and resolving
+  // it against baseCwd would invent `<cwd>/~otheruser` — the same fictional-directory bypass.
+  if (/[$`]/.test(expanded) || expanded.startsWith('~')) return { dir: baseCwd, matched: false }
+  const resolved = path.isAbsolute(expanded) ? expanded : path.resolve(baseCwd, expanded)
+  // A glob is a directory only the shell knows, so `cd *` must not invent `<cwd>/*` as a base. But
+  // glob characters are also ordinary characters in a real directory name — `My Docs [2026]` is
+  // routine on macOS — and a blanket character test stopped tracking those. Measured 2026-09-04:
+  // that regressed `cd 'My Docs [2026]' && cp x node_modules/` from DENY to ALLOW, to buy a `cd *`
+  // improvement the tests showed was worth nothing. Ask the filesystem instead of guessing: if the
+  // literal name exists, it is a directory, not a pattern.
+  const isDirectory = (p) => { try { return fs.statSync(p).isDirectory() } catch { return false } }
+  if (/[*?[\]]/.test(expanded) && !isDirectory(resolved)) return { dir: baseCwd, matched: false }
+  return { dir: resolved, matched: true }
 }
 
 /** The first symlink at or above `p`, or null. Walks ancestors because `/tmp/x/y` is a symlinked
@@ -426,9 +431,21 @@ process.stdin.on('end', () => {
     // length-preserving and covers no path characters, which is an invariant elsewhere in this
     // file, not a property of the slicing.
     let cursor = 0
+    // Substitution depth, counted ACROSS parts. Blanking `$( … )` inside one part cannot see an
+    // opener two parts away, and nesting puts one there: in
+    // `echo $( echo $(date) && cd /elsewhere ) && cp x <link>/` the inner `)` balances part 1, so
+    // the `cd` lands in a part with no opener in it and reads as top-level. Measured 2026-09-04 —
+    // that prefix hid a real symlink. Counting bare `)` also closes a plain `(subshell)`, which is
+    // safe in one direction only: it can make depth SMALLER, i.e. more cds visible, never fewer.
+    let subDepth = 0
     for (const part of parts) {
       const base = cursor
       cursor += part.length
+      const partOrig = cmd.slice(base, base + part.length)
+      const insideSubst = subDepth > 0
+      subDepth = Math.max(0, subDepth
+        + (partOrig.match(/\$\(/g) || []).length
+        - (partOrig.match(/\)/g) || []).length)
       if (part === '||' || part === '&') { dir = sessionCwd; dirExplicit = false; continue }
       if (/^(?:&&|[;\n])$/.test(part)) continue
       const pipeline = part
@@ -457,7 +474,10 @@ process.stdin.on('end', () => {
         // directory the PIPELINE was entered in, and none of their cds survive past it. The same
         // asymmetry governs `explicit`: a stage sees its OWN cd and one from a previous split part
         // (entryExplicit), never a sibling stage's — that cd ran in a different subshell.
-        const ec = effectiveCwd(segment, multi ? entryDir : dir)
+        // A cd in a part that is INSIDE an unclosed substitution moves only that subshell.
+        const ec = insideSubst
+          ? { dir: multi ? entryDir : dir, matched: false }
+          : effectiveCwd(segment, multi ? entryDir : dir)
         const stageDir = ec.dir
         const stageExplicit = ec.matched || (multi ? entryExplicit : dirExplicit)
         if (!multi) { dir = stageDir; dirExplicit = stageExplicit }

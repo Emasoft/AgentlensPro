@@ -153,6 +153,16 @@ check(run(`echo $( cd ${sub} && pwd ) && cp x ${path.basename(link)}/`).denied, 
 check(run(`echo $(cd ${sub} && pwd) && cp x ${path.basename(link)}/`).denied, '...nor an unspaced one')
 check(run('echo `cd ' + sub + ' && pwd` && cp x ' + path.basename(link) + '/').denied, '...nor a backtick one')
 check(run(`(cd ${wtDir} && cp x node_modules/)`).denied, 'a plain subshell is NOT a substitution: its cd still counts')
+// Nesting puts the inner `)` in the OPENER's part, so the cd lands in a part with no opener and
+// reads as top-level. Per-part blanking cannot see two parts back; only depth counted across parts
+// can. This is the shape blanking alone missed.
+check(run(`echo $( echo $(date) && cd ${sub} ) && cp x ${path.basename(link)}/`).denied, 'a NESTED substitution does not let its cd escape')
+// A glob char in a name that REALLY EXISTS is a name, not a pattern. A blanket character test
+// stopped tracking these, trading a real regression for a `cd *` improvement worth nothing.
+const bracket = path.join(root, 'My Docs [2026]')
+fs.mkdirSync(bracket, { recursive: true })
+fs.symlinkSync(real, path.join(bracket, 'node_modules'))
+check(run(`cd 'My Docs [2026]' && cp x node_modules/`).denied, 'a directory whose real name contains glob chars is still tracked')
 check(run(`sort -o ${link}/out ${link}/in`).denied, 'sort -o DOES write in place')
 check(run(`sed -i s/a/b/ ${link}/f`).denied, 'sed is not read-only at all')
 
