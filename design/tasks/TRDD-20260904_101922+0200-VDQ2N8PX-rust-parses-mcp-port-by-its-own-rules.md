@@ -3,8 +3,8 @@ trdd-id: VDQ2N8PX
 title: Rust parses MCP_PORT by its own rules so the server and the CLI can still disagree
 column: todo
 created: 2026-09-04T10:19:22+0200
-updated: 2026-09-04T16:54:56+0200
-duplicated-by: 4MJT92J7
+updated: 2026-09-04T16:58:30+0200
+related: [4MJT92J7, 99HUNXJS, EGGERLEO, Q9WD3K5R]
 current-owner: main-session
 task-type: bugfix
 project-id: agentlenspro
@@ -26,8 +26,10 @@ external-refs: []
 
 Noted 2026-09-04T16:54. `4MJT92J7` covers the same site (`server_stats.rs:68`), the same two-engine
 divergence, and the same EGGERLEO hand-off; it was filed 5h45m after this card by a session that
-did not check the board first. **This card is the survivor** — earlier, and
-`min-approval-requirement: none` against 4MJT92J7's `medium`.
+did not check the board first. **This card is the survivor** — earlier, and better developed.
+(An earlier version of this line added *"`min-approval-requirement: none` against 4MJT92J7's
+`medium`"*. **That is FALSE** — 4MJT92J7 is also `none`; `medium`/`MEDIUM` are its `priority` and
+`severity`. Corrected 16:58.)
 
 The supersede transition is NOT performed here (`<any non-design> → superseded` is non-exempt).
 **But 4MJT92J7 is not empty, and its content must not be lost if it is archived:**
@@ -37,11 +39,16 @@ The supersede transition is NOT performed here (`<any non-design> → superseded
   vars for these — it is flags-only"*, which this very defect falsifies. It now states the scoped
   truth instead. That comment was the only evidence anyone had that the Rust env boundary was
   airtight.
-- **The `Ports::default()` caller trace**, which settles severity for BOTH cards: one caller
-  (`lib.rs:565`), and the only reads of `st.ports.*` are `server_stats.rs:574-575`. `Ports` is a
-  REPORTING struct — nothing binds a listener from it — so `MCP_PORT=0` yields a wrong number in
-  `/api/server-stats`, never a dead bound socket. This card's own box *"`MCP_PORT=0` does not yield
-  `Ports.mcp == 0`"* is still the right fix, but the impact is a false self-report, not a hazard.
+- ~~The `Ports::default()` caller trace~~ — **STRUCK 16:58: THIS CARD ALREADY HAD IT AND HAS IT
+  BETTER.** The claim that 4MJT92J7 contributed this was written after reading only the first 60
+  lines of this card — a completeness assertion over a partial read, which is the same failure
+  shape as the port-site claims, applied to a card instead of a source tree. This card's
+  *"Why severity is low — MEASURED rather than assumed"* section already carried `lib.rs:565`,
+  ALSO located the overwrite site `alcore.rs:235-237` that 4MJT92J7 never found, ruled out a
+  `..Default::default()` spread, and — decisively — flags the guard on `alcore.rs:235-237` as
+  **UNVERIFIED**, where 4MJT92J7's box 1 asserts the overwrite flatly. So 4MJT92J7's box-1 work was
+  a ~6h-later rediscovery of this section, and the duplication is DEEPER than first recorded, not
+  shallower. Nothing to migrate here.
 
 `rust-core/crates/agentlens-core/src/server_stats.rs:68`, in `impl Default for Ports`:
 

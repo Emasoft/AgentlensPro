@@ -3,8 +3,7 @@ trdd-id: 4MJT92J7
 title: alcore reads MCP_PORT from env with parse rules that differ from the TypeScript envPort
 column: todo
 created: 2026-09-04T16:04:40+0200
-updated: 2026-09-04T16:54:56+0200
-duplicate-of: VDQ2N8PX
+updated: 2026-09-04T16:58:30+0200
 current-owner: main-session
 task-type: bugfix
 project-id: agentlenspro
@@ -16,7 +15,7 @@ parent-trdd: 99HUNXJS
 npt: []
 eht: []
 blocked-by: []
-related: [99HUNXJS, BSDR4TRM, EGGERLEO, 1B98LCVR]
+related: [VDQ2N8PX, 99HUNXJS, BSDR4TRM, EGGERLEO, 1B98LCVR]
 ---
 
 # alcore reads MCP_PORT from env, with different parse rules than the TS parser
@@ -27,7 +26,14 @@ Found 2026-09-04T16:54 while grepping for something else. `VDQ2N8PX`
 (*"Rust parses MCP_PORT by its own rules so the server and the CLI can still disagree"*, created
 **10:19:22**; this card **16:04:40**) covers the same site, the same two-engine divergence, the
 `'0'` row, and hands the `'3e3'` question to EGGERLEO exactly as this card does. **This card should
-be SUPERSEDED into VDQ2N8PX**, which is both earlier and `min-approval-requirement: none`.
+be SUPERSEDED into VDQ2N8PX**, which is earlier and better developed.
+
+**CORRECTED 16:58 — an earlier version of this note said VDQ2N8PX wins partly on
+`min-approval-requirement: none` "against 4MJT92J7's `medium`". FALSE: this card is ALSO
+`min-approval-requirement: none`.** `medium`/`MEDIUM` are its `priority` and `severity` — three
+frontmatter fields collapsed into one. That deleted one of the two stated grounds; what remains is
+creation order plus the content comparison below, and "earlier wins" is not a convention stated
+anywhere in this project's rules.
 
 **Not doing that transition here:** `<any non-design> → superseded` is NON-EXEMPT under
 `manager-approval-defaults.md` §W. Recording the duplication is exempt (table E); force-superseding
@@ -37,9 +43,15 @@ is not, and this session already closed one contested card on its own authority 
 - **Box 3 is DONE and the code has landed** (`c17ef591`, corrected by `0f1e9433`): `freePort.ts`'s
   `alcoreArgsFromEnv` comment no longer claims alcore is flags-only, and now carries the scoped
   evidence (the literals `UI_PORT`/`OTLP_PORT` occur 4× in `rust-core`, all in comments).
-- **The `Ports::default()` caller trace** (one caller `lib.rs:565`; only reads `server_stats.rs:574-575`)
-  and the conclusion it supports: `Ports` is a reporting struct, so the impact is a wrong number in
-  `/api/server-stats`, never a bound socket.
+- ~~The `Ports::default()` caller trace~~ — **STRUCK 16:58. VDQ2N8PX ALREADY HAD IT, measured the
+  same morning, and its version is BETTER.** VDQ2N8PX's "Why severity is low — MEASURED rather than
+  assumed" section carries `lib.rs:565` as the only construction site AND names the overwrite site
+  `alcore.rs:235-237`, which this card never found. It then flags what this card asserted flatly:
+  *"`severity: low` ASSUMES the overwrite at `alcore.rs:235-237` runs unconditionally on the serve
+  path — that guard is UNVERIFIED."* This card's box 1 "ANSWERED 2026-09-04" was therefore a
+  REDISCOVERY of VDQ2N8PX's morning finding, arrived at ~6h later and less carefully. It also rules
+  out a hazard this card never considered (no `..Default::default()` spread of `Ports` exists).
+  **Nothing to migrate; read VDQ2N8PX's section instead of this card's box 1.**
 - The retractions recorded below (the `server stop` scenario; the inverted BSDR4TRM citation; the
   `'+8080'` row asserted from intuition).
 
@@ -155,6 +167,13 @@ is the first task, not a formality — the whole severity of this card depends o
       env-derived value can reach a SERVED RESPONSE but never a bound socket — the impact is a
       wrong number in `/api/server-stats`, which is the failure the struct's own doc comment at
       `:55-58` already describes ("stated a port about itself that a client would find dead").
+      **SUPERSEDED BY VDQ2N8PX's OWN, EARLIER AND MORE CAREFUL TRACE (see the duplicate note at the
+      top).** That card found the same `lib.rs:565` construction site hours before this box was
+      written, ALSO found the overwrite site `alcore.rs:235-237` which this box never located, and
+      explicitly marks as UNVERIFIED the guard this box asserts flatly ("`alcore serve` overwrites
+      `mcp` from `--mcp-port` once `serve_mcp` claims the port"). Whether that overwrite runs
+      unconditionally is NOT established, and the severity rating depends on it. Do not cite this
+      box; cite VDQ2N8PX.
 - [ ] A decision is recorded: delete the env read in favour of the flag, OR align its parse
       semantics with `envPort`. Not "it's probably fine".
 - [x] `freePort.ts`'s `alcoreArgsFromEnv` comment is corrected or narrowed to what is true. It
