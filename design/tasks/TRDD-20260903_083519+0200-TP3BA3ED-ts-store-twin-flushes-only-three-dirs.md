@@ -3,7 +3,8 @@ trdd-id: TP3BA3ED
 title: The TypeScript store twin flushes and fsyncs only blobs bodies and parts so api_calls is invisible to it
 column: backburner
 created: 2026-09-03T08:35:19+0200
-updated: 2026-09-03T08:35:19+0200
+updated: 2026-09-04T13:37:25+0200
+implementation-commits: [c3f011cb]
 current-owner: main-session
 task-type: bugfix
 min-approval-requirement: none

@@ -3,7 +3,8 @@ trdd-id: 2R0AXCKL
 title: The two real-corpus slow tests time out under host contention and turn a green gate red
 column: backburner
 created: 2026-09-02T01:11:53+0200
-updated: 2026-09-02T01:11:53+0200
+updated: 2026-09-04T13:37:25+0200
+implementation-commits: [84d6f500]
 current-owner: claude-agentlenspro
 task-type: bugfix
 project-id: agentlenspro
