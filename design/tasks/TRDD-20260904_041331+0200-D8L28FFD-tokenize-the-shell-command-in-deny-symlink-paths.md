@@ -86,6 +86,13 @@ Replace the regex layers with **one pass that produces a token stream**, so "syn
       not that the case does. `oppa` returns 5 hits against 4 distinct probe shapes; counting cannot
       tell 5-covering-4 from 5-covering-2. **A real case-by-case diff is still owed**, and this box
       stays unticked until it happens.
+      **`probe-ad.js` NOW READ (17:22) — it is not a case list at all**, which is why the extractor
+      returned nothing. It is a MUTATION-COVERAGE probe: `AD5` deletes `effectiveCwd`'s `cd`/`pushd`
+      match and counts failing matrix cases (it is the precedent for this card's criterion 3, and it
+      already carries the `ANCHOR MISS` guard that criterion describes). Its only case list is `AD2`
+      — three separator cases (`||`, `&`, `&&`) that ARE pinned in the matrix (13 hits). So it
+      contributes **no missing cases**. Six of seven probes now genuinely examined; the case-by-case
+      diff of the other six is what remains.
 - [ ] Mutation-verified per layer, and **every mutation diff-confirmed before its count is
       believed** — a `perl` mutation that silently fails to match reports zero failures and reads
       exactly like "this test pins nothing" (this nearly cost a real finding on 2026-09-04).
@@ -113,6 +120,29 @@ Replace the regex layers with **one pass that produces a token stream**, so "syn
 - Do NOT aim for a POSIX-complete shell parser. The target is the subset that decides: where does
   a command start and end, what is quoted, what is nested, and which words are paths.
 - Do NOT merge the pnpm guard into this one here — that is separate pending work.
+
+## ⚠ HAZARD FOUND 2026-09-04T17:22 — a STALE backup of this guard is sitting in `/tmp`
+
+`/tmp/ad-g.bak` — **24,189 bytes against the current guard's 49,675.** The guard has more than
+DOUBLED since that backup was taken (Sep 3 23:49), because the five bypass fixes landed afterwards.
+392 diff lines.
+
+**Why it exists:** `probe-ad.js` (the mutation probe, above) writes the guard to `/tmp/ad-g.bak`
+before mutating `scripts/deny-symlink-paths.js` **IN PLACE**, then restores it. Verified 17:22 —
+the guard is currently byte-identical to HEAD, so the last run's restore succeeded, and the restore
+path reads the in-memory `src` rather than the `.bak`, so a fresh run is safe on its own.
+
+**The hazard is the file, not the script.** It is a plausible-looking backup of a safety guard,
+named as one, sitting next to a probe that mutates that guard in place. Anyone — human or agent —
+who finds the guard mutated by an interrupted run and restores from the obvious backup **silently
+reverts all five bypass fixes**, and the matrix would then fail loudly, which is the only reason
+this would be caught at all. Left in place rather than deleted: `/tmp` is RULE-0-exempt, but this
+is evidence and the call to remove it is the owner's.
+
+**Design consequence for the rewrite:** mutation runs must never write into the repo's guard. The
+verification this session did (`66052519`) mutated a `/tmp` COPY and pointed a harness at it, so an
+interrupted run leaves the repo untouched and produces no restore-from-stale-backup trap. Adopt
+that shape; retire `probe-ad.js`'s in-place pattern when its cases are folded in.
 
 ## Notes
 
