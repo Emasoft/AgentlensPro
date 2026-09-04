@@ -204,14 +204,20 @@ function pathTokens(cmd, baseDir, baseIsExplicit) {
  *  session cwd. LIFTED VERBATIM from deny-pkgmanager-symlink-purge.js, where it is
  *  mutation-verified — this guard shipped without it, so `cd <worktree> && cp x node_modules/`
  *  resolved the relative path against the HOOK's cwd, found nothing, and allowed. That is the
- *  original incident's exact shape, uncaught, in the guard built to generalise it. */
-function effectiveCwd(segment, sessionCwd) {
+ *  original incident's exact shape, uncaught, in the guard built to generalise it.
+ *
+ *  Returns `{dir, matched}`. `matched` is load-bearing and the caller must not re-derive it as
+ *  `dir !== sessionCwd`: `cd .` and `cd $PWD` are explicit cds that leave the dir identical, and
+ *  the caller uses "an explicit cd set this base" to decide whether a NON-EXISTENT relative path
+ *  is still worth resolving. Inferring it from the dir answers that question wrong in exactly the
+ *  case where a worktree and the hook cwd happen to coincide. */
+function effectiveCwd(segment, baseCwd) {
   const m = /(?:^|\s)(?:cd|pushd)\s+(?:--\s+)?(['"]?)([^'"&;|]+)\1(?:\s|$)/.exec(segment)
-  if (!m) return sessionCwd
+  if (!m) return { dir: baseCwd, matched: false }
   const target = m[2].trim()
-  if (!target || target === '-') return sessionCwd
+  if (!target || target === '-') return { dir: baseCwd, matched: false }
   const expanded = target.startsWith('~') ? path.join(process.env.HOME || '', target.slice(1)) : target
-  return path.isAbsolute(expanded) ? expanded : path.resolve(sessionCwd, expanded)
+  return { dir: path.isAbsolute(expanded) ? expanded : path.resolve(baseCwd, expanded), matched: true }
 }
 
 /** The first symlink at or above `p`, or null. Walks ancestors because `/tmp/x/y` is a symlinked
@@ -345,14 +351,29 @@ process.stdin.on('end', () => {
     // ALLOW — `ls` was exempt and `oppa` named no path. So a stage keeps its exemption only when
     // EVERY stage of its pipeline is itself known-read-only: `ls x | grep y` stays quiet, and one
     // unknown command anywhere in the chain re-arms the whole pipeline.
-    // `dir` lives ACROSS pipelines: `cd <wt> && cp x node_modules/` splits into TWO pipelines, so a
-    // `dir` scoped inside the loop resets before the command that matters and the cd is lost — which
-    // is exactly how this guard shipped without cd tracking at all. Carried across `;`/`&&`/newline;
-    // the split does not distinguish `||`/`&` here, so this is deliberately more eager than the
-    // sibling guard: over-resolving a relative path can only produce an extra OTP prompt, never a
-    // missed symlink, and a miss is the failure that matters.
+    // `dir` lives ACROSS pipelines: `cd <wt> && cp x node_modules/` splits into TWO, so a `dir`
+    // scoped inside the loop resets before the command that matters and the cd is lost.
+    //
+    // But it carries ONLY across separators meaning "the cd ran and we are still in that shell":
+    // `;`, `&&`, newline. `||` runs its right side only when the left FAILED, and a bare `&`
+    // backgrounds the cd in a subshell — in both cases the following command runs in the ORIGINAL
+    // directory. An earlier version carried across everything, justified as "over-resolving can
+    // only produce an extra prompt, never a missed symlink". That was wrong: measured 2026-09-03,
+    // `cd <wt> || cp x node_modules/` DENIED while naming `<wt>/node_modules`, a path that command
+    // cannot touch. A verdict about the wrong file is not friction, it is incorrect.
+    //
+    // Nor does it carry across a bare `|`: every stage of a pipeline runs in its OWN subshell, so
+    // `cd <wt> | cp x node_modules/` leaves the `cp` in the ORIGINAL directory, and a cd anywhere
+    // inside a multi-stage pipeline never reaches the commands AFTER the pipeline either. Measured
+    // 2026-09-03: carrying it made that DENY while naming `<wt>/node_modules`, a path the command
+    // cannot reach — the same wrong-file verdict as the `||` case above, one separator over.
     let dir = sessionCwd
-    for (const pipeline of segmentable.split(/(?:\|\||&&|[;&\n])+/)) {
+    let dirExplicit = false
+    const parts = segmentable.split(/(\|\||&&|[;&\n])/)
+    for (const part of parts) {
+      if (part === '||' || part === '&') { dir = sessionCwd; dirExplicit = false; continue }
+      if (/^(?:&&|[;\n])$/.test(part)) continue
+      const pipeline = part
       // Stage boundaries come from the MASKED text; the stage CONTENT is sliced from the original
       // so quoted paths are still extractable.
       const base = segmentable.indexOf(pipeline)
@@ -371,12 +392,20 @@ process.stdin.on('end', () => {
         return (t[i] || '').replace(/^['"]+/, '').split('/').pop()
       }
       const wholePipelineReadOnly = stages.every((st) => isReadOnlySegment(st, commandWord(st)))
+      const multi = stages.length > 1
+      const entryDir = dir
+      const entryExplicit = dirExplicit
       for (const segment of stages) {
-        dir = effectiveCwd(segment, dir)
+        // A multi-stage pipeline's stages are siblings, not a sequence: each resolves against the
+        // directory the PIPELINE was entered in, and none of their cds survive past it.
+        const ec = effectiveCwd(segment, multi ? entryDir : dir)
+        const stageDir = ec.dir
+        const stageExplicit = ec.matched || (multi ? entryExplicit : dirExplicit)
+        if (!multi) { dir = stageDir; dirExplicit = stageExplicit }
         const trimmed = segment.trim()
         if (!trimmed) continue
         if (wholePipelineReadOnly) continue
-        for (const tok of pathTokens(trimmed, dir, dir !== sessionCwd)) {
+        for (const tok of pathTokens(trimmed, stageDir, stageExplicit)) {
           const found = firstSymlink(tok.resolved)
           if (found) { hit = { ...found, raw: tok.raw }; break }
         }

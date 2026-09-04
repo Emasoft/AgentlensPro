@@ -109,6 +109,14 @@ check(run(`pushd ${wtDir} && mv a node_modules/b`).denied, 'pushd form')
 check(run(`cd ${wtDir} ; cp x node_modules/`).denied, 'cd carried across ; into a later pipeline')
 check(run(`cd ${wtDir} && cp x ./node_modules/notyet`).denied, 'a symlinked ANCESTOR counts even when the leaf does not exist yet')
 check(!run(`cd ${wtDir} && ls node_modules/`).denied, 'read-only after a cd is still exempt')
+// A cd reaches the NEXT command only when the separator means "it ran and we are still in that
+// shell". `||` runs its right side only if the cd FAILED; `&` backgrounds it in a subshell; every
+// stage of a `|` pipeline is its own subshell. Carrying the dir across those made the guard DENY
+// while naming a path the command cannot reach — a verdict about the wrong file, not friction.
+check(!run(`cd ${wtDir} || cp x node_modules/`).denied, '|| : the cd did NOT run, so it sets no base')
+check(!run(`cd ${wtDir} & cp x node_modules/`).denied, '& : the cd is backgrounded in a subshell')
+check(!run(`cd ${wtDir} | cp x node_modules/`).denied, '| : each pipeline stage is its own subshell')
+check(run(`cd ${wtDir} && cp x node_modules/ | cat`).denied, '...but a cd BEFORE the pipeline still reaches it')
 check(run(`sort -o ${link}/out ${link}/in`).denied, 'sort -o DOES write in place')
 check(run(`sed -i s/a/b/ ${link}/f`).denied, 'sed is not read-only at all')
 
