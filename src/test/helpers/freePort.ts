@@ -182,8 +182,14 @@ export function alcoreTestBin(): string | null {
  *  failure would not look like a misconfiguration; it would look like passing tests plus a
  *  corrupted live data dir.
  *
- *  For BINDING, alcore is flags-only: nothing in the Rust tree reads UI_PORT or OTLP_PORT from the
- *  environment at all, and no listener is bound from an env-derived value. But the blanket claim
+ *  For BINDING, alcore is flags-only. The evidence, stated WITH its scope because a completeness
+ *  claim inherits the scope of its search: the literals `UI_PORT` and `OTLP_PORT` occur exactly 4
+ *  times in all of `rust-core/` (excluding `target/`, any file type) and ALL FOUR ARE COMMENTS —
+ *  they appear nowhere in executable Rust. That is what rules out the indirect routes a plain
+ *  `grep env::var` would miss: the tree ingests the environment wholesale in ~10 places
+ *  (`std::env::vars().collect()`) and has helpers taking a runtime key (`env::var(key)`), but a map
+ *  lookup cannot name a key whose literal does not exist, and there is no `format!("{}_PORT", ..)`
+ *  or other constructed port name. No listener is bound from an env-derived value. But the blanket claim
  *  this comment used to make — "alcore reads NO env vars for these" — is FALSE for MCP_PORT:
  *  `server_stats.rs`'s `impl Default for Ports` reads it via `std::env::var`, with parse rules that
  *  differ from the TS `envPort` (`'3e3'` → TS 3000 / Rust fallback; `'0'` → TS rejected / Rust

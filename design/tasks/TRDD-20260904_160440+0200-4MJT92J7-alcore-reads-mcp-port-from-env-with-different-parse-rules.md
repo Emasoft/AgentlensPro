@@ -133,13 +133,27 @@ is the first task, not a formality — the whole severity of this card depends o
       **DONE 2026-09-04T16:39+0200.** NARROWED, not deleted — the comment's operational point (pass
       the flags or the child stomps the developer's live server) is still true and still load-bearing,
       so only the false universal was replaced. It now states the property that IS true and is the one
-      isolation depends on — **for BINDING alcore is flags-only; no listener is bound from an
-      env-derived value, and UI_PORT/OTLP_PORT have zero `env::var` reads in the Rust tree** — then
-      names the exception explicitly (`server_stats.rs`'s `impl Default for Ports` reads `MCP_PORT`,
-      with the divergent parse rules tabled above) and records WHY the correction matters: this
-      comment was the only evidence anyone had that the Rust env boundary was airtight, and a false
-      "I checked, there is no other site" is the same shape that was already wrong once in
-      TRDD-99HUNXJS's commit `44fcd56f`. `npx tsc --noEmit` exit 0.
+      isolation depends on — **for BINDING alcore is flags-only** — then names the exception
+      explicitly (`server_stats.rs`'s `impl Default for Ports` reads `MCP_PORT`, with the divergent
+      parse rules tabled above).
+      **The first attempt at this fix FAILED review and the retry is what the box is ticked on.**
+      `c17ef591`'s text asserted "nothing in the Rust tree reads UI_PORT or OTLP_PORT" — a fresh
+      unbounded negative resting on the same four-way-restricted grep (`env::var` ∩ `-i port` ∩
+      `crates/` ∩ `*.rs`), i.e. the SCOPE-LAUNDERING FAILURE THE COMMENT ITSELF CITES 99HUNXJS
+      AGAINST, committed inside the sentence citing it. The widened search settles it properly:
+      `env::var|env::vars|var_os|option_env|envy|config::Environment|figment` over ALL of
+      `rust-core` returns 33 hits (no `build.rs`, no `.rs` outside `crates/`), of which the only
+      literal port read is `server_stats.rs:68`; ~10 are `std::env::vars().collect()` wholesale
+      ingestion and several are helpers taking a runtime key, so THAT grep alone still could not
+      support the negative. The check that can: **the literals `UI_PORT`/`OTLP_PORT` occur 4 times
+      in all of `rust-core` and all four are COMMENTS** — absent from executable Rust entirely — and
+      no `format!("{}_PORT", ..)` or other constructed name exists. A map lookup cannot name a key
+      whose literal does not exist. The comment now carries that scope instead of a bare universal.
+      **`tsc` is NOT evidence here and was withdrawn from this box** (`c17ef591` cited `EXIT=0` in
+      the position where evidence goes): the change is a doc comment, so tsc parses and discards it
+      — it returns 0 for the unedited file and would return 0 for an outright lie. The only failure
+      it could catch is an unterminated block comment. `AGPYOAA6` — *a check that measured nothing
+      looks exactly like a check that passed* — recalled 40 minutes earlier and not applied here.
 - [ ] A check that would FAIL if a future Rust site reads a port env var directly — the TypeScript
       side got one shared parser, the Rust side has no equivalent guard.
 
