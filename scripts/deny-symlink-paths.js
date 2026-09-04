@@ -309,10 +309,12 @@ function effectiveCwd(segment, baseCwd) {
   // improvement the tests showed was worth nothing. Ask the filesystem instead of guessing: if the
   // literal name exists, it is a directory, not a pattern.
   const isDirectory = (p) => { try { return fs.statSync(p).isDirectory() } catch { return false } }
-  // Kept even though the general existence rule below now covers every case the matrix reaches: it
-  // still guards the one this cannot, a directory whose literal name IS a glob character, where
-  // `cd *` would glob elsewhere while `<cwd>/*` really exists.
-  if (/[*?[\]]/.test(expanded) && !isDirectory(resolved)) return { dir: baseCwd, matched: false }
+  // (The glob check that stood here is gone. It tested `!isDirectory(resolved)` under a narrower
+  //  condition than the general rule below tests it — same predicate, same value — so it could only
+  //  ever fire where that one also fires. Dead by construction, not merely unreached. It was kept
+  //  one commit ago on the claim that it guarded a directory literally named `*`; in that case the
+  //  directory EXISTS, so it is precisely the case the check stays silent on. The comment inverted
+  //  the behaviour, which is worse than no comment.)
   // A `)` TERMINATOR can cut a real name short: `cd /tmp/a(b)/sub` stops the unquoted branch at the
   // `(`-less `)`, yielding `/tmp/a(b` — a directory that does not exist — and `matched: true` then
   // disables the existence gate, which is the `cd $PWD` bug arriving by a new route. Measured
@@ -347,8 +349,14 @@ function effectiveCwd(segment, baseCwd) {
   // a base that does not exist. `matched: true` is what DISABLES the existence gate for every
   // relative path after it, so asserting a fictional base is the single mechanism behind the
   // `cd $PWD`, `cd *`, `cd %CD%` and mid-string `$HOME` bypasses — each of which was fixed
-  // separately before this. A directory the command is about to create cannot hold a symlink yet,
-  // so there is nothing to miss by declining here.
+  // separately before this.
+  //
+  // This is a LIMITATION, not a proof. The first draft of this comment said "a directory the
+  // command is about to create cannot hold a symlink yet, so there is nothing to miss" — false:
+  // `git worktree add X && cd X && …` materialises a POPULATED tree, and a symlinked node_modules
+  // inside a fresh worktree is this guard's founding incident. Nothing is missed TODAY only because
+  // such a symlink does not exist at hook time either, so firstSymlink cannot see it whichever base
+  // we pick. Do not build on the stronger claim; the OTP is the backstop for this whole class.
   if (!isDirectory(resolved)) return { dir: baseCwd, matched: false }
   return { dir: resolved, matched: true }
 }
