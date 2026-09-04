@@ -242,13 +242,25 @@ would all be invisible to them. Do not cite those searches as a rule-out.
 
 ```bash
 D=~/.agentlens/store/api_calls
-find "$D" -name '*.parquet' | sort > /tmp/parts-before.txt   # BEFORE
+find "$D" -name '*.parquet' | sort > /tmp/parts-before.txt        # BEFORE
 agentlenspro server restart
-comm -23 /tmp/parts-before.txt <(find "$D" -name '*.parquet' | sort)   # AFTER
+comm -23 /tmp/parts-before.txt <(find "$D" -name '*.parquet' | sort)   # (a) SURVIVES
+agentlenspro sql "SELECT count(*) FROM read_parquet('$D/*.parquet')"   # (b) IS READABLE
 ```
 
-**Empty output ⇒ every pre-restart part still exists ⇒ step 3 PASSES.** Any line listed is a part
-that vanished across the restart, which is the actual failure.
+**BOTH halves are required — step 3 says "survives AND is readable".** (a) empty output ⇒ every
+pre-restart part still exists. (b) must return a count without a parquet error ⇒ the surviving
+parts are actually readable. An earlier version ran only (a) and declared "⇒ step 3 PASSES": a part
+that persists TRUNCATED OR CORRUPT passes an existence check and fails the criterion, so filename
+identity is a proxy for content survival, not a substitute. (If `agentlenspro sql` is not the right
+verb here, any DuckDB `read_parquet` over the directory does the same job — the point is that
+something must PARSE the bytes.)
+
+**One false-FAILURE to rule out before believing (a).** Retention machinery is live in this repo
+(`retention_config.rs`, `summarize/retention.rs`, `AGENTLENS_STATUSLINE_RETENTION_DAYS`); whether
+any of it targets `store/api_calls/` is UNESTABLISHED. If (a) lists parts, confirm they were lost
+to the RESTART and not deleted on a retention schedule that happened to fire in the same window —
+the window is short, so a collision is unlikely, not excluded.
 
 **A pid-diversity check does NOT work here, and the earlier version of this recipe was wrong.** It
 said "more than one distinct pid ⇒ parts survived". Immediately after a restart the old parts are
