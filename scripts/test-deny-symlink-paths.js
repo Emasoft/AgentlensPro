@@ -223,6 +223,21 @@ check(run(`cd ${root}/a*b(c)/sub && cp x ${path.basename(link)}/`).denied, 'a gl
 const gdir2 = path.join(root, 'a(b)*x', 'sub')
 fs.mkdirSync(gdir2, { recursive: true })
 check(run(`cd ${root}/a(b)*x/sub && cp x ${path.basename(link)}/`).denied, '...including a glob that only survives in the whole-word spelling')
+// No paren, so the repair never runs: an unquoted glob whose literal spelling is ABSENT must leave
+// the base alone. (This does NOT isolate the main gate — the general existence rule at the end of
+// effectiveCwd refuses the same input. That redundancy is deliberate and recorded there.)
+check(run(`cd ${root}/a*b-nomatch/sub && cp x ${path.basename(link)}/`).denied, 'an unquoted glob with no literal match claims no base')
+// A glob character in a name that REALLY EXISTS is a name: with nullglob off the shell passes an
+// unmatched pattern through literally, so refusing here would throw away a base we can resolve.
+const litglob = path.join(root, 'rel-1.0[stable]')
+fs.mkdirSync(litglob, { recursive: true })
+fs.symlinkSync(real, path.join(litglob, 'node_modules'))
+check(run(`cd ${litglob} && cp x node_modules/`).denied, 'a literal glob-char directory that exists is still tracked')
+// One shell WORD, quoting changing mid-token: the whole-word scan stops at the quote and would
+// otherwise claim the shallower prefix as the base.
+// Asserting DENY, not ALLOW: claiming the shallower `<root>/a(b)` as the base is what HIDES the
+// symlink at the real cwd, so only a DENY-side case discriminates.
+check(run(`cd ${root}/a(b)'*'/sub && cp x ${path.basename(link)}/`).denied, 'a token cut short by a quote claims no base')
 // Both spellings must go through the SAME expansion: the truncated one had `$PWD` substituted and
 // the whole-word one did not, so the correct `<cwd>/a(b)` was never built out of the two halves.
 check(run(`cd $PWD/a(b)/sub && cp x node_modules/`).denied, 'a $PWD prefix and a paren name are fixed together, not separately')

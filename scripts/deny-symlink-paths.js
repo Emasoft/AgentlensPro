@@ -325,7 +325,23 @@ function effectiveCwd(segment, baseCwd) {
   // `cd <base>/a*b(c)/sub && cp x node_modules/` claimed that base, disabled the existence gate,
   // and ALLOWED — where before the deletion it denied. An algebraic claim about two lines has to
   // account for every path between them.
-  if (unquotedTarget && /[*?[\]]/.test(expanded)) return { dir: baseCwd, matched: false }
+  // ...but only when the literal spelling is ABSENT. With nullglob off — the default — a pattern
+  // that matches nothing is passed through literally, so `cd rel-1.0[stable]` really does enter the
+  // directory of that name when one exists and no sibling matches. Refusing unconditionally, as the
+  // first version of this gate did, threw that base away and lost a DENY. The fifteenth bypass is
+  // still closed without the unconditional form: its shape is `)`-terminated, so it goes through
+  // the repair below, whose own refusal IS unconditional — that is the path where a claimed base
+  // gets no further vetting, and the only one that needs the stricter rule.
+  //
+  // With that `!isDirectory` restored this gate is REDUNDANT with the general rule at the end of
+  // the function — same condition, narrower. It is kept anyway, and this time the redundancy is
+  // measured rather than argued: deleting it on that reasoning is exactly what opened the
+  // fifteenth bypass, because the repair between the two positions RETURNS. It does not return on
+  // a glob any more, so the argument now holds — but a check whose only defence is an argument
+  // that was wrong once already is not worth the bytes it saves.
+  if (unquotedTarget && /[*?[\]]/.test(expanded) && !isDirectory(resolved)) {
+    return { dir: baseCwd, matched: false }
+  }
   // A `)` TERMINATOR can cut a real name short: `cd /tmp/a(b)/sub` stops the unquoted branch at the
   // `(`-less `)`, yielding `/tmp/a(b` — a directory that does not exist — and `matched: true` then
   // disables the existence gate, which is the `cd $PWD` bug arriving by a new route. Measured
@@ -344,6 +360,12 @@ function effectiveCwd(segment, baseCwd) {
     while (end < visible.length && !/[\s&;|'"]/.test(visible[end])) end += 1
     // `whole` comes from `visible`, where a `$( … )` is blanked to spaces — so a substitution
     // abutting the name reads as a separator and ends the word early. Gated by isDirectory below.
+    // A shell WORD can change quoting mid-token: `cd /tmp/a(b)'*'/sub` is one argument. The scan
+    // stops at the quote, so `whole` would be the shallower `/tmp/a(b)` with the `*` and the `/sub`
+    // dropped — and the glob test below never sees a glob that is still there. Measured 2026-09-04:
+    // that returned a base the command does not use and ALLOWED. Cut short by a quote means the
+    // token continues somewhere we cannot follow, so claim nothing.
+    if (end < visible.length && /['"]/.test(visible[end])) return { dir: baseCwd, matched: false }
     const whole = expand(visible.slice(start, end), baseCwd)
     // `whole` skips the bailouts above, so re-apply them here rather than leaning on isDirectory to
     // catch everything: hoisting the expansion to both spellings and leaving the VALIDATION on one
