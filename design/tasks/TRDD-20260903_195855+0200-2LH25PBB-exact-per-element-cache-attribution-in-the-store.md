@@ -37,12 +37,23 @@ session could hold uncommitted work in the crate without ever opening the TRDD. 
 **The stall date is `2026-09-03T19:58:55` — compare against THAT, not `updated:`.** Writing this
 note bumped `updated:` (rule §7 requires it: the card's assertions changed), which resets the very
 staleness signal the note documents. Recorded here because otherwise the evidence for this finding
-survives only in git blame.
+survives only in git blame. **This fixes the human record, NOT the detector:** `trdd-drift` reads
+the `updated:` field and nothing parses this prose, so the card now reads as touched minutes ago
+and is invisible to staleness checking for another cycle. The real gap is in the schema — no field
+distinguishes "work last touched" from "assertions last changed" — and it belongs on its own card
+against the schema or the detector, not in more prose here.
 
 **Column NOT changed:** `dev → todo` is not a row on `manager-approval-defaults.md` table A;
-recording runtime evidence is exempt (table E), moving the card is not. The principle, stated so it
-cannot be bent either way afterwards: **move a card to match what its content DEMONSTRATES, never
-to match what it lacks.** Forward-after-completion qualifies; backward-after-abandonment does not.
+recording runtime evidence is exempt (table E), moving the card is not. **The table governs, full
+stop** — and by that same rule this session's `todo → ai_review` on TRDD-KBK9J59Y was a violation I
+chose to make and disclosed, not a licensed exception.
+
+An earlier version of this note offered a principle instead — *move a card to match what its
+content DEMONSTRATES, never to match what it lacks* — which was reverse-engineered from those two
+decisions to make them look consistent, and does not survive its own test: this card's 13 open
+boxes and frozen `updated:` ARE positive evidence of an unstarted card, so the principle recommends
+the very move it was written to justify declining. The word carrying the deception was "lacks". A
+rule that returns what you already did, in every case it was derived from, has no content.
 
 **Not started:** all four EHTs (`3UJB4MN3`, `AS5DZJRC`, `HCK5162J` in `todo`; `FE1RXC6D` `blocked`)
 are non-terminal, so the parent cannot reach `complete` however much gets built now. That fact is
