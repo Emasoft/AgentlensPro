@@ -398,7 +398,17 @@ if (failed.length) {
   console.error(`\nmigrate-forensics: FAIL — ${failed.length} table(s) did not verify. Delete NOTHING.`)
   process.exit(1)
 }
-console.log(`\nmigrate-forensics: OK — ${results.length} table(s) migrated and verified CONTENT-IDENTICAL (md5 over every value).`)
+// The claim is deliberately NARROWER than "content-identical", because the hash cannot support
+// that. Extraction runs sql.js -> NDJSON -> DuckDB relation R -> parquet written FROM R, and the
+// hash compares R against that parquet — both descend from the SAME NDJSON parse, so an extraction
+// bug is present identically in both operands and hashes equal. It proves DuckDB's writer
+// round-trips a relation; it does NOT prove sql.js extracted the right bytes. Saying otherwise on
+// the last line of a successful run is worse than saying nothing, because the last line is what
+// gets believed. Recorded as defect 1 in TRDD-Q9WD3K5R's STATE block, with the fix (hash the
+// NDJSON line bytes JS-side and compare THAT to DuckDB's digest).
+console.log(`\nmigrate-forensics: OK — ${results.length} table(s) written; row, column, NULL and hash checks passed.`)
+console.log('  NOTE: the content hash compares two DuckDB relations that share one NDJSON parse, so')
+console.log('  it cannot see an extraction bug. See TRDD-Q9WD3K5R defect 1 before trusting it alone.')
 // The .db bytes are unchanged by this run: sql.js opened the source with fs.readFileSync, which
 // takes no lock and mutates nothing — not even the -shm sidecar the earlier DuckDB attach touched
 // on open. "Untouched" is the accurate word here, unlike the read-only-attach version this replaced.
