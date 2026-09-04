@@ -241,15 +241,27 @@ implementation-commits: [4e19ed4b, 428a1dec]
       Each resolves to its OWN workspace, not this one, so the map is genuinely per-session and the
       parent-inheritance explanation is refuted.
 
-      TO CLOSE: probe a session started after the last summary rebuild that HAS made API calls
-      (`callsTotal > 0`), confirm its `project` resolves and that a project-scoped query returns its
-      blocks. **This may be harder than it reads:** every session probed so far reports
-      `callsTotal: 0`, including 26M-token sessions in other workspaces — consistent with
-      `callsTotal` counting CAPTURED BODIES, which the bodies pass deletes. If that is so, a
-      "post-rebuild session with calls" is a narrow window right after capture, not something
-      findable by scanning history, and this box may need re-specifying against what the field
-      actually counts rather than against what its name suggests. Establish that before spending
-      long hunting for a session that may not persist.
+      TO CLOSE: probe a session started after the last summary rebuild whose bodies are still in
+      the live registry (`callsTotal > 0`), confirm its `project` resolves and that a
+      project-scoped query returns its blocks.
+
+      **What `callsTotal` actually counts — READ FROM THE CODE, not inferred.**
+      `context_composition_index.rs:472` is `m.insert("callsTotal", num(refs.len() as f64))`, where
+      `refs` comes from `resolve_refs(&st.bodies, session_id)` — so it is **the count of body REFS
+      the live registry holds for that session**, and the doc at `:419-420` states it outright:
+      *"`callsTotal` counts the REFS, not the parsed calls. That gap is not a bug — it IS the
+      coverage honesty."*
+
+      So a session reporting `callsTotal: 0` has no refs in the registry, which is why 26M-input-token
+      sessions in other workspaces report 0: their bodies were ingested and reclaimed. **A
+      "post-rebuild session with calls" is therefore a narrow window between capture and the bodies
+      pass, not something findable by scanning history** — plan the probe around a session captured
+      minutes ago, not around picking a big one out of the corpus.
+
+      (An earlier version of this paragraph asserted `callsTotal` counts "CAPTURED BODIES, which the
+      bodies pass deletes". Right family, wrong mechanism, and asserted from four probes without
+      reading the code — the recurring error of this session. It is corrected here from the source.
+      The practical conclusion happens to survive; the reasoning that produced it did not deserve to.)
 
 ## Notes and lessons learned
 
