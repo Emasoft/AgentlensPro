@@ -169,7 +169,13 @@ for (const t of tables) {
     // hash cannot see it. Making every overwrite recoverable is strictly better than making the
     // guard cleverer, and much smaller: one rename covers the whole class of "the new copy is
     // worse than the old one", including the cases nobody predicted.
-    fs.renameSync(dest, `${dest}.prev`)
+    // TIMESTAMPED, not a single `.prev`. A one-deep backup survives exactly ONE mistake: run 1
+    // saves the good copy and writes a bad one, run 2 saves the BAD copy over it and writes another
+    // — and a second run is precisely what someone does when the first result looks wrong. The
+    // backup would be destroyed by the act of investigating the problem it exists for. Pruning is
+    // left to a human on purpose: this directory is under the user's data dir and the directive is
+    // "do not lose any data", so nothing here deletes anything.
+    fs.renameSync(dest, `${dest}.${Date.now()}.prev`)
   }
 
   await con.run(`COPY (SELECT * FROM ${scan(t)}) TO '${dest}' (FORMAT PARQUET, COMPRESSION ZSTD)`)
@@ -210,14 +216,57 @@ for (const t of tables) {
 //     preserving the types `all_varchar` discards, preserving none of them. A swallowed error in a
 //     data-preservation path is data loss with a success message on top.
 //   - reading `sqlite_master.sql` fixed that but kept `sqlite_scan()`, which opens READ-WRITE.
-// The catalog of a READ_ONLY attach fixes both at once, and is stricter than parsing DDL text: an
-// empty column list for a table that exists is impossible, so a blank here is a real failure.
-const declared = {}
+// The catalog of a READ_ONLY attach fixes both at once. An empty column list for a table that
+// exists is impossible, so a blank here is a real failure.
+//
+// WHAT THIS RECORD IS NOT — and the previous commit message overclaimed it as "stricter":
+// `duckdb_columns()` reports DUCKDB's RESOLVED types, not SQLite's literal declared strings. A
+// column declared `TEXT` reads back `VARCHAR`; `INTEGER` reads `BIGINT`. So this preserves the
+// SHAPE of the schema, not its verbatim DDL. (`duckdb_tables().sql` is no better — it renders
+// DuckDB's own `CREATE TABLE ... VARCHAR ...`, not the source text.) Recovering the literal SQLite
+// DDL needs `sqlite_scan(SRC,'sqlite_master')`, which opens the database READ-WRITE — the exact
+// thing this pass exists to avoid, so it is deliberately not done here.
+// CONSEQUENCE, and it is a precondition on deletion: the verbatim DDL exists ONLY in the source
+// database. So it is captured ONCE, below, and the field is named for what it holds — the previous
+// version called resolved types `declared`, which is the second time this file shipped a
+// `_schema.json` that failed at its one job.
+const resolvedTypes = {}
 const undeclared = []
 for (const t of tables) {
   const cols = typed.filter((r) => r.table_name === t).map((r) => ({ name: r.column_name, type: r.data_type }))
   if (!cols.length) undeclared.push(t)
-  declared[t] = cols
+  resolvedTypes[t] = cols
+}
+
+// THE VERBATIM DDL, captured once and kept forever. Resolved types lose everything that is not a
+// type: NOT NULL, PRIMARY KEY, DEFAULT, CHECK, UNIQUE, and every length/precision qualifier
+// (`TEXT` and `VARCHAR(255)` both resolve to VARCHAR; `INTEGER` to BIGINT). Since parquet stores
+// none of those either, the source database is the ONLY place they exist — and this tool exists to
+// make that database deletable.
+//
+// This one read goes through `sqlite_scan()`, which opens READ-WRITE; there is no read-only route
+// to `sqlite_master` (a READ_ONLY attach does not expose it — measured: "Table with name
+// sqlite_master does not exist"). So it runs ONLY when the DDL is not already recorded, making it
+// a one-time cost rather than a write-lock on every run, and it is announced rather than silent.
+const schemaPath = path.join(OUT, '_schema.json')
+let verbatimDdl = null
+try {
+  const prior = JSON.parse(fs.readFileSync(schemaPath, 'utf8'))
+  if (prior.verbatimDdl && Object.keys(prior.verbatimDdl).length === tables.length) verbatimDdl = prior.verbatimDdl
+} catch { /* no previous run, or unreadable — capture below */ }
+
+if (!verbatimDdl) {
+  console.log('  capturing verbatim DDL (one-time; this single read opens the source read-write)')
+  verbatimDdl = {}
+  const rows = await q(`SELECT name, sql FROM sqlite_scan('${SRC}','sqlite_master') WHERE type='table'`)
+  for (const r of rows) if (!r.name.startsWith('sqlite_')) verbatimDdl[r.name] = r.sql
+  const missingDdl = tables.filter((t) => !verbatimDdl[t])
+  if (missingDdl.length) {
+    console.error(`\nmigrate-forensics: FAIL — no CREATE TABLE recovered for: ${missingDdl.join(', ')}.`)
+    console.error('  That text is the only record of NOT NULL / PRIMARY KEY / DEFAULT / precision.')
+    console.error('  Migrating without it is lossy. Delete NOTHING.')
+    process.exit(1)
+  }
 }
 if (undeclared.length) {
   console.error(`\nmigrate-forensics: FAIL — no declared columns recovered for: ${undeclared.join(', ')}.`)
@@ -242,7 +291,7 @@ if (undeclared.length) {
 // version tested /\bBLOB\b/i against the CREATE TABLE string, which misses a column declared with
 // no type at all (BLOB affinity in SQLite, and the word appears nowhere) and misses VARBINARY /
 // BYTEA. Asking the catalog for the resolved type has neither blind spot.
-const blobbed = Object.entries(declared).filter(([, cols]) => cols.some((c) => /BLOB/i.test(c.type)))
+const blobbed = Object.entries(resolvedTypes).filter(([, cols]) => cols.some((c) => /BLOB/i.test(c.type)))
 if (blobbed.length) {
   console.error(`\nmigrate-forensics: FAIL — BLOB column(s) in: ${blobbed.map(([t]) => t).join(', ')}.`)
   console.error('  all_varchar routes values through a text decode, and the content hash is computed')
@@ -250,10 +299,23 @@ if (blobbed.length) {
   console.error('  mangled. Export BLOBs explicitly before trusting this tool. Delete NOTHING.')
   process.exit(1)
 }
-const schemaPath = path.join(OUT, '_schema.json')
 fs.writeFileSync(
   schemaPath,
-  JSON.stringify({ source: SRC, migratedAt: new Date().toISOString(), tables: results, declared }, null, 2)
+  JSON.stringify(
+    {
+      source: SRC,
+      migratedAt: new Date().toISOString(),
+      tables: results,
+      // Named for what each one actually is. `resolvedTypes` is DuckDB's mapping (TEXT->VARCHAR,
+      // INTEGER->BIGINT, all qualifiers gone); `verbatimDdl` is the source's own CREATE TABLE text
+      // and is the ONLY record of NOT NULL / PRIMARY KEY / DEFAULT / precision once the database
+      // is deleted. The previous version wrote the former under the name `declared`.
+      resolvedTypes,
+      verbatimDdl,
+    },
+    null,
+    2
+  )
 )
 console.log(`  wrote ${schemaPath}`)
 
