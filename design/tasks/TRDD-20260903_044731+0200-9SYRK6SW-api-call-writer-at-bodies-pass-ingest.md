@@ -223,7 +223,8 @@ doesn't have) — union_by_name at read time (GVA8TTJF) coalesces them per call.
 3. Restart the server, confirm the parquet part under `store/api_calls/` survives and is readable.
 
 **STEP 3 HAS NEVER HAD THE OPPORTUNITY TO RUN — measured 2026-09-04, read-only.** The live store
-holds **497 parquet parts / 5.0 MB** under `~/.agentlens/store/api_calls/`, actively growing
+holds **497 parquet parts** (~5.0 MB, measured when the count was 495) under
+`~/.agentlens/store/api_calls/`, actively growing
 (495 → 497 in three minutes), so the WRITER half is well supported. But the earliest part by mtime
 is 08:56:13, after the running server started (`uptime=7h34m` at 16:30), and every filename's
 `<pid>` field reads 37180 — the live pid. **No part predates the process**, so the store has never
@@ -237,14 +238,27 @@ searches for a compactor were run and are NOT the warrant: they were scoped to o
 `merge`/`consolidate`/`gc`, or the TypeScript store writer (`src/store/*.ts`, per TRDD-TP3BA3ED)
 would all be invisible to them. Do not cite those searches as a rule-out.
 
-**TO SETTLE IT — one restart plus one command:**
+**TO SETTLE IT — snapshot, restart, compare THE SAME FILES:**
 
 ```bash
+D=~/.agentlens/store/api_calls
+find "$D" -name '*.parquet' | sort > /tmp/parts-before.txt   # BEFORE
 agentlenspro server restart
-find ~/.agentlens/store/api_calls -name '*.parquet' | sed -E 's/.*part-[0-9]+-([0-9]+)-.*/\1/' | sort -u
+comm -23 /tmp/parts-before.txt <(find "$D" -name '*.parquet' | sort)   # AFTER
 ```
 
-More than one distinct pid ⇒ parts survived the restart ⇒ step 3 PASSES. Not performed here:
+**Empty output ⇒ every pre-restart part still exists ⇒ step 3 PASSES.** Any line listed is a part
+that vanished across the restart, which is the actual failure.
+
+**A pid-diversity check does NOT work here, and the earlier version of this recipe was wrong.** It
+said "more than one distinct pid ⇒ parts survived". Immediately after a restart the old parts are
+present (old pid) and the NEW server has flushed nothing yet — parts flush on a cadence — so
+`sort -u` returns ONE pid and that criterion reads a perfectly healthy, surviving store as
+"did not survive". It fires on flush TIMING, not on the property being tested. Survival is a claim
+about specific FILES persisting; pid-diversity is an inference about who wrote them, and it imports
+a dependency the question never had.
+
+Not performed here:
 restarting the live collector is an unrequested state change on a running system (TRDD-BSDR4TRM is
 the precedent for what those cost).
 
