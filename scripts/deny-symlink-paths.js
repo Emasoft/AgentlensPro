@@ -265,9 +265,15 @@ function effectiveCwd(segment, baseCwd) {
   // ALLOW. A guard defeated by a no-op prefix is not a guard, so an unresolvable target leaves the
   // base exactly where it was and claims nothing. PWD and HOME are expanded because they are the
   // two we can know; anything else stays put.
-  const expanded = target
+  // ONE expansion, applied to every spelling of the target. It used to be inline here, so the
+  // whole-word repair below resolved a RAW string while this path resolved an EXPANDED one, and
+  // neither carried both fixes: `cd $PWD/a(b)` truncated to `<cwd>/a(b` on one side and stayed
+  // `$PWD/a(b)` on the other, so the correct `<cwd>/a(b)` was never constructed and the symlink was
+  // never examined. Measured 2026-09-04 — an ALLOW built from two half-right strings.
+  const expand = (s) => s
     .replace(/^\$\{?PWD\}?(?=\/|$)/, baseCwd)
     .replace(/^(?:~|\$\{?HOME\}?)(?=\/|$)/, process.env.HOME || '')
+  const expanded = expand(target)
   // Same rule for a leftover `~`: `~otheruser` is a home this guard cannot resolve, and resolving
   // it against baseCwd would invent `<cwd>/~otheruser` — the same fictional-directory bypass.
   if (/[$`]/.test(expanded) || expanded.startsWith('~')) return { dir: baseCwd, matched: false }
@@ -286,7 +292,9 @@ function effectiveCwd(segment, baseCwd) {
   // 2026-09-04. Note the harm is not the truncation itself (the old regex matched nothing here,
   // also a miss) but the flip from the conservative `matched: false` to an active gate-disable.
   // So when a `)` ended the match, put the `)` back if THAT is the real directory, and claim
-  // nothing when neither spelling exists. Only ever narrows: it cannot turn false into true.
+  // nothing when neither spelling exists. It CAN turn `matched` false into true — that is the first
+  // line's whole job — but it can never return `matched: true` on a base that does not exist, which
+  // is the property the bailouts above are actually protecting.
   // Reattaching a single `)` is not enough — the truncation loses everything after it too
   // (`/tmp/a(b)/sub` stops at `/tmp/a(b`), so take the WHOLE unquoted word from the original text,
   // up to the next real separator, and prefer it when it is a real directory.
@@ -294,7 +302,9 @@ function effectiveCwd(segment, baseCwd) {
     const start = m.index + m[0].lastIndexOf(m[3])
     let end = start
     while (end < visible.length && !/[\s&;|'"]/.test(visible[end])) end += 1
-    const whole = visible.slice(start, end)
+    // `whole` comes from `visible`, where a `$( … )` is blanked to spaces — so a substitution
+    // abutting the name reads as a separator and ends the word early. Gated by isDirectory below.
+    const whole = expand(visible.slice(start, end))
     const wholeResolved = path.isAbsolute(whole) ? whole : path.resolve(baseCwd, whole)
     if (whole !== expanded && isDirectory(wholeResolved)) return { dir: wholeResolved, matched: true }
     if (!isDirectory(resolved)) return { dir: baseCwd, matched: false }

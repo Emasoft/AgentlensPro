@@ -201,6 +201,13 @@ const pdir = path.join(root, 'a(b)', 'sub')
 fs.mkdirSync(pdir, { recursive: true })
 fs.symlinkSync(real, path.join(pdir, 'node_modules'))
 check(run(`cd ${pdir} && cp x node_modules/`).denied, 'an UNQUOTED directory name containing parens is not truncated')
+// Both spellings must go through the SAME expansion: the truncated one had `$PWD` substituted and
+// the whole-word one did not, so the correct `<cwd>/a(b)` was never built out of the two halves.
+check(run(`cd $PWD/a(b)/sub && cp x node_modules/`).denied, 'a $PWD prefix and a paren name are fixed together, not separately')
+// The conservative half. Asserting DENY, not ALLOW: an allow-side assertion here is vacuous —
+// both the right answer and the fictional base produce "no symlink found". Claiming nothing leaves
+// the base at the real cwd, where `linked/` IS a symlink; claiming the fictional base hides it.
+check(run(`cd ${root}/nope(x)/deeper && cp x ${path.basename(link)}/`).denied, 'neither spelling exists: claim nothing, so the REAL cwd is still checked')
 // ...but INSIDE quotes a paren is a name, and excluding it everywhere left the closing quote
 // unreachable, so the regex matched nothing and no cd was seen at all. `Screenshot (1)` is routine.
 const paren = path.join(root, 'My Docs (2026)')
