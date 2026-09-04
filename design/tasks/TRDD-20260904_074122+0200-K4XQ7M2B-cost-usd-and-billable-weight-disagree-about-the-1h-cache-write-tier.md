@@ -3,13 +3,14 @@ trdd-id: K4XQ7M2B
 title: cost_usd and billable_weight disagree about the 1h cache-write tier in the same api_calls row
 column: todo
 created: 2026-09-04T07:41:22+0200
-updated: 2026-09-04T07:41:22+0200
+updated: 2026-09-04T07:51:51+0200
 current-owner: main-session
 task-type: bugfix
 project-id: agentlenspro
 scope: project
 min-approval-requirement: none
 labels: [pricing, forensics, parity]
+priority: high
 severity: high
 effort: S
 relevant-rules: []
@@ -43,13 +44,19 @@ So within one `api_calls` row, `cost_usd` asserts every cache write was 5-minute
 
 **Size of the error.** Per CLAUDE.md's cache doctrine (measured, three ways): an Anthropic-shaped
 cache write is **1.25× input at the 5m tier and 2× at the 1h tier**. Pricing 1h tokens at the 5m
-rate therefore understates that bucket by **37.5%** (1.25/2), and understates the row's total cost
-by whatever share the write bucket carries.
+rate therefore yields `1.25/2 = 62.5%` of the true bucket cost — an understatement of
+**37.5%** of truth (`1 − 1.25/2`), needing a **×1.6** correction (`2/1.25`) to restore it. Both
+framings describe one defect; a review of this card quoted the second as "a 60% understatement",
+which is the markup, not the shortfall. The row's total is understated by 37.5% of whatever share
+the write bucket carries.
 
-**It is not an edge case.** CLAUDE.md doctrine 3: *"MAIN conversation → 1h TTL automatically"*. So
-interactive traffic — the dominant shape for a human's own sessions — is exactly the traffic being
-understated. The 7 sessions in the sonnet-5 measurement were 100% 5m tier, which is a property of
-**subagent** traffic and is why that measurement could not have surfaced this
+**It is the dominant shape, with one stated exception.** CLAUDE.md doctrine 3: *"MAIN conversation
+→ 1h TTL automatically"* — but **"drops to 5m when the account is drawing usage credits / in
+overage"**, and `get_subscription_usage`'s `usageCreditsEnabled` is the live oracle for which
+regime is active. So interactive traffic is the traffic being understated on a subscription, and an
+overage account sees little or none of this — size the impact against the regime, not the default.
+The 7 sessions in the sonnet-5 measurement were 100% 5m tier, which is a property of **subagent**
+traffic and is why that measurement could not have surfaced this
 (`reports/pricing-measurement/20260904_061757+0200-sonnet5-billed-rate.md` records the all-5m
 sample; the derived 1h rate was explicitly noted there as unmeasured).
 
