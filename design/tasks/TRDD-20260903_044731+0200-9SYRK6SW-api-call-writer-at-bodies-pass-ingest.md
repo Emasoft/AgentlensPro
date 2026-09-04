@@ -246,10 +246,10 @@ rm -f /tmp/parts-before.txt /tmp/parts-after.txt /tmp/p.raw
 # find's OWN exit status is captured (a pipeline would discard it), and no `exit` —
 # this block is meant to be PASTED, and `exit` closes an interactive shell.
 find "$D" -name '*.parquet' > /tmp/p.raw && sort /tmp/p.raw > /tmp/parts-before.txt \
-  || echo "BEFORE: find FAILED — fix that first, do NOT restart"
+  || { rm -f /tmp/parts-before.txt; echo "BEFORE snapshot FAILED (find or sort) — do NOT restart"; }
 agentlenspro server restart
 find "$D" -name '*.parquet' > /tmp/p.raw && sort /tmp/p.raw > /tmp/parts-after.txt \
-  || echo "AFTER: find FAILED — this is NOT data loss; re-run the find"
+  || { rm -f /tmp/parts-after.txt; echo "AFTER snapshot FAILED (find or sort) — NOT data loss"; }
 [ -s /tmp/parts-before.txt ] && [ -s /tmp/parts-after.txt ] \
   && comm -23 /tmp/parts-before.txt /tmp/parts-after.txt \
   || echo "a snapshot is missing (see above) — comparison SKIPPED, not passed"
