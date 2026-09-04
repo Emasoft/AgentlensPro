@@ -24,6 +24,7 @@ import * as os from 'os'
 import * as fs from 'fs/promises'
 import { safeConfigEdit, SafeEditOp } from './safeConfigEdit'
 import { rawBodyCaptureEnabled, effectiveBodiesDir, spoolDirConfigured, RAW_BODIES_KEY } from './captureConfig'
+import { envPort } from './cli/cliCore'
 
 export interface TelemetryConfigOptions {
   /** settings.json to manage. Default: ~/.claude/settings.json */
@@ -435,7 +436,22 @@ export async function telemetryConfigStatus(options: TelemetryConfigOptions = {}
  */
 export async function runTelemetryCli(args: string[]): Promise<number> {
   const sub = args[0]
-  const otlpPort = process.env.OTLP_PORT ? parseInt(process.env.OTLP_PORT, 10) : 4318
+  // TRDD-99HUNXJS: was `parseInt(process.env.OTLP_PORT, 10)`, which stops at the first non-digit —
+  // `'8080/evil'` became 8080 and `'0'` became 0. This site is the one that PERSISTS the value
+  // (runTelemetryCli -> ensureTelemetryConfig writes it to settings.json), so a bad parse survived
+  // the process. Use the one shared parser; the full divergence table is in the card.
+  const otlpPort = Number(envPort(process.env.OTLP_PORT, 4318))
+  // ...and because this site persists it, say so when the operator's value was discarded. The
+  // fallback is silent by design (envPort's ratified semantics, TRDD-EGGERLEO); silence is fine
+  // for a URL built per-request and wrong for a number written into the user's settings.json.
+  // Two DIFFERENT valid fallbacks: if the input was accepted both calls return that port and
+  // agree; if it was rejected they return 1 and 2. Asks the parser instead of re-deriving its
+  // predicate. Guard on PRESENCE, not truthiness — `OTLP_PORT=''` and `'   '` are set-but-garbage.
+  const rawOtlp = process.env.OTLP_PORT
+  if (rawOtlp !== undefined && envPort(rawOtlp, 1) !== envPort(rawOtlp, 2)) {
+    const why = rawOtlp.trim() === '' ? 'is empty' : 'is not a usable port'
+    console.error(`⚠ OTLP_PORT=${JSON.stringify(rawOtlp)} ${why} — using ${otlpPort}`)
+  }
   try {
     if (sub === 'install') {
       const r = await ensureTelemetryConfig({ otlpPort })

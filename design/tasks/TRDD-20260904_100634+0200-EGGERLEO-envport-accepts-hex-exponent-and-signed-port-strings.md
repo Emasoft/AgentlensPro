@@ -3,7 +3,7 @@ trdd-id: EGGERLEO
 title: envPort accepts hex exponent and signed forms that nobody types as a port
 column: todo
 created: 2026-09-04T10:06:34+0200
-updated: 2026-09-04T10:11:41+0200
+updated: 2026-09-04T10:28:30+0200
 current-owner: main-session
 task-type: bugfix
 project-id: agentlenspro
@@ -76,6 +76,16 @@ passes the regex and is then rejected by `n < 65536`, exactly as it is today.
 ratified in TRDD-BSDR4TRM's ai_review. It was filed as `none` on 2026-09-04 and corrected the same
 day: a card whose prose concedes it overturns a prior approval cannot also declare itself
 self-approvable. That field is what a future session greps to decide whether it may just do this.
+
+## While you are in `envPort` anyway
+
+`src/telemetryConfig.ts` needs to know whether the parser ACCEPTED the input or fell back, and
+today asks by probing with two different fallbacks (`envPort(raw,1) !== envPort(raw,2)`). That
+works and is drift-proof, but it is a question the function could answer directly — e.g. returning
+`{ port, fellBack }`. **Not proposed here:** exactly one call site needs it, and widening the
+return type of a function with several callers to serve one CLI diagnostic is speculative. Noted only
+because this card already opens the file; if a second site ever needs the distinction, that is
+when the shape is earned.
 
 ## Acceptance
 

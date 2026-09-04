@@ -3,7 +3,7 @@ trdd-id: 99HUNXJS
 title: The server and the CLI parse the same port env vars by different rules
 column: ai_review
 created: 2026-08-27T19:03:03+0200
-updated: 2026-09-04T10:11:41+0200
+updated: 2026-09-04T10:28:30+0200
 implementation-commits: [a77ca36a, 35118d19, f5cabd35, 9147d608]
 current-owner: main
 task-type: bugfix
@@ -52,11 +52,16 @@ start (exit non-zero, naming the variable and its value) may beat any silent fal
 
 ## Acceptance
 
-- [x] One port parser, imported by every site that reads a port env var — `src/cli/cliCore.ts`
-      (which defines it), `src/cli/setup.ts`, `src/cli/serverControl.ts`, `standalone/cli.ts`.
+- [x] One port parser, imported by every **TypeScript** site that reads a port env var —
+      `src/cli/cliCore.ts` (which defines it), `src/cli/setup.ts`, `src/cli/serverControl.ts`,
+      `standalone/cli.ts`, `src/telemetryConfig.ts`. FIVE sites, not four. Scoped to TypeScript
+      deliberately: Rust cannot import `envPort`, and there IS a Rust site that disagrees —
+      TRDD-VDQ2N8PX. An unscoped "every site" here would be false a third time.
       (Originally named `standalone/server.ts`, deleted in 567fc5c2 before this card landed. That
       box was left checked-but-vacuous until 2026-09-04; naming the sites that exist is greppable,
-      "satisfied vacuously" is not.)
+      "satisfied vacuously" is not. Checked WRONGLY again on 2026-09-04 at four sites — see the
+      fifth-site note in STATE — and re-earned the same day once `telemetryConfig.ts` was wired
+      through `envPort`.)
 - [x] A test table pinning the parser's behaviour LITERALLY at `resolveCtx`, plus a cross-site
       check that `alcoreServeArgs` is wired to the same values, over
       `['', '   ', 'abc', '0', '-1', '65536', '80.5', '3e3', '8080/evil']` on all three variables.
@@ -154,7 +159,63 @@ this note, because a SHA a reader cannot make sense of is worse than one they we
 The lesson is the reusable part: a commit that carries two unrelated changes breaks backtracking
 for BOTH of them, and only the one named in the subject is findable afterwards.
 
-**NEXT ACTION:** none — ready for ai_review / merge into `testing`.
+### The FIFTH site, found after this card was closed — 2026-09-04
+
+`44fcd56f` closed this card at `ai_review` claiming "verified by grep that there is no fifth
+site". **That grep was for `envPort`, and a site that never calls the parser is exactly what it
+cannot see.** The census of `envPort` CALLERS was correct; the invariant box 1 asserts is about
+`process.env.{UI,MCP,OTLP}_PORT` READS. Those are different sets, and the difference IS the defect
+class. Re-grepping for the reads found:
+
+```
+src/telemetryConfig.ts:438
+  const otlpPort = process.env.OTLP_PORT ? parseInt(process.env.OTLP_PORT, 10) : 4318
+```
+
+A fourth spelling, never counted by the card's own opening table, and the loosest of them —
+`parseInt` stops at the first non-digit. Measured against this card's table, it disagreed with
+`envPort` on **8 of 10** values:
+
+| raw | `envPort` | `parseInt` site |
+|---|---|---|
+| `'   '` / `'abc'` | 4318 | `NaN` |
+| `'0'` | 4318 | **0** |
+| `'-1'` | 4318 | -1 |
+| `'65536'` | 4318 | 65536 |
+| `'80.5'` | 4318 | 80 |
+| `'3e3'` | 3000 | 3 |
+| `'8080/evil'` | 4318 | **8080** |
+
+Two of those are the exact bugs this card was created to fix, still live: port **0**, and the
+path-injection value silently truncated to a plausible port. And it is worse here than at the
+sites already fixed — `runTelemetryCli` passes `otlpPort` to `ensureTelemetryConfig`, which
+WRITES it into the user's `settings.json`, so a bad parse PERSISTED rather than misrouting one
+request. Now routed through `envPort`.
+
+**The reusable lesson: grep for the thing the invariant is about, not for the thing the fix uses.**
+A search keyed on the remedy is structurally blind to every site that lacks it — which is the
+definition of an unfixed site. `standalone/cli.ts` was invisible to the same grep until `35118d19`
+added the call.
+
+**On the `testing → ai_review` move in 44fcd56f:** this card carries no `test-requirements:` or
+`audit-requirements:` (it was authored from TRDD-BSDR4TRM's ai_review, not through a design
+column). That transition's exemption is conditioned on those PASSING; with none specified the
+condition is vacuous — the same "satisfied vacuously" reasoning rejected for box 1 one commit
+earlier. The move rests on the gates actually run (check-types, eslint, 40 passing, mutation
+11-failing), not on a requirements set. Named so a reviewer can judge the substitution instead of
+assuming one was checked.
+
+**A warn was added BEYOND acceptance, deliberately.** `runTelemetryCli` now prints one line when
+`OTLP_PORT` was set to something the parser discarded. Acceptance never asked for a diagnostic, so
+the justification has to be better than "a reviewer suggested it" — and it is: **this is the fix's
+own loose end.** Before the fix, `OTLP_PORT=65536` wrote 65536 into settings.json — wrong, but
+VISIBLE; the operator could read the file and find their value. After it, 4318 is written and the
+operator's value vanishes without trace. `envPort`'s ratified fallback-not-refuse semantics create
+that silence, and routing this site into them is what exposed the user to it. This is the ONE site
+that persists to a file a human reads later, which is why the warn belongs here and nowhere else —
+`cliCore`'s URL builders rebuild per request, where silence costs nothing.
+
+**NEXT ACTION:** none — the fifth site is wired and box 1 re-earned. Ready for ai_review.
 
 ## Related
 
