@@ -126,6 +126,14 @@ check(!run(`cd ${wtDir} && ls node_modules/`).denied, 'read-only after a cd is s
 check(!run(`cd ${wtDir} || cp x node_modules/`).denied, '|| : the cd did NOT run, so it sets no base')
 check(!run(`cd ${wtDir} & cp x node_modules/`).denied, '& : the cd is backgrounded in a subshell')
 check(!run(`cd ${wtDir} | cp x node_modules/`).denied, '| : each pipeline stage is its own subshell')
+// `&` not carrying a cd is a statement about the CD, never about the whole command. The segment
+// after it is still a real segment and is still judged on its own — otherwise "the cd does not
+// reach here" would quietly become "nothing after an & is checked", which is a far larger hole
+// than the one the separator rule closed. Folded in from the /tmp probe that measured the
+// separator semantics (TRDD-D8L28FFD box 2); the matrix had only the cd-carrying `&` case, so
+// nothing pinned the segment-after-& behaviour and a regression there would have passed green.
+check(!run(`ls ${link} & cat ${link}/file.txt`).denied, '& : both sides read-only, nothing to deny')
+check(run(`ls ${link} & cp x ${link}/`).denied, '& : the segment AFTER an & is still judged — it mutates through the link')
 check(run(`cd ${wtDir} && cp x node_modules/ | cat`).denied, '...but a cd BEFORE the pipeline still reaches it')
 check(run(`cd ${wtDir} && cat f | cp x node_modules/`).denied, '...and reaches a LATER stage, not just the first')
 // `(` is a boundary. Without this the paren form ALLOWED while the brace form denied — the brace
