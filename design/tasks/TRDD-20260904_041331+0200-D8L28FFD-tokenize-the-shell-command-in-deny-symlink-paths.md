@@ -163,10 +163,21 @@ Sep 3 23:49 by `probe-ad.js` (the mutation probe above), which mutates
 that CANNOT HAPPEN.** The claim was: someone finds the guard mutated by an interrupted run,
 restores from the obvious backup, and silently reverts the bypass fixes. `probe-ad.js` refutes it
 in its own first three lines — **it rewrites `.bak` from the CURRENT guard BEFORE it mutates
-anything.** So the two halves are mutually exclusive: if the probe runs again the `.bak` becomes
-correct, and if it never runs the guard is never mutated and nobody goes looking for a backup. **A
-stale `.bak` is positive evidence the probe has not run since Sep 3** — precisely the case where no
-mutated guard exists to mis-restore. I picked the one mechanism that cannot produce the trap.
+anything.** So the hazard's two halves are mutually exclusive: if the probe runs again the `.bak`
+becomes correct, and if it never runs the guard is never mutated and nobody goes looking for a
+backup. The mutation step ALWAYS follows a `.bak` refresh, so I picked the one mechanism that
+cannot produce the trap.
+
+**Stated exactly, because a 17:25 version of this line over-corrected in its turn.** It said a
+stale `.bak` "is positive evidence the probe has not run since Sep 3" — too strong.
+`fs.writeFileSync` is NOT atomic, so a crash mid-write leaves a short file, and a byte count cannot
+distinguish an old complete backup from a new partial one. What the code licenses is narrower: *a
+stale `.bak` is inconsistent with a COMPLETED run since Sep 3, and the hazard's mechanism requires
+a mutation that always follows a `.bak` refresh.* That is sufficient to retract the hazard, and the
+guard being byte-identical to HEAD settles the practical question regardless of which branch is
+true. Recording it because it is `ATOM-4C5N-32AS` again — the same modality overreach in the
+RETRACTION as in the thing being retracted, which is the failure mode of a correction layer: every
+retraction is itself a new claim, and it needs the same discipline as the claim it replaces.
 
 What actually remains: a stale, plausibly-named copy of a safety file, i.e. clutter someone could
 misuse for unrelated reasons. A "delete this artifact" note, not a hazard. Left in place — `/tmp`
