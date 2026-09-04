@@ -3,7 +3,7 @@ trdd-id: 2R0AXCKL
 title: The two real-corpus slow tests flip between runs and turn a green gate red
 column: backburner
 created: 2026-09-02T01:11:53+0200
-updated: 2026-09-04T14:23:13+0200
+updated: 2026-09-04T14:27:48+0200
 implementation-commits: [84d6f500]
 current-owner: claude-agentlenspro
 task-type: bugfix
@@ -14,7 +14,7 @@ npt: []
 eht: []
 ---
 
-# The two real-corpus slow tests time out under host contention
+# The two real-corpus slow tests flip between runs
 
 ## Symptom
 
@@ -54,20 +54,23 @@ reading any of this. The filename still carries the old slug; renaming it would 
 
 ## Why it matters
 
-A 🐌 real-machine test that flips on host contention turns the release gate's exit code from 0 to 2
+A 🐌 real-machine test that flips between runs turns the release gate's exit code from 0 to 2
 for reasons unrelated to the change under test. Every such flip costs a 10-minute re-run and, worse,
 teaches the reader to shrug at a non-zero exit — the exact habit that lets a real failure through.
 
 ## Options (decide when picked up)
 
-1. ⚠ **CONTRADICTED BY THIS CARD'S OWN DATA — do not implement as written.** The load-average gate
-   below cannot discriminate: the failing run had the LOWER load average (see the Symptom table),
-   so this skip would fire on the passing run and not the failing one. Kept, struck, as the record
-   of a fix that looked obvious and was disproved by evidence already in the file — the live-pid
-   half may still be worth something, the loadavg half is not.
-   ~~Skip both under contention explicitly — e.g. when `os.loadavg()[0] / os.cpus().length > 1` or
-   when the live server pid is present — and PRINT the skip reason, so a skip is visible, never
-   silent.~~
+1. ~~Skip when `os.loadavg()[0] / os.cpus().length > 1`.~~ **CONTRADICTED by this card's own data:
+   the failing run had the LOWER load average, so this gate fires on the passing run and not the
+   failing one.** Kept struck rather than deleted — it is the record of a fix that looks obvious
+   and is disproved by evidence already in the file, which is what stops the next reader
+   re-proposing it.
+1b. **Skip when the live server pid is present** — and PRINT the skip reason, so a skip is never
+   silent. This was the OTHER half of the original option 1 and it is NOT contradicted: a live
+   alcore working the same bodies dir is IO contention on the exact resource these tests read,
+   which a runnable-queue average does not measure. Split out 2026-09-04 because striking the whole
+   disjunction while saying "the pid half may still be worth something" made the card assert two
+   opposite things about the same clause.
 2. Bound the WORK instead of the time: cap the number of bodies files scanned (the tests assert
    "without crashing" and "honest coverage", not completeness), so the runtime is O(cap) regardless
    of corpus size.
@@ -77,14 +80,14 @@ Option 2 is the one that keeps the tests meaningful AND deterministic; 1 is the 
 3 hides the tests. Whatever is chosen: `mocha --exit` is NOT on the table (it masks handle leaks —
 see 1B98LCVR STATE, the 90-minute post-summary linger).
 
-## The flaky set is BIGGER than the two tests this card names (measured 2026-09-04)
+## The flipping set is BIGGER than the two tests this card names (measured 2026-09-04)
 
 Two full-suite runs, **same tree, same commit, no source change between them**:
 
 | cluster | run A | run B | verdict |
 |---|---|---|---|
 | `standalone server — P5 window auto-calibration` (5 tests) | 5 fail | 5 fail | DETERMINISTIC, pre-existing — **now owned by TRDD-CS2W7E77** |
-| real-corpus timeouts (`cacheBreakTimeline`, `forensicsIndex`/FAL) | 2 fail | 3 fail | flaky — **this card's known pair** |
+| real-corpus timeouts (`cacheBreakTimeline`, `forensicsIndex`/FAL) | 2 fail | 3 fail | differs between runs — **this card's own pair**, cause UNESTABLISHED |
 | `segmentedSpanStore — compressSealedSegments` gzip (7 tests) | **7 fail** | **0 fail** | differs between runs — cause UNESTABLISHED |
 | `serverRuntime — rssPressure` default HWM (1 test) | **1 fail** | **0 fail** | differs between runs — cause UNESTABLISHED |
 
@@ -108,7 +111,8 @@ process RSS, so a mocha process that has grown past the 4096 MB HWM pauses the s
 empty array. **That mechanism is UNCONFIRMED** — the RSS at the moment those tests ran was never
 measured, and it does not explain the `rssPressure` HWM-selection failure at all (that test
 asserts which HWM is *chosen*, is independent of live RSS, and no `AGENTLENS_RSS_HWM_*` env var
-was set, which should make it pass). Treat the mechanism as open; the FLAKINESS is measured.
+was set, which should make it pass). Treat the mechanism as open; only the DIFFERENCE between the
+two runs is measured — see the retraction above, which governs this paragraph too.
 
 **Consequence for this card's acceptance:** criterion 1 is scoped to "both tests", so it can pass
 in full while eight other tests keep flipping — a green acceptance that leaves the release gate
