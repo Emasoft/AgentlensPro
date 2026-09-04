@@ -3,7 +3,7 @@ trdd-id: EGGERLEO
 title: envPort accepts hex exponent and signed forms that nobody types as a port
 column: todo
 created: 2026-09-04T10:06:34+0200
-updated: 2026-09-04T16:50:24+0200
+updated: 2026-09-04T16:52:56+0200
 current-owner: main-session
 task-type: bugfix
 project-id: agentlenspro
@@ -94,12 +94,34 @@ proposed `/^\d+$/` guard:
 | `'08080'` | `Some(8080)` | ACCEPT 8080 | yes |
 | `'-1'` | `None` | REJECT | yes |
 
-**This strengthens the case for rejecting non-decimal literals** — decimal-only is what the Rust
-half already enforces by construction, so the change makes the two engines agree rather than
-imposing a new opinion. Today they disagree on `3e3` (TS 3000 / Rust 4316) and `0x1F80`
-(TS 8064 / Rust 4316): the same env var, two different live ports.
+**Scope of the table: `MCP_PORT` only.** `UI_PORT` and `OTLP_PORT` have no Rust reader at all
+(TRDD-4MJT92J7), so there is nothing for them to diverge from; the table names no variable and must
+not be read as covering all three.
 
-**But the one-line fix as written is WRONG, and this is the part worth catching before it lands.**
+**This is an argument for rejecting non-decimal literals** — decimal-only is what the Rust half
+already enforces by construction, so the change makes the two engines agree rather than imposing a
+new opinion. Today they disagree on `3e3` (TS 3000 / Rust 4316) and `0x1F80` (TS 8064 / Rust 4316):
+the same env var, **one live port and one wrong report**.
+
+**CORRECTED 2026-09-04T16:52 — an earlier version of this line said "two different live ports".
+That is FALSE and contradicts TRDD-4MJT92J7's own retraction, made hours earlier the same day:**
+`Ports` is a REPORTING struct, `Ports::default()` has one caller, and the only reads of
+`st.ports.*` are the `/api/server-stats` payload. The Rust 4316 never reaches a socket — the
+listener binds from `--mcp-port`. I deflated that exact overstatement on 4MJT92J7 and then
+re-inflated it here in the opposite direction, on the card where it made my own contribution look
+weightier. Worth naming because it is not a memory failure: the corrected text was in front of me.
+
+**The `+8080` rejection was ALREADY KNOWN — this card said so this morning**, in the very sentence
+proposing the fix: *"This rejects `3e3`, `0x1F80`, `0b11` and `+8080` while accepting every input
+the current parser accepts that is actually a port."* Only *Rust accepts it* is new here, so the
+contribution is narrower than "catching it before it lands" implies.
+
+**And that sentence was already false on its own terms, before Rust entered the argument:** `+8080`
+IS currently accepted and IS actually a port, so "rejects `+8080`" and "accepts every input the
+current parser accepts that is actually a port" cannot both hold. The card was refuting itself in
+plain sight and I reached for a cross-engine argument instead of reading it.
+
+**The one-line fix as written is WRONG, and this is the part worth catching before it lands.**
 Rust's integer `FromStr` accepts a leading `+`, so `/^\d+$/` would reject an input Rust accepts —
 trading three divergences for a fourth instead of eliminating all four. The alignment-preserving
 guard is:
@@ -115,8 +137,30 @@ byte-identical on all eight vectors above. (Note `-8080` stays rejected by both 
 
 **Whichever way box 1 is decided, the Rust side must be decided WITH it.** If TS goes decimal-only,
 Rust already matches (modulo the `+`); if TS keeps `Number()`'s looseness, then TRDD-4MJT92J7's box
-2 has to make Rust loose to match, which is far harder — `str::parse` has no hex/exponent mode.
-That asymmetry is itself an argument for the strict direction.
+2 has to make Rust loose to match. That is **unwanted, not near-impossible** — an earlier version of
+this line said "far harder ... near-impossible", which is unsupported: std ships
+`u16::from_str_radix`, so matching `Number()` needs prefix dispatch on `0x`/`0b`/`0o` plus an f64
+parse with an integer check, roughly fifteen unremarkable lines. The honest asymmetry is
+**strict costs zero lines because Rust already enforces it; loose costs a hand-rolled parser
+nobody wants.** Cost asymmetry is a consideration for box 1, not a settlement of it.
+
+## The case AGAINST changing this, recorded because the section above argued only one side
+
+An evidence section that lists only the arguments for one option does not decide the box, but it
+makes the decision look foreclosed, which has the same effect by a slower route. The other side:
+
+- **BSDR4TRM RATIFIED the current fallback semantics deliberately.** This card exists to revisit an
+  approved decision; "the parser is loose" was a choice, not an oversight.
+- **Nothing is broken.** `severity: low`, and every accepted oddity resolves to a real, in-range
+  port. There is no reported incident, and no evidence in this repository that any config sets
+  `3e3`, `0x1F80` or `+8080` for any port variable — the divergence is real but **unreached**.
+- **A strict patch could move a live port silently.** Any existing config using `3e3` binds 3000
+  today and would bind the fallback after the change. That is a behaviour change to a shipped
+  product in service of a shape nobody has complained about.
+- **The divergence's live impact is one wrong number in `/api/server-stats`** (see the correction
+  above), which is the impact TRDD-4MJT92J7 already records — and which could equally be fixed on
+  the Rust side by deleting the env read in favour of the flag (4MJT92J7 box 2), touching no TS at
+  all and leaving ratified semantics alone.
 
 **`min-approval-requirement: manager`, not `none`** — this card exists to revisit a decision
 ratified in TRDD-BSDR4TRM's ai_review. It was filed as `none` on 2026-09-04 and corrected the same
