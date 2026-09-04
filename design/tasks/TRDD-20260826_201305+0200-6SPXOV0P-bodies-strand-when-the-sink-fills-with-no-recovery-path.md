@@ -51,15 +51,17 @@ have had". **That was overstated and is corrected here**; adversarial review cau
 and two commands settled them.
 
 ESTABLISHED (measured 16:30–16:34):
-- **The drain is ALIVE and succeeding, not idle.** This is the check that carries the weight, and
-  it replaces the one below that does not: consecutive `bodies pass` lines in `~/.agentlens/server.log`
-  read `ingested 12, deleted 12 (0 of them re-emitted), failed 0` — and `ingested N, deleted N,
-  failed 0` on every pass. A dead or silently-failing chore cannot print that.
+- **The bodies chore is scheduled, running and completing** — consecutive `bodies pass` lines in
+  `~/.agentlens/server.log` read `ingested 12, deleted 12 (0 of them re-emitted), failed 0`. A dead,
+  crash-looping, or lock-wedged chore cannot print that. **It does NOT exercise `f9605164`'s reclaim
+  branch**, which is reachable only with a non-empty `strandedNames` — and the tell is inside the
+  line itself: `(0 of them re-emitted)` is the `reclaimed_reemitted` counter, pinned at 0 in every
+  sample because nothing is stranded. This is a liveness proof for the surrounding machinery, not a
+  proof of the fix.
 - **The serving binary is alcore, not the TS twin** — `lsof -p 37180` txt → 
   `bin-native/darwin-arm64/alcore`. Worth pinning because `rustBinResolve` falls back to the TS
   server SILENTLY, and TRDD-M2VK8T4P (a codesign SIGKILL) landed today, making that fallback a live
-  possibility rather than a theoretical one. It is at least as new as f9605164: it prints the
-  `(N re-emitted), failed M` instrumentation the 09-02 note said was NOT yet deployed.
+  possibility rather than a theoretical one.
 - **No new stranding in two days**: legacy dir `~/.agentlens/otel-bodies` 0 files, `capture:` shows
   no PARKED suffix (was 308 live / PARKED 307 / 144.3 MB), 0 files older than 1 h in either dir.
 - A process boundary exists (pid 37180, uptime 7h34m; the 09-02 run was pid 31959).
@@ -69,7 +71,16 @@ NOT ESTABLISHED — do not read this run as a re-test of the fix:
   falsifier (*a file that fails verify is KEPT and re-examined every 60 s, so it would age*) has
   nothing left to falsify. Today's "0 files older than 1 h" is equally consistent with a working
   drain and with a drain that never ran — fresh captures never reach 1 h either way. It tests
-  ABSENCE OF BACKLOG, not DRAIN OF BACKLOG. The pass-log lines above are what rescue this.
+  ABSENCE OF BACKLOG, not DRAIN OF BACKLOG. The pass-log lines do NOT rescue it either (an earlier
+  version of this block claimed they did): they prove the chore runs, not that the reclaim path
+  works — see above.
+- **That the running binary contains `f9605164` at all.** `bin-native/` is gitignored with no
+  recorded link to a commit. An earlier version inferred "at least as new as f9605164" from the
+  `(N re-emitted), failed M` log format; that inference is **backwards** — the `reclaimed_reemitted`
+  counter it names came from `aa0caa40`, which PRECEDES `f9605164`. A binary printing 2.33.2-era
+  logging contains the LOGGING change; nothing here shows the two shipped in the same build. The
+  honest statement is: alcore is serving, it prints 2.33.2-era logging, and whether `f9605164`'s
+  reclaim fix is in it is unestablished.
 - The matching `capture: 11` on both dates was struck from the record: two instantaneous samples of
   a rolling window that turns over in seconds ("newest 2s ago"). Equality there is coincidence, and
   presenting it beside two real findings lends it unearned weight.
