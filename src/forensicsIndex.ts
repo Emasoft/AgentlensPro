@@ -281,16 +281,30 @@ function refFor(row: EvidenceRow, spool: string | null): string {
 // and appeared inside live burn windows with wrong culprit attribution. A null row is dropped by
 // selectRecent — the drain put its bytes in the store, so the next pass indexes it with its TRUE
 // capture ts; skipping one pass is honest, back-dating history to the scan time is not.
-// A NON-FINITE ts is unknowable too, and takes the same exit. `tsMs` is `Number(r.ts_ms)`, and
-// Number('NaN')/Number('Infinity') both produce non-finite values, so this is reachable — the Rust
-// port's `s.parse::<f64>()` accepts "nan"/"inf" for the same reason (measured). Only `=== null` was
-// filtered here, and `NaN < tsFromMs` is false, so such a row passed the window check too and
-// reached pricing, where `at >= effective` is false for NaN and would silently pin it to the
-// PRE-change rate of any announced change. Dropping is the policy this function already documents
-// two paragraphs up; substituting a clock at the pricing site instead is the back-dating it
-// refuses, and worse there because the resulting row is durable and carries no `unpriced` marker.
+// An UNUSABLE stored ts — non-finite, or beyond the ±8.64e15 ms `new Date()` accepts — is treated
+// as absent and FALLS THROUGH to the mtime branch, so a spool row still resolves from its file.
+// Only a store-only row with an unusable ts is dropped.
+//
+// Both conditions live here, mirroring `resolve_ts` in the Rust port. Nothing in the parse path
+// rejects a non-finite value (`Number('NaN')`, `Number('Infinity')`), and only `=== null` used to be
+// filtered — while `NaN < tsFromMs` is false, so such a row also passed the window check and reached
+// pricing, where `at >= effective` is false for NaN and would have pinned it to the PRE-change rate
+// of any announced change. The range half keeps the two languages from diverging on an extreme
+// value: DuckDB TIMESTAMP is i64 microseconds, so epoch_ms tops out above what `Date` can hold.
+//
+// The two unusable shapes behaved differently before this filter, and neither was fully harmless
+// (measured against SQLite, not assumed): a bound NaN binds as NULL, excluded from TIME-WINDOWED
+// queries but NOT from the untimed `GROUP BY model` rollups that counted its tokens, and it still
+// consumed a scan-cap slot; an Infinity binds as a real `inf`, which MATCHES every `>=` window and
+// sorts FIRST, so it displaced real rows under the cap and appeared in every window. Dropping such
+// a row therefore DOES move untimed rollup totals. That is accepted for a structural reason rather
+// than a count: what is lost is an INDEX row, the body stays in the store, and the row is
+// rebuildable if the ts is ever repaired. (No such state has been observed in a local sweep, but
+// that is one machine at one instant — evidence for sizing the risk, not the reason to accept it.)
+// It is NOT the drained-spool case above: a durably-corrupt stored ts is dropped on every future
+// pass, not recovered by the next one.
 function resolveTs(row: EvidenceRow, spool: string | null): number | null {
-  if (row.tsMs !== null) { return Number.isFinite(row.tsMs) ? row.tsMs : null }
+  if (row.tsMs !== null && Number.isFinite(row.tsMs) && Math.abs(row.tsMs) <= 8.64e15) { return row.tsMs }
   if (spool) {
     try { return fs.statSync(path.join(spool, row.srcName)).mtimeMs } catch { /* drained mid-scan */ }
   }
@@ -593,11 +607,14 @@ export function apiCallParams(ev: ApiCallEvent, spawn: ResolvedSpawn, now: numbe
   //
   // `new Date(x).toISOString()` THROWS RangeError on a non-finite or out-of-range value, and this
   // runs inside the indexer loop, so an unguarded conversion would turn one corrupt ts into a dead
-  // ingest run — strictly worse than the mispricing it fixes. `resolveTs` now drops a non-finite ts
-  // (see there), which removes the reachable case; the range check is what remains, and it is kept
-  // deliberately rather than trusted away, because this function is exported and the throw is a
-  // hard failure rather than a wrong number. Falling back to `undefined` means "price at today's
-  // rate" — the pre-change behaviour, and a degradation rather than a crash.
+  // ingest run. On the INDEXER path `resolveTs` already rejects both shapes, so this cannot fire
+  // there — it is kept because this function is EXPORTED, and `resolveTs` is private, so it cannot
+  // enforce a precondition on a public entry point. A caller reaching `apiCallParams` directly
+  // (the test does, with NaN) bypasses `resolveTs` entirely. That is what makes this a boundary
+  // check rather than unreachable defensive code — the distinction that justified deleting the
+  // equivalent Rust guard, where both the resolver and the pricing site are private to one module.
+  // If this export is ever retired, retire the guard with it. Falling back to `undefined` means
+  // "price at today's rate" — a degradation rather than a crash.
   const atIso = Number.isFinite(ev.ts) && Math.abs(ev.ts) <= 8.64e15 ? new Date(ev.ts).toISOString() : undefined
   const costUsd = model
     ? calcTokenCostUsd(ev.inputTokens, ev.cacheReadTokens, ev.cacheCreationTokens, ev.outputTokens, model, 0, atIso)

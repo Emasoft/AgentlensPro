@@ -72,20 +72,42 @@ fn ref_for(row: &EvidenceRow, spool: Option<&Path>) -> String {
 /// its bytes in the store, so the next pass indexes it with its TRUE capture ts — skipping one pass
 /// is honest, back-dating history to the scan time is not.
 ///
-/// A NON-FINITE ts is UNKNOWABLE too, and takes the same exit. `ts_ms` is built by
-/// `s.parse::<f64>().ok()` over a string column, and Rust's `f64::from_str` ACCEPTS "nan", "inf",
-/// "-inf" and "infinity", and overflows "1e400" to inf — measured, not assumed — so `Some(NaN)` is
-/// a reachable value, not a type-system ghost. It must not reach pricing: `at >= effective` is
-/// false for NaN, so such a row would silently take the PRE-change rate of any announced change.
+/// An UNUSABLE stored ts — non-finite, or beyond the ±8.64e15 ms JavaScript's `Date` accepts — is
+/// treated as ABSENT and falls through to the mtime branch, so a row whose file is still on the
+/// spool resolves from it. Garbage is not evidence, so such a row is epistemically the no-`ts_ms`
+/// case; and mtime is a recorded observation of when the exporter wrote the bytes, not the scan
+/// clock the paragraph above refuses. (The fallback is not gated on `location`, unlike `ref_for`,
+/// so a STORE row with a corrupt ts now reaches it too — narrow, since a drained file is deleted
+/// and `metadata` then fails.) What still drops is a row whose mtime is also unavailable.
 ///
-/// Filtering HERE rather than substituting a clock at the pricing site is the whole point. The
-/// alternative — falling back to "now" when the ts is unusable — is the exact back-dating this
-/// function refuses two paragraphs above, and it is worse there than here: a dropped row is
-/// indexed correctly next pass, while a row priced at the scan clock is DURABLE and carries no
-/// `unpriced` marker to tell it apart from a correctly-priced one.
+/// Why BOTH conditions, on the stored ts, in both languages:
+/// - Non-finite is not rejected anywhere upstream — `ts_ms` is `s.parse::<f64>().ok()` over a
+///   string column, and `f64::from_str` accepts "nan"/"inf"/"infinity" and overflows "1e400" to
+///   inf (verified by running it — which shows the PARSER would not stop such a value, not that
+///   the column emits one).
+/// - Out-of-range is reachable in principle because DuckDB `TIMESTAMP` is i64 MICROseconds, so
+///   `epoch_ms(ts)` tops out near 9.22e15 — above what `Date` can hold. Dropping this test makes
+///   the two languages disagree on such a value whenever a scheduled change's `from` is still in
+///   the FUTURE, which is the normal state of an announced change. It has been removed once as
+///   "unreachable" already; `resolve_ts_tests` exists so that costs a red test, not a silent
+///   divergence.
+///
+/// The mtime branch is deliberately unguarded: a `Duration` is finite by construction, and passing
+/// the range needs a file dated ~8 million years out. The pre-existing code has the same gap and no
+/// such state has been observed.
+///
+/// Cost of dropping, measured against SQLite rather than assumed: a NaN binds as NULL, so such a
+/// row was excluded from time-windowed queries but still counted by untimed `GROUP BY model`
+/// rollups; an INFINITY binds as a real `inf`, which matches every `>=` window and sorts FIRST, so
+/// it displaced real rows under `RESPONSE_SCAN_CAP`. Dropping therefore DOES move untimed rollup
+/// totals. Accepted structurally — what is lost is an INDEX row, the body stays in the store and is
+/// rebuildable — not because a local sweep found no such rows, which is one machine at one instant.
+/// Unlike the drained-spool case above, a durably-corrupt stored ts is dropped on every pass.
 fn resolve_ts(row: &EvidenceRow, spool: Option<&Path>) -> Option<f64> {
     if let Some(ts) = row.ts_ms {
-        return ts.is_finite().then_some(ts);
+        if ts.is_finite() && ts.abs() <= 8.64e15 {
+            return Some(ts);
+        }
     }
     let dir = spool?;
     let md = std::fs::metadata(dir.join(&row.src_name)).ok()?;
@@ -657,4 +679,59 @@ pub fn scan_api_call_events(opts: &ScanApiCallOptions, now_ms: f64) -> (Vec<ApiC
             note,
         },
     )
+}
+
+#[cfg(test)]
+mod resolve_ts_tests {
+    use super::resolve_ts;
+    use agentlens_store::bodies_evidence::EvidenceRow;
+
+    fn row_with_ts(ts: f64) -> EvidenceRow {
+        EvidenceRow {
+            src_name: "r0.response.json".into(),
+            body_id: None,
+            session_id: None,
+            ts_ms: Some(ts),
+            raw_bytes: 1.0,
+            kind: "response".into(),
+            location: String::new(), // resolve_ts never reads it (unlike ref_for)
+        }
+    }
+
+    // `resolve_ts` is a pure function of (ts_ms, spool), so unlike the three assertions this change
+    // set retired, a mutation here genuinely flips the result: those were vacuous because they were
+    // built on a RATE that no longer varies with time, not because testing was the wrong move.
+    //
+    // `spool: None` isolates the ts_ms branch — with a spool present the mtime fallback would
+    // resolve the row and mask whether the stored value was rejected.
+    //
+    // COVERAGE GAP, stated rather than implied: every test here passes `spool: None`, so none of
+    // them pins the FALL-THROUGH — that a corrupt ts_ms WITH a spool present resolves from the
+    // file mtime instead of dropping. Reverting the fall-through to an early `return None` leaves
+    // all three green. Pinning it needs a temp dir with a set mtime (see `write_resp` in
+    // burn/investigator_scan.rs for that shape); judged not worth the filesystem setup for a state
+    // never observed, but the next reader should know it is unpinned rather than infer coverage.
+    #[test]
+    fn an_unusable_stored_ts_is_not_returned() {
+        for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, 9e15, -9e15] {
+            assert_eq!(resolve_ts(&row_with_ts(bad), None), None, "{bad} must not be used as a ts");
+        }
+    }
+
+    // 9e15 above and this boundary pair are the ONLY asserts covering the range half, which was
+    // added, removed as "unreachable", then re-added on the finding that DuckDB TIMESTAMP is i64
+    // MICROseconds (ceiling ~9.22e15 ms, above the 8.64e15 JavaScript Date accepts). Without them
+    // the next reader retraces exactly that reasoning and deletes it again.
+    #[test]
+    fn the_range_boundary_matches_the_javascript_date_limit() {
+        assert_eq!(resolve_ts(&row_with_ts(8.64e15), None), Some(8.64e15));
+        assert_eq!(resolve_ts(&row_with_ts(-8.64e15), None), Some(-8.64e15));
+        assert_eq!(resolve_ts(&row_with_ts(8.64e15 + 1.0), None), None);
+    }
+
+    #[test]
+    fn a_usable_stored_ts_is_returned_unchanged() {
+        assert_eq!(resolve_ts(&row_with_ts(1_788_213_600_000.0), None), Some(1_788_213_600_000.0));
+        assert_eq!(resolve_ts(&row_with_ts(0.0), None), Some(0.0), "epoch 0 is a real timestamp");
+    }
 }
