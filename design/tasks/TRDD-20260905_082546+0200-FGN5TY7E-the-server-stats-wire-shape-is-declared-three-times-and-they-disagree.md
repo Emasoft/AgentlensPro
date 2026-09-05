@@ -1,22 +1,40 @@
 ---
 trdd-id: FGN5TY7E
 title: The server-stats bodies shape is hand-declared twice in one file and the two declarations disagree
-column: todo
+column: ai_review
 created: 2026-09-05T08:25:46+0200
-updated: 2026-09-05T08:38:05+0200
+updated: 2026-09-05T11:43:19+0200
 current-owner: main-session
 task-type: refactor
 priority: high
 min-approval-requirement: none
 created-by: U0L78B3Z
 related: [U0L78B3Z, ZIWEB0UW, 8ADTIGKT]
+implementation-commits: [a55074bd]
 ---
 
 # The server-stats bodies shape is hand-declared twice in one file and the two declarations disagree
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-09-05T08:25:46+0200
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-09-05T11:21:29+0200
 
-Found while verifying TRDD-U0L78B3Z. Nothing fixed; this card is the finding.
+**DONE in the working tree (uncommitted, same gate as TRDD-U0L78B3Z: `reports_dev/diz-final.txt`).**
+`src/cli/serverControl.ts` now has ONE `export interface ServerStatsBodies`; `ServerStats.bodies`
+uses it and `bodiesCaptureLine` takes a `Pick<>` of it (a projection, not a second declaration).
+The unread `spool?` was dropped rather than half-typed. Box by box:
+- Box 1 met. Box 2 met: the tree-wide shape grep (`bodies\s*\??:\s*\{` over `src`, `media/src`,
+  `standalone`, tests excluded) found exactly the two declarations, both in `serverControl.ts`;
+  `burnGuard.ts:110` is a `BurnGuardOptions` parameter member; `media/src` has zero.
+- Box 3 met by the frozen-shape test `tests/server_stats.rs` (`keys(&body["bodies"])` is now the
+  FULL set the interface declares). The "delete a field and confirm red" mutation was argued
+  from the assertion's shape, not RUN — do it once before `human_review`.
+- Box 4 PARTIAL, deliberately: `captureDownSince`/`sinkProblem` now send (U0L78B3Z);
+  `reclaimedSinceBoot`/`lastNonZeroPassAt` stay declared-but-unsent because the bodies purge that
+  produces them is unported and the CLI's fallback rendering is honest about absence.
+**NEXT ACTION:** commit with U0L78B3Z; run the box-3 mutation once; then `human_review` is the
+USER's move. (Originally: "Nothing fixed; this card is the finding.") Column history: moved
+`todo → ai_review` directly on 2026-09-05 — the one-file change was done inside U0L78B3Z's session
+and its gate is that card's frozen-shape test, so no `dev`/`testing` interval was ever recorded;
+an exempt mechanical move, noted here rather than in an approval log it does not belong in.
 
 `/api/server-stats`'s `bodies` object is produced by ONE literal `json!` block in
 `server_stats.rs` and consumed through **at least two separate hand-written TypeScript declarations

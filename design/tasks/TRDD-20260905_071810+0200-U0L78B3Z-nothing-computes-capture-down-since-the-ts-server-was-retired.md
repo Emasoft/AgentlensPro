@@ -10,6 +10,7 @@ priority: high
 min-approval-requirement: none
 created-by: 8ADTIGKT
 related: [8ADTIGKT, 4FMHW124, 1B98LCVR, 5PUD8RKE, FGN5TY7E]
+implementation-commits: [a55074bd]
 ---
 
 # Nothing computes CAPTURE DOWN since the TS server was retired so the liveness clock ticks unread

@@ -503,17 +503,31 @@ export async function stopServer(): Promise<void> {
  *  time and captured nothing, which no amount of idleness explains.
  *
  *  `now` is a parameter so this is testable without waiting for wall-clock. */
+/** `/api/server-stats` `bodies` — THE declaration (TRDD-FGN5TY7E). The emitter is the one `json!`
+ *  block in `rust-core/.../server_stats.rs`; `tests/server_stats.rs` pins its exact key set, so a
+ *  field added here without a producer, or dropped there while still read here, fails a test. */
+export interface ServerStatsBodies {
+  archive: { volumes: number; entries: number; bytes: number }
+  lastPass: { removedFiles: number; keptBytes: number }
+  // TRDD-C5L779YI: cumulative reclaim. NOT SENT by alcore (the bodies purge is unported) — absent
+  // is not zero, so the renderer falls back to the legacy last-pass line, never "0 since boot".
+  reclaimedSinceBoot?: number
+  lastNonZeroPassAt?: number
+  // TRDD-4FMHW124 / TRDD-U0L78B3Z: null = up. Absent is not "healthy", it is "not reported".
+  captureDownSince?: number | null
+  sinkProblem?: string | null
+  // TRDD-0SA5QZTG: a server older than this omits it; the renderer must say "unknown", never "never".
+  live?: { files: number; newestMs: number | null }
+  // TRDD-8TM7I49X: null = pass state unreadable.
+  parked?: { files: number; bytes: number; onDisk: number } | null
+  // `spool` is also on the wire (TRDD-ZW4APOPI) but nothing here reads it — declare it when
+  // something does; a half-typed unread field is the class this card exists to stop.
+}
+
 export function bodiesCaptureLine(
-  s: {
-    uptimeSec: number
-    bodies: {
-      live?: { files: number; newestMs: number | null }
-      parked?: { files: number; bytes: number; onDisk: number } | null
-      // TRDD-4FMHW124: absent on an older server — absent is not "healthy", it is "not reported".
-      captureDownSince?: number | null
-      sinkProblem?: string | null
-    }
-  },
+  // TRDD-FGN5TY7E: the ONE wire shape, not a second hand-copied subset — a subset here once
+  // omitted `parked` while the interface omitted it too, and nothing noticed.
+  s: { uptimeSec: number; bodies: Pick<ServerStatsBodies, 'live' | 'parked' | 'captureDownSince' | 'sinkProblem'> },
   now: number = Date.now(),
 ): string {
   // TRDD-4FMHW124: server-detected outage state. Rendered on every branch below — an empty live
@@ -572,20 +586,7 @@ interface ServerStats {
     offsetsBytes: number; offsetsWrites: number; cardsBytes: number; cardsWrites: number
     files: { spans: number; cards: number; offsets: number }
   }
-  bodies: {
-    archive: { volumes: number; entries: number; bytes: number }
-    lastPass: { removedFiles: number; keptBytes: number }
-    // TRDD-C5L779YI: cumulative reclaim. Absent on an older server — absent is not zero, so the
-    // renderer falls back to the legacy last-pass line rather than claiming "0 since boot".
-    reclaimedSinceBoot?: number
-    lastNonZeroPassAt?: number
-    captureDownSince?: number | null
-    sinkProblem?: string | null
-    // TRDD-0SA5QZTG. Optional: a server older than this change does not send it, and the renderer
-    // must say "unknown" there rather than print a confident "never" about a field that was
-    // simply not transmitted.
-    live?: { files: number; newestMs: number | null }
-  }
+  bodies: ServerStatsBodies
   hookEvents?: { receivedSinceBoot: number; files: number; bytes: number }
   // TRDD-AMEA4O4Z: gated-out OTEL log events persisted to the sink (absent on pre-sink servers).
   logEvents?: { persistedSinceBoot: number; files: number; bytes: number; retentionDays: number }
