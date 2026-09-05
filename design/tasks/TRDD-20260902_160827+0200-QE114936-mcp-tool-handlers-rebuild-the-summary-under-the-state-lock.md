@@ -3,7 +3,7 @@ trdd-id: QE114936
 title: Twenty MCP tool handlers still rebuild the session summary under the state lock
 column: testing
 created: 2026-09-02T16:08:27+0200
-updated: 2026-09-05T06:36:14+0200
+updated: 2026-09-05T06:37:48+0200
 current-owner: main-session
 task-type: bugfix
 priority: high
@@ -14,7 +14,7 @@ related: [UTFVMVT8, 2R36W8Q1, HFV4AIT7]
 
 # Twenty MCP tool handlers still rebuild the session summary under the state lock
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-05T06:36:14+0200
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-05T06:37:48+0200
 
 **ALL 20 SITES ARE DONE IN CODE (the card was written for 18; two more were found), COMMITTED,
 and the INTEGRATION SUITE IS GREEN. Still NOT deployed — box 3 is the only one left.**
@@ -28,19 +28,28 @@ writing code on it, which nobody is.
   only; it is not. `git show <rev>:…/ui.rs | grep -c 'build_session_summary('` gives **17 at
   `2b38a39b` → 2 at `1a00cec6`**, and those last 2 are inside comments in the guard test
   (`ui.rs:4204`, `:4216`). `1a00cec6` is +309/−147 on `ui.rs` and is the ONLY commit touching that
-  file since `2b38a39b`, so all 19 remaining sites are in it. Working tree clean. **The subject
-  line alone would have sent you to the wrong commit for sites 2–18** — that is why this bullet
-  carries the count.
+  file since `2b38a39b`. Sites 19–20 are half in `lib.rs`, which that count cannot see, so:
+  `git show --stat 1a00cec6` → `lib.rs` **+40** and `ui.rs` **456** changed lines, both in the one
+  commit. All 19 remaining sites are in it. Working tree clean. **The subject line alone would
+  have sent you to the wrong commit for sites 2–18** — that is why this bullet carries the count.
+  **The count proves LOCATION, not correctness**: a needle reaching 0 is exactly what the card's
+  own MAIN LESSON warns about. Correctness rests on the three mutation-verified guard tests plus
+  the integration run, which is separate evidence.
 - **INTEGRATION SUITE GREEN, 2026-09-05** — `cargo test -p agentlens-core --test '*'` → **exit 0,
   98 test binaries, 0 failures**, `tests/ui.rs` 41/41. Total passed **543, summed from the
-  per-binary `test result: ok.` lines** (derived, not printed by cargo). This is the run box 2 was
+  per-binary `test result: ok.` lines** (derived, not printed by cargo — and trustworthy only
+  because `grep -c '^test result: FAILED'` was 0 and the run exited 0; the sum alone would read
+  the same if a binary had failed). "98 binaries" is likewise the count of OK lines. This is the run box 2 was
   waiting for: the one that actually invokes `handle()`. `--lib` alone never did.
   Raw output: `reports_dev/qe114936-integration.txt`.
-- **The box's second clause is also verified**: no `mcp_*` test or fixture file changed anywhere
-  in `2b38a39b^..HEAD` (`git diff --name-only` matches only TRDD *filenames* containing "mcp").
-  The only test-side churn in that range is `pricing-expected.json` and `log_reader_parity.rs`,
+- **The box's second clause is also verified, and it is NOT vacuous** — the files exist:
+  `tests/mcptools_parity.rs` and `tests/fixtures/mcptools-expected.json`. Neither changed in
+  `2b38a39b^..HEAD`, and `mcptools_parity` ran **13 tests green** in the suite. Scoped to the whole
+  test tree, the ONLY churn in that range is `pricing-expected.json` and `log_reader_parity.rs`,
   from `f7610871` and `420e6bb9` — other cards. A green suite alone would NOT have proven this:
-  a fixture updated in the same commit as the code would pass either way.
+  a golden updated in the same commit as the code it checks passes either way. (Checking this by
+  grepping paths for "mcp" was the weak form — it cannot tell "unchanged" from "does not exist",
+  and here the goldens are named `mcptools-*`, not `mcp_*`.)
 - One test crossed 60 s and then passed —
   `log_reader_parity::watcher_advances_a_card_on_growth_without_waiting_for_the_backstop` (it
   waits on a real filesystem backstop). **One observation, so nothing is established about
@@ -50,6 +59,9 @@ writing code on it, which nobody is.
   binary exits **137** before `main` and `server.log` is empty. **Remedy verified; mechanism NOT
   established** — the competing explanation is a stale cached verdict after `cp` over a running
   mapped binary, which `--force` also fixes. See TRDD-M2VK8T4P; do not build on the cause.
+  **`bin-native/` is gitignored**, so once deployed nothing on disk links the running binary to
+  `1a00cec6`. On a card whose whole subject is which commit contains what, the deploy report is
+  the only place that link can be pinned — record the SHA in it.
 
 **The three bullets below are the historical site record. Their "uncommitted" wording is
 SUPERSEDED by the first bullet above** — every site listed is committed.
