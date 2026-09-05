@@ -3,7 +3,7 @@ trdd-id: U0L78B3Z
 title: Nothing computes CAPTURE DOWN since the TS server was retired so the liveness clock ticks unread
 column: todo
 created: 2026-09-05T07:18:10+0200
-updated: 2026-09-05T08:25:46+0200
+updated: 2026-09-05T08:29:12+0200
 current-owner: main-session
 task-type: bugfix
 priority: high
@@ -59,7 +59,7 @@ says alcore is the only backend and the MCP server is deliberately not registere
 the TS burn-guard row is itself legacy. If so the port target is alcore's own burn guard, not the
 TS one. Settle this before writing code.
 
-## ⏵ 2026-09-05 — THIS IS NOT ONE FIELD. The CLI reads THREE that alcore never emits.
+## ⏵ 2026-09-05 — THIS IS NOT ONE FIELD. The CLI reads FOUR that alcore never emits.
 
 Found while verifying the read path for this card. `showStatus` assigns `s` ONCE at
 `serverControl.ts:616` from `apiRequest('GET', '/api/server-stats')` and only reads it afterwards —
@@ -100,8 +100,10 @@ children yields the same four unsent fields.
 
 **NOT "instrument-independent" — I claimed that and it is wrong.** Both instruments ran over
 `serverControl.ts` alone, so they share a blind spot: another file declaring or consuming this
-shape is invisible to both. Proof, found minutes later: **there is a THIRD declaration, in a second
-file** — `burnGuard.ts:110` — so the count went 2 → 3 the moment the search widened. What was
+shape is invisible to both. (A widened search did find a third SITE naming `captureDownSince` —
+`burnGuard.ts:110` — but reading it showed a `BurnGuardOptions` parameter type that is HANDED the
+value, not a third wire declaration; see TRDD-FGN5TY7E. The single-file blind spot is real
+regardless, and does not need that hit to be a declaration.) What was
 actually earned: *the same four from two instruments with different blind spots, both scoped to one
 file*, which is a real strengthening (the grep cannot see `:521`'s parameter read; the type route
 can) but still a LOWER BOUND. The asymmetry protects the finding — every miss adds an unsent
