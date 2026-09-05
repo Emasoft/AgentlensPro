@@ -66,17 +66,34 @@ Found while verifying the read path for this card. `showStatus` assigns `s` ONCE
 no reassignment, no `Object.assign`, no spread — so the read path is verified and nothing injects
 fields. That same read shows the CLI consuming two MORE fields with the same problem:
 
-| field the CLI reads | in `server_stats.rs` | anywhere in `rust-core/*/src/` |
-|---|---|---|
-| `s.bodies.captureDownSince` | 0 | 0 |
-| `s.bodies.reclaimedSinceBoot` | 0 | 0 |
-| `s.bodies.lastNonZeroPassAt` | 0 | 0 |
+**This is ONE CLASS with a COMPLETE list, not a growing pile of omissions.** `bodies`'s direct
+children are closed at five (`archive`, `lastPass`, `live`, `parked`, `spool` — the bounded block
+read at `server_stats.rs:613`, confirmed by the live curl returning exactly those keys). So every
+`s.bodies.*` the CLI reads outside that set is unsent, and the diff is exhaustive:
 
-**`reclaimedSinceBoot` is worse than silent.** `serverControl.ts` branches on
-`s.bodies.reclaimedSinceBoot !== undefined`; since it is always undefined, the status line ALWAYS
-takes the else-branch and prints the `lastPass` fallback. The output looks correct and reports a
-different statistic than the one the branch was written to show — no error, no absent line, just a
-quieter number. `captureDownSince` at least fails by printing nothing.
+| `s.bodies.*` read by `serverControl.ts` | emitted? |
+|---|---|
+| `archive`, `lastPass`, `live`, `parked` | **yes** |
+| `captureDownSince` | **NO** — the `\| CAPTURE DOWN <N>m` row |
+| `sinkProblem` | **NO** — the `\| SINK: <problem>` row |
+| `reclaimedSinceBoot` | **NO** — gates the newer reclaimed-since-boot statistic |
+| `lastNonZeroPassAt` | **NO** — the timestamp that statistic renders with |
+
+Derived as: `grep -oE 's\.bodies\.[a-zA-Z][a-zA-Z0-9_]*' src/cli/serverControl.ts | sort -u`, diffed
+against the five. **Cite the bounded block for all four** — the per-key `grep -c` that first found
+them is the scoped-search evidence this card spent four commits demoting, and it is strictly weaker
+than the closed set.
+
+**TWO silent alarms, not one.** `sinkProblem` renders `| SINK: …` on every status branch and, like
+CAPTURE DOWN, has never been able to appear. A sink problem is exactly the condition a human needs
+told.
+
+**`reclaimedSinceBoot` fails differently from the other three, and the distinction matters for
+triage.** `serverControl.ts` branches on `s.bodies.reclaimedSinceBoot !== undefined`; since it is
+always undefined the line ALWAYS takes the else-branch. The else-branch is not buggy — it is the
+correct older `lastPass` rendering — so nothing looks wrong. The defect is that the NEWER, better
+statistic is permanently unreachable, silently, with a plausible number in its place. The other
+three fail by rendering nothing at all.
 
 Same wound as this card's: `567fc5c2` retired the TS server, the CLI kept the reader, and the Rust
 replacement never grew the writer. **Scope decision for whoever takes this**: either widen this
@@ -84,8 +101,20 @@ card to "port the bodies fields the CLI reads", or split the two new ones out �
 `captureDownSince` alone and leave a consumer reading two more fields nobody sends.
 
 **Not yet checked**: whether other `s.<section>.*` reads outside `bodies` have the same gap. The
-method that found these is cheap and should be run across the whole `ServerStats` shape — compare
-every field `serverControl.ts` reads against the key space `server_stats.rs` emits.
+recipe, written down because it is the same two steps that closed `bodies` and will otherwise be
+re-derived:
+
+1. Read the ONE literal `json!` block in `server_stats.rs` that builds that section; its direct
+   children are the closed emitted set. (Do not grep the file for key names — `json!` splices
+   `Value`s built in other modules, so a file-wide literal count proves nothing about a subtree.)
+2. `grep -oE 's\.<section>\.[a-zA-Z][a-zA-Z0-9_]*' src/cli/serverControl.ts | sort -u` and diff.
+
+**On the read path**: `s` is assigned once at `:616` and an identifier scan of the render range
+found only reads — but that scan would miss a helper mutating `s` in place or a bracket-access
+write, and `apiRequest`'s own return shaping was never read. What actually excludes a mutation that
+MATTERS is behavioural: the live run printed the capture line with no `| CAPTURE DOWN` suffix, so
+any injected value was falsy, which is indistinguishable from absence at `:521`. A truthy injection
+would have rendered.
 
 ## Why this matters
 
