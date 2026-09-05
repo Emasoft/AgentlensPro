@@ -3,7 +3,7 @@ trdd-id: 9SYRK6SW
 title: api_call staging table writer at the bodies-pass ingest site
 column: ai_review
 created: 2026-09-03T04:47:31+0200
-updated: 2026-09-05T12:24:45+0200
+updated: 2026-09-05T14:20:42+0200
 current-owner: main-session
 task-type: feature
 priority: high
@@ -364,5 +364,22 @@ implementation, and step 3 is the one that outlives it.
 `b69cb30d`, `7ce2f279`, `c9ac8efe` and this one — not on the card.)*
 
 ## Approval log
+
+## AI review verdict — 2026-09-05T14:20:42+0200
+
+| # | Box | Status | Evidence |
+|---|---|---|---|
+| 1 | response row, no `cost_usd` | ✓ VERIFIED | `lib.rs:168-181` CREATE TABLE (26 cols, no cost_usd); `tests/api_call.rs::a_bodies_pass_leaves_one_row_per_kind_and_the_bodies_are_gone` asserts response row's `session_id`/`system_fps` NULL, bodies deleted. |
+| 2 | request row fields | ✓ VERIFIED | Same test asserts `cc_prev_req`/`previous_message_id`/`tools_fp`/`first_user_fp` populated with PINNED hash values (not `is_some()`), response-only fields NULL. |
+| 3 | flush_detailed 3→4 parts | ✓ VERIFIED | `lib.rs:241` list includes `("api_call", API_CALLS_DIR)`; `tests/roundtrip.rs:44` `assert_eq!(flushed.part_paths.len(), 4, ...)`. |
+| 4 | open_store dir + fsync barrier | ✓ VERIFIED | `lib.rs:139` and `pass.rs:291` both iterate `[BLOBS_DIR, BODIES_DIR, PARTS_DIR, API_CALLS_DIR]`; test `the_fsync_barrier_covers_the_new_api_calls_directory` present. |
+| 5 | purely additive | ✓ VERIFIED (code) / ✗ UNVERIFIED (test run) | `src/store/db.ts:138-140` explicit comment confirms TS twin ignores the new dir; `validate.ts` queries named tables, not dirs. `cargo test -p agentlens-core` re-run deferred (CPU contention). |
+| 6 | parsed once | ✓ VERIFIED | `lib.rs:371-385` one `from_str`, shared `&Value` passed to `extract_meta` and `append_api_call_row`; `extract_api_call_meta` takes `&Value`, cannot parse. |
+
+Also checked live, first-hand: `reports_dev/alcore-restart.txt` (pid 37180→39382, exits 0); live `ps` shows pid 39382 running now; `~/.agentlens/store/api_calls/` has 1680 parts, newest 5 all `-39382-`; code is committed (`c92a90c3`, working tree clean) — the STATE block's "main session commits it" is done; `node scripts/check-no-identities.js` → OK; `is_agent_meta` 4096-byte bound confirmed at `api_call.rs:122/138`; self-correction commits `b69cb30d`/`7ce2f279`/`c9ac8efe` exist and are doc-only. `cargo test`/`clippy` gate claims not re-run per this review's hard constraint (Rust build in progress on this machine).
+
+No defects found. Full report: `reports/ai-review/20260905_142042+0200-9SYRK6SW.md`.
+
+**Verdict: APPROVE**
 
 ## Notes and lessons learned
