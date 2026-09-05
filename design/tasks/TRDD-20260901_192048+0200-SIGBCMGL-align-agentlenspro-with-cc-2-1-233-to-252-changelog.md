@@ -3,10 +3,10 @@ trdd-id: SIGBCMGL
 title: Align agentlenspro taxonomies and diagnostics with Claude Code 2.1.233→2.1.252
 column: ai_review
 created: 2026-09-01T19:20:48+0200
-updated: 2026-09-05T15:31:15+0200
+updated: 2026-09-05T15:33:19+0200
 current-owner: agentlenspro-15
 task-type: feature
-implementation-commits: [2d06942b, 46576993, 525bbcf8]
+implementation-commits: [2d06942b, 46576993]
 related: [YE15B2JK, BFUZ1THR, VY1IUVUM, B7DSTJLS]
 ---
 
@@ -83,10 +83,13 @@ Done this session (commits named below); remaining boxes are docs/design work, n
   code here and is the same item TRDD-YE15B2JK carried, so both now point at TRDD-BFUZ1THR and this
   card carries no open box. The owner or the USER may veto by restoring the box.
   `implementation-commits:` was first filled (`9f5259c7`) with every SHA the body cites — wrong, the
-  field is for commits that landed THIS card's code. Corrected at 15:31 to the three code commits
-  tagged `TRDD-SIGBCMGL`: `2d06942b` (the alignment feat: prompt_cache columns, ttl-resolved cost,
-  model-switch hooks), `46576993` and `525bbcf8` (pricing). Dropped: `494eb779` (YE15B2JK's), `aef94208`
-  (B7DSTJLS's), and `f36a934d` (this card's memory-page docs, not code). Human-review reader: the
+  field is for commits that landed THIS card's code. Corrected at 15:31/15:33 to the two code commits
+  that are both tagged `TRDD-SIGBCMGL` AND covered by a box above: `2d06942b` (the alignment feat:
+  prompt_cache columns, ttl-resolved cost, model-switch hooks) and `46576993` (pricing divergences).
+  Dropped: `494eb779` (YE15B2JK's), `aef94208` (B7DSTJLS's), `f36a934d` (this card's memory-page docs,
+  not code), and `525bbcf8` (tagged SIGBCMGL, but a CC 2.1.257 fable-5-1 pricing entry landed at 21:38
+  after this card reached `ai_review` — outside the 2.1.233→2.1.252 scope and named by no box; a tag
+  is not ownership). Human-review reader: the
   check-types/esbuild box is UNVERIFIED (test run deferred) and the "2535 passing / 1 failing" count
   has no saved run artifact — judge those two as the author's claims.
 
