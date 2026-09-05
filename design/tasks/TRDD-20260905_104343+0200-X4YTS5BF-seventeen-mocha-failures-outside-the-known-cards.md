@@ -1,9 +1,9 @@
 ---
 trdd-id: X4YTS5BF
 title: The full mocha suite has 17 failures and only 7 of them belong to an open card
-column: todo
+column: dev
 created: 2026-09-05T10:43:43+0200
-updated: 2026-09-05T10:43:43+0200
+updated: 2026-09-05T12:10:36+0200
 current-owner: main-session
 task-type: bugfix
 priority: high
@@ -13,7 +13,26 @@ related: [B7DSTJLS, CS2W7E77, U0L78B3Z]
 
 # The full mocha suite has 17 failures and only 7 of them belong to an open card
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-09-05T10:43:43+0200
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-09-05T12:10:36+0200
+
+**IN `dev`. Established so far (each first-hand or from a report whose cited lines were re-read):**
+- The eight `setup` failures are ONE cause: the `hooks` step's verify exec
+  (`src/cli/setup.ts` `execRegisteredCommand`, `spawnSync … timeout`) returns `ETIMEDOUT` and
+  fail-fast turns it into SKIP cascades (`reports/x4yts5bf/20260905_115152+0200-*.md`). The
+  virgin-HOME suite passes in isolation (4/4 runs); the bare shim boots in 0.14 s at load 18.
+- BUT the `repair matrix` suite still hits `ETIMEDOUT` in isolation with the ceiling raised to
+  60 s (`reports_dev/x4y-setupverb.txt`, 16 pass / 3 fail, all three the same cascade). So the
+  exec'd command genuinely hangs past its own 2 s budget in that fixture — the contention story
+  covers the virgin suite only. Root cause pending (debug agent, report under `reports/x4yts5bf/`).
+- Rows 3–4: P3b's `alingest` child runs in 0.00 s on an empty payload and the fixture is two
+  spans, so the 49 s wall is on the TS side or the harness, not the Rust binary — a base raise
+  (120 s) would hide it; NOT committed until explained. FAL's 198 s at the 180 s floor: the
+  bodies dir readdir returns 0 entries, so the per-entry term is inert and the time is elsewhere.
+- Uncommitted worker edits in the tree: `setup.ts` ceiling 15 s → 60 s (keep: the never-hang
+  guard, measured harmless), `rustIngest.test.ts` / `forensicsIndex.test.ts` load-scaled + bases
+  raised (hold until the slow side is named).
+- `check-identities` flagged this card's own row 5–9 (`/home/…` from a test's ephemeral HOME);
+  rewritten as `<tmpHOME>` — the guard is shape-based and a tmp HOME looks like a home path.
 
 Measured 2026-09-05 10:27–10:42 local, `npx mocha` over the whole `out/test` tree (the two file
 arguments were ignored by the mocharc spec — the run was the full suite, 15 min):
@@ -26,7 +45,7 @@ Rust files mocha never loads); none of the 17 touch those, and the capture-line 
 | 1–2 | `cacheBreakTimeline — buildCauseCostPeakReport` / `real machine data` | Timeout 120 s / 240 s | TRDD-B7DSTJLS |
 | 3 | `FAL Phase 1 — 🐌 real machine data` | Timeout 180 s (`forensicsIndex.test.js`) | **nobody** |
 | 4 | `rustIngest — P3b OTLP transform parity` | Timeout 30 s | **nobody** |
-| 5–9 | `standalone server — P5 window auto-calibration (real boot, real ingest path)` ×5 | `ENOENT …/home/.agentlens/burn-config.json` | TRDD-CS2W7E77 |
+| 5–9 | `standalone server — P5 window auto-calibration (real boot, real ingest path)` ×5 | `ENOENT <tmpHOME>/.agentlens/burn-config.json` | TRDD-CS2W7E77 |
 | 10–14 | `setup — virgin HOME full converge (real server on ephemeral ports)` ×5 | `ENOENT …/.claude/skills/agentlenspro-diagnostics/SKILL.md` | **nobody** |
 | 15–16 | `setup — repair matrix (broken fixtures, real converge)` ×2 | (read the file) | **nobody** |
 | 17 | `setup — fail-fast refusals (no silent continue)` | (read the file) | **nobody** |
