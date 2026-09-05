@@ -1,9 +1,9 @@
 ---
 trdd-id: QE114936
 title: Twenty MCP tool handlers still rebuild the session summary under the state lock
-column: dev
+column: testing
 created: 2026-09-02T16:08:27+0200
-updated: 2026-09-05T06:33:26+0200
+updated: 2026-09-05T06:36:14+0200
 current-owner: main-session
 task-type: bugfix
 priority: high
@@ -14,29 +14,51 @@ related: [UTFVMVT8, 2R36W8Q1, HFV4AIT7]
 
 # Twenty MCP tool handlers still rebuild the session summary under the state lock
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-05T06:33:26+0200
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-05T06:36:14+0200
 
 **ALL 20 SITES ARE DONE IN CODE (the card was written for 18; two more were found), COMMITTED,
 and the INTEGRATION SUITE IS GREEN. Still NOT deployed — box 3 is the only one left.**
 
-- **Committed**: site 1 as `2b38a39b`, sites 2–20 as `1a00cec6`. Working tree clean. The
-  paragraph below that said "nothing since site 1 is committed" was true when written and is
-  now false — kept only as the record of what the sites were, not of where they live.
+**Column moved `dev` → `testing` on 2026-09-05**: no code work remains, and the one open box is a
+runtime verification against a deployed binary. Leaving it in `dev` would assert someone is
+writing code on it, which nobody is.
+
+- **Committed**: site 1 as `2b38a39b`, sites 2–20 as `1a00cec6` — **verified by counting, not by
+  reading the subject line.** `1a00cec6`'s subject says "the last two", which reads as sites 19–20
+  only; it is not. `git show <rev>:…/ui.rs | grep -c 'build_session_summary('` gives **17 at
+  `2b38a39b` → 2 at `1a00cec6`**, and those last 2 are inside comments in the guard test
+  (`ui.rs:4204`, `:4216`). `1a00cec6` is +309/−147 on `ui.rs` and is the ONLY commit touching that
+  file since `2b38a39b`, so all 19 remaining sites are in it. Working tree clean. **The subject
+  line alone would have sent you to the wrong commit for sites 2–18** — that is why this bullet
+  carries the count.
 - **INTEGRATION SUITE GREEN, 2026-09-05** — `cargo test -p agentlens-core --test '*'` → **exit 0,
-  98 test binaries, 543 tests, 0 failures**, `tests/ui.rs` 41/41. This is the run box 2 was
+  98 test binaries, 0 failures**, `tests/ui.rs` 41/41. Total passed **543, summed from the
+  per-binary `test result: ok.` lines** (derived, not printed by cargo). This is the run box 2 was
   waiting for: the one that actually invokes `handle()`. `--lib` alone never did.
   Raw output: `reports_dev/qe114936-integration.txt`.
-  One test ran >60 s and then passed —
+- **The box's second clause is also verified**: no `mcp_*` test or fixture file changed anywhere
+  in `2b38a39b^..HEAD` (`git diff --name-only` matches only TRDD *filenames* containing "mcp").
+  The only test-side churn in that range is `pricing-expected.json` and `log_reader_parity.rs`,
+  from `f7610871` and `420e6bb9` — other cards. A green suite alone would NOT have proven this:
+  a fixture updated in the same commit as the code would pass either way.
+- One test crossed 60 s and then passed —
   `log_reader_parity::watcher_advances_a_card_on_growth_without_waiting_for_the_backstop` (it
-  waits on a real filesystem backstop). Slow, not flaky, in this run.
-- **NEXT: box 3 only.** Deploy and re-run the 15-min hold read. The deploy needs the ad-hoc
-  `codesign -s - --force bin-native/darwin-arm64/alcore` after the copy or macOS SIGKILLs it
-  before `main` (exit 137, empty `server.log`) — no script does this for you.
+  waits on a real filesystem backstop). **One observation, so nothing is established about
+  flakiness** — a single green run cannot separate slow-and-deterministic from flaky-and-lucky.
+- **NEXT: box 3 only.** Deploy and re-run the 15-min hold read. Run
+  `codesign -s - --force bin-native/darwin-arm64/alcore` after copying the binary: without it the
+  binary exits **137** before `main` and `server.log` is empty. **Remedy verified; mechanism NOT
+  established** — the competing explanation is a stale cached verdict after `cp` over a running
+  mapped binary, which `--force` also fixes. See TRDD-M2VK8T4P; do not build on the cause.
+
+**The three bullets below are the historical site record. Their "uncommitted" wording is
+SUPERSEDED by the first bullet above** — every site listed is committed.
 
 - **Site 1** (`resolve_session_card` takes `summary: &Value` in) — committed **2b38a39b**, deployed
   as pid 2074 (acaf82e8), **15-min hold read PASS** (max `ui.rs` hold 506 ms, 0 holds ≥1000 ms;
   `reports/deploy/20260903_053800+0200-deploy-420e6bb9-step0.md`).
-- **Sites 2–18** (the 17 direct `st.build_session_summary(` sites) — DONE, uncommitted. Report:
+- **Sites 2–18** (the 17 direct `st.build_session_summary(` sites) — DONE; committed in
+  `1a00cec6` (see the count above — this bullet once read "uncommitted"). Report:
   `reports/trdd-qe114936/20260903_090717+0200-sites-2-18.md` (per-site table, advisor verdict,
   gate outputs).
 - **Site 19, NEW — found by the advisor, verified first-hand**: `get_session_status` (ui.rs:1880)
@@ -173,7 +195,8 @@ the off-lock summary through its callers.
 - [x] `cargo clippy -p agentlens-core --all-targets -- -D warnings` and `cargo test -p agentlens-core`
       green; the `tests/mcp_*` parity fixtures unchanged in output. **clippy exit 0, `--lib` 42/42,
       and — 2026-09-05 — the INTEGRATION suite `cargo test -p agentlens-core --test '*'` exit 0,
-      98 binaries / 543 tests / 0 failures, `tests/ui.rs` 41/41.** It had been briefly ticked on
+      98 binaries / 543 tests / 0 failures, `tests/ui.rs` 41/41; the fixture clause verified
+      separately (no `mcp_*` test or fixture changed in `2b38a39b^..HEAD`).** It had been briefly ticked on
       `--lib` alone — a proxy: not one lib test invokes `handle()`, so nothing that had run
       exercised any of the twenty rewritten request paths. It is the `--test '*'` run, and only
       that run, that ticks this box.
