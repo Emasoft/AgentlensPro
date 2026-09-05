@@ -3,7 +3,7 @@ trdd-id: 2C23ROPZ
 title: rust-core debug builds are the host's dominant disk writer — bound the dev profile
 column: ai_review
 created: 2026-09-01T22:05:22+0200
-updated: 2026-09-05T09:45:50+0200
+updated: 2026-09-05T09:52:05+0200
 current-owner: agentlenspro-15
 task-type: infra
 external-refs: [https://github.com/Emasoft/AgentlensPro/issues/18]
@@ -42,10 +42,19 @@ sixteen more, so that class of claim needs a `git show --stat` before it counts 
   every member manifest but never the virtual root — is the CARD'S check against the pinned
   action's source, not mine**; I never opened the action. An earlier version of this block stated
   it flat, with no provenance marker, in a paragraph whose whole organising principle is provenance
-  markers. Note the fix is correct either way: keying on `rust-core/Cargo.toml` is right whether or
-  not the original assumption was wrong. **That retraction is still the most useful thing on this
-  card for a future reader** — an assumption checked against a pinned source and found half-wrong,
-  recorded rather than quietly patched.
+  markers. **The fix is DEFENSIBLE either way — and that is an ARGUMENT of mine, not a check**: it
+  is a conditional over the same unread fact. Both branches have soft spots. If the action already
+  hashes the virtual root, the explicit `hashFiles` is not a no-op but a change to the key's
+  COMPOSITION — usually harmless, not established, and a key hashing the same file twice can rotate
+  on edits that previously did not rotate it. If it does not, the key is necessary *given the card's
+  account of what else the key covers*, which is the same inherited account. Neither branch was
+  observed. **That retraction is still the most useful thing on this card for a future reader** —
+  an assumption checked against a pinned source and found half-wrong, recorded rather than quietly
+  patched.
+
+  **Not opening the action is deliberate**: clause (c)'s bar is "CI cache keys unaffected", and the
+  card demonstrably reasoned about the key, found its own assumption wrong, and changed the
+  workflow. Which direction the original assumption was wrong in does not move the APPROVE.
 
 **Two DIFFERENT reasons a number here is unreproduced — an earlier version of this block flattened
 them into one, and that flattening was the error:**
