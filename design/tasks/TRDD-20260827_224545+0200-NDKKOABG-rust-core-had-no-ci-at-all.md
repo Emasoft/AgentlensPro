@@ -3,7 +3,7 @@ trdd-id: NDKKOABG
 title: rust-core was never built or tested by CI — add the job, with caching
 column: ai_review
 created: 2026-08-27T22:45:45+0200
-updated: 2026-09-05T09:16:40+0200
+updated: 2026-09-05T09:22:15+0200
 current-owner: main-session
 task-type: infra
 scope: project
@@ -11,7 +11,7 @@ project-id: agentlenspro
 parent-trdd: DMWOBWFH
 min-approval-requirement: none
 relevant-rules: []
-implementation-commits: []
+implementation-commits: [36277dee, 1ecb1935]
 ---
 
 # rust-core was never built or tested by CI — add the job, with caching
@@ -57,6 +57,15 @@ fell behind; the 253 unpushed commits are LATER work.** A review pass argued the
 253-commit-old tip cannot have seen this card's code — reasoning from the branch gap without
 checking whether the work predated it. Reasonable prior, wrong conclusion, and the command that
 settles it is one `git show <sha>:.github/workflows/ci.yml`.
+
+**ATTRIBUTION, settled by lineage rather than by inference — because green alone could not do it.**
+A later pass caught that "green clippy ⇒ this card's fixes are in that SHA" skips a step: green
+proves the DEFECTS ARE ABSENT, not that THIS card's commits are why. Another commit could have
+fixed those lints incidentally. Closed with `git log 3e294e16 --grep=NDKKOABG`:
+**`36277dee`** (adds the job) and **`1ecb1935`** (pins the `workspaces: rust-core` rationale) are
+this card's own commits and both are ancestors of `3e294e16`. Lineage, not consequence.
+`implementation-commits:` is now populated with them — it was the missing link in TWO consecutive
+reviews, which is what makes it a real defect rather than the cosmetic gap it was first called.
 
 **REPORTED BY THE REVIEWING AGENT:** clippy exit 0 locally, the fixture fix confirmed, and
 no-fmt-check confirmed. It also notes one cosmetic gap: `implementation-commits:` is empty.
