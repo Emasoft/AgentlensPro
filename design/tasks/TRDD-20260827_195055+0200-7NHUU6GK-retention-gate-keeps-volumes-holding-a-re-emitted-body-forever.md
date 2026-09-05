@@ -3,7 +3,7 @@ trdd-id: 7NHUU6GK
 title: The archive retention gate keeps a volume forever when it holds a re-emitted body
 column: backburner
 created: 2026-08-27T19:50:55+0200
-updated: 2026-08-27T19:50:55+0200
+updated: 2026-09-05T07:32:41+0200
 current-owner: main
 task-type: bugfix
 severity: LOW
@@ -29,6 +29,17 @@ ARCHIVE retention gate uses the same underlying proof and did not change:
 
 So an archive volume containing even ONE re-emitted body can never pass its gate, and ages out
 forever without being purged.
+
+## ⏵ 2026-09-05 — this card is now the ONLY thing holding its parent open
+
+`parent-trdd: 6SPXOV0P` has been AI-review APPROVED with all 7 acceptance boxes green. A parent
+cannot reach `complete` until every EHT is terminal, and this is its EHT — so nothing about
+6SPXOV0P is outstanding except this card sitting in `backburner`.
+
+**"Why LOW" below is still correct on its own merits and is NOT retracted** — the failure mode is
+a volume kept, not data lost. What changed is not this card's severity but its COST OF DELAY: it
+now also holds a finished card open. That is a scheduling fact, not a severity one, and `priority:
+4` is left alone deliberately rather than inflated to manufacture urgency the defect does not have.
 
 ## Why LOW
 

@@ -15,8 +15,16 @@ relevant-rules: []
 
 ## ⏵ AI-REVIEW VERDICT 2026-09-05 — APPROVE, and it still cannot reach `complete`.
 
-All 7 ticked boxes verified first-hand by the reviewing agent (code read, tests run 7/7, clippy
+All 7 ticked boxes verified first-hand **by the reviewing agent** (code read, tests run 7/7, clippy
 clean, commits checked). Report: `reports/ai-review/20260905_073032+0200-6SPXOV0P.md`.
+
+**Provenance, stated because the neighbouring cards' blocks differ**: the seven boxes rest on that
+agent's report and were NOT re-checked by the orchestrator. The ONE thing re-checked here is the
+EHT's column — a governance fact, adjacent to all seven boxes and about none of them. Compare
+TRDD-5PUD8RKE, whose block carries a per-box table naming who verified each; this card has no such
+table and does not inherit that standard. The agent's citations have held across five cards, and
+this card cannot move on the verdict anyway — but that is a reason to accept the report, not a
+reason to describe it as something it is not.
 
 **The column stays where it is, and not for a review reason.** `eht: [7NHUU6GK]`, and that EHT is
 at `column: backburner` — verified here, not taken from the report. A parent cannot reach
