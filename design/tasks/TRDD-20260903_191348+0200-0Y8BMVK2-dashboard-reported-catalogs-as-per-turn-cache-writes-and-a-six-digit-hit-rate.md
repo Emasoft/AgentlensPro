@@ -3,7 +3,7 @@ trdd-id: 0Y8BMVK2
 title: The dashboard reported skill and agent catalogs as per-turn cache writes and a six-digit hit rate
 column: ai_review
 created: 2026-09-03T19:13:48+0200
-updated: 2026-09-05T18:31:49+0200
+updated: 2026-09-05T18:33:35+0200
 current-owner: main-session
 task-type: bugfix
 severity: HIGH
@@ -37,9 +37,12 @@ live in `Agents.tsx` and `Traces.tsx`, webview code with NO automated test in th
 they are covered only by the `media/tsconfig.json` type-check leg (its `include` is `src/**/*.tsx`,
 so `tabs/` is in scope) and the esbuild build — shape, not behaviour — and behaviourally only by the
 09-03 manual inspection of the served bundle. The AI review must read "gates green" with that gap in
-view. The served `dashboard.js` (`curl localhost:3000/dashboard.js`) already carries the `:996`
-label, so the live dashboard has been the post-fix bundle since the 09-03 restart; no
-`server restart` here — a deploy step, not a gate. The rebuild also rewrote `standalone/cli.js`
+view. The served `dashboard.js` (`curl localhost:3000/dashboard.js` at 18:33) is byte-identical to
+the 18:29 rebuild on disk (`cmp` → identical, 762,950 bytes both), so alcore serves the file from
+disk per request and the live dashboard IS the HEAD build without a restart; when it first became
+post-fix is not established by this (an earlier claim of "since the 09-03 restart" rested on the old
+STATE's own word and is withdrawn). No `server restart` here — a deploy step, not a gate, and
+unnecessary for the TS bundle. The rebuild also rewrote `standalone/cli.js`
 (the hook entrypoint): `git diff --stat 52155adf HEAD -- src standalone/*.ts media/src` is empty, so
 nothing the hooks execute changed. Of the two fold-out items: "PostToolUse:Agent
 advisory size" had no card until TRDD-V8W9A8FZ (backburner, `fb20872b` — the remark carries no spec
