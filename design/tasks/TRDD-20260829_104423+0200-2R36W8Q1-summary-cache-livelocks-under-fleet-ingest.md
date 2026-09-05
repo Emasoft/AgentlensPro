@@ -5,7 +5,7 @@ column: blocked
 pre-block-column: ai_review
 unblock-when: [trdd:UTFVMVT8 terminal]
 created: 2026-08-29T10:44:23+0200
-updated: 2026-09-05T14:33:32+0200
+updated: 2026-09-05T14:35:52+0200
 current-owner: main-session
 task-type: bugfix
 scope: project
@@ -18,7 +18,7 @@ blocked-by: [UTFVMVT8]
 
 # Summary cache livelocks under fleet ingest
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-05T14:33:32+0200
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-05T14:35:52+0200
 
 **`blocked` (pre-block `ai_review`) — the 14:21 AI review REJECTED on process, not code:** `blocked-by:
 [UTFVMVT8]` was set deliberately in `061d2ed2` and never cleared, and UTFVMVT8 is still `testing` with
@@ -29,11 +29,14 @@ field says; `unblock-when: [trdd:UTFVMVT8 terminal]` matches the drift detector'
 UTFVMVT8 reaches a terminal column; the restore code (`_restore_column_text`, the `.sub` calls after
 the `column:` substitution) rewrites `blocked-by: []` and deletes the `pre-block-column:` line, so
 this card cannot re-block itself (the detector's other path, "satisfied but `blocked-by` still names a
-live blocker", cannot fire here because the predicate and the blocker are the same id). The board the
-predicate reads is built over every design folder, archived included, so UTFVMVT8 being archived on
-completion does not strand it. The dependency IS real: `061d2ed2`'s body says "2R36W8Q1's prose
-already waited on UTFVMVT8's young-session probe", and that probe is exactly UTFVMVT8's one still-open
-box — so hold here, do not clear the field. The verdict downgraded boxes
+live blocker" — seen only in its docstring lines 301–320 — should not fire here because the predicate
+and the blocker are the same id). The board the predicate reads is built over every design folder,
+archived included, so UTFVMVT8 being archived on completion does not strand it. The field was
+deliberate and its blocker is still open: `061d2ed2`'s body says "2R36W8Q1's prose already waited on
+UTFVMVT8's young-session probe", and that probe is exactly UTFVMVT8's one still-open box. That
+establishes intent to wait, not that this card's own gate (server-stats p99 under fleet ingest) is
+technically coupled to the probe — so hold here on the author's intent; a re-submitter who can show
+the two gates are independent may clear the field with that one-line reason. The verdict downgraded boxes
 2, 3 and 5 to INFERRED, and I confirmed the basis myself: the three 09-05 soak artifacts
 (`reports_dev/2r36-soak{,-log,-sorted}.txt`) contain neither the string `dropped` nor `rss`
 (case-insensitive), so those numbers
