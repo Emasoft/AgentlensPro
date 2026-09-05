@@ -3,7 +3,7 @@ trdd-id: B7DSTJLS
 title: cacheBreakTimeline tests pass in CI and fail on a developer machine, and fail differently depending on run order
 column: dev
 created: 2026-08-29T16:50:19+0200
-updated: 2026-09-05T20:55:56+0200
+updated: 2026-09-05T20:58:36+0200
 current-owner: main-session
 task-type: bugfix
 scope: project
@@ -28,17 +28,24 @@ history.
 - The subset the 08-29 block recorded as **6 failing** (`--grep "previous_message_id chain\|subagents
   transcript"`) is now **7 passing** in 54 ms under load-avg 11–31, with every `fs` open traced
   through a preload (`scripts_dev/trace-fs-opens.cjs`): 171 opens, 147 inside mocha's `os.tmpdir()`
-  scratch tree, **0 under `~/.claude/projects` and 0 under `~/.agentlens`**. Capture
+  scratch tree, **0 under `~/.claude/projects` and 0 under `~/.agentlens`** — counting
+  `readdir`/`opendir`/`open`/`stat` calls, which is what the preload patches; a `readFileSync` of a
+  hardcoded live path would be invisible to it, but the defect class here is a directory WALK, and a
+  walk cannot read an entry without the visible listing that yields its path. Capture
   `reports_dev/b7ds-mocha-one-case.txt`, trace `reports_dev/b7ds-fs-trace.tsv`.
 - Call-site census, read by me: 14 `buildCacheBreakTimeline(`/`buildCauseCostPeakReport(` calls in
   `src/test/cacheBreakTimeline.test.ts`; 12 pass BOTH `storeDir: noStore` AND `hookEventsDir:
-  noStore` (12 = 12 = 12 by grep); the remaining two, `:709` and `:798`, are the DELIBERATE
-  real-corpus tests — `scanCap: 300`, `derivedTimeoutMs(defaultBodiesDir(), 120_000)` /
-  `loadScaledTimeout(240_000)`, `skipIfUnmeasurable` — bounded by cap, not by scratch dir. The one
-  `storeDir` mention without `noStore` is the `:487` comment.
+  noStore` — paired PER SITE (each call's 4-line argument object grepped for both literals: 12 rows
+  `Y Y`, 2 rows `N N`), not inferred from two matching counts; the two `N N` sites, `:709` and
+  `:798`, are the DELIBERATE real-corpus tests — `scanCap: 300` caps the PARSE cost, while the
+  LISTING cost is the whole spool (`readdirSync`, unbounded by `scanCap`, as the `:700-707` comment
+  says) and is covered by a measured timeout (`derivedTimeoutMs(defaultBodiesDir(), 120_000)` /
+  `loadScaledTimeout(240_000)`) plus `skipIfUnmeasurable`. The one `storeDir` mention without
+  `noStore` is the `:487` comment.
 
-**Acceptance status:** box 1 (bounded by construction) — holds for the 12 scratch sites by census,
-the two real-corpus sites are bounded by `scanCap`, and the 09-01 block's 67/0 whole-file run plus
+**Acceptance status:** box 1 (bounded by construction) — holds for the 12 scratch sites by the
+per-site census, the two real-corpus sites are parse-capped and timeout-covered by design, and the
+09-01 block's 67/0 whole-file run plus
 today's 0-live-opens trace are the evidence; box 2 (whole file passes on THIS machine) — the 09-01
 run says 67/0 but was not re-run today; boxes 3 (3-vs-6 explained), 4 (mutation), 5 (comment
 updated) — OPEN. **NEXT ACTION:** when the detached MVR6PXC0 cargo run ends (it owns the CPU), run
