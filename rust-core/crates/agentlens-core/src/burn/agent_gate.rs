@@ -366,17 +366,26 @@ warm-up this rule is protecting — denying it would cause the cold cache it pre
             model_clause,
             thrash_source(t)
         );
-        // A FORK re-enters the thrashing caller's prefix and re-pays it per launch — deny. A
-        // FRESH agent boots its OWN prefix and multiplies nothing (TRDD-THRGX41P) — warn. The
-        // keep-warm pinger routes through deny() so its USER-ordered advisory wording holds.
-        if fork || keep_warm {
-            return deny(
-                "THRASH_ACTIVE",
-                format!("{thrash_base} A fork re-enters that prefix and multiplies the re-billing. Fix the source first. Override: AGENTLENS_GATE=off."),
-            );
+        // TRDD-DIZ289UQ: the API's own reasons for the misses — the cause, not a guess.
+        let reasons = t
+            .get("missReasons")
+            .and_then(Value::as_object)
+            .filter(|m| !m.is_empty())
+            .map(|m| {
+                let parts: Vec<String> = m.iter().map(|(k, v)| format!("{k} ×{}", fmt_js_num(v.as_f64().unwrap_or(0.0)))).collect();
+                format!(" API cache_miss_reason: {}.", parts.join(", "))
+            })
+            .unwrap_or_default();
+        // Forks are NOT denied (TRDD-DIZ289UQ): measured 2026-09-05, a fork's first request reads
+        // the caller's LAST-WRITTEN entry warm (cache_read 380k–785k, cache_creation 1–3k), so it
+        // multiplies nothing — the thrash is the caller's own turns, and the fork is no more its
+        // cause than the next user prompt. Only the keep-warm pinger keeps deny(), for its
+        // USER-ordered advisory wording.
+        if keep_warm {
+            return deny("THRASH_ACTIVE", format!("{thrash_base}{reasons} Fix the source first. Override: AGENTLENS_GATE=off."));
         }
         return json!({ "decision": "warn", "code": "THRASH_ACTIVE", "reason": format!(
-            "[agentlens] {thrash_base} This fresh launch pays only its own boot prefix (forks stay denied) — diagnose the source before widening fan-outs.") });
+            "[agentlens] {thrash_base}{reasons} This launch is not the cause — a fork reads the caller's last-written entry, a fresh agent boots its own prefix — but the caller's next turns keep re-writing until the source is fixed.") });
     }
     let starts60 = f(state, "startsLast60s").unwrap_or(0.0);
     if starts60 >= threshold(state, "runaway60s") {
@@ -435,7 +444,7 @@ warm-up this rule is protecting — denying it would cause the cold cache it pre
     }
     if fork && fat && cold {
         return json!({ "decision": "warn", "code": "COLD_FORK", "reason": format!(
-            "[agentlens] cache cold (idle {}min > the parent's {}): this fork re-pays ~{parent_k} tokens of parent prefix at the write rate once. Let it warm the cache before launching further forks.",
+            "[agentlens] cache cold (idle {}min > the parent's {}): the parent's ~{parent_k}-token prefix is due one write at the write rate, and whichever request comes first pays it — this fork, or the parent's next turn; a single fork adds nothing (TRDD-DIZ289UQ). Only PARALLEL forks in one message multiply it: let this one warm the cache before launching more.",
             fmt_js_num(idle_min.unwrap_or(f64::NAN)), ttl_phrase_v(ttl)) });
     }
     if fork && fat {

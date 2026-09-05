@@ -69,6 +69,39 @@ struct ResponseEntry {
     cc: f64,
     cr: f64,
     id: Option<String>,
+    /// TRDD-DIZ289UQ: `usage.cache_creation.ephemeral_1h_input_tokens`; `None` when the response
+    /// carries no `cache_creation` object (older Claude Code builds — the legacy count-only rule
+    /// applies there).
+    tier_1h: Option<f64>,
+    /// `diagnostics.cache_miss_reason.type` — the API's own label for the miss.
+    miss_reason: Option<String>,
+}
+
+/// TRDD-DIZ289UQ — bodiesActivity.ts `extractMissDiagnostics`: `(tier1h, missReason)`. What tells
+/// a subagent's BOOT write apart from a caller re-writing its own prefix — measured over 205 big
+/// writes in the store (2026-09-05): every main-conversation rewrite sat on the 1h tier, every
+/// worker boot on the 5m tier with NO reason. The reason alone is not enough: 16 of 21 reason-less
+/// opus writes were 1h-tier main-turn rewrites the API did not label (review-fork finding).
+/// ponytail: on a usage-credits account main turns are 5m too — thread the gate's ttl_context in
+/// if that case is ever measured.
+pub fn extract_miss_diagnostics(j: &Value) -> (Option<f64>, Option<String>) {
+    let Some(cand) = [Some(j), j.get("response"), j.get("body")]
+        .into_iter()
+        .flatten()
+        .find(|x| x.get("usage").is_some_and(Value::is_object))
+    else {
+        return (None, None);
+    };
+    // A `cache_creation` object IS tiered accounting: on all 205 big writes in the store the two
+    // tier keys summed to the write (never both zero), so an absent 1h key under a present object
+    // is a real 0, not "unknown". Only a missing object is unknown.
+    // An object with NEITHER tier key is unknown, not "0 on the 1h tier": treating it as tiered
+    // would turn every reason-less big write into a boot and disarm the detector on that build.
+    let tier_1h = cand
+        .pointer("/usage/cache_creation")
+        .filter(|c| c.is_object() && (c.get("ephemeral_5m_input_tokens").is_some() || c.get("ephemeral_1h_input_tokens").is_some()))
+        .map(|c| c.get("ephemeral_1h_input_tokens").and_then(Value::as_f64).filter(|v| v.is_finite()).unwrap_or(0.0));
+    (tier_1h, cand.pointer("/diagnostics/cache_miss_reason/type").and_then(Value::as_str).map(str::to_owned))
 }
 
 /// extractRequestAttribution — the bounded 6KB read on a fat request body: `"model"` in the
@@ -250,8 +283,11 @@ impl BodiesActivityTracker {
                 continue;
             }
             // Truncated mid-write or not JSON — skip.
-            if let Some((model, cc, cr, id)) = std::fs::read_to_string(&path).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()).as_ref().and_then(extract_response_usage) {
-                self.responses.push(ResponseEntry { t: mtime, model, cc, cr, id });
+            if let Some(body) = std::fs::read_to_string(&path).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()) {
+                if let Some((model, cc, cr, id)) = extract_response_usage(&body) {
+                    let (tier_1h, miss_reason) = extract_miss_diagnostics(&body);
+                    self.responses.push(ResponseEntry { t: mtime, model, cc, cr, id, tier_1h, miss_reason });
+                }
             }
         }
         self.seeded = true;
@@ -321,7 +357,7 @@ impl BodiesActivityTracker {
         let huge_count = huge90.len() as f64;
         let huge_bytes: f64 = huge90.iter().map(|e| e.bytes as f64).sum();
 
-        let misses: Vec<&ResponseEntry> = self
+        let all_misses: Vec<&ResponseEntry> = self
             .responses
             .iter()
             .filter(|e| {
@@ -332,6 +368,19 @@ impl BodiesActivityTracker {
                 e.cc > self.opts.thrash_min_cc && denom > 0.0 && e.cr / denom < self.opts.thrash_max_read_share
             })
             .collect();
+        // TRDD-DIZ289UQ: ONE rule — a big 5m-tier write is a SUBAGENT's own prefix (its boot, or
+        // its own turn-2 rewrite: the `cc_prev_req` prefix break the API labels `system_changed`),
+        // never the caller's; on a subscription the caller's turns are 1h-tier (see
+        // `extract_miss_diagnostics` for the measurement). 2026-09-04: five sonnet workers booting
+        // under their parent's session id tripped "the same session re-wrote its prefix 5×" and
+        // the gate blamed the launches; the real thrash that day was opus 1h-tier main-turn writes
+        // the API labelled `previous_message_not_found`. A 5m write leaves `misses` entirely, so
+        // `count`, `topSource` and `missReasons` all describe the same population; a 1h-tier or
+        // legacy (untiered) write always counts.
+        let is_subagent_write = |e: &ResponseEntry| e.tier_1h == Some(0.0);
+        let (subagent_writes, misses): (Vec<&ResponseEntry>, Vec<&ResponseEntry>) =
+            all_misses.into_iter().partition(|e| is_subagent_write(e));
+        let subagent_cc: f64 = subagent_writes.iter().map(|e| e.cc).sum();
         let mut by_model: IndexMap<&str, f64> = IndexMap::new();
         let mut rebilled = 0.0;
         for m in &misses {
@@ -433,6 +482,25 @@ impl BodiesActivityTracker {
         thrash.insert("unattributed".into(), Value::Object(un));
         thrash.insert("coldStartSessions".into(), num(cold_start_sessions));
         thrash.insert("coldStartRebilledTokens".into(), num(cold_start_rebilled));
+        let mut subagent_obj = Map::new();
+        subagent_obj.insert("count".into(), num(subagent_writes.len() as f64));
+        subagent_obj.insert("rebilledTokens".into(), num(subagent_cc));
+        thrash.insert("subagentWrites".into(), Value::Object(subagent_obj));
+        // The API's own reasons for the top source's misses — what the warning names as the cause.
+        let mut reasons: IndexMap<String, f64> = IndexMap::new();
+        for m in &misses {
+            // A legacy body (no tier data at all) is "no data", not a cause — it counts toward
+            // `active` but says nothing here; the clause is prefixed "API cache_miss_reason".
+            if m.tier_1h.is_none() {
+                continue;
+            }
+            if top_source.as_ref().is_none_or(|t| self.session_of(m) == Some(t.0.as_str())) {
+                // A 1h-tier rewrite the API did not label still counts — say so, rather than
+                // print no reason at all in exactly the case the histogram exists for.
+                *reasons.entry(m.miss_reason.clone().unwrap_or_else(|| "unlabelled".to_owned())).or_insert(0.0) += 1.0;
+            }
+        }
+        thrash.insert("missReasons".into(), Value::Object(reasons.into_iter().map(|(k, v)| (k, num(v))).collect()));
 
         let mut premium = Map::new();
         premium.insert("share".into(), num(if recent.is_empty() { 0.0 } else { premium_count / recent.len() as f64 }));

@@ -68,6 +68,14 @@ export interface ThrashReport {
    *  write. Expected fan-out cost, advisory-only, never a reason to deny unrelated actions. */
   coldStartSessions: number
   coldStartRebilledTokens: number
+  /** TRDD-DIZ289UQ: big writes on the 5m TTL tier — a SUBAGENT's own prefix (its boot, or its
+   *  own turn-2 rewrite), never the caller's. They share the parent's session id, so before this
+   *  they read as the parent "re-writing its prefix N times" and the gate blamed the launches.
+   *  Out of `misses` entirely: not in `count`, `topSource`, or `missReasons`. Never deny-driving. */
+  subagentWrites: { count: number; rebilledTokens: number }
+  /** The API's OWN reasons for the top source's misses (`previous_message_not_found`,
+   *  `messages_changed`, `system_changed`, …) — the cause the warning names, instead of a guess. */
+  missReasons: Record<string, number>
 }
 
 export interface BodiesActivityReport {
@@ -100,7 +108,44 @@ const SEED_LOOKBACK_MS = 15 * 60_000
 const PREMIUM_RE = /opus|fable|mythos/i
 
 interface LargeRequestEntry { t: number; bytes: number; huge: boolean; sessionId: string | null; model: string | null }
-interface ResponseEntry { t: number; model: string | null; cc: number; cr: number; id: string | null }
+interface ResponseEntry {
+  t: number; model: string | null; cc: number; cr: number; id: string | null
+  // TRDD-DIZ289UQ: `tier1h` = `usage.cache_creation.ephemeral_1h_input_tokens`, null when the
+  // response carries no `cache_creation` object (older Claude Code builds; the legacy count-only
+  // rule applies there). `missReason` = `diagnostics.cache_miss_reason.type`, the API's own label.
+  tier1h: number | null; missReason: string | null
+}
+
+/** TRDD-DIZ289UQ: what tells a subagent's BOOT write apart from a caller re-writing its own
+ *  prefix — measured over 205 big writes in the store (2026-09-05): every main-conversation
+ *  rewrite sat on the 1h tier (subscription main turns), every worker boot on the 5m tier with
+ *  NO `cache_miss_reason` (nothing existed to miss). The reason ALONE is not enough: 16 of 21
+ *  reason-less opus writes were 1h-tier main-turn rewrites the API simply did not label, so a
+ *  "no reason ⇒ boot" rule would have disarmed the detector on them (review-fork finding).
+ *  ponytail: on a usage-credits account the main conversation is 5m too and a reason-less main
+ *  rewrite reads as a boot here; the gate's ttl_context knows the regime — thread it in if that
+ *  case is ever measured. */
+export function extractMissDiagnostics(j: unknown): { tier1h: number | null; missReason: string | null } {
+  if (!j || typeof j !== 'object') return { tier1h: null, missReason: null }
+  const o = j as Record<string, unknown>
+  const cand = [o, o.response, o.body].find(
+    (x): x is Record<string, unknown> => !!x && typeof x === 'object' && typeof (x as Record<string, unknown>).usage === 'object',
+  )
+  const cc = (cand?.usage as Record<string, unknown> | undefined)?.cache_creation as Record<string, unknown> | undefined
+  // An object with NEITHER tier key is unknown, not "0 on the 1h tier": treating it as tiered
+  // would turn every reason-less big write into a boot and disarm the detector on that build.
+  const tiered = !!cc && typeof cc === 'object' && ('ephemeral_5m_input_tokens' in cc || 'ephemeral_1h_input_tokens' in cc)
+  const t1h = tiered ? cc.ephemeral_1h_input_tokens : undefined
+  const reason = (cand?.diagnostics as Record<string, unknown> | undefined)?.cache_miss_reason as Record<string, unknown> | undefined
+  const type = reason && typeof reason === 'object' ? reason.type : undefined
+  return {
+    // A `cache_creation` object IS tiered accounting: on all 205 big writes in the store the two
+    // tier keys summed to the write (never both zero), so an absent 1h key under a present object
+    // is a real 0, not "unknown". Only a missing object is unknown.
+    tier1h: !tiered ? null : typeof t1h === 'number' && Number.isFinite(t1h) ? t1h : 0,
+    missReason: typeof type === 'string' ? type : null,
+  }
+}
 
 /**
  * Bounded 6KB attribution read on a fat request body — verified layout on real bodies:
@@ -218,8 +263,9 @@ export class BodiesActivityTracker {
       }
       if (st.size > RESPONSE_PARSE_CAP) continue
       try {
-        const u = extractResponseUsage(JSON.parse(fs.readFileSync(path.join(this.dir, name), 'utf-8')))
-        if (u) this.responses.push({ t: st.mtimeMs, model: u.model, cc: u.cc, cr: u.cr, id: u.id })
+        const body: unknown = JSON.parse(fs.readFileSync(path.join(this.dir, name), 'utf-8'))
+        const u = extractResponseUsage(body)
+        if (u) this.responses.push({ t: st.mtimeMs, model: u.model, cc: u.cc, cr: u.cr, id: u.id, ...extractMissDiagnostics(body) })
       } catch {
         /* truncated mid-write or not JSON — skip */
       }
@@ -286,11 +332,25 @@ export class BodiesActivityTracker {
     let hugeBytes = 0
     for (const e of huge90) { hugeCount++; hugeBytes += e.bytes }
 
-    const misses = this.responses.filter(e => {
+    const allMisses = this.responses.filter(e => {
       if (now - e.t > this.opts.thrashWindowMs) return false
       const denom = e.cc + e.cr
       return e.cc > this.opts.thrashMinCc && denom > 0 && e.cr / denom < this.opts.thrashMaxReadShare
     })
+    // TRDD-DIZ289UQ: ONE rule — a big 5m-tier write is a SUBAGENT's own prefix (its boot, or its
+    // own turn-2 rewrite: the `cc_prev_req` prefix break the API labels `system_changed`), never
+    // the caller's; on a subscription the caller's turns are 1h-tier (see extractMissDiagnostics
+    // for the measurement). Measured 2026-09-04 in the field: five sonnet workers booting under
+    // their parent's session id tripped "the same session re-wrote its prefix 5×" and the gate
+    // blamed the launches; the real thrash that day was opus 1h-tier main-turn writes the API
+    // labelled `previous_message_not_found`. A 5m write leaves `misses` entirely, so `count`,
+    // `topSource` and `missReasons` all describe the same population; a 1h-tier or legacy
+    // (untiered) write always counts.
+    const isSubagentWrite = (e: ResponseEntry): boolean => e.tier1h === 0
+    const misses = allMisses.filter(e => !isSubagentWrite(e))
+    let subagentCount = 0
+    let subagentCc = 0
+    for (const e of allMisses) { if (isSubagentWrite(e)) { subagentCount++; subagentCc += e.cc } }
     const byModel = new Map<string, number>()
     let rebilled = 0
     for (const m of misses) {
@@ -366,6 +426,22 @@ export class BodiesActivityTracker {
         unattributed: { count: unattributedCount, rebilledTokens: unattributedCc },
         coldStartSessions,
         coldStartRebilledTokens: coldStartRebilled,
+        subagentWrites: { count: subagentCount, rebilledTokens: subagentCc },
+        missReasons: (() => {
+          const r: Record<string, number> = {}
+          for (const m of misses) {
+            // A legacy body (no tier data at all) is "no data", not a cause — it counts toward
+            // `active` but says nothing here; the clause is prefixed "API cache_miss_reason".
+            if (m.tier1h === null) continue
+            if (topSource === null || this.sessionOf(m) === topSource.session) {
+              // A 1h-tier rewrite the API did not label still counts — say so, rather than print
+              // no reason at all in exactly the case the histogram exists for.
+              const key = m.missReason ?? 'unlabelled'
+              r[key] = (r[key] ?? 0) + 1
+            }
+          }
+          return r
+        })(),
       },
       premium: {
         share: recent.length > 0 ? premiumCount / recent.length : 0,

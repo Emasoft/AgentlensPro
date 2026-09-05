@@ -1,0 +1,1 @@
+{"id":"msg_h","model":"claude-sonnet-5","usage":{"cache_creation_input_tokens":386848,"cache_read_input_tokens":12000,"cache_creation":{"ephemeral_5m_input_tokens":386848,"ephemeral_1h_input_tokens":0}},"diagnostics":{"cache_miss_reason":{"type":"system_changed","cache_missed_input_tokens":386848}}}

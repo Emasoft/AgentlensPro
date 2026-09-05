@@ -51,6 +51,8 @@ const thrashing: ThrashReport = {
   topSource: { session: '249c4216-4db4-4b64-9a10-b994b9aa0001', count: 4, rebilledTokens: 1_200_000 },
   unattributed: { count: 0, rebilledTokens: 0 },
   coldStartSessions: 0, coldStartRebilledTokens: 0,
+  subagentWrites: { count: 0, rebilledTokens: 0 },
+  missReasons: {},
 }
 
 suite('agentGate — evaluateAgentGate (TRDD-GOD0108C)', () => {
@@ -59,11 +61,17 @@ suite('agentGate — evaluateAgentGate (TRDD-GOD0108C)', () => {
     assert.deepStrictEqual(d, { decision: 'allow', code: null, reason: null })
   })
 
-  test('active cache-thrash DENIES a fork — it re-enters the thrashing prefix per launch', () => {
+  test('active cache-thrash only WARNS a fork — measured a warm read of the caller entry, it multiplies nothing (TRDD-DIZ289UQ)', () => {
+    // 2026-09-05: a fork's first request read 380k–785k cached tokens and wrote 1–3k; the thrash
+    // is the caller's own turns. The old deny blamed the fork and blocked the per-turn review.
     const d = evaluateAgentGate({ subagent_type: 'fork' }, state({ thrash: thrashing }))
-    assert.strictEqual(d.decision, 'deny')
+    assert.strictEqual(d.decision, 'warn')
     assert.strictEqual(d.code, 'THRASH_ACTIVE')
     assert.ok(d.reason?.includes('1200k'), d.reason ?? '')
+    assert.ok(d.reason?.includes('not the cause'), d.reason ?? '')
+    // The API's own reasons are the cause the warning names.
+    const labelled = evaluateAgentGate({ subagent_type: 'fork' }, state({ thrash: { ...thrashing, missReasons: { previous_message_not_found: 5 } } }))
+    assert.ok(labelled.reason?.includes('cache_miss_reason: previous_message_not_found ×5'), labelled.reason ?? '')
     // A suspect carries no cwd, so it can never be shown to be THIS caller's project — naming it
     // would put another project's session id in an agent's context for no action it can take.
     assert.ok(!d.reason?.includes('249c4216'), `suspect session must NOT be named: ${d.reason ?? ''}`)
@@ -93,7 +101,7 @@ suite('agentGate — evaluateAgentGate (TRDD-GOD0108C)', () => {
   test('unattributable thrash says so honestly and points at investigate_burn', () => {
     const noSuspects: ThrashReport = { ...thrashing, suspects: [] }
     const d = evaluateAgentGate({ subagent_type: 'fork' }, state({ thrash: noSuspects }))
-    assert.strictEqual(d.decision, 'deny')
+    assert.strictEqual(d.decision, 'warn') // TRDD-DIZ289UQ: a fork is never denied for thrash
     assert.ok(d.reason?.includes('not attributable'), d.reason ?? '')
     assert.ok(d.reason?.includes('investigate_burn'), d.reason ?? '')
   })
@@ -222,9 +230,11 @@ suite('agentGate — evaluateAgentGate (TRDD-GOD0108C)', () => {
   })
 
   test('mode=warn downgrades every deny to a warning and says so', () => {
-    const d = evaluateAgentGate({ subagent_type: 'fork' }, state({ mode: 'warn', thrash: thrashing }))
+    // A fork under thrash is a plain warn since TRDD-DIZ289UQ, so it can no longer stand in for
+    // "a deny"; the runaway fan-out rule still denies and exercises the downgrade.
+    const d = evaluateAgentGate({}, state({ mode: 'warn', startsLast60s: 8, startsLast2min: 8, spawners: spawnersIn(8) }))
     assert.strictEqual(d.decision, 'warn')
-    assert.strictEqual(d.code, 'THRASH_ACTIVE')
+    assert.strictEqual(d.code, 'RUNAWAY_FANOUT')
     assert.ok(d.reason?.startsWith('[deny downgraded'), d.reason ?? '')
   })
 
@@ -498,6 +508,8 @@ suite('agentGate — buildAdvisory (PostToolUse in-band warning)', () => {
       suspects: [], topSource: { session: 's1', count: 1, rebilledTokens: 120_000 },
       unattributed: { count: 0, rebilledTokens: 0 },
       coldStartSessions: 4, coldStartRebilledTokens: 463_000,
+      subagentWrites: { count: 0, rebilledTokens: 0 },
+      missReasons: {},
     }
     assert.strictEqual(buildAdvisory(state({ thrash: coldStarts })), null)
     // Precedence unchanged: an ACTIVE thrash is a real anomaly the caller can act on, and still speaks.

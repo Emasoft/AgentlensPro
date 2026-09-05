@@ -308,19 +308,23 @@ export function evaluateAgentGate(
       `${Math.round(state.thrash.windowMs / 60_000)}min re-WROTE ~${k(state.thrash.rebilledTokens)} tokens of prefix ` +
       `instead of reading cache${state.thrash.model ? ` (model ${state.thrash.model})` : ''}, i.e. something mutates ` +
       `the context prefix on every call so the cache never hits. ${thrashSource(state.thrash)}`
-    // A FORK re-enters the thrashing caller's prefix and re-pays it per launch — deny. A FRESH
-    // agent boots its OWN prefix and multiplies nothing: the blanket deny blocked the very
-    // advisor/diagnostic launches that could fix the source, while stopping none of the thrash
-    // (TRDD-THRGX41P) — warn instead. The keep-warm pinger routes through deny() so its
-    // USER-ordered advisory wording is preserved.
-    if (fork || keepWarm) {
-      return deny('THRASH_ACTIVE',
-        `${thrashBase} A fork re-enters that prefix and multiplies the re-billing. Fix the source first. Override: AGENTLENS_GATE=off.`)
+    // TRDD-DIZ289UQ: the API's own reasons for the misses — the cause, not a guess.
+    const reasonEntries = Object.entries(state.thrash.missReasons ?? {})
+    const reasons = reasonEntries.length > 0
+      ? ` API cache_miss_reason: ${reasonEntries.map(([r, n]) => `${r} ×${n}`).join(', ')}.`
+      : ''
+    // Forks are NOT denied (TRDD-DIZ289UQ): measured 2026-09-05, a fork's first request reads the
+    // caller's LAST-WRITTEN entry warm (cache_read 380k–785k, cache_creation 1–3k), so it
+    // multiplies nothing — the thrash is the caller's own turns, and the fork is no more its cause
+    // than the next user prompt. A FRESH agent boots its own prefix (TRDD-THRGX41P). Only the
+    // keep-warm pinger keeps deny(), for its USER-ordered advisory wording.
+    if (keepWarm) {
+      return deny('THRASH_ACTIVE', `${thrashBase}${reasons} Fix the source first. Override: AGENTLENS_GATE=off.`)
     }
     return {
       decision: 'warn', code: 'THRASH_ACTIVE',
-      reason: `[agentlens] ${thrashBase} This fresh launch pays only its own boot prefix (forks stay denied) — ` +
-        `diagnose the source before widening fan-outs.`,
+      reason: `[agentlens] ${thrashBase}${reasons} This launch is not the cause — a fork reads the caller's ` +
+        `last-written entry, a fresh agent boots its own prefix — but the caller's next turns keep re-writing until the source is fixed.`,
     }
   }
   if (state.startsLast60s >= th.runaway60s) {
@@ -370,9 +374,10 @@ export function evaluateAgentGate(
   if (fork && fat && cold) {
     return {
       decision: 'warn', code: 'COLD_FORK',
-      reason: `[agentlens] cache cold (idle ${idleMin}min > the parent's ${ttlPhrase(ttl)}): this fork re-pays ` +
-        `~${parentK} tokens of parent prefix at the write rate once. Let it warm the cache before launching ` +
-        `further forks.`,
+      reason: `[agentlens] cache cold (idle ${idleMin}min > the parent's ${ttlPhrase(ttl)}): the parent's ` +
+        `~${parentK}-token prefix is due one write at the write rate, and whichever request comes first pays it — ` +
+        `this fork, or the parent's next turn; a single fork adds nothing (TRDD-DIZ289UQ). Only PARALLEL forks in ` +
+        `one message multiply it: let this one warm the cache before launching more.`,
     }
   }
   if (fork && fat) {

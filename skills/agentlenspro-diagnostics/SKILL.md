@@ -177,7 +177,7 @@ Monitor(command: "agentlenspro budget --minutes 90 --watch 120 --with-risks",
 | `[budget] ABORT — … — who: proj (sess, rate, share)` | the window will run out before the batch finishes, **and the line names the workdirs draining it** | **stop launching, kill the batch.** The command has already exited 1. If the top culprit is NOT your project, the drain is someone else's — killing your batch may not be the fix |
 | `[budget] TIGHT — … — who: …` | it fits, but under the safety margin | stop *adding* work; let what is running finish. Check whether the named culprit is yours |
 | `[burn-guard] FANOUT_BURST` / `RUNAWAY_FANOUT` | too many sub-agents launched too fast | pause launching; let the wave settle |
-| `[burn-guard] CACHE_THRASH` | the prefix is being re-billed every turn | stop launching NOW and run `investigate_burn --windowHours 1` |
+| `[burn-guard] CACHE_THRASH` | the CALLER's prefix is being re-billed every turn | fix the source first (`investigate_burn --windowHours 1`); launches are not the cause, but every new agent rides a prefix that is about to break again — hold them until it is fixed |
 | `[burn-guard] COLD_RESUME_RISK` | a rate-limit stall just ended | warm with ONE agent before resuming the fan-out |
 | nothing for a long time | normal — it is silent until something changes | no action |
 
@@ -607,7 +607,7 @@ the same ground without the tool.
 | `COMPACTION_REWRITE` | PreCompact ≤5min ago | The next turn rewrites the full prefix; avoid fan-outs/model switches until warm |
 | `HUGE_REQUEST_BURST` | ≥3 requests >1MB in 90s | A fat-context fan-out is IN FLIGHT — stop adding agents, let the wave settle |
 | `BURN_SPIKE` | live burn > 250k tokens/min (5-min window) | Run `investigate_burn --windowHours 1` NOW to name the source before it drains the window. The flag reports rate, **not** time-left (it says `Window time-left unavailable` without calibrated capacity) — pair it with `get_window_eta` to learn whether the window actually survives the run |
-| `CACHE_THRASH` | ≥3 responses in 5min with big `cache_creation` and ~zero `cache_read` (exact Anthropic usage) | The prefix is being INVALIDATED every turn — a subagent/fork or a prefix-mutating tool is re-billing the whole context per call. STOP launching agents; `investigate_burn --windowHours 1` then `get_cache_break_causes` to name the mutator |
+| `CACHE_THRASH` | ≥3 responses in 5min from ONE session's own prefix (1h-tier or untiered) with big `cache_creation` and ~zero `cache_read` (exact Anthropic usage); 5m-tier writes — a subagent's boot or its own turn-2 rewrite — are reported separately as `subagentWrites` and never count | The CALLER's prefix is being INVALIDATED every turn. Not a fork on Claude Code ≥ 2.1.257 (a fork reads the caller's last-written entry warm — measured on 2.1.261: cache_read ≈ the parent's whole context, cache_creation 1–3k; older builds may cold-write it) and not the workers' boots — the row's `API cache_miss_reason` histogram names what the API saw (`previous_message_not_found`, `system_changed`, …). Blind spot: on a usage-credits account main turns are 5m-tier too, so they land in `subagentWrites` and this row sees only untiered (old-build) bodies — read `subagentWrites` there; `get_subscription_usage`'s `usageCreditsEnabled` says which regime you are on. `investigate_burn --windowHours 1` then `get_cache_break_causes` to name the mutator |
 
 Hook-event risks need `--install-hooks` (the `sources` block says which feeds are absent).
 Known burn multipliers to avoid up front: fan-outs forked from a fat session (compact first),
@@ -622,7 +622,7 @@ resident server before every launch (one curl, measured 14ms end-to-end, decisio
 and **DENIES the four measured disaster signatures**, feeding the reason back to the agent so
 it can adapt instead of just failing:
 
-1. **THRASH_ACTIVE** — cache-thrash in progress: launching more agents multiplies the re-billing.
+1. **THRASH_ACTIVE** — cache-thrash in progress in the CALLER's own turns. A warn, never a deny for a fork or a fresh agent (neither is the cause: a fork reads the caller's last-written entry, a fresh agent boots its own prefix); the message carries the API's own `cache_miss_reason` histogram. Fix the source — the caller's next turns keep re-writing until then.
 2. **RUNAWAY_FANOUT** — ≥8 launches in 60s: let the wave settle.
 3. **COLD_RESUME_FANOUT** — a rate-limit stall just ended and one agent already launched: that
    first launch IS the cache warm-up; the gate holds the rest until it lands (every fork

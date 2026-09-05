@@ -38,10 +38,43 @@ write('r2.request.json', fatBody('11111111-aaaa-bbbb-cccc-000000000001', 'claude
 write('r3.request.json', fatBody('11111111-aaaa-bbbb-cccc-000000000001', 'claude-fable-5', 'msg_c', 1_100_000), NOW - 50_000)
 write('r4.request.json', fatBody('22222222-aaaa-bbbb-cccc-000000000002', 'claude-opus-5', 'msg_d', 450_000), NOW - 60_000)
 // Responses: three big prefix re-writes with ~no cache read, all attributed to S1 via the chain.
-const resp = (id, model, cc, cr) => JSON.stringify({ id, model, usage: { cache_creation_input_tokens: cc, cache_read_input_tokens: cr } })
-write('a.response.json', resp('msg_a', 'claude-fable-5', 300000, 1000), NOW - 25_000)
+const resp = (id, model, cc, cr, extra = {}) => JSON.stringify({ id, model, usage: { cache_creation_input_tokens: cc, cache_read_input_tokens: cr, ...extra.usage }, ...extra.top })
+// TRDD-DIZ289UQ: `a` is a LABELLED 1h-tier rewrite (the API named the cause) — it must count
+// AND surface in `missReasons`. `b`/`c` carry no cache_creation object (older CC) — legacy rule.
+write('a.response.json', resp('msg_a', 'claude-fable-5', 300000, 1000, {
+  usage: { cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 300000 } },
+  top: { diagnostics: { cache_miss_reason: { type: 'previous_message_not_found', cache_missed_input_tokens: 300000 } } },
+}), NOW - 25_000)
+// TRDD-DIZ289UQ: two BOOTS chained to S1 — 5m-tier big writes with NO miss reason, exactly what
+// a fresh worker under its parent's session id looks like. They must land in
+// `thrash.subagentWrites`, not in S1's count (mutation: drop the tier check and S1 reads 6).
+write('r5.request.json', fatBody('11111111-aaaa-bbbb-cccc-000000000001', 'claude-sonnet-5', 'msg_f', 1_100_000), NOW - 42_000)
+write('r6.request.json', fatBody('11111111-aaaa-bbbb-cccc-000000000001', 'claude-sonnet-5', 'msg_g', 1_100_000), NOW - 44_000)
+write('f.response.json', resp('msg_f', 'claude-sonnet-5', 220000, 8954, {
+  usage: { cache_creation: { ephemeral_5m_input_tokens: 220000, ephemeral_1h_input_tokens: 0 } }, top: { diagnostics: {} },
+}), NOW - 41_000)
+write('g.response.json', resp('msg_g', 'claude-sonnet-5', 220000, 8954, {
+  usage: { cache_creation: { ephemeral_5m_input_tokens: 220000, ephemeral_1h_input_tokens: 0 } }, top: { diagnostics: {} },
+}), NOW - 43_000)
+// `h` is a worker's OWN turn-2 rewrite: 5m tier WITH a reason (`system_changed`, the
+// cc_prev_req prefix break), chained to S1 like everything a worker sends. Same rule as the
+// boots — a 5m write is the subagent's prefix, not the caller's — so it joins `subagentWrites`
+// (3 writes, 826,848 tokens) and is in neither `count` nor `topSource` nor `missReasons`
+// (mutation: make the rule reason-aware again and `count` reads 4, `system_changed` appears).
+write('r7.request.json', fatBody('11111111-aaaa-bbbb-cccc-000000000001', 'claude-sonnet-5', 'msg_h', 1_100_000), NOW - 47_000)
+write('h.response.json', resp('msg_h', 'claude-sonnet-5', 386848, 12000, {
+  usage: { cache_creation: { ephemeral_5m_input_tokens: 386848, ephemeral_1h_input_tokens: 0 } },
+  top: { diagnostics: { cache_miss_reason: { type: 'system_changed', cache_missed_input_tokens: 386848 } } },
+}), NOW - 46_000)
+// `b` is the PRE-TIERED wire (no cache_creation object): legacy rule — counts toward thrash,
+// names nothing in `missReasons`. Do not "fix" it to match `a`/`c`; it is the third shape.
 write('b.response.json', resp('msg_b', 'claude-fable-5', 250000, 500), NOW - 35_000)
-write('c.response.json', resp('msg_c', 'claude-fable-5', 220000, 400), NOW - 45_000)
+// `c` is an UNLABELLED 1h-tier rewrite — the API named no reason (16 of 21 reason-less opus
+// writes in the field were this shape); it counts, and surfaces as `unlabelled`. `b` stays a
+// legacy body (no cache_creation): counts, says nothing in the histogram.
+write('c.response.json', resp('msg_c', 'claude-fable-5', 220000, 400, {
+  usage: { cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 220000 } },
+}), NOW - 45_000)
 // A warm response (big read, tiny write) for the sessionWarmSince probe.
 write('d.response.json', resp('msg_d', 'claude-opus-5', 900, 200000), NOW - 20_000)
 // Junk that must be skipped: not JSON, and a non-body name.

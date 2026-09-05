@@ -1,1 +1,1 @@
-{"id":"msg_a","model":"claude-fable-5","usage":{"cache_creation_input_tokens":300000,"cache_read_input_tokens":1000}}
+{"id":"msg_a","model":"claude-fable-5","usage":{"cache_creation_input_tokens":300000,"cache_read_input_tokens":1000,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":300000}},"diagnostics":{"cache_miss_reason":{"type":"previous_message_not_found","cache_missed_input_tokens":300000}}}

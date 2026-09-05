@@ -82,6 +82,11 @@ const thrash = (over = {}) => ({
   suspects: [{ file: 'r1.request.json', bytes: 1_100_000, model: 'claude-fable-5' }],
   topSource: { session: 'sess-caller-1', count: 6, rebilledTokens: 1_800_000 },
   unattributed: { count: 0, rebilledTokens: 0 }, coldStartSessions: 0, coldStartRebilledTokens: 0,
+  // TRDD-DIZ289UQ: the API's own reasons ride into the verdict text (`… ×5`) — one labelled
+  // case so both engines' reason clause (and the U+00D7) is oracle-tested, not just unit-tested.
+  // Keys deliberately NON-alphabetical: TS renders insertion order and Rust relies on serde_json
+  // `preserve_order`; an alphabetical pair could not tell that apart from a sorted map.
+  subagentWrites: { count: 0, rebilledTokens: 0 }, missReasons: { system_changed: 2, messages_changed: 3, unlabelled: 1 },
   ...over,
 })
 const ownSpawners = [
@@ -100,7 +105,7 @@ const liveEvents = [
 // ── The case list (name → dispatch + inputs; ONE source for both engines) ──────────────────
 const cases = [
   { name: 'quiet allow', fn: 'evaluateAgentGate', toolInput: null, state: base() },
-  { name: 'thrash fork deny', fn: 'evaluateAgentGate', toolInput: { subagent_type: 'fork', prompt: 'do x' }, state: base({ thrash: thrash() }) },
+  { name: 'thrash fork warn', fn: 'evaluateAgentGate', toolInput: { subagent_type: 'fork', prompt: 'do x' }, state: base({ thrash: thrash() }) },
   { name: 'thrash fresh warn', fn: 'evaluateAgentGate', toolInput: { subagent_type: 'explore', prompt: 'scan' }, state: base({ thrash: thrash() }) },
   { name: 'thrash keepwarm advisory', fn: 'evaluateAgentGate', toolInput: { subagent_type: 'fork', prompt: 'keep-warm ping' }, state: base({ thrash: thrash() }) },
   { name: 'thrash no-model no-suspects', fn: 'evaluateAgentGate', toolInput: { subagent_type: 'fork' }, state: base({ thrash: thrash({ model: null, suspects: [] }) }) },

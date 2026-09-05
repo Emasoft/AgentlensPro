@@ -5,6 +5,12 @@
   "bodies/r3.request.json": 1786999950000,
   "bodies/r4.request.json": 1786999940000,
   "bodies/a.response.json": 1786999975000,
+  "bodies/r5.request.json": 1786999958000,
+  "bodies/r6.request.json": 1786999956000,
+  "bodies/f.response.json": 1786999959000,
+  "bodies/g.response.json": 1786999957000,
+  "bodies/r7.request.json": 1786999953000,
+  "bodies/h.response.json": 1786999954000,
   "bodies/b.response.json": 1786999965000,
   "bodies/c.response.json": 1786999955000,
   "bodies/d.response.json": 1786999980000,
@@ -15,14 +21,14 @@
  "report": {
   "available": true,
   "hugeRequests90s": {
-   "count": 3,
-   "bytes": 3300627,
+   "count": 6,
+   "bytes": 6601257,
    "senders": [
     {
      "session": "11111111-aaaa-bbbb-cccc-000000000001",
      "model": "claude-fable-5",
-     "count": 3,
-     "bytes": 3300627
+     "count": 6,
+     "bytes": 6601257
     }
    ]
   },
@@ -36,8 +42,8 @@
     {
      "session": "11111111-aaaa-bbbb-cccc-000000000001",
      "model": "claude-fable-5",
-     "count": 3,
-     "bytes": 3300627
+     "count": 6,
+     "bytes": 6601257
     }
    ],
    "topSource": {
@@ -50,11 +56,19 @@
     "rebilledTokens": 0
    },
    "coldStartSessions": 0,
-   "coldStartRebilledTokens": 0
+   "coldStartRebilledTokens": 0,
+   "subagentWrites": {
+    "count": 3,
+    "rebilledTokens": 826848
+   },
+   "missReasons": {
+    "previous_message_not_found": 1,
+    "unlabelled": 1
+   }
   },
   "premium": {
-   "share": 1,
-   "sampled": 4,
+   "share": 0.5714285714285714,
+   "sampled": 7,
    "lastModel": "claude-opus-5"
   }
  },
@@ -64,8 +78,8 @@
  },
  "fmtSenders": [
   "no fat-request sender attributable",
-  "session 11111111… (claude-fable-5, 3 fat requests ~3.3MB)",
-  "session 11111111… (claude-fable-5, 3 fat requests ~3.3MB)"
+  "session 11111111… (claude-fable-5, 6 fat requests ~6.6MB)",
+  "session 11111111… (claude-fable-5, 6 fat requests ~6.6MB)"
  ],
  "usage": [
   {
@@ -118,16 +132,16 @@
    {
     "code": "HUGE_REQUEST_BURST",
     "active": true,
-    "detail": "3 requests >1MB (3MB ≈ 825k tokens) sent in the last 90s — a fat-context fan-out is IN FLIGHT. Senders: session 11111111… (claude-fable-5, 3 fat requests ~3.3MB). Stop spawning further agents; let this wave settle before adding load.",
+    "detail": "6 requests >1MB (7MB ≈ 1650k tokens) sent in the last 90s — a fat-context fan-out is IN FLIGHT. Senders: session 11111111… (claude-fable-5, 6 fat requests ~6.6MB). Stop spawning further agents; let this wave settle before adding load.",
     "evidence": {
-     "hugeRequests90s": 3,
-     "bytes": 3300627,
+     "hugeRequests90s": 6,
+     "bytes": 6601257,
      "senders": [
       {
        "session": "11111111-aaaa-bbbb-cccc-000000000001",
        "model": "claude-fable-5",
-       "count": 3,
-       "bytes": 3300627
+       "count": 6,
+       "bytes": 6601257
       }
      ]
     }
@@ -135,7 +149,7 @@
    {
     "code": "CACHE_THRASH",
     "active": true,
-    "detail": "3 calls in the last 5min re-WROTE ~770k tokens of prefix instead of reading cache (model claude-fable-5) — the context cache is being invalidated every turn. Likely source: session 11111111… (claude-fable-5, 3 fat requests ~3.3MB). STOP launching agents and fix the prefix mutator (get_cache_break_causes shows the mechanism).",
+    "detail": "3 calls in the last 5min re-WROTE ~770k tokens of prefix instead of reading cache (model claude-fable-5) — the context cache is being invalidated every turn. Likely source: session 11111111… (claude-fable-5, 6 fat requests ~6.6MB). STOP launching agents and fix the prefix mutator (get_cache_break_causes shows the mechanism).",
     "evidence": {
      "misses": 3,
      "rebilledTokens": 770000,
@@ -145,8 +159,8 @@
       {
        "session": "11111111-aaaa-bbbb-cccc-000000000001",
        "model": "claude-fable-5",
-       "count": 3,
-       "bytes": 3300627
+       "count": 6,
+       "bytes": 6601257
       }
      ]
     }

@@ -34,7 +34,7 @@
    }
   },
   {
-   "name": "thrash fork deny",
+   "name": "thrash fork warn",
    "fn": "evaluateAgentGate",
    "toolInput": {
     "subagent_type": "fork",
@@ -76,7 +76,16 @@
       "rebilledTokens": 0
      },
      "coldStartSessions": 0,
-     "coldStartRebilledTokens": 0
+     "coldStartRebilledTokens": 0,
+     "subagentWrites": {
+      "count": 0,
+      "rebilledTokens": 0
+     },
+     "missReasons": {
+      "system_changed": 2,
+      "messages_changed": 3,
+      "unlabelled": 1
+     }
     },
     "premiumShare": null,
     "premiumModel": null,
@@ -136,7 +145,16 @@
       "rebilledTokens": 0
      },
      "coldStartSessions": 0,
-     "coldStartRebilledTokens": 0
+     "coldStartRebilledTokens": 0,
+     "subagentWrites": {
+      "count": 0,
+      "rebilledTokens": 0
+     },
+     "missReasons": {
+      "system_changed": 2,
+      "messages_changed": 3,
+      "unlabelled": 1
+     }
     },
     "premiumShare": null,
     "premiumModel": null,
@@ -196,7 +214,16 @@
       "rebilledTokens": 0
      },
      "coldStartSessions": 0,
-     "coldStartRebilledTokens": 0
+     "coldStartRebilledTokens": 0,
+     "subagentWrites": {
+      "count": 0,
+      "rebilledTokens": 0
+     },
+     "missReasons": {
+      "system_changed": 2,
+      "messages_changed": 3,
+      "unlabelled": 1
+     }
     },
     "premiumShare": null,
     "premiumModel": null,
@@ -249,7 +276,16 @@
       "rebilledTokens": 0
      },
      "coldStartSessions": 0,
-     "coldStartRebilledTokens": 0
+     "coldStartRebilledTokens": 0,
+     "subagentWrites": {
+      "count": 0,
+      "rebilledTokens": 0
+     },
+     "missReasons": {
+      "system_changed": 2,
+      "messages_changed": 3,
+      "unlabelled": 1
+     }
     },
     "premiumShare": null,
     "premiumModel": null,
@@ -1049,7 +1085,16 @@
       "rebilledTokens": 0
      },
      "coldStartSessions": 0,
-     "coldStartRebilledTokens": 0
+     "coldStartRebilledTokens": 0,
+     "subagentWrites": {
+      "count": 0,
+      "rebilledTokens": 0
+     },
+     "missReasons": {
+      "system_changed": 2,
+      "messages_changed": 3,
+      "unlabelled": 1
+     }
     },
     "premiumShare": null,
     "premiumModel": null,
@@ -1107,7 +1152,16 @@
       "rebilledTokens": 0
      },
      "coldStartSessions": 0,
-     "coldStartRebilledTokens": 0
+     "coldStartRebilledTokens": 0,
+     "subagentWrites": {
+      "count": 0,
+      "rebilledTokens": 0
+     },
+     "missReasons": {
+      "system_changed": 2,
+      "messages_changed": 3,
+      "unlabelled": 1
+     }
     },
     "premiumShare": null,
     "premiumModel": null,
@@ -1165,7 +1219,16 @@
       "rebilledTokens": 0
      },
      "coldStartSessions": 0,
-     "coldStartRebilledTokens": 0
+     "coldStartRebilledTokens": 0,
+     "subagentWrites": {
+      "count": 0,
+      "rebilledTokens": 0
+     },
+     "missReasons": {
+      "system_changed": 2,
+      "messages_changed": 3,
+      "unlabelled": 1
+     }
     },
     "premiumShare": null,
     "premiumModel": null,
@@ -1294,7 +1357,16 @@
       "rebilledTokens": 0
      },
      "coldStartSessions": 0,
-     "coldStartRebilledTokens": 0
+     "coldStartRebilledTokens": 0,
+     "subagentWrites": {
+      "count": 0,
+      "rebilledTokens": 0
+     },
+     "missReasons": {
+      "system_changed": 2,
+      "messages_changed": 3,
+      "unlabelled": 1
+     }
     },
     "premiumShare": null,
     "premiumModel": null,
@@ -1352,7 +1424,16 @@
       "rebilledTokens": 0
      },
      "coldStartSessions": 0,
-     "coldStartRebilledTokens": 0
+     "coldStartRebilledTokens": 0,
+     "subagentWrites": {
+      "count": 0,
+      "rebilledTokens": 0
+     },
+     "missReasons": {
+      "system_changed": 2,
+      "messages_changed": 3,
+      "unlabelled": 1
+     }
     },
     "premiumShare": null,
     "premiumModel": null,
@@ -1651,7 +1732,16 @@
       "rebilledTokens": 0
      },
      "coldStartSessions": 0,
-     "coldStartRebilledTokens": 0
+     "coldStartRebilledTokens": 0,
+     "subagentWrites": {
+      "count": 0,
+      "rebilledTokens": 0
+     },
+     "missReasons": {
+      "system_changed": 2,
+      "messages_changed": 3,
+      "unlabelled": 1
+     }
     },
     "premiumShare": null,
     "premiumModel": null,
@@ -2244,14 +2334,14 @@
    "reason": null
   },
   {
-   "decision": "deny",
+   "decision": "warn",
    "code": "THRASH_ACTIVE",
-   "reason": "AgentLens burn-gate: cache-thrash in progress — 6 calls in the last 5min re-WROTE ~1800k tokens of prefix instead of reading cache (model claude-fable-5), i.e. something mutates the context prefix on every call so the cache never hits. 1 sender(s) implicated — investigate_burn --windowHours 1 names them. A fork re-enters that prefix and multiplies the re-billing. Fix the source first. Override: AGENTLENS_GATE=off."
+   "reason": "[agentlens] AgentLens burn-gate: cache-thrash in progress — 6 calls in the last 5min re-WROTE ~1800k tokens of prefix instead of reading cache (model claude-fable-5), i.e. something mutates the context prefix on every call so the cache never hits. 1 sender(s) implicated — investigate_burn --windowHours 1 names them. API cache_miss_reason: system_changed ×2, messages_changed ×3, unlabelled ×1. This launch is not the cause — a fork reads the caller's last-written entry, a fresh agent boots its own prefix — but the caller's next turns keep re-writing until the source is fixed."
   },
   {
    "decision": "warn",
    "code": "THRASH_ACTIVE",
-   "reason": "[agentlens] AgentLens burn-gate: cache-thrash in progress — 6 calls in the last 5min re-WROTE ~1800k tokens of prefix instead of reading cache (model claude-fable-5), i.e. something mutates the context prefix on every call so the cache never hits. 1 sender(s) implicated — investigate_burn --windowHours 1 names them. This fresh launch pays only its own boot prefix (forks stay denied) — diagnose the source before widening fan-outs."
+   "reason": "[agentlens] AgentLens burn-gate: cache-thrash in progress — 6 calls in the last 5min re-WROTE ~1800k tokens of prefix instead of reading cache (model claude-fable-5), i.e. something mutates the context prefix on every call so the cache never hits. 1 sender(s) implicated — investigate_burn --windowHours 1 names them. API cache_miss_reason: system_changed ×2, messages_changed ×3, unlabelled ×1. This launch is not the cause — a fork reads the caller's last-written entry, a fresh agent boots its own prefix — but the caller's next turns keep re-writing until the source is fixed."
   },
   {
    "decision": "warn",
@@ -2259,9 +2349,9 @@
    "reason": "[agentlens] keep-warm pinger allowed through THRASH_ACTIVE: the pinger is the cache warm-up this rule is protecting — denying it would cause the cold cache it prevents."
   },
   {
-   "decision": "deny",
+   "decision": "warn",
    "code": "THRASH_ACTIVE",
-   "reason": "AgentLens burn-gate: cache-thrash in progress — 6 calls in the last 5min re-WROTE ~1800k tokens of prefix instead of reading cache, i.e. something mutates the context prefix on every call so the cache never hits. Source not attributable from the fat requests — investigate_burn --windowHours 1 to name it. A fork re-enters that prefix and multiplies the re-billing. Fix the source first. Override: AGENTLENS_GATE=off."
+   "reason": "[agentlens] AgentLens burn-gate: cache-thrash in progress — 6 calls in the last 5min re-WROTE ~1800k tokens of prefix instead of reading cache, i.e. something mutates the context prefix on every call so the cache never hits. Source not attributable from the fat requests — investigate_burn --windowHours 1 to name it. API cache_miss_reason: system_changed ×2, messages_changed ×3, unlabelled ×1. This launch is not the cause — a fork reads the caller's last-written entry, a fresh agent boots its own prefix — but the caller's next turns keep re-writing until the source is fixed."
   },
   {
    "decision": "deny",
@@ -2311,7 +2401,7 @@
   {
    "decision": "warn",
    "code": "COLD_FORK",
-   "reason": "[agentlens] cache cold (idle 67min > the parent's 60-min TTL (doc-matrix)): this fork re-pays ~350k tokens of parent prefix at the write rate once. Let it warm the cache before launching further forks."
+   "reason": "[agentlens] cache cold (idle 67min > the parent's 60-min TTL (doc-matrix)): the parent's ~350k-token prefix is due one write at the write rate, and whichever request comes first pays it — this fork, or the parent's next turn; a single fork adds nothing (TRDD-DIZ289UQ). Only PARALLEL forks in one message multiply it: let this one warm the cache before launching more."
   },
   {
    "decision": "warn",
@@ -2351,7 +2441,7 @@
   {
    "decision": "warn",
    "code": "COLD_FORK",
-   "reason": "[agentlens] cache cold (idle 7min > the parent's 5-min TTL (assumed)): this fork re-pays ~350k tokens of parent prefix at the write rate once. Let it warm the cache before launching further forks."
+   "reason": "[agentlens] cache cold (idle 7min > the parent's 5-min TTL (assumed)): the parent's ~350k-token prefix is due one write at the write rate, and whichever request comes first pays it — this fork, or the parent's next turn; a single fork adds nothing (TRDD-DIZ289UQ). Only PARALLEL forks in one message multiply it: let this one warm the cache before launching more."
   },
   {
    "decision": "allow",
