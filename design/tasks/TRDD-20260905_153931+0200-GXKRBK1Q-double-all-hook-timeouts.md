@@ -35,6 +35,15 @@ this card's scope, which is the four installer entries plus the two network budg
 - 2026-09-05T18:08:21+0200 — ORCHESTRATOR decision: accepted the 18:07 AI-review APPROVE after the
   first-hand re-check above. Vetoable at `human_review`. The running sessions still need a restart to
   pick up the doubled ceilings (installer output) — the USER's move, not a box here.
+- 2026-09-05T18:12:10+0200 — the review fork on `a01a4703` asked for the source of truth instead of
+  re-implemented counters; settled: `agentlenspro setup --dry-run` → "21 agentlens hook entries (0
+  stale generation(s))", hooks step "registrations current / none" (the installer's own
+  `isOurHookCommand` view, not a token counter); `git blame -L 240,240` and `-L 268,268
+  src/cli/hookHandlers.ts` → `52155adf`, so the cited lines are HEAD-accurate (the reviewer's
+  :237/:266 were a different revision); `standalone/cli.js` mtime is 16:00:55, three seconds after
+  `52155adf` (16:00:52), so the bundle is from the committed source and the STATE's "16:05" is a
+  loose time, not a stale bundle. The four `timeout: 5` literals are not in `src/cli` or
+  `standalone/cli.ts` (grep 0) — they come from other bundled modules and are outside this card.
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-09-05T16:06:03+0200
 
