@@ -22,19 +22,25 @@ no cargo, because the MVR6PXC0 suite owned the target dir). Re-checked first-han
 at 18:05 before accepting: `grep -c 'st\.build_session_summary(' ui.rs` → 0; the three guard tests
 exist at `ui.rs:4262/4285/4308`; `2b38a39b` (ui.rs +57) and `1a00cec6` (ui.rs +456, lib.rs +40) are
 the two commits whose hunks implement this card — `7caad610` and `acaf82e8` are deploy-time HEAD
-markers, not implementation, and are now excluded from `implementation-commits:`. Box 3 stays OPEN on
-purpose: 3 of 20 handlers still hold ≥ 1 s, at a different code path (the per-candidate reparse in
+markers, not implementation (verified 18:08 by `git show --stat` on both: one board file and six
+design files, no `rust-core/` path), and are excluded from `implementation-commits:`. Box 3 stays OPEN
+on purpose: 3 of 20 handlers still hold ≥ 1 s, at a different code path (the per-candidate reparse in
 `resolve_session_card`, not the summary rebuild this card removed), and that residue is
-TRDD-MVR6PXC0 (in `dev`, code written, suite running). The reviewer's one unre-executed claim is box 2's
-543-test integration run (cited from the card, not re-run).
+TRDD-MVR6PXC0 — see the note under box 3 itself. The reviewer's one unre-executed claim is box 2's
+543-test integration run (cited from the card, not re-run); the three guard tests are verified as
+SOURCE (`fn` names at fixed lines), not as an executed run — the MVR6PXC0 suite's `ui.rs` unit binary
+is what settles that.
 
 ## Approval log
 
 - 2026-09-05T18:05:29+0200 — ORCHESTRATOR decision: accepted the 18:03 AI-review APPROVE with box 3
-  left unchecked and delegated to TRDD-MVR6PXC0 (MVR6PXC0's own box "QE114936's box 3 note updated to
-  point here" is met by the STATE block's cross-link). Added the missing `implementation-commits:`
-  from first-hand `git show --stat`. Vetoable at `human_review`: the USER may instead hold this card
-  in `ai_review` until MVR6PXC0 lands and box 3 can be ticked on a re-measured recipe.
+  left unchecked and delegated to TRDD-MVR6PXC0. Added the missing `implementation-commits:` from
+  first-hand `git show --stat`. Vetoable at `human_review`: the USER may instead hold this card in
+  `ai_review` until MVR6PXC0 lands and box 3 can be ticked on a re-measured recipe.
+- 2026-09-05T18:08:52+0200 — the review fork on `cca017ef` found the box-3 pointer lived only in the
+  STATE block, not under box 3, while MVR6PXC0's box "QE114936's box 3 note updated to point here"
+  had been declared met from here. Fixed in one commit: the note now sits under box 3, and MVR6PXC0's
+  box is ticked in its own file.
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-05T12:33:51+0200
 
@@ -254,6 +260,11 @@ the off-lock summary through its callers.
       that run, that ticks this box.
 - [ ] After deploy, invoking each affected tool once (via `agentlenspro <tool>`) while ingest is
       hot produces no `state lock held ≥ 1000 ms by ui.rs:<that handler>` line.
+      **Box-3 note (2026-09-05):** measured, NOT met by three handlers — `ui.rs:2074`, `:3220`,
+      `:3283` hold 1,037–3,948 ms inside their per-candidate `resolve_session_card` closures, a
+      different code path from the summary rebuild this card removed (17/20 sites clean:
+      `reports/qe114936/20260905_123046+0200-box3-tool-invocations.md`). That residue is
+      **TRDD-MVR6PXC0**; this box is ticked only when MVR6PXC0's re-measured recipe is clean.
 
 ## Notes and lessons learned
 

@@ -3,7 +3,7 @@ trdd-id: MVR6PXC0
 title: Three MCP tool handlers hold the state lock for one to four seconds inside their per-candidate resolve_session_card closure
 column: dev
 created: 2026-09-05T12:33:51+0200
-updated: 2026-09-05T17:16:41+0200
+updated: 2026-09-05T18:08:52+0200
 current-owner: main-session
 task-type: bugfix
 priority: high
@@ -80,6 +80,8 @@ three tools.
       outside it (or is proven lock-free).
 - [ ] Same 24-invocation recipe as the QE114936 box-3 report: zero `state lock held ≥ 1000 ms
       by ui.rs:{2074,3220,3283}` lines while ingest is hot.
-- [ ] QE114936's box 3 note updated to point here.
+- [x] QE114936's box 3 note updated to point here (2026-09-05 18:08 — the note sits directly under
+      QE114936's box 3, naming this card and the three `ui.rs` sites; earlier only its STATE block
+      carried the link, which a review fork correctly refused to count as "the box-3 note").
 
 ## Notes and lessons learned

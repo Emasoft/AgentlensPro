@@ -3,7 +3,7 @@ trdd-id: GXKRBK1Q
 title: Double every hook timeout the installer writes and every hook's own network budget
 column: ai_review
 created: 2026-09-05T15:39:31+0200
-updated: 2026-09-05T16:08:16+0200
+updated: 2026-09-05T18:08:21+0200
 current-owner: main-session
 task-type: bugfix
 priority: high
@@ -16,6 +16,25 @@ implementation-commits: [52155adf]
 ---
 
 # Double every hook timeout the installer writes and every hook's own network budget
+
+## ⏵ AI-REVIEW VERDICT 2026-09-05 — APPROVE. Ready for `human_review`; the USER makes that move.
+
+Review report: `reports/ai-review/20260905_180731+0200-GXKRBK1Q-ai-review.md` (lean-worker: read the
+`52155adf` hunks, ran `check-types` 0, `compile-tests` 0, scoped `cliMatchers` mocha 12/0, read the
+live `~/.claude/settings.json`). Re-checked first-hand by the orchestrator at 18:08: `hookInstall.ts`
+:185/:194/:203/:207 carry 10/10/20/10; `hookHandlers.ts:240` default 2 and `:268` default 4 (inner <
+outer); `setup.ts:297-298` verify env `'4'`/`'4'`; the live settings.json counts 15 `hook` + 2 `gate` +
+2 `review-supervisor` at 10 and 2 `review-gate` at 20, the one foreign 30 s hook untouched. The claim
+the reviewer did not re-run — box 2's bundle content — was checked here instead: `standalone/cli.js`
+(16:00) carries `timeout: 10` ×3 and `timeout: 20` ×1, the four matcher values; four `timeout: 5`
+literals remain in the bundle from code paths outside the matcher fns (origin not traced — not in
+this card's scope, which is the four installer entries plus the two network budgets).
+
+## Approval log
+
+- 2026-09-05T18:08:21+0200 — ORCHESTRATOR decision: accepted the 18:07 AI-review APPROVE after the
+  first-hand re-check above. Vetoable at `human_review`. The running sessions still need a restart to
+  pick up the doubled ceilings (installer output) — the USER's move, not a box here.
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-09-05T16:06:03+0200
 
