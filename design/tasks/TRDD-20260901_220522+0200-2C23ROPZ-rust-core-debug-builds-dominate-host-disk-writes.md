@@ -3,13 +3,36 @@ trdd-id: 2C23ROPZ
 title: rust-core debug builds are the host's dominant disk writer — bound the dev profile
 column: ai_review
 created: 2026-09-01T22:05:22+0200
-updated: 2026-09-02T07:34:07+0200
+updated: 2026-09-05T09:33:10+0200
 current-owner: agentlenspro-15
 task-type: infra
 external-refs: [https://github.com/Emasoft/AgentlensPro/issues/18]
 ---
 
 # rust-core `target/` debug builds wrote +30.8 GB in 3 days (issue #18)
+
+## ⏵ AI-REVIEW VERDICT 2026-09-05 — APPROVE. Ready for `human_review`; the USER makes that move.
+
+Acceptance is PROSE, not checkboxes; the reviewing agent extracted the claims and verified each.
+Report: `reports/ai-review/20260905_091606+0200-2C23ROPZ.md`.
+
+**OBSERVED BY THE ORCHESTRATOR:** the dev profile really is bound —
+`rust-core/Cargo.toml:22-26` carries `[profile.dev] debug = "line-tables-only"` and
+`[profile.dev.package."*"] debug = false`, i.e. minimal debuginfo for workspace crates and none at
+all for dependencies. That is the artifact the fix consists of, read directly.
+
+**REPORTED BY THE REVIEWING AGENT:** `ci.yml`, the CHANGELOG entry, the implementing commit and the
+issue closure all confirmed first-hand by it, plus a live re-run of `cargo test -p agentlens-core
+--lib` at 52/52.
+
+**REPORTED BY THE CARD, and NOT re-verified by anyone — deliberately labelled:** the +30.8 GB
+in 3 days, and the post-fix GB/timing figures. Those are historical measurements of a host's disk
+over a window that has passed; they cannot be re-run today, and a reviewer who wrote them down as
+CONFIRMED would be laundering the card's own numbers into an independent check. The agent was
+instructed to keep that line and did.
+
+**What this verdict does and does not cover**: the SETTING is verified present; the SIZE OF THE
+EFFECT is the card's own claim. Both matter, and only one of them is checkable now.
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-02
 
