@@ -3,7 +3,7 @@ trdd-id: 2R36W8Q1
 title: The summary cache is keyed on a version that moves faster than a rebuild completes, so the UI path livelocks under fleet ingest
 column: ai_review
 created: 2026-08-29T10:44:23+0200
-updated: 2026-09-05T13:06:02+0200
+updated: 2026-09-05T13:08:47+0200
 current-owner: main-session
 task-type: bugfix
 scope: project
@@ -31,9 +31,12 @@ writer's `ts_ms` is the body's own call time is INFERRED from the forensics rows
 not read at 9SYRK6SW's writer), and the writer's parts landed once a minute right through it;
 and the load the summary rebuild actually pays for, read from `/api/server-stats` 9 min after
 the last sample: **`spans.inMemory` 420,541 over the CONFIGURED 24 h window** (`windowMs`
-300000 is the report's row, `configuredWindowMs` 86,400,000 is what the window keeps; the
-window's only feeder is the OTLP ingest path, `lib.rs` `state.window.add` — no log-scan rows —
-so this is a day of fleet OTLP spans, ~17.5k/h) and **`logSessions` 30,975** (the card map the
+300000 is the report's row, `configuredWindowMs` 86,400,000 is what the window keeps). Two
+feeders, both OTLP-origin, no log-scan rows: `SpanWindow::boot_load` rehydrated **401,648** spans
+from the store at the 11:51 boot (`server.log`), and `state.window.add` on the ingest path
+(`lib.rs`) grew it to 421,138 by 13:08 — **~19.5k live spans in 78 min, ~15k/h** — so the
+rebuild walks a day of stored spans plus the live tail; "~17.5k/h" in an earlier wording was
+420k/24 as if all ingested live, which the 78 min uptime rules out. And **`logSessions` 30,975** (the card map the
 rebuild walks; it barely moves minute to minute, so it stands in for the soak's load even read
 late, which `inMemory` does not — its 24 h window still overlaps the soak, but the read is one
 point, not the series). The soak discarded its 260 response bodies; a repeat should keep them
