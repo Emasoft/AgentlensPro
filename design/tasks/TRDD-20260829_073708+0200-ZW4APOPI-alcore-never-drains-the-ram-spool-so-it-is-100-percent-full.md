@@ -3,7 +3,7 @@ trdd-id: ZW4APOPI
 title: alcore never drains the RAM-disk spool so it is 100 percent full and capture is silently losing bodies
 column: ai_review
 created: 2026-08-29T07:37:08+0200
-updated: 2026-09-02T08:40:22+0200
+updated: 2026-09-05T07:18:10+0200
 current-owner: claude-agentlenspro
 task-type: bugfix
 project-id: agentlenspro
@@ -12,6 +12,19 @@ blocked-by: []
 ---
 
 # alcore never drains the RAM spool — it is full, and capture is losing data now
+
+## ⏵ AI-REVIEW VERDICT 2026-09-05 — APPROVE. Ready for `human_review`; the USER makes that move.
+
+All four ticked boxes CONFIRMED first-hand by the reviewing agent: test run passed, live
+`/api/server-stats` queried, `df` measured 2% used, code read. The drain chain it rests on was
+independently verified by the orchestrator while reviewing TRDD-5PUD8RKE (same code path):
+`resolve_bodies_read_scope` → `for bodies_dir in &scope.dirs` (`chores.rs:295`) → `ingest_pass`
+(`:337`) per dir. Report: `reports/ai-review/20260905_071703+0200-ZW4APOPI.md`.
+
+**One wording inaccuracy, not a defect**: the card refers to a "70%-of-spool cap" that does not
+exist as a literal anywhere — it was superseded by the unconditional spool age-0 drain, which is
+strictly stronger. Left as-is; flagged so a future reader does not go looking for a constant that
+was designed out rather than lost.
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-08-29
 

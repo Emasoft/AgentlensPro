@@ -3,7 +3,7 @@ trdd-id: 8ADTIGKT
 title: The capture-liveness clock ignores statusline samples so a statusline-only machine never raises CAPTURE DOWN
 column: ai_review
 created: 2026-08-26T04:26:17+0200
-updated: 2026-09-01T22:00:21+0200
+updated: 2026-09-05T07:18:10+0200
 current-owner: AgentlensPro session
 task-type: bugfix
 severity: LOW
@@ -16,6 +16,24 @@ eht: []
 ---
 
 # The capture-liveness clock counts two of three feeds
+
+## ⏵ AI-REVIEW VERDICT 2026-09-05 — APPROVE. Ready for `human_review`; the USER makes that move.
+
+Both ticked boxes verified — the reviewing agent's, then re-checked by the orchestrator reading
+producer AND consumer: `ui.rs:1218` bumps `last_ingest_activity_ms` inside the statusline POST
+handler, and `/api/debug/capture-activity` (`ui.rs:1451-1464`) exposes it; the pinning test passes
+1/1 against the current binary. Report: `reports/ai-review/20260905_071607+0200-8ADTIGKT.md`.
+
+**But the PURPOSE this card names is not reachable, and that is a separate defect —
+TRDD-U0L78B3Z.** The title says a statusline-only machine "never raises CAPTURE DOWN"; nothing
+raises CAPTURE DOWN on ANY machine now. `ui.rs:1460` delegates the window comparison to "the
+caller (server.ts kept `CAPTURE_ACTIVITY_WINDOW_MS` on its side)", and `567fc5c2` retired
+`standalone/server.ts` entirely. `CAPTURE_ACTIVITY_WINDOW_MS` is absent from the whole tree, alcore
+computes no CAPTURE DOWN, and `getCaptureDownSince` is declared and called but supplied by nothing.
+The clock this card fixed now ticks correctly and unread.
+
+The APPROVE stands: these two boxes are about the bump and the bump works. The gap is one the
+criteria could not see, because they stop at the value and the purpose needs the consumer.
 
 TRDD-4FMHW124 shipped capture-liveness detection for `server status`. Its
 description (line 44-45) lists three things that count as capture: OTEL spans,
