@@ -3,7 +3,7 @@ trdd-id: MVR6PXC0
 title: Three MCP tool handlers hold the state lock for one to four seconds inside their per-candidate resolve_session_card closure
 column: dev
 created: 2026-09-05T12:33:51+0200
-updated: 2026-09-05T20:43:42+0200
+updated: 2026-09-05T20:45:42+0200
 current-owner: main-session
 task-type: bugfix
 priority: high
@@ -44,10 +44,13 @@ doctests unrun by either run. **That gate is COMPOSED from three runs over three
 `lpv_parity.rs` (old → `as_u64` form → `from_secs_f64` form) and ONE state of `ui.rs`** — 17:15
 full, 20:27 and 20:41 `lpv_parity` scoped, 20:34 remaining-31 — and the composition is
 legitimate only because `ui.rs` is byte-identical across all of them: the working-tree diff
-`cmp`s equal to the 17:14 patch copy (`UI_RS_UNCHANGED_SINCE_1714`, 20:41; hunk headers included,
-so HEAD's `ui.rs` is unchanged too). The file's mtime 13:12:40 is the kraken's LAST `Edit` of
-`ui.rs` per its own transcript (first 13:02:22, last 13:12:40 local); 13:12 → 17:14 was its
-build/clippy/test time, so the mtime is not in tension with "kraken alive at 17:00".
+`cmp`s equal to the 17:14 patch copy (`UI_RS_UNCHANGED_SINCE_1714`, 20:41), and
+`git log --since='2026-09-05 17:14' -- src/ui.rs` is empty, so HEAD's `ui.rs` is unchanged too.
+The file's mtime 13:12:40 is the kraken's LAST `Edit` of `ui.rs` per its own transcript: 6 Edit
+calls with `file_path` ending `/src/ui.rs`, first 13:02:22, last 13:12:40 local, in exactly one
+session dir (the second copy of that transcript, under the cleared session, holds 0). That it
+spent 13:12 → 17:14 in build/clippy/test is the handoff's narrative (deps mtimes 16:51), not
+re-read here; the mtime itself is not in tension with "kraken alive at 17:00".
 `lpv_parity.rs` is linked by nothing else: `grep -rn lpv_parity tests/ src/ Cargo.toml` outside
 the file itself → 0. Capture
 `reports_dev/mvr6pxc0-cargo-test-remaining-20260905_203434+0200.txt` (the `_203409` file beside
