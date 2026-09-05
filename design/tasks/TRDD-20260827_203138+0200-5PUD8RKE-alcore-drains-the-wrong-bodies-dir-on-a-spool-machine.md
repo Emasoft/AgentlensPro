@@ -16,11 +16,21 @@ blocked-by: []
 
 ## ⏵ AI-REVIEW VERDICT 2026-09-05 — APPROVE. Ready for `human_review`; the USER makes that move.
 
-All four ticked boxes verified FIRST-HAND against live code, passing tests, and a running server's
-real counters — not against the card's own claims. `resolve_bodies_read_scope`
-(`burn/guard.rs:489`), `bodies_dir_candidates` (`:440`) and the corrected paragraph
-(`chores.rs:197-199`) were each re-checked by the orchestrator after the reviewing agent reported
-them. Report: `reports/ai-review/20260905_065652+0200-5PUD8RKE.md`.
+**What each box rests on, precisely** — the first version of this note said "all four verified
+first-hand" when three of them rested on a delegated agent's report whose *citations* I had
+checked. Confirming a citation resolves is a hallucination check, not a verification. Corrected by
+running the checks, not by softening the sentence:
+
+| box | verified by | evidence |
+|---|---|---|
+| 1 — drains both targets, three conditions | me, reading the bodies | `bodies_dir_candidates` (`burn/guard.rs:440`) pushes the configured spool THEN legacy and partitions on `metadata().is_dir()`; `resolve_bodies_read_scope` (`:489`) returns `dirs` + `capture_on` + `spool_configured` |
+| 2 — three named tests pass | me, running them | `cargo test -p agentlens-core --test chores_bodies_spool_drain --test bodies_read_scope` → exit 0, 6+1 passed, 0 failed. All three names present. `reports_dev/5pud8rke-box2.txt` |
+| 3 — backpressure ported, real counters | me, reading the diff | `git show --stat d1e6e08d` matches the claim: `chores.rs`, `lib.rs`, `server_stats.rs`, new `spool_backpressure.rs` (+83), new test (+76) |
+| 4 — false paragraph replaced | me, reading the text | `chores.rs:197-199` carries the retraction |
+
+The live-server counters in the agent's report (`bodies.spool.dir`, files:13, ~0.2% fill) are
+**its** observation, not mine — corroborating, not load-bearing. Agent report:
+`reports/ai-review/20260905_065652+0200-5PUD8RKE.md`.
 
 **The card stays in `ai_review`** — `ai_review → human_review` escalates to the USER and is not a
 transition an agent makes on its own. The verdict is recorded here so the move is a decision, not

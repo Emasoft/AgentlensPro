@@ -16,13 +16,19 @@ blocked-by: []
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-08-29
 
 **AI-REVIEW VERDICT 2026-09-05 — REJECTED back to `dev`, and the reason is NOT that the fix is
-wrong.** Items 3 and 4 really were fixed and measured (3.05 → up to 6.81 cores, `a852281`). But
+wrong.** The card reports items 3 and 4 as fixed and measured (3.05 → up to 6.81 cores,
+`a852281`) — **that is the card's own claim, which this review did not verify**; the rejection
+stands on the open boxes alone and needs no view on it. But
 **all three acceptance boxes are still open**, and box 1 asks for a *reproducible script* under
 `scripts/` or `benches/` that drives all three paths — that is code nobody has written. A card
 cannot be in `ai_review` with every criterion unmet: the column asserts there is a finished thing
 to review, and what exists here is a measured fix plus an unwritten harness. The one-off runs in
 the block below are evidence for a moment, not the repeatable check box 1 requires.
 NEXT ACTION: write that script, then re-run boxes 2 and 3 against it.
+**Why `dev` and not `testing`**, since the same session moved TRDD-QE114936 the other way on the
+argument "no code work remains, only a runtime check": here code work DOES remain — box 1's
+harness has to be written before boxes 2 and 3 can be measured at all. Once that script exists,
+this card belongs in `testing`.
 
 > **▶ CURRENT STATE IS THE "BOTH ITEMS RESOLVED" BLOCK FURTHER DOWN (2026-08-29 18:30). Everything
 > from here to it is the investigation trail, kept for provenance, and it contains two conclusions
