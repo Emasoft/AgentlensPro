@@ -1,9 +1,9 @@
 ---
 trdd-id: 9SYRK6SW
 title: api_call staging table writer at the bodies-pass ingest site
-column: testing
+column: ai_review
 created: 2026-09-03T04:47:31+0200
-updated: 2026-09-04T17:50:14+0200
+updated: 2026-09-05T12:24:45+0200
 current-owner: main-session
 task-type: feature
 priority: high
@@ -15,7 +15,17 @@ eht: []
 blocked-by: []
 ---
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-03
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-05T12:24:45+0200
+
+**DEPLOYED and writing — `ai_review`.** The writer is in the alcore binary built from
+`7caad610` at 11:49 on 2026-09-05 (`cargo build --release` → `bin-native/darwin-arm64/` →
+`codesign -s - --force` → `agentlenspro server restart`, pid 37180 → 39382, `RESTART_EXIT=0`,
+`STATUS_EXIT=0`; raw: `reports_dev/alcore-restart.txt`). Measured 33 min later: 32 new
+`~/.agentlens/store/api_calls/part-*-39382-*.parquet` files carry the new pid — the staging
+writer runs at the bodies-pass ingest site on the live collector. The NEXT ACTION below
+("commit it and deploy") is done; `human_review` is the USER's move. Earlier state, kept:
+
+## ⏵ STATE (earlier) — 2026-09-03
 
 - **RE-SPEC per Fable advisor verdict (2026-09-03, orchestrator-verified on 80 captured bodies):**
   requests and responses do NOT share a filename stem (`req_<id>.response.json` vs
