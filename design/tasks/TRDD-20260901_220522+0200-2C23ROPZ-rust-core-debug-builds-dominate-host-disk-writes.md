@@ -3,7 +3,7 @@ trdd-id: 2C23ROPZ
 title: rust-core debug builds are the host's dominant disk writer — bound the dev profile
 column: ai_review
 created: 2026-09-01T22:05:22+0200
-updated: 2026-09-05T09:33:10+0200
+updated: 2026-09-05T09:39:25+0200
 current-owner: agentlenspro-15
 task-type: infra
 external-refs: [https://github.com/Emasoft/AgentlensPro/issues/18]
@@ -21,18 +21,41 @@ Report: `reports/ai-review/20260905_091606+0200-2C23ROPZ.md`.
 `[profile.dev.package."*"] debug = false`, i.e. minimal debuginfo for workspace crates and none at
 all for dependencies. That is the artifact the fix consists of, read directly.
 
-**REPORTED BY THE REVIEWING AGENT:** `ci.yml`, the CHANGELOG entry, the implementing commit and the
-issue closure all confirmed first-hand by it, plus a live re-run of `cargo test -p agentlens-core
---lib` at 52/52.
+**REPORTED BY THE REVIEWING AGENT** (not re-checked here): `ci.yml`, the CHANGELOG entry, the
+implementing commit, and the issue closure — plus a live re-run of `cargo test -p agentlens-core
+--lib` at 52/52. **The "implementing commit is confirmed" item is the agent's, and unchecked by
+me**: two cards over (TRDD-NDKKOABG) a commit's subject named one thing while its diff carried
+sixteen more, so that class of claim needs a `git show --stat` before it counts as mine.
 
-**REPORTED BY THE CARD, and NOT re-verified by anyone — deliberately labelled:** the +30.8 GB
-in 3 days, and the post-fix GB/timing figures. Those are historical measurements of a host's disk
-over a window that has passed; they cannot be re-run today, and a reviewer who wrote them down as
-CONFIRMED would be laundering the card's own numbers into an independent check. The agent was
-instructed to keep that line and did.
+**The card's Acceptance has THREE clauses, and they land differently:**
 
-**What this verdict does and does not cover**: the SETTING is verified present; the SIZE OF THE
-EFFECT is the card's own claim. Both matter, and only one of them is checkable now.
+- **(a) a before/after of bytes written, RECORDED HERE** — met. Note the clause asks for the
+  measurement to be *recorded*, not *reproduced by a reviewer*; the Measurements section carries
+  the method, a four-row table of raw byte counts, like-for-like artifact pairs, and an explicit
+  statement of what the metric under- and over-counts. Checking that a recording exists and is
+  honest about its own limits is the bar this clause sets, and it clears it.
+- **(b) test/clippy gates unchanged** — CONFIRMED (lib tests 52/52 re-run by the agent; clippy
+  rc 0 per the card).
+- **(c) CI cache keys unaffected** — **the original wording was FALSIFIED and the card says so**:
+  checked against the pinned action's source, `Swatinem/rust-cache` hashes every member manifest
+  but never the virtual root, so the profile edit would NOT have rotated the key — worse than
+  assumed. Fixed with `hashFiles('rust-core/Cargo.toml')` on both steps. **That retraction is the
+  most useful thing on this card for a future reader**, and an earlier version of this verdict
+  block failed to point at it.
+
+**Two DIFFERENT reasons a number here is unreproduced — an earlier version of this block flattened
+them into one, and that flattening was the error:**
+
+- **+30.8 GB in 3 days** — genuinely unreproducible: a disk-history observation over a window that
+  has closed.
+- **The touch-cycle table** (100,740,576 B → 93,755,108 B) — **reproducible in principle** by the
+  method the card documents (`touch lib.rs` → `cargo test --lib --no-run` → scan by mtime). NOT
+  reproduced, on cost grounds, with the machine under load. That is an engineering call, not an
+  impossibility, and calling it "cannot be re-run" quietly promoted a decision into physics.
+
+**What this verdict covers**: the SETTING is verified present by me; the gates are re-run; the
+cache-key clause is met via a documented correction. **The SIZE OF THE EFFECT remains the card's
+own claim** — checkable, unchecked.
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-02
 
