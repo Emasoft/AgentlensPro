@@ -19,15 +19,28 @@ related: [8ADTIGKT, 4FMHW124, 1B98LCVR, 5PUD8RKE]
 Found while AI-reviewing TRDD-8ADTIGKT, whose boxes are satisfied and whose PURPOSE is not
 reachable. Nothing here is fixed yet; this card is the finding.
 
-**The producer works. The consumer does not exist.**
+**The producer works and a live consumer is waiting. The SUPPLIER in the middle is missing.**
+
+> **This card's first version claimed "nothing computes CAPTURE DOWN anywhere". That was FALSE**,
+> and the way it went wrong is the point: the grep meant to establish that universal negative was
+> piped through `| head -12`, and the disproof (`src/cli/serverControl.ts`) was on line 23. A
+> truncated search cannot establish an absence — it can only ever show what it did not cut off.
+> The corrected finding below is narrower AND more actionable.
 
 | link in the chain | state | evidence |
 |---|---|---|
 | statusline POST bumps the clock | **works** | `ui.rs:1218` sets `st.last_ingest_activity_ms = now` (TRDD-8ADTIGKT) |
-| the value is exposed | **works** | `/api/debug/capture-activity` → `{"lastIngestActivityAt": …}` (`ui.rs:1451-1464`) |
-| something compares it to a window | **MISSING** | `CAPTURE_ACTIVITY_WINDOW_MS` appears NOWHERE in the tree |
-| something renders CAPTURE DOWN | **MISSING** | zero hits for `CAPTURE DOWN` / `capture_down` in `rust-core/crates/*/src/` |
-| the TS row's supplier | **MISSING** | `getCaptureDownSince` is DECLARED (`mcpServer.ts:3451`) and CALLED (`:3845`) but supplied by nothing, so it is always `undefined` — which its own comment defines as "no row" |
+| the value is exposed on a debug route | **works** | `/api/debug/capture-activity` → `{"lastIngestActivityAt": …}` (`ui.rs:1451-1464`) |
+| something compares it to a window | **MISSING** | `CAPTURE_ACTIVITY_WINDOW_MS` appears nowhere in the tree; `ui.rs:1460` says the comparison "belongs to the caller (server.ts kept it on its side)" and `567fc5c2` retired `standalone/server.ts` |
+| alcore emits `bodies.captureDownSince` in `/api/server-stats` | **MISSING** | zero hits for `captureDown` / `capture_down` in `server_stats.rs`, and none anywhere under `rust-core/crates/*/src/` |
+| **the CLI renders the row** | **WORKS, AND IS WAITING** | `src/cli/serverControl.ts:513` declares `captureDownSince?: number \| null` on the server-stats shape and `:521` renders `` `\| CAPTURE DOWN <N>m — sessions active, no bodies arriving` `` on EVERY branch |
+| the TS burn-guard row | **unsupplied** | `getCaptureDownSince` DECLARED (`mcpServer.ts:3451`) and CALLED (`:3845`) but supplied by nothing ⇒ always `undefined` ⇒ its own comment: "no row" |
+
+**So `agentlenspro server status` has rendered CAPTURE DOWN correctly this whole time and will
+never print it**, because alcore — the only backend — does not send the field. `serverControl.ts`
+names this exact trap in its own comment: *"absent on an older server — absent is not 'healthy',
+it is 'not reported'."* The CLI is honest about the distinction; there is simply no server left
+that reports it.
 
 `ui.rs:1460` states the design explicitly: *"the window comparison belongs to the caller (server.ts
 kept `CAPTURE_ACTIVITY_WINDOW_MS` on its side)"*. That caller was deleted — `567fc5c2` retired
@@ -69,9 +82,25 @@ spool sat 100% full for ~18h and 117 request bodies were written as ZERO BYTES.
 - [ ] With the clock stale past the window, the guard emits a CAPTURE DOWN row; within the window
       it emits none. Both asserted by a test that fails if the comparison is removed
       (mutation-verified, not merely present).
-- [ ] `grep -rn 'CAPTURE_ACTIVITY_WINDOW_MS\|CAPTURE DOWN' <live backend src>` is non-empty, and
-      the window's value is justified in a comment against the git-history original.
+- [ ] `/api/server-stats` emits `bodies.captureDownSince` — asserted by a test that reads the
+      ACTUAL response body, so `serverControl.ts:521`'s row can render. (An earlier draft of this
+      box asked only that a grep be non-empty; a comment satisfies that. The failure this card
+      documents is a field nobody sends, which a grep for a name cannot detect.)
+- [ ] The window's value is justified in a comment against the git-history original
+      (`CAPTURE_ACTIVITY_WINDOW_MS` in `standalone/server.ts` before `567fc5c2`), not guessed.
 - [ ] TRDD-8ADTIGKT's statusline bump is the input: a statusline-only machine with a stale clock
       trips the row.
 
 ## Notes and lessons learned
+
+- **The negative IS established now, by one unscoped search.** `grep -rna
+  "last_ingest_activity_ms\|lastIngestActivityAt" .` over the whole repo (no `--include`, no
+  directory list, `-a` because `grep` is a shell function here that hides binary matches) returns
+  only writes, the definition, the debug-route exposure, and tests — no comparison anywhere. That
+  search is complete BY CONSTRUCTION: any consumer must name the field. A scoped grep for a
+  constant NAME could never have settled it, because a threshold can be an env var, a
+  `resolve_knob` call, or an inline literal.
+- **TRDD-8ADTIGKT's acceptance criteria were under-specified, and the next card in this family
+  will be tempted to repeat the shape.** Its title promises an alarm; its two boxes test only that
+  a field gets bumped. Both boxes passed honestly and the alarm still cannot fire. When a card's
+  title names an OUTCOME, at least one box must assert that outcome — not the input that feeds it.

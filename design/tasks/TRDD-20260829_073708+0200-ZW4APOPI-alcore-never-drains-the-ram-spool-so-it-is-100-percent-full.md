@@ -16,10 +16,16 @@ blocked-by: []
 ## ⏵ AI-REVIEW VERDICT 2026-09-05 — APPROVE. Ready for `human_review`; the USER makes that move.
 
 All four ticked boxes CONFIRMED first-hand by the reviewing agent: test run passed, live
-`/api/server-stats` queried, `df` measured 2% used, code read. The drain chain it rests on was
-independently verified by the orchestrator while reviewing TRDD-5PUD8RKE (same code path):
-`resolve_bodies_read_scope` → `for bodies_dir in &scope.dirs` (`chores.rs:295`) → `ingest_pass`
-(`:337`) per dir. Report: `reports/ai-review/20260905_071703+0200-ZW4APOPI.md`.
+`/api/server-stats` queried, `df` measured 2% used, code read. Report:
+`reports/ai-review/20260905_071703+0200-ZW4APOPI.md`.
+
+**Which half the orchestrator verified, precisely.** The DRAIN CHAIN — and only that — was read
+end to end here while reviewing TRDD-5PUD8RKE (the same code path): `resolve_bodies_read_scope` →
+`for bodies_dir in &scope.dirs` (`chores.rs:295`) → `ingest_pass` (`:337`) per dir, plus
+`durable_source: !is_spool` at `:333`. That covers the boxes about draining. **The live
+`/api/server-stats` query, the `df` measurement, and the 1 h → 60 s interval change rest on the
+agent's report and were NOT re-run here** — "same code path, already read" is legitimate transfer
+for the chain and covers nothing beyond it.
 
 **One wording inaccuracy, not a defect**: the card refers to a "70%-of-spool cap" that does not
 exist as a literal anywhere — it was superseded by the unconditional spool age-0 drain, which is
