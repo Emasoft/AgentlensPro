@@ -3,7 +3,7 @@ trdd-id: 0Y8BMVK2
 title: The dashboard reported skill and agent catalogs as per-turn cache writes and a six-digit hit rate
 column: ai_review
 created: 2026-09-03T19:13:48+0200
-updated: 2026-09-05T18:23:01+0200
+updated: 2026-09-05T18:27:28+0200
 current-owner: main-session
 task-type: bugfix
 severity: HIGH
@@ -16,18 +16,31 @@ related: [V8W9A8FZ, DIZ289UQ]
 
 # The dashboard reported catalogs as per-turn cache writes and a six-digit hit rate
 
-## ⏵ STATE — 2026-09-05T18:23:01+0200 — `testing → ai_review`
+## ⏵ STATE — 2026-09-05T18:27:28+0200 — `testing → ai_review`
 
 The 19:13 NEXT ACTION below was done one minute after it was written: `574eeba5` (2026-09-03
 19:14:39) commits the four files named in `relevant-files:` plus this card (5 files, +182/−12),
 verified by `git show --stat`. The card then sat in `testing` for two days with a stale NEXT ACTION
-and no `implementation-commits:`; both fixed here. This card has no acceptance boxes by design
-(TRDD-KBK9J59Y ruled it one of the report-shaped cards that need none); the AI review checks the
-gates the 19:13 STATE enumerates (`check-types`, `check-mirrors`, the 5 `cacheHitRate` tests,
-`esbuild`) against HEAD. Of the two fold-out items: "PostToolUse:Agent advisory size" had no card
-until TRDD-V8W9A8FZ (backburner, this commit — the remark carries no spec beyond its name);
-"burn-gate wording" is most likely what TRDD-DIZ289UQ (2026-09-05, the thrash gate blaming forks)
-addressed — INFERRED from the titles, not from a record linking them.
+and no `implementation-commits:`; both fixed here. This card has no acceptance boxes: TRDD-KBK9J59Y
+(read in full, its Acceptance section) concluded "no card needs criteria written" for the seven it
+audited and records this one as "reports itself finished on its own STATE block, unconfirmed".
+**Gates re-run on HEAD `689e4176` at 18:27:28** (the 18:23 move had relied on the 09-03 run, ~200
+commits old — a review fork caught it): `pnpm run compile-tests` 0, `cacheHitRate.test.js` 5/0,
+`scripts/check-no-mirrors.js` 0 ("141 shared exports, no mirrors under media/src"), `pnpm run
+check-types` 0 (`reports_dev/0y8b-*.txt`). Not re-run: `node esbuild.js`; the served bundle is the
+one the 09-03 STATE verified, and no `media/src` or `src/shared` change since would be caught by a
+build alone rather than by the type-check above. Of the two fold-out items: "PostToolUse:Agent
+advisory size" had no card until TRDD-V8W9A8FZ (backburner, `fb20872b` — the remark carries no spec
+beyond its name); "burn-gate wording" is most likely what TRDD-DIZ289UQ (2026-09-05, the thrash
+gate blaming forks) addressed — INFERRED from the titles, not from a record linking them.
+
+## Approval log
+
+- 2026-09-05T18:27:28+0200 — ORCHESTRATOR decision: `testing → ai_review` on the gates re-run
+  above. KBK9J59Y reads this transition as OFF the mechanical exempt row for a card with no
+  `test-requirements:` frontmatter (`manager-approval-defaults.md` table A) and itself moved nothing;
+  in this standalone project the USER is the approver, so the move is recorded here as vetoable:
+  the USER may return the card to `testing`.
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-03 19:13
 
