@@ -3,7 +3,7 @@ trdd-id: L6V1UUW0
 title: The hook-spool never drains while the server is up, and every spooled hook spawns a doomed revive
 column: ai_review
 created: 2026-09-02T09:31:25+0200
-updated: 2026-09-02T13:10:29+0200
+updated: 2026-09-05T07:30:47+0200
 current-owner: main-session
 task-type: bugfix
 priority: high
@@ -12,6 +12,29 @@ related: [465EXTJ6, 2R36W8Q1, D3K7QM2P]
 ---
 
 # The hook-spool never drains while the server is up, and every spooled hook spawns a doomed revive
+
+## ⏵ AI-REVIEW VERDICT 2026-09-05 — APPROVE. Ready for `human_review`; the USER makes that move.
+
+All 4 boxes CONFIRMED by the reviewing agent, then the load-bearing claims re-checked here:
+the periodic drain at `chores.rs:634-641` (env-tunable via `AGENTLENS_HOOK_SPOOL_DRAIN_MS`, with
+the comment naming exactly the defect — "the boot-only drain above never re-runs while…"), the
+`pidfileOwnerAlive()` guard at `hookHandlers.ts:118-131` (fail-open on an unreadable pidfile, and
+it says why), and the live spool at **0 `*.json` files**. Report:
+`reports/ai-review/20260905_072747+0200-L6V1UUW0.md`.
+
+**Both halves of the title are asserted by boxes** — box 1 the drain-never-runs half, box 3 the
+doomed-revive-storm half. That check is here because TRDD-8ADTIGKT passed every box while the
+outcome its title promised remained impossible (TRDD-U0L78B3Z); a card whose title names an
+outcome needs a box that asserts it.
+
+**Two citation typos in the card, no effect on correctness**: a line range is off, and a test
+count reads 11 where the suite has 9. Recorded rather than silently fixed — the next reader should
+know the numbers were checked and which way they were wrong.
+
+Box 4 is honest about its own limit: the live server was NOT restarted (out of scope for a
+read-only review), so it rests on corroborating state — 0 spooled files, "Refusing to start" at
+7362 vs 7,360 at deploy (2 in ~2.5 days is no storm), and post-boot drain lines continuing well
+past the original backlog.
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-02
 

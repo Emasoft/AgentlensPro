@@ -3,7 +3,7 @@ trdd-id: 6SPXOV0P
 title: 307 files remain parked with a ts-row mismatch after the TRDD-8TM7I49X repair
 column: ai_review
 created: 2026-08-26T20:13:05+0200
-updated: 2026-09-04T16:30:17+0200
+updated: 2026-09-05T07:30:47+0200
 eht: [7NHUU6GK]
 current-owner: main
 task-type: bugfix
@@ -12,6 +12,17 @@ priority: 3
 labels: [bodies, ingest, silent-failure, capacity]
 relevant-rules: []
 ---
+
+## ⏵ AI-REVIEW VERDICT 2026-09-05 — APPROVE, and it still cannot reach `complete`.
+
+All 7 ticked boxes verified first-hand by the reviewing agent (code read, tests run 7/7, clippy
+clean, commits checked). Report: `reports/ai-review/20260905_073032+0200-6SPXOV0P.md`.
+
+**The column stays where it is, and not for a review reason.** `eht: [7NHUU6GK]`, and that EHT is
+at `column: backburner` — verified here, not taken from the report. A parent cannot reach
+`complete` until every EHT is terminal, so this card's own boxes being green does not move it. Do
+not read the APPROVE as "ready to close": what it means is that nothing in THIS card is
+outstanding. TRDD-7NHUU6GK is.
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-02
 
