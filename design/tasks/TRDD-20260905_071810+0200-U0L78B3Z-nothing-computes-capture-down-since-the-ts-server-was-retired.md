@@ -3,7 +3,7 @@ trdd-id: U0L78B3Z
 title: Nothing computes CAPTURE DOWN since the TS server was retired so the liveness clock ticks unread
 column: todo
 created: 2026-09-05T07:18:10+0200
-updated: 2026-09-05T07:18:10+0200
+updated: 2026-09-05T08:13:10+0200
 current-owner: main-session
 task-type: bugfix
 priority: high
@@ -32,7 +32,7 @@ reachable. Nothing here is fixed yet; this card is the finding.
 | statusline POST bumps the clock | **works** | `ui.rs:1218` sets `st.last_ingest_activity_ms = now` (TRDD-8ADTIGKT) |
 | the value is exposed on a debug route | **works** | `/api/debug/capture-activity` → `{"lastIngestActivityAt": …}` (`ui.rs:1451-1464`) |
 | something compares it to a window | **MISSING** | `CAPTURE_ACTIVITY_WINDOW_MS` appears nowhere in the tree; `ui.rs:1460` says the comparison "belongs to the caller (server.ts kept it on its side)" and `567fc5c2` retired `standalone/server.ts` |
-| alcore emits `bodies.captureDownSince` in `/api/server-stats` | **MISSING** | zero hits for `captureDown` / `capture_down` in `server_stats.rs`, and none anywhere under `rust-core/crates/*/src/` |
+| alcore emits `bodies.captureDownSince` in `/api/server-stats` | **MISSING — confirmed ON THE WIRE** | zero hits for `captureDown` / `capture_down` in `server_stats.rs` or anywhere under `rust-core/crates/*/src/`; and `curl -s localhost:3000/api/server-stats` on the RUNNING server (2026-09-05) returns `bodies` with keys `[archive, lastPass, live, parked, spool]` — **no `captureDownSince`**. Source absence and wire absence agree, so this no longer rests on greps alone |
 | **the CLI renders the row** | **LIVE — verified by running it** | `src/cli/serverControl.ts:513` declares `captureDownSince?: number \| null` and `:521` renders `` `\| CAPTURE DOWN <N>m — sessions active, no bodies arriving` `` on EVERY branch. **`agentlenspro server status` on 2026-09-05 printed `capture: 11 live file(s), newest 1s ago`**, and `:700` is literally `` `capture: ${bodiesCaptureLine(s)}` `` while `bodiesCaptureLine` is the function at `:506` whose body computes `down` at `:521` — so that line IS this function's output, the function ran, `down` evaluated, and it was empty because the field is absent. (`:691`'s `bodies: archive …` is a DIFFERENT line; do not cite it for this.) |
 | the TS burn-guard row | **unsupplied** | `getCaptureDownSince` DECLARED (`mcpServer.ts:3451`) and CALLED (`:3845`) but supplied by nothing ⇒ always `undefined` ⇒ its own comment: "no row" |
 

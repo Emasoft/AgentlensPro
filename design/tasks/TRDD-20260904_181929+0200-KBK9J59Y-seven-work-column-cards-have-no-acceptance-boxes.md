@@ -3,7 +3,7 @@ trdd-id: KBK9J59Y
 title: A checkbox count cannot triage cards whose criteria are prose — print ticked beside open
 column: ai_review
 created: 2026-09-04T18:19:29+0200
-updated: 2026-09-04T18:52:00+0200
+updated: 2026-09-05T08:13:10+0200
 current-owner: main-session
 task-type: audit
 project-id: agentlenspro
@@ -17,6 +17,26 @@ eht: []
 blocked-by: []
 related: [9SYRK6SW, CS2W7E77, HSPUF5XH]
 ---
+
+## ⏵ AI-REVIEW VERDICT 2026-09-05 — APPROVE. Ready for `human_review`; the USER makes that move.
+
+**OBSERVED BY THE ORCHESTRATOR:** ran `./scripts/board-boxes.sh ai_review` directly. It prints the
+distinction this card exists for — `NO BOXES (has a criteria heading — open it)` vs `NO BOXES (and
+NO criteria heading — REVIEW)` vs `all WRITTEN boxes ticked — read the card before closing` — so
+the two meanings of `open=0` are separated in the output, not just in the design. Independently
+re-derived the population board-wide: **8 cards carry no checkbox at all** (4 in `ai_review`, the
+rest in `backburner`/`testing`/`todo`).
+
+**REPORTED BY THE REVIEWING AGENT:** all three boxes CONFIRMED, the card's "nine cards" count
+reproduces exactly, and seven of its named ids still read `open=0 ticked=0`. Report:
+`reports/ai-review/20260905_080646+0200-KBK9J59Y.md`.
+
+**This card was proven on its reviewer.** Earlier in the same session the orchestrator audited
+`ai_review` with a hand-rolled `grep -c '^- \[x\]'` and reported "12 of 17 have zero open boxes —
+the column is jammed on a missing verdict", counting four prose-criteria cards as having met
+criteria they never had. `board-boxes.sh` — already committed, already on disk — prints exactly
+the warning that would have caught it. The defect this card describes is not hypothetical and its
+fix is not merely adequate: it was needed, unused, and the omission reproduced the bug.
 
 # `open=0` means two different things and the board cannot tell them apart
 
