@@ -3,7 +3,7 @@ trdd-id: NDKKOABG
 title: rust-core was never built or tested by CI — add the job, with caching
 column: ai_review
 created: 2026-08-27T22:45:45+0200
-updated: 2026-09-05T09:10:30+0200
+updated: 2026-09-05T09:16:40+0200
 current-owner: main-session
 task-type: infra
 scope: project
@@ -34,11 +34,37 @@ per job:
 
 So "CI is red on `main`" is true at the workflow level and was hiding the thing that matters here:
 **the job this card exists to add is green.** The red belongs to TRDD-EJDNNDY3, whose fix has never
-been pushed. A workflow-level verdict is the wrong granularity for a card that adds ONE job —
-check the job, not the run.
+been pushed — **the leading explanation, not a verified one**: EJDNNDY3 documents a cause for
+exactly these jobs failing and its fix `48e8193a` is unpushed, but the failure LOGS were not read,
+so a second independent breakage among the 253 unpushed commits is not excluded. A workflow-level
+verdict is the wrong granularity for a card that adds ONE job — check the job, not the run.
+
+**Does that green run actually cover THIS card's work?** It would not, if the `rust` job postdated
+`origin/main` — the branch is 253 commits behind, so a green run there could easily have never seen
+the card's code. Checked: the `rust` job IS present at `3e294e16` (`ci.yml:235`, with
+`Swatinem/rust-cache` and the clippy step), running VERBATIM this card's own two gates:
+
+```
+cargo clippy --manifest-path rust-core/Cargo.toml --workspace --all-targets -- -D warnings
+cargo test  --manifest-path rust-core/Cargo.toml --workspace
+```
+
+And the coverage is **self-verifying**: this card records clippy as **red on arrival** until its 16
+source fixes landed, and the `empty_spool()` fixture fix as required for `--workspace` to pass on a
+fresh clone (CI is always a fresh clone). Both steps are GREEN at that SHA, so the fixes are in it —
+the job could not pass without them. **The work therefore landed on `origin/main` BEFORE the branch
+fell behind; the 253 unpushed commits are LATER work.** A review pass argued the opposite — that a
+253-commit-old tip cannot have seen this card's code — reasoning from the branch gap without
+checking whether the work predated it. Reasonable prior, wrong conclusion, and the command that
+settles it is one `git show <sha>:.github/workflows/ci.yml`.
 
 **REPORTED BY THE REVIEWING AGENT:** clippy exit 0 locally, the fixture fix confirmed, and
 no-fmt-check confirmed. It also notes one cosmetic gap: `implementation-commits:` is empty.
+
+**Still open, from this card's own NEXT ACTION**: whether the COLD-cache path fits inside
+`timeout-minutes: 40`. The green run at `3e294e16` says the job passes; it does not say it passed
+from a cold cache. Not a blocker for the verdict — the card's claim is that the gate exists and is
+green — but the timeout question is unanswered and belongs to whoever takes it further.
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-08-27
 
