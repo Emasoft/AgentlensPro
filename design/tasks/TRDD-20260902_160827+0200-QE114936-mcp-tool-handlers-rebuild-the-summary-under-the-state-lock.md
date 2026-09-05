@@ -3,16 +3,38 @@ trdd-id: QE114936
 title: Twenty MCP tool handlers still rebuild the session summary under the state lock
 column: ai_review
 created: 2026-09-02T16:08:27+0200
-updated: 2026-09-05T12:33:51+0200
+updated: 2026-09-05T18:05:29+0200
 current-owner: main-session
 task-type: bugfix
 priority: high
 min-approval-requirement: none
 created-by: UTFVMVT8
-related: [UTFVMVT8, 2R36W8Q1, HFV4AIT7]
+related: [UTFVMVT8, 2R36W8Q1, HFV4AIT7, MVR6PXC0]
+implementation-commits: [2b38a39b, 1a00cec6]
 ---
 
 # Twenty MCP tool handlers still rebuild the session summary under the state lock
+
+## ⏵ AI-REVIEW VERDICT 2026-09-05 — APPROVE. Ready for `human_review`; the USER makes that move.
+
+Review report: `reports/ai-review/20260905_180358+0200-QE114936-ai-review.md` (lean-worker, read-only —
+no cargo, because the MVR6PXC0 suite owned the target dir). Re-checked first-hand by the orchestrator
+at 18:05 before accepting: `grep -c 'st\.build_session_summary(' ui.rs` → 0; the three guard tests
+exist at `ui.rs:4262/4285/4308`; `2b38a39b` (ui.rs +57) and `1a00cec6` (ui.rs +456, lib.rs +40) are
+the two commits whose hunks implement this card — `7caad610` and `acaf82e8` are deploy-time HEAD
+markers, not implementation, and are now excluded from `implementation-commits:`. Box 3 stays OPEN on
+purpose: 3 of 20 handlers still hold ≥ 1 s, at a different code path (the per-candidate reparse in
+`resolve_session_card`, not the summary rebuild this card removed), and that residue is
+TRDD-MVR6PXC0 (in `dev`, code written, suite running). The reviewer's one unre-executed claim is box 2's
+543-test integration run (cited from the card, not re-run).
+
+## Approval log
+
+- 2026-09-05T18:05:29+0200 — ORCHESTRATOR decision: accepted the 18:03 AI-review APPROVE with box 3
+  left unchecked and delegated to TRDD-MVR6PXC0 (MVR6PXC0's own box "QE114936's box 3 note updated to
+  point here" is met by the STATE block's cross-link). Added the missing `implementation-commits:`
+  from first-hand `git show --stat`. Vetoable at `human_review`: the USER may instead hold this card
+  in `ai_review` until MVR6PXC0 lands and box 3 can be ticked on a re-measured recipe.
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-05T12:33:51+0200
 
