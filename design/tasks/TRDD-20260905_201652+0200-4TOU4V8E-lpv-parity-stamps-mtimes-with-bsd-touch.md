@@ -3,7 +3,7 @@ trdd-id: 4TOU4V8E
 title: lpv_parity stamps fixture mtimes through touch -d @epoch, which BSD touch rejects
 column: testing
 created: 2026-09-05T20:16:52+0200
-updated: 2026-09-05T20:36:59+0200
+updated: 2026-09-05T20:41:42+0200
 current-owner: agentlenspro-b2
 task-type: bugfix
 min-approval-requirement: none
@@ -85,8 +85,11 @@ binaries (`--no-fail-fast` this time) before its own commit.
       (`644a9113`; `grep -rn '"touch"' tests/` → 0).
 - [x] `cargo test -p agentlens-core --test lpv_parity` → 10 passed
       (`reports_dev/4tou4v8e-lpv-parity.txt:17`, 20:27:38). The PATH qualifier this box first
-      carried is moot: the fixed code spawns nothing, so no PATH ordering can affect it — the
-      property delivered is "passes with no `touch` on PATH at all".
+      carried is moot: the fixed code spawns nothing, so no PATH ordering can affect it. The
+      property delivered — passes with NO `touch` on PATH at all — is MEASURED, not inferred:
+      `PATH=<cargo bin dir only> cargo test -p agentlens-core --test lpv_parity` → exit 0,
+      `10 passed` (`reports_dev/4tou4v8e-lpv-parity-no-touch-on-path.txt:16`, 20:41; `command -v
+      touch` on that PATH → nothing).
 - [x] The comment names the real reason the mtimes are stamped and cites nothing false
       (read in the diff: git-does-not-preserve-mtimes WHY kept; POSIX and no-std claims gone).
 

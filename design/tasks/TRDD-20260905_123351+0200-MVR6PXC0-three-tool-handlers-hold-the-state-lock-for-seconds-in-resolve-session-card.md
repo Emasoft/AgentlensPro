@@ -3,7 +3,7 @@ trdd-id: MVR6PXC0
 title: Three MCP tool handlers hold the state lock for one to four seconds inside their per-candidate resolve_session_card closure
 column: dev
 created: 2026-09-05T12:33:51+0200
-updated: 2026-09-05T20:36:59+0200
+updated: 2026-09-05T20:41:42+0200
 current-owner: main-session
 task-type: bugfix
 priority: high
@@ -40,7 +40,12 @@ after `lpv_parity` never ran (no `[[test]]` renames, no directory-style tests, s
 immune to session events) with `--no-fail-fast` since 20:34:34 under load-avg ~200; note that
 naming `--test` targets excludes the lib/bin unittests and doctests, so the eventual green is
 "67 + 31 integration binaries" with the 3 unittest binaries standing on the 17:15 result and
-doctests unrun by either run. Capture
+doctests unrun by either run. **That gate is COMPOSED from three runs on two trees** — 17:15
+full (old `lpv_parity.rs`), 20:27 and 20:41 `lpv_parity` scoped (fixed), 20:34 remaining-31
+(fixed) — and the composition is legitimate only because `ui.rs` is byte-identical across all of
+them: the working-tree diff `cmp`s equal to the 17:14 patch copy (`UI_RS_UNCHANGED_SINCE_1714`,
+20:41) and the file's mtime is 13:12:40, before every run; `lpv_parity.rs` is a test file no
+other binary links. Capture
 `reports_dev/mvr6pxc0-cargo-test-remaining-20260905_203434+0200.txt` (the `_203409` file beside
 it is a mis-launch: zsh passed the `--test` list as one token; ignore it). **NEXT ACTION:** poll
 that capture for its `test result` lines and the absence of `error:` (no EXIT line — detached);
