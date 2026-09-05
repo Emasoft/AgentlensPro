@@ -3,7 +3,7 @@ trdd-id: UIDUVNY8
 title: ensureRamDisk leaks a twin volume when the spool name is already taken
 column: ai_review
 created: 2026-09-02T09:31:25+0200
-updated: 2026-09-02T13:10:29+0200
+updated: 2026-09-05T15:30:26+0200
 current-owner: main-session
 task-type: bugfix
 priority: normal
@@ -48,6 +48,30 @@ related: [ZW4APOPI, 5PUD8RKE]
 - [ ] `mount | grep -c AgentLensSpool` stays 1 across a `spool ensure` + `setup` run on this machine.
       Not run — would mutate real RAM-disk state on this machine; out of scope for this fix.
 
+## Approval log
+
+- 2026-09-05T15:30:26+0200 — orchestrator accepts the 15:27 AI-review APPROVE and leaves box 3 OPEN
+  on purpose: the author deferred it as a live-state mutation and asked the reviewer to decide, and
+  that decision (accept the unit-level race proof, or demand a real two-process run) is the human
+  reviewer's, not this session's. Re-ran the read-only check myself: `mount | grep -c AgentLensSpool`
+  → 1 at 15:30 — circumstantial, as the verdict says. Nothing struck, nothing split.
+
 ## Notes and lessons learned
 
 - Empty section on creation.
+
+## AI review verdict — run: 2026-09-05T15:27:49+0200
+
+| Box | Status | Evidence |
+|---|---|---|
+| 1. failed post-check detaches `dev`, test proves `hdiutil detach` called | ✓ VERIFIED | `git show 5bb076c8 -- src/ramdisk.ts` lines ~104-117: on `!post.mounted` the code now calls `exec('hdiutil', ['detach', dev], …)` (best-effort, try/catch) before the retry. `src/test/ramdiskTwin.test.ts` both `test(...)` cases assert `calls.find(c => c.cmd==='hdiutil' && c.args[0]==='detach')` is truthy and (case 1) that its device arg is `/dev/disk999` — the exact device `hdiutil attach` returned to the stub. Read the diff body, not the commit message. |
+| 2. racing calls end with ONE volume; loser returns winner's mount | ✓ VERIFIED | Same diff: after the detach, code does `const retry = ramDiskInfo(mountPoint, exec); if (retry.mounted) { …; return { mountPoint, sizeBytes: retry.sizeBytes ?? … } }`. Test case 1 stubs `df` to report "not mounted" on calls 1–2 and "mounted" on call 3 (the retry), then asserts `r.mountPoint === mountPoint` (the winner's mount) — i.e. the loser call returns the winner's volume, not a twin. Both cases traced line-by-line against the injected `exec`/`mkdirSpoolDir` seams added in the same diff (`opts.exec`, `opts.mkdirSpoolDir`), confirming the seam is real and used, not decorative. |
+| 3. `mount | grep -c AgentLensSpool` stays 1 across a `spool ensure` + `setup` run | ✗ UNVERIFIED — deliberately not run; documented in-card as out of scope (mutates live RAM-disk state). Read-only check permitted by this review's constraints: `mount | grep -c AgentLensSpool` on this machine now returns `1` (consistent with the STATE block's hand-detach on 2026-09-02 09:27, and with no regression since). This is circumstantial — it does not exercise the actual two-process race the box describes — but the box's own rationale for skipping it is genuine (a real race test would create/detach real RAM disks on the reviewer's machine) and was already flagged in the STATE block as "Review decides whether that is acceptable evidence," not silently dropped or appended out of scope after the fact. `git log -p --follow` on this card shows box 3's wording present in the original authoring commit (card creation), unchanged since — it is an originally-scoped-out acceptance item, not a later appendix. |
+
+**Test-run gate:** the two unit-test cases were read and traced against `src/ramdisk.ts`'s actual post-diff logic and are internally consistent (correct stub shape, correct assertions, `suite`/`test` mocha style matching the project's other `src/test/*.test.ts`), but were **not executed** — deferred per this review's hard constraint (no `mocha`/`pnpm test`/build, CPU-starved by a concurrent Rust build). Exact command deferred: `pnpm run compile-tests && npx mocha out/test/test/ramdiskTwin.test.js`.
+
+**Defects noted (non-blocking):**
+- Frontmatter carries no `implementation-commits:` field even though the card cites a landed commit (5bb076c8) in its body/STATE block — the backtracking field the TRDD schema expects for shipped code is absent. Should be added (`implementation-commits: [5bb076c8]`) on next touch; not a reason to reject since the commit is independently verifiable via git.
+- `column: ai_review` with one open box is internally consistent here (the STATE block explicitly asks the reviewer to decide on box 3), not a mis-columned card.
+
+**Verdict: APPROVE** — boxes 1–2 verified first-hand against the actual diff and test assertions (not just commit-message claims); box 3's non-completion is a documented, deliberate scope decision (not a hidden gap or out-of-scope appendix), correctly left for `human_review` to accept or demand a real two-process repro.
