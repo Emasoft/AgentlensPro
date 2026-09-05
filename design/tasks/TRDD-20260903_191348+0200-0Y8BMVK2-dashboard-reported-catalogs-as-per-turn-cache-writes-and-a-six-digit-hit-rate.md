@@ -1,18 +1,33 @@
 ---
 trdd-id: 0Y8BMVK2
 title: The dashboard reported skill and agent catalogs as per-turn cache writes and a six-digit hit rate
-column: testing
+column: ai_review
 created: 2026-09-03T19:13:48+0200
-updated: 2026-09-03T19:13:48+0200
-current-owner: claude-code
+updated: 2026-09-05T18:23:01+0200
+current-owner: main-session
 task-type: bugfix
 severity: HIGH
 labels: [dashboard, cache, metrics, attribution, false-positive]
 relevant-files: [media/src/tabs/Agents.tsx, media/src/tabs/Traces.tsx, src/shared/tokenBuckets.ts, src/test/cacheHitRate.test.ts]
 release-via: publish
+implementation-commits: [574eeba5]
+related: [V8W9A8FZ, DIZ289UQ]
 ---
 
 # The dashboard reported catalogs as per-turn cache writes and a six-digit hit rate
+
+## ⏵ STATE — 2026-09-05T18:23:01+0200 — `testing → ai_review`
+
+The 19:13 NEXT ACTION below was done one minute after it was written: `574eeba5` (2026-09-03
+19:14:39) commits the four files named in `relevant-files:` plus this card (5 files, +182/−12),
+verified by `git show --stat`. The card then sat in `testing` for two days with a stale NEXT ACTION
+and no `implementation-commits:`; both fixed here. This card has no acceptance boxes by design
+(TRDD-KBK9J59Y ruled it one of the report-shaped cards that need none); the AI review checks the
+gates the 19:13 STATE enumerates (`check-types`, `check-mirrors`, the 5 `cacheHitRate` tests,
+`esbuild`) against HEAD. Of the two fold-out items: "PostToolUse:Agent advisory size" had no card
+until TRDD-V8W9A8FZ (backburner, this commit — the remark carries no spec beyond its name);
+"burn-gate wording" is most likely what TRDD-DIZ289UQ (2026-09-05, the thrash gate blaming forks)
+addressed — INFERRED from the titles, not from a record linking them.
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-03 19:13
 
