@@ -3,7 +3,7 @@ trdd-id: YE15B2JK
 title: Claude Code now reports cache state in the statusline payload so cache-expired should read it instead of inferring
 column: ai_review
 created: 2026-09-01T18:30:59+0200
-updated: 2026-09-01T19:50:43+0200
+updated: 2026-09-05T15:16:57+0200
 current-owner: main-session
 task-type: feature
 scope: project
@@ -69,6 +69,22 @@ Code is at 2.1.252 here. The field names in the directive are described, not quo
 - [x] `cache-expired` prefers the captured field and says so in its output.
 - [x] With the field absent, the old inference still answers and is labelled as an inference.
 - [x] Mutation-verified: remove the field-reading branch and a test must fail (5 unit tests, `src/test/cacheExpiredAuthoritative.test.ts`).
-- [ ] `rate_limits.spend_limit` column populated from a real gateway-captured row (not yet observed).
+- ~~`rate_limits.spend_limit` column populated from a real gateway-captured row~~ — appended in
+  `e4b8ae88` after the card's scope was set and unmeetable by work here (the harness has never emitted
+  the field); split out to TRDD-BFUZ1THR (`backburner`, `review-after: 2026-10-05`) on 2026-09-05.
 
 ## Notes and lessons learned
+
+## AI review verdict — run: 2026-09-05T15:15:25+0200
+
+| Box | Status | Evidence |
+|---|---|---|
+| Field names recorded, quoted from live row | ? INFERRED | Names given in prose (`prompt_cache_expires_at`, `prompt_cache_ttl`, `prompt_cache_warm`) match a REAL live row read today (`~/.agentlens/statusline/main/2026-09-05/wal-39382.ndjson`) and all 12 `GUARANTEED_COLUMNS` in `src/statuslineStore.ts:218-229`; card never pastes a raw JSON row (doc gap, not correctness). |
+| `cache-expired` prefers captured field, says so | ✓ VERIFIED | `src/cli/cacheExpiredCli.ts:198-212` — tries `authoritativeFromWals()` first; success path prints `harness-reported (ttl …)` and sets `source: 'statusline-prompt-cache'` in `--json`. |
+| Field absent → old inference still answers, labelled | ✓ VERIFIED (partial) | Fallthrough to `check_cache_expiry` (`cacheExpiredCli.ts:224-276`) confirmed; distinguishable by shape (`source` key absent, different stderr wording) but never prints the literal word "inferred". |
+| Mutation-verified (5 unit tests) | ✓ VERIFIED | `git show --stat 494eb779` adds `src/test/cacheExpiredAuthoritative.test.ts`; read in full — 5 `test()` blocks, all importing `authoritativeFromWals` directly, so removing it fails every test. Run itself deferred (CPU contention). |
+| `rate_limits.spend_limit` populated (open box) | ✗ UNVERIFIED — genuinely unmet | Checked today's live row: only the four `rate_limits_{five_hour,seven_day}_*` fields exist; `spend_limit` has never been observed. Box is correctly left unticked. |
+
+**Defect (process hygiene):** `git log --follow` on this card shows the 5th box was appended in the SAME commit that ticked the other 4 and moved the card to `ai_review` (commit `e4b8ae88`) — it was NOT part of the card's original scope (commit `dc204e41`, `column: todo`, 4 boxes only). Per TRDD rule 9/13 this should have been split into its own TRDD/EHT rather than appended post-hoc to a closing card. It is explicitly marked `not blocking` in the STATE block, which mitigates but does not eliminate the defect. Recommend filing it as its own TRDD (or folding into TRDD-SIGBCMGL) before/at `human_review`.
+
+**Verdict: APPROVE** — the four original acceptance criteria are verified against source, commits, tests, and a live captured row; the later-appended 5th box names a field genuinely never observed, so leaving it unticked is honest, not concealment of unfinished required work.
