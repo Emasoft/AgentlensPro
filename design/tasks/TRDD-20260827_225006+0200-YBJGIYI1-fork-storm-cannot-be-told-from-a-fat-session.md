@@ -3,7 +3,7 @@ trdd-id: YBJGIYI1
 title: FORK_STORM cannot be distinguished from one fat session rewriting its own prefix
 column: ai_review
 created: 2026-08-27T22:50:06+0200
-updated: 2026-09-05T19:03:52+0200
+updated: 2026-09-05T20:48:51+0200
 current-owner: claude-session-2026-09-02
 task-type: bugfix
 scope: project
@@ -22,9 +22,15 @@ Review report: `reports/ai-review/20260905_185612+0200-YBJGIYI1-ai-review.md` (l
 cargo). Re-checked first-hand by the orchestrator at 18:57: `burn/investigator.rs:163` gates `FORK_STORM` on
 `biggest_fam_sessions >= 2` (plus the spike/family/cold thresholds) and `:216` emits `FAT_SESSION_REWRITES`
 otherwise; the three unit tests at `:582` (two sessions → FORK_STORM), `:587` (one session →
-FAT_SESSION_REWRITES) and `:592` (`None, None, None` → FAT_SESSION_REWRITES) pin the honest-label rule;
-`git log bb76bb51..HEAD -- rust-core/` is empty, so the 17:15 capture's `burnscan_parity` 9/9 is the gate for
-the reviewed tree. `implementation-commits: [06649a73]` is the single implementing commit (per the review's
+FAT_SESSION_REWRITES) and `:592` (`None, None, None` → FAT_SESSION_REWRITES) pin the honest-label rule.
+Those three are `#[test]` fns inside `mod tests` of `src/burn/investigator.rs` — LIB unit tests — and they
+vary ONLY the session-id slice: `synth` (`:550`) fixes three cold full-prefix spikes two minutes apart on one
+shared fingerprint, and `cause_of` (`:574`) feeds that to `detect_storms_and_rewrites` and returns
+`findings[0]["cause"]`, so the spike/family/cold conjuncts are held constant and the session-count gate is
+the only thing under test. Their evidence in the 17:15 capture is therefore line 60 — `Running unittests
+src/lib.rs` (line 3) → `test result: ok. 53 passed` — NOT the `burnscan_parity` binary, which exercises the
+scan/oracle path. `git log bb76bb51..HEAD -- rust-core/` is empty, so the 17:15 capture's `burnscan_parity`
+9/9 plus that lib result are the gates for the reviewed tree. `implementation-commits: [06649a73]` is the single implementing commit (per the review's
 `--stat` read; `532baacb` belongs to TRDD-MF4YQWWA). **Not re-verified, still INFERRED:** the 09-02 mutation
 claim (gate reverted → 2 of 3 tests fail, exit 101) — no cargo this pass; it rests on the three assertions
 targeting three distinct branches, which is consistent with the claim but is not the observation.
