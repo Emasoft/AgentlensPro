@@ -1,22 +1,49 @@
 ---
 trdd-id: MVR6PXC0
 title: Three MCP tool handlers hold the state lock for one to four seconds inside their per-candidate resolve_session_card closure
-column: dev
+column: ai_review
 created: 2026-09-05T12:33:51+0200
-updated: 2026-09-05T20:45:42+0200
+updated: 2026-09-05T21:50:15+0200
 current-owner: main-session
 task-type: bugfix
 priority: high
 min-approval-requirement: none
 created-by: QE114936
-related: [QE114936, UTFVMVT8, 2R36W8Q1]
+related: [QE114936, UTFVMVT8, 2R36W8Q1, RAPDS7OX]
+implementation-commits: [3b9018e0]
 ---
 
 # Three MCP tool handlers hold the state lock for one to four seconds inside their per-candidate resolve_session_card closure
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-09-05T17:16:41+0200
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-09-05T21:50:15+0200
 
-**IN `dev` — the code is written and UNCOMMITTED in the working tree (`ui.rs` +149/−42); the full
+**IN `ai_review` — fix committed `3b9018e0`, deployed, acceptance MEASURED PASS.** The detached
+remaining-31 run finished green: 31/31 `test result: ok`, 0 failed, `ui` 41/41, no `error:` line
+(`reports_dev/mvr6pxc0-cargo-test-remaining-20260905_203434+0200.txt`, last write 21:28; no EXIT line
+by construction — `detach-run.py` execs cargo directly — completion read from the 31st binary's
+result line plus the absence of the cargo process in a `ps` snapshot). `ui.rs` was `cmp`-equal to
+the 17:14 patch at commit time. Deploy 21:38: release build 3m26s → old binary MOVED to
+`builds_dev/alcore.prev-20260905_213843+0200` (not rm'd) → `cp` (fresh inode, ATOM-SFLG-1NSX) →
+`codesign -s - --force` → `codesign -v` OK → `--version` exit 64 (usage, the documented non-kill exit)
+→ `agentlenspro server restart` → pid 574 RUNNING canonical. **Acceptance (box 2) PASS**:
+`reports/mvr6pxc0/20260905_214926+0200-acceptance-24-invocations.md` — 24/24 tools EXIT=0 against
+pid 574 (log offset 27264342→27275615), 49 `state lock held` lines, all <1000 ms at the four target
+ranges; the ONE ≥1000 ms line in the window is 1440 ms at `ui.rs:3507`, the `burn_risk_report` call
+under the guard in `check_burn_risk` — a different handler, outside every range this card names →
+its own card **TRDD-RAPDS7OX**. **Two facts the review fork on `3b9018e0` surfaced, recorded here
+because the earlier STATE implied otherwise:** (1) the binary deployed at 16:32 (kept as the `.prev`
+copy) already contained `resolve_session_card_offlock` — the live collector ran this diff ~5 h
+BEFORE the gate went green, so the 21:38 deploy is a fresh-inode rebuild of the same source, and the
+"gate before deploy" ordering in the 17:16 STATE was not honoured by whoever deployed at 16:32;
+(2) the only eviction path from `log_sessions` is `POST /api/clear` (`lib.rs:627`), which triggers a
+full sweeper rescan from offset 0, so a card stored into the cleared map between lock 1 and lock 2 is
+re-derived from the same file — bounded, no code change. Nits parked for the next substantive
+`ui.rs` edit: the `"state poisoned"` label at the new `env` clone site names a lock TIMEOUT as poison
+(wording only); no test exercises `_offlock` under contention — the 24-invocation window is the only
+concurrency evidence. **NEXT ACTION:** AI review of the split (read-only) → `human_review` is the
+USER's move.
+
+**Previous STATE (17:16) — IN `dev` — the code is written and UNCOMMITTED in the working tree (`ui.rs` +149/−42); the full
 cargo test run is the gate that has not passed.** The kraken worker spawned ~13:00 was stopped by the
 orchestrator at 17:14 after 4 h with no reply to a 14:07 status ping and a transcript file untouched
 since 13:50. That silence was NOT death: a subagent's transcript file does not grow while one Bash
@@ -99,12 +126,28 @@ three tools.
 
 ## Acceptance
 
-- [ ] The three handlers take the state lock only to snapshot, and `resolve_session_card` runs
-      outside it (or is proven lock-free).
-- [ ] Same 24-invocation recipe as the QE114936 box-3 report: zero `state lock held ≥ 1000 ms
+- [x] The three handlers take the state lock only to snapshot, and `resolve_session_card` runs
+      outside it (or is proven lock-free). (`3b9018e0`: all four `timeline_of` closures call
+      `resolve_session_card_offlock`, which holds the guard for a `contains_key`, a stamp+insert and
+      the OTEL graft, and releases it across `reparse_session_card(&Env, …)` — the disk read + JSONL
+      parse. The single-lookup callers keep `resolve_session_card`, now composed from the same
+      helpers, so the two cannot drift.)
+- [x] Same 24-invocation recipe as the QE114936 box-3 report: zero `state lock held ≥ 1000 ms
       by ui.rs:{2074,3220,3283}` lines while ingest is hot.
+      (`reports/mvr6pxc0/20260905_214926+0200-acceptance-24-invocations.md`, pid 574 = the
+      `3b9018e0` build: 49 lock-hold lines in the window, none ≥1000 ms inside the four handlers'
+      ranges; the single 1440 ms line is `check_burn_risk`'s `ui.rs:3507` → TRDD-RAPDS7OX.)
 - [x] QE114936's box 3 note updated to point here (2026-09-05 18:08 — the note sits directly under
       QE114936's box 3, naming this card and the three `ui.rs` sites; earlier only its STATE block
       carried the link, which a review fork correctly refused to count as "the box-3 note").
 
 ## Notes and lessons learned
+
+## Approval log
+
+- 2026-09-05T21:50:15+0200 — `dev → testing → ai_review` (both exempt rows: code committed
+  `3b9018e0`; the composed gate green and the box-2 recipe measured PASS on the deployed build).
+  The card has no `test-requirements:` frontmatter, so per KBK9J59Y the "tests passed" judgement is
+  the orchestrator's — USER may veto by demanding a single-run (non-composed) full suite including
+  doctests. Review fork on `3b9018e0`: nothing blocking; its two verified findings (deploy preceded
+  the gate; `POST /api/clear` is the only eviction path) are in the STATE block.
