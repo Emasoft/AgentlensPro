@@ -42,8 +42,14 @@ this card's scope, which is the four installer entries plus the two network budg
   src/cli/hookHandlers.ts` → `52155adf`, so the cited lines are HEAD-accurate (the reviewer's
   :237/:266 were a different revision); `standalone/cli.js` mtime is 16:00:55, three seconds after
   `52155adf` (16:00:52), so the bundle is from the committed source and the STATE's "16:05" is a
-  loose time, not a stale bundle. The four `timeout: 5` literals are not in `src/cli` or
-  `standalone/cli.ts` (grep 0) — they come from other bundled modules and are outside this card.
+  loose time, not a stale bundle. The four `timeout: 5` literals were a grep artefact: the bundle
+  pattern `timeout: *[0-9]*` stops at the `_` in `timeout: 5_000`, the `execFileSync` budgets in
+  `src/serverRuntime.ts:147`, `src/safeConfigEdit.ts:57`, `src/cli/setup.ts:849` and two
+  `timeout: 5000` siblings — process budgets in milliseconds, not hook ceilings. Located 18:13 by
+  `grep -rn "timeout: 5" src --include='*.ts'`; nothing of this card's scope is at 5.
+- 2026-09-05T18:13:50+0200 — the fork on `bbb7fa5e` questioned the attribution "the installer's
+  own `isOurHookCommand` view": confirmed — `src/cli/setup.ts:1063` computes the printed count as
+  `allHooks.filter(h => isOurHookCommand(h.command)).length`.
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-09-05T16:06:03+0200
 
