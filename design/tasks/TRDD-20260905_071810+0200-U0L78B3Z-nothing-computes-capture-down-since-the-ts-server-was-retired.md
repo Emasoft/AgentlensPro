@@ -3,13 +3,13 @@ trdd-id: U0L78B3Z
 title: Nothing computes CAPTURE DOWN since the TS server was retired so the liveness clock ticks unread
 column: todo
 created: 2026-09-05T07:18:10+0200
-updated: 2026-09-05T08:13:10+0200
+updated: 2026-09-05T08:25:46+0200
 current-owner: main-session
 task-type: bugfix
 priority: high
 min-approval-requirement: none
 created-by: 8ADTIGKT
-related: [8ADTIGKT, 4FMHW124, 1B98LCVR, 5PUD8RKE]
+related: [8ADTIGKT, 4FMHW124, 1B98LCVR, 5PUD8RKE, FGN5TY7E]
 ---
 
 # Nothing computes CAPTURE DOWN since the TS server was retired so the liveness clock ticks unread
@@ -96,11 +96,20 @@ declarations disagree.**
 
 Neither is complete, and the CLI demonstrably reads `s.bodies.parked` — a field the main interface
 does not declare. **The real read set is the UNION**, and diffing that against the five emitted
-children yields the same four unsent fields. So the list is instrument-independent.
+children yields the same four unsent fields.
 
-That duplication is itself worth a card: one wire object with two partial hand-maintained shapes is
-exactly how a field goes unsent for months without anyone noticing — each declaration looks
-locally complete. **Cite the bounded block plus this union for all four**; the per-key `grep -c`
+**NOT "instrument-independent" — I claimed that and it is wrong.** Both instruments ran over
+`serverControl.ts` alone, so they share a blind spot: another file declaring or consuming this
+shape is invisible to both. Proof, found minutes later: **there is a THIRD declaration, in a second
+file** — `burnGuard.ts:110` — so the count went 2 → 3 the moment the search widened. What was
+actually earned: *the same four from two instruments with different blind spots, both scoped to one
+file*, which is a real strengthening (the grep cannot see `:521`'s parameter read; the type route
+can) but still a LOWER BOUND. The asymmetry protects the finding — every miss adds an unsent
+field, never removes one.
+
+That duplication is now its own card, **TRDD-FGN5TY7E** (`related:`, not `eht:` — the port does not
+depend on the dedup and must not be blocked by it). It is plausibly the root cause of this whole
+class: each declaration looks locally complete, so nobody notices. **Cite the bounded block plus this union for all four**; the per-key `grep -c`
 that first found two of them is the scoped-search evidence this card spent four commits demoting.
 
 **TWO silent alarms, not one.** `sinkProblem` renders `| SINK: …` on every status branch and, like
