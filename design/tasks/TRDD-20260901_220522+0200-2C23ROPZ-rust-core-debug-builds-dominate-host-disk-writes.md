@@ -3,7 +3,7 @@ trdd-id: 2C23ROPZ
 title: rust-core debug builds are the host's dominant disk writer — bound the dev profile
 column: ai_review
 created: 2026-09-01T22:05:22+0200
-updated: 2026-09-05T09:39:25+0200
+updated: 2026-09-05T09:45:50+0200
 current-owner: agentlenspro-15
 task-type: infra
 external-refs: [https://github.com/Emasoft/AgentlensPro/issues/18]
@@ -36,12 +36,16 @@ sixteen more, so that class of claim needs a `git show --stat` before it counts 
   honest about its own limits is the bar this clause sets, and it clears it.
 - **(b) test/clippy gates unchanged** — CONFIRMED (lib tests 52/52 re-run by the agent; clippy
   rc 0 per the card).
-- **(c) CI cache keys unaffected** — **the original wording was FALSIFIED and the card says so**:
-  checked against the pinned action's source, `Swatinem/rust-cache` hashes every member manifest
-  but never the virtual root, so the profile edit would NOT have rotated the key — worse than
-  assumed. Fixed with `hashFiles('rust-core/Cargo.toml')` on both steps. **That retraction is the
-  most useful thing on this card for a future reader**, and an earlier version of this verdict
-  block failed to point at it.
+- **(c) CI cache keys unaffected** — **THE CARD RECORDS ITS OWN ASSUMPTION AS FALSIFIED** and fixes
+  it with `hashFiles('rust-core/Cargo.toml')` on both rust-cache steps. That the card says this,
+  I verified by reading it. **The underlying technical fact — that `Swatinem/rust-cache` hashes
+  every member manifest but never the virtual root — is the CARD'S check against the pinned
+  action's source, not mine**; I never opened the action. An earlier version of this block stated
+  it flat, with no provenance marker, in a paragraph whose whole organising principle is provenance
+  markers. Note the fix is correct either way: keying on `rust-core/Cargo.toml` is right whether or
+  not the original assumption was wrong. **That retraction is still the most useful thing on this
+  card for a future reader** — an assumption checked against a pinned source and found half-wrong,
+  recorded rather than quietly patched.
 
 **Two DIFFERENT reasons a number here is unreproduced — an earlier version of this block flattened
 them into one, and that flattening was the error:**
