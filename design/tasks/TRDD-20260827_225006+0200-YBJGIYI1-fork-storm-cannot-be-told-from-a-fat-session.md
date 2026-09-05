@@ -3,7 +3,7 @@ trdd-id: YBJGIYI1
 title: FORK_STORM cannot be distinguished from one fat session rewriting its own prefix
 column: ai_review
 created: 2026-08-27T22:50:06+0200
-updated: 2026-09-05T18:51:15+0200
+updated: 2026-09-05T19:03:52+0200
 current-owner: claude-session-2026-09-02
 task-type: bugfix
 scope: project
@@ -15,6 +15,19 @@ implementation-commits: [06649a73]
 ---
 
 # FORK_STORM cannot be distinguished from one fat session rewriting its own prefix
+
+## ⏵ AI-REVIEW VERDICT 2026-09-05 — APPROVE. Ready for `human_review`; the USER makes that move.
+
+Review report: `reports/ai-review/20260905_185612+0200-YBJGIYI1-ai-review.md` (lean-worker, read-only, no
+cargo). Re-checked first-hand by the orchestrator at 18:57: `burn/investigator.rs:163` gates `FORK_STORM` on
+`biggest_fam_sessions >= 2` (plus the spike/family/cold thresholds) and `:216` emits `FAT_SESSION_REWRITES`
+otherwise; the three unit tests at `:582` (two sessions → FORK_STORM), `:587` (one session →
+FAT_SESSION_REWRITES) and `:592` (`None, None, None` → FAT_SESSION_REWRITES) pin the honest-label rule;
+`git log bb76bb51..HEAD -- rust-core/` is empty, so the 17:15 capture's `burnscan_parity` 9/9 is the gate for
+the reviewed tree. `implementation-commits: [06649a73]` is the single implementing commit (per the review's
+`--stat` read; `532baacb` belongs to TRDD-MF4YQWWA). **Not re-verified, still INFERRED:** the 09-02 mutation
+claim (gate reverted → 2 of 3 tests fail, exit 101) — no cargo this pass; it rests on the three assertions
+targeting three distinct branches, which is consistent with the claim but is not the observation.
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-09-05T18:47:42+0200
 
@@ -123,6 +136,9 @@ A fixture with 3 cold full-prefix spikes, one fingerprint, ONE session id must c
 - 2026-09-05T18:47:42+0200 — ORCHESTRATOR: `dev → ai_review` on the burnscan_parity gate read
   from the full-suite capture (9/9); the suite ran on a tree with one unrelated uncommitted
   file, named above. Vetoable at ai_review/human_review.
+- 2026-09-05T19:03:52+0200 — ORCHESTRATOR decision: accepted the 18:56 AI-review APPROVE after the
+  first-hand re-check above. Vetoable at `human_review`; the USER may require the mutation run to
+  be observed (revert the `:163` gate, run `cargo test --lib`, restore) before accepting.
 
 ## STATE — 2026-09-05T14:33:32+0200 — HISTORICAL (superseded above; the gate has now actually run)
 
