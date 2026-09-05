@@ -1,9 +1,9 @@
 ---
 trdd-id: X4YTS5BF
 title: The full mocha suite has 17 failures and only 7 of them belong to an open card
-column: dev
+column: ai_review
 created: 2026-09-05T10:43:43+0200
-updated: 2026-09-05T12:33:51+0200
+updated: 2026-09-05T12:48:06+0200
 implementation-commits: [f3235678, 244fbfef]
 current-owner: main-session
 task-type: bugfix
@@ -14,9 +14,22 @@ related: [B7DSTJLS, CS2W7E77, U0L78B3Z]
 
 # The full mocha suite has 17 failures and only 7 of them belong to an open card
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-09-05T12:33:51+0200
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-09-05T12:48:06+0200
 
-**IN `dev`, fixes COMMITTED, full-suite run (box 4) in flight.** Root cause of the eight `setup`
+**IN `ai_review` — every row this card owns is green on a full-suite run.** Full `npx mocha`
+2026-09-05 12:33–12:47 (14 min, load 17 → 12; `reports_dev/x4y-full-suite.txt`, ANSI-stripped
+copy `x4y-full-suite-plain.txt`): **2654 passing · 10 pending · 6 failing** (was 2643 / 10 / 17).
+The six: `cacheBreakTimeline — buildCauseCostPeakReport` timeout 120 s (TRDD-B7DSTJLS, one of its
+two rows — the "real machine data" row now passes) and the five `P5 window auto-calibration`
+tests (TRDD-CS2W7E77; the first now reads "account window must exist before the stall …
+0 span(s)", the other four the same `burn-config.json` ENOENT). All eight `setup` rows, P3b, FAL
+and the FAL-shaped `forensicsIndex` timeout are gone. One caveat on the leak fix: its behaviour in
+the fixture (the revive lock / hook-spool landing under the tmp home) is being measured by a
+probe queued behind the 2R36W8Q1 soak (`reports_dev/x4y-leak-probe.txt`); the code is verified,
+the cascade is gone on two runs, the probe is the positive signal. `human_review` is the USER's
+move. Earlier:
+
+**Earlier STATE — 2026-09-05T12:33:51+0200 — IN `dev`, fixes COMMITTED, full-suite run (box 4) in flight.** Root cause of the eight `setup`
 failures, from `reports/x4yts5bf/20260905_122349+0200-repair-matrix-hook-hang.md` and verified at
 both code sites: the hooks step's verify exec inherited the caller's HOME and never set
 `AGENTLENS_DATA_DIR`, so every hook the tests spawned resolved the REAL machine's `~/.agentlens`
@@ -78,12 +91,12 @@ default, reproducible on this tree.
 
 ## Acceptance
 
-- [ ] `setup` ×8: root cause named from the raw output (fixture path vs product path), fixed in
+- [x] `setup` ×8: root cause named from the raw output (fixture path vs product path), fixed in
       whichever side is wrong, and the eight tests green on a real ephemeral-HOME run.
-- [ ] `rustIngest — P3b` and `FAL Phase 1`: either fixed or their timeouts are `loadScaledTimeout`
+- [x] `rustIngest — P3b` and `FAL Phase 1`: either fixed or their timeouts are `loadScaledTimeout`
       like their neighbours, with the measured runtime on this machine recorded here.
-- [ ] Rows 1–2 and 5–9 stay with their owning cards; this card links, never duplicates.
-- [ ] A full-suite run recorded here with the failing count, so the next reader does not start
+- [x] Rows 1–2 and 5–9 stay with their owning cards; this card links, never duplicates.
+- [x] A full-suite run recorded here with the failing count, so the next reader does not start
       from "17".
 
 ## Notes and lessons learned
