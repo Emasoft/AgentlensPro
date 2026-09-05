@@ -3,10 +3,10 @@ trdd-id: SIGBCMGL
 title: Align agentlenspro taxonomies and diagnostics with Claude Code 2.1.233→2.1.252
 column: ai_review
 created: 2026-09-01T19:20:48+0200
-updated: 2026-09-05T15:28:39+0200
+updated: 2026-09-05T15:31:15+0200
 current-owner: agentlenspro-15
 task-type: feature
-implementation-commits: [494eb779, 46576993, f36a934d, aef94208]
+implementation-commits: [2d06942b, 46576993, 525bbcf8]
 related: [YE15B2JK, BFUZ1THR, VY1IUVUM, B7DSTJLS]
 ---
 
@@ -78,10 +78,15 @@ Done this session (commits named below); remaining boxes are docs/design work, n
 
 - 2026-09-05T15:28:39+0200 — ORCHESTRATOR decision on the 15:26 AI-review APPROVE: the one open box
   (`spend_limit`) was original scope the author deliberately deferred ("NOT guaranteed yet", unticked
-  since `2d06942b`); it cannot be met by code here and is the same item TRDD-YE15B2JK carried, so
-  both now delegate it to TRDD-BFUZ1THR and this card carries no open box. The owner or the USER may
-  veto by restoring the box. Also added the missing `implementation-commits:` from the four SHAs the
-  body cites (each confirmed to exist with the claimed subject). Human-review reader: the
+  since `2d06942b`, which `git log --follow` shows is this card's first commit); unlike YE15B2JK's
+  post-hoc box this one was part of the plan, so it is DELEGATED, not dropped: it cannot be met by
+  code here and is the same item TRDD-YE15B2JK carried, so both now point at TRDD-BFUZ1THR and this
+  card carries no open box. The owner or the USER may veto by restoring the box.
+  `implementation-commits:` was first filled (`9f5259c7`) with every SHA the body cites — wrong, the
+  field is for commits that landed THIS card's code. Corrected at 15:31 to the three code commits
+  tagged `TRDD-SIGBCMGL`: `2d06942b` (the alignment feat: prompt_cache columns, ttl-resolved cost,
+  model-switch hooks), `46576993` and `525bbcf8` (pricing). Dropped: `494eb779` (YE15B2JK's), `aef94208`
+  (B7DSTJLS's), and `f36a934d` (this card's memory-page docs, not code). Human-review reader: the
   check-types/esbuild box is UNVERIFIED (test run deferred) and the "2535 passing / 1 failing" count
   has no saved run artifact — judge those two as the author's claims.
 
