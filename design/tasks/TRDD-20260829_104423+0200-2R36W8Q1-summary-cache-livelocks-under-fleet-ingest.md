@@ -3,7 +3,7 @@ trdd-id: 2R36W8Q1
 title: The summary cache is keyed on a version that moves faster than a rebuild completes, so the UI path livelocks under fleet ingest
 column: ai_review
 created: 2026-08-29T10:44:23+0200
-updated: 2026-09-05T12:55:19+0200
+updated: 2026-09-05T13:00:42+0200
 current-owner: main-session
 task-type: bugfix
 scope: project
@@ -23,9 +23,13 @@ blocked-by: [UTFVMVT8]
 carries this card's summary-cache change and QE114936's twenty handler rewrites), with no build
 or test overlapping it: p50 0.524 s, p99 0.955 s, max 1.281 s, 1 of 260 samples over 1 s. No
 `state lock held ≥ 1000 ms`; every `waited` line names the log scan (`log_reader.rs:1076`) or a
-chore as holder, none the summary. The bar is met by 45 ms, so the measurement is recorded
-as narrow, not comfortable — the incremental summarizer named below stays the real upgrade.
-`human_review` is the USER's move. Earlier state, kept:
+chore as holder, none the summary (lock census window 12:48–12:55, the log read at 12:55:19
+runs 25 s past the last sample). "Fleet rate" is measured, not assumed: the DuckDB store holds
+**502 `api_calls` rows from 6 sessions** with `ts_ms` inside the soak window, ~77 calls/min. The
+bar is met by 45 ms on ONE run with load rising 11 → 27 inside the window, so the measurement
+is recorded as narrow, not comfortable — a repeat at sustained load ≥ 25 is the confirmation,
+and the incremental summarizer named below stays the real upgrade. `human_review` is the
+USER's move. Earlier state, kept:
 
 ## ⏵ STATE (earlier) — 2026-09-02
 
