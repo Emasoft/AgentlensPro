@@ -1,21 +1,34 @@
 ---
 trdd-id: FGN5TY7E
 title: The server-stats bodies shape is hand-declared twice in one file and the two declarations disagree
-column: ai_review
+column: testing
 created: 2026-09-05T08:25:46+0200
-updated: 2026-09-05T11:49:00+0200
+updated: 2026-09-05T16:48:00+0200
 current-owner: main-session
 task-type: refactor
 priority: high
 min-approval-requirement: none
 created-by: U0L78B3Z
 related: [U0L78B3Z, ZIWEB0UW, 8ADTIGKT]
-implementation-commits: [a55074bd]
+implementation-commits: [0c01a3e1, 7659b9ca]
 ---
 
 # The server-stats bodies shape is hand-declared twice in one file and the two declarations disagree
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-09-05T11:21:29+0200
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-09-05T16:48:00+0200
+
+**`ai_review` → `testing` (REJECTED 16:46, accepted by the orchestrator).** Boxes 1–2 verified met by
+the review; box 3 is PARTIAL by the card's own 11:21 STATE and its mutation run — delete a field from
+the emitter in `server_stats.rs`, confirm the frozen-shape test in `tests/server_stats.rs` goes red,
+restore — was never performed, so the card moved toward `human_review` ahead of its own stated gate.
+No code is pending; the deliverable is that test run, hence `testing` rather than `dev`.
+`implementation-commits` was `[a55074bd]` — TRDD-U0L78B3Z's fix commit, not this card's — corrected to
+`[0c01a3e1, 7659b9ca]` (the dedup refactor and the review-correction commit, the only two code commits
+tagged FGN5TY7E; checked with `git log --grep`). **NEXT ACTION:** run the box-3 mutation when the
+machine is free (a Rust build shares the CPU today), record the red/green pair with the command and
+date, decide box 4 (partial by design, or a follow-up card), then `testing → ai_review`.
+
+## STATE — 2026-09-05T11:21:29+0200 — HISTORICAL
 
 **DONE in the working tree (uncommitted, same gate as TRDD-U0L78B3Z: `reports_dev/diz-final.txt`).**
 `src/cli/serverControl.ts` now has ONE `export interface ServerStatsBodies`; `ServerStats.bodies`
@@ -116,5 +129,24 @@ a parameter read — it could not see `serverControl.ts:521`, the read TRDD-U0L7
       field from the emitter and confirm it goes red.
 - [ ] The four fields from TRDD-U0L78B3Z either send or stop being declared; no declaration
       survives that describes a field nothing emits.
+
+## AI review verdict — 2026-09-05T16:46:33+0200
+
+| box | met/unmet/unmeetable | status | evidence |
+|---|---|---|---|
+| 1. ONE declaration of `bodies` | met | ✓ VERIFIED | `git show 0c01a3e1 -- src/cli/serverControl.ts`: `ServerStats.bodies` interface + `bodiesCaptureLine`'s param collapsed into ONE `export interface ServerStatsBodies` (line 511) + a `Pick<>` at line 532/589. Current file confirmed: only one `interface.*Bodies` hit in `serverControl.ts` (`grep -n`). |
+| 2. Search establishes full declaration set | met | ✓ VERIFIED | Re-ran the shape grep myself (`bodies\s*[?]\?:\s*{` and `Bodies` name grep) over `src/`, `media/src/`, `standalone/` (`--include='*.ts'`): only `ServerStatsBodies` in `serverControl.ts` matches the server-stats wire shape; the other 4 `*Bodies` interfaces (`BodiesReadScope`, `BodiesActivityReport/Options`, `LiveBodiesScan`) are unrelated shapes, not competitors. `media/src` = 0, matching the card's claim. |
+| 3. Something FAILS on producer/consumer divergence, mutation-verified | unmet | ✗ UNVERIFIED | `git show 7659b9ca -- rust-core/.../tests/server_stats.rs`: comment now says the test freezes the EMITTER's key set only and "cannot see" the TS interface — the card's own review-fork (`reports/review-fork/20260905_114745+0200-diz-u0l-fgn-review.md` §1) downgraded this to PARTIAL. `reports_dev/review-fix-gate.txt:124-131` shows the test PASSING (green), but the required mutation ("delete a field from the emitter and confirm it goes red") was never run — STATE block says so explicitly ("argued, not RUN — run once before human_review"). Deferred here too (CPU contention forbids me running `cargo test`), but the card's own NEXT ACTION names this as the step still outstanding, and it was not done before the column move. |
+| 4. The four TRDD-U0L78B3Z fields send or stop being declared | unmet (partial, reasoned) | ✓ VERIFIED (as partial) | `grep -n "reclaimedSinceBoot\|lastNonZeroPassAt\|captureDownSince\|sinkProblem" rust-core/.../src/server_stats.rs`: emitter sends `captureDownSince`/`sinkProblem` (line 676-682) but never `reclaimedSinceBoot`/`lastNonZeroPassAt`. `curl -s localhost:3000/api/server-stats` on the LIVE server confirms the same key set: `['archive','captureDownSince','lastPass','live','parked','sinkProblem','spool']` — no `reclaimedSinceBoot`/`lastNonZeroPassAt`. The interface still declares both as optional with a comment naming the unported purge as the reason (consistent with the card's stated rationale) — so the claim "2 of 4 fixed, 2 deliberately left declared-but-unsent" is accurate, but the acceptance box's literal text ("no declaration survives that describes a field nothing emits") is not met. |
+
+**Frontmatter defect:** `implementation-commits: [a55074bd]` is WRONG for this card — `a55074bd` is TRDD-U0L78B3Z's own fix commit (`git log -1 a55074bd`: "compute captureDownSince and probe the bodies sink … (TRDD-U0L78B3Z)"). This card's actual implementing commits are **`0c01a3e1`** (the dedup) and **`7659b9ca`** (the review-fork correction that downgraded box 3 to PARTIAL). `git log --all --grep="FGN5TY7E"` confirms these two plus four `docs(board)` commits (card authoring, not implementation). Neither `0c01a3e1` nor `7659b9ca` appears in `implementation-commits:` — the backtracking field currently points at the wrong card's commit entirely.
+
+**Defects found:**
+1. Box 3's acceptance text requires "Mutation-verified" and the card's own STATE names the mutation run as the outstanding NEXT ACTION, not yet performed — moved toward `human_review` before its own stated gate.
+2. `implementation-commits:` frontmatter cites `a55074bd` (a different card's commit) instead of this card's actual `0c01a3e1`/`7659b9ca`.
+
+Boxes 1 and 2 are genuinely done and well-evidenced. Box 4's partial state is honestly reported and reasoned (scope boundary vs. an unported purge), which is exactly the kind of judgment call `human_review` exists for. Box 3's gap is smaller in scope — one `cargo test` mutation run — but it is the card's own self-identified last step, skipped.
+
+**Verdict: REJECT — run the box-3 mutation (delete a field from the emitter, confirm the frozen-shape test goes red) and fix `implementation-commits:` to `[0c01a3e1, 7659b9ca]` before resubmitting.**
 
 ## Notes and lessons learned
