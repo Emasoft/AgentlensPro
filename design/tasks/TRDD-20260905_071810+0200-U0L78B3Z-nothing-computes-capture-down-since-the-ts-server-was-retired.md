@@ -33,7 +33,7 @@ reachable. Nothing here is fixed yet; this card is the finding.
 | the value is exposed on a debug route | **works** | `/api/debug/capture-activity` → `{"lastIngestActivityAt": …}` (`ui.rs:1451-1464`) |
 | something compares the CLOCK to a window | **MISSING** | The unscoped, binary-safe search over `last_ingest_activity_ms`/`lastIngestActivityAt` returns ONLY writes, the definition, the debug-route exposure, and tests. Complete by construction **for that identifier** — but NOT for the card's claim: a CAPTURE DOWN value need not come from this clock at all. `bodies.live.newestMs` is already in the same response and `now - newestMs > window` is a complete capture-liveness test; so are spool mtimes, hook-event arrival, and span arrival. An earlier version of this row claimed "any emitter would have to compute from this clock" — **false, and `newestMs` is arguably the BETTER design.** Also true: `CAPTURE_ACTIVITY_WINDOW_MS` is absent tree-wide, and `ui.rs:1460` delegates the comparison to "the caller (server.ts kept it on its side)", which `567fc5c2` retired |
 | alcore emits `bodies.captureDownSince` in `/api/server-stats` | **MISSING — CLOSED, by reading the one block that decides it** | The consumer reads `s.bodies.captureDownSince` — a DIRECT CHILD of `bodies`. `server_stats.rs:613` builds that object as a literal `json!` block whose direct children are exactly five: `archive`, `lastPass`, `live`, `parked`, `spool`. Four are inline literals; **exactly one value is spliced** (`spool_gauge(…)`), and it sits UNDER `"spool"`, so whatever it emits lands at `bodies.spool.*` and can never become `bodies.captureDownSince`. The enumeration is therefore complete for the key the CLI actually reads — a bounded block, not a search. **Cross-check**: the live curl returned `bodies` keys `[archive, lastPass, live, parked, spool]` — exactly the literal set, so no splice adds a direct child at runtime either. (An earlier version claimed closure from a whole-file string-literal count plus "zero derives in this file". That is the WEAKER precondition: `json!` can splice a `Value` built anywhere, so a file-scoped derive check cannot exclude keys entering the tree from another module. What closes it is reading the one block, not counting literals in the file.) **The row below is SUPPORTING only — a SCOPED search, not a universal negative.** Zero hits for `captureDown` / `capture_down` in `server_stats.rs` or anywhere under `rust-core/crates/*/src/`. It could miss an emitter whose Rust field is named something else under a `rename_all = "camelCase"`, a key built in a hand-written `json!` (the codebase mixes styles — `ui.rs:1463` is exactly that), or a crate outside the `*/src/` glob. That does not weaken the card, because the row above does not depend on it. **CORROBORATING ONLY: the wire.** `curl -s localhost:3000/api/server-stats` (2026-09-05) returns `bodies` with keys `[archive, lastPass, live, parked, spool]`, no `captureDownSince` — but that curl was taken while capture was HEALTHY (`live.files=29`, newest 1s ago), which is exactly when a CORRECTLY WORKING implementation would also omit an optional field (`skip_serializing_if = "Option::is_none"` is the idiom). **It discriminates nothing.** The behavioural test that WOULD is a response observed while capture is genuinely down — nobody has run it, and acceptance box 1 already asks for it |
-| **the CLI renders the row** | **LIVE — verified by running it** | `src/cli/serverControl.ts:513` declares `captureDownSince?: number \| null` and `:521` renders `` `\| CAPTURE DOWN <N>m — sessions active, no bodies arriving` `` on EVERY branch. **`agentlenspro server status` on 2026-09-05 printed `capture: 11 live file(s), newest 1s ago`**, and `:700` is literally `` `capture: ${bodiesCaptureLine(s)}` `` while `bodiesCaptureLine` is the function at `:506` whose body computes `down` at `:521` — so that line IS this function's output, the function ran, `down` evaluated, and it was empty because the field is absent. (`:691`'s `bodies: archive …` is a DIFFERENT line; do not cite it for this.) |
+| **the CLI renders the row, and its read path is clean** | **LIVE — verified by running it, and the path re-read** | `showStatus` assigns `s` once at `serverControl.ts:616` from the parsed `/api/server-stats` response and only reads it after — no normalizer, no merge, no default-filler, so nothing between the wire and `:521` can inject or relocate the field. | `src/cli/serverControl.ts:513` declares `captureDownSince?: number \| null` and `:521` renders `` `\| CAPTURE DOWN <N>m — sessions active, no bodies arriving` `` on EVERY branch. **`agentlenspro server status` on 2026-09-05 printed `capture: 11 live file(s), newest 1s ago`**, and `:700` is literally `` `capture: ${bodiesCaptureLine(s)}` `` while `bodiesCaptureLine` is the function at `:506` whose body computes `down` at `:521` — so that line IS this function's output, the function ran, `down` evaluated, and it was empty because the field is absent. (`:691`'s `bodies: archive …` is a DIFFERENT line; do not cite it for this.) |
 | the TS burn-guard row | **unsupplied** | `getCaptureDownSince` DECLARED (`mcpServer.ts:3451`) and CALLED (`:3845`) but supplied by nothing ⇒ always `undefined` ⇒ its own comment: "no row" |
 
 **So `agentlenspro server status` has rendered CAPTURE DOWN correctly this whole time and will
@@ -58,6 +58,34 @@ carefully maintained and whose consumer was deleted a commit at a time.
 says alcore is the only backend and the MCP server is deliberately not registered, which suggests
 the TS burn-guard row is itself legacy. If so the port target is alcore's own burn guard, not the
 TS one. Settle this before writing code.
+
+## ⏵ 2026-09-05 — THIS IS NOT ONE FIELD. The CLI reads THREE that alcore never emits.
+
+Found while verifying the read path for this card. `showStatus` assigns `s` ONCE at
+`serverControl.ts:616` from `apiRequest('GET', '/api/server-stats')` and only reads it afterwards —
+no reassignment, no `Object.assign`, no spread — so the read path is verified and nothing injects
+fields. That same read shows the CLI consuming two MORE fields with the same problem:
+
+| field the CLI reads | in `server_stats.rs` | anywhere in `rust-core/*/src/` |
+|---|---|---|
+| `s.bodies.captureDownSince` | 0 | 0 |
+| `s.bodies.reclaimedSinceBoot` | 0 | 0 |
+| `s.bodies.lastNonZeroPassAt` | 0 | 0 |
+
+**`reclaimedSinceBoot` is worse than silent.** `serverControl.ts` branches on
+`s.bodies.reclaimedSinceBoot !== undefined`; since it is always undefined, the status line ALWAYS
+takes the else-branch and prints the `lastPass` fallback. The output looks correct and reports a
+different statistic than the one the branch was written to show — no error, no absent line, just a
+quieter number. `captureDownSince` at least fails by printing nothing.
+
+Same wound as this card's: `567fc5c2` retired the TS server, the CLI kept the reader, and the Rust
+replacement never grew the writer. **Scope decision for whoever takes this**: either widen this
+card to "port the bodies fields the CLI reads", or split the two new ones out — but do not fix
+`captureDownSince` alone and leave a consumer reading two more fields nobody sends.
+
+**Not yet checked**: whether other `s.<section>.*` reads outside `bodies` have the same gap. The
+method that found these is cheap and should be run across the whole `ServerStats` shape — compare
+every field `serverControl.ts` reads against the key space `server_stats.rs` emits.
 
 ## Why this matters
 
