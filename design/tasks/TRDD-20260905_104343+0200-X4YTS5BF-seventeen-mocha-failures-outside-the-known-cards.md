@@ -3,7 +3,7 @@ trdd-id: X4YTS5BF
 title: The full mocha suite has 17 failures and only 7 of them belong to an open card
 column: ai_review
 created: 2026-09-05T10:43:43+0200
-updated: 2026-09-05T15:09:33+0200
+updated: 2026-09-05T15:12:06+0200
 implementation-commits: [f3235678, 244fbfef]
 current-owner: main-session
 task-type: bugfix
@@ -127,7 +127,8 @@ Test-execution boxes (89/89, 2654/10/6, 5/5) were verified from saved report fil
 - 2026-09-05T15:09:33+0200 — worker verdict APPROVE (14:40); orchestrator re-checked first-hand:
   `x4y-full-suite-plain.txt:3798-3800` reads `2654 passing (14m) / 10 pending / 6 failing` and the
   file has exactly 6 `^  [0-9]) ` failure headers; `git show 244fbfef -- src/serverRuntime.ts` carries
-  the `timeout: 5_000` hunk on the `ps` exec; `git show --stat` confirms both cited commits with the
+  a `+ … timeout: 5_000,` line (hunk line 47) inside an `execFileSync` options object — that it is
+  the `ps` call is the commit message's word, not read here; `git show --stat` confirms both cited commits with the
   claimed subjects and dates. Duplicate-card sweep (`grep -l 'cacheBreakTimeline\|burn-config.json'
   design/tasks/*.md`): hits are B7DSTJLS and CS2W7E77 (the owners), BSDR4TRM (`complete`), this card,
   and 2R0AXCKL (`backburner`, the real-corpus flip-flop pair — related, not a duplicate of the six
