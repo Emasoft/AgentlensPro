@@ -1,19 +1,50 @@
 ---
 trdd-id: 7YPQWKPG
 title: DuckDB is the memory and alcore keeps no resident data model
-column: todo
+column: dev
 created: 2026-09-02T22:05:41+0200
-updated: 2026-09-03T05:36:55+0200
+updated: 2026-09-05T22:06:10+0200
 current-owner: main-session
 task-type: refactor
-priority: high
+priority: critical
 min-approval-requirement: user
 requested-by: user
 blocked-by: []
-related: [768NEX6E, CAJ5RCP9, O3ICDRLO, XX1UAZHS, N60JUWU3]
+npt: [YILE6N3T, 7RM5YW2T, XTFDRTH2, FSMISF5K]
+related: [768NEX6E, CAJ5RCP9, O3ICDRLO, XX1UAZHS, N60JUWU3, Q9WD3K5R]
 approved-by: user
 approved-at: 2026-09-02T22:05:41+0200
 ---
+
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-05T22:06:10+0200
+
+**RE-ISSUED BY THE USER 2026-09-05 22:00 and moved `todo → dev`.** Verbatim: *"why the hell alcore
+is using 17Gb of ram??? haven't i told you to make duckdb the only memory of agentlenspro? why there
+are things kept in memory and not written down in parquet files? why there are persistent data
+structures in ram instead of just the small query results from duckdb??? why a rust process is
+using so much memory and it is so slow??? fix all this"*. This card sat in `todo` since 09-03 with
+NEXT ACTION "wait for 768NEX6E box-4 sizing, then advisor, then split" — the sizing landed 09-02
+and the advisor verdict is below; the split never happened. It is done now, and the two same-day
+slices are in `dev` with workers.
+
+**Measured today on pid 574 (`3b9018e0`), all ✓ VERIFIED:** footprint 13.1 GB (peak 21.3 GB), of
+which mimalloc (the Rust heap) 8.7 GB resident and DuckDB/system malloc 0.38 GB; `spans.inMemory`
+570,550 and growing at the ingest rate while `windowMs` = 300,000 after four memory-pressure
+narrowings — the 24-hour `boot_load` is never pruned (TRDD-YILE6N3T); the 25-ms rebuild loop
+rebuilds the whole window back-to-back under ingest, 84% of a core, and is the churn mimalloc never
+returns (TRDD-7RM5YW2T); 32,607 log cards resident (TRDD-XTFDRTH2). The per-structure sizing
+(`reports/trdd-768nex6e/20260902_220716+0200-box4-heap-by-structure.md`) stands: bounded
+structures < 1 GB, the rest is rebuild churn + the unpruned window.
+
+**Children (advisor order, ≤5 files per phase):** YILE6N3T (window never prunes — critical bugfix,
+`dev`, worker) → 7RM5YW2T (rebuild back-off — critical bugfix, `dev`, worker) → XTFDRTH2 (cards →
+DuckDB table, `todo`, NPT on the two above) → FSMISF5K (summaries as DuckDB SQL, delete
+`SpanWindow`/`boot_load`, `todo`, NPT on XTFDRTH2). The log scan → `read_json_auto` replacement
+(inventory item 5) stays inside this card's own acceptance and is sequenced after FSMISF5K.
+**NEXT ACTION:** land YILE6N3T + 7RM5YW2T, deploy, re-measure RSS/CPU on the live server, then start
+XTFDRTH2. The advisor's card contradictions (a) are resolved by the children's shapes: log readers
+are replaced last (inventory item 5), routes stay identical in shape (no paging in this card),
+freshness = RYW ≤ 500 ms kept by 7RM5YW2T's design.
 
 ## WHY
 
