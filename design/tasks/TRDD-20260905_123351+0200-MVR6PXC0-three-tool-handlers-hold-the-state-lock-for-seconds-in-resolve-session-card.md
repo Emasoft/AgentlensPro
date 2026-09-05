@@ -3,7 +3,7 @@ trdd-id: MVR6PXC0
 title: Three MCP tool handlers hold the state lock for one to four seconds inside their per-candidate resolve_session_card closure
 column: dev
 created: 2026-09-05T12:33:51+0200
-updated: 2026-09-05T18:08:52+0200
+updated: 2026-09-05T20:34:48+0200
 current-owner: main-session
 task-type: bugfix
 priority: high
@@ -30,10 +30,15 @@ fixtures unchanged; `cargo test -p agentlens-core` had not completed under load-
 run was OOM-killed, exit 137 — not a test failure). The diff is still in the working tree; a
 belt-and-braces copy sits at `reports_dev/mvr6pxc0-kraken-ui-rs-20260905_1714.patch` (243 lines,
 5 hunks). The split is INTENDED as behaviour-preserving (the worker's evidence: fixtures unchanged,
-build and clippy 0); the full suite is the proof and is running as of 17:15. **NEXT ACTION:** read
-that run's exit code from its capture file (`reports_dev/mvr6pxc0-cargo-test-20260905_1715.txt`);
-if the machine is loaded again, run `--test ui` plus the touched-module tests first rather than
-waiting hours on the full suite. On green, commit `ui.rs` by name citing this card; then deploy
+build and clippy 0); the full suite is the proof. **The 17:15 run ended exit 101 at binary 70/98
+on `lpv_parity` — a harness portability bug unrelated to this diff (TRDD-4TOU4V8E, fixed in
+`644a9113`); 3 unittest + 67 integration binaries were green, `ui` and the 30 other names sorting
+after `lpv_parity` never ran.** Those 31 are now running detached (ppid 1, immune to session
+events) with `--no-fail-fast` since 20:34:34 under load-avg ~200, capture
+`reports_dev/mvr6pxc0-cargo-test-remaining-20260905_203434+0200.txt` (the `_203409` file beside
+it is a mis-launch: zsh passed the `--test` list as one token; ignore it). **NEXT ACTION:** poll
+that capture for its `test result` lines and the absence of `error:` (no EXIT line — detached);
+`--test ui` is the one that gates this diff. On green, commit `ui.rs` by name citing this card; then deploy
 (release build → `bin-native/darwin-arm64/alcore` → `codesign -s - --force` → `agentlenspro server
 restart`) and re-run the 24-invocation recipe from the QE114936 box-3 report for the acceptance line.
 On red, read the failure in full before touching the diff.
