@@ -3,7 +3,7 @@ trdd-id: 9SYRK6SW
 title: api_call staging table writer at the bodies-pass ingest site
 column: ai_review
 created: 2026-09-03T04:47:31+0200
-updated: 2026-09-05T14:20:42+0200
+updated: 2026-09-05T14:25:51+0200
 current-owner: main-session
 task-type: feature
 priority: high
@@ -365,6 +365,13 @@ implementation, and step 3 is the one that outlives it.
 
 ## Approval log
 
+- 2026-09-05T14:25:51+0200 — orchestrator re-checked boxes 1–6 first-hand after the worker's verdict
+  (`lib.rs:168-181` no `cost_usd`; `tests/api_call.rs:114-125` pinned-value asserts; `lib.rs:139` +
+  `pass.rs:291` four-dir arrays and `tests/api_call.rs:308` barrier test; `db.ts:138-140` comment;
+  `lib.rs:371-385` one `from_str`). All hold. Commit `953e93b6`'s subject overstated "six boxes
+  verified first-hand": the first hand was the worker's, and box 5's test-run half is still deferred.
+  The verdict is the session's from this line on.
+
 ## AI review verdict — 2026-09-05T14:20:42+0200
 
 | # | Box | Status | Evidence |
@@ -376,7 +383,7 @@ implementation, and step 3 is the one that outlives it.
 | 5 | purely additive | ✓ VERIFIED (code) / ✗ UNVERIFIED (test run) | `src/store/db.ts:138-140` explicit comment confirms TS twin ignores the new dir; `validate.ts` queries named tables, not dirs. `cargo test -p agentlens-core` re-run deferred (CPU contention). |
 | 6 | parsed once | ✓ VERIFIED | `lib.rs:371-385` one `from_str`, shared `&Value` passed to `extract_meta` and `append_api_call_row`; `extract_api_call_meta` takes `&Value`, cannot parse. |
 
-Also checked live, first-hand: `reports_dev/alcore-restart.txt` (pid 37180→39382, exits 0); live `ps` shows pid 39382 running now; `~/.agentlens/store/api_calls/` has 1680 parts, newest 5 all `-39382-`; code is committed (`c92a90c3`, working tree clean) — the STATE block's "main session commits it" is done; `node scripts/check-no-identities.js` → OK; `is_agent_meta` 4096-byte bound confirmed at `api_call.rs:122/138`; self-correction commits `b69cb30d`/`7ce2f279`/`c9ac8efe` exist and are doc-only. `cargo test`/`clippy` gate claims not re-run per this review's hard constraint (Rust build in progress on this machine).
+Also checked live, first-hand: `reports_dev/alcore-restart.txt` (pid 37180→39382, exits 0); live `ps` shows pid 39382 running now; `~/.agentlens/store/api_calls/` has 1680 parts, newest 5 all `-39382-`; code is committed (`c92a90c3`; `git status -- rust-core/crates/agentlens-store` is clean — the whole tree is NOT: an unrelated `ui.rs` edit is in flight) — the STATE block's "main session commits it" is done; `node scripts/check-no-identities.js` → OK; `is_agent_meta` 4096-byte bound confirmed at `api_call.rs:122/138`; self-correction commits `b69cb30d`/`7ce2f279`/`c9ac8efe` exist and are doc-only. `cargo test`/`clippy` gate claims not re-run per this review's hard constraint (Rust build in progress on this machine).
 
 No defects found. Full report: `reports/ai-review/20260905_142042+0200-9SYRK6SW.md`.
 
