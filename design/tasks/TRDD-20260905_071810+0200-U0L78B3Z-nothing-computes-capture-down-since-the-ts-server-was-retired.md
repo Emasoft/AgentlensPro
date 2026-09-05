@@ -33,7 +33,7 @@ reachable. Nothing here is fixed yet; this card is the finding.
 | the value is exposed on a debug route | **works** | `/api/debug/capture-activity` → `{"lastIngestActivityAt": …}` (`ui.rs:1451-1464`) |
 | something compares it to a window | **MISSING** | `CAPTURE_ACTIVITY_WINDOW_MS` appears nowhere in the tree; `ui.rs:1460` says the comparison "belongs to the caller (server.ts kept it on its side)" and `567fc5c2` retired `standalone/server.ts` |
 | alcore emits `bodies.captureDownSince` in `/api/server-stats` | **MISSING** | zero hits for `captureDown` / `capture_down` in `server_stats.rs`, and none anywhere under `rust-core/crates/*/src/` |
-| **the CLI renders the row** | **WORKS, AND IS WAITING** | `src/cli/serverControl.ts:513` declares `captureDownSince?: number \| null` on the server-stats shape and `:521` renders `` `\| CAPTURE DOWN <N>m — sessions active, no bodies arriving` `` on EVERY branch |
+| **the CLI renders the row** | **LIVE — verified by running it** | `src/cli/serverControl.ts:513` declares `captureDownSince?: number \| null` and `:521` renders `` `\| CAPTURE DOWN <N>m — sessions active, no bodies arriving` `` on EVERY branch. **`agentlenspro server status` on 2026-09-05 printed `capture: 11 live file(s), newest 1s ago`** — this renderer executing in the current product, with no `\| CAPTURE DOWN` suffix, which is exactly what an absent `captureDownSince` yields |
 | the TS burn-guard row | **unsupplied** | `getCaptureDownSince` DECLARED (`mcpServer.ts:3451`) and CALLED (`:3845`) but supplied by nothing ⇒ always `undefined` ⇒ its own comment: "no row" |
 
 **So `agentlenspro server status` has rendered CAPTURE DOWN correctly this whole time and will
@@ -97,9 +97,15 @@ spool sat 100% full for ~18h and 117 request bodies were written as ZERO BYTES.
   "last_ingest_activity_ms\|lastIngestActivityAt" .` over the whole repo (no `--include`, no
   directory list, `-a` because `grep` is a shell function here that hides binary matches) returns
   only writes, the definition, the debug-route exposure, and tests — no comparison anywhere. That
-  search is complete BY CONSTRUCTION: any consumer must name the field. A scoped grep for a
-  constant NAME could never have settled it, because a threshold can be an env var, a
-  `resolve_knob` call, or an inline literal.
+  search is complete for **in-process Rust** consumers — there `st.last_ingest_activity_ms` is the
+  only access path, the struct is internal, and no serde rename applies. It is **NOT** complete
+  across the HTTP boundary: a reader could fetch the route and index the parsed object without
+  either identifier appearing (`v[k]`, `Object.values(v)[0]`, passing the whole object onward).
+  What rules THAT out is the second search — `/api/debug/capture-activity` appears only in
+  `ui.rs` (the route), `serverEndpoints.test.ts` (tests) and a `lib.rs` comment. **Both searches
+  together** carry the negative; neither does alone. A scoped grep for a constant NAME could never
+  have settled it either way, because a threshold can be an env var, a `resolve_knob` call, or an
+  inline literal.
 - **TRDD-8ADTIGKT's acceptance criteria were under-specified, and the next card in this family
   will be tempted to repeat the shape.** Its title promises an alarm; its two boxes test only that
   a field gets bumped. Both boxes passed honestly and the alarm still cannot fire. When a card's
