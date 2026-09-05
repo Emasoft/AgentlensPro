@@ -980,6 +980,21 @@ fn agent_gate_route_fail_open_deny_warn_advisory_and_dedupe() {
     assert!(reason.contains("From this project: explore"), "{reason}");
     assert!(v["systemMessage"].as_str().unwrap().contains("blocked an agent launch (RUNAWAY_FANOUT)"), "{v}");
 
+    // The same wave never denies a FORK (TRDD-3EZ6SJ2Z): it reads the caller's cache entry and
+    // writes no new prefix, so it gets a warn that still names the count, and passes.
+    let fork_launch = serde_json::json!({
+        "hook_event_name": "PreToolUse", "tool_name": "Agent", "session_id": "sess-gate-1",
+        "cwd": "/tmp/gate-proj", "tool_input": { "subagent_type": "fork", "prompt": "review the last commit" }
+    })
+    .to_string();
+    let r = post(ui, "/api/agent-gate", &fork_launch);
+    assert!(r.starts_with("HTTP/1.1 200"), "{r}");
+    let v: serde_json::Value = serde_json::from_str(body_of(&r)).unwrap();
+    assert!(v.get("hookSpecificOutput").is_none(), "a fork is not denied for the wave: {v}");
+    let msg = v["systemMessage"].as_str().unwrap();
+    assert!(msg.contains("8 subagent launches in the last 60s"), "{msg}");
+    assert!(msg.contains("This fork is allowed"), "{msg}");
+
     // gateMode=warn downgrades the same deny — applied INSTANTLY via the hook-config route.
     post(ui, "/api/hook-config", r#"{"gateMode":"warn"}"#);
     let r = post(ui, "/api/agent-gate", &quiet);
@@ -1039,15 +1054,19 @@ fn agent_gate_route_fail_open_deny_warn_advisory_and_dedupe() {
     let r = post(ui, "/api/agent-gate", &post_ev);
     assert!(r.starts_with("HTTP/1.1 204"), "advisor off: {r}");
 
-    // The counters, on BOTH server-stats surfaces: 10 parsed checks (the malformed body never
-    // built a state), 1 deny, 2 warns (the downgraded deny + the image), 1 advisory.
+    // The counters, on BOTH server-stats surfaces: 11 parsed checks (the malformed body never
+    // built a state), 1 deny, 3 warns (the fork-in-a-wave warn added by TRDD-3EZ6SJ2Z, the
+    // downgraded deny, the image), 1 advisory. The +1 check / +1 warn over the pre-3EZ6SJ2Z tallies
+    // (10/1/2/1) is the fork case above: its own assertions (200, no hookSpecificOutput, the count
+    // and "This fork is allowed" in systemMessage) pass BEFORE this tally runs, so the extra counted
+    // check is that call and not an uncounted 204 plus a regression elsewhere.
     let r = get(ui, "/api/server-stats", "");
     let v: serde_json::Value = serde_json::from_str(body_of(&r)).unwrap();
-    assert_eq!(v["gate"]["checks"], 10, "{}", v["gate"]);
+    assert_eq!(v["gate"]["checks"], 11, "{}", v["gate"]);
     assert_eq!(v["gate"]["denies"], 1);
-    assert_eq!(v["gate"]["warns"], 2);
+    assert_eq!(v["gate"]["warns"], 3);
     assert_eq!(v["gate"]["advisories"], 1);
-    assert_eq!(v["persistence"]["gateChecks"], 10);
+    assert_eq!(v["persistence"]["gateChecks"], 11);
     assert_eq!(v["persistence"]["gateDenies"], 1);
     let _ = std::fs::remove_dir_all(&tdir);
 }

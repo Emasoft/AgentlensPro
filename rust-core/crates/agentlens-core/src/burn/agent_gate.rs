@@ -393,12 +393,22 @@ warm-up this rule is protecting — denying it would cause the cold cache it pre
         // IDENTITIES are dropped.
         let kinds = fmt_own_agent_types(state);
         let kinds_clause = if kinds.is_empty() { String::new() } else { format!(". From this project: {kinds}") };
+        let runaway_base = format!(
+            "AgentLens burn-gate: {} subagent launches in the last 60s — runaway fan-out{kinds_clause}.",
+            fmt_js_num(starts60)
+        );
+        // A FORK is counted in the wave but never denied for it (TRDD-3EZ6SJ2Z, parity with
+        // agentGate.ts:330): its first request reads the caller's last-written entry warm, so it adds
+        // no cold prefix whatever the count; the fat-into-cold fork case has its own rules below.
+        // Denying forks here blocked the stop-hook review fork whenever OTHER sessions' fresh spawns
+        // filled the 60s window. The keep-warm pinger keeps deny() for its advisory wording.
+        if fork && !keep_warm {
+            return json!({ "decision": "warn", "code": "RUNAWAY_FANOUT", "reason": format!(
+                "[agentlens] {runaway_base} This fork is allowed: it reads the caller's cache entry and writes no new prefix, so it adds nothing to the wave's cost. Fresh agents are still denied until it settles.") });
+        }
         return deny(
             "RUNAWAY_FANOUT",
-            format!(
-                "AgentLens burn-gate: {} subagent launches in the last 60s — runaway fan-out{kinds_clause}. Let the in-flight wave settle, then relaunch this agent (retry in ~60s is usually enough). Override: AGENTLENS_GATE=off.",
-                fmt_js_num(starts60)
-            ),
+            format!("{runaway_base} Let the in-flight wave settle, then relaunch this agent (retry in ~60s is usually enough). Override: AGENTLENS_GATE=off."),
         );
     }
     let starts120 = f(state, "startsLast2min").unwrap_or(0.0);
