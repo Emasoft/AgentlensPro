@@ -1,9 +1,9 @@
 ---
 trdd-id: YBJGIYI1
 title: FORK_STORM cannot be distinguished from one fat session rewriting its own prefix
-column: dev
+column: ai_review
 created: 2026-08-27T22:50:06+0200
-updated: 2026-09-05T14:33:32+0200
+updated: 2026-09-05T18:47:42+0200
 current-owner: claude-session-2026-09-02
 task-type: bugfix
 scope: project
@@ -99,8 +99,30 @@ A fixture with 3 cold full-prefix spikes, one fingerprint, ONE session id must c
 - 2026-08-27T22:50:06+0200 — Filed from a peer report, then confirmed first-hand at
   `src/burnInvestigator.ts:304-306`, `:328`, `:107`. Queued to `todo`, not started: it is Rust
   cutover work and the USER's sequencing is publish → install → Rust.
+- 2026-09-05T18:47:42+0200 — ORCHESTRATOR: `dev → ai_review` on the burnscan_parity gate read
+  from the full-suite capture (9/9); the suite ran on a tree with one unrelated uncommitted
+  file, named above. Vetoable at ai_review/human_review.
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-09-05T14:33:32+0200
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-09-05T18:47:42+0200
+
+**Gate run for real, replacing the historical claim below.** Full-suite capture
+`reports_dev/mvr6pxc0-cargo-test-20260905_1715.txt` (started 17:15). `burnscan_parity` binary ran
+at capture lines 225-238: all 9 tests `ok` (`scanned_records_carry_the_identities_slice_2_needs`,
+`blind_classification_separates_its_three_causes`,
+`attach_causing_calls_preserves_findings_and_reports_honestly`,
+`the_verdict_admits_what_the_detectors_could_not_attribute`,
+`finding_key_order_differs_by_detector_and_is_preserved`,
+`scan_half_reproduces_the_ts_oracle_exactly`,
+`blind_and_no_response_verdicts_are_decided_by_the_scan`,
+`every_burn_cause_is_exercised_by_the_fixture_set`,
+`full_report_reproduces_the_ts_oracle_exactly`), verbatim result line (238):
+`test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.17s`.
+Tree: capture started against HEAD `bb76bb51`; every commit since (through the current HEAD
+`01c686da`) is `docs(board)` only — no `rust-core/` change — plus one unrelated uncommitted file,
+`rust-core/crates/agentlens-core/src/ui.rs` (a TRDD-MVR6PXC0 lock-scope split, does not touch the
+burn scan). **NEXT ACTION:** ai review.
+
+## STATE — 2026-09-05T14:33:32+0200 — HISTORICAL (superseded above; the gate has now actually run)
 
 **`ai_review` → `dev` (REJECTED 14:23, confirmed first-hand 14:25).** The 2026-09-02 STATE below
 lists `burnscan_parity` 9/9 among the gates that passed for `06649a73`. It did not: the card's own
