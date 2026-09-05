@@ -495,7 +495,7 @@ culprits by cache-**weighted** equiv (`investigate_burn`), never by request byte
 Diagnostics encode this as the TTL-regime matrix (TRDD-VY1IUVUM); the full model with measured
 costs: `.claude/project/memory/cache-ttl-model.md`.
 
-<+-+-JANITOR-WIKIMEM-INDEX-START-(do-not-modify)-+-+> v1 digest=7f65769f9c3d generated=2026-09-03T05:07:05+0200
+<+-+-JANITOR-WIKIMEM-INDEX-START-(do-not-modify)-+-+> v1 digest=4ca3a0143429 generated=2026-09-05T17:36:03+0200
 ## Wikimem index (PROJECT scope) — recall by symptom, read on demand
 
 Deep knowledge lives in these pages, not in this file. Search: `memgrep recall "<symptom>" .claude/project/memory`.
@@ -510,6 +510,7 @@ Deep knowledge lives in these pages, not in this file. Search: `memgrep recall "
   - [cache-ttl-model](.claude/project/memory/cache-ttl-model.md) — keepWarm says cold turns but the session felt warm
   - [claude-code-surface-inferences](.claude/project/memory/claude-code-surface-inferences.md) — the model id says claude-opus-5 not claude-opus-5[1m]
   - [cumulative-vs-per-turn-fields](.claude/project/memory/cumulative-vs-per-turn-fields.md) — is total_cost_usd per turn or cumulative
+  - [memory-scope-leak-detector-false-positives](.claude/project/memory/memory-scope-leak-detector-false-positives.md) — janitor flags a PROJECT memory page as leaking machine-private data
   - [cache-risk-command-detection](.claude/project/memory/cache-risk-command-detection.md) — what actually broke my prompt cache
 
 **agentlenspro-identity** — what is this repo
@@ -541,5 +542,6 @@ Deep knowledge lives in these pages, not in this file. Search: `memgrep recall "
 - [ssd-write-economics](.claude/project/memory/ssd-write-economics.md) — is SSD life spent by write operations or by bytes
 - [standalone-server-security-model](.claude/project/memory/standalone-server-security-model.md) — can a website read my local agentlens data
 - [statusline-capture-and-store](.claude/project/memory/statusline-capture-and-store.md) — how do I get rate_limits without hitting the usage endpoint
+- [trdd-board-review-hygiene](.claude/project/memory/trdd-board-review-hygiene.md) — which commits belong in implementation-commits
 - [vmmap-ioaccelerator-is-the-mimalloc-heap](.claude/project/memory/vmmap-ioaccelerator-is-the-mimalloc-heap.md) — vmmap says IOAccelerator dominates alcore's memory
 <+-+-JANITOR-WIKIMEM-INDEX-END-(do-not-modify)-+-+>
