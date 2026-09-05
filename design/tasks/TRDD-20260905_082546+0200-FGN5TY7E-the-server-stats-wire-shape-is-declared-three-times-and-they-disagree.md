@@ -3,7 +3,7 @@ trdd-id: FGN5TY7E
 title: The server-stats bodies shape is hand-declared twice in one file and the two declarations disagree
 column: testing
 created: 2026-09-05T08:25:46+0200
-updated: 2026-09-05T16:48:00+0200
+updated: 2026-09-05T16:49:28+0200
 current-owner: main-session
 task-type: refactor
 priority: high
@@ -15,18 +15,24 @@ implementation-commits: [0c01a3e1, 7659b9ca]
 
 # The server-stats bodies shape is hand-declared twice in one file and the two declarations disagree
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-09-05T16:48:00+0200
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-09-05T16:49:28+0200
 
 **`ai_review` → `testing` (REJECTED 16:46, accepted by the orchestrator).** Boxes 1–2 verified met by
 the review; box 3 is PARTIAL by the card's own 11:21 STATE and its mutation run — delete a field from
 the emitter in `server_stats.rs`, confirm the frozen-shape test in `tests/server_stats.rs` goes red,
 restore — was never performed, so the card moved toward `human_review` ahead of its own stated gate.
-No code is pending; the deliverable is that test run, hence `testing` rather than `dev`.
+No code is pending for box 3 — its deliverable is that test run plus an appended result, hence
+`testing` (YBJGIYI1 sat in `dev` for a run-then-rewrite because its gate LINE was false and must be
+rewritten; here the card text needs no correction). Box 4 is a DEFERRED CODE DECISION, not "done":
+the four fields either get sent or stop being declared — resolve it or split it to its own card before
+`ai_review`; if the answer is "send them", this card goes back to `dev`.
 `implementation-commits` was `[a55074bd]` — TRDD-U0L78B3Z's fix commit, not this card's — corrected to
-`[0c01a3e1, 7659b9ca]` (the dedup refactor and the review-correction commit, the only two code commits
-tagged FGN5TY7E; checked with `git log --grep`). **NEXT ACTION:** run the box-3 mutation when the
+`[0c01a3e1, 7659b9ca]` on their HUNKS, not their tags: `0c01a3e1` rewrites `src/cli/serverControl.ts`
+(+49/−29, the one `ServerStatsBodies` declaration); `7659b9ca` touches `serverControl.ts` (+6/−2) and
+extends `tests/server_stats.rs::body_matches_the_frozen_key_order_exactly` (+22/−4, the "EMITTER's key
+set only" comment) — the very test box 3 leans on. **NEXT ACTION:** run the box-3 mutation when the
 machine is free (a Rust build shares the CPU today), record the red/green pair with the command and
-date, decide box 4 (partial by design, or a follow-up card), then `testing → ai_review`.
+date, decide box 4, then `testing → ai_review`.
 
 ## STATE — 2026-09-05T11:21:29+0200 — HISTORICAL
 
