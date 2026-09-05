@@ -79,10 +79,29 @@ read at `server_stats.rs:613`, confirmed by the live curl returning exactly thos
 | `reclaimedSinceBoot` | **NO** — gates the newer reclaimed-since-boot statistic |
 | `lastNonZeroPassAt` | **NO** — the timestamp that statistic renders with |
 
-Derived as: `grep -oE 's\.bodies\.[a-zA-Z][a-zA-Z0-9_]*' src/cli/serverControl.ts | sort -u`, diffed
-against the five. **Cite the bounded block for all four** — the per-key `grep -c` that first found
-them is the scoped-search evidence this card spent four commits demoting, and it is strictly weaker
-than the closed set.
+**Derived twice, by two instruments that cannot miss the same things — same four both times.**
+First by dot-access grep (`grep -oE 's\.bodies\.[a-zA-Z][a-zA-Z0-9_]*' src/cli/serverControl.ts`),
+which is a LOWER BOUND only: it sees one file, one syntax, one variable name. Proof that it is the
+wrong instrument — **it cannot see `:521`, the read this whole card is about**, because inside
+`bodiesCaptureLine` the object is a parameter, not `s`. Then by the declared TYPE, which lists what
+any consumer can read regardless of syntax or variable name.
+
+**The type instrument has its own trap here: the wire shape is DECLARED TWICE, and the two
+declarations disagree.**
+
+| declaration | has | lacks |
+|---|---|---|
+| `interface ServerStats.bodies` (`:575-588`) | archive, lastPass, reclaimedSinceBoot, lastNonZeroPassAt, captureDownSince, sinkProblem, live | **parked**, **spool** |
+| `bodiesCaptureLine`'s parameter (`:509-514`) | live, parked, captureDownSince, sinkProblem | archive, lastPass, reclaimedSinceBoot, lastNonZeroPassAt |
+
+Neither is complete, and the CLI demonstrably reads `s.bodies.parked` — a field the main interface
+does not declare. **The real read set is the UNION**, and diffing that against the five emitted
+children yields the same four unsent fields. So the list is instrument-independent.
+
+That duplication is itself worth a card: one wire object with two partial hand-maintained shapes is
+exactly how a field goes unsent for months without anyone noticing — each declaration looks
+locally complete. **Cite the bounded block plus this union for all four**; the per-key `grep -c`
+that first found two of them is the scoped-search evidence this card spent four commits demoting.
 
 **TWO silent alarms, not one.** `sinkProblem` renders `| SINK: …` on every status branch and, like
 CAPTURE DOWN, has never been able to appear. A sink problem is exactly the condition a human needs
@@ -107,7 +126,12 @@ re-derived:
 1. Read the ONE literal `json!` block in `server_stats.rs` that builds that section; its direct
    children are the closed emitted set. (Do not grep the file for key names — `json!` splices
    `Value`s built in other modules, so a file-wide literal count proves nothing about a subtree.)
-2. `grep -oE 's\.<section>\.[a-zA-Z][a-zA-Z0-9_]*' src/cli/serverControl.ts | sort -u` and diff.
+2. Read the DECLARED TYPE(S) for that section — **plural, and check for more than one**; a
+   dot-access grep is a lower bound that cannot see a destructured read, a differently-named
+   variable, another file, or bracket access. Diff the union of the declarations against step 1.
+
+**Still uncovered, one level down**: `s.bodies.spool.*`. `spool` is the ONE spliced value in the
+block, so the bounded read said nothing about its keys — run the same two steps on `spool_gauge`.
 
 **On the read path**: `s` is assigned once at `:616` and an identifier scan of the render range
 found only reads — but that scan would miss a helper mutating `s` in place or a bracket-access
