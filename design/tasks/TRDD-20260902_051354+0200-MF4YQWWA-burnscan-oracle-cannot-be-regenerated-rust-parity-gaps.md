@@ -28,13 +28,17 @@ zero-diff fixture, 9/9 parity, 18/18 mocha, clippy clean. Report:
 been.** A parity test can pass because the golden was regenerated in the same commit as the code
 it checks — the fixture and the implementation drift together and the assertion never notices.
 The discriminator is that the golden is ALREADY IN THE REPO and untouched. **Split by who
-established what**: the parity suite passes against `tests/fixtures/burnscan-expected.json`, which
-`git status` shows unmodified and which was committed before this session — that half is
-re-checked here, and it is the half the drift trap needed. That a regen RAN today and produced
-zero diff is the agent's report, not an observation of mine: a clean tree is equally consistent
-with a regen that ran, one that wrote nothing, and one that never ran. What makes the report
-credible is that its other results (9/9 parity, 18/18 mocha, clippy clean) are outputs it could
-not produce from a tree it never touched — corroboration, not proof.
+established what** — and the split is per CLAUSE, not per sentence:
+
+- **ORCHESTRATOR (observed):** `tests/fixtures/burnscan-expected.json` is unmodified in the working
+  tree and was committed before this session. So whatever the suite asserts against, it is a
+  golden nobody touched. **That, alone, is what the drift trap needed** — and it is a question
+  about the fixture's PROVENANCE, which a source-level check can settle and a test result cannot.
+- **REVIEWING AGENT (reported):** that the suite passes (9/9), that mocha is 18/18 and clippy
+  clean, and that a regen ran today with zero diff. A clean tree is equally consistent with a
+  regen that ran and matched, one that wrote nothing, and one that never ran — so the tree
+  corroborates this report, it does not prove it. What makes it credible is that those results are
+  outputs nobody obtains from a tree they never touched.
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-09-02
 
