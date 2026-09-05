@@ -3,7 +3,7 @@ trdd-id: 3EZ6SJ2Z
 title: The burn-gate's RUNAWAY_FANOUT rule denies fork launches although a fork writes no new prefix
 column: testing
 created: 2026-09-05T15:39:31+0200
-updated: 2026-09-05T16:40:54+0200
+updated: 2026-09-05T16:43:02+0200
 current-owner: main-session
 task-type: bugfix
 priority: high
@@ -26,7 +26,9 @@ is allowed` warn in the transcript instead of the deny. `/api/server-stats` at 1
 `gate.warns: 1` on the fresh server — cause NOT logged (`server.log` carries no gate lines), so it
 is not the acceptance; do not read it as the observation. The bin-native file is the 16:22 build:
 it carries the new reason string the 11:50 build could not, and `cmp` against `target/release`
-differs only from char 1794 (the signature `codesign --force` rewrote). **NEXT ACTION:** the next time a fork spawn
+reports its first differing byte at 1794 (the signature region `codesign --force` rewrote). The live
+alcore is the tree at `10715a00`; `95fec703` (a `server_stats.rs` doc comment) is the only later
+change to the crate and needs no rebuild. **NEXT ACTION:** the next time a fork spawn
 is attempted during a wave (they were happening several times an hour today), record the transcript
 line here with its time; then `testing → ai_review`. If the deny still appears, the live binary is
 not the one built here — check `ps` for the `bin-native/darwin-arm64/alcore` path and its mtime.

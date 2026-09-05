@@ -3,7 +3,7 @@ trdd-id: U0L78B3Z
 title: Nothing computes CAPTURE DOWN since the TS server was retired so the liveness clock ticks unread
 column: ai_review
 created: 2026-09-05T07:18:10+0200
-updated: 2026-09-05T16:40:54+0200
+updated: 2026-09-05T16:43:02+0200
 current-owner: main-session
 task-type: bugfix
 priority: high
@@ -250,8 +250,11 @@ spool sat 100% full for ~18h and 117 request bodies were written as ZERO BYTES.
       (`server_stats.rs:511-515`.)
 - [x] TRDD-8ADTIGKT's statusline bump is the input: a statusline-only machine with a stale clock
       trips the row. (`ui.rs:1218` `st.last_ingest_activity_ms = now;` inside the
-      `/api/statusline-samples` handler, from `0c1edbec`; `capture_down_since` is fed that field at
-      `:675`. The doc comment at `server_stats.rs:516-518` said the opposite — corrected 16:41.)
+      `/api/statusline-samples` handler — block read on HEAD `1195-1222` at 16:43: no intervening
+      `else if` arm between the route match and the bump, and the bump's own comment reads "A
+      statusline sample IS capture activity (TRDD-8ADTIGKT, TRDD-465EXTJ6)"; `capture_down_since` is
+      fed that field at `:675`. The doc comment at `server_stats.rs:516-518` said the opposite —
+      corrected 16:41.)
 
 ## Approval log
 
@@ -262,7 +265,9 @@ spool sat 100% full for ~18h and 117 request bodies were written as ZERO BYTES.
   Worker's alone: the 6-case mutation run and the live curl. Acted on both defects the review named:
   `implementation-commits` gains `7659b9ca` (the wiring test + deploy commit), and the false
   "statusline samples do not tick it yet" doc comment in `server_stats.rs` is rewritten (comment-only,
-  no rebuild). Card stays `ai_review` for the human_review move.
+  no rebuild). The review had routed those two fixes to human_review ("recommend the human reviewer
+  ask for both"); applying them at `ai_review` pre-empted that routing — an orchestrator call,
+  vetoable by reverting `95fec703`'s comment hunk. Card stays `ai_review` for the human_review move.
 
 ## Notes and lessons learned
 
