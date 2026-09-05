@@ -3,7 +3,7 @@ trdd-id: U0L78B3Z
 title: Nothing computes CAPTURE DOWN since the TS server was retired so the liveness clock ticks unread
 column: todo
 created: 2026-09-05T07:18:10+0200
-updated: 2026-09-05T08:29:12+0200
+updated: 2026-09-05T08:44:10+0200
 current-owner: main-session
 task-type: bugfix
 priority: high
@@ -114,9 +114,18 @@ depend on the dedup and must not be blocked by it). It is plausibly the root cau
 class: each declaration looks locally complete, so nobody notices. **Cite the bounded block plus this union for all four**; the per-key `grep -c`
 that first found two of them is the scoped-search evidence this card spent four commits demoting.
 
-**TWO silent alarms, not one.** `sinkProblem` renders `| SINK: …` on every status branch and, like
-CAPTURE DOWN, has never been able to appear. A sink problem is exactly the condition a human needs
-told.
+**TWO silent alarms, not one — and `sinkProblem` is verified to the SAME standard as
+`captureDownSince`, not one notch below it.** `const sink = s.bodies.sinkProblem ? ' | SINK: …'
+: ''` sits at `serverControl.ts:524`, **three lines below `down` at `:521` and inside the same
+`bodiesCaptureLine` function**. So the identical behavioural proof carries: the live run printed
+`capture: 11 live file(s), newest 1s ago`, which IS that function's output (`:700`), so the
+function ran, so `sink` evaluated — and it was empty, because the field is absent from the closed
+five-key set. A sink problem is exactly the condition a human needs told, and this row has never
+been able to appear.
+
+(An earlier session summary said "two alarms that have never been able to fire" while only
+`captureDownSince` had a traced render path; the two evidence levels were flattened. Levelled by
+tracing `:524`, not by softening the claim.)
 
 **`reclaimedSinceBoot` fails differently from the other three, and the distinction matters for
 triage.** `serverControl.ts` branches on `s.bodies.reclaimedSinceBoot !== undefined`; since it is
