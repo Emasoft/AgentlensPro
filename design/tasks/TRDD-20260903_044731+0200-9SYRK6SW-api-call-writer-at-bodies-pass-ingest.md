@@ -3,7 +3,7 @@ trdd-id: 9SYRK6SW
 title: api_call staging table writer at the bodies-pass ingest site
 column: ai_review
 created: 2026-09-03T04:47:31+0200
-updated: 2026-09-05T14:25:51+0200
+updated: 2026-09-05T14:33:32+0200
 current-owner: main-session
 task-type: feature
 priority: high
@@ -368,7 +368,9 @@ implementation, and step 3 is the one that outlives it.
 - 2026-09-05T14:25:51+0200 — orchestrator re-checked boxes 1–6 first-hand after the worker's verdict
   (`lib.rs:168-181` no `cost_usd`; `tests/api_call.rs:114-125` pinned-value asserts; `lib.rs:139` +
   `pass.rs:291` four-dir arrays and `tests/api_call.rs:308` barrier test; `db.ts:138-140` comment;
-  `lib.rs:371-385` one `from_str`). All hold. Commit `953e93b6`'s subject overstated "six boxes
+  `lib.rs:371-385` one `from_str`; `from_str` is the only serde entry point in store `lib.rs` +
+  `api_call.rs` — no `from_slice`/`from_reader`/`from_value` — and `lib.rs:319` parses the embedded
+  `metadata.user_id` string, not `raw`). All hold. Commit `953e93b6`'s subject overstated "six boxes
   verified first-hand": the first hand was the worker's, and box 5's test-run half is still deferred.
   The verdict is the session's from this line on.
 
