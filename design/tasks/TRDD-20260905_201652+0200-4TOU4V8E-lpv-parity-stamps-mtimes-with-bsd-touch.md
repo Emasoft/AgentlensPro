@@ -3,7 +3,7 @@ trdd-id: 4TOU4V8E
 title: lpv_parity stamps fixture mtimes through touch -d @epoch, which BSD touch rejects
 column: dev
 created: 2026-09-05T20:16:52+0200
-updated: 2026-09-05T20:24:57+0200
+updated: 2026-09-05T20:27:14+0200
 current-owner: agentlenspro-b2
 task-type: bugfix
 min-approval-requirement: none
@@ -27,9 +27,11 @@ each test dies on entry 1 — all eight messages read, all identical). Counted f
 `Running` lines: 70 binaries ran = 3 unittest binaries + 67 integration binaries, `lpv_parity`
 being the 67th; cargo's last line is `error: test failed, to rerun pass …` and no `Running`
 follows, so the run ended there (fail-fast). The `tests/*.rs` names sorting after `lpv_parity`
-number 31, plus doctests — none ran. MVR6PXC0's gate is INCOMPLETE, not red on its own diff.
-The run's exit code was never captured (its `echo EXIT` went to the killed task's stdout); do not
-cite one.
+number 31 — none ran — plus the `Doc-tests` step (INFERRED: `Cargo.toml` sets no `doctest =
+false`, and the capture never reached that step). MVR6PXC0's gate is INCOMPLETE, not red on its
+own diff. The run exited on its own with **101** (recovered from the prior session's task output
+`tasks/be71t16hu.output`: `cargo-test EXIT=101`); the capture's mtime 19:57:22 postdates the
+19:47 `/clear`, so the task was not killed by it.
 
 **Cause, verified first-hand:** `stamp_mtimes` shells out to `touch -d @<secs>`. On this machine
 `command -v touch` → `/usr/bin/touch` (BSD; `/usr/bin` precedes the coreutils gnubin at PATH
@@ -39,12 +41,13 @@ specification: YYYY-MM-DDThh:mm:SS[.frac][tz]"*. The source comment claims `touc
 `std::fs::File::set_modified` is stable since Rust 1.75 (toolchain here: 1.97.0).
 
 **The fixture files currently carry the oracle's exact mtimes** (Aug 1 15:00/16:00/19:00 +0200
-= `lpv-expected.json` `mtimes` ÷ 1000), older than the Aug 20 checkout — so something stamped
-them post-checkout. That something is most likely the generator itself:
+= `lpv-expected.json` `mtimes` ÷ 1000). They are the generator's own pre-commit stamps:
 `fixtures/gen-lpv-expected.mjs:50` calls `utimesSync` on every fixture before publishing the
-table. Whether a cargo run with GNU touch first on PATH ever stamped them is NOT established and
-is not needed for the diagnosis. Either way the test's own stamping step has never worked with
-`/usr/bin/touch` first on PATH.
+table, and the fixture commit `8e1f8cc7` was authored on this machine (2026-08-20), so the files
+were never checked out here — a commit does not touch working-tree mtimes. Whether a cargo run
+with GNU touch first on PATH ever stamped them is NOT established and is not needed for the
+diagnosis. Either way the test's own stamping step has never worked with `/usr/bin/touch` first
+on PATH.
 
 **NEXT ACTION:** replace the subprocess in `stamp_mtimes` with
 `File::options().write(true).open(&path)?.set_modified(UNIX_EPOCH + Duration::from_millis(ms))`
@@ -78,3 +81,8 @@ never reaches CI (ATOM-2PSS-WR4Q's inverse).
   lines (unittests included) with `tests/*.rs` file count; corrected to 3+67 ran, 31 integration
   binaries + doctests never ran. "Some earlier run stamped the mtimes" withdrawn as a proxy — the
   generator's own `utimesSync` explains them.
+- 2026-09-05T20:27 — Review fork on `b4a00d79`: "exit code never captured, task killed by the
+  clear" was asserted against the evidence. Settled: `tasks/be71t16hu.output` holds
+  `cargo-test EXIT=101`; capture mtime 19:57:22 is after the 19:47 clear. "Killed" dropped, 101
+  cited. Doctests marked INFERRED. Stamp form changed to `Duration::from_secs_f64(ms / 1000.0)`
+  (fails fast on NaN/negative where an `as u64` cast would stamp epoch 0).
