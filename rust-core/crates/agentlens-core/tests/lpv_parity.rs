@@ -28,15 +28,17 @@ fn keys(v: &Value) -> Vec<&str> {
 /// compares two different worlds while still passing.
 fn stamp_mtimes(o: &Value) {
     for (rel, ms) in o["mtimes"].as_object().unwrap() {
-        let secs = ms.as_f64().unwrap() / 1000.0;
         let path = fixtures().join("lpv-home").join(rel);
-        // No std API sets mtime and no dep in this crate provides one; `touch -d @<epoch>` is POSIX
-        // and needs neither.
-        let st = std::process::Command::new("touch")
-            .args(["-d", &format!("@{secs}"), path.to_str().unwrap()])
-            .status()
-            .expect("touch must exist to run this parity suite");
-        assert!(st.success(), "failed to stamp {}", path.display());
+        // std::fs::File::set_modified is stable since Rust 1.75, so no subprocess is needed. It was
+        // shelling out to `touch -d @<epoch>` (a GNU extension `touch` supports; BSD /usr/bin/touch
+        // takes -t or ISO -d), which only passed here when GNU touch happened to be first on PATH
+        // (TRDD-4TOU4V8E).
+        let f = std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap_or_else(|e| panic!("open {} to stamp: {e}", path.display()));
+        f.set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs_f64(ms.as_f64().unwrap() / 1000.0))
+            .unwrap_or_else(|e| panic!("stamp {}: {e}", path.display()));
     }
 }
 
