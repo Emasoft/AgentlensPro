@@ -3,7 +3,7 @@ trdd-id: 4TOU4V8E
 title: lpv_parity stamps fixture mtimes through touch -d @epoch, which BSD touch rejects
 column: testing
 created: 2026-09-05T20:16:52+0200
-updated: 2026-09-05T20:41:42+0200
+updated: 2026-09-05T20:43:42+0200
 current-owner: agentlenspro-b2
 task-type: bugfix
 min-approval-requirement: none
@@ -128,3 +128,8 @@ never reaches CI (ATOM-2PSS-WR4Q's inverse).
   first-hand (diff read, gate line 17 read, no `touch` left); `dev → testing` (exempt row).
   Clippy on the final form INFERRED clean (ran on the penultimate form) — orchestrator decision,
   USER may veto by demanding a re-run.
+- 2026-09-05T20:43 — Review fork on `0a52ade5`: the `"touch"` grep would miss an absolute-path
+  spawn. Widened to `grep -rn touch tests/ src/`: every hit is the English word in a comment or
+  assertion message except this card's own comment at `lpv_parity.rs:33-34`; no `Command::new`
+  or `/usr/bin/touch` anywhere. The no-touch-PATH measurement proves no PATH dependence; the grep
+  proves no spawn at all. Both now read, not assumed.
