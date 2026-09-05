@@ -3,7 +3,7 @@ trdd-id: 0Y8BMVK2
 title: The dashboard reported skill and agent catalogs as per-turn cache writes and a six-digit hit rate
 column: ai_review
 created: 2026-09-03T19:13:48+0200
-updated: 2026-09-05T18:33:35+0200
+updated: 2026-09-05T18:36:15+0200
 current-owner: main-session
 task-type: bugfix
 severity: HIGH
@@ -38,11 +38,18 @@ they are covered only by the `media/tsconfig.json` type-check leg (its `include`
 so `tabs/` is in scope) and the esbuild build — shape, not behaviour — and behaviourally only by the
 09-03 manual inspection of the served bundle. The AI review must read "gates green" with that gap in
 view. The served `dashboard.js` (`curl localhost:3000/dashboard.js` at 18:33) is byte-identical to
-the 18:29 rebuild on disk (`cmp` → identical, 762,950 bytes both), so alcore serves the file from
-disk per request and the live dashboard IS the HEAD build without a restart; when it first became
-post-fix is not established by this (an earlier claim of "since the 09-03 restart" rested on the old
-STATE's own word and is withdrawn). No `server restart` here — a deploy step, not a gate, and
-unnecessary for the TS bundle. The rebuild also rewrote `standalone/cli.js`
+the 18:29 rebuild on disk (`cmp` → identical, 762,950 bytes both); on its own that only proves the
+build is deterministic over unchanged source, since a boot-time snapshot taken before 18:29 would
+read the same if nothing had changed. **Confirmed by observation instead, 18:36:** `static_asset()`
+(`rust-core/crates/agentlens-core/src/ui.rs:1049,1056`) does `std::fs::canonicalize` +
+`std::fs::read(&file)` on `media_dir.join(path)` inline in the request handler — no boot-time cache,
+no `include_bytes!`. A marker line appended to `media/dashboard.js` on disk (no restart, no rebuild)
+was returned by the very next `curl localhost:3000/dashboard.js` (`grep -c` on the response = 1);
+`node esbuild.js` then rebuilt the artefact and the marker was gone (post-restore count 0). So the
+per-request-from-disk claim is CONFIRMED by direct observation, not inferred from byte-identity, and
+the live dashboard is the HEAD build the instant `node esbuild.js` finishes — no `server restart`
+needed for the TS/webview bundle (only the Rust binary itself needs a restart to pick up a rebuild).
+The rebuild also rewrote `standalone/cli.js`
 (the hook entrypoint): `git diff --stat 52155adf HEAD -- src standalone/*.ts media/src` is empty, so
 nothing the hooks execute changed. Of the two fold-out items: "PostToolUse:Agent
 advisory size" had no card until TRDD-V8W9A8FZ (backburner, `fb20872b` — the remark carries no spec
