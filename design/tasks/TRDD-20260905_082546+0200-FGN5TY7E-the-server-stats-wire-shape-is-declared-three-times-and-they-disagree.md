@@ -3,7 +3,7 @@ trdd-id: FGN5TY7E
 title: The server-stats bodies shape is hand-declared twice in one file and the two declarations disagree
 column: todo
 created: 2026-09-05T08:25:46+0200
-updated: 2026-09-05T08:34:20+0200
+updated: 2026-09-05T08:38:05+0200
 current-owner: main-session
 task-type: refactor
 priority: high
@@ -49,8 +49,8 @@ across `src/`, `media/src/`, `standalone/` (tests excluded) is now classified:
 | `src/cli/serverControl.ts` | 11 | the TWO declarations above, plus reads |
 | `src/burnGuard.ts` | 6 | `BurnGuardOptions` member + uses — a parameter contract, NOT a wire declaration |
 | `src/mcpServer.ts` | 1 | `getCaptureDownSince` — the supplier callback, declared and called, never supplied |
-| `standalone/cli.js` | 3 | **BUILD ARTIFACT** — the esbuild bundle of the above; never count it as a declaration |
-| `media/src/` | 0 | no hit for these names |
+| `standalone/cli.js` | 3 | **BUILD ARTIFACT — measured, not assumed**: esbuild preamble (`var __create = Object.create;` …), 15,266 lines, and gitignored. Never count a bundle as a declaration |
+| `media/src/` | 0 | no hit for these names (`--include=*.ts,*.tsx`, which is what the dashboard is written in) |
 
 **But that search keys on FOUR FIELD NAMES, so it cannot see a declaration that omits all four** —
 e.g. one declaring only `archive`/`lastPass`/`live`/`parked`. Given the two known shapes each omit
