@@ -3,7 +3,7 @@ trdd-id: MVR6PXC0
 title: Three MCP tool handlers hold the state lock for one to four seconds inside their per-candidate resolve_session_card closure
 column: dev
 created: 2026-09-05T12:33:51+0200
-updated: 2026-09-05T20:34:48+0200
+updated: 2026-09-05T20:36:59+0200
 current-owner: main-session
 task-type: bugfix
 priority: high
@@ -32,9 +32,15 @@ belt-and-braces copy sits at `reports_dev/mvr6pxc0-kraken-ui-rs-20260905_1714.pa
 5 hunks). The split is INTENDED as behaviour-preserving (the worker's evidence: fixtures unchanged,
 build and clippy 0); the full suite is the proof. **The 17:15 run ended exit 101 at binary 70/98
 on `lpv_parity` — a harness portability bug unrelated to this diff (TRDD-4TOU4V8E, fixed in
-`644a9113`); 3 unittest + 67 integration binaries were green, `ui` and the 30 other names sorting
-after `lpv_parity` never ran.** Those 31 are now running detached (ppid 1, immune to session
-events) with `--no-fail-fast` since 20:34:34 under load-avg ~200, capture
+`644a9113`); 3 unittest + 66 integration binaries were green and `lpv_parity` red — every one of
+the 70 `Running` lines is paired 1:1 with a `test result` line (awk-checked: 70/70, none
+missing, so no silent crash/OOM hides in the green set); `ui` and the 30 other names sorting
+after `lpv_parity` never ran (no `[[test]]` renames, no directory-style tests, so the
+`tests/*.rs` stem list IS cargo's target list).** Those 31 are now running detached (ppid 1,
+immune to session events) with `--no-fail-fast` since 20:34:34 under load-avg ~200; note that
+naming `--test` targets excludes the lib/bin unittests and doctests, so the eventual green is
+"67 + 31 integration binaries" with the 3 unittest binaries standing on the 17:15 result and
+doctests unrun by either run. Capture
 `reports_dev/mvr6pxc0-cargo-test-remaining-20260905_203434+0200.txt` (the `_203409` file beside
 it is a mis-launch: zsh passed the `--test` list as one token; ignore it). **NEXT ACTION:** poll
 that capture for its `test result` lines and the absence of `error:` (no EXIT line — detached);
