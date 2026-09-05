@@ -3,7 +3,7 @@ trdd-id: QE114936
 title: Twenty MCP tool handlers still rebuild the session summary under the state lock
 column: testing
 created: 2026-09-02T16:08:27+0200
-updated: 2026-09-05T06:37:48+0200
+updated: 2026-09-05T06:39:31+0200
 current-owner: main-session
 task-type: bugfix
 priority: high
@@ -14,7 +14,7 @@ related: [UTFVMVT8, 2R36W8Q1, HFV4AIT7]
 
 # Twenty MCP tool handlers still rebuild the session summary under the state lock
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-05T06:37:48+0200
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-05T06:39:31+0200
 
 **ALL 20 SITES ARE DONE IN CODE (the card was written for 18; two more were found), COMMITTED,
 and the INTEGRATION SUITE IS GREEN. Still NOT deployed — box 3 is the only one left.**
@@ -28,9 +28,11 @@ writing code on it, which nobody is.
   only; it is not. `git show <rev>:…/ui.rs | grep -c 'build_session_summary('` gives **17 at
   `2b38a39b` → 2 at `1a00cec6`**, and those last 2 are inside comments in the guard test
   (`ui.rs:4204`, `:4216`). `1a00cec6` is +309/−147 on `ui.rs` and is the ONLY commit touching that
-  file since `2b38a39b`. Sites 19–20 are half in `lib.rs`, which that count cannot see, so:
-  `git show --stat 1a00cec6` → `lib.rs` **+40** and `ui.rs` **456** changed lines, both in the one
-  commit. All 19 remaining sites are in it. Working tree clean. **The subject line alone would
+  file since `2b38a39b`. Sites 19–20 are half in `lib.rs`, which that count cannot see, so read
+  **`git show 1a00cec6`'s commit BODY**: it names both edits — `session_status_over` (site 19) and
+  `burn_risk_report`'s `status_when_unset` fill-in (site 20) — with mechanism. `--stat`'s
+  `lib.rs +40` shows only that the file was touched, which is consistent with one of the two as
+  much as both; the body is what settles it. All 19 remaining sites are in that commit. Working tree clean. **The subject line alone would
   have sent you to the wrong commit for sites 2–18** — that is why this bullet carries the count.
   **The count proves LOCATION, not correctness**: a needle reaching 0 is exactly what the card's
   own MAIN LESSON warns about. Correctness rests on the three mutation-verified guard tests plus
@@ -43,8 +45,10 @@ writing code on it, which nobody is.
   waiting for: the one that actually invokes `handle()`. `--lib` alone never did.
   Raw output: `reports_dev/qe114936-integration.txt`.
 - **The box's second clause is also verified, and it is NOT vacuous** — the files exist:
-  `tests/mcptools_parity.rs` and `tests/fixtures/mcptools-expected.json`. Neither changed in
-  `2b38a39b^..HEAD`, and `mcptools_parity` ran **13 tests green** in the suite. Scoped to the whole
+  `tests/mcptools_parity.rs` and `tests/fixtures/mcptools-expected.json`. **The clause is carried
+  by the DIFF** — neither file changed in `2b38a39b^..HEAD`. `mcptools_parity` also ran **13 tests
+  green**, which says the assertions hold against the current goldens; that is a separate fact and
+  contributes nothing to "unchanged". Scoped to the whole
   test tree, the ONLY churn in that range is `pricing-expected.json` and `log_reader_parity.rs`,
   from `f7610871` and `420e6bb9` — other cards. A green suite alone would NOT have proven this:
   a golden updated in the same commit as the code it checks passes either way. (Checking this by
