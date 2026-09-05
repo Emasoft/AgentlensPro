@@ -513,9 +513,11 @@ pub fn free_disk_bytes(path: &Path) -> Option<u64> {
 /// both halves of the CAPTURE DOWN test share: "sessions active" = an ingest/statusline bump within
 /// it; "capturing" = a body landed within it. The TS value is kept as-is — nothing measured here
 /// argues for a different one, and the CLI's `agentlenspro server status` text was written to it.
-/// That is the TS CONTRACT: on alcore the clock fed in is `last_ingest_activity_ms`, and statusline
-/// samples do not tick it yet (TRDD-8ADTIGKT, open) — a statusline-only host still never raises
-/// CAPTURE DOWN until that card lands.
+/// That is the TS CONTRACT: on alcore the clock fed in is `last_ingest_activity_ms`, which BOTH
+/// ingest and the `/api/statusline-samples` POST handler bump (ui.rs, landed in `0c1edbec`) — so a
+/// statusline-only host trips CAPTURE DOWN like any other once the window elapses. (An earlier
+/// version of this comment said statusline samples did not tick the clock yet; the 2026-09-05
+/// AI review of TRDD-U0L78B3Z read the handler and found that false.)
 pub const CAPTURE_ACTIVITY_WINDOW_MS: i64 = 10 * 60_000;
 
 /// TRDD-U0L78B3Z: the comparison `ui.rs`'s debug route says "belongs to the caller" — that caller

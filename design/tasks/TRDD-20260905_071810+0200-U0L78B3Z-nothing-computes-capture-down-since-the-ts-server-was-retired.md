@@ -3,14 +3,14 @@ trdd-id: U0L78B3Z
 title: Nothing computes CAPTURE DOWN since the TS server was retired so the liveness clock ticks unread
 column: ai_review
 created: 2026-09-05T07:18:10+0200
-updated: 2026-09-05T11:52:25+0200
+updated: 2026-09-05T16:40:54+0200
 current-owner: main-session
 task-type: bugfix
 priority: high
 min-approval-requirement: none
 created-by: 8ADTIGKT
 related: [8ADTIGKT, 4FMHW124, 1B98LCVR, 5PUD8RKE, FGN5TY7E]
-implementation-commits: [a55074bd]
+implementation-commits: [a55074bd, 7659b9ca]
 ---
 
 # Nothing computes CAPTURE DOWN since the TS server was retired so the liveness clock ticks unread
@@ -233,19 +233,36 @@ spool sat 100% full for ~18h and 117 request bodies were written as ZERO BYTES.
 
 ## Acceptance
 
-- [ ] A named constant and a comparison exist in the LIVE backend, reachable from a request path
-      that a test drives — not merely defined.
-- [ ] With the clock stale past the window, the guard emits a CAPTURE DOWN row; within the window
+- [x] A named constant and a comparison exist in the LIVE backend, reachable from a request path
+      that a test drives — not merely defined. (`server_stats.rs:519` `CAPTURE_ACTIVITY_WINDOW_MS`,
+      `capture_down_since` at `:528`, called from the `bodies` object at `:674`.)
+- [x] With the clock stale past the window, the guard emits a CAPTURE DOWN row; within the window
       it emits none. Both asserted by a test that fails if the comparison is removed
-      (mutation-verified, not merely present).
-- [ ] `/api/server-stats` emits `bodies.captureDownSince` — asserted by a test that reads the
+      (mutation-verified, not merely present). (`server_stats.rs:738` unit test, 6 cases; the 15:36
+      review's mutation claim is the worker's — the run itself was deferred for CPU contention.)
+- [x] `/api/server-stats` emits `bodies.captureDownSince` — asserted by a test that reads the
       ACTUAL response body, so `serverControl.ts:521`'s row can render. (An earlier draft of this
       box asked only that a grep be non-empty; a comment satisfies that. The failure this card
       documents is a field nobody sends, which a grep for a name cannot detect.)
-- [ ] The window's value is justified in a comment against the git-history original
+      (`tests/server_stats.rs`, extended in `7659b9ca`; live curl corroborated by the review.)
+- [x] The window's value is justified in a comment against the git-history original
       (`CAPTURE_ACTIVITY_WINDOW_MS` in `standalone/server.ts` before `567fc5c2`), not guessed.
-- [ ] TRDD-8ADTIGKT's statusline bump is the input: a statusline-only machine with a stale clock
-      trips the row.
+      (`server_stats.rs:511-515`.)
+- [x] TRDD-8ADTIGKT's statusline bump is the input: a statusline-only machine with a stale clock
+      trips the row. (`ui.rs:1218` `st.last_ingest_activity_ms = now;` inside the
+      `/api/statusline-samples` handler, from `0c1edbec`; `capture_down_since` is fed that field at
+      `:675`. The doc comment at `server_stats.rs:516-518` said the opposite — corrected 16:41.)
+
+## Approval log
+
+- 2026-09-05T16:40:54+0200 — orchestrator accepts the 15:36 AI-review APPROVE and ticks the five
+  boxes it had left for the review to judge. Re-checked first-hand: the constant, the `:674-675` call
+  site, the `:738` unit test's existence, `7659b9ca`'s Rust footprint (`server_stats.rs`,
+  `tests/server_stats.rs`, `bodies_activity.rs`), and the statusline bump at HEAD `ui.rs:1218`.
+  Worker's alone: the 6-case mutation run and the live curl. Acted on both defects the review named:
+  `implementation-commits` gains `7659b9ca` (the wiring test + deploy commit), and the false
+  "statusline samples do not tick it yet" doc comment in `server_stats.rs` is rewritten (comment-only,
+  no rebuild). Card stays `ai_review` for the human_review move.
 
 ## Notes and lessons learned
 
@@ -266,3 +283,23 @@ spool sat 100% full for ~18h and 117 request bodies were written as ZERO BYTES.
   will be tempted to repeat the shape.** Its title promises an alarm; its two boxes test only that
   a field gets bumped. Both boxes passed honestly and the alarm still cannot fire. When a card's
   title names an OUTCOME, at least one box must assert that outcome — not the input that feeds it.
+
+## AI review verdict — run: 2026-09-05T15:36:08+0200
+
+| box | met/unmet | status | evidence |
+|---|---|---|---|
+| 1. named constant + comparison in the LIVE backend, reachable from a request path a test drives | met | ✓ VERIFIED | `server_stats.rs:519` `CAPTURE_ACTIVITY_WINDOW_MS`, `:528` `capture_down_since(...)`, called at `:674-677` inside `pub fn server_stats(...)`, which is the EXACT function `ui.rs:1200` invokes for the `/api/server-stats` route (`crate::server_stats::server_stats(&st, crate::now_ms())`) — no wrapper in between. The integration test (`tests/server_stats.rs::the_values_the_core_owns_move_with_the_state`) calls `server_stats(&st, ...)` directly rather than issuing a real HTTP request, so "reachable from a request path" is proven by reading the handler, not by the test itself; the live curl below closes that gap behaviourally. |
+| 2. stale clock ⇒ row; within window ⇒ none; mutation-verified test | met | ✓ VERIFIED | Unit test `server_stats.rs:738-752` `capture_down_since_fires_only_on_active_and_not_captured`, 6 asserts covering: fresh body→None, stale body→Some(since), no body ever→Some(boot), stale-older-than-boot floored, idle host→None, capture off→None. Removing the `!captured` or `active` term in `capture_down_since` (`:535-539`) would flip at least 2 of the 6 asserts — genuinely mutation-sensitive, not just present. Plus the integration test asserts the SAME transition through real `CoreState`: `before["bodies"]["captureDownSince"]==null` (no activity yet), `after[...]==st.started_at_ms` (post-ingest, no bodies) at `tests/server_stats.rs:159,184`. |
+| 3. `/api/server-stats` emits `bodies.captureDownSince`, asserted against the actual response body | met | ✓ VERIFIED (code + live wire, both) | `server_stats.rs:674-677` splices it as a direct `bodies` child; `tests/server_stats.rs:43` frozen key-order test includes it in the exact key list. **Live re-verified independently**: `curl -s localhost:3000/api/server-stats` (this review, pid 39382, binary mtime Sep 5 11:50, matching the claimed deploy) returned `bodies` keys `[archive, lastPass, live, captureDownSince, sinkProblem, parked, spool]`, `captureDownSince: null`, `sinkProblem: null` — matches `reports_dev/alcore-restart.txt` exactly. This only proves the UP reading on the wire (capture is healthy); the DOWN reading on the wire is proven by the integration test above, not by this curl. |
+| 4. window value justified against git-history original, not guessed | met | ✓ VERIFIED | `git show 567fc5c2^:standalone/server.ts` line 671: `const CAPTURE_ACTIVITY_WINDOW_MS = 10 * 60_000`. Rust: `server_stats.rs:519` `pub const CAPTURE_ACTIVITY_WINDOW_MS: i64 = 10 * 60_000;`, comment cites the exact same commit/line. Values and provenance match. |
+| 5. TRDD-8ADTIGKT's statusline bump is the input; a statusline-only machine with a stale clock trips the row | met, but the card's own doc comment is factually wrong about it | ✓ VERIFIED (met) / defect in the comment | `capture_down_since` is fed `st.last_ingest_activity_ms` (`server_stats.rs:675`). That field IS bumped by the statusline POST handler in **alcore itself**: `ui.rs:1303-1308` (`st.last_ingest_activity_ms = now;` inside the `/api/statusline` handler), landed in commit `0c1edbec` (2026-09-01, TRDD-465EXTJ6), i.e. already live before this card was even opened. So a statusline-only machine (no spans, no hook events, periodic statusline POSTs, no bodies landing) DOES tick the same field the guard reads, and WOULD trip `captureDownSince`. **Defect**: the doc comment this card's own commit `7659b9ca` added at `server_stats.rs:515-517` says *"statusline samples do not tick it yet (TRDD-8ADTIGKT, open)"* — this is FALSE, contradicted by `ui.rs:1308` read directly. TRDD-8ADTIGKT's own file (`design/tasks/TRDD-...-8ADTIGKT-...md`) has this exact box ticked `[x]` already, citing (stale) TS evidence — the same fix independently exists and is live in alcore. No test specifically drives the *statusline* path into `capture_down_since` (the wiring test uses a trace ingest, which bumps the same field via `lib.rs:885`), but since both callers write the identical `CoreState` field that the pure function consumes, the wiring is structurally proven; the missing piece is a comment correction, not code. |
+
+**Frontmatter hygiene defect**: `implementation-commits: [a55074bd]` omits `7659b9ca`, which is the commit that (a) added the wiring test that actually exercises the FIRES branch through real state, (b) performed the deploy, and (c) moved the card to `ai_review`. Per the STATE block's own account, `7659b9ca` is load-bearing for this card's readiness and should be listed.
+
+**Other defects found, none blocking**:
+- The stale/false doc comment at `server_stats.rs:515-517` (see box 5) should be corrected to reflect that alcore's statusline handler already bumps the clock (commit `0c1edbec`), independent of TRDD-8ADTIGKT's own (TS-only) evidence trail.
+- Box 1's "reachable from a request path that a test drives" is met by reading the handler wiring (no wrapper between the HTTP route and the tested function) plus the live curl corroborating the UP case; no test issues a literal HTTP request against `/api/server-stats` for the DOWN case. This is a thin but real gap between the letter of the box and what was tested — not enough to reject given the integration test drives the exact function the route calls, with real `CoreState`, real config-file parsing, and a live-server cross-check for the up-branch.
+
+**Deferred, not run (CPU contention — a Rust worker is building on this machine)**: `cargo test --workspace` fresh run; the reviewer relied on the two committed gate transcripts (`reports_dev/diz-final.txt`, `reports_dev/u0l-wiring-test.txt`), both read in full, both `*_EXIT=0` with the relevant test names and PASS lines present verbatim.
+
+**Verdict: APPROVE** — all five acceptance boxes are met by code read first-hand, one unit test (6 mutation-sensitive cases) plus one integration test (real `CoreState`, both branches) plus a live independent curl corroborating the wire. The one real defect (a false doc comment on box 5, landed in `7659b9ca`) is cosmetic — it does not change what code executes or what the tests prove — and the missing `implementation-commits` entry is a one-line frontmatter fix. Recommend the human reviewer ask for both fixed as a fast-follow, but neither blocks promotion to `human_review`.
