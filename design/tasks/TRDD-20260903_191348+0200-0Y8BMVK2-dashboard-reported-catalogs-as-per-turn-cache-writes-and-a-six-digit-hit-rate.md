@@ -3,7 +3,7 @@ trdd-id: 0Y8BMVK2
 title: The dashboard reported skill and agent catalogs as per-turn cache writes and a six-digit hit rate
 column: ai_review
 created: 2026-09-03T19:13:48+0200
-updated: 2026-09-05T18:36:15+0200
+updated: 2026-09-05T18:42:04+0200
 current-owner: main-session
 task-type: bugfix
 severity: HIGH
@@ -15,6 +15,18 @@ related: [V8W9A8FZ, DIZ289UQ]
 ---
 
 # The dashboard reported catalogs as per-turn cache writes and a six-digit hit rate
+
+## ⏵ AI-REVIEW VERDICT 2026-09-05 — APPROVE. Ready for `human_review`; the USER makes that move.
+
+Review report: `reports/ai-review/20260905_184022+0200-0Y8BMVK2-ai-review.md` (lean-worker; compile-tests 0,
+`cacheHitRate.test.js` 5/0, source reads of the three webview sites). Re-checked first-hand by the
+orchestrator at 18:41: `Agents.tsx:3` imports `cacheHitRate` from `src/shared/tokenBuckets`, `:40` calls it
+with `(cacheRead, cacheWrite)`, `:32` sets `totalFresh: totalInput`; `tokenBuckets.ts:93-97` divides
+clamped read by clamped `read + write` and returns 0 when the total is 0 (`clamp` at `:49-51`); the five test
+names pin exactly the 164662% case, the cold-session 0-not-NaN case, the 0/0 case and negative inputs.
+**Coverage split, as the review states it:** defect 1 is verified by test and source; defects 2, 3 and 4
+(`Agents.tsx:32`, `Traces.tsx:967`/`:334`, `Traces.tsx:996`) are verified by source read ONLY — no automated
+test exists for the webview, and none was added by this card.
 
 ## ⏵ STATE — 2026-09-05T18:27:28+0200 — `testing → ai_review`
 
@@ -63,6 +75,10 @@ gate blaming forks) addressed — INFERRED from the titles, not from a record li
   `test-requirements:` frontmatter (`manager-approval-defaults.md` table A) and itself moved nothing;
   in this standalone project the USER is the approver, so the move is recorded here as vetoable:
   the USER may return the card to `testing`.
+- 2026-09-05T18:42:04+0200 — ORCHESTRATOR decision: accepted the 18:40 AI-review APPROVE after the
+  first-hand re-check above. Vetoable at `human_review`; the USER may instead require a webview test
+  for defects 2–4 before accepting (that would be a new card — this one added none and does not
+  claim to).
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-03 19:13
 
