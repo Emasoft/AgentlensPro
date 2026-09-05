@@ -3,7 +3,7 @@ trdd-id: NDKKOABG
 title: rust-core was never built or tested by CI — add the job, with caching
 column: ai_review
 created: 2026-08-27T22:45:45+0200
-updated: 2026-09-05T09:22:15+0200
+updated: 2026-09-05T09:27:40+0200
 current-owner: main-session
 task-type: infra
 scope: project
@@ -66,6 +66,19 @@ fixed those lints incidentally. Closed with `git log 3e294e16 --grep=NDKKOABG`:
 this card's own commits and both are ancestors of `3e294e16`. Lineage, not consequence.
 `implementation-commits:` is now populated with them — it was the missing link in TWO consecutive
 reviews, which is what makes it a real defect rather than the cosmetic gap it was first called.
+
+**And the field's VALUE was checked, because a wrong one is worse than the empty one it replaced.**
+Ancestry: `git merge-base --is-ancestor` says YES for both (also true by construction — `git log
+<sha> --grep=` walks only that SHA's history). Contents: `36277dee` is **14 files, +244/−56**, and
+touches exactly the sites this card names — `cbreport_parity.rs` (+15/−1, the `empty_spool()` fix),
+`agentlens-ingest/src/lib.rs` (+87, the `items_after_test_module` move), `span_window.rs`,
+`log_reader_parity.rs`, `ui.rs`, `pass.rs`. Completeness: the only other `--grep` hit was
+`de1df748`, a board-drain docs commit, correctly excluded.
+
+**Note what that check found on the way**: `36277dee`'s subject is *"add the job"* and its diff
+carries the sixteen fixes. A subject naming one thing while the diff carries another is this
+project's own recurring lesson (see TRDD-QE114936, where a subject reading "the last two" carried
+all nineteen sites) — here it appeared inside a commit being cited AS the evidence.
 
 **REPORTED BY THE REVIEWING AGENT:** clippy exit 0 locally, the fixture fix confirmed, and
 no-fmt-check confirmed. It also notes one cosmetic gap: `implementation-commits:` is empty.
