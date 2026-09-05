@@ -1,9 +1,9 @@
 ---
 trdd-id: 4TOU4V8E
 title: lpv_parity stamps fixture mtimes through touch -d @epoch, which BSD touch rejects
-column: testing
+column: ai_review
 created: 2026-09-05T20:16:52+0200
-updated: 2026-09-05T20:43:42+0200
+updated: 2026-09-05T21:50:15+0200
 current-owner: agentlenspro-b2
 task-type: bugfix
 min-approval-requirement: none
@@ -17,9 +17,18 @@ implementation-commits: [644a9113]
 
 # lpv_parity stamps fixture mtimes through `touch -d @epoch`, which BSD touch rejects
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-05T20:32
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-05T21:50
 
-**FIX LANDED — `644a9113`** (`stamp_mtimes` → `File::options().write(true).open(&path)` +
+**IN `ai_review` — second gate green.** MVR6PXC0's detached `--no-fail-fast` run of the 31 binaries
+that fail-fast had hidden finished 31/31 `test result: ok`, 0 failed, no `error:` line
+(`reports_dev/mvr6pxc0-cargo-test-remaining-20260905_203434+0200.txt`, last write 21:28). That run
+named the 31 `--test` targets explicitly, so `lpv_parity` itself was NOT in it; its own green is the
+stock-PATH 20:27:38 run (10/10) and the no-touch-PATH 20:41 run (10/10) already cited in the boxes.
+Together: the whole `tests/*.rs` set has now passed at least once on this machine on the fixed
+code, and nothing sorted after `lpv_parity` was hiding a red. Doctests remain unrun by any run today
+(INFERRED green). **NEXT ACTION:** read-only AI review of `644a9113`; `human_review` is the USER's move.
+
+**Previous STATE (20:32) — FIX LANDED — `644a9113`** (`stamp_mtimes` → `File::options().write(true).open(&path)` +
 `set_modified(UNIX_EPOCH + Duration::from_secs_f64(ms / 1000.0))`; no `touch` subprocess left
 under `tests/`, grep-verified). Gate read first-hand: `reports_dev/4tou4v8e-lpv-parity.txt`
 line 17 `test result: ok. 10 passed` (capture 20:27:38, after the final form landed);
@@ -133,3 +142,8 @@ never reaches CI (ATOM-2PSS-WR4Q's inverse).
   assertion message except this card's own comment at `lpv_parity.rs:33-34`; no `Command::new`
   or `/usr/bin/touch` anywhere. The no-touch-PATH measurement proves no PATH dependence; the grep
   proves no spawn at all. Both now read, not assumed.
+- 2026-09-05T21:50:15+0200 — `testing → ai_review` (exempt row: all required tests passed). This
+  card has no `test-requirements:` frontmatter, so per KBK9J59Y the "passed" judgement is the
+  orchestrator's: `lpv_parity` 10/10 twice (stock PATH, no-touch PATH) plus the 31 hidden binaries
+  31/31 in MVR6PXC0's detached run. USER may veto by demanding one un-composed full-suite run
+  including doctests on a stock PATH.
