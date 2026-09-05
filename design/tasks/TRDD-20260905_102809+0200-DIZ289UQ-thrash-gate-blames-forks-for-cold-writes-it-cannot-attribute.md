@@ -9,6 +9,7 @@ task-type: bugfix
 priority: high
 min-approval-requirement: none
 related: [0YG37FXM, THRGX41P, VY1IUVUM, U0L78B3Z]
+implementation-commits: [3979a57d]
 ---
 
 # The burn-gate blames review forks for cache thrash it cannot attribute
