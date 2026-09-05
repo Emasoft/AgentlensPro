@@ -3,7 +3,8 @@ trdd-id: X4YTS5BF
 title: The full mocha suite has 17 failures and only 7 of them belong to an open card
 column: dev
 created: 2026-09-05T10:43:43+0200
-updated: 2026-09-05T12:10:36+0200
+updated: 2026-09-05T12:33:51+0200
+implementation-commits: [f3235678, 244fbfef]
 current-owner: main-session
 task-type: bugfix
 priority: high
@@ -13,9 +14,23 @@ related: [B7DSTJLS, CS2W7E77, U0L78B3Z]
 
 # The full mocha suite has 17 failures and only 7 of them belong to an open card
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-09-05T12:10:36+0200
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-09-05T12:33:51+0200
 
-**IN `dev`. Established so far (each first-hand or from a report whose cited lines were re-read):**
+**IN `dev`, fixes COMMITTED, full-suite run (box 4) in flight.** Root cause of the eight `setup`
+failures, from `reports/x4yts5bf/20260905_122349+0200-repair-matrix-hook-hang.md` and verified at
+both code sites: the hooks step's verify exec inherited the caller's HOME and never set
+`AGENTLENS_DATA_DIR`, so every hook the tests spawned resolved the REAL machine's `~/.agentlens`
+(pidfile, daemon-revive lock, hook-spool); a failed POST then revived against the live pidfile,
+which ran an UNBOUNDED synchronous `ps` in `processStartRef`. Fix `244fbfef`: pin `HOME` and
+`AGENTLENS_DATA_DIR` to the ctx (byte-equivalent in production), 5 s timeout on the `ps` call
+(null = cannot verify = the conservative rule), ceiling back to 15 s. Measured: the five setup +
+runtime suites, 89 passing in 11 s at load 27 — including the repair-matrix suite that hit
+ETIMEDOUT at a 60 s ceiling an hour earlier. The `ps` stall as the mechanism is inferred (not
+reproduced); the leak is verified and the hang is bounded either way. Rows 3–4 are `f3235678`
+(P3b load-scaled at 30 s, FAL 400 s behind `skipIfUnmeasurable`). Remaining: box 4's full-suite
+count (`reports_dev/x4y-full-suite.txt`) → then `ai_review`.
+
+**Established earlier (each first-hand or from a report whose cited lines were re-read):**
 - The eight `setup` failures are ONE cause: the `hooks` step's verify exec
   (`src/cli/setup.ts` `execRegisteredCommand`, `spawnSync … timeout`) returns `ETIMEDOUT` and
   fail-fast turns it into SKIP cascades (`reports/x4yts5bf/20260905_115152+0200-*.md`). The

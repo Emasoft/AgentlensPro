@@ -1,9 +1,9 @@
 ---
 trdd-id: QE114936
 title: Twenty MCP tool handlers still rebuild the session summary under the state lock
-column: testing
+column: ai_review
 created: 2026-09-02T16:08:27+0200
-updated: 2026-09-05T06:39:31+0200
+updated: 2026-09-05T12:33:51+0200
 current-owner: main-session
 task-type: bugfix
 priority: high
@@ -14,7 +14,21 @@ related: [UTFVMVT8, 2R36W8Q1, HFV4AIT7]
 
 # Twenty MCP tool handlers still rebuild the session summary under the state lock
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-05T06:39:31+0200
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-05T12:33:51+0200
+
+**DEPLOYED, box 3 measured — `ai_review`.** The binary built from `7caad610` (all twenty sites)
+went live at 11:51 on 2026-09-05 (pid 39382; `reports_dev/alcore-restart.txt`). Hold read over the
+first 33 min of `server.log` after the restart: zero `state lock held ≥ 1000 ms` lines, max
+`ui.rs` hold 464 ms (`reports_dev/server-log-since-restart.txt`). Then every rewritten tool was
+invoked once while ingest was hot (`reports/qe114936/20260905_123046+0200-box3-tool-invocations.md`,
+24 tools, 0 unmapped): no `≥ 1000 ms` line at any `summary_now` site — the defect this card is
+about is gone on the live server. Read literally, box 3 is NOT met for three handlers
+(`get_cost_by_cause`, `get_cache_risk_costs`, `get_cache_break_report`): eight holds of
+1,037–3,948 ms at `ui.rs:2074/3220/3283`, inside their per-candidate `resolve_session_card`
+closure — the "reparse can still block a worker" cost already carried forward below, now its own
+card **TRDD-MVR6PXC0**. `human_review` is the USER's move. Earlier state, kept:
+
+## ⏵ STATE (earlier) — 2026-09-05T06:39:31+0200
 
 **ALL 20 SITES ARE DONE IN CODE (the card was written for 18; two more were found), COMMITTED,
 and the INTEGRATION SUITE IS GREEN. Still NOT deployed — box 3 is the only one left.**
