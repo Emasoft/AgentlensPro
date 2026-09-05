@@ -3,7 +3,7 @@ trdd-id: NDKKOABG
 title: rust-core was never built or tested by CI — add the job, with caching
 column: ai_review
 created: 2026-08-27T22:45:45+0200
-updated: 2026-09-01T22:00:21+0200
+updated: 2026-09-05T09:10:30+0200
 current-owner: main-session
 task-type: infra
 scope: project
@@ -15,6 +15,30 @@ implementation-commits: []
 ---
 
 # rust-core was never built or tested by CI — add the job, with caching
+
+## ⏵ AI-REVIEW VERDICT 2026-09-05 — APPROVE. Ready for `human_review`; the USER makes that move.
+
+This card's acceptance is PROSE, not checkboxes; the reviewing agent extracted the claims and
+verified each. Report: `reports/ai-review/20260905_090658+0200-NDKKOABG.md`.
+
+**OBSERVED BY THE ORCHESTRATOR — and it corrects a coarser claim I had been repeating.** The
+newest `CI` workflow run on `origin/main` (`3e294e16`, id 33667160582) is `failure` OVERALL, but
+per job:
+
+| job | result |
+|---|---|
+| **`rust`** — the job THIS card added | **success** |
+| `build-alcore` | success |
+| `browser-smoke` | failure |
+| `build-and-test (20)` / `(22)` | failure |
+
+So "CI is red on `main`" is true at the workflow level and was hiding the thing that matters here:
+**the job this card exists to add is green.** The red belongs to TRDD-EJDNNDY3, whose fix has never
+been pushed. A workflow-level verdict is the wrong granularity for a card that adds ONE job —
+check the job, not the run.
+
+**REPORTED BY THE REVIEWING AGENT:** clippy exit 0 locally, the fixture fix confirmed, and
+no-fmt-check confirmed. It also notes one cosmetic gap: `implementation-commits:` is empty.
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-08-27
 
