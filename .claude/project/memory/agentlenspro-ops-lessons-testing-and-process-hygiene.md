@@ -195,6 +195,11 @@ and remember the deny path renders through a third field again.
 
 
 
+
+^ATOM-ZQII-NI24 [desc: "A background subagent that shows running for hours with a tiny, static transcript file is usually BLOCKED inside one long tool call (a cargo test under load), not dead — check its target artifacts' mt", keywords: background_agent_shows_running_but_does_nothing subagent_silent_for_hours transcript_file_not_growing is_my_worker_dead_or_hung should_I_stop_a_silent_subagent cargo_test_blocked_under_load_worker TaskStop_a_running_agent worker_never_answered_SendMessage target_debug_deps_mtime output_file_157_bytes agent_stuck_or_waiting kill_destroyed_a_finishing_run, type: project, trdd: TRDD-MVR6PXC0, ocd: 2026-09-05, lmd: 2026-09-05]
+
+Measured 2026-09-05 (TRDD-MVR6PXC0): a kraken worker sat `running` for 4 h, never answered a SendMessage status ping, its transcript/output file stayed at 157 bytes from 13:50, and its edited `ui.rs` had a 13:12 mtime — every surface an orchestrator checks said "hung". It was not: a subagent's output file does not grow while ONE Bash call is blocked, and `rust-core/target/debug/deps` test binaries carried 16:51 mtimes — the worker was inside `cargo test -p agentlens-core` under load-avg 40–160 (an earlier run had been OOM-killed, exit 137). Stopping it at 17:14 surfaced a complete status (split done, build 0, clippy 0, suite pending) and threw away a run that may have been minutes from green. Rule: before stopping a silent worker, read the mtimes of the artifacts its last step would produce (`ls -lt target/debug/deps | head`, the capture file it writes) and `uptime`; a fresh artifact means WAIT. A SendMessage is only answered at the worker's next tool round, so silence to a ping during a long call proves nothing. If you must stop it, say so on the card as a trade, not as a death.
+
 ## See also
 
 - [[memory-scope-leak-detector-false-positives]]
