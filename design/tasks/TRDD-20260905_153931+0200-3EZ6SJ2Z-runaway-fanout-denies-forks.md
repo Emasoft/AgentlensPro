@@ -1,9 +1,9 @@
 ---
 trdd-id: 3EZ6SJ2Z
 title: The burn-gate's RUNAWAY_FANOUT rule denies fork launches although a fork writes no new prefix
-column: dev
+column: testing
 created: 2026-09-05T15:39:31+0200
-updated: 2026-09-05T15:39:31+0200
+updated: 2026-09-05T16:38:00+0200
 current-owner: main-session
 task-type: bugfix
 priority: high
@@ -12,10 +12,20 @@ scope: project
 project-id: agentlenspro
 related: [DIZ289UQ, THRGX41P, VY1IUVUM]
 relevant-rules: []
-implementation-commits: []
+implementation-commits: [52155adf, 10715a00]
 ---
 
 # The burn-gate's RUNAWAY_FANOUT rule denies fork launches although a fork writes no new prefix
+
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-09-05T16:38:00+0200
+
+**`testing` — code committed in both twins and LIVE since 16:37; the behavioural acceptance is
+still unobserved.** The unit and route tests prove the rule; what remains is one real event: a fork
+launch while the machine is inside a ≥8-launches/60 s wave must produce the `[agentlens] … This fork
+is allowed` warn in the transcript instead of the deny. **NEXT ACTION:** the next time a fork spawn
+is attempted during a wave (they were happening several times an hour today), record the transcript
+line here with its time; then `testing → ai_review`. If the deny still appears, the live binary is
+not the one built here — check `ps` for the `bin-native/darwin-arm64/alcore` path and its mtime.
 
 USER report 2026-09-05 15:36: "why the agentlenspro hook is blocking my fork-agents from doing their
 reviews?? they are fork agents, they reuse the same context of the parent, no cache build is triggered
@@ -48,14 +58,21 @@ machine-wide and still includes forks.
 
 ## Acceptance
 
-- [ ] `agentGate.ts`: a fork with `startsLast60s >= 8` gets `decision: 'warn'`, `code: 'RUNAWAY_FANOUT'`;
-      a non-fork with the same state still gets `deny`. Unit test for both, in `agentGate.test.ts`.
-- [ ] `agent_gate.rs`: same behaviour, same reason text (parity twin), covered by the existing ring-fed
-      RUNAWAY_FANOUT test in `tests/ui.rs` plus a fork case.
-- [ ] `pnpm run check-types` 0; `cargo clippy -p agentlens-core -- -D warnings` 0 (run when the machine
-      is free — a worker build is in flight).
-- [ ] Deployed: release build → `bin-native/darwin-arm64/alcore` → `codesign -s - --force` →
-      `agentlenspro server restart`; then a fork launch during a real ≥8/60 s wave is allowed (transcript
-      shows the warn, not the deny).
+- [x] `agentGate.ts`: a fork with `startsLast60s >= 8` gets `decision: 'warn'`, `code: 'RUNAWAY_FANOUT'`;
+      a non-fork with the same state still gets `deny`. Unit test for both in `agentGate.test.ts`
+      (`52155adf`; scoped mocha 73/0 — one pre-existing test used a fork as "a launch that denies" and
+      was repointed at a fresh agent).
+- [x] `agent_gate.rs`: same behaviour, same reason text (parity twin), covered by the ring-fed
+      RUNAWAY_FANOUT test in `tests/ui.rs` plus a fork case (`10715a00`; 1 passed; tallies 10/1/2/1 →
+      11/1/3/1 because the fork case is one counted check and one warn). `cargo test --lib agent_gate`
+      matched 0 tests — the Rust gate has no lib-level unit tests, so the route test is the whole Rust
+      coverage.
+- [x] `pnpm run check-types` 0; `cargo clippy -p agentlens-core -- -D warnings` 0 — clippy covers lib +
+      bins only; `tests/ui.rs` was compiled and run by `cargo test`, not linted.
+- [x] Deployed 16:37: release build (9m42s) → `bin-native/darwin-arm64/alcore` → `codesign -s - --force`
+      (`--version` exit 64 = usage, not 137) → `agentlenspro server restart` (pid 39382 → 37474, the
+      new path in `ps`); the binary carries the new reason string. NOT yet observed on a real ≥8/60 s
+      wave — the first fork launch inside one is the acceptance read; until then this box is the
+      deployment, not the behaviour.
 
 ## Notes and lessons learned
