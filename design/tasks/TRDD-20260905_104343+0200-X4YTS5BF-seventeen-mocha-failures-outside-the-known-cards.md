@@ -3,7 +3,7 @@ trdd-id: X4YTS5BF
 title: The full mocha suite has 17 failures and only 7 of them belong to an open card
 column: ai_review
 created: 2026-09-05T10:43:43+0200
-updated: 2026-09-05T12:55:19+0200
+updated: 2026-09-05T14:40:58+0200
 implementation-commits: [f3235678, 244fbfef]
 current-owner: main-session
 task-type: bugfix
@@ -104,5 +104,22 @@ default, reproducible on this tree.
 - [x] Rows 1–2 and 5–9 stay with their owning cards; this card links, never duplicates.
 - [x] A full-suite run recorded here with the failing count, so the next reader does not start
       from "17".
+
+## AI review verdict — run: 2026-09-05T14:40:58+0200
+
+| Box | Status | Evidence |
+|---|---|---|
+| 1. `setup` ×8 root-caused, fixed, green on real ephemeral-HOME run | ✓ VERIFIED | Commit `244fbfef` diff read: `src/cli/setup.ts` pins `HOME`/`AGENTLENS_DATA_DIR` to `ctx`; `src/serverRuntime.ts` adds `timeout: 5_000` to the `ps` `execFileSync` call — matches the commit message and card prose exactly. `reports_dev/x4y-setup-fix-mocha.txt` tail: `89 passing (11s)` / `MOCHA_EXIT=0`. Full-suite run (`reports_dev/x4y-full-suite-plain.txt`) has zero failing rows under any `setup —` describe (39 `setup` lines, all `✔`). Root-cause report `reports/x4yts5bf/20260905_122349+0200-repair-matrix-hook-hang.md` exists (16,544 bytes). |
+| 2. P3b / FAL fixed or `loadScaledTimeout`'d, runtime recorded | ✓ VERIFIED | Commit `f3235678` diff read: `rustIngest.test.ts` 3 tests changed `this.timeout(30_000)` → `this.timeout(loadScaledTimeout(30_000))` with inline measured-runtime comments (24 ms in isolation); `forensicsIndex.test.ts` FAL test changed to `skipIfUnmeasurable(this)` guard + `loadScaledTimeout(400_000)`, comment records 198 s / 281 s measured runs. Both are neither present in the full-suite's 6 remaining failures. |
+| 3. Rows 1–2 / 5–9 stay with owning cards, no duplication | ✓ VERIFIED | `TRDD-B7DSTJLS` (`column: dev`) and `TRDD-CS2W7E77` (`column: todo`) both exist as open cards in `design/tasks/`; this card's `related:` frontmatter lists both plus `U0L78B3Z`. The 6 remaining full-suite failures are exactly 1× `cacheBreakTimeline — buildCauseCostPeakReport` (B7DSTJLS's remaining row) + 5× `P5 window auto-calibration` `ENOENT …/burn-config.json` (CS2W7E77's 5 rows) — no new/duplicate card was filed for either. |
+| 4. Full-suite run recorded with failing count | ✓ VERIFIED | `reports_dev/x4y-full-suite-plain.txt:3798-3800`: `2654 passing (14m)` / `10 pending` / `6 failing`, `MOCHA_EXIT=6`. Matches the STATE block's "2654 / 10 / 6" exactly. The 6 failure headers (`grep -n "^  [0-9]) "`) are 1× cacheBreakTimeline + 5× P5 auto-calibration — matches the STATE block's description verbatim. |
+
+**Frontmatter/hygiene check:** `column: ai_review` consistent with all 4 boxes ticked; `blocked-by:` absent (not blocked); `implementation-commits: [f3235678, 244fbfef]` non-empty and both commits verified to exist and touch the claimed files; `related:` correctly cross-links the two cards this one explicitly does not duplicate. No defects found.
+
+**Honesty note (not a defect):** the STATE block itself flags that the leak-fix *mechanism* (an unbounded `ps` as the actual 60 s stall) is inferred, not reproduced in 7 attempts, and that the leak-probe (`reports_dev/x4y-leak-probe.txt`, `5 passing (2s)`) is a null result for the positive signal rather than a demonstration of it. This is the card correctly under-claiming rather than over-claiming — the root cause (the HOME/DATA_DIR leak) is independently verified by instrumentation per the commit message, and the fix is bounded regardless of which exact syscall was the stall.
+
+Test-execution boxes (89/89, 2654/10/6, 5/5) were verified from saved report files, not by re-running mocha (deferred — CPU contention from a concurrent Rust build): `npx mocha` full suite would reproduce `reports_dev/x4y-full-suite-plain.txt`.
+
+**Verdict: APPROVE**
 
 ## Notes and lessons learned
