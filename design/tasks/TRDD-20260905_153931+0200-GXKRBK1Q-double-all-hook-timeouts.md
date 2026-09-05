@@ -43,10 +43,13 @@ this card's scope, which is the four installer entries plus the two network budg
   :237/:266 were a different revision); `standalone/cli.js` mtime is 16:00:55, three seconds after
   `52155adf` (16:00:52), so the bundle is from the committed source and the STATE's "16:05" is a
   loose time, not a stale bundle. The four `timeout: 5` literals were a grep artefact: the bundle
-  pattern `timeout: *[0-9]*` stops at the `_` in `timeout: 5_000`, the `execFileSync` budgets in
-  `src/serverRuntime.ts:147`, `src/safeConfigEdit.ts:57`, `src/cli/setup.ts:849` and two
-  `timeout: 5000` siblings — process budgets in milliseconds, not hook ceilings. Located 18:13 by
-  `grep -rn "timeout: 5" src --include='*.ts'`; nothing of this card's scope is at 5.
+  spells them `timeout: 5e3` (observed 18:15 with `grep -o "timeout: *[0-9]*[e_]*[0-9]*"
+  standalone/cli.js` → `5e3` ×4, plus `3e3` ×2, `6e4`, `12e4`, `15e3`), and the pattern
+  `timeout: *[0-9]*` stopped at the `e`. They are the 5,000 ms `execFileSync` budgets of
+  `src/serverRuntime.ts:147`, `src/safeConfigEdit.ts:57`, `src/cli/setup.ts:849` and
+  `src/subscriptionUsage.ts:149`; the fifth source site, `src/runtimeInventory.ts:133`, is not in the
+  cli bundle (0 hits for its path), which is why four bundle hits meet five source sites. Process
+  budgets, not hook ceilings; nothing of this card's scope is at 5.
 - 2026-09-05T18:13:50+0200 — the fork on `bbb7fa5e` questioned the attribution "the installer's
   own `isOurHookCommand` view": confirmed — `src/cli/setup.ts:1063` computes the printed count as
   `allHooks.filter(h => isOurHookCommand(h.command)).length`.
