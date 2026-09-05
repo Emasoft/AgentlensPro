@@ -3,7 +3,7 @@ trdd-id: GXKRBK1Q
 title: Double every hook timeout the installer writes and every hook's own network budget
 column: ai_review
 created: 2026-09-05T15:39:31+0200
-updated: 2026-09-05T16:06:03+0200
+updated: 2026-09-05T16:08:16+0200
 current-owner: main-session
 task-type: bugfix
 priority: high
@@ -20,7 +20,11 @@ implementation-commits: [52155adf]
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-09-05T16:06:03+0200
 
 **`ai_review` — all three boxes met and measured.** Code in `52155adf`; the owner machine converged
-at 16:05 (setup exit 0, read-back 10/10/20/10 on 21 timed entries). Nothing left but the review.
+at 16:05 (setup exit 0, read-back 10/10/20/10 on 21 timed entries). The column went
+`dev → testing → ai_review` in ONE edit at 16:06: the `testing` evidence is the scoped mocha run and
+the convergence read-back above; the board never showed the card in `testing`. Note the new ceilings
+are in the FILE — running Claude Code sessions still enforce the old ones until they restart (the
+installer's own line). Nothing left but the review.
 Reviewer: the full mocha suite was NOT run for this change (killed at 15-min load-avg 164 after ~10
 min); the three suites that import the touched modules (agentGate, cliMatchers, hookScripts) ran
 green with `--no-config`, 73/0.
@@ -65,8 +69,8 @@ failing open.
 - [x] `pnpm run check-types` 0; `node esbuild.js` exit 0 and `standalone/cli.js` carries `timeout: 20`
       (the CLI bundle is what `setup` runs; `agentlenspro` on this machine resolves to it).
 - [x] `agentlenspro setup --yes` (or `--install-hooks`) converges the live settings.json through
-      `safeConfigEdit`; `python3` read-back shows 10/10/20/10 on all 22 agentlenspro entries and the
-      foreign hooks untouched. Done 16:05: setup exit 0, hooks step "installed/migrated, PASS",
+      `safeConfigEdit`; `python3` read-back shows 10/10/20/10 on all 21 timed agentlenspro entries and
+      the foreign hooks untouched. Done 16:05: setup exit 0, hooks step "installed/migrated, PASS",
       final self-test PASS; read-back 15 `hook` + 2 `gate` + 2 `supervisor` at 10, 2 `review-gate` at
       20 (21 timed entries — the 22nd is the untimed pending-prompt cat), the foreign 30 s
       `git_safety_guard` hook untouched. The installer itself prints "restart Claude Code sessions to
