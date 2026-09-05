@@ -3,7 +3,7 @@ trdd-id: YE15B2JK
 title: Claude Code now reports cache state in the statusline payload so cache-expired should read it instead of inferring
 column: ai_review
 created: 2026-09-01T18:30:59+0200
-updated: 2026-09-05T15:16:57+0200
+updated: 2026-09-05T15:19:13+0200
 current-owner: main-session
 task-type: feature
 scope: project
@@ -70,8 +70,18 @@ Code is at 2.1.252 here. The field names in the directive are described, not quo
 - [x] With the field absent, the old inference still answers and is labelled as an inference.
 - [x] Mutation-verified: remove the field-reading branch and a test must fail (5 unit tests, `src/test/cacheExpiredAuthoritative.test.ts`).
 - ~~`rate_limits.spend_limit` column populated from a real gateway-captured row~~ — appended in
-  `e4b8ae88` after the card's scope was set and unmeetable by work here (the harness has never emitted
-  the field); split out to TRDD-BFUZ1THR (`backburner`, `review-after: 2026-10-05`) on 2026-09-05.
+  `e4b8ae88` after the card's scope was set and unmeetable by work here (the field has never been
+  emitted on this machine); split out to TRDD-BFUZ1THR (`backburner`, `review-after: 2026-10-05`) on
+  2026-09-05 — see the Approval log for who made that call.
+
+## Approval log
+
+- 2026-09-05T15:19:13+0200 — ORCHESTRATOR decision, not the author's: the reviewing session struck
+  box 5 and split it out to TRDD-BFUZ1THR, then accepted the 15:15 AI-review APPROVE. Grounds: the box
+  was appended by `e4b8ae88` in the same commit that ticked boxes 1–4 and moved the card to `ai_review`
+  (its own author marked it "not blocking"), and no work in this repo can meet it. This narrows the
+  card under review by the review step itself; the card's owner or the USER may veto by restoring the
+  box, which re-opens the card. Human-review reader: judge the four original boxes.
 
 ## Notes and lessons learned
 
