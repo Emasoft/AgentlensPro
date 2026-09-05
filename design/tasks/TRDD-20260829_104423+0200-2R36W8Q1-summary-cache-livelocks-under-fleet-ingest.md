@@ -1,9 +1,9 @@
 ---
 trdd-id: 2R36W8Q1
 title: The summary cache is keyed on a version that moves faster than a rebuild completes, so the UI path livelocks under fleet ingest
-column: testing
+column: ai_review
 created: 2026-08-29T10:44:23+0200
-updated: 2026-09-03T04:58:45+0200
+updated: 2026-09-05T12:55:19+0200
 current-owner: main-session
 task-type: bugfix
 scope: project
@@ -16,7 +16,18 @@ blocked-by: [UTFVMVT8]
 
 # Summary cache livelocks under fleet ingest
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-02
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-05T12:55:19+0200
+
+**LAST BOX MET — `ai_review`.** The 1/s × 260 s soak the NEXT ACTION below asked for ran on
+2026-09-05 12:48–12:54 against the live alcore restarted at 11:51 (built from `7caad610`, which
+carries this card's summary-cache change and QE114936's twenty handler rewrites), with no build
+or test overlapping it: p50 0.524 s, p99 0.955 s, max 1.281 s, 1 of 260 samples over 1 s. No
+`state lock held ≥ 1000 ms`; every `waited` line names the log scan (`log_reader.rs:1076`) or a
+chore as holder, none the summary. The bar is met by 45 ms, so the measurement is recorded
+as narrow, not comfortable — the incremental summarizer named below stays the real upgrade.
+`human_review` is the USER's move. Earlier state, kept:
+
+## ⏵ STATE (earlier) — 2026-09-02
 
 - **Measured, profile-confirmed.** Not a hypothesis. Evidence is in this card's
   "Measurement" section; the `sample` output is `/tmp/soak-sample.txt` (ephemeral —
@@ -295,9 +306,14 @@ version.
 opposite verdicts from the same binary. A criterion that cannot distinguish a fix from luck
 is not a criterion, so it now names the sample size and the statistic.
 
-- [ ] `/api/server-stats` p99 under 1 s, sampled 1/s for a full ≥250 s soak at fleet rate
+- [x] `/api/server-stats` p99 under 1 s, sampled 1/s for a full ≥250 s soak at fleet rate
       (n≥130), with the over-1 s share reported. **Measured 2026-08-29: p50 0.503, p95 2.657,
-      p99 14.104, max 16.292, over-1 s 6.2% — NOT met.**
+      p99 14.104, max 16.292, over-1 s 6.2% — NOT met.** **Measured 2026-09-05 12:48–12:54 on the
+      11:51 alcore (built from 7caad610), n=260 at 1/s, load 11 → 27: p50 0.524, p99 0.955, max
+      1.281, over-1 s 1/260 = 0.4% — MET, narrowly (p99 is 45 ms under the bar). No `state lock
+      held ≥ 1000 ms` in the window; the 13 `state lock waited` lines name `log_reader.rs:1076`
+      as holder in 9, `chores.rs:573/619` in 3, `ui.rs:1109` in 1 — the log scan, not the summary.
+      Raw: `reports_dev/2r36-soak.txt`, `2r36-soak-sorted.txt`, `2r36-soak-log.txt`.**
 - [x] `/v1/traces` stays at HTTP 200 with p99 unchanged (no ingest regression). Measured:
       24,069 of 24,093 2xx, OTLP p50 0.615 ms / p99 164 ms. **Recorded with its caveat: max
       7,571 ms.** The p99 is fine and the tail is not, and reporting only the p99 here would

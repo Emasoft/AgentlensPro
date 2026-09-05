@@ -3,7 +3,7 @@ trdd-id: X4YTS5BF
 title: The full mocha suite has 17 failures and only 7 of them belong to an open card
 column: ai_review
 created: 2026-09-05T10:43:43+0200
-updated: 2026-09-05T12:48:06+0200
+updated: 2026-09-05T12:55:19+0200
 implementation-commits: [f3235678, 244fbfef]
 current-owner: main-session
 task-type: bugfix
@@ -24,10 +24,16 @@ two rows — the "real machine data" row now passes) and the five `P5 window aut
 tests (TRDD-CS2W7E77; the first now reads "account window must exist before the stall …
 0 span(s)", the other four the same `burn-config.json` ENOENT). All eight `setup` rows, P3b, FAL
 and the FAL-shaped `forensicsIndex` timeout are gone. One caveat on the leak fix: its behaviour in
-the fixture (the revive lock / hook-spool landing under the tmp home) is being measured by a
-probe queued behind the 2R36W8Q1 soak (`reports_dev/x4y-leak-probe.txt`); the code is verified,
-the cascade is gone on two runs, the probe is the positive signal. `human_review` is the USER's
-move. Earlier:
+the fixture was probed at 12:54 (`reports_dev/x4y-leak-probe.txt`: repair-matrix suite 5 passing
+in 2 s; a 0.2 s poll of the tmp roots saw NO revive lock or hook-spool under any `al-setup-*`
+home, and the real `~/.agentlens/hook-spool` count stayed 9 → 9). Read honestly: no write reached
+the real data dir, AND the failure path that would have written to the fixture was never taken
+(the POST succeeded), so the probe is a null result for the positive signal, not a
+demonstration of it. What is established: the leak is at the code (env lacked DATA_DIR, HOME
+inherited — read), the fix is byte-equivalent in production, the cascade is gone on three runs
+(isolated 89/89, full suite, probe). The `ps` stall as the MECHANISM of the 60 s hang stays
+inferred; box 1 is ticked on "root cause = the leak, fixed" with that caveat, not on the
+mechanism. `human_review` is the USER's move. Earlier:
 
 **Earlier STATE — 2026-09-05T12:33:51+0200 — IN `dev`, fixes COMMITTED, full-suite run (box 4) in flight.** Root cause of the eight `setup`
 failures, from `reports/x4yts5bf/20260905_122349+0200-repair-matrix-hook-hang.md` and verified at
