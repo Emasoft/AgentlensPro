@@ -3,9 +3,11 @@ trdd-id: SIGBCMGL
 title: Align agentlenspro taxonomies and diagnostics with Claude Code 2.1.233→2.1.252
 column: ai_review
 created: 2026-09-01T19:20:48+0200
-updated: 2026-09-01T20:00:30+0200
+updated: 2026-09-05T15:28:39+0200
 current-owner: agentlenspro-15
 task-type: feature
+implementation-commits: [494eb779, 46576993, f36a934d, aef94208]
+related: [YE15B2JK, BFUZ1THR, VY1IUVUM, B7DSTJLS]
 ---
 
 # Align agentlenspro with the CC 2.1.233→2.1.252 changelog
@@ -31,9 +33,11 @@ Done this session (commits named below); remaining boxes are docs/design work, n
       invalidate the prompt cache with no transcript trace. Pipeline is name-agnostic end to end
       (verified: `build_hook_event_record` takes `hook_event_name` verbatim), so registration is
       the whole change. Takes effect after `agentlenspro setup`/`--install-hooks` + session restart.
-- [ ] **`rate_limits.spend_limit` (2.1.251)** — deliberately NOT guaranteed yet: no gateway on
-      this machine, so the flattened shape is unverifiable. Add from a REAL captured row only
-      (the YE15B2JK step-1 rule). A comment in `GUARANTEED_COLUMNS` records this.
+- ~~**`rate_limits.spend_limit` (2.1.251)**~~ — deliberately NOT guaranteed: no gateway on this
+      machine, so the flattened shape is unverifiable; add from a REAL captured row only (the
+      YE15B2JK step-1 rule), as the `GUARANTEED_COLUMNS` comment at `src/statuslineStore.ts:230-233`
+      records. Owned since 2026-09-05 by TRDD-BFUZ1THR (`backburner`, `review-after: 2026-10-05`),
+      the one card for the first observed row — see the Approval log.
 - [x] **TTL-regime matrix update (TRDD-VY1IUVUM consumer)** — 2.1.243/248 broke "fresh subagents
       are ALWAYS 5m" open: `promptCacheTtl` + `subagentPromptCacheTtl` settings (API-key/cloud
       users) and per-agent `experimental.cacheTtl` frontmatter now set the tier explicitly. The
@@ -69,3 +73,42 @@ Done this session (commits named below); remaining boxes are docs/design work, n
       ttl-regime consult of `prompt_cache_ttl` is DEFERRED with rationale — the CLI already answers
       authoritatively from disk, so a server duplicate adds little; revisit only if a server-side
       consumer (dashboard, MCP tool) needs the verdict without the CLI.
+
+## Approval log
+
+- 2026-09-05T15:28:39+0200 — ORCHESTRATOR decision on the 15:26 AI-review APPROVE: the one open box
+  (`spend_limit`) was original scope the author deliberately deferred ("NOT guaranteed yet", unticked
+  since `2d06942b`); it cannot be met by code here and is the same item TRDD-YE15B2JK carried, so
+  both now delegate it to TRDD-BFUZ1THR and this card carries no open box. The owner or the USER may
+  veto by restoring the box. Also added the missing `implementation-commits:` from the four SHAs the
+  body cites (each confirmed to exist with the claimed subject). Human-review reader: the
+  check-types/esbuild box is UNVERIFIED (test run deferred) and the "2535 passing / 1 failing" count
+  has no saved run artifact — judge those two as the author's claims.
+
+## AI review verdict — run: 2026-09-05T15:26:20+0200
+
+| Box | Status | Evidence |
+|---|---|---|
+| statusline `prompt_cache` block / `cache-expired` | ✓ VERIFIED | `git show --stat 494eb779` — `cacheExpiredCli.ts` +107, 5 named tests present |
+| 12 `prompt_cache_*` in `GUARANTEED_COLUMNS` | ✓ VERIFIED | `src/statuslineStore.ts:218-229`, counted 12 |
+| `cache` view 5m/1h via `prompt_cache_ttl` + `misses` | ✓ VERIFIED | `src/cli/statuslineHistoryCli.ts:471-472` |
+| `PreModelSwitch`/`PostModelSwitch` in `HOOK_EVENTS` | ✓ VERIFIED | `src/cli/hookInstall.ts:49-57` |
+| `spend_limit` deliberately not guaranteed | ✓ VERIFIED (open box matches) | `src/statuslineStore.ts:230-233`, and `git log --follow` shows this box unticked since the FIRST authoring commit `2d06942b` — original scope, honestly deferred, not appended/mis-columned |
+| TTL-regime matrix, `f36a934d`, `ATOM-N9P1-MNYD` | ✓ VERIFIED | `git show --stat f36a934d`; atom text at `cache-ttl-model.md:84-86` |
+| `modelPricing`/1.1× premium, `46576993` | ✓ VERIFIED | `git show --stat 46576993`, `pricing.ts` +9 |
+| Version-gated cache-miss causes | ✓ VERIFIED (landed in `cache-ttl-model.md`, not a separate "research page" as worded) | `cache-ttl-model.md:86` names OAuth-refresh, ScheduleWakeup, pre-2.1.239 trace fragmentation |
+| Sonnet 5 auto-compact ~967K no-op | ✓ VERIFIED | `grep -rn "934\|967" src/` — no such constant |
+| Statusline data-quality caveat | ✓ VERIFIED | `f36a934d` diff, `statusline-capture-and-store.md` |
+| Todo-tool taxonomy no-op | ✓ VERIFIED | `grep -rn "TaskCreate\|TodoWrite" src/summarizers/` — 0 hits |
+| Acceptance: check-types/esbuild 0 | ✗ UNVERIFIED — deferred (CPU contention) |
+| Acceptance: 2535 passing/1 failing, B7DSTJLS root fix | ? INFERRED — root fix `aef94208` verified + corroborated by `reports/cachebreak-flake/20260901_195258+0200-load-dependence-analysis.md`; exact pass/fail counts have no saved run-output artifact |
+| Acceptance: remaining boxes carded | ✓ VERIFIED | matches `## Work` text |
+
+Defects: `implementation-commits:` frontmatter field absent despite 4 cited code SHAs (minor,
+non-blocking — recoverable via body + `git log --follow`). No follow-up TRDD named for
+`spend_limit` (unlike ttl-regime's named follow-up) — low risk, nothing actionable without a
+gateway sample.
+
+Full report: `reports/ai-review/20260905_152620+0200-SIGBCMGL.md`
+
+**Verdict: APPROVE**
