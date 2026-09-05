@@ -12,7 +12,7 @@ scope: project
 project-id: agentlenspro
 created-by: 0Y8BMVK2
 related: [0Y8BMVK2]
-relevant-files: [src/cli/hookHandlers.ts]
+relevant-files: [src/agentGate.ts, rust-core/crates/agentlens-core/src/burn/agent_gate.rs]
 review-after: 2026-10-05
 ---
 
@@ -22,9 +22,11 @@ Folded out of TRDD-0Y8BMVK2's 2026-09-03 STATE, which named "PostToolUse:Agent a
 one of two remaining items to card and carried no further specification. This card exists so the
 remark is not lost; it has no measurement yet.
 
-**What is known:** the `PostToolUse` hook on `Agent` emits an advisory (`src/cli/hookHandlers.ts`,
-the post-spawn path) whose text rides forward in the parent transcript on every later turn, so its
-size is a resident cost, not a one-off (the cost model in CLAUDE.md, doctrine 7). The 2026-09-03
+**What is known:** the burn-gate's `PostToolUse` path on `Agent` emits an advisory — the "notify
+the MODEL" channel at `src/agentGate.ts:577` (TS twin; the Rust twin is
+`rust-core/crates/agentlens-core/src/burn/agent_gate.rs`, which alcore serves live) — whose text
+rides forward in the parent transcript on every later turn, so its size is a resident cost, not a
+one-off (the cost model in CLAUDE.md, doctrine 7). The 2026-09-03
 session judged it oversized while measuring the dashboard's cache attribution; the judgement was
 not written down with a number.
 
