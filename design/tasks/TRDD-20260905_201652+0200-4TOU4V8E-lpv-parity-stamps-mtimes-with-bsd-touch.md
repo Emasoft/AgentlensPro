@@ -1,9 +1,9 @@
 ---
 trdd-id: 4TOU4V8E
 title: lpv_parity stamps fixture mtimes through touch -d @epoch, which BSD touch rejects
-column: dev
+column: testing
 created: 2026-09-05T20:16:52+0200
-updated: 2026-09-05T20:29:04+0200
+updated: 2026-09-05T20:32:35+0200
 current-owner: agentlenspro-b2
 task-type: bugfix
 min-approval-requirement: none
@@ -12,12 +12,24 @@ project-id: agentlenspro
 relevant-files: [rust-core/crates/agentlens-core/tests/lpv_parity.rs]
 labels: [rust-core, tests, portability]
 priority: high
-implementation-commits: []
+implementation-commits: [644a9113]
 ---
 
 # lpv_parity stamps fixture mtimes through `touch -d @epoch`, which BSD touch rejects
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-05T20:16
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-05T20:32
+
+**FIX LANDED — `644a9113`** (`stamp_mtimes` → `File::options().write(true).open(&path)` +
+`set_modified(UNIX_EPOCH + Duration::from_secs_f64(ms / 1000.0))`; no `touch` subprocess left
+under `tests/`, grep-verified). Gate read first-hand: `reports_dev/4tou4v8e-lpv-parity.txt`
+line 17 `test result: ok. 10 passed` (capture 20:27:38, after the final form landed);
+`reports_dev/4tou4v8e-clippy.txt` clean (`Finished`, 0 warnings) — but that clippy ran at
+20:19 on the penultimate `as_u64` form, NOT on `from_secs_f64`; the final form compiled for the
+test run, so it type-checks, and its clippy verdict is INFERRED clean. Card is `testing`.
+**NEXT ACTION:** MVR6PXC0 re-runs the 31 never-run binaries (`cargo test -p agentlens-core
+--no-fail-fast`, background, detached) — that run is this card's second gate too (the whole
+suite passing `lpv_parity` on a stock PATH). Then `testing → ai_review` — this card has no
+`test-requirements:` frontmatter, so per KBK9J59Y that move needs an explicit veto line.
 
 **Measured, not inferred.** The MVR6PXC0 full-suite capture
 (`reports_dev/mvr6pxc0-cargo-test-20260905_1715.txt`, mtime 19:57) ends on `tests/lpv_parity.rs`:
@@ -30,12 +42,17 @@ follows, so the run ended there (fail-fast). The `tests/*.rs` names sorting afte
 number 31 — none ran — plus the `Doc-tests` step (INFERRED: `Cargo.toml` sets no `doctest =
 false`, and the capture never reached that step). MVR6PXC0's gate is INCOMPLETE, not red on its
 own diff. The run exited on its own with **101**: the prior session's task output
-`tasks/be71t16hu.output` opens `Loading .zprofile at 17:15:40` and ends `cargo-test EXIT=101`,
-and that file's mtime is 19:57:22 — the same second as the capture's. No output names the
-capture path (the redirection lived in the tool call, not in stdout), so the binding is by
-start time and by that shared last-write second; the two other `cargo-test EXIT` outputs in the
-directory are 16:04 and 16:09 scoped runs. A killed task never writes its trailing `echo`, so
-the EXIT line itself refutes "killed by the clear" without any clear-time arithmetic.
+`tasks/be71t16hu.output` opens `Loading .zprofile at 17:15:40`, carries `cargo-test EXIT=101`,
+then a `sort | uniq -c` tally of the capture's `test result` lines. The binding to THIS capture
+is by the prior session's own command text, read from its transcript: a Bash `tool_use` at
+17:15:40 local running `cargo test -p agentlens-core > $D/mvr6pxc0-cargo-test-20260905_1715.txt
+2>&1; echo "cargo-test EXIT=$?"; grep … | sort | uniq -c`, and the tally it printed reproduces
+from the capture today (`5 × "ok. 1 passed … 0.01s"`, `5 × "… 0.00s"`). The shared last-write
+second (19:57:22 on both files) is consistent with that, not evidence for it. The two other
+`cargo-test EXIT` outputs in the directory are 16:04 and 16:09 scoped runs. "Killed" is refuted
+by the VALUE: a signal death of cargo would leave `$?` = 128+n (137/143) and still write the
+echo; a kill of the shell would write no echo at all; 101 is the Rust test harness's own
+failure exit — cargo exited on a test failure.
 
 **Cause, verified first-hand:** `stamp_mtimes` shells out to `touch -d @<secs>`. On this machine
 `command -v touch` → `/usr/bin/touch` (BSD; `/usr/bin` precedes the coreutils gnubin at PATH
@@ -64,10 +81,12 @@ binaries (`--no-fail-fast` this time) before its own commit.
 
 ## Acceptance
 
-- [ ] `stamp_mtimes` uses `std::fs::File::set_modified`; no `touch` subprocess remains in `tests/`.
-- [ ] `cargo test -p agentlens-core --test lpv_parity` → 10 passed on this machine with
-      `/usr/bin/touch` first on PATH (the failing precondition, reproduced above).
-- [ ] The comment names the real reason the mtimes are stamped and cites nothing false.
+- [x] `stamp_mtimes` uses `std::fs::File::set_modified`; no `touch` subprocess remains in `tests/`
+      (`644a9113`; `grep -rn '"touch"' tests/` → 0).
+- [x] `cargo test -p agentlens-core --test lpv_parity` → 10 passed on this machine with
+      `/usr/bin/touch` first on PATH (`reports_dev/4tou4v8e-lpv-parity.txt:17`, 20:27:38).
+- [x] The comment names the real reason the mtimes are stamped and cites nothing false
+      (read in the diff: git-does-not-preserve-mtimes WHY kept; POSIX and no-std claims gone).
 
 ## Why this matters beyond one binary
 
@@ -97,3 +116,10 @@ never reaches CI (ATOM-2PSS-WR4Q's inverse).
   `cargo-test EXIT=101`, last written 19:57:22 = the capture's second; the other two outputs are
   16:04/16:09 scoped runs. "Killed" now refuted by the EXIT line itself, clear-time arithmetic
   dropped. "Never checked out here" replaced by the provenance-independent mtime argument.
+- 2026-09-05T20:32 — Review fork on `46c80908`: "same last-write second" was a coincidence
+  claim, and "a killed task never writes its echo" only covers a shell kill. Settled by reading
+  the prior session's transcript: the 17:15:40 Bash command names this capture and its tally
+  reproduces; 101 (not 128+n) is the proof cargo exited on a failure. Fix `644a9113` verified
+  first-hand (diff read, gate line 17 read, no `touch` left); `dev → testing` (exempt row).
+  Clippy on the final form INFERRED clean (ran on the penultimate form) — orchestrator decision,
+  USER may veto by demanding a re-run.
