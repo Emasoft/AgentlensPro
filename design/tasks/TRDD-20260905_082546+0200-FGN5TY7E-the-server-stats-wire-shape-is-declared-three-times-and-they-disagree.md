@@ -3,7 +3,7 @@ trdd-id: FGN5TY7E
 title: The server-stats bodies shape is hand-declared twice in one file and the two declarations disagree
 column: todo
 created: 2026-09-05T08:25:46+0200
-updated: 2026-09-05T08:29:12+0200
+updated: 2026-09-05T08:34:20+0200
 current-owner: main-session
 task-type: refactor
 priority: high
@@ -19,8 +19,8 @@ related: [U0L78B3Z, ZIWEB0UW, 8ADTIGKT]
 Found while verifying TRDD-U0L78B3Z. Nothing fixed; this card is the finding.
 
 `/api/server-stats`'s `bodies` object is produced by ONE literal `json!` block in
-`server_stats.rs` and consumed through **two separate hand-written TypeScript declarations in one
-file**, which disagree:
+`server_stats.rs` and consumed through **at least two separate hand-written TypeScript declarations
+in one file**, which disagree (why "at least" is the honest word: see the floor note below):
 
 | declaration | declares | omits |
 |---|---|---|
@@ -40,6 +40,26 @@ context, and put "three times in two files" in the TITLE. **A grep hit proves a 
 somewhere; it says nothing about what type declares it or what else that type contains.** The
 count matters because it sizes the work: two shapes in one file is a local dedup, three across two
 files would have been a reconciliation.
+
+**TWO IS A FLOOR, and the search that found it says why.** Every hit for the four field names
+across `src/`, `media/src/`, `standalone/` (tests excluded) is now classified:
+
+| file | hits | what it is |
+|---|---|---|
+| `src/cli/serverControl.ts` | 11 | the TWO declarations above, plus reads |
+| `src/burnGuard.ts` | 6 | `BurnGuardOptions` member + uses — a parameter contract, NOT a wire declaration |
+| `src/mcpServer.ts` | 1 | `getCaptureDownSince` — the supplier callback, declared and called, never supplied |
+| `standalone/cli.js` | 3 | **BUILD ARTIFACT** — the esbuild bundle of the above; never count it as a declaration |
+| `media/src/` | 0 | no hit for these names |
+
+**But that search keys on FOUR FIELD NAMES, so it cannot see a declaration that omits all four** —
+e.g. one declaring only `archive`/`lastPass`/`live`/`parked`. Given the two known shapes each omit
+half the fields, a third partial shape omitting all four is exactly what this codebase produces.
+The zero in `media/src/` is likewise weak: it means no declaration there names these four, not that
+none exists (the dashboard consumes state over the message protocol rather than this endpoint —
+plausible, unchecked). Acceptance box 2 exists to settle the total; widen by SHAPE, not by field
+name: `grep -rn 'bodies\s*[?]\?:\s*{' --include=*.ts src/ media/src/`. The asymmetry protects the
+card — every miss ADDS a declaration, so the fix only grows.
 
 **Why this is its own card and not part of U0L78B3Z.** U0L78B3Z is "the Rust writer was never
 ported for four fields" — a porting job. This is "one wire object has two partial hand-maintained
