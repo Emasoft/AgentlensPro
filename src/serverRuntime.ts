@@ -139,8 +139,12 @@ export function processStartRef(pid: number): string | null {
     // lock's owner (launchd vs terminal, a localized shell) reads a DIFFERENT string for the SAME
     // live process, the comparison misjudges it 'recycled-takeover', and a live owner gets taken
     // over — re-opening the exact double-owner window this reference exists to close.
+    // TRDD-X4YTS5BF: bounded. This runs on every failed hook's daemon-revive path, synchronously,
+    // and an unbounded `ps` on a loaded box stalled a hook past its caller's 15 s ceiling. A
+    // timeout lands in the catch below as null = "cannot verify", which callers already treat
+    // as the conservative kill-0-only rule — the same answer as `ps` being unavailable.
     const out = execFileSync('ps', ['-o', 'lstart=', '-p', String(pid)], {
-      encoding: 'utf8', env: { ...process.env, LC_ALL: 'C' },
+      encoding: 'utf8', env: { ...process.env, LC_ALL: 'C' }, timeout: 5_000,
     }).trim()
     return out === '' ? null : out
   } catch {

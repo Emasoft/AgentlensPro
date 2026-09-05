@@ -286,11 +286,23 @@ function execRegisteredCommand(ctx: Ctx, command: string, payload: string, expec
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     PATH: ctx.pathEnv,
+    // TRDD-X4YTS5BF: the exec'd hook resolves its data dir from the ENVIRONMENT, and this env
+    // inherited the caller's HOME — so a setup run against an isolated ctx (every setup test)
+    // had its hooks read and write the REAL machine's ~/.agentlens: its server.pid, its
+    // daemon-revive lock, its hook-spool. Pin both so the verify exercises the install it is
+    // verifying. In production ctx.home/ctx.dataDir ARE the real ones, so nothing changes there.
+    HOME: ctx.home,
+    AGENTLENS_DATA_DIR: ctx.dataDir,
     AGENTLENS_UI_URL: `http://127.0.0.1:${ctx.uiPort}`,
     AGENTLENS_HOOK_TIMEOUT: '2',
     AGENTLENS_GATE_TIMEOUT: '2',
   }
   delete env.AGENTLENS_GATE // an ambient kill-switch would make the gate exec vacuous
+  // 15 s bounds /bin/sh + PATH shim + node startup; the child's own budgets are the 2 s above.
+  // The ETIMEDOUTs seen under the full mocha suite (TRDD-X4YTS5BF) came through the HOME leak
+  // fixed above: a failed hook POST revives the daemon, which ran an unbounded `ps` against the
+  // real machine's pidfile — now bounded in processStartRef. Do not raise this to paper over a
+  // hang; bound the hang.
   const r = spawnSync('/bin/sh', ['-c', command], { input: payload, env, encoding: 'utf8', timeout: 15_000 })
   if (r.error) return `spawn failed: ${r.error.message}`
   if (r.status !== 0) return `exit ${r.status} (must always exit 0): ${(r.stderr || '').slice(0, 120)}`
