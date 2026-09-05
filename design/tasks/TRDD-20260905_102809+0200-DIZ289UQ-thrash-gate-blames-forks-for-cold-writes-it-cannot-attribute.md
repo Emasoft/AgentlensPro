@@ -3,7 +3,7 @@ trdd-id: DIZ289UQ
 title: The burn-gate blames review forks for cache thrash it cannot attribute
 column: ai_review
 created: 2026-09-05T10:28:09+0200
-updated: 2026-09-05T11:43:19+0200
+updated: 2026-09-05T16:58:38+0200
 current-owner: main-session
 task-type: bugfix
 priority: high
@@ -192,16 +192,66 @@ tripped the detector belong to something else entirely and the ledger names it.
 
 - [ ] A measurement on a real review fork: request + paired response `usage`, recorded here with
       cc/cr and the prefix size. States plainly which of the two cases holds.
-- [ ] The thrash detector distinguishes a subagent boot from a main-conversation rewrite under the
+      MET TO THE LIMIT THE DATA ALLOWS (16:57 review): the STATE table gives cc/cr for four
+      responses and states the warm-read case; the request↔response pairing is by mtime window,
+      because nothing on disk joins a request to its response (the CLAUDE.md doctrine records that
+      pairing as measured-dead). Left open for human_review: accept the windowed pairing as this
+      box's ceiling, or reword the box.
+- [x] The thrash detector distinguishes a subagent boot from a main-conversation rewrite under the
       SAME session id — by the request shape (`messages[0]` is the injected prompt / `agent_type`
       in the hook stream / the `cc_prev_req` marker), not by session id alone. Mutation-verified:
       N fork boots on one session id must NOT flip `active`; N rewrites of the main conversation
-      still must.
+      still must. (Met by a DIFFERENT discriminator than the box names: the response's TTL tier —
+      `bodies_activity.rs:88-100` `is_subagent_write = tier_1h == Some(0.0)` — partitions fresh-agent
+      boots into `subagentWrites` before the thrash count; both parity fixtures pin the partition.
+      The 16:57 review read it; the mutation run itself is the fixtures' assertion, not re-run here.)
 - [ ] THRASH_ACTIVE's message names the SOURCE it measured (which session, which requests, the
       ledger's `cache_miss_reason` where captured) and never names the fork as the cause.
-- [ ] `COLD_FORK` either states the true economics (the parent's next turn pays the same write —
-      a single fork adds nothing; only parallel forks multiply it) or is removed.
-- [ ] One regression test per changed rule, in the existing `agent_gate` / `bodies_activity`
-      test modules.
+      PARTIAL (16:57 review): the fork is told "not the cause" and the `cache_miss_reason` histogram
+      is inline (`agentGate.ts:305-326`), but no session or request id is named. Left open for
+      human_review: require the ids, or accept the histogram and close.
+- [x] `COLD_FORK` either states the true economics (the parent's next turn pays the same write —
+      a single fork adds nothing; only parallel forks multiply it) or is removed. (`agentGate.ts:390-397`
+      per the review — the branch is now the single-fork advisory "a single fork adds nothing … Only
+      PARALLEL forks".)
+- [x] One regression test per changed rule, in the existing `agent_gate` / `bodies_activity`
+      test modules. (`agentGate.test.ts` fork+thrash → `warn`, the `×5` miss-reason assertion, the
+      rewritten `mode=warn` test; both parity fixtures pin the tier partition and `missReasons`;
+      `reports_dev/diz-final.txt` records the run — read by the review, not re-run here.)
+
+## Approval log
+
+- 2026-09-05T16:58:38+0200 — orchestrator accepts the 16:57 AI-review APPROVE: boxes 2, 4, 5 ticked on
+  the review's file:line evidence (re-read by me: the box-2 partition site and the fixture stats of
+  `3979a57d` — `agent_gate.rs` +29, `bodies_activity.rs` +74, both expected-JSON fixtures); boxes 1 and
+  3 left OPEN with their limitation stated, for human_review to accept or demand more. The review
+  asked to add `7659b9ca` to `implementation-commits`; declined — its only hunk in this card's files
+  is a three-line comment in `bodies_activity.rs` (tagged, not code), so `[3979a57d]` stands and the
+  comment commit is named here instead. Card stays `ai_review` for the human_review move.
+
+## AI review verdict — run: 2026-09-05T16:57:11+0200
+
+Commits reviewed: `3979a57d` (fix + fixtures), `7659b9ca` (review-fork corrections + wiring
+test). Full report: `reports/ai-review/20260905_165711+0200-DIZ289UQ.md`.
+
+**Frontmatter defect:** `implementation-commits: [3979a57d]` omits `7659b9ca`, which touches
+`src/bodiesActivity.ts` (13 lines) implementing corrections to THIS card's fix (its own message:
+"review-fork corrections after 3979a57d … TRDD-DIZ289UQ"). ✓ VERIFIED (`git show --stat 7659b9ca`).
+
+| box | met/unmet | evidence |
+|---|---|---|
+| 1. fork measurement, cc/cr + prefix, states which case | met, weak pairing | STATE table (lines 68-83) gives cc/cr for 4 fable-5-1 responses, concludes "warm read; none was a full-prefix write" — matches `agentGate.ts:317-318`'s comment. ? INFERRED: pairing is by mtime window, not a request→response join — the card itself says a response "cannot be labelled fork vs parent". Functionally sufficient, not literally "paired". |
+| 2. distinguish boot vs main-rewrite by request shape, not session id; mutation-verified | met via a different mechanism | Shipped rule uses the response's TTL tier (`extract_miss_diagnostics`, `bodies_activity.rs:88-100`; `is_subagent_write = tier_1h == Some(0.0)`), not request shape (`messages[0]`/`agent_type`/`cc_prev_req`). Satisfies "not session id alone"; regression-pinned by `gen-burnguard-expected.mjs` (`a`/`b`/`c` chained to S1 → count 3; `f`/`g`/`h` chained to the SAME S1 → `subagentWrites {3,826848}`, excluded from count/topSource — fixture comments state the falsifying mutation). No automated mutation-testing harness; the falsification is documented, not executed. |
+| 3. THRASH_ACTIVE names the SOURCE (session, requests, miss reason), never the fork | partially met | `agentGate.ts:305-326`: fork explicitly told "not the cause" (pinned by `agentGate.test.ts`'s `includes('not the cause')`); `missReasons` histogram surfaced inline (`API cache_miss_reason: previous_message_not_found ×5`). `thrashSource()` (`agentGate.ts:198-202`) prints only a sender COUNT, defers naming to `investigate_burn` — session id / request ids are NOT printed in the message. |
+| 4. COLD_FORK states true economics or removed | met | `agentGate.ts:390-397`: "a single fork adds nothing … Only PARALLEL forks…". |
+| 5. one regression test per changed rule | met | `agentGate.test.ts` diff: fork+thrash now asserts `warn` not `deny` + `×5` reason assertion + rewritten `mode=warn` test; both parity fixtures pin the tier-partition + `missReasons` shape; `reports_dev/diz-final.txt` shows both parity tests + 92 passing mocha green. |
+
+Gate evidence read in full: `reports_dev/diz-final.txt` (11:43) — types/eslint/compile/mocha 92
+passing, both parity regens, `INTEG_EXIT=0`, `CLIPPY_EXIT=0`.
+
+**Verdict: APPROVE** — the fix is functionally correct and tested at both engines; boxes 1 and 3
+are met in spirit, not to their literal wording (weak pairing; no session/request id in the
+warning text), and `implementation-commits:` should gain `7659b9ca`. None of these are
+functional regressions.
 
 ## Notes and lessons learned
