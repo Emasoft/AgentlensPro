@@ -1,9 +1,9 @@
 ---
 trdd-id: UTFVMVT8
 title: The composition routes hold the state lock for seconds at ui.rs:560 and the dominant statement is not yet isolated
-column: testing
+column: ai_review
 created: 2026-09-02T12:55:49+0200
-updated: 2026-09-04T15:25:08+0200
+updated: 2026-09-05T21:50:15+0200
 current-owner: main-session
 task-type: bugfix
 priority: high
@@ -149,10 +149,17 @@ implementation-commits: [4e19ed4b, 428a1dec]
   behind the span flush tick (was 145,456 ms behind this card's guard). Boxes 2 and 3 pass; box 4's
   steady-state half passes; the young-session half is still owed. The burn tick is the next holder
   to card, not this card's scope.
-- **NEXT ACTION:** the young-session probe for box 4 — the next time a NEW Claude session starts
-  on this machine, within ~10 s call `GET /api/composition-index/<new id>` (expect `project:
-  "unknown"` or a resolved project), then again after ≥ 15 s and expect the real project; then run
-  `query_context_blocks --project <its repo>` and expect it in scope. Then `testing → ai_review`.
+- **BOX 4 YOUNG-SESSION HALF MEASURED 2026-09-05 21:48 — PASS; `testing → ai_review`.** A heartbeat can
+  never catch a stranger's session within 10 s of start, so the probe was made: a one-shot
+  `claude -p` session in a scratch git repo (`/private/tmp/claude-501/utfvmvt8-probe`), id
+  `89013081-…`, against pid 574. `GET /api/composition-index/<id>` → `"unknown"` at 38 s and 59 s,
+  the real path at 91 s; `query_context_blocks --project <that path>` at ~100 s → 1 group, that id,
+  8 blocks. So a session started after the last rebuild does NOT stay `"unknown"` and is scoped once
+  the next rebuild lands — exactly the box's wording. The "~10 s / ≥ 15 s" markers in the old NEXT
+  ACTION were an expectation, not the box; on this run session startup alone took 13–23 s and the
+  fill came at 91 s. No `state lock held ≥ 1000 ms` in the probe window (24 lines, max 790 ms).
+  Report: `reports/utfvmvt8/20260905_215049+0200-box4-young-session-probe.md`. The four cards with
+  `unblock-when: [trdd:UTFVMVT8 terminal]` stay blocked until `human_review → complete` (USER's move).
 - **What this card does NOT fix, on purpose:** inside the same `check_cache_expiry` handler the
   per-candidate `timeline_of` closure takes its own guard and calls `resolve_session_card` →
   `st.build_session_summary` (`ui.rs:599` at this commit) — a rebuild under the lock per candidate
@@ -182,7 +189,10 @@ implementation-commits: [4e19ed4b, 428a1dec]
       per-candidate `timeline_of` guard (site 599) is TRDD-QE114936's, not this box's.
       DONE — 16:36–16:51 on pid 18695: zero holds ≥ 250 ms at any of those sites (STATE has the
       per-site table); the worst hold on the server fell from 273,893 ms to 2,263 ms.
-- [ ] `/api/composition-index/<sessionId>` (scoped and single-session) still fills `project` —
+- [x] (DONE 2026-09-05 21:48, both halves — steady-state on pid 18695, young session `89013081-…`
+      on pid 574: `"unknown"` at 38/59 s → real path at 91 s → in `query_context_blocks` scope;
+      `reports/utfvmvt8/20260905_215049+0200-box4-young-session-probe.md`)
+      `/api/composition-index/<sessionId>` (scoped and single-session) still fills `project` —
       route name CORRECTED 2026-09-04; this box was written as `/api/context-compositions`, the
       pre-1B98LCVR TypeScript name, which now 404s. Leaving the dead name on the box's first line
       meant an auditor reading only that line would hit a 404 and could conclude the feature was
