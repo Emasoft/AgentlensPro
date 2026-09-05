@@ -3,7 +3,7 @@ trdd-id: DIZ289UQ
 title: The burn-gate blames review forks for cache thrash it cannot attribute
 column: ai_review
 created: 2026-09-05T10:28:09+0200
-updated: 2026-09-05T16:58:38+0200
+updated: 2026-09-05T17:00:37+0200
 current-owner: main-session
 task-type: bugfix
 priority: high
@@ -194,17 +194,24 @@ tripped the detector belong to something else entirely and the ledger names it.
       cc/cr and the prefix size. States plainly which of the two cases holds.
       MET TO THE LIMIT THE DATA ALLOWS (16:57 review): the STATE table gives cc/cr for four
       responses and states the warm-read case; the request↔response pairing is by mtime window,
-      because nothing on disk joins a request to its response (the CLAUDE.md doctrine records that
-      pairing as measured-dead). Left open for human_review: accept the windowed pairing as this
-      box's ceiling, or reword the box.
-- [x] The thrash detector distinguishes a subagent boot from a main-conversation rewrite under the
+      because no on-disk field joins a request to its response in the aggregate (the CLAUDE.md ctxmap
+      doctrine). But a FORK's own request IS selectable — the ctxvis method (nonce in the prompt +
+      `messages[0]` position, cross-checked against billed `usage`) produced one verified pair — and
+      that recipe was not run for this card. Left open for human_review: accept the windowed pairing,
+      or ask for one ctxvis-style exact pair.
+- [ ] The thrash detector distinguishes a subagent boot from a main-conversation rewrite under the
       SAME session id — by the request shape (`messages[0]` is the injected prompt / `agent_type`
       in the hook stream / the `cc_prev_req` marker), not by session id alone. Mutation-verified:
       N fork boots on one session id must NOT flip `active`; N rewrites of the main conversation
-      still must. (Met by a DIFFERENT discriminator than the box names: the response's TTL tier —
-      `bodies_activity.rs:88-100` `is_subagent_write = tier_1h == Some(0.0)` — partitions fresh-agent
-      boots into `subagentWrites` before the thrash count; both parity fixtures pin the partition.
-      The 16:57 review read it; the mutation run itself is the fixtures' assertion, not re-run here.)
+      still must.
+      SUBSTITUTED, NOT MET AS WRITTEN (left open for human_review): the shipped discriminator is the
+      RESPONSE's TTL tier — `bodies_activity.rs:380-382` `is_subagent_write = |e| e.tier_1h ==
+      Some(0.0)` partitioning `all_misses` (the tier is read at `:87` `extract_miss_diagnostics`; the
+      review's `:88-100` citation was that reader, not the partition) — which routes FRESH-agent
+      5m-tier boots into `subagentWrites` before the thrash count (both parity fixtures pin it). The request-shape discriminator the box names was not built, and a
+      FORK rides the caller's 1h tier so the tier cannot tell it from a main rewrite — the fork half
+      of the mutation clause is covered by the THRASH branch's fork EXEMPTION, not by detection.
+      Human_review: accept the substitution and reword the box, or demand the request-shape check.
 - [ ] THRASH_ACTIVE's message names the SOURCE it measured (which session, which requests, the
       ledger's `cache_miss_reason` where captured) and never names the fork as the cause.
       PARTIAL (16:57 review): the fork is told "not the cause" and the `cache_miss_reason` histogram
@@ -221,10 +228,15 @@ tripped the detector belong to something else entirely and the ledger names it.
 
 ## Approval log
 
-- 2026-09-05T16:58:38+0200 — orchestrator accepts the 16:57 AI-review APPROVE: boxes 2, 4, 5 ticked on
-  the review's file:line evidence (re-read by me: the box-2 partition site and the fixture stats of
-  `3979a57d` — `agent_gate.rs` +29, `bodies_activity.rs` +74, both expected-JSON fixtures); boxes 1 and
-  3 left OPEN with their limitation stated, for human_review to accept or demand more. The review
+- 2026-09-05T16:58:38+0200 — orchestrator accepts the 16:57 AI-review APPROVE: boxes 4 and 5 ticked on
+  the review's file:line evidence; re-read by me only `3979a57d`'s `--stat` (`agent_gate.rs` +29,
+  `bodies_activity.rs` +74, both expected-JSON fixtures) and, at 17:01, the partition itself —
+  `bodies_activity.rs:380-382`, not the `:88-100` the review cited (that is the tier reader); the rest
+  of the per-box evidence is the worker's. Box 2 was
+  first ticked as "met by a different discriminator" and UN-ticked at 17:01 (review-fork finding): the
+  shipped TTL-tier partition substitutes for the request-shape check the box names and does not
+  cover forks by detection — an orchestrator judgment the human must ratify, not a met box. Boxes 1,
+  2 and 3 are OPEN with their limitation stated, for human_review to accept or demand more. The review
   asked to add `7659b9ca` to `implementation-commits`; declined — its only hunk in this card's files
   is a three-line comment in `bodies_activity.rs` (tagged, not code), so `[3979a57d]` stands and the
   comment commit is named here instead. Card stays `ai_review` for the human_review move.
