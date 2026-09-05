@@ -3,7 +3,7 @@ trdd-id: 0Y8BMVK2
 title: The dashboard reported skill and agent catalogs as per-turn cache writes and a six-digit hit rate
 column: ai_review
 created: 2026-09-03T19:13:48+0200
-updated: 2026-09-05T18:29:53+0200
+updated: 2026-09-05T18:31:49+0200
 current-owner: main-session
 task-type: bugfix
 severity: HIGH
@@ -27,15 +27,21 @@ audited and records this one as "reports itself finished on its own STATE block,
 **Gates re-run on HEAD `689e4176` at 18:27:28** (the 18:23 move had relied on the 09-03 run, ~200
 commits old — a review fork caught it): `pnpm run compile-tests` 0, `cacheHitRate.test.js` 5/0,
 `scripts/check-no-mirrors.js` 0 ("141 shared exports, no mirrors under media/src"), `pnpm run
-check-types` 0 (`reports_dev/0y8b-*.txt`); `node esbuild.js` 0 at 18:29:53 and the rebuilt
-`media/dashboard.js` carries the `Traces.tsx:996` guard label once (`grep -c "Inherited context
-blocks"` → 1). **What those gates do and do not prove:** the 5 mocha tests exercise only the shared
-helper `cacheHitRate` (defect 1). Defects 2–4 live in `Agents.tsx` and `Traces.tsx`, webview code
-with NO automated test in this repo; on HEAD they are covered only by the `media/tsconfig.json`
-type-check leg and the esbuild build (shape, not behaviour), and behaviourally only by the 09-03
-manual inspection of the served bundle. The AI review must read "gates green" with that gap in
-view. The rebuilt bundle is on disk, not served — `agentlenspro server restart` was NOT run here (a
-deploy step, not a gate, and the collector is mid-measurement for MVR6PXC0). Of the two fold-out items: "PostToolUse:Agent
+check-types` 0 (`reports_dev/0y8b-*.txt`); `node esbuild.js` 0 at 18:29:53. The guard itself, read
+at HEAD: `Traces.tsx:967` `!sourcesInherited && itemizedSum > 0 && totals.cacheWrite >= itemizedSum`
+(turn level) and `:334` `blocksAreNewWrites` (breakdown level); the inherited-case label at `:996`.
+A `grep -c` of that label in a bundle counts one string on the inherited branch and says nothing
+about the guard — it is not evidence and is not cited as such. **What those gates do and do not
+prove:** the 5 mocha tests exercise only the shared helper `cacheHitRate` (defect 1). Defects 2–4
+live in `Agents.tsx` and `Traces.tsx`, webview code with NO automated test in this repo; on HEAD
+they are covered only by the `media/tsconfig.json` type-check leg (its `include` is `src/**/*.tsx`,
+so `tabs/` is in scope) and the esbuild build — shape, not behaviour — and behaviourally only by the
+09-03 manual inspection of the served bundle. The AI review must read "gates green" with that gap in
+view. The served `dashboard.js` (`curl localhost:3000/dashboard.js`) already carries the `:996`
+label, so the live dashboard has been the post-fix bundle since the 09-03 restart; no
+`server restart` here — a deploy step, not a gate. The rebuild also rewrote `standalone/cli.js`
+(the hook entrypoint): `git diff --stat 52155adf HEAD -- src standalone/*.ts media/src` is empty, so
+nothing the hooks execute changed. Of the two fold-out items: "PostToolUse:Agent
 advisory size" had no card until TRDD-V8W9A8FZ (backburner, `fb20872b` — the remark carries no spec
 beyond its name); "burn-gate wording" is most likely what TRDD-DIZ289UQ (2026-09-05, the thrash
 gate blaming forks) addressed — INFERRED from the titles, not from a record linking them.
