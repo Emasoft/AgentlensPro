@@ -3,7 +3,7 @@ trdd-id: QE114936
 title: Twenty MCP tool handlers still rebuild the session summary under the state lock
 column: dev
 created: 2026-09-02T16:08:27+0200
-updated: 2026-09-03T10:05:23+0200
+updated: 2026-09-05T06:33:26+0200
 current-owner: main-session
 task-type: bugfix
 priority: high
@@ -14,10 +14,24 @@ related: [UTFVMVT8, 2R36W8Q1, HFV4AIT7]
 
 # Twenty MCP tool handlers still rebuild the session summary under the state lock
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-03T10:05:23+0200
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-05T06:33:26+0200
 
-**ALL 20 SITES ARE DONE IN CODE (the card was written for 18; two more were found).
-Nothing since site 1 is committed or deployed.**
+**ALL 20 SITES ARE DONE IN CODE (the card was written for 18; two more were found), COMMITTED,
+and the INTEGRATION SUITE IS GREEN. Still NOT deployed — box 3 is the only one left.**
+
+- **Committed**: site 1 as `2b38a39b`, sites 2–20 as `1a00cec6`. Working tree clean. The
+  paragraph below that said "nothing since site 1 is committed" was true when written and is
+  now false — kept only as the record of what the sites were, not of where they live.
+- **INTEGRATION SUITE GREEN, 2026-09-05** — `cargo test -p agentlens-core --test '*'` → **exit 0,
+  98 test binaries, 543 tests, 0 failures**, `tests/ui.rs` 41/41. This is the run box 2 was
+  waiting for: the one that actually invokes `handle()`. `--lib` alone never did.
+  Raw output: `reports_dev/qe114936-integration.txt`.
+  One test ran >60 s and then passed —
+  `log_reader_parity::watcher_advances_a_card_on_growth_without_waiting_for_the_backstop` (it
+  waits on a real filesystem backstop). Slow, not flaky, in this run.
+- **NEXT: box 3 only.** Deploy and re-run the 15-min hold read. The deploy needs the ad-hoc
+  `codesign -s - --force bin-native/darwin-arm64/alcore` after the copy or macOS SIGKILLs it
+  before `main` (exit 137, empty `server.log`) — no script does this for you.
 
 - **Site 1** (`resolve_session_card` takes `summary: &Value` in) — committed **2b38a39b**, deployed
   as pid 2074 (acaf82e8), **15-min hold read PASS** (max `ui.rs` hold 506 ms, 0 holds ≥1000 ms;
@@ -156,12 +170,13 @@ the off-lock summary through its callers.
 - [x] `grep -c 'st.build_session_summary(' rust-core/crates/agentlens-core/src/ui.rs` is 0 outside
       tests; every former site reads the summary via `summary_now` before the guard. **Now enforced
       by a test rather than a grep** — `mcp_handlers_never_rebuild_the_summary_under_the_lock`.
-- [ ] `cargo clippy -p agentlens-core --all-targets -- -D warnings` and `cargo test -p agentlens-core`
-      green; the `tests/mcp_*` parity fixtures unchanged in output. **clippy exit 0 and `--lib`
-      42/42, but this box stays UNTICKED until the INTEGRATION suite is green.** It was briefly
-      ticked on `--lib` alone — a proxy: not one lib test invokes `handle()`, so nothing that had
-      run exercised any of the twenty rewritten request paths. `cargo test -p agentlens-core
-      --test '*'` is the only run that does. Result recorded in the STATE block above.
+- [x] `cargo clippy -p agentlens-core --all-targets -- -D warnings` and `cargo test -p agentlens-core`
+      green; the `tests/mcp_*` parity fixtures unchanged in output. **clippy exit 0, `--lib` 42/42,
+      and — 2026-09-05 — the INTEGRATION suite `cargo test -p agentlens-core --test '*'` exit 0,
+      98 binaries / 543 tests / 0 failures, `tests/ui.rs` 41/41.** It had been briefly ticked on
+      `--lib` alone — a proxy: not one lib test invokes `handle()`, so nothing that had run
+      exercised any of the twenty rewritten request paths. It is the `--test '*'` run, and only
+      that run, that ticks this box.
 - [ ] After deploy, invoking each affected tool once (via `agentlenspro <tool>`) while ingest is
       hot produces no `state lock held ≥ 1000 ms by ui.rs:<that handler>` line.
 
