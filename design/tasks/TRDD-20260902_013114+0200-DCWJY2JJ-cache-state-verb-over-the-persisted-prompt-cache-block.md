@@ -3,7 +3,7 @@ trdd-id: DCWJY2JJ
 title: Expose a cache-state verb (warm or cold) over the already-persisted status-line prompt_cache block
 column: ai_review
 created: 2026-09-02T01:31:14+0200
-updated: 2026-09-02T06:46:03+0200
+updated: 2026-09-05T07:57:47+0200
 current-owner: claude-agentlenspro
 task-type: feature
 project-id: agentlenspro
@@ -14,6 +14,22 @@ external-refs: [https://github.com/Emasoft/AgentlensPro/issues/19]
 ---
 
 # Expose a cache-state verb over the persisted prompt_cache block
+
+## ⏵ AI-REVIEW VERDICT 2026-09-05 — APPROVE. Ready for `human_review`; the USER makes that move.
+
+All 5 boxes CONFIRMED by the reviewing agent (live CLI run, full test suite, gh comment, source
+wiring). Report: `reports/ai-review/20260905_075159+0200-DCWJY2JJ.md`.
+
+**Re-checked here on the one thing that could not be checked from source**: the verb is reachable
+from the bare command a user types, not merely present in the tree.
+`agentlenspro cache-state` → `warm`, exit 0, with the harness-reported line above it
+(`ttl 1h, warm true`), and `--json` carrying `state`/`session_id`. A verb that exists in source and
+is unreachable from the PATH-resolved binary is the documented failure mode here
+(`~/.claude/rules/cli-verify-on-path.md`), and it is invisible to every source-level check — so
+this was run, not read.
+
+Noted, non-blocking: a 12-vs-13 field-count discrepancy between the card's prose and the emitted
+shape. Recorded rather than silently corrected.
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-02
 

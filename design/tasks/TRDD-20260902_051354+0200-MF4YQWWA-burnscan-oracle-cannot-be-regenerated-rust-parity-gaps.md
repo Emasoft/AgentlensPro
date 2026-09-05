@@ -3,7 +3,7 @@ trdd-id: MF4YQWWA
 title: The burnscan TS oracle can no longer be regenerated — Rust investigate_burn is behind it on captureGaps and on the sonnet-5 scheduled price
 column: ai_review
 created: 2026-09-02T05:13:54+0200
-updated: 2026-09-02T06:10:52+0200
+updated: 2026-09-05T07:57:47+0200
 current-owner: claude-session-2026-09-02
 task-type: bugfix
 scope: project
@@ -16,6 +16,21 @@ implementation-commits: [532baacb]
 ---
 
 # The burnscan TS oracle can no longer be regenerated — Rust investigate_burn is behind it on captureGaps and on the sonnet-5 scheduled price
+
+## ⏵ AI-REVIEW VERDICT 2026-09-05 — APPROVE. Ready for `human_review`; the USER makes that move.
+
+All 3 boxes CONFIRMED by the reviewing agent: `captureGaps` ported, per-response ts pricing at
+every call site in BOTH languages, and a **live regeneration performed today** yielding a
+zero-diff fixture, 9/9 parity, 18/18 mocha, clippy clean. Report:
+`reports/ai-review/20260905_075655+0200-MF4YQWWA.md`.
+
+**Why the zero-diff regen is the right evidence, and a green parity run alone would not have
+been.** A parity test can pass because the golden was regenerated in the same commit as the code
+it checks — the fixture and the implementation drift together and the assertion never notices.
+The discriminator is a regen against a golden that is ALREADY IN THE REPO: re-checked here,
+`git status` is clean and `tests/fixtures/burnscan-expected.json` is unmodified, so the
+just-regenerated output matched a file committed before the run. That is the card's own claim —
+the oracle can be regenerated again — demonstrated rather than asserted.
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-09-02
 
