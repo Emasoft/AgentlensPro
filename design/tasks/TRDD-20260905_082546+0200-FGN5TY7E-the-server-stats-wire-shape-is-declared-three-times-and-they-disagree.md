@@ -3,7 +3,7 @@ trdd-id: FGN5TY7E
 title: The server-stats bodies shape is hand-declared twice in one file and the two declarations disagree
 column: ai_review
 created: 2026-09-05T08:25:46+0200
-updated: 2026-09-05T11:43:19+0200
+updated: 2026-09-05T11:49:00+0200
 current-owner: main-session
 task-type: refactor
 priority: high
@@ -24,9 +24,14 @@ The unread `spool?` was dropped rather than half-typed. Box by box:
 - Box 1 met. Box 2 met: the tree-wide shape grep (`bodies\s*\??:\s*\{` over `src`, `media/src`,
   `standalone`, tests excluded) found exactly the two declarations, both in `serverControl.ts`;
   `burnGuard.ts:110` is a `BurnGuardOptions` parameter member; `media/src` has zero.
-- Box 3 met by the frozen-shape test `tests/server_stats.rs` (`keys(&body["bodies"])` is now the
-  FULL set the interface declares). The "delete a field and confirm red" mutation was argued
-  from the assertion's shape, not RUN — do it once before `human_review`.
+- Box 3 PARTIAL (review fork 2026-09-05, `reports/review-fork/20260905_114745+0200-*.md` §1 —
+  corrected after commit 0c01a3e1 claimed "met"): `tests/server_stats.rs` freezes the EMITTER's
+  key set only; it cannot see the TS interface, and the two sets already differ (the interface
+  declares unsent `reclaimedSinceBoot`/`lastNonZeroPassAt`; the emitter sends undeclared `spool`).
+  A consumer-side drift is caught by nobody. The comments in both files now say so instead of
+  claiming a gate. The other half (a TS test parsing the `json!` keys) is YAGNI until a second
+  drift appears. The "delete a field and confirm red" mutation was argued, not RUN — run once
+  before `human_review`.
 - Box 4 PARTIAL, deliberately: `captureDownSince`/`sinkProblem` now send (U0L78B3Z);
   `reclaimedSinceBoot`/`lastNonZeroPassAt` stay declared-but-unsent because the bodies purge that
   produces them is unported and the CLI's fallback rendering is honest about absence.

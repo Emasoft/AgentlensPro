@@ -480,6 +480,9 @@ impl BodiesActivityTracker {
         un.insert("count".into(), num(unattributed_count));
         un.insert("rebilledTokens".into(), num(unattributed_cc));
         thrash.insert("unattributed".into(), Value::Object(un));
+        // TRDD-DIZ289UQ: counted over `misses` AFTER the tier partition — on a tiered wire a fresh
+        // agent's 5m boot lands in `subagentWrites`, so this counts only untiered (older CC)
+        // bodies plus 1h-tier callers below the repeat threshold. Mirrors the TS doc comment.
         thrash.insert("coldStartSessions".into(), num(cold_start_sessions));
         thrash.insert("coldStartRebilledTokens".into(), num(cold_start_rebilled));
         let mut subagent_obj = Map::new();

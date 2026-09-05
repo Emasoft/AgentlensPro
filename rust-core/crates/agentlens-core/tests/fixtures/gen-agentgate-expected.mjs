@@ -82,7 +82,7 @@ const thrash = (over = {}) => ({
   suspects: [{ file: 'r1.request.json', bytes: 1_100_000, model: 'claude-fable-5' }],
   topSource: { session: 'sess-caller-1', count: 6, rebilledTokens: 1_800_000 },
   unattributed: { count: 0, rebilledTokens: 0 }, coldStartSessions: 0, coldStartRebilledTokens: 0,
-  // TRDD-DIZ289UQ: the API's own reasons ride into the verdict text (`… ×5`) — one labelled
+  // TRDD-DIZ289UQ: the API's own reasons ride into the verdict text (`… ×2, … ×3, … ×1`) — one labelled
   // case so both engines' reason clause (and the U+00D7) is oracle-tested, not just unit-tested.
   // Keys deliberately NON-alphabetical: TS renders insertion order and Rust relies on serde_json
   // `preserve_order`; an alphabetical pair could not tell that apart from a sorted map.

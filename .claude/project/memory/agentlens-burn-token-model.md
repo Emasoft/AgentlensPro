@@ -2,7 +2,7 @@
 name: agentlens-burn-token-model
 description: "5h/7d account window drained fast / burning 1M+ tokens per minute / what is consuming all the tokens / impossible that a few Claude sessions burned the window / cost vs token window limit / cache-read dominating burn / OTEL and JSONL report different token numbers for the same session / session cost looks 100x too big or negative / all 3 OAuth accounts drained one after another over ~2 days / a huge idle main session re-woken every ~15 min by a heartbeat cron / plugin reloads forcing full cache-CREATE rewrites / what exhausted my 7-day rate-limit window with no visible rate-limit wall"
 ocd: 2026-07-08
-lmd: 2026-07-30
+lmd: 2026-09-05
 metadata:
   node_type: memory
   tier: hub
@@ -134,6 +134,7 @@ Three tools answer "what is every sub-agent costing me", and they are not interc
   against a window that page is the authority on.
 - [[cumulative-vs-per-turn-fields]] — which captured fields are lifetime counters vs per-turn
   deltas; misreading one as the other corrupts every cost this model prices.
+- [[memory-scope-leak-detector-false-positives]]
 
 ## Notes and lessons learned
 [^1]: [id:ATOM-STATUSLINE-BUCKET-SPLIT, status:valid, keywords:"statusline_breakdown_landed_in_unknown per_bucket_split_missing_no_otel_sessions StatuslineBillingEvent_commit", ocd:2026-07-08, lmd:2026-07-08] The statusline event path originally carried only a total

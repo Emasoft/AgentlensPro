@@ -2,7 +2,7 @@
 name: cumulative-vs-per-turn-fields
 description: "is total_cost_usd per turn or cumulative / my burn number is hundreds of times too high / the cost jumped after a server restart / d cost looks like one expensive turn / which statusline fields are lifetime totals / how do I difference a cumulative field safely / a cost and a token count that cannot both be true / burn looks wrong only for one model / a new model shipped and the cost numbers went strange / the fix is in the other file so this one is fine, right"
 ocd: 2026-08-01
-lmd: 2026-08-01
+lmd: 2026-09-05
 metadata:
   node_type: memory
   type: project
@@ -74,6 +74,11 @@ a claim to verify, not to trust: read the cited function's fallback branches spe
 mitigation with a fallback is a mitigation with a hole, and the hole inherits none of the comment's
 confidence. Where a delta is unavoidable, carry the sampling interval WITH it (the `peaks` view's
 `gap_s` column is the working shape) so a consumer can label an interval total instead of guessing. [^1]
+
+
+## See also
+
+- [[memory-scope-leak-detector-false-positives]]
 
 ## Notes and lessons learned
 

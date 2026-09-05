@@ -3,7 +3,7 @@ trdd-id: 5PUD8RKE
 title: alcore's bodies chore drains only the legacy dir and would abandon the RAM spool
 column: ai_review
 created: 2026-08-27T20:31:38+0200
-updated: 2026-09-05T07:02:45+0200
+updated: 2026-09-05T11:49:00+0200
 current-owner: main
 task-type: bugfix
 severity: HIGH
@@ -122,3 +122,8 @@ backpressure cluster (`ensureRamDisk`/`ramDiskInfo`/`spoolSizeMb`, `applySpoolBa
 
 - [[TRDD-DMWOBWFH]] — the cutover this blocks. Full inventory:
   `reports/rust-port/20260827_202829+0200-ts-core-to-rust-gap-list.md` (24 gaps, 14 absent).
+- [[TRDD-U0L78B3Z]] (commit a55074bd) added a second reader of the SAME wrong dir: `chores.rs`
+  probes `default_bodies_dir` for the `sinkProblem` field regardless of `spool_dir_configured`
+  (review fork 2026-09-05, `reports/review-fork/20260905_114745+0200-*.md` §4). On a spool machine
+  an unwritable RAM spool goes unreported and a missing legacy dir can false-alarm `SINK:`. Fix
+  it here, with the drain, once the primary-sink rule is settled — not on that card.

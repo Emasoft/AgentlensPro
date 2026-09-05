@@ -504,8 +504,10 @@ export async function stopServer(): Promise<void> {
  *
  *  `now` is a parameter so this is testable without waiting for wall-clock. */
 /** `/api/server-stats` `bodies` — THE declaration (TRDD-FGN5TY7E). The emitter is the one `json!`
- *  block in `rust-core/.../server_stats.rs`; `tests/server_stats.rs` pins its exact key set, so a
- *  field added here without a producer, or dropped there while still read here, fails a test. */
+ *  block in `rust-core/.../server_stats.rs`; `tests/server_stats.rs` freezes the EMITTER's key set
+ *  (a field dropped there goes red). It cannot see this interface, so a field added HERE without a
+ *  producer is caught by nobody — keep the two in step by hand, and say so on the field (as the
+ *  `reclaimedSinceBoot` comment does). */
 export interface ServerStatsBodies {
   archive: { volumes: number; entries: number; bytes: number }
   lastPass: { removedFiles: number; keptBytes: number }

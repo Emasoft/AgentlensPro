@@ -65,7 +65,10 @@ export interface ThrashReport {
   unattributed: { count: number; rebilledTokens: number }
   /** FAN_OUT_COLD_START: DISTINCT attributed sessions whose in-window big writes stayed BELOW the
    *  same-session repeat threshold — N fresh agents each paying their one-time cold-start prefix
-   *  write. Expected fan-out cost, advisory-only, never a reason to deny unrelated actions. */
+   *  write. Expected fan-out cost, advisory-only, never a reason to deny unrelated actions.
+   *  TRDD-DIZ289UQ: counted over `misses` AFTER the tier partition, so on a tiered wire a fresh
+   *  agent's 5m boot lands in `subagentWrites` and never here — this counts only untiered (older
+   *  CC) bodies plus 1h-tier callers below the repeat threshold. */
   coldStartSessions: number
   coldStartRebilledTokens: number
   /** TRDD-DIZ289UQ: big writes on the 5m TTL tier — a SUBAGENT's own prefix (its boot, or its
@@ -129,7 +132,9 @@ export function extractMissDiagnostics(j: unknown): { tier1h: number | null; mis
   if (!j || typeof j !== 'object') return { tier1h: null, missReason: null }
   const o = j as Record<string, unknown>
   const cand = [o, o.response, o.body].find(
-    (x): x is Record<string, unknown> => !!x && typeof x === 'object' && typeof (x as Record<string, unknown>).usage === 'object',
+    // `!!usage` — `typeof null === 'object'`, so without it a `{usage: null, response: {usage}}`
+    // wrapper would be picked here and rejected by the Rust engine (`is_some_and(Value::is_object)`).
+    (x): x is Record<string, unknown> => !!x && typeof x === 'object' && !!(x as Record<string, unknown>).usage && typeof (x as Record<string, unknown>).usage === 'object',
   )
   const cc = (cand?.usage as Record<string, unknown> | undefined)?.cache_creation as Record<string, unknown> | undefined
   // An object with NEITHER tier key is unknown, not "0 on the 1h tier": treating it as tiered
@@ -183,7 +188,9 @@ export function extractResponseUsage(j: unknown): { model: string | null; cc: nu
   if (!j || typeof j !== 'object') return null
   const o = j as Record<string, unknown>
   const cand = [o, o.response, o.body].find(
-    (x): x is Record<string, unknown> => !!x && typeof x === 'object' && typeof (x as Record<string, unknown>).usage === 'object',
+    // `!!usage` — `typeof null === 'object'`, so without it a `{usage: null, response: {usage}}`
+    // wrapper would be picked here and rejected by the Rust engine (`is_some_and(Value::is_object)`).
+    (x): x is Record<string, unknown> => !!x && typeof x === 'object' && !!(x as Record<string, unknown>).usage && typeof (x as Record<string, unknown>).usage === 'object',
   )
   const usage = cand?.usage as Record<string, unknown> | undefined
   if (!usage) return null

@@ -1,9 +1,9 @@
 ---
 trdd-id: U0L78B3Z
 title: Nothing computes CAPTURE DOWN since the TS server was retired so the liveness clock ticks unread
-column: testing
+column: ai_review
 created: 2026-09-05T07:18:10+0200
-updated: 2026-09-05T11:43:19+0200
+updated: 2026-09-05T11:52:25+0200
 current-owner: main-session
 task-type: bugfix
 priority: high
@@ -15,13 +15,20 @@ implementation-commits: [a55074bd]
 
 # Nothing computes CAPTURE DOWN since the TS server was retired so the liveness clock ticks unread
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-09-05T11:43:19+0200
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-09-05T11:52:25+0200
 
-**IN `testing` — the port is committed; every gate in `reports_dev/diz-final.txt` (types, eslint,
-compile-tests, mocha, both parity oracles, lib, integration incl. `tests/server_stats.rs`, clippy)
-exited 0 on 2026-09-05 11:42. What remains is box 3: the codesign deploy
-(`codesign -s - --force bin-native/darwin-arm64/alcore` + `agentlenspro server restart`) and a
-live `server status` showing the capture line — then `ai_review`.** Earlier state, kept: `server_stats.rs` now carries
+**IN `ai_review` — committed (a55074bd) AND DEPLOYED on this machine.** Gate
+`reports_dev/diz-final.txt`: every stage exit 0 at 11:42. Deploy at 11:51: `cargo build --release`
+→ copy into `bin-native/darwin-arm64/` → `codesign -s - --force` → the binary answers its usage
+line (exit 64, i.e. past `main`; the codesign failure is exit 137 before it) → `agentlenspro server
+restart` (pid 37180 → 39382, `RESTART_EXIT=0`, `STATUS_EXIT=0`). Live `/api/server-stats` now
+sends `bodies` keys `[archive, lastPass, live, captureDownSince, sinkProblem, parked, spool]` with
+`captureDownSince: null` / `sinkProblem: null` while capture is up (23 live files, newest 1 s
+ago) — the correct "up" reading; raw: `reports_dev/alcore-restart.txt`. Box 3 met. The
+review fork's two notes are recorded where they belong: the sink probe reads the legacy dir on a
+spool machine (TRDD-5PUD8RKE), and statusline samples do not tick the activity clock yet
+(TRDD-8ADTIGKT, cross-referenced in the `CAPTURE_ACTIVITY_WINDOW_MS` doc). `human_review` is the
+USER's move. Earlier state, kept: `server_stats.rs` now carries
 `CAPTURE_ACTIVITY_WINDOW_MS` (the TS value, cited to `567fc5c2^:standalone/server.ts:671`) and
 `capture_down_since(capture_on, now, last_activity, newest_body, started_at)` — the server.ts:825-827
 predicate, STATELESS: `since` = the moment the window closed on the newest body, floored at boot
