@@ -3,7 +3,7 @@ trdd-id: MVR6PXC0
 title: Three MCP tool handlers hold the state lock for one to four seconds inside their per-candidate resolve_session_card closure
 column: dev
 created: 2026-09-05T12:33:51+0200
-updated: 2026-09-05T12:58:46+0200
+updated: 2026-09-05T17:14:44+0200
 current-owner: main-session
 task-type: bugfix
 priority: high
@@ -14,9 +14,25 @@ related: [QE114936, UTFVMVT8, 2R36W8Q1]
 
 # Three MCP tool handlers hold the state lock for one to four seconds inside their per-candidate resolve_session_card closure
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-09-05T12:58:46+0200
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-09-05T17:14:44+0200
 
-**IN `dev`.** Analysis done, read-only (`reports/mvr6pxc0/20260905_125347+0200-lock-scope-analysis.md`,
+**IN `dev` — the code is written and UNCOMMITTED in the working tree (`ui.rs` +149/−42); the full
+cargo test run is the gate that has not passed.** The kraken worker spawned ~13:00 was stopped by the
+orchestrator at 17:14 after 4 h with no reply to a 14:07 status ping and a transcript file untouched
+since 13:50; its final status on kill: `resolve_session_card` split into 5 shared helpers plus a new
+`resolve_session_card_offlock` (the reparse runs OFF the lock, three short guards), all four closures
+converted (`get_cost_by_cause`, `get_cache_risk_costs`, `get_cache_break_report`,
+`check_cache_expiry`) with TRDD comments; `cargo build` 0, `cargo clippy --all-targets -D warnings` 0,
+fixtures unchanged; `cargo test -p agentlens-core` was still running under load-avg 40–160 (an earlier
+run was OOM-killed, exit 137 — not a test failure). Safety copy of the diff:
+`reports_dev/mvr6pxc0-kraken-ui-rs-20260905_1714.patch` (243 lines, 5 hunks; gitignored, never
+deleted). **NEXT ACTION:** when the machine is quiet, `cargo test -p agentlens-core` (capture to a
+file, gate on the exit code); on green, commit `ui.rs` by name citing this card; then deploy (release
+build → `bin-native/darwin-arm64/alcore` → `codesign -s - --force` → `agentlenspro server restart`)
+and re-run the 24-invocation recipe from the QE114936 box-3 report for the acceptance line. On red,
+read the failure in full before touching the diff — it was written to keep behaviour identical.
+
+**Previous STATE (12:58) — IN `dev`.** Analysis done, read-only (`reports/mvr6pxc0/20260905_125347+0200-lock-scope-analysis.md`,
 every element ✓ VERIFIED from source): the closures hold the guard across `resolve_session_card`'s
 reparse-on-demand fallback, `log_reader::reparse_session(&Env, …)`, which needs no state and does
 disk I/O + JSONL parsing of a multi-MB transcript; only `put_log_session` (an IndexMap insert),
