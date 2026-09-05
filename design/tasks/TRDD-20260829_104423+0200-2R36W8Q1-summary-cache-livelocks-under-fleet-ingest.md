@@ -3,7 +3,7 @@ trdd-id: 2R36W8Q1
 title: The summary cache is keyed on a version that moves faster than a rebuild completes, so the UI path livelocks under fleet ingest
 column: ai_review
 created: 2026-08-29T10:44:23+0200
-updated: 2026-09-05T13:03:20+0200
+updated: 2026-09-05T13:06:02+0200
 current-owner: main-session
 task-type: bugfix
 scope: project
@@ -25,13 +25,19 @@ or test overlapping it: p50 0.524 s, p99 0.955 s, max 1.281 s, 1 of 260 samples 
 `state lock held ≥ 1000 ms`; every `waited` line names the log scan (`log_reader.rs:1076`) or a
 chore as holder, none the summary (lock census window 12:48–12:55, the log read at 12:55:19
 runs 25 s past the last sample). "Fleet rate" is measured, not assumed, on two axes: the DuckDB
-store holds **502 `api_calls` rows from ≥ 6 sessions** with `ts_ms` (the exporter's own call
-timestamp, `forensics_scan.rs`; response rows carry NULL `session_id`, so 6 is a floor) inside
-the soak window, ~77 calls/min, and the writer's parts landed once a minute right through it;
+store holds **502 `api_calls` rows from ≥ 6 sessions** with `ts_ms` inside the soak window
+(~77 calls/min; response rows carry NULL `session_id`, so 6 is a floor; whether the staging
+writer's `ts_ms` is the body's own call time is INFERRED from the forensics rows' convention,
+not read at 9SYRK6SW's writer), and the writer's parts landed once a minute right through it;
 and the load the summary rebuild actually pays for, read from `/api/server-stats` 9 min after
-the last sample: **`spans.inMemory` 420,541 in the 5-min window, `logSessions` 30,975**. The soak
-discarded its 260 response bodies, so the window size DURING the soak is this one read, not a
-series — a repeat should keep the bodies and record `spans.inMemory` per sample. The bar is met
+the last sample: **`spans.inMemory` 420,541 over the CONFIGURED 24 h window** (`windowMs`
+300000 is the report's row, `configuredWindowMs` 86,400,000 is what the window keeps; the
+window's only feeder is the OTLP ingest path, `lib.rs` `state.window.add` — no log-scan rows —
+so this is a day of fleet OTLP spans, ~17.5k/h) and **`logSessions` 30,975** (the card map the
+rebuild walks; it barely moves minute to minute, so it stands in for the soak's load even read
+late, which `inMemory` does not — its 24 h window still overlaps the soak, but the read is one
+point, not the series). The soak discarded its 260 response bodies; a repeat should keep them
+and record `spans.inMemory` per sample. The bar is met
 by 45 ms on ONE run with load rising 11 → 27 inside the window, so the measurement
 is recorded as narrow, not comfortable — a repeat at sustained load ≥ 25 is the confirmation,
 and the incremental summarizer named below stays the real upgrade. `human_review` is the
