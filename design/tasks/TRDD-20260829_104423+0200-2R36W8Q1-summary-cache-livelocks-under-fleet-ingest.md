@@ -5,7 +5,7 @@ column: blocked
 pre-block-column: ai_review
 unblock-when: [trdd:UTFVMVT8 terminal]
 created: 2026-08-29T10:44:23+0200
-updated: 2026-09-05T14:25:51+0200
+updated: 2026-09-05T14:29:47+0200
 current-owner: main-session
 task-type: bugfix
 scope: project
@@ -18,18 +18,22 @@ blocked-by: [UTFVMVT8]
 
 # Summary cache livelocks under fleet ingest
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-05T14:25:51+0200
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-05T14:29:47+0200
 
 **`blocked` (pre-block `ai_review`) — the 14:21 AI review REJECTED on process, not code:** `blocked-by:
 [UTFVMVT8]` was set deliberately in `061d2ed2` and never cleared, and UTFVMVT8 is still `testing` with
 one open box. The rule makes a non-empty `blocked-by` mean `blocked`, so the column now says what the
-field says; `unblock-when: [trdd:UTFVMVT8 terminal]` (the drift detector's exact grammar,
-`_PRED_TRDD_RE`) restores `ai_review` once UTFVMVT8 reaches a terminal column, and that restore also
-clears `blocked-by:` and drops `pre-block-column:` (`trdd-drift.py::_restore_column_text`). Whether the
+field says; `unblock-when: [trdd:UTFVMVT8 terminal]` matches the drift detector's predicate regex
+(`_PRED_TRDD_RE = ^trdd:([0-9A-Za-z]{8})\s+terminal$`) and survives the list parser intact
+(`trdd_common.parse_flow_list` splits on commas, not whitespace), so it restores `ai_review` once
+UTFVMVT8 reaches a terminal column; the restore code (`_restore_column_text`, the `.sub` calls after
+the `column:` substitution) rewrites `blocked-by: []` and deletes the `pre-block-column:` line, so
+this card cannot re-block itself. Whether the
 dependency is still real is undecided — `061d2ed2` added the field with no rationale in the diff; if
 it is not real, remove `blocked-by` with a one-line reason and re-submit. The verdict downgraded boxes
 2, 3 and 5 to INFERRED, and I confirmed the basis myself: the three 09-05 soak artifacts
-(`reports_dev/2r36-soak{,-log,-sorted}.txt`) contain no `dropped` and no RSS reading, so those numbers
+(`reports_dev/2r36-soak{,-log,-sorted}.txt`) contain neither the string `dropped` nor `rss`
+(case-insensitive), so those numbers
 are carried from the 08-29 runs — re-measure them in the re-submission or state why the carry holds.
 `implementation-commits` now names `481c94e4` (the `REBUILDER_ACTIVE` change), which was missing.
 

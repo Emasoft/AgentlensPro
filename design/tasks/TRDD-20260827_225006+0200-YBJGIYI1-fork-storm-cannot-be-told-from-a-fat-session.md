@@ -3,7 +3,7 @@ trdd-id: YBJGIYI1
 title: FORK_STORM cannot be distinguished from one fat session rewriting its own prefix
 column: dev
 created: 2026-08-27T22:50:06+0200
-updated: 2026-09-05T14:25:51+0200
+updated: 2026-09-05T14:29:47+0200
 current-owner: claude-session-2026-09-02
 task-type: bugfix
 scope: project
@@ -100,15 +100,18 @@ A fixture with 3 cold full-prefix spikes, one fingerprint, ONE session id must c
   `src/burnInvestigator.ts:304-306`, `:328`, `:107`. Queued to `todo`, not started: it is Rust
   cutover work and the USER's sequencing is publish → install → Rust.
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-09-05T14:25:51+0200
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-09-05T14:29:47+0200
 
 **`ai_review` → `dev` (REJECTED 14:23, confirmed first-hand 14:25).** The 2026-09-02 STATE below
 lists `burnscan_parity` 9/9 among the gates that passed for `06649a73`. It did not: the card's own
 report (`reports/YBJGIYI1/20260902_050600+0200-fork-storm-discriminator.md`, "What is left undone")
-says the parity suite "was not run to completion … not directly verified", and the next commit that
-day, `532baacb` (TRDD-MF4YQWWA), records that regenerating the oracle turned `burnscan_parity` RED
-6/9 for two pre-existing reasons it then fixed. So the 9/9 was a claim written as a result. The
-discriminator itself, its gate (`investigator.rs:163`) and its three unit tests are verified present.
+says the parity suite "was not run to completion … not directly verified", and `532baacb`
+(TRDD-MF4YQWWA, three commits after `06649a73` the same day) records that regenerating the oracle
+turned `burnscan_parity` RED 6/9 for two pre-existing reasons it then fixed. So the 9/9 was a claim
+written as a result. Read first-hand at 14:29: the gate at `investigator.rs:163` carries
+`biggest_fam_sessions >= 2`, and the three unit tests exist at `:581`, `:586`, `:591`.
+Kept in `dev` rather than `testing` because the deliverable is a card edit (rewrite the false gate
+line with the real number); the test run is the evidence for that edit, not the gate itself.
 **NEXT ACTION:** run `cargo test -p agentlens-core --test burnscan_parity` on the current tree when
 the machine is free (a Rust build is in flight), record the real number with the command and date,
 correct the gate line below, then re-submit to `ai_review`.
