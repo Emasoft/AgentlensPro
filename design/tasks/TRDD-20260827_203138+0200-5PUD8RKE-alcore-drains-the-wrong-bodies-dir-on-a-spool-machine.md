@@ -23,10 +23,15 @@ running the checks, not by softening the sentence:
 
 | box | verified by | evidence |
 |---|---|---|
-| 1 — drains both targets, three conditions | me, reading the bodies | `bodies_dir_candidates` (`burn/guard.rs:440`) pushes the configured spool THEN legacy and partitions on `metadata().is_dir()`; `resolve_bodies_read_scope` (`:489`) returns `dirs` + `capture_on` + `spool_configured` |
+| 1 — drains both targets, three conditions | me, reading producer AND consumer | **producer**: `bodies_dir_candidates` (`burn/guard.rs:440`) pushes the configured spool THEN legacy and partitions on `metadata().is_dir()`; `resolve_bodies_read_scope` (`:489`) returns `dirs` + `capture_on` + `spool_configured`. **consumer**: `bodies_pass` (`chores.rs:208`) calls it, and `for bodies_dir in &scope.dirs` (`:295`) iterates EVERY dir, with a per-dir `is_spool` branch and the age-0 valve |
 | 2 — three named tests pass | me, running them | `cargo test -p agentlens-core --test chores_bodies_spool_drain --test bodies_read_scope` → exit 0, 6+1 passed, 0 failed. All three names present. `reports_dev/5pud8rke-box2.txt` |
 | 3 — backpressure ported, real counters | me, reading the diff | `git show --stat d1e6e08d` matches the claim: `chores.rs`, `lib.rs`, `server_stats.rs`, new `spool_backpressure.rs` (+83), new test (+76) |
 | 4 — false paragraph replaced | me, reading the text | `chores.rs:197-199` carries the retraction |
+
+Box 1's first correction read only the PRODUCER and reported a claim about the DRAIN — a resolver
+returning two dirs is compatible with a consumer that takes `.first()`. Note that box 2's
+`during_a_drain_both_..._are_in_scope_spool_first` tests the resolver too, by its own name; only
+reading `:295` settles it. General lesson, recorded in USER memory as `ATOM-H5NC-JGM6`.
 
 The live-server counters in the agent's report (`bodies.spool.dir`, files:13, ~0.2% fill) are
 **its** observation, not mine — corroborating, not load-bearing. Agent report:
