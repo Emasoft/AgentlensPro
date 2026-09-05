@@ -1,9 +1,9 @@
 ---
 trdd-id: HFV4AIT7
 title: Measure and guarantee that alcore uses all CPU cores for telemetry and hook ingest and for the JSONL to DuckDB load
-column: ai_review
+column: dev
 created: 2026-08-28T22:05:59+0200
-updated: 2026-08-29T19:35:05+0200
+updated: 2026-09-05T07:02:45+0200
 current-owner: claude-agentlenspro
 task-type: audit
 project-id: agentlenspro
@@ -14,6 +14,15 @@ blocked-by: []
 # alcore must use all CPU cores
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-08-29
+
+**AI-REVIEW VERDICT 2026-09-05 — REJECTED back to `dev`, and the reason is NOT that the fix is
+wrong.** Items 3 and 4 really were fixed and measured (3.05 → up to 6.81 cores, `a852281`). But
+**all three acceptance boxes are still open**, and box 1 asks for a *reproducible script* under
+`scripts/` or `benches/` that drives all three paths — that is code nobody has written. A card
+cannot be in `ai_review` with every criterion unmet: the column asserts there is a finished thing
+to review, and what exists here is a measured fix plus an unwritten harness. The one-off runs in
+the block below are evidence for a moment, not the repeatable check box 1 requires.
+NEXT ACTION: write that script, then re-run boxes 2 and 3 against it.
 
 > **▶ CURRENT STATE IS THE "BOTH ITEMS RESOLVED" BLOCK FURTHER DOWN (2026-08-29 18:30). Everything
 > from here to it is the investigation trail, kept for provenance, and it contains two conclusions

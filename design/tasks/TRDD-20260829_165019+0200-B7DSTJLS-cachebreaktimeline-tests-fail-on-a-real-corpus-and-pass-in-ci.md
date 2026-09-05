@@ -1,9 +1,9 @@
 ---
 trdd-id: B7DSTJLS
 title: cacheBreakTimeline tests pass in CI and fail on a developer machine, and fail differently depending on run order
-column: ai_review
+column: dev
 created: 2026-08-29T16:50:19+0200
-updated: 2026-09-01T19:59:51+0200
+updated: 2026-09-05T07:02:45+0200
 current-owner: main-session
 task-type: bugfix
 scope: project
@@ -15,6 +15,12 @@ implementation-commits: []
 # cacheBreakTimeline tests fail on a real corpus and pass in CI
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-08-29
+
+**AI-REVIEW VERDICT 2026-09-05 — REJECTED back to `dev`.** All five acceptance boxes are open and
+the bug itself is unfixed: this is an open investigation, not something with a finished change to
+review. Nothing was reviewed and nothing is being claimed about the diagnosis below, which still
+stands on its own measurements. The card was simply in a column that asserts work I could not
+find. NEXT ACTION is unchanged — the investigation in this block.
 
 **Measured today, first-hand, on an unrelated change's verification run.** This card exists because
 the failure was nearly written off as "a pre-existing flake" — the phrase a subagent used, and the

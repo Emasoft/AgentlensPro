@@ -3,7 +3,7 @@ trdd-id: 5PUD8RKE
 title: alcore's bodies chore drains only the legacy dir and would abandon the RAM spool
 column: ai_review
 created: 2026-08-27T20:31:38+0200
-updated: 2026-09-01T23:06:30+0200
+updated: 2026-09-05T07:02:45+0200
 current-owner: main
 task-type: bugfix
 severity: HIGH
@@ -13,6 +13,23 @@ relevant-rules: []
 created-by: TRDD-DMWOBWFH TS-core-to-Rust gap inventory (GAP-12)
 blocked-by: []
 ---
+
+## ⏵ AI-REVIEW VERDICT 2026-09-05 — APPROVE. Ready for `human_review`; the USER makes that move.
+
+All four ticked boxes verified FIRST-HAND against live code, passing tests, and a running server's
+real counters — not against the card's own claims. `resolve_bodies_read_scope`
+(`burn/guard.rs:489`), `bodies_dir_candidates` (`:440`) and the corrected paragraph
+(`chores.rs:197-199`) were each re-checked by the orchestrator after the reviewing agent reported
+them. Report: `reports/ai-review/20260905_065652+0200-5PUD8RKE.md`.
+
+**The card stays in `ai_review`** — `ai_review → human_review` escalates to the USER and is not a
+transition an agent makes on its own. The verdict is recorded here so the move is a decision, not
+a re-derivation.
+
+**One drift note, not a defect**: `567fc5c2` retired `standalone/server.ts` entirely (~24 min
+before this card's previous `updated:`). The boxes cite `server.ts:588-600` / `:619-625` / `:968`
+as historical justification; those lines are now readable only through git history. Nothing ticked
+depends on the file existing.
 
 ## NOT a live incident — a CUTOVER BLOCKER. Read this before reacting.
 
