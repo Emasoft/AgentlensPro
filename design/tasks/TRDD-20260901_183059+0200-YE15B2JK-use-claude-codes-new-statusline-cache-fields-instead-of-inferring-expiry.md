@@ -3,7 +3,7 @@ trdd-id: YE15B2JK
 title: Claude Code now reports cache state in the statusline payload so cache-expired should read it instead of inferring
 column: ai_review
 created: 2026-09-01T18:30:59+0200
-updated: 2026-09-05T15:19:13+0200
+updated: 2026-09-05T15:20:27+0200
 current-owner: main-session
 task-type: feature
 scope: project
@@ -79,7 +79,8 @@ Code is at 2.1.252 here. The field names in the directive are described, not quo
 - 2026-09-05T15:19:13+0200 — ORCHESTRATOR decision, not the author's: the reviewing session struck
   box 5 and split it out to TRDD-BFUZ1THR, then accepted the 15:15 AI-review APPROVE. Grounds: the box
   was appended by `e4b8ae88` in the same commit that ticked boxes 1–4 and moved the card to `ai_review`
-  (its own author marked it "not blocking"), and no work in this repo can meet it. This narrows the
+  (its own author marked it "not blocking"), and code in this repo cannot meet it — it waits on a
+  captured row from a spend-limit gateway, which this machine does not have. This narrows the
   card under review by the review step itself; the card's owner or the USER may veto by restoring the
   box, which re-opens the card. Human-review reader: judge the four original boxes.
 
