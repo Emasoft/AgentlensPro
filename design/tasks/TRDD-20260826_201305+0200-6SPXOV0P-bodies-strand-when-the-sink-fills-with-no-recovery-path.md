@@ -22,9 +22,16 @@ clean, commits checked). Report: `reports/ai-review/20260905_073032+0200-6SPXOV0
 agent's report and were NOT re-checked by the orchestrator. The ONE thing re-checked here is the
 EHT's column — a governance fact, adjacent to all seven boxes and about none of them. Compare
 TRDD-5PUD8RKE, whose block carries a per-box table naming who verified each; this card has no such
-table and does not inherit that standard. The agent's citations have held across five cards, and
-this card cannot move on the verdict anyway — but that is a reason to accept the report, not a
-reason to describe it as something it is not.
+table and does not inherit that standard.
+
+What the agents' track record actually supports, stated narrowly: **their file:line citations have
+resolved correctly on every card where they were spot-checked — three of five** (5PUD8RKE,
+8ADTIGKT, L6V1UUW0 were checked directly; ZW4APOPI's chain was transferred; this card's boxes were
+not checked at all). "Five cards" would be circular — two of the five are cards this claim would be
+propping up. And a citation check is a HALLUCINATION check: it shows the agent does not invent
+references. It is NOT evidence that a `cargo test` it reported as 7/7 actually ran, which is the
+claim carrying this card. The APPROVE is accepted on that narrower basis, plus the fact that
+nothing moves on it while the EHT is open.
 
 **The column stays where it is, and not for a review reason.** `eht: [7NHUU6GK]`, and that EHT is
 at `column: backburner` — verified here, not taken from the report. A parent cannot reach
