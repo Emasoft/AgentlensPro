@@ -1,9 +1,9 @@
 ---
 trdd-id: U0L78B3Z
 title: Nothing computes CAPTURE DOWN since the TS server was retired so the liveness clock ticks unread
-column: todo
+column: testing
 created: 2026-09-05T07:18:10+0200
-updated: 2026-09-05T08:44:10+0200
+updated: 2026-09-05T11:43:19+0200
 current-owner: main-session
 task-type: bugfix
 priority: high
@@ -14,7 +14,54 @@ related: [8ADTIGKT, 4FMHW124, 1B98LCVR, 5PUD8RKE, FGN5TY7E]
 
 # Nothing computes CAPTURE DOWN since the TS server was retired so the liveness clock ticks unread
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-09-05T07:18:10+0200
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-09-05T11:43:19+0200
+
+**IN `testing` — the port is committed; every gate in `reports_dev/diz-final.txt` (types, eslint,
+compile-tests, mocha, both parity oracles, lib, integration incl. `tests/server_stats.rs`, clippy)
+exited 0 on 2026-09-05 11:42. What remains is box 3: the codesign deploy
+(`codesign -s - --force bin-native/darwin-arm64/alcore` + `agentlenspro server restart`) and a
+live `server status` showing the capture line — then `ai_review`.** Earlier state, kept: `server_stats.rs` now carries
+`CAPTURE_ACTIVITY_WINDOW_MS` (the TS value, cited to `567fc5c2^:standalone/server.ts:671`) and
+`capture_down_since(capture_on, now, last_activity, newest_body, started_at)` — the server.ts:825-827
+predicate, STATELESS: `since` = the moment the window closed on the newest body, floored at boot
+(no body ever ⇒ boot). Emitted as `bodies.captureDownSince` (null = up), the direct child the CLI
+reads at `serverControl.ts:521`. Inputs: `st.last_ingest_activity_ms` (the TRDD-8ADTIGKT statusline
+bump + ingest) and `bodies.live.newestMs` from the same response — so box 5's input is wired.
+One unit test, six cases, in `capture_block_tests`.
+
+**Scope decisions (ponytail):** (1) `mcpServer.ts`'s burn-guard row stays unsupplied. Whether it
+is even reachable is NOT established: the string `mcpServer` occurs in `standalone/cli.js`, but
+that is a 15k-line bundle and a grep hit there is not an import (this card's own rule); the grep
+for `from './mcpServer'` under `standalone/` returned nothing. The CLI status row is the consumer
+that demonstrably renders, so it is the one wired.
+**Review-fork check (2026-09-05): the `.sink-probe` file cannot be mis-read as a body** — every
+scanner of the capture dirs filters on `.request.json`/`.response.json` (`chores.rs:171`,
+`burn/guard.rs:218`, `live_bodies_liveness` :232), so the drain chore, the burn guard and the
+liveness gauge all skip it; `newestMs` is `as_secs_f64()*1000` = epoch ms, same unit as the clock.
+A second fork pointed out that ONE filter hit is not EVERY listing — so every `read_dir` over the
+capture dirs was read, not grepped: `chores.rs:167` is `staged_body_bytes` (filtered),
+`agentlens-store/pass.rs:170` `body_files` is THE drain lister (filtered on both suffixes),
+`bodies_evidence.rs:181` skips non-`.json`, `pass.rs:293` lists the parquet store, not bodies.
+`chores.rs` contains no `rename`/`remove_file` at all. And `probe_sink` now tolerates `NotFound` on
+its own cleanup, so a concurrent consumer of the probe file can never surface as `SINK:`. (2) `sinkProblem`,
+`reclaimedSinceBoot`, `lastNonZeroPassAt` are NOT ported here — the first needs a sink probe
+(`probeSink`) alcore does not have, the other two need bodies-pass counters; each is its own
+change. TRDD-FGN5TY7E box 4 still decides whether they send or stop being declared.
+
+**`sinkProblem` is ALSO ported, and where it runs matters (third review fork):** the TS probed
+once per bodies-pass TICK (server.ts:818) and the stats route read a variable; a first draft here
+probed on every `/api/server-stats` call, which dashboards poll — a create+unlink per poll on the
+legacy SSD dir. Now: `chores.rs` probes at the tick (capture on only), logs on TRANSITIONS
+(`bodies sink precondition FAILED: …` / `recovered`, as the TS did), stores `CoreState.sink_problem`;
+`server_stats` reads it. `PersistStats` is `Copy`, so the `Option<String>` lives on `CoreState`
+next to `last_ingest_activity_ms`.
+
+**Gates:** lib unit test 1/1 (LIB_EXIT=0, pre-probe-move run); `--test server_stats` + clippy
+relaunched after the last edit — read `reports_dev/u0l78b3z-gate2.txt` / `-gate3.txt`. Mocha
+whole-suite run: 2643 pass / 17 fail, none in the capture-line suites (those pass); the 17 are
+pre-existing (B7DSTJLS, CS2W7E77) plus `setup`/`rustIngest`/`FAL` failures carded as TRDD-X4YTS5BF.
+**NEXT ACTION:** gates green → commit → a live check per box 3 needs a deploy (`codesign` —
+TRDD-M2VK8T4P).
 
 Found while AI-reviewing TRDD-8ADTIGKT, whose boxes are satisfied and whose PURPOSE is not
 reachable. Nothing here is fixed yet; this card is the finding.

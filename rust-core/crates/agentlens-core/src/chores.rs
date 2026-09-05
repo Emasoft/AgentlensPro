@@ -228,6 +228,18 @@ pub fn bodies_pass(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
     // is configured — same SPOOL_MODE gate the TS uses. `free_disk_bytes` fails open (None), so a
     // transient statvfs hiccup never falsely reports pressure.
     if scope.capture_on {
+        // server.ts:818-823 — the sink precondition, once per pass tick, warnings on TRANSITIONS
+        // only (a per-tick repeat is filtered out by the day it matters). TRDD-U0L78B3Z.
+        let problem = crate::server_stats::probe_sink(&crate::burn::guard::default_bodies_dir(&data_dir));
+        if let Ok(mut st) = state.lock_timed() {
+            if problem != st.sink_problem {
+                match &problem {
+                    Some(p) => eprintln!("alcore: bodies sink precondition FAILED: {p} (TRDD-4FMHW124)"),
+                    None => eprintln!("alcore: bodies sink precondition recovered"),
+                }
+                st.sink_problem = problem;
+            }
+        }
         if let Some(spool_dir) = crate::burn::guard::spool_dir_configured(&data_dir) {
             let vars: std::collections::HashMap<String, String> = std::env::vars().collect();
             let floor = crate::spool_backpressure::spool_floor_bytes(&vars);

@@ -166,6 +166,11 @@ pub struct CoreState {
     /// otherwise observable only indirectly (a 10-minute window and a warning on transition), which
     /// is exactly why the endpoint exists — it makes the bump itself directly testable per feed.
     pub last_ingest_activity_ms: i64,
+    /// server.ts `sinkProblem` (TRDD-4FMHW124, ported in TRDD-U0L78B3Z): `None` = the primary
+    /// bodies sink is a writable directory. Written ONCE PER BODIES-PASS TICK by the chore
+    /// (`probe_sink`), read by `/api/server-stats` — never probed per stats call, which the
+    /// dashboard polls; the TS had the same split (probe at :818, the route reads a variable).
+    pub sink_problem: Option<String>,
     /// The dashboard live-reload fingerprint carried in every update frame (server.ts BUILD_ID —
     /// bundle mtimes there; here the process start, the same "changes on restart" contract).
     pub build_id: String,
@@ -557,6 +562,7 @@ impl CoreState {
             window,
             data_version: 0,
             last_ingest_activity_ms: 0,
+            sink_problem: None,
             build_id: now.to_string(),
             media_dir: None,
             log_sessions: IndexMap::new(),

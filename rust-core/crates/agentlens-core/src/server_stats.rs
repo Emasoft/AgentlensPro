@@ -509,6 +509,58 @@ pub fn free_disk_bytes(path: &Path) -> Option<u64> {
 }
 
 /// The frozen §1.4 body over the live state. `now_ms` is the request clock.
+/// server.ts:671 `CAPTURE_ACTIVITY_WINDOW_MS = 10 * 60_000` (git `567fc5c2^`). The one window
+/// both halves of the CAPTURE DOWN test share: "sessions active" = an ingest/statusline bump within
+/// it; "capturing" = a body landed within it. The TS value is kept as-is — nothing measured here
+/// argues for a different one, and the CLI's `agentlenspro server status` text was written to it.
+pub const CAPTURE_ACTIVITY_WINDOW_MS: i64 = 10 * 60_000;
+
+/// TRDD-U0L78B3Z: the comparison `ui.rs`'s debug route says "belongs to the caller" — that caller
+/// was `server.ts` (retired in `567fc5c2`) and the comparison went with it, so the CLI's
+/// `CAPTURE DOWN` row could never fire on alcore. Same predicate as server.ts:825-827
+/// (`active && !captured`, gated on capture being on). STATELESS, unlike the TS: it kept the tick
+/// at which the transition was first seen, which cannot predate this process — so the "since" here
+/// is the moment the window closed on the newest body, floored at boot (no body ever ⇒ boot).
+/// `now_ms` is a parameter so the test needs no wall clock.
+pub fn capture_down_since(
+    capture_on: bool,
+    now_ms: i64,
+    last_activity_ms: i64,
+    newest_body_ms: Option<i64>,
+    started_at_ms: i64,
+) -> Option<i64> {
+    let active = last_activity_ms > now_ms - CAPTURE_ACTIVITY_WINDOW_MS;
+    let captured = newest_body_ms.is_some_and(|n| n > now_ms - CAPTURE_ACTIVITY_WINDOW_MS);
+    (capture_on && active && !captured)
+        .then(|| newest_body_ms.map_or(started_at_ms, |n| (n + CAPTURE_ACTIVITY_WINDOW_MS).max(started_at_ms)))
+}
+
+/// server.ts:676-683 `probeSink` (git `567fc5c2^`), the other half of TRDD-4FMHW124 the retirement
+/// dropped: is the PRIMARY bodies sink a directory we can write to right now? `None` = fine, else
+/// the reason the CLI prints after `SINK:`. A write+unlink probe, not a metadata check — an
+/// unmounted volume or a read-only remount looks like a directory until you write to it.
+pub fn probe_sink(dir: &Path) -> Option<String> {
+    match std::fs::metadata(dir) {
+        Ok(m) if !m.is_dir() => return Some(format!("{} exists but is not a directory", dir.display())),
+        Err(_) => return Some(format!("{} does not exist (volume unmounted?)", dir.display())),
+        Ok(_) => {}
+    }
+    let probe = dir.join(".sink-probe");
+    // The write is the test. A cleanup that finds the file already gone is NOT a sink failure —
+    // no scanner of this dir names a non-`.request.json`/`.response.json` file (chores.rs:171,
+    // burn/guard.rs:218, `live_bodies_liveness`), but tolerating NotFound closes the race whether
+    // or not that stays true (review-fork finding, TRDD-U0L78B3Z).
+    let r = std::fs::write(&probe, now_ms_string()).and_then(|()| match std::fs::remove_file(&probe) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
+        _ => Ok(()),
+    });
+    r.err().map(|e| format!("{} not writable: {e}", dir.display()))
+}
+
+fn now_ms_string() -> String {
+    crate::now_ms().to_string()
+}
+
 pub fn server_stats(st: &CoreState, now_ms: i64) -> Value {
     // Read from the ONE process-wide controller the HTTP handlers admit through, so these counters
     // describe the sheds that actually happened rather than a second, separately-kept tally.
@@ -614,6 +666,15 @@ pub fn server_stats(st: &CoreState, now_ms: i64) -> Value {
             "archive": { "volumes": volumes, "bytes": archive_bytes, "entries": entries },
             "lastPass": { "at": 0, "removedFiles": 0, "freedBytes": 0, "keptFiles": 0, "keptBytes": 0 },
             "live": { "files": live_files, "newestMs": live_newest_ms.map(num).unwrap_or(Value::Null) },
+            // TRDD-U0L78B3Z: null = up, else the CLI prints `CAPTURE DOWN <N>m` (serverControl.ts
+            // `bodiesCaptureLine`). Direct child of `bodies`, which is where the CLI reads it.
+            "captureDownSince": capture_down_since(
+                bodies_scope.capture_on, now_ms, st.last_ingest_activity_ms,
+                live_newest_ms.map(|n| n as i64), st.started_at_ms,
+            ).map(Value::from).unwrap_or(Value::Null),
+            // Read, never probed here: the chore probes once per pass tick (chores.rs, capture on
+            // only) and this route reports its last reading — server.ts:2947 read a variable too.
+            "sinkProblem": st.sink_problem.clone().map(Value::from).unwrap_or(Value::Null),
             "parked": match parked {
                 Some((files, bytes, on_disk)) => json!({ "files": files, "bytes": bytes, "onDisk": on_disk }),
                 None => Value::Null,
@@ -667,6 +728,26 @@ pub fn server_stats(st: &CoreState, now_ms: i64) -> Value {
 mod capture_block_tests {
     use super::*;
     use std::time::{Duration, SystemTime};
+
+    /// TRDD-U0L78B3Z: the CLI's CAPTURE DOWN row fires only when sessions are active AND no body
+    /// landed inside the window, and only with capture on; `since` never predates boot.
+    #[test]
+    fn capture_down_since_fires_only_on_active_and_not_captured() {
+        const W: i64 = CAPTURE_ACTIVITY_WINDOW_MS;
+        let (now, boot) = (1_000_000 * 60, 0);
+        // active + fresh body ⇒ up
+        assert_eq!(capture_down_since(true, now, now - 1, Some(now - 1), boot), None);
+        // active + stale body ⇒ down since the window closed on that body
+        assert_eq!(capture_down_since(true, now, now - 1, Some(now - 3 * W), boot), Some(now - 2 * W));
+        // active + no body ever ⇒ down since boot
+        assert_eq!(capture_down_since(true, now, now - 1, None, boot), Some(boot));
+        // stale body older than this process ⇒ floored at boot, never "before we existed"
+        assert_eq!(capture_down_since(true, now, now - 1, Some(now - 3 * W), now - W), Some(now - W));
+        // idle host (no activity) ⇒ up, whatever the bodies say
+        assert_eq!(capture_down_since(true, now, now - 2 * W, None, boot), None);
+        // capture off ⇒ never an alarm
+        assert_eq!(capture_down_since(false, now, now - 1, None, boot), None);
+    }
 
     /// TRDD-ZIWEB0UW: `bodies.live` must report the real file count and newest mtime — a zeroed
     /// count (empty dir) must NOT report the same `files`/`newestMs` as a populated one, which is
