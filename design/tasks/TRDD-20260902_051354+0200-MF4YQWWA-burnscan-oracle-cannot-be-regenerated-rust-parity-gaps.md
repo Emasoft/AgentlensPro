@@ -27,10 +27,14 @@ zero-diff fixture, 9/9 parity, 18/18 mocha, clippy clean. Report:
 **Why the zero-diff regen is the right evidence, and a green parity run alone would not have
 been.** A parity test can pass because the golden was regenerated in the same commit as the code
 it checks — the fixture and the implementation drift together and the assertion never notices.
-The discriminator is a regen against a golden that is ALREADY IN THE REPO: re-checked here,
-`git status` is clean and `tests/fixtures/burnscan-expected.json` is unmodified, so the
-just-regenerated output matched a file committed before the run. That is the card's own claim —
-the oracle can be regenerated again — demonstrated rather than asserted.
+The discriminator is that the golden is ALREADY IN THE REPO and untouched. **Split by who
+established what**: the parity suite passes against `tests/fixtures/burnscan-expected.json`, which
+`git status` shows unmodified and which was committed before this session — that half is
+re-checked here, and it is the half the drift trap needed. That a regen RAN today and produced
+zero diff is the agent's report, not an observation of mine: a clean tree is equally consistent
+with a regen that ran, one that wrote nothing, and one that never ran. What makes the report
+credible is that its other results (9/9 parity, 18/18 mocha, clippy clean) are outputs it could
+not produce from a tree it never touched — corroboration, not proof.
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-09-02
 

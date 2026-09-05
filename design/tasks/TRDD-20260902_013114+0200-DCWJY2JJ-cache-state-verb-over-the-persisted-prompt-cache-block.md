@@ -17,8 +17,9 @@ external-refs: [https://github.com/Emasoft/AgentlensPro/issues/19]
 
 ## ⏵ AI-REVIEW VERDICT 2026-09-05 — APPROVE. Ready for `human_review`; the USER makes that move.
 
-All 5 boxes CONFIRMED by the reviewing agent (live CLI run, full test suite, gh comment, source
-wiring). Report: `reports/ai-review/20260905_075159+0200-DCWJY2JJ.md`.
+All 5 boxes CONFIRMED **by the reviewing agent** (live CLI run, full test suite, gh comment, source
+wiring); boxes 2–5 rest on that report and were NOT re-checked by the orchestrator — same
+convention as TRDD-6SPXOV0P's block. Report: `reports/ai-review/20260905_075159+0200-DCWJY2JJ.md`.
 
 **Re-checked here on the one thing that could not be checked from source**: the verb is reachable
 from the bare command a user types, not merely present in the tree.
