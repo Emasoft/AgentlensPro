@@ -3,7 +3,7 @@ trdd-id: YBJGIYI1
 title: FORK_STORM cannot be distinguished from one fat session rewriting its own prefix
 column: ai_review
 created: 2026-08-27T22:50:06+0200
-updated: 2026-09-05T20:50:25+0200
+updated: 2026-09-05T20:52:06+0200
 current-owner: claude-session-2026-09-02
 task-type: bugfix
 scope: project
@@ -23,7 +23,7 @@ cargo). Re-checked first-hand by the orchestrator at 18:57: `burn/investigator.r
 `biggest_fam_sessions >= 2` (plus the spike/family/cold thresholds) and `:216` emits `FAT_SESSION_REWRITES`
 otherwise; the three unit tests at `:582` (two sessions → FORK_STORM), `:587` (one session →
 FAT_SESSION_REWRITES) and `:592` (`None, None, None` → FAT_SESSION_REWRITES) pin the honest-label rule.
-Those three are `#[test]` fns inside `#[cfg(test)] mod fork_storm_discriminator_tests` (`:542`) of
+Those three are `#[test]` fns inside `#[cfg(test)] mod fork_storm_discriminator_tests` (`:542-543`, read) of
 `src/burn/investigator.rs` — LIB unit tests — and they vary ONLY the session-id slice: `synth` (`:550`) fixes
 three cold full-prefix spikes two minutes apart on one shared fingerprint, and `cause_of` (`:574`) feeds that
 to `detect_storms_and_rewrites` and returns `findings[0]["cause"]`, so the gate's other conjuncts (re-read at
