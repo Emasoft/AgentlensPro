@@ -1,9 +1,9 @@
 ---
 trdd-id: MVR6PXC0
 title: Three MCP tool handlers hold the state lock for one to four seconds inside their per-candidate resolve_session_card closure
-column: todo
+column: dev
 created: 2026-09-05T12:33:51+0200
-updated: 2026-09-05T12:33:51+0200
+updated: 2026-09-05T12:58:46+0200
 current-owner: main-session
 task-type: bugfix
 priority: high
@@ -14,7 +14,17 @@ related: [QE114936, UTFVMVT8, 2R36W8Q1]
 
 # Three MCP tool handlers hold the state lock for one to four seconds inside their per-candidate resolve_session_card closure
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-09-05T12:33:51+0200
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-09-05T12:58:46+0200
+
+**IN `dev`.** Analysis done, read-only (`reports/mvr6pxc0/20260905_125347+0200-lock-scope-analysis.md`,
+every element ✓ VERIFIED from source): the closures hold the guard across `resolve_session_card`'s
+reparse-on-demand fallback, `log_reader::reparse_session(&Env, …)`, which needs no state and does
+disk I/O + JSONL parsing of a multi-MB transcript; only `put_log_session` (an IndexMap insert),
+the summary lookup and `graft_otel_attribution` need the guard. A fourth site shares the shape.
+The fix is UTFVMVT8's snapshot-then-work split; a worker is implementing it with build, clippy
+and the full cargo test set, parity goldens required unchanged. Then: deploy (release build →
+`bin-native/` → `codesign -s - --force` → `agentlenspro server restart`) and re-run the
+24-invocation recipe from the QE114936 box-3 report for the acceptance line.
 
 Found by TRDD-QE114936's acceptance box 3 (invoke every rewritten tool once while ingest is
 hot: `reports/qe114936/20260905_123046+0200-box3-tool-invocations.md`). The twenty
