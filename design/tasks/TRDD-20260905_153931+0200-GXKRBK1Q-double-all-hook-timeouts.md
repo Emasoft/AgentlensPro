@@ -1,9 +1,9 @@
 ---
 trdd-id: GXKRBK1Q
 title: Double every hook timeout the installer writes and every hook's own network budget
-column: dev
+column: ai_review
 created: 2026-09-05T15:39:31+0200
-updated: 2026-09-05T15:39:31+0200
+updated: 2026-09-05T16:06:03+0200
 current-owner: main-session
 task-type: bugfix
 priority: high
@@ -12,10 +12,18 @@ scope: project
 project-id: agentlenspro
 related: [3EZ6SJ2Z, X4YTS5BF]
 relevant-rules: []
-implementation-commits: []
+implementation-commits: [52155adf]
 ---
 
 # Double every hook timeout the installer writes and every hook's own network budget
+
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-09-05T16:06:03+0200
+
+**`ai_review` — all three boxes met and measured.** Code in `52155adf`; the owner machine converged
+at 16:05 (setup exit 0, read-back 10/10/20/10 on 21 timed entries). Nothing left but the review.
+Reviewer: the full mocha suite was NOT run for this change (killed at 15-min load-avg 164 after ~10
+min); the three suites that import the touched modules (agentGate, cliMatchers, hookScripts) ran
+green with `--no-config`, 73/0.
 
 USER order 2026-09-05 15:38: "relax the timeouts of all hooks.. they must be doubled".
 
@@ -50,13 +58,18 @@ failing open.
 
 ## Acceptance
 
-- [ ] The four matcher fns write 10/10/20/10; the hook and gate network defaults are doubled; the
-      setup verify env is doubled. Tests that pin the old numbers updated (none found pinning 5/10 for
-      agentlenspro hooks — the only `timeout: 5` in tests is a FOREIGN janitor hook that must survive).
-- [ ] `pnpm run check-types` 0 and `node esbuild.js` succeeds (the CLI bundle is what `setup` runs).
-- [ ] `agentlenspro setup --yes` (or `--install-hooks`) converges the live settings.json through
+- [x] The four matcher fns write 10/10/20/10; the hook and gate network defaults are doubled; the
+      setup verify env is doubled (`52155adf`). One test pinned the old gate value — `cliMatchers.test.ts:33`
+      failed `10 !== 5` on the first scoped run and was raised on purpose; the `timeout: 5` at `:59` is
+      a FOREIGN janitor hook that must survive and was left alone.
+- [x] `pnpm run check-types` 0; `node esbuild.js` exit 0 and `standalone/cli.js` carries `timeout: 20`
+      (the CLI bundle is what `setup` runs; `agentlenspro` on this machine resolves to it).
+- [x] `agentlenspro setup --yes` (or `--install-hooks`) converges the live settings.json through
       `safeConfigEdit`; `python3` read-back shows 10/10/20/10 on all 22 agentlenspro entries and the
-      foreign hooks untouched. Whether the new ceilings apply without a session restart is a LOCAL
-      memory note (hook registration reloaded live on CC 2.1.240), not verified here — restart if in doubt.
+      foreign hooks untouched. Done 16:05: setup exit 0, hooks step "installed/migrated, PASS",
+      final self-test PASS; read-back 15 `hook` + 2 `gate` + 2 `supervisor` at 10, 2 `review-gate` at
+      20 (21 timed entries — the 22nd is the untimed pending-prompt cat), the foreign 30 s
+      `git_safety_guard` hook untouched. The installer itself prints "restart Claude Code sessions to
+      pick up the hook change"; whether CC ≥ 2.1.240 reloads live is a LOCAL memory note, not verified here.
 
 ## Notes and lessons learned
