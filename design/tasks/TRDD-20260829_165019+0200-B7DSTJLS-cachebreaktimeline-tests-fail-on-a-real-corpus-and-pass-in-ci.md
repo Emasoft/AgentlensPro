@@ -3,18 +3,54 @@ trdd-id: B7DSTJLS
 title: cacheBreakTimeline tests pass in CI and fail on a developer machine, and fail differently depending on run order
 column: dev
 created: 2026-08-29T16:50:19+0200
-updated: 2026-09-05T07:02:45+0200
+updated: 2026-09-05T20:55:56+0200
 current-owner: main-session
 task-type: bugfix
 scope: project
 project-id: agentlenspro
 relevant-rules: []
-implementation-commits: []
+implementation-commits: [aef94208]
 ---
 
 # cacheBreakTimeline tests fail on a real corpus and pass in CI
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-08-29
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes every block below) — 2026-09-05T20:56
+
+**The fix landed on 2026-09-01 and the card never said so where it counts.** `aef94208`
+(`fix(test): cacheBreakTimeline fixtures no longer scan the LIVE hook-events store`, test file only,
+24 lines) is the implementing commit — it was recorded in a second STATE block at the BOTTOM of this
+file and `implementation-commits:` stayed empty, which is exactly why the 09-05 07:02 AI review found
+"nothing to review" and REJECTed to `dev`. Both fields are corrected now; the 08-29 block below is
+history.
+
+**Re-measured today, first-hand + one delegated trace (report
+`reports/lean-worker/20260905_205526+0200-B7DSTJLS-fs-trace.md`):**
+- The subset the 08-29 block recorded as **6 failing** (`--grep "previous_message_id chain\|subagents
+  transcript"`) is now **7 passing** in 54 ms under load-avg 11–31, with every `fs` open traced
+  through a preload (`scripts_dev/trace-fs-opens.cjs`): 171 opens, 147 inside mocha's `os.tmpdir()`
+  scratch tree, **0 under `~/.claude/projects` and 0 under `~/.agentlens`**. Capture
+  `reports_dev/b7ds-mocha-one-case.txt`, trace `reports_dev/b7ds-fs-trace.tsv`.
+- Call-site census, read by me: 14 `buildCacheBreakTimeline(`/`buildCauseCostPeakReport(` calls in
+  `src/test/cacheBreakTimeline.test.ts`; 12 pass BOTH `storeDir: noStore` AND `hookEventsDir:
+  noStore` (12 = 12 = 12 by grep); the remaining two, `:709` and `:798`, are the DELIBERATE
+  real-corpus tests — `scanCap: 300`, `derivedTimeoutMs(defaultBodiesDir(), 120_000)` /
+  `loadScaledTimeout(240_000)`, `skipIfUnmeasurable` — bounded by cap, not by scratch dir. The one
+  `storeDir` mention without `noStore` is the `:487` comment.
+
+**Acceptance status:** box 1 (bounded by construction) — holds for the 12 scratch sites by census,
+the two real-corpus sites are bounded by `scanCap`, and the 09-01 block's 67/0 whole-file run plus
+today's 0-live-opens trace are the evidence; box 2 (whole file passes on THIS machine) — the 09-01
+run says 67/0 but was not re-run today; boxes 3 (3-vs-6 explained), 4 (mutation), 5 (comment
+updated) — OPEN. **NEXT ACTION:** when the detached MVR6PXC0 cargo run ends (it owns the CPU), run
+the whole file ONCE on this machine (`npx mocha --no-config --require src/test/setup.js --ui tdd
+out/test/test/cacheBreakTimeline.test.js`, capture to a file) for box 2 and to see whether the
+3-vs-6 shape still exists post-fix (box 3 may be moot: if the unbounded read was the ONLY cause, the
+order dependence was the live store's size changing between invocations — state that as the
+explanation only if the whole-file and `--grep` runs now agree); then box 4 (drop `hookEventsDir:
+noStore` from ONE of the 12 sites, the case must go red under a live store, restore) and box 5 (the
+`:485-490` comment gets the `hookEventsDir` half of the story). Then `dev → testing → ai_review`.
+
+## STATE (history) — 2026-08-29
 
 **AI-REVIEW VERDICT 2026-09-05 — REJECTED back to `dev`.** All five acceptance boxes are open and
 the bug itself is unfixed: this is an open investigation, not something with a finished change to
@@ -85,7 +121,7 @@ Find what is unbounded, before changing any timeout. In order:
 
 ## Notes and lessons learned
 
-## ⏵ STATE — 2026-09-01 — FIX LANDED, verification pending
+## STATE (history) — 2026-09-01 — FIX LANDED, verification pending (folded into the top block on 09-05)
 
 Root cause found and fixed in `aef94208`: 12 fixture calls passed `storeDir: noStore` but not
 `hookEventsDir`, so `loadCompactionHookInfo` (cacheBreakTimeline.ts:1369/1718) scanned the LIVE
