@@ -1,9 +1,11 @@
 ---
 trdd-id: 2R36W8Q1
 title: The summary cache is keyed on a version that moves faster than a rebuild completes, so the UI path livelocks under fleet ingest
-column: ai_review
+column: blocked
+pre-block-column: ai_review
+unblock-when: [trdd:UTFVMVT8]
 created: 2026-08-29T10:44:23+0200
-updated: 2026-09-05T13:08:47+0200
+updated: 2026-09-05T14:23:04+0200
 current-owner: main-session
 task-type: bugfix
 scope: project
@@ -16,9 +18,17 @@ blocked-by: [UTFVMVT8]
 
 # Summary cache livelocks under fleet ingest
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-05T12:55:19+0200
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-05T14:23:04+0200
 
-**LAST BOX MET — `ai_review`.** The 1/s × 260 s soak the NEXT ACTION below asked for ran on
+**`blocked` (pre-block `ai_review`) — the 14:21 AI review REJECTED on process, not code:** `blocked-by:
+[UTFVMVT8]` was set deliberately in `061d2ed2` and never cleared, and UTFVMVT8 is still `testing` with
+one open box. The rule makes a non-empty `blocked-by` mean `blocked`, so the column now says what the
+field says; `unblock-when` restores `ai_review` when UTFVMVT8 goes terminal. Whether the dependency is
+still real is undecided here — if it is not, remove `blocked-by` with a one-line reason and re-submit.
+The verdict also downgraded boxes 2, 3 and 5 to INFERRED (numbers carried from the 08-29 runs, not
+re-measured in the 09-05 soak) — re-measure those in the re-submission or state why the carry holds.
+
+**Previous STATE (12:55) — LAST BOX MET — `ai_review`.** The 1/s × 260 s soak the NEXT ACTION below asked for ran on
 2026-09-05 12:48–12:54 against the live alcore restarted at 11:51 (built from `7caad610`, which
 carries this card's summary-cache change and QE114936's twenty handler rewrites), with no build
 or test overlapping it: p50 0.524 s, p99 0.955 s, max 1.281 s, 1 of 260 samples over 1 s. No
@@ -345,3 +355,17 @@ is not a criterion, so it now names the sample size and the statistic.
       narrowed from the configured 86,400,000 ms. Not comparable to the earlier 17.08 GB figure:
       different run length and a different effective window, so it is recorded, not claimed as
       an improvement.
+
+## AI review verdict — 2026-09-05T14:21:26+0200
+
+| box | status | evidence |
+|---|---|---|
+| Box 1 — p99 <1s, n≥130 @1/s | ✓ VERIFIED (numbers), narrow (self-flagged) | Recomputed from raw `reports_dev/2r36-soak-sorted.txt` (n=260): p50=0.524197, p99 (ceil-rank)=0.954911, max=1.280966, exactly 1/260 >1.0s — matches the card's 0.524/0.955/1.281/0.4% to the decimal. Cross-checked `reports_dev/2r36-soak-log.txt`: 0 `held` lines ≥1000ms (max held 556ms, chores.rs:619); of 13 `waited` lines the holder is `log_reader.rs:1076` in exactly 9, `chores.rs:573/619` in exactly 3, `ui.rs:1109` in exactly 1 — matches the card's count precisely. `state.lock_timed()` call sites confirmed present in `ui.rs` at the cited line ranges. |
+| Box 2 — ingest p99 unchanged, 0 regression | ? INFERRED | Numbers (24,069/24,093 2xx, p50 0.615ms/p99 164ms/max 7,571ms) are carried from the 2026-08-29 run's STATE, not re-measured in the 2026-09-05 soak whose own log/sorted files carry no OTLP-side data. Not re-verified this cycle; not contradicted either. |
+| Box 3 — zero spans dropped | ? INFERRED | `grep -rn "dropped"` over `reports_dev/2r36-soak*.txt` and `2r36-soak-log.txt` returns nothing — the 2026-09-05 soak's saved artifacts do not record a `droppedOnFailure` reading for this run, despite the box's own wording "confirmed … on every run." Carried from earlier (2026-08-29) runs only. |
+| Box 4 — mutation-verified test | ✓ VERIFIED (code presence) / ✗ UNVERIFIED (pass/fail) — test run deferred (CPU contention) | `REBUILDER_ACTIVE` flag and `a_reader_never_rebuilds_when_the_background_rebuilder_owns_it` (ui.rs:4204, guard at :150/:171/:258) exist exactly as described. Verify pass/fail with `cargo test -p agentlens-core ui:: -- --test-threads=1` once the machine is free. |
+| Box 5 — RSS bounded | ? INFERRED | 10.29–11.78 GB figure is carried from the 2026-08-29 runs (per the card's own text); no RSS reading is recorded for the 2026-09-05 soak in the saved artifacts. |
+
+**Defect found — frontmatter/process, not code.** `blocked-by: [UTFVMVT8]` is still set (line 14) while `column: ai_review`. Per `trdd-design-tasks.md`, "`blocked` applies whenever `blocked-by:` is non-empty" — a card carrying a live `blocked-by` has no business advancing columns without either clearing the field or being in `column: blocked`. Checked what it points at: `TRDD-...-UTFVMVT8-...md` is still `column: testing` with one un-ticked acceptance box (`[ ]` — the young-session `project` probe, box 4), i.e. the blocking TRDD's own gate for `testing → ai_review` ("Then `testing → ai_review`") has not fired. The commit history (`061d2ed2`) shows `blocked-by` was added deliberately, not left over from a template, so it was never cleared even though this card ticked over to `ai_review` in a later commit (`d6717988`). Two readings are both plausible — (a) 2R36W8Q1's own acceptance (server-stats p99) is genuinely independent of UTFVMVT8's leftover composition-index/project-tag box and the field is just stale housekeeping, or (b) the dependency was real and got skipped — but the card does not say which, and the rule does not grant a silent-independence exception. This must be resolved (either remove `blocked-by` with a one-line rationale, or hold this card at `blocked`) before `human_review`.
+
+**Verdict: REJECT — `blocked-by: [UTFVMVT8]` is still set while `column: ai_review` and the named blocker (UTFVMVT8) is itself still `testing` with an open acceptance box; clear or justify the field before re-submitting.**
