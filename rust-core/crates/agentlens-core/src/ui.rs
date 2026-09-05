@@ -662,43 +662,133 @@ pub(crate) async fn compositions_in_scope(state: &Arc<Mutex<CoreState>>, scope: 
 /// reparses the multi-MB transcript AGAIN. Every current shaper resolves one timeline per card,
 /// which is what makes this safe — a shaper that starts resolving a card twice would turn a
 /// bounded scan into an unbounded one.
+///
+/// TRDD-MVR6PXC0: the body is now four steps — three cheap ones that need the state, and ONE
+/// (`reparse_session_card`) that needs only `&Env`. That is the split `resolve_session_card_offlock`
+/// exploits; the pieces are shared so the two drivers cannot drift into two different answers.
 fn resolve_session_card(st: &mut CoreState, summary: &Value, session_id: &str, now: i64) -> Option<Value> {
-    let mut session: Option<Value> = summary
+    let mut session = summary_card(summary, session_id);
+    if timeline_empty(session.as_ref()) && st.log_sessions.contains_key(session_id) {
+        if let Some(card) = reparse_session_card(&st.log_env, session_id, now) {
+            session = Some(stamp_and_store_reparsed(st, card));
+        }
+    }
+    if let Some(s) = session.as_mut() {
+        graft_otel_attribution_onto(st, s, session_id);
+    }
+    session
+}
+
+/// The summary's own copy of one card, before any reparse — a linear scan over an already-in-memory
+/// snapshot the caller read off the lock. No state, no I/O.
+fn summary_card(summary: &Value, session_id: &str) -> Option<Value> {
+    summary
         .get("sessions")
         .and_then(Value::as_array)
         .and_then(|ss| ss.iter().find(|s| s.get("sessionId").and_then(Value::as_str) == Some(session_id)))
-        .cloned();
-    let timeline_empty = session
-        .as_ref()
-        .is_some_and(|s| s.get("timeline").and_then(Value::as_array).is_none_or(Vec::is_empty));
-    if timeline_empty && st.log_sessions.contains_key(session_id) {
-        if let Some(scanned) = crate::log_reader::reparse_session(&st.log_env, session_id, now) {
-            if let Some(mut card) = scanned.cards.into_iter().next() {
-                // ingest_scanned's accountId stamp — the TS parser stamps it natively inside
-                // _buildCard, so the reparsed card must carry it here too.
-                if let Some(obj) = card.as_object_mut() {
-                    let acct = obj.get("sessionId").and_then(Value::as_str).and_then(|sid| st.accounts.account_for(sid)).map(str::to_owned);
-                    if let Some(a) = acct {
-                        obj.insert("accountId".into(), Value::from(a));
-                    }
-                }
-                st.put_log_session(card.clone());
-                session = Some(card);
+        .cloned()
+}
+
+/// The reparse precondition: a card that IS in the summary but carries no timeline. Absent ⇒ false
+/// (there is no card to fill in), which is what makes a miss cost nothing.
+fn timeline_empty(session: Option<&Value>) -> bool {
+    session.is_some_and(|s| s.get("timeline").and_then(Value::as_array).is_none_or(Vec::is_empty))
+}
+
+/// TRDD-MVR6PXC0: the SLOW half of the reparse-on-demand fallback, split out precisely because it
+/// needs only `&Env` — a fresh FULL parse of the one (possibly multi-MB) transcript backing the id,
+/// i.e. a synchronous disk read plus a JSONL parse, measured at 1,037–3,948 ms per candidate. It has
+/// zero data dependency on `CoreState`, so no caller has any reason to hold the state guard across
+/// it, and every per-candidate caller must not: the state mutex is the INGEST path's mutex, so a
+/// 4 s hold stalls every session posting to this server for those 4 s.
+fn reparse_session_card(env: &agentlens_logscan::discovery::Env, session_id: &str, now: i64) -> Option<Value> {
+    crate::log_reader::reparse_session(env, session_id, now).and_then(|scanned| scanned.cards.into_iter().next())
+}
+
+/// The CHEAP half of the fallback, and the only part that needs `&mut CoreState`: the accountId
+/// stamp (a registry lookup) plus `put_log_session` (an IndexMap insert + a `data_version` bump).
+fn stamp_and_store_reparsed(st: &mut CoreState, mut card: Value) -> Value {
+    // ingest_scanned's accountId stamp — the TS parser stamps it natively inside
+    // _buildCard, so the reparsed card must carry it here too.
+    if let Some(obj) = card.as_object_mut() {
+        let acct = obj.get("sessionId").and_then(Value::as_str).and_then(|sid| st.accounts.account_for(sid)).map(str::to_owned);
+        if let Some(a) = acct {
+            obj.insert("accountId".into(), Value::from(a));
+        }
+    }
+    st.put_log_session(card.clone());
+    card
+}
+
+/// TRDD-5GFSFX0Q's graft, onto the SERVED copy only — it runs AFTER `put_log_session`, so the
+/// STORED card stays pure. Cheap and state-bound: one IndexMap read plus a merge of two Vecs already
+/// sized to a single session's timeline, so this half keeps the guard.
+fn graft_otel_attribution_onto(st: &CoreState, session: &mut Value, session_id: &str) {
+    let claude_log = session.get("source").and_then(Value::as_str) == Some("claude_code")
+        && session.get("dataSource").and_then(Value::as_str) == Some("log");
+    if !claude_log {
+        return;
+    }
+    if let Some(entries) = st.otel_attribution.get(session_id).filter(|e| !e.is_empty()) {
+        let log_tl: Vec<Value> = session.get("timeline").and_then(Value::as_array).cloned().unwrap_or_default();
+        let grafted = crate::feed_merge::graft_otel_attribution(&log_tl, Some(entries));
+        if let Some(obj) = session.as_object_mut() {
+            obj.insert("timeline".into(), Value::Array(grafted));
+        }
+    }
+}
+
+/// TRDD-MVR6PXC0: `resolve_session_card` for the PER-CANDIDATE scan closures — the same answer, with
+/// the transcript reparse run OUTSIDE the state guard. TRDD-UTFVMVT8's snapshot-then-work shape,
+/// applied one level down: the guard is taken three times, briefly, for work that is a map lookup or
+/// a map insert, and released across the disk read between them.
+///
+/// Four handlers (`get_cost_by_cause`, `get_cache_risk_costs`, `get_cache_break_report`,
+/// `check_cache_expiry`) call this up to 20–50 times per invocation, and each call that reparses
+/// used to hold the mutex for the whole parse: eight holds of 1,037–3,948 ms in one measured window
+/// (the card's own table). `resolve_session_card` itself is UNCHANGED for its four single-lookup
+/// callers — they pay the reparse at most once per request, so the extra lock churn buys them
+/// nothing.
+///
+/// THE TRADE, stated rather than silently accepted (UTFVMVT8 framed its own the same way):
+/// check-reparse-store is no longer one atomic critical section, so
+///   1. two concurrent scans landing on the same empty-timeline id can both reparse the same file —
+///      wasted disk, not a wrong answer (`put_log_session` is a last-write-wins upsert and both
+///      compute the same card from the same file; cf. `burn_status_seed`'s "racing another seeder is
+///      harmless"), and
+///   2. a sweeper that stores a FRESHER card for this id during our unlocked reparse loses to our
+///      store when we re-lock. Bounded staleness, not loss: the window is one file parse, and the
+///      next sweeper pass — or the next resolve that again finds an empty timeline — re-stores the
+///      newer card.
+///
+/// Both are strictly cheaper than blocking every ingest for up to four seconds per candidate.
+fn resolve_session_card_offlock(
+    st2: &Arc<Mutex<CoreState>>,
+    env: &agentlens_logscan::discovery::Env,
+    summary: &Value,
+    session_id: &str,
+    now: i64,
+) -> Option<Value> {
+    let mut session = summary_card(summary, session_id);
+    if timeline_empty(session.as_ref()) {
+        // Lock 1: one IndexMap::contains_key.
+        let has_log = {
+            let st = st2.lock_timed().ok()?;
+            st.log_sessions.contains_key(session_id)
+        };
+        if has_log {
+            // NO GUARD IS ALIVE HERE — this is the multi-MB disk read + JSONL parse.
+            if let Some(card) = reparse_session_card(env, session_id, now) {
+                // Lock 2: the accountId stamp + the store.
+                let mut st = st2.lock_timed().ok()?;
+                session = Some(stamp_and_store_reparsed(&mut st, card));
             }
         }
     }
     if let Some(s) = session.as_mut() {
-        let claude_log = s.get("source").and_then(Value::as_str) == Some("claude_code")
-            && s.get("dataSource").and_then(Value::as_str) == Some("log");
-        if claude_log {
-            if let Some(entries) = st.otel_attribution.get(session_id).filter(|e| !e.is_empty()) {
-                let log_tl: Vec<Value> = s.get("timeline").and_then(Value::as_array).cloned().unwrap_or_default();
-                let grafted = crate::feed_merge::graft_otel_attribution(&log_tl, Some(entries));
-                if let Some(obj) = s.as_object_mut() {
-                    obj.insert("timeline".into(), Value::Array(grafted));
-                }
-            }
-        }
+        // Lock 3: the OTEL graft's one map read and in-memory merge.
+        let st = st2.lock_timed().ok()?;
+        graft_otel_attribution_onto(&st, s, session_id);
     }
     session
 }
@@ -2064,15 +2154,20 @@ async fn handle(
                         let (_, timeline_summary) = summary_now(&state, now as f64)?;
                         let sessions: Vec<Value> =
                             timeline_summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
+                        // TRDD-MVR6PXC0: the log env, cloned off the lock ONCE for the whole scan.
+                        // It is the only input the per-candidate reparse needs, which is what lets
+                        // that reparse run with no guard alive.
+                        let env = state.lock_timed().map_err(|_| "state poisoned".to_owned())?.log_env.clone();
                         let (a, st2) = (args.clone(), state.clone());
                         let payload = tokio::task::spawn_blocking(move || {
                             let timeline_of = |c: &Value| -> Vec<Value> {
                                 let Some(sid) = c.get("sessionId").and_then(Value::as_str) else { return Vec::new() };
-                                // Re-locked PER SESSION, never held across the pool: resolution can
-                                // reparse a multi-MB transcript and one held lock would stall every
-                                // other request for the whole scan.
-                                let Ok(mut st) = st2.lock_timed() else { return Vec::new() };
-                                resolve_session_card(&mut st, &timeline_summary, sid, now)
+                                // TRDD-MVR6PXC0: re-locked PER SESSION *and* only for the cheap
+                                // in-memory steps — the transcript reparse runs OUTSIDE the guard.
+                                // Held across it, this site measured 1,475 ms, and the state mutex is
+                                // the ingest path's mutex: every posting session stalls for exactly
+                                // as long as we hold it, so a 4 s hold is 4 s of blocked ingest.
+                                resolve_session_card_offlock(&st2, &env, &timeline_summary, sid, now)
                                     .and_then(|c| c.get("timeline").and_then(Value::as_array).cloned())
                                     .unwrap_or_default()
                             };
@@ -3217,8 +3312,12 @@ async fn handle(
                             };
                             let timeline_of = |c: &Value| -> Vec<Value> {
                                 let Some(sid) = c.get("sessionId").and_then(Value::as_str) else { return Vec::new() };
-                                let Ok(mut st) = st2.lock_timed() else { return Vec::new() };
-                                resolve_session_card(&mut st, &timeline_summary, sid, now)
+                                // TRDD-MVR6PXC0: the guard covers only the cheap in-memory steps; the
+                                // transcript reparse runs OUTSIDE it, on the `env` already cloned off
+                                // the lock above. This site held the mutex 1,234–3,948 ms across that
+                                // reparse, and the state mutex is the ingest path's mutex — a 4 s hold
+                                // blocks every session posting to this server for 4 s.
+                                resolve_session_card_offlock(&st2, &env, &timeline_summary, sid, now)
                                     .and_then(|c| c.get("timeline").and_then(Value::as_array).cloned())
                                     .unwrap_or_default()
                             };
@@ -3278,10 +3377,13 @@ async fn handle(
                             };
                             let timeline_of = |c: &Value| -> Vec<Value> {
                                 let Some(sid) = c.get("sessionId").and_then(Value::as_str) else { return Vec::new() };
-                                // Lock is now held only long enough to snapshot/reparse THIS
-                                // candidate — the summary itself is no longer rebuilt in here.
-                                let Ok(mut st) = st2.lock_timed() else { return Vec::new() };
-                                resolve_session_card(&mut st, &timeline_summary, sid, now)
+                                // TRDD-MVR6PXC0: the lock is now held only for THIS candidate's cheap
+                                // in-memory steps — QE114936 took the summary rebuild out of here, and
+                                // this takes the reparse out too (it runs on the `env` cloned off the
+                                // lock above). Held across the reparse this site measured 1,037 and
+                                // 1,274 ms; the state mutex is the ingest path's mutex, so every one
+                                // of those milliseconds is blocked ingest for every posting session.
+                                resolve_session_card_offlock(&st2, &env, &timeline_summary, sid, now)
                                     .and_then(|c| c.get("timeline").and_then(Value::as_array).cloned())
                                     .unwrap_or_default()
                             };
@@ -3331,8 +3433,13 @@ async fn handle(
                         let payload = tokio::task::spawn_blocking(move || {
                             let timeline_of = |c: &Value| -> Vec<Value> {
                                 let Some(sid) = c.get("sessionId").and_then(Value::as_str) else { return Vec::new() };
-                                let Ok(mut st) = st2.lock_timed() else { return Vec::new() };
-                                resolve_session_card(&mut st, &summary, sid, now)
+                                // TRDD-MVR6PXC0: same per-candidate shape as the other three scan
+                                // handlers, so the same fix — the reparse runs OUTSIDE the guard, on
+                                // `log_env` (already cloned off the lock for `last_request_ms` below).
+                                // This site never surfaced a ≥1000 ms line in the measured window, but
+                                // it probes the same multi-MB transcripts under the same mutex the
+                                // ingest path takes; a hold here blocks every posting session too.
+                                resolve_session_card_offlock(&st2, &log_env, &summary, sid, now)
                                     .and_then(|c| c.get("timeline").and_then(Value::as_array).cloned())
                                     .unwrap_or_default()
                             };
