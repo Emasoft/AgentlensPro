@@ -14,7 +14,7 @@ import {
 import { defaultBodiesDir } from '../cacheCreationForensics'
 import { flush, openStore, Store } from '../store/db'
 import { ingestBody } from '../store/bodyStore'
-import { derivedTimeoutMs } from './helpers/derivedTimeout'
+import { loadScaledTimeout, skipIfUnmeasurable } from './loadAware'
 
 // TRDD-FB5RG4P1 Phase 1 — REAL tests: no mocked bodies, no mocked join, no mocked DB. Every test
 // writes real request/response JSON to a tmp otel-bodies dir + a real sql.js main DB with a sessions
@@ -477,7 +477,16 @@ suite('FAL Phase 1 — 🐌 real machine data (skips when ~/.agentlens absent)',
     // is a generous stat+readdir budget under contention (a store repair may be hammering the same
     // disk); floor at the old 180s so a small corpus keeps its old bound, cap at 10 minutes so a
     // runaway corpus fails loudly rather than hanging mocha forever.
-    this.timeout(derivedTimeoutMs(defaultBodiesDir(), 180_000))
+    // TRDD-X4YTS5BF: timed out at the fixed 180 s under the full suite. Measured 2026-09-05 in
+    // isolation: 198 s and 281 s (load 14–20 on 14 CPUs) — a 42 % swing on the same corpus. The
+    // readdir-derived budget is inert here (the resolved dir is the spool, ~32 entries) because
+    // the time goes into the main DB / store scan, which that derivation cannot see. The swing
+    // is load (14 → 19.75), which the scaling already covers, so the base is sized to the
+    // runtime at scale ≈ 1 × 2 (198 s → 400 s; true idle was never sampled), and above
+    // MAX_SCALE the measurement is void — skip
+    // loudly rather than hold `test:unit` for up to 12 × the base.
+    if (skipIfUnmeasurable(this)) return
+    this.timeout(loadScaledTimeout(400_000))
     const tmpDb = path.join(tmpRoot, 'real-forensics.db')
     // windowHours bounds the evidence-base scan the SAME way cacheBreakTimeline.test.ts's own real-
     // machine test does (its comment: "an uncapped scan makes this test's runtime a function of the

@@ -11,6 +11,7 @@ import * as path from 'path'
 import { execFileSync } from 'child_process'
 import { OtlpCollector } from '../otlpCollector'
 import type { Span } from '../shared/telemetryTypes'
+import { loadScaledTimeout } from './loadAware'
 
 const BIN = path.join(__dirname, '..', '..', '..', 'rust-core', 'target', 'release', 'alingest')
 const haveBin = fs.existsSync(BIN)
@@ -111,7 +112,14 @@ suite('rustIngest — P3b OTLP transform parity', () => {
   const parityTest = haveBin ? test : test.skip
 
   parityTest('🐌 processTraces hands the store identical spans from both engines', function () {
-    this.timeout(30_000)
+    // TRDD-X4YTS5BF: load-scaled like its neighbours. The base stays 30 s: the three P3b tests
+    // measure 24 ms total in isolation (2026-09-05) and alingest transforms the fixture in 0.00 s;
+    // the one run that tripped 30 s stalled on THIS first test only (the next two passed under
+    // the reporter's slow threshold; ~18 s of that run sit elsewhere inside it, unattributed)
+    // while a second mocha suite ran alongside — consistent with contention, not isolated as the
+    // cause. Raising the base would hide a real regression here; a repeat is the signal to look
+    // inside tsCollector().
+    this.timeout(loadScaledTimeout(30_000))
     const { collector, store } = tsCollector()
     priv(collector).processTraces(TRACES_PAYLOAD, '/v1/traces')
     const rust = rustRun('--traces', TRACES_PAYLOAD, NOW)
@@ -120,7 +128,14 @@ suite('rustIngest — P3b OTLP transform parity', () => {
   })
 
   parityTest('🐌 processLogs: rich events, tool_result timing, codex grouping, drops — identical', function () {
-    this.timeout(30_000)
+    // TRDD-X4YTS5BF: load-scaled like its neighbours. The base stays 30 s: the three P3b tests
+    // measure 24 ms total in isolation (2026-09-05) and alingest transforms the fixture in 0.00 s;
+    // the one run that tripped 30 s stalled on THIS first test only (the next two passed under
+    // the reporter's slow threshold; ~18 s of that run sit elsewhere inside it, unattributed)
+    // while a second mocha suite ran alongside — consistent with contention, not isolated as the
+    // cause. Raising the base would hide a real regression here; a repeat is the signal to look
+    // inside tsCollector().
+    this.timeout(loadScaledTimeout(30_000))
     const { collector, store } = tsCollector()
     priv(collector).processLogs(LOGS_PAYLOAD)
     const rust = rustRun('--logs', LOGS_PAYLOAD, Date.now())
@@ -137,7 +152,14 @@ suite('rustIngest — P3b OTLP transform parity', () => {
   })
 
   parityTest('🐌 gen_ai content buffered from a log event injects into the later-arriving span', function () {
-    this.timeout(30_000)
+    // TRDD-X4YTS5BF: load-scaled like its neighbours. The base stays 30 s: the three P3b tests
+    // measure 24 ms total in isolation (2026-09-05) and alingest transforms the fixture in 0.00 s;
+    // the one run that tripped 30 s stalled on THIS first test only (the next two passed under
+    // the reporter's slow threshold; ~18 s of that run sit elsewhere inside it, unattributed)
+    // while a second mocha suite ran alongside — consistent with contention, not isolated as the
+    // cause. Raising the base would hide a real regression here; a repeat is the signal to look
+    // inside tsCollector().
+    this.timeout(loadScaledTimeout(30_000))
     const genAiLog = { resourceLogs: [{ scopeLogs: [{ logRecords: [
       { eventName: 'gen_ai.choice', traceId: 'g1', spanId: 'gs1',
         attributes: [{ key: 'gen_ai.event.content', value: { stringValue: JSON.stringify({ message: { role: 'assistant', content: 'hello é' } }) } }] },
