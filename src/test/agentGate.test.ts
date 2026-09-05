@@ -124,6 +124,19 @@ suite('agentGate — evaluateAgentGate (TRDD-GOD0108C)', () => {
     assert.ok(!d.reason?.includes('…/agentlens'), `workspace must NOT be named: ${d.reason ?? ''}`)
   })
 
+  test('runaway fan-out never denies a FORK: it warns with the count and lets it pass (TRDD-3EZ6SJ2Z)', () => {
+    const wave = state({ startsLast60s: 9, startsLast2min: 9, spawners: spawnersIn(9) })
+    const fork = evaluateAgentGate({ subagent_type: 'fork', prompt: 'review the last commit' }, wave)
+    assert.strictEqual(fork.decision, 'warn')
+    assert.strictEqual(fork.code, 'RUNAWAY_FANOUT')
+    assert.ok(fork.reason?.includes('9 subagent launches'), `the wave is still named: ${fork.reason ?? ''}`)
+    assert.ok(fork.reason?.includes('This fork is allowed'), fork.reason ?? '')
+    // The same wave still denies a fresh agent — the exemption is fork-only, not a rule downgrade.
+    const fresh = evaluateAgentGate({ subagent_type: 'lean-worker', prompt: 'review the last commit' }, wave)
+    assert.strictEqual(fresh.decision, 'deny')
+    assert.strictEqual(fresh.code, 'RUNAWAY_FANOUT')
+  })
+
   test('a fan-out in ANOTHER project does not warn this caller — it is not theirs to stop', () => {
     const d = evaluateAgentGate({}, state({ startsLast60s: 7, startsLast2min: 7, spawners: spawnersIn(7, FOREIGN_CWD) }))
     assert.deepStrictEqual(d, { decision: 'allow', code: null, reason: null })
@@ -373,7 +386,9 @@ suite('agentGate — evaluateSendMessageGate (P6 SendMessage coverage)', () => {
       startsLast60s: 20, startsLast2min: 9,
       parent: { contextTokens: 400_000, idleMs: 20 * 60_000 },
     })
-    assert.strictEqual(evaluateAgentGate({ subagent_type: 'fork' }, hot).decision, 'deny', 'precondition: a launch denies')
+    // A FRESH launch is the precondition: since TRDD-3EZ6SJ2Z a fork in a runaway wave warns instead
+    // of denying, so a fork can no longer stand in for "a launch that denies".
+    assert.strictEqual(evaluateAgentGate({ subagent_type: 'lean-worker' }, hot).decision, 'deny', 'precondition: a launch denies')
     assert.deepStrictEqual(evaluateSendMessageGate(hot), { decision: 'allow', code: null, reason: null })
   })
 

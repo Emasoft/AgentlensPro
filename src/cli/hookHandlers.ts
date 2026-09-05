@@ -236,7 +236,8 @@ export async function forwardHookEvent(
   const apiPath = opts.path ?? '/api/hook-events'
   // Number(env)||default, NOT Number(env||default): a non-numeric value like "2s" must fall back to
   // the default, not become NaN → AbortSignal.timeout(NaN) throws → swallowed → silent spool-only.
-  const timeoutMs = opts.timeoutMs ?? Math.max(200, (Number(process.env.AGENTLENS_HOOK_TIMEOUT) || 1) * 1000)
+  // Default 2s (1s before 2026-09-05, TRDD-GXKRBK1Q: doubled with the settings.json ceilings).
+  const timeoutMs = opts.timeoutMs ?? Math.max(200, (Number(process.env.AGENTLENS_HOOK_TIMEOUT) || 2) * 1000)
   try {
     const res = await fetch(`${base}${apiPath}`, {
       method: 'POST',
@@ -263,7 +264,8 @@ export async function runGateCheck(payload: Buffer, opts: { baseUrl?: string; ti
   if (skipGateRoundTrip(payload)) return '' // non-image Read, or the guard is off — no network
   const base = opts.baseUrl ?? uiBaseUrl()
   // Number(env)||default (see forwardHookEvent): "2s" must fall back to 2, not NaN → throw → fail-open.
-  const timeoutMs = opts.timeoutMs ?? Math.max(200, (Number(process.env.AGENTLENS_GATE_TIMEOUT) || 2) * 1000)
+  // Default 4s (2s before 2026-09-05, TRDD-GXKRBK1Q) — still inside the 10s settings.json ceiling.
+  const timeoutMs = opts.timeoutMs ?? Math.max(200, (Number(process.env.AGENTLENS_GATE_TIMEOUT) || 4) * 1000)
   try {
     const res = await fetch(`${base}/api/agent-gate`, {
       method: 'POST',

@@ -331,9 +331,25 @@ export function evaluateAgentGate(
     // The COUNT stays machine-wide — this deny protects the machine's cache, and scoping its
     // trigger to one project would quietly weaken a safety gate. Only the IDENTITIES are dropped.
     const kinds = fmtOwnAgentTypes(state)
-    return deny('RUNAWAY_FANOUT',
+    const runawayBase =
       `AgentLens burn-gate: ${state.startsLast60s} subagent launches in the last 60s — runaway fan-out` +
-      `${kinds ? `. From this project: ${kinds}` : ''}. Let the in-flight wave settle, then relaunch this agent ` +
+      `${kinds ? `. From this project: ${kinds}` : ''}.`
+    // A FORK is counted in the wave but never denied for it (TRDD-3EZ6SJ2Z, 2026-09-05): its first
+    // request reads the caller's last-written entry warm (the DIZ289UQ measurement — cache_creation
+    // 1–3k against 380k–785k read), so it adds no cold prefix to the machine's cache whatever the
+    // count is. The only fork launch that burns — a fat parent into a COLD cache — has its own two
+    // rules below. Denying forks here blocked the stop-hook review fork on every busy machine: the
+    // other sessions' fresh spawns filled the 60s window and the review paid for it. The keep-warm
+    // pinger keeps deny() for its USER-ordered advisory wording.
+    if (fork && !keepWarm) {
+      return {
+        decision: 'warn', code: 'RUNAWAY_FANOUT',
+        reason: `[agentlens] ${runawayBase} This fork is allowed: it reads the caller's cache entry and ` +
+          `writes no new prefix, so it adds nothing to the wave's cost. Fresh agents are still denied until it settles.`,
+      }
+    }
+    return deny('RUNAWAY_FANOUT',
+      `${runawayBase} Let the in-flight wave settle, then relaunch this agent ` +
       `(retry in ~60s is usually enough). Override: AGENTLENS_GATE=off.`)
   }
   if (coldResume && state.startsLast2min >= 1) {

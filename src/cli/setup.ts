@@ -294,11 +294,11 @@ function execRegisteredCommand(ctx: Ctx, command: string, payload: string, expec
     HOME: ctx.home,
     AGENTLENS_DATA_DIR: ctx.dataDir,
     AGENTLENS_UI_URL: `http://127.0.0.1:${ctx.uiPort}`,
-    AGENTLENS_HOOK_TIMEOUT: '2',
-    AGENTLENS_GATE_TIMEOUT: '2',
+    AGENTLENS_HOOK_TIMEOUT: '4', // doubled 2026-09-05 with every other hook budget (TRDD-GXKRBK1Q)
+    AGENTLENS_GATE_TIMEOUT: '4',
   }
   delete env.AGENTLENS_GATE // an ambient kill-switch would make the gate exec vacuous
-  // 15 s bounds /bin/sh + PATH shim + node startup; the child's own budgets are the 2 s above.
+  // 15 s bounds /bin/sh + PATH shim + node startup; the child's own budgets are the 4 s above.
   // The ETIMEDOUTs seen under the full mocha suite (TRDD-X4YTS5BF) came through the HOME leak
   // fixed above: a failed hook POST revives the daemon, which ran an unbounded `ps` against the
   // real machine's pidfile — now bounded in processStartRef. Do not raise this to paper over a

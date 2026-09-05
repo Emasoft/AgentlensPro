@@ -15,7 +15,7 @@ import {
 
 suite('agentlenspro — rebuildEventMatchers (hook install/uninstall)', () => {
   test('install injects the gate entry on the agent-launch + Read matcher, SYNC (no async)', () => {
-    // A fresh PreToolUse event gains exactly the gate matcher with the gate command, timeout 3, sync.
+    // A fresh PreToolUse event gains exactly the gate matcher with the gate command, timeout 10, sync.
     // SendMessage joined in P6: resuming a dead agent re-runs the request that killed it, so the
     // server gates messages too (narrower — cache-thrash / cold-resume only, never routine traffic).
     // Read joined 2026-07-28 for the image cache-guard — the one non-rare tool in the matcher. Its
@@ -30,7 +30,7 @@ suite('agentlenspro — rebuildEventMatchers (hook install/uninstall)', () => {
     assert.strictEqual(gate.hooks[0].command, GATE_CMD)
     // 5s since the 2026-08-14 owner report (load-130+ made the old 3s fire routinely — see
     // gateMatcher's WHY); the pin exists so a timeout change is a deliberate act, not drift.
-    assert.strictEqual(gate.hooks[0].timeout, 5)
+    assert.strictEqual(gate.hooks[0].timeout, 10) // doubled 2026-09-05 (TRDD-GXKRBK1Q, USER order)
     assert.ok(!('async' in gate.hooks[0]), 'gate hook must be SYNC — an async hook cannot deny')
   })
 
