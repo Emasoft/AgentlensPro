@@ -77,6 +77,7 @@ pub mod resident_cost;
 pub mod retention_config;
 pub mod runtime_inventory;
 pub mod server_stats;
+pub mod session_summary_sql;
 pub mod shutdown;
 pub mod skill_attribution;
 pub mod span_window;
