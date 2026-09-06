@@ -1,9 +1,9 @@
 ---
 trdd-id: HFV4AIT7
 title: Measure and guarantee that alcore uses all CPU cores for telemetry and hook ingest and for the JSONL to DuckDB load
-column: dev
+column: testing
 created: 2026-08-28T22:05:59+0200
-updated: 2026-09-06T02:36:03+0200
+updated: 2026-09-06T02:42:08+0200
 current-owner: claude-agentlenspro
 task-type: audit
 project-id: agentlenspro
