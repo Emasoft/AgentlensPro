@@ -773,7 +773,7 @@ impl DurableState {
     fn save_cards(&mut self, state: &std::sync::Mutex<crate::CoreState>) {
         let records: IndexMap<String, Value> = {
             let st = state.lock_timed().expect("core state");
-            st.log_sessions.iter().map(|(id, c)| (id.clone(), strip_card_for_persist(c))).collect()
+            st.cards.persist_records()
         };
         match self.cards.save(&records) {
             Ok(r) if r.bytes > 0 => {

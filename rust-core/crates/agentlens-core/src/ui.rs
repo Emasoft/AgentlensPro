@@ -99,8 +99,8 @@ fn sse_frame(payload: &str) -> Bytes {
 /// The comment this replaces said two readers computing the same version was "wasted CPU, never a
 /// stalled ingest". The CPU half was right and the cost was wrong: each in-flight rebuild holds its
 /// own `SummaryInputs` snapshot (a `Vec<Arc<Value>>` over the whole window plus, since
-/// TRDD-XTFDRTH2, a `Vec<String>` of the card corpus read out of the card table — it was a clone
-/// of the `log_sessions` map) AND the per-session card set it is building, while the previous
+/// TRDD-XTFDRTH2, a `Vec<String>` of the card corpus read out of the card table — it used to be a
+/// clone of the resident card map) AND the per-session card set it is building, while the previous
 /// summary stays
 /// alive until `store_summary` swaps it. So concurrent rebuilds cost N COMPLETE COPIES of the
 /// derived state, not N times the CPU. Measured: `MIMALLOC_SHOW_STATS=1` reported **26.3 GiB

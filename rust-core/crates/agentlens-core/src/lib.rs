@@ -188,21 +188,16 @@ pub struct CoreState {
     pub media_dir: Option<std::path::PathBuf>,
     /// Log-derived session cards keyed by sessionId (server.ts `logSessions`), merged into the
     /// served summary under the feed-collision doctrine (feed_merge.rs). Fed by the log reader
-    /// (log_reader.rs); `put_log_session` is the one write path and bumps data_version. An
-    /// IndexMap: insertion order kept like the JS Map, O(1) upsert (a 13k-card boot would be
-    /// quadratic on a Vec).
+    /// (log_reader.rs); `put_log_session` is the one write path and bumps data_version.
     ///
-    /// **BEING RETIRED (TRDD-XTFDRTH2).** The summary path no longer reads it — `cards` below is
-    /// the corpus. What is left are the `contains_key` probes in `ui.rs`/`import_card.rs`, the
-    /// `len()` in `server_stats.rs`, and the persist scan in `log_reader.rs`; the field goes when
-    /// the last of them moves.
-    pub log_sessions: IndexMap<String, Arc<Value>>,
-    /// TRDD-XTFDRTH2 — the card corpus in a DuckDB table, the replacement for `log_sessions`.
-    ///
-    /// Both exist for the length of the migration ONLY: this phase makes the table the same
-    /// corpus (every write path feeds both), and each following phase moves one file's readers
-    /// across, with the map deleted in the last one. Nothing reads `cards` until its reader's own
-    /// phase, so the two cannot disagree on the wire in the meantime.
+    /// TRDD-XTFDRTH2: this WAS an `IndexMap<String, Arc<Value>>` holding 32,607 cards as resident
+    /// `Value` trees — measured as one of the three contributors to the 8.7 GB mimalloc heap. It
+    /// is now a DuckDB table (`card_store.rs`) holding the same corpus as JSON text; a reader gets
+    /// a `Vec` it drops when it is done, which is the USER's ruling in TRDD-7YPQWKPG ("duckdb is
+    /// your memory… the rust code should only make queries and report the ephemeral answers").
+    /// The three properties the map supplied for free — first-insert iteration order, an upsert
+    /// keeping its slot, and demotion ties falling back to insertion order — are rebuilt on the
+    /// `seq` column and pinned by `tests/card_store.rs`.
     pub cards: card_store::CardStore,
     /// The data dir this process owns (server.ts DATA_DIR) — the sidecar paths `/api/server-stats`
     /// measures hang off it.
@@ -291,9 +286,7 @@ pub struct CoreState {
 impl CoreState {
     /// putLogSession — upsert by sessionId.
     pub fn put_log_session(&mut self, card: Value) {
-        let id = card.get("sessionId").and_then(Value::as_str).unwrap_or("").to_owned();
         self.cards.put(&card);
-        self.log_sessions.insert(id, Arc::new(card));
         self.data_version += 1;
     }
 
@@ -301,23 +294,12 @@ impl CoreState {
     /// sufficient on a ~13k-session machine — only the `hot_cards` most-recently-active cards
     /// keep their timelines in RAM; every colder card keeps headers only.
     pub fn demote_cold_timelines(&mut self, hot_cards: usize) {
+        // TRDD-XTFDRTH2: the ranking (`last_active` DESC, first-insert ASC on ties) and the strip
+        // now run inside the card table — see `CardStore::demote_cold`. The `Arc::make_mut`
+        // copy-on-write this replaces existed only because a rebuild in flight could still be
+        // holding the very `Arc` being stripped; a snapshot is now a copy of the JSON text, so
+        // there is nothing shared left to protect.
         self.cards.demote_cold(hot_cards);
-        if self.log_sessions.len() <= hot_cards {
-            return;
-        }
-        let mut order: Vec<(f64, usize)> =
-            self.log_sessions.values().enumerate().map(|(i, c)| (log_reader::last_active_ms(c), i)).collect();
-        // Newest first; a stable sort keeps insertion order among ties, as the JS sort does.
-        order.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
-        for (_, i) in order.into_iter().skip(hot_cards) {
-            // `Arc::make_mut` — copy-on-write, so a card a rebuild in flight is still reading is
-            // cloned before it is stripped instead of being mutated underneath it. The clone hits
-            // only the cards actually demoted (the tail past `hot_cards`), and only while a
-            // snapshot still holds them.
-            if let Some(obj) = self.log_sessions.get_index_mut(i).and_then(|(_, c)| Arc::make_mut(c).as_object_mut()) {
-                log_reader::strip_timeline_value(obj);
-            }
-        }
     }
 
     /// A sweep's output into the card map (server.ts runLogScan's loop): every card through
@@ -590,7 +572,6 @@ impl CoreState {
             sink_problem: None,
             build_id: now.to_string(),
             media_dir: None,
-            log_sessions: IndexMap::new(),
             cards: card_store::CardStore::new(),
             data_dir: data_dir.to_path_buf(),
             started_at_ms: now,
@@ -650,7 +631,6 @@ impl CoreState {
     /// every file from 0 (a targeted scan would only see the paths the watcher happened to name).
     pub fn clear_all(&mut self) {
         self.clear_spans();
-        self.log_sessions.clear();
         self.cards.clear();
         if let Some(s) = &self.sweeper {
             s.clear_and_rescan();

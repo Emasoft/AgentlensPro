@@ -438,7 +438,7 @@ fn small_routes_embed_status_hook_config_clear_action_and_log_scan_stats() {
     assert_eq!(v["derivedCaches"]["stripped"], serde_json::json!({ "hits": 1, "misses": 2 }));
     {
         let mut st = state.lock().unwrap();
-        st.log_sessions.clear();
+        st.cards.clear();
         st.data_version += 1;
     }
 
@@ -464,13 +464,13 @@ fn small_routes_embed_status_hook_config_clear_action_and_log_scan_stats() {
         assert_eq!(st.window.spans.len(), 0);
         assert_eq!(st.writer.stats(), (0, 0, 0));
         assert!(!data_dir.join("spans").join("index.json").exists(), "the store forgot");
-        assert_eq!(st.log_sessions.len(), 1, "clearAll keeps the log cards");
+        assert_eq!(st.cards.len(), 1, "clearAll keeps the log cards");
     }
     let r = post(ui, "/action", "garbage");
     assert!(r.starts_with("HTTP/1.1 200"), "malformed body is still 200: {r}");
     let r = post(ui, "/api/clear", "");
     assert!(r.starts_with("HTTP/1.1 200") && body_of(&r).is_empty(), "{r}");
-    assert!(state.lock().unwrap().log_sessions.is_empty());
+    assert!(state.lock().unwrap().cards.is_empty());
 }
 
 /// Freeze row 3 — POST /api/import: buildImportCardStandalone's defaults (transcribed from
@@ -537,9 +537,9 @@ fn import_builds_log_cards_with_the_ts_defaults_and_counts_exactly() {
     assert_eq!(body_of(&r), r#"{"imported":1,"skipped":1,"failed":0,"total":5}"#);
     {
         let st = state.lock().unwrap();
-        assert_eq!(st.log_sessions.len(), 2);
-        assert_eq!(st.log_sessions["new-1"]["totalLlmCalls"], 2);
-        assert_eq!(st.log_sessions["dup"]["source"], "codex", "the existing card is untouched");
+        assert_eq!(st.cards.len(), 2);
+        assert_eq!(st.cards.get("new-1").unwrap()["totalLlmCalls"], 2);
+        assert_eq!(st.cards.get("dup").unwrap()["source"], "codex", "the existing card is untouched");
     }
     let r = post(ui, "/api/import", r#"{"sessions":"nope"}"#);
     assert!(r.starts_with("HTTP/1.1 400"), "{r}");
@@ -834,7 +834,7 @@ fn timeline_route_serves_the_lazy_detail_with_the_otel_graft() {
     assert_eq!(v["generatedFilesTruncated"], true);
     // The STORED card stays pure — the graft lands on the served copy only.
     let st = state.lock().unwrap();
-    assert_eq!(st.log_sessions["sess-ui-1"]["timeline"].as_array().unwrap().len(), 1);
+    assert_eq!(st.cards.get("sess-ui-1").unwrap()["timeline"].as_array().unwrap().len(), 1);
 }
 
 #[test]
@@ -921,7 +921,7 @@ fn timeline_route_reparses_a_stripped_card_from_disk() {
     // resolveSessionCard re-stores the reparsed card (putLogSession) — the map now holds the
     // full timeline, not the stripped one.
     let st = state.lock().unwrap();
-    assert!(!st.log_sessions[sid]["timeline"].as_array().unwrap().is_empty());
+    assert!(!st.cards.get(sid).unwrap()["timeline"].as_array().unwrap().is_empty());
     drop(st);
     let _ = std::fs::remove_dir_all(&home);
 }

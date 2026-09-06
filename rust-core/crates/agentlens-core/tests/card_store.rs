@@ -169,36 +169,42 @@ fn a_card_without_a_session_id_is_keyed_by_the_empty_string() {
     assert_eq!(s.get("").unwrap()["source"], "claude_code");
 }
 
-/// The migration's own safety net: while `CoreState` writes BOTH the map and the table, they must
-/// hold the same corpus in the same order. This is what licenses moving readers across one file
-/// per phase — a reader that switches sides cannot change what it sees.
+/// The store's contract as `CoreState` drives it — the three write paths that used to mutate the
+/// `IndexMap` in place, now going through the table: `put_log_session` (upsert + data_version
+/// bump), `demote_cold_timelines`, and `clear_all`.
+///
+/// This test was written during the migration as a dual-write agreement check (the table had to
+/// hold exactly what the map held, in the same order — that is what licensed moving readers one
+/// file per phase). The map is gone, so it now asserts the same invariants against the one
+/// remaining container.
 #[test]
-fn the_table_agrees_with_the_map_it_replaces() {
+fn core_state_write_paths_keep_the_table_ordered_and_current() {
     let dir = std::env::temp_dir().join(format!("al-cardstore-dual-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let mut st = agentlens_core::CoreState::open(&dir);
 
-    let same = |st: &agentlens_core::CoreState, what: &str| {
-        let from_map: Vec<Value> = st.log_sessions.values().map(|c| (**c).clone()).collect();
-        assert_eq!(st.cards.cards(), from_map, "{what}: the table and the map must hold the same cards in the same order");
-        assert_eq!(st.cards.len(), st.log_sessions.len(), "{what}: same count");
-    };
-
+    let v0 = st.data_version;
     for id in ["a", "b", "c", "d", "e"] {
         st.put_log_session(card(id, "2026-08-01T10:00:00.000Z", 0.0, 2));
     }
-    same(&st, "after inserts");
+    assert_eq!(ids(&st.cards.cards()), ["a", "b", "c", "d", "e"]);
+    assert!(st.data_version > v0, "put_log_session bumps data_version");
 
-    // An upsert must not move the card in EITHER container.
+    // An upsert replaces the body and keeps the slot.
     st.put_log_session(card("a", "2026-08-01T12:00:00.000Z", 0.0, 1));
-    same(&st, "after an upsert");
+    assert_eq!(ids(&st.cards.cards()), ["a", "b", "c", "d", "e"], "an upsert does not re-order");
+    assert_eq!(st.cards.len(), 5);
+    assert_eq!(st.cards.get("a").unwrap()["startTime"], "2026-08-01T12:00:00.000Z");
 
+    // `a` is now the most recently active, so it and one other keep their timelines.
     st.demote_cold_timelines(2);
-    same(&st, "after demotion");
+    let hot = st.cards.cards().iter().filter(|c| !c["timeline"].as_array().unwrap().is_empty()).count();
+    assert_eq!(hot, 2, "exactly hot_cards keep a timeline");
+    assert_eq!(st.cards.get("a").unwrap()["timeline"].as_array().unwrap().len(), 1, "the hottest is one of them");
 
     st.clear_all();
-    assert!(st.cards.is_empty() && st.log_sessions.is_empty(), "clear_all empties both");
+    assert!(st.cards.is_empty(), "clear_all empties the table");
 
     let _ = std::fs::remove_dir_all(&dir);
 }

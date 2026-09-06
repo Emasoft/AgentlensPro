@@ -93,7 +93,7 @@ fn run_cold_log_scan_fills_the_card_map_and_the_summary_serves_it() {
     let (scanned, stats) = cold_scan(&fixture_env(), agentlens_core::now_ms());
     assert_eq!(stats.cards, 7);
     st.ingest_scanned(scanned);
-    assert_eq!(st.log_sessions.len(), 7);
+    assert_eq!(st.cards.len(), 7);
     assert!(st.data_version > v0, "put_log_session must bump data_version");
     let summary = st.session_summary(agentlens_core::now_ms() as f64);
     let ids: Vec<&str> = summary["sessions"].as_array().unwrap().iter().map(|c| c["sessionId"].as_str().unwrap()).collect();
@@ -102,7 +102,7 @@ fn run_cold_log_scan_fills_the_card_map_and_the_summary_serves_it() {
     // Re-ingesting upserts (same ids, no growth); an empty sweep is a no-op.
     let v1 = st.data_version;
     st.ingest_scanned(cold_scan(&fixture_env(), agentlens_core::now_ms()).0);
-    assert_eq!(st.log_sessions.len(), 7);
+    assert_eq!(st.cards.len(), 7);
     assert!(st.data_version > v1);
     let v2 = st.data_version;
     st.ingest_scanned(Vec::new());
@@ -250,17 +250,22 @@ fn demote_cold_timelines_keeps_only_the_k_most_recently_active() {
     st.put_log_session(mk("newest", "2026-08-01T10:00:00.000Z", 7_200_000.0, 2)); // start+duration wins
     st.put_log_session(mk("mid", "2026-08-01T11:00:00.000Z", 0.0, 4));
     st.put_log_session(mk("nostart", "", 5.0, 1)); // unparseable start → 0 → coldest
+    // A free fn, not a closure: a closure capturing `&st` would still be alive across the
+    // `demote_cold_timelines(&mut self)` calls below and the borrow checker rejects it.
+    fn card(st: &CoreState, id: &str) -> Value {
+        st.cards.get(id).expect("a stored card")
+    }
     st.demote_cold_timelines(10);
-    assert_eq!(st.log_sessions["old"]["timeline"].as_array().unwrap().len(), 3, "under the cap nothing moves");
+    assert_eq!(card(&st, "old")["timeline"].as_array().unwrap().len(), 3, "under the cap nothing moves");
     st.demote_cold_timelines(1);
-    let tl = |id: &str| st.log_sessions[id]["timeline"].as_array().unwrap().len();
-    assert_eq!((tl("newest"), tl("mid"), tl("old"), tl("nostart")), (2, 0, 0, 0));
-    assert_eq!(st.log_sessions["old"]["timelineTruncatedCount"], 3);
-    assert_eq!(st.log_sessions["old"]["timelineRetainedBytes"], 0);
-    assert!(st.log_sessions["newest"].get("timelineTruncatedCount").is_none());
+    let tl = |st: &CoreState, id: &str| card(st, id)["timeline"].as_array().unwrap().len();
+    assert_eq!((tl(&st, "newest"), tl(&st, "mid"), tl(&st, "old"), tl(&st, "nostart")), (2, 0, 0, 0));
+    assert_eq!(card(&st, "old")["timelineTruncatedCount"], 3);
+    assert_eq!(card(&st, "old")["timelineRetainedBytes"], 0);
+    assert!(card(&st, "newest").get("timelineTruncatedCount").is_none());
     // Idempotent: a second pass finds nothing to strip and does not double-count.
     st.demote_cold_timelines(1);
-    assert_eq!(st.log_sessions["old"]["timelineTruncatedCount"], 3);
+    assert_eq!(card(&st, "old")["timelineTruncatedCount"], 3);
 }
 
 // ── Durable state (P5e) ──────────────────────────────────────────────────────────────────────
@@ -304,7 +309,7 @@ fn durable_state_round_trips_offsets_and_stripped_cards_and_skips_the_cold_resca
     assert_eq!(parent["timeline"].as_array().unwrap().len(), 0);
     assert!(parent.get("fileOps").is_none());
     assert_eq!(parent["backgroundSpans"], Value::Array(vec![]));
-    assert_eq!(parent["turns"], state.lock().unwrap().log_sessions["cccccccc-1111-2222-3333-444444444444"]["turns"]);
+    assert_eq!(parent["turns"], state.lock().unwrap().cards.get("cccccccc-1111-2222-3333-444444444444").unwrap()["turns"]);
     assert_eq!(DeltaLog::new(&data, "log-offsets").load().unwrap().len(), 5);
 
     // Between the runs one transcript grows.
@@ -317,7 +322,7 @@ fn durable_state_round_trips_offsets_and_stripped_cards_and_skips_the_cold_resca
     let mut durable2 = DurableState::open(&data);
     let (restored, imported, skipped) = durable2.restore(&mut tailer2, &mut state2.lock().unwrap()).unwrap();
     assert_eq!((restored, imported, skipped), (7, 5, 0));
-    assert_eq!(state2.lock().unwrap().log_sessions.len(), 7);
+    assert_eq!(state2.lock().unwrap().cards.len(), 7);
     let (scanned, s) = tailer2.sweep(&env, now);
     assert_eq!((s.files, s.changed, s.parsed, s.incremental_reads, s.full_reads), (5, 1, 1, 0, 1));
     assert_eq!(parent_card(&scanned)["turns"].as_u64().unwrap(), parent["turns"].as_u64().unwrap() + 1);
@@ -365,7 +370,7 @@ fn durable_state_round_trips_offsets_and_stripped_cards_and_skips_the_cold_resca
     let mut tailer4 = LogTailer::default();
     let mut st4 = CoreState::open(&data.join("spans"));
     assert_eq!(DurableState::open(&data).restore(&mut tailer4, &mut st4).unwrap(), (0, 0, 0));
-    assert!(st4.log_sessions.is_empty() && tailer4.file_state.is_empty());
+    assert!(st4.cards.is_empty() && tailer4.file_state.is_empty());
 }
 
 /// P5f: the watcher names a changed file and the debounced TARGETED sweep advances its card long
@@ -387,7 +392,7 @@ fn watcher_advances_a_card_on_growth_without_waiting_for_the_backstop() {
     let (boot, handle) = start_sweeper(state.clone(), env, data.clone(), std::time::Duration::from_secs(3600)).unwrap();
     assert!(boot.watch_attached >= 1, "the fixture's claude projects root is watchable: {boot:?}");
     assert!(FULL_RESCAN.as_secs() >= 60);
-    let turns0 = state.lock().unwrap().log_sessions[sid]["turns"].as_u64().unwrap();
+    let turns0 = state.lock().unwrap().cards.get(sid).unwrap()["turns"].as_u64().unwrap();
     let version0 = state.lock().unwrap().data_version;
 
     // FSEvents latency + the 300ms debounce: poll the card map, bounded well under the backstop.
@@ -396,7 +401,7 @@ fn watcher_advances_a_card_on_growth_without_waiting_for_the_backstop() {
     let mut turns = turns0;
     while std::time::Instant::now() < deadline {
         std::thread::sleep(std::time::Duration::from_millis(100));
-        turns = state.lock().unwrap().log_sessions[sid]["turns"].as_u64().unwrap();
+        turns = state.lock().unwrap().cards.get(sid).unwrap()["turns"].as_u64().unwrap();
         if turns > turns0 {
             break;
         }
@@ -406,16 +411,16 @@ fn watcher_advances_a_card_on_growth_without_waiting_for_the_backstop() {
     let statted_before = state.lock().unwrap().log_scan.files_statted;
 
     // POST /api/clear's core: the cards go NOW, the sweeper forgets every offset and re-reads
-    // every file from 0 (a full sweep, all 5 fixture files statted again), and the map refills.
+    // every file from 0 (a full sweep, all 5 fixture files statted again), and the table refills.
     state.lock().unwrap().clear_all();
-    assert!(state.lock().unwrap().log_sessions.is_empty());
+    assert!(state.lock().unwrap().cards.is_empty());
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-    while std::time::Instant::now() < deadline && state.lock().unwrap().log_sessions.get(sid).is_none() {
+    while std::time::Instant::now() < deadline && state.lock().unwrap().cards.get(sid).is_none() {
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
     {
         let st = state.lock().unwrap();
-        assert_eq!(st.log_sessions[sid]["turns"], turns0 + 1, "re-read from byte 0 sees the grown file");
+        assert_eq!(st.cards.get(sid).unwrap()["turns"], turns0 + 1, "re-read from byte 0 sees the grown file");
         assert_eq!(st.log_scan.files_statted, statted_before + 5, "the post-clear sweep was FULL");
     }
 
@@ -460,11 +465,11 @@ fn account_registry_is_fed_by_the_logs_ingest_and_stamps_log_cards_at_build_time
     let mk = |sid: &str| serde_json::json!({ "sessionId": sid, "source": "claude_code", "startTime": "2026-08-01T10:00:00.000Z", "timeline": [] });
     let state = FileState { bytes_read: 1, mtime_ms: 1.0, ino: 1, size: 1 };
     st.ingest_scanned(vec![ScannedFile { file: "f".into(), file_size_bytes: 1, state, cards: vec![mk("sess-known"), mk("agent-child"), mk("sess-other")] }]);
-    let known = &st.log_sessions["sess-known"];
+    let known = st.cards.get("sess-known").unwrap();
     assert_eq!(known["accountId"], "acct-aaaa");
     assert_eq!(known.as_object().unwrap().keys().next_back().map(String::as_str), Some("accountId"), "appended last");
-    assert!(st.log_sessions["agent-child"].get("accountId").is_none());
-    assert!(st.log_sessions["sess-other"].get("accountId").is_none());
+    assert!(st.cards.get("agent-child").unwrap().get("accountId").is_none());
+    assert!(st.cards.get("sess-other").unwrap().get("accountId").is_none());
 
     // Bounded + MRU: the 201st distinct session evicts the OLDEST, and a re-recorded one survives.
     for i in 0..MAX_SESSIONS {
