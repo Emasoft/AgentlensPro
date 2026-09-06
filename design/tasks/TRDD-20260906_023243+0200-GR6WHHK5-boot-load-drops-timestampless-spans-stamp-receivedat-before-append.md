@@ -3,7 +3,7 @@ trdd-id: GR6WHHK5
 title: Boot load evicts timestamp-less codex spans within 5 s because receivedAt is stamped after writer.append
 column: testing
 created: 2026-09-06T02:32:43+0200
-updated: 2026-09-06T02:57:58+0200
+updated: 2026-09-06T03:08:36+0200
 current-owner: agentlenspro-b2
 task-type: bugfix
 priority: normal
@@ -12,8 +12,8 @@ scope: project
 project-id: agentlenspro
 npt: []
 eht: []
-implementation-commits: [58abca7f]
-relevant-files: [rust-core/crates/agentlens-core/src/lib.rs, rust-core/crates/agentlens-core/src/span_window.rs, rust-core/crates/agentlens-core/src/writer.rs, rust-core/crates/agentlens-core/src/summarize/codex.rs]
+implementation-commits: [58abca7f, c89148ce3eb20262480ddb6e652146902268b74c]
+relevant-files: [rust-core/crates/agentlens-core/src/lib.rs, rust-core/crates/agentlens-core/src/span_window.rs, rust-core/crates/agentlens-spanstore/src/writer.rs, rust-core/crates/agentlens-core/src/summarize/codex.rs]
 labels: [rust-core, memory, span-window, boot-load]
 ---
 
@@ -28,7 +28,7 @@ labels: [rust-core, memory, span-window, boot-load]
 - **The fix is 2 lines of behaviour**: `ingest_parsed` stamps each span before
   `state.writer.append`, using a helper `span_window::stamp_received_at` extracted from
   `SpanWindow::add` — ONE stamping site, so the disk copy and the window copy can never disagree.
-- **`state.writer.append` has exactly ONE caller in the whole workspace** (`lib.rs:876`), and both
+- **`state.writer.append` has exactly ONE caller in the whole workspace** (`lib.rs:880`), and both
   `ingest_parsed` callers (the HTTP handler and `ingest_post`) route through it — verified by
   grep. The hook-events path writes its own event files and never touches the span writer, so it
   has no equivalent ordering to fix.
@@ -125,3 +125,6 @@ ingest site would have created a second place for "when did this span arrive" to
   review's finding (1); no approval required).
 - 2026-09-06T02:57:58+0200 — `todo` → `testing`; all four acceptance boxes proved on branch
   `worktree-agent-a8a594781552e41c7`. Not merged, not pushed, not deployed.
+- 2026-09-06T03:08:36+0200 — Merged `worktree-agent-a8a594781552e41c7` into `main`
+  (c89148ce3eb20262480ddb6e652146902268b74c). `column:` stays `testing` — merged, not deployed
+  (`bin-native/` untouched).

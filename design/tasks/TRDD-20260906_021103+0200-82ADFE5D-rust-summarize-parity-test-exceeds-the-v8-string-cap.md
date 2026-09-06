@@ -3,7 +3,7 @@ trdd-id: 82ADFE5D
 title: rustSummarize end-to-end parity fails on the real corpus because a string exceeds the V8 string cap
 column: todo
 created: 2026-09-06T02:11:03+0200
-updated: 2026-09-06T02:27:51+0200
+updated: 2026-09-06T03:08:36+0200
 current-owner: main-session
 task-type: bugfix
 priority: medium
@@ -50,6 +50,9 @@ gated on FSMISF5K — decide on the card, not in the test file's comments.
       gated on FSMISF5K.
 
 ## Notes and lessons learned
+
+- Note: PASS after YILE6N3T removes the trigger, not the culprit (the 512 MB string is still
+  possible on a corpus that reaches it another way).
 
 ## Approval log
 
