@@ -3,7 +3,7 @@ trdd-id: 7RM5YW2T
 title: The 25 ms summary rebuild loop rebuilds the whole window continuously under ingest and is the mimalloc churn
 column: testing
 created: 2026-09-05T22:06:10+0200
-updated: 2026-09-06T02:49:27+0200
+updated: 2026-09-06T03:18:01+0200
 current-owner: main-session
 implementation-commits: [bd0d48e3, 6698af32, bb8d5f8e, 67e5478cc62f28a49e3877db3885ee3fd727d6ed]
 task-type: bugfix
@@ -18,6 +18,18 @@ labels: [rust-core, memory, cpu, summary-rebuild]
 ---
 
 # The 25 ms summary rebuild loop rebuilds the whole window continuously under ingest and is the mimalloc churn
+
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-06T03:18:01+0200
+
+Last acceptance box MISS on live measurement (pid 93345, deployed 02:58, uptime ~18 min; t15
+report `reports/7ypqwkpg/20260906_031515+0200-t15-after-deploy.md`): CPU ~65.5% of a core
+(cputime delta 39.29s / 60s wall — 12:44.22 → 13:23.51), threshold was ≤15%. mimalloc/malloc-zone
+resident ~10.8 GB (`vmmap --summary`, TOTAL RESIDENT SIZE row), threshold was ≤2 GB — WORSE than
+the 8.7 GB pre-fix baseline, though physical footprint (3.1 GB, peak 11.2 GB) is far lower than
+the old 13.1 GB. NEXT ACTION: needs a follow-up investigation card (not created here — instructed
+not to) into why the rebuild-loop fix did not cut CPU/mimalloc as the arithmetic predicted; check
+whether ingest rate at measurement time was higher than the 22 spans/s assumption, and whether
+`vmmap` TOTAL RESIDENT vs physical footprint is the right proxy for "mimalloc resident" here.
 
 Same USER directive as TRDD-YILE6N3T (2026-09-05 22:00, "why is alcore using 17 GB … why is it so
 slow … fix all this"). This is the second same-day slice; the architecture is TRDD-7YPQWKPG,
@@ -103,8 +115,8 @@ churn cut.
       override are covered only by the unit tests above, not end-to-end.
 - [ ] Live after deploy, 15 min: CPU of alcore ≤ 15% of a core at today's ingest rate (was 84%),
       mimalloc resident ≤ 2 GB (was 8.7 GB) — `vmmap --summary` and `ps`, numbers recorded here.
-      **OPEN — the churn cut is asserted from the arithmetic, not measured.** Needs a Rust-core
-      deploy (`cargo build --release` → `bin-native/` → `codesign -s - --force` → `server restart`).
+      **MISS: cpu ~65.5% (cputime delta 39.29s/60s wall, pid 93345), mimalloc ~10.8 GB (vmmap
+      TOTAL RESIDENT SIZE) — needs a follow-up card (do not create it).**
 
 ## Notes and lessons learned
 
