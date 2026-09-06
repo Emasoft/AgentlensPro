@@ -158,6 +158,11 @@ const STALE_BUDGET_MS: u64 = 500;
 /// closes that band: a waiting reader overrides the skip whenever the rebuild can still land inside
 /// its budget. What remains, deliberately, is a larger staleness ceiling at LARGE `d` — a reader
 /// there was served stale before too, and the summary it sees is now up to ≈`5d` old, not ≈`d`.
+///
+/// The override reads the LAST pass's cost as a proxy for the next one's. That misleads only
+/// transiently and self-corrects on the following pass: a window that just grew past the budget
+/// grants one unhelpful override (one extra pass, the reader stale anyway); a one-off spike above
+/// it denies one override (one stale answer). Neither is worth a second measurement.
 const REBUILD_COST_FACTOR: u32 = 4;
 
 /// The single-flight gate, and the back-off record it protects.
@@ -4390,6 +4395,7 @@ mod rebuild_admission_tests {
         // Deliberately NOT holding the gate: the winner is the case the budget cannot fix.
         assert!(rebuild_gate().try_lock().is_ok(), "the gate must be free — that is the case under test");
 
+        READER_WAITING.store(false, Ordering::Relaxed);
         let began = Instant::now();
         let (served_version, _) = summary_now(&state, crate::now_ms() as f64).expect("served");
         let waited = began.elapsed();
@@ -4397,6 +4403,13 @@ mod rebuild_admission_tests {
         assert_eq!(
             served_version, warm_version,
             "the reader rebuilt on the request path — with a rebuilder active it must serve the last good summary"
+        );
+        // The producer half of the back-off override (TRDD-7RM5YW2T): this reader's only source of
+        // fresh data is the loop, so entering the wait MUST raise the flag the loop consults. The
+        // wiring test sets the flag by hand and so cannot see this line go missing.
+        assert!(
+            READER_WAITING.load(Ordering::Relaxed),
+            "a reader entering the budget wait must raise READER_WAITING, or the loop's back-off starves it"
         );
         assert!(
             waited < Duration::from_secs(2),

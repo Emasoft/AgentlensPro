@@ -3,7 +3,7 @@ trdd-id: 7RM5YW2T
 title: The 25 ms summary rebuild loop rebuilds the whole window continuously under ingest and is the mimalloc churn
 column: dev
 created: 2026-09-05T22:06:10+0200
-updated: 2026-09-06T02:34:37+0200
+updated: 2026-09-06T02:41:21+0200
 current-owner: main-session
 implementation-commits: [bd0d48e3]
 task-type: bugfix
@@ -54,13 +54,24 @@ is untouched.
 **Why the override is budget-bounded — the deliberate trade.** With a rebuilder active a
 cache-missing reader NEVER builds inline (TRDD-2R36W8Q1); it waits ≤ 500 ms for the loop and then
 serves `cached_any`. So the loop is a waiting reader's only source of fresh data, and a blind `4d`
-skip shrinks the RYW envelope from `d ≲ 475 ms` to `d ≲ 95 ms` — an ordinary 5k–25k-span dev
-install (100–500 ms per rebuild) would land in the regressed band. The override restores the
-pre-change envelope exactly where it existed. Above the budget the reader was served stale before
-this card too, and honouring the override there would rebuild once per dashboard poll — the churn
-this card removes at precisely the sizes it exists for. **What remains is a larger staleness
-ceiling at large `d`: a reader there sees a summary up to ≈5d old, not ≈d** (20 s rebuild ⇒ up to
-~100 s behind, was ~20 s). Accepted: the alternative was the 84%-of-a-core / 8.7 GB plateau.
+skip shrinks the RYW envelope from `d ≲ 475 ms` (≈237 ms when a pass is already in flight —
+`2d + tick ≤ 500`; that phase is unchanged by this card) to `d ≲ 95 ms` — an ordinary 5k–25k-span
+dev install (100–500 ms per rebuild) would land in the regressed band. The override restores the
+pre-change envelope exactly where it existed, in both phases. Above the budget the reader was served
+stale before this card too, and honouring the override there would rebuild once per dashboard poll
+— the churn this card removes at precisely the sizes it exists for. **What remains is a larger
+staleness ceiling at large `d`: a reader there sees a summary up to ≈5d old, not ≈d** (20 s rebuild
+⇒ up to ~100 s behind, was ~20 s). Accepted: the alternative was the 84%-of-a-core / 8.7 GB plateau.
+
+**Effective cadence while `d ≤ 500 ms` is `min(reader interval, 4d)`, not `4d`.** Every
+cache-missing `summary_now` call under a rebuilder raises the flag, and the pass consumes it at
+its start, so a reader arriving mid-pass re-raises it and the next tick rebuilds again. Internal
+periodic callers (grep of `summary_now(` in `ui.rs`): `run_burn_tick` every **4 s** on every
+install, `push_update` from the coalesced SSE timer only while a dashboard is connected, plus one
+warm-up per GET/HEAD on `/`, `/events`, `/api/*`. So with no client the floor in that band is one
+rebuild per 4 s (d = 300 ms ⇒ ≈7.5% of a core, was 100%); with a 1 s dashboard poll ≈1/s (≈30%,
+vs 20% under a pure `4d` rule). Zero effect at the 20 s sizes this card targets, where
+`took > budget` disables the override.
 
 **Superseded design (2026-09-05, this card as authored): `max(250 ms, 4 × d)` back-off at the gate
 + a waiting-reader counter.** Dropped in two steps, both by review: (1) the floor and the counter
@@ -78,13 +89,18 @@ churn cut.
 
 - [x] `rebuild_once` is skipped while inside the cost-scaled back-off (`4 × d`, no floor), EXCEPT
       when a reader is waiting AND the last rebuild's cost is ≤ `STALE_BUDGET_MS`; unit-tested —
-      arithmetic in `rebuild_backoff_tests` (6), wiring incl. both sides of the override bound in
-      `the_rebuild_loop_skips_a_pass_inside_the_backoff_window`, both mutation-verified (check
-      disabled ⇒ red; override disabled ⇒ red). 30/30 green at `--test-threads=8`.
+      arithmetic in `rebuild_backoff_tests` (6), the consumer half incl. both sides of the override
+      bound in `the_rebuild_loop_skips_a_pass_inside_the_backoff_window`, the producer half (a
+      reader entering the wait raises the flag) asserted in
+      `a_reader_never_rebuilds_when_the_background_rebuilder_owns_it`. Three mutations, each shown
+      red: back-off check disabled; override term disabled; flag producer disabled. 30/30 green at
+      `--test-threads=8` on the landed source.
 - [x] cargo RYW test (`tests/ui.rs::summary_serves_the_stripped_summarizer_output_over_ingested_spans`,
-      `POST /v1/traces` → `GET /api/summary` ≤ 500 ms) green — 41/41 in `--test ui`, 10/10 repeats.
-      Note it runs at `d ≈ 1 ms` and cannot see the 95–475 ms band; that band is covered by the
-      override's wiring test, not by CI end-to-end.
+      `POST /v1/traces` → `GET /api/summary` ≤ 500 ms) green — 41/41 in `--test ui`, 10/10 repeats
+      on the landed source. **Caveat (settled by grep): `tests/ui.rs` and `tests/helpers.rs` never
+      spawn `run_summary_rebuild`, so this test exercises the INLINE reader path, not the
+      production wait-for-the-loop path, and runs at `d ≈ 1 ms`.** The 95–475 ms band and the
+      override are covered only by the unit tests above, not end-to-end.
 - [ ] Live after deploy, 15 min: CPU of alcore ≤ 15% of a core at today's ingest rate (was 84%),
       mimalloc resident ≤ 2 GB (was 8.7 GB) — `vmmap --summary` and `ps`, numbers recorded here.
       **OPEN — the churn cut is asserted from the arithmetic, not measured.** Needs a Rust-core
