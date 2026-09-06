@@ -296,7 +296,9 @@ trace AS (
             AS has_claude_spans,
         arg_min(sess_id, sid) FILTER (WHERE name = 'claude_code.interaction')            AS root_sess_id,
         arg_min(span_id, sid) FILTER (WHERE name = 'claude_code.interaction')            AS root_span_id,
-        arg_min(sess_id, sid) FILTER (WHERE sess_id <> '')                               AS any_sess_id
+        arg_min(start_ms, sid) FILTER (WHERE name = 'claude_code.interaction')           AS root_start_ms,
+        arg_min(sess_id, sid) FILTER (WHERE sess_id <> '')                               AS any_sess_id,
+        min(sid)                                                                          AS trace_ord
     FROM sp
     WHERE trace_id <> ''
     GROUP BY trace_id
@@ -304,6 +306,9 @@ trace AS (
 keyed AS (
     SELECT
         trace_id,
+        has_root,
+        root_start_ms,
+        trace_ord,
         CASE
             WHEN has_root THEN coalesce(nullif(root_sess_id, ''), root_span_id)
             ELSE coalesce(nullif(any_sess_id, ''), 'synth-' || substr(trace_id, 1, 12))
@@ -311,16 +316,31 @@ keyed AS (
     FROM trace
     WHERE has_root OR has_claude_spans
 ),
--- The aggregate half of `build_interaction_card`, then `merge_interaction_slices`' sums. The root
--- interaction span is EXCLUDED (the Rust filters `spanId != interaction.spanId`) and only
+-- ONE ROW PER SLICE CARD (`build_interaction_card`), i.e. per trace. The root interaction span is
+-- EXCLUDED from the visited set (the Rust filters `spanId != interaction.spanId`) and only
 -- `llm_request` / `tool` spans are visited (`top_spans`) — an `api_request` span contributes
 -- neither a call nor a token, which is why `sessB` in the parity fixture reports one LLM call over
 -- two token-carrying spans.
-agg AS (
+--
+-- `model` is `arg_max` BY START TIME, not `arg_min` by file position, and that is not cosmetic:
+-- the Rust loops `top_spans` sorted by start ASC and OVERWRITES `model` on every `llm_request`
+-- that carries one, so the card reports the LAST model of the slice. A session that switches
+-- model mid-way — routine on this machine — is exactly where the two disagree, and
+-- `sql_takes_the_last_model_of_a_slice_like_the_rust_engine` is the test that separates them.
+-- KNOWN EDGE: two `llm_request` spans with the IDENTICAL `startTime` and DIFFERENT models resolve
+-- arbitrarily here, where the Rust's stable sort keeps the later file position. Not chased: it
+-- needs a deterministic file-order key, and `read_ndjson_objects` exposes none.
+--
+-- `start_ms` follows the same split as the session key: a REAL root contributes its own
+-- `startTime` (`build_interaction_card` reads the interaction span), a SYNTHESIZED one the
+-- earliest span in its trace (`sorted[0].startTime`).
+per_trace AS (
     SELECT
         k.session_id,
-        min(sp.start_ms)                                                                 AS start_ms,
-        arg_min(sp.model, sp.sid) FILTER (WHERE sp.name = 'claude_code.llm_request' AND sp.model <> '') AS model,
+        k.trace_ord,
+        CASE WHEN k.has_root THEN k.root_start_ms ELSE min(sp.start_ms) END               AS start_ms,
+        coalesce(arg_max(sp.model, sp.start_ms)
+                 FILTER (WHERE sp.name = 'claude_code.llm_request' AND sp.model <> ''), '') AS model,
         sum(CASE WHEN sp.name = 'claude_code.llm_request' AND sp.in_raw > 0 THEN sp.in_raw ELSE 0 END)  AS input_tokens,
         sum(CASE WHEN sp.name = 'claude_code.llm_request' AND sp.out_raw > 0 THEN sp.out_raw ELSE 0 END) AS output_tokens,
         sum(CASE WHEN sp.name = 'claude_code.llm_request' AND sp.cr_raw > 0 THEN sp.cr_raw ELSE 0 END)  AS cache_read_tokens,
@@ -329,7 +349,27 @@ agg AS (
         count(*) FILTER (WHERE sp.name = 'claude_code.tool')                             AS total_tool_calls,
         count(*) FILTER (WHERE sp.name IN ('claude_code.llm_request', 'claude_code.tool') AND sp.is_error) AS errors
     FROM keyed k JOIN sp USING (trace_id)
-    GROUP BY k.session_id
+    GROUP BY k.session_id, k.trace_id, k.trace_ord, k.has_root, k.root_start_ms
+),
+-- `merge_interaction_slices`: the counters SUM across a session's slices, `startTime` is the
+-- earliest, and `model` is `firstNonEmpty` — the FIRST slice that has one, in slice order.
+-- KNOWN EDGE: slice order is approximated by each trace's first span position, which differs from
+-- the Rust only for a session that mixes a real root with a SYNTHESIZED one (the synth roots are
+-- appended after every real one).
+agg AS (
+    SELECT
+        session_id,
+        min(start_ms)                                                 AS start_ms,
+        arg_min(model, trace_ord) FILTER (WHERE model <> '')          AS model,
+        sum(input_tokens)                                             AS input_tokens,
+        sum(output_tokens)                                            AS output_tokens,
+        sum(cache_read_tokens)                                        AS cache_read_tokens,
+        sum(cache_create_tokens)                                      AS cache_create_tokens,
+        sum(total_llm_calls)                                          AS total_llm_calls,
+        sum(total_tool_calls)                                         AS total_tool_calls,
+        sum(errors)                                                   AS errors
+    FROM per_trace
+    GROUP BY session_id
 )
 SELECT
     session_id,

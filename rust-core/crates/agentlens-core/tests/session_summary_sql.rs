@@ -16,6 +16,12 @@
 //! |---|---|
 //! | `arg_min(val, idx)` → `arg_max` (last duplicate attribute wins) | `sql_mirrors_the_attribute_reader_rules`: `"second-model"` vs `"first-model"` |
 //! | `total_llm_calls` counts `claude_code.api_request` too | BOTH fixture tests: `sessB totalLlmCalls` 2 vs 1 |
+//! | `per_trace`'s `arg_max(model, start_ms)` → `arg_min(model, sid)` (first model in FILE order) | `sql_takes_the_last_model_of_a_slice_like_the_rust_engine`: `"claude-opus-5"` vs `"claude-sonnet-5"` |
+//!
+//! That third row is the one that earns this file: the SQL really did pick the first model in file
+//! order until 2026-09-06, and NEITHER fixture could see it — both carry one `llm_request` per
+//! session, so the first and the last are the same span. A session that switches model mid-way
+//! (routine here) is where it showed, and only a test written for that case finds it.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -194,6 +200,60 @@ fn sql_mirrors_the_attribute_reader_rules() {
     assert_eq!(row.total_tool_calls, f(&card, "totalToolCalls"), "tool spans counted");
     assert_eq!(row.errors, f(&card, "errors"), "status.code 2 is an error");
     assert_eq!(row.errors, 1.0);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// A session whose model CHANGES mid-way — routine on a machine that mixes opus and sonnet in one
+/// session. The card reports the LAST model of the slice, because `build_interaction_card` walks
+/// `top_spans` in start-time order and OVERWRITES `model` on every `llm_request` that carries one.
+///
+/// This is the case the two parity fixtures CANNOT see (one `llm_request` per session there), and
+/// the first version of this SQL got it wrong in a way that would never have reddened: it picked
+/// the first model in FILE order. MUTATION CHECK: change `per_trace`'s `arg_max(sp.model,
+/// sp.start_ms)` back to `arg_min(sp.model, sp.sid)` and this test fails with "first-model".
+#[test]
+fn sql_takes_the_last_model_of_a_slice_like_the_rust_engine() {
+    let spans = vec![
+        serde_json::json!({
+            "traceId": "tm", "spanId": "root", "name": "claude_code.interaction",
+            "startTime": "1755600000000000000",
+            "attributes": [{ "key": "session.id", "value": { "stringValue": "sessM" } }]
+        }),
+        serde_json::json!({
+            "traceId": "tm", "spanId": "c1", "parentSpanId": "root", "name": "claude_code.llm_request",
+            "startTime": "1755600001000000000",
+            "attributes": [
+                { "key": "gen_ai.request.model", "value": { "stringValue": "claude-opus-5" } },
+                { "key": "input_tokens", "value": { "intValue": 10 } }
+            ]
+        }),
+        serde_json::json!({
+            "traceId": "tm", "spanId": "c2", "parentSpanId": "root", "name": "claude_code.llm_request",
+            "startTime": "1755600002000000000",
+            "attributes": [
+                { "key": "gen_ai.request.model", "value": { "stringValue": "claude-sonnet-5" } },
+                { "key": "input_tokens", "value": { "intValue": 20 } }
+            ]
+        }),
+    ];
+    let (dir, file) = write_segment("model", &spans);
+    let mut sql = SessionSummarySql::new();
+    sql.refresh(&[file]);
+    let row = sql.get("sessM").expect("the session row");
+
+    let shared: Vec<Arc<Value>> = spans.into_iter().map(Arc::new).collect();
+    let summary = agentlens_core::summarize::summarizer::summarize_spans(&shared, &|_| None);
+    let card = summary.get("sessions").and_then(Value::as_array).expect("sessions")[0].clone();
+
+    assert_eq!(row.model, s(&card, "model"), "the LAST llm_request's model, by start time");
+    assert_eq!(row.model, "claude-sonnet-5");
+    assert_eq!(row.input_tokens, f(&card, "inputTokens"), "both calls' tokens still sum");
+    assert_eq!(row.input_tokens, 30.0);
+    assert_eq!(row.total_llm_calls, f(&card, "totalLlmCalls"));
+    assert_eq!(row.total_llm_calls, 2.0);
+    // The card's startTime comes from the ROOT interaction span, not from the earliest child.
+    assert_eq!(row.start_ms, chrono_parse_ms(&s(&card, "startTime")), "root's own start");
+    assert_eq!(row.start_ms, 1_755_600_000_000.0);
     let _ = std::fs::remove_dir_all(dir);
 }
 
