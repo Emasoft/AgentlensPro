@@ -105,6 +105,9 @@ delete `boot_load` → `SpanWindow` → the rebuild loop, one phase per file gro
       `tests/ui.rs` 41, `summarize_parity` 1, `update_payload_parity` 1, `otlp` 4,
       `received_at_stamp` 2, `span_window` 3, `session_summary_sql` 5 — all green, and
       `cargo clippy -p agentlens-core --all-targets -- -D warnings` clean, on `7d1fbd76`.
+      Full sweep: **105 binaries, 623 passed, 0 failed** — and 623 reconciles exactly against the
+      617 baseline (+5 `session_summary_sql`, +1 `load_range_…`; the two retargeted tests were
+      renamed, not added), which is the check that no test was dropped with `boot_load`.
 - [ ] Boot time and steady-state RSS recorded; RSS after 24 h under a bound the advisor sets
       (7YPQWKPG acceptance). **Stays for main's live measurement after deploy — this worker does
       not deploy, codesign or restart.**
