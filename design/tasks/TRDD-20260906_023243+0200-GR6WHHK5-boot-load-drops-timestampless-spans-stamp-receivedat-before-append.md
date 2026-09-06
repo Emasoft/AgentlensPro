@@ -12,7 +12,7 @@ scope: project
 project-id: agentlenspro
 npt: []
 eht: []
-implementation-commits: []
+implementation-commits: [58abca7f]
 relevant-files: [rust-core/crates/agentlens-core/src/lib.rs, rust-core/crates/agentlens-core/src/span_window.rs, rust-core/crates/agentlens-core/src/writer.rs, rust-core/crates/agentlens-core/src/summarize/codex.rs]
 labels: [rust-core, memory, span-window, boot-load]
 ---
