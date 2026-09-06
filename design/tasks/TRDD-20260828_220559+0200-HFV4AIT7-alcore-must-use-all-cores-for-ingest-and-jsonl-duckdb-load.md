@@ -3,7 +3,7 @@ trdd-id: HFV4AIT7
 title: Measure and guarantee that alcore uses all CPU cores for telemetry and hook ingest and for the JSONL to DuckDB load
 column: dev
 created: 2026-08-28T22:05:59+0200
-updated: 2026-09-05T07:02:45+0200
+updated: 2026-09-06T02:16:58+0200
 current-owner: claude-agentlenspro
 task-type: audit
 project-id: agentlenspro
@@ -29,6 +29,37 @@ NEXT ACTION: write that script, then re-run boxes 2 and 3 against it.
 argument "no code work remains, only a runtime check": here code work DOES remain — box 1's
 harness has to be written before boxes 2 and 3 can be measured at all. Once that script exists,
 this card belongs in `testing`.
+
+**2026-09-06T02:16:58+0200 — box 1 harness written, NOT yet run for real.** New script:
+`scripts/bench/alcore_core_utilization.py` (`uv run`, PEP 723, stdlib-only). It orchestrates all
+three load paths from the "What to measure" section against ONE isolated `--data-dir`/`--home`:
+(1) OTLP ingest and (2) hook events, each by reusing `scripts/bench/alcore-ingest-flood.mjs`
+while sampling `ps -o %cpu=` on the server pid (read from `<data-dir>/server.pid`, both pid_lock
+shapes) once per second; (3) the cold JSONL→DuckDB boot scan, by starting a fresh `alcore serve`
+(log-scan ON) against `--home`'s `.claude/projects` and sampling cores from launch until
+`/api/summary` answers 200. Cores-busy = `%cpu / 100` (macOS convention this card already used
+elsewhere). Writes one JSON report (`--out`, default `reports/bench/<ts>-alcore-core-utilization.json`)
+with per-path `{cores: {meanCores,maxCores,samples,ncpu}, throughput|bootSeconds}`, plus raw
+per-second sample files beside it — nothing here interprets PASS/FAIL, that is boxes 2/3.
+
+**Verified this session (no build, no restart of the live server, per this dispatch's
+constraints):** `uv run scripts/bench/alcore_core_utilization.py --help` (exit 0, full flag
+list) and `--dry-run` (exit 0, prints the 9-step plan with no side effects) and `--self-test`
+(exit 0, `{"selfTest": "pass", "meanCores": 0.045, "maxCores": 0.129, "samples": 5, "ncpu": 14}`
+— exercises the sampler against this process for 1s). **NOT run**: the real three-path
+measurement — it needs a release `alcore` build (`cargo build --release -p agentlens-core --bin
+alcore`, `codesign -s - --force` per `agentlenspro-ops-lessons`) and a copy of a real
+`~/.claude/projects` corpus under `--home`, both explicitly out of scope for this dispatch (a
+`cargo test` was running and the live collector must not be touched). Box 1 is now met by this
+script's existence + the dry-run/self-test proof it runs; **box 1's checkbox stays unticked**
+until a real run's report path is recorded here, since the acceptance text requires "its output
+is committed as a report path in this card" — that has not happened yet.
+
+NEXT ACTION: build the release `alcore` binary (idle window, not this dispatch), copy a real
+`.claude/projects` corpus into a throwaway `--home`, run
+`uv run scripts/bench/alcore_core_utilization.py --out reports/bench/<ts>-alcore-core-utilization.json`,
+paste the resulting report path here, tick box 1, then read boxes 2/3 off its `paths.*.cores`
+and `paths.cold_jsonl_load.bootSeconds` fields.
 
 > **▶ CURRENT STATE IS THE "BOTH ITEMS RESOLVED" BLOCK FURTHER DOWN (2026-08-29 18:30). Everything
 > from here to it is the investigation trail, kept for provenance, and it contains two conclusions
