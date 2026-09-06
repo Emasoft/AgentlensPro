@@ -171,6 +171,11 @@ impl CardStore {
     /// cards are skipped, which is what makes a second pass idempotent (the truncation counter
     /// accumulates, so re-stripping an empty timeline would still be a no-op, but not re-reading
     /// and re-writing 30k unchanged rows is the point).
+    ///
+    /// The window operator carries `session_id` and the sort keys ONLY, and the card text is
+    /// joined back afterwards for the few rows that survive the filter. Ranking with `card` inside
+    /// the CTE would materialize the whole corpus on every sweep — the transient churn that is
+    /// this card's whole subject.
     pub fn demote_cold(&mut self, hot_cards: usize) {
         if self.len() <= hot_cards {
             return;
@@ -178,11 +183,13 @@ impl CardStore {
         let mut stmt = self
             .conn
             .prepare(
-                "SELECT session_id, card FROM (
-                     SELECT session_id, card, timeline_len,
-                            row_number() OVER (ORDER BY last_active_ms DESC, seq ASC) AS rn
+                "WITH ranked AS (
+                     SELECT session_id, row_number() OVER (ORDER BY last_active_ms DESC, seq ASC) AS rn
                      FROM cards
-                 ) WHERE rn > ? AND timeline_len > 0",
+                 )
+                 SELECT c.session_id, c.card
+                 FROM cards c JOIN ranked r USING (session_id)
+                 WHERE r.rn > ? AND c.timeline_len > 0",
             )
             .expect("prepare the demotion scan");
         let rows = stmt
