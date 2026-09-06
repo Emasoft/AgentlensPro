@@ -202,3 +202,34 @@ fn the_table_agrees_with_the_map_it_replaces() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The reason `seq` exists, asserted through the SERVED shape rather than the store's own API.
+///
+/// `summary_over` sorts the merged card list by `startTime` with a STABLE `sort_by`, so a group of
+/// cards sharing one `startTime` comes out in the order the corpus yielded them — first-insert
+/// order. Nothing else in the suite covers that: every other fixture has distinct start times, so
+/// an unordered scan would pass them all and change `/api/summary` for the tie group only.
+#[test]
+fn cards_sharing_a_start_time_are_served_in_first_insert_order() {
+    let dir = std::env::temp_dir().join(format!("al-cardstore-tie-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut st = agentlens_core::CoreState::open(&dir);
+
+    for id in ["tie-1", "tie-2", "tie-3", "tie-4"] {
+        st.put_log_session(card(id, "2026-08-01T10:00:00.000Z", 0.0, 0));
+    }
+    // An upsert in the middle must not promote its card to the end of the tie group.
+    st.put_log_session(card("tie-2", "2026-08-01T10:00:00.000Z", 0.0, 1));
+
+    let summary = st.session_summary(agentlens_core::now_ms() as f64);
+    let served: Vec<String> = summary["sessions"]
+        .as_array()
+        .expect("sessions array")
+        .iter()
+        .map(|c| c["sessionId"].as_str().unwrap_or_default().to_owned())
+        .collect();
+    assert_eq!(served, ["tie-1", "tie-2", "tie-3", "tie-4"]);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

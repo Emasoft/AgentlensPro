@@ -131,7 +131,14 @@ pub struct Counters {
 pub struct SummaryInputs {
     pub version: u64,
     pub spans: Vec<Arc<Value>>,
-    pub log_sessions: IndexMap<String, Arc<Value>>,
+    /// The card corpus as its RAW stored JSON, in first-insert order (TRDD-XTFDRTH2).
+    ///
+    /// Strings, not `Value`s, because the DuckDB connection lives inside `CoreState` and can only
+    /// be read under the state lock: copying the stored text is the cheapest thing that can cross
+    /// that boundary, and the PARSE — the expensive half, and the one that allocates a tree per
+    /// card — then happens in `summary_from`, off the lock. Handing `Value`s here would drag the
+    /// whole deserialization back under the guard that TRDD-HFV4AIT7 emptied.
+    pub log_cards: Vec<String>,
     /// The session→account map the summarizer resolves `accountId` through (TRDD-465EXTJ6).
     ///
     /// It has to travel IN the snapshot: `summary_over` is deliberately a free function with no
@@ -183,9 +190,12 @@ pub struct CoreState {
     /// served summary under the feed-collision doctrine (feed_merge.rs). Fed by the log reader
     /// (log_reader.rs); `put_log_session` is the one write path and bumps data_version. An
     /// IndexMap: insertion order kept like the JS Map, O(1) upsert (a 13k-card boot would be
-    /// quadratic on a Vec). `Arc` per card for the same reason the window holds `Arc`s
-    /// (TRDD-HFV4AIT7): `summary_snapshot` has to copy this map under the lock so the rebuild can
-    /// run outside it, and a deep clone of 13k cards there would be the stall it removes.
+    /// quadratic on a Vec).
+    ///
+    /// **BEING RETIRED (TRDD-XTFDRTH2).** The summary path no longer reads it — `cards` below is
+    /// the corpus. What is left are the `contains_key` probes in `ui.rs`/`import_card.rs`, the
+    /// `len()` in `server_stats.rs`, and the persist scan in `log_reader.rs`; the field goes when
+    /// the last of them moves.
     pub log_sessions: IndexMap<String, Arc<Value>>,
     /// TRDD-XTFDRTH2 — the card corpus in a DuckDB table, the replacement for `log_sessions`.
     ///
@@ -338,25 +348,29 @@ impl CoreState {
     /// computeSessionSummary (server.ts:2240) — summarizeSpans over the live window, then, when
     /// any log session exists, the feed-collision merge + the subagent link, sorted newest-first.
     pub fn session_summary(&self, now_ms: f64) -> Value {
-        Self::summary_over(&self.window.spans, &self.log_sessions, &self.accounts.snapshot(), now_ms).0
+        Self::summary_over(&self.window.spans, self.cards.cards(), &self.accounts.snapshot(), now_ms).0
     }
 
     /// The inputs of one summary rebuild, copied under the state lock so the rebuild itself runs
-    /// OUTSIDE it (TRDD-HFV4AIT7). Both containers hold `Arc`s, so this is a pointer copy per
-    /// element, not a deep clone of the window.
+    /// OUTSIDE it (TRDD-HFV4AIT7). The spans are `Arc`s, so that half is a pointer copy; the cards
+    /// are their raw stored JSON, so that half is a string copy and NOT a 32k-tree deserialization
+    /// (see `SummaryInputs::log_cards`).
     pub fn summary_snapshot(&self) -> SummaryInputs {
         SummaryInputs {
             version: self.data_version,
             spans: self.window.spans.clone(),
-            log_sessions: self.log_sessions.clone(),
+            log_cards: self.cards.cards_json(),
             accounts: Arc::new(self.accounts.snapshot()),
         }
     }
 
     /// The off-lock half: `summary_over` on a snapshot. Free function shape on purpose — it takes
-    /// no `&self`, so it cannot accidentally be called while the lock is held.
+    /// no `&self`, so it cannot accidentally be called while the lock is held. The card parse
+    /// happens HERE, which is why the snapshot carries text.
     pub fn summary_from(inputs: &SummaryInputs, now_ms: f64) -> (Value, IndexMap<String, Vec<Value>>) {
-        Self::summary_over(&inputs.spans, &inputs.log_sessions, &inputs.accounts, now_ms)
+        let cards: Vec<Value> =
+            inputs.log_cards.iter().map(|j| serde_json::from_str(j).expect("a stored session card parses")).collect();
+        Self::summary_over(&inputs.spans, cards, &inputs.accounts, now_ms)
     }
 
     /// Store a summary built off the lock, together with the attribution map built WITH it. The
@@ -377,7 +391,7 @@ impl CoreState {
     /// `/api/timeline` graft still has them after the merge displaces the OTEL twin.
     fn summary_over(
         spans: &[Arc<Value>],
-        log_sessions: &IndexMap<String, Arc<Value>>,
+        log_cards: Vec<Value>,
         accounts: &IndexMap<String, String>,
         now_ms: f64,
     ) -> (Value, IndexMap<String, Vec<Value>>) {
@@ -406,12 +420,13 @@ impl CoreState {
                 }
             }
         }
-        if !log_sessions.is_empty() {
+        if !log_cards.is_empty() {
             let otel: Vec<Value> = summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
-            // The merge REWRITES the cards it keeps, so this deep clone stays — but it now runs
-            // off the state lock (ui::summary_now), which is what made it affordable.
-            let logs: Vec<Value> = log_sessions.values().map(|c| (**c).clone()).collect();
-            let mut merged = feed_merge::link_subagent_transcripts(feed_merge::merge_otel_and_log_sessions(otel, logs));
+            // The merge REWRITES the cards it keeps, and it now receives them by VALUE: the caller
+            // parsed them out of the card table, so this function owns the only copy and the deep
+            // clone the `Arc<Value>` map forced here is gone (TRDD-XTFDRTH2).
+            let mut merged =
+                feed_merge::link_subagent_transcripts(feed_merge::merge_otel_and_log_sessions(otel, log_cards));
             // Date.parse(b.startTime || '0') - Date.parse(a.startTime || '0'), newest first.
             merged.sort_by(|a, b| {
                 let k = |c: &Value| {
@@ -441,10 +456,10 @@ impl CoreState {
         // Disjoint field borrows: the cache + side-map are written, the inputs are read.
         // `accounts` joins the disjoint-borrow list for the same reason as the rest: it is READ
         // here while the cache + side-map are written (TRDD-465EXTJ6).
-        let Self { summary_cache, window, log_sessions, data_version, otel_attribution, accounts, .. } = self;
+        let Self { summary_cache, window, cards, data_version, otel_attribution, accounts, .. } = self;
         let accounts = accounts.snapshot();
         summary_cache.get(*data_version, || {
-            let (summary, attribution) = Self::summary_over(&window.spans, log_sessions, &accounts, now_ms);
+            let (summary, attribution) = Self::summary_over(&window.spans, cards.cards(), &accounts, now_ms);
             *otel_attribution = attribution;
             summary
         })
