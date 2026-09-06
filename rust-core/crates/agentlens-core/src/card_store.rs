@@ -34,7 +34,7 @@
 use indexmap::IndexMap;
 use serde_json::Value;
 
-use agentlens_store::duckdb::Connection;
+use agentlens_store::duckdb::{Connection, OptionalExt};
 
 /// The one table. `card` is JSON TEXT, not DuckDB's `JSON` type: the served bytes must be
 /// byte-identical to what the TS server produced, and a `JSON` column normalizes (it re-emits the
@@ -74,6 +74,19 @@ impl CardStore {
         // RAM) stays as the backstop.
         conn.execute_batch(&format!("SET threads=2; {SCHEMA};")).expect("create the card store schema");
         CardStore { conn, next_seq: 0 }
+    }
+
+    /// Wrap a bulk-insert caller in one transaction. `put` itself stays autocommit — the
+    /// incremental ingest path (one card at a time, as logs tail in) is unaffected — but the boot
+    /// restore replays ~32k cards through `put` in a loop, and DuckDB commits each autocommit
+    /// statement individually. One explicit transaction around the whole restore is the
+    /// DuckDB-idiomatic bulk-load path; call `commit` once every card has been `put`.
+    pub fn begin(&self) {
+        self.conn.execute_batch("BEGIN TRANSACTION").expect("begin a card store transaction");
+    }
+
+    pub fn commit(&self) {
+        self.conn.execute_batch("COMMIT").expect("commit a card store transaction");
     }
 
     /// putLogSession's storage half — upsert by sessionId.
@@ -117,11 +130,17 @@ impl CardStore {
 
     /// One card, parsed. `None` when the id is unknown — the `contains_key` + index pair the
     /// callers used becomes a single lookup.
+    ///
+    /// `.ok()` used to sit here, which silently maps ANY error (a corrupt table, a bad
+    /// connection, a dropped column) to "card not found" — a fail-fast violation, since the
+    /// module's whole doctrine is to panic rather than swallow a card. `optional()` maps only
+    /// `QueryReturnedNoRows` to `Ok(None)`; every other error still propagates to `.expect()`.
     pub fn get(&self, session_id: &str) -> Option<Value> {
         let raw: Option<String> = self
             .conn
             .query_row("SELECT card FROM cards WHERE session_id = ?", [session_id], |r| r.get::<_, String>(0))
-            .ok();
+            .optional()
+            .expect("look up a session card");
         raw.map(|j| parse(&j))
     }
 
@@ -216,4 +235,20 @@ impl CardStore {
 /// means the table was corrupted in memory, which is not a condition to paper over.
 fn parse(json: &str) -> Value {
     serde_json::from_str(json).expect("a stored session card parses")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A real DB error (here: the table is gone) must panic, not be swallowed into `None` — the
+    /// bug `.ok()` used to cause. `conn` is private, so this lives in-module rather than in the
+    /// integration test file, which only ever sees a healthy store.
+    #[test]
+    #[should_panic(expected = "look up a session card")]
+    fn get_panics_on_a_real_db_error_instead_of_reporting_not_found() {
+        let store = CardStore::new();
+        store.conn.execute_batch("DROP TABLE cards").expect("drop the table for the test");
+        store.get("anything");
+    }
 }
