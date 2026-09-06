@@ -832,7 +832,7 @@ fn record_ingest_profile(parse_ns: u64, wait_ns: u64, held_ns: u64) {
 
 pub fn ingest_parsed(state: &mut CoreState, kind: &'static str, payload: Value, path: &str) {
     let now = now_ms();
-    let spans: Vec<Value> = match kind {
+    let mut spans: Vec<Value> = match kind {
         "traces" => {
             state.counters.traces_payloads += 1;
             state.ingest.process_traces(payload, path)
@@ -872,7 +872,11 @@ pub fn ingest_parsed(state: &mut CoreState, kind: &'static str, payload: Value, 
         }
         _ => Vec::new(),
     };
-    for span in &spans {
+    // Stamp arrival BEFORE the store append (TRDD-GR6WHHK5): `append` writes the line as it
+    // stands, so a span stamped only by `window.add` below persisted with no timestamp at all.
+    // Same `now` for both copies — one clock read per payload, one stamping helper.
+    for span in &mut spans {
+        span_window::stamp_received_at(span, now);
         state.writer.append(span, now);
         state.counters.spans_appended += 1;
     }

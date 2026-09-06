@@ -102,20 +102,32 @@ fn any_non_post_is_a_bare_200() {
 
 #[test]
 fn post_traces_lands_spans_in_the_store_and_answers_empty_200() {
-    let (addr, state, dir) = start_server();
+    let (addr, state, _dir) = start_server();
+    let t0 = agentlens_core::now_ms();
     let r = post(addr, "/v1/traces", &trace_payload("sess-core-1"));
     assert!(r.starts_with("HTTP/1.1 200"), "POST answers 200: {r}");
     assert!(r.ends_with("\r\n\r\n") || r.contains("content-length: 0"), "empty body: {r}");
     // The HTTP path no longer flushes per payload (TRDD-HFV4AIT7: one fsync per request under
     // the state lock capped ingest at ~131 req/s on one core); durability is the 5 s tick in
     // chores.rs, which this harness does not run — so flush through the same state handle the
-    // tick would, then read the day segment (keyed on the span's own startTime,
-    // 1755504000000000000 ns = 2025-08-18T08:00:00Z).
+    // tick would, then read the span back.
+    //
+    // The read is a RANGE QUERY over arrival time, which is what boot load does — not a filename.
+    // This assertion used to name `2025-08-18.ndjson`, the day of the payload's own startTime
+    // (1755504000000000000 ns), and that encoded the port's inverted stamp order: ingest appended
+    // BEFORE `receivedAt` was stamped, so the disk copy carried no arrival time at all and bucketed
+    // by whatever the span itself claimed. The TS this ports (server.ts `addSpan`) stamped first
+    // and appended second, and `span_timestamp_ms` prefers `receivedAt` — so a span buckets by
+    // WHEN IT ARRIVED. See TRDD-GR6WHHK5.
     state.lock().unwrap().flush_spans();
-    let seg = dir.path.join("spans").join("2025-08-18.ndjson");
-    let text = std::fs::read_to_string(&seg).expect("segment written");
-    assert!(text.contains("sess-core-1"), "span persisted: {text}");
-    assert_eq!(state.lock().unwrap().counters.spans_appended, 1);
+    let t1 = agentlens_core::now_ms();
+    let mut st = state.lock().unwrap();
+    let found = st.writer.load_range(t0 - 1, t1 + 1, t1);
+    assert_eq!(found.len(), 1, "the arrival-time range query finds the span: {found:?}");
+    assert!(found[0].to_string().contains("sess-core-1"), "span persisted: {:?}", found[0]);
+    let received = found[0]["receivedAt"].as_i64().expect("the disk copy carries its arrival time");
+    assert!((t0..=t1).contains(&received), "receivedAt is the ingest clock: {t0} <= {received} <= {t1}");
+    assert_eq!(st.counters.spans_appended, 1);
 }
 
 #[test]
