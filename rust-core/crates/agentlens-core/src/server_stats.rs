@@ -648,7 +648,7 @@ pub fn server_stats(st: &CoreState, now_ms: i64) -> Value {
             "droppedOnFailure": st.writer.dropped_on_failure(),
             "store": { "segments": segments, "totalSpans": total_spans, "totalBytes": total_bytes },
         },
-        "logSessions": st.log_sessions.len(),
+        "logSessions": st.cards.len(),
         "persistence": {
             "spanAppendWrites": p.span_append_writes, "spanAppendBytes": p.span_append_bytes,
             "offsetsWrites": p.offsets_writes, "offsetsBytes": p.offsets_bytes,

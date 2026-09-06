@@ -82,7 +82,7 @@ pub fn import_sessions(state: &mut crate::CoreState, sessions: &[Value], now_ms:
         if !s.get("source").and_then(Value::as_str).is_some_and(|src| VALID_SOURCES.contains(&src)) {
             continue;
         }
-        if state.log_sessions.contains_key(id) {
+        if state.cards.contains(id) {
             skipped += 1;
             continue;
         }
