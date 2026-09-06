@@ -3,7 +3,7 @@ trdd-id: 7YPQWKPG
 title: DuckDB is the memory and alcore keeps no resident data model
 column: dev
 created: 2026-09-02T22:05:41+0200
-updated: 2026-09-05T22:06:10+0200
+updated: 2026-09-06T04:42:39+0200
 current-owner: main-session
 task-type: refactor
 priority: critical
@@ -16,7 +16,7 @@ approved-by: user
 approved-at: 2026-09-02T22:05:41+0200
 ---
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-05T22:06:10+0200
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-06T04:42:39+0200
 
 **RE-ISSUED BY THE USER 2026-09-05 22:00 and moved `todo → dev`.** Verbatim: *"why the hell alcore
 is using 17Gb of ram??? haven't i told you to make duckdb the only memory of agentlenspro? why there
@@ -41,10 +41,24 @@ structures < 1 GB, the rest is rebuild churn + the unpruned window.
 DuckDB table, `todo`, NPT on the two above) → FSMISF5K (summaries as DuckDB SQL, delete
 `SpanWindow`/`boot_load`, `todo`, NPT on XTFDRTH2). The log scan → `read_json_auto` replacement
 (inventory item 5) stays inside this card's own acceptance and is sequenced after FSMISF5K.
-**NEXT ACTION:** land YILE6N3T + 7RM5YW2T, deploy, re-measure RSS/CPU on the live server, then start
-XTFDRTH2. The advisor's card contradictions (a) are resolved by the children's shapes: log readers
-are replaced last (inventory item 5), routes stay identical in shape (no paging in this card),
-freshness = RYW ≤ 500 ms kept by 7RM5YW2T's design.
+**Measured 2026-09-06 on pid 78233 (after YILE6N3T + 7RM5YW2T + XTFDRTH2 deployed), ✓ VERIFIED by main:**
+RSS 10.7 GB but `vmmap` Physical footprint **2.8 GB** (peak 13.2 GB); IOAccelerator (= the mimalloc
+heap) 9.5 GB reserved / 7.0 GB resident / **1.9 GB dirty**. The ~8 GB gap is freed pages mimalloc
+has MADV_FREE'd that macOS keeps in RSS until memory pressure — INFERRED mechanism, resident-clean
+numbers measured. The "17 GB" the USER saw is mostly this residue, not live data.
+What sets the high-water mark: the boot replay still parses **528,219 spans** into `window.spans`
+at startup (peak 13.2 GB), then prunes to the 5-min window (309 resident). Second contributor: the
+summary rebuild re-scans + re-parses all 33k cards every ~1.73 s (0.58/s), a ~0.7 GB sawtooth and
+the reason 7RM5YW2T's CPU box MISSED (57–65% of a core vs ≤15%).
+Both are owned by **FSMISF5K** (delete `SpanWindow`/`boot_load`, summaries as DuckDB SQL). Evidence:
+reports/7ypqwkpg/20260906_043059+0200-heap-by-structure-after-xtfdrth2.md,
+reports/7ypqwkpg/20260906_043240+0200-t15-verdict-xtfdrth2.md,
+reports/7ypqwkpg/20260906_031902+0200-t15-verdict.md.
+Children status: YILE6N3T testing (live box PASS), 7RM5YW2T testing (live box MISS, deferred to
+FSMISF5K), XTFDRTH2 ai_review (merged ac289d8d), GR6WHHK5 testing (merged c89148ce).
+**NEXT ACTION:** FSMISF5K dispatched (kraken, worktree). After it lands + deploys: re-measure
+footprint AND RSS; expect peak ≤ 3 GB and CPU ≤ 15%. If RSS still carries MADV_FREE residue,
+evaluate `MIMALLOC_PURGE_DELAY=0` / eager decommit as a one-line knob card, not a refactor.
 
 ## WHY
 
