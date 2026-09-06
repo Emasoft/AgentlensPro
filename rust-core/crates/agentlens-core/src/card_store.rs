@@ -6,7 +6,32 @@
 //! cards as `serde_json::Value` trees — a shape whose in-RAM cost is several times its own JSON
 //! text (a `Map` node plus an owned `String` per key, per card) — and it was measured as one of
 //! the three contributors to the 8.7 GB mimalloc heap. Here the corpus is JSON TEXT in one
-//! long-lived in-memory DuckDB connection; a reader gets a `Vec` it drops when it is done.
+//! long-lived DuckDB connection; a reader gets a `Vec` it drops when it is done.
+//!
+//! ## TRDD-TOIM26HP — the database is a FILE under the data dir, and it is REPLACED at every boot
+//!
+//! XTFDRTH2 landed this table in `Connection::open_in_memory()`, so the corpus was still 100%
+//! resident: the win was the SHAPE of the bytes, not their residency. `<data_dir>/cards.duckdb`
+//! hands the residency decision to DuckDB's buffer pool, and [`MEMORY_LIMIT`] is what makes that
+//! decision bounded instead of "whatever DuckDB feels like".
+//!
+//! It is a SPILL file, not a durable store — `open` deletes the previous boot's database before
+//! opening, and drops the table if the delete could not happen. Two reasons, and the first is a
+//! correctness one:
+//!
+//! 1. `DurableState::restore` (log_reader.rs) treats a stale `LOG_INGEST_VERSION` as "restore
+//!    nothing, cold-rescan", and it does NOT clear the card store — it never had to, because a
+//!    fresh `CoreState` always had an empty one. A database that outlived the process would keep
+//!    serving cards built under the OLD ingest semantics, and the version stamp — the ONLY
+//!    mechanism that exists to invalidate them — would silently stop working.
+//! 2. A `CoreState` is not a singleton in tests: `tests/log_reader_parity.rs` opens four of them
+//!    over one data dir, with the earlier ones still alive. Deleting the file first gives each one
+//!    its own inode instead of four live writers on one database.
+//!
+//! Because every boot starts empty, the delta-log replay is unchanged and its idempotency question
+//! does not arise (it is upsert-idempotent regardless — `ON CONFLICT DO UPDATE`). Reusing a
+//! previous boot's corpus would remove the replay entirely, but it must first wire that version
+//! gate into this constructor; that is a follow-up, not a change this module can make alone.
 //!
 //! ## What `IndexMap` used to provide for free, and now has to be built
 //!
@@ -25,16 +50,36 @@
 //!
 //! ## Fail-fast
 //!
-//! Every statement here runs against a process-local in-memory database with a fixed schema and
+//! Every statement here runs against a process-local database with a fixed schema and
 //! bound parameters: a failure is a bug or an OOM, never a recoverable condition, and the callers
 //! (`put_log_session`, `demote_cold_timelines`) have no error channel to report one through. So
 //! this module panics with the offending SQL rather than swallowing a card, which would lose
 //! telemetry silently — the failure mode this project treats as worse than a crash.
 
+use std::path::Path;
+
 use indexmap::IndexMap;
 use serde_json::Value;
 
 use agentlens_store::duckdb::{Connection, OptionalExt};
+
+/// The card database's name under the data dir. Public because it is an on-disk artifact the ops
+/// docs and the tests both name, and one constant is what keeps those two from drifting.
+pub const CARD_DB_FILE: &str = "cards.duckdb";
+
+/// The buffer pool's ceiling. This is the whole point of the file: the corpus lives on disk and
+/// DuckDB keeps at most this much of it resident.
+///
+/// WATCH THE SORT. `cards_json` is `ORDER BY seq` over the whole table and runs on every summary
+/// rebuild, and the sort carries the card TEXT as its payload — so a corpus larger than this limit
+/// spills to `<data_dir>/cards.duckdb.tmp` on every rebuild (latency on the hot path, plus device
+/// writes). If `du -sh` on the file ever passes this number, raise it here — `statusline_store.rs`
+/// already runs its connection at 2GB.
+///
+/// `MiB`, not `MB`: DuckDB takes `MB` as 10^6 and then REPORTS the setting back in MiB, so a
+/// `'256MB'` limit reads as `244.1 MiB` — a number that matches nothing anyone wrote down. Binary
+/// units keep the constant, the setting, and `current_setting('memory_limit')` all saying 256.
+const MEMORY_LIMIT: &str = "256MiB";
 
 /// The one table. `card` is JSON TEXT, not DuckDB's `JSON` type: the served bytes must be
 /// byte-identical to what the TS server produced, and a `JSON` column normalizes (it re-emits the
@@ -57,22 +102,35 @@ pub struct CardStore {
     next_seq: i64,
 }
 
-impl Default for CardStore {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl CardStore {
-    pub fn new() -> CardStore {
-        let conn = Connection::open_in_memory().expect("open the in-memory card store");
+    /// Open `<data_dir>/cards.duckdb`, EMPTY. See the module header for why a previous boot's
+    /// corpus is never reused.
+    ///
+    /// No `Default`: a card store without a data dir is not a thing, and the impl only ever
+    /// existed to satisfy clippy's `new_without_default`, which does not apply to a constructor
+    /// that takes an argument.
+    pub fn open(data_dir: &Path) -> CardStore {
+        std::fs::create_dir_all(data_dir).expect("create the data dir for the card store");
+        let path = data_dir.join(CARD_DB_FILE);
+        // Best-effort: a missing file is the NORMAL case (first boot), so this cannot be an
+        // `expect`. The `DROP TABLE IF EXISTS` below is what actually guarantees an empty corpus —
+        // deleting the file is how each store gets its OWN inode, which is what keeps two live
+        // stores over one data dir from sharing a database (and a WAL).
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(data_dir.join(format!("{CARD_DB_FILE}.wal")));
+        let conn =
+            Connection::open(&path).unwrap_or_else(|e| panic!("open the card store at {}: {e}", path.display()));
         // `threads=2` matches statusline_store's connection: these are point queries and a
         // 32k-row sort, not an analytical scan, and a per-connection thread pool sized to the
         // machine would be pure overhead in a process that already runs its own executor.
-        // NO memory_limit override: this table IS the server's card corpus, so a limit would turn
-        // "a big machine" into "the server lost cards". DuckDB's own default (a fraction of system
-        // RAM) stays as the backstop.
-        conn.execute_batch(&format!("SET threads=2; {SCHEMA};")).expect("create the card store schema");
+        //
+        // NOT `SET temp_directory=''` (which the Parquet stores use to make an over-limit query
+        // FAIL rather than spill): here a spill is the intended behaviour of a bounded buffer
+        // pool, and failing the summary rebuild instead would lose the whole corpus from the wire.
+        conn.execute_batch(&format!(
+            "SET memory_limit='{MEMORY_LIMIT}'; SET threads=2; DROP TABLE IF EXISTS cards; {SCHEMA};"
+        ))
+        .expect("create the card store schema");
         CardStore { conn, next_seq: 0 }
     }
 
@@ -241,14 +299,37 @@ fn parse(json: &str) -> Value {
 mod tests {
     use super::*;
 
+    fn data_dir(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("al-cardstore-unit-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        dir
+    }
+
     /// A real DB error (here: the table is gone) must panic, not be swallowed into `None` — the
     /// bug `.ok()` used to cause. `conn` is private, so this lives in-module rather than in the
     /// integration test file, which only ever sees a healthy store.
     #[test]
     #[should_panic(expected = "look up a session card")]
     fn get_panics_on_a_real_db_error_instead_of_reporting_not_found() {
-        let store = CardStore::new();
+        let store = CardStore::open(&data_dir("dberror"));
         store.conn.execute_batch("DROP TABLE cards").expect("drop the table for the test");
         store.get("anything");
+    }
+
+    /// TRDD-TOIM26HP — the connection's memory is BOUNDED. Without this the file would be a pure
+    /// cost: DuckDB's default limit is a fraction of system RAM, so on this machine the buffer
+    /// pool would happily keep the entire corpus resident and the card would have changed nothing
+    /// it set out to change. Asserted here because `conn` is private.
+    #[test]
+    fn the_connection_is_bounded_and_uses_two_threads() {
+        let store = CardStore::open(&data_dir("settings"));
+        let mem: String = store
+            .conn
+            .query_row("SELECT current_setting('memory_limit')", [], |r| r.get(0))
+            .expect("read back memory_limit");
+        assert!(mem.starts_with("256"), "the buffer pool must be capped at {MEMORY_LIMIT}, got {mem}");
+        let threads: i64 =
+            store.conn.query_row("SELECT current_setting('threads')", [], |r| r.get(0)).expect("read back threads");
+        assert_eq!(threads, 2);
     }
 }
