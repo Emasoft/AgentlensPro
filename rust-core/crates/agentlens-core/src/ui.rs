@@ -98,8 +98,10 @@ fn sse_frame(payload: &str) -> Bytes {
 ///
 /// The comment this replaces said two readers computing the same version was "wasted CPU, never a
 /// stalled ingest". The CPU half was right and the cost was wrong: each in-flight rebuild holds its
-/// own `SummaryInputs` snapshot (a `Vec<Arc<Value>>` over the whole window plus a clone of
-/// `log_sessions`) AND the per-session card set it is building, while the previous summary stays
+/// own `SummaryInputs` snapshot (a `Vec<Arc<Value>>` over the whole window plus, since
+/// TRDD-XTFDRTH2, a `Vec<String>` of the card corpus read out of the card table — it used to be a
+/// clone of the resident card map) AND the per-session card set it is building, while the previous
+/// summary stays
 /// alive until `store_summary` swaps it. So concurrent rebuilds cost N COMPLETE COPIES of the
 /// derived state, not N times the CPU. Measured: `MIMALLOC_SHOW_STATS=1` reported **26.3 GiB
 /// committed** with the window capped at 200,000 spans (~300 MB) and the writer buffer empty —
@@ -777,7 +779,7 @@ pub(crate) async fn compositions_in_scope(state: &Arc<Mutex<CoreState>>, scope: 
 /// exploits; the pieces are shared so the two drivers cannot drift into two different answers.
 fn resolve_session_card(st: &mut CoreState, summary: &Value, session_id: &str, now: i64) -> Option<Value> {
     let mut session = summary_card(summary, session_id);
-    if timeline_empty(session.as_ref()) && st.log_sessions.contains_key(session_id) {
+    if timeline_empty(session.as_ref()) && st.cards.contains(session_id) {
         if let Some(card) = reparse_session_card(&st.log_env, session_id, now) {
             session = Some(stamp_and_store_reparsed(st, card));
         }
@@ -880,10 +882,10 @@ fn resolve_session_card_offlock(
 ) -> Option<Value> {
     let mut session = summary_card(summary, session_id);
     if timeline_empty(session.as_ref()) {
-        // Lock 1: one IndexMap::contains_key.
+        // Lock 1: one indexed point query on the card table.
         let has_log = {
             let st = st2.lock_timed().ok()?;
-            st.log_sessions.contains_key(session_id)
+            st.cards.contains(session_id)
         };
         if has_log {
             // NO GUARD IS ALIVE HERE — this is the multi-MB disk read + JSONL parse.

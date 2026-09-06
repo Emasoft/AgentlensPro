@@ -46,6 +46,7 @@ pub mod session_burn_profile;
 pub mod cache_risk_commands;
 pub mod chores;
 pub mod call_body_registry;
+pub mod card_store;
 pub mod collector_lifecycle;
 pub mod context_composition;
 pub mod context_history;
@@ -130,7 +131,14 @@ pub struct Counters {
 pub struct SummaryInputs {
     pub version: u64,
     pub spans: Vec<Arc<Value>>,
-    pub log_sessions: IndexMap<String, Arc<Value>>,
+    /// The card corpus as its RAW stored JSON, in first-insert order (TRDD-XTFDRTH2).
+    ///
+    /// Strings, not `Value`s, because the DuckDB connection lives inside `CoreState` and can only
+    /// be read under the state lock: copying the stored text is the cheapest thing that can cross
+    /// that boundary, and the PARSE — the expensive half, and the one that allocates a tree per
+    /// card — then happens in `summary_from`, off the lock. Handing `Value`s here would drag the
+    /// whole deserialization back under the guard that TRDD-HFV4AIT7 emptied.
+    pub log_cards: Vec<String>,
     /// The session→account map the summarizer resolves `accountId` through (TRDD-465EXTJ6).
     ///
     /// It has to travel IN the snapshot: `summary_over` is deliberately a free function with no
@@ -180,12 +188,17 @@ pub struct CoreState {
     pub media_dir: Option<std::path::PathBuf>,
     /// Log-derived session cards keyed by sessionId (server.ts `logSessions`), merged into the
     /// served summary under the feed-collision doctrine (feed_merge.rs). Fed by the log reader
-    /// (log_reader.rs); `put_log_session` is the one write path and bumps data_version. An
-    /// IndexMap: insertion order kept like the JS Map, O(1) upsert (a 13k-card boot would be
-    /// quadratic on a Vec). `Arc` per card for the same reason the window holds `Arc`s
-    /// (TRDD-HFV4AIT7): `summary_snapshot` has to copy this map under the lock so the rebuild can
-    /// run outside it, and a deep clone of 13k cards there would be the stall it removes.
-    pub log_sessions: IndexMap<String, Arc<Value>>,
+    /// (log_reader.rs); `put_log_session` is the one write path and bumps data_version.
+    ///
+    /// TRDD-XTFDRTH2: this WAS an `IndexMap<String, Arc<Value>>` holding 32,607 cards as resident
+    /// `Value` trees — measured as one of the three contributors to the 8.7 GB mimalloc heap. It
+    /// is now a DuckDB table (`card_store.rs`) holding the same corpus as JSON text; a reader gets
+    /// a `Vec` it drops when it is done, which is the USER's ruling in TRDD-7YPQWKPG ("duckdb is
+    /// your memory… the rust code should only make queries and report the ephemeral answers").
+    /// The three properties the map supplied for free — first-insert iteration order, an upsert
+    /// keeping its slot, and demotion ties falling back to insertion order — are rebuilt on the
+    /// `seq` column and pinned by `tests/card_store.rs`.
+    pub cards: card_store::CardStore,
     /// The data dir this process owns (server.ts DATA_DIR) — the sidecar paths `/api/server-stats`
     /// measures hang off it.
     pub data_dir: std::path::PathBuf,
@@ -273,8 +286,7 @@ pub struct CoreState {
 impl CoreState {
     /// putLogSession — upsert by sessionId.
     pub fn put_log_session(&mut self, card: Value) {
-        let id = card.get("sessionId").and_then(Value::as_str).unwrap_or("").to_owned();
-        self.log_sessions.insert(id, Arc::new(card));
+        self.cards.put(&card);
         self.data_version += 1;
     }
 
@@ -282,22 +294,12 @@ impl CoreState {
     /// sufficient on a ~13k-session machine — only the `hot_cards` most-recently-active cards
     /// keep their timelines in RAM; every colder card keeps headers only.
     pub fn demote_cold_timelines(&mut self, hot_cards: usize) {
-        if self.log_sessions.len() <= hot_cards {
-            return;
-        }
-        let mut order: Vec<(f64, usize)> =
-            self.log_sessions.values().enumerate().map(|(i, c)| (log_reader::last_active_ms(c), i)).collect();
-        // Newest first; a stable sort keeps insertion order among ties, as the JS sort does.
-        order.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
-        for (_, i) in order.into_iter().skip(hot_cards) {
-            // `Arc::make_mut` — copy-on-write, so a card a rebuild in flight is still reading is
-            // cloned before it is stripped instead of being mutated underneath it. The clone hits
-            // only the cards actually demoted (the tail past `hot_cards`), and only while a
-            // snapshot still holds them.
-            if let Some(obj) = self.log_sessions.get_index_mut(i).and_then(|(_, c)| Arc::make_mut(c).as_object_mut()) {
-                log_reader::strip_timeline_value(obj);
-            }
-        }
+        // TRDD-XTFDRTH2: the ranking (`last_active` DESC, first-insert ASC on ties) and the strip
+        // now run inside the card table — see `CardStore::demote_cold`. The `Arc::make_mut`
+        // copy-on-write this replaces existed only because a rebuild in flight could still be
+        // holding the very `Arc` being stripped; a snapshot is now a copy of the JSON text, so
+        // there is nothing shared left to protect.
+        self.cards.demote_cold(hot_cards);
     }
 
     /// A sweep's output into the card map (server.ts runLogScan's loop): every card through
@@ -328,25 +330,29 @@ impl CoreState {
     /// computeSessionSummary (server.ts:2240) — summarizeSpans over the live window, then, when
     /// any log session exists, the feed-collision merge + the subagent link, sorted newest-first.
     pub fn session_summary(&self, now_ms: f64) -> Value {
-        Self::summary_over(&self.window.spans, &self.log_sessions, &self.accounts.snapshot(), now_ms).0
+        Self::summary_over(&self.window.spans, self.cards.cards(), &self.accounts.snapshot(), now_ms).0
     }
 
     /// The inputs of one summary rebuild, copied under the state lock so the rebuild itself runs
-    /// OUTSIDE it (TRDD-HFV4AIT7). Both containers hold `Arc`s, so this is a pointer copy per
-    /// element, not a deep clone of the window.
+    /// OUTSIDE it (TRDD-HFV4AIT7). The spans are `Arc`s, so that half is a pointer copy; the cards
+    /// are their raw stored JSON, so that half is a string copy and NOT a 32k-tree deserialization
+    /// (see `SummaryInputs::log_cards`).
     pub fn summary_snapshot(&self) -> SummaryInputs {
         SummaryInputs {
             version: self.data_version,
             spans: self.window.spans.clone(),
-            log_sessions: self.log_sessions.clone(),
+            log_cards: self.cards.cards_json(),
             accounts: Arc::new(self.accounts.snapshot()),
         }
     }
 
     /// The off-lock half: `summary_over` on a snapshot. Free function shape on purpose — it takes
-    /// no `&self`, so it cannot accidentally be called while the lock is held.
+    /// no `&self`, so it cannot accidentally be called while the lock is held. The card parse
+    /// happens HERE, which is why the snapshot carries text.
     pub fn summary_from(inputs: &SummaryInputs, now_ms: f64) -> (Value, IndexMap<String, Vec<Value>>) {
-        Self::summary_over(&inputs.spans, &inputs.log_sessions, &inputs.accounts, now_ms)
+        let cards: Vec<Value> =
+            inputs.log_cards.iter().map(|j| serde_json::from_str(j).expect("a stored session card parses")).collect();
+        Self::summary_over(&inputs.spans, cards, &inputs.accounts, now_ms)
     }
 
     /// Store a summary built off the lock, together with the attribution map built WITH it. The
@@ -367,7 +373,7 @@ impl CoreState {
     /// `/api/timeline` graft still has them after the merge displaces the OTEL twin.
     fn summary_over(
         spans: &[Arc<Value>],
-        log_sessions: &IndexMap<String, Arc<Value>>,
+        log_cards: Vec<Value>,
         accounts: &IndexMap<String, String>,
         now_ms: f64,
     ) -> (Value, IndexMap<String, Vec<Value>>) {
@@ -396,12 +402,13 @@ impl CoreState {
                 }
             }
         }
-        if !log_sessions.is_empty() {
+        if !log_cards.is_empty() {
             let otel: Vec<Value> = summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
-            // The merge REWRITES the cards it keeps, so this deep clone stays — but it now runs
-            // off the state lock (ui::summary_now), which is what made it affordable.
-            let logs: Vec<Value> = log_sessions.values().map(|c| (**c).clone()).collect();
-            let mut merged = feed_merge::link_subagent_transcripts(feed_merge::merge_otel_and_log_sessions(otel, logs));
+            // The merge REWRITES the cards it keeps, and it now receives them by VALUE: the caller
+            // parsed them out of the card table, so this function owns the only copy and the deep
+            // clone the `Arc<Value>` map forced here is gone (TRDD-XTFDRTH2).
+            let mut merged =
+                feed_merge::link_subagent_transcripts(feed_merge::merge_otel_and_log_sessions(otel, log_cards));
             // Date.parse(b.startTime || '0') - Date.parse(a.startTime || '0'), newest first.
             merged.sort_by(|a, b| {
                 let k = |c: &Value| {
@@ -431,10 +438,10 @@ impl CoreState {
         // Disjoint field borrows: the cache + side-map are written, the inputs are read.
         // `accounts` joins the disjoint-borrow list for the same reason as the rest: it is READ
         // here while the cache + side-map are written (TRDD-465EXTJ6).
-        let Self { summary_cache, window, log_sessions, data_version, otel_attribution, accounts, .. } = self;
+        let Self { summary_cache, window, cards, data_version, otel_attribution, accounts, .. } = self;
         let accounts = accounts.snapshot();
         summary_cache.get(*data_version, || {
-            let (summary, attribution) = Self::summary_over(&window.spans, log_sessions, &accounts, now_ms);
+            let (summary, attribution) = Self::summary_over(&window.spans, cards.cards(), &accounts, now_ms);
             *otel_attribution = attribution;
             summary
         })
@@ -565,7 +572,7 @@ impl CoreState {
             sink_problem: None,
             build_id: now.to_string(),
             media_dir: None,
-            log_sessions: IndexMap::new(),
+            cards: card_store::CardStore::new(),
             data_dir: data_dir.to_path_buf(),
             started_at_ms: now,
             ports: server_stats::Ports::default(),
@@ -624,7 +631,7 @@ impl CoreState {
     /// every file from 0 (a targeted scan would only see the paths the watcher happened to name).
     pub fn clear_all(&mut self) {
         self.clear_spans();
-        self.log_sessions.clear();
+        self.cards.clear();
         if let Some(s) = &self.sweeper {
             s.clear_and_rescan();
         }

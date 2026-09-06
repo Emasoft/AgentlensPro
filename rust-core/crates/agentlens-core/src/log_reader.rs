@@ -729,6 +729,11 @@ impl DurableState {
         let restored = cards.len();
         if restored > 0 {
             let (max_entries, max_bytes) = (timeline_max_entries(), timeline_max_bytes());
+            // One transaction for the whole restore, not one autocommit per card: at 32k cards
+            // that is 32k individual DuckDB commits for data that either all belongs (a clean
+            // restore) or none of it does (a crash mid-restore should not leave a half-loaded
+            // store to `contains()` against).
+            state.cards.begin();
             for (_, mut card) in cards {
                 // Normalize on restore (TRDD-66IXMIGN): a log written before the cap may hold giant
                 // timelines; loading them uncapped rebuilds the very heap the cap prevents.
@@ -743,6 +748,7 @@ impl DurableState {
                 }
                 state.put_log_session(card);
             }
+            state.cards.commit();
             state.demote_cold_timelines(crate::summarize::retention::timeline_hot_cards());
         }
         let (imported, skipped) = tailer.import_file_state(&offsets);
@@ -773,7 +779,7 @@ impl DurableState {
     fn save_cards(&mut self, state: &std::sync::Mutex<crate::CoreState>) {
         let records: IndexMap<String, Value> = {
             let st = state.lock_timed().expect("core state");
-            st.log_sessions.iter().map(|(id, c)| (id.clone(), strip_card_for_persist(c))).collect()
+            st.cards.persist_records()
         };
         match self.cards.save(&records) {
             Ok(r) if r.bytes > 0 => {
