@@ -1,10 +1,11 @@
 ---
 trdd-id: FSMISF5K
 title: Per-session summaries are DuckDB queries over the segments and the resident span window is deleted
-column: todo
+column: dev
 created: 2026-09-05T22:06:10+0200
-updated: 2026-09-05T22:06:10+0200
-current-owner: main-session
+updated: 2026-09-06T04:55:34+0200
+current-owner: kraken-worker-fix/fsmisf5k
+implementation-commits: []
 task-type: refactor
 priority: high
 min-approval-requirement: none
