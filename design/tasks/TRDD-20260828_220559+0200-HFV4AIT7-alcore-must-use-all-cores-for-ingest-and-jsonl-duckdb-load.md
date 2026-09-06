@@ -3,7 +3,7 @@ trdd-id: HFV4AIT7
 title: Measure and guarantee that alcore uses all CPU cores for telemetry and hook ingest and for the JSONL to DuckDB load
 column: dev
 created: 2026-08-28T22:05:59+0200
-updated: 2026-09-06T02:30:49+0200
+updated: 2026-09-06T02:36:03+0200
 current-owner: claude-agentlenspro
 task-type: audit
 project-id: agentlenspro
@@ -43,23 +43,34 @@ stays as a cross-check column. The report is rewritten after each path. The firs
 (427d8c7b) could not boot alcore at all (empty `--media-dir`, pidfile read before it existed —
 review B1/B2); the reviewed fixes landed in the follow-up commit.
 
-**Real run (this machine, `rust-core/target/release/alcore` built 2026-09-05 21:37, ports
-3901/4901/4902, `--seconds 10`, concurrency 32, EMPTY `--home`):**
-`reports/bench/20260906_023008+0200-alcore-core-utilization.json` (+ `-samples/` beside it).
-otlp: meanCores 1.58 / max 2.19 over 10.6 s, 3,844 req/s, 0 non-2xx, 766k spans appended
-(previous run 20260906_022727: 1.81 / 2.26). hooks: meanCores 1.55 / max 1.98, 5,094 req/s,
-0 non-2xx. cold_jsonl_load: bootSeconds 0.216 with an empty corpus — that number proves the
-PIPELINE completes, it is not a box-3 measurement. **Box 1 stays unticked** because the
-acceptance text names the JSONL→DuckDB load and this run's corpus was empty; the two flood
-numbers above are usable box-2 input now (14-core box, ~1.6 cores busy — read that against box 2
-when it is judged, not here).
+**Real runs (this machine, `rust-core/target/release/alcore` built 2026-09-05 21:37, ports
+3901/4901/4902, `--seconds 10`, concurrency 32, EMPTY `--home`, live collector running
+alongside at ~1.5 cores):** latest `reports/bench/20260906_023521+0200-alcore-core-utilization.json`
+(+ `-samples/` beside it), previous `…_023008+0200…` and `…_022727+0200…` (flood paths only).
+Three back-to-back runs of the SAME flood, in `meanCores`: otlp 1.81 → 1.58 → 0.85, hooks
+1.95 → 1.55 → 1.13 — **one run is not the variance**; the box is shared with the live collector
+and nothing here pins CPU frequency or isolates cores. Throughput was stable (otlp ~3.8k req/s,
+766k spans / 10 s; hooks ~5.1k req/s; 0 non-2xx every run). cold_jsonl_load: bootSeconds
+0.11–0.22 with an empty corpus and `belowResolution: true` — proves the PIPELINE completes, it
+is not a box-3 measurement. Neither instance needed SIGKILL (`*InstanceForcedKill: false`).
+**Box 1 stays unticked** because the acceptance text names the JSONL→DuckDB load and every
+run's corpus was empty. The `cputime` sampler was reconciled once against `top -pid` on the
+live collector: ps Δcputime 17.97 s / 11.42 s = 1.57 cores vs top's `141.1%` + `time` delta
+16 s over its 10 s window — same kernel counter, agrees to resolution, so `ps cputime` is
+process-wide (threads summed) here, measured not assumed. When box 2 is judged, judge it from
+≥3 runs on a quiet box, not from any single number above.
 
 **Incidental finding worth its own look (NOT a verdict):** the first real run pointed the cold
 boot at the data dir the flood had just filled (521 MB single `2026-09-06.ndjson` segment,
-766k spans) and alcore spent the whole 60 s boot timeout at 0.95–1.0 core replaying it without
-ever binding the UI port (`reports/bench/20260906_022727+0200-alcore-core-utilization-samples/cold_jsonl.samples.txt`,
-268 readings). Boot-time span-store replay is single-threaded and >60 s for one busy-day segment
-— exactly the shape box 3 is about, but on the OTLP store rather than the JSONL scan.
+766k spans). MEASURED: that instance ran at 0.95–1.0 core for the whole 60 s boot timeout and
+never bound the UI port (`reports/bench/20260906_022727+0200-alcore-core-utilization-samples/cold_jsonl.samples.txt`,
+268 readings); its `server.pid` survived, consistent with the harness's silent SIGKILL after the
+10 s SIGTERM grace (now reported as `*InstanceForcedKill`). INFERRED, not shown: that the busy
+core was boot-time replay of that segment — the only other thing in the data dir was 4 MB of
+`requests.log`. If true, span-store replay is single-threaded and >60 s for one busy-day
+segment — the shape box 3 is about, on the OTLP store rather than the JSONL scan. Settle it
+with a boot of alcore against a copy of that data dir under `sample`/`cargo flamegraph`, or by
+timing `--no-log-scan` boots on an empty vs the 521 MB store.
 
 NEXT ACTION: copy a real `~/.claude/projects` corpus into a throwaway `--home` (the default is
 an empty per-run `/tmp/alcore-core-util-<ts>/home`), run

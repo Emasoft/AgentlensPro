@@ -91,17 +91,22 @@ def sample_pid_cores(pid: int, stop: threading.Event, max_seconds: float, interv
                 break
             stop.wait(interval_s)
     intervals = [(c1 - c0) / (w1 - w0) for (w0, c0, _), (w1, c1, _) in zip(readings, readings[1:]) if w1 > w0]
-    if not intervals:
-        raise RuntimeError(f"no complete sampling interval for pid {pid} (readings={len(readings)}, exited={exited}) — see {samples_file}")
+    # A server that died mid-window would otherwise yield a "valid" cores number over the
+    # seconds it lived; wait_http_ready covers boot, this covers the flood.
+    if exited or not intervals:
+        raise RuntimeError(f"pid {pid} exited={exited}, intervals={len(intervals)} — see {samples_file}")
+    cpu_seconds = readings[-1][1] - readings[0][1]
     return {
         "meanCores": round(sum(intervals) / len(intervals), 3),
         "maxCores": round(max(intervals), 3),
         "intervals": len(intervals),
         "wallSeconds": round(readings[-1][0] - readings[0][0], 3),
-        "cpuSeconds": round(readings[-1][1] - readings[0][1], 2),
+        "cpuSeconds": round(cpu_seconds, 2),
+        # cputime is centisecond-resolution: under 5 cs of CPU, or fewer than 3 intervals, the
+        # cores figures are a rounding floor (an empty-corpus boot reads 0.0), not a measurement.
+        "belowResolution": cpu_seconds < 0.05 or len(intervals) < 3,
         "meanPctCpuCrossCheck": round(sum(r[2] for r in readings) / len(readings), 1),
         "ncpu": ncpu,
-        "exitedDuringSampling": exited,
     }
 
 
@@ -140,14 +145,18 @@ def start_server(binary: Path, data_dir: Path, media_dir: Path, home: Path, port
     return subprocess.Popen(args, env=env, stdout=subprocess.DEVNULL, stderr=stderr_file.open("w", encoding="utf-8"))
 
 
-def stop_server(proc: subprocess.Popen, timeout_s: float = 10.0) -> None:
-    """SIGTERMs the server (the path that actually flushes — see the card's F1 fix) and waits."""
+def stop_server(proc: subprocess.Popen, timeout_s: float = 10.0) -> bool:
+    """SIGTERMs the server (the path that actually flushes — see the card's F1 fix) and waits.
+    Returns True when it had to escalate to SIGKILL — a wedged shutdown is a finding, and the
+    first real run hid one (server.pid survived, nothing said why)."""
     proc.terminate()
     try:
         proc.wait(timeout=timeout_s)
+        return False
     except subprocess.TimeoutExpired:
         proc.kill()
         proc.wait(timeout=5.0)
+        return True
 
 
 def run_flood(mix: str, ports: dict, seconds: int, concurrency: int) -> dict:
@@ -227,7 +236,8 @@ def run_all(args: argparse.Namespace) -> dict:
             result["paths"][mix] = {"cores": cores, "throughput": flood_result}
             write_report()
     finally:
-        stop_server(proc)
+        result["floodInstanceForcedKill"] = stop_server(proc)
+        write_report()
 
     stderr_file = samples_dir / "alcore-cold.stderr.log"
     cold_proc = start_server(binary, cold_data_dir, media_dir, home, ports, no_log_scan=False, stderr_file=stderr_file)
@@ -243,7 +253,8 @@ def run_all(args: argparse.Namespace) -> dict:
         result["paths"]["cold_jsonl_load"] = {"cores": cores, "bootSeconds": round(boot_seconds, 3)}
         write_report()
     finally:
-        stop_server(cold_proc)
+        result["coldInstanceForcedKill"] = stop_server(cold_proc)
+        write_report()
     return result
 
 
