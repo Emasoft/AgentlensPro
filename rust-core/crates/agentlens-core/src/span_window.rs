@@ -22,6 +22,29 @@ use serde_json::Value;
 /// server.ts SUMMARY_WINDOW_FLOOR_MS.
 pub const SUMMARY_WINDOW_FLOOR_MS: i64 = 5 * 60_000;
 
+/// The store's `receivedAt` stamp — arrival time, recorded once, never overwritten.
+///
+/// THE ORDER MATTERS, AND IT IS WHY THIS IS A FREE FUNCTION (TRDD-GR6WHHK5). Ingest must stamp
+/// BEFORE `SpanStoreWriter::append`, not after: the appended line is the disk copy, so a span
+/// stamped only on its way into the window persists with no timestamp of any kind. `"0"` is the
+/// protobuf default the Codex exporter really sends (602 timestamp-less `codex.api_request` spans
+/// in the 2026-09-05 segment), so those records came back from `load_range` resolvable only
+/// through its `now_ms` fallback — and the first prune tick after boot evicted every one of them,
+/// because since TRDD-YILE6N3T an unresolvable age resolves to `i64::MIN`. One function, called
+/// from both sides, so the two copies of a span can never disagree about when it arrived.
+///
+/// This is also the TS order, not an invention: `standalone/server.ts` `addSpan` (recovered at
+/// 567fc5c2^:557-561) stamped `receivedAt` and THEN called `spanStore.append(span)`. So a span
+/// buckets into the segment of its ARRIVAL day — `span_timestamp_ms` prefers `receivedAt` — which
+/// is what the port had silently lost along with the stamp.
+pub fn stamp_received_at(span: &mut Value, now_ms: i64) {
+    if let Some(obj) = span.as_object_mut() {
+        if !obj.contains_key("receivedAt") {
+            obj.insert("receivedAt".into(), Value::from(now_ms));
+        }
+    }
+}
+
 /// Resident span ceiling: `AGENTLENS_MAX_WINDOW_SPANS` overrides, `0` disables, default 1,000,000.
 ///
 /// Sized against BOTH measurements rather than picked. Wedging was observed above ~1.5M spans, so
@@ -70,11 +93,7 @@ impl SpanWindow {
 
     /// addSpan: stamp receivedAt when absent, append (the store append is the caller's).
     pub fn add(&mut self, mut span: Value, now_ms: i64) {
-        if let Some(obj) = span.as_object_mut() {
-            if !obj.contains_key("receivedAt") {
-                obj.insert("receivedAt".into(), Value::from(now_ms));
-            }
-        }
+        stamp_received_at(&mut span, now_ms);
         self.spans.push(Arc::new(span));
     }
 
