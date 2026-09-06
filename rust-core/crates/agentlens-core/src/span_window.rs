@@ -121,7 +121,7 @@ impl SpanWindow {
 
     /// The flush-tick prune: drop spans older than the effective window by their own timestamp,
     /// THEN cap the window by span COUNT. Returns true when the window shrank (every derived view
-    /// must be rebuilt).
+    /// must be rebuilt). A span whose timestamp cannot be read is dropped too — see the retain.
     ///
     /// WHY A SECOND AXIS (TRDD-YU8QPU89). The time cutoff — and the RSS guard that shortens it —
     /// bound BYTES. They do not bound the thing the cost actually follows: every summary rebuild is
@@ -136,12 +136,32 @@ impl SpanWindow {
     /// is the same trade `apply_memory_pressure` already makes by shortening the window.
     pub fn prune(&mut self, now_ms: i64) -> bool {
         let cutoff = now_ms - self.effective_ms;
-        let first_old = self.spans.first().and_then(|s| s.as_object()).is_some_and(|s| span_timestamp_ms(s, now_ms) < cutoff);
-        let mut changed = false;
-        if first_old {
-            self.spans.retain(|s| s.as_object().is_none_or(|o| span_timestamp_ms(o, now_ms) >= cutoff));
-            changed = true;
-        }
+        let before = self.spans.len();
+        // WHY THIS RETAIN IS UNCONDITIONAL, AND WHY THE TIMESTAMP FALLBACK IS `i64::MIN`
+        // (TRDD-YILE6N3T, measured 2026-09-06 on a 432,335-span replay of the real store).
+        //
+        // This used to run only when ONE sentinel element — `spans.first()` — resolved older than
+        // the cutoff, and it read that element's timestamp with `now_ms` as the fallback. Both
+        // halves are wrong, and together they froze the window permanently:
+        //
+        //   * 602 of today's 432,335 spans are `codex.api_request` records carrying
+        //     `startTime: "0"` / `endTime: "0"`. `span_timestamp_ms` reads neither (`"0"`/1e6 is
+        //     not > 0) and returns the `now_ms` it was handed — so such a span is ALWAYS inside
+        //     the window and can never age out. The first one is the segment's 40th line.
+        //   * The first narrowing prune (24h -> 12h) evicted 27,755 spans (432,335 -> 404,580) and
+        //     left one of those unresolvable spans at index 0. From the next tick `first_old` was
+        //     false, so the retain never ran again: 404,580 spans stayed resident while `windowMs`
+        //     reported 300,000, and the count only grew with live ingest.
+        //
+        // So: never gate the pass on one element (any element can be unresolvable, out of order,
+        // or not even an object), and treat "no timestamp we can read" as INFINITELY OLD rather
+        // than as "now". `span_timestamp_ms` uses its `now_ms` argument for nothing but that final
+        // fallback, so passing `i64::MIN` is exactly "unknown age loses the cutoff". A non-object
+        // span (which `add` cannot stamp) is evicted for the same reason — it can never age.
+        // Cost is not a reason to gate this: a `retain` over <=1M `Arc`s is milliseconds, and once
+        // the window is bounded again it is a few thousand.
+        self.spans.retain(|s| s.as_object().is_some_and(|o| span_timestamp_ms(o, i64::MIN) >= cutoff));
+        let mut changed = self.spans.len() != before;
         // Keep the NEWEST `max_spans`. `add` appends, so the front is the oldest arrival — the same
         // end the time cutoff removes.
         if self.max_spans > 0 && self.spans.len() > self.max_spans {
@@ -150,5 +170,40 @@ impl SpanWindow {
             changed = true;
         }
         changed
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    /// TRDD-YILE6N3T, the regression that froze the window: one element the timestamp reader
+    /// cannot resolve must not stop the pass, and must not survive it either. The shape is the
+    /// real one from the live store — a `codex.api_request` with `startTime`/`endTime` of `"0"`.
+    #[test]
+    fn prunes_past_a_first_element_with_no_resolvable_timestamp() {
+        let now = 1_788_000_000_000i64;
+        let mut w = SpanWindow::new(SUMMARY_WINDOW_FLOOR_MS);
+        w.spans.push(Arc::new(json!({
+            "traceId": "codex:x", "spanId": "unresolvable", "name": "codex.api_request",
+            "startTime": "0", "endTime": "0", "attributes": []
+        })));
+        for i in 0..999 {
+            w.spans.push(Arc::new(json!({ "spanId": format!("old{i}"), "receivedAt": now - 3_600_000 })));
+        }
+
+        assert!(w.prune(now), "1,000 spans an hour old must be a cut at a 5-minute window");
+        assert!(
+            w.spans.is_empty(),
+            "the 999 resolvable spans must go even though the FIRST element is unresolvable, and \
+             the unresolvable one must go too — unknown age is not `now`"
+        );
+
+        // Still a cutoff, not a purge: an in-window span survives, and a pass that removes
+        // nothing reports no change (the caller keys `data_version` on that).
+        w.add(json!({ "spanId": "live" }), now);
+        assert!(!w.prune(now), "nothing aged out ⇒ nothing to rebuild");
+        assert_eq!(w.spans.len(), 1);
     }
 }
