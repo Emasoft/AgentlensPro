@@ -3,8 +3,9 @@ trdd-id: 7RM5YW2T
 title: The 25 ms summary rebuild loop rebuilds the whole window continuously under ingest and is the mimalloc churn
 column: dev
 created: 2026-09-05T22:06:10+0200
-updated: 2026-09-05T22:06:10+0200
+updated: 2026-09-06T02:41:21+0200
 current-owner: main-session
+implementation-commits: [bd0d48e3]
 task-type: bugfix
 priority: critical
 min-approval-requirement: none
@@ -39,28 +40,83 @@ advisor step 1.
   `ui.rs:289-300`). A reader that misses the cache waits up to 500 ms for an in-flight rebuild,
   else serves `cached_any`.
 
-## The fix (advisor step 1, ponytail-sized)
+## The fix — as landed (supersedes the original design below)
 
-Rate-limit rebuilds by their own cost instead of polling every 25 ms: after a pass that took `d`,
-do not start another for `max(250 ms, k × d)` (k = 4, one constant) unless a READER is waiting on
-the gate (the RYW path already blocks on the gate for up to 500 ms — a reader arriving inside the
-back-off must trigger the rebuild it needs, so RYW keeps holding at small windows where `d` is
-milliseconds). At today's sizes a 20 s rebuild gets an 80 s gap: churn ÷ ~4000, CPU released. No
-new thread, no new lock: one `Instant` + one `Duration` next to the existing gate. Do NOT move the
-trigger to the 5 s chores tick alone — that breaks RYW at small windows.
+**Landed rule** (`ui.rs`, `rebuild_once` + `summary_now`, branch `fix/7rm5yw2t`): the 25 ms loop
+records what each pass cost (`d`, timed from BEFORE the snapshot — the snapshot clones the window's
+spans and the log cards under the state lock and is part of the churn) in the existing single-flight
+gate, and **skips while `now < finished + 4 × d`**, with **one override**: a reader waiting on the
+loop (`READER_WAITING`, raised on entry to the `STALE_BUDGET_MS` wait, consumed at the start of the
+pass that answers it) forces the pass **only while `d ≤ STALE_BUDGET_MS`**. No floor. The read path
+carries no back-off; the inline reader rebuild (reached only without a rebuilder — tests/embedders)
+is untouched.
 
-Keep the rebuild OFF the state lock as today. Add a unit test on the back-off arithmetic and keep
-the existing RYW CI test green.
+**Why the override is budget-bounded — the deliberate trade.** With a rebuilder active a
+cache-missing reader NEVER builds inline (TRDD-2R36W8Q1); it waits ≤ 500 ms for the loop and then
+serves `cached_any`. So the loop is a waiting reader's only source of fresh data, and a blind `4d`
+skip shrinks the RYW envelope from `d ≲ 475 ms` (≈237 ms when a pass is already in flight —
+`2d + tick ≤ 500`; that phase is unchanged by this card) to `d ≲ 95 ms` — an ordinary 5k–25k-span
+dev install (100–500 ms per rebuild) would land in the regressed band. The override restores the
+pre-change envelope exactly where it existed, in both phases. Above the budget the reader was served
+stale before this card too, and honouring the override there would rebuild once per dashboard poll
+— the churn this card removes at precisely the sizes it exists for. **What remains is a larger
+staleness ceiling at large `d`: a reader there sees a summary up to ≈5d old, not ≈d** (20 s rebuild
+⇒ up to ~100 s behind, was ~20 s). Accepted: the alternative was the 84%-of-a-core / 8.7 GB plateau.
+
+**Effective cadence while `d ≤ 500 ms` is `min(reader interval, 4d)`, not `4d`.** Every
+cache-missing `summary_now` call under a rebuilder raises the flag, and the pass consumes it at
+its start, so a reader arriving mid-pass re-raises it and the next tick rebuilds again. Internal
+periodic callers (grep of `summary_now(` in `ui.rs`): `run_burn_tick` every **4 s** on every
+install, `push_update` from the coalesced SSE timer only while a dashboard is connected, plus one
+warm-up per GET/HEAD on `/`, `/events`, `/api/*`. So with no client the floor in that band is one
+rebuild per 4 s (d = 300 ms ⇒ ≈7.5% of a core, was 100%); with a 1 s dashboard poll ≈1/s (≈30%,
+vs 20% under a pure `4d` rule). Zero effect at the 20 s sizes this card targets, where
+`took > budget` disables the override.
+
+**Superseded design (2026-09-05, this card as authored): `max(250 ms, 4 × d)` back-off at the gate
++ a waiting-reader counter.** Dropped in two steps, both by review: (1) the floor and the counter
+went — a floor at 250 ms eats half a waiting reader's budget for a window size with no churn left to
+ration, and the gate already serializes so the record needs no second lock; (2) a first attempt
+applied the back-off to readers too, which fails `an_uncontended_reader_gets_fresh_data_not_stale`
+(a reader-side back-off has no version term and serves a reader its own write back stale), and a
+second attempt made it loop-only with NO reader term, which mis-modelled production — readers never
+rebuild inline there, so RYW broke for 95 ms < d < 475 ms (review
+`reports/review-fork/20260906_022542+0200-bd0d48e3-7rm5yw2t-backoff.md`). The landed rule is the
+original "unless a reader is waiting" term with the one condition that reconciles it with the
+churn cut.
 
 ## Acceptance
 
-- [ ] `rebuild_once` is skipped while inside the cost-scaled back-off unless a reader is waiting;
-      unit-tested.
-- [ ] `pnpm`/cargo RYW test (`POST /v1/traces` → `GET /api/summary` ≤ 500 ms) still green.
+- [x] `rebuild_once` is skipped while inside the cost-scaled back-off (`4 × d`, no floor), EXCEPT
+      when a reader is waiting AND the last rebuild's cost is ≤ `STALE_BUDGET_MS`; unit-tested —
+      arithmetic in `rebuild_backoff_tests` (6), the consumer half incl. both sides of the override
+      bound in `the_rebuild_loop_skips_a_pass_inside_the_backoff_window`, the producer half (a
+      reader entering the wait raises the flag) asserted in
+      `a_reader_never_rebuilds_when_the_background_rebuilder_owns_it`. Three mutations, each shown
+      red: back-off check disabled; override term disabled; flag producer disabled. 30/30 green at
+      `--test-threads=8` on the landed source.
+- [x] cargo RYW test (`tests/ui.rs::summary_serves_the_stripped_summarizer_output_over_ingested_spans`,
+      `POST /v1/traces` → `GET /api/summary` ≤ 500 ms) green — 41/41 in `--test ui`, 10/10 repeats
+      on the landed source. **Caveat (settled by grep): `tests/ui.rs` and `tests/helpers.rs` never
+      spawn `run_summary_rebuild`, so this test exercises the INLINE reader path, not the
+      production wait-for-the-loop path, and runs at `d ≈ 1 ms`.** The 95–475 ms band and the
+      override are covered only by the unit tests above, not end-to-end.
 - [ ] Live after deploy, 15 min: CPU of alcore ≤ 15% of a core at today's ingest rate (was 84%),
       mimalloc resident ≤ 2 GB (was 8.7 GB) — `vmmap --summary` and `ps`, numbers recorded here.
+      **OPEN — the churn cut is asserted from the arithmetic, not measured.** Needs a Rust-core
+      deploy (`cargo build --release` → `bin-native/` → `codesign -s - --force` → `server restart`).
 
 ## Notes and lessons learned
+
+- **Model the path production takes before arguing about RYW.** Two review rounds (worker's first
+  attempt, coordinator's correction) debated whether a reader "rebuilds inline or hands the rebuild
+  to the next poll" — a path only tests and embedders take. On every real server `REBUILDER_ACTIVE`
+  is set and a reader's ONLY source of fresh data is the loop. The invariant to check on any change
+  to `rebuild_once` is therefore: *for every `d` where a reader was served fresh before, is the loop
+  still guaranteed to land a pass inside that reader's 500 ms budget?*
+- **A pure-arithmetic test is not evidence the arithmetic is consulted.** `REBUILD_COST_FACTOR 4→0`
+  and disabling the check both had to be shown red at the WIRING level; the six arithmetic tests
+  stay green under the second mutation.
 
 ## Approval log
 
