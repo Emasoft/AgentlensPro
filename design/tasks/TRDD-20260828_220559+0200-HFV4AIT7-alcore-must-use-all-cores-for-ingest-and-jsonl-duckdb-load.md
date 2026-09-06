@@ -3,7 +3,7 @@ trdd-id: HFV4AIT7
 title: Measure and guarantee that alcore uses all CPU cores for telemetry and hook ingest and for the JSONL to DuckDB load
 column: dev
 created: 2026-08-28T22:05:59+0200
-updated: 2026-09-06T02:16:58+0200
+updated: 2026-09-06T02:30:49+0200
 current-owner: claude-agentlenspro
 task-type: audit
 project-id: agentlenspro
@@ -30,36 +30,43 @@ argument "no code work remains, only a runtime check": here code work DOES remai
 harness has to be written before boxes 2 and 3 can be measured at all. Once that script exists,
 this card belongs in `testing`.
 
-**2026-09-06T02:16:58+0200 — box 1 harness written, NOT yet run for real.** New script:
-`scripts/bench/alcore_core_utilization.py` (`uv run`, PEP 723, stdlib-only). It orchestrates all
-three load paths from the "What to measure" section against ONE isolated `--data-dir`/`--home`:
-(1) OTLP ingest and (2) hook events, each by reusing `scripts/bench/alcore-ingest-flood.mjs`
-while sampling `ps -o %cpu=` on the server pid (read from `<data-dir>/server.pid`, both pid_lock
-shapes) once per second; (3) the cold JSONL→DuckDB boot scan, by starting a fresh `alcore serve`
-(log-scan ON) against `--home`'s `.claude/projects` and sampling cores from launch until
-`/api/summary` answers 200. Cores-busy = `%cpu / 100` (macOS convention this card already used
-elsewhere). Writes one JSON report (`--out`, default `reports/bench/<ts>-alcore-core-utilization.json`)
-with per-path `{cores: {meanCores,maxCores,samples,ncpu}, throughput|bootSeconds}`, plus raw
-per-second sample files beside it — nothing here interprets PASS/FAIL, that is boxes 2/3.
+**2026-09-06T02:30:49+0200 — box 1 harness written and run ONCE against alcore (empty corpus);
+box 1 stays unticked.** Script: `scripts/bench/alcore_core_utilization.py` (`uv run`, PEP 723,
+stdlib-only). It orchestrates the three load paths from "What to measure" against an isolated
+instance: (1) OTLP ingest and (2) hook events by reusing `scripts/bench/alcore-ingest-flood.mjs`
+on one `--no-log-scan` instance; (3) the cold JSONL→DuckDB boot scan by starting a fresh
+`alcore serve` (log-scan ON) against `--home`'s `.claude/projects` in its OWN empty data dir
+(`<data-dir>-cold`) and sampling from launch until `/api/summary` answers 200. Cores-busy is
+**Δcputime/Δwall per interval** from `ps -o cputime=` (process-wide, centisecond) — not `%cpu`,
+which is a decaying ≤1-min average and under-reads a short flood (review 427d8c7b M2); `%cpu`
+stays as a cross-check column. The report is rewritten after each path. The first commit
+(427d8c7b) could not boot alcore at all (empty `--media-dir`, pidfile read before it existed —
+review B1/B2); the reviewed fixes landed in the follow-up commit.
 
-**Verified this session (no build, no restart of the live server, per this dispatch's
-constraints):** `uv run scripts/bench/alcore_core_utilization.py --help` (exit 0, full flag
-list) and `--dry-run` (exit 0, prints the 9-step plan with no side effects) and `--self-test`
-(exit 0, `{"selfTest": "pass", "meanCores": 0.045, "maxCores": 0.129, "samples": 5, "ncpu": 14}`
-— exercises the sampler against this process for 1s). **NOT run**: the real three-path
-measurement — it needs a release `alcore` build (`cargo build --release -p agentlens-core --bin
-alcore`, `codesign -s - --force` per `agentlenspro-ops-lessons`) and a copy of a real
-`~/.claude/projects` corpus under `--home`, both explicitly out of scope for this dispatch (a
-`cargo test` was running and the live collector must not be touched). Box 1 is now met by this
-script's existence + the dry-run/self-test proof it runs; **box 1's checkbox stays unticked**
-until a real run's report path is recorded here, since the acceptance text requires "its output
-is committed as a report path in this card" — that has not happened yet.
+**Real run (this machine, `rust-core/target/release/alcore` built 2026-09-05 21:37, ports
+3901/4901/4902, `--seconds 10`, concurrency 32, EMPTY `--home`):**
+`reports/bench/20260906_023008+0200-alcore-core-utilization.json` (+ `-samples/` beside it).
+otlp: meanCores 1.58 / max 2.19 over 10.6 s, 3,844 req/s, 0 non-2xx, 766k spans appended
+(previous run 20260906_022727: 1.81 / 2.26). hooks: meanCores 1.55 / max 1.98, 5,094 req/s,
+0 non-2xx. cold_jsonl_load: bootSeconds 0.216 with an empty corpus — that number proves the
+PIPELINE completes, it is not a box-3 measurement. **Box 1 stays unticked** because the
+acceptance text names the JSONL→DuckDB load and this run's corpus was empty; the two flood
+numbers above are usable box-2 input now (14-core box, ~1.6 cores busy — read that against box 2
+when it is judged, not here).
 
-NEXT ACTION: build the release `alcore` binary (idle window, not this dispatch), copy a real
-`.claude/projects` corpus into a throwaway `--home`, run
-`uv run scripts/bench/alcore_core_utilization.py --out reports/bench/<ts>-alcore-core-utilization.json`,
-paste the resulting report path here, tick box 1, then read boxes 2/3 off its `paths.*.cores`
-and `paths.cold_jsonl_load.bootSeconds` fields.
+**Incidental finding worth its own look (NOT a verdict):** the first real run pointed the cold
+boot at the data dir the flood had just filled (521 MB single `2026-09-06.ndjson` segment,
+766k spans) and alcore spent the whole 60 s boot timeout at 0.95–1.0 core replaying it without
+ever binding the UI port (`reports/bench/20260906_022727+0200-alcore-core-utilization-samples/cold_jsonl.samples.txt`,
+268 readings). Boot-time span-store replay is single-threaded and >60 s for one busy-day segment
+— exactly the shape box 3 is about, but on the OTLP store rather than the JSONL scan.
+
+NEXT ACTION: copy a real `~/.claude/projects` corpus into a throwaway `--home` (the default is
+an empty per-run `/tmp/alcore-core-util-<ts>/home`), run
+`uv run scripts/bench/alcore_core_utilization.py --home <that> --out reports/bench/<ts>-alcore-core-utilization.json`,
+paste the report path here, tick box 1, then read boxes 2/3 off `paths.*.cores` and
+`paths.cold_jsonl_load.bootSeconds`. Separately decide whether the span-replay-at-boot finding
+gets a card.
 
 > **▶ CURRENT STATE IS THE "BOTH ITEMS RESOLVED" BLOCK FURTHER DOWN (2026-08-29 18:30). Everything
 > from here to it is the investigation trail, kept for provenance, and it contains two conclusions
