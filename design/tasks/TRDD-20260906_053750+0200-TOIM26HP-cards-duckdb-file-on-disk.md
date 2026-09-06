@@ -3,7 +3,7 @@ trdd-id: TOIM26HP
 title: The session-card DuckDB store is a file under the data dir, not an in-memory database
 column: dev
 created: 2026-09-06T05:37:50+0200
-updated: 2026-09-06T05:37:50+0200
+updated: 2026-09-06T08:10:28+0200
 current-owner: kraken-agent-acb4ac9d59a86a1c5
 task-type: refactor
 parent-trdd: 7YPQWKPG
@@ -11,15 +11,16 @@ min-approval-requirement: none
 scope: project
 project-id: agentlenspro
 relevant-rules: []
-implementation-commits: []
+implementation-commits: [486290c3]
 ---
 
 # The session-card DuckDB store is a file under the data dir
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-06
 
-Implemented on branch `worktree-agent-acb4ac9d59a86a1c5`. `CardStore::new()` is gone;
-`CardStore::open(data_dir)` opens `<data_dir>/cards.duckdb` with `memory_limit='256MB'` and
+Implemented on branch `worktree-agent-acb4ac9d59a86a1c5` (`486290c3`), gates green: 621 tests pass
+(617 before), `clippy --all-targets -D warnings` clean. `CardStore::new()` is gone;
+`CardStore::open(data_dir)` opens `<data_dir>/cards.duckdb` with `memory_limit='256MiB'` and
 `threads=2`. The database is **replaced at every boot** — it is a spill file, not a durable store.
 The delta-log replay is UNCHANGED (see "Which of the two boot options" below — the answer is the
 third one, and the reason it is not the ordered one is a correctness blocker, not a preference).
@@ -97,6 +98,17 @@ card's parent's actual target), it is a follow-up that must wire the `LOG_INGEST
   latency on the hot path plus device writes. Check `du -sh` of the file post-deploy against the
   limit; the constant is one line (`MEMORY_LIMIT` in `card_store.rs`), and `statusline_store.rs`
   already uses 2GB for its connection.
+- **THE STATE LOCK NOW COVERS A DISK WRITE.** `put` stays autocommit for the incremental ingest
+  path, and it runs inside `put_log_session` under the state lock — so every card a log sweep
+  produces now costs a WAL append (and its fsync) while the lock is held. TRDD-O3ICDRLO and
+  TRDD-XX1UAZHS are both about lock-hold time, so this belongs in the same measurement: the boot
+  replay is already wrapped in ONE transaction and is not affected, but steady-state ingest is.
+  Expected to be sub-millisecond per card against the seconds-scale holds those cards chase — a
+  prediction, not a measurement.
+- **`cards.duckdb` is invisible to the disk-usage reporting.** Every data-dir scanner in
+  `server_stats.rs` filters by suffix (`.ndjsonl`, `bodies-*.wad`, `*.request.json`), so nothing
+  deletes the new file — and nothing counts it either. Worth adding to the stats if the file turns
+  out to be large; that is a `server_stats.rs` change.
 - **UNMEASURED ALTERNATIVE.** `open_in_memory()` + `memory_limit` + a `temp_directory` under the
   data dir would bound RAM with far fewer device writes IF DuckDB's buffer manager evicts an
   in-memory database's base-table blocks to the temp directory. That is unverified here, and the
