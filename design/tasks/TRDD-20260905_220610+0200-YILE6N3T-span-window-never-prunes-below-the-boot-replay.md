@@ -1,9 +1,9 @@
 ---
 trdd-id: YILE6N3T
 title: The span window reports a 5-minute window but holds the whole 24-hour boot replay and only grows
-column: dev
+column: testing
 created: 2026-09-05T22:06:10+0200
-updated: 2026-09-05T22:06:10+0200
+updated: 2026-09-06T02:32:43+0200
 current-owner: main-session
 task-type: bugfix
 priority: critical
@@ -11,12 +11,27 @@ min-approval-requirement: none
 scope: project
 project-id: agentlenspro
 parent-trdd: 7YPQWKPG
-related: [7YPQWKPG, 768NEX6E, YU8QPU89, 7RM5YW2T]
+related: [7YPQWKPG, 768NEX6E, YU8QPU89, 7RM5YW2T, GR6WHHK5]
 relevant-files: [rust-core/crates/agentlens-core/src/span_window.rs, rust-core/crates/agentlens-core/src/lib.rs, rust-core/crates/agentlens-core/src/chores.rs]
 labels: [rust-core, memory, span-window]
+implementation-commits: [f2572740, afcf8766181b052973c115778040a4a08d6ca1dd]
 ---
 
 # The span window reports a 5-minute window but holds the whole 24-hour boot replay and only grows
+
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-06T02:32:43+0200
+
+Cause proven: 602 codex spans with `startTime`/`endTime` == `"0"` made `span_timestamp_ms`
+return `now_ms`, and one such span at `spans[0]` froze the old `first_old`-gated prune forever.
+Fix merged to `main` as `afcf8766181b052973c115778040a4a08d6ca1dd` (unconditional `retain` by
+cutoff, `i64::MIN` fallback for unresolvable timestamps — no more dependency on `spans.first()`).
+Isolated replay: 431,910 spans pruned to 0; RSS 1.13 GB → 36 MB. Review verdict NON-BLOCKING
+(`reports/review-fork/20260906_023053+0200-f2572740-yile6n3t-prune.md`), one boot-path follow-up
+filed as TRDD-GR6WHHK5 (receivedAt stamped after writer.append lets timestamp-less spans survive
+to disk, then get evicted on the first tick after restart).
+
+NEXT ACTION: release build + deploy together with 7RM5YW2T, then verify boxes 3–4 below by live
+measurement (post-deploy `spans.inMemory` bound, RSS after 15 min live).
 
 USER directive 2026-09-05 22:00 (verbatim): *"why the hell alcore is using 17Gb of ram??? haven't i
 told you to make duckdb the only memory of agentlenspro? why there are things kept in memory and not
@@ -75,8 +90,8 @@ old spans whose FIRST element has no resolvable timestamp must still prune the o
 
 ## Acceptance
 
-- [ ] The cause is named from a measurement (which candidate, with the number that proved it).
-- [ ] `span_window.rs::prune` no longer depends on `spans.first()`; a unit test covers the
+- [x] The cause is named from a measurement (which candidate, with the number that proved it).
+- [x] `span_window.rs::prune` no longer depends on `spans.first()`; a unit test covers the
       unresolvable-first-element case.
 - [ ] Against the live server after deploy: `spans.inMemory` ≤ (ingest rate × `windowMs`) × 2 within
       one tick of boot-load completing, and it stays there over 15 min.
