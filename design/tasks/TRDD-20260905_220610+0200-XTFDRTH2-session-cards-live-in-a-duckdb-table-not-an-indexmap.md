@@ -1,9 +1,10 @@
 ---
 trdd-id: XTFDRTH2
 title: Session cards live in a DuckDB table upserted on ingest, not in a 32k-entry IndexMap
-column: todo
+column: dev
 created: 2026-09-05T22:06:10+0200
-updated: 2026-09-05T22:06:10+0200
+updated: 2026-09-06T03:19:16+0200
+implementation-commits: []
 current-owner: main-session
 task-type: refactor
 priority: high
