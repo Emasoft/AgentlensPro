@@ -3,14 +3,13 @@ trdd-id: GR6WHHK5
 title: Boot load evicts timestamp-less codex spans within 5 s because receivedAt is stamped after writer.append
 column: todo
 created: 2026-09-06T02:32:43+0200
-updated: 2026-09-06T02:32:43+0200
+updated: 2026-09-06T02:35:16+0200
 current-owner: agentlenspro-b2
 task-type: bugfix
 priority: normal
 min-approval-requirement: none
 scope: project
 project-id: agentlenspro
-parent-trdd: 7YPQWKPG
 npt: []
 eht: []
 relevant-files: [rust-core/crates/agentlens-core/src/lib.rs, rust-core/crates/agentlens-core/src/span_window.rs, rust-core/crates/agentlens-core/src/writer.rs, rust-core/crates/agentlens-core/src/summarize/codex.rs]

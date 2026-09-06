@@ -3,7 +3,7 @@ trdd-id: YILE6N3T
 title: The span window reports a 5-minute window but holds the whole 24-hour boot replay and only grows
 column: testing
 created: 2026-09-05T22:06:10+0200
-updated: 2026-09-06T02:32:43+0200
+updated: 2026-09-06T02:35:16+0200
 current-owner: main-session
 task-type: bugfix
 priority: critical
@@ -11,6 +11,7 @@ min-approval-requirement: none
 scope: project
 project-id: agentlenspro
 parent-trdd: 7YPQWKPG
+eht: [GR6WHHK5]
 related: [7YPQWKPG, 768NEX6E, YU8QPU89, 7RM5YW2T, GR6WHHK5]
 relevant-files: [rust-core/crates/agentlens-core/src/span_window.rs, rust-core/crates/agentlens-core/src/lib.rs, rust-core/crates/agentlens-core/src/chores.rs]
 labels: [rust-core, memory, span-window]
