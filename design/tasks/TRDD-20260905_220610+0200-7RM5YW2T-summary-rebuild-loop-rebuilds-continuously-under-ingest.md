@@ -1,11 +1,11 @@
 ---
 trdd-id: 7RM5YW2T
 title: The 25 ms summary rebuild loop rebuilds the whole window continuously under ingest and is the mimalloc churn
-column: dev
+column: testing
 created: 2026-09-05T22:06:10+0200
-updated: 2026-09-06T02:41:21+0200
+updated: 2026-09-06T02:49:27+0200
 current-owner: main-session
-implementation-commits: [bd0d48e3]
+implementation-commits: [bd0d48e3, 6698af32, bb8d5f8e, 67e5478cc62f28a49e3877db3885ee3fd727d6ed]
 task-type: bugfix
 priority: critical
 min-approval-requirement: none

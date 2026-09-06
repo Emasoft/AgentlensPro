@@ -78,3 +78,4 @@ agent-lens-export-*.json
 # Rust parity test builds its own rather than reading them, so committing them would ship two binary
 # blobs nothing consumes.
 rust-core/crates/agentlens-core/tests/fixtures/forensicsindexer/*.db
+__pycache__/
