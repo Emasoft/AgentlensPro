@@ -121,11 +121,11 @@ fn sse_frame(payload: &str) -> Bytes {
 /// block. Rebuilds used to run BACK-TO-BACK under sustained ingest — the moment one finished the
 /// next cache miss started another — a steady 100% of ONE core (measured 101.9%, later 84%) and
 /// the allocation churn behind the multi-GB plateau. The 25 ms rebuild loop now records what each
-/// pass cost in the gate and skips its next `REBUILD_COST_FACTOR ×` that, capping ITS rebuilding at
-/// a fifth of the wall clock; the read path is untouched, so a reader still rebuilds at most once
-/// per version change it observes. That RATIONS the cost; the ceiling is unchanged — a rebuild is
-/// still the WHOLE window — and the upgrade is still the incremental summarizer named above, which
-/// removes it rather than rationing it.
+/// pass cost in the gate and skips its next `REBUILD_COST_FACTOR ×` that, capping its rebuilding at
+/// a fifth of the wall clock — with ONE override: a reader waiting on it, honoured only while the
+/// rebuild can still land inside that reader's budget (`READER_WAITING`, below). That RATIONS the
+/// cost; the ceiling is unchanged — a rebuild is still the WHOLE window — and the upgrade is still
+/// the incremental summarizer named above, which removes it rather than rationing it.
 /// How long a reader waits for an in-flight rebuild before serving stale (TRDD-2R36W8Q1).
 ///
 /// Sized against BOTH failure modes rather than picked. Long enough that an ordinary rebuild
@@ -147,12 +147,17 @@ const STALE_BUDGET_MS: u64 = 500;
 ///
 /// WHY A MULTIPLE OF THE COST AND NOT A PERIOD, AND NO FLOOR UNDER IT. `4 × d` caps rebuilding at a
 /// fifth of the wall clock at EVERY window size, so nothing needs retuning as the window grows: a
-/// 1 ms rebuild is waved through 4 ms later, a 20 s rebuild gets an 80 s gap. That same scaling is
-/// what leaves read-your-writes intact where it is observable at all — a reader that misses the
-/// cache waits up to `STALE_BUDGET_MS` for this loop, and after a millisecond-scale rebuild the
-/// loop is back inside 4 ms. A fixed floor would be a second constant with no such relationship to
-/// either number: at 250 ms it delays the pass a waiting reader needs to half its budget, and it
-/// buys nothing, because at `d ≈ 1 ms` there is no churn left to ration.
+/// 1 ms rebuild is waved through 4 ms later, a 20 s rebuild gets an 80 s gap. A fixed floor would
+/// be a second constant that buys nothing: at `d ≈ 1 ms` there is no churn left to ration.
+///
+/// WHAT THE FACTOR ALONE DOES TO READ-YOUR-WRITES, stated rather than waved away. With a rebuilder
+/// active a cache-missing reader never builds; it waits ≤ `STALE_BUDGET_MS` for the loop. Before
+/// this back-off that held for `d + tick ≲ 500 ms`, i.e. `d ≲ 475 ms`; with a blind `4 × d` skip it
+/// would hold only for `4d + tick + d ≲ 500 ms`, i.e. `d ≲ 95 ms`, and a 5k–25k-span store (an
+/// ordinary dev install, 100–500 ms per rebuild) would sit in the regressed band. `READER_WAITING`
+/// closes that band: a waiting reader overrides the skip whenever the rebuild can still land inside
+/// its budget. What remains, deliberately, is a larger staleness ceiling at LARGE `d` — a reader
+/// there was served stale before too, and the summary it sees is now up to ≈`5d` old, not ≈`d`.
 const REBUILD_COST_FACTOR: u32 = 4;
 
 /// The single-flight gate, and the back-off record it protects.
@@ -175,13 +180,11 @@ fn rebuild_gate() -> &'static Mutex<RebuildGate> {
 /// the gate are read by the caller — so the arithmetic is unit-testable without sleeping or faking
 /// an `Instant`.
 ///
-/// THE ONLY CALLER IS THE 25 ms LOOP, and that is the whole design. This predicate knows what the
-/// last rebuild COST and nothing about `data_version`, so it cannot tell "no one needs this pass"
-/// from "someone just wrote and is asking for it" — which is exactly the question the read path
-/// exists to answer. Rationing `summary_now` with it would serve the pre-write summary to any
-/// reader whose write landed inside the window, for 80 s after a 20 s boot-replay rebuild. The loop
-/// is unbounded (a tick every 25 ms for as long as ingest bumps the version); a reader is already
-/// bounded by how often anyone asks. Ration the unbounded one.
+/// THE ONLY CALLER IS THE 25 ms LOOP. This predicate knows what the last rebuild COST and nothing
+/// about `data_version`, so it cannot tell "no one needs this pass" from "someone just wrote and is
+/// asking for it". That is why it is never applied to the read path, and why the loop pairs it with
+/// `READER_WAITING`: in production the loop is a waiting reader's ONLY source of fresh data, so a
+/// reader raising that flag is the version term this arithmetic lacks.
 ///
 /// `saturating_mul` because `Duration * u32` PANICS on overflow, and `saturating_duration_since`
 /// because a clock that went backwards must read as "no time passed", not wrap into "due".
@@ -199,6 +202,17 @@ fn should_rebuild(finished_at: std::time::Instant, took: std::time::Duration, no
 /// So the flag makes the contract explicit: rebuilder present ⇒ readers only ever WAIT and serve;
 /// rebuilder absent ⇒ the previous self-healing inline-build behaviour, unchanged.
 static REBUILDER_ACTIVE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Raised by a reader entering the `STALE_BUDGET_MS` wait in `summary_now`; consumed by
+/// `rebuild_once` at the start of the pass that answers it (TRDD-7RM5YW2T).
+///
+/// The cost back-off has no `data_version` term, and with a rebuilder active a cache-missing reader
+/// cannot build for itself — the loop is its only source of fresh data. This flag is how the reader
+/// tells the loop "someone is waiting on you", so the loop can override its skip while the rebuild
+/// can still land inside the reader's budget. Advisory, like `REBUILDER_ACTIVE`: a spurious extra
+/// pass costs one rebuild, a lost flag costs one stale answer, neither is a safety property, hence
+/// `Relaxed`.
+static READER_WAITING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// Owns summary rebuilds so no HTTP request ever runs one (TRDD-2R36W8Q1).
 ///
@@ -253,11 +267,31 @@ fn rebuild_once(state: &Arc<Mutex<CoreState>>) {
     };
     // THE COST BACK-OFF (TRDD-7RM5YW2T). Without it this tick fires every 25 ms for as long as
     // ingest keeps bumping the version, which is what turned a whole-window rebuild into 84% of a
-    // core and 8.7 GB of mimalloc churn. A reader that needs data newer than this is not starved by
-    // the skip: at the window sizes where read-your-writes is observable the gap is milliseconds.
-    if !flight.last.is_none_or(|(finished_at, took)| should_rebuild(finished_at, took, std::time::Instant::now())) {
+    // core and 8.7 GB of mimalloc churn.
+    //
+    // THE ONE OVERRIDE: a reader waiting on this loop, honoured ONLY while the rebuild can still land
+    // inside that reader's budget (`took <= STALE_BUDGET_MS`). Below the budget the override is what
+    // keeps read-your-writes where it was before this change (`d ≲ 475 ms`, not `d ≲ 95 ms` — see
+    // `REBUILD_COST_FACTOR`). Above it the reader is served stale either way, exactly as before, and
+    // honouring it there would hand every dashboard poll a whole-window rebuild — the back-to-back
+    // churn at precisely the sizes this card exists for.
+    let now = std::time::Instant::now();
+    let reader_waiting = READER_WAITING.load(std::sync::atomic::Ordering::Relaxed);
+    let due = flight.last.is_none_or(|(finished_at, took)| {
+        should_rebuild(finished_at, took, now)
+            || (reader_waiting && took <= std::time::Duration::from_millis(STALE_BUDGET_MS))
+    });
+    if !due {
         return;
     }
+    // Consumed BEFORE the snapshot, not after the store: a reader that raises the flag mid-pass has
+    // a write this pass's snapshot does not contain, and clearing after the store would lose it —
+    // it would time out on the next backed-off tick. Cleared here, any reader arriving after the
+    // snapshot re-raises the flag and the next tick sees it.
+    READER_WAITING.store(false, std::sync::atomic::Ordering::Relaxed);
+    // The timer starts before the snapshot: it clones the window's spans and the log cards under
+    // the state lock, and that is part of the cost being rationed (and the part that blocks ingest).
+    let started = std::time::Instant::now();
     let inputs = {
         let Ok(mut st) = state.lock_timed() else { return };
         let version = st.data_version;
@@ -266,7 +300,6 @@ fn rebuild_once(state: &Arc<Mutex<CoreState>>) {
         }
         st.summary_snapshot()
     };
-    let started = std::time::Instant::now();
     let (summary, attribution) = CoreState::summary_from(&inputs, crate::now_ms() as f64);
     let took = started.elapsed();
     if let Ok(mut st) = state.lock_timed() {
@@ -322,6 +355,9 @@ pub fn summary_now(state: &Arc<Mutex<CoreState>>, now_ms: f64) -> Result<(u64, A
         if let Some(stale_pair) = stale.clone() {
             let deadline =
                 std::time::Instant::now() + std::time::Duration::from_millis(STALE_BUDGET_MS);
+            // Tell the loop someone is waiting on it, so its cost back-off yields while the rebuild
+            // can still land inside this budget (TRDD-7RM5YW2T). The loop consumes the flag.
+            READER_WAITING.store(true, std::sync::atomic::Ordering::Relaxed);
             loop {
                 std::thread::sleep(std::time::Duration::from_millis(2));
                 {
@@ -345,13 +381,11 @@ pub fn summary_now(state: &Arc<Mutex<CoreState>>, now_ms: f64) -> Result<(u64, A
         }
     }
 
-    // NO COST BACK-OFF ON THE READ PATH, deliberately (TRDD-7RM5YW2T). The back-off has no
-    // `data_version` term — it only knows what the last rebuild cost — so applying it here would
-    // answer a reader whose write landed INSIDE the window with the pre-write summary. After a slow
-    // pass (boot replay measured at ~20 s ⇒ an 80 s window) that is read-your-writes broken for a
-    // minute and a half. A reader may still only rebuild once per version change it observes, which
-    // is bounded by how often anyone asks; the 25 ms tick is what was unbounded, and that is where
-    // the rationing belongs.
+    // NO COST BACK-OFF ON THIS PATH, deliberately (TRDD-7RM5YW2T). The back-off has no
+    // `data_version` term — it only knows what the last rebuild cost — so applying it to a reader
+    // would answer one whose write landed INSIDE the window with the pre-write summary. This inline
+    // build is reached only without a rebuilder (tests, embedders); a reader is bounded by how often
+    // anyone asks, and its rebuild is not what churned. The 25 ms tick was.
     let _flight = match rebuild_gate().try_lock() {
         Ok(g) => g,
         Err(std::sync::TryLockError::Poisoned(e)) => e.into_inner(),
@@ -4155,10 +4189,11 @@ pub async fn run_push_loop(state: Arc<Mutex<CoreState>>, hub: Arc<SseHub>) {
 /// admission reinstated is guarding nothing.
 #[cfg(test)]
 mod rebuild_admission_tests {
+    use std::sync::atomic::Ordering;
     use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
 
-    use super::{rebuild_gate, rebuild_once, summary_now, REBUILDER_ACTIVE, STALE_BUDGET_MS};
+    use super::{rebuild_gate, rebuild_once, summary_now, READER_WAITING, REBUILDER_ACTIVE, STALE_BUDGET_MS};
     use crate::{CoreState, LockTimed};
 
     /// `REBUILDER_ACTIVE` is process-global and cargo runs these tests on parallel threads, so a
@@ -4207,6 +4242,10 @@ mod rebuild_admission_tests {
     /// keyed to inputs it really derives from).
     #[test]
     fn reader_does_not_block_behind_an_in_flight_rebuild() {
+        // This test HOLDS the process-global gate for the whole wait below, so any sibling that
+        // `try_lock`s it meanwhile (`rebuild_once` in the wiring test) sees `WouldBlock` and reads
+        // that as "someone is rebuilding". Measured 2/30 flakes at --test-threads=8 before this.
+        let _serial = serial();
         let (state, warm_version) = state_with_a_warm_summary("nonblock");
 
         // Force the fast path to miss exactly the way sustained ingest does: bump the key.
@@ -4264,49 +4303,66 @@ mod rebuild_admission_tests {
     ///
     /// The record is WRITTEN directly, with an absurd cost, so the second tick is inside the window
     /// on any machine at any load; timing it against a real microsecond rebuild would be a flake.
-    /// `rebuild_once` is the only writer of that record, and no other test calls it, so this needs
-    /// no serialization — if a second test ever does, both must take `serial()`.
+    /// `serial()` because the gate is process-global: a sibling holding it makes `rebuild_once`
+    /// `try_lock` → `WouldBlock` → "someone is rebuilding" → the first assertion fails (measured
+    /// 2/30 at --test-threads=8), and this test's own momentary `.lock()`s can fail a sibling's
+    /// `try_lock().is_ok()` the same way.
     ///
-    /// The reader path is deliberately absent from this test because it is deliberately absent from
-    /// the change: a reader is the read-your-writes path and the back-off has no version term.
+    /// The reader-waiting override is exercised on both sides of its budget bound: an absurd cost
+    /// with a reader waiting must STILL skip (the reader is stale either way, and honouring it would
+    /// recreate the churn), a 10 ms cost with a reader waiting must build and consume the flag.
     #[test]
     fn the_rebuild_loop_skips_a_pass_inside_the_backoff_window() {
+        let _serial = serial();
         let dir = std::env::temp_dir().join(format!("al-backoff-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let state = Arc::new(Mutex::new(CoreState::open(&dir)));
-        rebuild_gate().lock().unwrap_or_else(|e| e.into_inner()).last = None;
+        let set_record = |last| rebuild_gate().lock().unwrap_or_else(|e| e.into_inner()).last = last;
+        let is_current = |state: &Arc<Mutex<CoreState>>| {
+            let mut st = state.lock_timed().unwrap();
+            let version = st.data_version;
+            st.summary_cache.current(version).is_some()
+        };
+        set_record(None);
+        READER_WAITING.store(false, Ordering::Relaxed);
 
         // Nothing on the record yet: the first pass must build.
         rebuild_once(&state);
-        {
-            let mut st = state.lock_timed().unwrap();
-            let version = st.data_version;
-            assert!(st.summary_cache.current(version).is_some(), "the first pass must build — nothing is recorded yet");
-        }
+        assert!(is_current(&state), "the first pass must build — nothing is recorded yet");
 
         // Move the cache key the way ingest does, and put an expensive pass on the record.
         state.lock_timed().unwrap().data_version += 1;
-        rebuild_gate().lock().unwrap_or_else(|e| e.into_inner()).last = Some((Instant::now(), Duration::from_secs(60)));
+        set_record(Some((Instant::now(), Duration::from_secs(60))));
         rebuild_once(&state);
-        {
-            let mut st = state.lock_timed().unwrap();
-            let version = st.data_version;
-            assert!(
-                st.summary_cache.current(version).is_none(),
-                "the loop rebuilt inside the back-off window — this is the back-to-back churn the card removed"
-            );
-        }
+        assert!(
+            !is_current(&state),
+            "the loop rebuilt inside the back-off window — this is the back-to-back churn the card removed"
+        );
 
-        // Clear the window and the SAME tick must build: that is what shows the skip above was the
-        // back-off and not a version compare, an empty window, or a poisoned gate.
-        rebuild_gate().lock().unwrap_or_else(|e| e.into_inner()).last = None;
+        // A reader waiting on a rebuild that cannot land inside its budget changes nothing: it is
+        // served stale either way, and yielding here would rebuild once per dashboard poll.
+        READER_WAITING.store(true, Ordering::Relaxed);
         rebuild_once(&state);
-        {
-            let mut st = state.lock_timed().unwrap();
-            let version = st.data_version;
-            assert!(st.summary_cache.current(version).is_some(), "with the window cleared the loop must rebuild");
-        }
-        rebuild_gate().lock().unwrap_or_else(|e| e.into_inner()).last = None;
+        assert!(!is_current(&state), "a reader waiting on a 60 s rebuild must not override the back-off");
+        assert!(READER_WAITING.load(Ordering::Relaxed), "a skipped pass must not consume the reader's flag");
+
+        // The same reader waiting on a rebuild that CAN land inside its budget is honoured, and the
+        // pass consumes the flag.
+        set_record(Some((Instant::now(), Duration::from_millis(10))));
+        rebuild_once(&state);
+        assert!(is_current(&state), "a reader waiting on a 10 ms rebuild must override the back-off");
+        assert!(!READER_WAITING.load(Ordering::Relaxed), "the pass that answers a waiting reader consumes its flag");
+
+        // Clear the window and the SAME tick must build: that is what shows the skips above were the
+        // back-off and not a version compare, an empty window, or a poisoned gate.
+        state.lock_timed().unwrap().data_version += 1;
+        set_record(Some((Instant::now(), Duration::from_secs(60))));
+        rebuild_once(&state);
+        assert!(!is_current(&state), "sanity: inside the window, no reader waiting, must skip");
+        set_record(None);
+        rebuild_once(&state);
+        assert!(is_current(&state), "with the window cleared the loop must rebuild");
+        set_record(None);
     }
 
     /// THE FIX FOR THE GATE WINNER (TRDD-2R36W8Q1). With a background rebuilder owning rebuilds,
