@@ -3,7 +3,7 @@ trdd-id: 3LKN70Y4
 title: Six mocha failures from the load-113 whole-suite run need re-running alone to classify
 column: todo
 created: 2026-09-06T02:11:03+0200
-updated: 2026-09-06T02:27:51+0200
+updated: 2026-09-06T02:41:06+0200
 current-owner: main-session
 task-type: bugfix
 priority: medium
@@ -26,7 +26,7 @@ release builds and an isolated alcore ran beside it (load average 113–115). Re
 | # | test | error |
 |---|---|---|
 | 1 | `cacheBreakTimeline — buildCauseCostPeakReport (cross-session cause cost-peak)` | `Timeout of 120000ms exceeded` — B7DSTJLS's own file |
-| 3–7 | `standalone server — P5 window auto-calibration` (`serverCalibration.test.ts`), five tests | one symptom: the spawned server ingested nothing — `store holds 0 span(s) across 0 segment(s)` (#3), so calibration never wrote `burn-config.json`, producing four downstream `ENOENT … /home/.agentlens/burn-config.json` (#4–7) |
+| 3–7 | `standalone server — P5 window auto-calibration` (`serverCalibration.test.ts`), five tests | one symptom: the spawned server ingested nothing — `store holds 0 span(s) across 0 segment(s)` (#3), so calibration never wrote `burn-config.json`, producing four downstream `ENOENT … <test HOME>/.agentlens/burn-config.json` (#4–7) |
 
 The five `serverCalibration` rows are not five independent defects — #4–7 are consequences of the
 one empty-ingest symptom in #3. That symptom is consistent with the spawned server not finishing
