@@ -3,8 +3,8 @@ trdd-id: XTFDRTH2
 title: Session cards live in a DuckDB table upserted on ingest, not in a 32k-entry IndexMap
 column: dev
 created: 2026-09-05T22:06:10+0200
-updated: 2026-09-06T03:19:16+0200
-implementation-commits: []
+updated: 2026-09-06T03:52:24+0200
+implementation-commits: [f29bc3b6, 8069c6a9, e00af58b, 13209791, 12c4c4a7]
 current-owner: main-session
 task-type: refactor
 priority: high
@@ -19,6 +19,47 @@ labels: [rust-core, memory, duckdb]
 ---
 
 # Session cards live in a DuckDB table upserted on ingest, not in a 32k-entry IndexMap
+
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-06T03:52:24+0200
+
+**CODE IS DONE AND GREEN on branch `worktree-agent-a7d79196282fd6298`, NOT DEPLOYED.** Five commits
+(see `implementation-commits:`), each one phase. `CoreState.log_sessions` no longer exists;
+`card_store.rs` owns one long-lived in-memory DuckDB connection with
+`cards(session_id PK, seq, last_active_ms, timeline_len, card VARCHAR)`. Gates on every phase:
+`cargo clippy -p agentlens-core --all-targets -- -D warnings` clean, `cargo test -p agentlens-core`
+**616 passed / 0 failed across 104 suites** (`alcore` is a bin of that crate, so it is covered).
+Zero expected outputs edited — only test ACCESSORS moved (`st.log_sessions["x"]` →
+`st.cards.get("x").unwrap()`).
+
+**NEXT ACTION (main session, needs the live server):** deploy — `cargo build --release`, copy into
+`bin-native/darwin-arm64/`, `codesign -s - --force`, `agentlenspro server restart` — then take the
+box-3 measurement (resident mimalloc heap after boot vs the 8.7 GB pre-change figure) and record it
+here. Nothing else is outstanding.
+
+**Two deviations from the card's `## Shape`, both deliberate — rule on them before closing:**
+
+1. **Boot restore does NOT use `read_ndjson_auto`.** It still goes through `DeltaLog::load()` →
+   `put_log_session` per card, which now upserts into the table. `read_ndjson_auto` needs
+   `ignore_errors=true` to be usable, and that SILENTLY DROPS a corrupt line — whereas `load()`'s
+   documented contract tolerates exactly ONE torn TRAILING line and REFUSES a corrupt line anywhere
+   else, because that is real damage and the on-disk format is byte-compatible with the TS engine.
+   It would also have to re-implement snapshot+delta precedence, tombstones, and the TRDD-66IXMIGN
+   timeline-cap normalization in SQL. The memory goal is met either way: cards are parsed one at a
+   time and land in the table, not in a resident map.
+2. **A `seq` column was added** (the sketch said `session_id PK, start_ms, card JSON`), and
+   `start_ms` is stored as `last_active_ms` (start + duration), which is the value the demotion
+   ranking actually uses. `seq` is not cosmetic — it is what reproduces `IndexMap` iteration order,
+   which the served `sessions` array depends on for cards sharing a `startTime` (the final sort is
+   stable). `card` is VARCHAR and not DuckDB's `JSON` type on purpose: a `JSON` column re-emits the
+   document from a parsed form and can reorder keys / reformat numbers, which would change the
+   wire bytes.
+
+**One residual worth knowing, NOT a defect:** `summary_snapshot` now copies the whole corpus as
+`Vec<String>` under the state lock (the parse happens off it, in `summary_from`). That is inherent —
+the DuckDB connection lives inside `CoreState` and cannot be read off the lock — and it replaces an
+`IndexMap` clone of 32k `Arc`s + `String` keys. It is bounded by the rebuild cadence TRDD-7RM5YW2T
+rationed. If it ever measures as a hold, the fix is to hand the rebuild a second read-only
+connection, not to reintroduce a resident map.
 
 Advisor step 2 of TRDD-7YPQWKPG (verdict 2026-09-02), re-issued by the USER 2026-09-05 22:00
 ("why are there persistent data structures in RAM instead of just the small query results from
@@ -44,12 +85,63 @@ phase (≤5 files per phase), parity tests unchanged.
 
 ## Acceptance
 
-- [ ] `CoreState` has no `log_sessions` map; `grep -rn 'log_sessions' src/` → only the DuckDB
-      accessor.
-- [ ] All parity/golden tests unchanged; every `agentlenspro` tool answers with identical shape.
+- [x] `CoreState` has no `log_sessions` map; `grep -rn 'log_sessions' src/` → only the DuckDB
+      accessor. **Verified 2026-09-06** (commit 13209791). The field is gone. The grep returns FIVE
+      residual hits and none of them is a resident structure: `feed_merge.rs:90/91/97/108` are the
+      function `merge_otel_and_log_sessions`, its `Vec<Value>` parameter and its locals, and
+      `lib.rs:411` is the call site. That is the function this card's `## Shape` says stays Rust
+      ("`feed_merge.rs` stays Rust over the colliding ids only"); it never held the map. There is
+      no symbol named `log_sessions` on `CoreState` and no accessor by that name — the accessor is
+      `CoreState.cards` (`card_store::CardStore`).
+- [x] All parity/golden tests unchanged; every `agentlenspro` tool answers with identical shape.
+      **Verified 2026-09-06.** Not one expected value was edited anywhere — the TS-oracle fixtures
+      (`log-reader-expected.json`, the feed-merge fixture) and the freeze-row assertions are
+      byte-for-byte what they were; only test ACCESSORS moved with the field. The tool-shape half
+      is carried by the `mcp_tools` oracle suites (`get_recent_sessions` / `get_session_detail` /
+      `get_cost_rollup` / `get_workspace_patterns` / `get_efficiency_report` /
+      `find_relevant_context` / `predict_session_cost` … `_reproduces_the_ts_oracle_exactly`),
+      unchanged and green. What that does NOT cover, and the deploy will: the same tools invoked
+      through a LIVE server against the real corpus.
 - [ ] Resident mimalloc heap after boot ≤ the pre-change figure minus the cards' share, recorded.
+      **Deliberately unticked — needs a live measurement the worker could not take** (no deploy, no
+      codesign, no server restart in this branch). Baseline to compare against: 8.7 GB mimalloc
+      resident with 32,607 cards, `reports/trdd-768nex6e/20260902_220716+0200-box4-heap-by-structure.md`.
 
 ## Notes and lessons learned
+
+**Phase 0 — the complete reader/writer inventory** (`grep -rn log_sessions
+rust-core/crates/agentlens-core/src`, taken 2026-09-06 before any edit). Note the card's NEXT
+ACTION named `chores.rs`: it has NO reference and never did.
+
+| file:line | what it did | phase |
+|---|---|---|
+| `lib.rs:133` | `SummaryInputs.log_sessions` field | 2 |
+| `lib.rs:188` | `CoreState.log_sessions` field | 4 (deleted) |
+| `lib.rs:277` | `put_log_session` — THE one write path | 1 (dual) → 4 |
+| `lib.rs:285,289,297` | `demote_cold_timelines` — len guard, stable rank, `Arc::make_mut` strip | 1 (dual) → 4 |
+| `lib.rs:331` | `session_summary` | 2 |
+| `lib.rs:341` | `summary_snapshot` (the under-lock copy) | 2 |
+| `lib.rs:349,370,399,403` | `summary_from` / `summary_over` (the deep clone of all cards) | 2 |
+| `lib.rs:434,437` | `build_session_summary` disjoint-borrow destructure | 2 |
+| `lib.rs:568` | `open()` initialiser | 4 |
+| `lib.rs:627` | `clear_all` | 1 (dual) → 4 |
+| `ui.rs:780` | `resolve_session_card` reparse gate | 3 |
+| `ui.rs:886` | `resolve_session_card_offlock` reparse gate (lock 1) | 3 |
+| `ui.rs:102` | doc comment only | 3 |
+| `import_card.rs:85` | `import_sessions` already-known-id → `skipped` | 3 |
+| `server_stats.rs:651` | `logSessions` count in `/api/server-stats` | 3 |
+| `log_reader.rs:776` | `save_cards` — the durable-save strip scan | 4 |
+| `feed_merge.rs:90-108` | `merge_otel_and_log_sessions` — a `Vec<Value>` parameter, NOT the map | none (stays Rust) |
+
+**Lesson — an `IndexMap` field is three contracts, not one.** Replacing it with a table only looks
+like a storage swap. What it actually removes is (a) first-insert iteration order, (b) an upsert
+keeping its slot, and (c) a STABLE sort's tie-break falling back to that order — and all three are
+observable on the wire, because the served `sessions` array is produced by a stable sort over the
+corpus. A table has none of them; they come back as a `seq` column plus `ORDER BY` on every read.
+No existing test would have caught losing them: every fixture in the suite has DISTINCT
+`startTime`s, so an unordered scan passes all 616. The guard is
+`tests/card_store.rs::cards_sharing_a_start_time_are_served_in_first_insert_order`, written and
+verified green BEFORE the switch so it pins the OLD behaviour rather than blessing the new one.
 
 ## Approval log
 
