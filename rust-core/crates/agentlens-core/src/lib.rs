@@ -46,6 +46,7 @@ pub mod session_burn_profile;
 pub mod cache_risk_commands;
 pub mod chores;
 pub mod call_body_registry;
+pub mod card_store;
 pub mod collector_lifecycle;
 pub mod context_composition;
 pub mod context_history;
@@ -186,6 +187,13 @@ pub struct CoreState {
     /// (TRDD-HFV4AIT7): `summary_snapshot` has to copy this map under the lock so the rebuild can
     /// run outside it, and a deep clone of 13k cards there would be the stall it removes.
     pub log_sessions: IndexMap<String, Arc<Value>>,
+    /// TRDD-XTFDRTH2 — the card corpus in a DuckDB table, the replacement for `log_sessions`.
+    ///
+    /// Both exist for the length of the migration ONLY: this phase makes the table the same
+    /// corpus (every write path feeds both), and each following phase moves one file's readers
+    /// across, with the map deleted in the last one. Nothing reads `cards` until its reader's own
+    /// phase, so the two cannot disagree on the wire in the meantime.
+    pub cards: card_store::CardStore,
     /// The data dir this process owns (server.ts DATA_DIR) — the sidecar paths `/api/server-stats`
     /// measures hang off it.
     pub data_dir: std::path::PathBuf,
@@ -274,6 +282,7 @@ impl CoreState {
     /// putLogSession — upsert by sessionId.
     pub fn put_log_session(&mut self, card: Value) {
         let id = card.get("sessionId").and_then(Value::as_str).unwrap_or("").to_owned();
+        self.cards.put(&card);
         self.log_sessions.insert(id, Arc::new(card));
         self.data_version += 1;
     }
@@ -282,6 +291,7 @@ impl CoreState {
     /// sufficient on a ~13k-session machine — only the `hot_cards` most-recently-active cards
     /// keep their timelines in RAM; every colder card keeps headers only.
     pub fn demote_cold_timelines(&mut self, hot_cards: usize) {
+        self.cards.demote_cold(hot_cards);
         if self.log_sessions.len() <= hot_cards {
             return;
         }
@@ -566,6 +576,7 @@ impl CoreState {
             build_id: now.to_string(),
             media_dir: None,
             log_sessions: IndexMap::new(),
+            cards: card_store::CardStore::new(),
             data_dir: data_dir.to_path_buf(),
             started_at_ms: now,
             ports: server_stats::Ports::default(),
@@ -625,6 +636,7 @@ impl CoreState {
     pub fn clear_all(&mut self) {
         self.clear_spans();
         self.log_sessions.clear();
+        self.cards.clear();
         if let Some(s) = &self.sweeper {
             s.clear_and_rescan();
         }
