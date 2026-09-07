@@ -3,7 +3,7 @@ trdd-id: WKLD508O
 title: alcore exits with a culprit log rather than exceed a 2 GB memory cap
 column: dev
 created: 2026-09-07T19:36:46+0200
-updated: 2026-09-07T21:30:33+0200
+updated: 2026-09-07T21:59:51+0200
 current-owner: main
 task-type: feature
 parent-trdd: 7YPQWKPG
@@ -21,12 +21,44 @@ labels: [rust, memory, alcore, guard]
 
 # alcore exits with a culprit log rather than exceed a 2 GB memory cap
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-07 21:15
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-07 21:59
 
 **CODE LANDED, NOT DEPLOYED.** `466775af` (worker's implementation) + `f9776548` (two defects I
 found by reading the 244 lines I had committed after reading ~60). The worker has finished and
-released the crate. 8/8 tests green. Deploy still needs `cargo build --release` → copy into
-`bin-native/darwin-arm64/` → `codesign -s - --force` → `agentlenspro server restart`.
+released the crate. 8/8 tests green.
+
+**DEPLOY STATE (durable — the chat transcript is not).** `cargo build --release` is **DONE**,
+exit 0: `rust-core/target/release/alcore`, 55,409,760 bytes, 2026-09-07 21:56 (from `stat`).
+`bin-native/darwin-arm64/alcore` still holds the **old** binary (55,104,624 bytes, 2026-09-06
+04:13) — a fresh `target/release/alcore` is NOT a deployed one, and a later reader who sees only
+the mtime will get that wrong. Three commands remain:
+
+```
+cp rust-core/target/release/alcore bin-native/darwin-arm64/alcore
+codesign -s - --force bin-native/darwin-arm64/alcore
+agentlenspro server restart
+```
+
+**Do NOT call the copy risk-free — I did, in chat, and it was wrong.** CLAUDE.md records `cp`
+over a RUNNING, mapped binary as the live competing explanation for the exit-137 silent-SIGKILL
+incident (the copy there *did* precede the restart, with the old process still alive — exactly
+this shape). Keep copy + codesign **adjacent to the restart**, not staged hours ahead. Only the
+`cargo build` was ever free.
+
+**The restart destroys pid 30984** (~7 h uptime), and with it the only live specimen. Three of
+the four questions I have been calling "specimen-only" do **not** need it — the `memory_limit`
+scope falsifier and the `current_setting` readback are DuckDB semantics reproducible anywhere,
+and the parquet-retention re-read is on-disk. Only *reconciling* `rssMb 7930` vs `ps` 6.6 GB vs
+`footprint` 6265 MB needs the live process. I over-scoped that set across several turns.
+
+**No launchd respawn — now verified structurally, not by grep.** `plutil -p` (binary-plist-safe;
+a raw `grep` for an ASCII key can return a false 0 on a bplist, and this machine's `grep` hides
+binary matches without `-a`) on the **only** agentlens job anywhere under `~/Library/LaunchAgents`,
+`/Library/LaunchAgents`, `/Library/LaunchDaemons`: `com.agentlens.spool`, `RunAtLoad: true`, no
+`KeepAlive`, and `ProgramArguments` = `agentlenspro spool ensure`. That subcommand only re-creates
+the RAM-disk spool (`src/cli/spoolCli.ts`) — **it does not start the server.** So the one launchd
+job on this machine cannot bring the collector back. Still unchecked: cron, shell wrappers, and
+`server start`'s own retry logic.
 
 **THE FINDING THAT CHANGES THIS CARD'S PREMISE — measured on the live collector (pid 30984),
 `vmmap -summary` + `footprint`, 2026-09-07 21:0x:**
