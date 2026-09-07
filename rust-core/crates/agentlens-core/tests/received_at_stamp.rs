@@ -81,14 +81,22 @@ fn a_timestampless_span_carries_its_arrival_time_on_disk() {
 }
 
 #[test]
-fn a_timestampless_span_survives_boot_load_and_the_first_prune_tick() {
+fn a_timestampless_span_read_back_from_disk_survives_the_first_prune_tick() {
     let dir = tmp("prune");
     let (st, arrived) = ingest_and_flush(&dir);
     drop(st); // restart
 
+    // TRDD-FSMISF5K deleted `SpanWindow::boot_load`, so the record is read back the way every
+    // remaining reader gets it — `load_range` — and put in the window through the ingest door.
+    // `add` re-stamps only when `receivedAt` is ABSENT, so the disk copy's arrival time is what
+    // the prune below is judged against, which is exactly the invariant under test.
     let mut w = SpanStoreWriter::open(&dir.join("spans"));
     let mut window = SpanWindow::new(SUMMARY_WINDOW_FLOOR_MS);
-    assert_eq!(window.boot_load(&mut w, arrived), 1, "load_range admits the span");
+    let loaded = w.load_range(arrived - SUMMARY_WINDOW_FLOOR_MS, i64::MAX, arrived);
+    assert_eq!(loaded.len(), 1, "load_range admits the span");
+    for s in loaded {
+        window.add(s, arrived + 999_999);
+    }
 
     // The invariant the prune depends on: the loaded record resolves to its arrival time BY
     // ITSELF. `i64::MIN` is the fallback `prune` passes since TRDD-YILE6N3T, so a record with no

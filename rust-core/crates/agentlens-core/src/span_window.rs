@@ -1,10 +1,27 @@
 //! The standalone server's in-memory summarization window (TRDD-DMWOBWFH P4h) — server.ts
 //! `spans` + `effectiveWindowMs`: the array every derived view (summary, SSE update payload,
 //! analytics) is computed over. It is NOT the 5-minute collector SessionStore (that is the
-//! VS-Code-era otlpCollector path, unused by the standalone server): at boot it is loaded from
-//! the segmented span store for the last `summaryWindowHours` (default 24h), every ingested
-//! span is appended, and the flush tick prunes by the span's own timestamp — "memory is the time
-//! window, disk is everything". Nothing is evicted from disk.
+//! VS-Code-era otlpCollector path, unused by the standalone server): every ingested span is
+//! appended, and the flush tick prunes by the span's own timestamp — "memory is the time window,
+//! disk is everything". Nothing is evicted from disk.
+//!
+//! THERE IS NO BOOT LOAD ANY MORE (TRDD-FSMISF5K). It used to replay the last
+//! `summaryWindowHours` (default 24h) of the segmented store into this `Vec` at every start —
+//! measured 2026-09-06 on the live collector at **528,219 spans** and a **13.2 GB** process peak
+//! the allocator never returns
+//! (reports/7ypqwkpg/20260906_043059+0200-heap-by-structure-after-xtfdrth2.md).
+//!
+//! What it bought was measured on the same server, and it was NOTHING: of the 23,274 cards
+//! `/api/summary` served, **23,273 came from the log transcripts and exactly ONE from this
+//! window** — a codex session 40 seconds old, i.e. from the LIVE window, not from the replay.
+//! The feed-collision doctrine is why (`feed_merge.rs`): for claude_code sessions the log
+//! transcript WINS, so a replayed OTEL twin is built at a cost of gigabytes and then discarded by
+//! the merge. History is answered off disk instead — `session_summary_sql.rs` aggregates the same
+//! segments in DuckDB, and `/api/timeline` already re-reads a single session on demand
+//! (`ui.rs`, `writer.load_range`).
+//!
+//! So this window now holds ONLY what has arrived since boot, bounded by `effective_ms` and
+//! `max_spans` exactly as before.
 //!
 //! The TS heap/rss-pressure halving of `effectiveWindowMs` IS now ported, as
 //! `apply_memory_pressure` below — keyed on RSS (portable: proc_pidinfo on macOS, /proc on Linux)
@@ -16,7 +33,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use agentlens_spanstore::writer::{span_timestamp_ms, SpanStoreWriter};
+use agentlens_spanstore::writer::span_timestamp_ms;
 use serde_json::Value;
 
 /// server.ts SUMMARY_WINDOW_FLOOR_MS.
@@ -83,12 +100,6 @@ pub struct SpanWindow {
 impl SpanWindow {
     pub fn new(configured_ms: i64) -> SpanWindow {
         SpanWindow { spans: Vec::new(), configured_ms, effective_ms: configured_ms, max_spans: max_spans_default() }
-    }
-
-    /// Boot load: ONLY the segments overlapping the window — never the whole store.
-    pub fn boot_load(&mut self, writer: &mut SpanStoreWriter, now_ms: i64) -> usize {
-        self.spans = writer.load_range(now_ms - self.configured_ms, i64::MAX, now_ms).into_iter().map(Arc::new).collect();
-        self.spans.len()
     }
 
     /// addSpan: stamp receivedAt when absent, append (the store append is the caller's).

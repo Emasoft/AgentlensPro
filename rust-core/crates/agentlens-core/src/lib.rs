@@ -77,6 +77,7 @@ pub mod resident_cost;
 pub mod retention_config;
 pub mod runtime_inventory;
 pub mod server_stats;
+pub mod session_summary_sql;
 pub mod shutdown;
 pub mod skill_attribution;
 pub mod span_window;
@@ -555,13 +556,19 @@ pub fn burn_status_for(summary: &Value, config: &burn::monitor::BurnConfig, ttl:
 }
 
 impl CoreState {
-    /// Open the store under `<data_dir>/spans` and load the summary window from it — the TS boot
-    /// load (server.ts:422): only the segments overlapping the window, nothing evicted.
+    /// Open the store under `<data_dir>/spans`. The summary window starts EMPTY.
+    ///
+    /// TRDD-FSMISF5K: this used to run the TS boot load (server.ts:422) — every segment
+    /// overlapping the last `summaryWindowHours` replayed into `window.spans`. Measured on the
+    /// live collector that was 528,219 spans and a 13.2 GB peak, and it produced exactly ONE of
+    /// the 23,274 cards `/api/summary` served (see `span_window`'s header for the measurement and
+    /// why the feed merge makes a replayed OTEL twin worthless). Booting empty is therefore not a
+    /// data cut — every span is still on disk, `session_summary_sql` aggregates it there, and
+    /// `/api/timeline` re-reads one session on demand.
     pub fn open(data_dir: &std::path::Path) -> CoreState {
         let now = now_ms();
-        let mut writer = SpanStoreWriter::open(&data_dir.join("spans"));
-        let mut window = span_window::SpanWindow::new(span_window::summary_window_ms(data_dir));
-        window.boot_load(&mut writer, now);
+        let writer = SpanStoreWriter::open(&data_dir.join("spans"));
+        let window = span_window::SpanWindow::new(span_window::summary_window_ms(data_dir));
         CoreState {
             ingest: IngestState::default(),
             writer,
