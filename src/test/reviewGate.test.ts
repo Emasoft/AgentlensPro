@@ -6,6 +6,7 @@ import {
   scanMainTranscriptLines, decideMainGate,
   scanSubagentTranscriptLines, decideSubagentGate, agentCannotSpawn, declaredToolsHaveAgent,
   REVIEW_GATE_DIRECTIVE, ONE_TURN_RULE, MAIN_BLOCK_REASON, SUBAGENT_BLOCK_REASON,
+  NO_REVIEW_SENTINEL, REVIEWER_AGENT_TYPES,
 } from '../cli/reviewGate'
 
 // `agentlenspro review-gate` — pure decision-function tests, ported faithfully from
@@ -358,5 +359,124 @@ suite('reviewGate — the one-turn rule reaches the fork', () => {
         `${name} mentions SendMessage outside the prohibition — a named tool reads as a licence`,
       )
     }
+  })
+})
+
+// ── THE NO-REVIEW SENTINEL — the only exit from either gate that does not require spawning ──────
+//
+// Why these exist: the demand used to instruct a wedged agent to "state that in one line and
+// return", but that statement is a `text` block, which re-arms the very predicate that produced
+// the demand. Complying reproduced the demand over a longer transcript, forever. Every test below
+// fails if the sentinel stops being recognized, is matched as a substring, or is accepted without
+// a reason — the three ways the fix silently turns back into the bug.
+suite('review-gate: the no-review sentinel', () => {
+  const sentinelLine = (reason = 'rate-limited, cannot spawn') =>
+    ({ type: 'text', text: `${NO_REVIEW_SENTINEL} — ${reason}` })
+
+  test('a subagent that emits the sentinel is released — the documented compliance path terminates', () => {
+    // The exact sequence the block reason instructs: work, then the sentinel.
+    const scan = scanSubagentTranscriptLines([
+      assistantLine([textBlock]),
+      assistantLine([sentinelLine()]),
+    ])
+    assert.strictEqual(scan.reviewed, true, 'sentinel must set reviewed or the demand repeats forever')
+    assert.deepStrictEqual(
+      decideSubagentGate('lean-worker', true, scan, 0, 1),
+      { block: false, nextDemands: 0 },
+    )
+  })
+
+  test('without the sentinel that same transcript is blocked — proving the release came from it', () => {
+    // The discriminating control. Without this, the test above passes for any reason at all.
+    const scan = scanSubagentTranscriptLines([
+      assistantLine([textBlock]),
+      assistantLine([{ type: 'text', text: 'I cannot spawn a reviewer, sorry.' }]),
+    ])
+    assert.strictEqual(scan.reviewed, false)
+    assert.strictEqual(decideSubagentGate('lean-worker', true, scan, 0, 1).block, true)
+  })
+
+  test('the main gate honours the sentinel as its last block', () => {
+    const scan = scanMainTranscriptLines([
+      assistantLine([textBlock]),
+      assistantLine([sentinelLine()]),
+    ])
+    assert.ok(scan.lastFork >= scan.lastWork, 'sentinel must satisfy the positional rule')
+    assert.strictEqual(decideMainGate(scan, { total: 0, consecutive: 0 }, { maxPerSession: 9, maxConsecutive: 9 }).block, false)
+  })
+
+  test('prose after the sentinel re-arms the main gate, exactly as prose after a fork does', () => {
+    const scan = scanMainTranscriptLines([
+      assistantLine([sentinelLine()]),
+      assistantLine([textBlock]),
+    ])
+    assert.strictEqual(decideMainGate(scan, { total: 0, consecutive: 0 }, { maxPerSession: 9, maxConsecutive: 9 }).block, true)
+  })
+
+  test('a QUOTED sentinel does not release — a reviewer discussing the gate must not free its subject', () => {
+    // This is not hypothetical: the forks that reviewed this very file quoted the sentinel in their
+    // findings. A substring test would have released the agent under review.
+    for (const text of [
+      `> ${NO_REVIEW_SENTINEL} — quoted in a markdown blockquote`,
+      `# ${NO_REVIEW_SENTINEL} — as a heading`,
+      `The agent may emit ${NO_REVIEW_SENTINEL} — mid-prose, which must not count.`,
+      `Here is the rule:\n${NO_REVIEW_SENTINEL} — on a later line of the same block.`,
+    ]) {
+      const scan = scanSubagentTranscriptLines([assistantLine([textBlock]), assistantLine([{ type: 'text', text }])])
+      assert.strictEqual(scan.reviewed, false, `quoted/embedded sentinel released the gate: ${text.slice(0, 40)}`)
+    }
+  })
+
+  test('the sentinel without a reason does not release — "I cannot" must stay a statement, not a magic word', () => {
+    for (const text of [NO_REVIEW_SENTINEL, `${NO_REVIEW_SENTINEL} — `, `${NO_REVIEW_SENTINEL} — ab`]) {
+      const scan = scanSubagentTranscriptLines([assistantLine([textBlock]), assistantLine([{ type: 'text', text }])])
+      assert.strictEqual(scan.reviewed, false, `bare sentinel released the gate: ${JSON.stringify(text)}`)
+    }
+  })
+
+  test('the separator may be an em-dash, a hyphen or a colon — an agent that obeyed in substance is not re-wedged', () => {
+    for (const sep of ['—', '-', ':']) {
+      const scan = scanSubagentTranscriptLines([
+        assistantLine([{ type: 'text', text: `${NO_REVIEW_SENTINEL} ${sep} depth limit reached` }]),
+      ])
+      assert.strictEqual(scan.reviewed, true, `separator ${sep} was rejected`)
+    }
+  })
+
+  test('both block reasons tell the agent the escape exists — an unnamed exit is not an exit', () => {
+    for (const [name, reason] of [['MAIN', MAIN_BLOCK_REASON], ['SUBAGENT', SUBAGENT_BLOCK_REASON]] as const) {
+      assert.ok(reason.includes(NO_REVIEW_SENTINEL), `${name}_BLOCK_REASON omits the sentinel`)
+    }
+    assert.ok(
+      !SUBAGENT_BLOCK_REASON.includes('asked once'),
+      'the "asked once" promise is false — maxDemands is voided, so nothing enforces it',
+    )
+  })
+})
+
+// ── THE RECURSION GUARD — whole-token, never a substring ────────────────────────────────────────
+suite('review-gate: the recursion guard exempts reviewers and nothing else', () => {
+  const workScan = { didWork: true, reviewed: false }
+
+  test('the adversarial reviewer is exempt, so reviewing never recurses', () => {
+    assert.strictEqual(decideSubagentGate('fork', true, workScan, 0, 1).block, false)
+    assert.strictEqual(decideSubagentGate('FORK', true, workScan, 0, 1).block, false, 'case-folded')
+    assert.strictEqual(decideSubagentGate('', true, workScan, 0, 1).block, false, 'unnamed micro-lookup class')
+  })
+
+  test('an agent that merely CONTAINS "fork" is NOT exempt — the substring test gave it a free pass', () => {
+    // `/fork/i` matched every one of these. None is the adversarial reviewer; each returned
+    // unreviewed for free. This test fails the moment the guard goes back to a substring match.
+    for (const type of ['worktree-fork', 'fork-worker', 'wtfork', 'forklift', 'my-fork-agent']) {
+      assert.strictEqual(
+        decideSubagentGate(type, true, workScan, 0, 1).block,
+        true,
+        `${type} was exempted by a substring match`,
+      )
+    }
+  })
+
+  test('REVIEWER_AGENT_TYPES holds only genuine reviewers — each entry skips that agent\'s review', () => {
+    assert.deepStrictEqual([...REVIEWER_AGENT_TYPES], ['fork'])
   })
 })

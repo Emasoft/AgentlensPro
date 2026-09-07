@@ -238,8 +238,42 @@ export function agentCannotSpawn(
 interface AssistantContentBlock {
   type?: unknown
   name?: unknown
+  // Present only on `type: 'text'` blocks. Read to recognize the no-review sentinel — the gate's
+  // only exit that does not require spawning an agent. `unknown`, not `string`, because this is
+  // parsed from an on-disk JSONL a different process wrote: a malformed entry must reach the
+  // String() coercion at the read site, not throw here.
+  text?: unknown
   input?: { subagent_type?: unknown; command?: unknown }
 }
+/** The sentinel an agent emits when it CANNOT spawn a reviewer — the only exit from either gate
+ *  that does not require spawning one. ONE definition serves both gates deliberately: two copies
+ *  would drift, and an agent that learned the phrase from one gate's message would be wedged by
+ *  the other. Must be the FIRST thing in a text block (anchor rationale at each read site), and
+ *  must carry a reason — so "I can't" is a statement someone can act on, not a magic word. The
+ *  reason is never parsed; requiring it is what stops the phrase becoming a reflex. */
+export const NO_REVIEW_SENTINEL = 'REVIEW-GATE: NO REVIEW POSSIBLE'
+/** Does this text block open with the sentinel AND carry a reason? Written as a predicate rather
+ *  than one regex because the regex form was WRONG in a way that read fine: with an optional
+ *  separator class, `^\s*SENTINEL\s*[—:-]?\s*\S.{2,}` backtracks — it declines to consume the
+ *  em-dash as the separator and counts it as the reason's first character instead, so a bare
+ *  `SENTINEL — ab` satisfied the "≥3 characters of reason" rule with a dash and two letters.
+ *  Caught by the test that asserts a reasonless sentinel does NOT release; a stricter-looking
+ *  pattern that silently accepts the empty case is exactly the shape this gate cannot afford.
+ *
+ *  ANCHORED at the start of the trimmed block: a fork REVIEWING this gate quotes the sentinel in
+ *  its findings (this file's own reviewers did), and a substring test would let that quotation
+ *  release the agent under review. Nothing is stripped first, so `> SENTINEL` and `# SENTINEL`
+ *  correctly fail — stripping the marker would be the very smuggling the anchor exists to stop. */
+function isNoReviewSentinel(text: string): boolean {
+  const t = text.replace(/^\s+/, '')
+  if (!t.startsWith(NO_REVIEW_SENTINEL)) return false
+  // Any of — : - is accepted as the separator, because an agent told to write an em-dash types a
+  // hyphen often enough that keying the escape on punctuation would re-wedge an agent that obeyed
+  // in substance. The reason itself must survive stripping them: >=3 characters, on this line.
+  const reason = t.slice(NO_REVIEW_SENTINEL.length).split('\n')[0].replace(/^[\s—:-]+/, '').trim()
+  return reason.length >= 3
+}
+
 interface TranscriptEntry {
   type?: unknown
   isSidechain?: unknown
@@ -301,7 +335,23 @@ export function scanMainTranscriptLines(lines: string[]): { lastFork: number; la
       // A PROPOSAL IS WORK (owner order, 2026-09-07). The gate used to fire only on Edit/Write/
       // NotebookEdit/commit, so the turn that PROPOSES a change while writing nothing to disk was
       // invisible to it — exactly the turn propose-then-review-then-implement needs reviewed.
-      if (b?.type === 'text') { lastWork = i; continue }
+      if (b?.type === 'text') {
+        // THE SAME EXIT THE SUBAGENT GATE HAS, and it is needed here for a reason the positional
+        // rule hides. `lastFork >= lastWork` is always *reachable* — but only by an agent that can
+        // actually SPAWN. An agent whose Agent tool is declared yet whose spawn cannot succeed —
+        // rate-limited (this machine saw a 7994 s limit on 2026-09-07), at a depth or concurrency
+        // ceiling, or denied by a PreToolUse rule — has no exit at all: `agentCannotSpawn` releases
+        // only agents with no Agent tool DECLARED, which is a different population. That agent is
+        // wedged exactly as the subagent was, so it gets the same escape: say so, in the sentinel
+        // form, and the gate treats the review as resolved.
+        //
+        // Sets `lastFork` and NOT `lastWork` — the sentinel is an exit, not a proposal, so it must
+        // not arm the gate it is closing. It obeys the same positional rule as a fork: prose after
+        // it re-arms, so it has to be the turn's last block.
+        if (isNoReviewSentinel(String(b.text ?? ''))) { lastFork = i; continue }
+        lastWork = i
+        continue
+      }
       if (b?.type !== 'tool_use') continue
       if (b.name === 'Agent' && b.input?.subagent_type === 'fork') { lastFork = i; continue }
       if (typeof b.name === 'string' && EDITORS.has(b.name)) { lastWork = i; continue }
@@ -373,7 +423,14 @@ export const MAIN_BLOCK_REASON = 'Review-fork gate: this turn edited or committe
   + ONE_TURN_RULE + '" The fork cannot see this message, so a rule you do not paste into its prompt '
   + 'never reaches it; it inherits your context, so any tool call only buys a second turn that '
   + 'rewrites the whole prefix at the cache-WRITE rate. Run `agentlenspro review-gate --directive` '
-  + 'for the full directive, then act on the findings.'
+  // Symmetric with SUBAGENT_BLOCK_REASON. The positional exit (`lastFork >= lastWork`) is always
+  // REACHABLE, but only by an agent whose spawn can succeed; a rate-limited or depth-capped agent
+  // has the Agent tool declared, so `agentCannotSpawn` never releases it, and before the sentinel
+  // it had no exit whatsoever. Naming the escape in the message is half the fix — an escape nobody
+  // is told about is not one.
+  + 'for the full directive, then act on the findings. If you CANNOT spawn one — rate-limited, at '
+  + `a depth limit, tool denied — make the FIRST line of your reply exactly "${NO_REVIEW_SENTINEL} `
+  + '— <reason>" and nothing after it; that is the only other way out.'
 
 async function runMainGate(input: ReviewGateInput): Promise<string | null> {
   const transcript = input?.transcript_path
@@ -408,6 +465,11 @@ const SUBAGENT_MAX_DEMANDS_PER_AGENT = 1
 
 interface SubagentState { demands: number }
 
+/** Agent types that ARE the adversarial reviewer and must never be reviewed themselves. Compared
+ *  whole and case-folded — never as a substring, or every `*-fork-*` agent inherits the exemption.
+ *  Adding a name here skips that agent's review, so add only a genuine reviewer. */
+export const REVIEWER_AGENT_TYPES = new Set(['fork'])
+
 /** Scan a subagent's OWN transcript for whether it did consequential work and whether it already
  *  spawned its own reviewer. Pure — mirrors scanMainTranscriptLines but without the fork-position
  *  logic (a subagent gets at most ONE demand, never a relative-position check). */
@@ -427,7 +489,25 @@ export function scanSubagentTranscriptLines(lines: string[]): { didWork: boolean
     for (const b of content) {
       // A PROPOSAL IS WORK — see scanMainTranscriptLines. A subagent that reasons out a change and
       // returns it as prose has done the thing the owner asked to be reviewed.
-      if (b?.type === 'text') { didWork = true; continue }
+      if (b?.type === 'text') {
+        // THE TERMINATOR. Without it the block is a LIVELOCK: the demand tells a subagent to state
+        // its inability and return, but that statement is itself a `text` block, so it re-arms
+        // `didWork` and the identical demand fires again over a strictly longer transcript. Every
+        // other brake on this path is gone by design (`enforceOn` and `maxDemands` are voided, the
+        // state write is explicitly not allowed to gate), so `reviewed` is the ONLY exit and until
+        // now the only way to set it was spawning a fork — impossible for an agent that has the
+        // Agent tool but is out of turns, budget, or depth. The escape must therefore set the same
+        // flag the fork sets.
+        //
+        // ANCHORED AT THE START of a trimmed block, deliberately: a fork REVIEWING this gate quotes
+        // the sentinel mid-prose (this file's own reviewers did), and a substring test would let
+        // that quotation release the very agent under review. Nothing is stripped first — a
+        // markdown-quoted `> REVIEW-GATE: ...` or a `# REVIEW-GATE: ...` heading must NOT match,
+        // and stripping the marker would be the very smuggling this anchor exists to stop.
+        if (isNoReviewSentinel(String(b.text ?? ''))) { reviewed = true; didWork = true; continue }
+        didWork = true
+        continue
+      }
       if (b?.type !== 'tool_use') continue
       if (b.name === 'Agent' && b.input?.subagent_type === 'fork') reviewed = true
       else if (typeof b.name === 'string' && EDITORS.has(b.name)) didWork = true
@@ -453,7 +533,20 @@ export function decideSubagentGate(
   // THE RECURSION GUARD — a review fork is itself a subagent; reviewing it spawns a reviewer for
   // the reviewer. Empty type is the internal micro-lookup class — skipped for cost, and because an
   // agent that will not name itself cannot be told apart from a reviewer.
-  if (agentType === '' || /fork/i.test(agentType)) return { block: false, nextDemands: demands }
+  //
+  // WHOLE-TOKEN, not a substring. `/fork/i` exempted every agent type with "fork" anywhere in it —
+  // `worktree-fork`, `fork-worker`, `wtfork` — none of which is the adversarial reviewer, all of
+  // which then returned unreviewed for free. The owner's carve-out (2026-09-07) is for "the
+  // adversarial review fork agents themselves, of course, to avoid infinite recursion", i.e. the
+  // agents spawned as `subagent_type: "fork"`, whose `agent_type` is exactly `fork`.
+  //
+  // Narrowing a release guard is DEMAND-direction, so it is the dangerous direction: getting it
+  // wrong wedges a reviewer instead of skipping a review. That is safe here only because the
+  // sentinel above is now a real exit — a reviewer this list failed to name can still terminate by
+  // stating why. Before the sentinel existed, this narrowing would have been a livelock generator.
+  if (agentType === '' || REVIEWER_AGENT_TYPES.has(agentType.trim().toLowerCase())) {
+    return { block: false, nextDemands: demands }
+  }
   // NOT BYPASSABLE (owner order, 2026-09-03: "Not even for the subagents!"). `enforceOn` and the
   // per-agent demand cap are both ignored: a subagent that did work and has not reviewed itself is
   // asked EVERY time it tries to return, not once. The parameters stay in the signature so the
@@ -486,7 +579,14 @@ export const SUBAGENT_BLOCK_REASON = 'Subagent review gate: before returning, sp
   + '(Agent tool, subagent_type "fork") over your work and COPY THIS LINE VERBATIM INTO ITS PROMPT: "'
   + ONE_TURN_RULE + '" The fork cannot see this message, so a rule you do not paste into its prompt '
   + 'never reaches it. Run `agentlenspro review-gate --directive` for the full directive, then act '
-  + 'on its findings. If you have no Agent tool, state that in one line and return — asked once.'
+  // The old tail promised "asked once" and told a wedged agent to "state that in one line and
+  // return". Both were false: `maxDemands` is voided so nothing enforces "once", and the statement
+  // is itself a text block, which re-arms `didWork` and reproduces the identical demand over a
+  // longer transcript — a LIVELOCK whose instructions were the trap. The sentinel is the fix: it
+  // is the one text a subagent can emit that sets `reviewed`, so complying now terminates.
+  + 'on its findings. If you CANNOT spawn one — no Agent tool, rate-limited, at a depth limit — '
+  + `then make the FIRST line of your reply exactly "${NO_REVIEW_SENTINEL} — <reason>" and return; `
+  + 'that is the only other way out, and it must start the block (a quoted copy will not count).'
 
 async function runSubagentGate(input: ReviewGateInput): Promise<string | null> {
   if (input?.stop_hook_active === true) return null
