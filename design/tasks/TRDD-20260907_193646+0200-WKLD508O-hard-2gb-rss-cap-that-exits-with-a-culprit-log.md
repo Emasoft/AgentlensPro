@@ -130,6 +130,21 @@ The decision taken, and the owner can flip either half in one command:
 This is not a softened cap: 2048 is the shipped value. It is a diagnostic sequencing choice, and if
 the owner would rather take the crash loop tonight, unset the env var.
 
+**FLAW IN THE ABOVE RATIONALE, found before acting on it — do not deploy 7168 without resolving
+this.** The argument for 7168 is "at 2048 the guard breaches on its first tick, so the culprit log
+describes a booting process." **That describes the process that is running now, and installing the
+guard destroys it** — deploy requires `cargo build --release` → copy → `codesign` → server restart.
+A fresh collector starts small and grows; whenever it crosses 2048 it exits with a log describing a
+**grown** process, which is precisely the diagnostic 7168 was chosen to obtain. The crash-loop worry
+needs a fresh process to breach 2048 *during boot*, and that is **UNVERIFIED**: the "boot scan peaks
+at 0.97–1.00 GB" figure this card leaned on came from a compacted summary, and `grep` does not find
+it anywhere in `design/tasks/`. If it is right, a fresh boot sits at half the cap and 2048 is simply
+correct; if it is wrong, nobody has measured what a fresh boot costs.
+
+**So the resolving measurement is one restart with the guard at 2048**, watching whether it survives
+the boot scan — which is acceptance criterion #4, already on this card. 7168 buys information only
+if 2048 cannot boot, and that is the thing to find out first, not to route around.
+
 **OPEN DEFECT — the backstop stands in front of what it backs.** The two thresholds are keyed
 on DIFFERENT counters and ordered backwards: the soft valve compares **RSS** against
 `rss_budget_bytes()` = **4096 MB**, while the hard cap compares **phys_footprint** against
