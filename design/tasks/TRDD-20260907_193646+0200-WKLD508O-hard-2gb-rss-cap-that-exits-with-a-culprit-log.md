@@ -3,7 +3,7 @@ trdd-id: WKLD508O
 title: alcore exits with a culprit log rather than exceed a 2 GB memory cap
 column: dev
 created: 2026-09-07T19:36:46+0200
-updated: 2026-09-07T22:15:07+0200
+updated: 2026-09-07T22:23:24+0200
 current-owner: main
 task-type: feature
 parent-trdd: 7YPQWKPG
@@ -156,13 +156,26 @@ allocations**, 4.9 G allocated, 0% fragmentation.
    that double-counted, and it is wrong (2.2:1) on dirty. **Away from 5:1 in every column** — that
    part stands.
 
-   **The number that matters most for a 2048 MB cap, which neither earlier pass surfaced:**
-   `MALLOC_LARGE (empty)` 630.3 M + `MALLOC_SMALL (empty)` 1126.4 M = **~1.72 G of RESIDENT
-   allocator regions holding no live allocations** (only 643 M of it dirty). Reclaimable under
-   pressure, charged to RSS, **not** charged to footprint. That is ~85% of the entire proposed cap
-   spent on allocator residue — **a guard reading RSS can fire on it, and the culprit log would name
-   nothing, because nothing was allocated.** This is the strongest argument yet that the guard
-   should measure `phys_footprint` and not RSS, or at minimum report both.
+   **RSS-vs-footprint — and the "~1.72 G of empty regions" I published is WRONG by 55%.** I wrote
+   that `MALLOC_LARGE (empty)` 630.3 M + `MALLOC_SMALL (empty)` 1126.4 M = ~1.72 G is "charged to
+   RSS, not to footprint". **`(empty)` and "not charged to footprint" are different properties and
+   I conflated them.** `MALLOC_LARGE (empty)` is 630.3 M resident against 630.3 M **dirty** — 100%
+   dirty, and dirty anonymous pages are charged to `phys_footprint` whether or not a live
+   allocation sits in them, because the allocator has not `madvise`d them away. Only
+   `MALLOC_SMALL (empty)` (1126.4 M resident, 12.8 M dirty) is mostly clean. **The quantity is
+   ~1.11 G, not 1.72 G.**
+
+   **The number to use instead requires no allocator-internals reasoning at all, and is directly
+   measured: RSS 8892 MB vs footprint 6349 MB — a ~2.5 G gap. THAT is the quantity the metric
+   choice controls**, and it cannot be wrong the way the sentence above was. (For completeness, the
+   resident-but-clean total across every `MALLOC_*` row is 4.76 − 1.31 ≈ **3.45 G**, because
+   `MALLOC_SMALL` alone is 2.6 G resident against 246 M dirty.)
+
+   **The better argument for footprint is not about residue at all: RSS can FALL with nothing
+   freed**, purely from eviction under system pressure, so an RSS guard is non-deterministic with
+   respect to the program's own behaviour — two identical runs on differently-loaded machines
+   breach at different times. **But switching metric does NOT save the cap:** footprint 6.2 G and
+   RSS 8.9 G are both ~3× over 2048 MB. The metric decides *what fires the guard*, not *whether*.
 
    **The mimalloc identification is now settled from the BUILD, not from a memory page.**
    `rust-core/crates/agentlens-core/src/bin/alcore.rs:34` — `#[global_allocator] static GLOBAL:
@@ -176,7 +189,46 @@ allocations**, 4.9 G allocated, 0% fragmentation.
    heap-shaped, not the all-or-nothing of a mapped GPU surface; and **63.9 M is swapped, where
    IOKit/GPU memory is wired and cannot swap at all.**
 
-### ⚠ THE CAP IS UNREACHABLE BY CONSTRUCTION: one in-process DuckDB connection is permitted the WHOLE 2048 MB
+### ⚠ DEPLOYED 22:21 — the binary carrying the guard is in place; the RESTART is not done, and doing it WILL kill the collector
+
+`bin-native/darwin-arm64/alcore` now carries `AGENTLENS_RSS_HARD_CAP_MB` (inode 1550846767,
+22:21:45; the outgoing binary is preserved at `alcore.prev`, inode 1550845115). pid 30984 was
+untouched by the deploy and is still up.
+
+**The deploy used an ATOMIC RENAME, and the reason is the exit-137 in CLAUDE.md.** Never `cp` over
+the destination: `cp` opens the SAME inode `O_TRUNC`, and the running process has that inode
+**mmap'd** — overwriting it invalidates the mapped image's code signature and macOS SIGKILLs the
+process. `codesign --force` rewrites in place too, same hazard. So: copy and sign a SEPARATE inode
+(`alcore.new`), pre-flight it (`--version`, and assert the exit is **not 137**), then `mv` —
+`rename(2)` swaps only the directory entry, and the old inode stays mapped and valid until the
+process exits. **This makes the "cp over a running mapped binary" explanation in CLAUDE.md the
+stronger of the two competing ones, and it means the deploy was always safe to do without a
+restart — the hazard was in the METHOD, not in the act.** (Recorded because I deferred the whole
+deploy for five hours on a hazard that this three-line form removes.)
+
+**⚠ DO NOT RESTART UNATTENDED.** The live process is at ~8.9 G RSS against a 2048 MB cap. Restarting
+arms a guard that will kill the collector — **not a risk, an arithmetic certainty.** Boot peaks
+~1 G so it will not crash-loop instantly; it will run some hours, breach, exit, and repeat, and
+with no respawn path each death lasts until a human intervenes. Either raise
+`AGENTLENS_RSS_HARD_CAP_MB` for the first run (env-read per tick — a restart, not a rebuild) or
+land the memory work first.
+
+### THE CAP AND THE DuckDB BUDGETS CANNOT BOTH BE 2048 MB — but "unreachable by construction" over-claimed it
+
+**Retracted wording.** What is proven is the absence of a BOUND, not the presence of a BREACH:
+nothing in the configuration bounds this process below 2048 MB. Whether it is *exercised* is a
+runtime fact I did not measure. Two things I got wrong by publishing the stronger form:
+
+- **Exactly ONE connection is resident** — `CardStore.conn` at 256 MiB. Every 2 GB site is per-call
+  or per-pass, so the 4 GB figure needs two transient connections to *coincide*, which I inferred
+  from "both exist" and never showed happens.
+- **A guard that fires and names DuckDB is the directive being SERVED, not defeated.** I framed a
+  success case as a design failure. And "unreachable by construction" is exactly the sentence
+  someone quotes to justify raising the cap to 8 GB — which defeats the directive, whose whole
+  point was to make the process die so the culprit surfaces.
+
+**To earn the stronger word:** measure peak DuckDB buffer during one real bodies pass. Peak 1.8 GB
+⇒ earned. Peak 150 MB ⇒ it is a config-hygiene finding, correctly stated as the weaker claim above.
 
 Independent of every allocator question above, and verified first-hand by reading all seven call
 sites (`grep -rn "memory_limit\|Connection::open" rust-core/crates --include='*.rs'`):
@@ -184,7 +236,7 @@ sites (`grep -rn "memory_limit\|Connection::open" rust-core/crates --include='*.
 | call site | connection | limit | lifetime |
 |---|---|---|---|
 | `card_store.rs:131` | `Connection::open(cards.duckdb)` | 256 MiB | **resident** (`CardStore.conn`) |
-| `statusline_store.rs:237` | `open_in_memory()` | caller-supplied | in-process |
+| `statusline_store.rs:237` (`open_duck`) | `open_in_memory()` | **2 GB** (`AGENTLENS_DUCKDB_MEMORY_LIMIT` default) | per read and per seal |
 | `session_summary_sql.rs:127` | `open_in_memory()` | 1 GB | per call |
 | `bodies_evidence.rs:78` (`with_duck`) | `open_in_memory()` | **2 GB** (env-overridable) | per call |
 | `store/lib.rs:144` (`open_store`) | `open_in_memory()` | **2 GB** — `chores.rs:288` passes it, **every 60 s inside the resident server** | per pass |
@@ -208,11 +260,32 @@ takes what a query needs up to it, so "4 GB permitted" is not "4 GB used"; and i
 **buffer manager**, not every allocation DuckDB makes. It does not by itself explain 9.4 G resident.
 It does explain why 2048 is not reachable without changing these numbers.
 
-Corroborating (not load-bearing — the six `open_in_memory()` sites settle the scope question on
-their own): `rust-core/crates/agentlens-store/tests/memory_limit_scope.rs` measures `memory_limit`
-to be per-connection-handle, with `SET SESSION memory_limit` rejected outright by DuckDB
-(`option "memory_limit" cannot be set locally`). **My own run of that test is still in flight; the
-4/4 pass is so far the worker's claim, not my measurement.**
+`rust-core/crates/agentlens-store/tests/memory_limit_scope.rs` (4/4, my own run) measures
+`memory_limit` to be per-connection-handle, with `SET SESSION memory_limit` rejected outright
+(`option "memory_limit" cannot be set locally`). **Its load-bearing test is the SAME-FILE one, not
+the `open_in_memory()` one** — I had this backwards in `de505185`'s commit message. `open_in_memory()`
+settles instance separation on its own, so testing it adds nothing; but `card_store.rs` uses
+`Connection::open(path)`, where two handles to one file *could* plausibly share an instance. Test 4
+shows they do not. That is the only site the argument could not reach without a measurement.
+
+### ⚠ `SELECT * FROM duckdb_memory()` IS STRUCK — my own finding above killed it, and four reviews had named it the top measurement
+
+It reports the memory of **the connection it runs on**. Since the seven sites are seven separate
+instances with seven separate buffer managers, **no connection's `duckdb_memory()` answers "how much
+is DuckDB using in this process"** — not even after a restart. Worse, the one route in (a SQL
+endpoint) goes through `transcript_sql::query`, which opens a *fresh* connection per call and would
+report that new connection's near-zero usage: a confident wrong number, strictly worse than none.
+**Replacement, and it is a code change rather than a specimen measurement: have the guard call
+`duckdb_memory()` on every LIVE connection and sum them into the culprit log.** This also removes
+the reason pid 30984 was being treated as precious.
+
+**`server_stats::rss_bytes()` VERIFIED at `server_stats.rs:313` — it really is RSS.** macOS branch:
+`proc_pidinfo(PROC_PIDTASKINFO)` → returns `pti_resident_size`. Linux branch: field 2 of
+`/proc/self/statm` × page size. Both are resident-set size; neither is `phys_footprint`. **This was
+the weakest link in everything above** — every metric argument assumed it from the function's NAME,
+and a name is not behaviour. It resolved in favour of the assumption: RESIDENT is the guard's
+column, the 0.9:1 ratio is the operative one, and the footprint recommendation is a live change
+rather than a no-op. Had it returned `phys_footprint`, the operative ratio would have been 2.2:1.
 
 **"The ordering inverted" (previous section) is WRONG — correct it when next edited.** At 21:0x
 RSS ~6.6 G was already above footprint 6265 MB. Nothing flipped. What happened: **footprint stayed
