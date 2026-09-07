@@ -1703,7 +1703,6 @@ function SessionBlock({ sess, sessIdx, sessNum, isFirst }: {
   // through the shared signal so it still participates in the single-expansion invariant.
   useEffect(() => {
     if (isFirst && expandedTraceId.value === null) setExpandedTraceId(sess.sessionId)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   useEffect(() => {
