@@ -141,7 +141,7 @@ pub fn format_diagnostic(metric_name: &str, metric_bytes: u64, mi: &MimallocInfo
     format!(
         "alcore: RSS HARD CAP — {metric_name} {measured_mb} MB > cap {cap_mb} MB, exiting\n\
          alcore: RSS HARD CAP — mimalloc (Rust heap): current {mi_cur} MB, peak {mi_peak} MB, commit {mi_commit} MB, page faults {mi_pf}\n\
-         alcore: RSS HARD CAP — non-mimalloc (approx = {metric_name} minus mimalloc current_rss; the two are different counters, so this is a bisection, not an attribution): {non_mimalloc} MB\n\
+         alcore: RSS HARD CAP — non-mimalloc LOWER BOUND (= {metric_name} minus mimalloc current_rss; mimalloc's counter is RSS-like and carries clean pages the footprint never charged, so the true non-mimalloc share is LARGER — read this as a floor, never as the answer): {non_mimalloc} MB\n\
          alcore: RSS HARD CAP — resident spans: {spans}\n\
          alcore: RSS HARD CAP — summarization window: effective {eff} ms / configured {cfg} ms\n\
          alcore: RSS HARD CAP — card store rows: {cards}\n\
@@ -248,8 +248,14 @@ mod tests {
         // 2.3 G) but well behind on DIRTY (876 M vs ~2.7 G), so a log asserting "DuckDB" would
         // have been read as a finding when nothing had measured DuckDB. The subtraction also
         // mixes counters — phys_footprint minus mimalloc's RSS — which is why it says bisection.
-        assert!(d.contains("non-mimalloc (approx = phys_footprint minus mimalloc current_rss"));
-        assert!(d.contains("bisection, not an attribution): 5000 MB"));
+        // Measured on the live collector 2026-09-07: footprint 6265 MB, mimalloc RSS ~3481 MB, so
+        // this subtraction prints 2784 MB — while dirty+swapped per region puts the real
+        // non-mimalloc share near 5208 MB. It is low by ~47%, in the direction that HIDES the
+        // culprit, because it subtracts an RSS-like counter (clean pages included) from footprint
+        // (clean pages excluded). There is no mimalloc footprint equivalent to subtract instead,
+        // so the number stays and the label carries the direction of its error.
+        assert!(d.contains("non-mimalloc LOWER BOUND"));
+        assert!(d.contains("read this as a floor, never as the answer): 5000 MB"));
         assert!(!d.contains("e.g. DuckDB"), "the diagnostic must not name a suspect it did not measure");
         assert!(d.contains("resident spans: 397"));
         for line in d.lines() {
