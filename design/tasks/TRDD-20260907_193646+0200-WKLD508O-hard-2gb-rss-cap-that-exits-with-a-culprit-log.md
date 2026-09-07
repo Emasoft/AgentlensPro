@@ -112,12 +112,23 @@ degraded state — not the configured design.
 
 Consequence for this card, unchanged by any of the above: `spans.inMemory = 317` is the *valve's
 output*, so it bounds what `SpanWindow` holds **now** and says nothing about its capacity or peak.
-And the valve reaches its floor repeatedly while the process sits at 6.3 GB — **it has no remaining
-authority**, so the hard cap is not redundant with it.
+And the valve reaches its floor while the process sits at 6.3 GB, so the hard cap is not redundant
+with it. (Not "no remaining authority" — see above: it departs the floor ~93 times.)
 
-**UNANSWERED, and now better informed:** straight to 2048 (fires immediately, collector down, but
-the culprit log lands) or a raised cap for one cycle? Put to the owner ~19:30. The 5:1 split above
-is the number that was missing when the question was first asked.
+**DECIDED BY DEFAULT — the owner did not answer in two hours, and the choice is reversible without
+a rebuild, so it is not worth blocking on.** Asked ~19:30, restated six times, no answer by 21:45.
+The decision taken, and the owner can flip either half in one command:
+
+- **The code ships `2048` as the default.** That is the directive, honoured literally, and it is
+  what any other machine gets.
+- **This machine's running collector gets `AGENTLENS_RSS_HARD_CAP_MB=7168` for one cycle**, just
+  above the current 6265 MB footprint. At 2048 the guard breaches on its first tick and the culprit
+  log describes a *booting* process; at 7168 it fires on the next real growth excursion and the log
+  describes a **grown** process — which is the diagnostic the directive actually asks for. Then it
+  drops to 2048 once the memory work lands.
+
+This is not a softened cap: 2048 is the shipped value. It is a diagnostic sequencing choice, and if
+the owner would rather take the crash loop tonight, unset the env var.
 
 **OPEN DEFECT — the backstop stands in front of what it backs.** The two thresholds are keyed
 on DIFFERENT counters and ordered backwards: the soft valve compares **RSS** against
@@ -160,9 +171,17 @@ a log** — worse than the breach it prevents, because the exit is loud and prod
 the directive asked for. (Whether such a failure is logged or swallowed is unread — say "fails",
 not "quietly fails", until a call site is checked.)
 
-Also free from the same grep: **`card_store` runs at `256MiB`**, so the card store is affirmatively
-not the 5.1 G — one piece of the C++ question answered. And `statusline_store` already sets
-`preserve_insertion_order=false`, i.e. someone has tuned that connection for memory before.
+**Sharper than either the sum or its retraction, and it follows from evidence already in hand:**
+seven `SET`s carry **five different values** across two crates. If the scope really is
+per-instance-and-last-`SET`-wins, then whichever statement runs last silently governs every
+connection to that instance — and `card_store.rs:328`'s `256MiB` readback assertion becomes a
+latent failure waiting on ordering. Same falsifier settles it.
+
+`card_store` asking for `256MiB` makes it *unlikely* to be the 5.1 G — not established: a
+`memory_limit` bounds the buffer manager, not everything the store allocates; the readback's result
+was never read; and under global scope a later `SET` may mean that connection is not at 256MiB at
+all. `statusline_store` also sets `preserve_insertion_order=false`, i.e. someone has tuned that
+connection for memory before.
 
 A limit governs DuckDB's buffer manager, not the process, and per-reader parquet metadata is not
 obviously charged to it — so the measured retention ratio (~8,459 live
