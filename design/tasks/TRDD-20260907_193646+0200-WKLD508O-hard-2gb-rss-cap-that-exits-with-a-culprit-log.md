@@ -3,7 +3,7 @@ trdd-id: WKLD508O
 title: alcore exits with a culprit log rather than exceed a 2 GB memory cap
 column: dev
 created: 2026-09-07T19:36:46+0200
-updated: 2026-09-07T22:04:59+0200
+updated: 2026-09-07T22:07:31+0200
 current-owner: main
 task-type: feature
 parent-trdd: 7YPQWKPG
@@ -103,6 +103,58 @@ them is the point of counting per-subtree. DuckDB holding metadata across ~40 k 
 plausible multi-GB consumer, and it is Rust code that decides how many readers exist. **NOT yet
 established** that this is where the memory is — it is a lead with the right order of magnitude,
 and the next measurement should test it directly.
+
+**⚠ THE FULL REGION TABLE (22:07, pid 30984) REVERSES THIS CARD'S CENTRAL SPLIT, AND KILLS THE
+PARQUET LEAD I POSTED 20 MINUTES AGO.** `vmmap` (full, 4,717 lines — not `-summary`):
+
+| region type | resident | dirty | swapped | regions |
+|---|---|---|---|---|
+| **IOAccelerator** | **4.4 G** | **2.9 G** | 63.9 M | 49 |
+| MALLOC_SMALL | 2.6 G | 246.2 M | 38.5 M | 1833 |
+| MALLOC_SMALL (empty) | 1.1 G | 12.8 M | 0 | 397 |
+| MALLOC_LARGE | 418.9 M | 418.9 M | **2.6 G** | 197 |
+| MALLOC_LARGE (empty) | 630.3 M | 630.3 M | 0 | 79 |
+| **`mapped file`** | **80 K** | 0 | 0 | **1** |
+| TOTAL | 9.4 G | 4.2 G | 2.7 G | 4628 |
+
+`MALLOC ZONE DefaultMallocZone`: 4.1 G resident, 711.8 M dirty, 2.7 G swapped, **3,712,017 live
+allocations**, 4.9 G allocated, 0% fragmentation.
+
+**Three hypotheses die on this one table:**
+
+1. **Parquet metadata — DEAD.** `lsof` on pid 30984: 34 open fds total, **3 parquet files open**,
+   not 39,781. And the arithmetic I never did before calling it "the right order of magnitude":
+   5.1 G ÷ 39,781 = **134 KB of resident metadata per file**, where a parquet footer is
+   single-digit KB. Ten to a hundred times too high, and the files are not even open. I posted
+   that lead to the card AND to the owner one commit ago (`3ece83dc`); it is retracted.
+2. **Mapped-file page cache — DEAD.** `mapped file` is **80 K resident in one region**. The 2.3 G
+   of RSS growth in the last hour is not file-backed pages.
+3. **"~0.96 G Rust vs ~5.1 G C/C++, about 5:1" — REVERSED.** By this table IOAccelerator alone is
+   dirty 2.9 G + swap 63.9 M ≈ **3.0 G**, and the C malloc zone is dirty 711.8 M + swap 2.7 G ≈
+   **3.4 G**. That is roughly **1:1, not 1:5** — and IOAccelerator is the single largest region
+   type by resident size, at 4.4 G. **Caveat, load-bearing:** "IOAccelerator = the mimalloc Rust
+   heap" rests on the project memory page `vmmap-ioaccelerator-is-the-mimalloc-heap` (mimalloc
+   tags its mmaps VM tag 100; macOS names tag 100 `VM_MEMORY_IOACCELERATOR`). If that
+   identification is right, **the Rust heap grew ~0.96 G → ~2.9 G dirty in one hour and is now
+   co-equal with DuckDB.** Verify it before building on it — it inverts which side of the codebase
+   the fix belongs in, and this card previously told the reader the opposite.
+
+**"The ordering inverted" (previous section) is WRONG — correct it when next edited.** At 21:0x
+RSS ~6.6 G was already above footprint 6265 MB. Nothing flipped. What happened: **footprint stayed
+flat (6265 → 6349 MB, +84 MB, ~1%) while RSS grew ~2.3 G in an hour.** Flat footprint with rising
+RSS means growth in pages footprint does not charge — and since `mapped file` is 80 K, the
+remaining candidate is the IOAccelerator/tag-100 region's accounting, not page cache.
+
+**FAILED MEASUREMENT, recorded rather than dropped:** `agentlenspro server status` returned EMPTY
+this turn and last. That is the surface that produced `rssMb 7930` at 21:0x, so the three-way
+reconciliation is still open — I have two numbers, not three. Unknown whether the cause is the
+invocation, a timeout, or an unresponsive server; **the last would change the restart calculus**
+and is unchecked.
+
+**STILL UNRUN and specimen-bound: `SELECT * FROM duckdb_memory()`** — DuckDB's own per-tag
+accounting. It would name the culprit tag directly, and if the answer is a DuckDB tag then the
+guard's culprit log as specced (span counts, card rows, segment counts, uptime) **can never name
+it** — that would be a design defect in the deliverable, not a research nicety.
 
 **MEASUREMENT ERROR, mine, recorded so the number is not quoted later:** the first parquet pass
 reported "0.0 MB total". That is garbage — `find` on this machine is `bfs`, which does not support
