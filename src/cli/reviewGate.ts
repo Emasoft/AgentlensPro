@@ -77,8 +77,17 @@ interface ReviewGateInput {
 /** True when the agent's definition lists a `tools:` line WITHOUT the Agent tool — it cannot
  *  spawn a reviewer, so a demand costs it a full turn to say so (review F2). Absent or unreadable
  *  definition ⇒ unknown ⇒ demand as usual. */
+export const BUILTIN_WITHOUT_AGENT_TOOL = new Set(['Explore', 'Plan'])
+
 export function agentCannotSpawn(agentType: string, agentsDir = path.join(os.homedir(), '.claude', 'agents')): boolean {
   if (!/^[A-Za-z0-9_-]+$/.test(agentType)) return false
+  // BUILT-INS HAVE NO DEFINITION FILE, so the readFileSync below falls through to "unknown =>
+  // demand as usual". That was harmless while work meant an edit — Explore and Plan never edit — but
+  // the text-is-work predicate above makes every one of their returns count as work, and neither has
+  // the Agent tool, so each would be blocked on EVERY return with no exit. A hardcoded set is
+  // deliberate over a cleverer probe: it is greppable and it fails VISIBLY if a built-in is renamed,
+  // whereas a missing file fails silently into a permanent wedge.
+  if (BUILTIN_WITHOUT_AGENT_TOOL.has(agentType)) return true
   let text: string
   try { text = fs.readFileSync(path.join(agentsDir, `${agentType}.md`), 'utf8') } catch { return false }
   const m = /^tools:\s*(.+)$/m.exec(text.split('\n---')[0] ?? '')
@@ -148,6 +157,10 @@ export function scanMainTranscriptLines(lines: string[]): { lastFork: number; la
     const content = e?.message?.content
     if (!Array.isArray(content)) continue
     for (const b of content) {
+      // A PROPOSAL IS WORK (owner order, 2026-09-07). The gate used to fire only on Edit/Write/
+      // NotebookEdit/commit, so the turn that PROPOSES a change while writing nothing to disk was
+      // invisible to it — exactly the turn propose-then-review-then-implement needs reviewed.
+      if (b?.type === 'text') { lastWork = i; continue }
       if (b?.type !== 'tool_use') continue
       if (b.name === 'Agent' && b.input?.subagent_type === 'fork') { lastFork = i; continue }
       if (typeof b.name === 'string' && EDITORS.has(b.name)) { lastWork = i; continue }
@@ -166,8 +179,11 @@ export function decideMainGate(
   opts: { maxPerSession: number; maxConsecutive: number },
 ): { block: boolean; nextState: MainBreakerState } {
   if (scan.lastWork === -1) return { block: false, nextState: state } // nothing claimed this window
-  // `>=`, not `>`: an edit and a fork spawn in the SAME assistant message share an index, and a
-  // tie must go to the fork or that turn can never end.
+  // `>=`, not `>`: two blocks CAN share an index when a harness writes one transcript entry per
+  // assistant message, and a tie must go to the fork or that turn can never end. MEASURED
+  // 2026-09-07 on this project's own session JSONL: this Claude Code build writes ONE ENTRY PER
+  // CONTENT BLOCK (thinking / text / tool_use each got their own index), so the tie never occurs
+  // here and `>=` is degenerate on this format. It is kept because it is correct on both shapes.
   if (scan.lastFork >= scan.lastWork) {
     // The review landed. THIS IS THE ONLY WAY PAST THE GATE.
     return { block: false, nextState: state.consecutive !== 0 ? { total: state.total, consecutive: 0 } : state }
@@ -261,6 +277,9 @@ export function scanSubagentTranscriptLines(lines: string[]): { didWork: boolean
     const content = e?.message?.content
     if (e?.type !== 'assistant' || !Array.isArray(content)) continue
     for (const b of content) {
+      // A PROPOSAL IS WORK — see scanMainTranscriptLines. A subagent that reasons out a change and
+      // returns it as prose has done the thing the owner asked to be reviewed.
+      if (b?.type === 'text') { didWork = true; continue }
       if (b?.type !== 'tool_use') continue
       if (b.name === 'Agent' && b.input?.subagent_type === 'fork') reviewed = true
       else if (typeof b.name === 'string' && EDITORS.has(b.name)) didWork = true

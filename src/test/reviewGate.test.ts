@@ -15,12 +15,22 @@ const assistantLine = (blocks: unknown[], extra: Record<string, unknown> = {}): 
   JSON.stringify({ type: 'assistant', message: { content: blocks }, ...extra })
 
 const editBlock = { type: 'tool_use', name: 'Edit' }
+const textBlock = { type: 'text', text: 'I propose changing X to Y.' }
+const thinkBlock = { type: 'thinking', thinking: 'internal' }
 const forkBlock = { type: 'tool_use', name: 'Agent', input: { subagent_type: 'fork' } }
 
 suite('reviewGate — main (Stop) gate', () => {
   test('scanMainTranscriptLines finds the last edit and the last fork by index', () => {
     const lines = [assistantLine([editBlock]), assistantLine([forkBlock])]
     assert.deepStrictEqual(scanMainTranscriptLines(lines), { lastFork: 1, lastWork: 0 })
+    // A PROPOSAL IS WORK. Measured on a real session JSONL, this build writes ONE ENTRY PER BLOCK,
+    // so a proposing turn is a lone `text` entry with no tool_use anywhere near it — which the old
+    // predicate scored as lastWork -1 (nothing claimed) and waved through.
+    assert.deepStrictEqual(scanMainTranscriptLines([assistantLine([textBlock])]), { lastFork: -1, lastWork: 0 })
+    assert.deepStrictEqual(
+      scanMainTranscriptLines([assistantLine([textBlock]), assistantLine([forkBlock])]),
+      { lastFork: 1, lastWork: 0 }, 'text then fork ⇒ reviewed')
+    assert.deepStrictEqual(scanMainTranscriptLines([assistantLine([thinkBlock])]), { lastFork: -1, lastWork: -1 })
   })
 
   test('decideMainGate BLOCKS when the last edit is newer than the last fork', () => {
@@ -74,6 +84,21 @@ suite('reviewGate — subagent (SubagentStop) gate', () => {
   test('decideSubagentGate SKIPS a fork (the recursion guard)', () => {
     const v = decideSubagentGate('fork', true, { didWork: true, reviewed: false }, 0, 1)
     assert.strictEqual(v.block, false)
+  })
+
+  test('a text-only subagent return counts as work (owner order 2026-09-07: a proposal is work)', () => {
+    assert.deepStrictEqual(scanSubagentTranscriptLines([assistantLine([textBlock])]), { didWork: true, reviewed: false })
+    // A thinking block is NOT speech — it must not arm the gate on its own, or an agent that only
+    // reasoned and then called a tool would owe a review for having thought.
+    assert.deepStrictEqual(scanSubagentTranscriptLines([assistantLine([thinkBlock])]), { didWork: false, reviewed: false })
+  })
+
+  test('a built-in with no Agent tool and no definition file is RELEASED, not wedged', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rg-builtin-'))
+    // No Explore.md is written: the point is that the ABSENT file must not mean "demand as usual".
+    assert.strictEqual(agentCannotSpawn('Explore', dir), true)
+    assert.strictEqual(agentCannotSpawn('Plan', dir), true)
+    assert.strictEqual(agentCannotSpawn('general-purpose', dir), false, 'it HAS the Agent tool — still demanded')
   })
 
   test('agentCannotSpawn reads the agent definition: a tools line without Agent means no demand (review F2)', () => {
