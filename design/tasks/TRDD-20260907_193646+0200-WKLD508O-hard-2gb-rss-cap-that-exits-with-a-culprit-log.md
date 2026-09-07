@@ -3,7 +3,7 @@ trdd-id: WKLD508O
 title: alcore exits with a culprit log rather than exceed a 2 GB memory cap
 column: dev
 created: 2026-09-07T19:36:46+0200
-updated: 2026-09-07T21:59:51+0200
+updated: 2026-09-07T22:04:59+0200
 current-owner: main
 task-type: feature
 parent-trdd: 7YPQWKPG
@@ -57,8 +57,66 @@ binary matches without `-a`) on the **only** agentlens job anywhere under `~/Lib
 `/Library/LaunchAgents`, `/Library/LaunchDaemons`: `com.agentlens.spool`, `RunAtLoad: true`, no
 `KeepAlive`, and `ProgramArguments` = `agentlenspro spool ensure`. That subcommand only re-creates
 the RAM-disk spool (`src/cli/spoolCli.ts`) — **it does not start the server.** So the one launchd
-job on this machine cannot bring the collector back. Still unchecked: cron, shell wrappers, and
-`server start`'s own retry logic.
+job on this machine cannot bring the collector back.
+
+**What that scan STILL cannot see — it rules out a differently-NAMED job, not a differently-
+REFERENCED one.** Re-run 22:04 matching on decoded CONTENT rather than filename (24 plists: 15
+user + 2 `/Library/LaunchAgents` + 7 `/Library/LaunchDaemons`), same single hit, and `launchctl
+list` shows only `com.agentlens.spool` loaded. But the matcher is still three literal substrings,
+so the blind spots are one indirection away: a wrapper script in `ProgramArguments[0]` (the plist
+stays clean, the script does the work — the likeliest real shape), `sh -c "$VAR serve"`, a symlink
+or short alias, a generic supervisor with the collector in ITS config, a `launchctl submit` job
+with no plist on disk at all, and `/System/Library/Launch*` which was not scanned. Also unchecked:
+cron, login items, and `server start`'s own retry logic. **A machine with a differently-named
+supervisor and a machine with no supervisor produce identical output from this scan** — so it
+corroborates, it does not discriminate. Treat "no respawn path" as well-supported, not proven.
+
+**THE CAP IS RE-READ EVERY TICK — verified at the call site, not inferred.**
+`rss_hard_cap_bytes()` is invoked at `lib.rs:698`, inside the `CulpritSnapshot` built for each
+`check_and_enforce` call in `prune_window` — i.e. per tick, not cached at startup. So the value is
+env-sourced continuously; a restart is still needed in practice only because a running process's
+environment cannot be changed from outside. **"Costs a restart, not a rebuild" is now verified.**
+Earlier I asserted it from the unit test alone, which only ever proved the "not a rebuild" half.
+
+**SPECIMEN CAPTURED before the restart destroys it — pid 30984, 22:03, uptime 07:45:23.**
+
+| metric | value |
+|---|---|
+| `ps` RSS | **8892 MB** |
+| `vmmap` physical footprint | **6.2 G** |
+| footprint peak | **9.9 G** |
+
+**The ordering has INVERTED since 21:0x** (then: footprint 6265 MB > `ps` RSS ~6.6 GB… i.e. close;
+now RSS exceeds footprint by ~2.5 G). RSS counts resident pages including clean/reclaimable ones;
+`phys_footprint` does not. **The guard measures RSS** (`server_stats::rss_bytes`), so it fires on
+the larger, partly-reclaimable number — and its culprit log would indict pages the OS would have
+given back for free. That is an argument for measuring footprint on macOS, and it is now backed by
+a measured 2.5 G gap rather than by theory. Peak footprint also grew 8375 MB → 9.9 G in one hour:
+**the process is still growing, so a fresh boot's peak remains the unmeasured quantity that
+decides whether 2048 is reachable at all.**
+
+**THE STRONGEST LEAD ON THE ~5.1 G OF C/C++ ALLOCATOR, and the first that is not a guess:
+39,781 parquet files in the LIVE store** (`~/.agentlens/store`: 2.3 G `parts`, 1.7 G `blobs`,
+133 M `bodies`). Another 14,555 sit in `store.old-v2-prerepair-…`, 1,588 under `statusline`, 1,026
+in `store.old-v0` — those are archives the running process should not be opening, and separating
+them is the point of counting per-subtree. DuckDB holding metadata across ~40 k parquet files is a
+plausible multi-GB consumer, and it is Rust code that decides how many readers exist. **NOT yet
+established** that this is where the memory is — it is a lead with the right order of magnitude,
+and the next measurement should test it directly.
+
+**MEASUREMENT ERROR, mine, recorded so the number is not quoted later:** the first parquet pass
+reported "0.0 MB total". That is garbage — `find` on this machine is `bfs`, which does not support
+`-printf`, so the byte stream was empty and `awk` summed nothing. The COUNTS came from `wc -l` and
+are sound; the byte figures above come from `du`. No byte total from that first pass is usable.
+
+**OPTION B IS THE STRUCK 7168 PROPOSAL RETURNING, and I owe the owner that label.** I have put two
+options to them: deploy at 2048 now, or start once at a high value and tighten to 2048 with them
+present. The second is the override I proposed and struck earlier tonight, now bounded to one
+night. The difference is real (a staging value with a named end condition is not a shipped
+default) but smaller than the framing implies: **during the overnight window the directive is not
+enforced under either version**, which is exactly what I argued against when I struck it. The
+sunset also depends on a future action by me, and this session's record is twelve docs commits and
+zero deployments. The owner should weigh it knowing it is the same proposal.
 
 **THE FINDING THAT CHANGES THIS CARD'S PREMISE — measured on the live collector (pid 30984),
 `vmmap -summary` + `footprint`, 2026-09-07 21:0x:**
