@@ -143,6 +143,20 @@ suite('reviewGate — subagent (SubagentStop) gate', () => {
     assert.strictEqual(agentCannotSpawn('plug:a', dir, cache), false, 'newest now HAS Agent ⇒ demanded')
   })
 
+  test('every built-in that lacks the Agent tool is released, not just Explore and Plan', () => {
+    // A built-in has NO definition file, so it lands on `text === null` → `plugin !== ''`, which for
+    // a BARE name is false ⇒ DEMAND ⇒ a fork it cannot spawn. Two real ones were wedged that way;
+    // tool lists verified against the live agent listing 2026-09-07.
+    const empty = fs.mkdtempSync(path.join(os.tmpdir(), 'rg-bi-'))
+    for (const n of ['Explore', 'Plan', 'claude-code-guide', 'statusline-setup']) {
+      assert.strictEqual(agentCannotSpawn(n, empty), true, `${n} has no Agent tool ⇒ must be released`)
+    }
+    // The counter-case: a built-in that DOES hold `*` must still be demanded, or the set is just a
+    // blanket release for every unresolvable name and the gate stops covering built-ins at all.
+    assert.strictEqual(agentCannotSpawn('general-purpose', empty), false,
+      'general-purpose holds * ⇒ it can spawn ⇒ still demanded')
+  })
+
   test('an unreadable newest candidate falls through to the next, it does not discard them all', () => {
     // `statSync` succeeds on a DIRECTORY, so a directory named `a.md` sorts into the candidate list
     // as the newest entry and then throws on read. Abandoning there discarded every OTHER version

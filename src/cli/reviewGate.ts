@@ -77,7 +77,14 @@ interface ReviewGateInput {
 /** True when the agent's definition lists a `tools:` line WITHOUT the Agent tool — it cannot
  *  spawn a reviewer, so a demand costs it a full turn to say so (review F2). Absent or unreadable
  *  definition ⇒ unknown ⇒ demand as usual. */
-export const BUILTIN_WITHOUT_AGENT_TOOL = new Set(['Explore', 'Plan'])
+// EVERY built-in that lacks the Agent tool must be listed here, not just the two obvious ones.
+// A built-in has no definition file, so it falls to `text === null` → `plugin !== ''` → for a BARE
+// name that is FALSE, i.e. DEMAND — a fork it cannot spawn. `claude-code-guide` (Bash, Read,
+// WebFetch, WebSearch) and `statusline-setup` (Read, Edit) were wedged exactly that way, verified
+// against the live agent listing 2026-09-07. `claude` and `general-purpose` hold `*`, so demanding
+// them is right. Adding a name here is release-direction: the cost of a wrong entry is one skipped
+// review, the cost of a missing one is an agent that cannot finish its turn.
+export const BUILTIN_WITHOUT_AGENT_TOOL = new Set(['Explore', 'Plan', 'claude-code-guide', 'statusline-setup'])
 
 export function pluginCacheRoot(): string {
   return path.join(os.homedir(), '.claude', 'plugins', 'cache')
