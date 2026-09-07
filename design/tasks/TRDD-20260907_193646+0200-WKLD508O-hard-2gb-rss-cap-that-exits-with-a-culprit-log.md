@@ -64,6 +64,24 @@ is not span-shaped" is reading the guard, not the structure.
 the culprit log lands) or a raised cap for one cycle? Put to the owner ~19:30. The 5:1 split above
 is the number that was missing when the question was first asked.
 
+**OPEN DEFECT — the backstop stands in front of what it backs.** The two thresholds are keyed
+on DIFFERENT counters and ordered backwards: the soft valve compares **RSS** against
+`rss_budget_bytes()` = **4096 MB**, while the hard cap compares **phys_footprint** against
+**2048 MB**. Footprint runs BELOW RSS here (6265 vs 6590–7930), so a process growing from cold
+crosses footprint 2048 well before RSS 4096 — the hard cap fires before the valve has narrowed
+once, and `rss_guard.rs`'s own module doc ("this is the backstop" to a valve that "already
+narrows the window as RSS climbs") describes a sequence the shipped defaults prevent. Needs a
+decision, not an edit: put both on the same counter, or set the cap above the valve's budget.
+
+**LEAD THAT FALSIFIES "no Rust-side work reaches 2048" — DuckDB has a `memory_limit`.** It is a
+connection setting the Rust code owns; nothing in the tree appears to set it. `SET
+memory_limit='...'` is Rust-side work that bounds the C++ side directly. Related and already
+measured: ~8,459 live parquet `FileMetaData`/`SchemaElement`/`ColumnChunk` sets against ~1,587
+sealed files — a retention ratio, and retention is a Rust-side decision (readers not closed, a
+pool unbounded, re-globbing). Plus ~619 MB in `MALLOC_*(empty)` free-list retention. So the
+correct claim is the narrower one: **zeroing the Rust HEAP does not reach 2048; Rust-side
+changes that reduce what DuckDB is asked to hold are untried and are the next thing to try.**
+
 **NOT worth doing:** a restart with `MIMALLOC_SHOW_STATS=1` — those stats print at process **exit**,
 so a restart yields nothing about the state under investigation, and it would destroy a 6.6-hour
 specimen. `mi_process_info` (already linked by `466775af`) reads the same numbers live.
