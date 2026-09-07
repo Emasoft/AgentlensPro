@@ -3,7 +3,7 @@ trdd-id: WKLD508O
 title: alcore exits with a culprit log rather than exceed a 2 GB memory cap
 column: dev
 created: 2026-09-07T19:36:46+0200
-updated: 2026-09-07T22:07:31+0200
+updated: 2026-09-07T22:15:07+0200
 current-owner: main
 task-type: feature
 parent-trdd: 7YPQWKPG
@@ -129,15 +129,90 @@ allocations**, 4.9 G allocated, 0% fragmentation.
    that lead to the card AND to the owner one commit ago (`3ece83dc`); it is retracted.
 2. **Mapped-file page cache — DEAD.** `mapped file` is **80 K resident in one region**. The 2.3 G
    of RSS growth in the last hour is not file-backed pages.
-3. **"~0.96 G Rust vs ~5.1 G C/C++, about 5:1" — REVERSED.** By this table IOAccelerator alone is
-   dirty 2.9 G + swap 63.9 M ≈ **3.0 G**, and the C malloc zone is dirty 711.8 M + swap 2.7 G ≈
-   **3.4 G**. That is roughly **1:1, not 1:5** — and IOAccelerator is the single largest region
-   type by resident size, at 4.4 G. **Caveat, load-bearing:** "IOAccelerator = the mimalloc Rust
-   heap" rests on the project memory page `vmmap-ioaccelerator-is-the-mimalloc-heap` (mimalloc
-   tags its mmaps VM tag 100; macOS names tag 100 `VM_MEMORY_IOACCELERATOR`). If that
-   identification is right, **the Rust heap grew ~0.96 G → ~2.9 G dirty in one hour and is now
-   co-equal with DuckDB.** Verify it before building on it — it inverts which side of the codebase
-   the fix belongs in, and this card previously told the reader the opposite.
+3. **"~0.96 G Rust vs ~5.1 G C/C++, about 5:1" — REVERSED, but my first correction of it was
+   itself computed wrong. Both are recorded here; the second supersedes the first.**
+
+   **The wrong route (published 22:07 in `a38be9b1`, and to the owner):** IOAccelerator dirty 2.9 G
+   + swap 63.9 M ≈ 3.0 G vs *the MALLOC ZONE row* dirty 711.8 M + swap 2.7 G ≈ 3.4 G → "roughly
+   1:1". **That comparison is invalid: the `MALLOC_*` region rows and the `DefaultMallocZone` row
+   are two views of the same bytes** — which is exactly what the table's own annotation "see MALLOC
+   ZONE table below" says, printed on every one of those rows. The arithmetic proves it: the region
+   rows already sum to the TOTAL (malloc 4.87 G + IOAccelerator 4.51 G + ~0.32 G of everything else
+   ≈ 9.4 G = the TOTAL row). Adding the zone's 4.1 G on top would give ~13.5 G resident against a
+   9.4 G total — impossible. **The zone row must not appear in the comparison at all.**
+
+   **The corrected arithmetic — region rows only, all seven `MALLOC_*` rows summed:**
+
+   | column | IOAccelerator | all `MALLOC_*` | ratio |
+   |---|---|---|---|
+   | RESIDENT | 4.40 G | **4.76 G** | **0.9 : 1** |
+   | DIRTY | 2.90 G | 1.31 G | 2.2 : 1 |
+   | DIRTY + SWAPPED | 2.96 G | 3.95 G | 0.75 : 1 |
+
+   **The ratio depends entirely on the column, because malloc's memory is heavily swapped (2.64 G)
+   and IOAccelerator's is not (63.9 M).** The guard measures **RSS**, and RSS counts resident pages
+   and *not* swapped ones — so **the guard's own column is RESIDENT, where it is 0.9 : 1.** "Roughly
+   1:1" happens to be right for the guard's metric; it was published on the wrong column by a route
+   that double-counted, and it is wrong (2.2:1) on dirty. **Away from 5:1 in every column** — that
+   part stands.
+
+   **The number that matters most for a 2048 MB cap, which neither earlier pass surfaced:**
+   `MALLOC_LARGE (empty)` 630.3 M + `MALLOC_SMALL (empty)` 1126.4 M = **~1.72 G of RESIDENT
+   allocator regions holding no live allocations** (only 643 M of it dirty). Reclaimable under
+   pressure, charged to RSS, **not** charged to footprint. That is ~85% of the entire proposed cap
+   spent on allocator residue — **a guard reading RSS can fire on it, and the culprit log would name
+   nothing, because nothing was allocated.** This is the strongest argument yet that the guard
+   should measure `phys_footprint` and not RSS, or at minimum report both.
+
+   **The mimalloc identification is now settled from the BUILD, not from a memory page.**
+   `rust-core/crates/agentlens-core/src/bin/alcore.rs:34` — `#[global_allocator] static GLOBAL:
+   mimalloc::MiMalloc` — with `mimalloc = "0.1.52"` + `libmimalloc-sys` (`extended`) in that crate's
+   `Cargo.toml`. **mimalloc IS alcore's allocator**, so the branch that would have inverted
+   everything ("mimalloc isn't in this build, the split is unmeasurable") is closed. What remains
+   unproven is only the tag-100 → `VM_MEMORY_IOACCELERATOR` step. Four independent shape arguments
+   from this same table support it and none oppose it: 49 regions holding 4.8 G virtual is ~100 MB
+   per region (arena allocator, not GPU surfaces); a 256 MB `IOAccelerator (reserved)` region at
+   `0x5311a000000` is reserve-then-commit, mimalloc's arena strategy; 66% dirty-of-resident is
+   heap-shaped, not the all-or-nothing of a mapped GPU surface; and **63.9 M is swapped, where
+   IOKit/GPU memory is wired and cannot swap at all.**
+
+### ⚠ THE CAP IS UNREACHABLE BY CONSTRUCTION: one in-process DuckDB connection is permitted the WHOLE 2048 MB
+
+Independent of every allocator question above, and verified first-hand by reading all seven call
+sites (`grep -rn "memory_limit\|Connection::open" rust-core/crates --include='*.rs'`):
+
+| call site | connection | limit | lifetime |
+|---|---|---|---|
+| `card_store.rs:131` | `Connection::open(cards.duckdb)` | 256 MiB | **resident** (`CardStore.conn`) |
+| `statusline_store.rs:237` | `open_in_memory()` | caller-supplied | in-process |
+| `session_summary_sql.rs:127` | `open_in_memory()` | 1 GB | per call |
+| `bodies_evidence.rs:78` (`with_duck`) | `open_in_memory()` | **2 GB** (env-overridable) | per call |
+| `store/lib.rs:144` (`open_store`) | `open_in_memory()` | **2 GB** — `chores.rs:288` passes it, **every 60 s inside the resident server** | per pass |
+| `transcript_sql.rs:402` (`query`) | `open_in_memory()` | **2 GB** | per call |
+| `transcript_sql.rs:574` (`DuckSession`) | `open_in_memory()` | **2 GB** | per session |
+
+**Six of the seven are `Connection::open_in_memory()`, which is a SEPARATE DuckDB instance by
+construction** — separate `DBConfig`, separate buffer manager. So these seven `SET memory_limit`
+statements do not compose into one budget: **whatever is concurrently alive, their ceilings SUM.**
+
+The consequence is arithmetic, not inference: **the bodies chore alone (`open_store(…, "2GB", 2)`,
+every 60 s, in the resident server) permits 2048 MB of DuckDB buffer — the entire proposed process
+cap — before one byte of Rust heap, span window, or card store.** An HTTP request landing in
+`transcript_sql::query` or `bodies_evidence::with_duck` while that pass runs permits **4 GB
+concurrently.** A 2048 MB process cap and a 2048 MB single-connection DuckDB budget cannot both
+hold; **the cap and the DuckDB limits have to be sized together, or the guard fires on correct,
+in-spec behaviour.**
+
+Two honest limits on this finding: a `memory_limit` is a **ceiling, not a reservation** — DuckDB
+takes what a query needs up to it, so "4 GB permitted" is not "4 GB used"; and it governs DuckDB's
+**buffer manager**, not every allocation DuckDB makes. It does not by itself explain 9.4 G resident.
+It does explain why 2048 is not reachable without changing these numbers.
+
+Corroborating (not load-bearing — the six `open_in_memory()` sites settle the scope question on
+their own): `rust-core/crates/agentlens-store/tests/memory_limit_scope.rs` measures `memory_limit`
+to be per-connection-handle, with `SET SESSION memory_limit` rejected outright by DuckDB
+(`option "memory_limit" cannot be set locally`). **My own run of that test is still in flight; the
+4/4 pass is so far the worker's claim, not my measurement.**
 
 **"The ordering inverted" (previous section) is WRONG — correct it when next edited.** At 21:0x
 RSS ~6.6 G was already above footprint 6265 MB. Nothing flipped. What happened: **footprint stayed
