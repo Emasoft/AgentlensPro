@@ -115,9 +115,11 @@ output*, so it bounds what `SpanWindow` holds **now** and says nothing about its
 And the valve reaches its floor while the process sits at 6.3 GB, so the hard cap is not redundant
 with it. (Not "no remaining authority" — see above: it departs the floor ~93 times.)
 
-**DECIDED BY DEFAULT — the owner did not answer in two hours, and the choice is reversible without
-a rebuild, so it is not worth blocking on.** Asked ~19:30, restated six times, no answer by 21:45.
-The decision taken, and the owner can flip either half in one command:
+**CAP VALUE — 2048, per the directive. An override was considered and REJECTED.** An earlier version
+of this header read "DECIDED BY DEFAULT — the owner did not answer in two hours … restated six
+times", which was wrong twice over: the owner was absent, not unresponsive (silence is not a stall
+and cannot grant consent), and what survived is the owner's own directive, so there was never a
+default to take. The header now describes its own contents.
 
 - **The code ships `2048` as the default.** That is the directive, honoured literally, and it is
   what any other machine gets.
@@ -162,7 +164,22 @@ side that the cap is really about:
   `SET` asked for, or did a later `SET` win?
 - How many distinct DuckDB **instances** the process holds — the additive unit the retracted
   ≈5.25 GB sum needed and never had.
-- The parquet-metadata retention figure (~8,459 live sets vs ~1,587 sealed files) re-read now. 7168 buys information only
+- The parquet-metadata retention figure (~8,459 live sets vs ~1,587 sealed files) re-read now.
+
+**FIRST OF THOSE ANSWERED, and it undercuts the instance theory.** `lsof -p 30984 | grep .duckdb`
+returns exactly **two** paths, and **both are EXTENSIONS** — `.duckdb/extensions/v1.5.5/osx_arm64/{json,parquet}.duckdb_extension`.
+**No database file is open at all**: no `cards.duckdb`, no store db. So the "many DuckDB instances,
+each with its own `memory_limit` budget" theory gets no support from the live process — whatever the
+seven `SET` sites are configuring, the grown process is not holding open database files. Candidates:
+in-memory (`:memory:`) databases, or connections opened and closed per operation. Either changes what
+`memory_limit` can bound. NOT yet checked: whether `lsof` would show a `:memory:` database (it would
+not — that is the point), so this **narrows** the theory rather than refuting it outright.
+
+**And the no-auto-restart finding is now properly verified**, closing a gap in the version above:
+`launchctl list` (which sees agents regardless of directory) shows only `com.agentlens.spool`, status
+`-  0` (not running); `/Library/LaunchDaemons` and `/Library/LaunchAgents` hold nothing matching; and
+`grep -c KeepAlive` on the plist returns **0**. The earlier claim rested on a `grep -A2` that could
+have hidden a `KeepAlive` key; it cannot now. 7168 buys information only
 if 2048 cannot boot, and that is the thing to find out first, not to route around.
 
 **OPEN DEFECT — the backstop stands in front of what it backs.** The two thresholds are keyed
