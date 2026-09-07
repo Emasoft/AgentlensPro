@@ -579,7 +579,9 @@ impl CoreState {
             sink_problem: None,
             build_id: now.to_string(),
             media_dir: None,
-            cards: card_store::CardStore::new(),
+            // TRDD-TOIM26HP: `<data_dir>/cards.duckdb`, opened EMPTY at every boot — the corpus is
+            // on disk so DuckDB's bounded buffer pool decides what is resident, not the process.
+            cards: card_store::CardStore::open(data_dir),
             data_dir: data_dir.to_path_buf(),
             started_at_ms: now,
             ports: server_stats::Ports::default(),

@@ -30,9 +30,17 @@ fn ids(cards: &[Value]) -> Vec<String> {
     cards.iter().map(|c| c["sessionId"].as_str().unwrap_or_default().to_owned()).collect()
 }
 
+/// One data dir per test (TRDD-TOIM26HP — the store is a DuckDB FILE now). Sharing a dir would
+/// mean two live stores over one database path, which is exactly what `CardStore::open` deletes
+/// the previous file to avoid; `tests/card_store_file.rs` covers that case deliberately, and
+/// these tests should not be exercising it by accident.
+fn store(name: &str) -> CardStore {
+    CardStore::open(&std::env::temp_dir().join(format!("al-cardstore-{name}-{}", std::process::id())))
+}
+
 #[test]
 fn put_then_get_round_trips_the_card_verbatim() {
-    let mut s = CardStore::new();
+    let mut s = store("roundtrip");
     // Key order is deliberately NOT alphabetical: serde_json's `preserve_order` keeps it, and the
     // wire shape is byte-compared against the TS server, so a round-trip that sorted keys would
     // change every response.
@@ -49,7 +57,7 @@ fn put_then_get_round_trips_the_card_verbatim() {
 
 #[test]
 fn iteration_is_first_insert_order_and_an_upsert_keeps_its_slot() {
-    let mut s = CardStore::new();
+    let mut s = store("order");
     s.put(&card("a", "2026-08-01T10:00:00.000Z", 0.0, 0));
     s.put(&card("b", "2026-08-01T10:00:00.000Z", 0.0, 0));
     s.put(&card("c", "2026-08-01T10:00:00.000Z", 0.0, 0));
@@ -69,7 +77,7 @@ fn iteration_is_first_insert_order_and_an_upsert_keeps_its_slot() {
 fn cards_json_matches_cards_element_for_element() {
     // `summary_snapshot` takes the RAW strings under the state lock and parses them off it; the
     // two accessors must agree or the off-lock rebuild would see a different corpus.
-    let mut s = CardStore::new();
+    let mut s = store("cardsjson");
     for id in ["a", "b", "c"] {
         s.put(&card(id, "2026-08-01T10:00:00.000Z", 0.0, 1));
     }
@@ -79,7 +87,7 @@ fn cards_json_matches_cards_element_for_element() {
 
 #[test]
 fn contains_and_len_and_clear() {
-    let mut s = CardStore::new();
+    let mut s = store("contains");
     assert!(s.is_empty());
     assert!(!s.contains("a"));
     s.put(&card("a", "", 0.0, 0));
@@ -99,7 +107,7 @@ fn contains_and_len_and_clear() {
 fn demote_cold_strips_all_but_the_hottest_and_accumulates_the_counter() {
     // Mirrors tests/log_reader_parity.rs::demote_cold_timelines_keeps_only_the_hottest_cards —
     // same fixture, asserted directly on the store so the ordering rule has its own guard.
-    let mut s = CardStore::new();
+    let mut s = store("demote");
     s.put(&card("old", "2026-08-01T10:00:00.000Z", 1000.0, 3));
     s.put(&card("newest", "2026-08-01T10:00:00.000Z", 7_200_000.0, 2)); // start+duration wins
     s.put(&card("mid", "2026-08-01T11:00:00.000Z", 0.0, 4));
@@ -125,7 +133,7 @@ fn demote_cold_breaks_ties_on_first_insert_order() {
     // Four cards with the SAME last-active instant. The Rust original sorted stably over
     // `values().enumerate()`, so a tie kept insertion order and the LAST-inserted cards were the
     // ones demoted. `ORDER BY last_active_ms DESC` alone would leave the tie group unordered.
-    let mut s = CardStore::new();
+    let mut s = store("ties");
     for id in ["first", "second", "third", "fourth"] {
         s.put(&card(id, "2026-08-01T10:00:00.000Z", 0.0, 2));
     }
@@ -137,7 +145,7 @@ fn demote_cold_breaks_ties_on_first_insert_order() {
 
 #[test]
 fn persist_records_are_stripped_and_in_first_insert_order() {
-    let mut s = CardStore::new();
+    let mut s = store("persist");
     let mut a = card("a", "2026-08-01T10:00:00.000Z", 0.0, 2);
     a["fileOps"] = json!([{ "path": "x" }]);
     a["generatedFiles"] = json!(["y"]);
@@ -162,7 +170,7 @@ fn a_card_without_a_session_id_is_keyed_by_the_empty_string() {
     // `put_log_session` has always done `unwrap_or("")`. Two such cards therefore COLLIDE — that
     // is the pre-existing contract (an IndexMap keyed on "" holds one), and the table must not
     // quietly grow a second row for them.
-    let mut s = CardStore::new();
+    let mut s = store("nosessionid");
     s.put(&json!({ "source": "codex" }));
     s.put(&json!({ "source": "claude_code" }));
     assert_eq!(s.len(), 1);
