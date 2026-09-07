@@ -97,10 +97,18 @@ pub fn phys_footprint_bytes() -> Option<u64> {
 /// The metric the cap decision is keyed on, and its name for the log — macOS uses physical
 /// footprint (falling back to RSS only if the footprint syscall itself failed); every other
 /// platform uses RSS, because there is no footprint equivalent there.
-pub fn primary_metric(fallback_rss_bytes: u64) -> (&'static str, u64) {
+///
+/// The fallback is a CLOSURE, not a value, and that is load-bearing rather than stylistic. The
+/// caller samples RSS once BEFORE running the soft valve (it has to — the valve's own decision
+/// needs that reading). Handing that same number here would key the hard cap on a pre-valve
+/// measurement, so on the RSS path the guard could not observe the one thing that makes it
+/// meaningful: that memory is STILL over the cap after the window was narrowed. A closure defers
+/// the read to breach-check time. On macOS it is never called at all, because the footprint
+/// syscall answers first — so the fresh read costs nothing on the platform that does not need it.
+pub fn primary_metric(fallback_rss: impl FnOnce() -> u64) -> (&'static str, u64) {
     match phys_footprint_bytes() {
         Some(fp) => ("phys_footprint", fp),
-        None => ("rss", fallback_rss_bytes),
+        None => ("rss", fallback_rss()),
     }
 }
 
@@ -133,7 +141,7 @@ pub fn format_diagnostic(metric_name: &str, metric_bytes: u64, mi: &MimallocInfo
     format!(
         "alcore: RSS HARD CAP — {metric_name} {measured_mb} MB > cap {cap_mb} MB, exiting\n\
          alcore: RSS HARD CAP — mimalloc (Rust heap): current {mi_cur} MB, peak {mi_peak} MB, commit {mi_commit} MB, page faults {mi_pf}\n\
-         alcore: RSS HARD CAP — non-mimalloc (approx, e.g. DuckDB's own allocator): {non_mimalloc} MB\n\
+         alcore: RSS HARD CAP — non-mimalloc (approx = {metric_name} minus mimalloc current_rss; the two are different counters, so this is a bisection, not an attribution): {non_mimalloc} MB\n\
          alcore: RSS HARD CAP — resident spans: {spans}\n\
          alcore: RSS HARD CAP — summarization window: effective {eff} ms / configured {cfg} ms\n\
          alcore: RSS HARD CAP — card store rows: {cards}\n\
@@ -176,11 +184,11 @@ fn write_log_file(log_path: &Path, diagnostic: &str) {
 }
 
 /// Check the primary metric against the hard cap and, on breach, write + print the diagnostic and
-/// exit(1). No-op under the cap. `fallback_rss_bytes` is the RSS the caller already computed
-/// (`server_stats::rss_bytes()`) — used as the primary metric on non-macOS, and as the fallback if
-/// the macOS footprint syscall itself fails.
-pub fn check_and_enforce(fallback_rss_bytes: u64, log_path: &Path, snapshot: CulpritSnapshot) {
-    let (metric_name, metric_bytes) = primary_metric(fallback_rss_bytes);
+/// exit(1). No-op under the cap. `fallback_rss` is called ONLY on the RSS path (non-macOS, or a
+/// failed footprint syscall) and is called HERE rather than by the caller, so the reading is taken
+/// after the soft valve has run — see `primary_metric`.
+pub fn check_and_enforce(fallback_rss: impl FnOnce() -> u64, log_path: &Path, snapshot: CulpritSnapshot) {
+    let (metric_name, metric_bytes) = primary_metric(fallback_rss);
     if metric_bytes <= snapshot.cap_bytes {
         return;
     }
@@ -217,7 +225,7 @@ mod tests {
     fn under_cap_is_a_no_op() {
         let tmp = std::env::temp_dir().join(format!("al-rss-guard-noop-{}.log", std::process::id()));
         let _ = std::fs::remove_file(&tmp);
-        check_and_enforce(1024 * 1024 * 1024, &tmp, snap(2 * 1024 * 1024 * 1024));
+        check_and_enforce(|| 1024 * 1024 * 1024, &tmp, snap(2 * 1024 * 1024 * 1024));
         assert!(!tmp.exists(), "no log should be written when under cap");
     }
 
@@ -235,7 +243,14 @@ mod tests {
         let d = format_diagnostic("phys_footprint", 5_400 * 1024 * 1024, &mi(400 * 1024 * 1024), &snap(2048 * 1024 * 1024));
         assert!(d.contains("phys_footprint 5400 MB > cap 2048 MB"));
         assert!(d.contains("mimalloc (Rust heap): current 400 MB"));
-        assert!(d.contains("non-mimalloc (approx, e.g. DuckDB's own allocator): 5000 MB"));
+        // The label must name its METHOD, not a suspect. Naming DuckDB here was measurably
+        // premature: a live vmmap on 2026-09-07 put the mimalloc side ahead on RESIDENT (3.4 G vs
+        // 2.3 G) but well behind on DIRTY (876 M vs ~2.7 G), so a log asserting "DuckDB" would
+        // have been read as a finding when nothing had measured DuckDB. The subtraction also
+        // mixes counters — phys_footprint minus mimalloc's RSS — which is why it says bisection.
+        assert!(d.contains("non-mimalloc (approx = phys_footprint minus mimalloc current_rss"));
+        assert!(d.contains("bisection, not an attribution): 5000 MB"));
+        assert!(!d.contains("e.g. DuckDB"), "the diagnostic must not name a suspect it did not measure");
         assert!(d.contains("resident spans: 397"));
         for line in d.lines() {
             assert!(line.starts_with("alcore: RSS HARD CAP —"), "line not prefixed for grep: {line}");

@@ -687,8 +687,12 @@ pub fn rss_budget_bytes() -> u64 {
         // still over AGENTLENS_RSS_HARD_CAP_MB (default 2048) after the soft valve had its
         // chance, the leak isn't in the summarization window this tick narrows — exit now with a
         // diagnostic rather than let the process grow toward an OOM kill with no evidence left.
+        // A CLOSURE, not `rss_now`. `rss_now` was sampled ABOVE, before the valve ran — the valve
+        // needs it, but the hard cap must not be keyed on a pre-valve reading, or on the RSS path
+        // it cannot see the only thing that makes the breach meaningful: still over AFTER the cut.
+        // On macOS this closure is never called; the footprint syscall answers first.
         rss_guard::check_and_enforce(
-            rss_now,
+            crate::server_stats::rss_bytes,
             &self.data_dir.join("rss-hard-cap.log"),
             rss_guard::CulpritSnapshot {
                 cap_bytes: rss_guard::rss_hard_cap_bytes(),
