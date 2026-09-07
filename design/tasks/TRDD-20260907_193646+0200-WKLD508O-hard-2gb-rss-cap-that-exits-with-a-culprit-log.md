@@ -143,14 +143,23 @@ correct; if it is wrong, nobody has measured what a fresh boot costs.
 **So the resolving measurement is one restart with the guard at 2048**, watching whether it survives
 the boot scan — which is acceptance criterion #4, already on this card.
 
-**THE CRASH LOOP DOES NOT EXIST — VERIFIED, and it inverts the risk this card has reasoned about
-all evening.** `~/Library/LaunchAgents/com.agentlens.spool.plist` runs `agentlenspro spool ensure`
-(NOT the collector), `RunAtLoad` only, **no `KeepAlive`**. `standalone/cli.ts:47` spawns alcore and
-its `child.on('exit')` merely sets `process.exitCode` and resolves — **no respawn path**. So a guard
-breach means the collector **stays down until a human restarts it**. Every "crash loop" risk on this
-card and in four review passes was assumed, never checked; the real exposure is the opposite one — an
-observability product silently dark for hours with nobody watching. That makes an **unattended**
-deploy the thing to avoid, not the cap value.
+**NO RESPAWN PATH FOUND — and it inverts the risk this card has reasoned about all evening.**
+`~/Library/LaunchAgents/com.agentlens.spool.plist` runs `agentlenspro spool ensure` with `RunAtLoad`
+and no `KeepAlive` (`grep -c KeepAlive` on the whole file = **0**, so that absence is conclusive for
+the literal key). `standalone/cli.ts:34` spawns alcore and its `child.on('exit')` merely sets
+`process.exitCode` and resolves — no respawn. So a guard breach most likely leaves the collector
+**down until a human restarts it**. Every "crash loop" risk on this card and in four review passes
+was **assumed, never checked** — that much is certain — and the real exposure looks like the opposite
+one: an observability product silently dark for hours with nobody watching. That makes an
+**unattended** deploy the thing to avoid, not the cap value.
+
+**Scoped honestly, because this is a NEGATIVE existence claim and an earlier version shouted it as
+VERIFIED:** `spool ensure`'s *implementation* was never read — "not the collector" is inferred from
+the subcommand name. And `cli.ts`'s `runServerForeground` is the FOREGROUND path; a 6.9-hour
+collector was plausibly started some other way, and that launcher's exit handling is unread. What IS
+solid: no loaded launchd job but `com.agentlens.spool` (status `-  0`, not running), nothing in
+`/Library/Launch{Daemons,Agents}`, and `KeepAlive` literally absent. Not checked: cron, shell
+wrappers, `server start`'s own retry logic.
 
 **Also verified: the diagnostic APPENDS.** `write_log_file` opens with
 `.create(true).append(true)` then `writeln!` → `flush` → `sync_all`, so successive breaches
