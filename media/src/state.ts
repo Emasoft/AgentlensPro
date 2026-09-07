@@ -185,6 +185,33 @@ export function cacheSessionDetail(
   sessionGeneratedFiles.value = gf
 }
 
+// ── Single-expansion tree (Traces tab) ─────────────────────────────────────────
+// Owner directive: only one heavy trace/branch/session subtree may be expanded at a
+// time — expanding one collapses every other, and collapsing releases its fetched
+// data so the browser only ever holds one page of duckdb-sourced detail. `SessionBlock`
+// and `SubAgentBranch` both key off this single id instead of local component state.
+export const expandedTraceId = signal<string | null>(null)
+
+export function setExpandedTraceId(id: string | null): void {
+  expandedTraceId.value = id
+  // Drop every OTHER session's cached detail — the new id (if any) keeps its own
+  // entry if already loaded, everything else is evicted so at most one heavy
+  // subtree's data is resident.
+  const keep = id
+  const tl = sessionTimelines.value
+  const fo = sessionFileOps.value
+  const gf = sessionGeneratedFiles.value
+  const nextTl: Record<string, TimelineEntry[]> = keep && tl[keep] !== undefined ? { [keep]: tl[keep] } : {}
+  const nextFo: Record<string, FileOpSummary[]> = keep && fo[keep] !== undefined ? { [keep]: fo[keep] } : {}
+  const nextGf: Record<string, { files: GeneratedFileRef[]; truncated: boolean }> =
+    keep && gf[keep] !== undefined ? { [keep]: gf[keep] } : {}
+  sessionTimelines.value = nextTl
+  sessionFileOps.value = nextFo
+  sessionGeneratedFiles.value = nextGf
+  detailLRU.length = 0
+  if (keep) detailLRU.push(keep)
+}
+
 // Request one generated file's content on expand (TRDD-ZS1GDXVY). Deduped: an in-flight/loaded path
 // is not re-requested. Routes through vscode.postMessage — in VS Code the dashboardPanel reads the
 // file; in standalone the inline shim fetches /api/generated-file. The reply lands as a

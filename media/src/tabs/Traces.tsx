@@ -4,6 +4,7 @@ import {
   filteredSessions, sessionSummary, sessionTimelines, sessionCompositions, blobCache,
   focusedSessionId, vscode, cacheHitSliThreshold, callContexts,
   timelineMetric, timelineSortByValue, timelineGroupByTurn, sessionGeneratedFiles, timeRange,
+  expandedTraceId, setExpandedTraceId,
 } from '../state'
 import { GeneratedFilesList } from '../GeneratedFilesView'
 import { CopyBranchButton } from '../CopyBranchButton'
@@ -1292,7 +1293,9 @@ function subAgentTotals(child: SessionSummaryCard): TurnTotals {
 // trace (loaded on demand via loadSessionDetail), so the sub-agent is BOTH inline-expandable AND
 // navigable to its own session (TRDD-TKN5VALS item 1).
 function SubAgentBranch({ child, sessIdx }: { child: SessionSummaryCard; sessIdx: number }) {
-  const [open, setOpen] = useState(false)
+  // Same single-expansion signal as SessionBlock — a sub-agent branch is just another
+  // node in the one leaf/branch/trace/session tree, so opening it collapses everything else.
+  const open = expandedTraceId.value === child.sessionId
   const timelines = sessionTimelines.value
   const loaded = timelines[child.sessionId]
   const totals = subAgentTotals(child)
@@ -1307,7 +1310,7 @@ function SubAgentBranch({ child, sessIdx }: { child: SessionSummaryCard; sessIdx
 
   return (
     <div class="wf-turn-group" style="border-left:2px solid var(--vscode-charts-orange,#e2a03f);margin-left:6px">
-      <div class="wf-row wf-turn-row" onClick={() => setOpen(v => !v)}>
+      <div class="wf-row wf-turn-row" onClick={() => setExpandedTraceId(open ? null : child.sessionId)}>
         <div class="wf-label">
           <span class="sw-chevron">{open ? '▼' : '▶'}</span>
           <span class="wf-type-badge" style="background:var(--vscode-charts-orange,#e2a03f);color:#000" title="spawned sub-agent">↳</span>
@@ -1323,7 +1326,7 @@ function SubAgentBranch({ child, sessIdx }: { child: SessionSummaryCard; sessIdx
         <div class="wf-info" style="display:flex;gap:6px;align-items:center;justify-content:flex-end">
           <span style="color:var(--muted);font-size:9px">{child.model}</span>
           <button
-            onClick={e => { e.stopPropagation(); focusedSessionId.value = child.sessionId; setOpen(true) }}
+            onClick={e => { e.stopPropagation(); focusedSessionId.value = child.sessionId; setExpandedTraceId(child.sessionId) }}
             style="padding:1px 6px;font-size:9px;cursor:pointer;border-radius:3px;border:1px solid var(--border);background:transparent;color:var(--vscode-textLink-foreground,#4fc3f7)"
             title="focus this sub-agent session">open →</button>
           <CopyBranchButton card={child} />
@@ -1675,10 +1678,13 @@ export function TimelineWaterfall({ steps, sessionDur, sessionModel, sessIdx = 0
   )
 }
 
-function SessionBlock({ sess, sessIdx, sessNum, totalCount, isFirst }: {
-  sess: SessionSummaryCard; sessIdx: number; sessNum: number; totalCount: number; isFirst: boolean
+function SessionBlock({ sess, sessIdx, sessNum, isFirst }: {
+  sess: SessionSummaryCard; sessIdx: number; sessNum: number; isFirst: boolean
 }) {
-  const [collapsed, setCollapsed] = useState(!isFirst)
+  // Single-expansion invariant (owner directive): `collapsed` is derived from the one shared
+  // expandedTraceId signal, never local state — so opening any other session/sub-agent branch
+  // collapses this one automatically. `isFirst` seeds the initial expansion once, below.
+  const collapsed = expandedTraceId.value !== sess.sessionId
   const [promptExpanded, setPromptExpanded] = useState(false)
   const isFocused = focusedSessionId.value === sess.sessionId
   const isLongPrompt = (sess.userRequest?.length ?? 0) > 100
@@ -1693,6 +1699,13 @@ function SessionBlock({ sess, sessIdx, sessNum, totalCount, isFirst }: {
   // TRDD-ZS1GDXVY: session-level "generated files" group (loaded lazily alongside the timeline).
   const sessionGenFiles = sessionGeneratedFiles.value[sess.sessionId]
 
+  // Seed the initial expansion once: the first session opens by default, same as before, but
+  // through the shared signal so it still participates in the single-expansion invariant.
+  useEffect(() => {
+    if (isFirst && expandedTraceId.value === null) setExpandedTraceId(sess.sessionId)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   useEffect(() => {
     if (!collapsed && loadedTimeline === undefined) {
       if (vscode) vscode.postMessage({ type: 'loadSessionDetail', sessionId: sess.sessionId })
@@ -1700,11 +1713,7 @@ function SessionBlock({ sess, sessIdx, sessNum, totalCount, isFirst }: {
   }, [sess.sessionId, collapsed])
 
   const toggle = () => {
-    const opening = collapsed
-    setCollapsed(v => !v)
-    if (opening && loadedTimeline === undefined) {
-      if (vscode) vscode.postMessage({ type: 'loadSessionDetail', sessionId: sess.sessionId })
-    }
+    setExpandedTraceId(collapsed ? sess.sessionId : null)
   }
 
   const timeline = loadedTimeline ?? sess.timeline ?? []
@@ -1824,7 +1833,6 @@ function DayGroup({ label, sessions, startNum, focusedId }: {
           sess={sess}
           sessIdx={idx}
           sessNum={startNum + idx}
-          totalCount={sessions.length}
           isFirst={idx === 0 && focusedId === null}
         />
       ))}
