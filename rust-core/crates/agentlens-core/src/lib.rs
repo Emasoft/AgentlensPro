@@ -75,6 +75,7 @@ pub mod raw_body_context;
 pub mod request_log;
 pub mod resident_cost;
 pub mod retention_config;
+pub mod rss_guard;
 pub mod runtime_inventory;
 pub mod server_stats;
 pub mod session_summary_sql;
@@ -680,9 +681,27 @@ pub fn rss_budget_bytes() -> u64 {
         // Memory pressure FIRST: narrowing the window is what makes the following prune evict.
         // Order is load-bearing — halving after the prune would defer every cut by a full tick,
         // and the tick is 5s while a flood can add ~11k spans/s.
-        let narrowed = self
-            .window
-            .apply_memory_pressure(crate::server_stats::rss_bytes(), Self::rss_budget_bytes());
+        let rss_now = crate::server_stats::rss_bytes();
+        let narrowed = self.window.apply_memory_pressure(rss_now, Self::rss_budget_bytes());
+        // Hard ceiling, separate from and higher-severity than the soft valve above: if RSS is
+        // still over AGENTLENS_RSS_HARD_CAP_MB (default 2048) after the soft valve had its
+        // chance, the leak isn't in the summarization window this tick narrows — exit now with a
+        // diagnostic rather than let the process grow toward an OOM kill with no evidence left.
+        rss_guard::check_and_enforce(
+            rss_now,
+            &self.data_dir.join("rss-hard-cap.log"),
+            rss_guard::CulpritSnapshot {
+                cap_bytes: rss_guard::rss_hard_cap_bytes(),
+                resident_spans: Some(self.window.spans.len()),
+                window_effective_ms: Some(self.window.effective_ms),
+                window_configured_ms: Some(self.window.configured_ms),
+                card_count: Some(self.cards.len()),
+                span_store_segments: Some(self.writer.stats().0),
+                span_store_total_spans: Some(self.writer.stats().1),
+                span_store_total_bytes: Some(self.writer.stats().2),
+                uptime_ms: Some(now_ms - self.started_at_ms),
+            },
+        );
         if narrowed {
             // Said out loud: a silently shrinking window looks identical to "no traffic", and the
             // whole point of porting this guard is that the cut is visible. `windowMs` in

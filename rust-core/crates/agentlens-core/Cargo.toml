@@ -81,6 +81,10 @@ futures-core = "0.3"
 # lock via tokio; a direct dep so the calls are ours, not a transitive accident.
 libc = "0.2"
 mimalloc = "0.1.52"
+# rss_guard's culprit log: mi_process_info reports mimalloc's OWN heap (current/peak rss,
+# commit, page faults) directly from the allocator that alcore.rs sets as global — the only way
+# to tell "the Rust heap grew" from "DuckDB (a separate, non-Rust allocator) grew" (TRDD-WKLD508O).
+libmimalloc-sys = { version = "0.1.49", features = ["extended"] }
 
 [dev-dependencies]
 # forensics_scan's oracle stamps fixture mtimes on both sides: a spool EvidenceRow carries no
