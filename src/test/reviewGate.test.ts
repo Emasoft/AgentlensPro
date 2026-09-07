@@ -103,17 +103,44 @@ suite('reviewGate — subagent (SubagentStop) gate', () => {
 
   test('a plugin-namespaced type is not bricked by the path-traversal guard (live outage 2026-09-07)', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rg-ns-'))
+    const emptyCache = fs.mkdtempSync(path.join(os.tmpdir(), 'rg-cache-'))
     // Unresolvable + namespaced => RELEASED. Demanding an agent that cannot be proven able to spawn
     // is a permanent wedge; a missed review is recoverable.
-    assert.strictEqual(agentCannotSpawn('fable-advisor:advisor', dir), true)
+    // A VISIBLY-FAKE namespace, and an EMPTY cache passed explicitly. The previous version named a
+    // really-installed plugin and let the resolver read the developer's own ~/.claude/plugins/cache,
+    // so its outcome depended on machine state — it would have flipped if that plugin ever shipped
+    // `Agent` in its tools. A test that consults the machine is not a test of the code.
+    assert.strictEqual(agentCannotSpawn('nosuchplugin:nosuchagent', dir, emptyCache), true, 'unresolvable + namespaced ⇒ released, never wedged')
     // The traversal defence still holds — it just guards the NAME now, not the whole address.
-    assert.strictEqual(agentCannotSpawn('plug:../etc/passwd', dir), false)
-    assert.strictEqual(agentCannotSpawn('../etc/passwd:name', dir), false, 'a bad plugin part is rejected too')
+    assert.strictEqual(agentCannotSpawn('plug:../etc/passwd', dir, emptyCache), false)
+    assert.strictEqual(agentCannotSpawn('../etc/passwd:name', dir, emptyCache), false, 'a bad plugin part is rejected too')
     // A BARE unresolvable name keeps the old default (demand) — this fix changes only the namespaced case.
-    assert.strictEqual(agentCannotSpawn('nosuchagent', dir), false)
+    assert.strictEqual(agentCannotSpawn('nosuchagent', dir, emptyCache), false)
     // A namespaced type whose BARE name resolves in agentsDir is parsed, not blanket-released.
     fs.writeFileSync(path.join(dir, 'known.md'), '---\ntools: Read, Agent\n---\n')
-    assert.strictEqual(agentCannotSpawn('someplugin:known', dir), false, 'it HAS Agent — still demanded')
+    assert.strictEqual(agentCannotSpawn('someplugin:known', dir, emptyCache), false, 'agentsDir is the FALLBACK when the cache has nothing')
+  })
+
+  test('the plugin cache OUTRANKS a same-named user agent, and the NEWEST version wins', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rg-p-'))
+    const cache = fs.mkdtempSync(path.join(os.tmpdir(), 'rg-c-'))
+    const mk = (v: string, tools: string, whenMs: number): void => {
+      const d = path.join(cache, 'mp', 'plug', v, 'agents')
+      fs.mkdirSync(d, { recursive: true })
+      const f = path.join(d, 'a.md')
+      fs.writeFileSync(f, `---\ntools: ${tools}\n---\n`)
+      fs.utimesSync(f, whenMs / 1000, whenMs / 1000)
+    }
+    // A user agent of the SAME bare name claims the Agent tool. If agentsDir won, `plug:a` would be
+    // DEMANDED a fork it cannot spawn — the outage, recreated through a name collision.
+    fs.writeFileSync(path.join(dir, 'a.md'), '---\ntools: Read, Agent\n---\n')
+    mk('3.4.14', 'Read, Bash', Date.parse('2026-01-01T00:00:00Z'))
+    assert.strictEqual(agentCannotSpawn('plug:a', dir, cache), true, 'the plugin definition wins over the same-named local one')
+    // '3.4.1' sorts FIRST lexicographically but is older; only mtime picks the installed one.
+    mk('3.4.1', 'Read, Agent', Date.parse('2020-01-01T00:00:00Z'))
+    assert.strictEqual(agentCannotSpawn('plug:a', dir, cache), true, 'stale 3.4.1 must not outrank 3.4.14')
+    fs.utimesSync(path.join(cache, 'mp', 'plug', '3.4.1', 'agents', 'a.md'), Date.now() / 1000, Date.now() / 1000)
+    assert.strictEqual(agentCannotSpawn('plug:a', dir, cache), false, 'newest now HAS Agent ⇒ demanded')
   })
 
   test('a child sidechain entry does not count as the parent subagent\'s work', () => {

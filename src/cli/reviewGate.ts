@@ -79,26 +79,48 @@ interface ReviewGateInput {
  *  definition ⇒ unknown ⇒ demand as usual. */
 export const BUILTIN_WITHOUT_AGENT_TOOL = new Set(['Explore', 'Plan'])
 
+export function pluginCacheRoot(): string {
+  return path.join(os.homedir(), '.claude', 'plugins', 'cache')
+}
+
 /** Read a plugin agent's definition. A plugin agent is addressed `<plugin>:<name>` and its file
- *  lives under the plugin cache, never in `agentsDir` — so the plain readFileSync below can never
- *  find one. Walks NOTHING: the cache is `<cache>/<marketplace>/<plugin>/<version>/agents/<n>.md`,
- *  so two small readdirs and a stat resolve it deterministically. Returns null when absent. */
-function readPluginAgentDef(plugin: string, bare: string): string | null {
-  const cache = path.join(os.homedir(), '.claude', 'plugins', 'cache')
+ *  normally lives under the INSTALLED plugin cache. Not a walk, but not two readdirs either: it is
+ *  1 + M readdirs (M = marketplaces) plus up to M×V stats, all bounded and only for namespaced
+ *  types. It handles ONE of the four layouts observed on this machine —
+ *  `<cache>/<marketplace>/<plugin>/<version>/agents/<n>.md`. The other three are under
+ *  `plugins/marketplaces/`, which is deliberately NOT searched: that
+ *  tree is upstream source for plugins that may not be installed, and 4,029 of the 4,761 agent
+ *  definitions on this machine live there — resolving against one would answer for an agent the
+ *  harness never dispatches. Unresolvable is handled by the caller, which releases.
+ *
+ *  NEWEST VERSION BY MTIME, not readdir order. MEASURED 2026-09-07: ai-maestro-janitor has 14
+ *  versions cached and readdirSync yields them lexicographically — `3.4.1` first, `3.4.14` seventh
+ *  from last — so taking the first match read a THIRTEEN-VERSION-STALE definition and let it decide
+ *  whether the agent is demanded or released. mtime tracks install order without parsing semver
+ *  (a string sort gets `3.4.9` > `3.4.10` wrong, which is the same bug with extra steps). */
+function readPluginAgentDef(plugin: string, bare: string, cache = pluginCacheRoot()): string | null {
   let markets: string[]
   try { markets = fs.readdirSync(cache) } catch { return null }
+  const found: { file: string; mtime: number }[] = []
   for (const mp of markets) {
     const pluginDir = path.join(cache, mp, plugin)
     let versions: string[]
     try { versions = fs.readdirSync(pluginDir) } catch { continue }
     for (const v of versions) {
-      try { return fs.readFileSync(path.join(pluginDir, v, 'agents', `${bare}.md`), 'utf8') } catch { /* next */ }
+      const file = path.join(pluginDir, v, 'agents', `${bare}.md`)
+      try { found.push({ file, mtime: fs.statSync(file).mtimeMs }) } catch { /* next */ }
     }
   }
-  return null
+  if (found.length === 0) return null
+  found.sort((a, b) => b.mtime - a.mtime)
+  try { return fs.readFileSync(found[0].file, 'utf8') } catch { return null }
 }
 
-export function agentCannotSpawn(agentType: string, agentsDir = path.join(os.homedir(), '.claude', 'agents')): boolean {
+export function agentCannotSpawn(
+  agentType: string,
+  agentsDir = path.join(os.homedir(), '.claude', 'agents'),
+  cacheDir = pluginCacheRoot(),
+): boolean {
   // GUARD THE NAME COMPONENT, NOT THE WHOLE ADDRESS. This regex is a path-traversal defence (its
   // test pins `../etc/passwd`), and a colon is legitimate plugin syntax, not an attack — but a
   // namespaced type failed it and returned false, i.e. "demand as usual". That was harmless while
@@ -114,9 +136,16 @@ export function agentCannotSpawn(agentType: string, agentsDir = path.join(os.hom
   // their returns is work and neither has the Agent tool. A hardcoded set is deliberate over a
   // cleverer probe: greppable, and it fails VISIBLY on a rename where a missing file fails silently.
   if (BUILTIN_WITHOUT_AGENT_TOOL.has(bare)) return true
-  let text: string | null = null
-  try { text = fs.readFileSync(path.join(agentsDir, `${bare}.md`), 'utf8') } catch { /* try the plugin cache */ }
-  if (text === null && plugin) text = readPluginAgentDef(plugin, bare)
+  // CACHE FIRST FOR A NAMESPACED TYPE — the plugin's own definition is authoritative for it, and
+  // agentsDir is keyed on the BARE name, so `someplugin:known` and `otherplugin:known` both hit one
+  // `~/.claude/agents/known.md`. With 38 generically-named user agents (scout, judge, reviewer,
+  // spark…) a collision is a matter of time, and its worse branch — local lists Agent, the plugin
+  // does not — DEMANDS a fork from an agent that cannot spawn one, i.e. it recreates the very
+  // outage this function was fixed for, while looking like a successful resolve.
+  let text: string | null = plugin ? readPluginAgentDef(plugin, bare, cacheDir) : null
+  if (text === null) {
+    try { text = fs.readFileSync(path.join(agentsDir, `${bare}.md`), 'utf8') } catch { /* unresolved */ }
+  }
   // A NAMESPACED AGENT WE CANNOT FIND CANNOT BE PROVEN ABLE TO SPAWN, and an unprovable demand is a
   // permanent wedge — the agent has no exit. Release it: a missed review is recoverable, a bricked
   // agent is not. A BARE name still defaults to "demand", which is the pre-existing behaviour.
