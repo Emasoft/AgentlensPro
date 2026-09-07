@@ -121,17 +121,14 @@ The decision taken, and the owner can flip either half in one command:
 
 - **The code ships `2048` as the default.** That is the directive, honoured literally, and it is
   what any other machine gets.
-- **This machine's running collector gets `AGENTLENS_RSS_HARD_CAP_MB=7168` for one cycle**, just
-  above the current 6265 MB footprint. At 2048 the guard breaches on its first tick and the culprit
-  log describes a *booting* process; at 7168 it fires on the next real growth excursion and the log
-  describes a **grown** process — which is the diagnostic the directive actually asks for. Then it
-  drops to 2048 once the memory work lands.
+- **This machine runs 2048 as well — deploy and see whether it boots.** ~~`AGENTLENS_RSS_HARD_CAP_MB=7168`
+  for one cycle~~ **SUPERSEDED within the hour, by the flaw recorded below.** The override was chosen
+  to avoid a culprit log that describes a *booting* process, but installing the guard restarts the
+  collector anyway, so the 6265 MB process the override was sized against does not survive the
+  deploy. A fresh process crossing 2048 exits with a log describing a grown process — the same
+  diagnostic, without pre-emptively widening the cap.
 
-This is not a softened cap: 2048 is the shipped value. It is a diagnostic sequencing choice, and if
-the owner would rather take the crash loop tonight, unset the env var.
-
-**FLAW IN THE ABOVE RATIONALE, found before acting on it — do not deploy 7168 without resolving
-this.** The argument for 7168 is "at 2048 the guard breaches on its first tick, so the culprit log
+**FLAW THAT SUPERSEDED THE OVERRIDE, found before acting on it.** The argument for 7168 was "at 2048 the guard breaches on its first tick, so the culprit log
 describes a booting process." **That describes the process that is running now, and installing the
 guard destroys it** — deploy requires `cargo build --release` → copy → `codesign` → server restart.
 A fresh collector starts small and grows; whenever it crosses 2048 it exits with a log describing a
