@@ -3,7 +3,7 @@ trdd-id: WKLD508O
 title: alcore exits with a culprit log rather than exceed a 2 GB memory cap
 column: dev
 created: 2026-09-07T19:36:46+0200
-updated: 2026-09-07T21:09:12+0200
+updated: 2026-09-07T21:30:33+0200
 current-owner: main
 task-type: feature
 parent-trdd: 7YPQWKPG
@@ -13,7 +13,7 @@ severity: high
 blocked-by: []
 npt: []
 eht: []
-implementation-commits: [466775af, f9776548]
+implementation-commits: [466775af, f9776548, c0537ef4]
 project-id: agentlenspro
 scope: project
 labels: [rust, memory, alcore, guard]
@@ -53,12 +53,67 @@ readers create them. Do not read "the bytes are in DuckDB" as "no Rust change ca
 **Corollary: the guard fires on its first tick at the 2048 default**, and peak 8375 MB says it
 would have fired at any point today.
 
-**Also measured, and it retires an inference this card previously rested on:** the soft valve has
-narrowed the window **750 times** this uptime (`grep -c "memory pressure — summarization window"
-~/.agentlens/server.log`; last two lines `337500ms` → `300000ms` against a configured
-`86400000ms`). So `spans.inMemory = 317` is the *valve's output*, not evidence that the span
-window is naturally small. Every argument of the form "only 317 spans are resident, so the memory
-is not span-shaped" is reading the guard, not the structure.
+**THE SOFT VALVE IS OSCILLATING OVER ITS WHOLE RANGE, AND ITS CONTROL INPUT IS INVERTED UNDER
+SWAP.** Two wrong versions of this paragraph preceded this one: the first said "narrowed 750
+times" (the log message prints on a boolean that is also `true` for a *widening*, so a recovery is
+printed as `memory pressure` — a real logging defect, `lib.rs::prune_window` binds it as
+`narrowed`); the second retracted the oscillation claim as unsupported. **The retraction was
+wrong.** Classifying all 750 logged values settles it:
+
+```
+101 × 300000   93 × 600000   48 × 43200000   46 × 21600000   46 × 1200000
+ 44 × 5400000  44 × 2700000  44 × 1350000    44 × 10800000   43 × 675000   40 × 337500 …
+```
+
+**There are TWO disjoint ladders, and reading them as one produced three wrong counts in three
+turns.** Descent halves from `configured_ms` and clamps: `43200000 21600000 10800000 5400000
+2700000 1350000 675000 337500 300000`. Ascent doubles from the floor and clamps: `600000 1200000
+2400000 4800000 9600000 19200000 38400000 76800000 86400000`. They share nothing, because
+`300000 ≠ 86400000 / 2^k` (the ratio is 288, not a power of two).
+
+**Widening is proven by VALUE MEMBERSHIP, which needs no assumption about consecutive lines.**
+`600000, 1200000, 2400000, 4800000, 9600000, 19200000` are unreachable by halving from
+`86400000` — a process that only ever starts fresh and narrows can never print them. They appear
+254 times, `600000` alone 93 times. So the window departed the floor **~93 times**, and the ascent
+counts decay 93 → 46 → 39 → 31 → 25 → 20: most recoveries survive one or two ticks.
+
+**The log spans restarts — by arithmetic, from these same counts.** Logging `43200000` requires the
+window to have been at `86400000`, which happens only at construction or when an ascent clamps
+there. `#(43200000) = 48` but `#(86400000) = 15`, so there were **≥33 window constructions**. Any
+sentence attributing this log to one uptime — including two earlier versions of this paragraph — is
+wrong. Descent-rung counts are also direction-ambiguous (a mid-descent widen re-emits the same
+value going up), so none of them is a descent tally.
+
+**The control input can read 0, and 0 widens.** `server_stats::rss_bytes()` returns
+`proc_pidinfo(PROC_PIDTASKINFO).pti_resident_size` — but on a short read it falls through to
+`0`, and `0 <= budget` takes the widen branch. That is a complete inversion mechanism requiring
+one transient syscall failure and nothing else. A swap-driven story is also available (RSS falls
+when pages leave residency, and ~2.5 G is swapped here) but its magnitude is **unshown** — the
+server reports `rssMb 7930`, *above* `ps`'s 6.6 GB, and nothing measured shows this input reaching
+≤4096 MB. Prefer the mechanism that is visible in the source; do not assert either as established.
+
+**Do NOT call the valve "saturated" — it is not, and the two claims are incompatible.** A saturated
+valve is pinned at the floor and logs nothing (`max(150000, 300000)` is not `< effective_ms` ⇒
+`return false`). This one departs the floor ~93 times. The supported statement is narrower and
+still decides the cap question: **the window reaches its floor while the process sits at 6265 MB, so
+a valve at full deflection does not bring it under 2048 MB — the hard cap is not redundant with it.**
+
+**Interaction with this card's own deliverable.** `CulpritSnapshot` records `window_effective_ms` at
+breach. If the valve widened on a spurious low reading in the tick before the cap fires, the culprit
+log names a window that had just been *widened* — the diagnostic the owner asked for would
+misdescribe the state that produced the breach. The guard should record whether the last valve
+action was a widen, or sample the width before `apply_memory_pressure` runs.
+
+Established facts behind the above: `SUMMARY_WINDOW_FLOOR_MS = 5 * 60_000` (read at
+`span_window.rs:40`), narrowing is `(effective_ms / 2).max(FLOOR)`, widening is
+`(effective_ms * 2).min(configured_ms)` and is **not** floor-clamped, and `configured_ms` is
+`86400000` (24 h). So CLAUDE.md's "5-minute rolling span window" describes the *floor* — the
+degraded state — not the configured design.
+
+Consequence for this card, unchanged by any of the above: `spans.inMemory = 317` is the *valve's
+output*, so it bounds what `SpanWindow` holds **now** and says nothing about its capacity or peak.
+And the valve reaches its floor repeatedly while the process sits at 6.3 GB — **it has no remaining
+authority**, so the hard cap is not redundant with it.
 
 **UNANSWERED, and now better informed:** straight to 2048 (fires immediately, collector down, but
 the culprit log lands) or a raised cap for one cycle? Put to the owner ~19:30. The 5:1 split above
@@ -73,14 +128,52 @@ once, and `rss_guard.rs`'s own module doc ("this is the backstop" to a valve tha
 narrows the window as RSS climbs") describes a sequence the shipped defaults prevent. Needs a
 decision, not an edit: put both on the same counter, or set the cap above the valve's budget.
 
-**LEAD THAT FALSIFIES "no Rust-side work reaches 2048" — DuckDB has a `memory_limit`.** It is a
-connection setting the Rust code owns; nothing in the tree appears to set it. `SET
-memory_limit='...'` is Rust-side work that bounds the C++ side directly. Related and already
-measured: ~8,459 live parquet `FileMetaData`/`SchemaElement`/`ColumnChunk` sets against ~1,587
-sealed files — a retention ratio, and retention is a Rust-side decision (readers not closed, a
-pool unbounded, re-globbing). Plus ~619 MB in `MALLOC_*(empty)` free-list retention. So the
-correct claim is the narrower one: **zeroing the Rust HEAP does not reach 2048; Rust-side
-changes that reduce what DuckDB is asked to hold are untried and are the next thing to try.**
+**CORRECTED — `memory_limit` is NOT untried; it is set everywhere, and that is the finding.**
+The first version of this paragraph said "nothing in the tree appears to set it". That was a guess
+dressed as an observation, and one `grep -rn memory_limit rust-core/ --include='*.rs'` refutes it.
+**VERIFIED — exactly seven `SET memory_limit` statements** (the other four grep hits are two
+comments, a `SELECT current_setting` readback, and a function signature):
+
+| statement | limit |
+|---|---|
+| `card_store.rs:131` (`MEMORY_LIMIT`) | `256MiB` |
+| `session_summary_sql.rs:127` | `1GB` |
+| `transcript_sql.rs:402`, `:574` | `2GB` each |
+| `statusline_store.rs:237`, `agentlens-store/lib.rs:144`, `bodies_evidence.rs:78` | parameterized |
+
+**NOT VERIFIED, and an earlier version of this paragraph asserted it anyway: that these sum.** It
+claimed `memory_limit` is per-connection and that the literals therefore license ≈5.25 GB. Two
+reasons to distrust that: DuckDB's `memory_limit` is very likely a **database-instance** setting,
+not a session one — in which case connections to the same instance share one budget and the last
+`SET` wins — and a `SET` statement is not a connection either way (`open_store()` takes the limit
+as a *parameter*, so one line can serve N callers). **The additive unit is distinct DuckDB
+instances, and the grep cannot see how many there are.** Falsifier, one command:
+`SET SESSION memory_limit='1GB'` — if it errors, the scope is global. `card_store.rs:328`'s
+`SELECT current_setting('memory_limit')` readback is a hint someone already worried about
+clobbering, which is a global-setting concern.
+
+**VERIFIED and more useful than the sum was: four of the seven sites also `SET temp_directory=''`**
+(`session_summary_sql:127`, `statusline_store:237`, both `transcript_sql` sites). That **disables
+spilling**, so on those connections hitting the limit is a hard error, not degradation. Tightening
+limits to reach 2048 MB therefore risks a collector that **fails its queries instead of exiting with
+a log** — worse than the breach it prevents, because the exit is loud and produces the culprit file
+the directive asked for. (Whether such a failure is logged or swallowed is unread — say "fails",
+not "quietly fails", until a call site is checked.)
+
+Also free from the same grep: **`card_store` runs at `256MiB`**, so the card store is affirmatively
+not the 5.1 G — one piece of the C++ question answered. And `statusline_store` already sets
+`preserve_insertion_order=false`, i.e. someone has tuned that connection for memory before.
+
+A limit governs DuckDB's buffer manager, not the process, and per-reader parquet metadata is not
+obviously charged to it — so the measured retention ratio (~8,459 live
+`FileMetaData`/`SchemaElement`/`ColumnChunk` sets against ~1,587 sealed files) may be untouched by
+any limit. Retention stays a Rust-side decision (readers not closed, a pool unbounded, re-globbing),
+and ~619 MB sits in `MALLOC_*(empty)` free-list retention.
+
+So the claim this paragraph supports is the narrow one: **zeroing the Rust HEAP does not reach 2048,
+and `memory_limit` is already set at every site — so the untried lever is reader/instance retention,
+not the limit value.** Whether limits sum is the open question above; settle it with the one-command
+falsifier before building on either answer.
 
 **NOT worth doing:** a restart with `MIMALLOC_SHOW_STATS=1` — those stats print at process **exit**,
 so a restart yields nothing about the state under investigation, and it would destroy a 6.6-hour
