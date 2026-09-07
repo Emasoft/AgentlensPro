@@ -139,7 +139,30 @@ it anywhere in `design/tasks/`. If it is right, a fresh boot sits at half the ca
 correct; if it is wrong, nobody has measured what a fresh boot costs.
 
 **So the resolving measurement is one restart with the guard at 2048**, watching whether it survives
-the boot scan — which is acceptance criterion #4, already on this card. 7168 buys information only
+the boot scan — which is acceptance criterion #4, already on this card.
+
+**THE CRASH LOOP DOES NOT EXIST — VERIFIED, and it inverts the risk this card has reasoned about
+all evening.** `~/Library/LaunchAgents/com.agentlens.spool.plist` runs `agentlenspro spool ensure`
+(NOT the collector), `RunAtLoad` only, **no `KeepAlive`**. `standalone/cli.ts:47` spawns alcore and
+its `child.on('exit')` merely sets `process.exitCode` and resolves — **no respawn path**. So a guard
+breach means the collector **stays down until a human restarts it**. Every "crash loop" risk on this
+card and in four review passes was assumed, never checked; the real exposure is the opposite one — an
+observability product silently dark for hours with nobody watching. That makes an **unattended**
+deploy the thing to avoid, not the cap value.
+
+**Also verified: the diagnostic APPENDS.** `write_log_file` opens with
+`.create(true).append(true)` then `writeln!` → `flush` → `sync_all`, so successive breaches
+accumulate and the first (most informative) entry is never overwritten.
+
+**DO BEFORE DEPLOYING — pid 30984 is a 6.9-hour grown specimen and a restart destroys it.** Regrowing
+one costs ~7 h. These are answerable ONLY on a live, grown process, and all four bear on the C++
+side that the cap is really about:
+- `SET SESSION memory_limit='1GB'` on a live connection — the scope falsifier (errors ⇒ global).
+- `SELECT current_setting('memory_limit')` per store — does each connection hold the value its own
+  `SET` asked for, or did a later `SET` win?
+- How many distinct DuckDB **instances** the process holds — the additive unit the retracted
+  ≈5.25 GB sum needed and never had.
+- The parquet-metadata retention figure (~8,459 live sets vs ~1,587 sealed files) re-read now. 7168 buys information only
 if 2048 cannot boot, and that is the thing to find out first, not to route around.
 
 **OPEN DEFECT — the backstop stands in front of what it backs.** The two thresholds are keyed
