@@ -4,7 +4,7 @@ import * as os from 'os'
 import * as path from 'path'
 import {
   scanMainTranscriptLines, decideMainGate,
-  scanSubagentTranscriptLines, decideSubagentGate, agentCannotSpawn,
+  scanSubagentTranscriptLines, decideSubagentGate, agentCannotSpawn, declaredToolsHaveAgent,
   REVIEW_GATE_DIRECTIVE, ONE_TURN_RULE, MAIN_BLOCK_REASON, SUBAGENT_BLOCK_REASON,
 } from '../cli/reviewGate'
 
@@ -143,6 +143,22 @@ suite('reviewGate — subagent (SubagentStop) gate', () => {
     assert.strictEqual(agentCannotSpawn('plug:a', dir, cache), false, 'newest now HAS Agent ⇒ demanded')
   })
 
+  test('an unreadable newest candidate falls through to the next, it does not discard them all', () => {
+    // `statSync` succeeds on a DIRECTORY, so a directory named `a.md` sorts into the candidate list
+    // as the newest entry and then throws on read. Abandoning there discarded every OTHER version
+    // that would have read fine. The two outcomes are distinguishable only because the readable
+    // older file declares Agent: fall-through ⇒ DEMAND (false); give-up ⇒ text null ⇒ RELEASE (true).
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rg-p2-'))
+    const cache = fs.mkdtempSync(path.join(os.tmpdir(), 'rg-c2-'))
+    const old = path.join(cache, 'mp', 'plug', '1.0.0', 'agents')
+    fs.mkdirSync(old, { recursive: true })
+    fs.writeFileSync(path.join(old, 'a.md'), '---\ntools: Read, Agent\n---\n')
+    fs.utimesSync(path.join(old, 'a.md'), Date.parse('2020-01-01T00:00:00Z') / 1000, Date.parse('2020-01-01T00:00:00Z') / 1000)
+    fs.mkdirSync(path.join(cache, 'mp', 'plug', '2.0.0', 'agents', 'a.md'), { recursive: true })
+    assert.strictEqual(agentCannotSpawn('plug:a', dir, cache), false,
+      'the readable older version decides; an unreadable newest one is skipped, not fatal')
+  })
+
   test('a child sidechain entry does not count as the parent subagent\'s work', () => {
     const child = JSON.stringify({ type: 'assistant', isSidechain: true, message: { content: [textBlock] } })
     assert.deepStrictEqual(scanSubagentTranscriptLines([child]), { didWork: false, reviewed: false })
@@ -158,6 +174,87 @@ suite('reviewGate — subagent (SubagentStop) gate', () => {
     assert.strictEqual(agentCannotSpawn('star', dir), false, 'no tools line ⇒ unknown ⇒ demand')
     assert.strictEqual(agentCannotSpawn('missing', dir), false)
     assert.strictEqual(agentCannotSpawn('../etc/passwd', dir), false, 'a type is a bare name, never a path')
+  })
+
+  test('the tools parse handles *, All tools, an except clause, and a YAML block list', () => {
+    // THE OLD ONE-LINE REGEX RELEASED ALL OF THESE. It looked for the literal `Agent` inside
+    // whatever the `tools:` line itself captured — which is `*` for an all-tools agent and nothing
+    // at all for a block list, whose value lives on the lines below. Each miss silently SKIPPED a
+    // review for an agent that could have run one: the directive's exact inverse, and unlike a
+    // wedge it never announces itself. Found independently by two reviews, 2026-09-07.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'al-tools-'))
+    const def = (n: string, tools: string) => {
+      fs.writeFileSync(path.join(dir, `${n}.md`), `---\nname: ${n}\n${tools}\n---\nbody`)
+      return n
+    }
+    assert.strictEqual(agentCannotSpawn(def('star', 'tools: *'), dir), false, '* includes Agent ⇒ demand')
+    assert.strictEqual(agentCannotSpawn(def('all', 'tools: All tools'), dir), false)
+    assert.strictEqual(
+      agentCannotSpawn(def('most', 'tools: All tools except Agent, Artifact'), dir), true,
+      'the except clause takes Agent back out ⇒ release')
+    assert.strictEqual(
+      agentCannotSpawn(def('blockyes', 'tools:\n  - Read\n  - Agent'), dir), false,
+      'a block list naming Agent ⇒ demand')
+    assert.strictEqual(agentCannotSpawn(def('blockno', 'tools:\n  - Read\n  - Bash'), dir), true)
+    assert.strictEqual(agentCannotSpawn(def('flow', 'tools: [Read, Agent]'), dir), false)
+    assert.strictEqual(
+      agentCannotSpawn(def('qstar', 'tools: "*"'), dir), false,
+      'the QUOTED form is the only YAML-legal one — bare * is an alias node, i.e. a syntax error')
+    assert.strictEqual(
+      agentCannotSpawn(def('someexcept', 'tools: All tools except Artifact, ExitPlanMode'), dir), false,
+      'an except clause that does not name Agent leaves Agent in ⇒ demand')
+    // A BLOCK LIST STOPS AT THE FIRST NON-ITEM LINE, so a later key's own list can never be read as
+    // this one's — without that bound, any `- Agent` further down the frontmatter would count.
+    assert.strictEqual(declaredToolsHaveAgent('tools:\n  - Read\nmodel: x\nother:\n  - Agent\n'), false)
+    assert.strictEqual(declaredToolsHaveAgent('name: x\nmodel: y\n'), null, 'no tools key ⇒ unknown, not empty')
+  })
+
+  test('every shape that could WEDGE an agent releases instead', () => {
+    // WIDENING THE PARSE MADE MISPARSES DANGEROUS. The old regex could only fail to FIND Agent, so
+    // its errors all fell toward release; this one infers Agent from `*` and from a list, so a
+    // misparse can DEMAND a fork from an agent that cannot spawn one — permanent, and silent until
+    // something hangs. These four are the shapes that would do it. Found by review, 2026-09-07.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'al-wedge-'))
+    const write = (n: string, body: string) => {
+      fs.writeFileSync(path.join(dir, `${n}.md`), body)
+      return n
+    }
+    assert.strictEqual(
+      agentCannotSpawn(write('caps', '---\nname: caps\nTools: Read, Bash\n---\nbody'), dir), true,
+      'a capital Tools: key must not fall through to demand')
+    assert.strictEqual(
+      agentCannotSpawn(write('prose', 'No frontmatter here.\n\ntools:\n  - Read\n  - Agent\n'), dir), true,
+      'an unfenced file is not a definition — its prose must never be parsed as a declaration')
+    assert.strictEqual(
+      declaredToolsHaveAgent('tools: All tools, except-handler, Agent'), true,
+      'a tool NAMED except-handler is not an except clause — Agent is still declared')
+    assert.strictEqual(
+      declaredToolsHaveAgent('tools: [Read, "Agent"]'), true, 'quoted items are stripped')
+    assert.strictEqual(
+      declaredToolsHaveAgent('tools: All tools, except Artifact, Agent'), false,
+      'the comma form is still an except clause — Agent IS excepted here')
+  })
+
+  test('frontmatter shapes that a byte-exact fence check would have broken', () => {
+    // THE FIRST GUARD I WROTE WAS A REGRESSION. `startsWith("---\\n")` released every CRLF file, every
+    // BOM file, and every `--- ` with a trailing space — all three parsed CORRECTLY before it, so it
+    // converted right answers into silent skipped reviews. It also missed the wedge it was written
+    // for: the body-prose hole comes from a missing CLOSING fence, which an opening-fence check
+    // cannot see. Normalizing and requiring both fences is what actually closes it.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'al-fence-'))
+    const write = (n: string, body: string) => { fs.writeFileSync(path.join(dir, `${n}.md`), body); return n }
+    assert.strictEqual(
+      agentCannotSpawn(write('crlf', '---\r\nname: crlf\r\ntools: Read, Agent\r\n---\r\nbody'), dir), false,
+      'a CRLF definition still declares Agent ⇒ demand')
+    assert.strictEqual(
+      agentCannotSpawn(write('bom', '﻿---\nname: bom\ntools: Read, Bash\n---\nbody'), dir), true,
+      'a BOM must not decide the verdict')
+    assert.strictEqual(
+      agentCannotSpawn(write('pad', '--- \nname: pad\ntools: Read, Agent\n---\nbody'), dir), false,
+      'a trailing space on the fence must not decide the verdict')
+    assert.strictEqual(
+      agentCannotSpawn(write('unclosed', '---\nname: unclosed\nmodel: x\n\ntools:\n  - Agent\n'), dir), true,
+      'no CLOSING fence ⇒ the body is not frontmatter ⇒ release, never wedge')
   })
 
   test('decideSubagentGate IGNORES the OFF switch — it cannot be disabled', () => {

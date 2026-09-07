@@ -111,9 +111,71 @@ function readPluginAgentDef(plugin: string, bare: string, cache = pluginCacheRoo
       try { found.push({ file, mtime: fs.statSync(file).mtimeMs }) } catch { /* next */ }
     }
   }
-  if (found.length === 0) return null
   found.sort((a, b) => b.mtime - a.mtime)
-  try { return fs.readFileSync(found[0].file, 'utf8') } catch { return null }
+  // FALL THROUGH ON AN UNREADABLE CANDIDATE rather than abandoning the rest. `statSync` succeeds on
+  // a directory and on a file we may not read, so the newest entry can be one `readFileSync` then
+  // throws on — and returning null there discarded every OTHER version that would have read fine,
+  // releasing the agent unreviewed for a reason having nothing to do with its tools.
+  for (const c of found) {
+    try { return fs.readFileSync(c.file, 'utf8') } catch { /* next candidate */ }
+  }
+  return null
+}
+
+/**
+ * Does a definition's frontmatter declare the Agent tool? `null` = it declares no `tools:` key at
+ * all, which is NOT the same as declaring none.
+ *
+ * THE OLD ONE-LINE REGEX WAS WRONG IN THE DIRECTION NOBODY NOTICES. `/^tools:\s*(.+)$/m` captures
+ * nothing on a YAML block list (the value is on the following lines) and captures `*` on an
+ * all-tools declaration; neither contains the literal `Agent`, so both answered "cannot spawn" and
+ * RELEASED an agent that can in fact spawn. A wedge announces itself; a skipped review does not,
+ * and it subtracts directly from what this gate exists to do.
+ *
+ * BUT THIS IS NOT A PURE IMPROVEMENT, and the trade is worth stating. The old regex could only ever
+ * FAIL to find `Agent`; it could not find one spuriously. Every one of its errors therefore fell
+ * toward release. This one infers Agent from `*` and from a list, so a misparse can now DEMAND —
+ * and a demand on an agent that cannot spawn is a permanent wedge, which is the worse failure. The
+ * guards below (case-insensitive key, `except` anchored to the all-tools head, and the caller's
+ * frontmatter-fence check) each exist to close one such path.
+ */
+export function declaredToolsHaveAgent(front: string): boolean | null {
+  // CASE-INSENSITIVE: a `Tools:` key fell through to null, which the caller reads as "demand" — a
+  // wedge over a capital letter. Pre-existing, but only reachable now that misparses can demand.
+  const m = /^tools:[ \t]*(.*)$/im.exec(front)
+  if (!m) return null
+  const strip = (s: string) => s.trim().replace(/^["']|["']$/g, '')
+  // STRIP THE WHOLE VALUE, not just the list items. A bare `*` opens a YAML alias node, so `tools: *`
+  // is a syntax error and any file a linter has touched spells it `tools: "*"` — i.e. the branch
+  // below would have handled only the spelling that cannot legally exist. Same for `"All tools"`.
+  const inline = strip(m[1])
+  if (inline === '') {
+    // BLOCK LIST: the value is the run of `  - item` lines immediately below. Stop at the first
+    // line that is not one, so a later key's own list is never read as this one's.
+    const items: string[] = []
+    for (const line of front.slice(m.index + m[0].length).split('\n')) {
+      const item = /^[ \t]+-[ \t]*(.+)$/.exec(line)
+      if (!item) { if (line.trim() === '') continue; break }
+      items.push(strip(item[1]))
+    }
+    return items.includes('Agent')
+  }
+  if (inline === '*') return true
+  // `All tools` means every tool — Agent included — unless an `except` clause takes it back out.
+  // That clause is a real shape: Explore and Plan are written `All tools except Agent, …`, and
+  // reading only the head of the line would invert their answer. ANCHOR `except` TO THE ALL-TOOLS
+  // HEAD rather than searching the line: a free `\bexcept\b` also matches a tool NAMED
+  // `except-handler`, and `tools: All tools, except-handler, Agent` then reads Agent as excepted and
+  // releases an agent that explicitly declares it. Unanchored, this pattern falls through to the
+  // plain-list branch below, which answers it correctly.
+  // `except[ \t]+`, NOT `except\b` — `\b` holds between `t` and `-`, so `except-handler` (a plausible
+  // tool name) parses as a clause and takes the following `Agent` out with it. Requiring whitespace
+  // after the keyword makes that fall through to the plain-list branch, which answers it correctly.
+  // `,?` covers `All tools, except X`. A dangling `except` captures '' — falsy, hence the truthiness
+  // test rather than `=== undefined`, which would have taken the wrong branch on it.
+  const all = /^all tools\b[ \t]*,?[ \t]*(?:except[ \t]+(.*))?$/i.exec(inline)
+  if (all) return all[1] ? !all[1].split(',').map(strip).includes('Agent') : true
+  return inline.replace(/^\[/, '').replace(/\]$/, '').split(',').map(strip).includes('Agent')
 }
 
 export function agentCannotSpawn(
@@ -150,12 +212,20 @@ export function agentCannotSpawn(
   // permanent wedge — the agent has no exit. Release it: a missed review is recoverable, a bricked
   // agent is not. A BARE name still defaults to "demand", which is the pre-existing behaviour.
   if (text === null) return plugin !== ''
-  // A YAML block list (`tools:` then `  - Read`) and `tools: *` both capture something without the
-  // literal `Agent`, so both return true = released. MEASURED 2026-09-07, and it is the OPPOSITE of
-  // a wedge: it silently SKIPS a review for an agent that could have run one. Left alone here on
-  // purpose — widening the parse is a change to what gets reviewed, not to this outage.
-  const m = /^tools:\s*(.+)$/m.exec(text.split('\n---')[0] ?? '')
-  return m ? !m[1].split(',').map(s => s.trim()).includes('Agent') : false
+  // REQUIRE BOTH FENCES, OVER NORMALIZED TEXT. Two defects meet here. `split('\n---')[0]` yields the
+  // WHOLE FILE when the CLOSING fence is missing, so a markdown body documenting its tools as
+  // `tools:` then `  - Agent` parses as a declaration and answers DEMAND — a wedge, off prose. And
+  // the obvious guard, `startsWith('---\n')`, does not fix that at all (the hole is the closing
+  // fence) while releasing every CRLF file, every BOM file, and every `--- ` with a trailing space —
+  // all three of which parsed CORRECTLY before, so it would have turned right answers into silent
+  // skipped reviews. Normalizing first and requiring both fences closes all four at once.
+  const norm = text.replace(/^﻿/, '').replace(/\r\n/g, '\n')
+  const fm = /^---[ \t]*\n([\s\S]*?)\n---[ \t]*(?:\n|$)/.exec(norm)
+  if (fm === null) return true
+  // NO `tools:` KEY MEANS ALL TOOLS, which includes Agent — so an agent that declares no surface is
+  // demanded. That is the answer the old regex gave too, but by accident rather than on purpose.
+  const has = declaredToolsHaveAgent(fm[1])
+  return has === null ? false : !has
 }
 
 interface AssistantContentBlock {
