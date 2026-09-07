@@ -3,7 +3,7 @@ trdd-id: WKLD508O
 title: alcore exits with a culprit log rather than exceed a 2 GB memory cap
 column: dev
 created: 2026-09-07T19:36:46+0200
-updated: 2026-09-07T19:36:46+0200
+updated: 2026-09-07T21:09:12+0200
 current-owner: main
 task-type: feature
 parent-trdd: 7YPQWKPG
@@ -13,7 +13,7 @@ severity: high
 blocked-by: []
 npt: []
 eht: []
-implementation-commits: []
+implementation-commits: [466775af, f9776548]
 project-id: agentlenspro
 scope: project
 labels: [rust, memory, alcore, guard]
@@ -21,21 +21,52 @@ labels: [rust, memory, alcore, guard]
 
 # alcore exits with a culprit log rather than exceed a 2 GB memory cap
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-07
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-07 21:15
 
-**IN FLIGHT, uncarded until now.** A background lean-worker was dispatched at ~19:20 to build
-`rss_guard.rs` (`AGENTLENS_RSS_HARD_CAP_MB`, default 2048, exit(1) plus a culprit log). The card
-is being written after the dispatch, which is the defect this file corrects — the board showed
-work in flight with no card for roughly twenty minutes.
+**CODE LANDED, NOT DEPLOYED.** `466775af` (worker's implementation) + `f9776548` (two defects I
+found by reading the 244 lines I had committed after reading ~60). The worker has finished and
+released the crate. 8/8 tests green. Deploy still needs `cargo build --release` → copy into
+`bin-native/darwin-arm64/` → `codesign -s - --force` → `agentlenspro server restart`.
 
-**The worker holds `rust-core/crates/agentlens-core`.** Do not edit that crate, and in particular
-do not touch `lib.rs::prune_window`, until it reports. TRDD-KBM09XHB rewrites the same function
-and is deliberately parked at `todo` behind this card.
+**THE FINDING THAT CHANGES THIS CARD'S PREMISE — measured on the live collector (pid 30984),
+`vmmap -summary` + `footprint`, 2026-09-07 21:0x:**
 
-**UNANSWERED, and it changes what the worker should ship:** does the first deploy go straight to
-2048 MB and take the crash loop, or run once at a raised cap to capture a culprit log first? Put
-to the owner at ~19:30; no answer yet. The worker was told to build the 2048 default, so the
-question is currently about deploy policy, not code.
+`phys_footprint` **6265 MB**, peak **8375 MB**. Per-region `dirty + swapped` (footprint charges
+compressed/swapped pages; DIRTY alone does not, which is why a dirty-only reading understates the
+C++ side by ~2×):
+
+| region | dirty + swapped |
+|---|---|
+| IOAccelerator = **the Rust heap** (mimalloc tags its mmaps VM tag 100; macOS names tag 100 `VM_MEMORY_IOACCELERATOR`) | **~0.96 G** |
+| MALLOC_LARGE (93 M resident, **2.3 G swapped**) | ~2.39 G |
+| MALLOC_SMALL | ~2.05 G |
+| MALLOC (empty) + metadata | ~0.66 G |
+| | Σ ≈ **6.05 G** vs footprint 6.265 G |
+
+**So ~5.1 G of 6.3 G is the C/C++ (DuckDB) allocator and ~0.96 G is the Rust heap — about 5:1.**
+The consequence for this card: **zeroing the entire Rust heap does not reach 2048 MB.** Deleting
+`SpanWindow` (TRDD-KBM09XHB), shrinking the card store, or narrowing the window all operate on the
+~0.96 G. Whether that 5.1 G is *reducible by Rust-side work* is a separate, open question — the
+bytes live in the C++ allocator, but the Rust code decides how many queries, appends, and parquet
+readers create them. Do not read "the bytes are in DuckDB" as "no Rust change can shrink them".
+
+**Corollary: the guard fires on its first tick at the 2048 default**, and peak 8375 MB says it
+would have fired at any point today.
+
+**Also measured, and it retires an inference this card previously rested on:** the soft valve has
+narrowed the window **750 times** this uptime (`grep -c "memory pressure — summarization window"
+~/.agentlens/server.log`; last two lines `337500ms` → `300000ms` against a configured
+`86400000ms`). So `spans.inMemory = 317` is the *valve's output*, not evidence that the span
+window is naturally small. Every argument of the form "only 317 spans are resident, so the memory
+is not span-shaped" is reading the guard, not the structure.
+
+**UNANSWERED, and now better informed:** straight to 2048 (fires immediately, collector down, but
+the culprit log lands) or a raised cap for one cycle? Put to the owner ~19:30. The 5:1 split above
+is the number that was missing when the question was first asked.
+
+**NOT worth doing:** a restart with `MIMALLOC_SHOW_STATS=1` — those stats print at process **exit**,
+so a restart yields nothing about the state under investigation, and it would destroy a 6.6-hour
+specimen. `mi_process_info` (already linked by `466775af`) reads the same numbers live.
 
 ## WHY
 
