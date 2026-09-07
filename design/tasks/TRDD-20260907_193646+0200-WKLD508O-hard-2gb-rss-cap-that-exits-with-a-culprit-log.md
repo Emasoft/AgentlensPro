@@ -21,9 +21,43 @@ labels: [rust, memory, alcore, guard]
 
 # alcore exits with a culprit log rather than exceed a 2 GB memory cap
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-07 21:59
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-07 22:43
 
-**CODE LANDED, NOT DEPLOYED.** `466775af` (worker's implementation) + `f9776548` (two defects I
+**⛔ THE GUARD CANNOT FIRE ON macOS, AT ANY CAP — MEASURED 2026-09-07 22:35.** `rss_guard.rs::
+phys_footprint_bytes()` passes the wrong pointer level to `proc_pid_rusage`. XNU's callers pass
+`(rusage_info_t *)&struct` — `rusage_info_t*` is an OPAQUE HANDLE type, not a real double
+indirection, and the kernel writes the flavor's struct AT that address. The code instead builds
+`buf = &info` and passes `&mut buf`, so the kernel writes 96 bytes over an 8-byte stack local and
+`info` stays zeroed. `Some(0)` is returned, `primary_metric` takes the `Some` branch (so the RSS
+fallback closure is NEVER called), and `0 <= cap_bytes` holds for every cap.
+
+Evidence, all first-hand:
+
+- **A C program, both call shapes in ONE process after dirtying 300 MB** — correct form
+  `footprint=301 MB resident=301 MB`; as-coded form `footprint=0 MB resident=0 MB`. This is the
+  discriminator: the two shapes predict opposite results and only one matches reality.
+- **Two live probes of the DEPLOYED binary**, isolated `DATA_DIR`+`HOME`+ports: cap 512 MB / 180 s
+  → `exit 124`; cap **1 MB** / 90 s → `exit 124`. Neither emitted guard output. A 1 MB cap on a
+  process holding ~50 MB is unbreachable only if the metric reads ~0.
+- **The tick is NOT the cause** (checked before blaming the metric): `chores.rs:576` is an
+  unconditional 5 s `tokio::time::interval` → `prune_window`, and `spawn_all` runs at
+  `alcore.rs:310`, *before* the three listen lines the probe logs did print.
+- **The binary is NOT stale**: deployed `alcore` carries 9 `RSS HARD CAP` format strings;
+  `alcore.prev` carries 0.
+
+**Two consequences that reverse earlier decisions on this card.** (1) The unattended-restart hazard
+below is **VOID while this bug stands** — the deployed guard is inert on macOS, so a restart cannot
+kill the collector; do not revert `alcore.prev` for safety. (2) The 96-byte write into an 8-byte
+slot is a **stack smash**, and is the likely real cause of the "a real V2 attempt SIGSEGV'd here"
+note in this module's own doc comment, which attributes it to a struct-layout mismatch instead.
+
+**NEXT ACTION:** land the pointer fix + a test that fails on the current code
+(`primary_metric(|| 0)` must report > 8 MB — passing 0 as the fallback makes a bug on EITHER path
+fail it), rebuild, re-run the 1 MB probe, and only then read what the culprit log prints. A
+proposal for both is out for adversarial review as of 22:40; nothing is written yet.
+
+**CODE LANDED AND DEPLOYED (22:21, see the deploy record below).** `466775af` (worker's
+implementation) + `f9776548` (two defects I
 found by reading the 244 lines I had committed after reading ~60). The worker has finished and
 released the crate. 8/8 tests green.
 
@@ -201,17 +235,33 @@ the destination: `cp` opens the SAME inode `O_TRUNC`, and the running process ha
 process. `codesign --force` rewrites in place too, same hazard. So: copy and sign a SEPARATE inode
 (`alcore.new`), pre-flight it (`--version`, and assert the exit is **not 137**), then `mv` —
 `rename(2)` swaps only the directory entry, and the old inode stays mapped and valid until the
-process exits. **This makes the "cp over a running mapped binary" explanation in CLAUDE.md the
-stronger of the two competing ones, and it means the deploy was always safe to do without a
-restart — the hazard was in the METHOD, not in the act.** (Recorded because I deferred the whole
-deploy for five hours on a hazard that this three-line form removes.)
+process exits. **The deploy was safe to do without a restart — the hazard was in the METHOD, not in
+the act.** (Recorded because I deferred the whole deploy for five hours on a hazard that this
+three-line form removes.)
 
-**⚠ DO NOT RESTART UNATTENDED.** The live process is at ~8.9 G RSS against a 2048 MB cap. Restarting
-arms a guard that will kill the collector — **not a risk, an arithmetic certainty.** Boot peaks
-~1 G so it will not crash-loop instantly; it will run some hours, breach, exit, and repeat, and
-with no respawn path each death lasts until a human intervenes. Either raise
-`AGENTLENS_RSS_HARD_CAP_MB` for the first run (env-read per tick — a restart, not a rebuild) or
-land the memory work first.
+**RETRACTED: this does NOT make the `cp`-over-mapped-binary explanation the stronger of the two.**
+I wrote that it did. It does not discriminate at all — `rename(2)` also gives the destination a
+fresh inode, so it removes the competing stale-cached-signature-verdict mechanism by exactly the
+same stroke. An observation both hypotheses predict is not evidence for either
+(`~/.claude/rules/evidence-must-discriminate.md`). The CLAUDE.md question stays open, and
+TRDD-M2VK8T4P still lists the three commands that would settle it.
+
+**⚠ DO NOT RESTART UNATTENDED — SUSPENDED, NOT CANCELLED (2026-09-07 22:43).** The reasoning below
+was sound and its premise is now false: the deployed guard is inert on macOS (see the STATE
+headline), so a restart today cannot kill the collector. **This warning becomes live again the
+moment the `proc_pid_rusage` pointer fix lands and is deployed** — and it is left standing, not
+deleted, for exactly that reason.
+
+The reasoning, unchanged: the live process is at ~8.9 G RSS against a 2048 MB cap, so a working
+guard kills the collector — **not a risk, an arithmetic certainty.** Boot peaks ~1 G so it will not
+crash-loop instantly; it will run some hours, breach, exit, and repeat, and with no respawn path
+each death lasts until a human intervenes. Either raise `AGENTLENS_RSS_HARD_CAP_MB` for the first
+run (env-read per tick — a restart, not a rebuild) or land the memory work first.
+
+**And a third option the fix makes urgent: there is currently NO off switch.** `rss_hard_cap_bytes`
+filters `*v > 0`, so `AGENTLENS_RSS_HARD_CAP_MB=0` falls back to 2048 rather than disarming. That
+was harmless while the guard could not fire; once it can, a lethal guard with no disarm value is a
+defect in its own right. Decide it with the fix, not after.
 
 ### THE CAP AND THE DuckDB BUDGETS CANNOT BOTH BE 2048 MB — but "unreachable by construction" over-claimed it
 
