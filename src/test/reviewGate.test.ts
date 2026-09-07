@@ -480,6 +480,30 @@ suite('review-gate: the no-review sentinel', () => {
       'the "asked once" promise is false — maxDemands is voided, so nothing enforces it',
     )
   })
+
+  test('the shape both block reasons INSTRUCT is a shape the predicate ACCEPTS', () => {
+    // The test above only asserts the strings mention the sentinel — it passes identically whether
+    // they say "FIRST line", "ENTIRE reply", or nothing coherent at all. That is why a mismatch
+    // survived twice: 05fa9128 made the sentinel valid only as a whole block while both strings
+    // still said "make the FIRST line ... " (which in plain language permits more lines), and the
+    // first repair overcorrected to "your ENTIRE reply" — unsatisfiable for a main agent whose
+    // reply already contains tool_use blocks, since the predicate reads one TEXT BLOCK, not a reply.
+    // Instruction and predicate are two halves of one contract, and an agent that obeys the half it
+    // is shown must pass the half it is judged by. This test is the only thing that holds them
+    // together: tighten the predicate without touching the strings, or reword the strings out of the
+    // predicate's units, and it goes red.
+    for (const [name, reason] of [['MAIN', MAIN_BLOCK_REASON], ['SUBAGENT', SUBAGENT_BLOCK_REASON]] as const) {
+      const quoted = reason.match(/"(REVIEW-GATE: NO REVIEW POSSIBLE[^"]*)"/)
+      assert.ok(quoted, `${name}_BLOCK_REASON must QUOTE the exact sentinel form it demands`)
+      const instructed = quoted[1].replace('<reason>', 'depth limit reached')
+      const scan = scanSubagentTranscriptLines([assistantLine([{ type: 'text', text: instructed }])])
+      assert.strictEqual(
+        scan.reviewed,
+        true,
+        `${name}_BLOCK_REASON instructs a shape the predicate REJECTS, which wedges any agent that obeys it: ${JSON.stringify(instructed)}`,
+      )
+    }
+  })
 })
 
 // ── THE RECURSION GUARD — whole-token, never a substring ────────────────────────────────────────
