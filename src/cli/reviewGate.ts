@@ -440,8 +440,8 @@ export const MAIN_BLOCK_REASON = 'Review-fork gate: this turn edited or committe
   // it had no exit whatsoever. Naming the escape in the message is half the fix — an escape nobody
   // is told about is not one.
   + 'for the full directive, then act on the findings. If you CANNOT spawn one — rate-limited, at '
-  + `a depth limit, tool denied — make the FIRST line of your reply exactly "${NO_REVIEW_SENTINEL} `
-  + '— <reason>" and nothing after it; that is the only other way out.'
+  + `a depth limit, tool denied — make your ENTIRE reply exactly "${NO_REVIEW_SENTINEL} `
+  + '— <reason>", one line, nothing after it; that is the only other way out.'
 
 async function runMainGate(input: ReviewGateInput): Promise<string | null> {
   const transcript = input?.transcript_path
@@ -596,8 +596,9 @@ export const SUBAGENT_BLOCK_REASON = 'Subagent review gate: before returning, sp
   // longer transcript — a LIVELOCK whose instructions were the trap. The sentinel is the fix: it
   // is the one text a subagent can emit that sets `reviewed`, so complying now terminates.
   + 'on its findings. If you CANNOT spawn one — no Agent tool, rate-limited, at a depth limit — '
-  + `then make the FIRST line of your reply exactly "${NO_REVIEW_SENTINEL} — <reason>" and return; `
-  + 'that is the only other way out, and it must start the block (a quoted copy will not count).'
+  + `then make your ENTIRE reply exactly "${NO_REVIEW_SENTINEL} — <reason>" and return; that is `
+  + 'the only other way out. One line, nothing after it, and it must start the block (a quoted '
+  + 'copy will not count).'
 
 async function runSubagentGate(input: ReviewGateInput): Promise<string | null> {
   if (input?.stop_hook_active === true) return null
