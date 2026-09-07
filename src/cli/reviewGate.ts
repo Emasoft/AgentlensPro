@@ -267,10 +267,18 @@ export const NO_REVIEW_SENTINEL = 'REVIEW-GATE: NO REVIEW POSSIBLE'
 function isNoReviewSentinel(text: string): boolean {
   const t = text.replace(/^\s+/, '')
   if (!t.startsWith(NO_REVIEW_SENTINEL)) return false
+  const [firstLine, ...tail] = t.slice(NO_REVIEW_SENTINEL.length).split('\n')
+  // NOTHING may follow the reason line, and this check is the load-bearing half of the escape.
+  // Prose in a SEPARATE block does re-arm the gate positionally — its own index sets `lastWork`
+  // above the sentinel's — so that case was always safe. But prose on a LATER LINE OF THE SAME
+  // block carries no index of its own and cannot re-arm anything, and one text block is exactly
+  // how a model emits contiguous prose. Constraining only `split('\n')[0]` therefore released
+  // sentinel-then-entire-essay: the likely shape, not the unlikely one.
+  if (tail.some((line) => line.trim() !== '')) return false
   // Any of — : - is accepted as the separator, because an agent told to write an em-dash types a
   // hyphen often enough that keying the escape on punctuation would re-wedge an agent that obeyed
-  // in substance. The reason itself must survive stripping them: >=3 characters, on this line.
-  const reason = t.slice(NO_REVIEW_SENTINEL.length).split('\n')[0].replace(/^[\s—:-]+/, '').trim()
+  // in substance. The reason itself must survive stripping them: >=3 characters.
+  const reason = firstLine.replace(/^[\s—:-]+/, '').trim()
   return reason.length >= 3
 }
 
@@ -346,8 +354,11 @@ export function scanMainTranscriptLines(lines: string[]): { lastFork: number; la
         // form, and the gate treats the review as resolved.
         //
         // Sets `lastFork` and NOT `lastWork` — the sentinel is an exit, not a proposal, so it must
-        // not arm the gate it is closing. It obeys the same positional rule as a fork: prose after
-        // it re-arms, so it has to be the turn's last block.
+        // not arm the gate it is closing. Prose in a LATER BLOCK re-arms it positionally, so the
+        // sentinel does have to be the turn's last block. That rule does NOT cover prose on a
+        // later LINE of the SAME block, which has no index and cannot re-arm — `isNoReviewSentinel`
+        // rejects a block carrying anything after the reason line, and this comment previously
+        // claimed a protection the code did not have.
         if (isNoReviewSentinel(String(b.text ?? ''))) { lastFork = i; continue }
         lastWork = i
         continue

@@ -434,6 +434,34 @@ suite('review-gate: the no-review sentinel', () => {
     }
   })
 
+  test('the sentinel followed by an essay does not release — the block reason promises nothing after it', () => {
+    // The positional rule only covers prose in a SEPARATE block, whose own index re-arms `lastWork`.
+    // Prose on a later LINE of the SAME block carries no index and cannot re-arm anything, and one
+    // text block is exactly how a model emits contiguous prose — so this was the LIKELY shape, not
+    // the unlikely one. Before the trailing-line check, every case below released the gate.
+    for (const text of [
+      `${NO_REVIEW_SENTINEL} — depth limit reached\n\nAnyway, here is what I changed and why...`,
+      `${NO_REVIEW_SENTINEL} — tool denied\nI went ahead and edited four files.`,
+      `${NO_REVIEW_SENTINEL} — rate limited\n\n## Findings\n\n1. ...`,
+    ]) {
+      const sub = scanSubagentTranscriptLines([assistantLine([textBlock]), assistantLine([{ type: 'text', text }])])
+      assert.strictEqual(sub.reviewed, false, `sentinel-then-essay released the subagent gate: ${JSON.stringify(text.slice(0, 50))}`)
+      const main = scanMainTranscriptLines([assistantLine([textBlock]), assistantLine([{ type: 'text', text }])])
+      assert.strictEqual(
+        decideMainGate(main, { total: 0, consecutive: 0 }, { maxPerSession: 9, maxConsecutive: 9 }).block,
+        true,
+        `sentinel-then-essay released the main gate: ${JSON.stringify(text.slice(0, 50))}`,
+      )
+    }
+  })
+
+  test('trailing blank lines after the reason are still a release — whitespace is not an essay', () => {
+    for (const text of [`${NO_REVIEW_SENTINEL} — depth limit reached\n`, `${NO_REVIEW_SENTINEL} — depth limit reached\n\n   \n`]) {
+      const scan = scanSubagentTranscriptLines([assistantLine([{ type: 'text', text }])])
+      assert.strictEqual(scan.reviewed, true, `trailing whitespace wrongly rejected: ${JSON.stringify(text)}`)
+    }
+  })
+
   test('the separator may be an em-dash, a hyphen or a colon — an agent that obeyed in substance is not re-wedged', () => {
     for (const sep of ['—', '-', ':']) {
       const scan = scanSubagentTranscriptLines([
