@@ -79,17 +79,52 @@ interface ReviewGateInput {
  *  definition ⇒ unknown ⇒ demand as usual. */
 export const BUILTIN_WITHOUT_AGENT_TOOL = new Set(['Explore', 'Plan'])
 
+/** Read a plugin agent's definition. A plugin agent is addressed `<plugin>:<name>` and its file
+ *  lives under the plugin cache, never in `agentsDir` — so the plain readFileSync below can never
+ *  find one. Walks NOTHING: the cache is `<cache>/<marketplace>/<plugin>/<version>/agents/<n>.md`,
+ *  so two small readdirs and a stat resolve it deterministically. Returns null when absent. */
+function readPluginAgentDef(plugin: string, bare: string): string | null {
+  const cache = path.join(os.homedir(), '.claude', 'plugins', 'cache')
+  let markets: string[]
+  try { markets = fs.readdirSync(cache) } catch { return null }
+  for (const mp of markets) {
+    const pluginDir = path.join(cache, mp, plugin)
+    let versions: string[]
+    try { versions = fs.readdirSync(pluginDir) } catch { continue }
+    for (const v of versions) {
+      try { return fs.readFileSync(path.join(pluginDir, v, 'agents', `${bare}.md`), 'utf8') } catch { /* next */ }
+    }
+  }
+  return null
+}
+
 export function agentCannotSpawn(agentType: string, agentsDir = path.join(os.homedir(), '.claude', 'agents')): boolean {
-  if (!/^[A-Za-z0-9_-]+$/.test(agentType)) return false
-  // BUILT-INS HAVE NO DEFINITION FILE, so the readFileSync below falls through to "unknown =>
-  // demand as usual". That was harmless while work meant an edit — Explore and Plan never edit — but
-  // the text-is-work predicate above makes every one of their returns count as work, and neither has
-  // the Agent tool, so each would be blocked on EVERY return with no exit. A hardcoded set is
-  // deliberate over a cleverer probe: it is greppable and it fails VISIBLY if a built-in is renamed,
-  // whereas a missing file fails silently into a permanent wedge.
-  if (BUILTIN_WITHOUT_AGENT_TOOL.has(agentType)) return true
-  let text: string
-  try { text = fs.readFileSync(path.join(agentsDir, `${agentType}.md`), 'utf8') } catch { return false }
+  // GUARD THE NAME COMPONENT, NOT THE WHOLE ADDRESS. This regex is a path-traversal defence (its
+  // test pins `../etc/passwd`), and a colon is legitimate plugin syntax, not an attack — but a
+  // namespaced type failed it and returned false, i.e. "demand as usual". That was harmless while
+  // work meant an edit; under the text-is-work predicate above it BRICKED every plugin agent
+  // without the Agent tool, which could then never return. Measured live 2026-09-07.
+  const colon = agentType.lastIndexOf(':')
+  const bare = colon >= 0 ? agentType.slice(colon + 1) : agentType
+  const plugin = colon >= 0 ? agentType.slice(0, colon) : ''
+  if (!/^[A-Za-z0-9_-]+$/.test(bare)) return false
+  if (plugin && !/^[A-Za-z0-9_-]+$/.test(plugin)) return false
+  // BUILT-INS HAVE NO DEFINITION FILE, so the reads below fall through to "unknown". Harmless while
+  // work meant an edit — Explore and Plan never edit — but under the new predicate every one of
+  // their returns is work and neither has the Agent tool. A hardcoded set is deliberate over a
+  // cleverer probe: greppable, and it fails VISIBLY on a rename where a missing file fails silently.
+  if (BUILTIN_WITHOUT_AGENT_TOOL.has(bare)) return true
+  let text: string | null = null
+  try { text = fs.readFileSync(path.join(agentsDir, `${bare}.md`), 'utf8') } catch { /* try the plugin cache */ }
+  if (text === null && plugin) text = readPluginAgentDef(plugin, bare)
+  // A NAMESPACED AGENT WE CANNOT FIND CANNOT BE PROVEN ABLE TO SPAWN, and an unprovable demand is a
+  // permanent wedge — the agent has no exit. Release it: a missed review is recoverable, a bricked
+  // agent is not. A BARE name still defaults to "demand", which is the pre-existing behaviour.
+  if (text === null) return plugin !== ''
+  // A YAML block list (`tools:` then `  - Read`) and `tools: *` both capture something without the
+  // literal `Agent`, so both return true = released. MEASURED 2026-09-07, and it is the OPPOSITE of
+  // a wedge: it silently SKIPS a review for an agent that could have run one. Left alone here on
+  // purpose — widening the parse is a change to what gets reviewed, not to this outage.
   const m = /^tools:\s*(.+)$/m.exec(text.split('\n---')[0] ?? '')
   return m ? !m[1].split(',').map(s => s.trim()).includes('Agent') : false
 }
@@ -184,6 +219,9 @@ export function decideMainGate(
   // 2026-09-07 on this project's own session JSONL: this Claude Code build writes ONE ENTRY PER
   // CONTENT BLOCK (thinking / text / tool_use each got their own index), so the tie never occurs
   // here and `>=` is degenerate on this format. It is kept because it is correct on both shapes.
+  // THE EXIT IS POSITIONAL, so the fork must be the LAST arming block of the turn. Because this
+  // build writes one entry per content block (see below), prose emitted AFTER a fork re-arms the
+  // gate and the turn is blocked again. Spawn the review as the turn's final act, not mid-turn.
   if (scan.lastFork >= scan.lastWork) {
     // The review landed. THIS IS THE ONLY WAY PAST THE GATE.
     return { block: false, nextState: state.consecutive !== 0 ? { total: state.total, consecutive: 0 } : state }
@@ -274,6 +312,10 @@ export function scanSubagentTranscriptLines(lines: string[]): { didWork: boolean
     if (!line) continue
     let e: TranscriptEntry
     try { e = JSON.parse(line) as TranscriptEntry } catch { continue }
+    // Symmetric with scanMainTranscriptLines. Whether an agent's own file can contain its
+    // CHILDREN's entries is unverified; filtering makes this correct under both answers instead of
+    // betting on one, and stops a child's prose from being scored as the parent's work.
+    if (e?.isSidechain === true) continue
     const content = e?.message?.content
     if (e?.type !== 'assistant' || !Array.isArray(content)) continue
     for (const b of content) {

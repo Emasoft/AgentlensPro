@@ -101,6 +101,26 @@ suite('reviewGate — subagent (SubagentStop) gate', () => {
     assert.strictEqual(agentCannotSpawn('general-purpose', dir), false, 'it HAS the Agent tool — still demanded')
   })
 
+  test('a plugin-namespaced type is not bricked by the path-traversal guard (live outage 2026-09-07)', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rg-ns-'))
+    // Unresolvable + namespaced => RELEASED. Demanding an agent that cannot be proven able to spawn
+    // is a permanent wedge; a missed review is recoverable.
+    assert.strictEqual(agentCannotSpawn('fable-advisor:advisor', dir), true)
+    // The traversal defence still holds — it just guards the NAME now, not the whole address.
+    assert.strictEqual(agentCannotSpawn('plug:../etc/passwd', dir), false)
+    assert.strictEqual(agentCannotSpawn('../etc/passwd:name', dir), false, 'a bad plugin part is rejected too')
+    // A BARE unresolvable name keeps the old default (demand) — this fix changes only the namespaced case.
+    assert.strictEqual(agentCannotSpawn('nosuchagent', dir), false)
+    // A namespaced type whose BARE name resolves in agentsDir is parsed, not blanket-released.
+    fs.writeFileSync(path.join(dir, 'known.md'), '---\ntools: Read, Agent\n---\n')
+    assert.strictEqual(agentCannotSpawn('someplugin:known', dir), false, 'it HAS Agent — still demanded')
+  })
+
+  test('a child sidechain entry does not count as the parent subagent\'s work', () => {
+    const child = JSON.stringify({ type: 'assistant', isSidechain: true, message: { content: [textBlock] } })
+    assert.deepStrictEqual(scanSubagentTranscriptLines([child]), { didWork: false, reviewed: false })
+  })
+
   test('agentCannotSpawn reads the agent definition: a tools line without Agent means no demand (review F2)', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'al-agents-'))
     fs.writeFileSync(path.join(dir, 'lean.md'), '---\nname: lean\ntools: Bash, Read, Write, Edit\n---\nbody')
