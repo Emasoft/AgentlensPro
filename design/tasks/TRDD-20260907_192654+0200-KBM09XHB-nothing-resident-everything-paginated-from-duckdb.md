@@ -3,7 +3,7 @@ trdd-id: KBM09XHB
 title: Nothing is stored in RAM — every answer is a short or paginated DuckDB result, discarded immediately
 column: todo
 created: 2026-09-07T19:26:54+0200
-updated: 2026-09-07T19:26:54+0200
+updated: 2026-09-08T10:02:32+0200
 current-owner: main
 task-type: refactor
 parent-trdd: 7YPQWKPG
@@ -11,7 +11,7 @@ min-approval-requirement: none
 priority: high
 severity: high
 blocked-by: []
-npt: [WKLD508O]
+npt: [WKLD508O, DKBGT7MQ]
 eht: []
 implementation-commits: []
 project-id: agentlenspro
@@ -21,7 +21,15 @@ labels: [rust, memory, alcore, duckdb]
 
 # Nothing is stored in RAM — every answer is a short or paginated DuckDB result
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-07
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-08
+
+**ACCEPTANCE #4 CANNOT PASS AS THIS CARD STANDS — see TRDD-DKBGT7MQ (new NPT, 2026-09-08).**
+Eight production DuckDB instances each carry their OWN buffer-pool limit (the budget is
+per-instance; this repo's `agentlens-store/tests/memory_limit_scope.rs` proves it does not cross
+instances) and they sum to **19.25 GB permitted** — one of them, `body_archive.rs:135` via
+`DEFAULT_MEMORY_LIMIT`, permits **8 GB by itself**, 4× the whole process cap. Deleting `SpanWindow`
+cannot make a 2 GB boot scan pass while those ceilings stand. Criteria 1-3 of this card can all go
+green with #4 still failing. Land DKBGT7MQ first.
 
 **NOT STARTED.** Carded the moment the owner issued the directive so it cannot be forgotten.
 Deliberately NOT dispatched concurrently with TRDD-WKLD508O (the 2 GB hard cap): both edit
@@ -76,10 +84,26 @@ tradeoff, and the owner has now decided it in favour of residency — twice, exp
 the ruling; record the latency cost as a measurement, and raise it only if the measurement shows it
 is severe.
 
-**Note the count that makes this cheaper than it looks:** the live server self-reported **397 spans
-in memory** in its 5-minute window. Ordinary residency is set by real span volume, not by the 1M
-ceiling — so replacing the window with a query is unlikely to be the thing that saves 3 GB, and
-this card must not be sold as the fix for the cap. It is the fix for the DESIGN RULING.
+**RETRACTED (2026-09-08): the 397-span reading does NOT exonerate the window.** This card
+previously argued that because the live server self-reported **397 spans in memory**, replacing
+the window with a query was "unlikely to be the thing that saves 3 GB". That inference is wrong
+and must not be repeated. 397 is an *instantaneous* count of a structure with a **1,000,000**
+ceiling and an active `apply_memory_pressure` shrink path, sampled 5 h into the process's life.
+The same process reports **7.9 G peak footprint against 5.4 G current** — i.e. ~2.5 G was
+allocated and released. mimalloc's decommit branch is disabled in the vendored source, so
+released pages stay in the process's footprint forever. A window that briefly held hundreds of
+thousands of spans during the boot scan and was then halved back to 397 produces **exactly this
+signature**. The observation cannot tell "the window was never big" apart from "the window was
+big and shrank", and the second is the outcome the pressure valve exists to produce.
+
+Corroborating: `ui.rs:277-282`'s own comment records this path was previously capable of
+"84% of a core and **8.7 GB of mimalloc churn**" under continuous ingest, and the 2026-09-07 CPU
+profile (`reports/alcore-cpu/20260907_201607+0200-cpu-profile.md`) found `rebuild_once`'s
+`serde_json::Value` churn dominating self-time in both sample windows.
+
+What may be said: the window holds no large *live* object set right now. What may not be said:
+that it did not put the footprint there. This card is the fix for the DESIGN RULING and remains a
+live candidate for the cap.
 
 ## Acceptance
 
