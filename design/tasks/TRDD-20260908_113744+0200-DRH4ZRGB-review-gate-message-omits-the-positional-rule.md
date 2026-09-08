@@ -1,14 +1,15 @@
 ---
 trdd-id: DRH4ZRGB
 title: The review-gate block message omits the positional rule its own instruction violates
-column: dev
+column: todo
 created: 2026-09-08T11:37:44+0200
-updated: 2026-09-08T12:14:03+0200
+updated: 2026-09-08T12:36:26+0200
 current-owner: main-session
 task-type: bugfix
 scope: project
 min-approval-requirement: none
 implementation-commits: [e7d1d3c7, 4521dea7]
+eht: [7FA3NIXU]
 ---
 
 # The review-gate block message omits the positional rule its own instruction violates
@@ -199,8 +200,22 @@ rule, while the three fork-last turns all passed. No evidence it has bitten.
       and do not split text and fork across two responses.
 - [x] The predicate is unchanged (owner order 2026-09-03: the gate is never stopped or bypassed).
       Two string constants and four tests; `decideMainGate` untouched.
-- [x] Neither surface can silently lose the rule — `4521dea7` adds four assertions, because tsc
-      and esbuild both pass on a message that has quietly dropped the clause.
+**Not a fourth box.** `4521dea7` added assertions so neither surface can silently lose the rule,
+and a later commit strengthened them. That is evidence for box 1, not a criterion: a checkbox
+authored *after* the work it describes has probability zero of failing at authoring time, so it is
+a changelog line wearing a checkbox. It was briefly added and ticked in one edit; removed.
+
+**What the assertions actually cover, after the strengthening.** The first version was mostly
+spell-checks — `!/HIGHER/` catches one English word while "strictly after", "greater than" and
+"must come later than" express the same wrong strict inequality and all passed; and
+`/fork[\s\S]{0,80}LAST/` was co-occurrence, negation-blind, green on "Never put the fork tool_use
+LAST". Measured: deleting "AT OR AFTER" from the directive left every assertion green, which made
+`4521dea7`'s own subject ("assert it cannot silently rot") false. Now: the boundary phrase is
+asserted POSITIVELY, the imperative is matched as a phrase with negation guards, the
+`!/TaskOutput/` policy-as-CI test is replaced by a positive assertion on the consequence sentence
+(a bare ban also fires on a sentence *warning* against it, and warning requires naming), and the
+predicate is pinned in BOTH directions — `(4,4) → release` and `(4,3) → block`, because
+`block === false` alone is satisfied by a gate that never blocks.
 
 ## ⚠ DO NOT CLOSE THIS CARD YET — it must be SPLIT first
 
@@ -213,7 +228,7 @@ none of them — content deleted with extra steps.
 |---|---|---|
 | §The passing shape exists | knowledge, no "done" state | PROJECT wikimem page, recall by symptom |
 | §The loop, and who drives it | a behavioural lesson | TRDD-T2N1GOZ2, which is already that subject |
-| §A cost property of the gate | a **separate defect with its own fix** (scan anchored at the window, not the turn ⇒ every answering turn pays a fork; the fix is anchoring at the last user entry) | its own card |
+| §A cost property of the gate | a **separate defect with its own fix** (scan anchored at the window, not the turn ⇒ every answering turn pays a fork; the fix is anchoring at the last user entry) | **DONE — split out as TRDD-7FA3NIXU**, recorded in `eht:` so this card cannot reach `complete` until it is terminal |
 
 The §Tier paragraph above lectures about metadata inheritance across a card split being "the trap
 that bit twice" — written into a card that was itself refusing to split. Recorded rather than

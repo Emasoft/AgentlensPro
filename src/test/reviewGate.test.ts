@@ -544,47 +544,93 @@ suite('review-gate: the recursion guard exempts reviewers and nothing else', () 
       ['REVIEW_GATE_DIRECTIVE', REVIEW_GATE_DIRECTIVE],
     ] as const) {
       assert.ok(text.includes('POSITIONAL'), `${name} no longer names the positional exit`)
-      assert.ok(/fork[\s\S]{0,80}LAST/.test(text), `${name} no longer says to put the fork LAST`)
+      // The imperative, matched as a PHRASE. An earlier version of this test used
+      // /fork[\s\S]{0,80}LAST/, which is co-occurrence dressed as semantics: `fork` appears
+      // repeatedly in both strings, so any `LAST` within 80 characters of any `fork` satisfied it —
+      // including two unrelated clauses that merely collide. It was also negation-blind, passing
+      // happily on "Never put the fork tool_use LAST".
       assert.ok(
-        text.includes('re-arms'),
+        /put the fork `?tool_use`? LAST/.test(text),
+        `${name} no longer gives the imperative "put the fork tool_use LAST"`,
+      )
+      assert.ok(
+        !/[Nn]ever put the fork|does not have to be LAST|need not be LAST/.test(text),
+        `${name} now NEGATES the imperative it is supposed to give`,
+      )
+      assert.ok(
+        /re-arms this gate|re-arms the gate/.test(text) && !/never re-arms/.test(text),
         `${name} no longer warns that text after the fork re-arms the gate`,
       )
     }
   })
 
-  // The directive must not prescribe blocking. `TaskOutput` with `block: true` is one way to stop a
-  // background fork's notification from starting a turn, but ordering it here would resolve, for
-  // every consumer, a rule conflict that is unresolved even on the machine that wrote it: a
-  // standing IRON RULE forbids blocking the main agent, and a second rule claims the review fork as
-  // its sole exception. A tool states the consequence and lets the operator apply their own rules.
-  test('the directive states the notification consequence without prescribing a blocking call', () => {
+  // The BOUNDARY, asserted positively. Guarding only the wrong word (`!/HIGHER/`) is a spell-check:
+  // "strictly after", "greater than", "must come later than", "beyond" all express the same wrong
+  // strict inequality and all pass a ban on one word. Measured against the previous revision of
+  // this file: deleting "AT OR AFTER" from the directive left every assertion here green, which
+  // made the commit subject "assert it cannot silently rot" false. Only the directive states the
+  // mechanism — MAIN_BLOCK_REASON deliberately gives imperatives only, so it is not asserted here.
+  test('the directive states the >= boundary correctly, and no surface misstates it as HIGHER', () => {
     assert.ok(
-      !/TaskOutput/.test(REVIEW_GATE_DIRECTIVE),
-      'the directive prescribes a blocking TaskOutput — state the consequence instead',
+      /AT OR AFTER/i.test(REVIEW_GATE_DIRECTIVE),
+      'the directive no longer states the at-or-after boundary — a strict reading of >= is wrong',
     )
-    assert.ok(
-      REVIEW_GATE_DIRECTIVE.includes('BACKGROUND'),
-      'the directive no longer warns that a background fork\'s notification starts a fresh turn',
-    )
-  })
-
-  // The predicate is `lastFork >= lastWork`, so EQUAL releases too. A message saying the fork must
-  // sit at a HIGHER index is wrong on the boundary, and hook text is read as ground truth by an
-  // agent that cannot check it. Guard the specific wrong word rather than the whole sentence.
-  test('no block surface claims the fork must be at a strictly HIGHER index than the work', () => {
     for (const [name, text] of [
       ['MAIN_BLOCK_REASON', MAIN_BLOCK_REASON],
       ['REVIEW_GATE_DIRECTIVE', REVIEW_GATE_DIRECTIVE],
     ] as const) {
-      assert.ok(!/HIGHER/.test(text), `${name} misstates the >= predicate as strictly HIGHER`)
+      assert.ok(
+        !/HIGHER index|strictly (after|later|greater)|greater than the last/.test(text),
+        `${name} misstates the >= predicate as a strict inequality`,
+      )
     }
   })
 
-  // The boundary the two tests above describe, asserted against the decision function itself rather
-  // than against prose — prose can agree with a wrong model. Equal indices must release.
-  test('decideMainGate releases when the fork and the work sit at the SAME index', () => {
-    const scan = { lastWork: 4, lastFork: 4 }
-    const v = decideMainGate(scan, { total: 0, consecutive: 0 }, { maxPerSession: 20, maxConsecutive: 2 })
-    assert.strictEqual(v.block, false, 'equal indices must release')
+  // The directive warns about the background-notification turn and stops there. It deliberately
+  // does NOT prescribe `TaskOutput` with `block: true`: that would resolve, for every consumer, a
+  // rule conflict unresolved even on the machine that wrote it (a standing IRON RULE forbids
+  // blocking the main agent; a second rule claims the review fork as its sole exception). This
+  // asserts the CONSEQUENCE is present, not that a token is absent — a `!/TaskOutput/` test would
+  // also fire on a sentence WARNING against it, and warning about a mechanism requires naming it.
+  test('the directive states the background-notification consequence', () => {
+    assert.ok(
+      REVIEW_GATE_DIRECTIVE.includes('BACKGROUND fork'),
+      'the directive no longer warns that a background fork\'s notification starts a fresh turn',
+    )
+    assert.ok(
+      /your own rules|forbidden to block/.test(REVIEW_GATE_DIRECTIVE),
+      'the directive no longer leaves the blocking decision to the operator',
+    )
+  })
+
+  // The boundary asserted against the FUNCTION, not the prose — prose can agree with a wrong model.
+  // Both directions are needed: `block === false` alone is satisfied by a gate that never blocks,
+  // which is the most dangerous mutation a review gate has.
+  test('decideMainGate: equal indices release, work after the fork blocks', () => {
+    const opts = { maxPerSession: 20, maxConsecutive: 2 }
+    const fresh = () => ({ total: 0, consecutive: 0 })
+    assert.strictEqual(
+      decideMainGate({ lastWork: 4, lastFork: 4 }, fresh(), opts).block, false,
+      'equal indices must RELEASE — the predicate is >=, not >',
+    )
+    assert.strictEqual(
+      decideMainGate({ lastWork: 4, lastFork: 3 }, fresh(), opts).block, true,
+      'work after the fork must BLOCK — without this, a never-blocking gate passes',
+    )
+  })
+
+  // The fail-open pinned so a change to it is visible. `lastWork === -1` returns BEFORE `lastFork`
+  // is consulted, so an empty scan window allows the stop whatever the fork state — a silent bypass
+  // of a gate the owner ordered never bypassed. Sought on real transcripts and not reproduced; the
+  // mechanism is in the code regardless. This test asserts today's behaviour, so whoever changes it
+  // must do so deliberately. (TRDD-W0ZTTUBA)
+  test('decideMainGate fails OPEN on an empty window — pinned, not endorsed', () => {
+    const opts = { maxPerSession: 20, maxConsecutive: 2 }
+    for (const lastFork of [-1, 7]) {
+      assert.strictEqual(
+        decideMainGate({ lastWork: -1, lastFork }, { total: 0, consecutive: 0 }, opts).block, false,
+        `lastWork === -1 currently allows the stop (lastFork ${lastFork}); see TRDD-W0ZTTUBA`,
+      )
+    }
   })
 })
