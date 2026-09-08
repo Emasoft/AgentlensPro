@@ -5,33 +5,59 @@ import * as path from 'path'
 import {
   scanMainTranscriptLines, decideMainGate,
   scanSubagentTranscriptLines, decideSubagentGate, agentCannotSpawn, declaredToolsHaveAgent,
-  REVIEW_GATE_DIRECTIVE, ONE_TURN_RULE, MAIN_BLOCK_REASON, SUBAGENT_BLOCK_REASON,
+  REVIEW_GATE_DIRECTIVE, ONE_TURN_RULE, mainBlockReason, scanPositions, SUBAGENT_BLOCK_REASON,
   NO_REVIEW_SENTINEL, REVIEWER_AGENT_TYPES,
 } from '../cli/reviewGate'
 
 // `agentlenspro review-gate` — pure decision-function tests, ported faithfully from
 // ~/.claude/hooks/stop-spawn-review-fork.js and subagent-stop-spawn-review-fork.js.
 
+// One representative instance; the message's cause-naming is tested on its own below.
+const MAIN_BLOCK_REASON = mainBlockReason('edit', 'Edit x.ts')
+
 const assistantLine = (blocks: unknown[], extra: Record<string, unknown> = {}): string =>
   JSON.stringify({ type: 'assistant', message: { content: blocks }, ...extra })
 
-const editBlock = { type: 'tool_use', name: 'Edit' }
-const textBlock = { type: 'text', text: 'I propose changing X to Y.' }
+const CWD = '/proj'
+const editBlock = { type: 'tool_use', name: 'Edit', input: { file_path: '/proj/src/x.ts' } }
+const bashBlock = (command: string) => ({ type: 'tool_use', name: 'Bash', input: { command } })
+// A MARKED proposal is work; the same sentence as prose is not (owner order 2026-09-08).
+const proposalBlock = { type: 'text', text: 'PROPOSAL: change X to Y.' }
+const proseBlock = { type: 'text', text: 'I propose changing X to Y.' }
 const thinkBlock = { type: 'thinking', thinking: 'internal' }
 const forkBlock = { type: 'tool_use', name: 'Agent', input: { subagent_type: 'fork' } }
+const nothing = { lastFork: -1, work: null }
 
 suite('reviewGate — main (Stop) gate', () => {
-  test('scanMainTranscriptLines finds the last edit and the last fork by index', () => {
-    const lines = [assistantLine([editBlock]), assistantLine([forkBlock])]
-    assert.deepStrictEqual(scanMainTranscriptLines(lines), { lastFork: 1, lastWork: 0 })
-    // A PROPOSAL IS WORK. Measured on a real session JSONL, this build writes ONE ENTRY PER BLOCK,
-    // so a proposing turn is a lone `text` entry with no tool_use anywhere near it — which the old
-    // predicate scored as lastWork -1 (nothing claimed) and waved through.
-    assert.deepStrictEqual(scanMainTranscriptLines([assistantLine([textBlock])]), { lastFork: -1, lastWork: 0 })
-    assert.deepStrictEqual(
-      scanMainTranscriptLines([assistantLine([textBlock]), assistantLine([forkBlock])]),
-      { lastFork: 1, lastWork: 0 }, 'text then fork ⇒ reviewed')
-    assert.deepStrictEqual(scanMainTranscriptLines([assistantLine([thinkBlock])]), { lastFork: -1, lastWork: -1 })
+  test('scanMainTranscriptLines: an edit, a marked proposal and a write-shaped command arm; prose, a heartbeat and reads do not', () => {
+    assert.deepStrictEqual(scanMainTranscriptLines([assistantLine([editBlock]), assistantLine([forkBlock])], CWD),
+      { lastFork: 1, work: { index: 0, cause: 'edit', detail: 'Edit x.ts' } })
+    // Measured on a real session JSONL, this build writes ONE ENTRY PER BLOCK, so a proposing turn
+    // is a lone `text` entry with no tool_use anywhere near it.
+    assert.deepStrictEqual(scanMainTranscriptLines([assistantLine([proposalBlock])], CWD),
+      { lastFork: -1, work: { index: 0, cause: 'proposal text', detail: '' } })
+    assert.deepStrictEqual(scanMainTranscriptLines([assistantLine([proposalBlock]), assistantLine([forkBlock])], CWD),
+      { lastFork: 1, work: { index: 0, cause: 'proposal text', detail: '' } }, 'proposal then fork ⇒ reviewed')
+    assert.deepStrictEqual(scanMainTranscriptLines([assistantLine([bashBlock('git commit -m x')])], CWD),
+      { lastFork: -1, work: { index: 0, cause: 'write-shaped command', detail: 'git commit' } })
+    // THE LIVELOCK (TRDD-0E3W5C45). For one day every text block was work, so a heartbeat's
+    // mandated `janitor heartbeat` line armed the gate and every reply to the block re-armed it —
+    // ~40 blocked turns and 5 forks over zero edits. None of these is work:
+    for (const turn of [
+      [proseBlock], [thinkBlock],
+      [bashBlock('/x/dispatcher-stub.py 2>&1'), { type: 'text', text: 'janitor heartbeat' }],
+      [bashBlock('grep -rn foo /proj/src')],
+      [{ type: 'tool_use', name: 'Write', input: { file_path: '/private/tmp/claude-1/s/x.py' } }],
+    ]) {
+      assert.deepStrictEqual(scanMainTranscriptLines([assistantLine(turn)], CWD), nothing, JSON.stringify(turn).slice(0, 80))
+    }
+  })
+
+  test('the block message names the actual arming cause — it said "edited or committed" for every cause', () => {
+    assert.ok(mainBlockReason('proposal text').includes('PROPOSAL'))
+    assert.ok(!mainBlockReason('proposal text').includes('edited'))
+    assert.ok(mainBlockReason('write-shaped command', 'git push').includes('git push'))
+    assert.ok(mainBlockReason('edit', 'Write y.md').startsWith('Review-fork gate: this turn edited a file: Write y.md. '))
   })
 
   test('decideMainGate BLOCKS when the last edit is newer than the last fork', () => {
@@ -87,8 +113,15 @@ suite('reviewGate — subagent (SubagentStop) gate', () => {
     assert.strictEqual(v.block, false)
   })
 
-  test('a text-only subagent return counts as work (owner order 2026-09-07: a proposal is work)', () => {
-    assert.deepStrictEqual(scanSubagentTranscriptLines([assistantLine([textBlock])]), { didWork: true, reviewed: false })
+  test('a MARKED proposal in a subagent return is work; plain prose is not (owner orders 2026-09-07/08)', () => {
+    assert.deepStrictEqual(scanSubagentTranscriptLines([assistantLine([proposalBlock])]), { didWork: true, reviewed: false })
+    assert.deepStrictEqual(scanSubagentTranscriptLines([assistantLine([proseBlock])]), { didWork: false, reviewed: false })
+    // The subagent gate shares the tool_use classifier: a write-shaped command is work, a Write into
+    // the scratchpad is not. Without these two, commenting out the shared branch stays green here.
+    assert.deepStrictEqual(scanSubagentTranscriptLines([assistantLine([bashBlock('sed -i "" s/a/b/ f')])], CWD), { didWork: true, reviewed: false })
+    assert.deepStrictEqual(
+      scanSubagentTranscriptLines([assistantLine([{ type: 'tool_use', name: 'Write', input: { file_path: '/tmp/x' } }])], CWD),
+      { didWork: false, reviewed: false })
     // A thinking block is NOT speech — it must not arm the gate on its own, or an agent that only
     // reasoned and then called a tool would owe a review for having thought.
     assert.deepStrictEqual(scanSubagentTranscriptLines([assistantLine([thinkBlock])]), { didWork: false, reviewed: false })
@@ -175,7 +208,7 @@ suite('reviewGate — subagent (SubagentStop) gate', () => {
   })
 
   test('a child sidechain entry does not count as the parent subagent\'s work', () => {
-    const child = JSON.stringify({ type: 'assistant', isSidechain: true, message: { content: [textBlock] } })
+    const child = JSON.stringify({ type: 'assistant', isSidechain: true, message: { content: [proposalBlock] } })
     assert.deepStrictEqual(scanSubagentTranscriptLines([child]), { didWork: false, reviewed: false })
   })
 
@@ -376,7 +409,7 @@ suite('review-gate: the no-review sentinel', () => {
   test('a subagent that emits the sentinel is released — the documented compliance path terminates', () => {
     // The exact sequence the block reason instructs: work, then the sentinel.
     const scan = scanSubagentTranscriptLines([
-      assistantLine([textBlock]),
+      assistantLine([proposalBlock]),
       assistantLine([sentinelLine()]),
     ])
     assert.strictEqual(scan.reviewed, true, 'sentinel must set reviewed or the demand repeats forever')
@@ -389,7 +422,7 @@ suite('review-gate: the no-review sentinel', () => {
   test('without the sentinel that same transcript is blocked — proving the release came from it', () => {
     // The discriminating control. Without this, the test above passes for any reason at all.
     const scan = scanSubagentTranscriptLines([
-      assistantLine([textBlock]),
+      assistantLine([proposalBlock]),
       assistantLine([{ type: 'text', text: 'I cannot spawn a reviewer, sorry.' }]),
     ])
     assert.strictEqual(scan.reviewed, false)
@@ -398,19 +431,19 @@ suite('review-gate: the no-review sentinel', () => {
 
   test('the main gate honours the sentinel as its last block', () => {
     const scan = scanMainTranscriptLines([
-      assistantLine([textBlock]),
+      assistantLine([proposalBlock]),
       assistantLine([sentinelLine()]),
     ])
-    assert.ok(scan.lastFork >= scan.lastWork, 'sentinel must satisfy the positional rule')
-    assert.strictEqual(decideMainGate(scan, { total: 0, consecutive: 0 }, { maxPerSession: 9, maxConsecutive: 9 }).block, false)
+    assert.ok(scanPositions(scan).lastFork >= scanPositions(scan).lastWork, 'sentinel must satisfy the positional rule')
+    assert.strictEqual(decideMainGate(scanPositions(scan), { total: 0, consecutive: 0 }, { maxPerSession: 9, maxConsecutive: 9 }).block, false)
   })
 
   test('prose after the sentinel re-arms the main gate, exactly as prose after a fork does', () => {
     const scan = scanMainTranscriptLines([
       assistantLine([sentinelLine()]),
-      assistantLine([textBlock]),
+      assistantLine([proposalBlock]),
     ])
-    assert.strictEqual(decideMainGate(scan, { total: 0, consecutive: 0 }, { maxPerSession: 9, maxConsecutive: 9 }).block, true)
+    assert.strictEqual(decideMainGate(scanPositions(scan), { total: 0, consecutive: 0 }, { maxPerSession: 9, maxConsecutive: 9 }).block, true)
   })
 
   test('a QUOTED sentinel does not release — a reviewer discussing the gate must not free its subject', () => {
@@ -422,14 +455,14 @@ suite('review-gate: the no-review sentinel', () => {
       `The agent may emit ${NO_REVIEW_SENTINEL} — mid-prose, which must not count.`,
       `Here is the rule:\n${NO_REVIEW_SENTINEL} — on a later line of the same block.`,
     ]) {
-      const scan = scanSubagentTranscriptLines([assistantLine([textBlock]), assistantLine([{ type: 'text', text }])])
+      const scan = scanSubagentTranscriptLines([assistantLine([proposalBlock]), assistantLine([{ type: 'text', text }])])
       assert.strictEqual(scan.reviewed, false, `quoted/embedded sentinel released the gate: ${text.slice(0, 40)}`)
     }
   })
 
   test('the sentinel without a reason does not release — "I cannot" must stay a statement, not a magic word', () => {
     for (const text of [NO_REVIEW_SENTINEL, `${NO_REVIEW_SENTINEL} — `, `${NO_REVIEW_SENTINEL} — ab`]) {
-      const scan = scanSubagentTranscriptLines([assistantLine([textBlock]), assistantLine([{ type: 'text', text }])])
+      const scan = scanSubagentTranscriptLines([assistantLine([proposalBlock]), assistantLine([{ type: 'text', text }])])
       assert.strictEqual(scan.reviewed, false, `bare sentinel released the gate: ${JSON.stringify(text)}`)
     }
   })
@@ -444,11 +477,11 @@ suite('review-gate: the no-review sentinel', () => {
       `${NO_REVIEW_SENTINEL} — tool denied\nI went ahead and edited four files.`,
       `${NO_REVIEW_SENTINEL} — rate limited\n\n## Findings\n\n1. ...`,
     ]) {
-      const sub = scanSubagentTranscriptLines([assistantLine([textBlock]), assistantLine([{ type: 'text', text }])])
+      const sub = scanSubagentTranscriptLines([assistantLine([proposalBlock]), assistantLine([{ type: 'text', text }])])
       assert.strictEqual(sub.reviewed, false, `sentinel-then-essay released the subagent gate: ${JSON.stringify(text.slice(0, 50))}`)
-      const main = scanMainTranscriptLines([assistantLine([textBlock]), assistantLine([{ type: 'text', text }])])
+      const main = scanMainTranscriptLines([assistantLine([proposalBlock]), assistantLine([{ type: 'text', text }])])
       assert.strictEqual(
-        decideMainGate(main, { total: 0, consecutive: 0 }, { maxPerSession: 9, maxConsecutive: 9 }).block,
+        decideMainGate(scanPositions(main), { total: 0, consecutive: 0 }, { maxPerSession: 9, maxConsecutive: 9 }).block,
         true,
         `sentinel-then-essay released the main gate: ${JSON.stringify(text.slice(0, 50))}`,
       )
@@ -564,7 +597,7 @@ suite('review-gate: the recursion guard exempts reviewers and nothing else', () 
       )
       assert.ok(
         /re-arms this gate|re-arms the gate/.test(text) && !/never re-arms/.test(text),
-        `${name} no longer warns that text after the fork re-arms the gate`,
+        `${name} no longer warns what after the fork re-arms the gate`,
       )
     }
   })
