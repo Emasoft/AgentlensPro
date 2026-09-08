@@ -1,13 +1,13 @@
 ---
 trdd-id: W0ZTTUBA
 title: The review gate fails open when its 4MB tail window holds no arming block
-column: proposal
+column: backburner
 created: 2026-09-08T11:40:48+0200
-updated: 2026-09-08T11:40:48+0200
+updated: 2026-09-08T11:44:00+0200
 current-owner: main-session
 task-type: bugfix
 scope: project
-min-approval-requirement: user
+min-approval-requirement: none
 ---
 
 # The review gate fails open when its 4MB tail window holds no arming block
@@ -87,10 +87,24 @@ false-negative risk if the JSON is spaced differently: the bare key `isSidechain
 Subagent turns are written to their own files under the session's `tasks/` directory, not into
 the main JSONL.
 
-**Honest limit on that claim:** 0 hits over 3,126 files on ONE machine and ONE CC build, whose
-spawns were overwhelmingly `subagent_type: "fork"`. It does not prove no configuration produces
-`isSidechain: true` — and the filter's existence in the source is weak evidence something does.
-Narrowest form: *fork subagent turns do not appear in the main JSONL here.*
+**The literal-grep gap, and how it was closed.** `grep -l '"isSidechain":true'` assumes one exact
+spelling (no space after the colon, bare `true`), so 0 hits over 3,126 files proved only that
+that byte sequence is absent. The control (bare key in 3,123 files) is weaker than it looks —
+`grep -o` sampling returned `isSidechain / initiator` and `isSidechain = false): s`, i.e. prose
+and source quoted *inside* transcripts, not JSON fields. Closed by a format-independent check:
+**60 randomly-sampled transcripts, JSON-parsed, 260,395 occurrences of the field, every one
+`False`, zero `True`.**
+
+**Honest limit that remains:** ONE machine, ONE CC build, spawns overwhelmingly
+`subagent_type: "fork"`. It does not prove no configuration produces `isSidechain: true` — and
+the filter's existence in the source is weak evidence something does. Narrowest form: *fork
+subagent turns do not appear in the main JSONL here.*
+
+**Correction to commit `b8e5a632`'s message**, which is immutable and says "0 isSidechain entries
+across all 3126 transcripts": that was a literal-string grep over 3,126 files plus a
+format-independent check over 2. The 60-file JSON-parsed sample above is what actually supports
+the claim, and it was run afterwards. The conclusion survives; the evidence quoted in the commit
+did not yet support it when written.
 
 ## What is actually unfavourable
 
@@ -108,8 +122,16 @@ not excluded.
    could not resolve). Risk: wedges a genuinely fresh session.
 2. **Widen the window when it yields no assistant entries** — re-read with a larger `maxBytes`
    before deciding.
-3. **Accept and document.** Defensible given two samples and 150 truncating files with no
-   reproduction — but then say so in the source, so the next reader does not re-derive it.
+3. **Accept and document.** Defensible given the spot-check with no reproduction — but then say
+   so in the source, so the next reader does not re-derive it.
+
+**Tier note.** Filed `backburner` / `none`, NOT as a user-gated proposal. Closing a fail-open
+*implements* the owner's standing never-bypass ruling rather than revising it, so it is ordinary
+in-scope bugfix work — Tier 0. It was briefly filed at `user` only because it inherited the tier
+of the card it was split out of, which is exactly the metadata-inheritance trap that splitting a
+card invites. **Option 1 (fail closed) is the exception**: it can wedge a fresh session, a
+user-visible behaviour change to a mandatory gate, so that option needs sign-off before it lands.
+Options 2 and 3 do not.
 
 ## Acceptance
 
