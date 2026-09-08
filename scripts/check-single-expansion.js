@@ -53,15 +53,26 @@ function stripComments(src) {
 
 /**
  * Return the source of `function <name>(` up to the next top-level `function ` / `export function `.
- * Returns null when the component is absent — treated as a hard failure by the caller, because a
- * renamed component silently disables the rule otherwise.
+ *
+ * Two failure sentinels, both hard-failed by the caller rather than passed silently:
+ *   null  — the component is absent (renamed or removed), which would disable the rule vacuously.
+ *   false — no following top-level `function` exists, so the slice would run to EOF and the rule
+ *           would blame this component for every symbol in the rest of the file. That wrong-culprit
+ *           shape is the exact failure this guard exists to prevent, so it must not be a silent
+ *           pass. Today `SubAgentBranch` is not the last function-declared component in the file;
+ *           if a refactor makes it so, this fires and the slicer needs a real brace-matcher.
+ *
+ * Known remaining imprecision, stated rather than discovered: the slice ends at the next
+ * `function`-declared component, so any `const Foo = () => …` component sitting between this
+ * component's closing brace and that next `function` is swallowed into the slice. That fails
+ * toward a FALSE POSITIVE (over-match), which is loud, not toward a missed violation.
  */
 function componentBody(src, name) {
   const start = src.search(new RegExp(`^(?:export )?function ${name}\\b`, 'm'))
   if (start === -1) return null
   const rest = src.slice(start + 1)
   const nextIdx = rest.search(/^(?:export )?function \w/m)
-  return nextIdx === -1 ? rest : rest.slice(0, nextIdx)
+  return nextIdx === -1 ? false : rest.slice(0, nextIdx)
 }
 
 // Optional single-file override, so the guard can be run against an arbitrary revision of the
@@ -86,6 +97,16 @@ for (const rule of RULES) {
       `check-single-expansion: FAIL — ${rule.component} not found in ${rule.file}. ` +
         'It was renamed or removed; update or delete this rule deliberately rather than ' +
         'letting the check pass vacuously.'
+    )
+    failures++
+    continue
+  }
+  if (body === false) {
+    console.error(
+      `check-single-expansion: FAIL — ${rule.component} is the last function-declared component ` +
+        `in ${rule.file}, so its slice would run to EOF and this rule would blame it for every ` +
+        'symbol in the rest of the file. Move a function-declared component below it, or replace ' +
+        'the slicer with a real brace-matcher. Failing loudly beats a wrong-culprit message.'
     )
     failures++
     continue
