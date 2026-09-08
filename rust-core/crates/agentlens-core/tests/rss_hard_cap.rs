@@ -41,6 +41,20 @@ fn tmp_log(tag: &str) -> std::path::PathBuf {
     p
 }
 
+/// WHAT THIS TEST DOES **NOT** COVER — read before trusting its name. It asserts a CONJUNCTION
+/// (flush happened, log written, exit 1), NOT a SEQUENCE, and two real regressions pass it:
+///
+///  - **flush vs. log-write ordering.** Moving `flush_before_exit()` to after `write_log_file()`
+///    keeps every assertion green. (The sentinel DOES prove the flush ran before `exit` — a flush
+///    ordered after `exit` never runs at all — but nothing here pins it before the log write.)
+///  - **the cap boundary.** `if metric_bytes <= cap { return; }` flipped to `<` stays green: this
+///    test uses cap 0 against a positive metric and `under_cap_is_a_no_op` uses cap 2048 MB
+///    against 1 GB, so neither sits near the boundary. An off-by-one at the cap is the most
+///    likely future regression in that function and no test can currently see it.
+///
+/// Also platform-scoped: on non-macOS the metric comes from the constant fallback closure below,
+/// so the breach BRANCH is exercised everywhere but the real memory reading only on macOS.
+///
 /// THE OWNER DIRECTIVE'S DELIVERABLE, WHICH HAD NEVER EXECUTED ONCE: on breach, flush, write a
 /// culprit log, and exit non-zero. Every other test here covers the env parser, the pure string
 /// builder (`format_diagnostic`), or the NO-OP branch — so the breach branch of the shipped
@@ -92,14 +106,23 @@ fn breach_flushes_writes_the_culprit_log_and_exits_1() {
         .output()
         .expect("re-exec this test binary as a child");
 
-    // 101 means the child PANICKED rather than exiting through the guard — almost always the
-    // `unreachable!` above, i.e. check_and_enforce RETURNED because no breach was detected. That
-    // is the historical defect (the metric read 0 and silently disabled the cap at every
-    // threshold), so name it here rather than let it masquerade as "the exit is broken".
+    // The hint BRANCHES ON THE OBSERVED CODE. An earlier version stated the 101 explanation
+    // unconditionally, so an exit(0) failure printed "the metric probably read 0" directly above
+    // `left: Some(0)` and a stderr full of the diagnostic that had plainly just run — a
+    // wrong-culprit message inside the test whose own subject is a wrong-culprit guard.
+    let hint = match out.status.code() {
+        Some(101) => "the child PANICKED, almost certainly on the `unreachable!` above — meaning \
+                      check_and_enforce RETURNED, so no breach was detected. That is the historical \
+                      defect: the metric read 0 and silently disabled the cap at every threshold",
+        Some(0) => "the child exited 0 — the guard ran but did not exit with ERROR, which is the \
+                    directive's actual requirement",
+        Some(_) => "the child exited with an unexpected non-zero code — not the guard's exit(1)",
+        None => "the child was killed by a signal (see stderr); on macOS an unsigned or replaced \
+                 binary is SIGKILLed before main",
+    };
     assert_eq!(
         out.status.code(), Some(1),
-        "breach must exit(1); 101 means the child panicked, so the metric probably read 0 and no \
-         breach was detected. stderr:\n{}",
+        "breach must exit(1): {hint}. stderr:\n{}",
         String::from_utf8_lossy(&out.stderr)
     );
     assert!(sentinel.exists(), "flush_before_exit must run BEFORE exit(1)");
