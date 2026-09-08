@@ -40,7 +40,7 @@ fn tmp_log(tag: &str) -> std::path::PathBuf {
 fn under_cap_is_a_no_op_and_writes_no_log() {
     let log = tmp_log("noop");
     // Would exit(1) on breach; calling it under-cap must return normally and touch nothing.
-    check_and_enforce(|| 1024 * 1024 * 1024, &log, snap(2048 * 1024 * 1024));
+    check_and_enforce(|| 1024 * 1024 * 1024, || {}, &log, snap(2048 * 1024 * 1024));
     assert!(!log.exists(), "no diagnostic should be written when under the cap");
 }
 
