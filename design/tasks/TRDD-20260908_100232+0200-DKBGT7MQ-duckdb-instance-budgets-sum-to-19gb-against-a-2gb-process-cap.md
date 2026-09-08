@@ -3,7 +3,7 @@ trdd-id: DKBGT7MQ
 title: Eight independent DuckDB instances each carry their own buffer-pool limit and they sum to 19.25 GB against a 2 GB process cap
 column: todo
 created: 2026-09-08T10:02:32+0200
-updated: 2026-09-08T10:18:10+0200
+updated: 2026-09-08T22:42:39+0200
 current-owner: main
 task-type: bugfix
 parent-trdd: 7YPQWKPG
@@ -21,7 +21,21 @@ labels: [rust, memory, alcore, duckdb]
 
 # DuckDB instance budgets sum to 19.25 GB against a 2 GB process cap
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-08 10:15
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-08 22:42
+
+**OWNER RULING 2026-09-08 22:41 (verbatim: "256mb limit? duckdb memory limit should be 2Gb").**
+This settles the "size the cap and the budgets together" question below: there is ONE DuckDB
+memory budget and it is the process cap, **2 GB**. DuckDB is the process's memory (parent
+TRDD-7YPQWKPG); per-store pools of 256 MB / 1 GB / 8 GB are neither the design nor the ceiling.
+`memory_limit` is per DuckDB *instance*, so one budget means one instance (one database with the
+stores as schemas, or the store files ATTACHed to one connection) — the split-the-budget shape is
+already ruled out in acceptance #3 ("the concurrent set is UNBOUNDED"). What triggered the ruling:
+the live collector on `~/.agentlens` is crash-looping at boot — the log-sweeper panics at
+`card_store.rs:168` with DuckDB out-of-memory at the card store's 256 MB pool during the boot
+sweep upsert (1,155 hook-revive boots logged 2026-09-08; root-cause report pending under
+`reports/card-store-oom/`). **NEXT ACTION:** plan the single-instance shape (which stores, one
+`SET memory_limit='2GB'`, no `temp_directory=''` masking, how `body_archive`'s 8 GB site folds in)
+and put it through adversarial review before any code; the crash-loop card records the interim.
 
 **⚠️ THIS CARD WAS AUTHORED REDUNDANTLY AND ITS ORIGINAL FRAMING WAS THE RETRACTED ONE.** Read
 TRDD-WKLD508O's STATE section *"THE CAP AND THE DuckDB BUDGETS CANNOT BOTH BE 2048 MB — but
@@ -174,3 +188,9 @@ must be established, not assumed.
   NPT for it.
 - **TRDD-WKLD508O** (the 2 GB hard cap) is still correct to land first — it is the enforcement.
   This card is the reason enforcement alone is not enough.
+
+## Approval log
+
+- 2026-09-08T22:42:39+0200 — OWNER RULING (USER, Tier 3): the DuckDB memory limit is 2 GB — one
+  budget equal to the process cap, DuckDB as the only memory. Recorded by main from the user's
+  message "256mb limit? duckdb memory limit should be 2Gb".
