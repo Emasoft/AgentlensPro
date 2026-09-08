@@ -59,9 +59,9 @@ export const HOOK_EVENTS = [
 
 // The burn gate (TRDD-GOD0108C) is the ONE narrow exception to the no-PreToolUse rule: it is
 // MATCHED to agent-launch tools only (rare calls, the exact moments token disasters start),
-// and it must be SYNC (async hooks cannot deny) with a hard 3s timeout so a dead server never
-// stalls a turn. SendMessage joined the matcher in P6: resuming a DEAD agent re-runs the
-// request that killed it, so the server gates it — but ONLY on cache-thrash / cold-resume.
+// and it must be SYNC (async hooks cannot deny) with a hard HOOK_TIMEOUT_SEC timeout so a dead
+// server never stalls a turn. SendMessage joined the matcher in P6: resuming a DEAD agent re-runs
+// the request that killed it, so the server gates it — but ONLY on cache-thrash / cold-resume.
 //
 // `Read` (2026-07-28) is the ONE non-rare tool in the matcher, and it is here only for the image
 // cache-guard, which warns when an image would become RESIDENT in an already-fat session. Its cost
@@ -170,41 +170,44 @@ const isSpyglass = (h: HookCommandEntry): boolean =>
 // other registers a DIFFERENT hook depending on whether the install had anything to strip, which
 // is invisible until someone diffs two machines' settings.json.
 
-// Every hook timeout below was DOUBLED on 2026-09-05 (TRDD-GXKRBK1Q, USER order "relax the timeouts
-// of all hooks.. they must be doubled"): at load-avg 16–26 on 14 cores the previous ceilings were
-// still being hit, and each hit is a silently dropped capture or a gate failing OPEN. The inner
-// network budgets in hookHandlers.ts (AGENTLENS_HOOK_TIMEOUT / AGENTLENS_GATE_TIMEOUT) doubled with
-// them so the child's own deadline still sits inside the ceiling Claude Code enforces.
+// Hook timeout history: 2s/3s at launch → doubled 2026-08-14 (load-avg 130+ starved even an
+// 800ms TCP connect) → doubled again 2026-09-05 (TRDD-GXKRBK1Q, USER order "relax the timeouts of
+// all hooks.. they must be doubled": at load-avg 16-26 on 14 cores the previous ceilings were still
+// being hit) — 10s for the lifecycle/gate/supervisor hooks, 20s for the review gate → ALL raised to
+// 30s on 2026-09-08 (USER order): the owner's live settings.json already carried 30 on every entry
+// while these builders still emitted 10/20 — the installer and the file disagreed, and which value
+// a rebuild would have kept was never measured. ONE constant, ONE number, no per-builder drift. The
+// inner network budgets in hookHandlers.ts (AGENTLENS_HOOK_TIMEOUT 2s / AGENTLENS_GATE_TIMEOUT 4s)
+// are the child's own deadlines inside this ceiling and did not move.
+export const HOOK_TIMEOUT_SEC = 30
 
-/** The lifecycle forwarder: async, so it cannot block a turn. Timeout 10s (5s before 2026-09-05;
- *  2s before the owner's 2026-08-14 report that the hooks "often" hit it: at load-avg 130+ even an
- *  800ms TCP connect starved, and a cold node CLI start alone can exceed 2s). Every timeout is a
- *  silently dropped capture event plus a warning in the user's terminal. Async means the extra
- *  allowance never delays a turn. */
+/** The lifecycle forwarder: async, so it cannot block a turn. Every timeout is a silently dropped
+ *  capture event plus a warning in the user's terminal; async means the ceiling never delays a
+ *  turn, so it can be generous. See HOOK_TIMEOUT_SEC for the history. */
 export function lifecycleMatcher(cmd: string): HookMatcher {
-  return { hooks: [{ type: 'command', command: cmd, timeout: 10, async: true }] }
+  return { hooks: [{ type: 'command', command: cmd, timeout: HOOK_TIMEOUT_SEC, async: true }] }
 }
 
-/** The burn gate: SYNC (an async hook cannot deny) and scoped to agent-launch tools only.
- *  Timeout 10s (5s before 2026-09-05, 3s before 2026-08-14). The worst-case turn stall only occurs
- *  when the server is WEDGED and the call is an agent-launch or an image Read (runGateCheck answers
- *  ordinary Reads locally, no network), so the common path never pays it; a gate that times out
- *  FIRST under load fails open and misses the one disaster it exists to deny. */
+/** The burn gate: SYNC (an async hook cannot deny) and scoped to agent-launch tools only. The
+ *  worst-case turn stall only occurs when the server is WEDGED and the call is an agent-launch or
+ *  an image Read (runGateCheck answers ordinary Reads locally, no network), so the common path
+ *  never pays it; a gate that times out FIRST under load fails open and misses the one disaster it
+ *  exists to deny. See HOOK_TIMEOUT_SEC for the history. */
 export function gateMatcher(gateCmd: string): HookMatcher {
-  return { matcher: GATE_MATCHER, hooks: [{ type: 'command', command: gateCmd, timeout: 10 }] }
+  return { matcher: GATE_MATCHER, hooks: [{ type: 'command', command: gateCmd, timeout: HOOK_TIMEOUT_SEC }] }
 }
 
 /** The adversarial-review gate: SYNC (an async hook cannot deny), no `matcher` field (Stop/
- *  SubagentStop fire unconditionally, unlike PreToolUse/PostToolUse which are tool-scoped).
- *  Timeout 20s (10s before 2026-09-05): unlike the burn gate it makes no network round trip — it
- *  reads a local transcript tail (capped at 4MB) — so the ceiling only needs to cover local disk
- *  I/O under load, not a possibly-down server. */
+ *  SubagentStop fire unconditionally, unlike PreToolUse/PostToolUse which are tool-scoped). Unlike
+ *  the burn gate it makes no network round trip — it reads a local transcript tail (capped at
+ *  4MB) — so the ceiling only needs to cover local disk I/O under load, not a possibly-down
+ *  server. See HOOK_TIMEOUT_SEC for the history. */
 export function reviewGateMatcher(reviewCmd: string): HookMatcher {
-  return { hooks: [{ type: 'command', command: reviewCmd, timeout: 20 }] }
+  return { hooks: [{ type: 'command', command: reviewCmd, timeout: HOOK_TIMEOUT_SEC }] }
 }
 
 export function reviewSupervisorMatcher(cmd: string): HookMatcher {
-  return { hooks: [{ type: 'command', command: cmd, timeout: 10 }] }
+  return { hooks: [{ type: 'command', command: cmd, timeout: HOOK_TIMEOUT_SEC }] }
 }
 
 export function rebuildEventMatchers(

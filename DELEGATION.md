@@ -1,42 +1,61 @@
-# Delegation plan — alcore keeps no resident data model (TRDD-7YPQWKPG)
+# Delegation plan — alcore memory: one 2 GB DuckDB budget, the boot crash loop, the guard, the hook ceiling
 
-Gate: **OPEN — 5 units** (threshold ≥3 units / ≥5 files / >30 min — all met). Written 2026-09-06T05:33:47+0200.
+Units: 6
+Created: 2026-09-08T22:45:13+0200
 
-Prior ledger (TRDD-465EXTJ6, uncommitted) archived at
-`reports_dev/delegation-archive/20260906_053311+0200-DELEGATION-465EXTJ6.md`, not deleted.
+Gate: **OPEN — 6 units** (≥3 independent units, ≥5 files, >30 min). Prior ledger (TRDD-7YPQWKPG,
+committed at fc88dfb6) archived as a copy at
+`reports_dev/delegation-archive/20260908_224513+0200-DELEGATION-7YPQWKPG.md`, not deleted.
 
-Every row is `pending` and `## Evidence` is empty at creation: the four workers were spawned
-minutes before this file and none has reported. USER order: urgent, parallel.
+Every row is `pending` and `## Evidence` is empty at creation. Units 1–3 were spawned BEFORE this
+file existed (the colony gate was invoked mid-flight); their workers' self-reports are claims, and
+the rows stay `pending` until the coordinator re-runs each acceptance.
 
-Live baseline (pid 78233, after YILE6N3T + 7RM5YW2T + XTFDRTH2): RSS 10.7 GB, physical footprint
-2.8 GB, peak 13.2 GB, CPU 58% of a core. Evidence:
-`reports/7ypqwkpg/20260906_043059+0200-heap-by-structure-after-xtfdrth2.md`.
+Owner directives driving this ledger (2026-09-08): "ensure the installer of the agentlenspro hooks
+uses a 30 seconds timeout"; "verify that the server alcore do not use 10+ Gb or ram but a maximum
+of 2Gb, using duckdb as the only memory"; "256mb limit? duckdb memory limit should be 2Gb".
 
-| # | Unit | Files (owner) | Worker | Acceptance | Status |
-|---|------|---------------|--------|------------|--------|
-| 1 | FSMISF5K — session summaries are SQL over the segments; `SpanWindow`, `boot_load`, the rebuild loop are deleted | `rust-core/crates/agentlens-core/src/{span_window.rs,ui.rs,chores.rs,session_summary_sql.rs,lib.rs}` + tests | kraken (fix/fsmisf5k) | `! grep -rqE 'fn boot_load|struct SpanWindow' /Users/emanuelesabetta/Code/AgentlensPro/rust-core/crates/agentlens-core/src/` | pending |
-| 2 | Session cards live in a DuckDB FILE under the data dir, bounded buffer pool, not `open_in_memory` | `rust-core/crates/agentlens-core/src/card_store.rs`, its `CardStore::new` call site, `tests/card_store*.rs` | kraken | `! grep -q open_in_memory /Users/emanuelesabetta/Code/AgentlensPro/rust-core/crates/agentlens-core/src/card_store.rs` | pending |
-| 3 | mimalloc purges eagerly at startup so freed pages leave RSS (the 8 GB RSS-vs-footprint gap) | the alcore binary's allocator file, its Cargo.toml, one probe example | kraken | `grep -rlqE 'mi_option_set|MIMALLOC_PURGE' /Users/emanuelesabetta/Code/AgentlensPro/rust-core/crates --include='*.rs'` | pending |
-| 4 | Cold boot log scan is a DuckDB `read_ndjson_auto` query; Rust holds no per-file JSON trees | `rust-core/crates/agentlens-core/src/log_reader.rs`, new `log_scan_sql.rs` (+ its one `mod` line), tests | kraken | `grep -rl read_ndjson_auto /Users/emanuelesabetta/Code/AgentlensPro/rust-core/crates/agentlens-core/src/ \| grep -q 'log_'` | pending |
-| 5 | Integration: review fork per branch, merge all four `--no-ff`, one release build + codesign + restart, re-measure | main branch, `bin-native/darwin-arm64/alcore`, cards 7YPQWKPG/FSMISF5K/+3 | me | `p="$(agentlenspro server status \| sed -n 's/.*pid=\([0-9]*\).*/\1/p')"; [ "$(printf '%s\n' "$p" \| grep -c .)" = 1 ] && ps -o command= -p "$p" > /tmp/alcore-cmd.txt && grep -q 'alcore serve' /tmp/alcore-cmd.txt && /usr/bin/vmmap --summary "$p" \| awk '/Physical footprint \(peak\):/ { seen=1; v=$4; sub(/[GM]$/,"",v); ok=(($4 ~ /G$/ && v+0 < 3) \|\| $4 ~ /M$/) } END { exit !(seen && ok) }'` | pending |
+| # | Unit | Files (mine) | Worker | Acceptance | Status |
+|---|------|--------------|--------|------------|--------|
+| 1 | Installer emits a 30 s ceiling on every hook entry (TRDD-B07NR7ZI) | `src/cli/hookInstall.ts`, `src/test/cliMatchers.test.ts` | lean-worker (hook-timeout-30) | `npx mocha --no-config --ui tdd --require src/test/setup.js out/test/test/cliMatchers.test.js` exits 0 | verified |
+| 2 | Root cause of the boot crash loop at card_store.rs:168 (TRDD-5JZQFVO8), with file:line call path and a minimal fix proposal | `reports/card-store-oom/*.md` | sleuth (card-store-oom) | the report names the call path with file:line and the pinned-block mechanism, marked VERIFIED/INFERRED per claim | verified |
+| 3 | Rebuilt RSS guard fires on an isolated instance (TRDD-WKLD508O): 1 MB cap exits 1 with a culprit log, 512 MB control stays up | `reports/trdd-wkld508o/*.md`, `rust-core/target/release/alcore` | lean-worker (wkld508o-probe) | `grep -q 'Verdict: guard FIRED' reports/trdd-wkld508o/20260908_224712+0200-isolated-rss-guard-probe.md` | verified |
+| 4 | The collector survives its boot sweep on ~/.agentlens — the card-store OOM fix (TRDD-5JZQFVO8), shape decided by unit 2 | `rust-core/crates/agentlens-core/src/card_store.rs`, `rust-core/crates/agentlens-core/src/log_reader.rs` | pending — after unit 2 | `cargo test --manifest-path rust-core/Cargo.toml -p agentlens-core --lib card_store` exits 0 | pending |
+| 5 | No test revives a real alcore daemon on the canonical ports (TRDD-YGEV6QDD): both tmp-HOME suites brake the revive and pin isolated ports | `src/test/cliHotPathLatency.test.ts`, `src/test/setupVerb.test.ts` | lean-worker (ygev6qdd) | `npx mocha --no-config --ui tdd --require src/test/setup.js out/test/test/cliHotPathLatency.test.js out/test/test/setupVerb.test.js` exits 0 and the process table afterwards has no `alcore serve --data-dir /var/folders` | pending |
+| 6 | One 2 GB DuckDB budget: inventory of the eight instance sites with file:line and the single-budget shape, written into the card (TRDD-DKBGT7MQ) | `design/tasks/TRDD-20260908_100232+0200-DKBGT7MQ-*.md` | Plan agent (dkbgt7mq) | the card's STATE block lists every `memory_limit` site with file:line and one proposed shape, each claim marked VERIFIED/INFERRED | pending |
 
-## File ownership
+## Rules of this ledger
 
-`lib.rs` is shared at the edges: unit 1 owns it, unit 4 may add exactly one `mod log_scan_sql;`
-line, unit 2 may change only the `CardStore::new(..)` call. Units 2, 3, 4 never touch
-`span_window.rs`, `ui.rs`, `chores.rs`. Unit 3 never touches `agentlens-core/src`. A worker that
-needs a file it does not own STOPS and reports; the coordinator resolves it in the merge.
-
-## Review findings applied (fork, 2026-09-06 05:40)
-
-- Rows 1–4 acceptances are symbol checks: a floor, not proof. They gate `done` only. A row moves
-  to `verified` on the BEHAVIOUR after deploy: row 1 `spans in memory` = the unflushed buffer;
-  row 2 `test -s "$DATA_DIR/cards.duckdb"`; row 3 the probe's printed RSS delta and the live
-  RSS-vs-footprint gap; row 4 the isolated-boot peak RSS below the recorded pre-change figure.
-- Row 5 asserts the PEAK footprint (the number `boot_load` decides), on the pid the server itself
-  reports, not a pidfile.
-- Units 1, 2, 4 all edit the boot sequence in `lib.rs` (`restore` at log_reader.rs:720 is read by
-  1 and 4). `merge-tree` will call it clean and it will not be. Merge order: 1 first, then rebase
-  2 and 4 onto the result one at a time, build after each. Never a three-way.
+- One row per unit. No two rows share a file.
+- Acceptance is checkable: a command, a test, a measurable criterion. "Works" is not acceptance.
+- Status: `pending` → `done` (worker reported) → `verified` (coordinator checked it themselves).
+- One criterion per row. A disjunction is unfalsifiable and breaks the re-run.
+- `node ~/.claude/skills/colony/scripts/ledger-check.mjs DELEGATION.md` RUNS each verified row's acceptance command and appends a content-bound receipt. No receipt = never checked.
+- No "done" for the task until every row is `verified`.
+- Unit 4 depends on unit 2 (the fix shape is the investigator's finding); it is one unit, sequenced, not a disjunction.
 
 ## Evidence
+
+**Unit 1 —** coordinator re-ran the acceptance: `pnpm run compile-tests` exit 0, then
+`npx mocha --no-config --ui tdd --require src/test/setup.js out/test/test/cliMatchers.test.js`
+exit 0, 13 passing (`reports_dev/unit1-cliMatchers-scoped.txt`); `node esbuild.js` exit 0 and the
+bundle carries `HOOK_TIMEOUT_SEC` 5× (`reports_dev/unit1-esbuild.txt`). Read the worker's diff of
+`src/cli/hookInstall.ts` in full; softened one over-claim in its comment ("would have reverted" →
+"which value a rebuild would have kept was never measured"). Worker report:
+`reports/hook-timeout-30/20260908_224450+0200-installer-ceiling-30s.md` (predates this ledger by
+23 s; the scoped re-run above is the fresh artifact). Live `~/.claude/settings.json`: all 19
+agentlens entries carry `timeout: 30` (jq listing in the worker report; re-listed by the
+coordinator before the worker ran — already 30).
+
+**Unit 2 —** `reports/card-store-oom/20260908_224702+0200-boot-sweep-oom-root-cause.md` (§1–§5).
+Coordinator verified first-hand: `log_reader.rs:732-751` is one `begin()`…35k `put_log_session`…
+`commit()`; `card_store.rs:82` `MEMORY_LIMIT = "256MiB"`, `:154-168` the single-row `INSERT … ON
+CONFLICT` with `.expect("upsert a session card")`. The pinned-block mechanism (transaction-local
+storage vs the PK ART index) is marked INFERRED in the report with a discriminator; unit 4's
+isolated boot on the real snapshot is that measurement.
+
+**Unit 3 —** `reports/trdd-wkld508o/20260908_224712+0200-isolated-rss-guard-probe.md`: probe A
+(cap 1 MB) exit 1 at 14 ms uptime with the culprit log written; probe B (cap 512 MB) exit 124 with
+`/api/server-stats` answering at +8 s; both children confirmed dead. Coordinator ran the acceptance
+grep: PASS. Deploy of the rebuilt binary is a separate, owner-gated step (guard + 2 GB cap on the
+real collector), not this unit.
