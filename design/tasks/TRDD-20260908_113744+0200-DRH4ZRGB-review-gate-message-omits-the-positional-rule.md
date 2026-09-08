@@ -1,13 +1,14 @@
 ---
 trdd-id: DRH4ZRGB
 title: The review-gate block message omits the positional rule its own instruction violates
-column: backburner
+column: dev
 created: 2026-09-08T11:37:44+0200
-updated: 2026-09-08T11:54:14+0200
+updated: 2026-09-08T12:14:03+0200
 current-owner: main-session
 task-type: bugfix
 scope: project
 min-approval-requirement: none
+implementation-commits: [e7d1d3c7, 4521dea7]
 ---
 
 # The review-gate block message omits the positional rule its own instruction violates
@@ -191,7 +192,35 @@ rule, while the three fork-last turns all passed. No evidence it has bitten.
 
 ## Acceptance
 
-- [ ] The blocked agent can learn the positional rule from what it is shown, without reading source.
-- [ ] A turn that spawns the fork and then reports to the user does not re-fire the gate — or the
-      message tells it not to do that.
-- [ ] The predicate is unchanged (owner order 2026-09-03: the gate is never stopped or bypassed).
+- [x] The blocked agent can learn the positional rule from what it is shown, without reading
+      source. `e7d1d3c7` put it in `MAIN_BLOCK_REASON`; `4521dea7` corrected it.
+- [x] A turn that spawns the fork and then reports to the user does not re-fire the gate — or the
+      message tells it not to do that. The message tells it: fork LAST, no further TEXT after,
+      and do not split text and fork across two responses.
+- [x] The predicate is unchanged (owner order 2026-09-03: the gate is never stopped or bypassed).
+      Two string constants and four tests; `decideMainGate` untouched.
+- [x] Neither surface can silently lose the rule — `4521dea7` adds four assertions, because tsc
+      and esbuild both pass on a message that has quietly dropped the clause.
+
+## ⚠ DO NOT CLOSE THIS CARD YET — it must be SPLIT first
+
+The three acceptance boxes above cover the message, which is done. But this card has accumulated
+three sections that are **not this card's task** and have **no acceptance criteria of their own**.
+Closing it would freeze them (terminal columns are frozen) inside a document whose title mentions
+none of them — content deleted with extra steps.
+
+| section | what it actually is | belongs |
+|---|---|---|
+| §The passing shape exists | knowledge, no "done" state | PROJECT wikimem page, recall by symptom |
+| §The loop, and who drives it | a behavioural lesson | TRDD-T2N1GOZ2, which is already that subject |
+| §A cost property of the gate | a **separate defect with its own fix** (scan anchored at the window, not the turn ⇒ every answering turn pays a fork; the fix is anchoring at the last user entry) | its own card |
+
+The §Tier paragraph above lectures about metadata inheritance across a card split being "the trap
+that bit twice" — written into a card that was itself refusing to split. Recorded rather than
+quietly fixed, because the irony is the evidence.
+
+**Also open, found while landing this and NOT part of it:** `pnpm run compile` fails at
+`check-duckdb-only` on `main` — store-opener caps exceeded, 24 > 22 non-test and 15 > 14 test,
+against a guard whose own text says the caps may only go DOWN. Someone added openers. That is a
+live regression, discovered here and left in place; it needs its own card, not a paragraph in a
+commit body, or the next commit inherits "compile fails, unrelated" without re-deriving it.
