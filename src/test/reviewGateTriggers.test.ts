@@ -30,6 +30,10 @@ suite('review-gate triggers: write-shaped commands', () => {
     ['{ git commit -m x; }', 'git commit'],
     ['find . -print0 | xargs -0 rm', 'rm via xargs (targets unknown)'],  // `-0` is xargs's option, not the command
     ['xargs -I {} rm {} < list', 'rm via xargs (targets unknown)'],
+    ['find . | xargs -n 1 rm', 'rm via xargs (targets unknown)'],  // a SEPARATE option value (third review)
+    ['find . | xargs -P 4 rm', 'rm via xargs (targets unknown)'],
+    ['find . -exec rm {} \\;', 'rm via find -exec (targets unknown)'],
+    ['find . -name \'*.log\' -delete', 'find -delete'],
     ['echo "->"| tee notes.md', 'tee notes.md'],               // a quoted `>` must not glue the pipe
     ['git -c a=b commit -m x', 'git commit'],                   // `-c k=v` takes a value
     ['git commit -F - <<\'EOF\'\nsubject\n- a line with > in it\nEOF', 'git commit'],  // segments before redirects
@@ -83,6 +87,7 @@ suite('review-gate triggers: write-shaped commands', () => {
     'sed -n \'1,45p\' f', 'perl -ne \'print\' f', 'node -e \'console.log(1)\'', 'python3 -c "print(1)"',
     'D=' + '~' + '/.claude/x; grep -rn "reports" "$D/s/" 2>/dev/null | head',
     'find .claude -type f -exec ls -la {} \\; 2>/dev/null',       // an escaped `;` is not a separator
+    'sudo -n git status',                                            // `-n` takes NO value for sudo: git status must be reached
     'echo a \\> b',                                                  // an escaped `>` is not a redirect
     'echo a\\>| b', 'echo "a>"| tr a b',                             // …and does not glue the pipe after it
     'diff <(node -e \'1\') <(node -e \'2\')',

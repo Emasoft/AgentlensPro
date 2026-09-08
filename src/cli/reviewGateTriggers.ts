@@ -99,7 +99,8 @@ const SHELLS = /^(bash|sh|zsh|dash|ksh)$/
 export const ALL_ARGS_ARE_TARGETS = ['tee', 'rm', 'touch']
 export const LAST_ARG_IS_TARGET = ['cp', 'mv', 'rsync', 'ln', 'install']
 
-function segmentWriteReason(base: string, args: string[], viaXargs: boolean, cwd: string): string | null {
+/** `via` names the launcher (`xargs`, `find -exec`) when the targets are not in this segment's text. */
+function segmentWriteReason(base: string, args: string[], via: string | null, cwd: string): string | null {
   const flagless = args.filter((a) => !a.startsWith('-'))
   if (base === 'git') {
     let j = 0 // skip global options; `-C dir` / `-c k=v` / `--git-dir x` take a value
@@ -129,8 +130,15 @@ function segmentWriteReason(base: string, args: string[], viaXargs: boolean, cwd
   }
   if (base === 'agentlenspro' && !args.includes('--dry-run') && args.some((a) => a === 'setup' || /^--(un)?install-/.test(a))) return 'agentlenspro config write'
   if (base === 'memgrep' && /-mem-/.test(args[0] ?? '')) return `memgrep ${args[0]}`
+  // `find -exec <cmd>` runs <cmd> once per hit and `-delete` unlinks the hits: both are writes
+  // the command word `find` hides (review 2026-09-08 — `find . -exec rm {} \;` released).
+  if (base === 'find') {
+    if (args.includes('-delete')) return 'find -delete'
+    const e = args.findIndex((a) => /^-(exec|execdir|ok|okdir)$/.test(a))
+    return e >= 0 && args[e + 1] !== undefined ? segmentWriteReason(path.basename(args[e + 1]), args.slice(e + 2), 'find -exec', cwd) : null
+  }
   if (ALL_ARGS_ARE_TARGETS.includes(base) || LAST_ARG_IS_TARGET.includes(base)) {
-    if (viaXargs) return `${base} via xargs (targets unknown)`
+    if (via !== null) return `${base} via ${via} (targets unknown)`
     const targets = ALL_ARGS_ARE_TARGETS.includes(base) ? flagless : flagless.slice(-1)
     const bad = targets.find((t) => !isEphemeralTarget(t, cwd))
     return bad === undefined ? null : `${base} ${bad}`
@@ -151,22 +159,25 @@ export function commandWriteReason(cmd: string, cwd: string): string | null {
   }
   for (const seg of segments) {
     let i = 0
-    let viaXargs = false
+    let via: string | null = null
     let inWrapper = false
     while (i < seg.length && !seg[i].quoted) {
       const w = seg[i].word
       if (WRAPPERS.test(w) || /^[A-Za-z_][A-Za-z0-9_]*=/.test(w)) {
         inWrapper = WRAPPERS.test(w)
-        if (w === 'xargs') viaXargs = true
+        if (w === 'xargs') via = 'xargs'
       } else if (inWrapper && (w.startsWith('-') || w === '{}')) {
         // a wrapper's own option (`xargs -0 rm`, `xargs -I {} rm {}`) — `-0` was taken as the
-        // command and released the rm. An option's SEPARATE value (`sudo -u x cmd`, `nice -n 10
-        // cmd`) is still taken as the command: unmodelled, fail-open, like any unknown word.
+        // command and released the rm. Only xargs's value-taking options skip their SEPARATE
+        // value (`xargs -n 1 rm`); never generically — `sudo -n` takes none, and a generic skip
+        // would eat the command. Other wrappers' values (`sudo -u x cmd`, `nice -n 10 cmd`) are
+        // still taken as the command: unmodelled, fail-open, like any unknown word.
+        if (via === 'xargs' && /^-[nPLIEdsa]$/.test(w)) i++
       } else break
       i++
     }
     if (i >= seg.length || seg[i].quoted) continue
-    const reason = segmentWriteReason(path.basename(seg[i].word), seg.slice(i + 1).map((w) => w.word), viaXargs, cwd)
+    const reason = segmentWriteReason(path.basename(seg[i].word), seg.slice(i + 1).map((w) => w.word), via, cwd)
     if (reason !== null) return reason
   }
   for (let i = 0; i < words.length; i++) {
