@@ -3,7 +3,7 @@ trdd-id: DKBGT7MQ
 title: Eight independent DuckDB instances each carry their own buffer-pool limit and they sum to 19.25 GB against a 2 GB process cap
 column: todo
 created: 2026-09-08T10:02:32+0200
-updated: 2026-09-08T22:42:39+0200
+updated: 2026-09-08T23:11:14+0200
 current-owner: main
 task-type: bugfix
 parent-trdd: 7YPQWKPG
@@ -21,7 +21,34 @@ labels: [rust, memory, alcore, duckdb]
 
 # DuckDB instance budgets sum to 19.25 GB against a 2 GB process cap
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-08 22:42
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-08 23:11
+
+**23:11 — THE PLAN EXISTS: `reports/dkbgt7mq/20260908_231114+0200-single-2gb-budget-plan.md`.**
+Inventory of every DuckDB open/limit site in non-test code (agent-VERIFIED by reading; the
+coordinator has first-hand verified only A and the restore path): A `card_store.rs:122`
+(const `:82` 256MiB, file-backed, the ONLY resident instance); B `statusline_store.rs:230-238`
+(2GB, per-call, every 60 s); C `transcript_sql.rs:401-404` (2GB, per MCP call); D
+`transcript_sql.rs:572-576` (2GB, burn_seismic); E `bodies_evidence.rs:70-86` (2GB, 4 MCP
+tools); F `agentlens-store/src/lib.rs:138-178` `open_store(dir, limit, threads)` used by F1
+`chores.rs:288` (2GB, bodies pass), F2 `body_archive.rs:133-136` (**8GB** via
+`DEFAULT_MEMORY_LIMIT`, `lib.rs:42` — and it DOES run inside the resident server:
+`ui.rs:1979/1987` bodies export/purge; that settles the open question below), F3 `alstore.rs:105`
+(8GB, separate process); G `session_summary_sql.rs:122-127` (1GB, DEAD code). The "sum to
+19.25 GB" framing stays withdrawn: only A is resident, the rest are per-call.
+**Shape chosen: (a) one process-wide instance** = the card store's file instance configured once
+(`memory_limit='2GiB'`, threads=2, `temp_directory=''`) and installed as a root every other site
+`try_clone()`s through one `agentlens_store::connect()`, per-call stores isolated with TEMP
+tables. (b) stores-as-schemas rejected (Parquet stores are fileless by measurement); (c) sum of
+separate instances rejected (DuckDB has no cross-instance budget). Phases 0–4, ≤5 files each,
+each with the test that fails on current code, are in the report.
+**Two facts that bound this card:** the single budget ALONE is not shown to stop the boot panic
+(open-transaction charge k×64 MB with k ∈ [4, 75) — whether under 2 GiB is UNDETERMINED), so the
+chunked restore of TRDD-5JZQFVO8 is required regardless; and a 2 GiB DuckDB budget plus the Rust
+heap exceeds WKLD508O's 2048 MB RSS cap by construction — cap = budget + Rust floor, or budget
+below the cap, is an OWNER decision not taken here. Correction to the paragraph below: the boot
+count "1,155" is unsupported (whole-log, undated); measured: 138 OOM panics.
+NEXT ACTION: after 5JZQFVO8 deploys and the real-corpus footprint is measured, put Phase 1 through
+adversarial review, then implement phase by phase.
 
 **OWNER RULING 2026-09-08 22:41 (verbatim: "256mb limit? duckdb memory limit should be 2Gb").**
 This settles the "size the cap and the budgets together" question below: there is ONE DuckDB

@@ -22,7 +22,7 @@ of 2Gb, using duckdb as the only memory"; "256mb limit? duckdb memory limit shou
 | 3 | Rebuilt RSS guard fires on an isolated instance (TRDD-WKLD508O): 1 MB cap exits 1 with a culprit log, 512 MB control stays up | `reports/trdd-wkld508o/*.md`, `rust-core/target/release/alcore` | lean-worker (wkld508o-probe) | `grep -q 'Verdict: guard FIRED' reports/trdd-wkld508o/20260908_224712+0200-isolated-rss-guard-probe.md` | verified |
 | 4 | The collector survives its boot sweep on ~/.agentlens — the card-store OOM fix (TRDD-5JZQFVO8), shape decided by unit 2 | `rust-core/crates/agentlens-core/src/log_reader.rs`, `rust-core/crates/agentlens-core/tests/card_store.rs` | lean-worker (5jzqfvo8) | `cargo test --manifest-path rust-core/Cargo.toml -p agentlens-core --test card_store` exits 0 | pending |
 | 5 | No test revives a real alcore daemon on the canonical ports (TRDD-YGEV6QDD): both tmp-HOME suites brake the revive and pin isolated ports | `src/test/cliHotPathLatency.test.ts`, `src/test/setupVerb.test.ts` | lean-worker (ygev6qdd) | `npx mocha --no-config --ui tdd --require src/test/setup.js out/test/test/cliHotPathLatency.test.js out/test/test/setupVerb.test.js` exits 0 and the process table afterwards has no `alcore serve --data-dir /var/folders` | pending |
-| 6 | One 2 GB DuckDB budget: inventory of the eight instance sites with file:line and the single-budget shape, written into the card (TRDD-DKBGT7MQ) | `design/tasks/TRDD-20260908_100232+0200-DKBGT7MQ-*.md` | Plan agent (dkbgt7mq) | the card's STATE block lists every `memory_limit` site with file:line and one proposed shape, each claim marked VERIFIED/INFERRED | pending |
+| 6 | One 2 GB DuckDB budget: inventory of the eight instance sites with file:line and the single-budget shape, written into the card (TRDD-DKBGT7MQ) | `design/tasks/TRDD-20260908_100232+0200-DKBGT7MQ-*.md` | Plan agent (dkbgt7mq) | the card's STATE block lists every `memory_limit` site with file:line and one proposed shape, each claim marked VERIFIED/INFERRED | done |
 
 ## Rules of this ledger
 
@@ -59,3 +59,10 @@ isolated boot on the real snapshot is that measurement.
 `/api/server-stats` answering at +8 s; both children confirmed dead. Coordinator ran the acceptance
 grep: PASS. Deploy of the rebuilt binary is a separate, owner-gated step (guard + 2 GB cap on the
 real collector), not this unit.
+
+**Unit 6 — `done`, not `verified`:** the Plan agent returned its report inline (read-only mode),
+persisted verbatim at `reports/dkbgt7mq/20260908_231114+0200-single-2gb-budget-plan.md`; the
+card's STATE now carries the 9-site inventory with file:line and the chosen shape. The coordinator
+has first-hand verified only site A (`card_store.rs:82,112-116,142-168`) and the restore path
+(`log_reader.rs:732-751`); the other rows and the DuckDB-internals claims are the agent's until
+re-read, so the row stays `done`.
