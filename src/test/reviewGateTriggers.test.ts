@@ -23,6 +23,18 @@ suite('review-gate triggers: write-shaped commands', () => {
     ['echo `git commit -m x`', 'git commit'],                // and a backtick
     ['bash -c \'git commit -m x\'', 'git commit'],           // a shell given a string runs it
     ['eval "git push"', 'git push'],
+    ['for f in a b; do git commit -m x; done', 'git commit'],  // `do` heads the body (post-write review)
+    ['if true; then git push; fi', 'git push'],
+    ['if git commit -m x; then :; fi', 'git commit'],          // the CONDITION is a command too
+    ['while ! git push; do sleep 1; done', 'git push'],
+    ['{ git commit -m x; }', 'git commit'],
+    ['find . -print0 | xargs -0 rm', 'rm via xargs (targets unknown)'],  // `-0` is xargs's option, not the command
+    ['xargs -I {} rm {} < list', 'rm via xargs (targets unknown)'],
+    ['echo "->"| tee notes.md', 'tee notes.md'],               // a quoted `>` must not glue the pipe
+    ['git -c a=b commit -m x', 'git commit'],                   // `-c k=v` takes a value
+    ['git commit -F - <<\'EOF\'\nsubject\n- a line with > in it\nEOF', 'git commit'],  // segments before redirects
+    ['echo x >| src/a', 'redirect into src/a'],
+    ['perl -i -pe \'s/a/b/\' f', 'perl -i'],
     ['git mv a b', 'git mv'],
     ['git checkout -- x', 'git checkout'],
     ['git stash', 'git stash'],
@@ -60,7 +72,8 @@ suite('review-gate triggers: write-shaped commands', () => {
     'ps -eo pid,command > /private/tmp/claude-1/s/ps.txt',
     'git status --short && git log -1 --oneline',
     'git worktree list --porcelain | sed -n \'s/^worktree //p\'',
-    'git stash list', 'git diff', 'git rev-parse HEAD', 'git -C /proj log -3',
+    'git stash list', 'git stash show', 'git diff', 'git rev-parse HEAD', 'git -C /proj log -3',
+    'X=$(date); echo $X > /tmp/y', 'find . -name \'*.ts\' -exec grep -l foo {} +', 'bash -c "ls | wc -l"',
     'grep -E \'git (add|commit|merge)\' f', 'echo "git commit"', 'echo "cp x y"', 'grep \'mv \' f', 'cp --help',
     'cmd 2>/dev/null', 'cmd >/dev/null 2>&1', 'cmd 2>&1 | head', 'cmd &> /tmp/x',
     'cmd | tee /tmp/x', 'cmd | tee reports/x/y.md', 'rm -f /tmp/x', 'mv x reports_dev/x',
@@ -71,6 +84,7 @@ suite('review-gate triggers: write-shaped commands', () => {
     'D=' + '~' + '/.claude/x; grep -rn "reports" "$D/s/" 2>/dev/null | head',
     'find .claude -type f -exec ls -la {} \\; 2>/dev/null',       // an escaped `;` is not a separator
     'echo a \\> b',                                                  // an escaped `>` is not a redirect
+    'echo a\\>| b', 'echo "a>"| tr a b',                             // …and does not glue the pipe after it
     'diff <(node -e \'1\') <(node -e \'2\')',
     'awk \'{print > "x"}\' f', 'echo "a > b"', 'date +%s', 'ls -la', 'cat file',
   ]
@@ -120,6 +134,8 @@ suite('review-gate triggers: shellWords', () => {
   test('quotes, escapes, fd dups and boundaries', () => {
     assert.deepStrictEqual(shellWords('a "b c" d').map((w) => w.word), ['a', 'b c', 'd'])
     assert.deepStrictEqual(shellWords('x 2>&1 | y').map((w) => w.word), ['x', '2>&1', '|', 'y'])
+    assert.deepStrictEqual(shellWords('x >| y').map((w) => w.word), ['x', '>|', 'y'])  // clobber, not a pipe
+    assert.deepStrictEqual(shellWords('echo a\\>| b').map((w) => w.word), ['echo', 'a>', '|', 'b'])  // escaped `>`: a pipe
     assert.deepStrictEqual(shellWords('a&&b||c;d\ne').map((w) => w.word), ['a', '&&', 'b', '||', 'c', ';', 'd', ';', 'e'])
     assert.deepStrictEqual(shellWords('f \\; g').map((w) => [w.word, w.quoted]), [['f', false], [';', true], ['g', false]])
     assert.deepStrictEqual(shellWords('X=$(y) z').map((w) => w.word), ['X=$', ';', 'y', ';', 'z'])

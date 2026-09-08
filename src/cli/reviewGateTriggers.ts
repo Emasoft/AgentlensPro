@@ -13,8 +13,8 @@
 // FAIL OPEN ON COMMANDS THE TOKENIZER DOES NOT MODEL, and say so: a script's own writes
 // (`uv run x.py`, `./deploy.sh`) are invisible, and an unspaced `cmd>file` is one word. The
 // separator set below is the weakest link — a shape it does not split (review 2026-09-08 found
-// newlines and `$(…)` missing, which silently released a multi-line `git commit`) is a skipped
-// review that announces nothing.
+// newlines and `$(…)` missing, then `do`/`then`/`{` as segment heads, each of which silently
+// released a `git commit` inside it) is a skipped review that announces nothing.
 // ponytail: string classification, not effects. Upgrade path if script writes ever matter:
 // fingerprint `git status --porcelain` + HEAD between consecutive Stops.
 
@@ -35,9 +35,10 @@ export interface Word { word: string; quoted: boolean }
 
 /** Shell words, quotes honoured, nothing expanded. Command-position boundaries — `|` `||` `&&`
  *  `;` a lone `&`, a NEWLINE, `(` `)` and a backtick — become a `;` word so `a|b`, a multi-line
- *  command and `X=$(git commit)` all put their commands in command position. `>&` stays glued so
- *  `2>&1` is one fd-dup word. An escaped character is marked quoted: `\;` must not split, `\>`
- *  must not redirect. */
+ *  command and `X=$(git commit)` all put their commands in command position. `>&` and `>|` stay
+ *  glued so `2>&1` is one fd-dup word and a clobber redirect is not read as a pipe into its target
+ *  (it was: `>| src/a` reported `redirect into |`). An escaped character is marked quoted: `\;`
+ *  must not split, `\>` must not redirect. */
 export function shellWords(cmd: string): Word[] {
   const out: Word[] = []
   let cur = ''
@@ -50,7 +51,9 @@ export function shellWords(cmd: string): Word[] {
     if (q !== null) { if (c === q) q = null; else cur += c; continue }
     if (c === '"' || c === "'") { q = c; quoted = true; continue }
     if (c === '\\' && i + 1 < cmd.length) { cur += cmd[++i]; quoted = true; continue }
-    if (c === '&' && cur.endsWith('>')) { cur += c; continue }
+    // `!quoted`: a `>` that arrived quoted or escaped (`echo "a>"| tee x`) ends the word too, and
+    // gluing the pipe onto it would swallow `tee` out of command position (review 2026-09-08).
+    if ((c === '&' || c === '|') && cur.endsWith('>') && !quoted) { cur += c; continue }
     if (c === '|' || c === '&') {
       if (cmd[i + 1] === c) { sep(c + c); i++ } else sep(c)
       continue
@@ -88,7 +91,10 @@ const GIT_WRITE = new Set(GIT_WRITE_SUBCOMMANDS)
 const GH_MUTATING = new Set(GH_MUTATING_VERBS)
 const PKG_WRITE = new Set(PKG_WRITE_VERBS)
 const GH_API_WRITE = /^(-X|--method|-f|-F|--field|--raw-field|--input)$/
-const WRAPPERS = /^(sudo|env|time|nohup|nice|caffeinate|exec|command|xargs)$/
+// Prefix words that are not the command: wrappers, and the shell keywords that head a compound
+// body or condition (`for …; do git commit; done` put `do` in command position and released the
+// commit; `if git commit; then` and `while ! git push` did the same one review later).
+const WRAPPERS = /^(sudo|env|time|nohup|nice|caffeinate|exec|command|xargs|if|while|until|!|do|then|else|elif|\{|\})$/
 const SHELLS = /^(bash|sh|zsh|dash|ksh)$/
 export const ALL_ARGS_ARE_TARGETS = ['tee', 'rm', 'touch']
 export const LAST_ARG_IS_TARGET = ['cp', 'mv', 'rsync', 'ln', 'install']
@@ -132,18 +138,12 @@ function segmentWriteReason(base: string, args: string[], viaXargs: boolean, cwd
   return null
 }
 
-/** Why a shell command is a write, or null when its text shows only reads. Redirects anywhere
- *  (`>`, `>>`, `>|`, attached or spaced; `2>&1`/`>&2` are fd dups, not files), then each
- *  segment's command word after wrappers and env assignments. */
+/** Why a shell command is a write, or null when its text shows only reads. Each segment's
+ *  command word (after wrappers and env assignments) FIRST, then redirects anywhere (`>`, `>>`,
+ *  `>|`, attached or spaced; `2>&1`/`>&2` are fd dups, not files) — in that order so a heredoc
+ *  commit whose body holds a bare `>` is reported as the commit it is, not as a redirect. */
 export function commandWriteReason(cmd: string, cwd: string): string | null {
   const words = shellWords(cmd)
-  for (let i = 0; i < words.length; i++) {
-    if (words[i].quoted) continue
-    const m = /^\d*(?:>\||>>?)(.*)$/.exec(words[i].word)
-    if (!m || m[1].startsWith('&')) continue
-    const target = m[1] !== '' ? m[1] : (words[i + 1]?.word ?? '')
-    if (!isEphemeralTarget(target, cwd)) return `redirect into ${target || '(no target)'}`
-  }
   const segments: Word[][] = [[]]
   for (const w of words) {
     if (!w.quoted && /^(\||\|\||&&|;|&)$/.test(w.word)) segments.push([])
@@ -152,13 +152,29 @@ export function commandWriteReason(cmd: string, cwd: string): string | null {
   for (const seg of segments) {
     let i = 0
     let viaXargs = false
-    while (i < seg.length && !seg[i].quoted && (WRAPPERS.test(seg[i].word) || /^[A-Za-z_][A-Za-z0-9_]*=/.test(seg[i].word))) {
-      if (seg[i].word === 'xargs') viaXargs = true
+    let inWrapper = false
+    while (i < seg.length && !seg[i].quoted) {
+      const w = seg[i].word
+      if (WRAPPERS.test(w) || /^[A-Za-z_][A-Za-z0-9_]*=/.test(w)) {
+        inWrapper = WRAPPERS.test(w)
+        if (w === 'xargs') viaXargs = true
+      } else if (inWrapper && (w.startsWith('-') || w === '{}')) {
+        // a wrapper's own option (`xargs -0 rm`, `xargs -I {} rm {}`) — `-0` was taken as the
+        // command and released the rm. An option's SEPARATE value (`sudo -u x cmd`, `nice -n 10
+        // cmd`) is still taken as the command: unmodelled, fail-open, like any unknown word.
+      } else break
       i++
     }
     if (i >= seg.length || seg[i].quoted) continue
     const reason = segmentWriteReason(path.basename(seg[i].word), seg.slice(i + 1).map((w) => w.word), viaXargs, cwd)
     if (reason !== null) return reason
+  }
+  for (let i = 0; i < words.length; i++) {
+    if (words[i].quoted) continue
+    const m = /^\d*(?:>\||>>?)(.*)$/.exec(words[i].word)
+    if (!m || m[1].startsWith('&')) continue
+    const target = m[1] !== '' ? m[1] : (words[i + 1]?.word ?? '')
+    if (!isEphemeralTarget(target, cwd)) return `redirect into ${target || '(no target)'}`
   }
   return null
 }

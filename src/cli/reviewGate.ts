@@ -71,9 +71,10 @@ THE EXIT IS POSITIONAL, and this is the part that is easy to get wrong. The gate
 positions: it releases when the fork is AT OR AFTER the last block that armed it. WHAT ARMS IT
 (owner directive 2026-09-08): an Edit/Write/NotebookEdit outside /tmp and the project's reports/
 and *_dev/ dirs; a write-shaped Bash command — git commit/push/pull/mv/rm/checkout/reset/rebase/
-merge/stash/clean…, gh create/comment/edit/merge…, sed -i, a package add/remove, or a redirect /
-tee / cp / mv / rm whose target is not a LITERAL path under /tmp, /dev/null or those dirs; or a
-text block with a line starting \`PROPOSAL\`. Plain prose, status lines, heartbeat output and
+merge/stash/clean…, gh create/comment/edit/merge…, sed -i / perl -i, a package add/remove,
+agentlenspro setup / --install-*, a memgrep *-mem-* verb, the string given to \`sh -c\` / \`eval\`,
+or a redirect / tee / cp / mv / rm / touch whose target is not a LITERAL path under /tmp,
+/dev/null or those dirs; or a text block with a line starting \`PROPOSAL\`. Plain prose, status lines, heartbeat output and
 read-only commands do NOT arm it; an undecidable target (a $VAR, a glob, after a \`cd\`) counts as
 a write. So:
 
@@ -334,7 +335,7 @@ function toolUseWork(b: AssistantContentBlock, cwd: string): { cause: ArmCause; 
   return null
 }
 
-function hookCwd(input: ReviewGateInput): string {
+export function hookCwd(input: ReviewGateInput): string {
   return typeof input?.cwd === 'string' && input.cwd !== '' ? input.cwd : process.cwd()
 }
 

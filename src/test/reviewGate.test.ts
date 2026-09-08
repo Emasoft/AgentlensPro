@@ -5,7 +5,7 @@ import * as path from 'path'
 import {
   scanMainTranscriptLines, decideMainGate,
   scanSubagentTranscriptLines, decideSubagentGate, agentCannotSpawn, declaredToolsHaveAgent,
-  REVIEW_GATE_DIRECTIVE, ONE_TURN_RULE, mainBlockReason, scanPositions, SUBAGENT_BLOCK_REASON,
+  REVIEW_GATE_DIRECTIVE, ONE_TURN_RULE, mainBlockReason, scanPositions, hookCwd, SUBAGENT_BLOCK_REASON,
   NO_REVIEW_SENTINEL, REVIEWER_AGENT_TYPES,
 } from '../cli/reviewGate'
 
@@ -51,6 +51,16 @@ suite('reviewGate — main (Stop) gate', () => {
     ]) {
       assert.deepStrictEqual(scanMainTranscriptLines([assistantLine(turn)], CWD), nothing, JSON.stringify(turn).slice(0, 80))
     }
+  })
+
+  test('a NotebookEdit follows the same ephemeral-root rule, and the hook cwd comes from the input', () => {
+    const nb = (notebook_path: string) => ({ type: 'tool_use', name: 'NotebookEdit', input: { notebook_path } })
+    assert.deepStrictEqual(scanMainTranscriptLines([assistantLine([nb('/proj/n.ipynb')])], CWD),
+      { lastFork: -1, work: { index: 0, cause: 'edit', detail: 'NotebookEdit n.ipynb' } })
+    assert.deepStrictEqual(scanMainTranscriptLines([assistantLine([nb('/tmp/n.ipynb')])], CWD), nothing)
+    assert.strictEqual(hookCwd({ cwd: '/elsewhere' }), '/elsewhere')
+    assert.strictEqual(hookCwd({ cwd: '' }), process.cwd(), 'an empty cwd falls back, it is not a root')
+    assert.strictEqual(hookCwd({}), process.cwd())
   })
 
   test('the block message names the actual arming cause — it said "edited or committed" for every cause', () => {

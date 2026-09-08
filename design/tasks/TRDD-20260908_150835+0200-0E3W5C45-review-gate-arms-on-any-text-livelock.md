@@ -3,7 +3,7 @@ trdd-id: 0E3W5C45
 title: The review gate arms on any text block so idle and heartbeat turns livelock it
 column: ai_review
 created: 2026-09-08T15:08:35+0200
-updated: 2026-09-08T15:39:09+0200
+updated: 2026-09-08T15:50:56+0200
 current-owner: main-session
 task-type: bugfix
 min-approval-requirement: none
@@ -14,7 +14,23 @@ implementation-commits: []
 
 # The review gate arms on any text block so idle and heartbeat turns livelock it
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-08 15:39
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-08 15:50
+
+**15:50 — POST-WRITE REVIEWS APPLIED.** Three review forks over the follow-up edits found four
+fail-open shapes and one false reason string; this diff fixes each and pins it with an ARM or PASS
+row: a shell keyword heading a body or condition (`do|then|else|elif|{|}`, then `if|while|until|!`)
+sat in command position and released the `git commit` behind it; a heredoc commit with a bare `>`
+in its body reported a redirect (segment pass now runs before the redirect pass); `>|` split into
+`>` + a pipe and `echo x >| src/a` reported `redirect into |` (glued — only after an UNQUOTED `>`,
+because `echo "a>"| tee notes.md` would otherwise swallow `tee`); `xargs -0 rm` took `-0` as the
+command (a wrapper's own options are skipped). 57 tests green, bundle rebuilt 15:50 with both
+markers present. **Test-runner gotcha:** `npx mocha --no-config <files>` drops `.mocharc.cjs`'s
+`--ui tdd` and dies on `suite is not defined` before any test runs — one build chain "passed" that
+way with zero tests executed; run the suites with `--ui tdd --require src/test/setup.js`. Still
+unmodelled and fail-open, by design: an option's separate value (`sudo -u x cmd`, `nice -n 10 cmd`),
+unspaced redirects, a script's own writes. Review item NOT taken: a `runMainGate`-level test that
+the hook `cwd` reaches the scan — `hookCwd` and the scan's cwd handling are unit-tested separately;
+the composition test needs a transcript fixture and is deferred, recorded here so it is not lost.
 
 **15:39 — IMPLEMENTED AND DEPLOYED.** `src/cli/reviewGateTriggers.ts` (new) + `reviewGate.ts` rewired
 + both test suites green; `node esbuild.js` exit 0; `standalone/cli.js` (15:38) carries
