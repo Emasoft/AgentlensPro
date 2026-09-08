@@ -531,4 +531,60 @@ suite('review-gate: the recursion guard exempts reviewers and nothing else', () 
   test('REVIEWER_AGENT_TYPES holds only genuine reviewers — each entry skips that agent\'s review', () => {
     assert.deepStrictEqual([...REVIEWER_AGENT_TYPES], ['fork'])
   })
+
+  // Both surfaces the BLOCKED agent reads must state the positional rule. It used to live only in
+  // the source comment above `scanMainTranscriptLines`, which that agent never sees — so the
+  // instruction "spawn a fork, then act on the findings" read as spawn-then-reply, and the reply's
+  // text block took the higher index and re-armed the gate. tsc and esbuild both pass on a message
+  // that has quietly lost the clause, so only an assertion catches a refactor that drops it.
+  // (TRDD-DRH4ZRGB)
+  test('both block surfaces state the positional rule, so a refactor cannot silently drop it', () => {
+    for (const [name, text] of [
+      ['MAIN_BLOCK_REASON', MAIN_BLOCK_REASON],
+      ['REVIEW_GATE_DIRECTIVE', REVIEW_GATE_DIRECTIVE],
+    ] as const) {
+      assert.ok(text.includes('POSITIONAL'), `${name} no longer names the positional exit`)
+      assert.ok(/fork[\s\S]{0,80}LAST/.test(text), `${name} no longer says to put the fork LAST`)
+      assert.ok(
+        text.includes('re-arms'),
+        `${name} no longer warns that text after the fork re-arms the gate`,
+      )
+    }
+  })
+
+  // The directive must not prescribe blocking. `TaskOutput` with `block: true` is one way to stop a
+  // background fork's notification from starting a turn, but ordering it here would resolve, for
+  // every consumer, a rule conflict that is unresolved even on the machine that wrote it: a
+  // standing IRON RULE forbids blocking the main agent, and a second rule claims the review fork as
+  // its sole exception. A tool states the consequence and lets the operator apply their own rules.
+  test('the directive states the notification consequence without prescribing a blocking call', () => {
+    assert.ok(
+      !/TaskOutput/.test(REVIEW_GATE_DIRECTIVE),
+      'the directive prescribes a blocking TaskOutput — state the consequence instead',
+    )
+    assert.ok(
+      REVIEW_GATE_DIRECTIVE.includes('BACKGROUND'),
+      'the directive no longer warns that a background fork\'s notification starts a fresh turn',
+    )
+  })
+
+  // The predicate is `lastFork >= lastWork`, so EQUAL releases too. A message saying the fork must
+  // sit at a HIGHER index is wrong on the boundary, and hook text is read as ground truth by an
+  // agent that cannot check it. Guard the specific wrong word rather than the whole sentence.
+  test('no block surface claims the fork must be at a strictly HIGHER index than the work', () => {
+    for (const [name, text] of [
+      ['MAIN_BLOCK_REASON', MAIN_BLOCK_REASON],
+      ['REVIEW_GATE_DIRECTIVE', REVIEW_GATE_DIRECTIVE],
+    ] as const) {
+      assert.ok(!/HIGHER/.test(text), `${name} misstates the >= predicate as strictly HIGHER`)
+    }
+  })
+
+  // The boundary the two tests above describe, asserted against the decision function itself rather
+  // than against prose — prose can agree with a wrong model. Equal indices must release.
+  test('decideMainGate releases when the fork and the work sit at the SAME index', () => {
+    const scan = { lastWork: 4, lastFork: 4 }
+    const v = decideMainGate(scan, { total: 0, consecutive: 0 }, { maxPerSession: 20, maxConsecutive: 2 })
+    assert.strictEqual(v.block, false, 'equal indices must release')
+  })
 })

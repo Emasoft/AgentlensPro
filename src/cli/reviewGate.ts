@@ -56,24 +56,23 @@ Spawn ONE adversarial reviewer with the Agent tool, \`subagent_type: "fork"\`, w
   for the variance, an assumed format for the real one);
 - asks it to name the single WEAKEST link and give ONE settling command for it.
 
-THE EXIT IS POSITIONAL, and this is the part that is easy to get wrong. The gate releases when
-the fork sits at a HIGHER transcript index than the last thing that armed it, and an assistant
-text block arms it. So:
+THE EXIT IS POSITIONAL, and this is the part that is easy to get wrong. The gate compares
+positions: it releases when the fork is AT OR AFTER the last block that armed it, and an
+assistant text block arms it. So:
 
 - put the fork \`tool_use\` LAST, in the SAME response as your user-visible text;
-- emit NOTHING after it — text after the fork re-arms the gate;
-- do NOT split the text and the fork across two responses. A fork-only response has no visible
-  output, the harness injects a complaint turn, and answering THAT complaint is what fires the
-  gate. Measured 2026-09-08: ten forks and ~2.4M subagent tokens went to this one mistake.
+- emit no further TEXT after it — a text block after the fork re-arms the gate. Tool calls that
+  are not themselves arming blocks are fine;
+- do NOT split the text and the fork across two responses. A fork-only response can draw a
+  no-visible-output complaint from the harness, and answering that complaint with text is what
+  fires the gate.
 
-A BACKGROUND fork's completion notification manufactures a fresh turn, that turn must emit text,
-and the text re-arms the gate — a self-sustaining loop that ends only on user input. Consume the
-fork in-turn (\`TaskOutput\` with \`block: true\`; it is not an arming block) so no notification
-is left to force the next turn.
+A BACKGROUND fork's completion notification starts a fresh turn, and that turn's text re-arms
+the gate. Whether to consume the fork in-turn instead is your call under your own rules — some
+agents are forbidden to block, and this gate does not require it either way.
 
-Then read its findings and act on them — in the NEXT turn, which is the earliest a report-out can
-happen without re-arming. Do NOT restate this directive to the user — spawn the fork and
-continue. This gate CANNOT be disabled — \`AGENTLENS_REVIEW_FORK=off\` is ignored.
+Then read its findings and act on them. Do NOT restate this directive to the user — spawn the
+fork and continue. This gate CANNOT be disabled — \`AGENTLENS_REVIEW_FORK=off\` is ignored.
 `
 
 interface ReviewGateInput {
@@ -462,9 +461,9 @@ export const MAIN_BLOCK_REASON = 'Review-fork gate: this turn edited or committe
   // index and re-armed the gate — ten forks and ~2.4M subagent tokens before the shape was
   // read out of the source. An instruction whose correct execution is undocumented is a trap,
   // not an instruction. (TRDD-DRH4ZRGB)
-  + 'tool_use LAST, in the SAME response as your user-visible text, and emit NOTHING after it: '
-  + 'any text block after the fork re-arms this gate, and splitting the text and the fork across '
-  + 'two responses is what makes that happen. If you CANNOT spawn one — rate-limited, at '
+  + 'tool_use LAST, in the SAME response as your user-visible text, and emit no further TEXT '
+  + 'after it: a text block after the fork re-arms this gate, and splitting the text and the fork '
+  + 'across two responses is what makes that happen. If you CANNOT spawn one — rate-limited, at '
   + `a depth limit, tool denied — emit a text block whose ENTIRE content is "${NO_REVIEW_SENTINEL} `
   + '— <reason>", nothing after the reason; that is the only other way out.'
 
