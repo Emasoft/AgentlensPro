@@ -192,24 +192,47 @@ export function cacheSessionDetail(
 // and `SubAgentBranch` both key off this single id instead of local component state.
 export const expandedTraceId = signal<string | null>(null)
 
-export function setExpandedTraceId(id: string | null): void {
-  expandedTraceId.value = id
-  // Drop every OTHER session's cached detail — the new id (if any) keeps its own
-  // entry if already loaded, everything else is evicted so at most one heavy
-  // subtree's data is resident.
-  const keep = id
+// A sub-agent branch renders INSIDE its parent session's mounted body (SubAgentBranch sits under
+// TurnGroup → TimelineWaterfall, which SessionBlock mounts only while it is itself expanded), so
+// the branch CANNOT share `expandedTraceId`: pointing that at the child's id collapses the parent
+// and unmounts the very branch that was just opened. The branch therefore gets its own id, scoped
+// within whichever session is expanded.
+export const expandedBranchId = signal<string | null>(null)
+
+// Drop every cached detail except the ids named. At most two are ever named — the expanded session
+// and the one branch open inside it — because a branch's ancestor MUST stay resident or the tree it
+// is drawn in no longer exists. Evicting the ancestor would also make it refetch on next render.
+function evictDetailExcept(keep: Array<string | null>): void {
+  const ids = [...new Set(keep.filter((k): k is string => k !== null))]
   const tl = sessionTimelines.value
   const fo = sessionFileOps.value
   const gf = sessionGeneratedFiles.value
-  const nextTl: Record<string, TimelineEntry[]> = keep && tl[keep] !== undefined ? { [keep]: tl[keep] } : {}
-  const nextFo: Record<string, FileOpSummary[]> = keep && fo[keep] !== undefined ? { [keep]: fo[keep] } : {}
-  const nextGf: Record<string, { files: GeneratedFileRef[]; truncated: boolean }> =
-    keep && gf[keep] !== undefined ? { [keep]: gf[keep] } : {}
+  const nextTl: Record<string, TimelineEntry[]> = {}
+  const nextFo: Record<string, FileOpSummary[]> = {}
+  const nextGf: Record<string, { files: GeneratedFileRef[]; truncated: boolean }> = {}
+  for (const id of ids) {
+    if (tl[id] !== undefined) nextTl[id] = tl[id]
+    if (fo[id] !== undefined) nextFo[id] = fo[id]
+    if (gf[id] !== undefined) nextGf[id] = gf[id]
+  }
   sessionTimelines.value = nextTl
   sessionFileOps.value = nextFo
   sessionGeneratedFiles.value = nextGf
   detailLRU.length = 0
-  if (keep) detailLRU.push(keep)
+  detailLRU.push(...ids)
+}
+
+export function setExpandedTraceId(id: string | null): void {
+  expandedTraceId.value = id
+  // Switching (or closing) the session invalidates whatever branch was open inside the old one —
+  // clearing it here is what stops a stale branch id keeping a dead session's data alive.
+  expandedBranchId.value = null
+  evictDetailExcept([id])
+}
+
+export function setExpandedBranchId(id: string | null): void {
+  expandedBranchId.value = id
+  evictDetailExcept([expandedTraceId.value, id])
 }
 
 // Request one generated file's content on expand (TRDD-ZS1GDXVY). Deduped: an in-flight/loaded path

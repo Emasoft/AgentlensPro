@@ -4,7 +4,7 @@ import {
   filteredSessions, sessionSummary, sessionTimelines, sessionCompositions, blobCache,
   focusedSessionId, vscode, cacheHitSliThreshold, callContexts,
   timelineMetric, timelineSortByValue, timelineGroupByTurn, sessionGeneratedFiles, timeRange,
-  expandedTraceId, setExpandedTraceId,
+  expandedTraceId, setExpandedTraceId, expandedBranchId, setExpandedBranchId,
 } from '../state'
 import { GeneratedFilesList } from '../GeneratedFilesView'
 import { CopyBranchButton } from '../CopyBranchButton'
@@ -1293,9 +1293,11 @@ function subAgentTotals(child: SessionSummaryCard): TurnTotals {
 // trace (loaded on demand via loadSessionDetail), so the sub-agent is BOTH inline-expandable AND
 // navigable to its own session (TRDD-TKN5VALS item 1).
 function SubAgentBranch({ child, sessIdx }: { child: SessionSummaryCard; sessIdx: number }) {
-  // Same single-expansion signal as SessionBlock — a sub-agent branch is just another
-  // node in the one leaf/branch/trace/session tree, so opening it collapses everything else.
-  const open = expandedTraceId.value === child.sessionId
+  // Branch-scoped signal, NOT the session's own: this component renders inside the parent
+  // SessionBlock's `!collapsed` body, so writing the child's id into `expandedTraceId` would
+  // collapse that parent and unmount this branch the instant it was opened. One branch at a
+  // time is still enforced — `expandedBranchId` holds exactly one id.
+  const open = expandedBranchId.value === child.sessionId
   const timelines = sessionTimelines.value
   const loaded = timelines[child.sessionId]
   const totals = subAgentTotals(child)
@@ -1310,7 +1312,7 @@ function SubAgentBranch({ child, sessIdx }: { child: SessionSummaryCard; sessIdx
 
   return (
     <div class="wf-turn-group" style="border-left:2px solid var(--vscode-charts-orange,#e2a03f);margin-left:6px">
-      <div class="wf-row wf-turn-row" onClick={() => setExpandedTraceId(open ? null : child.sessionId)}>
+      <div class="wf-row wf-turn-row" onClick={() => setExpandedBranchId(open ? null : child.sessionId)}>
         <div class="wf-label">
           <span class="sw-chevron">{open ? '▼' : '▶'}</span>
           <span class="wf-type-badge" style="background:var(--vscode-charts-orange,#e2a03f);color:#000" title="spawned sub-agent">↳</span>
@@ -1326,7 +1328,7 @@ function SubAgentBranch({ child, sessIdx }: { child: SessionSummaryCard; sessIdx
         <div class="wf-info" style="display:flex;gap:6px;align-items:center;justify-content:flex-end">
           <span style="color:var(--muted);font-size:9px">{child.model}</span>
           <button
-            onClick={e => { e.stopPropagation(); focusedSessionId.value = child.sessionId; setExpandedTraceId(child.sessionId) }}
+            onClick={e => { e.stopPropagation(); focusedSessionId.value = child.sessionId; setExpandedBranchId(child.sessionId) }}
             style="padding:1px 6px;font-size:9px;cursor:pointer;border-radius:3px;border:1px solid var(--border);background:transparent;color:var(--vscode-textLink-foreground,#4fc3f7)"
             title="focus this sub-agent session">open →</button>
           <CopyBranchButton card={child} />
