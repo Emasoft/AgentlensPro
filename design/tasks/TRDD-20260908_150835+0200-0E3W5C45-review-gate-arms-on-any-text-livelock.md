@@ -3,7 +3,7 @@ trdd-id: 0E3W5C45
 title: The review gate arms on any text block so idle and heartbeat turns livelock it
 column: ai_review
 created: 2026-09-08T15:08:35+0200
-updated: 2026-09-08T20:03:23+0200
+updated: 2026-09-08T20:07:18+0200
 current-owner: main-session
 task-type: bugfix
 min-approval-requirement: none
@@ -21,26 +21,35 @@ and its message and the 15:50 paragraph here described them wrongly (fourth revi
 accurate record: two pre-existing FAIL-OPEN shapes (a shell keyword in command position —
 `do|then|else|elif|{|}`, then `if|while|until|!` — released the `git commit` behind it; `xargs -0
 rm` took `-0` as the command), two WRONG REASON STRINGS that still armed (a heredoc commit with a
-bare `>` in its body reported a redirect — the segment pass now runs first; `echo x >| src/a`
-reported `redirect into |` — `>|` is glued), and one defect the `>|` fix itself INTRODUCED and the
+bare `>` in its body would report a redirect — traced by the round-2 review, not run; the segment
+pass now runs first; `echo x >| src/a` reported `redirect into |`, measured — `>|` is glued), and one defect the `>|` fix itself INTRODUCED and the
 review caught before commit (a quoted or escaped `>` glued a real pipe, so `echo "a>"| tee x`
 swallowed `tee`; glue now needs an unquoted `>`). The message's "a build chain passed with zero
 tests run" is FALSE: the chain file printed `chain_exit=1` and the `ReferenceError` in full; only
 the task-level exit was 0 because a trailing `echo` follows the chain. The true gotcha:
 `npx mocha --no-config <files>` drops ALL of `.mocharc.cjs` (`ui: tdd`, `require:
-src/test/setup.js`, `spec`, `timeout`), and WITHOUT `--no-config` the config's `spec` merges in
-and the whole suite runs; the exact line that runs the two suites alone is
+src/test/setup.js`, `spec`, `timeout`, `color`), and without `--no-config` the config's `spec:`
+key would pull the whole suite in (per the file's keys; not re-measured); the exact line that runs the two suites alone is
 `npx mocha --no-config --ui tdd --require src/test/setup.js out/test/test/reviewGate.test.js
 out/test/test/reviewGateTriggers.test.js` (57 passing at 15:50). The third fork (over those fixes)
 found one more fail-open, fixed in the commit after `3eb7683f`: xargs options with a SEPARATE value
 (`xargs -n 1 rm`, `-P 4`) released — the value is skipped only for xargs's value-taking options
 (`-n -P -L -I -E -d -s -a`), never generically, because `sudo -n` takes none and a generic skip eats
-the command (`sudo -n git status` is a PASS row for exactly that); its out-of-scope note is taken
-too: `find … -exec rm {} \;` and `find -delete` now arm (`rm via find -exec (targets unknown)`,
-`find -delete`). Still unmodelled, fail-open, by design: another wrapper's separate option value
-(`sudo -u x cmd`, `nice -n 10 cmd`), a redirect glued to a word (`cmd>file`; `cat "$F">|out`, whose
-quoted word the redirect pass skips), a script's own writes. `pnpm run check-identities` runs in
-the build chain from this round on — expected RED only on `DELEGATION.md` (TRDD-P46MEOXA).
+the command (`sudo -n git status` is a PASS row for exactly that); its out-of-scope note
+(`find … -exec rm {} \;` released) is taken too, and `find -delete` with it (my addition, not the
+fork's): `rm via find -exec (targets unknown)`, `find -delete`. **Fourth review (over that
+commit, `9ee081c5`):** only the FIRST `-exec` was classified and its command skipped the wrapper
+walk — `find . -exec ls {} \; -exec rm {} \;` and `find . -exec sudo rm {} \;` released; every
+`-exec` now goes through the shared `classifyCommand` walk (commit after `9ee081c5`). Still
+unmodelled, fail-open, by design: another wrapper's separate option value (`sudo -u x cmd`, `nice
+-n 10 cmd`), xargs long options (`--max-args 1`), a redirect glued to a word (`cmd>file`; `cat
+"$F">|out`, whose quoted word the redirect pass skips), a script's own writes. `pnpm run
+check-identities` runs in the build chain from this round on — RED only on `DELEGATION.md`
+(TRDD-P46MEOXA), measured 20:07. **Build-chain lesson (same review):** `set -e` inside a brace
+group exits the whole shell, so a red step leaves the capture file WITHOUT its trailing
+`chain_exit=` line — an absent line is not green; use a subshell `( set -e; … )` so the outer echo
+runs. And a bundle marker must be a LITERAL in the source: `via find -exec` is assembled from a
+template and grepping it reported 0 on a correct bundle.
 Review item NOT taken, deferred: a `runMainGate`-level test that the hook `cwd` reaches the scan —
 `reviewGate.test.ts` has no transcript fixture at all (grep 2026-09-08: zero `runMainGate` /
 `transcript_path` hits), so it is a new fixture, not a one-liner.

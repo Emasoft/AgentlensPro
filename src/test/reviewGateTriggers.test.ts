@@ -33,6 +33,8 @@ suite('review-gate triggers: write-shaped commands', () => {
     ['find . | xargs -n 1 rm', 'rm via xargs (targets unknown)'],  // a SEPARATE option value (third review)
     ['find . | xargs -P 4 rm', 'rm via xargs (targets unknown)'],
     ['find . -exec rm {} \\;', 'rm via find -exec (targets unknown)'],
+    ['find . -exec ls {} \\; -exec rm {} \\;', 'rm via find -exec (targets unknown)'],  // EVERY -exec (fourth review)
+    ['find . -exec sudo rm {} \\;', 'rm via find -exec (targets unknown)'],           // through the wrapper walk
     ['find . -name \'*.log\' -delete', 'find -delete'],
     ['echo "->"| tee notes.md', 'tee notes.md'],               // a quoted `>` must not glue the pipe
     ['git -c a=b commit -m x', 'git commit'],                   // `-c k=v` takes a value

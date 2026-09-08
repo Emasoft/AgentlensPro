@@ -132,10 +132,16 @@ function segmentWriteReason(base: string, args: string[], via: string | null, cw
   if (base === 'memgrep' && /-mem-/.test(args[0] ?? '')) return `memgrep ${args[0]}`
   // `find -exec <cmd>` runs <cmd> once per hit and `-delete` unlinks the hits: both are writes
   // the command word `find` hides (review 2026-09-08 — `find . -exec rm {} \;` released).
+  // EVERY `-exec`, each through the wrapper walk: `-exec ls {} \; -exec rm {} \;` and
+  // `-exec sudo rm` both released when only the first one's next word was classified.
   if (base === 'find') {
     if (args.includes('-delete')) return 'find -delete'
-    const e = args.findIndex((a) => /^-(exec|execdir|ok|okdir)$/.test(a))
-    return e >= 0 && args[e + 1] !== undefined ? segmentWriteReason(path.basename(args[e + 1]), args.slice(e + 2), 'find -exec', cwd) : null
+    for (let e = 0; e < args.length; e++) {
+      if (!/^-(exec|execdir|ok|okdir)$/.test(args[e])) continue
+      const r = classifyCommand(args.slice(e + 1).map((word) => ({ word, quoted: false })), 'find -exec', cwd)
+      if (r !== null) return r
+    }
+    return null
   }
   if (ALL_ARGS_ARE_TARGETS.includes(base) || LAST_ARG_IS_TARGET.includes(base)) {
     if (via !== null) return `${base} via ${via} (targets unknown)`
@@ -144,6 +150,30 @@ function segmentWriteReason(base: string, args: string[], via: string | null, cw
     return bad === undefined ? null : `${base} ${bad}`
   }
   return null
+}
+
+/** The command word of one segment (after wrappers, env assignments and a wrapper's own
+ *  options), classified. A quoted word in command position is not a command. */
+function classifyCommand(words: Word[], via: string | null, cwd: string): string | null {
+  let i = 0
+  let inWrapper = false
+  while (i < words.length && !words[i].quoted) {
+    const w = words[i].word
+    if (WRAPPERS.test(w) || /^[A-Za-z_][A-Za-z0-9_]*=/.test(w)) {
+      inWrapper = WRAPPERS.test(w)
+      if (w === 'xargs') via = 'xargs'
+    } else if (inWrapper && (w.startsWith('-') || w === '{}')) {
+      // a wrapper's own option (`xargs -0 rm`, `xargs -I {} rm {}`) — `-0` was taken as the
+      // command and released the rm. Only xargs's short value-taking options skip their SEPARATE
+      // value (`xargs -n 1 rm`); never generically — `sudo -n` takes none, and a generic skip
+      // would eat the command. Long forms (`--max-args 1`) and other wrappers' values
+      // (`sudo -u x cmd`, `nice -n 10 cmd`) are still taken as the command: unmodelled, fail-open.
+      if (via === 'xargs' && /^-[nPLIEdsa]$/.test(w)) i++
+    } else break
+    i++
+  }
+  if (i >= words.length || words[i].quoted) return null
+  return segmentWriteReason(path.basename(words[i].word), words.slice(i + 1).map((w) => w.word), via, cwd)
 }
 
 /** Why a shell command is a write, or null when its text shows only reads. Each segment's
@@ -158,26 +188,7 @@ export function commandWriteReason(cmd: string, cwd: string): string | null {
     else segments[segments.length - 1].push(w)
   }
   for (const seg of segments) {
-    let i = 0
-    let via: string | null = null
-    let inWrapper = false
-    while (i < seg.length && !seg[i].quoted) {
-      const w = seg[i].word
-      if (WRAPPERS.test(w) || /^[A-Za-z_][A-Za-z0-9_]*=/.test(w)) {
-        inWrapper = WRAPPERS.test(w)
-        if (w === 'xargs') via = 'xargs'
-      } else if (inWrapper && (w.startsWith('-') || w === '{}')) {
-        // a wrapper's own option (`xargs -0 rm`, `xargs -I {} rm {}`) — `-0` was taken as the
-        // command and released the rm. Only xargs's value-taking options skip their SEPARATE
-        // value (`xargs -n 1 rm`); never generically — `sudo -n` takes none, and a generic skip
-        // would eat the command. Other wrappers' values (`sudo -u x cmd`, `nice -n 10 cmd`) are
-        // still taken as the command: unmodelled, fail-open, like any unknown word.
-        if (via === 'xargs' && /^-[nPLIEdsa]$/.test(w)) i++
-      } else break
-      i++
-    }
-    if (i >= seg.length || seg[i].quoted) continue
-    const reason = segmentWriteReason(path.basename(seg[i].word), seg.slice(i + 1).map((w) => w.word), via, cwd)
+    const reason = classifyCommand(seg, null, cwd)
     if (reason !== null) return reason
   }
   for (let i = 0; i < words.length; i++) {
