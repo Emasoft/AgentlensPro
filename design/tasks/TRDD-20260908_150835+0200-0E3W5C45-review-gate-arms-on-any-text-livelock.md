@@ -3,7 +3,7 @@ trdd-id: 0E3W5C45
 title: The review gate arms on any text block so idle and heartbeat turns livelock it
 column: human_review
 created: 2026-09-08T15:08:35+0200
-updated: 2026-09-08T20:12:20+0200
+updated: 2026-09-08T20:16:24+0200
 current-owner: main-session
 task-type: bugfix
 min-approval-requirement: none
@@ -19,8 +19,8 @@ implementation-commits: []
 **20:12 — TO `human_review`.** Six review forks in this window over four commits (`b7a99cab`,
 `3eb7683f`, `9ee081c5`, `31912fc4`); the sixth found nothing that releases a write — one
 mislabelled reason (`find . -exec xargs rm` would report `via xargs`, not `via find -exec`, and
-still arm) and a nonsense-shell null (`find . -exec {} \;`), both TRACED by that fork, not run;
-left as is. What remains is the owner's: (1) apply the `PROPOSAL:` rule
+still arm) and a nonsense-shell null (`find . -exec {} \;`), both traced by that fork and then measured the same (20:15); left
+as is. What remains is the owner's: (1) apply the `PROPOSAL:` rule
 amendment (last acceptance row); (2) accept or reject the cooperative-marker trade for prose
 proposals; (3) TRDD-P46MEOXA for the `DELEGATION.md` identity hits. Not done and stated so: the
 per-trigger mutation sweep; a `runMainGate`-level cwd test. NEXT ACTION on resume: none until the
