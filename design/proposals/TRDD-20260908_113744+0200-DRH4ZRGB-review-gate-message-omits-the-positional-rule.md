@@ -8,7 +8,6 @@ current-owner: main-session
 task-type: bugfix
 scope: project
 min-approval-requirement: user
-eht: [W0ZTTUBA]
 ---
 
 # The review-gate block message omits the positional rule its own instruction violates
@@ -93,7 +92,12 @@ Both were right about the same turn: three `Write`/`Edit` calls landed with the 
 a *later* response, so the supervisor's counter read 3; and separately my prose sat after the
 fork, so the gate blocked. Recorded here so the next reader does not re-open it as a conflict.
 
-## Adjacent: the 4MB tail window — split out to TRDD-W0ZTTUBA
+## Adjacent: the 4MB tail window — TRDD-W0ZTTUBA (INDEPENDENT, not an EHT)
+
+Found alongside this card while reading `reviewGate.ts`; that is a discovery-moment relationship,
+not a causal one. W0ZTTUBA is pre-existing and fixing this card's message causes nothing it must
+handle, so it is deliberately NOT recorded as an `eht:` — that field would block this card from
+reaching `complete` on an unrelated, unreproduced fail-open.
 
 `decideMainGate` returns `block: false` when `lastWork === -1`, **before** consulting `lastFork`
 — a fail-open in a gate the owner ordered never bypassed. That is a different defect class from

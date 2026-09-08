@@ -8,7 +8,6 @@ current-owner: main-session
 task-type: bugfix
 scope: project
 min-approval-requirement: user
-parent-trdd: DRH4ZRGB
 ---
 
 # The review gate fails open when its 4MB tail window holds no arming block
@@ -42,7 +41,15 @@ The converse is benign by comparison. If the window drops the last fork while re
 arming prose, `lastFork` falls to `-1` and the gate blocks — recoverable, because the next
 fork-last turn lands at the highest index and clears it.
 
-## Sought on real data. NOT reproduced.
+## Sought on 2 of the 150 truncating transcripts. NOT reproduced.
+
+Two purposively-chosen points, not a survey: the most convenient (this session) and the most
+extreme (the largest file on the machine). The extreme point is the right one to try first — if
+truncation ever starves the window, a 545 MB transcript is where it should show — but 2 of 150 is
+what was measured, and a reader should weigh it as that.
+
+Related, independent card: TRDD-DRH4ZRGB (found in the same reading session; neither causes the
+other, so no `eht:`/`parent-trdd:` link between them).
 
 **Sample 1 — this session** (1,122,983 bytes, so `span === size` and **no truncation at all**):
 
