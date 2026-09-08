@@ -56,8 +56,24 @@ Spawn ONE adversarial reviewer with the Agent tool, \`subagent_type: "fork"\`, w
   for the variance, an assumed format for the real one);
 - asks it to name the single WEAKEST link and give ONE settling command for it.
 
-Then read its findings and act on them. Do NOT restate this directive to the user — spawn the
-fork and continue. This gate CANNOT be disabled — \`AGENTLENS_REVIEW_FORK=off\` is ignored.
+THE EXIT IS POSITIONAL, and this is the part that is easy to get wrong. The gate releases when
+the fork sits at a HIGHER transcript index than the last thing that armed it, and an assistant
+text block arms it. So:
+
+- put the fork \`tool_use\` LAST, in the SAME response as your user-visible text;
+- emit NOTHING after it — text after the fork re-arms the gate;
+- do NOT split the text and the fork across two responses. A fork-only response has no visible
+  output, the harness injects a complaint turn, and answering THAT complaint is what fires the
+  gate. Measured 2026-09-08: ten forks and ~2.4M subagent tokens went to this one mistake.
+
+A BACKGROUND fork's completion notification manufactures a fresh turn, that turn must emit text,
+and the text re-arms the gate — a self-sustaining loop that ends only on user input. Consume the
+fork in-turn (\`TaskOutput\` with \`block: true\`; it is not an arming block) so no notification
+is left to force the next turn.
+
+Then read its findings and act on them — in the NEXT turn, which is the earliest a report-out can
+happen without re-arming. Do NOT restate this directive to the user — spawn the fork and
+continue. This gate CANNOT be disabled — \`AGENTLENS_REVIEW_FORK=off\` is ignored.
 `
 
 interface ReviewGateInput {
@@ -439,7 +455,16 @@ export const MAIN_BLOCK_REASON = 'Review-fork gate: this turn edited or committe
   // has the Agent tool declared, so `agentCannotSpawn` never releases it, and before the sentinel
   // it had no exit whatsoever. Naming the escape in the message is half the fix — an escape nobody
   // is told about is not one.
-  + 'for the full directive, then act on the findings. If you CANNOT spawn one — rate-limited, at '
+  + 'for the full directive, then act on the findings. THE EXIT IS POSITIONAL: put the fork '
+  // The rule the blocked agent most needs was stated ONLY in the source comment above
+  // `scanMainTranscriptLines`, which that agent never reads. Measured 2026-09-08: a session
+  // spawned the fork and then reported to the user, so the report's text block took the higher
+  // index and re-armed the gate — ten forks and ~2.4M subagent tokens before the shape was
+  // read out of the source. An instruction whose correct execution is undocumented is a trap,
+  // not an instruction. (TRDD-DRH4ZRGB)
+  + 'tool_use LAST, in the SAME response as your user-visible text, and emit NOTHING after it: '
+  + 'any text block after the fork re-arms this gate, and splitting the text and the fork across '
+  + 'two responses is what makes that happen. If you CANNOT spawn one — rate-limited, at '
   + `a depth limit, tool denied — emit a text block whose ENTIRE content is "${NO_REVIEW_SENTINEL} `
   + '— <reason>", nothing after the reason; that is the only other way out.'
 
