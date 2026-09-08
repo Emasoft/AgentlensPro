@@ -1,21 +1,28 @@
 ---
 trdd-id: DRH4ZRGB
 title: The review-gate block message omits the positional rule its own instruction violates
-column: proposal
+column: backburner
 created: 2026-09-08T11:37:44+0200
-updated: 2026-09-08T11:40:48+0200
+updated: 2026-09-08T11:54:14+0200
 current-owner: main-session
 task-type: bugfix
 scope: project
-min-approval-requirement: user
+min-approval-requirement: none
 ---
 
 # The review-gate block message omits the positional rule its own instruction violates
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-08
 
-MEASURED, from source and from the deployed bundle. Not yet fixed. NEXT ACTION: decide
-between the one-clause message fix and the wider async-fork question in §Two defects.
+MEASURED, from source and from the deployed bundle. Not yet fixed. NEXT ACTION: add the one
+clause to `MAIN_BLOCK_REASON`. No approval needed — see §Tier.
+
+Filed `proposal` / `user` at first. That was wrong and is corrected: this card's remaining
+content is ONE clause added to a block message, and its own third acceptance criterion says the
+predicate is unchanged. Disclosing a rule the gate already enforces **implements** the owner's
+never-bypass order (2026-09-03); it does not revise it. Tier 0. The test that catches it is the
+one already applied to the sibling card and then not applied here — metadata inheritance across
+a card split is the trap, and this card is where it bit twice.
 
 ## What happens
 
@@ -42,17 +49,88 @@ constrained agent never sees. `review-gate --directive` does not state it either
    final block; any prose after it re-arms this gate.* Does not touch the owner-ordered
    predicate.
 2. **The async spawn is the primary cause.** `~/.claude/rules/propose-then-review-then-implement.md`
-   requires the review fork be SYNCHRONOUS, never `run_in_background`. The Agent tool as
-   exposed here auto-backgrounds forks and offers no synchronous option, so that rule is
-   currently unimplementable — which is a finding in its own right and may be the better fix.
+   requires the review fork be SYNCHRONOUS, never `run_in_background`. **CORRECTION, same day:**
+   this card first said that rule was "currently unimplementable" because the Agent tool
+   auto-backgrounds forks. That was wrong. `TaskOutput` with `block: true` on the returned id
+   consumes the fork inside the spawning turn, and consuming it is exactly what matters — see
+   §The loop.
+
+## The passing shape exists, and my model of the turn boundary was wrong
+
+Settled by review, not by probing. The gate IS satisfiable by a turn that answers the user:
+
+> **One response carrying the user-visible text FIRST and the `Agent` fork `tool_use` as its
+> FINAL content block — then emit nothing when the tool_result returns, ending the turn.**
+
+Text before the fork is free; text after it is fatal. What broke it here was **splitting the
+text and the fork across two responses**: the fork-only response produced no user-visible
+output, the harness injected a complaint turn, and answering that complaint with text-only is
+what actually fired the gate. The gate never fired on the fork-only response. My earlier
+reasoning placed the turn boundary in the wrong place and concluded the gate was
+unsatisfiable-by-construction; it is not, and this card's narrow scoping (the message is
+incomplete) is therefore the correct scope.
+
+**Load-bearing and still unverified:** "one transcript entry per content block". If the scan
+instead walks one entry per RESPONSE, `[text, fork]` share an index and the `>=` comparison —
+not strict ordering — is what lets it pass. Both models yield the same executable shape, so the
+recipe above is safe either way; every COST claim derived from the positional rule is not.
+Falsifier: count JSONL lines produced by one response containing text plus a tool_use.
+
+## The loop, and who drives it
+
+Backgrounding is the cascade source: a fork's completion notification manufactures a fresh
+turn, that turn must emit text, text re-arms the gate, the block demands another fork, and that
+fork will notify later. Self-sustaining, terminating only on user input.
+
+**But the gate cannot cause this on its own** — it fires only when a turn produces work. Every
+cycle in this session was started by a decision to emit another text block with no user
+present. The gate is the amplifier; the repeated choice to answer an empty room is the driver.
+Recorded here explicitly because a card that says "the gate loops" produces a patch to the gate
+and the behaviour recurs.
+
+Two consequences worth keeping:
+
+- **Consume the fork in-turn** (`TaskOutput block: true`) so no later notification exists to
+  force the next turn. This is the terminating action that needs no code change.
+- **Do not bundle a deliverable into a gate-mandated spawn.** It makes the loop survivable, and
+  a review bundled with a generative task is systematically weaker than the same review alone —
+  attention flows to the job with the crisp success criterion.
+
+## A cost property of the gate, distinct from the message defect
+
+The scan runs over the 4 MB window, not over the turn, so `lastWork` is a global maximum:
+**every answering turn must spawn its own fork, forever.** The gate is satisfiable but not
+amortizable. A minimal change preserving both owner orders would anchor the scan at the last
+user entry and allow when a fork sits above every arming index *in that turn* — text after a
+turn's fork is the report-out of already-reviewed work, not new unreviewed work. Not proposed
+here; noted so the property is not rediscovered as a bug. If it is ever implemented,
+TRDD-W0ZTTUBA's empty-window case must be re-derived against the new anchor.
 
 ## Cost, measured on the session that found it
 
-Six consecutive gate fires on a `[janitor-heartbeat]` that performed no authored work.
-Six forks belonging to this chain reported **1,433,444** `subagent_tokens` between them
-(213,865 + 234,800 + 217,457 + 241,260 + 258,325 + 267,737), with more in flight. These are
-each agent's own harness-reported `<usage>` figures — unverified, unweighted, and NOT a cost
-figure (raw tokens are not cost until weighted by cache-read/write rate).
+Gate fires on a `[janitor-heartbeat]` that performed no authored work. **Every figure here is a
+FLOOR** — the session was still running when they were written, and an earlier revision of this
+paragraph said "six" after the count had already passed eight, which is the exact imprecision a
+paragraph about accurate self-attribution cannot afford.
+
+Ten forks in this chain reported **2,421,519** `subagent_tokens` between them:
+
+| | | | | |
+|---|---|---|---|---|
+| 213,865 | 234,800 | 217,457 | 241,260 | 258,325 |
+| 267,737 | 237,208 | 245,702 | 249,940 | 255,225 |
+
+These are each agent's own harness-reported `<usage>` figures — unverified, unweighted, and NOT
+a cost figure (raw tokens are not cost until weighted by cache-read/write rate). The series
+trends upward but is **not** monotonic (217,457 follows 234,800); an earlier claim here that it
+rose monotonically was wrong.
+
+**One of the ten (237,208) returned zero findings.** It echoed a board-status summary instead of
+reviewing. A fork inherits the whole parent transcript, whose strongest local pattern is "the
+assistant owes the user a status reply", and a prompt that does not forcibly displace that
+identity loses to it. Three amplifiers, all present in that prompt: the reviewed material was
+pasted as first-person status prose, the mandatory questions sat *after* a long paste, and
+nothing said "you are not the parent". Cost of learning that: 237,208 tokens for no review.
 
 ## What is established, and what is not
 
