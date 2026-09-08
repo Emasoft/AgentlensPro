@@ -21,9 +21,72 @@ labels: [rust, memory, alcore, guard]
 
 # alcore exits with a culprit log rather than exceed a 2 GB memory cap
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-07 22:43
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-08 10:07
 
-**⛔ THE GUARD CANNOT FIRE ON macOS, AT ANY CAP — MEASURED 2026-09-07 22:35.** `rss_guard.rs::
+**⚠️ DO NOT DEPLOY THE FIXED GUARD WITHOUT AN OWNER DECISION — IT WILL CRASH-LOOP THE COLLECTOR.**
+Measured 2026-09-08 on the live pid 30984: `phys_footprint` is **10.9 GB**, peak **11.3 GB**, and
+it is **GROWING at ~0.37 GB/h**. Growth is not a two-point inference — *peak* footprint rose 7.9 →
+11.3 GB between readings, and peak is monotonic by construction, so the process genuinely reached
+levels it had never reached before. Against a 2 GB cap that is **5.5× over and climbing**, so the
+corrected guard would fire almost immediately after every start, on every restart, forever. The
+directive ("exit with error and a log identifying the culprit") is satisfied by that behaviour —
+which is exactly why the owner, not an agent, decides whether to arm it. Compounding it:
+`AGENTLENS_RSS_HARD_CAP_MB=0` falls back to 2048 (`filter(|v| *v > 0)`), so a lethal guard
+currently has **no disarm value**.
+
+**Where the 10.9 GB is** (dirty bytes — what the OS charges): IOAccelerator **2.8 GB** = the Rust
+mimalloc heap, corroborated independently (`otool -L` shows NO Metal/IOKit/CoreGraphics/IOSurface
+linked; the 63 regions are `SM=PRV` arena-shaped chunks, many exactly 128 MB, with no backing
+object — see the `vmmap-ioaccelerator-is-the-mimalloc-heap` memory page); MALLOC_SMALL+LARGE live
+**2.2 GB** = the C/C++ side; MALLOC_* **(empty) 1.44 GB** = allocator pages holding **no live
+object**. **The Rust heap is under half the total, so deleting `SpanWindow` cannot reach 2 GB on
+its own.** Explicitly NOT established: that the C/C++ 2.2 GB is DuckDB — the system malloc zones
+catch every non-Rust allocation (CoreFoundation, CoreServices, libc++ are all linked), so naming
+DuckDB would redirect the plan onto a possible minority. To settle it: `MIMALLOC_SHOW_STATS=1`
+pins the Rust side, `duckdb_memory()` self-reports, and the gap is everything else.
+
+**Best lead, cheap and structural-change-free:** the 1.44 GB in `(empty)` zones holds nothing live,
+and an earlier mimalloc `purge_delay=0` probe returned **1023.5 MiB of footprint in 200 ms while
+moving 0 RSS**. That was previously filed as a failure on the "0 RSS" reading — wrong reading: the
+guard keys on `phys_footprint`, which is precisely what purging returns. ~1 GB of the *guarded
+metric* may be recoverable by allocator tuning alone. Caveat: that probe touched the Rust arenas;
+the system zones need `malloc_zone_pressure_relief`, which is UNMEASURED.
+
+**Pointer fix: DONE on disk, NOT committed, NOT deployed.** 7/7 tests pass
+(`cargo test --release -p agentlens-core --lib rss_guard`) — but that was measured BEFORE the
+in-flight edits below, so it describes a tree that no longer exists. **Do NOT record the offsets as
+"pinned":** the oracle's `resident`-vs-`rss` comparison is tight and does catch a low-direction
+shift, but its `fp < hi * 4` bound is defeated by `ri_pageins` and both wkup counters, and the
+HIGH-direction shift (`resident` reading `ri_phys_footprint`) is caught ONLY by that leaky bound.
+**~~The commit is blocked~~ — UNBLOCKED 2026-09-08 10:16.** The E0061/E0277 pair (a live agent had
+changed `check_and_enforce` to 4 args while `lib.rs:694` still passed 3, and `lib.rs:696` passed a
+`&PathBuf` where a closure is expected) is fixed: the call site now builds `log_path` and
+`snapshot` as owned locals BEFORE the `|| self.writer.flush()` closure, so the closure's `&mut
+self.writer` capture never overlaps the immutable `&self.window`/`&self.cards`/`&self.writer`
+borrows that build the snapshot. All 9 `CulpritSnapshot` fields survive. `cargo check -p
+agentlens-core` → **exit 0, 0 errors** (my own run, captured to file, not the worker's claim).
+
+**Still unapplied:** an adversarial review of the new tests found 4 accepted defects (three of which
+fire with a *wrong culprit*); they are recorded at
+`reports/rss-guard-review/20260908_001500+0200-oracle-review-findings.md`. Compiling is not the same
+as sound — those defects stand.
+
+**One call site is MISSING from the seven-row table below** (found 2026-09-08, TRDD-DKBGT7MQ):
+`body_archive.rs:135` calls `open_store(…, agentlens_store::DEFAULT_MEMORY_LIMIT, threads)`, and
+`agentlens-store/src/lib.rs:42` is `pub const DEFAULT_MEMORY_LIMIT: &str = "8GB"` — **4× the
+proposed cap in a single ceiling**, where every other site is ≤2 GB. Whether `body_archive` runs
+inside the resident alcore server (as `chores.rs:288` does) is NOT established; check that before
+the row carries any weight. The same card's "budgets sum to 19.25 GB" framing is **withdrawn** —
+see its STATE block; it is this section's already-retracted stronger form, re-published from a
+compaction summary.
+
+**Still unproven — the directive's actual deliverable:** what the culprit log prints on a real
+breach has never executed anywhere. A forced breach on an empty store prints zeros that prove
+nothing; it needs a probe against a copy of real data.
+
+---
+
+**⛔ (RESOLVED — fix on disk, see above) THE GUARD CANNOT FIRE ON macOS, AT ANY CAP — MEASURED 2026-09-07 22:35.** `rss_guard.rs::
 phys_footprint_bytes()` passes the wrong pointer level to `proc_pid_rusage`. XNU's callers pass
 `(rusage_info_t *)&struct` — `rusage_info_t*` is an OPAQUE HANDLE type, not a real double
 indirection, and the kernel writes the flavor's struct AT that address. The code instead builds

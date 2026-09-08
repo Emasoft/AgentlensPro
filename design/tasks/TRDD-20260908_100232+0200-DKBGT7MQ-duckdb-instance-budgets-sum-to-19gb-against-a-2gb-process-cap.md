@@ -21,19 +21,48 @@ labels: [rust, memory, alcore, duckdb]
 
 # DuckDB instance budgets sum to 19.25 GB against a 2 GB process cap
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-08
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-08 10:15
 
-**NOT STARTED.** Carded the moment the arithmetic was verified.
+**⚠️ THIS CARD WAS AUTHORED REDUNDANTLY AND ITS ORIGINAL FRAMING WAS THE RETRACTED ONE.** Read
+TRDD-WKLD508O's STATE section *"THE CAP AND THE DuckDB BUDGETS CANNOT BOTH BE 2048 MB — but
+'unreachable by construction' over-claimed it"* first; it is the authority and it is better
+calibrated than the body below. I wrote this card after a compaction, from a summary, without
+reading WKLD508O's STATE block — the exact failure the compaction warning names.
 
-This card exists because TRDD-KBM09XHB and TRDD-WKLD508O were both aimed at `SpanWindow`, and
-`SpanWindow` is measurably NOT where the memory is (the live process self-reported **397 spans**
-while holding **5.4 GB** of physical footprint). This card names the ceiling that makes 5.4 GB
-possible.
+**What WKLD508O already established, and what I published anyway:**
 
-**What is VERIFIED here is a CEILING, not a measurement.** The limits below are what the code
-PERMITS. Nothing in this card proves DuckDB is currently holding those bytes — that still needs
-heap attribution. The verified claim is narrower and sufficient to act on: *nothing in the current
-configuration prevents a 2 GB breach, and one instance alone is permitted 4× the whole cap.*
+- WKLD508O: *"What is proven is the absence of a BOUND, not the presence of a BREACH."* I led my
+  report to the owner with "found where the 2 GB cap actually breaks" — the retracted stronger form.
+- WKLD508O: *"Exactly ONE connection is resident — `CardStore.conn` at 256 MiB. Every 2 GB site is
+  per-call or per-pass, so the 4 GB figure needs two transient connections to coincide, which I
+  inferred from 'both exist' and never showed happens."* A 19.25 GB **sum** is that same inference,
+  eight-fold. **The sum is not a quantity this process can hold; it is the total of ceilings that
+  are mostly never concurrent.** Do not quote it.
+- WKLD508O: `card_store.rs:131` is `Connection::open(cards.duckdb)` — a FILE-backed connection, and
+  the only resident one. My table called it `open_in_memory()`. Wrong on the single most important
+  row.
+- WKLD508O also records the honest limits I omitted: a `memory_limit` is a **ceiling, not a
+  reservation**, and it governs DuckDB's **buffer manager**, not every allocation DuckDB makes.
+
+**The measured breakdown, which this card ignored and which does NOT point at DuckDB** (WKLD508O,
+first-hand, live pid 30984): footprint **10.9 GB**, peak **11.3 GB**, growing **~0.37 GB/h** — not
+the 5.4 GB this card was written against. Of the dirty bytes: IOAccelerator **2.8 GB = the Rust
+mimalloc heap**; MALLOC_SMALL+LARGE live **2.2 GB** = the C/C++ side; MALLOC_* **(empty) 1.44 GB
+holding no live object at all**. WKLD508O states explicitly: *"NOT established: that the C/C++
+2.2 GB is DuckDB — the system malloc zones catch every non-Rust allocation."* The largest single
+identified share is the **Rust** heap, and the cheapest GB is the 1.44 GB of empty allocator pages.
+
+**What survives from this card, and it is ONE row:** `body_archive.rs:135` calls
+`open_store(…, agentlens_store::DEFAULT_MEMORY_LIMIT, threads)` where `agentlens-store/src/lib.rs:42`
+is `pub const DEFAULT_MEMORY_LIMIT: &str = "8GB"`. That site is **not in WKLD508O's seven-row table**,
+and 8 GB is 4× the proposed cap in a single ceiling. Whether `body_archive` runs inside the resident
+alcore server (as `chores.rs:288` does) is **NOT established here** and must be checked before the
+row means anything.
+
+**The card remains open as a work item** — "size the process cap and the DuckDB budgets together"
+is real, and WKLD508O says so too (*"the cap and the DuckDB limits have to be sized together, or
+the guard fires on correct, in-spec behaviour"*). What is withdrawn is the framing that this is
+where the memory IS.
 
 ## WHY
 

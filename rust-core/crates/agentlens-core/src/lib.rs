@@ -691,20 +691,33 @@ pub fn rss_budget_bytes() -> u64 {
         // needs it, but the hard cap must not be keyed on a pre-valve reading, or on the RSS path
         // it cannot see the only thing that makes the breach meaningful: still over AFTER the cut.
         // On macOS this closure is never called; the footprint syscall answers first.
+        // Snapshot fields are read into owned locals BEFORE the flush closure below, so the
+        // closure's `&mut self.writer` capture (Rust 2021 disjoint field capture) never overlaps
+        // an outstanding `&self.writer`/`&self.window`/`&self.cards` borrow from building the
+        // snapshot — those borrows are already done by the time the closure is constructed.
+        let log_path = self.data_dir.join("rss-hard-cap.log");
+        let snapshot = rss_guard::CulpritSnapshot {
+            cap_bytes: rss_guard::rss_hard_cap_bytes(),
+            resident_spans: Some(self.window.spans.len()),
+            window_effective_ms: Some(self.window.effective_ms),
+            window_configured_ms: Some(self.window.configured_ms),
+            card_count: Some(self.cards.len()),
+            span_store_segments: Some(self.writer.stats().0),
+            span_store_total_spans: Some(self.writer.stats().1),
+            span_store_total_bytes: Some(self.writer.stats().2),
+            uptime_ms: Some(now_ms - self.started_at_ms),
+        };
         rss_guard::check_and_enforce(
             crate::server_stats::rss_bytes,
-            &self.data_dir.join("rss-hard-cap.log"),
-            rss_guard::CulpritSnapshot {
-                cap_bytes: rss_guard::rss_hard_cap_bytes(),
-                resident_spans: Some(self.window.spans.len()),
-                window_effective_ms: Some(self.window.effective_ms),
-                window_configured_ms: Some(self.window.configured_ms),
-                card_count: Some(self.cards.len()),
-                span_store_segments: Some(self.writer.stats().0),
-                span_store_total_spans: Some(self.writer.stats().1),
-                span_store_total_bytes: Some(self.writer.stats().2),
-                uptime_ms: Some(now_ms - self.started_at_ms),
+            // `exit()` skips destructors — buffered span-store appends not yet flushed to disk
+            // would be lost silently at the exact moment this guard exists to prevent silent
+            // loss, so flush them first. Called only on breach (check_and_enforce runs this
+            // AFTER confirming the cap is exceeded), never on every 5s tick.
+            || {
+                self.writer.flush();
             },
+            &log_path,
+            snapshot,
         );
         if narrowed {
             // Said out loud: a silently shrinking window looks identical to "no traffic", and the
