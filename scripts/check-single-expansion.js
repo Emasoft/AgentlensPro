@@ -86,7 +86,7 @@ let checked = 0
 for (const rule of RULES) {
   const abs = override ?? path.join(ROOT, rule.file)
   if (!fs.existsSync(abs)) {
-    console.error(`check-single-expansion: FAIL — ${rule.file} does not exist (rule is stale)`)
+    console.error(`check-single-expansion: FAIL — ${abs} does not exist (rule is stale)`)
     failures++
     continue
   }
@@ -94,7 +94,7 @@ for (const rule of RULES) {
   const body = componentBody(src, rule.component)
   if (body === null) {
     console.error(
-      `check-single-expansion: FAIL — ${rule.component} not found in ${rule.file}. ` +
+      `check-single-expansion: FAIL — ${rule.component} not found in ${abs}. ` +
         'It was renamed or removed; update or delete this rule deliberately rather than ' +
         'letting the check pass vacuously.'
     )
@@ -104,7 +104,7 @@ for (const rule of RULES) {
   if (body === false) {
     console.error(
       `check-single-expansion: FAIL — ${rule.component} is the last function-declared component ` +
-        `in ${rule.file}, so its slice would run to EOF and this rule would blame it for every ` +
+        `in ${abs}, so its slice would run to EOF and this rule would blame it for every ` +
         'symbol in the rest of the file. Move a function-declared component below it, or replace ' +
         'the slicer with a real brace-matcher. Failing loudly beats a wrong-culprit message.'
     )
@@ -115,7 +115,7 @@ for (const rule of RULES) {
     // Word-boundary match so `expandedBranchId` never trips a rule about `expandedTraceId`.
     if (new RegExp(`\\b${symbol}\\b`).test(body)) {
       console.error(
-        `check-single-expansion: FAIL — ${rule.component} (${rule.file}) references ${symbol}.\n` +
+        `check-single-expansion: FAIL — ${rule.component} (${abs}) references ${symbol}.\n` +
           `  ${rule.reason}`
       )
       failures++
