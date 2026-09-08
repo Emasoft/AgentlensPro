@@ -3,7 +3,7 @@ trdd-id: WKLD508O
 title: alcore exits with a culprit log rather than exceed a 2 GB memory cap
 column: dev
 created: 2026-09-07T19:36:46+0200
-updated: 2026-09-07T22:23:24+0200
+updated: 2026-09-08T22:53:00+0200
 current-owner: main
 task-type: feature
 parent-trdd: 7YPQWKPG
@@ -13,7 +13,7 @@ severity: high
 blocked-by: []
 npt: []
 eht: []
-implementation-commits: [466775af, f9776548, c0537ef4]
+implementation-commits: [466775af, f9776548, c0537ef4, 97c5123f, 17ce33a1, 3ec4bcf5, 93fca3e7, 6091ce1f]
 project-id: agentlenspro
 scope: project
 labels: [rust, memory, alcore, guard]
@@ -21,9 +21,29 @@ labels: [rust, memory, alcore, guard]
 
 # alcore exits with a culprit log rather than exceed a 2 GB memory cap
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-08 10:07
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-08 22:53
 
-**⚠️ DO NOT DEPLOY THE FIXED GUARD WITHOUT AN OWNER DECISION — IT WILL CRASH-LOOP THE COLLECTOR.**
+**22:53 — THE NEXT ACTION BELOW IS DONE; the guard now fires.** The `proc_pid_rusage` pointer fix
+landed (`97c5123f`, `17ce33a1`), the breach path and the `<=` boundary are tested (`3ec4bcf5`,
+`93fca3e7`, `6091ce1f`; 6 integration + 7 unit tests green), and the REBUILT binary
+(`rust-core/target/release/alcore`, 22:43) was probed in isolation: cap 1 MB → exit 1 at 14 ms
+uptime with the culprit log written; cap 512 MB control → stayed up and answered
+`/api/server-stats`. Report: `reports/trdd-wkld508o/20260908_224712+0200-isolated-rss-guard-probe.md`.
+**NOT DEPLOYED.** `bin-native/darwin-arm64/alcore` is still the 2026-09-07 22:21 build (guard inert).
+Two things changed the deploy question since 10:07: (1) the OWNER RULED 2026-09-08 22:41 that the
+DuckDB budget is 2 GB and DuckDB is the only memory (TRDD-DKBGT7MQ) — a guard that exits at 2 GB
+with a culprit log is now the specified behaviour, not a hazard to be gated; (2) the real collector
+on `~/.agentlens` is crash-looping at boot for an unrelated reason (TRDD-5JZQFVO8, card-store OOM
+in the restore transaction), so the 10.9 GB figure below is from a process shape that no longer
+boots. The deploy therefore rides with the 5JZQFVO8 fix in one rebuilt binary: after that lands,
+an isolated boot on a copy of the real snapshot measures the footprint FIRST; if it sits under
+2 GB the deploy is routine, if it does not, the culprit log is exactly the evidence the owner asked
+for. `AGENTLENS_RSS_HARD_CAP_MB` still has no disarm value (0 → 2048); a large value raises it.
+NEXT ACTION: wait for TRDD-5JZQFVO8's fix + isolated real-snapshot boot, then deploy both
+(`cp` + `codesign -s - --force` + `agentlenspro server restart`) after stopping any test-leaked
+squatter on the canonical ports (TRDD-YGEV6QDD), and read what the culprit log prints, if it does.
+
+**⚠️ (SUPERSEDED 22:53 — see above) DO NOT DEPLOY THE FIXED GUARD WITHOUT AN OWNER DECISION — IT WILL CRASH-LOOP THE COLLECTOR.**
 Measured 2026-09-08 on the live pid 30984: `phys_footprint` is **10.9 GB**, peak **11.3 GB**, and
 it is **GROWING at ~0.37 GB/h**. Growth is not a two-point inference — *peak* footprint rose 7.9 →
 11.3 GB between readings, and peak is monotonic by construction, so the process genuinely reached

@@ -1,9 +1,9 @@
 ---
 trdd-id: B07NR7ZI
 title: The hook installer emits a 30 s ceiling on every AgentlensPro hook entry
-column: dev
+column: ai_review
 created: 2026-09-08T22:41:54+0200
-updated: 2026-09-08T22:41:54+0200
+updated: 2026-09-08T22:53:00+0200
 current-owner: main
 task-type: infra
 min-approval-requirement: none
@@ -12,7 +12,7 @@ severity: medium
 blocked-by: []
 npt: []
 eht: []
-implementation-commits: []
+implementation-commits: [a2303f91]
 project-id: agentlenspro
 scope: project
 labels: [hooks, installer, settings, timeout]
@@ -21,12 +21,17 @@ relevant-rules: []
 
 # The hook installer emits a 30 s ceiling on every AgentlensPro hook entry
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-08
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-08 22:53
 
-NEXT ACTION: a background worker is implementing + verifying the fix (check-types, eslint,
-mocha `cliMatchers`, esbuild, `--install-hooks`, `setup --dry-run`); a report will land under
-`reports/hook-timeout-30/`. Read that report before closing this card, then verify the
-acceptance boxes directly.
+LANDED in `a2303f91`: `HOOK_TIMEOUT_SEC = 30` drives all four builders; `cliMatchers.test.ts` pins
+the constant and asserts every builder emits it. Coordinator re-ran the scoped test (13 passing),
+rebuilt the bundle (`HOOK_TIMEOUT_SEC` present 5×), and the live settings.json shows 30 on every
+agentlens entry; `--install-hooks` reported nothing to change and `setup --dry-run` reported the
+registrations current. Report: `reports/hook-timeout-30/20260908_224450+0200-installer-ceiling-30s.md`.
+One claim was softened before commit: whether the OLD builders (10/20) would have reverted the
+live 30 on the next rebuild was never measured — the code comment says so.
+NEXT ACTION: the Stop-time adversarial review of `a2303f91`; then supersede memory atom
+ATOM-5WTK-6YPU (it still says 10 s / 20 s) and close.
 
 ## Why
 
