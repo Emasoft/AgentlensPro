@@ -3,7 +3,7 @@ trdd-id: DKBGT7MQ
 title: Eight independent DuckDB instances each carry their own buffer-pool limit and they sum to 19.25 GB against a 2 GB process cap
 column: todo
 created: 2026-09-08T10:02:32+0200
-updated: 2026-09-08T10:02:32+0200
+updated: 2026-09-08T10:18:10+0200
 current-owner: main
 task-type: bugfix
 parent-trdd: 7YPQWKPG
