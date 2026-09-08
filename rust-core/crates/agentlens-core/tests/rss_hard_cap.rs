@@ -47,10 +47,13 @@ fn tmp_log(tag: &str) -> std::path::PathBuf {
 ///  - **flush vs. log-write ordering.** Moving `flush_before_exit()` to after `write_log_file()`
 ///    keeps every assertion green. (The sentinel DOES prove the flush ran before `exit` — a flush
 ///    ordered after `exit` never runs at all — but nothing here pins it before the log write.)
-///  - **the cap boundary.** `if metric_bytes <= cap { return; }` flipped to `<` stays green: this
-///    test uses cap 0 against a positive metric and `under_cap_is_a_no_op` uses cap 2048 MB
-///    against 1 GB, so neither sits near the boundary. An off-by-one at the cap is the most
-///    likely future regression in that function and no test can currently see it.
+///  - ~~**the cap boundary.**~~ CLOSED by `cap_boundary_is_inclusive_metric_equal_to_cap_is_a_no_op`
+///    below. The note that stood here was measured-true but explained wrong, so it is kept as a
+///    warning: it said the `<=`→`<` flip survives because neither test "sits near the boundary",
+///    implying the fix was to test CLOSER to the cap. That is false and would have produced
+///    another blind test — the flip changes behaviour for exactly ONE input, `metric == cap`, so a
+///    test at `cap - 1` is as blind as one at `cap / 2`. Distance is irrelevant; only the exact
+///    value discriminates.
 ///
 /// Also platform-scoped: on non-macOS the metric comes from the constant fallback closure below,
 /// so the breach BRANCH is exercised everywhere but the real memory reading only on macOS.
@@ -117,8 +120,8 @@ fn breach_flushes_writes_the_culprit_log_and_exits_1() {
         Some(0) => "the child exited 0 — the guard ran but did not exit with ERROR, which is the \
                     directive's actual requirement",
         Some(_) => "the child exited with an unexpected non-zero code — not the guard's exit(1)",
-        None => "the child was killed by a signal (see stderr); on macOS an unsigned or replaced \
-                 binary is SIGKILLed before main",
+        None => "the child was killed by a signal (see stderr) — SIGKILL under memory pressure, or \
+                 a crash inside the guard itself",
     };
     assert_eq!(
         out.status.code(), Some(1),
@@ -139,6 +142,41 @@ fn breach_flushes_writes_the_culprit_log_and_exits_1() {
 
     let _ = std::fs::remove_file(&log);
     let _ = std::fs::remove_file(&sentinel);
+}
+
+/// THE `<=` BOUNDARY — the one input no other test in this file supplies. `check_and_enforce`
+/// returns when `metric_bytes <= cap`, so the cap is INCLUSIVE: sitting exactly AT it is not a
+/// breach. Flipping that to `<` changes behaviour for exactly ONE value, `metric == cap`, and
+/// measured 2026-09-08 all six other tests stay green under that flip. Testing "closer to the cap"
+/// would not have helped — only the exact value discriminates.
+///
+/// The detector is the flush closure panicking, not the log assertion: `flush_before_exit()` runs
+/// FIRST on the breach path, so under the mutation this fails by unwinding with a clear message
+/// rather than reaching `std::process::exit(1)` and killing the whole test runner.
+///
+/// **NOT COMPILED ON macOS, and that gate is load-bearing — MEASURED, not assumed.** Ungated, this
+/// test passes on macOS *under the mutation* (verified 2026-09-08: `<=`→`<`, boundary test green).
+/// `primary_metric` reads the process's real phys_footprint there and IGNORES the fallback closure,
+/// so the metric is ~2.4 MB against a 4 GiB cap — under the cap, never AT it, and the test silently
+/// degrades into a duplicate of `under_cap_is_a_no_op_and_writes_no_log`. On the fallback path the
+/// closure IS the metric, so `cap == fallback` is exact and the assertion discriminates.
+///
+/// Consequence worth stating plainly: this test has NEVER RUN in its discriminating form on the
+/// development machine. Its first real execution is Linux CI. Gating it is still right — a test
+/// that is green-but-blind on the platform you develop on is worse than one that is absent there,
+/// because the green is mistaken for coverage.
+#[cfg(not(target_os = "macos"))]
+#[test]
+fn cap_boundary_is_inclusive_metric_equal_to_cap_is_a_no_op() {
+    let log = tmp_log("boundary");
+    const AT_CAP: u64 = 4 * 1024 * 1024 * 1024;
+    check_and_enforce(
+        || AT_CAP,
+        || panic!("flush must NOT run when the metric merely EQUALS the cap — the cap is inclusive"),
+        &log,
+        snap(AT_CAP),
+    );
+    assert!(!log.exists(), "metric == cap is not a breach; no culprit log may be written");
 }
 
 #[test]
