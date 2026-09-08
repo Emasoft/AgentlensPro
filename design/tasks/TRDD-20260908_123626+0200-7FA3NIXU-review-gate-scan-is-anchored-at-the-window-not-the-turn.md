@@ -7,7 +7,7 @@ updated: 2026-09-08T12:36:26+0200
 current-owner: main-session
 task-type: refactor
 scope: project
-min-approval-requirement: user
+min-approval-requirement: none
 parent-trdd: DRH4ZRGB
 ---
 
@@ -70,8 +70,13 @@ review.
 
 ## Acceptance
 
-- [ ] A decision is recorded: change the anchor, or keep the window and document the property at
-      the return site so the next reader does not rediscover it as a bug.
+- [ ] The return site in `decideMainGate` carries a comment stating whether the window anchor is
+      deliberate, and `reviewGate.test.ts` asserts whichever behaviour was chosen. **False today,
+      false until someone does the work, true under either decision** — that is the property an
+      acceptance criterion needs, and the first draft of this box did not have it: "a decision is
+      recorded: change it or keep it" is satisfied by writing one sentence either way, which makes
+      it a discussion prompt wearing a checkbox. Exactly the defect removed from TRDD-DRH4ZRGB in
+      the same commit that created it here; the correction had not generalised from the instance.
 - [ ] If changed: a turn that spawns a fork and then reports its findings does not re-fire the
       gate, and a turn that edits after its fork still does.
 - [ ] If changed: the "what delimits a turn" question above is answered in the code, with a

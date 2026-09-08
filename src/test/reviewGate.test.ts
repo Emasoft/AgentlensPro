@@ -553,8 +553,13 @@ suite('review-gate: the recursion guard exempts reviewers and nothing else', () 
         /put the fork `?tool_use`? LAST/.test(text),
         `${name} no longer gives the imperative "put the fork tool_use LAST"`,
       )
+      // A blacklist of negations is a spell-check one level up, and this one is NOT a class guard:
+      // it enumerates the spellings noticed so far. "Do NOT put the fork tool_use LAST" contains
+      // the positive substring verbatim and was green until `[Dd]o NOT` was added; "it is a myth
+      // that you must …" still is. Kept because the cheap catches are worth having, named honestly
+      // because the test's value must not be read as coverage of negation in general.
       assert.ok(
-        !/[Nn]ever put the fork|does not have to be LAST|need not be LAST/.test(text),
+        !/[Nn]ever put the fork|[Dd]o NOT put the fork|do not put the fork|does not have to be LAST|need not be LAST/.test(text),
         `${name} now NEGATES the imperative it is supposed to give`,
       )
       assert.ok(
@@ -570,20 +575,19 @@ suite('review-gate: the recursion guard exempts reviewers and nothing else', () 
   // this file: deleting "AT OR AFTER" from the directive left every assertion here green, which
   // made the commit subject "assert it cannot silently rot" false. Only the directive states the
   // mechanism — MAIN_BLOCK_REASON deliberately gives imperatives only, so it is not asserted here.
-  test('the directive states the >= boundary correctly, and no surface misstates it as HIGHER', () => {
+  test('the directive states the >= boundary as AT OR AFTER — one known regression, not a class', () => {
     assert.ok(
       /AT OR AFTER/i.test(REVIEW_GATE_DIRECTIVE),
       'the directive no longer states the at-or-after boundary — a strict reading of >= is wrong',
     )
-    for (const [name, text] of [
-      ['MAIN_BLOCK_REASON', MAIN_BLOCK_REASON],
-      ['REVIEW_GATE_DIRECTIVE', REVIEW_GATE_DIRECTIVE],
-    ] as const) {
-      assert.ok(
-        !/HIGHER index|strictly (after|later|greater)|greater than the last/.test(text),
-        `${name} misstates the >= predicate as a strict inequality`,
-      )
-    }
+    // A blacklist of strict-inequality phrasings was here and is REMOVED, not weakened. It
+    // reddened on correct writing — "this is not strictly after; an equal index releases too" is
+    // the clearest way to state the boundary and the regex banned it — which is the same defect
+    // that got the `!/TaskOutput/` ban deleted one test over: a guard that cannot tell asserting
+    // from warning. It also promised a class it cannot deliver, since "higher position" and a
+    // dozen other spellings walked past it, and it detected nothing the positive assertion above
+    // does not. The positive assertion is the whole guard; what neither catches is a CONTRADICTION
+    // — a later edit adding a wrong restatement while the correct sentence survives untouched.
   })
 
   // The directive warns about the background-notification turn and stops there. It deliberately

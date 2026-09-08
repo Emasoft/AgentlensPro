@@ -209,8 +209,12 @@ a changelog line wearing a checkbox. It was briefly added and ticked in one edit
 spell-checks — `!/HIGHER/` catches one English word while "strictly after", "greater than" and
 "must come later than" express the same wrong strict inequality and all passed; and
 `/fork[\s\S]{0,80}LAST/` was co-occurrence, negation-blind, green on "Never put the fork tool_use
-LAST". Measured: deleting "AT OR AFTER" from the directive left every assertion green, which made
-`4521dea7`'s own subject ("assert it cannot silently rot") false. Now: the boundary phrase is
+LAST". **? INFERRED, not measured** — deleting "AT OR AFTER" from the directive would have left
+every assertion green, read off the four regexes (none referenced the phrase); the deletion was
+never actually performed and the old assertions never re-run against it. The conclusion is almost
+certainly right, which is exactly why filing it under "Measured" was wrong: a correct claim
+certified by a method that was not used is indistinguishable, to a later reader, from the measured
+figures beside it. It made `4521dea7`'s own subject ("assert it cannot silently rot") false. Now: the boundary phrase is
 asserted POSITIVELY, the imperative is matched as a phrase with negation guards, the
 `!/TaskOutput/` policy-as-CI test is replaced by a positive assertion on the consequence sentence
 (a bare ban also fires on a sentence *warning* against it, and warning requires naming), and the

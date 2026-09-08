@@ -138,3 +138,15 @@ Options 2 and 3 do not.
 - [ ] `lastWork === -1` no longer allows a stop *silently* — it either blocks, widens, or is
       documented as a deliberate accepted risk at the return site.
 - [ ] Whichever is chosen, a test covers the empty-window input.
+
+**Before changing anything, read this — the test that will break is SUPPOSED to break.**
+`src/test/reviewGate.test.ts` carries a PASSING test named *"decideMainGate fails OPEN on an empty
+window — pinned, not endorsed"*, asserting today's behaviour: `lastWork === -1` releases whatever
+`lastFork` holds. **That test failing IS this card landing.** It is not a regression and must be
+updated in the same commit, never worked around.
+
+The pin exists so a change to the fail-open shows up in the suite rather than only in prose — but
+the cross-reference was one-directional until now: the test cited this card, this card did not
+cite the test, and whoever breaks it will be working from the card. A green test whose name
+asserts a defect reads as *specified behaviour* to every tool and every reader scanning output.
+This paragraph is the only thing that says otherwise.
