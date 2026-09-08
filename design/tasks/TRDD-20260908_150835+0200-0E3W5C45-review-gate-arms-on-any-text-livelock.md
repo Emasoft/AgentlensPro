@@ -1,9 +1,9 @@
 ---
 trdd-id: 0E3W5C45
 title: The review gate arms on any text block so idle and heartbeat turns livelock it
-column: ai_review
+column: human_review
 created: 2026-09-08T15:08:35+0200
-updated: 2026-09-08T20:07:18+0200
+updated: 2026-09-08T20:12:20+0200
 current-owner: main-session
 task-type: bugfix
 min-approval-requirement: none
@@ -14,7 +14,16 @@ implementation-commits: []
 
 # The review gate arms on any text block so idle and heartbeat turns livelock it
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-08 20:03
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-08 20:12
+
+**20:12 — TO `human_review`.** Five review forks over four commits (`b7a99cab`, `3eb7683f`,
+`9ee081c5`, `31912fc4`); the fifth found nothing that releases a write — one mislabelled reason
+(`find . -exec xargs rm` reports `via xargs`, not `via find -exec`; it arms) and a nonsense-shell
+null (`find . -exec {} \;`); left as is. What remains is the owner's: (1) apply the `PROPOSAL:` rule
+amendment (last acceptance row); (2) accept or reject the cooperative-marker trade for prose
+proposals; (3) TRDD-P46MEOXA for the `DELEGATION.md` identity hits. Not done and stated so: the
+per-trigger mutation sweep; a `runMainGate`-level cwd test. NEXT ACTION on resume: none until the
+owner rules; a fresh idle-turn livelock would be the only reason to reopen.
 
 **20:03 — THIRD REVIEW ROUND + RECORD CORRECTED.** Commit `3eb7683f` carried the follow-up fixes,
 and its message and the 15:50 paragraph here described them wrongly (fourth review fork); the
