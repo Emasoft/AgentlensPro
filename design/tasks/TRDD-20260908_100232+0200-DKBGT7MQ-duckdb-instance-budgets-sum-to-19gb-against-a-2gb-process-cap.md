@@ -119,12 +119,38 @@ must be established, not assumed.
 
 1. `agentlens_store::DEFAULT_MEMORY_LIMIT` is no longer 8 GB, and no production call site passes a
    limit ≥ the process cap.
-2. A test asserts the SUM of the limits of all simultaneously-live instances is under the process
-   cap. It must fail if any single site is raised past its share — a per-site assertion does not
-   catch the bug this card is about.
-3. The concurrent-residency set is established by measurement (which instances are alive at once
-   during a boot scan + one ingest cycle), and the budget split is derived from it, recorded in
-   this card.
+2. ~~A test asserts the SUM of the limits of all simultaneously-live instances is under the process
+   cap.~~ **UNWRITABLE AS STATED — superseded by #2′ below.** The set it sums is not finite; see #3.
+2′. A test asserts that **no more than N DuckDB instances can be live at once**, N × per-instance
+   limit is under the process cap, and the N+1th caller BLOCKS or is REJECTED rather than opening
+   instance N+1. A sum-of-sites assertion cannot catch this bug and would pass while the process
+   holds unbounded instances.
+3. **DONE 2026-09-08 — and it invalidates the premise of #1/#2.**
+   `reports/duckdb-budget/20260908_101604+0200-concurrent-residency.md`, spot-verified first-hand.
+   **The worst-case concurrent set is UNBOUNDED, not eight.** Four sites — `transcript_sql.rs:401`
+   (`run_transcript_sql`), `transcript_sql.rs:572` (`burn_seismic`), `bodies_evidence.rs:71`
+   (`with_duck`, reached by 4 MCP tools) and `body_archive.rs:135` (`bodies_export`/`bodies_purge`,
+   **8 GB**) — are reached from MCP/HTTP handlers that `spawn_blocking` per request with **no lock
+   spanning the DuckDB work**, and each call opens its own `Connection::open_in_memory()`. Nothing
+   serialises them against each other OR against themselves, so residency grows with request
+   concurrency, bounded only by tokio's default 512 blocking threads (INFERRED — no
+   `max_blocking_threads` override exists).
+
+   Verified first-hand, not taken from the report: `body_archive.rs` contains **zero** locks of any
+   kind (`grep -cE "Mutex|acquire_pass_lock|\.lock\("` → 0); `acquire_pass_lock` appears ONLY at
+   `chores.rs:270`, so the chore is guarded and the 8 GB export path over the *same store dir* is
+   not; and the state lock at the MCP sites is released before `spawn_blocking` **deliberately** —
+   `ui.rs:2938` carries the comment "spawn_blocking with the state lock released first".
+
+   Also corrected by that measurement: `card_store.rs` is `Connection::open()` — **file-backed**,
+   not in-memory (TRDD-TOIM26HP moved it, deliberately, for this exact residency reason); and two
+   sites are **dead code** with no production caller (`session_summary_sql.rs`, and
+   `statusline_store.rs`'s `query_statusline` — its sibling `seal_one` keeps `open_duck` live).
+
+   **Therefore the fix is NOT a budget split.** You cannot divide a fixed pie among an unbounded
+   number of instances. It is admission control — one shared semaphore bounding concurrent DuckDB
+   instances process-wide, plus a per-instance limit sized so N × limit fits the cap. Whether the
+   N+1th caller queues or fails fast is a behavioural choice for the owner, not an agent.
 4. An over-limit query still fails LOUDLY. Every site currently sets `temp_directory=''`
    deliberately (a persistent `.duckdb` measured 300× write amplification; spilling would quietly
    write gigabytes to the SSD). Shrinking the budgets must not be paid for by turning spill on.
