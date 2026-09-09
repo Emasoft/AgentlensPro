@@ -93,10 +93,15 @@ a read-only worker that quoted the ACTUAL cited lines
 lines, not the verdict column. 9/9 cited lines carry the claimed limit: A `card_store.rs:82,131`
 256MiB file-backed; B `statusline_store.rs:230-238` env-else-2GB; C/D `transcript_sql.rs:402,574`
 2GB; E `bodies_evidence.rs:70-86` env-else-2GB; F `lib.rs:42,138` `DEFAULT_MEMORY_LIMIT = "8GB"`;
-F1 `chores.rs:288` 2GB; F2 `body_archive.rs:135` 8GB; G `session_summary_sql.rs:127` 1GB (dead).
+F1 `chores.rs:288` 2GB; F2 `body_archive.rs:135` 8GB; G `session_summary_sql.rs:127` 1GB (the
+card calls it dead; not checked).
 An independent sweep (`grep -rn -E "memory_limit|MEMORY_LIMIT|max_memory"` over `rust-core/crates`
-with a QUOTED `--include='*.rs'`) finds no production site the inventory misses and no phantom row;
-the only uncovered hits are under `tests/` or `memory_limit_scope.rs`. Every row carries a marker.
+with a QUOTED `--include='*.rs'`) finds no needle-bearing production site the inventory misses and
+no phantom row; helper call sites without the literal (e.g. `chores.rs:288`) are covered only where
+the card names them; the TS server's own DuckDB sites (under src/store/, e.g. db.ts) exist and are
+outside the card's alcore scope; the only uncovered Rust hits are under `tests/` or
+`memory_limit_scope.rs`. Markers: one blanket agent-VERIFIED marker over the inventory (STATE line
+27) plus an explicit INFERRED (line 177); the per-row ✓ marks live in the plan report, not the card.
 One off-by-one in the STATE prose: `alstore.rs:105` is the `threads` line, the call is `:106`.
 The chosen shape's DuckDB-internals claims (`try_clone()` through one `connect()`, TEMP-table
 isolation) remain the agent's — this row verifies the inventory-and-marker acceptance, not the
@@ -126,5 +131,5 @@ YGEV6QDD and 5JZQFVO8 only, not for the new card), and each carries one `NEXT AC
 `design/tasks/TRDD-20260909_113635+0200-81BW1CS9-diverted-capture-in-two-leaked-tmp-data-dirs.md`;
 committed at dbebe144. The `date`-sourced clause was dropped from the cell: it is not verifiable
 from the artifact.
-<!-- colony-check: 2026-09-09T10:26:09.188Z sha256:221de7cf0f9b40aa -->
+<!-- colony-check: 2026-09-09T10:33:37.926Z sha256:4aca74264da3cd39 -->
 <!-- colony-check: this is a CONTENT BINDING, not a verdict. It records which bytes were checked, never whether they passed. Re-run ledger-check.mjs on this file for a verdict. -->
