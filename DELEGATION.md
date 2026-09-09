@@ -22,7 +22,7 @@ of 2Gb, using duckdb as the only memory"; "256mb limit? duckdb memory limit shou
 | 3 | Rebuilt RSS guard fires on an isolated instance (TRDD-WKLD508O): 1 MB cap exits 1 with a culprit log, 512 MB control stays up | `reports/trdd-wkld508o/*.md`, `rust-core/target/release/alcore` | lean-worker (wkld508o-probe) | `grep -q 'Verdict: guard FIRED' reports/trdd-wkld508o/20260908_224712+0200-isolated-rss-guard-probe.md` | verified |
 | 4 | The collector survives its boot sweep on ~/.agentlens — the card-store OOM fix (TRDD-5JZQFVO8), shape decided by unit 2 | `rust-core/crates/agentlens-core/src/log_reader.rs`, `rust-core/crates/agentlens-core/tests/card_store.rs` | lean-worker (5jzqfvo8) | `cargo test --manifest-path rust-core/Cargo.toml -p agentlens-core --test card_store` exits 0 | verified |
 | 5 | No test revives a real alcore daemon on the canonical ports (TRDD-YGEV6QDD): both tmp-HOME suites brake the revive and pin isolated ports | `src/test/cliHotPathLatency.test.ts`, `src/test/setupVerb.test.ts` | lean-worker (ygev6qdd) | `npx mocha --no-config --ui tdd --require src/test/setup.js out/test/test/cliHotPathLatency.test.js out/test/test/setupVerb.test.js` exits 0 and no `alcore serve --data-dir /var/folders` process younger than the run exists afterwards (the literal "none at all" was unsatisfiable when authored: pid 68584 had squatted since 22:43) | verified |
-| 6 | One 2 GB DuckDB budget: inventory of the eight instance sites with file:line and the single-budget shape, written into the card (TRDD-DKBGT7MQ) | `design/tasks/TRDD-20260908_100232+0200-DKBGT7MQ-*.md` | Plan agent (dkbgt7mq) | the card's STATE block lists every `memory_limit` site with file:line and one proposed shape, each claim marked VERIFIED/INFERRED | done |
+| 6 | One 2 GB DuckDB budget: inventory of the eight instance sites with file:line and the single-budget shape, written into the card (TRDD-DKBGT7MQ) | `design/tasks/TRDD-20260908_100232+0200-DKBGT7MQ-*.md` | Plan agent (dkbgt7mq) | the card's STATE block lists every `memory_limit` site with file:line and one proposed shape, each claim marked VERIFIED/INFERRED | verified |
 | 7 | Unit-4 evidence: mutation check (single-transaction test must fail), release rebuild, isolated boot on a copy of the real corpus (TRDD-5JZQFVO8) | `reports/trdd-5jzqfvo8/*.md`, `rust-core/target/release/alcore` | lean-worker (5jzqfvo8-evidence) | `grep -q 'panicked' reports_dev/5jzqfvo8/03_mutation.txt` and the report records a boot with no `log-sweeper died` and a card count | verified |
 | 8 | Unit-5 finalization per review: brake scoped to this file's suites (not the mocha root), dead `return`s after `this.skip()` removed, one shared `assertNoSurvivingServer` helper (TRDD-YGEV6QDD) | `src/test/cliHotPathLatency.test.ts`, `src/test/setupVerb.test.ts`, `src/test/helpers/noSurvivingServer.ts` | lean-worker (ygev6qdd-final) | `npx mocha --no-config --ui tdd --require src/test/setup.js out/test/test/cliHotPathLatency.test.js out/test/test/setupVerb.test.js` exits 0 (the run's load is recorded in Evidence, not gated here — the checker re-runs at whatever load it finds) | verified |
 | 9 | Cards current: TRDD-YGEV6QDD and TRDD-5JZQFVO8 STATE blocks carry the verified facts and review findings; new card for merging the two diverted capture dirs back into the real data dir | `design/tasks/TRDD-20260908_224151+0200-YGEV6QDD-*.md`, `design/tasks/TRDD-20260908_224153+0200-5JZQFVO8-*.md`, one new `design/tasks/TRDD-*-diverted-capture-*.md` | lean-worker (cards-0909) | each of the three files has a STATE block whose first line carries a 2026-09-09 timestamp and names its NEXT ACTION | verified |
@@ -86,12 +86,21 @@ ETIMEDOUTs (two variables changed since: load, and the per-suite brake). The che
 inherits whatever load it finds (a red receipt at load 20+ is that shape, not a regression) and
 runs against `out/` without recompiling.
 
-**Unit 6 — `done`, not `verified`:** the Plan agent returned its report inline (read-only mode),
-persisted verbatim at `reports/dkbgt7mq/20260908_231114+0200-single-2gb-budget-plan.md`; the
-card's STATE now carries the 9-site inventory with file:line and the chosen shape. The coordinator
-has first-hand verified only site A (`card_store.rs:82,112-116,142-168`) and the restore path
-(`log_reader.rs:732-751`); the other rows and the DuckDB-internals claims are the agent's until
-re-read, so the row stays `done`.
+**Unit 6 —** the Plan agent's inventory (persisted verbatim at
+`reports/dkbgt7mq/20260908_231114+0200-single-2gb-budget-plan.md`) was re-verified site by site by
+a read-only worker that quoted the ACTUAL cited lines
+(`reports/dkbgt7mq/20260909_122118+0200-inventory-verification.md`); the coordinator read the quoted
+lines, not the verdict column. 9/9 cited lines carry the claimed limit: A `card_store.rs:82,131`
+256MiB file-backed; B `statusline_store.rs:230-238` env-else-2GB; C/D `transcript_sql.rs:402,574`
+2GB; E `bodies_evidence.rs:70-86` env-else-2GB; F `lib.rs:42,138` `DEFAULT_MEMORY_LIMIT = "8GB"`;
+F1 `chores.rs:288` 2GB; F2 `body_archive.rs:135` 8GB; G `session_summary_sql.rs:127` 1GB (dead).
+An independent sweep (`grep -rn -E "memory_limit|MEMORY_LIMIT|max_memory"` over `rust-core/crates`
+with a QUOTED `--include='*.rs'`) finds no production site the inventory misses and no phantom row;
+the only uncovered hits are under `tests/` or `memory_limit_scope.rs`. Every row carries a marker.
+One off-by-one in the STATE prose: `alstore.rs:105` is the `threads` line, the call is `:106`.
+The chosen shape's DuckDB-internals claims (`try_clone()` through one `connect()`, TEMP-table
+isolation) remain the agent's — this row verifies the inventory-and-marker acceptance, not the
+design.
 
 **Unit 7 —** coordinator read both worker reports in full.
 `reports/trdd-5jzqfvo8/20260909_114357+0200-mutation-build-real-corpus-boot.md`: the
@@ -117,5 +126,5 @@ YGEV6QDD and 5JZQFVO8 only, not for the new card), and each carries one `NEXT AC
 `design/tasks/TRDD-20260909_113635+0200-81BW1CS9-diverted-capture-in-two-leaked-tmp-data-dirs.md`;
 committed at dbebe144. The `date`-sourced clause was dropped from the cell: it is not verifiable
 from the artifact.
-<!-- colony-check: 2026-09-09T10:17:52.004Z sha256:a34c836c02d092ec -->
+<!-- colony-check: 2026-09-09T10:26:09.188Z sha256:221de7cf0f9b40aa -->
 <!-- colony-check: this is a CONTENT BINDING, not a verdict. It records which bytes were checked, never whether they passed. Re-run ledger-check.mjs on this file for a verdict. -->
