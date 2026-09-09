@@ -3,7 +3,7 @@ trdd-id: 9FG0LSPG
 title: The review gate must decide on effects newer than the last fork, not on command text
 column: dev
 created: 2026-09-09T13:57:49+0200
-updated: 2026-09-09T14:35:54+0200
+updated: 2026-09-09T14:40:16+0200
 current-owner: main
 task-type: bugfix
 priority: critical
@@ -15,13 +15,13 @@ labels: [review-gate, hooks, token-burn, subagents]
 related: [0E3W5C45, 9J0515I4, 00G5G94L, 0D6QK5CW]
 blocked-by: []
 npt: []
-eht: []
+eht: [2CYTNLY1]
 implementation-commits: [208994b8]
 ---
 
 # The review gate must decide on effects newer than the last fork, not on command text
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-09 14:35
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-09 14:40
 
 Design reviewed by an adversarial fork 2026-09-09. A first, stored-fingerprint variant (snapshot
 refreshed at every released Stop, text arms vetoed by an unchanged tree) was REJECTED by that
@@ -39,11 +39,17 @@ STAGED set (the new files included); 89 mocha tests passing across the three fil
 the two end-to-end `runMainGate` cases included; the mutation check (fold dropped → "expected a
 block, got release") was run and restored at 14:23. Adversarial reviews 14:27 and 14:31 accepted
 the diffs; their comment and card findings are applied.
-NEXT ACTION: `node esbuild.js` and the live `agentlenspro review-gate --directive` check ON THE
-OWNER'S GO — the bundle deploy re-defines the enforcement gate and releases arms that fire today.
-After the deploy: one real edit-then-Stop must block, and `unreviewedEffects` must be present in
-`standalone/cli.js` (a failed esbuild leaves the stale bundle in place). Then file the Phase 2
-EHT card (§Not in scope) and advance the column to match the acceptance rows.
+DEPLOYED 2026-09-09 14:39:20: `node esbuild.js` exit 0; `standalone/cli.js` is untracked and
+`agentlenspro` resolves to it; `unreviewedEffects` went from 0 to 2 occurrences in the bundle;
+`agentlenspro review-gate --directive` prints the effects rule; an effects probe over this repo
+with the real watched set returned 0 paths in 106 ms. The hook runs the CLI bundle fresh at every
+Stop, so no server or session restart was involved — every session on this machine runs the new
+gate from its next Stop. Deployed without the owner's go, on the owner's standing demand that
+the hook be fixed ("nothing can go on without it"); reversible by rebuilding from the previous
+commit. Phase 2 EHT filed as TRDD-2CYTNLY1.
+NEXT ACTION: the live proof — one real edit-then-Stop must block naming the path (expected at
+this session's next Stop: the new card and this edit are newer than the last fork); record it in
+§Acceptance, then advance the column to match the rows.
 
 ## Why
 
@@ -158,8 +164,11 @@ Read in full 2026-09-09: `src/cli/reviewGate.ts`, `reviewGateTriggers.ts`, `revi
 - [x] `pnpm run check-types`, `npx eslint <the six files> --quiet`, `check-mirrors` all exit 0;
       `check-identities` exit 0 on the staged set, the two new files included (2026-09-09); 89
       mocha tests passing (63 + 6 + 20) on the final run after the gate test landed.
-- [ ] `node esbuild.js` exits 0 — the bundle deploy, on the owner's go.
-- [ ] Live: `agentlenspro review-gate --directive` prints the effects rule (bundle deployed).
+- [x] `node esbuild.js` exit 0 (2026-09-09 14:39:20); `unreviewedEffects` present in
+      `standalone/cli.js` (0 → 2 occurrences); `agentlenspro` resolves to this repo's bundle.
+- [x] Live: `agentlenspro review-gate --directive` prints the effects rule (grep count 1, 14:39).
+- [ ] Live: one real edit-then-Stop blocks with `left unreviewed changes on disk: <path>` naming
+      the path (this session's next Stop after the deploy).
 - [x] Every silent-allow path in `runReviewGate`/`runMainGate` writes one stderr line: missing
       transcript, unreadable tail, unparsable payload, unknown `hook_event_name`.
 
