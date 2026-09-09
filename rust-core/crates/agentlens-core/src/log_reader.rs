@@ -729,12 +729,19 @@ impl DurableState {
         let restored = cards.len();
         if restored > 0 {
             let (max_entries, max_bytes) = (timeline_max_entries(), timeline_max_bytes());
-            // One transaction for the whole restore, not one autocommit per card: at 32k cards
-            // that is 32k individual DuckDB commits for data that either all belongs (a clean
-            // restore) or none of it does (a crash mid-restore should not leave a half-loaded
-            // store to `contains()` against).
+            // Bounded chunks, not one transaction over the whole corpus (TRDD-5JZQFVO8, 2026-09-08):
+            // an open DuckDB transaction's rows are charged to card_store::MEMORY_LIMIT (256 MiB)
+            // until COMMIT, and at 35,258 cards / 64 MB the pool filled part-way through, `put`
+            // panicked, and the sweeper's death exited the process at every boot. Whether the PK
+            // index also needs the checkpoint a COMMIT gives it is measured by the boot on the real
+            // corpus, not asserted here. Atomicity across the whole restore protected nothing: the
+            // store is recreated at every boot (card_store.rs `open`), and this thread holds the
+            // state lock for the whole restore, so no reader can see a half-loaded store.
+            // ponytail: rows-only chunking; the honest ceiling is bytes (2,000 × 100 KB cards would
+            // be 200 MB) — add a byte accumulator if cards ever grow past ~10 KB on average.
+            const RESTORE_CHUNK: usize = 2_000;
             state.cards.begin();
-            for (_, mut card) in cards {
+            for (n, (_, mut card)) in cards.into_iter().enumerate() {
                 // Normalize on restore (TRDD-66IXMIGN): a log written before the cap may hold giant
                 // timelines; loading them uncapped rebuilds the very heap the cap prevents.
                 if let Some(obj) = card.as_object_mut() {
@@ -747,6 +754,10 @@ impl DurableState {
                     }
                 }
                 state.put_log_session(card);
+                if (n + 1) % RESTORE_CHUNK == 0 {
+                    state.cards.commit();
+                    state.cards.begin();
+                }
             }
             state.cards.commit();
             state.demote_cold_timelines(crate::summarize::retention::timeline_hot_cards());

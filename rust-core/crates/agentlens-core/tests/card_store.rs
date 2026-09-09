@@ -247,3 +247,38 @@ fn cards_sharing_a_start_time_are_served_in_first_insert_order() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// TRDD-5JZQFVO8 — a restore-sized bulk load must stay inside the store's 256 MiB pool when it is
+/// committed in bounded chunks. On 2026-09-08 the real corpus (35,258 cards / 64 MB of card text)
+/// was loaded inside ONE transaction and `put` panicked at card_store.rs:168 (`upsert a session
+/// card`) with DuckDB's Out of Memory Error at every boot. N is ~1.7× that corpus so the mutation
+/// check is not a coin flip (80k ran 493 s on a loaded machine; 60k ran 510 s under heavier load —
+/// this is a 🐌 slow test, single-row upserts into a file-backed store).
+/// MUTATION CHECK: wrap the whole loop in a single `begin()` … `commit()` and this test panics at
+/// `upsert a session card` — that is the pre-fix shape.
+#[test]
+fn a_restore_sized_bulk_load_stays_inside_the_memory_limit() {
+    const N: usize = 60_000;
+    const CHUNK: usize = 2_000;
+    let mut store = store("bulk-restore");
+    let filler = "x".repeat(1_700); // ~ the real corpus's average card
+    let whale = "x".repeat(310_000); // > DuckDB's 256 KiB block: forces overflow blocks
+    store.begin();
+    for i in 0..N {
+        let body = if i % 5_000 == 0 { &whale } else { &filler };
+        store.put(&json!({
+            "sessionId": format!("s{i:06}"),
+            "source": "claude_code",
+            "startTime": "2026-09-08T00:00:00.000Z",
+            "durationMs": 1.0,
+            "timeline": [],
+            "filler": body,
+        }));
+        if (i + 1) % CHUNK == 0 {
+            store.commit();
+            store.begin();
+        }
+    }
+    store.commit();
+    assert_eq!(store.len(), N);
+}
