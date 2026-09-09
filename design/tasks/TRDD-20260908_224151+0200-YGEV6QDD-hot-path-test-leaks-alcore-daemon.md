@@ -3,7 +3,7 @@ trdd-id: YGEV6QDD
 title: The hot-path latency test revives a real alcore daemon on the canonical ports and never stops it
 column: dev
 created: 2026-09-08T22:41:51+0200
-updated: 2026-09-09T12:15:41+0200
+updated: 2026-09-09T12:19:48+0200
 current-owner: main
 task-type: bugfix
 min-approval-requirement: none
@@ -21,7 +21,7 @@ relevant-rules: []
 
 # The hot-path latency test revives a real alcore daemon on the canonical ports and never stops it
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-09 12:15
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-09 12:19
 
 Root cause, verified: `runSetup()`'s `hooks`/`final-test` steps exec the registered hook via
 `execRegisteredCommand` (`src/cli/setup.ts:285-311`), which spreads `process.env` (`:287`) and
@@ -59,15 +59,17 @@ variables changed (load, and the per-suite brake).
   `if (ctx.dryRun) return` (`src/cli/setup.ts:567`, `:967`). `brakeReviveForThisSuite()` is the
   first line of the other four suites (:135, :242, :314, :365).
 
-Third squatter found 2026-09-09 12:15 in the post-run process table: pid 2218, elapsed 3 d 8 h, a
-worktree agent's DEBUG build `.claude/worktrees/agent-…/rust-core/target/debug/alcore serve
---data-dir …/al-shutdown-2141-…` — the same leak shape from a different suite (an `al-shutdown`
-fixture), predating this card; origin test not identified. pid 850 (`al-lat-wUTURr`) no longer
-matched the needle at 12:15 — gone or renamed, unverified.
+Third squatter in the 12:07 post-run snapshot (`reports_dev/unit8-ps-after.txt`): pid 2218,
+elapsed 3 d 8 h, a worktree agent's DEBUG build `.claude/worktrees/agent-…/rust-core/target/debug/alcore serve --data-dir …/al-shutdown-2141-…` — an alcore leaked by some test on an
+`al-shutdown-…` fixture; MECHANISM NOT ESTABLISHED (a test that spawns the server itself and
+skips teardown is at least as likely as the hook revive this card diagnoses). Carded as
+TRDD-4FLTDMHA. pid 850 (`al-lat-wUTURr`) was not among the three matches; whether it is alive
+was not checked. A bare `alcore serve` grep of the same snapshot (12:45) returns the same three
+lines, so no alcore of any kind is younger than the run.
 
-NEXT ACTION: stop pids 68584 and 2218 only inside the 5JZQFVO8 deploy after the TRDD-81BW1CS9
-decision (68584 holds real diverted capture; 2218's fixture dir is a test fixture, recovery value
-unknown); then close this card.
+NEXT ACTION: pid 68584 is stopped only inside the 5JZQFVO8 deploy after the TRDD-81BW1CS9
+decision; pid 2218 belongs to TRDD-4FLTDMHA (origin untraced, out of this card's scope); then
+close this card.
 
 ## Why
 

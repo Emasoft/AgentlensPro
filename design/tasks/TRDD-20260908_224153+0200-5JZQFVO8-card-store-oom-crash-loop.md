@@ -3,7 +3,7 @@ trdd-id: 5JZQFVO8
 title: The collector crash-loops at boot because the card store 256 MB DuckDB pool overflows during the boot sweep upsert
 column: dev
 created: 2026-09-08T22:41:53+0200
-updated: 2026-09-09T12:15:41+0200
+updated: 2026-09-09T12:19:48+0200
 current-owner: main
 task-type: bugfix
 min-approval-requirement: none
@@ -22,12 +22,12 @@ relevant-rules: []
 
 # The collector crash-loops at boot because the card store 256 MB DuckDB pool overflows during the boot sweep upsert
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-09 12:15
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-09 12:19
 
 Fix LANDED in `86acd104`: `rust-core/crates/agentlens-core/src/log_reader.rs` ~:729-763:
 `RESTORE_CHUNK = 2_000`, commit+begin every 2,000 cards (comment cites `card_store.rs` `open`
-recreating the file and the state lock at `log_reader.rs:1007` (was :996 before the +11-line
-diff)). Test added:
+recreating the file and that the restore runs under the state lock — the comment cites no line
+number; the lock-hold log line on the fixed binary names `log_reader.rs:1007`). Test added:
 `a_restore_sized_bulk_load_stays_inside_the_memory_limit` in `tests/card_store.rs` (N=60_000,
 ≈1.7× the real corpus, 12 whale rows of 310 KB; 80k ran 493 s, 60k ran 510 s under heavier
 load — a 🐌 test).
@@ -56,8 +56,9 @@ Deploy sequence (USER go required; the owner must also decide TRDD-81BW1CS9 firs
 deleted):
 1. `ls -ld $(readlink -f $(which agentlenspro))` must be this repo's `standalone/cli.js`
    (verified 12:01).
-2. Record `shasum -a 256 rust-core/target/release/alcore` here (`bin-native/` is gitignored, so
-   the deployed binary has no commit link otherwise).
+2. Record `shasum -a 256 rust-core/target/release/alcore` in this STATE block as a line
+   `release-binary-sha256: <hex>` BEFORE the copy (`bin-native/` is gitignored, so the deployed
+   binary has no commit link otherwise).
 3. `cp rust-core/target/release/alcore bin-native/darwin-arm64/alcore.new` →
    `codesign -s - --force bin-native/darwin-arm64/alcore.new` →
    `mv bin-native/darwin-arm64/alcore.new bin-native/darwin-arm64/alcore` (same dir = rename(2),
@@ -70,6 +71,10 @@ deleted):
    authoritative — read `started-by=` in `~/.agentlens/server.log`.
 7. Judge the boot from `server.log`: `RSS HARD CAP` (the WKLD508O guard at 2 GB, ruled
    behaviour) vs `Out of Memory` (the old loop); confirm `logSessions` ≈ 35k and the footprint.
+
+On choice (b) abandon-for-now: pid 68584's data dir is under `/var/folders/…/T`, which macOS
+purges on reboot and by age — "stays on disk" holds only until then. (b) is the owner's
+explicit choice, never a default on a bare "go".
 
 NEXT ACTION: the deploy above, on the owner's word. DELEGATION.md row 4 is verified (cargo test
 card_store: 11 passed, exit 0, 188.79 s).
