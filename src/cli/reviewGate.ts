@@ -16,6 +16,15 @@ import { agentlensDisabled } from './killSwitch'
 import { readStdin } from './hookHandlers'
 import { commandWriteReason, isEphemeralTarget, textArms } from './reviewGateTriggers'
 import type { ArmCause } from './reviewGateTriggers'
+import { unreviewedEffects } from './reviewGateEffects'
+import type { Effects } from './reviewGateEffects'
+
+/** The main gate's cause enum widens `ArmCause` with one value ONLY the main gate can produce:
+ *  a disk effect (a worker's edit, a script's write, a fork-as-worker) that the transcript never
+ *  shows as a tool_use at all. The subagent gate has no equivalent — it scans its OWN transcript,
+ *  where every one of its own edits already IS a tool_use — so this stays local rather than
+ *  widening the shared `ArmCause` in reviewGateTriggers.ts, which the subagent gate also imports. */
+export type MainArmCause = ArmCause | 'unreviewed change'
 
 // ── Step 2: the directive, embedded (not a shipped file) ──────────────────────────────────────
 // Both gates' block reason used to point at ~/.claude/hooks/review-fork-directive.md, which the
@@ -74,7 +83,10 @@ and *_dev/ dirs; a write-shaped Bash command — git commit/push/pull/mv/rm/chec
 merge/stash/clean…, gh create/comment/edit/merge…, sed -i / perl -i, a package add/remove,
 agentlenspro setup / --install-*, a memgrep *-mem-* verb, the string given to \`sh -c\` / \`eval\`,
 or a redirect / tee / cp / mv / rm / touch whose target is not a LITERAL path under /tmp,
-/dev/null or those dirs; or a text block with a line starting \`PROPOSAL\`. Plain prose, status lines, heartbeat output and
+/dev/null or those dirs; or a text block with a line starting \`PROPOSAL\`; or any file under the
+repo or the watched config set (rules, skills, agents, hooks, settings, memory) whose mtime is
+newer than the last fork — whoever wrote it, a worker included — and any HEAD move newer than the
+last fork. Plain prose, status lines, heartbeat output and
 read-only commands do NOT arm it; an undecidable target (a $VAR, a glob, after a \`cd\`) counts as
 a write. So:
 
@@ -96,7 +108,7 @@ Then read its findings and act on them. Do NOT restate this directive to the use
 fork and continue. This gate CANNOT be disabled — \`AGENTLENS_REVIEW_FORK=off\` is ignored.
 `
 
-interface ReviewGateInput {
+export interface ReviewGateInput {
   hook_event_name?: unknown
   hookEventName?: unknown
   transcript_path?: unknown
@@ -107,8 +119,11 @@ interface ReviewGateInput {
   /** The session's working directory, which relative write targets resolve against. */
   cwd?: unknown
   /** Set by Claude Code when a Stop hook already blocked this same stop — the harness's own
-   *  loop breaker. Honoured before anything else: with it ignored, an unwritable tmpdir (the
-   *  counter never persists) blocked every fire forever (review of dca6c45, F1). */
+   *  loop breaker. The SUBAGENT gate honours it (see `runSubagentGate`'s early return): an
+   *  unwritable tmpdir (the counter never persists) blocked every fire forever (review of
+   *  dca6c45, F1). The MAIN gate deliberately does NOT honour it — see `runMainGate`, which
+   *  never reads this field; a one-block cap by another name is exactly what the owner's
+   *  "no give-up" order (2026-09-03) forbids. */
   stop_hook_active?: unknown
 }
 
@@ -317,6 +332,16 @@ interface TranscriptEntry {
   type?: unknown
   isSidechain?: unknown
   message?: { content?: AssistantContentBlock[] }
+  /** ISO timestamp Claude Code stamps on every transcript entry — read only for `lastForkTs`. */
+  timestamp?: unknown
+}
+
+/** The epoch ms of an entry's own `timestamp`, or 0 (fail closed: everything on disk is newer
+ *  than the epoch) when the field is absent or does not parse. */
+function entryTs(e: TranscriptEntry): number {
+  if (typeof e?.timestamp !== 'string') return 0
+  const ms = Date.parse(e.timestamp)
+  return Number.isNaN(ms) ? 0 : ms
 }
 
 const EDITORS = new Set(['Edit', 'Write', 'NotebookEdit'])
@@ -372,9 +397,15 @@ export function readTranscriptTail(transcriptPath: string, maxBytes = 4 * 1024 *
 
 export interface MainScan {
   lastFork: number
+  /** Epoch ms of the last fork (the entry that set `lastFork`), so `runMainGate` can ask
+   *  `unreviewedEffects` for disk writes newer than it. No fork in the window ⇒ the timestamp of
+   *  the window's FIRST parsed entry (still a valid lower bound — anything before the window
+   *  opened is out of scope for this Stop); an absent/unparsable field ⇒ 0 (fail closed: 0 makes
+   *  every mtime on disk "newer", i.e. arms rather than silently trusting a clock it cannot read). */
+  lastForkTs: number
   /** The last arming block, or null when nothing in the window is work. Index + cause travel
    *  together so the block message can never name a cause the scan did not find. */
-  work: { index: number; cause: ArmCause; detail: string } | null
+  work: { index: number; cause: MainArmCause; detail: string } | null
 }
 /** The positional pair `decideMainGate` reads; `lastWork` is -1 when nothing armed. */
 export const scanPositions = (s: MainScan): { lastFork: number; lastWork: number } =>
@@ -386,10 +417,17 @@ export const scanPositions = (s: MainScan): { lastFork: number; lastWork: number
  *  (TRDD-0E3W5C45); `cwd` is the hook's, for resolving relative write targets. */
 export function scanMainTranscriptLines(lines: string[], cwd = process.cwd()): MainScan {
   let lastFork = -1
+  let lastForkTs = 0
+  let firstTs = 0
+  let firstTsSeen = false
   let work: MainScan['work'] = null
   for (let i = 0; i < lines.length; i++) {
     let e: TranscriptEntry
     try { e = JSON.parse(lines[i]) as TranscriptEntry } catch { continue }
+    // The FIRST parsed entry's own timestamp is the fallback `lastForkTs` when no fork is found —
+    // read before the sidechain/type filters below, because it is a property of the WINDOW, not
+    // of an assistant block.
+    if (!firstTsSeen) { firstTs = entryTs(e); firstTsSeen = true }
     // Subagent turns are marked `isSidechain: true` — skipping them means a sidechain transcript
     // yields no work and no fork, so the gate allows the stop and stays silent.
     if (e?.isSidechain === true) continue
@@ -408,7 +446,7 @@ export function scanMainTranscriptLines(lines: string[], cwd = process.cwd()): M
         // later LINE of the SAME block has no index and cannot re-arm — `isNoReviewSentinel`
         // rejects a block carrying anything after the reason line.
         const text = String(b.text ?? '')
-        if (isNoReviewSentinel(text)) { lastFork = i; continue }
+        if (isNoReviewSentinel(text)) { lastFork = i; lastForkTs = entryTs(e); continue }
         // A PROPOSAL IS WORK (owner order 2026-09-07) — a MARKED one (owner order 2026-09-08). For
         // one day EVERY text block was work, and that livelocked idle turns: a heartbeat's
         // `janitor heartbeat` line armed the gate, and every reply to the block re-armed it
@@ -417,12 +455,37 @@ export function scanMainTranscriptLines(lines: string[], cwd = process.cwd()): M
         continue
       }
       if (b?.type !== 'tool_use') continue
-      if (b.name === 'Agent' && b.input?.subagent_type === 'fork') { lastFork = i; continue }
+      // CASE-FOLDED, same as the subagent scanner: a subagent_type of "Fork" is still a fork.
+      if (b.name === 'Agent' && String(b.input?.subagent_type ?? '').trim().toLowerCase() === 'fork') {
+        lastFork = i; lastForkTs = entryTs(e); continue
+      }
       const w = toolUseWork(b, cwd)
       if (w !== null) work = { index: i, ...w }
     }
   }
-  return { lastFork, work }
+  return { lastFork, lastForkTs: lastFork === -1 ? firstTs : lastForkTs, work }
+}
+
+/** Fold a `unreviewedEffects()` result into the scan. Additive and positional, mirroring how a
+ *  transcript fork/edit already work: an effect is placed at `lastFork + 1` — "a fork must
+ *  follow it" — UNLESS a text arm already sits strictly after the last fork, in which case that
+ *  arm already blocks and is left alone (both would block identically; keeping the more specific
+ *  transcript-derived cause is more useful to the agent reading the message). The write may have
+ *  been made by a worker, a script, a fork-as-worker, or a background job the transcript never
+ *  shows at all — the effects walk sees it regardless of who made it.
+ *  Returns `scan` BY REFERENCE when there is nothing to fold in, so a caller can skip work on the
+ *  common (nothing changed) case. */
+export function applyEffects(scan: MainScan, fx: Effects): MainScan {
+  if (!fx.truncated && fx.paths.length === 0) return scan
+  if (scan.work !== null && scan.work.index > scan.lastFork) return scan // an existing arm already blocks
+  const shown = fx.paths.slice(0, 8).join(', ')
+  const overflow = fx.paths.length > 8 ? ` (+${fx.paths.length - 8} more)` : ''
+  const detail = (fx.truncated ? 'walk truncated — ' : '') + shown + overflow
+  return {
+    lastFork: scan.lastFork,
+    lastForkTs: scan.lastForkTs,
+    work: { index: scan.lastFork + 1, cause: 'unreviewed change', detail },
+  }
 }
 
 /** The rule: allow the stop iff the last fork spawn is NEWER than the last consequential action.
@@ -482,15 +545,16 @@ function writeMainState(p: string, s: MainBreakerState): boolean {
 // `subagent_type: 'fork'`), and it would not have prevented turn 2 anyway — the deny returns as a
 // tool RESULT and reacting to it is the cold request. Measured 2026-09-03: six multi-turn review
 // forks cost ~4.6M tokens; the first zero-tool-call fork answered in 18s off one warm read.
-export const ARM_CAUSE_TEXT: Record<ArmCause, string> = {
+export const ARM_CAUSE_TEXT: Record<MainArmCause, string> = {
   'edit': 'edited a file',
   'write-shaped command': 'ran a write-shaped command',
   'proposal text': 'made a proposal (a PROPOSAL line)',
+  'unreviewed change': 'left unreviewed changes on disk',
 }
 /** The block message names WHAT armed the gate. It said "edited or committed" unconditionally from
  *  2026-09-07, when a proposal became work, until TRDD-0E3W5C45 — so a blocked agent that had edited
  *  nothing was told it had, and could not tell which of its blocks to review. */
-export function mainBlockReason(cause: ArmCause, detail = ''): string {
+export function mainBlockReason(cause: MainArmCause, detail = ''): string {
   const what = detail === '' ? ARM_CAUSE_TEXT[cause] : `${ARM_CAUSE_TEXT[cause]}: ${detail}`
   return `Review-fork gate: this turn ${what}. ` + MAIN_BLOCK_DEMAND
 }
@@ -516,12 +580,25 @@ export const MAIN_BLOCK_DEMAND = 'Spawn ONE adversarial fork (Agent tool, subage
   + `denied — emit a text block whose ENTIRE content is "${NO_REVIEW_SENTINEL} — <reason>", nothing `
   + 'after the reason; that is the only other way out.'
 
-async function runMainGate(input: ReviewGateInput): Promise<string | null> {
+// Exported for the end-to-end test in src/test/reviewGate.test.ts, whose mutation check is
+// dropping the `applyEffects(rawScan, unreviewedEffects(...))` fold below (TRDD-9FG0LSPG).
+export async function runMainGate(input: ReviewGateInput): Promise<string | null> {
   const transcript = input?.transcript_path
-  if (typeof transcript !== 'string' || !fs.existsSync(transcript)) return null
+  if (typeof transcript !== 'string' || !fs.existsSync(transcript)) {
+    process.stderr.write('[review-gate] allowing UNREVIEWED: transcript_path is missing or does not exist\n')
+    return null
+  }
   const lines = readTranscriptTail(transcript)
-  if (lines === null) return null
-  const scan = scanMainTranscriptLines(lines, hookCwd(input))
+  if (lines === null) {
+    process.stderr.write('[review-gate] allowing UNREVIEWED: could not read the transcript tail\n')
+    return null
+  }
+  const cwd = hookCwd(input)
+  const rawScan = scanMainTranscriptLines(lines, cwd)
+  // Fold in disk effects newer than the last fork (TRDD-9FG0LSPG) — a worker's edit, a script's
+  // write, or a fork-as-worker's own change never appears as a tool_use in THIS transcript, so
+  // the transcript scan alone would release it unreviewed.
+  const scan = applyEffects(rawScan, unreviewedEffects(cwd, rawScan.lastForkTs))
   const key = typeof input?.session_id === 'string' && input.session_id ? input.session_id : transcript
   const statePath = mainStatePath(key)
   const state = readMainState(statePath)
@@ -728,13 +805,18 @@ export async function runReviewGate(argv: string[]): Promise<number> {
     process.stderr.write('[review-gate] AGENTLENS_REVIEW_FORK=off is IGNORED — the review gate cannot be disabled.\n')
   }
   let input: ReviewGateInput
-  try { input = JSON.parse(payload.toString('utf8')) as ReviewGateInput } catch { return 0 }
+  try { input = JSON.parse(payload.toString('utf8')) as ReviewGateInput } catch {
+    process.stderr.write('[review-gate] allowing UNREVIEWED: the hook payload is not valid JSON\n')
+    return 0
+  }
   const evt = input?.hook_event_name ?? input?.hookEventName
   let out: string | null = null
   if (evt === 'SubagentStop') {
     out = await runSubagentGate(input)
   } else if (typeof evt !== 'string' || evt === 'Stop') {
     out = await runMainGate(input)
+  } else {
+    process.stderr.write(`[review-gate] allowing UNREVIEWED: unknown hook_event_name ${JSON.stringify(evt)}\n`)
   }
   if (out) process.stdout.write(out + '\n')
   return 0

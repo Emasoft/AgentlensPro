@@ -2,11 +2,12 @@ import * as assert from 'assert'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
+import { execFileSync } from 'child_process'
 import {
-  scanMainTranscriptLines, decideMainGate,
+  scanMainTranscriptLines, decideMainGate, applyEffects,
   scanSubagentTranscriptLines, decideSubagentGate, agentCannotSpawn, declaredToolsHaveAgent,
   REVIEW_GATE_DIRECTIVE, ONE_TURN_RULE, mainBlockReason, scanPositions, hookCwd, SUBAGENT_BLOCK_REASON,
-  NO_REVIEW_SENTINEL, REVIEWER_AGENT_TYPES,
+  NO_REVIEW_SENTINEL, REVIEWER_AGENT_TYPES, runMainGate,
 } from '../cli/reviewGate'
 
 // `agentlenspro review-gate` — pure decision-function tests, ported faithfully from
@@ -26,20 +27,22 @@ const proposalBlock = { type: 'text', text: 'PROPOSAL: change X to Y.' }
 const proseBlock = { type: 'text', text: 'I propose changing X to Y.' }
 const thinkBlock = { type: 'thinking', thinking: 'internal' }
 const forkBlock = { type: 'tool_use', name: 'Agent', input: { subagent_type: 'fork' } }
-const nothing = { lastFork: -1, work: null }
+// `lastForkTs` is always 0 across this suite's fixtures: none of them stamps a `timestamp` field,
+// so `entryTs` (fail-closed default) returns 0 for every entry.
+const nothing = { lastFork: -1, lastForkTs: 0, work: null }
 
 suite('reviewGate — main (Stop) gate', () => {
   test('scanMainTranscriptLines: an edit, a marked proposal and a write-shaped command arm; prose, a heartbeat and reads do not', () => {
     assert.deepStrictEqual(scanMainTranscriptLines([assistantLine([editBlock]), assistantLine([forkBlock])], CWD),
-      { lastFork: 1, work: { index: 0, cause: 'edit', detail: 'Edit x.ts' } })
+      { lastFork: 1, lastForkTs: 0, work: { index: 0, cause: 'edit', detail: 'Edit x.ts' } })
     // Measured on a real session JSONL, this build writes ONE ENTRY PER BLOCK, so a proposing turn
     // is a lone `text` entry with no tool_use anywhere near it.
     assert.deepStrictEqual(scanMainTranscriptLines([assistantLine([proposalBlock])], CWD),
-      { lastFork: -1, work: { index: 0, cause: 'proposal text', detail: '' } })
+      { lastFork: -1, lastForkTs: 0, work: { index: 0, cause: 'proposal text', detail: '' } })
     assert.deepStrictEqual(scanMainTranscriptLines([assistantLine([proposalBlock]), assistantLine([forkBlock])], CWD),
-      { lastFork: 1, work: { index: 0, cause: 'proposal text', detail: '' } }, 'proposal then fork ⇒ reviewed')
+      { lastFork: 1, lastForkTs: 0, work: { index: 0, cause: 'proposal text', detail: '' } }, 'proposal then fork ⇒ reviewed')
     assert.deepStrictEqual(scanMainTranscriptLines([assistantLine([bashBlock('git commit -m x')])], CWD),
-      { lastFork: -1, work: { index: 0, cause: 'write-shaped command', detail: 'git commit' } })
+      { lastFork: -1, lastForkTs: 0, work: { index: 0, cause: 'write-shaped command', detail: 'git commit' } })
     // THE LIVELOCK (TRDD-0E3W5C45). For one day every text block was work, so a heartbeat's
     // mandated `janitor heartbeat` line armed the gate and every reply to the block re-armed it —
     // ~40 blocked turns and 5 forks over zero edits. None of these is work:
@@ -56,7 +59,7 @@ suite('reviewGate — main (Stop) gate', () => {
   test('a NotebookEdit follows the same ephemeral-root rule, and the hook cwd comes from the input', () => {
     const nb = (notebook_path: string) => ({ type: 'tool_use', name: 'NotebookEdit', input: { notebook_path } })
     assert.deepStrictEqual(scanMainTranscriptLines([assistantLine([nb('/proj/n.ipynb')])], CWD),
-      { lastFork: -1, work: { index: 0, cause: 'edit', detail: 'NotebookEdit n.ipynb' } })
+      { lastFork: -1, lastForkTs: 0, work: { index: 0, cause: 'edit', detail: 'NotebookEdit n.ipynb' } })
     assert.deepStrictEqual(scanMainTranscriptLines([assistantLine([nb('/tmp/n.ipynb')])], CWD), nothing)
     assert.strictEqual(hookCwd({ cwd: '/elsewhere' }), '/elsewhere')
     assert.strictEqual(hookCwd({ cwd: '' }), process.cwd(), 'an empty cwd falls back, it is not a root')
@@ -103,6 +106,86 @@ suite('reviewGate — main (Stop) gate', () => {
     const scan = { lastFork: -1, lastWork: 0 }
     const v = decideMainGate(scan, { total: 20, consecutive: 0 }, { maxPerSession: 20, maxConsecutive: 2 })
     assert.strictEqual(v.block, true, 'the per-session cap is gone too')
+  })
+
+  test('scanMainTranscriptLines case-folds subagent_type, like the subagent scanner already does', () => {
+    const capsForkBlock = { type: 'tool_use', name: 'Agent', input: { subagent_type: 'Fork' } }
+    const scan = scanMainTranscriptLines([assistantLine([editBlock]), assistantLine([capsForkBlock])], CWD)
+    assert.strictEqual(scan.lastFork, 1, 'a subagent_type of "Fork" must still count as the fork')
+  })
+})
+
+// ── lastForkTs — the timestamp `unreviewedEffects` is anchored to (TRDD-9FG0LSPG) ─────────────────
+suite('reviewGate — scanMainTranscriptLines: lastForkTs', () => {
+  test('lastForkTs is the fork entry\'s own top-level timestamp, in ms', () => {
+    const forkTs = '2026-09-09T11:42:09.715Z'
+    const scan = scanMainTranscriptLines([
+      assistantLine([editBlock], { timestamp: '2026-09-09T11:00:00.000Z' }),
+      assistantLine([forkBlock], { timestamp: forkTs }),
+    ], CWD)
+    assert.strictEqual(scan.lastForkTs, Date.parse(forkTs))
+  })
+
+  test('no fork in the window ⇒ lastForkTs falls back to the FIRST parsed entry\'s timestamp', () => {
+    const firstTs = '2026-09-09T11:00:00.000Z'
+    const scan = scanMainTranscriptLines([
+      assistantLine([editBlock], { timestamp: firstTs }),
+      assistantLine([bashBlock('git push')], { timestamp: '2026-09-09T12:00:00.000Z' }),
+    ], CWD)
+    assert.strictEqual(scan.lastFork, -1)
+    assert.strictEqual(scan.lastForkTs, Date.parse(firstTs), 'the FIRST entry, not the last, sets the fallback')
+  })
+
+  test('an absent or unparsable timestamp fails CLOSED to 0, never to "now"', () => {
+    // No `timestamp` field at all on the fork entry:
+    const noField = scanMainTranscriptLines([assistantLine([forkBlock])], CWD)
+    assert.strictEqual(noField.lastForkTs, 0)
+    // A field that is present but not a valid date string:
+    const bad = scanMainTranscriptLines([assistantLine([forkBlock], { timestamp: 'not-a-date' })], CWD)
+    assert.strictEqual(bad.lastForkTs, 0)
+    // No fork, and the first entry has no timestamp either:
+    const noForkNoField = scanMainTranscriptLines([assistantLine([editBlock])], CWD)
+    assert.strictEqual(noForkNoField.lastForkTs, 0)
+  })
+})
+
+// ── applyEffects — folding `unreviewedEffects()` into the scan (TRDD-9FG0LSPG) ─────────────────────
+suite('reviewGate — applyEffects', () => {
+  const baseScan = { lastFork: 3, lastForkTs: 1000, work: null }
+
+  test('no existing work + unreviewed paths ⇒ arms at lastFork + 1 with cause "unreviewed change"', () => {
+    const out = applyEffects(baseScan, { paths: ['src/a.ts'], truncated: false })
+    assert.deepStrictEqual(out, { lastFork: 3, lastForkTs: 1000, work: { index: 4, cause: 'unreviewed change', detail: 'src/a.ts' } })
+  })
+
+  test('an existing text arm strictly after the last fork is KEPT, not overwritten', () => {
+    const scanWithArm = { lastFork: 3, lastForkTs: 1000, work: { index: 5, cause: 'proposal text' as const, detail: '' } }
+    const out = applyEffects(scanWithArm, { paths: ['src/a.ts', 'src/b.ts'], truncated: false })
+    assert.deepStrictEqual(out, scanWithArm, 'both arms would block identically — keep the more specific one')
+  })
+
+  test('truncated with zero paths still arms, and the detail names the truncation', () => {
+    const out = applyEffects(baseScan, { paths: [], truncated: true })
+    assert.strictEqual(out.work?.cause, 'unreviewed change')
+    assert.ok(out.work?.detail.startsWith('walk truncated'), out.work?.detail)
+  })
+
+  test('more than 8 paths: the detail lists 8 and an overflow count', () => {
+    const paths = Array.from({ length: 12 }, (_, i) => `f${i}.ts`)
+    const out = applyEffects(baseScan, { paths, truncated: false })
+    assert.strictEqual(out.work?.detail, `${paths.slice(0, 8).join(', ')} (+4 more)`)
+  })
+
+  test('empty effects (no paths, not truncated) leave the scan unchanged, BY REFERENCE', () => {
+    const out = applyEffects(baseScan, { paths: [], truncated: false })
+    assert.strictEqual(out, baseScan, 'must be the SAME object, not merely deep-equal')
+  })
+})
+
+// ── mainBlockReason names the new cause (TRDD-9FG0LSPG) ────────────────────────────────────────────
+suite('reviewGate — mainBlockReason: unreviewed change', () => {
+  test('names the cause and lists the path', () => {
+    assert.ok(mainBlockReason('unreviewed change', 'src/a.ts').includes('left unreviewed changes on disk: src/a.ts'))
   })
 })
 
@@ -679,5 +762,63 @@ suite('review-gate: the recursion guard exempts reviewers and nothing else', () 
         `lastWork === -1 currently allows the stop (lastFork ${lastFork}); see TRDD-W0ZTTUBA`,
       )
     }
+  })
+})
+
+// Real tmp git repo + real transcript JSONL + the real `runMainGate` — no mocks. The gate's whole
+// job is reading a real filesystem and a real transcript, so a fake would test nothing about the
+// thing that actually breaks (TRDD-9FG0LSPG).
+suite('reviewGate — runMainGate end to end (TRDD-9FG0LSPG)', () => {
+  let root: string
+  let repo: string
+  let savedHome: string | undefined
+
+  setup(() => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), 'al-gate-e2e-'))
+    repo = path.join(root, 'repo')
+    fs.mkdirSync(repo)
+    execFileSync('git', ['-C', repo, 'init', '-q'])
+    execFileSync('git', ['-C', repo, 'config', 'user.email', 'x@example.com'])
+    execFileSync('git', ['-C', repo, 'config', 'user.name', 'x'])
+    fs.writeFileSync(path.join(repo, 'tracked.txt'), 'v1\n')
+    execFileSync('git', ['-C', repo, 'add', '-A'])
+    execFileSync('git', ['-C', repo, 'commit', '-q', '-m', 'init'])
+    // Pin HOME so the gate's default watched set (~/.claude/...) resolves under root, not the
+    // real home — this test must never walk the operator's actual home directory.
+    savedHome = process.env.HOME
+    process.env.HOME = root
+    assert.strictEqual(os.homedir(), root, 'HOME pin did not take')
+  })
+
+  teardown(() => {
+    if (savedHome === undefined) delete process.env.HOME
+    else process.env.HOME = savedHome
+    fs.rmSync(root, { recursive: true, force: true })
+  })
+
+  const writeTranscript = (forkIso: string): string => {
+    const p = path.join(root, 'transcript.jsonl')
+    fs.writeFileSync(p, assistantLine([forkBlock], { timestamp: forkIso }) + '\n')
+    return p
+  }
+
+  test('a file written after the last fork, with no tool_use in the transcript, BLOCKS and names the path', async () => {
+    const forkIso = new Date(Date.now() - 5000).toISOString()
+    const transcript_path = writeTranscript(forkIso)
+    fs.writeFileSync(path.join(repo, 'tracked.txt'), 'v2\n')
+    const out = await runMainGate({ transcript_path, cwd: repo, session_id: `e2e-${Date.now()}` })
+    assert.notStrictEqual(out, null, 'expected a block, got release')
+    const v = JSON.parse(out as string)
+    assert.strictEqual(v.decision, 'block')
+    assert.ok(v.reason.includes('left unreviewed changes on disk'), v.reason)
+    assert.ok(v.reason.includes('tracked.txt'), v.reason)
+  })
+
+  test('a fork spawned AFTER the write releases the stop', async () => {
+    fs.writeFileSync(path.join(repo, 'tracked.txt'), 'v2\n')
+    const forkIso = new Date(Date.now() + 60_000).toISOString()
+    const transcript_path = writeTranscript(forkIso)
+    const out = await runMainGate({ transcript_path, cwd: repo, session_id: `e2e-${Date.now()}` })
+    assert.strictEqual(out, null)
   })
 })

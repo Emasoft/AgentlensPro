@@ -70,6 +70,15 @@ suite('review-gate triggers: write-shaped commands', () => {
     ['agentlenspro --install-hooks', 'agentlenspro config write'],
     ['agentlenspro setup', 'agentlenspro config write'],
     ['memgrep new-mem-atom x', 'memgrep new-mem-atom'],
+    ['S=$(mktemp); echo x > "$S"', 'redirect into $S'],                       // undecidable assignment ⇒ arm
+    ['S=/tmp/a; S=$X; echo x > "$S"', 'redirect into $S'],                    // reassignment deletes the resolved value
+    ['S=/tmp/a; echo x > "$S/../../etc/x"', 'redirect into $S/../../etc/x'],  // not a bare $VAR ⇒ never resolved
+    ['echo x > /tmp/$X', 'redirect into /tmp/$X'],                           // still has a $ after stripping ⇒ arm
+    ['echo x > /tmp/../etc/$$', 'redirect into /tmp/../etc/$$'],             // literal `..` escapes /tmp ⇒ arm
+    ['echo x >| src/a.ts', 'redirect into src/a.ts'],
+    ['S=/tmp/a; cp "$S" src/x', 'cp src/x'],                                  // $S is the FIRST arg, not the target
+    ['S=/tmp/b tee "$S"', 'tee $S'],              // prefix assignment: $S expands to the OLD value, same segment
+    ['echo x > "$S"; S=/tmp/a', 'redirect into $S'],  // assignment AFTER the use — too late to resolve it
   ]
   const PASS = [
     '/x/dispatcher-stub.py 2>&1',                                   // the janitor heartbeat, 10 fires this session
@@ -94,6 +103,15 @@ suite('review-gate triggers: write-shaped commands', () => {
     'echo a\\>| b', 'echo "a>"| tr a b',                             // …and does not glue the pipe after it
     'diff <(node -e \'1\') <(node -e \'2\')',
     'awk \'{print > "x"}\' f', 'echo "a > b"', 'date +%s', 'ls -la', 'cat file',
+    'cargo install --list 2>/dev/null', 'npm install 2>&1 | tail -3',
+    'echo hi > /tmp/x-$$.txt', 'echo hi > /tmp/janitor-$$-$RANDOM.txt',
+    'S=/private/tmp/a/b.txt; echo x > "$S"',
+    'O=/tmp/o.txt; { git log -3; } > "$O" 2>&1; cat "$O"',
+    'S="/tmp/q.txt"; tee "$S" </dev/null',
+    'cat /tmp/in > /tmp/out',
+    'S=/tmp/a; cp src/x "$S"',
+    'S=/tmp/a && echo x > "$S"',
+    '(S=/tmp/a; echo x > "$S")',
   ]
 
   test('every ARM row arms, with the reason the message will print', () => {

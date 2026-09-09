@@ -72,7 +72,19 @@ export function shellWords(cmd: string): Word[] {
  *  the SESSION cwd, so `cd elsewhere && > x` resolves wrong and arms (by design), and a session
  *  opened inside a subdirectory exempts that subdirectory's own `reports/` (accepted). */
 export function isEphemeralTarget(target: string, cwd: string): boolean {
-  if (target === '' || /[$`~*?{}[\]]/.test(target)) return false
+  if (target === '' || /[$`~*?{}[\]]/.test(target)) {
+    // `$$`/`$RANDOM` under a literal /tmp prefix are still decidable: both expand to DIGITS,
+    // which cannot contain `/`, so they cannot escape the prefix — strip them and re-check the
+    // remainder for any other shell metachar before resolving.
+    if (/^\/(?:private\/)?tmp\//.test(target)) {
+      const stripped = target.replace(/\$\$|\$RANDOM/g, '')
+      if (!/[$`~*?{}[\]]/.test(stripped)) {
+        const abs = path.resolve(cwd, stripped)
+        if (abs.startsWith('/tmp/') || abs.startsWith('/private/tmp/')) return true
+      }
+    }
+    return false
+  }
   if (target === '/dev/null') return true
   const abs = path.resolve(cwd, target)
   if (abs.startsWith('/tmp/') || abs.startsWith('/private/tmp/')) return true
@@ -98,9 +110,24 @@ const WRAPPERS = /^(sudo|env|time|nohup|nice|caffeinate|exec|command|xargs|if|wh
 const SHELLS = /^(bash|sh|zsh|dash|ksh)$/
 export const ALL_ARGS_ARE_TARGETS = ['tee', 'rm', 'touch']
 export const LAST_ARG_IS_TARGET = ['cp', 'mv', 'rsync', 'ln', 'install']
+// A redirect operator, attached or bare (`>file`/`>`), fd dups included (`2>&1`) — used to strip
+// redirect words out of a segment's ARGUMENTS before classification. `cargo install --list
+// 2>/dev/null` must not count `2>/dev/null` as a second package name (review 2026-09-09).
+const REDIRECT_WORD_RE = /^\d*(?:>\||>>?|<{1,3})/
+// Only a segment where EVERY word is `NAME=value` is a real shell assignment prefix — `export
+// S=x`, `local S=x`, `declare S=x` are each a two-word segment whose first word (`export`/
+// `local`/`declare`) fails this test, so they are deliberately NOT collected (fail closed:
+// their effective value is unmodelled, so a use of `$S` after them must stay undecidable).
+const ASSIGNMENT_RE = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/
+/** Resolves a word that is EXACTLY `$NAME`/`${NAME}` to a same-command literal assignment
+ *  recorded STRICTLY BEFORE `segIdx` (shell semantics: `$S` expands before a same-segment
+ *  prefix assignment applies — `S=/tmp/b tee "$S"` reads the OLD value of S, and an assignment
+ *  only takes effect for LATER segments). Any other shape (`$NAME/sub`, `$(mktemp)`,
+ *  `${NAME:-x}`) is returned unchanged — undecidable, so it stays undecidable and arms. */
+type Resolve = (word: string, segIdx: number) => string
 
 /** `via` names the launcher (`xargs`, `find -exec`) when the targets are not in this segment's text. */
-function segmentWriteReason(base: string, args: string[], via: string | null, cwd: string): string | null {
+function segmentWriteReason(base: string, args: string[], via: string | null, cwd: string, resolve: Resolve, segIdx: number): string | null {
   const flagless = args.filter((a) => !a.startsWith('-'))
   if (base === 'git') {
     let j = 0 // skip global options; `-C dir` / `-c k=v` / `--git-dir x` take a value
@@ -138,7 +165,7 @@ function segmentWriteReason(base: string, args: string[], via: string | null, cw
     if (args.includes('-delete')) return 'find -delete'
     for (let e = 0; e < args.length; e++) {
       if (!/^-(exec|execdir|ok|okdir)$/.test(args[e])) continue
-      const r = classifyCommand(args.slice(e + 1).map((word) => ({ word, quoted: false })), 'find -exec', cwd)
+      const r = classifyCommand(args.slice(e + 1).map((word) => ({ word, quoted: false })), 'find -exec', cwd, resolve, segIdx)
       if (r !== null) return r
     }
     return null
@@ -146,7 +173,9 @@ function segmentWriteReason(base: string, args: string[], via: string | null, cw
   if (ALL_ARGS_ARE_TARGETS.includes(base) || LAST_ARG_IS_TARGET.includes(base)) {
     if (via !== null) return `${base} via ${via} (targets unknown)`
     const targets = ALL_ARGS_ARE_TARGETS.includes(base) ? flagless : flagless.slice(-1)
-    const bad = targets.find((t) => !isEphemeralTarget(t, cwd))
+    // `resolve` turns a same-command literal `$VAR` target into its recorded value before the
+    // ephemeral check; the reported message still names the original text (`t`), not the value.
+    const bad = targets.find((t) => !isEphemeralTarget(resolve(t, segIdx), cwd))
     return bad === undefined ? null : `${base} ${bad}`
   }
   return null
@@ -154,7 +183,7 @@ function segmentWriteReason(base: string, args: string[], via: string | null, cw
 
 /** The command word of one segment (after wrappers, env assignments and a wrapper's own
  *  options), classified. A quoted word in command position is not a command. */
-function classifyCommand(words: Word[], via: string | null, cwd: string): string | null {
+function classifyCommand(words: Word[], via: string | null, cwd: string, resolve: Resolve, segIdx: number): string | null {
   let i = 0
   let inWrapper = false
   while (i < words.length && !words[i].quoted) {
@@ -173,7 +202,7 @@ function classifyCommand(words: Word[], via: string | null, cwd: string): string
     i++
   }
   if (i >= words.length || words[i].quoted) return null
-  return segmentWriteReason(path.basename(words[i].word), words.slice(i + 1).map((w) => w.word), via, cwd)
+  return segmentWriteReason(path.basename(words[i].word), words.slice(i + 1).map((w) => w.word), via, cwd, resolve, segIdx)
 }
 
 /** Why a shell command is a write, or null when its text shows only reads. Each segment's
@@ -182,21 +211,69 @@ function classifyCommand(words: Word[], via: string | null, cwd: string): string
  *  commit whose body holds a bare `>` is reported as the commit it is, not as a redirect. */
 export function commandWriteReason(cmd: string, cwd: string): string | null {
   const words = shellWords(cmd)
+  // Segments used for CLASSIFICATION only: separator words split them, and every unquoted
+  // redirect word is dropped (its attached operand with it; a BARE operator's separate spaced
+  // operand is dropped too) so a redirect never counts as a command argument. `words` itself is
+  // left untouched — the redirect pass below still walks it to find real write targets.
   const segments: Word[][] = [[]]
-  for (const w of words) {
-    if (!w.quoted && /^(\||\|\||&&|;|&)$/.test(w.word)) segments.push([])
-    else segments[segments.length - 1].push(w)
+  for (let idx = 0; idx < words.length; idx++) {
+    const w = words[idx]
+    if (!w.quoted && /^(\||\|\||&&|;|&)$/.test(w.word)) { segments.push([]); continue }
+    if (!w.quoted) {
+      const m = REDIRECT_WORD_RE.exec(w.word)
+      if (m !== null) {
+        if (w.word.slice(m[0].length) === '') idx++ // bare operator: its spaced operand isn't an argument either
+        continue
+      }
+    }
+    segments[segments.length - 1].push(w)
   }
+
+  // Same-command literal `VAR=value` assignments resolve a later `$VAR`/`${VAR}` write target —
+  // but only POSITIONALLY: the shell expands `$VAR` at the point of use BEFORE a same-segment
+  // prefix assignment applies (`S=/tmp/b tee "$S"` reads the OLD value), and an assignment takes
+  // effect only for segments AFTER the one that defines it. A segment counts as a real
+  // assignment prefix only when EVERY one of its words is `NAME=value` (a pure-assignment
+  // segment like `S=/tmp/a;` or `S=/tmp/a &&`) — one with a command after the assignment words
+  // (`S=/tmp/b tee …`) records nothing, because that VAR is not yet set for anything in THIS
+  // segment. `cumulative[i]` is the literal map as of the START of segment `i` (segments
+  // 0..i-1 applied); a later reassignment whose value is not itself a plain literal deletes the
+  // entry rather than keeping the stale value, so it still fails closed.
+  const cumulative: Map<string, string>[] = [new Map()]
   for (const seg of segments) {
-    const reason = classifyCommand(seg, null, cwd)
+    const next = new Map(cumulative[cumulative.length - 1])
+    if (seg.every((w) => ASSIGNMENT_RE.test(w.word))) {
+      for (const w of seg) {
+        const m = ASSIGNMENT_RE.exec(w.word) as RegExpExecArray
+        if (/[$`~*?{}[\]]/.test(m[2])) next.delete(m[1])
+        else next.set(m[1], m[2])
+      }
+    }
+    cumulative.push(next)
+  }
+  const resolve: Resolve = (word, segIdx) => {
+    const m = /^\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?$/.exec(word)
+    if (m === null) return word
+    return cumulative[segIdx]?.get(m[1]) ?? word
+  }
+
+  for (let idx = 0; idx < segments.length; idx++) {
+    const reason = classifyCommand(segments[idx], null, cwd, resolve, idx)
     if (reason !== null) return reason
   }
+  // `segIdx` counts the same separator words the segment builder split on, so it names the same
+  // segment as the classification pass. Sole divergence: a bare operator whose operand is itself a
+  // separator (`> ; foo`) — the builder swallowed it as the operand, this pass counts it. Harmless:
+  // the target becomes the literal word `;`, which resolves under cwd and arms — unless cwd is
+  // under /tmp, where the malformed command is a shell syntax error anyway.
+  let segIdx = 0
   for (let i = 0; i < words.length; i++) {
+    if (!words[i].quoted && /^(\||\|\||&&|;|&)$/.test(words[i].word)) { segIdx++; continue }
     if (words[i].quoted) continue
     const m = /^\d*(?:>\||>>?)(.*)$/.exec(words[i].word)
     if (!m || m[1].startsWith('&')) continue
     const target = m[1] !== '' ? m[1] : (words[i + 1]?.word ?? '')
-    if (!isEphemeralTarget(target, cwd)) return `redirect into ${target || '(no target)'}`
+    if (!isEphemeralTarget(resolve(target, segIdx), cwd)) return `redirect into ${target || '(no target)'}`
   }
   return null
 }
