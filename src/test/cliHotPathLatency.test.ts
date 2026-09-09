@@ -6,6 +6,7 @@ import * as path from 'path'
 import { spawn } from 'child_process'
 import { HOT_PATH_BUDGET_MS, LATENCY_EXEMPT } from '../cli/main'
 import { MAX_RATIO_ABSOLUTE_DEADLINE, oversubscription, skipIfUnmeasurable } from './loadAware'
+import { assertNoSurvivingServer } from './helpers/noSurvivingServer'
 
 // TRDD-E8XIC2PM — a latency guard for every command a harness runs on its hot path.
 //
@@ -50,6 +51,13 @@ function baseEnv(home: string): NodeJS.ProcessEnv {
     ...env, HOME: home, USERPROFILE: home,
     AGENTLENS_UI_URL: DROP_URL, AGENTLENS_MCP_URL: `${DROP_URL}/mcp`,
     AGENTLENS_GATE_TIMEOUT: '1', AGENTLENS_HOOK_TIMEOUT: '1',
+    // TRDD-YGEV6QDD: the `hook`/`gate` recipes below run the REAL forwardHookEvent() path, which
+    // on a failed POST (this test aims it at a black-holed address on purpose) falls through to
+    // reviveDaemonDetached() (src/cli/hookHandlers.ts) — a real detached `alcore serve` with NO
+    // port args, i.e. the DEFAULT canonical ports 3000/4316/4318, only `--data-dir` following this
+    // fixture's HOME. Measured leaking a daemon for 7h (pid 850). This test measures dispatch
+    // latency, not revive behavior, so braking the spawn (spool still happens) is correct.
+    AGENTLENS_NO_REVIVE: '1',
   }
 }
 
@@ -116,11 +124,10 @@ suite('CLI hot-path latency guard (TRDD-E8XIC2PM)', () => {
 
   test('🐌 every hot-path command returns inside its ceiling against an address that DROPS', async function () {
     this.timeout(120_000)
-    if (!fs.existsSync(CLI_JS)) { this.skip(); return }
+    if (!fs.existsSync(CLI_JS)) this.skip()
     if (!await addressDrops()) {
       // Not a pass. This environment answers instead of blackholing, so the measurement is void.
       this.skip()
-      return
     }
     // Same reasoning, second way the measurement can be void: a machine with no CPU headroom.
     // These ceilings are ABSOLUTE and not ours to relax — Claude Code kills a lifecycle hook at 2 s
@@ -146,7 +153,7 @@ suite('CLI hot-path latency guard (TRDD-E8XIC2PM)', () => {
         if (r.ms >= budget) slow.push(`${cmd}: ${r.ms}ms >= ${budget}ms ceiling`)
       }
       assert.deepStrictEqual(slow, [], `a hung socket is holding the process open:\n  ${slow.join('\n  ')}`)
-    } finally { fs.rmSync(home, { recursive: true, force: true }) }
+    } finally { assertNoSurvivingServer(home); fs.rmSync(home, { recursive: true, force: true }) }
   })
 
   test('the top-level FAILURE exit flushes too — a failed command must not truncate what it wrote', () => {

@@ -5,6 +5,7 @@ import * as os from 'os'
 import * as path from 'path'
 import { spawn } from 'child_process'
 import { freePort } from './helpers/freePort'
+import { assertNoSurvivingServer } from './helpers/noSurvivingServer'
 import { runSetup, runSetupCli, SetupOutcome } from '../cli/setup'
 import { GATE_CMD, GATE_MATCHER, HOOK_CMD, HOOK_EVENTS, REVIEW_CMD, SUPERVISOR_CMD } from '../cli/hookInstall'
 import { ownedTelemetryKeys } from '../telemetryConfig'
@@ -15,6 +16,31 @@ import { ownedTelemetryKeys } from '../telemetryConfig'
 // standalone/cli.js executed through a PATH shim as `agentlenspro hook`/`gate`. No mocks of
 // anything under test. The resident server (3000/4316/4318) and the real ~/.agentlens /
 // ~/.claude are never touched.
+
+// TRDD-YGEV6QDD — measured leak: the `final-test`/`hooks` steps exec the REGISTERED hook/gate
+// commands (setup.ts execRegisteredCommand), which run forwardHookEvent()/reviveDaemonDetached()
+// for real. When that POST to the fixture server fails or times out (flaky under a loaded
+// mocha run), reviveDaemonDetached() spawns a REAL `alcore serve` with `alcoreServeArgs()` called
+// with NO args — so it takes the fixture's `--data-dir` (from AGENTLENS_DATA_DIR, set below by
+// execRegisteredCommand) but the DEFAULT ports 3000/4316/4318, because that env carries no
+// UI_PORT/MCP_PORT/OTLP_PORT. Root-cause fix (not ours to make — non-test code): setup.ts
+// execRegisteredCommand (src/cli/setup.ts:286-299) should add `AGENTLENS_NO_REVIVE: '1'` to the
+// env it builds for the hook/gate/review execs — the self-test already owns the server's
+// lifecycle end-to-end, so a revive-on-failure during it is never wanted. Belt-and-suspenders
+// here: brake every revive the exec'd hook could ever trigger — it inherits `process.env` via
+// execRegisteredCommand's spread (src/cli/setup.ts:287), which is how setting this IN-PROCESS
+// var reaches the child — scoped per-suite (never root-level: a root suiteSetup/suiteTeardown in
+// mocha's TDD ui attaches to the WHOLE RUN, leaking into every other test file) to just the
+// suites that actually spawn a real server or exec the registered hooks, plus a hard survivor
+// check in every teardown so a leak fails the run instead of outliving it silently.
+function brakeReviveForThisSuite(): void {
+  let saved: string | undefined
+  suiteSetup(() => { saved = process.env.AGENTLENS_NO_REVIVE; process.env.AGENTLENS_NO_REVIVE = '1' })
+  suiteTeardown(() => {
+    if (saved === undefined) delete process.env.AGENTLENS_NO_REVIVE
+    else process.env.AGENTLENS_NO_REVIVE = saved
+  })
+}
 
 const REPO_ROOT = path.resolve(__dirname, '..', '..', '..')
 
@@ -106,6 +132,7 @@ async function waitDead(pid: number | null): Promise<void> {
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 
 suite('setup — virgin HOME full converge (real server on ephemeral ports)', () => {
+  brakeReviveForThisSuite()
   let f: Fixture
   let ports: { ui: number; mcp: number; otlp: number }
   let first: SetupOutcome
@@ -123,6 +150,7 @@ suite('setup — virgin HOME full converge (real server on ephemeral ports)', ()
     this.timeout(30_000)
     killPid(first?.serverPid ?? null)
     await waitDead(first?.serverPid ?? null)
+    if (f) assertNoSurvivingServer(f.dataDir)
     f?.cleanup()
   })
 
@@ -211,6 +239,7 @@ function maimFixture(f: Fixture): { garbage: Buffer } {
 }
 
 suite('setup — repair matrix (broken fixtures, real converge)', () => {
+  brakeReviveForThisSuite()
   let f: Fixture
   let ports: { ui: number; mcp: number; otlp: number }
   let garbage: Buffer
@@ -236,6 +265,7 @@ suite('setup — repair matrix (broken fixtures, real converge)', () => {
     this.timeout(30_000)
     killPid(repaired?.serverPid ?? null)
     await waitDead(repaired?.serverPid ?? null)
+    if (f) assertNoSurvivingServer(f.dataDir)
     f?.cleanup()
   })
 
@@ -281,6 +311,7 @@ suite('setup — repair matrix (broken fixtures, real converge)', () => {
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 
 suite('setup — fail-fast refusals (no silent continue)', () => {
+  brakeReviveForThisSuite()
   test('a truncated settings.json is REFUSED: non-zero exit, file byte-identical, later steps not run', async function () {
     // Refuse-unparseable is the safeConfigEdit stance: never "start fresh" over user config.
     this.timeout(60_000)
@@ -320,7 +351,7 @@ suite('setup — fail-fast refusals (no silent continue)', () => {
           assert.strictEqual(stepOf(outcome, name).action, 'not run', `${name} must not run after the skill failure`)
         }
       } finally { fs.rmSync(bogusRoot, { recursive: true, force: true }) }
-    } finally { f.cleanup() }
+    } finally { assertNoSurvivingServer(f.dataDir); f.cleanup() }
   })
 
   test('setup rejects unknown flags with a usage error instead of guessing', async () => {
@@ -331,6 +362,7 @@ suite('setup — fail-fast refusals (no silent continue)', () => {
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 
 suite('setup — CLI wiring (spawned single executable)', () => {
+  brakeReviveForThisSuite()
   test('`agentlenspro setup --dry-run` through the real CLI honors env overrides, prints the table, exits 0', async function () {
     // The spawn-level proof that the verb is reachable through the ONE published bin.
     this.timeout(60_000)
