@@ -3,7 +3,7 @@ trdd-id: YGEV6QDD
 title: The hot-path latency test revives a real alcore daemon on the canonical ports and never stops it
 column: dev
 created: 2026-09-08T22:41:51+0200
-updated: 2026-09-09T12:06:43+0200
+updated: 2026-09-09T12:15:41+0200
 current-owner: main
 task-type: bugfix
 min-approval-requirement: none
@@ -12,7 +12,7 @@ severity: high
 blocked-by: []
 npt: []
 eht: []
-implementation-commits: []
+implementation-commits: [e56795ae]
 project-id: agentlenspro
 scope: project
 labels: [test, ops, server, leak]
@@ -21,7 +21,7 @@ relevant-rules: []
 
 # The hot-path latency test revives a real alcore daemon on the canonical ports and never stops it
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-09 12:06
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-09 12:15
 
 Root cause, verified: `runSetup()`'s `hooks`/`final-test` steps exec the registered hook via
 `execRegisteredCommand` (`src/cli/setup.ts:285-311`), which spreads `process.env` (`:287`) and
@@ -34,8 +34,7 @@ holding ~100 MB of REAL diverted capture (tracked for recovery in TRDD-81BW1CS9)
 file's own `baseEnv()` had the same hole (no NO_REVIVE) — pid 850 (`al-lat-wUTURr`, 123 MB) was
 an earlier squatter, origin unknown.
 
-Fix on disk (uncommitted; per-suite brake + `src/test/helpers/noSurvivingServer.ts` landed by
-the finalization worker, types/eslint/compile 0): `AGENTLENS_NO_REVIVE: '1'` added to the env in
+Fix LANDED in `e56795ae` (per-suite brake + `src/test/helpers/noSurvivingServer.ts`, types/eslint/compile 0): `AGENTLENS_NO_REVIVE: '1'` added to the env in
 this test file + `src/test/setupVerb.test.ts`, plus a ps-snapshot tripwire
 `assertNoSurvivingServer`.
 
@@ -51,17 +50,24 @@ Adversarial review (2026-09-09) accepted the brake and found:
 
 Coordinator's acceptance re-run 2026-09-08 23:00: 15 passing / 8 failing, every failure
 `spawnSync /bin/sh ETIMEDOUT` in the `hooks` step at load 20–37; the worker's own idle run was
-23/23. Load is the INFERRED cause of the timeouts; a re-run on an idle machine is still
-pending.
+23/23. Idle re-run 2026-09-09 12:07 (load 6.71 at the gate): 23 passing, exit 0; no `alcore serve`
+younger than the run afterwards. Load remains the INFERRED cause of the 23:00 timeouts — two
+variables changed (load, and the per-suite brake).
 - review 3 (2026-09-09) asked whether the "server probe distinguishes DOWN from UNRESPONSIVE"
   suite (`setupVerb.test.ts:394`) needs the brake: VERIFIED no — it calls `runSetup` only with
   `dryRun: true` (:413/:431/:444/:461) and both `execRegisteredCommand` sites sit behind
   `if (ctx.dryRun) return` (`src/cli/setup.ts:567`, `:967`). `brakeReviveForThisSuite()` is the
   first line of the other four suites (:135, :242, :314, :365).
 
-NEXT ACTION: scoped mocha on an idle machine (load < 8; 19.5 at 12:01), then commit the three
-test files by name; pid 68584 is stopped only inside the 5JZQFVO8 deploy after the
-TRDD-81BW1CS9 decision.
+Third squatter found 2026-09-09 12:15 in the post-run process table: pid 2218, elapsed 3 d 8 h, a
+worktree agent's DEBUG build `.claude/worktrees/agent-…/rust-core/target/debug/alcore serve
+--data-dir …/al-shutdown-2141-…` — the same leak shape from a different suite (an `al-shutdown`
+fixture), predating this card; origin test not identified. pid 850 (`al-lat-wUTURr`) no longer
+matched the needle at 12:15 — gone or renamed, unverified.
+
+NEXT ACTION: stop pids 68584 and 2218 only inside the 5JZQFVO8 deploy after the TRDD-81BW1CS9
+decision (68584 holds real diverted capture; 2218's fixture dir is a test fixture, recovery value
+unknown); then close this card.
 
 ## Why
 
