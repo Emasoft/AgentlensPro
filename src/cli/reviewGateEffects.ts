@@ -251,8 +251,8 @@ function inRepoEffects(cwd: string, sinceMs: number): string[] {
     const rel = entry.slice(3)
     if (/[RC]/.test(xy)) i++ // discard the accompanying old-path field of a rename/copy
     // `rel` is relative to `cwd` (`git -C cwd status`), so this match assumes the hook cwd IS the
-    // repo root — true for a session opened at the repo root, as this project's are. From a
-    // subdirectory `rel` would read
+    // repo root — true for a session opened at the repo root, which is how this project's
+    // sessions are opened (not measured from the hook). From a subdirectory `rel` would read
     // `../standalone/x.js`, the exclusion would miss and a watch rebuild would arm once: fail
     // closed, not open (the mtime check below resolves against cwd and is unaffected).
     if (BUILD_OUTPUT.some((re) => re.test(rel))) continue

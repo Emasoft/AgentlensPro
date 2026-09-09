@@ -3,7 +3,7 @@ trdd-id: 9FG0LSPG
 title: The review gate must decide on effects newer than the last fork, not on command text
 column: dev
 created: 2026-09-09T13:57:49+0200
-updated: 2026-09-09T14:32:07+0200
+updated: 2026-09-09T14:35:54+0200
 current-owner: main
 task-type: bugfix
 priority: critical
@@ -16,20 +16,21 @@ related: [0E3W5C45, 9J0515I4, 00G5G94L, 0D6QK5CW]
 blocked-by: []
 npt: []
 eht: []
-implementation-commits: []
+implementation-commits: [208994b8]
 ---
 
 # The review gate must decide on effects newer than the last fork, not on command text
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-09 14:32
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-09 14:35
 
 Design reviewed by an adversarial fork 2026-09-09. A first, stored-fingerprint variant (snapshot
 refreshed at every released Stop, text arms vetoed by an unchanged tree) was REJECTED by that
 review and is not to be revived: a cross-Stop refresh invariant has silent-release holes (a
 worker write landing between Stops, a missing snapshot after `/clear`, a hook timeout mid-walk),
 and the veto releases exactly the targets it was designed for — an empty diff proves nothing about
-where `$X` pointed. The STATELESS, ADDITIVE variant in §Design is IMPLEMENTED (uncommitted at
-14:17): `src/cli/reviewGateTriggers.ts` (redirect words stripped, literal-/tmp `$$`/`$RANDOM`,
+where `$X` pointed. The STATELESS, ADDITIVE variant in §Design is IMPLEMENTED and COMMITTED in
+`208994b8` (every text arm kept — every pre-existing ARM row still green; the commit subject's
+"not on command text" names the decision unit, not a removal): `src/cli/reviewGateTriggers.ts` (redirect words stripped, literal-/tmp `$$`/`$RANDOM`,
 positional `$VAR` resolution), `src/cli/reviewGateEffects.ts` (new), `src/cli/reviewGate.ts`
 (`lastForkTs`, `applyEffects`, `'unreviewed change'`, four stderr lines, case-folded fork check,
 directive sentence). Coordinator read every diff first-hand except the e2e test's two import
@@ -38,11 +39,11 @@ STAGED set (the new files included); 89 mocha tests passing across the three fil
 the two end-to-end `runMainGate` cases included; the mutation check (fold dropped → "expected a
 block, got release") was run and restored at 14:23. Adversarial reviews 14:27 and 14:31 accepted
 the diffs; their comment and card findings are applied.
-NEXT ACTION: commit by name (this card + six code/test files), then `node esbuild.js` and the live
-`agentlenspro review-gate --directive` check ON THE OWNER'S GO — the bundle deploy re-defines the
-enforcement gate and releases arms that fire today. After the deploy: one real edit-then-Stop
-must block, and `unreviewedEffects` must be present in `standalone/cli.js` (a failed esbuild
-leaves the stale bundle in place).
+NEXT ACTION: `node esbuild.js` and the live `agentlenspro review-gate --directive` check ON THE
+OWNER'S GO — the bundle deploy re-defines the enforcement gate and releases arms that fire today.
+After the deploy: one real edit-then-Stop must block, and `unreviewedEffects` must be present in
+`standalone/cli.js` (a failed esbuild leaves the stale bundle in place). Then file the Phase 2
+EHT card (§Not in scope) and advance the column to match the acceptance rows.
 
 ## Why
 

@@ -263,9 +263,10 @@ export function commandWriteReason(cmd: string, cwd: string): string | null {
   }
   // `segIdx` counts the same separator words the segment builder split on, so it names the same
   // segment as the classification pass. Sole divergence: a bare operator whose operand is itself a
-  // separator (`> ; foo`) — the builder swallowed it as the operand, this pass counts it. Harmless:
-  // the target becomes the literal word `;`, which resolves under cwd and arms — unless cwd is
-  // under /tmp, where the malformed command is a shell syntax error anyway.
+  // separator (`> ; foo`) — the builder swallows it as the operand. Harmless: this pass takes `;`
+  // as the redirect TARGET first and arms before it can count the `;` as a separator — unless cwd
+  // is under /tmp, where the count diverges unobservably (nothing later reads the snapshot) on a
+  // command the shell rejects as a syntax error anyway.
   let segIdx = 0
   for (let i = 0; i < words.length; i++) {
     if (!words[i].quoted && /^(\||\|\||&&|;|&)$/.test(words[i].word)) { segIdx++; continue }
