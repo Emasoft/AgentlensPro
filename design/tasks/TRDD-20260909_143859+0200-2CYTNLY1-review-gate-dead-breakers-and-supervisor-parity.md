@@ -3,7 +3,7 @@ trdd-id: 2CYTNLY1
 title: Delete the review gate's dead breakers and give the supervisor the gate's work definition
 column: todo
 created: 2026-09-09T14:38:59+0200
-updated: 2026-09-09T14:38:59+0200
+updated: 2026-09-09T14:42:57+0200
 current-owner: main
 task-type: refactor
 priority: medium
@@ -75,20 +75,18 @@ verified against the live source, not restated from memory.
   Reword to name the scanned window, matching `reviewSupervisor.ts`'s own care about this exact
   overclaim (`:108-109`, "in the scanned window, never 'this session'").
 
-- **DECISION — the kill switch silently disarms a gate the owner ordered undisablable.**
-  `agentlensDisabled()` (`src/cli/killSwitch.ts:92-95`) is checked at the top of
-  `runReviewGate` (`src/cli/reviewGate.ts:796`: `if (agentlensDisabled()) return 0`) with no
-  stderr line at all — the file's own doctrine (`killSwitch.ts:28-31`) says the switch is meant
-  to stop *every* AgentlensPro side-effect, but the standing order in `reviewGate.ts:108`
-  ("This gate CANNOT be disabled") and the `never-disarm-the-janitor`-shaped memory
-  `review-fork-gate-never-disabled.md` both say the review gate specifically is never to be
-  disabled by anything. Two open questions for the owner, not decided here: (1) minimum fix —
-  add the stderr line every other silent-allow path already has (`reviewGate.ts:588,593,809,819`
-  are the precedent); (2) larger question — should the global kill switch be allowed to cover the
-  review gate at all, or should the gate check `AGENTLENS_DISABLED`/the flag file itself and
-  refuse to honour it (mirroring how `reviveBraked()` is deliberately NOT unified with
-  `agentlensDisabled()`, `killSwitch.ts:56-61`)? Do not pick an answer in code before the owner
-  rules on (2); ship (1) regardless.
+- **DECISION — does the GLOBAL kill switch outrank a gate the owner ordered undisablable?**
+  `agentlensDisabled()` (`src/cli/killSwitch.ts:92-95`, verified 2026-09-09: env
+  `AGENTLENS_DISABLED=1` OR the flag file exists) returns `runReviewGate` at
+  `src/cli/reviewGate.ts:796` with no stderr line. The gate already refuses its OWN off-switch:
+  `AGENTLENS_REVIEW_FORK=off` is read and ignored with a stderr line (`reviewGate.ts:803-805`,
+  owner order 2026-09-03 — an env var is settable by anything in the process tree). The env half
+  of the global switch is that same bypass shape; the flag file is "an explicit human act"
+  (`killSwitch.ts:30`). Ship regardless of the decision: a stderr line on the kill-switch return,
+  matching the four other silent-allow lines (`reviewGate.ts:588,593,809,819`). The one question
+  for the owner: should the gate honour only the FILE half of the global switch and ignore
+  `AGENTLENS_DISABLED=1` the way it ignores its own env switch? Record the answer in
+  `## Approval log`; do not decide it in code.
 
 ## Acceptance
 

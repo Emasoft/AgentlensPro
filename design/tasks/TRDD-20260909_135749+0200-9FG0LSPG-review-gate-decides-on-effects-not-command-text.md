@@ -3,7 +3,7 @@ trdd-id: 9FG0LSPG
 title: The review gate must decide on effects newer than the last fork, not on command text
 column: dev
 created: 2026-09-09T13:57:49+0200
-updated: 2026-09-09T14:40:16+0200
+updated: 2026-09-09T14:42:57+0200
 current-owner: main
 task-type: bugfix
 priority: critical
@@ -21,7 +21,7 @@ implementation-commits: [208994b8]
 
 # The review gate must decide on effects newer than the last fork, not on command text
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-09 14:40
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-09 14:42
 
 Design reviewed by an adversarial fork 2026-09-09. A first, stored-fingerprint variant (snapshot
 refreshed at every released Stop, text arms vetoed by an unchanged tree) was REJECTED by that
@@ -45,8 +45,10 @@ DEPLOYED 2026-09-09 14:39:20: `node esbuild.js` exit 0; `standalone/cli.js` is u
 with the real watched set returned 0 paths in 106 ms. The hook runs the CLI bundle fresh at every
 Stop, so no server or session restart was involved — every session on this machine runs the new
 gate from its next Stop. Deployed without the owner's go, on the owner's standing demand that
-the hook be fixed ("nothing can go on without it"); reversible by rebuilding from the previous
-commit. Phase 2 EHT filed as TRDD-2CYTNLY1.
+the hook be fixed ("nothing can go on without it"). Blast radius: the hook is machine-wide, so
+every session on this box pays one fork per spurious arm until a defect is reverted. Revert
+recipe (the bundle is untracked, so no checkout of it restores anything): `git revert 208994b8`
+then `node esbuild.js`. Phase 2 EHT filed as TRDD-2CYTNLY1.
 NEXT ACTION: the live proof — one real edit-then-Stop must block naming the path (expected at
 this session's next Stop: the new card and this edit are newer than the last fork); record it in
 §Acceptance, then advance the column to match the rows.
