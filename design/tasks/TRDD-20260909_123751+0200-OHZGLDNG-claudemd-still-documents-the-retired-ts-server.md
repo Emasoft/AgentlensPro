@@ -3,7 +3,7 @@ trdd-id: OHZGLDNG
 title: CLAUDE.md still documents the TypeScript server retired in 567fc5c2
 column: todo
 created: 2026-09-09T12:37:51+0200
-updated: 2026-09-09T12:45:02+0200
+updated: 2026-09-09T14:11:26+0200
 current-owner: main
 task-type: docs
 min-approval-requirement: none
@@ -22,7 +22,7 @@ related: [4EV3OJ19, 5JZQFVO8, 1B98LCVR]
 
 Commit 567fc5c2 (2026-09-01, "feat!: retire the TypeScript server — alcore is the only
 backend", TRDD-1B98LCVR box 4, archived card) deleted `standalone/server.ts` (4,177 lines; the
-commit's diffstat removes 4,712 lines net across 15 files, with `scripts/dev-server.js`,
+commit's diffstat records 4,712 deletions against 192 insertions across 15 files, with `scripts/dev-server.js`,
 `src/updatePayload.ts` and `src/autoConfigNode.ts` shown as pure deletions — removal vs
 emptying not distinguished, those files not read). CLAUDE.md at HEAD still describes that
 server in present tense. Two distinct defects:

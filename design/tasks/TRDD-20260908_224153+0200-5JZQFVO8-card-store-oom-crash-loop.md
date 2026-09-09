@@ -3,7 +3,7 @@ trdd-id: 5JZQFVO8
 title: The collector crash-loops at boot because the card store 256 MB DuckDB pool overflows during the boot sweep upsert
 column: dev
 created: 2026-09-08T22:41:53+0200
-updated: 2026-09-09T12:45:02+0200
+updated: 2026-09-09T14:35:54+0200
 current-owner: main
 task-type: bugfix
 min-approval-requirement: none
@@ -68,7 +68,11 @@ deleted):
    AGENTLENS_ALCORE` prints nothing) and `~/.agentlens/bin/alcore` must not be a regular file
    (a directory or dangling symlink falls through — `statSync(...).isFile()`): `alcoreBin()`
    takes `AGENTLENS_ALCORE`, then `<dataDir>/bin/alcore`, before `bin-native/`
-   (`serverControl.ts:109-116`), so either would silently outrank the swap. Neither checked
+   (`serverControl.ts:109-116`), so either would silently outrank the swap. A live symlink to a
+   regular file at that path counts as a regular file (`statSync` follows it). This env check is
+   authoritative only for processes spawned from this shell's environment; a hook-revived child
+   inherits the environment of whichever Claude Code process runs the hook, which may differ —
+   step 7's argv-path check covers a hook env naming a different path. Neither checked
    this session — if set or present, stop and ask.
 5. `kill -TERM 68584` (TRDD-81BW1CS9's squatter) and, as a SEPARATE
    authorization the owner names, `kill -TERM 2218` (TRDD-4FLTDMHA's
@@ -82,7 +86,13 @@ deleted):
    runs `bin-native/darwin-arm64/alcore` AND that `shasum -a 256` of that path equals the
    `release-binary-sha256:` line from step 2 — both halves are required: a byte-identical copy
    under `AGENTLENS_ALCORE` or `~/.agentlens/bin/` passes the hash with the wrong path, and a
-   stale file at the right path passes the path with the wrong hash. There is no TS fallback
+   stale file at the right path passes the path with the wrong hash. Both halves also pass for a
+   process that started BEFORE the step-3 swap (the replacement leaves the old process running
+   its old image; the hash is of the file now on disk), so additionally require
+   `/bin/ps -o lstart= -p <pid>` to be later than `/usr/bin/stat -f %Sc bin-native/darwin-arm64/alcore`
+   (the binary's ctime, bumped by the rename and by `codesign --force`; explicit binaries because
+   GNU stat shadows BSD stat on PATH here). A process like pid 850, if still alive (its liveness
+   was never checked), is exactly the shape this catches. There is no TS fallback
    since 567fc5c2: `alcoreBin()` throws when
    `bin-native/` exists but the binary is missing or not executable (`serverControl.ts:124-132`)
    and returns null otherwise, on which the caller stops with `noServerAvailableError` (`:37`).
