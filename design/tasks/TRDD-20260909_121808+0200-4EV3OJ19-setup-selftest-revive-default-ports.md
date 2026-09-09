@@ -3,7 +3,7 @@ trdd-id: 4EV3OJ19
 title: The setup self-test revives alcore on the default ports because execRegisteredCommand pins the data dir but not the ports
 column: todo
 created: 2026-09-09T12:18:08+0200
-updated: 2026-09-09T12:27:56+0200
+updated: 2026-09-09T12:31:42+0200
 current-owner: main
 task-type: bugfix
 min-approval-requirement: none
@@ -50,6 +50,16 @@ VERIFIED first-hand 2026-09-09:
   (commit e56795ae), but a REAL `agentlenspro setup` run with custom
   (non-default) ports has the identical hole: its self-test's revive path
   would land on the default ports, not the ports the run just converged to.
+- `rust-core/crates/agentlens-core/src/pid_lock.rs:43-48` — `format_pid_lock`,
+  both arms: a bare pid when the start reference is unknown, else
+  `{"pid","start"}`; no port field in either shape. TS side:
+  `src/serverRuntime.ts:104-106` `formatPidLock` has the same two shapes and
+  no non-test caller; no `.ts` under `src/` or `standalone/` writes
+  `server.pid` (swept: the literal, sync and async `writeFile`, and every
+  `pidfilePath()` call site — readers only, at `serverControl.ts:444,639`,
+  `hookHandlers.ts:120`, `setup.ts:838`); the `standalone/server.ts` CLAUDE.md
+  names no longer exists. So a port record in the data dir would have to be
+  ADDED — nothing writes one today.
 - Rejected alternative (adversarial review, 2026-09-09): setting
   `AGENTLENS_NO_REVIVE` unconditionally inside `execRegisteredCommand` — on a
   real user's `HOME`, a revive triggered by the self-test's own hook call is
@@ -71,9 +81,8 @@ pins `setup.ts:923-925` already applies to setup's own spawn. Closes only
 this caller.
 
 (2) Shared-function fix, root cause: `reviveDaemonDetached()` derives ports
-from env because nothing in the data dir records them (VERIFIED: `server.pid`
-carries only `{"pid","start"}` — `pid_lock.rs:43-46` `format_pid_lock` — so a
-port record would have to be ADDED) — add a data-dir-scoped port record written by the
+from env because nothing in the data dir records them (the pidfile carries pid
+and start only — see Evidence) — add a data-dir-scoped port record written by the
 server at boot and read by the revive, so every caller (setup self-test, the
 real Claude Code hook) revives on the ports the data dir's server used.
 
