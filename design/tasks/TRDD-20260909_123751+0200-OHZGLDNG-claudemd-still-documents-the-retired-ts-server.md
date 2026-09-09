@@ -3,7 +3,7 @@ trdd-id: OHZGLDNG
 title: CLAUDE.md still documents the TypeScript server retired in 567fc5c2
 column: todo
 created: 2026-09-09T12:37:51+0200
-updated: 2026-09-09T12:37:51+0200
+updated: 2026-09-09T12:45:02+0200
 current-owner: main
 task-type: docs
 min-approval-requirement: none
@@ -21,9 +21,11 @@ related: [4EV3OJ19, 5JZQFVO8, 1B98LCVR]
 ## Why
 
 Commit 567fc5c2 (2026-09-01, "feat!: retire the TypeScript server — alcore is the only
-backend", TRDD-1B98LCVR box 4) deleted `standalone/server.ts` (4,177 lines) and the
-`scripts/dev-server.js` / `src/updatePayload.ts` / `src/autoConfigNode.ts` it fed. CLAUDE.md at
-HEAD still describes that server in present tense. Two distinct defects:
+backend", TRDD-1B98LCVR box 4, archived card) deleted `standalone/server.ts` (4,177 lines; the
+commit's diffstat removes 4,712 lines net across 15 files, with `scripts/dev-server.js`,
+`src/updatePayload.ts` and `src/autoConfigNode.ts` shown as pure deletions — removal vs
+emptying not distinguished, those files not read). CLAUDE.md at HEAD still describes that
+server in present tense. Two distinct defects:
 
 1. **A deleted file is named as live.** Lines 133 (`standalone/server.ts` as a source of the
    `standalone/**` layer, bundled with `cli.ts`), 135 (the `/api/*` shim "on
@@ -54,7 +56,8 @@ line 270 goes looking for the guard in a file that has not existed for eight day
 - `src/rustBinResolve.ts` read whole: `npmPlatformBin` returns null for an unshipped platform
   or a missing file; `src/cli/serverControl.ts:103-133` (`alcoreBin`): env override, then
   `<dataDir>/bin/alcore`, then `bin-native/`; returns null when the platform is unshipped or
-  `bin-native/` is absent (the caller stops with `noServerAvailableError`, `:37`); THROWS when
+  `bin-native/` is absent (the caller stops with `noServerAvailableError`, defined at `:37`;
+  its call sites not read); THROWS when
   `bin-native/` exists but the binary is missing or not executable (`:124-132`). No branch
   spawns anything but alcore.
 - The guard doctrine at line 270 (atomic exclusive create, stale-lock takeover,
@@ -68,15 +71,17 @@ line 270 goes looking for the guard in a file that has not existed for eight day
 
 ## Acceptance
 
-1. `! grep -q 'standalone/server.ts' CLAUDE.md` exits 0, and `grep -c entryPoints esbuild.js`
-   prints `3` with line 135's count corrected to match.
+1. `! grep -q 'standalone/server.ts' CLAUDE.md` exits 0, and `grep -c 'entryPoints:' esbuild.js`
+   prints `3` — confirmed by reading `esbuild.js` that each is one `build()` call (a literal
+   count is not a target count) — with line 135's count corrected to match.
 2. Line 151 is rewritten from a grep of `require.resolve('sql.js')` / `sql.js` over non-test
    `src/` and `standalone/`: either the gotcha names its live file, or it is removed as retired.
 3. Lines 257 and 312 state what happens with no binary (null → `noServerAvailableError`; throw
    on a corrupt install, `serverControl.ts:121-132`), and line 270 names `pid_lock.rs::claim`
    after its body is read and the three guard properties are confirmed against it.
-4. `src/rustBinResolve.ts:15-17` reads "must return null (the CLI stops with an actionable
-   error) rather than crash the CLI" or equivalent — no "fall back to the TS server".
+4. `src/rustBinResolve.ts:15-17` reads "must return null — the caller (`serverControl.ts`,
+   `noServerAvailableError`) turns that into an actionable stop — rather than crash the CLI" or
+   equivalent — no "fall back to the TS server".
 5. `pnpm run check-identities` exit 0 on the edited CLAUDE.md (it is a checked file).
 
 Filed at `todo` like the two sibling cards of 2026-09-09 (Tier-0 docs work that should drain),

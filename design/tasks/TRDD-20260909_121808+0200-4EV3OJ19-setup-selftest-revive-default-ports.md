@@ -3,7 +3,7 @@ trdd-id: 4EV3OJ19
 title: The setup self-test revives alcore on the default ports because execRegisteredCommand pins the data dir but not the ports
 column: todo
 created: 2026-09-09T12:18:08+0200
-updated: 2026-09-09T12:40:50+0200
+updated: 2026-09-09T12:45:02+0200
 current-owner: main
 task-type: bugfix
 min-approval-requirement: none
@@ -56,6 +56,9 @@ VERIFIED first-hand 2026-09-09:
   — `formatPidLock`, the same two shapes. So a port record in the data dir
   would have to be ADDED — nothing writes one today (the absence half of that
   claim is under SWEPT below).
+- `standalone/` holds `cli.ts`, `cli.js`, `cli.js.map`, `tsconfig.json` (directory
+  listing) — the `standalone/server.ts` CLAUDE.md names does not exist (retired
+  in 567fc5c2; carded as TRDD-OHZGLDNG).
 - Rejected alternative (adversarial review, 2026-09-09): setting
   `AGENTLENS_NO_REVIVE` unconditionally inside `execRegisteredCommand` — on a
   real user's `HOME`, a revive triggered by the self-test's own hook call is
@@ -71,14 +74,11 @@ whole for these absences):
   `openSync(…, 'wx')`, `writeFile(` / `promises.writeFile` /
   `createWriteStream(`, and every `pidfilePath()` call site — readers only, at
   `serverControl.ts:444,639`, `hookHandlers.ts:120`, `setup.ts:838`.
-- The `standalone/server.ts` CLAUDE.md names does not exist: `standalone/`
-  holds `cli.ts`, `cli.js`, `cli.js.map`, `tsconfig.json` (retired in
-  567fc5c2; carded as TRDD-OHZGLDNG).
 
 INFERRED (never observed):
 
 - A real `agentlenspro setup` run with custom ports reviving on the defaults
-  (follows from the four code-path bullets above; nobody ran it).
+  (follows from the four port-path bullets above; nobody ran it).
 - Whether the production hook path (Claude Code's own hook env) carries the
   ports depends on what setup writes into settings.json's env block, not
   checked.
