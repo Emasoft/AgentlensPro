@@ -100,8 +100,10 @@ with a QUOTED `--include='*.rs'`) finds no needle-bearing production site the in
 no phantom row; helper call sites without the literal (e.g. `chores.rs:288`) are covered only where
 the card names them; the TS server's own DuckDB sites (under src/store/, e.g. db.ts) exist and are
 outside the card's alcore scope; the only uncovered Rust hits are under `tests/` or
-`memory_limit_scope.rs`. Markers: one blanket agent-VERIFIED marker over the inventory (STATE line
-27) plus an explicit INFERRED (line 177); the per-row ✓ marks live in the plan report, not the card.
+`memory_limit_scope.rs`. Markers, quoted from the card (line numbers drift as the card is edited):
+one blanket "agent-VERIFIED by reading" on the STATE inventory heading, plus one explicit
+"INFERRED — no" on the blocking-threads sentence; the per-row ✓ marks live in the plan report, not
+the card.
 One off-by-one in the STATE prose: `alstore.rs:105` is the `threads` line, the call is `:106`.
 The chosen shape's DuckDB-internals claims (`try_clone()` through one `connect()`, TEMP-table
 isolation) remain the agent's — this row verifies the inventory-and-marker acceptance, not the
@@ -131,5 +133,5 @@ YGEV6QDD and 5JZQFVO8 only, not for the new card), and each carries one `NEXT AC
 `design/tasks/TRDD-20260909_113635+0200-81BW1CS9-diverted-capture-in-two-leaked-tmp-data-dirs.md`;
 committed at dbebe144. The `date`-sourced clause was dropped from the cell: it is not verifiable
 from the artifact.
-<!-- colony-check: 2026-09-09T10:33:37.926Z sha256:4aca74264da3cd39 -->
+<!-- colony-check: 2026-09-09T10:38:58.556Z sha256:c80a1efc65769153 -->
 <!-- colony-check: this is a CONTENT BINDING, not a verdict. It records which bytes were checked, never whether they passed. Re-run ledger-check.mjs on this file for a verdict. -->
