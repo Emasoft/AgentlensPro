@@ -3,7 +3,7 @@ trdd-id: 5JZQFVO8
 title: The collector crash-loops at boot because the card store 256 MB DuckDB pool overflows during the boot sweep upsert
 column: dev
 created: 2026-09-08T22:41:53+0200
-updated: 2026-09-08T22:41:53+0200
+updated: 2026-09-09T11:36:35+0200
 current-owner: main
 task-type: bugfix
 min-approval-requirement: none
@@ -22,14 +22,43 @@ relevant-rules: []
 
 # The collector crash-loops at boot because the card store 256 MB DuckDB pool overflows during the boot sweep upsert
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-08
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-09 11:36
 
-NEXT ACTION: read the background investigator's root-cause report under
-`reports/card-store-oom/` (still being written as of card authoring time), then propose the
-minimal fix (bounded batches/commits per chunk in the boot sweep, or a spilling store) for
-adversarial review BEFORE implementing. Do NOT raise the 256 MB memory_limit — TRDD-DKBGT7MQ
-already shows per-instance limits summing to 19.25 GB across running instances on this
-machine, so raising a per-instance cap compounds a known problem rather than fixing this one.
+Fix ON DISK, uncommitted, in `rust-core/crates/agentlens-core/src/log_reader.rs` ~:729-763:
+`RESTORE_CHUNK = 2_000`, commit+begin every 2,000 cards (comment cites `card_store.rs` `open`
+recreating the file and the state lock at `log_reader.rs:996`). Test added:
+`a_restore_sized_bulk_load_stays_inside_the_memory_limit` in `tests/card_store.rs` (N=60_000,
+≈1.7× the real corpus, 12 whale rows of 310 KB; 80k ran 493 s, 60k ran 510 s under heavier
+load — a 🐌 test).
+
+Reviewed 2026-09-08 (accepted with amendments) and 2026-09-09:
+- begin/commit are plain BEGIN/COMMIT (`card_store.rs:142-148`); nothing in the loop spans the
+  chunk boundary.
+- whether COMMIT also checkpoints the ART index charge is DuckDB's auto-checkpoint —
+  INFERRED, not verified; the real-corpus boot is the discriminator.
+- `demote_cold_timelines`, which runs right after the restore, is the same unbounded shape and
+  is UNMEASURED — next suspect if the boot still dies one line later.
+
+Evidence still missing as of 11:35:
+- the mutation check (the single-transaction pre-fix code must FAIL the new test; a timeout
+  result is undetermined, not a pass).
+- the release rebuild — `target/release/alcore` is still the 22:43 build, predates the fix.
+- the isolated boot on a COPY of snapshot+delta measures the RESTORE only (no spans dir
+  copied), so it says nothing about resident footprint against the real 4.38M-span store.
+
+Real collector: 138 OOM panics logged, last revive 2026-09-08 23:47 died 23:48;
+`server.pid` still names dead pid 17041.
+
+Deploy sequence once PASS (USER go required): `cp` to a temp name in
+`bin-native/darwin-arm64` → `codesign -s - --force` → atomic `mv` over `alcore` (never `cp`
+over the running mapped binary — the exit-137 shape) → `kill -TERM 68584` (only AFTER its
+diverted data is recovered per TRDD-81BW1CS9) → `agentlenspro server restart` (verify
+`agentlenspro` resolves to this repo first) → read `~/.agentlens/server.log` for `RSS HARD
+CAP` before calling a 6-second exit an OOM — the new binary carries the fixed WKLD508O guard
+and a 2 GB exit is the ruled behaviour.
+
+NEXT ACTION: read the worker report under `reports/trdd-5jzqfvo8/`, then commit
+`log_reader.rs` + `tests/card_store.rs` by name, then the deploy on the owner's word.
 
 ## Why
 

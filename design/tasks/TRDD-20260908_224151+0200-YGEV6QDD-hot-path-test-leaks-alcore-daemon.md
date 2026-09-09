@@ -1,9 +1,9 @@
 ---
 trdd-id: YGEV6QDD
 title: The hot-path latency test revives a real alcore daemon on the canonical ports and never stops it
-column: todo
+column: dev
 created: 2026-09-08T22:41:51+0200
-updated: 2026-09-08T22:41:51+0200
+updated: 2026-09-09T11:36:35+0200
 current-owner: main
 task-type: bugfix
 min-approval-requirement: none
@@ -21,10 +21,41 @@ relevant-rules: []
 
 # The hot-path latency test revives a real alcore daemon on the canonical ports and never stops it
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-08
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-09 11:36
 
-NEXT ACTION: pin explicit isolated ports for the test's temp HOME, and stop any revived
-server (by pidfile) in `finally`. Not yet started.
+Root cause, verified: `runSetup()`'s `hooks`/`final-test` steps exec the registered hook via
+`execRegisteredCommand` (`src/cli/setup.ts:285-311`), which spreads `process.env` (`:287`) and
+pins HOME/AGENTLENS_DATA_DIR/AGENTLENS_UI_URL but NOT UI_PORT/MCP_PORT/OTLP_PORT. On a failed
+POST the hook's `reviveDaemonDetached()` (`src/cli/hookHandlers.ts:138-232`, brake at `:166`)
+spawns `alcore serve` with `alcoreServeArgs()` reading ports from env → DEFAULT ports
+3000/4316/4318 with the FIXTURE's `--data-dir`. Measured leak: pid 68584 (`al-setup-OYnBpx`),
+started 22:43 during a full mocha run, still the only listener on 3000 at 11:32 on 2026-09-09,
+holding ~100 MB of REAL diverted capture (tracked for recovery in TRDD-81BW1CS9). This test
+file's own `baseEnv()` had the same hole (no NO_REVIVE) — pid 850 (`al-lat-wUTURr`, 123 MB) was
+an earlier squatter, origin unknown.
+
+Fix on disk (uncommitted): `AGENTLENS_NO_REVIVE: '1'` added to the env in this test file +
+`src/test/setupVerb.test.ts`, plus a ps-snapshot tripwire `assertNoSurvivingServer`.
+
+Adversarial review (2026-09-09) accepted the brake and found:
+- the root-level `suiteSetup` brake in `setupVerb.test.ts` was RUN-scoped not file-scoped —
+  being fixed: convert to a per-suite brake + shared helper (worker in flight).
+- the tripwire only fails when the POST race actually fires — it is not a regression test of
+  the brake itself, only a symptom detector.
+- the product-side recommendation to add NO_REVIVE inside `execRegisteredCommand` was
+  REJECTED — on a real HOME a revive from the self-test is a working collector; the real
+  defect is the missing port pins (a real setup with custom ports would still revive on
+  default ports). That is a separate follow-up, not this card.
+
+Coordinator's acceptance re-run 2026-09-08 23:00: 15 passing / 8 failing, every failure
+`spawnSync /bin/sh ETIMEDOUT` in the `hooks` step at load 20–37; the worker's own idle run was
+23/23. Load is the INFERRED cause of the timeouts; a re-run on an idle machine is still
+pending.
+
+NEXT ACTION: land the per-suite brake + shared helper (worker in flight), re-run the two
+suites (`cliHotPathLatency.test.ts`, `setupVerb.test.ts`) on an idle machine, commit, then stop
+pid 68584 only as part of the 5JZQFVO8 deploy (its data must be recovered first, per
+TRDD-81BW1CS9).
 
 ## Why
 
