@@ -3,7 +3,7 @@ trdd-id: YGEV6QDD
 title: The hot-path latency test revives a real alcore daemon on the canonical ports and never stops it
 column: dev
 created: 2026-09-08T22:41:51+0200
-updated: 2026-09-09T12:19:48+0200
+updated: 2026-09-09T12:23:20+0200
 current-owner: main
 task-type: bugfix
 min-approval-requirement: none
@@ -21,7 +21,7 @@ relevant-rules: []
 
 # The hot-path latency test revives a real alcore daemon on the canonical ports and never stops it
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-09 12:19
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-09 12:23
 
 Root cause, verified: `runSetup()`'s `hooks`/`final-test` steps exec the registered hook via
 `execRegisteredCommand` (`src/cli/setup.ts:285-311`), which spreads `process.env` (`:287`) and
@@ -65,7 +65,9 @@ elapsed 3 d 8 h, a worktree agent's DEBUG build `.claude/worktrees/agent-…/rus
 skips teardown is at least as likely as the hook revive this card diagnoses). Carded as
 TRDD-4FLTDMHA. pid 850 (`al-lat-wUTURr`) was not among the three matches; whether it is alive
 was not checked. A bare `alcore serve` grep of the same snapshot (12:45) returns the same three
-lines, so no alcore of any kind is younger than the run.
+lines, so no `alcore serve` line in the 12:07 snapshot is younger than the run (a
+renamed binary or a non-`serve` alcore would not match; the in-suite
+tripwire covers a child that exited before the snapshot).
 
 NEXT ACTION: pid 68584 is stopped only inside the 5JZQFVO8 deploy after the TRDD-81BW1CS9
 decision; pid 2218 belongs to TRDD-4FLTDMHA (origin untraced, out of this card's scope); then

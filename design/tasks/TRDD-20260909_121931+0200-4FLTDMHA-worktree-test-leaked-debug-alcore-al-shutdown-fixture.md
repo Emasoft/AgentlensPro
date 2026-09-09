@@ -15,7 +15,7 @@ eht: []
 implementation-commits: []
 relevant-rules: []
 created: 2026-09-09T12:19:31+0200
-updated: 2026-09-09T12:19:31+0200
+updated: 2026-09-09T12:23:20+0200
 ---
 
 # A worktree test run leaked a debug alcore on an al-shutdown fixture that survived three days
@@ -28,8 +28,10 @@ worktree agent's run, alive for three days; origin test NOT identified; MECHANIS
 ESTABLISHED (a test that spawns the server itself and skips teardown is at least as likely as
 the hook-revive path TRDD-YGEV6QDD diagnoses).
 
-Next: grep `al-shutdown` under `src/test/` and `rust-core/crates/*/tests/` to find the suite;
-add teardown or the `assertNoSurvivingServer` tripwire (`src/test/helpers/noSurvivingServer.ts`).
+Next: grep `al-shutdown` under `rust-core/crates/*/tests/` FIRST (a DEBUG build from
+`rust-core/target/debug` points at a Rust integration test run by `cargo test`), then
+`src/test/`, to find the suite; add teardown or the `assertNoSurvivingServer` tripwire
+(`src/test/helpers/noSurvivingServer.ts`).
 
 ## Acceptance
 

@@ -3,7 +3,7 @@ trdd-id: 5JZQFVO8
 title: The collector crash-loops at boot because the card store 256 MB DuckDB pool overflows during the boot sweep upsert
 column: dev
 created: 2026-09-08T22:41:53+0200
-updated: 2026-09-09T12:19:48+0200
+updated: 2026-09-09T12:23:20+0200
 current-owner: main
 task-type: bugfix
 min-approval-requirement: none
@@ -22,7 +22,7 @@ relevant-rules: []
 
 # The collector crash-loops at boot because the card store 256 MB DuckDB pool overflows during the boot sweep upsert
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-09 12:19
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-09 12:23
 
 Fix LANDED in `86acd104`: `rust-core/crates/agentlens-core/src/log_reader.rs` ~:729-763:
 `RESTORE_CHUNK = 2_000`, commit+begin every 2,000 cards (comment cites `card_store.rs` `open`
@@ -65,16 +65,24 @@ deleted):
    atomic; never `cp` over the mapped binary — the exit-137 shape).
 4. `./bin-native/darwin-arm64/alcore --version` must exit 0 (137 = the codesign shape) BEFORE
    touching 68584.
-5. `kill -TERM 68584`, then poll `kill -0 68584` until it is gone.
+5. `kill -TERM 68584` (TRDD-81BW1CS9's squatter) and, as a SEPARATE
+   authorization the owner names, `kill -TERM 2218` (TRDD-4FLTDMHA's
+   untraced 3-day-old debug alcore); poll `kill -0` on each until gone.
 6. `agentlenspro server restart`. A hook-revive may win the race on 3000 with the fixed binary
    and the real data dir; then the restart's own 'exited during startup' line is NOT
    authoritative — read `started-by=` in `~/.agentlens/server.log`.
 7. Judge the boot from `server.log`: `RSS HARD CAP` (the WKLD508O guard at 2 GB, ruled
    behaviour) vs `Out of Memory` (the old loop); confirm `logSessions` ≈ 35k and the footprint.
+   Also confirm from a `ps -eo pid,command` snapshot (grep the FILE) that the pid on port 3000
+   runs `bin-native/darwin-arm64/alcore`, not the TS fallback server `rustBinResolve` picks when
+   the binary is not executable — a silent fallback boots clean and restores nothing through the
+   Rust path.
 
 On choice (b) abandon-for-now: pid 68584's data dir is under `/var/folders/…/T`, which macOS
-purges on reboot and by age — "stays on disk" holds only until then. (b) is the owner's
-explicit choice, never a default on a bare "go".
+purges on reboot for certain and by age possibly (the dir has survived 13 h
+so far) — "stays on disk" holds only until then. (b) is the owner's
+explicit choice, never a default on a bare "go" — coordinator's rule,
+adopted from the 2026-09-09 review, not an owner ruling.
 
 NEXT ACTION: the deploy above, on the owner's word. DELEGATION.md row 4 is verified (cargo test
 card_store: 11 passed, exit 0, 188.79 s).
