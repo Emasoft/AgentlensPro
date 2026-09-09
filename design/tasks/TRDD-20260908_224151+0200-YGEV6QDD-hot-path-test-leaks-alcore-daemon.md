@@ -3,7 +3,7 @@ trdd-id: YGEV6QDD
 title: The hot-path latency test revives a real alcore daemon on the canonical ports and never stops it
 column: dev
 created: 2026-09-08T22:41:51+0200
-updated: 2026-09-09T11:36:35+0200
+updated: 2026-09-09T12:06:43+0200
 current-owner: main
 task-type: bugfix
 min-approval-requirement: none
@@ -21,7 +21,7 @@ relevant-rules: []
 
 # The hot-path latency test revives a real alcore daemon on the canonical ports and never stops it
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-09 11:36
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-09 12:06
 
 Root cause, verified: `runSetup()`'s `hooks`/`final-test` steps exec the registered hook via
 `execRegisteredCommand` (`src/cli/setup.ts:285-311`), which spreads `process.env` (`:287`) and
@@ -34,8 +34,10 @@ holding ~100 MB of REAL diverted capture (tracked for recovery in TRDD-81BW1CS9)
 file's own `baseEnv()` had the same hole (no NO_REVIVE) — pid 850 (`al-lat-wUTURr`, 123 MB) was
 an earlier squatter, origin unknown.
 
-Fix on disk (uncommitted): `AGENTLENS_NO_REVIVE: '1'` added to the env in this test file +
-`src/test/setupVerb.test.ts`, plus a ps-snapshot tripwire `assertNoSurvivingServer`.
+Fix on disk (uncommitted; per-suite brake + `src/test/helpers/noSurvivingServer.ts` landed by
+the finalization worker, types/eslint/compile 0): `AGENTLENS_NO_REVIVE: '1'` added to the env in
+this test file + `src/test/setupVerb.test.ts`, plus a ps-snapshot tripwire
+`assertNoSurvivingServer`.
 
 Adversarial review (2026-09-09) accepted the brake and found:
 - the root-level `suiteSetup` brake in `setupVerb.test.ts` was RUN-scoped not file-scoped —
@@ -51,11 +53,15 @@ Coordinator's acceptance re-run 2026-09-08 23:00: 15 passing / 8 failing, every 
 `spawnSync /bin/sh ETIMEDOUT` in the `hooks` step at load 20–37; the worker's own idle run was
 23/23. Load is the INFERRED cause of the timeouts; a re-run on an idle machine is still
 pending.
+- review 3 (2026-09-09) asked whether the "server probe distinguishes DOWN from UNRESPONSIVE"
+  suite (`setupVerb.test.ts:394`) needs the brake: VERIFIED no — it calls `runSetup` only with
+  `dryRun: true` (:413/:431/:444/:461) and both `execRegisteredCommand` sites sit behind
+  `if (ctx.dryRun) return` (`src/cli/setup.ts:567`, `:967`). `brakeReviveForThisSuite()` is the
+  first line of the other four suites (:135, :242, :314, :365).
 
-NEXT ACTION: land the per-suite brake + shared helper (worker in flight), re-run the two
-suites (`cliHotPathLatency.test.ts`, `setupVerb.test.ts`) on an idle machine, commit, then stop
-pid 68584 only as part of the 5JZQFVO8 deploy (its data must be recovered first, per
-TRDD-81BW1CS9).
+NEXT ACTION: scoped mocha on an idle machine (load < 8; 19.5 at 12:01), then commit the three
+test files by name; pid 68584 is stopped only inside the 5JZQFVO8 deploy after the
+TRDD-81BW1CS9 decision.
 
 ## Why
 

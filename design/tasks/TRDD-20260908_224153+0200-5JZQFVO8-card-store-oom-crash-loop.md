@@ -3,7 +3,7 @@ trdd-id: 5JZQFVO8
 title: The collector crash-loops at boot because the card store 256 MB DuckDB pool overflows during the boot sweep upsert
 column: dev
 created: 2026-09-08T22:41:53+0200
-updated: 2026-09-09T11:36:35+0200
+updated: 2026-09-09T12:06:43+0200
 current-owner: main
 task-type: bugfix
 min-approval-requirement: none
@@ -13,7 +13,7 @@ blocked-by: []
 parent-trdd: 7YPQWKPG
 npt: []
 eht: []
-implementation-commits: []
+implementation-commits: [86acd104]
 project-id: agentlenspro
 scope: project
 labels: [rust, duckdb, card-store, boot, crash-loop, memory]
@@ -22,9 +22,9 @@ relevant-rules: []
 
 # The collector crash-loops at boot because the card store 256 MB DuckDB pool overflows during the boot sweep upsert
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-09 11:36
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-09 12:06
 
-Fix ON DISK, uncommitted, in `rust-core/crates/agentlens-core/src/log_reader.rs` ~:729-763:
+Fix LANDED in `86acd104`: `rust-core/crates/agentlens-core/src/log_reader.rs` ~:729-763:
 `RESTORE_CHUNK = 2_000`, commit+begin every 2,000 cards (comment cites `card_store.rs` `open`
 recreating the file and the state lock at `log_reader.rs:996`). Test added:
 `a_restore_sized_bulk_load_stays_inside_the_memory_limit` in `tests/card_store.rs` (N=60_000,
@@ -39,26 +39,39 @@ Reviewed 2026-09-08 (accepted with amendments) and 2026-09-09:
 - `demote_cold_timelines`, which runs right after the restore, is the same unbounded shape and
   is UNMEASURED — next suspect if the boot still dies one line later.
 
-Evidence still missing as of 11:35:
-- the mutation check (the single-transaction pre-fix code must FAIL the new test; a timeout
-  result is undetermined, not a pass).
-- the release rebuild — `target/release/alcore` is still the 22:43 build, predates the fix.
-- the isolated boot on a COPY of snapshot+delta measures the RESTORE only (no spans dir
-  copied), so it says nothing about resident footprint against the real 4.38M-span store.
+Evidence landed 2026-09-09 (reports under `reports/trdd-5jzqfvo8/`): the single-transaction
+mutant FAILS the test at `card_store.rs:168` with DuckDB's Out of Memory Error (255.9/256.0
+MiB), exit 101; `target/release/alcore` rebuilt 11:39:51 with the fix; boot #2 on a copy of
+snapshot+delta+`log-delta-version.json`: `restored 35258 session cards`, no panic, no
+`cold-rescanning`, alive +126 s, footprint 608 MB (peak 894 MB), restore lock 14,738 ms. NOT
+established: resident footprint with the real 4.38M-span store and the live transcript scan (no
+spans dir, tmp HOME), and `demote_cold_timelines` on a store that also holds span-derived cards.
 
 Real collector: 138 OOM panics logged, last revive 2026-09-08 23:47 died 23:48;
 `server.pid` still names dead pid 17041.
 
-Deploy sequence once PASS (USER go required): `cp` to a temp name in
-`bin-native/darwin-arm64` → `codesign -s - --force` → atomic `mv` over `alcore` (never `cp`
-over the running mapped binary — the exit-137 shape) → `kill -TERM 68584` (only AFTER its
-diverted data is recovered per TRDD-81BW1CS9) → `agentlenspro server restart` (verify
-`agentlenspro` resolves to this repo first) → read `~/.agentlens/server.log` for `RSS HARD
-CAP` before calling a 6-second exit an OOM — the new binary carries the fixed WKLD508O guard
-and a 2 GB exit is the ruled behaviour.
+Deploy sequence (USER go required; the owner must also decide TRDD-81BW1CS9 first: recover pid
+68584's diverted capture BEFORE the kill, or abandon-for-now — its tmp dir stays on disk, never
+deleted):
+1. `ls -ld $(readlink -f $(which agentlenspro))` must be this repo's `standalone/cli.js`
+   (verified 12:01).
+2. Record `shasum -a 256 rust-core/target/release/alcore` here (`bin-native/` is gitignored, so
+   the deployed binary has no commit link otherwise).
+3. `cp rust-core/target/release/alcore bin-native/darwin-arm64/alcore.new` →
+   `codesign -s - --force bin-native/darwin-arm64/alcore.new` →
+   `mv bin-native/darwin-arm64/alcore.new bin-native/darwin-arm64/alcore` (same dir = rename(2),
+   atomic; never `cp` over the mapped binary — the exit-137 shape).
+4. `./bin-native/darwin-arm64/alcore --version` must exit 0 (137 = the codesign shape) BEFORE
+   touching 68584.
+5. `kill -TERM 68584`, then poll `kill -0 68584` until it is gone.
+6. `agentlenspro server restart`. A hook-revive may win the race on 3000 with the fixed binary
+   and the real data dir; then the restart's own 'exited during startup' line is NOT
+   authoritative — read `started-by=` in `~/.agentlens/server.log`.
+7. Judge the boot from `server.log`: `RSS HARD CAP` (the WKLD508O guard at 2 GB, ruled
+   behaviour) vs `Out of Memory` (the old loop); confirm `logSessions` ≈ 35k and the footprint.
 
-NEXT ACTION: read the worker report under `reports/trdd-5jzqfvo8/`, then commit
-`log_reader.rs` + `tests/card_store.rs` by name, then the deploy on the owner's word.
+NEXT ACTION: the deploy above, on the owner's word; row 4 of DELEGATION.md
+(`cargo test --test card_store`) is running for the ledger.
 
 ## Why
 
