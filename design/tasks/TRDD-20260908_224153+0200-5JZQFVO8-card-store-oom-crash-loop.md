@@ -3,7 +3,7 @@ trdd-id: 5JZQFVO8
 title: The collector crash-loops at boot because the card store 256 MB DuckDB pool overflows during the boot sweep upsert
 column: dev
 created: 2026-09-08T22:41:53+0200
-updated: 2026-09-09T12:23:20+0200
+updated: 2026-09-09T12:40:50+0200
 current-owner: main
 task-type: bugfix
 min-approval-requirement: none
@@ -22,7 +22,7 @@ relevant-rules: []
 
 # The collector crash-loops at boot because the card store 256 MB DuckDB pool overflows during the boot sweep upsert
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-09 12:23
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-09 12:40
 
 Fix LANDED in `86acd104`: `rust-core/crates/agentlens-core/src/log_reader.rs` ~:729-763:
 `RESTORE_CHUNK = 2_000`, commit+begin every 2,000 cards (comment cites `card_store.rs` `open`
@@ -64,7 +64,10 @@ deleted):
    `mv bin-native/darwin-arm64/alcore.new bin-native/darwin-arm64/alcore` (same dir = rename(2),
    atomic; never `cp` over the mapped binary — the exit-137 shape).
 4. `./bin-native/darwin-arm64/alcore --version` must exit 0 (137 = the codesign shape) BEFORE
-   touching 68584.
+   touching 68584. Also `~/.agentlens/bin/alcore` must NOT exist: `alcoreBin()` takes
+   `AGENTLENS_ALCORE`, then `<dataDir>/bin/alcore`, before `bin-native/`
+   (`serverControl.ts:109-116`), so a copy there would silently outrank the swap. Not checked
+   this session — if present, stop and ask.
 5. `kill -TERM 68584` (TRDD-81BW1CS9's squatter) and, as a SEPARATE
    authorization the owner names, `kill -TERM 2218` (TRDD-4FLTDMHA's
    untraced 3-day-old debug alcore); poll `kill -0` on each until gone.
@@ -74,9 +77,11 @@ deleted):
 7. Judge the boot from `server.log`: `RSS HARD CAP` (the WKLD508O guard at 2 GB, ruled
    behaviour) vs `Out of Memory` (the old loop); confirm `logSessions` ≈ 35k and the footprint.
    Also confirm from a `ps -eo pid,command` snapshot (grep the FILE) that the pid on port 3000
-   runs `bin-native/darwin-arm64/alcore`, not the TS fallback server `rustBinResolve` picks when
-   the binary is not executable — a silent fallback boots clean and restores nothing through the
-   Rust path.
+   runs `bin-native/darwin-arm64/alcore` and that `shasum -a 256` of the path its argv names
+   equals the `release-binary-sha256:` line from step 2 — the argv path is corroboration, the
+   hash is the discriminator. There is no TS fallback since 567fc5c2: `alcoreBin()` throws when
+   `bin-native/` exists but the binary is missing or not executable (`serverControl.ts:124-132`)
+   and returns null otherwise, on which the caller stops with `noServerAvailableError` (`:37`).
 
 On choice (b) abandon-for-now: pid 68584's data dir is under `/var/folders/…/T`, which macOS
 purges on reboot for certain and by age possibly (the dir has survived 13 h

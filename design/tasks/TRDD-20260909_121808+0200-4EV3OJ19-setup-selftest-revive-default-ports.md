@@ -3,7 +3,7 @@ trdd-id: 4EV3OJ19
 title: The setup self-test revives alcore on the default ports because execRegisteredCommand pins the data dir but not the ports
 column: todo
 created: 2026-09-09T12:18:08+0200
-updated: 2026-09-09T12:31:42+0200
+updated: 2026-09-09T12:40:50+0200
 current-owner: main
 task-type: bugfix
 min-approval-requirement: none
@@ -52,24 +52,33 @@ VERIFIED first-hand 2026-09-09:
   would land on the default ports, not the ports the run just converged to.
 - `rust-core/crates/agentlens-core/src/pid_lock.rs:43-48` — `format_pid_lock`,
   both arms: a bare pid when the start reference is unknown, else
-  `{"pid","start"}`; no port field in either shape. TS side:
-  `src/serverRuntime.ts:104-106` `formatPidLock` has the same two shapes and
-  no non-test caller; no `.ts` under `src/` or `standalone/` writes
-  `server.pid` (swept: the literal, sync and async `writeFile`, and every
-  `pidfilePath()` call site — readers only, at `serverControl.ts:444,639`,
-  `hookHandlers.ts:120`, `setup.ts:838`); the `standalone/server.ts` CLAUDE.md
-  names no longer exists. So a port record in the data dir would have to be
-  ADDED — nothing writes one today.
+  `{"pid","start"}`; no port field in either shape. `src/serverRuntime.ts:104-106`
+  — `formatPidLock`, the same two shapes. So a port record in the data dir
+  would have to be ADDED — nothing writes one today (the absence half of that
+  claim is under SWEPT below).
 - Rejected alternative (adversarial review, 2026-09-09): setting
   `AGENTLENS_NO_REVIVE` unconditionally inside `execRegisteredCommand` — on a
   real user's `HOME`, a revive triggered by the self-test's own hook call is
   actually the correct/working collector; the defect is specifically the
   MISSING port pins, not the revive mechanism itself.
 
+SWEPT (grep over `src/` and `standalone/`, patterns listed; no file was read
+whole for these absences):
+
+- `formatPidLock` has no non-test caller — the identifier matches only its
+  definition line.
+- No non-test `.ts` writes `server.pid`: swept the literal, `writeFileSync` /
+  `openSync(…, 'wx')`, `writeFile(` / `promises.writeFile` /
+  `createWriteStream(`, and every `pidfilePath()` call site — readers only, at
+  `serverControl.ts:444,639`, `hookHandlers.ts:120`, `setup.ts:838`.
+- The `standalone/server.ts` CLAUDE.md names does not exist: `standalone/`
+  holds `cli.ts`, `cli.js`, `cli.js.map`, `tsconfig.json` (retired in
+  567fc5c2; carded as TRDD-OHZGLDNG).
+
 INFERRED (never observed):
 
 - A real `agentlenspro setup` run with custom ports reviving on the defaults
-  (follows from the three verified bullets above; nobody ran it).
+  (follows from the four code-path bullets above; nobody ran it).
 - Whether the production hook path (Claude Code's own hook env) carries the
   ports depends on what setup writes into settings.json's env block, not
   checked.
