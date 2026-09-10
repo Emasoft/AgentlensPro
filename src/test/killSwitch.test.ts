@@ -23,7 +23,7 @@ import * as path from 'path'
 // call rather than capturing it at import time.
 const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'agentlens-ks-'))
 
-import { agentlensDisabled, armKillSwitch, disarmKillSwitch, killSwitchPath, noRevivePath, reviveBraked } from '../cli/killSwitch'
+import { agentlensDisabled, armKillSwitch, disarmKillSwitch, killSwitchHalf, killSwitchPath, noRevivePath, reviveBraked } from '../cli/killSwitch'
 import { runHookCommand, reviveDisabledOnDisk } from '../cli/hookHandlers'
 import { ensureServer, runSupervise, serverCommand } from '../cli/serverControl'
 
@@ -124,6 +124,18 @@ suite('global kill-switch', () => {
   test('AGENTLENS_DISABLED=1 also disables, for the paths where env DOES reach the process', () => {
     process.env.AGENTLENS_DISABLED = '1'
     assert.strictEqual(agentlensDisabled(), true)
+  })
+
+  test('killSwitchHalf names WHICH half fired — env, file, or neither — so a caller never has to re-derive it', () => {
+    assert.strictEqual(killSwitchHalf(), null)
+    process.env.AGENTLENS_DISABLED = '1'
+    assert.strictEqual(killSwitchHalf(), 'env')
+    delete process.env.AGENTLENS_DISABLED
+    armKillSwitch()
+    assert.strictEqual(killSwitchHalf(), 'file')
+    // env takes precedence when BOTH are set — matches agentlensDisabled()'s own check order.
+    process.env.AGENTLENS_DISABLED = '1'
+    assert.strictEqual(killSwitchHalf(), 'env')
   })
 
   test('a hook is a NO-OP while disabled — and must not even read stdin', async () => {

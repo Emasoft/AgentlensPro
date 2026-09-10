@@ -12,7 +12,7 @@
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
-import { agentlensDisabled, killSwitchPath } from './killSwitch'
+import { agentlensDisabled, killSwitchHalf, killSwitchPath } from './killSwitch'
 import { readStdin } from './hookHandlers'
 import { commandWriteReason, isEphemeralTarget, textArms } from './reviewGateTriggers'
 import type { ArmCause } from './reviewGateTriggers'
@@ -421,8 +421,6 @@ export function hookCwd(input: ReviewGateInput): string {
 
 // ── MAIN AGENT GATE (Stop) ──────────────────────────────────────────────────────────────────────
 
-interface MainBreakerState { total: number; consecutive: number }
-
 /** Read only the tail of a (possibly huge) transcript — the answer is always near the end. */
 export function readTranscriptTail(transcriptPath: string, maxBytes = 4 * 1024 * 1024): string[] | null {
   try {
@@ -581,13 +579,9 @@ export function applyEffects(scan: MainScan, fx: Effects): MainScan {
 }
 
 /** The rule: allow the stop iff the last fork spawn is NEWER than the last consequential action.
- *  Pure decision over an already-scanned transcript + breaker state. Returns `nextState` by
- *  REFERENCE-equal to `state` when nothing changed, so the caller can skip an unnecessary write. */
-export function decideMainGate(
-  scan: { lastFork: number; lastWork: number },
-  state: MainBreakerState,
-): { block: boolean; nextState: MainBreakerState } {
-  if (scan.lastWork === -1) return { block: false, nextState: state } // nothing claimed this window
+ *  Pure decision over an already-scanned transcript. NO BREAKER STATE — see below. */
+export function decideMainGate(scan: { lastFork: number; lastWork: number }): { block: boolean } {
+  if (scan.lastWork === -1) return { block: false } // nothing claimed this window
   // `>=`, not `>`: two blocks CAN share an index when a harness writes one transcript entry per
   // assistant message, and a tie must go to the fork or that turn can never end. MEASURED
   // 2026-09-07 on this project's own session JSONL: this Claude Code build writes ONE ENTRY PER
@@ -596,22 +590,22 @@ export function decideMainGate(
   // THE EXIT IS POSITIONAL, so the fork must be the LAST arming block of the turn. Because this
   // build writes one entry per content block (see below), prose emitted AFTER a fork re-arms the
   // gate and the turn is blocked again. Spawn the review as the turn's final act, not mid-turn.
-  if (scan.lastFork >= scan.lastWork) {
-    // The review landed. THIS IS THE ONLY WAY PAST THE GATE.
-    return { block: false, nextState: state.consecutive !== 0 ? { total: state.total, consecutive: 0 } : state }
-  }
+  if (scan.lastFork >= scan.lastWork) return { block: false } // the review landed — the only way past the gate
   // NO GIVE-UP. The consecutive and per-session breakers were REMOVED (owner order, 2026-09-03:
-  // "it must NEVER BE STOPPED OR BYPASSED, no matter what"). They used to fail OPEN on the reasoning
-  // that a wedged session costs more than a skipped review — but the measured outcome was worse: on
-  // 2026-09-03 this session ignored the demand twice, `consecutive` reached 2, the gate went silent,
-  // and EVERY subsequent change went unreviewed with nothing announcing it. A silent stop is the one
-  // failure a safety gate must not have.
+  // "it must NEVER BE STOPPED OR BYPASSED, no matter what") and their state (`MainBreakerState`,
+  // `total`/`consecutive`) is gone too — it was read every call and then discarded, decided nothing
+  // (nothing in this repo ever branched on it once the give-up path was deleted), and the tmpdir
+  // persistence that used to consume it was removed in 53a30222. They used to fail OPEN on the
+  // reasoning that a wedged session costs more than a skipped review — but the measured outcome was
+  // worse: on 2026-09-03 this session ignored the demand twice, `consecutive` reached 2, the gate
+  // went silent, and EVERY subsequent change went unreviewed with nothing announcing it. A silent
+  // stop is the one failure a safety gate must not have.
   //
   // The exit is always available and is the thing being asked for: spawn the fork and the branch
   // above returns immediately. The caller ALSO applies `agentCannotSpawn` so an agent that has no
   // Agent tool is released rather than wedged — a capability check, not a give-up. That check was
   // missing from the main gate when this comment first claimed it (review finding G2).
-  return { block: true, nextState: { total: (state.total || 0) + 1, consecutive: (state.consecutive || 0) + 1 } }
+  return { block: true }
 }
 
 // The ONE-TURN rule lives HERE, in the text the agent reads on every single fire, because that is
@@ -631,12 +625,19 @@ export const ARM_CAUSE_TEXT: Record<MainArmCause, string> = {
  *  nothing was told it had, and could not tell which of its blocks to review. */
 export function mainBlockReason(cause: MainArmCause, detail = ''): string {
   const what = detail === '' ? ARM_CAUSE_TEXT[cause] : `${ARM_CAUSE_TEXT[cause]}: ${detail}`
-  // NAMES THE SCANNED WINDOW, NOT "THIS TURN" — the scan is over `readTranscriptTail`'s last 4 MB
-  // (see `readTranscriptTail`'s `maxBytes` default), not the current turn, so a long turn's
-  // earlier blocks can be outside the window. "this turn" claimed certainty the scan does not
-  // have; matches `reviewSupervisor.ts`'s own care about the identical overclaim.
+  // NAMES THE SCANNED WINDOW, NOT "THIS TURN" — but the window differs BY CAUSE, because the two
+  // causes come from two DIFFERENT scans. Every cause but 'unreviewed change' is found by
+  // `scanMainTranscriptLines` over `readTranscriptTail`'s last 4 MB (see its `maxBytes` default),
+  // so "this turn" would claim certainty the scan does not have — a long turn's earlier blocks can
+  // be outside that window. 'unreviewed change' instead comes from `unreviewedEffects`'s mtime walk
+  // (`applyEffects`, `runMainGate`), which never reads the transcript at all — saying "scanned: the
+  // transcript's last 4 MB" for it would name the wrong scan and mislead the agent about where to
+  // look. Matches `reviewSupervisor.ts`'s own care about the identical overclaim.
+  const window = cause === 'unreviewed change'
+    ? 'files on disk newer than that fork'
+    : "the transcript's last 4 MB"
   return `Review-fork gate: ${what} landed after the last review fork `
-    + `(scanned: the transcript's last 4 MB). ` + MAIN_BLOCK_DEMAND
+    + `(scanned: ${window}). ` + MAIN_BLOCK_DEMAND
 }
 export const MAIN_BLOCK_DEMAND = 'Spawn ONE adversarial fork (Agent tool, subagent_type "fork"), and COPY '
   + 'THIS LINE VERBATIM INTO ITS PROMPT: "' + ONE_TURN_RULE + '" The fork cannot see this message, so a '
@@ -679,7 +680,7 @@ export async function runMainGate(input: ReviewGateInput): Promise<string | null
   // write, or a fork-as-worker's own change never appears as a tool_use in THIS transcript, so
   // the transcript scan alone would release it unreviewed.
   const scan = applyEffects(rawScan, unreviewedEffects(cwd, rawScan.lastForkTs, { activity: rawScan.activity }))
-  const verdict = decideMainGate(scanPositions(scan), { total: 0, consecutive: 0 })
+  const verdict = decideMainGate(scanPositions(scan))
   // A block implies an arming block was found (`lastWork !== -1` ⇔ `work !== null`); the second
   // test only narrows the type, so the message can never name a cause the scan did not find.
   if (!verdict.block || scan.work === null) return null
@@ -833,7 +834,7 @@ export async function runReviewGate(argv: string[]): Promise<number> {
   // (review finding G3). Names WHICH half fired rather than claiming it was "disabled by the
   // owner": the env half can be set by anything in the process tree, not just a human act.
   if (agentlensDisabled()) {
-    const half = process.env.AGENTLENS_DISABLED === '1'
+    const half = killSwitchHalf() === 'env'
       ? 'env AGENTLENS_DISABLED=1'
       : `the kill-switch flag file (${killSwitchPath()})`
     process.stderr.write(`[review-gate] allowing UNREVIEWED: ${half} is set.\n`)

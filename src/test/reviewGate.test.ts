@@ -85,38 +85,48 @@ suite('reviewGate — main (Stop) gate', () => {
         + '(scanned: the transcript\'s last 4 MB). '), true)
   })
 
+  test('the window text names the DISK scan for "unreviewed change" — a different scan than the transcript', () => {
+    assert.strictEqual(
+      mainBlockReason('unreviewed change', 'src/a.ts').startsWith(
+        'Review-fork gate: left unreviewed changes on disk: src/a.ts landed after the last review fork '
+        + '(scanned: files on disk newer than that fork). '), true)
+    assert.ok(!mainBlockReason('unreviewed change', 'src/a.ts').includes("transcript's last 4 MB"),
+      'unreviewed change comes from the mtime walk, not the transcript tail')
+  })
+
   test('decideMainGate BLOCKS when the last edit is newer than the last fork', () => {
     const scan = { lastFork: 0, lastWork: 1 } // work happened AFTER the fork
-    const v = decideMainGate(scan, { total: 0, consecutive: 0 })
+    const v = decideMainGate(scan)
     assert.strictEqual(v.block, true)
-    assert.deepStrictEqual(v.nextState, { total: 1, consecutive: 1 })
   })
 
-  test('decideMainGate ALLOWS when the fork is newer than (or ties) the last edit', () => {
+  test('decideMainGate ALLOWS when a landed fork is newer than (or ties) the last edit', () => {
     const scan = { lastFork: 1, lastWork: 0 } // fork happened AFTER the work
-    const v = decideMainGate(scan, { total: 3, consecutive: 1 })
+    const v = decideMainGate(scan)
     assert.strictEqual(v.block, false)
-    assert.deepStrictEqual(v.nextState, { total: 3, consecutive: 0 }, 'a landed fork resets the streak')
   })
 
-  test('decideMainGate ALLOWS (no state change) when nothing was claimed this window', () => {
-    const v = decideMainGate({ lastFork: -1, lastWork: -1 }, { total: 5, consecutive: 0 })
+  test('decideMainGate ALLOWS when nothing was claimed this window', () => {
+    const v = decideMainGate({ lastFork: -1, lastWork: -1 })
     assert.strictEqual(v.block, false)
-    assert.strictEqual(v.nextState.total, 5)
   })
 
+  // NO BREAKER STATE (TRDD-2CYTNLY1 amendment 8): `MainBreakerState`/`total`/`consecutive` were
+  // deleted — they were read every call, then discarded, and decided nothing once the give-up path
+  // was removed below. These two titles are KEPT so a reintroduced breaker still has a named test
+  // to break, even though `decideMainGate` now takes no state argument at all.
   test('decideMainGate KEEPS BLOCKING past the old MAX_CONSECUTIVE — no give-up', () => {
     const scan = { lastFork: -1, lastWork: 0 }
     // THE CONSECUTIVE BREAKER IS GONE (owner order 2026-09-03). It used to fail open here, which is
     // exactly how this session's gate went silent after two ignored demands and every later change
     // shipped unreviewed. The only way past is now a landed fork.
-    const v = decideMainGate(scan, { total: 2, consecutive: 2 })
+    const v = decideMainGate(scan)
     assert.strictEqual(v.block, true, 'no give-up: keep demanding until a fork lands')
   })
 
   test('decideMainGate KEEPS BLOCKING past the old MAX_PER_SESSION — no give-up', () => {
     const scan = { lastFork: -1, lastWork: 0 }
-    const v = decideMainGate(scan, { total: 20, consecutive: 0 })
+    const v = decideMainGate(scan)
     assert.strictEqual(v.block, true, 'the per-session cap is gone too')
   })
 
@@ -353,6 +363,12 @@ suite('reviewGate — subagent (SubagentStop) gate', () => {
     // A thinking block is NOT speech — it must not arm the gate on its own, or an agent that only
     // reasoned and then called a tool would owe a review for having thought.
     assert.deepStrictEqual(scanSubagentTranscriptLines([assistantLine([thinkBlock])]), { didWork: false, reviewed: false })
+  })
+
+  test('scanSubagentTranscriptLines case-folds subagent_type, like the main scanner already does', () => {
+    const capsForkBlock = { type: 'tool_use', name: 'Agent', input: { subagent_type: 'Fork' } }
+    assert.deepStrictEqual(scanSubagentTranscriptLines([assistantLine([editBlock, capsForkBlock])]),
+      { didWork: true, reviewed: true }, 'a subagent_type of "Fork" must still count as the fork')
   })
 
   test('a built-in with no Agent tool and no definition file is RELEASED, not wedged', () => {
@@ -654,7 +670,7 @@ suite('review-gate: the no-review sentinel', () => {
       assistantLine([sentinelLine()]),
     ])
     assert.ok(scanPositions(scan).lastFork >= scanPositions(scan).lastWork, 'sentinel must satisfy the positional rule')
-    assert.strictEqual(decideMainGate(scanPositions(scan), { total: 0, consecutive: 0 }).block, false)
+    assert.strictEqual(decideMainGate(scanPositions(scan)).block, false)
   })
 
   test('prose after the sentinel re-arms the main gate, exactly as prose after a fork does', () => {
@@ -662,7 +678,7 @@ suite('review-gate: the no-review sentinel', () => {
       assistantLine([sentinelLine()]),
       assistantLine([proposalBlock]),
     ])
-    assert.strictEqual(decideMainGate(scanPositions(scan), { total: 0, consecutive: 0 }).block, true)
+    assert.strictEqual(decideMainGate(scanPositions(scan)).block, true)
   })
 
   test('a QUOTED sentinel does not release — a reviewer discussing the gate must not free its subject', () => {
@@ -700,7 +716,7 @@ suite('review-gate: the no-review sentinel', () => {
       assert.strictEqual(sub.reviewed, false, `sentinel-then-essay released the subagent gate: ${JSON.stringify(text.slice(0, 50))}`)
       const main = scanMainTranscriptLines([assistantLine([proposalBlock]), assistantLine([{ type: 'text', text }])])
       assert.strictEqual(
-        decideMainGate(scanPositions(main), { total: 0, consecutive: 0 }).block,
+        decideMainGate(scanPositions(main)).block,
         true,
         `sentinel-then-essay released the main gate: ${JSON.stringify(text.slice(0, 50))}`,
       )
@@ -875,13 +891,12 @@ suite('review-gate: the recursion guard exempts reviewers and nothing else', () 
   // Both directions are needed: `block === false` alone is satisfied by a gate that never blocks,
   // which is the most dangerous mutation a review gate has.
   test('decideMainGate: equal indices release, work after the fork blocks', () => {
-    const fresh = () => ({ total: 0, consecutive: 0 })
     assert.strictEqual(
-      decideMainGate({ lastWork: 4, lastFork: 4 }, fresh()).block, false,
+      decideMainGate({ lastWork: 4, lastFork: 4 }).block, false,
       'equal indices must RELEASE — the predicate is >=, not >',
     )
     assert.strictEqual(
-      decideMainGate({ lastWork: 4, lastFork: 3 }, fresh()).block, true,
+      decideMainGate({ lastWork: 4, lastFork: 3 }).block, true,
       'work after the fork must BLOCK — without this, a never-blocking gate passes',
     )
   })
@@ -894,7 +909,7 @@ suite('review-gate: the recursion guard exempts reviewers and nothing else', () 
   test('decideMainGate fails OPEN on an empty window — pinned, not endorsed', () => {
     for (const lastFork of [-1, 7]) {
       assert.strictEqual(
-        decideMainGate({ lastWork: -1, lastFork }, { total: 0, consecutive: 0 }).block, false,
+        decideMainGate({ lastWork: -1, lastFork }).block, false,
         `lastWork === -1 currently allows the stop (lastFork ${lastFork}); see TRDD-W0ZTTUBA`,
       )
     }

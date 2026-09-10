@@ -82,16 +82,26 @@ export function reviveBraked(): boolean {
 }
 
 /**
- * Is AgentlensPro globally disabled? Checked at the top of EVERY entry point, before any work,
- * any network call and any read of stdin — a disabled AgentlensPro must cost the host session
- * nothing at all, not even a blocked pipe.
+ * WHICH half of the global kill-switch is armed, or `null` if neither is. ONE definition shared by
+ * `agentlensDisabled()` and the review gate's stderr line (`reviewGate.ts::runReviewGate`) — those
+ * two used to each spell out `AGENTLENS_DISABLED === '1'` on their own, which is exactly the kind
+ * of duplicated condition that drifts the moment one side changes and the other doesn't.
  *
  * `AGENTLENS_DISABLED=1` is honored too, for the cases where env DOES reach the process (tests,
  * a supervisor that spawns the server directly). The FILE is the one that reaches running agents.
  */
+export function killSwitchHalf(): 'env' | 'file' | null {
+  if (process.env.AGENTLENS_DISABLED === '1') return 'env'
+  try { return fs.existsSync(killSwitchPath()) ? 'file' : null } catch { return null }
+}
+
+/**
+ * Is AgentlensPro globally disabled? Checked at the top of EVERY entry point, before any work,
+ * any network call and any read of stdin — a disabled AgentlensPro must cost the host session
+ * nothing at all, not even a blocked pipe.
+ */
 export function agentlensDisabled(): boolean {
-  if (process.env.AGENTLENS_DISABLED === '1') { return true }
-  try { return fs.existsSync(killSwitchPath()) } catch { return false }
+  return killSwitchHalf() !== null
 }
 
 /** Arm the global kill-switch. Idempotent. Returns the flag path. */

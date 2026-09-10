@@ -57,6 +57,12 @@ suite('reviewSupervisor — scan', () => {
     assert.ok(commandWriteReason(`sed -i "" s/a/b/ ${CWD}/f.ts`, CWD) !== null, 'sed -i must classify as a write on its own')
   })
 
+  test('scanSupervision case-folds subagent_type, like the gate\'s own scanners already do', () => {
+    const capsFork = { type: 'tool_use', name: 'Agent', input: { subagent_type: 'Fork' } }
+    const s = scanSupervision([assistant([edit]), assistant([capsFork])], CWD)
+    assert.deepStrictEqual(s, { work: 1, forks: 1, unreviewed: 0 }, 'a subagent_type of "Fork" must still count as the fork')
+  })
+
   test('a no-review sentinel counts as a review, like a fork — or the sentinel path would nag forever', () => {
     const sentinel = { type: 'text', text: `${NO_REVIEW_SENTINEL} — rate-limited` }
     const s = scanSupervision([assistant([edit]), assistant([sentinel])], CWD)
