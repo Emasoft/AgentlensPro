@@ -1,9 +1,9 @@
 ---
 trdd-id: DRH4ZRGB
 title: The review-gate block message omits the positional rule its own instruction violates
-column: ai_review
+column: dev
 created: 2026-09-08T11:37:44+0200
-updated: 2026-09-10T14:16:14+0200
+updated: 2026-09-10T14:24:29+0200
 current-owner: main-session
 task-type: bugfix
 scope: project
@@ -14,16 +14,16 @@ eht: [7FA3NIXU]
 
 # The review-gate block message omits the positional rule its own instruction violates
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-10 14:16
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-10 14:24
 
 The message work is DONE: all three §Acceptance rows ticked, landed as `e7d1d3c7` + `4521dea7`,
 assertions made real guards in `a18ff9f1` (which also split out TRDD-7FA3NIXU); all three in
-`implementation-commits`. Each commit passed the Stop gate's fork at its own Stop; no combined
-review of the three is recorded here. NEXT ACTION: a combined review of the three commits (the
-card records the verdict). `column: ai_review` asserts that review is dispatched — the fork spawned
-in the same turn as this STATE edit is it; if no verdict lands below, the column is stale and goes
-back to `todo`. Before close, execute §⚠ DO NOT CLOSE (the two undone rows of its table). Cannot
-reach `complete` until TRDD-7FA3NIXU (`eht:`) is terminal — it bars the close, not the review. No
+`implementation-commits`. Each commit landed under the Stop gate (a fork or the sentinel released
+each Stop — not re-read here). The combined review of the three is DONE — §Review verdict below:
+ACCEPT-WITH-FIXES. NEXT ACTION: land the accepted fixes listed there (one-clause message and test
+edits; predicate untouched), then a post-write fork over that commit. `column: dev` while they are
+being landed. Before close, execute §⚠ DO NOT CLOSE (the two undone rows of its table). Cannot
+reach `complete` until TRDD-7FA3NIXU (`eht:`) is terminal — it bars the close, not the fixes. No
 approval needed (Tier 0 — the next paragraph, which still holds for what remains).
 
 Filed `proposal` / `user` at first. That was wrong and is corrected: this card's landed content
@@ -32,6 +32,39 @@ criterion says the predicate is unchanged. Disclosing a rule the gate already en
 never-bypass order (2026-09-03); it does not revise it. Tier 0. The test that catches it is the
 one already applied to the sibling card and then not applied here — metadata inheritance across
 a card split is the trap, and this card is where it bit twice.
+
+## Review verdict — 2026-09-10 14:24 (combined `ai_review` of e7d1d3c7 + 4521dea7 + a18ff9f1)
+
+Dispatched 2026-09-10 ~14:16 as one fork, bundled with the post-write review of commit
+`e6720f9f` (the commit that moved this card to `ai_review`; the dispatch followed that commit by
+one response, so its subject line said "dispatched" one response early — recorded, not
+repeatable). The fork reviewed the a18ff9f1 end state from pasted diffs; by the time the verdict
+landed the source had moved on under TRDD-2CYTNLY1, which retires two of its findings.
+
+**VERDICT: ACCEPT-WITH-FIXES.** Accepted, to land next:
+
+- The comment above the AT-OR-AFTER test claims "Measured against the previous revision …
+  deleting 'AT OR AFTER' … left every assertion here green". That method was never run (this
+  card's §Acceptance says so). Reword to "read off the previous revision's four regexes; not re-run".
+- `text.includes('POSITIONAL')` passes on "NOT POSITIONAL"; add `!/NOT POSITIONAL/`.
+- `!/never re-arms/` passes on "no longer re-arms" and "does not re-arm"; widen to
+  `!/(never|no longer|does not) re-arm/`.
+- `includes('BACKGROUND fork')` asserts the noun, not the consequence; assert
+  `/BACKGROUND fork[^.]*fresh turn/`.
+- Fail-open pin: `(lastWork -1, lastFork 7)` releasing is CORRECT behaviour, not the fail-open;
+  the assertion message must say which case is which.
+- Directive: "Then read its findings and act on them" gains "— the turn that acts on them is
+  itself new work and needs its own fork".
+- `MAIN_BLOCK_DEMAND`: "in the SAME response as your user-visible text" reads, on a heartbeat turn
+  with none, as an order to invent some → "as any user-visible text you have".
+
+Retired by the later commits (53a30222 … 05d27534): "the directive never names which tool calls
+arm the gate" — the current directive carries a WHAT ARMS IT paragraph and says plain text does
+not arm; "widen the strict-inequality blacklist" — that blacklist was deleted and the positive
+AT-OR-AFTER assertion is the whole guard.
+
+Not defects: the two-direction `decideMainGate` test can fail in both directions; the
+TRDD-W0ZTTUBA pin is a tripwire by design.
 
 ## What happens
 

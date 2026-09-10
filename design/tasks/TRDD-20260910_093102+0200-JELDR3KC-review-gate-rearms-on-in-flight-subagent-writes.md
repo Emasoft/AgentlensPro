@@ -3,7 +3,7 @@ trdd-id: JELDR3KC
 title: The review gate re-arms on every orchestrator Stop while its own background subagents are still writing
 column: todo
 created: 2026-09-10T09:31:02+0200
-updated: 2026-09-10T14:16:14+0200
+updated: 2026-09-10T14:24:29+0200
 current-owner: main
 task-type: bugfix
 min-approval-requirement: none
@@ -49,8 +49,9 @@ them. VERIFIED in source 2026-09-10 (`src/cli/reviewGate.ts`: `agentCannotSpawn`
 `if (agentCannotSpawn(type)) return null` line in `runSubagentGate`): `agentCannotSpawn` returns
 true for an agent whose RESOLVED definition declares `tools:` without `Agent`, and
 `runSubagentGate` returns null on it — so the gate demands NO review of such an agent at its own
-SubagentStop. The `lean-worker` agent definition available to this session declares `Bash, Read,
-Write, Edit, Grep`; whether the peer resolved the same definition, and whether the deployed bundle
+SubagentStop. The harness's agent listing for `lean-worker` (the listing, not the resolved file
+`agentCannotSpawn` reads) declares `Bash, Read, Write, Edit, Grep`; whether the peer's resolved
+definition says the same, and whether the deployed bundle
 its hook ran carries this code, were not inspected. For an agent released that way the parent's
 re-arm is the only AUTOMATIC review its writes get: it is not redundant, it is mis-timed (it fires
 before the diff is in any fork's hands).
@@ -81,9 +82,10 @@ Either shape must keep TRDD-9FG0LSPG's invariant: no write is released unreviewe
       with the existing gate suites green; `node esbuild.js` exit 0 and a grep for the new symbol in
       `standalone/cli.js`.
 - [ ] Live: N background workers dispatched and K orchestrator write-turns yield K parent forks,
-      ZERO parent forks whose gate cause line names a worker-written file, and every worker-written
-      file named by the cause line of SOME fork (a parent fork after that worker's completion, or
-      the worker's own SubagentStop fork) — counted from the transcript with the gate's stderr
-      cause line as the discriminator.
+      ZERO parent forks spawned while a worker is still running whose block reason names that
+      worker's files, and every worker-written file named by the block reason of SOME fork (a
+      parent fork after that worker's completion, or the worker's own SubagentStop fork) — counted
+      from the transcript with the gate's block reason as the discriminator (`applyEffects` puts
+      up to 8 paths in it).
 
 ## Approval log
