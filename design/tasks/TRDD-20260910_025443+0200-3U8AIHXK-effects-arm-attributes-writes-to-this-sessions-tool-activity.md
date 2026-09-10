@@ -3,7 +3,7 @@ trdd-id: 3U8AIHXK
 title: The effects arm must attribute a write to this session's own tool activity before arming
 column: testing
 created: 2026-09-10T02:54:43+0200
-updated: 2026-09-10T03:36:03+0200
+updated: 2026-09-10T03:37:16+0200
 current-owner: main
 task-type: bugfix
 priority: critical
@@ -21,7 +21,7 @@ implementation-commits: [3f498995]
 
 # The effects arm must attribute a write to this session's own tool activity before arming
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-10 03:36
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-10 03:37
 
 Filed as TRDD-9FG0LSPG's EHT on four cross-session reports from peer session tldr-code-5c. The
 proposal was reviewed by an adversarial fork at filing (02:5x); six findings, all applied (the
@@ -62,10 +62,12 @@ passing. Mutation MEASURED on the compiled scratch copy (source untouched): `fre
 else. COMMITTED 3f498995 (the four src/test files) and DEPLOYED 03:32: `node esbuild.js` exit 0,
 `ATTRIBUTION_SLACK_MS` ×2 in `standalone/cli.js`; VERIFIED 03:34 that the Stop hook command is
 `agentlenspro review-gate` and `command -v agentlenspro` resolves through `/opt/homebrew/bin` to
-THIS checkout's `standalone/cli.js` (npm link, not a published install); 03:36: that link is the
-ONLY `agentlenspro` on every standard bin dir and the npm global root, so the hook's own PATH
-(not read — it is Claude Code's process env) has no second candidate to shadow it — the live
-gate attributes from the next Stop on. Peer tldr-code-5c told 03:32. A post-commit
+THIS checkout's `standalone/cli.js` (npm link, not a published install); 03:37: all 57 dirs on
+this shell's PATH swept (explicit `:` split — zsh does not word-split `$PATH`), exactly ONE
+`agentlenspro` exists, that link. The hook's own PATH is Claude Code's process env and was not
+read, so a dir outside this shell's PATH is the only unexcluded shadow; the live gate should
+attribute from the next Stop on, and the Stop-side proof is 9FG0LSPG's release half (a Stop that
+passes after a KNOWN non-session write). Peer tldr-code-5c told 03:32. A post-commit
 review found two stale test comments (a "1.5s margin" left at 2.5 s; a "Positional" label for
 the recency gate) — fixed in the docs commit 24323387.
 LIVE: this session's Stop was blocked by the effects arm on the worker's own edit of
