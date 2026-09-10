@@ -3,7 +3,7 @@ trdd-id: 2CYTNLY1
 title: Delete the review gate's dead breakers and give the supervisor the gate's work definition
 column: dev
 created: 2026-09-09T14:38:59+0200
-updated: 2026-09-10T03:53:34+0200
+updated: 2026-09-10T03:54:30+0200
 current-owner: main
 task-type: refactor
 priority: medium
@@ -129,8 +129,9 @@ verified against the live source, not restated from memory.
 - [ ] `pnpm run check-types` and `npx eslint src/cli/reviewGate.ts src/cli/reviewSupervisor.ts src/cli/killSwitch.ts --quiet` both exit 0.
 - [ ] The three existing review-gate mocha files (`src/test/reviewGate.test.ts`,
       `src/test/reviewGateTriggers.test.ts`, `src/test/reviewGateEffects.test.ts`) still pass —
-      107 cases as of 3f498995 (89 when this row was written), plus `reviewSupervisor.test.ts`,
-      `reviewSupervisorRunner.test.ts` and `killSwitch.test.ts`.
+      107 `test(` cases in those three as of 3f498995 (89 when this row was written); also run
+      `reviewSupervisor.test.ts` (20), `reviewSupervisorRunner.test.ts` (7) and
+      `killSwitch.test.ts` (16), counted 03:54 by grep, not by a mocha run.
 - [ ] One new `reviewSupervisor.test.ts` case proves `scanSupervision` now counts a `sed -i`
       command and a `git push` command as work — parity with the gate's own `commandWriteReason`
       — on a fixture turn neither the old regex nor the old `EDITORS` set would have caught.
