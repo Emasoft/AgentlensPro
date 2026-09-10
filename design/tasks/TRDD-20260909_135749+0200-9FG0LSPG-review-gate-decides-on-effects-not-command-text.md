@@ -3,7 +3,7 @@ trdd-id: 9FG0LSPG
 title: The review gate must decide on effects newer than the last fork, not on command text
 column: dev
 created: 2026-09-09T13:57:49+0200
-updated: 2026-09-10T03:32:04+0200
+updated: 2026-09-10T03:34:48+0200
 current-owner: main
 task-type: bugfix
 priority: critical
@@ -204,8 +204,9 @@ Read in full 2026-09-09: `src/cli/reviewGate.ts`, `reviewGateTriggers.ts`, `revi
       any-writer rule produced it, so attribution was not exercised.
 - [ ] Live: under the TRDD-3U8AIHXK bundle a background worker's write blocks BEFORE its
       notification (inside its open interval), AND the release half: a Stop that passes with no
-      block after a non-session write landed in a tool gap (the janitor's `CLAUDE.md` rewrite is
-      that shape) — observable as the ABSENCE of a block at Stop. A pin-open bug (the `agentId`
+      block after a KNOWN non-session write landed in a tool gap (the janitor's `CLAUDE.md`
+      rewrite is that shape: check its mtime against the Stop time — a quiet day proves nothing)
+      — observable as the ABSENCE of a block at Stop. A pin-open bug (the `agentId`
       never matching a `<task-id>`) would pass the block half and then block every later Stop, so
       the second half is what discriminates; the peer's report row below is its cross-session
       form.

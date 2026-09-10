@@ -1,9 +1,9 @@
 ---
 trdd-id: 3U8AIHXK
 title: The effects arm must attribute a write to this session's own tool activity before arming
-column: dev
+column: testing
 created: 2026-09-10T02:54:43+0200
-updated: 2026-09-10T03:32:04+0200
+updated: 2026-09-10T03:34:48+0200
 current-owner: main
 task-type: bugfix
 priority: critical
@@ -21,7 +21,7 @@ implementation-commits: [3f498995]
 
 # The effects arm must attribute a write to this session's own tool activity before arming
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-10 03:32
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-10 03:34
 
 Filed as TRDD-9FG0LSPG's EHT on four cross-session reports from peer session tldr-code-5c. The
 proposal was reviewed by an adversarial fork at filing (02:5x); six findings, all applied (the
@@ -60,18 +60,22 @@ ran, the write releases — `forkLines` now feeds both e2e release cases. Recomp
 passing. Mutation MEASURED on the compiled scratch copy (source untouched): `freshness` reduced to
 `ms > sinceMs` → 96 passing, 5 failing — (B), (C) and the three effects "does not" cases, nothing
 else. COMMITTED 3f498995 (the four src/test files) and DEPLOYED 03:32: `node esbuild.js` exit 0,
-`ATTRIBUTION_SLACK_MS` ×2 in `standalone/cli.js` — the hook runs that bundle fresh at every Stop,
-so the live gate attributes from the next Stop on. Peer tldr-code-5c told 03:32. A post-commit
+`ATTRIBUTION_SLACK_MS` ×2 in `standalone/cli.js`; VERIFIED 03:34 that the Stop hook command is
+`agentlenspro review-gate` and `command -v agentlenspro` resolves through `/opt/homebrew/bin` to
+THIS checkout's `standalone/cli.js` (not a published install) — so the live gate attributes from
+the next Stop on. Peer tldr-code-5c told 03:32. A post-commit
 review found two stale test comments (a "1.5s margin" left at 2.5 s; a "Positional" label for
-the recency gate) — comment-only follow-up commit.
+the recency gate) — fixed in the docs commit 24323387.
 LIVE: this session's Stop was blocked by the effects arm on the worker's own edit of
 `src/cli/reviewGate.ts` with no tool_use in the main transcript — under the PRE-3U8AIHXK bundle,
 whose any-writer rule cannot tell a worker from a peer; under the new bundle the same block must
 survive because the worker is a background Agent whose interval stays open until its
 notification (re-prove: 9FG0LSPG's live rows, both halves). Deferred: the security-guidance
 2.0.8 plugin reload (a reload at this context would `/clear` and drop agent types).
-NEXT ACTION: docs commit (both cards + the two test comments) → post-write review fork → the
-live two-half proof on 9FG0LSPG → column `testing` → reload plugins (handoff first).
+Column `testing` from 03:34 (code committed, built, deployed; only the live rows open).
+NEXT ACTION: the live two-half proof on 9FG0LSPG (block half: a background worker's write before
+its notification; release half: a Stop that passes after a KNOWN non-session write in a tool
+gap) → the peer's one-day row → `ai_review` → reload plugins (handoff first).
 
 ## Why
 
