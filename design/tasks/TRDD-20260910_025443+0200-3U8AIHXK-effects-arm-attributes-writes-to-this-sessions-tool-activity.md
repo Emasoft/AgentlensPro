@@ -3,7 +3,7 @@ trdd-id: 3U8AIHXK
 title: The effects arm must attribute a write to this session's own tool activity before arming
 column: testing
 created: 2026-09-10T02:54:43+0200
-updated: 2026-09-10T03:42:23+0200
+updated: 2026-09-10T09:31:02+0200
 current-owner: main
 task-type: bugfix
 priority: critical
@@ -15,7 +15,7 @@ labels: [review-gate, hooks, token-burn]
 related: [9FG0LSPG, 0E3W5C45, 2CYTNLY1]
 blocked-by: []
 npt: []
-eht: []
+eht: [JELDR3KC]
 implementation-commits: [3f498995]
 ---
 
