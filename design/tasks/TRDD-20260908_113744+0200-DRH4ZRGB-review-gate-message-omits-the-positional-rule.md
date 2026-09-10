@@ -1,27 +1,32 @@
 ---
 trdd-id: DRH4ZRGB
 title: The review-gate block message omits the positional rule its own instruction violates
-column: todo
+column: ai_review
 created: 2026-09-08T11:37:44+0200
-updated: 2026-09-08T12:36:26+0200
+updated: 2026-09-10T09:55:17+0200
 current-owner: main-session
 task-type: bugfix
 scope: project
 min-approval-requirement: none
-implementation-commits: [e7d1d3c7, 4521dea7]
+implementation-commits: [e7d1d3c7, 4521dea7, a18ff9f1]
 eht: [7FA3NIXU]
 ---
 
 # The review-gate block message omits the positional rule its own instruction violates
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-08
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-10 09:55
 
-MEASURED, from source and from the deployed bundle. Not yet fixed. NEXT ACTION: add the one
-clause to `MAIN_BLOCK_REASON`. No approval needed — see §Tier.
+The message work is DONE: all three §Acceptance rows ticked, landed as `e7d1d3c7` + `4521dea7`,
+assertions made real guards in `a18ff9f1` (which also split out TRDD-7FA3NIXU); all three in
+`implementation-commits`. No review pass is recorded on this card for them. NEXT ACTION:
+`ai_review` of those three commits — one fork over their combined diff of `src/cli/reviewGate.ts`
++ `src/test/reviewGate.test.ts`. Before close, execute §⚠ DO NOT CLOSE (two relocations; its
+table is the list). Cannot reach `complete` until TRDD-7FA3NIXU (`eht:`) is terminal — it bars
+the close, not the review. No approval needed — see the next paragraph.
 
-Filed `proposal` / `user` at first. That was wrong and is corrected: this card's remaining
-content is ONE clause added to a block message, and its own third acceptance criterion says the
-predicate is unchanged. Disclosing a rule the gate already enforces **implements** the owner's
+Filed `proposal` / `user` at first. That was wrong and is corrected: this card's landed content
+is ONE clause in a block message and the assertions that pin it, and its own third acceptance
+criterion says the predicate is unchanged. Disclosing a rule the gate already enforces **implements** the owner's
 never-bypass order (2026-09-03); it does not revise it. Tier 0. The test that catches it is the
 one already applied to the sibling card and then not applied here — metadata inheritance across
 a card split is the trap, and this card is where it bit twice.
@@ -231,7 +236,7 @@ none of them — content deleted with extra steps.
 | section | what it actually is | belongs |
 |---|---|---|
 | §The passing shape exists | knowledge, no "done" state | PROJECT wikimem page, recall by symptom |
-| §The loop, and who drives it | a behavioural lesson | TRDD-T2N1GOZ2, which is already that subject |
+| §The loop, and who drives it | a behavioural lesson | TRDD-T2N1GOZ2, which is already that subject (a LOCAL-scope card — the id stays as prose, it must not enter any frontmatter field) |
 | §A cost property of the gate | a **separate defect with its own fix** (scan anchored at the window, not the turn ⇒ every answering turn pays a fork; the fix is anchoring at the last user entry) | **DONE — split out as TRDD-7FA3NIXU**, recorded in `eht:` so this card cannot reach `complete` until it is terminal |
 
 The §Tier paragraph above lectures about metadata inheritance across a card split being "the trap
