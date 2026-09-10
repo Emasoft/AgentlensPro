@@ -51,14 +51,15 @@ on the `sed -i` command is non-null and the `PROPOSAL` block starts a line; `dem
 `AGENTLENS_REVIEW_FORK_MAX` grepped across skills/docs/scripts before the exported
 `mainGateMaxPerSession` is deleted; the kill-switch stderr line names which HALF fired and never
 says "disabled by the owner".
-LANDED 04:09 as `53a30222` (worker report `reports/review-gate/20260910_040630+0200-2CYTNLY1-worker.md`;
+LANDED as `53a30222` (worker report `reports/review-gate/20260910_040630+0200-2CYTNLY1-worker.md`;
 diff verified first-hand against all seven amendments; my own chain: tsc / check-types / eslint /
 check-mirrors / check-identities 0, the six suites 145 passing + 8 failing under a SCRATCH outDir
 and 23/23 for those same 8 from the project `out/` — the runner test resolves REPO_ROOT three dirs
-up from its compiled location, so a scratch outDir is the wrong harness for it and for the
-kill-switch LIFTED case; none of the 8 is real). NOT yet deployed (`node esbuild.js` pending).
-Post-write adversarial review 04:13 of that commit — three findings, all accepted, plus the
-reviewed follow-up, delegated to a second lean-worker at 04:15 as AMENDMENT 8: (i)
+up from its compiled location, so a scratch outDir is the wrong harness for it; the kill-switch
+LIFTED case also passed from `out/` — mechanism not established; none of the 8 reproduced there).
+NOT yet deployed (`node esbuild.js` pending). Post-write adversarial review of that commit —
+three findings, all accepted, plus the reviewed follow-up, delegated to a second lean-worker in
+the same turn as this STATE edit, as AMENDMENT 8: (i)
 `mainBlockReason` appends "(scanned: the transcript's last 4 MB)" to EVERY cause, but the
 `'unreviewed change'` cause comes from the mtime walk in `unreviewedEffects`, not the transcript
 tail — name the window per cause (disk: files newer than the last fork; transcript: last 4 MB),
