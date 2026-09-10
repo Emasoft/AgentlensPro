@@ -3,7 +3,7 @@ trdd-id: 9FG0LSPG
 title: The review gate must decide on effects newer than the last fork, not on command text
 column: dev
 created: 2026-09-09T13:57:49+0200
-updated: 2026-09-10T03:56:29+0200
+updated: 2026-09-10T04:01:36+0200
 current-owner: main
 task-type: bugfix
 priority: critical
@@ -203,10 +203,15 @@ Read in full 2026-09-09: `src/cli/reviewGate.ts`, `reviewGateTriggers.ts`, `revi
       background worker's in-progress edit, no tool_use for it in the main transcript. The
       any-writer rule produced it, so attribution was not exercised.
 - [x] Live, BLOCK half, under the TRDD-3U8AIHXK bundle (3f498995, bundle-to-hook chain verified
-      03:32-03:37): 2026-09-10 shortly after 03:56, this session's Stop blocked with `left
-      unreviewed changes on disk: src/cli/reviewGate.ts` — the TRDD-2CYTNLY1 background
-      lean-worker's in-progress edit, BEFORE that worker's task-id notification, i.e. inside its
-      open interval; no tool_use of this session touched the file.
+      03:32-03:37): 2026-09-10T03:56:45+0200 (the Stop-hook entry's own timestamp in the session
+      JSONL; a second block at 04:00:38), this session's Stop blocked with `left unreviewed changes
+      on disk: src/cli/reviewGate.ts`. Consistent with the 3U8AIHXK bundle; NON-DISCRIMINATING vs
+      the prior any-writer rule (identical message either way) — it only rules out fail-open on an
+      open worker interval. The writer is INFERRED to be the TRDD-2CYTNLY1 background lean-worker
+      (its progress line named the file; not diffed), the write INFERRED to sit inside its open
+      interval (the scanner rule, not a dump — this session's ~600 s handoff-compose Bash interval
+      may also contain it); no tool_use of this session touched the file. The discriminator is the
+      release half below.
 - [ ] Live, RELEASE half: a Stop that passes with no block after a KNOWN non-session write landed
       in a tool gap (the janitor's `CLAUDE.md` rewrite is that shape: check its mtime against the
       Stop time — a quiet day proves nothing) — observable as the ABSENCE of a block at Stop,
