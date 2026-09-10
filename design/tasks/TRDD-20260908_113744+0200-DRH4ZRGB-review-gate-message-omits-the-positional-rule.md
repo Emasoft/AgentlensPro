@@ -3,7 +3,7 @@ trdd-id: DRH4ZRGB
 title: The review-gate block message omits the positional rule its own instruction violates
 column: dev
 created: 2026-09-08T11:37:44+0200
-updated: 2026-09-10T14:24:29+0200
+updated: 2026-09-10T18:54:37+0200
 current-owner: main-session
 task-type: bugfix
 scope: project
@@ -18,8 +18,8 @@ eht: [7FA3NIXU]
 
 The message work is DONE: all three §Acceptance rows ticked, landed as `e7d1d3c7` + `4521dea7`,
 assertions made real guards in `a18ff9f1` (which also split out TRDD-7FA3NIXU); all three in
-`implementation-commits`. Each commit landed under the Stop gate (a fork or the sentinel released
-each Stop — not re-read here). The combined review of the three is DONE — §Review verdict below:
+`implementation-commits`. Each commit landed under the Stop gate (a fork, the sentinel, or one of
+the gate's UNREVIEWED releases — not re-read here). The combined review of the three is DONE — §Review verdict below:
 ACCEPT-WITH-FIXES. NEXT ACTION: land the accepted fixes listed there (one-clause message and test
 edits; predicate untouched), then a post-write fork over that commit. `column: dev` while they are
 being landed. Before close, execute §⚠ DO NOT CLOSE (the two undone rows of its table). Cannot
@@ -38,33 +38,40 @@ a card split is the trap, and this card is where it bit twice.
 Dispatched 2026-09-10 ~14:16 as one fork, bundled with the post-write review of commit
 `e6720f9f` (the commit that moved this card to `ai_review`; the dispatch followed that commit by
 one response, so its subject line said "dispatched" one response early — recorded, not
-repeatable). The fork reviewed the a18ff9f1 end state from pasted diffs; by the time the verdict
+repeatable). The fork reviewed the a18ff9f1 end state from ABRIDGED pasted diffs (4521dea7's tests were
+summarised, a18ff9f1's comments elided) — so its findings are provisional and each accepted item
+below was re-verified by the parent against the live source before being listed; by the time the verdict
 landed the source had moved on under TRDD-2CYTNLY1, which retires two of its findings.
 
 **VERDICT: ACCEPT-WITH-FIXES.** Accepted, to land next:
 
 - The comment above the AT-OR-AFTER test claims "Measured against the previous revision …
   deleting 'AT OR AFTER' … left every assertion here green". That method was never run (this
-  card's §Acceptance says so). Reword to "read off the previous revision's four regexes; not re-run".
+  card's §Acceptance says so). Reword to "read off the previous revision's regexes; not re-run".
 - `text.includes('POSITIONAL')` passes on "NOT POSITIONAL"; add `!/NOT POSITIONAL/`.
-- `!/never re-arms/` passes on "no longer re-arms" and "does not re-arm"; widen to
-  `!/(never|no longer|does not) re-arm/`.
 - `includes('BACKGROUND fork')` asserts the noun, not the consequence; assert
-  `/BACKGROUND fork[^.]*fresh turn/`.
+  `/BACKGROUND fork[^.]*fresh turn[^.]*re-arms/`.
 - Fail-open pin: `(lastWork -1, lastFork 7)` releasing is CORRECT behaviour, not the fail-open;
   the assertion message must say which case is which.
-- Directive: "Then read its findings and act on them" gains "— the turn that acts on them is
-  itself new work and needs its own fork".
+- Directive: "Then read its findings and act on them — if acting on them edits, writes or
+  proposes, that turn is new work and needs its own fork."
 - `MAIN_BLOCK_DEMAND`: "in the SAME response as your user-visible text" reads, on a heartbeat turn
   with none, as an order to invent some → "as any user-visible text you have".
+- `!/never re-arms/` stays as is — widening it to "no longer / does not" was reviewed and rejected
+  (it bans the correct sentence "plain text after the fork does not re-arm the gate").
 
-Retired by the later commits (53a30222 … 05d27534): "the directive never names which tool calls
+Retired by the parent on reading the current source (the fork did not see it) — the later
+commits 53a30222 … 05d27534: "the directive never names which tool calls
 arm the gate" — the current directive carries a WHAT ARMS IT paragraph and says plain text does
 not arm; "widen the strict-inequality blacklist" — that blacklist was deleted and the positive
 AT-OR-AFTER assertion is the whole guard.
 
 Not defects: the two-direction `decideMainGate` test can fail in both directions; the
 TRDD-W0ZTTUBA pin is a tripwire by design.
+
+Box 1 of §Acceptance ("can learn the positional rule from what it is shown") is satisfied as of
+05d27534 — TRDD-2CYTNLY1's commits carry the WHAT ARMS IT paragraph; they are credited there, not
+here.
 
 ## What happens
 
@@ -250,7 +257,7 @@ spell-checks — `!/HIGHER/` catches one English word while "strictly after", "g
 "must come later than" express the same wrong strict inequality and all passed; and
 `/fork[\s\S]{0,80}LAST/` was co-occurrence, negation-blind, green on "Never put the fork tool_use
 LAST". **? INFERRED, not measured** — deleting "AT OR AFTER" from the directive would have left
-every assertion green, read off the four regexes (none referenced the phrase); the deletion was
+every assertion green, read off its regexes (none referenced the phrase); the deletion was
 never actually performed and the old assertions never re-run against it. The conclusion is almost
 certainly right, which is exactly why filing it under "Measured" was wrong: a correct claim
 certified by a method that was not used is indistinguishable, to a later reader, from the measured
