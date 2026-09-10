@@ -3,7 +3,7 @@ trdd-id: 2CYTNLY1
 title: Delete the review gate's dead breakers and give the supervisor the gate's work definition
 column: todo
 created: 2026-09-09T14:38:59+0200
-updated: 2026-09-09T14:42:57+0200
+updated: 2026-09-10T02:54:43+0200
 current-owner: main
 task-type: refactor
 priority: medium
@@ -79,11 +79,14 @@ verified against the live source, not restated from memory.
   `agentlensDisabled()` (`src/cli/killSwitch.ts:92-95`, verified 2026-09-09: env
   `AGENTLENS_DISABLED=1` OR the flag file exists) returns `runReviewGate` at
   `src/cli/reviewGate.ts:796` with no stderr line. The gate already refuses its OWN off-switch:
-  `AGENTLENS_REVIEW_FORK=off` is read and ignored with a stderr line (`reviewGate.ts:803-805`,
+  `AGENTLENS_REVIEW_FORK=off` is read and ignored with a stderr line (`reviewGate.ts:804-805`,
   owner order 2026-09-03 — an env var is settable by anything in the process tree). The env half
-  of the global switch is that same bypass shape; the flag file is "an explicit human act"
-  (`killSwitch.ts:30`). Ship regardless of the decision: a stderr line on the kill-switch return,
-  matching the four other silent-allow lines (`reviewGate.ts:588,593,809,819`). The one question
+  of the global switch is that same bypass shape. `killSwitch.ts:30` says the switch "is armed by
+  an explicit human act" — a claim about the whole switch that its own env branch (`:93`)
+  contradicts, so that comment does not by itself support a file-vs-env split; the gate's
+  env-switch precedent does. Ship regardless of the decision: a stderr line on the kill-switch
+  return, matching the four other silent-allow lines (`reviewGate.ts:588,593,809,819`, re-verified
+  2026-09-10). The one question
   for the owner: should the gate honour only the FILE half of the global switch and ignore
   `AGENTLENS_DISABLED=1` the way it ignores its own env switch? Record the answer in
   `## Approval log`; do not decide it in code.
@@ -98,8 +101,11 @@ verified against the live source, not restated from memory.
       — on a fixture turn neither the old regex nor the old `EDITORS` set would have caught.
 - [ ] No behaviour change to the gate's block/allow decision on the existing test corpus — this
       is dead-code removal and a supervisor parity fix, not a new enforcement rule.
-- [ ] The kill-switch stderr line lands (item 1); item 2 stays an open question recorded in this
-      card's `## Approval log` once the owner answers, not silently resolved in code.
+- [ ] The kill-switch stderr line lands (item 1), asserted by a mocha case that captures
+      `process.stderr.write` under `AGENTLENS_DISABLED=1` — on screen it is debug-log only, since
+      a Stop hook's stderr on exit 0 is not surfaced to the model or the user (INFERRED from the
+      hooks contract, not measured); item 2 stays an open question recorded in this card's
+      `## Approval log` once the owner answers, not silently resolved in code.
 
 ## Notes and lessons learned
 

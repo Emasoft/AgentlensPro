@@ -3,7 +3,7 @@ trdd-id: 9FG0LSPG
 title: The review gate must decide on effects newer than the last fork, not on command text
 column: dev
 created: 2026-09-09T13:57:49+0200
-updated: 2026-09-09T14:42:57+0200
+updated: 2026-09-10T02:54:43+0200
 current-owner: main
 task-type: bugfix
 priority: critical
@@ -15,13 +15,13 @@ labels: [review-gate, hooks, token-burn, subagents]
 related: [0E3W5C45, 9J0515I4, 00G5G94L, 0D6QK5CW]
 blocked-by: []
 npt: []
-eht: [2CYTNLY1]
+eht: [2CYTNLY1, 3U8AIHXK]
 implementation-commits: [208994b8]
 ---
 
 # The review gate must decide on effects newer than the last fork, not on command text
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-09 14:42
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-10 02:54
 
 Design reviewed by an adversarial fork 2026-09-09. A first, stored-fingerprint variant (snapshot
 refreshed at every released Stop, text arms vetoed by an unchanged tree) was REJECTED by that
@@ -47,11 +47,29 @@ Stop, so no server or session restart was involved — every session on this mac
 gate from its next Stop. Deployed without the owner's go, on the owner's standing demand that
 the hook be fixed ("nothing can go on without it"). Blast radius: the hook is machine-wide, so
 every session on this box pays one fork per spurious arm until a defect is reverted. Revert
-recipe (the bundle is untracked, so no checkout of it restores anything): `git revert 208994b8`
-then `node esbuild.js`. Phase 2 EHT filed as TRDD-2CYTNLY1.
-NEXT ACTION: the live proof — one real edit-then-Stop must block naming the path (expected at
-this session's next Stop: the new card and this edit are newer than the last fork); record it in
-§Acceptance, then advance the column to match the rows.
+recipe (the bundle is untracked, so no checkout of it restores anything) — NOT `git revert`:
+rehearsed with `git merge-tree` 2026-09-10, `git revert 208994b8` CONFLICTS (modify/delete on
+this card and on `reviewGateEffects.ts`, content on `reviewGateTriggers.ts` — all from the later
+comment commit 4789b856), and reverting 4789b856 first conflicts on this card (docs commits after
+it). Restore the pre-fix SOURCE by path instead: `git checkout 208994b8~1 -- src/cli/reviewGate.ts
+src/cli/reviewGateTriggers.ts src/test/reviewGate.test.ts src/test/reviewGateTriggers.test.ts &&
+git rm -q src/cli/reviewGateEffects.ts src/test/reviewGateEffects.test.ts`, commit, then
+`node esbuild.js` (the checkout guard on this machine issues its OTP for `git checkout --`; this
+form is not rehearsed; add TRDD-3U8AIHXK's commit to the restore once it lands). Phase 2 EHT filed
+as TRDD-2CYTNLY1.
+LIVE OUTCOME (peer session tldr-code-5c, four cross-session reports: 2026-09-09 16:50 and 21:06,
+2026-09-10 01:2x and 01:3x): the effects path blocked its Stop four times, naming the path each
+time — and every one was a write by ANOTHER actor: `~/.claude/hooks/state/checkout-otp*` (the
+checkout guard's ledger, written for another session's checkout — twice), a plugin version landing
+in `~/.claude/plugins/cache/…/hooks/hooks.json`, and a server-regenerated `~/.claude/agents/*.md`.
+The mechanism is live; the attribution is wrong — "newer than the last fork" says nothing about
+WHO wrote, and the watched roots are machine-global. Filed TRDD-3U8AIHXK (EHT, `dev`): report a
+path only when its mtime falls inside one of this session's own tool-activity intervals
+(tool_use → tool_result; a background job → its notification; a review fork → zero-length). This
+session has not yet seen an effects block of its own — every Stop here armed on a text arm first.
+NEXT ACTION: land TRDD-3U8AIHXK (proposal under adversarial review at filing, implementation the
+turn after); then the TRUE-positive live proof in §Acceptance; then advance the column to match
+the rows.
 
 ## Why
 
@@ -157,7 +175,9 @@ Read in full 2026-09-09: `src/cli/reviewGate.ts`, `reviewGateTriggers.ts`, `revi
       last fork, with no tool_use in the transcript, blocks through the real `runMainGate` and the
       reason names `tracked.txt`; a fork newer than the write releases. Mutation check run
       2026-09-09 14:23: with the `applyEffects` fold dropped the block case fails ("expected a
-      block, got release"); fold restored, 63 passing.
+      block, got release"); fold restored, 63 passing. (TRDD-3U8AIHXK supersedes the "no
+      tool_use in the transcript" clause: a write with no tool activity behind it RELEASES by
+      design; the fixture gains a Bash tool_use/tool_result pair spanning the write.)
 - [x] `rust-core/target/` is in `.gitignore`; `.claude/worktrees/` is excluded on this machine
       only, via the local `.git/info/exclude` (on a fresh clone each worktree should appear as one
       untracked entry and release after one fork — INFERRED, not measured). `git status --porcelain=v1 -z --untracked-files=all` on this repo measured
@@ -169,8 +189,12 @@ Read in full 2026-09-09: `src/cli/reviewGate.ts`, `reviewGateTriggers.ts`, `revi
 - [x] `node esbuild.js` exit 0 (2026-09-09 14:39:20); `unreviewedEffects` present in
       `standalone/cli.js` (0 → 2 occurrences); `agentlenspro` resolves to this repo's bundle.
 - [x] Live: `agentlenspro review-gate --directive` prints the effects rule (grep count 1, 14:39).
-- [ ] Live: one real edit-then-Stop blocks with `left unreviewed changes on disk: <path>` naming
-      the path (this session's next Stop after the deploy).
+- [x] Live: the effects path blocks a Stop with `left unreviewed changes on disk: <path>` naming
+      the path — four blocks in peer session tldr-code-5c (cross-session reports 2026-09-09 16:50
+      and 21:06, 2026-09-10 01:2x and 01:3x; not observed in this session). All four named writes
+      by other actors — the false-positive class TRDD-3U8AIHXK handles.
+- [ ] Live: one TRUE positive — a Stop blocked on a write made by this session's own tools or
+      workers, naming the path (after TRDD-3U8AIHXK lands).
 - [x] Every silent-allow path in `runReviewGate`/`runMainGate` writes one stderr line: missing
       transcript, unreadable tail, unparsable payload, unknown `hook_event_name`.
 
