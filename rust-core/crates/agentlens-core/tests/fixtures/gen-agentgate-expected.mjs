@@ -118,6 +118,10 @@ const cases = [
   // deny — the cold-resume fork exemption must not shadow FORK_STORM_FORMING.
   { name: 'cold-resume fork storm still denied', fn: 'evaluateAgentGate', toolInput: { subagent_type: 'fork' }, state: base({ parent: { contextTokens: 350_000, idleMs: 4_000_000 }, lastStopFailureMs: NOW - 120_000, startsLast2min: 2, stall: { session: 'sess-caller-1', cwd: '/tmp/projA' } }) },
   { name: 'cold-resume keepwarm fork not exempt', fn: 'evaluateAgentGate', toolInput: { subagent_type: 'fork', prompt: 'keep-warm ping' }, state: base({ lastStopFailureMs: NOW - 120_000, startsLast2min: 1, stall: { session: 'sess-caller-1', cwd: '/tmp/projA' } }) },
+  // TRDD-0D6QK5CW: the load-bearing case — the FIRST fork after a stall passes even on a fat cold
+  // parent (FORK_STORM needs 2 launches); and FORK_STORM stays AFTER the RUNAWAY block.
+  { name: 'cold-resume first fat cold fork still exempt', fn: 'evaluateAgentGate', toolInput: { subagent_type: 'fork' }, state: base({ parent: { contextTokens: 350_000, idleMs: 4_000_000 }, lastStopFailureMs: NOW - 120_000, startsLast2min: 1, stall: { session: 'sess-caller-1', cwd: '/tmp/projA' } }) },
+  { name: 'runaway outranks fork storm', fn: 'evaluateAgentGate', toolInput: { subagent_type: 'fork' }, state: base({ parent: { contextTokens: 350_000, idleMs: 4_000_000 }, startsLast60s: 9, startsLast2min: 9, spawners: ownSpawners }) },
   { name: 'cold-resume disarmed by warm evidence', fn: 'evaluateAgentGate', toolInput: {}, state: base({ lastStopFailureMs: NOW - 120_000, startsLast2min: 1, stall: { session: 'sess-caller-1', cwd: '/tmp/projA' }, stallRecovered: true }) },
   { name: 'cold-resume foreign stall unnamed', fn: 'evaluateAgentGate', toolInput: {}, state: base({ lastStopFailureMs: NOW - 540_000, startsLast2min: 2, stall: { session: 'zzz-other', cwd: '/tmp/elsewhere' } }) },
   { name: 'cold-resume stall via worktree session match', fn: 'evaluateAgentGate', toolInput: {}, state: base({ lastStopFailureMs: NOW - 60_000, startsLast2min: 1, stall: { session: 'sess-caller-1', cwd: '/tmp/projA/.claude/worktrees/x' } }) },

@@ -232,6 +232,24 @@ suite('agentGate — evaluateAgentGate (TRDD-GOD0108C)', () => {
     assert.ok(!d.reason?.includes('This fork is allowed'), d.reason ?? '')
   })
 
+  test('the FIRST fork after a stall passes even on a fat cold parent: FORK_STORM needs 2 launches, cold-resume exempts it (TRDD-0D6QK5CW)', () => {
+    const s = state({
+      lastStopFailureMs: NOW - 3 * 60_000, startsLast2min: 1,
+      parent: { contextTokens: 350_000, idleMs: 4_000_000 },
+    })
+    const d = evaluateAgentGate({ subagent_type: 'fork' }, s)
+    assert.strictEqual(d.decision, 'warn')
+    assert.strictEqual(d.code, 'COLD_RESUME_FANOUT')
+    assert.ok(d.reason?.includes('This fork is allowed'), d.reason ?? '')
+  })
+
+  test('FORK_STORM_FORMING sits AFTER the RUNAWAY block: a fat cold fork at runaway counts keeps the measured-exempt RUNAWAY warn (TRDD-0D6QK5CW)', () => {
+    const s = state({ startsLast60s: 9, startsLast2min: 9, parent: { contextTokens: 350_000, idleMs: 4_000_000 } })
+    const d = evaluateAgentGate({ subagent_type: 'fork' }, s)
+    assert.strictEqual(d.decision, 'warn')
+    assert.strictEqual(d.code, 'RUNAWAY_FANOUT')
+  })
+
   test('a stall older than 10min disarms the cold-resume rule', () => {
     const d = evaluateAgentGate({}, state({ lastStopFailureMs: NOW - 11 * 60_000, startsLast2min: 2 }))
     assert.strictEqual(d.decision, 'allow')
