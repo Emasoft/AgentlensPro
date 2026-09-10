@@ -1,9 +1,9 @@
 ---
 trdd-id: 2CYTNLY1
 title: Delete the review gate's dead breakers and give the supervisor the gate's work definition
-column: todo
+column: dev
 created: 2026-09-09T14:38:59+0200
-updated: 2026-09-10T02:54:43+0200
+updated: 2026-09-10T03:49:54+0200
 current-owner: main
 task-type: refactor
 priority: medium
@@ -20,6 +20,26 @@ implementation-commits: []
 ---
 
 # Delete the review gate's dead breakers and give the supervisor the gate's work definition
+
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-10 03:49
+
+Pulled `todo` → `dev` at 03:49 by the janitor keep-going resume, after TRDD-3U8AIHXK reached
+`testing`. The §Scope line numbers date from 2026-09-09 and are STALE since 3f498995 (the
+attribution scanner grew `reviewGate.ts` by ~110 lines) — navigate by SYMBOL. Re-anchored 03:49
+in `src/cli/reviewGate.ts`: `isNoReviewSentinel` :320; `MAIN_MAX_PER_SESSION_DEFAULT` /
+`MAIN_MAX_CONSECUTIVE` :414-415; `mainGateMaxPerSession` :420 (EXPORTED — grep every caller
+before deleting); `decideMainGate` :585 (`void opts` :615); `mainStatePath` / `readMainState` /
+`writeMainState` :619-629; `mainBlockReason` :648; `runMainGate` state plumbing :694-701;
+`SUBAGENT_MAX_DEMANDS_PER_AGENT` :718; the subagent exact-match fork check :767;
+`decideSubagentGate` params :782-785 (`void` :809); `subagentStatePath` / `readSubagentState` /
+`writeSubagentState` :814-821; `runSubagentGate` plumbing :854-868; the silent kill-switch return
+:887. `src/cli/reviewSupervisor.ts`: `EDITORS` :26, `scanSupervision` :39, fork exact-match :52,
+the `git commit` regex :54. The three gate test files now hold 107 cases (89 when §Acceptance
+was written) — that row's count is superseded, the "still pass" clause stands. Delegated to one
+lean-worker at 03:49 against this card. The owner's kill-switch question (§Scope, last bullet)
+stays OPEN in `## Approval log`; the stderr line ships regardless.
+NEXT ACTION: worker report → verify the diff first-hand → run the check chain myself → commit
+→ `node esbuild.js` (the Stop hook runs the bundle) → `testing`.
 
 ## Why
 
@@ -106,6 +126,13 @@ verified against the live source, not restated from memory.
       a Stop hook's stderr on exit 0 is not surfaced to the model or the user (INFERRED from the
       hooks contract, not measured); item 2 stays an open question recorded in this card's
       `## Approval log` once the owner answers, not silently resolved in code.
+
+## Approval log
+
+- 2026-09-10T03:49:54+0200 — OPEN QUESTION for the owner, not decided in code: should the gate
+  honour only the FILE half of the global kill switch and ignore `AGENTLENS_DISABLED=1`, the way
+  it already ignores its own `AGENTLENS_REVIEW_FORK=off`? Until answered the gate keeps honouring
+  both halves, now with a stderr line on that return.
 
 ## Notes and lessons learned
 
