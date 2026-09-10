@@ -3,7 +3,7 @@ trdd-id: 3U8AIHXK
 title: The effects arm must attribute a write to this session's own tool activity before arming
 column: testing
 created: 2026-09-10T02:54:43+0200
-updated: 2026-09-10T03:38:19+0200
+updated: 2026-09-10T03:39:26+0200
 current-owner: main
 task-type: bugfix
 priority: critical
@@ -21,7 +21,7 @@ implementation-commits: [3f498995]
 
 # The effects arm must attribute a write to this session's own tool activity before arming
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-10 03:38
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-10 03:39
 
 Filed as TRDD-9FG0LSPG's EHT on four cross-session reports from peer session tldr-code-5c. The
 proposal was reviewed by an adversarial fork at filing (02:5x); six findings, all applied (the
@@ -68,9 +68,14 @@ this shell's PATH swept (explicit `:` split — zsh does not word-split `$PATH`)
 process env and was not read, so a dir outside this shell's PATH (or one populated later) is the
 only unexcluded shadow; if the chain holds, EVERY Stop since 03:32 has already run the new bundle
 — the Stop-side proof is 9FG0LSPG's release half (a Stop that passes after a KNOWN non-session
-write). 03:38: no known non-session writer has written since 03:32 (CLAUDE.md 09-09 12:27, the
-identity page 14:08, the guard ledger 01:30, the agent file 01:22, the 2.0.8 cache 21:01), so
-that half awaits the next janitor rewrite. Peer tldr-code-5c told 03:32. A post-commit
+write). 03:39: the real compiled `unreviewedEffects` run with `activity` undefined (= the OLD
+any-writer rule) since 03:32:04 lists exactly `["HEAD"]`, `truncated: false` — my own commits are
+the only candidate in the repo or the whole watched set, so no non-session write has landed
+since the bundle. WHEN that half can be observed: `sinceMs` is the last fork's timestamp and
+every fork-ended turn puts an earlier write below it at the next Stop, so the release half shows
+only at the Stop of a turn with NO fork after the write — a heartbeat turn (its sole tool is the
+foreground stub, seconds long; a write during the stub's own interval blocks, the named
+residual). Peer tldr-code-5c told 03:32. A post-commit
 review found two stale test comments (a "1.5s margin" left at 2.5 s; a "Positional" label for
 the recency gate) — fixed in the docs commit 24323387.
 LIVE: this session's Stop was blocked by the effects arm on the worker's own edit of
