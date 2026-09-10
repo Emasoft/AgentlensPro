@@ -4,7 +4,7 @@ title: The burn-gate cold-resume rule denies review forks machine-wide and deadl
 column: blocked
 pre-block-column: testing
 created: 2026-09-08T23:04:23+0200
-updated: 2026-09-10T09:17:37+0200
+updated: 2026-09-10T09:23:58+0200
 current-owner: main
 task-type: bugfix
 min-approval-requirement: none
@@ -23,7 +23,7 @@ relevant-rules: []
 
 # The burn-gate cold-resume rule denies review forks machine-wide and deadlocks the review gate
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-10 09:17
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-10 09:23
 
 Pulled `todo` → `dev` at 04:29 by the janitor keep-going resume (this session owns the card; the
 ownership note below is superseded). LANDED in three commits, each reviewed by an adversarial
@@ -64,20 +64,27 @@ line (§Where, last bullet) is REFUTED by reading: that rule needs `fat` AND `�
 case fires at `≥1`. RUNAWAY's identical shadowing of FORK_STORM is pre-existing: TRDD-VRW14OB0.
 Row 3 is BLOCKED on the owner's `go`/`no` for the alcore binary (TRDD-81BW1CS9) — the LIVE gate
 keeps the old decision until then, so the column is `blocked` (pre-block `testing`;
-`unblock-when: [trdd:81BW1CS9 terminal]` lets trdd-drift restore it when the decision card
-closes). Row 3 cannot be measured on demand: the cold-resume window opens only on a REAL
-StopFailure, and injecting one would deny fresh agents machine-wide for the 10-min window — the
-proof is opportunistic, at the next natural stall, read from the launching session's hook output;
-"deploy" means the process answering :3000 replaced per the a/b of 81BW1CS9 (at filing that was a
-leaked test daemon, so a copy + restart can leave the old decision live). Row 4 CLOSED BY
-SUBSTITUTE: the peer tldr-code-7a was not among the six listed peer sessions at 05:14, and peer
-names rotate (the 09:1x listing carries tldr-code-73, not 7a — no prefix-match send); this card
-carries the SHAs.
+`unblock-when: [trdd:81BW1CS9 terminal]` lets trdd-drift restore it to `testing` when the
+decision card closes on ANY answer — a restored card in a WORK column is what the keep-going
+resume pulls; a `blocked` card whose blocker closed is the invisible stall). Row 3 cannot be
+measured on demand: the cold-resume window opens only on a REAL StopFailure, and injecting one
+would deny every fresh launch after the first for the 10-min window — the proof is opportunistic,
+at the next natural stall, read from the launching session's hook output. The discriminating
+observation is a fork launch that comes back with the COLD_RESUME_FANOUT warn ("This fork is
+allowed …") — text only the new code emits; a fork that passes silently proves nothing (count 0
+passes on the old code too), and a fresh-agent deny inside the same 2-min count window is the
+control. "deploy" means the process answering :3000 replaced per the a/b of 81BW1CS9 (at filing
+that was a leaked test daemon, so a copy + restart can leave the old decision live). Row 4
+DROPPED: never an acceptance criterion of the fix — the peer's deadlock is cured by the deploy,
+not by a message; tldr-code-7a was not listed at 05:14 and the 09:1x listing carries a different
+tldr-code session (73), so no send was possible and none is owed.
 NEXT ACTION: on the owner's answer to TRDD-81BW1CS9 — `go`: rebuild alcore, `codesign -s - --force`
-(the `-` is the ad-hoc identity; without it macOS SIGKILLs the binary, exit 137), deploy per the
-a/b, restore `testing`, then → `ai_review` with row 3 open until its opportunistic observation;
-`no`: row 3 stays open and the card goes to `ai_review` on the TS/Rust evidence alone. Nothing
-else is open on this card.
+(the `-` is the ad-hoc identity; without it codesign takes `--force` as the identity and refuses,
+and the unsigned binary exits 137 at launch — measured, cause unestablished, TRDD-M2VK8T4P),
+deploy per the a/b, then from `testing` → `ai_review` with row 3 open until its opportunistic
+observation; `no`: drift restores `testing`, move to `ai_review` on the TS/Rust evidence alone,
+and row 3 stays open as the record that the LIVE gate still denies forks machine-wide — the
+deadlock in this card's title persists until a later alcore deploy. Nothing else is open.
 
 Filed from the main session at 23:04 while the USER's forked session works the review-hook
 directive ("fix the damn adversarial review hook"); that session OWNS this card — the main
@@ -150,11 +157,13 @@ answer the scoping question below on measured evidence.
 - [ ] BLOCKED on the owner's `go`/`no` (TRDD-81BW1CS9): alcore rebuilt, `codesign -s - --force`,
       deployed as the process answering :3000 (the a/b of 81BW1CS9), and — opportunistically, at
       the next REAL StopFailure, since the cold-resume window cannot be opened on demand without
-      denying fresh agents machine-wide — a fork launch observed allowed while a fresh-agent
-      launch in the same window is still denied.
-- [x] CLOSED BY SUBSTITUTE (05:14, reviewed 09:17): the peer session tldr-code-7a was not among
-      the listed peer sessions and peer names rotate (no prefix-match send); the SHAs live in this
-      card's frontmatter, which is the durable delivery.
+      denying fresh launches machine-wide — a fork launch observed returning the
+      COLD_RESUME_FANOUT warn ("This fork is allowed …", emitted only by the new code) while a
+      fresh-agent launch inside the same 2-min count window is denied (the control; a silently
+      passing fork proves nothing — count 0 passes on the old code too).
+- [x] DROPPED (reviewed 09:23): notifying the peer session tldr-code-7a was never an acceptance
+      criterion of the fix — its deadlock is cured by the deploy, not by a message; the session was
+      not listed at 05:14 and the 09:1x listing carries a different tldr-code session (73).
 
 ## Approval log
 
