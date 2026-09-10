@@ -1,10 +1,10 @@
 ---
 trdd-id: 0D6QK5CW
 title: The burn-gate cold-resume rule denies review forks machine-wide and deadlocks the review gate
-column: todo
+column: dev
 created: 2026-09-08T23:04:23+0200
-updated: 2026-09-08T23:04:23+0200
-current-owner: fork-session-review-hook
+updated: 2026-09-10T04:29:12+0200
+current-owner: main
 task-type: bugfix
 min-approval-requirement: none
 priority: critical
@@ -21,7 +21,27 @@ relevant-rules: []
 
 # The burn-gate cold-resume rule denies review forks machine-wide and deadlocks the review gate
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-08 23:04
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-10 04:29
+
+Pulled `todo` → `dev` at 04:29 by the janitor keep-going resume, after TRDD-2CYTNLY1 reached
+`testing`; the review-hook session that filed it is this session's lineage, so the ownership
+note below is historical. Delegated to one lean-worker (no git, Edit tool only, NO deploy) with
+candidate 1 ONLY and these BRIEF AMENDMENTS from the adversarial review (binding): (i) the card's
+"FORK_STORM_FORMING already covers a cold fork" line is an ASSUMPTION, not a measurement — the
+worker records whether a first fork after a stall (`startsLast2min` < 2, or not `fat`) is exempt
+from both rules after the change; (ii) before editing, read BOTH RUNAWAY fork-exemption branches
+(TS `agentGate.ts:346`, Rust `agent_gate.rs:406`) and match their reason-code style and `warn`
+shape in each core; (iii) answer candidate 3 by READING the code that feeds `startsLast2min`
+(Rust `:697-716`, `:796`; the TS twin) — does a denied or warned launch still increment it — with
+no behaviour change; (iv) the "fresh agent still denied" assertion needs a coldResume fixture
+(StopFailure inside the window, no stallRecovered) — locate the file's helper or build the state
+its existing cold-resume tests use; red-first for both new tests. Anchors 04:30: TS
+COLD_RESUME deny `:355-363`, FORK_STORM `:372`; Rust COLD_RESUME `:415-426`, FORK_STORM `:433`.
+Acceptance row 3 (alcore rebuild + `codesign` + deploy + live measurement) is BLOCKED on the
+owner's explicit `go`/`no` for the alcore binary (TRDD-81BW1CS9); rows 1, 2 and 4 are not.
+NEXT ACTION: worker report → verify both diffs first-hand → my own chain (tsc scratch + mocha
+agentGate; check-types; eslint; `cargo test -p agentlens-core --lib burn`; clippy `-D warnings`)
+→ commit by name → `testing` with row 3 marked blocked → notify tldr-code-7a with the SHA.
 
 Filed from the main session at 23:04 while the USER's forked session works the review-hook
 directive ("fix the damn adversarial review hook"); that session OWNS this card — the main
