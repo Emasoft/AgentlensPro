@@ -3,7 +3,7 @@ trdd-id: 2CYTNLY1
 title: Delete the review gate's dead breakers and give the supervisor the gate's work definition
 column: dev
 created: 2026-09-09T14:38:59+0200
-updated: 2026-09-10T03:49:54+0200
+updated: 2026-09-10T03:53:34+0200
 current-owner: main
 task-type: refactor
 priority: medium
@@ -21,7 +21,7 @@ implementation-commits: []
 
 # Delete the review gate's dead breakers and give the supervisor the gate's work definition
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-10 03:49
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-10 03:53
 
 Pulled `todo` → `dev` at 03:49 by the janitor keep-going resume, after TRDD-3U8AIHXK reached
 `testing`. The §Scope line numbers date from 2026-09-09 and are STALE since 3f498995 (the
@@ -37,7 +37,20 @@ before deleting); `decideMainGate` :585 (`void opts` :615); `mainStatePath` / `r
 the `git commit` regex :54. The three gate test files now hold 107 cases (89 when §Acceptance
 was written) — that row's count is superseded, the "still pass" clause stands. Delegated to one
 lean-worker at 03:49 against this card. The owner's kill-switch question (§Scope, last bullet)
-stays OPEN in `## Approval log`; the stderr line ships regardless.
+stays OPEN in `## Approval log`; the stderr line ships regardless. BRIEF AMENDMENTS (adversarial
+review 03:53, sent to the worker, binding over §Scope where they differ): sentinel floor =
+`reason.trim().length >= 8`, no space rule — the block message's own examples ("rate-limited",
+"at a depth limit", "tool denied") live in ONE exported constant shared by message and test, all
+three must pass and `foo` fail; `scanSupervision` takes `cwd` from the hook payload (never
+`process.cwd()`) because `commandWriteReason` needs it, gains a `text`-block branch for
+`textArms`, and counts an `isNoReviewSentinel` text as a review; the block message becomes
+"<cause + detail> landed after the last review fork (scanned: the transcript's last 4 MB)" — the
+gate measures after-the-fork, not a window; the parity test also asserts `commandWriteReason`
+on the `sed -i` command is non-null and the `PROPOSAL` block starts a line; `demands` /
+`nextDemands` go with the voided params and the two comments describing them are rewritten;
+`AGENTLENS_REVIEW_FORK_MAX` grepped across skills/docs/scripts before the exported
+`mainGateMaxPerSession` is deleted; the kill-switch stderr line names which HALF fired and never
+says "disabled by the owner".
 NEXT ACTION: worker report → verify the diff first-hand → run the check chain myself → commit
 → `node esbuild.js` (the Stop hook runs the bundle) → `testing`.
 
@@ -115,7 +128,9 @@ verified against the live source, not restated from memory.
 
 - [ ] `pnpm run check-types` and `npx eslint src/cli/reviewGate.ts src/cli/reviewSupervisor.ts src/cli/killSwitch.ts --quiet` both exit 0.
 - [ ] The three existing review-gate mocha files (`src/test/reviewGate.test.ts`,
-      `src/test/reviewGateTriggers.test.ts`, `src/test/reviewGateEffects.test.ts`) still pass, 89/89.
+      `src/test/reviewGateTriggers.test.ts`, `src/test/reviewGateEffects.test.ts`) still pass —
+      107 cases as of 3f498995 (89 when this row was written), plus `reviewSupervisor.test.ts`,
+      `reviewSupervisorRunner.test.ts` and `killSwitch.test.ts`.
 - [ ] One new `reviewSupervisor.test.ts` case proves `scanSupervision` now counts a `sed -i`
       command and a `git push` command as work — parity with the gate's own `commandWriteReason`
       — on a fixture turn neither the old regex nor the old `EDITORS` set would have caught.
