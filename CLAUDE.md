@@ -495,7 +495,7 @@ culprits by cache-**weighted** equiv (`investigate_burn`), never by request byte
 Diagnostics encode this as the TTL-regime matrix (TRDD-VY1IUVUM); the full model with measured
 costs: `.claude/project/memory/cache-ttl-model.md`.
 
-<+-+-JANITOR-WIKIMEM-INDEX-START-(do-not-modify)-+-+> v1 digest=4ca3a0143429 generated=2026-09-05T17:36:03+0200
+<+-+-JANITOR-WIKIMEM-INDEX-START-(do-not-modify)-+-+> v1 digest=eaf93696c6c6 generated=2026-09-09T12:27:17+0200
 ## Wikimem index (PROJECT scope) — recall by symptom, read on demand
 
 Deep knowledge lives in these pages, not in this file. Search: `memgrep recall "<symptom>" .claude/project/memory`.

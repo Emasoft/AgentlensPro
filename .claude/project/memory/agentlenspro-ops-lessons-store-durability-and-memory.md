@@ -2,7 +2,7 @@
 name: agentlenspro-ops-lessons-store-durability-and-memory
 description: "a span segment over 512MB breaks setup or silently drops a day of results / the server hit an out-of-memory heap error / is the parquet part actually durable before we delete the source / does fsync guarantee data is on disk on macOS / the RAM-disk spool never drains and fills to 100% / raw body capture stops silently / a drain looks stalled but is actually working / DuckDB ignore_errors silently degrades bad NDJSON lines into all-NULL rows / a diagnostics answer changes between runs or a session's turn count shrinks / sync streaming gunzip needed for a huge gz segment / MaxListenersExceededWarning on Gunzip or an uncaught unexpected end of file / heap looks healthy but the server was still killed / how much of the footprint is off-heap"
 ocd: 2026-07-11
-lmd: 2026-09-04
+lmd: 2026-09-10
 metadata:
   node_type: memory
   type: project
@@ -18,7 +18,7 @@ A span segment can grow past V8's max string length (~512 MB), and `fs.readFileS
 
 
 
-^ATOM-GZJG-RS6I [desc:"Streaming the FILE fixed half of it — loadRange still held every span, so an unbounded query OOM'd the server at 4GB", keywords: server_died_on_a_tool_call socket_hang_up_pid_changed JavaScript_heap_out_of_memory Ineffective_mark-compacts get_cache_event_log_kills_the_server unbounded_query no_--window loadRange_materializes streaming_the_file_is_not_streaming_the_query, type: reference, ocd: 2026-08-07, lmd: 2026-08-07]
+^ATOM-GZJG-RS6I [desc:"Streaming the FILE fixed half of it — loadRange still held every span, so an unbounded query OOM'd the server at 4GB", keywords: server_died_on_a_tool_call socket_hang_up_pid_changed JavaScript_heap_out_of_memory Ineffective_mark-compacts get_cache_event_log_kills_the_server unbounded_query no_--window loadRange_materializes streaming_the_file_is_not_streaming_the_query, type: reference, ocd: 2026-08-07, lmd: 2026-09-10]
 
 **Reading incrementally while accumulating everything is still O(all).** ATOM-DMTT-DOCU made
 `segmentedSpanStore.loadRange` stream each segment through `ndjsonLines.ts` instead of one
@@ -30,6 +30,9 @@ died with `FATAL ERROR: Ineffective mark-compacts near heap limit — JavaScript
 at ~4 GB after 62 s. Memory tracked the WINDOW, not the answer: 1 h→19 MB, 24 h→478 MB, 168 h→dead,
 for a result that was 7 rows at every size. It degrades with store age rather than failing on day
 one, which is how it shipped.
+
+
+^ATOM-HH4J-3A09 [desc: "The fix is forEachInRange — a selective reader's peak memory follows what it KEEPS, not the window; unbounded query now 36s/184k calls, and one server owning the data dir means a per-tool OOM is a mac", keywords: forEachInRange_selective_reader loadRange_thin_wrapper peak_memory_follows_what_it_keeps window_cap_hides_accumulation one_server_owns_the_data_dir per-tool_memory_bug_is_machine-wide_outage tool_start_done_log_line wedged_handler_never_logs_completion OOM_uncatchable_v8_abort measured_after_168x_window_range, type: reference, ocd: 2026-09-10, lmd: 2026-09-10]
 
 Fix: the store exposes `forEachInRange(since, until, visit)` and `loadRange` is a thin wrapper over
 it, so a selective reader's peak memory follows what it KEEPS. Measured after, across a 168× window
@@ -47,7 +50,7 @@ Three things worth carrying:
 
 
 
-^ATOM-PJAW-P8XT [desc:"The delete gate's read-back is served from the page cache, so it proved readability not durability; the fsync barrier is gated on whether the SOURCE was durable, and F_FULLFSYNC is unavailable in Node", keywords: is_the_parquet_part_actually_durable_before_we_delete_the_source verify_before_delete_page_cache does_fsync_guarantee_data_on_disk_macos F_FULLFSYNC_not_available_in_node reclaim_only_1_file_per_second duckdb_round_trips_per_file_in_the_delete_gate, type: project, ocd: 2026-08-12, lmd: 2026-08-12]
+^ATOM-PJAW-P8XT [desc:"The delete gate's read-back is served from the page cache, so it proved readability not durability; the fsync barrier is gated on whether the SOURCE was durable, and F_FULLFSYNC is unavailable in Node", keywords: is_the_parquet_part_actually_durable_before_we_delete_the_source verify_before_delete_page_cache does_fsync_guarantee_data_on_disk_macos F_FULLFSYNC_not_available_in_node reclaim_only_1_file_per_second duckdb_round_trips_per_file_in_the_delete_gate, type: project, ocd: 2026-08-12, lmd: 2026-09-10]
 
 **A read-back proves READABILITY, not DURABILITY — the page cache answers it.** The universal
 delete gate (`src/store/ingestPass.ts`) flushes Parquet, reconstructs each body FROM the store,
@@ -62,6 +65,9 @@ takes it either way and the barrier buys ~nothing. Draining the LEGACY SSD bodie
 was safely on disk, and deleting it after a non-durable flush can lose data that was already
 safe. The spool back-pressure valve redirects INTO that SSD dir under pressure, which is what
 turned this from latent to live.
+
+
+^ATOM-K99N-LEXN [desc: "F_FULLFSYNC is false in Node on macOS (no guarantee past OS buffers); the delete gate's real bottleneck was ~2 DuckDB round trips per file — batched to ~15 round trips, and a missing body in the bulk ", keywords: F_FULLFSYNC_false_in_node fsync_not_a_power-loss_guarantee macos_drive_write_cache duckdb_round_trips_per_file throughput_bottleneck_not_flush_cadence batched_bulk_row_ts_query chunked_reconstruction_32_per_query missing_body_defaults_to_not-ok silently_dropped_row_cannot_authorize_delete 1_file_per_second_vs_80MB_min_inflow, type: project, ocd: 2026-09-10, lmd: 2026-09-10]
 
 **`fs.constants.F_FULLFSYNC` is `false` in Node (verified empirically).** So on macOS pure Node
 cannot force the drive's own write cache to media — `fsync(2)` asks the OS to flush its buffers to
