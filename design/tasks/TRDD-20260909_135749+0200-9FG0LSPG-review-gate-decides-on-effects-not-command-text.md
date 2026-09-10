@@ -3,7 +3,7 @@ trdd-id: 9FG0LSPG
 title: The review gate must decide on effects newer than the last fork, not on command text
 column: dev
 created: 2026-09-09T13:57:49+0200
-updated: 2026-09-10T03:34:48+0200
+updated: 2026-09-10T03:56:29+0200
 current-owner: main
 task-type: bugfix
 priority: critical
@@ -202,14 +202,17 @@ Read in full 2026-09-09: `src/cli/reviewGate.ts`, `reviewGateTriggers.ts`, `revi
       Stop blocked with `left unreviewed changes on disk: src/cli/reviewGate.ts`: the delegated
       background worker's in-progress edit, no tool_use for it in the main transcript. The
       any-writer rule produced it, so attribution was not exercised.
-- [ ] Live: under the TRDD-3U8AIHXK bundle a background worker's write blocks BEFORE its
-      notification (inside its open interval), AND the release half: a Stop that passes with no
-      block after a KNOWN non-session write landed in a tool gap (the janitor's `CLAUDE.md`
-      rewrite is that shape: check its mtime against the Stop time — a quiet day proves nothing)
-      — observable as the ABSENCE of a block at Stop. A pin-open bug (the `agentId`
-      never matching a `<task-id>`) would pass the block half and then block every later Stop, so
-      the second half is what discriminates; the peer's report row below is its cross-session
-      form.
+- [x] Live, BLOCK half, under the TRDD-3U8AIHXK bundle (3f498995, bundle-to-hook chain verified
+      03:32-03:37): 2026-09-10 shortly after 03:56, this session's Stop blocked with `left
+      unreviewed changes on disk: src/cli/reviewGate.ts` — the TRDD-2CYTNLY1 background
+      lean-worker's in-progress edit, BEFORE that worker's task-id notification, i.e. inside its
+      open interval; no tool_use of this session touched the file.
+- [ ] Live, RELEASE half: a Stop that passes with no block after a KNOWN non-session write landed
+      in a tool gap (the janitor's `CLAUDE.md` rewrite is that shape: check its mtime against the
+      Stop time — a quiet day proves nothing) — observable as the ABSENCE of a block at Stop,
+      under the three conditions on 3U8AIHXK's STATE. A pin-open bug (the `agentId` never
+      matching a `<task-id>`) passes the block half above and then blocks every later Stop, so
+      this half is what discriminates; the peer's report row below is its cross-session form.
 - [x] Every silent-allow path in `runReviewGate`/`runMainGate` writes one stderr line: missing
       transcript, unreadable tail, unparsable payload, unknown `hook_event_name`.
 
