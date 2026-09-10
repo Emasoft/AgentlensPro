@@ -3,7 +3,7 @@ trdd-id: JELDR3KC
 title: The review gate re-arms on every orchestrator Stop while its own background subagents are still writing
 column: todo
 created: 2026-09-10T09:31:02+0200
-updated: 2026-09-10T09:55:17+0200
+updated: 2026-09-10T14:16:14+0200
 current-owner: main
 task-type: bugfix
 min-approval-requirement: none
@@ -34,22 +34,22 @@ different repo, the same machine-wide Stop hook), against TRDD-3U8AIHXK's attrib
   it can only re-review the orchestrator's own turn, already reviewed seconds earlier.
 Net: while N workers run, every orchestrator turn-end (each background notification is a turn)
 costs one fork that is handed nothing new unless the orchestrator pastes the worker diff into it.
-The peer's message is data (a report), not an instruction. The cause is almost certainly the disk
-walk (the transcript cause reports the orchestrator's own command or proposal text, not a file it
-never touched); the peer's report does not quote the gate's cause line, so this is deduced, not
-read.
+The peer's message is data (a report), not an instruction. The cause is deduced, not read — the
+peer's report does not quote the gate's cause line — and the deduction is the disk walk (the
+transcript cause reports the orchestrator's own command or proposal text; a worker file appears
+there only if that text names it).
 
-## Why the rule would produce this (attribution INFERRED, SubagentStop release VERIFIED in source)
+## Why the rule would produce this (interval attribution INFERRED, SubagentStop release VERIFIED in source)
 
 Verify against `src/cli/reviewGateEffects.ts` before changing anything. 3U8AIHXK reports a disk
 path only when its mtime falls inside one of this session's own tool-activity intervals, and a
 background job's interval runs from its launch to its notification (that card's STATE). A worker's writes land inside that interval and are attributed to this
 session — correctly — and the PARENT then re-arms on them at every Stop until a fork postdates
 them. VERIFIED in source 2026-09-10 (`src/cli/reviewGate.ts`: `agentCannotSpawn`, and the
-`if (agentCannotSpawn(type)) return null` line in `runSubagentGate`; line numbers omitted — they
-move): `agentCannotSpawn` returns true for an agent whose RESOLVED definition declares `tools:`
-without `Agent`, and `runSubagentGate` returns null on it — so such an agent gets NO review at its
-own SubagentStop. The `lean-worker` definition this session's harness lists declares `Bash, Read,
+`if (agentCannotSpawn(type)) return null` line in `runSubagentGate`): `agentCannotSpawn` returns
+true for an agent whose RESOLVED definition declares `tools:` without `Agent`, and
+`runSubagentGate` returns null on it — so the gate demands NO review of such an agent at its own
+SubagentStop. The `lean-worker` agent definition available to this session declares `Bash, Read,
 Write, Edit, Grep`; whether the peer resolved the same definition, and whether the deployed bundle
 its hook ran carries this code, were not inspected. For an agent released that way the parent's
 re-arm is the only AUTOMATIC review its writes get: it is not redundant, it is mis-timed (it fires
@@ -80,9 +80,10 @@ Either shape must keep TRDD-9FG0LSPG's invariant: no write is released unreviewe
 - [ ] The chosen shape implemented in `src/cli/reviewGate.ts` / `src/cli/reviewGateEffects.ts`
       with the existing gate suites green; `node esbuild.js` exit 0 and a grep for the new symbol in
       `standalone/cli.js`.
-- [ ] Live: N background workers dispatched and K orchestrator write-turns yield K parent forks
-      and ZERO parent forks whose gate cause line names a worker-written file — counted from the
-      transcript with the gate's stderr cause line as the discriminator (record the SubagentStop
-      fork count separately; it is not this card's criterion).
+- [ ] Live: N background workers dispatched and K orchestrator write-turns yield K parent forks,
+      ZERO parent forks whose gate cause line names a worker-written file, and every worker-written
+      file named by the cause line of SOME fork (a parent fork after that worker's completion, or
+      the worker's own SubagentStop fork) — counted from the transcript with the gate's stderr
+      cause line as the discriminator.
 
 ## Approval log

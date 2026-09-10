@@ -3,7 +3,7 @@ trdd-id: DRH4ZRGB
 title: The review-gate block message omits the positional rule its own instruction violates
 column: ai_review
 created: 2026-09-08T11:37:44+0200
-updated: 2026-09-10T09:55:17+0200
+updated: 2026-09-10T14:16:14+0200
 current-owner: main-session
 task-type: bugfix
 scope: project
@@ -14,15 +14,17 @@ eht: [7FA3NIXU]
 
 # The review-gate block message omits the positional rule its own instruction violates
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-10 09:55
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-10 14:16
 
 The message work is DONE: all three §Acceptance rows ticked, landed as `e7d1d3c7` + `4521dea7`,
 assertions made real guards in `a18ff9f1` (which also split out TRDD-7FA3NIXU); all three in
-`implementation-commits`. No review pass is recorded on this card for them. NEXT ACTION:
-`ai_review` of those three commits — one fork over their combined diff of `src/cli/reviewGate.ts`
-+ `src/test/reviewGate.test.ts`. Before close, execute §⚠ DO NOT CLOSE (two relocations; its
-table is the list). Cannot reach `complete` until TRDD-7FA3NIXU (`eht:`) is terminal — it bars
-the close, not the review. No approval needed — see the next paragraph.
+`implementation-commits`. Each commit passed the Stop gate's fork at its own Stop; no combined
+review of the three is recorded here. NEXT ACTION: a combined review of the three commits (the
+card records the verdict). `column: ai_review` asserts that review is dispatched — the fork spawned
+in the same turn as this STATE edit is it; if no verdict lands below, the column is stale and goes
+back to `todo`. Before close, execute §⚠ DO NOT CLOSE (the two undone rows of its table). Cannot
+reach `complete` until TRDD-7FA3NIXU (`eht:`) is terminal — it bars the close, not the review. No
+approval needed (Tier 0 — the next paragraph, which still holds for what remains).
 
 Filed `proposal` / `user` at first. That was wrong and is corrected: this card's landed content
 is ONE clause in a block message and the assertions that pin it, and its own third acceptance
@@ -248,3 +250,4 @@ quietly fixed, because the irony is the evidence.
 against a guard whose own text says the caps may only go DOWN. Someone added openers. That is a
 live regression, discovered here and left in place; it needs its own card, not a paragraph in a
 commit body, or the next commit inherits "compile fails, unrelated" without re-deriving it.
+Carded as TRDD-4BZPAQWM.
