@@ -77,7 +77,7 @@ suite('review-gate effects: unreviewedEffects', () => {
     fs.writeFileSync(path.join(repo, 'tracked.txt'), 'v2\n')
     git(repo, 'commit', '-q', '-a', '-m', 'second')
     const first = git(repo, 'rev-list', '--max-parents=0', 'HEAD').trim()
-    // git's reflog timestamp is whole UNIX SECONDS too — same 1.5s margin as the commit test above.
+    // git's reflog timestamp is whole UNIX SECONDS too — same 2.5s margin as the commit test above.
     const t = Date.now() - 2500
     git(repo, 'checkout', '-q', first)
     const { paths } = unreviewedEffects(repo, t, { watched: [] })

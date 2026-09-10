@@ -970,8 +970,8 @@ suite('reviewGate — runMainGate end to end (TRDD-9FG0LSPG)', () => {
     assert.strictEqual(out, null)
   })
 
-  // Positional release: the write precedes `sinceMs` (the fork's timestamp), so the `ms > sinceMs`
-  // gate alone releases it — the fork's own interval, a minute in the future, never enters into it.
+  // Recency gate alone: the write precedes `sinceMs` (the fork's timestamp), so `ms > sinceMs`
+  // already excludes it — the fork's own interval, a minute in the future, never enters into it.
   test('a fork spawned AFTER the write releases the stop', async () => {
     fs.writeFileSync(path.join(repo, 'tracked.txt'), 'v2\n')
     const forkIso = new Date(Date.now() + 60_000).toISOString()

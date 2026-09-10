@@ -3,7 +3,7 @@ trdd-id: 9FG0LSPG
 title: The review gate must decide on effects newer than the last fork, not on command text
 column: dev
 created: 2026-09-09T13:57:49+0200
-updated: 2026-09-10T02:54:43+0200
+updated: 2026-09-10T03:32:04+0200
 current-owner: main
 task-type: bugfix
 priority: critical
@@ -48,15 +48,16 @@ gate from its next Stop. Deployed without the owner's go, on the owner's standin
 the hook be fixed ("nothing can go on without it"). Blast radius: the hook is machine-wide, so
 every session on this box pays one fork per spurious arm until a defect is reverted. Revert
 recipe (the bundle is untracked, so no checkout of it restores anything) — NOT `git revert`:
-rehearsed with `git merge-tree` 2026-09-10, `git revert 208994b8` CONFLICTS (modify/delete on
-this card and on `reviewGateEffects.ts`, content on `reviewGateTriggers.ts` — all from the later
+rehearsed with `git merge-tree` 2026-09-10, `git revert 208994b8` CONFLICTS (a modify/delete on
+this card; the stage-1/2 pattern of a modify/delete on `reviewGateEffects.ts` and three stages on
+`reviewGateTriggers.ts` — the CONFLICT lines themselves were cut at 800 bytes; all from the later
 comment commit 4789b856), and reverting 4789b856 first conflicts on this card (docs commits after
 it). Restore the pre-fix SOURCE by path instead: `git checkout 208994b8~1 -- src/cli/reviewGate.ts
 src/cli/reviewGateTriggers.ts src/test/reviewGate.test.ts src/test/reviewGateTriggers.test.ts &&
 git rm -q src/cli/reviewGateEffects.ts src/test/reviewGateEffects.test.ts`, commit, then
-`node esbuild.js` (the checkout guard on this machine issues its OTP for `git checkout --`; this
-form is not rehearsed; add TRDD-3U8AIHXK's commit to the restore once it lands). Phase 2 EHT filed
-as TRDD-2CYTNLY1.
+`node esbuild.js` (per the peer's reading of its ledger, the checkout guard on this machine issues
+an OTP for `git checkout --` — not measured here; this form is not rehearsed; add
+TRDD-3U8AIHXK's commit to the restore once it lands). Phase 2 EHT filed as TRDD-2CYTNLY1.
 LIVE OUTCOME (peer session tldr-code-5c, four cross-session reports: 2026-09-09 16:50 and 21:06,
 2026-09-10 01:2x and 01:3x): the effects path blocked its Stop four times, naming the path each
 time — and every one was a write by ANOTHER actor: `~/.claude/hooks/state/checkout-otp*` (the
@@ -169,15 +170,19 @@ Read in full 2026-09-09: `src/cli/reviewGate.ts`, `reviewGateTriggers.ts`, `revi
       overflow → `truncated`; a depth-0 symlink followed, a depth-1 one not, a link resolving to
       an ancestor of a root refused, a dangling link never throws; `reflogEpochMs`: epoch shape →
       ms, `HEAD@{0}` → null, empty → null; non-git cwd → watched set only. The whole-second `+1 s`
-      tolerance is exercised only indirectly (the two HEAD tests keep a 1.5 s margin).
+      tolerance is exercised only indirectly (the two HEAD tests keep a 2.5 s margin — 1.5 s until
+      TRDD-3U8AIHXK widened it).
 - [x] Gate test (`src/test/reviewGate.test.ts`, suite "runMainGate end to end": a real tmp repo,
       HOME pinned to it so the default watched set resolves to nothing): a file written after the
       last fork, with no tool_use in the transcript, blocks through the real `runMainGate` and the
       reason names `tracked.txt`; a fork newer than the write releases. Mutation check run
       2026-09-09 14:23: with the `applyEffects` fold dropped the block case fails ("expected a
       block, got release"); fold restored, 63 passing. (TRDD-3U8AIHXK supersedes the "no
-      tool_use in the transcript" clause: a write with no tool activity behind it RELEASES by
-      design; the fixture gains a Bash tool_use/tool_result pair spanning the write.)
+      tool_use in the transcript" clause: that case is now (B), the RELEASE twin — a write with no
+      tool activity behind it releases by design; the block case is (A), a Bash tool_use/tool_result
+      pair spanning the write; (C) releases when the pair ended before the write. The old fixture's
+      id-less fork would hold an interval open forever under the new scanner — the old code had no
+      intervals — so the 14:23 mutation above measured that old case, not (A).)
 - [x] `rust-core/target/` is in `.gitignore`; `.claude/worktrees/` is excluded on this machine
       only, via the local `.git/info/exclude` (on a fresh clone each worktree should appear as one
       untracked entry and release after one fork — INFERRED, not measured). `git status --porcelain=v1 -z --untracked-files=all` on this repo measured
@@ -193,8 +198,17 @@ Read in full 2026-09-09: `src/cli/reviewGate.ts`, `reviewGateTriggers.ts`, `revi
       the path — four blocks in peer session tldr-code-5c (cross-session reports 2026-09-09 16:50
       and 21:06, 2026-09-10 01:2x and 01:3x; not observed in this session). All four named writes
       by other actors — the false-positive class TRDD-3U8AIHXK handles.
-- [ ] Live: one TRUE positive — a Stop blocked on a write made by this session's own tools or
-      workers, naming the path (after TRDD-3U8AIHXK lands).
+- [x] Live: one TRUE positive under the 208994b8 bundle — 2026-09-10 after 03:06, this session's
+      Stop blocked with `left unreviewed changes on disk: src/cli/reviewGate.ts`: the delegated
+      background worker's in-progress edit, no tool_use for it in the main transcript. The
+      any-writer rule produced it, so attribution was not exercised.
+- [ ] Live: under the TRDD-3U8AIHXK bundle a background worker's write blocks BEFORE its
+      notification (inside its open interval), AND the release half: a Stop that passes with no
+      block after a non-session write landed in a tool gap (the janitor's `CLAUDE.md` rewrite is
+      that shape) — observable as the ABSENCE of a block at Stop. A pin-open bug (the `agentId`
+      never matching a `<task-id>`) would pass the block half and then block every later Stop, so
+      the second half is what discriminates; the peer's report row below is its cross-session
+      form.
 - [x] Every silent-allow path in `runReviewGate`/`runMainGate` writes one stderr line: missing
       transcript, unreadable tail, unparsable payload, unknown `hook_event_name`.
 
