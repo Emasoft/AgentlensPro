@@ -202,6 +202,17 @@ suite('agentGate — evaluateAgentGate (TRDD-GOD0108C)', () => {
     assert.ok(d.reason?.includes('…/agentlens'), 'own workspace must be named')
   })
 
+  test('cold resume never denies a FORK: it warns and lets it pass, but a fresh agent stays denied (TRDD-0D6QK5CW)', () => {
+    const stalled = state({ lastStopFailureMs: NOW - 3 * 60_000, startsLast2min: 1 })
+    const fork = evaluateAgentGate({ subagent_type: 'fork', prompt: 'review the last commit' }, stalled)
+    assert.strictEqual(fork.decision, 'warn')
+    assert.strictEqual(fork.code, 'COLD_RESUME_FANOUT')
+    assert.ok(fork.reason?.includes('This fork is allowed'), fork.reason ?? '')
+    const fresh = evaluateAgentGate({ subagent_type: 'lean-worker' }, stalled)
+    assert.strictEqual(fresh.decision, 'deny')
+    assert.strictEqual(fresh.code, 'COLD_RESUME_FANOUT')
+  })
+
   test('a stall older than 10min disarms the cold-resume rule', () => {
     const d = evaluateAgentGate({}, state({ lastStopFailureMs: NOW - 11 * 60_000, startsLast2min: 2 }))
     assert.strictEqual(d.decision, 'allow')

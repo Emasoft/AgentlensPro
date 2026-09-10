@@ -357,10 +357,26 @@ export function evaluateAgentGate(
     // The TTL here is the SUBAGENT tier (module note above): the launches this rule holds back
     // are fresh agent conversations whose shared prefix entries ride the 5-min tier regardless
     // of the caller's regime — a 1h main-session entry does not warm a fan-out's agent prefixes.
-    return deny('COLD_RESUME_FANOUT',
+    const coldResumeBase =
       `AgentLens burn-gate: a rate-limit stall ended ${Math.round((stallAgeMs as number) / 60_000)}min ago` +
       `${stallWho}, so the fan-out's agent prefix caches are past their ${ttlPhrase(SUBAGENT_TTL)}, and ` +
-      `${state.startsLast2min} agent(s) already launched since — that first launch IS the cache warm-up. ` +
+      `${state.startsLast2min} agent(s) already launched since — that first launch IS the cache warm-up.`
+    // A FORK is exempt here for the same reason RUNAWAY_FANOUT exempts it (TRDD-3EZ6SJ2Z,
+    // TRDD-0D6QK5CW): its first request reads the CALLER's last-written entry warm, not a fresh
+    // agent prefix — the stall's cold TTL applies to fanned-out agent prefixes, not to the
+    // caller's own entry. Denying forks here deadlocked the Stop-time review gate (which fires a
+    // fork on every write-shaped turn) on any machine with a recent stall. The keep-warm pinger
+    // keeps deny() for its USER-ordered advisory wording.
+    if (fork && !keepWarm) {
+      return {
+        decision: 'warn', code: 'COLD_RESUME_FANOUT',
+        reason: `[agentlens] ${coldResumeBase} This fork is allowed: it reads the caller's cache entry, ` +
+          `not a fresh agent prefix, so the stall's cold TTL does not apply to it. Fresh agents are still ` +
+          `denied until the window clears.`,
+      }
+    }
+    return deny('COLD_RESUME_FANOUT',
+      `${coldResumeBase} ` +
       `Every further agent launched before it lands re-pays the full prefix at the write rate. ` +
       `Retry this launch in ~60s. Override: AGENTLENS_GATE=off.`)
   }

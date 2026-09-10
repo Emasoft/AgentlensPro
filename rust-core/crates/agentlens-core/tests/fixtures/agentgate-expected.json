@@ -443,6 +443,45 @@
    }
   },
   {
+   "name": "cold-resume fork warns not denied",
+   "fn": "evaluateAgentGate",
+   "toolInput": {
+    "subagent_type": "fork",
+    "prompt": "review the last commit"
+   },
+   "state": {
+    "now": 1787000000000,
+    "mode": "enforce",
+    "parent": {
+     "contextTokens": null,
+     "idleMs": null
+    },
+    "startsLast60s": 0,
+    "startsLast2min": 1,
+    "spawners": [],
+    "lastStopFailureMs": 1786999880000,
+    "stall": {
+     "session": "sess-caller-1",
+     "cwd": "/tmp/projA"
+    },
+    "stallRecovered": false,
+    "thrash": null,
+    "premiumShare": null,
+    "premiumModel": null,
+    "ttl": {
+     "ttlMs": 3600000,
+     "ttlAssumedMin": 60,
+     "ttlSource": "doc-matrix",
+     "ttlBasis": "main conversation on a Claude subscription within plan — automatic 1-hour tier"
+    },
+    "caller": {
+     "session": "sess-caller-1",
+     "cwd": "/tmp/projA"
+    },
+    "thresholds": {}
+   }
+  },
+  {
    "name": "cold-resume disarmed by warm evidence",
    "fn": "evaluateAgentGate",
    "toolInput": {},
@@ -2367,6 +2406,11 @@
    "decision": "deny",
    "code": "COLD_RESUME_FANOUT",
    "reason": "AgentLens burn-gate: a rate-limit stall ended 2min ago (turn died in session sess-cal… in …/projA), so the fan-out's agent prefix caches are past their 5-min TTL (doc-matrix), and 1 agent(s) already launched since — that first launch IS the cache warm-up. Every further agent launched before it lands re-pays the full prefix at the write rate. Retry this launch in ~60s. Override: AGENTLENS_GATE=off."
+  },
+  {
+   "decision": "warn",
+   "code": "COLD_RESUME_FANOUT",
+   "reason": "[agentlens] AgentLens burn-gate: a rate-limit stall ended 2min ago (turn died in session sess-cal… in …/projA), so the fan-out's agent prefix caches are past their 5-min TTL (doc-matrix), and 1 agent(s) already launched since — that first launch IS the cache warm-up. This fork is allowed: it reads the caller's cache entry, not a fresh agent prefix, so the stall's cold TTL does not apply to it. Fresh agents are still denied until the window clears."
   },
   {
    "decision": "allow",

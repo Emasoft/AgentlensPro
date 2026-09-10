@@ -417,13 +417,25 @@ warm-up this rule is protecting — denying it would cause the cold cache it pre
         // The TTL here is the SUBAGENT tier: the launches this rule holds back are fresh agent
         // conversations whose shared prefix entries ride the 5-min tier regardless of the
         // caller's regime.
+        let cold_resume_base = format!(
+            "AgentLens burn-gate: a rate-limit stall ended {}min ago{stall_who}, so the fan-out's agent prefix caches are past their {}, and {} agent(s) already launched since — that first launch IS the cache warm-up.",
+            fmt_js_num(js_math_round(stall_age_ms.unwrap_or(0.0) / 60_000.0)),
+            subagent_ttl_phrase(),
+            fmt_js_num(starts120)
+        );
+        // A FORK is exempt here (TRDD-0D6QK5CW, parity with RUNAWAY_FANOUT above): its first
+        // request reads the CALLER's last-written entry warm, not a fresh agent prefix — the
+        // stall's cold TTL applies to fanned-out agent prefixes, not to the caller's own entry.
+        // Denying forks here deadlocked the Stop-time review gate (which fires a fork on every
+        // write-shaped turn) on any machine with a recent stall.
+        if fork && !keep_warm {
+            return json!({ "decision": "warn", "code": "COLD_RESUME_FANOUT", "reason": format!(
+                "[agentlens] {cold_resume_base} This fork is allowed: it reads the caller's cache entry, not a fresh agent prefix, so the stall's cold TTL does not apply to it. Fresh agents are still denied until the window clears.") });
+        }
         return deny(
             "COLD_RESUME_FANOUT",
             format!(
-                "AgentLens burn-gate: a rate-limit stall ended {}min ago{stall_who}, so the fan-out's agent prefix caches are past their {}, and {} agent(s) already launched since — that first launch IS the cache warm-up. Every further agent launched before it lands re-pays the full prefix at the write rate. Retry this launch in ~60s. Override: AGENTLENS_GATE=off.",
-                fmt_js_num(js_math_round(stall_age_ms.unwrap_or(0.0) / 60_000.0)),
-                subagent_ttl_phrase(),
-                fmt_js_num(starts120)
+                "{cold_resume_base} Every further agent launched before it lands re-pays the full prefix at the write rate. Retry this launch in ~60s. Override: AGENTLENS_GATE=off."
             ),
         );
     }

@@ -112,6 +112,8 @@ const cases = [
   { name: 'runaway deny', fn: 'evaluateAgentGate', toolInput: { subagent_type: 'explore' }, state: base({ startsLast60s: 9, startsLast2min: 9, spawners: ownSpawners }) },
   { name: 'runaway warn-mode downgrade', fn: 'evaluateAgentGate', toolInput: {}, state: base({ mode: 'warn', startsLast60s: 9, spawners: ownSpawners }) },
   { name: 'cold-resume fanout deny own stall', fn: 'evaluateAgentGate', toolInput: {}, state: base({ lastStopFailureMs: NOW - 120_000, startsLast2min: 1, stall: { session: 'sess-caller-1', cwd: '/tmp/projA' } }) },
+  // TRDD-0D6QK5CW: a fork under cold-resume warns instead of denying (same exemption as runaway).
+  { name: 'cold-resume fork warns not denied', fn: 'evaluateAgentGate', toolInput: { subagent_type: 'fork', prompt: 'review the last commit' }, state: base({ lastStopFailureMs: NOW - 120_000, startsLast2min: 1, stall: { session: 'sess-caller-1', cwd: '/tmp/projA' } }) },
   { name: 'cold-resume disarmed by warm evidence', fn: 'evaluateAgentGate', toolInput: {}, state: base({ lastStopFailureMs: NOW - 120_000, startsLast2min: 1, stall: { session: 'sess-caller-1', cwd: '/tmp/projA' }, stallRecovered: true }) },
   { name: 'cold-resume foreign stall unnamed', fn: 'evaluateAgentGate', toolInput: {}, state: base({ lastStopFailureMs: NOW - 540_000, startsLast2min: 2, stall: { session: 'zzz-other', cwd: '/tmp/elsewhere' } }) },
   { name: 'cold-resume stall via worktree session match', fn: 'evaluateAgentGate', toolInput: {}, state: base({ lastStopFailureMs: NOW - 60_000, startsLast2min: 1, stall: { session: 'sess-caller-1', cwd: '/tmp/projA/.claude/worktrees/x' } }) },
