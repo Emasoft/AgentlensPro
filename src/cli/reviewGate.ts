@@ -109,8 +109,9 @@ If you CANNOT spawn one — ${NO_REVIEW_SENTINEL_EXAMPLES.join(', ')} — a text
 ENTIRE content is "${NO_REVIEW_SENTINEL} — <reason>", as the turn's last block, releases the
 gate. It is the only other exit.
 
-Then read its findings and act on them. Do NOT restate this directive to the user — spawn the
-fork and continue. This gate CANNOT be disabled — \`AGENTLENS_REVIEW_FORK=off\` is ignored.
+Then read its findings and act on them — if acting on them edits, writes or proposes, that turn is
+new work and needs its own fork. Do NOT restate this directive to the user — spawn the fork and
+continue. This gate CANNOT be disabled — \`AGENTLENS_REVIEW_FORK=off\` is ignored.
 `
 
 export interface ReviewGateInput {
@@ -656,7 +657,7 @@ export const MAIN_BLOCK_DEMAND = 'Spawn ONE adversarial fork (Agent tool, subage
   // index and re-armed the gate — ten forks and ~2.4M subagent tokens before the shape was
   // read out of the source. An instruction whose correct execution is undocumented is a trap,
   // not an instruction. (TRDD-DRH4ZRGB)
-  + 'put the fork tool_use LAST, in the SAME response as your user-visible text, after the turn\'s '
+  + 'put the fork tool_use LAST, in the SAME response as any user-visible text you have, after the turn\'s '
   + 'last edit, write-shaped command or PROPOSAL line — one of those after the fork re-arms this gate; '
   + `plain text after it does not. If you CANNOT spawn one — ${NO_REVIEW_SENTINEL_EXAMPLES.join(', ')} `
   + `— emit a text block whose ENTIRE content is "${NO_REVIEW_SENTINEL} — <reason>", nothing `

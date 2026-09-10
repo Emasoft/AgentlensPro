@@ -823,7 +823,7 @@ suite('review-gate: the recursion guard exempts reviewers and nothing else', () 
       ['MAIN_BLOCK_REASON', MAIN_BLOCK_REASON],
       ['REVIEW_GATE_DIRECTIVE', REVIEW_GATE_DIRECTIVE],
     ] as const) {
-      assert.ok(text.includes('POSITIONAL'), `${name} no longer names the positional exit`)
+      assert.ok(text.includes('POSITIONAL') && !/NOT POSITIONAL/.test(text), `${name} no longer names the positional exit`)
       // The imperative, matched as a PHRASE. An earlier version of this test used
       // /fork[\s\S]{0,80}LAST/, which is co-occurrence dressed as semantics: `fork` appears
       // repeatedly in both strings, so any `LAST` within 80 characters of any `fork` satisfied it —
@@ -851,10 +851,12 @@ suite('review-gate: the recursion guard exempts reviewers and nothing else', () 
 
   // The BOUNDARY, asserted positively. Guarding only the wrong word (`!/HIGHER/`) is a spell-check:
   // "strictly after", "greater than", "must come later than", "beyond" all express the same wrong
-  // strict inequality and all pass a ban on one word. Measured against the previous revision of
-  // this file: deleting "AT OR AFTER" from the directive left every assertion here green, which
-  // made the commit subject "assert it cannot silently rot" false. Only the directive states the
-  // mechanism — MAIN_BLOCK_REASON deliberately gives imperatives only, so it is not asserted here.
+  // strict inequality and all pass a ban on one word. Read off the previous revision's regexes
+  // (none referenced the phrase; the deletion was never performed and nothing was re-run — see
+  // TRDD-DRH4ZRGB §Acceptance): deleting "AT OR AFTER" from the directive would have left every
+  // assertion green, which made the commit subject "assert it cannot silently rot" false. Only the
+  // directive states the mechanism — MAIN_BLOCK_REASON deliberately gives imperatives only, so it
+  // is not asserted here.
   test('the directive states the >= boundary as AT OR AFTER — one known regression, not a class', () => {
     assert.ok(
       /AT OR AFTER/i.test(REVIEW_GATE_DIRECTIVE),
@@ -878,7 +880,7 @@ suite('review-gate: the recursion guard exempts reviewers and nothing else', () 
   // also fire on a sentence WARNING against it, and warning about a mechanism requires naming it.
   test('the directive states the background-notification consequence', () => {
     assert.ok(
-      REVIEW_GATE_DIRECTIVE.includes('BACKGROUND fork'),
+      /BACKGROUND fork[^.]*fresh turn[^.]*re-arms/.test(REVIEW_GATE_DIRECTIVE),
       'the directive no longer warns that a background fork\'s notification starts a fresh turn',
     )
     assert.ok(
@@ -910,7 +912,7 @@ suite('review-gate: the recursion guard exempts reviewers and nothing else', () 
     for (const lastFork of [-1, 7]) {
       assert.strictEqual(
         decideMainGate({ lastWork: -1, lastFork }).block, false,
-        `lastWork === -1 currently allows the stop (lastFork ${lastFork}); see TRDD-W0ZTTUBA`,
+        `lastWork === -1 allows the stop with lastFork ${lastFork} — ${lastFork === -1 ? 'the fail-open itself' : 'correct: a fork after no work'}; see TRDD-W0ZTTUBA`,
       )
     }
   })

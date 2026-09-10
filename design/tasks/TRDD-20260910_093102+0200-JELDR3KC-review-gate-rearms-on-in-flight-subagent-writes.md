@@ -3,7 +3,7 @@ trdd-id: JELDR3KC
 title: The review gate re-arms on every orchestrator Stop while its own background subagents are still writing
 column: todo
 created: 2026-09-10T09:31:02+0200
-updated: 2026-09-10T14:24:29+0200
+updated: 2026-09-10T14:35:22+0200
 current-owner: main
 task-type: bugfix
 min-approval-requirement: none
@@ -65,7 +65,8 @@ is actually reviewed. Either shape below must not trade that review away for cos
    subagent has stopped. AS WORDED THIS RELEASES LEAN-WORKER WRITES UNREVIEWED (see Why: their
    SubagentStop demands nothing), so it is admissible only if the parent's Stop arms on the
    worker's writes AT the worker's completion notification. Pasting the diff into that fork is
-   orchestrator discipline the gate cannot check (nothing in the gate reads the fork's prompt) —
+   orchestrator discipline the gate cannot check (nothing in reviewGate.ts, reviewGateEffects.ts,
+   reviewGateTriggers.ts or reviewSupervisor.ts reads the fork's prompt — grepped 2026-09-10) —
    it lives in the no-code paragraph above, not in the rule. REQUIRED FALLBACK either way: a worker
    that is killed, times out, or is torn down with the session never completes (this session's
    own task notifications today include "stopped … no completion record"), so an interval whose
@@ -82,10 +83,11 @@ Either shape must keep TRDD-9FG0LSPG's invariant: no write is released unreviewe
       with the existing gate suites green; `node esbuild.js` exit 0 and a grep for the new symbol in
       `standalone/cli.js`.
 - [ ] Live: N background workers dispatched and K orchestrator write-turns yield K parent forks,
-      ZERO parent forks spawned while a worker is still running whose block reason names that
-      worker's files, and every worker-written file named by the block reason of SOME fork (a
-      parent fork after that worker's completion, or the worker's own SubagentStop fork) — counted
-      from the transcript with the gate's block reason as the discriminator (`applyEffects` puts
-      up to 8 paths in it).
+      ZERO parent forks spawned while a worker is still running whose `Agent` prompt carries that
+      worker's files (shape 1; under shape 2 substitute: at most one such fork per worker), and every
+      worker-written file appearing in the pasted diff of SOME fork's `Agent` prompt (a parent fork
+      after that worker's completion, or the worker's own SubagentStop fork) — counted from the
+      transcript; the gate's block reason is corroboration only (it hides worker paths whenever an
+      orchestrator arm already sits after the last fork, and caps at 8 paths).
 
 ## Approval log
