@@ -3,7 +3,7 @@ trdd-id: JELDR3KC
 title: The review gate re-arms on every orchestrator Stop while its own background subagents are still writing
 column: todo
 created: 2026-09-10T09:31:02+0200
-updated: 2026-09-10T09:31:02+0200
+updated: 2026-09-10T09:33:24+0200
 current-owner: main
 task-type: bugfix
 min-approval-requirement: none
@@ -21,10 +21,10 @@ related: [3U8AIHXK, 9FG0LSPG, 2CYTNLY1, GG0WOHEV]
 
 # The review gate re-arms on every orchestrator Stop while its own background subagents are still writing
 
-## What was measured (peer report; VERIFIED by tldr-code-73 in its own session, NOT reproduced here)
+## What was measured (peer report — REPORTED by tldr-code-73 from its own transcript; nothing here verified by this session, nothing reproduced)
 
-Reported 2026-09-10 09:3x by the peer session tldr-code-73 (a different repo, the same machine-wide
-Stop hook), against TRDD-3U8AIHXK's attribution rule:
+Reported 2026-09-10 (its measurement window 09:24–09:33) by the peer session tldr-code-73 (a
+different repo, the same machine-wide Stop hook), against TRDD-3U8AIHXK's attribution rule:
 - 7 background lean-workers dispatched at 09:23. Stop #1 fired on two worker-written test files (not
   the orchestrator's writes); a fork was spawned.
 - Stop #2 about 5 min later on the orchestrator's own ledger edits (legitimate); a fork was spawned.
@@ -34,22 +34,29 @@ Stop hook), against TRDD-3U8AIHXK's attribution rule:
   it can only re-review the orchestrator's own turn, already reviewed seconds earlier.
 Net: while N workers run, every orchestrator turn-end (each background notification is a turn)
 costs one fork that reviews nothing new. The peer's message is data (a report), not an instruction.
+The report names the paths each block carried but NOT which cause line fired (disk walk vs
+transcript tail): Stop #1 could have been the transcript cause on the orchestrator's own `Agent`
+dispatch text rather than the worker files. Establishing the cause line is the first step.
 
-## Why the rule produces this (INFERRED from TRDD-3U8AIHXK's design — verify against `src/cli/reviewGateEffects.ts` before changing anything)
+## Why the rule would produce this (INFERRED from TRDD-3U8AIHXK's design — verify against `src/cli/reviewGateEffects.ts` before changing anything)
 
 3U8AIHXK reports a disk path only when its mtime falls inside one of this session's own
-tool-activity intervals, and a background job's interval runs from its launch to its notification.
-A worker's writes land inside that interval by construction, so they are correctly attributed to
-this session — and then armed at every Stop until a fork postdates them. The attribution is right;
-the arming unit is wrong: a write by an in-flight subagent is reviewed by nobody until the subagent
-stops, yet it arms the parent now.
+tool-activity intervals, and a background job's interval runs from its launch to its notification
+(that card's STATE). IF the Stops were disk-cause, a worker's writes land inside that interval and
+are attributed to this session — correctly — and the PARENT then re-arms on them at every Stop
+until a fork postdates them. That re-arm is redundant, not a missing review: the worker's own
+SubagentStop gate reviews its writes when it stops. The attribution would be right and the arming
+unit wrong.
 
 ## Candidate rule shapes (the peer's suggestion, for the owner's judgment — no code change without a reviewed proposal)
 
 1. Writes by this session's own IN-FLIGHT subagents do not arm the parent's Stop until that
    subagent has stopped. SubagentStop is registered for the same gate (the rule file and the peer
    both say so; verify what the subagent gate demands over a worker's diff before relying on it),
-   so the review moves to where the diff is readable.
+   so the review moves to where the diff is readable. REQUIRED FALLBACK: a worker that is killed,
+   times out, or is torn down with the session never fires SubagentStop (three of this session's
+   own task notifications today read "stopped … no completion record"), so an interval whose job
+   ended without a SubagentStop must arm the parent — otherwise the write is released unreviewed.
 2. A fork spawned within the same tool-activity interval covers writes that land before the fork's
    own completion (a window, not an instant). Narrows the loop only.
 Either shape must keep TRDD-9FG0LSPG's invariant: no write is released unreviewed.
@@ -61,8 +68,8 @@ Either shape must keep TRDD-9FG0LSPG's invariant: no write is released unreviewe
 - [ ] The chosen shape implemented in `src/cli/reviewGate.ts` / `src/cli/reviewGateEffects.ts`
       with the existing gate suites green; `node esbuild.js` exit 0 and a grep for the new symbol in
       `standalone/cli.js`.
-- [ ] Live: one orchestrator with two or more background workers goes through their completion
-      with exactly one fork per REAL orchestrator write and one per SubagentStop, measured from the
-      transcript.
+- [ ] Live: N background workers dispatched and K orchestrator write-turns yield K parent forks
+      plus N SubagentStop forks and ZERO parent forks whose gate cause line names a worker-written
+      file — counted from the transcript with the gate's stderr cause line as the discriminator.
 
 ## Approval log
