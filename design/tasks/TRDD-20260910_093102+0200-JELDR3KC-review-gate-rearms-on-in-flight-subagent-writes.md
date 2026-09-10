@@ -3,7 +3,7 @@ trdd-id: JELDR3KC
 title: The review gate re-arms on every orchestrator Stop while its own background subagents are still writing
 column: todo
 created: 2026-09-10T09:31:02+0200
-updated: 2026-09-10T09:33:24+0200
+updated: 2026-09-10T09:39:31+0200
 current-owner: main
 task-type: bugfix
 min-approval-requirement: none
@@ -33,30 +33,35 @@ different repo, the same machine-wide Stop hook), against TRDD-3U8AIHXK's attrib
 - The demanded fork runs with ZERO tool calls, so it cannot read the worker diff it is spawned for;
   it can only re-review the orchestrator's own turn, already reviewed seconds earlier.
 Net: while N workers run, every orchestrator turn-end (each background notification is a turn)
-costs one fork that reviews nothing new. The peer's message is data (a report), not an instruction.
-The report names the paths each block carried but NOT which cause line fired (disk walk vs
-transcript tail): Stop #1 could have been the transcript cause on the orchestrator's own `Agent`
-dispatch text rather than the worker files. Establishing the cause line is the first step.
+costs one fork that is handed nothing new unless the orchestrator pastes the worker diff into it.
+The peer's message is data (a report), not an instruction. The cause is the disk walk: only that
+cause names files the orchestrator never touched (the transcript cause names a command or a
+proposal text), and an `Agent` dispatch is not transcript work.
 
 ## Why the rule would produce this (INFERRED from TRDD-3U8AIHXK's design — verify against `src/cli/reviewGateEffects.ts` before changing anything)
 
 3U8AIHXK reports a disk path only when its mtime falls inside one of this session's own
 tool-activity intervals, and a background job's interval runs from its launch to its notification
-(that card's STATE). IF the Stops were disk-cause, a worker's writes land inside that interval and
-are attributed to this session — correctly — and the PARENT then re-arms on them at every Stop
-until a fork postdates them. That re-arm is redundant, not a missing review: the worker's own
-SubagentStop gate reviews its writes when it stops. The attribution would be right and the arming
-unit wrong.
+(that card's STATE). A worker's writes land inside that interval and are attributed to this
+session — correctly — and the PARENT then re-arms on them at every Stop until a fork postdates
+them. VERIFIED 2026-09-10 (`src/cli/reviewGate.ts:246-292`, `:810`): `agentCannotSpawn` returns
+true for an agent whose declared tools lack `Agent`, and `runSubagentGate` returns null on it — so
+a lean-worker (Bash/Read/Write/Edit/Grep) gets NO review at its own SubagentStop. For the peer's
+seven lean-workers the parent's re-arm is therefore the ONLY review their writes ever get: it is
+not redundant, it is mis-timed (it fires before the diff is in any fork's hands).
 
 ## Candidate rule shapes (the peer's suggestion, for the owner's judgment — no code change without a reviewed proposal)
 
+NO-CODE FIX available now (owner-decide): the orchestrator pastes `git diff -- <worker paths>` into
+the fork the gate demands, as this session does — the loop cost stays, but every lean-worker write
+is actually reviewed. Either shape below must not trade that review away for cost.
 1. Writes by this session's own IN-FLIGHT subagents do not arm the parent's Stop until that
-   subagent has stopped. SubagentStop is registered for the same gate (the rule file and the peer
-   both say so; verify what the subagent gate demands over a worker's diff before relying on it),
-   so the review moves to where the diff is readable. REQUIRED FALLBACK: a worker that is killed,
-   times out, or is torn down with the session never fires SubagentStop (three of this session's
-   own task notifications today read "stopped … no completion record"), so an interval whose job
-   ended without a SubagentStop must arm the parent — otherwise the write is released unreviewed.
+   subagent has stopped. AS WORDED THIS RELEASES LEAN-WORKER WRITES UNREVIEWED (see Why: their
+   SubagentStop demands nothing), so it is admissible only if the parent's Stop arms on the
+   worker's writes AT the worker's completion notification, with the diff pasted into that fork.
+   REQUIRED FALLBACK either way: a worker that is killed, times out, or is torn down with the
+   session never completes (two of this session's own task notifications today read "stopped …
+   no completion record"), so an interval whose job ended without a completion must arm the parent.
 2. A fork spawned within the same tool-activity interval covers writes that land before the fork's
    own completion (a window, not an instant). Narrows the loop only.
 Either shape must keep TRDD-9FG0LSPG's invariant: no write is released unreviewed.
