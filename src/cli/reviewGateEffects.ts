@@ -6,6 +6,9 @@
 // (a worker write landing between Stops, a missing snapshot after `/clear`, a timed-out walk).
 // A path is "unreviewed" here purely because its mtime (or HEAD's commit time) is newer than the
 // last review fork — whatever wrote it: a worker subagent, a script, a fork, or `git commit`.
+// Since TRDD-3U8AIHXK the caller also passes the session's tool-activity intervals, and a
+// path counts only if its mtime falls inside one — a write nobody in this session could have made
+// (another session's guard, a plugin update, a server regenerating an agent file) is not ours to review.
 //
 // Known evasions, stated rather than hidden: `touch -t` and `GIT_COMMITTER_DATE` can backdate an
 // mtime or a commit past `sinceMs` and slip through. Accepted — closing this needs content
@@ -16,8 +19,22 @@ import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
 
-export interface EffectsOptions { home?: string; watched?: string[]; maxEntries?: number }
+export interface EffectsOptions { home?: string; watched?: string[]; maxEntries?: number; activity?: Activity[] }
 export interface Effects { paths: string[]; truncated: boolean }
+
+/** One span during which THIS session's tools were running — the only time its own writes
+ *  (foreground tools, workers, scripts, background jobs) can land. `end` is `Infinity` while the
+ *  tool has not reported back: fail closed, everything after `start` counts as ours. */
+export interface Activity { start: number; end: number }
+/** mtimes and transcript timestamps come from the same clock; git times are whole seconds. */
+export const ATTRIBUTION_SLACK_MS = 1000
+/** "Newer than the last fork AND written while one of this session's tools was running"
+ *  (TRDD-3U8AIHXK). With no `activity` (a caller or test of the walk alone) the second half is
+ *  vacuously true — the pre-3U8AIHXK behaviour, which arms on every writer on the machine. */
+function freshness(sinceMs: number, activity: Activity[] | undefined): (ms: number) => boolean {
+  return (ms) => ms > sinceMs && (activity === undefined
+    || activity.some((a) => ms >= a.start - ATTRIBUTION_SLACK_MS && ms <= a.end + ATTRIBUTION_SLACK_MS))
+}
 
 /** Parses `git log -g -1 --date=unix --format=%gd HEAD` output into epoch milliseconds, or
  *  `null` when the shape isn't the expected `...@{<epoch-seconds>}` — e.g. the bare ordinal
@@ -46,7 +63,12 @@ const isMemgrepSidecar = (name: string): boolean =>
  *  `guardRoots` are canonical paths a followed symlink must never resolve to (or contain) —
  *  cwd, home, and every watched root — so a symlink pointing at `~` or `/` can't turn the
  *  bounded one-level follow into an unbounded walk of the whole machine. */
-interface WalkState { paths: string[]; visited: number; maxEntries: number; truncated: boolean; guardRoots: string[] }
+interface WalkState {
+  paths: string[]; visited: number; maxEntries: number; truncated: boolean; guardRoots: string[]
+  fresh: (ms: number) => boolean
+  // Absolute directory paths never descended into — hook RUNTIME state, not config.
+  excluded: Set<string>
+}
 
 /** True when `target` (a canonical/realpath'd directory) equals or CONTAINS any of `guardRoots`
  *  — i.e. following into `target` would walk into cwd, home, or a watched root. */
@@ -57,7 +79,7 @@ function targetContainsGuardRoot(target: string, guardRoots: string[]): boolean 
   })
 }
 
-function walkDir(dir: string, sinceMs: number, state: WalkState, depth = 0): void {
+function walkDir(dir: string, state: WalkState, depth = 0): void {
   if (state.truncated) return
   let entries: fs.Dirent[]
   try { entries = fs.readdirSync(dir, { withFileTypes: true }) } catch { return }
@@ -85,21 +107,24 @@ function walkDir(dir: string, sinceMs: number, state: WalkState, depth = 0): voi
         let real: string
         try { real = fs.realpathSync(full) } catch { continue }
         if (targetContainsGuardRoot(real, state.guardRoots)) continue
-        walkDir(full, sinceMs, state, depth + 1)
+        walkDir(full, state, depth + 1)
         if (state.truncated) return
       } else if (target.isFile() && !isMemgrepSidecar(e.name)) {
-        if (target.mtimeMs > sinceMs) state.paths.push(full)
+        if (state.fresh(target.mtimeMs)) state.paths.push(full)
       }
       continue
     }
     if (e.isDirectory()) {
       if (SKIP_DIRS.has(e.name)) continue
-      walkDir(full, sinceMs, state, depth + 1)
+      // ~/.claude/hooks/state/ is the checkout guard's append-only ledger, written for EVERY
+      // session's checkouts — runtime state, never config (TRDD-3U8AIHXK, reports 1 and 4).
+      if (state.excluded.has(full)) continue
+      walkDir(full, state, depth + 1)
       if (state.truncated) return
     } else if (e.isFile() && !isMemgrepSidecar(e.name)) {
       let st: fs.Stats
       try { st = fs.lstatSync(full) } catch { continue }
-      if (st.mtimeMs > sinceMs) state.paths.push(full)
+      if (state.fresh(st.mtimeMs)) state.paths.push(full)
     }
   }
 }
@@ -163,7 +188,7 @@ export function defaultWatchedSet(cwd: string, home: string): string[] {
   return out
 }
 
-function walkWatched(entries: string[], sinceMs: number, state: WalkState): void {
+function walkWatched(entries: string[], state: WalkState): void {
   for (const entry of entries) {
     if (state.truncated) return
     let st: fs.Stats
@@ -178,20 +203,20 @@ function walkWatched(entries: string[], sinceMs: number, state: WalkState): void
         let real: string
         try { real = fs.realpathSync(entry) } catch { continue }
         if (targetContainsGuardRoot(real, state.guardRoots)) continue
-        walkDir(entry, sinceMs, state, 1)
+        walkDir(entry, state, 1)
       } else if (target.isFile()) {
         state.visited++
         if (state.visited > state.maxEntries) { state.truncated = true; return }
-        if (target.mtimeMs > sinceMs) state.paths.push(entry)
+        if (state.fresh(target.mtimeMs)) state.paths.push(entry)
       }
       continue
     }
     if (st.isDirectory()) {
-      walkDir(entry, sinceMs, state)
+      walkDir(entry, state)
     } else if (st.isFile()) {
       state.visited++
       if (state.visited > state.maxEntries) { state.truncated = true; return }
-      if (st.mtimeMs > sinceMs) state.paths.push(entry)
+      if (state.fresh(st.mtimeMs)) state.paths.push(entry)
     }
   }
 }
@@ -215,12 +240,12 @@ function walkWatched(entries: string[], sinceMs: number, state: WalkState): void
 // No same-second tolerance here (unlike the HEAD reflog/`%ct` comparison below): APFS (and
 // ext4/NTFS) directory mtimes are nanosecond-resolution, not whole-second, so `>` alone is
 // exact.
-function deletionStillUnreviewed(cwd: string, rel: string, sinceMs: number): boolean {
+function deletionStillUnreviewed(cwd: string, rel: string, fresh: (ms: number) => boolean): boolean {
   const cwdResolved = path.resolve(cwd)
   let dir = path.dirname(path.resolve(cwd, rel))
   for (;;) {
     try {
-      return fs.lstatSync(dir).mtimeMs > sinceMs
+      return fresh(fs.lstatSync(dir).mtimeMs)
     } catch {
       if (dir === cwdResolved) return true // even cwd itself failed to stat — fail closed
       const parent = path.dirname(dir)
@@ -230,7 +255,7 @@ function deletionStillUnreviewed(cwd: string, rel: string, sinceMs: number): boo
   }
 }
 
-function inRepoEffects(cwd: string, sinceMs: number): string[] {
+function inRepoEffects(cwd: string, fresh: (ms: number) => boolean): string[] {
   let statusOut: string
   try {
     statusOut = execFileSync(
@@ -257,15 +282,15 @@ function inRepoEffects(cwd: string, sinceMs: number): string[] {
     // closed, not open (the mtime check below resolves against cwd and is unaffected).
     if (BUILD_OUTPUT.some((re) => re.test(rel))) continue
     if (xy.includes('D')) { // deletion: no mtime of its own — key off the parent dir's mtime
-      if (deletionStillUnreviewed(cwd, rel, sinceMs)) paths.push(rel)
+      if (deletionStillUnreviewed(cwd, rel, fresh)) paths.push(rel)
       continue
     }
     try {
       const st = fs.lstatSync(path.resolve(cwd, rel))
-      if (st.mtimeMs > sinceMs) paths.push(rel)
+      if (fresh(st.mtimeMs)) paths.push(rel)
     } catch {
       // stat failed (e.g. ENOENT) — same "no mtime of its own" situation as a `D` entry above.
-      if (deletionStillUnreviewed(cwd, rel, sinceMs)) paths.push(rel)
+      if (deletionStillUnreviewed(cwd, rel, fresh)) paths.push(rel)
     }
   }
 
@@ -287,7 +312,7 @@ function inRepoEffects(cwd: string, sinceMs: number): string[] {
       } catch { /* no reflog yet — fall back to %ct */ }
       // Both git timestamps are whole SECONDS; round up one full second before comparing so a
       // move landing in the same wall-clock second as the fork is never missed.
-      if ((headSec + 1) * 1000 > sinceMs) paths.push('HEAD')
+      if (fresh((headSec + 1) * 1000)) paths.push('HEAD')
     }
   } catch { /* empty repo — no HEAD yet, skip silently */ }
 
@@ -296,15 +321,17 @@ function inRepoEffects(cwd: string, sinceMs: number): string[] {
 
 /** Paths changed on disk strictly after `sinceMs` (epoch ms) that no review fork has covered. */
 export function unreviewedEffects(cwd: string, sinceMs: number, opts: EffectsOptions = {}): Effects {
-  const paths = inRepoEffects(cwd, sinceMs)
+  const fresh = freshness(sinceMs, opts.activity)
+  const paths = inRepoEffects(cwd, fresh)
 
   const home = opts.home ?? os.homedir()
   const watched = opts.watched ?? defaultWatchedSet(cwd, home)
   const guardRoots = [path.resolve(cwd), path.resolve(home), ...watched.map((w) => path.resolve(w))]
   const state: WalkState = {
     paths: [], visited: 0, maxEntries: opts.maxEntries ?? DEFAULT_MAX_ENTRIES, truncated: false, guardRoots,
+    fresh, excluded: new Set([path.join(home, '.claude', 'hooks', 'state')]),
   }
-  walkWatched(watched, sinceMs, state)
+  walkWatched(watched, state)
 
   return { paths: paths.concat(state.paths), truncated: state.truncated }
 }

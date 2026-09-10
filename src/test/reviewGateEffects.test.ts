@@ -4,6 +4,7 @@ import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
 import { unreviewedEffects, defaultWatchedSet, reflogEpochMs } from '../cli/reviewGateEffects'
+import type { Activity } from '../cli/reviewGateEffects'
 
 // Real tmp git repos, no mocks — the review gate's whole job is reading a real filesystem and a
 // real `git status`, so a fake would test nothing about the thing that actually breaks (TRDD-9FG0LSPG).
@@ -63,7 +64,7 @@ suite('review-gate effects: unreviewedEffects', () => {
   test('a git commit landing after T surfaces the literal path HEAD', () => {
     // git's committer time (%ct) is whole UNIX SECONDS, so T must sit at least a full second
     // before the commit or the truncated commit time can equal T without exceeding it.
-    const t = Date.now() - 1500
+    const t = Date.now() - 2500
     fs.writeFileSync(path.join(repo, 'tracked.txt'), 'v2\n')
     git(repo, 'commit', '-q', '-a', '-m', 'second')
     const { paths } = unreviewedEffects(repo, t, { watched: [] })
@@ -77,7 +78,7 @@ suite('review-gate effects: unreviewedEffects', () => {
     git(repo, 'commit', '-q', '-a', '-m', 'second')
     const first = git(repo, 'rev-list', '--max-parents=0', 'HEAD').trim()
     // git's reflog timestamp is whole UNIX SECONDS too — same 1.5s margin as the commit test above.
-    const t = Date.now() - 1500
+    const t = Date.now() - 2500
     git(repo, 'checkout', '-q', first)
     const { paths } = unreviewedEffects(repo, t, { watched: [] })
     assert.ok(paths.includes('HEAD'), paths.join(','))
@@ -234,6 +235,115 @@ suite('review-gate effects: unreviewedEffects', () => {
     fs.utimesSync(watchedFile, future, future)
     const { paths } = unreviewedEffects(notARepo, t, { watched: [watchedFile] })
     assert.deepStrictEqual(paths, [watchedFile])
+  })
+})
+
+// Attribution (TRDD-3U8AIHXK): a path only counts if its mtime falls inside one of THIS
+// session's tool-activity intervals — otherwise a machine-global writer (another session's
+// guard, a plugin update) re-arms an idle gate for nothing it did.
+suite('unreviewedEffects — attribution (TRDD-3U8AIHXK)', () => {
+  let root: string
+  let repo: string
+
+  setup(() => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), 'al-attrib-'))
+    repo = path.join(root, 'repo')
+    fs.mkdirSync(repo)
+    git(repo, 'init', '-q')
+    git(repo, 'config', 'user.email', 'x@example.com')
+    git(repo, 'config', 'user.name', 'x')
+    fs.writeFileSync(path.join(repo, 'tracked.txt'), 'v1\n')
+    git(repo, 'add', '-A')
+    git(repo, 'commit', '-q', '-m', 'init')
+  })
+
+  teardown(() => { fs.rmSync(root, { recursive: true, force: true }) })
+
+  test('a file write is listed only when it falls inside an activity interval', () => {
+    const t = Date.now() - 2500
+    const p = path.join(repo, 'tracked.txt')
+    fs.writeFileSync(p, 'v2\n')
+    const w = fs.statSync(p).mtimeMs
+    const covering: Activity[] = [{ start: w - 5000, end: w + 5000 }]
+    assert.ok(unreviewedEffects(repo, t, { watched: [], activity: covering }).paths.includes('tracked.txt'))
+    const before: Activity[] = [{ start: w - 60000, end: w - 30000 }]
+    assert.ok(!unreviewedEffects(repo, t, { watched: [], activity: before }).paths.includes('tracked.txt'))
+    assert.ok(!unreviewedEffects(repo, t, { watched: [], activity: [] }).paths.includes('tracked.txt'))
+  })
+
+  test('a two-interval fixture lists the file when the SECOND interval covers it (guards `some` over `every`)', () => {
+    const t = Date.now() - 2500
+    const p = path.join(repo, 'tracked.txt')
+    fs.writeFileSync(p, 'v2\n')
+    const w = fs.statSync(p).mtimeMs
+    const farPast: Activity = { start: w - 500_000, end: w - 400_000 }
+    const covering: Activity = { start: w - 5000, end: w + 5000 }
+    assert.ok(unreviewedEffects(repo, t, { watched: [], activity: [farPast, covering] }).paths.includes('tracked.txt'))
+  })
+
+  test('a covering interval lists the file even when its mtime is OLDER than t was captured for (guards `fresh` ignoring sinceMs)', () => {
+    // `freshness` ANDs the two conditions — `ms > sinceMs` still gates a covering interval, so a
+    // covering interval alone must not be enough. This pins the AND, not an OR: `t` here is set
+    // AFTER the file's own mtime, so `sinceMs` alone would already exclude it.
+    const p = path.join(repo, 'tracked.txt')
+    fs.writeFileSync(p, 'v2\n')
+    const w = fs.statSync(p).mtimeMs
+    const past = new Date(w - 60_000)
+    fs.utimesSync(p, past, past)
+    const olderMtime = fs.statSync(p).mtimeMs
+    const t = Date.now() - 2500 // AFTER olderMtime — sinceMs alone would exclude it
+    const covering: Activity = { start: olderMtime - 5000, end: olderMtime + 5000 }
+    assert.ok(!unreviewedEffects(repo, t, { watched: [], activity: [covering] }).paths.includes('tracked.txt'),
+      'sinceMs must still gate a covering interval — fresh is an AND, not an OR')
+  })
+
+  test('HEAD is listed only when a covering interval spans the commit second', () => {
+    const t = Date.now() - 2500
+    fs.writeFileSync(path.join(repo, 'tracked.txt'), 'v2\n')
+    git(repo, 'commit', '-q', '-a', '-m', 'second')
+    const nowMs = Date.now()
+    const covering: Activity[] = [{ start: nowMs - 5000, end: nowMs + 5000 }]
+    assert.ok(unreviewedEffects(repo, t, { watched: [], activity: covering }).paths.includes('HEAD'))
+    const before: Activity[] = [{ start: nowMs - 60000, end: nowMs - 30000 }]
+    assert.ok(!unreviewedEffects(repo, t, { watched: [], activity: before }).paths.includes('HEAD'))
+  })
+
+  test('a deletion is listed only when a covering interval spans the parent dir\'s mtime', () => {
+    const t = Date.now() - 2500
+    fs.rmSync(path.join(repo, 'tracked.txt')) // bumps repo/'s mtime — D
+    const d = fs.statSync(repo).mtimeMs
+    const covering: Activity[] = [{ start: d - 5000, end: d + 5000 }]
+    assert.ok(unreviewedEffects(repo, t, { watched: [], activity: covering }).paths.includes('tracked.txt'))
+    const before: Activity[] = [{ start: d - 60000, end: d - 30000 }]
+    assert.ok(!unreviewedEffects(repo, t, { watched: [], activity: before }).paths.includes('tracked.txt'))
+  })
+
+  test('the maxEntries guard still truncates with an empty activity set', () => {
+    const dir = path.join(root, 'watched-dir')
+    fs.mkdirSync(dir)
+    for (const name of ['a.txt', 'b.txt', 'c.txt']) fs.writeFileSync(path.join(dir, name), 'x\n')
+    const t = Date.now()
+    const { truncated } = unreviewedEffects(repo, t, { watched: [dir], maxEntries: 1, activity: [] })
+    assert.strictEqual(truncated, true)
+  })
+
+  test('~/.claude/hooks/state/ is excluded from the watched walk; ~/.claude/hooks/ itself is not', () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'al-home-'))
+    const stateDir = path.join(home, '.claude', 'hooks', 'state')
+    fs.mkdirSync(stateDir, { recursive: true })
+    fs.writeFileSync(path.join(stateDir, 'x.log'), 'v1\n')
+    fs.writeFileSync(path.join(home, '.claude', 'hooks', 'y.py'), 'v1\n')
+    const t = Date.now() - 2500
+    const nowMs = Date.now()
+    const covering: Activity[] = [{ start: nowMs - 5000, end: nowMs + 5000 }]
+    const watched = defaultWatchedSet(repo, home)
+    // `home` MUST be passed explicitly: `excluded` is built from `opts.home ?? os.homedir()`, so
+    // omitting it would exclude the REAL home's hooks/state/, not this tmp one, and the second
+    // assertion below would pass for the wrong reason (or fail outright).
+    const { paths } = unreviewedEffects(repo, t, { watched, activity: covering, home })
+    assert.ok(paths.some((p) => p.endsWith('y.py')), paths.join(','))
+    assert.ok(!paths.some((p) => p.includes(path.join('hooks', 'state'))), paths.join(','))
+    fs.rmSync(home, { recursive: true, force: true })
   })
 })
 

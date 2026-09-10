@@ -17,7 +17,7 @@ import { readStdin } from './hookHandlers'
 import { commandWriteReason, isEphemeralTarget, textArms } from './reviewGateTriggers'
 import type { ArmCause } from './reviewGateTriggers'
 import { unreviewedEffects } from './reviewGateEffects'
-import type { Effects } from './reviewGateEffects'
+import type { Effects, Activity } from './reviewGateEffects'
 
 /** The main gate's cause enum widens `ArmCause` with one value ONLY the main gate can produce:
  *  a disk effect (a worker's edit, a script's write, a fork-as-worker) that the transcript never
@@ -288,6 +288,7 @@ export function agentCannotSpawn(
   return has === null ? false : !has
 }
 
+// Also describes a `user` entry's `tool_result` block.
 interface AssistantContentBlock {
   type?: unknown
   name?: unknown
@@ -297,6 +298,12 @@ interface AssistantContentBlock {
   // String() coercion at the read site, not throw here.
   text?: unknown
   input?: { subagent_type?: unknown; command?: unknown; file_path?: unknown; notebook_path?: unknown }
+  /** On a `tool_use` block: its id, which the later `tool_result`'s `tool_use_id` names. */
+  id?: unknown
+  /** On a `tool_result` block (a `user` entry): the tool_use it answers, and the result body —
+   *  a string, or an array of `{ type: 'text', text }` blocks. */
+  tool_use_id?: unknown
+  content?: unknown
 }
 /** Does this text block open with the sentinel AND carry a reason? Written as a predicate rather
  *  than one regex because the regex form was WRONG in a way that read fine: with an optional
@@ -331,7 +338,7 @@ function isNoReviewSentinel(text: string): boolean {
 interface TranscriptEntry {
   type?: unknown
   isSidechain?: unknown
-  message?: { content?: AssistantContentBlock[] }
+  message?: { content?: AssistantContentBlock[] | string }
   /** ISO timestamp Claude Code stamps on every transcript entry — read only for `lastForkTs`. */
   timestamp?: unknown
 }
@@ -345,6 +352,44 @@ function entryTs(e: TranscriptEntry): number {
 }
 
 const EDITORS = new Set(['Edit', 'Write', 'NotebookEdit'])
+
+/** A background tool's result names the job it started; the job's exit arrives later as a
+ *  `<task-id>` notification. Keyed by TOOL: a foreground Read or Bash whose OUTPUT quotes one of
+ *  these lines (a probe of a transcript, a `cat` of a task file) must not be mistaken for a
+ *  launch — that would leave its interval open forever (review finding 2, TRDD-3U8AIHXK). */
+const BACKGROUND_BASH_ID = /^Command running in background with ID: ([A-Za-z0-9]+)/
+const BACKGROUND_AGENT_ID = /agentId: ([A-Za-z0-9]+)/
+const AGENT_LAUNCHED = 'Async agent launched successfully'
+/** A command that detaches work from its own Bash call — the result returns while the job runs
+ *  on. Text heuristic, deliberately fail-CLOSED: a match keeps the interval open (the pre-3U8AIHXK
+ *  behaviour for that session); a detached job the pattern does not name is a named residual.
+ *  A trailing `&` covers `cmd &`; a MID-line `&` after whitespace or `)` also backgrounds a job
+ *  — `( sleep 5; touch x ) & echo started` keeps writing after the shell itself exits, and the
+ *  old end-anchored form missed it entirely. Guarded against false positives: `&&` (a chain, not
+ *  a backgrounder — `(?![&>])` excludes it) and a URL query string like `curl '…?a=1&b=2'` (the
+ *  `&` follows `1`, not whitespace or `)`, so `(?<=[\s)])` never matches it) and `cmd 2>&1` (the
+ *  `&` follows `>`, excluded by the lookahead). */
+const DETACHED_JOB = /\b(?:nohup|setsid|disown|detach-run\.py)\b|(?<=[\s)])&(?![&>])|(?<![&>])&\s*$/m
+
+function resultText(c: unknown): string {
+  if (typeof c === 'string') return c
+  if (!Array.isArray(c)) return ''
+  return c.map((x) => String((x as { text?: unknown })?.text ?? '')).join('\n')
+}
+/** `tool === '*'` means "unknown" — a tool_result whose tool_use fell before the scan window, so
+ *  we never saw which tool opened it (TRDD-3U8AIHXK). Try BOTH anchored shapes rather than none:
+ *  a pre-window background Bash whose result lands inside the window must still be recognized as
+ *  a launch and kept open, not closed at that very result for lack of a known tool name. */
+function backgroundJobId(tool: string, text: string): string | null {
+  if (tool === 'Bash' || tool === '*') {
+    const m = BACKGROUND_BASH_ID.exec(text)?.[1]
+    if (m) return m
+  }
+  if ((tool === 'Agent' || tool === '*') && text.includes(AGENT_LAUNCHED)) {
+    return BACKGROUND_AGENT_ID.exec(text)?.[1] ?? null
+  }
+  return null
+}
 
 /** The one arming block of a turn, and WHY. `null` from the editor branch means the edit landed
  *  under an ephemeral root (the scratchpad, reports/) and is not work. */
@@ -406,6 +451,9 @@ export interface MainScan {
   /** The last arming block, or null when nothing in the window is work. Index + cause travel
    *  together so the block message can never name a cause the scan did not find. */
   work: { index: number; cause: MainArmCause; detail: string } | null
+  /** Every tool_use in the window, as an attribution interval (TRDD-3U8AIHXK) — see
+   *  `scanMainTranscriptLines`. */
+  activity: Activity[]
 }
 /** The positional pair `decideMainGate` reads; `lastWork` is -1 when nothing armed. */
 export const scanPositions = (s: MainScan): { lastFork: number; lastWork: number } =>
@@ -421,6 +469,11 @@ export function scanMainTranscriptLines(lines: string[], cwd = process.cwd()): M
   let firstTs = 0
   let firstTsSeen = false
   let work: MainScan['work'] = null
+  const activity: Activity[] = []
+  // Open intervals, by the tool_use id its tool_result will carry, and — once a background job's
+  // result named it — by the job id its `<task-id>` notification will carry.
+  const openByToolUse = new Map<string, { a: Activity; tool: string }>()
+  const openByTask = new Map<string, Activity>()
   for (let i = 0; i < lines.length; i++) {
     let e: TranscriptEntry
     try { e = JSON.parse(lines[i]) as TranscriptEntry } catch { continue }
@@ -431,9 +484,39 @@ export function scanMainTranscriptLines(lines: string[], cwd = process.cwd()): M
     // Subagent turns are marked `isSidechain: true` — skipping them means a sidechain transcript
     // yields no work and no fork, so the gate allows the stop and stays silent.
     if (e?.isSidechain === true) continue
-    if (e?.type !== 'assistant') continue
+    // A background job's EXIT is recorded by the harness as an `attachment` entry or a
+    // string-content `user` entry, both carrying `<task-id>ID</task-id>` (measured on this
+    // project's own JSONL, 2026-09-10) — the first one closes the job's interval.
+    // `queue-operation` is deliberately EXCLUDED: the harness writes one on ENQUEUE too, so a
+    // queue-operation naming the id can precede the job's actual exit and close the interval
+    // early. Array-content user entries are tool_results and may QUOTE a notification (a Read
+    // of the job's output file), so they never close anything either.
+    if (openByTask.size > 0 && (e?.type === 'attachment'
+        || (e?.type === 'user' && typeof e?.message?.content === 'string'))) {
+      for (const [id, a] of openByTask) {
+        if (lines[i].includes(`<task-id>${id}</task-id>`)) { a.end = entryTs(e) || a.end; openByTask.delete(id) }
+      }
+    }
     const content = e?.message?.content
     if (!Array.isArray(content)) continue
+    if (e?.type === 'user') {
+      for (const b of content) {
+        if (b?.type !== 'tool_result' || typeof b.tool_use_id !== 'string') continue
+        const open = openByToolUse.get(b.tool_use_id)
+        openByToolUse.delete(b.tool_use_id)
+        // A result whose tool_use fell before the window opened: the tool ran from (at least) the
+        // window's start until now — open that span rather than lose the write (review finding 4).
+        const a = open?.a ?? { start: firstTs, end: Infinity }
+        if (open === undefined) activity.push(a)
+        // A background tool returns at once and keeps running: its result names the job, and the
+        // interval stays open until that job's notification (above).
+        const job = backgroundJobId(open?.tool ?? '*', resultText(b.content))
+        if (job !== null) openByTask.set(job, a)
+        else a.end = entryTs(e) || a.end
+      }
+      continue
+    }
+    if (e?.type !== 'assistant') continue
     for (const b of content) {
       if (b?.type === 'text') {
         // THE SAME EXIT THE SUBAGENT GATE HAS, and it is needed here for a reason the positional
@@ -455,7 +538,19 @@ export function scanMainTranscriptLines(lines: string[], cwd = process.cwd()): M
         continue
       }
       if (b?.type !== 'tool_use') continue
+      // Every tool_use opens an attribution interval (TRDD-3U8AIHXK): this session's own writes —
+      // foreground tools, workers, scripts, background jobs — can only land while one of its tools
+      // is running. `end` stays Infinity (fail closed) until the tool reports back.
+      const a: Activity = { start: entryTs(e), end: Infinity }
+      activity.push(a)
+      const tool = typeof b.name === 'string' ? b.name : ''
+      // A detached job outlives its own result — leave the interval open (see DETACHED_JOB).
+      const detached = tool === 'Bash' && DETACHED_JOB.test(String(b.input?.command ?? ''))
+      if (typeof b.id === 'string' && !detached) openByToolUse.set(b.id, { a, tool })
       // CASE-FOLDED, same as the subagent scanner: a subagent_type of "Fork" is still a fork.
+      // A review fork's interval closes like any other spawn's — its result or its notification.
+      // A zero-length interval keyed on its prompt was proposed and REJECTED in review: a fork
+      // spawned with the ONE-turn line pasted and then used as a worker would write unattributed.
       if (b.name === 'Agent' && String(b.input?.subagent_type ?? '').trim().toLowerCase() === 'fork') {
         lastFork = i; lastForkTs = entryTs(e); continue
       }
@@ -463,7 +558,7 @@ export function scanMainTranscriptLines(lines: string[], cwd = process.cwd()): M
       if (w !== null) work = { index: i, ...w }
     }
   }
-  return { lastFork, lastForkTs: lastFork === -1 ? firstTs : lastForkTs, work }
+  return { lastFork, lastForkTs: lastFork === -1 ? firstTs : lastForkTs, work, activity }
 }
 
 /** Fold a `unreviewedEffects()` result into the scan. Additive and positional, mirroring how a
@@ -481,11 +576,7 @@ export function applyEffects(scan: MainScan, fx: Effects): MainScan {
   const shown = fx.paths.slice(0, 8).join(', ')
   const overflow = fx.paths.length > 8 ? ` (+${fx.paths.length - 8} more)` : ''
   const detail = (fx.truncated ? 'walk truncated — ' : '') + shown + overflow
-  return {
-    lastFork: scan.lastFork,
-    lastForkTs: scan.lastForkTs,
-    work: { index: scan.lastFork + 1, cause: 'unreviewed change', detail },
-  }
+  return { ...scan, work: { index: scan.lastFork + 1, cause: 'unreviewed change', detail } }
 }
 
 /** The rule: allow the stop iff the last fork spawn is NEWER than the last consequential action.
@@ -598,7 +689,7 @@ export async function runMainGate(input: ReviewGateInput): Promise<string | null
   // Fold in disk effects newer than the last fork (TRDD-9FG0LSPG) — a worker's edit, a script's
   // write, or a fork-as-worker's own change never appears as a tool_use in THIS transcript, so
   // the transcript scan alone would release it unreviewed.
-  const scan = applyEffects(rawScan, unreviewedEffects(cwd, rawScan.lastForkTs))
+  const scan = applyEffects(rawScan, unreviewedEffects(cwd, rawScan.lastForkTs, { activity: rawScan.activity }))
   const key = typeof input?.session_id === 'string' && input.session_id ? input.session_id : transcript
   const statePath = mainStatePath(key)
   const state = readMainState(statePath)

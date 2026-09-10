@@ -30,18 +30,25 @@ const forkBlock = { type: 'tool_use', name: 'Agent', input: { subagent_type: 'fo
 // `lastForkTs` is always 0 across this suite's fixtures: none of them stamps a `timestamp` field,
 // so `entryTs` (fail-closed default) returns 0 for every entry.
 const nothing = { lastFork: -1, lastForkTs: 0, work: null }
+// `activity` (TRDD-3U8AIHXK) is exercised by its own suite below — these fixtures assert
+// lastFork/lastForkTs/work only, so a `tool_use` fixture's incidental activity entries never
+// need to be spelled out here.
+const dropActivity = (s: ReturnType<typeof scanMainTranscriptLines>): Omit<typeof s, 'activity'> => {
+  const { activity: _activity, ...rest } = s
+  return rest
+}
 
 suite('reviewGate — main (Stop) gate', () => {
   test('scanMainTranscriptLines: an edit, a marked proposal and a write-shaped command arm; prose, a heartbeat and reads do not', () => {
-    assert.deepStrictEqual(scanMainTranscriptLines([assistantLine([editBlock]), assistantLine([forkBlock])], CWD),
+    assert.deepStrictEqual(dropActivity(scanMainTranscriptLines([assistantLine([editBlock]), assistantLine([forkBlock])], CWD)),
       { lastFork: 1, lastForkTs: 0, work: { index: 0, cause: 'edit', detail: 'Edit x.ts' } })
     // Measured on a real session JSONL, this build writes ONE ENTRY PER BLOCK, so a proposing turn
     // is a lone `text` entry with no tool_use anywhere near it.
-    assert.deepStrictEqual(scanMainTranscriptLines([assistantLine([proposalBlock])], CWD),
+    assert.deepStrictEqual(dropActivity(scanMainTranscriptLines([assistantLine([proposalBlock])], CWD)),
       { lastFork: -1, lastForkTs: 0, work: { index: 0, cause: 'proposal text', detail: '' } })
-    assert.deepStrictEqual(scanMainTranscriptLines([assistantLine([proposalBlock]), assistantLine([forkBlock])], CWD),
+    assert.deepStrictEqual(dropActivity(scanMainTranscriptLines([assistantLine([proposalBlock]), assistantLine([forkBlock])], CWD)),
       { lastFork: 1, lastForkTs: 0, work: { index: 0, cause: 'proposal text', detail: '' } }, 'proposal then fork ⇒ reviewed')
-    assert.deepStrictEqual(scanMainTranscriptLines([assistantLine([bashBlock('git commit -m x')])], CWD),
+    assert.deepStrictEqual(dropActivity(scanMainTranscriptLines([assistantLine([bashBlock('git commit -m x')])], CWD)),
       { lastFork: -1, lastForkTs: 0, work: { index: 0, cause: 'write-shaped command', detail: 'git commit' } })
     // THE LIVELOCK (TRDD-0E3W5C45). For one day every text block was work, so a heartbeat's
     // mandated `janitor heartbeat` line armed the gate and every reply to the block re-armed it —
@@ -52,15 +59,15 @@ suite('reviewGate — main (Stop) gate', () => {
       [bashBlock('grep -rn foo /proj/src')],
       [{ type: 'tool_use', name: 'Write', input: { file_path: '/private/tmp/claude-1/s/x.py' } }],
     ]) {
-      assert.deepStrictEqual(scanMainTranscriptLines([assistantLine(turn)], CWD), nothing, JSON.stringify(turn).slice(0, 80))
+      assert.deepStrictEqual(dropActivity(scanMainTranscriptLines([assistantLine(turn)], CWD)), nothing, JSON.stringify(turn).slice(0, 80))
     }
   })
 
   test('a NotebookEdit follows the same ephemeral-root rule, and the hook cwd comes from the input', () => {
     const nb = (notebook_path: string) => ({ type: 'tool_use', name: 'NotebookEdit', input: { notebook_path } })
-    assert.deepStrictEqual(scanMainTranscriptLines([assistantLine([nb('/proj/n.ipynb')])], CWD),
+    assert.deepStrictEqual(dropActivity(scanMainTranscriptLines([assistantLine([nb('/proj/n.ipynb')])], CWD)),
       { lastFork: -1, lastForkTs: 0, work: { index: 0, cause: 'edit', detail: 'NotebookEdit n.ipynb' } })
-    assert.deepStrictEqual(scanMainTranscriptLines([assistantLine([nb('/tmp/n.ipynb')])], CWD), nothing)
+    assert.deepStrictEqual(dropActivity(scanMainTranscriptLines([assistantLine([nb('/tmp/n.ipynb')])], CWD)), nothing)
     assert.strictEqual(hookCwd({ cwd: '/elsewhere' }), '/elsewhere')
     assert.strictEqual(hookCwd({ cwd: '' }), process.cwd(), 'an empty cwd falls back, it is not a root')
     assert.strictEqual(hookCwd({}), process.cwd())
@@ -115,6 +122,124 @@ suite('reviewGate — main (Stop) gate', () => {
   })
 })
 
+// ── scanMainTranscriptLines — activity (TRDD-3U8AIHXK) ────────────────────────────────────────────
+// Synthetic JSONL lines with real ISO `timestamp`s, over the shapes measured on this project's own
+// session JSONL (2026-09-10): a tool_use/tool_result pair, a background job's launch + exit, and
+// the harness's own `attachment` / `queue-operation` / string-content-`user` notification shapes.
+suite('scanMainTranscriptLines — activity (TRDD-3U8AIHXK)', () => {
+  const iso = (offsetMs: number): string => new Date(1_800_000_000_000 + offsetMs).toISOString()
+  const toolUse = (ts: string, id: string, name: string, input: Record<string, unknown> = {}): string =>
+    JSON.stringify({ type: 'assistant', timestamp: ts, message: { content: [{ type: 'tool_use', id, name, input }] } })
+  const toolResult = (ts: string, toolUseId: string, content: unknown): string =>
+    JSON.stringify({ type: 'user', timestamp: ts, message: { content: [{ type: 'tool_result', tool_use_id: toolUseId, content }] } })
+  const attachment = (ts: string, taskId: string): string =>
+    JSON.stringify({ type: 'attachment', timestamp: ts, attachment: { x: `<task-id>${taskId}</task-id>` } })
+  const queueOp = (ts: string, taskId: string): string =>
+    JSON.stringify({ type: 'queue-operation', timestamp: ts, note: `<task-id>${taskId}</task-id>` })
+  const stringUser = (ts: string, text: string): string =>
+    JSON.stringify({ type: 'user', timestamp: ts, message: { content: text } })
+
+  test('(i) a tool_use/tool_result pair yields one interval {start, end}', () => {
+    const A = iso(0); const B = iso(1000)
+    const scan = scanMainTranscriptLines([toolUse(A, 't1', 'Bash', { command: 'ls' }), toolResult(B, 't1', 'ok')])
+    assert.deepStrictEqual(scan.activity, [{ start: Date.parse(A), end: Date.parse(B) }])
+  })
+
+  test('(ii) a background Bash job stays open past its result, closes on the matching attachment', () => {
+    const A = iso(0); const B = iso(1000); const C = iso(5000)
+    const withoutAttachment = scanMainTranscriptLines([
+      toolUse(A, 't1', 'Bash', { command: 'python3 long_task.py' }),
+      toolResult(B, 't1', 'Command running in background with ID: job1. Output …'),
+    ])
+    assert.strictEqual(withoutAttachment.activity[0].end, Infinity)
+    const withAttachment = scanMainTranscriptLines([
+      toolUse(A, 't1', 'Bash', { command: 'python3 long_task.py' }),
+      toolResult(B, 't1', 'Command running in background with ID: job1. Output …'),
+      attachment(C, 'job1'),
+    ])
+    assert.strictEqual(withAttachment.activity[0].end, Date.parse(C))
+  })
+
+  test('(iii) only an attachment or a string-content user entry closes a job — never an array-content result or a queue-operation', () => {
+    const A = iso(0); const B = iso(1000)
+    const arrayQuote = iso(2000); const queueQuote = iso(3000); const D = iso(4000)
+    const opened = [
+      toolUse(A, 't1', 'Bash', { command: 'python3 long_task.py' }),
+      toolResult(B, 't1', 'Command running in background with ID: job1. Output …'),
+      toolResult(arrayQuote, 'unrelated', 'quoting <task-id>job1</task-id>'), // array-content — never closes
+    ]
+    // A queue-operation naming the id ALONE must not close it — the discriminating assertion
+    // caught here: without it, this test passed even when queue-operation closed the interval.
+    const afterQueueOp = scanMainTranscriptLines([...opened, queueOp(queueQuote, 'job1')])
+    assert.strictEqual(afterQueueOp.activity[0].end, Infinity)
+    // Only the string-content user entry — the real exit notification — closes it.
+    const afterStringUser = scanMainTranscriptLines([...opened, queueOp(queueQuote, 'job1'), stringUser(D, 'closing note <task-id>job1</task-id>')])
+    assert.strictEqual(afterStringUser.activity[0].end, Date.parse(D))
+  })
+
+  test('(iv) a foreground tool whose result merely CONTAINS launch-shaped text closes at its own result', () => {
+    const A = iso(0); const B = iso(1000)
+    // A Bash result reading "agentId: zzz" — the Bash branch never looks for agentId at all.
+    const bash = scanMainTranscriptLines([toolUse(A, 't1', 'Bash', { command: 'echo hi' }), toolResult(B, 't1', 'agentId: zzz\n')])
+    assert.strictEqual(bash.activity[0].end, Date.parse(B))
+    // A Read result quoting the Bash launch line — Read is neither Bash nor Agent.
+    const read = scanMainTranscriptLines([toolUse(A, 't1', 'Read', {}), toolResult(B, 't1', 'Command running in background with ID: q9')])
+    assert.strictEqual(read.activity[0].end, Date.parse(B))
+    // An Agent result naming an agentId WITHOUT the launched-text anchor — not recognized as a launch.
+    const agent = scanMainTranscriptLines([toolUse(A, 't1', 'Agent', {}), toolResult(B, 't1', 'agentId: q7')])
+    assert.strictEqual(agent.activity[0].end, Date.parse(B))
+    // A BASH result carrying BOTH the Agent launch phrase and an agentId — the Bash branch is
+    // keyed on the OPENING tool_use's own name, never on the result text alone, so it still
+    // closes at its own result rather than being mistaken for an Agent-launched background job.
+    const bashWithAgentText = scanMainTranscriptLines([
+      toolUse(A, 't1', 'Bash', { command: 'echo hi' }),
+      toolResult(B, 't1', 'Async agent launched successfully. agentId: b9'),
+    ])
+    assert.strictEqual(bashWithAgentText.activity[0].end, Date.parse(B))
+  })
+
+  test('(v) a BACKGROUND review fork stays open past its own result, closes on its task-id attachment', () => {
+    const A = iso(0); const B = iso(1000); const C = iso(5000)
+    const scan = scanMainTranscriptLines([
+      toolUse(A, 't1', 'Agent', { subagent_type: 'fork' }),
+      toolResult(B, 't1', 'Async agent launched successfully. agentId: f1'),
+      attachment(C, 'f1'),
+    ])
+    assert.strictEqual(scan.lastFork, 0, 'the fork tool_use still sets lastFork')
+    assert.strictEqual(scan.activity[0].end, Date.parse(C))
+  })
+
+  test('(vi) a tool_result with an unknown tool_use_id opens {start: firstTs, end: resultTs} — unless its text IS a launch, then it stays open too', () => {
+    const first = iso(0); const B = iso(1000); const C = iso(5000)
+    // A leading text-only entry (no tool_use, no activity of its own) sets firstTs before the
+    // unknown-id result arrives, so start !== end and the fallback is visibly exercised.
+    const lead = JSON.stringify({ type: 'assistant', timestamp: first, message: { content: [{ type: 'text', text: 'hi' }] } })
+    const plain = scanMainTranscriptLines([lead, toolResult(B, 'unknown-id', 'ok')])
+    assert.deepStrictEqual(plain.activity, [{ start: Date.parse(first), end: Date.parse(B) }])
+    // The unknown-id result whose text STARTS the Bash launch line stays open until its attachment
+    // — `backgroundJobId` is tried with tool '*' when the opener is unknown (TRDD-3U8AIHXK).
+    const launching = scanMainTranscriptLines([lead, toolResult(B, 'unknown-id', 'Command running in background with ID: q1'), attachment(C, 'q1')])
+    assert.strictEqual(launching.activity[0].end, Date.parse(C))
+  })
+
+  test('(vii) a detached job (nohup / trailing & / mid-line &) stays open past its result; a chain, a query string and a redirect close normally', () => {
+    const A = iso(0); const B = iso(1000)
+    for (const command of ['nohup ./x.sh &', './x.sh &', '( sleep 5; touch x ) & echo started']) {
+      const scan = scanMainTranscriptLines([toolUse(A, 't1', 'Bash', { command }), toolResult(B, 't1', 'started')])
+      assert.strictEqual(scan.activity[0].end, Infinity, command)
+    }
+    for (const command of ['a && b', "curl 'http://x/?a=1&b=2'", 'cmd 2>&1']) {
+      const scan = scanMainTranscriptLines([toolUse(A, 't1', 'Bash', { command }), toolResult(B, 't1', 'ok')])
+      assert.strictEqual(scan.activity[0].end, Date.parse(B), command)
+    }
+  })
+
+  test('(viii) a tool_use with no result stays open (Infinity), fail closed', () => {
+    const scan = scanMainTranscriptLines([toolUse(iso(0), 't1', 'Bash', { command: 'ls' })])
+    assert.deepStrictEqual(scan.activity, [{ start: Date.parse(iso(0)), end: Infinity }])
+  })
+})
+
 // ── lastForkTs — the timestamp `unreviewedEffects` is anchored to (TRDD-9FG0LSPG) ─────────────────
 suite('reviewGate — scanMainTranscriptLines: lastForkTs', () => {
   test('lastForkTs is the fork entry\'s own top-level timestamp, in ms', () => {
@@ -151,15 +276,15 @@ suite('reviewGate — scanMainTranscriptLines: lastForkTs', () => {
 
 // ── applyEffects — folding `unreviewedEffects()` into the scan (TRDD-9FG0LSPG) ─────────────────────
 suite('reviewGate — applyEffects', () => {
-  const baseScan = { lastFork: 3, lastForkTs: 1000, work: null }
+  const baseScan = { lastFork: 3, lastForkTs: 1000, work: null, activity: [] }
 
   test('no existing work + unreviewed paths ⇒ arms at lastFork + 1 with cause "unreviewed change"', () => {
     const out = applyEffects(baseScan, { paths: ['src/a.ts'], truncated: false })
-    assert.deepStrictEqual(out, { lastFork: 3, lastForkTs: 1000, work: { index: 4, cause: 'unreviewed change', detail: 'src/a.ts' } })
+    assert.deepStrictEqual(out, { lastFork: 3, lastForkTs: 1000, work: { index: 4, cause: 'unreviewed change', detail: 'src/a.ts' }, activity: [] })
   })
 
   test('an existing text arm strictly after the last fork is KEPT, not overwritten', () => {
-    const scanWithArm = { lastFork: 3, lastForkTs: 1000, work: { index: 5, cause: 'proposal text' as const, detail: '' } }
+    const scanWithArm = { lastFork: 3, lastForkTs: 1000, work: { index: 5, cause: 'proposal text' as const, detail: '' }, activity: [] }
     const out = applyEffects(scanWithArm, { paths: ['src/a.ts', 'src/b.ts'], truncated: false })
     assert.deepStrictEqual(out, scanWithArm, 'both arms would block identically — keep the more specific one')
   })
@@ -179,6 +304,11 @@ suite('reviewGate — applyEffects', () => {
   test('empty effects (no paths, not truncated) leave the scan unchanged, BY REFERENCE', () => {
     const out = applyEffects(baseScan, { paths: [], truncated: false })
     assert.strictEqual(out, baseScan, 'must be the SAME object, not merely deep-equal')
+  })
+
+  test('(ix) folding paths in preserves the SAME activity array — the fold never touches attribution', () => {
+    const out = applyEffects(baseScan, { paths: ['src/a.ts'], truncated: false })
+    assert.strictEqual(out.activity, baseScan.activity, 'must be the SAME array, not a copy')
   })
 })
 
@@ -796,16 +926,70 @@ suite('reviewGate — runMainGate end to end (TRDD-9FG0LSPG)', () => {
     fs.rmSync(root, { recursive: true, force: true })
   })
 
+  // A fork tool_use WITH an `id`, closed by its own tool_result 500 ms later — the shape every real
+  // transcript has. `forkBlock` (the scanner suites above) carries no `id`; an id-less tool_use can
+  // never be closed, so its interval would stay open (Infinity) and cover every later write, making
+  // every case in this suite block for a reason no production transcript can produce.
+  const forkLines = (forkIso: string): string[] => {
+    const forkCloseIso = new Date(Date.parse(forkIso) + 500).toISOString()
+    return [
+      JSON.stringify({ type: 'assistant', timestamp: forkIso, message: { content: [{ type: 'tool_use', id: 'f1', name: 'Agent', input: { subagent_type: 'fork' } }] } }),
+      JSON.stringify({ type: 'user', timestamp: forkCloseIso, message: { content: [{ type: 'tool_result', tool_use_id: 'f1', content: 'reviewed' }] } }),
+    ]
+  }
+
   const writeTranscript = (forkIso: string): string => {
     const p = path.join(root, 'transcript.jsonl')
-    fs.writeFileSync(p, assistantLine([forkBlock], { timestamp: forkIso }) + '\n')
+    fs.writeFileSync(p, forkLines(forkIso).join('\n') + '\n')
     return p
   }
 
-  test('a file written after the last fork, with no tool_use in the transcript, BLOCKS and names the path', async () => {
+  // The fork pair, then a Bash tool_use/tool_result pair (an ordinary non-write command — the point
+  // is the ACTIVITY interval it opens, not any arm of its own), written as separate transcript lines.
+  const writeActivityTranscript = (forkIso: string, bashStartIso: string, bashEndIso: string): string => {
+    const p = path.join(root, 'transcript.jsonl')
+    const lines = [
+      ...forkLines(forkIso),
+      JSON.stringify({ type: 'assistant', timestamp: bashStartIso, message: { content: [{ type: 'tool_use', id: 't1', name: 'Bash', input: { command: 'sleep 1' } }] } }),
+      JSON.stringify({ type: 'user', timestamp: bashEndIso, message: { content: [{ type: 'tool_result', tool_use_id: 't1', content: 'ok' }] } }),
+    ]
+    fs.writeFileSync(p, lines.join('\n') + '\n')
+    return p
+  }
+
+  // (B) the release twin of (A): the fork reported 500 ms after it spawned and nothing else ran, so
+  // a write landing seconds later has no tool activity behind it — a machine-global writer, not this
+  // session — and the gate releases. Before TRDD-3U8AIHXK this same fixture BLOCKED (the write was
+  // merely newer than the fork); with `freshness` reduced to `ms > sinceMs` it blocks again, which
+  // is what makes this case discriminate attribution from recency.
+  test('(B) a file written after the last fork, with NO tool activity behind it, releases — attribution, not recency, decides', async () => {
     const forkIso = new Date(Date.now() - 5000).toISOString()
     const transcript_path = writeTranscript(forkIso)
     fs.writeFileSync(path.join(repo, 'tracked.txt'), 'v2\n')
+    const out = await runMainGate({ transcript_path, cwd: repo, session_id: `e2e-${Date.now()}` })
+    assert.strictEqual(out, null)
+  })
+
+  // Positional release: the write precedes `sinceMs` (the fork's timestamp), so the `ms > sinceMs`
+  // gate alone releases it — the fork's own interval, a minute in the future, never enters into it.
+  test('a fork spawned AFTER the write releases the stop', async () => {
+    fs.writeFileSync(path.join(repo, 'tracked.txt'), 'v2\n')
+    const forkIso = new Date(Date.now() + 60_000).toISOString()
+    const transcript_path = writeTranscript(forkIso)
+    const out = await runMainGate({ transcript_path, cwd: repo, session_id: `e2e-${Date.now()}` })
+    assert.strictEqual(out, null)
+  })
+
+  // Attribution (TRDD-3U8AIHXK): the write itself is now attributed to this session's tool
+  // activity, not merely to "newer than the last fork" — a real file write, a real activity
+  // interval computed from a real transcript, a real fork before both.
+  test('(A) a file written INSIDE this session\'s tool-activity interval BLOCKS and names the path', async () => {
+    fs.writeFileSync(path.join(repo, 'tracked.txt'), 'v2\n')
+    const m = fs.statSync(path.join(repo, 'tracked.txt')).mtimeMs
+    const forkIso = new Date(m - 5000).toISOString()
+    const bashStartIso = new Date(m - 1000).toISOString()
+    const bashEndIso = new Date(m + 1000).toISOString()
+    const transcript_path = writeActivityTranscript(forkIso, bashStartIso, bashEndIso)
     const out = await runMainGate({ transcript_path, cwd: repo, session_id: `e2e-${Date.now()}` })
     assert.notStrictEqual(out, null, 'expected a block, got release')
     const v = JSON.parse(out as string)
@@ -814,10 +998,15 @@ suite('reviewGate — runMainGate end to end (TRDD-9FG0LSPG)', () => {
     assert.ok(v.reason.includes('tracked.txt'), v.reason)
   })
 
-  test('a fork spawned AFTER the write releases the stop', async () => {
+  // (C) same write, but the activity interval sits well BEFORE the write's mtime — a machine-
+  // global writer this session could not have made — so the gate must release, not block.
+  test('(C) a file written OUTSIDE every activity interval is not attributed to this session — releases', async () => {
     fs.writeFileSync(path.join(repo, 'tracked.txt'), 'v2\n')
-    const forkIso = new Date(Date.now() + 60_000).toISOString()
-    const transcript_path = writeTranscript(forkIso)
+    const m = fs.statSync(path.join(repo, 'tracked.txt')).mtimeMs
+    const forkIso = new Date(m - 40000).toISOString()
+    const bashStartIso = new Date(m - 30000).toISOString()
+    const bashEndIso = new Date(m - 20000).toISOString()
+    const transcript_path = writeActivityTranscript(forkIso, bashStartIso, bashEndIso)
     const out = await runMainGate({ transcript_path, cwd: repo, session_id: `e2e-${Date.now()}` })
     assert.strictEqual(out, null)
   })
