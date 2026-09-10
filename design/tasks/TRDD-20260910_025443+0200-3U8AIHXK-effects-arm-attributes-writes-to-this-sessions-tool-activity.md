@@ -3,7 +3,7 @@ trdd-id: 3U8AIHXK
 title: The effects arm must attribute a write to this session's own tool activity before arming
 column: testing
 created: 2026-09-10T02:54:43+0200
-updated: 2026-09-10T03:39:26+0200
+updated: 2026-09-10T03:41:00+0200
 current-owner: main
 task-type: bugfix
 priority: critical
@@ -21,7 +21,7 @@ implementation-commits: [3f498995]
 
 # The effects arm must attribute a write to this session's own tool activity before arming
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-10 03:39
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-10 03:41
 
 Filed as TRDD-9FG0LSPG's EHT on four cross-session reports from peer session tldr-code-5c. The
 proposal was reviewed by an adversarial fork at filing (02:5x); six findings, all applied (the
@@ -69,13 +69,14 @@ process env and was not read, so a dir outside this shell's PATH (or one populat
 only unexcluded shadow; if the chain holds, EVERY Stop since 03:32 has already run the new bundle
 — the Stop-side proof is 9FG0LSPG's release half (a Stop that passes after a KNOWN non-session
 write). 03:39: the real compiled `unreviewedEffects` run with `activity` undefined (= the OLD
-any-writer rule) since 03:32:04 lists exactly `["HEAD"]`, `truncated: false` — my own commits are
-the only candidate in the repo or the whole watched set, so no non-session write has landed
+any-writer rule) since the code commit 03:32:04 lists exactly `["HEAD"]`, `truncated: false` —
+nothing dirty or watched is newer except my own commits, so no non-session write has landed
 since the bundle. WHEN that half can be observed: `sinceMs` is the last fork's timestamp and
 every fork-ended turn puts an earlier write below it at the next Stop, so the release half shows
 only at the Stop of a turn with NO fork after the write — a heartbeat turn (its sole tool is the
-foreground stub, seconds long; a write during the stub's own interval blocks, the named
-residual). Peer tldr-code-5c told 03:32. A post-commit
+foreground stub, seconds long) — AND only once every earlier background fork/agent has reported
+(an unreported one keeps `end = Infinity`, so that Stop BLOCKS and is not a pin-open bug), AND
+the write did not land during the stub (the named residual). Peer tldr-code-5c told 03:32. A post-commit
 review found two stale test comments (a "1.5s margin" left at 2.5 s; a "Positional" label for
 the recency gate) — fixed in the docs commit 24323387.
 LIVE: this session's Stop was blocked by the effects arm on the worker's own edit of
