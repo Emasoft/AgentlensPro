@@ -1,9 +1,9 @@
 ---
 trdd-id: GG0WOHEV
-title: A background worker's open interval makes the review gate demand one fork per turn for the worker's whole runtime
+title: A background worker's open interval makes the review gate demand one fork per write-then-Stop cycle
 column: backburner
 created: 2026-09-10T03:58:08+0200
-updated: 2026-09-10T03:58:08+0200
+updated: 2026-09-10T04:04:39+0200
 current-owner: main
 task-type: spike
 priority: low
@@ -19,7 +19,7 @@ eht: []
 implementation-commits: []
 ---
 
-# A background worker's open interval makes the review gate demand one fork per turn for the worker's whole runtime
+# A background worker's open interval makes the review gate demand one fork per write-then-Stop cycle
 
 ## Why
 
@@ -33,8 +33,8 @@ is blocked again. Measured: two Stop-hook blocks (03:56:45, 04:00:38 — the sec
 compaction-request Stop, which no fork could exit anyway); one exit fork attributable to the loop,
 241,291 subagent tokens (the other two forks in the window were reviews owed regardless). Cost of
 the loop = one inherited-context fork per worker write-then-Stop cycle, at the cache-read rate
-(the dollar figure was not measured here). The loop is bounded by the worker's runtime, and each
-fork sees the worker's partial diff, so it is not reviewing nothing — it is reviewing a moving
+(the dollar figure was not measured here). The loop is bounded by the worker's runtime, and the
+exit fork sees the worker's partial diff, so it is not reviewing nothing — it is reviewing a moving
 target.
 
 ## Design — decided 2026-09-10 (adversarial review 03:59, paraphrased here)
