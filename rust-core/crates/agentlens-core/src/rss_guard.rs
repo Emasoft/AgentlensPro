@@ -178,11 +178,11 @@ pub fn write_diagnostic<W: std::io::Write>(
         mi.current_commit_bytes / 1024 / 1024,
         mi.page_faults,
     )?;
-    write!(
+    writeln!(
         w,
         "alcore: RSS HARD CAP — non-mimalloc LOWER BOUND (= {metric_name} minus mimalloc current_rss; mimalloc's counter \
          is RSS-like and carries clean pages the footprint never charged, so the true non-mimalloc share is LARGER — \
-         read this as a floor, never as the answer): {non_mimalloc_approx} MB\n",
+         read this as a floor, never as the answer): {non_mimalloc_approx} MB",
     )?;
     write!(w, "alcore: RSS HARD CAP — resident spans: ")?;
     opt(w, s.resident_spans)?;
