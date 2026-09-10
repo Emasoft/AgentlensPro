@@ -3,7 +3,7 @@ trdd-id: VRW14OB0
 title: The RUNAWAY_FANOUT fork exemption returns before FORK_STORM_FORMING is evaluated
 column: backburner
 created: 2026-09-10T04:51:30+0200
-updated: 2026-09-10T04:51:30+0200
+updated: 2026-09-10T05:19:23+0200
 current-owner: main
 task-type: spike
 min-approval-requirement: none
@@ -38,9 +38,11 @@ caller's entry warm).
 Whether a fork off a COLD parent during a runaway wave actually writes a full prefix (the
 FORK_STORM premise) or reads warm (the RUNAWAY-exemption premise) — one measured pair from the
 captured request bodies (`cache_read` vs `cache_creation` on the fork's first request with the
-parent's entry past its TTL). If it writes, move the FORK_STORM check before the RUNAWAY block as
-was done for COLD_RESUME; if it reads warm, FORK_STORM_FORMING's `cold` predicate is the thing to
-revisit. No code change without that measurement.
+parent's entry past its TTL). The pair must be the FIRST fork after the parent went cold — a
+sibling within 5 min reads the first fork's write and shows the warm shape under BOTH premises, so
+it discriminates nothing. If it writes, move the FORK_STORM check before the RUNAWAY block as was
+done for COLD_RESUME (`e53fef7a`, pinned by `e51ac1c8`); if it reads warm, FORK_STORM_FORMING's
+`cold` predicate is the thing to revisit. No code change without that measurement.
 
 ## Approval log
 

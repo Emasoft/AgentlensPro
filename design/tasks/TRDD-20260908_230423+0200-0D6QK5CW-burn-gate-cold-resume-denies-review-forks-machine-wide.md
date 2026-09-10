@@ -1,18 +1,19 @@
 ---
 trdd-id: 0D6QK5CW
 title: The burn-gate cold-resume rule denies review forks machine-wide and deadlocks the review gate
-column: dev
+column: blocked
+pre-block-column: testing
 created: 2026-09-08T23:04:23+0200
-updated: 2026-09-10T04:51:30+0200
+updated: 2026-09-10T05:19:23+0200
 current-owner: main
 task-type: bugfix
 min-approval-requirement: none
 priority: critical
 severity: high
-blocked-by: []
+blocked-by: [81BW1CS9]
 npt: []
 eht: []
-implementation-commits: [c3809f16]
+implementation-commits: [c3809f16, e53fef7a, e51ac1c8]
 project-id: agentlenspro
 scope: project
 labels: [burn-gate, review-gate, agent-gate, cold-resume, fork, deadlock]
@@ -21,42 +22,50 @@ relevant-rules: []
 
 # The burn-gate cold-resume rule denies review forks machine-wide and deadlocks the review gate
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-10 04:51
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-10 05:19
 
 Pulled `todo` → `dev` at 04:29 by the janitor keep-going resume (this session owns the card; the
-ownership note below is superseded). Candidate 1 delegated to a lean-worker with four brief
-amendments from the adversarial review (record the FORK_STORM assumption's truth; match the RUNAWAY
-exemption's shape in each core; answer candidate 3 by reading the `startsLast2min` feed; red-first
-tests with a cold-resume fixture).
-LANDED as `c3809f16` (worker report `reports/review-gate/20260910_044030+0200-0D6QK5CW-worker.md`):
-both cores exempt a fork from COLD_RESUME_FANOUT with `warn` (same code, `fork && !keepWarm`, the
-RUNAWAY exemption's wording), the deny text unchanged, the parity fixture gained the case and
-`agentgate-expected.json` was regenerated. Verified first-hand before the commit: branch order
-THRASH → RUNAWAY → COLD_RESUME → FORK_STORM in both cores and the warn precedes the deny;
-`startsLast2min` is fed only by `SubagentStart` events (`agent_gate.rs:723-728`, the sole write
-site; the TS core has no feeder, it is a state field) — candidate 3 answered: a DENIED launch does
-not increment it, a warned one does; my own regeneration of the golden is byte-identical to the
-committed one (`cmp` 0, 61 cases); check-types / eslint 0; the new TS test ✔ inside the full suite
-(2753 passing — the 5 failures are TRDD-CS2W7E77's calibration tests); cargo lib 8/8, parity 1/1;
-clippy `-D warnings` failed only on the pre-existing `rss_guard.rs:181` lint, fixed as
-TRDD-QJPUG1WP. The "FORK_STORM_FORMING already covers a cold fork" line (§Where, last bullet) is
-REFUTED by reading: that rule needs `fat` AND `≥2`, the cold-resume case fires at `≥1`.
-Post-write adversarial review of `c3809f16`: 8 findings. ACCEPTED — (2) the new warn returns before
-FORK_STORM_FORMING, so for the whole window a fat+cold parent's 2nd+ fork is warned instead of
-denied; fix = move the FORK_STORM block before the COLD_RESUME block in both cores (reviewer-
-prescribed, no second round); (5) the `!keepWarm` carve-out has no test; (6) the storm case has no
-test. Delegated as ONE follow-up to a lean-worker at 04:51 (reorder + two TS tests + two fixture
-cases, red-first on both sides, regenerate, full chain incl. `--workspace` clippy). REJECTED — the
-`&& !cold` variant: a parent that idled past its TTL through the stall is exactly the case whose
-FIRST fork must pass, or the deadlock returns; (3) the base-string refactor is byte-neutral and
-removes a duplicated message, kept; (8) "USER-ordered advisory wording" is the file's own phrasing
-(`agentGate.ts:256`, `:320`, `:343`), kept. RUNAWAY's identical shadowing of FORK_STORM is
-pre-existing and out of scope: TRDD-VRW14OB0 (backburner).
-Rows 1 and 2 are met by `c3809f16` (the follow-up re-runs both); row 3 is BLOCKED on the owner's
-`go`/`no` for the alcore binary (TRDD-81BW1CS9) — the LIVE gate keeps the old decision until then;
-row 4 after the follow-up lands (one message with both SHAs).
-NEXT ACTION: worker3 report → verify the reorder diff first-hand (both cores, reason strings
-unchanged) → my chain → commit by name → `testing` with row 3 marked blocked → notify tldr-code-7a.
+ownership note below is superseded). LANDED in three commits, each reviewed by an adversarial
+fork after the write, each preceded by a lean-worker with a reviewed brief:
+- `c3809f16` — candidate 1: both cores exempt a fork from COLD_RESUME_FANOUT with `warn` (same
+  code, `fork && !keepWarm`, the RUNAWAY exemption's wording); the deny text unchanged (the golden's
+  deny entry is an unchanged context line); the parity fixture gained the case and the golden was
+  regenerated (worker report `reports/review-gate/20260910_044030+0200-0D6QK5CW-worker.md`).
+- `e53fef7a` — from that commit's review: the exemption returned before FORK_STORM_FORMING, so for
+  the whole window a fat+cold parent's 2nd+ fork was warned instead of denied; the FORK_STORM block
+  now sits after RUNAWAY and before COLD_RESUME in both cores, bodies byte-identical. Storm test red
+  on the old order (`'warn' !== 'deny'`); the keep-warm carve-out pinned (red only with
+  `&& !keepWarm` removed — a carve-out pin, NOT evidence for the reorder); parity red on exactly the
+  storm case before the Rust move (worker report `…/20260910_051328+0200-0D6QK5CW-worker3.md`).
+- `e51ac1c8` — from THAT commit's review: two regression pins — the first fork after a stall on a
+  fat cold parent (count 1) still passes, and FORK_STORM stays after RUNAWAY (a fat cold fork at
+  runaway counts keeps the RUNAWAY warn). Both pass on either block order by design; they guard
+  against `&& !cold`, a `>= 1` threshold, and a further move up.
+Verified first-hand at each step: branch order in both cores; `startsLast2min` fed only by
+`SubagentStart` events (`agent_gate.rs:723-728`, the sole write site; the TS core has no feeder) —
+candidate 3 answered: a DENIED launch does not increment it, a warned one does; my own regeneration
+of the golden byte-identical to the worker's each time (`cmp` 0; 61 → 63 → 65 cases); check-types /
+eslint 0; scoped mocha 54 → 56 → 58 passing (`--no-config` — `.mocharc.cjs` otherwise runs the
+whole suite: 2753 passing, the 5 failures being TRDD-CS2W7E77's calibration tests); parity 1/1;
+cargo lib 8/8 (unrelated burn tests; the coverage is the parity test); `--workspace` clippy 0 once
+TRDD-QJPUG1WP's fix landed (it was the only failure).
+The review of `e53fef7a` asked whether the reorder re-deadlocks the review gate on a fat parent
+(2nd fork within 2 min → FORK_STORM). REJECTED by reading: `parent.idleMs` is now − mtime of the
+caller's TRANSCRIPT (`agentGate.ts:217`, `agent_gate.rs:241`); a Stop-time review fork is spawned by
+an active turn that has just appended to that transcript, so the parent is never `cold` at review
+time and FORK_STORM_FORMING cannot fire on it. Also rejected: the `&& !cold` variant (it denies the
+first fork of a parent that idled past its TTL through the stall); the base-string refactor stays
+(byte-neutral, removes a duplicated message); "USER-ordered advisory wording" is the file's own
+phrasing (`agentGate.ts:256`, `:320`, `:343`). The "FORK_STORM_FORMING already covers a cold fork"
+line (§Where, last bullet) is REFUTED by reading: that rule needs `fat` AND `≥2`, the cold-resume
+case fires at `≥1`. RUNAWAY's identical shadowing of FORK_STORM is pre-existing: TRDD-VRW14OB0.
+Row 3 is BLOCKED on the owner's `go`/`no` for the alcore binary (TRDD-81BW1CS9) — the LIVE gate
+keeps the old decision until then, so the column is `blocked` (pre-block `testing`). Row 4: the
+peer tldr-code-7a was not among the six listed peer sessions at 05:14, so the SHAs could not be
+delivered; this card carries them.
+NEXT ACTION: on the owner's answer to TRDD-81BW1CS9 — `go`: rebuild alcore, `codesign -s --force`,
+deploy, measure row 3, then `testing` → `ai_review`; `no`: row 3 stays open and the card goes to
+`ai_review` on the TS/Rust evidence alone. Nothing else is open on this card.
 
 Filed from the main session at 23:04 while the USER's forked session works the review-hook
 directive ("fix the damn adversarial review hook"); that session OWNS this card — the main
@@ -119,15 +128,18 @@ answer the scoping question below on measured evidence.
 ## Acceptance
 
 - [x] (`c3809f16`) A test in `src/test/` that fails on the current `agentGate.ts` (a fork under
-      coldResume with startsLast2min ≥ 1 must not be denied) and the Rust twin — as a parity
-      fixture case (`tests/agentgate_parity.rs` replays the TS oracle; `burn/agent_gate.rs` has no
-      `#[cfg(test)]` block), red on both sides per the worker report.
-- [x] (`c3809f16`) Both cores changed; `pnpm run check-types` + the scoped mocha + `cargo test -p
-      agentlens-core --lib burn` green (8/8 unrelated burn tests; the coverage is the parity test, 1/1).
+      coldResume with startsLast2min ≥ 1 must not be denied BY COLD_RESUME_FANOUT — the
+      FORK_STORM_FORMING deny still applies at ≥ 2 on a fat cold parent, `e53fef7a`) and the Rust
+      twin — as a parity fixture case (`tests/agentgate_parity.rs` replays the TS oracle;
+      `burn/agent_gate.rs` has no `#[cfg(test)]` block), red on both sides per the worker report.
+- [x] (`c3809f16`, `e53fef7a`, `e51ac1c8`) Both cores changed; `pnpm run check-types` + the scoped
+      mocha + `cargo test -p agentlens-core --lib burn` green (8/8 unrelated burn tests; the
+      coverage is the parity test, 1/1 over 65 cases).
 - [ ] BLOCKED on the owner's `go`/`no` (TRDD-81BW1CS9): alcore rebuilt, `codesign -s - --force`,
       deployed, and a fork launch measured allowed while a fresh-agent launch in the same window is
       still denied.
-- [ ] The peer session tldr-code-7a notified with the commit SHA.
+- [ ] UNDELIVERABLE (05:14): the peer session tldr-code-7a notified with the commit SHA — it was
+      not among the listed peer sessions; the SHAs are in this card's frontmatter.
 
 ## Approval log
 
