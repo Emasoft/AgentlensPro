@@ -1,10 +1,13 @@
 import * as assert from 'assert'
 import { judge, scanSupervision, gateIsRegistered, contextEvent, UNREVIEWED_ALARM } from '../cli/reviewSupervisor'
+import { commandWriteReason } from '../cli/reviewGateTriggers'
+import { NO_REVIEW_SENTINEL } from '../cli/reviewGate'
 
 // The supervisor's whole purpose is to be the check that STILL WORKS when the review gate does not,
 // so shipping it untested would have been the same mistake it exists to catch. Its own review said
 // exactly that: "zero tests for a component whose whole purpose is to be the check that still works".
 
+const CWD = '/proj'
 const assistant = (blocks: unknown[], isSidechain = false): string =>
   JSON.stringify({ type: 'assistant', isSidechain, message: { content: blocks } })
 const edit = { type: 'tool_use', name: 'Edit', input: {} }
@@ -16,27 +19,49 @@ const settings = (cmd: string): string => JSON.stringify({ hooks: { Stop: [{ hoo
 
 suite('reviewSupervisor — scan', () => {
   test('counts edits and commits as work, and forks as reviews', () => {
-    const s = scanSupervision([assistant([edit]), assistant([commit]), assistant([fork])])
+    const s = scanSupervision([assistant([edit]), assistant([commit]), assistant([fork])], CWD)
     assert.deepStrictEqual(s, { work: 2, forks: 1, unreviewed: 0 })
   })
 
   test('a fork clears the unreviewed backlog; later work rebuilds it', () => {
-    const s = scanSupervision([assistant([edit]), assistant([fork]), assistant([edit]), assistant([edit])])
+    const s = scanSupervision([assistant([edit]), assistant([fork]), assistant([edit]), assistant([edit])], CWD)
     assert.strictEqual(s.unreviewed, 2, 'only the work AFTER the last fork is unreviewed')
     assert.strictEqual(s.forks, 1)
   })
 
   test('prose about committing is not a commit', () => {
-    assert.strictEqual(scanSupervision([assistant([talkAboutCommit])]).work, 0)
+    assert.strictEqual(scanSupervision([assistant([talkAboutCommit])], CWD).work, 0)
   })
 
   test('subagent (sidechain) turns are not the main agent\'s work', () => {
-    assert.deepStrictEqual(scanSupervision([assistant([edit], true)]), { work: 0, forks: 0, unreviewed: 0 })
+    assert.deepStrictEqual(scanSupervision([assistant([edit], true)], CWD), { work: 0, forks: 0, unreviewed: 0 })
   })
 
   test('malformed lines are skipped rather than throwing', () => {
-    const s = scanSupervision(['not json', '', JSON.stringify({ type: 'user' }), assistant([edit])])
+    const s = scanSupervision(['not json', '', JSON.stringify({ type: 'user' }), assistant([edit])], CWD)
     assert.strictEqual(s.work, 1)
+  })
+
+  // TRDD-2CYTNLY1: scanSupervision now shares the gate's own work predicate (toolUseWork/textArms)
+  // instead of an EDITORS set plus a bare git-commit regex — parity proved on shapes neither of the
+  // old checks could ever see.
+  test('parity with the gate\'s work predicate: sed -i, git push and a PROPOSAL count — none caught by the old EDITORS set or the git-commit-only regex', () => {
+    const sed = { type: 'tool_use', name: 'Bash', input: { command: `sed -i "" s/a/b/ ${CWD}/f.ts` } }
+    const push = { type: 'tool_use', name: 'Bash', input: { command: 'git push' } }
+    const proposal = { type: 'text', text: 'PROPOSAL: change X to Y.' }
+    const s = scanSupervision([assistant([sed]), assistant([push]), assistant([proposal])], CWD)
+    assert.strictEqual(s.work, 3, 'sed -i / git push / a marked PROPOSAL must all count as work')
+    // Prove the classification directly too — sed is not in the exported writer lists
+    // (GIT_WRITE_SUBCOMMANDS / GH_MUTATING_VERBS / PKG_WRITE_VERBS), it is a dedicated branch in
+    // reviewGateTriggers.ts's segmentWriteReason, so this is not tautological.
+    assert.ok(commandWriteReason(`sed -i "" s/a/b/ ${CWD}/f.ts`, CWD) !== null, 'sed -i must classify as a write on its own')
+  })
+
+  test('a no-review sentinel counts as a review, like a fork — or the sentinel path would nag forever', () => {
+    const sentinel = { type: 'text', text: `${NO_REVIEW_SENTINEL} — rate-limited` }
+    const s = scanSupervision([assistant([edit]), assistant([sentinel])], CWD)
+    assert.strictEqual(s.unreviewed, 0, 'the sentinel must clear the backlog like a fork does')
+    assert.strictEqual(s.forks, 1)
   })
 })
 
@@ -107,7 +132,7 @@ suite('reviewSupervisor — warns without ever blocking', () => {
   })
 
   test('spawning a fork clears the backlog — the warning is actionable', () => {
-    const withFork = scanSupervision([assistant([edit]), assistant([edit]), assistant([edit]), assistant([fork])])
+    const withFork = scanSupervision([assistant([edit]), assistant([edit]), assistant([edit]), assistant([fork])], CWD)
     assert.strictEqual(withFork.unreviewed, 0)
     assert.strictEqual(judge(withFork, true, true).level, 'ok')
   })

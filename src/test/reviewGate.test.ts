@@ -7,7 +7,7 @@ import {
   scanMainTranscriptLines, decideMainGate, applyEffects,
   scanSubagentTranscriptLines, decideSubagentGate, agentCannotSpawn, declaredToolsHaveAgent,
   REVIEW_GATE_DIRECTIVE, ONE_TURN_RULE, mainBlockReason, scanPositions, hookCwd, SUBAGENT_BLOCK_REASON,
-  NO_REVIEW_SENTINEL, REVIEWER_AGENT_TYPES, runMainGate,
+  NO_REVIEW_SENTINEL, NO_REVIEW_SENTINEL_EXAMPLES, REVIEWER_AGENT_TYPES, runMainGate, runReviewGate,
 } from '../cli/reviewGate'
 
 // `agentlenspro review-gate` — pure decision-function tests, ported faithfully from
@@ -73,29 +73,34 @@ suite('reviewGate — main (Stop) gate', () => {
     assert.strictEqual(hookCwd({}), process.cwd())
   })
 
-  test('the block message names the actual arming cause — it said "edited or committed" for every cause', () => {
+  test('the block message names the actual arming cause and the scanned window, not "this turn"', () => {
     assert.ok(mainBlockReason('proposal text').includes('PROPOSAL'))
     assert.ok(!mainBlockReason('proposal text').includes('edited'))
     assert.ok(mainBlockReason('write-shaped command', 'git push').includes('git push'))
-    assert.ok(mainBlockReason('edit', 'Write y.md').startsWith('Review-fork gate: this turn edited a file: Write y.md. '))
+    assert.ok(!mainBlockReason('edit', 'Write y.md').includes('this turn'),
+      'the scan is over a bounded transcript TAIL, never "this turn" — matches reviewSupervisor\'s own care')
+    assert.strictEqual(
+      mainBlockReason('edit', 'Write y.md').startsWith(
+        'Review-fork gate: edited a file: Write y.md landed after the last review fork '
+        + '(scanned: the transcript\'s last 4 MB). '), true)
   })
 
   test('decideMainGate BLOCKS when the last edit is newer than the last fork', () => {
     const scan = { lastFork: 0, lastWork: 1 } // work happened AFTER the fork
-    const v = decideMainGate(scan, { total: 0, consecutive: 0 }, { maxPerSession: 20, maxConsecutive: 2 })
+    const v = decideMainGate(scan, { total: 0, consecutive: 0 })
     assert.strictEqual(v.block, true)
     assert.deepStrictEqual(v.nextState, { total: 1, consecutive: 1 })
   })
 
   test('decideMainGate ALLOWS when the fork is newer than (or ties) the last edit', () => {
     const scan = { lastFork: 1, lastWork: 0 } // fork happened AFTER the work
-    const v = decideMainGate(scan, { total: 3, consecutive: 1 }, { maxPerSession: 20, maxConsecutive: 2 })
+    const v = decideMainGate(scan, { total: 3, consecutive: 1 })
     assert.strictEqual(v.block, false)
     assert.deepStrictEqual(v.nextState, { total: 3, consecutive: 0 }, 'a landed fork resets the streak')
   })
 
   test('decideMainGate ALLOWS (no state change) when nothing was claimed this window', () => {
-    const v = decideMainGate({ lastFork: -1, lastWork: -1 }, { total: 5, consecutive: 0 }, { maxPerSession: 20, maxConsecutive: 2 })
+    const v = decideMainGate({ lastFork: -1, lastWork: -1 }, { total: 5, consecutive: 0 })
     assert.strictEqual(v.block, false)
     assert.strictEqual(v.nextState.total, 5)
   })
@@ -105,13 +110,13 @@ suite('reviewGate — main (Stop) gate', () => {
     // THE CONSECUTIVE BREAKER IS GONE (owner order 2026-09-03). It used to fail open here, which is
     // exactly how this session's gate went silent after two ignored demands and every later change
     // shipped unreviewed. The only way past is now a landed fork.
-    const v = decideMainGate(scan, { total: 2, consecutive: 2 }, { maxPerSession: 20, maxConsecutive: 2 })
+    const v = decideMainGate(scan, { total: 2, consecutive: 2 })
     assert.strictEqual(v.block, true, 'no give-up: keep demanding until a fork lands')
   })
 
   test('decideMainGate KEEPS BLOCKING past the old MAX_PER_SESSION — no give-up', () => {
     const scan = { lastFork: -1, lastWork: 0 }
-    const v = decideMainGate(scan, { total: 20, consecutive: 0 }, { maxPerSession: 20, maxConsecutive: 2 })
+    const v = decideMainGate(scan, { total: 20, consecutive: 0 })
     assert.strictEqual(v.block, true, 'the per-session cap is gone too')
   })
 
@@ -327,12 +332,12 @@ suite('reviewGate — subagent (SubagentStop) gate', () => {
   })
 
   test('decideSubagentGate SKIPS an empty agent_type (internal micro-lookups)', () => {
-    const v = decideSubagentGate('', true, { didWork: true, reviewed: false }, 0, 1)
+    const v = decideSubagentGate('', { didWork: true, reviewed: false })
     assert.strictEqual(v.block, false)
   })
 
   test('decideSubagentGate SKIPS a fork (the recursion guard)', () => {
-    const v = decideSubagentGate('fork', true, { didWork: true, reviewed: false }, 0, 1)
+    const v = decideSubagentGate('fork', { didWork: true, reviewed: false })
     assert.strictEqual(v.block, false)
   })
 
@@ -528,41 +533,32 @@ suite('reviewGate — subagent (SubagentStop) gate', () => {
       'no CLOSING fence ⇒ the body is not frontmatter ⇒ release, never wedge')
   })
 
-  test('decideSubagentGate IGNORES the OFF switch — it cannot be disabled', () => {
-    // enforceOn=false is the explicit OFF switch, no longer the default: the gate shipped
-    // observe-only-unless-`on`, nothing ever set `on`, and a subagent with one Write and no fork
-    // review was allowed live and on replay (TRDD-6QV50JNN). The default is now the main gate's.
-    // The OFF switch is ignored now: enforceOn is voided inside the gate, so passing false changes
-    // nothing. A subagent that did work and has not reviewed itself is always asked.
-    const v = decideSubagentGate('lean-worker', false, { didWork: true, reviewed: false }, 0, 1)
-    assert.strictEqual(v.block, true, 'the subagent OFF switch no longer disables the gate')
-  })
-
-  test('decideSubagentGate DEMANDS once for a worker that edited and has not reviewed itself', () => {
-    const v = decideSubagentGate('lean-worker', true, { didWork: true, reviewed: false }, 0, 1)
+  test('decideSubagentGate DEMANDS a worker that did work and has not reviewed itself', () => {
+    const v = decideSubagentGate('lean-worker', { didWork: true, reviewed: false })
     assert.strictEqual(v.block, true)
-    assert.strictEqual(v.nextDemands, 1)
   })
 
-  test('decideSubagentGate ALLOWS the second stop — the one-demand cap', () => {
-    // The per-agent demand cap was REMOVED (owner order 2026-09-03: "Not even for the subagents!").
-    // A worker that did work and has not reviewed itself is asked EVERY time it tries to return.
-    const v = decideSubagentGate('lean-worker', true, { didWork: true, reviewed: false }, 1, 1)
-    assert.strictEqual(v.block, true, 'the demand cap is gone: ask again, every time')
+  test('decideSubagentGate demands again on a repeat call with the same scan — no per-agent cap, no OFF switch (owner order 2026-09-03: "Not even for the subagents!")', () => {
+    // There is no enforcement switch and no per-agent demand cap left in the signature at all — a
+    // worker that did work and has not reviewed itself is asked EVERY time it tries to return, and
+    // there is no counter to exhaust that would ever change the answer.
+    const scan = { didWork: true, reviewed: false }
+    assert.strictEqual(decideSubagentGate('lean-worker', scan).block, true)
+    assert.strictEqual(decideSubagentGate('lean-worker', scan).block, true, 'identical input, still demanded')
   })
 
   test('decideSubagentGate ALLOWS a worker that already spawned its own reviewer', () => {
-    const v = decideSubagentGate('lean-worker', true, { didWork: true, reviewed: true }, 0, 1)
+    const v = decideSubagentGate('lean-worker', { didWork: true, reviewed: true })
     assert.strictEqual(v.block, false)
   })
 
   test('decideSubagentGate ALLOWS when the worker did no consequential work', () => {
-    const v = decideSubagentGate('lean-worker', true, { didWork: false, reviewed: false }, 0, 1)
+    const v = decideSubagentGate('lean-worker', { didWork: false, reviewed: false })
     assert.strictEqual(v.block, false)
   })
 
   test('decideSubagentGate ALLOWS when its own transcript could not be read (scan=null)', () => {
-    const v = decideSubagentGate('lean-worker', true, null, 0, 1)
+    const v = decideSubagentGate('lean-worker', null)
     assert.strictEqual(v.block, false)
   })
 })
@@ -637,8 +633,8 @@ suite('review-gate: the no-review sentinel', () => {
     ])
     assert.strictEqual(scan.reviewed, true, 'sentinel must set reviewed or the demand repeats forever')
     assert.deepStrictEqual(
-      decideSubagentGate('lean-worker', true, scan, 0, 1),
-      { block: false, nextDemands: 0 },
+      decideSubagentGate('lean-worker', scan),
+      { block: false },
     )
   })
 
@@ -649,7 +645,7 @@ suite('review-gate: the no-review sentinel', () => {
       assistantLine([{ type: 'text', text: 'I cannot spawn a reviewer, sorry.' }]),
     ])
     assert.strictEqual(scan.reviewed, false)
-    assert.strictEqual(decideSubagentGate('lean-worker', true, scan, 0, 1).block, true)
+    assert.strictEqual(decideSubagentGate('lean-worker', scan).block, true)
   })
 
   test('the main gate honours the sentinel as its last block', () => {
@@ -658,7 +654,7 @@ suite('review-gate: the no-review sentinel', () => {
       assistantLine([sentinelLine()]),
     ])
     assert.ok(scanPositions(scan).lastFork >= scanPositions(scan).lastWork, 'sentinel must satisfy the positional rule')
-    assert.strictEqual(decideMainGate(scanPositions(scan), { total: 0, consecutive: 0 }, { maxPerSession: 9, maxConsecutive: 9 }).block, false)
+    assert.strictEqual(decideMainGate(scanPositions(scan), { total: 0, consecutive: 0 }).block, false)
   })
 
   test('prose after the sentinel re-arms the main gate, exactly as prose after a fork does', () => {
@@ -666,7 +662,7 @@ suite('review-gate: the no-review sentinel', () => {
       assistantLine([sentinelLine()]),
       assistantLine([proposalBlock]),
     ])
-    assert.strictEqual(decideMainGate(scanPositions(scan), { total: 0, consecutive: 0 }, { maxPerSession: 9, maxConsecutive: 9 }).block, true)
+    assert.strictEqual(decideMainGate(scanPositions(scan), { total: 0, consecutive: 0 }).block, true)
   })
 
   test('a QUOTED sentinel does not release — a reviewer discussing the gate must not free its subject', () => {
@@ -704,7 +700,7 @@ suite('review-gate: the no-review sentinel', () => {
       assert.strictEqual(sub.reviewed, false, `sentinel-then-essay released the subagent gate: ${JSON.stringify(text.slice(0, 50))}`)
       const main = scanMainTranscriptLines([assistantLine([proposalBlock]), assistantLine([{ type: 'text', text }])])
       assert.strictEqual(
-        decideMainGate(scanPositions(main), { total: 0, consecutive: 0 }, { maxPerSession: 9, maxConsecutive: 9 }).block,
+        decideMainGate(scanPositions(main), { total: 0, consecutive: 0 }).block,
         true,
         `sentinel-then-essay released the main gate: ${JSON.stringify(text.slice(0, 50))}`,
       )
@@ -727,13 +723,25 @@ suite('review-gate: the no-review sentinel', () => {
     }
   })
 
+  test('the reason floor accepts every canonical example the gate\'s own message offers, and rejects a token like "foo"', () => {
+    // Adversarial review 2026-09-10: a proposed ">=12 chars AND a space" floor rejected two of the
+    // three examples the block message itself hands out ("rate-limited" has no space, "tool denied"
+    // is 11 chars) — a rejected sentinel leaves the agent that emitted it with no exit from the gate.
+    for (const reason of NO_REVIEW_SENTINEL_EXAMPLES) {
+      const scan = scanSubagentTranscriptLines([assistantLine([{ type: 'text', text: `${NO_REVIEW_SENTINEL} — ${reason}` }])])
+      assert.strictEqual(scan.reviewed, true, `canonical example reason rejected: ${JSON.stringify(reason)}`)
+    }
+    const scan = scanSubagentTranscriptLines([assistantLine([{ type: 'text', text: `${NO_REVIEW_SENTINEL} — foo` }])])
+    assert.strictEqual(scan.reviewed, false, '"foo" must not satisfy the reason floor')
+  })
+
   test('both block reasons tell the agent the escape exists — an unnamed exit is not an exit', () => {
     for (const [name, reason] of [['MAIN', MAIN_BLOCK_REASON], ['SUBAGENT', SUBAGENT_BLOCK_REASON]] as const) {
       assert.ok(reason.includes(NO_REVIEW_SENTINEL), `${name}_BLOCK_REASON omits the sentinel`)
     }
     assert.ok(
       !SUBAGENT_BLOCK_REASON.includes('asked once'),
-      'the "asked once" promise is false — maxDemands is voided, so nothing enforces it',
+      'the "asked once" promise is false — there is no per-agent demand cap, so nothing enforces it',
     )
   })
 
@@ -767,9 +775,9 @@ suite('review-gate: the recursion guard exempts reviewers and nothing else', () 
   const workScan = { didWork: true, reviewed: false }
 
   test('the adversarial reviewer is exempt, so reviewing never recurses', () => {
-    assert.strictEqual(decideSubagentGate('fork', true, workScan, 0, 1).block, false)
-    assert.strictEqual(decideSubagentGate('FORK', true, workScan, 0, 1).block, false, 'case-folded')
-    assert.strictEqual(decideSubagentGate('', true, workScan, 0, 1).block, false, 'unnamed micro-lookup class')
+    assert.strictEqual(decideSubagentGate('fork', workScan).block, false)
+    assert.strictEqual(decideSubagentGate('FORK', workScan).block, false, 'case-folded')
+    assert.strictEqual(decideSubagentGate('', workScan).block, false, 'unnamed micro-lookup class')
   })
 
   test('an agent that merely CONTAINS "fork" is NOT exempt — the substring test gave it a free pass', () => {
@@ -777,7 +785,7 @@ suite('review-gate: the recursion guard exempts reviewers and nothing else', () 
     // unreviewed for free. This test fails the moment the guard goes back to a substring match.
     for (const type of ['worktree-fork', 'fork-worker', 'wtfork', 'forklift', 'my-fork-agent']) {
       assert.strictEqual(
-        decideSubagentGate(type, true, workScan, 0, 1).block,
+        decideSubagentGate(type, workScan).block,
         true,
         `${type} was exempted by a substring match`,
       )
@@ -867,14 +875,13 @@ suite('review-gate: the recursion guard exempts reviewers and nothing else', () 
   // Both directions are needed: `block === false` alone is satisfied by a gate that never blocks,
   // which is the most dangerous mutation a review gate has.
   test('decideMainGate: equal indices release, work after the fork blocks', () => {
-    const opts = { maxPerSession: 20, maxConsecutive: 2 }
     const fresh = () => ({ total: 0, consecutive: 0 })
     assert.strictEqual(
-      decideMainGate({ lastWork: 4, lastFork: 4 }, fresh(), opts).block, false,
+      decideMainGate({ lastWork: 4, lastFork: 4 }, fresh()).block, false,
       'equal indices must RELEASE — the predicate is >=, not >',
     )
     assert.strictEqual(
-      decideMainGate({ lastWork: 4, lastFork: 3 }, fresh(), opts).block, true,
+      decideMainGate({ lastWork: 4, lastFork: 3 }, fresh()).block, true,
       'work after the fork must BLOCK — without this, a never-blocking gate passes',
     )
   })
@@ -885,10 +892,9 @@ suite('review-gate: the recursion guard exempts reviewers and nothing else', () 
   // mechanism is in the code regardless. This test asserts today's behaviour, so whoever changes it
   // must do so deliberately. (TRDD-W0ZTTUBA)
   test('decideMainGate fails OPEN on an empty window — pinned, not endorsed', () => {
-    const opts = { maxPerSession: 20, maxConsecutive: 2 }
     for (const lastFork of [-1, 7]) {
       assert.strictEqual(
-        decideMainGate({ lastWork: -1, lastFork }, { total: 0, consecutive: 0 }, opts).block, false,
+        decideMainGate({ lastWork: -1, lastFork }, { total: 0, consecutive: 0 }).block, false,
         `lastWork === -1 currently allows the stop (lastFork ${lastFork}); see TRDD-W0ZTTUBA`,
       )
     }
@@ -1009,5 +1015,30 @@ suite('reviewGate — runMainGate end to end (TRDD-9FG0LSPG)', () => {
     const transcript_path = writeActivityTranscript(forkIso, bashStartIso, bashEndIso)
     const out = await runMainGate({ transcript_path, cwd: repo, session_id: `e2e-${Date.now()}` })
     assert.strictEqual(out, null)
+  })
+})
+
+// ── the global kill-switch is named on stderr, never a silent allow (TRDD-2CYTNLY1) ──────────────
+suite('reviewGate — runReviewGate: the global kill-switch stderr line', () => {
+  test('AGENTLENS_DISABLED=1 allows the stop AND names which half of the switch fired', async () => {
+    const savedEnv = process.env.AGENTLENS_DISABLED
+    const writes: string[] = []
+    const originalWrite = process.stderr.write.bind(process.stderr)
+    process.stderr.write = ((chunk: unknown): boolean => {
+      writes.push(String(chunk))
+      return true
+    }) as typeof process.stderr.write
+    try {
+      process.env.AGENTLENS_DISABLED = '1'
+      const code = await runReviewGate([])
+      assert.strictEqual(code, 0)
+    } finally {
+      process.stderr.write = originalWrite
+      if (savedEnv === undefined) delete process.env.AGENTLENS_DISABLED
+      else process.env.AGENTLENS_DISABLED = savedEnv
+    }
+    const joined = writes.join('')
+    assert.ok(/\[review-gate\]/.test(joined), `no kill-switch line was written: ${JSON.stringify(writes)}`)
+    assert.ok(joined.includes('AGENTLENS_DISABLED=1'), `the line must name the env half, not "disabled by the owner": ${joined}`)
   })
 })

@@ -12,7 +12,7 @@
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
-import { agentlensDisabled } from './killSwitch'
+import { agentlensDisabled, killSwitchPath } from './killSwitch'
 import { readStdin } from './hookHandlers'
 import { commandWriteReason, isEphemeralTarget, textArms } from './reviewGateTriggers'
 import type { ArmCause } from './reviewGateTriggers'
@@ -63,6 +63,11 @@ export const ONE_TURN_RULE = 'Answer in ONE turn. Make ZERO tool calls — no Se
  *  Declared ABOVE the directive, which interpolates it: a `const` is in its TDZ until its line runs. */
 export const NO_REVIEW_SENTINEL = 'REVIEW-GATE: NO REVIEW POSSIBLE'
 
+/** Canonical example reasons, shared between the block-message prose and the sentinel-floor test
+ *  (`isNoReviewSentinel`) so the two can never drift apart — a message that offers an example the
+ *  predicate itself would reject wedges the very agent it is telling how to exit. */
+export const NO_REVIEW_SENTINEL_EXAMPLES = ['rate-limited', 'at a depth limit', 'tool denied'] as const
+
 export const REVIEW_GATE_DIRECTIVE = `# Review-fork gate directive (read on every Stop-hook fire)
 
 Spawn ONE adversarial reviewer with the Agent tool, \`subagent_type: "fork"\`, with a prompt that:
@@ -100,7 +105,7 @@ if it itself edits, writes or proposes. Whether to consume the fork in-turn inst
 under your own rules — some agents are forbidden to block, and this gate does not require it
 either way.
 
-If you CANNOT spawn one — rate-limited, at a depth limit, tool denied — a text block whose
+If you CANNOT spawn one — ${NO_REVIEW_SENTINEL_EXAMPLES.join(', ')} — a text block whose
 ENTIRE content is "${NO_REVIEW_SENTINEL} — <reason>", as the turn's last block, releases the
 gate. It is the only other exit.
 
@@ -289,7 +294,7 @@ export function agentCannotSpawn(
 }
 
 // Also describes a `user` entry's `tool_result` block.
-interface AssistantContentBlock {
+export interface AssistantContentBlock {
   type?: unknown
   name?: unknown
   // Present only on `type: 'text'` blocks. Read to recognize the no-review sentinel — the gate's
@@ -317,7 +322,7 @@ interface AssistantContentBlock {
  *  its findings (this file's own reviewers did), and a substring test would let that quotation
  *  release the agent under review. Nothing is stripped first, so `> SENTINEL` and `# SENTINEL`
  *  correctly fail — stripping the marker would be the very smuggling the anchor exists to stop. */
-function isNoReviewSentinel(text: string): boolean {
+export function isNoReviewSentinel(text: string): boolean {
   const t = text.replace(/^\s+/, '')
   if (!t.startsWith(NO_REVIEW_SENTINEL)) return false
   const [firstLine, ...tail] = t.slice(NO_REVIEW_SENTINEL.length).split('\n')
@@ -330,9 +335,14 @@ function isNoReviewSentinel(text: string): boolean {
   if (tail.some((line) => line.trim() !== '')) return false
   // Any of — : - is accepted as the separator, because an agent told to write an em-dash types a
   // hyphen often enough that keying the escape on punctuation would re-wedge an agent that obeyed
-  // in substance. The reason itself must survive stripping them: >=3 characters.
+  // in substance. The reason itself must survive stripping them and be at least 8 characters — a
+  // bound picked so every example the block message itself offers (`NO_REVIEW_SENTINEL_EXAMPLES`:
+  // "rate-limited", "at a depth limit", "tool denied") passes it, while a token like "foo" does
+  // not. Adversarial review 2026-09-10: a floor of ">=3 chars" let "foo" through, and a proposed
+  // ">=12 chars AND a space" rejected "rate-limited" (no space) and "tool denied" (11 chars) — a
+  // rejected sentinel leaves the agent that emitted it with no exit from the gate.
   const reason = firstLine.replace(/^[\s—:-]+/, '').trim()
-  return reason.length >= 3
+  return reason.length >= 8
 }
 
 interface TranscriptEntry {
@@ -393,7 +403,7 @@ function backgroundJobId(tool: string, text: string): string | null {
 
 /** The one arming block of a turn, and WHY. `null` from the editor branch means the edit landed
  *  under an ephemeral root (the scratchpad, reports/) and is not work. */
-function toolUseWork(b: AssistantContentBlock, cwd: string): { cause: ArmCause; detail: string } | null {
+export function toolUseWork(b: AssistantContentBlock, cwd: string): { cause: ArmCause; detail: string } | null {
   if (typeof b.name === 'string' && EDITORS.has(b.name)) {
     const file = String(b.input?.file_path ?? b.input?.notebook_path ?? '')
     return isEphemeralTarget(file, cwd) ? null : { cause: 'edit', detail: `${b.name} ${path.basename(file)}` }
@@ -411,16 +421,7 @@ export function hookCwd(input: ReviewGateInput): string {
 
 // ── MAIN AGENT GATE (Stop) ──────────────────────────────────────────────────────────────────────
 
-const MAIN_MAX_PER_SESSION_DEFAULT = 20
-const MAIN_MAX_CONSECUTIVE = 2
-
 interface MainBreakerState { total: number; consecutive: number }
-
-/** Read per-call so a live AGENTLENS_REVIEW_FORK_MAX change is honored. */
-export function mainGateMaxPerSession(): number {
-  const v = Number(process.env.AGENTLENS_REVIEW_FORK_MAX)
-  return v > 0 ? v : MAIN_MAX_PER_SESSION_DEFAULT
-}
 
 /** Read only the tail of a (possibly huge) transcript — the answer is always near the end. */
 export function readTranscriptTail(transcriptPath: string, maxBytes = 4 * 1024 * 1024): string[] | null {
@@ -585,7 +586,6 @@ export function applyEffects(scan: MainScan, fx: Effects): MainScan {
 export function decideMainGate(
   scan: { lastFork: number; lastWork: number },
   state: MainBreakerState,
-  opts: { maxPerSession: number; maxConsecutive: number },
 ): { block: boolean; nextState: MainBreakerState } {
   if (scan.lastWork === -1) return { block: false, nextState: state } // nothing claimed this window
   // `>=`, not `>`: two blocks CAN share an index when a harness writes one transcript entry per
@@ -611,23 +611,7 @@ export function decideMainGate(
   // above returns immediately. The caller ALSO applies `agentCannotSpawn` so an agent that has no
   // Agent tool is released rather than wedged — a capability check, not a give-up. That check was
   // missing from the main gate when this comment first claimed it (review finding G2).
-  // `opts` is retained for the tests that pin this behaviour and for callers still passing limits.
-  void opts
   return { block: true, nextState: { total: (state.total || 0) + 1, consecutive: (state.consecutive || 0) + 1 } }
-}
-
-function mainStatePath(key: string): string {
-  const safe = String(key).replace(/[^A-Za-z0-9]/g, '_').slice(-64)
-  return path.join(os.tmpdir(), `agentlens-review-fork-${safe}.json`)
-}
-function readMainState(p: string): MainBreakerState {
-  try { return JSON.parse(fs.readFileSync(p, 'utf8')) as MainBreakerState } catch { return { total: 0, consecutive: 0 } }
-}
-/** False when the breaker could not be persisted — the caller must then NOT block: a demand that
- *  cannot be counted is a demand repeated forever (review of dca6c45, F1: an unwritable tmpdir
- *  blocked every fire with `demands` stuck at 0). */
-function writeMainState(p: string, s: MainBreakerState): boolean {
-  try { fs.writeFileSync(p, JSON.stringify(s)); return true } catch { return false }
 }
 
 // The ONE-TURN rule lives HERE, in the text the agent reads on every single fire, because that is
@@ -647,7 +631,12 @@ export const ARM_CAUSE_TEXT: Record<MainArmCause, string> = {
  *  nothing was told it had, and could not tell which of its blocks to review. */
 export function mainBlockReason(cause: MainArmCause, detail = ''): string {
   const what = detail === '' ? ARM_CAUSE_TEXT[cause] : `${ARM_CAUSE_TEXT[cause]}: ${detail}`
-  return `Review-fork gate: this turn ${what}. ` + MAIN_BLOCK_DEMAND
+  // NAMES THE SCANNED WINDOW, NOT "THIS TURN" — the scan is over `readTranscriptTail`'s last 4 MB
+  // (see `readTranscriptTail`'s `maxBytes` default), not the current turn, so a long turn's
+  // earlier blocks can be outside the window. "this turn" claimed certainty the scan does not
+  // have; matches `reviewSupervisor.ts`'s own care about the identical overclaim.
+  return `Review-fork gate: ${what} landed after the last review fork `
+    + `(scanned: the transcript's last 4 MB). ` + MAIN_BLOCK_DEMAND
 }
 export const MAIN_BLOCK_DEMAND = 'Spawn ONE adversarial fork (Agent tool, subagent_type "fork"), and COPY '
   + 'THIS LINE VERBATIM INTO ITS PROMPT: "' + ONE_TURN_RULE + '" The fork cannot see this message, so a '
@@ -667,8 +656,8 @@ export const MAIN_BLOCK_DEMAND = 'Spawn ONE adversarial fork (Agent tool, subage
   // not an instruction. (TRDD-DRH4ZRGB)
   + 'put the fork tool_use LAST, in the SAME response as your user-visible text, after the turn\'s '
   + 'last edit, write-shaped command or PROPOSAL line — one of those after the fork re-arms this gate; '
-  + 'plain text after it does not. If you CANNOT spawn one — rate-limited, at a depth limit, tool '
-  + `denied — emit a text block whose ENTIRE content is "${NO_REVIEW_SENTINEL} — <reason>", nothing `
+  + `plain text after it does not. If you CANNOT spawn one — ${NO_REVIEW_SENTINEL_EXAMPLES.join(', ')} `
+  + `— emit a text block whose ENTIRE content is "${NO_REVIEW_SENTINEL} — <reason>", nothing `
   + 'after the reason; that is the only other way out.'
 
 // Exported for the end-to-end test in src/test/reviewGate.test.ts, whose mutation check is
@@ -690,15 +679,7 @@ export async function runMainGate(input: ReviewGateInput): Promise<string | null
   // write, or a fork-as-worker's own change never appears as a tool_use in THIS transcript, so
   // the transcript scan alone would release it unreviewed.
   const scan = applyEffects(rawScan, unreviewedEffects(cwd, rawScan.lastForkTs, { activity: rawScan.activity }))
-  const key = typeof input?.session_id === 'string' && input.session_id ? input.session_id : transcript
-  const statePath = mainStatePath(key)
-  const state = readMainState(statePath)
-  const verdict = decideMainGate(scanPositions(scan), state, { maxPerSession: mainGateMaxPerSession(), maxConsecutive: MAIN_MAX_CONSECUTIVE })
-  // Persist for observability only. The stored counters no longer gate anything, so a failed write
-  // must NOT skip the review: an unwritable tmpdir, a full disk or a chmod on the state file would
-  // otherwise be a silent bypass reachable by the very agent being constrained — the same class of
-  // escape as the env var just closed, and quieter (review finding G3).
-  if (verdict.nextState !== state) writeMainState(statePath, verdict.nextState)
+  const verdict = decideMainGate(scanPositions(scan), { total: 0, consecutive: 0 })
   // A block implies an arming block was found (`lastWork !== -1` ⇔ `work !== null`); the second
   // test only narrows the type, so the message can never name a cause the scan did not find.
   if (!verdict.block || scan.work === null) return null
@@ -714,10 +695,6 @@ export async function runMainGate(input: ReviewGateInput): Promise<string | null
 }
 
 // ── SUBAGENT GATE (SubagentStop) ───────────────────────────────────────────────────────────────
-
-const SUBAGENT_MAX_DEMANDS_PER_AGENT = 1
-
-interface SubagentState { demands: number }
 
 /** Agent types that ARE the adversarial reviewer and must never be reviewed themselves. Compared
  *  whole and case-folded — never as a substring, or every `*-fork-*` agent inherits the exemption.
@@ -747,9 +724,9 @@ export function scanSubagentTranscriptLines(lines: string[], cwd = process.cwd()
         // THE TERMINATOR. Without it the block is a LIVELOCK: the demand tells a subagent to state
         // its inability and return, but that statement is itself a `text` block, so it re-arms
         // `didWork` and the identical demand fires again over a strictly longer transcript. Every
-        // other brake on this path is gone by design (`enforceOn` and `maxDemands` are voided, the
-        // state write is explicitly not allowed to gate), so `reviewed` is the ONLY exit and until
-        // now the only way to set it was spawning a fork — impossible for an agent that has the
+        // other brake on this path is gone by design (no enforcement switch, no per-agent demand
+        // cap), so `reviewed` is the ONLY exit and until now the only way to set it was spawning a
+        // fork — impossible for an agent that has the
         // Agent tool but is out of turns, budget, or depth. The escape must therefore set the same
         // flag the fork sets.
         //
@@ -764,26 +741,22 @@ export function scanSubagentTranscriptLines(lines: string[], cwd = process.cwd()
         continue
       }
       if (b?.type !== 'tool_use') continue
-      if (b.name === 'Agent' && b.input?.subagent_type === 'fork') reviewed = true
+      // CASE-FOLDED, same as scanMainTranscriptLines — a subagent_type of "Fork" is still a fork.
+      if (b.name === 'Agent' && String(b.input?.subagent_type ?? '').trim().toLowerCase() === 'fork') reviewed = true
       else if (toolUseWork(b, cwd) !== null) didWork = true
     }
   }
   return { didWork, reviewed }
 }
 
-/** Pure decision: demand a review from a subagent at most once, and only when it (a) is not the
- *  reviewer itself (recursion guard on `agent_type`), (b) enforcement is armed
- *  (AGENTLENS_SUBAGENT_REVIEW=off disables it — ENFORCED by default, like the main gate;
- *  it shipped observe-only-unless-`on`, and since no hook environment ever set that, the
- *  subagent gate had never blocked once — TRDD-6QV50JNN), (c) its own transcript proves it did
- *  work and has not already reviewed itself, (d) it has not already been asked. */
+/** Pure decision: demand a review from a subagent, and only when it (a) is not the reviewer
+ *  itself (recursion guard on `agent_type`), (b) its own transcript proves it did work and has
+ *  not already reviewed itself. There is no enforcement switch and no per-agent demand cap — see
+ *  the "NOT BYPASSABLE" comment below. */
 export function decideSubagentGate(
   agentType: string,
-  enforceOn: boolean,
   scan: { didWork: boolean; reviewed: boolean } | null,
-  demands: number,
-  maxDemands: number,
-): { block: boolean; nextDemands: number } {
+): { block: boolean } {
   // THE RECURSION GUARD — a review fork is itself a subagent; reviewing it spawns a reviewer for
   // the reviewer. Empty type is the internal micro-lookup class — skipped for cost, and because an
   // agent that will not name itself cannot be told apart from a reviewer.
@@ -799,27 +772,13 @@ export function decideSubagentGate(
   // sentinel above is now a real exit — a reviewer this list failed to name can still terminate by
   // stating why. Before the sentinel existed, this narrowing would have been a livelock generator.
   if (agentType === '' || REVIEWER_AGENT_TYPES.has(agentType.trim().toLowerCase())) {
-    return { block: false, nextDemands: demands }
+    return { block: false }
   }
-  // NOT BYPASSABLE (owner order, 2026-09-03: "Not even for the subagents!"). `enforceOn` and the
-  // per-agent demand cap are both ignored: a subagent that did work and has not reviewed itself is
-  // asked EVERY time it tries to return, not once. The parameters stay in the signature so the
-  // existing callers and their tests keep compiling, and so the removal is visible here rather than
-  // silently absent.
-  void enforceOn; void maxDemands
-  if (!scan || !scan.didWork || scan.reviewed) return { block: false, nextDemands: demands }
-  return { block: true, nextDemands: demands + 1 }
-}
-
-function subagentStatePath(key: string): string {
-  const safe = String(key).replace(/[^A-Za-z0-9]/g, '_').slice(-64)
-  return path.join(os.tmpdir(), `agentlens-subagent-review-${safe}.json`)
-}
-function readSubagentState(p: string): SubagentState {
-  try { return JSON.parse(fs.readFileSync(p, 'utf8')) as SubagentState } catch { return { demands: 0 } }
-}
-function writeSubagentState(p: string, s: SubagentState): boolean {
-  try { fs.writeFileSync(p, JSON.stringify(s)); return true } catch { return false }
+  // NOT BYPASSABLE (owner order, 2026-09-03: "Not even for the subagents!"). There is no
+  // enforcement switch and no per-agent demand cap: a subagent that did work and has not reviewed
+  // itself is asked EVERY time it tries to return, not once.
+  if (!scan || !scan.didWork || scan.reviewed) return { block: false }
+  return { block: true }
 }
 
 function readSubagentScan(transcriptPath: string, cwd: string): { didWork: boolean; reviewed: boolean } | null {
@@ -834,9 +793,9 @@ export const SUBAGENT_BLOCK_REASON = 'Subagent review gate: before returning, sp
   + ONE_TURN_RULE + '" The fork cannot see this message, so a rule you do not paste into its prompt '
   + 'never reaches it. Run `agentlenspro review-gate --directive` for the full directive, then act '
   // The old tail promised "asked once" and told a wedged agent to "state that in one line and
-  // return". Both were false: `maxDemands` is voided so nothing enforces "once", and the statement
-  // is itself a text block, which re-arms `didWork` and reproduces the identical demand over a
-  // longer transcript — a LIVELOCK whose instructions were the trap. The sentinel is the fix: it
+  // return". Both were false: there is no per-agent cap, so nothing enforces "once", and the
+  // statement is itself a text block, which re-arms `didWork` and reproduces the identical demand
+  // over a longer transcript — a LIVELOCK whose instructions were the trap. The sentinel is the fix: it
   // is the one text a subagent can emit that sets `reviewed`, so complying now terminates.
   + 'on its findings. If you CANNOT spawn one — no Agent tool, rate-limited, at a depth limit — '
   + `then emit a text block whose ENTIRE content is "${NO_REVIEW_SENTINEL} — <reason>" and return; `
@@ -847,25 +806,11 @@ async function runSubagentGate(input: ReviewGateInput): Promise<string | null> {
   if (input?.stop_hook_active === true) return null
   const type = String(input?.agent_type ?? '')
   if (agentCannotSpawn(type)) return null
-  // Same polarity as the main gate's AGENTLENS_REVIEW_FORK: on unless explicitly `off`. Measured
-  // 2026-08-29: a subagent whose transcript held one Write and no fork review was allowed live AND
-  // on replay, solely because this read `=== 'on'` and nothing sets the variable (TRDD-6QV50JNN).
-  // Hardcoded true — the env switch is ignored, same reason as the main gate's above.
-  const enforceOn = true
   const own = input?.agent_transcript_path
   // `agent_transcript_path` is the subagent's OWN file — `transcript_path` names the PARENT's and
   // would measure the wrong agent entirely.
   const scan = typeof own === 'string' && fs.existsSync(own) ? readSubagentScan(own, hookCwd(input)) : null
-  const agentKey = typeof input?.agent_id === 'string' && input.agent_id
-    ? input.agent_id
-    : (typeof input?.session_id === 'string' && input.session_id ? input.session_id : 'unknown')
-  const statePath = subagentStatePath(agentKey)
-  const state = readSubagentState(statePath)
-  const verdict = decideSubagentGate(type, enforceOn, scan, state.demands, SUBAGENT_MAX_DEMANDS_PER_AGENT)
-  // Same rule as the main gate: an uncounted demand is never issued.
-  // Persist for observability only — the demand counter no longer gates anything, so a failed write
-  // must not skip the review (review finding G3: an unwritable tmpdir was a silent bypass).
-  writeSubagentState(statePath, { demands: verdict.nextDemands })
+  const verdict = decideSubagentGate(type, scan)
   if (!verdict.block) return null
   return JSON.stringify({ decision: 'block', suppressOutput: true, reason: SUBAGENT_BLOCK_REASON })
 }
@@ -883,8 +828,17 @@ export async function runReviewGate(argv: string[]): Promise<number> {
     return 0
   }
   // GLOBAL kill-switch, before stdin — mirrors runHookCommand('gate'): a disabled AgentlensPro
-  // must never block the user's work.
-  if (agentlensDisabled()) return 0
+  // must never block the user's work. Named on stderr, matching the four other silent-allow
+  // lines in this file — a silent bypass is exactly the failure class this gate exists to close
+  // (review finding G3). Names WHICH half fired rather than claiming it was "disabled by the
+  // owner": the env half can be set by anything in the process tree, not just a human act.
+  if (agentlensDisabled()) {
+    const half = process.env.AGENTLENS_DISABLED === '1'
+      ? 'env AGENTLENS_DISABLED=1'
+      : `the kill-switch flag file (${killSwitchPath()})`
+    process.stderr.write(`[review-gate] allowing UNREVIEWED: ${half} is set.\n`)
+    return 0
+  }
   const payload = await readStdin(process.stdin)
   // THE ENV KILL-SWITCH IS GONE (owner order, 2026-09-03: "it must NEVER BE STOPPED OR BYPASSED, no
   // matter what"). `AGENTLENS_REVIEW_FORK=off` and `AGENTLENS_SUBAGENT_REVIEW=off` are now ignored:

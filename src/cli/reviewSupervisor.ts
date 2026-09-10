@@ -20,23 +20,29 @@
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
-import { readTranscriptTail } from './reviewGate'
-
-/** Tool names whose use means the turn changed something a review would have caught. */
-const EDITORS = new Set(['Edit', 'Write', 'NotebookEdit'])
-const unquoted = (s: string): string => s.replace(/'[^']*'/g, '').replace(/"[^"]*"/g, '')
+import { readTranscriptTail, hookCwd, isNoReviewSentinel, toolUseWork } from './reviewGate'
+import type { AssistantContentBlock } from './reviewGate'
+import { textArms } from './reviewGateTriggers'
 
 export interface SupervisorScan {
-  /** Consequential actions (edits, commits) seen in the scanned window. */
+  /** Consequential actions (edits, write-shaped commands, marked proposals) seen in the window. */
   work: number
-  /** Adversarial review forks spawned in the same window. */
+  /** Adversarial review forks spawned, or a no-review sentinel emitted — either counts as this
+   *  window's review, so a legitimate "I cannot review" declaration does not nag forever. */
   forks: number
   /** Work items that appear AFTER the last fork — the unreviewed backlog. */
   unreviewed: number
 }
 
-/** Count work and forks over a transcript tail. Pure, so the thresholds are testable. */
-export function scanSupervision(lines: string[]): SupervisorScan {
+/** Count work and forks over a transcript tail. Pure, so the thresholds are testable.
+ *
+ *  USES THE GATE'S OWN WORK PREDICATE (`toolUseWork`/`textArms`, TRDD-2CYTNLY1) instead of
+ *  re-deriving it: this used to keep its own `EDITORS` set plus a bare `/\bgit\s+commit\b/`
+ *  regex, so it was silent on `sed -i`, `git push`, every other write-shaped Bash command the
+ *  gate already recognizes, and on a marked `PROPOSAL` text block — the exact drift a supervisor
+ *  whose job is to catch the gate going quiet must not itself have. `cwd` is the hook's, never
+ *  `process.cwd()`: `toolUseWork`'s Bash branch resolves relative write targets against it. */
+export function scanSupervision(lines: string[], cwd: string): SupervisorScan {
   let work = 0
   let forks = 0
   let unreviewed = 0
@@ -47,11 +53,22 @@ export function scanSupervision(lines: string[]): SupervisorScan {
     if (e?.type !== 'assistant') continue
     const content = e?.message?.content
     if (!Array.isArray(content)) continue
-    for (const b of content as Array<{ type?: string; name?: string; input?: { subagent_type?: unknown; command?: unknown } }>) {
+    for (const b of content as AssistantContentBlock[]) {
+      if (b?.type === 'text') {
+        const text = String(b.text ?? '')
+        // A no-review sentinel is a legitimate exit, not a proposal — treat it like a fork
+        // (clears the backlog) so the supervisor does not nag an agent that correctly declared
+        // it could not spawn a reviewer.
+        if (isNoReviewSentinel(text)) { forks++; unreviewed = 0; continue }
+        if (textArms(text)) { work++; unreviewed++ }
+        continue
+      }
       if (b?.type !== 'tool_use') continue
-      if (b.name === 'Agent' && b.input?.subagent_type === 'fork') { forks++; unreviewed = 0; continue }
-      if (typeof b.name === 'string' && EDITORS.has(b.name)) { work++; unreviewed++; continue }
-      if (b.name === 'Bash' && /\bgit\s+commit\b/.test(unquoted(String(b.input?.command ?? '')))) { work++; unreviewed++ }
+      // CASE-FOLDED, same as scanMainTranscriptLines/scanSubagentTranscriptLines.
+      if (b.name === 'Agent' && String(b.input?.subagent_type ?? '').trim().toLowerCase() === 'fork') {
+        forks++; unreviewed = 0; continue
+      }
+      if (toolUseWork(b, cwd) !== null) { work++; unreviewed++ }
     }
   }
   return { work, forks, unreviewed }
@@ -122,7 +139,15 @@ export function judge(scan: SupervisorScan, registered: boolean, transcriptReada
   return { level: 'ok', message: `review supervisor: ${scan.forks} review(s) for ${scan.work} change(s) in the scanned window, ${scan.unreviewed} unreviewed.` }
 }
 
-interface SupervisorInput { transcript_path?: unknown; session_id?: unknown; hook_event_name?: unknown; hookEventName?: unknown }
+interface SupervisorInput {
+  transcript_path?: unknown
+  session_id?: unknown
+  hook_event_name?: unknown
+  hookEventName?: unknown
+  /** The session's working directory — read via `hookCwd` (reviewGate.ts), never `process.cwd()`,
+   *  so relative write targets in `scanSupervision` resolve against the SESSION's cwd. */
+  cwd?: unknown
+}
 
 function settingsCascade(cwd: string): string[] {
   return [
@@ -170,7 +195,7 @@ export async function runReviewSupervisor(): Promise<number> {
   try { input = JSON.parse((await readStdin(process.stdin)).toString('utf8')) as SupervisorInput } catch { /* keep defaults */ }
   const transcript = typeof input?.transcript_path === 'string' ? input.transcript_path : ''
   const lines = transcript && fs.existsSync(transcript) ? readTranscriptTail(transcript) : null
-  const scan = lines ? scanSupervision(lines) : { work: 0, forks: 0, unreviewed: 0 }
+  const scan = lines ? scanSupervision(lines, hookCwd(input)) : { work: 0, forks: 0, unreviewed: 0 }
   const registered = gateIsRegistered(settingsCascade(process.cwd()), p => fs.readFileSync(p, 'utf8'))
   const verdict = judge(scan, registered, lines !== null)
   if (verdict.level === 'ok') return 0
