@@ -32,8 +32,7 @@ for a result that was 7 rows at every size. It degrades with store age rather th
 one, which is how it shipped.
 
 
-^ATOM-HH4J-3A09 [desc: "The fix is forEachInRange — a selective reader's peak memory follows what it KEEPS, not the window; unbounded query now 36s/184k calls, and one server owning the data dir means a per-tool OOM is a mac", keywords: forEachInRange_selective_reader loadRange_thin_wrapper peak_memory_follows_what_it_keeps window_cap_hides_accumulation one_server_owns_the_data_dir per-tool_memory_bug_is_machine-wide_outage tool_start_done_log_line wedged_handler_never_logs_completion OOM_uncatchable_v8_abort measured_after_168x_window_range, type: reference, ocd: 2026-09-10, lmd: 2026-09-10]
-
+^ATOM-HH4J-3A09 [desc: "The fix is forEachInRange — a selective reader's peak memory follows what it KEEPS, not the window; unbounded query now 36s/184k calls", keywords: forEachInRange_selective_reader loadRange_thin_wrapper peak_memory_follows_what_it_keeps window_cap_hides_accumulation one_server_owns_the_data_dir per-tool_memory_bug_is_machine-wide_outage tool_start_done_log_line wedged_handler_never_logs_completion OOM_uncatchable_v8_abort measured_after_168x_window_range, type: reference, ocd: 2026-09-10, lmd: 2026-09-10]
 Fix: the store exposes `forEachInRange(since, until, visit)` and `loadRange` is a thin wrapper over
 it, so a selective reader's peak memory follows what it KEEPS. Measured after, across a 168× window
 range: 69/121/147/170 MB; the unbounded query now completes in 36 s over 184,212 calls.
@@ -50,8 +49,7 @@ Three things worth carrying:
 
 
 
-^ATOM-PJAW-P8XT [desc:"The delete gate's read-back is served from the page cache, so it proved readability not durability; the fsync barrier is gated on whether the SOURCE was durable, and F_FULLFSYNC is unavailable in Node", keywords: is_the_parquet_part_actually_durable_before_we_delete_the_source verify_before_delete_page_cache does_fsync_guarantee_data_on_disk_macos F_FULLFSYNC_not_available_in_node reclaim_only_1_file_per_second duckdb_round_trips_per_file_in_the_delete_gate, type: project, ocd: 2026-08-12, lmd: 2026-09-10]
-
+^ATOM-PJAW-P8XT [desc: "The delete gate's read-back is served from the page cache, so it proved readability not durability; the fsync barrier is gated on whether the SOURCE was durable", keywords: is_the_parquet_part_actually_durable_before_we_delete_the_source verify_before_delete_page_cache does_fsync_guarantee_data_on_disk_macos F_FULLFSYNC_not_available_in_node reclaim_only_1_file_per_second duckdb_round_trips_per_file_in_the_delete_gate, type: project, ocd: 2026-08-12, lmd: 2026-09-10]
 **A read-back proves READABILITY, not DURABILITY — the page cache answers it.** The universal
 delete gate (`src/store/ingestPass.ts`) flushes Parquet, reconstructs each body FROM the store,
 compares sha256 against the source file's own bytes, and only then unlinks. That ordering is
@@ -67,8 +65,7 @@ safe. The spool back-pressure valve redirects INTO that SSD dir under pressure, 
 turned this from latent to live.
 
 
-^ATOM-K99N-LEXN [desc: "F_FULLFSYNC is false in Node on macOS (no guarantee past OS buffers); the delete gate's real bottleneck was ~2 DuckDB round trips per file — batched to ~15 round trips, and a missing body in the bulk ", keywords: F_FULLFSYNC_false_in_node fsync_not_a_power-loss_guarantee macos_drive_write_cache duckdb_round_trips_per_file throughput_bottleneck_not_flush_cadence batched_bulk_row_ts_query chunked_reconstruction_32_per_query missing_body_defaults_to_not-ok silently_dropped_row_cannot_authorize_delete 1_file_per_second_vs_80MB_min_inflow, type: project, ocd: 2026-09-10, lmd: 2026-09-10]
-
+^ATOM-K99N-LEXN [desc: "F_FULLFSYNC is false in Node on macOS (no guarantee past OS buffers); the delete gate's real bottleneck was ~2 DuckDB round trips per file — batched to ~15 round trips.", keywords: F_FULLFSYNC_false_in_node fsync_not_a_power-loss_guarantee macos_drive_write_cache duckdb_round_trips_per_file throughput_bottleneck_not_flush_cadence batched_bulk_row_ts_query chunked_reconstruction_32_per_query missing_body_defaults_to_not-ok silently_dropped_row_cannot_authorize_delete 1_file_per_second_vs_80MB_min_inflow, type: project, ocd: 2026-09-10, lmd: 2026-09-10]
 **`fs.constants.F_FULLFSYNC` is `false` in Node (verified empirically).** So on macOS pure Node
 cannot force the drive's own write cache to media — `fsync(2)` asks the OS to flush its buffers to
 the device, which is a real improvement over never asking, but not a guarantee against power loss
