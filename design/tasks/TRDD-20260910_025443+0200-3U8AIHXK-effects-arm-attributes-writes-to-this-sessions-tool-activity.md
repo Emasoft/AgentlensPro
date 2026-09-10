@@ -3,7 +3,7 @@ trdd-id: 3U8AIHXK
 title: The effects arm must attribute a write to this session's own tool activity before arming
 column: testing
 created: 2026-09-10T02:54:43+0200
-updated: 2026-09-10T03:41:48+0200
+updated: 2026-09-10T03:42:23+0200
 current-owner: main
 task-type: bugfix
 priority: critical
@@ -21,7 +21,7 @@ implementation-commits: [3f498995]
 
 # The effects arm must attribute a write to this session's own tool activity before arming
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-10 03:41
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-10 03:42
 
 Filed as TRDD-9FG0LSPG's EHT on four cross-session reports from peer session tldr-code-5c. The
 proposal was reviewed by an adversarial fork at filing (02:5x); six findings, all applied (the
@@ -74,7 +74,8 @@ nothing dirty or watched is newer except my own commits, so no non-session write
 since the bundle. WHEN that half can be observed: `sinceMs` is the last fork's timestamp and
 every fork-ended turn puts an earlier write below it at the next Stop, so the release half shows
 only at the Stop of a turn with NO fork after the write — a heartbeat turn whose stub spawned no
-background agent (a memory-chore spawn is a minutes-long open interval) — AND only once every
+background agent (a memory-chore spawn is an interval open until ITS notification lands, however
+long that takes) — AND only once every
 earlier background fork/agent's `<task-id>` notification has been DELIVERED to the transcript (a
 write in the gap between a fork's spawn and its notification sits inside `end = Infinity`, so that
 Stop BLOCKS and is not a pin-open bug), AND the write did not land during the stub itself (the
