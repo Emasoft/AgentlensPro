@@ -1,9 +1,9 @@
 ---
 trdd-id: 2CYTNLY1
 title: Delete the review gate's dead breakers and give the supervisor the gate's work definition
-column: testing
+column: ai_review
 created: 2026-09-09T14:38:59+0200
-updated: 2026-09-10T04:24:02+0200
+updated: 2026-09-10T04:30:05+0200
 current-owner: main
 task-type: refactor
 priority: medium
@@ -21,7 +21,7 @@ implementation-commits: [53a30222, 86abd4ef]
 
 # Delete the review gate's dead breakers and give the supervisor the gate's work definition
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-10 04:24
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-10 04:30
 
 Pulled `todo` → `dev` at 03:49 by the janitor keep-going resume, after TRDD-3U8AIHXK reached
 `testing`. The §Scope line numbers date from 2026-09-09 and are STALE since 3f498995 (the
@@ -86,8 +86,13 @@ same class as worker 1's. DEPLOYED: `node esbuild.js` exit 0 at 04:24, `standalo
 (0); the bare `agentlenspro review-gate --directive` runs (exit 0) but its directive text is
 unchanged by this card, so the bundle greps are the discriminator. Column →
 `testing`; the owner's kill-switch question stays OPEN in `## Approval log`.
-NEXT ACTION: peer session told `standalone/cli.js` changed → observe one live Stop block under
-`86abd4ef` whose message names the per-cause window → `ai_review`.
+LIVE (the Stop before 04:30:05, under the `86abd4ef` bundle): this session's Stop was blocked with
+"left unreviewed changes on disk: rust-core/crates/agentlens-core/src/burn/agent_gate.rs landed
+after the last review fork (scanned: files on disk newer than that fork)" — the TRDD-0D6QK5CW
+worker's edit, i.e. the DISK cause naming the disk window, not the transcript one. Peer session
+tldr-code-5c told `standalone/cli.js` changed. Column → `ai_review`.
+NEXT ACTION: `ai_review` — the owner's kill-switch question (`## Approval log`) is the one open
+item; the transcript-cause wording has an in-file test but no live observation yet.
 
 ## Why
 

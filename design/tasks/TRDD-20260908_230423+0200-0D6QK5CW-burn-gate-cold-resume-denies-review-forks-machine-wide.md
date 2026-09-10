@@ -24,8 +24,7 @@ relevant-rules: []
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-10 04:29
 
 Pulled `todo` → `dev` at 04:29 by the janitor keep-going resume, after TRDD-2CYTNLY1 reached
-`testing`; the review-hook session that filed it is this session's lineage, so the ownership
-note below is historical. Delegated to one lean-worker (no git, Edit tool only, NO deploy) with
+`testing`; pulled by this session — the ownership note below is superseded by this pull. Delegated to one lean-worker (no git, Edit tool only, NO deploy) with
 candidate 1 ONLY and these BRIEF AMENDMENTS from the adversarial review (binding): (i) the card's
 "FORK_STORM_FORMING already covers a cold fork" line is an ASSUMPTION, not a measurement — the
 worker records whether a first fork after a stall (`startsLast2min` < 2, or not `fat`) is exempt
@@ -35,7 +34,7 @@ shape in each core; (iii) answer candidate 3 by READING the code that feeds `sta
 (Rust `:697-716`, `:796`; the TS twin) — does a denied or warned launch still increment it — with
 no behaviour change; (iv) the "fresh agent still denied" assertion needs a coldResume fixture
 (StopFailure inside the window, no stallRecovered) — locate the file's helper or build the state
-its existing cold-resume tests use; red-first for both new tests. Anchors 04:30: TS
+its existing cold-resume tests use; red-first for both new tests. Anchors (grep at pull): TS
 COLD_RESUME deny `:355-363`, FORK_STORM `:372`; Rust COLD_RESUME `:415-426`, FORK_STORM `:433`.
 Acceptance row 3 (alcore rebuild + `codesign` + deploy + live measurement) is BLOCKED on the
 owner's explicit `go`/`no` for the alcore binary (TRDD-81BW1CS9); rows 1, 2 and 4 are not.
