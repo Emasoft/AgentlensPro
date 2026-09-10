@@ -83,7 +83,8 @@ setup/teardown (both delete the env and disarm the flag). Worker 2 self-reported
 one-liner batch edit before switching to the Edit tool (rule slip, result diff-verified) — the
 same class as worker 1's. DEPLOYED: `node esbuild.js` exit 0 at 04:24, `standalone/cli.js` carries
 `killSwitchHalf` (3 hits), the disk-window text (1) and no `agentlens-review-fork-` state name
-(0); the bare `agentlenspro review-gate --directive` prints the shared example list. Column →
+(0); the bare `agentlenspro review-gate --directive` runs (exit 0) but its directive text is
+unchanged by this card, so the bundle greps are the discriminator. Column →
 `testing`; the owner's kill-switch question stays OPEN in `## Approval log`.
 NEXT ACTION: peer session told `standalone/cli.js` changed → observe one live Stop block under
 `86abd4ef` whose message names the per-cause window → `ai_review`.

@@ -64,8 +64,9 @@ target.
       their subagent tokens for that worker's runtime — the cost stays bounded by the runtime.
       Measured 2026-09-10 on the second TRDD-2CYTNLY1 lean-worker (about six minutes of edits):
       four Stop blocks, four exit forks at 361,986 / 367,218 / 370,620 / 373,539 subagent tokens
-      (one of the four turns was also used for a card edit); the loop ended with the worker's
-      notification, as designed.
+      (one of the four turns was also used for a card edit); the worker-attributed blocks ended
+      with its notification, as designed (a fifth block that followed was this session's own
+      `$VAR`-prefixed redirect, not the worker).
 
 ## Approval log
 

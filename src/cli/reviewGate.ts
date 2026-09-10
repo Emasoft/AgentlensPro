@@ -579,7 +579,8 @@ export function applyEffects(scan: MainScan, fx: Effects): MainScan {
 }
 
 /** The rule: allow the stop iff the last fork spawn is NEWER than the last consequential action.
- *  Pure decision over an already-scanned transcript. NO BREAKER STATE — see below. */
+ *  Pure decision over an already-scanned transcript. NO BREAKER STATE — see the NO GIVE-UP
+ *  paragraph below. */
 export function decideMainGate(scan: { lastFork: number; lastWork: number }): { block: boolean } {
   if (scan.lastWork === -1) return { block: false } // nothing claimed this window
   // `>=`, not `>`: two blocks CAN share an index when a harness writes one transcript entry per
