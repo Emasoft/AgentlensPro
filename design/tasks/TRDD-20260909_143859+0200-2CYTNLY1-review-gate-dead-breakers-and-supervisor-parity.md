@@ -3,7 +3,7 @@ trdd-id: 2CYTNLY1
 title: Delete the review gate's dead breakers and give the supervisor the gate's work definition
 column: dev
 created: 2026-09-09T14:38:59+0200
-updated: 2026-09-10T03:54:30+0200
+updated: 2026-09-10T04:11:27+0200
 current-owner: main
 task-type: refactor
 priority: medium
@@ -16,12 +16,12 @@ related: [9FG0LSPG, 0E3W5C45]
 blocked-by: []
 npt: []
 eht: []
-implementation-commits: []
+implementation-commits: [53a30222]
 ---
 
 # Delete the review gate's dead breakers and give the supervisor the gate's work definition
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-10 03:53
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-10 04:11
 
 Pulled `todo` → `dev` at 03:49 by the janitor keep-going resume, after TRDD-3U8AIHXK reached
 `testing`. The §Scope line numbers date from 2026-09-09 and are STALE since 3f498995 (the
@@ -51,8 +51,29 @@ on the `sed -i` command is non-null and the `PROPOSAL` block starts a line; `dem
 `AGENTLENS_REVIEW_FORK_MAX` grepped across skills/docs/scripts before the exported
 `mainGateMaxPerSession` is deleted; the kill-switch stderr line names which HALF fired and never
 says "disabled by the owner".
-NEXT ACTION: worker report → verify the diff first-hand → run the check chain myself → commit
-→ `node esbuild.js` (the Stop hook runs the bundle) → `testing`.
+LANDED 04:09 as `53a30222` (worker report `reports/review-gate/20260910_040630+0200-2CYTNLY1-worker.md`;
+diff verified first-hand against all seven amendments; my own chain: tsc / check-types / eslint /
+check-mirrors / check-identities 0, the six suites 145 passing + 8 failing under a SCRATCH outDir
+and 23/23 for those same 8 from the project `out/` — the runner test resolves REPO_ROOT three dirs
+up from its compiled location, so a scratch outDir is the wrong harness for it and for the
+kill-switch LIFTED case; none of the 8 is real). NOT yet deployed (`node esbuild.js` pending).
+Post-write adversarial review 04:13 of that commit — three findings, all accepted, plus the
+reviewed follow-up, delegated to a second lean-worker at 04:15 as AMENDMENT 8: (i)
+`mainBlockReason` appends "(scanned: the transcript's last 4 MB)" to EVERY cause, but the
+`'unreviewed change'` cause comes from the mtime walk in `unreviewedEffects`, not the transcript
+tail — name the window per cause (disk: files newer than the last fork; transcript: last 4 MB),
+test both; (ii) neither case-fold (scanSubagentTranscriptLines, scanSupervision) has a test —
+reverting either passes 130/130; add one `subagent_type: 'Fork'` case per scanner and prove the
+mutation; (iii) the gate's stderr line duplicates `=== '1'` from `killSwitch.ts` — export ONE
+`killSwitchHalf()` there, used by `agentlensDisabled()` and the gate; (iv) as its OWN commit:
+`decideMainGate(scan)` → `{ block }`, `MainBreakerState`/`state`/`nextState` deleted (consumed only
+by the tmpdir persistence 53a30222 removed), the "no give-up" test titles KEPT with `block === true`
+so a reintroduced breaker still has a named test to break. `scripts/stop-spawn-review-fork.js`
+still reads `AGENTLENS_REVIEW_FORK_MAX` — a separate legacy script, out of scope, not deleted.
+NEXT ACTION: second worker's report → verify both diffs first-hand → chain (six suites: the four
+gate/supervisor files under a scratch outDir, runner + kill-switch from `out/` after
+`compile-tests`) → two commits by name → `node esbuild.js` + grep `killSwitchHalf` in
+`standalone/cli.js` → message the peer session that `standalone/cli.js` changed → `testing`.
 
 ## Why
 
