@@ -213,6 +213,25 @@ suite('agentGate — evaluateAgentGate (TRDD-GOD0108C)', () => {
     assert.strictEqual(fresh.code, 'COLD_RESUME_FANOUT')
   })
 
+  test('a fork storm forming under the cold-resume window is still denied, not shadowed by the fork exemption (TRDD-0D6QK5CW review of c3809f16)', () => {
+    const s = state({
+      lastStopFailureMs: NOW - 3 * 60_000, startsLast2min: 2,
+      parent: { contextTokens: 350_000, idleMs: 4_000_000 },
+    })
+    const d = evaluateAgentGate({ subagent_type: 'fork' }, s)
+    assert.strictEqual(d.decision, 'deny')
+    assert.strictEqual(d.code, 'FORK_STORM_FORMING')
+  })
+
+  test('a keep-warm fork under cold-resume gets pinger wording, not the COLD_RESUME_FANOUT fork-exemption wording', () => {
+    const s = state({ lastStopFailureMs: NOW - 3 * 60_000, startsLast2min: 1 })
+    const d = evaluateAgentGate({ subagent_type: 'fork', prompt: 'keep-warm ping' }, s)
+    assert.strictEqual(d.decision, 'warn')
+    assert.strictEqual(d.code, 'COLD_RESUME_FANOUT')
+    assert.ok(d.reason?.includes('keep-warm pinger allowed through COLD_RESUME_FANOUT'), d.reason ?? '')
+    assert.ok(!d.reason?.includes('This fork is allowed'), d.reason ?? '')
+  })
+
   test('a stall older than 10min disarms the cold-resume rule', () => {
     const d = evaluateAgentGate({}, state({ lastStopFailureMs: NOW - 11 * 60_000, startsLast2min: 2 }))
     assert.strictEqual(d.decision, 'allow')

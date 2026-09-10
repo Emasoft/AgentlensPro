@@ -114,6 +114,10 @@ const cases = [
   { name: 'cold-resume fanout deny own stall', fn: 'evaluateAgentGate', toolInput: {}, state: base({ lastStopFailureMs: NOW - 120_000, startsLast2min: 1, stall: { session: 'sess-caller-1', cwd: '/tmp/projA' } }) },
   // TRDD-0D6QK5CW: a fork under cold-resume warns instead of denying (same exemption as runaway).
   { name: 'cold-resume fork warns not denied', fn: 'evaluateAgentGate', toolInput: { subagent_type: 'fork', prompt: 'review the last commit' }, state: base({ lastStopFailureMs: NOW - 120_000, startsLast2min: 1, stall: { session: 'sess-caller-1', cwd: '/tmp/projA' } }) },
+  // TRDD-0D6QK5CW review of c3809f16: a real fork storm during the cold-resume window must still
+  // deny — the cold-resume fork exemption must not shadow FORK_STORM_FORMING.
+  { name: 'cold-resume fork storm still denied', fn: 'evaluateAgentGate', toolInput: { subagent_type: 'fork' }, state: base({ parent: { contextTokens: 350_000, idleMs: 4_000_000 }, lastStopFailureMs: NOW - 120_000, startsLast2min: 2, stall: { session: 'sess-caller-1', cwd: '/tmp/projA' } }) },
+  { name: 'cold-resume keepwarm fork not exempt', fn: 'evaluateAgentGate', toolInput: { subagent_type: 'fork', prompt: 'keep-warm ping' }, state: base({ lastStopFailureMs: NOW - 120_000, startsLast2min: 1, stall: { session: 'sess-caller-1', cwd: '/tmp/projA' } }) },
   { name: 'cold-resume disarmed by warm evidence', fn: 'evaluateAgentGate', toolInput: {}, state: base({ lastStopFailureMs: NOW - 120_000, startsLast2min: 1, stall: { session: 'sess-caller-1', cwd: '/tmp/projA' }, stallRecovered: true }) },
   { name: 'cold-resume foreign stall unnamed', fn: 'evaluateAgentGate', toolInput: {}, state: base({ lastStopFailureMs: NOW - 540_000, startsLast2min: 2, stall: { session: 'zzz-other', cwd: '/tmp/elsewhere' } }) },
   { name: 'cold-resume stall via worktree session match', fn: 'evaluateAgentGate', toolInput: {}, state: base({ lastStopFailureMs: NOW - 60_000, startsLast2min: 1, stall: { session: 'sess-caller-1', cwd: '/tmp/projA/.claude/worktrees/x' } }) },

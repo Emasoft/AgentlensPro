@@ -352,6 +352,25 @@ export function evaluateAgentGate(
       `${runawayBase} Let the in-flight wave settle, then relaunch this agent ` +
       `(retry in ~60s is usually enough). Override: AGENTLENS_GATE=off.`)
   }
+  // CC ≥2.1.229 performs the "warm the cache with ONE agent first" remedy itself for WORKFLOW
+  // same-prefix siblings (stagger; CLAUDE_CODE_WORKFLOW_PREFIX_STAGGER_MS=0 disables). Staggered
+  // siblings arrive warm and never satisfy `cold`, so this deny keeps firing only on launches that
+  // still storm: parallel Agent-tool forks in one message, a disabled stagger, or an older CC
+  // (TRDD-0YG37FXM).
+  // TRDD-0D6QK5CW review of c3809f16: this MUST precede the COLD_RESUME_FANOUT block below — that
+  // block's fork exemption is unconditional on startsLast2min, so it would shadow this deny for
+  // every fork in the 10-min cold-resume window, letting a real fork storm through as a mere warn.
+  if (fork && fat && cold && state.startsLast2min >= 2) {
+    const kinds = fmtOwnAgentTypes(state)
+    return deny('FORK_STORM_FORMING',
+      `AgentLens burn-gate: fork of a ~${parentK}-token parent into a COLD cache (idle ${idleMin}min > its ` +
+      // Same split as RUNAWAY_FANOUT: the COUNT is machine-wide (the cache this guards is shared),
+      // the KINDS are own-project only — so label the parenthetical, or the two read as one
+      // population and the message attributes other projects' launches to the caller.
+      `${ttlPhrase(ttl)}) with ${state.startsLast2min} launches already in 2min${kinds ? ` (from this project: ${kinds})` : ''} — a fork ` +
+      `storm is forming; each fork re-pays the full parent prefix at the cache-WRITE rate. Warm the cache with ` +
+      `ONE agent first, or compact the parent before fanning out. Retry in ~60s. Override: AGENTLENS_GATE=off.`)
+  }
   if (coldResume && state.startsLast2min >= 1) {
     const stallWho = fmtStallOrigin(state)
     // The TTL here is the SUBAGENT tier (module note above): the launches this rule holds back
@@ -379,22 +398,6 @@ export function evaluateAgentGate(
       `${coldResumeBase} ` +
       `Every further agent launched before it lands re-pays the full prefix at the write rate. ` +
       `Retry this launch in ~60s. Override: AGENTLENS_GATE=off.`)
-  }
-  // CC ≥2.1.229 performs the "warm the cache with ONE agent first" remedy itself for WORKFLOW
-  // same-prefix siblings (stagger; CLAUDE_CODE_WORKFLOW_PREFIX_STAGGER_MS=0 disables). Staggered
-  // siblings arrive warm and never satisfy `cold`, so this deny keeps firing only on launches that
-  // still storm: parallel Agent-tool forks in one message, a disabled stagger, or an older CC
-  // (TRDD-0YG37FXM).
-  if (fork && fat && cold && state.startsLast2min >= 2) {
-    const kinds = fmtOwnAgentTypes(state)
-    return deny('FORK_STORM_FORMING',
-      `AgentLens burn-gate: fork of a ~${parentK}-token parent into a COLD cache (idle ${idleMin}min > its ` +
-      // Same split as RUNAWAY_FANOUT: the COUNT is machine-wide (the cache this guards is shared),
-      // the KINDS are own-project only — so label the parenthetical, or the two read as one
-      // population and the message attributes other projects' launches to the caller.
-      `${ttlPhrase(ttl)}) with ${state.startsLast2min} launches already in 2min${kinds ? ` (from this project: ${kinds})` : ''} — a fork ` +
-      `storm is forming; each fork re-pays the full parent prefix at the cache-WRITE rate. Warm the cache with ` +
-      `ONE agent first, or compact the parent before fanning out. Retry in ~60s. Override: AGENTLENS_GATE=off.`)
   }
 
   // ── warn tier: real cost, but a single launch is a legitimate choice ─────────

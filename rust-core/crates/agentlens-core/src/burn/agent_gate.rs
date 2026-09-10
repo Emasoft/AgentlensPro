@@ -412,6 +412,27 @@ warm-up this rule is protecting — denying it would cause the cold cache it pre
         );
     }
     let starts120 = f(state, "startsLast2min").unwrap_or(0.0);
+    // CC ≥2.1.229 performs the "warm the cache with ONE agent first" remedy itself for WORKFLOW
+    // same-prefix siblings (stagger), so this deny keeps firing only on launches that still
+    // storm: parallel Agent-tool forks in one message, a disabled stagger, or an older CC.
+    // TRDD-0D6QK5CW review of c3809f16: this MUST precede the COLD_RESUME_FANOUT block below —
+    // that block's fork exemption is unconditional on starts120, so it would shadow this deny for
+    // every fork in the 10-min cold-resume window, letting a real fork storm through as a warn.
+    if fork && fat && cold && starts120 >= 2.0 {
+        let kinds = fmt_own_agent_types(state);
+        // Same split as RUNAWAY_FANOUT: the COUNT is machine-wide, the KINDS are own-project
+        // only — the labeled parenthetical keeps the two populations from reading as one.
+        let kinds_clause = if kinds.is_empty() { String::new() } else { format!(" (from this project: {kinds})") };
+        return deny(
+            "FORK_STORM_FORMING",
+            format!(
+                "AgentLens burn-gate: fork of a ~{parent_k}-token parent into a COLD cache (idle {}min > its {}) with {} launches already in 2min{kinds_clause} — a fork storm is forming; each fork re-pays the full parent prefix at the cache-WRITE rate. Warm the cache with ONE agent first, or compact the parent before fanning out. Retry in ~60s. Override: AGENTLENS_GATE=off.",
+                fmt_js_num(idle_min.unwrap_or(f64::NAN)),
+                ttl_phrase_v(ttl),
+                fmt_js_num(starts120)
+            ),
+        );
+    }
     if cold_resume && starts120 >= 1.0 {
         let stall_who = fmt_stall_origin(state);
         // The TTL here is the SUBAGENT tier: the launches this rule holds back are fresh agent
@@ -436,24 +457,6 @@ warm-up this rule is protecting — denying it would cause the cold cache it pre
             "COLD_RESUME_FANOUT",
             format!(
                 "{cold_resume_base} Every further agent launched before it lands re-pays the full prefix at the write rate. Retry this launch in ~60s. Override: AGENTLENS_GATE=off."
-            ),
-        );
-    }
-    // CC ≥2.1.229 performs the "warm the cache with ONE agent first" remedy itself for WORKFLOW
-    // same-prefix siblings (stagger), so this deny keeps firing only on launches that still
-    // storm: parallel Agent-tool forks in one message, a disabled stagger, or an older CC.
-    if fork && fat && cold && starts120 >= 2.0 {
-        let kinds = fmt_own_agent_types(state);
-        // Same split as RUNAWAY_FANOUT: the COUNT is machine-wide, the KINDS are own-project
-        // only — the labeled parenthetical keeps the two populations from reading as one.
-        let kinds_clause = if kinds.is_empty() { String::new() } else { format!(" (from this project: {kinds})") };
-        return deny(
-            "FORK_STORM_FORMING",
-            format!(
-                "AgentLens burn-gate: fork of a ~{parent_k}-token parent into a COLD cache (idle {}min > its {}) with {} launches already in 2min{kinds_clause} — a fork storm is forming; each fork re-pays the full parent prefix at the cache-WRITE rate. Warm the cache with ONE agent first, or compact the parent before fanning out. Retry in ~60s. Override: AGENTLENS_GATE=off.",
-                fmt_js_num(idle_min.unwrap_or(f64::NAN)),
-                ttl_phrase_v(ttl),
-                fmt_js_num(starts120)
             ),
         );
     }
