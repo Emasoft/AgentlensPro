@@ -3,7 +3,7 @@ trdd-id: GG0WOHEV
 title: A background worker's open interval makes the review gate demand one fork per write-then-Stop cycle
 column: backburner
 created: 2026-09-10T03:58:08+0200
-updated: 2026-09-10T04:04:39+0200
+updated: 2026-09-10T04:24:02+0200
 current-owner: main
 task-type: spike
 priority: low
@@ -60,8 +60,12 @@ target.
 
 ## Acceptance
 
-- [ ] On the next delegated background worker, record on this card the count of exit forks and
+- [x] On the next delegated background worker, record on this card the count of exit forks and
       their subagent tokens for that worker's runtime — the cost stays bounded by the runtime.
+      Measured 2026-09-10 on the second TRDD-2CYTNLY1 lean-worker (about six minutes of edits):
+      four Stop blocks, four exit forks at 361,986 / 367,218 / 370,620 / 373,539 subagent tokens
+      (one of the four turns was also used for a card edit); the loop ended with the worker's
+      notification, as designed.
 
 ## Approval log
 

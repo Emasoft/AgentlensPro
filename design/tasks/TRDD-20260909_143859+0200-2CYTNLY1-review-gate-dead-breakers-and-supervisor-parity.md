@@ -1,9 +1,9 @@
 ---
 trdd-id: 2CYTNLY1
 title: Delete the review gate's dead breakers and give the supervisor the gate's work definition
-column: dev
+column: testing
 created: 2026-09-09T14:38:59+0200
-updated: 2026-09-10T04:11:27+0200
+updated: 2026-09-10T04:24:02+0200
 current-owner: main
 task-type: refactor
 priority: medium
@@ -16,12 +16,12 @@ related: [9FG0LSPG, 0E3W5C45]
 blocked-by: []
 npt: []
 eht: []
-implementation-commits: [53a30222]
+implementation-commits: [53a30222, 86abd4ef]
 ---
 
 # Delete the review gate's dead breakers and give the supervisor the gate's work definition
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-10 04:11
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-10 04:24
 
 Pulled `todo` → `dev` at 03:49 by the janitor keep-going resume, after TRDD-3U8AIHXK reached
 `testing`. The §Scope line numbers date from 2026-09-09 and are STALE since 3f498995 (the
@@ -57,7 +57,7 @@ check-mirrors / check-identities 0, the six suites 145 passing + 8 failing under
 and 23/23 for those same 8 from the project `out/` — the runner test resolves REPO_ROOT three dirs
 up from its compiled location, so a scratch outDir is the wrong harness for it; the kill-switch
 LIFTED case also passed from `out/` — mechanism not established; none of the 8 reproduced there).
-NOT yet deployed (`node esbuild.js` pending). Post-write adversarial review of that commit —
+Post-write adversarial review of that commit —
 three findings, all accepted, plus the reviewed follow-up, delegated to a second lean-worker in
 the same turn as this STATE edit, as AMENDMENT 8: (i)
 `mainBlockReason` appends "(scanned: the transcript's last 4 MB)" to EVERY cause, but the
@@ -71,10 +71,22 @@ mutation; (iii) the gate's stderr line duplicates `=== '1'` from `killSwitch.ts`
 by the tmpdir persistence 53a30222 removed), the "no give-up" test titles KEPT with `block === true`
 so a reintroduced breaker still has a named test to break. `scripts/stop-spawn-review-fork.js`
 still reads `AGENTLENS_REVIEW_FORK_MAX` — a separate legacy script, out of scope, not deleted.
-NEXT ACTION: second worker's report → verify both diffs first-hand → chain (six suites: the four
-gate/supervisor files under a scratch outDir, runner + kill-switch from `out/` after
-`compile-tests`) → two commits by name → `node esbuild.js` + grep `killSwitchHalf` in
-`standalone/cli.js` → message the peer session that `standalone/cli.js` changed → `testing`.
+AMENDMENT 8 LANDED as `86abd4ef` — ONE commit, not two: the group-B hunks interleave with group A
+in `reviewGate.ts` and its test and this harness has no interactive staging (deviation from the
+review's "own commit"; the message separates the four items). Verified first-hand:
+`killSwitchHalf` is the single truth (env precedence pinned by a test), the window text is per
+cause with a negative assertion on the disk cause, both case-fold tests present,
+`decideMainGate(scan)` with the no-give-up titles kept; my chain 133/133 (four gate/supervisor
+suites, scratch outDir) + 24/24 (runner + kill-switch from `out/`), tsc / check-types / eslint /
+check-mirrors / check-identities 0. The kill-switch test's end state is cleared by the suite's own
+setup/teardown (both delete the env and disarm the flag). Worker 2 self-reported one Python
+one-liner batch edit before switching to the Edit tool (rule slip, result diff-verified) — the
+same class as worker 1's. DEPLOYED: `node esbuild.js` exit 0 at 04:24, `standalone/cli.js` carries
+`killSwitchHalf` (3 hits), the disk-window text (1) and no `agentlens-review-fork-` state name
+(0); the bare `agentlenspro review-gate --directive` prints the shared example list. Column →
+`testing`; the owner's kill-switch question stays OPEN in `## Approval log`.
+NEXT ACTION: peer session told `standalone/cli.js` changed → observe one live Stop block under
+`86abd4ef` whose message names the per-cause window → `ai_review`.
 
 ## Why
 
@@ -148,18 +160,20 @@ verified against the live source, not restated from memory.
 
 ## Acceptance
 
-- [ ] `pnpm run check-types` and `npx eslint src/cli/reviewGate.ts src/cli/reviewSupervisor.ts src/cli/killSwitch.ts --quiet` both exit 0.
-- [ ] The three existing review-gate mocha files (`src/test/reviewGate.test.ts`,
+- [x] `pnpm run check-types` and `npx eslint src/cli/reviewGate.ts src/cli/reviewSupervisor.ts src/cli/killSwitch.ts --quiet` both exit 0 (run at 53a30222 and 86abd4ef).
+- [x] The three existing review-gate mocha files (`src/test/reviewGate.test.ts`,
       `src/test/reviewGateTriggers.test.ts`, `src/test/reviewGateEffects.test.ts`) still pass —
       107 `test(` cases in those three as of 3f498995 (89 when this row was written); also run
       `reviewSupervisor.test.ts` (20), `reviewSupervisorRunner.test.ts` (7) and
-      `killSwitch.test.ts` (16), counted 03:54 by grep, not by a mocha run.
-- [ ] One new `reviewSupervisor.test.ts` case proves `scanSupervision` now counts a `sed -i`
+      `killSwitch.test.ts` (16), counted 03:54 by grep, not by a mocha run. Run at 86abd4ef:
+      133 passing across the four gate/supervisor suites (scratch outDir), 24 passing for runner +
+      kill-switch from the project `out/` (the runner resolves REPO_ROOT from its compiled path).
+- [x] One new `reviewSupervisor.test.ts` case proves `scanSupervision` now counts a `sed -i`
       command and a `git push` command as work — parity with the gate's own `commandWriteReason`
       — on a fixture turn neither the old regex nor the old `EDITORS` set would have caught.
-- [ ] No behaviour change to the gate's block/allow decision on the existing test corpus — this
+- [x] No behaviour change to the gate's block/allow decision on the existing test corpus — this
       is dead-code removal and a supervisor parity fix, not a new enforcement rule.
-- [ ] The kill-switch stderr line lands (item 1), asserted by a mocha case that captures
+- [x] The kill-switch stderr line lands (item 1), asserted by a mocha case that captures
       `process.stderr.write` under `AGENTLENS_DISABLED=1` — on screen it is debug-log only, since
       a Stop hook's stderr on exit 0 is not surfaced to the model or the user (INFERRED from the
       hooks contract, not measured); item 2 stays an open question recorded in this card's
