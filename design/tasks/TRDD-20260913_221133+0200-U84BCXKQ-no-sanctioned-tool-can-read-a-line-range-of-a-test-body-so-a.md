@@ -3,7 +3,7 @@ trdd-id: U84BCXKQ
 title: No sanctioned tool can read a line range of a test body so assertions cannot be verified
 column: todo
 created: 2026-09-13T22:11:33+0200
-updated: 2026-09-13T22:11:33+0200
+updated: 2026-09-13T22:35:12+0200
 current-owner: emanuelesabetta
 created-by: emanuelesabetta
 task-type: infra
@@ -14,6 +14,7 @@ mandated-by: none
 approved: true
 approval-judge: emanuelesabetta
 approval-datetime: 2026-09-13T22:11:33+0200
+priority: low
 ---
 
 # No sanctioned tool can read a line range of a test body so assertions cannot be verified
@@ -52,3 +53,8 @@ The project's own review discipline requires distinguishing a test that guards f
 ## Approval log
 
 - 2026-09-13T22:11:33+0200 — MANDATE issued by emanuelesabetta (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+
+## AMENDMENT 2026-09-13 — a sanctioned route DOES exist and the body overstates the gap
+
+The body lists every failed route accurately, but its conclusion is too strong. A SANCTIONED route exists and was in the rules the whole time: the tldr/fastedit rule already prescribes copying the file to a .txt and reading that — it is written there for reconstructing a body before a --replace, and it works identically for reading a test assertion. Used it 2026-09-13: cp the test file to a scratch .txt, grep for the symbol, sed the line range. Read the deferIntervals guard in full and confirmed it is NOT vacuous. So this card is NOT a blocker, and TRDD-4J1QA18G's open verification item is PERFORMABLE — it was discharged the same evening the gap was carded.
+WHAT REMAINS TRUE and still worth fixing: there is no DIRECT verb — no 'tldr lines FILE START END' — so the route is a copy-then-read workaround rather than a first-class read, and tldr slice still refuses the synthetic test: names that tldr structure itself emits. Both are real ergonomics defects. Downgrade this from 'assertions cannot be verified' to 'verifying an assertion requires a copy-to-scratch detour that the toolchain should not need'. The failure that actually cost time was RECALL, not capability: the workaround was in a rule already loaded in context and was not remembered across an evening of hitting the wall. That belongs in memory as a recall lesson, not here as a capability gap.
