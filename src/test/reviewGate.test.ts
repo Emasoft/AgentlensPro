@@ -668,9 +668,9 @@ suite('reviewGate — both role rules reach both agents', () => {
   })
 })
 
-// ── forkRole / resultRole — two-role identification (owner spec 2026-09-13) ───────────────────────
-suite('reviewGate — forkRole / resultRole: two-role identification', () => {
-  test('forkRole: exactly one ROLE marker credits that role; both or neither credits neither', () => {
+// ── creditRoleLoose / resultRole — two-role identification (owner spec 2026-09-13) ───────────────────────
+suite('reviewGate — creditRoleLoose / resultRole: two-role identification', () => {
+  test('creditRoleLoose: exactly one ROLE marker credits that role; both or neither credits neither', () => {
     assert.strictEqual(creditRoleLoose('ROLE: MEASURE\ndo the thing'), 'measure')
     assert.strictEqual(creditRoleLoose('ROLE: REVIEW\ndo the thing'), 'review')
     assert.strictEqual(creditRoleLoose('ROLE: MEASURE\nROLE: REVIEW\n'), null, 'both markers ⇒ null')
@@ -690,15 +690,15 @@ suite('reviewGate — forkRole / resultRole: two-role identification', () => {
     assert.strictEqual(resultRole(`no ${MEASURE_HEADING} was produced this turn`), null, 'a mid-sentence mention is not an anchored heading')
   })
 
-// -- declaredRole: the EXEMPTION predicate, stricter than forkRole (owner correction 2026-09-13) --
+// -- exemptRoleStrict: the EXEMPTION predicate, stricter than creditRoleLoose (owner correction 2026-09-13) --
 //
-// forkRole CREDITS loosely (no trailing `$`) so an honest reviewer with trailing whitespace is
-// still credited. declaredRole EXEMPTS an agent from being reviewed at all, so a miss must leave
-// it gated -- it restores the `$` anchor forkRole deliberately dropped, and matches the marker
+// creditRoleLoose CREDITS loosely (no trailing `$`) so an honest reviewer with trailing whitespace is
+// still credited. exemptRoleStrict EXEMPTS an agent from being reviewed at all, so a miss must leave
+// it gated -- it restores the `$` anchor creditRoleLoose deliberately dropped, and matches the marker
 // as a WHOLE LINE anywhere in the prompt (not the first line: measured 2026-09-13, the harness
 // PREPENDS boilerplate ahead of a fork's own `ROLE: ...` line, so a first-line rule matched
 // nothing and every roled agent was gated -- the exact regress this predicate exists to prevent).
-suite('reviewGate -- declaredRole: the exemption predicate is stricter than forkRole', () => {
+suite('reviewGate -- exemptRoleStrict: the exemption predicate is stricter than creditRoleLoose', () => {
   test('a bare ROLE line anywhere in the prompt is credited, trailing whitespace or \\r tolerated', () => {
     assert.strictEqual(exemptRoleStrict('ROLE: MEASURE'), 'measure')
     assert.strictEqual(exemptRoleStrict('ROLE: REVIEW'), 'review')
@@ -721,7 +721,7 @@ suite('reviewGate -- declaredRole: the exemption predicate is stricter than fork
     assert.strictEqual(exemptRoleStrict('Here is the protocol:\nROLE: REVIEW\nThat is what it looks like.'), 'review')
   })
 
-  test('property: declaredRole is a strict subset of forkRole -- strict implies loose, and they agree', () => {
+  test('property: exemptRoleStrict is a strict subset of creditRoleLoose -- strict implies loose, and they agree', () => {
     const prompts = [
       'ROLE: MEASURE', 'ROLE: REVIEW', 'ROLE: MEASURE\ndo the thing', 'ROLE: REVIEW\ndo the thing',
       'ROLE: REVIEW \r\ndo the thing', 'some preamble\n\nROLE: MEASURE\ndo the thing',
@@ -737,7 +737,7 @@ suite('reviewGate -- declaredRole: the exemption predicate is stricter than fork
     }
   })
 
-  test('MUTATION CHECK: dropping the $ anchor (forkRoles own regex) must let the trailing-prose hole back in', () => {
+  test('MUTATION CHECK: dropping the $ anchor from the creditRoleLoose regex must let the trailing-prose hole back in', () => {
     const withoutAnchor = (prompt: string): 'measure' | 'review' | null => {
       const m = /^ROLE: MEASURE/m.test(prompt)
       const r = /^ROLE: REVIEW/m.test(prompt)

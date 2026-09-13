@@ -88,7 +88,9 @@ export type Role = 'measure' | 'review'
  *  `resultRole` below is different on purpose: a RESULT is third-party attestation by another
  *  agent, so it tolerates LEADING markdown punctuation but still anchors on nothing after the
  *  heading — a heading legitimately precedes prose on the same line. */
-// NOT interchangeable with `exemptRoleStrict` below -- the missing `$` here is deliberate; see the note there.
+// NOT interchangeable with `exemptRoleStrict` below TODAY -- the missing `$` here is deliberate for
+// now (both are read at different trust levels); see the fuller note there, and TRDD-1YXR6S47 for
+// when this line and the duplication both go away.
 export function creditRoleLoose(prompt: string): Role | null {
   const m = /^ROLE: MEASURE/m.test(prompt)
   const r = /^ROLE: REVIEW/m.test(prompt)
@@ -99,18 +101,28 @@ export function creditRoleLoose(prompt: string): Role | null {
  *  first-line design this replaced, matched ANYWHERE in the prompt: measured 2026-09-13, the
  *  harness PREPENDS boilerplate ahead of a fork's own `ROLE: ...` line, so a first-line rule
  *  matched nothing and every roled agent was gated -- the exact regress this exemption exists to
- *  prevent, reintroduced by being too strict. `creditRoleLoose` CREDITS a review loosely (a miss only
- *  over-blocks, which is safe) by dropping the trailing `$` anchor; `exemptRoleStrict` EXEMPTS an
- *  agent from being reviewed at all, so here a miss must leave the agent gated -- the marker line
- *  must be `ROLE: MEASURE`/`ROLE: REVIEW` and NOTHING ELSE (trailing whitespace or a lone `\r`
- *  tolerated via `\s*$`, so an honest marker is never punished for it; real trailing prose like
- *  "ROLE: REVIEW the following diff" does not match and is not exempt -- that was the hole).
- *  A bare marker line quoted inside a longer brief still exempts; that residual is narrower than
- *  an inline mid-line mention and is accepted rather than chased with a positional rule again.
- *  `creditRoleLoose` and `exemptRoleStrict` differ by ONE character -- the `$` -- and that difference IS the
- *  point: a miss on the loose CREDITING side only over-blocks (noisy, safe); a false match on the
- *  strict EXEMPTION side lets an agent skip its own review entirely (silent, unsafe). DO NOT UNIFY
- *  THESE TWO FUNCTIONS. */
+ *  prevent, reintroduced by being too strict.
+ *  `creditRoleLoose` and `exemptRoleStrict` differ by ONE character -- the `$` -- and today that
+ *  difference is read at DIFFERENT TRUST LEVELS, not "loose is safe": the earlier reasoning here
+ *  was inverted, so do not restore it. Split it on TWO AXES instead: EXEMPTION IS CHEAPER TO
+ *  TRIGGER (one marker, in one agent's own composed prompt, effective immediately, no partner
+ *  condition needed); CREDITING IS WORSE ONCE TRIGGERED, for reasons that all need the trigger
+ *  to actually fire.
+ *  (1) THE SAME AUTHOR-SUPPLIED SPAWN PROMPT feeds both: `creditRoleLoose` reads it from the
+ *  parent's own `tool_use.input.prompt`, `exemptRoleStrict` reads the text the harness composes
+ *  the subagent's first message around -- one untrusted brief reaches both predicates in one shot.
+ *  (2) `creditRoleLoose` fires on plain prose with no end anchor (a line starting with the marker
+ *  text followed by ordinary words still matches); `exemptRoleStrict` rejects that same line.
+ *  (3) Once BOTH roles are credited, `creditRoleLoose` releases the MAIN gate for the whole turn --
+ *  never on one false marker alone, since `Math.min(measure, review) >= lastWork` needs a partner
+ *  credit too. Still a weak barrier in practice: the realistic attack forges only the role that
+ *  was never legitimately spawned, and pairs it with one honest reviewer's own credit.
+ *  (4) THE STRONGEST REASON: crediting also zeroes `reviewSupervisor`'s `unreviewed` alarm counter
+ *  via `noteRole`, so a false credit is SELF-CONCEALING -- it silences the very escalation meant
+ *  to catch the miss. A false exemption leaves that alarm intact.
+ *  The real fix is decided and carded as TRDD-1YXR6S47: replace both with a whole-line exact
+ *  compare (`trimEnd`, fail closed on ambiguity). Once that lands the two predicates are
+ *  genuinely identical and THIS COMMENT AND THE DUPLICATION MUST BE DELETED. */
 export function exemptRoleStrict(prompt: string): Role | null {
   const m = /^ROLE: MEASURE\s*$/m.test(prompt)
   const r = /^ROLE: REVIEW\s*$/m.test(prompt)
