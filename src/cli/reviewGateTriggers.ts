@@ -77,29 +77,67 @@ export function shellWords(cmd: string): Word[] {
  *  unterminated heredoc treats everything after it as body (fail toward dropping data, since
  *  unexecuted body text cannot itself be a write). */
 const HEREDOC_OP_RE = /<<(-)?\s*(?:'([^']*)'|"([^"]*)"|([^\s'"<>;|&]+))/g
-function stripHeredocBodies(cmd: string): string {
+/** A heredoc BODY (`<<EOF` … terminator line) is data the shell writes to stdin, not shell
+ *  words — a body line reading `git commit -m x` must not arm, and `>=` inside prose must not
+ *  read as a redirect (`redirect into =` — the false positive this exists to fix). Everything
+ *  from the end of the operator line up to (and including) the terminator line is dropped;
+ *  the operator line itself is kept untouched so a same-line redirect (`cat <<EOF > /abs/f`)
+ *  still classifies normally. `<<-` strips leading tabs off the terminator line per shell rules.
+ *  The terminator match trims trailing whitespace and a trailing `\r` before comparing, so
+ *  `<<'EOF'`, a padded terminator line (`EOF `), and a CRLF-terminated one all still terminate —
+ *  a byte-exact-only match hides everything after it as unparsed body (review 2026-09-13: 4 of 5
+ *  heredoc shapes broke exactly this way and released a later `git commit` as body data).
+ *  A `<<` sitting inside an already-open quote (`bash -c 'cat <<EOF...'`) is not a real operator
+ *  in THIS pass — it belongs to the quoted argument the outer shell just carries verbatim — so
+ *  it is skipped here; `segmentWriteReason` re-enters this same classifier on that argument's
+ *  own text and sees the heredoc for real.
+ *  Multiple heredocs in one command are each consumed in the order their operators appear.
+ *  FAIL OPEN vs FAIL CLOSED is a per-CALLER choice (`failOpen`), because an unterminated heredoc
+ *  is evidence we failed to PARSE it, not evidence the rest of the line is safe to drop: the
+ *  classification pass needs `failOpen=true` — a `git commit` sitting past an unparsed heredoc
+ *  must still arm — while the noisy redirect scan needs `failOpen=false`, dropping the unparsed
+ *  region so leftover `>=`/`->` inside genuinely-unclosed document text can't false-positive a
+ *  redirect (commit 74b24905's fix). */
+function stripHeredocBodies(cmd: string, failOpen: boolean): string {
+  const quoted = new Uint8Array(cmd.length)
+  {
+    let q: string | null = null
+    for (let i = 0; i < cmd.length; i++) {
+      const c = cmd[i]
+      if (q !== null) { quoted[i] = 1; if (c === q) q = null; continue }
+      if (c === '"' || c === "'") { q = c; quoted[i] = 1; continue }
+      if (c === '\\' && i + 1 < cmd.length) { quoted[i] = 1; quoted[i + 1] = 1; i++; continue }
+    }
+  }
   const lines = cmd.split('\n')
+  const lineStart: number[] = []
+  { let off = 0; for (const l of lines) { lineStart.push(off); off += l.length + 1 } }
   const kept: string[] = []
   let i = 0
   while (i < lines.length) {
     const line = lines[i]
+    const base = lineStart[i]
     kept.push(line)
     i++
     HEREDOC_OP_RE.lastIndex = 0
     let m: RegExpExecArray | null
     const delimiters: { delim: string; strip: boolean }[] = []
     while ((m = HEREDOC_OP_RE.exec(line)) !== null) {
+      if (quoted[base + m.index]) continue // `<<` inside a quote — not a real operator here
       const delim = m[2] ?? m[3] ?? m[4]
       if (delim !== undefined) delimiters.push({ delim, strip: m[1] === '-' })
     }
     for (const { delim, strip } of delimiters) {
       let terminated = false
-      while (i < lines.length) {
-        const bodyLine = lines[i]
-        i++
-        if ((strip ? bodyLine.replace(/^\t+/, '') : bodyLine) === delim) { terminated = true; break }
+      let j = i
+      while (j < lines.length) {
+        const raw = lines[j]
+        const bodyLine = (strip ? raw.replace(/^\t+/, '') : raw).replace(/\r$/, '').replace(/[ \t]+$/, '')
+        j++
+        if (bodyLine === delim) { terminated = true; break }
       }
-      if (!terminated) return kept.join('\n') // unterminated: rest already consumed as body
+      if (!terminated) return failOpen ? cmd : kept.join('\n')
+      i = j
     }
   }
   return kept.join('\n')
@@ -249,7 +287,9 @@ function classifyCommand(words: Word[], via: string | null, cwd: string, resolve
  *  `>|`, attached or spaced; `2>&1`/`>&2` are fd dups, not files) — in that order so a heredoc
  *  commit whose body holds a bare `>` is reported as the commit it is, not as a redirect. */
 export function commandWriteReason(cmd: string, cwd: string): string | null {
-  const words = shellWords(stripHeredocBodies(cmd))
+  // `words` drives CLASSIFICATION (does this contain a `git commit`-shaped write?) and must
+  // fail OPEN on a heredoc we can't parse — losing the command text would hide a real write.
+  const words = shellWords(stripHeredocBodies(cmd, true))
   // Segments used for CLASSIFICATION only: separator words split them, and every unquoted
   // redirect word is dropped (its attached operand with it; a BARE operator's separate spaced
   // operand is dropped too) so a redirect never counts as a command argument. `words` itself is
@@ -300,19 +340,26 @@ export function commandWriteReason(cmd: string, cwd: string): string | null {
     const reason = classifyCommand(segments[idx], null, cwd, resolve, idx)
     if (reason !== null) return reason
   }
-  // `segIdx` counts the same separator words the segment builder split on, so it names the same
-  // segment as the classification pass. Sole divergence: a bare operator whose operand is itself a
-  // separator (`> ; foo`) — the builder swallows it as the operand. Harmless: this pass takes `;`
-  // as the redirect TARGET first and arms before it can count the `;` as a separator — unless cwd
-  // is under /tmp, where the count diverges unobservably (nothing later reads the snapshot) on a
-  // command the shell rejects as a syntax error anyway.
+  // The redirect scan is the noisy pass (any bare `>` anywhere counts), so it takes the FAIL
+  // CLOSED strip instead: an unterminated heredoc has its unparsed region dropped rather than
+  // scanned, so leftover `>=`/`->` inside genuinely-unclosed document text can't false-positive
+  // a redirect (the false positive commit 74b24905 fixed). `segIdx` counts the same separator
+  // words the segment builder split on, so it names the same segment as the classification pass
+  // in the common (terminated-heredoc) case where `redirectWords` and `words` agree; they can
+  // diverge only on a genuinely unterminated heredoc, where `resolve` falls back to the raw word
+  // via its own out-of-range guard. Sole other divergence: a bare operator whose operand is
+  // itself a separator (`> ; foo`) — the builder swallows it as the operand. Harmless: this pass
+  // takes `;` as the redirect TARGET first and arms before it can count the `;` as a separator —
+  // unless cwd is under /tmp, where the count diverges unobservably (nothing later reads the
+  // snapshot) on a command the shell rejects as a syntax error anyway.
+  const redirectWords = shellWords(stripHeredocBodies(cmd, false))
   let segIdx = 0
-  for (let i = 0; i < words.length; i++) {
-    if (!words[i].quoted && /^(\||\|\||&&|;|&)$/.test(words[i].word)) { segIdx++; continue }
-    if (words[i].quoted) continue
-    const m = /^\d*(?:>\||>>?)(.*)$/.exec(words[i].word)
+  for (let i = 0; i < redirectWords.length; i++) {
+    if (!redirectWords[i].quoted && /^(\||\|\||&&|;|&)$/.test(redirectWords[i].word)) { segIdx++; continue }
+    if (redirectWords[i].quoted) continue
+    const m = /^\d*(?:>\||>>?)(.*)$/.exec(redirectWords[i].word)
     if (!m || m[1].startsWith('&')) continue
-    const target = m[1] !== '' ? m[1] : (words[i + 1]?.word ?? '')
+    const target = m[1] !== '' ? m[1] : (redirectWords[i + 1]?.word ?? '')
     if (!isEphemeralTarget(resolve(target, segIdx), cwd)) return `redirect into ${target || '(no target)'}`
   }
   return null

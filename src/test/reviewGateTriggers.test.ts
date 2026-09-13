@@ -114,6 +114,32 @@ suite('review-gate triggers: write-shaped commands', () => {
     '(S=/tmp/a; echo x > "$S")',
   ]
 
+  suite('review-gate triggers: heredoc terminator matching is lenient, unterminated fails open for classification', () => {
+    test('quoted delimiter (`<<\'EOF\'`) terminates and a later write still arms', () => {
+      assert.strictEqual(commandWriteReason("cat <<'EOF' > /tmp/x\nEOF\ngit commit -m real", CWD), 'git commit')
+    })
+
+    test('a heredoc quoted inside `bash -c \'...\'` is not stripped by the outer pass', () => {
+      assert.strictEqual(commandWriteReason("bash -c 'cat <<EOF\nbody\nEOF' && git commit -m x", CWD), 'git commit')
+    })
+
+    test('`<<` inside a quoted argument (not an operator) never starts a heredoc', () => {
+      assert.strictEqual(commandWriteReason("grep '<<EOF' file && git commit -m x", CWD), 'git commit')
+    })
+
+    test('a terminator line with trailing whitespace still terminates', () => {
+      assert.strictEqual(commandWriteReason('cat <<EOF\nbody\nEOF \ngit commit -m x', CWD), 'git commit')
+    })
+
+    test('a CRLF-terminated heredoc still terminates', () => {
+      assert.strictEqual(commandWriteReason('cat <<EOF\r\nbody\r\nEOF\r\ngit commit -m x', CWD), 'git commit')
+    })
+
+    test('a genuinely unterminated heredoc with both a commit and a redirect-shaped line arms as the commit, not a redirect', () => {
+      assert.strictEqual(commandWriteReason('cat <<EOF\ngit commit -m x\na >= b', CWD), 'git commit')
+    })
+  })
+
 
   suite('review-gate triggers: heredoc bodies are data, not shell words', () => {
     test('a heredoc BODY is not tokenized as shell words — the >= false positive of 2026-09-13', () => {
@@ -141,8 +167,8 @@ suite('review-gate triggers: write-shaped commands', () => {
       assert.strictEqual(commandWriteReason('cat <<A\nfoo\nA\ncat <<B\nbar\nB', CWD), null)
     })
 
-    test('an unterminated heredoc treats the rest of the command as body', () => {
-      assert.strictEqual(commandWriteReason('cat <<A\ngit commit -m x', CWD), null)
+    test('an unterminated heredoc fails OPEN for classification — a real git commit past it still arms', () => {
+      assert.strictEqual(commandWriteReason('cat <<A\ngit commit -m x', CWD), 'git commit')
     })
   })
 
