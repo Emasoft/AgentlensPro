@@ -24,6 +24,28 @@ import { readTranscriptTail } from './reviewGate'
 import { commandWriteReason, isEphemeralTarget, shellWords } from './reviewGateTriggers'
 import { readStdin } from './hookHandlers'
 
+// UNREVIEWED. TRDD-SA99VCPZ classifies this module as never having had its
+// accepted review fixes applied; its acceptance criterion is a FRESH
+// adversarial review of the whole module, not recovery of an old fix list.
+//
+// UNREGISTERED, DELIBERATELY. Commit 01c4cbff DELETED both registration
+// sites rather than guarding them behind a flag. Do not re-add one just
+// because this module looks complete.
+//
+// WHY DELETION, NOT A FLAG: a hardcoded false is a dormant code path this
+// project forbids, it implies a runtime switch that does not exist, and
+// esbuild would eliminate the branch at --production, so "guard present"
+// would become indistinguishable from "code missing because the build
+// failed".
+//
+// WHY IT IS TRACKED AT ALL: untracked was the most destructible state in
+// the repo; tracking makes it recoverable and changes nothing about its
+// status.
+//
+// A second, interim delegation gate (the fable_delegation_gate python
+// hook) is already enforcing the same rule, so activating this one would
+// run two gates at once.
+
 export interface DelegateGateInput {
   tool_name?: unknown
   tool_input?: { file_path?: unknown; command?: unknown }
@@ -39,6 +61,8 @@ export interface DelegateGateVerdict {
   /** Non-fatal stderr line — logged whether or not the call denies. */
   note?: string
 }
+
+
 
 // Deliberately does NOT mention the env kill-switch: advertising a bypass in the block message
 // undermines the delegation rule the same way naming it in a public deny reason would (an agent
