@@ -3,7 +3,7 @@ trdd-id: XI3UZUTK
 title: Five P5 window auto-calibration tests fail because the real-boot ingest path stores zero spans
 column: todo
 created: 2026-09-13T20:59:19+0200
-updated: 2026-09-13T20:59:19+0200
+updated: 2026-09-13T21:08:06+0200
 current-owner: emanuelesabetta
 created-by: emanuelesabetta
 task-type: bugfix
@@ -14,6 +14,7 @@ mandated-by: none
 approved: true
 approval-judge: emanuelesabetta
 approval-datetime: 2026-09-13T20:59:19+0200
+priority: high
 ---
 
 # Five P5 window auto-calibration tests fail because the real-boot ingest path stores zero spans
@@ -34,6 +35,7 @@ alcore DID boot (it printed its OTLP/UI/MCP listening lines), so this is NOT the
 **Whether these five are PRE-EXISTING is UNVERIFIED.** They were found while committing unrelated review-gate work, and the working tree carries uncommitted changes to `src/cli/main.ts`, `reviewGate`, `reviewGateEffects` and `delegateGate`. None of those is on the calibration path and the failing path runs the Rust core, so causation is implausible — but implausible is not measured. First step is to check out a clean HEAD in a scratch worktree and re-run `serverCalibration` there. If it fails clean, the suite was already red and the question becomes for how long.
 
 Also note the suite emitted `file watching unavailable on every log dir — falling back to a 5s full poll`, which is worth ruling in or out as the reason the scan saw `files=0`.
+Priority raised to high: a red suite outranks ordinary backlog, because it means the next person cannot tell whether their own change broke something or hit this pre-existing failure.
 
 ## Acceptance
 - [ ] Re-run on a clean HEAD worktree; record whether the five fail there too.
