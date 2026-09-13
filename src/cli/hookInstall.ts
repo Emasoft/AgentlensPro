@@ -78,13 +78,19 @@ export const GATE_EVENTS = ['PreToolUse', 'PostToolUse']
 // same event, exactly like PreToolUse carries the gate matcher beside any foreign tool's hooks.
 export const REVIEW_EVENTS = ['Stop', 'SubagentStop']
 
+// The delegate gate (Fable plans, Sonnet executes — owner order 2026-09-10): SYNC, like the
+// burn gate, because an async hook cannot deny. Matched to the edit/write tools only — no
+// network round trip, so unlike the burn gate a dead server can never stall it.
+export const DELEGATE_MATCHER = '^(Edit|Write|NotebookEdit|MultiEdit|Bash)$'
+export const DELEGATE_EVENTS = ['PreToolUse']
+
 /** The ONE published bin (package.json "bin") — what must resolve on PATH. */
 export const CLI_BIN = 'agentlenspro'
 /** v2 registration command strings (shell command strings; args are valid in hook commands). */
 export const HOOK_CMD = 'agentlenspro hook'
 export const GATE_CMD = 'agentlenspro gate'
 export const REVIEW_CMD = 'agentlenspro review-gate'
-
+export const DELEGATE_CMD = 'agentlenspro delegate-gate'
 // The METAHOOK over the review gate. UserPromptSubmit deliberately — a DIFFERENT event from the
 // gate's Stop, so a gate that has stopped firing is exactly what this still detects. It only
 // reports (never blocks), so it is registered unconditionally alongside the gate.
@@ -116,7 +122,7 @@ export const SUPERVISOR_EVENTS = ['UserPromptSubmit', 'Stop']
 // install log line) still need their own edit, because they say something different about each
 // command rather than treating them as a set. Checked by enumerating every reference to the *_CMD
 // constants across src/, standalone/ and skills/; do that again rather than trusting this sentence.
-export const CURRENT_CMDS: readonly string[] = [HOOK_CMD, GATE_CMD, REVIEW_CMD, SUPERVISOR_CMD]
+export const CURRENT_CMDS: readonly string[] = [HOOK_CMD, GATE_CMD, REVIEW_CMD, SUPERVISOR_CMD, DELEGATE_CMD]
 export function isStaleGeneration(command: string): boolean {
   return isOurHookCommand(command) && !CURRENT_CMDS.includes(command)
 }
@@ -154,7 +160,7 @@ export function isOurHookCommand(command: unknown): boolean {
     || LEGACY_REVIEW_SCRIPTS.some(s => command.includes(s))
     // \b keeps a hypothetical foreign "agentlensprod hookx" from matching; the space
     // between bin and verb is what distinguishes the v2 command-string generation.
-    || /\bagentlenspro\s+(hook|gate|review-gate|review-supervisor)\b/.test(command)
+    || /\bagentlenspro\s+(hook|gate|review-gate|review-supervisor|delegate-gate)\b/.test(command)
 }
 
 const isSpyglass = (h: HookCommandEntry): boolean =>
@@ -210,8 +216,22 @@ export function reviewSupervisorMatcher(cmd: string): HookMatcher {
   return { hooks: [{ type: 'command', command: cmd, timeout: HOOK_TIMEOUT_SEC }] }
 }
 
+/** The delegate gate: SYNC (an async hook cannot deny), scoped to the edit/write tools plus Bash.
+ *  No network round trip — a local transcript-tail read — so the ceiling only needs to cover
+ *  local disk I/O, like the review gate. See HOOK_TIMEOUT_SEC for the history.
+ *
+ *  UNREFERENCED as of TRDD-SA99VCPZ: registration is deleted (rebuildEventMatchers /
+ *  buildEventOps no longer call this), so this builder currently has no callers. Kept, not
+ *  deleted, so re-registering the gate when TRDD-SA99VCPZ closes is a one-line change here
+ *  rather than a re-write from scratch. Do not assume "unreferenced" means "dead" -- verify
+ *  TRDD-SA99VCPZ's status before deleting this function. */
+export function delegateGateMatcher(delegateCmd: string): HookMatcher {
+  return { matcher: DELEGATE_MATCHER, hooks: [{ type: 'command', command: delegateCmd, timeout: HOOK_TIMEOUT_SEC }] }
+}
+
 export function rebuildEventMatchers(
-  matchers: HookMatcher[], ev: string, uninstall: boolean, cmd: string, gateCmd: string, reviewCmd: string = REVIEW_CMD
+  matchers: HookMatcher[], ev: string, uninstall: boolean, cmd: string, gateCmd: string,
+  reviewCmd: string = REVIEW_CMD
 ): RebuildResult {
   const out: RebuildResult = { rebuilt: [], removedOurs: 0, removedSpyglass: 0, installed: false, removedCommands: [] }
   for (const m of matchers) {
@@ -238,6 +258,8 @@ export function rebuildEventMatchers(
     out.rebuilt.push(reviewSupervisorMatcher(SUPERVISOR_CMD))
     out.installed = true
   }
+  // delegate-gate registration removed until TRDD-SA99VCPZ closes (six accepted review
+  // fixes unapplied; an interim delegation-gate hook enforces this rule today).
   return out
 }
 
@@ -266,7 +288,8 @@ function removalNeedle(command: string): string | null {
  *  a file: the ops are computed from a pre-lock read and applied to whatever the file holds at
  *  commit time, so the test applies them to a tree carrying an entry they never saw. */
 export function buildEventOps(
-  ev: string, matchers: HookMatcher[], uninstall: boolean, cmd = HOOK_CMD, gateCmd = GATE_CMD, reviewCmd = REVIEW_CMD
+  ev: string, matchers: HookMatcher[], uninstall: boolean, cmd = HOOK_CMD, gateCmd = GATE_CMD,
+  reviewCmd = REVIEW_CMD
 ): SafeEditOp[] {
   const r = rebuildEventMatchers(matchers, ev, uninstall, cmd, gateCmd, reviewCmd)
   if (JSON.stringify(r.rebuilt) === JSON.stringify(matchers)) return []
@@ -305,6 +328,8 @@ export function buildEventOps(
   if (!uninstall && SUPERVISOR_EVENTS.includes(ev)) {
     ops.push({ op: 'append_unique', path: ['hooks', ev], value: reviewSupervisorMatcher(SUPERVISOR_CMD), unique_by_substring: SUPERVISOR_CMD })
   }
+  // delegate-gate registration removed until TRDD-SA99VCPZ closes (six accepted review
+  // fixes unapplied; an interim delegation-gate hook enforces this rule today).
   return ops
 }
 
@@ -372,7 +397,7 @@ export async function installHooks(uninstall: boolean, opts: InstallHooksOptions
   let removedSpyglass = 0
   let removedOurs = 0
   let added = 0
-  const events = new Set([...Object.keys(hooks), ...(uninstall ? [] : [...HOOK_EVENTS, ...GATE_EVENTS, ...REVIEW_EVENTS, ...SUPERVISOR_EVENTS])])
+  const events = new Set([...Object.keys(hooks), ...(uninstall ? [] : [...HOOK_EVENTS, ...GATE_EVENTS, ...REVIEW_EVENTS, ...SUPERVISOR_EVENTS, ...DELEGATE_EVENTS])])
   for (const ev of events) {
     const matchers = Array.isArray(hooks[ev]) ? hooks[ev] : []
     const r = rebuildEventMatchers(matchers, ev, uninstall, HOOK_CMD, GATE_CMD, REVIEW_CMD)

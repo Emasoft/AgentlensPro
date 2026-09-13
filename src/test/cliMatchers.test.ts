@@ -3,6 +3,7 @@ import {
   rebuildEventMatchers, isOurHookCommand, resolveOnPath,
   lifecycleMatcher, reviewGateMatcher, reviewSupervisorMatcher,
   GATE_MATCHER, HOOK_CMD, GATE_CMD, REVIEW_CMD, SUPERVISOR_CMD, SUPERVISOR_EVENTS, CLI_BIN, LEGACY_HOOK_BIN, LEGACY_GATE_BIN,
+  DELEGATE_MATCHER, DELEGATE_CMD,
   HOOK_TIMEOUT_SEC,
   type HookMatcher,
 } from '../cli/hookInstall'
@@ -107,11 +108,19 @@ suite('agentlenspro — v2 command-string hook registration', () => {
     assert.strictEqual(gate.hooks[0].command, GATE_CMD)
     assert.ok(!gateEv.rebuilt.some(m => m.hooks.some(h => h.command === HOOK_CMD)),
       'the lifecycle forwarder must NOT be registered on PreToolUse')
+    // The delegate gate (Fable plans, Sonnet executes) is NOT registered: six accepted review
+    // fixes from its pre-clear session were never applied (TRDD-SA99VCPZ), and an interim
+    // delegation-gate hook already enforces this rule outside this codebase.
+    assert.ok(!gateEv.rebuilt.some(m => m.matcher === DELEGATE_MATCHER),
+      'the delegate gate must NOT be registered until TRDD-SA99VCPZ closes')
 
     const lifecycleEv = rebuildEventMatchers([], 'Stop', false, HOOK_CMD, GATE_CMD)
     const lifecycle = lifecycleEv.rebuilt.find(m => m.hooks.some(h => h.command === HOOK_CMD))
     if (!lifecycle) return assert.fail('lifecycle forwarder entry must be present after install on Stop')
     assert.strictEqual(lifecycle.hooks[0].command, HOOK_CMD)
+    // The delegate gate is deliberately NOT registered on Stop — it is PreToolUse-only.
+    assert.ok(!lifecycleEv.rebuilt.some(m => m.matcher === DELEGATE_MATCHER),
+      'the delegate gate must NOT be registered on Stop')
   })
 
   test('migration: install over v0 absolute-path entries strips them and registers the v2 command strings', () => {
@@ -130,6 +139,7 @@ suite('agentlenspro — v2 command-string hook registration', () => {
     ]
     const rGate = rebuildEventMatchers(legacyGate, 'PreToolUse', false, HOOK_CMD, GATE_CMD)
     assert.strictEqual(rGate.removedOurs, 1, 'legacy absolute-path gate must be stripped')
+    // The delegate gate is not registered (TRDD-SA99VCPZ) — PreToolUse carries only the burn gate.
     assert.deepStrictEqual(rGate.rebuilt.flatMap(m => m.hooks.map(h => h.command)), [GATE_CMD])
   })
 
@@ -179,6 +189,19 @@ suite('agentlenspro — v2 command-string hook registration', () => {
     assert.strictEqual(r.rebuilt.length, 0)
   })
 
+  test('an already-registered delegate gate is still detected and removed by uninstall, even though registration is disabled', () => {
+    // TRDD-SA99VCPZ disabled ADDING the delegate gate, but a peer session or an older build may
+    // already have registered it -- uninstall (and detection) must keep working on that leftover
+    // registration, or it becomes permanently stuck in settings.json.
+    const existing: HookMatcher[] = [
+      { matcher: DELEGATE_MATCHER, hooks: [{ type: 'command', command: DELEGATE_CMD, timeout: 30 }] },
+    ]
+    assert.ok(isOurHookCommand(DELEGATE_CMD), 'the detection regex must still recognise the delegate gate command')
+    const r = rebuildEventMatchers(existing, 'PreToolUse', true, HOOK_CMD, GATE_CMD)
+    assert.strictEqual(r.removedOurs, 1, 'the pre-existing delegate gate entry must be stripped on uninstall')
+    assert.strictEqual(r.rebuilt.length, 0)
+  })
+
   test('isOurHookCommand matches every generation but never a foreign command', () => {
     // The needle set is the migration contract: too narrow orphans old entries, too wide
     // eats another tool's hooks.
@@ -188,6 +211,7 @@ suite('agentlenspro — v2 command-string hook registration', () => {
     assert.ok(isOurHookCommand(LEGACY_GATE_BIN))
     assert.ok(isOurHookCommand(HOOK_CMD))
     assert.ok(isOurHookCommand(GATE_CMD))
+    assert.ok(isOurHookCommand(DELEGATE_CMD))
     assert.ok(isOurHookCommand('agentlenspro  gate'), 'extra whitespace between bin and verb still matches')
     assert.strictEqual(isOurHookCommand('bash /other/janitor-hook.sh'), false)
     assert.strictEqual(isOurHookCommand('agentlenspro list'), false, 'other subcommands are not hook registrations')
