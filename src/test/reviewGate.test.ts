@@ -6,8 +6,9 @@ import { execFileSync } from 'child_process'
 import {
   scanMainTranscriptLines, decideMainGate, applyEffects,
   scanSubagentTranscriptLines, decideSubagentGate, agentCannotSpawn, declaredToolsHaveAgent,
-  REVIEW_GATE_DIRECTIVE, ONE_TURN_RULE, mainBlockReason, scanPositions, hookCwd, SUBAGENT_BLOCK_REASON,
-  NO_REVIEW_SENTINEL, NO_REVIEW_SENTINEL_EXAMPLES, REVIEWER_AGENT_TYPES, runMainGate, runReviewGate,
+  REVIEW_GATE_DIRECTIVE, REVIEW_ROLE_RULE, MEASURE_ROLE_RULE, mainBlockReason, scanPositions, hookCwd,
+  SUBAGENT_BLOCK_REASON, NO_REVIEW_SENTINEL, NO_REVIEW_SENTINEL_EXAMPLES, REVIEWER_AGENT_TYPES,
+  runMainGate, runReviewGate, forkRole, resultRole, MEASURE_HEADING, REVIEW_HEADING,
 } from '../cli/reviewGate'
 
 // `agentlenspro review-gate` — pure decision-function tests, ported faithfully from
@@ -29,7 +30,11 @@ const thinkBlock = { type: 'thinking', thinking: 'internal' }
 const forkBlock = { type: 'tool_use', name: 'Agent', input: { subagent_type: 'fork' } }
 // `lastForkTs` is always 0 across this suite's fixtures: none of them stamps a `timestamp` field,
 // so `entryTs` (fail-closed default) returns 0 for every entry.
-const nothing = { lastFork: -1, lastForkTs: 0, work: null }
+// `roles` stays {-1,-1} across this file's plain fixtures: none of them carries a `ROLE: …`
+// marker or a heading, so neither role is ever credited — the two-role suites below build their
+// own fixtures for that.
+const NO_ROLES = { measure: -1, review: -1 }
+const nothing = { lastFork: -1, lastForkTs: 0, work: null, roles: NO_ROLES }
 // `activity` (TRDD-3U8AIHXK) is exercised by its own suite below — these fixtures assert
 // lastFork/lastForkTs/work only, so a `tool_use` fixture's incidental activity entries never
 // need to be spelled out here.
@@ -41,15 +46,18 @@ const dropActivity = (s: ReturnType<typeof scanMainTranscriptLines>): Omit<typeo
 suite('reviewGate — main (Stop) gate', () => {
   test('scanMainTranscriptLines: an edit, a marked proposal and a write-shaped command arm; prose, a heartbeat and reads do not', () => {
     assert.deepStrictEqual(dropActivity(scanMainTranscriptLines([assistantLine([editBlock]), assistantLine([forkBlock])], CWD)),
-      { lastFork: 1, lastForkTs: 0, work: { index: 0, cause: 'edit', detail: 'Edit x.ts' } })
+      { lastFork: 1, lastForkTs: 0, work: { index: 0, cause: 'edit', detail: 'Edit x.ts' }, roles: NO_ROLES })
     // Measured on a real session JSONL, this build writes ONE ENTRY PER BLOCK, so a proposing turn
     // is a lone `text` entry with no tool_use anywhere near it.
     assert.deepStrictEqual(dropActivity(scanMainTranscriptLines([assistantLine([proposalBlock])], CWD)),
-      { lastFork: -1, lastForkTs: 0, work: { index: 0, cause: 'proposal text', detail: '' } })
+      { lastFork: -1, lastForkTs: 0, work: { index: 0, cause: 'proposal text', detail: '' }, roles: NO_ROLES })
+    // `forkBlock` carries no `prompt`, so it is a bare spawn with no ROLE marker — it still sets
+    // `lastFork` (unchanged) but credits neither role (that needs a `ROLE: MEASURE`/`ROLE: REVIEW`
+    // marker — see the two-role suites below).
     assert.deepStrictEqual(dropActivity(scanMainTranscriptLines([assistantLine([proposalBlock]), assistantLine([forkBlock])], CWD)),
-      { lastFork: 1, lastForkTs: 0, work: { index: 0, cause: 'proposal text', detail: '' } }, 'proposal then fork ⇒ reviewed')
+      { lastFork: 1, lastForkTs: 0, work: { index: 0, cause: 'proposal text', detail: '' }, roles: NO_ROLES }, 'proposal then a bare (unroled) fork spawn')
     assert.deepStrictEqual(dropActivity(scanMainTranscriptLines([assistantLine([bashBlock('git commit -m x')])], CWD)),
-      { lastFork: -1, lastForkTs: 0, work: { index: 0, cause: 'write-shaped command', detail: 'git commit' } })
+      { lastFork: -1, lastForkTs: 0, work: { index: 0, cause: 'write-shaped command', detail: 'git commit' }, roles: NO_ROLES })
     // THE LIVELOCK (TRDD-0E3W5C45). For one day every text block was work, so a heartbeat's
     // mandated `janitor heartbeat` line armed the gate and every reply to the block re-armed it —
     // ~40 blocked turns and 5 forks over zero edits. None of these is work:
@@ -66,7 +74,7 @@ suite('reviewGate — main (Stop) gate', () => {
   test('a NotebookEdit follows the same ephemeral-root rule, and the hook cwd comes from the input', () => {
     const nb = (notebook_path: string) => ({ type: 'tool_use', name: 'NotebookEdit', input: { notebook_path } })
     assert.deepStrictEqual(dropActivity(scanMainTranscriptLines([assistantLine([nb('/proj/n.ipynb')])], CWD)),
-      { lastFork: -1, lastForkTs: 0, work: { index: 0, cause: 'edit', detail: 'NotebookEdit n.ipynb' } })
+      { lastFork: -1, lastForkTs: 0, work: { index: 0, cause: 'edit', detail: 'NotebookEdit n.ipynb' }, roles: NO_ROLES })
     assert.deepStrictEqual(dropActivity(scanMainTranscriptLines([assistantLine([nb('/tmp/n.ipynb')])], CWD)), nothing)
     assert.strictEqual(hookCwd({ cwd: '/elsewhere' }), '/elsewhere')
     assert.strictEqual(hookCwd({ cwd: '' }), process.cwd(), 'an empty cwd falls back, it is not a root')
@@ -94,20 +102,20 @@ suite('reviewGate — main (Stop) gate', () => {
       'unreviewed change comes from the mtime walk, not the transcript tail')
   })
 
-  test('decideMainGate BLOCKS when the last edit is newer than the last fork', () => {
-    const scan = { lastFork: 0, lastWork: 1 } // work happened AFTER the fork
+  test('decideMainGate BLOCKS when the last edit is newer than both roles', () => {
+    const scan = { roles: { measure: 0, review: 0 }, lastWork: 1 } // work happened AFTER both roles were credited
     const v = decideMainGate(scan)
     assert.strictEqual(v.block, true)
   })
 
-  test('decideMainGate ALLOWS when a landed fork is newer than (or ties) the last edit', () => {
-    const scan = { lastFork: 1, lastWork: 0 } // fork happened AFTER the work
+  test('decideMainGate ALLOWS when both roles are credited newer than (or tie) the last edit', () => {
+    const scan = { roles: { measure: 1, review: 1 }, lastWork: 0 } // both roles credited AFTER the work
     const v = decideMainGate(scan)
     assert.strictEqual(v.block, false)
   })
 
   test('decideMainGate ALLOWS when nothing was claimed this window', () => {
-    const v = decideMainGate({ lastFork: -1, lastWork: -1 })
+    const v = decideMainGate({ roles: { measure: -1, review: -1 }, lastWork: -1 })
     assert.strictEqual(v.block, false)
   })
 
@@ -116,16 +124,16 @@ suite('reviewGate — main (Stop) gate', () => {
   // was removed below. These two titles are KEPT so a reintroduced breaker still has a named test
   // to break, even though `decideMainGate` now takes no state argument at all.
   test('decideMainGate KEEPS BLOCKING past the old MAX_CONSECUTIVE — no give-up', () => {
-    const scan = { lastFork: -1, lastWork: 0 }
+    const scan = { roles: { measure: -1, review: -1 }, lastWork: 0 }
     // THE CONSECUTIVE BREAKER IS GONE (owner order 2026-09-03). It used to fail open here, which is
     // exactly how this session's gate went silent after two ignored demands and every later change
-    // shipped unreviewed. The only way past is now a landed fork.
+    // shipped unreviewed. The only way past is now both roles landing.
     const v = decideMainGate(scan)
-    assert.strictEqual(v.block, true, 'no give-up: keep demanding until a fork lands')
+    assert.strictEqual(v.block, true, 'no give-up: keep demanding until both roles land')
   })
 
   test('decideMainGate KEEPS BLOCKING past the old MAX_PER_SESSION — no give-up', () => {
-    const scan = { lastFork: -1, lastWork: 0 }
+    const scan = { roles: { measure: -1, review: -1 }, lastWork: 0 }
     const v = decideMainGate(scan)
     assert.strictEqual(v.block, true, 'the per-session cap is gone too')
   })
@@ -291,15 +299,15 @@ suite('reviewGate — scanMainTranscriptLines: lastForkTs', () => {
 
 // ── applyEffects — folding `unreviewedEffects()` into the scan (TRDD-9FG0LSPG) ─────────────────────
 suite('reviewGate — applyEffects', () => {
-  const baseScan = { lastFork: 3, lastForkTs: 1000, work: null, activity: [] }
+  const baseScan = { lastFork: 3, lastForkTs: 1000, work: null, activity: [], roles: NO_ROLES }
 
   test('no existing work + unreviewed paths ⇒ arms at lastFork + 1 with cause "unreviewed change"', () => {
     const out = applyEffects(baseScan, { paths: ['src/a.ts'], truncated: false })
-    assert.deepStrictEqual(out, { lastFork: 3, lastForkTs: 1000, work: { index: 4, cause: 'unreviewed change', detail: 'src/a.ts' }, activity: [] })
+    assert.deepStrictEqual(out, { lastFork: 3, lastForkTs: 1000, work: { index: 4, cause: 'unreviewed change', detail: 'src/a.ts' }, activity: [], roles: NO_ROLES })
   })
 
   test('an existing text arm strictly after the last fork is KEPT, not overwritten', () => {
-    const scanWithArm = { lastFork: 3, lastForkTs: 1000, work: { index: 5, cause: 'proposal text' as const, detail: '' }, activity: [] }
+    const scanWithArm = { lastFork: 3, lastForkTs: 1000, work: { index: 5, cause: 'proposal text' as const, detail: '' }, activity: [], roles: NO_ROLES }
     const out = applyEffects(scanWithArm, { paths: ['src/a.ts', 'src/b.ts'], truncated: false })
     assert.deepStrictEqual(out, scanWithArm, 'both arms would block identically — keep the more specific one')
   })
@@ -336,9 +344,9 @@ suite('reviewGate — mainBlockReason: unreviewed change', () => {
 
 suite('reviewGate — subagent (SubagentStop) gate', () => {
   test('scanSubagentTranscriptLines detects an edit and a self-review independently', () => {
-    assert.deepStrictEqual(scanSubagentTranscriptLines([assistantLine([editBlock])]), { didWork: true, reviewed: false })
-    assert.deepStrictEqual(scanSubagentTranscriptLines([assistantLine([editBlock, forkBlock])]), { didWork: true, reviewed: true })
-    assert.deepStrictEqual(scanSubagentTranscriptLines([]), { didWork: false, reviewed: false })
+    assert.deepStrictEqual(scanSubagentTranscriptLines([assistantLine([editBlock])]), { didWork: true, reviewed: false, ownRole: null })
+    assert.deepStrictEqual(scanSubagentTranscriptLines([assistantLine([editBlock, forkBlock])]), { didWork: true, reviewed: true, ownRole: null })
+    assert.deepStrictEqual(scanSubagentTranscriptLines([]), { didWork: false, reviewed: false, ownRole: null })
   })
 
   test('decideSubagentGate SKIPS an empty agent_type (internal micro-lookups)', () => {
@@ -352,23 +360,53 @@ suite('reviewGate — subagent (SubagentStop) gate', () => {
   })
 
   test('a MARKED proposal in a subagent return is work; plain prose is not (owner orders 2026-09-07/08)', () => {
-    assert.deepStrictEqual(scanSubagentTranscriptLines([assistantLine([proposalBlock])]), { didWork: true, reviewed: false })
-    assert.deepStrictEqual(scanSubagentTranscriptLines([assistantLine([proseBlock])]), { didWork: false, reviewed: false })
+    assert.deepStrictEqual(scanSubagentTranscriptLines([assistantLine([proposalBlock])]), { didWork: true, reviewed: false, ownRole: null })
+    assert.deepStrictEqual(scanSubagentTranscriptLines([assistantLine([proseBlock])]), { didWork: false, reviewed: false, ownRole: null })
     // The subagent gate shares the tool_use classifier: a write-shaped command is work, a Write into
     // the scratchpad is not. Without these two, commenting out the shared branch stays green here.
-    assert.deepStrictEqual(scanSubagentTranscriptLines([assistantLine([bashBlock('sed -i "" s/a/b/ f')])], CWD), { didWork: true, reviewed: false })
+    assert.deepStrictEqual(scanSubagentTranscriptLines([assistantLine([bashBlock('sed -i "" s/a/b/ f')])], CWD), { didWork: true, reviewed: false, ownRole: null })
     assert.deepStrictEqual(
       scanSubagentTranscriptLines([assistantLine([{ type: 'tool_use', name: 'Write', input: { file_path: '/tmp/x' } }])], CWD),
-      { didWork: false, reviewed: false })
+      { didWork: false, reviewed: false, ownRole: null })
     // A thinking block is NOT speech — it must not arm the gate on its own, or an agent that only
     // reasoned and then called a tool would owe a review for having thought.
-    assert.deepStrictEqual(scanSubagentTranscriptLines([assistantLine([thinkBlock])]), { didWork: false, reviewed: false })
+    assert.deepStrictEqual(scanSubagentTranscriptLines([assistantLine([thinkBlock])]), { didWork: false, reviewed: false, ownRole: null })
   })
 
   test('scanSubagentTranscriptLines case-folds subagent_type, like the main scanner already does', () => {
     const capsForkBlock = { type: 'tool_use', name: 'Agent', input: { subagent_type: 'Fork' } }
     assert.deepStrictEqual(scanSubagentTranscriptLines([assistantLine([editBlock, capsForkBlock])]),
-      { didWork: true, reviewed: true }, 'a subagent_type of "Fork" must still count as the fork')
+      { didWork: true, reviewed: true, ownRole: null }, 'a subagent_type of "Fork" must still count as the fork')
+  })
+
+  test('a lean-worker whose OWN prompt declares ROLE: REVIEW is exempt from the subagent gate (C3/C6)', () => {
+    const own = [
+      JSON.stringify({ type: 'user', message: { content: 'ROLE: REVIEW\nAttack the proposal.' } }),
+      assistantLine([editBlock]),
+    ]
+    const scan = scanSubagentTranscriptLines(own, CWD)
+    assert.strictEqual(scan.ownRole, 'review')
+    assert.strictEqual(decideSubagentGate('lean-worker', scan).block, false, 'a REVIEW-marked agent must not be told to spawn its own reviewer')
+  })
+
+  test('a lean-worker whose OWN prompt declares ROLE: MEASURE is NOT exempt — MEASURE has an unbounded tool budget and must itself be reviewed (owner correction C6)', () => {
+    const own = [
+      JSON.stringify({ type: 'user', message: { content: 'ROLE: MEASURE\nSettle the assumptions.' } }),
+      assistantLine([editBlock]),
+    ]
+    const scan = scanSubagentTranscriptLines(own, CWD)
+    assert.strictEqual(scan.ownRole, 'measure')
+    assert.strictEqual(decideSubagentGate('lean-worker', scan).block, true, 'exempting MEASURE would let its writes through unreviewed')
+  })
+
+  test('an UNROLED lean-worker is still gated — C3/C6 exempt an announced role, not every lean-worker', () => {
+    const own = [
+      JSON.stringify({ type: 'user', message: { content: 'Go do some ordinary work.' } }),
+      assistantLine([editBlock]),
+    ]
+    const scan = scanSubagentTranscriptLines(own, CWD)
+    assert.strictEqual(scan.ownRole, null)
+    assert.strictEqual(decideSubagentGate('lean-worker', scan).block, true)
   })
 
   test('a built-in with no Agent tool and no definition file is RELEASED, not wedged', () => {
@@ -453,7 +491,7 @@ suite('reviewGate — subagent (SubagentStop) gate', () => {
 
   test('a child sidechain entry does not count as the parent subagent\'s work', () => {
     const child = JSON.stringify({ type: 'assistant', isSidechain: true, message: { content: [proposalBlock] } })
-    assert.deepStrictEqual(scanSubagentTranscriptLines([child]), { didWork: false, reviewed: false })
+    assert.deepStrictEqual(scanSubagentTranscriptLines([child]), { didWork: false, reviewed: false, ownRole: null })
   })
 
   test('agentCannotSpawn reads the agent definition: a tools line without Agent means no demand (review F2)', () => {
@@ -587,45 +625,157 @@ suite('reviewGate — directive', () => {
 })
 
 // The fork reads ONLY the prompt its parent writes — never a hook's block reason. So a channel that
-// states the one-turn rule to the parent without ordering it PASTED reaches the fork not at all,
-// which is how six review forks took second turns and cost ~4.6M tokens (2026-09-03).
-suite('reviewGate — the one-turn rule reaches the fork', () => {
+// states a role rule to the parent without ordering it PASTED reaches the fork not at all, which is
+// how six review forks took second turns and cost ~4.6M tokens (2026-09-03).
+suite('reviewGate — both role rules reach both agents', () => {
   const channels: [string, string][] = [
     ['MAIN_BLOCK_REASON', MAIN_BLOCK_REASON],
     ['SUBAGENT_BLOCK_REASON', SUBAGENT_BLOCK_REASON],
     ['REVIEW_GATE_DIRECTIVE', REVIEW_GATE_DIRECTIVE],
   ]
 
-  test('every channel carries ONE_TURN_RULE verbatim, so none can drift out of sync', () => {
+  test('every channel carries BOTH REVIEW_ROLE_RULE and MEASURE_ROLE_RULE verbatim, so none can drift out of sync', () => {
     for (const [name, text] of channels) {
-      assert.ok(text.includes(ONE_TURN_RULE), `${name} lost the verbatim one-turn rule`)
+      assert.ok(text.includes(REVIEW_ROLE_RULE), `${name} lost the verbatim review-role rule`)
+      assert.ok(text.includes(MEASURE_ROLE_RULE), `${name} lost the verbatim measure-role rule`)
     }
   })
 
-  test('every channel orders the rule COPIED VERBATIM into the fork prompt, not merely stated', () => {
+  test('every channel orders the rule COPIED VERBATIM into the agent prompt, not merely stated', () => {
     for (const [name, text] of channels) {
       assert.ok(/VERBATIM/.test(text), `${name} states the rule but never orders it pasted`)
     }
   })
 
-  // A REGRESSION PIN FOR ONE HISTORICAL BUG — not a general carve-out guard, and it must not be
-  // described as one. Measured 2026-09-03: 186 fork prompts pasted the directive's own "except a
-  // single SendMessage" carve-out, and 177 of them then made exactly one tool call, buying a second
-  // turn. This pins THAT regression by name. It cannot catch a carve-out that names a different
-  // tool ("except one Read"), or none at all ("one verification step is permitted") — expressing
-  // "the rule admits no exception" is beyond a substring test, and the earlier /except/i attempt
-  // was worse: it missed re-wordings AND reddened on innocent prose like "exception handling".
-  // Only the REVIEW_GATE_DIRECTIVE arm has real freedom; the other two interpolate ONE_TURN_RULE,
-  // so their counts are near-guaranteed by construction. Effective new coverage is one assertion.
-  const countOf = (needle: string, hay: string): number => hay.split(needle).length - 1
-
-  test('no channel names a sanctioned tool call — the only "SendMessage" is the one being forbidden', () => {
-    assert.strictEqual(countOf('SendMessage', ONE_TURN_RULE), 1, 'the rule forbids SendMessage exactly once')
+  // REPLACES the old countOf('SendMessage', ...) regression pin (2026-09-03: 186 fork prompts
+  // pasted a "except a single SendMessage" carve-out and 177 then made exactly one tool call). That
+  // ban on NAMING a tool no longer fits: the MEASURE role now has a deliberate, unbounded tool
+  // budget (owner correction C4), so a channel that says "READ-ONLY" and names `tldr`/`llm-ext`/
+  // `distill` is correct, not a leak. What still matters is that every channel publishes BOTH
+  // headings (so an agent complying with either role can be recognized) and states the measure
+  // role's read-only constraint.
+  test('every channel names both role headings, and states the measure role is read-only', () => {
     for (const [name, text] of channels) {
-      assert.strictEqual(
-        countOf('SendMessage', text), countOf('SendMessage', ONE_TURN_RULE),
-        `${name} mentions SendMessage outside the prohibition — a named tool reads as a licence`,
-      )
+      assert.ok(text.includes(MEASURE_HEADING), `${name} omits the MEASURE heading`)
+      assert.ok(text.includes(REVIEW_HEADING), `${name} omits the REVIEW heading`)
+      assert.ok(/READ-ONLY/.test(text), `${name} no longer states the measure role is read-only`)
+    }
+  })
+})
+
+// ── forkRole / resultRole — two-role identification (owner spec 2026-09-13) ───────────────────────
+suite('reviewGate — forkRole / resultRole: two-role identification', () => {
+  test('forkRole: exactly one ROLE marker credits that role; both or neither credits neither', () => {
+    assert.strictEqual(forkRole('ROLE: MEASURE\ndo the thing'), 'measure')
+    assert.strictEqual(forkRole('ROLE: REVIEW\ndo the thing'), 'review')
+    assert.strictEqual(forkRole('ROLE: MEASURE\nROLE: REVIEW\n'), null, 'both markers ⇒ null')
+    assert.strictEqual(forkRole('just a plain prompt'), null, 'neither marker ⇒ null')
+    assert.strictEqual(forkRole('see ROLE: MEASURE above, then do X'), null, 'a marker mid-line is not an anchored marker LINE')
+  })
+
+  test('resultRole: exactly one heading credits that role; both or neither credits neither', () => {
+    assert.strictEqual(resultRole(`${MEASURE_HEADING}\n\nfindings...`), 'measure')
+    assert.strictEqual(resultRole(`${REVIEW_HEADING}\n\nfindings...`), 'review')
+    assert.strictEqual(resultRole(`${MEASURE_HEADING}\n${REVIEW_HEADING}\n`), null, 'both headings ⇒ null')
+    assert.strictEqual(resultRole('just some prose about the gate'), null)
+    assert.strictEqual(resultRole(`## ${MEASURE_HEADING}\n\nfindings...`), 'measure', 'a markdown heading prefix still credits')
+    assert.strictEqual(resultRole(`**${REVIEW_HEADING}**\n\nfindings...`), 'review', 'bold punctuation prefix still credits')
+    // C2: the punctuation class is HORIZONTAL whitespace only (`[#*\t ]`, never `\s`) — `\s` would
+    // span lines and let a heading buried after a blank line still "start" a line under the anchor.
+    assert.strictEqual(resultRole(`some prose\n\n${MEASURE_HEADING}`), 'measure', 'the heading itself still starts ITS OWN line')
+  })
+})
+
+// ── two-role gate: SPAWN-while-pending vs RESULT-permanent (owner correction 2026-09-13, C5) ──────
+//
+// C1 (an earlier design) said a spawn credit expires once a LATER string-content `user` entry
+// appears — but that entry shape also covers a `[janitor-heartbeat]` fire, the owner typing
+// mid-turn, and the gate's own `Stop hook feedback:` block message, so a single block would have
+// been self-sustaining. C5 retracts C1: a spawn credits its role only while its own tool_use is
+// still OPEN (no tool_result / task-id notification landed yet); a RESULT credits its role
+// permanently, whatever the heading says.
+suite('reviewGate — two-role gate: SPAWN-while-pending, RESULT-permanent (C5)', () => {
+  const toolUse = (ts: string, id: string, name: string, input: Record<string, unknown> = {}): string =>
+    JSON.stringify({ type: 'assistant', timestamp: ts, message: { content: [{ type: 'tool_use', id, name, input }] } })
+  const toolResult = (ts: string, toolUseId: string, content: unknown): string =>
+    JSON.stringify({ type: 'user', timestamp: ts, message: { content: [{ type: 'tool_result', tool_use_id: toolUseId, content }] } })
+  const iso = (offsetMs: number): string => new Date(1_800_000_000_000 + offsetMs).toISOString()
+
+  test('(C5-1) spawn both, no results yet, work BEFORE them ⇒ RELEASE — the launching turn releases its own Stop', () => {
+    const lines = [
+      assistantLine([editBlock]), // work at index 0
+      toolUse(iso(1000), 'm1', 'Agent', { subagent_type: 'lean-worker', prompt: 'ROLE: MEASURE\nsettle it' }), // index 1
+      toolUse(iso(2000), 'r1', 'Agent', { subagent_type: 'fork', prompt: 'ROLE: REVIEW\nattack it' }), // index 2
+    ]
+    const scan = scanMainTranscriptLines(lines, CWD)
+    assert.strictEqual(scan.roles.measure, 1, 'still open ⇒ the spawn credits it')
+    assert.strictEqual(scan.roles.review, 2, 'still open ⇒ the spawn credits it')
+    assert.strictEqual(decideMainGate(scanPositions(scan)).block, false)
+  })
+
+  test('(C5-2) spawn both, BOTH results land carrying their headings ⇒ RELEASE', () => {
+    const lines = [
+      assistantLine([editBlock]),
+      toolUse(iso(1000), 'm1', 'Agent', { subagent_type: 'lean-worker', prompt: 'ROLE: MEASURE\nsettle it' }),
+      toolUse(iso(2000), 'r1', 'Agent', { subagent_type: 'fork', prompt: 'ROLE: REVIEW\nattack it' }),
+      toolResult(iso(3000), 'm1', `${MEASURE_HEADING}\n\nASSUMPTION 1: ... VERDICT: confirmed`),
+      toolResult(iso(4000), 'r1', `${REVIEW_HEADING}\n\nno findings`),
+    ]
+    const scan = scanMainTranscriptLines(lines, CWD)
+    assert.strictEqual(scan.roles.measure, 3, 'the RESULT decides once it lands, permanently')
+    assert.strictEqual(scan.roles.review, 4)
+    assert.strictEqual(decideMainGate(scanPositions(scan)).block, false)
+  })
+
+  test('(C5-3) spawn both, ONE result lands WITHOUT its heading ⇒ BLOCK — returning is not enough, the heading is', () => {
+    const lines = [
+      assistantLine([editBlock]),
+      toolUse(iso(1000), 'm1', 'Agent', { subagent_type: 'lean-worker', prompt: 'ROLE: MEASURE\nsettle it' }),
+      toolUse(iso(2000), 'r1', 'Agent', { subagent_type: 'fork', prompt: 'ROLE: REVIEW\nattack it' }),
+      toolResult(iso(3000), 'm1', `${MEASURE_HEADING}\n\nASSUMPTION 1: ... VERDICT: confirmed`),
+      toolResult(iso(4000), 'r1', 'looks fine to me'), // returned, but WITHOUT the heading
+    ]
+    const scan = scanMainTranscriptLines(lines, CWD)
+    assert.strictEqual(scan.roles.measure, 3)
+    assert.strictEqual(scan.roles.review, -1, 'returned without the heading ⇒ no credit, spawn credit is also gone (it is no longer open)')
+    assert.strictEqual(decideMainGate(scanPositions(scan)).block, true)
+  })
+
+  test('(C5-4) a [janitor-heartbeat] / "Stop hook feedback:" string-content user entry between the spawns and the Stop does NOT change the verdict — the retracted C1 bug, pinned', () => {
+    const heartbeat = JSON.stringify({ type: 'user', message: { content: '[janitor-heartbeat]\nfindings: none' } })
+    const feedback = JSON.stringify({ type: 'user', message: { content: `Stop hook feedback:\n${MEASURE_HEADING}\n${REVIEW_HEADING}` } })
+    for (const noise of [heartbeat, feedback]) {
+      const lines = [
+        assistantLine([editBlock]),
+        toolUse(iso(1000), 'm1', 'Agent', { subagent_type: 'lean-worker', prompt: 'ROLE: MEASURE\nsettle it' }),
+        toolUse(iso(2000), 'r1', 'Agent', { subagent_type: 'fork', prompt: 'ROLE: REVIEW\nattack it' }),
+        noise,
+      ]
+      const scan = scanMainTranscriptLines(lines, CWD)
+      assert.strictEqual(scan.roles.measure, 1, `noise line changed the measure verdict: ${noise.slice(0, 40)}`)
+      assert.strictEqual(scan.roles.review, 2, `noise line changed the review verdict: ${noise.slice(0, 40)}`)
+      assert.strictEqual(decideMainGate(scanPositions(scan)).block, false, `noise line flipped the gate: ${noise.slice(0, 40)}`)
+    }
+  })
+
+  // C8: the gate's OWN block message must publish "ROLE: MEASURE"/"ROLE: REVIEW" and both headings
+  // (so agents can comply), and it lands in the transcript as a string-content `user` entry. If the
+  // result-credit scan read ANY such entry, the gate would credit both roles from its own output and
+  // release itself. Gated on the task-id tag (and a redundant `Stop hook feedback:` exclusion) —
+  // this is the test that would catch either guard going missing.
+  test('(C8) the gate\'s own block message (no task-id tag) never credits a role, even though it quotes both headings verbatim', () => {
+    const ownBlockMessage = JSON.stringify({
+      type: 'user',
+      message: { content: `Stop hook feedback: COPY THIS LINE VERBATIM INTO THE MEASURE PROMPT: "ROLE: MEASURE ... ${MEASURE_HEADING} ..." COPY THIS LINE VERBATIM INTO THE REVIEW PROMPT: "ROLE: REVIEW ... ${REVIEW_HEADING} ..."` },
+    })
+    const additionalContext = JSON.stringify({
+      type: 'user',
+      message: { content: `[review-supervisor] before returning spawn ROLE: MEASURE and ROLE: REVIEW, headings ${MEASURE_HEADING} / ${REVIEW_HEADING}` },
+    })
+    for (const line of [ownBlockMessage, additionalContext]) {
+      const scan = scanMainTranscriptLines([assistantLine([editBlock]), line], CWD)
+      assert.strictEqual(scan.roles.measure, -1, `the gate's own output credited MEASURE: ${line.slice(0, 60)}`)
+      assert.strictEqual(scan.roles.review, -1, `the gate's own output credited REVIEW: ${line.slice(0, 60)}`)
     }
   })
 })
@@ -669,8 +819,9 @@ suite('review-gate: the no-review sentinel', () => {
       assistantLine([proposalBlock]),
       assistantLine([sentinelLine()]),
     ])
-    assert.ok(scanPositions(scan).lastFork >= scanPositions(scan).lastWork, 'sentinel must satisfy the positional rule')
-    assert.strictEqual(decideMainGate(scanPositions(scan)).block, false)
+    const pos = scanPositions(scan)
+    assert.ok(Math.min(pos.roles.measure, pos.roles.review) >= pos.lastWork, 'sentinel must satisfy the positional rule for BOTH roles')
+    assert.strictEqual(decideMainGate(pos).block, false)
   })
 
   test('prose after the sentinel re-arms the main gate, exactly as prose after a fork does', () => {
@@ -892,27 +1043,27 @@ suite('review-gate: the recursion guard exempts reviewers and nothing else', () 
   // The boundary asserted against the FUNCTION, not the prose — prose can agree with a wrong model.
   // Both directions are needed: `block === false` alone is satisfied by a gate that never blocks,
   // which is the most dangerous mutation a review gate has.
-  test('decideMainGate: equal indices release, work after the fork blocks', () => {
+  test('decideMainGate: equal indices release, one role before the work still blocks', () => {
     assert.strictEqual(
-      decideMainGate({ lastWork: 4, lastFork: 4 }).block, false,
+      decideMainGate({ lastWork: 4, roles: { measure: 4, review: 4 } }).block, false,
       'equal indices must RELEASE — the predicate is >=, not >',
     )
     assert.strictEqual(
-      decideMainGate({ lastWork: 4, lastFork: 3 }).block, true,
-      'work after the fork must BLOCK — without this, a never-blocking gate passes',
+      decideMainGate({ lastWork: 4, roles: { measure: 3, review: 4 } }).block, true,
+      'one role before the work must BLOCK — without this, a never-blocking gate passes',
     )
   })
 
-  // The fail-open pinned so a change to it is visible. `lastWork === -1` returns BEFORE `lastFork`
-  // is consulted, so an empty scan window allows the stop whatever the fork state — a silent bypass
-  // of a gate the owner ordered never bypassed. Sought on real transcripts and not reproduced; the
-  // mechanism is in the code regardless. This test asserts today's behaviour, so whoever changes it
-  // must do so deliberately. (TRDD-W0ZTTUBA)
+  // The fail-open pinned so a change to it is visible. `lastWork === -1` returns BEFORE the roles
+  // are consulted, so an empty scan window allows the stop whatever the role state — a silent
+  // bypass of a gate the owner ordered never bypassed. Sought on real transcripts and not
+  // reproduced; the mechanism is in the code regardless. This test asserts today's behaviour, so
+  // whoever changes it must do so deliberately. (TRDD-W0ZTTUBA)
   test('decideMainGate fails OPEN on an empty window — pinned, not endorsed', () => {
-    for (const lastFork of [-1, 7]) {
+    for (const roleIdx of [-1, 7]) {
       assert.strictEqual(
-        decideMainGate({ lastWork: -1, lastFork }).block, false,
-        `lastWork === -1 allows the stop with lastFork ${lastFork} — ${lastFork === -1 ? 'the fail-open itself' : 'correct: a fork after no work'}; see TRDD-W0ZTTUBA`,
+        decideMainGate({ lastWork: -1, roles: { measure: roleIdx, review: roleIdx } }).block, false,
+        `lastWork === -1 allows the stop with roles at ${roleIdx} — ${roleIdx === -1 ? 'the fail-open itself' : 'correct: roles credited after no work'}; see TRDD-W0ZTTUBA`,
       )
     }
   })

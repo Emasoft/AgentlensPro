@@ -11,22 +11,35 @@ const CWD = '/proj'
 const assistant = (blocks: unknown[], isSidechain = false): string =>
   JSON.stringify({ type: 'assistant', isSidechain, message: { content: blocks } })
 const edit = { type: 'tool_use', name: 'Edit', input: {} }
+// A BARE fork (no `ROLE: …` marker) — kept for the tests that are specifically about the FORKS
+// COUNTER (case-folding), which counts any `subagent_type: "fork"` spawn whatever its role.
 const fork = { type: 'tool_use', name: 'Agent', input: { subagent_type: 'fork' } }
+// The two-role model (owner spec 2026-09-13): the backlog now clears only once BOTH a MEASURE and
+// a REVIEW spawn have been seen since the last work item — a bare, unmarked fork no longer clears
+// it alone.
+const measureFork = { type: 'tool_use', name: 'Agent', input: { subagent_type: 'lean-worker', prompt: 'ROLE: MEASURE\ndo it' } }
+const reviewFork = { type: 'tool_use', name: 'Agent', input: { subagent_type: 'fork', prompt: 'ROLE: REVIEW\ndo it' } }
 const commit = { type: 'tool_use', name: 'Bash', input: { command: 'git commit -m x' } }
 const talkAboutCommit = { type: 'tool_use', name: 'Bash', input: { command: 'echo "run git commit"' } }
 
 const settings = (cmd: string): string => JSON.stringify({ hooks: { Stop: [{ hooks: [{ command: cmd }] }] } })
 
 suite('reviewSupervisor — scan', () => {
-  test('counts edits and commits as work, and forks as reviews', () => {
-    const s = scanSupervision([assistant([edit]), assistant([commit]), assistant([fork])], CWD)
+  test('counts edits and commits as work, and both roles as a review', () => {
+    const s = scanSupervision([assistant([edit]), assistant([commit]), assistant([measureFork]), assistant([reviewFork])], CWD)
     assert.deepStrictEqual(s, { work: 2, forks: 1, unreviewed: 0 })
   })
 
-  test('a fork clears the unreviewed backlog; later work rebuilds it', () => {
-    const s = scanSupervision([assistant([edit]), assistant([fork]), assistant([edit]), assistant([edit])], CWD)
-    assert.strictEqual(s.unreviewed, 2, 'only the work AFTER the last fork is unreviewed')
+  test('both roles clear the unreviewed backlog; later work rebuilds it', () => {
+    const s = scanSupervision([assistant([edit]), assistant([measureFork]), assistant([reviewFork]), assistant([edit]), assistant([edit])], CWD)
+    assert.strictEqual(s.unreviewed, 2, 'only the work AFTER both roles landed is unreviewed')
     assert.strictEqual(s.forks, 1)
+  })
+
+  test('a lone, unmarked fork spawn does NOT clear the backlog — the two-role model needs both', () => {
+    const s = scanSupervision([assistant([edit]), assistant([fork])], CWD)
+    assert.strictEqual(s.unreviewed, 1, 'a bare fork carries no ROLE marker, so neither role is credited')
+    assert.strictEqual(s.forks, 1, 'the forks counter itself is unaffected — it counts the spawn, not the role')
   })
 
   test('prose about committing is not a commit', () => {
@@ -60,7 +73,9 @@ suite('reviewSupervisor — scan', () => {
   test('scanSupervision case-folds subagent_type, like the gate\'s own scanners already do', () => {
     const capsFork = { type: 'tool_use', name: 'Agent', input: { subagent_type: 'Fork' } }
     const s = scanSupervision([assistant([edit]), assistant([capsFork])], CWD)
-    assert.deepStrictEqual(s, { work: 1, forks: 1, unreviewed: 0 }, 'a subagent_type of "Fork" must still count as the fork')
+    // Case-folding is proven by `forks: 1` alone — `capsFork` carries no ROLE marker, so under the
+    // two-role model `unreviewed` is NOT cleared (that needs both roles, tested separately above).
+    assert.deepStrictEqual(s, { work: 1, forks: 1, unreviewed: 1 }, 'a subagent_type of "Fork" must still count as the fork')
   })
 
   test('a no-review sentinel counts as a review, like a fork — or the sentinel path would nag forever', () => {
@@ -137,8 +152,8 @@ suite('reviewSupervisor — warns without ever blocking', () => {
     assert.ok(/--install-hooks/.test(m), 'a fork cannot fix a settings-derived condition; say what can')
   })
 
-  test('spawning a fork clears the backlog — the warning is actionable', () => {
-    const withFork = scanSupervision([assistant([edit]), assistant([edit]), assistant([edit]), assistant([fork])], CWD)
+  test('spawning both roles clears the backlog — the warning is actionable', () => {
+    const withFork = scanSupervision([assistant([edit]), assistant([edit]), assistant([edit]), assistant([measureFork]), assistant([reviewFork])], CWD)
     assert.strictEqual(withFork.unreviewed, 0)
     assert.strictEqual(judge(withFork, true, true).level, 'ok')
   })

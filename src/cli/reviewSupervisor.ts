@@ -20,8 +20,8 @@
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
-import { readTranscriptTail, hookCwd, isNoReviewSentinel, toolUseWork } from './reviewGate'
-import type { AssistantContentBlock } from './reviewGate'
+import { readTranscriptTail, hookCwd, isNoReviewSentinel, toolUseWork, forkRole, resultRole, resultText } from './reviewGate'
+import type { AssistantContentBlock, Role } from './reviewGate'
 import { textArms } from './reviewGateTriggers'
 
 export interface SupervisorScan {
@@ -46,29 +46,51 @@ export function scanSupervision(lines: string[], cwd: string): SupervisorScan {
   let work = 0
   let forks = 0
   let unreviewed = 0
+  // Advisory two-role tracking (owner spec 2026-09-13): the backlog clears only once BOTH the
+  // MEASURE and REVIEW roles have been seen since the last work item — a lone spawn (which used to
+  // clear it unconditionally) is no longer enough. This supervisor never blocks, so it uses the
+  // simpler "seen anywhere" model rather than the main gate's open/closed-interval bookkeeping —
+  // an under-warning here costs a missed nag, not a skipped enforcement (the gate still enforces).
+  let seenMeasure = false
+  let seenReview = false
+  const noteRole = (role: Role | null): void => {
+    if (role === 'measure') seenMeasure = true
+    else if (role === 'review') seenReview = true
+    if (seenMeasure && seenReview) { unreviewed = 0; seenMeasure = false; seenReview = false }
+  }
   for (const line of lines) {
     let e: { type?: string; isSidechain?: boolean; message?: { content?: unknown } }
     try { e = JSON.parse(line) as typeof e } catch { continue }
     if (e?.isSidechain === true) continue
-    if (e?.type !== 'assistant') continue
     const content = e?.message?.content
+    if (e?.type === 'user' && Array.isArray(content)) {
+      for (const b of content as AssistantContentBlock[]) {
+        if (b?.type !== 'tool_result') continue
+        noteRole(resultRole(resultText(b.content)))
+      }
+      continue
+    }
+    if (e?.type !== 'assistant') continue
     if (!Array.isArray(content)) continue
     for (const b of content as AssistantContentBlock[]) {
       if (b?.type === 'text') {
         const text = String(b.text ?? '')
-        // A no-review sentinel is a legitimate exit, not a proposal — treat it like a fork
-        // (clears the backlog) so the supervisor does not nag an agent that correctly declared
-        // it could not spawn a reviewer.
-        if (isNoReviewSentinel(text)) { forks++; unreviewed = 0; continue }
-        if (textArms(text)) { work++; unreviewed++ }
+        // A no-review sentinel is a legitimate exit, not a proposal — treat it like both roles
+        // landing (clears the backlog) so the supervisor does not nag an agent that correctly
+        // declared it could not spawn a reviewer.
+        if (isNoReviewSentinel(text)) { forks++; seenMeasure = true; seenReview = true; unreviewed = 0; continue }
+        if (textArms(text)) { work++; unreviewed++; seenMeasure = false; seenReview = false }
         continue
       }
       if (b?.type !== 'tool_use') continue
-      // CASE-FOLDED, same as scanMainTranscriptLines/scanSubagentTranscriptLines.
-      if (b.name === 'Agent' && String(b.input?.subagent_type ?? '').trim().toLowerCase() === 'fork') {
-        forks++; unreviewed = 0; continue
+      if (b.name === 'Agent') {
+        const role = forkRole(String(b.input?.prompt ?? ''))
+        if (role !== null) noteRole(role)
+        // CASE-FOLDED, same as scanMainTranscriptLines/scanSubagentTranscriptLines.
+        if (String(b.input?.subagent_type ?? '').trim().toLowerCase() === 'fork') forks++
+        continue
       }
-      if (toolUseWork(b, cwd) !== null) { work++; unreviewed++ }
+      if (toolUseWork(b, cwd) !== null) { work++; unreviewed++; seenMeasure = false; seenReview = false }
     }
   }
   return { work, forks, unreviewed }
