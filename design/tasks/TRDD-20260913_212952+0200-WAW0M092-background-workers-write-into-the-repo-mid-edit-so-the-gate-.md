@@ -3,7 +3,7 @@ trdd-id: WAW0M092
 title: Worker writes arm the main gate as the coordinator's own, and the demanded remedy cannot review them
 column: todo
 created: 2026-09-13T21:29:52+0200
-updated: 2026-09-13T21:33:15+0200
+updated: 2026-09-13T21:56:57+0200
 current-owner: emanuelesabetta
 created-by: emanuelesabetta
 task-type: refactor
@@ -64,3 +64,4 @@ The prompt dispatching one of these workers contained the text ROLE + colon + ME
 4. The proposed mechanism adds a SILENT LOST-UPDATE RACE. Copy-out, edit, rename-back is read-modify-write with no compare-and-swap; two concurrent workers, or a worker and the coordinator, and the last rename silently wins. A mid-edit window is transient and observable; a lost update is permanent and silent — a strictly worse failure class, and this session ran three workers concurrently. Also: rename(2) is atomic per PATH, so a multi-file change (the rename touched three) is a SEQUENCE of renames, i.e. a coarser mid-edit window, not none. And editing a detached copy breaks the tree-sitter tooling's model, since impact analysis would run against a tree that no longer matches the edit target.
 5. The CHEAPEST fix is not on this card at all: batch writes into fewer turns. Roughly half this session's fork count came from placing each card write in its own turn; batching costs nothing and would have halved it. Do that before restructuring any worker I/O.
 6. 'Q3 would have suppressed all three arms' was REASONED, not executed — mark it so. The raw-token figures (~300k each, ~900k total) are unweighted and this project's doctrine forbids that accounting: forks inherit the parent cache at 0.1x while fresh workers pay a cold prefix write at 1.25x, so the forks were the cheap half. Drop or weight the figures. The marker near-miss fixture belongs on the marker trust-boundary card, not here — a card holding another card's fixture is how fixtures get lost. Acceptance row 1 is untestable as written (you cannot observe the absence of a transient); rewrite as 'a worker's repo file mtime changes exactly once per worker run'. Row 3 belongs on Q3's card.
+SEPARATE FINDING, recorded here for lack of a better home: TEST TITLES ARE NOW EFFECTIVELY API in this repo. Commit 3555741c's message cites two of them verbatim as the guards for named hazards, and a commit message cannot be corrected. A stale --grep exits 0 having run 0 tests — a silent pass, the exact shape this project legislates against. Either stop quoting test titles in commit messages, or treat titles as a renamable-with-care interface. Measured this session: there is NO stored --grep filter in package.json or .mocharc, so renames break no tooling today; the risk is entirely in citations.

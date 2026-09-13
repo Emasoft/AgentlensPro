@@ -3,7 +3,7 @@ trdd-id: 1YXR6S47
 title: The documented loose-credit strict-exempt polarity is inverted on the security axis
 column: todo
 created: 2026-09-13T21:39:12+0200
-updated: 2026-09-13T21:40:16+0200
+updated: 2026-09-13T21:43:29+0200
 current-owner: emanuelesabetta
 created-by: emanuelesabetta
 task-type: security
@@ -63,3 +63,8 @@ RESULT TEXT must be stricter than spawn prompts, and the body's finding 3 is why
 REJECTED — a first-N-lines position bound. It does not survive the real threat: untrusted text pasted at the TOP of a brief is the common shape, not the rare one, and it adds a constant nobody can tune. Revisit only if injection is observed past the harness boilerplate.
 REJECTED for now — signing or nonce-stamping the role declaration. Correct, and far more than this gate warrants until the exact-compare version is observed failing.
 SEQUENCING: do NOT start this while another agent holds reviewGate. Land the in-flight guards/rename work first, then apply this as its own change with its own tests.
+CORRECTION to the decision above: use trimEnd(), NOT trim(). trim() strips LEADING whitespace, and the current strict regex anchors at line start — so an indented marker does NOT match today but WOULD under trim(). That is a WIDENING, not a tightening, and indented text is exactly the shape quoted material arrives in (markdown blocks, YAML, pasted transcripts). trimEnd() kills the trailing-space wedge without touching the leading anchor.
+KEEP the both-or-neither null rule; 'first non-null wins' is a regression. Resolving ambiguity by picking a winner IS the false-credit direction. It also costs nothing defensively: an attacker quotes ONE marker, never both. Who actually trips the rule is DOCUMENTATION — these very cards, the skill files, this session — which quote both and correctly yield null today. Ship: collect distinct roles found, return one only if exactly one was found.
+CONSEQUENCE: once crediting is whole-line exact, the two predicates become genuinely IDENTICAL and one function is correct. The do-not-unify comment must be DELETED in the same change. Leaving a comment that contradicts the code is worse than either option.
+REJECTED — resultRole restricted to the first line. Dead on arrival: the harness fork boilerplate instructs the agent to open with one line restating its task, and every fork in this session complied (they open with 'Task:' or 'Reviewing'). First-line-only would credit NONE of them, and since release needs both roles that is the permanent wedge arriving by design rather than by attack. Ship whole-line-exact over the WHOLE result text instead — already far narrower than 'anywhere within', since a quoted marker must occupy an entire line alone. Bound it to the first N lines only after MEASURING where the marker actually lands.
+VERIFIED no regress risk in the exemption tightening: every input matching the current strict regex (no leading whitespace, marker, trailing whitespace only) still matches under trimEnd-exact. Checked specifically — zero-width U+200B is in neither the whitespace class nor trim's set so fails both; U+FEFF is in both so matches both; a trailing comment fails both; CRLF is handled by both. No agent becomes permanently gated.
