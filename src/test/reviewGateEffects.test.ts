@@ -100,6 +100,64 @@ suite('review-gate effects: unreviewedEffects', () => {
     assert.ok(r.paths.includes(watchedFile), r.paths.join(','))
   })
 
+  test('derived artifacts in a watched root never arm the gate; a real source edit still does (TRDD-M9344XC8)', () => {
+    // A non-git cwd (same pattern as the "non-git cwd" test below) so the assertion is a clean
+    // paths:[] / paths:[sourceFile], with no unrelated HEAD noise from `repo`'s own commit.
+    const cwd = path.join(root, 'plain-dir-derived')
+    fs.mkdirSync(cwd)
+    const watchedDir = path.join(root, 'watched-derived')
+    fs.mkdirSync(watchedDir)
+    const hooksDir = path.join(watchedDir, 'hooks')
+    fs.mkdirSync(hooksDir)
+    const pycacheDir = path.join(hooksDir, '__pycache__')
+    fs.mkdirSync(pycacheDir)
+
+    const sourceFile = path.join(hooksDir, 'x.py')
+    // Two fixtures, each hidden by exactly ONE guard, so a mutation removing either guard
+    // is caught by this single test (see the mutation-proof commands in the m9344xc8-r2 report):
+    // junkFile is hidden ONLY by SKIP_DIRS('__pycache__') — its own name/extension never
+    // matches the derived-artifact regex; pycFile2 sits OUTSIDE __pycache__ so it is hidden
+    // ONLY by the regex, never by SKIP_DIRS.
+    const junkFile = path.join(pycacheDir, 'junk.txt')
+    const pycFile2 = path.join(hooksDir, 'x.pyc')
+    const dsStoreFile = path.join(hooksDir, '.DS_Store')
+    const logFile = path.join(hooksDir, 'x.log')
+
+    const past = new Date(Date.now() - 60_000)
+    fs.writeFileSync(sourceFile, 'print(1)\n')
+    fs.utimesSync(sourceFile, past, past)
+
+    const sinceMs = Date.now()
+
+    const future = new Date(sinceMs + 60_000)
+    for (const f of [junkFile, pycFile2, dsStoreFile, logFile]) {
+      fs.writeFileSync(f, 'x\n')
+      fs.utimesSync(f, future, future)
+    }
+
+    let r = unreviewedEffects(cwd, sinceMs, { watched: [watchedDir] })
+    assert.deepStrictEqual(r.paths, [], r.paths.join(','))
+
+    fs.utimesSync(sourceFile, future, future)
+    r = unreviewedEffects(cwd, sinceMs, { watched: [watchedDir] })
+    assert.deepStrictEqual(r.paths, [sourceFile], r.paths.join(','))
+  })
+
+  test('a .log added in-repo next to an already-tracked file is listed (TRDD-M9344XC8)', () => {
+    // `isDerivedArtifact` is now unconditional (no `watched` flag) and repo content never
+    // routes through it — `inRepoEffects` lists whatever `git status` reports, filtered only
+    // by BUILD_OUTPUT. A .log here must still arm the gate: it is reviewable work outside the
+    // watched config set. `repo`'s `.gitignore` (see `setup` above) matches only `ignored.txt`,
+    // never `*.log`, so this file is untracked, not ignored.
+    const t = Date.now()
+    const p = path.join(repo, 'x.log') // alongside tracked.txt, already committed in `setup`
+    fs.writeFileSync(p, 'log line\n')
+    const future = new Date(t + 60_000)
+    fs.utimesSync(p, future, future)
+    const { paths } = unreviewedEffects(repo, t, { watched: [] })
+    assert.ok(paths.includes('x.log'), paths.join(','))
+  })
+
   test('a build-output path (standalone/*.js) modified after T is excluded', () => {
     const t = Date.now()
     fs.mkdirSync(path.join(repo, 'standalone'))
@@ -371,5 +429,86 @@ suite('review-gate effects: defaultWatchedSet', () => {
     const slug = cwd.replace(/[^A-Za-z0-9]/g, '-')
     assert.ok(out.includes(path.join(home, '.claude', 'projects', slug, 'memory')))
     assert.ok(out.includes(path.join(home, '.claude', 'projects', slug, 'design')))
+  })
+})
+
+suite('unreviewedEffects — deferIntervals (TRDD-3U8AIHXK/Q3: defer credit against an index, not a clock)', () => {
+  let root: string
+  let repo: string
+
+  setup(() => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), 'al-defer-'))
+    repo = path.join(root, 'repo')
+    fs.mkdirSync(repo)
+    git(repo, 'init', '-q')
+    git(repo, 'config', 'user.email', 'x@example.com')
+    git(repo, 'config', 'user.name', 'x')
+    fs.writeFileSync(path.join(repo, 'tracked.txt'), 'v1\n')
+    git(repo, 'add', '-A')
+    git(repo, 'commit', '-q', '-m', 'init')
+  })
+
+  teardown(() => { fs.rmSync(root, { recursive: true, force: true }) })
+
+  test('a write covered ONLY by a deferred interval does not arm', () => {
+    const t = Date.now() - 2500
+    const p = path.join(repo, 'tracked.txt')
+    fs.writeFileSync(p, 'v2\n')
+    const w = fs.statSync(p).mtimeMs
+    const openSpawn: Activity = { start: w - 5000, end: w + 5000 }
+    assert.ok(
+      !unreviewedEffects(repo, t, { watched: [], activity: [openSpawn], deferIntervals: [openSpawn] }).paths.includes('tracked.txt'),
+      'covered only by a deferred interval — must not arm',
+    )
+  })
+
+  test('the SAME write, once its interval is no longer passed as a deferral, arms', () => {
+    const t = Date.now() - 2500
+    const p = path.join(repo, 'tracked.txt')
+    fs.writeFileSync(p, 'v2\n')
+    const w = fs.statSync(p).mtimeMs
+    const closedSpawn: Activity = { start: w - 5000, end: w + 5000 }
+    // The agent "returned" — the caller no longer includes this interval in deferIntervals,
+    // exactly as `scanMainTranscriptLines` stops listing it once `end !== Infinity`.
+    assert.ok(
+      unreviewedEffects(repo, t, { watched: [], activity: [closedSpawn], deferIntervals: [] }).paths.includes('tracked.txt'),
+      'no longer deferred — must arm',
+    )
+  })
+
+  test('a write inside a ROLE-marked (non-deferred) spawn interval still arms — the Q3 guard', () => {
+    const t = Date.now() - 2500
+    const p = path.join(repo, 'tracked.txt')
+    fs.writeFileSync(p, 'v2\n')
+    const w = fs.statSync(p).mtimeMs
+    const roledSpawn: Activity = { start: w - 5000, end: w + 5000 }
+    // A roled spawn is never placed in `deferIntervals` by the caller (see reviewGate.ts), but it
+    // DOES stay in `activity` — this is the guard that a filtered `activity` array would defeat.
+    assert.ok(
+      unreviewedEffects(repo, t, { watched: [], activity: [roledSpawn], deferIntervals: [] }).paths.includes('tracked.txt'),
+      'a roled spawn interval is never a defer candidate — must arm',
+    )
+  })
+
+  test('a write covered by BOTH a deferred interval and an ordinary closed one still arms', () => {
+    const t = Date.now() - 2500
+    const p = path.join(repo, 'tracked.txt')
+    fs.writeFileSync(p, 'v2\n')
+    const w = fs.statSync(p).mtimeMs
+    const deferred: Activity = { start: w - 5000, end: w + 5000 }
+    const closed: Activity = { start: w - 5000, end: w + 5000 }
+    assert.ok(
+      unreviewedEffects(repo, t, { watched: [], activity: [deferred, closed], deferIntervals: [deferred] }).paths.includes('tracked.txt'),
+      'also covered by a non-deferred interval — must arm',
+    )
+  })
+
+  test('omitting deferIntervals entirely leaves existing activity-only callers unaffected', () => {
+    const t = Date.now() - 2500
+    const p = path.join(repo, 'tracked.txt')
+    fs.writeFileSync(p, 'v2\n')
+    const w = fs.statSync(p).mtimeMs
+    const covering: Activity = { start: w - 5000, end: w + 5000 }
+    assert.ok(unreviewedEffects(repo, t, { watched: [], activity: [covering] }).paths.includes('tracked.txt'))
   })
 })

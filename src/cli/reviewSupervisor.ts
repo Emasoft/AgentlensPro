@@ -20,7 +20,7 @@
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
-import { readTranscriptTail, hookCwd, isNoReviewSentinel, toolUseWork, forkRole, resultRole, resultText } from './reviewGate'
+import { readTranscriptTail, hookCwd, isNoReviewSentinel, toolUseWork, creditRoleLoose, resultRole, resultText } from './reviewGate'
 import type { AssistantContentBlock, Role } from './reviewGate'
 import { textArms } from './reviewGateTriggers'
 
@@ -84,7 +84,7 @@ export function scanSupervision(lines: string[], cwd: string): SupervisorScan {
       }
       if (b?.type !== 'tool_use') continue
       if (b.name === 'Agent') {
-        const role = forkRole(String(b.input?.prompt ?? ''))
+        const role = creditRoleLoose(String(b.input?.prompt ?? ''))
         if (role !== null) noteRole(role)
         // CASE-FOLDED, same as scanMainTranscriptLines/scanSubagentTranscriptLines.
         if (String(b.input?.subagent_type ?? '').trim().toLowerCase() === 'fork') forks++

@@ -19,7 +19,7 @@ import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
 
-export interface EffectsOptions { home?: string; watched?: string[]; maxEntries?: number; activity?: Activity[] }
+export interface EffectsOptions { home?: string; watched?: string[]; maxEntries?: number; activity?: Activity[]; deferIntervals?: Activity[] }
 export interface Effects { paths: string[]; truncated: boolean }
 
 /** One span during which THIS session's tools were running — the only time its own writes
@@ -30,10 +30,18 @@ export interface Activity { start: number; end: number }
 export const ATTRIBUTION_SLACK_MS = 1000
 /** "Newer than the last fork AND written while one of this session's tools was running"
  *  (TRDD-3U8AIHXK). With no `activity` (a caller or test of the walk alone) the second half is
- *  vacuously true — the pre-3U8AIHXK behaviour, which arms on every writer on the machine. */
-function freshness(sinceMs: number, activity: Activity[] | undefined): (ms: number) => boolean {
+ *  vacuously true — the pre-3U8AIHXK behaviour, which arms on every writer on the machine.
+ *  `deferIntervals` (TRDD-3U8AIHXK/Q3) are still-open, non-roled Agent spawns: an outstanding
+ *  worker cannot yet have its writes reviewed. `activity` is UNCHANGED by this — the interval
+ *  stays in `activity` so a write it covers is still attributed to this session; only its
+ *  CANDIDACY to arm the gate is suppressed, and only while no OTHER interval (closed, or a
+ *  roled/fork spawn) also covers the same mtime. Membership check is by object identity. */
+function freshness(sinceMs: number, activity: Activity[] | undefined, deferIntervals?: Activity[]): (ms: number) => boolean {
+  const deferred = new Set(deferIntervals ?? [])
+  const covers = (a: Activity, ms: number): boolean =>
+    ms >= a.start - ATTRIBUTION_SLACK_MS && ms <= a.end + ATTRIBUTION_SLACK_MS
   return (ms) => ms > sinceMs && (activity === undefined
-    || activity.some((a) => ms >= a.start - ATTRIBUTION_SLACK_MS && ms <= a.end + ATTRIBUTION_SLACK_MS))
+    || activity.some((a) => covers(a, ms) && !deferred.has(a)))
 }
 
 /** Parses `git log -g -1 --date=unix --format=%gd HEAD` output into epoch milliseconds, or
@@ -53,10 +61,29 @@ export const BUILD_OUTPUT: RegExp[] = [/^standalone\/[^/]+\.js$/, /^media\/[^/]+
 
 const DEFAULT_MAX_ENTRIES = 100000
 // Never descend into these — node_modules/.git churn constantly and carry no reviewable work;
-// memgrep's own sidecars are excluded by name pattern (checked per-file below, not here).
-const SKIP_DIRS = new Set(['node_modules', '.git'])
+// language/tool caches (__pycache__ and friends) hold only derived artifacts, never source
+// (TRDD-M9344XC8: a worker's `py_compile` into `__pycache__/` armed the gate with nothing
+// reviewable inside it); memgrep's own sidecars are excluded by name pattern (checked
+// per-file below, not here).
+const SKIP_DIRS = new Set([
+  'node_modules', '.git', '__pycache__', '.mypy_cache', '.ruff_cache', '.pytest_cache',
+  '.hypothesis', '.tox',
+])
 const isMemgrepSidecar = (name: string): boolean =>
   /\.sqlite(-.*)?$/.test(name) || name.startsWith('.memgrep')
+// Derived/noise files that carry no reviewable work: Finder's .DS_Store, a stray .pyc (PEP
+// 3147 — CPython never imports one whose source is absent, so skipping it hides no runnable
+// code), and a .log (the watched config set — ~/.claude/hooks, rules, skills, ... — holds
+// instructions, never a log a session must obey; a peer hook's growing log there, e.g.
+// ~/.claude/hooks/fable_delegation_gate.log, appended on every tool call, must never arm the
+// gate). Accepted residuals, deliberately not chased further: a hook run as `python x.pyc`
+// under a `__pycache__/` still arms via its `.py` source (no hook here is registered to run raw
+// bytecode), and a legacy `.pyc` sibling outside `__pycache__` is importable by CPython but,
+// same reason, nothing here executes it.
+// walkDir walks only the watched config set (instructions, never logs); repo content is listed
+// by git status in `inRepoEffects` and filtered only by `BUILD_OUTPUT`, never by this predicate.
+const isDerivedArtifact = (rel: string): boolean =>
+  /(^|\/)(\.DS_Store|[^/]+\.(pyc|log))$/.test(rel)
 
 /** Shared mutable walk state so the recursive directory walk and the flat watched-entry loop
  *  stop at the exact same `maxEntries` boundary and report one `truncated` flag.
@@ -79,6 +106,8 @@ function targetContainsGuardRoot(target: string, guardRoots: string[]): boolean 
   })
 }
 
+// ponytail: watched config set only — if a repo or non-git-cwd walk is ever routed through
+// here, split the .log rule out of isDerivedArtifact first (a repo .log is reviewable).
 function walkDir(dir: string, state: WalkState, depth = 0): void {
   if (state.truncated) return
   let entries: fs.Dirent[]
@@ -109,7 +138,7 @@ function walkDir(dir: string, state: WalkState, depth = 0): void {
         if (targetContainsGuardRoot(real, state.guardRoots)) continue
         walkDir(full, state, depth + 1)
         if (state.truncated) return
-      } else if (target.isFile() && !isMemgrepSidecar(e.name)) {
+      } else if (target.isFile() && !isMemgrepSidecar(e.name) && !isDerivedArtifact(e.name)) {
         if (state.fresh(target.mtimeMs)) state.paths.push(full)
       }
       continue
@@ -121,7 +150,7 @@ function walkDir(dir: string, state: WalkState, depth = 0): void {
       if (state.excluded.has(full)) continue
       walkDir(full, state, depth + 1)
       if (state.truncated) return
-    } else if (e.isFile() && !isMemgrepSidecar(e.name)) {
+    } else if (e.isFile() && !isMemgrepSidecar(e.name) && !isDerivedArtifact(e.name)) {
       let st: fs.Stats
       try { st = fs.lstatSync(full) } catch { continue }
       if (state.fresh(st.mtimeMs)) state.paths.push(full)
@@ -204,7 +233,7 @@ function walkWatched(entries: string[], state: WalkState): void {
         try { real = fs.realpathSync(entry) } catch { continue }
         if (targetContainsGuardRoot(real, state.guardRoots)) continue
         walkDir(entry, state, 1)
-      } else if (target.isFile()) {
+      } else if (target.isFile() && !isDerivedArtifact(entry)) {
         state.visited++
         if (state.visited > state.maxEntries) { state.truncated = true; return }
         if (state.fresh(target.mtimeMs)) state.paths.push(entry)
@@ -213,7 +242,7 @@ function walkWatched(entries: string[], state: WalkState): void {
     }
     if (st.isDirectory()) {
       walkDir(entry, state)
-    } else if (st.isFile()) {
+    } else if (st.isFile() && !isDerivedArtifact(entry)) {
       state.visited++
       if (state.visited > state.maxEntries) { state.truncated = true; return }
       if (state.fresh(st.mtimeMs)) state.paths.push(entry)
@@ -321,7 +350,7 @@ function inRepoEffects(cwd: string, fresh: (ms: number) => boolean): string[] {
 
 /** Paths changed on disk strictly after `sinceMs` (epoch ms) that no review fork has covered. */
 export function unreviewedEffects(cwd: string, sinceMs: number, opts: EffectsOptions = {}): Effects {
-  const fresh = freshness(sinceMs, opts.activity)
+  const fresh = freshness(sinceMs, opts.activity, opts.deferIntervals)
   const paths = inRepoEffects(cwd, fresh)
 
   const home = opts.home ?? os.homedir()

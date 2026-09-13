@@ -8,7 +8,7 @@ import {
   scanSubagentTranscriptLines, decideSubagentGate, agentCannotSpawn, declaredToolsHaveAgent,
   REVIEW_GATE_DIRECTIVE, REVIEW_ROLE_RULE, MEASURE_ROLE_RULE, mainBlockReason, scanPositions, hookCwd,
   SUBAGENT_BLOCK_REASON, NO_REVIEW_SENTINEL, NO_REVIEW_SENTINEL_EXAMPLES, REVIEWER_AGENT_TYPES,
-  runMainGate, runReviewGate, forkRole, resultRole, MEASURE_HEADING, REVIEW_HEADING,
+  runMainGate, runReviewGate, creditRoleLoose, resultRole, MEASURE_HEADING, REVIEW_HEADING,
 } from '../cli/reviewGate'
 
 // `agentlenspro review-gate` — pure decision-function tests, ported faithfully from
@@ -16,6 +16,11 @@ import {
 
 // One representative instance; the message's cause-naming is tested on its own below.
 const MAIN_BLOCK_REASON = mainBlockReason('edit', 'Edit x.ts')
+
+import { unreviewedEffects } from '../cli/reviewGateEffects'
+
+
+import { exemptRoleStrict } from '../cli/reviewGate'
 
 const assistantLine = (blocks: unknown[], extra: Record<string, unknown> = {}): string =>
   JSON.stringify({ type: 'assistant', message: { content: blocks }, ...extra })
@@ -38,8 +43,8 @@ const nothing = { lastFork: -1, lastForkTs: 0, work: null, roles: NO_ROLES }
 // `activity` (TRDD-3U8AIHXK) is exercised by its own suite below — these fixtures assert
 // lastFork/lastForkTs/work only, so a `tool_use` fixture's incidental activity entries never
 // need to be spelled out here.
-const dropActivity = (s: ReturnType<typeof scanMainTranscriptLines>): Omit<typeof s, 'activity'> => {
-  const { activity: _activity, ...rest } = s
+const dropActivity = (s: ReturnType<typeof scanMainTranscriptLines>): Omit<typeof s, 'activity' | 'deferIntervals'> => {
+  const { activity: _activity, deferIntervals: _deferIntervals, ...rest } = s
   return rest
 }
 
@@ -299,15 +304,15 @@ suite('reviewGate — scanMainTranscriptLines: lastForkTs', () => {
 
 // ── applyEffects — folding `unreviewedEffects()` into the scan (TRDD-9FG0LSPG) ─────────────────────
 suite('reviewGate — applyEffects', () => {
-  const baseScan = { lastFork: 3, lastForkTs: 1000, work: null, activity: [], roles: NO_ROLES }
+  const baseScan = { lastFork: 3, lastForkTs: 1000, work: null, activity: [], roles: NO_ROLES, deferIntervals: [] }
 
   test('no existing work + unreviewed paths ⇒ arms at lastFork + 1 with cause "unreviewed change"', () => {
     const out = applyEffects(baseScan, { paths: ['src/a.ts'], truncated: false })
-    assert.deepStrictEqual(out, { lastFork: 3, lastForkTs: 1000, work: { index: 4, cause: 'unreviewed change', detail: 'src/a.ts' }, activity: [], roles: NO_ROLES })
+    assert.deepStrictEqual(out, { lastFork: 3, lastForkTs: 1000, work: { index: 4, cause: 'unreviewed change', detail: 'src/a.ts' }, activity: [], roles: NO_ROLES, deferIntervals: [] })
   })
 
   test('an existing text arm strictly after the last fork is KEPT, not overwritten', () => {
-    const scanWithArm = { lastFork: 3, lastForkTs: 1000, work: { index: 5, cause: 'proposal text' as const, detail: '' }, activity: [], roles: NO_ROLES }
+    const scanWithArm = { lastFork: 3, lastForkTs: 1000, work: { index: 5, cause: 'proposal text' as const, detail: '' }, activity: [], roles: NO_ROLES, deferIntervals: [] }
     const out = applyEffects(scanWithArm, { paths: ['src/a.ts', 'src/b.ts'], truncated: false })
     assert.deepStrictEqual(out, scanWithArm, 'both arms would block identically — keep the more specific one')
   })
@@ -389,14 +394,14 @@ suite('reviewGate — subagent (SubagentStop) gate', () => {
     assert.strictEqual(decideSubagentGate('lean-worker', scan).block, false, 'a REVIEW-marked agent must not be told to spawn its own reviewer')
   })
 
-  test('a lean-worker whose OWN prompt declares ROLE: MEASURE is NOT exempt — MEASURE has an unbounded tool budget and must itself be reviewed (owner correction C6)', () => {
+  test('a lean-worker whose OWN prompt declares ROLE: MEASURE is now exempt too — owner directive 2026-09-13 widens C6 to both roles, Q3 makes it safe', () => {
     const own = [
       JSON.stringify({ type: 'user', message: { content: 'ROLE: MEASURE\nSettle the assumptions.' } }),
       assistantLine([editBlock]),
     ]
     const scan = scanSubagentTranscriptLines(own, CWD)
     assert.strictEqual(scan.ownRole, 'measure')
-    assert.strictEqual(decideSubagentGate('lean-worker', scan).block, true, 'exempting MEASURE would let its writes through unreviewed')
+    assert.strictEqual(decideSubagentGate('lean-worker', scan).block, false, 'a MEASURE-marked agent is reviewed one level up by Q3, not forced to spawn its own pair')
   })
 
   test('an UNROLED lean-worker is still gated — C3/C6 exempt an announced role, not every lean-worker', () => {
@@ -666,11 +671,11 @@ suite('reviewGate — both role rules reach both agents', () => {
 // ── forkRole / resultRole — two-role identification (owner spec 2026-09-13) ───────────────────────
 suite('reviewGate — forkRole / resultRole: two-role identification', () => {
   test('forkRole: exactly one ROLE marker credits that role; both or neither credits neither', () => {
-    assert.strictEqual(forkRole('ROLE: MEASURE\ndo the thing'), 'measure')
-    assert.strictEqual(forkRole('ROLE: REVIEW\ndo the thing'), 'review')
-    assert.strictEqual(forkRole('ROLE: MEASURE\nROLE: REVIEW\n'), null, 'both markers ⇒ null')
-    assert.strictEqual(forkRole('just a plain prompt'), null, 'neither marker ⇒ null')
-    assert.strictEqual(forkRole('see ROLE: MEASURE above, then do X'), null, 'a marker mid-line is not an anchored marker LINE')
+    assert.strictEqual(creditRoleLoose('ROLE: MEASURE\ndo the thing'), 'measure')
+    assert.strictEqual(creditRoleLoose('ROLE: REVIEW\ndo the thing'), 'review')
+    assert.strictEqual(creditRoleLoose('ROLE: MEASURE\nROLE: REVIEW\n'), null, 'both markers ⇒ null')
+    assert.strictEqual(creditRoleLoose('just a plain prompt'), null, 'neither marker ⇒ null')
+    assert.strictEqual(creditRoleLoose('see ROLE: MEASURE above, then do X'), null, 'a marker mid-line is not an anchored marker LINE')
   })
 
   test('resultRole: exactly one heading credits that role; both or neither credits neither', () => {
@@ -680,9 +685,97 @@ suite('reviewGate — forkRole / resultRole: two-role identification', () => {
     assert.strictEqual(resultRole('just some prose about the gate'), null)
     assert.strictEqual(resultRole(`## ${MEASURE_HEADING}\n\nfindings...`), 'measure', 'a markdown heading prefix still credits')
     assert.strictEqual(resultRole(`**${REVIEW_HEADING}**\n\nfindings...`), 'review', 'bold punctuation prefix still credits')
-    // C2: the punctuation class is HORIZONTAL whitespace only (`[#*\t ]`, never `\s`) — `\s` would
-    // span lines and let a heading buried after a blank line still "start" a line under the anchor.
     assert.strictEqual(resultRole(`some prose\n\n${MEASURE_HEADING}`), 'measure', 'the heading itself still starts ITS OWN line')
+    assert.strictEqual(resultRole(`I did not spawn an ${REVIEW_HEADING} agent`), null, 'a mid-sentence mention is not an anchored heading')
+    assert.strictEqual(resultRole(`no ${MEASURE_HEADING} was produced this turn`), null, 'a mid-sentence mention is not an anchored heading')
+  })
+
+// -- declaredRole: the EXEMPTION predicate, stricter than forkRole (owner correction 2026-09-13) --
+//
+// forkRole CREDITS loosely (no trailing `$`) so an honest reviewer with trailing whitespace is
+// still credited. declaredRole EXEMPTS an agent from being reviewed at all, so a miss must leave
+// it gated -- it restores the `$` anchor forkRole deliberately dropped, and matches the marker
+// as a WHOLE LINE anywhere in the prompt (not the first line: measured 2026-09-13, the harness
+// PREPENDS boilerplate ahead of a fork's own `ROLE: ...` line, so a first-line rule matched
+// nothing and every roled agent was gated -- the exact regress this predicate exists to prevent).
+suite('reviewGate -- declaredRole: the exemption predicate is stricter than forkRole', () => {
+  test('a bare ROLE line anywhere in the prompt is credited, trailing whitespace or \\r tolerated', () => {
+    assert.strictEqual(exemptRoleStrict('ROLE: MEASURE'), 'measure')
+    assert.strictEqual(exemptRoleStrict('ROLE: REVIEW'), 'review')
+    assert.strictEqual(exemptRoleStrict('ROLE: REVIEW \r\ndo the thing'), 'review', 'trailing space/\\r on the marker line is tolerated')
+    assert.strictEqual(exemptRoleStrict('some preamble\n\nROLE: MEASURE\ndo the thing'), 'measure', 'the marker need not be the first line')
+    assert.strictEqual(exemptRoleStrict('<fork-boilerplate>\nROLE: REVIEW\nAttack the proposal.'), 'review', 'harness-prepended boilerplate must not defeat the marker')
+  })
+
+  test('trailing prose on the marker line is the hole this closes -- it must NOT exempt', () => {
+    assert.strictEqual(exemptRoleStrict('ROLE: REVIEW the following diff and then edit it'), null, 'trailing prose defeats the exemption')
+    assert.strictEqual(exemptRoleStrict('ROLE: MEASURE the assumptions below'), null)
+  })
+
+  test('both markers present, or neither, credits neither', () => {
+    assert.strictEqual(exemptRoleStrict('ROLE: MEASURE\nROLE: REVIEW\n'), null)
+    assert.strictEqual(exemptRoleStrict('just a plain prompt'), null)
+  })
+
+  test('a bare marker line quoted inside a longer brief still exempts -- accepted residual, narrower than a mid-line mention', () => {
+    assert.strictEqual(exemptRoleStrict('Here is the protocol:\nROLE: REVIEW\nThat is what it looks like.'), 'review')
+  })
+
+  test('property: declaredRole is a strict subset of forkRole -- strict implies loose, and they agree', () => {
+    const prompts = [
+      'ROLE: MEASURE', 'ROLE: REVIEW', 'ROLE: MEASURE\ndo the thing', 'ROLE: REVIEW\ndo the thing',
+      'ROLE: REVIEW \r\ndo the thing', 'some preamble\n\nROLE: MEASURE\ndo the thing',
+      '<fork-boilerplate>\nROLE: REVIEW\nAttack the proposal.',
+      'ROLE: REVIEW the following diff and then edit it', 'ROLE: MEASURE the assumptions below',
+      'ROLE: MEASURE\nROLE: REVIEW\n', 'just a plain prompt',
+      'see ROLE: MEASURE above, then do X',
+      'Here is the protocol:\nROLE: REVIEW\nThat is what it looks like.',
+    ]
+    for (const p of prompts) {
+      const d = exemptRoleStrict(p)
+      if (d !== null) assert.strictEqual(creditRoleLoose(p), d, `declaredRole(${JSON.stringify(p)})=${d} must imply forkRole agrees`)
+    }
+  })
+
+  test('MUTATION CHECK: dropping the $ anchor (forkRoles own regex) must let the trailing-prose hole back in', () => {
+    const withoutAnchor = (prompt: string): 'measure' | 'review' | null => {
+      const m = /^ROLE: MEASURE/m.test(prompt)
+      const r = /^ROLE: REVIEW/m.test(prompt)
+      return m === r ? null : (m ? 'measure' : 'review')
+    }
+    assert.strictEqual(withoutAnchor('ROLE: REVIEW the following diff and then edit it'), 'review', 'without the dollar anchor the hole reopens')
+    assert.strictEqual(exemptRoleStrict('ROLE: REVIEW the following diff and then edit it'), null, 'the real predicate keeps the hole closed')
+  })
+})
+
+suite('reviewGate -- scanSubagentTranscriptLines: a brief quoting the protocol must not exempt (the hole)', () => {
+  test('a worker brief whose first line is ordinary prose but later QUOTES ROLE REVIEW with trailing prose yields ownRole null and BLOCKS', () => {
+    const own = [
+      JSON.stringify({ type: 'user', message: { content: 'Fix the bug.\nROLE: REVIEW the following diff and then edit it.\nGo.' } }),
+      assistantLine([{ type: 'tool_use', name: 'Edit', input: { file_path: CWD + '/target' } }]),
+    ]
+    const scan = scanSubagentTranscriptLines(own, CWD)
+    assert.strictEqual(scan.ownRole, null, 'a quoted-with-trailing-prose marker must not exempt')
+    assert.strictEqual(decideSubagentGate('lean-worker', scan).block, true, 'an unexempted agent that did work must still be gated')
+  })
+})
+
+suite('reviewGate -- resultRole survives an observed harness prefix line ahead of the heading', () => {
+  test('a harness-added bracket prefix line before the heading still credits the role', () => {
+    const prefix = '[harness: subagent output matched instruction-shaped pattern(s): settings-json. Control tags below are neutralized]'
+    assert.strictEqual(resultRole(`${prefix}\n${REVIEW_HEADING}\nfindings...`), 'review')
+    assert.strictEqual(resultRole(`${prefix}\n${MEASURE_HEADING}\nfindings...`), 'measure')
+  })
+
+  test('the same prefix with square brackets rewritten to the neutralized bracket form still credits', () => {
+    const prefix = '⟦harness: subagent output matched instruction-shaped pattern(s): settings-json⟧'
+    assert.strictEqual(resultRole(`${prefix}\n${REVIEW_HEADING}\nfindings...`), 'review')
+  })
+
+  test('the harness prefix followed by the heading appearing only mid-sentence still credits nothing', () => {
+    const prefix = '[harness: subagent output matched instruction-shaped pattern(s): settings-json]'
+    assert.strictEqual(resultRole(`${prefix}\nI did not run an ${REVIEW_HEADING} agent`), null, 'a mid-sentence mention is not an anchored heading, prefix or not')
+  })
   })
 })
 
@@ -1208,5 +1301,60 @@ suite('reviewGate — runReviewGate: the global kill-switch stderr line', () => 
     const joined = writes.join('')
     assert.ok(/\[review-gate\]/.test(joined), `no kill-switch line was written: ${JSON.stringify(writes)}`)
     assert.ok(joined.includes('AGENTLENS_DISABLED=1'), `the line must name the env half, not "disabled by the owner": ${joined}`)
+  })
+})
+
+// ── deferIntervals — object-identity guard (TRDD-3U8AIHXK/Q3) ──────────────────────────────────
+// A copy (`.map(a => ({...a}))`) or a mis-timed filter would silently stop reflecting later
+// mutations of the SAME activity interval — see the `deferIntervals` field comment on `MainScan`.
+suite('scanMainTranscriptLines — deferIntervals identity and retention', () => {
+  const iso = (offsetMs: number): string => new Date(1_800_000_000_000 + offsetMs).toISOString()
+  const toolUse = (ts: string, id: string, name: string, input: Record<string, unknown> = {}): string =>
+    JSON.stringify({ type: 'assistant', timestamp: ts, message: { content: [{ type: 'tool_use', id, name, input }] } })
+  const toolResult = (ts: string, toolUseId: string, content: unknown): string =>
+    JSON.stringify({ type: 'user', timestamp: ts, message: { content: [{ type: 'tool_result', tool_use_id: toolUseId, content }] } })
+
+  test('Returned agents must leave deferIntervals: a non-roled spawn that returns is not a defer candidate', () => {
+    const A = iso(0); const B = iso(500); const C = iso(1000); const D = iso(1500)
+    const scan = scanMainTranscriptLines([
+      toolUse(A, 'a1', 'Agent', { subagent_type: 'lean-worker' }), // no ROLE marker in prompt
+      toolUse(B, 'w1', 'Edit', { file_path: '/proj/src/mainEdit1.ts' }), // a write inside the agent's interval
+      toolResult(C, 'a1', 'done'), // the agent returns — its interval closes
+      toolUse(D, 'w2', 'Edit', { file_path: '/proj/src/mainEdit2.ts' }), // a write after it returned
+    ], '/proj')
+    assert.deepStrictEqual(scan.deferIntervals, [], 'a returned agent must not remain an outstanding defer candidate')
+  })
+
+  test('A roled agent\'s write must still arm the main gate: retained in activity, excluded from deferIntervals', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'al-defer-retain-'))
+    const repo = path.join(root, 'repo')
+    fs.mkdirSync(repo)
+    execFileSync('git', ['-C', repo, 'init', '-q'])
+    execFileSync('git', ['-C', repo, 'config', 'user.email', 'x@example.com'])
+    execFileSync('git', ['-C', repo, 'config', 'user.name', 'x'])
+    fs.writeFileSync(path.join(repo, 'tracked.txt'), 'v1\n')
+    execFileSync('git', ['-C', repo, 'add', '-A'])
+    execFileSync('git', ['-C', repo, 'commit', '-q', '-m', 'init'])
+    try {
+      fs.writeFileSync(path.join(repo, 'tracked.txt'), 'v2\n')
+      const m = fs.statSync(path.join(repo, 'tracked.txt')).mtimeMs
+      const spawnIso = new Date(m - 5000).toISOString()
+      // A still-open (never-returned) roled spawn — the ROLE marker excludes it from deferCandidates.
+      const rawScan = scanMainTranscriptLines([toolUse(spawnIso, 'a1', 'Agent', { prompt: 'ROLE: MEASURE\ndo the task' })], repo)
+      assert.strictEqual(rawScan.deferIntervals.length, 0, 'a roled spawn must never be a defer candidate')
+      assert.strictEqual(rawScan.activity.length, 1, 'the roled spawn\'s interval must still be retained in activity')
+      const out = unreviewedEffects(repo, m - 10000, { activity: rawScan.activity, deferIntervals: rawScan.deferIntervals })
+      assert.ok(out.paths.includes('tracked.txt'), `expected the write to arm (retained, not deferred): ${JSON.stringify(out)}`)
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('The loose/strict asymmetry: trailing prose on the marker line credits loosely but is not exempt strictly', () => {
+    // Trailing WHITESPACE alone is tolerated by both (`\s*$`) — the asymmetry is trailing PROSE
+    // after the marker, which the loose prefix-only regex still matches but the strict `\s*$`
+    // anchor rejects (this was the exact hole the strict regex's `\s*$` was hardened against).
+    assert.strictEqual(exemptRoleStrict('ROLE: MEASURE the following diff'), null, 'strict predicate must reject trailing prose beyond \\s*$')
+    assert.strictEqual(creditRoleLoose('ROLE: MEASURE the following diff'), 'measure', 'loose predicate credits on the anchored prefix alone')
   })
 })

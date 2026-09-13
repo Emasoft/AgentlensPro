@@ -77,12 +77,47 @@ export type Role = 'measure' | 'review'
 
 /** Role claimed by a PROMPT the parent wrote. An anchored marker LINE, never a bare mention: an
  *  agent reviewing this gate quotes both names in prose. Both or neither => null, because one
- *  agent doing both jobs is the shape this replaces. */
-export function forkRole(prompt: string): Role | null {
-  const m = /^ROLE: MEASURE$/m.test(prompt)
-  const r = /^ROLE: REVIEW$/m.test(prompt)
+ *  agent doing both jobs is the shape this replaces.
+ *  LEADING `^` only, no trailing `$` — a PROMPT is self-certification (the parent authors this
+ *  marker to credit itself), so it must match only at a line's start and as the exact literal
+ *  text, but trailing text after the marker (a stray space, a `\r` from CRLF input) never changes
+ *  its meaning. An end anchor protects nothing: anyone deliberately gaming the gate writes the
+ *  marker correctly, so `$` only ever catches the HONEST agent whose line picked up a trailing
+ *  space — invisibly, since the prompt still reads correct to a human and the resulting block
+ *  message just says "spawn a review fork" with no hint the marker itself was rejected.
+ *  `resultRole` below is different on purpose: a RESULT is third-party attestation by another
+ *  agent, so it tolerates LEADING markdown punctuation but still anchors on nothing after the
+ *  heading — a heading legitimately precedes prose on the same line. */
+// NOT interchangeable with `exemptRoleStrict` below -- the missing `$` here is deliberate; see the note there.
+export function creditRoleLoose(prompt: string): Role | null {
+  const m = /^ROLE: MEASURE/m.test(prompt)
+  const r = /^ROLE: REVIEW/m.test(prompt)
   return m === r ? null : (m ? 'measure' : 'review')
 }
+
+/** The EXEMPTION predicate, deliberately stricter than `creditRoleLoose` -- and, unlike the earlier
+ *  first-line design this replaced, matched ANYWHERE in the prompt: measured 2026-09-13, the
+ *  harness PREPENDS boilerplate ahead of a fork's own `ROLE: ...` line, so a first-line rule
+ *  matched nothing and every roled agent was gated -- the exact regress this exemption exists to
+ *  prevent, reintroduced by being too strict. `creditRoleLoose` CREDITS a review loosely (a miss only
+ *  over-blocks, which is safe) by dropping the trailing `$` anchor; `exemptRoleStrict` EXEMPTS an
+ *  agent from being reviewed at all, so here a miss must leave the agent gated -- the marker line
+ *  must be `ROLE: MEASURE`/`ROLE: REVIEW` and NOTHING ELSE (trailing whitespace or a lone `\r`
+ *  tolerated via `\s*$`, so an honest marker is never punished for it; real trailing prose like
+ *  "ROLE: REVIEW the following diff" does not match and is not exempt -- that was the hole).
+ *  A bare marker line quoted inside a longer brief still exempts; that residual is narrower than
+ *  an inline mid-line mention and is accepted rather than chased with a positional rule again.
+ *  `creditRoleLoose` and `exemptRoleStrict` differ by ONE character -- the `$` -- and that difference IS the
+ *  point: a miss on the loose CREDITING side only over-blocks (noisy, safe); a false match on the
+ *  strict EXEMPTION side lets an agent skip its own review entirely (silent, unsafe). DO NOT UNIFY
+ *  THESE TWO FUNCTIONS. */
+export function exemptRoleStrict(prompt: string): Role | null {
+  const m = /^ROLE: MEASURE\s*$/m.test(prompt)
+  const r = /^ROLE: REVIEW\s*$/m.test(prompt)
+  return m === r ? null : (m ? 'measure' : 'review')
+}
+
+
 
 /** Role claimed by an OUTPUT. Same anchoring rationale: the heading must START a line (optionally
  *  after markdown heading/bold punctuation), so a result that merely DISCUSSES the gate does not
@@ -514,6 +549,25 @@ export interface MainScan {
    *  (a tool_result or background-job notification carrying the matching heading) credits its role
    *  permanently, whatever the spawn's open/closed state. */
   roles: { measure: number; review: number }
+  /** FOR: a still-open, non-roled `Agent` spawn cannot yet have its writes reviewed, so a disk
+   *  effect covered ONLY by one of these intervals must not arm the gate (TRDD-3U8AIHXK/Q3: "defer
+   *  credit against an index, not a clock") — while a ROLE-marked spawn is excluded from this list
+   *  on purpose, so its writes arm the PARENT's gate one level up instead of being suppressed here.
+   *  Subset of `activity` by object identity (the SAME reference, never a copy), filtered to
+   *  `end === Infinity` after the whole window is scanned.
+   *  THE REAL HOLE if that identity is ever broken (`deferCandidates` holding `.map(a => ({...a}))`
+   *  copies, or the filter moved inside the scan loop): a stale, permanently-open window then
+   *  swallows every LATER write too, including the MAIN AGENT'S OWN — and a main-agent write has no
+   *  second reviewer once its own arming is suppressed this way (see "Returned agents must leave
+   *  deferIntervals" in reviewGate.test.ts).
+   *  The interval STAYS in `activity` even while deferred (never removed) — drop a roled spawn's
+   *  interval from `activity` too (rather than just from this list) and its writes are reviewed by
+   *  NOBODY: its own SubagentStop gate was already waived by the role exemption, and now nothing
+   *  covers its disk effects either (see "A roled agent's write must still arm the main gate" in
+   *  reviewGate.test.ts).
+   *  Reconstructed fresh every scan, so nothing here survives a `/clear` and nothing needs a stored
+   *  fingerprint that could go stale. */
+  deferIntervals: Activity[]
 }
 /** The positional pair `decideMainGate` reads; `lastWork` is -1 when nothing armed. */
 export const scanPositions = (s: MainScan): { roles: { measure: number; review: number }; lastWork: number } =>
@@ -545,6 +599,11 @@ export function scanMainTranscriptLines(lines: string[], cwd = process.cwd()): M
   // keeps its spawn credit forever — the no-review sentinel is the intended exit for that case;
   // this is not patched with a timeout or an entry-count heuristic.
   const pendingSpawns: { role: Role; index: number; activity: Activity }[] = []
+  // Still-open, NON-roled Agent spawns (TRDD-3U8AIHXK/Q3) — candidates for `MainScan.deferIntervals`,
+  // filtered to still-open after the whole window is scanned (see below). A ROLE-marked spawn is
+  // never a candidate: Q3 excludes it deliberately, so its writes arm the PARENT's gate instead of
+  // being suppressed by its own defer — the review happens one level up.
+  const deferCandidates: Activity[] = []
   // Open intervals, by the tool_use id its tool_result will carry, and — once a background job's
   // result named it — by the job id its `<task-id>` notification will carry.
   const openByToolUse = new Map<string, { a: Activity; tool: string }>()
@@ -650,15 +709,18 @@ export function scanMainTranscriptLines(lines: string[], cwd = process.cwd()): M
         // SPAWN source: ANY Agent tool_use, whatever its subagent_type — a cheap lean-worker is a
         // valid MEASURE agent. Deferred: resolved only after the whole window is scanned, and only
         // credited if `a` is still open then (see the pendingSpawns comment above).
-        const role = forkRole(String(b.input?.prompt ?? ''))
+        const isFork = String(b.input?.subagent_type ?? '').trim().toLowerCase() === 'fork'
+        const role = creditRoleLoose(String(b.input?.prompt ?? ''))
         if (role !== null) pendingSpawns.push({ role, index: i, activity: a })
-      }
-      // CASE-FOLDED, same as the subagent scanner: a subagent_type of "Fork" is still a fork.
-      // A review fork's interval closes like any other spawn's — its result or its notification.
-      // A zero-length interval keyed on its prompt was proposed and REJECTED in review: a fork
-      // spawned with the ONE-turn line pasted and then used as a worker would write unattributed.
-      if (b.name === 'Agent' && String(b.input?.subagent_type ?? '').trim().toLowerCase() === 'fork') {
-        lastFork = i; lastForkTs = entryTs(e); continue
+        // Q3: a non-roled, non-fork spawn is a DEFER CANDIDATE — its own writes cannot yet be
+        // reviewed. A fork is excluded too: `lastFork` below already treats it as satisfying the
+        // gate at spawn time, so its interval must not additionally suppress disk effects.
+        else if (!isFork) deferCandidates.push(a)
+        // CASE-FOLDED, same as the subagent scanner: a subagent_type of "Fork" is still a fork.
+        // A review fork's interval closes like any other spawn's — its result or its notification.
+        // A zero-length interval keyed on its prompt was proposed and REJECTED in review: a fork
+        // spawned with the ONE-turn line pasted and then used as a worker would write unattributed.
+        if (isFork) { lastFork = i; lastForkTs = entryTs(e); continue }
       }
       const w = toolUseWork(b, cwd)
       if (w !== null) work = { index: i, ...w }
@@ -667,9 +729,11 @@ export function scanMainTranscriptLines(lines: string[], cwd = process.cwd()): M
   for (const p of pendingSpawns) {
     if (p.activity.end === Infinity) roles[p.role] = Math.max(roles[p.role], p.index)
   }
-  return { lastFork, lastForkTs: lastFork === -1 ? firstTs : lastForkTs, work, activity, roles }
+  // A defer candidate that has since CLOSED (its agent returned) is no longer an outstanding
+  // obligation — filtered here, once, after the whole window is known, same as `pendingSpawns`.
+  const deferIntervals = deferCandidates.filter((a) => a.end === Infinity)
+  return { lastFork, lastForkTs: lastFork === -1 ? firstTs : lastForkTs, work, activity, roles, deferIntervals }
 }
-
 /** Fold a `unreviewedEffects()` result into the scan. Additive and positional, mirroring how a
  *  transcript fork/edit already work: an effect is placed at `lastFork + 1` — "a fork must
  *  follow it" — UNLESS a text arm already sits strictly after the last fork, in which case that
@@ -786,8 +850,11 @@ export async function runMainGate(input: ReviewGateInput): Promise<string | null
   const rawScan = scanMainTranscriptLines(lines, cwd)
   // Fold in disk effects newer than the last fork (TRDD-9FG0LSPG) — a worker's edit, a script's
   // write, or a fork-as-worker's own change never appears as a tool_use in THIS transcript, so
-  // the transcript scan alone would release it unreviewed.
-  const scan = applyEffects(rawScan, unreviewedEffects(cwd, rawScan.lastForkTs, { activity: rawScan.activity }))
+  // the transcript scan alone would release it unreviewed. `deferIntervals` (Q3) is passed through
+  // so a write made only during a still-open, non-roled Agent spawn does not arm prematurely.
+  const scan = applyEffects(rawScan, unreviewedEffects(cwd, rawScan.lastForkTs, {
+    activity: rawScan.activity, deferIntervals: rawScan.deferIntervals,
+  }))
   const verdict = decideMainGate(scanPositions(scan))
   // A block implies an arming block was found (`lastWork !== -1` ⇔ `work !== null`); the second
   // test only narrows the type, so the message can never name a cause the scan did not find.
@@ -826,19 +893,21 @@ export function scanSubagentTranscriptLines(lines: string[], cwd = process.cwd()
     // CHILDREN's entries is unverified; filtering makes this correct under both answers instead of
     // betting on one, and stops a child's prose from being scored as the parent's work.
     if (e?.isSidechain === true) continue
-    // The subagent's OWN spawning prompt is its FIRST non-sidechain `user` entry — read ONCE, so a
+    // The subagent's OWN spawning prompt is its FIRST non-sidechain `user` entry -- read ONCE, so a
     // later human-authored `user` turn mid-conversation is never mistaken for it (owner correction
-    // 2026-09-13, C3/C6 — a role-marked agent is exempt from being told to spawn its own reviewer).
+    // 2026-09-13, C3/C6 -- a role-marked agent is exempt from being told to spawn its own reviewer).
+    // `declaredRole`, not `forkRole`: the exemption needs the marker to be a WHOLE line anywhere in
+    // the prompt, not merely quoted mid-sentence in a brief that discusses the protocol.
     if (!sawFirstUser && e?.type === 'user') {
       sawFirstUser = true
       const c = e?.message?.content
       const promptText = typeof c === 'string' ? c : Array.isArray(c) ? resultText(c) : ''
-      ownRole = forkRole(promptText)
+      ownRole = exemptRoleStrict(promptText)
     }
     const content = e?.message?.content
     if (e?.type !== 'assistant' || !Array.isArray(content)) continue
     for (const b of content) {
-      // A MARKED PROPOSAL IS WORK — see scanMainTranscriptLines. A subagent's plain-prose report
+      // A MARKED PROPOSAL IS WORK -- see scanMainTranscriptLines. A subagent's plain-prose report
       // (an Explore result, a status line) is not, or every returning worker owes a fork.
       if (b?.type === 'text') {
         // THE TERMINATOR. Without it the block is a LIVELOCK: the demand tells a subagent to state
@@ -846,13 +915,13 @@ export function scanSubagentTranscriptLines(lines: string[], cwd = process.cwd()
         // `didWork` and the identical demand fires again over a strictly longer transcript. Every
         // other brake on this path is gone by design (no enforcement switch, no per-agent demand
         // cap), so `reviewed` is the ONLY exit and until now the only way to set it was spawning a
-        // fork — impossible for an agent that has the
+        // fork -- impossible for an agent that has the
         // Agent tool but is out of turns, budget, or depth. The escape must therefore set the same
         // flag the fork sets.
         //
         // ANCHORED AT THE START of a trimmed block, deliberately: a fork REVIEWING this gate quotes
         // the sentinel mid-prose (this file's own reviewers did), and a substring test would let
-        // that quotation release the very agent under review. Nothing is stripped first — a
+        // that quotation release the very agent under review. Nothing is stripped first -- a
         // markdown-quoted `> REVIEW-GATE: ...` or a `# REVIEW-GATE: ...` heading must NOT match,
         // and stripping the marker would be the very smuggling this anchor exists to stop.
         const text = String(b.text ?? '')
@@ -861,7 +930,7 @@ export function scanSubagentTranscriptLines(lines: string[], cwd = process.cwd()
         continue
       }
       if (b?.type !== 'tool_use') continue
-      // CASE-FOLDED, same as scanMainTranscriptLines — a subagent_type of "Fork" is still a fork.
+      // CASE-FOLDED, same as scanMainTranscriptLines -- a subagent_type of "Fork" is still a fork.
       if (b.name === 'Agent' && String(b.input?.subagent_type ?? '').trim().toLowerCase() === 'fork') reviewed = true
       else if (toolUseWork(b, cwd) !== null) didWork = true
     }
@@ -894,13 +963,15 @@ export function decideSubagentGate(
   if (agentType === '' || REVIEWER_AGENT_TYPES.has(agentType.trim().toLowerCase())) {
     return { block: false }
   }
-  // A subagent whose OWN prompt declares it the REVIEW role is exempt for the same reason a
-  // `subagent_type: "fork"` reviewer is: REVIEW_ROLE_RULE demands ZERO tool calls, so it cannot
-  // itself arm the gate. MEASURE is DELIBERATELY NOT exempt here — it has an unbounded tool budget
-  // (MEASURE_ROLE_RULE) and must be reviewed like any other worker that did consequential work.
-  // Narrowed from `forkRole(...) !== null` to `=== 'review'` (owner correction 2026-09-13, C6):
-  // exempting MEASURE too would let its writes through unreviewed.
-  if (scan?.ownRole === 'review') return { block: false }
+  // A subagent whose OWN prompt declares it EITHER role is exempt. C6 narrowed this to 'review'
+  // because the measure role has a tool budget and so should not also be unreviewable. Owner
+  // directive 2026-09-13 widens it to BOTH roles, and Q3 is what makes that safe: Q3 excludes a
+  // ROLE-marked spawn from being a deferring interval, so a roled agent's writes arm the PARENT's
+  // gate instead of being suppressed. The review happens one level up, where the agent that
+  // dispatched the work can see it. Exempting a roled agent from its OWN gate therefore loses no
+  // review and stops an infinite regress (a measure agent forced to spawn its own measure+review
+  // pair, two more agents per level, forever).
+  if (scan?.ownRole !== null && scan?.ownRole !== undefined) return { block: false }
   // NOT BYPASSABLE (owner order, 2026-09-03: "Not even for the subagents!"). There is no
   // enforcement switch and no per-agent demand cap: a subagent that did work and has not reviewed
   // itself is asked EVERY time it tries to return, not once.
