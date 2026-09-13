@@ -114,6 +114,38 @@ suite('review-gate triggers: write-shaped commands', () => {
     '(S=/tmp/a; echo x > "$S")',
   ]
 
+
+  suite('review-gate triggers: heredoc bodies are data, not shell words', () => {
+    test('a heredoc BODY is not tokenized as shell words — the >= false positive of 2026-09-13', () => {
+      // This exact document (a JS/TS snippet with `>=`) armed the gate as "redirect into =" before
+      // the fix — the heredoc body was tokenized as shell words and `>=` matched the redirect regex.
+      assert.strictEqual(
+        commandWriteReason("cat > /tmp/spec.md <<'SPEC'\nreturn { block: Math.min(a, b) >= work.index }\nSPEC", CWD),
+        null,
+      )
+    })
+
+    test('a heredoc body containing shell-write-shaped text is data, not commands', () => {
+      assert.strictEqual(commandWriteReason('cat <<EOF\ngit commit -m x\nrm -rf /etc\nEOF', CWD), null)
+    })
+
+    test('a same-line redirect before the heredoc operator still arms — the true positive', () => {
+      assert.strictEqual(commandWriteReason('cat <<EOF > /proj/f.txt\nhello\nEOF', CWD), 'redirect into /proj/f.txt')
+    })
+
+    test('a same-line redirect into an ephemeral target does not arm', () => {
+      assert.strictEqual(commandWriteReason("cat <<'EOF' > /tmp/x\nhello\nEOF", CWD), null)
+    })
+
+    test('two heredocs in one command are each stripped', () => {
+      assert.strictEqual(commandWriteReason('cat <<A\nfoo\nA\ncat <<B\nbar\nB', CWD), null)
+    })
+
+    test('an unterminated heredoc treats the rest of the command as body', () => {
+      assert.strictEqual(commandWriteReason('cat <<A\ngit commit -m x', CWD), null)
+    })
+  })
+
   test('every ARM row arms, with the reason the message will print', () => {
     for (const [cmd, why] of ARM) assert.strictEqual(commandWriteReason(cmd, CWD), why, cmd)
   })

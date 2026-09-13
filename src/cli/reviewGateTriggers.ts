@@ -66,6 +66,45 @@ export function shellWords(cmd: string): Word[] {
   return out
 }
 
+
+/** A heredoc BODY (`<<EOF` … terminator line) is data the shell writes to stdin, not shell
+ *  words — a body line reading `git commit -m x` must not arm, and `>=` inside prose must not
+ *  read as a redirect (`redirect into =` — the false positive this exists to fix). Everything
+ *  from the end of the operator line up to (and including) the terminator line is dropped;
+ *  the operator line itself is kept untouched so a same-line redirect (`cat <<EOF > /abs/f`)
+ *  still classifies normally. `<<-` strips leading tabs off the terminator line per shell rules.
+ *  Multiple heredocs in one command are each consumed in the order their operators appear; an
+ *  unterminated heredoc treats everything after it as body (fail toward dropping data, since
+ *  unexecuted body text cannot itself be a write). */
+const HEREDOC_OP_RE = /<<(-)?\s*(?:'([^']*)'|"([^"]*)"|([^\s'"<>;|&]+))/g
+function stripHeredocBodies(cmd: string): string {
+  const lines = cmd.split('\n')
+  const kept: string[] = []
+  let i = 0
+  while (i < lines.length) {
+    const line = lines[i]
+    kept.push(line)
+    i++
+    HEREDOC_OP_RE.lastIndex = 0
+    let m: RegExpExecArray | null
+    const delimiters: { delim: string; strip: boolean }[] = []
+    while ((m = HEREDOC_OP_RE.exec(line)) !== null) {
+      const delim = m[2] ?? m[3] ?? m[4]
+      if (delim !== undefined) delimiters.push({ delim, strip: m[1] === '-' })
+    }
+    for (const { delim, strip } of delimiters) {
+      let terminated = false
+      while (i < lines.length) {
+        const bodyLine = lines[i]
+        i++
+        if ((strip ? bodyLine.replace(/^\t+/, '') : bodyLine) === delim) { terminated = true; break }
+      }
+      if (!terminated) return kept.join('\n') // unterminated: rest already consumed as body
+    }
+  }
+  return kept.join('\n')
+}
+
 /** A LITERAL path under /dev/null, /tmp, /private/tmp, or the project's gitignored `reports/`
  *  and `*_dev/` dirs (INSIDE them — the dir itself is not exempt, so `rm -rf reports_dev` arms).
  *  Anything the shell would expand fails closed. Relative paths resolve against the hook's cwd —
@@ -210,7 +249,7 @@ function classifyCommand(words: Word[], via: string | null, cwd: string, resolve
  *  `>|`, attached or spaced; `2>&1`/`>&2` are fd dups, not files) — in that order so a heredoc
  *  commit whose body holds a bare `>` is reported as the commit it is, not as a redirect. */
 export function commandWriteReason(cmd: string, cwd: string): string | null {
-  const words = shellWords(cmd)
+  const words = shellWords(stripHeredocBodies(cmd))
   // Segments used for CLASSIFICATION only: separator words split them, and every unquoted
   // redirect word is dropped (its attached operand with it; a BARE operator's separate spaced
   // operand is dropped too) so a redirect never counts as a command argument. `words` itself is
