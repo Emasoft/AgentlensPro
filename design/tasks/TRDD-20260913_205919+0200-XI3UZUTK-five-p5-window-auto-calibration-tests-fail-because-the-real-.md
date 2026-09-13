@@ -24,7 +24,7 @@ Measured 2026-09-13 on a full `pnpm run compile-tests && npx mocha` run: **2829 
 Failure 1 is the root; 2-5 are its consequences.
 
 1. `a rate-limit StopFailure through the ingest path writes observed capacity to burn-config.json` — AssertionError: *account window must exist before the stall*. The diagnostic line reads `0 span(s) (last 24h window) ... store holds 0 span(s) across 0 segment(s), nothing evicted`, and alcore's own log says `log scan files=0 changed=0 parsed=0 cards=0`.
-2-5. `ENOENT ... /home/.agentlens/burn-config.json` in `readConfig` — the file is never written because (1) never calibrated.
+2-5. `ENOENT` on the per-run burn-config file under the test HOME, raised in `readConfig` — the file is never written because (1) never calibrated. (Path elided: it was a per-run temp value, and the literal shape trips the identity gate.)
 
 So the real defect is single: **the real-boot ingest path ingests nothing**, so no account window exists, so calibration never runs and the config file is never created. The four ENOENT failures are downstream noise, not four separate bugs.
 
