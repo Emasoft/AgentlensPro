@@ -114,6 +114,39 @@ suite('review-gate triggers: write-shaped commands', () => {
     '(S=/tmp/a; echo x > "$S")',
   ]
 
+
+  suite("review-gate triggers: earlier terminated heredoc must not leak into a later unterminated one's fail-open text", () => {
+    test("an EARLIER terminated heredoc's body, reinjected via failOpen=true, must not desync segIdx and release a stale $VAR redirect", () => {
+      assert.strictEqual(
+        commandWriteReason("S=/tmp/fake\ncat <<A\nx ; y ; z\nA\nS=/repo/real\ncat <<EOF > $S\nunterminated body\n", CWD),
+        "redirect into $S",
+      )
+    })
+  })
+
+
+  suite("review-gate triggers: segIdx desync across the two heredoc passes (TRDD segidx desync)", () => {
+    test("1a: git commit on the operator line, unterminated body containing separators, still arms as the commit", () => {
+      assert.strictEqual(commandWriteReason("cat <<EOF && git commit -m x\nbody ; with | seps & more\n", CWD), "git commit")
+    })
+
+    test("1b: a same-line $VAR redirect before an unterminated heredoc body (with separators) still resolves and arms", () => {
+      assert.strictEqual(commandWriteReason("OUT=/repo/f\ncat <<EOF > $OUT\nbody ; sep\n", CWD), "redirect into $OUT")
+    })
+
+    test("2a: a write-shaped phrase not in command position, inside an unterminated heredoc body, does not arm", () => {
+      assert.strictEqual(commandWriteReason("cat <<EOF\nrun git commit -m x to finish\n", CWD), null)
+    })
+
+    test("2b: a TERMINATED heredoc body containing a write-shaped phrase is data, not commands", () => {
+      assert.strictEqual(commandWriteReason("cat <<EOF > /tmp/s\nrun git commit -m x to finish\nEOF\n", CWD), null)
+    })
+
+    test("R: the 74b24905 regression pin — a >= comparison inside a quoted-delimiter heredoc body never arms", () => {
+      assert.strictEqual(commandWriteReason("cat > /tmp/s <<'SPEC'\nreturn { block: a >= b }\nSPEC\n", CWD), null)
+    })
+  })
+
   suite('review-gate triggers: heredoc terminator matching is lenient, unterminated fails open for classification', () => {
     test('quoted delimiter (`<<\'EOF\'`) terminates and a later write still arms', () => {
       assert.strictEqual(commandWriteReason("cat <<'EOF' > /tmp/x\nEOF\ngit commit -m real", CWD), 'git commit')

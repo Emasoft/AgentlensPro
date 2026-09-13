@@ -136,7 +136,18 @@ function stripHeredocBodies(cmd: string, failOpen: boolean): string {
         j++
         if (bodyLine === delim) { terminated = true; break }
       }
-      if (!terminated) return failOpen ? cmd : kept.join('\n')
+      // On failure to terminate, `kept` already holds every EARLIER heredoc's body correctly
+      // stripped (that stripping happened incrementally, before we ever reached this one) plus
+      // this operator line itself. failOpen must extend that same prefix with the raw undecidable
+      // tail (`lines.slice(i)`), never discard `kept` and fall back to the original untouched
+      // `cmd` — doing so re-exposed an EARLIER, already-terminated heredoc's body as live shell
+      // text to the classification pass, inflating its segment count relative to the redirect
+      // pass (which still strips that earlier heredoc via `kept`) and desyncing the two passes'
+      // segIdx counters enough to resolve a `$VAR` redirect against a STALE assignment — a real
+      // write silently released (found by adversarial review of TRDD segidx-desync, 2026-09-13:
+      // `S=/tmp/fake\ncat <<A\nx ; y ; z\nA\nS=/repo/real\ncat <<EOF > $S\nbody` resolved `$S` to
+      // the stale `/tmp/fake` and returned null instead of arming).
+      if (!terminated) return failOpen ? kept.concat(lines.slice(i)).join('\n') : kept.join('\n')
       i = j
     }
   }
