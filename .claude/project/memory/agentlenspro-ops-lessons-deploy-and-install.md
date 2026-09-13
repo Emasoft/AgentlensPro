@@ -2,7 +2,7 @@
 name: agentlenspro-ops-lessons-deploy-and-install
 description: "how to deploy agentlenspro on a machine / setup vs manual install / hooks stopped firing after an upgrade / config file wiped or corrupted after an edit / which file does pnpm read its settings from / minimumReleaseAge or trustPolicy is set but not taking effect / is this supply-chain knob actually live / a guard blocks me editing package.json / is agentlenspro npm-linked or registry-installed / does switching the cli to an ordinary npm install lose my db or settings / where does the data live / can other agents on this machine use the cli / does the dev npm link affect normal published users / does agentlenspro run on Windows / setup fails with unsupported platform or node too old / a settings.json env key keeps reverting / can I run a second server for testing / two servers at once / I changed the ports so it is isolated right / dev instance wrote to my live data dir / invalid log tail offsets after a restart / I rebuilt and restarted but nothing changed / my fix is not live even though esbuild succeeded / am I testing the repo build or the published one / a server exited silently after deploying a new binary / the exec gate said the binary still does not exec but it was only a usage error / exit 64 after a deploy is not a kill, only exit 137 means the kernel killed it / codesign says valid on disk but every exec is still killed / the same cp-over-binary trap hit twice because the deploy page was not recalled first / how many diagnostic tools are there / keeping the skill and the CLI --help in sync / the CLI --help flag ran the command instead of showing help / a baseline ruleset restore reverted the owner's force-push bypass"
 ocd: 2026-07-11
-lmd: 2026-09-04
+lmd: 2026-09-13
 metadata:
   node_type: memory
   type: project
@@ -141,6 +141,16 @@ scripts/safe-deploy.sh runs types/lint/tests/esbuild/smoke/restart but NOT check
 
 In-place cp over an existing signed Mach-O binary (cp src bin-native/darwin-arm64/alcore onto the OLD inode) makes macOS SIGKILL every subsequent exec of it with ZERO output (exit 137, nothing on stdout/stderr) — the kernel's cached code-signature no longer matches the rewritten pages. The failure masquerades as 'the server exited during startup and wrote nothing to server.log'. Deploy binaries by rm + cp (fresh inode: the ad-hoc signature is re-associated and codesign -v passes) or cp to a temp name + mv. Diagnosed 2026-09-01: the first deploy of the day worked by luck; the second left the live server unstartable until the fresh-inode copy. [^24]
 
+
+
+^ATOM-AYEC-QR0F [desc: "when the CLI is npm-linked to a checkout, an esbuild rebuild deploys immediately; only hook registration changes need a Claude restart", keywords: do_I_need_to_restart_claude_after_rebuilding my_esbuild_change_is_not_showing_up is_a_claude_restart_required_for_a_code_fix npm_link_means_the_bin_shim_runs_a_fresh_CLI_process_every_hook_fire hooks_shell_out_to_the_CLI_binary_so_they_always_read_the_latest_bundle_from_disk restart_is_only_for_hook_registration_changes session_restart_does_not_affect_bundle_content rebuilding_deploys_without_restarting_claude why_does_the_hook_still_show_old_behaviour_after_a_rebuild distinguish_registration_change_from_bundle_change, ocd: 2026-09-13, lmd: 2026-09-13]
+
+When the CLI is npm-linked to a working checkout, an esbuild rebuild there deploys immediately:
+each hook fires by shelling a FRESH CLI invocation that reads whatever bundle is on disk at that
+moment — there is no in-memory copy of the CLI code to go stale. A Claude Code session RESTART
+is required only when the hook REGISTRATION itself changes (which hooks are wired in settings,
+not what they execute) — a running session keeps its registrations in memory until it restarts,
+but it always re-execs the CLI fresh, so a plain bundle change never needs one.
 
 ## Governed by
 
