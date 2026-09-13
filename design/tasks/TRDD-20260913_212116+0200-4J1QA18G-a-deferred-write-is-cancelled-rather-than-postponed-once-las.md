@@ -3,7 +3,7 @@ trdd-id: 4J1QA18G
 title: A write deferred inside an open agent window can be credited as reviewed by a fork that could not see it
 column: todo
 created: 2026-09-13T21:21:16+0200
-updated: 2026-09-13T22:36:24+0200
+updated: 2026-09-13T22:39:05+0200
 current-owner: emanuelesabetta
 created-by: emanuelesabetta
 task-type: bugfix
@@ -51,6 +51,7 @@ THE EXEMPTION'S JUSTIFICATION — state it MECHANISM-AGNOSTICALLY, because it ha
 STILL UNMEASURED, carried forward deliberately: whether isEphemeralTarget excludes reports/. It is a SEPARATE predicate from the effects scan's gitignore exclusion (git status --untracked-files=all surfaces untracked but not ignored), and nothing establishes the two agree. Moot for this session — every worker wrote src/cli and src/test paths, which no reasonable ephemeral predicate excludes — but it decides whether a measure agent that writes ONLY a gitignored report arms at all. Read isEphemeralTarget before relying on either answer.
 READ-DEBT DISCHARGED and the guard's SCOPE LIMIT measured, 2026-09-13. The assertion was read in full (copy the file to a scratch .txt and read that — the sanctioned route the tldr/fastedit rule already prescribes). It is NOT vacuous: it asserts on deferIntervals rather than activity, the fixture DOES contain the agent's return as a tool_result, it does not assert end === Infinity, and it drives the production scanner on real JSONL envelopes rather than a pre-built Activity array. Under the copy mutation the snapshot keeps end Infinity, the post-loop filter passes it, the array is length 1, and deepStrictEqual against the empty array fails — it reddens for the right reason. Emptiness is STRONGER than reference identity for this fixture, not weaker: the expected length is 0 and the mutation strictly adds, so no coincidental match is possible.
 THE SCOPE LIMIT, so nobody over-trusts this guard: 'move the filter inside the scan loop' names SEVERAL distinct edits with different outcomes. If the mutated filter still runs on every iteration, the final evaluation happens on the LAST line, by which time the interval has closed — the array comes out empty and the test PASSES GREEN UNDER A REAL DEFECT. It reddens only when the filter is evaluated at push time or its result is captured before the return. The references-vs-copies hazard this card names IS caught; that sibling class is not. A second test would close it: two spawns, one returned and one still open, asserting the survivor is the OPEN one by reference identity — which also catches a mutation that keeps the wrong element.
+THE VERDICT, because the measurements above point in two directions and a reader needs ONE: ATTRIBUTION OF A WRITE TO A REVIEWER IS TIMING-DEPENDENT. The two findings are opposite failures of the SAME predicate — a write can be deferred and then stop arming once the floor advances, AND a write can escape deferral entirely whenever another interval overlaps (freshness is existential, and agents dispatched in one response overlap by construction). So whether any given write is reviewed depends on DISPATCH TIMING rather than on policy. That is SEVERE, and it is the thing to fix. Do not read the two measurements as cancelling each other out.
 
 ## Supersession history
 

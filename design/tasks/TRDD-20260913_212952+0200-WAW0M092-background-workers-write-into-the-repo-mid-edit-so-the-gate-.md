@@ -1,9 +1,9 @@
 ---
 trdd-id: WAW0M092
-title: Worker writes arm the main gate as the coordinator's own, and the demanded remedy cannot review them
+title: Worker writes arm the main gate as the coordinator's own — and scratch-path landing is NOT the root-cause fix
 column: todo
 created: 2026-09-13T21:29:52+0200
-updated: 2026-09-13T21:56:57+0200
+updated: 2026-09-13T22:39:04+0200
 current-owner: emanuelesabetta
 created-by: emanuelesabetta
 task-type: refactor
@@ -65,3 +65,7 @@ The prompt dispatching one of these workers contained the text ROLE + colon + ME
 5. The CHEAPEST fix is not on this card at all: batch writes into fewer turns. Roughly half this session's fork count came from placing each card write in its own turn; batching costs nothing and would have halved it. Do that before restructuring any worker I/O.
 6. 'Q3 would have suppressed all three arms' was REASONED, not executed — mark it so. The raw-token figures (~300k each, ~900k total) are unweighted and this project's doctrine forbids that accounting: forks inherit the parent cache at 0.1x while fresh workers pay a cold prefix write at 1.25x, so the forks were the cheap half. Drop or weight the figures. The marker near-miss fixture belongs on the marker trust-boundary card, not here — a card holding another card's fixture is how fixtures get lost. Acceptance row 1 is untestable as written (you cannot observe the absence of a transient); rewrite as 'a worker's repo file mtime changes exactly once per worker run'. Row 3 belongs on Q3's card.
 SEPARATE FINDING, recorded here for lack of a better home: TEST TITLES ARE NOW EFFECTIVELY API in this repo. Commit 3555741c's message cites two of them verbatim as the guards for named hazards, and a commit message cannot be corrected. A stale --grep exits 0 having run 0 tests — a silent pass, the exact shape this project legislates against. Either stop quoting test titles in commit messages, or treat titles as a renamable-with-care interface. Measured this session: there is NO stored --grep filter in package.json or .mocharc, so renames break no tooling today; the risk is entirely in citations.
+
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-13
+
+THE BODY BELOW INVERTS ITS OWN CAUSAL CLAIM — read this first. The gate arms on mtime greater than lastForkTs, NOT on mid-edit-ness, so landing a file atomically at completion STILL ARMS; scratch-path reduces arm COUNT (roughly 3x, observed) without eliminating the arm. Q3 and deferIntervals are the ATTRIBUTION fix; scratch-path is the tidiness fix. Complementary, not alternatives. The proposed copy-out-edit-rename mechanism ALSO introduces a SILENT LOST-UPDATE RACE (read-modify-write with no compare-and-swap; three workers ran concurrently in the session that filed this) and cannot be atomic across multiple files, so a multi-file change degrades to a sequence of renames — a coarser mid-edit window, not none. DO NOT build the atomic-land mechanism from the body's acceptance rows: row 1 is untestable as written, since you cannot observe the absence of a transient (test instead that a worker's repo file mtime changes exactly once per run), and row 3 gates another card's fate from here. The cheapest real fix is not on this card at all — BATCH WRITES INTO FEWER TURNS, which costs nothing and would have halved that session's arm count.

@@ -1,9 +1,9 @@
 ---
 trdd-id: U84BCXKQ
-title: No sanctioned tool can read a line range of a test body so assertions cannot be verified
+title: Reading a test assertion needs a copy-to-scratch detour the toolchain should not require
 column: todo
 created: 2026-09-13T22:11:33+0200
-updated: 2026-09-13T22:35:12+0200
+updated: 2026-09-13T22:38:40+0200
 current-owner: emanuelesabetta
 created-by: emanuelesabetta
 task-type: infra
