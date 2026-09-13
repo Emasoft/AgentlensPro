@@ -98,7 +98,7 @@ const HEREDOC_OP_RE = /<<(-)?\s*(?:'([^']*)'|"([^"]*)"|([^\s'"<>;|&]+))/g
  *  must still arm — while the noisy redirect scan needs `failOpen=false`, dropping the unparsed
  *  region so leftover `>=`/`->` inside genuinely-unclosed document text can't false-positive a
  *  redirect (commit 74b24905's fix). */
-function stripHeredocBodies(cmd: string, failOpen: boolean): string {
+export function stripHeredocBodies(cmd: string, failOpen: boolean): string {
   const quoted = new Uint8Array(cmd.length)
   {
     let q: string | null = null

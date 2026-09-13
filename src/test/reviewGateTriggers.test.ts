@@ -3,6 +3,7 @@ import {
   commandWriteReason, isEphemeralTarget, shellWords, textArms,
   GIT_WRITE_SUBCOMMANDS, GH_MUTATING_VERBS, PKG_WRITE_VERBS, ALL_ARGS_ARE_TARGETS, LAST_ARG_IS_TARGET,
 } from '../cli/reviewGateTriggers'
+import { stripHeredocBodies } from '../cli/reviewGateTriggers'
 
 // WHAT ARMS the review gate (TRDD-0E3W5C45). The ARM rows are the guard against the fail-OPEN
 // direction (a write that goes unreviewed); the PASS rows guard the fail-CLOSED direction (the
@@ -113,6 +114,103 @@ suite('review-gate triggers: write-shaped commands', () => {
     'S=/tmp/a && echo x > "$S"',
     '(S=/tmp/a; echo x > "$S")',
   ]
+
+
+  // The invariant is BOUNDARY equality, not count equality: `stripHeredocBodies(cmd, false)`
+  // must always be an exact line-for-line PREFIX of `stripHeredocBodies(cmd, true)` (or equal to
+  // it). Two different texts can share a segment COUNT while `cumulative[i]` means different
+  // things to the two passes — that is the identical silent-release mechanism commit 1ade6293
+  // fixed, and a count-only assertion would call such an input healthy. This checks the exported
+  // production function DIRECTLY (no test-side reimplementation of the algorithm), so a
+  // regression that breaks the shared-prefix guarantee is caught structurally, not by pinning one
+  // instance of it.
+  suite('review-gate triggers: heredoc pass agreement (class-level guard)', () => {
+    function assertSharedPrefix(cmd: string, label: string): void {
+      const closed = stripHeredocBodies(cmd, false)
+      const open = stripHeredocBodies(cmd, true)
+      assert.ok(
+        open === closed || open.startsWith(closed + '\n'),
+        `failOpen=false text is not a line-prefix of failOpen=true text for [${label}]\n` +
+        `  closed: ${JSON.stringify(closed)}\n  open:   ${JSON.stringify(open)}`,
+      )
+    }
+
+    const CASES: [string, string][] = [
+      ['no heredoc at all', 'echo x > src/a.ts'],
+      ['one terminated heredoc, then a write', 'cat <<EOF > /tmp/a\nbody\nEOF\ntouch src/x'],
+      ['two terminated heredocs, then a write', 'cat <<A\nfoo\nA\ncat <<B\nbar\nB\ntouch src/y'],
+      ['terminated heredoc body containing `;`', 'cat <<EOF\na ; b ; c\nEOF\ntouch src/z'],
+      ['terminated heredoc body containing `|`', 'cat <<EOF\na | b\nEOF\ntouch src/w'],
+      ['terminated heredoc body containing `&&`', 'cat <<EOF\na && b\nEOF\ntouch src/v'],
+      ['terminated heredoc body containing `&`', 'cat <<EOF\na & b\nEOF\ntouch src/u'],
+      ['an unterminated heredoc, real write past it still arms', 'cat <<A\ntouch src/t'],
+      ['a terminated heredoc FOLLOWED by an unterminated one, write past it still arms',
+        'cat <<A\nfoo\nA\ncat <<B\ngit commit -m x'],
+      ['`<<` inside single quotes is not an operator', "echo '<<EOF' && git commit -m x"],
+      ['`<<` inside double quotes is not an operator', 'echo "<<EOF" && git commit -m x'],
+      ['bash -c wrapping a heredoc, then a write outside it', "bash -c 'cat <<EOF\nbody\nEOF' && touch src/s"],
+      ['CRLF line endings around a terminated heredoc', 'cat <<EOF\r\nbody\r\nEOF\r\ntouch src/r'],
+      ['a quoted delimiter, then a write', "cat <<'EOF'\nbody\nEOF\ntouch src/q"],
+      ['a body containing `>` and `>=`, then a write', "cat <<'EOF'\na > b\na >= b\nEOF\ntouch src/p"],
+      // Coordinator-requested case: a terminated heredoc body with exactly one `;` (one internal
+      // separator) followed, after an UNTERMINATED second heredoc, by a tail whose own separator
+      // count differs from the body's. Segment COUNTS for `open` vs `closed` here are NOT expected
+      // to be equal (fail-open legitimately appends the tail) — the point of this case is that
+      // `assertSharedPrefix` verifies the CORRECT relationship (prefix, not count) rather than
+      // asserting raw counts and being unable to tell a real desync from an intentional extension.
+      ['one `;` in a terminated body, then an unterminated heredoc whose tail has a different separator count',
+        'cat <<A\nx ; y\nA\ncat <<B\ntouch src/n ; touch src/m ; touch src/o'],
+    ]
+
+    test('every case: failOpen=false is always a line-prefix of failOpen=true (boundary equality, not count equality)', () => {
+      for (const [label, cmd] of CASES) assertSharedPrefix(cmd, label)
+    })
+
+    // Same corpus, verdict-level check: the shared prefix above is necessary but the caller
+    // (`commandWriteReason`) must also reach the one correct answer built on top of it.
+    const WANT: Record<string, string | null> = {
+      'echo x > src/a.ts': 'redirect into src/a.ts',
+      'cat <<EOF > /tmp/a\nbody\nEOF\ntouch src/x': 'touch src/x',
+      'cat <<A\nfoo\nA\ncat <<B\nbar\nB\ntouch src/y': 'touch src/y',
+      'cat <<EOF\na ; b ; c\nEOF\ntouch src/z': 'touch src/z',
+      'cat <<EOF\na | b\nEOF\ntouch src/w': 'touch src/w',
+      'cat <<EOF\na && b\nEOF\ntouch src/v': 'touch src/v',
+      'cat <<EOF\na & b\nEOF\ntouch src/u': 'touch src/u',
+      'cat <<A\ntouch src/t': 'touch src/t',
+      'cat <<A\nfoo\nA\ncat <<B\ngit commit -m x': 'git commit',
+      "echo '<<EOF' && git commit -m x": 'git commit',
+      'echo "<<EOF" && git commit -m x': 'git commit',
+      "bash -c 'cat <<EOF\nbody\nEOF' && touch src/s": 'touch src/s',
+      'cat <<EOF\r\nbody\r\nEOF\r\ntouch src/r': 'touch src/r',
+      "cat <<'EOF'\nbody\nEOF\ntouch src/q": 'touch src/q',
+      "cat <<'EOF'\na > b\na >= b\nEOF\ntouch src/p": 'touch src/p',
+      'cat <<A\nx ; y\nA\ncat <<B\ntouch src/n ; touch src/m ; touch src/o': 'touch src/n',
+    }
+    test('every case also reaches the one correct commandWriteReason verdict', () => {
+      for (const [label, cmd] of CASES) assert.strictEqual(commandWriteReason(cmd, CWD), WANT[cmd], label)
+    })
+  })
+
+  // STEP-3 regressions: both are variants of 1ade6293's bug shape that its own pinned test cannot
+  // catch — one flips the assignment order (so a desync would arm spuriously instead of releasing
+  // silently), the other removes the unterminated heredoc entirely (so any remaining divergence
+  // must come from something OTHER than the failOpen/failClosed split this file's comments already
+  // document as by-design).
+  suite('review-gate triggers: segIdx desync additional regressions (pass-agreement)', () => {
+    test('assignment order reversed: the LAST value (ephemeral) must release silently, not arm on the stale first value', () => {
+      assert.strictEqual(
+        commandWriteReason('S=/repo/real\ncat <<A\nx ; y ; z\nA\nS=/tmp/fake\ncat <<EOF > $S\nunterminated body\n', CWD),
+        null,
+      )
+    })
+
+    test('two TERMINATED heredocs and no unterminated one: a later $VAR redirect still resolves against the one real assignment', () => {
+      assert.strictEqual(
+        commandWriteReason('S=/repo/real\ncat <<A\nfoo\nA\ncat <<B\nbar\nB\necho x > $S', CWD),
+        'redirect into $S',
+      )
+    })
+  })
 
 
   suite("review-gate triggers: earlier terminated heredoc must not leak into a later unterminated one's fail-open text", () => {
