@@ -3,7 +3,7 @@ trdd-id: YGETIBJS
 title: Deploy the two-role review gate — rebuild and restart the server
 column: blocked
 created: 2026-09-13T22:38:39+0200
-updated: 2026-09-13T22:38:39+0200
+updated: 2026-09-14T06:59:21+0200
 current-owner: emanuelesabetta
 created-by: emanuelesabetta
 task-type: infra
@@ -14,6 +14,11 @@ mandated-by: none
 approved: true
 approval-judge: emanuelesabetta
 approval-datetime: 2026-09-13T22:38:39+0200
+blocked-by: [1YXR6S47, 4J1QA18G, BA0DCW98]
+unblock-when: [trdd:1YXR6S47, trdd:4J1QA18G, trdd:BA0DCW98]
+pre-block-column: todo
+blocker-probe: [trddgrep, why, YGETIBJS]
+blocker-holds-if: not-match:READY
 ---
 
 # Deploy the two-role review gate — rebuild and restart the server
@@ -41,6 +46,7 @@ Nothing mechanical currently prevents it: the CLI is npm-linked into this checko
 - [ ] All three blockers terminal.
 - [ ] Build verified by symbol grep, not mtime.
 - [ ] Server restarted; hook observed emitting the two-role message rather than the single-fork one.
+NOTE on what this card does and does not do: it ENFORCES NOTHING, because no build step reads the board. Its value is DISCOVERABILITY: the janitor heartbeat prints blocked cards on every fire, so the hold surfaces unprompted instead of being reachable only by someone who already knows which commit to read. unblock-when lets trdd-drift restore the card automatically once all three blockers are terminal. If holds like this recur, real enforcement is one more check script in the existing compile and package chain that exits non-zero while a blocked deploy card exists.
 
 ## Approval log
 
