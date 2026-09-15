@@ -554,6 +554,7 @@ suite('reviewGate — messages', () => {
       assert.ok(t.includes(PROPOSAL_MARKER), d)
       assert.ok(/\bLAST\b/.test(t), d)
       assert.ok(t.includes('review-gate --directive'), d)
+      assert.ok(t.includes('a line by itself'), d)
     }
   })
 
