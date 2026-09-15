@@ -87,18 +87,27 @@ suite('reviewSupervisor — scan', () => {
     assert.strictEqual(s.forks, 1)
   })
 
-  test('a [janitor-heartbeat] string prompt resets unreviewed to 0 (work count unchanged)', () => {
+  test('a [janitor-heartbeat] string prompt resets work, forks AND unreviewed to 0 — the whole window restarts at the floor', () => {
     const heartbeat = JSON.stringify({ type: 'user', message: { role: 'user', content: '[janitor-heartbeat] findings: none' } })
     const s = scanSupervision([assistant([edit]), heartbeat], CWD)
     assert.strictEqual(s.unreviewed, 0)
-    assert.strictEqual(s.work, 1)
+    assert.strictEqual(s.work, 0)
+    assert.strictEqual(s.forks, 0)
   })
 
-  test('an interrupt text-block entry resets unreviewed to 0 (work count unchanged)', () => {
+  test('an interrupt text-block entry resets work, forks AND unreviewed to 0 — the whole window restarts at the floor', () => {
     const interrupt = JSON.stringify({ type: 'user', message: { content: [{ type: 'text', text: '[Request interrupted by user]' }] } })
     const s = scanSupervision([assistant([edit]), interrupt], CWD)
     assert.strictEqual(s.unreviewed, 0)
-    assert.strictEqual(s.work, 1)
+    assert.strictEqual(s.work, 0)
+    assert.strictEqual(s.forks, 0)
+  })
+
+  test('a `lean-worker` spawn with `ROLE: REVIEW` does NOT count as a fork here either — only a fork spawn does', () => {
+    const leanReview = { type: 'tool_use', name: 'Agent', input: { subagent_type: 'lean-worker', prompt: 'ROLE: REVIEW\ndo it' } }
+    const s = scanSupervision([assistant([edit]), assistant([leanReview])], CWD)
+    assert.strictEqual(s.forks, 0)
+    assert.strictEqual(s.unreviewed, 1)
   })
 })
 

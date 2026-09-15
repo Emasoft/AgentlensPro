@@ -332,12 +332,22 @@ suite('reviewGate — scanTranscriptLines', () => {
     }
   })
 
-  test('an Agent spawn whose prompt starts `ROLE: REVIEW` credits roles.review at its index, for subagent_type fork AND for lean-worker', () => {
-    for (const type of ['fork', 'lean-worker']) {
-      const scan = scanTranscriptLines([assistantLine([agentBlock(type, 'ROLE: REVIEW\ndo it')])], CWD)
-      assert.strictEqual(scan.roles.review, 0, type)
-      assert.strictEqual(scan.roles.measure, -1, type)
-    }
+  test('an Agent spawn whose prompt starts `ROLE: REVIEW` credits roles.review at its index ONLY for subagent_type fork', () => {
+    const forkScan = scanTranscriptLines([assistantLine([agentBlock('fork', 'ROLE: REVIEW\ndo it')])], CWD)
+    assert.strictEqual(forkScan.roles.review, 0)
+    assert.strictEqual(forkScan.roles.measure, -1)
+  })
+
+  test('a `lean-worker` spawn whose prompt starts `ROLE: REVIEW` does NOT credit review — only a fork does', () => {
+    const scan = scanTranscriptLines([assistantLine([agentBlock('lean-worker', 'ROLE: REVIEW\ndo it')])], CWD)
+    assert.strictEqual(scan.roles.review, -1)
+    assert.strictEqual(scan.roles.measure, -1)
+  })
+
+  test('a `lean-worker` spawn whose prompt starts `ROLE: MEASURE` still credits measure', () => {
+    const scan = scanTranscriptLines([assistantLine([agentBlock('lean-worker', 'ROLE: MEASURE\nsettle it')])], CWD)
+    assert.strictEqual(scan.roles.measure, 0)
+    assert.strictEqual(scan.roles.review, -1)
   })
 
   test('an Agent spawn whose prompt starts `ROLE: MEASURE` credits roles.measure; a prompt with both markers or neither credits nothing', () => {
@@ -392,6 +402,18 @@ suite('reviewGate — scanTranscriptLines', () => {
       const scan = scanTranscriptLines([assistantLine([editBlock]), line], CWD)
       assert.deepStrictEqual(scan.work, { index: 0, cause: 'edit', detail: 'Edit a.ts' })
     }
+  })
+
+  test('a user entry whose content array pairs a tool_result with an interrupt text block IS a floor', () => {
+    const line = JSON.stringify({
+      type: 'user',
+      message: { content: [
+        { type: 'tool_result', tool_use_id: 't1', content: 'x' },
+        { type: 'text', text: '[Request interrupted by user for tool use]' },
+      ] },
+    })
+    const scan = scanTranscriptLines([assistantLine([editBlock]), line], CWD)
+    assert.strictEqual(scan.work, null)
   })
 
   test('isSidechain entries and malformed lines are skipped; ownRole comes from the FIRST user entry only (string and text-block shapes), a later `ROLE: MEASURE` user entry does not set it', () => {
@@ -500,6 +522,14 @@ suite('reviewGate — isFloorPrompt / userPromptText', () => {
     assert.strictEqual(isFloorPrompt(''), false)
     assert.strictEqual(isFloorPrompt([]), false)
   })
+
+  test('isFloorPrompt is true for an array pairing a tool_result with an interrupt text block, and false for a tool_result-only array', () => {
+    assert.strictEqual(isFloorPrompt([
+      { type: 'tool_result', tool_use_id: 't1', content: 'x' },
+      { type: 'text', text: '[Request interrupted by user for tool use]' },
+    ]), true)
+    assert.strictEqual(isFloorPrompt([{ type: 'tool_result', tool_use_id: 't1', content: 'x' }]), false)
+  })
 })
 
 // ── messages ──────────────────────────────────────────────────────────────────────────────────────
@@ -550,6 +580,7 @@ suite('reviewGate — messages', () => {
     assert.ok(REVIEW_GATE_DIRECTIVE.includes('[janitor-heartbeat]'))
     assert.ok(REVIEW_GATE_DIRECTIVE.includes('interrupted'))
     assert.ok(REVIEW_GATE_DIRECTIVE.includes('ai-maestro-janitor'))
+    assert.ok(REVIEW_GATE_DIRECTIVE.includes('Only a `fork` spawn credits the REVIEW role'))
     for (const ex of NO_REVIEW_SENTINEL_EXAMPLES) assert.ok(REVIEW_GATE_DIRECTIVE.includes(ex), ex)
   })
 })

@@ -58,7 +58,11 @@ export function scanSupervision(lines: string[], cwd: string): SupervisorScan {
     if (e?.isSidechain === true) continue
     const content = e?.message?.content
     if (e?.type === 'user') {
-      if (isFloorPrompt(content)) unreviewed = 0
+      // RESET ALL THREE COUNTERS AT THE FLOOR, not just `unreviewed`: with only `unreviewed` reset,
+      // `judge()`'s warn branch (`work > 0 && forks === 0`) still nagged on every later Stop after an
+      // interrupted turn, carrying `work`/`forks` counts from before the floor forward forever — the
+      // exact token-waste nag the owner ordered removed (2026-09-15). The window restarts at the floor.
+      if (isFloorPrompt(content)) { work = 0; forks = 0; unreviewed = 0 }
       continue
     }
     if (e?.type !== 'assistant') continue
@@ -75,7 +79,11 @@ export function scanSupervision(lines: string[], cwd: string): SupervisorScan {
       }
       if (b?.type !== 'tool_use') continue
       if (b.name === 'Agent') {
-        if (creditRoleLoose(String(b.input?.prompt ?? '')) === 'review') { forks++; unreviewed = 0 }
+        // REVIEW CREDIT REQUIRES A FORK HERE TOO, same case-folded test as the gate
+        // (reviewGate.ts scanTranscriptLines): a worker brief that merely describes the protocol
+        // must not clear the backlog with no reviewer ever spawned.
+        const isFork = String(b.input?.subagent_type ?? '').trim().toLowerCase() === 'fork'
+        if (creditRoleLoose(String(b.input?.prompt ?? '')) === 'review' && isFork) { forks++; unreviewed = 0 }
         continue
       }
       if (toolUseWork(b, cwd) !== null) { work++; unreviewed++ }

@@ -99,8 +99,9 @@ WHAT ARMS IT (owner order 2026-09-15):
   lacks that exact line is not a proposal to this gate and triggers nothing.
 
 WHAT NEVER ARMS IT: plain prose, status lines, read-only commands, files changed on disk by someone
-else (there is no mtime walk), a janitor heartbeat turn (\`[janitor-heartbeat]\`), a turn the user
-interrupted (Esc / Ctrl-C), a janitor subagent (\`ai-maestro-janitor:*\`), the review fork itself, or
+else (there is no mtime walk), a janitor heartbeat prompt (\`[janitor-heartbeat]\`) or a user interrupt (Esc / Ctrl-C,
+\`[Request interrupted by user…]\`) — each is a FLOOR: nothing before it is ever demanded, while a
+write the main agent makes AFTER it still arms —, a janitor subagent (\`ai-maestro-janitor:*\`), the review fork itself, or
 an agent whose own prompt carries \`ROLE: MEASURE\` / \`ROLE: REVIEW\` as a whole line.
 
 THE AGENTS:
@@ -109,7 +110,7 @@ THE AGENTS:
   "${REVIEW_ROLE_RULE}"
   Tell it to hunt the recurring failure shape — a PROXY read in place of the thing (a pipe's exit
   status for the tool's, a preview for the file, one run for the variance, an assumed format for the
-  real one) — and to name the single WEAKEST link with ONE settling command.
+  real one) — and to name the single WEAKEST link with ONE settling command. Only a \`fork\` spawn credits the REVIEW role; a \`ROLE: REVIEW\` line in any other agent's prompt credits nothing.
 - MEASURE (proposals only): any subagent type; a \`lean-worker\` (sonnet[1m], no inherited
   conversation context) is PREFERRED — measured at less than half a fork's tokens on the identical
   task with an equally usable report. Its prompt carries THIS LINE VERBATIM:
@@ -397,10 +398,25 @@ export function userPromptText(content: unknown): string {
  *  janitor's; an interrupted turn is the user's call to stop. Work AFTER the floor still arms — a
  *  main-agent edit inside a `[janitor-resume]` turn is not the janitor's action. Task
  *  notifications, the gate's own `Stop hook feedback:` message and mid-turn user messages are NOT
- *  floors (C1, 2026-09-13: those land inside a running turn). */
+ *  floors (C1, 2026-09-13: those land inside a running turn).
+ *
+ *  ARRAY CONTENT: true iff ANY `text` block, after stripping leading whitespace, starts with a
+ *  floor prefix — regardless of any `tool_result` block beside it. MEASURED on this project's own
+ *  JSONL (2026-09-15): 131 real interrupt entries, every one a lone leading `text` block, 0 paired
+ *  with a `tool_result` in the same content array — so a text+tool_result pairing is UNOBSERVED
+ *  today. But `userPromptText` returns '' for any array holding a tool_result (it exists to feed
+ *  `ownRole`, which must not read a tool_result as a spawning prompt), and reusing it here would
+ *  silently defeat the floor the day a harness change pairs interrupt text with a tool_result — the
+ *  exact "interrupted during a tool call" Esc this floor is meant to catch. So this scans the
+ *  blocks directly instead of going through `userPromptText`. */
 export function isFloorPrompt(content: unknown): boolean {
-  const p = userPromptText(content).replace(/^\s+/, '')
-  return p.startsWith(HEARTBEAT_PREFIX) || p.startsWith(INTERRUPT_PREFIX)
+  const isFloorText = (t: string) => {
+    const s = t.replace(/^\s+/, '')
+    return s.startsWith(HEARTBEAT_PREFIX) || s.startsWith(INTERRUPT_PREFIX)
+  }
+  if (typeof content === 'string') return isFloorText(content)
+  if (!Array.isArray(content)) return false
+  return content.some((b) => (b as AssistantContentBlock)?.type === 'text' && isFloorText(String((b as AssistantContentBlock).text ?? '')))
 }
 
 export interface GateScan {
@@ -409,9 +425,10 @@ export interface GateScan {
   work: { index: number; cause: ArmCause; detail: string } | null
   /** Index of the last proposal block after the last floor, -1 when none. */
   lastProposal: number
-  /** Highest index at which each role was credited — an Agent spawn whose prompt carries the
-   *  role marker (permanent, whatever the agent returns), or the no-review sentinel (both roles).
-   *  -1 when never. */
+  /** Highest index at which each role was credited — permanent, whatever the agent returns, or the
+   *  no-review sentinel (both roles). REVIEW credits ONLY an Agent spawn with `subagent_type: "fork"`
+   *  whose prompt carries the ROLE: REVIEW marker; MEASURE credits ANY subagent type whose prompt
+   *  carries the ROLE: MEASURE marker. -1 when never. */
   roles: { measure: number; review: number }
   /** The role the transcript's OWN first prompt declares (a subagent's spawning brief), which
    *  exempts that agent from the SubagentStop gate. Meaningless for the main transcript. */
@@ -456,10 +473,16 @@ export function scanTranscriptLines(lines: string[], cwd = process.cwd()): GateS
       }
       if (b?.type !== 'tool_use') continue
       if (b.name === 'Agent') {
-        // SPAWN credit: ANY subagent type whose prompt carries the marker — a lean-worker is a valid
-        // MEASURE agent. Permanent from the spawn index on; nothing the agent returns un-credits it.
+        // SPAWN credit. MEASURE: any subagent type whose prompt carries the marker — a lean-worker
+        // is a valid MEASURE agent. REVIEW REQUIRES A FORK: a worker brief that starts a line with
+        // "ROLE: REVIEW" merely to DESCRIBE this gate's protocol (e.g. this very file's own prose)
+        // must not release the gate with no reviewer ever spawned (adversarial review of 268f3080,
+        // finding b) — the owner's spec names the review agent a fork, the measure agent any type.
+        // Permanent from the spawn index on; nothing the agent returns un-credits it.
         const role = creditRoleLoose(String(b.input?.prompt ?? ''))
-        if (role !== null) roles[role] = Math.max(roles[role], i)
+        const isFork = String(b.input?.subagent_type ?? '').trim().toLowerCase() === 'fork'
+        if (role === 'review' && isFork) roles.review = Math.max(roles.review, i)
+        if (role === 'measure') roles.measure = Math.max(roles.measure, i)
         continue
       }
       const w = toolUseWork(b, cwd)
@@ -587,9 +610,15 @@ async function runSubagentGate(input: ReviewGateInput): Promise<string | null> {
   // `agent_transcript_path` is the subagent's OWN file — `transcript_path` names the PARENT's and
   // would measure the wrong agent entirely.
   const own = input?.agent_transcript_path
-  if (typeof own !== 'string' || !fs.existsSync(own)) return null
+  if (typeof own !== 'string' || !fs.existsSync(own)) {
+    process.stderr.write('[review-gate] allowing UNREVIEWED: agent_transcript_path is missing or does not exist for ' + JSON.stringify(type) + '\n')
+    return null
+  }
   let scan: GateScan
-  try { scan = scanTranscriptLines(fs.readFileSync(own, 'utf8').split('\n'), hookCwd(input)) } catch { return null }
+  try { scan = scanTranscriptLines(fs.readFileSync(own, 'utf8').split('\n'), hookCwd(input)) } catch {
+    process.stderr.write('[review-gate] allowing UNREVIEWED: agent_transcript_path is unreadable for ' + JSON.stringify(type) + '\n')
+    return null
+  }
   if (subagentExempt(type, scan.ownRole)) return null
   const demand = decideGate(scan)
   if (demand === null || scan.work === null) return null
