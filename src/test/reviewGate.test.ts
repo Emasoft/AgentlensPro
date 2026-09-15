@@ -6,7 +6,7 @@ import {
   scanTranscriptLines, decideGate, subagentExempt, JANITOR_AGENT_RE,
   isFloorPrompt, userPromptText, HEARTBEAT_PREFIX, INTERRUPT_PREFIX,
   demandText, mainBlockReason, subagentBlockReason, ARM_CAUSE_TEXT,
-  REVIEW_GATE_DIRECTIVE, REVIEW_ROLE_RULE, MEASURE_ROLE_RULE, creditRoleLoose, exemptRoleStrict,
+  REVIEW_GATE_DIRECTIVE, REVIEW_ROLE_RULE, MEASURE_ROLE_RULE, declaredRole,
   runMainGate, runReviewGate, agentCannotSpawn, declaredToolsHaveAgent,
   NO_REVIEW_SENTINEL, NO_REVIEW_SENTINEL_EXAMPLES,
 } from '../cli/reviewGate'
@@ -203,72 +203,51 @@ suite('reviewGate — agentCannotSpawn / declaredToolsHaveAgent (built-in + plug
   })
 })
 
-// ── KEPT VERBATIM — creditRoleLoose (the resultRole half is dropped: that symbol is removed) ────────
-suite('reviewGate — creditRoleLoose: role marker credit', () => {
-  test('creditRoleLoose: exactly one ROLE marker credits that role; both or neither credits neither', () => {
-    assert.strictEqual(creditRoleLoose('ROLE: MEASURE\ndo the thing'), 'measure')
-    assert.strictEqual(creditRoleLoose('ROLE: REVIEW\ndo the thing'), 'review')
-    assert.strictEqual(creditRoleLoose('ROLE: MEASURE\nROLE: REVIEW\n'), null, 'both markers ⇒ null')
-    assert.strictEqual(creditRoleLoose('just a plain prompt'), null, 'neither marker ⇒ null')
-    assert.strictEqual(creditRoleLoose('see ROLE: MEASURE above, then do X'), null, 'a marker mid-line is not an anchored marker LINE')
-  })
-})
-
-// ── KEPT VERBATIM — exemptRoleStrict: the exemption predicate is stricter than creditRoleLoose ──────
+// ── declaredRole: the ONE whole-line role predicate (round 3, 2026-09-15) ───────────────────────────
 //
-// creditRoleLoose CREDITS loosely (no trailing `$`) so an honest reviewer with trailing whitespace is
-// still credited. exemptRoleStrict EXEMPTS an agent from being reviewed at all, so a miss must leave
-// it gated -- it restores the `$` anchor creditRoleLoose deliberately dropped, and matches the marker
-// as a WHOLE LINE anywhere in the prompt (not the first line: measured 2026-09-13, the harness
-// PREPENDS boilerplate ahead of a fork's own `ROLE: ...` line, so a first-line rule matched
-// nothing and every roled agent was gated -- the exact regress this predicate exists to prevent).
-suite('reviewGate -- exemptRoleStrict: the exemption predicate is stricter than creditRoleLoose', () => {
+// declaredRole serves BOTH credit (a spawn releasing the parent's gate) and exemption (the spawned
+// agent skipping its own). It matches the marker as a WHOLE LINE (leading `^`, trailing `\s*$`) --
+// a stray trailing space or `\r` is fine, but prose after the marker is not -- matched ANYWHERE in
+// the prompt, not just the first line: measured 2026-09-13, the harness PREPENDS boilerplate ahead
+// of a fork's own `ROLE: ...` line, so a first-line rule matched nothing and every roled agent was
+// gated. The former LOOSE variant (no trailing `$`) is the defect fixture K exposed (2026-09-15): a
+// worker fork's prose line beginning "ROLE: REVIEW is the marker..." credited the review role with
+// no reviewer ever spawned.
+suite('reviewGate — declaredRole: the one whole-line role predicate', () => {
   test('a bare ROLE line anywhere in the prompt is credited, trailing whitespace or \\r tolerated', () => {
-    assert.strictEqual(exemptRoleStrict('ROLE: MEASURE'), 'measure')
-    assert.strictEqual(exemptRoleStrict('ROLE: REVIEW'), 'review')
-    assert.strictEqual(exemptRoleStrict('ROLE: REVIEW \r\ndo the thing'), 'review', 'trailing space/\\r on the marker line is tolerated')
-    assert.strictEqual(exemptRoleStrict('some preamble\n\nROLE: MEASURE\ndo the thing'), 'measure', 'the marker need not be the first line')
-    assert.strictEqual(exemptRoleStrict('<fork-boilerplate>\nROLE: REVIEW\nAttack the proposal.'), 'review', 'harness-prepended boilerplate must not defeat the marker')
+    assert.strictEqual(declaredRole('ROLE: MEASURE'), 'measure')
+    assert.strictEqual(declaredRole('ROLE: REVIEW'), 'review')
+    assert.strictEqual(declaredRole('ROLE: REVIEW \r\ndo the thing'), 'review', 'trailing space/\\r on the marker line is tolerated')
+    assert.strictEqual(declaredRole('some preamble\n\nROLE: MEASURE\ndo the thing'), 'measure', 'the marker need not be the first line')
+    assert.strictEqual(declaredRole('<fork-boilerplate>\nROLE: REVIEW\nAttack the proposal.'), 'review', 'harness-prepended boilerplate must not defeat the marker')
   })
 
-  test('trailing prose on the marker line is the hole this closes -- it must NOT exempt', () => {
-    assert.strictEqual(exemptRoleStrict('ROLE: REVIEW the following diff and then edit it'), null, 'trailing prose defeats the exemption')
-    assert.strictEqual(exemptRoleStrict('ROLE: MEASURE the assumptions below'), null)
+  test('trailing prose on the marker line does NOT credit -- the loose defect this replaces', () => {
+    assert.strictEqual(declaredRole('ROLE: REVIEW the following diff and then edit it'), null, 'trailing prose defeats the credit')
+    assert.strictEqual(declaredRole('ROLE: MEASURE the assumptions below'), null)
   })
 
   test('both markers present, or neither, credits neither', () => {
-    assert.strictEqual(exemptRoleStrict('ROLE: MEASURE\nROLE: REVIEW\n'), null)
-    assert.strictEqual(exemptRoleStrict('just a plain prompt'), null)
+    assert.strictEqual(declaredRole('ROLE: MEASURE\nROLE: REVIEW\n'), null)
+    assert.strictEqual(declaredRole('just a plain prompt'), null)
   })
 
-  test('a bare marker line quoted inside a longer brief still exempts -- accepted residual, narrower than a mid-line mention', () => {
-    assert.strictEqual(exemptRoleStrict('Here is the protocol:\nROLE: REVIEW\nThat is what it looks like.'), 'review')
+  test('the marker quoted mid-sentence is not an anchored marker LINE', () => {
+    assert.strictEqual(declaredRole('see ROLE: MEASURE above, then do X'), null)
   })
 
-  test('property: exemptRoleStrict is a strict subset of creditRoleLoose -- strict implies loose, and they agree', () => {
-    const prompts = [
-      'ROLE: MEASURE', 'ROLE: REVIEW', 'ROLE: MEASURE\ndo the thing', 'ROLE: REVIEW\ndo the thing',
-      'ROLE: REVIEW \r\ndo the thing', 'some preamble\n\nROLE: MEASURE\ndo the thing',
-      '<fork-boilerplate>\nROLE: REVIEW\nAttack the proposal.',
-      'ROLE: REVIEW the following diff and then edit it', 'ROLE: MEASURE the assumptions below',
-      'ROLE: MEASURE\nROLE: REVIEW\n', 'just a plain prompt',
-      'see ROLE: MEASURE above, then do X',
-      'Here is the protocol:\nROLE: REVIEW\nThat is what it looks like.',
-    ]
-    for (const p of prompts) {
-      const d = exemptRoleStrict(p)
-      if (d !== null) assert.strictEqual(creditRoleLoose(p), d, `declaredRole(${JSON.stringify(p)})=${d} must imply forkRole agrees`)
-    }
+  test('a bare marker line quoted inside a longer brief still credits -- accepted residual, narrower than a mid-line mention', () => {
+    assert.strictEqual(declaredRole('Here is the protocol:\nROLE: REVIEW\nThat is what it looks like.'), 'review')
   })
 
-  test('MUTATION CHECK: dropping the $ anchor from the creditRoleLoose regex must let the trailing-prose hole back in', () => {
+  test('MUTATION CHECK: dropping the $ anchor must let the trailing-prose hole back in', () => {
     const withoutAnchor = (prompt: string): 'measure' | 'review' | null => {
       const m = /^ROLE: MEASURE/m.test(prompt)
       const r = /^ROLE: REVIEW/m.test(prompt)
       return m === r ? null : (m ? 'measure' : 'review')
     }
     assert.strictEqual(withoutAnchor('ROLE: REVIEW the following diff and then edit it'), 'review', 'without the dollar anchor the hole reopens')
-    assert.strictEqual(exemptRoleStrict('ROLE: REVIEW the following diff and then edit it'), null, 'the real predicate keeps the hole closed')
+    assert.strictEqual(declaredRole('ROLE: REVIEW the following diff and then edit it'), null, 'the real predicate keeps the hole closed')
   })
 })
 
@@ -342,6 +321,21 @@ suite('reviewGate — scanTranscriptLines', () => {
     const scan = scanTranscriptLines([assistantLine([agentBlock('lean-worker', 'ROLE: REVIEW\ndo it')])], CWD)
     assert.strictEqual(scan.roles.review, -1)
     assert.strictEqual(scan.roles.measure, -1)
+  })
+
+  test('fixture K: a fork spawn whose prompt merely DESCRIBES the marker (prose after it on the same line) after an Edit leaves review uncredited and the gate still demands review', () => {
+    const lines = [
+      assistantLine([editBlock]),
+      assistantLine([agentBlock('fork', 'Refactor the parser.\nROLE: REVIEW is the marker the gate looks for; do not use it here.')]),
+    ]
+    const scan = scanTranscriptLines(lines, CWD)
+    assert.strictEqual(scan.roles.review, -1)
+    assert.strictEqual(decideGate(scan), 'review')
+  })
+
+  test('a fork spawn whose prompt is `ROLE: REVIEW \\r\\nreview this` credits review', () => {
+    const scan = scanTranscriptLines([assistantLine([agentBlock('fork', 'ROLE: REVIEW \r\nreview this')])], CWD)
+    assert.strictEqual(scan.roles.review, 0)
   })
 
   test('a `lean-worker` spawn whose prompt starts `ROLE: MEASURE` still credits measure', () => {

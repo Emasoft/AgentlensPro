@@ -20,7 +20,7 @@
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
-import { readTranscriptTail, hookCwd, isNoReviewSentinel, toolUseWork, creditRoleLoose, isFloorPrompt } from './reviewGate'
+import { readTranscriptTail, hookCwd, isNoReviewSentinel, toolUseWork, declaredRole, isFloorPrompt } from './reviewGate'
 import type { AssistantContentBlock } from './reviewGate'
 import { textArms } from './reviewGateTriggers'
 
@@ -37,7 +37,7 @@ export interface SupervisorScan {
 
 /** Count work and reviews over a transcript tail. Pure, so the thresholds are testable.
  *
- *  USES THE GATE'S OWN PREDICATES (`toolUseWork`/`textArms`/`creditRoleLoose`/`isFloorPrompt`)
+ *  USES THE GATE'S OWN PREDICATES (`toolUseWork`/`textArms`/`declaredRole`/`isFloorPrompt`)
  *  instead of re-deriving them: this used to keep its own `EDITORS` set plus a bare
  *  `/\bgit\s+commit\b/` regex, so it was silent on `sed -i`, `git push`, every other write-shaped
  *  Bash command the gate already recognizes, and on a marked proposal — the exact drift a
@@ -83,7 +83,7 @@ export function scanSupervision(lines: string[], cwd: string): SupervisorScan {
         // (reviewGate.ts scanTranscriptLines): a worker brief that merely describes the protocol
         // must not clear the backlog with no reviewer ever spawned.
         const isFork = String(b.input?.subagent_type ?? '').trim().toLowerCase() === 'fork'
-        if (creditRoleLoose(String(b.input?.prompt ?? '')) === 'review' && isFork) { forks++; unreviewed = 0 }
+        if (declaredRole(String(b.input?.prompt ?? '')) === 'review' && isFork) { forks++; unreviewed = 0 }
         continue
       }
       if (toolUseWork(b, cwd) !== null) { work++; unreviewed++ }

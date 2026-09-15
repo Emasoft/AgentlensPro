@@ -60,24 +60,16 @@ export const MEASURE_ROLE_RULE = 'Begin your prompt with a line that is exactly 
 
 export type Role = 'measure' | 'review'
 
-/** Role claimed by a PROMPT the parent wrote. An anchored marker LINE, never a bare mention: an
- *  agent reviewing this gate quotes both names in prose. Both or neither => null, because one
- *  agent doing both jobs is the shape this replaces. LEADING `^` only, no trailing `$`: trailing
- *  text after the marker (a stray space, a `\r`) never changes its meaning, and an end anchor only
- *  ever catches the HONEST agent whose line picked up a trailing space. */
-export function creditRoleLoose(prompt: string): Role | null {
-  const m = /^ROLE: MEASURE/m.test(prompt)
-  const r = /^ROLE: REVIEW/m.test(prompt)
-  return m === r ? null : (m ? 'measure' : 'review')
-}
-
-/** The EXEMPTION predicate (a roled agent is never told to spawn its own reviewer) — stricter than
- *  `creditRoleLoose` by one `$`, and matched ANYWHERE in the prompt: measured 2026-09-13, the
- *  harness PREPENDS boilerplate ahead of a fork's own `ROLE: …` line, so a first-line rule matched
- *  nothing and every roled agent was gated. Strict because exemption is cheap to trigger (one
- *  marker in the agent's own prompt) and the marker text quoted mid-sentence in a brief that merely
- *  discusses the protocol must not exempt the agent. */
-export function exemptRoleStrict(prompt: string): Role | null {
+/** Role claimed by a PROMPT the parent wrote. The marker must be a WHOLE LINE (leading `^`,
+ *  trailing `\s*$`, so a stray space or `\r` is fine but prose after the marker is not) and is
+ *  matched ANYWHERE in the prompt, not just the first line: measured 2026-09-13, the harness
+ *  PREPENDS boilerplate ahead of a fork's own `ROLE: …` line, so a leading-only rule matched
+ *  nothing and every roled agent was gated. Both or neither => null, because one agent doing both
+ *  jobs is the shape this replaces. ONE predicate serves both credit (a spawn releasing the
+ *  parent's gate) and exemption (the spawned agent skipping its own) — measured 2026-09-15
+ *  (fixture K): a loose leading-only variant credited REVIEW from a worker fork whose prose line
+ *  merely BEGAN "ROLE: REVIEW is the marker…", releasing the gate with no reviewer ever spawned. */
+export function declaredRole(prompt: string): Role | null {
   const m = /^ROLE: MEASURE\s*$/m.test(prompt)
   const r = /^ROLE: REVIEW\s*$/m.test(prompt)
   return m === r ? null : (m ? 'measure' : 'review')
@@ -101,7 +93,7 @@ WHAT ARMS IT (owner order 2026-09-15):
 WHAT NEVER ARMS IT: plain prose, status lines, read-only commands, files changed on disk by someone
 else (there is no mtime walk), a janitor heartbeat prompt (\`[janitor-heartbeat]\`) or a user interrupt (Esc / Ctrl-C,
 \`[Request interrupted by user…]\`) — each is a FLOOR: nothing before it is ever demanded, while a
-write the main agent makes AFTER it still arms —, a janitor subagent (\`ai-maestro-janitor:*\`), the review fork itself, or
+write the main agent makes AFTER it still arms — a janitor subagent (\`ai-maestro-janitor:*\`), the review fork itself, or
 an agent whose own prompt carries \`ROLE: MEASURE\` / \`ROLE: REVIEW\` as a whole line.
 
 THE AGENTS:
@@ -454,7 +446,7 @@ export function scanTranscriptLines(lines: string[], cwd = process.cwd()): GateS
     if (e?.type === 'user') {
       // The transcript's OWN spawning prompt is its FIRST non-sidechain `user` entry — read ONCE,
       // so a later human-authored `user` turn is never mistaken for it.
-      if (!sawFirstUser) { sawFirstUser = true; ownRole = exemptRoleStrict(userPromptText(content)) }
+      if (!sawFirstUser) { sawFirstUser = true; ownRole = declaredRole(userPromptText(content)) }
       if (isFloorPrompt(content)) { work = null; lastProposal = -1 }
       continue
     }
@@ -474,12 +466,13 @@ export function scanTranscriptLines(lines: string[], cwd = process.cwd()): GateS
       if (b?.type !== 'tool_use') continue
       if (b.name === 'Agent') {
         // SPAWN credit. MEASURE: any subagent type whose prompt carries the marker — a lean-worker
-        // is a valid MEASURE agent. REVIEW REQUIRES A FORK: a worker brief that starts a line with
-        // "ROLE: REVIEW" merely to DESCRIBE this gate's protocol (e.g. this very file's own prose)
-        // must not release the gate with no reviewer ever spawned (adversarial review of 268f3080,
-        // finding b) — the owner's spec names the review agent a fork, the measure agent any type.
-        // Permanent from the spawn index on; nothing the agent returns un-credits it.
-        const role = creditRoleLoose(String(b.input?.prompt ?? ''))
+        // is a valid MEASURE agent. REVIEW REQUIRES A FORK and a whole-line marker: a worker brief
+        // that merely mentions "ROLE: REVIEW" while DESCRIBING this gate's protocol (e.g. this very
+        // file's own prose) must not release the gate with no reviewer ever spawned (adversarial
+        // review of 268f3080, finding b) — the owner's spec names the review agent a fork, the
+        // measure agent any type. Permanent from the spawn index on; nothing the agent returns
+        // un-credits it.
+        const role = declaredRole(String(b.input?.prompt ?? ''))
         const isFork = String(b.input?.subagent_type ?? '').trim().toLowerCase() === 'fork'
         if (role === 'review' && isFork) roles.review = Math.max(roles.review, i)
         if (role === 'measure') roles.measure = Math.max(roles.measure, i)
