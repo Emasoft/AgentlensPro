@@ -524,9 +524,9 @@ export function demandText(d: Demand): string {
   const parts = d === 'review' ? [REVIEW_DEMAND] : d === 'measure' ? [MEASURE_DEMAND] : [MEASURE_DEMAND, REVIEW_DEMAND]
   return parts.join(' ') + ' A spawned agent cannot see this message, so a rule you do not paste into its '
     + 'prompt never reaches it. A spawn whose prompt starts with its ROLE line credits that role at the '
-    + 'spawn, permanently. A spawn counts ONLY if that marker is a line by itself — extra words on the marker '
-    + 'line, or a prompt carrying both markers, credit nothing, so if you already spawned and are still '
-    + 'blocked, that is why. THE EXIT IS POSITIONAL: put the spawn tool_use(s) LAST in the response, after the '
+    + 'spawn, permanently. A spawn counts ONLY if its prompt has the ROLE marker as a line by itself and, for '
+    + 'REVIEW, only if the spawn is a fork — extra words on the marker line, a non-fork REVIEW spawn, or a '
+    + 'prompt carrying both markers credit nothing. THE EXIT IS POSITIONAL: put the spawn tool_use(s) LAST in the response, after the '
     + 'turn\'s last edit, write-shaped command or "' + PROPOSAL_MARKER + '" line — one of those after the spawn '
     + 're-arms this gate; plain text after it does not. Run `agentlenspro review-gate --directive` for the full '
     + 'directive, then act on the findings. If you CANNOT spawn — ' + NO_REVIEW_SENTINEL_EXAMPLES.join(', ')
