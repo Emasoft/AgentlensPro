@@ -1,7 +1,11 @@
 import * as assert from 'assert'
+import * as fs from 'fs'
+import * as os from 'os'
+import * as path from 'path'
 import {
-  commandWriteReason, isEphemeralTarget, shellWords, textArms,
+  commandWriteReason, isEphemeralTarget, shellWords, textArms, PROPOSAL_MARKER,
   GIT_WRITE_SUBCOMMANDS, GH_MUTATING_VERBS, PKG_WRITE_VERBS, ALL_ARGS_ARE_TARGETS, LAST_ARG_IS_TARGET,
+  scriptRunnerReason, isNeverGatedTarget, isNoReviewSentinel,
 } from '../cli/reviewGateTriggers'
 import { stripHeredocBodies } from '../cli/reviewGateTriggers'
 
@@ -135,6 +139,24 @@ suite('review-gate triggers: write-shaped commands', () => {
       )
     }
 
+
+    // Guards the actual shared invariant: BOTH passes tokenize with the SAME `shellWords`, and
+    // `segIdx` is a counter over those TOKENIZED segments, not over the raw strip text. Text-prefix
+    // (assertSharedPrefix above) only guarantees the real segIdx invariant if shellWords is
+    // prefix-stable (tokenizing a prefix of the text yields a prefix of tokenizing the whole text).
+    // That is nowhere else asserted, so a future shellWords change with lookahead/line-joining could
+    // break the segIdx pairing while the text-prefix test stays green.
+    function assertSharedPrefixSegments(cmd: string, label: string): void {
+      const closedSegs = shellWords(stripHeredocBodies(cmd, false))
+      const openSegs = shellWords(stripHeredocBodies(cmd, true))
+      assert.deepStrictEqual(
+        openSegs.slice(0, closedSegs.length), closedSegs,
+        `failOpen=false tokenization is not an element-wise prefix of failOpen=true tokenization ` +
+        `(breaks the segIdx pairing the two commandWriteReason passes share) for [${label}]\n` +
+        `  closed: ${JSON.stringify(closedSegs)}\n  open:   ${JSON.stringify(openSegs)}`,
+      )
+    }
+
     const CASES: [string, string][] = [
       ['no heredoc at all', 'echo x > src/a.ts'],
       ['one terminated heredoc, then a write', 'cat <<EOF > /tmp/a\nbody\nEOF\ntouch src/x'],
@@ -161,6 +183,11 @@ suite('review-gate triggers: write-shaped commands', () => {
       ['one `;` in a terminated body, then an unterminated heredoc whose tail has a different separator count',
         'cat <<A\nx ; y\nA\ncat <<B\ntouch src/n ; touch src/m ; touch src/o'],
     ]
+
+
+    test("every case: failOpen=false tokenization is an element-wise prefix of failOpen=true tokenization (the segIdx pair, not just the strip text)", () => {
+      for (const [label, cmd] of CASES) assertSharedPrefixSegments(cmd, label)
+    })
 
     test('every case: failOpen=false is always a line-prefix of failOpen=true (boundary equality, not count equality)', () => {
       for (const [label, cmd] of CASES) assertSharedPrefix(cmd, label)
@@ -333,14 +360,37 @@ suite('review-gate triggers: ephemeral targets fail CLOSED', () => {
 })
 
 suite('review-gate triggers: text', () => {
-  test('only a line STARTING with PROPOSAL arms — not prose, not a fence, not a quotation', () => {
-    for (const t of ['PROPOSAL: change X', '**PROPOSAL:** change X', '## PROPOSAL\nchange X', 'intro\n\nPROPOSAL: later line']) {
+  test('a line starting with the marker (plain, bold, or a heading prefix) arms', () => {
+    for (const t of [
+      'PROPOSAL FOR ACTION - PLEASE REVIEW\nchange X',
+      '**PROPOSAL FOR ACTION - PLEASE REVIEW**\nchange X',
+      '## PROPOSAL FOR ACTION - PLEASE REVIEW\nchange X',
+      'intro\n\nPROPOSAL FOR ACTION - PLEASE REVIEW\nlater line',
+    ]) {
       assert.strictEqual(textArms(t), true, t)
     }
-    for (const t of ['janitor heartbeat', 'Holding.', 'I propose changing X to Y.', 'my proposal is X', '> PROPOSAL: quoted',
-      'here:\n```ts\nconst x = 1\n```', 'a proposal: no']) {
+  })
+
+  test('the dash between ACTION and PLEASE may be a hyphen, an en dash or an em dash', () => {
+    for (const dash of ['-', '–', '—']) {
+      assert.strictEqual(textArms(`PROPOSAL FOR ACTION ${dash} PLEASE REVIEW\nbody`), true, dash)
+    }
+  })
+
+  test('the old PROPOSAL: marker no longer arms, and the new marker mid-sentence or quoted does not arm', () => {
+    for (const t of [
+      'PROPOSAL: change X', '**PROPOSAL:** change X',
+      'janitor heartbeat', 'Holding.', 'I propose changing X to Y.', 'my proposal is X',
+      '> PROPOSAL FOR ACTION - PLEASE REVIEW: quoted',
+      'here:\n```ts\nconst x = 1\n```',
+      'I wrote a PROPOSAL FOR ACTION - PLEASE REVIEW mid-sentence',
+    ]) {
       assert.strictEqual(textArms(t), false, t)
     }
+  })
+
+  test('PROPOSAL_MARKER equals the literal string', () => {
+    assert.strictEqual(PROPOSAL_MARKER, 'PROPOSAL FOR ACTION - PLEASE REVIEW')
   })
 })
 
@@ -353,5 +403,113 @@ suite('review-gate triggers: shellWords', () => {
     assert.deepStrictEqual(shellWords('a&&b||c;d\ne').map((w) => w.word), ['a', '&&', 'b', '||', 'c', ';', 'd', ';', 'e'])
     assert.deepStrictEqual(shellWords('f \\; g').map((w) => [w.word, w.quoted]), [['f', false], [';', true], ['g', false]])
     assert.deepStrictEqual(shellWords('X=$(y) z').map((w) => w.word), ['X=$', ';', 'y', ';', 'z'])
+  })
+})
+
+// ── STAGE 1, D7: fastedit / trddgrep / prrdgrep / specgrep write verbs, deploy commands, and
+// script-runner classification (plan test 19). Also covers checklist items (b)/(c): read-only
+// tools used by this repo's own agents must stay null, and flags-before-subcommand shapes must
+// still classify.
+suite('review-loop D7: additional write-shaped verbs (fastedit/trddgrep/prrdgrep/specgrep/deploy)', () => {
+  test('fastedit write verbs arm; fastedit read verbs do not', () => {
+    for (const [cmd, why] of [
+      ['fastedit edit f.ts --replace x --snippet y', 'fastedit edit'],
+      ['fastedit multi-edit --file-edits x', 'fastedit multi-edit'],
+      ['fastedit create f.ts --content x', 'fastedit create'],
+      ['fastedit rename f.ts old new', 'fastedit rename'],
+      ['fastedit undo f.ts', 'fastedit undo'],
+    ] as [string, string][]) {
+      assert.strictEqual(commandWriteReason(cmd, CWD), why, cmd)
+    }
+    for (const cmd of ['fastedit read f.ts', 'fastedit search x dir', 'fastedit diff f.ts']) {
+      assert.strictEqual(commandWriteReason(cmd, CWD), null, cmd)
+    }
+  })
+
+  test('trddgrep write verbs arm (including index-verify --repair); read verbs (incl. `show`) do not', () => {
+    assert.strictEqual(commandWriteReason('trddgrep new --title X --task-type feature', CWD), 'trddgrep new')
+    assert.strictEqual(commandWriteReason('trddgrep set TRDD-1 column dev', CWD), 'trddgrep set')
+    assert.strictEqual(commandWriteReason('trddgrep index-verify --repair', CWD), 'trddgrep index-verify --repair')
+    assert.strictEqual(commandWriteReason('trddgrep index-verify', CWD), null)
+    assert.strictEqual(commandWriteReason('trddgrep show TRDD-1', CWD), null)
+    assert.strictEqual(commandWriteReason('trddgrep --design-dir /proj/design set TRDD-1 column dev', CWD), 'trddgrep set') // (c): flag before subcommand
+  })
+
+  test('prrdgrep/specgrep edit arms; other verbs do not', () => {
+    assert.strictEqual(commandWriteReason('prrdgrep edit 1 --expect x --replace y', CWD), 'prrdgrep edit')
+    assert.strictEqual(commandWriteReason('specgrep edit 1 --expect x --replace y', CWD), 'specgrep edit')
+    assert.strictEqual(commandWriteReason('prrdgrep lint', CWD), null)
+    assert.strictEqual(commandWriteReason('AIM_PILLAR_ALLOW_WRITE=1 trddgrep --design-dir /proj/design edit 1 --expect x --replace y', CWD), 'trddgrep edit') // (c)
+  })
+
+  test('deploy commands arm, with flags before the subcommand still detected (checklist c)', () => {
+    assert.strictEqual(commandWriteReason('node esbuild.js', CWD), 'node esbuild.js')
+    assert.strictEqual(commandWriteReason('node ./esbuild.js', CWD), 'node esbuild.js')
+    assert.strictEqual(commandWriteReason('node /abs/esbuild.js', CWD), 'node esbuild.js') // (c): basename match, any path
+    assert.strictEqual(commandWriteReason('pnpm run package', CWD), 'pnpm run package')
+    assert.strictEqual(commandWriteReason('pnpm --dir /repo run package', CWD), 'pnpm run package')
+    assert.strictEqual(commandWriteReason('npm --prefix /repo run compile', CWD), 'npm run compile') // (c): --prefix skipped
+    assert.strictEqual(commandWriteReason('agentlenspro server restart', CWD), 'agentlenspro server restart')
+    assert.strictEqual(commandWriteReason('agentlenspro server status', CWD), null) // (b): read-only
+    assert.strictEqual(commandWriteReason('pnpm run lint', CWD), null) // lint isn't in the deploy list
+  })
+
+  test('script runners need a window; a plugin-cache/data script is exempt; inline code never is', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'rlt-'))
+    // (h): the implementation resolves `~/.claude/plugins/{cache,data}` via `os.homedir()`, which
+    // reads `HOME` at call time — override HOME for this test's scope instead of writing fixtures
+    // into the REAL ~/.claude/plugins. Restored in `finally`, whatever happens.
+    const realHome = process.env.HOME
+    process.env.HOME = tmp
+    try {
+      assert.strictEqual(scriptRunnerReason('uv run /tmp/x.py', tmp), 'uv (script runner)')
+      assert.strictEqual(scriptRunnerReason('node ./x.js', tmp), 'node (script runner)')
+      assert.strictEqual(scriptRunnerReason('pnpm run build', tmp), 'pnpm (script runner)')
+      assert.strictEqual(scriptRunnerReason('cargo test', tmp), 'cargo (script runner)')
+      assert.strictEqual(scriptRunnerReason('git status', tmp), null) // not a runner at all
+      assert.strictEqual(scriptRunnerReason('python -c "print(1)"', tmp), 'python (inline code)')
+      assert.strictEqual(scriptRunnerReason('python3.11 -c "1"', tmp), 'python3.11 (inline code)')
+
+      const pluginData = path.join(tmp, '.claude', 'plugins', 'data', 'ai-maestro-janitor-ai-maestro-plugins')
+      fs.mkdirSync(pluginData, { recursive: true })
+      const stub = path.join(pluginData, 'dispatcher-stub.py')
+      fs.writeFileSync(stub, '# stub\n')
+      assert.strictEqual(scriptRunnerReason(`uv run --script --quiet "${stub}" 2>&1`, tmp), null) // (b): exempt, PASS
+      const outside = path.join(tmp, 'x.py')
+      fs.writeFileSync(outside, '# not a plugin script\n')
+      assert.strictEqual(scriptRunnerReason(`python3 ${outside}`, tmp), 'python3 (script runner)') // NOT exempt
+    } finally {
+      process.env.HOME = realHome
+      fs.rmSync(tmp, { recursive: true, force: true })
+    }
+  })
+
+  // MUTATION CHECK 19: disable the deploy-verb classification (comment out its call site) and
+  // confirm 'node esbuild.js' goes from armed to unarmed, then restore and confirm it re-arms.
+  // (This test documents the check performed manually via fastedit during development — see the
+  // STAGE 1 report for the disable/restore transcript; the assertion below is the "confirm green"
+  // half and is what CI actually runs on every commit.)
+  test('mutation-check anchor: node esbuild.js must arm (guards against the deploy-verb branch silently no-op-ing)', () => {
+    assert.strictEqual(commandWriteReason('node esbuild.js', CWD), 'node esbuild.js')
+  })
+})
+
+suite('review-loop D3: isNeverGatedTarget (moved from delegateGate.ts, behaviour unchanged)', () => {
+  test('ephemeral roots and ~/.claude/plans/ are never gated; everything else is decided normally', () => {
+    const plansFile = path.join(os.homedir(), '.claude', 'plans', 'x.md')
+    assert.strictEqual(isNeverGatedTarget('/tmp/x', CWD), true)
+    assert.strictEqual(isNeverGatedTarget('reports/x', CWD), true)
+    assert.strictEqual(isNeverGatedTarget(plansFile, CWD), true)
+    assert.strictEqual(isNeverGatedTarget('src/x.ts', CWD), false)
+    assert.strictEqual(isNeverGatedTarget('', CWD), false)
+  })
+})
+
+suite('review-loop: isNoReviewSentinel (moved from reviewGate.ts, behaviour unchanged)', () => {
+  test('a sentinel with a real reason releases; a bare or reasonless one does not', () => {
+    assert.strictEqual(isNoReviewSentinel('REVIEW-GATE: NO REVIEW POSSIBLE — rate-limited'), true)
+    assert.strictEqual(isNoReviewSentinel('REVIEW-GATE: NO REVIEW POSSIBLE'), false)
+    assert.strictEqual(isNoReviewSentinel('REVIEW-GATE: NO REVIEW POSSIBLE — ab'), false)
+    assert.strictEqual(isNoReviewSentinel('prose quoting REVIEW-GATE: NO REVIEW POSSIBLE — rate-limited'), false)
   })
 })

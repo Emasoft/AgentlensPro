@@ -20,54 +20,45 @@
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
-import { readTranscriptTail, hookCwd, isNoReviewSentinel, toolUseWork, creditRoleLoose, resultRole, resultText } from './reviewGate'
-import type { AssistantContentBlock, Role } from './reviewGate'
+import { readTranscriptTail, hookCwd, isNoReviewSentinel, toolUseWork, creditRoleLoose, isFloorPrompt } from './reviewGate'
+import type { AssistantContentBlock } from './reviewGate'
 import { textArms } from './reviewGateTriggers'
 
 export interface SupervisorScan {
   /** Consequential actions (edits, write-shaped commands, marked proposals) seen in the window. */
   work: number
-  /** Adversarial review forks spawned, or a no-review sentinel emitted — either counts as this
-   *  window's review, so a legitimate "I cannot review" declaration does not nag forever. */
+  /** Adversarial review forks spawned (a spawn whose prompt carries `ROLE: REVIEW`), or a
+   *  no-review sentinel emitted — either counts as this window's review, so a legitimate "I cannot
+   *  review" declaration does not nag forever. */
   forks: number
-  /** Work items that appear AFTER the last fork — the unreviewed backlog. */
+  /** Work items that appear AFTER the last review — the unreviewed backlog. */
   unreviewed: number
 }
 
-/** Count work and forks over a transcript tail. Pure, so the thresholds are testable.
+/** Count work and reviews over a transcript tail. Pure, so the thresholds are testable.
  *
- *  USES THE GATE'S OWN WORK PREDICATE (`toolUseWork`/`textArms`, TRDD-2CYTNLY1) instead of
- *  re-deriving it: this used to keep its own `EDITORS` set plus a bare `/\bgit\s+commit\b/`
- *  regex, so it was silent on `sed -i`, `git push`, every other write-shaped Bash command the
- *  gate already recognizes, and on a marked `PROPOSAL` text block — the exact drift a supervisor
- *  whose job is to catch the gate going quiet must not itself have. `cwd` is the hook's, never
- *  `process.cwd()`: `toolUseWork`'s Bash branch resolves relative write targets against it. */
+ *  USES THE GATE'S OWN PREDICATES (`toolUseWork`/`textArms`/`creditRoleLoose`/`isFloorPrompt`)
+ *  instead of re-deriving them: this used to keep its own `EDITORS` set plus a bare
+ *  `/\bgit\s+commit\b/` regex, so it was silent on `sed -i`, `git push`, every other write-shaped
+ *  Bash command the gate already recognizes, and on a marked proposal — the exact drift a
+ *  supervisor whose job is to catch the gate going quiet must not itself have. The same FLOORS the
+ *  gate honours (a janitor heartbeat turn, a user interrupt) clear the backlog here too, so the
+ *  supervisor never nags for work the gate itself no longer demands (owner order 2026-09-15).
+ *  Advisory, so it keeps the simpler "review seen since the last work" model rather than the
+ *  gate's per-role positional decision — an under-warning here costs a missed nag, not a skipped
+ *  enforcement. `cwd` is the hook's, never `process.cwd()`: `toolUseWork`'s Bash branch resolves
+ *  relative write targets against it. */
 export function scanSupervision(lines: string[], cwd: string): SupervisorScan {
   let work = 0
   let forks = 0
   let unreviewed = 0
-  // Advisory two-role tracking (owner spec 2026-09-13): the backlog clears only once BOTH the
-  // MEASURE and REVIEW roles have been seen since the last work item — a lone spawn (which used to
-  // clear it unconditionally) is no longer enough. This supervisor never blocks, so it uses the
-  // simpler "seen anywhere" model rather than the main gate's open/closed-interval bookkeeping —
-  // an under-warning here costs a missed nag, not a skipped enforcement (the gate still enforces).
-  let seenMeasure = false
-  let seenReview = false
-  const noteRole = (role: Role | null): void => {
-    if (role === 'measure') seenMeasure = true
-    else if (role === 'review') seenReview = true
-    if (seenMeasure && seenReview) { unreviewed = 0; seenMeasure = false; seenReview = false }
-  }
   for (const line of lines) {
     let e: { type?: string; isSidechain?: boolean; message?: { content?: unknown } }
     try { e = JSON.parse(line) as typeof e } catch { continue }
     if (e?.isSidechain === true) continue
     const content = e?.message?.content
-    if (e?.type === 'user' && Array.isArray(content)) {
-      for (const b of content as AssistantContentBlock[]) {
-        if (b?.type !== 'tool_result') continue
-        noteRole(resultRole(resultText(b.content)))
-      }
+    if (e?.type === 'user') {
+      if (isFloorPrompt(content)) unreviewed = 0
       continue
     }
     if (e?.type !== 'assistant') continue
@@ -75,22 +66,19 @@ export function scanSupervision(lines: string[], cwd: string): SupervisorScan {
     for (const b of content as AssistantContentBlock[]) {
       if (b?.type === 'text') {
         const text = String(b.text ?? '')
-        // A no-review sentinel is a legitimate exit, not a proposal — treat it like both roles
+        // A no-review sentinel is a legitimate exit, not a proposal — treat it like a review
         // landing (clears the backlog) so the supervisor does not nag an agent that correctly
         // declared it could not spawn a reviewer.
-        if (isNoReviewSentinel(text)) { forks++; seenMeasure = true; seenReview = true; unreviewed = 0; continue }
-        if (textArms(text)) { work++; unreviewed++; seenMeasure = false; seenReview = false }
+        if (isNoReviewSentinel(text)) { forks++; unreviewed = 0; continue }
+        if (textArms(text)) { work++; unreviewed++ }
         continue
       }
       if (b?.type !== 'tool_use') continue
       if (b.name === 'Agent') {
-        const role = creditRoleLoose(String(b.input?.prompt ?? ''))
-        if (role !== null) noteRole(role)
-        // CASE-FOLDED, same as scanMainTranscriptLines/scanSubagentTranscriptLines.
-        if (String(b.input?.subagent_type ?? '').trim().toLowerCase() === 'fork') forks++
+        if (creditRoleLoose(String(b.input?.prompt ?? '')) === 'review') { forks++; unreviewed = 0 }
         continue
       }
-      if (toolUseWork(b, cwd) !== null) { work++; unreviewed++; seenMeasure = false; seenReview = false }
+      if (toolUseWork(b, cwd) !== null) { work++; unreviewed++ }
     }
   }
   return { work, forks, unreviewed }

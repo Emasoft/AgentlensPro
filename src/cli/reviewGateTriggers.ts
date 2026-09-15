@@ -18,17 +18,21 @@
 // ponytail: string classification, not effects. Upgrade path if script writes ever matter:
 // fingerprint `git status --porcelain` + HEAD between consecutive Stops.
 
+import * as fs from 'fs'
+import * as os from 'os'
 import * as path from 'path'
 
 export type ArmCause = 'edit' | 'write-shaped command' | 'proposal text'
 
-/** A text block is a proposal iff a line STARTS with `PROPOSAL` (bold or heading allowed).
- *  Case-sensitive so prose ("my proposal is…") never counts. Fenced code does NOT arm: the
+/** THE PROPOSAL MARKER (owner order 2026-09-15). A text block is a proposal iff a line STARTS with
+ *  `PROPOSAL FOR ACTION - PLEASE REVIEW` (bold or heading prefix allowed; any dash). Case-sensitive,
+ *  exact words, so prose about the protocol never counts. A proposal that lacks this line is NOT a
+ *  proposal to the gate and triggers nothing on Stop or SubagentStop — the marker is a self-report,
+ *  the owner's chosen trade over an LLM classifier on every Stop. Fenced code does NOT arm: the
  *  harness style puts every command and every error dump in a fence, so a fence rule re-creates
- *  the idle-turn livelock one notch down. The marker is a self-report (propose-then-review rule);
- *  an unmarked proposal goes unreviewed by its author's omission — the owner's chosen trade over
- *  an LLM classifier on every Stop (round-2 review, 2026-09-08). */
-export const PROPOSAL_LINE = /^[ \t]*(?:\*\*|#{1,6}[ \t]*)?PROPOSAL\b/m
+ *  the idle-turn livelock one notch down. */
+export const PROPOSAL_MARKER = 'PROPOSAL FOR ACTION - PLEASE REVIEW'
+export const PROPOSAL_LINE = /^[ \t]*(?:\*\*|#{1,6}[ \t]*)?PROPOSAL FOR ACTION [-–—] PLEASE REVIEW\b/m
 export const textArms = (text: string): boolean => PROPOSAL_LINE.test(text)
 
 export interface Word { word: string; quoted: boolean }
@@ -217,6 +221,8 @@ type Resolve = (word: string, segIdx: number) => string
 /** `via` names the launcher (`xargs`, `find -exec`) when the targets are not in this segment's text. */
 function segmentWriteReason(base: string, args: string[], via: string | null, cwd: string, resolve: Resolve, segIdx: number): string | null {
   const flagless = args.filter((a) => !a.startsWith('-'))
+  const deployOrDesign = deployOrDesignVerbWriteReason(base, args)
+  if (deployOrDesign !== null) return deployOrDesign
   if (base === 'git') {
     let j = 0 // skip global options; `-C dir` / `-c k=v` / `--git-dir x` take a value
     while (j < args.length && args[j].startsWith('-')) j += /^(-C|-c|--git-dir|--work-tree)$/.test(args[j]) ? 2 : 1
@@ -374,4 +380,172 @@ export function commandWriteReason(cmd: string, cwd: string): string | null {
     if (!isEphemeralTarget(resolve(target, segIdx), cwd)) return `redirect into ${target || '(no target)'}`
   }
   return null
+}
+
+
+// ── D7 (STAGE 1): additional write-shaped verbs + script-runner classification ─────────────────
+// fastedit/trddgrep/prrdgrep/specgrep write verbs and the deploy commands this project actually
+// runs were missing from commandWriteReason; folded here as its own predicate so
+// `commandWriteReason`'s existing per-segment loop can call it alongside the existing verbs
+// without widening `segmentWriteReason`'s own branch list.
+const FASTEDIT_WRITE_VERBS = new Set([
+  'edit', 'multi-edit', 'batch-edit', 'create', 'duplicate', 'split', 'join',
+  'delete', 'move', 'rename', 'rename-all', 'move-to-file', 'undo',
+])
+const TRDDGREP_WRITE_VERBS = new Set(['new', 'set', 'append', 'check-box', 'move', 'edit', 'fix'])
+
+/** D7: fastedit / trddgrep / prrdgrep / specgrep write verbs, and the deploy commands
+ *  (`node esbuild.js`, `pnpm|npm run package|compile|watch|local`, `agentlenspro server
+ *  start|stop|restart`). */
+function deployOrDesignVerbWriteReason(base: string, args: string[]): string | null {
+  if (base === 'fastedit') {
+    const sub = args[0] ?? ''
+    return FASTEDIT_WRITE_VERBS.has(sub) ? `fastedit ${sub}` : null
+  }
+  if (base === 'trddgrep') {
+    let j = 0
+    while (args[j] === '--design-dir') j += 2
+    const sub = args[j] ?? ''
+    if (sub === 'index-verify') return args.includes('--repair') ? 'trddgrep index-verify --repair' : null
+    return TRDDGREP_WRITE_VERBS.has(sub) ? `trddgrep ${sub}` : null
+  }
+  if (base === 'prrdgrep' || base === 'specgrep') {
+    let j = 0
+    while (args[j] === '--design-dir') j += 2
+    return (args[j] ?? '') === 'edit' ? `${base} edit` : null
+  }
+  if (base === 'node' && path.basename(args[0] ?? '') === 'esbuild.js') return 'node esbuild.js'
+  if (/^(pnpm|npm)$/.test(base)) {
+    let j = 0
+    // (c): `--dir <path>` / `--prefix <path>` precede the verb (`pnpm --dir x run y`, `npm --prefix x run y`).
+    if (args[j] === '--dir' || args[j] === '--prefix') j += 2
+    if (args[j] !== 'run') return null
+    const script = args[j + 1] ?? ''
+    return /^(package|compile|watch|local)$/.test(script) ? `${base} run ${script}` : null
+  }
+  if (base === 'agentlenspro' && args[0] === 'server' && /^(start|stop|restart)$/.test(args[1] ?? '')) {
+    return `agentlenspro server ${args[1]}`
+  }
+  return null
+}
+
+/** Script-file paths under an INSTALLED plugin's own cache/data dirs (e.g. the janitor's
+ *  dispatcher stub) are exempt from the runner check — writing INTO those directories is itself
+ *  gated, so running a file the plugin shipped there is not a fresh write surface. */
+function isPluginCacheOrDataScript(word: string, cwd: string): boolean {
+  if (word === '' || /[$`~*?{}[\]]/.test(word)) return false
+  const abs = path.resolve(cwd, word)
+  // A3: resolve symlinks and `..` before comparing — an escaping symlink or a `../` traversal
+  // out of the plugin dirs must NOT be exempt. `realpathSync` throws on a nonexistent path,
+  // which fails CLOSED (not exempt).
+  let real: string
+  try { real = fs.realpathSync(abs) } catch { return false }
+  const cache = path.join(os.homedir(), '.claude', 'plugins', 'cache')
+  const data = path.join(os.homedir(), '.claude', 'plugins', 'data')
+  const realCache = (() => { try { return fs.realpathSync(cache) } catch { return cache } })()
+  const realData = (() => { try { return fs.realpathSync(data) } catch { return data } })()
+  return [realCache, realData].some((d) => real === d || real.startsWith(d + path.sep))
+}
+
+const RUNNER_SINGLE_WORD = new Set(['deno', 'bun', 'ruby', 'php', 'make', 'tsx', 'ts-node', 'npx', 'uvx', 'node'])
+const PY_RUNNER_RE = /^python[0-9.]*$/
+const SHELL_RUNNER = new Set(['sh', 'bash', 'zsh'])
+const PKG_RUNNER_BASE = new Set(['pnpm', 'npm', 'yarn'])
+const PKG_RUNNER_VERBS = new Set(['run', 'exec', 'dlx'])
+const INLINE_CODE_FLAG_RE = /^(-c|--command|-e|--eval)$/
+
+/** D7 (script runners). Write-shaped like the verbs above — a runner can execute arbitrary
+ *  written code — but roled forks MAY run them (measuring needs tests). Fails CLOSED on inline
+ *  code (`-c`/`-e`/stdin/heredoc): a plugin-cache exemption is for a known SCRIPT FILE the
+ *  plugin shipped, never for code text the caller supplies inline. */
+export function scriptRunnerReason(cmd: string, cwd: string): string | null {
+  const words = shellWords(stripHeredocBodies(cmd, true))
+  let i = 0
+  while (i < words.length && !words[i].quoted
+    && (WRAPPERS.test(words[i].word) || /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i].word))) i++
+  if (i >= words.length || words[i].quoted) return null
+  const rawBase = words[i].word
+  const base = path.basename(rawBase)
+  const args = words.slice(i + 1)
+  // Flagless candidates: a QUOTED word can still be a real script path (`uv run "/a b/x.py"`), so
+  // quoting alone must not exclude it — only a literal `-` prefix does (checked on the unquoted
+  // text, which is fine: a quoted argument's first character was never a real `-` flag anyway).
+  const flaglessOf = (ws: typeof args): string[] => ws.filter((a) => !a.word.startsWith('-')).map((a) => a.word)
+  const flagless = flaglessOf(args)
+  const hasInline = args.some((a) => !a.quoted && INLINE_CODE_FLAG_RE.test(a.word))
+
+  let isRunner = false
+  let scriptArg: string | undefined
+  if (PY_RUNNER_RE.test(base) || RUNNER_SINGLE_WORD.has(base)) { isRunner = true; scriptArg = flagless[0] }
+  else if (base === 'uv' && args[0]?.word === 'run') { isRunner = true; scriptArg = flaglessOf(args.slice(1))[0] }
+  else if (PKG_RUNNER_BASE.has(base) && PKG_RUNNER_VERBS.has(args[0]?.word ?? '')) { isRunner = true }
+  else if (base === 'cargo' && /^(run|test|build)$/.test(args[0]?.word ?? '')) { isRunner = true }
+  else if (base === 'go' && args[0]?.word === 'run') { isRunner = true; scriptArg = flaglessOf(args.slice(1))[0] }
+  else if (SHELL_RUNNER.has(base) && flagless.length > 0) { isRunner = true; scriptArg = flagless[0] }
+  else if (rawBase.startsWith('./') || path.isAbsolute(rawBase)) { isRunner = true; scriptArg = rawBase }
+
+  if (!isRunner) return null
+  if (hasInline) return `${base} (inline code)`
+  if (scriptArg !== undefined && isPluginCacheOrDataScript(scriptArg, cwd)) return null
+  return `${base} (script runner)`
+}
+
+/** A write target never gated, whatever tool asks for it: the existing ephemeral roots
+ *  (`isEphemeralTarget`) plus `~/.claude/plans/` — MOVED here from `delegateGate.ts`
+ *  (`isPlanningArtefact`, D3) so both the delegate gate and the review-loop gate share one
+ *  definition; behaviour is unchanged. */
+export function isNeverGatedTarget(file: string, cwd: string): boolean {
+  if (isEphemeralTarget(file, cwd)) return true
+  if (file === '' || /[$`~*?{}[\]]/.test(file)) return false
+  const abs = path.resolve(cwd, file)
+  const plansDir = path.join(os.homedir(), '.claude', 'plans')
+  return abs === plansDir || abs.startsWith(plansDir + path.sep)
+}
+
+
+// ── Moved from the Stop/SubagentStop gate module (coordinator directive, stage 1) so the new
+// pure review-loop module can import the sentinel without creating an import cycle once stage 2
+// wires it in. The Stop/SubagentStop gate now imports these three names from here instead.
+
+/** The sentinel an agent emits when it CANNOT spawn a reviewer — the only exit from either gate
+ *  that does not require spawning one. ONE definition serves both gates deliberately: two copies
+ *  would drift, and an agent that learned the phrase from one gate's message would be wedged by
+ *  the other. Must be the FIRST thing in a text block (anchor rationale at each read site), and
+ *  must carry a reason — so "I can't" is a statement someone can act on, not a magic word. The
+ *  reason is never parsed; requiring it is what stops the phrase becoming a reflex. */
+export const NO_REVIEW_SENTINEL = 'REVIEW-GATE: NO REVIEW POSSIBLE'
+
+/** Canonical example reasons, shared between the block-message prose and the sentinel-floor test
+ *  (`isNoReviewSentinel`) so the two can never drift apart — a message that offers an example the
+ *  predicate itself would reject wedges the very agent it is telling how to exit. */
+export const NO_REVIEW_SENTINEL_EXAMPLES = ['rate-limited', 'at a depth limit', 'tool denied'] as const
+
+/** Does this text block open with the sentinel AND carry a reason? Written as a predicate rather
+ *  than one regex because the regex form was WRONG in a way that read fine: with an optional
+ *  separator class, `^\s*SENTINEL\s*[—:-]?\s*\S.{2,}` backtracks — it declines to consume the
+ *  em-dash as the separator and counts it as the reason's first character instead, so a bare
+ *  `SENTINEL — ab` satisfied the "≥3 characters of reason" rule with a dash and two letters.
+ *  Caught by the test that asserts a reasonless sentinel does NOT release; a stricter-looking
+ *  pattern that silently accepts the empty case is exactly the shape this gate cannot afford.
+ *
+ *  ANCHORED at the start of the trimmed block: a fork REVIEWING this gate quotes the sentinel in
+ *  its findings, and a substring test would let that quotation release the agent under review.
+ *  Nothing is stripped first, so `> SENTINEL` and `# SENTINEL` correctly fail — stripping the
+ *  marker would be the very smuggling the anchor exists to stop. */
+export function isNoReviewSentinel(text: string): boolean {
+  const t = text.replace(/^\s+/, '')
+  if (!t.startsWith(NO_REVIEW_SENTINEL)) return false
+  const [firstLine, ...tail] = t.slice(NO_REVIEW_SENTINEL.length).split('\n')
+  // NOTHING may follow the reason line: prose in a SEPARATE block re-arms the gate positionally
+  // (its own index sets `lastWork`), but prose on a LATER LINE OF THE SAME block carries no index
+  // of its own and cannot re-arm anything — constraining only `split('\n')[0]` therefore released
+  // sentinel-then-entire-essay.
+  if (tail.some((line) => line.trim() !== '')) return false
+  // Any of — : - is accepted as the separator (an agent told to write an em-dash types a hyphen
+  // often enough that keying the escape on punctuation would re-wedge an agent that obeyed in
+  // substance). The reason itself must survive stripping them and be at least 8 characters — a
+  // bound picked so every example NO_REVIEW_SENTINEL_EXAMPLES offers passes it, while a token
+  // like "foo" does not.
+  const reason = firstLine.replace(/^[\s—:-]+/, '').trim()
+  return reason.length >= 8
 }

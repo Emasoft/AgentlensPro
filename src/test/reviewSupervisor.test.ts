@@ -14,9 +14,8 @@ const edit = { type: 'tool_use', name: 'Edit', input: {} }
 // A BARE fork (no `ROLE: …` marker) — kept for the tests that are specifically about the FORKS
 // COUNTER (case-folding), which counts any `subagent_type: "fork"` spawn whatever its role.
 const fork = { type: 'tool_use', name: 'Agent', input: { subagent_type: 'fork' } }
-// The two-role model (owner spec 2026-09-13): the backlog now clears only once BOTH a MEASURE and
-// a REVIEW spawn have been seen since the last work item — a bare, unmarked fork no longer clears
-// it alone.
+// Owner order 2026-09-15: only a ROLE: REVIEW spawn clears the backlog — a ROLE: MEASURE spawn is
+// tracked (measure agents are reviewed one level up) but does not itself count as a review here.
 const measureFork = { type: 'tool_use', name: 'Agent', input: { subagent_type: 'lean-worker', prompt: 'ROLE: MEASURE\ndo it' } }
 const reviewFork = { type: 'tool_use', name: 'Agent', input: { subagent_type: 'fork', prompt: 'ROLE: REVIEW\ndo it' } }
 const commit = { type: 'tool_use', name: 'Bash', input: { command: 'git commit -m x' } }
@@ -25,21 +24,24 @@ const talkAboutCommit = { type: 'tool_use', name: 'Bash', input: { command: 'ech
 const settings = (cmd: string): string => JSON.stringify({ hooks: { Stop: [{ hooks: [{ command: cmd }] }] } })
 
 suite('reviewSupervisor — scan', () => {
-  test('counts edits and commits as work, and both roles as a review', () => {
+  test('counts edits and commits as work, and a REVIEW spawn as a review', () => {
     const s = scanSupervision([assistant([edit]), assistant([commit]), assistant([measureFork]), assistant([reviewFork])], CWD)
     assert.deepStrictEqual(s, { work: 2, forks: 1, unreviewed: 0 })
   })
 
-  test('both roles clear the unreviewed backlog; later work rebuilds it', () => {
-    const s = scanSupervision([assistant([edit]), assistant([measureFork]), assistant([reviewFork]), assistant([edit]), assistant([edit])], CWD)
-    assert.strictEqual(s.unreviewed, 2, 'only the work AFTER both roles landed is unreviewed')
-    assert.strictEqual(s.forks, 1)
+  test('a spawn whose prompt starts `ROLE: REVIEW` clears the backlog; a `ROLE: MEASURE` spawn alone does not', () => {
+    const withReview = scanSupervision([assistant([edit]), assistant([reviewFork]), assistant([edit]), assistant([edit])], CWD)
+    assert.strictEqual(withReview.unreviewed, 2, 'only the work AFTER the REVIEW spawn landed is unreviewed')
+    assert.strictEqual(withReview.forks, 1)
+    const withMeasureOnly = scanSupervision([assistant([edit]), assistant([measureFork])], CWD)
+    assert.strictEqual(withMeasureOnly.unreviewed, 1, 'a MEASURE-only spawn must not clear the backlog')
+    assert.strictEqual(withMeasureOnly.forks, 0, 'forks counts only a REVIEW-credited spawn, not a MEASURE one')
   })
 
-  test('a lone, unmarked fork spawn does NOT clear the backlog — the two-role model needs both', () => {
+  test('a lone, unmarked fork spawn does NOT clear the backlog — it carries no ROLE marker', () => {
     const s = scanSupervision([assistant([edit]), assistant([fork])], CWD)
-    assert.strictEqual(s.unreviewed, 1, 'a bare fork carries no ROLE marker, so neither role is credited')
-    assert.strictEqual(s.forks, 1, 'the forks counter itself is unaffected — it counts the spawn, not the role')
+    assert.strictEqual(s.unreviewed, 1, 'a bare fork carries no ROLE marker, so no role is credited')
+    assert.strictEqual(s.forks, 0, 'the forks counter only counts a ROLE: REVIEW-credited spawn')
   })
 
   test('prose about committing is not a commit', () => {
@@ -58,12 +60,12 @@ suite('reviewSupervisor — scan', () => {
   // TRDD-2CYTNLY1: scanSupervision now shares the gate's own work predicate (toolUseWork/textArms)
   // instead of an EDITORS set plus a bare git-commit regex — parity proved on shapes neither of the
   // old checks could ever see.
-  test('parity with the gate\'s work predicate: sed -i, git push and a PROPOSAL count — none caught by the old EDITORS set or the git-commit-only regex', () => {
+  test('parity with the gate\'s work predicate: sed -i, git push and a marked proposal count — none caught by the old EDITORS set or the git-commit-only regex', () => {
     const sed = { type: 'tool_use', name: 'Bash', input: { command: `sed -i "" s/a/b/ ${CWD}/f.ts` } }
     const push = { type: 'tool_use', name: 'Bash', input: { command: 'git push' } }
-    const proposal = { type: 'text', text: 'PROPOSAL: change X to Y.' }
+    const proposal = { type: 'text', text: 'PROPOSAL FOR ACTION - PLEASE REVIEW\nchange X to Y.' }
     const s = scanSupervision([assistant([sed]), assistant([push]), assistant([proposal])], CWD)
-    assert.strictEqual(s.work, 3, 'sed -i / git push / a marked PROPOSAL must all count as work')
+    assert.strictEqual(s.work, 3, 'sed -i / git push / a marked proposal must all count as work')
     // Prove the classification directly too — sed is not in the exported writer lists
     // (GIT_WRITE_SUBCOMMANDS / GH_MUTATING_VERBS / PKG_WRITE_VERBS), it is a dedicated branch in
     // reviewGateTriggers.ts's segmentWriteReason, so this is not tautological.
@@ -73,9 +75,9 @@ suite('reviewSupervisor — scan', () => {
   test('scanSupervision case-folds subagent_type, like the gate\'s own scanners already do', () => {
     const capsFork = { type: 'tool_use', name: 'Agent', input: { subagent_type: 'Fork' } }
     const s = scanSupervision([assistant([edit]), assistant([capsFork])], CWD)
-    // Case-folding is proven by `forks: 1` alone — `capsFork` carries no ROLE marker, so under the
-    // two-role model `unreviewed` is NOT cleared (that needs both roles, tested separately above).
-    assert.deepStrictEqual(s, { work: 1, forks: 1, unreviewed: 1 }, 'a subagent_type of "Fork" must still count as the fork')
+    // Case-folding is orthogonal to role-credit here: `capsFork` carries no ROLE marker, so
+    // `unreviewed` is NOT cleared (that needs a ROLE: REVIEW credit, tested separately above).
+    assert.deepStrictEqual(s, { work: 1, forks: 0, unreviewed: 1 })
   })
 
   test('a no-review sentinel counts as a review, like a fork — or the sentinel path would nag forever', () => {
@@ -83,6 +85,20 @@ suite('reviewSupervisor — scan', () => {
     const s = scanSupervision([assistant([edit]), assistant([sentinel])], CWD)
     assert.strictEqual(s.unreviewed, 0, 'the sentinel must clear the backlog like a fork does')
     assert.strictEqual(s.forks, 1)
+  })
+
+  test('a [janitor-heartbeat] string prompt resets unreviewed to 0 (work count unchanged)', () => {
+    const heartbeat = JSON.stringify({ type: 'user', message: { role: 'user', content: '[janitor-heartbeat] findings: none' } })
+    const s = scanSupervision([assistant([edit]), heartbeat], CWD)
+    assert.strictEqual(s.unreviewed, 0)
+    assert.strictEqual(s.work, 1)
+  })
+
+  test('an interrupt text-block entry resets unreviewed to 0 (work count unchanged)', () => {
+    const interrupt = JSON.stringify({ type: 'user', message: { content: [{ type: 'text', text: '[Request interrupted by user]' }] } })
+    const s = scanSupervision([assistant([edit]), interrupt], CWD)
+    assert.strictEqual(s.unreviewed, 0)
+    assert.strictEqual(s.work, 1)
   })
 })
 
@@ -152,8 +168,8 @@ suite('reviewSupervisor — warns without ever blocking', () => {
     assert.ok(/--install-hooks/.test(m), 'a fork cannot fix a settings-derived condition; say what can')
   })
 
-  test('spawning both roles clears the backlog — the warning is actionable', () => {
-    const withFork = scanSupervision([assistant([edit]), assistant([edit]), assistant([edit]), assistant([measureFork]), assistant([reviewFork])], CWD)
+  test('spawning a ROLE: REVIEW fork clears the backlog — the warning is actionable', () => {
+    const withFork = scanSupervision([assistant([edit]), assistant([edit]), assistant([edit]), assistant([reviewFork])], CWD)
     assert.strictEqual(withFork.unreviewed, 0)
     assert.strictEqual(judge(withFork, true, true).level, 'ok')
   })

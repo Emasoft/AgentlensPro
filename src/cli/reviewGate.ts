@@ -1,56 +1,44 @@
 // src/cli/reviewGate.ts — `agentlenspro review-gate`: the adversarial-review Stop/SubagentStop
 // gate, as ONE verb that dispatches on `hook_event_name` (TRDD ai-review-gate-cli-verb).
 //
-// WHY A VERB, NOT SHIPPED .js FILES. The two source-of-truth implementations
-// (~/.claude/hooks/stop-spawn-review-fork.js and subagent-stop-spawn-review-fork.js) are loose
-// user-scope files this package never shipped and `--install-hooks` never registered. Absolute
-// script paths in settings.json break on reinstall (a different prefix per npm/Homebrew version);
-// a subcommand of the one published bin does not, because HOOK_EVENTS/GATE_EVENTS registration
-// already resolves `agentlenspro` on PATH. Ported here FAITHFULLY — same decision logic, same
-// breakers, same fail-open direction — just merged behind one dispatch instead of two files.
+// WHAT ARMS IT (owner order 2026-09-15, replacing every earlier arming rule):
+//   - a WRITE — an Edit/Write/NotebookEdit outside the ephemeral roots, or a write-shaped Bash
+//     command (git commit, sed -i, a redirect outside /tmp, …; `commandWriteReason`) — demands ONE
+//     adversarial REVIEW fork (`ROLE: REVIEW`, heading ADVERSARIAL-REVIEW);
+//   - a PROPOSAL — a text block with a line that starts `PROPOSAL FOR ACTION - PLEASE REVIEW`
+//     (`PROPOSAL_LINE`) — demands a MEASURE agent (`ROLE: MEASURE`, heading
+//     MEASURE-AND-VERIFY-REPORT) AND the REVIEW fork. A proposal without that exact line is not a
+//     proposal to this gate; it triggers nothing on Stop or SubagentStop.
+// WHAT NEVER ARMS IT: a janitor heartbeat turn (`[janitor-heartbeat]`), a turn the user interrupted
+// (`[Request interrupted by user…]`, Esc / Ctrl-C), a janitor subagent, the review fork itself, an
+// agent whose own prompt declares a role — and files on disk. The mtime walk (`unreviewedEffects`)
+// was REMOVED: it armed the MAIN gate on every heartbeat for writes made by the janitor's own
+// agents and by background workers, so every 5-minute cron fire spawned a review pair. That, plus
+// role credit that EXPIRED when a measure agent returned (a background notification is one JSONL
+// line, so its heading can never sit at a line start and the credit was lost every time), is the
+// loop that drained the owner's window on 2026-09-14/15. A worker's writes are reviewed by its
+// own SubagentStop gate; the main agent's by its Stop gate; nobody's by a clock.
+// A ROLED SPAWN NOW CREDITS ITS ROLE PERMANENTLY at the spawn index. Both gates share one scan and
+// one decision (`scanTranscriptLines` / `decideGate`), so the criteria cannot drift between them.
 
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
 import { agentlensDisabled, killSwitchHalf, killSwitchPath } from './killSwitch'
 import { readStdin } from './hookHandlers'
-import { commandWriteReason, isEphemeralTarget, textArms } from './reviewGateTriggers'
+import {
+  commandWriteReason, isEphemeralTarget, textArms, PROPOSAL_MARKER,
+  NO_REVIEW_SENTINEL, NO_REVIEW_SENTINEL_EXAMPLES, isNoReviewSentinel,
+} from './reviewGateTriggers'
 import type { ArmCause } from './reviewGateTriggers'
-import { unreviewedEffects } from './reviewGateEffects'
-import type { Effects, Activity } from './reviewGateEffects'
+// Re-exported so existing importers of these three names from THIS module keep working — the
+// definitions themselves live in reviewGateTriggers.ts.
+export { NO_REVIEW_SENTINEL, NO_REVIEW_SENTINEL_EXAMPLES, isNoReviewSentinel }
 
-/** The main gate's cause enum widens `ArmCause` with one value ONLY the main gate can produce:
- *  a disk effect (a worker's edit, a script's write, a fork-as-worker) that the transcript never
- *  shows as a tool_use at all. The subagent gate has no equivalent — it scans its OWN transcript,
- *  where every one of its own edits already IS a tool_use — so this stays local rather than
- *  widening the shared `ArmCause` in reviewGateTriggers.ts, which the subagent gate also imports. */
-export type MainArmCause = ArmCause | 'unreviewed change'
-
-// ── Step 2: the directive, embedded (not a shipped file) ──────────────────────────────────────
-// Both gates' block reason used to point at ~/.claude/hooks/review-fork-directive.md, which the
-// package would not ship either. `agentlenspro review-gate --directive` prints this instead, and
-// the block reason below points at that command.
-// THE ONE-TURN RULE. It admits NO exception, because the previous wording did and that was the
-// defect: REVIEW_GATE_DIRECTIVE used to order "NO tool calls except a single SendMessage to main".
-// Measured over this project's fork corpus (2026-09-03, 209 of 216 spawns joined to their usage;
-// evidence: reports/review-fork-economics/): 186 fork prompts carried that carve-out and 177 of
-// them made exactly one tool call — the sanctioned one. A tool_result must be answered, and that
-// answer is a second assistant turn. So the forks obeyed; naming a permitted tool reads as a
-// licence, not an exception.
-//
-// WHAT IS NOT ESTABLISHED, so the next reader does not inherit it as fact:
-//   - The COST of that second turn. `subagent_tokens` is dominated by the context a fork inherits
-//     at spawn, not by its turn count — the one fork ever given a proper one-turn rule used MORE
-//     (819k, zero tool calls) than the SENDMSG median (373k). A fork's second turn re-reads a warm
-//     prefix at 0.1x, so this may be untidy rather than expensive. Unmeasured either way; the
-//     "~6 forks / ~4.6M tokens" figure from a session handoff is not restated because nothing here
-//     confirms it.
-//   - That parents fail to transcribe the rule. That was the first diagnosis and it is not
-//     supported: 186/216 transcribed it faithfully, in broken form. The 23 prompts carrying no
-//     turn constraint were read in full and are mostly review forks deliberately told to `git show`
-//     a commit they did not inherit — their tool calls are the task, not a missing constraint.
-//     The channels below still order the rule PASTED, because a fork is bound only by the prompt
-//     its parent writes; that is cheap insurance, not a measured repair.
+// ── The role rules pasted into the spawned agents' prompts ──────────────────────────────────────
+// THE ONE-TURN RULE for the reviewer admits NO exception: measured over this project's fork corpus
+// (2026-09-03, reports/review-fork-economics/), a prompt that names one permitted tool call gets
+// exactly that call — and a tool_result must be answered, which is a second turn.
 export const REVIEW_ROLE_RULE = 'Begin your prompt with a line that is exactly "ROLE: REVIEW", and '
   + 'begin your final message with the heading ADVERSARIAL-REVIEW. Answer in ONE turn. Make ZERO '
   + 'tool calls — no SendMessage, no Read, no Bash, none. Put every finding INLINE in your final '
@@ -65,154 +53,84 @@ export const MEASURE_ROLE_RULE = 'Begin your prompt with a line that is exactly 
   + '`tldr` (structure | search | definition | impact | slice) rather than reading whole source files, '
   + '`llm-ext` for bounded read-only analysis whose output never enters your context, and pipe verbose '
   + 'output through `distill` with an explicit prompt. READ-ONLY only: no edit, no write, no commit, '
-  + 'no push, no install, no redirect outside /tmp — a write of yours lands on disk and arms the gate '
-  + 'that spawned you. Settle exactly the assumptions your prompt names and do not explore beyond '
-  + 'them — the bound is the assumption list, not a call count. An assumption you could not settle is '
-  + 'reported unmeasurable, which is a finding, not a failure.'
+  + 'no push, no install, no redirect outside /tmp. Do not spawn agents of your own. Settle exactly the '
+  + 'assumptions your prompt names and do not explore beyond them — the bound is the assumption list, '
+  + 'not a call count. An assumption you could not settle is reported unmeasurable, which is a finding, '
+  + 'not a failure. Report, then return.'
 
-
-export const MEASURE_HEADING = 'MEASURE-AND-VERIFY-REPORT'
-export const REVIEW_HEADING = 'ADVERSARIAL-REVIEW'
 export type Role = 'measure' | 'review'
 
 /** Role claimed by a PROMPT the parent wrote. An anchored marker LINE, never a bare mention: an
  *  agent reviewing this gate quotes both names in prose. Both or neither => null, because one
- *  agent doing both jobs is the shape this replaces.
- *  LEADING `^` only, no trailing `$` — a PROMPT is self-certification (the parent authors this
- *  marker to credit itself), so it must match only at a line's start and as the exact literal
- *  text, but trailing text after the marker (a stray space, a `\r` from CRLF input) never changes
- *  its meaning. An end anchor protects nothing: anyone deliberately gaming the gate writes the
- *  marker correctly, so `$` only ever catches the HONEST agent whose line picked up a trailing
- *  space — invisibly, since the prompt still reads correct to a human and the resulting block
- *  message just says "spawn a review fork" with no hint the marker itself was rejected.
- *  `resultRole` below is different on purpose: a RESULT is third-party attestation by another
- *  agent, so it tolerates LEADING markdown punctuation but still anchors on nothing after the
- *  heading — a heading legitimately precedes prose on the same line. */
-// NOT interchangeable with `exemptRoleStrict` below TODAY -- the missing `$` here is deliberate for
-// now (both are read at different trust levels); see the fuller note there, and TRDD-1YXR6S47 for
-// when this line and the duplication both go away.
+ *  agent doing both jobs is the shape this replaces. LEADING `^` only, no trailing `$`: trailing
+ *  text after the marker (a stray space, a `\r`) never changes its meaning, and an end anchor only
+ *  ever catches the HONEST agent whose line picked up a trailing space. */
 export function creditRoleLoose(prompt: string): Role | null {
   const m = /^ROLE: MEASURE/m.test(prompt)
   const r = /^ROLE: REVIEW/m.test(prompt)
   return m === r ? null : (m ? 'measure' : 'review')
 }
 
-/** The EXEMPTION predicate, deliberately stricter than `creditRoleLoose` -- and, unlike the earlier
- *  first-line design this replaced, matched ANYWHERE in the prompt: measured 2026-09-13, the
- *  harness PREPENDS boilerplate ahead of a fork's own `ROLE: ...` line, so a first-line rule
- *  matched nothing and every roled agent was gated -- the exact regress this exemption exists to
- *  prevent, reintroduced by being too strict.
- *  `creditRoleLoose` and `exemptRoleStrict` differ by ONE character -- the `$` -- and today that
- *  difference is read at DIFFERENT TRUST LEVELS, not "loose is safe": the earlier reasoning here
- *  was inverted, so do not restore it. Split it on TWO AXES instead: EXEMPTION IS CHEAPER TO
- *  TRIGGER (one marker, in one agent's own composed prompt, effective immediately, no partner
- *  condition needed); CREDITING IS WORSE ONCE TRIGGERED, for reasons that all need the trigger
- *  to actually fire.
- *  (1) THE SAME AUTHOR-SUPPLIED SPAWN PROMPT feeds both: `creditRoleLoose` reads it from the
- *  parent's own `tool_use.input.prompt`, `exemptRoleStrict` reads the text the harness composes
- *  the subagent's first message around -- one untrusted brief reaches both predicates in one shot.
- *  (2) `creditRoleLoose` fires on plain prose with no end anchor (a line starting with the marker
- *  text followed by ordinary words still matches); `exemptRoleStrict` rejects that same line.
- *  (3) Once BOTH roles are credited, `creditRoleLoose` releases the MAIN gate for the whole turn --
- *  never on one false marker alone, since `Math.min(measure, review) >= lastWork` needs a partner
- *  credit too. Still a weak barrier in practice: the realistic attack forges only the role that
- *  was never legitimately spawned, and pairs it with one honest reviewer's own credit.
- *  (4) THE STRONGEST REASON: crediting also zeroes `reviewSupervisor`'s `unreviewed` alarm counter
- *  via `noteRole`, so a false credit is SELF-CONCEALING -- it silences the very escalation meant
- *  to catch the miss. A false exemption leaves that alarm intact.
- *  The real fix is decided and carded as TRDD-1YXR6S47: replace both with a whole-line exact
- *  compare (`trimEnd`, fail closed on ambiguity). Once that lands the two predicates are
- *  genuinely identical and THIS COMMENT AND THE DUPLICATION MUST BE DELETED. */
+/** The EXEMPTION predicate (a roled agent is never told to spawn its own reviewer) — stricter than
+ *  `creditRoleLoose` by one `$`, and matched ANYWHERE in the prompt: measured 2026-09-13, the
+ *  harness PREPENDS boilerplate ahead of a fork's own `ROLE: …` line, so a first-line rule matched
+ *  nothing and every roled agent was gated. Strict because exemption is cheap to trigger (one
+ *  marker in the agent's own prompt) and the marker text quoted mid-sentence in a brief that merely
+ *  discusses the protocol must not exempt the agent. */
 export function exemptRoleStrict(prompt: string): Role | null {
   const m = /^ROLE: MEASURE\s*$/m.test(prompt)
   const r = /^ROLE: REVIEW\s*$/m.test(prompt)
   return m === r ? null : (m ? 'measure' : 'review')
 }
 
+// ── The directive, embedded (not a shipped file): `agentlenspro review-gate --directive` ─────────
+export const REVIEW_GATE_DIRECTIVE = `# Review gate directive (read on every Stop / SubagentStop fire)
 
+WHAT ARMS IT (owner order 2026-09-15):
+- a WRITE: an Edit/Write/NotebookEdit outside /tmp and the project's reports/ and *_dev/ dirs, or a
+  write-shaped Bash command — git commit/push/pull/mv/rm/checkout/reset/rebase/merge/stash/clean…,
+  gh create/comment/edit/merge…, sed -i / perl -i, a package add/remove, agentlenspro setup /
+  --install-*, a memgrep *-mem-* verb, the string given to \`sh -c\` / \`eval\`, or a redirect / tee /
+  cp / mv / rm / touch whose target is not a LITERAL path under /tmp, /dev/null or those dirs (an
+  undecidable target — a $VAR, a glob, after a \`cd\` — counts as a write) → demands ONE adversarial
+  REVIEW fork;
+- a PROPOSAL: a text block with a line that starts "${PROPOSAL_MARKER}" (a heading or bold prefix is
+  fine), followed by the proposal → demands a MEASURE agent AND the REVIEW fork. A proposal that
+  lacks that exact line is not a proposal to this gate and triggers nothing.
 
-/** Role claimed by an OUTPUT. Same anchoring rationale: the heading must START a line (optionally
- *  after markdown heading/bold punctuation), so a result that merely DISCUSSES the gate does not
- *  credit a role it did not fill. Both or neither => null.
- *  HORIZONTAL WHITESPACE ONLY in the punctuation class -- \s matches \n too, which would let the
- *  class span lines and defeat the "must START a line" anchor (owner correction 2026-09-13, C2). */
-export function resultRole(text: string): Role | null {
-  const m = /^[#*\t ]*MEASURE-AND-VERIFY-REPORT/m.test(text)
-  const r = /^[#*\t ]*ADVERSARIAL-REVIEW/m.test(text)
-  return m === r ? null : (m ? 'measure' : 'review')
-}
+WHAT NEVER ARMS IT: plain prose, status lines, read-only commands, files changed on disk by someone
+else (there is no mtime walk), a janitor heartbeat turn (\`[janitor-heartbeat]\`), a turn the user
+interrupted (Esc / Ctrl-C), a janitor subagent (\`ai-maestro-janitor:*\`), the review fork itself, or
+an agent whose own prompt carries \`ROLE: MEASURE\` / \`ROLE: REVIEW\` as a whole line.
 
-/** The sentinel an agent emits when it CANNOT spawn a reviewer — the only exit from either gate
- *  that does not require spawning one. ONE definition serves both gates deliberately: two copies
- *  would drift, and an agent that learned the phrase from one gate's message would be wedged by
- *  the other. Must be the FIRST thing in a text block (anchor rationale at each read site), and
- *  must carry a reason — so "I can't" is a statement someone can act on, not a magic word. The
- *  reason is never parsed; requiring it is what stops the phrase becoming a reflex.
- *  Declared ABOVE the directive, which interpolates it: a `const` is in its TDZ until its line runs. */
-export const NO_REVIEW_SENTINEL = 'REVIEW-GATE: NO REVIEW POSSIBLE'
-
-/** Canonical example reasons, shared between the block-message prose and the sentinel-floor test
- *  (`isNoReviewSentinel`) so the two can never drift apart — a message that offers an example the
- *  predicate itself would reject wedges the very agent it is telling how to exit. */
-export const NO_REVIEW_SENTINEL_EXAMPLES = ['rate-limited', 'at a depth limit', 'tool denied'] as const
-
-export const REVIEW_GATE_DIRECTIVE = `# Review-fork gate directive (read on every Stop-hook fire)
-
-Spawn TWO agents, not one: a MEASURE agent and a REVIEW agent.
-
-- The REVIEW agent uses the Agent tool, \`subagent_type: "fork"\`, with a prompt that:
-  - states what you did this turn and every claim you are asserting;
-  - carries THIS LINE VERBATIM, because it reads nothing else you were told:
-    "${REVIEW_ROLE_RULE}"
-  - tells it to hunt the recurring failure shape — a PROXY read in place of the thing (a pipe's
-    exit status for the tool's, a preview for the file, a profile for the workload rate, one run
-    for the variance, an assumed format for the real one);
-  - asks it to name the single WEAKEST link and give ONE settling command for it.
-- The MEASURE agent may be any subagent type — a \`lean-worker\` (sonnet[1m], no inherited
-  conversation context) is the PREFERRED choice, MEASURED at 143,363 tokens against a fork's
-  306,777 on the identical task, with an equally usable report. Its prompt carries THIS LINE
-  VERBATIM:
+THE AGENTS:
+- REVIEW: the Agent tool, \`subagent_type: "fork"\`. Its prompt states what you did this turn and
+  every claim you assert, and carries THIS LINE VERBATIM, because it reads nothing else you were told:
+  "${REVIEW_ROLE_RULE}"
+  Tell it to hunt the recurring failure shape — a PROXY read in place of the thing (a pipe's exit
+  status for the tool's, a preview for the file, one run for the variance, an assumed format for the
+  real one) — and to name the single WEAKEST link with ONE settling command.
+- MEASURE (proposals only): any subagent type; a \`lean-worker\` (sonnet[1m], no inherited
+  conversation context) is PREFERRED — measured at less than half a fork's tokens on the identical
+  task with an equally usable report. Its prompt carries THIS LINE VERBATIM:
   "${MEASURE_ROLE_RULE}"
+Each agent does its one job and returns; neither spawns reviewers of its own (a roled agent is
+exempt from this gate, so the regress stops there).
 
-Extra turns are not free, so measure only what the proposal actually rests on.
+THE EXIT IS POSITIONAL. A spawn whose prompt starts with its ROLE line credits that role AT THE
+SPAWN, permanently — what the agent later returns does not un-credit it. The gate compares indexes:
+it releases when the REVIEW credit sits at or after the last write / proposal, and (for a proposal)
+the MEASURE credit sits at or after the last proposal line. So put the spawn tool_use(s) LAST in
+the response, after the turn's last write, write-shaped command or proposal line. Plain text after
+the spawn is fine; another write or proposal after it re-arms the gate.
 
-THE EXIT IS POSITIONAL, and this is the part that is easy to get wrong. The gate compares
-positions: it releases when BOTH the measure and the review are credited AT OR AFTER the last
-block that armed it. A SPAWNED agent's credit lasts only until IT RETURNS — once its own tool_use
-closes (its result lands, or its background job's notification arrives), only what that result
-says decides: a result carrying its heading credits the role permanently, a result without the
-heading costs it. So the turn that launches both agents in the background still releases its own
-Stop (neither has returned yet); an agent that comes back later without its heading blocks the
-NEXT Stop. WHAT ARMS IT
-(owner directive 2026-09-08): an Edit/Write/NotebookEdit outside /tmp and the project's reports/
-and *_dev/ dirs; a write-shaped Bash command — git commit/push/pull/mv/rm/checkout/reset/rebase/
-merge/stash/clean…, gh create/comment/edit/merge…, sed -i / perl -i, a package add/remove,
-agentlenspro setup / --install-*, a memgrep *-mem-* verb, the string given to \`sh -c\` / \`eval\`,
-or a redirect / tee / cp / mv / rm / touch whose target is not a LITERAL path under /tmp,
-/dev/null or those dirs; or a text block with a line starting \`PROPOSAL\`; or any file under the
-repo or the watched config set (rules, skills, agents, hooks, settings, memory) whose mtime is
-newer than the last fork — whoever wrote it, a worker included — and any HEAD move newer than the
-last fork. Plain prose, status lines, heartbeat output and
-read-only commands do NOT arm it; an undecidable target (a $VAR, a glob, after a \`cd\`) counts as
-a write. So:
+If you CANNOT spawn — ${NO_REVIEW_SENTINEL_EXAMPLES.join(', ')} — a text block whose ENTIRE content
+is "${NO_REVIEW_SENTINEL} — <reason>", as the turn's last block, releases the gate. It is the only
+other exit.
 
-- put both agents' tool_use blocks LAST, in the SAME response as your user-visible text: put the fork tool_use LAST,
-  after the measure tool_use — at least after the turn's last edit, write-shaped command or PROPOSAL line;
-- an edit, a write-shaped command or a PROPOSAL line after the fork re-arms the gate; plain
-  text after it does not.
-
-A BACKGROUND fork's completion notification starts a fresh turn; that turn re-arms the gate only
-if it itself edits, writes or proposes. Whether to consume the fork in-turn instead is your call
-under your own rules — some agents are forbidden to block, and this gate does not require it
-either way.
-
-If you CANNOT spawn either — ${NO_REVIEW_SENTINEL_EXAMPLES.join(', ')} — a text block whose
-ENTIRE content is "${NO_REVIEW_SENTINEL} — <reason>", as the turn's last block, releases the
-gate. It is the only other exit.
-
-Then read both reports and act on them — if acting on them edits, writes or proposes, that turn is
-new work and needs its own pair. Do NOT restate this directive to the user — spawn them and
-continue. This gate CANNOT be disabled — \`AGENTLENS_REVIEW_FORK=off\` is ignored.
+Then read the report(s) and act on them — if acting edits, writes or proposes, that is new work
+and needs its own review. Do NOT restate this directive to the user — spawn and continue. This
+gate cannot be disabled — \`AGENTLENS_REVIEW_FORK=off\` is ignored.
 `
 
 export interface ReviewGateInput {
@@ -226,11 +144,10 @@ export interface ReviewGateInput {
   /** The session's working directory, which relative write targets resolve against. */
   cwd?: unknown
   /** Set by Claude Code when a Stop hook already blocked this same stop — the harness's own
-   *  loop breaker. The SUBAGENT gate honours it (see `runSubagentGate`'s early return): an
-   *  unwritable tmpdir (the counter never persists) blocked every fire forever (review of
-   *  dca6c45, F1). The MAIN gate deliberately does NOT honour it — see `runMainGate`, which
-   *  never reads this field; a one-block cap by another name is exactly what the owner's
-   *  "no give-up" order (2026-09-03) forbids. */
+   *  loop breaker. The SUBAGENT gate honours it (one demand per return, see `runSubagentGate`).
+   *  The MAIN gate deliberately does NOT: a one-block cap is what the owner's "no give-up" order
+   *  (2026-09-03) forbids. The main gate cannot loop on its own any more — a roled spawn credits
+   *  permanently, so one compliant response releases it. */
   stop_hook_active?: unknown
 }
 
@@ -399,108 +316,27 @@ export function agentCannotSpawn(
 export interface AssistantContentBlock {
   type?: unknown
   name?: unknown
-  // Present only on `type: 'text'` blocks. Read to recognize the no-review sentinel — the gate's
-  // only exit that does not require spawning an agent. `unknown`, not `string`, because this is
-  // parsed from an on-disk JSONL a different process wrote: a malformed entry must reach the
-  // String() coercion at the read site, not throw here.
+  // Present only on `type: 'text'` blocks. `unknown`, not `string`, because this is parsed from an
+  // on-disk JSONL a different process wrote: a malformed entry must reach the String() coercion at
+  // the read site, not throw here.
   text?: unknown
   input?: { subagent_type?: unknown; command?: unknown; file_path?: unknown; notebook_path?: unknown; prompt?: unknown }
-  /** On a `tool_use` block: its id, which the later `tool_result`'s `tool_use_id` names. */
   id?: unknown
-  /** On a `tool_result` block (a `user` entry): the tool_use it answers, and the result body —
-   *  a string, or an array of `{ type: 'text', text }` blocks. */
   tool_use_id?: unknown
   content?: unknown
 }
-/** Does this text block open with the sentinel AND carry a reason? Written as a predicate rather
- *  than one regex because the regex form was WRONG in a way that read fine: with an optional
- *  separator class, `^\s*SENTINEL\s*[—:-]?\s*\S.{2,}` backtracks — it declines to consume the
- *  em-dash as the separator and counts it as the reason's first character instead, so a bare
- *  `SENTINEL — ab` satisfied the "≥3 characters of reason" rule with a dash and two letters.
- *  Caught by the test that asserts a reasonless sentinel does NOT release; a stricter-looking
- *  pattern that silently accepts the empty case is exactly the shape this gate cannot afford.
- *
- *  ANCHORED at the start of the trimmed block: a fork REVIEWING this gate quotes the sentinel in
- *  its findings (this file's own reviewers did), and a substring test would let that quotation
- *  release the agent under review. Nothing is stripped first, so `> SENTINEL` and `# SENTINEL`
- *  correctly fail — stripping the marker would be the very smuggling the anchor exists to stop. */
-export function isNoReviewSentinel(text: string): boolean {
-  const t = text.replace(/^\s+/, '')
-  if (!t.startsWith(NO_REVIEW_SENTINEL)) return false
-  const [firstLine, ...tail] = t.slice(NO_REVIEW_SENTINEL.length).split('\n')
-  // NOTHING may follow the reason line, and this check is the load-bearing half of the escape.
-  // Prose in a SEPARATE block does re-arm the gate positionally — its own index sets `lastWork`
-  // above the sentinel's — so that case was always safe. But prose on a LATER LINE OF THE SAME
-  // block carries no index of its own and cannot re-arm anything, and one text block is exactly
-  // how a model emits contiguous prose. Constraining only `split('\n')[0]` therefore released
-  // sentinel-then-entire-essay: the likely shape, not the unlikely one.
-  if (tail.some((line) => line.trim() !== '')) return false
-  // Any of — : - is accepted as the separator, because an agent told to write an em-dash types a
-  // hyphen often enough that keying the escape on punctuation would re-wedge an agent that obeyed
-  // in substance. The reason itself must survive stripping them and be at least 8 characters — a
-  // bound picked so every example the block message itself offers (`NO_REVIEW_SENTINEL_EXAMPLES`:
-  // "rate-limited", "at a depth limit", "tool denied") passes it, while a token like "foo" does
-  // not. Adversarial review 2026-09-10: a floor of ">=3 chars" let "foo" through, and a proposed
-  // ">=12 chars AND a space" rejected "rate-limited" (no space) and "tool denied" (11 chars) — a
-  // rejected sentinel leaves the agent that emitted it with no exit from the gate.
-  const reason = firstLine.replace(/^[\s—:-]+/, '').trim()
-  return reason.length >= 8
-}
-
 interface TranscriptEntry {
   type?: unknown
   isSidechain?: unknown
   message?: { content?: AssistantContentBlock[] | string }
-  /** ISO timestamp Claude Code stamps on every transcript entry — read only for `lastForkTs`. */
-  timestamp?: unknown
-}
-
-/** The epoch ms of an entry's own `timestamp`, or 0 (fail closed: everything on disk is newer
- *  than the epoch) when the field is absent or does not parse. */
-function entryTs(e: TranscriptEntry): number {
-  if (typeof e?.timestamp !== 'string') return 0
-  const ms = Date.parse(e.timestamp)
-  return Number.isNaN(ms) ? 0 : ms
 }
 
 const EDITORS = new Set(['Edit', 'Write', 'NotebookEdit'])
-
-/** A background tool's result names the job it started; the job's exit arrives later as a
- *  `<task-id>` notification. Keyed by TOOL: a foreground Read or Bash whose OUTPUT quotes one of
- *  these lines (a probe of a transcript, a `cat` of a task file) must not be mistaken for a
- *  launch — that would leave its interval open forever (review finding 2, TRDD-3U8AIHXK). */
-const BACKGROUND_BASH_ID = /^Command running in background with ID: ([A-Za-z0-9]+)/
-const BACKGROUND_AGENT_ID = /agentId: ([A-Za-z0-9]+)/
-const AGENT_LAUNCHED = 'Async agent launched successfully'
-/** A command that detaches work from its own Bash call — the result returns while the job runs
- *  on. Text heuristic, deliberately fail-CLOSED: a match keeps the interval open (the pre-3U8AIHXK
- *  behaviour for that session); a detached job the pattern does not name is a named residual.
- *  A trailing `&` covers `cmd &`; a MID-line `&` after whitespace or `)` also backgrounds a job
- *  — `( sleep 5; touch x ) & echo started` keeps writing after the shell itself exits, and the
- *  old end-anchored form missed it entirely. Guarded against false positives: `&&` (a chain, not
- *  a backgrounder — `(?![&>])` excludes it) and a URL query string like `curl '…?a=1&b=2'` (the
- *  `&` follows `1`, not whitespace or `)`, so `(?<=[\s)])` never matches it) and `cmd 2>&1` (the
- *  `&` follows `>`, excluded by the lookahead). */
-const DETACHED_JOB = /\b(?:nohup|setsid|disown|detach-run\.py)\b|(?<=[\s)])&(?![&>])|(?<![&>])&\s*$/m
 
 export function resultText(c: unknown): string {
   if (typeof c === 'string') return c
   if (!Array.isArray(c)) return ''
   return c.map((x) => String((x as { text?: unknown })?.text ?? '')).join('\n')
-}
-/** `tool === '*'` means "unknown" — a tool_result whose tool_use fell before the scan window, so
- *  we never saw which tool opened it (TRDD-3U8AIHXK). Try BOTH anchored shapes rather than none:
- *  a pre-window background Bash whose result lands inside the window must still be recognized as
- *  a launch and kept open, not closed at that very result for lack of a known tool name. */
-function backgroundJobId(tool: string, text: string): string | null {
-  if (tool === 'Bash' || tool === '*') {
-    const m = BACKGROUND_BASH_ID.exec(text)?.[1]
-    if (m) return m
-  }
-  if ((tool === 'Agent' || tool === '*') && text.includes(AGENT_LAUNCHED)) {
-    return BACKGROUND_AGENT_ID.exec(text)?.[1] ?? null
-  }
-  return null
 }
 
 /** The one arming block of a turn, and WHY. `null` from the editor branch means the edit landed
@@ -521,8 +357,6 @@ export function hookCwd(input: ReviewGateInput): string {
   return typeof input?.cwd === 'string' && input.cwd !== '' ? input.cwd : process.cwd()
 }
 
-// ── MAIN AGENT GATE (Stop) ──────────────────────────────────────────────────────────────────────
-
 /** Read only the tail of a (possibly huge) transcript — the answer is always near the end. */
 export function readTranscriptTail(transcriptPath: string, maxBytes = 4 * 1024 * 1024): string[] | null {
   try {
@@ -541,312 +375,163 @@ export function readTranscriptTail(transcriptPath: string, maxBytes = 4 * 1024 *
   }
 }
 
-export interface MainScan {
-  lastFork: number
-  /** Epoch ms of the last fork (the entry that set `lastFork`), so `runMainGate` can ask
-   *  `unreviewedEffects` for disk writes newer than it. No fork in the window ⇒ the timestamp of
-   *  the window's FIRST parsed entry (still a valid lower bound — anything before the window
-   *  opened is out of scope for this Stop); an absent/unparsable field ⇒ 0 (fail closed: 0 makes
-   *  every mtime on disk "newer", i.e. arms rather than silently trusting a clock it cannot read). */
-  lastForkTs: number
-  /** The last arming block, or null when nothing in the window is work. Index + cause travel
-   *  together so the block message can never name a cause the scan did not find. */
-  work: { index: number; cause: MainArmCause; detail: string } | null
-  /** Every tool_use in the window, as an attribution interval (TRDD-3U8AIHXK) — see
-   *  `scanMainTranscriptLines`. */
-  activity: Activity[]
-  /** Highest index at which each role (MEASURE / REVIEW) was credited, -1 when absent. A SPAWN
-   *  (an Agent tool_use whose prompt carries `ROLE: MEASURE`/`ROLE: REVIEW`) credits its role only
-   *  while it is still open — see `scanMainTranscriptLines`'s pending-spawn resolution. A RESULT
-   *  (a tool_result or background-job notification carrying the matching heading) credits its role
-   *  permanently, whatever the spawn's open/closed state. */
-  roles: { measure: number; review: number }
-  /** FOR: a still-open, non-roled `Agent` spawn cannot yet have its writes reviewed, so a disk
-   *  effect covered ONLY by one of these intervals must not arm the gate (TRDD-3U8AIHXK/Q3: "defer
-   *  credit against an index, not a clock") — while a ROLE-marked spawn is excluded from this list
-   *  on purpose, so its writes arm the PARENT's gate one level up instead of being suppressed here.
-   *  Subset of `activity` by object identity (the SAME reference, never a copy), filtered to
-   *  `end === Infinity` after the whole window is scanned.
-   *  THE REAL HOLE if that identity is ever broken (`deferCandidates` holding `.map(a => ({...a}))`
-   *  copies, or the filter moved inside the scan loop): a stale, permanently-open window then
-   *  swallows every LATER write too, including the MAIN AGENT'S OWN — and a main-agent write has no
-   *  second reviewer once its own arming is suppressed this way (see "Returned agents must leave
-   *  deferIntervals" in reviewGate.test.ts).
-   *  The interval STAYS in `activity` even while deferred (never removed) — drop a roled spawn's
-   *  interval from `activity` too (rather than just from this list) and its writes are reviewed by
-   *  NOBODY: its own SubagentStop gate was already waived by the role exemption, and now nothing
-   *  covers its disk effects either (see "A roled agent's write must still arm the main gate" in
-   *  reviewGate.test.ts).
-   *  Reconstructed fresh every scan, so nothing here survives a `/clear` and nothing needs a stored
-   *  fingerprint that could go stale. */
-  deferIntervals: Activity[]
-}
-/** The positional pair `decideMainGate` reads; `lastWork` is -1 when nothing armed. */
-export const scanPositions = (s: MainScan): { roles: { measure: number; review: number }; lastWork: number } =>
-  ({ roles: s.roles, lastWork: s.work?.index ?? -1 })
+// ── The shared scan and decision (Stop AND SubagentStop) ─────────────────────────────────────────
 
-/** Scan the main transcript's tail for the last fork spawn and the last arming block, and WHY it
- *  armed. Pure — the whole "relative position, not turn boundaries" rule lives here, so it is
- *  testable without a real transcript file. WHAT counts as work is decided in the triggers module
- *  (TRDD-0E3W5C45); `cwd` is the hook's, for resolving relative write targets. */
-export function scanMainTranscriptLines(lines: string[], cwd = process.cwd()): MainScan {
-  let lastFork = -1
-  let lastForkTs = 0
-  let firstTs = 0
-  let firstTsSeen = false
-  let work: MainScan['work'] = null
-  const activity: Activity[] = []
-  const roles: MainScan['roles'] = { measure: -1, review: -1 }
-  // A SPAWN credits its role ONLY while its agent has not yet returned — i.e. while the interval
-  // opened for its tool_use is still open (Infinity), whether kept open by `openByToolUse` (no
-  // tool_result yet) or by `openByTask` (a background job whose notification has not arrived).
-  // Checked ONCE, after the whole window is scanned, because "still open" can only be known then.
-  // Once a result DOES land, only `resultRole` on that result counts — permanently, whatever the
-  // heading says. This is what makes the turn that launches both agents release its OWN Stop
-  // (neither has returned yet) while an agent that returns later WITHOUT its heading still blocks
-  // the next Stop (owner correction 2026-09-13, C5 — retracts an earlier "string-content user
-  // entry expires the spawn" design: that design expired credit on a heartbeat, on the owner
-  // typing mid-turn, and on the gate's own block message, none of which is the agent returning).
-  // HONEST LIMITATION: an agent that never returns keeps its interval open forever, so it also
-  // keeps its spawn credit forever — the no-review sentinel is the intended exit for that case;
-  // this is not patched with a timeout or an entry-count heuristic.
-  const pendingSpawns: { role: Role; index: number; activity: Activity }[] = []
-  // Still-open, NON-roled Agent spawns (TRDD-3U8AIHXK/Q3) — candidates for `MainScan.deferIntervals`,
-  // filtered to still-open after the whole window is scanned (see below). A ROLE-marked spawn is
-  // never a candidate: Q3 excludes it deliberately, so its writes arm the PARENT's gate instead of
-  // being suppressed by its own defer — the review happens one level up.
-  const deferCandidates: Activity[] = []
-  // Open intervals, by the tool_use id its tool_result will carry, and — once a background job's
-  // result named it — by the job id its `<task-id>` notification will carry.
-  const openByToolUse = new Map<string, { a: Activity; tool: string }>()
-  const openByTask = new Map<string, Activity>()
+/** A janitor heartbeat turn: the cron fire's prompt is a string-content `user` entry that starts
+ *  with this (measured on this project's own JSONL, 4,787 entries). */
+export const HEARTBEAT_PREFIX = '[janitor-heartbeat]'
+/** A user interrupt (Esc / Ctrl-C): the harness records `[Request interrupted by user]` or
+ *  `[Request interrupted by user for tool use]` as a text block in a `user` entry. */
+export const INTERRUPT_PREFIX = '[Request interrupted by user'
+
+/** The text of a `user` entry that is a PROMPT — string content, or text blocks with no
+ *  tool_result among them — and '' for a tool_result entry. */
+export function userPromptText(content: unknown): string {
+  if (typeof content === 'string') return content
+  if (!Array.isArray(content)) return ''
+  if (content.some((b) => (b as AssistantContentBlock)?.type === 'tool_result')) return ''
+  return resultText(content)
+}
+
+/** A FLOOR: a `user` entry after which nothing earlier owes a review. A heartbeat turn is the
+ *  janitor's; an interrupted turn is the user's call to stop. Work AFTER the floor still arms — a
+ *  main-agent edit inside a `[janitor-resume]` turn is not the janitor's action. Task
+ *  notifications, the gate's own `Stop hook feedback:` message and mid-turn user messages are NOT
+ *  floors (C1, 2026-09-13: those land inside a running turn). */
+export function isFloorPrompt(content: unknown): boolean {
+  const p = userPromptText(content).replace(/^\s+/, '')
+  return p.startsWith(HEARTBEAT_PREFIX) || p.startsWith(INTERRUPT_PREFIX)
+}
+
+export interface GateScan {
+  /** The last arming block after the last floor, or null. Index + cause travel together so the
+   *  block message can never name a cause the scan did not find. */
+  work: { index: number; cause: ArmCause; detail: string } | null
+  /** Index of the last proposal block after the last floor, -1 when none. */
+  lastProposal: number
+  /** Highest index at which each role was credited — an Agent spawn whose prompt carries the
+   *  role marker (permanent, whatever the agent returns), or the no-review sentinel (both roles).
+   *  -1 when never. */
+  roles: { measure: number; review: number }
+  /** The role the transcript's OWN first prompt declares (a subagent's spawning brief), which
+   *  exempts that agent from the SubagentStop gate. Meaningless for the main transcript. */
+  ownRole: Role | null
+}
+
+/** ONE scan for both gates. Pure — the whole "relative position, not turn boundaries" rule lives
+ *  here, so it is testable without a real transcript file. WHAT counts as work is decided in the
+ *  triggers module; `cwd` is the hook's, for resolving relative write targets. */
+export function scanTranscriptLines(lines: string[], cwd = process.cwd()): GateScan {
+  let work: GateScan['work'] = null
+  let lastProposal = -1
+  const roles: GateScan['roles'] = { measure: -1, review: -1 }
+  let ownRole: Role | null = null
+  let sawFirstUser = false
   for (let i = 0; i < lines.length; i++) {
     let e: TranscriptEntry
     try { e = JSON.parse(lines[i]) as TranscriptEntry } catch { continue }
-    // The FIRST parsed entry's own timestamp is the fallback `lastForkTs` when no fork is found —
-    // read before the sidechain/type filters below, because it is a property of the WINDOW, not
-    // of an assistant block.
-    if (!firstTsSeen) { firstTs = entryTs(e); firstTsSeen = true }
-    // Subagent turns are marked `isSidechain: true` — skipping them means a sidechain transcript
-    // yields no work and no fork, so the gate allows the stop and stays silent.
+    // Subagent turns are marked `isSidechain: true` — a child's prose must never be scored as the
+    // parent's work.
     if (e?.isSidechain === true) continue
-    // A background job's EXIT is recorded by the harness as an `attachment` entry or a
-    // string-content `user` entry, both carrying `<task-id>ID</task-id>` (measured on this
-    // project's own JSONL, 2026-09-10) — the first one closes the job's interval.
-    // `queue-operation` is deliberately EXCLUDED: the harness writes one on ENQUEUE too, so a
-    // queue-operation naming the id can precede the job's actual exit and close the interval
-    // early. Array-content user entries are tool_results and may QUOTE a notification (a Read
-    // of the job's output file), so they never close anything either.
-    if (e?.type === 'attachment' || (e?.type === 'user' && typeof e?.message?.content === 'string')) {
-      // RESULT source (background): a task-notification names the job whose result it is — its
-      // role is credited from the RAW LINE whether or not that job's interval is still tracked
-      // open (a notification for an agent spawned before the scan window still proves the review
-      // ran). GATED ON THE TASK-ID TAG, deliberately: without it, the gate's OWN block message
-      // (which must publish "ROLE: MEASURE"/"ROLE: REVIEW" and both headings so agents can obey
-      // it) lands as a string-content `user` entry too and would credit both roles from its own
-      // text — a self-crediting hole (owner correction 2026-09-13, C8). The explicit
-      // `Stop hook feedback:` exclusion is a second, redundant net over the same hole.
-      if (lines[i].includes('<task-id>') && !lines[i].includes('Stop hook feedback:')) {
-        const role = resultRole(lines[i])
-        if (role !== null) roles[role] = Math.max(roles[role], i)
-      }
-      if (openByTask.size > 0) {
-        for (const [id, a] of openByTask) {
-          if (lines[i].includes(`<task-id>${id}</task-id>`)) { a.end = entryTs(e) || a.end; openByTask.delete(id) }
-        }
-      }
-    }
     const content = e?.message?.content
-    if (!Array.isArray(content)) continue
     if (e?.type === 'user') {
-      for (const b of content) {
-        if (b?.type !== 'tool_result' || typeof b.tool_use_id !== 'string') continue
-        // A result whose tool_use fell before the window opened: the tool ran from (at least) the
-        // window's start until now — open that span rather than lose the write (review finding 4).
-        const open = openByToolUse.get(b.tool_use_id)
-        openByToolUse.delete(b.tool_use_id)
-        const a = open?.a ?? { start: firstTs, end: Infinity }
-        if (open === undefined) activity.push(a)
-        const text = resultText(b.content)
-        // RESULT source (foreground): permanent, whatever the outcome — a result WITHOUT the
-        // heading costs the role its credit even though the agent DID return (owner correction
-        // 2026-09-13, C5's third test case).
-        const role = resultRole(text)
-        if (role !== null) roles[role] = Math.max(roles[role], i)
-        // A background tool returns at once and keeps running: its result names the job, and the
-        // interval stays open until that job's notification (above).
-        const job = backgroundJobId(open?.tool ?? '*', text)
-        if (job !== null) openByTask.set(job, a)
-        else a.end = entryTs(e) || a.end
-      }
+      // The transcript's OWN spawning prompt is its FIRST non-sidechain `user` entry — read ONCE,
+      // so a later human-authored `user` turn is never mistaken for it.
+      if (!sawFirstUser) { sawFirstUser = true; ownRole = exemptRoleStrict(userPromptText(content)) }
+      if (isFloorPrompt(content)) { work = null; lastProposal = -1 }
       continue
     }
-    if (e?.type !== 'assistant') continue
+    if (e?.type !== 'assistant' || !Array.isArray(content)) continue
     for (const b of content) {
       if (b?.type === 'text') {
-        // THE SAME EXIT THE SUBAGENT GATE HAS, and it is needed here for a reason the positional
-        // rule hides. `lastFork >= lastWork` is always *reachable* — but only by an agent that can
-        // actually SPAWN. An agent whose Agent tool is declared yet whose spawn cannot succeed —
-        // rate-limited (this machine saw a 7994 s limit on 2026-09-07), at a depth or concurrency
-        // ceiling, or denied by a PreToolUse rule — has no exit at all: `agentCannotSpawn` releases
-        // only agents with no Agent tool DECLARED, which is a different population.
-        // Sets `lastFork` and NOT `work` — the sentinel is an exit, not a proposal. Prose on a
-        // later LINE of the SAME block has no index and cannot re-arm — `isNoReviewSentinel`
-        // rejects a block carrying anything after the reason line.
         const text = String(b.text ?? '')
-        if (isNoReviewSentinel(text)) {
-          // A definitive statement, not a pending spawn — credit BOTH roles permanently.
-          lastFork = i; lastForkTs = entryTs(e)
-          roles.measure = Math.max(roles.measure, i); roles.review = Math.max(roles.review, i)
-          continue
-        }
-        // A PROPOSAL IS WORK (owner order 2026-09-07) — a MARKED one (owner order 2026-09-08). For
-        // one day EVERY text block was work, and that livelocked idle turns: a heartbeat's
-        // `janitor heartbeat` line armed the gate, and every reply to the block re-armed it
-        // (TRDD-0E3W5C45). The marker is decided in the triggers module.
-        if (textArms(text)) work = { index: i, cause: 'proposal text', detail: '' }
+        // The sentinel is a definitive statement, not a pending spawn — credit BOTH roles.
+        // `isNoReviewSentinel` rejects a block carrying anything after the reason line, so prose
+        // after it cannot ride along.
+        if (isNoReviewSentinel(text)) { roles.measure = Math.max(roles.measure, i); roles.review = Math.max(roles.review, i); continue }
+        // A MARKED proposal is work. Plain prose is not — for one day EVERY text block was, and that
+        // livelocked idle turns (TRDD-0E3W5C45). The marker is decided in the triggers module.
+        if (textArms(text)) { work = { index: i, cause: 'proposal text', detail: '' }; lastProposal = i }
         continue
       }
       if (b?.type !== 'tool_use') continue
-      // Every tool_use opens an attribution interval (TRDD-3U8AIHXK): this session's own writes —
-      // foreground tools, workers, scripts, background jobs — can only land while one of its tools
-      // is running. `end` stays Infinity (fail closed) until the tool reports back.
-      const a: Activity = { start: entryTs(e), end: Infinity }
-      activity.push(a)
-      const tool = typeof b.name === 'string' ? b.name : ''
-      // A detached job outlives its own result — leave the interval open (see DETACHED_JOB).
-      const detached = tool === 'Bash' && DETACHED_JOB.test(String(b.input?.command ?? ''))
-      if (typeof b.id === 'string' && !detached) openByToolUse.set(b.id, { a, tool })
       if (b.name === 'Agent') {
-        // SPAWN source: ANY Agent tool_use, whatever its subagent_type — a cheap lean-worker is a
-        // valid MEASURE agent. Deferred: resolved only after the whole window is scanned, and only
-        // credited if `a` is still open then (see the pendingSpawns comment above).
-        const isFork = String(b.input?.subagent_type ?? '').trim().toLowerCase() === 'fork'
+        // SPAWN credit: ANY subagent type whose prompt carries the marker — a lean-worker is a valid
+        // MEASURE agent. Permanent from the spawn index on; nothing the agent returns un-credits it.
         const role = creditRoleLoose(String(b.input?.prompt ?? ''))
-        if (role !== null) pendingSpawns.push({ role, index: i, activity: a })
-        // Q3: a non-roled, non-fork spawn is a DEFER CANDIDATE — its own writes cannot yet be
-        // reviewed. A fork is excluded too: `lastFork` below already treats it as satisfying the
-        // gate at spawn time, so its interval must not additionally suppress disk effects.
-        else if (!isFork) deferCandidates.push(a)
-        // CASE-FOLDED, same as the subagent scanner: a subagent_type of "Fork" is still a fork.
-        // A review fork's interval closes like any other spawn's — its result or its notification.
-        // A zero-length interval keyed on its prompt was proposed and REJECTED in review: a fork
-        // spawned with the ONE-turn line pasted and then used as a worker would write unattributed.
-        if (isFork) { lastFork = i; lastForkTs = entryTs(e); continue }
+        if (role !== null) roles[role] = Math.max(roles[role], i)
+        continue
       }
       const w = toolUseWork(b, cwd)
       if (w !== null) work = { index: i, ...w }
     }
   }
-  for (const p of pendingSpawns) {
-    if (p.activity.end === Infinity) roles[p.role] = Math.max(roles[p.role], p.index)
-  }
-  // A defer candidate that has since CLOSED (its agent returned) is no longer an outstanding
-  // obligation — filtered here, once, after the whole window is known, same as `pendingSpawns`.
-  const deferIntervals = deferCandidates.filter((a) => a.end === Infinity)
-  return { lastFork, lastForkTs: lastFork === -1 ? firstTs : lastForkTs, work, activity, roles, deferIntervals }
-}
-/** Fold a `unreviewedEffects()` result into the scan. Additive and positional, mirroring how a
- *  transcript fork/edit already work: an effect is placed at `lastFork + 1` — "a fork must
- *  follow it" — UNLESS a text arm already sits strictly after the last fork, in which case that
- *  arm already blocks and is left alone (both would block identically; keeping the more specific
- *  transcript-derived cause is more useful to the agent reading the message). The write may have
- *  been made by a worker, a script, a fork-as-worker, or a background job the transcript never
- *  shows at all — the effects walk sees it regardless of who made it.
- *  Returns `scan` BY REFERENCE when there is nothing to fold in, so a caller can skip work on the
- *  common (nothing changed) case. */
-export function applyEffects(scan: MainScan, fx: Effects): MainScan {
-  if (!fx.truncated && fx.paths.length === 0) return scan
-  if (scan.work !== null && scan.work.index > scan.lastFork) return scan // an existing arm already blocks
-  const shown = fx.paths.slice(0, 8).join(', ')
-  const overflow = fx.paths.length > 8 ? ` (+${fx.paths.length - 8} more)` : ''
-  const detail = (fx.truncated ? 'walk truncated — ' : '') + shown + overflow
-  return { ...scan, work: { index: scan.lastFork + 1, cause: 'unreviewed change', detail } }
+  return { work, lastProposal, roles, ownRole }
 }
 
-/** The rule: allow the stop iff BOTH roles are credited AT OR AFTER the last consequential action.
- *  Pure decision over an already-scanned transcript. NO BREAKER STATE — see the NO GIVE-UP
- *  paragraph below. A missing role is -1, so `Math.min` degenerates to -1 and blocks whenever
- *  either role was never credited — one role alone is not enough (owner spec 2026-09-13). */
-export function decideMainGate(scan: { roles: { measure: number; review: number }; lastWork: number }): { block: boolean } {
-  if (scan.lastWork === -1) return { block: false } // nothing claimed this window
-  // `>=`, not `>`: two blocks CAN share an index when a harness writes one transcript entry per
-  // assistant message, and a tie must go to the fork or that turn can never end. MEASURED
-  // 2026-09-07 on this project's own session JSONL: this Claude Code build writes ONE ENTRY PER
-  // CONTENT BLOCK (thinking / text / tool_use each got their own index), so the tie never occurs
-  // here and `>=` is degenerate on this format. It is kept because it is correct on both shapes.
-  // THE EXIT IS POSITIONAL, so both roles must be credited AT OR AFTER the last arming block of the
-  // turn. Because this build writes one entry per content block (see below), prose emitted AFTER a
-  // fork re-arms the gate and the turn is blocked again. Spawn the review as the turn's final act,
-  // not mid-turn.
-  if (Math.min(scan.roles.measure, scan.roles.review) >= scan.lastWork) return { block: false } // both reviewed — the only way past the gate
-  // NO GIVE-UP. The consecutive and per-session breakers were REMOVED (owner order, 2026-09-03:
-  // "it must NEVER BE STOPPED OR BYPASSED, no matter what") and their state (`MainBreakerState`,
-  // `total`/`consecutive`) is gone too — it was read every call and then discarded, decided nothing
-  // (nothing in this repo ever branched on it once the give-up path was deleted), and the tmpdir
-  // persistence that used to consume it was removed in 53a30222. They used to fail OPEN on the
-  // reasoning that a wedged session costs more than a skipped review — but the measured outcome was
-  // worse: on 2026-09-03 this session ignored the demand twice, `consecutive` reached 2, the gate
-  // went silent, and EVERY subsequent change went unreviewed with nothing announcing it. A silent
-  // stop is the one failure a safety gate must not have.
-  //
-  // The exit is always available and is the thing being asked for: spawn both agents and the
-  // branch above returns immediately once they are credited. The caller ALSO applies
-  // `agentCannotSpawn` so an agent that has no Agent tool is released rather than wedged — a
-  // capability check, not a give-up. That check was missing from the main gate when this comment
-  // first claimed it (review finding G2).
-  return { block: true }
+export type Demand = 'review' | 'measure' | 'both'
+
+/** The rule, shared by both gates: release iff the REVIEW credit sits AT OR AFTER the last arming
+ *  block, and — when a proposal was made — the MEASURE credit sits at or after the last proposal
+ *  line. A write alone needs only the review. `>=`, not `>`: two blocks CAN share an index on a
+ *  harness that writes one transcript entry per assistant message, and a tie must go to the
+ *  spawn or that turn could never end (this build writes one entry per content block, so the tie
+ *  is degenerate here; kept because it is correct on both shapes). NO BREAKER STATE (owner order
+ *  2026-09-03: never stopped or bypassed) — and none is needed: one compliant response releases. */
+export function decideGate(s: Pick<GateScan, 'work' | 'lastProposal' | 'roles'>): Demand | null {
+  if (s.work === null) return null
+  const needReview = s.roles.review < s.work.index
+  const needMeasure = s.lastProposal !== -1 && s.roles.measure < s.lastProposal
+  if (needReview && needMeasure) return 'both'
+  if (needReview) return 'review'
+  if (needMeasure) return 'measure'
+  return null
 }
 
-// The ONE-TURN rule lives HERE, in the text the agent reads on every single fire, because that is
-// what actually changes behaviour. A PreToolUse deny was tried and reverted: nothing registers
-// review-gate on PreToolUse, it could not tell a review fork from any other fork (they all share
-// `subagent_type: 'fork'`), and it would not have prevented turn 2 anyway — the deny returns as a
-// tool RESULT and reacting to it is the cold request. Measured 2026-09-03: six multi-turn review
-// forks cost ~4.6M tokens; the first zero-tool-call fork answered in 18s off one warm read.
-export const ARM_CAUSE_TEXT: Record<MainArmCause, string> = {
+// ── The block messages ───────────────────────────────────────────────────────────────────────────
+
+export const ARM_CAUSE_TEXT: Record<ArmCause, string> = {
   'edit': 'edited a file',
   'write-shaped command': 'ran a write-shaped command',
-  'proposal text': 'made a proposal (a PROPOSAL line)',
-  'unreviewed change': 'left unreviewed changes on disk',
+  'proposal text': `wrote a "${PROPOSAL_MARKER}" proposal`,
 }
-/** The block message names WHAT armed the gate. It said "edited or committed" unconditionally from
- *  2026-09-07, when a proposal became work, until TRDD-0E3W5C45 — so a blocked agent that had edited
- *  nothing was told it had, and could not tell which of its blocks to review. */
-export function mainBlockReason(cause: MainArmCause, detail = ''): string {
-  const what = detail === '' ? ARM_CAUSE_TEXT[cause] : `${ARM_CAUSE_TEXT[cause]}: ${detail}`
-  // NAMES THE SCANNED WINDOW, NOT "THIS TURN" — but the window differs BY CAUSE, because the two
-  // causes come from two DIFFERENT scans. Every cause but 'unreviewed change' is found by
-  // `scanMainTranscriptLines` over `readTranscriptTail`'s last 4 MB (see its `maxBytes` default),
-  // so "this turn" would claim certainty the scan does not have — a long turn's earlier blocks can
-  // be outside that window. 'unreviewed change' instead comes from `unreviewedEffects`'s mtime walk
-  // (`applyEffects`, `runMainGate`), which never reads the transcript at all — saying "scanned: the
-  // transcript's last 4 MB" for it would name the wrong scan and mislead the agent about where to
-  // look. Matches `reviewSupervisor.ts`'s own care about the identical overclaim.
-  const window = cause === 'unreviewed change'
-    ? 'files on disk newer than that fork'
-    : "the transcript's last 4 MB"
-  return `Review-fork gate: ${what} landed after the last review fork `
-    + `(scanned: ${window}). ` + MAIN_BLOCK_DEMAND
-}
-export const MAIN_BLOCK_DEMAND = 'Spawn TWO agents: a MEASURE agent (any subagent type — a `lean-worker` '
-  + '(sonnet[1m], no inherited conversation context) is the PREFERRED choice, MEASURED at 143,363 tokens '
-  + "against a fork's 306,777 on the identical task, with an equally usable report) and a REVIEW agent "
-  + '(Agent tool, subagent_type "fork"). COPY '
-  + 'THIS LINE VERBATIM INTO THE MEASURE PROMPT: "' + MEASURE_ROLE_RULE + '" COPY THIS LINE VERBATIM '
-  + 'INTO THE REVIEW PROMPT: "' + REVIEW_ROLE_RULE + '" Neither agent can see this message, so a rule '
-  + 'you do not paste into its prompt never reaches it. Extra turns are not free, so measure only what '
-  + 'the proposal actually rests on. Run `agentlenspro '
-  + 'review-gate --directive` for the full directive, then act on the findings. THE EXIT IS POSITIONAL: '
-  + 'put the fork tool_use LAST, after the measure tool_use, in the SAME response as any user-visible text '
-  + "you have, at or after the turn's last edit, write-shaped command or PROPOSAL line — one of those "
-  + 'after the fork re-arms this gate; plain text after it does not. If you CANNOT spawn either — '
-  + NO_REVIEW_SENTINEL_EXAMPLES.join(', ') + ' '
-  + '— emit a text block whose ENTIRE content is "' + NO_REVIEW_SENTINEL + ' — <reason>", nothing '
-  + 'after the reason; that is the only other way out.'
 
-// Exported for the end-to-end test in src/test/reviewGate.test.ts, whose mutation check is
-// dropping the `applyEffects(rawScan, unreviewedEffects(...))` fold below (TRDD-9FG0LSPG).
+const REVIEW_DEMAND = 'Spawn ONE adversarial REVIEW fork (Agent tool, subagent_type "fork") and COPY THIS LINE '
+  + 'VERBATIM INTO ITS PROMPT: "' + REVIEW_ROLE_RULE + '"'
+const MEASURE_DEMAND = 'Spawn ONE MEASURE agent (any subagent type — a `lean-worker` (sonnet[1m], no inherited '
+  + 'conversation context) is PREFERRED, at less than half a fork\'s tokens) and COPY THIS LINE VERBATIM '
+  + 'INTO ITS PROMPT: "' + MEASURE_ROLE_RULE + '"'
+
+/** What the blocked agent must spawn, and how the gate releases. One text for both gates so the
+ *  two can never drift. */
+export function demandText(d: Demand): string {
+  const parts = d === 'review' ? [REVIEW_DEMAND] : d === 'measure' ? [MEASURE_DEMAND] : [MEASURE_DEMAND, REVIEW_DEMAND]
+  return parts.join(' ') + ' A spawned agent cannot see this message, so a rule you do not paste into its '
+    + 'prompt never reaches it. A spawn whose prompt starts with its ROLE line credits that role at the '
+    + 'spawn, permanently. THE EXIT IS POSITIONAL: put the spawn tool_use(s) LAST in the response, after the '
+    + 'turn\'s last edit, write-shaped command or "' + PROPOSAL_MARKER + '" line — one of those after the spawn '
+    + 're-arms this gate; plain text after it does not. Run `agentlenspro review-gate --directive` for the full '
+    + 'directive, then act on the findings. If you CANNOT spawn — ' + NO_REVIEW_SENTINEL_EXAMPLES.join(', ')
+    + ' — emit a text block whose ENTIRE content is "' + NO_REVIEW_SENTINEL + ' — <reason>", nothing after the '
+    + 'reason; that is the only other way out.'
+}
+
+/** The block message names WHAT armed the gate and WHICH agents it wants. It names the scanned
+ *  window, never "this turn": the scan reads the transcript's last 4 MB (`readTranscriptTail`), so
+ *  a long turn's earlier blocks can be outside it. */
+export function mainBlockReason(cause: ArmCause, detail: string, demand: Demand): string {
+  const what = detail === '' ? ARM_CAUSE_TEXT[cause] : `${ARM_CAUSE_TEXT[cause]}: ${detail}`
+  return `Review gate: ${what} after the last review (scanned: the transcript's last 4 MB). ${demandText(demand)}`
+}
+
+export function subagentBlockReason(cause: ArmCause, detail: string, demand: Demand): string {
+  const what = detail === '' ? ARM_CAUSE_TEXT[cause] : `${ARM_CAUSE_TEXT[cause]}: ${detail}`
+  return `Subagent review gate: before returning — you ${what} after the last review. ${demandText(demand)} `
+    + 'The sentinel must START the block and nothing may follow the reason (a quoted copy will not count).'
+}
+
+// ── MAIN AGENT GATE (Stop) ───────────────────────────────────────────────────────────────────────
+
 export async function runMainGate(input: ReviewGateInput): Promise<string | null> {
   const transcript = input?.transcript_path
   if (typeof transcript !== 'string' || !fs.existsSync(transcript)) {
@@ -858,189 +543,73 @@ export async function runMainGate(input: ReviewGateInput): Promise<string | null
     process.stderr.write('[review-gate] allowing UNREVIEWED: could not read the transcript tail\n')
     return null
   }
-  const cwd = hookCwd(input)
-  const rawScan = scanMainTranscriptLines(lines, cwd)
-  // Fold in disk effects newer than the last fork (TRDD-9FG0LSPG) — a worker's edit, a script's
-  // write, or a fork-as-worker's own change never appears as a tool_use in THIS transcript, so
-  // the transcript scan alone would release it unreviewed. `deferIntervals` (Q3) is passed through
-  // so a write made only during a still-open, non-roled Agent spawn does not arm prematurely.
-  const scan = applyEffects(rawScan, unreviewedEffects(cwd, rawScan.lastForkTs, {
-    activity: rawScan.activity, deferIntervals: rawScan.deferIntervals,
-  }))
-  const verdict = decideMainGate(scanPositions(scan))
-  // A block implies an arming block was found (`lastWork !== -1` ⇔ `work !== null`); the second
-  // test only narrows the type, so the message can never name a cause the scan did not find.
-  if (!verdict.block || scan.work === null) return null
+  const scan = scanTranscriptLines(lines, hookCwd(input))
+  const demand = decideGate(scan)
+  // A demand implies an arming block was found (`work !== null`); the second test only narrows
+  // the type, so the message can never name a cause the scan did not find.
+  if (demand === null || scan.work === null) return null
   // CAPABILITY CHECK, not a give-up: an agent that has no Agent tool cannot satisfy the demand, and
-  // blocking it forever wedges the session with no exit. The subagent gate already did this; the
-  // main gate did not, which made the "this cannot wedge" comment above false until now (G2).
-  // `stop_hook_active` is deliberately NOT honoured — that would be a one-block cap by another name.
+  // blocking it forever wedges the session with no exit.
   if (agentCannotSpawn(String(input?.agent_type ?? ''))) {
     process.stderr.write('[review-gate] the Agent tool is unavailable here, so the review cannot be demanded — allowing the stop UNREVIEWED.\n')
     return null
   }
-  return JSON.stringify({ decision: 'block', suppressOutput: true, reason: mainBlockReason(scan.work.cause, scan.work.detail) })
+  return JSON.stringify({ decision: 'block', suppressOutput: true, reason: mainBlockReason(scan.work.cause, scan.work.detail, demand) })
 }
 
-// ── SUBAGENT GATE (SubagentStop) ───────────────────────────────────────────────────────────────
+// ── SUBAGENT GATE (SubagentStop) ─────────────────────────────────────────────────────────────────
 
 /** Agent types that ARE the adversarial reviewer and must never be reviewed themselves. Compared
  *  whole and case-folded — never as a substring, or every `*-fork-*` agent inherits the exemption.
  *  Adding a name here skips that agent's review, so add only a genuine reviewer. */
 export const REVIEWER_AGENT_TYPES = new Set(['fork'])
 
-/** Scan a subagent's OWN transcript for whether it did consequential work and whether it already
- *  spawned its own reviewer. Pure — mirrors scanMainTranscriptLines but without the fork-position
- *  logic (a subagent gets at most ONE demand, never a relative-position check). */
-export function scanSubagentTranscriptLines(lines: string[], cwd = process.cwd()): { didWork: boolean; reviewed: boolean; ownRole: Role | null } {
-  let didWork = false
-  let reviewed = false
-  let ownRole: Role | null = null
-  let sawFirstUser = false
-  for (const line of lines) {
-    if (!line) continue
-    let e: TranscriptEntry
-    try { e = JSON.parse(line) as TranscriptEntry } catch { continue }
-    // Symmetric with scanMainTranscriptLines. Whether an agent's own file can contain its
-    // CHILDREN's entries is unverified; filtering makes this correct under both answers instead of
-    // betting on one, and stops a child's prose from being scored as the parent's work.
-    if (e?.isSidechain === true) continue
-    // The subagent's OWN spawning prompt is its FIRST non-sidechain `user` entry -- read ONCE, so a
-    // later human-authored `user` turn mid-conversation is never mistaken for it (owner correction
-    // 2026-09-13, C3/C6 -- a role-marked agent is exempt from being told to spawn its own reviewer).
-    // `declaredRole`, not `forkRole`: the exemption needs the marker to be a WHOLE line anywhere in
-    // the prompt, not merely quoted mid-sentence in a brief that discusses the protocol.
-    if (!sawFirstUser && e?.type === 'user') {
-      sawFirstUser = true
-      const c = e?.message?.content
-      const promptText = typeof c === 'string' ? c : Array.isArray(c) ? resultText(c) : ''
-      ownRole = exemptRoleStrict(promptText)
-    }
-    const content = e?.message?.content
-    if (e?.type !== 'assistant' || !Array.isArray(content)) continue
-    for (const b of content) {
-      // A MARKED PROPOSAL IS WORK -- see scanMainTranscriptLines. A subagent's plain-prose report
-      // (an Explore result, a status line) is not, or every returning worker owes a fork.
-      if (b?.type === 'text') {
-        // THE TERMINATOR. Without it the block is a LIVELOCK: the demand tells a subagent to state
-        // its inability and return, but that statement is itself a `text` block, so it re-arms
-        // `didWork` and the identical demand fires again over a strictly longer transcript. Every
-        // other brake on this path is gone by design (no enforcement switch, no per-agent demand
-        // cap), so `reviewed` is the ONLY exit and until now the only way to set it was spawning a
-        // fork -- impossible for an agent that has the
-        // Agent tool but is out of turns, budget, or depth. The escape must therefore set the same
-        // flag the fork sets.
-        //
-        // ANCHORED AT THE START of a trimmed block, deliberately: a fork REVIEWING this gate quotes
-        // the sentinel mid-prose (this file's own reviewers did), and a substring test would let
-        // that quotation release the very agent under review. Nothing is stripped first -- a
-        // markdown-quoted `> REVIEW-GATE: ...` or a `# REVIEW-GATE: ...` heading must NOT match,
-        // and stripping the marker would be the very smuggling this anchor exists to stop.
-        const text = String(b.text ?? '')
-        if (isNoReviewSentinel(text)) { reviewed = true; didWork = true; continue }
-        if (textArms(text)) didWork = true
-        continue
-      }
-      if (b?.type !== 'tool_use') continue
-      // CASE-FOLDED, same as scanMainTranscriptLines -- a subagent_type of "Fork" is still a fork.
-      if (b.name === 'Agent' && String(b.input?.subagent_type ?? '').trim().toLowerCase() === 'fork') reviewed = true
-      else if (toolUseWork(b, cwd) !== null) didWork = true
-    }
-  }
-  return { didWork, reviewed, ownRole }
-}
+/** The janitor's own agents (`ai-maestro-janitor:janitor-*`, or the bare `janitor-*` form some
+ *  sessions list) — excluded by owner order 2026-09-15: their memory/state writes are the janitor's
+ *  actions, not work to be reviewed. Anchored at the start, on the case-folded type. */
+export const JANITOR_AGENT_RE = /^(?:ai-maestro-janitor:)?janitor-/
 
-/** Pure decision: demand a review from a subagent, and only when it (a) is not the reviewer
- *  itself (recursion guard on `agent_type`), (b) its own transcript proves it did work and has
- *  not already reviewed itself. There is no enforcement switch and no per-agent demand cap — see
- *  the "NOT BYPASSABLE" comment below. */
-export function decideSubagentGate(
-  agentType: string,
-  scan: { didWork: boolean; reviewed: boolean; ownRole?: Role | null } | null,
-): { block: boolean } {
-  // THE RECURSION GUARD — a review fork is itself a subagent; reviewing it spawns a reviewer for
-  // the reviewer. Empty type is the internal micro-lookup class — skipped for cost, and because an
-  // agent that will not name itself cannot be told apart from a reviewer.
-  //
-  // WHOLE-TOKEN, not a substring. `/fork/i` exempted every agent type with "fork" anywhere in it —
-  // `worktree-fork`, `fork-worker`, `wtfork` — none of which is the adversarial reviewer, all of
-  // which then returned unreviewed for free. The owner's carve-out (2026-09-07) is for "the
-  // adversarial review fork agents themselves, of course, to avoid infinite recursion", i.e. the
-  // agents spawned as `subagent_type: "fork"`, whose `agent_type` is exactly `fork`.
-  //
-  // Narrowing a release guard is DEMAND-direction, so it is the dangerous direction: getting it
-  // wrong wedges a reviewer instead of skipping a review. That is safe here only because the
-  // sentinel above is now a real exit — a reviewer this list failed to name can still terminate by
-  // stating why. Before the sentinel existed, this narrowing would have been a livelock generator.
-  if (agentType === '' || REVIEWER_AGENT_TYPES.has(agentType.trim().toLowerCase())) {
-    return { block: false }
-  }
-  // A subagent whose OWN prompt declares it EITHER role is exempt. C6 narrowed this to 'review'
-  // because the measure role has a tool budget and so should not also be unreviewable. Owner
-  // directive 2026-09-13 widens it to BOTH roles, and Q3 is what makes that safe: Q3 excludes a
-  // ROLE-marked spawn from being a deferring interval, so a roled agent's writes arm the PARENT's
-  // gate instead of being suppressed. The review happens one level up, where the agent that
-  // dispatched the work can see it. Exempting a roled agent from its OWN gate therefore loses no
-  // review and stops an infinite regress (a measure agent forced to spawn its own measure+review
-  // pair, two more agents per level, forever).
-  if (scan?.ownRole !== null && scan?.ownRole !== undefined) return { block: false }
-  // NOT BYPASSABLE (owner order, 2026-09-03: "Not even for the subagents!"). There is no
-  // enforcement switch and no per-agent demand cap: a subagent that did work and has not reviewed
-  // itself is asked EVERY time it tries to return, not once.
-  if (!scan || !scan.didWork || scan.reviewed) return { block: false }
-  return { block: true }
+/** Never demanded: the reviewer itself (recursion guard), a janitor agent, an agent that will not
+ *  name itself (the internal micro-lookup class), or a ROLED agent — its own prompt declares
+ *  MEASURE or REVIEW, so forcing it to spawn its own pair would regress two agents per level,
+ *  forever. Its writes are the dispatching agent's to review one level up. */
+export function subagentExempt(agentType: string, ownRole: Role | null): boolean {
+  const t = agentType.trim().toLowerCase()
+  return t === '' || REVIEWER_AGENT_TYPES.has(t) || JANITOR_AGENT_RE.test(t) || ownRole !== null
 }
-
-function readSubagentScan(transcriptPath: string, cwd: string): { didWork: boolean; reviewed: boolean; ownRole: Role | null } | null {
-  try { return scanSubagentTranscriptLines(fs.readFileSync(transcriptPath, 'utf8').split('\n'), cwd) } catch { return null }
-}
-
-// Carries the same pasted rule as the main gate. It did not until 2026-09-03, which made every
-// subagent-spawned review a multi-turn one by default — the gate that costs the most forks was the
-// one channel that never stated the constraint.
-export const SUBAGENT_BLOCK_REASON = 'Subagent review gate: before returning, spawn TWO agents over your '
-  + 'work — a MEASURE agent (any subagent type — a `lean-worker` (sonnet[1m], no inherited conversation '
-  + "context) is the PREFERRED choice, MEASURED at 143,363 tokens against a fork's 306,777 on the "
-  + 'identical task, with an equally usable report) and a REVIEW agent (Agent tool, subagent_type '
-  + '"fork"). COPY THIS LINE VERBATIM INTO THE MEASURE PROMPT: "'
-  + MEASURE_ROLE_RULE + '" COPY THIS LINE VERBATIM INTO THE REVIEW PROMPT: "' + REVIEW_ROLE_RULE + '" '
-  + 'Neither agent can see this message, so a rule you do not paste into its prompt never reaches it. '
-  + 'Run `agentlenspro review-gate --directive` for the full directive, then act '
-  + 'on their findings. If you CANNOT spawn either — no Agent tool, rate-limited, at a depth limit — '
-  + `then emit a text block whose ENTIRE content is "${NO_REVIEW_SENTINEL} — <reason>" and return; `
-  + 'that is the only other way out. It must START the block and nothing may follow the reason (a '
-  + 'quoted copy will not count).'
 
 async function runSubagentGate(input: ReviewGateInput): Promise<string | null> {
+  // ONE demand per return: the harness sets this once a Stop hook already blocked this same stop.
   if (input?.stop_hook_active === true) return null
   const type = String(input?.agent_type ?? '')
+  if (subagentExempt(type, null)) return null
   if (agentCannotSpawn(type)) return null
-  const own = input?.agent_transcript_path
   // `agent_transcript_path` is the subagent's OWN file — `transcript_path` names the PARENT's and
   // would measure the wrong agent entirely.
-  const scan = typeof own === 'string' && fs.existsSync(own) ? readSubagentScan(own, hookCwd(input)) : null
-  const verdict = decideSubagentGate(type, scan)
-  if (!verdict.block) return null
-  return JSON.stringify({ decision: 'block', suppressOutput: true, reason: SUBAGENT_BLOCK_REASON })
+  const own = input?.agent_transcript_path
+  if (typeof own !== 'string' || !fs.existsSync(own)) return null
+  let scan: GateScan
+  try { scan = scanTranscriptLines(fs.readFileSync(own, 'utf8').split('\n'), hookCwd(input)) } catch { return null }
+  if (subagentExempt(type, scan.ownRole)) return null
+  const demand = decideGate(scan)
+  if (demand === null || scan.work === null) return null
+  return JSON.stringify({ decision: 'block', suppressOutput: true, reason: subagentBlockReason(scan.work.cause, scan.work.detail, demand) })
 }
 
-// ── Process entry for `agentlenspro review-gate` ───────────────────────────────────────────────
+// ── Process entry for `agentlenspro review-gate` ─────────────────────────────────────────────────
 
 /** `agentlenspro review-gate [--directive]`. Always resolves 0 — a Stop/SubagentStop hook that
  *  can throw or hang can wedge the session, which is worse than a missed review. Dispatches on
- *  `hook_event_name`: `PreToolUse` -> the fork one-turn deny, `SubagentStop` -> the subagent gate,
- *  `Stop` (or an absent field, honored the same way the ported scripts did) -> the main gate. Any
- *  other event is a silent allow. */
+ *  `hook_event_name`: `SubagentStop` -> the subagent gate, `Stop` (or an absent field) -> the main
+ *  gate. Any other event is a silent allow. */
 export async function runReviewGate(argv: string[]): Promise<number> {
   if (argv[0] === '--directive') {
     process.stdout.write(REVIEW_GATE_DIRECTIVE)
     return 0
   }
   // GLOBAL kill-switch, before stdin — mirrors runHookCommand('gate'): a disabled AgentlensPro
-  // must never block the user's work. Named on stderr, matching the four other silent-allow
-  // lines in this file — a silent bypass is exactly the failure class this gate exists to close
-  // (review finding G3). Names WHICH half fired rather than claiming it was "disabled by the
-  // owner": the env half can be set by anything in the process tree, not just a human act.
+  // must never block the user's work. Named on stderr, matching the other silent-allow lines in
+  // this file — a silent bypass is exactly the failure class this gate exists to close.
   if (agentlensDisabled()) {
     const half = killSwitchHalf() === 'env'
       ? 'env AGENTLENS_DISABLED=1'
@@ -1050,11 +619,8 @@ export async function runReviewGate(argv: string[]): Promise<number> {
   }
   const payload = await readStdin(process.stdin)
   // THE ENV KILL-SWITCH IS GONE (owner order, 2026-09-03: "it must NEVER BE STOPPED OR BYPASSED, no
-  // matter what"). `AGENTLENS_REVIEW_FORK=off` and `AGENTLENS_SUBAGENT_REVIEW=off` are now ignored:
-  // an env var is settable by anything in the process tree, so it was a bypass available to the very
-  // agent the gate exists to constrain. The standing order already forbade using it
-  // (memory: review-fork-gate-never-disabled); this makes the forbiddance structural instead of
-  // honour-based. Uninstalling the hook remains possible and is deliberately a visible, human act.
+  // matter what"). `AGENTLENS_REVIEW_FORK=off` is ignored: an env var is settable by anything in the
+  // process tree, so it was a bypass available to the very agent the gate exists to constrain.
   if ((process.env.AGENTLENS_REVIEW_FORK || '').trim() === 'off') {
     process.stderr.write('[review-gate] AGENTLENS_REVIEW_FORK=off is IGNORED — the review gate cannot be disabled.\n')
   }
