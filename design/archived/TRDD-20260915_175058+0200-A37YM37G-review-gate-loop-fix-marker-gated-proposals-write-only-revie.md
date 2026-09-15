@@ -1,9 +1,9 @@
 ---
 trdd-id: A37YM37G
 title: Review gate loop fix - marker-gated proposals, write-only review fork, heartbeat and interrupt floors
-column: dev
+column: complete
 created: 2026-09-15T17:50:58+0200
-updated: 2026-09-15T17:50:58+0200
+updated: 2026-09-15T18:19:32+0200
 current-owner: emanuelesabetta
 created-by: emanuelesabetta
 task-type: bugfix
@@ -14,6 +14,7 @@ mandated-by: none
 approved: true
 approval-judge: emanuelesabetta
 approval-datetime: 2026-09-15T17:50:58+0200
+implementation-commits: [268f3080, 79af6b24]
 ---
 
 # Review gate loop fix - marker-gated proposals, write-only review fork, heartbeat and interrupt floors
@@ -30,13 +31,15 @@ Owner order 2026-09-15 (verbatim intent): the adversarial review Stop/SubagentSt
 - User-scope rules updated: propose-then-review-then-implement.md, never-block-the-main-agent.md, fable-plans-sonnet-executes.md now state the marker requirement.
 ## Acceptance
 - [x] tsc + eslint clean on src/cli
-- [ ] node esbuild.js exit 0 and the live `agentlenspro review-gate --directive` prints the marker
-- [ ] nine smoke cases pass (edit-only blocks with review only; proposal blocks with both; heartbeat/interrupt floors release; janitor subagent released; old `PROPOSAL:` marker inert)
-- [ ] unit tests rewritten and green
-- [ ] committed with this id in the subject
+- [x] node esbuild.js exit 0 and the live `agentlenspro review-gate --directive` prints the marker
+- [x] nine smoke cases pass (edit-only blocks with review only; proposal blocks with both; heartbeat/interrupt floors release; janitor subagent released; old `PROPOSAL:` marker inert)
+- [x] unit tests rewritten and green
+- [x] committed with this id in the subject
 ## Notes
 The untracked review-loop module still exists and is out of scope.
+Adversarial review of 268f3080 — ACCEPTED and landed in 79af6b24: REVIEW credit requires a fork spawn; isFloorPrompt scans every text block (measured 131/0/0 on this project's JSONL); supervisor restarts its whole window at a floor; subagent gate names a missing/unreadable agent_transcript_path on stderr; directive/rules say heartbeat and interrupt are FLOORS. REJECTED by owner order: reviewing janitor agents (janitor actions excluded); result-heading credit (the marker is the one mechanism); dropping the measure agent's do-not-spawn/return line (both agents stay within one turn). DOCUMENTED CONSEQUENCE: writes by agents released via agentCannotSpawn, the sentinel, a missing agent_transcript_path, detached background jobs and roled agents are reviewed by no gate (the disk walk that covered them was the loop).
 
 ## Approval log
 
 - 2026-09-15T17:50:58+0200 — MANDATE issued by emanuelesabetta (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-09-15T18:19:32+0200 — COMPLETE by emanuelesabetta. archived → complete.
