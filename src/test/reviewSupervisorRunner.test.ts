@@ -31,7 +31,13 @@ function runSupervisor(cwd: string, stdinPayload: string): Promise<RunResult> {
 const assistantLine = (blocks: unknown[]): string =>
   JSON.stringify({ type: 'assistant', isSidechain: false, message: { content: blocks } })
 const editBlock = { type: 'tool_use', name: 'Edit', input: {} }
-const forkBlock = { type: 'tool_use', name: 'Agent', input: { subagent_type: 'fork' } }
+// declaredRole() (reviewGate.ts) only credits a fork as a REVIEW when its prompt carries the
+// `ROLE: REVIEW` marker line (owner order 2026-09-15) — a bare `subagent_type: 'fork'` with no
+// prompt used to count. TRDD-D7MCI7OA: this fixture pre-dated that change, so `declaredRole('')`
+// returned null (neither role), the OK-verdict test's fork was never credited, and the supervisor
+// nagged "1 change(s) ... NO adversarial review fork" — the test regressed together with the gate,
+// it was not the supervisor that broke.
+const forkBlock = { type: 'tool_use', name: 'Agent', input: { subagent_type: 'fork', prompt: 'ROLE: REVIEW' } }
 
 /** Fixture: a temp cwd whose `.claude/settings.json` registers the review gate on Stop. */
 function makeFixture(): { cwd: string; transcript: string; cleanup: () => void } {
