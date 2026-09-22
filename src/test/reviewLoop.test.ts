@@ -55,6 +55,10 @@ const T4 = '2026-09-14T10:04:00+0200'
 
 const PROPOSAL_TEXT = 'PROPOSAL FOR ACTION - PLEASE REVIEW\nchange the widget rendering path to avoid the double layout pass'
 
+// A1' round 2: the key is derived from the proposal's CONTENT (everything after the marker
+// line), never the marker text itself — this is what the fixed key must be checked against.
+const PROPOSAL_CONTENT = PROPOSAL_TEXT.split('\n').slice(1).join('\n')
+
 function bothSpawns(measureTs = T1, reviewTs = T2): string[] {
   return [
     assistantAgentSpawn('tu_measure', `ROLE: MEASURE\n${PROPOSAL_TEXT}`, measureTs),
@@ -71,6 +75,49 @@ function bothConfirmed(ts = T3): string[] {
 function mainInput(transcriptPath: string, toolName = 'Edit', toolInput: unknown = { file_path: '/proj/src/a.ts' }): Parameters<typeof mayWrite>[0] {
   return { transcriptPath, cwd: CWD, toolName, toolInput }
 }
+
+suite('review-loop-A1-prime-content-derived-key', () => {
+  // A1' (2026-09-22, round 2): the key is now derived from the proposal CONTENT (the text
+  // after the marker line), not the constant marker itself — a marker with no content must
+  // never bind any spawn (proposalKey returns '', and scanCycles/missingReasonOf guard on it).
+  test("A1'. a marker with no content after it -> no key, no spawn binds, deny names 'no body'", () => {
+    const dir = tmpDir()
+    const p = write(dir, 'main.jsonl', [
+      assistantText('PROPOSAL FOR ACTION - PLEASE REVIEW', T0),
+      assistantAgentSpawn('tu_m', 'ROLE: MEASURE\nanything at all here', T1),
+      assistantAgentSpawn('tu_r', 'ROLE: REVIEW\nanything at all here', T2),
+    ])
+    const cycles = scanCycles(fs.readFileSync(p, 'utf8').split('\n'), { cwd: CWD })
+    const cur = cycles[cycles.length - 1]
+    assert.strictEqual(cur.proposal.key, '')
+    assert.strictEqual(cur.spawns.measure, null)
+    assert.strictEqual(cur.spawns.review, null)
+    const r = mayWrite(mainInput(p))
+    assert.strictEqual(r.allow, false)
+    assert.strictEqual(r.missing, 'key-missing')
+    assert.ok(r.reason?.includes('no body'))
+  })
+
+  test("A1'. two proposals sharing the same >=24-char first content line but diverging later text -> a spawn quoting P1 does not credit P2", () => {
+    const dir = tmpDir()
+    const shared = 'Rationale in one sentence: this change is safe'
+    const p1Body = `${shared}\nP1-only detail: touches module Alpha`
+    const p2Body = `${shared}\nP2-only detail: touches module Beta`
+    const p = write(dir, 'main.jsonl', [
+      assistantText(`PROPOSAL FOR ACTION - PLEASE REVIEW\n${p1Body}`, T0),
+      assistantAgentSpawn('tu_m1', `ROLE: MEASURE\nPROPOSAL FOR ACTION - PLEASE REVIEW\n${p1Body}`, T1),
+      assistantAgentSpawn('tu_r1', `ROLE: REVIEW\nPROPOSAL FOR ACTION - PLEASE REVIEW\n${p1Body}`, T2),
+      assistantText(`PROPOSAL FOR ACTION - PLEASE REVIEW\n${p2Body}`, T4),
+    ])
+    const cycles = scanCycles(fs.readFileSync(p, 'utf8').split('\n'), { cwd: CWD })
+    assert.strictEqual(cycles.length, 2)
+    assert.notStrictEqual(cycles[0].proposal.key, cycles[1].proposal.key)
+    assert.notStrictEqual(cycles[0].spawns.measure, null)
+    assert.notStrictEqual(cycles[0].spawns.review, null)
+    assert.strictEqual(cycles[1].spawns.measure, null)
+    assert.strictEqual(cycles[1].spawns.review, null)
+  })
+})
 
 suite('review-loop D2/D3: mayWrite over the main transcript', () => {
   // Test 1: a write with no proposal at all → deny.
@@ -158,7 +205,8 @@ suite('review-loop D2/D3: mayWrite over the main transcript', () => {
     ])
     const r = mayWrite(mainInput(p))
     assert.strictEqual(r.allow, false)
-    assert.ok((r.reason?.length ?? 0) > 0 && r.reason?.includes(PROPOSAL_TEXT.slice(0, 24)))
+    // A1' round 2: the reason quotes the CONTENT-derived key now, never the constant marker text.
+    assert.ok((r.reason?.length ?? 0) > 0 && r.reason?.includes(PROPOSAL_CONTENT.slice(0, 24)))
   })
 
   // Test 9: status failed/killed/stopped → no credit (background notification path).

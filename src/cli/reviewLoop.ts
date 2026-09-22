@@ -324,11 +324,23 @@ function normalize(s: string): string {
   return s.replace(/[*_#>`]/g, '').replace(/\s+/g, ' ').trim()
 }
 function proposalKey(block: string): string {
+  // A1' (2026-09-22, round 2 correction): PROPOSAL_LINE now matches ONE constant marker string,
+  // so a key derived from the marker line itself is identical for every proposal and can no longer
+  // bind a spawn to its own proposal (round-2 spec amendment,
+  // reports/review-loop-gate/…stage1a-loop-spec.md). The key is the first 160 normalised chars of
+  // the proposal's CONTENT — the remainder of the marker line after the PROPOSAL_LINE match, plus
+  // every following line — with NO "short first line" shortcut: a templated opener shared by every
+  // proposal (e.g. "Rationale in one sentence: ...") would otherwise make every key identical
+  // again, exactly the bug this amendment fixes. A marker with no content normalises to '' —
+  // scanCycles gates spawn-binding on key !== '' and missingReasonOf reports 'key-missing'.
   const lines = block.split('\n')
-  const line = lines.find((l) => PROPOSAL_LINE.test(l)) ?? block
-  const normLine = normalize(line)
-  if (normLine.length >= 24) return normLine
-  return normalize(block).slice(0, 160)
+  const markerIndex = lines.findIndex((l) => PROPOSAL_LINE.test(l))
+  if (markerIndex === -1) return normalize(block).slice(0, 160)
+  const match = PROPOSAL_LINE.exec(lines[markerIndex])
+  const remainder = match ? lines[markerIndex].slice(match.index + match[0].length) : ''
+  const content = [remainder, ...lines.slice(markerIndex + 1)].join('\n')
+  const normContent = normalize(content)
+  return normContent === '' ? '' : normContent.slice(0, 160)
 }
 function roleFromPromptFirstLine(prompt: string): Role | null {
   // Spec A2: role marker must be the FIRST NON-BLANK line after trimEnd() — a leading blank
@@ -413,7 +425,10 @@ export function scanCycles(lines: string[], _opts: { sessionDir?: string; cwd?: 
           const isFork = String(b.input?.subagent_type ?? '').trim().toLowerCase() === 'fork'
           const prompt = String(b.input?.prompt ?? '')
           const role = roleFromPromptFirstLine(prompt)
-          if (isFork && role !== null && normalize(prompt).includes(cur.proposal.key)) {
+          // A1' (2026-09-22): an empty key (proposalKey returned '' — marker with no content) must
+          // never bind ANY spawn, because `String.includes('')` is trivially true for every prompt
+          // — without this guard a body-less proposal would credit every fork ever spawned.
+          if (isFork && role !== null && cur.proposal.key !== '' && normalize(prompt).includes(cur.proposal.key)) {
             const spawn: RoleSpawn = { role, index: i, ts, toolUseId: typeof b.id === 'string' ? b.id : null }
             if (role === 'measure') cur.spawns.measure = spawn
             else cur.spawns.review = spawn
@@ -703,6 +718,10 @@ export function mayWrite(input: MayWriteInput): MayWriteResult {
 }
 
 function missingReasonOf(c: Cycle): MissingReason {
+  // A1' (2026-09-22): a marker with no body normalises to key === '' (proposalKey); scanCycles
+  // gates spawn-binding on key !== '' so such a cycle can never be satisfied by any spawn — report
+  // it distinctly rather than the generic "role not spawned" (the fix is to add prose, not to spawn).
+  if (c.proposal.key === '') return 'key-missing'
   if (c.spawns.measure === null && c.spawns.review === null) return 'role-not-spawned'
   if (c.spawns.measure === null || c.spawns.review === null) return 'role-not-spawned'
   if (!c.confirmed.measure || !c.confirmed.review) return 'role-running'
@@ -712,6 +731,7 @@ function mayWriteMissingMessage(c: Cycle): string {
   const reason = missingReasonOf(c)
   const base = `review-loop gate: key "${c.proposal.key}" — `
   switch (reason) {
+    case 'key-missing': return base + 'the proposal marker has no body — a key can only be derived from prose after the PROPOSAL FOR ACTION line, so add it before a fork can bind to this proposal'
     case 'role-not-spawned': return base + 'both roles (MEASURE and REVIEW) must be spawned as fork subagents over this exact proposal before any write'
     case 'role-running': return base + 'at least one role has not yet returned with its heading'
     case 'window-expired': return base + 'the window for this proposal has expired (300 gated calls used, or a newer proposal opened) — re-propose'

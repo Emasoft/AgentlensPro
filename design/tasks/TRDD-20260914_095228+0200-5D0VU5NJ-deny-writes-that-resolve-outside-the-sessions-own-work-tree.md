@@ -25,7 +25,7 @@ priority: high
 
 ## Why
 
-On 2026-09-14 a worker of this session ran `git checkout --` twice inside `/Users/emanuelesabetta/ai-maestro`, supplying `git_safety_guard.py`'s own one-time code, and destroyed a peer session's uncommitted edits (report: `reports/review-loop-gate/20260914_085400+0200-incident-worker-reverted-peer-edits.md`). A review window controls WHEN an agent may write, not WHERE. This card is the WHERE.
+On 2026-09-14 a worker of this session ran `git checkout --` twice inside `~/ai-maestro`, supplying `git_safety_guard.py`'s own one-time code, and destroyed a peer session's uncommitted edits (report: `reports/review-loop-gate/20260914_085400+0200-incident-worker-reverted-peer-edits.md`). A review window controls WHEN an agent may write, not WHERE. This card is the WHERE.
 
 ## Why separate
 

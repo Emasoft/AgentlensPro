@@ -3,7 +3,7 @@ trdd-id: 40M4UPK3
 title: Enforce the propose then two-fork review then wait then act loop at PreToolUse
 column: dev
 created: 2026-09-14T08:38:31+0200
-updated: 2026-09-14T08:52:53+0200
+updated: 2026-09-22T23:18:03+0200
 current-owner: emanuelesabetta
 created-by: emanuelesabetta
 task-type: feature
@@ -19,9 +19,9 @@ priority: high
 
 # Enforce the propose then two-fork review then wait then act loop at PreToolUse
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-14
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-22
 
-NEXT ACTION: stage 1a is narrowed to the loop core — fixture fix, A2, A4, A5, A7, A8 helper, A9, A10, B6 prefix clause, and tests 1-17 plus the mutation checks; section C moved to TRDD-VESNWRL0; B2 ADD-list, B4 package.json pin and B5 worktree carve-out stay in stage 1a after the core. DEPLOY HOLD: TRDD-YGETIBJS is blocked on this card. GOTCHAS: agent meta.json exists for only about 98% of subagents, so completion binding uses notification tool-use-id, then meta, then the launch agentId; a subagent's "Fork started" launch result carries no id; the code-tool gate blocks cp/grep on .ts source, so read source with tldr or a /tmp .txt copy; a denied tool call is marked by the top-level transcript field toolDenialKind, measured 2026-09-14.
+NEXT ACTION: stage 1a (spec reports/review-loop-gate/20260914_095303+0200-stage1a-loop-spec.md) is narrowed to the loop core. DONE: fixture marker fix, A2 (c14df0a6), A1 key amendment. REMAINING, in order: A10 (test 13d red — reviewLoop.ts ~644-649 denies on a null parent cycle before resolving the spawner chain; the fix must judge the spawner's standing at the subagent's anchor time, not now, with a negative twin test: a depth-2 worker spawned before the main window opened is denied), A1 anchor (a proposal is a text block whose FIRST non-blank line matches PROPOSAL_LINE, per the turn protocol — the /m regex currently lets any line anywhere open a cycle and close the open window), A4, A5, A7, A8 helper, A9, B6 prefix clause, tests 1-17 plus the mutation checks; then B2 ADD-list, B4 package.json pin, B5 worktree carve-out. Section C (gate self-protection) moved to TRDD-VESNWRL0; the write-LOCATION scope rule moved to TRDD-5D0VU5NJ. THEN stage 2: PreToolUse/Stop/SubagentStop integration, supervisor, hook registration, deletion of the old two-role positional code and its tests; then build, install hooks, restart, live checks. DEPLOY HOLD: TRDD-YGETIBJS is blocked on this card. Caveat: the deployed loop gate carries no self-protection guards until TRDD-VESNWRL0 lands — inside an open window an agent could edit settings or hooks to switch it off; outside a window every GATED write is denied (never-gated roots such as /tmp, reports/, *_dev/ still pass). GOTCHAS: agent meta.json exists for only about 98% of subagents, so completion binding uses notification tool-use-id, then meta, then the launch agentId; a subagent's "Fork started" launch result carries no id; the code-tool gate blocks cp/grep on .ts source, so read source with tldr or a /tmp .txt copy; a denied tool call is marked by the top-level transcript field toolDenialKind, measured 2026-09-14. OUT-OF-CORPUS WORK: the owner's user-scope rule propose-then-review-then-implement.md must be updated to the two-fork loop.
 
 ## Why
 The owner requires every action to follow: the main agent proposes; two FORK agents run (ROLE MEASURE -> MEASURE-AND-VERIFY-REPORT, ROLE REVIEW -> ADVERSARIAL-REVIEW); the main agent waits for both to finish, then acts corrected by both. The committed two-role gate (b08e76aa, 3555741c) is Stop-only, so it enforces act-then-review and cannot enforce waiting; it also credits roles at result index, credits any tool_result, lets any fork move the effects floor, and its subagent gate appears inert (a code read of the sidechain skip plus two sampled subagent files; not yet reproduced by a test).
@@ -45,3 +45,7 @@ TRDD-1YXR6S47, TRDD-BA0DCW98, TRDD-4J1QA18G - their code paths will be deleted b
 
 - 2026-09-14T08:38:31+0200 — MANDATE issued by main-session (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-09-14 — APPROVED by emanuelesabetta: the implementation plan was approved in session via plan-mode approval. The earlier MANDATE line named a placeholder issuer.
+
+## Notes
+
+Amendment A1' (2026-09-22): the marker `PROPOSAL FOR ACTION - PLEASE REVIEW` is a CONSTANT string, so a key derived from the marker line itself (the original A1 rule) is identical for every proposal and cannot bind a spawn to its own proposal. The key is now the first 160 normalised chars of the proposal's CONTENT (the remainder of the marker line plus every following line), with no short-first-line shortcut (a templated opener would collapse the key back toward a constant). A marker with no content normalises to an empty key, which can never bind a spawn (scanCycles guards on key !== ''), and missingReasonOf reports it as 'key-missing'. Full text: reports/review-loop-gate/20260914_095303+0200-stage1a-loop-spec.md, section "Amendment A1'".
