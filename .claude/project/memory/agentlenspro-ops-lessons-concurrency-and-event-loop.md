@@ -2,7 +2,7 @@
 name: agentlenspro-ops-lessons-concurrency-and-event-loop
 description: "server hangs at 100% cpu and every request times out or SIGTERM is ignored / a settings.json env key keeps reverting or getting overwritten after every server restart / the CLI hangs for 75 seconds when the server is unreachable / cache-expired takes forever / a setup detector reports drift every run but the repair never lands / a green setup proves nothing about the repairer / the mocha suite dies at exit 139 SIGSEGV in duckdb.node / all MCP calls fail with rpc error undefined while server logs show 200s / already connected to a transport / a test times out under load but is actually scanning the real live store / an rss sampler goes dark during a scan / a server pidfile is corrupted or two servers own one data dir / a restart looks like it failed but another server already owns the data directory / server.log shows another process's history"
 ocd: 2026-07-11
-lmd: 2026-09-04
+lmd: 2026-09-22
 metadata:
   node_type: memory
   type: project
@@ -151,7 +151,59 @@ silenced — trading a false alarm for a silent one would be worse.
 
 
 
-^ATOM-0S2S-TC9O [desc: "compositions_in_scope held the state lock up to 274s because build_session_summary ran INSIDE the guard; the fix builds off-lock and trades fresh-but-blocking for stale-but-free", keywords: state_lock_held_for_seconds every_request_times_out_but_cpu_is_idle ui.rs_560 compositions_in_scope build_session_summary_under_the_lock otlp_ingest_waited_145_seconds log_sweeper_starved dashboard_slow_but_server_alive spans_stopped_being_stored summary_rebuild_takes_6_seconds composition_project_map lock_attribution_held_line waiter_queued_behind_holder SIGTERM_ignored_during_shutdown alcore_state_mutex, trdd: TRDD-UTFVMVT8, ocd: 2026-09-04, lmd: 2026-09-04]
+
+^ATOM-L0VH-P39Z [desc: "compositions_in_scope held the state lock up to 274s because build_session_summary ran INSIDE the guard (TRDD-UTFVMVT8)", keywords: state_lock_held_for_seconds every_request_times_out_but_cpu_is_idle ui.rs_560 compositions_in_scope build_session_summary_under_the_lock otlp_ingest_waited_145_seconds log_sweeper_starved dashboard_slow_but_server_alive spans_stopped_being_stored summary_rebuild_takes_6_seconds, trdd: TRDD-UTFVMVT8, ocd: 2026-09-22, lmd: 2026-09-22]
+
+Measured 2026-09-02..04 (TRDD-UTFVMVT8). On alcore, `compositions_in_scope` (`ui.rs`) took the
+state lock and then called `composition_project_map`, whose first line is `build_session_summary` —
+so a `VersionedCache` MISS rebuilt the whole summary INSIDE the guard. One pid: 82 holds at that
+site, worst **273.9 s**; the OTLP handler waited 145 s, the log sweeper 29 s. Spans stored per
+minute fell from 0.8-2.6k to single digits for ~30 min — OTEL detail lost at the source.
+
+
+^ATOM-R8UN-LY08 [desc: "Three lessons from the alcore lock-hold incident: held-line names the guard not the work, holder slot names queue-time not wait-site, line numbers are per-binary", keywords: held_line_names_the_guard holder_slot_at_queue_time line_numbers_per_binary lock_attribution_held_line waiter_queued_behind_holder composition_project_map session_ids_resolve_scope_0ms function_name_stable_across_builds chores.rs_653 cargo_build_inflated_duration, trdd: TRDD-UTFVMVT8, ocd: 2026-09-22, lmd: 2026-09-22]
+
+Three things that generalize:
+
+1. **A `held` line names the GUARD, not what ran under it.** Timing each statement separately
+   showed 19/19 traced holds were 100% `project_map`; `session_ids` and `resolve_scope` — the two
+   expensive-looking suspects — were 0 ms. (Those holds' DURATIONS were inflated by concurrent
+   cargo builds; the ATTRIBUTION is independent of that, which is why it is quoted and they are
+   not.)
+2. **The holder slot names the holder AT QUEUE TIME**, not the site you actually waited behind. A
+   26 s wait blamed `chores.rs:653`, which had no `held` line at all.
+3. **Line numbers are PER BINARY** — the instrumentation shifted every later site by +18. Key reads
+   on the FUNCTION name.
+
+
+^ATOM-63H6-5S6Y [desc: "Fix: build off-lock before taking the guard; worst hold dropped 120x but trades a CURRENT snapshot for stale-but-free, up to ~2 rebuild durations old", keywords: build_off_lock ui::summary_now fresh_but_blocking_vs_stale_but_free worst_hold_2263ms rebuild_takes_5.9_to_7.1s project_unknown_omitted_session coverage_says_scanned_all_but_isnt staleness_window_sizing doc_comment_claimed_milliseconds versioned_cache_snapshot_age, trdd: TRDD-UTFVMVT8, ocd: 2026-09-22, lmd: 2026-09-22]
+
+**Fix and its honest cost:** build off-lock (`ui::summary_now`) before taking the guard, clone cards
+off-lock too. Worst hold anywhere then 2,263 ms (120x drop), zero at any composition site. But the
+old path was always CURRENT, while the new one serves the last COMPLETED rebuild's snapshot — data
+age up to ~2 rebuild durations, and a rebuild is **≥5.9 s** at 27.7k sessions (5.9-7.1 s were the
+four QUIETEST traced rebuilds, with no build running — a FLOOR, not a typical range; size the
+staleness window above it, never at it). Not the "milliseconds" the doc comment claimed. A younger
+session resolves to `project: unknown` and is silently omitted from a project-scoped answer while
+coverage still reads "Scanned all N sessions".
+Say "fresh-but-blocking became stale-but-free", not "pure win".
+
+
+^ATOM-Q7NW-6I0K [desc: "A graceful SIGTERM stop starved 6 minutes with every tokio worker parked on the mutex; a 2s sample caught the holder by stack when log-reading could not", keywords: graceful_stop_starved SIGTERM_ignored_six_minutes http_dead_after_sigterm every_tokio_worker_parked_on_mutex sample_caught_holder_by_stack log_reading_could_not_find_holder alcore_state_mutex sigterm_shutdown_hang mutex_holder_identification 2s_sample_profiling, trdd: TRDD-UTFVMVT8, ocd: 2026-09-22, lmd: 2026-09-22]
+
+**A graceful stop STARVED:** SIGTERM, then HTTP-dead six minutes later, every tokio worker parked
+on the mutex. A 2 s `sample` caught the holder by stack (1,413/1,413 in that call) where log-reading
+could not.
+
+## Governed by
+
+- [[agentlenspro-ops-lessons]] — the operational-doctrine overview this sub-page details.
+
+
+## Superseded
+
+
+^ATOM-0S2S-TC9O [desc: "compositions_in_scope held the state lock up to 274s because build_session_summary ran INSIDE the guard; the fix builds off-lock and trades fresh-but-blocking for stale-but-free", keywords: state_lock_held_for_seconds every_request_times_out_but_cpu_is_idle ui.rs_560 compositions_in_scope build_session_summary_under_the_lock otlp_ingest_waited_145_seconds log_sweeper_starved dashboard_slow_but_server_alive spans_stopped_being_stored summary_rebuild_takes_6_seconds composition_project_map lock_attribution_held_line waiter_queued_behind_holder SIGTERM_ignored_during_shutdown alcore_state_mutex, trdd: TRDD-UTFVMVT8, ocd: 2026-09-04, lmd: 2026-09-04, status: superseded, superseded-by: ATOM-L0VH-P39Z]
 Measured 2026-09-02..04 (TRDD-UTFVMVT8). On alcore, `compositions_in_scope` (`ui.rs`) took the
 state lock and then called `composition_project_map`, whose first line is `build_session_summary` —
 so a `VersionedCache` MISS rebuilt the whole summary INSIDE the guard. One pid: 82 holds at that
@@ -183,11 +235,6 @@ Say "fresh-but-blocking became stale-but-free", not "pure win".
 **A graceful stop STARVED:** SIGTERM, then HTTP-dead six minutes later, every tokio worker parked
 on the mutex. A 2 s `sample` caught the holder by stack (1,413/1,413 in that call) where log-reading
 could not.
-
-## Governed by
-
-- [[agentlenspro-ops-lessons]] — the operational-doctrine overview this sub-page details.
-
 ## Notes and lessons learned
 
 [^8]: [id:ATOM-WEDGE-BOUND, status:valid, keywords:"server_hang 100%_cpu every_request_hangs event_loop_starved SIGTERM_ignored unbounded_scan flatMap_reparse", ocd:2026-07-16, lmd:2026-07-16]
