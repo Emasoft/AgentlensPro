@@ -69,6 +69,15 @@ function baseEnv(overrides: Record<string, string>): NodeJS.ProcessEnv {
   delete env.AGENTLENS_HOOK_TIMEOUT
   delete env.AGENTLENS_GATE_MODE
   delete env.AGENTLENS_UI_URL
+  // AGENTLENS_NO_REVIVE brakes reviveDaemonDetached() (src/cli/hookHandlers.ts): the
+  // 'server-down'/'hangs' tests below deliberately fail the hook's POST, and on a failed
+  // POST forwardHookEvent() falls through to a real detached `alcore serve` spawn using this
+  // file's UNMODIFIED HOME/DATA_DIR — i.e. the developer's REAL ~/.agentlens on the default
+  // ports. This file only overrides AGENTLENS_UI_URL (the POST target), so without the brake
+  // a "server down" test run while the real production server happens to be down (measured:
+  // TRDD-YGEV6QDD/TRDD-4EV3OJ19, an ongoing crash-loop) spawns a real production revive as a
+  // side effect of the test — never what "fail-open exit 0" is testing here.
+  env.AGENTLENS_NO_REVIVE = '1'
   return { ...env, ...overrides }
 }
 
