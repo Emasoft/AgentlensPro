@@ -3,7 +3,7 @@ trdd-id: 7RM5YW2T
 title: The 25 ms summary rebuild loop rebuilds the whole window continuously under ingest and is the mimalloc churn
 column: testing
 created: 2026-09-05T22:06:10+0200
-updated: 2026-09-06T03:18:01+0200
+updated: 2026-09-23T12:12:21+0200
 current-owner: main-session
 implementation-commits: [bd0d48e3, 6698af32, bb8d5f8e, 67e5478cc62f28a49e3877db3885ee3fd727d6ed]
 task-type: bugfix
@@ -134,3 +134,11 @@ churn cut.
 
 - 2026-09-05T22:06:10+0200 — Authored into `dev` (Tier 0 bugfix under the USER-approved parent
   7YPQWKPG; worker dispatched the same turn).
+
+## 2026-09-23 — in-run heap ratchet: advisor verdict and the measurement that picks the fix
+
+Live restarts are warm (server.log "resumed … offsets (0 invalid -> cold read)"); 8 guard exits so far; exits = per-pass peak ~1.3-1.5 GB (old summary + new summary during swap + card text + DuckDB sort + window spans) + a slow ratchet ~3.5-7 MB/min.
+The heap-attribution report's "non-mimalloc lower bound 0 MB" is a tautology (mimalloc current_rss is whole-process RSS on macOS); cite the culprit log's `commit` figure instead.
+Option B (second read-only connection + streaming parse) removes only ~6-8% of the exit-level footprint.
+Next: zero-code 3-variant isolated run (V0 default; V1 AGENTLENS_TIMELINE_HOT_CARDS=1; V2 MIMALLOC_ABANDONED_PAGE_PURGE=1 MIMALLOC_ABANDONED_RECLAIM_ON_FREE=1), decision rule per the advisor report §5.
+Reports: reports/alcore-heap/20260923_112303+0200-heap-attribution.md, reports/alcore-heap/20260923_114454+0200-inrun-growth.md, docs_dev/alcore-rebuild-fix/20260923_115202+0200-design-draft.md, docs_dev/alcore-rebuild-fix/20260923_120809+0200-advisor.md.
