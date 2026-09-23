@@ -3,7 +3,7 @@ trdd-id: EQCGAVGV
 title: The cause of alcore's in-run heap ratchet is unknown - correlate before choosing a fix
 column: dev
 created: 2026-09-23T12:31:46+0200
-updated: 2026-09-23T12:46:45+0200
+updated: 2026-09-23T14:11:08+0200
 current-owner: main-session
 created-by: main-session
 task-type: spike
@@ -18,7 +18,7 @@ approval-datetime: 2026-09-23T12:31:46+0200
 
 # The cause of alcore's in-run heap ratchet is unknown - correlate before choosing a fix
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-23T12:32:07+0200
-NEXT ACTION: discriminate with an isolated instance where the inputs vary independently — (a) read statusline_store.rs maybe_seal/count_lines and estimate its per-60s allocation vs the WAL size; (b) a paced replay that sends statusline POSTs WITHOUT OTLP, then OTLP WITHOUT statusline (scripts/bench/alcore-ingest-flood.mjs cannot send statusline or pace low — extend it or write a minimal replayer); isolated-instance recipe: own --data-dir clone with server.pid/rss-hard-cap.log/collector-lifecycle.json removed, own ports, AGENTLENS_RSS_HARD_CAP_MB=16384, kill only its own child pid. Report: reports/alcore-heap/20260923_134155+0200-ratchet-correlation.md.
+NEXT ACTION: (1) zero-risk first — redo the correlation on per-interval deltas (Δfootprint vs Δsummary.misses vs Δstatusline per 30 s row, 5-min block maxima, boot phase excluded) from the samples already collected (the report reports/alcore-heap/20260923_134155+0200-ratchet-correlation.md names the TSV); (2) only if still inseparable, the isolated instance with statusline and OTLP load varied independently (recipe in the section above).
 
 Problem — the live collector's phys_footprint climbs until the 2,048 MB guard (TRDD-WKLD508O) exits it; 8 exits on 2026-09-23 (rss-hard-cap.log), all but #1 after WARM boots (server.log "resumed N log tail offsets (0 invalid/rotated -> cold read)"). Candidates: rebuild churn (TRDD-7RM5YW2T), the statusline stream, a boot-phase effect (exits #1 at 251 s and #8 at 640 s). Verified facts: the /api/statusline-samples handler (rust-core/crates/agentlens-core/src/ui.rs:1396-1420) appends to the statusline store and updates counters/activity clock but does NOT bump data_version; statusline POSTs were 18,528 of the last 20,000 lines of requests.log (08:01-10:20Z) - requests.log covers the UI/API port only, OTLP on :4318 is not in it, so this is a request COUNT share, not ingest volume. Current step: a passive 60-minute live correlation of footprint against summary.misses and statusline count (report under reports/alcore-heap/, name ends -ratchet-correlation.md). Shelved: the 3-variant isolated run (scripts/bench/alcore-ingest-flood.mjs cannot send statusline POSTs, pace low, or drive several port sets). Acceptance: [ ] the dominant term named with a fit that discriminates the candidates; [ ] the fix chosen and filed/linked. related: [7RM5YW2T, WKLD508O, 091Z1FU0, MBQ9LXAN, P08Q5TK1, KBM09XHB]. Evidence: reports/alcore-heap/20260923_112303+0200-heap-attribution.md, reports/alcore-heap/20260923_114454+0200-inrun-growth.md, docs_dev/alcore-rebuild-fix/20260923_120809+0200-advisor.md.
 - [ ] on filing the fix card, re-point MBQ9LXAN's and 7RM5YW2T's blocked-by to it (they wait for the fix's deploy, not for this spike)
@@ -30,3 +30,9 @@ The 60-minute passive live correlation (report below) found summary.misses and s
 ## Approval log
 
 - 2026-09-23T12:31:46+0200 — MANDATE issued by main-session (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+
+## 2026-09-23T14:10:37+0200 — correction to the passive-correlation section
+
+The fresh-restart segment (pid 54845, 9.3 usable min) cannot show "no ratchet": at 3.5-7 MB/min the ratchet predicts only 33-65 MB over 9.3 min, while that segment's footprint spread was 657 MB (1,238-1,895 MB, R^2 0.16). It is no evidence either way; the earlier "showed NO ratchet" is withdrawn.
+The r = 0.9992 was computed between two CUMULATIVE counters (summary.misses, statusline receivedSinceBoot); any two monotonic counters correlate near 1. The inconclusive verdict stands but its reason was wrong - the regression must use per-interval deltas.
+count_lines (statusline_store.rs:244-246) is bounded by the WAL size, not "unbounded"; the WAL was ~22.5 MB (/api/server-stats statusline.walBytes 22,530,265 earlier today), so its 60-s transient is on the order of the WAL size - unlikely on its own to drive a 3.5-7 MB/min ratchet; it stays a candidate only as a fragmentation contributor.
