@@ -3,7 +3,7 @@ trdd-id: B07NR7ZI
 title: The hook installer emits a 30 s ceiling on every AgentlensPro hook entry
 column: ai_review
 created: 2026-09-08T22:41:54+0200
-updated: 2026-09-23T13:17:22+0200
+updated: 2026-09-23T13:23:42+0200
 current-owner: main
 task-type: infra
 min-approval-requirement: none
@@ -82,3 +82,7 @@ Ready for human_review; the owner makes that move.
 ## Notes and lessons learned
 
 Owed runs 2026-09-23T13:16:38+0200: pnpm run check-types -> exit=0; pnpm run lint -> exit=0 (0 errors, 456 warnings repo-wide, none in hookInstall.ts); npx mocha (scoped config) out/test/test/cliMatchers.test.js -> 14 passing, 0 failing, exit=0. Settles Box3 (types/lint/cliMatchers test pass) — all three green, checked. Box4 (stale bundle) and Box6 (setup --dry-run drift) were NOT re-run and stay unticked: standalone/cli.js is an untracked local build artifact, not shipped from this working tree state — run node esbuild.js before shipping.
+
+## 2026-09-23 — owed-run note
+
+2026-09-23T13:23:23+0200: Box 3's check-types/lint ran on the working tree, which includes 10 staged, unreviewed prior-session changes (TRDD-ZPSB2WZJ), among them src/cli/delegateGate.ts and src/cli/main.ts — so it certifies HEAD plus that staged work, not HEAD alone.

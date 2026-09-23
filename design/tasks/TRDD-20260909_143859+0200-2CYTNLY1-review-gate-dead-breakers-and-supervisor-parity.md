@@ -3,7 +3,7 @@ trdd-id: 2CYTNLY1
 title: Delete the review gate's dead breakers and give the supervisor the gate's work definition
 column: ai_review
 created: 2026-09-09T14:38:59+0200
-updated: 2026-09-23T13:17:52+0200
+updated: 2026-09-23T13:23:32+0200
 current-owner: main
 task-type: refactor
 priority: medium
@@ -212,3 +212,7 @@ Ready for human_review; the owner makes that move.
 
 ## AI-REVIEW VERDICT 2026-09-23T12:55:54+0200 — APPROVE
 (verdict body is the section immediately above)
+
+## 2026-09-23 — owed-run note
+
+Recount 2026-09-23T13:23:23+0200: without the stale out/test/test/reviewGateEffects.test.js (source deleted), reviewGate + reviewGateTriggers + reviewSupervisor → 127 passing, 0 failing; the earlier 161 included the stale file.
