@@ -258,7 +258,11 @@ pub fn compute_analytics_data(sessions: &[Value]) -> Value {
 /// buildUpdatePayload — the `update` SSE frame body. `collector_gaps` is the lifecycle-derived
 /// downtime list (collector_lifecycle::compute_gaps — both frame sites pass it).
 pub fn build_update_payload(summary: &Value, all_spans: &[std::sync::Arc<Value>], build_id: &str, collector_gaps: Vec<Value>, now_ms: f64) -> Value {
-    let sessions: Vec<Value> = summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
+    // Borrow instead of clone: `.cloned()` deep-copied every session Value
+    // (~22.9k sessions, ~170 MB parsed) on every SSE update frame only to
+    // lend a slice to compute_analytics_data; a borrow is the same data
+    // (TRDD-MBQ9LXAN).
+    let sessions: &[Value] = summary.get("sessions").and_then(Value::as_array).map(Vec::as_slice).unwrap_or(&[]);
     let mut p = Map::new();
     p.insert("type".into(), "update".into());
     p.insert("buildId".into(), build_id.into());
@@ -269,7 +273,7 @@ pub fn build_update_payload(summary: &Value, all_spans: &[std::sync::Arc<Value>]
     }
     p.insert("sessionSummary".into(), strip_session_detail(summary));
     p.insert("sidebar".into(), compute_sidebar_data(summary));
-    p.insert("analyticsData".into(), compute_analytics_data(&sessions));
+    p.insert("analyticsData".into(), compute_analytics_data(sessions));
     p.insert("collectorGaps".into(), Value::Array(collector_gaps));
     // ...(sidebarLive ?? {}) — top-level spread of computeSidebarPayload.
     if let Value::Object(live) = compute_sidebar_payload(summary, all_spans, now_ms) {
