@@ -1,9 +1,9 @@
 ---
 trdd-id: 7RM5YW2T
 title: The 25 ms summary rebuild loop rebuilds the whole window continuously under ingest and is the mimalloc churn
-column: testing
+column: blocked
 created: 2026-09-05T22:06:10+0200
-updated: 2026-09-23T12:32:31+0200
+updated: 2026-09-23T12:42:19+0200
 current-owner: main-session
 implementation-commits: [bd0d48e3, 6698af32, bb8d5f8e, 67e5478cc62f28a49e3877db3885ee3fd727d6ed]
 task-type: bugfix
@@ -15,6 +15,11 @@ parent-trdd: 7YPQWKPG
 related: [7YPQWKPG, 768NEX6E, 2R36W8Q1, YILE6N3T]
 relevant-files: [rust-core/crates/agentlens-core/src/ui.rs]
 labels: [rust-core, memory, cpu, summary-rebuild]
+blocked-by: [EQCGAVGV]
+pre-block-column: testing
+unblock-when: [trdd:EQCGAVGV terminal]
+blocker-probe: [trddgrep, why, 7RM5YW2T]
+blocker-holds-if: not-match:READY
 ---
 
 # The 25 ms summary rebuild loop rebuilds the whole window continuously under ingest and is the mimalloc churn
@@ -134,6 +139,7 @@ churn cut.
 
 - 2026-09-05T22:06:10+0200 — Authored into `dev` (Tier 0 bugfix under the USER-approved parent
   7YPQWKPG; worker dispatched the same turn).
+- 2026-09-23T12:41:39+0200 — column → blocked. ratchet cause now investigated in TRDD-EQCGAVGV; this card closes/fails on its own acceptance once that picks the fix
 
 ## 2026-09-23 — in-run heap ratchet: advisor verdict and the measurement that picks the fix
 
