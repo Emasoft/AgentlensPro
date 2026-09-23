@@ -167,7 +167,7 @@ suite('rustOpenCode — P3d cross-engine parity', () => {
 
   parityTest('🐌 the REAL opencode db on this machine parses identically (native WAL vs _mergeWal)', function () {
     this.timeout(60_000)
-    const real = path.join(os.homedir(), '.local', 'share', 'opencode', 'opencode.db')
+    const real = path.join(process.env.AGENTLENS_TEST_REAL_HOME || os.homedir(), '.local', 'share', 'opencode', 'opencode.db')
     if (!fs.existsSync(real)) this.skip()
     // The TS side runs in a CHILD process: sql.js WASM memory never shrinks, and the real db's
     // byte copy + WAL merge would push this mocha process past the 4096MB rssPressure HWM —

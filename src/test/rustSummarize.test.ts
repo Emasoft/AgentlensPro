@@ -46,7 +46,7 @@ suite('rustSummarize — end-to-end engine parity', () => {
       'sessions, backgroundSpans and efficiency must match field-for-field')
   })
 
-  const spansDir = path.join(os.homedir(), '.agentlens', 'spans')
+  const spansDir = path.join(process.env.AGENTLENS_TEST_REAL_HOME || os.homedir(), '.agentlens', 'spans')
   const realDays = fs.existsSync(spansDir)
     ? fs.readdirSync(spansDir).filter(f => f.endsWith('.ndjson')).sort()
     : []

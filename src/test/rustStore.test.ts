@@ -16,10 +16,14 @@ const haveBin = fs.existsSync(BIN)
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'al-xstore-'))
 
 function realBody(): { raw: string; name: string } | null {
-  for (const dir of ['/Volumes/AgentLensSpool/otel-bodies', path.join(os.homedir(), '.agentlens', 'otel-bodies')]) {
+  // Round-2 default isolation (src/test/setup.js) swaps HOME to a throwaway temp dir for the
+  // whole suite, so a plain os.homedir() would always miss this real, opt-in-only sample. Read
+  // the captured real HOME instead -- this is read-only sampling of the real corpus, never a write.
+  const realHome = process.env.AGENTLENS_TEST_REAL_HOME || os.homedir()
+  for (const dir of ["/Volumes/AgentLensSpool/otel-bodies", path.join(realHome, ".agentlens", "otel-bodies")]) {
     try {
-      const f = fs.readdirSync(dir).find(n => n.endsWith('.request.json'))
-      if (f) return { raw: fs.readFileSync(path.join(dir, f), 'utf8'), name: f }
+      const f = fs.readdirSync(dir).find(n => n.endsWith(".request.json"))
+      if (f) return { raw: fs.readFileSync(path.join(dir, f), "utf8"), name: f }
     } catch { /* try next */ }
   }
   return null

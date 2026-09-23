@@ -129,7 +129,7 @@ suite('rustLogScan — P2 cross-engine parity', () => {
 
   parityTest('🐌 a REAL transcript from this machine parses identically', function () {
     this.timeout(60_000)
-    const real = path.join(os.homedir(),
+    const real = path.join(process.env.AGENTLENS_TEST_REAL_HOME || os.homedir(),
       '.claude', 'projects', '-Users-emanuelesabetta-Code-AgentlensPro')
     let candidate: string | null = null
     try {

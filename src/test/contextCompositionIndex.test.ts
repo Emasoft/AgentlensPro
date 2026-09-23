@@ -15,7 +15,9 @@ import { estimateTokensFromBytes } from '../tokenEstimator'
 // that dir is absent (CI). The logic tests write real body JSON files to a tmp dir and drive the real
 // buildCallContext parse + the real registry — no mocks anywhere.
 
-const OTEL_DIR = path.join(os.homedir(), '.agentlens', 'otel-bodies')
+// Round-2 default isolation (src/test/setup.js) swaps HOME to a throwaway temp dir for the whole
+// suite; read the captured real HOME so this real-corpus, read-only sample keeps sampling it.
+const OTEL_DIR = path.join(process.env.AGENTLENS_TEST_REAL_HOME || os.homedir(), '.agentlens', 'otel-bodies')
 
 // A minimal but real Anthropic Messages request body (the exact shape buildCallContext parses).
 interface Body { model: string; metadata: { user_id: string }; system: Array<{ type: string; text: string }>; tools: unknown[]; messages: Array<{ role: string; content: unknown }> }

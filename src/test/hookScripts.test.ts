@@ -16,6 +16,8 @@ import type { AddressInfo } from 'net'
 //                       else POST stdin to /api/agent-gate and print the response body
 //                       VERBATIM; empty body ⇒ no output; server-down ⇒ silent exit 0.
 
+import * as fs from 'fs'
+
 const CLI_JS = path.resolve(__dirname, '..', '..', '..', 'standalone', 'cli.js')
 
 interface Captured { method: string; url: string; body: string }
@@ -197,5 +199,59 @@ suite('agentlenspro hook/gate — single-executable handler contracts', () => {
     const r = await run('gate', baseEnv({ AGENTLENS_UI_URL: `http://127.0.0.1:${dead}`, AGENTLENS_GATE_TIMEOUT: '2' }), launch)
     assert.strictEqual(r.code, 0, 'gate must fail open (exit 0) when the server is down')
     assert.strictEqual(r.stdout, '', 'no output when the server is unreachable')
+  })
+
+  test('round-2 default isolation: a server-down hook run writes its spool + revive-lock artefacts under the TEMP data dir, never the real one', async () => {
+    // src/test/setup.js overrides DATA_DIR/HOME for the whole run BEFORE this file's own
+    // baseEnv() spreads process.env into the child — this proves the redirection actually reaches
+    // the two writes that used to land in the REAL ~/.agentlens (spoolHookEvent + the
+    // .daemon-revive.lock write in reviveDaemonDetached()), both of which run BEFORE that
+    // function's own AGENTLENS_NO_REVIVE check.
+    const testDataDir = process.env.DATA_DIR
+    assert.ok(testDataDir, 'this suite must run under the global test DATA_DIR override (src/test/setup.js)')
+    const realHome = process.env.AGENTLENS_TEST_REAL_HOME
+    assert.ok(realHome, 'src/test/setup.js must have captured the real HOME')
+    const marker = `hookScripts-regression-${process.pid}-${Date.now()}`
+    const dead = await freePort()
+    const payload = JSON.stringify({ hook_event_name: 'Stop', session_id: marker })
+    const r = await run('hook', baseEnv({ AGENTLENS_UI_URL: `http://127.0.0.1:${dead}`, AGENTLENS_HOOK_TIMEOUT: '1' }), payload)
+    assert.strictEqual(r.code, 0)
+
+    const spoolDir = path.join(testDataDir as string, 'hook-spool')
+    const spooled = fs.readdirSync(spoolDir).filter((n) => n.endsWith('.json'))
+      .some((n) => fs.readFileSync(path.join(spoolDir, n), 'utf-8').includes(marker))
+    assert.ok(spooled, `expected a spooled event carrying ${marker} under ${spoolDir}`)
+
+    assert.ok(fs.existsSync(path.join(testDataDir as string, '.daemon-revive.lock')),
+      'expected the revive lock under the TEMP data dir')
+
+    const realSpoolDir = path.join(realHome as string, '.agentlens', 'hook-spool')
+    let realLeaked = false
+    try {
+      realLeaked = fs.readdirSync(realSpoolDir).some((n) => {
+        try { return fs.readFileSync(path.join(realSpoolDir, n), 'utf-8').includes(marker) } catch { return false }
+      })
+    } catch { /* no real spool dir on this machine — nothing to leak into */ }
+    assert.strictEqual(realLeaked, false, `this run's marker leaked into the REAL spool dir ${realSpoolDir}`)
+  })
+
+  test('round-2 isolation guard: assertContained throws on a real-HOME path, not just a temp one', () => {
+    // Exercises the ACTUAL guard exported by src/test/setup.js (not a re-implementation of its
+    // logic) — proves it refuses a path outside its own temp root rather than trusting it never
+    // fired during a normal run.
+    // setup.js is a plain .js file (not compiled by tsc.test.json), and mocha's own `require:`
+    // entry in .mocharc.cjs already loaded it from THIS path relative to the repo root — resolve
+    // it the same way here rather than relative to this test's own (compiled, differently-located)
+    // out/test/test/ path.
+    const setup = require(path.join(process.cwd(), 'src', 'test', 'setup.js')) as {
+      assertContained: (label: string, p: string) => void
+    }
+    const realHome = process.env.AGENTLENS_TEST_REAL_HOME as string
+    // Round-3: the guard's containment root was broadened from "this run's own TEST_ROOT" to
+    // "the whole system tmp root" (many pre-existing tests legitimately point HOME/DATA_DIR at a
+    // SIBLING mkdtemp, not nested under our TEST_ROOT — see setup.js's assertContained comment).
+    // A real HOME path is under neither, so it must still throw either way.
+    assert.throws(() => setup.assertContained('HOME', realHome), /not inside the system temp root/,
+      'the guard must refuse a real-HOME path')
   })
 })

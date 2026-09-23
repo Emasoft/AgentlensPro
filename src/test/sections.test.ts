@@ -103,7 +103,7 @@ suite('sections — content addressing', () => {
 
 suite('sections — against REAL captured bodies', () => {
   // The synthetic cases pin the edge conditions; these prove it on the data we actually ship.
-  const dir = path.join(os.homedir(), '.agentlens', 'otel-bodies')
+  const dir = path.join(process.env.AGENTLENS_TEST_REAL_HOME || os.homedir(), '.agentlens', 'otel-bodies')
   let files: string[] = []
   try {
     files = fs.readdirSync(dir).filter((f) => f.endsWith('.request.json')).slice(0, 25)
