@@ -172,6 +172,43 @@ function realpathOrParent(p) {
     return path.join(fs.realpathSync(path.dirname(p)), path.basename(p))
   }
 }
+
+/** Every `alcore serve --data-dir X` already running BEFORE this mocha run started, realpath'd
+ *  once at load time (never re-scanned — a server THIS run itself boots is not in this list and
+ *  must not be, or a test booting its own isolated server under the tmp root would trip its own
+ *  guard). Widening assertContained's containment check to "anywhere under the system tmp root"
+ *  (Round-3 fix above) means a LEAKED live server whose data dir also happens to sit under
+ *  os.tmpdir() (e.g. a debug `alcore --data-dir .../T/al-shutdown-2141-term-data`, TRDD-4FLTDMHA)
+ *  would otherwise pass the guard as "contained" even though it is someone else's real running
+ *  data, not this run's own scratch space. `ps -eo pid,command` is snapshotted ONCE via the same
+ *  process-table-to-a-string pattern used elsewhere in this file (never a live `ps | grep`, which
+ *  would match its own invoking shell's argv). */
+function findLiveServerDataDirs() {
+  try {
+    const out = execFileSync('ps', ['-eo', 'pid,command'], { encoding: 'utf-8' })
+    const dirs = []
+    for (const line of out.split('\n')) {
+      const m = line.match(/\balcore\b.*?\bserve\b.*?--data-dir[= ]+(\S+)/)
+      if (!m) continue
+      try { dirs.push(fs.realpathSync(m[1])) } catch { /* the named dir is already gone — nothing to protect */ }
+    }
+    return dirs
+  } catch {
+    return [] // ps unavailable — cannot enumerate; the guard degrades to the tmp-root-only check
+  }
+}
+
+
+// Returns a copy of the load-time snapshot so a test can restore it exactly (setup.js exposed
+// only a setter before; a test that needs to save-then-restore had no getter to save from).
+exports._getLiveServerDataDirsForTest = () => LIVE_SERVER_DATA_DIRS.slice()
+
+let LIVE_SERVER_DATA_DIRS = findLiveServerDataDirs()
+// Test-only override so hookScripts.test.ts can prove the clause below throws for a pre-existing
+// live server's data dir WITHOUT spawning a real alcore (this snapshot only runs once, at require
+// time, before any test's own server exists to pollute it).
+exports._setLiveServerDataDirsForTest = (dirs) => { LIVE_SERVER_DATA_DIRS = dirs }
+
 function assertContained(label, p) {
   const real = realpathOrParent(p)
   // Round-3 fix (found by running the FULL suite, not just the 2 targeted regression tests):
@@ -192,9 +229,22 @@ function assertContained(label, p) {
   // os.tmpdir()), not TEST_ROOT_REAL (just this run's own subdir of it).
   if (real !== TMP_ROOT_REAL && !real.startsWith(TMP_ROOT_REAL + path.sep)) {
     throw new Error(
-      `test isolation guard: ${label} (${real}) is not inside the system temp root ` +
+      `ABORTING remaining tests — test isolation guard: ${label} (${real}) is not inside the system temp root ` +
       `(${TMP_ROOT_REAL}) -- refusing to run rather than risk touching the real ${label}`,
     )
+  }
+  // A path CAN sit under the system tmp root (satisfying the check above) and still not be OUR
+  // scratch space: a live `alcore serve --data-dir X` that was already running before this run
+  // started (e.g. a leaked debug instance, TRDD-4FLTDMHA) may itself have picked a data dir under
+  // os.tmpdir(). That dir is real, in-use production data — refuse it just as loudly as a real
+  // HOME, or this run could write into (or the afterAll cleanup could delete) a live server's data.
+  for (const liveDir of LIVE_SERVER_DATA_DIRS) {
+    if (real === liveDir || real.startsWith(liveDir + path.sep)) {
+      throw new Error(
+        `ABORTING remaining tests — test isolation guard: ${label} (${real}) is the data dir of an ` +
+        `already-running alcore server (${liveDir}) -- refusing to run rather than touch its data`,
+      )
+    }
   }
 }
 
