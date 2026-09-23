@@ -1,9 +1,9 @@
 ---
 trdd-id: EQCGAVGV
 title: The cause of alcore's in-run heap ratchet is unknown - correlate before choosing a fix
-column: dev
+column: blocked
 created: 2026-09-23T12:31:46+0200
-updated: 2026-09-23T23:07:51+0200
+updated: 2026-09-23T23:12:30+0200
 current-owner: main-session
 created-by: main-session
 task-type: spike
@@ -15,6 +15,8 @@ approved: true
 approval-judge: main-session
 approval-datetime: 2026-09-23T12:31:46+0200
 npt: [C19SUVPH, PQ40PZ9D, 9SOYXKNE, Z0A777XW, CEAZZHHO]
+blocked-by: [PQ40PZ9D, Z0A777XW, CEAZZHHO]
+pre-block-column: dev
 ---
 
 # The cause of alcore's in-run heap ratchet is unknown - correlate before choosing a fix
@@ -22,9 +24,9 @@ npt: [C19SUVPH, PQ40PZ9D, 9SOYXKNE, Z0A777XW, CEAZZHHO]
 NEXT ACTION (restructured 2026-09-23 from four amendment layers; evidence in the reports named):
 - DONE (1): the per-interval redo is UNINFORMATIVE, not a negative - at 30-s resolution neither counter tracks footprint (max |r| 0.15) because single deltas swing -524..+448 MB against a ~5-8 MB/interval ratchet (reports/alcore-heap/20260923_190539+0200-per-interval-correlation.md).
 - DROPPED (2): a passive live capture - at 5-min blocks r(sum dMiss, sum dStat) = 0.94/0.85, above the pre-stated 0.7, and live processes last 36-126 min, shorter than the ~2.2 h per arm needed (reports/alcore-heap/20260923_192620+0200-step2-design-data.md).
-- NOW (3): controlled arms on an isolated instance built from HEAD, never the live collector. Arms: baseline (not idle: the 60-s FULL_RESCAN, maybe_seal and seven more timer chores run), statusline-only, OTLP-only, transcript-append. Each >= 26 five-minute blocks (~2.2 h) or until its guard exit; seeded with a live-size log corpus in a gitignored scratch path (check free disk first - 70 GB free at 23:00 on 2026-09-23 - and safe-delete after); sampled every 30 s; judged on the block-min slope (secondary: block max, spread, p10, time-to-guard). An arm is attributed only if |slope_arm - slope_baseline| / SE(diff) >= 1.96 AND the difference is >= 5 MB/min; otherwise report the achieved power at 5 and 10 MB/min, never a null.
+- NEXT (3), once the npt cards below are done: controlled arms on an isolated instance built from HEAD, never the live collector. Arms: baseline (not idle: the 60-s FULL_RESCAN, maybe_seal and seven more timer chores run), statusline-only, OTLP-only, transcript-append. Each >= 26 five-minute blocks (~2.2 h) or until its guard exit; seeded with a live-size log corpus in a gitignored scratch path (check free disk first - 70 GB free at 23:00 on 2026-09-23 - and safe-delete after); sampled every 30 s; judged on the block-min slope (secondary: block max, spread, p10, time-to-guard). An arm is attributed only if |slope_arm - slope_baseline| / SE(diff) >= 1.96 AND the difference is >= 5 MB/min; otherwise report the achieved power at 5 and 10 MB/min, never a null.
 - Prerequisites (npt): C19SUVPH (flood tool, done: bbf40fdf through 10cc720b), PQ40PZ9D (transcript-append arm), 9SOYXKNE (otlp.* counters, done: 221705cb), Z0A777XW (tracked sampler), CEAZZHHO (live new-session rate).
-- Calibrate each arm to live rates: statusline 1.97/s with --subagent-share 0.31; hooks 0.097/s; OTLP to the rate of span-yielding payloads, since data_version rises once per payload that yields at least one span (metrics never; logs only when they yield spans).
+- Calibrate each arm to live rates: statusline 1.97/s with --subagent-share 0.31; OTLP to the live rate of span-yielding payloads (data_version rises once per payload that yields at least one span, metrics never, logs only when they yield spans), with --spans-per-request = 2.76 live spans/s divided by that payload rate; --new-session-every from CEAZZHHO's measured rate; always --progress-sec 60. Hook events (0.097/s live) never bump data_version and have no arm; they are not a candidate. Kind mix: the flood tool sends only /v1/traces, while live OTLP is likely mostly logs (INFERRED) - before the OTLP arm runs, either reproduce the live kind mix (/v1/logs and /v1/metrics flood modes, see the conditional-prerequisite section) or show that /v1/traces takes the same parse, store and allocation path as logs (process_logs also feeds the account registry, body pointers and dropped-event persistence).
 - Live OTLP rate, preferred method first: (c) count distinct receivedAt stamps per minute in <data-dir>/spans/ day files, .gz included (one stamp per span-yielding payload; SpanStoreWriter::load_range reads them). It is the OTLP share of data_version bumps only, a lower bound on bumps, and bumps are not rebuilds (the cost back-off merges them). Preconditions: count only days written after the TRDD-GR6WHHK5 stamping fix reached the deployed binary (earlier days lack receivedAt - missing, not zero); spans.droppedOnFailure == 0; no other path rewrites spans/ without the stamp (check `tldr references stamp_received_at`). The non-OTLP bump source, log-card updates (put_log_session), has a proxy in persistence.cardsWrites deltas (batching unverified). (a) Deploy 221705cb or later, then per-pid otlp.* deltas (a lower bound on POSTs; live 2.33.2 has no otlp key, and only that key - not the version string - tells the builds apart). (b) An INFERRED upper bound only: export interval x Claude Code processes.
 - The live deploy of f0dca453, c16e5283 and 221705cb is the user's pending decision; it does not affect the isolated run.
 
@@ -38,6 +40,7 @@ The 60-minute passive live correlation (report below) found summary.misses and s
 ## Approval log
 
 - 2026-09-23T12:31:46+0200 — MANDATE issued by main-session (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-09-23T23:12:30+0200 — column → blocked. waits on the open npt prerequisite cards; the passive work that ran in dev is done
 
 ## 2026-09-23T14:10:37+0200 — correction to the passive-correlation section
 
