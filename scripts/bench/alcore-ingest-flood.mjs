@@ -36,34 +36,57 @@ function parseArgs(argv) {
     rate: 0, spansPerRequest: 20, newSessionEvery: 0, progressSec: 300, subagentShare: 0.31, allowLive: false,
   };
   const errors = [];
+  const given = new Set();
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--allow-live') { out.allowLive = true; continue; }
     if (a === '--mix') { out.mix = argv[++i]; continue; }
-    const key = FLAG_TO_KEY[a];
+    // Object.hasOwn, not a bare index: FLAG_TO_KEY[a] resolves an inherited name like
+    // "constructor" or "toString" to Object.prototype's own method instead of undefined,
+    // so `constructor 1` on the CLI silently passed through as a "known" flag.
+    const key = Object.hasOwn(FLAG_TO_KEY, a) ? FLAG_TO_KEY[a] : undefined;
     if (!key) { errors.push(`unknown flag: ${a}`); continue; }
     const raw = argv[++i];
+    // raw.trim() === '': Number('') is 0, which passes `value < 0` and
+    // Number.isFinite, so an unset shell var (`--rate "$UNSET"` -> `--rate ""`) silently
+    // became rate=0 — the flat-out-flood default — instead of a caught bad argument.
+    if (raw === undefined || raw.trim() === '') {
+      errors.push(`invalid value for ${a}: ${JSON.stringify(raw)}`);
+      continue;
+    }
     const value = Number(raw);
-    if (raw === undefined || !Number.isFinite(value) || value < 0) {
+    if (!Number.isFinite(value) || value < 0) {
       errors.push(`invalid value for ${a}: ${JSON.stringify(raw)}`);
       continue;
     }
     out[key] = value;
+    given.add(key);
   }
-  return { out, errors };
+  return { out, errors, given };
 }
 
 /** Cross-field / enum checks parseArgs cannot do inline. Runs before any http call so a bad
  *  flag combination fails fast (exit 2) instead of burning the run's --seconds. */
-function validateArgs(out) {
+function validateArgs(out, given) {
   const errors = [];
   if (!['otlp', 'hooks', 'both', 'statusline'].includes(out.mix)) errors.push(`--mix must be one of otlp,hooks,both,statusline, got ${JSON.stringify(out.mix)}`);
   if (!(out.concurrency >= 1)) errors.push('--concurrency must be >= 1');
+  // Array.from({ length: 2.5 }) makes 2 workers while paceMsPerReq is computed from the
+  // un-truncated 2.5 — the pacing math and the actual worker count would then disagree.
+  if (!Number.isInteger(out.concurrency)) errors.push('--concurrency must be an integer');
   if (!(out.seconds > 0)) errors.push('--seconds must be > 0');
   if (!(out.progressSec >= 1)) errors.push('--progress-sec must be >= 1');
   if (!(out.subagentShare >= 0 && out.subagentShare <= 1)) errors.push('--subagent-share must be within [0,1]');
   if (!Number.isInteger(out.otlpPort) || out.otlpPort < 1 || out.otlpPort > 65535) errors.push('--otlp-port must be an integer in 1-65535');
   if (!Number.isInteger(out.uiPort) || out.uiPort < 1 || out.uiPort > 65535) errors.push('--ui-port must be an integer in 1-65535');
+  // Flat-out (rate=0, sessions=0) stays reachable only by omitting BOTH --rate and --sessions;
+  // once --rate is explicitly given it must actually pace something, or it silently reduces to
+  // the flat-out flood the whole flag exists to avoid.
+  if (given.has('rate') && !(out.rate > 0)) errors.push('--rate must be > 0 when given');
+  if (!Number.isInteger(out.spansPerRequest) || out.spansPerRequest < 1) errors.push('--spans-per-request must be an integer >= 1');
+  if (!(out.spansPerSession >= 1)) errors.push('--spans-per-session must be >= 1');
+  if (!(out.newSessionEvery === 0 || out.newSessionEvery >= 1)) errors.push('--new-session-every must be 0 or >= 1');
+  if (!Number.isInteger(out.sessions)) errors.push('--sessions must be an integer');
   return errors;
 }
 
@@ -71,8 +94,8 @@ function validateArgs(out) {
 // a numeric flag with a missing/non-finite/negative value, or an out-of-range value must exit 2
 // immediately, never run silently with a default (`--rate=2` matches no exact flag string above
 // and is therefore an unknown flag, not a lenient `--rate 2`).
-const { out: args, errors: parseErrors } = parseArgs(process.argv.slice(2));
-const argErrors = [...parseErrors, ...validateArgs(args)];
+const { out: args, errors: parseErrors, given: givenFlags } = parseArgs(process.argv.slice(2));
+const argErrors = [...parseErrors, ...validateArgs(args, givenFlags)];
 if (argErrors.length > 0) {
   console.error(`bad arguments: ${argErrors.join('; ')}`);
   process.exit(2);
@@ -232,7 +255,6 @@ function makeStatuslinePayload() {
   // B3: rate_limits are account-wide and rise slowly across the whole run — see rateLimitState.
   rateLimitState.fiveHour.usedPercentage = Math.min(100, rateLimitState.fiveHour.usedPercentage + 0.001);
   rateLimitState.sevenDay.usedPercentage = Math.min(100, rateLimitState.sevenDay.usedPercentage + 0.001);
-  const nowSec = Math.floor(Date.now() / 1000);
   // B3: no `ts` field here — the server STAMPS ITS OWN ts on every stored row. statusline_store.rs
   // `append()` (rust-core/crates/agentlens-core/src/statusline_store.rs:289-304) flattens the
   // client payload, then does `flat.insert("ts", num(ts_ms))` with its OWN now_ms(), overwriting
@@ -281,7 +303,10 @@ function makeStatuslinePayload() {
       warm: true,
       caching_observed: true,
       ttl: '1h',
-      expires_at: nowSec + 3600,
+      // Fixed per run (RUN_START_SEC), not nowSec per sample — an expires_at that moves every
+      // tick has the same per-second cardinality problem already removed from resets_at (B3):
+      // one real cache write has ONE expiry, not a fresh one on every statusline sample.
+      expires_at: RUN_START_SEC + 3600,
       requests: Math.floor(Math.random() * 300),
       misses: Math.floor(Math.random() * 5),
       expected_rebuilds: 0,
@@ -311,6 +336,10 @@ function post(agent, port, path, body) {
     const req = http.request(
       { host: '127.0.0.1', port, path, method: 'POST', agent, headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) } },
       (res) => {
+        // A destroy() on an in-flight response (our own timeout below, or the peer resetting the
+        // socket after headers landed) emits 'error' on res, not just on req — uncaught, that
+        // throws out of the Promise executor and kills the whole run with no result JSON.
+        res.on('error', () => resolve(0));
         res.resume();
         res.on('end', () => resolve(res.statusCode));
       },
@@ -342,6 +371,10 @@ async function getJson(port, path) {
           reject(e);
         }
       });
+      // A destroy() on an in-flight response (our own setTimeout below, or the peer resetting the
+      // socket after headers landed) emits 'error' on res, not just on req — uncaught, that
+      // throws out of the Promise executor and kills the whole multi-minute run over one dropped GET.
+      res.on('error', reject);
     }).on('error', reject);
     // B1: same wedge risk `post` already guards against (2026-08-29 hang, see its comment) — a
     // stats GET with no timeout can block a tick, the initial read, or the final read forever
@@ -569,7 +602,10 @@ async function main() {
     // N3: pid + the two counters this bench cares about most, straight from the fresh snapshot
     // (falling back to the last good one when this tick's own GET failed).
     const s = snap ?? lastGood;
-    console.error(`[progress] mix=${args.mix} elapsed=${elapsedSoFar}s requests=${counters.requests} ok=${counters.ok} bad=${counters.bad} pid=${s.pid} statuslineReceived=${s.statuslineReceived} spansTotal=${s.spansTotal}`);
+    // stale=true when THIS tick's own GET failed and we fell back to lastGood — otherwise the
+    // printed pid/counters look like a fresh read when they may be a whole progressSec old.
+    const staleSuffix = snap ? '' : ' stale=true';
+    console.error(`[progress] mix=${args.mix} elapsed=${elapsedSoFar}s requests=${counters.requests} ok=${counters.ok} bad=${counters.bad} pid=${s.pid} statuslineReceived=${s.statuslineReceived} spansTotal=${s.spansTotal}${staleSuffix}`);
   }, Math.max(1, args.progressSec) * 1000);
 
   const workers = Array.from(
