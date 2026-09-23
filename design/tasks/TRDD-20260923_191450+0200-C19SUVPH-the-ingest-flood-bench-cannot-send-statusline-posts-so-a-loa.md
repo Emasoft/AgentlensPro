@@ -3,7 +3,7 @@ trdd-id: C19SUVPH
 title: The ingest flood bench cannot send statusline POSTs so a load arm cannot vary statusline alone
 column: ai_review
 created: 2026-09-23T19:14:50+0200
-updated: 2026-09-23T21:19:04+0200
+updated: 2026-09-23T21:23:25+0200
 current-owner: main-session
 created-by: main-session
 task-type: infra
@@ -14,7 +14,7 @@ mandated-by: none
 approved: true
 approval-judge: main-session
 approval-datetime: 2026-09-23T19:14:50+0200
-implementation-commits: [bbf40fdf, ea835fdf, d18dc9a1, fb61c4f4]
+implementation-commits: [bbf40fdf, ea835fdf, d18dc9a1, fb61c4f4, 9b599f21]
 ---
 
 # The ingest flood bench cannot send statusline POSTs so a load arm cannot vary statusline alone
@@ -65,5 +65,9 @@ The ticked acceptance first rested on the bbf40fdf verification; after the ea835
 
 ## Verification on fb61c4f4 and the first-fire follow-up (2026-09-23)
 
-Isolated alcore (own HOME/DATA_DIR, ports 4901/3901/4916): (i) statusline --rate 2 --concurrency 4 x 60 s -> ok2xx 120, statuslineReceivedDelta 120, underRate false; (ii) statusline --rate 1 --concurrency 32 x 60 s -> ok2xx 60, underRate false; (iii) killing the target at ~60 s during a --rate 2 --concurrency 1 x 300 s run -> exit 3, targetDownAtSec 60.002, deltaBasis tick. fb61c4f4 checks already run and reconfirmed: a 640 s-pace OTLP --seconds 30 run ends in 30 s with 0 late requests; --rate 0.00001 --concurrency 32 x 10 s ends in 10 s with no TimeoutOverflowWarning; --sessions 0 exits 2.
+Isolated alcore (own HOME/DATA_DIR, ports 4901/3901/4916): (i) statusline --rate 2 --concurrency 4 x 60 s -> ok2xx 120, statuslineReceivedDelta 120, underRate false; (ii) statusline --rate 1 --concurrency 32 x 60 s -> ok2xx 60, underRate false; (iii) killing the target at ~60 s during a --rate 2 --concurrency 1 x 300 s run -> exit 3, targetDownAtSec 60.002, deltaBasis tick. fb61c4f4 checks ran on fb61c4f4 but were not re-run after the first-fire change (expected to hold, with request counts now 2 and 1 instead of 0 and ~0): a 640 s-pace OTLP --seconds 30 run ends in 30 s with 0 late requests; --rate 0.00001 --concurrency 32 x 10 s ends in 10 s with no TimeoutOverflowWarning; --sessions 0 exits 2.
 Known limit: when --rate and --sessions are both given, --rate wins and --sessions is ignored without a warning.
+
+## Behaviour change for older recipes (9b599f21)
+
+The first-fire change also affects the --sessions lane: each worker now fires at its stagger instead of one pace later, so a run delivers up to one more request per worker than HFV4AIT7-era numbers; underRate does not report this lane (targetReqPerSec is 0).

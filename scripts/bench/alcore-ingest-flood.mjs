@@ -433,7 +433,7 @@ async function worker(i, agentOtlp, agentUi, state, mix, counters, paceMsPerReq)
   // period, so this only cancels the redundant extra sleep before the FIRST request that a plain
   // Date.now() start added on top of it. With the deadline cap in place, that extra sleep
   // under-delivered every run by ~1.5*pace (e.g. --rate 1 --concurrency 32 --seconds 300
-  // delivered ~252/300) and could false-flag underRate. No-op when paceMsPerReq is 0.
+  // would deliver ~252/300 by calculation) and could false-flag underRate. No-op when paceMsPerReq is 0.
   let nextAt = Date.now() - paceMsPerReq;
   while (Date.now() < state.deadline && !state.stopped) {
     if (paceMsPerReq > 0) {
@@ -442,6 +442,7 @@ async function worker(i, agentOtlp, agentUi, state, mix, counters, paceMsPerReq)
       // Behind schedule: do not try to catch up, or a stall becomes a burst that measures
       // something the fleet would never do.
       if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+      // The first iteration always lands here (nextAt starts one pace early), which anchors the schedule at the first send - keep that if this branch ever gains catch-up logic.
       else nextAt = Date.now();
     }
     // Re-check after any sleep above: the deadline may have passed while we were waiting, and a
