@@ -79,10 +79,12 @@ function validateArgs(out, given) {
   if (!(out.subagentShare >= 0 && out.subagentShare <= 1)) errors.push('--subagent-share must be within [0,1]');
   if (!Number.isInteger(out.otlpPort) || out.otlpPort < 1 || out.otlpPort > 65535) errors.push('--otlp-port must be an integer in 1-65535');
   if (!Number.isInteger(out.uiPort) || out.uiPort < 1 || out.uiPort > 65535) errors.push('--ui-port must be an integer in 1-65535');
-  // Flat-out (rate=0, sessions=0) stays reachable only by omitting BOTH --rate and --sessions;
-  // once --rate is explicitly given it must actually pace something, or it silently reduces to
-  // the flat-out flood the whole flag exists to avoid.
+  // Flat-out (rate=0, sessions=0) is rejected outright now: an explicit zero on EITHER
+  // --rate or --sessions errors below, so flat-out is reachable only by omitting BOTH flags.
   if (given.has('rate') && !(out.rate > 0)) errors.push('--rate must be > 0 when given');
+  // Mirrors the --rate rule directly above: --sessions "$N" with N=0 was another flat-out
+  // path, since a session count of 0 leaves nothing to bound the request rate either.
+  if (given.has('sessions') && !(out.sessions > 0)) errors.push('--sessions must be > 0 when given');
   if (!Number.isInteger(out.spansPerRequest) || out.spansPerRequest < 1) errors.push('--spans-per-request must be an integer >= 1');
   if (!(out.spansPerSession >= 1)) errors.push('--spans-per-session must be >= 1');
   if (!(out.newSessionEvery === 0 || out.newSessionEvery >= 1)) errors.push('--new-session-every must be 0 or >= 1');
@@ -419,20 +421,27 @@ async function worker(i, agentOtlp, agentUi, state, mix, counters, paceMsPerReq)
   // Stagger: worker i's FIRST request waits i*pace/concurrency ms, so `--rate` workers fan out
   // across one pacing period instead of firing a synchronized burst every period (TRDD-C19SUVPH
   // item 2) — a real fleet's sessions do not all call out on the same tick.
+  // Capped at the remaining run time (state.deadline - now): an uncapped stagger/pacing sleep let
+  // a --seconds 30 run with a slow --rate take minutes to finish, sending every request AFTER the
+  // deadline had already passed — and setTimeout clamps any delay above 2^31-1 ms down to 1 ms,
+  // turning an oversized wait into a hidden flat-out loop instead of a slow one.
   if (paceMsPerReq > 0 && args.concurrency > 1) {
-    const stagger = (i * paceMsPerReq) / args.concurrency;
+    const stagger = Math.min((i * paceMsPerReq) / args.concurrency, state.deadline - Date.now());
     if (stagger > 0) await new Promise((r) => setTimeout(r, stagger));
   }
   let nextAt = Date.now();
   while (Date.now() < state.deadline && !state.stopped) {
     if (paceMsPerReq > 0) {
       nextAt += paceMsPerReq;
-      const wait = nextAt - Date.now();
+      const wait = Math.min(nextAt - Date.now(), state.deadline - Date.now());
       // Behind schedule: do not try to catch up, or a stall becomes a burst that measures
       // something the fleet would never do.
       if (wait > 0) await new Promise((r) => setTimeout(r, wait));
       else nextAt = Date.now();
     }
+    // Re-check after any sleep above: the deadline may have passed while we were waiting, and a
+    // request sent past it would count against a window this run no longer owns.
+    if (Date.now() >= state.deadline || state.stopped) break;
     const kind = pick(mix);
     const t0 = performance.now();
     const status = kind === 'otlp'

@@ -3,7 +3,7 @@ trdd-id: C19SUVPH
 title: The ingest flood bench cannot send statusline POSTs so a load arm cannot vary statusline alone
 column: ai_review
 created: 2026-09-23T19:14:50+0200
-updated: 2026-09-23T20:36:41+0200
+updated: 2026-09-23T21:03:15+0200
 current-owner: main-session
 created-by: main-session
 task-type: infra
@@ -14,7 +14,7 @@ mandated-by: none
 approved: true
 approval-judge: main-session
 approval-datetime: 2026-09-23T19:14:50+0200
-implementation-commits: [bbf40fdf]
+implementation-commits: [bbf40fdf, ea835fdf, d18dc9a1]
 ---
 
 # The ingest flood bench cannot send statusline POSTs so a load arm cannot vary statusline alone
@@ -58,3 +58,7 @@ Item 1: no ts is sent - the server stamps its own ts on every row (statusline_st
 Item 5 as implemented: the revive check compares the pid of the first read with the pid of the final read (or last good tick), not every tick; a pid change nulls every delta. deltaBasis (final|tick|before) names the read the deltas rest on; with basis before, every delta is null.
 Item 6 as implemented: only status 0 (no response, socket error, timeout) counts toward target-down; 4xx/5xx are the server answering. getJson now has the same REQUEST_TIMEOUT_MS as post.
 Added: every flag is validated before any http call (unknown flag, missing/non-finite/negative number, --mix outside otlp|hooks|both|statusline, out-of-range ports/share/concurrency) -> exit 2; underRate is judged on achievedOkPerSec (2xx only).
+
+## Re-verification on d18dc9a1 (2026-09-23)
+
+The ticked acceptance first rested on the bbf40fdf verification; after the ea835fdf and d18dc9a1 fixes (status-0-only target-down, flag validation incl. empty/zero values) all checks were re-run on the fixed code against an isolated alcore: statusline --rate 2 x 300 s and OTLP --rate 1 --spans-per-request 20 x 300 s passed their count checks; ten bad-flag cases (incl. --rate '', --rate 0, --spans-per-request 0, --concurrency 2.5, constructor 1) and both live-port cases exit 2 with no HTTP request; killing the target at 60 s exits 3 with targetDownAtSec 60.003 and stale=true on the fallback progress lines. Report: reports/flood-bench/20260923_205703+0200-ea835fdf-followup.md (gitignored).
