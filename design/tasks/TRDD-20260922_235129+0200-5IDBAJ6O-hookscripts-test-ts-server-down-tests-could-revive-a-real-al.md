@@ -3,7 +3,7 @@ trdd-id: 5IDBAJ6O
 title: hookScripts.test.ts server-down tests could revive a real alcore on the real data dir
 column: dev
 created: 2026-09-22T23:51:29+0200
-updated: 2026-09-23T05:56:50+0200
+updated: 2026-09-23T07:05:23+0200
 current-owner: agentlenspro-main-session
 created-by: agentlenspro-main-session
 task-type: bugfix
@@ -47,3 +47,4 @@ The AGENTLENS_NO_REVIVE brake stops only the spawn: reviveDaemonDetached writes 
 ## Update
 
 Default isolation landed in 091799ee (setup.js: temp HOME/DATA_DIR, scrubbed endpoints, sync ports, global NO_REVIVE, containment guard). VERIFIED by the orchestrator: check-types, check-identities, setup.js parses, no stray fixture. REPORTED by the worker, not re-run by the orchestrator: suite 2832/17/6, lint, real-corpus read-only (confirmed on both sides only for OpenCode). The guard is detective, not preventive (a test that points DATA_DIR at a real dir and restores it within itself is invisible to it). A spawn-env audit and a live-tmp-server clause are in progress (round 4).
+In commit 668b7889's message, the 92-call-site spawn audit and the mutation-check result are the workers' reports, not re-run by the orchestrator (who verified check-identities, zero username hits, and that setup.js parses).

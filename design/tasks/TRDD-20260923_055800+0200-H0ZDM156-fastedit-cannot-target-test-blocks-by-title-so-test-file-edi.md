@@ -3,7 +3,7 @@ trdd-id: H0ZDM156
 title: fastedit cannot target test blocks by title so test-file edits fall back to the Edit tool
 column: todo
 created: 2026-09-23T05:58:00+0200
-updated: 2026-09-23T05:58:00+0200
+updated: 2026-09-23T07:05:07+0200
 current-owner: agentlenspro-main-session
 created-by: agentlenspro-main-session
 task-type: infra
@@ -23,3 +23,7 @@ tldr structure names anonymous test callbacks test:<slug> but fastedit edit --re
 ## Approval log
 
 - 2026-09-23T05:58:00+0200 — MANDATE issued by agentlenspro-main-session (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+
+## Instances
+
+2026-09-23: fastedit edit --replace fails on object-shorthand methods inside exports.mochaHooks = { afterEach() {...}, afterAll() {...} } in src/test/setup.js (reproduced 6 times by a worker), so three guard error messages there could not get the "ABORTING remaining tests -- " prefix; and a suite() callback body cannot be addressed at all, so src/test/isolationGuard.test.ts was created as its own file to be rewritable whole with fastedit create --force.

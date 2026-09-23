@@ -184,6 +184,10 @@ function realpathOrParent(p) {
  *  process-table-to-a-string pattern used elsewhere in this file (never a live `ps | grep`, which
  *  would match its own invoking shell's argv). */
 function findLiveServerDataDirs() {
+  // ponytail: two known limits here — the (\S+) capture cuts a data-dir path at its first space
+  // (realpathSync then fails and that dir silently goes unprotected), and a server started with
+  // DATA_DIR in its environment and no --data-dir flag is invisible to this argv scan. Upgrade:
+  // read each alcore pid's <dataDir>/server.pid or its environment instead of parsing argv.
   try {
     const out = execFileSync('ps', ['-eo', 'pid,command'], { encoding: 'utf-8' })
     const dirs = []
