@@ -259,9 +259,8 @@ pub fn compute_analytics_data(sessions: &[Value]) -> Value {
 /// downtime list (collector_lifecycle::compute_gaps — both frame sites pass it).
 pub fn build_update_payload(summary: &Value, all_spans: &[std::sync::Arc<Value>], build_id: &str, collector_gaps: Vec<Value>, now_ms: f64) -> Value {
     // Borrow instead of clone: `.cloned()` deep-copied every session Value
-    // (~22.9k sessions, ~170 MB parsed) on every SSE update frame only to
-    // lend a slice to compute_analytics_data; a borrow is the same data
-    // (TRDD-MBQ9LXAN).
+    // on every SSE update frame only to lend a slice to
+    // compute_analytics_data; a borrow is the same data (TRDD-MBQ9LXAN).
     let sessions: &[Value] = summary.get("sessions").and_then(Value::as_array).map(Vec::as_slice).unwrap_or(&[]);
     let mut p = Map::new();
     p.insert("type".into(), "update".into());

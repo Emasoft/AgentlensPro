@@ -570,24 +570,54 @@ pub fn is_disallowed_cross_origin(origin: Option<&str>, host: Option<&str>) -> b
 }
 
 /// stripSessionDetail — drop the heavy per-session detail from the broadcast payload.
+// WHY it walks in place instead of deep-cloning: the old body cloned the whole summary
+// (every timeline included) only to overwrite `sessions`, then cloned each session in full
+// before dropping its heavy keys — paid per `/api/summary` read and per SSE frame
+// (TRDD-091Z1FU0, TRDD-MBQ9LXAN). Walking in order clones only what survives; bytes stay
+// identical because `preserve_order` keeps a replaced key in place and appends a new one,
+// exactly like the old insert/shift_remove sequence did.
 pub fn strip_session_detail(summary: &Value) -> Value {
     let Some(obj) = summary.as_object() else { return summary.clone() };
-    let mut out = obj.clone();
-    if let Some(sessions) = obj.get("sessions").and_then(Value::as_array) {
-        let stripped: Vec<Value> = sessions
-            .iter()
-            .map(|s| {
-                let mut c = s.as_object().cloned().unwrap_or_default();
-                c.insert("timeline".into(), Value::Array(Vec::new()));
-                for k in ["fileOps", "generatedFiles", "generatedFilesTruncated"] {
-                    c.shift_remove(k);
-                }
-                Value::Object(c)
-            })
-            .collect();
-        out.insert("sessions".into(), Value::Array(stripped));
+    let mut out = Map::with_capacity(obj.len());
+    for (k, v) in obj {
+        if k == "sessions" {
+            if let Some(sessions) = v.as_array() {
+                out.insert(k.clone(), Value::Array(sessions.iter().map(strip_one_session).collect()));
+                continue;
+            }
+        }
+        out.insert(k.clone(), v.clone());
     }
     Value::Object(out)
+}
+
+/// One element of `strip_session_detail's `sessions` array: drop `fileOps`/`generatedFiles`/
+/// `generatedFilesTruncated`, blank `timeline` in place (appending it when absent, matching the
+/// old insert-then-remove order exactly), and clone every other field.
+fn strip_one_session(s: &Value) -> Value {
+    let Some(sobj) = s.as_object() else {
+        let mut c = Map::new();
+        c.insert("timeline".into(), Value::Array(Vec::new()));
+        return Value::Object(c);
+    };
+    let mut c = Map::with_capacity(sobj.len());
+    let mut saw_timeline = false;
+    for (k, v) in sobj {
+        match k.as_str() {
+            "timeline" => {
+                c.insert(k.clone(), Value::Array(Vec::new()));
+                saw_timeline = true;
+            }
+            "fileOps" | "generatedFiles" | "generatedFilesTruncated" => {}
+            _ => {
+                c.insert(k.clone(), v.clone());
+            }
+        }
+    }
+    if !saw_timeline {
+        c.insert("timeline".into(), Value::Array(Vec::new()));
+    }
+    Value::Object(c)
 }
 
 /// The query params of a request (the TS `new URLSearchParams(rawUrl.slice(qIdx + 1))` — last

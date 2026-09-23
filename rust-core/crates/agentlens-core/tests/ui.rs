@@ -2180,3 +2180,46 @@ fn capture_activity_reports_zero_until_an_ingest_produces_spans() {
     let at = v["lastIngestActivityAt"].as_i64().expect("a bare number, the TS shape");
     assert!(at > 0, "spans arrived, so the liveness clock must have moved off 0: {v}");
 }
+
+/// Pins `strip_session_detail`'s exact serialized byte output across a top-level key order with
+/// `sessions` in the middle, a fully-populated session, a session missing `timeline` entirely, a
+/// non-object array element, a non-array `sessions` value, and a non-object summary — so a rewrite
+/// of the function (TRDD-091Z1FU0 / TRDD-MBQ9LXAN: it deep-cloned the whole summary, timelines
+/// included, only to overwrite `sessions`) cannot silently reorder or drop a key. Value equality
+/// would not catch a reorder under `preserve_order`, so this compares serialized strings.
+#[test]
+fn strip_session_detail_pins_key_order_and_dropped_fields_byte_for_byte() {
+    let input = serde_json::json!({
+        "outer1": "a",
+        "sessions": [
+            {
+                "id": "s1",
+                "timeline": [{"t": 1}],
+                "fileOps": [{"op": "write"}],
+                "cost": 1.5,
+                "generatedFiles": ["f1"],
+                "generatedFilesTruncated": false,
+                "model": "opus"
+            },
+            {
+                "id": "s2",
+                "fileOps": [{"op": "read"}]
+            },
+            42
+        ],
+        "outer2": "b"
+    });
+    let out = agentlens_core::ui::strip_session_detail(&input);
+    assert_eq!(
+        serde_json::to_string(&out).unwrap(),
+        r#"{"outer1":"a","sessions":[{"id":"s1","timeline":[],"cost":1.5,"model":"opus"},{"id":"s2","timeline":[]},{"timeline":[]}],"outer2":"b"}"#
+    );
+
+    let non_array_sessions = serde_json::json!({"a": 1, "sessions": "not-an-array", "b": 2});
+    let out2 = agentlens_core::ui::strip_session_detail(&non_array_sessions);
+    assert_eq!(serde_json::to_string(&out2).unwrap(), r#"{"a":1,"sessions":"not-an-array","b":2}"#);
+
+    let non_object_summary = serde_json::json!([1, 2]);
+    let out3 = agentlens_core::ui::strip_session_detail(&non_object_summary);
+    assert_eq!(serde_json::to_string(&out3).unwrap(), r#"[1,2]"#);
+}
