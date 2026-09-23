@@ -2,7 +2,7 @@
 name: agentlenspro-ops-lessons-testing-and-process-hygiene
 description: "background agent shows running but does nothing / a fork started acting like the orchestrator / does cache-expired or last-compact cost tokens / is a cache-liveness check free / a free-port probe is flaky in CI but passes on rerun / mocha does not isolate a single test file / a test is flaky under load but fails in isolation too / CI is red while local slices were green / a background pipeline shows no output for 20 minutes and looks hung / recurring maximum call stack size exceeded RangeError / an identity check is green but an address leaked into a github comment / a bare @handle paged a stranger on github / what may a hook say to a model / removed a hook advisory but it still fires / a baseline ruleset restore reverted an owner-approved bypass"
 ocd: 2026-07-11
-lmd: 2026-09-05
+lmd: 2026-09-23
 metadata:
   node_type: memory
   type: project
@@ -43,7 +43,7 @@ There is NO API that reports whether a prompt-cache entry is still alive, so eve
 
 
 
-^ATOM-OL89-HIFU [desc:"freePort is a TOCTOU claim; two mitigations are needed, the retry must match the PORT TEXT not a bare exit(1), and npx mocha <file> does not isolate because .mocharc adds a spec glob", keywords: port_already_in_use_in_CI_but_passes_on_rerun flaky_test_only_on_one_matrix_leg freePort_race_between_probe_and_listen retry_swallowed_a_real_startup_failure npx_mocha_single_file_still_runs_whole_suite mocharc_spec_glob_does_not_isolate, type: project, ocd: 2026-08-12, lmd: 2026-08-12]
+^ATOM-OL89-HIFU [desc:"freePort is a TOCTOU claim; two mitigations are needed, the retry must match the PORT TEXT not a bare exit(1), and npx mocha <file> does not isolate because .mocharc adds a spec glob", keywords: port_already_in_use_in_CI_but_passes_on_rerun flaky_test_only_on_one_matrix_leg freePort_race_between_probe_and_listen retry_swallowed_a_real_startup_failure npx_mocha_single_file_still_runs_whole_suite mocharc_spec_glob_does_not_isolate, type: project, ocd: 2026-08-12, lmd: 2026-09-23]
 
 **A "free port" probe is a TOCTOU claim with a very short shelf life.** The classic helper —
 `listen(0)` → read the port → `close()` → resolve — proves the port was free AT PROBE TIME only.
@@ -52,6 +52,9 @@ anything, including another test's server in the same run. Retrying the ASSERTIO
 child already exited. Diagnosed from CI run 31139375893, where `build-and-test (20)` died on
 `Port 33097 (OTLP) already in use` while `(22)` passed **at the identical commit** — a leg passing
 is what distinguishes a race from a regression.
+
+
+^ATOM-JNJY-FQWS [desc: "Free-port flakiness needs an in-process claimed-set AND a bounded fresh-port retry; match PORT TEXT not a bare exit(1)", keywords: port_probe_two_mitigations_needed in_process_claimed_set bounded_retry_on_fresh_port disjoint_port_ranges_still_collide retry_matcher_swallows_startup_failure match_port_text_not_exit_code EADDRINUSE_already_in_use serverSingleInstance_test_exit1 retry_hid_the_real_reason spawnServerWithRetry, type: project, ocd: 2026-09-23, lmd: 2026-09-23]
 
 Two mitigations, because neither alone closes the window: an in-process claimed-set (the only
 collision source we can see — mocha runs the whole suite in ONE process) and a bounded spawn-retry
@@ -93,7 +96,7 @@ the result), and otherwise just run the suite and read the delta against the kno
 
 
 
-^ATOM-E5VV-1E9P [desc:"a fixture re-reading Date.now() across the code's own setImmediate yield; and 'flaky under load' was a false premise — it failed 7/20 in isolation", keywords: flaky_test_under_load test_fails_intermittently_identical_code wall_clock_in_test_fixture Date.now_re-evaluated_per_call setImmediate_yield_changes_timestamp tie-break_picks_wrong_session isolate_the_test_and_count_failures mine_!==_foreign, ocd: 2026-08-12, lmd: 2026-08-12]
+^ATOM-E5VV-1E9P [desc:"a fixture re-reading Date.now() across the code's own setImmediate yield; and 'flaky under load' was a false premise — it failed 7/20 in isolation", keywords: flaky_test_under_load test_fails_intermittently_identical_code wall_clock_in_test_fixture Date.now_re-evaluated_per_call setImmediate_yield_changes_timestamp tie-break_picks_wrong_session isolate_the_test_and_count_failures mine_!==_foreign, ocd: 2026-08-12, lmd: 2026-09-23]
 
 **A test fixture that re-reads the wall clock is nondeterministic wherever the code under test
 yields.** `cacheExpiry.test.ts` built its shared timeline as `() => [apiRequestAt(iso(1))]`, so
@@ -102,6 +105,9 @@ yields.** `cacheExpiry.test.ts` built its shared timeline as `() => [apiRequestA
 (`mcpServer.ts:3053`), so the later-processed card got a strictly newer millisecond and the
 strict-greater tie-break `ms > newestMs` (`mcpServer.ts:2157`) crowned whichever card the scheduler
 reached second. Fix: capture the value ONCE (`const activityAt = iso(1)`).
+
+
+^ATOM-FF0B-VOQL [desc: "The product's strict-greater tie-break was correct; before calling a test flaky under load, isolate it N times and count", keywords: product_code_was_correct_not_buggy strict_greater_tie_break_is_right isolate_test_and_count_failures flaky_under_load_false_premise 7_of_20_failures_in_isolation load_only_raises_the_rate signposts_walked_past comment_warned_about_this frozen_NOW_already_existed mine_vs_foreign_test_pollution, ocd: 2026-09-23, lmd: 2026-09-23]
 
 **The PRODUCT code was correct and unchanged** — strict-greater over millisecond timestamps with a
 real yield is right for real sessions. Two independent signposts had already said so and both were
@@ -146,7 +152,7 @@ DO NOT stop hunting a recurring RangeError 'Maximum call stack size exceeded' af
 
 
 
-^ATOM-2IIQ-XI6J [desc:"The bar every model-facing hook message must clear: own-project, actionable now, significant — anything else belongs in the CLI/dashboard, not an interruption", keywords: what_may_a_hook_say_to_an_agent advisory_got_removed why_doesn't_the_fan-out_warning_fire hook_noise_policy agent_context_injection_rules model-facing_text_bar, type: project, ocd: 2026-08-07, lmd: 2026-08-07]
+^ATOM-2IIQ-XI6J [desc:"The bar every model-facing hook message must clear: own-project, actionable now, significant — anything else belongs in the CLI/dashboard, not an interruption", keywords: what_may_a_hook_say_to_an_agent advisory_got_removed why_doesn't_the_fan-out_warning_fire hook_noise_policy agent_context_injection_rules model-facing_text_bar, type: project, ocd: 2026-08-07, lmd: 2026-09-23]
 
 Ratified 2026-08-07 after an audit of what the gate hooks actually injected. Text AgentlensPro puts
 in front of a MODEL must clear all three:
@@ -158,7 +164,10 @@ in front of a MODEL must clear all three:
    unprovable match must not become a claim.
 2. **ACTIONABLE NOW** — the caller can change what it is about to do. "Go run investigate_burn
    later" is a CLI answer, not an interruption.
-3. **SIGNIFICANT** — a real anomaly, not the expected cost of normal work.
+3. **SIGNIFICANT** — a real anomaly, not the expected cost of normal work. [^24]
+
+
+^ATOM-3LUC-AX9I [desc: "Failing the hook-message bar removed two advisories whose detection now surfaces nowhere; never add hook text without asking the three questions first", keywords: FAN_OUT_COLD_START_removed THRASH_UNATTRIBUTED_removed detection_surfaced_nowhere giving_it_a_home_is_open_work do_not_add_a_hook_message_to_explain explaining_is_not_interrupting ask_three_questions_before_hook_text foreign_identities_stripped_from_denies hook_noise_removed_from_stall_messages thrash_suspects_identity_stripped, type: project, ocd: 2026-09-23, lmd: 2026-09-23]
 
 Failing that bar cost two advisories outright (`FAN_OUT_COLD_START`, whose own text ended "No
 action needed"; `THRASH_UNATTRIBUTED`, about writes provably attributable to nobody) and stripped
@@ -171,7 +180,7 @@ gate, so they are still computed and now surfaced NOWHERE. Giving them a home is
 was added exactly that way — to help a HUMAN reading a debug session — and explaining is not
 interrupting; the reader in production is a busy agent that cannot act on it. **DO** ask the three
 questions above before adding any hook text, and put anything that fails them behind an explicit
-request instead. [^24]
+request instead.
 
 
 
