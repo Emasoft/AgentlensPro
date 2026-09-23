@@ -432,8 +432,9 @@ async function worker(i, agentOtlp, agentUi, state, mix, counters, paceMsPerReq)
   // Start one pace-interval early: the stagger above already spreads workers across the pacing
   // period, so this only cancels the redundant extra sleep before the FIRST request that a plain
   // Date.now() start added on top of it. With the deadline cap in place, that extra sleep
-  // under-delivered every run by ~1.5*pace (e.g. --rate 1 --concurrency 32 --seconds 300
-  // would deliver ~252/300 by calculation) and could false-flag underRate. No-op when paceMsPerReq is 0.
+  // cost each worker up to one request (e.g. --rate 1 --concurrency 32 --seconds 300 would
+  // deliver ~268/300, about 11% short, by calculation) and could false-flag underRate.
+  // No-op when paceMsPerReq is 0.
   let nextAt = Date.now() - paceMsPerReq;
   while (Date.now() < state.deadline && !state.stopped) {
     if (paceMsPerReq > 0) {
