@@ -3,7 +3,7 @@ trdd-id: 5JZQFVO8
 title: The collector crash-loops at boot because the card store 256 MB DuckDB pool overflows during the boot sweep upsert
 column: dev
 created: 2026-09-08T22:41:53+0200
-updated: 2026-09-09T14:35:54+0200
+updated: 2026-09-23T06:01:17+0200
 current-owner: main
 task-type: bugfix
 min-approval-requirement: none
@@ -147,3 +147,8 @@ exits — repeating on every subsequent hook fire.
 
 ## Approval log
 
+
+## Deploy result 2026-09-23
+
+Installed 2026-09-23 00:32 with a rollback copy (alcore.pre-5JZQFVO8) kept and intact. Since install: 0 OOM messages, 0 panics logged. One RSS-HARD-CAP exit occurred during the one-time cold-read backlog drain immediately after install, then the process (pid 15629) ran 12 minutes stable with no further cap exit -- RSS oscillated 1.6-2.55 GB (ps rss, not phys_footprint) with no plateau and no climb to the cap. Restore completes: cold-read backlog dropped from 2,219 invalid/rotated entries (pre-fix) to 0 (this boot), restored 31165 session cards. Two distinct binaries confirmed by sha256 (rollback vs deployed), confirming a real rebuild was deployed. Memory behavior is now tracked on TRDD-WKLD508O, not here. The deploy proceeded WITHOUT the TRDD-81BW1CS9 decision (recover-vs-abandon pid 68584's diverted capture) being made -- pid 68584 was already absent from the pre-deploy process snapshot, so the kill step in this card's own deploy sequence (step 5) had nothing to act on and the 81BW1CS9 blocker resolved itself by the squatter no longer existing. Full report: reports/deploy/20260923_054307+0200-5JZQFVO8-deploy-and-memory.md
+Status caveat: this is an interim finding, not a completion. `trddgrep move 5JZQFVO8 live` was attempted and REFUSED by the tool (5 of 5 acceptance boxes still unchecked -- 'would be a false completion'); column stays `dev` and no acceptance box was ticked.

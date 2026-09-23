@@ -3,7 +3,7 @@ trdd-id: 81BW1CS9
 title: Real capture diverted into two test-leaked tmp data dirs must be merged back into the data dir
 column: todo
 created: 2026-09-09T11:36:35+0200
-updated: 2026-09-09T11:36:35+0200
+updated: 2026-09-23T06:01:10+0200
 current-owner: main
 task-type: bugfix
 min-approval-requirement: user
@@ -66,3 +66,11 @@ is irreversible if the procedure is wrong.
 
 ## Approval log
 
+
+## Disk check 2026-09-23
+
+Checked on disk 2026-09-23: neither /var/folders/.../T/al-lat-wUTURr nor /var/folders/.../T/al-setup-OYnBpx/.agentlens exists anymore (find over /private/var/folders to depth 8 for both names returns nothing) — both leaked tmp data dirs are gone, presumably purged by macOS tmp cleanup or removed in an untracked prior pass; their diverted capture is not recoverable from these paths. pid 68584 (the al-setup-OYnBpx squatter) was already absent in the pre-2026-09-23-deploy process snapshot — it was not killed as part of that deploy, it had already exited or been reaped beforehand.
+
+## Verification note
+
+Re-verified 2026-09-23 with a stricter check per this repo's own evidence discipline: (a) tmp-dir search redone with NO maxdepth limit (not just depth 8) under /private/var/folders -- still 0 matches for al-lat-* or al-setup-* ($TMPDIR itself confirmed to point under that root). (b) pid 68584 absence re-checked by matching the PID and PPID COLUMNS of a ps snapshot (awk '$1==68584 || $2==68584'), not a substring grep -- 0 matching lines, ruling out both a live process AND a child reparented to it. Both findings VERIFIED, not merely inferred from a single substring hit.

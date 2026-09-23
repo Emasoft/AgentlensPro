@@ -3,7 +3,7 @@ trdd-id: 5IDBAJ6O
 title: hookScripts.test.ts server-down tests could revive a real alcore on the real data dir
 column: dev
 created: 2026-09-22T23:51:29+0200
-updated: 2026-09-22T23:57:55+0200
+updated: 2026-09-23T05:56:50+0200
 current-owner: agentlenspro-main-session
 created-by: agentlenspro-main-session
 task-type: bugfix
@@ -14,6 +14,7 @@ mandated-by: none
 approved: true
 approval-judge: agentlenspro-main-session
 approval-datetime: 2026-09-22T23:51:29+0200
+implementation-commits: [7734c1ff, 091799ee]
 ---
 
 # hookScripts.test.ts server-down tests could revive a real alcore on the real data dir
@@ -42,3 +43,7 @@ The DuckDB OOM crash-loop itself (card_store.rs:168, 'failed to pin block of siz
 
 Review fork findings and disposition: (1) AGENTLENS_NO_REVIVE is now set for ALL tests in hookScripts.test.ts, not just the two server-down tests -- ACCEPTED, not changed: the var only gates the revive spawn, so it is a no-op for the four happy-path tests; a per-test override is more legible but is 2 extra lines for zero behavior difference, and the shared comment already states which tests it protects. (2) pidfileOwnerAlive() runs BEFORE the AGENTLENS_NO_REVIVE check in reviveDaemonDetached(), so every test in the file still performs a READ of the real ~/.agentlens/server.pid even with the brake set -- CONFIRMED true, ACCEPTED as out of scope: it is a stat()+read, never a write/spawn/signal, so it does not interfere with the live server in the sense this task is scoped to (no process is stopped, started, or touched). (3) No new mocha assertion guards the fix itself (verified only by manual ps/log inspection, not by a suite-run regression check) -- ACCEPTED gap, not fixed: adding an assertNoSurvivingServer-style check to this file is a reasonable follow-up but was not requested and is not needed to close the observed bug. (4) The reviewSupervisorRunner fixture's prompt is a minimal single-line string, not a realistic multi-paragraph brief -- ACCEPTED nuance: the fix is verified against the marker contract (declaredRole's regex), not against arbitrary real-prompt shapes; no defect found, scope of the verified claim narrowed to match.
 The AGENTLENS_NO_REVIVE brake stops only the spawn: reviveDaemonDetached writes <dataDir>/.daemon-revive.lock and the failed hook spools its event BEFORE the brake check (hookHandlers.ts ~151-167), so the server-down tests still write into the real data dir; the fix is default isolation of HOME/DATA_DIR/ports in src/test/setup.js. Attribution of the observed production process is UNDETERMINED (PPID 1 and started-by=hook-revive are produced by both a session hook and these tests).
+
+## Update
+
+Default isolation landed in 091799ee (setup.js: temp HOME/DATA_DIR, scrubbed endpoints, sync ports, global NO_REVIVE, containment guard). VERIFIED by the orchestrator: check-types, check-identities, setup.js parses, no stray fixture. REPORTED by the worker, not re-run by the orchestrator: suite 2832/17/6, lint, real-corpus read-only (confirmed on both sides only for OpenCode). The guard is detective, not preventive (a test that points DATA_DIR at a real dir and restores it within itself is invisible to it). A spawn-env audit and a live-tmp-server clause are in progress (round 4).
