@@ -3,7 +3,7 @@ trdd-id: 7RM5YW2T
 title: The 25 ms summary rebuild loop rebuilds the whole window continuously under ingest and is the mimalloc churn
 column: testing
 created: 2026-09-05T22:06:10+0200
-updated: 2026-09-23T12:25:46+0200
+updated: 2026-09-23T12:32:31+0200
 current-owner: main-session
 implementation-commits: [bd0d48e3, 6698af32, bb8d5f8e, 67e5478cc62f28a49e3877db3885ee3fd727d6ed]
 task-type: bugfix
@@ -29,7 +29,7 @@ the 8.7 GB pre-fix baseline, though physical footprint (3.1 GB, peak 11.2 GB) is
 the old 13.1 GB. STATUS 2026-09-23: the follow-up landed as this card's own "in-run heap ratchet"
 sections; the ratchet's cause is now OPEN (not decided) per the 2026-09-23 correction section
 below, which supersedes the advisor verdict above it. The 3-variant isolated run is SHELVED.
-NEXT ACTION: read the in-progress live correlation report under `reports/alcore-heap/` and decide.
+NEXT ACTION: the ratchet cause is investigated in TRDD-EQCGAVGV; this card closes or fails on its own acceptance once that picks the fix.
 
 Same USER directive as TRDD-YILE6N3T (2026-09-05 22:00, "why is alcore using 17 GB … why is it so
 slow … fix all this"). This is the second same-day slice; the architecture is TRDD-7YPQWKPG,
@@ -151,3 +151,7 @@ Two of the 8 guard exits do not fit "per-pass peak + 3.5-7 MB/min ratchet": exit
 The "non-mimalloc lower bound" line printed by the guard is misleading, not a pure tautology: mimalloc's current_rss is whole-process RSS on macOS, yet 2 of the first 6 culprit records show a non-zero share (71 and 193 MB); read the commit figure instead. Filed as TRDD-P08Q5TK1.
 The zero-code 3-variant isolated run is SHELVED: the only load tool (scripts/bench/alcore-ingest-flood.mjs) cannot send statusline POSTs, cannot pace to a low rate, and cannot drive several port sets.
 Current step: a passive 60-minute live correlation of footprint against summary.misses and the statusline count (report under reports/alcore-heap/, name ends -ratchet-correlation.md, in progress).
+
+## 2026-09-23T12:32:31+0200 — verification and scope
+
+Verified in code — the /api/statusline-samples handler (ui.rs:1396-1420) does not bump data_version; 8 guard exits counted in rss-hard-cap.log; exit #8 followed a warm boot (server.log: "resumed 23692 log tail offsets (0 invalid…)"); on macOS vendored mimalloc sets current_rss from task_info MACH_TASK_BASIC_INFO resident_size (libmimalloc-sys-0.1.49 prim.c), so P08Q5TK1's premise holds. Scope correction: the "93%" is a share of requests LOGGED on the UI/API port (08:01-10:20Z), OTLP excluded - a count, not ingest volume. The ratchet-cause investigation now lives in TRDD-EQCGAVGV; this card keeps its own acceptance (its last live measurement was a recorded MISS).
