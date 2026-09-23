@@ -69,7 +69,7 @@ is irreversible if the procedure is wrong.
 
 ## Disk check 2026-09-23
 
-Checked on disk 2026-09-23: neither /var/folders/.../T/al-lat-wUTURr nor /var/folders/.../T/al-setup-OYnBpx/.agentlens exists anymore (find over /private/var/folders to depth 8 for both names returns nothing) — both leaked tmp data dirs are gone, presumably purged by macOS tmp cleanup or removed in an untracked prior pass; their diverted capture is not recoverable from these paths. pid 68584 (the al-setup-OYnBpx squatter) was already absent in the pre-2026-09-23-deploy process snapshot — it was not killed as part of that deploy, it had already exited or been reaped beforehand.
+Checked on disk 2026-09-23: neither /var/folders/.../T/al-lat-wUTURr nor /var/folders/.../T/al-setup-OYnBpx/.agentlens exists anymore (find over /private/var/folders to depth 8 for both names returns nothing) — both leaked tmp data dirs are gone, presumably purged by macOS tmp cleanup or removed in an untracked prior pass; the two tmp dirs are not present at the paths the card names, and other copies (backups, Time Machine, elsewhere) were not checked. pid 68584 (the al-setup-OYnBpx squatter) was already absent in the pre-2026-09-23-deploy process snapshot — it was not killed as part of that deploy, it had already exited or been reaped beforehand.
 
 ## Verification note
 
