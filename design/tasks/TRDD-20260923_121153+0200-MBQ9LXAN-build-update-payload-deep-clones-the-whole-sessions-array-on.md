@@ -1,9 +1,9 @@
 ---
 trdd-id: MBQ9LXAN
 title: build_update_payload deep-clones the whole sessions array on every SSE update frame
-column: todo
+column: dev
 created: 2026-09-23T12:11:53+0200
-updated: 2026-09-23T12:18:27+0200
+updated: 2026-09-23T12:26:45+0200
 current-owner: main-session
 created-by: emanuelesabetta
 task-type: bugfix

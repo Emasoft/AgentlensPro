@@ -3,7 +3,7 @@ trdd-id: 7RM5YW2T
 title: The 25 ms summary rebuild loop rebuilds the whole window continuously under ingest and is the mimalloc churn
 column: testing
 created: 2026-09-05T22:06:10+0200
-updated: 2026-09-23T12:12:21+0200
+updated: 2026-09-23T12:25:46+0200
 current-owner: main-session
 implementation-commits: [bd0d48e3, 6698af32, bb8d5f8e, 67e5478cc62f28a49e3877db3885ee3fd727d6ed]
 task-type: bugfix
@@ -26,10 +26,10 @@ report `reports/7ypqwkpg/20260906_031515+0200-t15-after-deploy.md`): CPU ~65.5% 
 (cputime delta 39.29s / 60s wall — 12:44.22 → 13:23.51), threshold was ≤15%. mimalloc/malloc-zone
 resident ~10.8 GB (`vmmap --summary`, TOTAL RESIDENT SIZE row), threshold was ≤2 GB — WORSE than
 the 8.7 GB pre-fix baseline, though physical footprint (3.1 GB, peak 11.2 GB) is far lower than
-the old 13.1 GB. NEXT ACTION: needs a follow-up investigation card (not created here — instructed
-not to) into why the rebuild-loop fix did not cut CPU/mimalloc as the arithmetic predicted; check
-whether ingest rate at measurement time was higher than the 22 spans/s assumption, and whether
-`vmmap` TOTAL RESIDENT vs physical footprint is the right proxy for "mimalloc resident" here.
+the old 13.1 GB. STATUS 2026-09-23: the follow-up landed as this card's own "in-run heap ratchet"
+sections; the ratchet's cause is now OPEN (not decided) per the 2026-09-23 correction section
+below, which supersedes the advisor verdict above it. The 3-variant isolated run is SHELVED.
+NEXT ACTION: read the in-progress live correlation report under `reports/alcore-heap/` and decide.
 
 Same USER directive as TRDD-YILE6N3T (2026-09-05 22:00, "why is alcore using 17 GB … why is it so
 slow … fix all this"). This is the second same-day slice; the architecture is TRDD-7YPQWKPG,
@@ -142,3 +142,12 @@ The heap-attribution report's "non-mimalloc lower bound 0 MB" is a tautology (mi
 Option B (second read-only connection + streaming parse) removes only ~6-8% of the exit-level footprint.
 Next: zero-code 3-variant isolated run (V0 default; V1 AGENTLENS_TIMELINE_HOT_CARDS=1; V2 MIMALLOC_ABANDONED_PAGE_PURGE=1 MIMALLOC_ABANDONED_RECLAIM_ON_FREE=1), decision rule per the advisor report §5.
 Reports: reports/alcore-heap/20260923_112303+0200-heap-attribution.md, reports/alcore-heap/20260923_114454+0200-inrun-growth.md, docs_dev/alcore-rebuild-fix/20260923_115202+0200-design-draft.md, docs_dev/alcore-rebuild-fix/20260923_120809+0200-advisor.md.
+
+## 2026-09-23T12:24:35+0200 — correction: the ratchet cause is OPEN
+
+This SUPERSEDES the "in-run heap ratchet: advisor verdict" section above it.
+The ratchet cause is OPEN — rebuild churn, the statusline stream, or a boot-phase effect are all still candidates, none decided. Statusline POSTs are 93% of live requests (18,528 of the last 20,000 lines of the collector's requests.log) and never bump data_version; the statusline store's bounds are unexamined.
+Two of the 8 guard exits do not fit "per-pass peak + 3.5-7 MB/min ratchet": exit #1 at 251 s (first boot after the crash loop, 2,219 cold reads) and exit #8 at 640 s uptime (a warm boot; it followed one GET /api/summary, see TRDD-091Z1FU0). The per-pass-peak and ratchet figures are the advisor's INFERRED arithmetic from RSS maxima, not measured footprint.
+The "non-mimalloc lower bound" line printed by the guard is misleading, not a pure tautology: mimalloc's current_rss is whole-process RSS on macOS, yet 2 of the first 6 culprit records show a non-zero share (71 and 193 MB); read the commit figure instead. Filed as TRDD-P08Q5TK1.
+The zero-code 3-variant isolated run is SHELVED: the only load tool (scripts/bench/alcore-ingest-flood.mjs) cannot send statusline POSTs, cannot pace to a low rate, and cannot drive several port sets.
+Current step: a passive 60-minute live correlation of footprint against summary.misses and the statusline count (report under reports/alcore-heap/, name ends -ratchet-correlation.md, in progress).
