@@ -3,7 +3,7 @@ trdd-id: UTFVMVT8
 title: The composition routes hold the state lock for seconds at ui.rs:560 and the dominant statement is not yet isolated
 column: ai_review
 created: 2026-09-02T12:55:49+0200
-updated: 2026-09-05T21:50:15+0200
+updated: 2026-09-23T12:57:34+0200
 current-owner: main-session
 task-type: bugfix
 priority: high
@@ -285,3 +285,12 @@ implementation-commits: [4e19ed4b, 428a1dec]
 ## Notes and lessons learned
 
 - Empty section on creation.
+
+## ⏵ AI-REVIEW VERDICT 2026-09-23T12:55:59+0200 — APPROVE
+
+Box 1 (per-statement timing) — met (historical, instrumentation later removed by design). Evidence: commit 4e19ed4b added it, 428a1dec removed it with the statement it measured; STATE block records the 100% project_map finding that motivated the fix.
+Box 2 (composition_project_map no longer under the lock) — met. Evidence: rust-core/crates/agentlens-core/src/ui.rs:708-737 (composition_for) and :755-778 (compositions_in_scope) both call summary_now(state, now) before the guard, then crate::composition_project_map(&summary) as a pure fn (lib.rs:1054); commit 428a1dec.
+Box 3 (15-min post-deploy read, no >=1000ms holds) — met. Evidence: STATE block's pid-18695 15-min read: worst hold anywhere fell from 273,893ms to 2,263ms, none at the composition or check_cache_expiry sites.
+Box 4 (young-session probe) — met. Evidence: reports/utfvmvt8/20260905_215049+0200-box4-young-session-probe.md — project starts unknown, resolves after the next rebuild (91s), then appears in a scoped query_context_blocks result; box was correctly reopened once by its own author after a self-caught overclaim, then closed on a session with callsTotal>0.
+Findings: no blocking findings. Staleness trade-off (up to ~2 rebuild durations, a very young session silently omitted from a scoped query until the next rebuild) is explicitly documented and bounded, not silently accepted.
+Ready for human_review; the owner makes that move. Full report: reports/ai-review/20260923_125559+0200-batch-B.md

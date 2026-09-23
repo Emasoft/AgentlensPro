@@ -3,7 +3,7 @@ trdd-id: OHZGLDNG
 title: CLAUDE.md still documents the TypeScript server retired in 567fc5c2
 column: ai_review
 created: 2026-09-09T12:37:51+0200
-updated: 2026-09-23T06:41:39+0200
+updated: 2026-09-23T13:01:23+0200
 current-owner: main
 task-type: docs
 min-approval-requirement: none
@@ -97,3 +97,11 @@ Round 3 (2026-09-23): (a) fixed L143 and L145 in the Dual ingestion section — 
 ## Approval log
 
 - 2026-09-23T06:05:45+0200 — column → ai_review by main. CLAUDE.md stale-TS-server sentences fixed via fastedit, verified with fastedit diff + git diff; check-no-identities exit 0
+
+## ⏵ AI-REVIEW VERDICT 2026-09-23T13:00:09+0200 — APPROVE
+
+Box 1 (no standalone/server.ts mention; esbuild.js has 3 entryPoints) met: grep -q 'standalone/server.ts' CLAUDE.md and 'fall back to the TS server' both exit 1 (no match) at HEAD; grep -c 'entryPoints:' esbuild.js = 3.
+Box 2 (sql.js sentence rewritten/verified) met: CLAUDE.md line 152 names src/logReader.ts's _scanOpenCode (verified via tldr, logReader.ts:1236-1279) as the JS-path fallback, with production OpenCode ingestion through rustParseOpenCodeSync — matches the code's rustBin-vs-sqlFactory branch exactly.
+Box 5 (identity check exit 0) met: re-ran the identity checker independently this session, captured to a file, EXIT=0, OK - no personal email or home path in any tracked or shipped file.
+Independently re-verified the Dual ingestion section against rust-core: log_reader.rs::start_sweeper (992-1106) matches exactly (boot restore, boot sweep, watcher attach, backstop = FULL_RESCAN 60s if watch_attached>0 else poll_interval 5s from LOG_SWEEP_INTERVAL in bin/alcore.rs); feed_merge.rs::preferred_data_source (29-31) returns log only for claude_code, otel otherwise, matching the log-wins/OTEL-wins sentence exactly; ui.rs::handle (line ~2103-2110) resolves get_call_context via resolve_call_context then hands the Value to mcp_tools::get_call_context, while get_burn_status (ui.rs:2116) locks CoreState directly via state.lock_timed() — both match the doctrine sentence precisely.
+No defects found in this independent pass; the card's own multiple self-review and adversarial-review rounds already caught and fixed every discrepancy this reviewer could find. Ready for human_review; the owner makes that move.

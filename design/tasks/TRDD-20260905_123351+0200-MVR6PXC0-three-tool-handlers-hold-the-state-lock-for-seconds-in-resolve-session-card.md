@@ -3,7 +3,7 @@ trdd-id: MVR6PXC0
 title: Three MCP tool handlers hold the state lock for one to four seconds inside their per-candidate resolve_session_card closure
 column: ai_review
 created: 2026-09-05T12:33:51+0200
-updated: 2026-09-05T21:50:15+0200
+updated: 2026-09-23T12:57:21+0200
 current-owner: main-session
 task-type: bugfix
 priority: high
@@ -151,3 +151,11 @@ three tools.
   the orchestrator's — USER may veto by demanding a single-run (non-composed) full suite including
   doctests. Review fork on `3b9018e0`: nothing blocking; its two verified findings (deploy preceded
   the gate; `POST /api/clear` is the only eviction path) are in the STATE block.
+
+## ⏵ AI-REVIEW VERDICT 2026-09-23T12:55:59+0200 — APPROVE
+
+Box 1 (lock scope) — met. Evidence: rust-core/crates/agentlens-core/src/ui.rs:906-935 (resolve_session_card_offlock releases the guard across reparse_session_card); commit 3b9018e0.
+Box 2 (zero >=1000ms lock holds at the four sites) — met. Evidence: reports/mvr6pxc0/20260905_214926+0200-acceptance-24-invocations.md — 24/24 tool calls EXIT=0, 49 lock-hold lines in window, none >=1000ms inside the four handlers' arm ranges; the one 1440ms line is check_burn_risk's own guard (ui.rs:3507), independently carved into TRDD-RAPDS7OX.
+Box 3 (QE114936 box-3 note updated) — not independently re-checked; out of scope (lives in QE114936's own file).
+Findings: no blocking findings. Verified all four call sites (ui.rs:2311/3461/3527/3583) route through resolve_session_card_offlock by reading each match arm; single-lookup callers correctly left on the unsplit resolve_session_card.
+Ready for human_review; the owner makes that move. Full report: reports/ai-review/20260923_125559+0200-batch-B.md

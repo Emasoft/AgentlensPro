@@ -3,7 +3,7 @@ trdd-id: 2CYTNLY1
 title: Delete the review gate's dead breakers and give the supervisor the gate's work definition
 column: ai_review
 created: 2026-09-09T14:38:59+0200
-updated: 2026-09-10T05:19:23+0200
+updated: 2026-09-23T12:56:28+0200
 current-owner: main
 task-type: refactor
 priority: medium
@@ -196,3 +196,17 @@ verified against the live source, not restated from memory.
 ## Notes and lessons learned
 
 - (none yet)
+
+## AI-REVIEW VERDICT
+Box1 (check-types/eslint exit 0 at 53a30222/86abd4ef): not re-run by this review — cannot execute pnpm; STATE's own claim is the only source.
+Box2 (existing suites still pass): not re-run; code shape at HEAD (src/cli/reviewGate.ts, src/cli/reviewSupervisor.ts) matches the described refactor.
+Box3 (scanSupervision parity, sed -i/git push/PROPOSAL): met, VERIFIED. src/cli/reviewSupervisor.ts:23,51-93 imports and calls toolUseWork/textArms/isNoReviewSentinel from reviewGate.ts, takes cwd from the hook (line 51), and src/test/reviewSupervisor.test.ts:63-73 holds the sed-parity test.
+Box4 (no behaviour change, dead-code removal only): met, VERIFIED by inspection. src/cli/reviewGate.ts's decideMainGate/decideSubagentGate, tmpdir state files, SUBAGENT_MAX_DEMANDS_PER_AGENT and mainGateMaxPerSession are gone at HEAD, replaced by one decideGate(scan) at reviewGate.ts:490-505; no re-run of the parity test to reconfirm 0 behaviour drift.
+Box5 (kill-switch stderr line, per killSwitchHalf): met, VERIFIED. src/cli/killSwitch.ts:84-96 defines the single killSwitchHalf(); src/cli/reviewGate.ts:330-336 uses it for the stderr line, never says disabled by the owner.
+Finding: the sentinel floor (isNoReviewSentinel, src/cli/reviewGateTriggers.ts:535-551) is >= 8 chars off NO_REVIEW_SENTINEL_EXAMPLES, matching the Scope requirement; foo (3) fails, the three examples pass — VERIFIED by reading the source.
+Finding: at HEAD the per-cause window wording from AMENDMENT 8 (disk vs transcript) is gone because ArmCause (reviewGateTriggers.ts:25) now has only edit/write-shaped command/proposal text — the disk-mtime unreviewed-change cause this card's amendment fixed the wording for was apparently removed by later cards (3U8AIHXK et al.); not a regression this card introduced, but the exact wording this card's Approval log describes no longer exists verbatim in mainBlockReason.
+Finding: reviewGateEffects.test.ts named in the box no longer exists (renamed/replaced by reviewLoop.test.ts by later cards) — test-count boxes are stale by construction, not a defect of this card.
+The owner's kill-switch question (should the gate honour only the FILE half of AGENTLENS_DISABLED) stays OPEN per instruction — this review does not decide it.
+Ready for human_review; the owner makes that move.
+
+## AI-REVIEW VERDICT 2026-09-23T12:55:54+0200 — APPROVE

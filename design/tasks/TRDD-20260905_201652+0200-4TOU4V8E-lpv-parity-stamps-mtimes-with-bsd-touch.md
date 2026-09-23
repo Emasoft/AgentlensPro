@@ -3,7 +3,7 @@ trdd-id: 4TOU4V8E
 title: lpv_parity stamps fixture mtimes through touch -d @epoch, which BSD touch rejects
 column: ai_review
 created: 2026-09-05T20:16:52+0200
-updated: 2026-09-05T21:50:15+0200
+updated: 2026-09-23T12:56:46+0200
 current-owner: agentlenspro-b2
 task-type: bugfix
 min-approval-requirement: none
@@ -147,3 +147,12 @@ never reaches CI (ATOM-2PSS-WR4Q's inverse).
   orchestrator's: `lpv_parity` 10/10 twice (stock PATH, no-touch PATH) plus the 31 hidden binaries
   31/31 in MVR6PXC0's detached run. USER may veto by demanding one un-composed full-suite run
   including doctests on a stock PATH.
+
+## AI-REVIEW VERDICT
+
+APPROVE — 2026-09-23T12:55:54+0200
+Box1 (stamp_mtimes uses File::set_modified, no touch subprocess): met, VERIFIED. rust-core/crates/agentlens-core/tests/lpv_parity.rs:29-43 (tldr body) uses File::options().write(true).open + set_modified(UNIX_EPOCH + Duration::from_secs_f64(ms/1000.0)); grep -rn touch tests/ src/ finds only the English word in comments/assertion strings, zero Command::new or /usr/bin/touch.
+Box2 (cargo test -p agentlens-core --test lpv_parity -> 10 passed, incl. no-touch-on-PATH run): not re-run by this review (no cargo execution per instructions) — code shape supports it (no subprocess spawn at all, so PATH cannot matter); RUN cargo test -p agentlens-core --test lpv_parity to reconfirm 10/10 if independent proof is wanted.
+Box3 (comment cites the real reason, drops the false POSIX/no-std claims): met, VERIFIED. lpv_parity.rs:24-28,32-35 keeps the git-does-not-preserve-mtimes WHY and states set_modified is stable since Rust 1.75 — no POSIX or no-std-API claim remains.
+Finding: none — the fix is a small, self-contained subprocess-to-stdlib swap with a clear comment; the Approval log's own review-fork history (5 rounds) already caught and corrected the evidentiary chain (exit code, mtime provenance) before this AI review, so no further correction needed there.
+Ready for human_review; the owner makes that move.

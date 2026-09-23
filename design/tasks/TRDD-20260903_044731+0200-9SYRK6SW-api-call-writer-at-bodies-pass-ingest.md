@@ -3,7 +3,7 @@ trdd-id: 9SYRK6SW
 title: api_call staging table writer at the bodies-pass ingest site
 column: ai_review
 created: 2026-09-03T04:47:31+0200
-updated: 2026-09-05T14:33:32+0200
+updated: 2026-09-23T13:05:24+0200
 current-owner: main-session
 task-type: feature
 priority: high
@@ -17,7 +17,7 @@ blocked-by: []
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-05T12:24:45+0200
 
-**DEPLOYED and writing — `ai_review`.** The writer is in the alcore binary built from
+**WAS deployed and writing as of 2026-09-05 — dormant, not broken, as of 2026-09-23 (see the AI-REVIEW VERDICT section below): raw body capture is currently OFF on this machine (no `~/.agentlens/config.json`, no `~/.agentlens/otel-bodies`), so `chores.rs::bodies_pass` returns at its `scope.dirs.is_empty()` guard (chores.rs:50-52) before `open_store` ever runs, and no `store/` directory exists today.** The writer code itself is unchanged since it shipped. Earlier deploy record, kept: the writer was in the alcore binary built from
 `7caad610` at 11:49 on 2026-09-05 (`cargo build --release` → `bin-native/darwin-arm64/` →
 `codesign -s - --force` → `agentlenspro server restart`, pid 37180 → 39382, `RESTART_EXIT=0`,
 `STATUS_EXIT=0`; raw: `reports_dev/alcore-restart.txt`). Measured 33 min later: 32 new
@@ -392,3 +392,17 @@ No defects found. Full report: `reports/ai-review/20260905_142042+0200-9SYRK6SW.
 **Verdict: APPROVE**
 
 ## Notes and lessons learned
+
+## ⏵ AI-REVIEW VERDICT 2026-09-23T13:00:09+0200 — APPROVE
+
+Boxes 1-6 re-verified against current HEAD, unchanged since c92a90c3 (the only commit ever to touch api_call.rs and tests/api_call.rs): open_store (agentlens-store/src/lib.rs:138) creates BLOBS_DIR/BODIES_DIR/PARTS_DIR/API_CALLS_DIR and the api_call CREATE TABLE has no cost_usd column; the two-row-kind extraction, flush_detailed's 4-dir list, and the single from_str parse are all intact as the card describes. Met.
+INVESTIGATED per orchestrator instruction: why ~/.agentlens/store/ does not exist today and server.log has zero api_call lines. ROOT CAUSE FOUND, file:line - agentlens-core/src/chores.rs:50-52, bodies_pass(): 'let scope = resolve_bodies_read_scope(...); if scope.dirs.is_empty() { return; }' runs BEFORE store_dir is even computed and BEFORE open_store (chores.rs:81) is ever called. scope.dirs comes from bodies_dir_candidates (burn/guard.rs:440-451), which lists only the configured spool dir and the legacy 'otel-bodies' dir THAT ACTUALLY EXIST ON DISK. On this machine neither exists (no ~/.agentlens/config.json, no ~/.agentlens/otel-bodies), so scope.dirs is empty on every 60s tick and bodies_pass returns silently - no eprintln, no log line, no store dir ever created. This matches curl /api/server-stats showing bodies.lastPass.at=0 and bodies.live.files=0.
+VERDICT ON THE THREE CANDIDATES: not the writer being broken (code unchanged and correct when invoked, as boxes 1-6 confirm), not a path change (the store dir path is still data_dir.join('store'), unchanged). It is CONDITIONAL: the whole bodies-capture subsystem (unrelated pre-existing feature, raw_body_capture_enabled defaults to false, burn/guard.rs ~473) is off on this machine right now, and separately bodies_dir_candidates finds no existing bodies dir to even scan - so the parasitic api_call writer never gets a chance to run. This is an environmental/config state, not a regression in this card's commit.
+FINDING (not blocking, but the STATE header should be corrected on next touch): the card's top STATE line still reads 'DEPLOYED and writing' in the present tense as an unconditional fact. That was true on 2026-09-05 when capture was on and 1680 parquet parts existed; it is false right now, and nothing in server.log distinguishes 'capture is off' from 'the writer broke' - both look like silence. Recommend a one-line addendum noting the dependency on raw body capture being enabled, so a future reader does not spend time debugging a writer that is working exactly as designed.
+Ready for human_review; the owner makes that move.
+
+## ⏵ AI-REVIEW VERDICT (revision) 2026-09-23T13:05:13+0200 — APPROVE (STATE corrected in place)
+
+A review-fork spawned in the same session correctly found the first-pass verdict above was right to APPROVE the acceptance boxes (1-6, all met, code unchanged since c92a90c3) but wrong to leave the STATE block's demonstrably false present-tense claim in place with only a non-blocking suggestion to fix it later. The STATE block is this project's own authoritative, currency-sensitive section (trdd-design-tasks.md item 10: kept current on every edit, wins on disagreement), and this review was itself an edit-worthy touch (verification-and-evidence.md: fix what you find immediately).
+ACTION TAKEN: the STATE line has been corrected in place (trddgrep edit, at-line 20) from an unconditional 'DEPLOYED and writing' to 'WAS deployed and writing as of 2026-09-05 - dormant, not broken, as of 2026-09-23', naming the file:line root cause (chores.rs:50-52, scope.dirs.is_empty() before open_store). A second review-fork then found that mutating the FIRST verdict section's own heading/closing line (rather than appending a new dated section) destroyed the audit trail of what the first pass actually said, and that labeling the heading REQUEST CHANGES while the body said the fix was already applied was self-contradictory. Both are now fixed: the first verdict section above is restored to its original APPROVE text verbatim, and this second, separately dated section records the correction instead of overwriting the first.
+Net effect: verdict is APPROVE. The STATE block no longer asserts a false present-tense claim; the acceptance boxes hold; no further code, test, or column change is needed. Ready for human_review; the owner makes that move.

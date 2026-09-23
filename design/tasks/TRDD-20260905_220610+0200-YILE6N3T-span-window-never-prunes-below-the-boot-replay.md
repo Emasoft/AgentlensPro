@@ -3,7 +3,7 @@ trdd-id: YILE6N3T
 title: The span window reports a 5-minute window but holds the whole 24-hour boot replay and only grows
 column: ai_review
 created: 2026-09-05T22:06:10+0200
-updated: 2026-09-06T03:18:01+0200
+updated: 2026-09-23T13:00:51+0200
 current-owner: main-session
 task-type: bugfix
 priority: critical
@@ -112,3 +112,12 @@ old spans whose FIRST element has no resolvable timestamp must still prune the o
 
 - 2026-09-05T22:06:10+0200 — Authored into `dev` (Tier 0 bugfix under the USER-approved parent
   7YPQWKPG; worker dispatched the same turn).
+
+## ⏵ AI-REVIEW VERDICT 2026-09-23T13:00:09+0200 — APPROVE
+
+Box 1 (cause named from measurement) met: 602 codex spans with startTime/endTime=="0" made span_timestamp_ms return now_ms; one landed at index 0 after the first narrow, freezing the old first_old-gated prune (commit f2572740 message, isolated replay 431,910->0).
+Box 2 (prune no longer depends on spans.first(); unit test for unresolvable-first-element) met: rust-core/crates/agentlens-core/src/span_window.rs::prune (line 168) runs an unconditional retain keyed on span_timestamp_ms(o, i64::MIN) for every element; test prunes_past_a_first_element_with_no_resolvable_timestamp (span_window.rs:215-238) seeds 1,000 spans with the FIRST one unresolvable and asserts all 1,000 are evicted, then that an in-window add survives.
+Box 3 (spans.inMemory bound after deploy, 15 min) met: STATE block + reports/7ypqwkpg/20260906_031515+0200-t15-after-deploy.md — inMemory 432-553 vs bound 13,200 (~4%).
+Box 4 (RSS after 15 min recorded vs 13.1 GB baseline) met: same report — RSS 10,479-11,326 MB vs 13.1 GB baseline / 19.6 GB pre-restart, both lower; live spot-check today (2026-09-23) shows rssMb 2,449 on the current process, consistent with the fix holding.
+Findings: mutation-verified review-fork report (reports/review-fork/20260906_023053+0200-f2572740-yile6n3t-prune.md) independently confirmed the diff, the test's RED-on-revert property, and non-coupling with 7RM5YW2T. No new defects found in this independent pass. eht GR6WHHK5 (boot-path follow-up) is filed and in testing, correctly left open rather than blocking this card.
+Ready for human_review; the owner makes that move.

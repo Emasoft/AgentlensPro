@@ -3,7 +3,7 @@ trdd-id: XTFDRTH2
 title: Session cards live in a DuckDB table upserted on ingest, not in a 32k-entry IndexMap
 column: ai_review
 created: 2026-09-05T22:06:10+0200
-updated: 2026-09-06T04:32:40+0200
+updated: 2026-09-23T12:57:51+0200
 implementation-commits: [f29bc3b6, 8069c6a9, e00af58b, 13209791, 12c4c4a7, 46a0268c, ac289d8d]
 current-owner: main-session
 task-type: refactor
@@ -161,3 +161,13 @@ verified green BEFORE the switch so it pins the OLD behaviour rather than blessi
 
 - 2026-09-05T22:06:10+0200 — Authored into `todo` as an NPT-gated child of the USER-approved
   7YPQWKPG (Tier 0: scope already ruled by the USER).
+
+## ⏵ AI-REVIEW VERDICT 2026-09-23T12:55:59+0200 — APPROVE
+
+Box 1 (no log_sessions map) — met, independently reproduced. Evidence: grep -rn 'log_sessions' rust-core/crates/agentlens-core/src/ -> exactly 5 hits, all inside feed_merge.rs's merge_otel_and_log_sessions (a Vec<Value> parameter/locals per the card's own Shape) plus its call site lib.rs:413; CoreState.cards is card_store::CardStore (lib.rs:191-200).
+Box 2 (parity tests unchanged, accessors moved) — INFERRED, not re-run this session (per rule 4, state what to run: cargo test -p agentlens-core, expect 616 passed / 0 failed across 104 suites). Read tests/card_store.rs:227-247 (cards_sharing_a_start_time_are_served_in_first_insert_order) in full: a real regression guard for the seq/tie-break behavior, asserting served order [tie-1,tie-2,tie-3,tie-4] across a mid-sequence upsert.
+Box 3 (resident mimalloc heap <= threshold) — met. Evidence: reports/7ypqwkpg/20260906_043240+0200-t15-verdict-xtfdrth2.md: 10.8GB pre -> 10.7GB threshold -> 10.6GB post, PASS by a 0.1GB margin (soft pass, not dramatic, but meets the box's own bar).
+Code verification: card_store.rs schema (lines 60-95) matches the card's documented deviations from its own Shape sketch (seq column added, card is VARCHAR not JSON type, last_active_ms not start_ms) — each justified in comments. put() (lines 95-111): ON CONFLICT DO UPDATE excludes seq, confirmed by reading the SQL text, so an upsert keeps its original insertion slot. demote_cold() (lines 197-230) ranks over the whole table before filtering timeline_len>0, matching the claim.
+Interaction with today's heap work: reports/alcore-heap/20260923_112303+0200-heap-attribution.md lists cards: card_store::CardStore as FIXED (XTFDRTH2), not Rust-heap resident, in the current heap-growth investigation -- no conflict or regression recorded.
+Findings: no blocking findings. Two deliberate Shape deviations (boot restore keeps DeltaLog::load instead of read_ndjson_auto; seq column added) are each justified and confirmed in code, not scope creep. The summary_snapshot whole-corpus clone under the lock is a documented, bounded residual, not disputed here.
+Ready for human_review; the owner makes that move. Full report: reports/ai-review/20260923_125559+0200-batch-B.md
