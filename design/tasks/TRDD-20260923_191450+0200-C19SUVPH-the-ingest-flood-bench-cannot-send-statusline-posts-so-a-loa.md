@@ -3,7 +3,7 @@ trdd-id: C19SUVPH
 title: The ingest flood bench cannot send statusline POSTs so a load arm cannot vary statusline alone
 column: ai_review
 created: 2026-09-23T19:14:50+0200
-updated: 2026-09-23T21:03:15+0200
+updated: 2026-09-23T21:19:04+0200
 current-owner: main-session
 created-by: main-session
 task-type: infra
@@ -14,7 +14,7 @@ mandated-by: none
 approved: true
 approval-judge: main-session
 approval-datetime: 2026-09-23T19:14:50+0200
-implementation-commits: [bbf40fdf, ea835fdf, d18dc9a1]
+implementation-commits: [bbf40fdf, ea835fdf, d18dc9a1, fb61c4f4]
 ---
 
 # The ingest flood bench cannot send statusline POSTs so a load arm cannot vary statusline alone
@@ -62,3 +62,8 @@ Added: every flag is validated before any http call (unknown flag, missing/non-f
 ## Re-verification on d18dc9a1 (2026-09-23)
 
 The ticked acceptance first rested on the bbf40fdf verification; after the ea835fdf and d18dc9a1 fixes (status-0-only target-down, flag validation incl. empty/zero values) all checks were re-run on the fixed code against an isolated alcore: statusline --rate 2 x 300 s and OTLP --rate 1 --spans-per-request 20 x 300 s passed their count checks; ten bad-flag cases (incl. --rate '', --rate 0, --spans-per-request 0, --concurrency 2.5, constructor 1) and both live-port cases exit 2 with no HTTP request; killing the target at 60 s exits 3 with targetDownAtSec 60.003 and stale=true on the fallback progress lines. Report: reports/flood-bench/20260923_205703+0200-ea835fdf-followup.md (gitignored).
+
+## Verification on fb61c4f4 and the first-fire follow-up (2026-09-23)
+
+Isolated alcore (own HOME/DATA_DIR, ports 4901/3901/4916): (i) statusline --rate 2 --concurrency 4 x 60 s -> ok2xx 120, statuslineReceivedDelta 120, underRate false; (ii) statusline --rate 1 --concurrency 32 x 60 s -> ok2xx 60, underRate false; (iii) killing the target at ~60 s during a --rate 2 --concurrency 1 x 300 s run -> exit 3, targetDownAtSec 60.002, deltaBasis tick. fb61c4f4 checks already run and reconfirmed: a 640 s-pace OTLP --seconds 30 run ends in 30 s with 0 late requests; --rate 0.00001 --concurrency 32 x 10 s ends in 10 s with no TimeoutOverflowWarning; --sessions 0 exits 2.
+Known limit: when --rate and --sessions are both given, --rate wins and --sessions is ignored without a warning.

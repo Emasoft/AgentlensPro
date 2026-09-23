@@ -79,8 +79,8 @@ function validateArgs(out, given) {
   if (!(out.subagentShare >= 0 && out.subagentShare <= 1)) errors.push('--subagent-share must be within [0,1]');
   if (!Number.isInteger(out.otlpPort) || out.otlpPort < 1 || out.otlpPort > 65535) errors.push('--otlp-port must be an integer in 1-65535');
   if (!Number.isInteger(out.uiPort) || out.uiPort < 1 || out.uiPort > 65535) errors.push('--ui-port must be an integer in 1-65535');
-  // Flat-out (rate=0, sessions=0) is rejected outright now: an explicit zero on EITHER
-  // --rate or --sessions errors below, so flat-out is reachable only by omitting BOTH flags.
+  // An explicit zero on either --rate or --sessions is rejected below; flat-out (both 0, the
+  // defaults) stays reachable only by omitting both flags.
   if (given.has('rate') && !(out.rate > 0)) errors.push('--rate must be > 0 when given');
   // Mirrors the --rate rule directly above: --sessions "$N" with N=0 was another flat-out
   // path, since a session count of 0 leaves nothing to bound the request rate either.
@@ -429,7 +429,12 @@ async function worker(i, agentOtlp, agentUi, state, mix, counters, paceMsPerReq)
     const stagger = Math.min((i * paceMsPerReq) / args.concurrency, state.deadline - Date.now());
     if (stagger > 0) await new Promise((r) => setTimeout(r, stagger));
   }
-  let nextAt = Date.now();
+  // Start one pace-interval early: the stagger above already spreads workers across the pacing
+  // period, so this only cancels the redundant extra sleep before the FIRST request that a plain
+  // Date.now() start added on top of it. With the deadline cap in place, that extra sleep
+  // under-delivered every run by ~1.5*pace (e.g. --rate 1 --concurrency 32 --seconds 300
+  // delivered ~252/300) and could false-flag underRate. No-op when paceMsPerReq is 0.
+  let nextAt = Date.now() - paceMsPerReq;
   while (Date.now() < state.deadline && !state.stopped) {
     if (paceMsPerReq > 0) {
       nextAt += paceMsPerReq;
