@@ -3,7 +3,7 @@ trdd-id: B07NR7ZI
 title: The hook installer emits a 30 s ceiling on every AgentlensPro hook entry
 column: ai_review
 created: 2026-09-08T22:41:54+0200
-updated: 2026-09-23T12:57:03+0200
+updated: 2026-09-23T13:17:22+0200
 current-owner: main
 task-type: infra
 min-approval-requirement: none
@@ -53,15 +53,15 @@ builders removes the drift permanently instead of hand-editing the settings file
 
 ## Acceptance
 
-- [ ] `src/cli/hookInstall.ts` defines one exported `HOOK_TIMEOUT_SEC = 30` used by all four
+- [x] `src/cli/hookInstall.ts` defines one exported `HOOK_TIMEOUT_SEC = 30` used by all four
       hook builders.
-- [ ] `src/test/cliMatchers.test.ts` pins the constant and asserts every builder emits `timeout: 30`.
-- [ ] `pnpm run check-types`, `pnpm run lint`, and the `cliMatchers` mocha test pass.
+- [x] `src/test/cliMatchers.test.ts` pins the constant and asserts every builder emits `timeout: 30`.
+- [x] `pnpm run check-types`, `pnpm run lint`, and the `cliMatchers` mocha test pass.
 - [ ] `node esbuild.js` rebuilds the bundle with the change.
-- [ ] `agentlenspro --install-hooks` followed by inspecting `~/.claude/settings.json` shows all
+- [x] `agentlenspro --install-hooks` followed by inspecting `~/.claude/settings.json` shows all
       agentlens entries at `timeout: 30`.
 - [ ] `agentlenspro setup --dry-run` reports no hook-timeout drift.
-- [ ] Memory atom `ATOM-5WTK-6YPU` (10s/20s claim) is updated/superseded.
+- [x] Memory atom `ATOM-5WTK-6YPU` (10s/20s claim) is updated/superseded.
 
 ## Approval log
 
@@ -78,3 +78,7 @@ Box6 (setup --dry-run reports no drift): not re-run by this review; STATE's own 
 Box7 (memory atom ATOM-5WTK-6YPU superseded): met, VERIFIED. .claude/project/memory/hook-events-pipeline.md footnote [^2] ATOM-6OC6-575F carries supersedes: ATOM-5WTK-6YPU and states the 30 s ceiling correctly.
 Finding: all seven acceptance checkboxes in this card are still literally unchecked ([ ]) even though the STATE block and code both show the work landed — a board-hygiene gap (governance-trdd-kanban), not a code defect; the owner or a follow-up edit should tick them before/at human_review.
 Ready for human_review; the owner makes that move.
+
+## Notes and lessons learned
+
+Owed runs 2026-09-23T13:16:38+0200: pnpm run check-types -> exit=0; pnpm run lint -> exit=0 (0 errors, 456 warnings repo-wide, none in hookInstall.ts); npx mocha (scoped config) out/test/test/cliMatchers.test.js -> 14 passing, 0 failing, exit=0. Settles Box3 (types/lint/cliMatchers test pass) — all three green, checked. Box4 (stale bundle) and Box6 (setup --dry-run drift) were NOT re-run and stay unticked: standalone/cli.js is an untracked local build artifact, not shipped from this working tree state — run node esbuild.js before shipping.

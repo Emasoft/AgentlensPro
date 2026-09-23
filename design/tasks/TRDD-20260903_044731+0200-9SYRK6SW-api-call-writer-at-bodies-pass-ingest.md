@@ -3,7 +3,7 @@ trdd-id: 9SYRK6SW
 title: api_call staging table writer at the bodies-pass ingest site
 column: ai_review
 created: 2026-09-03T04:47:31+0200
-updated: 2026-09-23T13:05:24+0200
+updated: 2026-09-23T13:17:37+0200
 current-owner: main-session
 task-type: feature
 priority: high
@@ -392,6 +392,7 @@ No defects found. Full report: `reports/ai-review/20260905_142042+0200-9SYRK6SW.
 **Verdict: APPROVE**
 
 ## Notes and lessons learned
+2026-09-23T13:16:38+0200: writer unobserved since 2026-09-05 (raw body capture off); approval is a code reading. git log --oneline c92a90c3..HEAD -- rust-core/crates/agentlens-store/src/ -> none (0 commits; agentlens-store/src/ unchanged since the AI-review's cited baseline commit).
 
 ## ⏵ AI-REVIEW VERDICT 2026-09-23T13:00:09+0200 — APPROVE
 

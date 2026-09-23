@@ -3,7 +3,7 @@ trdd-id: XTFDRTH2
 title: Session cards live in a DuckDB table upserted on ingest, not in a 32k-entry IndexMap
 column: ai_review
 created: 2026-09-05T22:06:10+0200
-updated: 2026-09-23T12:57:51+0200
+updated: 2026-09-23T13:17:02+0200
 implementation-commits: [f29bc3b6, 8069c6a9, e00af58b, 13209791, 12c4c4a7, 46a0268c, ac289d8d]
 current-owner: main-session
 task-type: refactor
@@ -156,6 +156,7 @@ No existing test would have caught losing them: every fixture in the suite has D
 `startTime`s, so an unordered scan passes all 616. The guard is
 `tests/card_store.rs::cards_sharing_a_start_time_are_served_in_first_insert_order`, written and
 verified green BEFORE the switch so it pins the OLD behaviour rather than blessing the new one.
+Owed runs 2026-09-23T13:16:38+0200: cargo test -p agentlens-core --test card_store -> 11 passed, 0 failed, exit=0 (188.72s, incl. the restore-sized bulk-load test). Partially settles Box2's 'INFERRED, not re-run' — reconfirms the card_store suite first-hand (incl. cards_sharing_a_start_time_are_served_in_first_insert_order); the full agentlens-core suite (616 passed / 0 failed across 104 suites) was NOT re-run this session (out of scope: only the card_store target was authorized, per TRDD-YGEV6QDD's canonical-port hazard).
 
 ## Approval log
 

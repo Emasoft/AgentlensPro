@@ -3,7 +3,7 @@ trdd-id: 4TOU4V8E
 title: lpv_parity stamps fixture mtimes through touch -d @epoch, which BSD touch rejects
 column: ai_review
 created: 2026-09-05T20:16:52+0200
-updated: 2026-09-23T12:56:46+0200
+updated: 2026-09-23T13:16:55+0200
 current-owner: agentlenspro-b2
 task-type: bugfix
 min-approval-requirement: none
@@ -111,6 +111,7 @@ on ubuntu with GNU touch and stay green, so this is exactly the class of local-o
 never reaches CI (ATOM-2PSS-WR4Q's inverse).
 
 ## Notes and lessons learned
+Owed runs 2026-09-23T13:16:38+0200: cargo test -p agentlens-core --test lpv_parity -> 10 passed, 0 failed, exit=0. Settles Box2's 'not re-run by this review' — reconfirms 10/10 first-hand, independent of code-shape inference.
 
 ## Approval log
 

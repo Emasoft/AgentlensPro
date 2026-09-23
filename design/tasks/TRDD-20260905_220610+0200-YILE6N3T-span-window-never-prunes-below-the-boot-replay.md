@@ -3,7 +3,7 @@ trdd-id: YILE6N3T
 title: The span window reports a 5-minute window but holds the whole 24-hour boot replay and only grows
 column: ai_review
 created: 2026-09-05T22:06:10+0200
-updated: 2026-09-23T13:00:51+0200
+updated: 2026-09-23T13:17:30+0200
 current-owner: main-session
 task-type: bugfix
 priority: critical
@@ -107,6 +107,7 @@ old spans whose FIRST element has no resolvable timestamp must still prune the o
       10,479 MB (t15) → 11,326 MB (t18), vs 13.1 GB baseline and 19.6 GB pre-restart — both lower.
 
 ## Notes and lessons learned
+Verdict qualification 2026-09-23T13:16:38+0200: Box 3's 13,200-span bound was derived for the 300 s window then in force (22 spans/s x 300 s x 2); the window is now configured at 24 h (/api/server-stats spans.configuredWindowMs 86400000, verified live), so that bound no longer applies today and today's resident-span count (inMemory 1,135 measured just now) is not a regression against it. The prune fix itself is pinned by prunes_past_a_first_element_with_no_resolvable_timestamp regardless of window size. The verdict's live spot-check 'consistent with the fix holding' is withdrawn: the same collector is being exited by the RSS guard every 1-2 h (TRDD-EQCGAVGV), so a spot-check RSS number reflects a recently-restarted process, not sustained steady-state. APPROVE stands on the code and test.
 
 ## Approval log
 
