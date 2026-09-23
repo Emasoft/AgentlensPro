@@ -1,9 +1,9 @@
 ---
 trdd-id: C19SUVPH
 title: The ingest flood bench cannot send statusline POSTs so a load arm cannot vary statusline alone
-column: todo
+column: ai_review
 created: 2026-09-23T19:14:50+0200
-updated: 2026-09-23T19:52:41+0200
+updated: 2026-09-23T20:36:41+0200
 current-owner: main-session
 created-by: main-session
 task-type: infra
@@ -14,13 +14,20 @@ mandated-by: none
 approved: true
 approval-judge: main-session
 approval-datetime: 2026-09-23T19:14:50+0200
+implementation-commits: [bbf40fdf]
 ---
 
 # The ingest flood bench cannot send statusline POSTs so a load arm cannot vary statusline alone
 
 scripts/bench/alcore-ingest-flood.mjs drives OTLP only. TRDD-EQCGAVGV's isolated run needs arms that vary statusline and OTLP independently, so the tool must: send POST /api/statusline-samples with a realistic payload at a configurable rate (including low rates, e.g. 1 per 10 s); pace OTLP independently; target a given port set (UI/API and OTLP) so it never touches the live collector's canonical ports by default.
 
-Acceptance: [ ] statusline-only and OTLP-only modes (the zero-load baseline is simply not running the tool); [ ] rate flags verified by the target's own counters (statusline receivedSinceBoot, admitted_total) over 5 min; [ ] refuses to run against the canonical ports unless an explicit flag says so. related: [EQCGAVGV].
+## Acceptance
+
+- [x] statusline-only and OTLP-only modes (the zero-load baseline is simply not running the tool).
+- [x] rate flags verified by the target's own counters (statusline receivedSinceBoot, spans.store.totalSpans; admitted_total counts UI-port POSTs) over 5 min.
+- [x] refuses to run against the canonical ports unless an explicit flag says so.
+
+related: [EQCGAVGV].
 
 ## Approval log
 
@@ -40,3 +47,14 @@ The statusline POST handler is agentlens-core/src/ui.rs:1426-1444 (POST /api/sta
 6. Target-down: a run of consecutive status-0 responses lasting >= 20 requests AND >= 30 s ends the arm; targetDownAtSec = time of the FIRST failure of that run. Always print the result JSON; exit 3 when the arm ended early on target-down, 0 on full duration, 2 on refusal, 1 on tool error.
 7. Live refusal: BEFORE any http call, exit 2 if --ui-port == 3000 or --otlp-port == 4318 (each alone) unless --allow-live. Then, on the first /api/server-stats read, exit 2 (no POST sent) if realpath($.dataDir) == realpath(os.userInfo().homedir + '/.agentlens') unless --allow-live; if $.dataDir is absent, warn on stderr and continue.
 8. Unchanged: OTLP/hook body shapes (except span count), defaults, the unbounded latency arrays (keep the existing ponytail comment). Add a code comment with the WHY for 5-7.
+
+## Verification (2026-09-23)
+
+Implemented in bbf40fdf. Isolated alcore (own HOME/DATA_DIR, ports 3901/4901/4916): statusline --rate 2 x 300 s -> 600 requests, 600 received = 600 persisted, 0 spans; OTLP --rate 1 --spans-per-request 20 x 300 s -> 5,900 spans at the tool's after-read, 6,000 on a re-read 2 s later; ports 3000 and 4318 each refused with exit 2 and zero HTTP requests; target killed at 60 s -> exit 3, targetDownAtSec 60. summaryMissesDelta: statusline 0, OTLP 300. The dataDir refusal was not exercised. Report: reports/flood-bench/20260923_201445+0200-c19suvph-impl.md (gitignored).
+
+## Amendments after review of bbf40fdf (2026-09-23)
+
+Item 1: no ts is sent - the server stamps its own ts on every row (statusline_store.rs append, ~289-304), overwriting any client value. resets_at is fixed per run, used_percentage is account-wide and rises 0.001/sample, prompt_id is stable for 20 samples per session; statuslineBodyBytesMean is reported (1,919 B measured).
+Item 5 as implemented: the revive check compares the pid of the first read with the pid of the final read (or last good tick), not every tick; a pid change nulls every delta. deltaBasis (final|tick|before) names the read the deltas rest on; with basis before, every delta is null.
+Item 6 as implemented: only status 0 (no response, socket error, timeout) counts toward target-down; 4xx/5xx are the server answering. getJson now has the same REQUEST_TIMEOUT_MS as post.
+Added: every flag is validated before any http call (unknown flag, missing/non-finite/negative number, --mix outside otlp|hooks|both|statusline, out-of-range ports/share/concurrency) -> exit 2; underRate is judged on achievedOkPerSec (2xx only).

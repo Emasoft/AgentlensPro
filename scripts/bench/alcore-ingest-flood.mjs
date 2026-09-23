@@ -13,6 +13,19 @@ import fs from 'node:fs';
  *  must still terminate and report that. */
 const REQUEST_TIMEOUT_MS = Number(process.env.BENCH_REQUEST_TIMEOUT_MS) || 10_000;
 
+// B4: exact-string flag matching means `--rate=2` is an unknown flag, not a lenient `--rate 2` —
+// list every accepted numeric flag once here so an unlisted or malformed value fails fast (exit 2)
+// before any http call, rather than silently running with a default.
+const FLAG_TO_KEY = {
+  '--otlp-port': 'otlpPort', '--ui-port': 'uiPort', '--seconds': 'seconds',
+  // Sessions, not raw throughput. The USER's question is "many Claude Code sessions in
+  // parallel", and a flat-out flood answers a different one: it runs ~6,250x this machine's
+  // measured 26 spans/s peak, which manufactures allocator behaviour no fleet produces.
+  '--concurrency': 'concurrency', '--sessions': 'sessions', '--spans-per-session': 'spansPerSession',
+  '--rate': 'rate', '--spans-per-request': 'spansPerRequest', '--new-session-every': 'newSessionEvery',
+  '--progress-sec': 'progressSec', '--subagent-share': 'subagentShare',
+};
+
 function parseArgs(argv) {
   const out = {
     otlpPort: 4901, uiPort: 3901, seconds: 30, concurrency: 32, mix: 'both',
@@ -22,30 +35,48 @@ function parseArgs(argv) {
     // their measured spans/s peak", a statement about OTLP, not about a statusline-only arm.
     rate: 0, spansPerRequest: 20, newSessionEvery: 0, progressSec: 300, subagentShare: 0.31, allowLive: false,
   };
+  const errors = [];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
-    const next = () => argv[++i];
-    if (a === '--otlp-port') out.otlpPort = Number(next());
-    else if (a === '--ui-port') out.uiPort = Number(next());
-    else if (a === '--seconds') out.seconds = Number(next());
-    else if (a === '--concurrency') out.concurrency = Number(next());
-    else if (a === '--mix') out.mix = next();
-    // Sessions, not raw throughput. The USER's question is "many Claude Code sessions in
-    // parallel", and a flat-out flood answers a different one: it runs ~6,250x this machine's
-    // measured 26 spans/s peak, which manufactures allocator behaviour no fleet produces.
-    else if (a === '--sessions') out.sessions = Number(next());
-    else if (a === '--spans-per-session') out.spansPerSession = Number(next());
-    else if (a === '--rate') out.rate = Number(next());
-    else if (a === '--spans-per-request') out.spansPerRequest = Number(next());
-    else if (a === '--new-session-every') out.newSessionEvery = Number(next());
-    else if (a === '--progress-sec') out.progressSec = Number(next());
-    else if (a === '--subagent-share') out.subagentShare = Number(next());
-    else if (a === '--allow-live') out.allowLive = true;
+    if (a === '--allow-live') { out.allowLive = true; continue; }
+    if (a === '--mix') { out.mix = argv[++i]; continue; }
+    const key = FLAG_TO_KEY[a];
+    if (!key) { errors.push(`unknown flag: ${a}`); continue; }
+    const raw = argv[++i];
+    const value = Number(raw);
+    if (raw === undefined || !Number.isFinite(value) || value < 0) {
+      errors.push(`invalid value for ${a}: ${JSON.stringify(raw)}`);
+      continue;
+    }
+    out[key] = value;
   }
-  return out;
+  return { out, errors };
 }
 
-const args = parseArgs(process.argv.slice(2));
+/** Cross-field / enum checks parseArgs cannot do inline. Runs before any http call so a bad
+ *  flag combination fails fast (exit 2) instead of burning the run's --seconds. */
+function validateArgs(out) {
+  const errors = [];
+  if (!['otlp', 'hooks', 'both', 'statusline'].includes(out.mix)) errors.push(`--mix must be one of otlp,hooks,both,statusline, got ${JSON.stringify(out.mix)}`);
+  if (!(out.concurrency >= 1)) errors.push('--concurrency must be >= 1');
+  if (!(out.seconds > 0)) errors.push('--seconds must be > 0');
+  if (!(out.progressSec >= 1)) errors.push('--progress-sec must be >= 1');
+  if (!(out.subagentShare >= 0 && out.subagentShare <= 1)) errors.push('--subagent-share must be within [0,1]');
+  if (!Number.isInteger(out.otlpPort) || out.otlpPort < 1 || out.otlpPort > 65535) errors.push('--otlp-port must be an integer in 1-65535');
+  if (!Number.isInteger(out.uiPort) || out.uiPort < 1 || out.uiPort > 65535) errors.push('--ui-port must be an integer in 1-65535');
+  return errors;
+}
+
+// B4: validated BEFORE the live-port refusal below and before any http call — an unknown flag,
+// a numeric flag with a missing/non-finite/negative value, or an out-of-range value must exit 2
+// immediately, never run silently with a default (`--rate=2` matches no exact flag string above
+// and is therefore an unknown flag, not a lenient `--rate 2`).
+const { out: args, errors: parseErrors } = parseArgs(process.argv.slice(2));
+const argErrors = [...parseErrors, ...validateArgs(args)];
+if (argErrors.length > 0) {
+  console.error(`bad arguments: ${argErrors.join('; ')}`);
+  process.exit(2);
+}
 
 // LIVE-PORT REFUSAL (TRDD-C19SUVPH item 7, half 1) — checked BEFORE any http call, so a synthetic
 // flood can never reach the real collector's canonical ports by construction, not by operator
@@ -89,6 +120,22 @@ const statuslineCostBySession = new Map();
 // short /tmp paths alone measured ~330 bytes light). No reader opens these paths.
 const BENCH_PROJECT_DIR = '/tmp/al-bench-data/bench-project-synthetic-workspace-for-load-testing';
 const BENCH_PROJECT_SLUG = BENCH_PROJECT_DIR.replace(/\//g, '-');
+
+// B3: prompt_id must stay stable across 20 consecutive samples of the SAME session, then rotate —
+// one real API call's prompt_id spans many statusline ticks, not one per tick.
+const statuslinePromptBySession = new Map(); // session -> { id, count }
+
+// B3: rate_limits are account-wide, not per-sample — every session on one account shares one
+// slowly-rising used_percentage and one reset time fixed at process start, never a fresh random
+// number on every POST.
+const RUN_START_SEC = Math.floor(Date.now() / 1000);
+const rateLimitState = {
+  fiveHour: { usedPercentage: 5 + Math.random() * 25, resetsAt: RUN_START_SEC + 18000 },
+  sevenDay: { usedPercentage: 5 + Math.random() * 25, resetsAt: RUN_START_SEC + 604800 },
+};
+
+// B3: mean statusline body size in bytes, surfaced in the result as statuslineBodyBytesMean.
+const statuslineBodyBytes = { total: 0, count: 0 };
 
 function hex(n) {
   let s = '';
@@ -166,6 +213,14 @@ function makeStatuslinePayload() {
   const prevCost = statuslineCostBySession.get(session) ?? Math.random() * 5;
   const cost = prevCost + Math.random() * 0.05;
   statuslineCostBySession.set(session, cost);
+  // B3: prompt_id stays stable for 20 consecutive samples of this session, then rotates — one
+  // real API call's prompt_id spans many statusline ticks, not one per tick.
+  let promptState = statuslinePromptBySession.get(session);
+  if (!promptState || promptState.count >= 20) {
+    promptState = { id: hex(32), count: 0 };
+    statuslinePromptBySession.set(session, promptState);
+  }
+  promptState.count++;
   const inputTokens = 500 + Math.floor(Math.random() * 5000);
   const outputTokens = 50 + Math.floor(Math.random() * 800);
   const cacheRead = Math.floor(Math.random() * 200000);
@@ -174,13 +229,21 @@ function makeStatuslinePayload() {
   const totalOutput = outputTokens * 40;
   const contextWindowSize = 200000;
   const usedPct = Math.min(100, Math.round(((totalInput + totalOutput) / contextWindowSize) * 100));
+  // B3: rate_limits are account-wide and rise slowly across the whole run — see rateLimitState.
+  rateLimitState.fiveHour.usedPercentage = Math.min(100, rateLimitState.fiveHour.usedPercentage + 0.001);
+  rateLimitState.sevenDay.usedPercentage = Math.min(100, rateLimitState.sevenDay.usedPercentage + 0.001);
   const nowSec = Math.floor(Date.now() / 1000);
-  return JSON.stringify({
+  // B3: no `ts` field here — the server STAMPS ITS OWN ts on every stored row. statusline_store.rs
+  // `append()` (rust-core/crates/agentlens-core/src/statusline_store.rs:289-304) flattens the
+  // client payload, then does `flat.insert("ts", num(ts_ms))` with its OWN now_ms(), overwriting
+  // whatever this field said. Sending a client ts would be dead weight the server discards, so it
+  // is omitted rather than faked (confirmed via `tldr search "fn append" statusline_store.rs`).
+  const body = JSON.stringify({
     session_id: session,
     transcript_path: `/tmp/al-bench-data/.claude-mirror/projects/${BENCH_PROJECT_SLUG}/${session}.jsonl`,
     cwd: BENCH_PROJECT_DIR,
     scratchpad_dir: `/tmp/al-bench-data/scratchpad/${BENCH_PROJECT_SLUG}/${session}`,
-    prompt_id: hex(32),
+    prompt_id: promptState.id,
     effort_level: 'medium',
     model: { id: model.id, display_name: model.display_name },
     workspace: {
@@ -232,13 +295,15 @@ function makeStatuslinePayload() {
     fast_mode: false,
     thinking_enabled: true,
     rate_limits: {
-      five_hour: { used_percentage: Math.round(Math.random() * 100), resets_at: nowSec + 18000 },
-      seven_day: { used_percentage: Math.round(Math.random() * 100), resets_at: nowSec + 604800 },
+      five_hour: { used_percentage: Math.round(rateLimitState.fiveHour.usedPercentage), resets_at: rateLimitState.fiveHour.resetsAt },
+      seven_day: { used_percentage: Math.round(rateLimitState.sevenDay.usedPercentage), resets_at: rateLimitState.sevenDay.resetsAt },
     },
     hook_event_name: isSubagent ? 'SubagentStatusLineSample' : 'StatusLineSample',
     statusline_stream: isSubagent ? 'subagent' : 'main',
-    ts: nowSec,
   });
+  statuslineBodyBytes.total += Buffer.byteLength(body);
+  statuslineBodyBytes.count++;
+  return body;
 }
 
 function post(agent, port, path, body) {
@@ -267,7 +332,7 @@ function post(agent, port, path, body) {
 
 async function getJson(port, path) {
   return new Promise((resolve, reject) => {
-    http.get({ host: '127.0.0.1', port, path }, (res) => {
+    const req = http.get({ host: '127.0.0.1', port, path }, (res) => {
       let data = '';
       res.on('data', (c) => (data += c));
       res.on('end', () => {
@@ -278,6 +343,11 @@ async function getJson(port, path) {
         }
       });
     }).on('error', reject);
+    // B1: same wedge risk `post` already guards against (2026-08-29 hang, see its comment) — a
+    // stats GET with no timeout can block a tick, the initial read, or the final read forever
+    // near the 2GB guard, where a wedged target is plausible. Destroying with an Error fires the
+    // 'error' handler above, which rejects — fetchSnapshot's catch turns that into a null.
+    req.setTimeout(REQUEST_TIMEOUT_MS, () => req.destroy(new Error('timeout')));
   });
 }
 
@@ -355,7 +425,10 @@ async function worker(i, agentOtlp, agentUi, state, mix, counters, paceMsPerReq)
     } else {
       counters.bad++;
     }
-    noteRequestOutcome(state, ok);
+    // B2: target-down counts only status===0 (no response / socket error / timeout — `post`
+    // resolves 0 for exactly those). A 4xx/5xx is the server ANSWERING, not down — counting it
+    // toward the down-streak would fake targetDownAtSec on a flood that merely got throttled.
+    noteRequestOutcome(state, status !== 0);
   }
 }
 
@@ -392,16 +465,21 @@ function realpathOrResolve(p) {
   }
 }
 
+let lastFetchErrorMessage = null;
+
 /** One combined read of /api/server-stats + /api/debug/log-scan-stats, reduced to the fields the
  *  result deltas need, plus the pid and dataDir used by the live/revived checks (TRDD-C19SUVPH
  *  items 5 and 7). Returns null on ANY failure — the caller falls back to the last good snapshot
- *  rather than crashing a multi-minute run over one dropped GET. */
+ *  rather than crashing a multi-minute run over one dropped GET. N2: the caught error's message
+ *  is stashed in `lastFetchErrorMessage` so the initial-read failure can report WHY, not just
+ *  that it failed. */
 async function fetchSnapshot(uiPort) {
   try {
     const [server, logScan] = await Promise.all([
       getJson(uiPort, '/api/server-stats'),
       getJson(uiPort, '/api/debug/log-scan-stats'),
     ]);
+    lastFetchErrorMessage = null;
     return {
       ts: Date.now(),
       pid: server.pid,
@@ -412,7 +490,8 @@ async function fetchSnapshot(uiPort) {
       statuslinePersisted: server.persistence.statuslineSamples,
       summaryMisses: logScan.derivedCaches.summary.misses,
     };
-  } catch {
+  } catch (e) {
+    lastFetchErrorMessage = e && e.message ? e.message : String(e);
     return null;
   }
 }
@@ -422,7 +501,8 @@ async function main() {
   // no separate probe GET, so a refusal never needed to have sent one either.
   let before = await fetchSnapshot(args.uiPort);
   if (!before) {
-    console.error('tool error: initial /api/server-stats + /api/debug/log-scan-stats read failed');
+    // N2: name WHY the read failed (connection refused, timeout, bad JSON), not just that it did.
+    console.error(`tool error: initial /api/server-stats + /api/debug/log-scan-stats read failed: ${lastFetchErrorMessage}`);
     process.exit(1);
   }
 
@@ -448,6 +528,9 @@ async function main() {
   }
 
   let lastGood = before;
+  // N1: whether ANY progress tick's snapshot succeeded — if none did AND the final read also
+  // fails, `after` never moves past `before` and every delta below must be null, not a false 0.
+  let tickSucceeded = false;
   const agentOtlp = new http.Agent({ keepAlive: true, maxSockets: args.concurrency });
   const agentUi = new http.Agent({ keepAlive: true, maxSockets: args.concurrency });
   const counters = { requests: 0, ok: 0, bad: 0, lat: { otlp: [], hooks: [], statusline: [] } };
@@ -478,9 +561,15 @@ async function main() {
   // snapshot survives even when the FINAL /api/server-stats read happens to fail.
   const progressTimer = setInterval(async () => {
     const snap = await fetchSnapshot(args.uiPort);
-    if (snap) lastGood = snap;
+    if (snap) {
+      lastGood = snap;
+      tickSucceeded = true;
+    }
     const elapsedSoFar = ((Date.now() - started) / 1000).toFixed(0);
-    console.error(`[progress] mix=${args.mix} elapsed=${elapsedSoFar}s requests=${counters.requests} ok=${counters.ok} bad=${counters.bad}`);
+    // N3: pid + the two counters this bench cares about most, straight from the fresh snapshot
+    // (falling back to the last good one when this tick's own GET failed).
+    const s = snap ?? lastGood;
+    console.error(`[progress] mix=${args.mix} elapsed=${elapsedSoFar}s requests=${counters.requests} ok=${counters.ok} bad=${counters.bad} pid=${s.pid} statuslineReceived=${s.statuslineReceived} spansTotal=${s.spansTotal}`);
   }, Math.max(1, args.progressSec) * 1000);
 
   const workers = Array.from(
@@ -496,16 +585,24 @@ async function main() {
   // Item 5: the after-read may itself fail — fall back to the last good snapshot (a progress tick,
   // or `before` if the run was shorter than one tick) rather than crashing a run that otherwise
   // completed cleanly.
-  const after = (await fetchSnapshot(args.uiPort)) ?? lastGood;
+  const finalSnap = await fetchSnapshot(args.uiPort);
+  // N1: deltaBasis names WHICH read the deltas below rest on, so a caller can tell "the run
+  // genuinely produced these numbers" (final/tick) from "the target never answered again after
+  // `before`, so every delta is a null, not a manufactured zero" (before).
+  const deltaBasis = finalSnap ? 'final' : tickSucceeded ? 'tick' : 'before';
+  const after = finalSnap ?? lastGood;
 
   // Item 5 remainder: a pid change between `before` and whichever snapshot the deltas are taken
   // against means the target was RESTARTED mid-run — every delta spanning that restart is
   // meaningless (the counters reset to 0 on the new process), so it is reported null, never a
   // negative or nonsensical number.
   const revived = before.pid !== after.pid;
-  const delta = (field) => (revived ? null : after[field] - before[field]);
+  const delta = (field) => (revived || deltaBasis === 'before' ? null : after[field] - before[field]);
 
   const achievedReqPerSec = counters.requests / elapsedSec;
+  // N4: attempts vs 2xx-only, so underRate is judged against what the server actually accepted,
+  // not against a rate a 429/503 flood could satisfy while still failing every request.
+  const achievedOkPerSec = counters.ok / elapsedSec;
   const result = {
     mix: args.mix,
     concurrency: args.concurrency,
@@ -518,19 +615,22 @@ async function main() {
     targetSpansPerSec: args.rate > 0 ? null : targetSpansPerSec(),
     paceMsPerReq,
     achievedReqPerSec,
-    underRate: targetReqPerSec > 0 && achievedReqPerSec < 0.95 * targetReqPerSec,
+    achievedOkPerSec,
+    underRate: targetReqPerSec > 0 && achievedOkPerSec < 0.95 * targetReqPerSec,
     sessionsModelled: args.sessions || null,
     latencyMs: {
       otlp: latencySummary(counters.lat.otlp),
       hooks: latencySummary(counters.lat.hooks),
       statusline: latencySummary(counters.lat.statusline),
     },
+    statuslineBodyBytesMean: statuslineBodyBytes.count > 0 ? statuslineBodyBytes.total / statuslineBodyBytes.count : null,
     spansAppendedDelta: delta('spansTotal'),
     hookEventsReceivedDelta: delta('hookReceived'),
     statuslineReceivedDelta: delta('statuslineReceived'),
     statuslinePersistedDelta: delta('statuslinePersisted'),
     summaryMissesDelta: delta('summaryMisses'),
     revived,
+    deltaBasis,
     targetDownAtSec: state.targetDownAtSec,
     deltasAsOfSec: (after.ts - started) / 1000,
   };
