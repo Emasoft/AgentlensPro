@@ -17,7 +17,7 @@ relevant-files: [rust-core/crates/agentlens-core/src/ui.rs]
 labels: [rust-core, memory, cpu, summary-rebuild]
 blocked-by: [EQCGAVGV]
 pre-block-column: testing
-unblock-when: [trdd:EQCGAVGV terminal]
+unblock-when: [decision:the heap-ratchet fix card filed by EQCGAVGV is deployed]
 blocker-probe: [trddgrep, why, 7RM5YW2T]
 blocker-holds-if: not-match:READY
 ---

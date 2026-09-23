@@ -17,7 +17,7 @@ approval-datetime: 2026-09-23T12:11:53+0200
 implementation-commits: [f0dca453, c16e5283]
 blocked-by: [EQCGAVGV]
 pre-block-column: testing
-unblock-when: [trdd:EQCGAVGV terminal]
+unblock-when: [decision:the heap-ratchet fix card filed by EQCGAVGV is deployed]
 blocker-probe: [trddgrep, why, MBQ9LXAN]
 blocker-holds-if: not-match:READY
 ---

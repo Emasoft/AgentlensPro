@@ -3,7 +3,7 @@ trdd-id: 091Z1FU0
 title: GET /api/summary keeps a second corpus-sized stripped tree resident and costs about 340 MB per read
 column: todo
 created: 2026-09-23T12:18:39+0200
-updated: 2026-09-23T12:41:46+0200
+updated: 2026-09-23T12:47:41+0200
 current-owner: main-session
 created-by: main-session
 task-type: bugfix
@@ -36,3 +36,8 @@ related: [MBQ9LXAN, 7RM5YW2T, KBM09XHB, WKLD508O]
 ## 2026-09-23T12:41:07+0200 — verified in code: the deep clones and their call path
 
 strip_session_detail (ui.rs, called by stripped_now -> GET /api/summary, by CoreState::build_stripped_summary, and by build_update_payload) deep-cloned the whole summary with obj.clone() (timelines included) only to overwrite sessions, then cloned each session in full before dropping fileOps/generatedFiles/generatedFilesTruncated; c16e5283 removed both throwaway copies with byte-identical output. Still open for this card: the stripped tree kept resident in stripped_cache, the ~47 MB .to_string(), and a measurement of the per-read cost.
+
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-23T12:47:16+0200
+Partly addressed by c16e5283 (strip_session_detail no longer makes its two throwaway copies). NOT started: the stripped tree kept resident in stripped_cache, the ~47 MB .to_string() per read, and a per-read measurement on an isolated instance. NEXT ACTION: measure first.
+
+
