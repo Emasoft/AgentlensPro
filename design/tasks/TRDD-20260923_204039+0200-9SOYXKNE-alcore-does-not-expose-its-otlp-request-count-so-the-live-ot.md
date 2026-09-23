@@ -3,7 +3,7 @@ trdd-id: 9SOYXKNE
 title: alcore does not expose its OTLP request count so the live OTLP request rate cannot be measured
 column: ai_review
 created: 2026-09-23T20:40:39+0200
-updated: 2026-09-23T22:43:22+0200
+updated: 2026-09-23T22:48:13+0200
 current-owner: main-session
 created-by: main-session
 task-type: feature
@@ -14,7 +14,7 @@ mandated-by: none
 approved: true
 approval-judge: main-session
 approval-datetime: 2026-09-23T20:40:39+0200
-implementation-commits: [221705cb]
+implementation-commits: [221705cb, 26e947da]
 ---
 
 # alcore does not expose its OTLP request count so the live OTLP request rate cannot be measured
