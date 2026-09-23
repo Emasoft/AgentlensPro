@@ -41,7 +41,7 @@ fn body_matches_the_frozen_key_order_exactly() {
     assert_eq!(keys(&body), [
         "pid", "version", "startedAt", "uptimeSec", "ports", "canonical", "dataDir", "memory", "spans", "logSessions",
         "persistence", "bodies", "hookEvents", "statusline", "logEvents", "admission", "resources", "gate",
-        "otlpDroppedLogEvents", "degradations",
+        "otlpDroppedLogEvents", "degradations", "otlp",
     ]);
     assert_eq!(keys(&body["ports"]), ["ui", "mcp", "otlp"]);
     assert_eq!(keys(&body["memory"]), ["rssMb", "heapUsedMb", "heapLimitMb"]);
@@ -85,6 +85,9 @@ fn body_matches_the_frozen_key_order_exactly() {
     assert_eq!(keys(&body["gate"]), ["mode", "enabled", "captureEnabled", "advisorEnabled", "checks", "denies", "warns", "advisories"]);
     assert_eq!(body["otlpDroppedLogEvents"], json!({}));
     assert_eq!(body["degradations"], json!({}));
+    // `otlp` ADDED 2026-09-23 (TRDD-9SOYXKNE) — the first TOP-LEVEL addition to the frozen shape;
+    // additive only, every pre-existing key keeps its name and relative position.
+    assert_eq!(keys(&body["otlp"]), ["tracesPayloads", "logsPayloads", "metricsPayloads", "parseErrors"]);
 
     // Process facts are real.
     assert_eq!(body["pid"], std::process::id());
@@ -153,6 +156,7 @@ fn the_values_the_core_owns_move_with_the_state() {
     assert_eq!(before["spans"]["store"], json!({ "segments": 0, "totalSpans": 0, "totalBytes": 0 }));
     assert_eq!(before["persistence"]["spanAppendWrites"], 0);
     assert_eq!(before["persistence"]["totalBytesWritten"], 0);
+    assert_eq!(before["otlp"], json!({"tracesPayloads":0,"logsPayloads":0,"metricsPayloads":0,"parseErrors":0}));
     // TRDD-U0L78B3Z, the FIRES half through the real state (the unit test covers only the pure
     // function; the live server can only show the up-reading, which a dead wiring also shows).
     // Capture on, no session activity yet ⇒ up.
@@ -182,6 +186,21 @@ fn the_values_the_core_owns_move_with_the_state() {
     // in this data dir ⇒ CAPTURE DOWN since boot. A wiring that fed defaults instead of the live
     // state would read null here exactly as the up case does — this line is what tells them apart.
     assert_eq!(after["bodies"]["captureDownSince"], json!(st.started_at_ms), "active + no bodies ⇒ down since boot");
+    assert_eq!(after["otlp"], json!({"tracesPayloads":1,"logsPayloads":0,"metricsPayloads":0,"parseErrors":0}));
+
+    // Each accepted OTLP path type moves only its own counter (TRDD-9SOYXKNE); an invalid body
+    // bumps parseErrors alone, leaving the accepted-payload counts untouched.
+    ingest_post(&mut st, "/v1/logs", br#"{"resourceLogs":[]}"#);
+    let logs = server_stats(&st, now_ms() + 2_400);
+    assert_eq!(logs["otlp"], json!({"tracesPayloads":1,"logsPayloads":1,"metricsPayloads":0,"parseErrors":0}));
+
+    ingest_post(&mut st, "/v1/metrics", br#"{"resourceMetrics":[]}"#);
+    let metrics = server_stats(&st, now_ms() + 2_400);
+    assert_eq!(metrics["otlp"], json!({"tracesPayloads":1,"logsPayloads":1,"metricsPayloads":1,"parseErrors":0}));
+
+    ingest_post(&mut st, "/v1/traces", b"not json");
+    let invalid = server_stats(&st, now_ms() + 2_400);
+    assert_eq!(invalid["otlp"], json!({"tracesPayloads":1,"logsPayloads":1,"metricsPayloads":1,"parseErrors":1}));
 }
 
 /// `otlpDroppedLogEvents` is the ingest's OWN rejection tally reaching the wire — not a constant.
