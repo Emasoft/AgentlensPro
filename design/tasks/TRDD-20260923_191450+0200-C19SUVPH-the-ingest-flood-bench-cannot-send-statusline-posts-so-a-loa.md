@@ -3,7 +3,7 @@ trdd-id: C19SUVPH
 title: The ingest flood bench cannot send statusline POSTs so a load arm cannot vary statusline alone
 column: todo
 created: 2026-09-23T19:14:50+0200
-updated: 2026-09-23T19:27:48+0200
+updated: 2026-09-23T19:52:41+0200
 current-owner: main-session
 created-by: main-session
 task-type: infra
@@ -29,3 +29,14 @@ Acceptance: [ ] statusline-only and OTLP-only modes (the zero-load baseline is s
 ## Evidence
 
 The statusline POST handler is agentlens-core/src/ui.rs:1426-1444 (POST /api/statusline-samples); payload shape is any JSON object with an optional statusline_stream:"subagent" field (ui.rs:1439), not a fixed schema struct on this path. No per-route auth/header check on this handler; it relies on the global CSRF Origin gate (ui.rs:6-14,548-569) applied to every non-GET/HEAD request.
+
+## Implementation spec (2026-09-23, after two review rounds)
+
+1. --mix statusline: POST /api/statusline-samples on --ui-port. Body = synthetic statusline JSON: session_id; transcript_path and cwd under /tmp/al-bench-data (no reader opens them - src/statuslineUsage.ts reads only the fields below); model{id,display_name}; workspace{current_dir,project_dir}; cost{total_cost_usd rising per session over the run, total_duration_ms, total_api_duration_ms, total_lines_added, total_lines_removed}; context_window{total_input_tokens,total_output_tokens,context_window_size,used_percentage,current_usage{input_tokens,output_tokens,cache_creation_input_tokens,cache_read_input_tokens}}; rate_limits{five_hour{used_percentage,resets_at},seven_day{used_percentage,resets_at}}; plus hook_event_name ('StatusLineSample' or 'SubagentStatusLineSample') and statusline_stream ('subagent' with probability --subagent-share, default 0.31, else 'main'). Take any further top-level/nested KEY NAMES (names only, never values) from one line of the newest live WAL (~/.agentlens/statusline/main/<today>/wal-*.ndjson, e.g. head -1 | jq) and add them with synthetic values so a body is ~1.9-2.0 KB (live mean 1,960 B/row).
+2. --rate R = total requests/s: paceMsPerReq = 1000*concurrency/R; overrides --sessions; worker i starts after i*pace/concurrency ms (no synchronized bursts). Result echoes paceMsPerReq, targetReqPerSec, achievedReqPerSec, and underRate:true if achieved < 95% of target.
+3. --spans-per-request K (default 20) sets makeOtlpBody's span count.
+4. --new-session-every S (default 0 = off): every S s a new monotonic id bench-session-<n> joins a sliding window of the 16 newest; all mixes pick from the window.
+5. Stats: read /api/server-stats and /api/debug/log-scan-stats (derivedCaches.summary.misses) before, at every progress tick (--progress-sec, default 300; one stderr line per tick), and after. Keep the last good snapshot. Result adds statuslineReceivedDelta, statuslinePersistedDelta (persistence.statuslineSamples), summaryMissesDelta, spansAppendedDelta, hookEventsReceivedDelta, deltasAsOfSec. If the after-read fails, deltas are computed against the last good snapshot. Record target pid at each read; a pid change sets revived:true and nulls every delta spanning it.
+6. Target-down: a run of consecutive status-0 responses lasting >= 20 requests AND >= 30 s ends the arm; targetDownAtSec = time of the FIRST failure of that run. Always print the result JSON; exit 3 when the arm ended early on target-down, 0 on full duration, 2 on refusal, 1 on tool error.
+7. Live refusal: BEFORE any http call, exit 2 if --ui-port == 3000 or --otlp-port == 4318 (each alone) unless --allow-live. Then, on the first /api/server-stats read, exit 2 (no POST sent) if realpath($.dataDir) == realpath(os.userInfo().homedir + '/.agentlens') unless --allow-live; if $.dataDir is absent, warn on stderr and continue.
+8. Unchanged: OTLP/hook body shapes (except span count), defaults, the unbounded latency arrays (keep the existing ponytail comment). Add a code comment with the WHY for 5-7.
