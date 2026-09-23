@@ -3,7 +3,7 @@ trdd-id: Z0A777XW
 title: The footprint sampler for the heap run hardcodes the live port and pidfile and is not tracked
 column: todo
 created: 2026-09-23T20:40:50+0200
-updated: 2026-09-23T21:07:39+0200
+updated: 2026-09-23T22:40:42+0200
 current-owner: main-session
 created-by: main-session
 task-type: infra
@@ -25,5 +25,5 @@ approval-datetime: 2026-09-23T20:40:50+0200
 ## Body
 
 scripts_dev/alcore-heap/sample.sh (gitignored, 17 lines) samples phys_footprint via /usr/bin/footprint plus /api/server-stats and /api/debug/log-scan-stats every 30 s, but hardcodes UI port 3000, the live ~/.agentlens/server.pid and a /tmp output path, and runs a fixed 3600 s.
-Move it to scripts/bench/alcore-footprint-sampler.sh (tracked) with --ui-port, --pidfile, --out, --seconds and --interval flags, no default that points at the live collector, and the same TSV columns (ts, pid, phys_footprint_mb, summary_misses, spans_inmem, statusline_recv, hook_recv, admitted_total).
-Acceptance: [ ] refuses to run without explicit --ui-port and --pidfile; [ ] produces the same TSV header as ratchet-correlation-samples.tsv; [ ] a 2-minute run at a 30 s interval against an isolated alcore yields 4-5 data rows (header excluded), each with a numeric footprint; [ ] pnpm run check-identities passes (the old script hardcodes a real home path). related: [EQCGAVGV].
+Move it to scripts/bench/alcore-footprint-sampler.sh (tracked) with --ui-port, --pidfile, --out, --seconds and --interval flags, no default that points at the live collector, and the same TSV columns (ts, pid, phys_footprint_mb, summary_misses, spans_inmem, statusline_recv, hook_recv, admitted_total) plus otlp_traces, otlp_logs, otlp_metrics, otlp_parse_errors from /api/server-stats otlp.* (TRDD-9SOYXKNE), so per-kind live rates are recorded per pid over time.
+Acceptance: [ ] refuses to run without explicit --ui-port and --pidfile; [ ] produces the ratchet-correlation-samples.tsv header plus the four otlp_* columns; [ ] a 2-minute run at a 30 s interval against an isolated alcore yields 4-5 data rows (header excluded), each with a numeric footprint; [ ] pnpm run check-identities passes (the old script hardcodes a real home path). related: [EQCGAVGV].

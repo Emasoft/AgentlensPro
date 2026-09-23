@@ -726,11 +726,13 @@ pub fn server_stats(st: &CoreState, now_ms: i64) -> Value {
         // could not be parsed, ACKed 200 (fail-open, an exporter must never error-loop on us) and
         // then dropped. It just never surfaced it, so a swallowed payload was invisible.
         "degradations": degradations,
-        // First TOP-LEVEL extension of the frozen key-order shape (TRDD-9SOYXKNE) — accepted OTLP
-        // payloads since boot, i.e. those that reached ingest_parsed (lib.rs ~889/893/922);
-        // excludes requests rejected before parse (oversize, shed); only JSON bodies parse, so a
-        // protobuf exporter shows up only in parseErrors; in-memory, reset on restart — pair with
-        // pid for rates (needed to calibrate TRDD-EQCGAVGV's OTLP arm).
+        // First TOP-LEVEL extension of the frozen key-order shape (TRDD-9SOYXKNE): accepted OTLP
+        // payloads since boot, counted by ingest_parsed's per-kind branches. Only two callers exist -
+        // the live OTLP HTTP handler and ingest_post (tests only) - so no replay path inflates them.
+        // Not counted anywhere: bodies rejected before parse (oversize) and payloads whose kind
+        // resolves to none of traces/logs/metrics, so these are a LOWER bound on OTLP POSTs. Only JSON
+        // bodies parse; a protobuf exporter shows up only in parseErrors. In-memory, reset on restart:
+        // pair with pid for rates (calibrates TRDD-EQCGAVGV's OTLP arm).
         "otlp": {
             "tracesPayloads": st.counters.traces_payloads,
             "logsPayloads": st.counters.logs_payloads,
