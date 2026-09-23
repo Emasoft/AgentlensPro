@@ -130,9 +130,9 @@ This is the single most important thing to internalize. Code is split by **where
 
 1. **`src/**`** — core **Node.js** logic (no DOM), bundled into the standalone outputs and exercised by the unit tests. The VS Code extension host was removed pre-fork (TRDD-6E6416B8) — there is no `src/extension.ts` and no `vscode` dependency; the retained persistence modules (`src/database/*`, `sessionRepository.ts`) type-check via the structural stand-ins in `src/vscodeCompat.ts` and run only under tests.
 2. **`media/src/**`** — the served **dashboard** (Preact + `@preact/signals`, browser, no Node). Entry `media/src/dashboard.tsx` → `media/dashboard.js` (iife); plus `media/src/sidebarWebview.ts` → `media/sidebar.js`.
-3. **`standalone/**`** — the server + CLI that reuse `src/**` (the `npx agentlenspro` path). `standalone/server.ts` + `standalone/cli.ts` → `standalone/*.js` (cjs).
+3. **`standalone/**`** — the CLI that reuses `src/**` (the `npx agentlenspro` path). `standalone/cli.ts` → `standalone/cli.js` (cjs); the server itself is `alcore` (rust-core), not a TypeScript process — the TS server was retired in commit 567fc5c2 (2026-09-01, "feat!: retire the TypeScript server — alcore is the only backend", TRDD-1B98LCVR box 4).
 
-`esbuild.js` builds **four** separate targets for these. The server↔dashboard boundary is a **message-shaped protocol** (`media/src/App.tsx` message handler, fed in standalone by an inline shim that proxies `/api/*` endpoints on `standalone/server.ts`); the two sides share shapes by importing **`src/shared/`** — the runtime-neutral directory (no Node imports, no DOM APIs) that holds the card/timeline/telemetry types and the pure engines. `media/src/types.ts` declares ONLY webview-specific message/UI types and re-exports the shared ones; it must never re-declare them (see the shared-module gotcha below). Evidence: `scripts/check-no-mirrors.js`, the executable guard for exactly this invariant.
+`esbuild.js` builds **three** separate targets for these (`entryPoints:` at lines 28, 43, 56: `media/src/dashboard.tsx`, `media/src/sidebarWebview.ts`, `standalone/cli.ts`). The server↔dashboard boundary is a **message-shaped protocol** (`media/src/App.tsx` message handler; `alcore` serves the `/api/*` endpoints and the dashboard directly — `rust-core/crates/agentlens-core/src/ui.rs`); the two sides share shapes by importing **`src/shared/`** — the runtime-neutral directory (no Node imports, no DOM APIs) that holds the card/timeline/telemetry types and the pure engines. `media/src/types.ts` declares ONLY webview-specific message/UI types and re-exports the shared ones; it must never re-declare them (see the shared-module gotcha below). Evidence: `scripts/check-no-mirrors.js`, the executable guard for exactly this invariant.
 
 ### Dual ingestion → SQLite (`SessionRepository` is the single read point)
 
@@ -148,7 +148,7 @@ When both capture the same session: **for Claude sessions the log transcript win
 - **NEVER write a user config file with `fs.writeFile`/`JSON.parse`-fallback.** Every mutation of `~/.claude/settings.json`, `~/.codex/config.toml`, or VS Code `settings.json` MUST go through `safeConfigEdit` (`src/safeConfigEdit.ts` → `scripts/safe_config_edit.py`): a verified transaction (refuse-unparseable, verify-diff, atomic backup+rename, cross-process lock, bounded retries). A direct writer with a "start fresh on parse failure" path wiped a user's entire 57.8KB settings.json on 2026-07-07 (commit 1a661a9 removed it — do not reintroduce the pattern).
 
 - **One source of truth in `src/shared/` — never mirror it into `media/src/`.** The runtime-neutral modules (`pricing.ts`, `summarizerTypes.ts`, `telemetryTypes.ts`, `cacheBreak.ts`, `keepWarm.ts`, `tokenBuckets.ts`, `fallbackCounters.ts`, `residentCost.ts`, `spawnRollup.ts`, `tokensByCause.ts`) are imported by BOTH the host and the webview; they must stay free of Node imports and DOM APIs. The old hand-synced copies drifted (the webview's cacheBreak had lost FAST_MODE detection; the two pricing tables had diverged into different interfaces), so `scripts/check-no-mirrors.js` (`pnpm run check-mirrors`, run by `compile` and `package`) FAILS the build if any file under `media/src/` re-declares a symbol `src/shared/` exports — import or re-export instead. Rates change in ONE place: `src/shared/pricing.ts` (bump `PRICING_LAST_UPDATED`; `PRICING_SOURCES.md` has the authoritative per-provider rate URLs). Evidence: the guard itself, `scripts/check-no-mirrors.js` (currently `OK — 120 shared exports, no mirrors under media/src`) — it had been wired into NO build path until 2026-08-16, so for its whole life this sentence described a guard that never ran; an executable check is the only evidence that cannot go stale, which is why this no longer cites a report.
-- **`sql.js` is not bundled.** The standalone server resolves it from `node_modules` at runtime (`require.resolve('sql.js')` + `locateFile` for its WASM, `standalone/server.ts`) to read OpenCode's SQLite database; when it is unavailable, OpenCode ingestion falls back to the per-message JSON files.
+- **`sql.js` is not bundled.** `src/logReader.ts` resolves it at runtime via an injected `sqlFactory` (`require.resolve('sql.js')` + `locateFile` for its WASM) to read OpenCode's SQLite database as a JS-path fallback; production OpenCode ingestion runs through the Rust engine (`rustParseOpenCodeSync`, `rust-core/crates/agentlens-logscan/src/opencode.rs`) and only falls back to the sql.js path when the binary is absent or `OPENCODE_DATA_DIR` overrides the data dir (`src/logReader.ts` `_scanOpenCode`).
 - **`@duckdb/node-api` is not bundled either — and a FAILED esbuild leaves the STALE bundle in place.** Native `.node` addons cannot be bundled, so the package is `external` in both node targets of `esbuild.js` and resolves from `node_modules` at runtime (it is a declared runtime dependency). The trap (commit 36c87c8): when esbuild fails it does NOT touch the outfile, so `standalone/*.js` keeps its old mtime and *looks* current — the store code sat un-shipped for a day this way while tsc+mocha gates (which run from `out/`, never esbuild) stayed green. **A change is deployed only after `node esbuild.js` succeeds AND `agentlenspro server restart` — verify with a grep for a new symbol in the bundle when in doubt.**
 - **Unit tests mock the `vscode` module** via `src/test/setup.js` → `src/test/__mocks__/vscode.js` (so mocha runs without VS Code). Tests needing the real VS Code API belong in `pnpm test` (vscode-test) instead.
 - **`.githooks/{post-merge,post-rewrite}`** rebuild bundles after pull/rebase to keep `standalone/*.js` in sync with source, but they are **not auto-enabled** — opt in with `git config core.hooksPath .githooks`.
@@ -253,8 +253,9 @@ Two traps that make a broken package install cleanly and fail only at spawn time
 **ZIP carries no unix executable bit**, so `upload-artifact` → `download-artifact` loses it (the
 `package` job re-`chmod +x`es and then runs `scripts/verify-bin-native.js`); and **npm's tar writer
 decides the final mode**, so the workflow also asserts `-rwxr-xr-x` on all 16 entries *inside* the
-packed `.tgz`. `src/rustBinResolve.ts` treats a present-but-not-executable binary as not shipped
-and falls back to the TS server rather than crashing.
+packed `.tgz`. `src/rustBinResolve.ts`'s `npmPlatformBin` returns null for a present-but-not-executable
+binary, which `src/cli/serverControl.ts`'s `alcoreBin` turns into a `noServerAvailableError` — there
+is no TypeScript server to fall back to (retired in 567fc5c2, 2026-09-01, TRDD-1B98LCVR box 4).
 
 The size is measured and accepted: `gzip -9` gives `alcore` 52.6→17.0 MB and `alstore` 39.9→11.8 MB,
 so four targets are **~121.5 MB downloaded / ~384 MB unpacked** per install, versus ~30/~96 MB if
@@ -266,9 +267,9 @@ DuckDB is the size and it does not compress away.
 - **EXACTLY ONE server may own a data directory — and changing ports does NOT isolate an instance.**
   `MCP_PORT`/`UI_PORT`/`OTLP_PORT` isolate the *listeners*; both processes still append to the same
   span store, log-tail offsets and session cards. To run a second instance you MUST give it its own
-  **`DATA_DIR`** (and `HOME`), which is what every test in `src/test/` already does. The guard in
-  `standalone/server.ts` is keyed on the data dir and refuses a second claimant whatever its ports
-  (atomic `wx`, stale-lock takeover, ownership-checked release). Evidence:
+  **`DATA_DIR`** (and `HOME`), which is what every test in `src/test/` already does. The guard —
+  atomic exclusive create, stale-lock takeover, ownership-checked release — is `rust-core/crates/agentlens-core/src/pid_lock.rs`
+  (`claim`/`release`), keyed on the data dir, and refuses a second claimant whatever its ports. Evidence:
   `reports/window-capacity-investigation/20260726_195540+0200-inferred-vs-actual-capacity.md`.
   **The CLI side of that recipe is keyed on the data dir too** (TRDD-BSDR4TRM): `findServerPid()`
   reads `<dataDir>/server.pid` FIRST and accepts a REST-reported pid only when that server reports
@@ -309,7 +310,8 @@ dashboard/OTLP). Hook registration changes need a Claude session restart to take
   the three commands that would settle it.
   Also note `bin-native/` is gitignored, so the running binary has no recorded link to a commit.
   Card: TRDD-M2VK8T4P (includes the unverified question of whether the published tarball is
-  affected — `rustBinResolve` would fall back to the TS server silently if it were).
+  affected — a missing/corrupt binary there would hit `noServerAvailableError`, there being no
+  TypeScript server to fall back to silently).
 
 ## HOW TOKEN USAGE / CACHE ECONOMICS WORK — read before reasoning about burn OR writing any cost/attribution code (doc-verified 2026-07-11, re-affirmed after a live mis-scaling)
 
