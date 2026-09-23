@@ -3,7 +3,7 @@ trdd-id: Z0A777XW
 title: The footprint sampler for the heap run hardcodes the live port and pidfile and is not tracked
 column: todo
 created: 2026-09-23T20:40:50+0200
-updated: 2026-09-23T22:48:04+0200
+updated: 2026-09-23T22:52:41+0200
 current-owner: main-session
 created-by: main-session
 task-type: infra
@@ -31,3 +31,4 @@ Acceptance: [ ] refuses to run without explicit --ui-port and --pidfile; [ ] pro
 ## Deploy dependency (2026-09-23)
 
 The otlp_* columns read /api/server-stats otlp.*, which the live collector serves only after 221705cb or later is deployed (a pending user decision). The sampler must write NA - never 0, which is a false value, and never crash - when otlp.* (or any other field) is absent.
+Every consumer of the TSV (e.g. scripts_dev/alcore-heap/per_interval_corr.py and its successors) must treat NA as missing - skip that row's delta - never parse it as 0 and never crash on it.

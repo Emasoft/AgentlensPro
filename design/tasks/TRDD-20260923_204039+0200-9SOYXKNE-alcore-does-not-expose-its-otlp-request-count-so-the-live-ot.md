@@ -3,7 +3,7 @@ trdd-id: 9SOYXKNE
 title: alcore does not expose its OTLP request count so the live OTLP request rate cannot be measured
 column: ai_review
 created: 2026-09-23T20:40:39+0200
-updated: 2026-09-23T22:48:13+0200
+updated: 2026-09-23T22:52:47+0200
 current-owner: main-session
 created-by: main-session
 task-type: feature
@@ -36,3 +36,4 @@ Implemented in 221705cb: /api/server-stats gains a top-level otlp {tracesPayload
 ## Review of 221705cb (2026-09-23)
 
 No blockers. Callers of ingest_parsed: the live OTLP HTTP handler (lib.rs ~998) and ingest_post (lib.rs ~835, tests only - the "import paths" its doc comment mentions do not exist in rust-core), so no replay path inflates the counts. The counts are a lower bound on POSTs: oversize bodies and payloads whose kind resolves to none of the three are counted nowhere. The code comment was corrected accordingly (dropped the unverified "shed" example, anchored on ingest_parsed instead of line numbers).
+Held in ai_review, with its AI review passed, pending the user's decision on the human_review policy for AI-approved cards.
