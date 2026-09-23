@@ -2,7 +2,7 @@
 name: cache-risk-command-detection
 description: "what actually broke my prompt cache / how does reload-cost know a /reload-plugins happened / where do the cache-break causes come from if no hook fires / does ConfigChange fire on /reload-plugins / how are /reload-skills /plugin /login /logout /model detected / why did the reload count change from 102 to 613 / where does the cost of a slash command get billed / why are so many breaks UNCLASSIFIED / an injected memory file keeps breaking the cache / a memory curator rewrote MEMORY.md under a live session / usertext block changed at msg[0]"
 ocd: 2026-07-21
-lmd: 2026-08-01
+lmd: 2026-09-23
 metadata:
   node_type: memory
   type: project
@@ -106,7 +106,7 @@ names the first change — so it can name a block that could not have caused the
 consumer inherits that. Tracked as TRDD-V8YOWHVT, which blocks adding the ~18 unmodelled causes. [^4]
 
 
-^ATOM-XWZZ-AEW4 [desc:"msg[0] is the CONVERSATION's identity: a divergence in its usertext segment means a different sub-agent stream, NOT a broken prefix — and the fix must key on the segment KIND", keywords: msg0_changed_but_nothing_broke subagent_shares_parent_session_id cache_break_blames_a_user_prompt UNCLASSIFIED_dominant_avoidable_perpetrator different_conversations_one_session_id fan-out_cache_report_over-attributes, ocd: 2026-08-04, lmd: 2026-08-04]
+^ATOM-XWZZ-AEW4 [desc:"msg[0] is the CONVERSATION's identity: a divergence in its usertext segment means a different sub-agent stream, NOT a broken prefix — and the fix must key on the segment KIND", keywords: msg0_changed_but_nothing_broke subagent_shares_parent_session_id cache_break_blames_a_user_prompt UNCLASSIFIED_dominant_avoidable_perpetrator different_conversations_one_session_id fan-out_cache_report_over-attributes, ocd: 2026-08-04, lmd: 2026-09-23]
 
 **`msg[0]` is the conversation's identity, not a mutable block.** A sub-agent's API calls carry the
 PARENT's `session_id`, so two consecutive requests grouped under one id are frequently two different
@@ -120,6 +120,9 @@ there, and every sampled one is a different sub-agent TASK PROMPT ("You are doin
 the *"Dominant AVOIDABLE perpetrator, 23.2%"* — a report telling the operator to fix something that
 never happened. After: `UNCLASSIFIED` 29.1% → 5.7%, the verdict moved to a real cause, and a genuinely
 avoidable 251k-token `MEMORY_FILE_CHANGED` surfaced from under the noise.
+
+
+^ATOM-48LY-KV5B [desc: "Why the A-B-A interleave test misses same-type subagent streams, why the usertext-kind check must cover BOTH sides, and why per-stream innocence still leaves a real aggregate FLEET-COLD cost.", keywords: interleave_signature_missed_subagent_streams two_subagents_same_type_share_model_and_tool_catalog A-B-A_pattern_fails_to_detect_divergence usertext_kind_check_both_sides_required memory_file_rewrite_is_a_different_cause_than_subagent_divergence postcompact_rewrite_claimed_before_subagent_kind_check per_stream_innocent_but_aggregate_cost_real fan-out_fleet_cold_spawn_shape_cost spawnRollup_FLEET-COLD_not_an_invalidation why_does_cache_blame_the_wrong_subagent_turn diffBlocks_cacheBreakTimeline_TRDD-00NOBU9W, ocd: 2026-09-23, lmd: 2026-09-23]
 
 The A→B→A interleave signature cannot catch these: it keys on model + tool catalog, and two sub-agents
 of the same type share both.
