@@ -3,7 +3,7 @@ trdd-id: J2K6IM4R
 title: The review gate arms on a write verb invoked with --help
 column: todo
 created: 2026-09-23T14:12:31+0200
-updated: 2026-09-23T19:18:22+0200
+updated: 2026-09-23T19:33:02+0200
 current-owner: main-session
 created-by: emanuelesabetta
 task-type: bugfix
@@ -17,6 +17,23 @@ approval-datetime: 2026-09-23T14:12:31+0200
 ---
 
 # The review gate arms on a write verb invoked with --help
+
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-23T19:24:53+0200
+
+AUTHORITATIVE RULE — supersedes the Fix section and both refinement sections below:
+
+1. Exempt list is exactly {fastedit, memgrep}, intersected with the verbs the classifier arms today (fastedit: edit, multi-edit, batch-edit, create, duplicate, split, join, delete, move, rename, rename-all, move-to-file, undo — FASTEDIT_WRITE_VERBS, src/cli/reviewGateTriggers.ts:391-394; memgrep: any verb matching /-mem-/, src/cli/reviewGateTriggers.ts:253, e.g. new-mem-atom, update-mem-atom, migrate-mem-atom, update-mem-topic). tldr has no write verb (nothing to exempt). trddgrep is EXCLUDED: its hand-rolled parser makes `trddgrep set <id> <field> --help` write the literal value --help.
+2. A segment is matched to a CLI the way the classifier matches it today (path.basename() of the first unwrapped, unquoted argv word after skipping WRAPPERS tokens and NAME=value assignment prefixes, src/cli/reviewGateTriggers.ts:280-299; a full/relative path wrapper like .venv/bin/fastedit still matches via basename, and a leading env assignment FOO=1 fastedit ... still matches; a script-runner wrapper not in WRAPPERS such as uv run fastedit ... does NOT recurse into the wrapped command and so does not match today, src/cli/reviewGateTriggers.ts:201,247-251); the exemption applies only where that match applies. An unmatched wrapper just arms (harmless false arm).
+3. Tokenize each segment quote-aware (shlex-style); a --help inside a heredoc body or a $(...) substitution never exempts the outer command, yet a $(...) is still classified as a command in its own right (X=$(fastedit edit ...) must arm); stop scanning at a bare --. Today: shellWords() is quote-aware (single/double quotes, backslash-escapes) and splits on whitespace/operators, src/cli/reviewGateTriggers.ts:46-71; heredoc bodies ARE stripped before tokenizing via stripHeredocBodies(), src/cli/reviewGateTriggers.ts:105-159 (called at :309/:372); there is NO bare -- end-of-options handling anywhere in this file (grep-verified absent) — the "stop at --" rule is NOT implemented today; $(...) substitutions are NOT excluded from the scan either — '(' and ')' are generic segment separators, src/cli/reviewGateTriggers.ts:65, so $(...) content is tokenized and classified like ordinary text (the comment at :42 confirms X=$(git commit) is put in command position, i.e. scanned, not skipped) — narrower than the "excluded" claim in the second review below.
+4. The segment's CLI-verb arm is cancelled only when a standalone -h or --help token appears whose preceding token does not start with "-".
+5. The exemption cancels ONLY the CLI-verb arm. A redirect (> or >>) or tee in the same segment still arms. Today: the redirect scan, src/cli/reviewGateTriggers.ts:372-381, is a second, unconditional pass over the raw token stream, independent of the per-segment CLI-verb classification pass, src/cli/reviewGateTriggers.ts:356-359; it arms on any non-ephemeral >/>> target regardless of whether that segment's CLI verb was exempted. tee arms through a separate mechanism (ALL_ARGS_ARE_TARGETS, :203/:267-274) only when tee is itself a segment's own base command (e.g. the sibling segment after a pipe, since | starts a new segment at :317) — not literally "in the same segment" as another CLI verb, since one segment has exactly one base command.
+6. Applies per segment of a compound command.
+
+Must still ARM: fastedit edit f --snippet 'a --help b'; fastedit edit f --replace x --snippet s -- --help; fastedit edit f --dry-run --help; fastedit edit f --snippet=--help; the second segment of fastedit --help && fastedit edit f --replace x --snippet s; fastedit edit f --help > notes.md; fastedit edit f --replace x --snippet "$(cat s --help)".
+
+Must NOT arm: fastedit --help; fastedit multi-edit --help; fastedit edit f -h --replace x; memgrep new-mem-atom --help.
+
+Superseded body claims: the Fix section's "--snippet '--help' is a real write" is FALSE for fastedit (probe: exit 2, no write) — it still arms, as conservative behaviour; the first refinement's "Unverified ... argparse likely errors" is replaced by that probe; the second review's example 'p.add_argument("x --help")' does not show the hole (whitespace splitting yields the token --help")' , not --help) — the correct case is --snippet 'a --help b'.
 
 ## Approval log
 
