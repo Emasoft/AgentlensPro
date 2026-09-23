@@ -3,7 +3,7 @@ trdd-id: L2HVOB5K
 title: compile-tests leaves compiled tests of deleted sources in out, and the mocha spec glob still runs them
 column: todo
 created: 2026-09-23T13:24:06+0200
-updated: 2026-09-23T13:24:06+0200
+updated: 2026-09-23T13:30:51+0200
 current-owner: main-session
 created-by: main-session
 task-type: bugfix
@@ -23,3 +23,7 @@ Evidence — out/test/test/reviewGateEffects.test.js (dated 2026-09-14) exists w
 ## Approval log
 
 - 2026-09-23T13:24:06+0200 — MANDATE issued by main-session (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+
+## Update
+
+Scope widened 2026-09-23T13:30:51+0200: stale output also includes compiled SOURCE modules under out/test/cli/ (out/test/cli/reviewGateEffects.js and .map exist while src/cli/reviewGateEffects.ts is gone) — tests compile to out/test/, so the stale test's `../cli/reviewGateEffects` import resolves and its 34 tests PASSED against deleted code (161 − 127). The fix must clean out/test/ outputs with no source, not only test files.
