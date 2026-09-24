@@ -1,10 +1,10 @@
 ---
 trdd-id: YVJYOJ81
-title: CHANGELOG has no entries for the CC 2.1.253-281 alignment commits
-column: backburner
+title: CHANGELOG lacks entries for the alignment commits after ef1577b6
+column: todo
 status: tasked
 created: 2026-09-25T00:09:07+0200
-updated: 2026-09-25T00:17:21+0200
+updated: 2026-09-25T00:22:50+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: docs
@@ -26,10 +26,12 @@ Known user-visible contract changes to name: meta.attachmentKind can no longer b
 ## Approval log
 
 - 2026-09-25T00:09:07+0200 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-09-25T00:22:50+0200 — column → todo by main-agent@agentlenspro.
 
 ## STATE
 
 Next action: run the git log query above, draft the CHANGELOG.md entries covering the alignment commits, and land them in one commit with the standard TRDD subject tag. — 2026-09-25
+Correction: 7f0b3d4e, 8eb2af75 and ef1577b6 DID add CHANGELOG entries for this stream; the debt starts after ef1577b6.
 
 ## Git result
 

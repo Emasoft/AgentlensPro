@@ -1,10 +1,10 @@
 ---
 trdd-id: BZFYC809
-title: gen-statusline-expected.mjs deletes committed dated fixtures on every run
+title: gen-statusline-expected.mjs deletes committed dated fixtures when run on a later day
 column: todo
 status: tasked
 created: 2026-09-25T00:17:38+0200
-updated: 2026-09-25T00:17:38+0200
+updated: 2026-09-25T00:23:13+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -26,6 +26,7 @@ Next action: pin the date the generator writes into statusline-tree/{main,subage
 Facts: it writes a statusline-tree/{main,subagent}/<today>/ directory and prunes an older one, so the working tree shows committed rust-core/crates/agentlens-core/tests/fixtures/statusline-tree/main/2026-08-20/*.parquet and *.ndjson as deleted. A `git add -u` or `commit -a` would delete committed fixtures.
 
 Evidence: I9b2-main-verify.md, Step 1 table.
+A second run on the same day deletes nothing new.
 
 ## Approval log
 
