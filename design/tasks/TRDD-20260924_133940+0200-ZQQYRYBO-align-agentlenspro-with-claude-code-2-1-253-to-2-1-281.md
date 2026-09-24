@@ -3,7 +3,7 @@ trdd-id: ZQQYRYBO
 title: Align AgentlensPro with Claude Code 2.1.253 to 2.1.281
 column: dev
 created: 2026-09-24T13:39:40+0200
-updated: 2026-09-24T19:28:22+0200
+updated: 2026-09-25T00:16:22+0200
 current-owner: emanuelesabetta
 created-by: emanuelesabetta
 task-type: refactor
@@ -14,7 +14,8 @@ mandated-by: none
 approved: true
 approval-judge: emanuelesabetta
 approval-datetime: 2026-09-24T13:39:40+0200
-implementation-commits: [92d8b369, b30b80d7, 33189cdf, fc89382b, 0972f2e7, 76c3b859, ef1577b6, e48e49c6, 97cb873d, f101fe50, 5b272f77, 079f7839, 802531dd, bb53a24c]
+implementation-commits: [92d8b369, b30b80d7, 33189cdf, fc89382b, 0972f2e7, 76c3b859, ef1577b6, e48e49c6, 97cb873d, f101fe50, 5b272f77, 079f7839, 802531dd, bb53a24c, e02bb80a]
+eht: [2D3D2V9F]
 ---
 
 # Align AgentlensPro with Claude Code 2.1.253 to 2.1.281
@@ -53,6 +54,7 @@ Message correction (2026-09-24): commit 5b272f77's "1,999 of 1,999" mixed start 
 Message correction (2026-09-24): commit bb53a24c's "shared build directory" cause is "most likely", not established as fact.
 Message correction (2026-09-24): commit 802531dd's "the heuristic CLAUDE.md records" may in fact be a different code path — not verified as stated.
 Correction to the I9 main-tree check (2026-09-24): "no raw body capture exists" was wrong. ~/.agentlens/otel-bodies holds roughly 23k live files, so ctxmap cross-checks against raw request/response bodies are possible after all.
+2026-09-25: I9b + I9b2 landed together in e02bb80a (the subject says I9b). The commit message omits three fixture additions: hist-main turn-1 short calibration pair, hist-nousage plain rules/ vs .claude/rules pair, conv-main.jsonl additions. Open follow-ups: (a) replace the literal 4 in mcptools_parity.rs the_drill_bounding_rules_hold with a comparison against the unfiltered call's turnCount, plus a >1 guard; (b) mcptools-expected.json provenance check vs a2b73fa6 (running); (c) mutation runs for contextCompositionDedup.test.ts A,B,A and tests 4-6; (d) restore the verification side-effect fixture diffs (ctxcomp, ctxsession, transcriptsql, seismicfiles, seismicrun, statusline-tree) once I6c2 lands; (e) I6c2 apply + verify on main (running).
 
 ## Increments
 
