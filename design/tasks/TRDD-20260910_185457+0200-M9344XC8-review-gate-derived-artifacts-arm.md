@@ -1,9 +1,9 @@
 ---
 trdd-id: M9344XC8
 title: The review gate's disk walk arms on derived artifacts such as __pycache__ pyc files and .DS_Store
-column: todo
+column: dev
 created: 2026-09-10T18:54:57+0200
-updated: 2026-09-10T18:54:57+0200
+updated: 2026-09-10T19:35:06+0200
 current-owner: main
 task-type: bugfix
 min-approval-requirement: none
@@ -23,7 +23,8 @@ related: [3U8AIHXK, JELDR3KC, 9FG0LSPG]
 ## Defect
 
 `src/cli/reviewGateEffects.ts` has `SKIP_DIRS = {node_modules, .git}` only, so a worker's
-`py_compile` into `__pycache__/`, Finder's `.DS_Store`, or a tool cache arms the Stop gate and
+`py_compile` into `__pycache__/`, Finder's `.DS_Store`, a tool cache, or a peer hook's growing `.log` (e.g.
+`~/.claude/hooks/fable_delegation_gate.log`, appended on every tool call) arms the Stop gate and
 demands a ~300k-token fork with nothing reviewable (measured 2026-09-10 by this session and by
 the ai-maestro-janitor session). CPython never imports a `__pycache__` pyc whose source is
 absent (PEP 3147), so skipping it hides no runnable code.
@@ -34,7 +35,13 @@ Read `SKIP_DIRS`, `BUILD_OUTPUT`, `walkDir`, `walkWatched` first; add `__pycache
 .ruff_cache .pytest_cache .hypothesis .tox` to `SKIP_DIRS`; add ONE shared
 `isDerivedArtifact(rel)` predicate matching `/(^|\/)(\.DS_Store|[^/]+\.pyc)$/` applied wherever
 the walk decides a FILE counts (both the repo walk and the watched walk — one function, not two
-copies). Plugin-cache `hooks.json` and `~/.claude/agents` stay WATCHED by design.
+copies). Plugin-cache `hooks.json` and `~/.claude/agents` stay WATCHED by design. Revised per
+review fork round 2: `isDerivedArtifact(rel)` is unconditional — `/(^|\/)(\.DS_Store|[^/]+\.(pyc|log))$/`,
+no `watched` param. `walkDir`/`walkWatched` walk ONLY the watched config set in production (never
+repo content, never routed anywhere else); a repo `.log` reaches the gate through `git status` in
+`inRepoEffects`, filtered only by `BUILD_OUTPUT`, and is never checked against `isDerivedArtifact`
+at all — pinned by test "a .log added in-repo next to an already-tracked file is listed
+(TRDD-M9344XC8)".
 
 ## Acceptance
 
