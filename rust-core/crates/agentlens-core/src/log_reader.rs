@@ -866,63 +866,97 @@ impl DurableState {
         Ok((restored, imported, skipped))
     }
 
-    /// TRDD-ORGJ0E3G — the usage-only backfill itself, replacing the full-card re-parse
-    /// (513623fe/80958154) that caused TRDD-TWDGR75R (re-parsing un-strips fields, which roughly
-    /// doubled `cards.duckdb`'s on-disk size on boot and blew its 256 MiB buffer-pool ceiling on
-    /// the very first `cards_json()` call). `restore()` never rebuilds a card; it only queues
-    /// `(session_id, path)` in `pending_1h_backfill`. This method drains that queue in bounded
-    /// chunks: each chunk's transcripts are streamed with `agentlens_logscan::sum_cache_create_1h`
-    /// (a lean line-by-line pass — no timeline, no tool records, no child cards, the SAME
-    /// first-row-per-`message.id` dedup rule the full parser uses) WITHOUT holding the state lock,
-    /// then the lock is taken only long enough to patch that one field onto each already-restored
-    /// card and released before the next chunk's I/O — so a backfill spanning thousands of files
-    /// never holds the lock for more than one chunk's worth of card writes. A card whose file
-    /// vanished between `restore()` and this call, or whose transcript turns out unparseable,
-    /// reads 0 tokens (same as its absence already implied) and is never retried — this runs
-    /// exactly once per boot, called from `start_sweeper` right after the boot report is sent so
-    /// it never delays server startup.
-    pub fn run_1h_backfill(&mut self, state: &std::sync::Mutex<crate::CoreState>) {
-        if self.pending_1h_backfill.is_empty() {
-            return;
-        }
-        let pending = std::mem::take(&mut self.pending_1h_backfill);
+    /// TRDD-ORGJ0E3G — one bounded slice of the usage-only backfill, replacing the full-card
+    /// re-parse (513623fe/80958154) that caused TRDD-TWDGR75R (re-parsing un-strips fields, which
+    /// roughly doubled `cards.duckdb`'s on-disk size on boot and blew its 256 MiB buffer-pool
+    /// ceiling on the very first `cards_json()` call). `restore()` never rebuilds a card; it only
+    /// queues `(session_id, path)` in `pending_1h_backfill`. This drains AT MOST one
+    /// `BACKFILL_CHUNK` (200 files) from that queue per call: the chunk's transcripts are streamed
+    /// with `agentlens_logscan::sum_cache_create_1h` (a lean line-by-line pass — no timeline, no
+    /// tool records, no child cards, the SAME first-row-per-`message.id` dedup rule the full
+    /// parser uses) WITHOUT holding the state lock, then the lock is taken only long enough to
+    /// patch that one field onto each already-restored card. A card whose file vanished between
+    /// `restore()` and this call, or whose transcript turns out unparseable, reads 0 tokens (same
+    /// as its absence already implied) and is never retried.
+    ///
+    /// Review fix (this session): the original design drained the WHOLE queue inside one call
+    /// made BEFORE `start_sweeper`'s watch/FULL_RESCAN loop started, so a corpus with thousands of
+    /// flagged files (measured: ~6.5 minutes for 8,846) left every real transcript write from
+    /// every other agent queued and unprocessed in the sweeper's own event channel for that whole
+    /// span — the loop that drains `rx` never got to run until the backfill call returned. Callers
+    /// now invoke this per loop iteration (see `start_sweeper`) so a real ingestion event is always
+    /// handled within one iteration, never blocked behind the backfill. Returns `true` when more
+    /// chunks remain (the caller should keep calling on subsequent iterations).
+    pub fn run_1h_backfill_step(&mut self, state: &std::sync::Mutex<crate::CoreState>) -> bool {
         const BACKFILL_CHUNK: usize = 200;
-        let mut filled = 0usize;
-        for chunk in pending.chunks(BACKFILL_CHUNK) {
-            let sums: Vec<(String, f64)> = chunk
-                .iter()
-                .map(|(session_id, path)| (session_id.clone(), agentlens_logscan::sum_cache_create_1h(&path.to_string_lossy())))
-                .collect();
-            // The "already filled" check is re-derived from the LIVE card, taken fresh under this
-            // lock — not a value captured before the unlocked I/O above — so a concurrent sweep
-            // that already re-parsed and wrote this same file's card (a normal watcher event can
-            // fire mid-backfill) is always seen here and skipped: this chunk's now-stale `sum`
-            // never clobbers a fresher value the sweep just wrote.
-            let Ok(mut st) = state.lock_timed() else { continue };
-            for (session_id, sum) in sums {
-                let Some(mut card) = st.cards.get(&session_id) else { continue };
-                let already_filled = card.as_object().is_some_and(|o| o.contains_key("cacheCreate1hTokens"));
-                if already_filled {
-                    continue; // patched by a later sweep meanwhile — never overwrite
+        if self.pending_1h_backfill.is_empty() {
+            return false;
+        }
+        let total_before = self.pending_1h_backfill.len();
+        let take = BACKFILL_CHUNK.min(self.pending_1h_backfill.len());
+        let chunk: Vec<(String, PathBuf)> = self.pending_1h_backfill.drain(..take).collect();
+        let sums: Vec<(String, f64)> = chunk
+            .iter()
+            .map(|(session_id, path)| (session_id.clone(), agentlens_logscan::sum_cache_create_1h(&path.to_string_lossy())))
+            .collect();
+        // The "already filled" check is re-derived from the LIVE card, taken fresh under this
+        // lock — not a value captured before the unlocked I/O above — so a concurrent sweep that
+        // already re-parsed and wrote this same file's card (a normal watcher event can fire
+        // mid-backfill) is always seen here and skipped: this chunk's now-stale `sum` never
+        // clobbers a fresher value the sweep just wrote.
+        let mut chunk_filled = 0usize;
+        {
+            if let Ok(mut st) = state.lock_timed() {
+                for (session_id, sum) in sums {
+                    let Some(mut card) = st.cards.get(&session_id) else { continue };
+                    let already_filled = card.as_object().is_some_and(|o| o.contains_key("cacheCreate1hTokens"));
+                    if already_filled {
+                        continue; // patched by a later sweep meanwhile — never overwrite
+                    }
+                    if let Some(obj) = card.as_object_mut() {
+                        let cache_create = obj.get("cacheCreateTokens").and_then(Value::as_f64).unwrap_or(0.0);
+                        // Clamp down, never up: `cacheCreateTokens` is never expected to shrink between
+                        // this card being queued (restore()) and being patched (here) — the card
+                        // lifecycle is upsert-replace, not decrement — so a sum that would exceed it
+                        // signals the two numbers came from different card states, and the safe,
+                        // bounded choice is to cap the write rather than either error or trust an
+                        // inconsistent pair blindly.
+                        obj.insert("cacheCreate1hTokens".into(), Value::from(sum.clamp(0.0, cache_create)));
+                    }
+                    st.put_log_session(card);
+                    chunk_filled += 1;
                 }
-                if let Some(obj) = card.as_object_mut() {
-                    let cache_create = obj.get("cacheCreateTokens").and_then(Value::as_f64).unwrap_or(0.0);
-                    // Clamp down, never up: `cacheCreateTokens` is never expected to shrink between
-                    // this card being queued (restore()) and being patched (here) — the card
-                    // lifecycle is upsert-replace, not decrement — so a sum that would exceed it
-                    // signals the two numbers came from different card states, and the safe,
-                    // bounded choice is to cap the write rather than either error or trust an
-                    // inconsistent pair blindly.
-                    obj.insert("cacheCreate1hTokens".into(), Value::from(sum.clamp(0.0, cache_create)));
-                }
-                st.put_log_session(card);
-                filled += 1;
             }
+            // `st` (if acquired) drops here, releasing the lock before the durable write below
+            // (`save_cards` takes its own short lock) — never hold the state lock across file I/O.
         }
-        if filled > 0 {
+        // TRDD-ORGJ0E3G review fix: a chunk's patches were previously only marked dirty AFTER
+        // every chunk in the whole backfill finished, so the periodic save timer never had
+        // anything to flush mid-run. The RSS hard-cap guard (rss_guard.rs) exits via
+        // `std::process::exit`, which skips all cleanup — a corpus large enough to trip that cap
+        // (measured: 9 of 45 chunks before the cap fired) would silently lose every already-
+        // applied chunk, undoing the whole run. Force each chunk's patches onto the existing
+        // delta-append path (`save_cards` → `DeltaLog::save`, which appends only the changed
+        // records — cheap even called once per chunk) BEFORE returning, so a hard exit loses at
+        // most one in-flight chunk.
+        if chunk_filled > 0 {
             self.mark_dirty();
+            self.save_cards(state);
         }
-        eprintln!("alcore: log-ingest 1h-tier backfill — filled cacheCreate1hTokens on {filled} of {} flagged card(s)", pending.len());
+        eprintln!(
+            "alcore: log-ingest 1h-tier backfill — filled cacheCreate1hTokens on {chunk_filled} of {} flagged card(s) ({} remaining)",
+            chunk.len(),
+            total_before - chunk.len()
+        );
+        !self.pending_1h_backfill.is_empty()
+    }
+
+    /// Test/tooling convenience: drains the WHOLE `pending_1h_backfill` queue in one call by
+    /// repeatedly running `run_1h_backfill_step`. Production (`start_sweeper`) calls the step
+    /// function directly, once per sweeper-loop iteration, so ingestion is never starved — see
+    /// that function's doc comment.
+    pub fn run_1h_backfill(&mut self, state: &std::sync::Mutex<crate::CoreState>) {
+        while self.run_1h_backfill_step(state) {}
     }
 
     /// scheduleDurableSave — a sweep produced cards: both sidecars are dirty.
@@ -1194,18 +1228,29 @@ pub fn start_sweeper(
                 watch_attached,
                 watch_failed: watch_failed.len(),
             }));
-            // TRDD-ORGJ0E3G: run the usage-only 1h-tier backfill AFTER the boot report is sent —
-            // it does real transcript I/O (bounded chunks, see `run_1h_backfill`'s own doc
-            // comment) and must never delay MCP/OTLP/UI coming up.
-            durable.run_1h_backfill(&state);
-
             let backstop = if watch_attached > 0 { FULL_RESCAN } else { poll_interval };
             let mut next_full = Instant::now() + backstop;
             let mut pending: Vec<PathBuf> = Vec::new();
             let mut needs_full = false;
             loop {
+                // TRDD-ORGJ0E3G: one bounded chunk (<=200 files) of the usage-only 1h-tier
+                // backfill per loop iteration, not the whole queue in one blocking call BEFORE
+                // this loop starts — a corpus with thousands of flagged transcripts (measured:
+                // ~6.5 minutes for 8,846) previously left every real transcript write from every
+                // other agent queued and unprocessed in `rx` for that whole span, since nothing
+                // drained the channel until the call returned. Interleaving it here means a real
+                // `Msg::Changed`/`Msg::Stop` is always handled within one iteration.
+                let backfill_pending = !durable.pending_1h_backfill.is_empty();
+                if backfill_pending {
+                    durable.run_1h_backfill_step(&state);
+                }
                 // recv_timeout doubles as the sleep: an event or a stop wakes the loop at once.
-                let wait = next_full.saturating_duration_since(Instant::now());
+                // Cap the wait while a backfill chunk remains so idle time between real events
+                // doesn't stall backfill progress behind FULL_RESCAN's up-to-60s backstop.
+                let mut wait = next_full.saturating_duration_since(Instant::now());
+                if backfill_pending {
+                    wait = wait.min(std::time::Duration::from_millis(50));
+                }
                 let first = rx.recv_timeout(wait);
                 match first {
                     Ok(Msg::Stop) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
@@ -1218,7 +1263,20 @@ pub fn start_sweeper(
                         tailer.clear();
                         needs_full = true;
                     }
-                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => needs_full = true,
+                    // Review fix: `wait` above is capped to 50ms while a backfill chunk is
+                    // pending, so a Timeout here does NOT mean the FULL_RESCAN backstop (up to
+                    // 60s) actually elapsed — only that our artificially short wait did. Setting
+                    // `needs_full` unconditionally on every such tick would turn one full
+                    // filesystem sweep per 60s into one every ~50ms for the whole backfill
+                    // duration (caught by review). Only the genuine backstop deadline forces a
+                    // full sweep; an early return from the capped wait falls through to the next
+                    // iteration having done nothing, which is correct (that's the whole point of
+                    // the cap: give `run_1h_backfill_step` another turn soon).
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                        if Instant::now() >= next_full {
+                            needs_full = true;
+                        }
+                    }
                 }
                 // Debounce: keep draining until the burst has been quiet for WATCH_DEBOUNCE.
                 if !needs_full {

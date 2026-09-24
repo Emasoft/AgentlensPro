@@ -825,3 +825,176 @@ fn backfill_of_an_unparseable_transcript_stamps_zero_once_and_is_not_retried() {
     assert_eq!(s3.full_reads, 1, "the tailer cold-reads once for lack of a saved offset, unrelated to this fix");
     assert!(scanned3.is_empty(), "the unparseable file still yields no card, so nothing is re-queued");
 }
+
+/// Review-fork follow-up (TRDD-ORGJ0E3G): `sum_cache_create_1h` must select and dedup rows
+/// IDENTICALLY to the full parser (`agentlens_logscan::parse_transcript` -> `on_entry`), or the
+/// lean backfill patches a different number than a full re-parse would have produced. Exercises
+/// every row shape the full parser does NOT filter out of usage accounting (only `type ==
+/// "assistant"` gates it there): a sidechain row, a `<synthetic>` model row, and an
+/// `isApiErrorMessage` row all still count, and a repeated `message.id` with DIFFERENT 1h values
+/// on each row (not identical dup values, which can't distinguish "keeps the first" from "keeps
+/// the last") proves first-row-wins in both readers.
+#[test]
+fn sum_cache_create_1h_matches_a_full_parse_across_sidechain_synthetic_and_api_error_rows() {
+    let dir = std::env::temp_dir().join(format!("al-1h-equivalence-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("33333333-1111-2222-3333-444444444444.jsonl");
+    let mut body = String::new();
+    body.push_str(
+        "{\"type\":\"user\",\"timestamp\":\"2026-09-24T09:00:00.000Z\",\"cwd\":\"/Users/someone/proj\",\"entrypoint\":\"cli\",\"message\":{\"role\":\"user\",\"content\":\"fix it\"}}\n",
+    );
+    // Row 1: sidechain, first row of "msg_a" — counted (1h=200).
+    body.push_str(
+        "{\"type\":\"assistant\",\"isSidechain\":true,\"timestamp\":\"2026-09-24T09:00:01.000Z\",\"message\":{\"id\":\"msg_a\",\"model\":\"claude-opus-5-5\",\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"cache_read_input_tokens\":0,\"cache_creation_input_tokens\":200,\"cache_creation\":{\"ephemeral_5m_input_tokens\":0,\"ephemeral_1h_input_tokens\":200}},\"content\":[{\"type\":\"text\",\"text\":\"a1\"}]}}\n",
+    );
+    // Row 2: SAME message.id, a DIFFERENT 1h value (999) — must be ignored by both readers (not
+    // merely equal-value dedup, which can't tell "keep first" from "keep last").
+    body.push_str(
+        "{\"type\":\"assistant\",\"isSidechain\":true,\"timestamp\":\"2026-09-24T09:00:02.000Z\",\"message\":{\"id\":\"msg_a\",\"model\":\"claude-opus-5-5\",\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"cache_read_input_tokens\":0,\"cache_creation_input_tokens\":999,\"cache_creation\":{\"ephemeral_5m_input_tokens\":0,\"ephemeral_1h_input_tokens\":999}},\"content\":[{\"type\":\"tool_use\",\"id\":\"t1\",\"name\":\"x\",\"input\":{}}]}}\n",
+    );
+    // Row 3: synthetic model — usage still counted (1h=50).
+    body.push_str(
+        "{\"type\":\"assistant\",\"timestamp\":\"2026-09-24T09:00:03.000Z\",\"message\":{\"id\":\"msg_b\",\"model\":\"<synthetic>\",\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"cache_read_input_tokens\":0,\"cache_creation_input_tokens\":50,\"cache_creation\":{\"ephemeral_5m_input_tokens\":0,\"ephemeral_1h_input_tokens\":50}},\"content\":[{\"type\":\"text\",\"text\":\"b\"}]}}\n",
+    );
+    // Row 4: isApiErrorMessage — usage still counted (1h=75).
+    body.push_str(
+        "{\"type\":\"assistant\",\"isApiErrorMessage\":true,\"timestamp\":\"2026-09-24T09:00:04.000Z\",\"message\":{\"id\":\"msg_c\",\"model\":\"claude-opus-5-5\",\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"cache_read_input_tokens\":0,\"cache_creation_input_tokens\":75,\"cache_creation\":{\"ephemeral_5m_input_tokens\":0,\"ephemeral_1h_input_tokens\":75}},\"content\":[{\"type\":\"text\",\"text\":\"c\"}]}}\n",
+    );
+    // Row 5: a non-assistant row with a huge usage-shaped field — must be excluded by both (only
+    // "assistant" rows are summed).
+    body.push_str(
+        "{\"type\":\"summary\",\"timestamp\":\"2026-09-24T09:00:05.000Z\",\"usage\":{\"cache_creation\":{\"ephemeral_1h_input_tokens\":100000}}}\n",
+    );
+    std::fs::write(&file, body).unwrap();
+
+    let parsed = agentlens_logscan::parse_transcript(file.to_str().unwrap(), 10_000, 50_000_000)
+        .unwrap()
+        .expect("transcript parses");
+    let lean_sum = agentlens_logscan::sum_cache_create_1h(file.to_str().unwrap());
+
+    assert_eq!(parsed.card.cache_create_1h_tokens, 325.0, "full parse: 200 (first msg_a row) + 50 (synthetic) + 75 (api-error) = 325; msg_a's 999 dup and the non-assistant 100000 are excluded");
+    assert_eq!(lean_sum, 325.0, "the lean reader's row selection (type==assistant, first-row-per-message.id) must match the full parser's EXACTLY");
+    assert_eq!(lean_sum, parsed.card.cache_create_1h_tokens, "sum_cache_create_1h(file) must equal what a full parse puts on the card for the SAME fixture");
+}
+
+/// Review-fork follow-up (TRDD-ORGJ0E3G): `run_1h_backfill_step` must make a chunk's patches
+/// DURABLE (the existing delta-append path) before it returns, not merely mark them dirty for a
+/// later timer to pick up — `rss_guard.rs`'s hard cap exits via `std::process::exit`, which skips
+/// all cleanup, so anything not yet durable at that instant is lost. This builds a FRESH
+/// `DurableState` from the data dir after calling `run_1h_backfill_step` exactly ONCE and NEVER
+/// calling `tick(..., force: true)` or any other explicit save — simulating a hard exit
+/// immediately after the one step returns — and asserts the patch survived and is not re-queued.
+#[test]
+fn run_1h_backfill_step_persists_before_returning_so_a_hard_exit_loses_nothing() {
+    let home = scratch_home("backfill-hardexit");
+    let env = Env { home: home.clone(), platform: Platform::Darwin, vars: HashMap::new() };
+    let data = std::env::temp_dir().join(format!("al-backfill-hardexit-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&data);
+    std::fs::create_dir_all(&data).unwrap();
+    let now = 1_785_578_400_000 + 600_000;
+
+    // Run 1: a normal boot + forced save so the parent card carries cacheCreate1hTokens.
+    let state = std::sync::Mutex::new(CoreState::open(&data.join("spans")));
+    let mut tailer = LogTailer::default();
+    let mut durable = DurableState::open(&data);
+    durable.restore(&mut tailer, &mut state.lock().unwrap(), &env).unwrap();
+    let (scanned, _) = tailer.sweep(&env, now);
+    state.lock().unwrap().ingest_scanned(scanned);
+    durable.mark_dirty();
+    durable.tick(&tailer, &state, true);
+
+    let parent_id = "cccccccc-1111-2222-3333-444444444444";
+    let mut cards = DeltaLog::new(&data, "log-sessions").load().unwrap();
+    let original_1h = cards[parent_id]["cacheCreate1hTokens"].as_f64().unwrap();
+    assert!(original_1h > 0.0, "fixture must actually exercise the 1h tier for this test to mean anything");
+    // Simulate a card persisted by a pre-fix binary: strip the field so it gets queued.
+    cards.get_mut(parent_id).unwrap().as_object_mut().unwrap().remove("cacheCreate1hTokens");
+    DeltaLog::new(&data, "log-sessions").save(&cards).unwrap();
+
+    // Run 2: restore() queues the stripped card; run the backfill's ONE step (this fixture's
+    // corpus is far below the 200-file chunk size, so one step drains everything) and then drop
+    // every in-process handle WITHOUT any explicit save or graceful-shutdown tick — the same
+    // state a `std::process::exit` from `rss_guard.rs` would leave behind.
+    let state2 = std::sync::Mutex::new(CoreState::open(&data.join("spans2")));
+    let mut tailer2 = LogTailer::default();
+    let mut durable2 = DurableState::open(&data);
+    durable2.restore(&mut tailer2, &mut state2.lock().unwrap(), &env).unwrap();
+    let still_pending = durable2.run_1h_backfill_step(&state2);
+    assert!(!still_pending, "this fixture's single qualifying card fits in one chunk");
+    drop(durable2);
+    drop(tailer2);
+    drop(state2);
+
+    // Run 3: a brand-new DurableState/CoreState from the SAME data dir — the "process restarted
+    // after a hard kill" case. The patch must already be there, with no re-read of the file.
+    let state3 = std::sync::Mutex::new(CoreState::open(&data.join("spans3")));
+    let mut tailer3 = LogTailer::default();
+    let mut durable3 = DurableState::open(&data);
+    durable3.restore(&mut tailer3, &mut state3.lock().unwrap(), &env).unwrap();
+    let card3 = state3.lock().unwrap().cards.get(parent_id).unwrap().clone();
+    assert_eq!(
+        card3["cacheCreate1hTokens"].as_f64(),
+        Some(original_1h),
+        "a single run_1h_backfill_step call must persist durably before returning -- a hard exit right after must not lose it"
+    );
+    // And nothing is re-queued: a further backfill call is a true no-op (the field is present).
+    durable3.run_1h_backfill(&state3);
+    let card3b = state3.lock().unwrap().cards.get(parent_id).unwrap().clone();
+    assert_eq!(card3b, card3, "nothing left to backfill -- the step's own durable write is what stopped it being re-queued, not a later graceful save");
+}
+
+/// Review-fork follow-up (TRDD-ORGJ0E3G): the "already has the key" re-check inside
+/// `run_1h_backfill_step` must be re-derived from the LIVE card under the lock, not skipped --
+/// otherwise a concurrent sweep's fresher write (a normal watcher event firing mid-backfill) gets
+/// clobbered by the backfill's own now-stale sum. Mutation-tested: deleting the `already_filled`
+/// guard in `log_reader.rs` makes this fail (the card ends up holding the stale computed sum
+/// instead of the concurrent sweep's fresher value).
+#[test]
+fn run_1h_backfill_step_never_clobbers_a_value_a_concurrent_sweep_already_wrote() {
+    let home = scratch_home("backfill-concurrent-sweep");
+    let env = Env { home: home.clone(), platform: Platform::Darwin, vars: HashMap::new() };
+    let data = std::env::temp_dir().join(format!("al-backfill-concurrent-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&data);
+    std::fs::create_dir_all(&data).unwrap();
+    let now = 1_785_578_400_000 + 600_000;
+
+    let state = std::sync::Mutex::new(CoreState::open(&data.join("spans")));
+    let mut tailer = LogTailer::default();
+    let mut durable = DurableState::open(&data);
+    durable.restore(&mut tailer, &mut state.lock().unwrap(), &env).unwrap();
+    let (scanned, _) = tailer.sweep(&env, now);
+    state.lock().unwrap().ingest_scanned(scanned);
+    durable.mark_dirty();
+    durable.tick(&tailer, &state, true);
+
+    let parent_id = "cccccccc-1111-2222-3333-444444444444";
+    let mut cards = DeltaLog::new(&data, "log-sessions").load().unwrap();
+    let original_1h = cards[parent_id]["cacheCreate1hTokens"].as_f64().unwrap();
+    cards.get_mut(parent_id).unwrap().as_object_mut().unwrap().remove("cacheCreate1hTokens");
+    DeltaLog::new(&data, "log-sessions").save(&cards).unwrap();
+
+    let state2 = std::sync::Mutex::new(CoreState::open(&data.join("spans2")));
+    let mut tailer2 = LogTailer::default();
+    let mut durable2 = DurableState::open(&data);
+    durable2.restore(&mut tailer2, &mut state2.lock().unwrap(), &env).unwrap();
+
+    // Simulate a concurrent sweep re-parsing this same file and writing a FRESHER, DIFFERENT
+    // value onto the card -- before the queued backfill step ever runs.
+    let fresh_value = original_1h + 12_345.0;
+    {
+        let mut st = state2.lock().unwrap();
+        let mut card = st.cards.get(parent_id).unwrap();
+        card.as_object_mut().unwrap().insert("cacheCreate1hTokens".into(), Value::from(fresh_value));
+        st.put_log_session(card);
+    }
+
+    durable2.run_1h_backfill_step(&state2);
+
+    let after = state2.lock().unwrap().cards.get(parent_id).unwrap().clone();
+    assert_eq!(
+        after["cacheCreate1hTokens"].as_f64(),
+        Some(fresh_value),
+        "a card a concurrent sweep already filled must never be overwritten by the backfill's own stale sum"
+    );
+}
