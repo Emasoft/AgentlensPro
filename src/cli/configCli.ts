@@ -171,24 +171,30 @@ export async function applyCaptureSetting(
     // pointing at /Volumes/AgentLensSpool/otel-bodies. effectiveBodiesDir prefers a configured
     // spoolDir over the SSD default, so without this guard ON would mkdir under a root-owned,
     // unmounted /Volumes path (EACCES) or silently resume writing into a stale mount. Refuse
-    // instead of guessing — the owner's migration (TRDD-Z53IJFE9 step C) clears spoolDir first.
+    // instead of guessing — `config set captureRawBodies off` clears spoolDir itself (see the
+    // OFF branch below), so cycling off/on is the fix (TRDD-Z53IJFE9).
     if (spoolDirConfigured(dir)) {
       console.error(
         `${CAPTURE_KEY} cannot be turned on: config.json still has a legacy spoolDir from the old ` +
-        `RAM-disk spool. Run the TRDD-Z53IJFE9 migration (step C) to clear it, then retry.`,
+        `RAM-disk spool. Run "agentlenspro config set captureRawBodies off" (clears spoolDir), ` +
+        `then "agentlenspro config set captureRawBodies on" to retry.`,
       )
       return EXIT.ABORT
     }
     const bodies = effectiveBodiesDir(dir, true)
     fs.mkdirSync(bodies, { recursive: true, mode: 0o700 })
-    // setRawBodyCapture BEFORE ensureTelemetry: if ensureTelemetry throws (e.g. a bad settings.json),
-    // the next converge must see capture already on and retry the env write — not see it still off
-    // and silently never wire the env key, which is what writing these in the other order risked.
+    // setRawBodyCapture BEFORE ensureTelemetry: the reversed order risked the env key getting written
+    // while the knob write then throws, leaving the env on but the knob off — so the next converge,
+    // reading the off knob, would DELETE that env key and silently turn capture back off.
     setRawBodyCapture(dir, true)
     await deps.ensureTelemetry({ dataDir: dir, captureRawBodies: true, bodiesDir: bodies })
     console.log(`set ${CAPTURE_KEY} = on in ${configPath(dir)}`)
     console.log(`wired ${RAW_BODIES_KEY} → file:${bodies}`)
-    console.log(`raw bodies are written to ${bodies} (~20-35 GB/day of SSD writes); the server loads and deletes them`)
+    console.log(
+      `raw bodies are written to ${bodies} (up to tens of GB/day under heavy use; it scales with ` +
+      `context size × request rate); the server loads and deletes them (hourly, after 72 h or past ` +
+      `8 GB, until the continuous drain ships)`,
+    )
     console.log('running sessions pick this up when their settings reload; restart any that do not.')
     return EXIT.OK
   }
