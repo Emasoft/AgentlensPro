@@ -80,11 +80,25 @@ function readSettingsEnv(homeDir: string): Record<string, unknown> | null {
   }
 }
 
+/** Read the top-level `subagentPromptCacheTtl` key of ~/.claude/settings.json (CC 2.1.242),
+ *  fail-soft (undefined on any problem — missing file, bad JSON, or a value other than the two
+ *  the setting accepts). READ-ONLY, same contract as readSettingsEnv. Never write. */
+function readSubagentTtlSetting(homeDir: string): '5m' | '1h' | undefined {
+  try {
+    const raw = fs.readFileSync(path.join(homeDir, '.claude', 'settings.json'), 'utf8')
+    const parsed = JSON.parse(raw) as Record<string, unknown>
+    const v = parsed.subagentPromptCacheTtl
+    return v === '5m' || v === '1h' ? v : undefined
+  } catch {
+    return undefined
+  }
+}
+
 // The slow signals (settings.json read + account resolution) cache for ~60s — the gate endpoint
 // sits on the PreToolUse hot path and the burn tick fires every few seconds; a per-call fs read
 // would be waste. The 5h window fill is CHEAP caller state and changes per call, so it stays a
 // parameter and never disables the cache.
-let cachedSlow: { account: AccountInfo | null; force5m: boolean; enable1h: boolean; ts: number } | null = null
+let cachedSlow: { account: AccountInfo | null; force5m: boolean; enable1h: boolean; subagentTtlSetting: '5m' | '1h' | undefined; ts: number } | null = null
 const TTL_CTX_CACHE_MS = 60_000 // same cadence as the account cache — these signals drift slowly
 
 /**
@@ -100,19 +114,23 @@ export function getTtlContext(fiveHourPctConsumed: number | null, opts?: {
   now?: number
 }): TtlContext {
   const now = opts?.now ?? Date.now()
-  let slow: { account: AccountInfo | null; force5m: boolean; enable1h: boolean }
+  let slow: { account: AccountInfo | null; force5m: boolean; enable1h: boolean; subagentTtlSetting: '5m' | '1h' | undefined }
   if (!opts && cachedSlow && now - cachedSlow.ts < TTL_CTX_CACHE_MS) {
     slow = cachedSlow
   } else {
     const home = opts?.homeDir ?? os.homedir()
     const account = opts?.account !== undefined ? opts.account : getCurrentAccount()
     const overrides = detectTtlEnvOverrides(opts?.processEnv ?? process.env, readSettingsEnv(home))
-    slow = { account, ...overrides }
+    // Same READ-ONLY settings.json this slow-signal bundle already opens for the env block —
+    // `opts?.homeDir` (already threaded above) is what makes this injectable for tests, same as
+    // every other slow signal here; no separate parameter needed.
+    slow = { account, ...overrides, subagentTtlSetting: readSubagentTtlSetting(home) }
     if (!opts) cachedSlow = { ...slow, ts: now }
   }
   return {
     auth: resolveAuthRegime(slow.account, fiveHourPctConsumed),
     force5m: slow.force5m,
     enable1h: slow.enable1h,
+    subagentTtlSetting: slow.subagentTtlSetting,
   }
 }

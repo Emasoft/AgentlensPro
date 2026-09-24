@@ -3435,7 +3435,13 @@ async fn handle(
                         let (_, timeline_summary) = summary_now(&state, now as f64)?;
                         let sessions: Vec<Value> =
                             timeline_summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
-                        let env = state.lock_timed().map_err(|_| "state poisoned".to_owned())?.log_env.clone();
+                        // TRDD-ZQQYRYBO I6c2: no TTL-context fetch here any more — the
+                        // idle-break judgment now reads each gap's MEASURED write tier off the
+                        // session's own timeline (cache_break.rs), not the regime right now.
+                        let env = {
+                            let st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
+                            st.log_env.clone()
+                        };
                         let (a, st2) = (args.clone(), state.clone());
                         let payload = tokio::task::spawn_blocking(move || {
                             let file_ids = crate::context_composition::list_session_file_ids(&env);
@@ -3501,7 +3507,13 @@ async fn handle(
                         let (_, timeline_summary) = summary_now(&state, now as f64)?;
                         let sessions: Vec<Value> =
                             timeline_summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
-                        let env = state.lock_timed().map_err(|_| "state poisoned".to_owned())?.log_env.clone();
+                        // TRDD-ZQQYRYBO I6c2: no TTL-context fetch here any more — the
+                        // idle-gap judgment now reads each gap's MEASURED write tier off the
+                        // session's own timeline (cache_break.rs), not the regime right now.
+                        let env = {
+                            let st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
+                            st.log_env.clone()
+                        };
                         let (a, st2) = (args.clone(), state.clone());
                         let payload = tokio::task::spawn_blocking(move || {
                             let file_ids = crate::context_composition::list_session_file_ids(&env);
@@ -3528,15 +3540,14 @@ async fn handle(
                                     .and_then(|c| c.get("timeline").and_then(Value::as_array).cloned())
                                     .unwrap_or_default()
                             };
-                            crate::mcp_tools::get_cache_break_report(
-                                &sessions,
-                                &file_ids,
-                                &a,
-                                Some(&get_comp),
-                                &timeline_of,
-                                now as f64,
-                                20_000.0,
-                            )
+                            let ctx = crate::mcp_tools::CacheBreakReportCtx {
+                                file_ids: &file_ids,
+                                get_composition: Some(&get_comp),
+                                timeline_of: &timeline_of,
+                                now_ms: now as f64,
+                                time_budget_ms: 20_000.0,
+                            };
+                            crate::mcp_tools::get_cache_break_report(&sessions, &a, &ctx)
                         })
                         .await
                         .map_err(|e| format!("cache-break scan join failed: {e}"))?;

@@ -61,6 +61,15 @@ impl AuthRegime {
     }
 }
 
+/// `subagentPromptCacheTtl` read from the top level of ~/.claude/settings.json (CC 2.1.242).
+/// Per-agent `experimental.cacheTtl` frontmatter is a separate, larger read (locating + parsing
+/// the active agent's own definition file) and is deliberately NOT covered here.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SubagentTtlSetting {
+    FiveM,
+    OneH,
+}
+
 /// Machine-level TTL signals, resolved by the caller and passed into this pure classifier.
 #[derive(Clone, Copy, Debug)]
 pub struct TtlContext {
@@ -69,6 +78,8 @@ pub struct TtlContext {
     pub force5m: bool,
     /// ENABLE_PROMPT_CACHING_1H=1 detected — opts an API-key session into the 1h tier.
     pub enable1h: bool,
+    /// `subagentPromptCacheTtl` setting, `None` when unset/unreadable/malformed.
+    pub subagent_ttl_setting: Option<SubagentTtlSetting>,
 }
 
 /// A session's resolved TTL regime — what every TTL-aware consumer reads.
@@ -123,11 +134,37 @@ pub fn session_ttl_kind_of(card: &Value) -> SessionTtlKind {
 /// then main/fork by auth (a fork rides the parent-conversation regime).
 pub fn classify_ttl_regime(kind: Option<SessionTtlKind>, ctx: Option<&TtlContext>) -> TtlRegime {
     if kind == Some(SessionTtlKind::Subagent) {
+        // CC 2.1.242 made this configurable (`subagentPromptCacheTtl` in settings.json). Docs
+        // answer (verified against code.claude.com/docs/en/prompt-caching + /docs/en/settings,
+        // TRDD-ZQQYRYBO I6c2): an UNSET setting is still a documented default (main 1h /
+        // everything-else 5m on a plan subscription; 5m for both on usage credits, an API key, or
+        // a cloud provider), so the no-setting fallback stays 'doc-matrix', not 'assumed' — this
+        // reverts I6c's demotion, which the docs answer overturned.
+        //
+        // This reader only checks the USER settings file (~/.claude/settings.json) — it does NOT
+        // implement the full precedence chain (FORCE_PROMPT_CACHING_5M, the bucket env var, the
+        // managed/project/local settings files, per-agent `experimental.cacheTtl` frontmatter,
+        // ENABLE_PROMPT_CACHING_1H). Each of those can override what this function reports, so a
+        // 'config'/'doc-matrix' verdict here reflects the user file only — `ttl_basis` says so.
+        let setting = ctx.and_then(|c| c.subagent_ttl_setting);
+        if setting == Some(SubagentTtlSetting::OneH) {
+            return TtlRegime {
+                ttl_ms: TTL_1H_MS,
+                ttl_assumed_min: TTL_1H_MIN,
+                ttl_source: "config",
+                ttl_basis: "subagent — subagentPromptCacheTtl=\"1h\" in ~/.claude/settings.json (user settings only — env vars, managed/project/local settings files, and per-agent experimental.cacheTtl frontmatter not read)".to_owned(),
+            };
+        }
+        let is_5m_config = setting == Some(SubagentTtlSetting::FiveM);
         return TtlRegime {
             ttl_ms: TTL_5M_MS,
             ttl_assumed_min: TTL_5M_MIN,
-            ttl_source: "doc-matrix",
-            ttl_basis: "subagent — own conversation, own 5-min cache (the 1h auto applies only to the main conversation)".to_owned(),
+            ttl_source: if is_5m_config { "config" } else { "doc-matrix" },
+            ttl_basis: if is_5m_config {
+                "subagent — subagentPromptCacheTtl=\"5m\" in ~/.claude/settings.json (user settings only — env vars, managed/project/local settings files, and per-agent experimental.cacheTtl frontmatter not read)".to_owned()
+            } else {
+                "subagent — no subagentPromptCacheTtl in ~/.claude/settings.json (user settings only read); the documented default (5m outside plan usage, 1h main-adjacent helper requests aside) applies".to_owned()
+            },
         };
     }
     let (Some(ctx), Some(kind)) = (ctx, kind) else {

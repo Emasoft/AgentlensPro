@@ -182,6 +182,14 @@ pub struct TimelineEntry {
     pub cache_read_tokens: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cache_create_tokens: Option<f64>,
+    // The 1h-tier slice of cache_create_tokens (usage.cache_creation.ephemeral_1h_input_tokens),
+    // TRDD-ZQQYRYBO I6c2 — the per-gap idle-TTL judgment in cache_break.rs needs to know the
+    // MEASURED write tier of the turn that wrote the entry, not the session's current regime.
+    // `None` means "no cache_creation tier sub-object on this row" (older CC, or no usage at
+    // all) — distinct from `Some(0.0)`, which means the row's write was measured as ALL 5m.
+    // Collapsing the two would silently guess a tier that was never observed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_create_tokens_1h: Option<f64>,
     pub duration_ms: f64,
     pub is_error: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -819,6 +827,7 @@ pub fn on_entry(a: &mut ClaudeAccum, entry: &serde_json::Map<String, Value>) {
             output_tokens: None,
             cache_read_tokens: None,
             cache_create_tokens: None,
+            cache_create_tokens_1h: None,
             duration_ms: 0.0,
             is_error: false,
             timestamp: ts.unwrap_or("").to_owned(),
@@ -852,8 +861,14 @@ pub fn on_entry(a: &mut ClaudeAccum, entry: &serde_json::Map<String, Value>) {
             a.has_fast_mode = true;
         }
         let mut row_buckets: Option<Buckets> = None;
+        // Whether THIS row's usage carried a `cache_creation` tier sub-object at all — distinct
+        // from a tier that split cleanly into 0 tokens on one side. Read alongside row_buckets
+        // (both are only meaningful when is_first_row set them), consumed by the TimelineEntry
+        // below (TRDD-ZQQYRYBO I6c2).
+        let mut row_has_tier_split = false;
         if let Some(usage) = raw_usage {
             if is_first_row {
+                row_has_tier_split = usage.get("cache_creation").and_then(Value::as_object).is_some();
                 let b = disjoint_anthropic(usage);
                 a.total_input += b.input;
                 a.total_output += b.output;
@@ -951,6 +966,7 @@ pub fn on_entry(a: &mut ClaudeAccum, entry: &serde_json::Map<String, Value>) {
             output_tokens: row_buckets.map(|b| b.output),
             cache_read_tokens: row_buckets.map(|b| b.cache_read),
             cache_create_tokens: row_buckets.map(|b| b.cache_create),
+            cache_create_tokens_1h: if row_has_tier_split { row_buckets.map(|b| b.cache_create_1h) } else { None },
             duration_ms: 0.0,
             is_error: false,
             timestamp: ts.unwrap_or("").to_owned(),
@@ -1173,6 +1189,7 @@ fn build_sub_agent_cards(parent_session_id: &str, a: &ClaudeAccum) -> Vec<Card> 
                 output_tokens: None,
                 cache_read_tokens: None,
                 cache_create_tokens: None,
+                cache_create_tokens_1h: None,
                 duration_ms: sub.duration_ms,
                 is_error: false,
                 timestamp: sub.spawn_ts.clone(),

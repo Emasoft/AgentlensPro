@@ -87,6 +87,7 @@
      "outputTokens": 10,
      "cacheReadTokens": 5000,
      "cacheCreateTokens": 200,
+     "cacheCreateTokens1h": 150,
      "durationMs": 0,
      "isError": false,
      "timestamp": "2026-08-01T10:00:01.000Z",

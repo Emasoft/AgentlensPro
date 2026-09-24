@@ -16,9 +16,9 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use super::account_info::{account_label_for, get_current_account, AccountInfo};
-use super::cache_ttl::TtlContext;
+use super::cache_ttl::{SubagentTtlSetting, TtlContext};
 use super::monitor::{load_burn_config, BurnConfig};
-use super::ttl_context::{detect_ttl_env_overrides, read_settings_env, resolve_auth_regime};
+use super::ttl_context::{detect_ttl_env_overrides, read_settings_env, read_subagent_ttl_setting, resolve_auth_regime};
 
 /// The slow signals (settings.json read + account resolution) cache for ~60s — the burn tick
 /// fires every 4s and (P4r.4) the gate sits on the PreToolUse hot path.
@@ -28,6 +28,7 @@ struct Slow {
     account: AccountInfo,
     force5m: bool,
     enable1h: bool,
+    subagent_ttl_setting: Option<SubagentTtlSetting>,
     ts: f64,
 }
 
@@ -79,7 +80,8 @@ impl BurnRuntime {
         if stale {
             let account = get_current_account(&self.home_dir, &self.vars, None);
             let (force5m, enable1h) = detect_ttl_env_overrides(&self.vars, read_settings_env(&self.home_dir).as_ref());
-            self.slow = Some(Slow { account, force5m, enable1h, ts: now_ms });
+            let subagent_ttl_setting = read_subagent_ttl_setting(&self.home_dir);
+            self.slow = Some(Slow { account, force5m, enable1h, subagent_ttl_setting, ts: now_ms });
         }
         self.slow.as_ref().expect("just filled")
     }
@@ -97,7 +99,12 @@ impl BurnRuntime {
             .as_ref()
             .and_then(|s| s.get("window")?.get("fiveHour")?.get("pctConsumed")?.as_f64());
         let slow = self.slow(now_ms);
-        TtlContext { auth: resolve_auth_regime(Some(&slow.account), pct), force5m: slow.force5m, enable1h: slow.enable1h }
+        TtlContext {
+            auth: resolve_auth_regime(Some(&slow.account), pct),
+            force5m: slow.force5m,
+            enable1h: slow.enable1h,
+            subagent_ttl_setting: slow.subagent_ttl_setting,
+        }
     }
 }
 

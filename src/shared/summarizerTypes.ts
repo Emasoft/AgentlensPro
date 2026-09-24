@@ -202,6 +202,12 @@ export interface TimelineEntry {
   outputTokens?: number
   cacheReadTokens?: number
   cacheCreateTokens?: number
+  // The 1h-tier slice of cacheCreateTokens (usage.cache_creation.ephemeral_1h_input_tokens).
+  // `undefined` means no cache_creation tier sub-object was observed on this row (older CC, or
+  // an OTEL-only source) — distinct from `0`, an OBSERVED all-5m write. TRDD-ZQQYRYBO I6c2: the
+  // idle-TTL judgment in cacheBreak.ts reads this to price a gap against the MEASURED tier of
+  // the last real write, not the session's current regime.
+  cacheCreateTokens1h?: number
   ttft?: number
   durationMs: number
   action?: string
@@ -422,6 +428,10 @@ export type CacheBreakCause =
   | 'UPGRADE'                 // Claude Code upgraded
   | 'RESUME_AFTER_UPGRADE'    // a session resumed after an upgrade (full re-read)
   | 'IDLE_TTL_EXPIRY'         // a >5-min gap let the cache entry expire (one-time, not structural)
+  // A split write's 5-min slice expired but its 1h slice's gap window has not — the 5-min portion
+  // needs a one-time re-warm, the 1h portion (if genuinely still resident server-side) does not.
+  // TRDD-ZQQYRYBO I6c2: never collapse a split write into one all-or-nothing IDLE_TTL_EXPIRY.
+  | 'IDLE_TTL_PARTIAL_EXPIRY'
   // A write that DOMINATED the turn (more written than read) with nothing in the block diff to
   // point at. Distinct from UNKNOWN, and the distinction is the point: UNKNOWN is "nothing
   // happened worth reporting", UNATTRIBUTABLE is "something expensive happened and we will not
@@ -461,6 +471,12 @@ export interface CacheBreakTurn {
   // be attributed to the turn that actually paid for it: a command at time T is billed on the
   // first turn at or after T, because the changed prefix rides the NEXT model request.
   tsMs?: number
+  // Set ONLY when cause is IDLE_TTL_EXPIRY / IDLE_TTL_PARTIAL_EXPIRY (TRDD-ZQQYRYBO I6c2):
+  // 'measured' — the verdict came from an OBSERVED cache_creation.ephemeral_{5m,1h}_input_tokens
+  // split on the last turn that actually wrote the cache. 'assumed' — no split was observed (an
+  // OTEL-only session, or a pre-tier-split Claude Code build), so the old conservative 5-min floor
+  // was used instead. Never invents a 1h guess from silence.
+  ttlGapSource?: 'measured' | 'assumed'
 }
 
 // One block's before/after state across a turn transition, for the cache-break diff popup (#92,

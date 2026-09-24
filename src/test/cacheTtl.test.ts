@@ -35,14 +35,35 @@ suite('shared/cacheTtl — classifyTtlRegime (the doc matrix)', () => {
     assert.strictEqual(opted.ttlSource, 'config')
   })
 
-  test('subagent → 5 min ALWAYS, auth-independent, even with NO machine context', () => {
-    // The one kind whose doc row needs no machine signals: the 1h auto applies only to the
-    // main conversation, so a subagent resolves doc-matrix even when ctx is null.
+  test('subagent → 5 min DEFAULT, auth-independent, with NO subagentPromptCacheTtl setting', () => {
+    // Auth-independent: the 1h auto applies only to the main conversation, so a subagent's TTL
+    // never looks at ctx.auth. CC 2.1.242 made the 5-min row CONFIGURABLE, but an unset setting
+    // is still a DOCUMENTED default (I6c2 docs answer), so this stays 'doc-matrix', not 'assumed'
+    // — 'assumed' is reserved for a genuinely unresolved regime (missing ctx/kind entirely).
     for (const c of [ctx('subscription'), ctx('api-key', { enable1h: true }), ctx('unknown'), null]) {
       const r = classifyTtlRegime('subagent', c)
       assert.strictEqual(r.ttlMs, TTL_5M_MS, JSON.stringify(c))
       assert.strictEqual(r.ttlSource, 'doc-matrix')
     }
+  })
+
+  test('subagent + subagentPromptCacheTtl="1h" → overrides the 5-min default, config provenance', () => {
+    const r = classifyTtlRegime('subagent', ctx('unknown', { subagentTtlSetting: '1h' }))
+    assert.strictEqual(r.ttlMs, TTL_1H_MS)
+    assert.strictEqual(r.ttlAssumedMin, TTL_1H_MIN)
+    assert.strictEqual(r.ttlSource, 'config')
+    assert.ok(r.ttlBasis.includes('subagentPromptCacheTtl'), r.ttlBasis)
+  })
+
+  test('subagent + subagentPromptCacheTtl="5m" → still 5 min, but now config provenance (not assumed)', () => {
+    const r = classifyTtlRegime('subagent', ctx('unknown', { subagentTtlSetting: '5m' }))
+    assert.strictEqual(r.ttlMs, TTL_5M_MS)
+    assert.strictEqual(r.ttlSource, 'config')
+  })
+
+  test('subagent TTL is auth-independent even WITH a setting — auth never overrides subagentTtlSetting', () => {
+    assert.strictEqual(classifyTtlRegime('subagent', ctx('subscription', { subagentTtlSetting: '1h' })).ttlMs, TTL_1H_MS)
+    assert.strictEqual(classifyTtlRegime('subagent', ctx('api-key', { subagentTtlSetting: '1h' })).ttlMs, TTL_1H_MS)
   })
 
   test('fork rides the parent-conversation regime (reads the PARENT cache entry)', () => {

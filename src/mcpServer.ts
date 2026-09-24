@@ -2571,6 +2571,8 @@ export async function handleGetCacheBreakReport(
   args: { sessionId?: string; workspace?: string },
 ) {
   if (!getComposition) return { error: 'Composition accessor unavailable — cache-break analysis needs local Claude logs.' }
+  // TRDD-ZQQYRYBO I6c2: no classifyTtlRegime/ttlCtx here any more — the idle-TTL judgment inside
+  // buildCacheBreakReport now reads each gap's MEASURED write tier off the timeline itself.
   const reportFor = async (s: SessionSummaryCard): Promise<CacheBreakReport | null> =>
     buildCacheBreakReport(s.sessionId, asTimeline(getTimeline, s.sessionId, s), await getComposition(s.sessionId), s.model)
 
@@ -2692,8 +2694,10 @@ export async function handleGetCacheRiskCosts(
     return true
   }
   const { pool, considered, withLog } = fileBackedPool(sessions, pred, 40)
-  const reportFor = async (s: SessionSummaryCard): Promise<{ card: SessionSummaryCard; report: CacheBreakReport | null }> =>
-    ({ card: s, report: buildCacheBreakReport(s.sessionId, asTimeline(getTimeline, s.sessionId, s), await getComposition(s.sessionId), s.model) })
+  const reportFor = async (s: SessionSummaryCard): Promise<{ card: SessionSummaryCard; report: CacheBreakReport | null }> => {
+    // TRDD-ZQQYRYBO I6c2: no classifyTtlRegime/ttlCtx here any more — see handleGetCacheBreakReport.
+    return { card: s, report: buildCacheBreakReport(s.sessionId, asTimeline(getTimeline, s.sessionId, s), await getComposition(s.sessionId), s.model) }
+  }
   const { results, scanned, stoppedEarly } = await scanWithBudget(pool, DRILL_SCAN_TIME_BUDGET_MS, reportFor)
 
   interface Row {

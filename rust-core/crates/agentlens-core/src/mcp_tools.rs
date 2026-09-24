@@ -2738,24 +2738,32 @@ fn offender_rounded(o: &Value) -> Value {
 /// state from "the accessor exists but this session has no transcript".
 pub type CompositionAccessor<'a> = Option<&'a dyn Fn(&str) -> Option<Value>>;
 
-/// `get_composition` is an `Option` rather than a separate `has_accessor` flag so the TS's
-/// `if (!getComposition)` guard has exactly one representation — a bool beside the closure would
-/// let the two disagree, and it pushed the signature past clippy's argument limit for nothing.
-pub fn get_cache_break_report(
-    sessions: &[Value],
-    file_ids: &std::collections::HashSet<String>,
-    args: &Value,
-    get_composition: CompositionAccessor<'_>,
-    timeline_of: &dyn Fn(&Value) -> Vec<Value>,
-    now_ms: f64,
-    time_budget_ms: f64,
-) -> Value {
-    let Some(get_composition) = get_composition else {
+/// Everything `get_cache_break_report` needs from its caller. A struct rather than plain
+/// parameters: `get_composition` is an `Option` rather than a separate `has_accessor` flag so
+/// the TS's `if (!getComposition)` guard has exactly one representation — a bool beside the
+/// closure would let the two disagree — the same reason `get_cache_risk_costs` already takes a
+/// `CacheRiskCtx`. No `ttl_ctx` any more: TRDD-ZQQYRYBO I6c2 moved the idle-TTL judgment to a
+/// per-gap MEASURED write-tier read off the session's own timeline (`cache_break.rs`), so this
+/// caller no longer resolves a "regime right now" for it.
+pub struct CacheBreakReportCtx<'a> {
+    pub file_ids: &'a std::collections::HashSet<String>,
+    pub get_composition: CompositionAccessor<'a>,
+    pub timeline_of: &'a dyn Fn(&Value) -> Vec<Value>,
+    pub now_ms: f64,
+    pub time_budget_ms: f64,
+}
+
+pub fn get_cache_break_report(sessions: &[Value], args: &Value, ctx: &CacheBreakReportCtx<'_>) -> Value {
+    let (file_ids, now_ms, time_budget_ms, timeline_of) = (ctx.file_ids, ctx.now_ms, ctx.time_budget_ms, ctx.timeline_of);
+    let Some(get_composition) = ctx.get_composition else {
         return err("Composition accessor unavailable — cache-break analysis needs local Claude logs.".to_owned());
     };
     let model_of = |s: &Value| s.get("model").and_then(Value::as_str).unwrap_or_default().to_owned();
     let report_for = |s: &Value| -> Option<Value> {
         let sid = s.get("sessionId").and_then(Value::as_str).unwrap_or_default();
+        // TRDD-ZQQYRYBO I6c2: the idle-TTL judgment now reads each gap's MEASURED write tier off
+        // the session's own timeline (cache_break.rs step 4) instead of the regime right now —
+        // no `classify_ttl_regime`/`ttl_ctx` fetch needed here any more.
         crate::cache_break::build_cache_break_report(sid, &timeline_of(s), get_composition(sid).as_ref(), &model_of(s), now_ms)
     };
 
@@ -3011,6 +3019,9 @@ pub fn get_cache_risk_costs(sessions: &[Value], args: &Value, ctx: &CacheRiskCtx
         }
         let sid = card.get("sessionId").and_then(Value::as_str).unwrap_or("");
         let card_model = card.get("model").and_then(Value::as_str).map(str::to_owned);
+        // TRDD-ZQQYRYBO I6c2: no `classify_ttl_regime`/`ttl_ctx` fetch here any more — the
+        // idle-TTL judgment inside `build_cache_break_report` now reads each gap's MEASURED
+        // write tier off the timeline itself.
         let report = crate::cache_break::build_cache_break_report(
             sid,
             &(ctx.timeline_of)(card),

@@ -172,3 +172,41 @@ suite('cacheBreak attribution provenance (TRDD-V8YOWHVT)', () => {
     assert.strictEqual(r.offenders[0].cause, 'UNATTRIBUTABLE')
   })
 })
+
+suite('cacheBreak idle-TTL per-gap MEASURED tier (TRDD-ZQQYRYBO I6c2)', () => {
+  const sameSource: ContextSource[] = [{ label: 'sys', kind: 'systemPrompt', tokens: 100, bytes: 400, count: 1 }]
+
+  test('a split write (both 5m and 1h slices) with a 30-min gap reports the PARTIAL-expiry verdict', () => {
+    const turns: CacheTurnInput[] = [
+      { turn: 1, sources: sameSource, cacheReadTokens: 0, cacheCreateTokens: 1000, cacheCreateTokens1h: 400, inputTokens: 0, timestampMs: 0 },
+      { turn: 2, sources: sameSource, cacheReadTokens: 0, cacheCreateTokens: 50, inputTokens: 0, timestampMs: 30 * 60_000 },
+    ]
+    const t = analyzeCacheBreaks('s', turns).turns[1]
+    assert.strictEqual(t.cause, 'IDLE_TTL_PARTIAL_EXPIRY')
+    assert.strictEqual(t.ttlGapSource, 'measured')
+  })
+
+  test('no observed tier split on the last writing turn falls back to the assumed 5-min floor', () => {
+    const turns: CacheTurnInput[] = [
+      { turn: 1, sources: sameSource, cacheReadTokens: 0, cacheCreateTokens: 100, inputTokens: 0, timestampMs: 0 },
+      { turn: 2, sources: sameSource, cacheReadTokens: 0, cacheCreateTokens: 50, inputTokens: 0, timestampMs: 10 * 60_000 },
+    ]
+    const t = analyzeCacheBreaks('s', turns).turns[1]
+    assert.strictEqual(t.cause, 'IDLE_TTL_EXPIRY')
+    assert.strictEqual(t.ttlGapSource, 'assumed')
+  })
+
+  test('the tier lookback walks BACKWARD past a pure-read turn to the last real write', () => {
+    // Turn 1 writes an all-1h entry; turn 2 is a pure read (no write, no tier data of its own);
+    // turn 3 re-writes 70 minutes later — past even the 1h slice. A "look only at prev" bug would
+    // see turn 2's absent tier data and wrongly report 'assumed'.
+    const turns: CacheTurnInput[] = [
+      { turn: 1, sources: sameSource, cacheReadTokens: 0, cacheCreateTokens: 100, cacheCreateTokens1h: 100, inputTokens: 0, timestampMs: 0 },
+      { turn: 2, sources: sameSource, cacheReadTokens: 500, cacheCreateTokens: 0, inputTokens: 0, timestampMs: 60_000 },
+      { turn: 3, sources: sameSource, cacheReadTokens: 0, cacheCreateTokens: 50, inputTokens: 0, timestampMs: 60_000 + 70 * 60_000 },
+    ]
+    const t = analyzeCacheBreaks('s', turns).turns[2]
+    assert.strictEqual(t.cause, 'IDLE_TTL_EXPIRY')
+    assert.strictEqual(t.ttlGapSource, 'measured')
+  })
+})

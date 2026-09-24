@@ -2316,6 +2316,10 @@ function _claudeOnEntry(a: ClaudeAccum, entry: Record<string, unknown>): void {
     // Transcript usage is Anthropic-shaped (input already cache-excluded) — the shared constructor
     // is the ONE place the four-disjoint-buckets invariant lives for this card AND its entry below.
     let rowBuckets: TokenBuckets | undefined
+    // Whether THIS row's usage carried a `cache_creation` tier sub-object at all — distinct from
+    // a tier that split cleanly into 0 tokens on one side. Consumed by the TimelineEntry pushed
+    // below (TRDD-ZQQYRYBO I6c2); `undefined` when not observed, never invented from cacheCreate.
+    let rowCacheCreate1hForEntry: number | undefined
     if (usage && isFirstRowOfMessage) {
       rowBuckets = disjointBuckets({
         input: usage['input_tokens'] ?? 0,
@@ -2329,6 +2333,8 @@ function _claudeOnEntry(a: ClaudeAccum, entry: Record<string, unknown>): void {
       a.card.totalCacheCreate += rowBuckets.cacheCreateTokens
       const rowCacheCreate1h = _cacheCreate1h(rawUsage)
       a.card.totalCacheCreate1h = (a.card.totalCacheCreate1h ?? 0) + rowCacheCreate1h
+      const rowHasTierSplit = (rawUsage?.['cache_creation'] as Record<string, unknown> | undefined) !== undefined
+      rowCacheCreate1hForEntry = rowHasTierSplit ? rowCacheCreate1h : undefined
       const turnContext = contextTokens(rowBuckets)
       if (turnContext > a.card.peakContextPerTurn) a.card.peakContextPerTurn = turnContext
       a.card.turns++
@@ -2394,6 +2400,7 @@ function _claudeOnEntry(a: ClaudeAccum, entry: Record<string, unknown>): void {
       outputTokens: rowBuckets?.outputTokens,
       cacheReadTokens: rowBuckets?.cacheReadTokens,
       cacheCreateTokens: rowBuckets?.cacheCreateTokens,
+      cacheCreateTokens1h: rowCacheCreate1hForEntry,
       durationMs: 0, isError: false, timestamp: ts ?? '',
       responseText: responseText === undefined ? undefined : capText(responseText),
     }, timelineMaxEntries())

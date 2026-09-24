@@ -21,6 +21,10 @@ use crate::pricing::lookup_rates;
 use crate::summarize::helpers::{js_string, num, parse_iso_ms, truthy};
 
 const DEFAULT_IDLE_TTL_MS: f64 = 5.0 * 60_000.0;
+// The 1h cache-write tier's TTL (TRDD-ZQQYRYBO I6c2's per-gap measured-tier judgment — see
+// classify_turn step 4). Not read from classify_ttl_regime: this module's historical attribution
+// must stay independent of the forward-looking "regime right now" answer.
+const TTL_1H_MS: f64 = 60.0 * 60_000.0;
 
 /// Kinds the composition parser emits that live in the STABLE prefix.
 const CATALOG_KINDS: [&str; 2] = ["toolCatalog", "agentCatalog"];
@@ -52,6 +56,7 @@ pub enum Cause {
     Upgrade,
     ResumeAfterUpgrade,
     IdleTtlExpiry,
+    IdleTtlPartialExpiry,
     Unattributable,
     Unknown,
 }
@@ -77,6 +82,7 @@ impl Cause {
             Cause::Upgrade => "UPGRADE",
             Cause::ResumeAfterUpgrade => "RESUME_AFTER_UPGRADE",
             Cause::IdleTtlExpiry => "IDLE_TTL_EXPIRY",
+            Cause::IdleTtlPartialExpiry => "IDLE_TTL_PARTIAL_EXPIRY",
             Cause::Unattributable => "UNATTRIBUTABLE",
             Cause::Unknown => "UNKNOWN",
         }
@@ -102,6 +108,7 @@ impl Cause {
             Cause::Upgrade => "A Claude Code upgrade invalidates the cache once — unavoidable, but do not resume large sessions right after upgrading.",
             Cause::ResumeAfterUpgrade => "Resuming after an upgrade forces a full re-read (the most expensive turn) — avoid resuming huge sessions post-upgrade.",
             Cause::IdleTtlExpiry => "A >5-min idle gap let the cache expire; keep turns within the TTL or accept the one-time re-warm.",
+            Cause::IdleTtlPartialExpiry => "The gap outlived the 5-min slice of a split write but stayed within its 1h slice; only the 5-min portion needed a one-time re-warm.",
             Cause::Unattributable => "A real cold write (more written than read) with nothing in the block diff to blame. Do NOT guess a culprit from timing or plausibility — run get_cache_break_timeline, which diffs the raw request bodies against their actual cache_control breakpoints.",
             Cause::Unknown => "Cause could not be localised from the block diff; inspect the raw prefix around this turn.",
         }
@@ -127,6 +134,7 @@ impl Cause {
             Cause::Upgrade => "Upgrade",
             Cause::ResumeAfterUpgrade => "Resume after upgrade",
             Cause::IdleTtlExpiry => "Idle TTL expiry",
+            Cause::IdleTtlPartialExpiry => "Idle TTL partial expiry",
             Cause::Unattributable => "Unattributable cold write",
             Cause::Unknown => "Unknown",
         }
@@ -141,6 +149,12 @@ pub struct CacheTurnInput {
     pub sources: Vec<Value>,
     pub cache_read_tokens: f64,
     pub cache_create_tokens: f64,
+    // The 1h-tier slice of cache_create_tokens (usage.cache_creation.ephemeral_1h_input_tokens).
+    // `None` means no tier sub-object was observed on this turn's write (older CC, or the turn
+    // wrote nothing) — distinct from `Some(0.0)`, an OBSERVED all-5m write. TRDD-ZQQYRYBO I6c2:
+    // the idle-TTL judgment in classify_turn reads this to price a gap against the MEASURED tier
+    // of the last real write, not the session's regime right now.
+    pub cache_create_tokens_1h: Option<f64>,
     pub input_tokens: f64,
     pub model: Option<String>,
     pub has_fast_mode: Option<bool>,
@@ -156,7 +170,6 @@ pub struct AnalyzeCacheBreaksOpts {
     /// The model's ACTUAL cache-read rate. Most Claude/OpenAI models read at 0.1× input but some do
     /// not (codex-mini at 0.25×), and hardcoding 0.1× overstates the waste for those.
     pub cache_read_rate_usd_per_mtok: Option<f64>,
-    pub idle_ttl_ms: Option<f64>,
 }
 
 // ── small JS-shaped helpers ───────────────────────────────────────────────────
@@ -318,8 +331,11 @@ fn price_waste(tokens: f64, opts: &AnalyzeCacheBreaksOpts) -> f64 {
 }
 
 /// Classify ONE transition (prev → cur) into a per-turn break verdict.
-fn classify_turn(prev: &CacheTurnInput, cur: &CacheTurnInput, opts: &AnalyzeCacheBreaksOpts) -> Value {
-    let idle_ttl = opts.idle_ttl_ms.unwrap_or(DEFAULT_IDLE_TTL_MS);
+// `history` is every turn up to and including `prev` (turns[..i] in analyze_cache_breaks), so
+// step 4 below can walk BACKWARD past pure-read turns to find the last turn that actually wrote
+// the cache — a read only refreshes the TTL of the entry it read, it does not change its tier.
+fn classify_turn(history: &[CacheTurnInput], cur: &CacheTurnInput, opts: &AnalyzeCacheBreaksOpts) -> Value {
+    let prev = history.last().expect("classify_turn requires non-empty history");
     let idle_gap_ms = match (cur.timestamp_ms, prev.timestamp_ms) {
         (Some(c), Some(p)) => Some(c - p),
         _ => None,
@@ -331,7 +347,8 @@ fn classify_turn(prev: &CacheTurnInput, cur: &CacheTurnInput, opts: &AnalyzeCach
                 kind: Option<&str>,
                 gap: Option<f64>,
                 confidence: Option<&str>,
-                attribution: Option<&str>|
+                attribution: Option<&str>,
+                gap_source: Option<&str>|
      -> Value {
         let mut o = Map::new();
         o.insert("turn".to_owned(), num(cur.turn));
@@ -358,6 +375,12 @@ fn classify_turn(prev: &CacheTurnInput, cur: &CacheTurnInput, opts: &AnalyzeCach
         if let Some(ts) = cur.timestamp_ms {
             o.insert("tsMs".to_owned(), num(ts));
         }
+        // "measured" when the idle-TTL verdict above came from an observed write-tier split on
+        // the last writing turn; "assumed" when no split was observed and the old 5-min floor
+        // was used instead (TRDD-ZQQYRYBO I6c2). Only ever set by the idle-gap branch.
+        if let Some(gs) = gap_source {
+            o.insert("ttlGapSource".to_owned(), Value::String(gs.to_owned()));
+        }
         Value::Object(o)
     };
 
@@ -366,11 +389,11 @@ fn classify_turn(prev: &CacheTurnInput, cur: &CacheTurnInput, opts: &AnalyzeCach
     let cur_model = cur.model.as_deref().unwrap_or("");
     let prev_model = prev.model.as_deref().unwrap_or("");
     if !cur_model.is_empty() && !prev_model.is_empty() && cur_model != prev_model {
-        return emit(Cause::ModelSwitched, None, None, None, None, None);
+        return emit(Cause::ModelSwitched, None, None, None, None, None, None);
     }
     // 2. Fast mode turned on this turn.
     if cur.has_fast_mode.unwrap_or(false) && !prev.has_fast_mode.unwrap_or(false) {
-        return emit(Cause::FastMode, None, None, None, None, None);
+        return emit(Cause::FastMode, None, None, None, None, None, None);
     }
     // 2.5 Plugin reload — /reload-plugins re-registers ≥2 catalogs at once. Detected BEFORE the
     // single-first-divergence pick (step 3), else it collapses to whichever catalog sorted first and
@@ -397,7 +420,7 @@ fn classify_turn(prev: &CacheTurnInput, cur: &CacheTurnInput, opts: &AnalyzeCach
         kinds.sort();
         let label = format!("{} catalogs churned ({})", kinds.len(), kinds.join(", "));
         let confidence = if churned.len() >= 3 { "high" } else { "medium" };
-        return emit(Cause::PluginsReloaded, Some(Value::String(label)), Some("catalog"), None, Some(confidence), None);
+        return emit(Cause::PluginsReloaded, Some(Value::String(label)), Some("catalog"), None, Some(confidence), None, None);
     }
     // 3. A localizable stable-block divergence (the common structural break).
     //
@@ -417,11 +440,56 @@ fn classify_turn(prev: &CacheTurnInput, cur: &CacheTurnInput, opts: &AnalyzeCach
             None,
             Some("low"),
             Some("block-diff-only"),
+            None,
         );
     }
-    // 4. No block diff but a long idle gap with a real re-write → the entry expired (one-time).
-    if idle_gap_ms.is_some_and(|g| g > idle_ttl) && cur.cache_create_tokens > 0.0 {
-        return emit(Cause::IdleTtlExpiry, None, None, idle_gap_ms, None, None);
+    // 4. No block diff but a long idle gap with a real re-write → judge the gap by the MEASURED
+    //    write tier of the last turn that actually wrote the cache, walking `history` backward
+    //    (including `prev`) PAST any pure-read turns — a read only refreshes the TTL of the entry
+    //    it read, it never changes that entry's tier. Scoped to THIS historical attribution only:
+    //    classify_ttl_regime (the forward-looking "what TTL applies right now", used by
+    //    cache-expired/cache-state/keep-warm/burn-monitor) is untouched (TRDD-ZQQYRYBO I6c2 —
+    //    judging every past gap by the CURRENT regime wrongly excused gaps taken while the
+    //    account was still on usage credits, i.e. still 5m, from an account that has since moved
+    //    to plan usage and 1h).
+    if let Some(gap) = idle_gap_ms.filter(|&g| g > DEFAULT_IDLE_TTL_MS) {
+        if cur.cache_create_tokens > 0.0 {
+            let last_write = history.iter().rev().find(|t| t.cache_create_tokens > 0.0);
+            match last_write.and_then(|w| w.cache_create_tokens_1h.map(|h| (w.cache_create_tokens, h))) {
+                Some((total, one_h)) => {
+                    let five_m = (total - one_h).max(0.0);
+                    let has_5m = five_m > 0.0;
+                    let has_1h = one_h > 0.0;
+                    if gap > TTL_1H_MS {
+                        // Every tier the last write carried has now expired.
+                        return emit(Cause::IdleTtlExpiry, None, None, idle_gap_ms, None, None, Some("measured"));
+                    }
+                    if has_5m && has_1h {
+                        // A split write: the 5m slice is gone, the 1h slice (if genuinely still
+                        // resident server-side) is not — report the partial verdict instead of
+                        // collapsing both slices into one cause.
+                        return emit(Cause::IdleTtlPartialExpiry, None, None, idle_gap_ms, None, None, Some("measured"));
+                    }
+                    if has_5m {
+                        // All-5m write: any gap past the 5-min floor is a full expiry.
+                        return emit(Cause::IdleTtlExpiry, None, None, idle_gap_ms, None, None, Some("measured"));
+                    }
+                    // All-1h (has_1h only, gap <= TTL_1H_MS already checked above): still
+                    // resident — falls through to step 5, not a break.
+                }
+                None => {
+                    // The writing turn carried no cache_creation tier sub-object — an OTEL-only
+                    // session, or a pre-tier-split CC build — OR no write is visible in this
+                    // timeline at all (a resumed/truncated session whose first visible turn read a
+                    // cache written off-screen; without this arm that gap fell through to
+                    // UNATTRIBUTABLE, a regression the I6c2 review caught). Never guess 1h from
+                    // silence: an unearned "not expired" verdict here is a permanent false
+                    // negative, worse than the one-time false positive the old flat 5-min floor
+                    // risked (TRDD-ZQQYRYBO I6c report, finding 1).
+                    return emit(Cause::IdleTtlExpiry, None, None, idle_gap_ms, None, None, Some("assumed"));
+                }
+            }
+        }
     }
     // 5. Nothing localisable — but "nothing to point at" covers two situations that must not be
     //    conflated, because doing so hides the costliest event this analyzer exists to surface:
@@ -430,7 +498,7 @@ fn classify_turn(prev: &CacheTurnInput, cur: &CacheTurnInput, opts: &AnalyzeCach
     //      cold rewrite we cannot name. Reporting it as "no break" makes it invisible; inventing a
     //      culprit is worse. Report it, unnamed. (TRDD-V8YOWHVT)
     if wasted > 0.0 && wasted > cur.cache_read_tokens {
-        return emit(Cause::Unattributable, None, None, idle_gap_ms, Some("low"), Some("block-diff-only"));
+        return emit(Cause::Unattributable, None, None, idle_gap_ms, Some("low"), Some("block-diff-only"), None);
     }
     let mut o = Map::new();
     o.insert("turn".to_owned(), num(cur.turn));
@@ -530,7 +598,7 @@ pub fn analyze_cache_breaks(session_id: &str, turns: &[CacheTurnInput], opts: &A
             results.push(Value::Object(o));
             continue;
         }
-        results.push(classify_turn(&turns[i - 1], cur, opts));
+        results.push(classify_turn(&turns[..i], cur, opts));
     }
 
     let offenders = rank_offenders(&results);
@@ -553,6 +621,11 @@ pub fn analyze_cache_breaks(session_id: &str, turns: &[CacheTurnInput], opts: &A
 struct Acc {
     cache_read: f64,
     cache_create: f64,
+    // Sum of this turn's cacheCreateTokens1h entries; only meaningful when `cache_create_1h_seen`
+    // is true (mirrors the TimelineEntry-level `None` vs `Some(0.0)` distinction one level up —
+    // a turn can fold multiple timeline rows, so "seen" must survive the fold too).
+    cache_create_1h: f64,
+    cache_create_1h_seen: bool,
     input: f64,
     model: Option<String>,
     ts: Option<f64>,
@@ -594,6 +667,10 @@ pub fn build_cache_break_report(
         let a = &mut by_turn.entry(turn.to_bits()).or_insert_with(|| (turn, Acc::default())).1;
         a.cache_read += e.get("cacheReadTokens").and_then(Value::as_f64).unwrap_or(0.0);
         a.cache_create += e.get("cacheCreateTokens").and_then(Value::as_f64).unwrap_or(0.0);
+        if let Some(v) = e.get("cacheCreateTokens1h").and_then(Value::as_f64) {
+            a.cache_create_1h += v;
+            a.cache_create_1h_seen = true;
+        }
         a.input += e.get("inputTokens").and_then(Value::as_f64).unwrap_or(0.0);
         // `!a.model` is TRUTHY, so an empty model never sticks and never blocks a later real one.
         if a.model.as_deref().unwrap_or("").is_empty() && e.get("type").and_then(Value::as_str) == Some("llm") {
@@ -618,7 +695,6 @@ pub fn build_cache_break_report(
         // The model's ACTUAL cache-read rate, not a hardcoded 0.1× input (wrong for e.g. codex-mini
         // at 0.25×), so the priced waste credits back the real avoided read.
         cache_read_rate_usd_per_mtok: Some(r.cache_read_per_mtok),
-        idle_ttl_ms: None,
     });
 
     let mut entries: Vec<(f64, Acc)> = by_turn.into_values().collect();
@@ -630,6 +706,7 @@ pub fn build_cache_break_report(
             sources: sources_by_turn.get(&turn.to_bits()).cloned().unwrap_or_default(),
             cache_read_tokens: a.cache_read,
             cache_create_tokens: a.cache_create,
+            cache_create_tokens_1h: if a.cache_create_1h_seen { Some(a.cache_create_1h) } else { None },
             input_tokens: a.input,
             model: Some(a.model.unwrap_or_else(|| session_model.to_owned())),
             has_fast_mode: None,

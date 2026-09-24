@@ -284,6 +284,7 @@ fn ttl_of(v: &Value) -> Option<agentlens_core::burn::cache_ttl::TtlContext> {
         },
         force5m: o.get("force5m").and_then(Value::as_bool).unwrap_or(false),
         enable1h: o.get("enable1h").and_then(Value::as_bool).unwrap_or(false),
+        subagent_ttl_setting: None,
     })
 }
 

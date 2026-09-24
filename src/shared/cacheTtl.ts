@@ -14,11 +14,18 @@
 //   | Main conversation     | Claude subscription (within plan)      | 1 hour   |
 //   | Main conversation     | subscription drawing USAGE CREDITS     | 5 min    |
 //   | Main conversation     | API key / Bedrock / GCP / Foundry      | 5 min (ENABLE_PROMPT_CACHING_1H=1 opts into 1h) |
-//   | Subagent (named/gen.) | any                                    | 5 min ALWAYS (own conversation, own cache) |
+//   | Subagent (named/gen.) | any                                    | 5 min DEFAULT (own conversation, own cache) |
 //   | Fork                  | inherits parent                        | reads the PARENT's entry; every hit RESETS its timer |
 //
 //   FORCE_PROMPT_CACHING_5M=1 forces 5 min regardless of auth. Every cache hit resets the
 //   inactivity timer. Cache scope is per machine+directory (+model +effort).
+//
+//   CC 2.1.242 made the Main and Subagent rows CONFIGURABLE: `promptCacheTtl` /
+//   `subagentPromptCacheTtl` in ~/.claude/settings.json, and CC 2.1.248 added per-agent
+//   `experimental.cacheTtl` frontmatter. The table above is the DEFAULT when no such setting is
+//   present, not an invariant — only `subagentPromptCacheTtl` is read here (below); the per-agent
+//   frontmatter and `promptCacheTtl` for the main row are known, separately-scoped gaps. See
+//   `.claude/project/memory/cache-ttl-model.md` ATOM-N9P1-MNYD.
 //
 // HONESTY CONTRACT: classification NEVER silently guesses. Every regime carries a ttlSource:
 //   'doc-matrix' — a matrix row applied to positively-resolved signals;
@@ -59,6 +66,11 @@ export interface TtlContext {
   force5m: boolean
   /** ENABLE_PROMPT_CACHING_1H=1 detected — opts an API-key session into the 1h tier. */
   enable1h: boolean
+  /** `subagentPromptCacheTtl` read from the top level of ~/.claude/settings.json (CC 2.1.242),
+   *  '5m'|'1h'|undefined. Per-agent `experimental.cacheTtl` frontmatter is a SEPARATE, larger
+   *  read (locating + parsing the active agent's own definition file) and is deliberately NOT
+   *  covered here — see the 'assumed' fallback note in classifyTtlRegime below. */
+  subagentTtlSetting?: '5m' | '1h'
 }
 
 /** A session's resolved TTL regime — what every TTL-aware consumer reads. */
@@ -97,9 +109,11 @@ export function sessionTtlKindOf(card: { parentSessionId?: string; spawnKind?: s
 /**
  * The doc matrix as code. Pure: (kind, machine context) → regime. Order of the rules is
  * load-bearing:
- *   1. subagent → 5 min ALWAYS. This row is auth-INDEPENDENT (the 1h auto applies only to the
- *      main conversation), so it resolves 'doc-matrix' even when ctx is absent — the one kind
- *      whose TTL needs no machine signals.
+ *   1. subagent → 5 min DEFAULT unless subagentPromptCacheTtl/experimental.cacheTtl says
+ *      otherwise (CC 2.1.242). Auth-INDEPENDENT (the 1h auto applies only to the main
+ *      conversation) — the one kind that never reads AuthRegime. A configured setting is
+ *      'config'; an unset one is still 'doc-matrix' (a documented default, per the I6c2 docs
+ *      answer — user-settings-file-only, see classifyTtlRegime below).
  *   2. missing ctx / missing kind → 'assumed' (never silently guess a main session's tier).
  *   3. FORCE_PROMPT_CACHING_5M → 5 min 'config' (doc: forces 5m regardless of auth).
  *   4. main/fork by auth. A fork reads the PARENT's entry, so it rides the parent-conversation
@@ -107,9 +121,30 @@ export function sessionTtlKindOf(card: { parentSessionId?: string; spawnKind?: s
  */
 export function classifyTtlRegime(kind: SessionTtlKind | null, ctx: TtlContext | null | undefined): TtlRegime {
   if (kind === 'subagent') {
+    // CC 2.1.242 made this configurable (`subagentPromptCacheTtl` in ~/.claude/settings.json).
+    // Docs answer (verified against code.claude.com/docs/en/prompt-caching + /docs/en/settings,
+    // TRDD-ZQQYRYBO I6c2): an UNSET setting is still a documented default (main 1h /
+    // everything-else 5m on a plan subscription; 5m for both on usage credits, an API key, or a
+    // cloud provider), so the no-setting fallback stays 'doc-matrix', not 'assumed' — this
+    // reverts I6c's demotion, which the docs answer overturned.
+    //
+    // This reader only checks the USER settings file (~/.claude/settings.json) — it does NOT
+    // implement the full precedence chain (FORCE_PROMPT_CACHING_5M, the bucket env var, the
+    // managed/project/local settings files, per-agent `experimental.cacheTtl` frontmatter,
+    // ENABLE_PROMPT_CACHING_1H). Each of those can override what this function reports, so a
+    // 'config'/'doc-matrix' verdict here reflects the user file only — `ttlBasis` says so.
+    if (ctx?.subagentTtlSetting === '1h') {
+      return {
+        ttlMs: TTL_1H_MS, ttlAssumedMin: TTL_1H_MIN, ttlSource: 'config',
+        ttlBasis: 'subagent — subagentPromptCacheTtl="1h" in ~/.claude/settings.json (user settings only — env vars, managed/project/local settings files, and per-agent experimental.cacheTtl frontmatter not read)',
+      }
+    }
     return {
-      ttlMs: TTL_5M_MS, ttlAssumedMin: TTL_5M_MIN, ttlSource: 'doc-matrix',
-      ttlBasis: 'subagent — own conversation, own 5-min cache (the 1h auto applies only to the main conversation)',
+      ttlMs: TTL_5M_MS, ttlAssumedMin: TTL_5M_MIN,
+      ttlSource: ctx?.subagentTtlSetting === '5m' ? 'config' : 'doc-matrix',
+      ttlBasis: ctx?.subagentTtlSetting === '5m'
+        ? 'subagent — subagentPromptCacheTtl="5m" in ~/.claude/settings.json (user settings only — env vars, managed/project/local settings files, and per-agent experimental.cacheTtl frontmatter not read)'
+        : 'subagent — no subagentPromptCacheTtl in ~/.claude/settings.json (user settings only read); the documented default (5m outside plan usage, 1h main-adjacent helper requests aside) applies',
     }
   }
   if (!ctx || kind === null) return ASSUMED_TTL_REGIME

@@ -3,7 +3,7 @@
 
 use std::collections::HashSet;
 
-use agentlens_core::mcp_tools::get_cache_break_report;
+use agentlens_core::mcp_tools::{get_cache_break_report, CacheBreakReportCtx};
 use serde_json::{json, Value};
 
 fn oracle() -> Value {
@@ -55,7 +55,15 @@ fn run(o: &Value, args: Value, accessor: bool) -> Value {
         let id = c.get("sessionId").and_then(Value::as_str).unwrap_or_default();
         o["timelines"].get(id).and_then(Value::as_array).cloned().unwrap_or_default()
     };
-    get_cache_break_report(&sessions, &file_ids(), &args, accessor.then_some(&comp as &dyn Fn(&str) -> Option<Value>), &timeline_of, now, BUDGET_MS)
+    let ids = file_ids();
+    let ctx = CacheBreakReportCtx {
+        file_ids: &ids,
+        get_composition: accessor.then_some(&comp as &dyn Fn(&str) -> Option<Value>),
+        timeline_of: &timeline_of,
+        now_ms: now,
+        time_budget_ms: BUDGET_MS,
+    };
+    get_cache_break_report(&sessions, &args, &ctx)
 }
 
 #[test]
@@ -157,7 +165,9 @@ fn an_elapsed_scan_budget_stops_before_the_first_session() {
         let id = c.get("sessionId").and_then(Value::as_str).unwrap_or_default();
         o["timelines"].get(id).and_then(Value::as_array).cloned().unwrap_or_default()
     };
-    let got = get_cache_break_report(&sessions, &file_ids(), &json!({}), Some(&comp), &timeline_of, 0.0, -1.0);
+    let ids = file_ids();
+    let ctx = CacheBreakReportCtx { file_ids: &ids, get_composition: Some(&comp), timeline_of: &timeline_of, now_ms: 0.0, time_budget_ms: -1.0 };
+    let got = get_cache_break_report(&sessions, &json!({}), &ctx);
     assert_eq!(got["sessionsAnalyzed"], 0, "{got}");
     assert_eq!(got["scanStoppedEarly"], true);
     assert_eq!(

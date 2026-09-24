@@ -32,6 +32,11 @@ export interface CacheTurnInput {
   sources: ContextSource[]
   cacheReadTokens: number
   cacheCreateTokens: number
+  // The 1h-tier slice of cacheCreateTokens (usage.cache_creation.ephemeral_1h_input_tokens).
+  // `undefined` = no tier sub-object observed on this turn's write (older CC, or the turn wrote
+  // nothing) — distinct from `0`, an OBSERVED all-5m write. TRDD-ZQQYRYBO I6c2: classifyTurn's
+  // idle-TTL step reads this to price a gap against the MEASURED tier of the last real write.
+  cacheCreateTokens1h?: number
   inputTokens: number
   model?: string
   hasFastMode?: boolean
@@ -47,10 +52,13 @@ export interface AnalyzeCacheBreaksOpts {
   // some do not (e.g. codex-mini at 0.25×), and hardcoding 0.1× overstates the "wasted re-write" for
   // those. When omitted, falls back to 0.1 × inputRate (the previous behavior, correct for 0.1× models).
   cacheReadRateUsdPerMTok?: number
-  idleTtlMs?: number     // gap beyond which the cache entry expired; default 5 min
 }
 
 const DEFAULT_IDLE_TTL_MS = 5 * 60_000
+// The 1h cache-write tier's TTL (TRDD-ZQQYRYBO I6c2's per-gap measured-tier judgment — see
+// classifyTurn step 4). Not read from classifyTtlRegime: this module's historical attribution
+// must stay independent of the forward-looking "regime right now" answer.
+const TTL_1H_MS = 60 * 60_000
 
 // Kinds the composition parser emits that live in the STABLE prefix (their turn-to-turn mutation is
 // an avoidable break). All of them qualify — the parser never emits the conversation-message layer.
@@ -79,6 +87,7 @@ const REMEDIATION: Record<CacheBreakCause, string> = {
   UPGRADE:                'A Claude Code upgrade invalidates the cache once — unavoidable, but do not resume large sessions right after upgrading.',
   RESUME_AFTER_UPGRADE:   'Resuming after an upgrade forces a full re-read (the most expensive turn) — avoid resuming huge sessions post-upgrade.',
   IDLE_TTL_EXPIRY:        'A >5-min idle gap let the cache expire; keep turns within the TTL or accept the one-time re-warm.',
+  IDLE_TTL_PARTIAL_EXPIRY: 'The gap outlived the 5-min slice of a split write but stayed within its 1h slice; only the 5-min portion needed a one-time re-warm.',
   UNATTRIBUTABLE:         'A real cold write (more written than read) with nothing in the block diff to blame. Do NOT guess a culprit from timing or plausibility — run get_cache_break_timeline, which diffs the raw request bodies against their actual cache_control breakpoints.',
   UNKNOWN:                'Cause could not be localised from the block diff; inspect the raw prefix around this turn.',
 }
@@ -175,8 +184,12 @@ function priceWaste(tokens: number, opts: AnalyzeCacheBreaksOpts): number {
 }
 
 // Classify ONE transition (prev → cur) into a per-turn break verdict.
-function classifyTurn(prev: CacheTurnInput, cur: CacheTurnInput, opts: AnalyzeCacheBreaksOpts): CacheBreakTurn {
-  const idleTtl = opts.idleTtlMs ?? DEFAULT_IDLE_TTL_MS
+// `history` is every turn up to and including `prev` (turns.slice(0, i) in analyzeCacheBreaks),
+// so step 4 below can walk BACKWARD past pure-read turns to find the last turn that actually
+// wrote the cache — a read only refreshes the TTL of the entry it read, it does not change its
+// tier.
+function classifyTurn(history: CacheTurnInput[], cur: CacheTurnInput, opts: AnalyzeCacheBreaksOpts): CacheBreakTurn {
+  const prev = history[history.length - 1]
   const idleGapMs = (cur.timestampMs !== undefined && prev.timestampMs !== undefined)
     ? cur.timestampMs - prev.timestampMs : undefined
   const wasted = cur.cacheCreateTokens
@@ -184,11 +197,16 @@ function classifyTurn(prev: CacheTurnInput, cur: CacheTurnInput, opts: AnalyzeCa
   const emit = (
     cause: CacheBreakCause, label?: string, kind?: string, gap?: number,
     confidence?: 'high' | 'medium' | 'low', attribution?: CacheBreakTurn['attribution'],
+    // 'measured' when the idle-TTL verdict came from an observed write-tier split on the last
+    // writing turn; 'assumed' when no split was observed and the old 5-min floor was used
+    // instead (TRDD-ZQQYRYBO I6c2). Only ever set by the idle-gap branch (step 4).
+    ttlGapSource?: 'measured' | 'assumed',
   ): CacheBreakTurn => ({
     turn: cur.turn, broke: true, cause,
     breakSourceLabel: label, breakSourceKind: kind,
     wastedTokens: wasted, wastedCostUsd: priceWaste(wasted, opts),
     idleGapMs: gap, remediation: REMEDIATION[cause], confidence, attribution, tsMs: cur.timestampMs,
+    ttlGapSource,
   })
 
   // 1. Model switch — a full, model-specific invalidation, dominates any block diff.
@@ -234,9 +252,48 @@ function classifyTurn(prev: CacheTurnInput, cur: CacheTurnInput, opts: AnalyzeCa
   // the raw bodies. (TRDD-V8YOWHVT)
   const diverged = firstDivergentBlock(prev.sources, cur.sources)
   if (diverged) return emit(causeForKind(diverged.kind), diverged.label, diverged.kind, undefined, 'low', 'block-diff-only')
-  // 4. No block diff but a long idle gap with a real re-write → the entry expired (one-time).
-  if (idleGapMs !== undefined && idleGapMs > idleTtl && cur.cacheCreateTokens > 0) {
-    return emit('IDLE_TTL_EXPIRY', undefined, undefined, idleGapMs)
+  // 4. No block diff but a long idle gap with a real re-write → judge the gap by the MEASURED
+  //    write tier of the last turn that actually wrote the cache, walking `history` backward
+  //    (including `prev`) PAST any pure-read turns — a read only refreshes the TTL of the entry
+  //    it read, it never changes that entry's tier. Scoped to THIS historical attribution only:
+  //    classifyTtlRegime (the forward-looking "what TTL applies right now", used by
+  //    cache-expired/cache-state/keep-warm/burn-monitor) is untouched (TRDD-ZQQYRYBO I6c2 —
+  //    judging every past gap by the CURRENT regime wrongly excused gaps taken while the account
+  //    was still on usage credits, i.e. still 5m, from an account that has since moved to plan
+  //    usage and 1h).
+  if (idleGapMs !== undefined && idleGapMs > DEFAULT_IDLE_TTL_MS && cur.cacheCreateTokens > 0) {
+    const lastWrite = [...history].reverse().find(t => t.cacheCreateTokens > 0)
+    const oneH = lastWrite?.cacheCreateTokens1h
+    if (lastWrite && oneH !== undefined) {
+      const fiveM = Math.max(lastWrite.cacheCreateTokens - oneH, 0)
+      const has5m = fiveM > 0
+      const has1h = oneH > 0
+      if (idleGapMs > TTL_1H_MS) {
+        // Every tier the last write carried has now expired.
+        return emit('IDLE_TTL_EXPIRY', undefined, undefined, idleGapMs, undefined, undefined, 'measured')
+      }
+      if (has5m && has1h) {
+        // A split write: the 5m slice is gone, the 1h slice (if genuinely still resident
+        // server-side) is not — report the partial verdict instead of collapsing both slices
+        // into one cause.
+        return emit('IDLE_TTL_PARTIAL_EXPIRY', undefined, undefined, idleGapMs, undefined, undefined, 'measured')
+      }
+      if (has5m) {
+        // All-5m write: any gap past the 5-min floor is a full expiry.
+        return emit('IDLE_TTL_EXPIRY', undefined, undefined, idleGapMs, undefined, undefined, 'measured')
+      }
+      // All-1h (has1h only, idleGapMs <= TTL_1H_MS already checked above): still resident —
+      // falls through to step 5, not a break.
+    } else {
+      // The writing turn carried no cache_creation tier sub-object — an OTEL-only session, or a
+      // pre-tier-split CC build — OR no write is visible in this timeline at all (a
+      // resumed/truncated session whose first visible turn read a cache written off-screen;
+      // without this branch that gap fell through to UNATTRIBUTABLE, a regression the I6c2 review
+      // caught). Never guess 1h from silence: an unearned "not expired" verdict here is a
+      // permanent false negative, worse than the one-time false positive the old flat 5-min
+      // floor risked (TRDD-ZQQYRYBO I6c report, finding 1).
+      return emit('IDLE_TTL_EXPIRY', undefined, undefined, idleGapMs, undefined, undefined, 'assumed')
+    }
   }
   // 5. Nothing localisable — but "nothing to point at" covers two situations that must not be
   //    conflated, because doing so hides the costliest event this analyzer exists to surface:
@@ -294,7 +351,7 @@ export function analyzeCacheBreaks(
       results.push({ turn: cur.turn, broke: false, cause: 'UNKNOWN', wastedTokens: 0, wastedCostUsd: 0 })
       continue
     }
-    results.push(classifyTurn(turns[i - 1], cur, opts))
+    results.push(classifyTurn(turns.slice(0, i), cur, opts))
   }
 
   const offenders = rankOffenders(results)
@@ -322,14 +379,22 @@ export function buildCacheBreakReport(
   const sourcesByTurn = new Map<number, ContextSource[]>()
   for (const t of composition.turns) sourcesByTurn.set(t.turn, t.sources)
 
-  interface Acc { cacheRead: number; cacheCreate: number; input: number; model?: string; ts?: number }
+  interface Acc {
+    cacheRead: number; cacheCreate: number
+    // Sum of this turn's cacheCreateTokens1h entries; only meaningful when `cacheCreate1hSeen`
+    // is true (mirrors the TimelineEntry-level `undefined` vs `0` distinction one level up — a
+    // turn can fold multiple timeline rows, so "seen" must survive the fold too).
+    cacheCreate1h: number; cacheCreate1hSeen: boolean
+    input: number; model?: string; ts?: number
+  }
   const byTurn = new Map<number, Acc>()
   for (const e of timeline) {
     if (e.type === 'background' || e.turn === undefined) continue
     let a = byTurn.get(e.turn)
-    if (!a) { a = { cacheRead: 0, cacheCreate: 0, input: 0 }; byTurn.set(e.turn, a) }
+    if (!a) { a = { cacheRead: 0, cacheCreate: 0, cacheCreate1h: 0, cacheCreate1hSeen: false, input: 0 }; byTurn.set(e.turn, a) }
     a.cacheRead += e.cacheReadTokens ?? 0
     a.cacheCreate += e.cacheCreateTokens ?? 0
+    if (e.cacheCreateTokens1h !== undefined) { a.cacheCreate1h += e.cacheCreateTokens1h; a.cacheCreate1hSeen = true }
     a.input += e.inputTokens ?? 0
     if (!a.model && e.type === 'llm' && e.model) a.model = e.model
     if (a.ts === undefined && e.timestamp) { const ms = Date.parse(e.timestamp); if (!Number.isNaN(ms)) a.ts = ms }
@@ -354,6 +419,7 @@ export function buildCacheBreakReport(
       sources: sourcesByTurn.get(turn) ?? [],
       cacheReadTokens: a.cacheRead,
       cacheCreateTokens: a.cacheCreate,
+      cacheCreateTokens1h: a.cacheCreate1hSeen ? a.cacheCreate1h : undefined,
       inputTokens: a.input,
       model: a.model ?? sessionModel,
       timestampMs: a.ts,
@@ -379,5 +445,6 @@ export const CAUSE_LABEL: Record<CacheBreakCause, string> = {
   ACCOUNT_SWITCHED: 'Account switched',
   TOOL_DENY: 'Tool denied', INJECTED_BLOCK_CHANGED: 'Injected block changed',
   COMPACTION: 'Compaction', UPGRADE: 'Upgrade', RESUME_AFTER_UPGRADE: 'Resume after upgrade',
-  IDLE_TTL_EXPIRY: 'Idle TTL expiry', UNATTRIBUTABLE: 'Unattributable cold write', UNKNOWN: 'Unknown',
+  IDLE_TTL_EXPIRY: 'Idle TTL expiry', IDLE_TTL_PARTIAL_EXPIRY: 'Idle TTL partial expiry',
+  UNATTRIBUTABLE: 'Unattributable cold write', UNKNOWN: 'Unknown',
 }

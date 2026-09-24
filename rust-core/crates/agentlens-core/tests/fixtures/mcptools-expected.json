@@ -351,7 +351,7 @@
       "ttlSource": "doc-matrix",
       "ttlContradicted": false,
       "measuredWarmGapMin": null,
-      "ttlBasis": "subagent — own conversation, own 5-min cache (the 1h auto applies only to the main conversation)"
+      "ttlBasis": "subagent — no subagentPromptCacheTtl in ~/.claude/settings.json (user settings only read); the documented default (5m outside plan usage, 1h main-adjacent helper requests aside) applies"
      }
     },
     {
@@ -1627,7 +1627,7 @@
        "ttlSource": "doc-matrix",
        "ttlContradicted": false,
        "measuredWarmGapMin": null,
-       "ttlBasis": "subagent — own conversation, own 5-min cache (the 1h auto applies only to the main conversation)"
+       "ttlBasis": "subagent — no subagentPromptCacheTtl in ~/.claude/settings.json (user settings only read); the documented default (5m outside plan usage, 1h main-adjacent helper requests aside) applies"
       }
      },
      {
@@ -2118,7 +2118,7 @@
        "ttlSource": "doc-matrix",
        "ttlContradicted": false,
        "measuredWarmGapMin": null,
-       "ttlBasis": "subagent — own conversation, own 5-min cache (the 1h auto applies only to the main conversation)"
+       "ttlBasis": "subagent — no subagentPromptCacheTtl in ~/.claude/settings.json (user settings only read); the documented default (5m outside plan usage, 1h main-adjacent helper requests aside) applies"
       }
      },
      {
@@ -2605,7 +2605,7 @@
        "ttlSource": "doc-matrix",
        "ttlContradicted": false,
        "measuredWarmGapMin": null,
-       "ttlBasis": "subagent — own conversation, own 5-min cache (the 1h auto applies only to the main conversation)"
+       "ttlBasis": "subagent — no subagentPromptCacheTtl in ~/.claude/settings.json (user settings only read); the documented default (5m outside plan usage, 1h main-adjacent helper requests aside) applies"
       }
      },
      {
@@ -3096,7 +3096,7 @@
        "ttlSource": "doc-matrix",
        "ttlContradicted": false,
        "measuredWarmGapMin": null,
-       "ttlBasis": "subagent — own conversation, own 5-min cache (the 1h auto applies only to the main conversation)"
+       "ttlBasis": "subagent — no subagentPromptCacheTtl in ~/.claude/settings.json (user settings only read); the documented default (5m outside plan usage, 1h main-adjacent helper requests aside) applies"
       }
      },
      {
@@ -3587,7 +3587,7 @@
        "ttlSource": "doc-matrix",
        "ttlContradicted": false,
        "measuredWarmGapMin": null,
-       "ttlBasis": "subagent — own conversation, own 5-min cache (the 1h auto applies only to the main conversation)"
+       "ttlBasis": "subagent — no subagentPromptCacheTtl in ~/.claude/settings.json (user settings only read); the documented default (5m outside plan usage, 1h main-adjacent helper requests aside) applies"
       }
      },
      {
@@ -4103,7 +4103,7 @@
        "ttlSource": "doc-matrix",
        "ttlContradicted": false,
        "measuredWarmGapMin": null,
-       "ttlBasis": "subagent — own conversation, own 5-min cache (the 1h auto applies only to the main conversation)"
+       "ttlBasis": "subagent — no subagentPromptCacheTtl in ~/.claude/settings.json (user settings only read); the documented default (5m outside plan usage, 1h main-adjacent helper requests aside) applies"
       }
      },
      {
@@ -4597,7 +4597,7 @@
        "ttlSource": "doc-matrix",
        "ttlContradicted": false,
        "measuredWarmGapMin": null,
-       "ttlBasis": "subagent — own conversation, own 5-min cache (the 1h auto applies only to the main conversation)"
+       "ttlBasis": "subagent — no subagentPromptCacheTtl in ~/.claude/settings.json (user settings only read); the documented default (5m outside plan usage, 1h main-adjacent helper requests aside) applies"
       }
      },
      {
@@ -5077,7 +5077,7 @@
        "ttlSource": "doc-matrix",
        "ttlContradicted": false,
        "measuredWarmGapMin": null,
-       "ttlBasis": "subagent — own conversation, own 5-min cache (the 1h auto applies only to the main conversation)"
+       "ttlBasis": "subagent — no subagentPromptCacheTtl in ~/.claude/settings.json (user settings only read); the documented default (5m outside plan usage, 1h main-adjacent helper requests aside) applies"
       }
      },
      {

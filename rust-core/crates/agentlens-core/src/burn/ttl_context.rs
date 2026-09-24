@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use super::account_info::AccountInfo;
-use super::cache_ttl::AuthRegime;
+use super::cache_ttl::{AuthRegime, SubagentTtlSetting};
 
 /// Truthy env-flag semantics: '1'/'true' (and JSON 1/true in the settings block) are on.
 fn flag_on(v: Option<&Value>) -> bool {
@@ -57,4 +57,18 @@ pub fn read_settings_env(home_dir: &Path) -> Option<Value> {
     let raw = std::fs::read_to_string(home_dir.join(".claude").join("settings.json")).ok()?;
     let parsed: Value = serde_json::from_str(&raw).ok()?;
     parsed.get("env").filter(|v| v.is_object()).cloned()
+}
+
+/// The top-level `subagentPromptCacheTtl` key of ~/.claude/settings.json (CC 2.1.242), fail-soft
+/// (`None` on a missing file, bad JSON, or a value other than the two the setting accepts).
+/// READ-ONLY, same contract as `read_settings_env`. `home_dir` is the injection point tests use
+/// to point this at a fixture settings.json instead of the real `~/.claude`.
+pub fn read_subagent_ttl_setting(home_dir: &Path) -> Option<SubagentTtlSetting> {
+    let raw = std::fs::read_to_string(home_dir.join(".claude").join("settings.json")).ok()?;
+    let parsed: Value = serde_json::from_str(&raw).ok()?;
+    match parsed.get("subagentPromptCacheTtl").and_then(Value::as_str) {
+        Some("5m") => Some(SubagentTtlSetting::FiveM),
+        Some("1h") => Some(SubagentTtlSetting::OneH),
+        _ => None,
+    }
 }

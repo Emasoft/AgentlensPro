@@ -56,6 +56,7 @@ fn turn_input(v: &Value) -> CacheTurnInput {
         sources: arr(v, "sources"),
         cache_read_tokens: opt_f(v, "cacheReadTokens").unwrap_or(0.0),
         cache_create_tokens: opt_f(v, "cacheCreateTokens").unwrap_or(0.0),
+        cache_create_tokens_1h: opt_f(v, "cacheCreateTokens1h"),
         input_tokens: opt_f(v, "inputTokens").unwrap_or(0.0),
         model: v.get("model").and_then(Value::as_str).map(str::to_owned),
         has_fast_mode: v.get("hasFastMode").and_then(Value::as_bool),
@@ -68,7 +69,6 @@ fn opts_of(v: &Value) -> AnalyzeCacheBreaksOpts {
         write_rate_usd_per_mtok: opt_f(v, "writeRateUsdPerMTok"),
         input_rate_usd_per_mtok: opt_f(v, "inputRateUsdPerMTok"),
         cache_read_rate_usd_per_mtok: opt_f(v, "cacheReadRateUsdPerMTok"),
-        idle_ttl_ms: opt_f(v, "idleTtlMs"),
     }
 }
 
@@ -146,6 +146,7 @@ fn every_cause_carries_the_ts_label_and_remediation() {
         Cause::Upgrade,
         Cause::ResumeAfterUpgrade,
         Cause::IdleTtlExpiry,
+        Cause::IdleTtlPartialExpiry,
         Cause::Unattributable,
         Cause::Unknown,
     ];
@@ -219,7 +220,7 @@ fn the_two_no_break_shapes_differ() {
     assert_eq!(keys(&first), ["turn", "broke", "cause", "wastedTokens", "wastedCostUsd"], "{first}");
     let silent = got["turns"][1].clone();
     assert_eq!(keys(&silent), ["turn", "broke", "cause", "wastedTokens", "wastedCostUsd", "idleGapMs"], "{silent}");
-    assert_eq!(silent["idleGapMs"], 120_000);
+    assert_eq!(silent["idleGapMs"], 600_000);
 }
 
 /// priceWaste credits back the model's REAL cache-read rate; absent that it falls back to 0.1×
@@ -277,3 +278,137 @@ fn build_returns_null_when_it_cannot_diff_and_folds_the_timeline_correctly() {
     assert_eq!(unpriced["totalWastedCostUsd"], 0.0);
     assert_eq!(unpriced["totalWastedTokens"], full["totalWastedTokens"]);
 }
+
+/// TRDD-ZQQYRYBO I6c2: the idle-TTL step judges a gap by the MEASURED write-tier split of the
+/// LAST TURN THAT ACTUALLY WROTE the cache — walking backward past pure-read turns — never just
+/// `prev`. Turn 0 writes an all-1h entry; turn 1 is a pure read (cacheCreateTokens 0, so it
+/// carries no tier data of its own); turn 2 re-writes after a 70-min gap. A naive "look only at
+/// prev" implementation would see turn 1's cache_create_tokens_1h (unset, since it never wrote)
+/// and wrongly fall back to 'assumed' — the backward walk must reach turn 0's real split instead.
+#[test]
+fn idle_gap_is_judged_by_the_last_writing_turns_measured_tier_not_just_prev() {
+    let same_source = serde_json::json!([{"kind": "systemPrompt", "label": "sys", "tokens": 100}]);
+    let turns = vec![
+        CacheTurnInput {
+            turn: 1.0,
+            sources: vec![same_source.clone()],
+            cache_create_tokens: 100.0,
+            cache_create_tokens_1h: Some(100.0), // all-1h write
+            timestamp_ms: Some(0.0),
+            ..CacheTurnInput::default()
+        },
+        CacheTurnInput {
+            turn: 2.0,
+            sources: vec![same_source.clone()],
+            cache_create_tokens: 0.0, // pure read — no write, no tier data of its own
+            timestamp_ms: Some(60_000.0),
+            ..CacheTurnInput::default()
+        },
+        CacheTurnInput {
+            turn: 3.0,
+            sources: vec![same_source.clone()],
+            cache_create_tokens: 50.0, // real re-write, 70 min after turn 2 (>TTL_1H_MS)
+            timestamp_ms: Some(60_000.0 + 70.0 * 60_000.0),
+            ..CacheTurnInput::default()
+        },
+    ];
+    let report = analyze_cache_breaks("s", &turns, &AnalyzeCacheBreaksOpts::default());
+    let got = &report["turns"][2];
+    assert_eq!(got["cause"], "IDLE_TTL_EXPIRY", "{got}");
+    assert_eq!(got["ttlGapSource"], "measured", "the backward walk must reach turn 0's split, not turn 1's absence: {got}");
+}
+
+/// TRDD-ZQQYRYBO I6c2 (b): a modern-shaped fixture (real JSON timeline entries, going through
+/// `build_cache_break_report`'s own field read of `cacheCreateTokens1h`, not a hand-built
+/// `CacheTurnInput`) where every writing turn carries a tier split → every idle-gap verdict
+/// reports 'measured'. Catches a wrong JSON field-path (e.g. a typo'd key) that a direct
+/// `CacheTurnInput` literal in the test itself could never expose.
+#[test]
+fn build_cache_break_report_reads_the_real_json_field_path_for_the_tier_split() {
+    let composition = serde_json::json!({
+        "turns": [
+            {"turn": 1, "sources": [{"kind": "systemPrompt", "label": "sys", "tokens": 100}]},
+            {"turn": 2, "sources": [{"kind": "systemPrompt", "label": "sys", "tokens": 100}]},
+            {"turn": 3, "sources": [{"kind": "systemPrompt", "label": "sys", "tokens": 100}]},
+        ],
+    });
+    // All-5m writes (cacheCreateTokens1h: 0, an OBSERVED empty 1h slice) so every 10-min gap
+    // below exceeds the write's own tier and reports a full IDLE_TTL_EXPIRY, sourced 'measured'.
+    let timeline = serde_json::json!([
+        {"type": "llm", "turn": 1, "cacheCreateTokens": 1000, "cacheCreateTokens1h": 0, "timestamp": "2026-01-01T00:00:00.000Z", "model": "claude-opus-5"},
+        {"type": "llm", "turn": 2, "cacheCreateTokens": 500, "cacheCreateTokens1h": 0, "timestamp": "2026-01-01T00:10:00.000Z", "model": "claude-opus-5"},
+        {"type": "llm", "turn": 3, "cacheCreateTokens": 500, "cacheCreateTokens1h": 0, "timestamp": "2026-01-01T00:20:00.000Z", "model": "claude-opus-5"},
+    ]);
+    let now = 1_800_000_000_000.0;
+    let report = build_cache_break_report("s", timeline.as_array().unwrap(), Some(&composition), "claude-opus-5", now).unwrap();
+    for t in report["turns"].as_array().unwrap().iter().skip(1) {
+        assert_eq!(t.get("ttlGapSource").cloned().unwrap_or(Value::Null), Value::String("measured".to_owned()), "{t}");
+    }
+}
+
+/// TRDD-ZQQYRYBO I6c2 (c): a SPLIT write (both a 5m and a 1h slice) with a 30-min gap — past the
+/// 5-min slice's TTL, within the 1h slice's — must report the PARTIAL verdict, never collapse to
+/// a full IDLE_TTL_EXPIRY (which would over-report) or silently pass (which would under-report the
+/// 5m slice's real re-warm cost).
+#[test]
+fn a_split_write_with_a_30_minute_gap_reports_the_partial_expiry_verdict() {
+    let same_source = serde_json::json!([{"kind": "systemPrompt", "label": "sys", "tokens": 100}]);
+    let turns = vec![
+        CacheTurnInput {
+            turn: 1.0,
+            sources: vec![same_source.clone()],
+            cache_create_tokens: 1000.0,
+            cache_create_tokens_1h: Some(400.0), // split: 600 five-min + 400 one-hour
+            timestamp_ms: Some(0.0),
+            ..CacheTurnInput::default()
+        },
+        CacheTurnInput {
+            turn: 2.0,
+            sources: vec![same_source.clone()],
+            cache_create_tokens: 50.0, // real re-write, 30 min later
+            timestamp_ms: Some(30.0 * 60_000.0),
+            ..CacheTurnInput::default()
+        },
+    ];
+    let report = analyze_cache_breaks("s", &turns, &AnalyzeCacheBreaksOpts::default());
+    let got = &report["turns"][1];
+    assert_eq!(got["cause"], "IDLE_TTL_PARTIAL_EXPIRY", "{got}");
+    assert_eq!(got["ttlGapSource"], "measured", "{got}");
+}
+
+/// TRDD-ZQQYRYBO I6c2 (d): no tier split observed AT ALL on the last writing turn (an OTEL-only
+/// session, or a pre-tier-split Claude Code build) → the fallback keeps the old conservative
+/// 5-min floor (never guesses 1h from silence), and says so via `ttlGapSource: 'assumed'`.
+#[test]
+fn no_observed_tier_split_falls_back_to_the_assumed_5_minute_floor() {
+    let same_source = serde_json::json!([{"kind": "systemPrompt", "label": "sys", "tokens": 100}]);
+    let turns = vec![
+        CacheTurnInput {
+            turn: 1.0,
+            sources: vec![same_source.clone()],
+            cache_create_tokens: 100.0,
+            cache_create_tokens_1h: None, // no tier sub-object ever observed
+            timestamp_ms: Some(0.0),
+            ..CacheTurnInput::default()
+        },
+        CacheTurnInput {
+            turn: 2.0,
+            sources: vec![same_source.clone()],
+            cache_create_tokens: 50.0, // real re-write, 10 min later (>5-min floor)
+            timestamp_ms: Some(10.0 * 60_000.0),
+            ..CacheTurnInput::default()
+        },
+    ];
+    let report = analyze_cache_breaks("s", &turns, &AnalyzeCacheBreaksOpts::default());
+    let got = &report["turns"][1];
+    assert_eq!(got["cause"], "IDLE_TTL_EXPIRY", "{got}");
+    assert_eq!(got["ttlGapSource"], "assumed", "{got}");
+}
+
+// (e) Interleaved parent/subagent streams taking the tier from their OWN stream, not a shared
+// history, is a KNOWN GAP — not implemented in this pass. `build_cache_break_report` operates on
+// one session's own timeline already (a subagent's `timeline` is its own transcript, never the
+// parent's), so a per-session call is stream-isolated by construction; what remains untested is a
+// caller that hands `analyze_cache_breaks` a MERGED multi-stream turn list directly. No production
+// caller does that today (grep confirms every `analyze_cache_breaks`/`build_cache_break_report`
+// call site passes one session's own timeline), so this is flagged rather than fabricated.

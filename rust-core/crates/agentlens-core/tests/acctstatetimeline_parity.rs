@@ -81,6 +81,7 @@ fn oracle_ttl_ctx(v: &serde_json::Map<String, Value>) -> TtlContext {
         auth,
         force5m: v.get("force5m").and_then(Value::as_bool).unwrap_or(false),
         enable1h: v.get("enable1h").and_then(Value::as_bool).unwrap_or(false),
+        subagent_ttl_setting: None,
     }
 }
 

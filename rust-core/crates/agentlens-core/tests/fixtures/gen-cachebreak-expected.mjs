@@ -80,6 +80,9 @@ const t = (turn, o) => ({
   sources: o.sources ?? [],
   cacheReadTokens: o.read ?? 0,
   cacheCreateTokens: o.create ?? 0,
+  // The 1h-tier slice of `create` (TRDD-ZQQYRYBO I6c2) — omitted entirely (not just 0) unless the
+  // case sets it, so the "no split observed" path stays reachable by omission.
+  ...(o.create1h !== undefined ? { cacheCreateTokens1h: o.create1h } : {}),
   inputTokens: o.input ?? 0,
   ...(o.model !== undefined ? { model: o.model } : {}),
   ...(o.fast !== undefined ? { hasFastMode: o.fast } : {}),
@@ -150,20 +153,57 @@ const CASES = {
       t(4, { sources: [src('toolCatalog', 'tools', 801), src('mcp', 'srv', 101), src('hook', 'h', 51)], read: 10, create: 900 }),
     ],
   },
-  // No diff + a gap past the TTL + a real write → IDLE_TTL_EXPIRY, carrying the gap.
+  // No diff + a gap past the 5-min floor + a real write, with turn 1's OWN write carrying no
+  // observed tier split → IDLE_TTL_EXPIRY, carrying the gap, ttlGapSource 'assumed' (TRDD-ZQQYRYBO
+  // I6c2 — the per-gap MEASURED tier judgment falls back to the old floor when the last writing
+  // turn never reported a cache_creation tier sub-object).
   idleExpiry: {
-    opts: { ...RATES, idleTtlMs: 60_000 },
+    opts: RATES,
     turns: [
-      t(1, { sources: [src('file', 'a', 10)], ts: 1_000_000 }),
-      t(2, { sources: [src('file', 'a', 10)], read: 5, create: 3000, ts: 1_000_000 + 120_000 }),
+      t(1, { sources: [src('file', 'a', 10)], create: 1000, ts: 1_000_000 }),
+      t(2, { sources: [src('file', 'a', 10)], read: 5, create: 3000, ts: 1_000_000 + 600_000 }),
     ],
   },
-  // The same gap with NO write is not an expiry — and the modest-write case below it stays silent.
+  // TRDD-ZQQYRYBO I6c2 review: engine-parity cases for the measured-tier rung. The bulk
+  // comparison checks the Rust output (cause, remediation TEXT, ttlGapSource) against the TS
+  // oracle, which the Rust-only unit tests cannot.
+  // A split write (600 5m + 400 1h), 30-min gap → IDLE_TTL_PARTIAL_EXPIRY, measured.
+  idleSplitPartial: {
+    opts: RATES,
+    turns: [
+      t(1, { sources: [src('file', 'a', 10)], create: 1000, create1h: 400, ts: 1_000_000 }),
+      t(2, { sources: [src('file', 'a', 10)], read: 5, create: 3000, ts: 1_000_000 + 30 * 60_000 }),
+    ],
+  },
+  // Boundaries are strict: exactly 5 min is NOT past the floor (all-5m write, silent), exactly 1h
+  // against an all-1h write is still resident (silent), 1h + 1ms is a full measured expiry.
+  idleBoundaries: {
+    opts: RATES,
+    turns: [
+      t(1, { sources: [src('file', 'a', 10)], create: 1000, create1h: 0, ts: 1_000_000 }),
+      t(2, { sources: [src('file', 'a', 10)], read: 5000, create: 3000, create1h: 3000, ts: 1_000_000 + 5 * 60_000 }),
+      t(3, { sources: [src('file', 'a', 10)], read: 5000, create: 3000, create1h: 3000, ts: 1_000_000 + 65 * 60_000 }),
+      t(4, { sources: [src('file', 'a', 10)], read: 5, create: 3000, ts: 1_000_000 + 125 * 60_000 + 1 }),
+    ],
+  },
+  // A truncated/resumed timeline: no write visible before the gap (turn 1 only READ a cache
+  // written off-screen) → the tier is unknown, so the assumed 5-min floor applies, NOT a
+  // fall-through to UNATTRIBUTABLE.
+  idleNoVisibleWrite: {
+    opts: RATES,
+    turns: [
+      t(1, { sources: [src('file', 'a', 10)], read: 5000, ts: 1_000_000 }),
+      t(2, { sources: [src('file', 'a', 10)], read: 5, create: 3000, ts: 1_000_000 + 600_000 }),
+    ],
+  },
+  // The same gap with NO write on the current turn is not an expiry — and the modest-write case
+  // below it stays silent. `cur.cacheCreateTokens === 0` gates out before the tier lookback even
+  // runs, so turn 1's own write shape does not matter here.
   idleGapWithoutWriteIsSilent: {
-    opts: { ...RATES, idleTtlMs: 60_000 },
+    opts: RATES,
     turns: [
       t(1, { sources: [src('file', 'a', 10)], ts: 1_000_000 }),
-      t(2, { sources: [src('file', 'a', 10)], read: 5000, create: 0, ts: 1_000_000 + 120_000 }),
+      t(2, { sources: [src('file', 'a', 10)], read: 5000, create: 0, ts: 1_000_000 + 600_000 }),
     ],
   },
   // wasted > cacheRead with nothing to blame → UNATTRIBUTABLE. The third turn writes MORE in

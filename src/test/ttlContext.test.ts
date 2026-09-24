@@ -81,7 +81,7 @@ suite('ttlContext — getTtlContext (temp-home fs integration)', () => {
     const { home, cleanup } = tempHome({ env: { FORCE_PROMPT_CACHING_5M: '1' } })
     try {
       const ctx = getTtlContext(null, { homeDir: home, account: account(), processEnv: {} })
-      assert.deepStrictEqual(ctx, { auth: 'subscription', force5m: true, enable1h: false })
+      assert.deepStrictEqual(ctx, { auth: 'subscription', force5m: true, enable1h: false, subagentTtlSetting: undefined })
     } finally { cleanup() }
   })
 
@@ -91,7 +91,7 @@ suite('ttlContext — getTtlContext (temp-home fs integration)', () => {
     try {
       for (const h of [missing.home, corrupt.home]) {
         const ctx = getTtlContext(120, { homeDir: h, account: account({ hasExtraUsageEnabled: true }), processEnv: {} })
-        assert.deepStrictEqual(ctx, { auth: 'usage-credits', force5m: false, enable1h: false })
+        assert.deepStrictEqual(ctx, { auth: 'usage-credits', force5m: false, enable1h: false, subagentTtlSetting: undefined })
       }
     } finally { missing.cleanup(); corrupt.cleanup() }
   })
@@ -100,7 +100,26 @@ suite('ttlContext — getTtlContext (temp-home fs integration)', () => {
     const { home, cleanup } = tempHome()
     try {
       const ctx = getTtlContext(null, { homeDir: home, account: null, processEnv: { ENABLE_PROMPT_CACHING_1H: '1' } })
-      assert.deepStrictEqual(ctx, { auth: 'unknown', force5m: false, enable1h: true })
+      assert.deepStrictEqual(ctx, { auth: 'unknown', force5m: false, enable1h: true, subagentTtlSetting: undefined })
+    } finally { cleanup() }
+  })
+
+  // TRDD-ZQQYRYBO I6c: subagentPromptCacheTtl is a TOP-LEVEL settings.json key (not under `env`,
+  // unlike FORCE_PROMPT_CACHING_5M/ENABLE_PROMPT_CACHING_1H), read read-only and injectable via
+  // the same `homeDir` opts every other slow signal here already uses.
+  test('reads the top-level subagentPromptCacheTtl key of settings.json', () => {
+    const { home, cleanup } = tempHome({ subagentPromptCacheTtl: '1h' })
+    try {
+      const ctx = getTtlContext(null, { homeDir: home, account: account(), processEnv: {} })
+      assert.strictEqual(ctx.subagentTtlSetting, '1h')
+    } finally { cleanup() }
+  })
+
+  test('a malformed subagentPromptCacheTtl value falls back to undefined (never a guess)', () => {
+    const { home, cleanup } = tempHome({ subagentPromptCacheTtl: 'forever' })
+    try {
+      const ctx = getTtlContext(null, { homeDir: home, account: account(), processEnv: {} })
+      assert.strictEqual(ctx.subagentTtlSetting, undefined)
     } finally { cleanup() }
   })
 })

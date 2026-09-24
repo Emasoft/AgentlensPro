@@ -41,8 +41,8 @@ fn same(got: &Value, exp: &Value, label: &str) {
     }
 }
 
-const SUBSCRIPTION: TtlContext = TtlContext { auth: AuthRegime::Subscription, force5m: false, enable1h: false };
-const UNKNOWN_AUTH: TtlContext = TtlContext { auth: AuthRegime::Unknown, force5m: false, enable1h: false };
+const SUBSCRIPTION: TtlContext = TtlContext { auth: AuthRegime::Subscription, force5m: false, enable1h: false, subagent_ttl_setting: None };
+const UNKNOWN_AUTH: TtlContext = TtlContext { auth: AuthRegime::Unknown, force5m: false, enable1h: false, subagent_ttl_setting: None };
 
 fn timeline_of(c: &Value) -> Vec<Value> {
     c.get("timeline").and_then(Value::as_array).cloned().unwrap_or_default()
