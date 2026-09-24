@@ -426,6 +426,33 @@ suite('review-loop D7: additional write-shaped verbs (fastedit/trddgrep/prrdgrep
     }
   })
 
+  // TRDD-J2K6IM4R: a standalone -h/--help on a fastedit/memgrep write verb never runs the
+  // handler (argparse/clap print help and exit first), so it must NOT arm; a --help that could
+  // be an option's VALUE (preceded by another "-" token), one past a bare `--`, or embedded in a
+  // larger/quoted token must still arm — that shape is a real write the parser will execute.
+  test('a standalone -h/--help exempts fastedit/memgrep write verbs; anything else still arms', () => {
+    for (const cmd of [
+      'fastedit --help',
+      'fastedit multi-edit --help',
+      'fastedit delete f.ts --help',
+      'fastedit edit f.ts -h --replace x',
+      'memgrep new-mem-atom --help',
+    ]) {
+      assert.strictEqual(commandWriteReason(cmd, CWD), null, cmd)
+    }
+    for (const [cmd, why] of [
+      ["fastedit edit f.ts --replace x --snippet 'a --help b'", 'fastedit edit'],
+      ["fastedit edit f.ts --replace x --snippet s -- --help", 'fastedit edit'],
+      ['fastedit edit f.ts --dry-run --help', 'fastedit edit'],
+      ['fastedit edit f.ts --snippet=--help', 'fastedit edit'],
+      ['fastedit --help && fastedit edit f.ts --replace x --snippet s', 'fastedit edit'],
+      ['fastedit edit f.ts --help > notes.md', 'redirect into notes.md'],
+      ["fastedit edit f.ts --replace x --snippet \"$(cat s --help)\"", 'fastedit edit'],
+    ] as [string, string][]) {
+      assert.strictEqual(commandWriteReason(cmd, CWD), why, cmd)
+    }
+  })
+
   test('trddgrep write verbs arm (including index-verify --repair); read verbs (incl. `show`) do not', () => {
     assert.strictEqual(commandWriteReason('trddgrep new --title X --task-type feature', CWD), 'trddgrep new')
     assert.strictEqual(commandWriteReason('trddgrep set TRDD-1 column dev', CWD), 'trddgrep set')

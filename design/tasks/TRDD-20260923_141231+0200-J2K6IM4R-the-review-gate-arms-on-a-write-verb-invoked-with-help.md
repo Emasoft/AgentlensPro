@@ -3,7 +3,7 @@ trdd-id: J2K6IM4R
 title: The review gate arms on a write verb invoked with --help
 column: todo
 created: 2026-09-23T14:12:31+0200
-updated: 2026-09-23T19:33:02+0200
+updated: 2026-09-24T09:01:26+0200
 current-owner: main-session
 created-by: emanuelesabetta
 task-type: bugfix
@@ -50,7 +50,7 @@ Smallest fix (in the write-shape classifier, src/cli/reviewGateTriggers.ts -- lo
 
 ## Acceptance
 
-[ ] fastedit multi-edit --help and fastedit delete --help | head do not arm; [ ] fastedit edit f --replace x --snippet '--help' still arms; [ ] a test for each direction in the review-gate trigger tests; [ ] check-types + lint + the review-gate mocha tests pass.
+[x] fastedit multi-edit --help and fastedit delete --help | head do not arm; [x] fastedit edit f --replace x --snippet '--help' still arms; [x] a test for each direction in the review-gate trigger tests; [x] check-types + lint + the review-gate mocha tests pass.
 
 ## Ownership
 
@@ -62,7 +62,7 @@ The Fix section's "argv after the subcommand is exactly -h or --help" is too nar
 Rule to implement: a segment of a known argparse/clap CLI does not arm when it has a standalone -h or --help token whose PRECEDING token does not start with "-" (program name, subcommand, or positional). A --help preceded by an option token still arms (conservative: that option may take it as a value), and --snippet=--help is not a standalone token, so it arms.
 Unverified: whether argparse/clap even accept `--snippet '--help'` as a value (argparse likely errors "expected one argument", which writes nothing). The rule arms there anyway; a false arm costs a fork, a missed write costs a review.
 Scope the exemption to that named CLI list; an unknown CLI keeps today's behaviour.
-[ ] fastedit --help and fastedit edit f -h --replace x do not arm; [ ] fastedit edit f --dry-run --help and --snippet=--help still arm.
+[x] fastedit --help and fastedit edit f -h --replace x do not arm; [x] fastedit edit f --dry-run --help and --snippet=--help still arm.
 
 ## 2026-09-23 — second review: the rule must be quote-aware, stop at --, and cite per-CLI evidence
 
@@ -71,4 +71,8 @@ Scanning stops at a bare -- (end of options): after it, --help is data and the h
 The rule applies per segment of a compound command: in `fastedit --help && fastedit edit f ...` the second segment still arms.
 A CLI joins the exempt list only with cited evidence of its parser and of no hyphen-swallowing positional or non-help -h on any write verb. Findings 2026-09-23: [fastedit: argparse (src/fastedit/cli.py, editable install; no argparse.REMAINDER; no -h remap; write verbs edit/multi-edit/delete/rename/rename-all/batch-edit checked clean)] [tldr: read-only, no write subcommand exists at all; source uses clap (Cargo.toml clap 4.0); allow_hyphen_values found only on the read-only `search` query positional] [trddgrep: hand-rolled Node argv parser (scripts/trddgrep.mjs, no argparse/clap/yargs/commander) -- NOT eligible for this rule; `set <id> <field> --help` lets --help land as the literal field VALUE (a real write) with a preceding token that does not start with "-", so the drafted rule would wrongly exempt it -- do not add trddgrep to the exempt list] [memgrep: clap (Cargo.toml clap 4.6.1; strings shows 44 clap hits); allow_hyphen_values found only on the read-only `find` query positional; write verbs new-mem-atom/update-mem-atom/migrate-mem-atom/update-mem-topic have no allow_hyphen_values/trailing_var_arg/last(true) and no -h remap]. Empirical (fastedit, scratch file): [`fastedit edit f -h --replace f --snippet 'def f(): return 2'` -> exit 0, prints edit-subcommand usage, file unchanged] [`fastedit edit f --replace f --snippet --help` -> exit 2, "expected one argument" usage error, file unchanged].
 Correction to the first refinement: "argparse likely errors" was unverified reasoning; the probe above replaces it. Click-style parsers accept --snippet --help as a value, so parser identity matters; the rule still arms on a --help preceded by an option token either way.
-Acceptance (added): [ ] --snippet 'a --help b' still arms; [ ] sub -- x --help still arms; [ ] the second segment of fastedit --help && fastedit edit f ... still arms; [ ] each exempt CLI's evidence is cited in the code comment next to the list.
+Acceptance (added): [x] --snippet 'a --help b' still arms; [x] sub -- x --help still arms; [x] the second segment of fastedit --help && fastedit edit f ... still arms; [x] each exempt CLI's evidence is cited in the code comment next to the list.
+
+## Implementation
+
+2026-09-24 — Implemented per the STATE block's authoritative rule: added hasStandaloneHelp(args) in src/cli/reviewGateTriggers.ts (near segmentWriteReason/Resolve) and wired it into the two exempt-CLI call sites (fastedit sub-verb check in deployOrDesignVerbWriteReason; memgrep /-mem-/ check in segmentWriteReason). A standalone -h/--help token (preceding token not starting with '-', scan stops at bare --) cancels only the CLI-verb arm; the independent redirect pass still arms on a same-segment redirect. tldr/trddgrep intentionally excluded per the card's evidence. Added a must-arm/must-not-arm test covering every case from the card's two lists to the D7 suite in src/test/reviewGateTriggers.test.ts. Verified: pnpm check-types exit 0, pnpm lint exit 0 (0 errors), pnpm compile-tests exit 0, mocha on out/test/test/reviewGateTriggers.test.js: 41/41 passing. Mutation check: forcing hasStandaloneHelp to always return false failed exactly the new test (1 failing) and left the other 40 green; restored and reverified green (41/41).

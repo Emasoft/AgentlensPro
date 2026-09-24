@@ -218,6 +218,28 @@ const ASSIGNMENT_RE = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/
  *  `${NAME:-x}`) is returned unchanged — undecidable, so it stays undecidable and arms. */
 type Resolve = (word: string, segIdx: number) => string
 
+// TRDD-J2K6IM4R: `fastedit multi-edit --help` armed the gate — argparse prints help and exits
+// before ANY subcommand handler runs, so nothing is written, yet the classifier only looked at
+// the write-verb SET and never at whether that verb's own argv asked for help. A STANDALONE
+// -h/--help token (its preceding token not itself an option — an option's value could
+// legitimately be the literal string "--help", e.g. `--snippet '--help'`, so that shape must
+// still arm, conservatively) cancels ONLY the CLI-verb arm for that segment; a redirect/tee in
+// the same segment still arms via the separate, unconditional redirect pass in
+// `commandWriteReason`, and scanning stops at a bare `--` (end-of-options) because after it
+// --help is positional DATA and the handler still runs. Exempt ONLY the two CLIs verified clean
+// of any write-verb hyphen-swallowing positional or non-help -h remap (card evidence,
+// 2026-09-23 second review): fastedit (argparse, src/fastedit/cli.py) and memgrep (clap,
+// Cargo.toml). tldr has no write verb to exempt. trddgrep's hand-rolled parser (no
+// argparse/clap) lets `--help` land as a literal field VALUE on `set <id> <field> --help` — a
+// real write — so it is deliberately EXCLUDED from this rule, not merely unlisted.
+function hasStandaloneHelp(args: string[]): boolean {
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--') return false
+    if ((args[i] === '-h' || args[i] === '--help') && !(args[i - 1] ?? '').startsWith('-')) return true
+  }
+  return false
+}
+
 /** `via` names the launcher (`xargs`, `find -exec`) when the targets are not in this segment's text. */
 function segmentWriteReason(base: string, args: string[], via: string | null, cwd: string, resolve: Resolve, segIdx: number): string | null {
   const flagless = args.filter((a) => !a.startsWith('-'))
@@ -250,7 +272,7 @@ function segmentWriteReason(base: string, args: string[], via: string | null, cw
     return /^(install|i)$/.test(sub) && flagless.length > 1 ? `${base} install <pkg>` : null
   }
   if (base === 'agentlenspro' && !args.includes('--dry-run') && args.some((a) => a === 'setup' || /^--(un)?install-/.test(a))) return 'agentlenspro config write'
-  if (base === 'memgrep' && /-mem-/.test(args[0] ?? '')) return `memgrep ${args[0]}`
+  if (base === 'memgrep' && /-mem-/.test(args[0] ?? '')) return hasStandaloneHelp(args) ? null : `memgrep ${args[0]}`
   // `find -exec <cmd>` runs <cmd> once per hit and `-delete` unlinks the hits: both are writes
   // the command word `find` hides (review 2026-09-08 — `find . -exec rm {} \;` released).
   // EVERY `-exec`, each through the wrapper walk: `-exec ls {} \; -exec rm {} \;` and
@@ -400,7 +422,8 @@ const TRDDGREP_WRITE_VERBS = new Set(['new', 'set', 'append', 'check-box', 'move
 function deployOrDesignVerbWriteReason(base: string, args: string[]): string | null {
   if (base === 'fastedit') {
     const sub = args[0] ?? ''
-    return FASTEDIT_WRITE_VERBS.has(sub) ? `fastedit ${sub}` : null
+    if (!FASTEDIT_WRITE_VERBS.has(sub)) return null
+    return hasStandaloneHelp(args) ? null : `fastedit ${sub}`
   }
   if (base === 'trddgrep') {
     let j = 0
