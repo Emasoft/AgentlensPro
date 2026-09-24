@@ -129,7 +129,9 @@ const ALLOW = new Map([
 // the exemption is temporary by construction (it dies with the source database), and the migration
 // it performs is what lowers the other entries. A budget raised to admit the tool that shrinks the
 // budget is the one increase that pays for itself.
-const MAX_EXEMPTIONS = 36
+// 2026-09-24: lowered to the measured count after TRDD-4BZPAQWM deleted src/database/* and
+// sessionRepository.ts (a81972f9).
+const MAX_EXEMPTIONS = 27
 
 // ─── THE OPENER CAP (TRDD-Q9WD3K5R) ──────────────────────────────────────────────────────────
 //
@@ -197,8 +199,15 @@ const isTestPath = (rel) =>
 //     `forensicsIndex.ts`, `database/db.ts` and `database/reader.ts` — a drop of 4 against the 3
 //     added. The ratchet only becomes real at that step, and until then the honest reading of
 //     "22/22" is a debt, not progress.
+// 2026-09-24 correction: the "repoint... removes forensicsDb.ts, forensicsIndex.ts, database/db.ts
+// and database/reader.ts" claim above is now false. `database/db.ts` and `database/reader.ts` were
+// deleted by a81972f9 directly, not via a repoint; `forensicsDb.ts` is LIVE (bundled via
+// src/cli/setup.ts) and `forensicsIndex.ts` is LIVE as a rust-core parity-oracle root
+// (reports/4BZPAQWM/20260924_104703+0200-dead-module-set.md §3) — neither is scheduled for deletion.
 const MAX_NON_TEST_OPENERS = 22
-const MAX_TEST_OPENERS = 14
+// 2026-09-24: lowered to the measured count after TRDD-4BZPAQWM deleted src/database/* and
+// sessionRepository.ts (a81972f9).
+const MAX_TEST_OPENERS = 8
 
 // WHAT THIS CAP DOES NOT MEASURE — stated here because the commit that added it overclaimed.
 // It counts CONSTRUCTION (`X::open`, `new SQL.Database`, `DuckDBInstance.create`). The card says
