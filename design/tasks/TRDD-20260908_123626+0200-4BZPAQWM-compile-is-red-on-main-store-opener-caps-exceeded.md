@@ -1,23 +1,26 @@
 ---
 trdd-id: 4BZPAQWM
 title: pnpm run compile is red on main — store-opener caps exceeded, and they may only go down
-column: todo
+column: dev
 created: 2026-09-08T12:36:26+0200
-updated: 2026-09-08T12:36:26+0200
+updated: 2026-09-24T11:11:54+0200
 current-owner: main-session
 task-type: bugfix
 scope: project
 min-approval-requirement: none
+implementation-commits: [a81972f9, 7a6d6038]
+assignee: main-session
 ---
 
 # `pnpm run compile` is red on main — store-opener caps exceeded
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-08
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-24
 
-MEASURED on main, 2026-09-08. Not fixed, not investigated beyond the failure text. NEXT ACTION:
-find which files added store openers (`git log -S` on the opener call the guard counts), then
-either remove them or take the guard's own escape — but the caps may only go DOWN, so raising
-them is not the fix.
+MEASURED 2026-09-24. Guard now passes: 22/22 non-test, 8/14 test openers, 27/36 exemptions —
+fixed by commit a81972f9 on branch fix/4bzpaqwm-drop-dead-database-layer, not yet merged to
+main. Caps were NOT raised (correction: the guard's text allows a justified non-test raise;
+only the TEST cap is frozen). NEXT ACTION: merge to main. Box 3 annotated not ticked, box 4 open — see Acceptance.
+UPDATE 2026-09-24: counts are stale after commit 7a6d6038 — now 22/22 non-test, 8/8 test, 27/27 exemptions. All three caps have zero headroom by design; the next new opener or exemption anywhere turns compile red and needs a raise defended in its commit message (guard text), so a red build from that is not a regression of this fix.
 
 ## The failure
 
@@ -76,7 +79,9 @@ a judgement for whoever picks this up; both touch the store.
 
 ## Acceptance
 
-- [ ] The commit(s) that pushed the opener counts over the caps are identified by SHA.
-- [ ] Each added opener is classified: reuses an existing entry point, or genuinely needs its own.
+- [x] The commit(s) that pushed the opener counts over the caps are identified by SHA.
+- [x] Each added opener is classified: reuses an existing entry point, or genuinely needs its own.
 - [ ] `pnpm run compile` exits 0 on `main` **without** raising either cap.
 - [ ] The 6 suite failures are either shown pre-existing by an actually-isolated run, or carded.
+Box 3 not ticked: every compile step except the final `node esbuild.js` exits 0 and all three bundles (media/src/dashboard.tsx, standalone/cli.ts, media/src/sidebarWebview.ts) build into reports_dev/ with exit 0; the esbuild step itself was not run because on this machine it deploys and waits on the owner (TRDD-C9BGEMSS decision 3).
+Box 4 stays open: one of the 6 failing tests, 'standalone server — P5 window auto-calibration', may belong to the now-dead capacityCalibration.ts (see TRDD-M3TWPLZO) rather than to a live store defect — not yet confirmed.
