@@ -105,6 +105,15 @@ reference for when that command's output needs interpreting.
 | ends? | **yes — exits on the verdict** (`1` = ABORT the run) | **no — reports every peak and keeps going** |
 | use when | you are about to start, or are running, something with a known duration | you want ongoing alerting with no duration in mind |
 
+This applies to `--guard` too (routing table above): whichever you arm, do it as a Monitor watch
+with `timeout_ms: 1800000` (30 minutes is the hard ceiling — 10 in a `-p` run). **Every such watch
+ends at its deadline with a notice, not a renewal** — it is blind until you re-arm it. Re-arming
+`budget --minutes N` needs a correction (it counts from its OWN start, so replaying the original N
+after 30 minutes have elapsed silently adds the elapsed time back on — pass the minutes still
+left); `--guard N` and `watch`'s poll interval take no such correction, just re-issue the same
+command. Full re-arm recipe and the abort/blind-gap details: [references/budget.md](references/budget.md),
+[references/guard-and-gate.md](references/guard-and-gate.md).
+
 ## The exit-code contract — read this BEFORE you shell out to this CLI
 
 If you are calling `agentlenspro` from a script or an agent loop rather than reading its output
