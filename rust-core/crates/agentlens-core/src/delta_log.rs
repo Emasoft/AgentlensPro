@@ -136,14 +136,13 @@ impl DeltaLog {
         Ok(body.len() as u64)
     }
 
-    /// Persist `records`, writing ONLY what changed. Nothing changed ⇒ ZERO bytes written.
-    pub fn save(&mut self, records: &IndexMap<String, Value>) -> Result<SaveResult, String> {
-        if let Some(dir) = self.snapshot_path.parent() {
-            fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-        }
+    /// The shared half of `save`/`append_changed`: appends the ndjson `{"k":...,"v":...}` line for
+    /// every record whose hash changed (or is new), updates `self.written`, returns the body text
+    /// plus how many lines were appended. Records whose hash is unchanged cost nothing — no line,
+    /// no write.
+    fn changed_lines(&mut self, records: &IndexMap<String, Value>) -> (String, usize) {
         let mut body = String::new();
         let mut appended = 0usize;
-        let mut deleted = 0usize;
         for (k, v) in records {
             let json = serde_json::to_string(v).unwrap_or_default();
             let h = hash_json(&json);
@@ -154,6 +153,19 @@ impl DeltaLog {
             self.written.insert(k.clone(), h);
             appended += 1;
         }
+        (body, appended)
+    }
+
+    /// Persist `records`, writing ONLY what changed. Nothing changed ⇒ ZERO bytes written.
+    /// `records` MUST be the FULL record set — deletion-diffing (below) and compaction both
+    /// assume any key missing from `records` was deleted. A caller with only a subset must use
+    /// `append_changed` instead.
+    pub fn save(&mut self, records: &IndexMap<String, Value>) -> Result<SaveResult, String> {
+        if let Some(dir) = self.snapshot_path.parent() {
+            fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        }
+        let (mut body, appended) = self.changed_lines(records);
+        let mut deleted = 0usize;
         let gone: Vec<String> = self.written.keys().filter(|k| !records.contains_key(*k)).cloned().collect();
         for k in gone {
             body.push_str(&format!("{{\"k\":{},\"d\":1}}\n", serde_json::to_string(&k).unwrap_or_default())); // tombstone
@@ -176,6 +188,31 @@ impl DeltaLog {
             .map_err(|e| format!("{}: {e}", self.delta_path.display()))?;
         f.write_all(body.as_bytes()).map_err(|e| format!("{}: {e}", self.delta_path.display()))?;
         Ok(SaveResult { appended, deleted, bytes: body.len() as u64, compacted: false })
+    }
+
+    /// TRDD-ORGJ0E3G follow-up — append-only persistence for a KNOWN SUBSET of records (e.g. one
+    /// backfill chunk's patched cards), never the whole store. Unlike `save`, this NEVER
+    /// deletion-diffs (`gone` needs the full key set — a caller passing only 200 of 30k cards
+    /// would otherwise see every other card as "missing" and tombstone it) and NEVER compacts
+    /// (`compact` rewrites the snapshot from exactly `records` — from a partial set that would
+    /// discard everything else in the snapshot). Both stay correct because the periodic full
+    /// `DurableState::tick()` → `save_cards()` still runs `save()` with the complete record set on
+    /// its own cadence; this path only shortens how long a subset of fresh writes sits unflushed.
+    pub fn append_changed(&mut self, records: &IndexMap<String, Value>) -> Result<SaveResult, String> {
+        if let Some(dir) = self.snapshot_path.parent() {
+            fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        }
+        let (body, appended) = self.changed_lines(records);
+        if body.is_empty() {
+            return Ok(SaveResult::default());
+        }
+        let mut f = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.delta_path)
+            .map_err(|e| format!("{}: {e}", self.delta_path.display()))?;
+        f.write_all(body.as_bytes()).map_err(|e| format!("{}: {e}", self.delta_path.display()))?;
+        Ok(SaveResult { appended, deleted: 0, bytes: body.len() as u64, compacted: false })
     }
 
     /// Total bytes on disk (both files).

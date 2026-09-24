@@ -905,6 +905,7 @@ impl DurableState {
         // mid-backfill) is always seen here and skipped: this chunk's now-stale `sum` never
         // clobbers a fresher value the sweep just wrote.
         let mut chunk_filled = 0usize;
+        let mut patched_ids: Vec<String> = Vec::with_capacity(take);
         {
             if let Ok(mut st) = state.lock_timed() {
                 for (session_id, sum) in sums {
@@ -924,24 +925,31 @@ impl DurableState {
                         obj.insert("cacheCreate1hTokens".into(), Value::from(sum.clamp(0.0, cache_create)));
                     }
                     st.put_log_session(card);
+                    patched_ids.push(session_id);
                     chunk_filled += 1;
                 }
             }
             // `st` (if acquired) drops here, releasing the lock before the durable write below
-            // (`save_cards` takes its own short lock) — never hold the state lock across file I/O.
+            // (`save_cards_for` takes its own short lock) — never hold the state lock across file I/O.
         }
         // TRDD-ORGJ0E3G review fix: a chunk's patches were previously only marked dirty AFTER
         // every chunk in the whole backfill finished, so the periodic save timer never had
         // anything to flush mid-run. The RSS hard-cap guard (rss_guard.rs) exits via
         // `std::process::exit`, which skips all cleanup — a corpus large enough to trip that cap
         // (measured: 9 of 45 chunks before the cap fired) would silently lose every already-
-        // applied chunk, undoing the whole run. Force each chunk's patches onto the existing
-        // delta-append path (`save_cards` → `DeltaLog::save`, which appends only the changed
-        // records — cheap even called once per chunk) BEFORE returning, so a hard exit loses at
-        // most one in-flight chunk.
+        // applied chunk, undoing the whole run. Force each chunk's patches onto the delta-append
+        // path BEFORE returning, so a hard exit loses at most one in-flight chunk.
+        //
+        // TRDD-ORGJ0E3G follow-up: this used to call `save_cards`, which rebuilds
+        // `persist_records()` — a `SELECT * FROM cards` over the WHOLE store plus a JSON parse of
+        // every card (`card_store.rs:222-235`) — once per 200-file chunk (~45 times on the
+        // measured 8,846-file corpus), the suspected driver behind the RSS-cap exits this backfill
+        // exists to reduce (TRDD-WKLD508O/TWDGR75R). `save_cards_for` below persists ONLY the
+        // session_ids this chunk actually patched, so the cost is proportional to the chunk
+        // (≤200 cards), not the corpus.
         if chunk_filled > 0 {
             self.mark_dirty();
-            self.save_cards(state);
+            self.save_cards_for(state, &patched_ids);
         }
         eprintln!(
             "alcore: log-ingest 1h-tier backfill — filled cacheCreate1hTokens on {chunk_filled} of {} flagged card(s) ({} remaining)",
@@ -995,6 +1003,37 @@ impl DurableState {
             }
             Ok(_) => {}
             Err(e) => eprintln!("alcore: could not save log cards: {e}"),
+        }
+        self.last_cards_save = Instant::now();
+    }
+
+    /// TRDD-ORGJ0E3G follow-up — `run_1h_backfill_step`'s own persistence path. Unlike
+    /// `save_cards` above (whole-store `persist_records()`, a `SELECT * FROM cards` plus a JSON
+    /// parse of every card — cheap at shutdown/timer cadence, expensive called ~45x per backfill),
+    /// this locks the state ONLY to fetch the handful of `session_ids` this one chunk patched
+    /// (`st.cards.get(id)`, bounded by chunk size — never a whole-store read under the lock) and
+    /// appends just those records via `DeltaLog::append_changed`, which — unlike `DeltaLog::save`
+    /// — skips deletion-diffing and compaction: both require the FULL record set to stay correct,
+    /// and computing them against a partial chunk would wrongly tombstone every card outside it
+    /// (deletion) or discard the rest of the snapshot (compaction). The periodic `tick()` still
+    /// calls the full `save_cards` on its own cadence — `mark_dirty()` (called by the caller
+    /// before this) keeps that catch-up scheduled, so deletion/compaction correctness is not lost,
+    /// only deferred to the next full save.
+    fn save_cards_for(&mut self, state: &std::sync::Mutex<crate::CoreState>, session_ids: &[String]) {
+        let records: IndexMap<String, Value> = {
+            let st = state.lock_timed().expect("core state");
+            session_ids.iter().filter_map(|id| st.cards.get(id).map(|c| (id.clone(), strip_card_for_persist(&c)))).collect()
+        };
+        match self.cards.append_changed(&records) {
+            Ok(r) if r.bytes > 0 => {
+                self.stamp_version();
+                if let Ok(mut st) = state.lock_timed() {
+                    st.persist.cards_writes += 1;
+                    st.persist.cards_bytes += r.bytes;
+                }
+            }
+            Ok(_) => {}
+            Err(e) => eprintln!("alcore: could not save log cards (partial): {e}"),
         }
         self.last_cards_save = Instant::now();
     }
@@ -1182,6 +1221,16 @@ fn attach_watchers(env: &Env, tx: std::sync::mpsc::Sender<Msg>) -> (Option<notif
 /// every `FULL_RESCAN` is the correctness backstop — or every `poll_interval` when not one
 /// watcher attached (server.ts's 5s full-poll fallback). Offsets/cards save on their cadences.
 /// The tailer is `!Send`, so it is created ON this thread and never leaves it.
+/// TRDD-ORGJ0E3G follow-up — pure predicate for "has the FULL_RESCAN backstop deadline passed".
+/// Extracted so `start_sweeper`'s loop can check it from more than one place (the top of the loop
+/// AND the `RecvTimeoutError::Timeout` arm) without duplicating the comparison, and so it is
+/// unit-testable without spinning up the sweeper thread. `next_full` is re-armed by the caller
+/// (`next_full = Instant::now() + backstop`) after every full sweep, whatever triggered it — this
+/// function only answers "is it due right now", never "has it ever been due".
+fn should_full_sweep(now: Instant, next_full: Instant) -> bool {
+    now >= next_full
+}
+
 pub fn start_sweeper(
     state: std::sync::Arc<std::sync::Mutex<crate::CoreState>>,
     env: Env,
@@ -1233,15 +1282,52 @@ pub fn start_sweeper(
             let mut pending: Vec<PathBuf> = Vec::new();
             let mut needs_full = false;
             loop {
+                // TRDD-ORGJ0E3G follow-up: drain every message ALREADY queued (non-blocking,
+                // try_recv until Empty) before even considering a backfill chunk. Without this a
+                // burst of real transcript writes sitting in `rx` would still wait behind
+                // whatever backfill chunk the loop chose to run first each iteration; draining
+                // first means a chunk only ever runs once the channel is genuinely empty right
+                // now.
+                loop {
+                    match rx.try_recv() {
+                        Ok(Msg::Stop) => {
+                            durable.tick(&tailer, &state, true);
+                            return;
+                        }
+                        Ok(Msg::Changed(p)) => pending.extend(p),
+                        Ok(Msg::Unnamed) => needs_full = true,
+                        Ok(Msg::Clear) => {
+                            tailer.clear();
+                            needs_full = true;
+                        }
+                        Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                        Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                            durable.tick(&tailer, &state, true);
+                            return;
+                        }
+                    }
+                }
+                // The backstop deadline is checked HERE, unconditionally, every iteration — not
+                // only inside the `RecvTimeoutError::Timeout` arm below, which a steady stream of
+                // real events (each arriving before `wait` elapses) would never reach, starving
+                // FULL_RESCAN indefinitely. `should_full_sweep` re-checked below (after the
+                // blocking recv) is the freshest read right when a wait actually elapses; this one
+                // is what catches the "busy channel" case.
+                if should_full_sweep(Instant::now(), next_full) {
+                    needs_full = true;
+                }
                 // TRDD-ORGJ0E3G: one bounded chunk (<=200 files) of the usage-only 1h-tier
                 // backfill per loop iteration, not the whole queue in one blocking call BEFORE
                 // this loop starts — a corpus with thousands of flagged transcripts (measured:
                 // ~6.5 minutes for 8,846) previously left every real transcript write from every
                 // other agent queued and unprocessed in `rx` for that whole span, since nothing
                 // drained the channel until the call returned. Interleaving it here means a real
-                // `Msg::Changed`/`Msg::Stop` is always handled within one iteration.
+                // `Msg::Changed`/`Msg::Stop` is always handled within one iteration. Gated on
+                // `pending.is_empty() && !needs_full` (on top of the try_recv drain above): a
+                // message that arrived in the tiny window between the drain and here still takes
+                // priority over starting another chunk.
                 let backfill_pending = !durable.pending_1h_backfill.is_empty();
-                if backfill_pending {
+                if backfill_pending && pending.is_empty() && !needs_full {
                     durable.run_1h_backfill_step(&state);
                 }
                 // recv_timeout doubles as the sleep: an event or a stop wakes the loop at once.
@@ -1273,7 +1359,7 @@ pub fn start_sweeper(
                     // iteration having done nothing, which is correct (that's the whole point of
                     // the cap: give `run_1h_backfill_step` another turn soon).
                     Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                        if Instant::now() >= next_full {
+                        if should_full_sweep(Instant::now(), next_full) {
                             needs_full = true;
                         }
                     }
@@ -1345,4 +1431,33 @@ pub fn strip_timeline_value(card: &mut Map<String, Value>) {
     card.insert("timelineTruncatedCount".to_owned(), Value::from(prev + n as u64));
     card.insert("timeline".to_owned(), Value::Array(Vec::new()));
     card.insert("timelineRetainedBytes".to_owned(), Value::from(0));
+}
+
+#[cfg(test)]
+mod sweeper_backstop_tests {
+    use super::should_full_sweep;
+    use std::time::{Duration, Instant};
+
+    /// TRDD-ORGJ0E3G follow-up: the backstop must fire exactly once it is due, and stay quiet
+    /// both before the deadline and after being re-armed to a later deadline — the loop re-arms
+    /// `next_full` to `now + backstop` after every full sweep, so the same wall-clock instant must
+    /// read as "not due" once `next_full` has moved past it again.
+    #[test]
+    fn fires_once_past_the_deadline_then_not_again_until_rearmed() {
+        let start = Instant::now();
+        let next_full = start + Duration::from_millis(100);
+
+        assert!(!should_full_sweep(start, next_full), "not due yet at t=0");
+        assert!(
+            !should_full_sweep(start + Duration::from_millis(50), next_full),
+            "a 50ms wakeup well before the 100ms deadline must not fire"
+        );
+        assert!(should_full_sweep(start + Duration::from_millis(100), next_full), "exactly at the deadline it must fire");
+        assert!(should_full_sweep(start + Duration::from_millis(150), next_full), "still due after the deadline, until re-armed");
+
+        // Re-arm: the caller sets next_full = now + backstop after running the full sweep.
+        let rearmed_now = start + Duration::from_millis(150);
+        let rearmed_next_full = rearmed_now + Duration::from_secs(60);
+        assert!(!should_full_sweep(rearmed_now, rearmed_next_full), "must not fire again immediately after being re-armed");
+    }
 }

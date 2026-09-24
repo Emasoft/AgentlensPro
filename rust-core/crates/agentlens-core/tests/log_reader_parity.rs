@@ -913,18 +913,21 @@ fn run_1h_backfill_step_persists_before_returning_so_a_hard_exit_loses_nothing()
     DeltaLog::new(&data, "log-sessions").save(&cards).unwrap();
 
     // Run 2: restore() queues the stripped card; run the backfill's ONE step (this fixture's
-    // corpus is far below the 200-file chunk size, so one step drains everything) and then drop
-    // every in-process handle WITHOUT any explicit save or graceful-shutdown tick — the same
-    // state a `std::process::exit` from `rss_guard.rs` would leave behind.
+    // corpus is far below the 200-file chunk size, so one step drains everything) and then model
+    // a REAL hard exit — `std::mem::forget` every in-process handle so no destructor of any kind
+    // runs (not just "no explicit save call"; neither `DurableState` nor `CardStore` has a `Drop`
+    // impl today, so a plain `drop()` here happened to already be equivalent, but `forget` makes
+    // that independent of whether one is ever added later) — the same state a
+    // `std::process::exit` from `rss_guard.rs` would leave behind.
     let state2 = std::sync::Mutex::new(CoreState::open(&data.join("spans2")));
     let mut tailer2 = LogTailer::default();
     let mut durable2 = DurableState::open(&data);
     durable2.restore(&mut tailer2, &mut state2.lock().unwrap(), &env).unwrap();
     let still_pending = durable2.run_1h_backfill_step(&state2);
     assert!(!still_pending, "this fixture's single qualifying card fits in one chunk");
-    drop(durable2);
-    drop(tailer2);
-    drop(state2);
+    std::mem::forget(durable2);
+    std::mem::forget(tailer2);
+    std::mem::forget(state2);
 
     // Run 3: a brand-new DurableState/CoreState from the SAME data dir — the "process restarted
     // after a hard kill" case. The patch must already be there, with no re-read of the file.
@@ -942,6 +945,72 @@ fn run_1h_backfill_step_persists_before_returning_so_a_hard_exit_loses_nothing()
     durable3.run_1h_backfill(&state3);
     let card3b = state3.lock().unwrap().cards.get(parent_id).unwrap().clone();
     assert_eq!(card3b, card3, "nothing left to backfill -- the step's own durable write is what stopped it being re-queued, not a later graceful save");
+}
+
+/// TRDD-ORGJ0E3G follow-up: `run_1h_backfill_step` must NOT trigger `CardStore::persist_records()`
+/// (the whole-store `SELECT * FROM cards` + JSON-parse-every-card scan) — that full-store cost,
+/// called once per 200-file chunk (~45x on the measured 8,846-file corpus), is the suspected
+/// driver behind the RSS-cap exits this backfill exists to reduce. Builds a corpus with several
+/// cards that already carry `cacheCreate1hTokens` (so they are NOT re-persisted) plus one card
+/// that needs backfilling, runs one step, and asserts `CardStore::full_scan_calls()` stayed at
+/// its pre-step value — the step's own persistence must go through the narrower per-chunk path.
+/// Mutation-tested below: reverting `save_cards_for` to call `save_cards` (the old whole-store
+/// path) makes this fail.
+#[test]
+fn run_1h_backfill_step_does_not_scan_the_whole_card_store() {
+    let home = scratch_home("backfill-no-full-scan");
+    let env = Env { home: home.clone(), platform: Platform::Darwin, vars: HashMap::new() };
+    let data = std::env::temp_dir().join(format!("al-backfill-no-full-scan-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&data);
+    std::fs::create_dir_all(&data).unwrap();
+    let now = 1_785_578_400_000 + 600_000;
+
+    // Run 1: a normal boot + forced save so the parent card carries cacheCreate1hTokens.
+    let state = std::sync::Mutex::new(CoreState::open(&data.join("spans")));
+    let mut tailer = LogTailer::default();
+    let mut durable = DurableState::open(&data);
+    durable.restore(&mut tailer, &mut state.lock().unwrap(), &env).unwrap();
+    let (scanned, _) = tailer.sweep(&env, now);
+    state.lock().unwrap().ingest_scanned(scanned);
+    durable.mark_dirty();
+    durable.tick(&tailer, &state, true);
+
+    let parent_id = "cccccccc-1111-2222-3333-444444444444";
+    let mut cards = DeltaLog::new(&data, "log-sessions").load().unwrap();
+    assert!(cards[parent_id]["cacheCreate1hTokens"].as_f64().unwrap() > 0.0);
+    // Add several already-backfilled decoy cards, then strip the parent's field so it re-queues.
+    for i in 0..5 {
+        let decoy_id = format!("decoy-session-{i}");
+        let mut decoy = cards[parent_id].clone();
+        decoy["sessionId"] = serde_json::json!(decoy_id.clone());
+        decoy["cacheCreate1hTokens"] = serde_json::json!(42.0 + i as f64);
+        cards.insert(decoy_id, decoy);
+    }
+    cards.get_mut(parent_id).unwrap().as_object_mut().unwrap().remove("cacheCreate1hTokens");
+    DeltaLog::new(&data, "log-sessions").save(&cards).unwrap();
+
+    // Run 2: restore() loads all 6 cards and queues only the stripped one; the step must persist
+    // its patch WITHOUT calling the whole-store scan.
+    let state2 = std::sync::Mutex::new(CoreState::open(&data.join("spans2")));
+    let mut tailer2 = LogTailer::default();
+    let mut durable2 = DurableState::open(&data);
+    durable2.restore(&mut tailer2, &mut state2.lock().unwrap(), &env).unwrap();
+    let scans_before = state2.lock().unwrap().cards.full_scan_calls();
+    durable2.run_1h_backfill_step(&state2);
+    let scans_after = state2.lock().unwrap().cards.full_scan_calls();
+    assert_eq!(scans_after, scans_before, "run_1h_backfill_step must not run CardStore::persist_records() (the whole-store scan)");
+
+    // And the patch is still durable per the hard-exit contract already covered above (real
+    // hard-exit model: forget, don't drop — see the comment on the durability test above).
+    std::mem::forget(durable2);
+    std::mem::forget(tailer2);
+    std::mem::forget(state2);
+    let state3 = std::sync::Mutex::new(CoreState::open(&data.join("spans3")));
+    let mut tailer3 = LogTailer::default();
+    let mut durable3 = DurableState::open(&data);
+    durable3.restore(&mut tailer3, &mut state3.lock().unwrap(), &env).unwrap();
+    let card3 = state3.lock().unwrap().cards.get(parent_id).unwrap().clone();
+    assert!(card3["cacheCreate1hTokens"].as_f64().unwrap() > 0.0, "the scoped save must still make the patch durable");
 }
 
 /// Review-fork follow-up (TRDD-ORGJ0E3G): the "already has the key" re-check inside

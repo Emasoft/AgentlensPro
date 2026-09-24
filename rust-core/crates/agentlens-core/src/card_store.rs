@@ -100,6 +100,12 @@ pub struct CardStore {
     /// number is simply skipped. Gaps are irrelevant: only the ORDER of the values is read, and
     /// not reusing a number is what keeps an upsert from stealing a later card's position.
     next_seq: i64,
+    /// TRDD-ORGJ0E3G follow-up — counts calls to `persist_records()`, the whole-store
+    /// `SELECT * FROM cards` + JSON-parse-every-card scan. Exists only so a test can assert a
+    /// bounded-cost caller (like `run_1h_backfill_step`) does NOT trigger it — a regression back
+    /// to the old `save_cards` full-store persist path would show up as this counter growing once
+    /// per backfill chunk instead of staying flat.
+    full_scan_calls: std::sync::atomic::AtomicUsize,
 }
 
 impl CardStore {
@@ -131,7 +137,13 @@ impl CardStore {
             "SET memory_limit='{MEMORY_LIMIT}'; SET threads=2; DROP TABLE IF EXISTS cards; {SCHEMA};"
         ))
         .expect("create the card store schema");
-        CardStore { conn, next_seq: 0 }
+        CardStore { conn, next_seq: 0, full_scan_calls: std::sync::atomic::AtomicUsize::new(0) }
+    }
+
+    /// TRDD-ORGJ0E3G follow-up — how many times `persist_records()` (the whole-store scan) has
+    /// run. Test-only signal; see the field doc above.
+    pub fn full_scan_calls(&self) -> usize {
+        self.full_scan_calls.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Wrap a bulk-insert caller in one transaction. `put` itself stays autocommit — the
@@ -222,6 +234,7 @@ impl CardStore {
     /// stripCardForPersist over the whole table, in first-insert order — the delta log's records.
     /// The stored cards are NOT mutated: persistence strips a copy.
     pub fn persist_records(&self) -> IndexMap<String, Value> {
+        self.full_scan_calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let mut stmt =
             self.conn.prepare("SELECT session_id, card FROM cards ORDER BY seq").expect("prepare the persist scan");
         let rows = stmt
