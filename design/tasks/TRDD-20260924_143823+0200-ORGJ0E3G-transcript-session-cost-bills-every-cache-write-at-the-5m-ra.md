@@ -3,7 +3,7 @@ trdd-id: ORGJ0E3G
 title: Transcript session cost bills every cache write at the 5m rate
 column: dev
 created: 2026-09-24T14:38:23+0200
-updated: 2026-09-24T19:17:05+0200
+updated: 2026-09-24T19:27:28+0200
 current-owner: emanuelesabetta
 created-by: emanuelesabetta
 task-type: bugfix
@@ -45,7 +45,9 @@ REVIEW (2026-09-24, adversarial fork): fixed discover_all gated only on restored
 HEAD is NOT deployable since 513623fe (513623fe alone was never measured; 80958154 is the build that crashed): an isolated full-size run of the re-parse build crashed after boot (card-store OOM, see TRDD-TWDGR75R). Deploy only after that card establishes whether the re-parse causes it. A plain `agentlenspro server restart` is safe: it reuses the prebuilt bin-native binary.
 Sessions last modified more than 30 days before the upgrade keep the 5m-rate cache-write cost (REPARSE_MAX_AGE); cross-session totals mix tier-aware and 5m-rate cards (~10% measured on one session).
 2026-09-24: the re-parse approach (513623fe, 80958154) is not deployable in its current form because it causes the TRDD-TWDGR75R card-store OOM (see that card's VERDICT: put() replaces rows, but a reparsed card's larger JSON doubled cards.duckdb and blew the 256 MiB buffer-pool ceiling on the first cards_json() call). The likely right design is a usage-only pass that reads just usage.cache_creation.ephemeral_1h_input_tokens per message id from each flagged transcript and patches cacheCreate1hTokens into the restored card, instead of rebuilding the full card.
-2026-09-24: usage-only backfill (86f4fa22) replaces the full-card re-parse; hardening (63f41d04) made it a chunk per sweep with a save per chunk; verified that patches survive kill -9 (isolated Run C flagged 0 transcripts after Run P, confirming Run P's patched values were persisted and restored). Open: scoped per-chunk save (worker running), deploy gate needs a full-size memory run of the final build.
+2026-09-24: usage-only backfill (86f4fa22) replaces the full-card re-parse; hardening (63f41d04) made it a chunk per sweep with a save per chunk. CORRECTED persistence evidence: Run P (86f4fa22) was killed AFTER logging "filled 8761 of 8761" (i.e. after the backfill had already COMPLETED), and Run C (restarted on Run P's data) flagged 0 transcripts — that proves a COMPLETED backfill's patched values persist and are restored, NOT that a hard exit mid-backfill loses at most one chunk. The mid-backfill-loses-at-most-one-chunk claim belongs to 63f41d04 and is still unverified — a real kill-mid-chunk test is in progress. Open: scoped per-chunk save (worker running), deploy gate needs a full-size memory run of the final build.
+Q6 (2026-09-24): restore() walks every transcript under the state lock on every boot until all flagged cards are filled — this is the mechanism the backfill rides on, and it is why restore() holding the lock is coupled to the backfill's own progress.
+Open 63f41d04 review items (2026-09-24), being fixed in worktree /tmp/wt-bfs: loop order runs a backfill chunk before handling waiting changes; next_full re-arm is unverified; the backstop can be skipped under a steady event stream; Stop latency during a chunk is unmeasured. None of these are resolved yet.
 
 ## Corrections (2026-09-24)
 
