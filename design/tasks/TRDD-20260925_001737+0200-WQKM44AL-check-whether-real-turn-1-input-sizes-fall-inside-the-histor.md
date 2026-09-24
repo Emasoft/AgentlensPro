@@ -1,10 +1,10 @@
 ---
 trdd-id: WQKM44AL
-title: Check whether real turn-1 input sizes fall inside the history calibration band
+title: Check whether real sessions' turn-1 estimate ratio falls inside the history calibration band
 column: todo
 status: tasked
 created: 2026-09-25T00:17:37+0200
-updated: 2026-09-25T00:23:10+0200
+updated: 2026-09-25T01:54:57+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: spike
