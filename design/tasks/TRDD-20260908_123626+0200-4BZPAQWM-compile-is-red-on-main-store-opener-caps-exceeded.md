@@ -3,24 +3,24 @@ trdd-id: 4BZPAQWM
 title: pnpm run compile is red on main — store-opener caps exceeded, and they may only go down
 column: dev
 created: 2026-09-08T12:36:26+0200
-updated: 2026-09-24T11:11:54+0200
+updated: 2026-09-24T11:16:30+0200
 current-owner: main-session
 task-type: bugfix
 scope: project
 min-approval-requirement: none
-implementation-commits: [a81972f9, 7a6d6038]
+implementation-commits: [a81972f9, 7a6d6038, 8002f1f6, b79c7752, e9ec120b]
 assignee: main-session
 ---
 
 # `pnpm run compile` is red on main — store-opener caps exceeded
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-24
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-24T11:15:51+0200
 
-MEASURED 2026-09-24. Guard now passes: 22/22 non-test, 8/14 test openers, 27/36 exemptions —
-fixed by commit a81972f9 on branch fix/4bzpaqwm-drop-dead-database-layer, not yet merged to
-main. Caps were NOT raised (correction: the guard's text allows a justified non-test raise;
-only the TEST cap is frozen). NEXT ACTION: merge to main. Box 3 annotated not ticked, box 4 open — see Acceptance.
-UPDATE 2026-09-24: counts are stale after commit 7a6d6038 — now 22/22 non-test, 8/8 test, 27/27 exemptions. All three caps have zero headroom by design; the next new opener or exemption anywhere turns compile red and needs a raise defended in its commit message (guard text), so a red build from that is not a regression of this fix.
+MEASURED 2026-09-24. Guard fixed and merged to main at 8002f1f6 (commits a81972f9, 7a6d6038, b79c7752, e9ec120b): 22/22 non-test openers, 8/8 test openers, 27/27 exemptions, all three caps at zero headroom by design — the next new opener or exemption anywhere turns compile red and needs a raise defended in its commit message (guard text), so that is a defended raise, not a regression of this fix. Box 3 is annotated not ticked (every compile step through check-duckdb-only exits 0; the esbuild deploy step itself was not run because on this machine it deploys and waits on the owner, TRDD-C9BGEMSS decision 3). NEXT ACTION: box 4, the 6 failing tests — one, 'standalone server — P5 window auto-calibration', may belong to the now-dead capacityCalibration.ts rather than a live store defect (see TRDD-M3TWPLZO), not yet confirmed.
+
+
+
+
 
 ## The failure
 

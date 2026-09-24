@@ -89,9 +89,9 @@ graph TB
 > **Historical (pre-fork).** The VS Code extension host was removed before the fork
 > (TRDD-6E6416B8): there is no `src/extension.ts` and no `vscode` dependency. The
 > `src/database/*` and `sessionRepository.ts` modules this sequence wired up were
-> deleted (TRDD-4BZPAQWM commit A) once measurement showed no live importer outside
-> the retired TS server. The shipped runtime boots via `standalone/server.ts` and
-> persists through the segmented span store (section 5) plus `~/.agentlens/forensics.db`.
+> deleted (commit a81972f9, TRDD-4BZPAQWM) once measurement showed no live importer outside
+> the retired TS server. The shipped server is the Rust `alcore` binary; the TypeScript
+> server was retired in commit 567fc5c2.
 > The sequence below is kept only as a historical record of the extension's original
 > activation flow.
 
