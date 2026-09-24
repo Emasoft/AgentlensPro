@@ -78,6 +78,11 @@ All notable changes to AgentlensPro are documented here.
   SSD on purpose — capture now writes roughly 20 GB/day there (measured ~14 MB/min; the old code's
   own estimate was 30-35 GB/day), and until the drain change lands bodies are loaded only after 72
   hours or once the folder passes 8 GB.
+- **`micro-worker` now starts without the user/project/local `CLAUDE.md` files** (CC >= 2.1.271;
+  measured on this repo, 2026-09-24: first request 61,119 -> 11,167 tokens, Sonnet 5, 5-minute
+  write tier), so user `CLAUDE.md` conventions no longer reach it. `agentlens-tldr-worker` is
+  unchanged — it edits code in whatever project it is dispatched into, so that project's own
+  conventions still need to reach it.
 
 ### Fixed (latent)
 

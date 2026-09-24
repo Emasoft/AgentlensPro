@@ -3,7 +3,7 @@ trdd-id: ZQQYRYBO
 title: Align AgentlensPro with Claude Code 2.1.253 to 2.1.281
 column: dev
 created: 2026-09-24T13:39:40+0200
-updated: 2026-09-24T17:51:59+0200
+updated: 2026-09-24T18:08:47+0200
 current-owner: emanuelesabetta
 created-by: emanuelesabetta
 task-type: refactor
@@ -66,6 +66,7 @@ are also excluded.
 - [ ] I20 — IMPROVE — SubagentStop matcher to skip the ~81% of spawns with an empty agent type (HT-7)
 - [ ] I21 — IMPROVE — Cost by skill, plugin and MCP server in window rollups (TI 1.6)
 - [ ] I22 — IMPROVE — `claude plugin eval` suite for the shipped skills (SS O4)
+2026-09-24: I14 — kept omitClaudeMd on micro-worker only; removed from agentlens-tldr-worker (it edits arbitrary-project code, so dropping CLAUDE.md would silently strip that project's conventions). Ships to users only via setup/installAgents, which today overwrites a user's own lean-worker (I5 / Q3) — release after Q3 is resolved.
 
 ## Owner questions
 
