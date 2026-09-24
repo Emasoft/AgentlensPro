@@ -18,10 +18,9 @@
 // itself (the main-session case, or a caller that already hands the subagent's own path).
 
 import * as fs from 'fs'
-import * as os from 'os'
 import * as path from 'path'
 import { readTranscriptTail } from './reviewGate'
-import { commandWriteReason, isEphemeralTarget, shellWords } from './reviewGateTriggers'
+import { commandWriteReason, isNeverGatedTarget, shellWords } from './reviewGateTriggers'
 import { readStdin } from './hookHandlers'
 
 // UNREVIEWED. TRDD-SA99VCPZ classifies this module as never having had its
@@ -155,17 +154,6 @@ export function isGitOrGhCommand(cmd: string): boolean {
 // the ceiling is caught downstream. Upgrade path if this is ever abused: split on `;`/`&&`/`|`
 // and require EVERY segment to be git/gh, not just the first.
 
-/** A write target the delegation rule doesn't gate: `isEphemeralTarget` already covers /tmp,
- *  /private/tmp (incl. the shell-metachar-under-/tmp case) and <cwd>/reports/, <cwd>/<name>_dev/.
- *  This adds the one thing it doesn't know about: ~/.claude/plans/. */
-function isPlanningArtefact(file: string, cwd: string): boolean {
-  if (isEphemeralTarget(file, cwd)) return true
-  if (file === '' || /[$`~*?{}[\]]/.test(file)) return false
-  const abs = path.resolve(cwd, file)
-  const plansDir = path.join(os.homedir(), '.claude', 'plans')
-  return abs === plansDir || abs.startsWith(plansDir + path.sep)
-}
-
 /** Pure decision — reads only what it is given (env is a param, never `process.env` directly),
  *  so this is testable without touching the real process. */
 export function decideDelegateGate(
@@ -188,13 +176,13 @@ export function decideDelegateGate(
   if (models.length === 0) {
     return { deny: false, note: '[delegate-gate] allowing: no model readable' }
   }
-  if (!models.some((m) => FABLE_RE.test(m))) return { deny: false } // Sonnet/Opus/Haiku aren't gated
+  if (!models.some((m) => FABLE_RE.test(m))) return { deny: false } // Sonnet/Opus/Haiku are not gated
 
   const tool = String(input?.tool_name ?? '')
   const cwd = hookCwd(input)
   if (EDIT_TOOLS.has(tool)) {
     const file = String(input?.tool_input?.file_path ?? '')
-    if (isPlanningArtefact(file, cwd)) return { deny: false }
+    if (isNeverGatedTarget(file, cwd)) return { deny: false }
     return { deny: true, reason: DELEGATE_DENY_REASON }
   }
   if (tool === 'Bash') {
