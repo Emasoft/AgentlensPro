@@ -114,6 +114,57 @@ fn effort_transition_as_risk_command_reproduces_the_ts_oracle_exactly() {
     same(&effort_transition_as_risk_command(&no_model), &o["asRiskCommandNoModel"], "asRiskCommandNoModel");
 }
 
+/// TRDD-ZQQYRYBO I6b: from CC 2.1.260, `/effort` on Fable 5.1 is sent as a per-message change that
+/// keeps the cache — a transition on that model/version grades `ambiguous`, never `certain`. Every
+/// other model, and every version before the fix (or none at all), keeps the old `certain` grading.
+#[test]
+fn effort_transition_as_risk_command_gates_fable_5_1_from_cc_2_1_260() {
+    let o = oracle();
+    let at = |model: &str, version: Option<&str>| {
+        let mut t = json!({"ts": 1, "session": "s1", "from": "xhigh", "to": "low", "sidechain": false, "model": model});
+        if let Some(v) = version {
+            t.as_object_mut().unwrap().insert("version".into(), Value::String(v.to_owned()));
+        }
+        t
+    };
+    same(
+        &effort_transition_as_risk_command(&at("claude-fable-5-1", Some("2.1.260"))),
+        &o["asRiskCommandFableAtGate"],
+        "asRiskCommandFableAtGate",
+    );
+    same(
+        &effort_transition_as_risk_command(&at("claude-fable-5-1", Some("2.1.259"))),
+        &o["asRiskCommandFableBeforeGate"],
+        "asRiskCommandFableBeforeGate",
+    );
+    same(
+        &effort_transition_as_risk_command(&at("claude-fable-5-10", Some("2.1.281"))),
+        &o["asRiskCommandFable10NotGated"],
+        "asRiskCommandFable10NotGated",
+    );
+    same(
+        &effort_transition_as_risk_command(&at("claude-opus-5", Some("2.1.281"))),
+        &o["asRiskCommandOtherModelNotGated"],
+        "asRiskCommandOtherModelNotGated",
+    );
+    same(
+        &effort_transition_as_risk_command(&at("claude-fable-5-1", None)),
+        &o["asRiskCommandNoVersionNotGated"],
+        "asRiskCommandNoVersionNotGated",
+    );
+}
+
+/// The gate reads `model` from the transition's own `message.model` field, never a regex over
+/// `message.content` — a decoy model name in the text must not change the verdict.
+#[test]
+fn a_decoy_model_string_in_message_content_does_not_affect_the_gate() {
+    let o = oracle();
+    let decoy = o["pure"]["versionedDecoyModelInContent"]["out"][0].clone();
+    let gated = o["pure"]["versionedFableAtGate"]["out"][0].clone();
+    same(&effort_transition_as_risk_command(&decoy), &effort_transition_as_risk_command(&gated), "decoy vs real");
+    assert_eq!(effort_transition_as_risk_command(&decoy)["mutation"], "ambiguous");
+}
+
 #[test]
 fn scan_effort_transitions_reproduces_the_ts_oracle_exactly() {
     let o = oracle();

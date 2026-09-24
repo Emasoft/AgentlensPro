@@ -84,6 +84,40 @@ const PURE_CASES = {
   // Two sessions interleaved: each partitions independently.
   twoSessions: [a('s1', 0, 'xhigh'), a('s2', 1, 'low'), a('s1', 2, 'low'), a('s2', 3, 'high')],
   empty: [],
+  // TRDD-ZQQYRYBO I6b — the transition itself is unaffected by the CC-version gate (the effort DID
+  // change); gating happens only in effortTransitionAsRiskCommand. These pin that `version`/`model`
+  // on the "to" record survive into the emitted transition object unchanged.
+  versionedFableAtGate: [
+    a('s1', 0, 'xhigh', { version: '2.1.259' }),
+    a('s1', 1, 'low', { version: '2.1.260', message: { model: 'claude-fable-5-1' } }),
+  ],
+  versionedFableBeforeGate: [
+    a('s1', 0, 'xhigh', { version: '2.1.258' }),
+    a('s1', 1, 'low', { version: '2.1.259', message: { model: 'claude-fable-5-1' } }),
+  ],
+  // `claude-fable-5-10` must NOT match the `fable-5-1` gate (a bare `.includes` would).
+  versionedFable10NotGated: [
+    a('s1', 0, 'xhigh', { version: '2.1.259' }),
+    a('s1', 1, 'low', { version: '2.1.281', message: { model: 'claude-fable-5-10' } }),
+  ],
+  versionedOtherModelNotGated: [
+    a('s1', 0, 'xhigh', { version: '2.1.259' }),
+    a('s1', 1, 'low', { version: '2.1.281', message: { model: 'claude-opus-5' } }),
+  ],
+  // No `version` on the record ⇒ the transition carries none ⇒ the old (ungated) grading applies.
+  versionedMissingVersion: [
+    a('s1', 0, 'xhigh'),
+    a('s1', 1, 'low', { message: { model: 'claude-fable-5-1' } }),
+  ],
+  // The model comes ONLY from `message.model`, never a regex over `message.content` — a decoy model
+  // name in the text must not change the verdict from the versionedFableAtGate case above.
+  versionedDecoyModelInContent: [
+    a('s1', 0, 'xhigh', { version: '2.1.259' }),
+    a('s1', 1, 'low', {
+      version: '2.1.260',
+      message: { model: 'claude-fable-5-1', content: [{ type: 'text', text: 'not claude-opus-5, really claude-fable-5-1' }] },
+    }),
+  ],
 }
 
 const SINCE_MTIME_SKIP = Date.parse('2026-07-15T00:00:00.000Z')
@@ -102,6 +136,23 @@ writeFileSync(dir + 'efforttransitions-expected.json', JSON.stringify({
   // The risk-command projection, including the model→args append and its absence.
   asRiskCommand: effortTransitionAsRiskCommand({ ts: 1, session: 's1', from: 'xhigh', to: 'low', sidechain: false, model: 'claude-opus-5' }),
   asRiskCommandNoModel: effortTransitionAsRiskCommand({ ts: 1, session: 's1', from: 'xhigh', to: 'low', sidechain: false }),
+  // TRDD-ZQQYRYBO I6b — the CC-version gate itself, exercised directly on the risk-command
+  // projection (where `mutation` is actually decided).
+  asRiskCommandFableAtGate: effortTransitionAsRiskCommand({
+    ts: 1, session: 's1', from: 'xhigh', to: 'low', sidechain: false, model: 'claude-fable-5-1', version: '2.1.260',
+  }),
+  asRiskCommandFableBeforeGate: effortTransitionAsRiskCommand({
+    ts: 1, session: 's1', from: 'xhigh', to: 'low', sidechain: false, model: 'claude-fable-5-1', version: '2.1.259',
+  }),
+  asRiskCommandFable10NotGated: effortTransitionAsRiskCommand({
+    ts: 1, session: 's1', from: 'xhigh', to: 'low', sidechain: false, model: 'claude-fable-5-10', version: '2.1.281',
+  }),
+  asRiskCommandOtherModelNotGated: effortTransitionAsRiskCommand({
+    ts: 1, session: 's1', from: 'xhigh', to: 'low', sidechain: false, model: 'claude-opus-5', version: '2.1.281',
+  }),
+  asRiskCommandNoVersionNotGated: effortTransitionAsRiskCommand({
+    ts: 1, session: 's1', from: 'xhigh', to: 'low', sidechain: false, model: 'claude-fable-5-1',
+  }),
   // ── the file walk ──────────────────────────────────────────────────────────
   scanAll: scan({}),
   scanWithSidechain: scan({ includeSidechain: true }),

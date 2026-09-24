@@ -97,7 +97,9 @@ pub fn gate_by_cc_version(
 }
 
 /// `claude-fable-5-1`, dated or suffixed, but never a later `claude-fable-5-10`.
-fn is_fable_5_1(model: &str) -> bool {
+/// `pub(crate)`: reused by `effort_transitions::effort_transition_as_risk_command` (TRDD-ZQQYRYBO
+/// I6b) so the two detectors gate on one definition, never a second copy.
+pub(crate) fn is_fable_5_1(model: &str) -> bool {
     static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
     RE.get_or_init(|| regex::Regex::new(r"(?i)fable-5-1(?:[^0-9]|$)").expect("static regex")).is_match(model)
 }

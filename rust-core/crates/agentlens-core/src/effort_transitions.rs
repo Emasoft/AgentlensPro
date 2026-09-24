@@ -11,20 +11,25 @@
 //! Rare AND invisible is exactly the combination worth a detector: an effort change invalidates the
 //! prefix, so it is a real cold-write cause nothing else here can name.
 
+use std::cmp::Ordering::Less;
 use std::path::PathBuf;
 
 use indexmap::IndexMap;
 use serde_json::{Map, Value};
 
-use crate::cache_risk_commands::transcript_files;
+use crate::cache_risk_commands::{is_fable_5_1, transcript_files};
+use crate::loaded_plugin_versions::compare_versions;
 use crate::summarize::helpers::{num, parse_iso_ms};
 
-/// One observation: the timestamp of the record, its EXPLICIT effort, and the model when present.
+/// One observation: the timestamp of the record, its EXPLICIT effort, the model when present, and
+/// the Claude Code `version` that wrote the record (TRDD-ZQQYRYBO I6b — gates the transition's
+/// mutation certainty; see `effort_transition_as_risk_command`).
 #[derive(Clone, Debug)]
 pub struct Observation {
     pub ts: f64,
     pub effort: String,
     pub model: Option<String>,
+    pub version: Option<String>,
 }
 
 /// Narrow one transcript line to an effort observation, or None.
@@ -45,7 +50,11 @@ pub fn effort_observation(entry: &Value) -> Option<Observation> {
     // non-string timestamp and an unparseable one are both rejected, never coerced to 0.
     let ts = entry.get("timestamp").and_then(Value::as_str).and_then(parse_iso_ms).filter(|t| t.is_finite())?;
     let model = entry.get("message").and_then(|m| m.get("model")).and_then(Value::as_str).filter(|s| !s.is_empty()).map(str::to_owned);
-    Some(Observation { ts, effort: effort.to_owned(), model })
+    // Top-level on the entry itself, not a line regex (measured: 56/57 command entries carry it, and
+    // a regex over content risks matching a version string a user pasted). Absent on a pre-transcript-
+    // versioning record; `effort_transition_as_risk_command` treats that as "keep the old grading".
+    let version = entry.get("version").and_then(Value::as_str).filter(|s| !s.is_empty()).map(str::to_owned);
+    Some(Observation { ts, effort: effort.to_owned(), model, version })
 }
 
 /// Partition key. A subagent runs at its OWN effort and its records are interleaved into the same
@@ -94,6 +103,12 @@ pub fn effort_transitions_of(records: &[(Value, Observation)]) -> Vec<Value> {
                     if let Some(m) = &obs.model {
                         t.insert("model".into(), Value::String(m.clone()));
                     }
+                    // Appended last, after model — same "absent means undecidable" rule: gating
+                    // needs the version of the record that carries the NEW value, never a regex
+                    // over content (TRDD-ZQQYRYBO I6b).
+                    if let Some(v) = &obs.version {
+                        t.insert("version".into(), Value::String(v.clone()));
+                    }
                     out.push(Value::Object(t));
                 }
             }
@@ -111,10 +126,26 @@ pub fn effort_transitions_of(records: &[(Value, Observation)]) -> Vec<Value> {
 /// Present a transition as a cache-risk EVENT, so the pricing side can charge it against the turn
 /// it broke without knowing this module exists.
 ///
-/// `mutation: 'certain'`, and that is not a formality: a `/effort` COMMAND is 'ambiguous' precisely
-/// because the user may re-select the value it already had, which changes and breaks nothing. A
-/// transition is the OBSERVED CHANGE itself — the one thing the command cannot promise. It is the
-/// more reliable of the two signals, not a supplement to it.
+/// `mutation` is `'certain'` by default, and that is not a formality: a `/effort` COMMAND is
+/// 'ambiguous' precisely because the user may re-select the value it already had, which changes and
+/// breaks nothing. A transition is the OBSERVED CHANGE itself — the one thing the command cannot
+/// promise. It is the more reliable of the two signals, not a supplement to it.
+///
+/// ONE gated exception (TRDD-ZQQYRYBO I6b): from Claude Code 2.1.260, `/effort` on Fable 5.1 is sent
+/// as a per-message change that the docs say keeps the cache — and every transition here IS a
+/// genuine value change already (the differencing step above never emits one for a same-value
+/// re-selection), so the gate covers the WHOLE class on that model/version, not just a re-selection
+/// case. Grade it `'ambiguous'`, not `'certain'`, because we cannot independently confirm the
+/// documented claim is exactly as broad as it reads (review finding, 2026-09-24): the sibling cause
+/// in `cache_break_timeline` (a DIFFERENT signal, the request body's `output_config.effort`) found
+/// its own "cache-safe" doc claim narrower than advertised once audited; that finding does not
+/// automatically transfer to THIS signal (the transcript's own `effort` field), but neither has it
+/// been ruled out here — hence ambiguous, not silently dropped and not left certain. The version and
+/// model both come from the "to" record itself (the one that carries the new value), never from
+/// `prev` — same documented limitation as `cache_break_timeline`'s own Fable-5.1 gate: a mid-session
+/// upgrade on this exact turn is graded as if the whole session already ran the newer CC.
+/// `is_fable_5_1`/`compare_versions` are the SAME
+/// functions `cache_risk_commands::gate_by_cc_version` uses, reused rather than copied.
 ///
 /// `command` is a synthetic LABEL in a shape no slash command can collide with
 /// (`(effort xhigh→low)`), because a row that reads like a typed command invites someone to grep
@@ -126,7 +157,11 @@ pub fn effort_transition_as_risk_command(t: &Value) -> Value {
     cmd.insert("session".into(), Value::String(s("session")));
     cmd.insert("command".into(), Value::String(format!("(effort {}→{})", s("from"), s("to"))));
     cmd.insert("kind".into(), Value::String("EFFORT_CHANGED".into()));
-    cmd.insert("mutation".into(), Value::String("certain".into()));
+    let model = t.get("model").and_then(Value::as_str);
+    let version = t.get("version").and_then(Value::as_str).filter(|v| !v.is_empty());
+    let ambiguous =
+        version.is_some_and(|v| compare_versions(v, "2.1.260") != Less) && model.is_some_and(is_fable_5_1);
+    cmd.insert("mutation".into(), Value::String(if ambiguous { "ambiguous" } else { "certain" }.into()));
     // Appended AFTER the literal in the TS, so it lands LAST — and only when a model was recorded.
     if let Some(m) = t.get("model").and_then(Value::as_str).filter(|m| !m.is_empty()) {
         cmd.insert("args".into(), Value::String(m.to_owned()));

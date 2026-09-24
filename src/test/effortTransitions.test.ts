@@ -193,6 +193,34 @@ suite('effortTransitionAsRiskCommand — a transition presented as a priceable e
   })
 })
 
+// TRDD-ZQQYRYBO I6b: from CC 2.1.260, `/effort` on Fable 5.1 is sent as a per-message change that
+// keeps the cache — a transition observed on that model/version cannot be told apart from the
+// harness's own no-op, so it must grade `ambiguous`, never `certain`. Every other model, and every
+// version before the fix, keeps the old `certain` grading.
+suite('effortTransitionAsRiskCommand — CC-version gate on Fable 5.1 (TRDD-ZQQYRYBO I6b)', () => {
+  const t = { ts: 1, session: 's1', from: 'xhigh', to: 'low', sidechain: false }
+
+  test('Fable 5.1 at or after 2.1.260 is ambiguous', () => {
+    assert.strictEqual(effortTransitionAsRiskCommand({ ...t, model: 'claude-fable-5-1', version: '2.1.260' }).mutation, 'ambiguous')
+  })
+
+  test('Fable 5.1 just before 2.1.260 stays certain — the boundary is exact', () => {
+    assert.strictEqual(effortTransitionAsRiskCommand({ ...t, model: 'claude-fable-5-1', version: '2.1.259' }).mutation, 'certain')
+  })
+
+  test('claude-fable-5-10 is not claude-fable-5-1 and stays certain', () => {
+    assert.strictEqual(effortTransitionAsRiskCommand({ ...t, model: 'claude-fable-5-10', version: '2.1.281' }).mutation, 'certain')
+  })
+
+  test('a different model at the same version stays certain — the gate is model-specific', () => {
+    assert.strictEqual(effortTransitionAsRiskCommand({ ...t, model: 'claude-opus-5', version: '2.1.281' }).mutation, 'certain')
+  })
+
+  test('no version on the record keeps the old grading — an older transcript is not gated', () => {
+    assert.strictEqual(effortTransitionAsRiskCommand({ ...t, model: 'claude-fable-5-1' }).mutation, 'certain')
+  })
+})
+
 suite('scanEffortTransitions — an empty corpus is empty, not a crash', () => {
   test('a directory that does not exist yields no transitions', () => {
     assert.deepStrictEqual(scanEffortTransitions({ dirs: ['/nonexistent-agentlens-effort-probe'] }), [])
