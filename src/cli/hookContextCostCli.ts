@@ -16,10 +16,18 @@
 // Every row is per HOOK FIRE, not per subagent spawn: two hooks matching one SubagentStart fire
 // twice, so summing fires is not the same as counting spawns.
 //
-// `hook_name` (displayed as `matcher`) is the matcher string that fired (e.g. `SubagentStart:fork`,
-// `PreToolUse:Bash`) — checked against every attribute on a captured hook_execution_complete event
-// (2026-09-24) and none names the hook's command, plugin, or source file; `hook_source` is the
-// config-merge origin ("merged"), not which hook ran. So the injecting hook cannot be named here.
+// `hook_name` (displayed as `match_target`) is `<event>:<tool or agent name>` (e.g.
+// `SubagentStart:fork`, `PreToolUse:Bash`) — a bare event name with no colon when the event has no
+// matcher (`Stop`, `UserPromptSubmit`, `SubagentStop`). Sampled ~185k real events on this machine
+// over 2026-09-23/24 (every hook registered here at the time): every value fit that shape, none
+// carried a config-pattern character (`*`, `|`, or an empty segment after the colon) — so on this
+// evidence it is the match TARGET the hook fired against, not the configured matcher pattern. This
+// is a sample over this machine's own hook config, not a schema guarantee: a hook registered
+// elsewhere with a compound matcher (e.g. `"matcher": "Bash|Edit"`) could still surface that raw
+// pattern verbatim in `hook_name` for its own firings — unverified, since no such matcher fired
+// here in the window sampled. No captured attribute names the hook's command, plugin, or source
+// file either way; `hook_source` is the config-merge origin ("merged"), not which hook ran. So the
+// injecting hook cannot be named here.
 //
 // No attribute is a reliable per-event id: `spanId`/`traceId` are present on ~95% of captured
 // events but absent on some (observed missing on early SessionStart events), so they cannot dedupe
@@ -39,7 +47,10 @@ export const CHARS_PER_TOKEN_ESTIMATE = 2.56
 
 export interface HookContextCostRow {
   hookEvent: string
-  hookName: string
+  /** hook_name — `<event>:<tool or agent name>`, i.e. the match TARGET the hook fired against
+   *  on this evidence (sampled 2026-09-24 against ~185k real sink events on this machine's own
+   *  hook config), not the configured matcher pattern — see the file header for the caveat. */
+  matchTarget: string
   fires: number
   additionalContextChars: number
   stdoutChars: number
@@ -89,11 +100,11 @@ export async function sumHookContextCost(dir: string, sinceMs: number, untilMs =
       if (ts < sinceMs || ts > untilMs) continue
       const a = rec.attrs ?? {}
       const hookEvent = String(a['hook_event'] ?? '?')
-      const hookName = String(a['hook_name'] ?? hookEvent)
-      const key = `${hookEvent}\u0000${hookName}`
+      const matchTarget = String(a['hook_name'] ?? hookEvent)
+      const key = `${hookEvent}\u0000${matchTarget}`
       let row = acc.get(key)
       if (!row) {
-        row = { hookEvent, hookName, fires: 0, additionalContextChars: 0, stdoutChars: 0, systemMessageChars: 0, outputsPersisted: 0, estContextTokens: 0 }
+        row = { hookEvent, matchTarget, fires: 0, additionalContextChars: 0, stdoutChars: 0, systemMessageChars: 0, outputsPersisted: 0, estContextTokens: 0 }
         acc.set(key, row)
       }
       row.fires += 1
@@ -124,18 +135,19 @@ stored in whole-day buckets — a window is rounded outward to the buckets cover
 
 Every row is PER HOOK FIRE, not per subagent spawn: two hooks matching one spawn are two fires.
 
-'matcher' is the hook_name attribute — the matcher string that fired (e.g. SubagentStart:fork),
-not the hook command, plugin, or source that ran; no captured attribute identifies that.
+'match_target' is the hook_name attribute — the <event>:<tool or agent name> the hook fired
+against (e.g. SubagentStart:fork), not the hook command, plugin, or source that ran; no captured
+attribute identifies that.
 
 est_tokens is an ESTIMATE of the additionalContext only: chars / ${CHARS_PER_TOKEN_ESTIMATE} (CLAUDE.md's
-measured ratio). stdout_chars is shown for reference only and is NOT counted in est_tokens: it is
-only injected into context for SessionStart/UserPromptSubmit hooks, and can be huge for other
-events (e.g. PostToolUse:Agent) without ever reaching the model.
+measured ratio). stdout_chars* is shown for reference only and is NOT counted in est_tokens: see
+the footnote printed after the table — it only reaches context for SessionStart/UserPromptSubmit
+hooks, and can be huge for other events (e.g. PostToolUse:Agent) without ever reaching the model.
 
 flags:
   --hours N   window length, ending now (default 24, max ${MAX_HOURS})
-  --json      the rows as JSON — field names are the raw HookContextCostRow ones (hookName,
-              stdoutChars, ...), NOT the table's display headers (matcher, stdout(not injected))
+  --json      the rows as JSON — field names are the raw HookContextCostRow ones (matchTarget,
+              stdoutChars, ...), NOT the table's display headers (match_target, stdout_chars)
 
 exit:
   0 = answered · 2 = no hook_execution_complete events in the window · 64 = bad flags`
@@ -156,7 +168,7 @@ export async function runHookContextCostCli(argv: string[], dir = path.join(data
     return EXIT.USAGE
   }
   if (hours > MAX_HOURS) {
-    console.error(`--hours must be <= ${MAX_HOURS} (7 days) — the sink is read in whole-day buckets and a wider window reads too much off disk`)
+    console.error(`--hours must be <= ${MAX_HOURS} (${MAX_HOURS / 24} days) — the sink is read in whole-day buckets and a wider window reads too much off disk`)
     return EXIT.USAGE
   }
   const untilMs = Date.now()
@@ -172,9 +184,9 @@ export async function runHookContextCostCli(argv: string[], dir = path.join(data
     return EXIT.OK
   }
 
-  const header = ['hook_event', 'matcher', 'fires', 'ctx_chars', 'est_tokens', 'stdout(not injected)', 'sysmsg_chars', 'persisted']
+  const header = ['hook_event', 'match_target', 'fires', 'ctx_chars', 'est_tokens', 'stdout_chars*', 'sysmsg_chars', 'persisted']
   const body = res.rows.map(r => [
-    r.hookEvent, r.hookName, String(r.fires), String(r.additionalContextChars), String(r.estContextTokens),
+    r.hookEvent, r.matchTarget, String(r.fires), String(r.additionalContextChars), String(r.estContextTokens),
     String(r.stdoutChars), String(r.systemMessageChars), String(r.outputsPersisted),
   ])
   const widths = header.map((h, i) => Math.max(h.length, ...body.map(row => row[i].length)))
@@ -182,11 +194,12 @@ export async function runHookContextCostCli(argv: string[], dir = path.join(data
   console.log(`hook output over the last ${hours}h — ${res.events} hook_execution_complete fires (per fire, not per spawn; est_tokens = ctx_chars / ${CHARS_PER_TOKEN_ESTIMATE}, an estimate)`)
   console.log(fmt(header))
   for (const row of body) console.log(fmt(row))
+  console.log('* stdout reaches the context only for SessionStart and UserPromptSubmit; not counted in est_tokens')
   const sub = res.rows.filter(r => r.hookEvent === 'SubagentStart')
   const subFires = sub.reduce((s, r) => s + r.fires, 0)
   if (subFires > 0) {
     const perFire = Math.round(sub.reduce((s, r) => s + r.additionalContextChars, 0) / subFires)
-    console.log(`note: SubagentStart context (~${perFire} chars per hook fire, not per spawn — a spawn matched by two hooks counts as two fires) opens every subagent's prompt, so it is paid as a cold cache write on each spawn.`)
+    console.log(`note: SubagentStart context (~${perFire} chars per hook fire, not per spawn — a spawn matched by two hooks counts as two fires, so multiply by the hooks matched per spawn to get the per-spawn cost) is written to the fresh subagent's cache prefix on each spawn and re-read on every later turn of that subagent.`)
   }
   return EXIT.OK
 }

@@ -9,11 +9,11 @@ import { sumHookContextCost, runHookContextCostCli, CHARS_PER_TOKEN_ESTIMATE, MA
 function writeSink(dir: string, day: string, recs: object[]): void {
   fs.writeFileSync(path.join(dir, `${day}.ndjsonl`), recs.map(r => JSON.stringify(r)).join('\n') + '\n')
 }
-function hookRec(ts: number, hookEvent: string, hookName: string, ctx: number, stdout = 0): object {
+function hookRec(ts: number, hookEvent: string, matchTarget: string, ctx: number, stdout = 0): object {
   return {
     ts, ev: 'hook_execution_complete', name: 'claude_code.hook_execution_complete',
     attrs: {
-      hook_event: hookEvent, hook_name: hookName, additional_context_chars: String(ctx),
+      hook_event: hookEvent, hook_name: matchTarget, additional_context_chars: String(ctx),
       stdout_chars: String(stdout), system_message_chars: '0', num_outputs_persisted: '0',
     },
   }
@@ -44,7 +44,7 @@ suite('hook-context-cost — sums hook_execution_complete size attributes', () =
     assert.strictEqual(sub.stdoutChars, 10400)
     assert.strictEqual(sub.estContextTokens, Math.round(10200 / CHARS_PER_TOKEN_ESTIMATE))
     assert.strictEqual(res.rows[0].hookEvent, 'SubagentStart', 'rows are ordered by injected context, largest first')
-    assert.strictEqual(res.rows.find(r => r.hookName === 'PreToolUse:Bash')?.additionalContextChars, 10)
+    assert.strictEqual(res.rows.find(r => r.matchTarget === 'PreToolUse:Bash')?.additionalContextChars, 10)
   })
 
   test('a torn tail line and non-numeric attributes do not poison the sums', async () => {
@@ -66,6 +66,11 @@ suite('hook-context-cost — sums hook_execution_complete size attributes', () =
   test('--hours above the cap is rejected (exit 64), not silently read', async () => {
     const code = await runHookContextCostCli(['--hours', String(MAX_HOURS + 1)], dir)
     assert.strictEqual(code, 64)
+  })
+
+  test('--hours at the cap (168) is accepted, not rejected as "above" it', async () => {
+    const code = await runHookContextCostCli(['--hours', String(MAX_HOURS)], dir)
+    assert.notStrictEqual(code, 64)
   })
 
   // Pins current behavior as a SPEC, not just a code comment: no captured attribute is a
