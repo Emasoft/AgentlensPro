@@ -115,6 +115,43 @@ suite('cacheRiskCommands — transcript command detection (TRDD-EYA3X5MQ)', () =
   })
 })
 
+// ── CC-version grading (TRDD-ZQQYRYBO I6) ────────────────────────────────────────────────────────
+// Breaks that a later Claude Code fixed must not be charged to a transcript written by that version.
+suite('cacheRiskCommands — CC-version grading (TRDD-ZQQYRYBO I6)', () => {
+  const at = (name: string, args: string | undefined, version?: string) => ({
+    ...RELOAD_ENTRY,
+    version,
+    message: { content: `<command-name>${name}</command-name>${args ? `<command-args>${args}</command-args>` : ''}` },
+  })
+
+  test('/effort on Fable 5.1 is ambiguous from 2.1.260, certain before it or on another model', () => {
+    assert.strictEqual(extractCacheRiskCommand(at('/effort', 'high', '2.1.281'), 'claude-fable-5-1')?.mutation, 'ambiguous')
+    assert.strictEqual(extractCacheRiskCommand(at('/effort', 'high', '2.1.259'), 'claude-fable-5-1')?.mutation, 'certain')
+    assert.strictEqual(extractCacheRiskCommand(at('/effort', 'high', '2.1.281'), 'claude-opus-5')?.mutation, 'certain')
+    assert.strictEqual(extractCacheRiskCommand(at('/effort', 'high', '2.1.281'), 'claude-fable-5-10')?.mutation, 'certain')
+  })
+
+  test('/login from 2.1.273 is ambiguous — thinking is kept, but the account may still differ', () => {
+    assert.strictEqual(extractCacheRiskCommand(at('/login', undefined, '2.1.273'))?.mutation, 'ambiguous')
+    assert.strictEqual(extractCacheRiskCommand(at('/login', undefined, '2.1.272'))?.mutation, 'certain')
+  })
+
+  test('/upgrade and /extra-usage break before 2.1.273 and are not cache risks after it', () => {
+    assert.deepStrictEqual(
+      [extractCacheRiskCommand(at('/upgrade', undefined, '2.1.270'))?.kind, extractCacheRiskCommand(at('/extra-usage', undefined, '2.1.272'))?.mutation],
+      ['ACCOUNT_SWITCHED', 'certain'],
+    )
+    assert.strictEqual(extractCacheRiskCommand(at('/upgrade', undefined, '2.1.281')), undefined)
+    assert.strictEqual(extractCacheRiskCommand(at('/extra-usage', undefined, '2.1.273')), undefined)
+  })
+
+  test('plugin/MCP churn is ambiguous from 2.1.267; a transcript with no version keeps the old grading', () => {
+    assert.strictEqual(extractCacheRiskCommand(at('/reload-plugins', undefined, '2.1.267'))?.mutation, 'ambiguous')
+    assert.strictEqual(extractCacheRiskCommand(at('/plugin', 'install foo', '2.1.266'))?.mutation, 'certain')
+    assert.strictEqual(extractCacheRiskCommand(at('/reload-plugins', undefined))?.mutation, 'certain')
+  })
+})
+
 // The join between the two halves: a command carries a wall-clock, a broken turn now carries one
 // too (CacheBreakTurn.tsMs), and "the command is billed on the first turn at or after it" is only
 // expressible if that field actually survives the analyzer.

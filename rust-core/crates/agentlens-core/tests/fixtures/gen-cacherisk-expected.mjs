@@ -52,6 +52,28 @@ writeFileSync(join(root, 'slug-b/two.jsonl'), [
   JSON.stringify({ type: 'user', timestamp: iso(55_000), message: { role: 'user', content: cmd('/clear') } }),
   '',
 ].join('\n'))
+// CC-version grading (TRDD-ZQQYRYBO I6): each command carries the `version` that wrote it, and the
+// /effort verdict depends on the model of the ASSISTANT record before it. Offsets stay past the
+// tsWindow/limit cut so only `all` sees these rows.
+mkdirSync(join(root, 'slug-c'), { recursive: true })
+const vUser = (off, version, text) =>
+  JSON.stringify({ type: 'user', sessionId: 'cccccccc-cccc-cccc-cccc-cccccccccccc', version, timestamp: iso(off), message: { role: 'user', content: text } })
+const vAsst = (off, model) =>
+  JSON.stringify({ type: 'assistant', version: '2.1.281', timestamp: iso(off), message: { role: 'assistant', model, content: [{ type: 'text', text: 'ok' }] } })
+writeFileSync(join(root, 'slug-c/versioned.jsonl'), [
+  vAsst(99_000, 'claude-fable-5-1'),
+  vUser(98_000, '2.1.281', cmd('/effort', 'high')),        // fixed on Fable 5.1 → ambiguous
+  vUser(97_000, '2.1.259', cmd('/effort', 'high')),        // before the fix → certain
+  vUser(96_000, '2.1.281', cmd('/login')),                 // thinking kept, account may differ → ambiguous
+  vUser(95_000, '2.1.270', cmd('/upgrade')),               // before the fix → certain
+  vUser(94_000, '2.1.281', cmd('/upgrade')),               // fixed → dropped
+  vUser(93_000, '2.1.273', cmd('/extra-usage')),           // fixed at exactly the boundary → dropped
+  vUser(92_000, '2.1.281', cmd('/reload-plugins')),        // deferred tools → ambiguous
+  vUser(91_000, '2.1.266', cmd('/plugin', 'install foo')), // before the fix → certain
+  vAsst(90_500, 'claude-opus-5'),
+  vUser(90_000, '2.1.281', cmd('/effort', 'low')),         // not Fable 5.1 → still certain
+  '',
+].join('\n'))
 
 const J = (v) => JSON.parse(JSON.stringify(v))
 const dirs = [root]

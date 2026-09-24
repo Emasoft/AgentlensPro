@@ -71,6 +71,59 @@
    "command": "/plugin",
    "kind": "PLUGIN_CHANGED",
    "mutation": "ambiguous"
+  },
+  {
+   "ts": 1786999910000,
+   "session": "cccccccc-cccc-cccc-cccc-cccccccccccc",
+   "command": "/effort",
+   "kind": "EFFORT_CHANGED",
+   "mutation": "certain",
+   "args": "low"
+  },
+  {
+   "ts": 1786999909000,
+   "session": "cccccccc-cccc-cccc-cccc-cccccccccccc",
+   "command": "/plugin",
+   "kind": "PLUGIN_CHANGED",
+   "mutation": "certain",
+   "args": "install foo"
+  },
+  {
+   "ts": 1786999908000,
+   "session": "cccccccc-cccc-cccc-cccc-cccccccccccc",
+   "command": "/reload-plugins",
+   "kind": "PLUGINS_RELOADED",
+   "mutation": "ambiguous"
+  },
+  {
+   "ts": 1786999905000,
+   "session": "cccccccc-cccc-cccc-cccc-cccccccccccc",
+   "command": "/upgrade",
+   "kind": "ACCOUNT_SWITCHED",
+   "mutation": "certain"
+  },
+  {
+   "ts": 1786999904000,
+   "session": "cccccccc-cccc-cccc-cccc-cccccccccccc",
+   "command": "/login",
+   "kind": "ACCOUNT_SWITCHED",
+   "mutation": "ambiguous"
+  },
+  {
+   "ts": 1786999903000,
+   "session": "cccccccc-cccc-cccc-cccc-cccccccccccc",
+   "command": "/effort",
+   "kind": "EFFORT_CHANGED",
+   "mutation": "certain",
+   "args": "high"
+  },
+  {
+   "ts": 1786999902000,
+   "session": "cccccccc-cccc-cccc-cccc-cccccccccccc",
+   "command": "/effort",
+   "kind": "EFFORT_CHANGED",
+   "mutation": "ambiguous",
+   "args": "high"
   }
  ],
  "kinds": [

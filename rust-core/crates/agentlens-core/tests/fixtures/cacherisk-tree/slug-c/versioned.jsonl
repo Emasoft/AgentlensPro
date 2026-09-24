@@ -1,0 +1,11 @@
+{"type":"assistant","version":"2.1.281","timestamp":"2026-08-17T20:51:41.000Z","message":{"role":"assistant","model":"claude-fable-5-1","content":[{"type":"text","text":"ok"}]}}
+{"type":"user","sessionId":"cccccccc-cccc-cccc-cccc-cccccccccccc","version":"2.1.281","timestamp":"2026-08-17T20:51:42.000Z","message":{"role":"user","content":"<command-name>/effort</command-name><command-args>high</command-args>"}}
+{"type":"user","sessionId":"cccccccc-cccc-cccc-cccc-cccccccccccc","version":"2.1.259","timestamp":"2026-08-17T20:51:43.000Z","message":{"role":"user","content":"<command-name>/effort</command-name><command-args>high</command-args>"}}
+{"type":"user","sessionId":"cccccccc-cccc-cccc-cccc-cccccccccccc","version":"2.1.281","timestamp":"2026-08-17T20:51:44.000Z","message":{"role":"user","content":"<command-name>/login</command-name>"}}
+{"type":"user","sessionId":"cccccccc-cccc-cccc-cccc-cccccccccccc","version":"2.1.270","timestamp":"2026-08-17T20:51:45.000Z","message":{"role":"user","content":"<command-name>/upgrade</command-name>"}}
+{"type":"user","sessionId":"cccccccc-cccc-cccc-cccc-cccccccccccc","version":"2.1.281","timestamp":"2026-08-17T20:51:46.000Z","message":{"role":"user","content":"<command-name>/upgrade</command-name>"}}
+{"type":"user","sessionId":"cccccccc-cccc-cccc-cccc-cccccccccccc","version":"2.1.273","timestamp":"2026-08-17T20:51:47.000Z","message":{"role":"user","content":"<command-name>/extra-usage</command-name>"}}
+{"type":"user","sessionId":"cccccccc-cccc-cccc-cccc-cccccccccccc","version":"2.1.281","timestamp":"2026-08-17T20:51:48.000Z","message":{"role":"user","content":"<command-name>/reload-plugins</command-name>"}}
+{"type":"user","sessionId":"cccccccc-cccc-cccc-cccc-cccccccccccc","version":"2.1.266","timestamp":"2026-08-17T20:51:49.000Z","message":{"role":"user","content":"<command-name>/plugin</command-name><command-args>install foo</command-args>"}}
+{"type":"assistant","version":"2.1.281","timestamp":"2026-08-17T20:51:49.500Z","message":{"role":"assistant","model":"claude-opus-5","content":[{"type":"text","text":"ok"}]}}
+{"type":"user","sessionId":"cccccccc-cccc-cccc-cccc-cccccccccccc","version":"2.1.281","timestamp":"2026-08-17T20:51:50.000Z","message":{"role":"user","content":"<command-name>/effort</command-name><command-args>low</command-args>"}}

@@ -13,7 +13,7 @@ export type CacheRiskKind =
   | 'MCP_SERVER_TOGGLE'  // /mcp — connecting/disconnecting a server rewrites the tool block
   | 'MODEL_SWITCHED'     // /model — caches are per-model, so a switch cannot hit the old entry
   | 'EFFORT_CHANGED'     // /effort — the reasoning-effort level is part of the cached prefix
-  | 'ACCOUNT_SWITCHED'   // /login, /logout — a different credential cannot read the old cache
+  | 'ACCOUNT_SWITCHED'   // /login, /logout, /upgrade, /extra-usage — discarded thinking before CC 2.1.273
   | 'COMPACTION'         // /compact — rebuilds the message layer
   | 'CLEAR'              // /clear — resets the transcript floor (the REMEDY, tracked for contrast)
 
@@ -52,6 +52,11 @@ export function classifySlashCommand(
     case '/reload-skills': return { kind: 'SKILLS_RELOADED', mutation: 'certain' }
     case '/login':
     case '/logout': return { kind: 'ACCOUNT_SWITCHED', mutation: 'certain' }
+    // Before CC 2.1.273 these discarded earlier thinking exactly like /login did (the real
+    // mechanism of that break, not the account), forcing a full prompt-cache rewrite.
+    // `gateByCcVersion` drops them on a transcript from a fixed version.
+    case '/upgrade':
+    case '/extra-usage': return { kind: 'ACCOUNT_SWITCHED', mutation: 'certain' }
     case '/compact': return { kind: 'COMPACTION', mutation: 'certain' }
     case '/clear': return { kind: 'CLEAR', mutation: 'certain' }
     // Menu-driven commands: an argument means the user named the mutation outright, so it is

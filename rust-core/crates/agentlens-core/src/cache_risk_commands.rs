@@ -26,6 +26,10 @@ pub fn classify_slash_command(name: &str, args: Option<&str>) -> Option<(&'stati
         "/reload-plugins" => Some(("PLUGINS_RELOADED", "certain")),
         "/reload-skills" => Some(("SKILLS_RELOADED", "certain")),
         "/login" | "/logout" => Some(("ACCOUNT_SWITCHED", "certain")),
+        // Before CC 2.1.273 these discarded earlier thinking exactly like /login did (the real
+        // mechanism of that break, not the account), forcing a full prompt-cache rewrite.
+        // `gate_by_cc_version` drops them on a transcript from a fixed version.
+        "/upgrade" | "/extra-usage" => Some(("ACCOUNT_SWITCHED", "certain")),
         "/compact" => Some(("COMPACTION", "certain")),
         "/clear" => Some(("CLEAR", "certain")),
         // Menu-driven commands: an argument means the user named the mutation outright; bare
@@ -54,6 +58,58 @@ pub fn classify_slash_command(name: &str, args: Option<&str>) -> Option<(&'stati
     }
 }
 
+/// gateByCcVersion — re-grade a classified command against the Claude Code version that wrote the
+/// transcript, because several of these breaks were HARNESS behaviour that a later CC fixed
+/// (TRDD-ZQQYRYBO I6). Blaming them on a fixed version tells the user to change a setup that is no
+/// longer the cause. An absent version means an older transcript, so it keeps the old grading.
+/// `model` is the most recent assistant model seen before the command in the same file.
+/// Returns None when the command no longer touches the prefix at all.
+pub fn gate_by_cc_version(
+    command: &str,
+    kind: &'static str,
+    mutation: &'static str,
+    version: Option<&str>,
+    model: Option<&str>,
+) -> Option<(&'static str, &'static str)> {
+    use crate::loaded_plugin_versions::compare_versions;
+    use std::cmp::Ordering::Less;
+    let Some(v) = version.filter(|v| !v.is_empty()) else { return Some((kind, mutation)) };
+    let at_least = |fixed: &str| compare_versions(v, fixed) != Less;
+    let cmd = command.trim().to_lowercase();
+    match kind {
+        // 2.1.273: /login, /upgrade and /extra-usage no longer discard thinking. /upgrade and
+        // /extra-usage keep the account, so nothing is left to break; a re-login may still land on a
+        // different organization, whose cache the old one cannot read, so it stays possible.
+        "ACCOUNT_SWITCHED" if at_least("2.1.273") => {
+            if cmd == "/upgrade" || cmd == "/extra-usage" {
+                None
+            } else {
+                Some((kind, "ambiguous"))
+            }
+        }
+        // 2.1.260: /effort on Fable 5.1 is sent as a per-message change that keeps the cache.
+        "EFFORT_CHANGED" if at_least("2.1.260") && model.is_some_and(is_fable_5_1) => Some((kind, "ambiguous")),
+        // 2.1.267: tools that arrive mid-session load deferred, and a disconnected server no longer
+        // rewrites the tool list (the last case, tool search off, fixed in 2.1.281).
+        "PLUGINS_RELOADED" | "PLUGIN_CHANGED" | "MCP_SERVER_TOGGLE" if at_least("2.1.267") => Some((kind, "ambiguous")),
+        _ => Some((kind, mutation)),
+    }
+}
+
+/// `claude-fable-5-1`, dated or suffixed, but never a later `claude-fable-5-10`.
+fn is_fable_5_1(model: &str) -> bool {
+    static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    RE.get_or_init(|| regex::Regex::new(r"(?i)fable-5-1(?:[^0-9]|$)").expect("static regex")).is_match(model)
+}
+
+/// The latest `"model":"…"` on a raw transcript line, read without parsing the JSON: the scan
+/// already skips JSON-parsing every line that holds no command, and a substring search keeps it so.
+fn model_on_line(line: &str) -> Option<String> {
+    static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let re = RE.get_or_init(|| regex::Regex::new(r#""model":"(claude-[^"]+)""#).expect("static regex"));
+    re.captures_iter(line).last().map(|c| c[1].to_owned())
+}
+
 /// parseCommandBlock — the command name (+ non-empty args) out of a transcript entry's text.
 pub fn parse_command_block(text: &str) -> Option<(String, Option<String>)> {
     static RE_NAME: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
@@ -76,12 +132,19 @@ pub fn parse_command_block(text: &str) -> Option<(String, Option<String>)> {
 /// that merely QUOTES `<command-name>` inflate the count). The wire row is
 /// `{ts, session?, command, args?, kind, mutation}` — conditional keys mirrored.
 pub fn extract_cache_risk_command(entry: &Value) -> Option<Value> {
+    extract_cache_risk_command_with_model(entry, None)
+}
+
+/// As `extract_cache_risk_command`, graded against the entry's own CC `version` and the model the
+/// session was on (`gate_by_cc_version`).
+pub fn extract_cache_risk_command_with_model(entry: &Value, model: Option<&str>) -> Option<Value> {
     if entry.get("type").and_then(Value::as_str) != Some("user") {
         return None;
     }
     let content = entry.get("message").and_then(|m| m.get("content")).and_then(Value::as_str)?;
     let (name, args) = parse_command_block(content)?;
     let (kind, mutation) = classify_slash_command(&name, args.as_deref())?;
+    let (kind, mutation) = gate_by_cc_version(&name, kind, mutation, entry.get("version").and_then(Value::as_str), model)?;
     // Transcript timestamps are ISO (Date.parse there, parse_iso_ms here — agree on ISO).
     let ts = entry.get("timestamp").and_then(Value::as_str).and_then(parse_iso_ms)?;
     let mut cmd = Map::new();
@@ -143,12 +206,20 @@ pub fn scan_cache_risk_commands(dirs: &[PathBuf], since_ms: Option<f64>, kinds: 
         if !text.contains("<command-name>") {
             continue;
         }
+        // The model a command ran under is on the ASSISTANT records around it, never on the
+        // command entry itself; track the latest one seen so far in this file.
+        let mut last_model: Option<String> = None;
         for line in text.split('\n') {
+            if line.contains("\"model\":\"claude-") {
+                if let Some(m) = model_on_line(line) {
+                    last_model = Some(m);
+                }
+            }
             if !line.contains("<command-name>") {
                 continue;
             }
             let Ok(entry) = serde_json::from_str::<Value>(line) else { continue };
-            let Some(cmd) = extract_cache_risk_command(&entry) else { continue };
+            let Some(cmd) = extract_cache_risk_command_with_model(&entry, last_model.as_deref()) else { continue };
             if let Some(since) = since_ms {
                 if cmd.get("ts").and_then(Value::as_f64).unwrap_or(f64::NAN) < since {
                     continue;

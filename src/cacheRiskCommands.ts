@@ -1,6 +1,7 @@
 import * as fs from 'fs'
 import * as path from 'path'
 import { claudeProjectsDirs } from './logReader'
+import { compareVersions } from './loadedPluginVersions'
 import { classifySlashCommand, type CacheRiskKind, type MutationCertainty } from './shared/cacheRiskKinds'
 
 // Re-exported (never re-declared) so host callers have one import site and check-mirrors keeps the
@@ -61,7 +62,61 @@ interface TranscriptEntry {
   type?: unknown
   timestamp?: unknown
   sessionId?: unknown
+  version?: unknown
   message?: { content?: unknown }
+}
+
+/**
+ * Re-grade a classified command against the Claude Code version that wrote the transcript, because
+ * several of these breaks were HARNESS behaviour that a later CC fixed (TRDD-ZQQYRYBO I6). Blaming
+ * them on a fixed version tells the user to change a setup that is no longer the cause. An absent
+ * version means an older transcript, so it keeps the old grading. `model` is the most recent
+ * assistant model seen before the command in the same file. Undefined when the command no longer
+ * touches the prefix at all.
+ */
+export function gateByCcVersion(
+  command: string,
+  cls: { kind: CacheRiskKind; mutation: MutationCertainty },
+  version: string | undefined,
+  model: string | undefined,
+): { kind: CacheRiskKind; mutation: MutationCertainty } | undefined {
+  if (!version) return cls
+  const atLeast = (fixed: string): boolean => compareVersions(version, fixed) >= 0
+  const cmd = command.trim().toLowerCase()
+  switch (cls.kind) {
+    // 2.1.273: /login, /upgrade and /extra-usage no longer discard thinking. /upgrade and
+    // /extra-usage keep the account, so nothing is left to break; a re-login may still land on a
+    // different organization, whose cache the old one cannot read, so it stays possible.
+    case 'ACCOUNT_SWITCHED':
+      if (!atLeast('2.1.273')) return cls
+      return cmd === '/upgrade' || cmd === '/extra-usage' ? undefined : { kind: cls.kind, mutation: 'ambiguous' }
+    // 2.1.260: /effort on Fable 5.1 is sent as a per-message change that keeps the cache.
+    case 'EFFORT_CHANGED':
+      return atLeast('2.1.260') && model !== undefined && isFable51(model) ? { kind: cls.kind, mutation: 'ambiguous' } : cls
+    // 2.1.267: tools that arrive mid-session load deferred, and a disconnected server no longer
+    // rewrites the tool list (the last case, tool search off, fixed in 2.1.281).
+    case 'PLUGINS_RELOADED':
+    case 'PLUGIN_CHANGED':
+    case 'MCP_SERVER_TOGGLE':
+      return atLeast('2.1.267') ? { kind: cls.kind, mutation: 'ambiguous' } : cls
+    default:
+      return cls
+  }
+}
+
+/** `claude-fable-5-1`, dated or suffixed, but never a later `claude-fable-5-10`. */
+export function isFable51(model: string): boolean {
+  return /fable-5-1(?:[^0-9]|$)/i.test(model)
+}
+
+/**
+ * The latest `"model":"…"` on a raw transcript line, read without parsing the JSON: the scan
+ * already skips JSON-parsing every line that holds no command, and a substring search keeps it so.
+ */
+function modelOnLine(line: string): string | undefined {
+  let last: string | undefined
+  for (const m of line.matchAll(/"model":"(claude-[^"]+)"/g)) last = m[1]
+  return last
 }
 
 /**
@@ -70,13 +125,15 @@ interface TranscriptEntry {
  * a command would let any transcript that merely QUOTES `<command-name>` (an assistant explaining
  * this very feature, for instance) inflate the count.
  */
-export function extractCacheRiskCommand(entry: TranscriptEntry): CacheRiskCommand | undefined {
+export function extractCacheRiskCommand(entry: TranscriptEntry, model?: string): CacheRiskCommand | undefined {
   if (entry.type !== 'user') return undefined
   const content = entry.message?.content
   if (typeof content !== 'string') return undefined
   const block = parseCommandBlock(content)
   if (!block) return undefined
-  const cls = classifySlashCommand(block.name, block.args)
+  const raw = classifySlashCommand(block.name, block.args)
+  if (!raw) return undefined
+  const cls = gateByCcVersion(block.name, raw, typeof entry.version === 'string' ? entry.version : undefined, model)
   if (!cls) return undefined
   const ts = typeof entry.timestamp === 'string' ? Date.parse(entry.timestamp) : NaN
   if (!Number.isFinite(ts)) return undefined
@@ -136,11 +193,15 @@ export function scanCacheRiskCommands(opts: ScanOptions = {}): CacheRiskCommand[
     let text: string
     try { text = fs.readFileSync(file, 'utf8') } catch { continue }
     if (!text.includes('<command-name>')) continue
+    // The model a command ran under is on the ASSISTANT records around it, never on the command
+    // entry itself; track the latest one seen so far in this file.
+    let lastModel: string | undefined
     for (const line of text.split('\n')) {
+      if (line.includes('"model":"claude-')) lastModel = modelOnLine(line) ?? lastModel
       if (!line.includes('<command-name>')) continue
       let entry: TranscriptEntry
       try { entry = JSON.parse(line) as TranscriptEntry } catch { continue }
-      const cmd = extractCacheRiskCommand(entry)
+      const cmd = extractCacheRiskCommand(entry, lastModel)
       if (!cmd) continue
       if (opts.sinceMs !== undefined && cmd.ts < opts.sinceMs) continue
       if (kinds && !kinds.has(cmd.kind)) continue
