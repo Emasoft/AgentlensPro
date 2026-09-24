@@ -1,9 +1,9 @@
 ---
 trdd-id: 4MJT92J7
 title: alcore reads MCP_PORT from env with parse rules that differ from the TypeScript envPort
-column: todo
+column: superseded
 created: 2026-09-04T16:04:40+0200
-updated: 2026-09-04T17:08:00+0200
+updated: 2026-09-24T08:57:23+0200
 current-owner: main-session
 task-type: bugfix
 project-id: agentlenspro
@@ -16,6 +16,7 @@ npt: []
 eht: []
 blocked-by: []
 related: [VDQ2N8PX, 99HUNXJS, BSDR4TRM, EGGERLEO, 1B98LCVR]
+superseded-by: [VDQ2N8PX]
 ---
 
 # alcore reads MCP_PORT from env, with different parse rules than the TS parser
@@ -253,3 +254,7 @@ is the first task, not a formality — the whole severity of this card depends o
 - The lesson is narrower than "grep more": **a completeness claim inherits the scope of its search,
   and the scope is the part nobody restates.** "No sixth site" read as a claim about the system;
   the evidence was a claim about four directories.
+
+## Approval log
+
+- 2026-09-24T08:57:23+0200 — SUPERSEDED by main-session. Duplicate of TRDD-VDQ2N8PX (both target server_stats.rs:68 MCP_PORT parse, VDQ2N8PX filed earlier and card's own text names VDQ2N8PX the survivor); its two unmigrated pieces (canonical-flag observation, implementation-commits) copied into VDQ2N8PX first (reports/board-triage/20260924_085320+0200-cluster-misc.md).

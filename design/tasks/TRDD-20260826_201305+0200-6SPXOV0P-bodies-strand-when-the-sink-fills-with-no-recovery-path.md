@@ -1,9 +1,9 @@
 ---
 trdd-id: 6SPXOV0P
 title: 307 files remain parked with a ts-row mismatch after the TRDD-8TM7I49X repair
-column: ai_review
+column: human_review
 created: 2026-08-26T20:13:05+0200
-updated: 2026-09-05T07:30:47+0200
+updated: 2026-09-24T08:58:02+0200
 eht: [7NHUU6GK]
 current-owner: main
 task-type: bugfix
@@ -403,3 +403,9 @@ Sizing is the USER's call regardless, and no agent should reclaim space to paper
   above (zero overlap between the two sets). Nothing about that card's closure needs revisiting;
   this card is about the 307 that appeared afterwards, which are a different population.
 - [[TRDD-Z8WJZV8E]] — the sink-status card, whose own premise also needed correcting.
+
+## Approval log
+
+- 2026-09-24T08:57:33+0200 — column → human_review by main-session. AI review verified, evidence in reports/board-triage ai_review-A/B/C triage
+- 2026-09-24T08:57:49+0200 — main-session (board update A): moved ai_review -> human_review; AI review verified per reports/board-triage ai_review-A/B/C triage rows. In this project's mono-agent rule the session moves ai_review->human_review; the owner moves human_review->complete.
+- 2026-09-24T08:58:02+0200 — main-session note: eht: [7NHUU6GK] is at column backburner (not terminal), so this move to human_review does not open the door to complete — the card cannot reach complete until 7NHUU6GK terminates.

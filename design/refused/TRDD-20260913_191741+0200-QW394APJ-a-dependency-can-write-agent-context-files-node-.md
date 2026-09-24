@@ -1,9 +1,9 @@
 ---
 trdd-id: QW394APJ
 title: a dependency can write agent-context files — node_modules/playwright/lib/agents/generateAgents.js
-column: proposal
+column: refused
 created: 2026-09-13T19:17:41+0200
-updated: 2026-09-13T19:17:41+0200
+updated: 2026-09-24T09:00:38+0200
 current-owner: janitor
 task-type: security
 severity: low
@@ -55,3 +55,7 @@ rotates credentials, never force-pushes, never pushes to `main`). It returns one
 path, and closes the ticket with an explicit status.
 
 ## Notes and lessons learned
+
+## Approval log
+
+- 2026-09-24T09:00:38+0200 — REFUSED by main-session. The invocation guard this proposal asks for already exists: scripts/deny-playwright-init-agents.js (.claude/settings.json:9 PreToolUse(Bash) deny), committed 071b8b7b 2026-07-23 -- BEFORE this proposal was filed 2026-09-13. Duplicate-of-existing-control (reports/board-triage/20260924_085313+0200-local-proposals-complete.md).

@@ -1,9 +1,9 @@
 ---
 trdd-id: 9SOYXKNE
 title: alcore does not expose its OTLP request count so the live OTLP request rate cannot be measured
-column: ai_review
+column: human_review
 created: 2026-09-23T20:40:39+0200
-updated: 2026-09-23T22:52:47+0200
+updated: 2026-09-24T08:58:02+0200
 current-owner: main-session
 created-by: main-session
 task-type: feature
@@ -22,6 +22,9 @@ implementation-commits: [221705cb, 26e947da]
 ## Approval log
 
 - 2026-09-23T20:40:39+0200 — MANDATE issued by main-session (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-09-24T08:57:34+0200 — column → human_review by main-session. AI review verified, evidence in reports/board-triage ai_review-A/B/C triage
+- 2026-09-24T08:57:49+0200 — main-session (board update A): moved ai_review -> human_review; AI review verified per reports/board-triage ai_review-A/B/C triage rows. In this project's mono-agent rule the session moves ai_review->human_review; the owner moves human_review->complete.
+- 2026-09-24T08:58:02+0200 — main-session note: this card carries the open owner question on the human_review policy for AI-approved mandate cards (shared with C19SUVPH) — moved to human_review per this batch's instruction; the policy question itself remains for the owner.
 
 ## Body
 

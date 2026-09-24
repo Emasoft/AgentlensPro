@@ -1,9 +1,9 @@
 ---
 trdd-id: HNPT6JRG
 title: The burn-gate treats every StopFailure as a rate-limit stall and blocks fresh agents machine-wide
-column: dev
+column: ai_review
 created: 2026-09-24T08:43:54+0200
-updated: 2026-09-24T08:44:20+0200
+updated: 2026-09-24T08:58:05+0200
 current-owner: emanuelesabetta
 created-by: emanuelesabetta
 task-type: bugfix
@@ -15,6 +15,7 @@ approved: true
 approval-judge: emanuelesabetta
 approval-datetime: 2026-09-24T08:43:54+0200
 related: [0D6QK5CW, 8ENYLEIO]
+implementation-commits: [78e84e7f]
 ---
 
 # The burn-gate treats every StopFailure as a rate-limit stall and blocks fresh agents machine-wide
@@ -22,6 +23,7 @@ related: [0D6QK5CW, 8ENYLEIO]
 ## Approval log
 
 - 2026-09-24T08:43:54+0200 — MANDATE issued by emanuelesabetta (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-09-24T08:58:05+0200 — column → ai_review by main-session. Fix landed and deployed (commit 78e84e7f); follow-up review needed on cold-resume clock scope, agentgate_parity fixture coverage, and integration test gap
 
 ## Defect
 
@@ -33,3 +35,7 @@ rust-core/crates/agentlens-core/src/burn/agent_gate.rs:751 (build_gate_state) to
 - [ ] (b) a rate-limit-class StopFailure still does (newest wins)
 - [ ] (c) unit tests pin both, and fail with the filter removed
 - [ ] (d) clippy on agentlens-core with -D warnings is clean
+
+## Deployment and follow-ups
+
+Deployed 2026-09-24 (alcore pid 10262); lean-worker launches confirmed allowed again right after. The only StopFailures on record for this session are model_not_found (7), authentication_failed (2), invalid_request (1) — none rate-limit-class; the regex rate.?limit matches the CC enum value rate_limit, so the calibrator's classifier and the fix's filter agree on these. Open follow-ups raised in review, not yet actioned: the cold-resume stall clock is still machine-wide, not per-account; agentgate_parity's fixture carries no non-rate-limit StopFailure case, so the TS and Rust gates can still diverge outside what that fixture covers; there is no integration test exercising build_gate_state end to end.

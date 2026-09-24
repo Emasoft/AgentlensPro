@@ -1,9 +1,9 @@
 ---
 trdd-id: 2CYTNLY1
 title: Delete the review gate's dead breakers and give the supervisor the gate's work definition
-column: ai_review
+column: human_review
 created: 2026-09-09T14:38:59+0200
-updated: 2026-09-23T13:23:32+0200
+updated: 2026-09-24T08:57:50+0200
 current-owner: main
 task-type: refactor
 priority: medium
@@ -192,6 +192,8 @@ verified against the live source, not restated from memory.
   honour only the FILE half of the global kill switch and ignore `AGENTLENS_DISABLED=1`, the way
   it already ignores its own `AGENTLENS_REVIEW_FORK=off`? Until answered the gate keeps honouring
   both halves, now with a stderr line on that return.
+- 2026-09-24T08:57:33+0200 — column → human_review by main-session. AI review verified, evidence in reports/board-triage ai_review-A/B/C triage
+- 2026-09-24T08:57:49+0200 — main-session (board update A): moved ai_review -> human_review; AI review verified per reports/board-triage ai_review-A/B/C triage rows. In this project's mono-agent rule the session moves ai_review->human_review; the owner moves human_review->complete.
 
 ## Notes and lessons learned
 

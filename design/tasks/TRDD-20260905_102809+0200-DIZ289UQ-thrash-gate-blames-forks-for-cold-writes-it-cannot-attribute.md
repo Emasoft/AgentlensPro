@@ -1,9 +1,9 @@
 ---
 trdd-id: DIZ289UQ
 title: The burn-gate blames review forks for cache thrash it cannot attribute
-column: ai_review
+column: human_review
 created: 2026-09-05T10:28:09+0200
-updated: 2026-09-05T17:00:37+0200
+updated: 2026-09-24T08:58:02+0200
 current-owner: main-session
 task-type: bugfix
 priority: high
@@ -240,6 +240,9 @@ tripped the detector belong to something else entirely and the ledger names it.
   asked to add `7659b9ca` to `implementation-commits`; declined — its only hunk in this card's files
   is a three-line comment in `bodies_activity.rs` (tagged, not code), so `[3979a57d]` stands and the
   comment commit is named here instead. Card stays `ai_review` for the human_review move.
+- 2026-09-24T08:57:35+0200 — column → human_review by main-session. AI review verified, evidence in reports/board-triage ai_review-A/B/C triage
+- 2026-09-24T08:57:49+0200 — main-session (board update A): moved ai_review -> human_review; AI review verified per reports/board-triage ai_review-A/B/C triage rows. In this project's mono-agent rule the session moves ai_review->human_review; the owner moves human_review->complete.
+- 2026-09-24T08:58:02+0200 — main-session note: acceptance boxes 1-3 are open by disclosed substitution (weak request/response pairing by mtime window instead of exact matching; TTL-tier substitutes for the request-shape discriminator the box literally names) and need the owner's judgment on whether to accept the substitutions or demand the stronger checks.
 
 ## AI review verdict — run: 2026-09-05T16:57:11+0200
 

@@ -1,9 +1,9 @@
 ---
 trdd-id: U0L78B3Z
 title: Nothing computes CAPTURE DOWN since the TS server was retired so the liveness clock ticks unread
-column: ai_review
+column: human_review
 created: 2026-09-05T07:18:10+0200
-updated: 2026-09-05T16:43:02+0200
+updated: 2026-09-24T08:57:54+0200
 current-owner: main-session
 task-type: bugfix
 priority: high
@@ -268,6 +268,8 @@ spool sat 100% full for ~18h and 117 request bodies were written as ZERO BYTES.
   no rebuild). The review had routed those two fixes to human_review ("recommend the human reviewer
   ask for both"); applying them at `ai_review` pre-empted that routing — an orchestrator call,
   vetoable by reverting `95fec703`'s comment hunk. Card stays `ai_review` for the human_review move.
+- 2026-09-24T08:57:37+0200 — column → human_review by main-session. AI review verified, evidence in reports/board-triage ai_review-A/B/C triage
+- 2026-09-24T08:57:49+0200 — main-session (board update A): moved ai_review -> human_review; AI review verified per reports/board-triage ai_review-A/B/C triage rows. In this project's mono-agent rule the session moves ai_review->human_review; the owner moves human_review->complete.
 
 ## Notes and lessons learned
 

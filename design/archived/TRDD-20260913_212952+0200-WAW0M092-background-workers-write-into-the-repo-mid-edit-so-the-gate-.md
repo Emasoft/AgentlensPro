@@ -1,9 +1,9 @@
 ---
 trdd-id: WAW0M092
 title: Worker writes arm the main gate as the coordinator's own — and scratch-path landing is NOT the root-cause fix
-column: todo
+column: superseded
 created: 2026-09-13T21:29:52+0200
-updated: 2026-09-13T22:39:04+0200
+updated: 2026-09-24T08:56:37+0200
 current-owner: emanuelesabetta
 created-by: emanuelesabetta
 task-type: refactor
@@ -15,6 +15,7 @@ approved: true
 approval-judge: emanuelesabetta
 approval-datetime: 2026-09-13T21:29:52+0200
 priority: medium
+superseded-by: [A37YM37G]
 ---
 
 # Background workers write into the repo mid-edit so the gate arms on files nobody has finished writing
@@ -55,6 +56,7 @@ The prompt dispatching one of these workers contained the text ROLE + colon + ME
 ## Approval log
 
 - 2026-09-13T21:29:52+0200 — MANDATE issued by emanuelesabetta (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-09-24T08:56:37+0200 — SUPERSEDED by main-session. Gen-2 mtime disk-effects mechanism (reviewGateEffects.ts) deleted by commit 268f3080 / TRDD-A37YM37G 2026-09-15; card describes a mechanism that no longer exists (reports/board-triage/20260924_083538+0200-cluster-review-gate.md).
 
 ## AMENDMENT 2026-09-13 — the body above inverts the causal claim
 

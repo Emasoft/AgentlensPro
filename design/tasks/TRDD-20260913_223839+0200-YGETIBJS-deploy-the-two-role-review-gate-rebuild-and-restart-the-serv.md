@@ -3,7 +3,7 @@ trdd-id: YGETIBJS
 title: Deploy the two-role review gate — rebuild and restart the server
 column: blocked
 created: 2026-09-13T22:38:39+0200
-updated: 2026-09-14T08:45:32+0200
+updated: 2026-09-24T09:01:59+0200
 current-owner: emanuelesabetta
 created-by: emanuelesabetta
 task-type: infra
@@ -14,8 +14,8 @@ mandated-by: none
 approved: true
 approval-judge: emanuelesabetta
 approval-datetime: 2026-09-13T22:38:39+0200
-blocked-by: [40M4UPK3]
-unblock-when: [trdd:40M4UPK3]
+blocked-by: [40M4UPK3, BA0DCW98]
+unblock-when: [trdd:40M4UPK3, trdd:BA0DCW98]
 pre-block-column: todo
 blocker-probe: [trddgrep, why, YGETIBJS]
 blocker-holds-if: not-match:READY
@@ -55,3 +55,4 @@ NOTE on what this card does and does not do: it ENFORCES NOTHING, because no bui
 ## Hold repointed 2026-09-14
 
 The three blockers 1YXR6S47, 4J1QA18G and BA0DCW98 are superseded by TRDD-40M4UPK3, whose redesign deletes their code paths; the hold now waits on 40M4UPK3 so superseding them cannot release the deploy early.
+2026-09-24T09:01:00+0200 — CORRECTION: this note's per-card accuracy was only 2/3 right. TRDD-1YXR6S47 shipped via TRDD-A37YM37G (commit 204ae7fb, 2026-09-15T18:25), independent of and BEFORE TRDD-40M4UPK3 was even filed (08:38 the same day) — not superseded by 40M4UPK3. TRDD-4J1QA18G — accurate, but the mechanism (reviewGateEffects.ts) was deleted by commit 268f3080, also under TRDD-A37YM37G, not by 40M4UPK3. TRDD-BA0DCW98 was a live, unfixed defect in the currently-DEPLOYED gate (declaredRole matching the marker anywhere, not just the first line) — not touched by 40M4UPK3 at all, and not a mere 'undeployed code' gap; it is being fixed today (src/cli/reviewGate.ts, src/test/reviewGate.test.ts, uncommitted this session). Added BA0DCW98 to blocked-by/unblock-when below (reports/board-triage/20260924_083538+0200-cluster-review-gate.md).

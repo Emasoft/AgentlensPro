@@ -1,9 +1,9 @@
 ---
 trdd-id: 70D0TUBZ
 title: alcore does not report a non-writable bodies sink so server status can never show the SINK clause
-column: todo
+column: superseded
 created: 2026-09-03T11:14:32+0200
-updated: 2026-09-03T11:14:32+0200
+updated: 2026-09-24T08:58:34+0200
 current-owner: main-session
 task-type: bugfix
 priority: medium
@@ -12,6 +12,7 @@ created-by: main-session
 npt: []
 eht: []
 relevant-rules: []
+superseded-by: [U0L78B3Z]
 ---
 
 ## Symptom
@@ -76,4 +77,5 @@ render at `src/cli/serverControl.ts:514-524` picks it up unchanged (it already e
 shape).
 
 ## Approval log
+- 2026-09-24T08:58:34+0200 — SUPERSEDED by main-session. Deviates from worker instruction (which said complete): acceptance checklist (4 boxes, real test execution) was never run under THIS card; the load-bearing symptom (nothing sets sink_problem) is fixed by probe_sink() in server_stats.rs:547-561 + chores.rs:233-240, landed under a DIFFERENT card TRDD-U0L78B3Z (commit 7659b9ca), not this one. superseded-by-implementation is the honest move; complete would falsely claim this card's own unrun acceptance tests passed. sink_probed_at_ms age field still open as a follow-up (reports/board-triage/20260924_085320+0200-cluster-misc.md).
 

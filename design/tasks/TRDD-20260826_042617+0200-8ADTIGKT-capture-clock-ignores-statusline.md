@@ -1,9 +1,9 @@
 ---
 trdd-id: 8ADTIGKT
 title: The capture-liveness clock ignores statusline samples so a statusline-only machine never raises CAPTURE DOWN
-column: ai_review
+column: human_review
 created: 2026-08-26T04:26:17+0200
-updated: 2026-09-05T07:18:10+0200
+updated: 2026-09-24T08:57:51+0200
 current-owner: AgentlensPro session
 task-type: bugfix
 severity: LOW
@@ -79,3 +79,8 @@ against the diff rather than against the card's prose.
       hook-events (TRDD-8ADTIGKT)`, reading the clock via a new debug endpoint
       `GET /api/debug/capture-activity`; `npx mocha
       out/test/test/serverEndpoints.test.js --grep TRDD-8ADTIGKT` → 1 passing.
+
+## Approval log
+
+- 2026-09-24T08:57:34+0200 — column → human_review by main-session. AI review verified, evidence in reports/board-triage ai_review-A/B/C triage
+- 2026-09-24T08:57:49+0200 — main-session (board update A): moved ai_review -> human_review; AI review verified per reports/board-triage ai_review-A/B/C triage rows. In this project's mono-agent rule the session moves ai_review->human_review; the owner moves human_review->complete.

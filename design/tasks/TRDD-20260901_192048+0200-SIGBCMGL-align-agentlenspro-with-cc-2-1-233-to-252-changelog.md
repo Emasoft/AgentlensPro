@@ -1,9 +1,9 @@
 ---
 trdd-id: SIGBCMGL
 title: Align agentlenspro taxonomies and diagnostics with Claude Code 2.1.233→2.1.252
-column: ai_review
+column: human_review
 created: 2026-09-01T19:20:48+0200
-updated: 2026-09-05T15:33:19+0200
+updated: 2026-09-24T08:57:54+0200
 current-owner: agentlenspro-15
 task-type: feature
 implementation-commits: [2d06942b, 46576993]
@@ -92,6 +92,8 @@ Done this session (commits named below); remaining boxes are docs/design work, n
   is not ownership). Human-review reader: the
   check-types/esbuild box is UNVERIFIED (test run deferred) and the "2535 passing / 1 failing" count
   has no saved run artifact — judge those two as the author's claims.
+- 2026-09-24T08:57:37+0200 — column → human_review by main-session. AI review verified, evidence in reports/board-triage ai_review-A/B/C triage
+- 2026-09-24T08:57:49+0200 — main-session (board update A): moved ai_review -> human_review; AI review verified per reports/board-triage ai_review-A/B/C triage rows. In this project's mono-agent rule the session moves ai_review->human_review; the owner moves human_review->complete.
 
 ## AI review verdict — run: 2026-09-05T15:26:20+0200
 

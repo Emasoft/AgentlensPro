@@ -3,7 +3,7 @@ trdd-id: 5JZQFVO8
 title: The collector crash-loops at boot because the card store 256 MB DuckDB pool overflows during the boot sweep upsert
 column: dev
 created: 2026-09-08T22:41:53+0200
-updated: 2026-09-23T06:01:17+0200
+updated: 2026-09-24T08:58:47+0200
 current-owner: main
 task-type: bugfix
 min-approval-requirement: none
@@ -135,12 +135,12 @@ exits — repeating on every subsequent hook fire.
 
 ## Acceptance
 
-- [ ] Root-cause report read from `reports/card-store-oom/`.
-- [ ] A minimal fix proposed (bounded batch/commit sizing in the boot sweep, or a spilling
+- [x] Root-cause report read from `reports/card-store-oom/`.
+- [x] A minimal fix proposed (bounded batch/commit sizing in the boot sweep, or a spilling
       DuckDB config) — NOT a raised `memory_limit`.
-- [ ] Fix passes adversarial review (per `~/.claude/rules/propose-then-review-then-implement.md`)
+- [x] Fix passes adversarial review (per `~/.claude/rules/propose-then-review-then-implement.md`)
       before implementation.
-- [ ] A hook-revive boot against the real `~/.agentlens` store completes the boot sweep without
+- [x] A hook-revive boot against the real `~/.agentlens` store completes the boot sweep without
       an OOM panic.
 - [ ] `cargo test --workspace` (excluding known-hanging `tldr coupling` per project memory)
       passes on the affected crate.
@@ -152,3 +152,7 @@ exits — repeating on every subsequent hook fire.
 
 Installed 2026-09-23 00:32 with a rollback copy (alcore.pre-5JZQFVO8) kept and intact. Since install: 0 OOM messages, 0 panics logged. One RSS-HARD-CAP exit occurred during the one-time cold-read backlog drain immediately after install, then the process (pid 15629) ran 12 minutes stable with no further cap exit -- RSS oscillated 1.6-2.55 GB (ps rss, not phys_footprint) with no plateau and no climb to the cap. Restore completes: cold-read backlog dropped from 2,219 invalid/rotated entries (pre-fix) to 0 (this boot), restored 31165 session cards. Two distinct binaries confirmed by sha256 (rollback vs deployed), confirming a real rebuild was deployed. Memory behavior is now tracked on TRDD-WKLD508O, not here. The deploy proceeded WITHOUT the TRDD-81BW1CS9 decision (recover-vs-abandon pid 68584's diverted capture) being made -- pid 68584 was already absent from the pre-deploy process snapshot, so the kill step in this card's own deploy sequence (step 5) had nothing to act on and the 81BW1CS9 blocker resolved itself by the squatter no longer existing. Full report: reports/deploy/20260923_054307+0200-5JZQFVO8-deploy-and-memory.md
 Status caveat: this is an interim finding, not a completion. `trddgrep move 5JZQFVO8 live` was attempted and REFUSED by the tool (5 of 5 acceptance boxes still unchecked -- 'would be a false completion'); column stays `dev` and no acceptance box was ticked.
+
+## Board-triage note 2026-09-24
+
+Ticked boxes 1-4: (1) reports/card-store-oom/20260908_224702+0200-boot-sweep-oom-root-cause.md exists and was read per this card's own STATE trail; (2) RESTORE_CHUNK=2000 commit-batching in log_reader.rs (commit 86acd104) is the minimal bounded batch/commit fix, not a raised memory_limit; (3) STATE records adversarial review on 2026-09-08 and 2026-09-09 (accepted with amendments); (4) the 2026-09-23 Deploy result on this card reports a real hook-revive boot against the actual ~/.agentlens store completing with 0 OOM messages and 0 panics. Box 5 LEFT UNTICKED: this card's own STATE cites only cargo test card_store (11 passed, 188.79s), not cargo test --workspace as the acceptance item requires — that full run has not been evidenced. Since not every box is ticked, column stays dev per RULE 1 board-triage worker instruction (move gated on all boxes ticked).

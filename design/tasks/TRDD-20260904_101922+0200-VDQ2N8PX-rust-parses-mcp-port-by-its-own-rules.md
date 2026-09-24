@@ -3,7 +3,7 @@ trdd-id: VDQ2N8PX
 title: Rust parses MCP_PORT by its own rules so the server and the CLI can still disagree
 column: todo
 created: 2026-09-04T10:19:22+0200
-updated: 2026-09-04T17:05:00+0200
+updated: 2026-09-24T08:57:06+0200
 related: [4MJT92J7, 99HUNXJS, EGGERLEO, Q9WD3K5R, 1B98LCVR]
 current-owner: main-session
 task-type: bugfix
@@ -16,7 +16,7 @@ severity: low
 relevant-rules: []
 npt: []
 eht: []
-implementation-commits: []
+implementation-commits: [c17ef591, 0f1e9433]
 external-refs: []
 ---
 
@@ -145,3 +145,4 @@ one TRDD-Q9WD3K5R names about a two-language repo. Options, cheapest first:
   `envPort` cannot see a site that never calls it, and a grep over `src`/`standalone` cannot see
   Rust at all.
 - [[TRDD-EGGERLEO]] — the `'3e3'`/`0x1F80` strictness question on the TS side.
+2026-09-24T08:56:26+0200 — migrated from superseded TRDD-4MJT92J7 (duplicate, same server_stats.rs:68 target, filed 16:04:40 same day, this card is the survivor): (a) server_stats.rs:575 canonical-flag observation (st.ports.otlp == 4318); (b) implementation-commits c17ef591/0f1e9433 are the already-landed freePort.ts doc-comment fix for this port-parsing defect class (TS side; the Rust-side '>0' filter at server_stats.rs:68 remains the open WORK-S item on this card).

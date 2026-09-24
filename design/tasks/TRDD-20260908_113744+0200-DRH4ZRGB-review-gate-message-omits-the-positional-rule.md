@@ -3,7 +3,7 @@ trdd-id: DRH4ZRGB
 title: The review-gate block message omits the positional rule its own instruction violates
 column: testing
 created: 2026-09-08T11:37:44+0200
-updated: 2026-09-10T19:30:16+0200
+updated: 2026-09-24T08:57:20+0200
 current-owner: main-session
 task-type: bugfix
 scope: project
@@ -291,3 +291,7 @@ against a guard whose own text says the caps may only go DOWN. Someone added ope
 live regression, discovered here and left in place; it needs its own card, not a paragraph in a
 commit body, or the next commit inherits "compile fails, unrelated" without re-deriving it.
 Carded as TRDD-4BZPAQWM.
+
+## Correction 2026-09-24
+
+Commit 847dc5c4 endorses column testing (accurate — the message work is done), but does not resolve the card's own "DO NOT CLOSE THIS CARD YET" split checklist: two of its three rows are still undone (the §The passing shape exists wikimem page has not been written; §The loop, and who drives it has not been folded into LOCAL card T2N1GOZ2). eht 7FA3NIXU is still column: backburner, so this card cannot reach complete regardless. Recorded per RULE 1 board-triage worker instruction so the next reader does not close this card prematurely.

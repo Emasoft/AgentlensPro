@@ -3,7 +3,7 @@ trdd-id: WKLD508O
 title: alcore exits with a culprit log rather than exceed a 2 GB memory cap
 column: dev
 created: 2026-09-07T19:36:46+0200
-updated: 2026-09-08T22:53:00+0200
+updated: 2026-09-24T08:58:31+0200
 current-owner: main
 task-type: feature
 parent-trdd: 7YPQWKPG
@@ -748,3 +748,7 @@ macOS, RSS on Linux, and the log line names which one it measured.
 - Landing this REMOVES nothing, but TRDD-KBM09XHB later deletes `apply_memory_pressure` along
   with `SpanWindow`. This card must land first or that change leaves a window with no memory
   protection at all.
+
+## Board-triage note 2026-09-24
+
+This card's ## Acceptance section is a plain numbered list (1.-4.), not markdown checkboxes (- [ ]), so trddgrep check-box has nothing to tick — recorded here per RULE 1 board-triage worker instruction rather than rewritten, since rewriting the Acceptance section into checkbox form is a content edit outside this worker's scope. Evidence per reports/board-triage/20260924_085040+0200-cluster-heap-perf.md: the guard is live and firing correctly — 200 logged RSS-HARD-CAP exits in ~/.agentlens/rss-hard-cap.log, each with a region/counter breakdown and the log flushed before exit, matching acceptance items 1-3 verbatim (deterministic non-zero exit past a low cap; log written+flushed+fsynced before exit; region/zone breakdown, not just aggregates). Item 4 (tick interval stated, and a tick is a detector not a guarantee) is not independently confirmed by that report — left unverified here. No code change indicated. NOT moving the column: the instruction conditions a move on every acceptance box being ticked, and none can be ticked in this card's current (non-checkbox) format.

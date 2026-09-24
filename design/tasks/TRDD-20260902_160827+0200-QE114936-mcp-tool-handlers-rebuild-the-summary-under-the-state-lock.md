@@ -1,9 +1,9 @@
 ---
 trdd-id: QE114936
 title: Twenty MCP tool handlers still rebuild the session summary under the state lock
-column: ai_review
+column: human_review
 created: 2026-09-02T16:08:27+0200
-updated: 2026-09-05T18:05:29+0200
+updated: 2026-09-24T08:57:54+0200
 current-owner: main-session
 task-type: bugfix
 priority: high
@@ -41,6 +41,8 @@ is what settles that.
   STATE block, not under box 3, while MVR6PXC0's box "QE114936's box 3 note updated to point here"
   had been declared met from here. Fixed in one commit: the note now sits under box 3, and MVR6PXC0's
   box is ticked in its own file.
+- 2026-09-24T08:57:37+0200 — column → human_review by main-session. AI review verified, evidence in reports/board-triage ai_review-A/B/C triage
+- 2026-09-24T08:57:49+0200 — main-session (board update A): moved ai_review -> human_review; AI review verified per reports/board-triage ai_review-A/B/C triage rows. In this project's mono-agent rule the session moves ai_review->human_review; the owner moves human_review->complete.
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-05T12:33:51+0200
 

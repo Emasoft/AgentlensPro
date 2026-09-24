@@ -1,9 +1,9 @@
 ---
 trdd-id: MVR6PXC0
 title: Three MCP tool handlers hold the state lock for one to four seconds inside their per-candidate resolve_session_card closure
-column: ai_review
+column: human_review
 created: 2026-09-05T12:33:51+0200
-updated: 2026-09-23T12:57:21+0200
+updated: 2026-09-24T08:57:53+0200
 current-owner: main-session
 task-type: bugfix
 priority: high
@@ -151,6 +151,8 @@ three tools.
   the orchestrator's — USER may veto by demanding a single-run (non-composed) full suite including
   doctests. Review fork on `3b9018e0`: nothing blocking; its two verified findings (deploy preceded
   the gate; `POST /api/clear` is the only eviction path) are in the STATE block.
+- 2026-09-24T08:57:36+0200 — column → human_review by main-session. AI review verified, evidence in reports/board-triage ai_review-A/B/C triage
+- 2026-09-24T08:57:49+0200 — main-session (board update A): moved ai_review -> human_review; AI review verified per reports/board-triage ai_review-A/B/C triage rows. In this project's mono-agent rule the session moves ai_review->human_review; the owner moves human_review->complete.
 
 ## ⏵ AI-REVIEW VERDICT 2026-09-23T12:55:59+0200 — APPROVE
 

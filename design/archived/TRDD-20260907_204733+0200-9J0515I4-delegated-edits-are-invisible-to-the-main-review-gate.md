@@ -1,14 +1,15 @@
 ---
 trdd-id: 9J0515I4
 title: A delegated edit is invisible to the main review gate
-column: todo
+column: superseded
 created: 2026-09-07T20:47:33+0200
-updated: 2026-09-07T20:47:33+0200
+updated: 2026-09-24T08:56:37+0200
 current-owner: main-session
 task-type: bugfix
 min-approval-requirement: none
 project-id: agentlenspro
 relevant-rules: []
+superseded-by: [A37YM37G]
 ---
 
 # A delegated edit is invisible to the main review gate
@@ -88,3 +89,7 @@ a latent inconsistency and belongs in whichever change touches this branch.
 Found while acting on the review-fork findings for commits `6610fba5`..`c904a00a`
 (2026-09-07). Two independent reviews advised carding this one gap rather than accumulating
 more. The hole predates the whole 2026-09-07 chain — `6610fba5` did not create it.
+
+## Approval log
+
+- 2026-09-24T08:56:37+0200 — SUPERSEDED by main-session. Gen-2 mtime disk-effects mechanism (reviewGateEffects.ts) deleted by commit 268f3080 / TRDD-A37YM37G 2026-09-15; card describes a mechanism that no longer exists (reports/board-triage/20260924_083538+0200-cluster-review-gate.md).

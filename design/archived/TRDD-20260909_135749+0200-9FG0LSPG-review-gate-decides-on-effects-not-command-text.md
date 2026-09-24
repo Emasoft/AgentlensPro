@@ -1,9 +1,9 @@
 ---
 trdd-id: 9FG0LSPG
 title: The review gate must decide on effects newer than the last fork, not on command text
-column: dev
+column: superseded
 created: 2026-09-09T13:57:49+0200
-updated: 2026-09-10T04:01:36+0200
+updated: 2026-09-24T08:56:36+0200
 current-owner: main
 task-type: bugfix
 priority: critical
@@ -17,6 +17,7 @@ blocked-by: []
 npt: []
 eht: [2CYTNLY1, 3U8AIHXK]
 implementation-commits: [208994b8]
+superseded-by: [A37YM37G]
 ---
 
 # The review gate must decide on effects newer than the last fork, not on command text
@@ -230,3 +231,7 @@ Read in full 2026-09-09: `src/cli/reviewGate.ts`, `reviewGateTriggers.ts`, `revi
 ## Notes and lessons learned
 
 - (none yet)
+
+## Approval log
+
+- 2026-09-24T08:56:36+0200 — SUPERSEDED by main-session. Gen-2 mtime disk-effects mechanism (reviewGateEffects.ts) deleted by commit 268f3080 / TRDD-A37YM37G 2026-09-15; card describes a mechanism that no longer exists (reports/board-triage/20260924_083538+0200-cluster-review-gate.md).

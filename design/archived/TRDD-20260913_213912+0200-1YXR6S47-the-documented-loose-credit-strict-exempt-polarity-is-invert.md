@@ -1,9 +1,9 @@
 ---
 trdd-id: 1YXR6S47
 title: The documented loose-credit strict-exempt polarity is inverted on the security axis
-column: todo
+column: complete
 created: 2026-09-13T21:39:12+0200
-updated: 2026-09-13T21:43:29+0200
+updated: 2026-09-24T09:00:27+0200
 current-owner: emanuelesabetta
 created-by: emanuelesabetta
 task-type: security
@@ -45,15 +45,16 @@ Verified: the supervisor calls noteRole(resultRole(resultText(b.content))). Cred
 The strict form uses whitespace-star before the end anchor. Whitespace matches newline and the end anchor matches before a line terminator under the multiline flag, but backtracking makes trailing next-line text harmless — the match lands at the original line end. So STRICT MEANS WHOLE-LINE, NOT ISOLATED. It guarantees only that nothing but whitespace follows on that line. A bare marker line buried at line 400 of a pasted document exempts exactly as well as one written deliberately. The anchor does not mitigate the carded injection hazard.
 
 ## Acceptance
-- [ ] Correct the source comment and any commit message repeating the inverted rationale. The honest statement: exemption is narrower in PRECONDITION but crediting is worse in CONSEQUENCE, and loose matching is the higher-risk half.
-- [ ] Decide whether crediting should also be whole-line anchored. Ranking says yes; the cost is that a trailing space silently uncredits an honest reviewer, which is the wedge in finding 2.
-- [ ] Test: a prompt line beginning with a role marker followed by ordinary prose must not credit.
-- [ ] Test: both markers present must not permanently block an honest reviewer.
-- [ ] Re-examine crediting from result text given finding 3.
+- [x] Correct the source comment and any commit message repeating the inverted rationale. The honest statement: exemption is narrower in PRECONDITION but crediting is worse in CONSEQUENCE, and loose matching is the higher-risk half.
+- [x] Decide whether crediting should also be whole-line anchored. Ranking says yes; the cost is that a trailing space silently uncredits an honest reviewer, which is the wedge in finding 2.
+- [x] Test: a prompt line beginning with a role marker followed by ordinary prose must not credit.
+- [x] Test: both markers present must not permanently block an honest reviewer.
+- [x] Re-examine crediting from result text given finding 3.
 
 ## Approval log
 
 - 2026-09-13T21:39:12+0200 — MANDATE issued by emanuelesabetta (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-09-24T09:00:27+0200 — COMPLETE by main-session. Card's own DECISION 2026-09-13 fully specifies trim-then-exact-compare, whole-line, both-or-neither->null. declaredRole() (reviewGate.ts:79-...) implements this, now with TRDD-BA0DCW98's first-line anchoring too; tests at reviewGate.test.ts:221-257 cover boxes 3-4. Box 5 (result text) re-examined: Gen-3 deployed supervisor credits only from spawn prompt (no result-text crediting live); Gen-4 (TRDD-40M4UPK3, reviewLoop.ts) reintroduces it bound to the spawn's own tool_use_id, closing the collapse. YGETIBJS's 'superseded by 40M4UPK3' note for this card is factually wrong (this shipped via A37YM37G, independent of and before 40M4UPK3) — corrected there separately (reports/board-triage/20260924_083538+0200-cluster-review-gate.md).
 
 ## DECISION 2026-09-13 — the fix to ship
 
@@ -68,3 +69,4 @@ KEEP the both-or-neither null rule; 'first non-null wins' is a regression. Resol
 CONSEQUENCE: once crediting is whole-line exact, the two predicates become genuinely IDENTICAL and one function is correct. The do-not-unify comment must be DELETED in the same change. Leaving a comment that contradicts the code is worse than either option.
 REJECTED — resultRole restricted to the first line. Dead on arrival: the harness fork boilerplate instructs the agent to open with one line restating its task, and every fork in this session complied (they open with 'Task:' or 'Reviewing'). First-line-only would credit NONE of them, and since release needs both roles that is the permanent wedge arriving by design rather than by attack. Ship whole-line-exact over the WHOLE result text instead — already far narrower than 'anywhere within', since a quoted marker must occupy an entire line alone. Bound it to the first N lines only after MEASURING where the marker actually lands.
 VERIFIED no regress risk in the exemption tightening: every input matching the current strict regex (no leading whitespace, marker, trailing whitespace only) still matches under trimEnd-exact. Checked specifically — zero-width U+200B is in neither the whitespace class nor trim's set so fails both; U+FEFF is in both so matches both; a trailing comment fails both; CRLF is handled by both. No agent becomes permanently gated.
+2026-09-24T08:56:26+0200 — box 5 re-examined (reviewGate.ts:343 resultText, reviewSupervisor.ts:86 noteRole): the DEPLOYED Gen-3 supervisor credits ONLY from the spawn PROMPT (declaredRole(b.input.prompt)); it does not call resultText/resultRole for crediting at all, so finding 3's collapse is currently moot in production. TRDD-40M4UPK3's in-progress Gen-4 (src/cli/reviewLoop.ts:451, resultRole(resultText(b.content))) reintroduces result-text crediting but binds it to the spawn's OWN tool_use_id (gated: 'a Read/Bash tool_result that merely QUOTES a heading ... must never confer credit'), closing the one-spawn-plus-one-crafted-result collapse this box worried about. Boxes 1-4 verified done in the current (uncommitted) src/cli/reviewGate.ts: single unified declaredRole() (TRDD-BA0DCW98, first-line-anchored), tests at src/test/reviewGate.test.ts:240-257 cover both the prose-after-marker miss and the both-or-neither non-wedge case.

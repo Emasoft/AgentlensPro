@@ -1,9 +1,9 @@
 ---
 trdd-id: XI3UZUTK
 title: Five P5 window auto-calibration tests fail because the real-boot ingest path stores zero spans
-column: todo
+column: superseded
 created: 2026-09-13T20:59:19+0200
-updated: 2026-09-13T21:08:06+0200
+updated: 2026-09-24T08:57:20+0200
 current-owner: emanuelesabetta
 created-by: emanuelesabetta
 task-type: bugfix
@@ -15,6 +15,7 @@ approved: true
 approval-judge: emanuelesabetta
 approval-datetime: 2026-09-13T20:59:19+0200
 priority: high
+superseded-by: [CS2W7E77]
 ---
 
 # Five P5 window auto-calibration tests fail because the real-boot ingest path stores zero spans
@@ -45,3 +46,4 @@ Priority raised to high: a red suite outranks ordinary backlog, because it means
 ## Approval log
 
 - 2026-09-13T20:59:19+0200 — MANDATE issued by emanuelesabetta (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-09-24T08:57:20+0200 — SUPERSEDED by main-session. Duplicate of TRDD-CS2W7E77: same 5 P5 window-auto-calibration failures, same suite, filed 9 days later with less investigative depth; its one new fact (file-watching-fallback log line) migrated into CS2W7E77's Notes first (reports/board-triage/20260924_085116+0200-cluster-test-hygiene.md).

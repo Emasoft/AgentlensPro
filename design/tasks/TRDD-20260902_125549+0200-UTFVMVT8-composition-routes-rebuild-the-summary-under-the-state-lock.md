@@ -1,9 +1,9 @@
 ---
 trdd-id: UTFVMVT8
 title: The composition routes hold the state lock for seconds at ui.rs:560 and the dominant statement is not yet isolated
-column: ai_review
+column: human_review
 created: 2026-09-02T12:55:49+0200
-updated: 2026-09-23T12:57:34+0200
+updated: 2026-09-24T08:57:55+0200
 current-owner: main-session
 task-type: bugfix
 priority: high
@@ -294,3 +294,8 @@ Box 3 (15-min post-deploy read, no >=1000ms holds) — met. Evidence: STATE bloc
 Box 4 (young-session probe) — met. Evidence: reports/utfvmvt8/20260905_215049+0200-box4-young-session-probe.md — project starts unknown, resolves after the next rebuild (91s), then appears in a scoped query_context_blocks result; box was correctly reopened once by its own author after a self-caught overclaim, then closed on a session with callsTotal>0.
 Findings: no blocking findings. Staleness trade-off (up to ~2 rebuild durations, a very young session silently omitted from a scoped query until the next rebuild) is explicitly documented and bounded, not silently accepted.
 Ready for human_review; the owner makes that move. Full report: reports/ai-review/20260923_125559+0200-batch-B.md
+
+## Approval log
+
+- 2026-09-24T08:57:38+0200 — column → human_review by main-session. AI review verified, evidence in reports/board-triage ai_review-A/B/C triage
+- 2026-09-24T08:57:49+0200 — main-session (board update A): moved ai_review -> human_review; AI review verified per reports/board-triage ai_review-A/B/C triage rows. In this project's mono-agent rule the session moves ai_review->human_review; the owner moves human_review->complete.

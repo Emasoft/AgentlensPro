@@ -3,7 +3,7 @@ trdd-id: X8MW8K92
 title: A PreToolUse delegate gate so a Fable main session cannot edit — it plans, Sonnet workers execute
 column: dev
 created: 2026-09-10T14:33:51+0200
-updated: 2026-09-10T19:30:16+0200
+updated: 2026-09-24T08:57:01+0200
 current-owner: main
 task-type: infra
 min-approval-requirement: none
@@ -109,3 +109,7 @@ unregistered) depends on that peer handover, which the peer has committed to.
 
 - 2026-09-10T18:54:37+0200 — OPEN (owner decision): gate `opus` too? The order names Fable, so the gate matches /fable|mythos/i only; the peer's python gate also gated opus. Not decided silently — owner's word.
 - 2026-09-10T19:20:54+0200 — REJECTED review finding, disclosed: gh/git commands stay EXEMPT from the delegate gate (per ~/.claude/rules/proactive-delegation.md: git tracking stays in the main context); the owner may overrule. gh: exempt per `~/.claude/rules/fable-plans-sonnet-executes.md` §Enforcement ("git/gh are exempt"); outward gh posts remain gated by `scripts/deny-identity-leak-to-github.js`.
+
+## Correction 2026-09-24
+
+Commit 4abf1b39's message is wrong in three places: (1) the OLD NEXT ACTION already pointed at §Acceptance row 4, which spelled out the four payloads — the commit overstates what changed; (2) the handover leaves up to a minute with both gates live, and it obliges THIS project's session to message the peer, not the reverse; (3) "the python gate is live again" was measured here only as a registration (settings.json names fable_delegation_gate once), never as observed liveness. Commit 6c246701's stated reason ("a hook registered from HEAD would call a verb that does not exist") is FALSE: grep -rn delegateGateMatcher src/ shows it referenced only at its own definition in hookInstall.ts — registration is deleted until TRDD-SA99VCPZ closes, so nothing registers it and nothing would have called a missing verb. Open owner question still unanswered: gate opus too? (see Approval log). Recorded per RULE 1 board-triage worker instruction; git history is not rewritten.

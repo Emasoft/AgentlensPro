@@ -1,9 +1,9 @@
 ---
 trdd-id: 3LKN70Y4
 title: Six mocha failures from the load-113 whole-suite run need re-running alone to classify
-column: todo
+column: superseded
 created: 2026-09-06T02:11:03+0200
-updated: 2026-09-06T02:41:06+0200
+updated: 2026-09-24T08:57:21+0200
 current-owner: main-session
 task-type: bugfix
 priority: medium
@@ -13,6 +13,7 @@ project-id: agentlenspro
 related: [B7DSTJLS, 82ADFE5D]
 relevant-files: [src/test/serverCalibration.test.ts, src/test/cacheBreakTimeline.test.ts]
 labels: [tests, flake-or-regression]
+superseded-by: [CS2W7E77]
 ---
 
 # Six mocha failures from the load-113 whole-suite run need re-running alone to classify
@@ -56,3 +57,4 @@ B7DSTJLS's NEXT ACTION (whole-file run) is satisfied only by the second re-run.
 ## Approval log
 
 - 2026-09-06T02:11:03+0200 — Authored into `todo` (Tier 0) from the measured run.
+- 2026-09-24T08:57:21+0200 — SUPERSEDED by main-session. Fully absorbed by TRDD-CS2W7E77 (P5 rows) and TRDD-82ADFE5D (rustSummarize timeout row, created together in commit a781ce0d); its one distinguishing fact (3-vs-6 run-order question) already tracked as B7DSTJLS's open acceptance box 3 (reports/board-triage/20260924_085116+0200-cluster-test-hygiene.md).

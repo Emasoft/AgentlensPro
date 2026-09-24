@@ -1,9 +1,9 @@
 ---
 trdd-id: OHZGLDNG
 title: CLAUDE.md still documents the TypeScript server retired in 567fc5c2
-column: ai_review
+column: human_review
 created: 2026-09-09T12:37:51+0200
-updated: 2026-09-23T13:01:23+0200
+updated: 2026-09-24T08:57:53+0200
 current-owner: main
 task-type: docs
 min-approval-requirement: none
@@ -97,6 +97,8 @@ Round 3 (2026-09-23): (a) fixed L143 and L145 in the Dual ingestion section — 
 ## Approval log
 
 - 2026-09-23T06:05:45+0200 — column → ai_review by main. CLAUDE.md stale-TS-server sentences fixed via fastedit, verified with fastedit diff + git diff; check-no-identities exit 0
+- 2026-09-24T08:57:37+0200 — column → human_review by main-session. AI review verified, evidence in reports/board-triage ai_review-A/B/C triage
+- 2026-09-24T08:57:49+0200 — main-session (board update A): moved ai_review -> human_review; AI review verified per reports/board-triage ai_review-A/B/C triage rows. In this project's mono-agent rule the session moves ai_review->human_review; the owner moves human_review->complete.
 
 ## ⏵ AI-REVIEW VERDICT 2026-09-23T13:00:09+0200 — APPROVE
 

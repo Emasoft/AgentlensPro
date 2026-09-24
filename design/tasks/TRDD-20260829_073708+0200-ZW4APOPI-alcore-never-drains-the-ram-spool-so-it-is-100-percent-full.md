@@ -1,9 +1,9 @@
 ---
 trdd-id: ZW4APOPI
 title: alcore never drains the RAM-disk spool so it is 100 percent full and capture is silently losing bodies
-column: ai_review
+column: human_review
 created: 2026-08-29T07:37:08+0200
-updated: 2026-09-05T07:18:10+0200
+updated: 2026-09-24T08:57:56+0200
 current-owner: claude-agentlenspro
 task-type: bugfix
 project-id: agentlenspro
@@ -341,3 +341,8 @@ place of the thing:
 4. **One grep pattern is not an absence proof.** "No writer exists in this repo" came from grepping
    two literal filename suffixes; a writer building the name by concatenation carries neither. The
    conclusion is likely right, but it is an observation, and the card now says so.
+
+## Approval log
+
+- 2026-09-24T08:57:39+0200 — column → human_review by main-session. AI review verified, evidence in reports/board-triage ai_review-A/B/C triage
+- 2026-09-24T08:57:49+0200 — main-session (board update A): moved ai_review -> human_review; AI review verified per reports/board-triage ai_review-A/B/C triage rows. In this project's mono-agent rule the session moves ai_review->human_review; the owner moves human_review->complete.

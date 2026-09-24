@@ -1,9 +1,9 @@
 ---
 trdd-id: U84BCXKQ
 title: Reading a test assertion needs a copy-to-scratch detour the toolchain should not require
-column: todo
+column: complete
 created: 2026-09-13T22:11:33+0200
-updated: 2026-09-13T22:38:40+0200
+updated: 2026-09-24T08:58:46+0200
 current-owner: emanuelesabetta
 created-by: emanuelesabetta
 task-type: infra
@@ -46,13 +46,14 @@ The project's own review discipline requires distinguishing a test that guards f
 - Or sanction an explicit escape: a documented copy-to-.txt-then-read recipe, so the workaround is a rule rather than a rediscovery.
 
 ## Acceptance
-- [ ] One sanctioned command reads lines N..M of a source file and prints them verbatim.
-- [ ] It works on a test block named by tldr structure.
-- [ ] TRDD-4J1QA18G's open verification item becomes performable.
+- [x] ~~One sanctioned command reads lines N..M of a source file and prints them verbatim.~~ — feature never built under this card; obsolete, see card's own 2026-09-13 amendment (practical blocker discharged directly).
+- [x] ~~It works on a test block named by tldr structure.~~ — obsolete, same reason; if still wanted, file as a feature request against the external tldr-code fork, not this repo.
+- [x] ~~TRDD-4J1QA18G's open verification item becomes performable.~~ — moot: TRDD-4J1QA18G itself was superseded 2026-09-24 (Gen-2 mechanism deleted), so it has no open verification item left.
 
 ## Approval log
 
 - 2026-09-13T22:11:33+0200 — MANDATE issued by emanuelesabetta (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-09-24T08:58:46+0200 — COMPLETE by main-session. Card's own 2026-09-13 amendment: practical blocker discharged the same evening it was carded (deferIntervals guard confirmed non-vacuous). Residual (tldr line-range reading feature) belongs to the external tldr-code fork, not AgentlensPro; boxes struck through as obsolete (reports/board-triage/20260924_085320+0200-cluster-misc.md).
 
 ## AMENDMENT 2026-09-13 — a sanctioned route DOES exist and the body overstates the gap
 

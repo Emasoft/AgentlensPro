@@ -1,9 +1,9 @@
 ---
 trdd-id: JELDR3KC
 title: The review gate re-arms on every orchestrator Stop while its own background subagents are still writing
-column: todo
+column: superseded
 created: 2026-09-10T09:31:02+0200
-updated: 2026-09-10T14:35:22+0200
+updated: 2026-09-24T08:56:37+0200
 current-owner: main
 task-type: bugfix
 min-approval-requirement: none
@@ -17,6 +17,7 @@ project-id: agentlenspro
 scope: project
 labels: [review-gate, subagents, fork-cost, effects]
 related: [3U8AIHXK, 9FG0LSPG, 2CYTNLY1, GG0WOHEV]
+superseded-by: [A37YM37G]
 ---
 
 # The review gate re-arms on every orchestrator Stop while its own background subagents are still writing
@@ -91,3 +92,4 @@ Either shape must keep TRDD-9FG0LSPG's invariant: no write is released unreviewe
       orchestrator arm already sits after the last fork, and caps at 8 paths).
 
 ## Approval log
+- 2026-09-24T08:56:37+0200 — SUPERSEDED by main-session. Gen-2 mtime disk-effects mechanism (reviewGateEffects.ts) deleted by commit 268f3080 / TRDD-A37YM37G 2026-09-15; card describes a mechanism that no longer exists (reports/board-triage/20260924_083538+0200-cluster-review-gate.md).

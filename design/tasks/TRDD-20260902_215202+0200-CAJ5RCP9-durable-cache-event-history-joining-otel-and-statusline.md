@@ -3,7 +3,7 @@ trdd-id: CAJ5RCP9
 title: Durable cache-event history that joins the OTEL ledger with the statusline feed
 column: todo
 created: 2026-09-02T21:52:02+0200
-updated: 2026-09-03T04:59:59+0200
+updated: 2026-09-24T08:59:04+0200
 current-owner: main-session
 task-type: feature
 priority: high
@@ -122,3 +122,7 @@ reason — so neither source alone answers "why did this turn cold-write".
 ## Approval log
 
 ## Notes and lessons learned
+
+## Board-triage flag 2026-09-24
+
+eht: lists six ids (9SYRK6SW, IRNHEN4Z, GVA8TTJF, QSFYIHUO, N6A8VX3G, TP3BA3ED), but the STATE block's own "Split into 5 depth-1 EHT children" section names and discusses only five (9SYRK6SW, N6A8VX3G, GVA8TTJF, QSFYIHUO, IRNHEN4Z). TP3BA3ED is not mentioned anywhere in STATE — no description of what it covers, no ordering, no dispatch status. FLAGGED, not removed: this card cannot reach complete until TP3BA3ED is also terminal, so whoever resumes this card should first determine what TP3BA3ED is and whether it belongs in this eht: list at all.

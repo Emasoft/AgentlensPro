@@ -1,9 +1,9 @@
 ---
 trdd-id: 0Y8BMVK2
 title: The dashboard reported skill and agent catalogs as per-turn cache writes and a six-digit hit rate
-column: ai_review
+column: human_review
 created: 2026-09-03T19:13:48+0200
-updated: 2026-09-05T18:44:47+0200
+updated: 2026-09-24T08:57:49+0200
 current-owner: main-session
 task-type: bugfix
 severity: HIGH
@@ -81,6 +81,8 @@ gate blaming forks) addressed — INFERRED from the titles, not from a record li
   first-hand re-check above. Vetoable at `human_review`; the USER may instead require a webview test
   for defects 2–4 before accepting (that would be a new card — this one added none and does not
   claim to).
+- 2026-09-24T08:57:32+0200 — column → human_review by main-session. AI review verified, evidence in reports/board-triage ai_review-A/B/C triage
+- 2026-09-24T08:57:49+0200 — main-session (board update A): moved ai_review -> human_review; AI review verified per reports/board-triage ai_review-A/B/C triage rows. In this project's mono-agent rule the session moves ai_review->human_review; the owner moves human_review->complete.
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-03 19:13
 

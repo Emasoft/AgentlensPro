@@ -1,9 +1,9 @@
 ---
 trdd-id: MF4YQWWA
 title: The burnscan TS oracle can no longer be regenerated — Rust investigate_burn is behind it on captureGaps and on the sonnet-5 scheduled price
-column: ai_review
+column: human_review
 created: 2026-09-02T05:13:54+0200
-updated: 2026-09-05T07:57:47+0200
+updated: 2026-09-24T08:57:53+0200
 current-owner: claude-session-2026-09-02
 task-type: bugfix
 scope: project
@@ -106,3 +106,5 @@ generator exists to prevent.
 
 - 2026-09-02T05:13:54+0200 — Filed by the session landing TRDD-YBJGIYI1, from the parity run it
   broke and the diff that explained it. Tier 0 (own scope, Rust parity work under DMWOBWFH).
+- 2026-09-24T08:57:36+0200 — column → human_review by main-session. AI review verified, evidence in reports/board-triage ai_review-A/B/C triage
+- 2026-09-24T08:57:49+0200 — main-session (board update A): moved ai_review -> human_review; AI review verified per reports/board-triage ai_review-A/B/C triage rows. In this project's mono-agent rule the session moves ai_review->human_review; the owner moves human_review->complete.

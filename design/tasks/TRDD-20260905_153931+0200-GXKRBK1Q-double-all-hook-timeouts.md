@@ -1,9 +1,9 @@
 ---
 trdd-id: GXKRBK1Q
 title: Double every hook timeout the installer writes and every hook's own network budget
-column: ai_review
+column: human_review
 created: 2026-09-05T15:39:31+0200
-updated: 2026-09-05T18:08:21+0200
+updated: 2026-09-24T08:57:52+0200
 current-owner: main-session
 task-type: bugfix
 priority: high
@@ -53,6 +53,8 @@ this card's scope, which is the four installer entries plus the two network budg
 - 2026-09-05T18:13:50+0200 — the fork on `bbb7fa5e` questioned the attribution "the installer's
   own `isOurHookCommand` view": confirmed — `src/cli/setup.ts:1063` computes the printed count as
   `allHooks.filter(h => isOurHookCommand(h.command)).length`.
+- 2026-09-24T08:57:35+0200 — column → human_review by main-session. AI review verified, evidence in reports/board-triage ai_review-A/B/C triage
+- 2026-09-24T08:57:49+0200 — main-session (board update A): moved ai_review -> human_review; AI review verified per reports/board-triage ai_review-A/B/C triage rows. In this project's mono-agent rule the session moves ai_review->human_review; the owner moves human_review->complete.
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-09-05T16:06:03+0200
 

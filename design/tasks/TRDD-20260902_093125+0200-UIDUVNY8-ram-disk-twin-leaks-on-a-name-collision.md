@@ -1,9 +1,9 @@
 ---
 trdd-id: UIDUVNY8
 title: ensureRamDisk leaks a twin volume when the spool name is already taken
-column: ai_review
+column: human_review
 created: 2026-09-02T09:31:25+0200
-updated: 2026-09-05T15:30:26+0200
+updated: 2026-09-24T08:57:54+0200
 current-owner: main-session
 task-type: bugfix
 priority: normal
@@ -55,6 +55,8 @@ related: [ZW4APOPI, 5PUD8RKE]
   that decision (accept the unit-level race proof, or demand a real two-process run) is the human
   reviewer's, not this session's. Re-ran the read-only check myself: `mount | grep -c AgentLensSpool`
   → 1 at 15:30 — circumstantial, as the verdict says. Nothing struck, nothing split.
+- 2026-09-24T08:57:38+0200 — column → human_review by main-session. AI review verified, evidence in reports/board-triage ai_review-A/B/C triage
+- 2026-09-24T08:57:49+0200 — main-session (board update A): moved ai_review -> human_review; AI review verified per reports/board-triage ai_review-A/B/C triage rows. In this project's mono-agent rule the session moves ai_review->human_review; the owner moves human_review->complete.
 
 ## Notes and lessons learned
 

@@ -1,9 +1,9 @@
 ---
 trdd-id: YILE6N3T
 title: The span window reports a 5-minute window but holds the whole 24-hour boot replay and only grows
-column: ai_review
+column: human_review
 created: 2026-09-05T22:06:10+0200
-updated: 2026-09-23T13:17:30+0200
+updated: 2026-09-24T08:57:55+0200
 current-owner: main-session
 task-type: bugfix
 priority: critical
@@ -113,6 +113,8 @@ Verdict qualification 2026-09-23T13:16:38+0200: Box 3's 13,200-span bound was de
 
 - 2026-09-05T22:06:10+0200 — Authored into `dev` (Tier 0 bugfix under the USER-approved parent
   7YPQWKPG; worker dispatched the same turn).
+- 2026-09-24T08:57:39+0200 — column → human_review by main-session. AI review verified, evidence in reports/board-triage ai_review-A/B/C triage
+- 2026-09-24T08:57:49+0200 — main-session (board update A): moved ai_review -> human_review; AI review verified per reports/board-triage ai_review-A/B/C triage rows. In this project's mono-agent rule the session moves ai_review->human_review; the owner moves human_review->complete.
 
 ## ⏵ AI-REVIEW VERDICT 2026-09-23T13:00:09+0200 — APPROVE
 

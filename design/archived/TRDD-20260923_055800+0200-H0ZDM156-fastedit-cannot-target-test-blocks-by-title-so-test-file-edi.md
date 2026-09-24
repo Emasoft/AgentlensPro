@@ -1,9 +1,9 @@
 ---
 trdd-id: H0ZDM156
 title: fastedit cannot target test blocks by title so test-file edits fall back to the Edit tool
-column: todo
+column: cancelled
 created: 2026-09-23T05:58:00+0200
-updated: 2026-09-23T07:05:07+0200
+updated: 2026-09-24T09:00:37+0200
 current-owner: agentlenspro-main-session
 created-by: agentlenspro-main-session
 task-type: infra
@@ -23,6 +23,7 @@ tldr structure names anonymous test callbacks test:<slug> but fastedit edit --re
 ## Approval log
 
 - 2026-09-23T05:58:00+0200 — MANDATE issued by agentlenspro-main-session (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-09-24T09:00:37+0200 — CANCELLED by main-session. Card's own body states outright: fix belongs in the owner's fastedit fork, not this repo — do not file it here. fastedit/tldr resolve outside this repo's checkout via which (~/.local/bin, ~/.cargo/bin) (reports/board-triage/20260924_085320+0200-cluster-misc.md).
 
 ## Instances
 

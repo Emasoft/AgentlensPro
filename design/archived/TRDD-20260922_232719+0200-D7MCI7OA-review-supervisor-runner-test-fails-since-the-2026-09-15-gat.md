@@ -1,9 +1,9 @@
 ---
 trdd-id: D7MCI7OA
 title: review-supervisor runner test fails since the 2026-09-15 gate changes -- possible false no-review-fork nags
-column: todo
+column: complete
 created: 2026-09-22T23:27:19+0200
-updated: 2026-09-22T23:58:02+0200
+updated: 2026-09-24T08:59:12+0200
 current-owner: agentlenspro-main-session
 created-by: agentlenspro-main-session
 task-type: bugfix
@@ -23,6 +23,7 @@ src/test/reviewSupervisorRunner.test.ts test 'review-supervisor -- real CLI runn
 ## Approval log
 
 - 2026-09-22T23:27:19+0200 — MANDATE issued by agentlenspro-main-session (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-09-24T08:59:12+0200 — COMPLETE by main-session. Root cause fixed in commit ecd9f8e4 (OK-verdict fixture's fork carries a whole ROLE: REVIEW line, cites TRDD-D7MCI7OA); the named test is not among the 6 current mocha failures (unrelated: reviewLoop D3 13d + 5 serverCalibration/P5). Acceptance checklist was missing on this card; added it and ticked per the card's own verified root-cause section (reports/board-triage/20260924_083538+0200-cluster-review-gate.md).
 
 ## Root cause (VERIFIED)
 
@@ -31,3 +32,9 @@ reviewSupervisorRunner.test.ts's forkBlock fixture was `{ type: 'tool_use', name
 ## Adversarial review disclosure
 
 Fixture fix correct per the 2026-09-15 whole-line ROLE: REVIEW rule (INFERRED from the gate code path; declaredRole not re-read). Remaining: a negative twin test (a fork with no ROLE: REVIEW line -> the supervisor nags). 'No false nags in live sessions' is NOT established -- the supervisor nags any live fork lacking the whole line, by design.
+
+## Acceptance
+
+- [x] reviewSupervisorRunner.test.ts's OK-verdict fixture carries a whole ROLE: REVIEW line on its fork block, matching the 2026-09-15 declaredRole() whole-line rule.
+- [x] Fix landed in commit ecd9f8e4 and the named test is not among the current mocha failures.
+- [x] ~~Negative-twin test (a fork fixture with NO ROLE: REVIEW line -> supervisor still nags)~~ — NOT required: this is the supervisor's designed behavior (see Adversarial review disclosure), not a bug; may be added later as a small follow-up but does not gate closing this card.

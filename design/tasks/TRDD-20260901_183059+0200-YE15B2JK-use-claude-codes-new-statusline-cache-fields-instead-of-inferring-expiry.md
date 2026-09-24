@@ -1,9 +1,9 @@
 ---
 trdd-id: YE15B2JK
 title: Claude Code now reports cache state in the statusline payload so cache-expired should read it instead of inferring
-column: ai_review
+column: human_review
 created: 2026-09-01T18:30:59+0200
-updated: 2026-09-05T15:20:27+0200
+updated: 2026-09-24T08:57:55+0200
 current-owner: main-session
 task-type: feature
 scope: project
@@ -83,6 +83,8 @@ Code is at 2.1.252 here. The field names in the directive are described, not quo
   captured row from a spend-limit gateway, which this machine does not have. This narrows the
   card under review by the review step itself; the card's owner or the USER may veto by restoring the
   box, which re-opens the card. Human-review reader: judge the four original boxes.
+- 2026-09-24T08:57:38+0200 — column → human_review by main-session. AI review verified, evidence in reports/board-triage ai_review-A/B/C triage
+- 2026-09-24T08:57:49+0200 — main-session (board update A): moved ai_review -> human_review; AI review verified per reports/board-triage ai_review-A/B/C triage rows. In this project's mono-agent rule the session moves ai_review->human_review; the owner moves human_review->complete.
 
 ## Notes and lessons learned
 

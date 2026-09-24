@@ -1,11 +1,12 @@
 ---
 trdd-id: ZIWEB0UW
 title: alcore /api/server-stats lacks the capture block so status prints capture unknown
-column: ai_review
+column: human_review
 created: 2026-09-01T19:46:50+0200
-updated: 2026-09-05T08:13:10+0200
+updated: 2026-09-24T08:58:06+0200
 current-owner: agentlenspro-15
 task-type: bugfix
+implementation-commits: [0c19090d, 3b7bfcd6]
 ---
 
 # alcore's server-stats has no `capture` block — `server status` prints "capture: unknown"
@@ -64,3 +65,8 @@ block yet, so the PARKED suffix is silently omitted from `server status`. Port i
 PARKED GAUGE SHIPPED (`3b7bfcd6`) and verified live: the status line prints the full TS-parity
 capture line including 'PARKED 307 file(s) 144.3MB'. Both acceptance criteria met → ai_review.
 Deploy lesson captured as ATOM-SFLG-1NSX (in-place cp SIGKILL).
+
+## Approval log
+
+- 2026-09-24T08:57:39+0200 — column → human_review by main-session. AI review verified, evidence in reports/board-triage ai_review-A/B/C triage
+- 2026-09-24T08:57:49+0200 — main-session (board update A): moved ai_review -> human_review; AI review verified per reports/board-triage ai_review-A/B/C triage rows. In this project's mono-agent rule the session moves ai_review->human_review; the owner moves human_review->complete.

@@ -1,9 +1,9 @@
 ---
 trdd-id: KBK9J59Y
 title: A checkbox count cannot triage cards whose criteria are prose — print ticked beside open
-column: ai_review
+column: human_review
 created: 2026-09-04T18:19:29+0200
-updated: 2026-09-05T08:13:10+0200
+updated: 2026-09-24T08:57:52+0200
 current-owner: main-session
 task-type: audit
 project-id: agentlenspro
@@ -150,3 +150,8 @@ not made.
 
 Out of scope, noted: `YBJGIYI1`'s Approval log says "Queued to `todo`, not started" while its
 `column:` is `ai_review` with a non-empty `implementation-commits:` — a stale line in that card.
+
+## Approval log
+
+- 2026-09-24T08:57:35+0200 — column → human_review by main-session. AI review verified, evidence in reports/board-triage ai_review-A/B/C triage
+- 2026-09-24T08:57:49+0200 — main-session (board update A): moved ai_review -> human_review; AI review verified per reports/board-triage ai_review-A/B/C triage rows. In this project's mono-agent rule the session moves ai_review->human_review; the owner moves human_review->complete.

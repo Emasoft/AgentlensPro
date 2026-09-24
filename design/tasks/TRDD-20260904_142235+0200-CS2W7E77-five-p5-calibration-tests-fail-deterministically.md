@@ -3,7 +3,7 @@ trdd-id: CS2W7E77
 title: The five P5 window auto-calibration tests fail deterministically on a burn-config ENOENT
 column: todo
 created: 2026-09-04T14:22:35+0200
-updated: 2026-09-04T14:30:12+0200
+updated: 2026-09-24T08:56:49+0200
 current-owner: main-session
 task-type: bugfix
 project-id: agentlenspro
@@ -145,3 +145,4 @@ handoff that edit owed.
 - [ ] Two consecutive full-suite runs show zero `P5 window auto-calibration` failures.
 
 ## Notes and lessons learned
+2026-09-24T08:56:26+0200 — from superseded/duplicate TRDD-XI3UZUTK (same 5 P5 failures, same suite): the boot log showed "file watching unavailable ... falling back to a 5s full poll" — supports the timing/race hypothesis (5s poll interval racing a tighter test timeout) named as the leading candidate cause here.

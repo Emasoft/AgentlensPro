@@ -1,9 +1,9 @@
 ---
 trdd-id: M9344XC8
 title: The review gate's disk walk arms on derived artifacts such as __pycache__ pyc files and .DS_Store
-column: dev
+column: superseded
 created: 2026-09-10T18:54:57+0200
-updated: 2026-09-10T19:35:06+0200
+updated: 2026-09-24T08:56:36+0200
 current-owner: main
 task-type: bugfix
 min-approval-requirement: none
@@ -16,6 +16,7 @@ project-id: agentlenspro
 scope: project
 labels: [review-gate, effects, noise]
 related: [3U8AIHXK, JELDR3KC, 9FG0LSPG]
+superseded-by: [A37YM37G]
 ---
 
 # The review gate's disk walk arms on derived artifacts such as __pycache__ pyc files and .DS_Store
@@ -54,3 +55,4 @@ at all — pinned by test "a .log added in-repo next to an already-tracked file 
 - [ ] Live: one Stop after a worker `py_compile` demands no fork
 
 ## Approval log
+- 2026-09-24T08:56:36+0200 — SUPERSEDED by main-session. Gen-2 mtime disk-effects mechanism (reviewGateEffects.ts) deleted by commit 268f3080 / TRDD-A37YM37G 2026-09-15; card describes a mechanism that no longer exists (reports/board-triage/20260924_083538+0200-cluster-review-gate.md).

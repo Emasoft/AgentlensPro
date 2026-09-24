@@ -1,9 +1,9 @@
 ---
 trdd-id: L6V1UUW0
 title: The hook-spool never drains while the server is up, and every spooled hook spawns a doomed revive
-column: ai_review
+column: human_review
 created: 2026-09-02T09:31:25+0200
-updated: 2026-09-05T07:30:47+0200
+updated: 2026-09-24T08:57:52+0200
 current-owner: main-session
 task-type: bugfix
 priority: high
@@ -89,3 +89,8 @@ past the original backlog.
 
 - A field named `spooled` is a directory listing (`server_stats.rs:553`), not a counter — read the emitter
   before pairing a number with a mechanism.
+
+## Approval log
+
+- 2026-09-24T08:57:35+0200 — column → human_review by main-session. AI review verified, evidence in reports/board-triage ai_review-A/B/C triage
+- 2026-09-24T08:57:49+0200 — main-session (board update A): moved ai_review -> human_review; AI review verified per reports/board-triage ai_review-A/B/C triage rows. In this project's mono-agent rule the session moves ai_review->human_review; the owner moves human_review->complete.

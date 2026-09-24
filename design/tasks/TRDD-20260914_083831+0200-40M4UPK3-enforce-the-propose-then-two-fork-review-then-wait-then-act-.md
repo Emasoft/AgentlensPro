@@ -3,7 +3,7 @@ trdd-id: 40M4UPK3
 title: Enforce the propose then two-fork review then wait then act loop at PreToolUse
 column: dev
 created: 2026-09-14T08:38:31+0200
-updated: 2026-09-22T23:26:19+0200
+updated: 2026-09-24T08:56:32+0200
 current-owner: emanuelesabetta
 created-by: emanuelesabetta
 task-type: feature
@@ -50,3 +50,4 @@ TRDD-1YXR6S47, TRDD-BA0DCW98, TRDD-4J1QA18G - their code paths will be deleted b
 
 Amendment A1' (2026-09-22): the marker `PROPOSAL FOR ACTION - PLEASE REVIEW` is a CONSTANT string, so a key derived from the marker line itself (the original A1 rule) is identical for every proposal and cannot bind a spawn to its own proposal. The key is now the first 160 normalised chars of the proposal's CONTENT (the remainder of the marker line plus every following line), with no short-first-line shortcut (a templated opener would collapse the key back toward a constant). A marker with no content normalises to an empty key, which can never bind a spawn (scanCycles guards on key !== ''), and missingReasonOf reports it as 'key-missing'. Full text: reports/review-loop-gate/20260914_095303+0200-stage1a-loop-spec.md, section "Amendment A1'".
 Round-2 review findings for round 3 (2026-09-22): (a) a spawned fork whose prompt does not contain the proposal's key is reported as 'role-not-spawned' although it WAS spawned -- once wired, that wrong reason invites re-spawning (the token-draining loop the owner stopped on 2026-09-15); add a distinct reason telling the agent to paste the proposal verbatim. (b) the A1' test 'two proposals sharing the same first content line' places P1's spawns BEFORE P2, so position alone excludes them from cycle 2 and the test only fails on key equality -- add the real binding test: after P2, a fork quoting P1 must not credit cycle 2 while one quoting P2 does. (c) a content-reflow test (re-wrapped/re-indented pasted proposal still binds) was requested and not added. (d) two proposals sharing >160 chars of opening text still collide, and very short content gives a weak key -- decide a minimum content length or a longer/whole-content key. (e) the markerIndex === -1 fallback in proposalKey is unreachable and would return the old marker-derived key -- delete it or return ''. (f) for a body-less proposal the message prints key "" -- drop the key there.
+2026-09-24T08:56:26+0200 — from superseded TRDD-WAW0M092 (mechanism deleted, Gen-2 mtime arm): (a) batch writes into fewer turns halves fork count — cheap, orthogonal, still true under Gen 3/4; (b) copy-rename lost-update-race objection — worth remembering if any future design reintroduces atomic-landing.

@@ -3,7 +3,7 @@ trdd-id: 3U8AIHXK
 title: The effects arm must attribute a write to this session's own tool activity before arming
 column: testing
 created: 2026-09-10T02:54:43+0200
-updated: 2026-09-10T19:20:54+0200
+updated: 2026-09-24T08:56:40+0200
 current-owner: main
 task-type: bugfix
 priority: critical
@@ -245,3 +245,7 @@ evidence could narrow it and none exists. Fail-closed is correct here (TRDD-9FG0
 or agent file the session must now obey is worth a read whoever wrote it. Reported 2026-09-10 by
 two peer sessions (ai-maestro-janitor, agents-discipline): one agent file flagged 4 times across
 peer rewrites — verified by neither this session nor a read of their transcripts.
+
+## Correction 2026-09-24
+
+Commit 5d418b93's message says the cross-arming report was "verified by neither" without naming who; the card's own wording is "verified by neither this session nor a read of their transcripts" — the commit message drops the specific scope. Also: the second reporting session named in the staged edit (agents-discipline) has no evidence of verification in this session's transcript. Recorded per RULE 1 board-triage worker instruction; git history is not rewritten.

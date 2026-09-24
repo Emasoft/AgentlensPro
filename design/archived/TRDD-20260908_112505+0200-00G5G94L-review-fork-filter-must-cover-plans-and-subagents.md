@@ -1,9 +1,9 @@
 ---
 trdd-id: 00G5G94L
 title: The adversarial review fork must cover proposals and sub-agents, with a recursion guard that cannot self-trigger
-column: todo
+column: superseded
 created: 2026-09-08T11:25:05+0200
-updated: 2026-09-08T11:25:05+0200
+updated: 2026-09-24T08:57:18+0200
 current-owner: main
 task-type: infra
 min-approval-requirement: none
@@ -16,6 +16,7 @@ implementation-commits: []
 project-id: agentlenspro
 scope: project
 labels: [review-gate, hooks, subagents, agentlenspro]
+superseded-by: [40M4UPK3]
 ---
 
 # The adversarial review fork must cover proposals and sub-agents
@@ -101,3 +102,7 @@ current behaviour, not to assume either answer.
 - (e)/(f) may be stale: those workers were observed frozen on 2026-09-07 and the session has since
   compacted. Verify they still exist before trying to recover them; do not act on a 16-hour-old
   process observation.
+
+## Approval log
+
+- 2026-09-24T08:57:18+0200 — SUPERSEDED by main-session. Duplicate of TRDD-40M4UPK3: 40M4UPK3's Design section (PreToolUse gate on proposal, exempt read-only forks, worker-inherits-window, Stop/SubagentStop backstops) covers exactly the four asks of this RESCUE card, more precisely specified (reports/board-triage/20260924_083538+0200-cluster-review-gate.md).

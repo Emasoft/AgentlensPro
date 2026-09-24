@@ -1,12 +1,13 @@
 ---
 trdd-id: 2C23ROPZ
 title: rust-core debug builds are the host's dominant disk writer — bound the dev profile
-column: ai_review
+column: human_review
 created: 2026-09-01T22:05:22+0200
-updated: 2026-09-05T09:58:30+0200
+updated: 2026-09-24T08:58:06+0200
 current-owner: agentlenspro-15
 task-type: infra
 external-refs: [https://github.com/Emasoft/AgentlensPro/issues/18]
+implementation-commits: [636cb99e]
 ---
 
 # rust-core `target/` debug builds wrote +30.8 GB in 3 days (issue #18)
@@ -150,3 +151,8 @@ Like-for-like artifacts (old hash vs new hash, `du -sb` / `stat`):
 Accumulation in `target/debug` (92.4 GB before, 93.8 GB after — nothing is ever pruned):
 `.fingerprint` generations per crate: agentlens-core 2,997 · agentlens-store 140 · spanstore 85 ·
 logscan 73 · ingest 70 · libduckdb-sys 18; `build/libduckdb-sys-*`: four dirs of ~3.1 GB.
+
+## Approval log
+
+- 2026-09-24T08:57:32+0200 — column → human_review by main-session. AI review verified, evidence in reports/board-triage ai_review-A/B/C triage
+- 2026-09-24T08:57:49+0200 — main-session (board update A): moved ai_review -> human_review; AI review verified per reports/board-triage ai_review-A/B/C triage rows. In this project's mono-agent rule the session moves ai_review->human_review; the owner moves human_review->complete.

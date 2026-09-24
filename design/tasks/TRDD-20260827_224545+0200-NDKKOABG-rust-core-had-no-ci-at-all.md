@@ -1,9 +1,9 @@
 ---
 trdd-id: NDKKOABG
 title: rust-core was never built or tested by CI — add the job, with caching
-column: ai_review
+column: human_review
 created: 2026-08-27T22:45:45+0200
-updated: 2026-09-05T09:27:40+0200
+updated: 2026-09-24T08:57:53+0200
 current-owner: main-session
 task-type: infra
 scope: project
@@ -178,3 +178,5 @@ python3 -c "import yaml; print(list(yaml.safe_load(open('.github/workflows/ci.ym
   addition plus lint fixes inside this project's own tree. The `.github/` touch would normally
   floor at MANAGER, but the USER approved workflow caching directly in this thread; no baseline
   ruleset, permission, or release behaviour changes.
+- 2026-09-24T08:57:36+0200 — column → human_review by main-session. AI review verified, evidence in reports/board-triage ai_review-A/B/C triage
+- 2026-09-24T08:57:49+0200 — main-session (board update A): moved ai_review -> human_review; AI review verified per reports/board-triage ai_review-A/B/C triage rows. In this project's mono-agent rule the session moves ai_review->human_review; the owner moves human_review->complete.
