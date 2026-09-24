@@ -623,6 +623,25 @@ fn restore_reparses_once_a_stale_card_whose_file_still_exists() {
     let mut cards = DeltaLog::new(&data, "log-sessions").load().unwrap();
     let original_1h = cards[parent_id]["cacheCreate1hTokens"].as_f64().unwrap();
     assert!(original_1h > 0.0, "fixture must actually exercise the 1h tier for this test to mean anything");
+    // TRDD-ORGJ0E3G review item 2: a targeted reparse must REPLACE the card, not accumulate into
+    // it — capture every token bucket + the derived cost BEFORE the strip so the rebuilt card can
+    // be checked for equality, not just presence, of cacheCreate1hTokens. A reparse that resumed
+    // an existing accumulator instead of starting a fresh one would double these.
+    let original_input = cards[parent_id]["inputTokens"].as_f64().unwrap_or(0.0);
+    let original_cache_create = cards[parent_id]["cacheCreateTokens"].as_f64().unwrap();
+    let original_cache_read = cards[parent_id]["cacheReadTokens"].as_f64().unwrap_or(0.0);
+    let original_output = cards[parent_id]["outputTokens"].as_f64().unwrap_or(0.0);
+    let original_model = cards[parent_id]["model"].as_str().unwrap_or("").to_string();
+    let original_cost = agentlens_core::pricing::calc_token_cost_usd(
+        original_input,
+        original_cache_read,
+        original_cache_create,
+        original_output,
+        &original_model,
+        original_1h,
+        None,
+        now as f64,
+    );
     // Simulate a card persisted by a PRE-FIX binary: strip the field.
     cards.get_mut(parent_id).unwrap().as_object_mut().unwrap().remove("cacheCreate1hTokens");
     DeltaLog::new(&data, "log-sessions").save(&cards).unwrap();
@@ -645,6 +664,23 @@ fn restore_reparses_once_a_stale_card_whose_file_still_exists() {
     state2.lock().unwrap().ingest_scanned(scanned);
     let rebuilt = state2.lock().unwrap().cards.get(parent_id).unwrap().clone();
     assert_eq!(rebuilt["cacheCreate1hTokens"].as_f64().unwrap(), original_1h, "the field is rebuilt with the correct value");
+    // Item 2: the reparse REPLACES the card (CardStore::put is an upsert on the whole JSON blob),
+    // it does not accumulate on top of the restored one — every other bucket, and the cost derived
+    // from them, must come back exactly equal, not doubled.
+    assert_eq!(rebuilt["cacheCreateTokens"].as_f64().unwrap(), original_cache_create, "cacheCreateTokens must not double from the targeted reparse");
+    assert_eq!(rebuilt["cacheReadTokens"].as_f64().unwrap_or(0.0), original_cache_read, "cacheReadTokens must not double from the targeted reparse");
+    assert_eq!(rebuilt["outputTokens"].as_f64().unwrap_or(0.0), original_output, "outputTokens must not double from the targeted reparse");
+    let rebuilt_cost = agentlens_core::pricing::calc_token_cost_usd(
+        rebuilt["inputTokens"].as_f64().unwrap_or(0.0),
+        rebuilt["cacheReadTokens"].as_f64().unwrap_or(0.0),
+        rebuilt["cacheCreateTokens"].as_f64().unwrap_or(0.0),
+        rebuilt["outputTokens"].as_f64().unwrap_or(0.0),
+        rebuilt["model"].as_str().unwrap_or(""),
+        rebuilt["cacheCreate1hTokens"].as_f64().unwrap_or(0.0),
+        None,
+        now as f64,
+    );
+    assert!((rebuilt_cost - original_cost).abs() < 1e-9, "session cost must not double from the targeted reparse: rebuilt={rebuilt_cost} original={original_cost}");
 }
 
 #[test]
@@ -720,5 +756,72 @@ fn restore_does_not_reparse_a_card_that_already_has_the_field() {
     let (scanned, s) = tailer2.sweep(&env, now);
     assert_eq!(s.full_reads, 0, "not one file is force-reread when nothing is missing");
     assert!(scanned.is_empty());
+}
+
+#[test]
+fn restore_stamps_a_flagged_card_the_reparse_could_not_fill_and_never_flags_it_again() {
+    // TRDD-ORGJ0E3G review item 3: a flagged file whose reparse yields NO card at all (truncated,
+    // unparseable, or — the narrower acknowledged gap — a subagent transcript keyed under a
+    // different sessionId) must not keep re-arming `restore`'s discover_all walk forever. One
+    // stamp to cacheCreate1hTokens: 0, one attempt, done.
+    let home = scratch_home("reparse-yields-nothing");
+    let env = Env { home: home.clone(), platform: Platform::Darwin, vars: HashMap::new() };
+    let data = std::env::temp_dir().join(format!("al-reparse-nothing-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&data);
+    std::fs::create_dir_all(&data).unwrap();
+    let now = 1_785_578_400_000 + 600_000;
+
+    let state = std::sync::Mutex::new(CoreState::open(&data.join("spans")));
+    let mut tailer = LogTailer::default();
+    let mut durable = DurableState::open(&data);
+    durable.restore(&mut tailer, &mut state.lock().unwrap(), &env).unwrap();
+    let (scanned, _) = tailer.sweep(&env, now);
+    state.lock().unwrap().ingest_scanned(scanned);
+    durable.mark_dirty();
+    durable.tick(&tailer, &state, true);
+
+    let parent_id = "cccccccc-1111-2222-3333-444444444444";
+    let mut cards = DeltaLog::new(&data, "log-sessions").load().unwrap();
+    cards.get_mut(parent_id).unwrap().as_object_mut().unwrap().remove("cacheCreate1hTokens");
+    DeltaLog::new(&data, "log-sessions").save(&cards).unwrap();
+
+    // Simulate a truncated/unparseable transcript: every line fails JSON parsing (log_reader's
+    // tail_one skips a bad line rather than erroring), so this file's reparse rebuilds ZERO cards
+    // — the file still exists and is still recent, so it IS flagged.
+    std::fs::write(home.join(CLAUDE_REL), "not json\nalso not json\n").unwrap();
+
+    let state2 = std::sync::Mutex::new(CoreState::open(&data.join("spans2")));
+    let mut tailer2 = LogTailer::default();
+    let mut durable2 = DurableState::open(&data);
+    let (restored, imported, skipped) = durable2.restore(&mut tailer2, &mut state2.lock().unwrap(), &env).unwrap();
+    assert_eq!(restored, 7);
+    assert_eq!((imported, skipped), (4, 0), "the flagged file's offset is still dropped, even though its reparse will yield nothing");
+
+    let (scanned, s) = tailer2.sweep(&env, now);
+    assert_eq!(s.full_reads, 1, "the flagged file is still cold-reparsed once");
+    assert!(scanned.is_empty(), "an unparseable transcript rebuilds no card");
+    state2.lock().unwrap().ingest_scanned(scanned);
+    assert!(
+        state2.lock().unwrap().cards.get(parent_id).unwrap().get("cacheCreate1hTokens").is_none(),
+        "the sweep alone leaves the card exactly as restored — still missing the field"
+    );
+
+    // The fix: after the boot sweep has had its one chance, finalize_1h_stamps stamps 0.
+    durable2.finalize_1h_stamps(&mut state2.lock().unwrap());
+    let stamped = state2.lock().unwrap().cards.get(parent_id).unwrap().clone();
+    assert_eq!(stamped["cacheCreate1hTokens"].as_f64(), Some(0.0), "stamped once so it is not re-flagged forever");
+    durable2.mark_dirty();
+    durable2.tick(&tailer2, &state2, true);
+
+    // Next restore: the card now carries the key (0.0), so it is no longer a candidate at all —
+    // no offset dropped, no forced reparse. This is the "not flagged on the next restore" proof.
+    let state3 = std::sync::Mutex::new(CoreState::open(&data.join("spans3")));
+    let mut tailer3 = LogTailer::default();
+    let mut durable3 = DurableState::open(&data);
+    let (restored3, imported3, skipped3) = durable3.restore(&mut tailer3, &mut state3.lock().unwrap(), &env).unwrap();
+    assert_eq!((restored3, imported3, skipped3), (7, 5, 0), "the stamped card is not flagged again");
+    let (scanned3, s3) = tailer3.sweep(&env, now);
+    assert_eq!(s3.full_reads, 0, "not flagged on the next restore");
+    assert!(scanned3.is_empty());
 }
 

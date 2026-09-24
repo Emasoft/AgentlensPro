@@ -682,7 +682,19 @@ pub struct DurableState {
     last_cards_save: Instant,
     offsets_dirty: bool,
     cards_dirty: bool,
+    /// Session ids flagged this boot for the targeted 1h-tier reparse (TRDD-ORGJ0E3G item 3):
+    /// populated by `restore`, drained by `finalize_1h_stamps` once the boot sweep has had its
+    /// one chance to backfill each of them.
+    pending_1h_stamp: std::collections::HashSet<String>,
 }
+
+/// TRDD-ORGJ0E3G review item 1: bounding the one-time migration's scale. ~8,500 top-level cards
+/// on this machine qualify for the targeted reparse — flagging every one of them makes the first
+/// boot close to a full corpus rescan (913 MB RSS observed mid-restore). A file untouched this
+/// long is an idle session already past every cost view's own horizon, so it keeps the 5m-rate
+/// cost it shows today (the field just stays absent, same as before this fix) instead of paying
+/// I/O to correct a number nothing displays anymore.
+const REPARSE_MAX_AGE: std::time::Duration = std::time::Duration::from_secs(30 * 24 * 60 * 60);
 
 fn env_ms(key: &str, default: u64, floor: u64) -> std::time::Duration {
     let v = std::env::var(key).ok().and_then(|s| s.trim().parse::<u64>().ok()).unwrap_or(default);
@@ -706,6 +718,7 @@ impl DurableState {
             last_cards_save: now,
             offsets_dirty: false,
             cards_dirty: false,
+            pending_1h_stamp: std::collections::HashSet::new(),
         }
     }
 
@@ -749,6 +762,7 @@ impl DurableState {
         }
         let restored = cards.len();
         let mut reparse_paths: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
+        let mut too_old = 0usize;
         if restored > 0 {
             let (max_entries, max_bytes) = (timeline_max_entries(), timeline_max_bytes());
             // Review finding (TRDD-ORGJ0E3G): `discover_all` is a full filesystem walk. Gating it
@@ -788,6 +802,7 @@ impl DurableState {
             // be 200 MB) — add a byte accumulator if cards ever grow past ~10 KB on average.
             const RESTORE_CHUNK: usize = 2_000;
             state.cards.begin();
+            let now = std::time::SystemTime::now();
             for (n, (_, mut card)) in cards.into_iter().enumerate() {
                 // Normalize on restore (TRDD-66IXMIGN): a log written before the cap may hold giant
                 // timelines; loading them uncapped rebuilds the very heap the cap prevents.
@@ -807,7 +822,20 @@ impl DurableState {
                     if needs_1h_field {
                         if let Some(session_id) = obj.get("sessionId").and_then(Value::as_str) {
                             if let Some(path) = claude_paths.get(session_id) {
-                                reparse_paths.insert(path.clone());
+                                // Item 1: skip a file older than REPARSE_MAX_AGE — see the
+                                // constant's comment. An unreadable mtime is treated as "too old"
+                                // (fail closed: never force I/O on a file we can't even stat).
+                                let recent = std::fs::metadata(path)
+                                    .and_then(|m| m.modified())
+                                    .ok()
+                                    .and_then(|mtime| now.duration_since(mtime).ok())
+                                    .is_some_and(|age| age <= REPARSE_MAX_AGE);
+                                if recent {
+                                    reparse_paths.insert(path.clone());
+                                    self.pending_1h_stamp.insert(session_id.to_string());
+                                } else {
+                                    too_old += 1;
+                                }
                             }
                         }
                     }
@@ -827,8 +855,8 @@ impl DurableState {
         // sees it, so it counts toward neither `imported` nor `skipped` — logged explicitly here
         // so a boot log distinguishes "dropped for a targeted reparse" from "skipped: stat
         // mismatch" instead of folding both into a lower, unexplained `imported`.
-        if !reparse_paths.is_empty() {
-            eprintln!("alcore: log-ingest targeted reparse — dropping {} file offset(s) missing cacheCreate1hTokens; rebuilt on the next sweep", reparse_paths.len());
+        if !reparse_paths.is_empty() || too_old > 0 {
+            eprintln!("alcore: log-ingest targeted reparse — dropping {} file offset(s) missing cacheCreate1hTokens; rebuilt on the next sweep ({too_old} skipped, older than {} days)", reparse_paths.len(), REPARSE_MAX_AGE.as_secs() / 86_400);
         }
         let offsets: IndexMap<String, Value> = if reparse_paths.is_empty() {
             offsets
@@ -837,6 +865,48 @@ impl DurableState {
         };
         let (imported, skipped) = tailer.import_file_state(&offsets);
         Ok((restored, imported, skipped))
+    }
+
+    /// TRDD-ORGJ0E3G review item 3: `restore`'s `any_candidates` prescan flags a card purely on
+    /// "source is claude_code and the field is absent" — it has no way to know the sweep that
+    /// follows actually filled it in. A file that turns out unparseable, truncated, or (a known,
+    /// narrower gap) a subagent transcript keyed under a different sessionId than the file's own
+    /// `session_id_for_file` never gains the field from that one sweep, so without this step
+    /// `any_candidates` would see it as a candidate again on every future boot and re-arm the
+    /// whole `discover_all` walk forever — turning a one-time migration into a permanent tax.
+    /// Called once, right after the boot sweep (`start_sweeper`) has had its one chance to
+    /// backfill every session id `restore` put into `pending_1h_stamp`: whatever still lacks the
+    /// key gets it stamped to 0 (the same value its absence already implied everywhere the field
+    /// is read), which both stops the re-flagging and matches "not yet corrected" honestly.
+    ///
+    /// Ordering invariant (not enforced by the type system — there is exactly one call site,
+    /// `start_sweeper`, right after its one boot sweep): call this exactly once per `restore()`,
+    /// after that restore's own boot sweep has run and BEFORE any later `restore()` on the same
+    /// `DurableState` repopulates `pending_1h_stamp`. Calling it twice, or skipping it, is safe
+    /// (each entry is re-checked against the live card before being touched) but calling it before
+    /// the matching sweep has run would stamp 0 prematurely, on a card the sweep was about to fill.
+    pub fn finalize_1h_stamps(&mut self, state: &mut crate::CoreState) {
+        if self.pending_1h_stamp.is_empty() {
+            return;
+        }
+        let pending = std::mem::take(&mut self.pending_1h_stamp);
+        let mut stamped = 0usize;
+        for session_id in pending {
+            if let Some(mut card) = state.cards.get(&session_id) {
+                let has_key = card.as_object().is_some_and(|o| o.contains_key("cacheCreate1hTokens"));
+                if !has_key {
+                    if let Some(obj) = card.as_object_mut() {
+                        obj.insert("cacheCreate1hTokens".into(), Value::from(0.0));
+                    }
+                    state.put_log_session(card);
+                    stamped += 1;
+                }
+            }
+        }
+        if stamped > 0 {
+            self.mark_dirty();
+            eprintln!("alcore: log-ingest targeted reparse — stamped cacheCreate1hTokens: 0 on {stamped} card(s) the reparse sweep did not fill in; not flagged again");
+        }
     }
 
     /// scheduleDurableSave — a sweep produced cards: both sidecars are dirty.
@@ -1098,6 +1168,7 @@ pub fn start_sweeper(
                 let mut st = state.lock_timed().expect("core state");
                 st.log_scan.add(&sweep);
                 st.ingest_scanned(scanned);
+                durable.finalize_1h_stamps(&mut st);
                 st.sweeper = Some(SweeperControl { tx });
             }
             let _ = boot_tx.send(Ok(BootReport {
