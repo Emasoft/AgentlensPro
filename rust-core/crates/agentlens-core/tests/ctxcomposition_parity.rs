@@ -62,15 +62,20 @@ fn cmp(got: &Value, exp: &Value, ctx: &str) {
 fn classify_attachment_reproduces_the_ts_oracle_exactly() {
     let o = oracle();
     for (case, exp) in o["classifyCases"].as_array().unwrap().iter().zip(o["classified"].as_array().unwrap()) {
-        let got = classify_attachment(case).map_or(Value::Null, |c| {
-            // Rebuild the TS return literal in ITS key order.
-            let mut m = Map::new();
-            m.insert("label".into(), Value::String(c.label));
-            m.insert("kind".into(), Value::String(c.kind.to_owned()));
-            m.insert("bytes".into(), Value::from(c.bytes));
-            m.insert("text".into(), Value::String(c.text));
-            Value::Object(m)
-        });
+        let got = Value::Array(
+            classify_attachment(case)
+                .into_iter()
+                .map(|c| {
+                    // Rebuild the TS return literal in ITS key order.
+                    let mut m = Map::new();
+                    m.insert("label".into(), Value::String(c.label));
+                    m.insert("kind".into(), Value::String(c.kind.to_owned()));
+                    m.insert("bytes".into(), Value::from(c.bytes));
+                    m.insert("text".into(), Value::String(c.text));
+                    Value::Object(m)
+                })
+                .collect(),
+        );
         cmp(&got, exp, &format!("classifyAttachment({case})"));
     }
 }

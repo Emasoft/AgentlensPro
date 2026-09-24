@@ -52,7 +52,29 @@ function joinedText(v: unknown): string {
 // EXPORTED as the ONE attachment classifier (TRDD-B22NYTOY): contextHistory and conversation
 // import it — an identical private copy previously lived in contextHistory (verified byte-equal
 // before de-duping), and the injected-content taxonomy must never fork.
-export function classifyAttachment(att: Record<string, unknown>): { label: string; kind: string; bytes: number; text: string } | null {
+// A LIST, not a nullable row (TRDD-ZQQYRYBO I9): since CC >=2.1.258 the transcript records every
+// loaded CLAUDE.md/rules file in ONE `instructions` attachment (`files: [{path, type, content}]`)
+// and the system prompt in a `prompt_snapshot` (`systemPrompt: [str]`); both were dropped, hiding
+// the largest injected block. `instructions` yields one row per file; every other type at most one.
+export type ClassifiedAttachment = { label: string; kind: string; bytes: number; text: string }
+export function classifyAttachment(att: Record<string, unknown>): ClassifiedAttachment[] {
+  if (att['type'] === 'instructions') {
+    const files = Array.isArray(att['files']) ? att['files'] as Record<string, unknown>[] : []
+    return files.flatMap(f => {
+      const bytes = utf8Len(f['content'])
+      if (bytes === 0) return []
+      return [{ label: `instructions: ${String(f['path'] ?? 'instructions')}`, kind: 'instructions', bytes, text: firstText(f, ['content']) }]
+    })
+  }
+  if (att['type'] === 'prompt_snapshot') {
+    const bytes = joinedLen(att['systemPrompt'])
+    return bytes === 0 ? [] : [{ label: 'system prompt', kind: 'systemPrompt', bytes, text: joinedText(att['systemPrompt']) }]
+  }
+  const one = classifyOne(att)
+  return one ? [one] : []
+}
+
+function classifyOne(att: Record<string, unknown>): ClassifiedAttachment | null {
   const t = String(att['type'] ?? '')
   const hookName = att['hookName'] ? String(att['hookName']) : undefined
   switch (t) {
@@ -213,34 +235,35 @@ export async function buildContextComposition(sessionId: string, parentSessionId
 
     const att = e['attachment'] as Record<string, unknown> | undefined
     if (!att) continue
-    const c = classifyAttachment(att)
-    if (!c || c.bytes === 0) continue
+    for (const c of classifyAttachment(att)) {
+      if (c.bytes === 0) continue
 
-    // Attribute to the turn this injected content feeds: the next assistant turn (1-based), matching
-    // the timeline's user_input turn = assistantTurns + 1.
-    const turn = assistantTurns + 1
-    let sources = byTurn.get(turn)
-    if (!sources) { sources = new Map(); byTurn.set(turn, sources) }
-    const cur = sources.get(c.label) ?? { kind: c.kind, bytes: 0, tokens: 0, count: 0, excerpt: '' }
-    cur.bytes += c.bytes
-    // Real tokenizer on the injected text. c.text is the primary content field; when the attachment
-    // spans multiple byte-bearing fields (c.bytes > the text's bytes) extrapolate by the byte ratio so
-    // the estimate still reflects the full injected weight rather than just the first field.
-    cur.tokens += c.text ? Math.round(countTokens(c.text) * (c.bytes / Math.max(1, utf8Len(c.text)))) : estimateTokensFromBytes(c.bytes)
-    cur.count += 1
-    // Keep the FIRST occurrence's leading text as the drill-leaf excerpt (capped). Later occurrences
-    // only add to the byte/token total — one representative excerpt is enough to show the real content.
-    // The excerpt is stored only while the whole-reconstruction budget has room (TRDD-PJC8N1HO); past
-    // it, excerpts are dropped (byte/token totals stay accurate) and the composition is truncated.
-    if (!cur.excerpt && c.text) {
-      if (excerptBytesStored < EXCERPT_BUDGET_BYTES) {
-        cur.excerpt = c.text.slice(0, EXCERPT_CAP)
-        excerptBytesStored += Buffer.byteLength(cur.excerpt, 'utf8')
-      } else {
-        truncated = true
+      // Attribute to the turn this injected content feeds: the next assistant turn (1-based), matching
+      // the timeline's user_input turn = assistantTurns + 1.
+      const turn = assistantTurns + 1
+      let sources = byTurn.get(turn)
+      if (!sources) { sources = new Map(); byTurn.set(turn, sources) }
+      const cur = sources.get(c.label) ?? { kind: c.kind, bytes: 0, tokens: 0, count: 0, excerpt: '' }
+      cur.bytes += c.bytes
+      // Real tokenizer on the injected text. c.text is the primary content field; when the attachment
+      // spans multiple byte-bearing fields (c.bytes > the text's bytes) extrapolate by the byte ratio so
+      // the estimate still reflects the full injected weight rather than just the first field.
+      cur.tokens += c.text ? Math.round(countTokens(c.text) * (c.bytes / Math.max(1, utf8Len(c.text)))) : estimateTokensFromBytes(c.bytes)
+      cur.count += 1
+      // Keep the FIRST occurrence's leading text as the drill-leaf excerpt (capped). Later occurrences
+      // only add to the byte/token total — one representative excerpt is enough to show the real content.
+      // The excerpt is stored only while the whole-reconstruction budget has room (TRDD-PJC8N1HO); past
+      // it, excerpts are dropped (byte/token totals stay accurate) and the composition is truncated.
+      if (!cur.excerpt && c.text) {
+        if (excerptBytesStored < EXCERPT_BUDGET_BYTES) {
+          cur.excerpt = c.text.slice(0, EXCERPT_CAP)
+          excerptBytesStored += Buffer.byteLength(cur.excerpt, 'utf8')
+        } else {
+          truncated = true
+        }
       }
+      sources.set(c.label, cur)
     }
-    sources.set(c.label, cur)
   }
   rl.close()
 

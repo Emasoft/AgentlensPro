@@ -98,13 +98,59 @@ pub struct Classified {
     pub text: String,
 }
 
-/// Classify one `attachment` entry into (label, kind, bytes, text). Returns None for shapes that
-/// carry no meaningful injected content (pure deltas with counts only, etc.).
+/// Classify one `attachment` entry into zero or more (label, kind, bytes, text) rows. Empty for
+/// shapes that carry no meaningful injected content (pure deltas with counts only, etc.).
 ///
 /// THE ONE attachment classifier (TRDD-B22NYTOY): contextHistory and conversation consume this
 /// same function in the TS — an identical private copy previously lived in contextHistory, and the
 /// injected-content taxonomy must never fork. Keep it that way here.
-pub fn classify_attachment(att: &Value) -> Option<Classified> {
+///
+/// A LIST, not an Option (TRDD-ZQQYRYBO I9): since CC ≥2.1.258 the transcript records every loaded
+/// CLAUDE.md/rules file in ONE `instructions` attachment (`files: [{path, type, content}]`) and the
+/// system prompt in a `prompt_snapshot` (`systemPrompt: [str]`). Both fell to `_ => None`, so the
+/// largest injected block was invisible here. `instructions` yields one row per file so the costliest
+/// file is visible; every other type yields at most one row.
+pub fn classify_attachment(att: &Value) -> Vec<Classified> {
+    match att.get("type").and_then(Value::as_str) {
+        Some("instructions") => att
+            .get("files")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|f| {
+                let bytes = utf8_len(f.get("content"));
+                if bytes == 0 {
+                    return None;
+                }
+                let path = match f.get("path") {
+                    None | Some(Value::Null) => "instructions".to_owned(),
+                    Some(v) => js_string(v),
+                };
+                Some(Classified {
+                    label: format!("instructions: {path}"),
+                    kind: "instructions",
+                    bytes,
+                    text: first_text(f, &["content"]),
+                })
+            })
+            .collect(),
+        Some("prompt_snapshot") => {
+            let bytes = joined_len(att.get("systemPrompt"));
+            if bytes == 0 {
+                return Vec::new();
+            }
+            vec![Classified {
+                label: "system prompt".into(),
+                kind: "systemPrompt",
+                bytes,
+                text: joined_text(att.get("systemPrompt")),
+            }]
+        }
+        _ => classify_one(att).into_iter().collect(),
+    }
+}
+
+fn classify_one(att: &Value) -> Option<Classified> {
     // `String(att['type'] ?? '')` — NULLISH then stringified, so a null/absent type is "" while a
     // numeric type stringifies rather than being rejected.
     let t = match att.get("type") {
@@ -358,34 +404,35 @@ pub fn build_context_composition(env: &Env, session_id: &str, parent_session_id:
             continue;
         }
         let Some(att) = e.get("attachment") else { continue };
-        let Some(c) = classify_attachment(att) else { continue };
-        if c.bytes == 0 {
-            continue;
-        }
+        for c in classify_attachment(att) {
+            if c.bytes == 0 {
+                continue;
+            }
 
-        // Attribute to the turn this injected content FEEDS: the next assistant turn (1-based),
-        // matching the timeline's `user_input` turn = assistantTurns + 1.
-        let turn = assistant_turns + 1;
-        let sources = by_turn.entry(turn).or_default();
-        let cur = sources.entry(c.label.clone()).or_insert_with(|| Acc { kind: c.kind, ..Acc::default() });
-        cur.bytes += c.bytes;
-        // The real tokenizer on the injected text. When the attachment spans MULTIPLE byte-bearing
-        // fields (c.bytes exceeds the text's own bytes) the count is extrapolated by the byte ratio,
-        // so the estimate reflects the full injected weight rather than only the first field.
-        cur.tokens += if c.text.is_empty() {
-            estimate_tokens_from_bytes(c.bytes) as f64
-        } else {
-            js_math_round(count_tokens(&c.text) * (c.bytes as f64 / (c.text.len() as f64).max(1.0)))
-        };
-        cur.count += 1.0;
-        // Keep the FIRST occurrence's leading text as the drill-leaf excerpt. Later occurrences add
-        // only to the byte/token total — one representative excerpt is enough to show real content.
-        if cur.excerpt.is_empty() && !c.text.is_empty() {
-            if excerpt_bytes_stored < budget {
-                cur.excerpt = crate::summarize::helpers::js_slice(&c.text, EXCERPT_CAP).to_owned();
-                excerpt_bytes_stored += cur.excerpt.len() as u64;
+            // Attribute to the turn this injected content FEEDS: the next assistant turn (1-based),
+            // matching the timeline's `user_input` turn = assistantTurns + 1.
+            let turn = assistant_turns + 1;
+            let sources = by_turn.entry(turn).or_default();
+            let cur = sources.entry(c.label.clone()).or_insert_with(|| Acc { kind: c.kind, ..Acc::default() });
+            cur.bytes += c.bytes;
+            // The real tokenizer on the injected text. When the attachment spans MULTIPLE byte-bearing
+            // fields (c.bytes exceeds the text's own bytes) the count is extrapolated by the byte ratio,
+            // so the estimate reflects the full injected weight rather than only the first field.
+            cur.tokens += if c.text.is_empty() {
+                estimate_tokens_from_bytes(c.bytes) as f64
             } else {
-                truncated = true;
+                js_math_round(count_tokens(&c.text) * (c.bytes as f64 / (c.text.len() as f64).max(1.0)))
+            };
+            cur.count += 1.0;
+            // Keep the FIRST occurrence's leading text as the drill-leaf excerpt. Later occurrences add
+            // only to the byte/token total — one representative excerpt is enough to show real content.
+            if cur.excerpt.is_empty() && !c.text.is_empty() {
+                if excerpt_bytes_stored < budget {
+                    cur.excerpt = crate::summarize::helpers::js_slice(&c.text, EXCERPT_CAP).to_owned();
+                    excerpt_bytes_stored += cur.excerpt.len() as u64;
+                } else {
+                    truncated = true;
+                }
             }
         }
     }

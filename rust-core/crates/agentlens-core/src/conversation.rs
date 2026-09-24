@@ -535,17 +535,23 @@ pub fn build_conversation_from_file(env: &Env, file_path: &str, session_id: &str
             }
 
             Some("attachment") => {
-                let c = e.get("attachment").and_then(classify_attachment);
-                match c.filter(|c| c.bytes > 0) {
-                    Some(c) => {
-                        let mut meta = Map::new();
-                        meta.insert("label".into(), Value::String(c.label.clone()));
-                        meta.insert("attachmentKind".into(), Value::String(c.kind.to_owned()));
-                        meta.insert("bytes".into(), num(c.bytes as f64));
-                        let text = c.text.clone();
-                        pending_attachments.push(make_block!("attachment", &text, vec![("meta".to_owned(), Value::Object(meta))]));
-                    }
-                    None => *other_records.entry("attachment".to_owned()).or_insert(0.0) += 1.0,
+                let rows: Vec<_> = e
+                    .get("attachment")
+                    .map(classify_attachment)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter(|c| c.bytes > 0)
+                    .collect();
+                if rows.is_empty() {
+                    *other_records.entry("attachment".to_owned()).or_insert(0.0) += 1.0;
+                }
+                for c in rows {
+                    let mut meta = Map::new();
+                    meta.insert("label".into(), Value::String(c.label.clone()));
+                    meta.insert("attachmentKind".into(), Value::String(c.kind.to_owned()));
+                    meta.insert("bytes".into(), num(c.bytes as f64));
+                    let text = c.text.clone();
+                    pending_attachments.push(make_block!("attachment", &text, vec![("meta".to_owned(), Value::Object(meta))]));
                 }
             }
 

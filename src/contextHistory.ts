@@ -42,6 +42,9 @@ function attachmentKind(kind: string): ContextBlockKind {
     case 'mcp': return 'mcp'
     case 'file': return 'file'
     case 'reminder': return 'reminder'
+    // TRDD-ZQQYRYBO I9: CLAUDE.md/rules files and the system prompt, recorded since CC 2.1.258.
+    case 'instructions': return 'claudemd'
+    case 'systemPrompt': return 'system'
     default: return 'other'
   }
 }
@@ -284,9 +287,10 @@ export async function buildContextHistory(sessionId: string, parentSessionId?: s
     if (type === 'attachment') {
       const att = e['attachment'] as Record<string, unknown> | undefined
       if (!att) continue
-      const c = classifyAttachment(att)
-      if (!c || c.bytes === 0) continue
-      addBlock(assistantTurns + 1, attachmentKind(c.kind), c.label, c.text, 'input')
+      for (const c of classifyAttachment(att)) {
+        if (c.bytes === 0) continue
+        addBlock(assistantTurns + 1, attachmentKind(c.kind), c.label, c.text, 'input')
+      }
       continue
     }
 

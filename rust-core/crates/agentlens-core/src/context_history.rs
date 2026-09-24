@@ -49,6 +49,9 @@ fn attachment_kind(kind: &str) -> &'static str {
         "mcp" => "mcp",
         "file" => "file",
         "reminder" => "reminder",
+        // TRDD-ZQQYRYBO I9: CLAUDE.md/rules files and the system prompt, recorded since CC 2.1.258.
+        "instructions" => "claudemd",
+        "systemPrompt" => "system",
         _ => "other",
     }
 }
@@ -418,13 +421,14 @@ pub fn build_context_history(env: &Env, session_id: &str, parent_session_id: Opt
 
         if ty == "attachment" {
             let Some(att) = e.get("attachment") else { continue };
-            let Some(c) = classify_attachment(att) else { continue };
-            if c.bytes == 0 {
-                continue;
+            for c in classify_attachment(att) {
+                if c.bytes == 0 {
+                    continue;
+                }
+                let turn = assistant_turns + 1;
+                let text = c.text.clone();
+                add_block!(turn, attachment_kind(c.kind), c.label.clone(), &text, "input", None);
             }
-            let turn = assistant_turns + 1;
-            let text = c.text.clone();
-            add_block!(turn, attachment_kind(c.kind), c.label.clone(), &text, "input", None);
             continue;
         }
 

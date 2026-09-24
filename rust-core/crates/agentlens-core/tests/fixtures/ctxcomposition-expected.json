@@ -97,6 +97,45 @@
    "content": "s"
   },
   {
+   "type": "instructions",
+   "files": [
+    {
+     "path": "/proj/CLAUDE.md",
+     "type": "Project",
+     "content": "project rules"
+    },
+    {
+     "path": "/home/x/.claude/rules/r.md",
+     "type": "User",
+     "content": "user rule"
+    },
+    {
+     "path": "/empty.md",
+     "type": "User",
+     "content": ""
+    },
+    {
+     "type": "AutoMem",
+     "content": "no path"
+    }
+   ]
+  },
+  {
+   "type": "instructions"
+  },
+  {
+   "type": "prompt_snapshot",
+   "systemPrompt": [
+    "You are",
+    "a helper"
+   ],
+   "reminderFold": false
+  },
+  {
+   "type": "prompt_snapshot",
+   "systemPrompt": []
+  },
+  {
    "type": "nope"
   },
   {
@@ -105,124 +144,192 @@
   {}
  ],
  "classified": [
-  {
-   "label": "hook: H",
-   "kind": "hook",
-   "bytes": 1,
-   "text": "c"
-  },
-  {
-   "label": "hook: unknown",
-   "kind": "hook",
-   "bytes": 1,
-   "text": "s"
-  },
-  null,
-  {
-   "label": "hook: unknown",
-   "kind": "hook",
-   "bytes": 1,
-   "text": "r"
-  },
-  {
-   "label": "hook: unknown",
-   "kind": "hook",
-   "bytes": 1,
-   "text": "e"
-  },
-  {
-   "label": "skill catalog",
-   "kind": "skill",
-   "bytes": 2,
-   "text": "sk"
-  },
-  {
-   "label": "skill catalog",
-   "kind": "skill",
-   "bytes": 0,
-   "text": ""
-  },
-  {
-   "label": "tool catalog",
-   "kind": "toolCatalog",
-   "bytes": 15,
-   "text": "a single string"
-  },
-  {
-   "label": "tool catalog",
-   "kind": "toolCatalog",
-   "bytes": 3,
-   "text": "two"
-  },
-  {
-   "label": "agent catalog",
-   "kind": "agentCatalog",
-   "bytes": 0,
-   "text": ""
-  },
-  {
-   "label": "mcp instructions",
-   "kind": "mcp",
-   "bytes": 2,
-   "text": "b"
-  },
-  {
-   "label": "mcp instructions",
-   "kind": "mcp",
-   "bytes": 10,
-   "text": "only-names"
-  },
-  {
-   "label": "file: c.txt",
-   "kind": "file",
-   "bytes": 1,
-   "text": "x"
-  },
-  {
-   "label": "file: C:\\win\\path.txt",
-   "kind": "file",
-   "bytes": 1,
-   "text": "x"
-  },
-  {
-   "label": "file: file",
-   "kind": "file",
-   "bytes": 14,
-   "text": "no name at all"
-  },
-  {
-   "label": "file: e.txt",
-   "kind": "file",
-   "bytes": 1,
-   "text": "t"
-  },
-  {
-   "label": "file: c.txt",
-   "kind": "file",
-   "bytes": 1,
-   "text": "c"
-  },
-  {
-   "label": "task reminder",
-   "kind": "reminder",
-   "bytes": 2,
-   "text": "tr"
-  },
-  {
-   "label": "invoked skills",
-   "kind": "skill",
-   "bytes": 2,
-   "text": "is"
-  },
-  {
-   "label": "invoked skills",
-   "kind": "skill",
-   "bytes": 1,
-   "text": "s"
-  },
-  null,
-  null,
-  null
+  [
+   {
+    "label": "hook: H",
+    "kind": "hook",
+    "bytes": 1,
+    "text": "c"
+   }
+  ],
+  [
+   {
+    "label": "hook: unknown",
+    "kind": "hook",
+    "bytes": 1,
+    "text": "s"
+   }
+  ],
+  [],
+  [
+   {
+    "label": "hook: unknown",
+    "kind": "hook",
+    "bytes": 1,
+    "text": "r"
+   }
+  ],
+  [
+   {
+    "label": "hook: unknown",
+    "kind": "hook",
+    "bytes": 1,
+    "text": "e"
+   }
+  ],
+  [
+   {
+    "label": "skill catalog",
+    "kind": "skill",
+    "bytes": 2,
+    "text": "sk"
+   }
+  ],
+  [
+   {
+    "label": "skill catalog",
+    "kind": "skill",
+    "bytes": 0,
+    "text": ""
+   }
+  ],
+  [
+   {
+    "label": "tool catalog",
+    "kind": "toolCatalog",
+    "bytes": 15,
+    "text": "a single string"
+   }
+  ],
+  [
+   {
+    "label": "tool catalog",
+    "kind": "toolCatalog",
+    "bytes": 3,
+    "text": "two"
+   }
+  ],
+  [
+   {
+    "label": "agent catalog",
+    "kind": "agentCatalog",
+    "bytes": 0,
+    "text": ""
+   }
+  ],
+  [
+   {
+    "label": "mcp instructions",
+    "kind": "mcp",
+    "bytes": 2,
+    "text": "b"
+   }
+  ],
+  [
+   {
+    "label": "mcp instructions",
+    "kind": "mcp",
+    "bytes": 10,
+    "text": "only-names"
+   }
+  ],
+  [
+   {
+    "label": "file: c.txt",
+    "kind": "file",
+    "bytes": 1,
+    "text": "x"
+   }
+  ],
+  [
+   {
+    "label": "file: C:\\win\\path.txt",
+    "kind": "file",
+    "bytes": 1,
+    "text": "x"
+   }
+  ],
+  [
+   {
+    "label": "file: file",
+    "kind": "file",
+    "bytes": 14,
+    "text": "no name at all"
+   }
+  ],
+  [
+   {
+    "label": "file: e.txt",
+    "kind": "file",
+    "bytes": 1,
+    "text": "t"
+   }
+  ],
+  [
+   {
+    "label": "file: c.txt",
+    "kind": "file",
+    "bytes": 1,
+    "text": "c"
+   }
+  ],
+  [
+   {
+    "label": "task reminder",
+    "kind": "reminder",
+    "bytes": 2,
+    "text": "tr"
+   }
+  ],
+  [
+   {
+    "label": "invoked skills",
+    "kind": "skill",
+    "bytes": 2,
+    "text": "is"
+   }
+  ],
+  [
+   {
+    "label": "invoked skills",
+    "kind": "skill",
+    "bytes": 1,
+    "text": "s"
+   }
+  ],
+  [
+   {
+    "label": "instructions: /proj/CLAUDE.md",
+    "kind": "instructions",
+    "bytes": 13,
+    "text": "project rules"
+   },
+   {
+    "label": "instructions: /home/x/.claude/rules/r.md",
+    "kind": "instructions",
+    "bytes": 9,
+    "text": "user rule"
+   },
+   {
+    "label": "instructions: instructions",
+    "kind": "instructions",
+    "bytes": 7,
+    "text": "no path"
+   }
+  ],
+  [],
+  [
+   {
+    "label": "system prompt",
+    "kind": "systemPrompt",
+    "bytes": 15,
+    "text": "You are\na helper"
+   }
+  ],
+  [],
+  [],
+  [],
+  []
  ],
  "compCases": [
   {
@@ -276,6 +383,15 @@
        "tokenSource": "estimated",
        "count": 1,
        "excerpt": "empty displayPath is USED (nullish, not falsy)"
+      },
+      {
+       "label": "system prompt",
+       "kind": "systemPrompt",
+       "bytes": 26,
+       "tokens": 9,
+       "tokenSource": "estimated",
+       "count": 1,
+       "excerpt": "You are a helper.\nBe brief."
       },
       {
        "label": "file: report.md",
@@ -332,6 +448,15 @@
        "excerpt": "skill a"
       },
       {
+       "label": "instructions: /proj/CLAUDE.md",
+       "kind": "instructions",
+       "bytes": 20,
+       "tokens": 4,
+       "tokenSource": "estimated",
+       "count": 1,
+       "excerpt": "project instructions"
+      },
+      {
        "label": "file: fallback.txt",
        "kind": "file",
        "bytes": 12,
@@ -339,6 +464,15 @@
        "tokenSource": "estimated",
        "count": 1,
        "excerpt": "via filename"
+      },
+      {
+       "label": "instructions: /home/x/.claude/rules/r.md",
+       "kind": "instructions",
+       "bytes": 11,
+       "tokens": 3,
+       "tokenSource": "estimated",
+       "count": 1,
+       "excerpt": "a user rule"
       },
       {
        "label": "hook: unknown",

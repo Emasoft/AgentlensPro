@@ -55,6 +55,12 @@ const own = [
   att({ type: 'invoked_skills', content: 'skill a' }),
   att({ type: 'skill', content: 'skill b' }),
   att({ type: 'totally_unknown_kind', content: 'ignored' }),             // → null
+  // TRDD-ZQQYRYBO I9: one attachment → one row per instruction file, plus the system prompt.
+  att({ type: 'instructions', files: [
+    { path: '/proj/CLAUDE.md', type: 'Project', content: 'project instructions' },
+    { path: '/home/x/.claude/rules/r.md', type: 'User', content: 'a user rule' },
+  ] }),
+  att({ type: 'prompt_snapshot', systemPrompt: ['You are a helper.', 'Be brief.'], reminderFold: false }),
   att({ type: 'hook_success', hookName: 'PostToolUse' }),                // 0 bytes → DROPPED
   asst(undefined),                                                       // NO id → always advances
   att({ type: 'task_reminder', content: 'turn 3 reminder' }),
@@ -94,6 +100,17 @@ const classifyCases = [
   { type: 'task_reminder', content: 'tr' },
   { type: 'invoked_skills', content: 'is' },
   { type: 'skill', content: 's' },
+  // TRDD-ZQQYRYBO I9 (CC >=2.1.258): one row per instruction file; an empty file and a missing
+  // path are handled; the system prompt snapshot joins its strings.
+  { type: 'instructions', files: [
+    { path: '/proj/CLAUDE.md', type: 'Project', content: 'project rules' },
+    { path: '/home/x/.claude/rules/r.md', type: 'User', content: 'user rule' },
+    { path: '/empty.md', type: 'User', content: '' },
+    { type: 'AutoMem', content: 'no path' },
+  ] },
+  { type: 'instructions' },                                      // no files → no rows
+  { type: 'prompt_snapshot', systemPrompt: ['You are', 'a helper'], reminderFold: false },
+  { type: 'prompt_snapshot', systemPrompt: [] },                 // empty → no rows
   { type: 'nope' },
   { type: null },
   {},

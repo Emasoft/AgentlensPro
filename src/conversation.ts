@@ -284,11 +284,10 @@ export async function buildConversationFromFile(filePath: string, sessionId: str
 
     if (type === 'attachment') {
       const att = e['attachment'] as Record<string, unknown> | undefined
-      const c = att ? classifyAttachment(att) : null
-      if (c && c.bytes > 0) {
+      const rows = (att ? classifyAttachment(att) : []).filter(c => c.bytes > 0)
+      if (rows.length === 0) otherRecords['attachment'] = (otherRecords['attachment'] ?? 0) + 1
+      for (const c of rows) {
         pendingAttachments.push(makeBlock('attachment', c.text, { meta: { label: c.label, attachmentKind: c.kind, bytes: c.bytes } }))
-      } else {
-        otherRecords['attachment'] = (otherRecords['attachment'] ?? 0) + 1
       }
       continue
     }
