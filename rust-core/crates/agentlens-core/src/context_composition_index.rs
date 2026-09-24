@@ -579,7 +579,7 @@ pub fn resolve_refs(registry: &crate::call_body_registry::CallBodyRegistry, sess
         .into_iter()
         .filter(|p| p.body_ref.as_deref().is_some_and(|b| !b.is_empty()))
         .map(|p| {
-            let resp = registry.response_for(session_id, p.span_id.as_deref(), p.request_id.as_deref());
+            let resp = registry.response_for(session_id, p.span_id.as_deref(), p.request_id.as_deref(), p.request_body_id.as_deref());
             let mut m = Map::new();
             m.insert("bodyRef".into(), Value::String(p.body_ref.clone().unwrap_or_default()));
             m.insert("ts".into(), num(p.ts as f64));

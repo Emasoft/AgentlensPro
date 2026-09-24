@@ -466,6 +466,14 @@ pub struct BodyPointer {
     pub model: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub query_source: Option<String>,
+    /// CC ≥2.1.274: on BOTH body events, the exact request↔response pairing key.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_body_id: Option<String>,
+    /// CC ≥2.1.274, api_response_body only: the response `id` and its final transcript entry.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message_uuid: Option<String>,
     pub ts: i64,
 }
 
@@ -646,6 +654,9 @@ impl IngestState {
                                 span_id: none_if_empty(body_span_id),
                                 model: none_if_empty(get_attr_from(&attrs, &["model"])),
                                 query_source: none_if_empty(get_attr_from(&attrs, &["query_source", "query.source"])),
+                                request_body_id: none_if_empty(get_attr_from(&attrs, &["request_body_id"])),
+                                message_id: none_if_empty(get_attr_from(&attrs, &["message.id", "message_id"])),
+                                message_uuid: none_if_empty(get_attr_from(&attrs, &["message.uuid", "message_uuid"])),
                                 ts: now_ms,
                             });
                         }

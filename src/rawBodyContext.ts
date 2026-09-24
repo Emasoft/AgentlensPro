@@ -38,6 +38,11 @@ export interface CallBodyPointer {
   ts: number            // arrival epoch-ms — used for nearest-preceding correlation
   model?: string
   querySource?: string
+  // CC ≥2.1.274: on BOTH body events, the exact request↔response key (TRDD-ZQQYRYBO I12a); the
+  // spanId / nearest-preceding-ts fallbacks mispair interleaved agents of one session.
+  requestBodyId?: string
+  messageId?: string    // response only: the response body's `id`
+  messageUuid?: string  // response only: its final transcript entry
 }
 
 /** Bounded (LRU by session, capped per session) index of raw-body pointers. Both the extension-host
@@ -86,6 +91,10 @@ export class CallBodyRegistry {
       if (direct) { return direct }
       const resp = list.find(p => p.kind === 'response' && p.requestId === sel.requestId)
       if (resp) {
+        if (resp.requestBodyId) {
+          const exact = requests.find(p => p.requestBodyId === resp.requestBodyId)
+          if (exact) { return exact }
+        }
         if (resp.spanId) {
           const paired = requests.find(p => p.spanId === resp.spanId)
           if (paired) { return paired }
@@ -138,10 +147,14 @@ export class CallBodyRegistry {
   /** The RESPONSE-body pointer paired with a request, joined on the shared spanId (the request-body
    *  event lacks the API-assigned request_id; the response-body event carries both). Used to read the
    *  authoritative per-call `usage` totals. Falls back to requestId match when spanId is absent. */
-  responseFor(sessionId: string, sel: { spanId?: string; requestId?: string }): CallBodyPointer | undefined {
+  responseFor(sessionId: string, sel: { spanId?: string; requestId?: string; requestBodyId?: string }): CallBodyPointer | undefined {
     const list = this.map.get(sessionId)
     if (!list) { return undefined }
     const responses = list.filter(p => p.kind === 'response')
+    if (sel.requestBodyId) {
+      const exact = responses.find(p => p.requestBodyId === sel.requestBodyId)
+      if (exact) { return exact }
+    }
     if (sel.spanId) {
       const bySpan = responses.find(p => p.spanId === sel.spanId)
       if (bySpan) { return bySpan }

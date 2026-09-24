@@ -47,6 +47,7 @@ fn resolve(case: &Value) -> (Value, Option<String>) {
                 model: p.get("model").and_then(Value::as_str).map(str::to_owned),
                 query_source: None,
                 ts: p["ts"].as_i64().unwrap(),
+                ..Default::default()
             },
         );
     }

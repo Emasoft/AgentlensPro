@@ -498,7 +498,7 @@ export class ContextCompositionIndex {
     const refs: RequestRef[] = pointers
       .filter(p => Boolean(p.bodyRef))
       .map(p => {
-        const resp = callBodyRegistry.responseFor(sessionId, { spanId: p.spanId, requestId: p.requestId })
+        const resp = callBodyRegistry.responseFor(sessionId, { spanId: p.spanId, requestId: p.requestId, requestBodyId: p.requestBodyId })
         return { bodyRef: p.bodyRef as string, ts: p.ts, spanId: p.spanId, requestId: p.requestId, responseRef: resp?.bodyRef, model: p.model }
       })
     const projectHint = projectFor?.(sessionId)

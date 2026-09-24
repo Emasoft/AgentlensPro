@@ -14,7 +14,7 @@ use indexmap::IndexMap;
 
 /// CallBodyPointer — one raw request/response body's address. Mirrors agentlens_ingest's
 /// `BodyPointer` (the ingest emits exactly this, minus the registry).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct CallBodyPointer {
     pub kind: &'static str, // "request" | "response"
     pub body_ref: Option<String>,
@@ -23,6 +23,14 @@ pub struct CallBodyPointer {
     pub span_id: Option<String>,
     pub model: Option<String>,
     pub query_source: Option<String>,
+    /// CC ≥2.1.274: the id of ONE request-body attempt, carried by BOTH the api_request_body event
+    /// and the api_response_body event that answers it. The only exact request↔response key: the
+    /// request event has no request_id, and spanId / nearest-preceding-ts mispair when several
+    /// agents of one session interleave (TRDD-ZQQYRYBO I12a). None on older captures.
+    pub request_body_id: Option<String>,
+    /// CC ≥2.1.274, response only: the response body's `id` and its final transcript entry uuid.
+    pub message_id: Option<String>,
+    pub message_uuid: Option<String>,
     /// Arrival epoch-ms — the nearest-preceding correlation key.
     pub ts: i64,
 }
@@ -83,6 +91,9 @@ impl CallBodyRegistry {
                 span_id: p.span_id,
                 model: p.model,
                 query_source: p.query_source,
+                request_body_id: p.request_body_id,
+                message_id: p.message_id,
+                message_uuid: p.message_uuid,
                 ts: p.ts,
             },
         );
@@ -90,9 +101,10 @@ impl CallBodyRegistry {
 
     /// resolveRequest — the REQUEST pointer for one call. The request-body event carries
     /// spanId + body_ref but NOT request_id (the API assigns it); the response-body event
-    /// carries request_id. So a caller who only knows request_id hops response→request via the
-    /// shared spanId, else nearest-PRECEDING request by ts. Then spanId. Then the session's
-    /// latest request.
+    /// carries request_id. So a caller who only knows request_id hops response→request — by the
+    /// shared request_body_id when both events carry it (CC ≥2.1.274, exact), else the shared
+    /// spanId, else nearest-PRECEDING request by ts. Then spanId. Then the session's latest
+    /// request.
     pub fn resolve_request(&self, session_id: &str, request_id: Option<&str>, span_id: Option<&str>) -> Option<&CallBodyPointer> {
         let list = self.map.get(session_id)?;
         if list.is_empty() {
@@ -107,6 +119,12 @@ impl CallBodyRegistry {
                 return Some(direct);
             }
             if let Some(resp) = list.iter().find(|p| p.kind == "response" && p.request_id.as_deref() == Some(rid)) {
+                // Exact first: the heuristics below mispair interleaved agents of one session.
+                if let Some(rbid) = resp.request_body_id.as_deref() {
+                    if let Some(exact) = requests.iter().find(|p| p.request_body_id.as_deref() == Some(rbid)) {
+                        return Some(exact);
+                    }
+                }
                 if let Some(rsid) = resp.span_id.as_deref() {
                     if let Some(paired) = requests.iter().find(|p| p.span_id.as_deref() == Some(rsid)) {
                         return Some(paired);
@@ -145,12 +163,24 @@ impl CallBodyRegistry {
         out
     }
 
-    /// responseFor — the RESPONSE paired with a request, joined on the shared spanId (the
-    /// request-body event lacks the API-assigned request_id). Falls back to requestId. This is
-    /// what makes the composition index's EXACT per-call usage readable instead of estimated.
-    pub fn response_for(&self, session_id: &str, span_id: Option<&str>, request_id: Option<&str>) -> Option<&CallBodyPointer> {
+    /// responseFor — the RESPONSE paired with a request: by the shared request_body_id when the
+    /// request carries one (CC ≥2.1.274, exact), else the shared spanId (the request-body event
+    /// lacks the API-assigned request_id), else requestId. This is what makes the composition
+    /// index's EXACT per-call usage readable instead of estimated.
+    pub fn response_for(
+        &self,
+        session_id: &str,
+        span_id: Option<&str>,
+        request_id: Option<&str>,
+        request_body_id: Option<&str>,
+    ) -> Option<&CallBodyPointer> {
         let list = self.map.get(session_id)?;
         let responses = || list.iter().filter(|p| p.kind == "response");
+        if let Some(rbid) = request_body_id {
+            if let Some(exact) = responses().find(|p| p.request_body_id.as_deref() == Some(rbid)) {
+                return Some(exact);
+            }
+        }
         if let Some(sid) = span_id {
             if let Some(by_span) = responses().find(|p| p.span_id.as_deref() == Some(sid)) {
                 return Some(by_span);

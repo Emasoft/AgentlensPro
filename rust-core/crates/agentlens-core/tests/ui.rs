@@ -1350,6 +1350,7 @@ fn composition_index_and_block_content_routes() {
                 model: None,
                 query_source: None,
                 ts: 1000,
+                ..Default::default()
             },
         );
     }
@@ -1523,6 +1524,7 @@ fn callcontext_route_resolves_a_body_and_backfills_the_account() {
                 model: None,
                 query_source: None,
                 ts: 1,
+                ..Default::default()
             },
         );
         assert!(st.accounts.account_for("cc-sess").is_none(), "account is unknown before the drill");
@@ -1632,6 +1634,7 @@ fn mcp_get_call_context_tool_answers_through_the_full_chain() {
                 model: None,
                 query_source: None,
                 ts: 1,
+                ..Default::default()
             },
         );
     }
@@ -1952,6 +1955,7 @@ fn mcp_get_block_content_matches_the_http_route_and_never_ships_image_bytes() {
                 model: None,
                 query_source: None,
                 ts: 1000,
+                ..Default::default()
             },
         );
     }
@@ -2012,6 +2016,7 @@ fn mcp_scoped_composition_tools_resolve_the_project_and_report_coverage() {
                 model: None,
                 query_source: None,
                 ts: 1000,
+                ..Default::default()
             },
         );
         // The card is what carries the workspace — without it there is no project to resolve.
