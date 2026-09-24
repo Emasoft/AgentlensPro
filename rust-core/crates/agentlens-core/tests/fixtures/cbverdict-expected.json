@@ -1728,6 +1728,85 @@
         "culpritSummary": "thinking enabled:1000 → enabled:2000"
       }
     },
+    "param_thinking_display": {
+      "prev": {
+        "model": "claude-opus-5",
+        "tools": [],
+        "system": [
+          {
+            "type": "text",
+            "text": "system prose",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ],
+        "thinking": {
+          "type": "enabled",
+          "budget_tokens": 1000,
+          "display": "requested"
+        }
+      },
+      "cur": {
+        "model": "claude-opus-5",
+        "tools": [],
+        "system": [
+          {
+            "type": "text",
+            "text": "system prose",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ],
+        "thinking": {
+          "type": "enabled",
+          "budget_tokens": 1000,
+          "display": "suppressed"
+        }
+      },
+      "prev2": null,
+      "timing": {
+        "cacheReadTokens": 5000,
+        "cacheCreateTokens": 20000,
+        "ephemeral5mTokens": 0,
+        "ephemeral1hTokens": 20000
+      },
+      "verdict": {
+        "cause": "THINKING_CONFIG_CHANGED",
+        "culpritLayer": "effort",
+        "culpritId": "param:thinking",
+        "culpritSummary": "thinking enabled:1000:display=requested → enabled:1000:display=suppressed"
+      }
+    },
     "param_effort": {
       "prev": {
         "model": "claude-opus-5",
@@ -1766,6 +1845,173 @@
           {
             "type": "text",
             "text": "system prose",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ],
+        "output_config": {
+          "effort": "high"
+        }
+      },
+      "prev2": null,
+      "timing": {
+        "cacheReadTokens": 5000,
+        "cacheCreateTokens": 20000,
+        "ephemeral5mTokens": 0,
+        "ephemeral1hTokens": 20000
+      },
+      "verdict": {
+        "cause": "EFFORT_PARAM_CHANGED",
+        "culpritLayer": "effort",
+        "culpritId": "param:effort",
+        "culpritSummary": "output_config.effort low → high"
+      }
+    },
+    "param_effort_fable_gated": {
+      "prev": {
+        "model": "claude-fable-5-1",
+        "tools": [],
+        "system": [
+          {
+            "type": "text",
+            "text": "stable prose"
+          },
+          {
+            "type": "text",
+            "text": "x-anthropic-billing-header: cc_version=2.1.281",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ],
+        "output_config": {
+          "effort": "low"
+        }
+      },
+      "cur": {
+        "model": "claude-fable-5-1",
+        "tools": [],
+        "system": [
+          {
+            "type": "text",
+            "text": "stable prose"
+          },
+          {
+            "type": "text",
+            "text": "x-anthropic-billing-header: cc_version=2.1.281",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ],
+        "output_config": {
+          "effort": "high"
+        }
+      },
+      "prev2": null,
+      "timing": {
+        "cacheReadTokens": 5000,
+        "cacheCreateTokens": 20000,
+        "ephemeral5mTokens": 0,
+        "ephemeral1hTokens": 20000
+      },
+      "verdict": {
+        "cause": "UNCLASSIFIED",
+        "culpritLayer": "timing",
+        "culpritId": "timing:UNCLASSIFIED",
+        "culpritSummary": "unlocalised re-write",
+        "rawDiffSummary": "prefix byte-identical by fingerprint but cache_creation=20000; tools=0 sys=2 msg=1"
+      }
+    },
+    "param_effort_fable_ungated": {
+      "prev": {
+        "model": "claude-fable-5-1",
+        "tools": [],
+        "system": [
+          {
+            "type": "text",
+            "text": "stable prose"
+          },
+          {
+            "type": "text",
+            "text": "x-anthropic-billing-header: cc_version=2.1.259",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ],
+        "output_config": {
+          "effort": "low"
+        }
+      },
+      "cur": {
+        "model": "claude-fable-5-1",
+        "tools": [],
+        "system": [
+          {
+            "type": "text",
+            "text": "stable prose"
+          },
+          {
+            "type": "text",
+            "text": "x-anthropic-billing-header: cc_version=2.1.259",
             "cache_control": {
               "type": "ephemeral"
             }
@@ -2140,6 +2386,75 @@
               {
                 "type": "text",
                 "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "prev2": null,
+      "timing": {
+        "cacheReadTokens": 5000,
+        "cacheCreateTokens": 20000,
+        "ephemeral5mTokens": 0,
+        "ephemeral1hTokens": 20000
+      },
+      "verdict": {
+        "cause": "GIT_STATE_CHANGED",
+        "culpritLayer": "system",
+        "culpritId": "system:git-snapshot",
+        "culpritSummary": "the startup git snapshot (branch / status / recent commits) changed between these turns"
+      }
+    },
+    "git_changed_msg0": {
+      "prev": {
+        "model": "claude-opus-5",
+        "tools": [],
+        "system": [
+          {
+            "type": "text",
+            "text": "no git snapshot in system text on this harness version",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "<system-reminder>\n# gitStatus\nCurrent branch: main\n\nMain branch: main\n</system-reminder>",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "cur": {
+        "model": "claude-opus-5",
+        "tools": [],
+        "system": [
+          {
+            "type": "text",
+            "text": "no git snapshot in system text on this harness version",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "<system-reminder>\n# gitStatus\nCurrent branch: feature/x\n\nMain branch: main\n</system-reminder>",
                 "cache_control": {
                   "type": "ephemeral"
                 }

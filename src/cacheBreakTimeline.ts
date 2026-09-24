@@ -27,6 +27,7 @@
 // the one scan pass and the multi-MB raw body is dropped immediately, so memory stays bounded.
 
 import { parseUserId } from './rawBodyContext'
+import { compareVersions } from './loadedPluginVersions'
 import { claudeProjectsDirs } from './logReader'
 import { estimateTokensFromBytes } from './tokenEstimator'
 import { calcTokenCostUsd } from './shared/pricing'
@@ -127,9 +128,9 @@ export const CACHE_BREAK_REMEDIATION: Record<CacheBreakTimelineCause, string> = 
   MESSAGE_SPLICED:            'A NEW block was INSERTED into the middle of the cached prefix, shifting every later block — everything after the splice point re-writes. The actor is whatever injected the block (typically the harness re-homing a hook/system message), never the shifted bystanders after it.',
   ATTACHMENT_CHANGED:         'A non-text block (image / tool_use input) inside the cached prefix changed or moved. Past attachments should be immutable; an image riding in the prefix re-bills the tail on any change.',
   WORKING_DIR_CHANGED:        'The environment block (working directory / platform / shell / OS) differs between these two turns, and it sits inside the cached system prefix — so a cache entry is scoped to ONE directory, and a second worktree of the same repository is a different prefix. This fires only ACROSS directories, never within one: `/cd` is engineered cache-safe (the new directory\'s CLAUDE.md is appended as a message instead of rebuilding the system prompt). Keep long-running work in one directory, or accept one cold warm per directory.',
-  GIT_STATE_CHANGED:          'The startup git snapshot (branch, status, recent commits) carried in the system prefix differs. It is captured ONCE at session start and never updates during a session, so this can only fire between turns that started from different snapshots — a resume, or a second stream sharing this session id. Sequential sessions share a prefix only when that snapshot matches, so branch/commit churn between sessions costs one cold warm each; nothing to fix mid-session.',
+  GIT_STATE_CHANGED:          'The startup git snapshot (branch, status, recent commits) carried in the prefix differs — in system text on older captures, or in the first user message\'s `# gitStatus` reminder on CC 2.1.281+. It is refreshed after a compaction (CC 2.1.269), so within one uncompacted stretch this can only fire between turns that started from different snapshots — a resume, or a second stream sharing this session id; across a compaction, a real branch/commit change is expected once. Sequential sessions share a prefix only when that snapshot matches, so branch/commit churn between sessions costs one cold warm each.',
   THINKING_CONFIG_CHANGED:    'The thinking configuration changed (type or budget_tokens). It is rendered into the prompt itself, so message-level breakpoints ALWAYS miss; tools and system miss only on models that render the configuration ahead of them, and the docs do not enumerate which. Fix the thinking config once at session start.',
-  EFFORT_PARAM_CHANGED:       'output_config.effort changed between two EXPLICIT values. Message blocks always miss; the effect on tools/system is model-specific. Setting effort explicitly to the model default is a documented no-op, so this never fires on an absent↔present transition — only on two different explicit values. Pick one effort level per conversation.',
+  EFFORT_PARAM_CHANGED:       'output_config.effort changed between two EXPLICIT values. Message blocks always miss; the effect on tools/system is model-specific. Setting effort explicitly to the model default is a documented no-op, so this never fires on an absent↔present transition — only on two different explicit values. On claude-fable-5-1 at CC ≥2.1.260 an effort change is documented cache-safe (its per-model default is known), so this cause is never emitted for that model/version — nothing to fix there. Pick one effort level per conversation.',
   TOOL_CHOICE_CHANGED:        'tool_choice changed between two explicit values. Per the docs this invalidates MESSAGE blocks only — tools and system stay cached — so the write is bounded by the message layer rather than the whole prefix. Keep tool_choice constant for the lifetime of a cached conversation.',
   LOOKBACK_OVERFLOW:          'No block changed, yet the cache found nothing to read: at least 20 blocks were appended since the last cache WRITE, and the lookback window is 20 blocks, so it walked past the last entry. This is claimed only when cache_read is 0 with an unchanged prefix — ordinary growth still reads. Add a second breakpoint closer to the growing tail so a write accumulates there before the window overruns.',
   BELOW_MIN_CACHEABLE:        'Both usage counters are 0 while the request DID carry cache_control markers, and the prompt is under this model\'s minimum cacheable length — a below-minimum prompt is silently not cached, with no error. The minimum is per model (512 to 4,096 tokens, an 8x spread), so this fires only when the estimate is under THIS model\'s threshold. Expand the cached content to reach it, or accept the full input rate on these calls.',
@@ -177,6 +178,22 @@ const ENV_CLI_RE = /# Environment\nYou have been invoked in the following enviro
 
 function extractEnvRegion(systemText: string): string {
   return ENV_SDK_RE.exec(systemText)?.[0] ?? ENV_CLI_RE.exec(systemText)?.[0] ?? ''
+}
+
+/** B1 (CC 2.1.281): `gitStatus` moved OUT of system text and is rendered into the first user
+ *  message as a `<system-reminder># gitStatus\n...</system-reminder>` block instead — the old
+ *  `gitStatus:` anchor below is dead on that harness version, so this second anchor is required or
+ *  every git-driven break on 2.1.281+ misclassifies as HOOK_INJECTION (msg[0] block diff, which
+ *  runs after the git check). Region: `# gitStatus\n` through the next `\n# ` heading or the
+ *  closing tag, whichever comes first — never past this reminder into unrelated msg[0] content. */
+function extractGitRegionMsg0(text: string): string {
+  const anchor = '# gitStatus\n'
+  const start = text.indexOf(anchor)
+  if (start < 0) return ''
+  const rest = text.slice(start + anchor.length)
+  const ends = [rest.indexOf('\n# '), rest.indexOf('</system-reminder>')].filter(i => i >= 0)
+  if (ends.length === 0) return text.slice(start)
+  return text.slice(start, start + anchor.length + Math.min(...ends))
 }
 
 /** The git snapshot: from `gitStatus:` through the end of the `Recent commits:` list. It STOPS at the
@@ -402,6 +419,10 @@ export interface TurnPrefix {
   // diff (which names SYSTEM_TIMESTAMP) instead of being blamed on a directory change.
   envFp: string; envNorm: string
   gitFp: string; gitNorm: string
+  // `cc_version` out of the bounded billing/agent-meta block (`extractCcVersion`), '' when absent —
+  // gates EFFORT_PARAM_CHANGED on Fable 5.1 >=2.1.260 (I7 item 2), never sourced from an unbounded
+  // regex over system text.
+  ccVersion: string
   // Whole-request signals for the no-cache-activity diagnosis (CACHING_DISABLED/BELOW_MIN_CACHEABLE).
   hasCacheControl: boolean
   promptTokensApprox: number   // estimated, over EVERY message + system + tools (not just the prefix)
@@ -437,12 +458,16 @@ export interface RawRequestForBreak {
 function paramSignature(v: unknown): string {
   if (v === undefined || v === null) return ''
   if (typeof v === 'object') {
-    const o = v as { type?: unknown; budget_tokens?: unknown; name?: unknown }
+    const o = v as { type?: unknown; budget_tokens?: unknown; name?: unknown; display?: unknown }
     // thinking / tool_choice both key on `type` (+ budget / tool name) — stringify those explicitly
     // so key-order churn in the raw JSON can never read as a parameter change.
     if (typeof o.type === 'string') {
       const extra = typeof o.budget_tokens === 'number' ? `:${o.budget_tokens}` : typeof o.name === 'string' ? `:${o.name}` : ''
-      return `${o.type}${extra}`
+      // `thinking.display` toggles the rendered extended-thinking UI; spelled out separately from
+      // `extra` (never folded into it) because it is orthogonal to budget_tokens/name and both can
+      // be present on `thinking` at once.
+      const display = o.display !== undefined ? `:display=${String(o.display)}` : ''
+      return `${o.type}${extra}${display}`
     }
     return JSON.stringify(v)
   }
@@ -454,6 +479,36 @@ function effortParamOf(body: RawRequestForBreak): string {
   if (!oc || typeof oc !== 'object') return ''
   const e = (oc as { effort?: unknown }).effort
   return typeof e === 'string' ? e : ''
+}
+
+/** Bounded, like a `MAX_BILLING_HEADER_BYTES`-style guard — a substring test alone self-matches:
+ *  any injected block that merely QUOTES `cc_version=` (a CLAUDE.md, a rule file, a memory page
+ *  documenting this very mechanism) would misread as the billing header. */
+const MAX_AGENT_META_BYTES = 4096
+function isAgentMetaBlock(text: string): boolean {
+  return text.length <= MAX_AGENT_META_BYTES
+    && (text.includes('x-anthropic-billing-header') || text.includes('cc_version=') || text.includes('cc_entrypoint='))
+}
+
+/** `cc_version` out of the bounded billing/agent-meta block ONLY — never an unbounded regex over the
+ *  whole system[0], which a large injected block quoting `cc_version=` in prose would poison. Used
+ *  to gate EFFORT_PARAM_CHANGED on Fable 5.1 >=2.1.260 (I7 item 2).
+ *
+ *  SCANS EVERY agent-meta-shaped block, not just the first: isAgentMetaBlock matches on
+ *  `cc_entrypoint=` OR `cc_version=` independently (mirroring the Rust twin's `is_agent_meta`), so a
+ *  short prose block quoting only `cc_entrypoint=` must not short-circuit the search past the real
+ *  billing header later in the array (review-caught bug, I7 revision 1: the original `.find()`
+ *  first-match version did exactly that). */
+function extractCcVersion(systemTexts: string[]): string {
+  for (const block of systemTexts.filter(isAgentMetaBlock)) {
+    const start = block.indexOf('cc_version=')
+    if (start < 0) continue
+    const from = start + 'cc_version='.length
+    const semi = block.indexOf(';', from)
+    const v = block.slice(from, semi < 0 ? block.length : semi).trim()
+    if (v) return v
+  }
+  return ''
 }
 
 function toPrefixBlock(layer: 'system' | 'message', kind: BlockContentKind, label: string, text: string): PrefixBlock {
@@ -512,6 +567,15 @@ function messageBlockText(b: RawBlockLike): string {
     if (typeof c === 'string') return c
     if (Array.isArray(c)) return c.map(x => (x && typeof x === 'object' && (x as { text?: string }).text) || '').join('\n')
   }
+  return ''
+}
+
+/** The first message's own text, joined across its content blocks — used ONLY to locate the
+ *  msg[0] `# gitStatus` reminder (B1); never fed into the message-block cache diff itself. */
+function firstUserMessageText(messages: RawMessageLike[]): string {
+  const c = messages[0]?.content
+  if (typeof c === 'string') return c
+  if (Array.isArray(c)) return c.map(b => (b && typeof b === 'object' ? messageBlockText(b as RawBlockLike) : '')).join('\n')
   return ''
 }
 
@@ -614,7 +678,7 @@ export function extractTurnPrefix(body: RawRequestForBreak | null): TurnPrefix |
 
   const systemText = systemTexts.join('\n')
   const envRegion = extractEnvRegion(systemText)
-  const gitRegion = extractGitRegion(systemText)
+  const gitRegion = extractGitRegion(systemText) || extractGitRegionMsg0(firstUserMessageText(messages))
 
   return {
     model,
@@ -626,6 +690,7 @@ export function extractTurnPrefix(body: RawRequestForBreak | null): TurnPrefix |
     envNorm: envRegion ? fnv1a(normalizeVolatile(envRegion)) : '',
     gitFp: gitRegion ? fnv1a(gitRegion) : '',
     gitNorm: gitRegion ? fnv1a(normalizeVolatile(gitRegion)) : '',
+    ccVersion: extractCcVersion(systemTexts),
     hasCacheControl: ccMarkers > 0,
     promptTokensApprox: estimateTokensFromBytes(promptBytes),
     messageCount: messages.length,
@@ -935,7 +1000,26 @@ export function classifyCacheBreak(prev: TurnPrefix | null, cur: TurnPrefix, tim
   if (paramChanged(prev.thinking, cur.thinking)) {
     return { cause: 'THINKING_CONFIG_CHANGED', culpritLayer: 'effort', culpritId: 'param:thinking', culpritSummary: `thinking ${prev.thinking} → ${cur.thinking}` }
   }
-  if (paramChanged(prev.effortParam, cur.effortParam)) {
+  // Fable 5.1 >=2.1.260: an explicit effort change on this model/version is documented cache-safe
+  // (its per-model default is now known), so naming it EFFORT_PARAM_CHANGED here would be a guess,
+  // not a fact — skip it and let the diff fall through to the next branch. Every other model/version
+  // keeps the certain branch above (I7 item 2; advisor verdict overrides the plan's "re-rank it" —
+  // the branch ORDER stays, only this one pair is gated).
+  // KNOWN GAP (review, I7 revision 1, disclosed not fixed — out of this increment's scope): only
+  // `cur`'s model/version are checked, not `prev`'s. A turn whose `prev` was on an ungated CC
+  // version and whose `cur` upgraded mid-session to >=2.1.260 suppresses this cause even though the
+  // upgrade is itself a real event — and the billing/agent-meta block is EXCLUDED from the block
+  // diff entirely (diffBlocks filters the 'agentmeta' kind on both sides, matching the documented
+  // "billing header changes every turn, not in the cache key"), so nothing else in the ladder is
+  // guaranteed to catch this particular turn either. Left as a documented limitation rather than a
+  // prev-aware gate, which the plan did not ask for.
+  // Anchored so `claude-fable-5-10` (a hypothetical later point release) does NOT match — a bare
+  // .includes('fable-5-1') would (review-caught, I7 revision 1).
+  const FABLE_5_1_RE = /fable-5-1(?:[^0-9]|$)/i
+  const effortGateActive = cur.ccVersion !== ''
+    && FABLE_5_1_RE.test(cur.model)
+    && compareVersions(cur.ccVersion, '2.1.260') >= 0
+  if (paramChanged(prev.effortParam, cur.effortParam) && !effortGateActive) {
     return { cause: 'EFFORT_PARAM_CHANGED', culpritLayer: 'effort', culpritId: 'param:effort', culpritSummary: `output_config.effort ${prev.effortParam} → ${cur.effortParam}` }
   }
   if (paramChanged(prev.toolChoice, cur.toolChoice)) {

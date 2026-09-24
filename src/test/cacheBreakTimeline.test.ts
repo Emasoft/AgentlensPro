@@ -295,6 +295,11 @@ const ENV_CLI = (cwd: string) =>
 const GIT_BLOCK = (branch: string, sha: string) =>
   `gitStatus: This is the git status at the start of the conversation. Note that this status is a snapshot in time, and will not update during the conversation.\n\nCurrent branch: ${branch}\n\nMain branch (you will usually use this for PRs): main\n\nGit user: tester\n\nStatus:\n(clean)\n\nRecent commits:\n${sha} feat: the most recent commit subject\n`
 const TRAILING_PROSE = '\nIf you intend to call multiple tools, make all of the independent calls in the same block.'
+// B1 (CC 2.1.281): gitStatus rendered into messages[0] as a <system-reminder> instead of system text.
+const GIT_REMINDER_MSG0 = (branch: string) =>
+  `<system-reminder>\n# gitStatus\nCurrent branch: ${branch}\n\nMain branch (you will usually use this for PRs): main\n</system-reminder>`
+// I7 item 2: the compact billing/agent-meta block extractCcVersion reads cc_version from.
+const BILLING_HEADER = (ccVersion: string) => `x-anthropic-billing-header: cc_version=${ccVersion}; cc_entrypoint=cli;`
 
 /** A request whose ONE cache-controlled system block carries the harness prose we are varying. */
 function sysReq(text: string, extra: Partial<RawRequestForBreak> = {}): RawRequestForBreak {
@@ -333,10 +338,30 @@ suite('cacheBreakTimeline — TRDD-B9ERTBZ9 documented causes (env / git / param
     assert.notStrictEqual(classify(a, b).cause, 'GIT_STATE_CHANGED')
   })
 
+  test('GIT_STATE_CHANGED — B1: the git anchor moved into messages[0] as a `# gitStatus` reminder (CC 2.1.281)', () => {
+    // Pre-fix this misclassifies as HOOK_INJECTION: with no `gitStatus:` anchor in system text, both
+    // turns' git regions are empty (equal), so the git check stands down and the msg[0] block diff
+    // names the changed <system-reminder> block a hook instead.
+    const req = (branch: string): RawRequestForBreak => reqBody({
+      system: [{ text: 'no git snapshot in system text on this harness version', cache_control: CC }],
+      messages: [{ role: 'user', content: [{ type: 'text', text: GIT_REMINDER_MSG0(branch), cache_control: CC }] }],
+    })
+    const v = classify(req('main'), req('feature/x'))
+    assert.strictEqual(v.cause, 'GIT_STATE_CHANGED')
+  })
+
   test('THINKING_CONFIG_CHANGED — two explicit thinking configs differ', () => {
     const v = classify(reqBody({ thinking: { type: 'adaptive' } }), reqBody({ thinking: { type: 'enabled', budget_tokens: 10000 } }))
     assert.strictEqual(v.cause, 'THINKING_CONFIG_CHANGED')
     assert.strictEqual(v.culpritLayer, 'effort')
+  })
+
+  test('THINKING_CONFIG_CHANGED — a thinking.display-only change is detected (I7 item 3)', () => {
+    const v = classify(
+      reqBody({ thinking: { type: 'enabled', budget_tokens: 10000, display: 'requested' } }),
+      reqBody({ thinking: { type: 'enabled', budget_tokens: 10000, display: 'suppressed' } }),
+    )
+    assert.strictEqual(v.cause, 'THINKING_CONFIG_CHANGED')
   })
 
   test('EFFORT_PARAM_CHANGED — two explicit output_config.effort values differ', () => {
@@ -351,6 +376,57 @@ suite('cacheBreakTimeline — TRDD-B9ERTBZ9 documented causes (env / git / param
     // guess here is exactly the false positive this criterion exists to prevent.
     const v = classify(sysReq('stable system prose'), sysReq('stable system prose', { output_config: { effort: 'high' } }))
     assert.notStrictEqual(v.cause, 'EFFORT_PARAM_CHANGED')
+  })
+
+  // I7 item 2: claude-fable-5-1's own effort defaults are now documented, which makes an explicit
+  // effort change on THAT model at CC >=2.1.260 decidable as cache-safe — gated, not re-ranked
+  // (advisor verdict overrides the plan's "rank it after the other causes", which would let an
+  // unrelated co-occurring block change steal the blame on every model/version, not just this pair).
+  const fableReq = (effort: string, ccVersion: string): RawRequestForBreak => ({
+    ...reqBody({}),
+    model: 'claude-fable-5-1',
+    system: [
+      { text: 'stable system prose', cache_control: CC },
+      { text: BILLING_HEADER(ccVersion) },
+    ],
+    output_config: { effort },
+  })
+
+  test('EFFORT_PARAM_CHANGED does NOT fire (certain) for claude-fable-5-1 at CC >=2.1.260 — documented cache-safe', () => {
+    const v = classify(fableReq('low', '2.1.281'), fableReq('high', '2.1.281'))
+    // Assert the EXACT fallthrough, not just "not EFFORT_PARAM_CHANGED" — a weaker assertion would
+    // still pass if the gate over-fired and mis-attributed the break to some other wrong cause
+    // (review-caught, I7 revision 1). Nothing else differs between the two bodies, so the ladder
+    // walks all the way to UNCLASSIFIED (verified against the live classifier, not guessed).
+    assert.strictEqual(v.cause, 'UNCLASSIFIED')
+  })
+
+  test('a hypothetical claude-fable-5-10 is NOT swept in by the fable-5-1 gate (anchored match)', () => {
+    const v = classify(
+      { ...fableReq('low', '2.1.281'), model: 'claude-fable-5-10' },
+      { ...fableReq('high', '2.1.281'), model: 'claude-fable-5-10' },
+    )
+    assert.strictEqual(v.cause, 'EFFORT_PARAM_CHANGED')
+  })
+
+  test('extractCcVersion does not short-circuit on a decoy agent-meta-shaped block missing cc_version (I7 revision 1)', () => {
+    // A short block quoting only `cc_entrypoint=` (no `cc_version=`) matches isAgentMetaBlock's
+    // shape on its own — the search must keep scanning past it to the real billing header instead
+    // of returning '' there, or the gate silently never activates.
+    const decoy = 'cc_entrypoint=cli mentioned in passing'
+    const req = (effort: string): RawRequestForBreak => ({
+      ...reqBody({}),
+      model: 'claude-fable-5-1',
+      system: [{ text: decoy, cache_control: CC }, { text: BILLING_HEADER('2.1.281') }],
+      output_config: { effort },
+    })
+    const v = classify(req('low'), req('high'))
+    assert.notStrictEqual(v.cause, 'EFFORT_PARAM_CHANGED')
+  })
+
+  test('EFFORT_PARAM_CHANGED still fires for claude-fable-5-1 below CC 2.1.260', () => {
+    const v = classify(fableReq('low', '2.1.259'), fableReq('high', '2.1.259'))
+    assert.strictEqual(v.cause, 'EFFORT_PARAM_CHANGED')
   })
 
   test('TOOL_CHOICE_CHANGED — two explicit tool_choice values differ', () => {

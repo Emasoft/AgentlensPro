@@ -35,6 +35,7 @@ use std::sync::OnceLock;
 
 use serde_json::{json, Value};
 
+use crate::loaded_plugin_versions::compare_versions;
 use crate::summarize::helpers::{fmt_js_num, js_slice, js_string, js_to_fixed_str, to_locale_en, truthy, utf16_len};
 use crate::token_estimator::estimate_tokens_from_bytes;
 
@@ -218,9 +219,9 @@ impl TimelineCause {
             TimelineCause::MessageSpliced => "A NEW block was INSERTED into the middle of the cached prefix, shifting every later block — everything after the splice point re-writes. The actor is whatever injected the block (typically the harness re-homing a hook/system message), never the shifted bystanders after it.",
             TimelineCause::AttachmentChanged => "A non-text block (image / tool_use input) inside the cached prefix changed or moved. Past attachments should be immutable; an image riding in the prefix re-bills the tail on any change.",
             TimelineCause::WorkingDirChanged => "The environment block (working directory / platform / shell / OS) differs between these two turns, and it sits inside the cached system prefix — so a cache entry is scoped to ONE directory, and a second worktree of the same repository is a different prefix. This fires only ACROSS directories, never within one: `/cd` is engineered cache-safe (the new directory's CLAUDE.md is appended as a message instead of rebuilding the system prompt). Keep long-running work in one directory, or accept one cold warm per directory.",
-            TimelineCause::GitStateChanged => "The startup git snapshot (branch, status, recent commits) carried in the system prefix differs. It is captured ONCE at session start and never updates during a session, so this can only fire between turns that started from different snapshots — a resume, or a second stream sharing this session id. Sequential sessions share a prefix only when that snapshot matches, so branch/commit churn between sessions costs one cold warm each; nothing to fix mid-session.",
+            TimelineCause::GitStateChanged => "The startup git snapshot (branch, status, recent commits) carried in the prefix differs — in system text on older captures, or in the first user message's `# gitStatus` reminder on CC 2.1.281+. It is refreshed after a compaction (CC 2.1.269), so within one uncompacted stretch this can only fire between turns that started from different snapshots — a resume, or a second stream sharing this session id; across a compaction, a real branch/commit change is expected once. Sequential sessions share a prefix only when that snapshot matches, so branch/commit churn between sessions costs one cold warm each.",
             TimelineCause::ThinkingConfigChanged => "The thinking configuration changed (type or budget_tokens). It is rendered into the prompt itself, so message-level breakpoints ALWAYS miss; tools and system miss only on models that render the configuration ahead of them, and the docs do not enumerate which. Fix the thinking config once at session start.",
-            TimelineCause::EffortParamChanged => "output_config.effort changed between two EXPLICIT values. Message blocks always miss; the effect on tools/system is model-specific. Setting effort explicitly to the model default is a documented no-op, so this never fires on an absent↔present transition — only on two different explicit values. Pick one effort level per conversation.",
+            TimelineCause::EffortParamChanged => "output_config.effort changed between two EXPLICIT values. Message blocks always miss; the effect on tools/system is model-specific. Setting effort explicitly to the model default is a documented no-op, so this never fires on an absent↔present transition — only on two different explicit values. On claude-fable-5-1 at CC ≥2.1.260 an effort change is documented cache-safe (its per-model default is known), so this cause is never emitted for that model/version — nothing to fix there. Pick one effort level per conversation.",
             TimelineCause::ToolChoiceChanged => "tool_choice changed between two explicit values. Per the docs this invalidates MESSAGE blocks only — tools and system stay cached — so the write is bounded by the message layer rather than the whole prefix. Keep tool_choice constant for the lifetime of a cached conversation.",
             TimelineCause::LookbackOverflow => "No block changed, yet the cache found nothing to read: at least 20 blocks were appended since the last cache WRITE, and the lookback window is 20 blocks, so it walked past the last entry. This is claimed only when cache_read is 0 with an unchanged prefix — ordinary growth still reads. Add a second breakpoint closer to the growing tail so a write accumulates there before the window overruns.",
             TimelineCause::BelowMinCacheable => "Both usage counters are 0 while the request DID carry cache_control markers, and the prompt is under this model's minimum cacheable length — a below-minimum prompt is silently not cached, with no error. The minimum is per model (512 to 4,096 tokens, an 8x spread), so this fires only when the estimate is under THIS model's threshold. Expand the cached content to reach it, or accept the full input rate on these calls.",
@@ -301,6 +302,11 @@ pub fn min_cacheable_tokens_for(model: &str) -> Option<u32> {
 // kept — the cwd is an absolute home path and must never reach a report.
 static ENV_SDK: OnceLock<regex::Regex> = OnceLock::new();
 
+/// Anchored so `claude-fable-5-10` (a hypothetical later point release) does NOT match — a bare
+/// `.contains("fable-5-1")` would (review-caught, I7 revision 1). Requires a non-digit or end of
+/// string right after `5-1`.
+static FABLE_5_1_MODEL: OnceLock<regex::Regex> = OnceLock::new();
+
 /// The CLI spelling has no closing delimiter; it runs to the next markdown heading. The JS uses a
 /// `(?=\n# |$)` lookahead, which `regex` cannot express — but a lazy match with a lookahead ends at
 /// the FIRST `\n# ` at or after the anchor, which is a plain `find`.
@@ -321,6 +327,75 @@ fn extract_env_region(system_text: &str) -> &str {
 /// The git snapshot: from `gitStatus:` through the end of the `Recent commits:` list. It STOPS at
 /// the blank line that ends that list, because harness prose follows it in the CLI spelling and
 /// blaming a harness-upgrade wording change on "git state changed" would be a confident lie.
+/// B1 (CC 2.1.281): `gitStatus` moved OUT of system text and is rendered into the first user
+/// message as a `<system-reminder># gitStatus\n...</system-reminder>` block instead — the old
+/// `gitStatus:` anchor below is dead on that harness version, so this second anchor is required or
+/// every git-driven break on 2.1.281+ misclassifies as HOOK_INJECTION (msg[0] block diff, which
+/// runs after the git check). Region: `# gitStatus\n` through the next `\n# ` heading or the
+/// closing tag, whichever comes first — never past this reminder into unrelated msg[0] content.
+fn extract_git_region_msg0(text: &str) -> &str {
+    const ANCHOR: &str = "# gitStatus\n";
+    let Some(start) = text.find(ANCHOR) else { return "" };
+    let after = start + ANCHOR.len();
+    let rest = &text[after..];
+    let ends = [rest.find("\n# "), rest.find("</system-reminder>")];
+    match ends.into_iter().flatten().min() {
+        Some(rel) => &text[start..after + rel],
+        None => &text[start..],
+    }
+}
+
+/// The first message's own text, joined across its content blocks — used ONLY to locate the msg[0]
+/// `# gitStatus` reminder (B1); never fed into the message-block cache diff itself.
+fn first_user_message_text(messages: &[Value]) -> String {
+    let Some(first) = messages.first() else { return String::new() };
+    match first.get("content") {
+        Some(Value::String(s)) => s.clone(),
+        Some(Value::Array(arr)) => arr
+            .iter()
+            .filter(|b| is_js_object(b))
+            .map(message_block_text)
+            .collect::<Vec<_>>()
+            .join("\n"),
+        _ => String::new(),
+    }
+}
+
+/// Bounded, like `agentlens-store::api_call::is_agent_meta` (`MAX_BILLING_HEADER_BYTES`) — that
+/// crate cannot depend back on this one, so the shape is reproduced, not shared. A substring test
+/// alone self-matches: any injected block that merely QUOTES `cc_version=` (a CLAUDE.md, a rule
+/// file, a memory page documenting this very mechanism) would misread as the billing header.
+const MAX_AGENT_META_BYTES: usize = 4096;
+
+fn is_agent_meta_block(text: &str) -> bool {
+    text.len() <= MAX_AGENT_META_BYTES
+        && (text.contains("x-anthropic-billing-header") || text.contains("cc_version=") || text.contains("cc_entrypoint="))
+}
+
+/// `cc_version` out of the bounded billing/agent-meta block ONLY — never an unbounded regex over
+/// the whole system[0], which a large injected block quoting `cc_version=` in prose would poison.
+/// Used to gate `EFFORT_PARAM_CHANGED` on Fable 5.1 ≥2.1.260 (I7 item 2); the docs give no
+/// per-model effort-default table, but Fable 5.1's own defaults are now documented, which makes
+/// this one model/version pair decidable while every other stays on the certain branch.
+///
+/// SCANS EVERY agent-meta-shaped block, not just the first: `is_agent_meta_block` matches on
+/// `cc_entrypoint=` OR `cc_version=` independently (mirroring `api_call::is_agent_meta`), so a
+/// short prose block that happens to quote `cc_entrypoint=` without `cc_version=` must not
+/// short-circuit the search past the real billing header later in the array (review-caught bug,
+/// I7 revision 1: the original `.find()`-first-match version did exactly that).
+fn extract_cc_version<S: AsRef<str>>(system_texts: &[S]) -> Option<String> {
+    for block in system_texts.iter().map(AsRef::as_ref).filter(|t| is_agent_meta_block(t)) {
+        let Some(rel) = block.find("cc_version=") else { continue };
+        let start = rel + "cc_version=".len();
+        let end = block[start..].find(';').map_or(block.len(), |i| start + i);
+        let v = block[start..end].trim();
+        if !v.is_empty() {
+            return Some(v.to_owned());
+        }
+    }
+    None
+}
+
 fn extract_git_region(system_text: &str) -> &str {
     let Some(start) = system_text.find("gitStatus:") else { return "" };
     // No commit list (a repo with no commits, or a truncated block): keep the region to the end
@@ -754,6 +829,10 @@ pub struct TurnPrefix {
     pub env_norm: String,
     pub git_fp: String,
     pub git_norm: String,
+    /// `cc_version` out of the bounded billing/agent-meta block (`extract_cc_version`), `""` when
+    /// absent — gates `EFFORT_PARAM_CHANGED` on Fable 5.1 ≥2.1.260 (I7 item 2), never sourced from
+    /// an unbounded regex over system text.
+    pub cc_version: String,
     /// Whole-request signals for the no-cache-activity diagnosis.
     pub has_cache_control: bool,
     /// Estimated over EVERY message + system + tools, not just the prefix.
@@ -779,6 +858,7 @@ impl TurnPrefix {
             "envNorm": self.env_norm,
             "gitFp": self.git_fp,
             "gitNorm": self.git_norm,
+            "ccVersion": self.cc_version,
             "hasCacheControl": self.has_cache_control,
             "promptTokensApprox": self.prompt_tokens_approx,
             "messageCount": self.message_count,
@@ -815,7 +895,14 @@ fn param_signature(v: Option<&Value>) -> String {
             } else {
                 String::new()
             };
-            return format!("{t}{extra}");
+            // `thinking.display` toggles the rendered extended-thinking UI; kept separate from
+            // `extra` (never folded in) because it is orthogonal to budget_tokens/name and both can
+            // be present on `thinking` at once — byte-identical to the TS twin's `display` handling.
+            let display = match v.get("display") {
+                Some(d) if !d.is_null() => format!(":display={}", js_string(d)),
+                _ => String::new(),
+            };
+            return format!("{t}{extra}{display}");
         }
         return serde_json::to_string(v).unwrap_or_default();
     }
@@ -1078,7 +1165,9 @@ pub fn extract_turn_prefix(body: Option<&Value>) -> Option<TurnPrefix> {
 
     let system_text = system_texts.join("\n");
     let env_region = extract_env_region(&system_text);
-    let git_region = extract_git_region(&system_text);
+    let msg0_text = first_user_message_text(messages);
+    let git_region_sys = extract_git_region(&system_text);
+    let git_region = if git_region_sys.is_empty() { extract_git_region_msg0(&msg0_text) } else { git_region_sys };
 
     Some(TurnPrefix {
         model,
@@ -1090,6 +1179,7 @@ pub fn extract_turn_prefix(body: Option<&Value>) -> Option<TurnPrefix> {
         env_norm: if env_region.is_empty() { String::new() } else { fnv1a(&normalize_volatile(env_region)) },
         git_fp: if git_region.is_empty() { String::new() } else { fnv1a(git_region) },
         git_norm: if git_region.is_empty() { String::new() } else { fnv1a(&normalize_volatile(git_region)) },
+        cc_version: extract_cc_version(&system_texts).unwrap_or_default(),
         has_cache_control: cc_markers > 0,
         prompt_tokens_approx: estimate_tokens_from_bytes(prompt_bytes),
         message_count: messages.len(),
@@ -1641,7 +1731,23 @@ pub fn classify_cache_break(
             format!("thinking {} → {}", prev.thinking, cur.thinking),
         );
     }
-    if param_changed(&prev.effort_param, &cur.effort_param) {
+    // Fable 5.1 ≥2.1.260: an explicit effort change on this model/version is documented cache-safe
+    // (its per-model default is now known), so naming it EFFORT_PARAM_CHANGED here would be a
+    // guess, not a fact — skip it and let the diff fall through to the next branch. Every other
+    // model/version keeps the certain branch above (I7 item 2; advisor verdict overrides the plan's
+    // "re-rank it" — the branch ORDER stays, only this one pair is gated).
+    // KNOWN GAP (review, I7 revision 1, disclosed not fixed — out of this increment's scope): only
+    // `cur`'s model/version are checked, not `prev`'s. A turn whose `prev` was on an ungated CC
+    // version and whose `cur` upgraded mid-session to ≥2.1.260 suppresses this cause even though the
+    // upgrade is itself a real event — and the billing/agent-meta block is EXCLUDED from the block
+    // diff entirely (`diff_blocks` filters `BlockContentKind::AgentMeta` on both sides, matching the
+    // documented "billing header changes every turn, not in the cache key"), so nothing else in the
+    // ladder is guaranteed to catch this particular turn either. Left as a documented limitation
+    // rather than a prev-aware gate, which the plan did not ask for.
+    let effort_gate_active = !cur.cc_version.is_empty()
+        && re(&FABLE_5_1_MODEL, r"(?i)fable-5-1(?:[^0-9]|$)").is_match(&cur.model)
+        && compare_versions(&cur.cc_version, "2.1.260") != std::cmp::Ordering::Less;
+    if param_changed(&prev.effort_param, &cur.effort_param) && !effort_gate_active {
         return CacheBreakVerdict::new(
             TimelineCause::EffortParamChanged,
             CulpritLayer::Effort,

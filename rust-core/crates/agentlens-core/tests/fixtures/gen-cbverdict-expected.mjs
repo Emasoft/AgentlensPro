@@ -167,9 +167,28 @@ const CASES = {
     cur: body({ thinking: { type: 'enabled', budget_tokens: 2000 } }),
     timing: T(),
   },
+  // I7 item 3: a display-only change (type/budget_tokens equal) must still be caught.
+  param_thinking_display: {
+    prev: body({ thinking: { type: 'enabled', budget_tokens: 1000, display: 'requested' } }),
+    cur: body({ thinking: { type: 'enabled', budget_tokens: 1000, display: 'suppressed' } }),
+    timing: T(),
+  },
   param_effort: {
     prev: body({ output_config: { effort: 'low' } }),
     cur: body({ output_config: { effort: 'high' } }),
+    timing: T(),
+  },
+  // I7 item 2: claude-fable-5-1's own effort defaults are documented from CC 2.1.260, so an explicit
+  // effort change on THAT model/version is cache-safe and must NOT be claimed — gated, not re-ranked.
+  param_effort_fable_gated: {
+    prev: body({ model: 'claude-fable-5-1', output_config: { effort: 'low' }, sys: ['stable prose', K.meta('2.1.281')] }),
+    cur: body({ model: 'claude-fable-5-1', output_config: { effort: 'high' }, sys: ['stable prose', K.meta('2.1.281')] }),
+    timing: T(),
+  },
+  // Same model, below the gate version — still a certain EFFORT_PARAM_CHANGED.
+  param_effort_fable_ungated: {
+    prev: body({ model: 'claude-fable-5-1', output_config: { effort: 'low' }, sys: ['stable prose', K.meta('2.1.259')] }),
+    cur: body({ model: 'claude-fable-5-1', output_config: { effort: 'high' }, sys: ['stable prose', K.meta('2.1.259')] }),
     timing: T(),
   },
   param_tool_choice: {
@@ -191,6 +210,16 @@ const CASES = {
   git_changed: {
     prev: body({ sys: [`prose\n${GIT('aaaaaaa')}`] }),
     cur: body({ sys: [`prose\n${GIT('bbbbbbb')}`] }),
+    timing: T(),
+  },
+  // B1 (CC 2.1.281): gitStatus rendered into messages[0] as a <system-reminder> instead of system
+  // text — pre-fix this misclassifies as HOOK_INJECTION (msg[0] block diff names the changed
+  // reminder a hook), because both turns' system-text git regions are empty and therefore equal.
+  git_changed_msg0: {
+    prev: body({ sys: ['no git snapshot in system text on this harness version'],
+      msgs: [[`<system-reminder>\n# gitStatus\nCurrent branch: main\n\nMain branch: main\n</system-reminder>`]] }),
+    cur: body({ sys: ['no git snapshot in system text on this harness version'],
+      msgs: [[`<system-reminder>\n# gitStatus\nCurrent branch: feature/x\n\nMain branch: main\n</system-reminder>`]] }),
     timing: T(),
   },
   // The env region differs ONLY by a clock: envNorm is equal, so the region rule stands down and
