@@ -68,6 +68,11 @@ export interface SessionSummaryCard {
   outputTokens: number
   cacheReadTokens: number
   cacheCreateTokens: number
+  // 1h-tier slice of cacheCreateTokens (usage.cache_creation.ephemeral_1h_input_tokens, never
+  // exceeds cacheCreateTokens). Optional/undefined on an old persisted card or a non-Anthropic
+  // source (Copilot/Codex/OpenCode) — sessionCost() below reads it as 0 in that case, which is
+  // the same "unknown split, bill it all at 5m" behavior every card had before this field existed.
+  cacheCreate1hTokens?: number
   cacheHitRate: number
   // Authoritative per-turn-blended cost, set ONLY for a MIXED-SPEED session (some turns fast, some
   // standard) where the whole-card model rate would be wrong — a single `<model>-fast` stamp prices

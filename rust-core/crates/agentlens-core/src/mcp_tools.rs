@@ -703,7 +703,11 @@ fn session_cost(s: &Value, now_ms: f64) -> f64 {
         f(s, "cacheCreateTokens"),
         f(s, "outputTokens"),
         s.get("model").and_then(Value::as_str).unwrap_or(""),
-        0.0,
+        // The 1h-tier slice of cacheCreateTokens (agentlens-logscan Card.cache_create_1h_tokens).
+        // A pre-fix persisted card has no such field and reads as 0 here, which is the SAME
+        // "unknown split, bill it all at 5m" behavior this card always had — never a crash, never
+        // a wrong-direction correction on old rows (TRDD-<pending>).
+        f(s, "cacheCreate1hTokens"),
         None,
         now_ms,
     )

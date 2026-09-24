@@ -124,7 +124,7 @@ function sessionCost(s: SessionSummaryCard): number {
   // lived here. That heuristic was structurally unsound: a raw-convention card whose raw input
   // happened to exceed its cache total was misclassified as incl-cache and silently under-counted.
   // The four buckets are disjoint; bill each at its own rate, no subtraction anywhere.
-  return calcTokenCostUsd(s.inputTokens, s.cacheReadTokens, s.cacheCreateTokens ?? 0, s.outputTokens, s.model)
+  return calcTokenCostUsd(s.inputTokens, s.cacheReadTokens, s.cacheCreateTokens ?? 0, s.outputTokens, s.model, s.cacheCreate1hTokens ?? 0)
 }
 
 // A session counts toward cache-health SLIs only when it actually exercised the prompt cache:

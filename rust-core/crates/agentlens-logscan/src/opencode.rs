@@ -404,6 +404,7 @@ pub fn parse_opencode_db(db_path: &str, max_entries: usize, max_bytes: usize) ->
             output_tokens: b_out,
             cache_read_tokens: b_cr,
             cache_create_tokens: b_cw,
+            cache_create_1h_tokens: 0.0, // OpenCode has no Anthropic-shaped 5m/1h tier split.
             cache_hit_rate: if total_context > 0.0 { b_cr / total_context } else { 0.0 },
             duration_ms,
             start_time: if start_ms > 0 { iso_from_ms(start_ms) } else { String::new() },

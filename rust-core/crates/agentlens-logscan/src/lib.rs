@@ -137,14 +137,21 @@ pub struct Buckets {
     pub output: f64,
     pub cache_read: f64,
     pub cache_create: f64,
+    // The 1h-tier slice of cache_create (src/forensicsIndex.ts tier1hTokens shape:
+    // usage.cache_creation.ephemeral_1h_input_tokens). 0 when the row carries a flat
+    // cache_creation total with no tier sub-object — same "no split known" meaning as
+    // billable_weight's own weightTier5m fallback, never invented from cache_create.
+    pub cache_create_1h: f64,
 }
 
 fn disjoint_anthropic(usage: &serde_json::Map<String, Value>) -> Buckets {
+    let tier = usage.get("cache_creation").and_then(Value::as_object);
     Buckets {
         input: clamp_num(usage.get("input_tokens")),
         output: clamp_num(usage.get("output_tokens")),
         cache_read: clamp_num(usage.get("cache_read_input_tokens")),
         cache_create: clamp_num(usage.get("cache_creation_input_tokens")),
+        cache_create_1h: tier.map_or(0.0, |t| clamp_num(t.get("ephemeral_1h_input_tokens"))),
     }
 }
 
@@ -328,6 +335,7 @@ struct SubAgentRec {
     output: f64,
     cache_read: f64,
     cache_create: f64,
+    cache_create_1h: f64,
     total_tokens: f64,
     tool_use_count: f64,
     duration_ms: f64,
@@ -363,6 +371,7 @@ pub struct BlendTurn {
     pub output: f64,
     pub cache_read: f64,
     pub cache_create: f64,
+    pub cache_create_1h: f64,
 }
 
 /// The per-file running state (TS ClaudeAccum) — held ACROSS scans by the incremental tailer,
@@ -389,6 +398,7 @@ pub struct ClaudeAccum {
     total_output: f64,
     total_cache_read: f64,
     total_cache_create: f64,
+    total_cache_create_1h: f64,
     peak_context_per_turn: f64,
     turns: u64,
     total_tool_calls: u64,
@@ -425,6 +435,7 @@ impl ClaudeAccum {
             total_output: 0.0,
             total_cache_read: 0.0,
             total_cache_create: 0.0,
+            total_cache_create_1h: 0.0,
             peak_context_per_turn: 0.0,
             turns: 0,
             total_tool_calls: 0,
@@ -677,6 +688,7 @@ fn complete_sub_agent(sub: &mut SubAgentRec, tur: &serde_json::Map<String, Value
     sub.output = b.output;
     sub.cache_read = b.cache_read;
     sub.cache_create = b.cache_create;
+    sub.cache_create_1h = b.cache_create_1h;
     sub.total_tokens = total_tokens.unwrap();
     sub.tool_use_count = tur.get("totalToolUseCount").and_then(Value::as_f64).unwrap_or(0.0);
     sub.duration_ms = tur.get("totalDurationMs").and_then(Value::as_f64).unwrap_or(0.0);
@@ -847,6 +859,7 @@ pub fn on_entry(a: &mut ClaudeAccum, entry: &serde_json::Map<String, Value>) {
                 a.total_output += b.output;
                 a.total_cache_read += b.cache_read;
                 a.total_cache_create += b.cache_create;
+                a.total_cache_create_1h += b.cache_create_1h;
                 let turn_context = b.input + b.cache_read + b.cache_create;
                 if turn_context > a.peak_context_per_turn {
                     a.peak_context_per_turn = turn_context;
@@ -867,6 +880,7 @@ pub fn on_entry(a: &mut ClaudeAccum, entry: &serde_json::Map<String, Value>) {
                     output: b.output,
                     cache_read: b.cache_read,
                     cache_create: b.cache_create,
+                    cache_create_1h: b.cache_create_1h,
                 });
                 row_buckets = Some(b);
             }
@@ -1019,6 +1033,9 @@ pub struct Card {
     pub output_tokens: f64,
     pub cache_read_tokens: f64,
     pub cache_create_tokens: f64,
+    // 1h-tier slice of cache_create_tokens (never exceeds it) — 0 when no row on this
+    // transcript carried the ephemeral_1h/5m split (see disjoint_anthropic doc comment).
+    pub cache_create_1h_tokens: f64,
     pub cache_hit_rate: f64,
     pub duration_ms: f64,
     pub start_time: String,
@@ -1199,6 +1216,7 @@ fn build_sub_agent_cards(parent_session_id: &str, a: &ClaudeAccum) -> Vec<Card> 
             output_tokens: sub.output,
             cache_read_tokens: sub.cache_read,
             cache_create_tokens: sub.cache_create,
+            cache_create_1h_tokens: sub.cache_create_1h,
             cache_hit_rate: if sub.total_tokens > 0.0 { sub.cache_read / sub.total_tokens } else { 0.0 },
             duration_ms: sub.duration_ms,
             start_time: if start_ms > 0 { iso_from_ms(start_ms) } else { String::new() },
@@ -1278,6 +1296,7 @@ pub fn build_result(file_path: &str, a: ClaudeAccum) -> Option<ParsedTranscript>
         output_tokens: a.total_output,
         cache_read_tokens: a.total_cache_read,
         cache_create_tokens: a.total_cache_create,
+        cache_create_1h_tokens: a.total_cache_create_1h,
         cache_hit_rate,
         duration_ms: duration_ms as f64,
         start_time: if start_ms > 0 { iso_from_ms(start_ms) } else { String::new() },
@@ -1412,5 +1431,45 @@ mod tests {
     fn local_command_caveat_strips_through_first_close() {
         let t = "<local-command-caveat>stuff</local-command-caveat>  real request";
         assert_eq!(strip_local_command_caveat(t), "real request");
+    }
+
+    // TRDD-<pending>: disjoint_anthropic must extract the ephemeral_1h split so cost callers can
+    // bill it at the 2x 1h rate instead of silently bucketing it into the 5m rate (both
+    // session_cost in mcp_tools.rs and speedBlendedCostUsd in log_reader.rs read this field).
+    #[test]
+    fn disjoint_anthropic_extracts_the_1h_tier_split() {
+        let usage: serde_json::Map<String, Value> = serde_json::from_str(
+            r#"{"input_tokens":10,"output_tokens":5,"cache_read_input_tokens":100,
+                "cache_creation_input_tokens":1000,
+                "cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":1000}}"#,
+        )
+        .unwrap();
+        let b = disjoint_anthropic(&usage);
+        assert_eq!(b.cache_create, 1000.0);
+        assert_eq!(b.cache_create_1h, 1000.0);
+    }
+
+    #[test]
+    fn disjoint_anthropic_mixed_5m_and_1h_keeps_only_the_1h_slice() {
+        let usage: serde_json::Map<String, Value> = serde_json::from_str(
+            r#"{"cache_creation_input_tokens":700,
+                "cache_creation":{"ephemeral_5m_input_tokens":300,"ephemeral_1h_input_tokens":400}}"#,
+        )
+        .unwrap();
+        let b = disjoint_anthropic(&usage);
+        assert_eq!(b.cache_create, 700.0);
+        assert_eq!(b.cache_create_1h, 400.0); // 5m half (300) is NOT counted here.
+    }
+
+    #[test]
+    fn disjoint_anthropic_flat_total_with_no_tier_object_reads_1h_as_zero() {
+        // A row with no cache_creation sub-object at all (the pre-tier-split shape, or a
+        // provider that never sends one) must behave exactly as before this fix: the whole
+        // bucket bills at the 5m rate, because there is no split to know otherwise.
+        let usage: serde_json::Map<String, Value> =
+            serde_json::from_str(r#"{"cache_creation_input_tokens":500}"#).unwrap();
+        let b = disjoint_anthropic(&usage);
+        assert_eq!(b.cache_create, 500.0);
+        assert_eq!(b.cache_create_1h, 0.0);
     }
 }

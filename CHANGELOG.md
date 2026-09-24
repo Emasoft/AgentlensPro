@@ -8,6 +8,24 @@ All notable changes to AgentlensPro are documented here.
 
 ### Fixed
 
+- **A session/card's `cost_usd` (and `speedBlendedCostUsd`) billed every cache write at the
+  5-minute rate, even when the transcript's own `usage.cache_creation.ephemeral_1h_input_tokens`
+  showed it was 1-hour tier.** Main-conversation sessions on a subscription are ~100% 1h-tagged
+  (CLAUDE.md cache doctrine #3), so this undercounted them by roughly 10% (measured: $29.2513
+  reported vs $32.4828 tier-aware recompute on one 230-call session,
+  `reports/cc-alignment/20260924_142509+0200-acceptance-7ab3ebfc.md`). Root cause: the log-scan
+  accumulator (`agentlens-logscan`'s `Buckets`/`ClaudeAccum`) never extracted the 1h/5m split at
+  all, so `mcp_tools.rs`'s `session_cost` and `log_reader.rs`'s `speedBlendedCostUsd` had nothing
+  to pass `calc_token_cost_usd` but a hardcoded `0.0` for the 1h argument. Now `Card` carries a
+  `cache_create_1h_tokens` subtotal and both call sites use it. **Persisted rows are NOT
+  reindexed/backfilled** — a card indexed before this fix keeps its (lower) cost until the
+  transcript is reparsed; a missing `cacheCreate1hTokens` field on an old DurableState snapshot
+  reads as `0`, i.e. the exact pre-fix behavior, never a crash or a wrong-direction change. This
+  is the same defect *shape* as `TRDD-K4XQ7M2B` (unfixed as of this entry) but in the session
+  **card**, not the per-call `api_calls` forensics row — the two are tracked and fixed separately.
+  Other `calc_token_cost_usd` call sites that still pass a hardcoded `0.0` (e.g.
+  `context_composition_index.rs`, `heartbeat_cost.rs`, `forensics_db.rs`) were left unaudited;
+  each is a candidate for the same bug and out of this fix's scope.
 - **`claude-sonnet-5` was being priced 50% high since 2026-09-01.** Its entry carried a
   `scheduledChange` reverting the $2/$10 per-MTok introductory rate to a $3/$15 sticker on that
   date; the reversion was withdrawn upstream (CC 2.1.243, 2026-08-25) but the flip had already

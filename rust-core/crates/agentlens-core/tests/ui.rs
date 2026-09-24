@@ -2149,6 +2149,41 @@ fn mcp_get_session_detail_serves_the_resolved_card() {
     assert!(miss["error"].as_str().unwrap().contains("ghost"), "{miss}");
 }
 
+/// A 1h-tagged card's `cost_usd` must bill its cache-write bucket at the 1h rate, not fold it
+/// silently into the 5m rate (TRDD-<pending>). `session_cost` (mcp_tools.rs) used to hand
+/// `calc_token_cost_usd` a hardcoded `0.0` for the 1h argument regardless of how the card's own
+/// `cacheCreate1hTokens` read — this pins that the persisted field is now actually read.
+#[test]
+fn get_session_detail_bills_the_1h_cache_write_tier() {
+    let make = |cache_create_1h: f64| {
+        serde_json::json!({
+            "sessionId": "tier-1h", "model": "claude-opus-5-5",
+            "inputTokens": 500.0, "outputTokens": 200.0,
+            "cacheReadTokens": 10_000.0, "cacheCreateTokens": 2_000.0,
+            "cacheCreate1hTokens": cache_create_1h,
+        })
+    };
+    let now = agentlens_core::now_ms() as f64;
+
+    // All-1h card (every cache_creation row carried ephemeral_1h_input_tokens == the total —
+    // the shape a main-conversation subscription session produces per CLAUDE.md doctrine 3).
+    let all_1h = agentlens_core::mcp_tools::get_session_detail(&[make(2_000.0)], &[], None, "tier-1h", now);
+    // Same card, but as if the 1h split were unknown (the pre-fix behavior: 0 passed through).
+    let unsplit = agentlens_core::mcp_tools::get_session_detail(&[make(0.0)], &[], None, "tier-1h", now);
+
+    let cost_1h = all_1h["cost_usd"].as_f64().unwrap();
+    let cost_5m_blind = unsplit["cost_usd"].as_f64().unwrap();
+
+    // The Anthropic 1h write rate (2x input) is always strictly above the 5m write rate (1.25x
+    // input) for a model with the Anthropic tier shape — so an all-1h card must cost MORE than
+    // the same tokens billed blind at 5m, and by exactly what calc_token_cost_usd computes when
+    // handed the real split directly (proves session_cost is actually wired to the field, not
+    // just producing a bigger-but-wrong number).
+    let expect_1h = agentlens_core::pricing::calc_token_cost_usd(500.0, 10_000.0, 2_000.0, 200.0, "claude-opus-5-5", 2_000.0, None, now);
+    assert!(cost_1h > cost_5m_blind, "1h-tier card ({cost_1h}) must cost more than the 5m-blind read ({cost_5m_blind})");
+    assert!((cost_1h - expect_1h).abs() < 1e-9, "cost_usd={cost_1h} must equal the direct tier-aware recompute={expect_1h}");
+}
+
 /// `/api/debug/capture-activity` — the capture-liveness clock, ported from the TS server
 /// (TRDD-1B98LCVR). This endpoint existed ONLY in `standalone/server.ts`, so it was the one real
 /// blocker on retiring that server; a port with no test would have re-created the same situation

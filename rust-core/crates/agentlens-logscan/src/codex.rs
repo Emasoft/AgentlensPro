@@ -151,6 +151,7 @@ pub fn build_result(file_path: &str, a: CodexAccum) -> Option<ParsedTranscript> 
         output_tokens: output,
         cache_read_tokens: cache_read,
         cache_create_tokens: 0.0,
+        cache_create_1h_tokens: 0.0, // Codex has no Anthropic-shaped 5m/1h tier split.
         cache_hit_rate: if total_context > 0.0 { cache_read / total_context } else { 0.0 },
         duration_ms: duration_ms as f64,
         start_time: if start_ms > 0 { iso_from_ms(start_ms) } else { String::new() },

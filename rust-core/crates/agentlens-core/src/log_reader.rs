@@ -90,7 +90,7 @@ pub fn finish_transcript(mut parsed: ParsedTranscript, now_ms: i64, state: FileS
     let blended = parsed.blend_turns.as_ref().map(|turns| {
         turns
             .iter()
-            .fold(0.0, |sum, t| sum + calc_token_cost_usd(t.input, t.cache_read, t.cache_create, t.output, &t.model, 0.0, None, now_ms as f64))
+            .fold(0.0, |sum, t| sum + calc_token_cost_usd(t.input, t.cache_read, t.cache_create, t.output, &t.model, t.cache_create_1h, None, now_ms as f64))
     });
     let mut cards: Vec<Value> = Vec::with_capacity(1 + parsed.child_cards.len());
     let mut parent = card_value(&parsed.card);
