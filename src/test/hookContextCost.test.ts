@@ -39,7 +39,7 @@ suite('hook-context-cost — sums hook_execution_complete size attributes', () =
     assert.strictEqual(res.events, 3)
     const sub = res.rows.find(r => r.hookEvent === 'SubagentStart')
     assert.ok(sub)
-    assert.strictEqual(sub.fires, 2)
+    assert.strictEqual(sub.dispatches, 2)
     assert.strictEqual(sub.additionalContextChars, 10200)
     assert.strictEqual(sub.stdoutChars, 10400)
     assert.strictEqual(sub.estContextTokens, Math.round(10200 / CHARS_PER_TOKEN_ESTIMATE))
@@ -70,7 +70,9 @@ suite('hook-context-cost — sums hook_execution_complete size attributes', () =
 
   test('--hours at the cap (168) is accepted, not rejected as "above" it', async () => {
     const code = await runHookContextCostCli(['--hours', String(MAX_HOURS)], dir)
-    assert.notStrictEqual(code, 64)
+    // 0 = answered (events found), 2 = cannot-answer (no events in window) — either is "accepted";
+    // only 64 (bad flags) would mean the cap itself was rejected.
+    assert.ok([0, 2].includes(code), `expected 0 or 2, got ${code}`)
   })
 
   // Pins current behavior as a SPEC, not just a code comment: no captured attribute is a
@@ -83,7 +85,24 @@ suite('hook-context-cost — sums hook_execution_complete size attributes', () =
     writeSink(dir, new Date(now).toISOString().slice(0, 10), [rec, rec])
     const res = await sumHookContextCost(dir, now - 3_600_000, now)
     assert.strictEqual(res.events, 2)
-    assert.strictEqual(res.rows[0].fires, 2)
+    assert.strictEqual(res.rows[0].dispatches, 2)
     assert.strictEqual(res.rows[0].additionalContextChars, 80)
+  })
+
+  // Pins the counting unit (TRDD-ZQQYRYBO I15): one hook_execution_complete event is one DISPATCH,
+  // regardless of how many hooks matched it — num_hooks says how many, but a dispatch matched by
+  // 3 hooks is still 1 dispatch, not 3.
+  test('a dispatch with num_hooks=3 counts as one dispatch, not one per matched hook', async () => {
+    const now = Date.now()
+    const rec = {
+      ts: now - 1000, ev: 'hook_execution_complete', attrs: {
+        hook_event: 'SubagentStart', hook_name: 'SubagentStart', num_hooks: '3',
+        additional_context_chars: '300', stdout_chars: '0', system_message_chars: '0', num_outputs_persisted: '0',
+      },
+    }
+    writeSink(dir, new Date(now).toISOString().slice(0, 10), [rec])
+    const res = await sumHookContextCost(dir, now - 3_600_000, now)
+    assert.strictEqual(res.rows[0].dispatches, 1)
+    assert.strictEqual(res.rows[0].additionalContextChars, 300)
   })
 })

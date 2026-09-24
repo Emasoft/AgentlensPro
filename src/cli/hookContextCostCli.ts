@@ -13,21 +13,21 @@
 // The token figure is an ESTIMATE: chars / 2.56, the chars-per-token ratio CLAUDE.md measured on
 // this machine's content with count_tokens. It is labelled as such everywhere it is printed.
 //
-// Every row is per HOOK FIRE, not per subagent spawn: two hooks matching one SubagentStart fire
-// twice, so summing fires is not the same as counting spawns.
+// Every row counts DISPATCHES, not hook fires: Claude Code emits one hook_execution_complete
+// event per hook DISPATCH, and that event already sums every hook that matched it (its `num_hooks`
+// attribute says how many — measured 2026-09-24: num_hooks='3' on 1,999 of 1,999 SubagentStart
+// events sampled). For SubagentStart a dispatch IS one subagent spawn, so the per-event average is
+// already the per-spawn figure — no multiplying by hooks-matched needed.
 //
 // `hook_name` (displayed as `match_target`) is `<event>:<tool or agent name>` (e.g.
 // `SubagentStart:fork`, `PreToolUse:Bash`) — a bare event name with no colon when the event has no
-// matcher (`Stop`, `UserPromptSubmit`, `SubagentStop`). Sampled ~185k real events on this machine
-// over 2026-09-23/24 (every hook registered here at the time): every value fit that shape, none
-// carried a config-pattern character (`*`, `|`, or an empty segment after the colon) — so on this
-// evidence it is the match TARGET the hook fired against, not the configured matcher pattern. This
-// is a sample over this machine's own hook config, not a schema guarantee: a hook registered
-// elsewhere with a compound matcher (e.g. `"matcher": "Bash|Edit"`) could still surface that raw
-// pattern verbatim in `hook_name` for its own firings — unverified, since no such matcher fired
-// here in the window sampled. No captured attribute names the hook's command, plugin, or source
-// file either way; `hook_source` is the config-merge origin ("merged"), not which hook ran. So the
-// injecting hook cannot be named here.
+// matcher (`Stop`, `UserPromptSubmit`, `SubagentStop`). `<event>:<target>` held in every value
+// sampled on 2026-09-24 (this machine's own hook config): none carried a config-pattern character
+// (`*`, `|`, or an empty segment after the colon) — so on this evidence it is the match TARGET the
+// hook fired against, not the configured matcher pattern; a compound matcher surfacing verbatim
+// (e.g. `"matcher": "Bash|Edit"`) is unverified, since none fired here. No captured attribute names
+// the hook's command, plugin, or source file either way; `hook_source` is the config-merge origin
+// ("merged"), not which hook ran. So the injecting hook cannot be named here.
 //
 // No attribute is a reliable per-event id: `spanId`/`traceId` are present on ~95% of captured
 // events but absent on some (observed missing on early SessionStart events), so they cannot dedupe
@@ -47,11 +47,12 @@ export const CHARS_PER_TOKEN_ESTIMATE = 2.56
 
 export interface HookContextCostRow {
   hookEvent: string
-  /** hook_name — `<event>:<tool or agent name>`, i.e. the match TARGET the hook fired against
-   *  on this evidence (sampled 2026-09-24 against ~185k real sink events on this machine's own
-   *  hook config), not the configured matcher pattern — see the file header for the caveat. */
+  /** hook_name — `<event>:<tool or agent name>`, the match TARGET the hook fired against; see
+   *  the file header for the sampling caveat on compound matchers. */
   matchTarget: string
-  fires: number
+  /** Count of hook_execution_complete events (dispatches), not hook fires — each event already
+   *  sums every hook that matched it. For SubagentStart a dispatch is one subagent spawn. */
+  dispatches: number
   additionalContextChars: number
   stdoutChars: number
   systemMessageChars: number
@@ -104,10 +105,10 @@ export async function sumHookContextCost(dir: string, sinceMs: number, untilMs =
       const key = `${hookEvent}\u0000${matchTarget}`
       let row = acc.get(key)
       if (!row) {
-        row = { hookEvent, matchTarget, fires: 0, additionalContextChars: 0, stdoutChars: 0, systemMessageChars: 0, outputsPersisted: 0, estContextTokens: 0 }
+        row = { hookEvent, matchTarget, dispatches: 0, additionalContextChars: 0, stdoutChars: 0, systemMessageChars: 0, outputsPersisted: 0, estContextTokens: 0 }
         acc.set(key, row)
       }
-      row.fires += 1
+      row.dispatches += 1
       row.additionalContextChars += num(a['additional_context_chars'])
       row.stdoutChars += num(a['stdout_chars'])
       row.systemMessageChars += num(a['system_message_chars'])
@@ -127,13 +128,15 @@ export const MAX_HOURS = 168
 
 export const HOOK_CONTEXT_COST_USAGE = `agentlenspro hook-context-cost [--hours N] [--json]
 
-How much text do hooks inject? Sums, per hook event and matcher, what each hook fire produced over
-a window: fires, additionalContext chars (added to the model's context), stdout chars, systemMessage
-chars, and outputs persisted to a file. Source: the hook_execution_complete OTEL events Claude Code
-emits since 2.1.280, read off the log-event sink on disk (works with the server down), which is
-stored in whole-day buckets — a window is rounded outward to the buckets covering it.
+How much text do hooks inject? Sums, per hook event and matcher, what each hook DISPATCH produced
+over a window: dispatches, additionalContext chars (added to the model's context), stdout chars,
+systemMessage chars, and outputs persisted to a file. Source: the hook_execution_complete OTEL
+events Claude Code emits since 2.1.280, read off the log-event sink on disk (works with the server
+down), which is stored in whole-day buckets — a window is rounded outward to the buckets covering it.
 
-Every row is PER HOOK FIRE, not per subagent spawn: two hooks matching one spawn are two fires.
+Every row counts DISPATCHES: one hook_execution_complete event per dispatch, and each event already
+sums every hook that matched it (num_hooks). For SubagentStart a dispatch IS one subagent spawn, so
+the per-event average is already the per-spawn figure.
 
 'match_target' is the hook_name attribute — the <event>:<tool or agent name> the hook fired
 against (e.g. SubagentStart:fork), not the hook command, plugin, or source that ran; no captured
@@ -141,8 +144,10 @@ attribute identifies that.
 
 est_tokens is an ESTIMATE of the additionalContext only: chars / ${CHARS_PER_TOKEN_ESTIMATE} (CLAUDE.md's
 measured ratio). stdout_chars* is shown for reference only and is NOT counted in est_tokens: see
-the footnote printed after the table — it only reaches context for SessionStart/UserPromptSubmit
-hooks, and can be huge for other events (e.g. PostToolUse:Agent) without ever reaching the model.
+the footnote printed after the table — it reaches context as plain text only for SessionStart and
+UserPromptSubmit hooks (a hook that prints JSON instead has its context already counted in
+ctx_chars — never add the two columns together for those rows), and can be huge for other events
+(e.g. PostToolUse:Agent) without ever reaching the model.
 
 flags:
   --hours N   window length, ending now (default 24, max ${MAX_HOURS})
@@ -184,22 +189,22 @@ export async function runHookContextCostCli(argv: string[], dir = path.join(data
     return EXIT.OK
   }
 
-  const header = ['hook_event', 'match_target', 'fires', 'ctx_chars', 'est_tokens', 'stdout_chars*', 'sysmsg_chars', 'persisted']
+  const header = ['hook_event', 'match_target', 'dispatches', 'ctx_chars', 'est_tokens', 'stdout_chars*', 'sysmsg_chars', 'persisted']
   const body = res.rows.map(r => [
-    r.hookEvent, r.matchTarget, String(r.fires), String(r.additionalContextChars), String(r.estContextTokens),
+    r.hookEvent, r.matchTarget, String(r.dispatches), String(r.additionalContextChars), String(r.estContextTokens),
     String(r.stdoutChars), String(r.systemMessageChars), String(r.outputsPersisted),
   ])
   const widths = header.map((h, i) => Math.max(h.length, ...body.map(row => row[i].length)))
   const fmt = (cells: string[]): string => cells.map((c, i) => (i < 2 ? c.padEnd(widths[i]) : c.padStart(widths[i]))).join('  ')
-  console.log(`hook output over the last ${hours}h — ${res.events} hook_execution_complete fires (per fire, not per spawn; est_tokens = ctx_chars / ${CHARS_PER_TOKEN_ESTIMATE}, an estimate)`)
+  console.log(`hook output over the last ${hours}h — ${res.events} hook_execution_complete dispatches (each event sums every hook it matched; est_tokens = ctx_chars / ${CHARS_PER_TOKEN_ESTIMATE}, an estimate)`)
   console.log(fmt(header))
   for (const row of body) console.log(fmt(row))
-  console.log('* stdout reaches the context only for SessionStart and UserPromptSubmit; not counted in est_tokens')
+  console.log('* stdout reaches context as plain text only for SessionStart/UserPromptSubmit hooks; a JSON-printing hook has its context already in ctx_chars — never add the two together. Not counted in est_tokens either way.')
   const sub = res.rows.filter(r => r.hookEvent === 'SubagentStart')
-  const subFires = sub.reduce((s, r) => s + r.fires, 0)
-  if (subFires > 0) {
-    const perFire = Math.round(sub.reduce((s, r) => s + r.additionalContextChars, 0) / subFires)
-    console.log(`note: SubagentStart context (~${perFire} chars per hook fire, not per spawn — a spawn matched by two hooks counts as two fires, so multiply by the hooks matched per spawn to get the per-spawn cost) is written to the fresh subagent's cache prefix on each spawn and re-read on every later turn of that subagent.`)
+  const subDispatches = sub.reduce((s, r) => s + r.dispatches, 0)
+  if (subDispatches > 0) {
+    const perSpawn = Math.round(sub.reduce((s, r) => s + r.additionalContextChars, 0) / subDispatches)
+    console.log(`note: SubagentStart context (~${perSpawn} chars per spawn) is part of that subagent's context on every later request of that subagent.`)
   }
   return EXIT.OK
 }
