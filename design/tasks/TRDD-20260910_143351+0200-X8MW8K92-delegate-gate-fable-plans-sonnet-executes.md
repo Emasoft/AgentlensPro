@@ -3,7 +3,7 @@ trdd-id: X8MW8K92
 title: A PreToolUse delegate gate so a Fable main session cannot edit — it plans, Sonnet workers execute
 column: dev
 created: 2026-09-10T14:33:51+0200
-updated: 2026-09-10T14:39:16+0200
+updated: 2026-09-10T19:30:16+0200
 current-owner: main
 task-type: infra
 min-approval-requirement: none
@@ -20,7 +20,7 @@ related: [DRH4ZRGB, JELDR3KC, GOD0108C]
 
 # A PreToolUse delegate gate so a Fable main session cannot edit — it plans, Sonnet workers execute
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-10T14:39:16+0200
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-10T19:30:16+0200
 
 Owner order 2026-09-10 ("Fable is used ONLY to analyze and plan; execution is delegated to Sonnet
 subagents"), issued after a day of Fable turns that solved no open issue. Enforcement, not prose:
@@ -28,10 +28,13 @@ subagents"), issued after a day of Fable turns that solved no open issue. Enforc
 Implementation dispatched to a lean-worker against the spec
 `docs_dev/20260910_143500+0200-spec-delegate-gate.md` (gitignored; its normative content is the
 §Behaviour below). NEXT ACTION: the parent reviews the worker's diff and commits (git stays exempt);
-then a SONNET worker runs `node esbuild.js`, `agentlenspro --install-hooks` and the smoke test in
-§Acceptance row 4 (the parent may not — rule 5 classifies `agentlenspro --install-*` as write-shaped);
-then `column: testing`. A second, standalone gate exists — see §Conflict; this card cannot reach
-`complete` until that gate is unregistered. Companion prose: the USER rule
+then a SONNET lean-worker runs `node esbuild.js`, `agentlenspro --install-hooks`, and a
+fake-payload smoke test of `agentlenspro delegate-gate` (Fable transcript + Edit on a repo file
+→ deny; Sonnet subagent transcript via `agent_id` → allow; Write under /tmp → allow; `git
+commit` → allow) (the parent may not — rule 5 classifies `agentlenspro --install-*` as
+write-shaped); then a LIVE probe: a `fork` subagent told to Write a repo file must receive the
+deny; then `column: testing`. A second, standalone gate exists — see §Conflict; this card cannot
+reach `complete` until that gate is unregistered. Companion prose: the USER rule
 `~/.claude/rules/fable-plans-sonnet-executes.md` (outside the repo).
 
 ## Behaviour
@@ -77,21 +80,32 @@ then `column: testing`. A second, standalone gate exists — see §Conflict; thi
       → the deny JSON is printed; the same payload plus `"agent_id":"abc"` and
       `<tmp>/subagents/agent-abc.jsonl` whose model is `claude-sonnet-5` → nothing printed.
 - [ ] The standalone python gate is no longer registered in `~/.claude/settings.json`
-      (`grep -c fable_delegation_gate` → 0; the peer session's action per §Conflict).
+      (`grep -c fable_delegation_gate` → 0; the peer session's action per §Conflict) — unblocked
+      by the peer handover in §Conflict.
 
 ## Conflict — a second implementation already existed
 
 `~/.claude/hooks/fable_delegation_gate.py` (written 2026-09-10 14:35 by the ai-maestro-janitor
-session, registered in `~/.claude/settings.json` on `Edit|Write|MultiEdit|NotebookEdit`)
+session, registered in `~/.claude/settings.json` on `Edit|Write|MultiEdit|NotebookEdit|Bash`)
 implements the same order with different rules: gates `opus` too; denies `git commit/merge/rebase/push`
-to the orchestrator; exempts `/design/`, `/memory/`, `/.claude/plans/`; off switch is a file
-(`fable_delegation_gate.off`). It is DISABLED by that file since 14:34, after it denied three
-Sonnet workers (it read the model from the parent's `transcript_path`). Agreed between the two
-sessions 2026-09-10: agentlenspro owns the one gate; the peer unregisters the python hook the
-moment `agentlenspro --install-hooks` has registered this one, leaving the file as reference.
-Until then the python gate stays disabled. With both registered, deny would win on every
-disagreement (no commits, no card or memory edits, opus gated) — none of which this card orders.
+to the orchestrator; exempts `/design/`, `/memory/`, `/.claude/plans/`; off switch is a file.
+Neither `~/.claude/hooks/fable_delegation_gate.off` nor `~/.claude/hooks/state/fable_delegation_gate.off`
+exists on disk as of this write; the live gate reads the latter (per the peer, state moved to
+`~/.claude/hooks/state/`), and any leftover `~/.claude/hooks/fable_delegation_gate.off` is inert.
+It denied three Sonnet workers early on (it read the model from the parent's `transcript_path`);
+it is now LIVE since 2026-09-10T19:17:44+0200 (log and kill-switch moved to
+`~/.claude/hooks/state/`), per the peer session's report (its log, 19:17): a main Fable session's
+Write → deny, a lean-worker Sonnet Write carrying `agent_id` → allow on its first tool call —
+this session itself observed one live deny — a Fable Bash `/tmp`-only redirect at ~19:21, a
+classifier defect the peer acknowledged. Handover agreed
+with the peer session (message 2026-09-10 19:17): the moment `agentlenspro delegate-gate` is
+registered on Edit|Write, this session messages the peer and the peer removes its
+`settings.json` entry within the minute — the two gates must never be live together (their Bash
+classifiers differ). With both registered, deny wins on every disagreement (no commits, no card
+or memory edits, opus gated) — none of which this card orders. Acceptance row 5 (python hook
+unregistered) depends on that peer handover, which the peer has committed to.
 
 ## Approval log
 
 - 2026-09-10T18:54:37+0200 — OPEN (owner decision): gate `opus` too? The order names Fable, so the gate matches /fable|mythos/i only; the peer's python gate also gated opus. Not decided silently — owner's word.
+- 2026-09-10T19:20:54+0200 — REJECTED review finding, disclosed: gh/git commands stay EXEMPT from the delegate gate (per ~/.claude/rules/proactive-delegation.md: git tracking stays in the main context); the owner may overrule. gh: exempt per `~/.claude/rules/fable-plans-sonnet-executes.md` §Enforcement ("git/gh are exempt"); outward gh posts remain gated by `scripts/deny-identity-leak-to-github.js`.
