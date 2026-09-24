@@ -25,11 +25,23 @@ All notable changes to AgentlensPro are documented here.
   `claude-fable-5-1`.
 - **The diagnostics skill armed `Monitor` with `persistent`, removed in Claude Code 2.1.271.**
   Added a `check-no-monitor-persistent` guard.
+- **Opus 5.5 (the default Opus since Claude Code 2.1.280) was priced at Opus 5 rates, about 2x
+  too high** — the table had no key for `claude-opus-5-5`, so the longest-prefix match fell back
+  to `claude-opus-5`. Added `claude-opus-5-5`, `claude-opus-5-5-fast`, and `claude-mythos-5-1`.
+  `billableWeight` (the ranking used by `investigate_burn` and "worst config" comparisons) also
+  hardcoded cache reads at a flat 0.1x input and writes at 1.25x/2x; it now uses each model's own
+  cache-read/write rates from the pricing table, since Opus 5.5 and Fable/Mythos 5.1 read caches
+  at 0.05x/0.025x, not the historical 0.1x. **Rows already written are not healed** — same as the
+  `claude-sonnet-5` entry above, `api_calls.cost_usd` / `api_calls.billable_weight` indexed before
+  this fix keep their high figures until the forensics index is rebuilt.
 
 ### Changed
 
 - **`config set captureRawBodies on` no longer mounts a RAM disk.** Bodies now write straight to
-  `~/.agentlens/otel-bodies`; the spool is being removed.
+  `<dataDir>/otel-bodies`; the spool is being removed. The old code refused to write bodies to the
+  SSD on purpose — capture now writes roughly 20 GB/day there (measured ~14 MB/min; the old code's
+  own estimate was 30-35 GB/day), and until the drain change lands bodies are loaded only after 72
+  hours or once the folder passes 8 GB.
 
 ### Fixed (latent)
 

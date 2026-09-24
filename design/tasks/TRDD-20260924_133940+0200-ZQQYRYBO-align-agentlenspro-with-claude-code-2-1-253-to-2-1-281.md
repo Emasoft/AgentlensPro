@@ -3,7 +3,7 @@ trdd-id: ZQQYRYBO
 title: Align AgentlensPro with Claude Code 2.1.253 to 2.1.281
 column: dev
 created: 2026-09-24T13:39:40+0200
-updated: 2026-09-24T13:50:14+0200
+updated: 2026-09-24T14:02:11+0200
 current-owner: emanuelesabetta
 created-by: emanuelesabetta
 task-type: refactor
@@ -14,7 +14,7 @@ mandated-by: none
 approved: true
 approval-judge: emanuelesabetta
 approval-datetime: 2026-09-24T13:39:40+0200
-implementation-commits: [92d8b369]
+implementation-commits: [92d8b369, b30b80d7]
 ---
 
 # Align AgentlensPro with Claude Code 2.1.253 to 2.1.281
@@ -35,7 +35,7 @@ Reports (this plan was merged from these five, all in
 - `reports/cc-alignment/20260924_133105+0200-shipped-surface.md`
 - `reports/cc-alignment/20260924_133225+0200-2.1.253-281-plan.md` (the plan itself)
 
-Progress so far: I1+I2 (pricing) are coded in this dev pass, uncommitted; I4 (Monitor) is committed (92d8b369).
+Progress so far: I1+I2 (pricing) landed in commit b30b80d7; I4 (Monitor) is committed (92d8b369).
 The rest not started.
 
 Out of scope here, owned elsewhere: the spool removal is TRDD-Z53IJFE9 and is
@@ -44,8 +44,8 @@ are also excluded.
 
 ## Increments
 
-- [ ] I1 — CORRECTION — Add pricing for Opus 5.5, Opus 5.5 fast and Mythos 5.1 (MP F1 F4 F7 F8)
-- [ ] I2 — CORRECTION — Billable weight uses each model's real cache-read and cache-write rates (MP F2)
+- [x] I1 — CORRECTION — Add pricing for Opus 5.5, Opus 5.5 fast and Mythos 5.1 (MP F1 F4 F7 F8)
+- [x] I2 — CORRECTION — Billable weight uses each model's real cache-read and cache-write rates (MP F2)
 - [ ] I3 — CORRECTION — Subagent review gate never fires: sidechain skip (HT-1)
 - [x] I4 — CORRECTION — Monitor `persistent` removed in 2.1.271: fix the diagnostics skill (SS F1)
 - [ ] I5 — CORRECTION — `setup` overwrites the user's own `lean-worker` (SS F3)

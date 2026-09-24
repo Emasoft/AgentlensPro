@@ -118,6 +118,15 @@ suite('FAL Phase 1 — pure helpers', () => {
     assert.ok(Math.abs(weight - 37.20) < 1e-9, `expected 37.20, got ${weight}`)
   })
 
+  test('billableWeight on a model with cacheWritePerMTok 0 (gpt-4o) contributes 0 for both write buckets, never a fabricated rate', () => {
+    // gpt-4o genuinely has NO cache-write rate in pricing.ts (OpenAI does not bill a cache-write
+    // bucket in this shape) — 0 is the documented, correct value here, not a missing entry (see
+    // TRDD-ZQQYRYBO item A). Isolate the write terms: cc5m/cc1h huge, everything else 0, so the
+    // whole weight IS the write contribution and must be exactly 0.
+    const weight = billableWeight(1_000_000, 1_000_000, 0, 0, 0, 'gpt-4o')
+    assert.equal(weight, 0)
+  })
+
   test('computeFrontmatterFp is stable + differs when the rule/claudemd set differs', () => {
     const a = computeFrontmatterFp({ tools: [{ name: 'Bash' }], system: 'plain system' })
     const b = computeFrontmatterFp({ tools: [{ name: 'Bash' }], system: 'plain system' })
