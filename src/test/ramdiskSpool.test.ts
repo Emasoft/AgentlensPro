@@ -128,6 +128,29 @@ suite('applyCaptureSetting — writes straight to the SSD bodies dir, no spool',
     assert.strictEqual(fs.statSync(bodies).mode & 0o777, 0o700)
   })
 
+  test('ON: refuses with EXIT.ABORT when a legacy spoolDir is still configured, and writes nothing', async () => {
+    const dir = tmp()
+    setSpoolDir(dir, '/Volumes/AgentLensSpool/otel-bodies')
+    const deps = spyDeps()
+    const code = await applyCaptureSetting(dir, true, deps)
+    assert.strictEqual(code, EXIT.ABORT)
+    assert.strictEqual(deps.calls.ensureTelemetry.length, 0, 'must not call ensureTelemetry')
+    assert.strictEqual(rawBodyCaptureEnabled(dir, {}), false, 'must not flip the knob')
+    assert.strictEqual(spoolDirConfigured(dir), '/Volumes/AgentLensSpool/otel-bodies', 'must not touch the stale spoolDir')
+    assert.strictEqual(fs.existsSync(path.join(dir, 'otel-bodies')), false, 'must not create the SSD bodies dir either')
+  })
+
+  test('ON: setRawBodyCapture is durable BEFORE ensureTelemetry is called — a throw there still leaves capture on', async () => {
+    const dir = tmp()
+    const deps: CaptureToggleDeps = {
+      ensureTelemetry: async () => { throw new Error('settings.json write failed') },
+      removeSpoolAgent: () => {},
+    }
+    await assert.rejects(() => applyCaptureSetting(dir, true, deps))
+    assert.strictEqual(rawBodyCaptureEnabled(dir, {}), true,
+      'setRawBodyCapture must have already landed before the ensureTelemetry throw')
+  })
+
   test('OFF: targets the default SSD bodies dir and removes any leftover boot-remount agent', async () => {
     const dir = tmp()
     await applyCaptureSetting(dir, true, spyDeps())          // establish capture on

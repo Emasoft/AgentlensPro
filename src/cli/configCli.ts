@@ -157,9 +157,9 @@ function realCaptureDeps(): CaptureToggleDeps {
  *
  * TRDD-Z53IJFE9 (owner removal order, 2026-09-24): "i told you to remove the spool completely, since
  * it was an intermediate buffer that proved to be useless and only slowed down the ingestion and
- * occupied space" — ON no longer calls ensureRamDisk or installs the spool LaunchAgent. No RAM disk
- * means no fail-fast-on-unmountable-spool case either; creating a plain directory cannot meaningfully
- * fail here, so there is nothing left to refuse.
+ * occupied space" — ON no longer calls ensureRamDisk or installs the spool LaunchAgent. `mkdirSync`
+ * on a plain SSD directory CAN still fail (EACCES, ENOSPC, EROFS) — that throw propagates to the
+ * top-level fail-fast handler, same as every other config write in this file.
  */
 export async function applyCaptureSetting(
   dir: string,
@@ -167,19 +167,29 @@ export async function applyCaptureSetting(
   deps: CaptureToggleDeps = realCaptureDeps(),
 ): Promise<number> {
   if (enabled) {
-    // KNOWN LIMITATION (flagged by review, left for card step C): on a machine that captured
-    // under the OLD code, config.json still carries a `spoolDir` pointing at the RAM-disk path
-    // (/Volumes/AgentLensSpool/otel-bodies). effectiveBodiesDir prefers that stale spoolDir over
-    // the SSD default, so ON here would target a path that no longer exists as a mount. Step C of
-    // TRDD-Z53IJFE9 drains and clears any legacy spoolDir before a machine reaches this code path;
-    // this function does not defend against it on its own.
+    // A machine that captured under the OLD (RAM-disk) code still has config.json's `spoolDir`
+    // pointing at /Volumes/AgentLensSpool/otel-bodies. effectiveBodiesDir prefers a configured
+    // spoolDir over the SSD default, so without this guard ON would mkdir under a root-owned,
+    // unmounted /Volumes path (EACCES) or silently resume writing into a stale mount. Refuse
+    // instead of guessing — the owner's migration (TRDD-Z53IJFE9 step C) clears spoolDir first.
+    if (spoolDirConfigured(dir)) {
+      console.error(
+        `${CAPTURE_KEY} cannot be turned on: config.json still has a legacy spoolDir from the old ` +
+        `RAM-disk spool. Run the TRDD-Z53IJFE9 migration (step C) to clear it, then retry.`,
+      )
+      return EXIT.ABORT
+    }
     const bodies = effectiveBodiesDir(dir, true)
     fs.mkdirSync(bodies, { recursive: true, mode: 0o700 })
-    await deps.ensureTelemetry({ dataDir: dir, captureRawBodies: true, bodiesDir: bodies })
+    // setRawBodyCapture BEFORE ensureTelemetry: if ensureTelemetry throws (e.g. a bad settings.json),
+    // the next converge must see capture already on and retry the env write — not see it still off
+    // and silently never wire the env key, which is what writing these in the other order risked.
     setRawBodyCapture(dir, true)
+    await deps.ensureTelemetry({ dataDir: dir, captureRawBodies: true, bodiesDir: bodies })
     console.log(`set ${CAPTURE_KEY} = on in ${configPath(dir)}`)
     console.log(`wired ${RAW_BODIES_KEY} → file:${bodies}`)
-    console.log('restart your Claude Code sessions for this to take effect (env is read at launch).')
+    console.log(`raw bodies are written to ${bodies} (~20-35 GB/day of SSD writes); the server loads and deletes them`)
+    console.log('running sessions pick this up when their settings reload; restart any that do not.')
     return EXIT.OK
   }
   // OFF: read the previously-configured spool FIRST so ensureTelemetry deletes exactly the sink WE
