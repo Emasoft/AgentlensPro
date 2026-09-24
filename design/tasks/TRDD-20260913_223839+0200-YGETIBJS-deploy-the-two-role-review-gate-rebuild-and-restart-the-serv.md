@@ -3,7 +3,7 @@ trdd-id: YGETIBJS
 title: Deploy the two-role review gate — rebuild and restart the server
 column: blocked
 created: 2026-09-13T22:38:39+0200
-updated: 2026-09-14T06:59:21+0200
+updated: 2026-09-14T08:45:32+0200
 current-owner: emanuelesabetta
 created-by: emanuelesabetta
 task-type: infra
@@ -14,8 +14,8 @@ mandated-by: none
 approved: true
 approval-judge: emanuelesabetta
 approval-datetime: 2026-09-13T22:38:39+0200
-blocked-by: [1YXR6S47, 4J1QA18G, BA0DCW98]
-unblock-when: [trdd:1YXR6S47, trdd:4J1QA18G, trdd:BA0DCW98]
+blocked-by: [40M4UPK3]
+unblock-when: [trdd:40M4UPK3]
 pre-block-column: todo
 blocker-probe: [trddgrep, why, YGETIBJS]
 blocker-holds-if: not-match:READY
@@ -51,3 +51,7 @@ NOTE on what this card does and does not do: it ENFORCES NOTHING, because no bui
 ## Approval log
 
 - 2026-09-13T22:38:39+0200 — MANDATE issued by emanuelesabetta (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+
+## Hold repointed 2026-09-14
+
+The three blockers 1YXR6S47, 4J1QA18G and BA0DCW98 are superseded by TRDD-40M4UPK3, whose redesign deletes their code paths; the hold now waits on 40M4UPK3 so superseding them cannot release the deploy early.
