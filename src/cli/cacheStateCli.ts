@@ -21,7 +21,7 @@
 // harness itself said not-warm; warm only when both agree. The bit is kept in the formula so a
 // future payload that says not-warm with a live deadline still reads cold, the safe direction.
 
-import { authoritativeFromWals, type AuthoritativeVerdict } from './cacheExpiredCli'
+import { authoritativeFromWals, latestResumeStaleness, type AuthoritativeVerdict } from './cacheExpiredCli'
 import { EXIT } from './cliErrors'
 import { assertKnownFlags, flagValue } from './argHelpers'
 
@@ -109,7 +109,13 @@ export function runCacheStateCli(argv: string[]): number {
   if (asJson) {
     // The stored fields VERBATIM (flattened `prompt_cache_*` keys exactly as captured), so the
     // consumer pins its reader to what the harness actually sends, not to changelog prose.
-    console.log(JSON.stringify({ state, session_id: row.sessionId, captured_at: row.sampleTs, ...row.promptCache }, null, 2))
+    // `resumeStaleness` rides alongside, never inside `promptCache`: it comes from a DIFFERENT
+    // capture (the SessionStart hook, not the status-line sample) and is absent for most sessions.
+    const resumeStaleness = latestResumeStaleness(row.sessionId)
+    console.log(JSON.stringify(
+      { state, session_id: row.sessionId, captured_at: row.sampleTs, ...row.promptCache, ...(resumeStaleness ? { resumeStaleness } : {}) },
+      null, 2,
+    ))
   } else {
     // Which session was measured goes to STDERR: stdout stays exactly one word, and a wrong-repo
     // answer can never masquerade as a right one.

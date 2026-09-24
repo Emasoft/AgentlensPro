@@ -470,13 +470,20 @@ export const VIEWS: Record<string, ViewSpec> = {
              count(*)                                                 AS renders,
              any_value(prompt_cache_ttl)                              AS cache_ttl,
              max(prompt_cache_misses)                                 AS h_miss,
-             max(prompt_cache_hit_ratio)                              AS h_hit
+             max(prompt_cache_hit_ratio)                              AS h_hit,
+             any_value(prompt_cache_last_miss_cause_causes)           AS h_cause
       FROM samples ${whereOf(f, 'context_window_current_usage_cache_read_input_tokens IS NOT NULL')}
       GROUP BY session_id, in_tok, cache_write, cache_read
       ORDER BY cache_write DESC NULLS LAST LIMIT ${limit}`,
     sortedBy: 'cache WRITE, largest first',
     post: rows => rows.map(r => {
       const write = n(r.cache_write), read = n(r.cache_read)
+      // DuckDB's node client returns a LIST column as a `DuckDBListValue` wrapper, not a plain
+      // array — every other column here is a scalar, so h_cause is the first LIST to reach this
+      // path un-unnested. Unwrap it once, here, rather than teach every caller `.items`.
+      const hCause = Array.isArray(r.h_cause)
+        ? r.h_cause
+        : (r.h_cause as { items?: unknown[] } | null)?.items ?? null
       const model = String(r.model_id ?? '')
       // An unknown model must read as "-", never as $0. calcTokenCostUsd returns 0 for an unpriced
       // id, and a 0 in a cost column is indistinguishable from "this turn was free".
@@ -500,6 +507,7 @@ export const VIEWS: Record<string, ViewSpec> = {
         cost: ttl === '1h' ? cost1h : ttl === '5m' ? cost5m : null,
         // WARM is the claim worth being able to make: the prefix was re-read, not re-written.
         verdict: total === 0 ? 'no-cache' : write / total >= 0.5 ? 'COLD-WRITE' : write / total >= 0.05 ? 'mixed' : 'warm',
+        h_cause: hCause,
       }
     }),
     cols: [
@@ -517,6 +525,9 @@ export const VIEWS: Record<string, ViewSpec> = {
       { key: 'cost', label: '$', fmt: fmtCost },
       { key: 'h_miss', label: 'miss', fmt: fmtNum },
       { key: 'verdict', label: 'verdict' },
+      // The harness's own diagnosed cause (CC 2.1.260), beside our verdict — the falsifier's
+      // falsifier: when it disagrees with `verdict`, that disagreement is worth reading, not hiding.
+      { key: 'h_cause', label: 'h-cause', fmt: v => Array.isArray(v) && v.length > 0 ? v.join(',') : '-' },
     ],
   },
 

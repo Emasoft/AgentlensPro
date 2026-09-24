@@ -24,6 +24,29 @@ suite('lifecycleEvents — SessionStart source → lifecycle kind (TRDD-EYA3X5MQ
     assert.strictEqual(toLifecycleEvent(rec('SessionStart', 1, {}))!.kind, 'STARTUP')
     assert.strictEqual(toLifecycleEvent(rec('SessionStart', 1, { source: 'wat' }))!.kind, 'STARTUP')
   })
+
+  test('source=resume carries the harness\'s own staleness verdict (CC 2.1.251)', () => {
+    // Field names taken from a real captured SessionStart(resume) payload (TRDD-ZQQYRYBO/I11).
+    const e = toLifecycleEvent(rec('SessionStart', 1, {
+      source: 'resume',
+      seconds_since_last_response: 6_386_262,
+      context_tokens: 569_470,
+      prompt_cache_likely_expired: true,
+      estimated_cache_write_usd: 5.6947,
+    }))!
+    assert.strictEqual(e.kind, 'RESUME')
+    assert.deepStrictEqual(e.resumeStaleness, {
+      secondsSinceLastResponse: 6_386_262,
+      contextTokens: 569_470,
+      promptCacheLikelyExpired: true,
+      estimatedCacheWriteUsd: 5.6947,
+    })
+  })
+
+  test('a non-resume SessionStart, or one with none of the four fields, carries no resumeStaleness', () => {
+    assert.strictEqual(toLifecycleEvent(rec('SessionStart', 1, { source: 'startup' }))!.resumeStaleness, undefined)
+    assert.strictEqual(toLifecycleEvent(rec('SessionStart', 1, { source: 'resume' }))!.resumeStaleness, undefined)
+  })
 })
 
 suite('lifecycleEvents — other events + discriminators', () => {

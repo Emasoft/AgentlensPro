@@ -300,6 +300,31 @@ suite('statusline-history — every view must actually EXECUTE', () => {
       assert.strictEqual(unpriced[0].cost_1h, null)
     } finally { fs.rmSync(root, { recursive: true, force: true }) }
   })
+
+  test('cache shows the harness\'s own diagnosed miss cause (CC 2.1.260) beside our verdict', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sl-cache-hcause-'))
+    try {
+      const s = new StatuslineStore({ root, autoTimer: false })
+      const now = Date.now()
+      s.append({
+        session_id: SESSIONS[0],
+        prompt_id: 'p-hcause',
+        model: { id: 'claude-opus-5', display_name: 'Opus' },
+        context_window: {
+          total_input_tokens: 100_000, used_percentage: 10, context_window_size: 1_000_000,
+          current_usage: USAGE[3], // the one COLD-WRITE turn
+        },
+        // The real shape observed on this machine (TRDD-ZQQYRYBO/I10): `causes` is always
+        // `[messages_rewritten]` so far — a name the docs never list.
+        prompt_cache: { last_miss_cause: { causes: ['messages_rewritten'], tools_added: 0, tools_removed: 0 } },
+      }, 'main', now)
+      s.flush()
+      const rows = VIEWS.cache.post!((await queryStatusline(
+        root, 'main', VIEWS.cache.sql(40, {}), { sinceMs: now - 3_600_000 }))!)
+      assert.strictEqual(rows.length, 1)
+      assert.deepStrictEqual(rows[0].h_cause, ['messages_rewritten'])
+    } finally { fs.rmSync(root, { recursive: true, force: true }) }
+  })
 })
 
 suite('statusline-history — argument parsing and rendering', () => {

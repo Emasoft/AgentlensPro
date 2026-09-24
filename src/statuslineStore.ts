@@ -227,6 +227,16 @@ const GUARANTEED_COLUMNS: ReadonlyArray<[string, string]> = [
   ['prompt_cache_miss_recache_tokens', 'BIGINT'],
   ['prompt_cache_last_miss_at', 'BIGINT'],
   ['prompt_cache_recache_tokens_if_cold', 'BIGINT'],
+  // The harness's own diagnosed cause (CC 2.1.260, `/cost` + status line). `last_miss_cause` is an
+  // OBJECT when non-null, so flattenSample() turns it into these four dotted keys instead of one
+  // scalar column — a window spanning only pre-2.1.260 samples has none of them, so without a
+  // guarantee here it binder-errors exactly like the rest of the prompt_cache block above.
+  // `miss_causes_<name>` is NOT listed: it is one column PER CAUSE NAME (open-ended), read by
+  // prefix in cacheExpiredCli.ts and the `cache` view, never enumerated here.
+  ['prompt_cache_last_miss_cause_causes', 'VARCHAR[]'],
+  ['prompt_cache_last_miss_cause_tools_added', 'BIGINT'],
+  ['prompt_cache_last_miss_cause_tools_removed', 'BIGINT'],
+  ['prompt_cache_last_miss_cause_system_char_delta', 'BIGINT'],
   // rate_limits.spend_limit (2.1.251) is deliberately NOT here: it only appears behind a Claude
   // apps gateway with spend limits, no sample of its flattened shape has been captured on this
   // machine, and a guessed column name is worse than none (it would bind NULL forever while the

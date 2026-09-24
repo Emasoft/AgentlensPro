@@ -344,6 +344,25 @@ suite('statuslineStore — a non-UUID session id must not blind every view', () 
     } finally { fs.rmSync(root, { recursive: true, force: true }) }
   })
 
+  test('a window of only pre-2.1.260 samples (no last_miss_cause block) still binds those columns', async () => {
+    // CC 2.1.260 added `prompt_cache.last_miss_cause` as an OBJECT, so flattenSample() turns a
+    // non-null sample into `prompt_cache_last_miss_cause_causes`/`_tools_added`/`_tools_removed`/
+    // `_system_char_delta` instead of one scalar column. A window spanning only older samples has
+    // none of them — the same trap as the rest of the prompt_cache block above.
+    const root = tmpRoot()
+    try {
+      const s = new StatuslineStore({ root, autoTimer: false })
+      s.append({ session_id: '249c4216-4db4-4b64-9a10-b994b9d7bd80', model: { id: 'claude-opus-5' } }, 'main', Date.now())
+      s.flush()
+      const rows = await queryStatusline(root, 'main', `
+        SELECT count(*) n, count(prompt_cache_last_miss_cause_causes) causes
+        FROM samples`)
+      assert.ok(rows, 'a window without the last_miss_cause block must not binder-error')
+      assert.strictEqual(Number(rows[0].n), 1)
+      assert.strictEqual(Number(rows[0].causes), 0, 'an unobserved column binds and is NULL')
+    } finally { fs.rmSync(root, { recursive: true, force: true }) }
+  })
+
   test('a source with NO session_id column at all does not break the query', async () => {
     // The normalization uses `* REPLACE`, which is a BINDER error when the column is absent — so a
     // malformed WAL would trade one total failure for another without the zero-row typed template.

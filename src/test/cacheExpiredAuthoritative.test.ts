@@ -2,7 +2,7 @@ import * as assert from 'assert'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
-import { authoritativeFromWals } from '../cli/cacheExpiredCli'
+import { authoritativeFromWals, latestResumeStaleness } from '../cli/cacheExpiredCli'
 
 // TRDD-YE15B2JK — the authoritative cache-expiry read: Claude Code ≥2.1.252 states the prompt-cache
 // deadline in the statusline payload (`prompt_cache_expires_at`, epoch SECONDS); `cache-expired`
@@ -80,5 +80,56 @@ suite('cache-expired — authoritative statusline read (TRDD-YE15B2JK)', () => {
     const v = authoritativeFromWals(undefined, 'aaaaaaaa-0000-0000-0000-000000000000')
     assert.ok(v)
     assert.strictEqual(authoritativeFromWals(undefined, 'cccc3333-0000-0000-0000-000000000000'), null)
+  })
+})
+
+// TRDD-ZQQYRYBO/I11 — SessionStart(resume) staleness (CC 2.1.251) is captured on a DIFFERENT store
+// (the hook-event NDJSON buckets, not the statusline WAL) than the rows above; `latestResumeStaleness`
+// is the read side that joins the two by session id, --json only.
+suite('cache-state / cache-expired --json — the harness\'s own resume verdict (TRDD-ZQQYRYBO/I11)', () => {
+  let tmp: string
+  let savedDataDir: string | undefined
+
+  setup(() => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'al-resume-'))
+    savedDataDir = process.env.DATA_DIR
+    process.env.DATA_DIR = tmp
+    fs.mkdirSync(path.join(tmp, 'hook-events'), { recursive: true })
+  })
+  teardown(() => {
+    if (savedDataDir === undefined) delete process.env.DATA_DIR
+    else process.env.DATA_DIR = savedDataDir
+    fs.rmSync(tmp, { recursive: true, force: true })
+  })
+
+  const writeHookEvents = (lines: Array<Record<string, unknown>>): void => {
+    const day = new Date().toISOString().slice(0, 10)
+    fs.writeFileSync(
+      path.join(tmp, 'hook-events', `${day}.ndjsonl`),
+      lines.map(l => JSON.stringify(l)).join('\n') + '\n',
+    )
+  }
+
+  test('a stored resume payload renders the estimated re-cache cost', () => {
+    const sid = 'e1b4c900-d366-4fc0-93a4-353bb259fe18'
+    writeHookEvents([{
+      ts: Date.now(),
+      ev: 'SessionStart',
+      session: sid,
+      payload: {
+        session_id: sid, hook_event_name: 'SessionStart', source: 'resume',
+        seconds_since_last_response: 6_386_262, context_tokens: 569_470,
+        prompt_cache_likely_expired: true, estimated_cache_write_usd: 5.6947,
+      },
+    }])
+    const s = latestResumeStaleness(sid)
+    assert.ok(s, 'a resumed session with a stored payload must resolve')
+    assert.strictEqual(s!.estimatedCacheWriteUsd, 5.6947)
+    assert.strictEqual(s!.promptCacheLikelyExpired, true)
+  })
+
+  test('no SessionStart on record for the session answers null, not a crash', () => {
+    writeHookEvents([{ ts: Date.now(), ev: 'SessionStart', session: 'other-session', payload: { source: 'resume' } }])
+    assert.strictEqual(latestResumeStaleness('missing-session'), null)
   })
 })

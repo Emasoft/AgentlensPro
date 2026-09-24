@@ -30,6 +30,17 @@ export interface LifecycleEvent {
   kind: LifecycleKind
   detail?: string         // the discriminator: SessionStart source / SessionEnd reason / *Compact trigger / StopFailure error_type / ConfigChange source
   ev: string              // the raw hook_event_name, kept for traceability
+  /** SessionStart source=resume only (CC 2.1.251) — the harness's OWN verdict on how stale the
+   *  resumed conversation is, straight off the payload, never recomputed. Absent on every other
+   *  kind and on a resume from a pre-2.1.251 build. */
+  resumeStaleness?: ResumeStaleness
+}
+
+export interface ResumeStaleness {
+  secondsSinceLastResponse?: number
+  contextTokens?: number
+  promptCacheLikelyExpired?: boolean
+  estimatedCacheWriteUsd?: number
 }
 
 // The subset of SessionStart `source` values, mapped to their lifecycle kind. An UNKNOWN/absent
@@ -45,6 +56,21 @@ const DETAIL_FIELD: Record<string, string> = {
 }
 
 function str(v: unknown): string | undefined { return typeof v === 'string' ? v : undefined }
+function num(v: unknown): number | undefined { return typeof v === 'number' ? v : undefined }
+function bool(v: unknown): boolean | undefined { return typeof v === 'boolean' ? v : undefined }
+
+/** Raw field names verified against a real captured SessionStart(resume) payload
+ *  (~/.agentlens/hook-events, TRDD-ZQQYRYBO/I11) — undefined, not 0/false, when a field is absent
+ *  (a pre-2.1.251 resume, or a resume with nothing stale to report). */
+function resumeStalenessOf(payload: Record<string, unknown>): ResumeStaleness | undefined {
+  const out: ResumeStaleness = {
+    secondsSinceLastResponse: num(payload.seconds_since_last_response),
+    contextTokens: num(payload.context_tokens),
+    promptCacheLikelyExpired: bool(payload.prompt_cache_likely_expired),
+    estimatedCacheWriteUsd: num(payload.estimated_cache_write_usd),
+  }
+  return Object.values(out).some(v => v !== undefined) ? out : undefined
+}
 
 /**
  * Map one hook record to a lifecycle event, or null when the record is not a lifecycle event we
@@ -54,7 +80,12 @@ export function toLifecycleEvent(rec: HookEventRecord): LifecycleEvent | null {
   const detail = str(rec.payload[DETAIL_FIELD[rec.ev]])
   const base = { ts: rec.ts, session: rec.session, ev: rec.ev, detail }
   switch (rec.ev) {
-    case 'SessionStart': return { ...base, kind: SESSION_START_KIND[detail ?? ''] ?? 'STARTUP' }
+    case 'SessionStart':
+      return {
+        ...base,
+        kind: SESSION_START_KIND[detail ?? ''] ?? 'STARTUP',
+        ...(detail === 'resume' ? { resumeStaleness: resumeStalenessOf(rec.payload) } : {}),
+      }
     case 'SessionEnd':   return { ...base, kind: 'SESSION_END' }
     case 'Stop':         return { ...base, kind: 'STOP' }
     case 'StopFailure':  return { ...base, kind: 'STOP_FAILURE' }

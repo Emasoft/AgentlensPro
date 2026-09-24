@@ -22,6 +22,24 @@ import { callTool } from './cliCore'
 import { EXIT, UsageError } from './cliErrors'
 import { assertKnownFlags } from './argHelpers'
 import { statuslineRoot } from './statuslineHistoryCli'
+import { dataDir } from '../dataDir'
+import { readHookEvents } from '../hookEventStore'
+import { toLifecycleEvent, type ResumeStaleness } from '../lifecycleEvents'
+
+/** The harness's OWN resume-staleness verdict (CC 2.1.251 `SessionStart source=resume`) for one
+ *  session — --json ONLY, never the one-word stdout contract those two fields feed. Reads the
+ *  newest SessionStart hook record for this exact session id straight off disk (no server), the
+ *  same store `last-compact` already reads without one. `null` covers three cases alike: no
+ *  SessionStart on record, the newest one isn't a resume, or it predates 2.1.251 — all three mean
+ *  "nothing to add", not an error. */
+export function latestResumeStaleness(sessionId: string): ResumeStaleness | null {
+  const recs = readHookEvents(path.join(dataDir(), 'hook-events'), { session: sessionId, ev: 'SessionStart', limit: 20 })
+  for (const rec of recs) {
+    const ev = toLifecycleEvent(rec)
+    if (ev?.resumeStaleness) return ev.resumeStaleness
+  }
+  return null
+}
 
 export const CACHE_EXPIRED_USAGE = `agentlenspro cache-expired [flags]
 
@@ -203,7 +221,11 @@ export async function runCacheExpiredCli(argv: string[]): Promise<number> {
     const auth = authoritativeFromWals(session ? undefined : project, session)
     if (auth) {
       if (asJson) {
-        console.log(JSON.stringify({ source: 'statusline-prompt-cache', ...auth }, null, 2))
+        const resumeStaleness = latestResumeStaleness(auth.sessionId)
+        console.log(JSON.stringify(
+          { source: 'statusline-prompt-cache', ...auth, ...(resumeStaleness ? { resumeStaleness } : {}) },
+          null, 2,
+        ))
         return EXIT.OK
       }
       if (quiet) return auth.expired ? QUIET.EXPIRED : QUIET.FRESH
