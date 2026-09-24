@@ -21,7 +21,7 @@ approval-datetime: 2026-09-25T00:09:07+0200
 
 Find the last commit that touched CHANGELOG.md (`git -C <repo> log -1 --format='%h %ad' -- CHANGELOG.md`) and list every later commit whose subject or body mentions TRDD-ZQQYRYBO, TRDD-ORGJ0E3G or TRDD-Z53IJFE9 (hash plus subject).
 
-Known user-visible contract changes to name: meta.attachmentKind can no longer be "instructionsRule" (e02bb80a), and I6c2 (pending) adds a `ttlGapSource` field and an IDLE_TTL_PARTIAL_EXPIRY cause.
+Known user-visible contract changes to name: meta.attachmentKind can no longer be "instructionsRule" (e02bb80a), and I6c2 (landed in 3d128e0d) adds a `ttlGapSource` field and an IDLE_TTL_PARTIAL_EXPIRY cause.
 
 ## Approval log
 

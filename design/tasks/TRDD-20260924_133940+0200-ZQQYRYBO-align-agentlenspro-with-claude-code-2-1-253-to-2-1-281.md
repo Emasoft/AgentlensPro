@@ -3,7 +3,7 @@ trdd-id: ZQQYRYBO
 title: Align AgentlensPro with Claude Code 2.1.253 to 2.1.281
 column: dev
 created: 2026-09-24T13:39:40+0200
-updated: 2026-09-25T00:22:29+0200
+updated: 2026-09-25T00:58:16+0200
 current-owner: emanuelesabetta
 created-by: emanuelesabetta
 task-type: refactor
@@ -14,8 +14,8 @@ mandated-by: none
 approved: true
 approval-judge: emanuelesabetta
 approval-datetime: 2026-09-24T13:39:40+0200
-implementation-commits: [92d8b369, b30b80d7, 33189cdf, fc89382b, 0972f2e7, 76c3b859, ef1577b6, e48e49c6, 97cb873d, f101fe50, 5b272f77, 079f7839, 802531dd, bb53a24c, e02bb80a, a2b73fa6, fbaae7d0, c18c33fa, a99a17f2, 33c8a52b, 7f0b3d4e]
-eht: [2D3D2V9F, 6TSEHXML, WQKM44AL]
+implementation-commits: [92d8b369, b30b80d7, 33189cdf, fc89382b, 0972f2e7, 76c3b859, ef1577b6, e48e49c6, 97cb873d, f101fe50, 5b272f77, 079f7839, 802531dd, bb53a24c, e02bb80a, a2b73fa6, fbaae7d0, c18c33fa, a99a17f2, 33c8a52b, 7f0b3d4e, 3d128e0d]
+eht: [2D3D2V9F, 6TSEHXML, WQKM44AL, WBT2WW96]
 ---
 
 # Align AgentlensPro with Claude Code 2.1.253 to 2.1.281
@@ -54,8 +54,13 @@ Message correction (2026-09-24): commit 5b272f77's "1,999 of 1,999" mixed start 
 Message correction (2026-09-24): commit bb53a24c's "shared build directory" cause is "most likely", not established as fact.
 Message correction (2026-09-24): commit 802531dd's "the heuristic CLAUDE.md records" may in fact be a different code path — not verified as stated.
 Correction to the I9 main-tree check (2026-09-24): "no raw body capture exists" was wrong. ~/.agentlens/otel-bodies holds roughly 23k live files, so ctxmap cross-checks against raw request/response bodies are possible after all.
-2026-09-25: I9b + I9b2 landed together in e02bb80a (the subject says I9b). The commit message omits three fixture additions: hist-main turn-1 short calibration pair, hist-nousage plain rules/ vs .claude/rules pair, conv-main.jsonl additions. Open follow-ups: (a) replace the literal 4 in mcptools_parity.rs the_drill_bounding_rules_hold with a comparison against the unfiltered call's turnCount, plus a >1 guard; (b) mcptools-expected.json provenance check vs a2b73fa6 (running); (c) mutation runs for contextCompositionDedup.test.ts A,B,A and tests 4-6; (d) restore the verification side-effect fixture diffs (ctxcomp, ctxsession, transcriptsql, seismicfiles, seismicrun, statusline-tree) once I6c2 lands; (e) I6c2 apply + verify on main (running).
+2026-09-25: I9b + I9b2 landed together in e02bb80a (the subject says I9b). The commit message omits three fixture additions: hist-main turn-1 short calibration pair, hist-nousage plain rules/ vs .claude/rules pair, conv-main.jsonl additions. Open follow-ups: (a) replace the literal 4 in mcptools_parity.rs the_drill_bounding_rules_hold with a comparison against the unfiltered call's turnCount, plus a >1 guard; (b) mcptools-expected.json provenance check vs a2b73fa6 (done — reports/cc-alignment/20260925_004016+0200-e02bb80a-clean-checks.md: a2b73fa6's committed mcptools fixture was already stale against its own source since 079f7839, and I9b's dedup is the largest part of the 726 lines); (c) mutation runs for contextCompositionDedup.test.ts A,B,A and tests 4-6; (d) restore the verification side-effect fixture diffs (ctxcomp, ctxsession, transcriptsql, seismicfiles, seismicrun, statusline-tree) once I6c2 lands; (e) I6c2 apply + verify on main (landed in 3d128e0d; reports ...20260925_002902+0200-I6c2-main-verify.md, ...20260925_003434+0200-I6c2-log-reader-parity.md; HEAD 156a6768 clean tree: 113/113 Rust binaries (680 tests), mocha 158 passing, both I6c2 mutations caught — ...20260925_005341+0200-head-156a6768-clean-checks.md; e02bb80a clean tree 113/113 plus a confirmed fail-before).
 2026-09-25: Also recorded: 6 landed code commits that were missing from implementation-commits. Pending when I6c2 lands: its commit hash; replace the two '(running)' follow-ups with their report paths.
+Message correction (2026-09-25): commit e02bb80a's 'mcptools-expected.json is regenerated for it' overstates: part of the 726 lines is drift left stale since 079f7839, so mcptools_parity may have been failing on 079f7839..a2b73fa6.
+Message correction (2026-09-25): commit 3d128e0d's 'the forward-looking tools ... are untouched' holds for their logic and ttlSource, but ttl_context.rs, runtime.rs, ttlContext.ts and cacheTtl.ts were edited and their ttlBasis text changed.
+Message correction (2026-09-25): commit 3d128e0d's ''measured' only when a tier was actually read': the 1h slice is read, the 5m slice is derived (total minus 1h, clamped at 0); checked on 3 of 4 branches.
+Message correction (2026-09-25): commit 3d128e0d's 'no production caller merges streams': logscan's timeline builder (lib.rs) applies no isSidechain filter; upstream filtering is unverified, so one session's timeline may interleave subagent turns from older transcripts (card WBT2WW96).
+2026-09-25: EJ6DIP5D is deliberately NOT an eht: I6c2 did not introduce the mixed-write limitation (the pre-I6c2 logic judged gaps by the current regime and was no better there), and a backburner eht would block this card indefinitely. I13 must also cover the new IDLE_TTL_PARTIAL_EXPIRY cause and the ttlGapSource field in the diagnostics skill.
 
 ## Increments
 
@@ -99,6 +104,7 @@ Correction to the I9 main-tree check (2026-09-24): "no raw body capture exists" 
 - **Q6 — repository attribution:** `OTEL_METRICS_INCLUDE_REPOSITORY=1` puts the repo URL on every event (TI 1.7 / SS O6). The value stays local. Wait until the spool removal has changed `telemetryConfig.ts`, because it touches the same file.
 
 ## Notes and lessons learned
+DO NOT verify a patch with a hand-picked --test list, BECAUSE the I6c2 worktree run named 9 parity suites, omitted log_reader_parity, and a stale fixture reached main. DO run cargo test -p agentlens-core -p agentlens-logscan --no-fail-fast (the whole crate) before committing.
 
 ## Approval log
 
