@@ -30,6 +30,8 @@ interface RustBlendTurn {
   output: number
   cacheRead: number
   cacheCreate: number
+  // 1h-tier slice of cacheCreate — TS twin of Rust's BlendTurn.cache_create_1h.
+  cacheCreate1h: number
 }
 
 interface RustParsedTranscript {
@@ -69,7 +71,7 @@ export function finishRustTranscript(r: RustParsedTranscript, nowMs = Date.now()
   // exactly then), priced per turn at that turn's own (model, speed) against the one table.
   if (r.blendTurns) {
     card.speedBlendedCostUsd = r.blendTurns.reduce(
-      (sum, t) => sum + calcTokenCostUsd(t.input, t.cacheRead, t.cacheCreate, t.output, t.model), 0)
+      (sum, t) => sum + calcTokenCostUsd(t.input, t.cacheRead, t.cacheCreate, t.output, t.model, t.cacheCreate1h), 0)
   }
   // Generated files — reconstruct the harvest map (insertion order preserved by the NDJSON array).
   const harvested = new Map<string, HarvestedGeneratedFile>()

@@ -1850,6 +1850,12 @@ interface CardAccum {
   totalOutput: number
   totalCacheRead: number
   totalCacheCreate: number
+  // 1h-tier slice of totalCacheCreate (usage.cache_creation.ephemeral_1h_input_tokens, summed
+  // once per message.id like totalCacheCreate itself) — see Rust twin's cache_create_1h doc
+  // comment (rust-core/crates/agentlens-logscan/src/lib.rs). Optional: only the Claude
+  // accumulation site sets it; every other source's inline CardAccum literal omits it and
+  // _buildCard reads it as 0 — the same "no split known" meaning as an absent tier object.
+  totalCacheCreate1h?: number
   peakContextPerTurn: number
   turns: number
   totalToolCalls: number
@@ -1888,7 +1894,7 @@ interface FileOpAccum {
 
 function _emptyCardAccum(initiator: 'user' | 'agent' | 'api' = 'user'): CardAccum {
   return {
-    totalInput: 0, totalOutput: 0, totalCacheRead: 0, totalCacheCreate: 0,
+    totalInput: 0, totalOutput: 0, totalCacheRead: 0, totalCacheCreate: 0, totalCacheCreate1h: 0,
     peakContextPerTurn: 0, turns: 0, totalToolCalls: 0, toolCounts: {},
     filesRead: new Set<string>(), filesChanged: new Set<string>(),
     filesWritten: new Set<string>(), filesSearched: new Set<string>(),
@@ -1957,6 +1963,7 @@ interface SubAgentRec {
   output: number
   cacheRead: number
   cacheCreate: number
+  cacheCreate1h: number
   totalTokens: number
   toolUseCount: number
   durationMs: number
@@ -2049,7 +2056,7 @@ function _recordSubAgentSpawn(a: ClaudeAccum, block: Record<string, unknown>, in
     // per spawn for the session's whole life — uncapped they were among the top heap strings.
     prompt: typeof inp['prompt'] === 'string' ? capText(inp['prompt']) : undefined,
     spawnKind, spawnModelOverride: modelOverride, spawnIsolation: isolation,
-    input: 0, output: 0, cacheRead: 0, cacheCreate: 0,
+    input: 0, output: 0, cacheRead: 0, cacheCreate: 0, cacheCreate1h: 0,
     totalTokens: 0, toolUseCount: 0, durationMs: 0, done: false,
   })
 }
@@ -2065,6 +2072,17 @@ function _recordSubAgentSpawn(a: ClaudeAccum, block: Record<string, unknown>, in
 // launch record (agentId/resolvedModel are present) with zero token buckets, honestly flagged
 // via sub.async → card.spawnAsync. If a usage-carrying result for the same tool_use id ever
 // appears (sync path re-runs _resolveToolResult), it overwrites the zero-bucket placeholder.
+// 1h-tier slice of cache_creation_input_tokens (usage.cache_creation.ephemeral_1h_input_tokens) —
+// TS twin of the Rust disjoint_anthropic's cache_create_1h (rust-core/crates/agentlens-logscan/src/
+// lib.rs). 0 when the row carries no `cache_creation` tier sub-object (pre-tier-split shape, or a
+// non-Anthropic source), same "no split known" meaning as clamp_num's own fallback — never
+// invented from cacheCreate.
+function _cacheCreate1h(usage: Record<string, unknown> | undefined): number {
+  const tier = usage?.['cache_creation'] as Record<string, unknown> | undefined
+  const v = tier?.['ephemeral_1h_input_tokens']
+  return typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : 0
+}
+
 function _completeSubAgent(sub: SubAgentRec, tur: Record<string, unknown>, resultContent: unknown): void {
   const usage = tur['usage'] as Record<string, number> | undefined
   if (!usage || typeof tur['totalTokens'] !== 'number') {
@@ -2090,6 +2108,7 @@ function _completeSubAgent(sub: SubAgentRec, tur: Record<string, unknown>, resul
   sub.output      = b.outputTokens
   sub.cacheRead   = b.cacheReadTokens
   sub.cacheCreate = b.cacheCreateTokens
+  sub.cacheCreate1h = _cacheCreate1h(usage)
   sub.totalTokens = tur['totalTokens'] as number
   sub.toolUseCount = (tur['totalToolUseCount'] as number) ?? 0
   sub.durationMs   = (tur['totalDurationMs'] as number) ?? 0
@@ -2196,6 +2215,7 @@ function _buildSubAgentCards(parentSessionId: string, a: ClaudeAccum): SessionSu
       outputTokens: sub.output,
       cacheReadTokens: sub.cacheRead,
       cacheCreateTokens: sub.cacheCreate,
+      cacheCreate1hTokens: sub.cacheCreate1h,
       cacheHitRate: sub.totalTokens > 0 ? sub.cacheRead / sub.totalTokens : 0,
       durationMs: sub.durationMs,
       startTime: startMs > 0 ? new Date(startMs).toISOString() : '',
@@ -2307,6 +2327,8 @@ function _claudeOnEntry(a: ClaudeAccum, entry: Record<string, unknown>): void {
       a.card.totalOutput      += rowBuckets.outputTokens
       a.card.totalCacheRead   += rowBuckets.cacheReadTokens
       a.card.totalCacheCreate += rowBuckets.cacheCreateTokens
+      const rowCacheCreate1h = _cacheCreate1h(rawUsage)
+      a.card.totalCacheCreate1h = (a.card.totalCacheCreate1h ?? 0) + rowCacheCreate1h
       const turnContext = contextTokens(rowBuckets)
       if (turnContext > a.card.peakContextPerTurn) a.card.peakContextPerTurn = turnContext
       a.card.turns++
@@ -2317,7 +2339,7 @@ function _claudeOnEntry(a: ClaudeAccum, entry: Record<string, unknown>): void {
       const turnFast = rawUsage?.['speed'] === 'fast'
       if (!turnFast) a.sawStandardSpeed = true
       const turnModel = turnFast && a.model ? `${a.model}-fast` : a.model
-      a.speedBlendedCostUsd += calcTokenCostUsd(rowBuckets.inputTokens, rowBuckets.cacheReadTokens, rowBuckets.cacheCreateTokens, rowBuckets.outputTokens, turnModel)
+      a.speedBlendedCostUsd += calcTokenCostUsd(rowBuckets.inputTokens, rowBuckets.cacheReadTokens, rowBuckets.cacheCreateTokens, rowBuckets.outputTokens, turnModel, rowCacheCreate1h)
     }
     const content = (msg?.['content'] as Array<Record<string, unknown>>) ?? []
     let hasToolCall = false
@@ -2498,6 +2520,10 @@ function _buildCard(
     outputTokens: buckets.outputTokens,
     cacheReadTokens: buckets.cacheReadTokens,
     cacheCreateTokens: buckets.cacheCreateTokens,
+    // Not routed through disjointBuckets (it's a subtotal OF cacheCreateTokens, not a fifth
+    // disjoint bucket) — same direct pass-through as the Rust twin's build_result. 0 for every
+    // non-Claude source, since only the Claude accumulation site above ever increments it.
+    cacheCreate1hTokens: acc.totalCacheCreate1h ?? 0,
     cacheHitRate,
     durationMs,
     startTime: startMs > 0 ? new Date(startMs).toISOString() : '',
