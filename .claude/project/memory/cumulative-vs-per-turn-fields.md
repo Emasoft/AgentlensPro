@@ -2,7 +2,7 @@
 name: cumulative-vs-per-turn-fields
 description: "is total_cost_usd per turn or cumulative / my burn number is hundreds of times too high / the cost jumped after a server restart / d cost looks like one expensive turn / which statusline fields are lifetime totals / how do I difference a cumulative field safely / a cost and a token count that cannot both be true / burn looks wrong only for one model / a new model shipped and the cost numbers went strange / the fix is in the other file so this one is fine, right"
 ocd: 2026-08-01
-lmd: 2026-09-05
+lmd: 2026-09-23
 metadata:
   node_type: memory
   type: project
@@ -48,7 +48,7 @@ See [[statusline-capture-and-store]] (the store and its own traps), [[cache-ttl-
 recomputed cost must use), [[agentlens-burn-token-model]].
 
 
-^ATOM-JQC5-5V9K [desc:"the third instance of the cumulative-delta bug is a COMPOSITION gap: two files each cite the other as the one handling it, and neither states the residue", keywords: each_file_assumes_the_other_handles_the_gap the_fallback_branch_is_gap-unaware unpriced_model_silently_returns_zero_cost a_new_model_ships_and_burn_quietly_overstates lookupRates_miss_returns_0_not_an_error cumulative_delta_survives_in_a_fallback composition_gap_between_two_correct_files burn_spikes_only_for_models_missing_from_pricing, type: project, ocd: 2026-08-05, lmd: 2026-08-05]
+^ATOM-JQC5-5V9K [desc:"the third instance of the cumulative-delta bug is a COMPOSITION gap: two files each cite the other as the one handling it, and neither states the residue", keywords: each_file_assumes_the_other_handles_the_gap the_fallback_branch_is_gap-unaware unpriced_model_silently_returns_zero_cost a_new_model_ships_and_burn_quietly_overstates lookupRates_miss_returns_0_not_an_error cumulative_delta_survives_in_a_fallback composition_gap_between_two_correct_files burn_spikes_only_for_models_missing_from_pricing, type: project, ocd: 2026-08-05, lmd: 2026-09-23]
 
 **The audit found the third instance, and it is not a missing check — it is a check that lives in
 the OTHER file.** (TRDD-H693VQLU, 2026-08-05. Full site table:
@@ -65,6 +65,9 @@ exactly that: `return be.deltaCostUsd` when the model is unknown, and again when
 `calcTokenCostUsd` yields 0 — which `pricing.ts` returns for **any model id not in the table**
 (`if (!rates) return 0`, not an error). On that branch the cumulative delta is used as a turn cost,
 gap-unaware, with nothing on either side marking it.
+
+
+^ATOM-OSS0-YABX [desc: "why the composition-gap fallback matters (fires exactly when a new model ships) and how to apply the lesson: verify a cited mitigation's own fallback branches, and carry the sampling interval with any", keywords: new_model_ships_and_burn_silently_overstates why_does_burn_spike_only_for_a_brand_new_model verify_the_cited_functions_fallback_branches_yourself a_mitigation_with_a_fallback_is_a_mitigation_with_a_hole the_other_files_comment_says_it_handles_this_does_it carry_the_sampling_interval_with_an_unavoidable_delta gap_s_column_labels_an_interval_total how_to_apply_this_lesson_when_auditing_a_delta unpriced_model_ships_and_burn_quietly_overstates fires_exactly_when_people_watch_burn_hardest, type: project, ocd: 2026-09-23, lmd: 2026-09-23]
 
 **Why it matters more than "a narrow branch" suggests:** it fires exactly when a NEW MODEL SHIPS and
 is not yet priced — the moment people watch burn hardest — and it fails silently, upward.
