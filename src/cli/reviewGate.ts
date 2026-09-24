@@ -60,16 +60,57 @@ export const MEASURE_ROLE_RULE = 'Begin your prompt with a line that is exactly 
 
 export type Role = 'measure' | 'review'
 
-/** Role claimed by a PROMPT the parent wrote. The marker must be a WHOLE LINE (leading `^`,
- *  trailing `\s*$`, so a stray space or `\r` is fine but prose after the marker is not) and is
- *  matched ANYWHERE in the prompt, not just the first line: measured 2026-09-13, the harness
- *  PREPENDS boilerplate ahead of a fork's own `ROLE: …` line, so a leading-only rule matched
- *  nothing and every roled agent was gated. Both or neither => null, because one agent doing both
- *  jobs is the shape this replaces. ONE predicate serves both credit (a spawn releasing the
- *  parent's gate) and exemption (the spawned agent skipping its own) — measured 2026-09-15
- *  (fixture K): a loose leading-only variant credited REVIEW from a worker fork whose prose line
- *  merely BEGAN "ROLE: REVIEW is the marker…", releasing the gate with no reviewer ever spawned. */
+/** Role claimed by a PROMPT the PARENT wrote — the literal string an assistant's own `Agent`
+ *  tool_use `input.prompt` carries (scanTranscriptLines' spawn-credit branch, and
+ *  reviewSupervisor's equivalent scan). This is exactly what the calling agent composed, never
+ *  wrapped or reframed by the harness before it lands in the parent's own transcript, so it is
+ *  safe to anchor to POSITION: the marker must be the prompt's literal FIRST non-whitespace line
+ *  (trailing `\s*` tolerated — a stray space or `\r` is fine, prose after the marker is not) —
+ *  TRDD-BA0DCW98: matching "anywhere" let a quoted marker line buried in untrusted third-party
+ *  text the parent pasted into a spawned agent's brief (a fetched doc, an issue body, a pasted
+ *  transcript) falsely credit that spawn as the real REVIEW/MEASURE agent, releasing the parent's
+ *  own gate with no reviewer ever having actually been asked for one. The harness's own directive
+ *  strings put the marker line first (`REVIEW_GATE_DIRECTIVE`'s spawn instructions), so first-line
+ *  anchoring costs no legitimate spawn its credit — candidate option 3 in the card, chosen over
+ *  N-line/boilerplate-length bookkeeping (drift-prone) and a marker-shape change (breaks the live
+ *  prompt contract with deployed roled agents). Both or neither => null, one agent claiming both
+ *  jobs is the shape this replaces. Exact whole-line equality (kept here) is what fixture K needs
+ *  (2026-09-15: a `.startsWith` variant credited REVIEW from a prose line merely BEGINNING
+ *  "ROLE: REVIEW is the marker…"); first-line anchoring (added here) is what BA0DCW98 needs — the
+ *  two are independent and both required.
+ *
+ *  NOT used for `ownRole` (the self-exemption check, below): that reads a DIFFERENT string — the
+ *  first user entry of the SPAWNED agent's own transcript, which per `declaredRoleOwnTranscript`'s
+ *  own doc comment may arrive with harness-added preamble ahead of the marker line, so anchoring
+ *  THIS function's position rule onto that read would falsely de-exempt every real REVIEW/MEASURE
+ *  fork and deadlock the gate (each fork's own SubagentStop would then demand it spawn a reviewer
+ *  of itself). Keep the two predicates separate; do not unify them. */
 export function declaredRole(prompt: string): Role | null {
+  let firstLine: string | undefined
+  for (const line of prompt.split('\n')) {
+    const trimmed = line.trimEnd()
+    if (trimmed !== '') { firstLine = trimmed; break }
+  }
+  const m = firstLine === 'ROLE: MEASURE'
+  const r = firstLine === 'ROLE: REVIEW'
+  return m === r ? null : (m ? 'measure' : 'review')
+}
+
+/** Role claimed by the SPAWNED agent's OWN first transcript entry — its spawning brief as Claude
+ *  Code actually delivered and recorded it, which (per a prior measurement, TRDD-3U8AIHXK) may
+ *  carry harness-added preamble ahead of the `ROLE: …` line, unlike the parent's raw `input.prompt`
+ *  string `declaredRole` reads above. Feeds ONLY `ownRole` (self-exemption from the agent's own
+ *  SubagentStop gate) — NOT anchored to the first line, so this predicate still carries the
+ *  BA0DCW98 residual: untrusted text quoted early in a spawned agent's own brief that happens to
+ *  contain a bare marker line self-exempts that agent. Left open deliberately (orchestrator
+ *  decision, 2026-09-24, pending a measurement of the wrapped shape): anchoring it requires
+ *  knowing the actual harness-wrapped shape, which is
+ *  unmeasured here, and a wrong anchor point deadlocks every real role fork — worse than the
+ *  residual it would close. Whole-line equality with trailing-whitespace tolerance (the fixture K
+ *  fix) still applies, so a marker with trailing prose does not exempt. Follow-up: measure the
+ *  real wrapped shape (a MEASURE agent's own first transcript entry) and anchor this predicate the
+ *  same way once that shape is known. */
+export function declaredRoleOwnTranscript(prompt: string): Role | null {
   const m = /^ROLE: MEASURE\s*$/m.test(prompt)
   const r = /^ROLE: REVIEW\s*$/m.test(prompt)
   return m === r ? null : (m ? 'measure' : 'review')
@@ -94,7 +135,9 @@ WHAT NEVER ARMS IT: plain prose, status lines, read-only commands, files changed
 else (there is no mtime walk), a janitor heartbeat prompt (\`[janitor-heartbeat]\`) or a user interrupt (Esc / Ctrl-C,
 \`[Request interrupted by user…]\`) — each is a FLOOR: nothing before it is ever demanded, while a
 write the main agent makes AFTER it still arms — a janitor subagent (\`ai-maestro-janitor:*\`), the review fork itself, or
-an agent whose own prompt carries \`ROLE: MEASURE\` / \`ROLE: REVIEW\` as a whole line.
+an agent whose own prompt's literal FIRST non-blank line is exactly \`ROLE: MEASURE\` / \`ROLE: REVIEW\`
+(TRDD-BA0DCW98: a marker buried later in the prompt, e.g. quoted from untrusted third-party text,
+no longer self-exempts).
 
 THE AGENTS:
 - REVIEW: the Agent tool, \`subagent_type: "fork"\`. Its prompt states what you did this turn and
@@ -446,7 +489,7 @@ export function scanTranscriptLines(lines: string[], cwd = process.cwd()): GateS
     if (e?.type === 'user') {
       // The transcript's OWN spawning prompt is its FIRST non-sidechain `user` entry — read ONCE,
       // so a later human-authored `user` turn is never mistaken for it.
-      if (!sawFirstUser) { sawFirstUser = true; ownRole = declaredRole(userPromptText(content)) }
+      if (!sawFirstUser) { sawFirstUser = true; ownRole = declaredRoleOwnTranscript(userPromptText(content)) }
       if (isFloorPrompt(content)) { work = null; lastProposal = -1 }
       continue
     }
