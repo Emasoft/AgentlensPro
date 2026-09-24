@@ -17,16 +17,19 @@ All notable changes to AgentlensPro are documented here.
   accumulator (`agentlens-logscan`'s `Buckets`/`ClaudeAccum`) never extracted the 1h/5m split at
   all, so `mcp_tools.rs`'s `session_cost` and `log_reader.rs`'s `speedBlendedCostUsd` had nothing
   to pass `calc_token_cost_usd` but a hardcoded `0.0` for the 1h argument. Now `Card` carries a
-  `cache_create_1h_tokens` subtotal and both call sites use it. **Persisted rows are backfilled by
-  a TARGETED re-parse, not a whole-corpus rescan** (`LOG_INGEST_VERSION` stays 7 — a proposed 7→8
-  bump was reviewed and rejected, see below): a card restored from a pre-fix delta log, or one
-  whose backing transcript file hadn't changed since a restart (so the sweeper's `unchanged()`
-  short-circuit would otherwise skip it forever), reads a missing `cacheCreate1hTokens` as `0`
-  (the exact pre-fix behavior, never a crash or a wrong-direction change) until `restore()` drops
-  that ONE file's saved offset and the next sweep re-parses it from 0. Sessions last modified more
-  than 30 days before the upgrade are excluded from this re-parse (`REPARSE_MAX_AGE`) and keep the
-  5m-rate cache-write cost, so a cross-session total mixes tier-aware and 5m-rate cards (up to
-  ~10% under-read on 1h-tier sessions older than that bound). This is the same defect
+  `cache_create_1h_tokens` subtotal and both call sites use it. **The idle-session backfill is
+  NOT SHIPPED YET.** A targeted re-parse (`LOG_INGEST_VERSION` stays 7 — a proposed 7→8 whole-corpus
+  bump was reviewed and rejected, see below) was implemented — a card restored from a pre-fix delta
+  log, or one whose backing transcript file hadn't changed since a restart (so the sweeper's
+  `unchanged()` short-circuit would otherwise skip it forever), would have its missing
+  `cacheCreate1hTokens` rebuilt by dropping that ONE file's saved offset and re-parsing it on the
+  next sweep — but it was WITHDRAWN (`TRDD-ORGJ0E3G`) after an isolated full-size run of the
+  re-parse build caused a card-store OOM (`TRDD-TWDGR75R`: re-parsed cards are larger, roughly
+  doubling `cards.duckdb`, which then exceeds DuckDB's 256 MiB buffer-pool limit on the next
+  summary scan). Until a replacement (a usage-only patch that adds just the 1h token count to a
+  restored card, instead of rebuilding it) ships, a session missing `cacheCreate1hTokens` keeps
+  reading it as `0` (the exact pre-fix behavior, never a crash or a wrong-direction change), so a
+  cross-session total mixes tier-aware and 5m-rate cards (~10% measured on one session). This is the same defect
   *shape* as `TRDD-K4XQ7M2B` (unfixed as of this entry) but in the session
   **card**, not the per-call `api_calls` forensics row — the two are tracked and fixed separately.
   Other `calc_token_cost_usd` call sites that still pass a hardcoded `0.0` (e.g.

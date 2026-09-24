@@ -3,7 +3,7 @@ trdd-id: ORGJ0E3G
 title: Transcript session cost bills every cache write at the 5m rate
 column: dev
 created: 2026-09-24T14:38:23+0200
-updated: 2026-09-24T16:12:01+0200
+updated: 2026-09-24T17:14:23+0200
 current-owner: emanuelesabetta
 created-by: emanuelesabetta
 task-type: bugfix
@@ -42,5 +42,6 @@ REVIEW (2026-09-24, adversarial fork): fixed discover_all gated only on restored
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-24
 
-HEAD is NOT deployable since 513623fe: an isolated full-size run of the re-parse build crashed after boot (card-store OOM, see TRDD-TWDGR75R). Deploy only after that card establishes whether the re-parse causes it. A plain `agentlenspro server restart` is safe: it reuses the prebuilt bin-native binary.
-Sessions last modified more than 30 days before the upgrade keep the 5m-rate cache-write cost (REPARSE_MAX_AGE); cross-session totals mix tier-aware and 5m-rate cards (up to ~10% under-read on 1h-tier sessions).
+HEAD is NOT deployable since 513623fe (513623fe alone was never measured; 80958154 is the build that crashed): an isolated full-size run of the re-parse build crashed after boot (card-store OOM, see TRDD-TWDGR75R). Deploy only after that card establishes whether the re-parse causes it. A plain `agentlenspro server restart` is safe: it reuses the prebuilt bin-native binary.
+Sessions last modified more than 30 days before the upgrade keep the 5m-rate cache-write cost (REPARSE_MAX_AGE); cross-session totals mix tier-aware and 5m-rate cards (~10% measured on one session).
+2026-09-24: the re-parse approach (513623fe, 80958154) is not deployable in its current form because it causes the TRDD-TWDGR75R card-store OOM (see that card's VERDICT: put() replaces rows, but a reparsed card's larger JSON doubled cards.duckdb and blew the 256 MiB buffer-pool ceiling on the first cards_json() call). The likely right design is a usage-only pass that reads just usage.cache_creation.ephemeral_1h_input_tokens per message id from each flagged transcript and patches cacheCreate1hTokens into the restored card, instead of rebuilding the full card.

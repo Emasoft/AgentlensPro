@@ -3,7 +3,7 @@ trdd-id: WKLD508O
 title: alcore exits with a culprit log rather than exceed a 2 GB memory cap
 column: dev
 created: 2026-09-07T19:36:46+0200
-updated: 2026-09-24T08:58:31+0200
+updated: 2026-09-24T17:15:10+0200
 current-owner: main
 task-type: feature
 parent-trdd: 7YPQWKPG
@@ -17,6 +17,8 @@ implementation-commits: [466775af, f9776548, c0537ef4, 97c5123f, 17ce33a1, 3ec4b
 project-id: agentlenspro
 scope: project
 labels: [rust, memory, alcore, guard]
+assignee: main
+created-by: main
 ---
 
 # alcore exits with a culprit log rather than exceed a 2 GB memory cap
@@ -752,3 +754,7 @@ macOS, RSS on Linux, and the log line names which one it measured.
 ## Board-triage note 2026-09-24
 
 This card's ## Acceptance section is a plain numbered list (1.-4.), not markdown checkboxes (- [ ]), so trddgrep check-box has nothing to tick — recorded here per RULE 1 board-triage worker instruction rather than rewritten, since rewriting the Acceptance section into checkbox form is a content edit outside this worker's scope. Evidence per reports/board-triage/20260924_085040+0200-cluster-heap-perf.md: the guard is live and firing correctly — 200 logged RSS-HARD-CAP exits in ~/.agentlens/rss-hard-cap.log, each with a region/counter breakdown and the log flushed before exit, matching acceptance items 1-3 verbatim (deterministic non-zero exit past a low cap; log written+flushed+fsynced before exit; region/zone breakdown, not just aggregates). Item 4 (tick interval stated, and a tick is a detector not a guarantee) is not independently confirmed by that report — left unverified here. No code change indicated. NOT moving the column: the instruction conditions a move on every acceptance box being ticked, and none can be ticked in this card's current (non-checkbox) format.
+
+## EVIDENCE
+
+## EVIDENCE (2026-09-24, ~/.agentlens/server.log; grep -a -c) — 41 `phys_footprint .* > cap` exits logged so far. Last three, quoted verbatim: EXIT 1 — `alcore: RSS HARD CAP — phys_footprint 2175 MB > cap 2048 MB, exiting` / `mimalloc (Rust heap): current 1634 MB, peak 2381 MB, commit 1632 MB, page faults 0` / `resident spans: 102` / `card store rows: 34630` / `span store: 4 segments, 290119 spans, 211916132 bytes` / `uptime: 104210 ms`. EXIT 2 — `alcore: RSS HARD CAP — phys_footprint 2069 MB > cap 2048 MB, exiting` / `mimalloc (Rust heap): current 2655 MB, peak 2764 MB, commit 1897 MB, page faults 0` / `resident spans: 5170` / `card store rows: 34678` / `span store: 4 segments, 295289 spans, 222338483 bytes` / `uptime: 2249592 ms`. EXIT 3 (latest) — `alcore: RSS HARD CAP — phys_footprint 2202 MB > cap 2048 MB, exiting` / `mimalloc (Rust heap): current 3033 MB, peak 3033 MB, commit 2081 MB, page faults 0` / `resident spans: 10497` / `card store rows: 34820` / `span store: 4 segments, 305786 spans, 243292850 bytes` / `uptime: 3076580 ms`. Each exit is followed by a `[AgentlensPro] boot provenance: started-by=hook-revive ...` line — the hook revives the server after every exit, so ingestion has a gap each time between the exit and the next boots sweep, not continuous coverage. Per the owners 2026-09-08 22:41 ruling recorded on this card (TRDD-DKBGT7MQ): the DuckDB budget is 2 GB and DuckDB is the only memory; exiting with a culprit log naming the culprit is the specified behaviour, not a hazard. Consistent with that ruling, the culprit logs quoted above now name the Rust heap (mimalloc current running 1.6-3.0 GB, exceeding the 2048 MB cap on its own in the last two exits) rather than DuckDB at face value — but flagged, not resolved, here (adversarial review, 2026-09-24): mimalloc current EXCEEDS phys_footprint in 2 of the 3 quoted exits (2655 MB and 3033 MB mimalloc vs 2069 MB and 2202 MB footprint), so mimalloc's self-reported "current" is not directly commensurate with phys_footprint (likely a gross/committed figure, not what macOS charges) — the same RSS-vs-footprint-vs-allocator-counter confusion this card's own STATE history spent many turns on. Whether the Rust heap or DuckDB dominates phys_footprint at these exits is UNSETTLED by this evidence; only that mimalloc alone is large enough to be a candidate is established.
