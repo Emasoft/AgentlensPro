@@ -61,6 +61,7 @@ usage:
                                               it could not resolve). Same harness-reported row as
                                               cache-expired, off disk, no server
   agentlenspro last-compact [--seconds] [--project DIR] [--trigger manual|auto] [--json]
+  agentlenspro hook-context-cost [--hours N] [--json]   what hooks inject per event/name (CC ≥2.1.280)
                                               how long ago did THIS project compact? Prints the age
                                               of the newest compaction — manual /compact OR auto —
                                               from the PreCompact hook, off disk (server may be

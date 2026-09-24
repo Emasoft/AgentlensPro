@@ -41,6 +41,7 @@ import { runCacheStateCli } from './cacheStateCli'
 import { runLastCompactCli } from './lastCompactCli'
 import { runModelHeadroomCli } from './modelHeadroomCli'
 import { runSearchCli } from './searchCli'
+import { runHookContextCostCli } from './hookContextCostCli'
 
 /** CLI entry. `startServer` lazily imports standalone/server (injected by the shim — src/
  *  cannot import standalone/ without inverting the build layering). Returns the exit code. */
@@ -109,7 +110,7 @@ export const MANAGEMENT_VERBS: ReadonlySet<string> = new Set([
   'hook', 'gate', 'review-gate', 'review-supervisor', 'delegate-gate', 'statusline', 'statusline-history', 'get_account_status', 'disable', 'enable',
   'telemetry', 'setup', 'server', 'daemon', 'dashboard', 'cache-expired', 'cache-state', 'last-compact',
   'budget', 'watch', 'heartbeat-cost', 'config', 'spool', 'env', 'ctxmap', 'ctxvis', 'list',
-  'search', 'model-headroom',
+  'search', 'model-headroom', 'hook-context-cost',
 ])
 
 export const LATENCY_EXEMPT: Readonly<Record<string, string>> = {
@@ -136,6 +137,7 @@ export const LATENCY_EXEMPT: Readonly<Record<string, string>> = {
   'review-supervisor': 'a UserPromptSubmit metahook over the review gate — reads a transcript tail and the settings cascade off disk, no network',
   'model-headroom': 'FETCHES the OAuth usage endpoint (10-minute cached), so it is network-bound by design and cannot carry a hot-path ceiling. It is not on any per-turn path: an agent calls it ONCE before deciding whether to spawn the advisor, which is itself a minutes-long operation — the check cannot be the expensive half',
   store: 'operator repair verb (repair-parked STAGES and fully re-verifies the whole bodies table) — run with the server stopped, a human watching',
+  'hook-context-cost': 'an analysis verb that streams the day buckets of the log-event sink (~170 MB/day); asked deliberately, never per turn',
 }
 
 export async function cliMain(argv: string[], startServer: () => Promise<unknown>): Promise<number> {
@@ -279,6 +281,10 @@ export async function cliMain(argv: string[], startServer: () => Promise<unknown
       // that never arrives. Same contract as its siblings — one word, and cannot-answer is exit 2,
       // never a confident `ok`.
       return runModelHeadroomCli(argv.slice(1))
+    case 'hook-context-cost':
+      // "How much text do my hooks inject?" — sums the hook_execution_complete size attributes
+      // (CC ≥2.1.280) from the gated-out log-event sink, disk-only (TRDD-ZQQYRYBO I15).
+      return runHookContextCostCli(argv.slice(1))
     case 'search':
       // Grep a session's transcript jsonl (tool outputs, agent responses) via DuckDB's streaming
       // NDJSON reader (TRDD-P31SWA8I). Disk-only — works with the server down, like its siblings.
