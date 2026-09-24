@@ -3,7 +3,7 @@ trdd-id: XTFDRTH2
 title: Session cards live in a DuckDB table upserted on ingest, not in a 32k-entry IndexMap
 column: human_review
 created: 2026-09-05T22:06:10+0200
-updated: 2026-09-24T09:07:56+0200
+updated: 2026-09-24T09:24:15+0200
 implementation-commits: [f29bc3b6, 8069c6a9, e00af58b, 13209791, 12c4c4a7, 46a0268c, ac289d8d]
 current-owner: main-session
 task-type: refactor
@@ -173,3 +173,7 @@ Code verification: card_store.rs schema (lines 60-95) matches the card's documen
 Interaction with today's heap work: reports/alcore-heap/20260923_112303+0200-heap-attribution.md lists cards: card_store::CardStore as FIXED (XTFDRTH2), not Rust-heap resident, in the current heap-growth investigation -- no conflict or regression recorded.
 Findings: no blocking findings. Two deliberate Shape deviations (boot restore keeps DeltaLog::load instead of read_ndjson_auto; seq column added) are each justified and confirmed in code, not scope creep. The summary_snapshot whole-corpus clone under the lock is a documented, bounded residual, not disputed here.
 Ready for human_review; the owner makes that move. Full report: reports/ai-review/20260923_125559+0200-batch-B.md
+
+## Notes
+
+2026-09-24: owner note: box 3's mimalloc bound was a 0.1 GB soft pass at landing -- today's RSS-cap exits show mimalloc current 2559-2877 MB (in-run ratchet, TRDD-EQCGAVGV) -- the owed 644/0 test run addressed box 2 only.

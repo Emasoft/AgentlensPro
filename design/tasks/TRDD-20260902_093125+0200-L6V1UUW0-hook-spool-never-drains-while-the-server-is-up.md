@@ -3,7 +3,7 @@ trdd-id: L6V1UUW0
 title: The hook-spool never drains while the server is up, and every spooled hook spawns a doomed revive
 column: human_review
 created: 2026-09-02T09:31:25+0200
-updated: 2026-09-24T08:57:52+0200
+updated: 2026-09-24T09:17:21+0200
 current-owner: main-session
 task-type: bugfix
 priority: high
@@ -94,3 +94,4 @@ past the original backlog.
 
 - 2026-09-24T08:57:35+0200 — column → human_review by main-session. AI review verified, evidence in reports/board-triage ai_review-A/B/C triage
 - 2026-09-24T08:57:49+0200 — main-session (board update A): moved ai_review -> human_review; AI review verified per reports/board-triage ai_review-A/B/C triage rows. In this project's mono-agent rule the session moves ai_review->human_review; the owner moves human_review->complete.
+2026-09-24T09:17:06+0200 — AI re-review at HEAD 3faa709c: acceptance still holds — 52155adf (the only later commit touching hookHandlers.ts) only changed the AGENTLENS_HOOK_TIMEOUT/AGENTLENS_GATE_TIMEOUT constants, not this card's pidfileOwnerAlive/reviveDaemonDetached guard or the spool-drain interval logic; cargo test -p agentlens-core --test hook_spool_drain 2/2 pass, npx mocha hookSpool.test.js 9/9 pass (matches the card's own noted 11-vs-9 typo).

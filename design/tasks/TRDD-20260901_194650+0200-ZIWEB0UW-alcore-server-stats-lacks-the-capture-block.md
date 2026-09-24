@@ -3,7 +3,7 @@ trdd-id: ZIWEB0UW
 title: alcore /api/server-stats lacks the capture block so status prints capture unknown
 column: human_review
 created: 2026-09-01T19:46:50+0200
-updated: 2026-09-24T08:58:06+0200
+updated: 2026-09-24T09:13:12+0200
 current-owner: agentlenspro-15
 task-type: bugfix
 implementation-commits: [0c19090d, 3b7bfcd6]
@@ -70,3 +70,4 @@ Deploy lesson captured as ATOM-SFLG-1NSX (in-place cp SIGKILL).
 
 - 2026-09-24T08:57:39+0200 — column → human_review by main-session. AI review verified, evidence in reports/board-triage ai_review-A/B/C triage
 - 2026-09-24T08:57:49+0200 — main-session (board update A): moved ai_review -> human_review; AI review verified per reports/board-triage ai_review-A/B/C triage rows. In this project's mono-agent rule the session moves ai_review->human_review; the owner moves human_review->complete.
+2026-09-24T09:12:59+0200 — AI re-review at HEAD 954fe1a0: acceptance still holds — server_stats.rs still emits bodies.live {files,newestMs} and bodies.parked {files,bytes,onDisk} (unchanged by the later OTLP-count/spool-gauge commits touching the same bodies object); serverControl.ts:544 still gates the unknown-capture message on absent live. cargo test -p agentlens-core --lib -- live_bodies_liveness_counts_request_response_files_and_finds_the_newest parked_bodies_gauge_reads_stranded_names_and_reports_ghosts -> 2 passed.

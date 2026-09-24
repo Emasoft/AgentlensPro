@@ -1,9 +1,9 @@
 ---
 trdd-id: GXKRBK1Q
 title: Double every hook timeout the installer writes and every hook's own network budget
-column: human_review
+column: dev
 created: 2026-09-05T15:39:31+0200
-updated: 2026-09-24T08:57:52+0200
+updated: 2026-09-24T09:17:29+0200
 current-owner: main-session
 task-type: bugfix
 priority: high
@@ -55,6 +55,8 @@ this card's scope, which is the four installer entries plus the two network budg
   `allHooks.filter(h => isOurHookCommand(h.command)).length`.
 - 2026-09-24T08:57:35+0200 — column → human_review by main-session. AI review verified, evidence in reports/board-triage ai_review-A/B/C triage
 - 2026-09-24T08:57:49+0200 — main-session (board update A): moved ai_review -> human_review; AI review verified per reports/board-triage ai_review-A/B/C triage rows. In this project's mono-agent rule the session moves ai_review->human_review; the owner moves human_review->complete.
+2026-09-24T09:17:06+0200 — AI re-review at HEAD 3faa709c: REJECTED. This card's approved acceptance (installer writes 10/10/20/10 outer ceilings, verify-read-back 10/10/20/10) no longer holds — a2303f91 (TRDD-B07NR7ZI, 2026-09-08, USER order) replaced all four hookInstall.ts builders with one flat HOOK_TIMEOUT_SEC=30 constant, and src/test/cliMatchers.test.ts:37 now pins assert.strictEqual(HOOK_TIMEOUT_SEC, 30), contradicting this card's approved 10/10/20/10 values. The doubling intent is superseded, not broken, by a later explicit user order; the card needs reconciling (close as superseded by TRDD-B07NR7ZI, or rewrite acceptance to match current values) rather than re-approval as written.
+- 2026-09-24T09:17:29+0200 — column → dev by main-session. Acceptance criteria (10/10/20/10 hook timeouts) stale at HEAD — superseded by a2303f91/TRDD-B07NR7ZI's flat 30s HOOK_TIMEOUT_SEC; needs reconciliation before re-approval.
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-09-05T16:06:03+0200
 

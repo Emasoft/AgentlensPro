@@ -3,7 +3,7 @@ trdd-id: ZW4APOPI
 title: alcore never drains the RAM-disk spool so it is 100 percent full and capture is silently losing bodies
 column: human_review
 created: 2026-08-29T07:37:08+0200
-updated: 2026-09-24T08:57:56+0200
+updated: 2026-09-24T09:13:42+0200
 current-owner: claude-agentlenspro
 task-type: bugfix
 project-id: agentlenspro
@@ -341,6 +341,7 @@ place of the thing:
 4. **One grep pattern is not an absence proof.** "No writer exists in this repo" came from grepping
    two literal filename suffixes; a writer building the name by concatenation carries neither. The
    conclusion is likely right, but it is an observation, and the card now says so.
+AI re-review at HEAD 3faa709c (2026-09-24T09:13:29+0200): acceptance still holds — chores.rs bodies_pass still iterates resolve_bodies_read_scope (spool first) and server_stats.rs still exposes spool_gauge (bodies.spool). Later commit a55074bd (TRDD-U0L78B3Z) only added captureDownSince/probe_sink to server_stats.rs, no change to the drain or the spool gauge. Reran cargo test -p agentlens-core --test chores_spool_drain --test chores_bodies_spool_drain -> 2/2 passed.
 
 ## Approval log
 

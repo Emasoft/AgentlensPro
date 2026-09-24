@@ -3,7 +3,7 @@ trdd-id: YE15B2JK
 title: Claude Code now reports cache state in the statusline payload so cache-expired should read it instead of inferring
 column: human_review
 created: 2026-09-01T18:30:59+0200
-updated: 2026-09-24T08:57:55+0200
+updated: 2026-09-24T09:17:21+0200
 current-owner: main-session
 task-type: feature
 scope: project
@@ -85,6 +85,7 @@ Code is at 2.1.252 here. The field names in the directive are described, not quo
   box, which re-opens the card. Human-review reader: judge the four original boxes.
 - 2026-09-24T08:57:38+0200 — column → human_review by main-session. AI review verified, evidence in reports/board-triage ai_review-A/B/C triage
 - 2026-09-24T08:57:49+0200 — main-session (board update A): moved ai_review -> human_review; AI review verified per reports/board-triage ai_review-A/B/C triage rows. In this project's mono-agent rule the session moves ai_review->human_review; the owner moves human_review->complete.
+2026-09-24T09:17:06+0200 — AI re-review at HEAD 3faa709c: acceptance still holds — DCWJY2JJ's ad96a436/4c3480eb only touched cacheStateCli.ts's warm-bit tri-state handling; cacheExpiredCli.ts's own diff (ad96a436) is additive (tri-state type doc) and its commit message states cache-expired is unaffected, branching on expired never warm; npx mocha cacheExpiredAuthoritative.test.js 5/5 pass, verb behavior unchanged.
 
 ## Notes and lessons learned
 

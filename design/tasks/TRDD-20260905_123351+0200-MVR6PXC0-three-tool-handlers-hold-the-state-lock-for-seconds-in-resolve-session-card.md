@@ -3,7 +3,7 @@ trdd-id: MVR6PXC0
 title: Three MCP tool handlers hold the state lock for one to four seconds inside their per-candidate resolve_session_card closure
 column: human_review
 created: 2026-09-05T12:33:51+0200
-updated: 2026-09-24T08:57:53+0200
+updated: 2026-09-24T09:13:11+0200
 current-owner: main-session
 task-type: bugfix
 priority: high
@@ -153,6 +153,7 @@ three tools.
   the gate; `POST /api/clear` is the only eviction path) are in the STATE block.
 - 2026-09-24T08:57:36+0200 — column → human_review by main-session. AI review verified, evidence in reports/board-triage ai_review-A/B/C triage
 - 2026-09-24T08:57:49+0200 — main-session (board update A): moved ai_review -> human_review; AI review verified per reports/board-triage ai_review-A/B/C triage rows. In this project's mono-agent rule the session moves ai_review->human_review; the owner moves human_review->complete.
+2026-09-24T09:12:59+0200 — AI re-review at HEAD 954fe1a0: acceptance still holds — resolve_session_card_offlock (ui.rs:906-935) still releases the state guard across reparse_session_card after the DuckDB migration (e00af58b): lock 1 is now st.cards.contains(session_id) (indexed point query, was contains_key on the IndexMap), lock 2 the stamp+store, lock 3 the OTEL graft — same three-lock snapshot-then-work shape; all four timeline_of call sites (ui.rs:2311/3461/3527/3583) still route through it.
 
 ## ⏵ AI-REVIEW VERDICT 2026-09-23T12:55:59+0200 — APPROVE
 

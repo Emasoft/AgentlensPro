@@ -1,9 +1,9 @@
 ---
 trdd-id: 8ADTIGKT
 title: The capture-liveness clock ignores statusline samples so a statusline-only machine never raises CAPTURE DOWN
-column: human_review
+column: dev
 created: 2026-08-26T04:26:17+0200
-updated: 2026-09-24T08:57:51+0200
+updated: 2026-09-24T09:13:51+0200
 current-owner: AgentlensPro session
 task-type: bugfix
 severity: LOW
@@ -84,3 +84,8 @@ against the diff rather than against the card's prose.
 
 - 2026-09-24T08:57:34+0200 — column → human_review by main-session. AI review verified, evidence in reports/board-triage ai_review-A/B/C triage
 - 2026-09-24T08:57:49+0200 — main-session (board update A): moved ai_review -> human_review; AI review verified per reports/board-triage ai_review-A/B/C triage rows. In this project's mono-agent rule the session moves ai_review->human_review; the owner moves human_review->complete.
+- 2026-09-24T09:13:51+0200 — column → dev by main-session. Acceptance box 2 ('a test pins it') is dead: its pinning test (src/test/serverEndpoints.test.ts) spawns standalone/server.js, deleted in 567fc5c2 with no successor build target -- the whole test suite's suiteSetup fails before running. No Rust test replaces it for the ui.rs:1449 statusline-bump fix. Needs either a new Rust test on the /api/statusline-samples handler or removal of the dead TS suite plus a note on what now pins the fix.
+
+## Notes and lessons learned
+
+AI re-review at HEAD 3faa709c (2026-09-24T09:13:29+0200): REJECTED. The fix substance still exists in Rust (ui.rs:1449, inside the /api/statusline-samples POST handler: st.last_ingest_activity_ms = now;), so the card's OWN flagged gap (server.ts deleted, box evidence file gone) is only half the problem. The deeper defect: acceptance box 2's pinning test (src/test/serverEndpoints.test.ts, TRDD-8ADTIGKT test at line 122) boots standalone/server.js via suiteSetup (path.resolve(__dirname,'..','..','..','standalone','server.js')); that file's source (standalone/server.ts) was deleted outright in 567fc5c2 and esbuild.js's three entryPoints no longer produce it, so the WHOLE suite's suiteSetup will fail with ENOENT before any test in the file runs -- not just this one. No Rust-side test asserts the statusline handler bumps last_ingest_activity_ms (grepped ui.rs's 15 #[test] fns and rust-core/crates/agentlens-core/tests/*.rs -- none cover it). So the fix is real but is no longer test-pinned by anything that runs; acceptance box 2 as written is false at HEAD.

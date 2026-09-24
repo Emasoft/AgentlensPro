@@ -3,7 +3,7 @@ trdd-id: UTFVMVT8
 title: The composition routes hold the state lock for seconds at ui.rs:560 and the dominant statement is not yet isolated
 column: human_review
 created: 2026-09-02T12:55:49+0200
-updated: 2026-09-24T08:57:55+0200
+updated: 2026-09-24T09:13:11+0200
 current-owner: main-session
 task-type: bugfix
 priority: high
@@ -299,3 +299,4 @@ Ready for human_review; the owner makes that move. Full report: reports/ai-revie
 
 - 2026-09-24T08:57:38+0200 — column → human_review by main-session. AI review verified, evidence in reports/board-triage ai_review-A/B/C triage
 - 2026-09-24T08:57:49+0200 — main-session (board update A): moved ai_review -> human_review; AI review verified per reports/board-triage ai_review-A/B/C triage rows. In this project's mono-agent rule the session moves ai_review->human_review; the owner moves human_review->complete.
+2026-09-24T09:12:59+0200 — AI re-review at HEAD 954fe1a0: acceptance still holds — composition_for (ui.rs:708) and compositions_in_scope (ui.rs:755) still call summary_now(state, now) before taking the state guard, then crate::composition_project_map(&summary) as a pure fn (lib.rs:1054); the doc comments citing this card's measurements are unchanged and match the code shape. No code regression found in the intervening commits (which touched reviewGate.ts, unrelated).

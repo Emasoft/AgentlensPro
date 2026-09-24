@@ -3,7 +3,7 @@ trdd-id: 6SPXOV0P
 title: 307 files remain parked with a ts-row mismatch after the TRDD-8TM7I49X repair
 column: human_review
 created: 2026-08-26T20:13:05+0200
-updated: 2026-09-24T08:58:02+0200
+updated: 2026-09-24T09:13:42+0200
 eht: [7NHUU6GK]
 current-owner: main
 task-type: bugfix
@@ -409,3 +409,7 @@ Sizing is the USER's call regardless, and no agent should reclaim space to paper
 - 2026-09-24T08:57:33+0200 — column → human_review by main-session. AI review verified, evidence in reports/board-triage ai_review-A/B/C triage
 - 2026-09-24T08:57:49+0200 — main-session (board update A): moved ai_review -> human_review; AI review verified per reports/board-triage ai_review-A/B/C triage rows. In this project's mono-agent rule the session moves ai_review->human_review; the owner moves human_review->complete.
 - 2026-09-24T08:58:02+0200 — main-session note: eht: [7NHUU6GK] is at column backburner (not terminal), so this move to human_review does not open the door to complete — the card cannot reach complete until 7NHUU6GK terminates.
+
+## Notes and lessons learned
+
+AI re-review at HEAD 3faa709c (2026-09-24T09:13:29+0200): acceptance still holds — pass.rs still has reclaimed_reemitted/TS_TOLERANCE_MS and the reclaim-not-park branch unchanged; the later commit f5926457 changes hook-spool drain cadence and DuckDB memory sizing in chores.rs, not the pass.rs reclaim logic. Reran cargo test -p agentlens-store --test pass -> 7/7 passed including legacy_stranded_name_drains_through_the_gate_and_the_parked_set_reaches_zero and ts_only_mismatch_on_a_reemitted_file_reclaims_not_parks_and_leaves_the_row_alone. Card still cannot reach complete: eht 7NHUU6GK remains non-terminal.

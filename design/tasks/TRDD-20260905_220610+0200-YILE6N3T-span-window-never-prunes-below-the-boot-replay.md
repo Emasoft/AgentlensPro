@@ -3,7 +3,7 @@ trdd-id: YILE6N3T
 title: The span window reports a 5-minute window but holds the whole 24-hour boot replay and only grows
 column: human_review
 created: 2026-09-05T22:06:10+0200
-updated: 2026-09-24T08:57:55+0200
+updated: 2026-09-24T09:13:42+0200
 current-owner: main-session
 task-type: bugfix
 priority: critical
@@ -108,6 +108,7 @@ old spans whose FIRST element has no resolvable timestamp must still prune the o
 
 ## Notes and lessons learned
 Verdict qualification 2026-09-23T13:16:38+0200: Box 3's 13,200-span bound was derived for the 300 s window then in force (22 spans/s x 300 s x 2); the window is now configured at 24 h (/api/server-stats spans.configuredWindowMs 86400000, verified live), so that bound no longer applies today and today's resident-span count (inMemory 1,135 measured just now) is not a regression against it. The prune fix itself is pinned by prunes_past_a_first_element_with_no_resolvable_timestamp regardless of window size. The verdict's live spot-check 'consistent with the fix holding' is withdrawn: the same collector is being exited by the RSS guard every 1-2 h (TRDD-EQCGAVGV), so a spot-check RSS number reflects a recently-restarted process, not sustained steady-state. APPROVE stands on the code and test.
+AI re-review at HEAD 3faa709c (2026-09-24T09:13:29+0200): acceptance still holds — span_window.rs::prune (unconditional retain, no dependency on spans.first()) and its test prunes_past_a_first_element_with_no_resolvable_timestamp are both present and unchanged. Later commit 7d552913 (TRDD-FSMISF5K) deleted boot_load entirely (the 24h boot replay this card's fix was reacting to) but did not touch prune() or its test. Reran cargo test -p agentlens-core --lib span_window -> 1/1 passed. Box-3/4 live-RSS numbers are already marked stale by the card's own 2026-09-23 note; re-review does not re-verify those, only the code+test acceptance the note says APPROVE still stands on.
 
 ## Approval log
 
