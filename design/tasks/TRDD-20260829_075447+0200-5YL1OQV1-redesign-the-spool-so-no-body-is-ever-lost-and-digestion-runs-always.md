@@ -3,7 +3,7 @@ trdd-id: 5YL1OQV1
 title: Redesign the spool so no body is ever lost and digestion runs continuously in the background
 column: design
 created: 2026-08-29T07:54:47+0200
-updated: 2026-08-29T07:54:47+0200
+updated: 2026-09-24T13:36:31+0200
 current-owner: claude-agentlenspro
 task-type: refactor
 project-id: agentlenspro
@@ -35,6 +35,7 @@ lose anything. (**"byte-identical" was overclaimed** in the first revision: file
 totals matched, which is not a checksum — `du` reports allocated blocks, so on one filesystem it is
 nearly a tautology. `cp -a` is very likely exact; it was not proven.) **That was a manual recovery
 of a symptom; this card is the cause.**
+2026-09-24 — superseded by TRDD-Z53IJFE9 per the owner's 2026-09-24 directive to remove the spool completely; column left as-is, the owner decides.
 
 ## The constraint that makes this hard — state it before proposing anything
 

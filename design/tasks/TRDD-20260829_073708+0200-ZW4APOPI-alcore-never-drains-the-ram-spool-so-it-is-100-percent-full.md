@@ -3,7 +3,7 @@ trdd-id: ZW4APOPI
 title: alcore never drains the RAM-disk spool so it is 100 percent full and capture is silently losing bodies
 column: human_review
 created: 2026-08-29T07:37:08+0200
-updated: 2026-09-24T09:13:42+0200
+updated: 2026-09-24T13:36:36+0200
 current-owner: claude-agentlenspro
 task-type: bugfix
 project-id: agentlenspro
@@ -273,6 +273,7 @@ future detector: `bodies.spool.files == 0` while `bodies.live.files > 0` = drain
 **Verify by** `df` going below 100% AND a request body larger than the free space landing non-empty.
 The zero-byte count going flat is NOT a pass on its own — it is flat right now with the bug fully
 present, during an idle window.
+2026-09-24 — related to TRDD-Z53IJFE9, which removes the RAM-disk body spool completely per the owner's 2026-09-24 directive; see that card for the removal plan.
 
 ## Second, separate regression — the hook-spool drain was never ported either
 

@@ -3,7 +3,7 @@ trdd-id: 5PUD8RKE
 title: alcore's bodies chore drains only the legacy dir and would abandon the RAM spool
 column: human_review
 created: 2026-08-27T20:31:38+0200
-updated: 2026-09-24T09:13:42+0200
+updated: 2026-09-24T13:36:35+0200
 current-owner: main
 task-type: bugfix
 severity: HIGH
@@ -137,3 +137,7 @@ backpressure cluster (`ensureRamDisk`/`ramDiskInfo`/`spoolSizeMb`, `applySpoolBa
 ## Notes and lessons learned
 
 AI re-review at HEAD 3faa709c (2026-09-24T09:13:29+0200): acceptance still holds — chores.rs:224,307 still call resolve_bodies_read_scope and iterate scope.dirs (unchanged); the only later commit touching chores.rs (24d9fc47, TRDD-6SPXOV0P) is a log-line-only change (adds 'failed' to the bodies-pass log), not the dir-scope logic. Reran the named tests: cargo test -p agentlens-core --test chores_bodies_spool_drain --test bodies_read_scope -> 7/7 passed.
+
+## STATE
+
+2026-09-24 — related to TRDD-Z53IJFE9, which removes the RAM-disk body spool completely per the owner's 2026-09-24 directive; see that card for the removal plan.

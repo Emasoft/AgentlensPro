@@ -3,7 +3,7 @@ trdd-id: UIDUVNY8
 title: ensureRamDisk leaks a twin volume when the spool name is already taken
 column: human_review
 created: 2026-09-02T09:31:25+0200
-updated: 2026-09-24T08:57:54+0200
+updated: 2026-09-24T13:36:31+0200
 current-owner: main-session
 task-type: bugfix
 priority: normal
@@ -34,6 +34,7 @@ related: [ZW4APOPI, 5PUD8RKE]
   hold at the unit level; box 3 (a real `spool ensure` + `setup` race on this machine) was deliberately
   NOT run — it mutates the live RAM disk. Review decides whether that is acceptable evidence.
   `mount | grep -c AgentLensSpool` is 1 since the hand detach at 09:27.
+2026-09-24 — superseded by TRDD-Z53IJFE9 per the owner's 2026-09-24 directive to remove the spool completely; column left as-is, the owner decides.
 
 ## Acceptance
 

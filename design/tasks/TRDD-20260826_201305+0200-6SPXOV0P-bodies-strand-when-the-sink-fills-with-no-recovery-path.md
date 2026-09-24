@@ -3,7 +3,7 @@ trdd-id: 6SPXOV0P
 title: 307 files remain parked with a ts-row mismatch after the TRDD-8TM7I49X repair
 column: human_review
 created: 2026-08-26T20:13:05+0200
-updated: 2026-09-24T09:13:42+0200
+updated: 2026-09-24T13:36:35+0200
 eht: [7NHUU6GK]
 current-owner: main
 task-type: bugfix
@@ -178,6 +178,7 @@ no-op). Then the `unparked 0` wording (`storeAdmin.ts:165-173`), then verify the
 expected to drain on a server restart with no verb, because the server holds `strandedNames` in
 memory while only the CLI persists `.pass-state.json`. Confirm that against the code before
 telling an operator so.
+2026-09-24 — related to TRDD-Z53IJFE9, which removes the RAM-disk body spool completely per the owner's 2026-09-24 directive; see that card for the removal plan.
 
 ## CORRECTION — this card's first version blamed the wrong cause
 
