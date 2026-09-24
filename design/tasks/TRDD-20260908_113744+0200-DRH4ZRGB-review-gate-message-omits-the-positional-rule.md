@@ -1,30 +1,30 @@
 ---
 trdd-id: DRH4ZRGB
 title: The review-gate block message omits the positional rule its own instruction violates
-column: dev
+column: testing
 created: 2026-09-08T11:37:44+0200
-updated: 2026-09-10T18:54:37+0200
+updated: 2026-09-10T19:30:16+0200
 current-owner: main-session
 task-type: bugfix
 scope: project
 min-approval-requirement: none
-implementation-commits: [e7d1d3c7, 4521dea7, a18ff9f1]
+implementation-commits: [e7d1d3c7, 4521dea7, a18ff9f1, f9ec0ecc]
 eht: [7FA3NIXU]
 ---
 
 # The review-gate block message omits the positional rule its own instruction violates
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-10 14:24
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-10T19:30:16+0200
 
 The message work is DONE: all three §Acceptance rows ticked, landed as `e7d1d3c7` + `4521dea7`,
 assertions made real guards in `a18ff9f1` (which also split out TRDD-7FA3NIXU); all three in
 `implementation-commits`. Each commit landed under the Stop gate (a fork, the sentinel, or one of
 the gate's UNREVIEWED releases — not re-read here). The combined review of the three is DONE — §Review verdict below:
-ACCEPT-WITH-FIXES. NEXT ACTION: land the accepted fixes listed there (one-clause message and test
-edits; predicate untouched), then a post-write fork over that commit. `column: dev` while they are
-being landed. Before close, execute §⚠ DO NOT CLOSE (the two undone rows of its table). Cannot
-reach `complete` until TRDD-7FA3NIXU (`eht:`) is terminal — it bars the close, not the fixes. No
-approval needed (Tier 0 — the next paragraph, which still holds for what remains).
+ACCEPT-WITH-FIXES. NEXT ACTION: fixes landed in `f9ec0ecc`; reviewed by the post-write fork on
+2026-09-10 (verdict: f9ec0ecc clean); column is now `testing`; next: execute the card's own
+"## ⚠ DO NOT CLOSE THIS CARD YET — it must be SPLIT first" checklist (the two undone rows of its
+table). Cannot reach `complete` until TRDD-7FA3NIXU (`eht:`) is terminal — it bars the close, not
+the fixes. No approval needed (Tier 0 — the next paragraph, which still holds for what remains).
 
 Filed `proposal` / `user` at first. That was wrong and is corrected: this card's landed content
 is ONE clause in a block message and the assertions that pin it, and its own third acceptance
