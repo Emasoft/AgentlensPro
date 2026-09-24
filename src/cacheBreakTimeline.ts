@@ -1035,7 +1035,14 @@ export function classifyCacheBreak(prev: TurnPrefix | null, cur: TurnPrefix, tim
     const ambiguous = effortGateActive
       ? ' (ambiguous on Fable 5.1 ≥2.1.260: documented cache-safe only for a per-message effort change; a changed top-level parameter, as seen here, does rewrite the prefix)'
       : ''
-    return { cause: 'EFFORT_PARAM_CHANGED', culpritLayer: 'effort', culpritId: 'param:effort', culpritSummary: `output_config.effort ${prev.effortParam} → ${cur.effortParam}${ambiguous}` }
+    // The gated pairing is a documented ambiguity (see the effortGateActive comment above), not a
+    // confirmed miss — "medium" tells a reader this verdict needs the raw per-message shape to
+    // fully confirm, same signal PLUGINS_RELOADED uses for its own uncertain case.
+    return {
+      cause: 'EFFORT_PARAM_CHANGED', culpritLayer: 'effort', culpritId: 'param:effort',
+      culpritSummary: `output_config.effort ${prev.effortParam} → ${cur.effortParam}${ambiguous}`,
+      ...(effortGateActive ? { confidence: 'medium' as const } : {}),
+    }
   }
   if (paramChanged(prev.toolChoice, cur.toolChoice)) {
     return { cause: 'TOOL_CHOICE_CHANGED', culpritLayer: 'effort', culpritId: 'param:tool_choice', culpritSummary: `tool_choice ${prev.toolChoice} → ${cur.toolChoice}` }

@@ -1962,7 +1962,8 @@
         "cause": "EFFORT_PARAM_CHANGED",
         "culpritLayer": "effort",
         "culpritId": "param:effort",
-        "culpritSummary": "output_config.effort low → high (ambiguous on Fable 5.1 ≥2.1.260: documented cache-safe only for a per-message effort change; a changed top-level parameter, as seen here, does rewrite the prefix)"
+        "culpritSummary": "output_config.effort low → high (ambiguous on Fable 5.1 ≥2.1.260: documented cache-safe only for a per-message effort change; a changed top-level parameter, as seen here, does rewrite the prefix)",
+        "confidence": "medium"
       }
     },
     "param_effort_fable_ungated": {

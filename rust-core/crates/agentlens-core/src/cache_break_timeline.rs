@@ -1275,6 +1275,11 @@ impl CacheBreakVerdict {
         self
     }
 
+    fn with_confidence(mut self, confidence: &'static str) -> Self {
+        self.confidence = Some(confidence);
+        self
+    }
+
     /// The four required keys always come first, in the TS literal order, and each optional key is
     /// OMITTED when absent — a TS optional property is not a null, and no branch sets two of them,
     /// so this one order reproduces every construction site in the file.
@@ -1791,12 +1796,16 @@ pub fn classify_cache_break(
         } else {
             ""
         };
-        return CacheBreakVerdict::new(
+        let verdict = CacheBreakVerdict::new(
             TimelineCause::EffortParamChanged,
             CulpritLayer::Effort,
             "param:effort".to_owned(),
             format!("output_config.effort {} → {}{}", prev.effort_param, cur.effort_param, ambiguous),
         );
+        // The gated pairing is a documented ambiguity (see the comment above `effort_gate_active`),
+        // not a confirmed miss — "medium" tells a reader this verdict needs the raw per-message
+        // shape to fully confirm, same signal PLUGINS_RELOADED uses for its own uncertain case.
+        return if effort_gate_active { verdict.with_confidence("medium") } else { verdict };
     }
     if param_changed(&prev.tool_choice, &cur.tool_choice) {
         return CacheBreakVerdict::new(

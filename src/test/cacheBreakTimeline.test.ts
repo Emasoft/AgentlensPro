@@ -427,6 +427,9 @@ suite('cacheBreakTimeline — TRDD-B9ERTBZ9 documented causes (env / git / param
     assert.strictEqual(v.cause, 'EFFORT_PARAM_CHANGED')
     assert.ok(v.culpritSummary.includes('ambiguous'), `must flag the pairing ambiguous, got: ${v.culpritSummary}`)
     assert.ok(v.culpritSummary.includes('Fable 5.1'), `must name the gated model, got: ${v.culpritSummary}`)
+    // The gated pairing is documented evidence, not a confirmed miss — 'medium' says so, same
+    // signal PLUGINS_RELOADED uses for its own 2-catalog uncertain case.
+    assert.strictEqual(v.confidence, 'medium')
   })
 
   test('a hypothetical claude-fable-5-10 is NOT swept in by the fable-5-1 gate (anchored match)', () => {
@@ -459,6 +462,9 @@ suite('cacheBreakTimeline — TRDD-B9ERTBZ9 documented causes (env / git / param
   test('EFFORT_PARAM_CHANGED still fires for claude-fable-5-1 below CC 2.1.260', () => {
     const v = classify(fableReq('low', '2.1.259'), fableReq('high', '2.1.259'))
     assert.strictEqual(v.cause, 'EFFORT_PARAM_CHANGED')
+    // Below the gate version the pairing is a certain break, not a documented ambiguity — no
+    // confidence caveat attached.
+    assert.strictEqual(v.confidence, undefined)
   })
 
   test('TOOL_CHOICE_CHANGED — two explicit tool_choice values differ', () => {
