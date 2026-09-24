@@ -3,7 +3,7 @@ trdd-id: BSDR4TRM
 title: server stop from an isolated DATA_DIR stopped the LIVE server
 column: complete
 created: 2026-08-27T16:07:07+0200
-updated: 2026-08-29T15:30:00+0200
+updated: 2026-09-24T09:09:23+0200
 implementation-commits: [2853862, a38c959, ba345e9]
 last-test-result: pass
 last-test-at: 2026-08-27T19:18:00+0200
@@ -166,3 +166,4 @@ this card is about the guard/stop not honouring the data-dir key it documents.
   bug required. Evidence: `reports/lean-worker-bsdr4trm-verify/20260829_152747+0200-verify.md`.
   Closed by the project session under the USER's explicit 2026-08-29 delegation ("complete all
   pending tasks and TRDDs, decide by yourself, base your decisions on verified facts and tests").
+- 2026-09-24T09:09:23+0200 — COMPLETE by main-session. board fix-up: zone repair (was column complete but still in design/tasks/); archived by trddgrep move.

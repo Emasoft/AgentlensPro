@@ -3,7 +3,7 @@ trdd-id: P46MEOXA
 title: DELEGATION.md acceptance commands carry absolute home paths and fail check-identities
 column: complete
 created: 2026-09-08T20:03:23+0200
-updated: 2026-09-24T08:58:25+0200
+updated: 2026-09-24T09:08:15+0200
 current-owner: claude-code-main
 task-type: bugfix
 labels: [identities, docs, build-gate]
@@ -41,3 +41,4 @@ the whole tree, which is what the first acceptance box asserts.
 ## Approval log
 
 - 2026-09-24T08:58:25+0200 — COMPLETE by main-session. Fixed as a side effect of commit 6e4ca257 (single 2 GB budget plan; nine-site inventory) which fully rewrote DELEGATION.md's table with repo-relative paths; grep for /Users/ or /home/ in DELEGATION.md = 0 hits confirmed 2026-09-24 (reports/board-triage/20260924_083345+0200-cluster-delegate-gate.md).
+- 2026-09-24T09:08:14+0200 — board fix-up disclosure: this card's close (commit fd4b679a) struck boxes 1 and 3 (`~~pnpm run check-identities exits 0 on the whole tree~~` and `~~pnpm run compile reaches the bundle step~~`, neither re-run this pass) and left box 2 ticked normally; the close awaits the owner's confirmation.

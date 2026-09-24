@@ -1,9 +1,9 @@
 ---
 trdd-id: XTFDRTH2
 title: Session cards live in a DuckDB table upserted on ingest, not in a 32k-entry IndexMap
-column: ai_review
+column: human_review
 created: 2026-09-05T22:06:10+0200
-updated: 2026-09-23T13:17:02+0200
+updated: 2026-09-24T09:07:56+0200
 implementation-commits: [f29bc3b6, 8069c6a9, e00af58b, 13209791, 12c4c4a7, 46a0268c, ac289d8d]
 current-owner: main-session
 task-type: refactor
@@ -162,6 +162,7 @@ Owed runs 2026-09-23T13:16:38+0200: cargo test -p agentlens-core --test card_sto
 
 - 2026-09-05T22:06:10+0200 — Authored into `todo` as an NPT-gated child of the USER-approved
   7YPQWKPG (Tier 0: scope already ruled by the USER).
+- 2026-09-24T09:07:56+0200 — column → human_review. Owed run PASSED 2026-09-24: cargo test -p agentlens-core 644 passed / 0 failed (106 blocks), card claim HOLDS (grew from 616/104). Report: reports/owed-runs/20260924_085621+0200-owed-runs.md
 
 ## ⏵ AI-REVIEW VERDICT 2026-09-23T12:55:59+0200 — APPROVE
 

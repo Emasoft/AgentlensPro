@@ -1,9 +1,9 @@
 ---
 trdd-id: 3U8AIHXK
 title: The effects arm must attribute a write to this session's own tool activity before arming
-column: testing
+column: superseded
 created: 2026-09-10T02:54:43+0200
-updated: 2026-09-24T08:56:40+0200
+updated: 2026-09-24T09:06:57+0200
 current-owner: main
 task-type: bugfix
 priority: critical
@@ -17,6 +17,7 @@ blocked-by: []
 npt: []
 eht: []
 implementation-commits: [3f498995]
+superseded-by: [A37YM37G]
 ---
 
 # The effects arm must attribute a write to this session's own tool activity before arming
@@ -249,3 +250,8 @@ peer rewrites — verified by neither this session nor a read of their transcrip
 ## Correction 2026-09-24
 
 Commit 5d418b93's message says the cross-arming report was "verified by neither" without naming who; the card's own wording is "verified by neither this session nor a read of their transcripts" — the commit message drops the specific scope. Also: the second reporting session named in the staged edit (agents-discipline) has no evidence of verification in this session's transcript. Recorded per RULE 1 board-triage worker instruction; git history is not rewritten.
+
+## Approval log
+
+- 2026-09-24T09:06:43+0200 — SUPERSEDED by main-session. archived → superseded.
+- 2026-09-24T09:06:57+0200 — Moved to `superseded`, `superseded-by: [A37YM37G]`, by board fix-up worker. VERIFIED today: commit 268f3080 deleted `src/cli/reviewGateEffects.ts` and its test, so the mechanism this card describes (the effects-arm attribution walk) no longer exists in the codebase; A37YM37G (review-gate-loop-fix, marker-gated proposals, write-only review) is the successor design that replaced it. Parent 9FG0LSPG was itself superseded and this card was its last open child.

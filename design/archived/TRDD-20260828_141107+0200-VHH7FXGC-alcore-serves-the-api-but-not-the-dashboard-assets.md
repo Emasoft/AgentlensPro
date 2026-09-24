@@ -3,7 +3,7 @@ trdd-id: VHH7FXGC
 title: alcore serves the API and SSE but not the dashboard's HTML/JS, so the web UI is dark when the Rust core is the server
 column: complete
 created: 2026-08-28T14:11:07+0200
-updated: 2026-08-28T21:55:03+0200
+updated: 2026-09-24T09:09:23+0200
 current-owner: claude-agentlenspro
 task-type: feature
 project-id: agentlenspro
@@ -129,3 +129,7 @@ Steady-state memory is worth watching separately: `alcore` settled at ~8.0 GB RS
 TypeScript server. Not obviously a defect — it looks like the 24 h span window resident in
 memory — but it is a real difference on a machine running several sessions, and nobody has
 measured where it plateaus over hours.
+
+## Approval log
+
+- 2026-09-24T09:09:23+0200 — COMPLETE by main-session. board fix-up: zone repair (was column complete but still in design/tasks/); archived by trddgrep move.

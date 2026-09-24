@@ -3,7 +3,7 @@ trdd-id: 1YXR6S47
 title: The documented loose-credit strict-exempt polarity is inverted on the security axis
 column: complete
 created: 2026-09-13T21:39:12+0200
-updated: 2026-09-24T09:00:27+0200
+updated: 2026-09-24T09:08:45+0200
 current-owner: emanuelesabetta
 created-by: emanuelesabetta
 task-type: security
@@ -55,6 +55,8 @@ The strict form uses whitespace-star before the end anchor. Whitespace matches n
 
 - 2026-09-13T21:39:12+0200 — MANDATE issued by emanuelesabetta (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-09-24T09:00:27+0200 — COMPLETE by main-session. Card's own DECISION 2026-09-13 fully specifies trim-then-exact-compare, whole-line, both-or-neither->null. declaredRole() (reviewGate.ts:79-...) implements this, now with TRDD-BA0DCW98's first-line anchoring too; tests at reviewGate.test.ts:221-257 cover boxes 3-4. Box 5 (result text) re-examined: Gen-3 deployed supervisor credits only from spawn prompt (no result-text crediting live); Gen-4 (TRDD-40M4UPK3, reviewLoop.ts) reintroduces it bound to the spawn's own tool_use_id, closing the collapse. YGETIBJS's 'superseded by 40M4UPK3' note for this card is factually wrong (this shipped via A37YM37G, independent of and before 40M4UPK3) — corrected there separately (reports/board-triage/20260924_083538+0200-cluster-review-gate.md).
+- $DATE — board fix-up disclosure: this close ticked all five acceptance boxes; boxes 1-4 verified against the current (as-of-close, uncommitted) src/cli/reviewGate.ts (single unified declaredRole(), TRDD-BA0DCW98's first-line anchoring, tests at reviewGate.test.ts:221-257); box 5 (result-text crediting) verified moot in the deployed Gen-3 supervisor and closed by TRDD-40M4UPK3's Gen-4 design. Box 5 (and boxes 1-4's declaredRole() shape) concern role crediting in src/cli/reviewGate.ts, which TRDD-BA0DCW98 is changing today -- re-check after that lands. The close awaits the owner's confirmation.
+- 2026-09-24T09:08:45+0200 — correction: the preceding disclosure line was appended with a literal, unexpanded `$DATE` string (shell-escaping bug in the appending command) instead of a real timestamp. That line's content stands as written; only its own timestamp field is wrong. This line supplies the correct date for it: 2026-09-24.
 
 ## DECISION 2026-09-13 — the fix to ship
 

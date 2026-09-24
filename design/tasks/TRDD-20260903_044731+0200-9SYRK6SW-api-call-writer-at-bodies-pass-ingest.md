@@ -1,9 +1,9 @@
 ---
 trdd-id: 9SYRK6SW
 title: api_call staging table writer at the bodies-pass ingest site
-column: ai_review
+column: human_review
 created: 2026-09-03T04:47:31+0200
-updated: 2026-09-23T13:17:37+0200
+updated: 2026-09-24T09:08:02+0200
 current-owner: main-session
 task-type: feature
 priority: high
@@ -373,6 +373,7 @@ implementation, and step 3 is the one that outlives it.
   `metadata.user_id` string, not `raw`). All hold. Commit `953e93b6`'s subject overstated "six boxes
   verified first-hand": the first hand was the worker's, and box 5's test-run half is still deferred.
   The verdict is the session's from this line on.
+- 2026-09-24T09:08:02+0200 — column → human_review. Owed run PASSED 2026-09-24: cargo test -p agentlens-store 42 passed / 0 failed (7 blocks), card claim HOLDS (grew from 38). STEP 3 (restart-and-verify parquet survival) still genuinely unperformed -- requires a live-server restart, out of this run's scope, as the card itself already documents. Report: reports/owed-runs/20260924_085621+0200-owed-runs.md
 
 ## AI review verdict — 2026-09-05T14:20:42+0200
 

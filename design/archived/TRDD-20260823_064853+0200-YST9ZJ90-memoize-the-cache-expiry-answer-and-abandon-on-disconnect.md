@@ -3,7 +3,7 @@ trdd-id: YST9ZJ90
 title: Memoize the check_cache_expiry ANSWER and abandon server work on client disconnect
 column: complete
 created: 2026-08-23T06:48:53+0200
-updated: 2026-08-29T15:34:00+0200
+updated: 2026-09-24T09:09:23+0200
 current-owner: unassigned
 task-type: refactor
 min-approval-requirement: manager
@@ -169,6 +169,7 @@ AbortController is per-request (`:4060`, inside the handler).
   decorative.
 - 2026-08-23T06:48:53+0200 — FILED as a proposal by the session working TRDD-ZFX0MPYZ. Not
   self-approved: both parts change observable behaviour, so this is the USER's call.
+- 2026-09-24T09:09:23+0200 — COMPLETE by main-session. board fix-up: zone repair (was column complete but still in design/tasks/); archived by trddgrep move.
 
 ## Approval log
 

@@ -3,7 +3,7 @@ trdd-id: 2CYTNLY1
 title: Delete the review gate's dead breakers and give the supervisor the gate's work definition
 column: human_review
 created: 2026-09-09T14:38:59+0200
-updated: 2026-09-24T08:57:50+0200
+updated: 2026-09-24T09:07:16+0200
 current-owner: main
 task-type: refactor
 priority: medium
@@ -12,7 +12,7 @@ min-approval-requirement: none
 project-id: agentlenspro
 scope: project
 labels: [review-gate, hooks, refactor]
-related: [9FG0LSPG, 0E3W5C45]
+related: [40M4UPK3, 0E3W5C45]
 blocked-by: []
 npt: []
 eht: []
@@ -194,6 +194,7 @@ verified against the live source, not restated from memory.
   both halves, now with a stderr line on that return.
 - 2026-09-24T08:57:33+0200 — column → human_review by main-session. AI review verified, evidence in reports/board-triage ai_review-A/B/C triage
 - 2026-09-24T08:57:49+0200 — main-session (board update A): moved ai_review -> human_review; AI review verified per reports/board-triage ai_review-A/B/C triage rows. In this project's mono-agent rule the session moves ai_review->human_review; the owner moves human_review->complete.
+- 2026-09-24T09:07:16+0200 — board fix-up worker: re-pointed `related` from 9FG0LSPG (now superseded, archived) to 40M4UPK3 (Enforce the propose then two-fork review then wait then act loop at PreToolUse, column: dev). No `parent-trdd:` field exists on this card, only `related:`, so that is the field edited; 40M4UPK3 is chosen as the card's live successor-in-spirit for the review-gate work stream since 9FG0LSPG is terminal and this card's own work (2CYTNLY1, human_review) is still open.
 
 ## Notes and lessons learned
 

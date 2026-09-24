@@ -1,9 +1,9 @@
 ---
 trdd-id: YBJGIYI1
 title: FORK_STORM cannot be distinguished from one fat session rewriting its own prefix
-column: ai_review
+column: human_review
 created: 2026-08-27T22:50:06+0200
-updated: 2026-09-05T20:52:06+0200
+updated: 2026-09-24T09:07:59+0200
 current-owner: claude-session-2026-09-02
 task-type: bugfix
 scope: project
@@ -149,6 +149,7 @@ A fixture with 3 cold full-prefix spikes, one fingerprint, ONE session id must c
 - 2026-09-05T19:03:52+0200 — ORCHESTRATOR decision: accepted the 18:56 AI-review APPROVE after the
   first-hand re-check above. Vetoable at `human_review`; the USER may require the mutation run to
   be observed (revert the `:163` gate, run `cargo test --lib`, restore) before accepting.
+- 2026-09-24T09:07:59+0200 — column → human_review. Owed run PASSED 2026-09-24: burnscan_parity 9/9 passed; mutation of the fam_sessions gate (investigator.rs:163, biggest_fam_sessions>=2 -> >=0) fails exactly 2 of 3 fork_storm_discriminator_tests as claimed, restored clean (git diff empty). Report: reports/owed-runs/20260924_085621+0200-owed-runs.md
 
 ## STATE — 2026-09-05T14:33:32+0200 — HISTORICAL (superseded above; the gate has now actually run)
 

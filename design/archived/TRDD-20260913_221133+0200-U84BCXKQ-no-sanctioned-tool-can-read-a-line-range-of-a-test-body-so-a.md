@@ -3,7 +3,7 @@ trdd-id: U84BCXKQ
 title: Reading a test assertion needs a copy-to-scratch detour the toolchain should not require
 column: complete
 created: 2026-09-13T22:11:33+0200
-updated: 2026-09-24T08:58:46+0200
+updated: 2026-09-24T09:08:26+0200
 current-owner: emanuelesabetta
 created-by: emanuelesabetta
 task-type: infra
@@ -54,6 +54,7 @@ The project's own review discipline requires distinguishing a test that guards f
 
 - 2026-09-13T22:11:33+0200 — MANDATE issued by emanuelesabetta (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-09-24T08:58:46+0200 — COMPLETE by main-session. Card's own 2026-09-13 amendment: practical blocker discharged the same evening it was carded (deferIntervals guard confirmed non-vacuous). Residual (tldr line-range reading feature) belongs to the external tldr-code fork, not AgentlensPro; boxes struck through as obsolete (reports/board-triage/20260924_085320+0200-cluster-misc.md).
+- 2026-09-24T09:08:26+0200 — board fix-up disclosure: this close struck all three acceptance boxes through (not ticked live) — box 1 and 2 (the tldr line-range feature) obsolete, never built; box 3 (4J1QA18G's open verification item) moot since 4J1QA18G was itself superseded 2026-09-24; the close awaits the owner's confirmation.
 
 ## AMENDMENT 2026-09-13 — a sanctioned route DOES exist and the body overstates the gap
 

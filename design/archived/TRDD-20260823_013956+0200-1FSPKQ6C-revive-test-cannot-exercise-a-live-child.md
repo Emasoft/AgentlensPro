@@ -3,7 +3,7 @@ trdd-id: 1FSPKQ6C
 title: The revive-log test cannot exercise a live child, and CI is where that matters
 column: complete
 created: 2026-08-23T01:39:56+0200
-updated: 2026-08-26T05:36:57+0200
+updated: 2026-09-24T09:09:23+0200
 current-owner: main
 task-type: infra
 severity: MEDIUM
@@ -122,3 +122,7 @@ TRDD-ZFX0MPYZ, whose provenance was left unestablished there.
     it", which a shared test process cannot afford. DO retreat to the claim the test actually
     carries, state in the test what it does NOT prove, and file the gap. A documented hole is
     cheaper than a fix that breaks its neighbours.
+
+## Approval log
+
+- 2026-09-24T09:09:23+0200 — COMPLETE by main-session. board fix-up: zone repair (was column complete but still in design/tasks/); archived by trddgrep move.

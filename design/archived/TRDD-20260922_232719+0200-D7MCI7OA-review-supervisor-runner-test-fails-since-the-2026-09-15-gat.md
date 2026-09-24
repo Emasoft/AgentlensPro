@@ -3,7 +3,7 @@ trdd-id: D7MCI7OA
 title: review-supervisor runner test fails since the 2026-09-15 gate changes -- possible false no-review-fork nags
 column: complete
 created: 2026-09-22T23:27:19+0200
-updated: 2026-09-24T08:59:12+0200
+updated: 2026-09-24T09:08:20+0200
 current-owner: agentlenspro-main-session
 created-by: agentlenspro-main-session
 task-type: bugfix
@@ -24,6 +24,7 @@ src/test/reviewSupervisorRunner.test.ts test 'review-supervisor -- real CLI runn
 
 - 2026-09-22T23:27:19+0200 — MANDATE issued by agentlenspro-main-session (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-09-24T08:59:12+0200 — COMPLETE by main-session. Root cause fixed in commit ecd9f8e4 (OK-verdict fixture's fork carries a whole ROLE: REVIEW line, cites TRDD-D7MCI7OA); the named test is not among the 6 current mocha failures (unrelated: reviewLoop D3 13d + 5 serverCalibration/P5). Acceptance checklist was missing on this card; added it and ticked per the card's own verified root-cause section (reports/board-triage/20260924_083538+0200-cluster-review-gate.md).
+- 2026-09-24T09:08:20+0200 — board fix-up disclosure: an Acceptance checklist was ADDED for this close (this card had none before); boxes 1 and 2 ticked (fixture fix + root cause verified), box 3 (negative-twin test) struck as not-required, designed behaviour; the close awaits the owner's confirmation.
 
 ## Root cause (VERIFIED)
 

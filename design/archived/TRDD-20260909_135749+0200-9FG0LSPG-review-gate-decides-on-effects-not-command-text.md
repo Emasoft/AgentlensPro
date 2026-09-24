@@ -3,7 +3,7 @@ trdd-id: 9FG0LSPG
 title: The review gate must decide on effects newer than the last fork, not on command text
 column: superseded
 created: 2026-09-09T13:57:49+0200
-updated: 2026-09-24T08:56:36+0200
+updated: 2026-09-24T09:07:42+0200
 current-owner: main
 task-type: bugfix
 priority: critical
@@ -15,7 +15,7 @@ labels: [review-gate, hooks, token-burn, subagents]
 related: [0E3W5C45, 9J0515I4, 00G5G94L, 0D6QK5CW]
 blocked-by: []
 npt: []
-eht: [2CYTNLY1, 3U8AIHXK]
+eht: [3U8AIHXK]
 implementation-commits: [208994b8]
 superseded-by: [A37YM37G]
 ---
@@ -235,3 +235,4 @@ Read in full 2026-09-09: `src/cli/reviewGate.ts`, `reviewGateTriggers.ts`, `revi
 ## Approval log
 
 - 2026-09-24T08:56:36+0200 — SUPERSEDED by main-session. Gen-2 mtime disk-effects mechanism (reviewGateEffects.ts) deleted by commit 268f3080 / TRDD-A37YM37G 2026-09-15; card describes a mechanism that no longer exists (reports/board-triage/20260924_083538+0200-cluster-review-gate.md).
+- 2026-09-24T09:07:41+0200 — board fix-up worker: removed 2CYTNLY1 from `eht:` (was `[2CYTNLY1, 3U8AIHXK]`, now `[3U8AIHXK]`) — GRAPH-FALSE-COMPLETE fix. 2CYTNLY1 is live Gen-3 work re-pointed to parent 40M4UPK3 (its `related:` field updated there), so it no longer gates this terminal card's completion; 3U8AIHXK was independently moved to `superseded` (--superseded-by A37YM37G) as Gen-2, terminal, still listed and harmless.

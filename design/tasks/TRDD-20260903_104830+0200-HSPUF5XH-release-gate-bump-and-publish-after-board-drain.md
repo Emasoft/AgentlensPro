@@ -3,7 +3,7 @@ trdd-id: HSPUF5XH
 title: Bump and publish agentlenspro only after every open card is terminal and every known issue is fixed
 column: blocked
 created: 2026-09-03T10:48:30+0200
-updated: 2026-09-04T15:13:48+0200
+updated: 2026-09-24T09:06:25+0200
 current-owner: main-session
 task-type: infra
 min-approval-requirement: user
@@ -12,7 +12,7 @@ created-by: main-session
 npt: []
 eht: []
 pre-block-column: todo
-blocked-by: [2R36W8Q1, N60JUWU3, UTFVMVT8, CAJ5RCP9, 9SYRK6SW, QE114936, POLG0613, 768NEX6E, 7YPQWKPG, 7NHUU6GK, ZSX34J8F, 2R0AXCKL, 2TQHNMEC, 70D0TUBZ, CS2W7E77]
+blocked-by: [2R36W8Q1, N60JUWU3, UTFVMVT8, CAJ5RCP9, 9SYRK6SW, QE114936, POLG0613, 768NEX6E, 7YPQWKPG, 7NHUU6GK, ZSX34J8F, 2R0AXCKL, 2TQHNMEC, U0L78B3Z, CS2W7E77]
 post-release-verification: [IXMB2JVD]
 ---
 
@@ -88,6 +88,7 @@ IXVHM52P (fix landed, verification has a `review-after:` date and no repro set).
 `~/.claude/rules/never_free_space.md` forbids the agent freeing disk space unilaterally — the
 main session will propose the retention rule and the exact command and wait for the user before
 this card can close.
+**Correction 2026-09-24T09:06:25+0200:** `blocked-by` named 70D0TUBZ, which is now `superseded` — swapped for its successor U0L78B3Z (nothing-computes-capture-down-since-the-ts-server-was-retired) per board fix-up pass.
 
 ## User order (verbatim, 2026-09-03)
 

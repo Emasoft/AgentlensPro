@@ -3,7 +3,7 @@ trdd-id: ZPSB2WZJ
 title: Ten files staged by an earlier session await review and commit
 column: complete
 created: 2026-09-23T12:41:54+0200
-updated: 2026-09-24T08:57:49+0200
+updated: 2026-09-24T09:08:51+0200
 current-owner: main-session
 created-by: main-session
 task-type: infra
@@ -25,6 +25,7 @@ git diff --cached --name-only lists 10 files staged by a prior session (staging 
 
 - 2026-09-23T12:41:54+0200 — MANDATE issued by main-session (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-09-24T08:57:49+0200 — COMPLETE by main-session. All ten staged files landed in commits cf46888e..6c246701; git status confirms none remain staged.
+- 2026-09-24T09:08:51+0200 — board fix-up disclosure: this close ticked its sole acceptance box, verified by `git status` showing no remaining staged files and all ten listed files present across the twelve landed commits (cf46888e..6c246701); no box was struck or added. The close awaits the owner's confirmation.
 
 ## Landed
 
