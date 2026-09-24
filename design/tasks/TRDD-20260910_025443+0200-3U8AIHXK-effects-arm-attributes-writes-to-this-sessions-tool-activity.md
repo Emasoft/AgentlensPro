@@ -3,7 +3,7 @@ trdd-id: 3U8AIHXK
 title: The effects arm must attribute a write to this session's own tool activity before arming
 column: testing
 created: 2026-09-10T02:54:43+0200
-updated: 2026-09-10T18:55:28+0200
+updated: 2026-09-10T19:20:54+0200
 current-owner: main
 task-type: bugfix
 priority: critical
@@ -238,8 +238,10 @@ measured per line).
 Two sessions overlapping on one machine cross-arm on the shared watched set (~/.claude/rules,
 agents, hooks, settings, plugin-cache hooks.json): a peer session's write inside this session's
 tool-activity interval is reported as this session's effect, so this session's fork is handed a
-change it did not author while the author's own Stop already reviewed it. The interval rule is
+change it did not author while the author's own Stop already reviewed it, if the author's Stop
+preceded ours (not established). The interval rule is
 a could-this-session-have-caused-it heuristic; mtime carries no authorship, so only authorship
 evidence could narrow it and none exists. Fail-closed is correct here (TRDD-9FG0LSPG): a rule
-or agent file the session must now obey is worth a read whoever wrote it. Measured 2026-09-10 by
-the ai-maestro-janitor session: one agent file flagged 4 times across peer rewrites.
+or agent file the session must now obey is worth a read whoever wrote it. Reported 2026-09-10 by
+two peer sessions (ai-maestro-janitor, agents-discipline): one agent file flagged 4 times across
+peer rewrites — verified by neither this session nor a read of their transcripts.
