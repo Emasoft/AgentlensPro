@@ -2,7 +2,7 @@ import * as assert from 'assert'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
-import { sumHookContextCost, runHookContextCostCli, CHARS_PER_TOKEN_ESTIMATE } from '../cli/hookContextCostCli'
+import { sumHookContextCost, runHookContextCostCli, CHARS_PER_TOKEN_ESTIMATE, MAX_HOURS } from '../cli/hookContextCostCli'
 
 // Synthetic log-event sink in the exact persisted shape (logEventSink.buildDroppedLogEventRecord):
 // attrs values are strings, as OTLP intValue arrives. Guards TRDD-ZQQYRYBO I15.
@@ -61,5 +61,24 @@ suite('hook-context-cost — sums hook_execution_complete size attributes', () =
   test('no events in the window is cannot-answer (exit 2), never a zero-cost success', async () => {
     const code = await runHookContextCostCli(['--hours', '1'], dir)
     assert.strictEqual(code, 2)
+  })
+
+  test('--hours above the cap is rejected (exit 64), not silently read', async () => {
+    const code = await runHookContextCostCli(['--hours', String(MAX_HOURS + 1)], dir)
+    assert.strictEqual(code, 64)
+  })
+
+  // Pins current behavior as a SPEC, not just a code comment: no captured attribute is a
+  // reliable per-event id (spanId/traceId are absent on ~5% of real events), so a line
+  // appearing twice in the sink is counted twice, not deduped. If dedup is ever added, this
+  // test must change deliberately, not regress silently.
+  test('a line appearing twice in the sink is counted twice — no dedup', async () => {
+    const now = Date.now()
+    const rec = hookRec(now - 1000, 'Stop', 'Stop', 40)
+    writeSink(dir, new Date(now).toISOString().slice(0, 10), [rec, rec])
+    const res = await sumHookContextCost(dir, now - 3_600_000, now)
+    assert.strictEqual(res.events, 2)
+    assert.strictEqual(res.rows[0].fires, 2)
+    assert.strictEqual(res.rows[0].additionalContextChars, 80)
   })
 })

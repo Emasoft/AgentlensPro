@@ -12,6 +12,19 @@
 //
 // The token figure is an ESTIMATE: chars / 2.56, the chars-per-token ratio CLAUDE.md measured on
 // this machine's content with count_tokens. It is labelled as such everywhere it is printed.
+//
+// Every row is per HOOK FIRE, not per subagent spawn: two hooks matching one SubagentStart fire
+// twice, so summing fires is not the same as counting spawns.
+//
+// `hook_name` (displayed as `matcher`) is the matcher string that fired (e.g. `SubagentStart:fork`,
+// `PreToolUse:Bash`) — checked against every attribute on a captured hook_execution_complete event
+// (2026-09-24) and none names the hook's command, plugin, or source file; `hook_source` is the
+// config-merge origin ("merged"), not which hook ran. So the injecting hook cannot be named here.
+//
+// No attribute is a reliable per-event id: `spanId`/`traceId` are present on ~95% of captured
+// events but absent on some (observed missing on early SessionStart events), so they cannot dedupe
+// a line appearing twice in the sink. sumHookContextCost therefore counts every matching line once,
+// with no dedup — a duplicated sink line (e.g. from a retried append) would double-count.
 
 import * as fs from 'fs'
 import * as path from 'path'
@@ -97,20 +110,32 @@ export async function sumHookContextCost(dir: string, sinceMs: number, untilMs =
   return { sinceMs, untilMs, events, rows }
 }
 
+/** `--hours` cap: the sink is read in whole-day buckets (~170 MB/day here), so an unbounded
+ *  window can force reading weeks of buckets off disk for one call. 168h = 7 days. */
+export const MAX_HOURS = 168
+
 export const HOOK_CONTEXT_COST_USAGE = `agentlenspro hook-context-cost [--hours N] [--json]
 
-How much text do hooks inject? Sums, per hook event and hook name, what each hook produced over a
-window: fires, additionalContext chars (added to the model's context), stdout chars, systemMessage
+How much text do hooks inject? Sums, per hook event and matcher, what each hook fire produced over
+a window: fires, additionalContext chars (added to the model's context), stdout chars, systemMessage
 chars, and outputs persisted to a file. Source: the hook_execution_complete OTEL events Claude Code
-emits since 2.1.280, read off the log-event sink on disk (works with the server down).
+emits since 2.1.280, read off the log-event sink on disk (works with the server down), which is
+stored in whole-day buckets — a window is rounded outward to the buckets covering it.
+
+Every row is PER HOOK FIRE, not per subagent spawn: two hooks matching one spawn are two fires.
+
+'matcher' is the hook_name attribute — the matcher string that fired (e.g. SubagentStart:fork),
+not the hook command, plugin, or source that ran; no captured attribute identifies that.
 
 est_tokens is an ESTIMATE of the additionalContext only: chars / ${CHARS_PER_TOKEN_ESTIMATE} (CLAUDE.md's
-measured ratio). SessionStart/UserPromptSubmit stdout can also reach the context; it is shown
-separately, not folded into the estimate.
+measured ratio). stdout_chars is shown for reference only and is NOT counted in est_tokens: it is
+only injected into context for SessionStart/UserPromptSubmit hooks, and can be huge for other
+events (e.g. PostToolUse:Agent) without ever reaching the model.
 
 flags:
-  --hours N   window length, ending now (default 24)
-  --json      the rows as JSON
+  --hours N   window length, ending now (default 24, max ${MAX_HOURS})
+  --json      the rows as JSON — field names are the raw HookContextCostRow ones (hookName,
+              stdoutChars, ...), NOT the table's display headers (matcher, stdout(not injected))
 
 exit:
   0 = answered · 2 = no hook_execution_complete events in the window · 64 = bad flags`
@@ -130,6 +155,10 @@ export async function runHookContextCostCli(argv: string[], dir = path.join(data
     console.error('--hours expects a positive number')
     return EXIT.USAGE
   }
+  if (hours > MAX_HOURS) {
+    console.error(`--hours must be <= ${MAX_HOURS} (7 days) — the sink is read in whole-day buckets and a wider window reads too much off disk`)
+    return EXIT.USAGE
+  }
   const untilMs = Date.now()
   const res = await sumHookContextCost(dir, untilMs - hours * 3_600_000, untilMs)
 
@@ -143,21 +172,21 @@ export async function runHookContextCostCli(argv: string[], dir = path.join(data
     return EXIT.OK
   }
 
-  const header = ['hook_event', 'hook_name', 'fires', 'ctx_chars', 'est_tokens', 'stdout_chars', 'sysmsg_chars', 'persisted']
+  const header = ['hook_event', 'matcher', 'fires', 'ctx_chars', 'est_tokens', 'stdout(not injected)', 'sysmsg_chars', 'persisted']
   const body = res.rows.map(r => [
     r.hookEvent, r.hookName, String(r.fires), String(r.additionalContextChars), String(r.estContextTokens),
     String(r.stdoutChars), String(r.systemMessageChars), String(r.outputsPersisted),
   ])
   const widths = header.map((h, i) => Math.max(h.length, ...body.map(row => row[i].length)))
   const fmt = (cells: string[]): string => cells.map((c, i) => (i < 2 ? c.padEnd(widths[i]) : c.padStart(widths[i]))).join('  ')
-  console.log(`hook output over the last ${hours}h — ${res.events} hook_execution_complete events (est_tokens = ctx_chars / ${CHARS_PER_TOKEN_ESTIMATE}, an estimate)`)
+  console.log(`hook output over the last ${hours}h — ${res.events} hook_execution_complete fires (per fire, not per spawn; est_tokens = ctx_chars / ${CHARS_PER_TOKEN_ESTIMATE}, an estimate)`)
   console.log(fmt(header))
   for (const row of body) console.log(fmt(row))
   const sub = res.rows.filter(r => r.hookEvent === 'SubagentStart')
   const subFires = sub.reduce((s, r) => s + r.fires, 0)
   if (subFires > 0) {
-    const perSpawn = Math.round(sub.reduce((s, r) => s + r.additionalContextChars, 0) / subFires)
-    console.log(`note: SubagentStart context (~${perSpawn} chars per spawn) opens every subagent's prompt, so it is paid as a cold cache write on each spawn.`)
+    const perFire = Math.round(sub.reduce((s, r) => s + r.additionalContextChars, 0) / subFires)
+    console.log(`note: SubagentStart context (~${perFire} chars per hook fire, not per spawn — a spawn matched by two hooks counts as two fires) opens every subagent's prompt, so it is paid as a cold cache write on each spawn.`)
   }
   return EXIT.OK
 }
