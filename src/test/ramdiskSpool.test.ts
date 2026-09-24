@@ -1,11 +1,13 @@
 // RAM-disk spool for raw-body capture (TRDD-K3WDPR7M Phase 3).
 //
-// The spool routes Claude Code's ~30 GB/day of raw-body writes into volatile RAM instead of the SSD.
-// These tests pin the parts that must be correct WITHOUT a real RAM disk: the durable spool-config
-// round-trip, the FAIL-FAST refusal (capture must never enable if the spool can't be made), the
-// skip-set that stops a 60s drain from re-hashing durable bodies, and the boot-remount LaunchAgent
-// plist. The one test that needs real `hdiutil` self-skips unless AGENTLENS_TEST_RAMDISK=1 — creating
-// real RAM disks in CI is hostile.
+// The spool routed Claude Code's ~30 GB/day of raw-body writes into volatile RAM instead of the SSD.
+// TRDD-Z53IJFE9 (owner removal order, 2026-09-24) cut applyCaptureSetting's RAM-disk/LaunchAgent
+// calls — capture ON now writes straight to the SSD bodies dir, pinned below. The remaining modules
+// (ramdisk.ts, spoolLaunchAgent.ts, spoolCli.ts) are removed in a later step of the same card; these
+// tests pin the parts that must still be correct WITHOUT a real RAM disk until then: the durable
+// spool-config round-trip, the skip-set that stops a 60s drain from re-hashing durable bodies, and the
+// boot-remount LaunchAgent plist. The one test that needs real `hdiutil` self-skips unless
+// AGENTLENS_TEST_RAMDISK=1 — creating real RAM disks in CI is hostile.
 import * as assert from 'assert'
 import * as fs from 'fs'
 import * as os from 'os'
@@ -88,58 +90,55 @@ suite('capture spool config — durable round-trip', () => {
   })
 })
 
-// ── applyCaptureSetting: FAIL-FAST + wiring (deps injected, no real RAM disk) ─────
-suite('applyCaptureSetting — fail-fast refusal + spool wiring', () => {
+// ── applyCaptureSetting: SSD-direct wiring, no RAM disk (TRDD-Z53IJFE9) ───────────
+suite('applyCaptureSetting — writes straight to the SSD bodies dir, no spool', () => {
   teardown(() => { delete process.env[RAW_BODIES_ENV] })
 
   function spyDeps(over: Partial<CaptureToggleDeps> = {}): CaptureToggleDeps & {
-    calls: { ensureTelemetry: Array<{ captureRawBodies: boolean; bodiesDir?: string }>; install: number; remove: number }
+    calls: { ensureTelemetry: Array<{ captureRawBodies: boolean; bodiesDir?: string }>; remove: number }
   } {
-    const calls = { ensureTelemetry: [] as Array<{ captureRawBodies: boolean; bodiesDir?: string }>, install: 0, remove: 0 }
+    const calls = { ensureTelemetry: [] as Array<{ captureRawBodies: boolean; bodiesDir?: string }>, remove: 0 }
     const base: CaptureToggleDeps = {
-      ensureRamDisk: (mb: number) => ({ mountPoint: '/Volumes/AgentLensSpool', sizeBytes: mb * 1024 * 1024 }),
       ensureTelemetry: async (o) => { calls.ensureTelemetry.push({ captureRawBodies: o.captureRawBodies, bodiesDir: o.bodiesDir }); return fakeEnsureResult(o.bodiesDir ?? '') },
-      installSpoolAgent: () => { calls.install++ },
       removeSpoolAgent: () => { calls.remove++ },
     }
     return Object.assign({}, base, over, { calls })
   }
 
-  test('FAIL-FAST: a RAM disk that cannot be created REFUSES capture and persists NOTHING', async () => {
-    const dir = tmp()
-    const deps = spyDeps({ ensureRamDisk: () => { throw new Error('hdiutil boom') } })
-    const code = await applyCaptureSetting(dir, true, deps)
-    assert.strictEqual(code, 1, 'must exit non-zero')
-    assert.strictEqual(deps.calls.ensureTelemetry.length, 0, 'must NOT wire the sink after a spool failure')
-    assert.strictEqual(deps.calls.install, 0, 'must NOT install the boot agent')
-    assert.strictEqual(rawBodyCaptureEnabled(dir, {}), false, 'capture must stay OFF')
-    assert.strictEqual(spoolDirConfigured(dir), undefined, 'no spool dir persisted')
-  })
-
-  test('ON: wires the sink at the spool bodies dir and persists capture + spoolDir', async () => {
+  test('ON: never touches a RAM disk — a deps object with no ensureRamDisk/installSpoolAgent is enough', async () => {
+    // The old interface REQUIRED ensureRamDisk + installSpoolAgent; spyDeps() above cannot even
+    // construct one anymore. This is the regression guard the task asked for: if the ON path ever
+    // grows a call back to a RAM-disk seam, this suite fails to compile before it fails at runtime.
     const dir = tmp()
     const deps = spyDeps()
     const code = await applyCaptureSetting(dir, true, deps)
     assert.strictEqual(code, 0)
     assert.strictEqual(deps.calls.ensureTelemetry.length, 1)
-    assert.deepStrictEqual(deps.calls.ensureTelemetry[0], { captureRawBodies: true, bodiesDir: '/Volumes/AgentLensSpool/otel-bodies' })
-    assert.strictEqual(deps.calls.install, 1, 'installs the boot-remount agent')
+    assert.deepStrictEqual(deps.calls.ensureTelemetry[0], { captureRawBodies: true, bodiesDir: path.join(dir, 'otel-bodies') })
     assert.strictEqual(rawBodyCaptureEnabled(dir, {}), true)
-    assert.strictEqual(spoolDirConfigured(dir), '/Volumes/AgentLensSpool/otel-bodies')
+    assert.strictEqual(spoolDirConfigured(dir), undefined, 'ON no longer persists a spool dir')
   })
 
-  test('OFF: deletes the sink at the PREVIOUSLY-configured spool dir, clears spoolDir, removes the agent', async () => {
+  test('ON: creates the SSD bodies dir (mode 0700) if it does not exist yet', async () => {
     const dir = tmp()
-    await applyCaptureSetting(dir, true, spyDeps())          // establish the spool config
+    const bodies = path.join(dir, 'otel-bodies')
+    assert.strictEqual(fs.existsSync(bodies), false)
+    await applyCaptureSetting(dir, true, spyDeps())
+    assert.strictEqual(fs.existsSync(bodies), true)
+    assert.strictEqual(fs.statSync(bodies).mode & 0o777, 0o700)
+  })
+
+  test('OFF: targets the default SSD bodies dir and removes any leftover boot-remount agent', async () => {
+    const dir = tmp()
+    await applyCaptureSetting(dir, true, spyDeps())          // establish capture on
     const deps = spyDeps()
     const code = await applyCaptureSetting(dir, false, deps)
     assert.strictEqual(code, 0)
     assert.strictEqual(deps.calls.ensureTelemetry.length, 1)
-    assert.deepStrictEqual(deps.calls.ensureTelemetry[0], { captureRawBodies: false, bodiesDir: '/Volumes/AgentLensSpool/otel-bodies' },
-      'OFF must target the exact sink we wrote, or the delete-guard cannot match it')
-    assert.strictEqual(deps.calls.remove, 1, 'removes the boot-remount agent')
+    assert.deepStrictEqual(deps.calls.ensureTelemetry[0], { captureRawBodies: false, bodiesDir: undefined },
+      'OFF falls back to the default dir when no spoolDir was ever configured')
+    assert.strictEqual(deps.calls.remove, 1, 'still tears down a leftover pre-removal boot agent, if any')
     assert.strictEqual(rawBodyCaptureEnabled(dir, {}), false)
-    assert.strictEqual(spoolDirConfigured(dir), undefined)
   })
 })
 

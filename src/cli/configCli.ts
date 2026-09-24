@@ -4,6 +4,7 @@
 // like the data they govern. The effective value obeys the same precedence the server resolves at
 // boot: env var > config.json > built-in default. See src/retentionConfig.ts.
 
+import * as fs from 'fs'
 import { dataDir } from './cliCore'
 import { EXIT } from './cliErrors'
 import {
@@ -11,12 +12,12 @@ import {
   type RetentionKeyMeta,
 } from '../retentionConfig'
 import {
-  RAW_BODIES_ENV, RAW_BODIES_KEY, rawBodyCaptureWithSource, setRawBodyCapture, setSpoolDir, spoolDirConfigured,
+  RAW_BODIES_ENV, RAW_BODIES_KEY, effectiveBodiesDir, rawBodyCaptureWithSource, setRawBodyCapture, setSpoolDir,
+  spoolDirConfigured,
 } from '../captureConfig'
 import { KEYCHAIN_ENV, KEYCHAIN_KEY, keychainConsentWithSource, setKeychainConsent } from '../keychainConsent'
 import { ensureTelemetryConfig, type EnsureResult } from '../telemetryConfig'
-import { ensureRamDisk, spoolDir, spoolSizeMb, type EnsureRamDiskResult } from '../ramdisk'
-import { installSpoolLaunchAgent, removeSpoolLaunchAgent } from './spoolLaunchAgent'
+import { removeSpoolLaunchAgent } from './spoolLaunchAgent'
 
 /** The one non-numeric knob (TRDD-BKF5NZD3): raw-body capture is a boolean, and it is OFF by default
  *  because turning it on costs ~35 GB/day of SSD writes. Special-cased rather than forced into the
@@ -139,32 +140,26 @@ async function setConfig(dir: string, key: string, rawValue: string): Promise<nu
 /** Seams for the capture on/off flow, so the fail-fast refusal + spool wiring are unit-testable
  *  without a real RAM disk / launchd (TRDD-K3WDPR7M Phase 3). Defaults are the real implementations. */
 export interface CaptureToggleDeps {
-  ensureRamDisk: (sizeMb: number) => EnsureRamDiskResult
   ensureTelemetry: (opts: { dataDir: string; captureRawBodies: boolean; bodiesDir?: string }) => Promise<EnsureResult>
-  installSpoolAgent: () => void
   removeSpoolAgent: () => void
-}
-
-/** ProgramArguments for the boot-remount LaunchAgent: this node re-running this CLI's `spool ensure`. */
-function spoolProgramArgs(): string[] {
-  return [process.execPath, process.argv[1] ?? 'agentlenspro', 'spool', 'ensure']
 }
 
 function realCaptureDeps(): CaptureToggleDeps {
   return {
-    ensureRamDisk: (mb) => ensureRamDisk(mb),
     ensureTelemetry: (o) => ensureTelemetryConfig(o),
-    installSpoolAgent: () => { installSpoolLaunchAgent(spoolProgramArgs()) },
     removeSpoolAgent: () => { removeSpoolLaunchAgent() },
   }
 }
 
 /**
- * Turn raw-body capture on/off. ON routes bodies to a RAM-disk spool so the ~30 GB/day of writes land
- * in volatile memory instead of the SSD; OFF deletes the sink and removes the boot-remount agent.
+ * Turn raw-body capture on/off. ON writes bodies straight to the SSD bodies dir; OFF deletes the sink
+ * and removes any boot-remount agent left over from a pre-removal install.
  *
- * FAIL-FAST (item 3): if the RAM disk cannot be created/mounted, capture is REFUSED — non-zero exit,
- * clear message, and the env key is NEVER pointed at an SSD path. Nothing is persisted on that failure.
+ * TRDD-Z53IJFE9 (owner removal order, 2026-09-24): "i told you to remove the spool completely, since
+ * it was an intermediate buffer that proved to be useless and only slowed down the ingestion and
+ * occupied space" — ON no longer calls ensureRamDisk or installs the spool LaunchAgent. No RAM disk
+ * means no fail-fast-on-unmountable-spool case either; creating a plain directory cannot meaningfully
+ * fail here, so there is nothing left to refuse.
  */
 export async function applyCaptureSetting(
   dir: string,
@@ -172,28 +167,17 @@ export async function applyCaptureSetting(
   deps: CaptureToggleDeps = realCaptureDeps(),
 ): Promise<number> {
   if (enabled) {
-    let spool: EnsureRamDiskResult
-    try {
-      spool = deps.ensureRamDisk(spoolSizeMb(process.env))
-    } catch (e) {
-      console.error(`cannot enable ${CAPTURE_KEY}: RAM-disk spool unavailable — ${(e as Error).message}`)
-      console.error('capture NOT enabled (refusing to write ~30 GB/day of raw bodies to the SSD).')
-      return EXIT.ABORT
-    }
-    const bodies = spoolDir(spool.mountPoint)
-    // Order matters on failure: make the SINK fully durable BEFORE signalling the SOURCE. Install the
-    // boot-remount agent first (so a reboot re-creates the spool), THEN wire settings.json — that env
-    // write is what tells Claude Code to start dumping bodies — THEN persist our own knob last. If any
-    // step throws we exit non-zero having never left capture "on" without a reboot-surviving spool
-    // behind it (the earlier failure mode: agent installed last, so a throw there left Claude writing
-    // to a spool that vanished on the next reboot). A stray agent from a later throw only re-runs
-    // `spool ensure`, which no-ops while capture is off.
-    deps.installSpoolAgent()
+    // KNOWN LIMITATION (flagged by review, left for card step C): on a machine that captured
+    // under the OLD code, config.json still carries a `spoolDir` pointing at the RAM-disk path
+    // (/Volumes/AgentLensSpool/otel-bodies). effectiveBodiesDir prefers that stale spoolDir over
+    // the SSD default, so ON here would target a path that no longer exists as a mount. Step C of
+    // TRDD-Z53IJFE9 drains and clears any legacy spoolDir before a machine reaches this code path;
+    // this function does not defend against it on its own.
+    const bodies = effectiveBodiesDir(dir, true)
+    fs.mkdirSync(bodies, { recursive: true, mode: 0o700 })
     await deps.ensureTelemetry({ dataDir: dir, captureRawBodies: true, bodiesDir: bodies })
     setRawBodyCapture(dir, true)
-    setSpoolDir(dir, bodies)
     console.log(`set ${CAPTURE_KEY} = on in ${configPath(dir)}`)
-    console.log(`RAM-disk spool ready → ${spool.mountPoint} (${Math.round(spool.sizeBytes / 1048576)} MB)`)
     console.log(`wired ${RAW_BODIES_KEY} → file:${bodies}`)
     console.log('restart your Claude Code sessions for this to take effect (env is read at launch).')
     return EXIT.OK
