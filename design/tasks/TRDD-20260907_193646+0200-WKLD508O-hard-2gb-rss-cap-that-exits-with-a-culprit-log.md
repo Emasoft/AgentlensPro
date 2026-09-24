@@ -3,7 +3,7 @@ trdd-id: WKLD508O
 title: alcore exits with a culprit log rather than exceed a 2 GB memory cap
 column: dev
 created: 2026-09-07T19:36:46+0200
-updated: 2026-09-24T17:51:08+0200
+updated: 2026-09-24T19:16:49+0200
 current-owner: main
 task-type: feature
 parent-trdd: 7YPQWKPG
@@ -683,6 +683,8 @@ falsifier before building on either answer.
 **NOT worth doing:** a restart with `MIMALLOC_SHOW_STATS=1` — those stats print at process **exit**,
 so a restart yields nothing about the state under investigation, and it would destroy a 6.6-hour
 specimen. `mi_process_info` (already linked by `466775af`) reads the same numbers live.
+2026-09-24 (RSS-cap isolation reports, reports/cc-alignment/20260924_191316+0200-backfill-rss-control.md + 20260924_181928+0200-1h-backfill.md): live server.log holds 45 RSS-HARD-CAP exits (uptimes 104s-3077s); isolated full-size runs exit at 77s (HEAD + backfill work queued), 182s (HEAD, no work queued), 335s (deployed a187815e). With the cap raised, RSS plateaus at 2.6-3.0 GB - ABOVE the 2 GB cap on this ~35k-card corpus, so the cap sits below the steady working set. Every >500 MB jump comes right after restore() releases its state lock (post-boot sweep / summary rebuild / cards_json), including on a187815e which has no 1h-backfill code at all. restore() held the lock 144-342s in these runs (inflated by concurrent builds - INFERRED). NEXT ACTION: owner decides between raising the cap as a stopgap and fixing the post-restore spike first.
+Queued note (2026-09-24): the 08:48 build presumably contained the cap (build commit unchecked).
 
 ## WHY
 
@@ -760,3 +762,7 @@ This card's ## Acceptance section is a plain numbered list (1.-4.), not markdown
 ## EVIDENCE (2026-09-24, ~/.agentlens/server.log; grep -a -c) — 41 `phys_footprint .* > cap` exits logged so far. Last three, quoted verbatim: EXIT 1 — `alcore: RSS HARD CAP — phys_footprint 2175 MB > cap 2048 MB, exiting` / `mimalloc (Rust heap): current 1634 MB, peak 2381 MB, commit 1632 MB, page faults 0` / `resident spans: 102` / `card store rows: 34630` / `span store: 4 segments, 290119 spans, 211916132 bytes` / `uptime: 104210 ms`. EXIT 2 — `alcore: RSS HARD CAP — phys_footprint 2069 MB > cap 2048 MB, exiting` / `mimalloc (Rust heap): current 2655 MB, peak 2764 MB, commit 1897 MB, page faults 0` / `resident spans: 5170` / `card store rows: 34678` / `span store: 4 segments, 295289 spans, 222338483 bytes` / `uptime: 2249592 ms`. EXIT 3 (latest) — `alcore: RSS HARD CAP — phys_footprint 2202 MB > cap 2048 MB, exiting` / `mimalloc (Rust heap): current 3033 MB, peak 3033 MB, commit 2081 MB, page faults 0` / `resident spans: 10497` / `card store rows: 34820` / `span store: 4 segments, 305786 spans, 243292850 bytes` / `uptime: 3076580 ms`. Each exit is followed by a `[AgentlensPro] boot provenance: started-by=hook-revive ...` line — the hook revives the server after every exit, so ingestion has a gap each time between the exit and the next boots sweep, not continuous coverage. Per the owners 2026-09-08 22:41 ruling recorded on this card (TRDD-DKBGT7MQ): the DuckDB budget is 2 GB and DuckDB is the only memory; exiting with a culprit log naming the culprit is the specified behaviour, not a hazard. Consistent with that ruling, the culprit logs quoted above now name the Rust heap (mimalloc current running 1.6-3.0 GB, exceeding the 2048 MB cap on its own in the last two exits) rather than DuckDB at face value — but flagged, not resolved, here (adversarial review, 2026-09-24): mimalloc current EXCEEDS phys_footprint in 2 of the 3 quoted exits (2655 MB and 3033 MB mimalloc vs 2069 MB and 2202 MB footprint), so mimalloc's self-reported "current" is not directly commensurate with phys_footprint (likely a gross/committed figure, not what macOS charges) — the same RSS-vs-footprint-vs-allocator-counter confusion this card's own STATE history spent many turns on. Whether the Rust heap or DuckDB dominates phys_footprint at these exits is UNSETTLED by this evidence; only that mimalloc alone is large enough to be a candidate is established.
 
 QUALIFIERS (2026-09-24): the 41-exit count above is grep -a -c over the whole ~/.agentlens/server.log, whose start date is unknown and whose RSS-HARD-CAP lines carry no timestamps — so neither an exit rate nor "not caused by today's deploys" is established, only that the 08:48 build of 2026-09-24 already contained the cap. What restarts the server after each exit was not checked; the log shows only that it comes back up (the hook-revive line), not what triggers that.
+
+## RSS-cap isolation evidence (2026-09-24)
+
+Isolated full-size runs (own DATA_DIR, real read-only HOME, distinct ports; reports/cc-alignment/20260924_191316+0200-backfill-rss-control.md, 20260924_181928+0200-1h-backfill.md): Run A (HEAD, 8849 flagged transcripts queued for the 1h backfill) hit the default 2048 MB cap at uptime 77s; Run C (HEAD, restarted on already-backfilled data, 0 flagged) hit it at 182s; Run D (deployed a187815e, no 1h-backfill code at all) hit it at 335s. With the cap raised to 8192 MB (measurement-only) RSS plateaus at 2.6-3.0 GB in every run, well above the 2048 MB default.

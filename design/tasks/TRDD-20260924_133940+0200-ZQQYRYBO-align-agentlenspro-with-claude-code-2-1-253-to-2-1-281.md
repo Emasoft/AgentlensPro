@@ -3,7 +3,7 @@ trdd-id: ZQQYRYBO
 title: Align AgentlensPro with Claude Code 2.1.253 to 2.1.281
 column: dev
 created: 2026-09-24T13:39:40+0200
-updated: 2026-09-24T18:08:47+0200
+updated: 2026-09-24T19:17:41+0200
 current-owner: emanuelesabetta
 created-by: emanuelesabetta
 task-type: refactor
@@ -14,7 +14,7 @@ mandated-by: none
 approved: true
 approval-judge: emanuelesabetta
 approval-datetime: 2026-09-24T13:39:40+0200
-implementation-commits: [92d8b369, b30b80d7, 33189cdf, fc89382b, 0972f2e7]
+implementation-commits: [92d8b369, b30b80d7, 33189cdf, fc89382b, 0972f2e7, 76c3b859, ef1577b6, e48e49c6, 97cb873d, f101fe50, 5b272f77, 079f7839, 802531dd, bb53a24c]
 ---
 
 # Align AgentlensPro with Claude Code 2.1.253 to 2.1.281
@@ -41,6 +41,9 @@ The rest not started.
 Out of scope here, owned elsewhere: the spool removal is TRDD-Z53IJFE9 and is
 excluded here; the 13 uncommitted hook and memory files waiting for the owner
 are also excluded.
+2026-09-24: I12a's exact path is unmeasured - index.jsonl carries request_id, message_id, message_uuid, request_file, response_file and no request_body_id; follow-up = pair from index rows + count exact vs fallback.
+2026-09-24: I6a follow-up = take the Fable model from the session's current model (real /effort lines rarely carry one: 1 of 2), grade /upgrade and /extra-usage ambiguous not dropped, add both-sides threshold tests.
+2026-09-24: I15 open question awaiting the owner (unverified: one event sums every hook; one SubagentStart dispatch = one spawn).
 
 ## Increments
 
@@ -52,21 +55,22 @@ are also excluded.
 - [ ] I6 — CORRECTION — Cache causes and remediations gated on Claude Code version: effort, /login, MCP/plugins, idle TTL, subagent TTL (CC F1 F2 F3 T1, TTL prior; MP F5)
 - [x] I7 — CORRECTION — Cache timeline: `thinking.display`, `DEFERRED_BUILTINS`, effort text, git anchor (CC D1 B1, HT 8, SS F4, MP F6)
 - [ ] I8 — CORRECTION — "Possibly the CC bug fixed in 2.1.X" note on causes from old versions (CC F4)
-- [ ] I9 — SILENT-MISS — Context classifier: `instructions` and `prompt_snapshot` attachments (HT-2)
-- [ ] I10 — SILENT-MISS — Read the harness's own miss cause from the status line (CC E1, TI 1.4)
-- [ ] I11 — SILENT-MISS — Show resume staleness from SessionStart and the new SubagentStop fields (HT-5)
+- [x] I9 — SILENT-MISS — Context classifier: `instructions` and `prompt_snapshot` attachments (HT-2)
+- [x] I10 — SILENT-MISS — Read the harness's own miss cause from the status line (CC E1, TI 1.4)
+- [x] I11 — SILENT-MISS — Show resume staleness from SessionStart and the new SubagentStop fields (HT-5)
 - [ ] I12 — SILENT-MISS — Pair each request with its response via `request_body_id`/`index.jsonl`; bound the index's growth (TI 1.1 1.2) — BLOCKED-ON-CAPTURE
 - [ ] I13 — DOC — CLAUDE.md doctrine sweep, `cache-ttl-model.md`, cache-guard and visualize skills, `micro-worker.md` (MP F8 F9, CC DOC-STALE, HT-2, SS F2)
-- [ ] I14 — IMPROVE — `omitClaudeMd` on `agentlens-tldr-worker` and `micro-worker` (SS O1)
-- [ ] I15 — IMPROVE — Verb showing what each hook injects into context (TI 1.3)
-- [ ] I16 — IMPROVE — Split the 97 KB diagnostics SKILL.md into a short body plus references (SS O2)
+- [x] I14 — IMPROVE — `omitClaudeMd` on `agentlens-tldr-worker` and `micro-worker` (SS O1)
+- [x] I15 — IMPROVE — Verb showing what each hook injects into context (TI 1.3)
+- [x] I16 — IMPROVE — Split the 97 KB diagnostics SKILL.md into a short body plus references (SS O2)
 - [ ] I17 — IMPROVE — Harness `thinking_drop` attachment as a reported cause (HT-4)
 - [ ] I18 — IMPROVE — Background-agent totals from `queued_command` usage (HT-6)
-- [ ] I19 — IMPROVE — Remediation for many subagents on Opus names `CLAUDE_CODE_SUBAGENT_MODEL_FORCE` (SS O3)
+- [x] I19 — IMPROVE — Remediation for many subagents on Opus names `CLAUDE_CODE_SUBAGENT_MODEL_FORCE` (SS O3)
 - [ ] I20 — IMPROVE — SubagentStop matcher to skip the ~81% of spawns with an empty agent type (HT-7)
 - [ ] I21 — IMPROVE — Cost by skill, plugin and MCP server in window rollups (TI 1.6)
 - [ ] I22 — IMPROVE — `claude plugin eval` suite for the shipped skills (SS O4)
 2026-09-24: I14 — kept omitClaudeMd on micro-worker only; removed from agentlens-tldr-worker (it edits arbitrary-project code, so dropping CLAUDE.md would silently strip that project's conventions). Ships to users only via setup/installAgents, which today overwrites a user's own lean-worker (I5 / Q3) — release after Q3 is resolved.
+2026-09-24: I6 — I6a done (partial); I6b/I6c still in progress.
 
 ## Owner questions
 
