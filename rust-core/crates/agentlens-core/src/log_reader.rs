@@ -601,7 +601,17 @@ fn read_lines_from(path: &Path, from: u64) -> std::io::Result<(Vec<Vec<u8>>, u64
 /// A restart trusts the delta logs ONLY when `log-delta-version.json` carries this value; a bump
 /// forces the cold rescan. Kept in lockstep with the TS constant by a test that reads the TS
 /// source (tests/log_reader_parity.rs) until the cutover retires the TS side.
-pub const LOG_INGEST_VERSION: u64 = 7;
+///
+/// Bumped 7→8 for TRDD-ORGJ0E3G: a card restored from a pre-fix delta log (or a file whose stat
+/// is UNCHANGED since restart — `LogTailer::unchanged` skips it entirely, forever, until the
+/// transcript itself grows again) has no `cache_create_1h_tokens` and reads it as 0, permanently
+/// under-billing at the 5m rate. There is no per-field "this card predates feature X" marker on a
+/// Card — only this whole-corpus version stamp — so the bump is the one bounded, idempotent way
+/// to force every card to rebuild from its transcript exactly once: `restore()` treats a stale
+/// version as "restore nothing", so the next boot's sweep sees an EMPTY file_state and takes the
+/// `cold_scan` branch for every discovered file (see `LogTailer::sweep`'s "with NO state yet"
+/// doc comment), re-deriving `cache_create_1h_tokens` for every session in one pass.
+pub const LOG_INGEST_VERSION: u64 = 8;
 
 /// TS `PersistedFileState` — the offset record as it sits in `log-offsets.*.ndjson`.
 fn file_state_record(s: &FileState) -> Value {

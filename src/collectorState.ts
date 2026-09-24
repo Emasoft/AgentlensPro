@@ -44,7 +44,10 @@ function isDegradedRead(e: unknown): boolean {
 //       with its transcript twin — but persisted agent-* cards were built without it AND the offset
 //       resume would skip their unchanged files forever, freezing them as orphans. Bumping forces
 //       the cold rescan that relinks history.
-export const LOG_INGEST_VERSION = 7
+//   v8 (TRDD-ORGJ0E3G, 1h-tier cache-write cost): cards gained cacheCreate1hTokens; a restored
+//       card without it reads 0 forever (same "unchanged file → never re-touched" freeze as v7),
+//       under-billing at the 5m rate. Bumping forces the one-time cold rescan that backfills it.
+export const LOG_INGEST_VERSION = 8
 
 // ── Log tail offsets ──────────────────────────────────────────────────────────
 

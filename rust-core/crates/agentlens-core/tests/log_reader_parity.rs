@@ -485,3 +485,167 @@ fn account_registry_is_fed_by_the_logs_ingest_and_stamps_log_cards_at_build_time
     st.accounts.record("x", "");
     assert_eq!(st.accounts.len(), MAX_SESSIONS, "empty ids are ignored");
 }
+
+// ── TRDD-ORGJ0E3G follow-up: 1h-tier cache-write round trip + message-id dedup ──────────────
+//
+// The review of a187815e flagged two gaps: (1) no test drove a REAL transcript through logscan
+// into a serialized Card and then into session_cost — the shipped test built a Card by hand; (2)
+// no test proved the 1h subtotal obeys the SAME message.id dedup as cache_create_tokens itself
+// (Claude Code repeats one message's usage on every content-block row it emits — see the
+// existing fixture's msg_1 in logs-home/.claude/projects/-Users-someone-proj/cccccccc-…jsonl —
+// so a naive per-ROW sum would overcount both totals, not just the 1h one).
+
+/// One user turn + one assistant JSONL line per `(message.id, cache_creation_input_tokens,
+/// ephemeral_1h_input_tokens)` in `rows`. A real transcript repeats the SAME message.id across
+/// content-block rows (tool_use vs text) of one message; passing the same id twice here
+/// reproduces that shape.
+fn write_1h_transcript(path: &Path, rows: &[(&str, f64, f64)]) {
+    let mut body = String::new();
+    body.push_str(
+        "{\"type\":\"user\",\"timestamp\":\"2026-09-24T09:00:00.000Z\",\"cwd\":\"/Users/someone/proj\",\"entrypoint\":\"cli\",\"message\":{\"role\":\"user\",\"content\":\"fix the cache tier bug\"}}\n",
+    );
+    for (i, (id, create, ephemeral_1h)) in rows.iter().copied().enumerate() {
+        let five_m = create - ephemeral_1h;
+        let sec = 1 + i as u32;
+        body.push_str(&format!(
+            "{{\"type\":\"assistant\",\"timestamp\":\"2026-09-24T09:00:{sec:02}.000Z\",\"message\":{{\"id\":\"{id}\",\"model\":\"claude-opus-5-5\",\"usage\":{{\"input_tokens\":10,\"output_tokens\":5,\"cache_read_input_tokens\":1000,\"cache_creation_input_tokens\":{create},\"cache_creation\":{{\"ephemeral_5m_input_tokens\":{five_m},\"ephemeral_1h_input_tokens\":{ephemeral_1h}}}}},\"content\":[{{\"type\":\"text\",\"text\":\"turn {i}\"}}]}}}}\n"
+        ));
+    }
+    std::fs::write(path, body).unwrap();
+}
+
+#[test]
+fn cache_1h_tier_round_trips_from_transcript_through_logscan_to_session_cost() {
+    let dir = std::env::temp_dir().join(format!("al-1h-roundtrip-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("11111111-1111-2222-3333-444444444444.jsonl");
+    // One turn, entirely on the 1h tier (800 cache-write tokens, all ephemeral_1h — the shape a
+    // main-conversation subscription session produces, CLAUDE.md doctrine 3).
+    write_1h_transcript(&file, &[("msg_rt1", 800.0, 800.0)]);
+
+    let parsed = agentlens_logscan::parse_transcript(file.to_str().unwrap(), 10_000, 50_000_000)
+        .unwrap()
+        .expect("transcript parses");
+    assert_eq!(parsed.card.cache_create_tokens, 800.0);
+    assert_eq!(parsed.card.cache_create_1h_tokens, 800.0, "the whole write was on the 1h tier");
+    assert!(parsed.card.cache_create_1h_tokens <= parsed.card.cache_create_tokens);
+
+    let card_json = serde_json::to_value(&parsed.card).unwrap();
+    let now = agentlens_core::now_ms() as f64;
+    let detail = agentlens_core::mcp_tools::get_session_detail(&[card_json], &[], None, &parsed.card.session_id, now);
+    let cost = detail["cost_usd"].as_f64().expect("cost_usd present");
+
+    let expect = agentlens_core::pricing::calc_token_cost_usd(
+        parsed.card.input_tokens,
+        parsed.card.cache_read_tokens,
+        parsed.card.cache_create_tokens,
+        parsed.card.output_tokens,
+        &parsed.card.model,
+        parsed.card.cache_create_1h_tokens,
+        None,
+        now,
+    );
+    // `detail["cost_usd"]` is rounded to 4dp by get_session_detail (mcp_tools.rs js_to_fixed_num);
+    // `expect` is the raw, unrounded recompute, so the two can differ by up to half a cent of a
+    // cent (5e-5) purely from rounding — a tighter epsilon here is a false failure, not a stricter
+    // check.
+    assert!((cost - expect).abs() < 5e-5, "session_cost must actually be wired to the parsed 1h field ({cost} vs {expect})");
+
+    // Sanity: had the split been unknown (pre-fix behavior), the cost would be strictly lower —
+    // the 1h write rate is always above the 5m rate for a model with the Anthropic tier shape.
+    let blind = agentlens_core::pricing::calc_token_cost_usd(
+        parsed.card.input_tokens,
+        parsed.card.cache_read_tokens,
+        parsed.card.cache_create_tokens,
+        parsed.card.output_tokens,
+        &parsed.card.model,
+        0.0,
+        None,
+        now,
+    );
+    assert!(expect > blind, "an all-1h card must cost more than the same tokens billed blind at 5m");
+}
+
+#[test]
+fn cache_1h_tier_counts_a_repeated_message_id_once_not_once_per_content_block() {
+    let dir = std::env::temp_dir().join(format!("al-1h-dedup-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("22222222-1111-2222-3333-444444444444.jsonl");
+    write_1h_transcript(
+        &file,
+        &[
+            ("msg_dup", 500.0, 500.0),
+            ("msg_dup", 500.0, 500.0), // same id, second content-block row — must NOT double-count
+            ("msg_dup", 500.0, 500.0), // third row, same id again
+            ("msg_2", 300.0, 100.0),   // a distinct message — must still count
+        ],
+    );
+
+    let parsed = agentlens_logscan::parse_transcript(file.to_str().unwrap(), 10_000, 50_000_000)
+        .unwrap()
+        .expect("transcript parses");
+    assert_eq!(parsed.card.cache_create_tokens, 800.0, "msg_dup's 3 rows must count once (500), not 1500");
+    assert_eq!(parsed.card.cache_create_1h_tokens, 600.0, "the 1h subtotal obeys the same message.id dedup");
+    assert!(parsed.card.cache_create_1h_tokens <= parsed.card.cache_create_tokens);
+}
+
+/// TRDD-ORGJ0E3G's actual fix: bumping `LOG_INGEST_VERSION` is what makes a stale-schema card
+/// (one built before `cacheCreate1hTokens` existed) get rebuilt at all — the review flagged that
+/// neither `cache_1h_tier_round_trips_…` nor `cache_1h_tier_counts_a_repeated_message_id_…`
+/// above exercises the RESTART path itself (they only prove a fresh parse computes the field
+/// correctly, which was never in doubt). This test exercises the restart mechanism directly:
+/// stamp the version file back one below `LOG_INGEST_VERSION`, confirm `restore()` throws the
+/// old cards away instead of resurrecting them, and confirm the resulting empty `file_state`
+/// makes the next sweep cold-read EVERY discovered file — including the ones that never
+/// changed, which the sibling `durable_state_round_trips_…` test's Run 2 proves are otherwise
+/// skipped forever by the `unchanged()` gate.
+#[test]
+fn a_stale_log_ingest_version_forces_one_full_cold_rescan_that_backfills_every_card() {
+    let home = scratch_home("staleversion");
+    let env = Env { home: home.clone(), platform: Platform::Darwin, vars: HashMap::new() };
+    let data = std::env::temp_dir().join(format!("al-staleversion-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&data);
+    std::fs::create_dir_all(&data).unwrap();
+    let now = 1_785_578_400_000 + 600_000;
+
+    // Run 1: a normal boot + forced save at the CURRENT version, exactly as a graceful stop does.
+    let state = std::sync::Mutex::new(CoreState::open(&data.join("spans")));
+    let mut tailer = LogTailer::default();
+    let mut durable = DurableState::open(&data);
+    durable.restore(&mut tailer, &mut state.lock().unwrap()).unwrap();
+    let (scanned, _) = tailer.sweep(&env, now);
+    state.lock().unwrap().ingest_scanned(scanned);
+    durable.mark_dirty();
+    durable.tick(&tailer, &state, true);
+    assert_eq!(
+        std::fs::read_to_string(data.join("log-delta-version.json")).unwrap(),
+        format!("{{\"v\":{LOG_INGEST_VERSION}}}")
+    );
+
+    // Simulate a card built by an OLDER binary — the actual TRDD-ORGJ0E3G failure mode: the
+    // persisted delta logs predate `cacheCreate1hTokens`. Nothing else changes: no transcript
+    // touched, no mtime bumped — exactly the "idle session, unchanged file" shape the bug was
+    // about, reproduced by stamping the version back one below current.
+    std::fs::write(data.join("log-delta-version.json"), format!("{{\"v\":{}}}", LOG_INGEST_VERSION - 1)).unwrap();
+
+    // Run 2: restore() must see the stale stamp and restore NOTHING — not even the cards it has
+    // on disk — which is what leaves file_state empty so the boot sweep cold-reads everything.
+    let state2 = std::sync::Mutex::new(CoreState::open(&data.join("spans2")));
+    let mut tailer2 = LogTailer::default();
+    let mut durable2 = DurableState::open(&data);
+    let (restored, imported, skipped) = durable2.restore(&mut tailer2, &mut state2.lock().unwrap()).unwrap();
+    assert_eq!((restored, imported, skipped), (0, 0, 0), "a stale version must restore nothing, not stale cards");
+    assert!(state2.lock().unwrap().cards.is_empty(), "no pre-fix card may survive into the new run");
+
+    // The boot sweep now full-reads EVERY discovered file — including the 4 that never changed
+    // and would otherwise be skipped forever by the unchanged() gate — and every rebuilt card
+    // carries the field a stale snapshot would have been missing.
+    let (scanned, s) = tailer2.sweep(&env, now);
+    assert_eq!(s.full_reads, 5, "every discovered file must cold-read, not just the ones that changed");
+    assert!(
+        scanned.iter().flat_map(|sc| &sc.cards).all(|c| c.get("cacheCreate1hTokens").is_some()),
+        "every rebuilt card must carry the field a stale snapshot would have been missing"
+    );
+}

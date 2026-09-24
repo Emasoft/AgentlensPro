@@ -17,10 +17,13 @@ All notable changes to AgentlensPro are documented here.
   accumulator (`agentlens-logscan`'s `Buckets`/`ClaudeAccum`) never extracted the 1h/5m split at
   all, so `mcp_tools.rs`'s `session_cost` and `log_reader.rs`'s `speedBlendedCostUsd` had nothing
   to pass `calc_token_cost_usd` but a hardcoded `0.0` for the 1h argument. Now `Card` carries a
-  `cache_create_1h_tokens` subtotal and both call sites use it. **Persisted rows are NOT
-  reindexed/backfilled** — a card indexed before this fix keeps its (lower) cost until the
-  transcript is reparsed; a missing `cacheCreate1hTokens` field on an old DurableState snapshot
-  reads as `0`, i.e. the exact pre-fix behavior, never a crash or a wrong-direction change. This
+  `cache_create_1h_tokens` subtotal and both call sites use it. **Persisted rows ARE
+  reindexed on the next restart, once, via `LOG_INGEST_VERSION` 7→8** — a card restored from a
+  pre-fix delta log, or one whose backing transcript file hadn't changed since a restart (so the
+  sweeper's `unchanged()` short-circuit would otherwise skip it forever), reads a missing
+  `cacheCreate1hTokens` as `0` (the exact pre-fix behavior, never a crash or a wrong-direction
+  change) until then. The version bump forces one full cold rescan of every discovered log file
+  on the next boot, which rebuilds every card's `cacheCreate1hTokens` from its transcript. This
   is the same defect *shape* as `TRDD-K4XQ7M2B` (unfixed as of this entry) but in the session
   **card**, not the per-call `api_calls` forensics row — the two are tracked and fixed separately.
   Other `calc_token_cost_usd` call sites that still pass a hardcoded `0.0` (e.g.
