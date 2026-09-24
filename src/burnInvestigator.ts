@@ -389,7 +389,7 @@ function detectPremiumFanout(resps: RespRec[], reqs: ReqRec[], totalEquiv: numbe
       equivTokens: Math.round(equiv),
       shareOfWindow: totalEquiv > 0 ? equiv / totalEquiv : 0,
       confidence: 'high',
-      verdict: `${calls.length} calls on ${model} (peak ${burst} in 30min), ${Math.round(100 * noWs / subagentReqs.length)}% subagent-shaped — a fan-out ran on this model (est $${usd.toFixed(2)}). If ${model} became the DEFAULT recently, fresh fan-out agents inherited it; pin cheaper models for fan-out work.`,
+      verdict: `${calls.length} calls on ${model} (peak ${burst} in 30min), ${Math.round(100 * noWs / subagentReqs.length)}% subagent-shaped — a fan-out ran on this model (est $${usd.toFixed(2)}). If ${model} became the DEFAULT recently, fresh fan-out agents inherited it; pin cheaper models for fan-out work: per agent (model: in its definition), or for every subagent with CLAUDE_CODE_SUBAGENT_MODEL=<cheaper model> plus CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1 (CC 2.1.257+; without FORCE the variable is only a default that agent definitions and per-spawn models override).`,
       evidence: { model, calls: calls.length, peak30min: burst, cacheCreationTokens: cc, cacheReadTokens: cr, outputTokens: outT, estCostUsd: Number(usd.toFixed(2)) },
     })
   }

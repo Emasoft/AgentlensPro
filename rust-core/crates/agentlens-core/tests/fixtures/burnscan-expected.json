@@ -951,7 +951,7 @@
           "equivTokens": 143000,
           "shareOfWindow": 1,
           "confidence": "high",
-          "verdict": "55 calls on claude-opus-5 (peak 55 in 30min), 100% subagent-shaped — a fan-out ran on this model (est $0.77). If claude-opus-5 became the DEFAULT recently, fresh fan-out agents inherited it; pin cheaper models for fan-out work.",
+          "verdict": "55 calls on claude-opus-5 (peak 55 in 30min), 100% subagent-shaped — a fan-out ran on this model (est $0.77). If claude-opus-5 became the DEFAULT recently, fresh fan-out agents inherited it; pin cheaper models for fan-out work: per agent (model: in its definition), or for every subagent with CLAUDE_CODE_SUBAGENT_MODEL=<cheaper model> plus CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1 (CC 2.1.257+; without FORCE the variable is only a default that agent definitions and per-spawn models override).",
           "evidence": {
             "model": "claude-opus-5",
             "calls": 55,
@@ -963,7 +963,7 @@
           }
         }
       ],
-      "verdict": "Top culprit: 1. PREMIUM_MODEL_FANOUT (143k equiv, 100%) — 55 calls on claude-opus-5 (peak 55 in 30min), 100% subagent-shaped — a fan-out ran on this model (est $0.77). If claude-opus-5 became the DEFAULT recently, fresh fan-out agents inherited it; pin cheaper models for fan-out work. Window total: 143k input-equivalents (110k cache-write + 55k cache-read), est $0.77."
+      "verdict": "Top culprit: 1. PREMIUM_MODEL_FANOUT (143k equiv, 100%) — 55 calls on claude-opus-5 (peak 55 in 30min), 100% subagent-shaped — a fan-out ran on this model (est $0.77). If claude-opus-5 became the DEFAULT recently, fresh fan-out agents inherited it; pin cheaper models for fan-out work: per agent (model: in its definition), or for every subagent with CLAUDE_CODE_SUBAGENT_MODEL=<cheaper model> plus CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1 (CC 2.1.257+; without FORCE the variable is only a default that agent definitions and per-spawn models override). Window total: 143k input-equivalents (110k cache-write + 55k cache-read), est $0.77."
     },
     "idle": {
       "window": {

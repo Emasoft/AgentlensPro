@@ -280,7 +280,7 @@ fn detect_premium_fanout(resps: &[RespRec], reqs: &[ReqRec], total_equiv: f64, n
             "shareOfWindow": num(if total_equiv > 0.0 { equiv / total_equiv } else { 0.0 }),
             "confidence": "high",
             "verdict": format!(
-                "{} calls on {model} (peak {burst} in 30min), {}% subagent-shaped — a fan-out ran on this model (est ${}). If {model} became the DEFAULT recently, fresh fan-out agents inherited it; pin cheaper models for fan-out work.",
+                "{} calls on {model} (peak {burst} in 30min), {}% subagent-shaped — a fan-out ran on this model (est ${}). If {model} became the DEFAULT recently, fresh fan-out agents inherited it; pin cheaper models for fan-out work: per agent (model: in its definition), or for every subagent with CLAUDE_CODE_SUBAGENT_MODEL=<cheaper model> plus CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1 (CC 2.1.257+; without FORCE the variable is only a default that agent definitions and per-spawn models override).",
                 calls.len(),
                 js_math_round(100.0 * no_ws / subagent_reqs.len() as f64),
                 js_to_fixed_str(usd, 2)
