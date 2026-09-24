@@ -32,6 +32,9 @@ agent-lens-export-*.json
 .claude/settings.local.json
 # ai-maestro-janitor runtime state (per-session, regeneratable — never commit)
 .claude/janitor/
+# Machine-private LOCAL-scope TRDD corpus (ai-maestro#163). Unlike
+# project/memory/, these cards are machine-specific and must never be committed.
+.claude/local/
 .janitor/
 # Agent reports (may contain private paths/tokens — never commit)
 /reports/
