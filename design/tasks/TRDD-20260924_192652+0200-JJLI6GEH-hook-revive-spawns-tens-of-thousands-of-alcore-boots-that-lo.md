@@ -1,10 +1,10 @@
 ---
 trdd-id: JJLI6GEH
-title: hook-revive spawns tens of thousands of alcore boots that load the span store before the pid lock
+title: A DuckDB OOM in the boot card restore crash-looped alcore through hook-revive for most of two weeks
 column: todo
 status: tasked
 created: 2026-09-24T19:26:52+0200
-updated: 2026-09-24T19:26:52+0200
+updated: 2026-09-24T19:39:56+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -24,3 +24,16 @@ OWNER-ADJACENT evidence, orchestrator, 2026-09-24, measured over the whole ~/.ag
 ## Approval log
 
 - 2026-09-24T19:26:52+0200 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+
+## STATE
+
+2026-09-24T19:37:34+0200 -- The pid lock runs BEFORE the span load (alcore.rs:192 vs :227): this card's original open question is answered and its premise refuted (see reports/JJLI6GEH/20260924_193521+0200-boot-storm-investigation.md, read in full). Real chain: a failed hook POST (server dead/unreachable) triggers reviveDaemonDetached() (src/cli/hookHandlers.ts), gated only by a 15s file-lock debounce with no health probe -> the new alcore wins the pid lock via dead-takeover (pid_lock.rs::claim, prior pid not alive) -> the synchronous boot sweep (log_reader::start_sweeper, runs before any listener binds) bulk-upserts session cards into card_store's DuckDB handle hard-capped at memory_limit=256MiB (card_store.rs:82) against a 238MB on-disk cards.duckdb -> the upsert .expect() panics on a DuckDB Out-Of-Memory error (card_store.rs:168) -> start_sweeper maps the dropped boot_tx channel to Err("log-sweeper died during the boot sweep") (log_reader.rs:1411) -> alcore.rs exits(1) (alcore.rs:291-294) before ever binding a listener. MEASURED over the whole ~/.agentlens/server.log (335,230 lines at investigation time): 40,735 boot-provenance lines, only 53 (about 0.13 percent) ever printed a listening line; the first refusal is at line 2,433 of 335,161, i.e. near the very start of the log's 14-day span, so the crash loop ran for most of that span until it stopped on its own. Verified by line-number re-check (this update): the last crash-loop panic sits around server.log line 324,018, a manual server-restart boot at line ~324,027 succeeds (restores 31,165 session cards, then binds listeners), and all 48 RSS-HARD-CAP exits (TRDD-WKLD508O) sit strictly after that line (0 before, 48 after) -- i.e. they belong entirely to the healthy tail, not the crash loop. Two defects to fix, tracked below.
+
+## Fixes needed
+
+- [ ] (a) A DuckDB error in the boot-time card restore must not panic the process (card_store.rs:168's .expect on the upsert) -- propagate it as a recoverable Result instead, and size memory_limit (card_store.rs:82, currently 256MiB) to the actual store; the same undersized limit also caused TRDD-TWDGR75R's cards_json OOM.
+- [ ] (b) hook-revive (src/cli/hookHandlers.ts::reviveDaemonDetached) needs crash-loop backoff -- after N consecutive boots that die before ever binding a listener, stop reviving and surface a status line instead of relaunching every ~15s forever.
+
+## Open questions
+
+What ended the storm is UNKNOWN -- server.log carries no per-line timestamps. Candidates, none checked: a deploy that day, cards.duckdb being rebuilt/vacuumed, or a card_store code change. Also open: whether spans/cards for the 2026-09-10 -> end-of-storm window are recoverable by re-scanning the local Claude/Codex/Copilot transcripts -- OTLP-only data from that window was never ingested, since the boot sweep never got far enough to start the OTLP listener.
