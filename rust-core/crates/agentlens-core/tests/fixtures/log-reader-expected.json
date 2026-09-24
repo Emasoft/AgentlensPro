@@ -20,7 +20,7 @@
    "outputTokens": 18,
    "cacheReadTokens": 5100,
    "cacheCreateTokens": 200,
-   "cacheCreate1hTokens": 0,
+   "cacheCreate1hTokens": 150,
    "cacheHitRate": 0.9306569343065694,
    "durationMs": 7000,
    "startTime": "2026-08-01T10:00:00.000Z",
@@ -190,7 +190,7 @@
    "backgroundSpans": [],
    "loopSignals": [],
    "peakContextPerTurn": 5300,
-   "speedBlendedCostUsd": 0.005575000000000001
+   "speedBlendedCostUsd": 0.006137500000000001
   },
   "agent-abc": {
    "sessionId": "agent-abc",
@@ -439,7 +439,7 @@
    "outputTokens": 18,
    "cacheReadTokens": 5100,
    "cacheCreateTokens": 200,
-   "cacheCreate1hTokens": 0,
+   "cacheCreate1hTokens": 150,
    "cacheHitRate": 0.9306569343065694,
    "durationMs": 7000,
    "startTime": "2026-08-01T10:00:00.000Z",
@@ -489,7 +489,7 @@
    "backgroundSpans": [],
    "loopSignals": [],
    "peakContextPerTurn": 5300,
-   "speedBlendedCostUsd": 0.005575000000000001,
+   "speedBlendedCostUsd": 0.006137500000000001,
    "timelineTruncatedCount": 9,
    "timelineRetainedBytes": 0
   },

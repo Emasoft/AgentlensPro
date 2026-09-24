@@ -294,7 +294,7 @@ fn durable_state_round_trips_offsets_and_stripped_cards_and_skips_the_cold_resca
     let state = std::sync::Mutex::new(CoreState::open(&data.join("spans")));
     let mut tailer = LogTailer::default();
     let mut durable = DurableState::open(&data);
-    assert_eq!(durable.restore(&mut tailer, &mut state.lock().unwrap()).unwrap(), (0, 0, 0), "nothing persisted yet");
+    assert_eq!(durable.restore(&mut tailer, &mut state.lock().unwrap(), &env).unwrap(), (0, 0, 0), "nothing persisted yet");
     let (scanned, s) = tailer.sweep(&env, now);
     assert_eq!(s.full_reads, 5);
     state.lock().unwrap().ingest_scanned(scanned);
@@ -320,7 +320,7 @@ fn durable_state_round_trips_offsets_and_stripped_cards_and_skips_the_cold_resca
     let state2 = std::sync::Mutex::new(CoreState::open(&data.join("spans")));
     let mut tailer2 = LogTailer::default();
     let mut durable2 = DurableState::open(&data);
-    let (restored, imported, skipped) = durable2.restore(&mut tailer2, &mut state2.lock().unwrap()).unwrap();
+    let (restored, imported, skipped) = durable2.restore(&mut tailer2, &mut state2.lock().unwrap(), &env).unwrap();
     assert_eq!((restored, imported, skipped), (7, 5, 0));
     assert_eq!(state2.lock().unwrap().cards.len(), 7);
     let (scanned, s) = tailer2.sweep(&env, now);
@@ -358,7 +358,7 @@ fn durable_state_round_trips_offsets_and_stripped_cards_and_skips_the_cold_resca
     std::fs::write(&cp, cp_body.lines().next().unwrap().to_owned() + "\n").unwrap(); // shrunk
     let mut tailer3 = LogTailer::default();
     let mut durable3 = DurableState::open(&data);
-    let (_, imported, skipped) = durable3.restore(&mut tailer3, &mut CoreState::open(&data.join("spans"))).unwrap();
+    let (_, imported, skipped) = durable3.restore(&mut tailer3, &mut CoreState::open(&data.join("spans")), &env).unwrap();
     // Per-case first: the tuple alone says "one file that should have skipped did not" without
     // saying WHICH, and guessing between the two cost a full CI round-trip once already.
     assert!(!tailer3.file_state.contains_key(&codex), "rotated file was resumed");
@@ -369,7 +369,7 @@ fn durable_state_round_trips_offsets_and_stripped_cards_and_skips_the_cold_resca
     std::fs::write(data.join("log-delta-version.json"), "{\"v\":1}").unwrap();
     let mut tailer4 = LogTailer::default();
     let mut st4 = CoreState::open(&data.join("spans"));
-    assert_eq!(DurableState::open(&data).restore(&mut tailer4, &mut st4).unwrap(), (0, 0, 0));
+    assert_eq!(DurableState::open(&data).restore(&mut tailer4, &mut st4, &env).unwrap(), (0, 0, 0));
     assert!(st4.cards.is_empty() && tailer4.file_state.is_empty());
 }
 
@@ -591,61 +591,134 @@ fn cache_1h_tier_counts_a_repeated_message_id_once_not_once_per_content_block() 
     assert!(parsed.card.cache_create_1h_tokens <= parsed.card.cache_create_tokens);
 }
 
-/// TRDD-ORGJ0E3G's actual fix: bumping `LOG_INGEST_VERSION` is what makes a stale-schema card
-/// (one built before `cacheCreate1hTokens` existed) get rebuilt at all — the review flagged that
-/// neither `cache_1h_tier_round_trips_…` nor `cache_1h_tier_counts_a_repeated_message_id_…`
-/// above exercises the RESTART path itself (they only prove a fresh parse computes the field
-/// correctly, which was never in doubt). This test exercises the restart mechanism directly:
-/// stamp the version file back one below `LOG_INGEST_VERSION`, confirm `restore()` throws the
-/// old cards away instead of resurrecting them, and confirm the resulting empty `file_state`
-/// makes the next sweep cold-read EVERY discovered file — including the ones that never
-/// changed, which the sibling `durable_state_round_trips_…` test's Run 2 proves are otherwise
-/// skipped forever by the `unchanged()` gate.
+/// TRDD-ORGJ0E3G's actual fix, replacing the 7→8 whole-corpus version bump the review rejected
+/// (bumping the version makes `restore()` discard EVERY card on a mismatch, and the cold rescan
+/// that follows only rebuilds cards from transcripts STILL ON DISK — a session whose transcript
+/// was already deleted or rotated would vanish from the dashboard permanently). These three tests
+/// exercise the targeted mechanism `restore()` uses instead: a card missing `cacheCreate1hTokens`
+/// gets its file's saved offset dropped ONLY when that file still exists, forcing exactly one
+/// re-parse of that one file — every card is kept regardless, and an already-current card is
+/// left completely alone.
 #[test]
-fn a_stale_log_ingest_version_forces_one_full_cold_rescan_that_backfills_every_card() {
-    let home = scratch_home("staleversion");
+fn restore_reparses_once_a_stale_card_whose_file_still_exists() {
+    let home = scratch_home("reparse-exists");
     let env = Env { home: home.clone(), platform: Platform::Darwin, vars: HashMap::new() };
-    let data = std::env::temp_dir().join(format!("al-staleversion-{}", std::process::id()));
+    let data = std::env::temp_dir().join(format!("al-reparse-exists-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&data);
     std::fs::create_dir_all(&data).unwrap();
     let now = 1_785_578_400_000 + 600_000;
 
-    // Run 1: a normal boot + forced save at the CURRENT version, exactly as a graceful stop does.
+    // Run 1: a normal boot + forced save — the parent card is built by the CURRENT parser, so it
+    // already carries cacheCreate1hTokens (the fixture transcript writes an ephemeral_1h split).
     let state = std::sync::Mutex::new(CoreState::open(&data.join("spans")));
     let mut tailer = LogTailer::default();
     let mut durable = DurableState::open(&data);
-    durable.restore(&mut tailer, &mut state.lock().unwrap()).unwrap();
+    durable.restore(&mut tailer, &mut state.lock().unwrap(), &env).unwrap();
     let (scanned, _) = tailer.sweep(&env, now);
     state.lock().unwrap().ingest_scanned(scanned);
     durable.mark_dirty();
     durable.tick(&tailer, &state, true);
-    assert_eq!(
-        std::fs::read_to_string(data.join("log-delta-version.json")).unwrap(),
-        format!("{{\"v\":{LOG_INGEST_VERSION}}}")
-    );
 
-    // Simulate a card built by an OLDER binary — the actual TRDD-ORGJ0E3G failure mode: the
-    // persisted delta logs predate `cacheCreate1hTokens`. Nothing else changes: no transcript
-    // touched, no mtime bumped — exactly the "idle session, unchanged file" shape the bug was
-    // about, reproduced by stamping the version back one below current.
-    std::fs::write(data.join("log-delta-version.json"), format!("{{\"v\":{}}}", LOG_INGEST_VERSION - 1)).unwrap();
+    let parent_id = "cccccccc-1111-2222-3333-444444444444";
+    let mut cards = DeltaLog::new(&data, "log-sessions").load().unwrap();
+    let original_1h = cards[parent_id]["cacheCreate1hTokens"].as_f64().unwrap();
+    assert!(original_1h > 0.0, "fixture must actually exercise the 1h tier for this test to mean anything");
+    // Simulate a card persisted by a PRE-FIX binary: strip the field.
+    cards.get_mut(parent_id).unwrap().as_object_mut().unwrap().remove("cacheCreate1hTokens");
+    DeltaLog::new(&data, "log-sessions").save(&cards).unwrap();
 
-    // Run 2: restore() must see the stale stamp and restore NOTHING — not even the cards it has
-    // on disk — which is what leaves file_state empty so the boot sweep cold-reads everything.
+    // Run 2: restore() must keep the card (never discard it) but drop ONLY this file's offset.
     let state2 = std::sync::Mutex::new(CoreState::open(&data.join("spans2")));
     let mut tailer2 = LogTailer::default();
     let mut durable2 = DurableState::open(&data);
-    let (restored, imported, skipped) = durable2.restore(&mut tailer2, &mut state2.lock().unwrap()).unwrap();
-    assert_eq!((restored, imported, skipped), (0, 0, 0), "a stale version must restore nothing, not stale cards");
-    assert!(state2.lock().unwrap().cards.is_empty(), "no pre-fix card may survive into the new run");
-
-    // The boot sweep now full-reads EVERY discovered file — including the 4 that never changed
-    // and would otherwise be skipped forever by the unchanged() gate — and every rebuilt card
-    // carries the field a stale snapshot would have been missing.
-    let (scanned, s) = tailer2.sweep(&env, now);
-    assert_eq!(s.full_reads, 5, "every discovered file must cold-read, not just the ones that changed");
+    let (restored, imported, skipped) = durable2.restore(&mut tailer2, &mut state2.lock().unwrap(), &env).unwrap();
+    assert_eq!(restored, 7, "every card is kept, not just the ones missing the field");
+    assert_eq!((imported, skipped), (4, 0), "the flagged file's offset is dropped; the other 4 import normally");
     assert!(
-        scanned.iter().flat_map(|sc| &sc.cards).all(|c| c.get("cacheCreate1hTokens").is_some()),
-        "every rebuilt card must carry the field a stale snapshot would have been missing"
+        state2.lock().unwrap().cards.get(parent_id).unwrap().get("cacheCreate1hTokens").is_none(),
+        "the card is kept AS RESTORED — the field is backfilled by the next sweep, not here"
     );
+
+    // The boot sweep re-parses ONLY the flagged file from 0 — not the other 4.
+    let (scanned, s) = tailer2.sweep(&env, now);
+    assert_eq!(s.full_reads, 1, "only the one file missing the field is cold-reparsed");
+    state2.lock().unwrap().ingest_scanned(scanned);
+    let rebuilt = state2.lock().unwrap().cards.get(parent_id).unwrap().clone();
+    assert_eq!(rebuilt["cacheCreate1hTokens"].as_f64().unwrap(), original_1h, "the field is rebuilt with the correct value");
 }
+
+#[test]
+fn restore_keeps_a_stale_card_untouched_when_its_file_is_gone() {
+    let home = scratch_home("reparse-gone");
+    let env = Env { home: home.clone(), platform: Platform::Darwin, vars: HashMap::new() };
+    let data = std::env::temp_dir().join(format!("al-reparse-gone-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&data);
+    std::fs::create_dir_all(&data).unwrap();
+    let now = 1_785_578_400_000 + 600_000;
+
+    let state = std::sync::Mutex::new(CoreState::open(&data.join("spans")));
+    let mut tailer = LogTailer::default();
+    let mut durable = DurableState::open(&data);
+    durable.restore(&mut tailer, &mut state.lock().unwrap(), &env).unwrap();
+    let (scanned, _) = tailer.sweep(&env, now);
+    state.lock().unwrap().ingest_scanned(scanned);
+    durable.mark_dirty();
+    durable.tick(&tailer, &state, true);
+
+    let parent_id = "cccccccc-1111-2222-3333-444444444444";
+    let mut cards = DeltaLog::new(&data, "log-sessions").load().unwrap();
+    cards.get_mut(parent_id).unwrap().as_object_mut().unwrap().remove("cacheCreate1hTokens");
+    DeltaLog::new(&data, "log-sessions").save(&cards).unwrap();
+
+    // The whole point: the transcript this card came from is gone before the restart — exactly
+    // the "Claude Code's own cleanupPeriodDays already deleted it" case a version bump would have
+    // thrown away entirely (the cold rescan it triggers can only see files still on disk).
+    std::fs::remove_file(home.join(CLAUDE_REL)).unwrap();
+
+    let state2 = std::sync::Mutex::new(CoreState::open(&data.join("spans2")));
+    let mut tailer2 = LogTailer::default();
+    let mut durable2 = DurableState::open(&data);
+    let (restored, _imported, _skipped) = durable2.restore(&mut tailer2, &mut state2.lock().unwrap(), &env).unwrap();
+    assert_eq!(restored, 7, "the card survives even though its file is gone");
+    let kept = state2.lock().unwrap().cards.get(parent_id).unwrap().clone();
+    assert!(kept.get("cacheCreate1hTokens").is_none(), "no file to rebuild from, so the card is left exactly as restored");
+    assert_eq!(kept["turns"], cards[parent_id]["turns"], "no other field was touched");
+
+    // The boot sweep discovers only 4 files now (one deleted) and force-rereads none of them —
+    // the deleted file was never flagged for reparse in the first place.
+    let (scanned, s) = tailer2.sweep(&env, now);
+    assert_eq!(s.files, 4);
+    assert_eq!(s.full_reads, 0, "nothing is force-reread; the missing file is correctly left alone");
+    assert!(scanned.is_empty());
+}
+
+#[test]
+fn restore_does_not_reparse_a_card_that_already_has_the_field() {
+    let home = scratch_home("reparse-fresh");
+    let env = Env { home: home.clone(), platform: Platform::Darwin, vars: HashMap::new() };
+    let data = std::env::temp_dir().join(format!("al-reparse-fresh-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&data);
+    std::fs::create_dir_all(&data).unwrap();
+    let now = 1_785_578_400_000 + 600_000;
+
+    let state = std::sync::Mutex::new(CoreState::open(&data.join("spans")));
+    let mut tailer = LogTailer::default();
+    let mut durable = DurableState::open(&data);
+    durable.restore(&mut tailer, &mut state.lock().unwrap(), &env).unwrap();
+    let (scanned, _) = tailer.sweep(&env, now);
+    state.lock().unwrap().ingest_scanned(scanned);
+    durable.mark_dirty();
+    durable.tick(&tailer, &state, true);
+
+    // Run 2: nothing stripped, nothing changed on disk — every card the current parser wrote
+    // already carries cacheCreate1hTokens, so restore() must not drop any offset.
+    let state2 = std::sync::Mutex::new(CoreState::open(&data.join("spans2")));
+    let mut tailer2 = LogTailer::default();
+    let mut durable2 = DurableState::open(&data);
+    let (restored, imported, skipped) = durable2.restore(&mut tailer2, &mut state2.lock().unwrap(), &env).unwrap();
+    assert_eq!((restored, imported, skipped), (7, 5, 0), "no offset dropped when every card already has the field");
+    let (scanned, s) = tailer2.sweep(&env, now);
+    assert_eq!(s.full_reads, 0, "not one file is force-reread when nothing is missing");
+    assert!(scanned.is_empty());
+}
+

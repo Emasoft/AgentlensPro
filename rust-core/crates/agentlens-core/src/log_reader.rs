@@ -602,16 +602,17 @@ fn read_lines_from(path: &Path, from: u64) -> std::io::Result<(Vec<Vec<u8>>, u64
 /// forces the cold rescan. Kept in lockstep with the TS constant by a test that reads the TS
 /// source (tests/log_reader_parity.rs) until the cutover retires the TS side.
 ///
-/// Bumped 7→8 for TRDD-ORGJ0E3G: a card restored from a pre-fix delta log (or a file whose stat
-/// is UNCHANGED since restart — `LogTailer::unchanged` skips it entirely, forever, until the
-/// transcript itself grows again) has no `cache_create_1h_tokens` and reads it as 0, permanently
-/// under-billing at the 5m rate. There is no per-field "this card predates feature X" marker on a
-/// Card — only this whole-corpus version stamp — so the bump is the one bounded, idempotent way
-/// to force every card to rebuild from its transcript exactly once: `restore()` treats a stale
-/// version as "restore nothing", so the next boot's sweep sees an EMPTY file_state and takes the
-/// `cold_scan` branch for every discovered file (see `LogTailer::sweep`'s "with NO state yet"
-/// doc comment), re-deriving `cache_create_1h_tokens` for every session in one pass.
-pub const LOG_INGEST_VERSION: u64 = 8;
+/// A 7→8 bump was proposed then RETRACTED for TRDD-ORGJ0E3G (a card missing
+/// `cache_create_1h_tokens` reads it as 0, permanently under-billing at the 5m rate): `restore()`
+/// treats a stale version as "restore nothing", and the cold rescan that follows only rebuilds
+/// cards from transcripts STILL ON DISK — so any session whose transcript Claude Code had already
+/// deleted (`cleanupPeriodDays`) or whose Codex/Copilot/OpenCode source had rotated would vanish
+/// from the dashboard permanently, an unbounded history loss to fix a bounded field. `restore()`
+/// now keeps every card unconditionally and, only for a card that is missing the field AND whose
+/// source file still exists, drops that ONE file's saved offset so the next sweep re-parses it
+/// from 0 and rebuilds just that card (see the `reparse_paths` set built in `restore()`). Version
+/// stays 7 — nothing about the delta-log SHAPE changed, so there is nothing to cold-rescan for.
+pub const LOG_INGEST_VERSION: u64 = 7;
 
 /// TS `PersistedFileState` — the offset record as it sits in `log-offsets.*.ndjson`.
 fn file_state_record(s: &FileState) -> Value {
@@ -727,7 +728,17 @@ impl DurableState {
     /// the map (timelines capped, then the global tier) and the offsets seed the tailer's gate.
     /// Returns (restored cards, imported offsets, skipped offsets); version-stale logs restore
     /// nothing and are tombstoned by the next save.
-    pub fn restore(&mut self, tailer: &mut LogTailer, state: &mut crate::CoreState) -> Result<(usize, usize, usize), String> {
+    ///
+    /// TRDD-ORGJ0E3G (targeted re-parse, replacing the 7→8 whole-corpus version bump this
+    /// superseded): a card whose file has since been deleted or rotated (Claude Code's own
+    /// `cleanupPeriodDays`, or a Codex/Copilot/OpenCode source that rotated) is the ONLY copy of
+    /// that session's history — a version bump that forces "restore nothing" throws it away
+    /// permanently, because the cold rescan only rebuilds cards from transcripts still on disk.
+    /// So EVERY restored card is always kept; only a card that is missing a field added by a
+    /// later parser (`cacheCreate1hTokens`, currently) AND whose source file still exists has its
+    /// saved read offset dropped here, forcing exactly one full re-parse of that one file on the
+    /// next sweep — never a whole-corpus rescan, never a card with no file left to rebuild it from.
+    pub fn restore(&mut self, tailer: &mut LogTailer, state: &mut crate::CoreState, env: &Env) -> Result<(usize, usize, usize), String> {
         let cards = self.cards.load()?;
         let offsets = self.offsets.load()?;
         if !self.version_is_current() {
@@ -737,8 +748,34 @@ impl DurableState {
             return Ok((0, 0, 0));
         }
         let restored = cards.len();
+        let mut reparse_paths: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
         if restored > 0 {
             let (max_entries, max_bytes) = (timeline_max_entries(), timeline_max_bytes());
+            // Review finding (TRDD-ORGJ0E3G): `discover_all` is a full filesystem walk. Gating it
+            // on `restored > 0` alone would run it on EVERY restart forever, not just the one-time
+            // migration — on a ~12k-file corpus that is a permanent tax paid long after every
+            // eligible card has already been backfilled. A cheap in-memory pre-scan of the already-
+            // loaded `cards` map (no disk I/O) decides whether the walk is needed AT ALL this boot;
+            // once every flagged card has been reparsed once, this is `false` forever after.
+            let any_candidates = cards.values().any(|c| {
+                c.as_object().is_some_and(|obj| {
+                    obj.get("source").and_then(Value::as_str) == Some("claude_code")
+                        && !obj.contains_key("cacheCreate1hTokens")
+                        && obj.get("cacheCreateTokens").and_then(Value::as_f64).unwrap_or(0.0) > 0.0
+                })
+            });
+            // Built once, not per-card: a walk of every discovered Claude transcript, keyed by
+            // the session id it backs — the same lookup `transcript_path_for` does per-call, done
+            // here in one pass since restore may see thousands of cards.
+            let claude_paths: HashMap<String, PathBuf> = if any_candidates {
+                discover_all(env)
+                    .into_iter()
+                    .filter(|f| f.source == LogSource::Claude)
+                    .map(|f| (session_id_for_file(&f.path, &f.source), f.path))
+                    .collect()
+            } else {
+                HashMap::new()
+            };
             // Bounded chunks, not one transaction over the whole corpus (TRDD-5JZQFVO8, 2026-09-08):
             // an open DuckDB transaction's rows are charged to card_store::MEMORY_LIMIT (256 MiB)
             // until COMMIT, and at 35,258 cards / 64 MB the pool filled part-way through, `put`
@@ -762,6 +799,18 @@ impl DurableState {
                             obj.insert("timelineTruncatedCount".into(), Value::from(prev + evicted as u64));
                         }
                     }
+                    // Missing the 1h-tier field (TRDD-ORGJ0E3G) and it actually wrote cache — flag
+                    // its file for a forced from-0 re-parse below, iff that file still exists.
+                    let needs_1h_field = obj.get("source").and_then(Value::as_str) == Some("claude_code")
+                        && !obj.contains_key("cacheCreate1hTokens")
+                        && obj.get("cacheCreateTokens").and_then(Value::as_f64).unwrap_or(0.0) > 0.0;
+                    if needs_1h_field {
+                        if let Some(session_id) = obj.get("sessionId").and_then(Value::as_str) {
+                            if let Some(path) = claude_paths.get(session_id) {
+                                reparse_paths.insert(path.clone());
+                            }
+                        }
+                    }
                 }
                 state.put_log_session(card);
                 if (n + 1) % RESTORE_CHUNK == 0 {
@@ -772,6 +821,20 @@ impl DurableState {
             state.cards.commit();
             state.demote_cold_timelines(crate::summarize::retention::timeline_hot_cards());
         }
+        // Drop only the flagged files' saved offsets — every other file's offset (and every card,
+        // flagged or not) is restored untouched, so a deleted/rotated source never loses history.
+        // Review finding: a flagged file's offset record is filtered out BEFORE import_file_state
+        // sees it, so it counts toward neither `imported` nor `skipped` — logged explicitly here
+        // so a boot log distinguishes "dropped for a targeted reparse" from "skipped: stat
+        // mismatch" instead of folding both into a lower, unexplained `imported`.
+        if !reparse_paths.is_empty() {
+            eprintln!("alcore: log-ingest targeted reparse — dropping {} file offset(s) missing cacheCreate1hTokens; rebuilt on the next sweep", reparse_paths.len());
+        }
+        let offsets: IndexMap<String, Value> = if reparse_paths.is_empty() {
+            offsets
+        } else {
+            offsets.into_iter().filter(|(p, _)| !reparse_paths.contains(&PathBuf::from(p))).collect()
+        };
         let (imported, skipped) = tailer.import_file_state(&offsets);
         Ok((restored, imported, skipped))
     }
@@ -1015,7 +1078,7 @@ pub fn start_sweeper(
             let mut durable = DurableState::open(&data_dir);
             let restored = {
                 let mut st = state.lock_timed().expect("core state");
-                durable.restore(&mut tailer, &mut st)
+                durable.restore(&mut tailer, &mut st, &env)
             };
             let (restored_cards, offsets_imported, offsets_skipped) = match restored {
                 Ok(r) => r,

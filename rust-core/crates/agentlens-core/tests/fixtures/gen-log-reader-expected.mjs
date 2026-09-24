@@ -34,13 +34,20 @@ const claude = w('.claude/projects/-Users-someone-proj/cccccccc-1111-2222-3333-4
   { type: 'user', timestamp: iso(0), cwd: '/Users/someone/proj', entrypoint: 'cli',
     message: { role: 'user', content: 'please fix the crash — só 𝄞 unicode here' } },
   { type: 'ai-title', aiTitle: 'Crash fix session' },
+  // TRDD-ORGJ0E3G: msg_1's cache_creation_input_tokens=200 carries a real Anthropic 5m/1h split
+  // (50 + 150), repeated verbatim on BOTH content-block rows of the same message.id — the real
+  // shape (Claude Code echoes one message's usage on every row) — so the parity fixture actually
+  // exercises cacheCreate1hTokens and its message-id dedup (200 total, 150 on the 1h tier; a
+  // per-row sum would wrongly double both to 400/300).
   { type: 'assistant', timestamp: iso(1000),
     message: { id: 'msg_1', model: 'claude-opus-5',
-      usage: { input_tokens: 100, output_tokens: 10, cache_read_input_tokens: 5000, cache_creation_input_tokens: 200 },
+      usage: { input_tokens: 100, output_tokens: 10, cache_read_input_tokens: 5000, cache_creation_input_tokens: 200,
+        cache_creation: { ephemeral_5m_input_tokens: 50, ephemeral_1h_input_tokens: 150 } },
       content: [{ type: 'text', text: 'looking at the loader 𝄞' }] } },
   { type: 'assistant', timestamp: iso(1500),
     message: { id: 'msg_1', model: 'claude-opus-5',
-      usage: { input_tokens: 100, output_tokens: 10, cache_read_input_tokens: 5000, cache_creation_input_tokens: 200 },
+      usage: { input_tokens: 100, output_tokens: 10, cache_read_input_tokens: 5000, cache_creation_input_tokens: 200,
+        cache_creation: { ephemeral_5m_input_tokens: 50, ephemeral_1h_input_tokens: 150 } },
       content: [{ type: 'tool_use', id: 'tu_read', name: 'Read', input: { file_path: '/Users/someone/proj/loader.ts' } }] } },
   { type: 'user', timestamp: iso(2000),
     message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'tu_read', content: 'line1\nline2 é' }] } },

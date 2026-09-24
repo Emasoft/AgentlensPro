@@ -17,18 +17,27 @@ All notable changes to AgentlensPro are documented here.
   accumulator (`agentlens-logscan`'s `Buckets`/`ClaudeAccum`) never extracted the 1h/5m split at
   all, so `mcp_tools.rs`'s `session_cost` and `log_reader.rs`'s `speedBlendedCostUsd` had nothing
   to pass `calc_token_cost_usd` but a hardcoded `0.0` for the 1h argument. Now `Card` carries a
-  `cache_create_1h_tokens` subtotal and both call sites use it. **Persisted rows ARE
-  reindexed on the next restart, once, via `LOG_INGEST_VERSION` 7→8** — a card restored from a
-  pre-fix delta log, or one whose backing transcript file hadn't changed since a restart (so the
-  sweeper's `unchanged()` short-circuit would otherwise skip it forever), reads a missing
-  `cacheCreate1hTokens` as `0` (the exact pre-fix behavior, never a crash or a wrong-direction
-  change) until then. The version bump forces one full cold rescan of every discovered log file
-  on the next boot, which rebuilds every card's `cacheCreate1hTokens` from its transcript. This
-  is the same defect *shape* as `TRDD-K4XQ7M2B` (unfixed as of this entry) but in the session
+  `cache_create_1h_tokens` subtotal and both call sites use it. **Persisted rows are backfilled by
+  a TARGETED re-parse, not a whole-corpus rescan** (`LOG_INGEST_VERSION` stays 7 — a proposed 7→8
+  bump was reviewed and rejected, see below): a card restored from a pre-fix delta log, or one
+  whose backing transcript file hadn't changed since a restart (so the sweeper's `unchanged()`
+  short-circuit would otherwise skip it forever), reads a missing `cacheCreate1hTokens` as `0`
+  (the exact pre-fix behavior, never a crash or a wrong-direction change) until `restore()` drops
+  that ONE file's saved offset and the next sweep re-parses it from 0. This is the same defect
+  *shape* as `TRDD-K4XQ7M2B` (unfixed as of this entry) but in the session
   **card**, not the per-call `api_calls` forensics row — the two are tracked and fixed separately.
   Other `calc_token_cost_usd` call sites that still pass a hardcoded `0.0` (e.g.
   `context_composition_index.rs`, `heartbeat_cost.rs`, `forensics_db.rs`) were left unaudited;
   each is a candidate for the same bug and out of this fix's scope.
+- **A `LOG_INGEST_VERSION` 7→8 bump (see above) was proposed for the backfill, then RETRACTED
+  before shipping.** `DurableState::restore()` treats a version mismatch as "restore nothing", and
+  the cold rescan that follows only rebuilds cards from transcripts still on disk — so any session
+  whose transcript Claude Code's own `cleanupPeriodDays` had already deleted, or whose
+  Codex/Copilot/OpenCode source had rotated, would have vanished from the dashboard permanently: an
+  unbounded history loss to backfill one bounded field. `restore()` now keeps every card
+  unconditionally, and only for a card that is missing `cacheCreate1hTokens` AND whose source file
+  still exists does it drop that one file's saved read offset — forcing exactly one targeted
+  re-parse instead of a whole-corpus cold rescan. `LOG_INGEST_VERSION` stays 7.
 - **`claude-sonnet-5` was being priced 50% high since 2026-09-01.** Its entry carried a
   `scheduledChange` reverting the $2/$10 per-MTok introductory rate to a $3/$15 sticker on that
   date; the reversion was withdrawn upstream (CC 2.1.243, 2026-08-25) but the flip had already

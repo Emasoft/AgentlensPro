@@ -44,10 +44,17 @@ function isDegradedRead(e: unknown): boolean {
 //       with its transcript twin — but persisted agent-* cards were built without it AND the offset
 //       resume would skip their unchanged files forever, freezing them as orphans. Bumping forces
 //       the cold rescan that relinks history.
-//   v8 (TRDD-ORGJ0E3G, 1h-tier cache-write cost): cards gained cacheCreate1hTokens; a restored
-//       card without it reads 0 forever (same "unchanged file → never re-touched" freeze as v7),
-//       under-billing at the 5m rate. Bumping forces the one-time cold rescan that backfills it.
-export const LOG_INGEST_VERSION = 8
+//   v8 was proposed then RETRACTED for TRDD-ORGJ0E3G (never shipped past this repo's own HEAD):
+//       cards gained cacheCreate1hTokens, and a restored card without it reads 0 forever — but a
+//       whole-corpus version bump makes restore() discard EVERY card on mismatch, and the cold
+//       rescan only rebuilds cards from transcripts STILL ON DISK. Any session whose transcript
+//       Claude Code had already deleted (cleanupPeriodDays) or whose Codex/Copilot/OpenCode
+//       source had rotated would vanish from the dashboard permanently — an unbounded loss to fix
+//       a bounded field-backfill. The Rust restore() (log_reader.rs DurableState::restore, the
+//       only LIVE restore path — the TS server was retired in 567fc5c2) instead keeps every card
+//       and drops the saved read offset of ONLY the file behind a card that is missing the field
+//       and still exists, forcing one targeted re-parse of that file alone. Version stays 7.
+export const LOG_INGEST_VERSION = 7
 
 // ── Log tail offsets ──────────────────────────────────────────────────────────
 
