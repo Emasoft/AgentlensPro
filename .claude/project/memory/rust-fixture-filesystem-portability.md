@@ -2,7 +2,7 @@
 name: rust-fixture-filesystem-portability
 description: "the test passes locally but fails only on CI / green on macOS red on ubuntu / the workspace test run aborts at the first failing binary so later tests never ran / report.premium.lastModel got claude-fable-5 expected claude-opus-5 / burnguard_parity fails on CI only / newest by mtime picked the wrong file / git checkout does not preserve mtimes / all fixture files share one timestamp / pinned mtimes are fixture data / durable_state_round_trips left (4, 1) right (3, 2) / log_reader_parity rotation not detected / remove_file then write did not change the inode / ext4 reuses a freed inode but APFS does not / how do I reproduce the CI filesystem condition locally / a fixture depending on unguaranteed filesystem behaviour"
 ocd: 2026-08-28
-lmd: 2026-08-28
+lmd: 2026-09-14
 metadata:
   node_type: memory
   type: component
@@ -14,7 +14,7 @@ publish-globally: false
 # rust-fixture-filesystem-portability
 
 
-^ATOM-2PSS-WR4Q [desc: "a parity fixture that depends on mtimes or inode allocation is green on APFS and red on ext4; commit the mtimes and rotate by rename", keywords: passes_locally_fails_on_CI green_on_macOS_red_on_ubuntu mtime_lost_on_checkout git_does_not_preserve_mtimes newest_by_mtime_wrong_file lastModel_fable-5_instead_of_opus-5 burnguard_parity inode_reused_after_delete ext4_inode_reuse APFS_never_reuses_inode rotation_not_detected imported_skipped_4_1_instead_of_3_2 log_reader_parity reproduce_CI_filesystem_locally fixture_depends_on_filesystem_behaviour, ocd: 2026-08-28, lmd: 2026-08-28]
+^ATOM-2PSS-WR4Q [desc: "a parity fixture that depends on mtimes or inode allocation is green on APFS and red on ext4; commit the mtimes and rotate by rename", keywords: passes_locally_fails_on_CI green_on_macOS_red_on_ubuntu mtime_lost_on_checkout git_does_not_preserve_mtimes newest_by_mtime_wrong_file lastModel_fable-5_instead_of_opus-5 burnguard_parity inode_reused_after_delete ext4_inode_reuse APFS_never_reuses_inode rotation_not_detected imported_skipped_4_1_instead_of_3_2 log_reader_parity reproduce_CI_filesystem_locally fixture_depends_on_filesystem_behaviour, ocd: 2026-08-28, lmd: 2026-09-14]
 
 Two CI-only failures on 2026-08-28, one root shape: **a fixture depended on filesystem
 behaviour macOS guarantees and Linux does not.** Both were invisible locally and cost a CI
@@ -29,6 +29,9 @@ keeps whichever readdir yielded first. Fix: the generator records every `touch()
 already used). Reproduce the CI condition with `touch -r <ref> {} +` — **`touch {} +` alone
 gives distinct nanosecond mtimes, not the exact ties CI has**, so it reproduces a different
 condition and can pass where CI fails.
+
+
+^ATOM-6SHT-ZX5M [desc: "ext4 reuses a freed inode immediately (APFS never does), so remove_file+write fools rotation detection; fix is write-then-rename. Inode reuse cannot be simulated locally, only CI proves it.", keywords: ext4_reuses_freed_inode_immediately APFS_never_reuses_inode remove_file_then_write_did_not_change_the_inode rotation_not_detected_log_reader_parity rec_ino_check_saw_nothing_rotated fix_write_then_rename_atomic inode_allocation_is_a_policy_not_a_guarantee cannot_reproduce_inode_reuse_locally CI_is_the_only_honest_oracle_for_filesystem_behaviour workspace_run_aborts_at_first_failing_binary_serial_fixes, ocd: 2026-09-14, lmd: 2026-09-14]
 
 **Inode allocation is a policy, not a guarantee.** A rotation set up as `remove_file` +
 `write` gets a fresh inode on APFS; **ext4 hands the just-freed number straight back**, so
