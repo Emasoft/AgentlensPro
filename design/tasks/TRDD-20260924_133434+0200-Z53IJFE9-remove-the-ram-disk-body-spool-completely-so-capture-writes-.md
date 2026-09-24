@@ -3,7 +3,7 @@ trdd-id: Z53IJFE9
 title: Remove the RAM-disk body spool completely so capture writes straight to the SSD bodies dir
 column: dev
 created: 2026-09-24T13:34:34+0200
-updated: 2026-09-24T13:36:26+0200
+updated: 2026-09-24T13:49:51+0200
 current-owner: emanuelesabetta
 created-by: emanuelesabetta
 task-type: refactor
@@ -14,6 +14,7 @@ mandated-by: none
 approved: true
 approval-judge: emanuelesabetta
 approval-datetime: 2026-09-24T13:34:34+0200
+implementation-commits: [b0ae59cb, 51e3c1b8]
 ---
 
 # Remove the RAM-disk body spool completely so capture writes straight to the SSD bodies dir
@@ -28,6 +29,11 @@ OWNER DIRECTIVE (verbatim, 2026-09-24): "i told you to remove the spool complete
 No earlier card recorded a removal order; the last recorded directive was the 2026-08-29 redesign order on TRDD-5YL1OQV1. Its two requirements still bind the SSD dir and are carried here verbatim: "no data must ever be lost! And the digestion must proceed in background at all times so after a while, if the telemetry stream slow down, the spool is emptied."
 Incident that surfaced this: since the 2026-09-23 05:24 reboot the RAM disk was not mounted while `~/.claude/settings.json` still sent `OTEL_LOG_RAW_API_BODIES` to `/Volumes/AgentLensSpool/otel-bodies`; `~/.agentlens/otel-bodies` did not exist, so NO raw body was captured anywhere. The `com.agentlens.spool` LaunchAgent exits 78 because its plist bakes `/opt/homebrew/Cellar/node/26.5.0/bin/node`, which no longer exists (reports/spool-removal/20260924_132959+0200-measure.md).
 Cost of the decision, recorded so it is made with its cost: the spool existed to keep raw bodies off the SSD (TRDD-K3WDPR7M). Estimates disagree: `src/ramdisk.ts` header says ~21 MB/min; the review's estimate from August counts is ~2.6 GB/day (~1 TB/year). Both are estimates, not measurements.
+CORRECTION 2026-09-24: capture had been OFF because ~/.agentlens/config.json was absent (default false), so --install-otel never wrote the SSD path and the settings.json value was a leftover from an earlier state; the only toggle that turned capture on (agentlenspro config set captureRawBodies on) unconditionally mounted the RAM disk. Commit b0ae59cb (capture-toggle step) removed that mount from the ON path.
+CORRECTION 2026-09-24: raw-body capture has been ON since about 13:45 today; ~/.claude/settings.json now names ~/.agentlens/otel-bodies; bodies land at ~14 MB/min (~20 GB/day SSD writes — the old RAM-disk code's own estimate was 30-35 GB/day). Already-running Claude Code sessions picked up the change without a restart.
+CORRECTION 2026-09-24: until step B lands, the drain is still the legacy hourly pass gated at 72 h / 8 GB — bodies are captured but not yet ingested promptly.
+ADVISOR VERDICT 2026-09-24 (reports/cc-alignment/20260924_134351+0200-advisor-verdict.md, section 2) on step B: B-1 — persist fsynced_parts across ticks instead of recomputing per tick (parts are immutable), keep the full fsync barrier over every part once the RAM spool is gone. B-2 — replace the size/mtime cross-tick tracker with a simple 10 s max_age cutoff; the existing parse-then-verify gate already handles a file still being written. B-3 — check staged_body_bytes == 0 for an empty dir BEFORE the pass lock and open_store, not after.
+ADVISOR VERDICT 2026-09-24 (continued): the bodies_interval spawn-time arm must change from _ => 3600 to 60 once spool_dir_configured is gone, or the drain silently stays hourly. bodiesMaxAgeHours/bodiesMaxGb and the over-cap valve are dead once age is fixed and should be removed in step D, not documented. Before touching pass.rs semantics for B-1/B-2, check src/store/ingestPass.ts (the TS twin) and the parity fixtures under rust-core/crates/agentlens-core/tests/fixtures/ — CLAUDE.md warns bundle reachability alone doesn't prove a module dead.
 
 ## Steps
 

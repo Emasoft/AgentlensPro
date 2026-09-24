@@ -34,7 +34,7 @@ related: [ZW4APOPI, 5PUD8RKE]
   hold at the unit level; box 3 (a real `spool ensure` + `setup` race on this machine) was deliberately
   NOT run — it mutates the live RAM disk. Review decides whether that is acceptable evidence.
   `mount | grep -c AgentLensSpool` is 1 since the hand detach at 09:27.
-2026-09-24 — superseded by TRDD-Z53IJFE9 per the owner's 2026-09-24 directive to remove the spool completely; column left as-is, the owner decides.
+2026-09-24 — proposed superseded by TRDD-Z53IJFE9 (owner directive 2026-09-24); the column move is the owner's.
 
 ## Acceptance
 

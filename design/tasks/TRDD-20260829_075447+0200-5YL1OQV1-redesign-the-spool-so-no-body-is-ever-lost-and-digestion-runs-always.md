@@ -35,7 +35,7 @@ lose anything. (**"byte-identical" was overclaimed** in the first revision: file
 totals matched, which is not a checksum — `du` reports allocated blocks, so on one filesystem it is
 nearly a tautology. `cp -a` is very likely exact; it was not proven.) **That was a manual recovery
 of a symptom; this card is the cause.**
-2026-09-24 — superseded by TRDD-Z53IJFE9 per the owner's 2026-09-24 directive to remove the spool completely; column left as-is, the owner decides.
+2026-09-24 — proposed superseded by TRDD-Z53IJFE9 (owner directive 2026-09-24); the column move is the owner's.
 
 ## The constraint that makes this hard — state it before proposing anything
 

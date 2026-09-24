@@ -3,7 +3,7 @@ trdd-id: ZQQYRYBO
 title: Align AgentlensPro with Claude Code 2.1.253 to 2.1.281
 column: dev
 created: 2026-09-24T13:39:40+0200
-updated: 2026-09-24T13:39:40+0200
+updated: 2026-09-24T13:50:14+0200
 current-owner: emanuelesabetta
 created-by: emanuelesabetta
 task-type: refactor
@@ -14,6 +14,7 @@ mandated-by: none
 approved: true
 approval-judge: emanuelesabetta
 approval-datetime: 2026-09-24T13:39:40+0200
+implementation-commits: [92d8b369]
 ---
 
 # Align AgentlensPro with Claude Code 2.1.253 to 2.1.281
@@ -34,7 +35,7 @@ Reports (this plan was merged from these five, all in
 - `reports/cc-alignment/20260924_133105+0200-shipped-surface.md`
 - `reports/cc-alignment/20260924_133225+0200-2.1.253-281-plan.md` (the plan itself)
 
-Progress so far: I1+I2 (pricing) and I4 (Monitor) are coded in this dev pass, uncommitted.
+Progress so far: I1+I2 (pricing) are coded in this dev pass, uncommitted; I4 (Monitor) is committed (92d8b369).
 The rest not started.
 
 Out of scope here, owned elsewhere: the spool removal is TRDD-Z53IJFE9 and is
@@ -46,7 +47,7 @@ are also excluded.
 - [ ] I1 — CORRECTION — Add pricing for Opus 5.5, Opus 5.5 fast and Mythos 5.1 (MP F1 F4 F7 F8)
 - [ ] I2 — CORRECTION — Billable weight uses each model's real cache-read and cache-write rates (MP F2)
 - [ ] I3 — CORRECTION — Subagent review gate never fires: sidechain skip (HT-1)
-- [ ] I4 — CORRECTION — Monitor `persistent` removed in 2.1.271: fix the diagnostics skill (SS F1)
+- [x] I4 — CORRECTION — Monitor `persistent` removed in 2.1.271: fix the diagnostics skill (SS F1)
 - [ ] I5 — CORRECTION — `setup` overwrites the user's own `lean-worker` (SS F3)
 - [ ] I6 — CORRECTION — Cache causes and remediations gated on Claude Code version: effort, /login, MCP/plugins, idle TTL, subagent TTL (CC F1 F2 F3 T1, TTL prior; MP F5)
 - [ ] I7 — CORRECTION — Cache timeline: `thinking.display`, `DEFERRED_BUILTINS`, effort text, git anchor (CC D1 B1, HT 8, SS F4, MP F6)
@@ -85,3 +86,14 @@ are also excluded.
 ## Approval log
 
 - 2026-09-24T13:39:40+0200 — MANDATE issued by emanuelesabetta (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+
+## Advisor verdict
+
+Advisor verdict — 2026-09-24 (reports/cc-alignment/20260924_134351+0200-advisor-verdict.md), summarising sections 1 and 3:
+I6: read the CC version only from the bounded billing block, the transcript record, or the status-line version column, reusing compare_versions — never the timeline's unbounded AgentMeta regex, which would one day self-match a fixture quoting cc_version=.
+/login: certainty that the account actually changed is not decidable in the risk scanner (transcript-only); at >=2.1.273 report it ambiguous, full stop — do not attempt the account-registry join.
+I8: the context flag ({resumed|fork|teammate|subagent}) has no verified body source beyond cc_is_subagent — ship it optional, and word the note conditionally when the source can't be verified.
+I7: gate EFFORT_PARAM_CHANGED by model and version instead of re-ranking it after the other causes — its branch-order position is deliberate and must stay; the messages[0] git-anchor fix is settled and needs no further capture.
+I12: split into (a) registry pairing on request_body_id, unblocked now, and (b) store-side pairing via a persisted byte offset into index.jsonl, never truncated — (b) also waits on spool steps B and D landing in chores.rs/pass.rs.
+W-cache1 runs after W-cache2 because both regenerate the same timeline parity fixtures; running them in parallel would overwrite each other's output.
+Q3 recommendation: rename the shipped worker to agentlens-lean-worker rather than adding a second, drift-prone skip-if-different code path.

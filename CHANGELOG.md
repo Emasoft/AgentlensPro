@@ -23,6 +23,13 @@ All notable changes to AgentlensPro are documented here.
   rather than through whichever model happens to have a promo. Also regenerates
   `rust-core/.../pricing.json` and the pricing parity fixture, which had additionally been stale for
   `claude-fable-5-1`.
+- **The diagnostics skill armed `Monitor` with `persistent`, removed in Claude Code 2.1.271.**
+  Added a `check-no-monitor-persistent` guard.
+
+### Changed
+
+- **`config set captureRawBodies on` no longer mounts a RAM disk.** Bodies now write straight to
+  `~/.agentlens/otel-bodies`; the spool is being removed.
 
 ### Fixed (latent)
 
