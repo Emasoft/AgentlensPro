@@ -3,7 +3,7 @@ trdd-id: TWDGR75R
 title: A card-store OOM poisons the core lock and silently kills the log sweeper
 column: todo
 created: 2026-09-24T16:11:23+0200
-updated: 2026-09-24T17:14:11+0200
+updated: 2026-09-24T17:51:15+0200
 current-owner: emanuelesabetta
 created-by: emanuelesabetta
 task-type: bugfix
@@ -46,3 +46,5 @@ The full-table scan cannot exceed DuckDB's MEMORY_LIMIT at 2x today's card count
 ## VERDICT
 
 ## VERDICT (2026-09-24, reports/cc-alignment/20260924_164606+0200-cardstore-oom.md) — caused by the re-parse, not by row duplication. card_store.rs put() (lines 161-165) is a strict upsert on the session_id PRIMARY KEY: a re-parsed card for an already-seen session id REPLACES that row's card/last_active_ms/timeline_len in place, it never adds a row. A freshly parsed card is much larger than the restored form (cacheCreate1hTokens and other fields the persisted/stripped form on disk did not carry), so re-parsing ~8,900 transcripts roughly doubled cards.duckdb (215 MB live, un-reparsed, vs 430 MB after re-parse on the same corpus) and the FIRST cards_json() call (card_store.rs:218) exceeded DuckDB's 256 MiB buffer-pool limit. The deployed binary (a187815e build, no re-parse) ran the same cards_json() scan 26+ times on the un-re-parsed corpus without incident, and runs fine today at ~34.7k cards. Whether the 256 MiB ceiling is ALSO reachable by ordinary organic growth (no re-parse) is inferred, not verified — no run tested un-reparsed growth past today's corpus size.
+
+Cause strongly indicated; one unverified confound: the two binaries compared were separate builds and their DuckDB crate version and flags were not cross-checked; the larger-payload mechanism is inferred from file size, not from which fields grew.

@@ -3,7 +3,7 @@ trdd-id: Z53IJFE9
 title: Remove the RAM-disk body spool completely so capture writes straight to the SSD bodies dir
 column: dev
 created: 2026-09-24T13:34:34+0200
-updated: 2026-09-24T14:02:23+0200
+updated: 2026-09-24T17:51:46+0200
 current-owner: emanuelesabetta
 created-by: emanuelesabetta
 task-type: refactor
@@ -14,7 +14,7 @@ mandated-by: none
 approved: true
 approval-judge: emanuelesabetta
 approval-datetime: 2026-09-24T13:34:34+0200
-implementation-commits: [b0ae59cb]
+implementation-commits: [b0ae59cb, 470ffbb3]
 ---
 
 # Remove the RAM-disk body spool completely so capture writes straight to the SSD bodies dir
@@ -34,6 +34,8 @@ CORRECTION 2026-09-24: raw-body capture has been ON since about 13:45 today; ~/.
 CORRECTION 2026-09-24: until step B lands, the drain is still the legacy hourly pass gated at 72 h / 8 GB — bodies are captured but not yet ingested promptly.
 ADVISOR VERDICT 2026-09-24 (reports/cc-alignment/20260924_134351+0200-advisor-verdict.md, section 2) on step B: B-1 — persist fsynced_parts across ticks instead of recomputing per tick (parts are immutable), keep the barrier over every part, as pass.rs does today; do not narrow it to newly flushed parts. B-2 — replace the size/mtime cross-tick tracker with a simple 10 s max_age cutoff; the existing parse-then-verify gate already handles a file still being written. B-3 — check staged_body_bytes == 0 for an empty dir BEFORE the pass lock and open_store, not after.
 ADVISOR VERDICT 2026-09-24 (continued): the bodies_interval spawn-time arm must change from _ => 3600 to 60 once spool_dir_configured is gone, or the drain silently stays hourly. bodiesMaxAgeHours/bodiesMaxGb and the over-cap valve are dead once age is fixed and should be removed in step D, not documented. Before touching pass.rs semantics for B-1/B-2, check src/store/ingestPass.ts (the TS twin) and the parity fixtures under rust-core/crates/agentlens-core/tests/fixtures/ — CLAUDE.md warns bundle reachability alone doesn't prove a module dead.
+2026-09-24 — Step B is committed (470ffbb3: 60 s interval, 10 s age, fsync barrier kept with a persisted fsynced-parts set, empty-dir skip) and NOT deployed. Deploy is blocked on an isolated full-size measurement of: (a) the first drain of the ~2 GB backlog in ~/.agentlens/otel-bodies into a store that does not exist yet, (b) parquet parts written per hour at a 60 s cadence (nothing merges parts, advisor F8), (c) RSS with a pass every minute against the 2 GB cap; and the four step-B tests must be re-run on HEAD itself.
+A scratch git worktree /private/tmp/verify-z53ijfe9 from step B is still registered (git worktree list); removing it needs the owner.
 
 ## Steps
 
@@ -52,3 +54,11 @@ This machine's LaunchAgent: unload + move the plist out only after the owner say
 - [ ] with the producer stopped, the SSD dir drains to empty without operator action
 - [ ] a machine upgraded from a spool install ends with no spool path in settings, no spool LaunchAgent, and every spooled body in the store
 - [ ] no spool-specific symbol remains in src/ or rust-core/ (grep of the name list returns nothing outside history notes)
+
+## Step C checklist
+
+- [ ] the legacy-spoolDir refusal must drain a still-mounted spool before clearing spoolDir
+- [ ] OFF may throw before it clears spoolDir (configCli.ts ~206)
+- [ ] say "by default" for the 72 h / 8 GB limits in the printed text
+- [ ] update the printed drain description when step B ships
+- [ ] a test for the refusal message

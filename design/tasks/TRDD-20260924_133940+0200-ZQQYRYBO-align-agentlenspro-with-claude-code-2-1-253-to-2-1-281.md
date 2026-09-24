@@ -3,7 +3,7 @@ trdd-id: ZQQYRYBO
 title: Align AgentlensPro with Claude Code 2.1.253 to 2.1.281
 column: dev
 created: 2026-09-24T13:39:40+0200
-updated: 2026-09-24T14:02:11+0200
+updated: 2026-09-24T17:51:59+0200
 current-owner: emanuelesabetta
 created-by: emanuelesabetta
 task-type: refactor
@@ -14,7 +14,7 @@ mandated-by: none
 approved: true
 approval-judge: emanuelesabetta
 approval-datetime: 2026-09-24T13:39:40+0200
-implementation-commits: [92d8b369, b30b80d7]
+implementation-commits: [92d8b369, b30b80d7, 33189cdf, fc89382b, 0972f2e7]
 ---
 
 # Align AgentlensPro with Claude Code 2.1.253 to 2.1.281
@@ -50,7 +50,7 @@ are also excluded.
 - [x] I4 — CORRECTION — Monitor `persistent` removed in 2.1.271: fix the diagnostics skill (SS F1)
 - [ ] I5 — CORRECTION — `setup` overwrites the user's own `lean-worker` (SS F3)
 - [ ] I6 — CORRECTION — Cache causes and remediations gated on Claude Code version: effort, /login, MCP/plugins, idle TTL, subagent TTL (CC F1 F2 F3 T1, TTL prior; MP F5)
-- [ ] I7 — CORRECTION — Cache timeline: `thinking.display`, `DEFERRED_BUILTINS`, effort text, git anchor (CC D1 B1, HT 8, SS F4, MP F6)
+- [x] I7 — CORRECTION — Cache timeline: `thinking.display`, `DEFERRED_BUILTINS`, effort text, git anchor (CC D1 B1, HT 8, SS F4, MP F6)
 - [ ] I8 — CORRECTION — "Possibly the CC bug fixed in 2.1.X" note on causes from old versions (CC F4)
 - [ ] I9 — SILENT-MISS — Context classifier: `instructions` and `prompt_snapshot` attachments (HT-2)
 - [ ] I10 — SILENT-MISS — Read the harness's own miss cause from the status line (CC E1, TI 1.4)
