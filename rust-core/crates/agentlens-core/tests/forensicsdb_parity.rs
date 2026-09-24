@@ -294,7 +294,9 @@ fn the_custom_fns_are_callable_from_sql_and_coerce_like_js() {
     let w: f64 = conn
         .query_row("SELECT billable_weight(0, 0, ?1, 0, 0, 'gpt-4o')", [one_m], |r| r.get(0))
         .unwrap();
-    assert_eq!(w, 0.25, "cache read is 0.1x the INPUT rate, not the cacheRead column");
+    // gpt-4o's cacheReadPerMTok (1.25) is NOT 0.1x its input rate (2.50 -> 0.25) — billable_weight
+    // reads the model's own cacheReadPerMTok column, not a fixed multiple of the input rate.
+    assert_eq!(w, 1.25, "cache read must use the model's own cacheReadPerMTok, not 0.1x input");
 
     // NULL model → 0, never a throw and never a guessed rate.
     let w0: f64 = conn

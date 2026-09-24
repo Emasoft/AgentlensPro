@@ -26,7 +26,7 @@ use rusqlite::types::ValueRef;
 use rusqlite::{Connection, OpenFlags};
 use serde_json::Value;
 
-use crate::pricing::{calc_token_cost_usd, lookup_rates};
+use crate::pricing::{cache_write_1h_rate, calc_token_cost_usd, lookup_rates};
 
 /// `defaultForensicsDb()` / `defaultMainDb()`. Functions, not consts, for the same reason the TS
 /// gives: a module-level const freezes the path at load time and then ignores a `$DATA_DIR` set
@@ -167,10 +167,12 @@ fn arg_js_number(v: ValueRef<'_>) -> Option<f64> {
 // ── cost / weighting helpers (pure — shared by the index-time column AND the SQL fns) ───────────
 
 /// `billableWeight` — the tier-aware "what did this call really cost me" number. The expensive
-/// buckets dominate spend but hide in raw token counts: a cache write bills 1.25x (5m) / 2x (1h) the
-/// input rate and output ≈5x, so collapsing every bucket onto one comparable number is what lets a
-/// "worst config" ranking reflect dollars instead of token volume. 0 when the model's rates are
-/// unknown — fail-soft, never a throw on an unseen model id.
+/// buckets dominate spend but hide in raw token counts, and their multiples vary BY MODEL — Opus 5.5
+/// reads at 0.05x input, Fable/Mythos 5.1 at 0.025x, not the historical 0.1x — so each bucket is
+/// priced from the model's OWN table rates (never the hardcoded 0.1x/1.25x/2x multiples of the input
+/// rate, which overstated Opus 5.5 reads 2x and Fable/Mythos 5.1 reads 4x). Collapsing every bucket
+/// onto one comparable number is what lets a "worst config" ranking reflect dollars instead of token
+/// volume. 0 when the model's rates are unknown — fail-soft, never a throw on an unseen model id.
 ///
 /// `now_ms` is threaded in rather than read from the clock, matching every other `lookup_rates`
 /// call site in this crate. That is not a style choice: the rates table is dated, so a function that
@@ -188,11 +190,14 @@ pub fn billable_weight(
         return 0.0;
     };
     let input_rate = rates.input_per_mtok / 1_000_000.0;
+    let cache_read_rate = rates.cache_read_per_mtok / 1_000_000.0;
+    let cache_write_5m_rate = rates.cache_write_per_mtok / 1_000_000.0;
+    let cache_write_1h_rate_val = cache_write_1h_rate(&rates) / 1_000_000.0;
     let output_rate = rates.output_per_mtok / 1_000_000.0;
     fin(input) * input_rate
-        + fin(cc5m) * 1.25 * input_rate
-        + fin(cc1h) * 2.0 * input_rate
-        + fin(cache_read) * 0.1 * input_rate
+        + fin(cc5m) * cache_write_5m_rate
+        + fin(cc1h) * cache_write_1h_rate_val
+        + fin(cache_read) * cache_read_rate
         + fin(output) * output_rate
 }
 

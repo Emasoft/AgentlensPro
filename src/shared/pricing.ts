@@ -9,7 +9,7 @@
 //   Request multipliers (pre Jun 1, 2026): https://docs.github.com/en/copilot/concepts/billing/copilot-requests
 //   Annual-plan multipliers (post Jun 1):  https://docs.github.com/en/copilot/reference/copilot-billing/model-multipliers-for-annual-plans
 //   Per-provider rate URLs: PRICING_SOURCES.md
-export const PRICING_LAST_UPDATED = '2026-09-04'
+export const PRICING_LAST_UPDATED = '2026-09-24'
 
 // Three Copilot billing modes (webview cost toggle):
 //   'token'          — new token-based AI Credits billing, effective Jun 1, 2026
@@ -72,7 +72,9 @@ export interface ModelRates {
 // TWO documented ways the harness's own `cost_usd` legitimately diverges from this table
 // (CC 2.1.239/2.1.243, TRDD-SIGBCMGL) — neither is an anomaly and neither should be "fixed" here:
 //  * a `modelPricing` managed setting substitutes an org's CONTRACTED per-model rates and discount
-//    multiplier into /cost, the status line, and telemetry cost figures;
+//    multiplier into /cost, the status line, and telemetry cost figures — as of 2.1.271 this
+//    multiplier can be ABOVE 1, up to 10 (a chargeback markup), so a harness-reported cost_usd can
+//    now be legitimately HIGHER than this table's list price, not only lower;
 //  * data-residency (US-only inference) workspaces carry a 1.1x premium the harness includes.
 // This table stays LIST price. Doctrine already prefers a harness-reported cost_usd over
 // recomputing; a diagnostic comparing the two must label a systematic org-wide offset as
@@ -183,6 +185,15 @@ export const RATES: Record<string, ModelRates> = {
   // Fast mode applies to Opus 5 + Opus 4.8 only (CC 2.1.219). $10 in / $50 out; cache write and read
   // stay at the standard 1.25x / 0.1x of THIS (premium) input rate, not of the standard one.
   'claude-opus-5-fast': { inputPerMTok: 10.00, cacheReadPerMTok: 1.00, cacheWritePerMTok: 12.50, outputPerMTok:  50.00, contextWindowTokens: 1_000_000, multiplier: 0,   multiplierAnnualPostJun1: 0 },
+  // Opus 5.5 (CC 2.1.280): $4 in / $20 out, $0.20/MTok cache read (0.05x — half of the usual 0.1x),
+  // $5 5m write (1.25x, derives $8 1h) — read live from the pricing page 2026-09-24. Was falling
+  // back to claude-opus-5's rates via the longest-prefix match, overstating cost ~2.08x (measured on
+  // session 7ab3ebfc: $33.98 at the wrong rate vs $16.35 here).
+  'claude-opus-5-5':      { inputPerMTok:  4.00, cacheReadPerMTok: 0.20, cacheWritePerMTok:  5.00, outputPerMTok:  20.00, contextWindowTokens: 1_000_000, multiplier: 0,   multiplierAnnualPostJun1: 0 },
+  // Opus 5.5 fast mode: $8/$40 sticker; the 0.40 cache read is ? INFERRED — the pricing page states
+  // "caching multipliers apply on top of fast mode pricing" but prints no fast-mode cache cell, so
+  // this applies Opus 5.5's own 0.05x read multiplier to the $8 fast input rate (8 * 0.05 = 0.40).
+  'claude-opus-5-5-fast': { inputPerMTok:  8.00, cacheReadPerMTok: 0.40, cacheWritePerMTok: 10.00, outputPerMTok:  40.00, contextWindowTokens: 1_000_000, multiplier: 0,   multiplierAnnualPostJun1: 0 },
   'claude-fable-5':      { inputPerMTok: 10.00, cacheReadPerMTok: 1.00, cacheWritePerMTok: 12.50, outputPerMTok:  50.00, contextWindowTokens: 1_000_000, multiplier: 0,   multiplierAnnualPostJun1: 0 },  // not yet in Copilot billing docs
   // claude-fable-5-1 (CC 2.1.257, 2026-09-01, the new default Fable): $10/$50 with a $0.25/MTok cache
   // READ — 2.5% of input, NOT the usual 10% — per the changelog (DOC-SOURCED; too few local samples to
@@ -191,6 +202,10 @@ export const RATES: Record<string, ModelRates> = {
   // so without it `claude-fable-5-1` silently billed at fable-5's $1.00 reads (4x high). Write stays
   // the 1.25x shape so the 1h tier derives to 2x like every other Anthropic entry.
   'claude-fable-5-1':    { inputPerMTok: 10.00, cacheReadPerMTok: 0.25, cacheWritePerMTok: 12.50, outputPerMTok:  50.00, contextWindowTokens: 1_000_000, multiplier: 0,   multiplierAnnualPostJun1: 0 },
+  // claude-mythos-5-1: same $10/$50 sticker as claude-mythos-5, with the same 2.5%-of-input cache
+  // read as fable-5-1 ($0.25, not the usual 10%). Limited availability, so likely zero local
+  // sessions today; without this the id prefix-matches `claude-mythos-5` and reads at $1.00 (4x high).
+  'claude-mythos-5-1':   { inputPerMTok: 10.00, cacheReadPerMTok: 0.25, cacheWritePerMTok: 12.50, outputPerMTok:  50.00, contextWindowTokens: 1_000_000, multiplier: 0,   multiplierAnnualPostJun1: 0 },
   // ── Google ─────────────────────────────────────────────────────────────────
   'gemini-2.5-pro':  { inputPerMTok: 1.25, cacheReadPerMTok: 0.125, cacheWritePerMTok: 0, outputPerMTok: 10.00, contextWindowTokens: 1_000_000, multiplier: 1,    multiplierAnnualPostJun1: 1,
                        inputAbove200kPerMTok: 2.50, outputAbove200kPerMTok: 15.00, cacheReadAbove200kPerMTok: 0.25, cacheWriteAbove200kPerMTok: 0 },

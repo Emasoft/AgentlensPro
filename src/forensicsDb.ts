@@ -16,7 +16,7 @@
 import * as fs from 'fs'
 import * as path from 'path'
 import { dataPath } from './dataDir'
-import { lookupRates } from './shared/pricing'
+import { lookupRates, cacheWrite1hRate } from './shared/pricing'
 
 // Functions, not consts: a module-level const freezes the path at import time, so it ignores a
 // $DATA_DIR / $AGENTLENS_DATA_DIR set after the module graph loads — which is exactly how the test
@@ -145,21 +145,27 @@ CREATE TABLE IF NOT EXISTS index_state (
 // ── Cost / weighting helpers (pure TS — shared by the index-time column AND the SQL custom fns) ──
 
 /** Tier-aware "how much did this call really cost me" number, in USD-ish weighted dollars. The
- *  expensive buckets dominate spend but hide in raw token counts: cache_creation is billed 1.25x
- *  (5m tier) / 2x (1h tier) the input rate, output ≈5x input. Collapsing every bucket to one
- *  comparable number lets "worst config" rankings reflect real dollars, not token volume. Returns 0
- *  when the model's rates are unknown (fail-soft — never throws on an unseen model id). */
+ *  expensive buckets dominate spend but hide in raw token counts, and their multiples vary BY MODEL
+ *  — Opus 5.5 reads at 0.05x input, Fable/Mythos 5.1 at 0.025x, not the historical 0.1x — so each
+ *  bucket is priced from the model's OWN table rates (never the hardcoded 0.1x/1.25x/2x multiples of
+ *  the input rate, which overstated Opus 5.5 reads 2x and Fable/Mythos 5.1 reads 4x). Collapsing
+ *  every bucket to one comparable number lets "worst config" rankings reflect real dollars, not
+ *  token volume. Returns 0 when the model's rates are unknown (fail-soft — never throws on an unseen
+ *  model id). */
 export function billableWeight(
   cc5m: number, cc1h: number, cacheRead: number, output: number, input: number, model: string | null | undefined,
 ): number {
   const rates = model ? lookupRates(model) : null
   if (!rates) { return 0 }
   const inputRate = rates.inputPerMTok / 1_000_000
+  const cacheReadRate = rates.cacheReadPerMTok / 1_000_000
+  const cacheWrite5mRate = rates.cacheWritePerMTok / 1_000_000
+  const cacheWrite1hRateVal = cacheWrite1hRate(rates) / 1_000_000
   const outputRate = rates.outputPerMTok / 1_000_000
   return num(input) * inputRate
-       + num(cc5m) * 1.25 * inputRate
-       + num(cc1h) * 2 * inputRate
-       + num(cacheRead) * 0.1 * inputRate
+       + num(cc5m) * cacheWrite5mRate
+       + num(cc1h) * cacheWrite1hRateVal
+       + num(cacheRead) * cacheReadRate
        + num(output) * outputRate
 }
 

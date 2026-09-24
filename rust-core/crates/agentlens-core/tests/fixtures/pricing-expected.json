@@ -3152,6 +3152,186 @@
    "cost": 3
   },
   {
+   "model": "claude-opus-5-5",
+   "i": 0,
+   "r": 0,
+   "w": 0,
+   "o": 0,
+   "w1h": 0,
+   "at": null,
+   "cost": 0
+  },
+  {
+   "model": "claude-opus-5-5",
+   "i": 1000,
+   "r": 0,
+   "w": 0,
+   "o": 100,
+   "w1h": 0,
+   "at": null,
+   "cost": 0.006
+  },
+  {
+   "model": "claude-opus-5-5",
+   "i": 1234,
+   "r": 50000,
+   "w": 3000,
+   "o": 456,
+   "w1h": 0,
+   "at": null,
+   "cost": 0.039056
+  },
+  {
+   "model": "claude-opus-5-5",
+   "i": 1234,
+   "r": 50000,
+   "w": 3000,
+   "o": 456,
+   "w1h": 1000,
+   "at": null,
+   "cost": 0.042055999999999996
+  },
+  {
+   "model": "claude-opus-5-5",
+   "i": 1234,
+   "r": 50000,
+   "w": 3000,
+   "o": 456,
+   "w1h": 99999,
+   "at": null,
+   "cost": 0.048056
+  },
+  {
+   "model": "claude-opus-5-5",
+   "i": 1234,
+   "r": 50000,
+   "w": 3000,
+   "o": 456,
+   "w1h": -5,
+   "at": null,
+   "cost": 0.039056
+  },
+  {
+   "model": "claude-opus-5-5",
+   "i": 250000,
+   "r": 300000,
+   "w": 210000,
+   "o": 201000,
+   "w1h": 205000,
+   "at": null,
+   "cost": 6.745
+  },
+  {
+   "model": "claude-opus-5-5",
+   "i": 150000,
+   "r": 150000,
+   "w": 0,
+   "o": 5000,
+   "w1h": 0,
+   "at": null,
+   "cost": 0.73
+  },
+  {
+   "model": "claude-opus-5-5",
+   "i": 250000,
+   "r": 0,
+   "w": 0,
+   "o": 10000,
+   "w1h": 0,
+   "at": null,
+   "cost": 1.2
+  },
+  {
+   "model": "claude-opus-5-5-fast",
+   "i": 0,
+   "r": 0,
+   "w": 0,
+   "o": 0,
+   "w1h": 0,
+   "at": null,
+   "cost": 0
+  },
+  {
+   "model": "claude-opus-5-5-fast",
+   "i": 1000,
+   "r": 0,
+   "w": 0,
+   "o": 100,
+   "w1h": 0,
+   "at": null,
+   "cost": 0.012
+  },
+  {
+   "model": "claude-opus-5-5-fast",
+   "i": 1234,
+   "r": 50000,
+   "w": 3000,
+   "o": 456,
+   "w1h": 0,
+   "at": null,
+   "cost": 0.078112
+  },
+  {
+   "model": "claude-opus-5-5-fast",
+   "i": 1234,
+   "r": 50000,
+   "w": 3000,
+   "o": 456,
+   "w1h": 1000,
+   "at": null,
+   "cost": 0.08411199999999999
+  },
+  {
+   "model": "claude-opus-5-5-fast",
+   "i": 1234,
+   "r": 50000,
+   "w": 3000,
+   "o": 456,
+   "w1h": 99999,
+   "at": null,
+   "cost": 0.096112
+  },
+  {
+   "model": "claude-opus-5-5-fast",
+   "i": 1234,
+   "r": 50000,
+   "w": 3000,
+   "o": 456,
+   "w1h": -5,
+   "at": null,
+   "cost": 0.078112
+  },
+  {
+   "model": "claude-opus-5-5-fast",
+   "i": 250000,
+   "r": 300000,
+   "w": 210000,
+   "o": 201000,
+   "w1h": 205000,
+   "at": null,
+   "cost": 13.49
+  },
+  {
+   "model": "claude-opus-5-5-fast",
+   "i": 150000,
+   "r": 150000,
+   "w": 0,
+   "o": 5000,
+   "w1h": 0,
+   "at": null,
+   "cost": 1.46
+  },
+  {
+   "model": "claude-opus-5-5-fast",
+   "i": 250000,
+   "r": 0,
+   "w": 0,
+   "o": 10000,
+   "w1h": 0,
+   "at": null,
+   "cost": 2.4
+  },
+  {
    "model": "claude-fable-5",
    "i": 0,
    "r": 0,
@@ -3323,6 +3503,96 @@
   },
   {
    "model": "claude-fable-5-1",
+   "i": 250000,
+   "r": 0,
+   "w": 0,
+   "o": 10000,
+   "w1h": 0,
+   "at": null,
+   "cost": 3
+  },
+  {
+   "model": "claude-mythos-5-1",
+   "i": 0,
+   "r": 0,
+   "w": 0,
+   "o": 0,
+   "w1h": 0,
+   "at": null,
+   "cost": 0
+  },
+  {
+   "model": "claude-mythos-5-1",
+   "i": 1000,
+   "r": 0,
+   "w": 0,
+   "o": 100,
+   "w1h": 0,
+   "at": null,
+   "cost": 0.015
+  },
+  {
+   "model": "claude-mythos-5-1",
+   "i": 1234,
+   "r": 50000,
+   "w": 3000,
+   "o": 456,
+   "w1h": 0,
+   "at": null,
+   "cost": 0.08514
+  },
+  {
+   "model": "claude-mythos-5-1",
+   "i": 1234,
+   "r": 50000,
+   "w": 3000,
+   "o": 456,
+   "w1h": 1000,
+   "at": null,
+   "cost": 0.09264
+  },
+  {
+   "model": "claude-mythos-5-1",
+   "i": 1234,
+   "r": 50000,
+   "w": 3000,
+   "o": 456,
+   "w1h": 99999,
+   "at": null,
+   "cost": 0.10764
+  },
+  {
+   "model": "claude-mythos-5-1",
+   "i": 1234,
+   "r": 50000,
+   "w": 3000,
+   "o": 456,
+   "w1h": -5,
+   "at": null,
+   "cost": 0.08514
+  },
+  {
+   "model": "claude-mythos-5-1",
+   "i": 250000,
+   "r": 300000,
+   "w": 210000,
+   "o": 201000,
+   "w1h": 205000,
+   "at": null,
+   "cost": 16.7875
+  },
+  {
+   "model": "claude-mythos-5-1",
+   "i": 150000,
+   "r": 150000,
+   "w": 0,
+   "o": 5000,
+   "w1h": 0,
+   "at": null,
+   "cost": 1.7875
+  },
+  {
+   "model": "claude-mythos-5-1",
    "i": 250000,
    "r": 0,
    "w": 0,

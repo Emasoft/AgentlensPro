@@ -107,6 +107,17 @@ suite('FAL Phase 1 — pure helpers', () => {
     assert.ok(billableWeight(1000, 500, 200, 50, 300, 'claude-opus-4-8') > 0)
   })
 
+  test('billableWeight prices cache read at the MODEL\'S own rate, not a fixed 0.1x — opus-5.5 reads at 0.05x', () => {
+    // opus-5-5: input $4, cc5m write $5 (=1.25x, matches the hardcoded 1.25 constant), cc1h write
+    // derives $8 (=2x, matches the hardcoded 2 constant), cache read $0.20 (=0.05x input, NOT the
+    // hardcoded 0.1x=$0.40). 1M tokens in every bucket isolates the read-rate difference: the old
+    // `cacheRead * 0.1 * inputRate` term gives 0.40, the model's real rate gives 0.20 — a 0.20 USD
+    // gap this test would miss if it only asserted `> 0`, which is why forensicsIndex.test.ts:105
+    // could not catch the bug F1/F2 describe.
+    const weight = billableWeight(1_000_000, 1_000_000, 1_000_000, 1_000_000, 1_000_000, 'claude-opus-5-5')
+    assert.ok(Math.abs(weight - 37.20) < 1e-9, `expected 37.20, got ${weight}`)
+  })
+
   test('computeFrontmatterFp is stable + differs when the rule/claudemd set differs', () => {
     const a = computeFrontmatterFp({ tools: [{ name: 'Bash' }], system: 'plain system' })
     const b = computeFrontmatterFp({ tools: [{ name: 'Bash' }], system: 'plain system' })

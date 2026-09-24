@@ -1,5 +1,5 @@
 import * as assert from 'assert'
-import { lookupRates, calcTokenCostUsd, applyScheduledChange, type ModelRates } from '../shared/pricing'
+import { lookupRates, calcTokenCostUsd, applyScheduledChange, cacheWrite1hRate, type ModelRates } from '../shared/pricing'
 
 suite('pricing', () => {
   test('lookupRates returns rates for known model', () => {
@@ -265,6 +265,38 @@ suite('pricing — claude-sonnet-5 (TRDD-ZK37VG4X spec 1)', () => {
     assert.strictEqual(rates!.inputPerMTok, 10.00)
     assert.strictEqual(rates!.outputPerMTok, 50.00)
     assert.notStrictEqual(rates!.cacheReadPerMTok, lookupRates('claude-fable-5')!.cacheReadPerMTok)
+  })
+
+  test('claude-opus-5-5 has its OWN entry and does not prefix-match onto opus-5 rates (CC 2.1.280)', () => {
+    // lookupRates prefix-matches a longer id onto a shorter family key, so without an explicit key
+    // opus-5-5 silently billed at claude-opus-5's $0.50 cache read — 2.5x the documented $0.20.
+    const rates = lookupRates('claude-opus-5-5')
+    assert.ok(rates)
+    assert.strictEqual(rates!.inputPerMTok, 4.00)
+    assert.strictEqual(rates!.cacheReadPerMTok, 0.20)
+    assert.strictEqual(rates!.cacheWritePerMTok, 5.00)
+    assert.strictEqual(rates!.outputPerMTok, 20.00)
+    assert.strictEqual(cacheWrite1hRate(rates!), 8.00)
+    assert.notStrictEqual(rates!.cacheReadPerMTok, lookupRates('claude-opus-5')!.cacheReadPerMTok)
+  })
+
+  test('claude-opus-5-5-fast has its OWN entry and does not prefix-match onto opus-5-5 or opus-5 standard rates', () => {
+    const rates = lookupRates('claude-opus-5-5-fast')
+    assert.ok(rates)
+    assert.strictEqual(rates!.inputPerMTok, 8.00)
+    assert.strictEqual(rates!.cacheReadPerMTok, 0.40)
+    assert.strictEqual(rates!.cacheWritePerMTok, 10.00)
+    assert.strictEqual(rates!.outputPerMTok, 40.00)
+    assert.notStrictEqual(rates!.inputPerMTok, lookupRates('claude-opus-5-5')!.inputPerMTok)
+  })
+
+  test('claude-mythos-5-1 has its OWN entry and does not prefix-match onto mythos-5 rates', () => {
+    const rates = lookupRates('claude-mythos-5-1')
+    assert.ok(rates)
+    assert.strictEqual(rates!.cacheReadPerMTok, 0.25)
+    assert.strictEqual(rates!.inputPerMTok, 10.00)
+    assert.strictEqual(rates!.outputPerMTok, 50.00)
+    assert.notStrictEqual(rates!.cacheReadPerMTok, lookupRates('claude-mythos-5')!.cacheReadPerMTok)
   })
 
   test('a dated claude-sonnet-5 model id normalizes onto the same entry', () => {

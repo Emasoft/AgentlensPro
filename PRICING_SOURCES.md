@@ -120,12 +120,15 @@ On `claude_code.llm_request` spans (per-API-call):
 - `ttft_ms` — time to first token in ms
 - `stop_reason` — e.g. `tool_use`, `end_turn`
 
-**Rates (USD per 1M tokens, verified 2026-06-08):**
+**Rates (USD per 1M tokens, verified 2026-06-08; opus-5-5/opus-5-5-fast/mythos-5-1 added 2026-09-24):**
 
 | Model                          | Input   | Cache Write (5m) | Cache Write (1h) | Cache Read | Output   |
 | ------------------------------ | ------- | ---------------- | ---------------- | ---------- | -------- |
+| `claude-opus-5-5`              | $4.00   | $5.00            | $8.00            | $0.20      | $20.00   |
+| `claude-opus-5-5-fast`         | $8.00   | $10.00           | $16.00           | $0.40      | $40.00   |
 | `claude-opus-5`                | $5.00   | $6.25            | $10.00           | $0.50      | $25.00   |
 | `claude-opus-5-fast`           | $10.00  | $12.50           | $20.00           | $1.00      | $50.00   |
+| `claude-mythos-5-1`            | $10.00  | $12.50           | $20.00           | $0.25      | $50.00   |
 | `claude-opus-4-8`              | $5.00   | $6.25            | $10.00           | $0.50      | $25.00   |
 | `claude-opus-4-7`              | $5.00   | $6.25            | $10.00           | $0.50      | $25.00   |
 | `claude-opus-4-6`              | $5.00   | $6.25            | $10.00           | $0.50      | $25.00   |
@@ -136,7 +139,7 @@ On `claude_code.llm_request` spans (per-API-call):
 | `claude-haiku-4-5`             | $1.00   | $1.25            | $2.00            | $0.10      | $5.00    |
 | `claude-opus-4-8` (fast, 2x)   | $10.00  | $12.50           | $20.00           | $1.00      | $50.00   |
 | `claude-opus-4-7` (fast, 6x)   | $30.00  | $37.50           | $60.00           | $3.00      | $150.00  |
-| `claude-opus-4-6` (fast, 6x)   | $30.00  | $37.50           | $60.00           | $3.00      | $150.00  |
+| `claude-opus-4-6` (fast — billed at STANDARD rates; pricing.ts:173-177) | $5.00 | $6.25 | $10.00 | $0.50 | $25.00 |
 
 **Tiered pricing — `claude-sonnet-4` only:**
 

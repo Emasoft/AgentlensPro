@@ -18,7 +18,7 @@
       "out": 0,
       "input": 0,
       "model": "claude-opus-5",
-      "value": 6.250000000000001
+      "value": 6.25
     },
     {
       "case": "cc1h only (2x)",
@@ -68,7 +68,7 @@
       "out": 0,
       "input": 0,
       "model": "gpt-4o",
-      "value": 0.25
+      "value": 1.25
     },
     {
       "case": "codex-mini cread only — same trap, 2.5x apart",
@@ -78,7 +78,7 @@
       "out": 0,
       "input": 0,
       "model": "codex-mini-latest",
-      "value": 0.15
+      "value": 0.375
     },
     {
       "case": "mythos-5 mixed",
@@ -89,6 +89,26 @@
       "input": 1000,
       "model": "claude-mythos-5",
       "value": 0.0935
+    },
+    {
+      "case": "opus-5-5 cread only — 0.05x input, NOT the hardcoded 0.1x",
+      "cc5m": 0,
+      "cc1h": 0,
+      "cread": 1000000,
+      "out": 0,
+      "input": 0,
+      "model": "claude-opus-5-5",
+      "value": 0.2
+    },
+    {
+      "case": "opus-5-5 all buckets mixed",
+      "cc5m": 1000,
+      "cc1h": 2000,
+      "cread": 30000,
+      "out": 400,
+      "input": 5000,
+      "model": "claude-opus-5-5",
+      "value": 0.055
     },
     {
       "case": "unknown model",

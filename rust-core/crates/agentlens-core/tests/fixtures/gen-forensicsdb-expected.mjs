@@ -38,10 +38,14 @@ const enc = (v) => {
 //    port. Every model used here is time-independent, so this oracle does not rot.
 //
 // 2. `gpt-4o` is INCLUDED specifically because its cacheRead rate (1.25) is NOT one tenth of its
-//    input rate (2.5 → 0.25). billableWeight deliberately weights cache reads at a flat 0.1x of the
-//    INPUT rate rather than reading `cacheReadPerMTok`, and on every Claude model those two happen
-//    to be equal — so a port that used the table's cacheRead column would agree everywhere and only
-//    diverge here, by 5x. Without this row that bug ships green.
+//    input rate (2.5 → 0.25). billableWeight reads each bucket's rate straight off the model's OWN
+//    table row (cacheReadPerMTok, cacheWritePerMTok, cacheWrite1hRate) rather than deriving it as a
+//    fixed multiple of the input rate — and on most Claude models the read rate DOES happen to equal
+//    0.1x input, so a port that hardcoded that multiple instead of reading the column would agree
+//    everywhere except here, by 5x. Without this row that regression ships green.
+// 3. `claude-opus-5-5` is INCLUDED for the same reason on a Claude model: its cache read is 0.05x
+//    input ($0.20 vs a hardcoded-0.1x $0.40) — a port still using the 0.1x constant disagrees here
+//    by 2x (2026-09-24 CC 2.1.253-281 alignment).
 const M = 1_000_000
 const bwCases = [
   // Each bucket alone, one MTok, so a swapped or dropped multiplier moves exactly one row.
@@ -56,6 +60,9 @@ const bwCases = [
   { case: 'codex-mini cread only — same trap, 2.5x apart', cc5m: 0, cc1h: 0, cread: M, out: 0, input: 0, model: 'codex-mini-latest' },
   // A second Claude model proves the rate is looked up per-model, not hardcoded to opus.
   { case: 'mythos-5 mixed', cc5m: 1000, cc1h: 1000, cread: 1000, out: 1000, input: 1000, model: 'claude-mythos-5' },
+  // The 0.1x-vs-table falsification on a Claude model (see note 3 above).
+  { case: 'opus-5-5 cread only — 0.05x input, NOT the hardcoded 0.1x', cc5m: 0, cc1h: 0, cread: M, out: 0, input: 0, model: 'claude-opus-5-5' },
+  { case: 'opus-5-5 all buckets mixed', cc5m: 1000, cc1h: 2000, cread: 30000, out: 400, input: 5000, model: 'claude-opus-5-5' },
   // Fail-soft: an unknown / absent model is 0, never a throw and never a guessed rate.
   { case: 'unknown model', cc5m: M, cc1h: M, cread: M, out: M, input: M, model: 'no-such-model-xyz' },
   { case: 'null model',    cc5m: M, cc1h: M, cread: M, out: M, input: M, model: null },
