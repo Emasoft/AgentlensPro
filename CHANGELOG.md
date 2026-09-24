@@ -23,7 +23,10 @@ All notable changes to AgentlensPro are documented here.
   whose backing transcript file hadn't changed since a restart (so the sweeper's `unchanged()`
   short-circuit would otherwise skip it forever), reads a missing `cacheCreate1hTokens` as `0`
   (the exact pre-fix behavior, never a crash or a wrong-direction change) until `restore()` drops
-  that ONE file's saved offset and the next sweep re-parses it from 0. This is the same defect
+  that ONE file's saved offset and the next sweep re-parses it from 0. Sessions last modified more
+  than 30 days before the upgrade are excluded from this re-parse (`REPARSE_MAX_AGE`) and keep the
+  5m-rate cache-write cost, so a cross-session total mixes tier-aware and 5m-rate cards (up to
+  ~10% under-read on 1h-tier sessions older than that bound). This is the same defect
   *shape* as `TRDD-K4XQ7M2B` (unfixed as of this entry) but in the session
   **card**, not the per-call `api_calls` forensics row — the two are tracked and fixed separately.
   Other `calc_token_cost_usd` call sites that still pass a hardcoded `0.0` (e.g.
