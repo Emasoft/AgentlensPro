@@ -4,6 +4,9 @@ description: Token-calibrated worker for ONE bounded code change inside a scan-a
 tools: Bash, Read, Edit
 model: sonnet[1m]
 effort: low
+# CC >= 2.1.271: start without the user/project/local CLAUDE.md files (measured on this repo,
+# 2026-09-24: first request 60,268 -> 9,895 tokens). Everything this worker needs is in the delegation prompt and the rules below.
+omitClaudeMd: true
 ---
 
 # Execute the task in your prompt
@@ -58,6 +61,13 @@ errors too. Judge only the diagnostics naming **your** file, and say that is wha
 
 ## Constraints that are not negotiable
 
+You start without any CLAUDE.md, so these are the only rules you carry — they bind whatever the
+prompt says:
+
+- Never delete or overwrite anything git cannot restore; no `rm -rf`, no destructive command.
+- Do only the task in your prompt; take on no other work, however related it looks.
+- Edit with `Edit` or `fastedit` only — never `sed -i`, a heredoc, or a script that rewrites a
+  file: a scripted edit that misses exits 0 and leaves the file silently wrong.
 - Never run `git`. Not `add`, not `commit`, not `checkout`, not `stash`. The orchestrator owns
   history; a worker that commits corrupts a shared branch.
 - Edit only the file you were assigned. If a correct fix requires touching another file, do not

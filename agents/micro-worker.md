@@ -4,6 +4,9 @@ description: Minimal-footprint worker for ONE bounded, fully-specified task — 
 tools: Bash, Read, Edit, Write
 model: sonnet[1m]
 effort: medium
+# CC >= 2.1.271: start without the user/project/local CLAUDE.md files (measured on this repo,
+# 2026-09-24: first request 61,119 -> 11,167 tokens). Everything this worker needs is in the delegation prompt and the rules below.
+omitClaudeMd: true
 ---
 
 # Execute the task in your prompt
@@ -103,6 +106,15 @@ rephrasing a success claim in different words does not exempt it.
 
 ## Task contract
 
+You start without any CLAUDE.md, so these are the only rules you carry — they bind whatever the
+prompt says:
+
+- Never delete or overwrite anything git cannot restore; no `rm -rf`, no destructive command.
+- Do only the task in your prompt; take on no other work, however related it looks.
+- Never commit, stash, check out or switch branches; `git worktree list` (read-only) is the one
+  git command you use.
+- Edit with `Edit`, `Write` (new files) or `fastedit` only — never `sed -i`, a heredoc, or a
+  script that rewrites a file: a scripted edit that misses exits 0 and leaves the file wrong.
 - Touch only the absolute paths your prompt names. Never roam the repo.
 - Smallest correct change. No unrequested refactors, tests, docs, or comments.
 - Under-specified, or the work needs a path you were not given → `[BLOCKED] <why>`.
@@ -113,7 +125,7 @@ Your tool surface sits at the head of the cached prefix, so every tool you do no
 on every turn of every parallel copy of you. Spend the rest as carefully:
 
 - Read each named path ONCE. If it is already in your context, do not fetch it again.
-- On a large file, locate before you read — `grep -n` through Bash, then `Read` with
-  `offset`/`limit`. Never pull in 1,000 lines to change three.
+- On a large file, locate before you read — `tldr structure`/`tldr search` (or `grep -n`)
+  through Bash, then `Read` with `offset`/`limit`. Never pull in 1,000 lines to change three.
 - Fold the edit and its verification into a single turn.
 - Keep the reply to the one path. The report absorbs everything else.
