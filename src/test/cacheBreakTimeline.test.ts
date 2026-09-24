@@ -348,6 +348,36 @@ suite('cacheBreakTimeline — TRDD-B9ERTBZ9 documented causes (env / git / param
     })
     const v = classify(req('main'), req('feature/x'))
     assert.strictEqual(v.cause, 'GIT_STATE_CHANGED')
+    assert.strictEqual(v.culpritLayer, 'message', 'msg0-anchored git region invalidates the MESSAGE layer only, not system')
+  })
+
+  test('GIT_STATE_CHANGED — the msg0 anchor STOPS at a second `# ` heading inside the SAME reminder (I7 revision 2, finding 3)', () => {
+    // Two injected reminders sharing one message: `# gitStatus` followed by `# Environment` inside
+    // the same <system-reminder> block. The git region must stop at that heading — swallowing the
+    // second reminder's content would make an unrelated env-block edit misfire as GIT_STATE_CHANGED.
+    const reminder = (branch: string, envProse: string) =>
+      `<system-reminder>\n# gitStatus\nCurrent branch: ${branch}\n\nMain branch: main\n# Environment\n${envProse}\n</system-reminder>`
+    const req = (branch: string, envProse: string): RawRequestForBreak => reqBody({
+      system: [{ text: 'no git snapshot in system text on this harness version', cache_control: CC }],
+      messages: [{ role: 'user', content: [{ type: 'text', text: reminder(branch, envProse), cache_control: CC }] }],
+    })
+    // Same branch, only the trailing `# Environment` prose (past the stop point) differs — the git
+    // region alone must be UNCHANGED, so this must NOT be claimed as GIT_STATE_CHANGED.
+    const v = classify(req('main', 'unrelated env prose A'), req('main', 'unrelated env prose B'))
+    assert.notStrictEqual(v.cause, 'GIT_STATE_CHANGED', `git region must stop at the heading, got: ${v.cause} / ${v.culpritSummary}`)
+  })
+
+  test('GIT_STATE_CHANGED does NOT fire across mismatched anchors with equal git state — a session spanning the CC 2.1.281 layout change (I7 revision 2, finding 2)', () => {
+    // prev carries the git snapshot in SYSTEM TEXT (older captures); cur carries the SAME branch in
+    // the msg[0] `# gitStatus` reminder (CC 2.1.281+). The two spellings hash to different bytes even
+    // though the git state (branch `main`) did not change — comparing across anchors would misfire on
+    // the wording, not a real git-state change.
+    const a = sysReq(ENV_SDK('/Users/tester/proj-alpha') + '\n' + GIT_BLOCK('main', 'aaaaaaa'))
+    const b: RawRequestForBreak = {
+      ...reqBody({ system: [{ text: 'no git snapshot in system text on this harness version', cache_control: CC }] }),
+      messages: [{ role: 'user', content: [{ type: 'text', text: GIT_REMINDER_MSG0('main'), cache_control: CC }] }],
+    }
+    assert.notStrictEqual(classify(a, b).cause, 'GIT_STATE_CHANGED')
   })
 
   test('THINKING_CONFIG_CHANGED — two explicit thinking configs differ', () => {
@@ -392,13 +422,11 @@ suite('cacheBreakTimeline — TRDD-B9ERTBZ9 documented causes (env / git / param
     output_config: { effort },
   })
 
-  test('EFFORT_PARAM_CHANGED does NOT fire (certain) for claude-fable-5-1 at CC >=2.1.260 — documented cache-safe', () => {
+  test('EFFORT_PARAM_CHANGED DOES fire (ambiguous) for claude-fable-5-1 at CC >=2.1.260 — the documented cache-safe claim covers only a per-message change, not this top-level one (I7 revision 2, review finding 1)', () => {
     const v = classify(fableReq('low', '2.1.281'), fableReq('high', '2.1.281'))
-    // Assert the EXACT fallthrough, not just "not EFFORT_PARAM_CHANGED" — a weaker assertion would
-    // still pass if the gate over-fired and mis-attributed the break to some other wrong cause
-    // (review-caught, I7 revision 1). Nothing else differs between the two bodies, so the ladder
-    // walks all the way to UNCLASSIFIED (verified against the live classifier, not guessed).
-    assert.strictEqual(v.cause, 'UNCLASSIFIED')
+    assert.strictEqual(v.cause, 'EFFORT_PARAM_CHANGED')
+    assert.ok(v.culpritSummary.includes('ambiguous'), `must flag the pairing ambiguous, got: ${v.culpritSummary}`)
+    assert.ok(v.culpritSummary.includes('Fable 5.1'), `must name the gated model, got: ${v.culpritSummary}`)
   })
 
   test('a hypothetical claude-fable-5-10 is NOT swept in by the fable-5-1 gate (anchored match)', () => {
@@ -421,7 +449,11 @@ suite('cacheBreakTimeline — TRDD-B9ERTBZ9 documented causes (env / git / param
       output_config: { effort },
     })
     const v = classify(req('low'), req('high'))
-    assert.notStrictEqual(v.cause, 'EFFORT_PARAM_CHANGED')
+    // The cause fires either way now (I7 revision 2) — what proves extractCcVersion did NOT
+    // short-circuit on the decoy is that the gate DID activate: the summary is flagged ambiguous.
+    // A short-circuit (ccVersion === '') would leave the gate inactive and the summary plain.
+    assert.strictEqual(v.cause, 'EFFORT_PARAM_CHANGED')
+    assert.ok(v.culpritSummary.includes('ambiguous'), `gate must activate past the decoy, got: ${v.culpritSummary}`)
   })
 
   test('EFFORT_PARAM_CHANGED still fires for claude-fable-5-1 below CC 2.1.260', () => {

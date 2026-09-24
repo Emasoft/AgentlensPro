@@ -256,6 +256,28 @@ const BODIES = {
     messages: [],
   },
 
+  // I7 revision 2 (finding 2): no `gitStatus:` in system text, so the region comes from msg[0]'s
+  // `# gitStatus` reminder instead — `gitAnchor` must read `msg0`, not `system`.
+  git_msg0_anchor: {
+    model: 'claude-opus-5',
+    system: 'no git snapshot in system text on this harness version',
+    messages: [{ role: 'user', content: [{ type: 'text', text: '<system-reminder>\n# gitStatus\nCurrent branch: main\n\nMain branch: main\n</system-reminder>' }] }],
+  },
+  // I7 revision 2 (finding 3): the `# gitStatus` reminder is followed by ANOTHER `# ` heading
+  // inside the SAME <system-reminder> block (a second injected reminder sharing one message) — the
+  // region must stop at that heading, not swallow the second reminder's content into the git hash.
+  git_msg0_followed_by_heading: {
+    model: 'claude-opus-5',
+    system: 'no git snapshot in system text on this harness version',
+    messages: [{
+      role: 'user',
+      content: [{
+        type: 'text',
+        text: '<system-reminder>\n# gitStatus\nCurrent branch: main\n\nMain branch: main\n# Environment\nunrelated env prose\n</system-reminder>',
+      }],
+    }],
+  },
+
   // Tools present but messages absent entirely (undefined) — messageCount 0, no crash.
   tools_only: { model: 'claude-opus-5', tools: TOOLS },
 }

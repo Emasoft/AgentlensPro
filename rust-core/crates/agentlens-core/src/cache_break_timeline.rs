@@ -219,9 +219,9 @@ impl TimelineCause {
             TimelineCause::MessageSpliced => "A NEW block was INSERTED into the middle of the cached prefix, shifting every later block — everything after the splice point re-writes. The actor is whatever injected the block (typically the harness re-homing a hook/system message), never the shifted bystanders after it.",
             TimelineCause::AttachmentChanged => "A non-text block (image / tool_use input) inside the cached prefix changed or moved. Past attachments should be immutable; an image riding in the prefix re-bills the tail on any change.",
             TimelineCause::WorkingDirChanged => "The environment block (working directory / platform / shell / OS) differs between these two turns, and it sits inside the cached system prefix — so a cache entry is scoped to ONE directory, and a second worktree of the same repository is a different prefix. This fires only ACROSS directories, never within one: `/cd` is engineered cache-safe (the new directory's CLAUDE.md is appended as a message instead of rebuilding the system prompt). Keep long-running work in one directory, or accept one cold warm per directory.",
-            TimelineCause::GitStateChanged => "The startup git snapshot (branch, status, recent commits) carried in the prefix differs — in system text on older captures, or in the first user message's `# gitStatus` reminder on CC 2.1.281+. It is refreshed after a compaction (CC 2.1.269), so within one uncompacted stretch this can only fire between turns that started from different snapshots — a resume, or a second stream sharing this session id; across a compaction, a real branch/commit change is expected once. Sequential sessions share a prefix only when that snapshot matches, so branch/commit churn between sessions costs one cold warm each.",
+            TimelineCause::GitStateChanged => "The startup git snapshot (branch, status, recent commits) carried in the prefix differs — in system text on older captures, where it invalidates the SYSTEM + MESSAGE layers, or in the first user message's `# gitStatus` reminder on CC 2.1.281+, where it lives in the MESSAGE layer only — the system prompt and tools stay cached there. Only compared when both turns anchored on the same spelling; a session spanning that CC 2.1.281 layout change falls through to the ordinary block diff instead of a false positive on the wording. It is refreshed after a compaction (CC 2.1.269), so within one uncompacted stretch this can only fire between turns that started from different snapshots — a resume, or a second stream sharing this session id; across a compaction, a real branch/commit change is expected once. Sequential sessions share a prefix only when that snapshot matches, so branch/commit churn between sessions costs one cold warm each (bounded to the message layer on CC 2.1.281+).",
             TimelineCause::ThinkingConfigChanged => "The thinking configuration changed (type or budget_tokens). It is rendered into the prompt itself, so message-level breakpoints ALWAYS miss; tools and system miss only on models that render the configuration ahead of them, and the docs do not enumerate which. Fix the thinking config once at session start.",
-            TimelineCause::EffortParamChanged => "output_config.effort changed between two EXPLICIT values. Message blocks always miss; the effect on tools/system is model-specific. Setting effort explicitly to the model default is a documented no-op, so this never fires on an absent↔present transition — only on two different explicit values. On claude-fable-5-1 at CC ≥2.1.260 an effort change is documented cache-safe (its per-model default is known), so this cause is never emitted for that model/version — nothing to fix there. Pick one effort level per conversation.",
+            TimelineCause::EffortParamChanged => "output_config.effort changed between two EXPLICIT values. Message blocks always miss; the effect on tools/system is model-specific. Setting effort explicitly to the model default is a documented no-op, so this never fires on an absent↔present transition — only on two different explicit values. Documented cache-safe on Fable 5.1 from CC 2.1.260 applies ONLY to a per-message effort change (a role:\"system\" message with empty content that the prefix builder already skips) — a changed TOP-LEVEL effort parameter, which is what this cause detects, DOES rewrite the prefix even on that model/version; a verdict flagged ambiguous on that pairing is evidence, not a confirmed miss. Pick one effort level per conversation.",
             TimelineCause::ToolChoiceChanged => "tool_choice changed between two explicit values. Per the docs this invalidates MESSAGE blocks only — tools and system stay cached — so the write is bounded by the message layer rather than the whole prefix. Keep tool_choice constant for the lifetime of a cached conversation.",
             TimelineCause::LookbackOverflow => "No block changed, yet the cache found nothing to read: at least 20 blocks were appended since the last cache WRITE, and the lookback window is 20 blocks, so it walked past the last entry. This is claimed only when cache_read is 0 with an unchanged prefix — ordinary growth still reads. Add a second breakpoint closer to the growing tail so a write accumulates there before the window overruns.",
             TimelineCause::BelowMinCacheable => "Both usage counters are 0 while the request DID carry cache_control markers, and the prompt is under this model's minimum cacheable length — a below-minimum prompt is silently not cached, with no error. The minimum is per model (512 to 4,096 tokens, an 8x spread), so this fires only when the estimate is under THIS model's threshold. Expand the cached content to reach it, or accept the full input rate on these calls.",
@@ -774,6 +774,25 @@ impl Layer {
     }
 }
 
+/// Which spelling produced the git-snapshot region (I7 revision 2, finding 2) — TS union
+/// `'system' | 'msg0' | 'none'`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum GitAnchor {
+    System,
+    Msg0,
+    None,
+}
+
+impl GitAnchor {
+    pub fn id(self) -> &'static str {
+        match self {
+            GitAnchor::System => "system",
+            GitAnchor::Msg0 => "msg0",
+            GitAnchor::None => "none",
+        }
+    }
+}
+
 pub struct PrefixTool {
     pub name: String,
     pub deferred: bool,
@@ -829,6 +848,13 @@ pub struct TurnPrefix {
     pub env_norm: String,
     pub git_fp: String,
     pub git_norm: String,
+    /// Which anchor produced `git_fp`/`git_norm` (I7 revision 2, finding 2). B1 moved `gitStatus`
+    /// OUT of system text into msg[0] on CC 2.1.281+, and the two spellings hash to DIFFERENT
+    /// bytes even when the underlying git state is identical — a session spanning that upgrade
+    /// would otherwise compare a system-text region against a msg0 region and misfire
+    /// `GitStateChanged` on the wording change, not the git state. Comparing `git_fp` is only
+    /// meaningful when both turns used the SAME anchor.
+    pub git_anchor: GitAnchor,
     /// `cc_version` out of the bounded billing/agent-meta block (`extract_cc_version`), `""` when
     /// absent — gates `EFFORT_PARAM_CHANGED` on Fable 5.1 ≥2.1.260 (I7 item 2), never sourced from
     /// an unbounded regex over system text.
@@ -858,6 +884,7 @@ impl TurnPrefix {
             "envNorm": self.env_norm,
             "gitFp": self.git_fp,
             "gitNorm": self.git_norm,
+            "gitAnchor": self.git_anchor.id(),
             "ccVersion": self.cc_version,
             "hasCacheControl": self.has_cache_control,
             "promptTokensApprox": self.prompt_tokens_approx,
@@ -1167,7 +1194,15 @@ pub fn extract_turn_prefix(body: Option<&Value>) -> Option<TurnPrefix> {
     let env_region = extract_env_region(&system_text);
     let msg0_text = first_user_message_text(messages);
     let git_region_sys = extract_git_region(&system_text);
-    let git_region = if git_region_sys.is_empty() { extract_git_region_msg0(&msg0_text) } else { git_region_sys };
+    let git_region_msg0 = if git_region_sys.is_empty() { extract_git_region_msg0(&msg0_text) } else { "" };
+    let git_region = if git_region_sys.is_empty() { git_region_msg0 } else { git_region_sys };
+    let git_anchor = if !git_region_sys.is_empty() {
+        GitAnchor::System
+    } else if !git_region_msg0.is_empty() {
+        GitAnchor::Msg0
+    } else {
+        GitAnchor::None
+    };
 
     Some(TurnPrefix {
         model,
@@ -1179,6 +1214,7 @@ pub fn extract_turn_prefix(body: Option<&Value>) -> Option<TurnPrefix> {
         env_norm: if env_region.is_empty() { String::new() } else { fnv1a(&normalize_volatile(env_region)) },
         git_fp: if git_region.is_empty() { String::new() } else { fnv1a(git_region) },
         git_norm: if git_region.is_empty() { String::new() } else { fnv1a(&normalize_volatile(git_region)) },
+        git_anchor,
         cc_version: extract_cc_version(&system_texts).unwrap_or_default(),
         has_cache_control: cc_markers > 0,
         prompt_tokens_approx: estimate_tokens_from_bytes(prompt_bytes),
@@ -1731,28 +1767,35 @@ pub fn classify_cache_break(
             format!("thinking {} → {}", prev.thinking, cur.thinking),
         );
     }
-    // Fable 5.1 ≥2.1.260: an explicit effort change on this model/version is documented cache-safe
-    // (its per-model default is now known), so naming it EFFORT_PARAM_CHANGED here would be a
-    // guess, not a fact — skip it and let the diff fall through to the next branch. Every other
-    // model/version keeps the certain branch above (I7 item 2; advisor verdict overrides the plan's
-    // "re-rank it" — the branch ORDER stays, only this one pair is gated).
-    // KNOWN GAP (review, I7 revision 1, disclosed not fixed — out of this increment's scope): only
-    // `cur`'s model/version are checked, not `prev`'s. A turn whose `prev` was on an ungated CC
-    // version and whose `cur` upgraded mid-session to ≥2.1.260 suppresses this cause even though the
-    // upgrade is itself a real event — and the billing/agent-meta block is EXCLUDED from the block
-    // diff entirely (`diff_blocks` filters `BlockContentKind::AgentMeta` on both sides, matching the
-    // documented "billing header changes every turn, not in the cache key"), so nothing else in the
-    // ladder is guaranteed to catch this particular turn either. Left as a documented limitation
-    // rather than a prev-aware gate, which the plan did not ask for.
+    // Fable 5.1 ≥2.1.260: the documented "cache-safe" claim (2026-09-24 audit, F5) is narrower than
+    // it reads — it covers a PER-MESSAGE effort change (a role:"system" message with empty content
+    // that the prefix builder already skips), not a changed TOP-LEVEL output_config.effort
+    // parameter, which is exactly what this branch detects. A top-level change DOES rewrite the
+    // prefix on that model/version too, so skipping the cause here was a false negative (I7
+    // revision 2, review finding 1) — EMIT it as usual and mark the pairing ambiguous in the
+    // summary instead, since we cannot tell apart "the harness sent a top-level change" from "our
+    // own extraction missed a per-message one" without the raw per-message shape.
+    // SURVIVING GAP (review, I7 revision 2): only `cur`'s model/version are checked, not `prev`'s.
+    // Under the OLD (revision 1) code this silently mis-suppressed the cause for a turn whose
+    // `prev` predates the gate — a false negative. Under THIS code the same cur-only check instead
+    // attaches the "ambiguous" caveat to a verdict that is not actually ambiguous (prev on CC
+    // 2.1.259, cur upgraded mid-turn to 2.1.260+: the change is a certain break, since prev's state
+    // predates the whole cache-safe carve-out) — a mislabel rather than a mis-suppression. Left as
+    // a documented limitation rather than a prev-aware gate, which the plan did not ask for.
     let effort_gate_active = !cur.cc_version.is_empty()
         && re(&FABLE_5_1_MODEL, r"(?i)fable-5-1(?:[^0-9]|$)").is_match(&cur.model)
         && compare_versions(&cur.cc_version, "2.1.260") != std::cmp::Ordering::Less;
-    if param_changed(&prev.effort_param, &cur.effort_param) && !effort_gate_active {
+    if param_changed(&prev.effort_param, &cur.effort_param) {
+        let ambiguous = if effort_gate_active {
+            " (ambiguous on Fable 5.1 ≥2.1.260: documented cache-safe only for a per-message effort change; a changed top-level parameter, as seen here, does rewrite the prefix)"
+        } else {
+            ""
+        };
         return CacheBreakVerdict::new(
             TimelineCause::EffortParamChanged,
             CulpritLayer::Effort,
             "param:effort".to_owned(),
-            format!("output_config.effort {} → {}", prev.effort_param, cur.effort_param),
+            format!("output_config.effort {} → {}{}", prev.effort_param, cur.effort_param, ambiguous),
         );
     }
     if param_changed(&prev.tool_choice, &cur.tool_choice) {
@@ -1785,13 +1828,31 @@ pub fn classify_cache_break(
             format!("the environment block (working directory / platform / shell / OS) {shape} between these turns"),
         );
     }
-    if prev.git_fp != cur.git_fp && prev.git_norm != cur.git_norm {
+    // Compare git regions ONLY when both turns anchored on the SAME spelling (system text vs the
+    // msg[0] `# gitStatus` reminder, B1/CC 2.1.281) — the two spellings hash to different bytes for
+    // identical git state, so a session spanning that upgrade would otherwise misfire here on the
+    // wording change, not a real git-state change (I7 revision 2, review finding 2). A mismatched
+    // anchor falls through to the ordinary block diffs below instead of returning a verdict.
+    if prev.git_anchor == cur.git_anchor && prev.git_fp != cur.git_fp && prev.git_norm != cur.git_norm {
         let shape = if prev.git_fp.is_empty() { "appeared" } else if cur.git_fp.is_empty() { "disappeared" } else { "changed" };
+        // The msg[0] anchor (CC 2.1.281+) puts the git snapshot in the MESSAGE layer, not system —
+        // only the message blocks rewrite; the system prompt and tools stay cached. The older
+        // system-text anchor still invalidates system + messages (I7 revision 2, review finding 4).
+        // DELIBERATE: the culprit id ALSO changes shape (`system:git-snapshot` vs
+        // `message:git-snapshot`), not just the layer — the id is the repeat-offender GROUPING
+        // KEY, so a session that hits this cause once under the old anchor and again under the new
+        // one is now reported as two distinct recurring culprits, not one merged bucket.
+        // Intentional: the two anchors carry different remediation (fix a system-prompt issue vs a
+        // msg[0] issue) and different blast radius, so merging their grouping would hide that
+        // distinction across a CC 2.1.281 upgrade — the trade-off is a smaller, less prominent
+        // repeat-offender count on either side of it.
+        let (layer, layer_id) = if cur.git_anchor == GitAnchor::Msg0 { (CulpritLayer::Message, "message") } else { (CulpritLayer::System, "system") };
+        let scope_note = if layer == CulpritLayer::Message { " (carried in msg[0] here — system prompt + tools stay cached)" } else { "" };
         return CacheBreakVerdict::new(
             TimelineCause::GitStateChanged,
-            CulpritLayer::System,
-            "system:git-snapshot".to_owned(),
-            format!("the startup git snapshot (branch / status / recent commits) {shape} between these turns"),
+            layer,
+            format!("{layer_id}:git-snapshot"),
+            format!("the startup git snapshot (branch / status / recent commits) {shape} between these turns{scope_note}"),
         );
     }
     // 5. System blocks.

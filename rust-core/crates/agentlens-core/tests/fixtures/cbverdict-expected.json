@@ -1959,11 +1959,10 @@
         "ephemeral1hTokens": 20000
       },
       "verdict": {
-        "cause": "UNCLASSIFIED",
-        "culpritLayer": "timing",
-        "culpritId": "timing:UNCLASSIFIED",
-        "culpritSummary": "unlocalised re-write",
-        "rawDiffSummary": "prefix byte-identical by fingerprint but cache_creation=20000; tools=0 sys=2 msg=1"
+        "cause": "EFFORT_PARAM_CHANGED",
+        "culpritLayer": "effort",
+        "culpritId": "param:effort",
+        "culpritSummary": "output_config.effort low → high (ambiguous on Fable 5.1 ≥2.1.260: documented cache-safe only for a per-message effort change; a changed top-level parameter, as seen here, does rewrite the prefix)"
       }
     },
     "param_effort_fable_ungated": {
@@ -2472,9 +2471,78 @@
       },
       "verdict": {
         "cause": "GIT_STATE_CHANGED",
+        "culpritLayer": "message",
+        "culpritId": "message:git-snapshot",
+        "culpritSummary": "the startup git snapshot (branch / status / recent commits) changed between these turns (carried in msg[0] here — system prompt + tools stay cached)"
+      }
+    },
+    "git_mixed_anchor_same_state": {
+      "prev": {
+        "model": "claude-opus-5",
+        "tools": [],
+        "system": [
+          {
+            "type": "text",
+            "text": "prose\ngitStatus: clean\nCurrent branch: main\nRecent commits:\naaaaaaa feat: x\n\ntrailing prose",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "cur": {
+        "model": "claude-opus-5",
+        "tools": [],
+        "system": [
+          {
+            "type": "text",
+            "text": "no git snapshot in system text on this harness version",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "<system-reminder>\n# gitStatus\nCurrent branch: main\n\nMain branch: main\n</system-reminder>",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "prev2": null,
+      "timing": {
+        "cacheReadTokens": 5000,
+        "cacheCreateTokens": 20000,
+        "ephemeral5mTokens": 0,
+        "ephemeral1hTokens": 20000
+      },
+      "verdict": {
+        "cause": "UNCLASSIFIED",
         "culpritLayer": "system",
-        "culpritId": "system:git-snapshot",
-        "culpritSummary": "the startup git snapshot (branch / status / recent commits) changed between these turns"
+        "culpritId": "system:UNCLASSIFIED:usertext:system[0]",
+        "culpritSummary": "usertext block changed at pos 0: system[0]"
       }
     },
     "env_and_timestamp": {

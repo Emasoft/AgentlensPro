@@ -178,8 +178,9 @@ const CASES = {
     cur: body({ output_config: { effort: 'high' } }),
     timing: T(),
   },
-  // I7 item 2: claude-fable-5-1's own effort defaults are documented from CC 2.1.260, so an explicit
-  // effort change on THAT model/version is cache-safe and must NOT be claimed — gated, not re-ranked.
+  // I7 revision 2 (finding 1): the "cache-safe on Fable 5.1 >=2.1.260" claim covers only a
+  // PER-MESSAGE effort change, not this TOP-LEVEL output_config.effort change — so the cause IS
+  // still emitted here, with the summary marked ambiguous rather than suppressed.
   param_effort_fable_gated: {
     prev: body({ model: 'claude-fable-5-1', output_config: { effort: 'low' }, sys: ['stable prose', K.meta('2.1.281')] }),
     cur: body({ model: 'claude-fable-5-1', output_config: { effort: 'high' }, sys: ['stable prose', K.meta('2.1.281')] }),
@@ -220,6 +221,17 @@ const CASES = {
       msgs: [[`<system-reminder>\n# gitStatus\nCurrent branch: main\n\nMain branch: main\n</system-reminder>`]] }),
     cur: body({ sys: ['no git snapshot in system text on this harness version'],
       msgs: [[`<system-reminder>\n# gitStatus\nCurrent branch: feature/x\n\nMain branch: main\n</system-reminder>`]] }),
+    timing: T(),
+  },
+  // I7 revision 2 (finding 2): `prev` carries the git snapshot in SYSTEM TEXT (older captures),
+  // `cur` carries the SAME branch/commit but in the msg[0] `# gitStatus` reminder (CC 2.1.281+) —
+  // a session spanning that layout upgrade. The two spellings hash to different bytes even though
+  // the underlying git state (branch `main`) did not change, so comparing gitFp across anchors
+  // would misfire GIT_STATE_CHANGED on the wording, not a real git-state change. Must fall through.
+  git_mixed_anchor_same_state: {
+    prev: body({ sys: [`prose\n${GIT('aaaaaaa')}`] }),
+    cur: body({ sys: ['no git snapshot in system text on this harness version'],
+      msgs: [[`<system-reminder>\n# gitStatus\nCurrent branch: main\n\nMain branch: main\n</system-reminder>`]] }),
     timing: T(),
   },
   // The env region differs ONLY by a clock: envNorm is equal, so the region rule stands down and
