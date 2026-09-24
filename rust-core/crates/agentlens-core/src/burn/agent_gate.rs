@@ -695,6 +695,29 @@ pub fn resolve_caller_ttl_kind(session_id: Option<&str>, transcript_path: Option
     None
 }
 
+/// The newest StopFailure at or before `now` whose error is rate-limit-class — the clock the
+/// cold-resume rules key on (`lastStopFailureMs`). TRDD-HNPT6JRG: only rate-limit-class failures
+/// count. Picking ANY StopFailure let an unrelated API error in any session on the machine arm
+/// COLD_RESUME_FANOUT and deny every fresh agent launch machine-wide for the whole window, while
+/// the calibrator (`burn_calibration::is_rate_limit_stop_failure`) already logged the very same
+/// events as "not rate-limit-class". One classifier, shared, so the two can never disagree.
+fn last_rate_limit_stop(events: &[Value], now: f64) -> Option<&Value> {
+    let mut last: Option<&Value> = None;
+    for r in events {
+        let ts_v = f(r, "ts").unwrap_or(f64::NAN);
+        if ts_v > now || s(r, "ev") != Some("StopFailure") {
+            continue;
+        }
+        if !crate::burn_calibration::is_rate_limit_stop_failure(r.get("payload").unwrap_or(&Value::Null)) {
+            continue;
+        }
+        if last.is_none_or(|l| ts_v > f(l, "ts").unwrap_or(f64::NAN)) {
+            last = Some(r);
+        }
+    }
+    last
+}
+
 /// buildGateState (server.ts:1221) — the ring-derived counts + attribution, the bodies-activity
 /// snapshot, the evidence-based stall disarm, the caller's TTL regime, and the env thresholds,
 /// as the TS object literal. The bodies report is READ-ONLY here: polling happens on the burn
@@ -710,7 +733,7 @@ pub fn build_gate_state(
 ) -> Value {
     let mut starts60 = 0.0;
     let mut starts120 = 0.0;
-    let mut last_stop: Option<&Value> = None;
+    let last_stop = last_rate_limit_stop(&st.recent_hook_events, now);
     // Per-session launch attribution: SubagentStart payloads carry cwd + agent_type, so the
     // deny/warn messages can name WHO is fanning out, from WHERE, with WHAT agent kinds.
     // IndexMaps: JS Map iteration order is insertion order, and the stable sorts below rely on it.
@@ -748,8 +771,6 @@ pub fn build_gate_state(
                     *e.1.entry(t.to_owned()).or_insert(0.0) += 1.0;
                 }
             }
-        } else if ev == Some("StopFailure") && last_stop.is_none_or(|l| ts_v > f(l, "ts").unwrap_or(f64::NAN)) {
-            last_stop = Some(r);
         }
     }
     let mut ranked: Vec<(String, Spawner)> = by_session.into_iter().collect();
@@ -837,5 +858,32 @@ pub fn prune_advisory_issued(map: &mut HashMap<String, f64>, now: f64) {
         if v <= now {
             map.remove(&key);
         }
+    }
+}
+
+#[cfg(test)]
+mod stall_filter_tests {
+    use super::last_rate_limit_stop;
+    use serde_json::json;
+
+    // TRDD-HNPT6JRG: a StopFailure that is not rate-limit-class must not start the cold-resume clock.
+    #[test]
+    fn non_rate_limit_stop_failure_is_not_a_stall() {
+        let evs = vec![json!({"ev": "StopFailure", "ts": 1000.0, "session": "s1",
+            "payload": {"error": "API Error: 500 internal server error"}})];
+        assert!(last_rate_limit_stop(&evs, 2000.0).is_none());
+    }
+
+    // The newest rate-limit-class StopFailure wins; a newer non-rate-limit one does not displace it.
+    #[test]
+    fn newest_rate_limit_stop_failure_is_the_stall() {
+        let evs = vec![
+            json!({"ev": "StopFailure", "ts": 1000.0, "payload": {"error": "rate_limit_error (429)"}}),
+            json!({"ev": "StopFailure", "ts": 1500.0, "payload": {"error": "API Error: 500"}}),
+            json!({"ev": "StopFailure", "ts": 1200.0, "payload": {"error": "Claude usage limit reached"}}),
+            json!({"ev": "StopFailure", "ts": 3000.0, "payload": {"error": "rate limit"}}), // after now
+        ];
+        let got = last_rate_limit_stop(&evs, 2000.0).expect("a rate-limit stall");
+        assert_eq!(got["ts"], json!(1200.0));
     }
 }
