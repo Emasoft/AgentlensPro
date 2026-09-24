@@ -376,6 +376,15 @@
      "turn": 2,
      "sources": [
       {
+       "label": "system prompt",
+       "kind": "systemPrompt",
+       "bytes": 53,
+       "tokens": 16,
+       "tokenSource": "estimated",
+       "count": 2,
+       "excerpt": "You are a helper.\nBe brief."
+      },
+      {
        "label": "file: ",
        "kind": "file",
        "bytes": 46,
@@ -383,15 +392,6 @@
        "tokenSource": "estimated",
        "count": 1,
        "excerpt": "empty displayPath is USED (nullish, not falsy)"
-      },
-      {
-       "label": "system prompt",
-       "kind": "systemPrompt",
-       "bytes": 26,
-       "tokens": 9,
-       "tokenSource": "estimated",
-       "count": 1,
-       "excerpt": "You are a helper.\nBe brief."
       },
       {
        "label": "file: report.md",
@@ -514,6 +514,29 @@
        "tokenSource": "estimated",
        "count": 1,
        "excerpt": "turn 3 reminder"
+      },
+      {
+       "label": "instructions: /proj/CLAUDE.md",
+       "kind": "instructions",
+       "bytes": 20,
+       "tokens": 4,
+       "tokenSource": "estimated",
+       "count": 1,
+       "excerpt": "project instructions"
+      }
+     ]
+    },
+    {
+     "turn": 4,
+     "sources": [
+      {
+       "label": "instructions: /proj/CLAUDE.md",
+       "kind": "instructions",
+       "bytes": 20,
+       "tokens": 4,
+       "tokenSource": "estimated",
+       "count": 1,
+       "excerpt": "project instructions"
       }
      ]
     }
@@ -820,6 +843,7 @@
   "comp-own",
   "comp-parent",
   "conv-main",
+  "hist-boundary-only",
   "hist-main",
   "hist-nousage"
  ]

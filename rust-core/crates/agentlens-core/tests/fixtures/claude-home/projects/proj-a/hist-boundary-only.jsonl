@@ -1,0 +1,4 @@
+{"type":"user","message":{"content":"before the boundary"}}
+{"type":"assistant","message":{"id":"b1","content":[{"type":"text","text":"ack"}]}}
+{"type":"system","subtype":"compact_boundary","compactMetadata":{"trigger":"auto","preTokens":100000,"postTokens":20000}}
+{"type":"assistant","message":{"id":"b2","content":[{"type":"text","text":"after the boundary"}]}}

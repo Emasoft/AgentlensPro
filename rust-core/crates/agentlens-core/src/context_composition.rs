@@ -90,6 +90,52 @@ fn basename(p: &str) -> &str {
     if cfg!(windows) { cut(&['/', '\\']) } else { cut(&['/']) }
 }
 
+/// A compaction boundary, from every signal the transcript actually uses — ONE predicate shared by
+/// `build_context_composition` (resets the dedup set below) and `build_context_history` (renders the
+/// postCompact block), so the two modules can never disagree about where a session was compacted.
+///
+/// Measured across 300 real transcripts (orchestrator, 2026-09-24): `system`/`subtype:
+/// "compact_boundary"` appears in 12 files, `isCompactSummary: true` in only 9 — 3 real compactions
+/// carry NO `isCompactSummary` row, so a predicate keyed on that flag alone misses a quarter of real
+/// boundaries. `type: "summary"` matched 0 of the 300 — UNOBSERVED in current Claude Code, kept only
+/// because `build_context_history` already recognized it (a possible legacy/pre-2.1.258 shape); do
+/// not delete it on the strength of this sample alone.
+pub fn is_compaction_boundary(e: &Value) -> bool {
+    let ty = e.get("type").and_then(Value::as_str).unwrap_or("");
+    if ty == "system" && e.get("subtype").and_then(Value::as_str) == Some("compact_boundary") {
+        return true;
+    }
+    if e.get("isCompactSummary") == Some(&Value::Bool(true)) {
+        return true;
+    }
+    ty == "summary"
+}
+
+/// A tiny FNV-1a-flavoured hash used ONLY to key the dedup set below (content equality, not
+/// cryptographic). Collisions are irrelevant here for the same reason `context_history.rs`'s own
+/// copy states: a false "already seen" on genuinely different content is astronomically unlikely.
+fn hash_text(s: &str) -> u32 {
+    let mut h: u32 = 0x811c_9dc5;
+    for u in s.encode_utf16() {
+        h ^= u as u32;
+        let sum = h
+            .wrapping_shl(1)
+            .wrapping_add(h.wrapping_shl(4))
+            .wrapping_add(h.wrapping_shl(7))
+            .wrapping_add(h.wrapping_shl(8))
+            .wrapping_add(h.wrapping_shl(24));
+        h = h.wrapping_add(sum);
+    }
+    h
+}
+
+/// Review finding (TRDD-ZQQYRYBO I9b revision): the "instructions: {path}" label prefix used to be
+/// duplicated as a bare string literal at every site that needed to recover `path` from a label —
+/// `classify_attachment` formatting it and `context_history.rs`'s `attachment_kind` stripping it
+/// back off, with no compiler tie between the two. A rename of one without the other would silently
+/// break the rule/claudemd split with no error, only wrong output. ONE constant, shared.
+pub const INSTRUCTIONS_LABEL_PREFIX: &str = "instructions: ";
+
 /// One classified attachment.
 pub struct Classified {
     pub label: String,
@@ -126,8 +172,14 @@ pub fn classify_attachment(att: &Value) -> Vec<Classified> {
                     None | Some(Value::Null) => "instructions".to_owned(),
                     Some(v) => js_string(v),
                 };
+                // TRDD-ZQQYRYBO I9b (revised): the raw classify kind stays "instructions" for
+                // EVERY injected file — `conversation.rs`'s `meta.attachmentKind` passes this raw
+                // kind straight through onto an API/MCP-visible surface, so a synthetic
+                // "instructionsRule" kind would leak there too. The rule-vs-claudemd split lives
+                // ONLY in `context_history.rs`'s `attachment_kind` (the sole ContextBlockKind
+                // consumer), keyed on the label's path.
                 Some(Classified {
-                    label: format!("instructions: {path}"),
+                    label: format!("{INSTRUCTIONS_LABEL_PREFIX}{path}"),
                     kind: "instructions",
                     bytes,
                     text: first_text(f, &["content"]),
@@ -359,6 +411,18 @@ pub fn build_context_composition(env: &Env, session_id: &str, parent_session_id:
     let mut lines: u64 = 0;
     let mut truncated = false;
     let mut excerpt_bytes_stored: u64 = 0;
+    // TRDD-ZQQYRYBO I9b: CC re-sends the FULL prompt_snapshot / instructions files on every
+    // compaction-adjacent turn even when nothing changed, so naively summing every occurrence
+    // across turns inflates any cross-turn merge (Traces.tsx `mergeSources`, which keys on
+    // `kind::label`) by as many turns as the content recurred. Dedup on the exact (kind, label,
+    // content) TRIPLE, reset at each compaction boundary — a real edit to a rule file or a
+    // genuinely regenerated system prompt still counts as new. This is a SET of everything seen
+    // since the last boundary, not just the last value per label: A, B, A (same label, content
+    // alternating) must count A once and B once, not re-admit A because it stopped being the most
+    // recent — a last-value-only map would double-count that A. Per-turn `sources` below is
+    // unaffected in shape; a duplicate simply contributes no row, same as any other zero-byte
+    // attachment.
+    let mut seen_since_boundary: HashSet<(&'static str, String, u32)> = HashSet::new();
 
     let f = std::fs::File::open(&file).ok()?;
     let mut reader = std::io::BufReader::new(f);
@@ -400,6 +464,14 @@ pub fn build_context_composition(env: &Env, session_id: &str, parent_session_id:
             }
             continue;
         }
+        // Compaction boundary — the ONE shared predicate (see `is_compaction_boundary` above),
+        // also used by context_history.rs for its own postCompact block. Past this point the
+        // harness has rebuilt the conversation state, so a prompt_snapshot/instructions file that
+        // recurs afterward is a fresh occurrence worth counting again, not a repeat.
+        if is_compaction_boundary(&e) {
+            seen_since_boundary.clear();
+            continue;
+        }
         if ty != "attachment" {
             continue;
         }
@@ -407,6 +479,15 @@ pub fn build_context_composition(env: &Env, session_id: &str, parent_session_id:
         for c in classify_attachment(att) {
             if c.bytes == 0 {
                 continue;
+            }
+            // TRDD-ZQQYRYBO I9b: dedup on the (kind, label, content) triple since the last
+            // compaction boundary — see `seen_since_boundary` above. Every other attachment kind
+            // is left alone: a repeated hook/file/tool-catalog attachment is a real event.
+            if matches!(c.kind, "instructions" | "systemPrompt") {
+                let key = (c.kind, c.label.clone(), hash_text(&c.text));
+                if !seen_since_boundary.insert(key) {
+                    continue;
+                }
             }
 
             // Attribute to the turn this injected content FEEDS: the next assistant turn (1-based),

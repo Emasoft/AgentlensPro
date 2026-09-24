@@ -127,3 +127,27 @@ fn harness_metas_are_never_labelled_post_compact() {
         "only a real compaction summary is postCompact: {ids:?}"
     );
 }
+
+/// TRDD-ZQQYRYBO I9b (item 1): a compaction signaled ONLY by `system`/`compact_boundary` — no
+/// `isCompactSummary` anywhere in the transcript — must still produce exactly one postCompact
+/// block. Before this patch this module had no branch for the signal at all, so it silently
+/// rendered NOTHING for a real compaction (3 of 12 real compactions in the orchestrator's
+/// 2026-09-24 sample of 300 transcripts carried this signal exclusively).
+#[test]
+fn compact_boundary_only_signal_still_renders_a_postcompact_block() {
+    let env = fixture_env();
+    let h = build_context_history(&env, "hist-boundary-only", None).unwrap();
+    let ids: Vec<&str> = h["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|s| s["blocks"].as_array().unwrap())
+        .map(|b| b["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        ids.iter().filter(|i| i.starts_with("postCompact:")).count(),
+        1,
+        "a compact_boundary-only signal (no isCompactSummary) must still render exactly one \
+         postCompact block: {ids:?}"
+    );
+}

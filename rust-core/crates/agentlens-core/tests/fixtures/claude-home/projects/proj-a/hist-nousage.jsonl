@@ -1,2 +1,4 @@
 {"type":"user","message":{"content":"hello"}}
+{"type":"attachment","attachment":{"type":"instructions","files":[{"path":"/proj/CLAUDE.md","type":"Project","content":"project instructions"},{"path":"/home/x/.claude/rules/r.md","type":"User","content":"a user rule"},{"path":"/proj/src/rules/CLAUDE.md","type":"Project","content":"not a project rule"}]}}
+{"type":"attachment","attachment":{"type":"prompt_snapshot","systemPrompt":["You are a helper.","Be brief."],"reminderFold":false}}
 {"type":"assistant","message":{"id":"n1","content":[{"type":"text","text":"hi back"}]}}

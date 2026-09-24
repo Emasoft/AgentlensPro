@@ -5,6 +5,8 @@
 {"type":"user","uuid":"u1","message":{"content":"do the thing"}}
 {"type":"attachment","attachment":{"type":"file","displayPath":"/a/ctx.md","content":"injected context"}}
 {"type":"attachment","attachment":{"type":"file","displayPath":"/a/empty.md"}}
+{"type":"attachment","attachment":{"type":"instructions","files":[{"path":"/proj/CLAUDE.md","type":"Project","content":"project instructions"},{"path":"/home/x/.claude/rules/r.md","type":"User","content":"a user rule"}]}}
+{"type":"attachment","attachment":{"type":"prompt_snapshot","systemPrompt":["You are a helper.","Be brief."],"reminderFold":false}}
 {"type":"assistant","timestamp":"2026-08-01T10:00:05Z","isSidechain":true,"message":{"id":"m1","model":"claude-opus-5","usage":{"input_tokens":30,"output_tokens":12,"cache_read_input_tokens":900,"cache_creation_input_tokens":40,"cache_creation":{"ephemeral_5m_input_tokens":10,"ephemeral_1h_input_tokens":30}},"content":[{"type":"thinking","thinking":"considering the options"},{"type":"text","text":"doing it now"},{"type":"tool_use","id":"tu1","name":"Bash","input":{"command":"echo hi"}},{"type":"tool_use","id":"tu2","name":"Read","input":{"file_path":"/x.txt"}}]}}
 {"type":"assistant","message":{"id":"m1","model":"claude-opus-5","usage":{"input_tokens":30,"output_tokens":12,"cache_read_input_tokens":900,"cache_creation_input_tokens":40},"content":[{"type":"text","text":"doing it now"},{"type":"text","text":"and a continuation"}]}}
 {"type":"system","subtype":"turn_duration","durationMs":4200}

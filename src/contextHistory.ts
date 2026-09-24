@@ -1,6 +1,6 @@
 import * as fs from 'fs'
 import * as readline from 'readline'
-import { classifyAttachment, findSessionFile } from './contextComposition'
+import { classifyAttachment, findSessionFile, INSTRUCTIONS_LABEL_PREFIX } from './contextComposition'
 import { countTokens, calibrateTokens } from './tokenEstimator'
 import type {
   ContextHistory, ContextHistoryStep, ContextBlock, ContextBlockKind, StepDiff,
@@ -32,8 +32,15 @@ function utf8Len(v: unknown): number { return typeof v === 'string' ? Buffer.byt
 // exported resolver/classifier, TRDD-B22NYTOY) — this module previously carried byte-identical
 // private copies (plus their string helpers), which is how drift starts.
 
-// Map classifyAttachment's kind string onto a ContextBlockKind for the block taxonomy.
-function attachmentKind(kind: string): ContextBlockKind {
+// Map classifyAttachment's kind string onto a ContextBlockKind for the block taxonomy. `label` is
+// needed ONLY for the 'instructions' case (see below); every other kind ignores it.
+//
+// TRDD-ZQQYRYBO I9b (revised): the rule-vs-claudemd split used to be a THIRD raw classify kind
+// ('instructionsRule'), which leaked onto conversation.ts's `meta.attachmentKind` — an
+// API/MCP-visible surface with no business knowing about a ContextBlockKind. It now lives HERE,
+// the only consumer that actually maps onto ContextBlockKind, keyed on the label's path (labels
+// are `"instructions: {path}"`, see classifyAttachment).
+function attachmentKind(kind: string, label: string): ContextBlockKind {
   switch (kind) {
     case 'hook': return 'hook'
     case 'skill': return 'skillPrompt'
@@ -43,7 +50,14 @@ function attachmentKind(kind: string): ContextBlockKind {
     case 'file': return 'file'
     case 'reminder': return 'reminder'
     // TRDD-ZQQYRYBO I9: CLAUDE.md/rules files and the system prompt, recorded since CC 2.1.258.
-    case 'instructions': return 'claudemd'
+    // Only a file under a `.claude/rules/` directory PAIR is a project rule (I9b) — a plain
+    // `rules/` directory elsewhere (e.g. `src/rules/CLAUDE.md`) stays the generic claudemd bucket.
+    case 'instructions': {
+      const p = label.startsWith(INSTRUCTIONS_LABEL_PREFIX) ? label.slice(INSTRUCTIONS_LABEL_PREFIX.length) : label
+      const segs = p.split('/')
+      const isRule = segs.some((s, i) => s === '.claude' && segs[i + 1] === 'rules')
+      return isRule ? 'rule' : 'claudemd'
+    }
     case 'systemPrompt': return 'system'
     default: return 'other'
   }
@@ -289,7 +303,7 @@ export async function buildContextHistory(sessionId: string, parentSessionId?: s
       if (!att) continue
       for (const c of classifyAttachment(att)) {
         if (c.bytes === 0) continue
-        addBlock(assistantTurns + 1, attachmentKind(c.kind), c.label, c.text, 'input')
+        addBlock(assistantTurns + 1, attachmentKind(c.kind, c.label), c.label, c.text, 'input')
       }
       continue
     }
@@ -297,6 +311,25 @@ export async function buildContextHistory(sessionId: string, parentSessionId?: s
     if (type === 'summary') {
       const summary = typeof e['summary'] === 'string' ? (e['summary'] as string) : ''
       if (summary) addBlock(assistantTurns + 1, 'postCompact', 'compact summary', summary, 'input')
+      continue
+    }
+
+    // TRDD-ZQQYRYBO I9b: a system/compact_boundary record (conversation.ts already reads this
+    // exact shape) carries no summary TEXT — only compactMetadata — so it can't reuse the
+    // isCompactSummary/summary branches above. Measured on 300 real transcripts (orchestrator,
+    // 2026-09-24): this signal fires in 12 files while isCompactSummary fires in only 9 — a
+    // quarter of real compactions had NO summary-text record at all, and this module rendered NO
+    // postCompact block for them before this patch. Render what IS available so the boundary is
+    // still visible in the per-step history, not just in conversation.ts's own timeline.
+    if (type === 'system' && e['subtype'] === 'compact_boundary') {
+      const m = e['compactMetadata'] as Record<string, unknown> | undefined
+      const trigger = typeof m?.['trigger'] === 'string' ? m['trigger'] as string : 'unknown'
+      const pre = typeof m?.['preTokens'] === 'number' ? m['preTokens'] as number : undefined
+      const post = typeof m?.['postTokens'] === 'number' ? m['postTokens'] as number : undefined
+      const text = pre !== undefined && post !== undefined
+        ? `compaction boundary (trigger=${trigger}, ${pre}→${post} tokens)`
+        : `compaction boundary (trigger=${trigger})`
+      addBlock(assistantTurns + 1, 'postCompact', 'compact summary', text, 'input')
       continue
     }
   }

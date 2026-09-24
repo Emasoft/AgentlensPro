@@ -5,6 +5,13 @@ import { claudeProjectsDirs } from './logReader'
 import { countTokens, estimateTokensFromBytes } from './tokenEstimator'
 import type { ContextComposition, ContextCompositionTurn, ContextSource } from './shared/summarizerTypes'
 
+// Review finding (TRDD-ZQQYRYBO I9b revision): the "instructions: {path}" label prefix used to be
+// duplicated as a bare string literal at every site that needed to recover `path` from a label —
+// classifyAttachment formatting it and contextHistory.ts's attachmentKind stripping it back off,
+// with no compiler tie between the two. A rename of one without the other would silently break the
+// rule/claudemd split with no error, only wrong output. ONE constant, shared, exported.
+export const INSTRUCTIONS_LABEL_PREFIX = 'instructions: '
+
 // Hard caps so an on-demand parse of a huge session never blocks the host unbounded. A session
 // past MAX_LINES is reported truncated=true (the breakdown covers what was read). Per turn only the
 // TOP_SOURCES heaviest sources are returned; the rest fold into a single "other" bucket.
@@ -63,7 +70,13 @@ export function classifyAttachment(att: Record<string, unknown>): ClassifiedAtta
     return files.flatMap(f => {
       const bytes = utf8Len(f['content'])
       if (bytes === 0) return []
-      return [{ label: `instructions: ${String(f['path'] ?? 'instructions')}`, kind: 'instructions', bytes, text: firstText(f, ['content']) }]
+      const p = String(f['path'] ?? 'instructions')
+      // TRDD-ZQQYRYBO I9b (revised): the raw classify kind stays 'instructions' for EVERY
+      // injected file — conversation.ts's `meta.attachmentKind` passes this raw kind straight
+      // through onto an API/MCP-visible surface, so a synthetic 'instructionsRule' kind would
+      // leak there too. The rule-vs-claudemd split lives ONLY in contextHistory.ts's
+      // attachmentKind (the sole ContextBlockKind consumer), keyed on the label's path.
+      return [{ label: `${INSTRUCTIONS_LABEL_PREFIX}${p}`, kind: 'instructions', bytes, text: firstText(f, ['content']) }]
     })
   }
   if (att['type'] === 'prompt_snapshot') {
@@ -115,6 +128,33 @@ function classifyOne(att: Record<string, unknown>): ClassifiedAttachment | null 
 function joinedLen(v: unknown): number {
   if (Array.isArray(v)) return v.reduce((n: number, s) => n + utf8Len(s), 0)
   return utf8Len(v)
+}
+
+// A compaction boundary, from every signal the transcript actually uses — ONE predicate shared by
+// buildContextComposition (resets the dedup set below) and buildContextHistory (renders the
+// postCompact block), so the two modules can never disagree about where a session was compacted.
+//
+// Measured across 300 real transcripts (orchestrator, 2026-09-24): system/subtype:'compact_boundary'
+// appears in 12 files, isCompactSummary:true in only 9 — 3 real compactions carry NO isCompactSummary
+// row, so a predicate keyed on that flag alone misses a quarter of real boundaries. type:'summary'
+// matched 0 of the 300 — UNOBSERVED in current Claude Code, kept only because buildContextHistory
+// already recognized it (a possible legacy/pre-2.1.258 shape); do not delete it on this sample alone.
+export function isCompactionBoundary(e: Record<string, unknown>): boolean {
+  if (e['type'] === 'system' && e['subtype'] === 'compact_boundary') return true
+  if (e['isCompactSummary'] === true) return true
+  return e['type'] === 'summary'
+}
+
+// A tiny FNV-1a string hash (no imports), used ONLY to key the dedup set below (content equality,
+// not cryptographic). Collisions are irrelevant — a false "already seen" on genuinely different
+// content is astronomically unlikely.
+function hashText(s: string): string {
+  let h = 0x811c9dc5
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i)
+    h = (h + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24))) >>> 0
+  }
+  return h.toString(16)
 }
 
 // Walk the parent chain from `sessionId` upward and return the FIRST ancestor that actually has a
@@ -216,6 +256,16 @@ export async function buildContextComposition(sessionId: string, parentSessionId
   let truncated = false
   // TRDD-PJC8N1HO: running total of stored excerpt bytes, capped by EXCERPT_BUDGET_BYTES.
   let excerptBytesStored = 0
+  // TRDD-ZQQYRYBO I9b: CC re-sends the FULL prompt_snapshot / instructions files on every
+  // compaction-adjacent turn even when nothing changed, so naively summing every occurrence
+  // across turns inflates any cross-turn merge (Traces.tsx `mergeSources`, which keys on
+  // `kind::label`) by as many turns as the content recurred. Dedup on the exact (kind, label,
+  // content) TRIPLE, reset at each compaction boundary — a real edit to a rule file or a
+  // genuinely regenerated system prompt still counts as new. A SET of everything seen since the
+  // last boundary, not just the last value per label: A, B, A (same label, content alternating)
+  // must count A once and B once — a last-value-only map would re-admit A because it stopped
+  // being the most recent, double-counting it.
+  const seenSinceBoundary = new Set<string>()
 
   const rl = readline.createInterface({ input: fs.createReadStream(file, { encoding: 'utf8' }), crlfDelay: Infinity })
   for await (const line of rl) {
@@ -231,12 +281,25 @@ export async function buildContextComposition(sessionId: string, parentSessionId
       if (!id || !seenMessageIds.has(id)) { assistantTurns++; if (id) seenMessageIds.add(id) }
       continue
     }
+    // Compaction boundary — the ONE shared predicate (isCompactionBoundary above), also used by
+    // contextHistory.ts for its own postCompact block. Past this point the harness has rebuilt the
+    // conversation state, so a prompt_snapshot/instructions file that recurs afterward is a fresh
+    // occurrence worth counting again, not a repeat.
+    if (isCompactionBoundary(e)) { seenSinceBoundary.clear(); continue }
     if (type !== 'attachment') continue
 
     const att = e['attachment'] as Record<string, unknown> | undefined
     if (!att) continue
     for (const c of classifyAttachment(att)) {
       if (c.bytes === 0) continue
+      // TRDD-ZQQYRYBO I9b: dedup on the (kind, label, content) triple since the last compaction
+      // boundary — see `seenSinceBoundary` above. Every other attachment kind is left alone: a
+      // repeated hook/file/tool-catalog attachment is a real event.
+      if (c.kind === 'instructions' || c.kind === 'systemPrompt') {
+        const key = `${c.kind}\u0000${c.label}\u0000${hashText(c.text)}`
+        if (seenSinceBoundary.has(key)) continue
+        seenSinceBoundary.add(key)
+      }
 
       // Attribute to the turn this injected content feeds: the next assistant turn (1-based), matching
       // the timeline's user_input turn = assistantTurns + 1.

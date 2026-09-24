@@ -60,10 +60,40 @@ const own = [
     { path: '/proj/CLAUDE.md', type: 'Project', content: 'project instructions' },
     { path: '/home/x/.claude/rules/r.md', type: 'User', content: 'a user rule' },
   ] }),
+  // TRDD-ZQQYRYBO I9b: an identical repeat, still turn 2, no compaction in between → deduped away
+  // (0 extra bytes/count on both rows; the "system prompt" repeat below is the same discriminator).
+  att({ type: 'instructions', files: [
+    { path: '/proj/CLAUDE.md', type: 'Project', content: 'project instructions' },
+    { path: '/home/x/.claude/rules/r.md', type: 'User', content: 'a user rule' },
+  ] }),
   att({ type: 'prompt_snapshot', systemPrompt: ['You are a helper.', 'Be brief.'], reminderFold: false }),
+  // REPEAT — byte-identical systemPrompt, no compaction in between → deduped away.
+  att({ type: 'prompt_snapshot', systemPrompt: ['You are a helper.', 'Be brief.'], reminderFold: false }),
+  // TRDD-ZQQYRYBO I9b: A, B, A on the SAME label — dedup is a SET of everything seen since the
+  // last boundary, not "last value only". B (different content) counts; the trailing A must be
+  // SKIPPED because it was already seen earlier in this segment, not re-admitted just because a
+  // different value (B) came in between. A last-value-only map would double-count this A.
+  att({ type: 'prompt_snapshot', systemPrompt: ['You are a DIFFERENT helper.'], reminderFold: false }), // B — counts
+  att({ type: 'prompt_snapshot', systemPrompt: ['You are a helper.', 'Be brief.'], reminderFold: false }), // A again — deduped
   att({ type: 'hook_success', hookName: 'PostToolUse' }),                // 0 bytes → DROPPED
   asst(undefined),                                                       // NO id → always advances
   att({ type: 'task_reminder', content: 'turn 3 reminder' }),
+  L({ type: 'summary', summary: 'a compacted summary' }),                // compaction boundary — resets dedup memory
+  // Byte-identical to the FIRST instructions attachment above, but past a compaction boundary →
+  // counted again, not deduped.
+  att({ type: 'instructions', files: [
+    { path: '/proj/CLAUDE.md', type: 'Project', content: 'project instructions' },
+  ] }),
+  asst(undefined),
+  // TRDD-ZQQYRYBO I9b (item 1): a system/compact_boundary record with NO isCompactSummary flag —
+  // the signal 3 of 12 real compactions carried EXCLUSIVELY (orchestrator measurement,
+  // 2026-09-24). Must reset the dedup memory just like the 'summary' boundary above.
+  L({ type: 'system', subtype: 'compact_boundary', compactMetadata: { trigger: 'auto', preTokens: 100000, postTokens: 20000 } }),
+  // Byte-identical to the instructions row right after the FIRST boundary, but past this SECOND,
+  // compact_boundary-only boundary → counted again, not deduped.
+  att({ type: 'instructions', files: [
+    { path: '/proj/CLAUDE.md', type: 'Project', content: 'project instructions' },
+  ] }),
 ]
 writeFileSync(join(projects, 'comp-own.jsonl'), own.join('\n') + '\n')
 

@@ -143,7 +143,7 @@ fn the_drill_bounding_rules_hold() {
     //    session have", not "how many did you get back".
     let c = case("compCases", "one-turn-keeps-unfiltered-turnCount");
     let got = agentlens_core::mcp_tools::get_context_composition(Some(&c["comp"]), "comp-own", Some(2.0));
-    assert_eq!(got["turnCount"], 3, "turnCount must not follow the filter: {got}");
+    assert_eq!(got["turnCount"], 4, "turnCount must not follow the filter: {got}");
     assert_eq!(got["turns"].as_array().unwrap().len(), 1, "{got}");
 
     // 2. the conversation range is CLAMPED to from+cap-1 — a caller cannot widen the window.

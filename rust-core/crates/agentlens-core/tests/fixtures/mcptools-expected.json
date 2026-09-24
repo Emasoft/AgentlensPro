@@ -5946,6 +5946,15 @@
       "turn": 2,
       "sources": [
        {
+        "label": "system prompt",
+        "kind": "systemPrompt",
+        "bytes": 53,
+        "tokens": 16,
+        "tokenSource": "estimated",
+        "count": 2,
+        "excerpt": "You are a helper.\nBe brief."
+       },
+       {
         "label": "file: ",
         "kind": "file",
         "bytes": 46,
@@ -6009,6 +6018,15 @@
         "excerpt": "skill a"
        },
        {
+        "label": "instructions: /proj/CLAUDE.md",
+        "kind": "instructions",
+        "bytes": 20,
+        "tokens": 4,
+        "tokenSource": "estimated",
+        "count": 1,
+        "excerpt": "project instructions"
+       },
+       {
         "label": "file: fallback.txt",
         "kind": "file",
         "bytes": 12,
@@ -6016,6 +6034,15 @@
         "tokenSource": "estimated",
         "count": 1,
         "excerpt": "via filename"
+       },
+       {
+        "label": "instructions: /home/x/.claude/rules/r.md",
+        "kind": "instructions",
+        "bytes": 11,
+        "tokens": 3,
+        "tokenSource": "estimated",
+        "count": 1,
+        "excerpt": "a user rule"
        },
        {
         "label": "hook: unknown",
@@ -6057,6 +6084,29 @@
         "tokenSource": "estimated",
         "count": 1,
         "excerpt": "turn 3 reminder"
+       },
+       {
+        "label": "instructions: /proj/CLAUDE.md",
+        "kind": "instructions",
+        "bytes": 20,
+        "tokens": 4,
+        "tokenSource": "estimated",
+        "count": 1,
+        "excerpt": "project instructions"
+       }
+      ]
+     },
+     {
+      "turn": 4,
+      "sources": [
+       {
+        "label": "instructions: /proj/CLAUDE.md",
+        "kind": "instructions",
+        "bytes": 20,
+        "tokens": 4,
+        "tokenSource": "estimated",
+        "count": 1,
+        "excerpt": "project instructions"
        }
       ]
      }
@@ -6091,6 +6141,15 @@
       "turn": 2,
       "sources": [
        {
+        "label": "system prompt",
+        "kind": "systemPrompt",
+        "bytes": 53,
+        "tokens": 16,
+        "tokenSource": "estimated",
+        "count": 2,
+        "excerpt": "You are a helper.\nBe brief."
+       },
+       {
         "label": "file: ",
         "kind": "file",
         "bytes": 46,
@@ -6154,6 +6213,15 @@
         "excerpt": "skill a"
        },
        {
+        "label": "instructions: /proj/CLAUDE.md",
+        "kind": "instructions",
+        "bytes": 20,
+        "tokens": 4,
+        "tokenSource": "estimated",
+        "count": 1,
+        "excerpt": "project instructions"
+       },
+       {
         "label": "file: fallback.txt",
         "kind": "file",
         "bytes": 12,
@@ -6161,6 +6229,15 @@
         "tokenSource": "estimated",
         "count": 1,
         "excerpt": "via filename"
+       },
+       {
+        "label": "instructions: /home/x/.claude/rules/r.md",
+        "kind": "instructions",
+        "bytes": 11,
+        "tokens": 3,
+        "tokenSource": "estimated",
+        "count": 1,
+        "excerpt": "a user rule"
        },
        {
         "label": "hook: unknown",
@@ -6202,6 +6279,29 @@
         "tokenSource": "estimated",
         "count": 1,
         "excerpt": "turn 3 reminder"
+       },
+       {
+        "label": "instructions: /proj/CLAUDE.md",
+        "kind": "instructions",
+        "bytes": 20,
+        "tokens": 4,
+        "tokenSource": "estimated",
+        "count": 1,
+        "excerpt": "project instructions"
+       }
+      ]
+     },
+     {
+      "turn": 4,
+      "sources": [
+       {
+        "label": "instructions: /proj/CLAUDE.md",
+        "kind": "instructions",
+        "bytes": 20,
+        "tokens": 4,
+        "tokenSource": "estimated",
+        "count": 1,
+        "excerpt": "project instructions"
        }
       ]
      }
@@ -6237,6 +6337,15 @@
       "turn": 2,
       "sources": [
        {
+        "label": "system prompt",
+        "kind": "systemPrompt",
+        "bytes": 53,
+        "tokens": 16,
+        "tokenSource": "estimated",
+        "count": 2,
+        "excerpt": "You are a helper.\nBe brief."
+       },
+       {
         "label": "file: ",
         "kind": "file",
         "bytes": 46,
@@ -6300,6 +6409,15 @@
         "excerpt": "skill a"
        },
        {
+        "label": "instructions: /proj/CLAUDE.md",
+        "kind": "instructions",
+        "bytes": 20,
+        "tokens": 4,
+        "tokenSource": "estimated",
+        "count": 1,
+        "excerpt": "project instructions"
+       },
+       {
         "label": "file: fallback.txt",
         "kind": "file",
         "bytes": 12,
@@ -6307,6 +6425,15 @@
         "tokenSource": "estimated",
         "count": 1,
         "excerpt": "via filename"
+       },
+       {
+        "label": "instructions: /home/x/.claude/rules/r.md",
+        "kind": "instructions",
+        "bytes": 11,
+        "tokens": 3,
+        "tokenSource": "estimated",
+        "count": 1,
+        "excerpt": "a user rule"
        },
        {
         "label": "hook: unknown",
@@ -6348,6 +6475,29 @@
         "tokenSource": "estimated",
         "count": 1,
         "excerpt": "turn 3 reminder"
+       },
+       {
+        "label": "instructions: /proj/CLAUDE.md",
+        "kind": "instructions",
+        "bytes": 20,
+        "tokens": 4,
+        "tokenSource": "estimated",
+        "count": 1,
+        "excerpt": "project instructions"
+       }
+      ]
+     },
+     {
+      "turn": 4,
+      "sources": [
+       {
+        "label": "instructions: /proj/CLAUDE.md",
+        "kind": "instructions",
+        "bytes": 20,
+        "tokens": 4,
+        "tokenSource": "estimated",
+        "count": 1,
+        "excerpt": "project instructions"
        }
       ]
      }
@@ -6373,7 +6523,7 @@
    "sessionId": "comp-own",
    "estimated": true,
    "truncated": false,
-   "turnCount": 3,
+   "turnCount": 4,
    "turns": [
     {
      "turn": 1,
@@ -6389,8 +6539,14 @@
     },
     {
      "turn": 2,
-     "totalTokens": 51,
+     "totalTokens": 74,
      "sources": [
+      {
+       "label": "system prompt",
+       "kind": "systemPrompt",
+       "tokens": 16,
+       "count": 2
+      },
       {
        "label": "file: ",
        "kind": "file",
@@ -6434,8 +6590,20 @@
        "count": 2
       },
       {
+       "label": "instructions: /proj/CLAUDE.md",
+       "kind": "instructions",
+       "tokens": 4,
+       "count": 1
+      },
+      {
        "label": "file: fallback.txt",
        "kind": "file",
+       "tokens": 3,
+       "count": 1
+      },
+      {
+       "label": "instructions: /home/x/.claude/rules/r.md",
+       "kind": "instructions",
        "tokens": 3,
        "count": 1
       },
@@ -6461,11 +6629,29 @@
     },
     {
      "turn": 3,
-     "totalTokens": 4,
+     "totalTokens": 8,
      "sources": [
       {
        "label": "task reminder",
        "kind": "reminder",
+       "tokens": 4,
+       "count": 1
+      },
+      {
+       "label": "instructions: /proj/CLAUDE.md",
+       "kind": "instructions",
+       "tokens": 4,
+       "count": 1
+      }
+     ]
+    },
+    {
+     "turn": 4,
+     "totalTokens": 4,
+     "sources": [
+      {
+       "label": "instructions: /proj/CLAUDE.md",
+       "kind": "instructions",
        "tokens": 4,
        "count": 1
       }
@@ -6477,12 +6663,18 @@
    "sessionId": "comp-own",
    "estimated": true,
    "truncated": false,
-   "turnCount": 3,
+   "turnCount": 4,
    "turns": [
     {
      "turn": 2,
-     "totalTokens": 51,
+     "totalTokens": 74,
      "sources": [
+      {
+       "label": "system prompt",
+       "kind": "systemPrompt",
+       "tokens": 16,
+       "count": 2
+      },
       {
        "label": "file: ",
        "kind": "file",
@@ -6526,8 +6718,20 @@
        "count": 2
       },
       {
+       "label": "instructions: /proj/CLAUDE.md",
+       "kind": "instructions",
+       "tokens": 4,
+       "count": 1
+      },
+      {
        "label": "file: fallback.txt",
        "kind": "file",
+       "tokens": 3,
+       "count": 1
+      },
+      {
+       "label": "instructions: /home/x/.claude/rules/r.md",
+       "kind": "instructions",
        "tokens": 3,
        "count": 1
       },
@@ -6557,7 +6761,7 @@
    "sessionId": "comp-own",
    "estimated": true,
    "truncated": false,
-   "turnCount": 3,
+   "turnCount": 4,
    "turns": []
   },
   {
@@ -6610,6 +6814,26 @@
         "tokenSource": "estimated",
         "bytes": 14,
         "text": "file body here",
+        "role": "input"
+       },
+       {
+        "id": "claudemd:instructions: /proj/CLAUDE.md",
+        "kind": "claudemd",
+        "label": "instructions: /proj/CLAUDE.md",
+        "tokens": 1,
+        "tokenSource": "estimated",
+        "bytes": 1,
+        "text": "x",
+        "role": "input"
+       },
+       {
+        "id": "system:system prompt",
+        "kind": "system",
+        "label": "system prompt",
+        "tokens": 1,
+        "tokenSource": "estimated",
+        "bytes": 2,
+        "text": "hi",
         "role": "input"
        },
        {
@@ -6671,6 +6895,8 @@
         "userMsg:user",
         "harness:system-reminder",
         "file:file: read.md",
+        "claudemd:instructions: /proj/CLAUDE.md",
+        "system:system prompt",
         "reasoning:thinking",
         "assistantMsg:assistant",
         "bashInput:Bash",
@@ -6799,6 +7025,8 @@
        "removed": [
         "harness:system-reminder",
         "file:file: read.md",
+        "claudemd:instructions: /proj/CLAUDE.md",
+        "system:system prompt",
         "reasoning:thinking",
         "bashInput:Bash",
         "toolInput:Task",
@@ -6911,6 +7139,26 @@
         "role": "input"
        },
        {
+        "id": "claudemd:instructions: /proj/CLAUDE.md",
+        "kind": "claudemd",
+        "label": "instructions: /proj/CLAUDE.md",
+        "tokens": 1,
+        "tokenSource": "estimated",
+        "bytes": 1,
+        "text": "x",
+        "role": "input"
+       },
+       {
+        "id": "system:system prompt",
+        "kind": "system",
+        "label": "system prompt",
+        "tokens": 1,
+        "tokenSource": "estimated",
+        "bytes": 2,
+        "text": "hi",
+        "role": "input"
+       },
+       {
         "id": "reasoning:thinking",
         "kind": "reasoning",
         "label": "thinking",
@@ -6969,6 +7217,8 @@
         "userMsg:user",
         "harness:system-reminder",
         "file:file: read.md",
+        "claudemd:instructions: /proj/CLAUDE.md",
+        "system:system prompt",
         "reasoning:thinking",
         "assistantMsg:assistant",
         "bashInput:Bash",
@@ -7097,6 +7347,8 @@
        "removed": [
         "harness:system-reminder",
         "file:file: read.md",
+        "claudemd:instructions: /proj/CLAUDE.md",
+        "system:system prompt",
         "reasoning:thinking",
         "bashInput:Bash",
         "toolInput:Task",
@@ -7208,6 +7460,26 @@
         "role": "input"
        },
        {
+        "id": "claudemd:instructions: /proj/CLAUDE.md",
+        "kind": "claudemd",
+        "label": "instructions: /proj/CLAUDE.md",
+        "tokens": 1,
+        "tokenSource": "estimated",
+        "bytes": 1,
+        "text": "x",
+        "role": "input"
+       },
+       {
+        "id": "system:system prompt",
+        "kind": "system",
+        "label": "system prompt",
+        "tokens": 1,
+        "tokenSource": "estimated",
+        "bytes": 2,
+        "text": "hi",
+        "role": "input"
+       },
+       {
         "id": "reasoning:thinking",
         "kind": "reasoning",
         "label": "thinking",
@@ -7266,6 +7538,8 @@
         "userMsg:user",
         "harness:system-reminder",
         "file:file: read.md",
+        "claudemd:instructions: /proj/CLAUDE.md",
+        "system:system prompt",
         "reasoning:thinking",
         "assistantMsg:assistant",
         "bashInput:Bash",
@@ -7394,6 +7668,8 @@
        "removed": [
         "harness:system-reminder",
         "file:file: read.md",
+        "claudemd:instructions: /proj/CLAUDE.md",
+        "system:system prompt",
         "reasoning:thinking",
         "bashInput:Bash",
         "toolInput:Task",
@@ -7507,6 +7783,26 @@
         "role": "input"
        },
        {
+        "id": "claudemd:instructions: /proj/CLAUDE.md",
+        "kind": "claudemd",
+        "label": "instructions: /proj/CLAUDE.md",
+        "tokens": 1,
+        "tokenSource": "estimated",
+        "bytes": 1,
+        "text": "x",
+        "role": "input"
+       },
+       {
+        "id": "system:system prompt",
+        "kind": "system",
+        "label": "system prompt",
+        "tokens": 1,
+        "tokenSource": "estimated",
+        "bytes": 2,
+        "text": "hi",
+        "role": "input"
+       },
+       {
         "id": "reasoning:thinking",
         "kind": "reasoning",
         "label": "thinking",
@@ -7565,6 +7861,8 @@
         "userMsg:user",
         "harness:system-reminder",
         "file:file: read.md",
+        "claudemd:instructions: /proj/CLAUDE.md",
+        "system:system prompt",
         "reasoning:thinking",
         "assistantMsg:assistant",
         "bashInput:Bash",
@@ -7693,6 +7991,8 @@
        "removed": [
         "harness:system-reminder",
         "file:file: read.md",
+        "claudemd:instructions: /proj/CLAUDE.md",
+        "system:system prompt",
         "reasoning:thinking",
         "bashInput:Bash",
         "toolInput:Task",
@@ -7807,6 +8107,26 @@
         "role": "input"
        },
        {
+        "id": "claudemd:instructions: /proj/CLAUDE.md",
+        "kind": "claudemd",
+        "label": "instructions: /proj/CLAUDE.md",
+        "tokens": 1,
+        "tokenSource": "estimated",
+        "bytes": 1,
+        "text": "x",
+        "role": "input"
+       },
+       {
+        "id": "system:system prompt",
+        "kind": "system",
+        "label": "system prompt",
+        "tokens": 1,
+        "tokenSource": "estimated",
+        "bytes": 2,
+        "text": "hi",
+        "role": "input"
+       },
+       {
         "id": "reasoning:thinking",
         "kind": "reasoning",
         "label": "thinking",
@@ -7865,6 +8185,8 @@
         "userMsg:user",
         "harness:system-reminder",
         "file:file: read.md",
+        "claudemd:instructions: /proj/CLAUDE.md",
+        "system:system prompt",
         "reasoning:thinking",
         "assistantMsg:assistant",
         "bashInput:Bash",
@@ -7993,6 +8315,8 @@
        "removed": [
         "harness:system-reminder",
         "file:file: read.md",
+        "claudemd:instructions: /proj/CLAUDE.md",
+        "system:system prompt",
         "reasoning:thinking",
         "bashInput:Bash",
         "toolInput:Task",
@@ -8107,6 +8431,26 @@
         "role": "input"
        },
        {
+        "id": "claudemd:instructions: /proj/CLAUDE.md",
+        "kind": "claudemd",
+        "label": "instructions: /proj/CLAUDE.md",
+        "tokens": 1,
+        "tokenSource": "estimated",
+        "bytes": 1,
+        "text": "x",
+        "role": "input"
+       },
+       {
+        "id": "system:system prompt",
+        "kind": "system",
+        "label": "system prompt",
+        "tokens": 1,
+        "tokenSource": "estimated",
+        "bytes": 2,
+        "text": "hi",
+        "role": "input"
+       },
+       {
         "id": "reasoning:thinking",
         "kind": "reasoning",
         "label": "thinking",
@@ -8165,6 +8509,8 @@
         "userMsg:user",
         "harness:system-reminder",
         "file:file: read.md",
+        "claudemd:instructions: /proj/CLAUDE.md",
+        "system:system prompt",
         "reasoning:thinking",
         "assistantMsg:assistant",
         "bashInput:Bash",
@@ -8293,6 +8639,8 @@
        "removed": [
         "harness:system-reminder",
         "file:file: read.md",
+        "claudemd:instructions: /proj/CLAUDE.md",
+        "system:system prompt",
         "reasoning:thinking",
         "bashInput:Bash",
         "toolInput:Task",
@@ -8385,10 +8733,10 @@
       "cacheCreate": 10
      },
      "costUsd": 0.0052,
-     "blockCount": 8,
-     "totalTokens": 47,
+     "blockCount": 10,
+     "totalTokens": 49,
      "diff": {
-      "added": 8,
+      "added": 10,
       "changed": 0,
       "removed": 0,
       "firstChangeBlockId": "userMsg:user"
@@ -8413,6 +8761,20 @@
        "kind": "file",
        "label": "file: read.md",
        "tokens": 3,
+       "role": "input"
+      },
+      {
+       "id": "claudemd:instructions: /proj/CLAUDE.md",
+       "kind": "claudemd",
+       "label": "instructions: /proj/CLAUDE.md",
+       "tokens": 1,
+       "role": "input"
+      },
+      {
+       "id": "system:system prompt",
+       "kind": "system",
+       "label": "system prompt",
+       "tokens": 1,
        "role": "input"
       },
       {
@@ -8468,7 +8830,7 @@
      "diff": {
       "added": 7,
       "changed": 2,
-      "removed": 6,
+      "removed": 8,
       "firstChangeBlockId": "bashOutput:Bash"
      },
      "blocks": [
@@ -8583,10 +8945,10 @@
       "cacheRead": 9000,
       "cacheCreate": 10
      },
-     "blockCount": 8,
-     "totalTokens": 47,
+     "blockCount": 10,
+     "totalTokens": 49,
      "diff": {
-      "added": 8,
+      "added": 10,
       "changed": 0,
       "removed": 0,
       "firstChangeBlockId": "userMsg:user"
@@ -8611,6 +8973,20 @@
        "kind": "file",
        "label": "file: read.md",
        "tokens": 3,
+       "role": "input"
+      },
+      {
+       "id": "claudemd:instructions: /proj/CLAUDE.md",
+       "kind": "claudemd",
+       "label": "instructions: /proj/CLAUDE.md",
+       "tokens": 1,
+       "role": "input"
+      },
+      {
+       "id": "system:system prompt",
+       "kind": "system",
+       "label": "system prompt",
+       "tokens": 1,
        "role": "input"
       },
       {
@@ -8665,7 +9041,7 @@
      "diff": {
       "added": 7,
       "changed": 2,
-      "removed": 6,
+      "removed": 8,
       "firstChangeBlockId": "bashOutput:Bash"
      },
      "blocks": [
@@ -8780,6 +9156,8 @@
      "userMsg:user",
      "harness:system-reminder",
      "file:file: read.md",
+     "claudemd:instructions: /proj/CLAUDE.md",
+     "system:system prompt",
      "reasoning:thinking",
      "assistantMsg:assistant",
      "bashInput:Bash",
@@ -8817,6 +9195,24 @@
      "bytes": 14,
      "role": "input",
      "text": "file body here"
+    },
+    {
+     "id": "claudemd:instructions: /proj/CLAUDE.md",
+     "kind": "claudemd",
+     "label": "instructions: /proj/CLAUDE.md",
+     "tokens": 1,
+     "bytes": 1,
+     "role": "input",
+     "text": "x"
+    },
+    {
+     "id": "system:system prompt",
+     "kind": "system",
+     "label": "system prompt",
+     "tokens": 1,
+     "bytes": 2,
+     "role": "input",
+     "text": "hi"
     },
     {
      "id": "reasoning:thinking",
@@ -8932,6 +9328,36 @@
          "label": "file: ctx.md",
          "attachmentKind": "file",
          "bytes": 16
+        }
+       },
+       {
+        "kind": "attachment",
+        "text": "project instructions",
+        "tokens": 4,
+        "meta": {
+         "label": "instructions: /proj/CLAUDE.md",
+         "attachmentKind": "instructions",
+         "bytes": 20
+        }
+       },
+       {
+        "kind": "attachment",
+        "text": "a user rule",
+        "tokens": 3,
+        "meta": {
+         "label": "instructions: /home/x/.claude/rules/r.md",
+         "attachmentKind": "instructions",
+         "bytes": 11
+        }
+       },
+       {
+        "kind": "attachment",
+        "text": "You are a helper.\nBe brief.",
+        "tokens": 9,
+        "meta": {
+         "label": "system prompt",
+         "attachmentKind": "systemPrompt",
+         "bytes": 26
         }
        },
        {
@@ -9167,6 +9593,36 @@
         }
        },
        {
+        "kind": "attachment",
+        "text": "project instructions",
+        "tokens": 4,
+        "meta": {
+         "label": "instructions: /proj/CLAUDE.md",
+         "attachmentKind": "instructions",
+         "bytes": 20
+        }
+       },
+       {
+        "kind": "attachment",
+        "text": "a user rule",
+        "tokens": 3,
+        "meta": {
+         "label": "instructions: /home/x/.claude/rules/r.md",
+         "attachmentKind": "instructions",
+         "bytes": 11
+        }
+       },
+       {
+        "kind": "attachment",
+        "text": "You are a helper.\nBe brief.",
+        "tokens": 9,
+        "meta": {
+         "label": "system prompt",
+         "attachmentKind": "systemPrompt",
+         "bytes": 26
+        }
+       },
+       {
         "kind": "thinking",
         "text": "considering the options",
         "tokens": 4
@@ -9400,6 +9856,36 @@
         }
        },
        {
+        "kind": "attachment",
+        "text": "project instructions",
+        "tokens": 4,
+        "meta": {
+         "label": "instructions: /proj/CLAUDE.md",
+         "attachmentKind": "instructions",
+         "bytes": 20
+        }
+       },
+       {
+        "kind": "attachment",
+        "text": "a user rule",
+        "tokens": 3,
+        "meta": {
+         "label": "instructions: /home/x/.claude/rules/r.md",
+         "attachmentKind": "instructions",
+         "bytes": 11
+        }
+       },
+       {
+        "kind": "attachment",
+        "text": "You are a helper.\nBe brief.",
+        "tokens": 9,
+        "meta": {
+         "label": "system prompt",
+         "attachmentKind": "systemPrompt",
+         "bytes": 26
+        }
+       },
+       {
         "kind": "thinking",
         "text": "considering the options",
         "tokens": 4
@@ -9630,6 +10116,36 @@
          "label": "file: ctx.md",
          "attachmentKind": "file",
          "bytes": 16
+        }
+       },
+       {
+        "kind": "attachment",
+        "text": "project instructions",
+        "tokens": 4,
+        "meta": {
+         "label": "instructions: /proj/CLAUDE.md",
+         "attachmentKind": "instructions",
+         "bytes": 20
+        }
+       },
+       {
+        "kind": "attachment",
+        "text": "a user rule",
+        "tokens": 3,
+        "meta": {
+         "label": "instructions: /home/x/.claude/rules/r.md",
+         "attachmentKind": "instructions",
+         "bytes": 11
+        }
+       },
+       {
+        "kind": "attachment",
+        "text": "You are a helper.\nBe brief.",
+        "tokens": 9,
+        "meta": {
+         "label": "system prompt",
+         "attachmentKind": "systemPrompt",
+         "bytes": 26
         }
        },
        {
@@ -9867,6 +10383,36 @@
         }
        },
        {
+        "kind": "attachment",
+        "text": "project instructions",
+        "tokens": 4,
+        "meta": {
+         "label": "instructions: /proj/CLAUDE.md",
+         "attachmentKind": "instructions",
+         "bytes": 20
+        }
+       },
+       {
+        "kind": "attachment",
+        "text": "a user rule",
+        "tokens": 3,
+        "meta": {
+         "label": "instructions: /home/x/.claude/rules/r.md",
+         "attachmentKind": "instructions",
+         "bytes": 11
+        }
+       },
+       {
+        "kind": "attachment",
+        "text": "You are a helper.\nBe brief.",
+        "tokens": 9,
+        "meta": {
+         "label": "system prompt",
+         "attachmentKind": "systemPrompt",
+         "bytes": 26
+        }
+       },
+       {
         "kind": "thinking",
         "text": "considering the options",
         "tokens": 4
@@ -10098,6 +10644,36 @@
          "label": "file: ctx.md",
          "attachmentKind": "file",
          "bytes": 16
+        }
+       },
+       {
+        "kind": "attachment",
+        "text": "project instructions",
+        "tokens": 4,
+        "meta": {
+         "label": "instructions: /proj/CLAUDE.md",
+         "attachmentKind": "instructions",
+         "bytes": 20
+        }
+       },
+       {
+        "kind": "attachment",
+        "text": "a user rule",
+        "tokens": 3,
+        "meta": {
+         "label": "instructions: /home/x/.claude/rules/r.md",
+         "attachmentKind": "instructions",
+         "bytes": 11
+        }
+       },
+       {
+        "kind": "attachment",
+        "text": "You are a helper.\nBe brief.",
+        "tokens": 9,
+        "meta": {
+         "label": "system prompt",
+         "attachmentKind": "systemPrompt",
+         "bytes": 26
         }
        },
        {
@@ -10373,7 +10949,7 @@
       "tier5m": 10,
       "tier1h": 30
      },
-     "blockCount": 9,
+     "blockCount": 12,
      "tools": [
       "Bash",
       "Read"
@@ -10452,6 +11028,36 @@
       "bytes": 16
      },
      "text": "injected context"
+    },
+    {
+     "kind": "attachment",
+     "tokens": 4,
+     "meta": {
+      "label": "instructions: /proj/CLAUDE.md",
+      "attachmentKind": "instructions",
+      "bytes": 20
+     },
+     "text": "project instructions"
+    },
+    {
+     "kind": "attachment",
+     "tokens": 3,
+     "meta": {
+      "label": "instructions: /home/x/.claude/rules/r.md",
+      "attachmentKind": "instructions",
+      "bytes": 11
+     },
+     "text": "a user rule"
+    },
+    {
+     "kind": "attachment",
+     "tokens": 9,
+     "meta": {
+      "label": "system prompt",
+      "attachmentKind": "systemPrompt",
+      "bytes": 26
+     },
+     "text": "You are a helper.\nBe brief."
     },
     {
      "kind": "thinking",
@@ -10553,6 +11159,36 @@
         "bytes": 16
        },
        "text": "injected context"
+      },
+      {
+       "kind": "attachment",
+       "tokens": 4,
+       "meta": {
+        "label": "instructions: /proj/CLAUDE.md",
+        "attachmentKind": "instructions",
+        "bytes": 20
+       },
+       "text": "project instructions"
+      },
+      {
+       "kind": "attachment",
+       "tokens": 3,
+       "meta": {
+        "label": "instructions: /home/x/.claude/rules/r.md",
+        "attachmentKind": "instructions",
+        "bytes": 11
+       },
+       "text": "a user rule"
+      },
+      {
+       "kind": "attachment",
+       "tokens": 9,
+       "meta": {
+        "label": "system prompt",
+        "attachmentKind": "systemPrompt",
+        "bytes": 26
+       },
+       "text": "You are a helper.\nBe brief."
       },
       {
        "kind": "thinking",
@@ -10663,6 +11299,36 @@
         "bytes": 16
        },
        "text": "injected context"
+      },
+      {
+       "kind": "attachment",
+       "tokens": 4,
+       "meta": {
+        "label": "instructions: /proj/CLAUDE.md",
+        "attachmentKind": "instructions",
+        "bytes": 20
+       },
+       "text": "project instructions"
+      },
+      {
+       "kind": "attachment",
+       "tokens": 3,
+       "meta": {
+        "label": "instructions: /home/x/.claude/rules/r.md",
+        "attachmentKind": "instructions",
+        "bytes": 11
+       },
+       "text": "a user rule"
+      },
+      {
+       "kind": "attachment",
+       "tokens": 9,
+       "meta": {
+        "label": "system prompt",
+        "attachmentKind": "systemPrompt",
+        "bytes": 26
+       },
+       "text": "You are a helper.\nBe brief."
       },
       {
        "kind": "thinking",
@@ -10836,6 +11502,36 @@
         "bytes": 16
        },
        "text": "injected context"
+      },
+      {
+       "kind": "attachment",
+       "tokens": 4,
+       "meta": {
+        "label": "instructions: /proj/CLAUDE.md",
+        "attachmentKind": "instructions",
+        "bytes": 20
+       },
+       "text": "project instructions"
+      },
+      {
+       "kind": "attachment",
+       "tokens": 3,
+       "meta": {
+        "label": "instructions: /home/x/.claude/rules/r.md",
+        "attachmentKind": "instructions",
+        "bytes": 11
+       },
+       "text": "a user rule"
+      },
+      {
+       "kind": "attachment",
+       "tokens": 9,
+       "meta": {
+        "label": "system prompt",
+        "attachmentKind": "systemPrompt",
+        "bytes": 26
+       },
+       "text": "You are a helper.\nBe brief."
       },
       {
        "kind": "thinking",

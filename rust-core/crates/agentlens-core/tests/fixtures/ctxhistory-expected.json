@@ -7,6 +7,9 @@
    "sessionId": "hist-nousage"
   },
   {
+   "sessionId": "hist-boundary-only"
+  },
+  {
    "sessionId": "hist-fork",
    "parent": "hist-main"
   },
@@ -61,6 +64,26 @@
        "tokenSource": "estimated",
        "bytes": 14,
        "text": "file body here",
+       "role": "input"
+      },
+      {
+       "id": "claudemd:instructions: /proj/CLAUDE.md",
+       "kind": "claudemd",
+       "label": "instructions: /proj/CLAUDE.md",
+       "tokens": 1,
+       "tokenSource": "estimated",
+       "bytes": 1,
+       "text": "x",
+       "role": "input"
+      },
+      {
+       "id": "system:system prompt",
+       "kind": "system",
+       "label": "system prompt",
+       "tokens": 1,
+       "tokenSource": "estimated",
+       "bytes": 2,
+       "text": "hi",
        "role": "input"
       },
       {
@@ -122,6 +145,8 @@
        "userMsg:user",
        "harness:system-reminder",
        "file:file: read.md",
+       "claudemd:instructions: /proj/CLAUDE.md",
+       "system:system prompt",
        "reasoning:thinking",
        "assistantMsg:assistant",
        "bashInput:Bash",
@@ -250,6 +275,8 @@
       "removed": [
        "harness:system-reminder",
        "file:file: read.md",
+       "claudemd:instructions: /proj/CLAUDE.md",
+       "system:system prompt",
        "reasoning:thinking",
        "bashInput:Bash",
        "toolInput:Task",
@@ -327,6 +354,46 @@
        "role": "input"
       },
       {
+       "id": "claudemd:instructions: /proj/CLAUDE.md",
+       "kind": "claudemd",
+       "label": "instructions: /proj/CLAUDE.md",
+       "tokens": 4,
+       "tokenSource": "estimated",
+       "bytes": 20,
+       "text": "project instructions",
+       "role": "input"
+      },
+      {
+       "id": "rule:instructions: /home/x/.claude/rules/r.md",
+       "kind": "rule",
+       "label": "instructions: /home/x/.claude/rules/r.md",
+       "tokens": 3,
+       "tokenSource": "estimated",
+       "bytes": 11,
+       "text": "a user rule",
+       "role": "input"
+      },
+      {
+       "id": "claudemd:instructions: /proj/src/rules/CLAUDE.md",
+       "kind": "claudemd",
+       "label": "instructions: /proj/src/rules/CLAUDE.md",
+       "tokens": 4,
+       "tokenSource": "estimated",
+       "bytes": 18,
+       "text": "not a project rule",
+       "role": "input"
+      },
+      {
+       "id": "system:system prompt",
+       "kind": "system",
+       "label": "system prompt",
+       "tokens": 9,
+       "tokenSource": "estimated",
+       "bytes": 27,
+       "text": "You are a helper.\nBe brief.",
+       "role": "input"
+      },
+      {
        "id": "assistantMsg:assistant",
        "kind": "assistantMsg",
        "label": "assistant",
@@ -340,11 +407,93 @@
      "diff": {
       "added": [
        "userMsg:user",
+       "claudemd:instructions: /proj/CLAUDE.md",
+       "rule:instructions: /home/x/.claude/rules/r.md",
+       "claudemd:instructions: /proj/src/rules/CLAUDE.md",
+       "system:system prompt",
        "assistantMsg:assistant"
       ],
       "removed": [],
       "changed": [],
       "firstChangeBlockId": "userMsg:user"
+     }
+    }
+   ],
+   "estimated": true,
+   "truncated": false
+  },
+  {
+   "sessionId": "hist-boundary-only",
+   "steps": [
+    {
+     "turn": 1,
+     "blocks": [
+      {
+       "id": "userMsg:user",
+       "kind": "userMsg",
+       "label": "user",
+       "tokens": 4,
+       "tokenSource": "estimated",
+       "bytes": 19,
+       "text": "before the boundary",
+       "role": "input"
+      },
+      {
+       "id": "assistantMsg:assistant",
+       "kind": "assistantMsg",
+       "label": "assistant",
+       "tokens": 1,
+       "tokenSource": "estimated",
+       "bytes": 3,
+       "text": "ack",
+       "role": "output"
+      }
+     ],
+     "diff": {
+      "added": [
+       "userMsg:user",
+       "assistantMsg:assistant"
+      ],
+      "removed": [],
+      "changed": [],
+      "firstChangeBlockId": "userMsg:user"
+     }
+    },
+    {
+     "turn": 2,
+     "blocks": [
+      {
+       "id": "postCompact:compact summary",
+       "kind": "postCompact",
+       "label": "compact summary",
+       "tokens": 16,
+       "tokenSource": "estimated",
+       "bytes": 57,
+       "text": "compaction boundary (trigger=auto, 100000→20000 tokens)",
+       "role": "input"
+      },
+      {
+       "id": "assistantMsg:assistant",
+       "kind": "assistantMsg",
+       "label": "assistant",
+       "tokens": 4,
+       "tokenSource": "estimated",
+       "bytes": 18,
+       "text": "after the boundary",
+       "role": "output"
+      }
+     ],
+     "diff": {
+      "added": [
+       "postCompact:compact summary"
+      ],
+      "removed": [
+       "userMsg:user"
+      ],
+      "changed": [
+       "assistantMsg:assistant"
+      ],
+      "firstChangeBlockId": "postCompact:compact summary"
      }
     }
    ],
@@ -393,6 +542,26 @@
        "tokenSource": "estimated",
        "bytes": 14,
        "text": "file body here",
+       "role": "input"
+      },
+      {
+       "id": "claudemd:instructions: /proj/CLAUDE.md",
+       "kind": "claudemd",
+       "label": "instructions: /proj/CLAUDE.md",
+       "tokens": 1,
+       "tokenSource": "estimated",
+       "bytes": 1,
+       "text": "x",
+       "role": "input"
+      },
+      {
+       "id": "system:system prompt",
+       "kind": "system",
+       "label": "system prompt",
+       "tokens": 1,
+       "tokenSource": "estimated",
+       "bytes": 2,
+       "text": "hi",
        "role": "input"
       },
       {
@@ -454,6 +623,8 @@
        "userMsg:user",
        "harness:system-reminder",
        "file:file: read.md",
+       "claudemd:instructions: /proj/CLAUDE.md",
+       "system:system prompt",
        "reasoning:thinking",
        "assistantMsg:assistant",
        "bashInput:Bash",
@@ -582,6 +753,8 @@
       "removed": [
        "harness:system-reminder",
        "file:file: read.md",
+       "claudemd:instructions: /proj/CLAUDE.md",
+       "system:system prompt",
        "reasoning:thinking",
        "bashInput:Bash",
        "toolInput:Task",

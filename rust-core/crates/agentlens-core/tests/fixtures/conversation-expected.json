@@ -39,6 +39,36 @@
        }
       },
       {
+       "kind": "attachment",
+       "text": "project instructions",
+       "tokens": 4,
+       "meta": {
+        "label": "instructions: /proj/CLAUDE.md",
+        "attachmentKind": "instructions",
+        "bytes": 20
+       }
+      },
+      {
+       "kind": "attachment",
+       "text": "a user rule",
+       "tokens": 3,
+       "meta": {
+        "label": "instructions: /home/x/.claude/rules/r.md",
+        "attachmentKind": "instructions",
+        "bytes": 11
+       }
+      },
+      {
+       "kind": "attachment",
+       "text": "You are a helper.\nBe brief.",
+       "tokens": 9,
+       "meta": {
+        "label": "system prompt",
+        "attachmentKind": "systemPrompt",
+        "bytes": 26
+       }
+      },
+      {
        "kind": "thinking",
        "text": "considering the options",
        "tokens": 4
@@ -284,6 +314,36 @@
        }
       },
       {
+       "kind": "attachment",
+       "text": "project instructions",
+       "tokens": 4,
+       "meta": {
+        "label": "instructions: /proj/CLAUDE.md",
+        "attachmentKind": "instructions",
+        "bytes": 20
+       }
+      },
+      {
+       "kind": "attachment",
+       "text": "a user rule",
+       "tokens": 3,
+       "meta": {
+        "label": "instructions: /home/x/.claude/rules/r.md",
+        "attachmentKind": "instructions",
+        "bytes": 11
+       }
+      },
+      {
+       "kind": "attachment",
+       "text": "You are a helper.\nBe brief.",
+       "tokens": 9,
+       "meta": {
+        "label": "system prompt",
+        "attachmentKind": "systemPrompt",
+        "bytes": 26
+       }
+      },
+      {
        "kind": "thinking",
        "text": "considering the options",
        "tokens": 4
@@ -507,6 +567,36 @@
         "label": "file: ctx.md",
         "attachmentKind": "file",
         "bytes": 16
+       }
+      },
+      {
+       "kind": "attachment",
+       "text": "project instructions",
+       "tokens": 4,
+       "meta": {
+        "label": "instructions: /proj/CLAUDE.md",
+        "attachmentKind": "instructions",
+        "bytes": 20
+       }
+      },
+      {
+       "kind": "attachment",
+       "text": "a user rule",
+       "tokens": 3,
+       "meta": {
+        "label": "instructions: /home/x/.claude/rules/r.md",
+        "attachmentKind": "instructions",
+        "bytes": 11
+       }
+      },
+      {
+       "kind": "attachment",
+       "text": "You are a helper.\nBe brief.",
+       "tokens": 9,
+       "meta": {
+        "label": "system prompt",
+        "attachmentKind": "systemPrompt",
+        "bytes": 26
        }
       },
       {

@@ -34,6 +34,12 @@ const hist = [
   L({ type: 'user', message: { content: 'please do the thing' }, timestamp: '2026-08-01T10:00:00Z' }),
   L({ type: 'user', message: { content: 'context <system-reminder>injected</system-reminder>' } }),
   L({ type: 'attachment', attachment: { type: 'file', displayPath: '/a/read.md', content: 'file body here' } }),
+  // TRDD-ZQQYRYBO I9b (item 4): the instructions/prompt_snapshot pair belongs in hist-main too, not
+  // only hist-nousage — kept intentionally SHORT so turn 1's calibration scale stays where it was
+  // (see the asymmetry test below; a bigger pair here risks pushing input tokens into the [0.5,2]
+  // calibratable band, which would be a DIFFERENT bug to chase, not this one).
+  L({ type: 'attachment', attachment: { type: 'instructions', files: [{ path: '/proj/CLAUDE.md', type: 'Project', content: 'x' }] } }),
+  L({ type: 'attachment', attachment: { type: 'prompt_snapshot', systemPrompt: ['hi'], reminderFold: false } }),
   L({ type: 'assistant', timestamp: '2026-08-01T10:00:05Z', message: {
     id: 'a1', model: 'claude-opus-5',
     usage: { input_tokens: 40, output_tokens: 25, cache_read_input_tokens: 9000, cache_creation_input_tokens: 10 },
@@ -74,15 +80,40 @@ const hist = [
 ]
 writeFileSync(join(projects, 'hist-main.jsonl'), hist.join('\n') + '\n')
 
-// A transcript with NO usage anywhere — every block must stay 'estimated'.
+// A transcript with NO usage anywhere — every block must stay 'estimated'. Also exercises the
+// instructions/rule/systemPrompt kinds (TRDD-ZQQYRYBO I9b) — this multi-row path (one attachment
+// record → several blocks) was previously untested in this generator; kept out of hist-main so it
+// doesn't perturb the calibration-scale assertion below.
 writeFileSync(join(projects, 'hist-nousage.jsonl'), [
   L({ type: 'user', message: { content: 'hello' } }),
+  L({ type: 'attachment', attachment: { type: 'instructions', files: [
+    { path: '/proj/CLAUDE.md', type: 'Project', content: 'project instructions' },
+    { path: '/home/x/.claude/rules/r.md', type: 'User', content: 'a user rule' },
+    // TRDD-ZQQYRYBO I9b (item 3): a plain `rules/` directory that is NOT under `.claude/` — must
+    // stay the generic claudemd bucket, not the `rule` kind (only a `.claude/rules/` segment PAIR
+    // qualifies).
+    { path: '/proj/src/rules/CLAUDE.md', type: 'Project', content: 'not a project rule' },
+  ] } }),
+  L({ type: 'attachment', attachment: { type: 'prompt_snapshot', systemPrompt: ['You are a helper.', 'Be brief.'], reminderFold: false } }),
   L({ type: 'assistant', message: { id: 'n1', content: [{ type: 'text', text: 'hi back' }] } }),
+].join('\n') + '\n')
+
+// TRDD-ZQQYRYBO I9b (item 1): a compaction signaled ONLY by system/compact_boundary — NO
+// isCompactSummary anywhere. Kept in its OWN fixture rather than hist-main so it doesn't perturb
+// `harness_metas_are_never_labelled_post_compact`'s pinned "exactly one postCompact block" count
+// there. Orchestrator measurement (2026-09-24): this signal alone accounted for 3 of 12 real
+// compactions across 300 transcripts — previously undetected by this module.
+writeFileSync(join(projects, 'hist-boundary-only.jsonl'), [
+  L({ type: 'user', message: { content: 'before the boundary' } }),
+  L({ type: 'assistant', message: { id: 'b1', content: [{ type: 'text', text: 'ack' }] } }),
+  L({ type: 'system', subtype: 'compact_boundary', compactMetadata: { trigger: 'auto', preTokens: 100000, postTokens: 20000 } }),
+  L({ type: 'assistant', message: { id: 'b2', content: [{ type: 'text', text: 'after the boundary' }] } }),
 ].join('\n') + '\n')
 
 const cases = [
   { sessionId: 'hist-main', parent: undefined },
   { sessionId: 'hist-nousage', parent: undefined },
+  { sessionId: 'hist-boundary-only', parent: undefined },
   { sessionId: 'hist-fork', parent: 'hist-main' },      // reconstruct from parent
   { sessionId: 'hist-known-parent', parent: 'no-such' },// honest EMPTY, still tagged
   { sessionId: 'hist-orphan', parent: undefined },      // → null

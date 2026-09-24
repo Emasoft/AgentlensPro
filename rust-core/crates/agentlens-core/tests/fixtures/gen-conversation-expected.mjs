@@ -37,6 +37,13 @@ const conv = [
   L({ type: 'user', uuid: 'u1', message: { content: 'do the thing' } }),   // resume rewrite → skipped
   L({ type: 'attachment', attachment: { type: 'file', displayPath: '/a/ctx.md', content: 'injected context' } }),
   L({ type: 'attachment', attachment: { type: 'file', displayPath: '/a/empty.md' } }),  // 0 bytes → otherRecords
+  // TRDD-ZQQYRYBO I9b: exercise the instructions/rule/systemPrompt kinds here too — this multi-row
+  // path was previously untested in this generator.
+  L({ type: 'attachment', attachment: { type: 'instructions', files: [
+    { path: '/proj/CLAUDE.md', type: 'Project', content: 'project instructions' },
+    { path: '/home/x/.claude/rules/r.md', type: 'User', content: 'a user rule' },
+  ] } }),
+  L({ type: 'attachment', attachment: { type: 'prompt_snapshot', systemPrompt: ['You are a helper.', 'Be brief.'], reminderFold: false } }),
   // The assistant turn: attachments flush in AHEAD of its own blocks.
   L({ type: 'assistant', timestamp: '2026-08-01T10:00:05Z', isSidechain: true, message: {
     id: 'm1', model: 'claude-opus-5',

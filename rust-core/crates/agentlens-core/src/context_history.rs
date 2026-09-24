@@ -13,7 +13,7 @@ use std::io::BufRead;
 
 use agentlens_logscan::discovery::Env;
 
-use crate::context_composition::{classify_attachment, find_session_file};
+use crate::context_composition::{classify_attachment, find_session_file, INSTRUCTIONS_LABEL_PREFIX};
 use crate::summarize::helpers::{js_slice, js_slice_from, num, utf16_len};
 use crate::token_estimator::{calibrate_tokens, count_tokens};
 
@@ -39,8 +39,15 @@ fn text_budget_bytes(env: &Env) -> u64 {
 }
 
 
-/// Map classifyAttachment's kind onto a ContextBlockKind.
-fn attachment_kind(kind: &str) -> &'static str {
+/// Map classifyAttachment's kind onto a ContextBlockKind. `label` is needed ONLY for the
+/// "instructions" case (see below); every other kind ignores it.
+///
+/// TRDD-ZQQYRYBO I9b (revised): the rule-vs-claudemd split used to be a THIRD raw classify kind
+/// ("instructionsRule"), which leaked onto conversation.rs's `meta.attachmentKind` — an
+/// API/MCP-visible surface with no business knowing about a ContextBlockKind. It now lives HERE,
+/// the only consumer that actually maps onto ContextBlockKind, keyed on the label's path (labels
+/// are `"instructions: {path}"`, see `classify_attachment`).
+fn attachment_kind(kind: &str, label: &str) -> &'static str {
     match kind {
         "hook" => "hook",
         "skill" => "skillPrompt",
@@ -50,7 +57,14 @@ fn attachment_kind(kind: &str) -> &'static str {
         "file" => "file",
         "reminder" => "reminder",
         // TRDD-ZQQYRYBO I9: CLAUDE.md/rules files and the system prompt, recorded since CC 2.1.258.
-        "instructions" => "claudemd",
+        // Only a file under a `.claude/rules/` directory PAIR is a project rule (I9b) — a plain
+        // `rules/` directory elsewhere (e.g. `src/rules/CLAUDE.md`) stays the generic claudemd
+        // bucket; POSIX-only split like the neighbouring basename(), same ceiling.
+        "instructions" => {
+            let path = label.strip_prefix(INSTRUCTIONS_LABEL_PREFIX).unwrap_or(label);
+            let segs: Vec<&str> = path.split('/').collect();
+            if segs.windows(2).any(|w| w[0] == ".claude" && w[1] == "rules") { "rule" } else { "claudemd" }
+        }
         "systemPrompt" => "system",
         _ => "other",
     }
@@ -427,7 +441,7 @@ pub fn build_context_history(env: &Env, session_id: &str, parent_session_id: Opt
                 }
                 let turn = assistant_turns + 1;
                 let text = c.text.clone();
-                add_block!(turn, attachment_kind(c.kind), c.label.clone(), &text, "input", None);
+                add_block!(turn, attachment_kind(c.kind, &c.label), c.label.clone(), &text, "input", None);
             }
             continue;
         }
@@ -438,6 +452,27 @@ pub fn build_context_history(env: &Env, session_id: &str, parent_session_id: Opt
                 let s = summary.to_owned();
                 add_block!(turn, "postCompact", "compact summary".to_owned(), &s, "input", None);
             }
+            continue;
+        }
+
+        // TRDD-ZQQYRYBO I9b: a `system`/`compact_boundary` record (conversation.rs already reads
+        // this exact shape) carries no summary TEXT — only compactMetadata — so it can't reuse the
+        // isCompactSummary/summary branches above. Measured on 300 real transcripts (orchestrator,
+        // 2026-09-24): this signal fires in 12 files while isCompactSummary fires in only 9 — a
+        // quarter of real compactions had NO summary-text record at all, and this module rendered
+        // NO postCompact block for them before this patch. Render what IS available so the boundary
+        // is still visible in the per-step history, not just in conversation.rs's own timeline.
+        if ty == "system" && e.get("subtype").and_then(Value::as_str) == Some("compact_boundary") {
+            let turn = assistant_turns + 1;
+            let m = e.get("compactMetadata");
+            let trigger = m.and_then(|m| m.get("trigger")).and_then(Value::as_str).unwrap_or("unknown");
+            let pre = m.and_then(|m| m.get("preTokens")).and_then(Value::as_f64);
+            let post = m.and_then(|m| m.get("postTokens")).and_then(Value::as_f64);
+            let text = match (pre, post) {
+                (Some(pre), Some(post)) => format!("compaction boundary (trigger={trigger}, {pre}\u{2192}{post} tokens)"),
+                _ => format!("compaction boundary (trigger={trigger})"),
+            };
+            add_block!(turn, "postCompact", "compact summary".to_owned(), &text, "input", None);
             continue;
         }
     }

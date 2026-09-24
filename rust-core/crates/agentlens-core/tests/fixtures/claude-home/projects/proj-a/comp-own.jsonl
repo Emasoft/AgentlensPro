@@ -19,7 +19,16 @@ not json at all
 {"type":"attachment","attachment":{"type":"skill","content":"skill b"}}
 {"type":"attachment","attachment":{"type":"totally_unknown_kind","content":"ignored"}}
 {"type":"attachment","attachment":{"type":"instructions","files":[{"path":"/proj/CLAUDE.md","type":"Project","content":"project instructions"},{"path":"/home/x/.claude/rules/r.md","type":"User","content":"a user rule"}]}}
+{"type":"attachment","attachment":{"type":"instructions","files":[{"path":"/proj/CLAUDE.md","type":"Project","content":"project instructions"},{"path":"/home/x/.claude/rules/r.md","type":"User","content":"a user rule"}]}}
+{"type":"attachment","attachment":{"type":"prompt_snapshot","systemPrompt":["You are a helper.","Be brief."],"reminderFold":false}}
+{"type":"attachment","attachment":{"type":"prompt_snapshot","systemPrompt":["You are a helper.","Be brief."],"reminderFold":false}}
+{"type":"attachment","attachment":{"type":"prompt_snapshot","systemPrompt":["You are a DIFFERENT helper."],"reminderFold":false}}
 {"type":"attachment","attachment":{"type":"prompt_snapshot","systemPrompt":["You are a helper.","Be brief."],"reminderFold":false}}
 {"type":"attachment","attachment":{"type":"hook_success","hookName":"PostToolUse"}}
 {"type":"assistant","message":{}}
 {"type":"attachment","attachment":{"type":"task_reminder","content":"turn 3 reminder"}}
+{"type":"summary","summary":"a compacted summary"}
+{"type":"attachment","attachment":{"type":"instructions","files":[{"path":"/proj/CLAUDE.md","type":"Project","content":"project instructions"}]}}
+{"type":"assistant","message":{}}
+{"type":"system","subtype":"compact_boundary","compactMetadata":{"trigger":"auto","preTokens":100000,"postTokens":20000}}
+{"type":"attachment","attachment":{"type":"instructions","files":[{"path":"/proj/CLAUDE.md","type":"Project","content":"project instructions"}]}}
