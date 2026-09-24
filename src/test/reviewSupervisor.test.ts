@@ -38,6 +38,16 @@ suite('reviewSupervisor — scan', () => {
     assert.strictEqual(withMeasureOnly.forks, 0, 'forks counts only a REVIEW-credited spawn, not a MEASURE one')
   })
 
+  // TRDD-BA0DCW98 parity: the supervisor calls declaredRole() from reviewGate.ts (not its own
+  // regex), so it inherits the same first-line anchoring the gate enforces — a marker preceded by
+  // one line of prose must not clear the backlog here either.
+  test('a fork spawn with one line of prose before the ROLE: REVIEW marker does NOT clear the backlog (declaredRole parity)', () => {
+    const buriedReviewFork = { type: 'tool_use', name: 'Agent', input: { subagent_type: 'fork', prompt: 'Understood, reviewing now.\nROLE: REVIEW\ndo it' } }
+    const s = scanSupervision([assistant([edit]), assistant([buriedReviewFork]), assistant([edit])], CWD)
+    assert.strictEqual(s.forks, 0, 'a marker that is not the prompt\'s first line credits nothing, per declaredRole')
+    assert.strictEqual(s.unreviewed, 2, 'both edits remain unreviewed — the buried marker never counted as a review')
+  })
+
   test('a lone, unmarked fork spawn does NOT clear the backlog — it carries no ROLE marker', () => {
     const s = scanSupervision([assistant([edit]), assistant([fork])], CWD)
     assert.strictEqual(s.unreviewed, 1, 'a bare fork carries no ROLE marker, so no role is credited')

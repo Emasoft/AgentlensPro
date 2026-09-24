@@ -39,12 +39,18 @@ export { NO_REVIEW_SENTINEL, NO_REVIEW_SENTINEL_EXAMPLES, isNoReviewSentinel }
 // THE ONE-TURN RULE for the reviewer admits NO exception: measured over this project's fork corpus
 // (2026-09-03, reports/review-fork-economics/), a prompt that names one permitted tool call gets
 // exactly that call — and a tool_result must be answered, which is a second turn.
-export const REVIEW_ROLE_RULE = 'Begin your prompt with a line that is exactly "ROLE: REVIEW", and '
+// TRDD-BA0DCW98: "the FIRST line" (not just "a line") is load-bearing — `declaredRole` credits a
+// spawn only when the marker is the prompt's literal first non-blank line, so a rule that only says
+// "a line" describes a laxer contract than the code enforces and a compliant-looking prompt with one
+// line of prose before the marker would silently fail to credit.
+export const REVIEW_ROLE_RULE = 'Begin your prompt with its FIRST line being exactly "ROLE: REVIEW" '
+  + '(nothing before it), and '
   + 'begin your final message with the heading ADVERSARIAL-REVIEW. Answer in ONE turn. Make ZERO '
   + 'tool calls — no SendMessage, no Read, no Bash, none. Put every finding INLINE in your final '
   + 'message and stop.'
 
-export const MEASURE_ROLE_RULE = 'Begin your prompt with a line that is exactly "ROLE: MEASURE", and '
+export const MEASURE_ROLE_RULE = 'Begin your prompt with its FIRST line being exactly "ROLE: MEASURE" '
+  + '(nothing before it), and '
   + 'begin your final message with the heading MEASURE-AND-VERIFY-REPORT. Settle EVERY load-bearing '
   + 'assumption the proposal rests on and report each as ASSUMPTION / COMMAND / OBSERVED / VERDICT '
   + '(confirmed | refuted | unmeasurable). There is NO cap on how many tool calls this takes — measure '
@@ -135,9 +141,12 @@ WHAT NEVER ARMS IT: plain prose, status lines, read-only commands, files changed
 else (there is no mtime walk), a janitor heartbeat prompt (\`[janitor-heartbeat]\`) or a user interrupt (Esc / Ctrl-C,
 \`[Request interrupted by user…]\`) — each is a FLOOR: nothing before it is ever demanded, while a
 write the main agent makes AFTER it still arms — a janitor subagent (\`ai-maestro-janitor:*\`), the review fork itself, or
-an agent whose own prompt's literal FIRST non-blank line is exactly \`ROLE: MEASURE\` / \`ROLE: REVIEW\`
-(TRDD-BA0DCW98: a marker buried later in the prompt, e.g. quoted from untrusted third-party text,
-no longer self-exempts).
+an agent whose OWN first transcript entry carries \`ROLE: MEASURE\` / \`ROLE: REVIEW\` as a whole line
+by itself (self-exemption; not anchored to that entry's first line — TRDD-8YM21R5X tracks that
+residual). This is DIFFERENT from what credits YOUR spawn to the gate scanning YOU (below): a spawn
+you make is only credited when the marker is the literal FIRST non-blank line of the prompt you
+wrote for it (TRDD-BA0DCW98: a marker buried later in the prompt you wrote, e.g. quoted from
+untrusted third-party text, no longer credits it).
 
 THE AGENTS:
 - REVIEW: the Agent tool, \`subagent_type: "fork"\`. Its prompt states what you did this turn and
@@ -153,7 +162,7 @@ THE AGENTS:
 Each agent does its one job and returns; neither spawns reviewers of its own (a roled agent is
 exempt from this gate, so the regress stops there).
 
-THE EXIT IS POSITIONAL. A spawn whose prompt starts with its ROLE line credits that role AT THE
+THE EXIT IS POSITIONAL. A spawn whose prompt's FIRST line is its ROLE marker credits that role AT THE
 SPAWN, permanently — what the agent later returns does not un-credit it. The gate compares indexes:
 it releases when the REVIEW credit sits at or after the last write / proposal, and (for a proposal)
 the MEASURE credit sits at or after the last proposal line. So put the spawn tool_use(s) LAST in
@@ -566,9 +575,11 @@ const MEASURE_DEMAND = 'Spawn ONE MEASURE agent (any subagent type — a `lean-w
 export function demandText(d: Demand): string {
   const parts = d === 'review' ? [REVIEW_DEMAND] : d === 'measure' ? [MEASURE_DEMAND] : [MEASURE_DEMAND, REVIEW_DEMAND]
   return parts.join(' ') + ' A spawned agent cannot see this message, so a rule you do not paste into its '
-    + 'prompt never reaches it. A spawn whose prompt starts with its ROLE line credits that role at the '
-    + 'spawn, permanently. A spawn counts ONLY if its prompt has the ROLE marker as a line by itself and, for '
-    + 'REVIEW, only if the spawn is a fork — extra words on the marker line, a non-fork REVIEW spawn, or a '
+    + 'prompt never reaches it. A spawn whose prompt\'s literal FIRST line is its ROLE marker credits that '
+    + 'role at the spawn, permanently. A spawn counts ONLY if the ROLE marker is the FIRST NON-BLANK line '
+    + 'of its prompt (only leading blank lines may precede it — no prose) and, for '
+    + 'REVIEW, only if the spawn is a fork — a marker that is not the first line, extra words on the marker '
+    + 'line, a non-fork REVIEW spawn, or a '
     + 'prompt carrying both markers credit nothing. THE EXIT IS POSITIONAL: put the spawn tool_use(s) LAST in the response, after the '
     + 'turn\'s last edit, write-shaped command or "' + PROPOSAL_MARKER + '" line — one of those after the spawn '
     + 're-arms this gate; plain text after it does not. Run `agentlenspro review-gate --directive` for the full '

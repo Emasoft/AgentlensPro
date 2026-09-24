@@ -27,9 +27,9 @@ import { textArms } from './reviewGateTriggers'
 export interface SupervisorScan {
   /** Consequential actions (edits, write-shaped commands, marked proposals) seen in the window. */
   work: number
-  /** Adversarial review forks spawned (a spawn whose prompt carries `ROLE: REVIEW`), or a
-   *  no-review sentinel emitted — either counts as this window's review, so a legitimate "I cannot
-   *  review" declaration does not nag forever. */
+  /** Adversarial review forks spawned (a spawn whose prompt's FIRST line is `ROLE: REVIEW` —
+   *  `declaredRole`, TRDD-BA0DCW98), or a no-review sentinel emitted — either counts as this
+   *  window's review, so a legitimate "I cannot review" declaration does not nag forever. */
   forks: number
   /** Work items that appear AFTER the last review — the unreviewed backlog. */
   unreviewed: number

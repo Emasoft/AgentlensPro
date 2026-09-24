@@ -620,7 +620,7 @@ suite('reviewGate — messages', () => {
       assert.ok(t.includes(PROPOSAL_MARKER), d)
       assert.ok(/\bLAST\b/.test(t), d)
       assert.ok(t.includes('review-gate --directive'), d)
-      assert.ok(t.includes('a line by itself'), d)
+      assert.ok(t.includes('the ROLE marker is the FIRST NON-BLANK line of its'), d)
     }
   })
 
@@ -643,6 +643,34 @@ suite('reviewGate — messages', () => {
     assert.ok(REVIEW_GATE_DIRECTIVE.includes('ai-maestro-janitor'))
     assert.ok(REVIEW_GATE_DIRECTIVE.includes('Only a `fork` spawn credits the REVIEW role'))
     for (const ex of NO_REVIEW_SENTINEL_EXAMPLES) assert.ok(REVIEW_GATE_DIRECTIVE.includes(ex), ex)
+  })
+
+  // TRDD-BA0DCW98: the directive text (REVIEW_ROLE_RULE/MEASURE_ROLE_RULE) and demandText's own
+  // wording both instruct "the marker must be the prompt's FIRST line" -- this pins that the
+  // instruction and the enforcing predicate (`declaredRole`) actually agree, so a future edit to
+  // either cannot silently drift the promise from the enforcement again (the original bug this
+  // card fixed was exactly that mismatch, just for the OTHER direction -- "a line", not "the first
+  // line").
+  test('the FIRST-line instruction and declaredRole agree: a prompt built exactly as instructed is credited, one line of prose before the marker is not', () => {
+    assert.ok(REVIEW_ROLE_RULE.includes('FIRST line'))
+    assert.ok(MEASURE_ROLE_RULE.includes('FIRST line'))
+    assert.ok(demandText('both').includes('the ROLE marker is the FIRST NON-BLANK line of its'))
+    // Built exactly as REVIEW_ROLE_RULE/MEASURE_ROLE_RULE instructs: the marker on its own as the
+    // prompt's first line, nothing before it.
+    assert.strictEqual(declaredRole('ROLE: REVIEW\nAttack the proposal.'), 'review')
+    assert.strictEqual(declaredRole('ROLE: MEASURE\nSettle the assumptions.'), 'measure')
+    // One line of prose before the marker -- the directive says "nothing before it", so this must
+    // NOT be credited; a laxer implementation ("a line", not "the FIRST line") would have credited it.
+    assert.strictEqual(declaredRole('Understood, spawning the reviewer now.\nROLE: REVIEW\nAttack the proposal.'), null)
+    assert.strictEqual(declaredRole('Understood.\nROLE: MEASURE\nSettle the assumptions.'), null)
+    // The realistic failure this card fixed: a parent that follows the rule's OWN text literally,
+    // pasting the rule line ABOVE the marker instead of the marker first, must still be rejected --
+    // and the marker followed by the pasted rule (as REVIEW_ROLE_RULE/MEASURE_ROLE_RULE instruct)
+    // must still be credited.
+    assert.strictEqual(declaredRole('ROLE: REVIEW\n' + REVIEW_ROLE_RULE), 'review')
+    assert.strictEqual(declaredRole(REVIEW_ROLE_RULE + '\nROLE: REVIEW'), null)
+    assert.strictEqual(declaredRole('ROLE: MEASURE\n' + MEASURE_ROLE_RULE), 'measure')
+    assert.strictEqual(declaredRole(MEASURE_ROLE_RULE + '\nROLE: MEASURE'), null)
   })
 })
 
