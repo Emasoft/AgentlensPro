@@ -3,15 +3,15 @@ trdd-id: CUCLHFBA
 title: TRDD-ZK37VG4X unpriced-session flag and same-feed session dedup were never ported to rust-core
 column: backburner
 created: 2026-09-24T11:04:45+0200
-updated: 2026-09-24T11:04:45+0200
+updated: 2026-09-24T11:11:24+0200
 current-owner: emanuelesabetta
 created-by: emanuelesabetta
 task-type: bugfix
 min-approval-requirement: none
 assignee: emanuelesabetta
-mandate: true
+mandate: false
 mandated-by: none
-approved: true
+approved: false
 approval-judge: emanuelesabetta
 approval-datetime: 2026-09-24T11:04:45+0200
 ---
@@ -23,3 +23,4 @@ flagUnpricedSessions and dedupeSessionIdentities (TRDD-ZK37VG4X spec 1 and spec 
 ## Approval log
 
 - 2026-09-24T11:04:45+0200 — MANDATE issued by emanuelesabetta (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+2026-09-24T11:11:23+0200 — CORRECTION: the MANDATE line above was stamped by trddgrep from the OS account (TRDD-FK4AXP7M); no owner mandated or approved this card; an agent created it during TRDD-4BZPAQWM.

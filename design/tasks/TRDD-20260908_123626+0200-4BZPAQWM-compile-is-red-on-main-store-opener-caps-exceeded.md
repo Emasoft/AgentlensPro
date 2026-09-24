@@ -3,12 +3,13 @@ trdd-id: 4BZPAQWM
 title: pnpm run compile is red on main — store-opener caps exceeded, and they may only go down
 column: dev
 created: 2026-09-08T12:36:26+0200
-updated: 2026-09-24T11:05:49+0200
+updated: 2026-09-24T11:11:54+0200
 current-owner: main-session
 task-type: bugfix
 scope: project
 min-approval-requirement: none
-implementation-commits: [a81972f9]
+implementation-commits: [a81972f9, 7a6d6038]
+assignee: main-session
 ---
 
 # `pnpm run compile` is red on main — store-opener caps exceeded
@@ -19,6 +20,7 @@ MEASURED 2026-09-24. Guard now passes: 22/22 non-test, 8/14 test openers, 27/36 
 fixed by commit a81972f9 on branch fix/4bzpaqwm-drop-dead-database-layer, not yet merged to
 main. Caps were NOT raised (correction: the guard's text allows a justified non-test raise;
 only the TEST cap is frozen). NEXT ACTION: merge to main. Box 3 annotated not ticked, box 4 open — see Acceptance.
+UPDATE 2026-09-24: counts are stale after commit 7a6d6038 — now 22/22 non-test, 8/8 test, 27/27 exemptions. All three caps have zero headroom by design; the next new opener or exemption anywhere turns compile red and needs a raise defended in its commit message (guard text), so a red build from that is not a regression of this fix.
 
 ## The failure
 

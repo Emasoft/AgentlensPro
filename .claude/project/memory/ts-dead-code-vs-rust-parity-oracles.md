@@ -14,8 +14,7 @@ metadata:
 
 
 ^ATOM-1PX5-NXV9 [desc: "a TS file with no bundle entry can still be a live rust-core parity oracle, imported by gen-*.mjs fixture generators", keywords: dead_code unused_TS_file safe_to_delete not_in_bundle esbuild_metafile reachability_pass rust-core_parity_oracle gen-*.mjs fixture_generator import_closure import_type bundle-only_reachability dead_module_set parity_suite rust_port_pin, trdd: TRDD-4BZPAQWM, ocd: 2026-09-24, lmd: 2026-09-24]
-
-A TS module absent from every esbuild bundle metafile is NOT necessarily dead code. 46 of the modules a bundle-only reachability pass flagged as dead were actually required by rust-core/**/tests/fixtures/gen-*.mjs (via out/test/<module>.js) — these generators are the parity oracles that pin the Rust port's output against the TypeScript original. A pass keyed on the three esbuild bundles alone (standalone/cli.js, media/dashboard.js, media/sidebar.js) called 89 files dead; the real dead count was 33, once the gen-*.mjs import closure (including `import type`) was unioned with the bundle metafiles. Evidence: reports/4BZPAQWM/20260924_104703+0200-dead-module-set.md. [^1]
+A TS module absent from every esbuild bundle metafile is NOT necessarily dead code. 46 of the modules a bundle-only reachability pass flagged as dead were required directly by rust-core/**/tests/fixtures/gen-*.mjs (via out/test/<module>.js) — these generators are the parity oracles that pin the Rust port's output against the TypeScript original. With their import closure (including `import type`) unioned in, 56 of the 89 files a bundle-only pass flagged as dead were actually live, leaving the real dead count at 33. A pass keyed on the three esbuild bundles alone (standalone/cli.js, media/dashboard.js, media/sidebar.js) called 89 files dead before that correction. Evidence: reports/4BZPAQWM/20260924_104703+0200-dead-module-set.md. [^1]
 
 ## Notes and lessons learned
 
