@@ -1,9 +1,9 @@
 ---
 trdd-id: J2K6IM4R
 title: The review gate arms on a write verb invoked with --help
-column: todo
+column: ai_review
 created: 2026-09-23T14:12:31+0200
-updated: 2026-09-24T09:01:26+0200
+updated: 2026-09-24T09:47:46+0200
 current-owner: main-session
 created-by: emanuelesabetta
 task-type: bugfix
@@ -38,6 +38,7 @@ Superseded body claims: the Fix section's "--snippet '--help' is a real write" i
 ## Approval log
 
 - 2026-09-23T14:12:31+0200 — MANDATE issued by emanuelesabetta (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-09-24T09:47:46+0200 — column → ai_review by main-session. --help exemption landed in 954fe1a0; all boxes ticked; mutation-checked
 
 ## Symptom
 

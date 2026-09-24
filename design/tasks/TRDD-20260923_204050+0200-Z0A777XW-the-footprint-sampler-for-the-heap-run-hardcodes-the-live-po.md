@@ -1,9 +1,9 @@
 ---
 trdd-id: Z0A777XW
 title: The footprint sampler for the heap run hardcodes the live port and pidfile and is not tracked
-column: todo
+column: testing
 created: 2026-09-23T20:40:50+0200
-updated: 2026-09-24T08:56:43+0200
+updated: 2026-09-24T09:47:46+0200
 current-owner: main-session
 created-by: main-session
 task-type: infra
@@ -21,6 +21,7 @@ approval-datetime: 2026-09-23T20:40:50+0200
 ## Approval log
 
 - 2026-09-23T20:40:50+0200 — MANDATE issued by main-session (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-09-24T09:47:46+0200 — column → testing by main-session. sampler landed in 9c363bb8; box 3 needs an isolated-instance run
 
 ## Body
 
