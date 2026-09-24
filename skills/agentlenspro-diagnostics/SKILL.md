@@ -167,8 +167,17 @@ agentlenspro budget --minutes 90            # exit 0 = go · 1 = do NOT start ·
 ```
 # 2. ARM — one Monitor covers the budget verdict AND the realtime burn risks.
 Monitor(command: "agentlenspro budget --minutes 90 --watch 120 --with-risks",
-        description: "budget+guard — scenario suite", persistent: true)
+        description: "budget+guard — scenario suite", timeout_ms: 1800000)
 ```
+
+A Monitor watch always has a deadline (30 minutes max, 10 in `-p` runs — a `-p` run needs roughly
+3x the re-arms of an interactive one for the same batch length) — it cannot run unattended for a
+90-minute batch. It notifies you when it times out; **re-arm with the time still left, not the
+original figure** — `--minutes N` counts from THIS invocation's own start (`t0`), so replaying
+`--minutes 90` after 30 minutes have already elapsed tells `budget` the run needs 90 *more*
+minutes and silently adds the elapsed time back on. Re-arm as `agentlenspro budget --minutes 60
+--watch 120 --with-risks` (90 minus the 30 already spent), shrinking N on each re-arm. The guard
+sees nothing in the gap between one watch's deadline and the next re-arm — that window is blind.
 
 **3. React to what arrives on that stream — each line means something different:**
 
@@ -181,8 +190,10 @@ Monitor(command: "agentlenspro budget --minutes 90 --watch 120 --with-risks",
 | `[burn-guard] COLD_RESUME_RISK` | a rate-limit stall just ended | warm with ONE agent before resuming the fan-out |
 | nothing for a long time | normal — it is silent until something changes | no action |
 
-**4. TaskStop the monitor when the batch ends**, or a guard armed for 90 minutes keeps emitting
-for the rest of the session.
+**4. TaskStop the monitor when the batch ends** — otherwise it keeps emitting until its own
+30-minute deadline, then notifies you to re-arm it (a 90-minute interactive batch needs 2-3
+re-arms; a `-p` run, capped at 10 minutes per watch, needs about 9). It sees nothing in the gap
+between one deadline and the next re-arm.
 
 **Two things this does NOT do, so plan for them:**
 - **It cannot stop your batch.** AgentlensPro measures and decides; it does not own your process
@@ -584,7 +595,7 @@ when nothing was attributable the message says so and points at `investigate_bur
 batches** — each stdout line then interrupts you the moment a risk fires:
 
 ```
-Monitor(command: "agentlenspro --guard 15", description: "burn guard", persistent: true)
+Monitor(command: "agentlenspro --guard 15", description: "burn guard", timeout_ms: 1800000)
 ```
 
 For a batch with a known duration (a test round, a sweep), the guard is only half the job — it
@@ -723,18 +734,22 @@ a 90-minute batch is usually bounded by the 5h window even when the 7d one exhau
 rather than needing to be polled):
 
 ```
-Monitor(command: "agentlenspro budget --hours 2 --watch 120 --with-risks", description: "budget+guard — <batch name>", persistent: true)
+Monitor(command: "agentlenspro budget --hours 2 --watch 120 --with-risks", description: "budget+guard — <batch name>", timeout_ms: 1800000)
 ```
 
 One Monitor, both signals: `[budget]` verdict transitions **and** `[burn-guard]` risk transitions
 on the same stream, silent while nothing changes. (Arming only the guard —
 `agentlenspro --guard 15` — is still correct when there is no fixed run length to budget against.)
 
-`persistent: true` is right for a batch (no deadline guessing — `timeout_ms` is then ignored and
-may be omitted), but it means the watch lives until the SESSION ends. **`TaskStop` it when the
-batch finishes**, or a guard for a 90-minute run keeps emitting for the rest of the day. If Monitor
-is unavailable in this environment (see the guard section above), fold `agentlenspro --risk` into
-the step-3 checkpoint loop instead.
+**Every watch ends after at most 30 minutes** (10 in a `-p` run — roughly 3x the re-arms for the
+same batch length) — Claude Code notifies you when it does; **re-arm with the minutes still
+left, not the original figure**. `--hours 2` / `--minutes N` count from THIS invocation's own
+`t0`, so replaying the same flag after time has already passed tells `budget` the run still
+needs that much *more* time and double-counts what already elapsed. A 2-hour interactive batch
+needs 3-4 re-arms this way, each with a smaller N. The guard sees nothing between one watch's
+deadline and the next re-arm — that gap is blind. **`TaskStop` it early when the batch finishes**,
+so a guard armed for a short run doesn't keep emitting until its own deadline. If Monitor is unavailable in this environment (see
+the guard section above), fold `agentlenspro --risk` into the step-3 checkpoint loop instead.
 
 **3 — Re-check at checkpoints, not just at the start.** The $/min at minute 0 is not the $/min at
 minute 40 — one fan-out moves it by an order of magnitude. Re-run `get_window_eta` after each phase
