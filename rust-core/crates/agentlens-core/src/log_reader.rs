@@ -607,11 +607,15 @@ fn read_lines_from(path: &Path, from: u64) -> std::io::Result<(Vec<Vec<u8>>, u64
 /// treats a stale version as "restore nothing", and the cold rescan that follows only rebuilds
 /// cards from transcripts STILL ON DISK — so any session whose transcript Claude Code had already
 /// deleted (`cleanupPeriodDays`) or whose Codex/Copilot/OpenCode source had rotated would vanish
-/// from the dashboard permanently, an unbounded history loss to fix a bounded field. `restore()`
-/// now keeps every card unconditionally and, only for a card that is missing the field AND whose
-/// source file still exists, drops that ONE file's saved offset so the next sweep re-parses it
-/// from 0 and rebuilds just that card (see the `reparse_paths` set built in `restore()`). Version
-/// stays 7 — nothing about the delta-log SHAPE changed, so there is nothing to cold-rescan for.
+/// from the dashboard permanently, an unbounded history loss to fix a bounded field. A second
+/// design (dropping the flagged file's saved offset so the next sweep re-parses and rebuilds the
+/// WHOLE card) was also retracted, post-deploy-measurement (TRDD-TWDGR75R): the re-parse un-strips
+/// fields the persisted form had dropped, which roughly doubled `cards.duckdb`'s on-disk size on
+/// boot and blew its 256 MiB buffer-pool ceiling on the first `cards_json()` call. `restore()` now
+/// keeps every card unconditionally and never rebuilds one; a card missing the field just has its
+/// `(session_id, transcript path)` queued for a USAGE-ONLY backfill pass
+/// (`DurableState::run_1h_backfill`) that patches only that one field in place. Version stays 7 —
+/// nothing about the delta-log SHAPE changed, so there is nothing to cold-rescan for.
 pub const LOG_INGEST_VERSION: u64 = 7;
 
 /// TS `PersistedFileState` — the offset record as it sits in `log-offsets.*.ndjson`.
@@ -682,18 +686,19 @@ pub struct DurableState {
     last_cards_save: Instant,
     offsets_dirty: bool,
     cards_dirty: bool,
-    /// Session ids flagged this boot for the targeted 1h-tier reparse (TRDD-ORGJ0E3G item 3):
-    /// populated by `restore`, drained by `finalize_1h_stamps` once the boot sweep has had its
-    /// one chance to backfill each of them.
-    pending_1h_stamp: std::collections::HashSet<String>,
+    /// `(session_id, transcript path)` flagged this boot for the usage-only 1h-tier backfill
+    /// (TRDD-ORGJ0E3G, replacing the full-card re-parse that caused TRDD-TWDGR75R): populated by
+    /// `restore`, drained by `run_1h_backfill` once the boot report has been sent — a card is
+    /// never rebuilt, only this one field is patched onto it.
+    pending_1h_backfill: Vec<(String, PathBuf)>,
 }
 
 /// TRDD-ORGJ0E3G review item 1: bounding the one-time migration's scale. ~8,500 top-level cards
-/// on this machine qualify for the targeted reparse — flagging every one of them makes the first
-/// boot close to a full corpus rescan (913 MB RSS observed mid-restore). A file untouched this
-/// long is an idle session already past every cost view's own horizon, so it keeps the 5m-rate
-/// cost it shows today (the field just stays absent, same as before this fix) instead of paying
-/// I/O to correct a number nothing displays anymore.
+/// on this machine qualify for the targeted backfill — flagging every one of them makes the first
+/// boot's candidate list close to a full corpus walk. A file untouched this long is an idle
+/// session already past every cost view's own horizon, so it keeps the 5m-rate cost it shows
+/// today (the field just stays absent, same as before this fix) instead of paying I/O to correct
+/// a number nothing displays anymore.
 const REPARSE_MAX_AGE: std::time::Duration = std::time::Duration::from_secs(30 * 24 * 60 * 60);
 
 fn env_ms(key: &str, default: u64, floor: u64) -> std::time::Duration {
@@ -718,7 +723,7 @@ impl DurableState {
             last_cards_save: now,
             offsets_dirty: false,
             cards_dirty: false,
-            pending_1h_stamp: std::collections::HashSet::new(),
+            pending_1h_backfill: Vec::new(),
         }
     }
 
@@ -742,15 +747,16 @@ impl DurableState {
     /// Returns (restored cards, imported offsets, skipped offsets); version-stale logs restore
     /// nothing and are tombstoned by the next save.
     ///
-    /// TRDD-ORGJ0E3G (targeted re-parse, replacing the 7→8 whole-corpus version bump this
-    /// superseded): a card whose file has since been deleted or rotated (Claude Code's own
-    /// `cleanupPeriodDays`, or a Codex/Copilot/OpenCode source that rotated) is the ONLY copy of
-    /// that session's history — a version bump that forces "restore nothing" throws it away
-    /// permanently, because the cold rescan only rebuilds cards from transcripts still on disk.
-    /// So EVERY restored card is always kept; only a card that is missing a field added by a
-    /// later parser (`cacheCreate1hTokens`, currently) AND whose source file still exists has its
-    /// saved read offset dropped here, forcing exactly one full re-parse of that one file on the
-    /// next sweep — never a whole-corpus rescan, never a card with no file left to rebuild it from.
+    /// TRDD-ORGJ0E3G (usage-only backfill, replacing both the 7→8 whole-corpus version bump AND
+    /// the full-card re-parse this superseded — see `LOG_INGEST_VERSION`'s doc comment and
+    /// TRDD-TWDGR75R for why each was retracted): a card whose file has since been deleted or
+    /// rotated (Claude Code's own `cleanupPeriodDays`, or a Codex/Copilot/OpenCode source that
+    /// rotated) is the ONLY copy of that session's history, and a card whose file DOES still
+    /// exist gets its history rebuilt bigger than the persisted form ever was if it is fully
+    /// re-parsed. So `restore()` never rebuilds ANY card and never touches ANY file offset here;
+    /// it only queues `(session_id, path)` for a card that is missing a field added by a later
+    /// parser (`cacheCreate1hTokens`, currently) AND whose source file still exists, for
+    /// `run_1h_backfill` to patch after boot with a usage-only pass over that one file.
     pub fn restore(&mut self, tailer: &mut LogTailer, state: &mut crate::CoreState, env: &Env) -> Result<(usize, usize, usize), String> {
         let cards = self.cards.load()?;
         let offsets = self.offsets.load()?;
@@ -761,7 +767,7 @@ impl DurableState {
             return Ok((0, 0, 0));
         }
         let restored = cards.len();
-        let mut reparse_paths: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
+        let mut backfill_candidates = 0usize;
         let mut too_old = 0usize;
         if restored > 0 {
             let (max_entries, max_bytes) = (timeline_max_entries(), timeline_max_bytes());
@@ -814,8 +820,9 @@ impl DurableState {
                             obj.insert("timelineTruncatedCount".into(), Value::from(prev + evicted as u64));
                         }
                     }
-                    // Missing the 1h-tier field (TRDD-ORGJ0E3G) and it actually wrote cache — flag
-                    // its file for a forced from-0 re-parse below, iff that file still exists.
+                    // Missing the 1h-tier field (TRDD-ORGJ0E3G) and it actually wrote cache — queue
+                    // its (session_id, path) for the post-boot usage-only backfill, iff the file
+                    // still exists. Never touches the card or its offset here.
                     let needs_1h_field = obj.get("source").and_then(Value::as_str) == Some("claude_code")
                         && !obj.contains_key("cacheCreate1hTokens")
                         && obj.get("cacheCreateTokens").and_then(Value::as_f64).unwrap_or(0.0) > 0.0;
@@ -831,8 +838,8 @@ impl DurableState {
                                     .and_then(|mtime| now.duration_since(mtime).ok())
                                     .is_some_and(|age| age <= REPARSE_MAX_AGE);
                                 if recent {
-                                    reparse_paths.insert(path.clone());
-                                    self.pending_1h_stamp.insert(session_id.to_string());
+                                    self.pending_1h_backfill.push((session_id.to_string(), path.clone()));
+                                    backfill_candidates += 1;
                                 } else {
                                     too_old += 1;
                                 }
@@ -849,64 +856,73 @@ impl DurableState {
             state.cards.commit();
             state.demote_cold_timelines(crate::summarize::retention::timeline_hot_cards());
         }
-        // Drop only the flagged files' saved offsets — every other file's offset (and every card,
-        // flagged or not) is restored untouched, so a deleted/rotated source never loses history.
-        // Review finding: a flagged file's offset record is filtered out BEFORE import_file_state
-        // sees it, so it counts toward neither `imported` nor `skipped` — logged explicitly here
-        // so a boot log distinguishes "dropped for a targeted reparse" from "skipped: stat
-        // mismatch" instead of folding both into a lower, unexplained `imported`.
-        if !reparse_paths.is_empty() || too_old > 0 {
-            eprintln!("alcore: log-ingest targeted reparse — dropping {} file offset(s) missing cacheCreate1hTokens; rebuilt on the next sweep ({too_old} skipped, older than {} days)", reparse_paths.len(), REPARSE_MAX_AGE.as_secs() / 86_400);
+        // Every card and every file offset is restored untouched — flagged or not — so a
+        // deleted/rotated source never loses history and no file is re-read twice for the same
+        // bytes. The flagged list is only a plan for `run_1h_backfill`; nothing here does I/O.
+        if backfill_candidates > 0 || too_old > 0 {
+            eprintln!("alcore: log-ingest 1h-tier backfill — flagged {backfill_candidates} transcript(s) for a usage-only cache_create_1h pass after boot ({too_old} skipped, older than {} days)", REPARSE_MAX_AGE.as_secs() / 86_400);
         }
-        let offsets: IndexMap<String, Value> = if reparse_paths.is_empty() {
-            offsets
-        } else {
-            offsets.into_iter().filter(|(p, _)| !reparse_paths.contains(&PathBuf::from(p))).collect()
-        };
         let (imported, skipped) = tailer.import_file_state(&offsets);
         Ok((restored, imported, skipped))
     }
 
-    /// TRDD-ORGJ0E3G review item 3: `restore`'s `any_candidates` prescan flags a card purely on
-    /// "source is claude_code and the field is absent" — it has no way to know the sweep that
-    /// follows actually filled it in. A file that turns out unparseable, truncated, or (a known,
-    /// narrower gap) a subagent transcript keyed under a different sessionId than the file's own
-    /// `session_id_for_file` never gains the field from that one sweep, so without this step
-    /// `any_candidates` would see it as a candidate again on every future boot and re-arm the
-    /// whole `discover_all` walk forever — turning a one-time migration into a permanent tax.
-    /// Called once, right after the boot sweep (`start_sweeper`) has had its one chance to
-    /// backfill every session id `restore` put into `pending_1h_stamp`: whatever still lacks the
-    /// key gets it stamped to 0 (the same value its absence already implied everywhere the field
-    /// is read), which both stops the re-flagging and matches "not yet corrected" honestly.
-    ///
-    /// Ordering invariant (not enforced by the type system — there is exactly one call site,
-    /// `start_sweeper`, right after its one boot sweep): call this exactly once per `restore()`,
-    /// after that restore's own boot sweep has run and BEFORE any later `restore()` on the same
-    /// `DurableState` repopulates `pending_1h_stamp`. Calling it twice, or skipping it, is safe
-    /// (each entry is re-checked against the live card before being touched) but calling it before
-    /// the matching sweep has run would stamp 0 prematurely, on a card the sweep was about to fill.
-    pub fn finalize_1h_stamps(&mut self, state: &mut crate::CoreState) {
-        if self.pending_1h_stamp.is_empty() {
+    /// TRDD-ORGJ0E3G — the usage-only backfill itself, replacing the full-card re-parse
+    /// (513623fe/80958154) that caused TRDD-TWDGR75R (re-parsing un-strips fields, which roughly
+    /// doubled `cards.duckdb`'s on-disk size on boot and blew its 256 MiB buffer-pool ceiling on
+    /// the very first `cards_json()` call). `restore()` never rebuilds a card; it only queues
+    /// `(session_id, path)` in `pending_1h_backfill`. This method drains that queue in bounded
+    /// chunks: each chunk's transcripts are streamed with `agentlens_logscan::sum_cache_create_1h`
+    /// (a lean line-by-line pass — no timeline, no tool records, no child cards, the SAME
+    /// first-row-per-`message.id` dedup rule the full parser uses) WITHOUT holding the state lock,
+    /// then the lock is taken only long enough to patch that one field onto each already-restored
+    /// card and released before the next chunk's I/O — so a backfill spanning thousands of files
+    /// never holds the lock for more than one chunk's worth of card writes. A card whose file
+    /// vanished between `restore()` and this call, or whose transcript turns out unparseable,
+    /// reads 0 tokens (same as its absence already implied) and is never retried — this runs
+    /// exactly once per boot, called from `start_sweeper` right after the boot report is sent so
+    /// it never delays server startup.
+    pub fn run_1h_backfill(&mut self, state: &std::sync::Mutex<crate::CoreState>) {
+        if self.pending_1h_backfill.is_empty() {
             return;
         }
-        let pending = std::mem::take(&mut self.pending_1h_stamp);
-        let mut stamped = 0usize;
-        for session_id in pending {
-            if let Some(mut card) = state.cards.get(&session_id) {
-                let has_key = card.as_object().is_some_and(|o| o.contains_key("cacheCreate1hTokens"));
-                if !has_key {
-                    if let Some(obj) = card.as_object_mut() {
-                        obj.insert("cacheCreate1hTokens".into(), Value::from(0.0));
-                    }
-                    state.put_log_session(card);
-                    stamped += 1;
+        let pending = std::mem::take(&mut self.pending_1h_backfill);
+        const BACKFILL_CHUNK: usize = 200;
+        let mut filled = 0usize;
+        for chunk in pending.chunks(BACKFILL_CHUNK) {
+            let sums: Vec<(String, f64)> = chunk
+                .iter()
+                .map(|(session_id, path)| (session_id.clone(), agentlens_logscan::sum_cache_create_1h(&path.to_string_lossy())))
+                .collect();
+            // The "already filled" check is re-derived from the LIVE card, taken fresh under this
+            // lock — not a value captured before the unlocked I/O above — so a concurrent sweep
+            // that already re-parsed and wrote this same file's card (a normal watcher event can
+            // fire mid-backfill) is always seen here and skipped: this chunk's now-stale `sum`
+            // never clobbers a fresher value the sweep just wrote.
+            let Ok(mut st) = state.lock_timed() else { continue };
+            for (session_id, sum) in sums {
+                let Some(mut card) = st.cards.get(&session_id) else { continue };
+                let already_filled = card.as_object().is_some_and(|o| o.contains_key("cacheCreate1hTokens"));
+                if already_filled {
+                    continue; // patched by a later sweep meanwhile — never overwrite
                 }
+                if let Some(obj) = card.as_object_mut() {
+                    let cache_create = obj.get("cacheCreateTokens").and_then(Value::as_f64).unwrap_or(0.0);
+                    // Clamp down, never up: `cacheCreateTokens` is never expected to shrink between
+                    // this card being queued (restore()) and being patched (here) — the card
+                    // lifecycle is upsert-replace, not decrement — so a sum that would exceed it
+                    // signals the two numbers came from different card states, and the safe,
+                    // bounded choice is to cap the write rather than either error or trust an
+                    // inconsistent pair blindly.
+                    obj.insert("cacheCreate1hTokens".into(), Value::from(sum.clamp(0.0, cache_create)));
+                }
+                st.put_log_session(card);
+                filled += 1;
             }
         }
-        if stamped > 0 {
+        if filled > 0 {
             self.mark_dirty();
-            eprintln!("alcore: log-ingest targeted reparse — stamped cacheCreate1hTokens: 0 on {stamped} card(s) the reparse sweep did not fill in; not flagged again");
         }
+        eprintln!("alcore: log-ingest 1h-tier backfill — filled cacheCreate1hTokens on {filled} of {} flagged card(s)", pending.len());
     }
 
     /// scheduleDurableSave — a sweep produced cards: both sidecars are dirty.
@@ -1168,7 +1184,6 @@ pub fn start_sweeper(
                 let mut st = state.lock_timed().expect("core state");
                 st.log_scan.add(&sweep);
                 st.ingest_scanned(scanned);
-                durable.finalize_1h_stamps(&mut st);
                 st.sweeper = Some(SweeperControl { tx });
             }
             let _ = boot_tx.send(Ok(BootReport {
@@ -1179,6 +1194,10 @@ pub fn start_sweeper(
                 watch_attached,
                 watch_failed: watch_failed.len(),
             }));
+            // TRDD-ORGJ0E3G: run the usage-only 1h-tier backfill AFTER the boot report is sent —
+            // it does real transcript I/O (bounded chunks, see `run_1h_backfill`'s own doc
+            // comment) and must never delay MCP/OTLP/UI coming up.
+            durable.run_1h_backfill(&state);
 
             let backstop = if watch_attached > 0 { FULL_RESCAN } else { poll_interval };
             let mut next_full = Instant::now() + backstop;

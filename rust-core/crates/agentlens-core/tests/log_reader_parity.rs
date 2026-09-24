@@ -591,25 +591,24 @@ fn cache_1h_tier_counts_a_repeated_message_id_once_not_once_per_content_block() 
     assert!(parsed.card.cache_create_1h_tokens <= parsed.card.cache_create_tokens);
 }
 
-/// TRDD-ORGJ0E3G's actual fix, replacing the 7→8 whole-corpus version bump the review rejected
-/// (bumping the version makes `restore()` discard EVERY card on a mismatch, and the cold rescan
-/// that follows only rebuilds cards from transcripts STILL ON DISK — a session whose transcript
-/// was already deleted or rotated would vanish from the dashboard permanently). These three tests
-/// exercise the targeted mechanism `restore()` uses instead: a card missing `cacheCreate1hTokens`
-/// gets its file's saved offset dropped ONLY when that file still exists, forcing exactly one
-/// re-parse of that one file — every card is kept regardless, and an already-current card is
-/// left completely alone.
+/// TRDD-ORGJ0E3G's actual fix, replacing BOTH the 7->8 whole-corpus version bump AND the full-card
+/// re-parse this superseded (the re-parse rebuilt cards bigger than their persisted form and blew
+/// DuckDB's buffer-pool ceiling on boot -- TRDD-TWDGR75R). These tests exercise the mechanism
+/// `restore()`/`run_1h_backfill()` use instead: a card missing `cacheCreate1hTokens` is queued
+/// (never rebuilt, never has its file offset touched) and a separate usage-only pass patches just
+/// that one field from a lean streaming read of its transcript.
 #[test]
-fn restore_reparses_once_a_stale_card_whose_file_still_exists() {
-    let home = scratch_home("reparse-exists");
+fn restore_backfill_fills_the_correct_deduplicated_value_and_touches_nothing_else() {
+    let home = scratch_home("backfill-exists");
     let env = Env { home: home.clone(), platform: Platform::Darwin, vars: HashMap::new() };
-    let data = std::env::temp_dir().join(format!("al-reparse-exists-{}", std::process::id()));
+    let data = std::env::temp_dir().join(format!("al-backfill-exists-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&data);
     std::fs::create_dir_all(&data).unwrap();
     let now = 1_785_578_400_000 + 600_000;
 
-    // Run 1: a normal boot + forced save — the parent card is built by the CURRENT parser, so it
-    // already carries cacheCreate1hTokens (the fixture transcript writes an ephemeral_1h split).
+    // Run 1: a normal boot + forced save -- the parent card is built by the CURRENT parser, so it
+    // already carries cacheCreate1hTokens (the fixture transcript writes an ephemeral_1h split,
+    // with msg_1 repeated across two content-block rows -- a real dedup case, not a synthetic one).
     let state = std::sync::Mutex::new(CoreState::open(&data.join("spans")));
     let mut tailer = LogTailer::default();
     let mut durable = DurableState::open(&data);
@@ -621,73 +620,59 @@ fn restore_reparses_once_a_stale_card_whose_file_still_exists() {
 
     let parent_id = "cccccccc-1111-2222-3333-444444444444";
     let mut cards = DeltaLog::new(&data, "log-sessions").load().unwrap();
-    let original_1h = cards[parent_id]["cacheCreate1hTokens"].as_f64().unwrap();
+    let original = cards[parent_id].clone();
+    let original_1h = original["cacheCreate1hTokens"].as_f64().unwrap();
     assert!(original_1h > 0.0, "fixture must actually exercise the 1h tier for this test to mean anything");
-    // TRDD-ORGJ0E3G review item 2: a targeted reparse must REPLACE the card, not accumulate into
-    // it — capture every token bucket + the derived cost BEFORE the strip so the rebuilt card can
-    // be checked for equality, not just presence, of cacheCreate1hTokens. A reparse that resumed
-    // an existing accumulator instead of starting a fresh one would double these.
-    let original_input = cards[parent_id]["inputTokens"].as_f64().unwrap_or(0.0);
-    let original_cache_create = cards[parent_id]["cacheCreateTokens"].as_f64().unwrap();
-    let original_cache_read = cards[parent_id]["cacheReadTokens"].as_f64().unwrap_or(0.0);
-    let original_output = cards[parent_id]["outputTokens"].as_f64().unwrap_or(0.0);
-    let original_model = cards[parent_id]["model"].as_str().unwrap_or("").to_string();
-    let original_cost = agentlens_core::pricing::calc_token_cost_usd(
-        original_input,
-        original_cache_read,
-        original_cache_create,
-        original_output,
-        &original_model,
-        original_1h,
-        None,
-        now as f64,
-    );
     // Simulate a card persisted by a PRE-FIX binary: strip the field.
     cards.get_mut(parent_id).unwrap().as_object_mut().unwrap().remove("cacheCreate1hTokens");
     DeltaLog::new(&data, "log-sessions").save(&cards).unwrap();
 
-    // Run 2: restore() must keep the card (never discard it) but drop ONLY this file's offset.
+    // Run 2: restore() must keep the card exactly as restored (missing the field) and must NOT
+    // touch any file offset -- every card was already parsed once; nothing here re-parses one.
     let state2 = std::sync::Mutex::new(CoreState::open(&data.join("spans2")));
     let mut tailer2 = LogTailer::default();
     let mut durable2 = DurableState::open(&data);
     let (restored, imported, skipped) = durable2.restore(&mut tailer2, &mut state2.lock().unwrap(), &env).unwrap();
     assert_eq!(restored, 7, "every card is kept, not just the ones missing the field");
-    assert_eq!((imported, skipped), (4, 0), "the flagged file's offset is dropped; the other 4 import normally");
+    assert_eq!((imported, skipped), (5, 0), "no offset is ever dropped by this design -- all 5 import normally");
     assert!(
         state2.lock().unwrap().cards.get(parent_id).unwrap().get("cacheCreate1hTokens").is_none(),
-        "the card is kept AS RESTORED — the field is backfilled by the next sweep, not here"
+        "the card is kept AS RESTORED -- the field is filled by run_1h_backfill, not restore()"
     );
 
-    // The boot sweep re-parses ONLY the flagged file from 0 — not the other 4.
+    // The boot sweep never force-rereads anything -- the file's offset was never dropped.
     let (scanned, s) = tailer2.sweep(&env, now);
-    assert_eq!(s.full_reads, 1, "only the one file missing the field is cold-reparsed");
-    state2.lock().unwrap().ingest_scanned(scanned);
-    let rebuilt = state2.lock().unwrap().cards.get(parent_id).unwrap().clone();
-    assert_eq!(rebuilt["cacheCreate1hTokens"].as_f64().unwrap(), original_1h, "the field is rebuilt with the correct value");
-    // Item 2: the reparse REPLACES the card (CardStore::put is an upsert on the whole JSON blob),
-    // it does not accumulate on top of the restored one — every other bucket, and the cost derived
-    // from them, must come back exactly equal, not doubled.
-    assert_eq!(rebuilt["cacheCreateTokens"].as_f64().unwrap(), original_cache_create, "cacheCreateTokens must not double from the targeted reparse");
-    assert_eq!(rebuilt["cacheReadTokens"].as_f64().unwrap_or(0.0), original_cache_read, "cacheReadTokens must not double from the targeted reparse");
-    assert_eq!(rebuilt["outputTokens"].as_f64().unwrap_or(0.0), original_output, "outputTokens must not double from the targeted reparse");
-    let rebuilt_cost = agentlens_core::pricing::calc_token_cost_usd(
-        rebuilt["inputTokens"].as_f64().unwrap_or(0.0),
-        rebuilt["cacheReadTokens"].as_f64().unwrap_or(0.0),
-        rebuilt["cacheCreateTokens"].as_f64().unwrap_or(0.0),
-        rebuilt["outputTokens"].as_f64().unwrap_or(0.0),
-        rebuilt["model"].as_str().unwrap_or(""),
-        rebuilt["cacheCreate1hTokens"].as_f64().unwrap_or(0.0),
-        None,
-        now as f64,
-    );
-    assert!((rebuilt_cost - original_cost).abs() < 1e-9, "session cost must not double from the targeted reparse: rebuilt={rebuilt_cost} original={original_cost}");
+    assert_eq!(s.full_reads, 0, "restore() never forces a re-parse; only run_1h_backfill reads the flagged file");
+    assert!(scanned.is_empty());
+
+    // Capture the exact as-restored card (missing the field) through the SAME CardStore/DuckDB
+    // round trip the backfilled card will come from — comparing against `original` (read from the
+    // Run 1 delta-log FILE, a different serialization path) would fail on a harmless numeric-type
+    // artifact of that round trip (a whole f64 like 150.0 comes back re-typed, still numerically
+    // 150), which is not what this test is checking.
+    let before_backfill = state2.lock().unwrap().cards.get(parent_id).unwrap().clone();
+
+    // The usage-only backfill: a lean streaming pass, not a card rebuild.
+    durable2.run_1h_backfill(&state2);
+    let backfilled = state2.lock().unwrap().cards.get(parent_id).unwrap().clone();
+    assert_eq!(backfilled["cacheCreate1hTokens"].as_f64().unwrap(), original_1h, "the field is filled with the correct deduplicated value");
+    // Every OTHER field must be exactly the card as restored, plus the one new field -- never a
+    // bigger rebuilt card (that growth is exactly what caused TRDD-TWDGR75R).
+    let mut expected = before_backfill.clone();
+    expected.as_object_mut().unwrap().insert("cacheCreate1hTokens".into(), backfilled["cacheCreate1hTokens"].clone());
+    assert_eq!(backfilled, expected, "the backfill must patch cacheCreate1hTokens and touch NOTHING else");
+    // A JSON-size sanity check in the same spirit: patching one numeric field changes the
+    // serialized size by, at most, a few bytes -- never by the size of a rebuilt timeline/card.
+    let before_size = serde_json::to_string(&before_backfill).unwrap().len();
+    let after_size = serde_json::to_string(&backfilled).unwrap().len();
+    assert!(after_size - before_size < 40, "patching one field must not measurably grow the card JSON (before={before_size} after={after_size})");
 }
 
 #[test]
 fn restore_keeps_a_stale_card_untouched_when_its_file_is_gone() {
-    let home = scratch_home("reparse-gone");
+    let home = scratch_home("backfill-gone");
     let env = Env { home: home.clone(), platform: Platform::Darwin, vars: HashMap::new() };
-    let data = std::env::temp_dir().join(format!("al-reparse-gone-{}", std::process::id()));
+    let data = std::env::temp_dir().join(format!("al-backfill-gone-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&data);
     std::fs::create_dir_all(&data).unwrap();
     let now = 1_785_578_400_000 + 600_000;
@@ -706,7 +691,7 @@ fn restore_keeps_a_stale_card_untouched_when_its_file_is_gone() {
     cards.get_mut(parent_id).unwrap().as_object_mut().unwrap().remove("cacheCreate1hTokens");
     DeltaLog::new(&data, "log-sessions").save(&cards).unwrap();
 
-    // The whole point: the transcript this card came from is gone before the restart — exactly
+    // The whole point: the transcript this card came from is gone before the restart -- exactly
     // the "Claude Code's own cleanupPeriodDays already deleted it" case a version bump would have
     // thrown away entirely (the cold rescan it triggers can only see files still on disk).
     std::fs::remove_file(home.join(CLAUDE_REL)).unwrap();
@@ -717,11 +702,14 @@ fn restore_keeps_a_stale_card_untouched_when_its_file_is_gone() {
     let (restored, _imported, _skipped) = durable2.restore(&mut tailer2, &mut state2.lock().unwrap(), &env).unwrap();
     assert_eq!(restored, 7, "the card survives even though its file is gone");
     let kept = state2.lock().unwrap().cards.get(parent_id).unwrap().clone();
-    assert!(kept.get("cacheCreate1hTokens").is_none(), "no file to rebuild from, so the card is left exactly as restored");
+    assert!(kept.get("cacheCreate1hTokens").is_none(), "no file to backfill from, so the card is left exactly as restored");
     assert_eq!(kept["turns"], cards[parent_id]["turns"], "no other field was touched");
 
-    // The boot sweep discovers only 4 files now (one deleted) and force-rereads none of them —
-    // the deleted file was never flagged for reparse in the first place.
+    // A file that no longer exists was never queued in the first place -- the backfill is a no-op.
+    durable2.run_1h_backfill(&state2);
+    let still = state2.lock().unwrap().cards.get(parent_id).unwrap().clone();
+    assert_eq!(still, kept, "run_1h_backfill must not touch a card whose file was never queued");
+
     let (scanned, s) = tailer2.sweep(&env, now);
     assert_eq!(s.files, 4);
     assert_eq!(s.full_reads, 0, "nothing is force-reread; the missing file is correctly left alone");
@@ -729,10 +717,10 @@ fn restore_keeps_a_stale_card_untouched_when_its_file_is_gone() {
 }
 
 #[test]
-fn restore_does_not_reparse_a_card_that_already_has_the_field() {
-    let home = scratch_home("reparse-fresh");
+fn restore_does_not_queue_a_card_that_already_has_the_field() {
+    let home = scratch_home("backfill-fresh");
     let env = Env { home: home.clone(), platform: Platform::Darwin, vars: HashMap::new() };
-    let data = std::env::temp_dir().join(format!("al-reparse-fresh-{}", std::process::id()));
+    let data = std::env::temp_dir().join(format!("al-backfill-fresh-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&data);
     std::fs::create_dir_all(&data).unwrap();
     let now = 1_785_578_400_000 + 600_000;
@@ -746,27 +734,32 @@ fn restore_does_not_reparse_a_card_that_already_has_the_field() {
     durable.mark_dirty();
     durable.tick(&tailer, &state, true);
 
-    // Run 2: nothing stripped, nothing changed on disk — every card the current parser wrote
-    // already carries cacheCreate1hTokens, so restore() must not drop any offset.
+    // Run 2: nothing stripped, nothing changed on disk -- every card the current parser wrote
+    // already carries cacheCreate1hTokens, so restore() must not queue anything, and the backfill
+    // (a card "with the key" per this test's name) must not be read at all.
     let state2 = std::sync::Mutex::new(CoreState::open(&data.join("spans2")));
     let mut tailer2 = LogTailer::default();
     let mut durable2 = DurableState::open(&data);
     let (restored, imported, skipped) = durable2.restore(&mut tailer2, &mut state2.lock().unwrap(), &env).unwrap();
-    assert_eq!((restored, imported, skipped), (7, 5, 0), "no offset dropped when every card already has the field");
+    assert_eq!((restored, imported, skipped), (7, 5, 0), "no offset dropped and no candidate queued when every card already has the field");
+    let before = state2.lock().unwrap().cards.get("cccccccc-1111-2222-3333-444444444444").unwrap().clone();
+    durable2.run_1h_backfill(&state2); // must be a true no-op: nothing queued, nothing read
+    let after = state2.lock().unwrap().cards.get("cccccccc-1111-2222-3333-444444444444").unwrap().clone();
+    assert_eq!(before, after, "a card that already has the key is never read or touched by the backfill");
     let (scanned, s) = tailer2.sweep(&env, now);
     assert_eq!(s.full_reads, 0, "not one file is force-reread when nothing is missing");
     assert!(scanned.is_empty());
 }
 
 #[test]
-fn restore_stamps_a_flagged_card_the_reparse_could_not_fill_and_never_flags_it_again() {
-    // TRDD-ORGJ0E3G review item 3: a flagged file whose reparse yields NO card at all (truncated,
-    // unparseable, or — the narrower acknowledged gap — a subagent transcript keyed under a
-    // different sessionId) must not keep re-arming `restore`'s discover_all walk forever. One
-    // stamp to cacheCreate1hTokens: 0, one attempt, done.
-    let home = scratch_home("reparse-yields-nothing");
+fn backfill_of_an_unparseable_transcript_stamps_zero_once_and_is_not_retried() {
+    // TRDD-ORGJ0E3G review item 3 (unchanged goal, new mechanism): a flagged file whose usage-only
+    // pass yields NOTHING (truncated, unparseable) must not keep re-arming `restore`'s
+    // `discover_all` walk forever. One pass, one written value (0 -- same as absence already
+    // implied), never retried.
+    let home = scratch_home("backfill-yields-nothing");
     let env = Env { home: home.clone(), platform: Platform::Darwin, vars: HashMap::new() };
-    let data = std::env::temp_dir().join(format!("al-reparse-nothing-{}", std::process::id()));
+    let data = std::env::temp_dir().join(format!("al-backfill-nothing-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&data);
     std::fs::create_dir_all(&data).unwrap();
     let now = 1_785_578_400_000 + 600_000;
@@ -785,9 +778,8 @@ fn restore_stamps_a_flagged_card_the_reparse_could_not_fill_and_never_flags_it_a
     cards.get_mut(parent_id).unwrap().as_object_mut().unwrap().remove("cacheCreate1hTokens");
     DeltaLog::new(&data, "log-sessions").save(&cards).unwrap();
 
-    // Simulate a truncated/unparseable transcript: every line fails JSON parsing (log_reader's
-    // tail_one skips a bad line rather than erroring), so this file's reparse rebuilds ZERO cards
-    // — the file still exists and is still recent, so it IS flagged.
+    // Simulate a truncated/unparseable transcript: every line fails JSON parsing -- the file still
+    // exists and is still recent, so it IS queued, but the usage-only pass finds no usable row.
     std::fs::write(home.join(CLAUDE_REL), "not json\nalso not json\n").unwrap();
 
     let state2 = std::sync::Mutex::new(CoreState::open(&data.join("spans2")));
@@ -795,33 +787,41 @@ fn restore_stamps_a_flagged_card_the_reparse_could_not_fill_and_never_flags_it_a
     let mut durable2 = DurableState::open(&data);
     let (restored, imported, skipped) = durable2.restore(&mut tailer2, &mut state2.lock().unwrap(), &env).unwrap();
     assert_eq!(restored, 7);
-    assert_eq!((imported, skipped), (4, 0), "the flagged file's offset is still dropped, even though its reparse will yield nothing");
+    // (4, 1), not (5, 0): restore() itself never drops an offset, but this test's own
+    // std::fs::write shrank the file out from under its previously-saved offset record, so
+    // import_file_state's ordinary size-mismatch guard (unrelated to this fix) skips it — the same
+    // "rotated/truncated file cold-reads" behavior any tailer restart already has.
+    assert_eq!((imported, skipped), (4, 1), "restore() itself never drops an offset; the truncated file skips via the normal size-mismatch guard");
 
-    let (scanned, s) = tailer2.sweep(&env, now);
-    assert_eq!(s.full_reads, 1, "the flagged file is still cold-reparsed once");
-    assert!(scanned.is_empty(), "an unparseable transcript rebuilds no card");
-    state2.lock().unwrap().ingest_scanned(scanned);
-    assert!(
-        state2.lock().unwrap().cards.get(parent_id).unwrap().get("cacheCreate1hTokens").is_none(),
-        "the sweep alone leaves the card exactly as restored — still missing the field"
-    );
-
-    // The fix: after the boot sweep has had its one chance, finalize_1h_stamps stamps 0.
-    durable2.finalize_1h_stamps(&mut state2.lock().unwrap());
+    // The backfill patches 0.0 (no usable 1h token found) and never rebuilds the card.
+    durable2.run_1h_backfill(&state2);
     let stamped = state2.lock().unwrap().cards.get(parent_id).unwrap().clone();
-    assert_eq!(stamped["cacheCreate1hTokens"].as_f64(), Some(0.0), "stamped once so it is not re-flagged forever");
+    assert_eq!(stamped["cacheCreate1hTokens"].as_f64(), Some(0.0), "an unparseable transcript backfills to 0, stamped once");
+    assert_eq!(stamped["turns"], cards[parent_id]["turns"], "the rest of the card is untouched -- this was never a rebuild");
     durable2.mark_dirty();
     durable2.tick(&tailer2, &state2, true);
 
-    // Next restore: the card now carries the key (0.0), so it is no longer a candidate at all —
-    // no offset dropped, no forced reparse. This is the "not flagged on the next restore" proof.
+    // Next restore: the card now carries the key (0.0), so it is no longer a candidate at all --
+    // nothing queued, and the backfill has nothing to do. This is the "not retried" proof.
     let state3 = std::sync::Mutex::new(CoreState::open(&data.join("spans3")));
     let mut tailer3 = LogTailer::default();
     let mut durable3 = DurableState::open(&data);
     let (restored3, imported3, skipped3) = durable3.restore(&mut tailer3, &mut state3.lock().unwrap(), &env).unwrap();
-    assert_eq!((restored3, imported3, skipped3), (7, 5, 0), "the stamped card is not flagged again");
+    // (7, 4, 0), not (7, 5, 0): this test's std::fs::write already broke that one file's saved
+    // offset before Run 2 (see the (4, 1) assert above) and nothing here ever re-reads the file to
+    // record a fresh one, so it stays absent from the persisted offset set from Run 2 onward — a
+    // pre-existing, unrelated fact about this test's corrupted fixture, not something this fix's
+    // "not queued again" claim is about (that claim is `restored3/imported3/skipped3` staying flat
+    // from Run 2 to Run 3, which they do).
+    assert_eq!((restored3, imported3, skipped3), (7, 4, 0), "the stamped card is not queued again");
+    durable3.run_1h_backfill(&state3); // no-op: nothing queued for the 1h backfill
+    // The ordinary tailer still cold-reads this file once, ONLY because it has no saved tail
+    // offset at all (the same broken-fixture consequence noted above) — that is the tailer's own
+    // unrelated "no prior state" behavior, not a re-flag by this fix. What this fix actually
+    // guarantees is `scanned3.is_empty()`: the unparseable content still yields no card, so
+    // `restore()`'s own candidate check (which only fires on a card missing the field) has nothing
+    // new to queue — the "not retried" claim.
     let (scanned3, s3) = tailer3.sweep(&env, now);
-    assert_eq!(s3.full_reads, 0, "not flagged on the next restore");
-    assert!(scanned3.is_empty());
+    assert_eq!(s3.full_reads, 1, "the tailer cold-reads once for lack of a saved offset, unrelated to this fix");
+    assert!(scanned3.is_empty(), "the unparseable file still yields no card, so nothing is re-queued");
 }
-

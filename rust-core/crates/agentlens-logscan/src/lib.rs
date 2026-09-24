@@ -1397,6 +1397,44 @@ pub(crate) fn for_each_json_line(file_path: &str, mut f: impl FnMut(&serde_json:
     Ok(consumed)
 }
 
+/// TRDD-ORGJ0E3G — the usage-only backfill that replaced the whole-card re-parse
+/// (`agentlens-core::log_reader::DurableState::restore`, superseding 513623fe/80958154). The
+/// re-parse rebuilt the FULL card (timeline, tool records, child cards, everything) for every
+/// flagged session, which un-strips fields the persisted form had dropped — that roughly doubled
+/// `cards.duckdb`'s on-disk size on boot and blew the 256 MiB buffer-pool ceiling on the first
+/// `cards_json()` call (TRDD-TWDGR75R). This streams the transcript through the SAME cheap
+/// line-by-line reader `parse_transcript` uses and sums ONLY
+/// `usage.cache_creation.ephemeral_1h_input_tokens`, applying the identical first-row-per-
+/// `message.id` dedup `on_entry` uses for the full parse (`bounded_add`/`disjoint_anthropic`,
+/// not re-implemented here) — no timeline, no tool accounting, no child cards, so the caller can
+/// patch just this one field onto the already-restored (already-stripped) card instead of
+/// replacing it.
+pub fn sum_cache_create_1h(file_path: &str) -> f64 {
+    let mut seen_message_ids: IndexSet<String> = IndexSet::new();
+    let mut total = 0.0;
+    let _ = for_each_json_line(file_path, |entry| {
+        if as_str(entry.get("type")) != Some("assistant") {
+            return;
+        }
+        let msg = entry.get("message").and_then(Value::as_object);
+        let message_id = msg.and_then(|m| as_str(m.get("id"))).map(str::to_owned);
+        let is_first_row = match &message_id {
+            None => true,
+            Some(id) => !seen_message_ids.contains(id.as_str()),
+        };
+        if let Some(id) = &message_id {
+            bounded_add(&mut seen_message_ids, id.clone());
+        }
+        if !is_first_row {
+            return;
+        }
+        if let Some(usage) = msg.and_then(|m| m.get("usage")).and_then(Value::as_object) {
+            total += disjoint_anthropic(usage).cache_create_1h;
+        }
+    });
+    total
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1471,5 +1509,50 @@ mod tests {
         let b = disjoint_anthropic(&usage);
         assert_eq!(b.cache_create, 500.0);
         assert_eq!(b.cache_create_1h, 0.0);
+    }
+
+    // TRDD-ORGJ0E3G — `sum_cache_create_1h` is the usage-only pass `agentlens-core`'s boot
+    // restore uses to backfill a stale card without rebuilding it (replacing the full-card
+    // re-parse that caused TRDD-TWDGR75R). It must obey the SAME first-row-per-message.id dedup
+    // as the full parser (`on_entry`/`bounded_add`) — these tests exercise it directly, not
+    // through `parse_transcript`.
+
+    fn write_assistant_line(body: &mut String, sec: u32, id: &str, create: f64, ephemeral_1h: f64) {
+        let five_m = create - ephemeral_1h;
+        body.push_str(&format!(
+            "{{\"type\":\"assistant\",\"timestamp\":\"2026-09-24T09:00:{sec:02}.000Z\",\"message\":{{\"id\":\"{id}\",\"model\":\"claude-opus-5-5\",\"usage\":{{\"input_tokens\":10,\"output_tokens\":5,\"cache_read_input_tokens\":1000,\"cache_creation_input_tokens\":{create},\"cache_creation\":{{\"ephemeral_5m_input_tokens\":{five_m},\"ephemeral_1h_input_tokens\":{ephemeral_1h}}}}},\"content\":[{{\"type\":\"text\",\"text\":\"turn {sec}\"}}]}}}}\n"
+        ));
+    }
+
+    #[test]
+    fn sum_cache_create_1h_counts_a_repeated_message_id_once() {
+        let dir = std::env::temp_dir().join(format!("al-logscan-1h-sum-dedup-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("session.jsonl");
+        let mut body = String::new();
+        write_assistant_line(&mut body, 1, "msg_dup", 500.0, 500.0);
+        write_assistant_line(&mut body, 2, "msg_dup", 500.0, 500.0); // same id, second content-block row
+        write_assistant_line(&mut body, 3, "msg_dup", 500.0, 500.0); // third row, same id again
+        write_assistant_line(&mut body, 4, "msg_2", 300.0, 100.0); // a distinct message — must still count
+        std::fs::write(&file, body).unwrap();
+
+        let sum = sum_cache_create_1h(file.to_str().unwrap());
+        assert_eq!(sum, 600.0, "msg_dup's 3 rows must count once (500), not 1500, plus msg_2's 100");
+    }
+
+    #[test]
+    fn sum_cache_create_1h_reads_zero_on_an_unparseable_file() {
+        let dir = std::env::temp_dir().join(format!("al-logscan-1h-sum-bad-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("session.jsonl");
+        std::fs::write(&file, "not json\nalso not json\n").unwrap();
+        assert_eq!(sum_cache_create_1h(file.to_str().unwrap()), 0.0);
+
+        // A missing file entirely must also read 0, never error/panic — the caller (a boot
+        // backfill over thousands of files) treats an unreadable transcript the same as an
+        // unparseable one.
+        assert_eq!(sum_cache_create_1h(dir.join("does-not-exist.jsonl").to_str().unwrap()), 0.0);
     }
 }
