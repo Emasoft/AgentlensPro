@@ -19,8 +19,8 @@
 //! `archiveOtelBodies` (A3 — the bodies pass has its own lock and options surface) and
 //! `scanResidentBlobs` (A4 — `burn/runtime.rs` still hard-codes `residentBlobs: []`).
 
-use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use serde_json::Value;
@@ -205,6 +205,20 @@ pub fn staged_body_bytes(dir: &Path) -> u64 {
 /// tick with margin.
 const DRAIN_MAX_PASSES: usize = 16;
 
+/// B-1 (TRDD-Z53IJFE9 step B, advisor verdict): the fsync barrier's "already durable" set, kept
+/// for the life of the process instead of rebuilt every tick — see the doc at its use site in
+/// `bodies_pass`. Module-scoped (not function-local) only so `fsynced_parts_snapshot_for_test`
+/// below can read it; nothing else needs to reach it from outside `bodies_pass`.
+static FSYNCED_PARTS: OnceLock<Mutex<std::collections::HashSet<PathBuf>>> = OnceLock::new();
+
+/// Test-only introspection: there is no other way for an integration test to observe that the
+/// fsync barrier skipped an already-proven part rather than re-fsyncing it, since `ingest_pass`
+/// reports no per-part counters. Returns a snapshot (cloned, so the lock is never held past this
+/// call) of every parquet part this process has fsynced so far via `bodies_pass`.
+pub fn fsynced_parts_snapshot_for_test() -> std::collections::HashSet<PathBuf> {
+    FSYNCED_PARTS.get().map(|m| m.lock().unwrap_or_else(|e| e.into_inner()).clone()).unwrap_or_default()
+}
+
 pub fn bodies_pass(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
     let data_dir = {
         let Ok(st) = state.lock_timed() else { return };
@@ -257,10 +271,25 @@ pub fn bodies_pass(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
     if scope.dirs.is_empty() {
         return;
     }
+
+    // B-3 (TRDD-Z53IJFE9 step B, advisor verdict): with the SSD dir drained continuously at a 60s
+    // interval it is empty most ticks, and `open_store` (DuckDB open) is the expensive part of this
+    // chore — "where the per-pass parquet rebuild scans happen" per the comment below. Checking
+    // every dir's staged bytes is one `read_dir` each; do that BEFORE the pass lock and BEFORE
+    // opening the store, so an idle minute costs a directory read instead of a DuckDB open for
+    // nothing. `over_cap`/emergency-valve reasoning below still re-checks per dir once real work
+    // exists — this is only the fast "nothing to do" exit.
+    if scope.dirs.iter().all(|d| staged_body_bytes(d) == 0) {
+        return;
+    }
+
     let store_dir = data_dir.join("store");
 
     let max_gb = crate::retention_config::resolve_knob(&data_dir, &crate::retention_config::BODIES_MAX_GB);
-    let max_age_hours = crate::retention_config::resolve_knob(&data_dir, &crate::retention_config::BODIES_MAX_AGE_HOURS);
+    // bodiesMaxAgeHours is kept resolvable (step D removes the knob) but no longer feeds the SSD
+    // dir's age gate below — B-2 replaces the 72h batching wait with a flat 10s cutoff, so this
+    // value has no reader left in this tick until step D deletes the knob.
+    let _max_age_hours = crate::retention_config::resolve_knob(&data_dir, &crate::retention_config::BODIES_MAX_AGE_HOURS);
     let cap_bytes = (max_gb * 1024.0 * 1024.0 * 1024.0) as u64;
 
     // The lock spans load → ingest → save. Narrowing it to the ingest alone lets two engines
@@ -294,7 +323,16 @@ pub fn bodies_pass(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
     };
     let state_file = store_dir.join(agentlens_store::pass::PASS_STATE_FILE);
     let (mut skip, mut stranded) = agentlens_store::pass::load_pass_state(&state_file);
-    let mut fsynced = std::collections::HashSet::new();
+    // B-1 (advisor verdict): parquet parts are immutable once written (`agentlens_store::lib.rs`
+    // never merges/rewrites one), so a part fsynced on an earlier tick is fsynced for the life of
+    // the process — recomputing the set fresh every tick (the old `HashSet::new()` here) made the
+    // durability barrier O(total parts in the store) and growing forever. The module-level
+    // `FSYNCED_PARTS` static is keyed by nothing but the part path, which is absolute and unique
+    // per store dir, so two data dirs (or two tests) can never collide in it. A restart empties the
+    // set and pays one full barrier on the next tick, which is the correct "prove everything
+    // again" behavior.
+    let fsynced_lock = FSYNCED_PARTS.get_or_init(|| Mutex::new(std::collections::HashSet::new()));
+    let mut fsynced = fsynced_lock.lock().unwrap_or_else(|e| e.into_inner());
     let max_bytes_per_pass = ingest_max_bytes_per_pass(&std::env::vars().collect());
 
     let mut ingested = 0u64;
@@ -335,7 +373,18 @@ pub fn bodies_pass(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
                 // where waiting is free; on a volatile RAM disk waiting is the whole defect —
                 // bodies sitting there are one reboot from gone, and the space they hold is the
                 // space the next write needs. So: drain the spool on sight.
-                max_age_ms: if is_spool || over_cap { 0 } else { (max_age_hours * 3_600_000.0) as i64 },
+                //
+                // B-2 (TRDD-Z53IJFE9 step B, advisor verdict): the legacy/SSD dir no longer waits
+                // out `bodiesMaxAgeHours` (72h default) to batch — it is the only durable capture
+                // dir now, so batching for free disk space no longer applies. `max_age_ms: 10_000`
+                // is a small non-zero cutoff instead of 0: `ingest_pass`'s parse gate already keeps
+                // (never deletes) a file that fails to parse and re-tries it next tick
+                // (`pass.rs::ingest_body` → `sectionize`), and `verify_bodies_in_store_cached`
+                // re-reads the file at settle time, so a file that finished writing between ingest
+                // and verify fails verify and converges through re-ingest — no cross-tick
+                // size/mtime tracker is needed. 10s just keeps a body captured mid-write off the
+                // per-tick `failed N` log line; it costs nothing on an SSD dir already durable.
+                max_age_ms: if is_spool || over_cap { 0 } else { 10_000 },
                 max_bytes_per_pass,
                 // Only the LEGACY dir is a durable source (the TS target carries `durable: true`),
                 // which gates the fsync barrier inside the pass: there IS something durable about
@@ -521,20 +570,17 @@ pub fn spawn_all(rt: &tokio::runtime::Runtime, state: Arc<Mutex<CoreState>>) {
         }
     });
 
-    // The bodies pass (server.ts:853). BODIES_PASS_INTERVAL_MS is `SPOOL_MODE ? 60_000 : 3600e3`,
-    // and SPOOL_MODE is `CAPTURE_ON && spoolDirConfigured` (server.ts:588-600) — NOT a port check.
-    // An earlier comment here claimed the gate was `OTLP_PORT === 4318` and pinned this to 1h on
-    // that basis; it was wrong when written, and an hourly timer cannot guard a 2GB RAM disk that
-    // was measured going 162MB -> 1.4MB free in ~2 minutes from ONE subagent (spoolBackpressure.ts).
+    // The bodies pass (server.ts:853). ALWAYS 60s now (TRDD-Z53IJFE9 step B): the RAM-disk spool
+    // is going away, and the legacy/SSD dir is the only durable capture target left, so it gets the
+    // same continuous drain the spool used to get alone — an hourly timer cannot guard a growing
+    // SSD dir any more than it could guard a 2GB RAM disk (measured going 162MB -> 1.4MB free in
+    // ~2 minutes from ONE subagent, spoolBackpressure.ts). The old `spool_dir_configured(&d)`
+    // gate that only sped this up when a spool existed is gone from THIS interval choice (the
+    // spool back-pressure valve inside `bodies_pass` itself is unrelated and still reads that
+    // config, out of scope here — step D deletes it along with the rest of the spool code).
     // On the blocking pool — a pass runs DuckDB ingestion and byte-for-byte reconstruction.
     let s = state.clone();
-    let bodies_interval = {
-        let data_dir = state.lock_timed().ok().map(|st| st.data_dir.clone());
-        match data_dir {
-            Some(d) if crate::burn::guard::spool_dir_configured(&d).is_some() => 60,
-            _ => 3600,
-        }
-    };
+    let bodies_interval: u64 = 60;
     rt.spawn(async move {
         let mut tick = tokio::time::interval(Duration::from_secs(bodies_interval));
         tick.tick().await; // boot pass ran inline above

@@ -1,10 +1,12 @@
-//! TRDD-ZW4APOPI box 1: a body written to the CONFIGURED spool dir is ingested and reclaimed by
-//! `bodies_pass`. The incident: the chore drained only the legacy `otel-bodies` dir, so a 2 GB
-//! RAM-disk spool filled to 100% while every pass reported an empty dir and capture silently
-//! lost bodies.
+//! TRDD-Z53IJFE9 step B: with the RAM-disk spool gone, `bodies_pass`'s SSD-dir age gate is what
+//! now stands between "a body still being written" and "ingested mid-write". This file used to
+//! prove the (retired) spool got drained alongside the legacy dir (TRDD-ZW4APOPI box 1); it now
+//! proves the SSD dir's 10s age gate itself: a body younger than 10s is left alone for the next
+//! tick, and only ages into the drain once it clears the cutoff.
 //!
-//! MUTATION CHECK: point the drain in `bodies_pass` back at `data_dir.join("otel-bodies")` alone
-//! and `spool_body_is_ingested_and_reclaimed` MUST fail (the spool file survives the pass).
+//! MUTATION CHECK: change `max_age_ms` in `bodies_pass` to `0` (age-0, "drain on sight" like the
+//! old spool arm) and `young_body_is_left_for_next_tick` MUST fail (a 0s-old body would be
+//! ingested immediately instead of surviving the first pass).
 
 use std::sync::{Arc, Mutex};
 
@@ -15,46 +17,36 @@ fn body(tag: &str) -> String {
     format!("{{\"model\":\"claude-opus-5\",\"messages\":[{{\"role\":\"user\",\"content\":\"{big}-{tag}\"}}],\"n\":1}}")
 }
 
-fn write_aged(p: &std::path::Path, raw: &str, age_hours: u64) {
+fn write_aged(p: &std::path::Path, raw: &str, age_secs: u64) {
     std::fs::write(p, raw).unwrap();
-    let t = std::time::SystemTime::now() - std::time::Duration::from_secs(age_hours * 3600);
+    let t = std::time::SystemTime::now() - std::time::Duration::from_secs(age_secs);
     std::fs::OpenOptions::new().write(true).open(p).unwrap().set_times(std::fs::FileTimes::new().set_modified(t)).unwrap();
 }
 
 #[test]
-fn spool_body_is_ingested_and_reclaimed() {
-    let tmp = std::env::temp_dir().join(format!("al-spool-drain-{}", std::process::id()));
+fn young_body_is_left_for_next_tick() {
+    let tmp = std::env::temp_dir().join(format!("al-bodies-young-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&tmp);
     let data_dir = tmp.join("data");
-    let spool_dir = tmp.join("spool");
-    let legacy_dir = data_dir.join("otel-bodies");
-    std::fs::create_dir_all(&spool_dir).unwrap();
-    std::fs::create_dir_all(&legacy_dir).unwrap();
-    std::fs::write(
-        data_dir.join("config.json"),
-        serde_json::json!({ "capture": { "rawBodies": true, "spoolDir": spool_dir.to_str().unwrap() } }).to_string(),
-    )
-    .unwrap();
+    let bodies_dir = data_dir.join("otel-bodies");
+    std::fs::create_dir_all(&bodies_dir).unwrap();
 
-    // The spool is drained on sight (age 0): a body written seconds ago must go. The legacy dir
-    // keeps its batching age gate (72 h by default), so its body is aged past it to prove the
-    // second dir is still drained too — the fix must ADD the spool, not swap to it.
-    let spool_body = spool_dir.join("fresh.request.json");
-    std::fs::write(&spool_body, body("spool")).unwrap();
-    let legacy_body = legacy_dir.join("old.request.json");
-    write_aged(&legacy_body, &body("legacy"), 73);
+    // Written "now" (0s old) — well inside the new 10s cutoff, mirroring a body Claude Code is
+    // still writing when the tick fires.
+    let name = "11111111-2222-3333-4444-555555555555.request.json";
+    let raw = body("young");
+    write_aged(&bodies_dir.join(name), &raw, 0);
 
     let state = Arc::new(Mutex::new(CoreState::open(&data_dir)));
     bodies_pass(&state, agentlens_core::now_ms() as f64);
 
-    assert!(!spool_body.exists(), "a body in the configured spool must be ingested and reclaimed by the pass");
-    assert!(!legacy_body.exists(), "the legacy dir must still be drained alongside the spool");
+    assert!(bodies_dir.join(name).exists(), "a body under the 10s age gate must survive one pass untouched");
 
-    // A pass never deletes what the store cannot reproduce, so the two deletions are two proofs;
-    // and the drained state persists — a second pass finds nothing and changes nothing.
+    // Age it past the cutoff (mirrors the next tick, 10s+ later) and prove the SAME pass code
+    // path drains it once it clears the gate — the file was left alone, not silently lost.
+    write_aged(&bodies_dir.join(name), &raw, 11);
     bodies_pass(&state, agentlens_core::now_ms() as f64);
-    assert_eq!(std::fs::read_dir(&spool_dir).unwrap().count(), 0);
-    assert_eq!(std::fs::read_dir(&legacy_dir).unwrap().count(), 0);
+    assert!(!bodies_dir.join(name).exists(), "the same body must be drained once it ages past the 10s cutoff");
 
     let _ = std::fs::remove_dir_all(&tmp);
 }
