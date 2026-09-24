@@ -88,12 +88,12 @@ graph TB
 
 > **Historical (pre-fork).** The VS Code extension host was removed before the fork
 > (TRDD-6E6416B8): there is no `src/extension.ts` and no `vscode` dependency. The
-> persistence modules this sequence wires up (`src/database/*`, `sessionRepository.ts`)
-> are retained in-tree per the TRDD KEEP inventory but are exercised only by the unit
-> tests, through the structural stand-ins in `src/vscodeCompat.ts`. The shipped runtime
-> boots via `standalone/server.ts` and persists through the segmented span store
-> (section 5) plus `~/.agentlens/forensics.db`. The sequence below is kept as the
-> reference for the retained layer's original activation flow.
+> `src/database/*` and `sessionRepository.ts` modules this sequence wired up were
+> deleted (TRDD-4BZPAQWM commit A) once measurement showed no live importer outside
+> the retired TS server. The shipped runtime boots via `standalone/server.ts` and
+> persists through the segmented span store (section 5) plus `~/.agentlens/forensics.db`.
+> The sequence below is kept only as a historical record of the extension's original
+> activation flow.
 
 The extension activated in a fixed sequence.
 
@@ -646,35 +646,6 @@ erDiagram
 
 Large string fields (`responseText`, `thinking`, `toolInput`, `fullResult`, `oldString`, `newString`) above 512 bytes are stored as files at `globalStorageUri/blobs/<spanId>-<field>.txt` rather than inline in the DB. The `has_blob` flag indicates when to read from disk instead.
 
-### Component responsibilities
-
-```mermaid
-graph TD
-    subgraph srcdb["src/database/"]
-        SCH[schema.ts<br/>SCHEMA_SQL - CREATE TABLE statements]
-        DBT[db.ts<br/>AgentLensDb - opens DB, applies<br/>schema + migrations, save/dispose]
-        WRI[writer.ts<br/>DatabaseWriter - enqueue/drain/clearAll<br/>Computes cost_usd at write time]
-        REA[reader.ts<br/>DatabaseReader - listSessions<br/>queryDailyStats · queryLifetimeStats<br/>searchSessions · queryBurnRate<br/>loadSessionTimeline · loadBlob]
-        MIG[migration.ts<br/>migrateGlobalStateToSqlite<br/>One-time globalState to SQLite]
-        RET[retention.ts<br/>runRetention - DELETE old sessions<br/>Evict orphaned blob files]
-    end
-
-    subgraph srcroot["src/"]
-        PRI[pricing.ts<br/>lookupRates · calcTokenCostUsd<br/>contextWindowTokens per model]
-        REPO[sessionRepository.ts<br/>SessionRepository<br/>Merges DB + live window<br/>Single access point for session data]
-    end
-
-    DBT -- raw SqlDatabase --> WRI
-    DBT -- raw SqlDatabase --> REA
-    PRI --> WRI
-    PRI --> REA
-    WRI --> REPO
-    REA --> REPO
-    SCH --> DBT
-    MIG --> REPO
-    RET --> REPO
-```
-
 ### Data flow: write path
 
 ```mermaid
@@ -1131,7 +1102,6 @@ agentlenspro/
 │   ├── otlpCollector.ts          # HTTP server, Codex session synthesis
 │   ├── otlpParser.ts             # Pure parsing (tests/standalone)
 │   ├── sessionStore.ts           # 5-min rolling span window, onUpdate callbacks
-│   ├── sessionRepository.ts      # Merges DB + live window; single session data access point
 │   ├── spanSummarizer.ts         # Orchestrates per-agent builders
 │   ├── segmentedSpanStore.ts     # Standalone span persistence — daily append-only NDJSON segments,
 │   │                             #   per-segment index, range loads, retention, spans.json migration
@@ -1153,14 +1123,6 @@ agentlenspro/
 │   ├── logReader.ts              # LogReader — local log ingestion (Claude/Codex/Copilot CLI/Copilot Chat JSONL+JSON)
 │   ├── loopDetector.ts           # Loop signal detection
 │   ├── types.ts                  # Host-only types (SessionSummary)
-│   ├── database/
-│   │   ├── schema.ts             # SCHEMA_SQL — CREATE TABLE statements + indexes
-│   │   ├── db.ts                 # AgentLensDb — open, migrate, save, dispose
-│   │   ├── writer.ts             # DatabaseWriter — enqueue/drain, blob writes, cost_usd
-│   │   ├── reader.ts             # DatabaseReader — list, search, analytics, burn rate, blobs
-│   │   ├── migration.ts          # migrateGlobalStateToSqlite (one-time)
-│   │   ├── retention.ts          # runRetention — DELETE old sessions + blob eviction
-│   │   └── types.ts              # Shared DB types
 │   ├── summarizers/
 │   │   ├── claude.ts             # Claude Code session builder
 │   │   ├── copilot.ts            # Copilot session builder
@@ -1168,13 +1130,6 @@ agentlenspro/
 │   │   └── helpers.ts            # Shared attribute/token extraction
 │   └── test/
 │       ├── sessionStore.test.ts
-│       ├── database/
-│       │   ├── writer.test.ts
-│       │   ├── reader.test.ts
-│       │   ├── reader.analytics.test.ts
-│       │   ├── migration.test.ts
-│       │   ├── retention.test.ts
-│       │   └── sessionRepository.test.ts
 │       └── pricing.test.ts
 ├── media/
 │   ├── src/

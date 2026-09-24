@@ -65,8 +65,7 @@ const ALLOW = new Map([
   ['rust-core/crates/agentlens-core/src/forensics_sql.rs', 'P2'],
   ['rust-core/crates/agentlens-core/src/forensics_compare.rs', 'P2'],
   // Phase 3 — agentlens.db (the session store) -> DuckDB
-  ['src/database/db.ts', 'P3'], ['src/database/reader.ts', 'P3'],
-    ['src/cli/setup.ts', 'P3'],
+  ['src/cli/setup.ts', 'P3'],
   // Phase 4 — opencode.db is NOT ours (OpenCode owns the file). It stays SQLite on disk; the fix
   // is to read it through DuckDB's sqlite_scanner rather than sql.js/rusqlite.
   ['src/logReader.ts', 'P4'],
@@ -87,10 +86,7 @@ const ALLOW = new Map([
   // TESTS. Tagged with the phase of the code they exercise, and they migrate in the SAME commit —
   // a suite still opening SQLite after its subject moved to DuckDB is a green test proving nothing.
   ['src/test/forensicsIndex.test.ts', 'P2'], ['src/test/forensicsAnalytics.test.ts', 'P2'],
-  ['src/test/database/generatedFiles.test.ts', 'P3'], ['src/test/database/migration.test.ts', 'P3'],
-  ['src/test/database/reader.analytics.test.ts', 'P3'], ['src/test/database/reader.test.ts', 'P3'],
-  ['src/test/database/reingest.test.ts', 'P3'], ['src/test/database/retention.test.ts', 'P3'],
-  ['src/test/database/writer.test.ts', 'P3'], ['src/test/setupEnvironment.test.ts', 'P3'],
+  ['src/test/setupEnvironment.test.ts', 'P3'],
   ['src/test/setupVerb.test.ts', 'P3'],
   ['src/test/logReader.opencode.test.ts', 'P4'], ['src/test/rustOpenCode.test.ts', 'P4'],
   ['src/test/helpers/opencodeParseChild.ts', 'P4'],

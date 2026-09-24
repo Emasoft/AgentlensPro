@@ -225,3 +225,54 @@ suite('pricing', () => {
     assert.ok(Math.abs(cost - 2.00) < 1e-9, `expected $2.00/MTok input, got $${cost}`)
   })
 })
+
+// Moved verbatim from src/test/database/sessionIdentity.test.ts (TRDD-4BZPAQWM commit A) —
+// this suite only exercises src/shared/pricing.ts, not the deleted sessionRepository/database
+// layer the rest of that file tested.
+suite('pricing — claude-sonnet-5 (TRDD-ZK37VG4X spec 1)', () => {
+  test('claude-sonnet-5 has a rate-table entry (was missing → silent $0 sessions)', () => {
+    // Pinned to a promo-era timestamp: from 2026-09-01 the scheduled change bills $3/$15, so an
+    // undated lookup (= today) would correctly return sticker rates and fail these intro asserts.
+    const rates = lookupRates('claude-sonnet-5', '2026-08-15T12:00:00Z')
+    assert.ok(rates, 'claude-sonnet-5 must resolve to rates')
+    // Introductory pricing through 2026-08-31: $2/$10 per MTok, cache 0.1x/1.25x of input.
+    assert.strictEqual(rates!.inputPerMTok, 2.00)
+    assert.strictEqual(rates!.cacheReadPerMTok, 0.20)
+    assert.strictEqual(rates!.cacheWritePerMTok, 2.50)
+    assert.strictEqual(rates!.outputPerMTok, 10.00)
+    assert.strictEqual(rates!.contextWindowTokens, 1_000_000)
+  })
+
+  test('claude-sonnet-5 session cost is non-zero and matches the intro rates', () => {
+    // 1M tokens in each bucket → 2 + 0.2 + 2.5 + 10 = 14.7 USD at intro pricing.
+    const cost = calcTokenCostUsd(1_000_000, 1_000_000, 1_000_000, 1_000_000, 'claude-sonnet-5', 0, '2026-08-15T12:00:00Z')
+    assert.ok(Math.abs(cost - 14.7) < 1e-9, `expected 14.7, got ${cost}`)
+  })
+
+  test('claude-mythos-5 (Fable-5 twin) has a rate-table entry', () => {
+    const rates = lookupRates('claude-mythos-5')
+    assert.ok(rates)
+    assert.strictEqual(rates!.inputPerMTok, 10.00)
+    assert.strictEqual(rates!.outputPerMTok, 50.00)
+  })
+
+  test('claude-fable-5-1 has its OWN entry and does not prefix-match onto fable-5 rates (CC 2.1.257)', () => {
+    // lookupRates prefix-matches a longer id onto a shorter family key, so without an explicit key
+    // fable-5-1 silently billed at fable-5's $1.00 cache read — 4x the documented $0.25.
+    const rates = lookupRates('claude-fable-5-1')
+    assert.ok(rates)
+    assert.strictEqual(rates!.cacheReadPerMTok, 0.25)
+    assert.strictEqual(rates!.inputPerMTok, 10.00)
+    assert.strictEqual(rates!.outputPerMTok, 50.00)
+    assert.notStrictEqual(rates!.cacheReadPerMTok, lookupRates('claude-fable-5')!.cacheReadPerMTok)
+  })
+
+  test('a dated claude-sonnet-5 model id normalizes onto the same entry', () => {
+    assert.ok(lookupRates('claude-sonnet-5-20260601'))
+  })
+
+  test('an unknown model returns null rates and $0 raw cost (the flag, not the table, carries the alarm)', () => {
+    assert.strictEqual(lookupRates('totally-unknown-model-xyz'), null)
+    assert.strictEqual(calcTokenCostUsd(1_000_000, 0, 0, 1_000_000, 'totally-unknown-model-xyz'), 0)
+  })
+})
