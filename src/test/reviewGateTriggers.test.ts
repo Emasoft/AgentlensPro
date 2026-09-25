@@ -51,6 +51,10 @@ suite('review-gate triggers: write-shaped commands', () => {
     ['git stash', 'git stash'],
     ['sed -i \'\' \'s/a/b/\' f', 'sed -i'],
     ['perl -pi -e \'s/a/b/\' f', 'perl -i'],
+    ['perl -lpi -e \'s/a/b/\' f', 'perl -i'],                  // a longer switch cluster still edits in place
+    ['perl -wpi -e \'s/a/b/\' f', 'perl -i'],                  // -w (warnings) in the cluster still edits in place
+    ['gh api --method=DELETE repos/a/b/git/refs/heads/x', 'gh api (mutating)'],  // attached pflag spelling
+    ['gh api -XPOST repos/a/b/issues', 'gh api (mutating)'],
     ['echo x > src/a.ts', 'redirect into src/a.ts'],
     ['echo x >> notes.md', 'redirect into notes.md'],
     ['cat > "$F" <<\'EOF\'\nbody\nEOF', 'redirect into $F'],  // undecidable target ⇒ arm

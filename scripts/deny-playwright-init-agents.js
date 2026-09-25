@@ -31,7 +31,9 @@ process.stdin.on('end', () => {
   let cmd = ''
   try {
     const payload = JSON.parse(raw)
-    cmd = String(payload?.tool_input?.command ?? '')
+    // Join backslash-newline continuations: `npx playwright \<NL> init-agents` is one command to the
+    // shell, but the `\n` segment split below would separate the binary from its subcommand.
+    cmd = String(payload?.tool_input?.command ?? '').replace(/\\\r?\n/g, ' ')
   } catch {
     // Unparseable payload: say nothing and let the call proceed. A guard that blocks every Bash
     // call because it could not read its own input is worse than the thing it guards against.
@@ -45,7 +47,9 @@ process.stdin.on('end', () => {
   const segments = cmd.split(/[;&|\n]+/)
   const invokesGenerator = segments.some((seg) => {
     const tokens = seg.trim().split(/\s+/).map((t) => t.replace(/^['"]+|['"]+$/g, ''))
-    const bin = tokens.findIndex((t) => t.split('/').pop() === 'playwright')
+    // Strip an npx version pin too: `npx playwright@latest init-agents` is the tutorial spelling
+    // and ran the generator while the bare-basename compare saw `playwright@latest` ≠ `playwright`.
+    const bin = tokens.findIndex((t) => t.split('/').pop().replace(/@[^@]*$/, '') === 'playwright')
     return bin !== -1 && tokens.slice(bin + 1).includes('init-agents')
   })
   if (!invokesGenerator) process.exit(0)

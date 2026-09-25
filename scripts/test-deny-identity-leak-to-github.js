@@ -49,6 +49,8 @@ const DENY = [
   `gh release create v1.0.0 --notes "thanks ${ADDR}"`,
   `gh issue create --title T --body-file ${leakFile}`,           // the shape the real incident took
   `gh issue comment 8 -F ${leakFile}`,
+  `gh issue comment 8 --repo o/r \\\n  --body-file ${leakFile}`,    // backslash-newline continuation
+  `gh release create v1.0.0 --notes-file=${leakFile}`,           // attached --notes-file= spelling
   `cd /tmp && gh issue comment 8 --body "${ADDR}"`,              // later segment
   `gh issue create --title T --body "${WIN_HOME}\\notes"`,
   // @-mentions in rendered prose page a real GitHub account. Both of these are TAKEN handles that

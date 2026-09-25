@@ -21,6 +21,8 @@ const DENY = [
   'playwright init-agents',
   'cd /tmp && npx playwright init-agents',           // later segment
   '"playwright" init-agents',                         // quoted binary
+  'npx playwright@latest init-agents --loop=claude',  // npx version pin
+  'npx playwright \\\n  init-agents',                 // backslash-newline continuation
 ]
 
 const ALLOW = [

@@ -126,8 +126,13 @@ export function armKillSwitch(reason?: string): string {
   return p
 }
 
-/** Disarm the global kill-switch. Idempotent — a missing flag is success, not an error. */
+/** Disarm the global kill-switch. Idempotent — a missing flag is success, not an error. Any OTHER
+ *  unlink failure (EACCES, EPERM, EBUSY) is thrown: swallowing it let `agentlenspro enable` print
+ *  "now ENABLED" while the flag stayed on disk and every hook kept no-op'ing. */
 export function disarmKillSwitch(): boolean {
   const p = killSwitchPath()
-  try { fs.unlinkSync(p); return true } catch { return false }
+  try { fs.unlinkSync(p); return true } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return false
+    throw e
+  }
 }

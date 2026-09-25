@@ -194,7 +194,9 @@ export const PKG_WRITE_VERBS = ['add', 'remove', 'uninstall', 'rm', 'un', 'link'
 const GIT_WRITE = new Set(GIT_WRITE_SUBCOMMANDS)
 const GH_MUTATING = new Set(GH_MUTATING_VERBS)
 const PKG_WRITE = new Set(PKG_WRITE_VERBS)
-const GH_API_WRITE = /^(-X|--method|-f|-F|--field|--raw-field|--input)$/
+// Attached spellings count too: `--method=DELETE`, `-XPOST` and `--field=k=v` are what pflag
+// accepts, and an exact-word match released every one of them as a read.
+const GH_API_WRITE = /^(?:-X|-f|-F)|^--(?:method|field|raw-field|input)(?:=|$)/
 // Prefix words that are not the command: wrappers, and the shell keywords that head a compound
 // body or condition (`for …; do git commit; done` put `do` in command position and released the
 // commit; `if git commit; then` and `while ! git push` did the same one review later).
@@ -265,7 +267,10 @@ function segmentWriteReason(base: string, args: string[], via: string | null, cw
   }
   if (base === 'eval') return commandWriteReason(args.join(' '), cwd)
   if (base === 'sed' && args.some((a) => /^(-[a-zA-Z]*i|--in-place)/.test(a))) return 'sed -i'
-  if (base === 'perl' && args.some((a) => /^-p?i/.test(a))) return 'perl -i'
+  // Any switch cluster that reaches `i`: `-lpi` / `-0777pi` / `-wpi` edit in place just like `-pi`.
+  // `w` (warnings) is a no-argument cluster letter too, so `-wpi -e ...` was missed. Only the
+  // no-argument cluster letters may precede it, so `-Ilib` / `-Mbigint` stay reads.
+  if (base === 'perl' && args.some((a) => /^-[lnpaw0-9]*i/.test(a))) return 'perl -i'
   if (/^(npm|pnpm|yarn|bun|cargo|uv)$/.test(base)) {
     const sub = args[0] ?? ''
     if (PKG_WRITE.has(sub)) return `${base} ${sub}`

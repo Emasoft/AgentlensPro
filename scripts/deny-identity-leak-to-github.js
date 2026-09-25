@@ -116,8 +116,9 @@ function bodyFiles(tokens) {
     const t = tokens[i]
     if (t === '--body-file' || t === '-F' || t === '--notes-file') {
       if (tokens[i + 1]) out.push(tokens[i + 1])
-    } else if (t.startsWith('--body-file=')) {
-      out.push(t.slice('--body-file='.length))
+    } else if (/^--(body|notes)-file=/.test(t)) {
+      // Both `=` spellings: `gh release create --notes-file=notes.md` published unscanned.
+      out.push(t.slice(t.indexOf('=') + 1))
     }
   }
   return out
@@ -128,7 +129,10 @@ process.stdin.on('data', (d) => { raw += d })
 process.stdin.on('end', () => {
   let cmd = ''
   try {
-    cmd = String(JSON.parse(raw)?.tool_input?.command ?? '')
+    // Join backslash-newline continuations BEFORE the `\n` segment split. `gh issue comment 8 \<NL>
+    // --body-file x.md` is one command, but split on `\n` the flag lands in a segment with no `gh`,
+    // so the body file was never read and its contents published unscanned.
+    cmd = String(JSON.parse(raw)?.tool_input?.command ?? '').replace(/\\\r?\n/g, ' ')
   } catch {
     process.exit(0) // unreadable payload — never block every Bash call over our own parse failure
   }
@@ -172,8 +176,9 @@ process.stdin.on('end', () => {
         + 'writing role names in prose. Neither can be unsent, and `pnpm run check-identities` catches '
         + 'neither — it scans tracked and shipped FILES, not outbound posts. Fixes: genericize the path; '
         + 'replace an address with the account uuid or a role name; and wrap any @name in BACKTICKS, which '
-        + 'renders it as code and notifies nobody. The noreply commit identity and example.com addresses '
-        + 'are allowed. Guard: scripts/deny-identity-leak-to-github.js',
+        + 'renders it as code and notifies nobody. No raw address is exempt — not the noreply commit '
+        + 'identity, not example.com (GitHub pages the DOMAIN as a username); backtick it or drop it. '
+        + 'Guard: scripts/deny-identity-leak-to-github.js',
     },
   }))
   process.exit(0)

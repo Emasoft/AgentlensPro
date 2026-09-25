@@ -36,7 +36,9 @@ process.stdin.on('data', (d) => { raw += d })
 process.stdin.on('end', () => {
   let cmd = ''
   try {
-    cmd = String(JSON.parse(raw)?.tool_input?.command ?? '')
+    // Join backslash-newline continuations first: the shell reads `cargo test \<NL> | tail` as ONE
+    // line, but a split on `\n` below would put the pipe in a separate "pipeline" and release it.
+    cmd = String(JSON.parse(raw)?.tool_input?.command ?? '').replace(/\\\r?\n/g, ' ')
   } catch {
     // Unparseable payload: allow. A guard that blocks every Bash call because it could not read
     // its own input is worse than what it guards against.
@@ -54,6 +56,7 @@ process.stdin.on('end', () => {
     process.exit(0)
   }
 
+  const WRAPPERS = new Set(['env', 'time', 'sudo', 'nohup', 'nice', 'command', 'exec', 'timeout'])
   const tokensOf = (s) => s.trim().split(/\s+/).map((t) => t.replace(/^['"]+|['"]+$/g, ''))
   // Split on pipes only — `;` and `&&` separate whole commands, and a pipeline cannot span them.
   const pipelines = cmd.split(/[;\n]+|&&|\|\|/)
@@ -83,13 +86,34 @@ process.stdin.on('end', () => {
     // ── Rule 2: a measurement piped into a truncating/buffering consumer ─────────────────────
     const MEASURE = new Set(['cargo', 'pnpm', 'npm', 'npx', 'make', 'mocha', 'pytest', 'go'])
     const TRUNCATOR = new Set(['head', 'tail'])
-    if (stages.length > 1 && first.some((t) => MEASURE.has(bin(t)))) {
+    // The COMMAND WORD, not any token: `grep -rn npm package.json | head` is file inspection, and
+    // matching `npm` as an ARGUMENT denied it. Skip `VAR=x` prefixes and exec wrappers, THEN the
+    // wrapper's own flags and numeric arguments (`nice -n 10`, `timeout -s KILL 600`, `env -i`),
+    // so `nice -n 10 cargo test | tail`, `timeout -s KILL 600 cargo test | tail` and
+    // `env -i cargo test | tail` still deny. A flag's value is only consumed when the following
+    // token isn't itself the measured command — `env -i cargo test` must not eat `cargo`.
+    let cw = 0
+    let sawWrapper = false
+    while (cw < first.length) {
+      const t = first[cw]
+      if (/^[A-Za-z_]\w*=/.test(t) || WRAPPERS.has(bin(t))) { cw += 1; sawWrapper = true; continue }
+      if (sawWrapper && /^-/.test(t)) {
+        cw += 1
+        const next = first[cw]
+        if (next && !/^-/.test(next) && !MEASURE.has(bin(next))) cw += 1
+        continue
+      }
+      if (sawWrapper && /^\d+$/.test(t)) { cw += 1; continue }
+      break
+    }
+    const commandWord = (first[cw] ?? '').replace(/^\(+/, '')
+    if (stages.length > 1 && MEASURE.has(bin(commandWord))) {
       const last = tokensOf(stages[stages.length - 1])
       // `tail -f` follows a live log and never truncates — that is a legitimate use.
       const follows = last.includes('-f') || last.includes('--follow')
       if (TRUNCATOR.has(bin(last[0])) && !follows) {
         deny(
-          `Blocked \`${bin(first.find((t) => MEASURE.has(bin(t))))} … | ${bin(last[0])}\`: this `
+          `Blocked \`${bin(commandWord)} … | ${bin(last[0])}\`: this `
           + 'measures the HARNESS. The consumer buffers to EOF so the run looks wedged while it is '
           + 'fine, and `$?` afterwards is the consumer\'s status, not the tool\'s — that is how '
           + '"exit code 0" got read as "the tests passed". Capture first, inspect second: '
@@ -113,13 +137,17 @@ process.stdin.on('end', () => {
     }
 
     // ── Rule 4: a process lookup that matches its own shell ──────────────────────────────────
+    // The bracket trick (`'[w]rite_bot'`) breaks the self-match for BOTH shapes — the regex no
+    // longer matches its own literal text — and the denial message itself recommends it, so it must
+    // release `ps aux | grep '[a]lcore'` as well as `pgrep -af '[w]rite_bot'`.
+    const bracketTrick = /\[[^\]]\]/.test(pipeline)
     const psGrep = stages.length > 1
       && bin(first[0]) === 'ps'
       && stages.slice(1).some((s) => ['grep', 'rg', 'egrep'].includes(bin(tokensOf(s)[0])))
-    // `pgrep -af '[w]rite_bot'` already breaks the self-match with the bracket trick.
+      && !bracketTrick
     const barePgrep = ['pgrep', 'pkill'].includes(bin(first[0]))
       && first.some((t) => /^-\w*f/.test(t))
-      && !/\[[^\]]\]/.test(pipeline)
+      && !bracketTrick
     if (psGrep || barePgrep) {
       deny(
         'Blocked a self-matching process lookup: the shell running this pipeline has the search '

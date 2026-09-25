@@ -41,6 +41,14 @@ const CASES = [
   ['cat /tmp/out.txt | head -20', 'allow', 'inspecting a FILE, not measuring a command'],
   ['grep error /tmp/out.txt | head -5', 'allow', 'file inspection'],
   ['head -20 /tmp/out.txt', 'allow', 'no pipe at all'],
+  ['grep -rn npm package.json | head -5', 'allow', 'npm as a grep PATTERN is not the command word'],
+  ['env CI=1 cargo test | tail -3', 'deny', 'a wrapper does not hide the command word'],
+  ['timeout 600 cargo test | tail -3', 'deny', "timeout's duration is skipped"],
+  ['cargo test \\\n  | tail -3', 'deny', 'backslash-newline continuation is one pipeline'],
+  ['nice -n 10 cargo test | tail -3', 'deny', "a wrapper's own flag+value is skipped too"],
+  ['timeout -s KILL 600 cargo test | tail -3', 'deny', "wrapper flag+value, then the wrapper's own number"],
+  ['env -i cargo test | tail -3', 'deny', "a wrapper's no-value flag doesn't eat the command word"],
+  ['nice -n 10 grep foo file.txt | head -5', 'allow', 'the wrapper does not turn grep into a measured command'],
 
   // ── rule 3: tee truncation ───────────────────────────────────────────────────────────────
   ['cargo build 2>&1 | tee /tmp/b.txt | head -18', 'deny', 'SIGPIPEs tee, silently truncating the file'],
@@ -53,6 +61,7 @@ const CASES = [
   ['ps -ef | rg cargo', 'deny', 'same with ripgrep'],
   ['pgrep -f write_alerts_bot.py', 'deny', 'pgrep -f matches its own invocation'],
   ["pgrep -af '[w]rite_alerts_bot.py'", 'allow', 'the bracket trick breaks the self-match'],
+  ["ps aux | grep '[a]lcore'", 'allow', 'the bracket trick works for ps | grep too'],
   ['ps -eo pid,ppid,etime,command > /tmp/ps.txt', 'allow', 'the prescribed snapshot'],
   ['grep alcore /tmp/ps.txt', 'allow', 'grepping the snapshot cannot self-match'],
   ['pkill -TERM 1234', 'allow', 'killing by pid, no -f pattern'],
