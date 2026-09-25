@@ -2,7 +2,7 @@
 name: log-scan-performance
 description: "the boot scan of the jsonl corpus is slow / the cold scan only uses 3 of 14 cpu cores / why is RAYON_NUM_THREADS=4 faster than the default 14 / the scan spends most of its time in sys not user / how do I make the log scan use all cpu cores / adding more rayon threads does not speed up the scan / the profile says every thread is waiting on a mutex / sharding the listing cache did not help / is the allocator the bottleneck in the scan / mimalloc vs system allocator for the scanner / allogscan is much faster than cold_scan on the same files / why does parse-only beat parse-plus-cards / the scan does hundreds of thousands of stat syscalls / filesStatted is huge / wall clock timings for the scan are wildly inconsistent / how do I benchmark the scan on a busy machine / why did the obvious optimisation change nothing / the arithmetic matches the call site so it must be the cause / how do I know what is actually serialising / a correlate is not a cause / I found the hot call site but removing it did not help / the perf hypothesis was falsified / how do I rule a mechanism out"
 ocd: 2026-08-29
-lmd: 2026-09-04
+lmd: 2026-09-24
 publish-globally: false
 metadata:
   node_type: memory
@@ -13,7 +13,7 @@ metadata:
 # log-scan-performance
 
 
-^ATOM-L1SN-FI52 [desc: "Attempt 5 falsified the stat-syscall-bound verdict: hoisting the (uid,slug) enumeration removed the per-session stat fan-out entirely and cores did not move. Cause is now UNKNOWN.", keywords: cold_scan_only_uses_3_of_14_cores jsonl_scan_slow scan_does_not_parallelise filesStatted_405436 stat_syscall_bound_was_wrong removing_the_stat_fan-out_changed_nothing hoisted_scratch_index_no_gain scan_census_cores_unchanged what_is_serialising_the_scan scan_cause_unknown do_not_re-try_the_lock do_not_re-try_the_allocator, ocd: 2026-08-29, lmd: 2026-08-29]
+^ATOM-L1SN-FI52 [desc: "Attempt 5 falsified the stat-syscall-bound verdict: hoisting the (uid,slug) enumeration removed the per-session stat fan-out entirely and cores did not move. Cause is now UNKNOWN.", keywords: cold_scan_only_uses_3_of_14_cores jsonl_scan_slow scan_does_not_parallelise filesStatted_405436 stat_syscall_bound_was_wrong removing_the_stat_fan-out_changed_nothing hoisted_scratch_index_no_gain scan_census_cores_unchanged what_is_serialising_the_scan scan_cause_unknown do_not_re-try_the_lock do_not_re-try_the_allocator, ocd: 2026-08-29, lmd: 2026-09-24]
 
 **The cold scan's ~3.2-of-14-core ceiling has NO established cause as of 2026-08-29.** Five
 candidate fixes were implemented and measured on the load-stable metric `(user+sys)/real`, three
@@ -32,6 +32,9 @@ The fifth is the load-bearing one. The 405,436 `filesStatted` arithmetic (÷ 26,
 fan-out outright moved cores by nothing, so the stat count is a **correlate, not the constraint** —
 they are cheap enough in aggregate that eliminating the redundant ones is invisible against
 whatever actually serialises.
+
+
+^ATOM-W2SV-B308 [desc: "Remaining unmeasured candidates for the cold-scan core ceiling: rayon per-thread work-distribution skew, a serializing section in the card builder, or a kernel per-directory vnode lock.", keywords: remaining_candidates_for_the_scan_core_ceiling_not_yet_measured rayon_per-thread_work_distribution_skew serializing_section_inside_the_card_builder kernel_per-directory_vnode_lock next_attempt_must_discriminate_between_causes_first per-thread_busy_idle_accounting_inside_the_scan what_to_measure_next_for_the_cold_scan_bottleneck do_not_try_another_fix_at_the_same_call_site scan_cause_still_unknown_next_steps cold_scan_core_ceiling_open_candidates, ocd: 2026-09-24, lmd: 2026-09-24]
 
 Remaining candidates, none yet measured: per-thread work-distribution skew in the rayon split, a
 serialising section inside the card builder, or a kernel per-directory vnode lock. A sixth attempt

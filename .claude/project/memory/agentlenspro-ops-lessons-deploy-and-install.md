@@ -2,7 +2,7 @@
 name: agentlenspro-ops-lessons-deploy-and-install
 description: "how to deploy agentlenspro on a machine / setup vs manual install / hooks stopped firing after an upgrade / config file wiped or corrupted after an edit / which file does pnpm read its settings from / minimumReleaseAge or trustPolicy is set but not taking effect / is this supply-chain knob actually live / a guard blocks me editing package.json / is agentlenspro npm-linked or registry-installed / does switching the cli to an ordinary npm install lose my db or settings / where does the data live / can other agents on this machine use the cli / does the dev npm link affect normal published users / does agentlenspro run on Windows / setup fails with unsupported platform or node too old / a settings.json env key keeps reverting / can I run a second server for testing / two servers at once / I changed the ports so it is isolated right / dev instance wrote to my live data dir / invalid log tail offsets after a restart / I rebuilt and restarted but nothing changed / my fix is not live even though esbuild succeeded / am I testing the repo build or the published one / a server exited silently after deploying a new binary / the exec gate said the binary still does not exec but it was only a usage error / exit 64 after a deploy is not a kill, only exit 137 means the kernel killed it / codesign says valid on disk but every exec is still killed / the same cp-over-binary trap hit twice because the deploy page was not recalled first / how many diagnostic tools are there / keeping the skill and the CLI --help in sync / the CLI --help flag ran the command instead of showing help / a baseline ruleset restore reverted the owner's force-push bypass"
 ocd: 2026-07-11
-lmd: 2026-09-14
+lmd: 2026-09-24
 metadata:
   node_type: memory
   type: project
@@ -96,7 +96,7 @@ Since v2.23.0 the CLI help contract is TOTAL (git/npm style): `--help`/`-h` ANYW
 
 
 
-^ATOM-IALX-LKC6 [desc:"Exit 1 is the watchers' ABORT signal, so a caller mistake must exit 64 via UsageError; and 'help <verb>' must answer from static USAGE for every management verb", keywords: cli_returned_exit_1_for_a_typo why_did_my_batch_abort_on_a_bad_flag exit_code_64_EX_USAGE_convention agentlenspro_help_verb_says_unknown_tool agentlenspro_list_does_not_show_cli_verbs server_expects_start_stop_restart_status_exit_code, type: project, ocd: 2026-08-12, lmd: 2026-08-12]
+^ATOM-IALX-LKC6 [desc: "Exit 1 is the watchers' ABORT signal — a caller mistake must exit 64 via UsageError, found only by running every verb not by code review", keywords: cli_returned_exit_1_for_a_typo why_did_my_batch_abort_on_a_bad_flag exit_code_64_EX_USAGE_convention server_expects_start_stop_restart_status_exit_code agentlenspro_server_no_subcommand_exits_1 budget_watch_ctxmap_exit_64_for_missing_argument usageerror_maps_to_exit_64 watchers_treat_exit_1_as_abort_signal found_by_running_every_verb_not_review inconsistent_exit_codes_across_cli_verbs, type: project, ocd: 2026-08-12, lmd: 2026-09-24]
 
 **Exit 1 is NOT the generic failure code — it is the watchers' ABORT signal** (`src/cli/cliErrors.ts`
 reserves it, and `budget --watch` uses it to mean "stop the run"). So a caller mistake must exit
@@ -109,6 +109,9 @@ moment the mapping moves).
 Found by RUNNING every verb, not by review: `agentlenspro server` (subcommand omitted) exited 1
 while `budget`, `watch` and `ctxmap` all exited 64 for the identical missing-argument shape. Each
 site reads fine alone; only the matrix makes the inconsistency visible.
+
+
+^ATOM-VWN5-JCH0 [desc: "'help <verb>' must answer from static USAGE for every management verb without touching the server — it instead hit the diagnostics tool schema and said unknown tool", keywords: agentlenspro_help_verb_says_unknown_tool help_budget_fails_with_unknown_tool_budget_agentlenspro_list agentlenspro_list_does_not_show_cli_verbs management_verb_help_touches_the_server help_must_answer_from_static_usage cli_help_hits_the_diagnostics_tool_schema typo_in_verb_name_should_fail_loudly_not_silently help_must_not_touch_a_socket unrecognised_verb_name_should_error_not_show_usage list_only_enumerates_diagnostics_tools, type: project, ocd: 2026-09-24, lmd: 2026-09-24]
 
 **`help <verb>` must answer for every management verb, from static USAGE, touching no socket** —
 the same doctrine as ATOM-9B2N-KU2R's "help is TOTAL" (recall it by id, not a wikilink — a `[[…]]`

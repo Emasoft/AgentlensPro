@@ -2,7 +2,7 @@
 name: agentlenspro-ops-lessons-concurrency-and-event-loop
 description: "server hangs at 100% cpu and every request times out or SIGTERM is ignored / a settings.json env key keeps reverting or getting overwritten after every server restart / the CLI hangs for 75 seconds when the server is unreachable / cache-expired takes forever / a setup detector reports drift every run but the repair never lands / a green setup proves nothing about the repairer / the mocha suite dies at exit 139 SIGSEGV in duckdb.node / all MCP calls fail with rpc error undefined while server logs show 200s / already connected to a transport / a test times out under load but is actually scanning the real live store / an rss sampler goes dark during a scan / a server pidfile is corrupted or two servers own one data dir / a restart looks like it failed but another server already owns the data directory / server.log shows another process's history"
 ocd: 2026-07-11
-lmd: 2026-09-22
+lmd: 2026-09-24
 metadata:
   node_type: memory
   type: project
@@ -11,7 +11,7 @@ publish-globally: false
 split-lineage: 266022327e5e4d3796245d2d1a921c06
 ---
 
-^ATOM-KRXC-PSWU [desc:"The MCP transport had NO connect bound (75s stalls); the fix is a CONNECT deadline, never a request timeout — server-side slowness is legitimate", keywords: CLI_hangs_75_seconds cache-expired_takes_forever command_stalls_when_server_unreachable http.request_has_no_timeout connect_timeout_vs_request_timeout address_drops_instead_of_refusing, ocd: 2026-08-04, lmd: 2026-08-04]
+^ATOM-KRXC-PSWU [desc:"The MCP transport had NO connect bound (75s stalls); the fix is a CONNECT deadline, never a request timeout — server-side slowness is legitimate", keywords: CLI_hangs_75_seconds cache-expired_takes_forever command_stalls_when_server_unreachable http.request_has_no_timeout connect_timeout_vs_request_timeout address_drops_instead_of_refusing, ocd: 2026-08-04, lmd: 2026-09-24]
 
 **A hot-path CLI verb must bound the CONNECT — and only the connect.** `rpc()` / `apiRequest()` called
 `http.request` with no bound at all, so an address that DROPS (a firewall blackhole, a suspended
@@ -23,19 +23,22 @@ that names the cause. Commit cc5326c, TRDD-E8XIC2PM.
 
 **Bound the CONNECT, never the request.** A legitimate call can be slow SERVER-side — `ctxvis` spawns
 an agent and measures two of its turns — so an idle-socket timeout kills correct work, while an
-unanswered connect is never anything but a dead endpoint.
+unanswered connect is never anything but a dead endpoint. [^22]
+
+
+^ATOM-BWCK-2PMH [desc: "Two traps hide behind connect-vs-request timeouts: a closed port refuses instantly (only a dropped address reproduces the stall) and AbortSignal.timeout bounds the request, not the process.", keywords: closed_port_refuses_instantly_test_suite_stayed_green dropped_address_reproduces_the_stall_not_a_closed_port abortsignal_timeout_bounds_the_request_not_the_process aborted_socket_keeps_the_event_loop_alive process_exit_discards_a_queued_pipe_write exitnow_must_flush_stdout_before_exit cli_hangs_75_seconds_even_after_abort queued_write_past_64kib_is_dropped_on_process_exit process_exitcode_still_waits_for_the_event_loop why_does_my_cli_hang_after_aborting_the_request, ocd: 2026-09-24, lmd: 2026-09-24]
 
 **Two traps this class hides behind.** (1) A closed port REFUSES instantly; only an address that DROPS
 (`10.255.255.1`) reproduces the stall, which is why a thorough "server down" suite stayed green for
 weeks while three commands took 10.6 s each. (2) `AbortSignal.timeout` bounds the REQUEST, not the
 PROCESS: the aborted socket keeps the event loop alive, so a CLI that ends by setting `process.exitCode`
 still waits it out — see `exitNow` in `src/cli/main.ts`, which must ALSO flush stdout first, because
-`process.exit()` discards a queued pipe write past ~64 KiB (measured: 262,144 written, 65,536 received). [^22]
+`process.exit()` discards a queued pipe write past ~64 KiB (measured: 262,144 written, 65,536 received).
 
 
 
 
-^ATOM-WPOI-PJMS [desc:"The verified transaction protects the FILE, not your INTENT: an op carrying a computed RESULT (set/delete) reintroduces the very race the lock closes", keywords: safe_config_edit_clobbers_another_tool's_hook transaction_lock_did_not_prevent_the_overwrite whole-array_set_is_stale settings.json_entry_disappeared ops_must_carry_predicates, ocd: 2026-08-04, lmd: 2026-08-04]
+^ATOM-WPOI-PJMS [desc:"The verified transaction protects the FILE, not your INTENT: an op carrying a computed RESULT (set/delete) reintroduces the very race the lock closes", keywords: safe_config_edit_clobbers_another_tool's_hook transaction_lock_did_not_prevent_the_overwrite whole-array_set_is_stale settings.json_entry_disappeared ops_must_carry_predicates, ocd: 2026-08-04, lmd: 2026-09-24]
 
 **`safeConfigEdit` protects the FILE, not your INTENT.** The lock, the verify-diff and the atomic
 rename are all real — and an op that carries a computed **RESULT** still clobbers a concurrent writer,
@@ -48,6 +51,9 @@ Found in our own hook installer (TRDD-T0CT9U4X, commit 4da41dc): the strip path 
 that event in between was silently deleted — from the user's `~/.claude/settings.json`, by the tool
 whose transaction exists because this project once destroyed one. `{op:'delete'}` is the same defect in
 a different op: "this array is now empty" is also a pre-lock conclusion.
+
+
+^ATOM-ZUBG-6XJ0 [desc: "Fix: config-edit ops must carry PREDICATES not RESULTS — append_unique/remove_by_substring, the predicate crosses into Python as literal DATA matched against json.dumps, never a regex or callback", keywords: ops_must_carry_predicates_not_results append_unique_to_add_remove_by_substring_to_strip predicate_must_be_data_not_a_regex_or_callback needle_matched_against_json_dumps_of_the_element tab_or_quote_in_the_command_never_matches_its_own_raw_text caller_that_cannot_express_a_removal_must_fail_loudly prune_empty_after_remove_by_substring safe_config_edit_predicate_crosses_process_boundary_into_python filter_strips_nothing_while_reporting_success how_to_avoid_a_config_edit_race_with_predicates, ocd: 2026-09-24, lmd: 2026-09-24]
 
 **RULE: ops carry PREDICATES, never results** — `append_unique` to add, `remove_by_substring`
 (+`prune_empty`) to strip. Two constraints that follow: the predicate crosses a process boundary into

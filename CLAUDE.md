@@ -498,7 +498,7 @@ culprits by cache-**weighted** equiv (`investigate_burn`), never by request byte
 Diagnostics encode this as the TTL-regime matrix (TRDD-VY1IUVUM); the full model with measured
 costs: `.claude/project/memory/cache-ttl-model.md`.
 
-<+-+-JANITOR-WIKIMEM-INDEX-START-(do-not-modify)-+-+> v1 digest=eaf93696c6c6 generated=2026-09-09T12:27:17+0200
+<+-+-JANITOR-WIKIMEM-INDEX-START-(do-not-modify)-+-+> v1 digest=b2b81262caa2 generated=2026-09-24T18:04:40+0200
 ## Wikimem index (PROJECT scope) — recall by symptom, read on demand
 
 Deep knowledge lives in these pages, not in this file. Search: `memgrep recall "<symptom>" .claude/project/memory`.
@@ -546,5 +546,6 @@ Deep knowledge lives in these pages, not in this file. Search: `memgrep recall "
 - [standalone-server-security-model](.claude/project/memory/standalone-server-security-model.md) — can a website read my local agentlens data
 - [statusline-capture-and-store](.claude/project/memory/statusline-capture-and-store.md) — how do I get rate_limits without hitting the usage endpoint
 - [trdd-board-review-hygiene](.claude/project/memory/trdd-board-review-hygiene.md) — which commits belong in implementation-commits
+- [ts-dead-code-vs-rust-parity-oracles](.claude/project/memory/ts-dead-code-vs-rust-parity-oracles.md) — is this TypeScript file dead
 - [vmmap-ioaccelerator-is-the-mimalloc-heap](.claude/project/memory/vmmap-ioaccelerator-is-the-mimalloc-heap.md) — vmmap says IOAccelerator dominates alcore's memory
 <+-+-JANITOR-WIKIMEM-INDEX-END-(do-not-modify)-+-+>

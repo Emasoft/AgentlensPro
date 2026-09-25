@@ -2,7 +2,7 @@
 name: agentlenspro-publish-pipeline
 description: "how do I release / publish a new version of agentlenspro / npm publish fails E404 Not Found PUT / CI publish rejected / provenance badge missing / can I publish from local / how was the package bootstrapped on npm / zizmor flags the workflows / where are the SBOM and checksums for a release / my zizmor ignore comment is not working / I pushed the tag but no release workflow ran / a file I committed is missing from the published package / the agent or skill did not reach users after publishing / feature missing after npm install / the tarball does not match the repo / what does the files allowlist actually ship — the release pipeline, its laws, and the bootstrap history / the published package is missing its native binaries / npm tarball is far smaller than the github release asset for the same tag / installed version silently falls back to the TypeScript server / the packaging guards were all green but the artifact was wrong / does OIDC trusted publishing work when you pass a prebuilt tarball / does npm publish --dry-run run lifecycle scripts / how do I check what was ACTUALLY published rather than what was packed"
 ocd: 2026-07-11
-lmd: 2026-08-28
+lmd: 2026-09-24
 metadata:
   node_type: memory
   type: project
@@ -86,7 +86,7 @@ memory/settings entries). [^6] [^7]
 DO NOT assume the latest CHANGELOG entry is published: 2.24.0 was version-bumped and changelogged on 2026-08-12 but the v2.24.0 TAG was never pushed, so the tag-driven publish never fired and npm latest silently stayed 2.23.0 for two days. DO verify before any release reasoning: `git tag -l 'v<ver>'` AND `npm view agentlenspro version` — the pair takes seconds and catches a bump-without-tag every time. The 2.25.0 release shipped the stranded content. A pushed tag is not sufficient either — see the more-than-3-tags-in-one-push failure mode[^5].
 
 
-^ATOM-YSCT-H2NF [desc: "publish-npm used to re-pack its own tarball, so every packaging guard validated an artifact that was never published — v2.30.0 shipped with 0 of 16 binaries", keywords: published_package_is_missing_the_binaries npm_tarball_smaller_than_the_github_release_asset fileCount_23_instead_of_39 installed_package_falls_back_to_the_TS_server bin-native_missing_from_the_published_package the_guards_were_green_but_the_artifact_was_wrong publish_job_re-packs_its_own_tarball attestation_covers_a_tarball_nobody_installs how_do_I_verify_what_was_actually_published registry_read-back_check npm_publish_with_a_prebuilt_tarball OIDC_trusted_publishing_with_a_tarball_argument, ocd: 2026-08-28, lmd: 2026-08-28]
+^ATOM-YSCT-H2NF [desc: "publish-npm used to re-pack its own tarball, so every packaging guard validated an artifact that was never published — v2.30.0 shipped with 0 of 16 binaries", keywords: published_package_is_missing_the_binaries npm_tarball_smaller_than_the_github_release_asset fileCount_23_instead_of_39 installed_package_falls_back_to_the_TS_server bin-native_missing_from_the_published_package the_guards_were_green_but_the_artifact_was_wrong publish_job_re-packs_its_own_tarball attestation_covers_a_tarball_nobody_installs how_do_I_verify_what_was_actually_published registry_read-back_check npm_publish_with_a_prebuilt_tarball OIDC_trusted_publishing_with_a_tarball_argument, ocd: 2026-08-28, lmd: 2026-09-24]
 
 **v2.30.0 published with none of its native binaries and every gate green.** The registry
 tarball was 23 files / 3.75 MB; the GitHub Release asset for the same tag was 144 MB. Cause:
@@ -103,6 +103,9 @@ and publishes exactly those bytes, so the attested bytes ARE the published bytes
 **The durable rule: a packaging guard must measure the artifact that ships.** The gate that
 now exists for this is the read-back — pull the tarball FROM THE REGISTRY after publishing
 and count `bin-native` entries. Everything else in the pipeline inspects a local file.
+
+
+^ATOM-AMK3-HO2P [desc: "Two cheap-to-get-wrong facts found while fixing the tarball mismatch: OIDC trusted publishing DOES work with a tarball argument, and npm publish --dry-run suppresses lifecycle scripts entirely.", keywords: does_oidc_trusted_publishing_work_with_a_tarball_argument npm_publish_dry_run_suppresses_lifecycle_scripts prepublishonly_does_not_run_in_a_dry_run how_to_verify_prepublishonly_will_actually_fire npm_publish_tarball_file_argument_oidc dry_run_cannot_prove_a_real_publish_behavior v2.30.1_published_green_through_a_tarball_argument npm_docs_silent_on_tarball_plus_oidc lifecycle_script_silent_during_dry_run does_dry_run_run_prepublishonly, ocd: 2026-09-24, lmd: 2026-09-24]
 
 Two things measured while fixing it, both cheap to get wrong:
 - **OIDC trusted publishing DOES work with a tarball argument** (`npm publish ./x.tgz`) —
