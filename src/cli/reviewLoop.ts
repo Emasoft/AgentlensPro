@@ -657,10 +657,24 @@ export function mayWrite(input: MayWriteInput): MayWriteResult {
   const parentCycles = scanCycles(parentLines, { sessionDir, cwd })
   const parentCycle = parentCycles.length > 0 ? parentCycles[parentCycles.length - 1] : null
   if (parentCycle === null) {
-    if (ownCycle === null) {
+    // The SPAWNER itself carries no proposal: either it is an inheriting worker (it has its own
+    // parentAgentId — its standing is established by the recursive probe below, exactly the D3
+    // shape the comment on the spawn-window check documents) or it is the main transcript with
+    // no proposal anywhere (deny). Without the inheritance escape here the deny fires BEFORE
+    // the recursion, and a depth-2 worker could never be allowed at all (13d).
+    if (parentAgentId !== undefined && parentAgentId !== '') {
+      const parentAllowed = mayWrite({
+        transcriptPath: sessionDirOf(input.transcriptPath) + '.jsonl',
+        agentId: parentAgentId, cwd, repoRoot, homeDir,
+        toolName: 'Edit', toolInput: { file_path: path.join(cwd, '.review-loop-synthetic-probe') },
+        fsHelpers: fh, _depth: depth + 1,
+      })
+      if (!parentAllowed.allow) return parentAllowed
+    } else if (ownCycle === null) {
       return { allow: false, reason: 'no PROPOSAL found in the spawner\'s transcript either — see `agentlenspro review-gate --directive`', missing: 'no-proposal' }
+    } else {
+      return { allow: false, reason: mayWriteMissingMessage(ownCycle), missing: missingReasonOf(ownCycle) }
     }
-    return { allow: false, reason: mayWriteMissingMessage(ownCycle), missing: missingReasonOf(ownCycle) }
   }
   // Find the Agent tool_use that spawned THIS agent in the parent's transcript (by toolUseId via
   // meta, when present) and confirm it is a non-role spawn sitting inside the parent's window.

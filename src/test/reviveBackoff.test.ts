@@ -33,7 +33,12 @@ suite('hook-revive crash-loop backoff (TRDD-JJLI6GEH)', () => {
 
   setup(() => {
     tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'al-revive-backoff-'))
+    // Pin BOTH env spellings: AGENTLENS_DATA_DIR (canonical) outranks DATA_DIR, and in a FULL
+    // suite run a leak of either from an earlier spec would redirect dataDir() away from tmp —
+    // the gate would then read the live machine's real .revive-backoff.json (mutated by
+    // running sessions' hooks) and a first-ever call could observe a genuine hold.
     setEnv('DATA_DIR', tmp)
+    setEnv('AGENTLENS_DATA_DIR', tmp)
   })
   teardown(() => {
     for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v }

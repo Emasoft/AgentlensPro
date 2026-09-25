@@ -117,10 +117,20 @@ suite('standalone server — P5 window auto-calibration (real boot, real ingest 
     }
   }
   async function burnStatusAccount(accountUuid: string): Promise<AccountWindow | undefined> {
-    const r = await httpReq(uiPort, 'GET', '/api/burn-status')
-    assert.strictEqual(r.status, 200)
-    const j = r.json as { accountWindows?: AccountWindow[] }
-    return (j.accountWindows ?? []).find(w => w.accountUuid === accountUuid)
+    // Poll briefly instead of one shot: since TRDD-2R36W8Q1 a reader that lands while the
+    // background summary rebuilder holds the gate is served the last CACHED summary (stale by
+    // design — read-your-writes is bounded, not guaranteed). Right after the OTLP POST that
+    // stale value is the empty boot summary, so the account window can legitimately lag one
+    // rebuild behind; a bounded poll asserts the behaviour, not the timing.
+    const deadline = Date.now() + 5_000
+    for (;;) {
+      const r = await httpReq(uiPort, 'GET', '/api/burn-status')
+      assert.strictEqual(r.status, 200)
+      const j = r.json as { accountWindows?: AccountWindow[] }
+      const win = (j.accountWindows ?? []).find(w => w.accountUuid === accountUuid)
+      if (win || Date.now() >= deadline) return win
+      await sleep(100)
+    }
   }
 
   suiteSetup(async function () {

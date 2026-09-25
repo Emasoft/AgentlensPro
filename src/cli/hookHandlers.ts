@@ -177,7 +177,6 @@ interface ReviveBackoffState {
   // new spawn actually happens (see the "proceed" branch of reviveBackoffGate below).
   deathClassified: boolean
 }
-const ZERO_BACKOFF_STATE: ReviveBackoffState = { consecutiveQuickDeaths: 0, lastSpawnMs: 0, backoffUntilMs: 0, deathClassified: false }
 
 /** Fail-OPEN (zero state) on anything missing/unreadable/malformed — a torn read must never
  *  PERMANENTLY wedge the reviver; the worst case of guessing wrong here is one extra spawn, not a
@@ -192,6 +191,12 @@ const ZERO_BACKOFF_STATE: ReviveBackoffState = { consecutiveQuickDeaths: 0, last
  *  open silently" once there was something on disk to lose. Reused by `reviveBackoffStatus()` below
  *  so `agentlenspro server status` reads the exact same state the gate itself acts on. */
 function loadReviveBackoffState(): ReviveBackoffState {
+  // A FRESH OBJECT every call, never the ZERO_BACKOFF_STATE constant itself: the gate mutates
+  // the returned state in place, so returning the shared constant let one real-time call
+  // poison every later reader in the same process — measured in a full-suite run, where a
+  // test calling gate() with the default Date.now() stamped the shared object with a
+  // real-now backoffUntilMs and every subsequent synthetic-now call observed a phantom hold.
+  const zero = (): ReviveBackoffState => ({ consecutiveQuickDeaths: 0, lastSpawnMs: 0, backoffUntilMs: 0, deathClassified: false })
   const statePath = reviveBackoffStatePath()
   let text: string
   try {
@@ -200,7 +205,7 @@ function loadReviveBackoffState(): ReviveBackoffState {
     if ((e as NodeJS.ErrnoException).code !== 'ENOENT') {
       process.stderr.write(`[agentlenspro] revive backoff: could not read ${statePath} (${(e as Error).message}) — starting from a clean state.\n`)
     }
-    return ZERO_BACKOFF_STATE
+    return zero()
   }
   try {
     const raw = JSON.parse(text) as Partial<ReviveBackoffState>
@@ -216,7 +221,7 @@ function loadReviveBackoffState(): ReviveBackoffState {
   } catch (e) {
     process.stderr.write(`[agentlenspro] revive backoff: ${statePath} is not valid JSON (${(e as Error).message}) — discarding it and starting from a clean state.\n`)
   }
-  return ZERO_BACKOFF_STATE
+  return zero()
 }
 
 /** Atomic (temp + rename, via serverRuntime's atomicWriteFileSync) so two racing hook processes can

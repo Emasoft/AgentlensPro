@@ -3,7 +3,7 @@ trdd-id: Z53IJFE9
 title: Remove the RAM-disk body spool completely so capture writes straight to the SSD bodies dir
 column: dev
 created: 2026-09-24T13:34:34+0200
-updated: 2026-09-24T17:51:46+0200
+updated: 2026-09-25T15:08:02+0200
 current-owner: emanuelesabetta
 created-by: emanuelesabetta
 task-type: refactor
@@ -36,6 +36,7 @@ ADVISOR VERDICT 2026-09-24 (reports/cc-alignment/20260924_134351+0200-advisor-ve
 ADVISOR VERDICT 2026-09-24 (continued): the bodies_interval spawn-time arm must change from _ => 3600 to 60 once spool_dir_configured is gone, or the drain silently stays hourly. bodiesMaxAgeHours/bodiesMaxGb and the over-cap valve are dead once age is fixed and should be removed in step D, not documented. Before touching pass.rs semantics for B-1/B-2, check src/store/ingestPass.ts (the TS twin) and the parity fixtures under rust-core/crates/agentlens-core/tests/fixtures/ — CLAUDE.md warns bundle reachability alone doesn't prove a module dead.
 2026-09-24 — Step B is committed (470ffbb3: 60 s interval, 10 s age, fsync barrier kept with a persisted fsynced-parts set, empty-dir skip) and NOT deployed. Deploy is blocked on an isolated full-size measurement of: (a) the first drain of the ~2 GB backlog in ~/.agentlens/otel-bodies into a store that does not exist yet, (b) parquet parts written per hour at a 60 s cadence (nothing merges parts, advisor F8), (c) RSS with a pass every minute against the 2 GB cap; and the four step-B tests must be re-run on HEAD itself.
 A scratch git worktree /private/tmp/verify-z53ijfe9 from step B is still registered (git worktree list); removing it needs the owner.
+2026-09-25T15:06:40+0200: Isolated full-size deploy-gate run of 8c74c5c0 COMPLETED (45 min, /tmp/iso-run, report reports/deploy/20260925_150640+0200-iso-run-8c74c5c0.md). Gate (a) drain: 30,115 bodies / 7.8 GB in ~375 s, 0 failed, 0 re-emitted. Gate (b) parquet: 868→1506 parts DURING the drain, then stable at 1506 for ~38 idle minutes — idle cadence writes nothing; growth tracks drain work, not time (merging still open for recurring drains). Gate (c) RSS: peak 1.28 GB mid-drain, steady 1.10 GB, no crash/panic in 45 min. All three gates PASS — HEAD is deployable for step B. UNMEASURED: the 1h backfill never armed in the isolated instance (fresh offsets), so its full-size behavior is still unit-tested-only; bounded by ≤200 files/chunk by construction. Next: build + codesign + deploy step B binary, then re-run the four step-B tests on HEAD.
 
 ## Steps
 

@@ -3,7 +3,7 @@ trdd-id: ORGJ0E3G
 title: Transcript session cost bills every cache write at the 5m rate
 column: dev
 created: 2026-09-24T14:38:23+0200
-updated: 2026-09-24T19:27:28+0200
+updated: 2026-09-25T15:08:14+0200
 current-owner: emanuelesabetta
 created-by: emanuelesabetta
 task-type: bugfix
@@ -48,6 +48,7 @@ Sessions last modified more than 30 days before the upgrade keep the 5m-rate cac
 2026-09-24: usage-only backfill (86f4fa22) replaces the full-card re-parse; hardening (63f41d04) made it a chunk per sweep with a save per chunk. CORRECTED persistence evidence: Run P (86f4fa22) was killed AFTER logging "filled 8761 of 8761" (i.e. after the backfill had already COMPLETED), and Run C (restarted on Run P's data) flagged 0 transcripts — that proves a COMPLETED backfill's patched values persist and are restored, NOT that a hard exit mid-backfill loses at most one chunk. The mid-backfill-loses-at-most-one-chunk claim belongs to 63f41d04 and is still unverified — a real kill-mid-chunk test is in progress. Open: scoped per-chunk save (worker running), deploy gate needs a full-size memory run of the final build.
 Q6 (2026-09-24): restore() walks every transcript under the state lock on every boot until all flagged cards are filled — this is the mechanism the backfill rides on, and it is why restore() holding the lock is coupled to the backfill's own progress.
 Open 63f41d04 review items (2026-09-24), being fixed in worktree /tmp/wt-bfs: loop order runs a backfill chunk before handling waiting changes; next_full re-arm is unverified; the backstop can be skipped under a steady event stream; Stop latency during a chunk is unmeasured. None of these are resolved yet.
+2026-09-25T15:10:00+0200: The wt-bfs worktree hardening (scoped per-chunk save via save_cards_for/append_changed; backfill chunk yields to queued events; FULL_RESCAN backstop check moved out of the Timeout arm so a steady stream cannot starve it; hard-exit test now uses mem::forget; no-full-scan counter test) is VERIFIED: cargo test -p agentlens-core 660 passed / 0 failed, all four review items covered by new tests (backstop re-arm, no-whole-store-scan, hard-exit durability, event priority). Isolated full-size run of 8c74c5c0 (reports/deploy/20260925_150640+0200-iso-run-8c74c5c0.md) PASSED the memory/drain gates but the backfill itself never armed there (fresh offsets — the instance restored from the same snapshot it then ran with), so full-size backfill behavior remains unit-tested-only, bounded ≤200 files/chunk by construction. NEXT: commit the wt-bfs worktree hardening onto main, then the deploy (build+codesign+restart) carries both. 
 
 ## Corrections (2026-09-24)
 

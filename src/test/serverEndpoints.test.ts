@@ -225,11 +225,19 @@ suite('standalone server — hook/gate/burn endpoints (real boot)', () => {
   })
 
   test('SendMessage in the cold-resume window: a DEAD target denies, unknown liveness only warns (P6)', async () => {
+    // Re-arm capture BEFORE feeding the stall/subagent events: tests 148/159 left
+    // captureEnabled=false, and a disabled forwarder ACKs 2xx but DROPS (hook_events.rs) —
+    // the three POSTs below would never reach recent_hook_events, lastStopFailureMs would
+    // stay unset, and this test would see the quiet-state 204 instead of the deny/warn pair.
+    await httpReq(uiPort, 'POST', '/api/hook-config', { captureEnabled: true, gateEnabled: true })
     // A rate-limit stall arms the window: resuming a DEAD agent re-runs the request that killed
     // it into a cold cache. 2026-07-11 fix: the hard deny needs POSITIVE dead evidence from the
     // SubagentStart/Stop hook events — a NAME target (no hook-event counterpart) downgrades to a
     // warning, because delivery to a possibly-live agent must never be hard-blocked.
-    await httpReq(uiPort, 'POST', '/api/hook-events', { hook_event_name: 'StopFailure', session_id: 'ep-stall', cwd: '/tmp/ep' })
+    // The stall must be RATE-LIMIT-CLASS (TRDD-HNPT6JRG: only 429-shaped StopFailures arm the
+    // cold-resume window) and capture must be on (see above) — otherwise the gate reads the
+    // quiet state and returns 204 allow instead of the deny/warn pair this test pins.
+    await httpReq(uiPort, 'POST', '/api/hook-events', { hook_event_name: 'StopFailure', session_id: 'ep-stall', cwd: '/tmp/ep', error: '429 rate_limit_error: exceeds your usage limit' })
     await httpReq(uiPort, 'POST', '/api/hook-events', { hook_event_name: 'SubagentStart', session_id: 'ep-stall', agent_id: 'aepdead0000000001' })
     await httpReq(uiPort, 'POST', '/api/hook-events', { hook_event_name: 'SubagentStop', session_id: 'ep-stall', agent_id: 'aepdead0000000001' })
     const dead = await httpReq(uiPort, 'POST', '/api/agent-gate', {
