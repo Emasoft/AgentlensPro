@@ -4,7 +4,7 @@ title: Cache-break idle judgment reads only the last write's tier and overstates
 column: dev
 status: tasked
 created: 2026-09-25T00:23:21+0200
-updated: 2026-09-25T14:17:23+0200
+updated: 2026-09-25T20:40:26+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -27,6 +27,7 @@ Facts: I6c2 (TRDD-ZQQYRYBO) judges an idle gap by the tier of the last turn that
 Evidence: reports/cc-alignment/20260924_234821+0200-I6c2.md
 2026-09-25: Rule now being implemented: within the current prefix segment (back to the last cold full rewrite, cache_read == 0 with a write), if the last write is all-5m and the gap is over 5 min and at most 1h, and an earlier write in the segment had a nonzero 1h slice or an unobserved tier, ttlGapSource becomes 'assumed'; the cause is unchanged. The mirror direction (earlier 5m, later 1h) is correct as is. This card must NOT close on this change: the cause may still be overstated, because whether the earlier 1h entry survived is uncertain (a hit refreshes the entry it matched). The segment boundary can be tripped by interleaved subagent turns, which depends on TRDD-WBT2WW96.
 2026-09-25T14:17:04+0200: Implementation verified and committed as 76e5b134 (mixed-tier writes in the same prefix segment now label the idle gap 'assumed'; TS 7 tests + Rust 3 tests + 2 fixture cases, mirror-direction control, off-screen-segment case; full crate cargo 682 passed / 0 failed; mocha cacheBreak+cacheBreakTimeline 23+72 passing; the 16 unrelated mocha failures are the pre-existing carded ones). Remaining before close: the cause-label itself can still overstate — whether the earlier 1h entry actually survived is uncertain (a hit refreshes the entry it matched) — and the segment boundary can be tripped by interleaved subagent turns (TRDD-WBT2WW96). Card stays open on those.
+OPEN LIMIT (adversarial review of 76e5b134, 2026-09-25): the mirror direction (earlier 5m, later all-1h) is treated as correct because the all-1h write 'covers the whole prefix' — but that holds only for a full rewrite. An all-1h APPEND (small cacheCreate at the 1h tier) rewrites only the suffix; the pre-append prefix stays covered by the earlier 5m entry, which can expire during the gap while the label claims 'measured'. One direction of the bug class this card exists for remains.
 
 ## Approval log
 
