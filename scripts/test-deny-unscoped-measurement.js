@@ -49,6 +49,9 @@ const CASES = [
   ['timeout -s KILL 600 cargo test | tail -3', 'deny', "wrapper flag+value, then the wrapper's own number"],
   ['env -i cargo test | tail -3', 'deny', "a wrapper's no-value flag doesn't eat the command word"],
   ['nice -n 10 grep foo file.txt | head -5', 'allow', 'the wrapper does not turn grep into a measured command'],
+  ['timeout 10m cargo test | tail', 'deny', "timeout's duration carries a unit suffix and is still skipped"],
+  ['timeout 1.5h cargo test | tail', 'deny', 'a decimal duration with a unit suffix is skipped too'],
+  ['nice -n 10 cargo build', 'allow', 'no pipe at all, so it is not a measurement'],
 
   // ── rule 3: tee truncation ───────────────────────────────────────────────────────────────
   ['cargo build 2>&1 | tee /tmp/b.txt | head -18', 'deny', 'SIGPIPEs tee, silently truncating the file'],

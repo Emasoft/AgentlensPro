@@ -103,7 +103,10 @@ process.stdin.on('end', () => {
         if (next && !/^-/.test(next) && !MEASURE.has(bin(next))) cw += 1
         continue
       }
-      if (sawWrapper && /^\d+$/.test(t)) { cw += 1; continue }
+      // A wrapper's numeric argument may carry a duration unit suffix (`timeout 10m cargo test`,
+      // `timeout 1.5h cargo test`) — without the suffix, `10m` fails the bare-number test and is
+      // read as the command word instead of a skipped argument.
+      if (sawWrapper && /^\d+(\.\d+)?[smhd]?$/.test(t)) { cw += 1; continue }
       break
     }
     const commandWord = (first[cw] ?? '').replace(/^\(+/, '')

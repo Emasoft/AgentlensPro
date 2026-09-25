@@ -105,6 +105,8 @@ suite('review-gate triggers: write-shaped commands', () => {
     'gh issue view 1', 'gh api repos/a/b', 'gh run view 1', 'agentlenspro setup --dry-run',
     'agentlenspro statusline-history project 2>&1 | distill "A -> B"', 'memgrep recall "x" dir',
     'sed -n \'1,45p\' f', 'perl -ne \'print\' f', 'node -e \'console.log(1)\'', 'python3 -c "print(1)"',
+    'perl -Mstrict -e \'print 1\'',                                  // a leading long-option flag must not be misread as `-i`
+
     'D=' + '~' + '/.claude/x; grep -rn "reports" "$D/s/" 2>/dev/null | head',
     'find .claude -type f -exec ls -la {} \\; 2>/dev/null',       // an escaped `;` is not a separator
     'sudo -n git status',                                            // `-n` takes NO value for sudo: git status must be reached
