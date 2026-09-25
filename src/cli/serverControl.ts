@@ -10,6 +10,12 @@ import * as path from 'path'
 import { apiRequest, dataDir, dashboardUrl, envPort, fmtGb, fmtMb, init, mcpEndpoint, sleep, CONNECT_TIMEOUT_MS } from './cliCore'
 import { dataDirSource, dataPath } from '../dataDir'
 import { agentlensDisabled, killSwitchPath, noRevivePath, reviveBraked, STARTED_BY_ENV } from './killSwitch'
+// resetReviveBackoff only (TRDD-JJLI6GEH) — a deliberate `server start`/`restart` must clear the
+// hook-reviver's crash-loop backoff, or a counter from a past incident silently throttles an
+// unrelated future one. hookHandlers.ts imports alcoreBin/alcoreServeArgs/resolveBinNativeDir from
+// THIS module, so this creates a cycle back to it — safe here because resetReviveBackoff is only
+// ever CALLED at runtime (inside serverCommand, below), never referenced at module-load time.
+import { resetReviveBackoff } from './hookHandlers'
 import { UsageError } from './cliErrors'
 import { assertKnownFlags } from './argHelpers'
 import { lockTakeoverVerdict, parsePidLock, processStartRef } from '../serverRuntime'
@@ -926,6 +932,7 @@ export async function serverCommand(argv: string[]): Promise<void> {
       // to spawn through it — see the gate in ensureServer() for the regression this avoids.
       await ensureServer('server start', { overrideBrake: true })
       clearReviveBrake()
+      resetReviveBackoff() // a deliberate start wants a clean slate, not yesterday's crash-loop counter
       return
     case 'stop':
       // Brake BEFORE the SIGTERM: a hook landing in the stop window must already see the flag,
@@ -960,6 +967,7 @@ export async function serverCommand(argv: string[]): Promise<void> {
       await stopServer()
       await ensureServer('server restart', { overrideBrake: true })  // same contract as `start`
       clearReviveBrake()
+      resetReviveBackoff() // same contract as `start` — see its own comment
       return
     case 'status':
       await showStatus()

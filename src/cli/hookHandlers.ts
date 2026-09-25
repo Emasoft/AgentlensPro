@@ -21,7 +21,7 @@ import { isImageReadPath } from '../shared/imageReads'
 import { uiBaseUrl, dataDir } from './cliCore'
 import { alcoreBin, alcoreServeArgs, resolveBinNativeDir } from './serverControl'
 import { agentlensDisabled, reviveBraked, STARTED_BY_ENV } from './killSwitch'
-import { lockTakeoverVerdict, parsePidLock, processStartRef } from '../serverRuntime'
+import { atomicWriteFileSync, lockTakeoverVerdict, parsePidLock, processStartRef } from '../serverRuntime'
 
 // D3K7QM2P/1a — hook durability. When the server can't take a hook event (down, or shedding under
 // load), we must NOT lose it: durably spool the payload to disk (the server's boot/periodic drain
@@ -132,6 +132,126 @@ export function pidfileOwnerAlive(): boolean {
   }
 }
 
+// ── Crash-loop backoff (TRDD-JJLI6GEH) ───────────────────────────────────────────────────────────
+// The 15s stampede lock above only collapses a BURST of hooks into one spawn; it does nothing once a
+// server crashes moments after every boot (a boot-time OOM measured ~40k spawns in one incident: the
+// only thing that ever stopped it was the crashing DuckDB restore finally fitting in memory again).
+// This tracks how many CONSECUTIVE spawns died quickly and backs off exponentially, so a broken
+// install fails LOUDLY and SLOWLY instead of pegging the CPU/disk forever.
+
+// "Quick death" window, keyed on TIME-SINCE-SPAWN, not "died before listening": TWDGR75R's OOM panics
+// moments AFTER the store starts serving, so a probe that only watches for "never listened" would
+// miss it. A legitimate large-store boot never even reaches this check — pidfileOwnerAlive() (below)
+// stays true for the whole readyTimeoutMs() budget, so reviveDaemonDetached() returns before this
+// runs at all. Reaching here at all already means the previous owner is confirmed NOT alive.
+//
+// MUST stay comfortably ABOVE REVIVE_BACKOFF_MAX_MS, or growth past one death becomes undetectable:
+// the hook process that spawns a server exits immediately (detached + unref'd), so the ONLY way this
+// gate ever re-examines a spawn is on a LATER hook's call, which cannot happen before the backoff hold
+// itself elapses — so once a hold exceeds the crash window, the next check's own elapsed time (now -
+// lastSpawnMs) always reads as "survived", silently capping the counter at 1 forever. Sizing the
+// window above the cap (here: 40min > the 30min cap below, with margin for the 15s debounce's own
+// slack) keeps every hold-driven gap inside the window, so a genuine repeat crash loop keeps counting.
+//
+// ACCEPTED TRADEOFF, reviewed 2026-09-25: this necessarily makes "quick death" coarser than its name
+// suggests — a server that ran healthily for, say, 20 minutes before dying is ALSO counted as a
+// "quick" death once this window covers 40 minutes, because nothing here watches the child directly
+// (see the comment above); the window is really "how long a gap our OWN throttling can produce
+// without being mistaken for survival", not a tight diagnostic of crash speed. That is fine for this
+// gate's actual job — throttling a genuinely repeating crash loop — but it means a rare, unrelated
+// death ~20-39 minutes after a healthy boot gets folded into the same streak instead of resetting it.
+const REVIVE_CRASH_WINDOW_MS = Math.max(5_000, Number(process.env.AGENTLENS_REVIVE_CRASH_WINDOW_MS) || 40 * 60_000)
+// Doubling from a 30s base reaches the 30-minute cap after 6 consecutive quick deaths (30s, 60s,
+// 120s, 240s, 480s, 960s -> capped), throttling a genuine crash loop to ~2 spawns/hour instead of
+// several per second, while a single flake (1-2 quick deaths) barely slows anything down.
+const REVIVE_BACKOFF_BASE_MS = 30_000
+const REVIVE_BACKOFF_MAX_MS = 30 * 60_000
+
+function reviveBackoffStatePath(): string { return path.join(dataDir(), '.revive-backoff.json') }
+
+interface ReviveBackoffState { consecutiveQuickDeaths: number; lastSpawnMs: number; backoffUntilMs: number }
+const ZERO_BACKOFF_STATE: ReviveBackoffState = { consecutiveQuickDeaths: 0, lastSpawnMs: 0, backoffUntilMs: 0 }
+
+/** Fail-OPEN (zero state) on anything missing/unreadable/malformed — a torn read must never
+ *  PERMANENTLY wedge the reviver; the worst case of guessing wrong here is one extra spawn, not a
+ *  stuck outage. Never a partial merge of a corrupt object: any missing/wrong-typed field discards
+ *  the whole record, so a half-written state (see the atomic-write comment below) can't be read as
+ *  a plausible-looking but wrong count. */
+function loadReviveBackoffState(): ReviveBackoffState {
+  try {
+    const raw = JSON.parse(fs.readFileSync(reviveBackoffStatePath(), 'utf-8')) as Partial<ReviveBackoffState>
+    if (
+      typeof raw.consecutiveQuickDeaths === 'number' &&
+      typeof raw.lastSpawnMs === 'number' &&
+      typeof raw.backoffUntilMs === 'number'
+    ) {
+      return raw as ReviveBackoffState
+    }
+  } catch { /* missing / corrupt — treated as zero state below */ }
+  return ZERO_BACKOFF_STATE
+}
+
+/** Atomic (temp + rename, via serverRuntime's atomicWriteFileSync) so two racing hook processes can
+ *  never leave a torn/half-written record — the old mtime-only debounce this backoff sits beside was
+ *  measured to race on 2 of 20 sampled spawns; a plain writeFileSync here would reintroduce the same
+ *  class of bug one layer up. */
+function saveReviveBackoffState(state: ReviveBackoffState): void {
+  try {
+    fs.mkdirSync(dataDir(), { recursive: true })
+    atomicWriteFileSync(reviveBackoffStatePath(), JSON.stringify(state))
+  } catch { /* best effort — a failed persist costs one mis-tracked spawn, not a hook failure */ }
+}
+
+function computeBackoffMs(consecutiveQuickDeaths: number): number {
+  return Math.min(REVIVE_BACKOFF_MAX_MS, REVIVE_BACKOFF_BASE_MS * 2 ** (consecutiveQuickDeaths - 1))
+}
+
+/** The crash-loop gate. Called exactly once per genuine spawn DECISION — after every earlier
+ *  "don't spawn" gate (pidfileOwnerAlive, NO_REVIVE, the disk brake) has already passed, and after
+ *  the alcore binary itself resolved, so this only ever counts attempts that WOULD have spawned a
+ *  real process; a merely-checked-and-skipped hook must never inflate the death count.
+ *
+ *  Returns true when the caller must hold off (and has already printed why); false when it recorded
+ *  this attempt and the caller should proceed to spawn. Exported so the state transitions — a quick
+ *  death grows the hold, a run that outlives REVIVE_CRASH_WINDOW_MS resets it — are testable directly
+ *  against a real (temp) data dir, without spawning a real alcore process per case. */
+export function reviveBackoffGate(now: number = Date.now()): boolean {
+  const state = loadReviveBackoffState()
+  if (now < state.backoffUntilMs) {
+    // VISIBLE, on purpose (card constraint): a silently-stopped reviver is an outage nobody can see.
+    // stderr, not stdout — the hook's stdout contract (raw payload / gate verdict) must stay untouched.
+    process.stderr.write(
+      `[agentlenspro] revive backoff: ${state.consecutiveQuickDeaths} quick crash(es) in a row — holding off ` +
+      `spawning a new server until ${new Date(state.backoffUntilMs).toISOString()}. ` +
+      'Run `agentlenspro server start` to clear the backoff and try now.\n',
+    )
+    return true
+  }
+  // Reset condition: the previous spawn (if any) is only "quick-died" when we are back here sooner
+  // than REVIVE_CRASH_WINDOW_MS after it started. A run that survived at least that long — however it
+  // eventually ended — proves the install works, so the counter must not carry a stale grudge into an
+  // unrelated later failure.
+  const quickDeath = state.lastSpawnMs > 0 && (now - state.lastSpawnMs) < REVIVE_CRASH_WINDOW_MS
+  const consecutiveQuickDeaths = quickDeath ? state.consecutiveQuickDeaths + 1 : 0
+  const backoffMs = consecutiveQuickDeaths > 0 ? computeBackoffMs(consecutiveQuickDeaths) : 0
+  saveReviveBackoffState({ consecutiveQuickDeaths, lastSpawnMs: now, backoffUntilMs: now + backoffMs })
+  if (consecutiveQuickDeaths > 0) {
+    process.stderr.write(
+      `[agentlenspro] reviving after ${consecutiveQuickDeaths} quick crash(es) in a row — will back off ` +
+      `~${Math.round(backoffMs / 1000)}s longer if this one dies quickly too.\n`,
+    )
+  }
+  return false
+}
+
+/** Lift the crash-loop backoff. Called on a deliberate `agentlenspro server start`/`restart`
+ *  (serverControl.ts) — an operator who explicitly starts the server wants a clean slate, not a
+ *  counter left over from a past incident silently throttling an unrelated future failure.
+ *  Fail-open on a removal error, matching clearReviveBrake()'s sibling contract in serverControl.ts. */
+export function resetReviveBackoff(): void {
+  try { fs.rmSync(reviveBackoffStatePath(), { force: true }) } catch { /* best effort */ }
+}
+
 /** Fire a DETACHED server revive without waiting (the hook must exit 0 fast). A short-TTL mtime lock
  *  collapses a burst of N hooks into ONE spawn; the server's own pidfile guard rejects a second
  *  canonical instance if two race. Never throws, never blocks. */
@@ -170,6 +290,9 @@ function reviveDaemonDetached(): void {
     let alcore: string | null = null
     try { alcore = alcoreBin(process.env, undefined, undefined, resolveBinNativeDir()) } catch { return } // corrupt install: startServer reports it; a hook cannot
     if (!alcore) return // no engine resolvable — cannot revive
+    // Crash-loop backoff — AFTER the binary resolved, so only a genuine spawn attempt is counted
+    // (a corrupt/missing install already returned above without touching the backoff state).
+    if (reviveBackoffGate()) return
     // A REVIVED server logs, exactly like a `server start`ed one (TRDD-4FMHW124). This used to be
     // `stdio: 'ignore'`, and the cost was measured: on 2026-08-22 the server was replaced at
     // 21:51 while `server.log` still ended at the 20:57 generation's boot — so the death that
