@@ -3,7 +3,7 @@ trdd-id: WKLD508O
 title: alcore exits with a culprit log rather than exceed a 2 GB memory cap
 column: dev
 created: 2026-09-07T19:36:46+0200
-updated: 2026-09-24T19:40:55+0200
+updated: 2026-09-25T05:34:07+0200
 current-owner: main
 task-type: feature
 parent-trdd: 7YPQWKPG
@@ -688,6 +688,7 @@ Queued note (2026-09-24): the 08:48 build presumably contained the cap (build co
 2026-09-24 (orchestrator, measured in server.log): 40,735 "boot provenance" lines, 40,731 of them started-by=hook-revive; 40,316 of those are followed by a "loaded N span(s)" line (the span store is loaded) and only 201 by an explicit "Refusing to start: another AgentlensPro server ... owns this data directory" refusal. So hook-revive starts tens of thousands of alcore processes that load the span store before (or instead of) meeting the pid lock. New card filed for this: TRDD (see below), open question — does the pid-lock check run after the span load, and what happens to the ~40k boots with no refusal line.
 New card for the above: TRDD-JJLI6GEH (bugfix, column todo).
 2026-09-24T19:37:34+0200 -- The live server was largely DOWN (boot crash loop, TRDD-JJLI6GEH: a DuckDB OOM panic in the boot-time card restore killed every boot before it could bind a listener) for most of the log's 14-day span; it only started booting healthy again around server.log line ~324,020 of 335,280 (verified by line-number recount). So the 48 RSS-HARD-CAP exits and their uptimes above all come from that recent healthy tail -- a far shorter window than the log's full 14-day span -- and any rate (exits/hour, etc.) must be computed over that tail only, never over the whole log.
+2026-09-25: default taken (owner may veto): keep the 2 GB cap; fix the post-startup spike first.
 
 ## WHY
 

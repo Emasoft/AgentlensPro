@@ -3,7 +3,7 @@ trdd-id: ZQQYRYBO
 title: Align AgentlensPro with Claude Code 2.1.253 to 2.1.281
 column: dev
 created: 2026-09-24T13:39:40+0200
-updated: 2026-09-25T01:54:48+0200
+updated: 2026-09-25T05:33:57+0200
 current-owner: emanuelesabetta
 created-by: emanuelesabetta
 task-type: refactor
@@ -64,6 +64,8 @@ Message correction (2026-09-25): commit 3d128e0d's 'no production caller merges 
 2026-09-25: ZQQYRYBO follow-ups (a) and (c) worked, plus a2b73fa6 provenance check. (a) done — pending commit: the_drill_bounding_rules_hold now compares got["turnCount"] against an unfiltered None-arg call's turnCount plus a >1 guard, replacing the literal 4; 13/13 mcptools_parity pass on main. Fail-before confirmed: mutating get_context_composition to use picked.len() instead of all.len() in a clean aa187c76 export made the_drill_bounding_rules_hold (and get_context_composition_reproduces_the_ts_oracle_exactly) FAIL as expected, then the export was cmp-verified restored.
 2026-09-25: a2b73fa6 provenance: CARGO_TARGET_DIR=/tmp/zq-target-a2b cargo test -p agentlens-core --test mcptools_parity on a clean a2b73fa6 export → 13/13 passed, 0 failed (exit=0, log reports/cc-alignment/*-zqqy-followups-a-c.md). Message correction: the stale drift since 079f7839 did not break mcptools_parity — measured at a2b73fa6 only; 079f7839, 802531dd, 63f41d04 and bb53a24c were not tested. (d) blocked: git restore of the verification fixture churn is gated by git_safety_guard's one-time password, which only the owner may enter.
 2026-09-25: (c) mocha mutation fail-before, all in a clean aa187c76 export (/tmp/zq-head), each recompiled with npx tsc after every mutation and restore (compiled JS grepped to confirm the change landed / was gone before mocha ran): contextComposition.ts dedup Set->Map(label->hash last-value) mutation -> 'A, B, A ... counts A once and B once' FAILS (3 !== 2), others pass; restored+recompiled clean. contextComposition.ts classifyAttachment emitting 'instructionsRule' for any path with a 'rules' segment -> 'a src/rules/CLAUDE.md path ... maps to claudemd' FAILS (raw kind 'instructionsRule' != 'instructions'), plus 'a .claude/rules/x.md path maps to rule' also fails as a side effect (attachmentKind has no case for 'instructionsRule', falls to 'other'); restored+recompiled clean. contextHistory.ts attachmentKind isRule=segs.includes('rules') (any rules/ segment, not just .claude/rules pair) -> the claudemd assertion inside 'a .claude/rules/x.md path maps to rule via contextHistory.attachmentKind' FAILS (src/rules/CLAUDE.md now classifies 'rule' not 'claudemd'); the standalone test 4 (raw kind) is unaffected since it never calls attachmentKind; restored+recompiled clean. contextHistory.ts attachmentKind path-less fallback (p==='instructions') forced to 'rule' -> 'a path-less instructions file ... maps to claudemd, not rule' FAILS ('rule' !== 'claudemd'); restored+recompiled clean. cacheBreak.ts idle-gap lookback narrowed to only prev (no backward walk past a pure-read turn) -> 'the tier lookback walks BACKWARD past a pure-read turn to the last real write' FAILS; restored+recompiled clean. cacheBreak.ts partial-expiry branch disabled (if (false && has5m && has1h)) -> 'a split write ... reports the PARTIAL-expiry verdict' FAILS; restored+recompiled clean. No mutation went uncaught; final clean-tree run after every restore is 22/22 (cacheBreak.test.js + contextCompositionDedup.test.js) passing. Full detail: reports/cc-alignment/*-zqqy-followups-a-c.md.
+2026-09-25: Resumed 2026-09-25 on the owner's 'what are you waiting for?': defaults taken as listed under Owner questions; only the two OTP-gated git operations remain truly blocked.
+2026-09-25: default: mark the two unproven I15 claims (one event sums every hook; one SubagentStart dispatch = one spawn) as unverified.
 
 ## Increments
 
@@ -105,6 +107,15 @@ Message correction (2026-09-25): commit 3d128e0d's 'no production caller merges 
   - Run it only after I5, or it overwrites your 8 KB `lean-worker`.
   - Also remove the orphaned Stop hook `pending-prompt.txt` (HT-8), which `setup` does not own.
 - **Q6 — repository attribution:** `OTEL_METRICS_INCLUDE_REPOSITORY=1` puts the repo URL on every event (TI 1.7 / SS O6). The value stays local. Wait until the spool removal has changed `telemetryConfig.ts`, because it touches the same file.
+Defaults taken 2026-09-25 (owner may veto):
+- Q1: scale equivOf per model by its read-rate / input-rate ratio (the smallest change).
+- Q2: re-enable the subagent review gate (I3). This matches the standing order that the review fork is never disabled.
+- Q3: rename the shipped lean-worker to agentlens-lean-worker (the advisor's recommendation).
+- Q4: investigate before deciding. Is the $112.98 also counted in api_request rows? Note: on 2026-09-25 its security_reminder_hook.py ran away three times (10-15 GB RSS, 99% CPU).
+- Q5: run setup only after I5, through safeConfigEdit; it needs a session restart.
+- Q6: read the question in the card, and record it as still open, with no default taken.
+- Raw-body capture stays on.
+- EJ6DIP5D: the label-downgrade default is being implemented now.
 
 ## Notes and lessons learned
 DO NOT verify a patch with a hand-picked --test list, BECAUSE the I6c2 worktree run named 9 parity suites, omitted log_reader_parity, and a stale fixture reached main. DO run cargo test -p agentlens-core -p agentlens-logscan --no-fail-fast (the whole crate) before committing.

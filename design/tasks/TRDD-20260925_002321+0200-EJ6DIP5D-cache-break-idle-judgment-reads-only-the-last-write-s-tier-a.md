@@ -1,10 +1,10 @@
 ---
 trdd-id: EJ6DIP5D
 title: Cache-break idle judgment reads only the last write's tier and overstates expiry after mixed writes
-column: backburner
+column: dev
 status: tasked
 created: 2026-09-25T00:23:21+0200
-updated: 2026-09-25T00:23:21+0200
+updated: 2026-09-25T05:34:00+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -28,3 +28,4 @@ Evidence: reports/cc-alignment/20260924_234821+0200-I6c2.md
 ## Approval log
 
 - 2026-09-25T00:23:21+0200 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-09-25T05:34:00+0200 — column → dev by main-agent@agentlenspro. owner default taken 2026-09-25: label 'assumed' on mixed-tier writes
