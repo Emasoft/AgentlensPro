@@ -10,12 +10,15 @@ import * as path from 'path'
 import { apiRequest, dataDir, dashboardUrl, envPort, fmtGb, fmtMb, init, mcpEndpoint, sleep, CONNECT_TIMEOUT_MS } from './cliCore'
 import { dataDirSource, dataPath } from '../dataDir'
 import { agentlensDisabled, killSwitchPath, noRevivePath, reviveBraked, STARTED_BY_ENV } from './killSwitch'
-// resetReviveBackoff only (TRDD-JJLI6GEH) — a deliberate `server start`/`restart` must clear the
-// hook-reviver's crash-loop backoff, or a counter from a past incident silently throttles an
-// unrelated future one. hookHandlers.ts imports alcoreBin/alcoreServeArgs/resolveBinNativeDir from
-// THIS module, so this creates a cycle back to it — safe here because resetReviveBackoff is only
-// ever CALLED at runtime (inside serverCommand, below), never referenced at module-load time.
-import { resetReviveBackoff } from './hookHandlers'
+// resetReviveBackoff/reviveBackoffStatus (TRDD-JJLI6GEH) — a deliberate `server start`/`restart`
+// must clear the hook-reviver's crash-loop backoff, or a counter from a past incident silently
+// throttles an unrelated future one; `server status` surfaces an ACTIVE hold (FIX b2) — the gate's
+// own hold message only ever reaches stderr from a hook Claude Code does not show the user, so
+// without this a stalled revive was invisible short of reading server.log by hand. hookHandlers.ts
+// imports alcoreBin/alcoreServeArgs/resolveBinNativeDir from THIS module, so this creates a cycle
+// back to it — safe here because both are only ever CALLED at runtime (inside serverCommand /
+// showStatus, below), never referenced at module-load time.
+import { resetReviveBackoff, reviveBackoffStatus } from './hookHandlers'
 import { UsageError } from './cliErrors'
 import { assertKnownFlags } from './argHelpers'
 import { lockTakeoverVerdict, parsePidLock, processStartRef } from '../serverRuntime'
@@ -621,6 +624,18 @@ export function statsOwnership(reported: string | undefined, mine: string): 'our
 }
 
 export async function showStatus(): Promise<void> {
+  // FIX b2 (TRDD-JJLI6GEH): report an active crash-loop hold before anything else — it explains
+  // why the probe below is likely to say NOT RUNNING, and it is the one piece of state a hook can
+  // never surface to the user itself (its own message goes to stderr from a hook Claude Code does
+  // not display). Read via the SAME exported state read the gate uses, so this can't disagree.
+  const backoff = reviveBackoffStatus()
+  if (backoff.holding) {
+    console.log(
+      `revive backoff: ${backoff.consecutiveQuickDeaths} quick crash(es) in a row — holding off spawning a ` +
+      `new server until ${new Date(backoff.backoffUntilMs).toISOString()}. Run \`agentlenspro server start\` ` +
+      'to clear the backoff and try now.',
+    )
+  }
   let s: ServerStats
   try { s = await apiRequest('GET', '/api/server-stats') as unknown as ServerStats } catch (e) {
     // A response (however wrong) means SOMETHING is serving the port — an older build without

@@ -145,22 +145,14 @@ export function pidfileOwnerAlive(): boolean {
 // stays true for the whole readyTimeoutMs() budget, so reviveDaemonDetached() returns before this
 // runs at all. Reaching here at all already means the previous owner is confirmed NOT alive.
 //
-// MUST stay comfortably ABOVE REVIVE_BACKOFF_MAX_MS, or growth past one death becomes undetectable:
-// the hook process that spawns a server exits immediately (detached + unref'd), so the ONLY way this
-// gate ever re-examines a spawn is on a LATER hook's call, which cannot happen before the backoff hold
-// itself elapses — so once a hold exceeds the crash window, the next check's own elapsed time (now -
-// lastSpawnMs) always reads as "survived", silently capping the counter at 1 forever. Sizing the
-// window above the cap (here: 40min > the 30min cap below, with margin for the 15s debounce's own
-// slack) keeps every hold-driven gap inside the window, so a genuine repeat crash loop keeps counting.
-//
-// ACCEPTED TRADEOFF, reviewed 2026-09-25: this necessarily makes "quick death" coarser than its name
-// suggests — a server that ran healthily for, say, 20 minutes before dying is ALSO counted as a
-// "quick" death once this window covers 40 minutes, because nothing here watches the child directly
-// (see the comment above); the window is really "how long a gap our OWN throttling can produce
-// without being mistaken for survival", not a tight diagnostic of crash speed. That is fine for this
-// gate's actual job — throttling a genuinely repeating crash loop — but it means a rare, unrelated
-// death ~20-39 minutes after a healthy boot gets folded into the same streak instead of resetting it.
-const REVIVE_CRASH_WINDOW_MS = Math.max(5_000, Number(process.env.AGENTLENS_REVIVE_CRASH_WINDOW_MS) || 40 * 60_000)
+// FIX b1 (TRDD-JJLI6GEH, 2026-09-25): the lifetime is classified ONCE, at the FIRST hook that finds
+// the previous owner dead (see the `deathClassified` field below) — BEFORE any hold from that
+// classification is applied. A hold-driven gap can therefore never leak into a later "now -
+// lastSpawnMs" measurement, so this window is a genuine "died within N minutes of starting"
+// threshold and does not need to exceed REVIVE_BACKOFF_MAX_MS (the earlier 40-minute window, sized
+// only to dodge that leak, made a healthy 30-50-minute run under the 2GB RSS cap — TRDD-WKLD508O —
+// look like a crash and cost it up to 30 minutes of downtime).
+const REVIVE_CRASH_WINDOW_MS = Math.max(5_000, Number(process.env.AGENTLENS_REVIVE_CRASH_WINDOW_MS) || 5 * 60_000)
 // Doubling from a 30s base reaches the 30-minute cap after 6 consecutive quick deaths (30s, 60s,
 // 120s, 240s, 480s, 960s -> capped), throttling a genuine crash loop to ~2 spawns/hour instead of
 // several per second, while a single flake (1-2 quick deaths) barely slows anything down.
@@ -169,25 +161,57 @@ const REVIVE_BACKOFF_MAX_MS = 30 * 60_000
 
 function reviveBackoffStatePath(): string { return path.join(dataDir(), '.revive-backoff.json') }
 
-interface ReviveBackoffState { consecutiveQuickDeaths: number; lastSpawnMs: number; backoffUntilMs: number }
-const ZERO_BACKOFF_STATE: ReviveBackoffState = { consecutiveQuickDeaths: 0, lastSpawnMs: 0, backoffUntilMs: 0 }
+interface ReviveBackoffState {
+  consecutiveQuickDeaths: number
+  lastSpawnMs: number
+  backoffUntilMs: number
+  // FIX b1 (TRDD-JJLI6GEH): true once the death that followed `lastSpawnMs` has already been
+  // classified (quick-or-not) and its verdict saved. A hook that fires WHILE a hold is active reads
+  // this as true and skips classification entirely — the classification always happened at the
+  // FIRST hook to find the owner dead, before that hold existed, so re-checking later can never
+  // fold the hold's own duration into the lifetime measurement. Cleared back to false the moment a
+  // new spawn actually happens (see the "proceed" branch of reviveBackoffGate below).
+  deathClassified: boolean
+}
+const ZERO_BACKOFF_STATE: ReviveBackoffState = { consecutiveQuickDeaths: 0, lastSpawnMs: 0, backoffUntilMs: 0, deathClassified: false }
 
 /** Fail-OPEN (zero state) on anything missing/unreadable/malformed — a torn read must never
  *  PERMANENTLY wedge the reviver; the worst case of guessing wrong here is one extra spawn, not a
  *  stuck outage. Never a partial merge of a corrupt object: any missing/wrong-typed field discards
  *  the whole record, so a half-written state (see the atomic-write comment below) can't be read as
- *  a plausible-looking but wrong count. */
+ *  a plausible-looking but wrong count.
+ *
+ *  FIX b3 (TRDD-JJLI6GEH): a MISSING file (ENOENT — no crash has ever happened here) is the common,
+ *  silent case and stays silent. A PRESENT-but-unreadable-or-malformed file is different: something
+ *  wrote garbage where a real state lived, and that is worth one stderr line naming the file, even
+ *  though we still fail open and carry on with a clean slate — "fails open" must not mean "fails
+ *  open silently" once there was something on disk to lose. Reused by `reviveBackoffStatus()` below
+ *  so `agentlenspro server status` reads the exact same state the gate itself acts on. */
 function loadReviveBackoffState(): ReviveBackoffState {
+  const statePath = reviveBackoffStatePath()
+  let text: string
   try {
-    const raw = JSON.parse(fs.readFileSync(reviveBackoffStatePath(), 'utf-8')) as Partial<ReviveBackoffState>
+    text = fs.readFileSync(statePath, 'utf-8')
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== 'ENOENT') {
+      process.stderr.write(`[agentlenspro] revive backoff: could not read ${statePath} (${(e as Error).message}) — starting from a clean state.\n`)
+    }
+    return ZERO_BACKOFF_STATE
+  }
+  try {
+    const raw = JSON.parse(text) as Partial<ReviveBackoffState>
     if (
       typeof raw.consecutiveQuickDeaths === 'number' &&
       typeof raw.lastSpawnMs === 'number' &&
-      typeof raw.backoffUntilMs === 'number'
+      typeof raw.backoffUntilMs === 'number' &&
+      typeof raw.deathClassified === 'boolean'
     ) {
       return raw as ReviveBackoffState
     }
-  } catch { /* missing / corrupt — treated as zero state below */ }
+    process.stderr.write(`[agentlenspro] revive backoff: ${statePath} has an unexpected shape — discarding it and starting from a clean state.\n`)
+  } catch (e) {
+    process.stderr.write(`[agentlenspro] revive backoff: ${statePath} is not valid JSON (${(e as Error).message}) — discarding it and starting from a clean state.\n`)
+  }
   return ZERO_BACKOFF_STATE
 }
 
@@ -206,20 +230,48 @@ function computeBackoffMs(consecutiveQuickDeaths: number): number {
   return Math.min(REVIVE_BACKOFF_MAX_MS, REVIVE_BACKOFF_BASE_MS * 2 ** (consecutiveQuickDeaths - 1))
 }
 
-/** The crash-loop gate. Called exactly once per genuine spawn DECISION — after every earlier
- *  "don't spawn" gate (pidfileOwnerAlive, NO_REVIVE, the disk brake) has already passed, and after
- *  the alcore binary itself resolved, so this only ever counts attempts that WOULD have spawned a
- *  real process; a merely-checked-and-skipped hook must never inflate the death count.
+/** The crash-loop gate. Called on every hook that reaches a genuine spawn DECISION — after every
+ *  earlier "don't spawn" gate (pidfileOwnerAlive, NO_REVIVE, the disk brake) has already passed, and
+ *  after the alcore binary itself resolved, so this only ever counts attempts that WOULD have
+ *  spawned a real process; a merely-checked-and-skipped hook must never inflate the death count.
  *
- *  Returns true when the caller must hold off (and has already printed why); false when it recorded
- *  this attempt and the caller should proceed to spawn. Exported so the state transitions — a quick
- *  death grows the hold, a run that outlives REVIVE_CRASH_WINDOW_MS resets it — are testable directly
- *  against a real (temp) data dir, without spawning a real alcore process per case. */
+ *  FIX b1 (TRDD-JJLI6GEH): classification and holding are two SEPARATE steps, in that order.
+ *  Classification (quick-death-or-not) happens exactly ONCE per death — at the FIRST hook call to
+ *  see `deathClassified === false` — using `now - lastSpawnMs` measured BEFORE any hold this
+ *  classification produces is applied. Every later hook call, while the resulting hold is still
+ *  active, finds `deathClassified === true` and skips straight to the hold check: it neither
+ *  re-measures the elapsed time (which would now include the hold itself) nor re-increments the
+ *  streak. Only once the hold has elapsed does a call fall through to "proceed", which stamps a
+ *  fresh `lastSpawnMs` for the spawn about to happen and clears `deathClassified` so the NEXT death
+ *  is measured fresh.
+ *
+ *  Returns true when the caller must hold off (and has already printed why); false when the caller
+ *  should proceed to spawn. Exported so the state transitions are testable directly against a real
+ *  (temp) data dir, without spawning a real alcore process per case. */
 export function reviveBackoffGate(now: number = Date.now()): boolean {
   const state = loadReviveBackoffState()
+  if (!state.deathClassified) {
+    // Reset condition: the previous spawn (if any) is only "quick-died" when this — the FIRST hook
+    // to notice — comes back sooner than REVIVE_CRASH_WINDOW_MS after it started. A run that
+    // survived at least that long — however it eventually ended — proves the install works, so the
+    // counter must not carry a stale grudge into an unrelated later failure.
+    const quickDeath = state.lastSpawnMs > 0 && (now - state.lastSpawnMs) < REVIVE_CRASH_WINDOW_MS
+    state.consecutiveQuickDeaths = quickDeath ? state.consecutiveQuickDeaths + 1 : 0
+    const backoffMs = state.consecutiveQuickDeaths > 0 ? computeBackoffMs(state.consecutiveQuickDeaths) : 0
+    state.backoffUntilMs = now + backoffMs
+    state.deathClassified = true
+    saveReviveBackoffState(state)
+    if (state.consecutiveQuickDeaths > 0) {
+      process.stderr.write(
+        `[agentlenspro] reviving after ${state.consecutiveQuickDeaths} quick crash(es) in a row — will back off ` +
+        `~${Math.round(backoffMs / 1000)}s longer if this one dies quickly too.\n`,
+      )
+    }
+  }
   if (now < state.backoffUntilMs) {
     // VISIBLE, on purpose (card constraint): a silently-stopped reviver is an outage nobody can see.
     // stderr, not stdout — the hook's stdout contract (raw payload / gate verdict) must stay untouched.
+    // (Also reported, non-silently, by `agentlenspro server status` — see reviveBackoffStatus below.)
     process.stderr.write(
       `[agentlenspro] revive backoff: ${state.consecutiveQuickDeaths} quick crash(es) in a row — holding off ` +
       `spawning a new server until ${new Date(state.backoffUntilMs).toISOString()}. ` +
@@ -227,21 +279,27 @@ export function reviveBackoffGate(now: number = Date.now()): boolean {
     )
     return true
   }
-  // Reset condition: the previous spawn (if any) is only "quick-died" when we are back here sooner
-  // than REVIVE_CRASH_WINDOW_MS after it started. A run that survived at least that long — however it
-  // eventually ended — proves the install works, so the counter must not carry a stale grudge into an
-  // unrelated later failure.
-  const quickDeath = state.lastSpawnMs > 0 && (now - state.lastSpawnMs) < REVIVE_CRASH_WINDOW_MS
-  const consecutiveQuickDeaths = quickDeath ? state.consecutiveQuickDeaths + 1 : 0
-  const backoffMs = consecutiveQuickDeaths > 0 ? computeBackoffMs(consecutiveQuickDeaths) : 0
-  saveReviveBackoffState({ consecutiveQuickDeaths, lastSpawnMs: now, backoffUntilMs: now + backoffMs })
-  if (consecutiveQuickDeaths > 0) {
-    process.stderr.write(
-      `[agentlenspro] reviving after ${consecutiveQuickDeaths} quick crash(es) in a row — will back off ` +
-      `~${Math.round(backoffMs / 1000)}s longer if this one dies quickly too.\n`,
-    )
-  }
+  // Not (or no longer) held: this call IS the next genuine spawn. Stamp when it happened and clear
+  // the classification flag so the death that follows THIS spawn gets its own fresh verdict.
+  // `backoffUntilMs` is deliberately left as-is here (now a PAST timestamp) rather than reset to
+  // `now` — it is safe to leave stale: the only two readers are this same `now < state.backoffUntilMs`
+  // check (which the very next classification overwrites before it is ever consulted again) and
+  // `reviveBackoffStatus()` (which only ever observes a `backoffUntilMs` that is provably `<= now`
+  // at read time, so it can never report a false "holding"). Leaving it saves a field we would
+  // otherwise have to recompute for no observable benefit.
+  saveReviveBackoffState({ ...state, lastSpawnMs: now, deathClassified: false })
   return false
+}
+
+/** Read-only snapshot for `agentlenspro server status` (serverControl.ts) — built on the SAME
+ *  `loadReviveBackoffState()` read the gate itself uses (FIX b2, TRDD-JJLI6GEH), so status can
+ *  never disagree with the gate about whether a hold is active. Without this, the gate's hold
+ *  message only ever reached stderr from a hook Claude Code does not surface — an operator staring
+ *  at a stalled revive had no way to discover WHY short of reading server.log by hand. */
+export interface ReviveBackoffStatus { holding: boolean; consecutiveQuickDeaths: number; backoffUntilMs: number }
+export function reviveBackoffStatus(now: number = Date.now()): ReviveBackoffStatus {
+  const state = loadReviveBackoffState()
+  return { holding: now < state.backoffUntilMs, consecutiveQuickDeaths: state.consecutiveQuickDeaths, backoffUntilMs: state.backoffUntilMs }
 }
 
 /** Lift the crash-loop backoff. Called on a deliberate `agentlenspro server start`/`restart`
