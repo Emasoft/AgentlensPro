@@ -656,6 +656,12 @@ export function mayWrite(input: MayWriteInput): MayWriteResult {
   }
   const parentCycles = scanCycles(parentLines, { sessionDir, cwd })
   const parentCycle = parentCycles.length > 0 ? parentCycles[parentCycles.length - 1] : null
+  // The probe below (and the identical post-spawnIndex recursion) establishes the spawner's own
+  // standing when it is itself an inheriting worker. Run it at most once: the first run happens
+  // here when the parent carries no cycle (the D3 escape), and the later block must not re-run
+  // the identical probe — on a deep inheritance chain that would double the transcript reads at
+  // every level (2^depth probes; adversarial-review finding on c7c540c8).
+  let parentEstablished = false
   if (parentCycle === null) {
     // The SPAWNER itself carries no proposal: either it is an inheriting worker (it has its own
     // parentAgentId — its standing is established by the recursive probe below, exactly the D3
@@ -670,6 +676,7 @@ export function mayWrite(input: MayWriteInput): MayWriteResult {
         fsHelpers: fh, _depth: depth + 1,
       })
       if (!parentAllowed.allow) return parentAllowed
+      parentEstablished = true
     } else if (ownCycle === null) {
       return { allow: false, reason: 'no PROPOSAL found in the spawner\'s transcript either — see `agentlenspro review-gate --directive`', missing: 'no-proposal' }
     } else {
@@ -708,8 +715,11 @@ export function mayWrite(input: MayWriteInput): MayWriteResult {
   // Edit of a placeholder path), not a Bash read — a read-shaped probe (`Bash: true`) trivially
   // classifies as `kind: 'read'` and `mayWrite` would return `allow: true` at its very first check
   // without ever walking the spawner's own cycle/inheritance chain, making this recursion a no-op
-  // that verified nothing. A write-shaped probe forces the real chain to run.
-  if (parentAgentId !== undefined && parentAgentId !== '') {
+  // that verified nothing. A write-shaped probe forces the real chain to run. Skipped when the
+  // identical probe already ran (and allowed) in the parentCycle === null branch above.
+  if (parentEstablished) {
+    // already allowed above — fall through
+  } else if (parentAgentId !== undefined && parentAgentId !== '') {
     const parentAllowed = mayWrite({
       transcriptPath: sessionDirOf(input.transcriptPath) + '.jsonl',
       agentId: parentAgentId, cwd, repoRoot, homeDir,
