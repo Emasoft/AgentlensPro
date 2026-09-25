@@ -471,8 +471,69 @@ fn classify_turn(history: &[CacheTurnInput], cur: &CacheTurnInput, opts: &Analyz
                         return emit(Cause::IdleTtlPartialExpiry, None, None, idle_gap_ms, None, None, Some("measured"));
                     }
                     if has_5m {
-                        // All-5m write: any gap past the 5-min floor is a full expiry.
-                        return emit(Cause::IdleTtlExpiry, None, None, idle_gap_ms, None, None, Some("measured"));
+                        // All-5m write: any gap past the 5-min floor is a full expiry — that
+                        // verdict stands. But the LABEL needs one more check: the prefix can hold
+                        // multiple coexisting tiers, and a cache HIT refreshes whichever entry it
+                        // matched (which may be this later 5m write, not an earlier 1h one) — so
+                        // an earlier 1h slice in the same prefix segment is not provably gone.
+                        // Walk `history` backward from (but not including) `last_write`, bounded
+                        // to the CURRENT prefix segment: a turn with cache_read_tokens == 0
+                        // alongside a real write is a cold full rewrite (also covers compaction)
+                        // that starts a brand-new prefix, so scanning stops there (inclusive —
+                        // that turn's own tier still counts, nothing before it does, since it can
+                        // never match again). Within that segment, ANY earlier write whose tier
+                        // was a nonzero 1h slice, OR was never observed at all (None — can't rule
+                        // out 1h either), means we cannot prove no 1h slice survives → 'assumed'.
+                        // The mirror direction (earlier 5m, later all-1h) is NOT checked: the
+                        // later all-1h write covers the whole prefix, so I6c2's verdict there is
+                        // already correct. Over-labelling 'assumed' costs nothing; the bug is
+                        // claiming 'measured' on a prefix that may still carry a mixed tier.
+                        // NOTE: the segment boundary can also be tripped by an interleaved
+                        // subagent turn sharing the same timeline — open as TRDD-WBT2WW96, not
+                        // resolved by this change.
+                        let lw = last_write.unwrap();
+                        let mut mixed_tier_in_segment = false;
+                        // If last_write ITSELF was a cold full rewrite, the segment is just
+                        // {last_write} — nothing before it can matter (that's exactly what a cold
+                        // rewrite means), so don't even scan.
+                        if lw.cache_read_tokens != 0.0 {
+                            let mut reached_last_write = false;
+                            let mut found_segment_start = false;
+                            for t in history.iter().rev() {
+                                if !reached_last_write {
+                                    if std::ptr::eq(t, lw) {
+                                        reached_last_write = true;
+                                    }
+                                    continue;
+                                }
+                                if t.cache_create_tokens <= 0.0 {
+                                    continue; // pure read: doesn't affect or end the segment
+                                }
+                                if t.cache_create_tokens_1h.is_none()
+                                    || t.cache_create_tokens_1h.unwrap() > 0.0
+                                {
+                                    mixed_tier_in_segment = true;
+                                }
+                                if t.cache_read_tokens == 0.0 {
+                                    found_segment_start = true;
+                                    break; // cold full rewrite: segment boundary, inclusive
+                                }
+                            }
+                            // Ran off the front of the VISIBLE history without ever finding where
+                            // this prefix segment began: last_write read from a cache written
+                            // off-screen (a resumed/truncated timeline — mirrors the sibling `None`
+                            // arm below for last_write's OWN tier). The segment may extend further
+                            // back than we can see, so an earlier mismatched tier can't be ruled
+                            // out either — same "never guess from silence" reasoning as everywhere
+                            // else in this function.
+                            if !found_segment_start {
+                                mixed_tier_in_segment = true;
+                            }
+                        }
+                        return emit(
+                            Cause::IdleTtlExpiry, None, None, idle_gap_ms, None, None,
+                            Some(if mixed_tier_in_segment { "assumed" } else { "measured" }),
+                        );
                     }
                     // All-1h (has_1h only, gap <= TTL_1H_MS already checked above): still
                     // resident — falls through to step 5, not a break.

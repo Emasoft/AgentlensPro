@@ -1,5 +1,5 @@
 {
-  "now": 1787307547237,
+  "now": 1790286490816,
   "offsets": {
     "base1/-w-one/aaaaaaaa-1111-2222-3333-444444444444.jsonl": 1,
     "base1/-w-one/bbbbbbbb-1111-2222-3333-444444444444.jsonl": 3,
@@ -14,7 +14,7 @@
     "fleet_default": {
       "opts": {
         "scope": "fleet",
-        "sinceMs": 1787221147237
+        "sinceMs": 1790200090816
       },
       "out": [
         "<FIXTURES>/base1/-w-one/aaaaaaaa-1111-2222-3333-444444444444.jsonl",
@@ -26,7 +26,7 @@
     "fleet_with_subagents": {
       "opts": {
         "scope": "fleet",
-        "sinceMs": 1787221147237,
+        "sinceMs": 1790200090816,
         "includeSubagents": true
       },
       "out": [
@@ -41,7 +41,7 @@
     "fleet_capped": {
       "opts": {
         "scope": "fleet",
-        "sinceMs": 1787221147237,
+        "sinceMs": 1790200090816,
         "maxFiles": 2
       },
       "out": [
@@ -52,7 +52,7 @@
     "fleet_cap_zero": {
       "opts": {
         "scope": "fleet",
-        "sinceMs": 1787221147237,
+        "sinceMs": 1790200090816,
         "maxFiles": 0
       },
       "out": []
@@ -60,7 +60,7 @@
     "fleet_narrow_window": {
       "opts": {
         "scope": "fleet",
-        "sinceMs": 1787307547237
+        "sinceMs": 1790286490816
       },
       "out": [
         "<FIXTURES>/base1/-w-one/aaaaaaaa-1111-2222-3333-444444444444.jsonl"
@@ -69,7 +69,7 @@
     "fleet_wide_window": {
       "opts": {
         "scope": "fleet",
-        "sinceMs": 1785507547237
+        "sinceMs": 1788486490816
       },
       "out": [
         "<FIXTURES>/base1/-w-one/aaaaaaaa-1111-2222-3333-444444444444.jsonl",
@@ -83,7 +83,7 @@
       "opts": {
         "scope": "workspace",
         "workspace": "/w/one",
-        "sinceMs": 1787221147237
+        "sinceMs": 1790200090816
       },
       "out": [
         "<FIXTURES>/base1/-w-one/aaaaaaaa-1111-2222-3333-444444444444.jsonl",
@@ -96,7 +96,7 @@
       "opts": {
         "scope": "workspace",
         "workspace": "/w/one",
-        "sinceMs": 1787221147237,
+        "sinceMs": 1790200090816,
         "includeSubagents": true
       },
       "out": [
@@ -111,7 +111,7 @@
       "opts": {
         "scope": "workspace",
         "workspace": "/w/two",
-        "sinceMs": 1787221147237
+        "sinceMs": 1790200090816
       },
       "out": [
         "<FIXTURES>/base1/-w-two/dddddddd-1111-2222-3333-444444444444.jsonl"
@@ -121,14 +121,14 @@
       "opts": {
         "scope": "workspace",
         "workspace": "/w/nope",
-        "sinceMs": 1787221147237
+        "sinceMs": 1790200090816
       },
       "out": []
     },
     "workspace_missing_arg": {
       "opts": {
         "scope": "workspace",
-        "sinceMs": 1787221147237
+        "sinceMs": 1790200090816
       },
       "out": []
     },
@@ -136,7 +136,7 @@
       "opts": {
         "scope": "workspace",
         "workspace": "-w-one",
-        "sinceMs": 1787221147237
+        "sinceMs": 1790200090816
       },
       "out": [
         "<FIXTURES>/base1/-w-one/aaaaaaaa-1111-2222-3333-444444444444.jsonl",
@@ -149,7 +149,7 @@
       "opts": {
         "scope": "session",
         "sessionId": "aaaaaaaa-1111-2222-3333-444444444444",
-        "sinceMs": 1787221147237
+        "sinceMs": 1790200090816
       },
       "out": [
         "<FIXTURES>/base1/-w-one/aaaaaaaa-1111-2222-3333-444444444444.jsonl"
@@ -159,7 +159,7 @@
       "opts": {
         "scope": "session",
         "sessionId": "aaaaaaaa",
-        "sinceMs": 1787221147237
+        "sinceMs": 1790200090816
       },
       "out": [
         "<FIXTURES>/base1/-w-one/aaaaaaaa-1111-2222-3333-444444444444.jsonl"
@@ -169,7 +169,7 @@
       "opts": {
         "scope": "session",
         "sessionId": "ffffffff",
-        "sinceMs": 1787307547237
+        "sinceMs": 1790286490816
       },
       "out": [
         "<FIXTURES>/base2/-w-one/ffffffff-1111-2222-3333-444444444444.jsonl"
@@ -178,7 +178,7 @@
     "session_missing_arg": {
       "opts": {
         "scope": "session",
-        "sinceMs": 1787221147237
+        "sinceMs": 1790200090816
       },
       "out": []
     },
@@ -186,7 +186,7 @@
       "opts": {
         "scope": "session",
         "sessionId": "zzzzzzzz",
-        "sinceMs": 1787221147237
+        "sinceMs": 1790200090816
       },
       "out": []
     }

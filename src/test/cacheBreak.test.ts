@@ -209,4 +209,107 @@ suite('cacheBreak idle-TTL per-gap MEASURED tier (TRDD-ZQQYRYBO I6c2)', () => {
     assert.strictEqual(t.cause, 'IDLE_TTL_EXPIRY')
     assert.strictEqual(t.ttlGapSource, 'measured')
   })
+
+  // The four cases below cover the mixed-tier-in-segment check added to the all-5m sub-branch:
+  // the prefix can hold coexisting tiers, and a cache HIT refreshes whichever entry it matched
+  // (which may be the later 5m write, not an earlier 1h one) — so 'measured' must not be claimed
+  // when an earlier write in the SAME prefix segment carried a different (or unobserved) tier.
+
+  test('control: every write in the segment is all-5m → stays measured', () => {
+    const turns: CacheTurnInput[] = [
+      { turn: 1, sources: sameSource, cacheReadTokens: 0, cacheCreateTokens: 100, cacheCreateTokens1h: 0, inputTokens: 0, timestampMs: 0 },
+      { turn: 2, sources: sameSource, cacheReadTokens: 0, cacheCreateTokens: 50, cacheCreateTokens1h: 0, inputTokens: 0, timestampMs: 30 * 60_000 },
+    ]
+    const t = analyzeCacheBreaks('s', turns).turns[1]
+    assert.strictEqual(t.cause, 'IDLE_TTL_EXPIRY')
+    assert.strictEqual(t.ttlGapSource, 'measured')
+  })
+
+  test('an earlier 1h write in the SAME segment as the last all-5m write → assumed', () => {
+    // Turn 1 writes all-1h; turn 2 (lastWrite) is a plain all-5m write in the SAME segment (it
+    // read from the cache, so it did not start a new prefix); turn 3 re-writes all-5m 30 min
+    // later. Turn 1's 1h slice may still be resident — the label must say so.
+    const turns: CacheTurnInput[] = [
+      { turn: 1, sources: sameSource, cacheReadTokens: 0, cacheCreateTokens: 100, cacheCreateTokens1h: 100, inputTokens: 0, timestampMs: 0 },
+      { turn: 2, sources: sameSource, cacheReadTokens: 500, cacheCreateTokens: 50, cacheCreateTokens1h: 0, inputTokens: 0, timestampMs: 60_000 },
+      { turn: 3, sources: sameSource, cacheReadTokens: 0, cacheCreateTokens: 50, cacheCreateTokens1h: 0, inputTokens: 0, timestampMs: 60_000 + 30 * 60_000 },
+    ]
+    const t = analyzeCacheBreaks('s', turns).turns[2]
+    assert.strictEqual(t.cause, 'IDLE_TTL_EXPIRY')
+    assert.strictEqual(t.ttlGapSource, 'assumed')
+  })
+
+  test('a cold full rewrite bounds the segment — an earlier 1h write before it does not leak through', () => {
+    // Turn 1 writes all-1h; turn 2 is a COLD FULL REWRITE (cacheReadTokens 0, a fresh prefix,
+    // itself all-5m) — it starts a brand-new segment, so turn 1's tier is out of scope; turn 3
+    // re-writes all-5m 30 min after turn 2. lastWrite (turn 2) is itself the segment boundary, so
+    // nothing before it is scanned.
+    const turns: CacheTurnInput[] = [
+      { turn: 1, sources: sameSource, cacheReadTokens: 0, cacheCreateTokens: 100, cacheCreateTokens1h: 100, inputTokens: 0, timestampMs: 0 },
+      { turn: 2, sources: sameSource, cacheReadTokens: 0, cacheCreateTokens: 80, cacheCreateTokens1h: 0, inputTokens: 0, timestampMs: 5 * 60_000 },
+      { turn: 3, sources: sameSource, cacheReadTokens: 0, cacheCreateTokens: 50, cacheCreateTokens1h: 0, inputTokens: 0, timestampMs: 5 * 60_000 + 30 * 60_000 },
+    ]
+    const t = analyzeCacheBreaks('s', turns).turns[2]
+    assert.strictEqual(t.cause, 'IDLE_TTL_EXPIRY')
+    assert.strictEqual(t.ttlGapSource, 'measured')
+  })
+
+  test('an earlier write with NO observed tier in the same segment also forces assumed', () => {
+    const turns: CacheTurnInput[] = [
+      { turn: 1, sources: sameSource, cacheReadTokens: 0, cacheCreateTokens: 100, inputTokens: 0, timestampMs: 0 }, // no cacheCreateTokens1h at all
+      { turn: 2, sources: sameSource, cacheReadTokens: 500, cacheCreateTokens: 50, cacheCreateTokens1h: 0, inputTokens: 0, timestampMs: 60_000 },
+      { turn: 3, sources: sameSource, cacheReadTokens: 0, cacheCreateTokens: 50, cacheCreateTokens1h: 0, inputTokens: 0, timestampMs: 60_000 + 30 * 60_000 },
+    ]
+    const t = analyzeCacheBreaks('s', turns).turns[2]
+    assert.strictEqual(t.cause, 'IDLE_TTL_EXPIRY')
+    assert.strictEqual(t.ttlGapSource, 'assumed')
+  })
+
+  test('lastWrite read from an off-screen cache (segment start invisible) → assumed, not measured', () => {
+    // Turn 1 (=lastWrite for turn 2) itself READ from a cache written off-screen — a
+    // resumed/truncated timeline, same idea as the sibling "no visible write at all" case a few
+    // lines below, but here it's an EARLIER write in lastWrite's own segment that is invisible,
+    // not lastWrite's own tier. The backward scan runs off the front of `history` without ever
+    // finding a cold-rewrite boundary, so the segment may extend further back than we can see —
+    // an earlier mismatched tier can't be ruled out, so this must NOT default to 'measured'.
+    const turns: CacheTurnInput[] = [
+      { turn: 1, sources: sameSource, cacheReadTokens: 500, cacheCreateTokens: 50, cacheCreateTokens1h: 0, inputTokens: 0, timestampMs: 0 },
+      { turn: 2, sources: sameSource, cacheReadTokens: 0, cacheCreateTokens: 3000, inputTokens: 0, timestampMs: 30 * 60_000 },
+    ]
+    const t = analyzeCacheBreaks('s', turns).turns[1]
+    assert.strictEqual(t.cause, 'IDLE_TTL_EXPIRY')
+    assert.strictEqual(t.ttlGapSource, 'assumed')
+  })
+
+  test('mirror-direction control: lastWrite itself is a SPLIT write (has both slices) — measured regardless of earlier history', () => {
+    // classifyTurn's idle-gap branch reads the TIER OF lastWrite (the last turn that actually
+    // wrote), never cur's own tier — cur's write is simply what triggered the analysis. Turn 0
+    // writes all-5m; turn 1 (lastWrite for turn 2) is a SPLIT write (both slices present) — its
+    // own tier already covers the whole prefix, so the has5m&&has1h branch returns 'measured'
+    // before our new mixed-tier scan ever runs, whatever turn 0's tier was.
+    const turns: CacheTurnInput[] = [
+      { turn: 1, sources: sameSource, cacheReadTokens: 0, cacheCreateTokens: 200, cacheCreateTokens1h: 0, inputTokens: 0, timestampMs: 0 },
+      { turn: 2, sources: sameSource, cacheReadTokens: 200, cacheCreateTokens: 1000, cacheCreateTokens1h: 400, inputTokens: 0, timestampMs: 60_000 },
+      { turn: 3, sources: sameSource, cacheReadTokens: 0, cacheCreateTokens: 50, cacheCreateTokens1h: 0, inputTokens: 0, timestampMs: 60_000 + 30 * 60_000 },
+    ]
+    const t = analyzeCacheBreaks('s', turns).turns[2]
+    assert.strictEqual(t.cause, 'IDLE_TTL_PARTIAL_EXPIRY')
+    assert.strictEqual(t.ttlGapSource, 'measured')
+  })
+
+  test('the unobserved-tier clause only fires under the all-5m precondition — lastWrite all-1h stays unaffected', () => {
+    // Turn 1's tier is unobserved; turn 2 (lastWrite for turn 3) is a plain all-1h write. Turn 3
+    // re-writes 30 min later. has5m is false for turn 2 (lastWrite), so the mixed-tier-in-segment
+    // scan never runs at all — the label is whatever I6c2 already computes (here: no idle-TTL
+    // verdict, since an all-1h lastWrite within the hour falls through to step 5, unattributable).
+    const turns: CacheTurnInput[] = [
+      { turn: 1, sources: sameSource, cacheReadTokens: 0, cacheCreateTokens: 100, inputTokens: 0, timestampMs: 0 },
+      { turn: 2, sources: sameSource, cacheReadTokens: 200, cacheCreateTokens: 80, cacheCreateTokens1h: 80, inputTokens: 0, timestampMs: 60_000 },
+      { turn: 3, sources: sameSource, cacheReadTokens: 0, cacheCreateTokens: 50, cacheCreateTokens1h: 0, inputTokens: 0, timestampMs: 60_000 + 30 * 60_000 },
+    ]
+    const t = analyzeCacheBreaks('s', turns).turns[2]
+    assert.notStrictEqual(t.cause, 'IDLE_TTL_EXPIRY')
+    assert.notStrictEqual(t.cause, 'IDLE_TTL_PARTIAL_EXPIRY')
+    assert.strictEqual(t.ttlGapSource, undefined)
+  })
 })

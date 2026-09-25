@@ -279,8 +279,45 @@ function classifyTurn(history: CacheTurnInput[], cur: CacheTurnInput, opts: Anal
         return emit('IDLE_TTL_PARTIAL_EXPIRY', undefined, undefined, idleGapMs, undefined, undefined, 'measured')
       }
       if (has5m) {
-        // All-5m write: any gap past the 5-min floor is a full expiry.
-        return emit('IDLE_TTL_EXPIRY', undefined, undefined, idleGapMs, undefined, undefined, 'measured')
+        // All-5m write: any gap past the 5-min floor is a full expiry — that verdict stands.
+        // But the LABEL needs one more check: the prefix can hold multiple coexisting tiers, and
+        // a cache HIT refreshes whichever entry it matched (which may be this later 5m write, not
+        // an earlier 1h one) — so an earlier 1h slice in the same prefix segment is not provably
+        // gone. Walk `history` backward from (but not including) `lastWrite`, bounded to the
+        // CURRENT prefix segment: a turn with cacheReadTokens === 0 alongside a real write is a
+        // cold full rewrite (also covers compaction) that starts a brand-new prefix, so scanning
+        // stops there (inclusive — that turn's own tier still counts, nothing before it does,
+        // since it can never match again). Within that segment, ANY earlier write whose tier was
+        // a nonzero 1h slice, OR was never observed at all (undefined — can't rule out 1h either),
+        // means we cannot prove no 1h slice survives → 'assumed'. The mirror direction (earlier
+        // 5m, later all-1h) is NOT checked: the later all-1h write covers the whole prefix, so
+        // I6c2's verdict there is already correct. Over-labelling 'assumed' costs nothing; the bug
+        // is claiming 'measured' on a prefix that may still carry a mixed tier.
+        // NOTE: the segment boundary can also be tripped by an interleaved subagent turn sharing
+        // the same timeline — open as TRDD-WBT2WW96, not resolved by this change.
+        let mixedTierInSegment = false
+        let reachedLastWrite = false
+        let foundSegmentStart = false
+        // If lastWrite ITSELF was a cold full rewrite, the segment is just {lastWrite} — nothing
+        // before it can matter (that's exactly what a cold rewrite means), so don't even scan.
+        if (lastWrite.cacheReadTokens !== 0) {
+          for (let i = history.length - 1; i >= 0; i--) {
+            const t = history[i]
+            if (!reachedLastWrite) { if (t === lastWrite) reachedLastWrite = true; continue }
+            if (t.cacheCreateTokens <= 0) continue // pure read: doesn't affect or end the segment
+            if (t.cacheCreateTokens1h === undefined || t.cacheCreateTokens1h > 0) mixedTierInSegment = true
+            if (t.cacheReadTokens === 0) { foundSegmentStart = true; break } // cold rewrite: segment boundary, inclusive
+          }
+          // Ran off the front of the VISIBLE history without ever finding where this prefix
+          // segment began: lastWrite read from a cache written off-screen (a resumed/truncated
+          // timeline — mirrors the sibling `else` branch below for lastWrite's OWN tier). The
+          // segment may extend further back than we can see, so an earlier mismatched tier can't
+          // be ruled out either — same "never guess from silence" reasoning as everywhere else
+          // in this function.
+          if (!foundSegmentStart) mixedTierInSegment = true
+        }
+        return emit('IDLE_TTL_EXPIRY', undefined, undefined, idleGapMs, undefined, undefined,
+          mixedTierInSegment ? 'assumed' : 'measured')
       }
       // All-1h (has1h only, idleGapMs <= TTL_1H_MS already checked above): still resident —
       // falls through to step 5, not a break.

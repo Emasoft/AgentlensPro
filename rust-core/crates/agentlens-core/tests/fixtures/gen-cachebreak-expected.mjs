@@ -186,6 +186,29 @@ const CASES = {
       t(4, { sources: [src('file', 'a', 10)], read: 5, create: 3000, ts: 1_000_000 + 125 * 60_000 + 1 }),
     ],
   },
+  // TRDD-EJ6DIP5D: turn 1 writes all-1h; turn 2 (lastWrite) is a plain all-5m write in the SAME
+  // prefix segment (it read from the cache, so it is not a cold rewrite); turn 3 re-writes
+  // all-5m 30 min later. The verdict is still a full expiry (the 5m slice IS gone), but turn 1's
+  // 1h slice may still be resident, so the label must say 'assumed', not 'measured'.
+  idleMixedTierSameSegment: {
+    opts: RATES,
+    turns: [
+      t(1, { sources: [src('file', 'a', 10)], create: 100, create1h: 100, ts: 1_000_000 }),
+      t(2, { sources: [src('file', 'a', 10)], read: 500, create: 50, create1h: 0, ts: 1_000_000 + 60_000 }),
+      t(3, { sources: [src('file', 'a', 10)], read: 5, create: 3000, create1h: 0, ts: 1_000_000 + 60_000 + 30 * 60_000 }),
+    ],
+  },
+  // TRDD-EJ6DIP5D (review finding): lastWrite (turn 1) itself READ from a cache written
+  // off-screen — the backward segment scan runs off the front of `history` without ever finding
+  // a cold-rewrite boundary, so the segment may extend further back than the visible window. An
+  // earlier mismatched tier can't be ruled out, so this must NOT default to 'measured'.
+  idleSegmentStartOffScreen: {
+    opts: RATES,
+    turns: [
+      t(1, { sources: [src('file', 'a', 10)], read: 500, create: 50, create1h: 0, ts: 1_000_000 }),
+      t(2, { sources: [src('file', 'a', 10)], create: 3000, ts: 1_000_000 + 30 * 60_000 }),
+    ],
+  },
   // A truncated/resumed timeline: no write visible before the gap (turn 1 only READ a cache
   // written off-screen) → the tier is unknown, so the assumed 5-min floor applies, NOT a
   // fall-through to UNATTRIBUTABLE.

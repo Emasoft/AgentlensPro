@@ -318,6 +318,80 @@ fn idle_gap_is_judged_by_the_last_writing_turns_measured_tier_not_just_prev() {
     assert_eq!(got["ttlGapSource"], "measured", "the backward walk must reach turn 0's split, not turn 1's absence: {got}");
 }
 
+/// TRDD-EJ6DIP5D: the idle-gap verdict for an all-5m lastWrite is still a full expiry (the 5m
+/// slice IS gone) — but a cache HIT refreshes whichever entry it matched, so an EARLIER write's
+/// 1h slice in the SAME prefix segment cannot be proven gone. Turn 1 writes all-1h; turn 2
+/// (lastWrite for turn 3) is a plain all-5m write that READ from the cache (not a cold rewrite,
+/// so it stays in the same segment as turn 1); turn 3 re-writes 30 min later. The cause is
+/// unchanged; only the label downgrades from 'measured' to 'assumed'.
+#[test]
+fn idle_gap_label_is_assumed_when_an_earlier_write_in_the_same_segment_carried_a_different_tier() {
+    let same_source = serde_json::json!([{"kind": "systemPrompt", "label": "sys", "tokens": 100}]);
+    let turns = vec![
+        CacheTurnInput {
+            turn: 1.0,
+            sources: vec![same_source.clone()],
+            cache_create_tokens: 100.0,
+            cache_create_tokens_1h: Some(100.0), // all-1h write
+            timestamp_ms: Some(0.0),
+            ..CacheTurnInput::default()
+        },
+        CacheTurnInput {
+            turn: 2.0,
+            sources: vec![same_source.clone()],
+            cache_read_tokens: 500.0, // reads from the cache: NOT a cold rewrite, same segment
+            cache_create_tokens: 50.0,
+            cache_create_tokens_1h: Some(0.0), // all-5m write — the lastWrite for turn 3
+            timestamp_ms: Some(60_000.0),
+            ..CacheTurnInput::default()
+        },
+        CacheTurnInput {
+            turn: 3.0,
+            sources: vec![same_source.clone()],
+            cache_create_tokens: 3000.0, // real re-write, 30 min later (within the 1h TTL)
+            timestamp_ms: Some(60_000.0 + 30.0 * 60_000.0),
+            ..CacheTurnInput::default()
+        },
+    ];
+    let report = analyze_cache_breaks("s", &turns, &AnalyzeCacheBreaksOpts::default());
+    let got = &report["turns"][2];
+    assert_eq!(got["cause"], "IDLE_TTL_EXPIRY", "{got}");
+    assert_eq!(got["ttlGapSource"], "assumed", "an earlier 1h slice in the same segment must downgrade the label: {got}");
+}
+
+/// TRDD-EJ6DIP5D (review finding): if lastWrite itself READ from a cache written off-screen (a
+/// resumed/truncated timeline — the same idea as the sibling "no visible write at all" case, but
+/// here it's an EARLIER write in lastWrite's own segment that is invisible), the backward scan
+/// runs off the front of `history` without ever finding a cold-rewrite boundary. The segment may
+/// extend further back than the visible window, so an earlier mismatched tier cannot be ruled
+/// out — this must NOT default to 'measured' just because the scan found nothing to flag.
+#[test]
+fn idle_gap_label_is_assumed_when_last_writes_own_segment_start_is_off_screen() {
+    let same_source = serde_json::json!([{"kind": "systemPrompt", "label": "sys", "tokens": 100}]);
+    let turns = vec![
+        CacheTurnInput {
+            turn: 1.0,
+            sources: vec![same_source.clone()],
+            cache_read_tokens: 500.0, // reads from a cache written off-screen
+            cache_create_tokens: 50.0,
+            cache_create_tokens_1h: Some(0.0), // all-5m write — the lastWrite for turn 2
+            timestamp_ms: Some(0.0),
+            ..CacheTurnInput::default()
+        },
+        CacheTurnInput {
+            turn: 2.0,
+            sources: vec![same_source.clone()],
+            cache_create_tokens: 3000.0, // real re-write, 30 min later (within the 1h TTL)
+            timestamp_ms: Some(30.0 * 60_000.0),
+            ..CacheTurnInput::default()
+        },
+    ];
+    let report = analyze_cache_breaks("s", &turns, &AnalyzeCacheBreaksOpts::default());
+    let got = &report["turns"][1];
+    assert_eq!(got["cause"], "IDLE_TTL_EXPIRY", "{got}");
+    assert_eq!(got["ttlGapSource"], "assumed", "an invisible segment start must not default to 'measured': {got}");
+}
+
 /// TRDD-ZQQYRYBO I6c2 (b): a modern-shaped fixture (real JSON timeline entries, going through
 /// `build_cache_break_report`'s own field read of `cacheCreateTokens1h`, not a hand-built
 /// `CacheTurnInput`) where every writing turn carries a tier split → every idle-gap verdict

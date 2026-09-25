@@ -768,20 +768,6 @@
             "cause": "FANOUT_RATE",
             "culprits": [
               {
-                "session": "aaaaaaaa-1111-2222-3333-444444444444",
-                "project": "projA",
-                "eventUsd": 0.3660367499999999,
-                "excessUsd": 0,
-                "writeUsd": 0.15000625,
-                "readUsd": 0.12000049999999998,
-                "outputUsd": 0.09002500000000002,
-                "turns": 13,
-                "tags": [],
-                "models": [
-                  "claude-opus-5"
-                ]
-              },
-              {
                 "session": "bbbbbbbb-1111-2222-3333-444444444444",
                 "project": "projA",
                 "eventUsd": 0.11292,
@@ -793,6 +779,20 @@
                 "tags": [],
                 "models": [
                   "claude-sonnet-5"
+                ]
+              },
+              {
+                "session": "aaaaaaaa-1111-2222-3333-444444444444",
+                "project": "projA",
+                "eventUsd": 0.3660367499999999,
+                "excessUsd": 0,
+                "writeUsd": 0.15000625,
+                "readUsd": 0.12000049999999998,
+                "outputUsd": 0.09002500000000002,
+                "turns": 13,
+                "tags": [],
+                "models": [
+                  "claude-opus-5"
                 ]
               }
             ]
@@ -3883,7 +3883,7 @@
             "costUsd": 21.139909999999997,
             "writeUsd": 20.01625,
             "readUsd": 0.113,
-            "outputUsd": 0.9099999999999998,
+            "outputUsd": 0.9099999999999999,
             "turns": 42,
             "modZ": 9.04100165950102,
             "pValueRate": 0,

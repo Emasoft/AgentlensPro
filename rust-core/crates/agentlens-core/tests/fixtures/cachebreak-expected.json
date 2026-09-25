@@ -1362,6 +1362,188 @@
         "cacheHitRate": 0.5001249687578105
       }
     },
+    "idleMixedTierSameSegment": {
+      "opts": {
+        "writeRateUsdPerMTok": 6.25,
+        "inputRateUsdPerMTok": 5,
+        "cacheReadRateUsdPerMTok": 0.5
+      },
+      "turns": [
+        {
+          "turn": 1,
+          "sources": [
+            {
+              "label": "a",
+              "kind": "file",
+              "tokens": 10,
+              "bytes": 40,
+              "count": 1
+            }
+          ],
+          "cacheReadTokens": 0,
+          "cacheCreateTokens": 100,
+          "cacheCreateTokens1h": 100,
+          "inputTokens": 0,
+          "timestampMs": 1000000
+        },
+        {
+          "turn": 2,
+          "sources": [
+            {
+              "label": "a",
+              "kind": "file",
+              "tokens": 10,
+              "bytes": 40,
+              "count": 1
+            }
+          ],
+          "cacheReadTokens": 500,
+          "cacheCreateTokens": 50,
+          "cacheCreateTokens1h": 0,
+          "inputTokens": 0,
+          "timestampMs": 1060000
+        },
+        {
+          "turn": 3,
+          "sources": [
+            {
+              "label": "a",
+              "kind": "file",
+              "tokens": 10,
+              "bytes": 40,
+              "count": 1
+            }
+          ],
+          "cacheReadTokens": 5,
+          "cacheCreateTokens": 3000,
+          "cacheCreateTokens1h": 0,
+          "inputTokens": 0,
+          "timestampMs": 2860000
+        }
+      ],
+      "out": {
+        "sessionId": "idleMixedTierSameSegment",
+        "turns": [
+          {
+            "turn": 1,
+            "broke": false,
+            "cause": "UNKNOWN",
+            "wastedTokens": 0,
+            "wastedCostUsd": 0
+          },
+          {
+            "turn": 2,
+            "broke": false,
+            "cause": "UNKNOWN",
+            "wastedTokens": 0,
+            "wastedCostUsd": 0,
+            "idleGapMs": 60000
+          },
+          {
+            "turn": 3,
+            "broke": true,
+            "cause": "IDLE_TTL_EXPIRY",
+            "wastedTokens": 3000,
+            "wastedCostUsd": 0.01725,
+            "idleGapMs": 1800000,
+            "remediation": "A >5-min idle gap let the cache expire; keep turns within the TTL or accept the one-time re-warm.",
+            "tsMs": 2860000,
+            "ttlGapSource": "assumed"
+          }
+        ],
+        "offenders": [
+          {
+            "label": "(IDLE_TTL_EXPIRY)",
+            "kind": "-",
+            "cause": "IDLE_TTL_EXPIRY",
+            "occurrences": 1,
+            "wastedTokens": 3000,
+            "wastedCostUsd": 0.01725
+          }
+        ],
+        "totalWastedTokens": 3000,
+        "totalWastedCostUsd": 0.01725,
+        "cacheHitRate": 0.1381668946648427
+      }
+    },
+    "idleSegmentStartOffScreen": {
+      "opts": {
+        "writeRateUsdPerMTok": 6.25,
+        "inputRateUsdPerMTok": 5,
+        "cacheReadRateUsdPerMTok": 0.5
+      },
+      "turns": [
+        {
+          "turn": 1,
+          "sources": [
+            {
+              "label": "a",
+              "kind": "file",
+              "tokens": 10,
+              "bytes": 40,
+              "count": 1
+            }
+          ],
+          "cacheReadTokens": 500,
+          "cacheCreateTokens": 50,
+          "cacheCreateTokens1h": 0,
+          "inputTokens": 0,
+          "timestampMs": 1000000
+        },
+        {
+          "turn": 2,
+          "sources": [
+            {
+              "label": "a",
+              "kind": "file",
+              "tokens": 10,
+              "bytes": 40,
+              "count": 1
+            }
+          ],
+          "cacheReadTokens": 0,
+          "cacheCreateTokens": 3000,
+          "inputTokens": 0,
+          "timestampMs": 2800000
+        }
+      ],
+      "out": {
+        "sessionId": "idleSegmentStartOffScreen",
+        "turns": [
+          {
+            "turn": 1,
+            "broke": false,
+            "cause": "UNKNOWN",
+            "wastedTokens": 0,
+            "wastedCostUsd": 0
+          },
+          {
+            "turn": 2,
+            "broke": true,
+            "cause": "IDLE_TTL_EXPIRY",
+            "wastedTokens": 3000,
+            "wastedCostUsd": 0.01725,
+            "idleGapMs": 1800000,
+            "remediation": "A >5-min idle gap let the cache expire; keep turns within the TTL or accept the one-time re-warm.",
+            "tsMs": 2800000,
+            "ttlGapSource": "assumed"
+          }
+        ],
+        "offenders": [
+          {
+            "label": "(IDLE_TTL_EXPIRY)",
+            "kind": "-",
+            "cause": "IDLE_TTL_EXPIRY",
+            "occurrences": 1,
+            "wastedTokens": 3000,
+            "wastedCostUsd": 0.01725
+          }
+        ],
+        "totalWastedTokens": 3000,
+        "totalWastedCostUsd": 0.01725,
+        "cacheHitRate": 0.14084507042253522
+      }
+    },
     "idleNoVisibleWrite": {
       "opts": {
         "writeRateUsdPerMTok": 6.25,
