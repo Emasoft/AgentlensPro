@@ -152,6 +152,10 @@ export function pidfileOwnerAlive(): boolean {
 // threshold and does not need to exceed REVIVE_BACKOFF_MAX_MS (the earlier 40-minute window, sized
 // only to dodge that leak, made a healthy 30-50-minute run under the 2GB RSS cap — TRDD-WKLD508O —
 // look like a crash and cost it up to 30 minutes of downtime).
+//
+// Caveat: lifetime is measured to the first hook that notices the death, so idle time between the
+// death and that hook inflates it; this errs toward not throttling (safe: spawns only come from
+// hooks, so sparse hooks mean sparse spawns).
 const REVIVE_CRASH_WINDOW_MS = Math.max(5_000, Number(process.env.AGENTLENS_REVIVE_CRASH_WINDOW_MS) || 5 * 60_000)
 // Doubling from a 30s base reaches the 30-minute cap after 6 consecutive quick deaths (30s, 60s,
 // 120s, 240s, 480s, 960s -> capped), throttling a genuine crash loop to ~2 spawns/hour instead of

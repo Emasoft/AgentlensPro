@@ -51,6 +51,7 @@ const CASES = [
   ['nice -n 10 grep foo file.txt | head -5', 'allow', 'the wrapper does not turn grep into a measured command'],
   ['timeout 10m cargo test | tail', 'deny', "timeout's duration carries a unit suffix and is still skipped"],
   ['timeout 1.5h cargo test | tail', 'deny', 'a decimal duration with a unit suffix is skipped too'],
+  ['timeout 10m ls | tail', 'allow', "goes through timeout's duration branch, but ls is not a measured command"],
   ['nice -n 10 cargo build', 'allow', 'no pipe at all, so it is not a measurement'],
 
   // ── rule 3: tee truncation ───────────────────────────────────────────────────────────────
