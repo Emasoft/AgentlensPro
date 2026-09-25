@@ -28,13 +28,13 @@ import { npmPlatformBin } from '../rustBinResolve'
  *  Zero in the healthy case; a non-zero, non-shrinking value means the daemon isn't draining. */
 export function hookSpoolDepth(): number {
   try {
-    return fs.readdirSync(spoolDirPath()).filter((n) => n.endsWith('.json')).length
+    return fs.readdirSync(hookSpoolDirPath()).filter((n) => n.endsWith('.json')).length
   } catch (e) {
     // "No spool directory" genuinely means zero. Anything else — a permission denial, an I/O
     // error — is NOT zero, and reporting it as zero tells the operator "healthy, nothing pending"
     // while undelivered hooks pile up unread. Only ENOENT may answer 0.
     if ((e as NodeJS.ErrnoException).code === 'ENOENT') return 0
-    throw new Error(`cannot read the hook spool (${spoolDirPath()}): ${(e as Error).message}`)
+    throw new Error(`cannot read the hook spool (${hookSpoolDirPath()}): ${(e as Error).message}`)
   }
 }
 
@@ -171,7 +171,9 @@ export function alcoreServeArgs(env: NodeJS.ProcessEnv = process.env, dir: strin
 // relocated store or a renamed file had to be found by grep rather than by following a symbol.
 function serverLogPath(): string { return path.join(dataDir(), 'server.log') }
 function pidfilePath(): string { return path.join(dataDir(), 'server.pid') }
-function spoolDirPath(): string { return path.join(dataDir(), 'hook-spool') }
+// Renamed in TRDD-Z53IJFE9 step D: it is the HOOK-event spool's dir. The old name shared its
+// "spool" prefix with the removed RAM-disk body spool, which muddied the spool-symbol sweep.
+function hookSpoolDirPath(): string { return path.join(dataDir(), 'hook-spool') }
 
 /** Heap cap for the server process. Named once: it appears in the direct spawn, the supervisor,
  *  and the launchd plist template, and three copies drift the moment one is tuned. */

@@ -127,28 +127,20 @@ suite('telemetryConfig', () => {
     assert.strictEqual((await readEnv())?.OTEL_LOG_RAW_API_BODIES, `file:${opts.bodiesDir}`)
   })
 
-  test('capture OFF removes a key we wrote at the SPOOL dir, not just the legacy dir', async () => {
+  test('capture OFF removes a key the REMOVED spool wrote, not just the default dir', async () => {
     // THE OUTAGE THIS PINS (2026-08-06): the delete guard compared the live key against
-    // `file:${effectiveBodiesDir(dataDir, /*captureOn*/ false)}` — which ignores the spool by
-    // construction. So the ordinary lifecycle (capture ON writes the SPOOL path → capture OFF
-    // resolves the LEGACY path) left the key behind: Claude Code kept honouring it and kept
-    // dumping bodies until the 2 GB RAM disk hit 100% full, at which point capture silently died
-    // (332 zero-byte files). Meanwhile the DETECTOR tests PRESENCE, so `setup` reported drift,
-    // "wired" it, verified, and FAILED — a repairer that could not repair, forever.
-    // Both halves must agree on what "a key we wrote" means: legacy dir OR configured spool.
-    const spoolDir = path.join(dir, 'spool-otel-bodies')
-    await fs.writeFile(
-      path.join(dir, 'config.json'),
-      JSON.stringify({ capture: { rawBodies: false, spoolDir } }, null, 2),
-      'utf-8',
-    )
-    await writeSettings({ env: { OTEL_LOG_RAW_API_BODIES: `file:${spoolDir}` } })
+    // `file:${effectiveBodiesDir(dataDir)}` — the default dir only. The RAM-disk spool is removed
+    // (TRDD-Z53IJFE9), but a legacy install upgraded past it still has the spool path in
+    // settings.json, so the guard must carry that path as a literal: capture OFF must delete it —
+    // leaving it is the ~35 GB/day burn.
+    const legacySpoolValue = 'file:/Volumes/AgentLensSpool/otel-bodies'
+    await writeSettings({ env: { OTEL_LOG_RAW_API_BODIES: legacySpoolValue } })
 
     await ensureTelemetryConfig({ ...opts, captureRawBodies: false })
 
     assert.strictEqual(
       (await readEnv())?.OTEL_LOG_RAW_API_BODIES, undefined,
-      'capture is off, so the spool key we wrote must be DELETED — leaving it is the ~35 GB/day burn',
+      'capture is off, so the removed spool key we wrote must be DELETED — leaving it is the ~35 GB/day burn',
     )
   })
 

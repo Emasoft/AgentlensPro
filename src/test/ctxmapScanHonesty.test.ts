@@ -14,24 +14,18 @@ import { DATA_DIR_ENV } from '../dataDir'
 // class of wrongness this tool cannot afford, because the whole point of ctxmap is to settle "is X in
 // my context" — a false negative reads identically to a true one, and the reader stops looking.
 
-interface Fixture { data: string; bodies: string; spool: string; env: NodeJS.ProcessEnv }
+interface Fixture { data: string; bodies: string; env: NodeJS.ProcessEnv }
 
-/** A data dir with an `otel-bodies` dir, plus a CONFIGURED spool so the scan really has two dirs to
- *  walk (the read scope puts the spool first — which is what makes the unreadable-dir case bite). */
-function fixture(opts: { spool?: boolean; capture?: boolean } = {}): Fixture {
+/** A data dir with an `otel-bodies` dir. The removed RAM-disk spool's second-dir shape is gone
+ *  (TRDD-Z53IJFE9), so a scan fixture needs exactly one capture dir. */
+function fixture(opts: { capture?: boolean } = {}): Fixture {
   const data = fs.mkdtempSync(path.join(os.tmpdir(), 'ctxmap-scan-'))
   const bodies = path.join(data, 'otel-bodies')
-  const spool = path.join(data, 'spool')
   fs.mkdirSync(bodies, { recursive: true })
-  if (opts.spool) {
-    fs.mkdirSync(spool, { recursive: true })
-    // The knob lives under `capture`, not at the top level — a flat key is silently ignored.
-    fs.writeFileSync(path.join(data, 'config.json'), JSON.stringify({ capture: { spoolDir: spool } }))
-  }
   const env: NodeJS.ProcessEnv = { ...process.env }
   env[DATA_DIR_ENV] = data
   if (opts.capture !== undefined) env[RAW_BODIES_ENV] = opts.capture ? '1' : '0'
-  return { data, bodies, spool, env }
+  return { data, bodies, env }
 }
 
 function writeCapture(dir: string, name: string, content: string): string {
@@ -92,33 +86,32 @@ suite('ctxmap --find: the deciding stage must try BOTH spellings, like the prefi
 })
 
 suite('ctxmap --list: one unreadable dir must not blind the scan', () => {
-  test('a body dir that denies listing does not sink the dirs that are readable', async function () {
+  test('a body dir that denies listing is skipped, never crashes the command', async function () {
     // chmod cannot deny root, so the premise would not hold and the test would pass vacuously.
     // No `return` after skip(): mocha's skip() throws, and tsc types it `never`.
     if (typeof process.getuid === 'function' && process.getuid() === 0) this.skip()
 
-    const f = fixture({ spool: true })
-    writeCapture(f.spool, 'inaccessible.request.json', 'written before the lock')
-    writeCapture(f.bodies, 'readable.request.json', 'this one must still be reported')
-    // The spool exists and stats as a directory (so the read scope keeps it), but cannot be listed —
-    // exactly the state a remounted RAM disk leaves behind. It is also scanned FIRST.
-    fs.chmodSync(f.spool, 0o000)
+    // The RAM-disk spool is removed (TRDD-Z53IJFE9), so the read scope has exactly ONE dir —
+    // <dataDir>/otel-bodies — which makes this simpler than the two-dir shape it replaces: the
+    // bodies dir itself stats as a directory (so the read scope keeps it) but cannot be listed.
+    // The scan must skip it via safeReaddir, not throw EACCES out of the command.
+    const f = fixture()
+    writeCapture(f.bodies, 'hidden.request.json', 'exists but cannot be listed')
+    fs.chmodSync(f.bodies, 0o000)
     try {
-      const denied = ((): boolean => { try { fs.readdirSync(f.spool); return false } catch { return true } })()
+      const denied = ((): boolean => { try { fs.readdirSync(f.bodies); return false } catch { return true } })()
       if (!denied) this.skip()
 
-      const { code, out, err } = await run(f, ['--list'])
-      assert.strictEqual(code, 0, `expected a successful listing, got ${code}: ${err.trim()}`)
-      assert.ok(out.includes('readable.request.json'),
-        `the readable dir must still be reported, got: ${out.trim() || err.trim()}`)
+      const { code, err } = await run(f, ['--list'])
+      assert.notStrictEqual(code, EXIT.USAGE, 'a denied dir is not a bad command line')
       assert.ok(!err.includes('EACCES'), 'the unreadable dir must be skipped, not thrown out of the command')
     } finally {
-      fs.chmodSync(f.spool, 0o700)
+      fs.chmodSync(f.bodies, 0o700)
     }
   })
 })
 
-suite('ctxmap --list: an empty spool is a healthy machine, not a bad command line', () => {
+suite('ctxmap --list: an empty feed is a healthy machine, not a bad command line', () => {
   test('nothing captured yet exits UNKNOWN, never USAGE', async () => {
     const f = fixture({ capture: false })
     const { code, out, err } = await run(f, ['--list'])

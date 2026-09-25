@@ -28,10 +28,6 @@ export const RAW_BODIES_DEFAULT = false
 
 export interface CaptureConfig {
   rawBodies?: boolean
-  /** Absolute path to the RAM-disk spool bodies dir, persisted when capture is turned on with a spool
-   *  (TRDD-K3WDPR7M Phase 3). The server reads it to resolve BODIES_DIR while capture is on, and the
-   *  capture-OFF path reads it to delete exactly the sink WE wrote. */
-  spoolDir?: string
 }
 
 export type CaptureSource = 'env' | 'file' | 'default'
@@ -57,54 +53,45 @@ export function loadCaptureConfig(dataDir: string): CaptureConfig {
   const c = obj.capture ?? {}
   const out: CaptureConfig = {}
   if (typeof c.rawBodies === 'boolean') out.rawBodies = c.rawBodies
-  if (typeof c.spoolDir === 'string' && c.spoolDir.length > 0) out.spoolDir = c.spoolDir
   return out
 }
 
-/** The persisted RAM-disk spool bodies dir, or undefined when none is configured. */
-export function spoolDirConfigured(dataDir: string): string | undefined {
-  return loadCaptureConfig(dataDir).spoolDir
-}
-
 /**
- * THE one resolution of "where should Claude Code write raw bodies": the configured RAM-disk spool
- * when capture is on (TRDD-K3WDPR7M Phase 3), else the legacy SSD dir. Every writer of the
- * OTEL_LOG_RAW_API_BODIES settings value must resolve through this — while the CLI capture-on flow
- * was spool-aware but telemetryConfig's default was not, the two writers converged DIFFERENT values
- * and the server boot (the last writer) silently re-pointed Claude Code's ~35 GB/day at the SSD
- * (observed 2026-07-16, minutes after the spool was wired).
+ * THE one resolution of "where should Claude Code write raw bodies": the SSD dir under the data dir.
+ * TRDD-Z53IJFE9 (owner order, 2026-09-24): the RAM-disk spool is removed — bodies always land here,
+ * and every writer of the OTEL_LOG_RAW_API_BODIES settings value must resolve through this so the
+ * CLI and the server converge the SAME value (the two-writer defect of 2026-07-16).
  */
-export function effectiveBodiesDir(dataDir: string, captureOn: boolean): string {
-  return (captureOn ? spoolDirConfigured(dataDir) : undefined) ?? path.join(dataDir, 'otel-bodies')
+export function effectiveBodiesDir(dataDir: string, _captureOn?: boolean): string {
+  return path.join(dataDir, 'otel-bodies')
 }
 
 /** Where the raw bodies a READER can actually see live, and what is missing. */
 export interface BodiesReadScope {
-  /** Existing, scannable dirs — spool first (it holds the live traffic), deduped. */
+  /** Existing, scannable dirs — deduped. */
   dirs: string[]
-  /** Candidates that do NOT exist: an unmounted spool, or a legacy dir that was fully drained. */
+  /** Candidates that do NOT exist: a legacy dir that was fully drained. */
   missing: string[]
   captureOn: boolean
-  /** True when a spool is configured — i.e. the legacy dir alone is NOT the whole picture. */
+  /** True when a spool was configured (legacy installs) — i.e. the default dir alone is NOT the
+   *  whole picture. Always false now that the spool is gone; kept because burnInvestigator reads
+   *  it. TRDD-Z53IJFE9. */
   spoolConfigured: boolean
 }
 
 /**
- * WHERE TO READ raw bodies from — deliberately NOT `effectiveBodiesDir`, which answers the
- * writer's question ("where should Claude Code dump bodies NOW"). A reader must also see bodies
- * left by a PREVIOUS sink: capture may be off while yesterday's corpus is still on disk, and a
- * spool can hold the live traffic while the legacy SSD dir still holds an undrained corpus.
+ * WHERE TO READ raw bodies from. A reader must also see bodies left by a PREVIOUS sink: capture may
+ * be off while yesterday's corpus is still on disk.
  *
  * Resolving a reader through the writer's single-answer function is what made investigate_burn
  * report "nothing burned here" during a 2.3M tok/min burn (2026-07-23, TRDD-8N3KQW2R): it read
- * the hardcoded legacy dir — 0 files, because the corpus had finished draining — while 1,876
- * live body files sat in the configured spool. Hence: every existing candidate, and an explicit
- * list of the missing ones so the caller can say WHY it is blind instead of saying "nothing".
+ * the hardcoded dir — 0 files, because the corpus had finished draining. Hence: every existing
+ * candidate, and an explicit list of the missing ones so the caller can say WHY it is blind instead
+ * of saying "nothing".
  */
 export function resolveBodiesReadScope(dataDir: string, env: NodeJS.ProcessEnv): BodiesReadScope {
   const captureOn = rawBodyCaptureEnabled(dataDir, env)
-  const spool = spoolDirConfigured(dataDir)
-  const candidates = [...new Set([...(spool ? [spool] : []), path.join(dataDir, 'otel-bodies')])]
+  const candidates = [...new Set([path.join(dataDir, 'otel-bodies')])]
   const dirs: string[] = []
   const missing: string[] = []
   for (const d of candidates) {
@@ -113,7 +100,7 @@ export function resolveBodiesReadScope(dataDir: string, env: NodeJS.ProcessEnv):
     try { ok = fs.statSync(d).isDirectory() } catch { ok = false }
     ;(ok ? dirs : missing).push(d)
   }
-  return { dirs, missing, captureOn, spoolConfigured: spool != null }
+  return { dirs, missing, captureOn, spoolConfigured: false }
 }
 
 /** Resolve capture + where the value came from (env > file > default). */
@@ -146,28 +133,12 @@ export function setRawBodyCapture(dataDir: string, enabled: boolean): void {
   if (fs.existsSync(p)) {
     obj = JSON.parse(fs.readFileSync(p, 'utf-8')) as typeof obj
   }
-  obj.capture = { ...(obj.capture ?? {}), rawBodies: enabled }
-  fs.mkdirSync(dataDir, { recursive: true })
-  const tmp = `${p}.tmp`
-  fs.writeFileSync(tmp, JSON.stringify(obj, null, 2) + '\n', 'utf-8')
-  fs.renameSync(tmp, p) // atomic replace
-}
-
-/**
- * Persist (or, with `undefined`, clear) the RAM-disk spool bodies dir. Same atomic + non-destructive +
- * refuse-corrupt contract as setRawBodyCapture: PRESERVES every other key, and THROWS on an existing
- * non-JSON file rather than clobbering it.
- */
-export function setSpoolDir(dataDir: string, spoolDir: string | undefined): void {
-  const p = configPath(dataDir)
-  let obj: { capture?: Record<string, unknown>; [k: string]: unknown } = {}
-  if (fs.existsSync(p)) {
-    obj = JSON.parse(fs.readFileSync(p, 'utf-8')) as typeof obj
-  }
-  const cap = { ...(obj.capture ?? {}) }
-  if (spoolDir === undefined) delete cap.spoolDir
-  else cap.spoolDir = spoolDir
-  obj.capture = cap
+  // The capture section is written EXACTLY as { rawBodies } — the removed RAM-disk spool's legacy
+  // key (TRDD-Z53IJFE9) is dropped, and so is any future key nobody parses: a spread-preserve here
+  // silently accumulates dead config. If you add a capture-section key, add it to the object ABOVE
+  // and to loadCaptureConfig's parse, or this write will delete it. Same atomic + non-destructive
+  // (rest-of-file) contract as before.
+  obj.capture = { rawBodies: enabled }
   fs.mkdirSync(dataDir, { recursive: true })
   const tmp = `${p}.tmp`
   fs.writeFileSync(tmp, JSON.stringify(obj, null, 2) + '\n', 'utf-8')

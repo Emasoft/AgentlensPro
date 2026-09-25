@@ -217,22 +217,22 @@ suite('agentlenspro hook/gate — single-executable handler contracts', () => {
     const r = await run('hook', baseEnv({ AGENTLENS_UI_URL: `http://127.0.0.1:${dead}`, AGENTLENS_HOOK_TIMEOUT: '1' }), payload)
     assert.strictEqual(r.code, 0)
 
-    const spoolDir = path.join(testDataDir as string, 'hook-spool')
-    const spooled = fs.readdirSync(spoolDir).filter((n) => n.endsWith('.json'))
-      .some((n) => fs.readFileSync(path.join(spoolDir, n), 'utf-8').includes(marker))
-    assert.ok(spooled, `expected a spooled event carrying ${marker} under ${spoolDir}`)
+    const hookSpoolDir = path.join(testDataDir as string, 'hook-spool')
+    const spooled = fs.readdirSync(hookSpoolDir).filter((n) => n.endsWith('.json'))
+      .some((n) => fs.readFileSync(path.join(hookSpoolDir, n), 'utf-8').includes(marker))
+    assert.ok(spooled, `expected a spooled event carrying ${marker} under ${hookSpoolDir}`)
 
     assert.ok(fs.existsSync(path.join(testDataDir as string, '.daemon-revive.lock')),
       'expected the revive lock under the TEMP data dir')
 
-    const realSpoolDir = path.join(realHome as string, '.agentlens', 'hook-spool')
+    const realHookSpoolDir = path.join(realHome as string, '.agentlens', 'hook-spool')
     let realLeaked = false
     try {
-      realLeaked = fs.readdirSync(realSpoolDir).some((n) => {
-        try { return fs.readFileSync(path.join(realSpoolDir, n), 'utf-8').includes(marker) } catch { return false }
+      realLeaked = fs.readdirSync(realHookSpoolDir).some((n) => {
+        try { return fs.readFileSync(path.join(realHookSpoolDir, n), 'utf-8').includes(marker) } catch { return false }
       })
     } catch { /* no real spool dir on this machine — nothing to leak into */ }
-    assert.strictEqual(realLeaked, false, `this run's marker leaked into the REAL spool dir ${realSpoolDir}`)
+    assert.strictEqual(realLeaked, false, `this run's marker leaked into the REAL spool dir ${realHookSpoolDir}`)
   })
 
   test('round-2 isolation guard: assertContained throws on a real-HOME path, not just a temp one', () => {

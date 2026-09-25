@@ -12,12 +12,10 @@ import {
   type RetentionKeyMeta,
 } from '../retentionConfig'
 import {
-  RAW_BODIES_ENV, RAW_BODIES_KEY, effectiveBodiesDir, rawBodyCaptureWithSource, setRawBodyCapture, setSpoolDir,
-  spoolDirConfigured,
+  RAW_BODIES_ENV, RAW_BODIES_KEY, effectiveBodiesDir, rawBodyCaptureWithSource, setRawBodyCapture,
 } from '../captureConfig'
 import { KEYCHAIN_ENV, KEYCHAIN_KEY, keychainConsentWithSource, setKeychainConsent } from '../keychainConsent'
 import { ensureTelemetryConfig, type EnsureResult } from '../telemetryConfig'
-import { removeSpoolLaunchAgent } from './spoolLaunchAgent'
 
 /** The one non-numeric knob (TRDD-BKF5NZD3): raw-body capture is a boolean, and it is OFF by default
  *  because turning it on costs ~35 GB/day of SSD writes. Special-cased rather than forced into the
@@ -137,29 +135,26 @@ async function setConfig(dir: string, key: string, rawValue: string): Promise<nu
   return EXIT.OK
 }
 
-/** Seams for the capture on/off flow, so the fail-fast refusal + spool wiring are unit-testable
- *  without a real RAM disk / launchd (TRDD-K3WDPR7M Phase 3). Defaults are the real implementations. */
+/** Seams for the capture on/off flow so it is unit-testable without touching the real settings file.
+ *  Defaults are the real implementations. */
 export interface CaptureToggleDeps {
   ensureTelemetry: (opts: { dataDir: string; captureRawBodies: boolean; bodiesDir?: string }) => Promise<EnsureResult>
-  removeSpoolAgent: () => void
 }
 
 function realCaptureDeps(): CaptureToggleDeps {
   return {
     ensureTelemetry: (o) => ensureTelemetryConfig(o),
-    removeSpoolAgent: () => { removeSpoolLaunchAgent() },
   }
 }
 
 /**
- * Turn raw-body capture on/off. ON writes bodies straight to the SSD bodies dir; OFF deletes the sink
- * and removes any boot-remount agent left over from a pre-removal install.
+ * Turn raw-body capture on/off. ON writes bodies straight to the SSD bodies dir; OFF deletes the sink.
  *
  * TRDD-Z53IJFE9 (owner removal order, 2026-09-24): "i told you to remove the spool completely, since
  * it was an intermediate buffer that proved to be useless and only slowed down the ingestion and
- * occupied space" — ON no longer calls ensureRamDisk or installs the spool LaunchAgent. `mkdirSync`
- * on a plain SSD directory CAN still fail (EACCES, ENOSPC, EROFS) — that throw propagates to the
- * top-level fail-fast handler, same as every other config write in this file.
+ * occupied space" — the RAM disk, the boot-remount LaunchAgent and the config-level spool path are
+ * all gone. `mkdirSync` on a plain SSD directory CAN still fail (EACCES, ENOSPC, EROFS) — that throw
+ * propagates to the top-level fail-fast handler, same as every other config write in this file.
  */
 export async function applyCaptureSetting(
   dir: string,
@@ -167,20 +162,6 @@ export async function applyCaptureSetting(
   deps: CaptureToggleDeps = realCaptureDeps(),
 ): Promise<number> {
   if (enabled) {
-    // A machine that captured under the OLD (RAM-disk) code still has config.json's `spoolDir`
-    // pointing at /Volumes/AgentLensSpool/otel-bodies. effectiveBodiesDir prefers a configured
-    // spoolDir over the SSD default, so without this guard ON would mkdir under a root-owned,
-    // unmounted /Volumes path (EACCES) or silently resume writing into a stale mount. Refuse
-    // instead of guessing — `config set captureRawBodies off` clears spoolDir itself (see the
-    // OFF branch below), so cycling off/on is the fix (TRDD-Z53IJFE9).
-    if (spoolDirConfigured(dir)) {
-      console.error(
-        `${CAPTURE_KEY} cannot be turned on: config.json still has a legacy spoolDir from the old ` +
-        `RAM-disk spool. Run "agentlenspro config set captureRawBodies off" (clears spoolDir), ` +
-        `then "agentlenspro config set captureRawBodies on" to retry.`,
-      )
-      return EXIT.ABORT
-    }
     const bodies = effectiveBodiesDir(dir, true)
     fs.mkdirSync(bodies, { recursive: true, mode: 0o700 })
     // setRawBodyCapture BEFORE ensureTelemetry: the reversed order risked the env key getting written
@@ -192,26 +173,18 @@ export async function applyCaptureSetting(
     console.log(`wired ${RAW_BODIES_KEY} → file:${bodies}`)
     console.log(
       `raw bodies are written to ${bodies} (up to tens of GB/day under heavy use; it scales with ` +
-      `context size × request rate); the server loads and deletes them (hourly, after 72 h or past ` +
-      `8 GB, until the continuous drain ships)`,
+      `context size × request rate); by default the server ingests them continuously (a pass every ` +
+      `60 s) and deletes each body once the store provably holds its bytes`,
     )
     console.log('running sessions pick this up when their settings reload; restart any that do not.')
     return EXIT.OK
   }
-  // OFF: read the previously-configured spool FIRST so ensureTelemetry deletes exactly the sink WE
-  // wrote (its guard matches only `file:${bodiesDir}`); fall back to the default dir for a legacy
-  // (pre-spool) capture-on install whose key pointed at DATA_DIR/otel-bodies.
-  const prevSpool = spoolDirConfigured(dir)
-  // Remove the settings.json key FIRST — that write is what actually stops Claude Code dumping bodies
-  // (our own knob does not). Only once it succeeds do we flip the knob and tear down the sink, so a
-  // failed settings write leaves capture fully ON and self-consistent (recoverable by re-running)
-  // rather than a config-off / env-on split that keeps the ~35 GB/day going while claiming "off".
-  const r = await deps.ensureTelemetry({
-    dataDir: dir, captureRawBodies: false, ...(prevSpool ? { bodiesDir: prevSpool } : {}),
-  })
+  // OFF. Remove the settings.json key FIRST — that write is what actually stops Claude Code dumping
+  // bodies (our own knob does not). Only once it succeeds do we flip the knob, so a failed settings
+  // write leaves capture fully ON and self-consistent (recoverable by re-running) rather than a
+  // config-off / env-on split that keeps the ~35 GB/day going while claiming "off".
+  const r = await deps.ensureTelemetry({ dataDir: dir, captureRawBodies: false })
   setRawBodyCapture(dir, false)
-  setSpoolDir(dir, undefined)
-  deps.removeSpoolAgent()
   console.log(`set ${CAPTURE_KEY} = off in ${configPath(dir)}`)
   if (r.removed.includes(RAW_BODIES_KEY)) console.log(`removed ${RAW_BODIES_KEY} from ${r.settingsPath}`)
   console.log('restart your Claude Code sessions for this to take effect (env is read at launch).')

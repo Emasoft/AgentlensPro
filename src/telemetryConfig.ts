@@ -23,7 +23,7 @@ import * as path from 'path'
 import * as os from 'os'
 import * as fs from 'fs/promises'
 import { safeConfigEdit, SafeEditOp } from './safeConfigEdit'
-import { rawBodyCaptureEnabled, effectiveBodiesDir, spoolDirConfigured, RAW_BODIES_KEY } from './captureConfig'
+import { rawBodyCaptureEnabled, effectiveBodiesDir, RAW_BODIES_KEY } from './captureConfig'
 import { envPort } from './cli/cliCore'
 
 export interface TelemetryConfigOptions {
@@ -108,24 +108,23 @@ function resolveOptions(options: TelemetryConfigOptions): {
   return {
     settingsPath: options.settingsPath ?? path.join(home, '.claude', 'settings.json'),
     markerPath:   options.markerPath   ?? path.join(home, '.agentlens', 'telemetry-managed.json'),
-    // Default through the ONE bodies-dir resolution (spool when capture is on) — a legacy-only
-    // default here made every spool-blind caller (server boot, --install-otel) overwrite the CLI's
-    // spool value on the next converge, re-pointing Claude Code's write firehose at the SSD.
+    // Default through the ONE bodies-dir resolution (the SSD dir under the data dir, TRDD-Z53IJFE9 —
+    // the RAM-disk spool is removed) so every caller converges the same value.
     bodiesDir:    resolvedBodiesDir,
     otlpPort:     options.otlpPort     ?? 4318,
     captureRawBodies,
-    // BOTH dirs this installer ever writes, because the capture-OFF delete guard must recognise a
-    // key written while capture was ON. `effectiveBodiesDir(dataDir, false)` returns the LEGACY dir
-    // by construction (it only consults the spool when captureOn), so resolving the "value we would
-    // have written" at delete time — when capture is by definition off — could never match a key
-    // holding the SPOOL path. That is the ordinary lifecycle (on → spool, off → legacy), so the key
-    // outlived every repair attempt. See the delete guard in ensureTelemetryConfig.
+    // BOTH values this installer could ever have written, because the capture-OFF delete guard must
+    // recognise a key written while capture was ON. The removed RAM-disk spool's bodies path is
+    // carried as a LITERAL: a legacy install upgraded past TRDD-Z53IJFE9 still has
+    // `file:/Volumes/AgentLensSpool/otel-bodies` in settings.json, and capture-OFF must delete it —
+    // the 2026-08-06 outage was exactly this guard not matching the then-current spool value, which
+    // let the key survive every repair until the 2 GB volume filled and capture died silently.
     ownedBodyValues: [
       ...new Set([
         resolvedBodiesDir,
-        effectiveBodiesDir(dataDir, false),   // the legacy dir — what capture-OFF resolves to
-        spoolDirConfigured(dataDir),          // the spool — what capture-ON writes; may be undefined
-      ].filter((d): d is string => typeof d === 'string' && d.length > 0)),
+        effectiveBodiesDir(dataDir, false),
+        '/Volumes/AgentLensSpool/otel-bodies',
+      ]),
     ].map(d => `file:${d}`),
   }
 }
@@ -293,10 +292,10 @@ export async function ensureTelemetryConfig(options: TelemetryConfigOptions = {}
   // directory made that choice deliberately and owns its cost — silently deleting a config we never
   // wrote would be the same overreach that force-converging was.
   //
-  // `ownedBodyValues` is that set, and it must contain BOTH the legacy dir and the configured spool.
-  // Comparing against `file:${bodiesDir}` alone was the 2026-08-06 outage: at delete time capture is
-  // off by definition, so `bodiesDir` had resolved to the LEGACY dir and could never equal a key
-  // holding the SPOOL path — which is exactly what capture-ON writes. The key therefore survived
+  // `ownedBodyValues` is that set, and it must cover every value we (or the removed RAM-disk spool,
+  // TRDD-Z53IJFE9) ever wrote. Comparing against `file:${bodiesDir}` alone was the 2026-08-06
+  // outage: at delete time capture is off by definition, so `bodiesDir` resolved to the DEFAULT dir
+  // and could never equal a key holding the then-configured SPOOL path. The key therefore survived
   // every repair, Claude Code kept honouring it, and it filled the 2 GB RAM spool to 100% until
   // capture died silently. Meanwhile the detector in cli/setup.ts tests PRESENCE, so setup reported
   // drift, "wired" it, verified, and FAILED forever — the two halves disagreed on "a key we wrote".

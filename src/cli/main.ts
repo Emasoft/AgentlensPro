@@ -23,7 +23,6 @@ import { runReviewSupervisor } from './reviewSupervisor'
 import { runDelegateGateCli } from './delegateGate'
 import { runHeartbeatCost } from './heartbeatCostCli'
 import { runConfigCli } from './configCli'
-import { runSpoolCli } from './spoolCli'
 import { runStoreCli } from './storeAdmin'
 import { runEnvCli } from './envCli'
 import { runDisableCli, runEnableCli } from './disableCli'
@@ -109,7 +108,7 @@ export const HOT_PATH_BUDGET_MS: Readonly<Record<string, number>> = {
 export const MANAGEMENT_VERBS: ReadonlySet<string> = new Set([
   'hook', 'gate', 'review-gate', 'review-supervisor', 'delegate-gate', 'statusline', 'statusline-history', 'get_account_status', 'disable', 'enable',
   'telemetry', 'setup', 'server', 'daemon', 'dashboard', 'cache-expired', 'cache-state', 'last-compact',
-  'budget', 'watch', 'heartbeat-cost', 'config', 'spool', 'env', 'ctxmap', 'ctxvis', 'list',
+  'budget', 'watch', 'heartbeat-cost', 'config', 'env', 'ctxmap', 'ctxvis', 'list',
   'search', 'model-headroom', 'hook-context-cost',
 ])
 
@@ -127,7 +126,6 @@ export const LATENCY_EXEMPT: Readonly<Record<string, string>> = {
   watch: 'observes INDEFINITELY by design — a ceiling here would contradict the verb',
   'heartbeat-cost': 'an analysis verb over historical fires; not on any per-turn path',
   config: 'reads/writes the data-retention config; invoked by a human or an installer',
-  spool: 'creates/removes a RAM-disk spool — mount work, run at login by a LaunchAgent',
   env: 'environment detection report; a diagnostic a human reads',
   ctxmap: 'decomposes captured request bodies with real token counting — inherently slow, and asked once',
   ctxvis: 'SPAWNS an agent and measures two of its turns; it is the slowest verb we ship, deliberately',
@@ -311,10 +309,6 @@ export async function cliMain(argv: string[], startServer: () => Promise<unknown
       // permanently-parked bodies were parked for (from their files' own mtimes, via the full
       // staged-migration protocol) and unparks them through the alstore flock.
       return runStoreCli(argv.slice(1))
-    case 'spool':
-      // RAM-disk spool for raw-body capture (TRDD-K3WDPR7M Phase 3). `spool ensure` is what the
-      // boot-remount LaunchAgent runs at login — re-create the spool iff capture is on, else no-op.
-      return runSpoolCli(argv.slice(1))
     case 'env':
       // Environment/system detection (TRDD-HUWJVQJA): terminal kind, OS, Claude/ai-maestro/CI/
       // container context, filesystem/worktree, network, cloud, tooling, MCP — all client-side, no

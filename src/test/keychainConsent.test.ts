@@ -71,12 +71,12 @@ suite('keychainConsent — a decision that survives a restart', () => {
     const { dir, cleanup } = tmpDataDir()
     try {
       fs.writeFileSync(path.join(dir, 'config.json'),
-        JSON.stringify({ spansRetentionDays: 45, capture: { rawBodies: true, spoolDir: '/Volumes/X' } }, null, 2))
+        JSON.stringify({ spansRetentionDays: 45, capture: { rawBodies: true }, usage: { OTEL_LOG_USER_PROMPTS: '1' } }, null, 2))
       setKeychainConsent(dir, true)
       const cfg = readConfig(dir)
       assert.strictEqual(cfg.spansRetentionDays, 45, 'retention knob survived')
-      assert.deepStrictEqual(cfg.capture, { rawBodies: true, spoolDir: '/Volumes/X' }, 'capture section survived')
-      assert.deepStrictEqual(cfg.usage, { [KEYCHAIN_KEY]: true })
+      assert.deepStrictEqual(cfg.capture, { rawBodies: true }, 'capture section survived')
+      assert.deepStrictEqual(cfg.usage, { OTEL_LOG_USER_PROMPTS: '1', [KEYCHAIN_KEY]: true }, 'the usage section was extended, not replaced')
     } finally { cleanup() }
   })
 

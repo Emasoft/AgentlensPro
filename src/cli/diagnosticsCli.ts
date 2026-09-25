@@ -100,10 +100,7 @@ usage:
   agentlenspro config set <key> <value>       persist a retention knob to ~/.agentlens/config.json
                                               (survives uninstall/upgrade; restart to apply; env still wins)
                                               captureRawBodies on|off turns raw-body capture on/off
-                                              (opt-in, default off; on mounts a RAM-disk spool on macOS)
-  agentlenspro spool ensure                   (re)create the RAM-disk spool for raw-body capture — a
-                                              no-op when capture is off; run at login by a LaunchAgent
-                                              (installed automatically when capture is turned on)
+                                              (opt-in, default off; bodies go to <data-dir>/otel-bodies)
   agentlenspro env [facet] [--json] [--out F]  detect the runtime environment: terminal kind, OS,
                                               Claude/ai-maestro/CI/container context, filesystem/worktree,
                                               user, network/VPN/proxy, cloud (AWS/Azure/GCP), tooling,

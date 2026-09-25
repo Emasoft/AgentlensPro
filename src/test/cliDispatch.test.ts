@@ -603,7 +603,7 @@ suite('agentlenspro — help is TOTAL: --help anywhere never executes the verb',
     // The full verb surface from the dispatch switch. Hot-path verbs (hook/gate/statusline) are
     // included deliberately: help must win over their read-stdin behavior too, or a probe hangs.
     const verbs = [
-      'disable', 'enable', 'telemetry', 'setup', 'server', 'daemon', 'config', 'env', 'spool',
+      'disable', 'enable', 'telemetry', 'setup', 'server', 'daemon', 'config', 'env',
       'budget', 'watch', 'heartbeat-cost', 'statusline-history', 'cache-expired', 'last-compact',
       'ctxmap', 'ctxvis', 'hook', 'gate', 'statusline', 'list',
     ]

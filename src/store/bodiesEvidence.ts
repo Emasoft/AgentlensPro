@@ -2,8 +2,8 @@
 // 2026-08-13: "make them use duckdb super efficient query of jsonl and parquet files").
 //
 // WHY THIS EXISTS — measured, not theorized. `get_cache_break_timeline` (and every forensics read
-// path that followed its pattern) listed `*.request.json` FILES in the spool and JSON.parsed each
-// one in JS. Two consequences, both observed on 2026-08-13:
+// path that followed its pattern) listed `*.request.json` FILES in the raw bodies dir and
+// JSON.parsed each one in JS. Two consequences, both observed on 2026-08-13:
 //
 //   1. VOLATILE EVIDENCE. The ingest drain deletes a raw file the moment the Parquet store provably
 //      holds its bytes — so a break event at 01:08Z was classifiable at 01:40 and GONE from the
@@ -15,12 +15,12 @@
 //      column-pruned Parquet scan.
 //
 // THE INVARIANT THAT MAKES THIS MODULE CORRECT: the delete gate (verifyInStore, "verify-before-
-// delete", USER directive 2026-07-15) deletes a spool file ONLY after the flushed store provably
+// delete", USER directive 2026-07-15) deletes a raw-body file ONLY after the flushed store provably
 // holds its exact bytes and its (src_name, ts) row. Therefore at every instant a captured body
-// exists in the SPOOL, or in the SEALED PARQUET, or briefly in both — never in neither. The union
-// queried here is complete BY CONSTRUCTION, not by hope. (Bodies ingested but not yet flushed live
-// in the store's in-memory staging, invisible to a parquet-only reader — and that is fine, because
-// their spool file cannot have been deleted yet.)
+// exists in the RAW BODY DIR, or in the SEALED PARQUET, or briefly in both — never in neither. The
+// union queried here is complete BY CONSTRUCTION, not by hope. (Bodies ingested but not yet flushed
+// live in the store's in-memory staging, invisible to a parquet-only reader — and that is fine,
+// because their raw file cannot have been deleted yet.)
 //
 // Division of labour: SELECTION is DuckDB over Parquet (pushdown on session/ts/kind — pay for what
 // you ask about); LOADING is per-body and chunked (never the corpus — 200 × ~881 KB bodies is
@@ -35,17 +35,20 @@ import { Part, reassemble, sha256 } from './sections'
 
 export interface EvidenceRow {
   srcName: string
-  /** sha256 of the original bytes for store rows; null for a spool row (not yet ingested/known). */
+  /** sha256 of the original bytes for store rows; null for a raw-dir row (not yet ingested/known). */
   bodyId: string | null
-  /** Known for store rows (a first-class Parquet column); null for spool rows — the spool file name
+  /** Known for store rows (a first-class Parquet column); null for raw-dir rows — the file name
    *  is an opaque uuid, and reading the file to learn its session would reintroduce the exact
    *  read-everything cost this module removes. Callers filtering by session must keep null rows and
-   *  filter them after parsing; the drain keeps the spool small, so that JS-side cost is bounded by
+   *  filter them after parsing; the drain keeps the raw dir small, so that JS-side cost is bounded by
    *  current inflow, never by history. */
   sessionId: string | null
   tsMs: number | null
   rawBytes: number
   kind: 'request' | 'response'
+  /** 'spool' is a historical name: it means "read from the raw bodies dir" (the removed RAM-disk
+   *  spool's wire tag, kept — rust-core's bodies_evidence.rs matches on it and the burn tooling
+   *  surfaces it). TRDD-Z53IJFE9. */
   location: 'store' | 'spool'
 }
 
@@ -86,12 +89,12 @@ async function withDuck<T>(fn: (con: DuckConn) => Promise<T>): Promise<T> {
 }
 
 /** Every body the diagnostics may reason about, selected by pushdown where the columns exist.
- *  Store rows come pre-filtered by DuckDB; spool rows are appended unfiltered on session/ts (their
+ *  Store rows come pre-filtered by DuckDB; raw-dir rows are appended unfiltered on session/ts (their
  *  metadata is unknown until parsed) except for `kind`, which the file suffix carries. A body
  *  present in both places yields ONE row (the store one — its metadata is richer and its bytes are
  *  proven), so a caller never double-counts a turn mid-drain. */
 export async function listBodyEvidence(
-  storeDir: string, spoolDir: string | null, f: EvidenceFilter = {},
+  storeDir: string, rawDir: string | null, f: EvidenceFilter = {},
 ): Promise<EvidenceRow[]> {
   const rows: EvidenceRow[] = []
   const scan = parquetScan(storeDir, BODIES_DIR)
@@ -117,17 +120,17 @@ export async function listBodyEvidence(
       })
     }
   }
-  if (spoolDir) {
+  if (rawDir) {
     const inStore = new Set(rows.map((r) => r.srcName))
     let names: string[] = []
-    try { names = fs.readdirSync(spoolDir) } catch { /* no spool = empty half, not an error */ }
+    try { names = fs.readdirSync(rawDir) } catch { /* unreadable dir = empty half, not an error */ }
     for (const name of names) {
       const kind: EvidenceRow['kind'] = name.includes('.response.') ? 'response'
         : name.includes('.request.') ? 'request' : 'request'
       if (!name.endsWith('.json') || inStore.has(name)) continue
       if (f.kind !== undefined && kind !== f.kind) continue
       let size = 0
-      try { size = fs.statSync(path.join(spoolDir, name)).size } catch { continue /* drained mid-list */ }
+      try { size = fs.statSync(path.join(rawDir, name)).size } catch { continue /* drained mid-list */ }
       rows.push({ srcName: name, bodyId: null, sessionId: null, tsMs: null, rawBytes: size, kind, location: 'spool' })
     }
   }
@@ -136,21 +139,21 @@ export async function listBodyEvidence(
 
 /** Load the selected bodies' raw text, srcName → bytes-as-string.
  *
- *  Spool rows are plain reads; a file drained between list and load falls through to the store by
+ *  Raw-dir rows are plain reads; a file drained between list and load falls through to the store by
  *  name (the delete gate guarantees it arrived there first) rather than failing — the race is
  *  routine, not exceptional. Store rows reconstruct in CHUNKS of `chunk` bodies (default 32, the
  *  bound TRDD-KB17X5G2 measured against ~176 MB single-result blowups), each proven against its
  *  sha256 before it is handed back. A body that fails its proof THROWS — handing back bytes we
  *  cannot prove are the original would quietly poison every diagnosis built on them. */
 export async function loadBodyTexts(
-  storeDir: string, spoolDir: string | null, selection: EvidenceRow[], chunk = 32,
+  storeDir: string, rawDir: string | null, selection: EvidenceRow[], chunk = 32,
 ): Promise<Map<string, string>> {
   const out = new Map<string, string>()
   const fromStore: EvidenceRow[] = []
   for (const row of selection) {
-    if (row.location === 'spool' && spoolDir) {
+    if (row.location === 'spool' && rawDir) {
       try {
-        out.set(row.srcName, fs.readFileSync(path.join(spoolDir, row.srcName), 'utf8'))
+        out.set(row.srcName, fs.readFileSync(path.join(rawDir, row.srcName), 'utf8'))
         continue
       } catch { /* drained since listing — the store must hold it now; fall through */ }
     }
@@ -165,7 +168,7 @@ export async function loadBodyTexts(
     throw new Error(`bodiesEvidence: ${fromStore.length} body(ies) need the store but ${storeDir} has no sealed parts`)
   }
   await withDuck(async (con) => {
-    // A spool row that fell through carries no bodyId — resolve it by src_name first.
+    // A raw-dir row that fell through carries no bodyId — resolve it by src_name first.
     const unresolved = fromStore.filter((r) => r.bodyId === null)
     if (unresolved.length) {
       const got = (await con.runAndReadAll(`
@@ -175,7 +178,7 @@ export async function loadBodyTexts(
       const byName = new Map(got.map((g) => [String(g.src_name), String(g.body_id)]))
       for (const r of unresolved) {
         const id = byName.get(r.srcName)
-        if (!id) throw new Error(`bodiesEvidence: ${r.srcName} is in neither the spool nor the store — the verify-before-delete invariant is broken, refuse to continue`)
+        if (!id) throw new Error(`bodiesEvidence: ${r.srcName} is in neither the raw bodies dir nor the store — the verify-before-delete invariant is broken, refuse to continue`)
         r.bodyId = id
       }
     }

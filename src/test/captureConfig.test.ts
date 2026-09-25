@@ -12,7 +12,7 @@ import * as os from 'os'
 import * as path from 'path'
 import {
   RAW_BODIES_ENV, RAW_BODIES_KEY, effectiveBodiesDir, loadCaptureConfig, rawBodyCaptureEnabled,
-  rawBodyCaptureWithSource, resolveBodiesReadScope, setRawBodyCapture, setSpoolDir,
+  rawBodyCaptureWithSource, resolveBodiesReadScope, setRawBodyCapture,
 } from '../captureConfig'
 import { ensureTelemetryConfig, ownedTelemetryKeys, removeTelemetryConfig } from '../telemetryConfig'
 
@@ -163,106 +163,82 @@ suite('telemetry converge — capture off must actually stop the burn', () => {
   })
 })
 
-// The two-writer defect (2026-07-16): the CLI capture-on flow wired the key at the RAM-disk spool,
-// then the server-boot converge — whose bodiesDir default was hard-coded to the legacy SSD dir —
-// overwrote it minutes later, silently re-pointing Claude Code's ~35 GB/day at the SSD. The contract:
-// there is ONE resolution of the bodies dir (effectiveBodiesDir), and a spool-BLIND caller of
-// ensureTelemetryConfig must converge the SAME value the spool-AWARE writer wrote.
-suite('effectiveBodiesDir — the one bodies-dir resolution (TRDD-K3WDPR7M spool × TRDD-BKF5NZD3 converge)', () => {
-  test('capture on + spool configured → the spool dir', () => {
-    const dir = tmp()
-    setSpoolDir(dir, '/Volumes/TestSpool/otel-bodies')
-    assert.strictEqual(effectiveBodiesDir(dir, true), '/Volumes/TestSpool/otel-bodies')
-  })
-  test('capture on + no spool configured → the legacy dir', () => {
+// The single-writer contract (TRDD-Z53IJFE9): the RAM-disk spool is REMOVED, so the bodies dir is
+// always the SSD dir under the data dir. There is ONE resolution of the bodies dir
+// (effectiveBodiesDir), and every writer of ensureTelemetryConfig must converge the SAME value.
+suite('effectiveBodiesDir — the one bodies-dir resolution (TRDD-Z53IJFE9 × TRDD-BKF5NZD3 converge)', () => {
+  test('capture on → the SSD dir under the data dir (the removed spool can never redirect it)', () => {
     const dir = tmp()
     assert.strictEqual(effectiveBodiesDir(dir, true), path.join(dir, 'otel-bodies'))
   })
-  test('capture off → the legacy dir even when a spool is configured (off never targets the spool)', () => {
+  test('capture off → the same SSD dir (the knob changes the key, never the path)', () => {
     const dir = tmp()
-    setSpoolDir(dir, '/Volumes/TestSpool/otel-bodies')
     assert.strictEqual(effectiveBodiesDir(dir, false), path.join(dir, 'otel-bodies'))
+  })
+  test('a legacy spool path in config.json is IGNORED (and dropped on the next capture write)', () => {
+    const dir = tmp()
+    fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ capture: { rawBodies: true, spoolDir: '/Volumes/TestSpool/otel-bodies' } }))
+    assert.strictEqual(effectiveBodiesDir(dir, true), path.join(dir, 'otel-bodies'))
+    setRawBodyCapture(dir, false)
+    assert.deepStrictEqual(loadCaptureConfig(dir), { rawBodies: false }, 'the legacy spool key is dropped')
   })
 })
 
 // The READER's counterpart (TRDD-8N3KQW2R). effectiveBodiesDir answers "where should Claude Code
 // WRITE now" — a single answer. A reader needs every dir that can still HOLD bodies: capture may be
-// off while yesterday's corpus is on disk, and a spool can hold live traffic while the legacy dir
-// still holds an undrained corpus. Resolving readers through the writer's answer is what made
-// investigate_burn report "nothing burned here" during a measured 2.3M tok/min burn.
+// off while yesterday's corpus is still on disk. Resolving readers through the writer's answer is
+// what made investigate_burn report "nothing burned here" during a measured 2.3M tok/min burn.
 suite('resolveBodiesReadScope — where a READER looks (TRDD-8N3KQW2R)', () => {
-  test('an existing spool is scanned FIRST, ahead of the legacy dir', () => {
-    const dir = tmp()
-    const spool = path.join(dir, 'spool-bodies')
-    fs.mkdirSync(spool, { recursive: true })
-    fs.mkdirSync(path.join(dir, 'otel-bodies'), { recursive: true })
-    setSpoolDir(dir, spool)
-    setRawBodyCapture(dir, true)
-    const s = resolveBodiesReadScope(dir, {})
-    assert.deepStrictEqual(s.dirs, [spool, path.join(dir, 'otel-bodies')])
-    assert.deepStrictEqual(s.missing, [])
-    assert.strictEqual(s.spoolConfigured, true)
-  })
-
-  test('a configured but UNMOUNTED spool is reported missing, not silently skipped', () => {
-    // The spool is a RAM disk remounted by a LaunchAgent — between reboot and remount it is simply
-    // absent, and a reader that hides that fact reports an empty window as an empty world.
+  test('an existing bodies dir is the one scanned dir', () => {
     const dir = tmp()
     fs.mkdirSync(path.join(dir, 'otel-bodies'), { recursive: true })
-    setSpoolDir(dir, '/Volumes/NotMounted/otel-bodies')
     setRawBodyCapture(dir, true)
     const s = resolveBodiesReadScope(dir, {})
     assert.deepStrictEqual(s.dirs, [path.join(dir, 'otel-bodies')])
-    assert.deepStrictEqual(s.missing, ['/Volumes/NotMounted/otel-bodies'])
+    assert.deepStrictEqual(s.missing, [])
+    assert.strictEqual(s.spoolConfigured, false)
+  })
+
+  test('a body dir that does not exist is reported missing, not silently skipped', () => {
+    // Between `config set captureRawBodies on` and the first mkdir the dir is simply absent, and
+    // a reader that hides that fact reports an empty window as an empty world.
+    const dir = tmp()
+    setRawBodyCapture(dir, true)
+    const s = resolveBodiesReadScope(dir, {})
+    assert.deepStrictEqual(s.dirs, [])
+    assert.deepStrictEqual(s.missing, [path.join(dir, 'otel-bodies')])
   })
 
   test('capture OFF still resolves the dirs — old bodies remain readable after capture stops', () => {
     const dir = tmp()
-    const spool = path.join(dir, 'spool-bodies')
-    fs.mkdirSync(spool, { recursive: true })
-    setSpoolDir(dir, spool)
+    fs.mkdirSync(path.join(dir, 'otel-bodies'), { recursive: true })
     setRawBodyCapture(dir, false)
     const s = resolveBodiesReadScope(dir, {})
     assert.strictEqual(s.captureOn, false)
-    assert.ok(s.dirs.includes(spool), 'a reader must still see the spool it wrote yesterday')
+    assert.deepStrictEqual(s.dirs, [path.join(dir, 'otel-bodies')], 'a reader must still see the dir capture wrote yesterday')
   })
 
-  test('nothing on disk → no dirs, and both candidates listed as missing', () => {
+  test('nothing on disk → no dirs, and the candidate listed as missing', () => {
     const dir = tmp()
-    setSpoolDir(dir, '/Volumes/NotMounted/otel-bodies')
     const s = resolveBodiesReadScope(dir, {})
     assert.deepStrictEqual(s.dirs, [])
-    assert.strictEqual(s.missing.length, 2)
+    assert.strictEqual(s.missing.length, 1)
   })
 
-  test('no spool configured → exactly the legacy dir, never a duplicate', () => {
+  test('exactly one candidate, never a duplicate', () => {
     const dir = tmp()
     fs.mkdirSync(path.join(dir, 'otel-bodies'), { recursive: true })
-    const s = resolveBodiesReadScope(dir, {})
-    assert.deepStrictEqual(s.dirs, [path.join(dir, 'otel-bodies')])
-    assert.strictEqual(s.spoolConfigured, false)
-  })
-
-  test('a spool configured to the legacy path is deduped, not scanned twice', () => {
-    const dir = tmp()
-    const legacy = path.join(dir, 'otel-bodies')
-    fs.mkdirSync(legacy, { recursive: true })
-    setSpoolDir(dir, legacy)
     setRawBodyCapture(dir, true)
-    assert.deepStrictEqual(resolveBodiesReadScope(dir, {}).dirs, [legacy])
+    assert.deepStrictEqual(resolveBodiesReadScope(dir, {}).dirs, [path.join(dir, 'otel-bodies')])
   })
 
-  test('a spool-BLIND converge (the server-boot shape) writes the SPOOL value, not the legacy dir', async () => {
+  test('a BLIND converge (the server-boot shape) writes the SSD value, not a stale spool path', async () => {
     const f = fixture()
-    // A tmp-rooted spool path (ensure mkdir-s the bodies dir, and /Volumes needs root) — the point
-    // is only that it differs from the legacy <dataDir>/otel-bodies.
-    const spool = path.join(f.dir, 'spool', 'otel-bodies')
     setRawBodyCapture(f.dir, true)
-    setSpoolDir(f.dir, spool)
-    // No bodiesDir in the options — exactly how the server boot calls ensure. Before the fix this
-    // converged file:<legacy> and clobbered the CLI's spool value.
+    // No bodiesDir in the options — exactly how the server boot calls ensure. The resolved value
+    // must be the SSD dir under the data dir (a stale legacy spool path in config.json is ignored).
     const { bodiesDir: _omit, ...blind } = f.opts as { bodiesDir: string } & Record<string, unknown>
     await ensureTelemetryConfig(blind)
-    assert.strictEqual(envOf(f.settingsPath)[RAW_BODIES_KEY], `file:${spool}`)
+    assert.strictEqual(envOf(f.settingsPath)[RAW_BODIES_KEY], `file:${path.join(f.dir, 'otel-bodies')}`)
   })
 })
