@@ -31,6 +31,9 @@ import { countNdjsonLinesAuto } from '../ndjsonLines'
 import { readFsMarkers } from '../environment/runtime'
 import { ensureTelemetryConfig, ownedTelemetryKeys } from '../telemetryConfig'
 import { rawBodyCaptureEnabled, effectiveBodiesDir, RAW_BODIES_KEY } from '../captureConfig'
+import { alstoreBin as resolveAlstoreBin, rustIngestPass } from '../rustStorePass'
+import { safeConfigEdit } from '../safeConfigEdit'
+import { DEFAULT_MAX_BYTES_PER_PASS, IngestPassResult } from '../store/ingestPass'
 import { envPort, sleep } from './cliCore'
 import {
   CLI_BIN, GATE_CMD, GATE_EVENTS, GATE_MATCHER, HOOK_CMD, HOOK_EVENTS, HookMatcher,
@@ -308,6 +311,299 @@ function execRegisteredCommand(ctx: Ctx, command: string, payload: string, expec
   if (r.status !== 0) return `exit ${r.status} (must always exit 0): ${(r.stderr || '').slice(0, 120)}`
   if (expectSilent && r.stdout !== '') return `must print nothing, got: ${r.stdout.slice(0, 120)}`
   return null
+}
+
+// ── Legacy RAM-disk spool migration (TRDD-Z53IJFE9 step C) ──────────────────────────────────
+// A published install upgraded from a spool-generation release can still carry three dead
+// artifacts: a mounted /Volumes/AgentLensSpool RAM disk, OTEL_LOG_RAW_API_BODIES pointing at it,
+// and the dead com.agentlens.spool LaunchAgent. The spool code is GONE (step D), so nothing
+// drains that volume and capture silently dies when it fills — the exact 2026-08-06 outage.
+// This migration runs BEFORE the telemetry step, in the card's exact order:
+//   drain (alstore pass — no data lost) → detach the disk → rewrite the settings path via
+//   safeConfigEdit → bootout the agent + move its plist aside.
+// NEVER detach before draining: the pass must read every body off the volume while it is live.
+// Residual surfaces deliberately IGNORED, not errored on (card review condition 2): the removed
+// `summary.bodies.spool` summary key and the removed `AGENTLENS_BODIES_MAX_AGE_HOURS` env var.
+
+/** The settings env value the old spool wrote, and the volume it mounted. Kept as literals:
+ *  the spool module that owned them is deleted. */
+const SPOOL_BODIES_VALUE = 'file:/Volumes/AgentLensSpool/otel-bodies'
+const SPOOL_VOLUME = '/Volumes/AgentLensSpool'
+const SPOOL_AGENT_LABEL = 'com.agentlens.spool'
+
+/** Injectable seams — tests stub these; production defaults do the real work. Every seam the
+ *  step's decisions flow through is here, so the tests drive the REAL decision flow (a test
+ *  that re-implements the flow would pin nothing — review round 1 on this step). */
+export interface SpoolMigrationDeps {
+  /** A directory scannable AND drainable, i.e. the volume is mounted. */
+  volumeMounted: (volume: string) => boolean
+  /** Detach the RAM disk. Called ONLY after a proven-complete drain. */
+  detachVolume: (volume: string) => void
+  /** One throttled `alstore pass` over the spool bodies into the store. `--no-delete` is NEVER
+   *  passed: the drain's whole point is to empty the volume before it is detached.
+   *  `relocateStrandedTo` moves stranded bodies (bytes proven, ts row wrong — the pass keeps
+   *  them on disk and skips them forever) onto the SSD dir so they survive the detach. */
+  drain: (storeDir: string, bodiesDir: string, relocateStrandedTo?: string) => Promise<IngestPassResult | null>
+  /** Resolve the alstore binary, or null when unavailable (a broken install — loud FAIL, the
+   *  fail-fast direction: migration NEVER detaches with bodies undrained). */
+  alstoreBin: () => string | null
+  /** `launchctl bootout gui/<uid>/<label>` — stop the dead agent if launchd still holds it. */
+  bootoutAgent: (label: string) => void
+  /** The LaunchAgent plist's absolute path. */
+  plistPath: () => string
+  /** Names in the spool's bodies dir RIGHT NOW — the airtight no-residue gate: whatever the
+   *  drain report says, the volume must not detach while any file remains. */
+  listSpoolBodies: () => string[]
+}
+
+function realSpoolDeps(): SpoolMigrationDeps {
+  return {
+    volumeMounted: (volume) => {
+      try { return fs.statSync(path.join(volume, 'otel-bodies')).isDirectory() } catch { return false }
+    },
+    detachVolume: (volume) => {
+      // hdiutil is the only sanctioned detach for a disk image we mounted ourselves. A failure
+      // THROWS — the step machinery reports it and the run stops; a forced detach could destroy
+      // unsaved spool bytes, so there is no -force fallback (fail-fast, no data-loss path).
+      execFileSync('hdiutil', ['detach', volume], { stdio: 'pipe', timeout: 60_000 })
+    },
+    drain: async (storeDir, bodiesDir, relocateStrandedTo) => {
+      const bin = resolveAlstoreBin()
+      if (!bin) return null
+      // 0 max-age-ms = ingest regardless of age: this is a ONE-SHOT migration, not the 60s
+      // steady-state drain — anything left behind here is lost the moment the volume detaches.
+      return rustIngestPass(bin, {
+        storeDir, bodiesDir, maxAgeMs: 0, maxBytesPerPass: DEFAULT_MAX_BYTES_PER_PASS,
+        durableSource: true, relocateStrandedTo,
+      })
+    },
+    alstoreBin: () => resolveAlstoreBin(),
+    bootoutAgent: (label) => {
+      // POSIX-only call: win32 is refused by the environment step (fail-fast) before this one
+      // ever runs, so getuid always exists on a machine that reaches here.
+      const uid = typeof process.getuid === 'function' ? process.getuid() : 0
+      // DELIBERATE fail-soft (review round 2, F5): the agent is DEAD either way — its baked node
+      // path is gone and it exits 78 on every launch — so there is nothing real to stop, and a
+      // launchctl failure here must not block the plist move, which is the actual teardown.
+      try { execFileSync('launchctl', ['bootout', `gui/${uid}/${label}`], { stdio: 'pipe', timeout: 15_000 }) } catch { /* dead agent: bootout failure is not a migration blocker */ }
+    },
+    plistPath: () => path.join(os.homedir(), 'Library', 'LaunchAgents', `${SPOOL_AGENT_LABEL}.plist`),
+    listSpoolBodies: () => fs.readdirSync(path.join(SPOOL_VOLUME, 'otel-bodies')),
+  }
+}
+
+/** Detect the legacy spool state on THIS machine (read-only). Each artifact is reported
+ *  independently: a machine can carry any subset after a partial manual migration. */
+export function detectLegacySpool(settingsPath: string): {
+  settingsPathPointsAtSpool: boolean
+  volumeMounted: boolean
+  plistPresent: boolean
+  plistPath: string
+} {
+  return detectLegacySpoolWith(realSpoolDeps(), settingsPath)
+}
+
+/** The deps-parameterized half of detection — the seam the tests drive. Same read-only parse. */
+function detectLegacySpoolWith(deps: SpoolMigrationDeps, settingsPath: string): {
+  settingsPathPointsAtSpool: boolean
+  volumeMounted: boolean
+  plistPresent: boolean
+  plistPath: string
+} {
+  let settingsPathPointsAtSpool = false
+  try {
+    const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8')) as { env?: Record<string, unknown> }
+    settingsPathPointsAtSpool = settings.env?.[RAW_BODIES_KEY] === SPOOL_BODIES_VALUE
+  } catch { /* absent/unparseable: the telemetry step owns that refusal — nothing spool-specific here */ }
+  return {
+    settingsPathPointsAtSpool,
+    volumeMounted: deps.volumeMounted(SPOOL_VOLUME),
+    plistPresent: fs.existsSync(deps.plistPath()),
+    plistPath: deps.plistPath(),
+  }
+}
+
+/** The migration body, deps-parameterized so tests drive the REAL flow — never a re-implementation:
+ *  a test that re-implements the order pins nothing (review round 1). `stepSpoolMigration` below is
+ *  the thin production wrapper calling this with the real seams. Detection uses deps too, so the
+ *  volume/plist halves are testable without a real /Volumes mount or a real plist.
+ *
+ *  The NEVER-DETACH-BEFORE-DRAINING gate is AIRTIGHT, not report-trusting (review round 1, HIGH):
+ *  after a "successful" drain the spool bodies dir is re-listed through a DIFFERENT path (readdir),
+ *  and ANY residue file refuses the detach. strandedTs bodies (bytes proven, ts row wrong — the
+ *  pass keeps them on disk and skips them forever) are also RELOCATED to the SSD bodies dir by the
+ *  drain itself (--relocate-to), so a proven-byte-identical body never dies with the volume.
+ *  The drain also LOOPS (review round 2, F1): a single pass leaves a window where a live writer
+ *  lands a body after the last readdir, so passes repeat until one full pass ingests nothing —
+ *  a starved writer — before the detach. */
+export async function runSpoolMigration(ctx: Ctx, deps: SpoolMigrationDeps): Promise<{ result: StepResult; acted: boolean }> {
+  const detected = detectLegacySpoolWith(deps, ctx.settingsPath)
+  const artifacts = [
+    detected.volumeMounted && 'RAM disk mounted',
+    detected.settingsPathPointsAtSpool && 'settings path points at the spool',
+    detected.plistPresent && 'LaunchAgent plist present',
+  ].filter(Boolean).join(', ')
+  if (!artifacts) {
+    return { result: { step: 'spool-migration', found: 'no legacy spool artifacts', action: 'none', verify: 'PASS', detail: 'nothing to migrate' }, acted: false }
+  }
+
+  if (ctx.dryRun) {
+    return {
+      result: {
+        step: 'spool-migration', found: artifacts,
+        action: 'would: drain spool bodies (the legacy 72h/8GB limits do not apply by default — this one-shot drain ingests regardless of age) → detach RAM disk → rewrite settings path via safeConfigEdit → bootout + set aside the plist',
+        verify: 'SKIP', detail: 'dry-run',
+      },
+      acted: false,
+    }
+  }
+
+  // ACT 1 — DRAIN FIRST. Detaching a volume with bodies still on it loses them (the card's
+  // NEVER-DETACH-BEFORE-DRAINING rule); so the drain runs whenever the volume is mounted,
+  // regardless of whether settings still point at it — a mounted volume with bodies needs
+  // draining even if the settings key was already rewritten by an earlier partial migration.
+  //
+  // The drain LOOPS (review round 2, F1): between the last readdir and the detach a live Claude
+  // Code session (settings still pointing at the spool) can land a new body — a single pass
+  // leaves that TOCTOU window open. Passes repeat until one full pass ingests NOTHING (a
+  // pass-starved writer: the pass itself takes time, so no settle delay is needed between
+  // iterations) AND the readdir gate reports zero files. The cap also bounds a huge backlog
+  // (8 × DEFAULT_MAX_BYTES_PER_PASS ≈ 4 GB per setup run; a larger one refuses and re-runs).
+  let drained = false
+  if (detected.volumeMounted) {
+    if (!deps.alstoreBin()) {
+      return {
+        result: {
+          step: 'spool-migration', found: artifacts, action: 'refused', verify: 'FAIL',
+          detail: 'alstore binary unavailable — cannot drain the spool safely; refusing to detach the RAM disk with bodies on it (install agentlenspro fully, then re-run setup)',
+        },
+        acted: false,
+      }
+    }
+    // The pass deletes each body only after the store PROVES it reconstructs byte-for-byte
+    // (durable_source fsyncs parts first) — that proof gate is the no-data-loss guarantee.
+    // stranded bodies (kept on disk by the pass, excluded from every future pass) are
+    // relocated to the SSD dir so they cannot be lost with the volume (review round 1).
+    const DRAIN_LOOP_MAX = 8
+    for (let pass = 1; ; pass++) {
+      let res: IngestPassResult | null = null
+      let drainErr: Error | null = null
+      try {
+        res = await deps.drain(path.join(ctx.dataDir, 'store'), path.join(SPOOL_VOLUME, 'otel-bodies'), path.join(ctx.dataDir, 'otel-bodies'))
+      } catch (e) { drainErr = e as Error }
+      if (drainErr || !res) {
+        return {
+          result: {
+            step: 'spool-migration', found: artifacts, action: 'refused', verify: 'FAIL',
+            detail: `drain failed${drainErr ? `: ${drainErr.message.slice(0, 120)}` : ' (another pass owns the store)'} — RAM disk left mounted; nothing detached, nothing rewritten. Fix and re-run setup.`,
+          },
+          acted: false,
+        }
+      }
+      if (res.failed.length > 0 || res.throttled) {
+        return {
+          result: {
+            step: 'spool-migration', found: artifacts, action: 'refused', verify: 'FAIL',
+            detail: `drain incomplete: ${res.failed.length} failed, throttled=${res.throttled} — RAM disk left mounted; re-run setup until the drain completes`,
+          },
+          acted: false,
+        }
+      }
+      // AIRTIGHT residue gate, now inside the loop: whatever the report says, the volume must
+      // not detach while a pass could still find work. Success is ONE pass that ingested
+      // NOTHING (a pass-starved writer — the pass itself takes time, so no settle delay is
+      // needed between iterations) AND whose readdir comes back empty; readdir is a path
+      // independent of the pass's own bookkeeping (falsify-the-layer).
+      const residueNames = deps.listSpoolBodies()
+      if (res.ingested === 0 && residueNames.length === 0) { drained = true; break }
+      if (pass >= DRAIN_LOOP_MAX) {
+        return {
+          result: {
+            step: 'spool-migration', found: artifacts, action: 'refused', verify: 'FAIL',
+            detail: residueNames.length > 0
+              ? `spool still holds ${residueNames.length} file(s) after ${DRAIN_LOOP_MAX} drain passes (${residueNames.slice(0, 3).join(', ')}${residueNames.length > 3 ? ', …' : ''}) — RAM disk left mounted; inspect and re-run setup`
+              : `a live writer kept landing bodies through ${DRAIN_LOOP_MAX} drain passes (no starved pass) — RAM disk left mounted; stop the sessions still writing to the spool and re-run setup`,
+          },
+          acted: false,
+        }
+      }
+    }
+  }
+
+  // ACT 2 — DETACH (only after a drain whose completion is proven by readdir, not just reported).
+  if (detected.volumeMounted && drained) {
+    deps.detachVolume(SPOOL_VOLUME)
+  }
+
+  // ACT 3 — REWRITE THE SETTINGS PATH via safeConfigEdit. Only the key's VALUE moves; capture
+  // stays exactly as the user left it (this is a location migration, not a capture-policy change).
+  let settingsRewritten = false
+  if (detected.settingsPathPointsAtSpool) {
+    const captureOn = rawBodyCaptureEnabled(ctx.dataDir, process.env)
+    const ops = captureOn
+      ? [{ op: 'set' as const, path: ['env', RAW_BODIES_KEY], value: `file:${effectiveBodiesDir(ctx.dataDir, true)}` }]
+      : [{ op: 'delete' as const, path: ['env', RAW_BODIES_KEY] }]
+    await safeConfigEdit(ctx.settingsPath, 'json', ops, { createIfMissing: true })
+    settingsRewritten = true
+  }
+
+  // ACT 4 — TEARDOWN THE DEAD LAUNCH AGENT. The plist lives OUTSIDE any project root, so the
+  // safe-delete tool cannot take it (it refuses paths outside the tree) — it is moved ASIDE to
+  // `disabled-<label>.plist.bak`, recoverable with one mv. The bootout runs first so launchd
+  // stops holding a plist that is about to be renamed. An EXISTING .bak is never overwritten:
+  // a re-created plist may differ (baked node path), so the newer copy gets a timestamped name
+  // and both survive (review round 1, MEDIUM).
+  let agentTornDown = false
+  if (detected.plistPresent) {
+    deps.bootoutAgent(SPOOL_AGENT_LABEL)
+    const plist = detected.plistPath
+    let aside = path.join(path.dirname(plist), `disabled-${SPOOL_AGENT_LABEL}.plist.bak`)
+    if (fs.existsSync(aside)) {
+      aside = path.join(path.dirname(plist), `disabled-${SPOOL_AGENT_LABEL}.plist.${new Date().toISOString().replace(/[:.]/g, '-')}.bak`)
+    }
+    try { fs.renameSync(plist, aside) } catch (e) {
+      return {
+        result: {
+          step: 'spool-migration', found: artifacts, action: 'refused', verify: 'FAIL',
+          detail: `could not move the plist aside: ${(e as Error).message.slice(0, 100)} — bootout already ran; move ${plist} to ${aside} manually, then re-run setup`,
+        },
+        acted: true,
+      }
+    }
+    agentTornDown = true
+  }
+
+  // VERIFY — re-detect through the SAME read-only path. Everything must be gone.
+  const after = detectLegacySpoolWith(deps, ctx.settingsPath)
+  const residue = [
+    after.volumeMounted && 'RAM disk still mounted',
+    after.settingsPathPointsAtSpool && 'settings still point at the spool',
+    after.plistPresent && 'plist still present',
+  ].filter(Boolean).join(', ')
+  return {
+    result: {
+      step: 'spool-migration', found: artifacts,
+      action: [
+        drained && 'drained spool bodies into the store (stranded bodies relocated to the SSD dir)',
+        detected.volumeMounted && drained && 'detached RAM disk',
+        settingsRewritten && 'rewrote settings path via safeConfigEdit',
+        agentTornDown && 'booted out the agent + moved its plist aside',
+      ].filter(Boolean).join(', ') || 'none',
+      verify: residue ? 'FAIL' : 'PASS',
+      detail: residue
+        ? `residue after migration: ${residue}`
+        : `bodies now in the store; disabled plist kept at ${path.join(path.dirname(detected.plistPath), `disabled-${SPOOL_AGENT_LABEL}.plist.bak`)}`,
+    },
+    acted: drained || settingsRewritten || agentTornDown,
+  }
+}
+
+/** The production step: the REAL seams, the shared decision body. */
+const stepSpoolMigration: StepDef = {
+  name: 'spool-migration',
+  async run(ctx) {
+    return runSpoolMigration(ctx, realSpoolDeps())
+  },
 }
 
 // ── Steps ───────────────────────────────────────────────────────────────────────────────────
@@ -1071,7 +1367,7 @@ function printDetection(ctx: Ctx): void {
 
 // ── Runner ──────────────────────────────────────────────────────────────────────────────────
 
-const STEPS: StepDef[] = [stepEnvironment, stepData, stepHooks, stepSkill, stepOtel, stepOldPackage, stepServer, stepSelfTest]
+const STEPS: StepDef[] = [stepEnvironment, stepData, stepSpoolMigration, stepHooks, stepSkill, stepOtel, stepOldPackage, stepServer, stepSelfTest]
 
 export async function runSetup(opts: SetupOptions = {}): Promise<SetupOutcome> {
   const ctx = resolveCtx(opts)
