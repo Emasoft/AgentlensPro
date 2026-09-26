@@ -4,7 +4,7 @@ title: Drain and boot become measurable and bounded — timestamped chore lines,
 column: todo
 status: tasked
 created: 2026-09-27T00:24:10+0200
-updated: 2026-09-27T00:24:18+0200
+updated: 2026-09-27T00:28:57+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: infra
@@ -47,3 +47,7 @@ ACCEPTANCE:
 
 - 2026-09-27T00:24:10+0200 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-09-27T00:24:18+0200 — column → todo by main-agent@agentlenspro. owner directive: resilience + measurability; D1 is prerequisite measurement for 2JOIAH2G R2
+
+## Review amendments (gate round 1, 2026-09-27, applied)
+
+AMENDMENTS from the gate review (findings F4/F5 applied here): F4 — D3's mutation check was INVERTED as written (guard-off produces zero cap lines, which the 'zero RSS HARD CAP lines' assertion scores as PASS — the test could never catch the thing it exists to catch). The discriminating mutation is the FIX, not the guard: run the backlog scenario with the purge fix REVERTED (or AGENTLENS_RSS_HARD_CAP_MB=256 for a forced-breach arm) and assert cap exits/kills APPEAR; with the fix, none. F5 — D2 promised a collapse the verbs cannot perform: a fifth lesson anchored on Y2TV adds a FOURTH supersedes pointer (deepening the fan-out) and retires none of LN86/2JW2/NSSD/O9EN (lesson footnotes are unreachable by every write verb). The achievable collapse: one new lesson carrying the measured number + a page-description update via memgrep update-mem-topic so the RECALL SURFACE itself points at the truth; the fan-out itself goes to the maintainer proposal already recorded in O9EN. F7 (from the shared review) — line-number citations rot; function names carry the meaning.

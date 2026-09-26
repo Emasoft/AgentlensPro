@@ -4,7 +4,7 @@ title: alcore crash-loops under the RSS cap because the ingest pass and boot chu
 column: todo
 status: tasked
 created: 2026-09-27T00:23:04+0200
-updated: 2026-09-27T00:23:27+0200
+updated: 2026-09-27T00:28:42+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -42,3 +42,7 @@ RELATED: TRDD-563B8WYH (the discovery card, measurements live there), TRDD-5JZQF
 
 - 2026-09-27T00:23:04+0200 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-09-27T00:23:27+0200 — column → todo by main-agent@agentlenspro. owner directive 2026-09-26: fix the crashes, verified facts in body
+
+## Review amendments (gate round 1, 2026-09-27, applied)
+
+AMENDMENTS from the gate review of this card + DX8PYPLO (verdict KEEP, findings F1/F3/F6/F7 applied here): F1 — the kills fire during BOOT churn (median uptime 296 s, min 26 s) but R2/R3(a) bound only the PASS; required before implementation: (i) classify the 236 kills by phase from the existing log, (ii) measure boot-phase footprint peak before/after R1, (iii) if boot dominates, add R5 bound-boot-scan-memory (chunk the transcript parse, the RESTORE_CHUNK precedent from TRDD-5JZQFVO8). F3 — R1's injection point is the SPAWN ENV in src/cli/serverControl.ts (mimalloc reads options at first allocation; std::env::set_var in main races pre-main allocations and can be a no-op); measure a NONZERO purge delay against the plateau before pinning 0 (delay 0 maximizes OS page churn). F6 — R3(a) is safe only after R2's bound is real and test-asserted (ordering R2 before R3(a)), and the suppression needs a deadline: a pass wedged on the lock must not disable the cap indefinitely. F7 — the acceptance item 'the 236-kill loop does not recur' carries the same monitored-window bound as the zero-exits item. STEP 0 (owner-gated, from F2): AGENTLENS_RSS_HARD_CAP_MB already exists (rss_guard.rs rss_hard_cap_bytes; non-positive/unparseable falls back to 2048), so a spawn-env 3072 is a zero-code interim mitigation that could restore ingestion TODAY while 568 MB of bodies queue — but the 2048 default is itself an owner directive, so this lands only on the owner's explicit nod.
