@@ -3128,9 +3128,9 @@ async fn handle(
                                 agentlens_logscan::discovery::claude_projects_dirs(&st.log_env),
                             )
                         };
-                        // The full multi-dir scope (captureConfig.resolveBodiesReadScope): during a
-                        // drain the live spool AND the legacy dir both hold bodies, so reading one
-                        // under-counts and windowEstCostUsd comes back low.
+                        // The multi-dir scope (captureConfig.resolveBodiesReadScope): one dir
+                        // since TRDD-Z53IJFE9 step D (the RAM-disk spool is gone), but the list
+                        // shape is kept so `missing` can name unreadable dirs.
                         let scope = crate::burn::guard::resolve_bodies_read_scope(&data_dir, &std::env::vars().collect());
                         let opts = crate::burn::investigator_scan::InvestigateOptions {
                             scope: crate::burn::investigator_scan::BodiesScope {

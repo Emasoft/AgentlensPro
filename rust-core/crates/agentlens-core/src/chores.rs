@@ -193,16 +193,9 @@ pub fn staged_body_bytes(dir: &Path) -> u64 {
 /// ingestion is memory-heavy — the prior art in this repo is an unbounded boot sweep driving RSS
 /// to 5.4GB. `max_bytes_per_pass` is what bounds it, which is why it is passed explicitly below
 /// rather than left to the default.
-///
-/// (An earlier paragraph here justified draining a SINGLE target because "alcore binds 4319, not
-/// the TS's 4318 spool gate". That was false the day alcore became the live server on 4318, and
-/// the drain below has since moved to every dir in `resolve_bodies_read_scope` — TRDD-5PUD8RKE /
-/// TRDD-ZW4APOPI. The justification is removed rather than left to outlive the code it excused.)
 /// How many throttled `ingest_pass` calls one tick may chain per dir before yielding. Bounds the
 /// time the store lock is held and the blocking-pool thread is occupied; the next tick resumes
 /// where this one stopped, so a backlog larger than this still drains, just over several ticks.
-/// Sized against the measured recovery: ~2GB took ~5 passes, so 16 clears a full 2GB spool in one
-/// tick with margin.
 const DRAIN_MAX_PASSES: usize = 16;
 
 /// B-1 (TRDD-Z53IJFE9 step B, advisor verdict): the fsync barrier's "already durable" set, kept
@@ -224,23 +217,13 @@ pub fn bodies_pass(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
         let Ok(st) = state.lock_timed() else { return };
         st.data_dir.clone()
     };
-    // EVERY configured bodies dir, SPOOL FIRST — not just the legacy one. This chore used to
-    // hardcode `data_dir.join("otel-bodies")`, which meant the RAM-disk spool had NO drain at all
-    // under alcore while the TS drained both (server.ts:620-625). Measured consequence
-    // (TRDD-ZW4APOPI): the 2GB spool sat 100% full for ~18h and Claude Code wrote 117 request
-    // bodies as ZERO BYTES — silent, size-dependent loss, because a ~867KB request cannot land on
-    // a full disk while a ~1KB response still fits in the slack.
-    //
-    // The old comment justified the hardcode by saying the TS gated its two-dir drain on
-    // `OTLP_PORT === 4318`. It never did: `SPOOL_MODE` is `CAPTURE_ON && spoolDirConfigured`
-    // (server.ts:588-600), no port anywhere. So the gap was never about which port we bind.
-    let legacy_dir = data_dir.join("otel-bodies");
+    // The ONE bodies dir, `<data>/otel-bodies` — capture writes straight to it (TRDD-Z53IJFE9
+    // step D removed the RAM-disk spool that this chore used to drain alongside it, and with the
+    // spool went the free-space back-pressure valve: it existed to relieve a 2GB RAM disk that
+    // filled in minutes, a hazard the SSD dir does not have — `bodiesMaxGb`'s over-cap valve
+    // below still guards it).
     let scope = crate::burn::guard::resolve_bodies_read_scope(&data_dir, &std::env::vars().collect());
 
-    // Spool free-space back-pressure (TRDD-5PUD8RKE box 3, port of spoolBackpressure.ts's
-    // checkSpoolCapacity/applySpoolBackpressure). Only meaningful when capture is on AND a spool
-    // is configured — same SPOOL_MODE gate the TS uses. `free_disk_bytes` fails open (None), so a
-    // transient statvfs hiccup never falsely reports pressure.
     if scope.capture_on {
         // server.ts:818-823 — the sink precondition, once per pass tick, warnings on TRANSITIONS
         // only (a per-tick repeat is filtered out by the day it matters). TRDD-U0L78B3Z.
@@ -252,18 +235,6 @@ pub fn bodies_pass(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
                     None => eprintln!("alcore: bodies sink precondition recovered"),
                 }
                 st.sink_problem = problem;
-            }
-        }
-        if let Some(spool_dir) = crate::burn::guard::spool_dir_configured(&data_dir) {
-            let vars: std::collections::HashMap<String, String> = std::env::vars().collect();
-            let floor = crate::spool_backpressure::spool_floor_bytes(&vars);
-            let free = crate::server_stats::free_disk_bytes(&spool_dir);
-            let over = crate::spool_backpressure::over_capacity(free, floor);
-            if let Ok(mut st) = state.lock_timed() {
-                let (active, spills) =
-                    crate::spool_backpressure::tick(over, st.persist.spool_backpressure_active, st.persist.spool_backpressure_spills);
-                st.persist.spool_backpressure_active = active;
-                st.persist.spool_backpressure_spills = spills;
             }
         }
     }
@@ -286,10 +257,6 @@ pub fn bodies_pass(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
     let store_dir = data_dir.join("store");
 
     let max_gb = crate::retention_config::resolve_knob(&data_dir, &crate::retention_config::BODIES_MAX_GB);
-    // bodiesMaxAgeHours is kept resolvable (step D removes the knob) but no longer feeds the SSD
-    // dir's age gate below — B-2 replaces the 72h batching wait with a flat 10s cutoff, so this
-    // value has no reader left in this tick until step D deletes the knob.
-    let _max_age_hours = crate::retention_config::resolve_knob(&data_dir, &crate::retention_config::BODIES_MAX_AGE_HOURS);
     let cap_bytes = (max_gb * 1024.0 * 1024.0 * 1024.0) as u64;
 
     // The lock spans load → ingest → save. Narrowing it to the ingest alone lets two engines
@@ -346,15 +313,13 @@ pub fn bodies_pass(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
         // `ingest_pass` is THROTTLED BY DESIGN — it returns `throttled: true` when it stopped at
         // `max_bytes_per_pass` with work left. One call per tick is therefore not a drain: it is a
         // nibble, and a producer faster than one nibble per interval wins forever. Keep passing
-        // until the dir reports empty, which is what makes "the spool is emptied when telemetry
-        // slows" true rather than aspirational (TRDD-5YL1OQV1).
+        // until the dir reports empty (TRDD-5YL1OQV1).
         //
         // ponytail: bounded at DRAIN_MAX_PASSES so one enormous backlog cannot monopolise the
         // blocking pool or hold the store lock for an unbounded time — the next tick resumes it.
         for _ in 0..DRAIN_MAX_PASSES {
             // Re-evaluated per pass: draining changes the staged size, and a dir that starts over
             // cap should stop draining at age 0 once it is back under.
-            let is_spool = *bodies_dir != legacy_dir;
             let over_cap = staged_body_bytes(bodies_dir) > cap_bytes;
             any_over_cap |= over_cap;
             let opts = agentlens_store::pass::PassOptions {
@@ -364,19 +329,9 @@ pub fn bodies_pass(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
                 // drain and the dir grows without bound while the pass politely skips every file
                 // that is not old enough yet.
                 //
-                // THE SPOOL IS ALWAYS AGE 0, and this is the second half of the ZW4APOPI fix —
-                // without it, pointing the drain at the spool still would not have drained it.
-                // The defaults are `bodiesMaxAgeHours: 72` and `bodiesMaxGb: 8`, but the spool is a
-                // 2GB RAM disk: it can NEVER exceed an 8GB cap, so the emergency valve above can
-                // never fire for it, and every body would wait 72h on a disk that fills in ~7 at
-                // the measured ~5MB/min. The age threshold exists to BATCH ingest on a durable dir
-                // where waiting is free; on a volatile RAM disk waiting is the whole defect —
-                // bodies sitting there are one reboot from gone, and the space they hold is the
-                // space the next write needs. So: drain the spool on sight.
-                //
-                // B-2 (TRDD-Z53IJFE9 step B, advisor verdict): the legacy/SSD dir no longer waits
-                // out `bodiesMaxAgeHours` (72h default) to batch — it is the only durable capture
-                // dir now, so batching for free disk space no longer applies. `max_age_ms: 10_000`
+                // B-2 (TRDD-Z53IJFE9 step B, advisor verdict): the SSD dir does not wait out
+                // `bodiesMaxAgeHours` (72h default) to batch — it is the only durable capture
+                // dir, so batching for free disk space no longer applies. `max_age_ms: 10_000`
                 // is a small non-zero cutoff instead of 0: `ingest_pass`'s parse gate already keeps
                 // (never deletes) a file that fails to parse and re-tries it next tick
                 // (`pass.rs::ingest_body` → `sectionize`), and `verify_bodies_in_store_cached`
@@ -384,15 +339,11 @@ pub fn bodies_pass(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
                 // and verify fails verify and converges through re-ingest — no cross-tick
                 // size/mtime tracker is needed. 10s just keeps a body captured mid-write off the
                 // per-tick `failed N` log line; it costs nothing on an SSD dir already durable.
-                max_age_ms: if is_spool || over_cap { 0 } else { 10_000 },
+                max_age_ms: if over_cap { 0 } else { 10_000 },
                 max_bytes_per_pass,
-                // Only the LEGACY dir is a durable source (the TS target carries `durable: true`),
-                // which gates the fsync barrier inside the pass: there IS something durable about
-                // that source to protect. The RAM spool is volatile by design, so it takes no
-                // barrier — matching the TS's own per-target `durable` flag, which
-                // `resolve_bodies_read_scope` does not carry and which must not be applied
-                // uniformly to every dir.
-                durable_source: !is_spool,
+                // The SSD dir is a durable source (the TS target carries `durable: true`), which
+                // gates the fsync barrier inside the pass.
+                durable_source: true,
                 ..Default::default()
             };
             let res = agentlens_store::pass::ingest_pass(&mut store, &opts, &mut skip, &mut stranded, &mut fsynced);
@@ -570,14 +521,9 @@ pub fn spawn_all(rt: &tokio::runtime::Runtime, state: Arc<Mutex<CoreState>>) {
         }
     });
 
-    // The bodies pass (server.ts:853). ALWAYS 60s now (TRDD-Z53IJFE9 step B): the RAM-disk spool
-    // is going away, and the legacy/SSD dir is the only durable capture target left, so it gets the
-    // same continuous drain the spool used to get alone — an hourly timer cannot guard a growing
-    // SSD dir any more than it could guard a 2GB RAM disk (measured going 162MB -> 1.4MB free in
-    // ~2 minutes from ONE subagent, spoolBackpressure.ts). The old `spool_dir_configured(&d)`
-    // gate that only sped this up when a spool existed is gone from THIS interval choice (the
-    // spool back-pressure valve inside `bodies_pass` itself is unrelated and still reads that
-    // config, out of scope here — step D deletes it along with the rest of the spool code).
+    // The bodies pass (server.ts:853). ALWAYS 60s (TRDD-Z53IJFE9 step B): the SSD dir is the only
+    // durable capture target, and it gets the continuous drain — an hourly timer cannot guard a
+    // growing SSD dir (measured going 162MB -> 1.4MB free in ~2 minutes from ONE subagent).
     // On the blocking pool — a pass runs DuckDB ingestion and byte-for-byte reconstruction.
     let s = state.clone();
     let bodies_interval: u64 = 60;

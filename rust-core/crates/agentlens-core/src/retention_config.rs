@@ -20,15 +20,13 @@ pub struct Knob {
 
 pub const SPANS_RETENTION_DAYS: Knob = Knob { key: "spansRetentionDays", env: "AGENTLENS_SPANS_RETENTION_DAYS", def: 30.0, min: 1.0 };
 pub const SUMMARY_WINDOW_HOURS: Knob = Knob { key: "summaryWindowHours", env: "AGENTLENS_SUMMARY_WINDOW_HOURS", def: 24.0, min: 1.0 };
-pub const BODIES_MAX_AGE_HOURS: Knob = Knob { key: "bodiesMaxAgeHours", env: "AGENTLENS_BODIES_MAX_AGE_HOURS", def: 72.0, min: 1.0 };
 pub const BODIES_MAX_GB: Knob = Knob { key: "bodiesMaxGb", env: "AGENTLENS_BODIES_MAX_GB", def: 8.0, min: 0.5 };
 pub const BODIES_RETENTION_DAYS: Knob = Knob { key: "bodiesRetentionDays", env: "AGENTLENS_BODIES_RETENTION_DAYS", def: 31.0, min: 1.0 };
 pub const LOG_EVENTS_RETENTION_DAYS: Knob = Knob { key: "logEventsRetentionDays", env: "AGENTLENS_LOG_EVENTS_RETENTION_DAYS", def: 31.0, min: 1.0 };
 
-pub const RETENTION_META: [&Knob; 6] = [
+pub const RETENTION_META: [&Knob; 5] = [
     &SPANS_RETENTION_DAYS,
     &SUMMARY_WINDOW_HOURS,
-    &BODIES_MAX_AGE_HOURS,
     &BODIES_MAX_GB,
     &BODIES_RETENTION_DAYS,
     &LOG_EVENTS_RETENTION_DAYS,

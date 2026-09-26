@@ -12,7 +12,6 @@ import * as path from 'path'
 export interface RetentionConfig {
   spansRetentionDays?: number
   summaryWindowHours?: number
-  bodiesMaxAgeHours?: number
   bodiesMaxGb?: number
   bodiesRetentionDays?: number
   logEventsRetentionDays?: number
@@ -32,7 +31,6 @@ export interface RetentionKeyMeta {
 export const RETENTION_META: readonly RetentionKeyMeta[] = [
   { key: 'spansRetentionDays',  env: 'AGENTLENS_SPANS_RETENTION_DAYS',  def: 30, min: 1,   unit: 'days',  desc: 'span segments (the trace DB) kept on disk' },
   { key: 'summaryWindowHours',  env: 'AGENTLENS_SUMMARY_WINDOW_HOURS',  def: 24, min: 1,   unit: 'hours', desc: 'in-memory rolling summary window' },
-  { key: 'bodiesMaxAgeHours',   env: 'AGENTLENS_BODIES_MAX_AGE_HOURS',  def: 72, min: 1,   unit: 'hours', desc: 'raw OTEL bodies kept as plain files before archiving' },
   { key: 'bodiesMaxGb',         env: 'AGENTLENS_BODIES_MAX_GB',         def: 8,  min: 0.5, unit: 'GB',    desc: 'live-bodies size cap (archives oldest-first; never deletes)' },
   { key: 'bodiesRetentionDays', env: 'AGENTLENS_BODIES_RETENTION_DAYS', def: 31, min: 1,   unit: 'days',  desc: 'archived OTEL bodies kept before whole-volume deletion' },
   // TRDD-AMEA4O4Z: gated-out OTEL log events (user_prompt, tool_decision, hook_execution_*, ...)

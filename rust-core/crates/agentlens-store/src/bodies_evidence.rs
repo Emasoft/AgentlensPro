@@ -45,7 +45,9 @@ pub struct EvidenceRow {
     pub raw_bytes: f64,
     /// "request" | "response".
     pub kind: String,
-    /// "store" | "spool".
+    /// "store" | "spool" — the "spool" value is a HISTORICAL WIRE TAG kept for TS parity
+    /// (bodiesEvidence.ts still emits/reads it, TRDD-Z53IJFE9 step D); the RAM-disk spool
+    /// itself is gone and no live capture dir produces it.
     pub location: String,
 }
 

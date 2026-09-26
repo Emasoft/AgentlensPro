@@ -45,11 +45,6 @@ pub struct PersistStats {
     /// Row 5: samples accepted into the statusline store (both routes — the dedicated endpoint
     /// and the legacy hook-events divert).
     pub statusline_samples: u64,
-    /// spool_backpressure::tick's transition count — how many times the RAM-disk spool has
-    /// crossed into its back-pressure floor since boot.
-    pub spool_backpressure_spills: u64,
-    /// spool_backpressure::tick's current reading — is the spool over its floor RIGHT NOW.
-    pub spool_backpressure_active: bool,
 }
 
 /// The bound listeners (server.ts UI_PORT / MCP_PORT / OTLP_PORT). All three are now really
@@ -217,10 +212,8 @@ pub fn archive_disk_usage(dir: &Path) -> (u64, u64, u64) {
     (volumes, bytes, entries)
 }
 
-/// src/bodyArchive.ts `liveBodiesLiveness`, generalized over every readable capture dir (spool +
-/// legacy — `burn::guard::resolve_bodies_read_scope`) rather than the TS's single
-/// `PRIMARY_BODIES_DIR`: alcore has both dirs live during a spool drain and the TS's single-dir
-/// read would under-count exactly then. `newestMs` is `None` for an empty/absent scope — an
+/// src/bodyArchive.ts `liveBodiesLiveness`, generalized over the readable capture dirs from
+/// `burn::guard::resolve_bodies_read_scope`. `newestMs` is `None` for an empty/absent scope — an
 /// ABSENT reading, never 0, which would render as "captured just now" (TRDD-ZIWEB0UW).
 pub fn live_bodies_liveness(dirs: &[std::path::PathBuf]) -> (u64, Option<f64>) {
     let (mut files, mut newest_ms) = (0u64, None::<f64>);
@@ -366,126 +359,6 @@ pub fn resource_sample(data_dir: &Path) -> Value {
     let load_per_core = load1 / cpu_count as f64;
     let free_disk_mb = free_disk_bytes(data_dir).map(|b| num(b as f64 / 1_048_576.0)).unwrap_or(Value::Null);
     json!({ "rssMb": num(rss_mb), "loadPerCore": num(load_per_core), "freeDiskMb": free_disk_mb, "cpuCount": cpu_count })
-}
-
-/// `bodies.spool` (TRDD-ZW4APOPI box 3): the RAM-disk spool as an operator would read it with
-/// `df` + `ls`, so "the spool is 100% full and capture is silently losing bodies" is visible in
-/// `/api/server-stats` instead of needing a shell on the box. `null` when no spool is configured
-/// (the legacy single-dir install).
-///
-/// TWO booleans, because "the path exists" is NOT "the RAM disk is there" (adversarial review):
-/// the configured path sits INSIDE the mount (`/Volumes/AgentLensSpool/otel-bodies`), and after
-/// a reboot, an unclean eject, or a leaked twin mount (`/Volumes/AgentLensSpool 1` appears only
-/// when the primary path was already OCCUPIED at attach time) it can resolve to a plain
-/// directory on the boot volume — then a path check reports a healthy spool with the SSD's
-/// terabyte of free space while bodies land on the disk the spool exists to protect. The
-/// discriminator is a MOUNT BOUNDARY ON THE PATH: `ownVolume` is true when some `child/parent`
-/// pair on the way from the dir up to `/` sits on different device ids, with the pair at `/`
-/// itself excluded (on macOS `/` ↔ the Data volume is a firmlink, not a spool). Not "a different
-/// device from the data dir": that reads right only while `DATA_DIR` shares the boot volume's
-/// Data side, and misreads the same plain directory as a volume the moment the data dir is moved
-/// to another disk (second review). `exists: false` is the `spool ensure` LaunchAgent's case. Free/total are `null` when statvfs cannot answer,
-/// never a fabricated 0 (a 0 here would read as "full"); they are `df`'s Size and Avail columns
-/// (`f_blocks`/`f_bavail` × `f_frsize`). Back-pressure figures are the chore's own controller
-/// state, passed in. `files` and `stagedBytes` use the same `*.request.json`/`*.response.json`
-/// filter (`live_bodies_liveness` / `staged_body_bytes`), so the two never disagree over a
-/// half-written temp file.
-pub fn spool_gauge(data_dir: &Path, backpressure_active: bool, backpressure_spills: u64) -> Value {
-    let Some(dir) = crate::burn::guard::spool_dir_configured(data_dir) else { return Value::Null };
-    let exists = std::fs::metadata(&dir).is_ok_and(|m| m.is_dir());
-    let own_volume = exists && has_mount_boundary_below_root(&dir);
-    let (files, staged_bytes, free, total) = if exists {
-        let (files, _) = live_bodies_liveness(std::slice::from_ref(&dir));
-        (files, crate::chores::staged_body_bytes(&dir), free_disk_bytes(&dir), total_disk_bytes(&dir))
-    } else {
-        (0, 0, None, None)
-    };
-    let vars: std::collections::HashMap<String, String> = std::env::vars().collect();
-    json!({
-        "dir": dir.to_string_lossy(),
-        "exists": exists,
-        "ownVolume": own_volume,
-        "files": files,
-        "stagedBytes": staged_bytes,
-        "freeBytes": free.map(|b| json!(b)).unwrap_or(Value::Null),
-        "totalBytes": total.map(|b| json!(b)).unwrap_or(Value::Null),
-        "floorBytes": crate::spool_backpressure::spool_floor_bytes(&vars),
-        "backpressure": { "active": backpressure_active, "spills": backpressure_spills },
-    })
-}
-
-/// The device id a path lives on (`st_dev`); None when it cannot be stat'ed. Two paths on
-/// different ids are on different volumes — the only honest "is this a mount" a userland reader
-/// has without parsing `mount`.
-fn device_id(path: &Path) -> Option<u64> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        std::fs::metadata(path).ok().map(|m| m.dev())
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = path;
-        None
-    }
-}
-
-/// Is there a mount boundary on the way from `dir` up to `/`? Walks `child → parent` comparing
-/// device ids. The dir is canonicalized first: `parent()` is lexical while `metadata()` follows
-/// links, so a symlinked intermediate pointing OUTSIDE the mount would otherwise pair a Data-volume
-/// child with a RAM-disk parent and fabricate a boundary (review). The ONE pair skipped is a
-/// child directly under `/` whose device is the macOS Data volume's (`/System/Volumes/Data`) —
-/// the root ↔ Data firmlink, not a mount. It is anchored on a MEASURED id, not on "parent is
-/// `/`": on the reference box `/`, `/System/Volumes/Data`, `/Users` and `/Volumes` all report
-/// one device, so a blanket skip there guarded nothing and would have hidden a mount placed
-/// directly under `/` (`hdiutil attach -mountpoint /spool`, a Linux `/ramdisk` — the product's
-/// own `spool ensure` mounts under `/Volumes/<name>`, so that is a hand-edited config, but it
-/// must still read true). On Linux the Data path does not exist ⇒ nothing is ever skipped.
-/// The guard has never been OBSERVED to fire: both GNU and BSD `stat` report one id for `/`
-/// and `/System/Volumes/Data` on the reference box even though `df` names two device nodes,
-/// i.e. the kernel presents the volume group as one st_dev there; it stays because it is
-/// correct in both worlds and costs one stat. An unreadable parent reads as no boundary — an
-/// unknown must never report a spool that is not there.
-fn has_mount_boundary_below_root(dir: &Path) -> bool {
-    let data_volume = device_id(Path::new("/System/Volumes/Data"));
-    let mut child = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
-    while let Some(parent) = child.parent() {
-        if parent.as_os_str().is_empty() {
-            return false;
-        }
-        match (device_id(&child), device_id(parent)) {
-            (Some(a), Some(b)) if a != b => {
-                if parent == Path::new("/") && Some(a) == data_volume {
-                    return false;
-                }
-                return true;
-            }
-            (Some(_), Some(_)) => {}
-            _ => return false,
-        }
-        child = parent.to_path_buf();
-    }
-    false
-}
-
-/// statvfs(path): blocks × frsize — the volume's size, the denominator `df` prints; None when unknown.
-pub fn total_disk_bytes(path: &Path) -> Option<u64> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::ffi::OsStrExt;
-        let c = std::ffi::CString::new(path.as_os_str().as_bytes()).ok()?;
-        let mut st: libc::statvfs = unsafe { std::mem::zeroed() };
-        // SAFETY: valid NUL-terminated path, zeroed out-struct.
-        if unsafe { libc::statvfs(c.as_ptr(), &mut st) } != 0 {
-            return None;
-        }
-        Some(st.f_blocks as u64 * st.f_frsize as u64)
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = path;
-        None
-    }
 }
 
 /// statvfs(dataDir): bavail × frsize (Node's statfsSync bavail × bsize); None when unknown.
@@ -662,8 +535,6 @@ pub fn server_stats(st: &CoreState, now_ms: i64) -> Value {
             "statuslineSamples": p.statusline_samples,
             "gateChecks": p.gate_checks, "gateDenies": p.gate_denies, "gateWarns": p.gate_warns, "gateAdvisories": p.gate_advisories,
             "bodiesLastPurge": { "at": 0, "removedFiles": 0, "freedBytes": 0, "keptFiles": 0, "keptBytes": 0 },
-            "spoolBackpressureSpills": p.spool_backpressure_spills,
-            "spoolBackpressureActive": p.spool_backpressure_active,
             "totalBytesWritten": p.span_append_bytes + p.offsets_bytes + p.cards_bytes + p.hook_event_bytes,
             "files": { "spans": total_bytes, "offsets": offsets_bytes_on_disk, "cards": cards_bytes_on_disk },
         },
@@ -684,9 +555,6 @@ pub fn server_stats(st: &CoreState, now_ms: i64) -> Value {
                 Some((files, bytes, on_disk)) => json!({ "files": files, "bytes": bytes, "onDisk": on_disk }),
                 None => Value::Null,
             },
-            // TRDD-ZW4APOPI box 3: null only when no spool is configured; a configured path that
-            // is absent, or present but NOT its own volume, is reported as such (see `spool_gauge`).
-            "spool": spool_gauge(data_dir, p.spool_backpressure_active, p.spool_backpressure_spills),
         },
         "hookEvents": { "files": hook_files, "bytes": hook_bytes, "receivedSinceBoot": p.hook_event_writes, "spooled": hook_spooled },
         "statusline": {
@@ -831,60 +699,5 @@ mod capture_block_tests {
 
         std::fs::remove_dir_all(&store_dir).ok();
         std::fs::remove_dir_all(&live_dir).ok();
-    }
-
-    /// TRDD-ZW4APOPI box 3: `bodies.spool` must distinguish "no spool configured" (null) from
-    /// "configured but absent" from "present but a plain directory on the data volume" from a
-    /// live spool with real file/byte/df figures — a stub returning null always (what shipped)
-    /// passed every same-shape check while the RAM disk sat at 100%, and a path-exists check
-    /// would pass the leaked-twin-mount case with the boot volume's figures.
-    #[test]
-    fn spool_gauge_null_absent_same_volume_and_live_are_different_answers() {
-        let data_dir = std::env::temp_dir().join(format!("alcore-spool-gauge-{}", std::process::id()));
-        let spool = data_dir.join("spool");
-        std::fs::create_dir_all(&data_dir).unwrap();
-
-        // No config ⇒ no spool ⇒ null, the legacy single-dir install.
-        assert!(spool_gauge(&data_dir, false, 0).is_null());
-
-        // Configured but the dir is gone (a reboot dropped the RAM disk): its own state, no numbers.
-        std::fs::write(
-            data_dir.join("config.json"),
-            format!(r#"{{"capture":{{"spoolDir":"{}"}}}}"#, spool.to_string_lossy()),
-        )
-        .unwrap();
-        let g = spool_gauge(&data_dir, true, 3);
-        assert_eq!(g["exists"], false);
-        assert_eq!(g["ownVolume"], false);
-        assert_eq!(g["files"], 0);
-        assert!(g["freeBytes"].is_null() && g["totalBytes"].is_null(), "never a fabricated 0 for an absent volume");
-        assert_eq!(g["backpressure"]["active"], true);
-        assert_eq!(g["backpressure"]["spills"], 3);
-
-        // Present with one body — but a plain temp directory with no mount boundary below `/` on
-        // its path, which is exactly the lying case: the path exists, the df figures are the temp
-        // volume's, and `ownVolume` must say so. (A real RAM disk at /Volumes/<name>/… reads
-        // `ownVolume: true`: measured live, /Volumes/AgentLensSpool dev 16777285 vs /Volumes
-        // 16777234.)
-        std::fs::create_dir_all(&spool).unwrap();
-        std::fs::write(spool.join("a.request.json"), b"12345").unwrap();
-        let g = spool_gauge(&data_dir, false, 3);
-        assert_eq!(g["exists"], true);
-        // Not a literal `false`: that would assert the RUNNER's layout (a tmpfs `$TMPDIR` on a
-        // Linux box is legitimately its own volume). The spool here is a plain subdirectory of
-        // the data dir, so it is exactly as much its own volume as the data dir is — and a
-        // reverted path-exists `ownVolume` still fails this on macOS (true vs the data dir's false).
-        assert_eq!(
-            g["ownVolume"],
-            has_mount_boundary_below_root(&data_dir),
-            "a plain subdirectory of the data dir is its own volume iff the data dir is"
-        );
-        assert_eq!(g["files"], 1);
-        assert_eq!(g["stagedBytes"], 5);
-        assert!(g["freeBytes"].as_u64().is_some() && g["totalBytes"].as_u64().is_some());
-        assert!(g["totalBytes"].as_u64() >= g["freeBytes"].as_u64());
-        assert_eq!(g["floorBytes"], crate::spool_backpressure::DEFAULT_SPOOL_FLOOR_BYTES);
-
-        std::fs::remove_dir_all(&data_dir).ok();
     }
 }

@@ -3,6 +3,8 @@
 //! Native, not oracle-driven: the answer is a function of what is on disk, and the TS has no seam
 //! that would let a fixture pin it. PID-and-tag-scoped temp dirs — cargo runs these as parallel
 //! threads in ONE process, so a PID-only path would let siblings delete each other's fixtures.
+//! TRDD-Z53IJFE9 step D removed the RAM-disk spool: there is exactly ONE candidate dir
+//! (`<data>/otel-bodies`), so the spool-first/dedup/absent-scope cases are retired with it.
 
 use std::collections::HashMap;
 
@@ -31,61 +33,21 @@ fn with_no_spool_the_scope_is_the_legacy_dir_alone() {
     let s = resolve_bodies_read_scope(&d, &no_vars());
     assert_eq!(s.dirs, vec![d.join("otel-bodies")]);
     assert!(s.missing.is_empty());
-    assert!(!s.spool_configured);
     assert_eq!(default_bodies_dir(&d), d.join("otel-bodies"), "the single-dir reader agrees");
 
     let _ = std::fs::remove_dir_all(&d);
 }
 
-/// THE CASE B3 EXISTS FOR. Mid-drain both dirs hold bodies; a reader that sees one under-counts,
-/// and `windowEstCostUsd` comes back low. Order is load-bearing too: the spool comes FIRST, so
-/// `default_bodies_dir` (which takes dirs[0]) picks the LIVE dir rather than a legacy one that is
-/// empty on any install redirecting bodies to a spool — reading that empty dir reports "no risk".
+/// An ABSENT bodies dir is MISSING, not dropped: the report can then say it could not read it,
+/// instead of implying the scope was empty.
 #[test]
-fn during_a_drain_both_the_spool_and_the_legacy_dir_are_in_scope_spool_first() {
-    let d = tmp("drain");
-    let spool = d.join("spool-bodies");
-    std::fs::create_dir_all(&spool).unwrap();
-    std::fs::create_dir_all(d.join("otel-bodies")).unwrap();
-    write_config(&d, &format!(r#"{{"capture":{{"spoolDir":"{}"}}}}"#, spool.to_string_lossy()));
+fn an_absent_bodies_dir_is_reported_missing_not_dropped() {
+    let d = tmp("absent");
+    std::fs::create_dir_all(&d).unwrap();
 
     let s = resolve_bodies_read_scope(&d, &no_vars());
-    assert_eq!(s.dirs, vec![spool.clone(), d.join("otel-bodies")], "BOTH dirs, spool first");
-    assert!(s.missing.is_empty());
-    assert!(s.spool_configured);
-    assert_eq!(default_bodies_dir(&d), spool, "the single-dir reader takes the LIVE spool");
-
-    let _ = std::fs::remove_dir_all(&d);
-}
-
-/// A configured-but-absent spool is MISSING, not silently forgotten: the report can then say it
-/// could not read it, instead of implying the legacy dir was the whole picture.
-#[test]
-fn a_configured_but_absent_spool_is_reported_missing_not_dropped() {
-    let d = tmp("absent-spool");
-    let spool = d.join("not-mounted");
-    std::fs::create_dir_all(d.join("otel-bodies")).unwrap();
-    write_config(&d, &format!(r#"{{"capture":{{"spoolDir":"{}"}}}}"#, spool.to_string_lossy()));
-
-    let s = resolve_bodies_read_scope(&d, &no_vars());
-    assert_eq!(s.dirs, vec![d.join("otel-bodies")]);
-    assert_eq!(s.missing, vec![spool], "named, so coverage can report the blind spot");
-    assert!(s.spool_configured, "configured is not the same question as readable");
-
-    let _ = std::fs::remove_dir_all(&d);
-}
-
-/// A spool pointing AT the legacy dir must not scan it twice — the TS dedupes with a Set, and a
-/// double-counted dir would double every byte total built from this scope.
-#[test]
-fn a_spool_equal_to_the_legacy_dir_is_deduped() {
-    let d = tmp("dedupe");
-    let legacy = d.join("otel-bodies");
-    std::fs::create_dir_all(&legacy).unwrap();
-    write_config(&d, &format!(r#"{{"capture":{{"spoolDir":"{}"}}}}"#, legacy.to_string_lossy()));
-
-    let s = resolve_bodies_read_scope(&d, &no_vars());
-    assert_eq!(s.dirs, vec![legacy], "one entry, not two");
+    assert!(s.dirs.is_empty());
+    assert_eq!(s.missing, vec![d.join("otel-bodies")], "named, so coverage can report the blind spot");
 
     let _ = std::fs::remove_dir_all(&d);
 }
@@ -100,7 +62,6 @@ fn a_corrupt_config_falls_back_to_the_legacy_dir() {
 
     let s = resolve_bodies_read_scope(&d, &no_vars());
     assert_eq!(s.dirs, vec![d.join("otel-bodies")]);
-    assert!(!s.spool_configured);
 
     let _ = std::fs::remove_dir_all(&d);
 }
