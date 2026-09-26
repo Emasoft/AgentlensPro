@@ -8,7 +8,10 @@ All notable changes to AgentlensPro are documented here.
 
 ### Changed
 
-- **The RAM-disk body spool is removed completely (TRDD-Z53IJFE9).** Raw API bodies now write
+- **BREAKING: the RAM-disk body spool is removed completely (TRDD-Z53IJFE9).** The `agentlenspro
+  spool` CLI verb, the `bodiesMaxAgeHours` config knob, the `AGENTLENS_BODIES_MAX_AGE_HOURS` env
+  var, and the `summary.bodies.spool` summary key are removed or ignored — a script using any of
+  them gets a hard refusal, with no compatibility shim. Raw API bodies now write
   straight to the SSD bodies dir (`~/.agentlens/otel-bodies`), drained by alcore's 60 s pass
   (10 s age cutoff, durable fsync-before-delete) — the intermediate RAM buffer slowed ingestion
   and occupied space without benefit, and its drain trigger died with each node upgrade
