@@ -1,0 +1,44 @@
+---
+trdd-id: 2JOIAH2G
+title: alcore crash-loops under the RSS cap because the ingest pass and boot churn transiently spike the heap and mimalloc never returns the pages
+column: todo
+status: tasked
+created: 2026-09-27T00:23:04+0200
+updated: 2026-09-27T00:23:27+0200
+current-owner: main-agent@agentlenspro
+created-by: main-agent@agentlenspro
+task-type: bugfix
+min-approval-requirement: none
+assignee: main-agent@agentlenspro
+mandate: true
+mandated-by: none
+approved: true
+approval-judge: main-agent@agentlenspro
+approval-datetime: 2026-09-27T00:23:04+0200
+---
+
+# alcore crash-loops under the RSS cap because the ingest pass and boot churn transiently spike the heap and mimalloc never returns the pages
+
+VERIFIED FACTS (2026-09-26/27, main session, all from live logs and source reads):
+1. The kill fires at phys_footprint 2048 MB (rss_guard.rs, AGENTLENS_RSS_HARD_CAP_MB). 236 kills. mimalloc current reads 2.7-3.0 GB at kill while footprint is 2.0-2.2 GB — the ordering is predicted by gauge definitions (counter carries clean pages footprint never charges), but the OPERATIVE fact is measured: RSS in requests.log sits at 2.1-3.2 GB continuously since 2026-09-25T17:53Z, before the f579942e deploy. Corpus accumulation, not a regression.
+2. Root mechanism A — ingest-pass heap churn: agentlens-store pass.rs reads bodies as raw Strings in SETTLE_GROUP_BYTES=128 MB chunks (raw + parsed + verify copies), max 512 MB per pass (DEFAULT_MAX_BYTES_PER_PASS), looped up to DRAIN_MAX_PASSES=16 per tick (chores.rs:320). Backlog pass measured: 25,262 bodies / 8,183.5 MB freed / 433 s in ONE pass. The Rust heap transiently balloons several GB.
+3. Root mechanism B — mimalloc retention: NO mi_collect/purge call exists anywhere in rust-core (grep verified) and no MIMALLOC_* env var is set at spawn. mimalloc holds freed pages in dirty arenas and does not return them to the OS; the heap counter ratchets to ~3 GB and stays. So the transient spike becomes a PERMANENT plateau, and the next churn event (boot) pushes footprint over 2048 MB.
+4. Root mechanism C — boot churn on every revive: boot loads 26k transcripts (state lock held 15-18 s), restores 36,902 cards, drains hook-spool, runs a first bodies pass. Median kill uptime 296 s = the boot churn window. Kill mid-boot → revive → boot churn again → kill. 11 quick deaths, backoff doubling to 30 min (reviveBackoffGate, hookHandlers.ts:260). The crash loop is SELF-SUSTAINING.
+5. DATA LOSS AUDIT (owner directive: no data lost): bodies during outage = SAFE (accumulate on disk: 1,215 files / 568 MB queued at 2026-09-27 00:19). Log transcripts = SAFE (offset backfill, always-on-ingestion-model). Hook events = SAFE (hook-spool on disk). OTLP spans during downtime = the known lossy window (log transcript wins on collision for Claude sessions; feed_merge.rs policy). NO NEW loss vector. But: a 433 s pass killed mid-drain deletes nothing unverified (verify-then-delete, pass.rs), so interruption is safe-by-design — the pass just restarts.
+6. Ingest throughput is NOT the bottleneck: pass throughput measured 1.1 GB/min vs capture ~13-25 MB/min — 40x headroom when the server is up. The problem is uptime, not speed.
+
+ROOT FIX (design):
+R1. Make mimalloc return memory: set MIMALLOC_PURGE_DELAY=0 (or call mi_collect(false) on a timer / after each bodies pass) — one-line spawn env or one call site. Expected effect: the ~3 GB plateau collapses to the working set; footprint peaks only during the actual spike.
+R2. Bound the transient: cap SETTLE_GROUP_BYTES accumulation or lower max_bytes_per_pass default for the SSD-dir path so the peak heap delta stays well under (cap - steady_state). Measure before picking the number.
+R3. Soften the kill-to-revive interaction: the cap check runs every 5 s tick (lib.rs prune_window); a breach during a legitimate backlog pass kills a healthy process mid-work. Options measured later: (a) suppress the hard-cap exit while a bodies pass holds its lock (the pass is the known, bounded spike), (b) raise cap for this machine via env, (c) both. Pick by measurement.
+R4. Instrument: add a timestamp to the bodies-pass log line (one-line Rust change) — this also fixes the unmeasurable-drain-span defect from the TRDD-Z53IJFE9 wikimem ladder.
+ACCEPTANCE: with the fix, server uptime > 24 h with bodies draining continuously through boot and backlog events; zero RSS HARD CAP exits across a monitored window; a forced backlog (fill otel-bodies to >2 GB while stopped, then start) drains to empty with zero kills; the 236-kill loop does not recur.
+
+Owner directives in force (2026-09-26): no data lost ever; everything must be ingested; server must not crash; direct ingestion, no buffer; DuckDB + SQL for new storage work.
+
+RELATED: TRDD-563B8WYH (the discovery card, measurements live there), TRDD-5JZQFVO8 (the prior boot-OOM loop, fixed by RESTORE_CHUNK — same family, different holder), TRDD-Z53IJFE9 (spool removal — the drain semantics pinned by its review conditions must not be broken: durable_source fsync barrier, verify-then-delete, 10 s age cutoff).
+
+## Approval log
+
+- 2026-09-27T00:23:04+0200 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-09-27T00:23:27+0200 — column → todo by main-agent@agentlenspro. owner directive 2026-09-26: fix the crashes, verified facts in body
