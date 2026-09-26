@@ -30,7 +30,7 @@ G4. The soft summarization valve (span_window.rs apply_memory_pressure, budget 4
 DESIGN:
 D1. Timestamp every alcore eprintln/println chore line (bodies pass, hook-spool, boot provenance, state lock): one helper, applied at the call sites in chores.rs + bin/alcore.rs + log_reader.rs boot lines. ISO 8601 local, same %Y-%m-%dT%H:%M:%S%z shape as TRDD frontmatter.
 D2. After D1 ships and the server has a day of uptime: ONE bounded re-measure of the body-write rate (sum freed MB over a known 1h window) replaces the entire wikimem ladder (ATOM-LN86-T9RZ + ATOM-2JW2-CPGV + ATOM-NSSD-71W1 + ATOM-O9EN-PDYP) with one number — the four lessons get superseded by a fifth that cites the timestamped measurement.
-D3. A resilience test (rust-core test or a scripted scenario under src/test/) that runs the G3 scenario against a real alcore binary in an isolated data dir, asserting: zero 'RSS HARD CAP' lines, drain completes, every body in the store (alstore verify on an aside copy). This is the executable form of 'no more crashes' for THIS family — the same discipline that caught the pid-lock regression (serverSingleInstance.test.ts, mutation-verified).
+D3. A resilience test (rust-core test or a scripted scenario under src/test/) that runs the G3 scenario against a real alcore binary in an isolated data dir, asserting: zero 'RSS HARD CAP' lines, drain completes, every body in the store (alstore verify on an aside copy). MUTATION CHECK (discriminates the FIX, not the guard — guard-off produces zero cap lines and would score the main assertion PASS): rerun with the purge fix REVERTED, or with AGENTLENS_RSS_HARD_CAP_MB=1500 (a forced-breach value BETWEEN fixed steady-state ~1.1-1.3 GB and the known ~3 GB plateau — NOT 256, which breaches immediately even with the fix and discriminates nothing); the harness word is not 'kills' (no revive supervisor exists in an isolated data dir) but the OBSERVABLE ARTIFACTS: entries in <dataDir>/rss-hard-cap.log (written by the same code path that exits) and the process's non-zero exit — assert those APPEAR in the reverted arm and are ABSENT with the fix. This is the executable form of 'no more crashes' for THIS family — the same discipline that caught the pid-lock regression (serverSingleInstance.test.ts, mutation-verified).
 D4. Fold into the 2JOIAH2G implementation order as the instrumentation step (D1 first — the measurement for R2 'measure before picking the number' then exists).
 
 NON-GOALS: no redesign of the store layout (DuckDB is already the direct-ingest target per owner directive), no new buffer, no process split (always-on-ingestion-model lesson: verify the ACTUAL loss vectors first — they are covered).
@@ -39,7 +39,7 @@ RELATED: TRDD-2JOIAH2G (the crash-loop fix this instruments), TRDD-Z53IJFE9 (dra
 
 ACCEPTANCE:
 - [ ] every chore/boot log line starts with an ISO 8601 local timestamp
-- [ ] the resilience scenario runs green against a real binary and fails when the RSS guard is disabled (mutation check)
+- [ ] the resilience scenario runs green against a real binary, and the REVERTED-FIX (or forced-breach cap 1500 MB) arm produces rss-hard-cap.log entries + non-zero exit while the fixed arm produces none (mutation check that can actually fail)
 - [ ] the wikimem ladder is collapsed to one timestamped measurement
 - [ ] a 1h bounded re-measure of the body-write rate exists and is cited by the collapsed lesson
 
