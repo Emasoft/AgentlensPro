@@ -4,7 +4,7 @@ title: Drain and boot become measurable and bounded — timestamped chore lines,
 column: todo
 status: tasked
 created: 2026-09-27T00:24:10+0200
-updated: 2026-09-27T00:37:59+0200
+updated: 2026-09-27T00:44:40+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: infra
@@ -55,3 +55,4 @@ HISTORICAL RETELLING — SUPERSEDED by the design-text edits of commit 51128af1 
 ## STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-27
 
 CROSS-CARD DEPENDENCY (gate round 4, F3'''): D3 cannot be WRITTEN until TRDD-2JOIAH2G R0b lands (its measure-first forced-breach value = measured idle steady-state footprint + margin, per D3's own text — R0b records idle steady-state on the fixed binary; boot peak is a transient and is NOT the source). D1 (timestamps) and D2 (bounded re-measure) are independent and may start immediately. STEP 0 recording protocol on TRDD-2JOIAH2G: the owner's cap-disambiguation answer goes there verbatim the turn it is given (per plans-in-design-folder), and is never re-asked. TERMINAL DEPENDENCY: the D3 blocker is ultimately the OWNER'S STEP 0 SILENCE (D3 ← 2JOIAH2G R0b ← fixed binary stable ← R1/R2 ← STEP 0 ← owner) — if R0b is pending, chase the answer on 2JOIAH2G, do not re-derive this chain. The 'floor 1.5 GB' figure lives in D3's own text — that is the normative source. RETIRE-CHECK (tracked debt, not a footnote): if D3 ships with the floor as the interim forced-breach value, DX8PYPLO's acceptance holds until it is re-derived from R0b's recorded steady-state — add to the acceptance list: '[ ] forced-breach value re-derived from R0b's recorded steady-state; the floor-as-interim is retired'.
+SETTLEMENT 2026-09-27 (gate round 7 verdict): the doc-only review chain on this card is CLOSED — future gate rounds evaluate NEW assertions only; findings-application commits and the STEP 0 answer recording are exempt from re-review. Full review resumes when implementation (code) commits land.
