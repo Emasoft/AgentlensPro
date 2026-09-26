@@ -15,16 +15,16 @@ AgentlensPro's operational field lessons — how to deploy, install, and run it,
 recurring failure classes hit while doing so. This page is a map; the detail lives in the
 sub-pages below, split out because the combined history outgrew a single page.
 
-^OPSLESN1 [desc: "Deployment and install lessons live in the deploy-and-install sub-page: setup/install/upgrade paths, npm link vs registry, platform support, port/data-dir isolation, and the is-my-fix-actually-live pitfalls.", keywords: deploy install upgrade setup npm link registry platform support port data-dir isolation is my fix actually live stale bundle]
+^OPSLESN1 [desc: "Deploy/install lessons live in the deploy-and-install sub-page: setup/upgrade paths, npm link vs registry, platform support, port/data-dir isolation, is-my-fix-actually-live pitfalls.", keywords: deploy install upgrade setup npm link registry platform support port data-dir isolation is my fix actually live stale bundle, lmd: 2026-09-26]
 - [[agentlenspro-ops-lessons-deploy-and-install]] — setup/install/upgrade, npm link vs
   registry, platform support, port/data-dir isolation, and "is my fix actually live" pitfalls.
-^OPSLESN2 [desc: "Span/OTLP store lessons live in the store-durability-and-memory sub-page: large-file reads, OOM, fsync/durability, the RAM-disk spool drain (removed 2026-09-25, capture writes raw bodies to SSD), and DuckDB read gotchas.", keywords: span store OTLP durability large file read OOM fsync RAM disk spool drain DuckDB capture SSD write gotcha]
+^OPSLESN2 [desc: "Span/OTLP store lessons live in the store-durability-and-memory sub-page: large-file reads, OOM, fsync/durability, RAM-disk spool drain (removed 2026-09-25), and DuckDB read gotchas.", keywords: span store OTLP durability large file read OOM fsync RAM disk spool drain DuckDB capture SSD write gotcha, lmd: 2026-09-26]
 - [[agentlenspro-ops-lessons-store-durability-and-memory]] — the span/OTLP store: large-file
   reads, OOM, fsync/durability, the RAM-disk spool drain (spool removed 2026-09-25 — capture now writes raw bodies straight to SSD), and DuckDB read gotchas.
-^OPSLESN3 [desc: "Concurrency and event-loop lessons live in the concurrency-and-event-loop sub-page: server hangs, event-loop starvation, connect timeouts, config-write races, single-instance locking, and log-tail scoping.", keywords: server hang event loop starvation connect timeout config write race single instance lock log tail scoping]
+^OPSLESN3 [desc: "Event-loop and concurrency lessons live in the concurrency-and-event-loop sub-page: server hangs, starvation, connect timeouts, config-write races, single-instance locking, log-tail scoping.", keywords: server hang event loop starvation connect timeout config write race single instance lock log tail scoping, lmd: 2026-09-26]
 - [[agentlenspro-ops-lessons-concurrency-and-event-loop]] — server hangs, event-loop starvation,
   connect timeouts, config-write races, single-instance locking, and log-tail scoping.
-^OPSLESN4 [desc: "Testing and process-hygiene lessons live in the testing-and-process-hygiene sub-page: background-agent liveness, flaky tests, CI-vs-local drift, GitHub identity/mention leaks, and hook-messaging policy.", keywords: background agent liveness flaky test CI local drift github identity mention leak hook messaging policy]
+^OPSLESN4 [desc: "Testing and process-hygiene lessons live in the testing-and-process-hygiene sub-page: background-agent liveness, flaky tests, CI-vs-local drift, GitHub identity/mention leaks, hook-messaging policy.", keywords: background agent liveness flaky test CI local drift github identity mention leak hook messaging policy, lmd: 2026-09-26]
 - [[agentlenspro-ops-lessons-testing-and-process-hygiene]] — background-agent liveness, flaky
   tests, CI-vs-local drift, GitHub identity/mention leaks, and hook-messaging policy.
 
