@@ -6,6 +6,23 @@ All notable changes to AgentlensPro are documented here.
 
 ## [Unreleased]
 
+### Changed
+
+- **The RAM-disk body spool is removed completely (TRDD-Z53IJFE9).** Raw API bodies now write
+  straight to the SSD bodies dir (`~/.agentlens/otel-bodies`), drained by alcore's 60 s pass
+  (10 s age cutoff, durable fsync-before-delete) — the intermediate RAM buffer slowed ingestion
+  and occupied space without benefit, and its drain trigger died with each node upgrade
+  (LaunchAgent exit 78), the exact 2026-08-06 capture-outage class. `agentlenspro setup` gains a
+  one-shot migration for upgraded installs: drain the spool into the store (stranded bodies
+  relocated; the drain LOOPS until a full pass ingests nothing and the volume is provably empty,
+  so a live writer cannot lose a body to the detach), detach the RAM disk, rewrite
+  `OTEL_LOG_RAW_API_BODIES` via safeConfigEdit (SSD path when capture is on, key deleted when
+  off), boot out the dead `com.agentlens.spool` agent and move its plist aside (never
+  overwriting an existing backup). Refusals are fail-safe: no alstore binary, a failed drain, or
+  any residue leaves the volume mounted and nothing rewritten. The removed spool CLI verb and
+  config keys (`bodiesMaxAgeHours`) are gone; the `summary.bodies.spool` summary key and
+  `AGENTLENS_BODIES_MAX_AGE_HOURS` env var are ignored, not errors.
+
 ### Fixed
 
 - **A session/card's `cost_usd` (and `speedBlendedCostUsd`) billed every cache write at the
