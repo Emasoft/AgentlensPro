@@ -4,7 +4,7 @@ title: Drain and boot become measurable and bounded — timestamped chore lines,
 column: todo
 status: tasked
 created: 2026-09-27T00:24:10+0200
-updated: 2026-09-27T00:28:57+0200
+updated: 2026-09-27T00:37:59+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: infra
@@ -51,3 +51,7 @@ ACCEPTANCE:
 ## Review amendments (gate round 1, 2026-09-27, applied)
 
 HISTORICAL RETELLING — SUPERSEDED by the design-text edits of commit 51128af1 + the round-3 fixes; the design sections above are AUTHORITATIVE, this appendix quotes pre-correction values: AMENDMENTS from the gate review (findings F4/F5 applied here): F4 — D3's mutation check was INVERTED as written (guard-off produces zero cap lines, which the 'zero RSS HARD CAP lines' assertion scores as PASS — the test could never catch the thing it exists to catch). The discriminating mutation is the FIX, not the guard: run the backlog scenario with the purge fix REVERTED (or AGENTLENS_RSS_HARD_CAP_MB=256 for a forced-breach arm) and assert cap exits/kills APPEAR; with the fix, none. F5 — D2 promised a collapse the verbs cannot perform: a fifth lesson anchored on Y2TV adds a FOURTH supersedes pointer (deepening the fan-out) and retires none of LN86/2JW2/NSSD/O9EN (lesson footnotes are unreachable by every write verb). The achievable collapse: one new lesson carrying the measured number + a page-description update via memgrep update-mem-topic so the RECALL SURFACE itself points at the truth; the fan-out itself goes to the maintainer proposal already recorded in O9EN. F7 (from the shared review) — line-number citations rot; function names carry the meaning.
+
+## STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-27
+
+CROSS-CARD DEPENDENCY (gate round 4, F3'''): D3 cannot be WRITTEN until TRDD-2JOIAH2G R0b lands (its measure-first forced-breach value = measured idle steady-state footprint + margin, floor 1.5 GB — R0b records idle steady-state on the fixed binary; boot peak is a transient and is NOT the source). D1 (timestamps) and D2 (bounded re-measure) are independent and may start immediately. STEP 0 recording protocol on TRDD-2JOIAH2G: the owner's cap-disambiguation answer goes there verbatim the turn it is given (per plans-in-design-folder), and is never re-asked.
