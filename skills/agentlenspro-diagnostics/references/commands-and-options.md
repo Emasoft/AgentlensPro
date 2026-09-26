@@ -29,8 +29,9 @@ session lifecycle — into `~/.agentlens/hook-events/` (NDJSON daily buckets, 31
 Query: `GET /api/hook-events?session=&ev=&since=&until=&limit=` on the UI port.
 
 Bodies lifecycle: raw capture is opt-in and off by default (`agentlenspro config set
-captureRawBodies on|off`); when on, bodies land in a RAM-disk spool (macOS) instead of the SSD.
-Live plain files (72h, `bodiesMaxAgeHours`) are ingested into a content-addressed store
+captureRawBodies on|off`); when on, bodies land directly on the SSD at
+`~/.agentlens/otel-bodies` (the RAM-disk spool was removed, TRDD-Z53IJFE9) and are drained every
+60 s. Live plain files are ingested into a content-addressed store
 (`~/.agentlens/store/` — fileless DuckDB → immutable zstd Parquet, deduped across turns,
 ~190× measured on this project's own history) — a source is deleted only after the store is proven
 to hold its exact bytes AND its `(src_name, capture-time)` row, one gate shared by `.wad` volumes

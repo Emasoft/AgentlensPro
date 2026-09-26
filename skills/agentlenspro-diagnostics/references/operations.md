@@ -69,10 +69,11 @@ agentlenspro config set spansRetentionDays 90    # persist a change (prints "res
 agentlenspro server restart                       # apply it
 ```
 
-Knobs: `spansRetentionDays` (30) · `summaryWindowHours` (24) · `bodiesMaxAgeHours` (72) ·
-`bodiesMaxGb` (8) · `bodiesRetentionDays` (31) · `captureRawBodies` (off) — the one boolean knob,
-`config set captureRawBodies on|off`; turning it on mounts a RAM-disk spool (macOS,
-`agentlenspro spool ensure` re-creates it after a reboot) so raw bodies never touch the SSD. A
+Knobs: `spansRetentionDays` (30) · `summaryWindowHours` (24) · `bodiesMaxGb` (8) ·
+`bodiesRetentionDays` (31) · `captureRawBodies` (off) — the one boolean knob,
+`config set captureRawBodies on|off`; when on, bodies land directly on the SSD at
+`~/.agentlens/otel-bodies` and the drain ingests them every 60 s (the RAM-disk spool and the
+`bodiesMaxAgeHours`/72h batching wait were removed in TRDD-Z53IJFE9). A
 `set` on a corrupt config file REFUSES to write rather than clobbering it. Recipe — keep a year of
 traces on a big disk: `agentlenspro config set spansRetentionDays 365 && agentlenspro server
 restart`.
