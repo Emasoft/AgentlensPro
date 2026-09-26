@@ -4,7 +4,7 @@ title: alcore crash-loops on the 2GB RSS hard cap with real-world data volume
 column: todo
 status: tasked
 created: 2026-09-26T08:14:31+0200
-updated: 2026-09-26T08:14:31+0200
+updated: 2026-09-26T16:45:14+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -24,3 +24,7 @@ DISCOVERED 2026-09-26 during the post-deploy idle-RSS glance owed by TRDD-Z53IJF
 ## Approval log
 
 - 2026-09-26T08:14:31+0200 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+
+## STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-26
+
+MEASURED 2026-09-26T16:30+0200 (main session, post-clear): open question (c) ANSWERED — the restarter is the hook-revive supervisor (settings.json hooks run 'agentlenspro hook'; spawn decision goes through reviveBackoffGate at src/cli/hookHandlers.ts:260); after 7 consecutive quick deaths it held off respawning until 16:36:23 (~/.agentlens/.revive-backoff.json: consecutiveQuickDeaths=7, REVIVE_BACKOFF_BASE_MS=30s doubling, MAX 30min). Open question (a) REFINED — the machine has outgrown the cap independent of binary version: requests.log rss= reads 2.1-3.2 GB continuously since 2026-09-25T17:53 (BEFORE f579942e deployed at ~21:09), so the excess is corpus accumulation, not the new binary. NEW MEASUREMENT for (b): at kill time mimalloc current reads 2.7-3.0 GB while phys_footprint reads only 2.0-2.2 GB — the heap counter far exceeds footprint, so mimalloc retains freed pages (dirty arenas not returned to the OS); the footprint kills are triggered by churn spikes (boot log scan of 26295 files + restored 36902 cards + bodies pass ingesting up to 196 bodies/87MB in one pass) on TOP of that retained heap. The soft summarization valve (span_window.rs apply_memory_pressure, budget 4096MB) NEVER fires — window holds only 10-110 resident spans at kill time (cap is 1M), so the excess is NOT the summarization window; candidate holders are the restored card set (36,905 cards in memory) and boot-scan parse churn. Kill uptimes: min 26s median 296s max 3.9h over 214 kills in the log window. SS body-volume measure (the Z53IJFE9 step-E wikimem residue, same turn): bodies steady-state 30,333 ingested / 12,257 MB freed over 390 non-OVER-CAP passes in the 22.5h window = ~13 GB/day SSD body writes (below the ~20 GB/day estimate; 34.8 GB/day including the iso-run backlog passes — do not quote that as steady state). Server is DOWN while backoff holds; card work next, then a deliberate start.
