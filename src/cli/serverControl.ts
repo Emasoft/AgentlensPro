@@ -179,6 +179,19 @@ function hookSpoolDirPath(): string { return path.join(dataDir(), 'hook-spool') 
  *  and the launchd plist template, and three copies drift the moment one is tuned. */
 export const DEFAULT_MAX_OLD_SPACE_MB = 6144
 
+// TRDD-2JOIAH2G R1: alcore's mimalloc retains freed pages, so the heap plateaus (~3 GB) above the
+// 2048 MB phys_footprint the RSS guard kills on. Spawn env is the ONLY reliable injection point:
+// mimalloc reads options at its first allocation, which can run before main, so a
+// std::env::set_var inside Rust main races and can be a no-op. Env name per the VENDORED allocator
+// (libmimalloc-sys 0.1.49, no "v2" feature => mimalloc v3): the option is `mimalloc_purge_delay`
+// — matched case-insensitively (prim/unix/prim.c _mi_prim_getenv), so MIMALLOC_PURGE_DELAY is
+// read; there is no *_MSEC variant in v3 (that spelling predates the v2/v3 split). v3's default is
+// already 1000 ms (options.c:140, arena_purge_mult=1) — the plateau was MEASURED at that default,
+// so 1000 would be a no-op; 100 ms is a nonzero 10x tightening (TRDD rules out 0: it maximizes
+// OS page churn) to be re-measured against the plateau before pinning further.
+const ALCORE_MIMALLOC_PURGE_DELAY_MS = '100'
+export { ALCORE_MIMALLOC_PURGE_DELAY_MS }
+
 /** Start the standalone server if the MCP endpoint is unreachable; wait until it answers.
  *
  *  Honors the GLOBAL kill-switch. This is the LAST hole through which a disabled AgentlensPro could
@@ -260,8 +273,9 @@ export async function ensureServer(startedBy = 'ensureServer:unknown', opts: { o
   const logStart = logSizeNow()
   // The child inherits our env PLUS the provenance stamp; the server logs it at boot next to the
   // brake state it observes, so "who started this server, and was the brake set?" is answered by
-  // one grep of server.log instead of a day of inference (TRDD-8VGQK9L9).
-  const env = { ...process.env, [STARTED_BY_ENV]: startedBy }
+  // one grep of server.log instead of a day of inference (TRDD-8VGQK9L9). The mimalloc purge delay
+  // rides here too (TRDD-2JOIAH2G R1) — alcore-spawn only, never a global override.
+  const env = { ...process.env, [STARTED_BY_ENV]: startedBy, MIMALLOC_PURGE_DELAY: ALCORE_MIMALLOC_PURGE_DELAY_MS }
   const child = spawn(alcore, alcoreServeArgs(), { cwd: dataDir(), env, detached: true, stdio: ['ignore', outFd, outFd] })
   // Without this, an async spawn failure (EMFILE, EAGAIN) emits an unhandled 'error' event and the
   // process dies with a raw stack trace instead of the actionable message below.
@@ -833,9 +847,9 @@ export function runSupervise(): void {
     const started = Date.now()
     // Inherit env so isolated-port / no-telemetry overrides pass through. stdout inherits
     // (logs flow to the launchd/terminal sink); stderr is teed so we keep its tail for the
-    // crash record.
+    // crash record. MIMALLOC_PURGE_DELAY: TRDD-2JOIAH2G R1, same rationale as the direct spawn.
     child = spawn(alcore, alcoreServeArgs(),
-      { cwd: dataDir(), env: { ...process.env, [STARTED_BY_ENV]: 'supervisor' }, stdio: ['ignore', 'inherit', 'pipe'] })
+      { cwd: dataDir(), env: { ...process.env, [STARTED_BY_ENV]: 'supervisor', MIMALLOC_PURGE_DELAY: ALCORE_MIMALLOC_PURGE_DELAY_MS }, stdio: ['ignore', 'inherit', 'pipe'] })
 
     let stderrTail = Buffer.alloc(0)
     child.stderr?.on('data', (chunk: Buffer) => {

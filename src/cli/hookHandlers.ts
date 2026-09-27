@@ -19,7 +19,7 @@ import * as fs from 'fs'
 import * as path from 'path'
 import { isImageReadPath } from '../shared/imageReads'
 import { uiBaseUrl, dataDir } from './cliCore'
-import { alcoreBin, alcoreServeArgs, resolveBinNativeDir } from './serverControl'
+import { alcoreBin, alcoreServeArgs, ALCORE_MIMALLOC_PURGE_DELAY_MS, resolveBinNativeDir } from './serverControl'
 import { agentlensDisabled, reviveBraked, STARTED_BY_ENV } from './killSwitch'
 import { atomicWriteFileSync, lockTakeoverVerdict, parsePidLock, processStartRef } from '../serverRuntime'
 
@@ -383,7 +383,8 @@ function reviveDaemonDetached(): void {
     try {
       // Provenance stamp for the server's boot line (TRDD-8VGQK9L9): of the spawn paths this
       // is the one a human never invoked, so it is the one most worth naming in the log.
-      const env = { ...process.env, [STARTED_BY_ENV]: 'hook-revive' }
+      // MIMALLOC_PURGE_DELAY: TRDD-2JOIAH2G R1 — see serverControl.ts (alcore-spawn paths only).
+      const env = { ...process.env, [STARTED_BY_ENV]: 'hook-revive', MIMALLOC_PURGE_DELAY: ALCORE_MIMALLOC_PURGE_DELAY_MS }
       const child = spawn(alcore, alcoreServeArgs(), { cwd: dataDir(), env, detached: true, stdio: ['ignore', outFd, outFd] })
       child.unref()
     } finally {

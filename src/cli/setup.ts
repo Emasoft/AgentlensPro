@@ -41,7 +41,7 @@ import {
   installHooks, installSkill, isOurHookCommand, rebuildEventMatchers, resolveOnPath,
   sha256File, SKILL_NAMES, findPackageRoot, skillTreeHash, installAgents, AGENT_NAMES,
 } from './hookInstall'
-import { alcoreBin, alcoreServeArgs, resolveBinNativeDir } from './serverControl'
+import { alcoreBin, alcoreServeArgs, ALCORE_MIMALLOC_PURGE_DELAY_MS, resolveBinNativeDir } from './serverControl'
 import { parsePidLock } from '../serverRuntime'
 
 export interface SetupOptions {
@@ -1214,6 +1214,7 @@ const stepServer: StepDef = {
     const spawnEnv = {
       ...process.env,
       [STARTED_BY_ENV]: 'setup',  // boot-provenance stamp (TRDD-8VGQK9L9); found by sweep
+      MIMALLOC_PURGE_DELAY: ALCORE_MIMALLOC_PURGE_DELAY_MS,  // TRDD-2JOIAH2G R1 — see serverControl.ts
       HOME: ctx.home,
       DATA_DIR: ctx.dataDir,
       UI_PORT: String(ctx.uiPort),
