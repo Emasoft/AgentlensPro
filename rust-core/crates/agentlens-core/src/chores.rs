@@ -617,11 +617,12 @@ fn composition_tick(state: &Arc<Mutex<CoreState>>) {
     let summary_cache_mb = cache_mb(&summary_cached);
     let stripped_cache_mb = cache_mb(&stripped_cached);
     let mi = crate::rss_guard::mimalloc_info();
+    let commit_mb = mi.current_commit_bytes / MB;
     println!(
         "{} {}",
         crate::log_ts(),
         composition_line(
-            mi.current_commit_bytes / MB,
+            commit_mb,
             mi.current_rss_bytes / MB,
             window_count,
             window_est_bytes / MB,
@@ -632,6 +633,33 @@ fn composition_tick(state: &Arc<Mutex<CoreState>>) {
             stripped_cache_mb,
         )
     );
+
+    // TRDD-2JOIAH2G collect-probe: force mimalloc's FULL collect (visits ALL heaps, including
+    // the 32 worker theaps) and log commit before/after. A big drop = the memory is a DRAINABLE
+    // POOL (retire-pools, abandoned pages); a small drop = LIVE data. KNOWN CAVEAT (round-74):
+    // this probe cannot separate retained structures from steady in-flight churn — both read as
+    // "doesn't drop" — that separation is attribution's job, not this probe's.
+    // WHY gated at >= 1024 MB: below that the answer carries no decision weight and the collect
+    // costs CPU on every tick.
+    if commit_mb >= 1024 {
+        unsafe { libmimalloc_sys::mi_collect(true) };
+        let after = crate::rss_guard::mimalloc_info();
+        let after_mb = after.current_commit_bytes / MB;
+        let (dropped, pct) = collect_drop_pct(commit_mb, after_mb);
+        println!(
+            "{} alcore: collect-probe: before {commit_mb} MB, after {after_mb} MB, dropped {dropped} MB ({pct}% of before)",
+            crate::log_ts()
+        );
+    }
+}
+
+/// Drop (before-after, saturating — `after >= before` is a no-op collect, not an error) and the
+/// percentage of `before` it represents, both integers. Pure so the arithmetic is testable
+/// without a live mimalloc.
+fn collect_drop_pct(before_mb: u64, after_mb: u64) -> (u64, u64) {
+    let dropped = before_mb.saturating_sub(after_mb);
+    let pct = dropped.saturating_mul(100).checked_div(before_mb).unwrap_or(0);
+    (dropped, pct)
 }
 
 /// Arm every recurring chore on `rt`. Called once from `main` after the state is built and before
@@ -838,7 +866,7 @@ pub fn spawn_all(rt: &tokio::runtime::Runtime, state: Arc<Mutex<CoreState>>) {
 
 #[cfg(test)]
 mod tests {
-    use super::composition_line;
+    use super::{collect_drop_pct, composition_line};
 
     #[test]
     fn composition_line_subtracts_window_est_from_commit() {
@@ -871,5 +899,23 @@ mod tests {
     fn composition_line_zero_window_yields_full_commit_as_slack() {
         let line = composition_line(2048, 1800, 0, 0, 10, 5, 0, None, None);
         assert!(line.ends_with("derived slack = commit - window est = 2048 MB"), "{line}");
+    }
+
+    #[test]
+    fn collect_drop_pct_normal_drop() {
+        assert_eq!(collect_drop_pct(1024, 512), (512, 50));
+    }
+
+    #[test]
+    fn collect_drop_pct_after_ge_before_yields_zero() {
+        // after == before and after > before are both "the collect freed nothing" — must be (0,0),
+        // no underflow, no panic.
+        assert_eq!(collect_drop_pct(512, 512), (0, 0));
+        assert_eq!(collect_drop_pct(512, 600), (0, 0));
+    }
+
+    #[test]
+    fn collect_drop_pct_before_zero_yields_zero() {
+        assert_eq!(collect_drop_pct(0, 0), (0, 0));
     }
 }
