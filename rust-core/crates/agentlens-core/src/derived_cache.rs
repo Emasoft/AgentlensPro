@@ -83,6 +83,16 @@ impl<T> VersionedCache<T> {
         Some((self.version, v))
     }
 
+    /// The stored value WHATEVER version it was built for, WITHOUT counting a hit — the
+    /// measurement half of the cache (TRDD-2JOIAH2G round-73). Unlike `cached_any` this is a
+    /// pure observer: the composition tick samples it every 60s, and counting those reads as
+    /// hits would inflate the served hit/miss ratio on /api/debug/log-scan-stats. The clone is
+    /// one refcount bump; the caller serializes OFF the lock — a multi-MB `Value` must never be
+    /// walked while the state mutex is held.
+    pub fn cached_value(&self) -> Option<Arc<T>> {
+        self.cached.clone()
+    }
+
     /// True until the first value of any version lands — the cold-boot discriminator (nothing to
     /// serve stale yet, so a reader may build one itself).
     pub fn is_empty(&self) -> bool {
@@ -97,5 +107,31 @@ impl<T> VersionedCache<T> {
     /// `{hits, misses}` — served on /api/debug/log-scan-stats `derivedCaches`.
     pub fn stats(&self) -> (u64, u64) {
         (self.hits, self.misses)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn cached_value_observes_without_counting_a_hit() {
+        let mut c = VersionedCache::default();
+        assert!(c.cached_value().is_none(), "empty cache must report None");
+        c.store_if_newer(7, json!({"k": [1, 2, 3]}));
+        let before = c.stats();
+        let v = c.cached_value().expect("stored value must be observable");
+        assert_eq!(*v, json!({"k": [1, 2, 3]}));
+        assert_eq!(c.version(), 7);
+        assert_eq!(c.stats(), before, "a measurement read is NOT a hit");
+    }
+
+    #[test]
+    fn cached_value_serializes_to_the_value_bytes() {
+        let mut c = VersionedCache::default();
+        c.store_if_newer(1, json!("hello"));
+        let v = c.cached_value().unwrap();
+        assert_eq!(serde_json::to_vec(v.as_ref()).unwrap().len(), 7); // "hello" quoted
     }
 }

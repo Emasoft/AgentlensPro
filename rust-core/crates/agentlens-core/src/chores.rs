@@ -505,6 +505,7 @@ fn log_spool_drain(d: &crate::hook_events::SpoolDrain) {
 /// next to its `memory_limit`, but it lives outside the denominator. Window spans are
 /// Rust-allocated (`Vec<Arc<Value>>`), so their estimate IS in-commit live data and is the one
 /// structure slack is measured against.
+#[allow(clippy::too_many_arguments)] // one flat diagnostic line: every field is a scalar in the sentence, a struct would not shorten anything
 pub fn composition_line(
     commit_mb: u64,
     rss_mb: u64,
@@ -513,13 +514,23 @@ pub fn composition_line(
     card_rows: usize,
     card_text_mb: u64,
     _persist_bytes: u64,
+    summary_cache_mb: Option<u64>,
+    stripped_cache_mb: Option<u64>,
 ) -> String {
     let slack = commit_mb.saturating_sub(window_est_mb);
+    // `None` = no cached value for either cache (cold boot, or nothing derived yet) — reported
+    // as `none`, never as 0 MB, because "zero bytes" and "nothing cached" are different facts.
+    let cache_field = |mb: Option<u64>, name: &str| match mb {
+        Some(v) => format!("{name} {v} MB"),
+        None => format!("{name} none MB"),
+    };
     format!(
         "alcore: composition: mimalloc commit {commit_mb} MB, process rss {rss_mb} MB, \
-         window.spans {window_count} (~{window_est_mb} MB sampled est), \
+         window.spans {window_count} (~{window_est_mb} MB sampled est), {}, {}, \
          card rows {card_rows} (~{card_text_mb} MB text, DuckDB own allocator, limit 256 MiB), \
-         derived slack = commit - window est = {slack} MB"
+         derived slack = commit - window est = {slack} MB",
+        cache_field(summary_cache_mb, "summary-cache"),
+        cache_field(stripped_cache_mb, "stripped-cache"),
     )
 }
 
@@ -528,7 +539,7 @@ pub fn composition_line(
 /// refcount bumps and one aggregate SELECT (see the comment at that call); phase 2 — the only
 /// allocation-heavy step, serializing the sample — runs OFF the lock.
 fn composition_tick(state: &Arc<Mutex<CoreState>>) {
-    let (window_count, sample, card_corpus) = {
+    let (window_count, sample, card_corpus, summary_cached, stripped_cached) = {
         let st = state.lock_timed().unwrap_or_else(|e| e.into_inner());
         let window_count = st.window.spans.len();
         // An even sample across the window, at most 20 handles: cloning an `Arc` is a refcount
@@ -539,12 +550,19 @@ fn composition_tick(state: &Arc<Mutex<CoreState>>) {
         } else {
             st.window.spans.iter().step_by(window_count / 20).take(20).cloned().collect()
         };
+        // TRDD-2JOIAH2G round-73: the two derived caches are the PRIME-but-UNMEASURED
+        // candidate for the ~2.3 GB unexplained live memory. Same contract as the window
+        // sample: an Arc clone under the lock, the multi-MB serialize happens below OFF the
+        // lock. `cached_value` (not `cached_any`) deliberately: a 60s measurement read must
+        // not inflate the served hit/miss ratio.
+        let summary_cached = st.summary_cache.cached_value();
+        let stripped_cached = st.stripped_cache.cached_value();
         // Card corpus, one aggregate. DEVIATION from the card's "never under the state lock":
         // `CardStore` is a plain field of `CoreState` with no lock of its own, so its connection
         // is only reachable from here — and the boot restore already holds this lock across
         // THOUSANDS of DuckDB puts (log_reader.rs `restore`). One aggregate SELECT over ≤32k
         // rows is bounded and strictly cheaper than that precedent.
-        (window_count, sample, st.cards.corpus_bytes())
+        (window_count, sample, st.cards.corpus_bytes(), summary_cached, stripped_cached)
     };
 
     let (card_rows, card_text_bytes) = match card_corpus {
@@ -586,6 +604,18 @@ fn composition_tick(state: &Arc<Mutex<CoreState>>) {
         0
     };
     const MB: u64 = 1024 * 1024;
+    // Off the lock, same as the sample serialization: each cache holds ONE big Value (the
+    // merged summary / its stripped form over the whole corpus), so this can move real bytes.
+    // A value that fails to serialize (or is absent) reports `none` — the tick continues either
+    // way; a cache size we cannot measure must not cost the whole composition line.
+    let cache_mb = |cached: &Option<Arc<Value>>| -> Option<u64> {
+        cached.as_ref().map(|v| match serde_json::to_vec(v.as_ref()) {
+            Ok(b) => (b.len() as u64) / MB,
+            Err(_) => 0,
+        })
+    };
+    let summary_cache_mb = cache_mb(&summary_cached);
+    let stripped_cache_mb = cache_mb(&stripped_cached);
     let mi = crate::rss_guard::mimalloc_info();
     println!(
         "{} {}",
@@ -598,6 +628,8 @@ fn composition_tick(state: &Arc<Mutex<CoreState>>) {
             card_rows,
             card_text_bytes / MB,
             0, // persist_bytes: spec-reserved parameter; the line's shape does not print it
+            summary_cache_mb,
+            stripped_cache_mb,
         )
     );
 }
@@ -810,31 +842,34 @@ mod tests {
 
     #[test]
     fn composition_line_subtracts_window_est_from_commit() {
-        let line = composition_line(2048, 1800, 5000, 400, 32_000, 120, 0);
+        let line = composition_line(2048, 1800, 5000, 400, 32_000, 120, 0, Some(500), Some(300));
         assert_eq!(
             line,
             "alcore: composition: mimalloc commit 2048 MB, process rss 1800 MB, \
-             window.spans 5000 (~400 MB sampled est), card rows 32000 (~120 MB text, \
+             window.spans 5000 (~400 MB sampled est), summary-cache 500 MB, \
+             stripped-cache 300 MB, card rows 32000 (~120 MB text, \
              DuckDB own allocator, limit 256 MiB), derived slack = commit - window est = 1648 MB"
         );
     }
 
     #[test]
     fn composition_line_prefix_is_exact() {
-        assert!(composition_line(1, 1, 0, 0, 0, 0, 0).starts_with("alcore: composition:"));
+        assert!(composition_line(1, 1, 0, 0, 0, 0, 0, None, None).starts_with("alcore: composition:"));
     }
 
     #[test]
-    fn composition_line_saturates_when_window_est_exceeds_commit() {
-        // commit_mb < window_est_mb must not panic and must clamp at 0 — a negative slack would
-        // be presented as an attributable subsystem, which the card forbids.
-        let line = composition_line(100, 90, 1000, 400, 10, 5, 0);
+    fn composition_line_none_reports_none_not_zero() {
+        // `None` (nothing cached) must print as `none`, never `0 MB` — "zero bytes" and
+        // "nothing cached" are different facts and the line must not blur them.
+        let line = composition_line(100, 90, 1000, 400, 10, 5, 0, None, None);
+        assert!(line.contains("summary-cache none MB"), "{line}");
+        assert!(line.contains("stripped-cache none MB"), "{line}");
         assert!(line.ends_with("derived slack = commit - window est = 0 MB"), "{line}");
     }
 
     #[test]
     fn composition_line_zero_window_yields_full_commit_as_slack() {
-        let line = composition_line(2048, 1800, 0, 0, 10, 5, 0);
+        let line = composition_line(2048, 1800, 0, 0, 10, 5, 0, None, None);
         assert!(line.ends_with("derived slack = commit - window est = 2048 MB"), "{line}");
     }
 }
