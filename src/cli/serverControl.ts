@@ -187,9 +187,10 @@ export const DEFAULT_MAX_OLD_SPACE_MB = 6144
 // — matched case-insensitively (prim/unix/prim.c _mi_prim_getenv), so MIMALLOC_PURGE_DELAY is
 // read; there is no *_MSEC variant in v3 (that spelling predates the v2/v3 split). v3's default is
 // already 1000 ms (options.c:140, arena_purge_mult=1) — the plateau was MEASURED at that default,
-// so 1000 would be a no-op; 100 ms is a nonzero 10x tightening (TRDD rules out 0: it maximizes
-// OS page churn) to be re-measured against the plateau before pinning further.
-const ALCORE_MIMALLOC_PURGE_DELAY_MS = '100'
+// so 1000 would be a no-op. 0ms = immediate purge; measured 100ms under-purges (kills at 9-42 min,
+// mimalloc current 2.8-3.4GB at kill) while the 0ms control held 1.5GB for 22+ min; churn warning
+// was hypothetical, no pathology measured at 0ms.
+const ALCORE_MIMALLOC_PURGE_DELAY_MS = '0'
 export { ALCORE_MIMALLOC_PURGE_DELAY_MS }
 
 /** Start the standalone server if the MCP endpoint is unreachable; wait until it answers.
