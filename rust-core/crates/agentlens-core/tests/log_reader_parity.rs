@@ -139,6 +139,67 @@ fn cold_scan_flushes_in_scan_chunk_sized_batches_and_returns_every_file_state() 
     assert!(scanned2.is_empty() && s2.changed == 0, "flushed files' states seed the gate");
 }
 
+
+/// F-2 (TRDD-2JOIAH2G closeout): the CRASH-LOOP restart path is NOT the cold scan — after a
+/// mid-boot kill the restart restores offsets for the already-ingested files and the boot sweep
+/// runs the INCREMENTAL branch of `sweep` (stale offsets → thousands of files re-parse from 0).
+/// That branch's flush (std::mem::take at `out.len() >= SCAN_CHUNK`) must therefore be pinned
+/// too: batches are SCAN_CHUNK-sized (final partial excepted), the RETURNED Vec is exactly the
+/// final partial batch, and — the load-bearing property — every flushed file's change-gate
+/// state was inserted by process_file BEFORE the flush, so a second sweep re-parses nothing.
+#[test]
+fn sweep_incremental_flushes_in_scan_chunk_sized_batches_and_seeds_the_gate() {
+    use agentlens_core::log_reader::{SCAN_CHUNK, LogTailer};
+    use std::io::Write;
+
+    let home = scratch_home("chunked-incremental");
+    let env = Env { home: home.clone(), platform: Platform::Darwin, vars: HashMap::new() };
+    let projects = home.join(".claude").join("projects").join("-Users-someone-chunk");
+    std::fs::create_dir_all(&projects).unwrap();
+    let now = agentlens_core::now_ms();
+    let mut t = LogTailer::default();
+
+    // Boot sweep (cold, None): seeds the gate with the fixture's 5 files. The 2009 chunk files
+    // do not exist yet, so the NEXT sweep sees them all as changed — the incremental path,
+    // exactly as a crash-loop restart does with its thousands of lagged files.
+    let (_, s) = t.sweep(&env, now, None);
+    assert_eq!((s.files, s.changed, s.parsed), (5, 5, 5));
+    assert_eq!(t.file_state.len(), 5);
+
+    // One extra file beyond a whole number of chunks, so the final flush is a REAL partial.
+    let total = SCAN_CHUNK + 9;
+    for i in 0..total {
+        let p = projects.join(format!("dddddddd-1111-2222-3333-{:012}.jsonl", i));
+        let mut f = std::fs::File::create(&p).unwrap();
+        // A timestamped user line: first_timestamp is what build_result requires (files without
+        // one are skipped by the cold scan; the incremental tail re-parses them from 0).
+        writeln!(f, "{{\"type\":\"user\",\"timestamp\":\"2026-08-01T10:00:00.000Z\",\"cwd\":\"/Users/someone/chunk\",\"message\":{{\"role\":\"user\",\"content\":\"seed {}\"}}}}", i).unwrap();
+    }
+
+    // Incremental sweep with ingest: 2009 changed files → 1 flush of SCAN_CHUNK + partial of 9.
+    let mut flush_sizes: Vec<usize> = Vec::new();
+    let mut ingest = |chunk: Vec<agentlens_core::log_reader::ScannedFile>| flush_sizes.push(chunk.len());
+    let (scanned, s) = t.sweep(&env, now, Some(&mut ingest));
+    assert_eq!(s.changed, total, "every new file counted changed");
+    assert_eq!(s.parsed, total);
+    assert_eq!(flush_sizes.len(), 1, "exactly one full-chunk flush");
+    assert_eq!(flush_sizes[0], SCAN_CHUNK, "the flush is SCAN_CHUNK-sized");
+    assert_eq!(scanned.len(), total - SCAN_CHUNK, "the returned Vec is exactly the final partial batch");
+    assert!(scanned.len() < SCAN_CHUNK);
+    // F-3's contract, pinned here where it broke: stats.cards counts the WHOLE sweep (flushed
+    // chunks + tail), not just the returned partial tail.
+    assert_eq!(s.cards, total, "one card per file; stats.cards covers flushed + tail");
+
+    // The gate: every flushed file's state was recorded, so a second sweep re-parses NOTHING.
+    assert_eq!(t.file_state.len(), 5 + total, "gate holds every file, flushed or not");
+    let mut flushes2: Vec<usize> = Vec::new();
+    let mut ingest2 = |chunk: Vec<agentlens_core::log_reader::ScannedFile>| flushes2.push(chunk.len());
+    let (scanned2, s2) = t.sweep(&env, now, Some(&mut ingest2));
+    assert!(scanned2.is_empty() && s2.changed == 0 && flushes2.is_empty(), "flushed files' gate states prevent re-parse");
+
+    let _ = std::fs::remove_dir_all(&home);
+}
+
 // ── The incremental tailer (P5d) ─────────────────────────────────────────────────────────────
 
 /// A private copy of the fixture tree the test can append to.

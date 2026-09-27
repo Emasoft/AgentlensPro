@@ -161,7 +161,8 @@ pub const SCAN_CHUNK: usize = 2_000;
 /// The cold boot scan: every discovered session file, parsed in parallel (a file that cannot
 /// be read or yields no timestamps is skipped, as the TS sweep does), finished, in discovery
 /// order. OpenCode dbs are parsed sequentially (rusqlite, native WAL read). Collects EVERY
-/// parsed file — test/tooling convenience; production boots go through [`cold_scan_chunked`].
+/// parsed file in one Vec — test/tooling ONLY, UNBOUNDED memory (the whole corpus resident
+/// at once; TRDD-2JOIAH2G R5). Production boots go through [`cold_scan_chunked`].
 pub fn cold_scan(env: &Env, now_ms: i64) -> (Vec<ScannedFile>, ScanStats) {
     let mut all: Vec<ScannedFile> = Vec::new();
     let (remainder, stats, _) = cold_scan_chunked(env, now_ms, &mut |chunk: Vec<ScannedFile>| all.extend(chunk));
@@ -473,7 +474,8 @@ impl LogTailer {
             // Seed the change gate from the chunked cold scan's returned states — flushed
             // chunks' offsets included, or the next sweep would re-parse the whole corpus.
             // With `ingest` = None the flush ACCUMULATES the chunks into the returned Vec
-            // (the exact pre-R5 semantics tests and tooling rely on); with Some, each chunk
+            // (the exact pre-R5 semantics) — test/tooling ONLY, UNBOUNDED memory (TRDD-2JOIAH2G
+            // R5); production must pass Some. With Some, each chunk
             // is handed to the caller's ingest and dropped, bounding the boot's peak.
             let mut unflushed: Vec<ScannedFile> = Vec::new();
             let (remainder, s, states) = cold_scan_chunked(env, now_ms, &mut |chunk| {
@@ -501,6 +503,7 @@ impl LogTailer {
         let files = discover_all(env);
         let mut out: Vec<ScannedFile> = Vec::new();
         let mut stats = SweepStats { files: files.len(), ..SweepStats::default() };
+        let mut cards_seen: usize = 0; // F-3 closeout (TRDD-2JOIAH2G): whole-sweep cards — flushed chunks counted here, the returned tail below.
         for f in &files {
             self.process_file(f, now_ms, &mut stats, &mut out);
             // Bound the accumulation (TRDD-2JOIAH2G R5): hand every SCAN_CHUNK files to the
@@ -509,11 +512,15 @@ impl LogTailer {
             // them), so a flush can never cause a re-parse.
             if let Some(st) = ingest.as_mut() {
                 if out.len() >= SCAN_CHUNK {
+                    cards_seen += out.iter().map(|s| s.cards.len()).sum::<usize>();
                     st(std::mem::take(&mut out));
                 }
             }
         }
-        stats.cards = out.iter().map(|s| s.cards.len()).sum();
+        // F-3 closeout (TRDD-2JOIAH2G): the whole sweep's cards — flushed chunks (cards_seen)
+        // plus the returned partial tail. With `ingest: Some` the tail is a fraction of the
+        // sweep, and alcore.rs's boot summary logs `cards=` from this field.
+        stats.cards = cards_seen + out.iter().map(|s| s.cards.len()).sum::<usize>();
         stats.elapsed_ms = t0.elapsed().as_millis();
         (out, stats)
     }
