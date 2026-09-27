@@ -384,7 +384,10 @@ function reviveDaemonDetached(): void {
       // Provenance stamp for the server's boot line (TRDD-8VGQK9L9): of the spawn paths this
       // is the one a human never invoked, so it is the one most worth naming in the log.
       // MIMALLOC_PURGE_DELAY: TRDD-2JOIAH2G R1 — see serverControl.ts (alcore-spawn paths only).
-      const env = { ...process.env, [STARTED_BY_ENV]: 'hook-revive', MIMALLOC_PURGE_DELAY: ALCORE_MIMALLOC_PURGE_DELAY_MS }
+      // MIMALLOC_VERBOSE: TRDD-2JOIAH2G rounds 58-60 probe — verbose boot prints mimalloc's option
+      // dump (proves purge_delay parse) and, at any kill (rss_guard exit(1)), the full exit stats
+      // block whose abandoned/reclaima/purged counters discriminate live-vs-retained.
+      const env = { ...process.env, [STARTED_BY_ENV]: 'hook-revive', MIMALLOC_PURGE_DELAY: ALCORE_MIMALLOC_PURGE_DELAY_MS, MIMALLOC_VERBOSE: '1' }
       const child = spawn(alcore, alcoreServeArgs(), { cwd: dataDir(), env, detached: true, stdio: ['ignore', outFd, outFd] })
       child.unref()
     } finally {
