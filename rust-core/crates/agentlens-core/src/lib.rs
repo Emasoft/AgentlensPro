@@ -803,6 +803,13 @@ pub fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
+/// ISO 8601 local timestamp with numeric offset (`2026-09-27T14:03:11+0200`) — the prefix on
+/// every alcore chore/boot diagnostic line (TRDD-DX8PYPLO D1): server.log lines carried no
+/// timestamps, so no body-write rate or boot sequence was measurable from history.
+pub fn log_ts() -> String {
+    chrono::Local::now().format("%Y-%m-%dT%H:%M:%S%z").to_string()
+}
+
 /// One POST body through the transforms into the store. Never fails toward the wire — the
 /// frozen contract answers 200 whatever happens; failures are counted, not surfaced.
 /// The parse half of an OTLP POST — pure, so the HTTP handler runs it BEFORE taking the state
@@ -1110,7 +1117,7 @@ impl<'a> Drop for StateGuard<'a> {
         let ptr = self.site as *const Location<'static> as *mut Location<'static>;
         let _ = HOLDER_SITE.compare_exchange(ptr, std::ptr::null_mut(), Ordering::AcqRel, Ordering::Relaxed);
         if held >= std::time::Duration::from_millis(lock_trace_threshold_ms()) {
-            eprintln!("alcore: state lock held {} ms by {}:{}", held.as_millis(), self.site.file(), self.site.line());
+            eprintln!("{} alcore: state lock held {} ms by {}:{}", crate::log_ts(), held.as_millis(), self.site.file(), self.site.line());
         }
     }
 }
@@ -1149,7 +1156,7 @@ impl LockTimed for Mutex<CoreState> {
                 let held_ms = queued_ns.saturating_sub(holder_since_ns) / 1_000_000;
                 format!("{}:{} (holding for {held_ms} ms when we queued)", loc.file(), loc.line())
             };
-            eprintln!("alcore: state lock waited {} ms at {}:{}; holder {holder}", waited.as_millis(), site.file(), site.line());
+            eprintln!("{} alcore: state lock waited {} ms at {}:{}; holder {holder}", crate::log_ts(), waited.as_millis(), site.file(), site.line());
         }
         match result {
             Ok(guard) => {

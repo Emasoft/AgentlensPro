@@ -332,12 +332,12 @@ fn parse_opencode(db: &Path, now_ms: i64) -> Option<(FileState, Vec<ScannedFile>
     match agentlens_logscan::opencode::parse_opencode_db(&path, timeline_max_entries(), timeline_max_bytes()) {
         Ok(r) => {
             if r.schema_unsupported {
-                eprintln!("alcore: opencode schema unsupported ({path}): session table lacks model/tokens columns; skipping");
+                eprintln!("{} alcore: opencode schema unsupported ({path}): session table lacks model/tokens columns; skipping", crate::log_ts());
             }
             Some((state, r.results.into_iter().map(|p| finish_transcript(p, now_ms, state)).collect()))
         }
         Err(e) => {
-            eprintln!("alcore: opencode db error {path}: {e} (sessions from this db not ingested)");
+            eprintln!("{} alcore: opencode db error {path}: {e} (sessions from this db not ingested)", crate::log_ts());
             None
         }
     }
@@ -516,7 +516,7 @@ impl LogTailer {
                 if st.2 > MAX_ARRAY_READ_BYTES {
                     // Recorded so the next sweep skips it instead of re-logging every pass.
                     self.file_state.insert(f.path.clone(), FileState { bytes_read: st.2, mtime_ms: st.0, ino: st.1, size: st.2 });
-                    eprintln!("alcore: skipping oversized non-incremental log {} ({}MB)", f.path.display(), st.2 / 1_048_576);
+                    eprintln!("{} alcore: skipping oversized non-incremental log {} ({}MB)", crate::log_ts(), f.path.display(), st.2 / 1_048_576);
                     return;
                 }
                 stats.full_reads += 1;
@@ -553,7 +553,7 @@ impl LogTailer {
         let (lines, consumed) = match read_lines_from(&f.path, from) {
             Ok(x) => x,
             Err(e) => {
-                eprintln!("alcore: read error {}: {e}", f.path.display());
+                eprintln!("{} alcore: read error {}: {e}", crate::log_ts(), f.path.display());
                 return None;
             }
         };
@@ -762,7 +762,7 @@ impl DurableState {
         let offsets = self.offsets.load()?;
         if !self.version_is_current() {
             if !cards.is_empty() || !offsets.is_empty() {
-                eprintln!("alcore: log-ingest semantics changed (v{LOG_INGEST_VERSION}) — cold-rescanning; stale delta-log entries are tombstoned on the next durable save");
+                eprintln!("{} alcore: log-ingest semantics changed (v{LOG_INGEST_VERSION}) — cold-rescanning; stale delta-log entries are tombstoned on the next durable save", crate::log_ts());
             }
             return Ok((0, 0, 0));
         }
@@ -860,7 +860,7 @@ impl DurableState {
         // deleted/rotated source never loses history and no file is re-read twice for the same
         // bytes. The flagged list is only a plan for `run_1h_backfill`; nothing here does I/O.
         if backfill_candidates > 0 || too_old > 0 {
-            eprintln!("alcore: log-ingest 1h-tier backfill — flagged {backfill_candidates} transcript(s) for a usage-only cache_create_1h pass after boot ({too_old} skipped, older than {} days)", REPARSE_MAX_AGE.as_secs() / 86_400);
+            eprintln!("{} alcore: log-ingest 1h-tier backfill — flagged {backfill_candidates} transcript(s) for a usage-only cache_create_1h pass after boot ({too_old} skipped, older than {} days)", crate::log_ts(), REPARSE_MAX_AGE.as_secs() / 86_400);
         }
         let (imported, skipped) = tailer.import_file_state(&offsets);
         Ok((restored, imported, skipped))
@@ -952,7 +952,8 @@ impl DurableState {
             self.save_cards_for(state, &patched_ids);
         }
         eprintln!(
-            "alcore: log-ingest 1h-tier backfill — filled cacheCreate1hTokens on {chunk_filled} of {} flagged card(s) ({} remaining)",
+            "{} alcore: log-ingest 1h-tier backfill — filled cacheCreate1hTokens on {chunk_filled} of {} flagged card(s) ({} remaining)",
+            crate::log_ts(),
             chunk.len(),
             total_before - chunk.len()
         );
@@ -984,7 +985,7 @@ impl DurableState {
                 }
             }
             Ok(_) => {}
-            Err(e) => eprintln!("alcore: could not save log offsets: {e}"),
+            Err(e) => eprintln!("{} alcore: could not save log offsets: {e}", crate::log_ts()),
         }
     }
 
@@ -1002,7 +1003,7 @@ impl DurableState {
                 }
             }
             Ok(_) => {}
-            Err(e) => eprintln!("alcore: could not save log cards: {e}"),
+            Err(e) => eprintln!("{} alcore: could not save log cards: {e}", crate::log_ts()),
         }
         self.last_cards_save = Instant::now();
     }
@@ -1033,7 +1034,7 @@ impl DurableState {
                 }
             }
             Ok(_) => {}
-            Err(e) => eprintln!("alcore: could not save log cards (partial): {e}"),
+            Err(e) => eprintln!("{} alcore: could not save log cards (partial): {e}", crate::log_ts()),
         }
         self.last_cards_save = Instant::now();
     }

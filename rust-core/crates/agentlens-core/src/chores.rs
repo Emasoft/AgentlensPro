@@ -73,7 +73,7 @@ fn span_tick(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
         let deleted = st.writer.run_retention(days, now_ms);
         if !deleted.is_empty() {
             let spans: u64 = deleted.iter().map(|d| d.spans).sum();
-            println!("alcore: span retention: deleted {} segment(s), {spans} span(s)", deleted.len());
+            println!("{} alcore: span retention: deleted {} segment(s), {spans} span(s)", crate::log_ts(), deleted.len());
         }
         // `usize::MAX` = the whole backlog in one call, matching the TS default of `Infinity`.
         // The bounded-slice mode exists for a BOOT sweep (a 31-segment backlog held the TS
@@ -83,20 +83,21 @@ fn span_tick(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
         let c = st.writer.compress_sealed_segments(now_ms as i64, usize::MAX, &|| false);
         if !c.compressed.is_empty() {
             println!(
-                "alcore: span compression: sealed {} segment(s), saved {:.1}MB",
+                "{} alcore: span compression: sealed {} segment(s), saved {:.1}MB",
+                crate::log_ts(),
                 c.compressed.len(),
                 c.bytes_saved as f64 / 1_048_576.0
             );
         }
         for w in &c.warnings {
-            eprintln!("alcore: {w}");
+            eprintln!("{} alcore: {w}", crate::log_ts());
         }
     });
     if ran.is_none() {
         // Not an error: the other engine holds the lock and is doing this work. Said out loud
         // anyway, because a chore that silently does nothing forever looks identical to a chore
         // that has nothing to do.
-        eprintln!("alcore: span retention/compression skipped — another engine holds .chores.lock");
+        eprintln!("{} alcore: span retention/compression skipped — another engine holds .chores.lock", crate::log_ts());
     }
 }
 
@@ -143,7 +144,8 @@ fn purge_tick(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
         let (removed, freed) = crate::hook_events::purge_buckets(&dir, days, now_ms);
         if !removed.is_empty() {
             println!(
-                "alcore: {label} retention: purged {} bucket(s), {:.1}MB",
+                "{} alcore: {label} retention: purged {} bucket(s), {:.1}MB",
+                crate::log_ts(),
                 removed.len(),
                 freed as f64 / 1_048_576.0
             );
@@ -153,7 +155,8 @@ fn purge_tick(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
     let (removed, freed) = crate::statusline_store::purge(&sl_root, crate::statusline_store::retention_days(&vars), now_ms);
     if !removed.is_empty() {
         println!(
-            "alcore: statusline retention: purged {} partition(s), {:.1}MB",
+            "{} alcore: statusline retention: purged {} partition(s), {:.1}MB",
+            crate::log_ts(),
             removed.len(),
             freed as f64 / 1_048_576.0
         );
@@ -231,8 +234,8 @@ pub fn bodies_pass(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
         if let Ok(mut st) = state.lock_timed() {
             if problem != st.sink_problem {
                 match &problem {
-                    Some(p) => eprintln!("alcore: bodies sink precondition FAILED: {p} (TRDD-4FMHW124)"),
-                    None => eprintln!("alcore: bodies sink precondition recovered"),
+                    Some(p) => eprintln!("{} alcore: bodies sink precondition FAILED: {p} (TRDD-4FMHW124)", crate::log_ts()),
+                    None => eprintln!("{} alcore: bodies sink precondition recovered", crate::log_ts()),
                 }
                 st.sink_problem = problem;
             }
@@ -267,7 +270,7 @@ pub fn bodies_pass(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
         Ok(f) => f,
         Err(agentlens_store::pass::PassLockErr::Busy) => return, // another engine owns this pass
         Err(agentlens_store::pass::PassLockErr::Io(e)) => {
-            eprintln!("alcore: bodies pass cannot take the store lock: {e}");
+            eprintln!("{} alcore: bodies pass cannot take the store lock: {e}", crate::log_ts());
             return;
         }
     };
@@ -284,7 +287,7 @@ pub fn bodies_pass(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
     let mut store = match agentlens_store::open_store(&store_dir, "2GB", threads) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("alcore: bodies pass cannot open the store: {e}");
+            eprintln!("{} alcore: bodies pass cannot open the store: {e}", crate::log_ts());
             return;
         }
     };
@@ -365,7 +368,8 @@ pub fn bodies_pass(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
     // PARKED gauge reads the state file, which the drain empties BEFORE the gate decides.
     if ingested > 0 || deleted > 0 || failed > 0 {
         println!(
-            "alcore: bodies pass: ingested {}, deleted {} ({} of them re-emitted), failed {}, freed {:.1}MB across {} dir(s) in {} ms{}",
+            "{} alcore: bodies pass: ingested {}, deleted {} ({} of them re-emitted), failed {}, freed {:.1}MB across {} dir(s) in {} ms{}",
+            crate::log_ts(),
             ingested,
             deleted,
             reemitted,
@@ -421,7 +425,7 @@ async fn resident_blob_scan(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
             // WARN, never propagate: the TS catches here too. A failed scan must leave the last
             // good cache in place and let the burn tick keep serving — it must not take down the
             // scheduler, and it must not blank the feed into a false "no resident blobs".
-            eprintln!("alcore: resident-blob scan error: {e}");
+            eprintln!("{} alcore: resident-blob scan error: {e}", crate::log_ts());
             return;
         }
     };
@@ -470,7 +474,8 @@ pub fn project_resident_blobs(engine_out: &Value) -> Vec<Value> {
 fn log_spool_drain(d: &crate::hook_events::SpoolDrain) {
     if *d != crate::hook_events::SpoolDrain::default() {
         println!(
-            "alcore: hook-spool: drained {} event(s), quarantined {} bad, kept {} unverified, kept {} for retry",
+            "{} alcore: hook-spool: drained {} event(s), quarantined {} bad, kept {} unverified, kept {} for retry",
+            crate::log_ts(),
             d.drained, d.rejected, d.unverified, d.kept
         );
     }

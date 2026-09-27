@@ -303,7 +303,8 @@ pub fn bodies_export(data_dir: &Path, body: &[u8]) -> (u16, Value) {
         Err(e) => (0, 0, vec![format!("store export failed: {e}")]),
     };
     println!(
-        "alcore: bodies export: {a_files} archive + {s_files} store file(s), {:.1}MB → {dest}{}",
+        "{} alcore: bodies export: {a_files} archive + {s_files} store file(s), {:.1}MB → {dest}{}",
+        crate::log_ts(),
         (a_bytes + s_bytes) as f64 / 1048576.0,
         if failed.is_empty() { String::new() } else { format!(" ({} FAILED)", failed.len()) }
     );
@@ -355,7 +356,8 @@ pub fn bodies_purge(data_dir: &Path) -> (u16, Value) {
         }
     }
     println!(
-        "alcore: bodies archive purge: removed {} verified volume(s) ({:.2}GB), kept {} unproven; .idx sidecars retained",
+        "{} alcore: bodies archive purge: removed {} verified volume(s) ({:.2}GB), kept {} unproven; .idx sidecars retained",
+        crate::log_ts(),
         removed.len(),
         freed_bytes as f64 / (1024u64.pow(3)) as f64,
         kept.len()

@@ -47,7 +47,7 @@ async fn terminate_signal() {
             // Registration failed: fall back to never firing. Exiting here would turn a signal
             // problem into an immediate shutdown.
             Err(e) => {
-                eprintln!("alcore: SIGTERM handler not installed ({e}) — stop will not flush");
+                eprintln!("{} alcore: SIGTERM handler not installed ({e}) — stop will not flush", agentlens_core::log_ts());
                 std::future::pending::<()>().await;
             }
         }
@@ -57,7 +57,7 @@ async fn terminate_signal() {
 }
 
 fn usage(msg: &str) -> ! {
-    eprintln!("alcore: {msg}");
+    eprintln!("{} alcore: {msg}", agentlens_core::log_ts());
     eprintln!("usage: alcore serve --data-dir DIR --media-dir DIR [--otlp-port N] [--ui-port N] [--mcp-port N] [--bind HOST] [--no-log-scan]");
     exit(64);
 }
@@ -151,15 +151,17 @@ fn main() {
         let brake_present = std::path::Path::new(&data_dir).join("NO_REVIVE").exists();
         let brake = if brake_present { "PRESENT" } else { "absent" };
         println!(
-            "[AgentlensPro] boot provenance: started-by={started_by} pid={} brake={brake} data={data_dir}",
+            "{} [AgentlensPro] boot provenance: started-by={started_by} pid={} brake={brake} data={data_dir}",
+            agentlens_core::log_ts(),
             std::process::id()
         );
         if brake_present {
             if agentlens_core::brake_lift_is_sanctioned(&started_by) {
-                println!("[AgentlensPro] brake {brake} — being lifted by `{started_by}`.");
+                println!("{} [AgentlensPro] brake {brake} — being lifted by `{started_by}`.", agentlens_core::log_ts());
             } else {
                 eprintln!(
-                    "[AgentlensPro] WARNING: this server started while the NO_REVIVE brake was {brake}. The starter above did not honour it. Clear the brake with `agentlenspro server start`, or stop this server with `agentlenspro server stop --stay-down`."
+                    "{} [AgentlensPro] WARNING: this server started while the NO_REVIVE brake was {brake}. The starter above did not honour it. Clear the brake with `agentlenspro server start`, or stop this server with `agentlenspro server stop --stay-down`.",
+                    agentlens_core::log_ts()
                 );
             }
         }
@@ -167,7 +169,7 @@ fn main() {
 
     let spans_dir = std::path::Path::new(&data_dir).join("spans");
     if let Err(e) = std::fs::create_dir_all(&spans_dir) {
-        eprintln!("alcore: cannot create {}: {e}", spans_dir.display());
+        eprintln!("{} alcore: cannot create {}: {e}", agentlens_core::log_ts(), spans_dir.display());
         exit(1);
     }
     // TRDD-N60JUWU3: parsed at BOOT, not at stop time. Parsing it in the shutdown path meant a
@@ -193,15 +195,17 @@ fn main() {
         agentlens_core::pid_lock::ClaimOutcome::Claimed => {}
         agentlens_core::pid_lock::ClaimOutcome::Refused { holder } => {
             eprintln!(
-                "alcore: Refusing to start: another AgentlensPro server (pid {holder}) already owns this data directory ({data_dir}).\n\
+                "{} alcore: Refusing to start: another AgentlensPro server (pid {holder}) already owns this data directory ({data_dir}).\n\
                  alcore: Only ONE server may run per data directory — two processes appending to the same span store, offsets and cards corrupt each other.\n\
-                 alcore: Use `agentlenspro server status` / `agentlenspro server restart`, or for a genuinely isolated instance set DATA_DIR (and HOME) as well as the ports — changing ports alone does NOT isolate storage."
+                 alcore: Use `agentlenspro server status` / `agentlenspro server restart`, or for a genuinely isolated instance set DATA_DIR (and HOME) as well as the ports — changing ports alone does NOT isolate storage.",
+                agentlens_core::log_ts()
             );
             exit(1);
         }
         agentlens_core::pid_lock::ClaimOutcome::VerifyFailed => {
             eprintln!(
-                "alcore: pidfile verification failed after claim — refusing to trust a lock we cannot read back correctly ({}).",
+                "{} alcore: pidfile verification failed after claim — refusing to trust a lock we cannot read back correctly ({}).",
+                agentlens_core::log_ts(),
                 agentlens_core::pid_lock::pidfile_path(std::path::Path::new(&data_dir)).display()
             );
             exit(1);
@@ -217,9 +221,10 @@ fn main() {
     let embed_key = match agentlens_core::embed_auth::ensure_embed_key(std::path::Path::new(&data_dir)) {
         Ok(k) => k,
         Err(e) => {
-            eprintln!("alcore: {e}");
+            eprintln!("{} alcore: {e}", agentlens_core::log_ts());
             eprintln!(
-                "alcore: refusing to boot — chmod 600 the key file or delete it (a fresh 0600 key is created on next boot). See AgentlensPro#4."
+                "{} alcore: refusing to boot — chmod 600 the key file or delete it (a fresh 0600 key is created on next boot). See AgentlensPro#4.",
+                agentlens_core::log_ts()
             );
             exit(78);
         }
@@ -237,7 +242,8 @@ fn main() {
         st.ports.mcp = mcp_port;
         let (segments, total_spans, _) = st.writer.stats();
         println!(
-            "alcore: loaded {} span(s) (last {}h window) from {} — store holds {total_spans} span(s) across {segments} segment(s), nothing evicted",
+            "{} alcore: loaded {} span(s) (last {}h window) from {} — store holds {total_spans} span(s) across {segments} segment(s), nothing evicted",
+            agentlens_core::log_ts(),
             st.window.spans.len(),
             st.window.configured_ms / 3_600_000,
             spans_dir.display()
@@ -254,13 +260,15 @@ fn main() {
             Ok((boot, handle)) => {
                 if boot.restored_cards > 0 || boot.offsets_imported > 0 {
                     println!(
-                        "alcore: resumed {} log tail offsets ({} invalid/rotated → cold read); restored {} session cards",
+                        "{} alcore: resumed {} log tail offsets ({} invalid/rotated → cold read); restored {} session cards",
+                        agentlens_core::log_ts(),
                         boot.offsets_imported, boot.offsets_skipped, boot.restored_cards
                     );
                 }
                 let s = boot.sweep;
                 println!(
-                    "alcore: log scan files={} changed={} parsed={} cards={} elapsed_ms={} threads={}",
+                    "{} alcore: log scan files={} changed={} parsed={} cards={} elapsed_ms={} threads={}",
+                    agentlens_core::log_ts(),
                     s.files,
                     s.changed,
                     s.parsed,
@@ -272,16 +280,18 @@ fn main() {
                 // on the backstop; no watcher at all ⇒ the fast full poll (higher CPU).
                 if boot.watch_failed > 0 {
                     eprintln!(
-                        "alcore: no watcher on {} log dir(s) — they refresh only on the {}s backstop sweep",
+                        "{} alcore: no watcher on {} log dir(s) — they refresh only on the {}s backstop sweep",
+                        agentlens_core::log_ts(),
                         boot.watch_failed,
                         agentlens_core::log_reader::FULL_RESCAN.as_secs()
                     );
                 }
                 if boot.watch_attached == 0 {
-                    eprintln!("alcore: file watching unavailable on every log dir — falling back to a {}s full poll (higher CPU)", LOG_SWEEP_INTERVAL.as_secs());
+                    eprintln!("{} alcore: file watching unavailable on every log dir — falling back to a {}s full poll (higher CPU)", agentlens_core::log_ts(), LOG_SWEEP_INTERVAL.as_secs());
                 } else {
                     println!(
-                        "alcore: watching {} log dir(s); full backstop sweep every {}s",
+                        "{} alcore: watching {} log dir(s); full backstop sweep every {}s",
+                        agentlens_core::log_ts(),
                         boot.watch_attached,
                         agentlens_core::log_reader::FULL_RESCAN.as_secs()
                     );
@@ -289,14 +299,14 @@ fn main() {
                 sweeper = Some(handle);
             }
             Err(e) => {
-                eprintln!("alcore: {e}");
+                eprintln!("{} alcore: {e}", agentlens_core::log_ts());
                 exit(1);
             }
         }
     }
 
     let rt = tokio::runtime::Runtime::new().unwrap_or_else(|e| {
-        eprintln!("alcore: runtime: {e}");
+        eprintln!("{} alcore: runtime: {e}", agentlens_core::log_ts());
         exit(1);
     });
     let addr: std::net::SocketAddr = format!("{bind}:{port}").parse().unwrap_or_else(|_| usage("bad bind/port"));
@@ -310,7 +320,7 @@ fn main() {
     agentlens_core::chores::spawn_all(&rt, state.clone());
     let ui_addr: std::net::SocketAddr = format!("{bind}:{ui_port}").parse().unwrap_or_else(|_| usage("bad bind/ui-port"));
     let serve = agentlens_core::serve_otlp(addr, state.clone(), |bound| {
-        println!("alcore: OTLP listening on http://{bound}");
+        println!("{} alcore: OTLP listening on http://{bound}", agentlens_core::log_ts());
     });
     let hub = Arc::new(agentlens_core::ui::SseHub::default());
     rt.spawn(agentlens_core::ui::run_push_loop(state.clone(), hub.clone()));
@@ -323,23 +333,23 @@ fn main() {
     // by the task itself rather than by a config knob nobody would remember to turn on.
     rt.spawn(agentlens_core::ui::run_summary_rebuild(state.clone()));
     let serve_ui = agentlens_core::ui::serve_ui(ui_addr, state.clone(), hub.clone(), |bound| {
-        println!("alcore: UI/API listening on http://{bound}");
+        println!("{} alcore: UI/API listening on http://{bound}", agentlens_core::log_ts());
     });
     let mcp_addr: std::net::SocketAddr = format!("{bind}:{mcp_port}").parse().unwrap_or_else(|_| usage("bad bind/mcp-port"));
     let serve_mcp = agentlens_core::ui::serve_mcp(mcp_addr, state.clone(), hub, |bound| {
-        println!("alcore: MCP listening on http://{bound}/mcp");
+        println!("{} alcore: MCP listening on http://{bound}/mcp", agentlens_core::log_ts());
     });
     rt.block_on(async move {
         tokio::select! {
             r = serve => {
                 if let Err(e) = r {
-                    eprintln!("alcore: OTLP listener failed: {e}");
+                    eprintln!("{} alcore: OTLP listener failed: {e}", agentlens_core::log_ts());
                     exit(1);
                 }
             }
             r = serve_ui => {
                 if let Err(e) = r {
-                    eprintln!("alcore: UI listener failed: {e}");
+                    eprintln!("{} alcore: UI listener failed: {e}", agentlens_core::log_ts());
                     exit(1);
                 }
             }
@@ -350,10 +360,11 @@ fn main() {
                     // pre-cutover, or by a VS Code extension on the same port).
                     if e.kind() == std::io::ErrorKind::AddrInUse {
                         eprintln!(
-                            "alcore: port {mcp_port} (MCP) already in use — stop the process using it or pass --mcp-port <other>."
+                            "{} alcore: port {mcp_port} (MCP) already in use — stop the process using it or pass --mcp-port <other>.",
+                            agentlens_core::log_ts()
                         );
                     } else {
-                        eprintln!("alcore: MCP listener failed: {e}");
+                        eprintln!("{} alcore: MCP listener failed: {e}", agentlens_core::log_ts());
                     }
                     exit(1);
                 }
@@ -409,7 +420,8 @@ fn main() {
             // The CLI's own timeout message (serverControl.ts stopServer) greps server.log for
             // exactly this shape to name the holder in ITS error — keep the two in lockstep.
             eprintln!(
-                "alcore: stop timed out after {} ms waiting on {holder} — skipping the flush, releasing the pid lock anyway",
+                "{} alcore: stop timed out after {} ms waiting on {holder} — skipping the flush, releasing the pid lock anyway",
+                agentlens_core::log_ts(),
                 stop_timeout.as_millis()
             );
         }
@@ -421,7 +433,7 @@ fn main() {
 
     if let Some(h) = sweeper {
         if !h.join_within(remaining(stop_deadline)) {
-            eprintln!("alcore: stop gave up waiting on the sweeper thread's own flush — the shared stop budget elapsed");
+            eprintln!("{} alcore: stop gave up waiting on the sweeper thread's own flush — the shared stop budget elapsed", agentlens_core::log_ts());
         }
     }
 
