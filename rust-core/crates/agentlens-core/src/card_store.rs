@@ -191,9 +191,15 @@ impl CardStore {
     /// connection. TRDD-2JOIAH2G's composition breakdown: the caller reports what the card corpus
     /// IS so the mimalloc commit number can be interpreted against it.
     ///
-    /// `octet_length`, not `length`: `length()` counts CHARACTERS and undercounts UTF-8 text
-    /// (session content is full of it); the metric this feeds is bytes. The `::BIGINT` cast keeps
-    /// the sum out of HUGEINT, which the Rust reader would otherwise have to widen from.
+    /// `strlen(card)`, NOT `octet_length`: this bundled DuckDB build (1.10505.0) rejects
+    /// `octet_length(VARCHAR)` at bind time, and the BLOB-cast workaround fails at runtime on
+    /// real corpus content — cards carry literal `\n` byte sequences (JSON string escapes
+    /// stored verbatim) and DuckDB's STRING→BLOB conversion refuses any non-printable byte
+    /// ("Invalid byte encountered in STRING -> BLOB conversion", measured live 2026-09-28).
+    /// `strlen` is DuckDB's byte-length function (6 on 'héllo' — UTF-8 aware, unlike
+    /// `length` which counts characters and undercounts multilingual session content);
+    /// it takes VARCHAR directly and cannot fail on any text value. Measured both ways
+    /// against escape-laden cards 2026-09-28 before this choice.
     /// `COALESCE` because SUM over an empty table is NULL.
     ///
     /// Returns `Result` (unlike `len`, which expects) because the caller is a recurring
@@ -201,7 +207,7 @@ impl CardStore {
     /// request path.
     pub fn corpus_bytes(&self) -> agentlens_store::duckdb::Result<(usize, u64)> {
         self.conn.query_row(
-            "SELECT count(*), COALESCE(SUM(octet_length(card)), 0)::BIGINT FROM cards",
+            "SELECT count(*), COALESCE(SUM(strlen(card)), 0)::BIGINT FROM cards",
             [],
             |r| Ok((r.get::<_, i64>(0)? as usize, r.get::<_, i64>(1)? as u64)),
         )
