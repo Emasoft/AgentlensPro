@@ -152,10 +152,34 @@ fn parse_one(f: &DiscoveredFile) -> Option<ParsedTranscript> {
     }
 }
 
+/// TRDD-2JOIAH2G R5 (bound-boot-scan-memory) — the boot scan's chunk size, matching the proven
+/// RESTORE_CHUNK of the card-store restore (TRDD-5JZQFVO8, same crash-loop family, same N):
+/// at the measured ~50 KB/file a chunk in flight is ~100 MB, far under the 2048 MB cap's
+/// headroom over the ~1.1-1.3 GB steady state.
+pub const SCAN_CHUNK: usize = 2_000;
+
 /// The cold boot scan: every discovered session file, parsed in parallel (a file that cannot
 /// be read or yields no timestamps is skipped, as the TS sweep does), finished, in discovery
-/// order. OpenCode dbs are parsed sequentially (rusqlite, native WAL read).
+/// order. OpenCode dbs are parsed sequentially (rusqlite, native WAL read). Collects EVERY
+/// parsed file — test/tooling convenience; production boots go through [`cold_scan_chunked`].
 pub fn cold_scan(env: &Env, now_ms: i64) -> (Vec<ScannedFile>, ScanStats) {
+    let mut all: Vec<ScannedFile> = Vec::new();
+    let (remainder, stats, _) = cold_scan_chunked(env, now_ms, &mut |chunk: Vec<ScannedFile>| all.extend(chunk));
+    all.extend(remainder);
+    (all, stats)
+}
+
+/// TRDD-2JOIAH2G R5 (bound-boot-scan-memory): the cold scan in chunks of [`SCAN_CHUNK`] files.
+/// Boot churn alone crossed the 2048 MB phys_footprint cap (R0a: boot-phase peak 2539 MB with
+/// ZERO bodies passes; 93 of 238 kills boot-phase) because the scan collected every parsed
+/// file's cards in one Vec before the caller ingested — ~26k transcripts is the whole corpus
+/// resident at once. Each full chunk is handed to `flush` (the boot site ingests + drops it
+/// under a short state lock) and only the final partial chunk is returned, so the scan's own
+/// peak is one chunk, not the corpus. `states` carries the (path, offset) of EVERY parsed file
+/// — flushed or not — because the caller seeds its change gate from them; dropping a flushed
+/// file's state would make the next sweep re-parse the whole corpus.
+/// Returns (unflushed remainder, stats, all parsed files' states).
+pub fn cold_scan_chunked(env: &Env, now_ms: i64, flush: &mut dyn FnMut(Vec<ScannedFile>)) -> (Vec<ScannedFile>, ScanStats, Vec<(PathBuf, FileState)>) {
     let t0 = Instant::now();
     // WHY THIS IS INSTRUMENTED (TRDD-HFV4AIT7). The scan uses ~3.2 of 14 cores, and SIX candidate
     // causes have now been ruled out by removing them and re-measuring: the LISTING mutex, the
@@ -196,28 +220,46 @@ pub fn cold_scan(env: &Env, now_ms: i64) -> (Vec<ScannedFile>, ScanStats) {
     };
 
     let t_par = Instant::now();
-    let mut out: Vec<ScannedFile> = files
-        .par_iter()
-        .filter_map(|f| {
-            // Counted around the WHOLE body, so "inside" means the same thing as the work the
-            // core count is measuring — including the time a worker sits blocked in a syscall.
-            let _guard = profile.then(|| InflightGuard::new(&inflight));
-            // Stat BEFORE the parse: a file that grows while we read it then shows a newer
-            // mtime/size than the state we record, and the next sweep re-reads it — the
-            // conservative-safe direction (TS seeds fileState from the sidecar's fileSizeBytes).
-            let st = stat(&f.path)?;
-            parse_one(f).map(|p| {
-                let state = state_after(&p, st);
-                finish_transcript(p, now_ms, state)
+    // Chunked (TRDD-2JOIAH2G R5): `collect` over the whole corpus held every parsed file at
+    // once. The file list is walked in SCAN_CHUNK-sized slices, each slice parsed in parallel
+    // and its results flushed + dropped before the next slice fills — the in-flight peak is one
+    // chunk of parsed files, not the corpus. (rayon's `chunks` needs an indexed iterator, which
+    // `filter_map` erases; slicing the input first gives the same bound on the output side.)
+    let mut remainder: Vec<ScannedFile> = Vec::new();
+    let mut states: Vec<(PathBuf, FileState)> = Vec::with_capacity(files.len());
+    // Whole-scan counters: flushed chunks are counted BEFORE the handoff (the flush drops them),
+    // the remainder at the end — `parsed`/`cards` stay whole-scan figures as before R5.
+    let mut parsed_total = 0usize;
+    let mut cards_total = 0usize;
+    for slice in files.chunks(SCAN_CHUNK) {
+        let parsed: Vec<ScannedFile> = slice
+            .par_iter()
+            .filter_map(|f| {
+                // Counted around the WHOLE body, so "inside" means the same thing as the work the
+                // core count is measuring — including the time a worker sits blocked in a syscall.
+                let _guard = profile.then(|| InflightGuard::new(&inflight));
+                // Stat BEFORE the parse: a file that grows while we read it then shows a newer
+                // mtime/size than the state we record, and the next sweep re-reads it — the
+                // conservative-safe direction (TS seeds fileState from the sidecar's fileSizeBytes).
+                let st = stat(&f.path)?;
+                parse_one(f).map(|p| {
+                    let state = state_after(&p, st);
+                    finish_transcript(p, now_ms, state)
+                })
             })
-        })
-        .collect();
+            .collect();
+        parsed_total += parsed.len();
+        cards_total += parsed.iter().map(|s| s.cards.len()).sum::<usize>();
+        states.extend(parsed.iter().map(|s| (PathBuf::from(&s.file), s.state)));
+        flush(parsed);
+    }
     let par_ms = t_par.elapsed().as_millis();
     sampling.store(false, std::sync::atomic::Ordering::Relaxed);
     let t_seq = Instant::now();
     for f in files.iter().filter(|f| f.source == LogSource::OpenCodeDb) {
         if let Some((_, scanned)) = parse_opencode(&f.path, now_ms) {
-            out.extend(scanned);
+            states.extend(scanned.iter().map(|s| (PathBuf::from(&s.file), s.state)));
+            remainder.extend(scanned);
         }
     }
     let opencode_ms = t_seq.elapsed().as_millis();
@@ -247,9 +289,10 @@ pub fn cold_scan(env: &Env, now_ms: i64) -> (Vec<ScannedFile>, ScanStats) {
             top.join(" "),
         );
     }
-    let cards = out.iter().map(|s| s.cards.len()).sum();
-    let stats = ScanStats { files: files.len(), parsed: out.len(), cards, elapsed_ms: t0.elapsed().as_millis() };
-    (out, stats)
+    parsed_total += remainder.len();
+    cards_total += remainder.iter().map(|s| s.cards.len()).sum::<usize>();
+    let stats = ScanStats { files: files.len(), parsed: parsed_total, cards: cards_total, elapsed_ms: t0.elapsed().as_millis() };
+    (remainder, stats, states)
 }
 
 /// Increments a live-worker counter for the lifetime of the value. A guard rather than a manual
@@ -418,11 +461,30 @@ impl LogTailer {
     /// through the accumulator path (resume when the accumulator is cached AND the file is the
     /// same and did not shrink, else from 0 — which CACHES the accumulator, so the next growth
     /// tails). Returns the changed files' cards and the counters.
-    pub fn sweep(&mut self, env: &Env, now_ms: i64) -> (Vec<ScannedFile>, SweepStats) {
+    ///
+    /// TRDD-2JOIAH2G R5 (bound-boot-scan-memory): when `ingest` is given, changed files are
+    /// flushed to it in SCAN_CHUNK-sized batches (each dropped before the next parses), and only
+    /// the final partial batch is returned — the restart boot after a mid-boot kill re-parses
+    /// thousands of lagged files and previously held every parsed card in one Vec until the
+    /// caller's single bulk ingest (boot-phase peak 2539 MB, zero bodies passes). With `ingest`
+    /// = None the behavior is exactly the unbounded-collect form (tests, tooling).
+    pub fn sweep(&mut self, env: &Env, now_ms: i64, mut ingest: Option<&mut dyn FnMut(Vec<ScannedFile>)>) -> (Vec<ScannedFile>, SweepStats) {
         if self.file_state.is_empty() {
-            let (scanned, s) = cold_scan(env, now_ms);
-            for f in &scanned {
-                self.file_state.insert(PathBuf::from(&f.file), f.state);
+            // Seed the change gate from the chunked cold scan's returned states — flushed
+            // chunks' offsets included, or the next sweep would re-parse the whole corpus.
+            // With `ingest` = None the flush ACCUMULATES the chunks into the returned Vec
+            // (the exact pre-R5 semantics tests and tooling rely on); with Some, each chunk
+            // is handed to the caller's ingest and dropped, bounding the boot's peak.
+            let mut unflushed: Vec<ScannedFile> = Vec::new();
+            let (remainder, s, states) = cold_scan_chunked(env, now_ms, &mut |chunk| {
+                match ingest.as_mut() {
+                    Some(st) => st(chunk),
+                    None => unflushed.extend(chunk),
+                }
+            });
+            unflushed.extend(remainder);
+            for (path, state) in states {
+                self.file_state.insert(path, state);
             }
             let stats = SweepStats {
                 files: s.files,
@@ -433,7 +495,7 @@ impl LogTailer {
                 full_reads: s.parsed as u64,
                 elapsed_ms: s.elapsed_ms,
             };
-            return (scanned, stats);
+            return (unflushed, stats);
         }
         let t0 = Instant::now();
         let files = discover_all(env);
@@ -441,6 +503,15 @@ impl LogTailer {
         let mut stats = SweepStats { files: files.len(), ..SweepStats::default() };
         for f in &files {
             self.process_file(f, now_ms, &mut stats, &mut out);
+            // Bound the accumulation (TRDD-2JOIAH2G R5): hand every SCAN_CHUNK files to the
+            // caller's ingest and drop them; only the last partial batch is returned. The
+            // dropped files' gate states are already in `file_state` (process_file inserts
+            // them), so a flush can never cause a re-parse.
+            if let Some(st) = ingest.as_mut() {
+                if out.len() >= SCAN_CHUNK {
+                    st(std::mem::take(&mut out));
+                }
+            }
         }
         stats.cards = out.iter().map(|s| s.cards.len()).sum();
         stats.elapsed_ms = t0.elapsed().as_millis();
@@ -1261,7 +1332,19 @@ pub fn start_sweeper(
             // Attach BEFORE the boot sweep: a write landing during the sweep is then named by an
             // event instead of waiting for the backstop (its stat gate makes a double-visit free).
             let (_watcher, watch_attached, watch_failed) = attach_watchers(&env, tx.clone());
-            let (scanned, sweep) = tailer.sweep(&env, crate::now_ms());
+            // TRDD-2JOIAH2G R5: the boot sweep ingests each SCAN_CHUNK under a short state lock
+            // and drops it — the only residual is the final partial chunk. The flush also marks
+            // both sidecars dirty (exactly what the old `if !scanned.is_empty()` did for the
+            // whole batch at once).
+            let mut ingest_boot = |chunk: Vec<ScannedFile>| {
+                if let Ok(mut core) = state.lock_timed() {
+                    core.ingest_scanned(chunk);
+                    durable.mark_dirty();
+                }
+            };
+            let (scanned, sweep) = tailer.sweep(&env, crate::now_ms(), Some(&mut ingest_boot));
+            // The flush marked each chunk dirty; the returned remainder is ingested below and
+            // must be marked too (old semantics: one mark for the whole batch).
             if !scanned.is_empty() {
                 durable.mark_dirty();
             }
@@ -1390,10 +1473,24 @@ pub fn start_sweeper(
                 }
                 let (scanned, sweep) = if needs_full {
                     // A full sweep subsumes every pending hint and re-arms the backstop.
+                    // TRDD-2JOIAH2G R5: chunks flush straight into the card map under a short
+                    // lock; only the final partial chunk comes back through `scanned`.
                     pending.clear();
                     needs_full = false;
                     next_full = Instant::now() + backstop;
-                    tailer.sweep(&env, crate::now_ms())
+                    let mut ingest_loop = |chunk: Vec<ScannedFile>| {
+                        if let Ok(mut core) = state.lock_timed() {
+                            core.ingest_scanned(chunk);
+                            // A flushed chunk carries new offsets: mark the sidecars dirty here,
+                            // not only for the returned remainder below.
+                            durable.mark_dirty();
+                        }
+                    };
+                    let (scanned, sweep) = tailer.sweep(&env, crate::now_ms(), Some(&mut ingest_loop));
+                    if !scanned.is_empty() {
+                        durable.mark_dirty();
+                    }
+                    (scanned, sweep)
                 } else {
                     let paths = std::mem::take(&mut pending);
                     tailer.sweep_paths(&env, &paths, crate::now_ms())

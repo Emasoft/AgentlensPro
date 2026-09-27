@@ -109,6 +109,36 @@ fn run_cold_log_scan_fills_the_card_map_and_the_summary_serves_it() {
     assert_eq!(st.data_version, v2, "an empty sweep must not bump data_version");
 }
 
+/// TRDD-2JOIAH2G R5 (bound-boot-scan-memory): the cold scan must hand its parsed files to the
+/// flush callback in SCAN_CHUNK-sized chunks (each dropped before the next fills — the boot's
+/// in-flight peak is one chunk, not the corpus) and must return the change-gate state of EVERY
+/// parsed file, flushed or not — a dropped state would make the next sweep re-parse the corpus.
+/// The fixture's 5 files all fit one chunk, so: exactly one flush, exactly SCAN_CHUNK max size,
+/// stats counting the flushed files, and 5 states returned. `sweep(.., None)` must still return
+/// the whole output (the unbounded-collect form tests and tooling rely on).
+#[test]
+fn cold_scan_flushes_in_scan_chunk_sized_batches_and_returns_every_file_state() {
+    use agentlens_core::log_reader::{cold_scan_chunked, SCAN_CHUNK};
+    let env = fixture_env();
+    let now = agentlens_core::now_ms();
+    let mut flush_sizes = Vec::new();
+    let (remainder, stats, states) =
+        cold_scan_chunked(&env, now, &mut |chunk: Vec<_>| flush_sizes.push(chunk.len()));
+    assert!(flush_sizes.iter().all(|n| *n <= SCAN_CHUNK), "no flush may exceed SCAN_CHUNK");
+    let flushed: usize = flush_sizes.iter().sum();
+    assert_eq!(flushed + remainder.len(), stats.parsed, "flushed + remainder == whole-scan parsed");
+    assert_eq!(states.len(), stats.parsed, "a state for EVERY parsed file, flushed or not");
+    assert!(states.iter().all(|(p, s)| s.bytes_read > 0 && !p.as_os_str().is_empty()));
+    assert_eq!(stats.parsed, 5, "the fixture's 5 session files all parse");
+    // The None-ingest sweep returns the full output: the old collect() semantics.
+    let mut t = LogTailer::default();
+    let (scanned, s) = t.sweep(&env, now, None);
+    assert_eq!((scanned.len(), s.parsed, s.cards, s.full_reads), (5, 5, 7, 5));
+    // And the gate is seeded so a second sweep touches nothing.
+    let (scanned2, s2) = t.sweep(&env, now, None);
+    assert!(scanned2.is_empty() && s2.changed == 0, "flushed files' states seed the gate");
+}
+
 // ── The incremental tailer (P5d) ─────────────────────────────────────────────────────────────
 
 /// A private copy of the fixture tree the test can append to.
@@ -155,7 +185,7 @@ fn tailer_gates_on_stat_and_tails_growth_incrementally() {
     let mut t = LogTailer::default();
 
     // Boot: the parallel cold path, every file from 0, state seeded.
-    let (scanned, s) = t.sweep(&env, now);
+    let (scanned, s) = t.sweep(&env, now, None);
     assert_eq!((s.files, s.changed, s.parsed, s.cards, s.incremental_reads, s.full_reads), (5, 5, 5, 7, 0, 5));
     let turns0 = parent_card(&scanned)["turns"].as_u64().unwrap();
     assert_eq!(t.file_state.len(), 5);
@@ -163,14 +193,14 @@ fn tailer_gates_on_stat_and_tails_growth_incrementally() {
     assert_eq!(st0.bytes_read, std::fs::metadata(&claude).unwrap().len());
 
     // Nothing moved → nothing touched.
-    let (scanned, s) = t.sweep(&env, now);
+    let (scanned, s) = t.sweep(&env, now, None);
     assert!(scanned.is_empty());
     assert_eq!((s.files, s.changed, s.parsed, s.incremental_reads, s.full_reads), (5, 0, 0, 0, 0));
 
     // Growth after a cold parse: no accumulator is cached for it → ONE from-0 read (which caches
     // the accumulator), only that file is re-parsed, and the card grew by one turn.
     append(&claude, &turn_line(1, "2026-08-01T10:00:08.000Z"));
-    let (scanned, s) = t.sweep(&env, now);
+    let (scanned, s) = t.sweep(&env, now, None);
     assert_eq!((s.changed, s.parsed, s.incremental_reads, s.full_reads), (1, 1, 0, 1));
     assert_eq!(scanned.len(), 1);
     assert_eq!(parent_card(&scanned)["turns"], turns0 + 1);
@@ -179,7 +209,7 @@ fn tailer_gates_on_stat_and_tails_growth_incrementally() {
     // Growth again: the accumulator is cached → an INCREMENTAL read, and the tailed card equals
     // a from-0 parse of the same bytes field for field.
     append(&claude, &turn_line(2, "2026-08-01T10:00:09.000Z"));
-    let (scanned, s) = t.sweep(&env, now);
+    let (scanned, s) = t.sweep(&env, now, None);
     assert_eq!((s.changed, s.parsed, s.incremental_reads, s.full_reads), (1, 1, 1, 0));
     let tailed = parent_card(&scanned).clone();
     assert_eq!(tailed["turns"], turns0 + 2);
@@ -192,12 +222,12 @@ fn tailer_gates_on_stat_and_tails_growth_incrementally() {
     let line = turn_line(3, "2026-08-01T10:00:10.000Z");
     let (head, tail) = line.split_at(line.len() / 2);
     append(&claude, head);
-    let (scanned, s) = t.sweep(&env, now);
+    let (scanned, s) = t.sweep(&env, now, None);
     assert_eq!((s.changed, s.incremental_reads), (1, 1));
     assert_eq!(parent_card(&scanned)["turns"], turns0 + 2, "a partial line must not become an entry");
     assert_eq!(t.file_state[&claude].bytes_read + head.len() as u64, std::fs::metadata(&claude).unwrap().len());
     append(&claude, tail);
-    let (scanned, s) = t.sweep(&env, now);
+    let (scanned, s) = t.sweep(&env, now, None);
     assert_eq!((s.changed, s.incremental_reads), (1, 1));
     assert_eq!(parent_card(&scanned)["turns"], turns0 + 3);
 
@@ -205,7 +235,7 @@ fn tailer_gates_on_stat_and_tails_growth_incrementally() {
     let body = std::fs::read_to_string(&claude).unwrap();
     let shorter: String = body.lines().take(6).map(|l| format!("{l}\n")).collect();
     std::fs::write(&claude, shorter).unwrap();
-    let (scanned, s) = t.sweep(&env, now);
+    let (scanned, s) = t.sweep(&env, now, None);
     assert_eq!((s.changed, s.incremental_reads, s.full_reads), (1, 0, 1));
     let (cold, _) = cold_scan(&env, now);
     assert_eq!(parent_card(&scanned), parent_card(&cold));
@@ -216,7 +246,7 @@ fn tailer_gates_on_stat_and_tails_growth_incrementally() {
     append(&codex, "{\"timestamp\":\"2026-08-01T10:00:04.000Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\"total_token_usage\":{\"input_tokens\":3000,\"cached_input_tokens\":900,\"output_tokens\":130,\"reasoning_output_tokens\":60},\"last_token_usage\":{\"input_tokens\":500}}}}\n");
     let cp = home.join(".copilot/session-state/abababab-1111-2222-3333-444444444444/events.jsonl");
     append(&cp, "{\"timestamp\":\"2026-08-01T10:00:05.000Z\",\"type\":\"assistant.message\",\"data\":{\"outputTokens\":9}}\n");
-    let (scanned, s) = t.sweep(&env, now);
+    let (scanned, s) = t.sweep(&env, now, None);
     assert_eq!((s.changed, s.parsed, s.full_reads), (2, 2, 2));
     let ids: Vec<&str> = scanned.iter().flat_map(|x| &x.cards).map(|c| c["sessionId"].as_str().unwrap()).collect();
     assert_eq!(ids, vec!["ffffffff-1111-2222-3333-444444444444", "abababab-1111-2222-3333-444444444444"]);
@@ -227,7 +257,7 @@ fn tailer_gates_on_stat_and_tails_growth_incrementally() {
     }
     // Codex now has a cached accumulator: the next growth tails.
     append(&codex, "{\"timestamp\":\"2026-08-01T10:00:06.000Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\"total_token_usage\":{\"input_tokens\":3100,\"cached_input_tokens\":900,\"output_tokens\":131,\"reasoning_output_tokens\":60},\"last_token_usage\":{\"input_tokens\":100}}}}\n");
-    let (scanned, s) = t.sweep(&env, now);
+    let (scanned, s) = t.sweep(&env, now, None);
     assert_eq!((s.changed, s.incremental_reads, s.full_reads), (1, 1, 0));
     let (cold, _) = cold_scan(&env, now);
     let codex_id = "ffffffff-1111-2222-3333-444444444444";
@@ -295,7 +325,7 @@ fn durable_state_round_trips_offsets_and_stripped_cards_and_skips_the_cold_resca
     let mut tailer = LogTailer::default();
     let mut durable = DurableState::open(&data);
     assert_eq!(durable.restore(&mut tailer, &mut state.lock().unwrap(), &env).unwrap(), (0, 0, 0), "nothing persisted yet");
-    let (scanned, s) = tailer.sweep(&env, now);
+    let (scanned, s) = tailer.sweep(&env, now, None);
     assert_eq!(s.full_reads, 5);
     state.lock().unwrap().ingest_scanned(scanned);
     durable.mark_dirty();
@@ -323,12 +353,12 @@ fn durable_state_round_trips_offsets_and_stripped_cards_and_skips_the_cold_resca
     let (restored, imported, skipped) = durable2.restore(&mut tailer2, &mut state2.lock().unwrap(), &env).unwrap();
     assert_eq!((restored, imported, skipped), (7, 5, 0));
     assert_eq!(state2.lock().unwrap().cards.len(), 7);
-    let (scanned, s) = tailer2.sweep(&env, now);
+    let (scanned, s) = tailer2.sweep(&env, now, None);
     assert_eq!((s.files, s.changed, s.parsed, s.incremental_reads, s.full_reads), (5, 1, 1, 0, 1));
     assert_eq!(parent_card(&scanned)["turns"].as_u64().unwrap(), parent["turns"].as_u64().unwrap() + 1);
     state2.lock().unwrap().ingest_scanned(scanned);
     // Nothing else moved: the next sweep is a pure stat pass.
-    let (scanned, s) = tailer2.sweep(&env, now);
+    let (scanned, s) = tailer2.sweep(&env, now, None);
     assert!(scanned.is_empty() && s.changed == 0);
     // An unchanged save costs zero bytes; the grown card costs one record.
     durable2.mark_dirty();
@@ -613,7 +643,7 @@ fn restore_backfill_fills_the_correct_deduplicated_value_and_touches_nothing_els
     let mut tailer = LogTailer::default();
     let mut durable = DurableState::open(&data);
     durable.restore(&mut tailer, &mut state.lock().unwrap(), &env).unwrap();
-    let (scanned, _) = tailer.sweep(&env, now);
+    let (scanned, _) = tailer.sweep(&env, now, None);
     state.lock().unwrap().ingest_scanned(scanned);
     durable.mark_dirty();
     durable.tick(&tailer, &state, true);
@@ -641,7 +671,7 @@ fn restore_backfill_fills_the_correct_deduplicated_value_and_touches_nothing_els
     );
 
     // The boot sweep never force-rereads anything -- the file's offset was never dropped.
-    let (scanned, s) = tailer2.sweep(&env, now);
+    let (scanned, s) = tailer2.sweep(&env, now, None);
     assert_eq!(s.full_reads, 0, "restore() never forces a re-parse; only run_1h_backfill reads the flagged file");
     assert!(scanned.is_empty());
 
@@ -681,7 +711,7 @@ fn restore_keeps_a_stale_card_untouched_when_its_file_is_gone() {
     let mut tailer = LogTailer::default();
     let mut durable = DurableState::open(&data);
     durable.restore(&mut tailer, &mut state.lock().unwrap(), &env).unwrap();
-    let (scanned, _) = tailer.sweep(&env, now);
+    let (scanned, _) = tailer.sweep(&env, now, None);
     state.lock().unwrap().ingest_scanned(scanned);
     durable.mark_dirty();
     durable.tick(&tailer, &state, true);
@@ -710,7 +740,7 @@ fn restore_keeps_a_stale_card_untouched_when_its_file_is_gone() {
     let still = state2.lock().unwrap().cards.get(parent_id).unwrap().clone();
     assert_eq!(still, kept, "run_1h_backfill must not touch a card whose file was never queued");
 
-    let (scanned, s) = tailer2.sweep(&env, now);
+    let (scanned, s) = tailer2.sweep(&env, now, None);
     assert_eq!(s.files, 4);
     assert_eq!(s.full_reads, 0, "nothing is force-reread; the missing file is correctly left alone");
     assert!(scanned.is_empty());
@@ -729,7 +759,7 @@ fn restore_does_not_queue_a_card_that_already_has_the_field() {
     let mut tailer = LogTailer::default();
     let mut durable = DurableState::open(&data);
     durable.restore(&mut tailer, &mut state.lock().unwrap(), &env).unwrap();
-    let (scanned, _) = tailer.sweep(&env, now);
+    let (scanned, _) = tailer.sweep(&env, now, None);
     state.lock().unwrap().ingest_scanned(scanned);
     durable.mark_dirty();
     durable.tick(&tailer, &state, true);
@@ -746,7 +776,7 @@ fn restore_does_not_queue_a_card_that_already_has_the_field() {
     durable2.run_1h_backfill(&state2); // must be a true no-op: nothing queued, nothing read
     let after = state2.lock().unwrap().cards.get("cccccccc-1111-2222-3333-444444444444").unwrap().clone();
     assert_eq!(before, after, "a card that already has the key is never read or touched by the backfill");
-    let (scanned, s) = tailer2.sweep(&env, now);
+    let (scanned, s) = tailer2.sweep(&env, now, None);
     assert_eq!(s.full_reads, 0, "not one file is force-reread when nothing is missing");
     assert!(scanned.is_empty());
 }
@@ -768,7 +798,7 @@ fn backfill_of_an_unparseable_transcript_stamps_zero_once_and_is_not_retried() {
     let mut tailer = LogTailer::default();
     let mut durable = DurableState::open(&data);
     durable.restore(&mut tailer, &mut state.lock().unwrap(), &env).unwrap();
-    let (scanned, _) = tailer.sweep(&env, now);
+    let (scanned, _) = tailer.sweep(&env, now, None);
     state.lock().unwrap().ingest_scanned(scanned);
     durable.mark_dirty();
     durable.tick(&tailer, &state, true);
@@ -821,7 +851,7 @@ fn backfill_of_an_unparseable_transcript_stamps_zero_once_and_is_not_retried() {
     // guarantees is `scanned3.is_empty()`: the unparseable content still yields no card, so
     // `restore()`'s own candidate check (which only fires on a card missing the field) has nothing
     // new to queue — the "not retried" claim.
-    let (scanned3, s3) = tailer3.sweep(&env, now);
+    let (scanned3, s3) = tailer3.sweep(&env, now, None);
     assert_eq!(s3.full_reads, 1, "the tailer cold-reads once for lack of a saved offset, unrelated to this fix");
     assert!(scanned3.is_empty(), "the unparseable file still yields no card, so nothing is re-queued");
 }
@@ -899,7 +929,7 @@ fn run_1h_backfill_step_persists_before_returning_so_a_hard_exit_loses_nothing()
     let mut tailer = LogTailer::default();
     let mut durable = DurableState::open(&data);
     durable.restore(&mut tailer, &mut state.lock().unwrap(), &env).unwrap();
-    let (scanned, _) = tailer.sweep(&env, now);
+    let (scanned, _) = tailer.sweep(&env, now, None);
     state.lock().unwrap().ingest_scanned(scanned);
     durable.mark_dirty();
     durable.tick(&tailer, &state, true);
@@ -970,7 +1000,7 @@ fn run_1h_backfill_step_does_not_scan_the_whole_card_store() {
     let mut tailer = LogTailer::default();
     let mut durable = DurableState::open(&data);
     durable.restore(&mut tailer, &mut state.lock().unwrap(), &env).unwrap();
-    let (scanned, _) = tailer.sweep(&env, now);
+    let (scanned, _) = tailer.sweep(&env, now, None);
     state.lock().unwrap().ingest_scanned(scanned);
     durable.mark_dirty();
     durable.tick(&tailer, &state, true);
@@ -1032,7 +1062,7 @@ fn run_1h_backfill_step_never_clobbers_a_value_a_concurrent_sweep_already_wrote(
     let mut tailer = LogTailer::default();
     let mut durable = DurableState::open(&data);
     durable.restore(&mut tailer, &mut state.lock().unwrap(), &env).unwrap();
-    let (scanned, _) = tailer.sweep(&env, now);
+    let (scanned, _) = tailer.sweep(&env, now, None);
     state.lock().unwrap().ingest_scanned(scanned);
     durable.mark_dirty();
     durable.tick(&tailer, &state, true);
