@@ -9,9 +9,10 @@
 //! identify a culprit — a measured live process held 397 spans at 5.4 GB footprint, so "397
 //! spans, 5.4 GB" tells nobody what to fix. Two things actually attribute the memory:
 //!
-//! 1. **mimalloc's own stats** (`mi_process_info`) — alcore.rs sets `mimalloc::MiMalloc` as the
-//!    global allocator, so this is the Rust heap, separated from non-Rust growth (DuckDB, which
-//!    allocates through its own C allocator, not through Rust's global one).
+//! 1. **`mi_process_info` counters** — on macOS `current_rss` is WHOLE-PROCESS resident memory
+//!    (mach `task_info` overwrites the commit-derived init, prim/unix/prim.c:766); mimalloc's OWN
+//!    counter is `current_commit` (decremented on decommit). The two are separated from non-Rust
+//!    growth (DuckDB, which allocates through its own C allocator, not through Rust's global one).
 //! 2. **Physical footprint** — on macOS this is what jetsam charges and what Activity Monitor
 //!    shows (`proc_pid_rusage` `ri_phys_footprint`); plain RSS includes resident-but-clean pages
 //!    the OS reclaims for free, so an RSS-keyed cap can kill a healthy process and indict pages
@@ -34,9 +35,15 @@ pub fn rss_hard_cap_bytes() -> u64 {
         * 1024
 }
 
-/// mimalloc's own bookkeeping for the process (`mi_process_info` — always available once the
-/// `libmimalloc-sys` "extended" feature is linked in, regardless of whether MiMalloc is actually
-/// the active global allocator; if it isn't, every field reads ~0, which is itself informative).
+/// Counters from `mi_process_info` (always available once the `libmimalloc-sys` "extended" feature
+/// is linked in, regardless of whether MiMalloc is the active global allocator; if it isn't, every
+/// field reads ~0, which is itself informative). TRUE semantics, vendored mimalloc v3
+/// (libmimalloc-sys-0.1.49): `current_rss_bytes` is WHOLE-PROCESS resident memory on macOS —
+/// stats.c:555 initializes it from the commit counter, then prim/unix/prim.c:766 OVERWRITES it
+/// with mach `task_info` `resident_size` — so it is NOT mimalloc heap accounting.
+/// `current_commit_bytes` is mimalloc's OWN committed-pages counter (decremented on decommit),
+/// the closest thing to "Rust heap dirty + freed-undecommitted". `peak_rss_bytes` is the process
+/// peak (ru_maxrss). On non-macOS prim may leave the RSS fields commit-derived.
 pub struct MimallocInfo {
     pub current_rss_bytes: u64,
     pub peak_rss_bytes: u64,
@@ -168,21 +175,22 @@ pub fn write_diagnostic<W: std::io::Write>(
             None => write!(w, "unavailable"),
         }
     }
-    let non_mimalloc_approx = metric_bytes.saturating_sub(mi.current_rss_bytes) / 1024 / 1024;
     writeln!(w, "alcore: RSS HARD CAP — {metric_name} {} MB > cap {} MB, exiting", metric_bytes / 1024 / 1024, s.cap_bytes / 1024 / 1024)?;
     writeln!(
         w,
-        "alcore: RSS HARD CAP — mimalloc (Rust heap): current {} MB, peak {} MB, commit {} MB, page faults {}",
+        "alcore: RSS HARD CAP — process RSS {} MB (NOT mimalloc heap — whole-process resident), mimalloc commit {} MB (Rust allocator's committed pages), peak {} MB, page faults {}",
         mi.current_rss_bytes / 1024 / 1024,
-        mi.peak_rss_bytes / 1024 / 1024,
         mi.current_commit_bytes / 1024 / 1024,
+        mi.peak_rss_bytes / 1024 / 1024,
         mi.page_faults,
     )?;
+    // process-RSS minus footprint is resident-CLEAN (libs, mapped files) — knowably useless as a
+    // non-mimalloc measure, saturating to ~0 in real kills. Commit is the mimalloc-owned counter,
+    // so footprint − commit bounds the non-mimalloc dirty share from below.
+    let footprint_minus_commit = metric_bytes.saturating_sub(mi.current_commit_bytes) / 1024 / 1024;
     writeln!(
         w,
-        "alcore: RSS HARD CAP — non-mimalloc LOWER BOUND (= {metric_name} minus mimalloc current_rss; mimalloc's counter \
-         is RSS-like and carries clean pages the footprint never charged, so the true non-mimalloc share is LARGER — \
-         read this as a floor, never as the answer): {non_mimalloc_approx} MB",
+        "alcore: RSS HARD CAP — non-mimalloc-dirty floor (= phys_footprint minus mimalloc commit; footprint charges dirty+compressed, commit counts mimalloc committed incl. freed-undecommitted): {footprint_minus_commit} MB",
     )?;
     write!(w, "alcore: RSS HARD CAP — resident spans: ")?;
     opt(w, s.resident_spans)?;
@@ -429,20 +437,18 @@ mod tests {
         // named nothing — this asserts the split that actually attributes it.
         let d = format_diagnostic("phys_footprint", 5_400 * 1024 * 1024, &mi(400 * 1024 * 1024), &snap(2048 * 1024 * 1024));
         assert!(d.contains("phys_footprint 5400 MB > cap 2048 MB"));
-        assert!(d.contains("mimalloc (Rust heap): current 400 MB"));
+        assert!(d.contains("process RSS 400 MB"), "current_rss must be labelled process RSS, not mimalloc heap; got:\n{d}");
+        assert!(d.contains("mimalloc commit"), "the log must separate mimalloc's own commit counter from whole-process RSS; got:\n{d}");
         // The label must name its METHOD, not a suspect. Naming DuckDB here was measurably
         // premature: a live vmmap on 2026-09-07 put the mimalloc side ahead on RESIDENT (3.4 G vs
         // 2.3 G) but well behind on DIRTY (876 M vs ~2.7 G), so a log asserting "DuckDB" would
-        // have been read as a finding when nothing had measured DuckDB. The subtraction also
-        // mixes counters — phys_footprint minus mimalloc's RSS — which is why it says bisection.
-        // Measured on the live collector 2026-09-07: footprint 6265 MB, mimalloc RSS ~3481 MB, so
-        // this subtraction prints 2784 MB — while dirty+swapped per region puts the real
-        // non-mimalloc share near 5208 MB. It is low by ~47%, in the direction that HIDES the
-        // culprit, because it subtracts an RSS-like counter (clean pages included) from footprint
-        // (clean pages excluded). There is no mimalloc footprint equivalent to subtract instead,
-        // so the number stays and the label carries the direction of its error.
-        assert!(d.contains("non-mimalloc LOWER BOUND"));
-        assert!(d.contains("read this as a floor, never as the answer): 5000 MB"));
+        // have been read as a finding when nothing had measured DuckDB. The floor subtracts
+        // mimalloc COMMIT, not process RSS: footprint − process-RSS is resident-clean (libs,
+        // mapped files) and saturates to ~0 in real kills, while commit is the mimalloc-owned
+        // counter (decremented on decommit), so footprint − commit bounds the non-mimalloc dirty
+        // share from below (5400 − 400 = 5000 MB here).
+        assert!(d.contains("non-mimalloc-dirty floor"));
+        assert!(d.contains("): 5000 MB"));
         assert!(!d.contains("e.g. DuckDB"), "the diagnostic must not name a suspect it did not measure");
         assert!(d.contains("resident spans: 397"));
         for line in d.lines() {

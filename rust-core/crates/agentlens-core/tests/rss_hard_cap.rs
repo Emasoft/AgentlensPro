@@ -9,9 +9,10 @@
 //! and the exit code was never asserted — i.e. the guard's whole reason to exist was the one
 //! unmeasured thing. `breach_flushes_writes_the_culprit_log_and_exits_1` closes that.
 //!
-//! TRDD-WKLD508O: the diagnostic must separate the Rust heap (mimalloc, via `mi_process_info`)
-//! from non-Rust growth (e.g. DuckDB) — a log naming only cheap counters (span/card counts) does
-//! not identify a culprit when those structures are small but the process is not.
+//! TRDD-WKLD508O: the diagnostic must separate whole-process RSS from mimalloc's own commit
+//! counter (`mi_process_info`) and from non-Rust growth (e.g. DuckDB) — a log naming only cheap
+//! counters (span/card counts) does not identify a culprit when those structures are small but
+//! the process is not.
 
 use agentlens_core::rss_guard::{
     check_and_enforce, format_diagnostic, mimalloc_info, rss_hard_cap_bytes, CulpritSnapshot, MimallocInfo,
@@ -137,7 +138,7 @@ fn breach_flushes_writes_the_culprit_log_and_exits_1() {
     // "resident spans: 42" is the load-bearing one: 42 comes from snap(), so it proves the
     // caller's snapshot was threaded through to disk rather than some default being printed.
     assert!(body.contains("RSS HARD CAP"), "log must be the guard diagnostic; got:\n{body}");
-    assert!(body.contains("mimalloc (Rust heap)"), "TRDD-WKLD508O: the log must separate the Rust heap from non-Rust growth; got:\n{body}");
+    assert!(body.contains("process RSS") && body.contains("mimalloc commit"), "TRDD-WKLD508O: the log must separate process RSS from the mimalloc heap (commit counter); got:\n{body}");
     assert!(body.contains("resident spans: 42"), "the caller's snapshot must reach the log, or it names no culprit; got:\n{body}");
 
     let _ = std::fs::remove_file(&log);
@@ -198,8 +199,9 @@ fn diagnostic_names_the_culprit_counters_on_breach() {
     }
     assert!(d.contains("3072 MB"), "measured value in MB missing: {d}");
     assert!(d.contains("2048 MB"), "cap in MB missing: {d}");
-    assert!(d.contains("mimalloc (Rust heap): current 400 MB"));
+    assert!(d.contains("process RSS 400 MB"), "current_rss must be labelled process RSS, not mimalloc heap: {d}");
     assert!(d.contains("non-mimalloc"), "must separate non-Rust growth: {d}");
+    assert!(d.contains("non-mimalloc-dirty floor"), "floor must be computed from mimalloc commit, not process RSS: {d}");
     assert!(d.contains("resident spans: 42"));
     assert!(d.contains("effective 60000 ms / configured 86400000 ms"));
     assert!(d.contains("card store rows: 7"));
