@@ -202,11 +202,22 @@ fn diagnostic_names_the_culprit_counters_on_breach() {
     assert!(d.contains("process RSS 400 MB"), "current_rss must be labelled process RSS, not mimalloc heap: {d}");
     assert!(d.contains("non-mimalloc"), "must separate non-Rust growth: {d}");
     assert!(d.contains("non-mimalloc-dirty floor"), "floor must be computed from mimalloc commit, not process RSS: {d}");
+    assert!(d.contains("non-mimalloc-dirty floor (= rss minus mimalloc commit"), "floor header must interpolate the metric name; got:\n{d}");
+    assert!(d.contains(": 2672 MB"), "floor arithmetic (3072-400) must be exact; got:\n{d}");
     assert!(d.contains("resident spans: 42"));
     assert!(d.contains("effective 60000 ms / configured 86400000 ms"));
     assert!(d.contains("card store rows: 7"));
     assert!(d.contains("3 segments, 1000 spans, 500000 bytes"));
     assert!(d.contains("uptime: 123456 ms"));
+}
+
+#[test]
+fn floor_saturates_to_zero_when_commit_meets_the_metric() {
+    // Real-kill shape: commit >= footprint (mimalloc has committed pages the metric never
+    // charged). saturating_sub must yield 0, never wrap.
+    let cap = 2048u64 * 1024 * 1024;
+    let d = format_diagnostic("rss", 400 * 1024 * 1024, &fake_mimalloc(400 * 1024 * 1024), &snap(cap));
+    assert!(d.contains(": 0 MB"), "floor must saturate to 0 MB when commit >= metric; got:\n{d}");
 }
 
 #[test]

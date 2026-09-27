@@ -178,7 +178,7 @@ pub fn write_diagnostic<W: std::io::Write>(
     writeln!(w, "alcore: RSS HARD CAP — {metric_name} {} MB > cap {} MB, exiting", metric_bytes / 1024 / 1024, s.cap_bytes / 1024 / 1024)?;
     writeln!(
         w,
-        "alcore: RSS HARD CAP — process RSS {} MB (NOT mimalloc heap — whole-process resident), mimalloc commit {} MB (Rust allocator's committed pages), peak {} MB, page faults {}",
+        "alcore: RSS HARD CAP — process RSS {} MB (macOS: whole-process resident; other OS: commit-derived), mimalloc commit {} MB (Rust allocator's committed pages), process peak {} MB, page faults {}",
         mi.current_rss_bytes / 1024 / 1024,
         mi.current_commit_bytes / 1024 / 1024,
         mi.peak_rss_bytes / 1024 / 1024,
@@ -190,7 +190,7 @@ pub fn write_diagnostic<W: std::io::Write>(
     let footprint_minus_commit = metric_bytes.saturating_sub(mi.current_commit_bytes) / 1024 / 1024;
     writeln!(
         w,
-        "alcore: RSS HARD CAP — non-mimalloc-dirty floor (= phys_footprint minus mimalloc commit; footprint charges dirty+compressed, commit counts mimalloc committed incl. freed-undecommitted): {footprint_minus_commit} MB",
+        "alcore: RSS HARD CAP — non-mimalloc-dirty floor (= {metric_name} minus mimalloc commit; footprint-style metrics charge dirty+compressed, commit counts mimalloc committed incl. freed-undecommitted): {footprint_minus_commit} MB",
     )?;
     write!(w, "alcore: RSS HARD CAP — resident spans: ")?;
     opt(w, s.resident_spans)?;
