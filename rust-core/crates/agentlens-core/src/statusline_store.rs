@@ -333,7 +333,7 @@ impl StatuslineStore {
             if let Err(e) = write() {
                 self.ingest_errors += 1;
                 if self.ingest_errors == 1 {
-                    eprintln!("alcore: statusline sample append FAILED: {e}");
+                    eprintln!("{} alcore: statusline sample append FAILED: {e}", crate::log_ts());
                 }
                 let cur = self.buffers.entry(stream).or_default();
                 if cur.len() + batch.len() > FLUSH_MAX_RECORDS * 200 {
@@ -461,7 +461,7 @@ fn seal_one(wal: &Path, expect_rows: usize, counters: &SealCounters, vars: &Hash
     if out.exists() {
         // Defence in depth behind the collision-free name: COPY TO silently overwrites, and an
         // overwritten part is destroyed data. Refuse; the naming invariant is broken.
-        eprintln!("alcore: refusing to overwrite existing part {} — part naming must be collision-free", out.display());
+        eprintln!("{} alcore: refusing to overwrite existing part {} — part naming must be collision-free", crate::log_ts(), out.display());
         return false;
     }
     let run = || -> Result<bool, String> {

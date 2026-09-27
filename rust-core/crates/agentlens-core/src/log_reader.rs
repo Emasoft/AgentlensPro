@@ -235,7 +235,8 @@ pub fn cold_scan(env: &Env, now_ms: i64) -> (Vec<ScannedFile>, ScanStats) {
             idx.iter().take(6).map(|&i| format!("{}:{:.1}%", i, 100.0 * hist[i] as f64 / total as f64)).collect()
         };
         println!(
-            "scan-profile: total={}ms discover={}ms (serial {:.1}%) par={}ms opencode={}ms | mean_inflight={:.2} zero={:.1}% top={}",
+            "{} scan-profile: total={}ms discover={}ms (serial {:.1}%) par={}ms opencode={}ms | mean_inflight={:.2} zero={:.1}% top={}",
+            crate::log_ts(),
             t0.elapsed().as_millis(),
             discover_ms,
             100.0 * discover_ms as f64 / t0.elapsed().as_millis().max(1) as f64,

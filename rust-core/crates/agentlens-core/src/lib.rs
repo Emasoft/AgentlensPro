@@ -723,7 +723,8 @@ pub fn rss_budget_bytes() -> u64 {
             // whole point of porting this guard is that the cut is visible. `windowMs` in
             // /api/server-stats carries the current value.
             println!(
-                "alcore: memory pressure — summarization window now {}ms (configured {}ms)",
+                "{} alcore: memory pressure — summarization window now {}ms (configured {}ms)",
+                crate::log_ts(),
                 self.window.effective_ms, self.window.configured_ms
             );
         }
@@ -735,7 +736,8 @@ pub fn rss_budget_bytes() -> u64 {
         let held = began.elapsed();
         if held >= std::time::Duration::from_millis(250) {
             println!(
-                "alcore: prune_window held the state lock for {} ms ({} spans, window {}ms{})",
+                "{} alcore: prune_window held the state lock for {} ms ({} spans, window {}ms{})",
+                crate::log_ts(),
                 held.as_millis(),
                 self.window.spans.len(),
                 self.window.effective_ms,
@@ -775,7 +777,7 @@ pub fn rss_budget_bytes() -> u64 {
             Err(e) => {
                 let msg = e.to_string();
                 if self.log_sink_warned.insert(msg.clone()) {
-                    eprintln!("[AgentLens] log-event sink append FAILED (event lost — disk problem?): {msg}");
+                    eprintln!("{} [AgentLens] log-event sink append FAILED (event lost — disk problem?): {msg}", crate::log_ts());
                 }
             }
         }
@@ -876,7 +878,8 @@ fn record_ingest_profile(parse_ns: u64, wait_ns: u64, held_ns: u64) {
         let (p, w, h) = (PARSE.load(Ordering::Relaxed), WAIT.load(Ordering::Relaxed), HELD.load(Ordering::Relaxed));
         let ms = |x: u64| x as f64 / 1e6;
         println!(
-            "ingest-profile: n={} parse={:.1}ms/req wait_for_lock={:.1}ms/req held_lock={:.1}ms/req | totals parse={:.0}ms wait={:.0}ms held={:.0}ms",
+            "{} ingest-profile: n={} parse={:.1}ms/req wait_for_lock={:.1}ms/req held_lock={:.1}ms/req | totals parse={:.0}ms wait={:.0}ms held={:.0}ms",
+            crate::log_ts(),
             n,
             ms(p) / n as f64,
             ms(w) / n as f64,

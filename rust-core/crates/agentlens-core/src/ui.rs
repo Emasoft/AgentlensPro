@@ -1382,7 +1382,8 @@ async fn handle(
             let next = crate::server_stats::save_hook_runtime_config(&st.data_dir, st.hook_runtime, &patch)?;
             st.hook_runtime = next;
             println!(
-                "alcore: hook config updated: gate={} capture={} advisor={}",
+                "{} alcore: hook config updated: gate={} capture={} advisor={}",
+                crate::log_ts(),
                 if next.gate_enabled { next.gate_mode } else { "off" },
                 next.capture_enabled,
                 next.advisor_enabled
@@ -1420,7 +1421,7 @@ async fn handle(
                 push_update(&state, &hub, crate::now_ms() as f64);
             }
             Ok(_) => {}
-            Err(e) => eprintln!("alcore: malformed /action body: {e}"),
+            Err(e) => eprintln!("{} alcore: malformed /action body: {e}", crate::log_ts()),
         }
         Response::new(boxed_full(Bytes::new()))
     } else if method == Method::POST && path == "/api/statusline-samples" {
@@ -1553,8 +1554,8 @@ async fn handle(
             Ok(file)
         };
         match write() {
-            Ok(file) => println!("alcore: prompt written to {}", file.display()),
-            Err(e) => eprintln!("alcore: write-prompts-file error: {e}"),
+            Ok(file) => println!("{} alcore: prompt written to {}", crate::log_ts(), file.display()),
+            Err(e) => eprintln!("{} alcore: write-prompts-file error: {e}", crate::log_ts()),
         }
         Response::new(boxed_full(Bytes::new()))
     } else if method == Method::POST && path == "/api/branch-dump" {
@@ -1622,7 +1623,7 @@ async fn handle(
                 std::fs::write(&target, content).map_err(|e| e.to_string())?;
                 paths.insert(id.to_owned(), Value::from(target.to_string_lossy().into_owned()));
             }
-            println!("alcore: branch-dump: {} file(s) → {}", paths.len(), dump_root.display());
+            println!("{} alcore: branch-dump: {} file(s) → {}", crate::log_ts(), paths.len(), dump_root.display());
             let body = serde_json::json!({ "dir": dump_root.to_string_lossy(), "paths": paths });
             Ok(json_response(StatusCode::OK, body.to_string()))
         };
@@ -4143,7 +4144,8 @@ pub async fn run_burn_tick(state: Arc<Mutex<CoreState>>, hub: Arc<SseHub>) {
             let threshold = std::time::Duration::from_millis(crate::lock_trace_threshold_ms());
             if held_a >= threshold || held_b >= threshold {
                 eprintln!(
-                    "alcore: burn tick guard split: lock_a {} ms (bodies_poll {} ms, statusline_flush {} ms, ttl_config {} ms), off_lock burn_status {} ms, lock_b {} ms (account_timeline {} ms, alerts_notify {} ms)",
+                    "{} alcore: burn tick guard split: lock_a {} ms (bodies_poll {} ms, statusline_flush {} ms, ttl_config {} ms), off_lock burn_status {} ms, lock_b {} ms (account_timeline {} ms, alerts_notify {} ms)",
+                    crate::log_ts(),
                     held_a.as_millis(),
                     t_poll.as_millis(),
                     (t_flush - t_poll).as_millis(),
@@ -4191,7 +4193,7 @@ pub async fn run_burn_tick(state: Arc<Mutex<CoreState>>, hub: Arc<SseHub>) {
                     .and_then(|v| v.get("reason").and_then(Value::as_str))
                     .unwrap_or("no-result")
                     .to_owned();
-                eprintln!("alcore: usage refresh (account changed): {reason}");
+                eprintln!("{} alcore: usage refresh (account changed): {reason}", crate::log_ts());
             });
         }
         if hub.client_count() > 0 {

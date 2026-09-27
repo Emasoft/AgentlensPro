@@ -72,8 +72,9 @@ pub fn purge_buckets(dir: &Path, retention_days: f64, now_ms: f64) -> (Vec<Strin
     // so this guards a direct caller, which is exactly who has no floor.
     let Some(cutoff_ms) = agentlens_spanstore::segment_day_ms(&format!("{cutoff_day}.ndjson")) else {
         eprintln!(
-            "alcore: refusing to purge {} — retention_days={retention_days} yields an unparseable \
+            "{} alcore: refusing to purge {} — retention_days={retention_days} yields an unparseable \
              cutoff day '{cutoff_day}'; nothing deleted",
+            crate::log_ts(),
             dir.display()
         );
         return (removed, freed_bytes);
@@ -239,9 +240,9 @@ pub fn ingest_hook_event(st: &mut crate::CoreState, payload: &Value, now_ms: i64
                 if outcome.calibrated {
                     // Reload so the next burn tick + every budget read projects against the new cap.
                     st.burn.config = crate::burn::monitor::load_burn_config(&st.burn.vars, &st.burn.home_dir);
-                    println!("[AgentlensPro] window capacity auto-calibrated: {}", outcome.reason);
+                    println!("{} [AgentlensPro] window capacity auto-calibrated: {}", crate::log_ts(), outcome.reason);
                 } else {
-                    println!("[AgentlensPro] capacity calibration skipped: {}", outcome.reason);
+                    println!("{} [AgentlensPro] capacity calibration skipped: {}", crate::log_ts(), outcome.reason);
                 }
             }
             (200, json!({ "ok": true }))
@@ -340,7 +341,7 @@ pub fn drain_hook_spool(st: &mut crate::CoreState, now_ms: i64, max_files: usize
             out.drained += 1;
         } else {
             out.unverified += 1;
-            eprintln!("[AgentlensPro] hook-spool: append NOT verified for {name} — keeping spool file (durable copy unproven)");
+            eprintln!("{} [AgentlensPro] hook-spool: append NOT verified for {name} — keeping spool file (durable copy unproven)", crate::log_ts());
         }
     }
     out

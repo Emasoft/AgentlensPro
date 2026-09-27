@@ -231,7 +231,7 @@ fn write_log_file(log_path: &Path, metric_name: &str, metric_bytes: u64, mi: &Mi
         f.sync_all()
     })();
     if let Err(e) = result {
-        eprintln!("alcore: RSS HARD CAP — could NOT write diagnostic to {}: {e}", log_path.display());
+        eprintln!("{} alcore: RSS HARD CAP — could NOT write diagnostic to {}: {e}", crate::log_ts(), log_path.display());
     }
 }
 
