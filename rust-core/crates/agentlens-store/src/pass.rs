@@ -499,7 +499,13 @@ pub fn ingest_pass(
                 }
             }
         }
-        if batch.len() >= opts.batch_size {
+        // TRDD-2JOIAH2G R2 — bound the pass transient. The DuckDB staging tables are RAM until
+        // flush_detailed, and the file-count batch alone lets a backlog of large bodies stage
+        // ~2× max_bytes_per_pass (≈1GB) before the first flush — a spike the RSS-cap kill
+        // (which fires only BETWEEN passes) cannot see. Settle on the batch's SOURCE bytes at
+        // SETTLE_GROUP_BYTES too (the same ceiling the verify grouping below uses; staged rows
+        // ≈ 2× source), so peak in-flight is one group + one file, not the whole pass budget.
+        if batch.len() >= opts.batch_size || batch.iter().map(|b| b.size).sum::<u64>() >= SETTLE_GROUP_BYTES {
             settle!();
         }
     }

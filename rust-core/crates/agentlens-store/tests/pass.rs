@@ -214,3 +214,33 @@ fn pass_lock_is_exclusive_and_dies_with_its_holder() {
     drop(held);
     agentlens_store::pass::acquire_pass_lock(&dir).expect("released lock is immediately reusable");
 }
+
+#[test]
+fn staging_settles_at_the_group_boundary_before_the_pass_budget_accumulates() {
+    // TRDD-2JOIAH2G R2: the pass transient is bounded, not just the pass total. The batch settles
+    // (flush → verify → delete) as soon as its source bytes reach SETTLE_GROUP_BYTES, so a
+    // backlog of large bodies can never stage ~max_bytes_per_pass (≈1GB in RAM) before the
+    // first flush. DISCRIMINATOR: every flush_detailed writes ONE new part file per table, so a
+    // 144MB fixture (2 groups at the 128MB ceiling) must leave 2 part files in the bodies store
+    // dir — the old file-count-only cut (batch_size 200 > 96 files) accumulates everything and
+    // flushes once at pass end, leaving exactly 1. Each body is ~1.5MB, far under the unchanged
+    // 512MB pass budget, so the throttle never fires.
+    let (bodies, store_dir) = fixture("group-bound");
+    let big = "b".repeat(1_500_000);
+    let names: Vec<String> = (0..96).map(|i| format!("g{i:02}.request.json")).collect();
+    for (i, n) in names.iter().enumerate() {
+        write_body(&bodies, n, &format!("{{\"model\":\"claude-opus-5\",\"messages\":[{{\"role\":\"user\",\"content\":\"{big}-{i}\"}}]}}"), 60_000);
+    }
+    let mut store = agentlens_store::open_store(&store_dir, "1GB", 4).expect("open");
+    let opts = PassOptions { bodies_dir: bodies.clone(), ..Default::default() };
+    let (mut skip, mut stranded, mut fsynced) = (HashSet::new(), HashSet::new(), HashSet::new());
+    let r = ingest_pass(&mut store, &opts, &mut skip, &mut stranded, &mut fsynced);
+    assert_eq!(r.ingested, 96);
+    assert_eq!(r.deleted, 96, "every verified body deletes: {:?}", r.failed.first());
+    assert!(r.failed.is_empty());
+    assert!(r.bytes_in >= agentlens_store::pass::SETTLE_GROUP_BYTES, "the fixture must cross the group boundary");
+    assert!(!r.throttled, "well under the pass budget: the group boundary is the cut, not the throttle");
+    let parts = fs::read_dir(store_dir.join(agentlens_store::BODIES_DIR)).unwrap().count();
+    assert!(parts >= 2, "two groups ⇒ two flushes ⇒ two part files (one = accumulate-then-flush-once); got {parts}");
+    assert!(names.iter().all(|n| !bodies.join(n).exists()));
+}

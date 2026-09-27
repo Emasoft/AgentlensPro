@@ -320,7 +320,7 @@ pub fn bodies_pass(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
         //
         // ponytail: bounded at DRAIN_MAX_PASSES so one enormous backlog cannot monopolise the
         // blocking pool or hold the store lock for an unbounded time — the next tick resumes it.
-        for _ in 0..DRAIN_MAX_PASSES {
+        for pass_num in 0..DRAIN_MAX_PASSES {
             // Re-evaluated per pass: draining changes the staged size, and a dir that starts over
             // cap should stop draining at age 0 once it is back under.
             let over_cap = staged_body_bytes(bodies_dir) > cap_bytes;
@@ -357,6 +357,17 @@ pub fn bodies_pass(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
             failed += res.failed.len() as u64;
             if !res.throttled {
                 break;
+            }
+            // TRDD-2JOIAH2G R2 — the bound is load-bearing: the RSS-cap kill fires between
+            // passes/ticks, so this cap is what turns one enormous backlog into per-tick
+            // nibbles. When the last allowed pass still reports throttled, say so (and what
+            // remains) instead of ending the tick silently — the next tick resumes the drain.
+            if pass_num + 1 == DRAIN_MAX_PASSES {
+                eprintln!(
+                    "{} alcore: drain stopped after DRAIN_MAX_PASSES passes; {:.1} MB remain",
+                    crate::log_ts(),
+                    staged_body_bytes(bodies_dir) as f64 / 1_048_576.0
+                );
             }
         }
     }
