@@ -187,6 +187,26 @@ impl CardStore {
             .expect("count the session cards") as usize
     }
 
+    /// (row count, total JSON-text BYTES) over the corpus — one aggregate, on this store's own
+    /// connection. TRDD-2JOIAH2G's composition breakdown: the caller reports what the card corpus
+    /// IS so the mimalloc commit number can be interpreted against it.
+    ///
+    /// `octet_length`, not `length`: `length()` counts CHARACTERS and undercounts UTF-8 text
+    /// (session content is full of it); the metric this feeds is bytes. The `::BIGINT` cast keeps
+    /// the sum out of HUGEINT, which the Rust reader would otherwise have to widen from.
+    /// `COALESCE` because SUM over an empty table is NULL.
+    ///
+    /// Returns `Result` (unlike `len`, which expects) because the caller is a recurring
+    /// diagnostics tick with a print-an-unavailable-and-continue contract, not a fail-fast
+    /// request path.
+    pub fn corpus_bytes(&self) -> agentlens_store::duckdb::Result<(usize, u64)> {
+        self.conn.query_row(
+            "SELECT count(*), COALESCE(SUM(octet_length(card)), 0)::BIGINT FROM cards",
+            [],
+            |r| Ok((r.get::<_, i64>(0)? as usize, r.get::<_, i64>(1)? as u64)),
+        )
+    }
+
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }

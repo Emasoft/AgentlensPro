@@ -492,6 +492,116 @@ fn log_spool_drain(d: &crate::hook_events::SpoolDrain) {
     }
 }
 
+/// TRDD-2JOIAH2G — the one-line composition report, PURE so its arithmetic is unit-testable.
+///
+/// The crash-loop investigation proved (exit stats: post-GC committed == peak, 1.8/1.9/2.2 GiB)
+/// that the 2+ GiB the RSS guard kills over is LIVE memory, not freed-but-retained — so the
+/// question became "live at WHAT?". This line names the measured structures and DERIVES the
+/// remainder; it must never hunt for or attribute unnamed subsystems, because a named guess
+/// reads like a finding and this is a subtraction.
+///
+/// WHY CARD TEXT IS NOT SUBTRACTED FROM COMMIT: DuckDB allocates through its own C allocator, so
+/// its buffer pool is invisible to mimalloc's commit counter — card text is reported for scale,
+/// next to its `memory_limit`, but it lives outside the denominator. Window spans are
+/// Rust-allocated (`Vec<Arc<Value>>`), so their estimate IS in-commit live data and is the one
+/// structure slack is measured against.
+pub fn composition_line(
+    commit_mb: u64,
+    rss_mb: u64,
+    window_count: usize,
+    window_est_mb: u64,
+    card_rows: usize,
+    card_text_mb: u64,
+    _persist_bytes: u64,
+) -> String {
+    let slack = commit_mb.saturating_sub(window_est_mb);
+    format!(
+        "alcore: composition: mimalloc commit {commit_mb} MB, process rss {rss_mb} MB, \
+         window.spans {window_count} (~{window_est_mb} MB sampled est), \
+         card rows {card_rows} (~{card_text_mb} MB text, DuckDB own allocator, limit 256 MiB), \
+         derived slack = commit - window est = {slack} MB"
+    )
+}
+
+/// TRDD-2JOIAH2G — one composition report: what the committed bytes ARE, in one server.log line.
+/// Phase 1 runs under the state lock and touches nothing heavier than counter reads, ≤20 `Arc`
+/// refcount bumps and one aggregate SELECT (see the comment at that call); phase 2 — the only
+/// allocation-heavy step, serializing the sample — runs OFF the lock.
+fn composition_tick(state: &Arc<Mutex<CoreState>>) {
+    let (window_count, sample, card_corpus) = {
+        let st = state.lock_timed().unwrap_or_else(|e| e.into_inner());
+        let window_count = st.window.spans.len();
+        // An even sample across the window, at most 20 handles: cloning an `Arc` is a refcount
+        // bump, so the whole lock hold stays in microseconds. `step >= 1` here because the
+        // branch only runs when the window has more than 20 spans.
+        let sample: Vec<Arc<Value>> = if window_count <= 20 {
+            st.window.spans.to_vec()
+        } else {
+            st.window.spans.iter().step_by(window_count / 20).take(20).cloned().collect()
+        };
+        // Card corpus, one aggregate. DEVIATION from the card's "never under the state lock":
+        // `CardStore` is a plain field of `CoreState` with no lock of its own, so its connection
+        // is only reachable from here — and the boot restore already holds this lock across
+        // THOUSANDS of DuckDB puts (log_reader.rs `restore`). One aggregate SELECT over ≤32k
+        // rows is bounded and strictly cheaper than that precedent.
+        (window_count, sample, st.cards.corpus_bytes())
+    };
+
+    let (card_rows, card_text_bytes) = match card_corpus {
+        Ok(v) => v,
+        Err(e) => {
+            // The corpus metric is gone, the tick is not: the line still reports commit/rss/window.
+            println!("{} alcore: composition: card corpus UNAVAILABLE: {e}", crate::log_ts());
+            (0, 0)
+        }
+    };
+
+    // Off the lock: serialize the sample (megabytes can move here) and read the process-global
+    // mimalloc counters (no CoreState involvement).
+    let mut ser_failures = 0usize;
+    let sampled_bytes: u64 = sample
+        .iter()
+        .map(|s| match serde_json::to_vec(s.as_ref()) {
+            Ok(v) => v.len() as u64,
+            Err(_) => {
+                ser_failures += 1;
+                0
+            }
+        })
+        .sum();
+    if ser_failures > 0 {
+        println!(
+            "{} alcore: composition: {ser_failures}/{} sampled spans did not serialize — window est is a LOWER bound",
+            crate::log_ts(),
+            sample.len()
+        );
+    }
+    let sampled_count = sample.len();
+    // Extrapolate the sample to the whole window. u128 on the multiply: sample bytes × window
+    // length outgrows u32 long before anything else here, and a wrapping estimate would print
+    // fiction next to a real commit number.
+    let window_est_bytes = if sampled_count > 0 {
+        (sampled_bytes as u128 * window_count as u128 / sampled_count as u128) as u64
+    } else {
+        0
+    };
+    const MB: u64 = 1024 * 1024;
+    let mi = crate::rss_guard::mimalloc_info();
+    println!(
+        "{} {}",
+        crate::log_ts(),
+        composition_line(
+            mi.current_commit_bytes / MB,
+            mi.current_rss_bytes / MB,
+            window_count,
+            window_est_bytes / MB,
+            card_rows,
+            card_text_bytes / MB,
+            0, // persist_bytes: spec-reserved parameter; the line's shape does not print it
+        )
+    );
+}
+
 /// Arm every recurring chore on `rt`. Called once from `main` after the state is built and before
 /// the listeners bind. Boot-time passes run INLINE first (the TS calls each chore once at startup
 /// before setting its interval), so a server that is restarted more often than a chore's period
@@ -676,4 +786,55 @@ pub fn spawn_all(rt: &tokio::runtime::Runtime, state: Arc<Mutex<CoreState>>) {
             log_spool_drain(&d);
         }
     });
+
+    // TRDD-2JOIAH2G — the 60s composition tick. Crash-loop forensics: the RSS guard kills at 2 GiB
+    // while exit stats say post-GC committed == peak, so what matters is naming the LIVE bytes.
+    // One tick, on the blocking pool (the serialization half moves real bytes); a skipped or
+    // overlapping tick costs one missing line, which is fine for a 60s diagnostic.
+    let s = state.clone();
+    rt.spawn(async move {
+        let mut tick = tokio::time::interval(Duration::from_secs(60));
+        tick.tick().await; // boot pass ran inline below
+        loop {
+            tick.tick().await;
+            let s2 = s.clone();
+            let _ = tokio::task::spawn_blocking(move || composition_tick(&s2)).await;
+        }
+    });
+    composition_tick(&state); // boot pass, inline — matches every other chore's boot-then-interval shape
+}
+
+#[cfg(test)]
+mod tests {
+    use super::composition_line;
+
+    #[test]
+    fn composition_line_subtracts_window_est_from_commit() {
+        let line = composition_line(2048, 1800, 5000, 400, 32_000, 120, 0);
+        assert_eq!(
+            line,
+            "alcore: composition: mimalloc commit 2048 MB, process rss 1800 MB, \
+             window.spans 5000 (~400 MB sampled est), card rows 32000 (~120 MB text, \
+             DuckDB own allocator, limit 256 MiB), derived slack = commit - window est = 1648 MB"
+        );
+    }
+
+    #[test]
+    fn composition_line_prefix_is_exact() {
+        assert!(composition_line(1, 1, 0, 0, 0, 0, 0).starts_with("alcore: composition:"));
+    }
+
+    #[test]
+    fn composition_line_saturates_when_window_est_exceeds_commit() {
+        // commit_mb < window_est_mb must not panic and must clamp at 0 — a negative slack would
+        // be presented as an attributable subsystem, which the card forbids.
+        let line = composition_line(100, 90, 1000, 400, 10, 5, 0);
+        assert!(line.ends_with("derived slack = commit - window est = 0 MB"), "{line}");
+    }
+
+    #[test]
+    fn composition_line_zero_window_yields_full_commit_as_slack() {
+        let line = composition_line(2048, 1800, 0, 0, 10, 5, 0);
+        assert!(line.ends_with("derived slack = commit - window est = 2048 MB"), "{line}");
+    }
 }
