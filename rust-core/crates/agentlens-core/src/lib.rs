@@ -815,9 +815,12 @@ pub fn log_ts() -> String {
 /// Boot-uptime stamp for every instrument line (TRDD-2JOIAH2G round-98 item B): `[up 42s] `,
 /// spliced between the `alcore: ` lead and the message. Boot phase is MEASURED, never inferred —
 /// round-96 had to reconstruct boot-A uptime from kill-block adjacency because no line carried it.
-/// The OnceLock seeds at FIRST CALL, not a `ctor` hook: every caller is a chore armed at boot, so
-/// the first call sits within milliseconds of process start, and one less init hook keeps the
-/// boot path plain. Seconds-only keeps the stamp one format — greppable and parseable at any age.
+/// The OnceLock seeds at FIRST CALL, not a `ctor` hook — one less init hook keeps the boot path
+/// plain. T0 semantics: the first instrument call comes AFTER log restore/backfill (measured ~16s
+/// after the boot provenance line, varying per boot), so the absolute `[up Ns]` UNDERCOUNTS true
+/// process uptime by that boot-work duration; each boot's first tick prints the residual itself
+/// (self-calibrating), and within-boot deltas are unaffected. Seconds-only keeps the stamp one
+/// format — greppable and parseable at any age.
 pub fn uptime_prefix() -> String {
     static BOOT: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
     let secs = BOOT.get_or_init(std::time::Instant::now).elapsed().as_secs();

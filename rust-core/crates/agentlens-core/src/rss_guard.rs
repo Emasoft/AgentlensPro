@@ -60,8 +60,9 @@ pub struct MimallocInfo {
     pub pages_abandoned: u64,
     /// Peak of the abandoned-pages counter (mi_stat_count_t.peak of `pages_abandoned`). The
     /// exit-dump reading (TRDD-2JOIAH2G round-98) showed abandoned peak 19.6K vs current 146 —
-    /// the pool DID drain within one boot — so the peak is the number that answers "how big did
-    /// it get", carried here on every read so no instrument has to re-derive it.
+    /// the pool drained BY EXIT (teardown included; live-operation drain unproven by this reading) —
+    /// so the peak is the number that answers "how big did it get", carried here on every read
+    /// so no instrument has to re-derive it.
     pub pages_abandoned_peak: u64,
     /// `committed.current` from the stats JSON. Parity twin of `current_commit_bytes` (which
     /// comes from `mi_process_info`): two read paths, one quantity — a disagreement between them
@@ -103,6 +104,9 @@ struct MimallocStatsFields {
 /// would parse to 0 forever.
 fn mimalloc_stats_fields() -> MimallocStatsFields {
     static WARNED: std::sync::Once = std::sync::Once::new();
+    // M5 discriminator (TRDD-2JOIAH2G): log the payload's stat_version once per process, on
+    // successful parses only — the UNAVAILABLE warn below already covers parse failure.
+    static VERSION_LOGGED: std::sync::Once = std::sync::Once::new();
     let mut unavailable = false;
     let read = unsafe {
         let raw = libmimalloc_sys::mi_stats_get_json(0, std::ptr::null_mut());
@@ -114,13 +118,22 @@ fn mimalloc_stats_fields() -> MimallocStatsFields {
             libmimalloc_sys::mi_free(raw.cast());
             serde_json::from_slice::<serde_json::Value>(&bytes)
                 .ok()
-                .map(|v| MimallocStatsFields {
-                    pages_abandoned: get_u64(&v, &["pages_abandoned", "current"]),
-                    pages_abandoned_peak: get_u64(&v, &["pages_abandoned", "peak"]),
-                    committed_current_bytes: get_u64(&v, &["committed", "current"]),
-                    // COUNTERS are bare integers in the JSON — `v["reset"]` IS the total.
-                    reset_total_bytes: get_u64(&v, &["reset"]),
-                    purged_total_bytes: get_u64(&v, &["purged"]),
+                .map(|v| {
+                    VERSION_LOGGED.call_once(|| {
+                        eprintln!(
+                            "{} alcore: mimalloc stats payload stat_version {} (counter shape bare-integer, pinned to libmimalloc-sys-0.1.49's writer — a binding bump must re-verify)",
+                            crate::log_ts(),
+                            get_u64(&v, &["stat_version"])
+                        );
+                    });
+                    MimallocStatsFields {
+                        pages_abandoned: get_u64(&v, &["pages_abandoned", "current"]),
+                        pages_abandoned_peak: get_u64(&v, &["pages_abandoned", "peak"]),
+                        committed_current_bytes: get_u64(&v, &["committed", "current"]),
+                        // COUNTERS are bare integers in the JSON — `v["reset"]` IS the total.
+                        reset_total_bytes: get_u64(&v, &["reset"]),
+                        purged_total_bytes: get_u64(&v, &["purged"]),
+                    }
                 })
         }
     };
@@ -607,6 +620,9 @@ mod tests {
         assert_eq!(get_u64(&json, &["reset"]), 4_294_967_296);
         assert_eq!(get_u64(&json, &["purged"]), 1_073_741_824);
         // Missing keys / non-u64 shapes degrade to 0 — the module's existing contract.
+        // M5 (TRDD-2JOIAH2G): the payload's own stat_version is the runtime discriminator the
+        // once-per-process stderr line reads — pin its parse here too.
+        assert_eq!(get_u64(&json, &["stat_version"]), 5);
         assert_eq!(get_u64(&json, &["nope"]), 0);
         assert_eq!(get_u64(&json, &["committed", "nope", "deeper"]), 0);
         assert_eq!(get_u64(&json, &["committed", "total"]), 2_147_483_648);
