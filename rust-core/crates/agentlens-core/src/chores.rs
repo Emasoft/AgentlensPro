@@ -733,9 +733,12 @@ fn abandoned_sweep_tick(_state: &Arc<Mutex<CoreState>>) {
 /// thread — the pool reuses threads, killing freshness) allocates 200 × 512 KiB page-backed
 /// objects (~100 MB) and exits. mimalloc's thread-done path UNCONDITIONALLY abandons every
 /// page the dying thread owned (round-64 mechanics — the same path that formed the 316-page
-/// stop-block residual), so `pages_abandoned` MUST move. The outcome is abandon either way:
-/// pages still owned at exit are abandoned directly, and pages already freed into the dying
-/// thread's own queues are abandoned with it.
+/// stop-block residual), so `pages_abandoned` MUST move. The ballast is LEAKED, not dropped
+/// (round-90 review, blocking fold 1): the drop self-cancels the measurement — fill-time
+/// abandons rise during allocation, then the frees drain them outright (try_free on emptied
+/// abandoned pages, free.c:249-256; retire-at-empty on owned pages, free.c:42-47) and the
+/// after-read returns to ~baseline on a healthy instrument. Only pages OWNED at exit are
+/// abandoned by thread death, so the ballast is never dropped.
 ///
 /// SEQUENCING IS LOAD-BEARING: before-read → spawn → join → after-read. The join must
 /// complete before the after-read, or the thread-exit has not run yet. A first after-read
@@ -758,7 +761,16 @@ fn abandoned_control_pass() {
             // fold 1), so every object lands on page-queue pages.
             let ballast: Vec<Vec<u8>> = (0..200).map(|_| vec![1u8; 512 * 1024]).collect();
             std::hint::black_box(&ballast);
-            drop(ballast);
+            // LEAK, not drop (round-90 review, blocking fold 1): the control's premise is
+            // "pages OWNED at exit are abandoned by thread death". Dropping the ballast
+            // self-cancels the measurement — fill-time abandons rise during allocation, then
+            // every free drains them (mi_abandoned_page_try_free frees emptied abandoned
+            // pages outright, free.c:249-256; retire-at-empty frees owned pages, free.c:42-47),
+            // so the after-read returns to ~baseline on a perfectly healthy instrument.
+            // Forgetting the Vec keeps the pages owned-at-exit: thread death is then the ONLY
+            // thing that can reclaim them, and _mi_thread_done abandons every one.
+            // 100 MB leaked once at boot is bounded and irrelevant next to the 2+ GB commit.
+            std::mem::forget(ballast);
         })
         .expect("failed to spawn alcore-abandon-control thread");
     spawned
@@ -786,11 +798,15 @@ fn abandoned_control_pass() {
     }
 }
 
-/// The control's pass threshold, pure so it is testable without a live mimalloc: the dying
-/// thread's ballast must move `pages_abandoned` by >= 100 pages. Signed — the pool can also
-/// SHRINK if the sweep's churn races the control.
+/// The control's pass threshold, pure so it is testable without a live mimalloc. GEOMETRY-
+/// DERIVED (round-90 review, blocking fold 2): 200 × 512 KiB = 100 MB in 2 MiB large pages
+/// = 4 blocks/page ≈ 50 pages — the review's arithmetic; the threshold is set at 30 to sit
+/// clear of read-noise (a few pages) while staying below the dominant-geometry expectation,
+/// and the FIRST live delta is calibration data: if the observed delta sits far from 50,
+/// the geometry assumption (4-per-page) is what's wrong, not the counter. Signed — the pool
+/// can also SHRINK if the sweep's churn races the control.
 fn control_passes(delta_pages: i64) -> bool {
-    delta_pages >= 100
+    delta_pages >= 30
 }
 
 /// Arm every recurring chore on `rt`. Called once from `main` after the state is built and before
@@ -1070,13 +1086,14 @@ mod tests {
     }
 
     #[test]
-    fn control_passes_at_100_page_boundary() {
-        // The dying thread's ballast must move pages_abandoned by >= 100 pages. Exactly 100
-        // passes, 99 fails — the boundary is inclusive by the card's `>= 100` wording. The
-        // delta is signed: a shrinking pool (sweep churn racing the control) fails too.
-        assert!(control_passes(100));
-        assert!(control_passes(1000));
-        assert!(!control_passes(99));
+    fn control_passes_at_30_page_boundary() {
+        // Geometry-derived threshold (round-90): 200 x 512 KiB in 2 MiB large pages = ~50
+        // pages; the bar sits at 30 — clear of read-noise, below the dominant-geometry
+        // expectation. Exactly 30 passes, 29 fails. The delta is signed: a shrinking pool
+        // (sweep churn racing the control) fails too.
+        assert!(control_passes(30));
+        assert!(control_passes(50));
+        assert!(!control_passes(29));
         assert!(!control_passes(0));
         assert!(!control_passes(-5));
     }
