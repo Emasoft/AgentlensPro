@@ -723,50 +723,74 @@ fn abandoned_sweep_tick(_state: &Arc<Mutex<CoreState>>) {
     );
 }
 
-/// TRDD-2JOIAH2G — positive control for the sweep's instrument, run ONCE at boot on the same
-/// blocking-pool thread shape the sweep uses. A KNOWN 200 MB ballast is allocated, the commit
-/// counter is read, the ballast dropped, the counter read again: with `purge_delay=0`
-/// (ALCORE_MIMALLOC_PURGE_DELAY_MS, serverControl.ts) the decommit happens at free time, so a
-/// healthy instrument recovers >= 150 MB. PASS/FAIL is the instrument verdict, not the server's.
+/// TRDD-2JOIAH2G — positive control for the sweep's instrument, run ONCE at boot. Rounds
+/// 86/87/88 established the old commit-drop ballast CANNOT discriminate (its commit delta is
+/// satisfiable from already-committed free stock; the abandoned counter never moves), so that
+/// mechanism is deleted and the control now synthesizes a KNOWN abandoned-count change via
+/// thread lifecycle.
 ///
-/// COVERAGE LIMIT (round-84 review fold 2, mandatory): this control validates the COMMIT-counter
-/// reading only. It does NOT and CANNOT validate the pages_abandoned delta — abandons happen on
-/// thread death / full-page abandonment and cannot be synthesized in-process. A passing control
-/// therefore does NOT make sweep interpretations valid: a zero abandoned-delta must not be read
-/// as "live-in-page" until the pressure mechanism is demonstrated to move the counter at least
-/// once (or source-verified end-to-end alloc→reclaim).
+/// Mechanism: a GENUINELY NEW OS thread (`std::thread::Builder`, NOT a tokio blocking-pool
+/// thread — the pool reuses threads, killing freshness) allocates 200 × 512 KiB page-backed
+/// objects (~100 MB) and exits. mimalloc's thread-done path UNCONDITIONALLY abandons every
+/// page the dying thread owned (round-64 mechanics — the same path that formed the 316-page
+/// stop-block residual), so `pages_abandoned` MUST move. The outcome is abandon either way:
+/// pages still owned at exit are abandoned directly, and pages already freed into the dying
+/// thread's own queues are abandoned with it.
+///
+/// SEQUENCING IS LOAD-BEARING: before-read → spawn → join → after-read. The join must
+/// complete before the after-read, or the thread-exit has not run yet. A first after-read
+/// still showing a sub-threshold delta gets ONE re-read after 2s — a hedge for abandoned-stat
+/// merge-visibility lag (round-89): the mechanism is a hypothesis, and the retry is cheap and
+/// safe under both merge semantics.
+///
+/// Unlike the commit-drop control, whose PASS was satisfiable without any abandon happening,
+/// this control FAILs only if the abandon mechanism or the counter-reading path itself is
+/// broken. Read-path noise: each `mimalloc_info()` read allocates (JSON buffer + parse), so
+/// deltas under a few MB / a few pages are read-noise, not signal — hence the 100-page floor.
 fn abandoned_control_pass() {
-    const MB: u64 = 1024 * 1024;
-    const CONTROL_BYTES: usize = 200 * 1024 * 1024;
-    // `vec![1u8; N]`, not `vec![0u8; N]`: a zeroed vec can take the OS zero-page path; the
-    // non-zeroed form memsets every byte (same precedent as rss_guard.rs's own control test).
-    let ballast: Vec<u8> = vec![1u8; CONTROL_BYTES];
-    std::hint::black_box(&ballast);
-    // ORDER IS LOAD-BEARING (round-83): `before` is read AFTER the allocation completes and
-    // BEFORE the drop. If the drop ran first, purge_delay=0 would decommit at free time and the
-    // before-read would see the already-decommitted number — the control false-fails.
-    let before_mb = crate::rss_guard::mimalloc_info().current_commit_bytes / MB;
-    drop(ballast);
-    let after_mb = crate::rss_guard::mimalloc_info().current_commit_bytes / MB;
-    let dropped = before_mb.saturating_sub(after_mb);
+    let before = crate::rss_guard::mimalloc_info().pages_abandoned;
+    let spawned = std::thread::Builder::new()
+        .name("alcore-abandon-control".into())
+        .spawn(|| {
+            // `vec![1u8; N]`, not `vec![0u8; N]`: a zeroed vec can take the OS zero-page path;
+            // the non-zeroed form memsets every byte (precedent: rss_guard.rs's control test).
+            // 512 KiB objects are page-backed large-class — never the HUGE class (round-84
+            // fold 1), so every object lands on page-queue pages.
+            let ballast: Vec<Vec<u8>> = (0..200).map(|_| vec![1u8; 512 * 1024]).collect();
+            std::hint::black_box(&ballast);
+            drop(ballast);
+        })
+        .expect("failed to spawn alcore-abandon-control thread");
+    spawned
+        .join()
+        .expect("alcore-abandon-control thread panicked");
+    let mut after = crate::rss_guard::mimalloc_info().pages_abandoned;
+    if !control_passes(after as i64 - before as i64) {
+        std::thread::sleep(Duration::from_secs(2));
+        after = crate::rss_guard::mimalloc_info().pages_abandoned;
+    }
+    let delta = after as i64 - before as i64;
+    // The thread id printed is the SPAWNING thread's (the blocking-pool task running this
+    // function) — the ballast thread is anonymous by design, its death is the mechanism.
     let thread = format!("{:?}", std::thread::current().id());
-    if control_passes(dropped) {
+    if control_passes(delta) {
         println!(
-            "{} alcore: abandoned-control: commit {before_mb} -> {after_mb} MB (dropped {dropped} MB) — PASS, thread {thread}",
+            "{} alcore: abandoned-control: pages {before} -> {after} (delta {delta}) — PASS, thread {thread}",
             crate::log_ts()
         );
     } else {
         println!(
-            "{} alcore: abandoned-control: FAILED — instrument invalid (dropped {dropped} MB < 150), thread {thread}",
+            "{} alcore: abandoned-control: pages {before} -> {after} (delta {delta}) — FAILED (delta {delta} < 100), thread {thread}",
             crate::log_ts()
         );
     }
 }
 
-/// The control's pass threshold, pure so it is testable without a live mimalloc: of the 200 MB
-/// ballast, a healthy commit counter must give back >= 150 MB.
-fn control_passes(dropped_mb: u64) -> bool {
-    dropped_mb >= 150
+/// The control's pass threshold, pure so it is testable without a live mimalloc: the dying
+/// thread's ballast must move `pages_abandoned` by >= 100 pages. Signed — the pool can also
+/// SHRINK if the sweep's churn races the control.
+fn control_passes(delta_pages: i64) -> bool {
+    delta_pages >= 100
 }
 
 /// Arm every recurring chore on `rt`. Called once from `main` after the state is built and before
@@ -973,8 +997,10 @@ pub fn spawn_all(rt: &tokio::runtime::Runtime, state: Arc<Mutex<CoreState>>) {
     // TRDD-2JOIAH2G — the abandoned-sweep chore: control ONCE at boot, then the 60s interval.
     // Same blocking-pool shape as the other spawn_blocking chores; one task awaiting each tick
     // means no overlap guard is needed (same construction as resident_blob_scan above). The
-    // control runs on the spawned pool thread (not inline on main) so its thread identity
-    // matches the sweep's — thead-local theap state is what the sweep reaches.
+    // control itself spawns a GENUINELY NEW OS thread for its ballast (pool threads are
+    // reused, and thread DEATH is the mechanism under test — the allocating thread must
+    // actually die); `pages_abandoned` is a process-global stat, so the reading thread's
+    // identity does not matter.
     let s = state.clone();
     rt.spawn(async move {
         let _ = tokio::task::spawn_blocking(abandoned_control_pass).await;
@@ -1044,12 +1070,14 @@ mod tests {
     }
 
     #[test]
-    fn control_passes_at_150_mb_boundary() {
-        // Of the 200 MB ballast, >= 150 MB back = healthy instrument. Exactly 150 passes, 149
-        // fails — the boundary is inclusive by the card's `>= 150` wording.
-        assert!(control_passes(150));
-        assert!(control_passes(200));
-        assert!(!control_passes(149));
+    fn control_passes_at_100_page_boundary() {
+        // The dying thread's ballast must move pages_abandoned by >= 100 pages. Exactly 100
+        // passes, 99 fails — the boundary is inclusive by the card's `>= 100` wording. The
+        // delta is signed: a shrinking pool (sweep churn racing the control) fails too.
+        assert!(control_passes(100));
+        assert!(control_passes(1000));
+        assert!(!control_passes(99));
         assert!(!control_passes(0));
+        assert!(!control_passes(-5));
     }
 }
