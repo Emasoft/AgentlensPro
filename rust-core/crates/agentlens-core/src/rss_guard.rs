@@ -44,11 +44,63 @@ pub fn rss_hard_cap_bytes() -> u64 {
 /// `current_commit_bytes` is mimalloc's OWN committed-pages counter (decremented on decommit),
 /// the closest thing to "Rust heap dirty + freed-undecommitted". `peak_rss_bytes` is the process
 /// peak (ru_maxrss). On non-macOS prim may leave the RSS fields commit-derived.
+/// TRDD-2JOIAH2G deviation note: the card expected `pages_abandoned` to be an extra
+/// `mi_process_info` out-param. It is not — stats.c:544-568 writes ONLY elapsed/user/system/
+/// rss/peak_rss/commit/peak_commit/page_faults; the count lives in `mi_stats_t.pages_abandoned.
+/// current` and the only surface libmimalloc-sys 0.1.49 binds for it is `mi_stats_get_json`
+/// (extended.rs, same "extended" feature). See `pages_abandoned_current`.
 pub struct MimallocInfo {
     pub current_rss_bytes: u64,
     pub peak_rss_bytes: u64,
     pub current_commit_bytes: u64,
     pub page_faults: u64,
+    /// Abandoned mimalloc pages (pages whose owning thread died; reclaimable by any thread via
+    /// the reclaim path). 0 also means "could not read" — a missing counter says so once on
+    /// stderr rather than lying low, see `pages_abandoned_current`.
+    pub pages_abandoned: u64,
+}
+
+/// Read `pages_abandoned.current` from `mi_stats_get_json`. The binding allocates the JSON via
+/// mimalloc's own allocator and hands it back for `mi_free` — copy the bytes out, free the
+/// buffer, then parse the named field. Hand-mirroring `mi_stats_t` (74-bin arrays in macro
+/// order) to call `mi_subproc_stats_get` directly would be a layout-drift trap; here the C side
+/// validates size+version and a parse failure is loud (one-time stderr warn, reading 0).
+fn pages_abandoned_current() -> u64 {
+    static WARNED: std::sync::Once = std::sync::Once::new();
+    let mut unavailable = false;
+    let read = unsafe {
+        let raw = libmimalloc_sys::mi_stats_get_json(0, std::ptr::null_mut());
+        if raw.is_null() {
+            unavailable = true;
+            None
+        } else {
+            let bytes = std::ffi::CStr::from_ptr(raw).to_bytes().to_vec();
+            libmimalloc_sys::mi_free(raw.cast());
+            serde_json::from_slice::<serde_json::Value>(&bytes)
+                .ok()
+                .and_then(|v| {
+                    v.get("pages_abandoned")
+                        .and_then(|s| s.get("current"))
+                        .and_then(serde_json::Value::as_u64)
+                })
+        }
+    };
+    let value = match read {
+        Some(v) => v,
+        None => {
+            unavailable = true;
+            0
+        }
+    };
+    if unavailable {
+        WARNED.call_once(|| {
+            eprintln!(
+                "{} alcore: mimalloc pages_abandoned UNAVAILABLE (mi_stats_get_json/parse failed) — abandoned readings report 0",
+                crate::log_ts()
+            );
+        });
+    }
+    value
 }
 
 pub fn mimalloc_info() -> MimallocInfo {
@@ -70,6 +122,7 @@ pub fn mimalloc_info() -> MimallocInfo {
         peak_rss_bytes: peak_rss as u64,
         current_commit_bytes: current_commit as u64,
         page_faults: page_faults as u64,
+        pages_abandoned: pages_abandoned_current(),
     }
 }
 
@@ -275,7 +328,7 @@ mod tests {
     use super::*;
 
     fn mi(current_rss: u64) -> MimallocInfo {
-        MimallocInfo { current_rss_bytes: current_rss, peak_rss_bytes: current_rss, current_commit_bytes: current_rss, page_faults: 1 }
+        MimallocInfo { current_rss_bytes: current_rss, peak_rss_bytes: current_rss, current_commit_bytes: current_rss, page_faults: 1, pages_abandoned: 0 }
     }
 
     fn snap(cap_bytes: u64) -> CulpritSnapshot {

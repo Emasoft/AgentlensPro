@@ -662,6 +662,85 @@ fn collect_drop_pct(before_mb: u64, after_mb: u64) -> (u64, u64) {
     (dropped, pct)
 }
 
+/// TRDD-2JOIAH2G — the abandoned-page sweep, the REMEDY TRIAL after the collect-probe retired
+/// (round-80: mi_collect's reach is theaps + calling-theap pages + arena purge only; the
+/// abandoned pool is the prime remaining drainable candidate and no instrument had measured it).
+/// Every 60s, when `pages_abandoned > 10_000`, apply allocation pressure and log the counter
+/// delta; below the threshold the pool is small and not worth the intervention — print nothing,
+/// do nothing.
+///
+/// Process-global counters: NO CoreState involvement, never take the state lock (round-84
+/// constraint) — the parameter exists only to keep the chore signature uniform. The reclaim
+/// lever is allocation pressure (4 rounds of 8x16 MB allocated and freed immediately), NOT
+/// `mi_collect` — the probe that called mi_collect is retired; the reclaim path
+/// (`reclaim_on_free` / `mi_abandoned_page_try_free`, free.c:375-387) runs inside free.
+fn abandoned_sweep_tick(_state: &Arc<Mutex<CoreState>>) {
+    const MB: u64 = 1024 * 1024;
+    const SWEEP_MIN_PAGES: u64 = 10_000;
+    let before = crate::rss_guard::mimalloc_info();
+    if before.pages_abandoned <= SWEEP_MIN_PAGES {
+        return;
+    }
+    for _ in 0..4 {
+        let blocks: Vec<Vec<u8>> = (0..8).map(|_| vec![1u8; 16 * 1024 * 1024]).collect();
+        std::hint::black_box(&blocks);
+        drop(blocks);
+    }
+    let after = crate::rss_guard::mimalloc_info();
+    // Signed deltas: the pool can also GROW from the pressure (fresh pages may be abandoned
+    // after), and a saturating delta would print that as 0 — a direction the reading needs.
+    let pages_delta = after.pages_abandoned as i64 - before.pages_abandoned as i64;
+    let commit_delta =
+        (after.current_commit_bytes as i64 - before.current_commit_bytes as i64) / MB as i64;
+    println!(
+        "{} alcore: abandoned-sweep: pages {} -> {} (delta {pages_delta}), commit {} -> {} MB (delta {commit_delta} MB)",
+        crate::log_ts(),
+        before.pages_abandoned,
+        after.pages_abandoned,
+        before.current_commit_bytes / MB,
+        after.current_commit_bytes / MB,
+    );
+}
+
+/// TRDD-2JOIAH2G — positive control for the sweep's instrument, run ONCE at boot on the same
+/// blocking-pool thread shape the sweep uses. A KNOWN 200 MB ballast is allocated, the commit
+/// counter is read, the ballast dropped, the counter read again: with `purge_delay=0`
+/// (ALCORE_MIMALLOC_PURGE_DELAY_MS, serverControl.ts) the decommit happens at free time, so a
+/// healthy instrument recovers >= 150 MB. PASS/FAIL is the instrument verdict, not the server's.
+fn abandoned_control_pass() {
+    const MB: u64 = 1024 * 1024;
+    const CONTROL_BYTES: usize = 200 * 1024 * 1024;
+    // `vec![1u8; N]`, not `vec![0u8; N]`: a zeroed vec can take the OS zero-page path; the
+    // non-zeroed form memsets every byte (same precedent as rss_guard.rs's own control test).
+    let ballast: Vec<u8> = vec![1u8; CONTROL_BYTES];
+    std::hint::black_box(&ballast);
+    // ORDER IS LOAD-BEARING (round-83): `before` is read AFTER the allocation completes and
+    // BEFORE the drop. If the drop ran first, purge_delay=0 would decommit at free time and the
+    // before-read would see the already-decommitted number — the control false-fails.
+    let before_mb = crate::rss_guard::mimalloc_info().current_commit_bytes / MB;
+    drop(ballast);
+    let after_mb = crate::rss_guard::mimalloc_info().current_commit_bytes / MB;
+    let dropped = before_mb.saturating_sub(after_mb);
+    let thread = format!("{:?}", std::thread::current().id());
+    if control_passes(dropped) {
+        println!(
+            "{} alcore: abandoned-control: commit {before_mb} -> {after_mb} MB (dropped {dropped} MB) — PASS, thread {thread}",
+            crate::log_ts()
+        );
+    } else {
+        println!(
+            "{} alcore: abandoned-control: FAILED — instrument invalid (dropped {dropped} MB < 150), thread {thread}",
+            crate::log_ts()
+        );
+    }
+}
+
+/// The control's pass threshold, pure so it is testable without a live mimalloc: of the 200 MB
+/// ballast, a healthy commit counter must give back >= 150 MB.
+fn control_passes(dropped_mb: u64) -> bool {
+    dropped_mb >= 150
+}
+
 /// Arm every recurring chore on `rt`. Called once from `main` after the state is built and before
 /// the listeners bind. Boot-time passes run INLINE first (the TS calls each chore once at startup
 /// before setting its interval), so a server that is restarted more often than a chore's period
@@ -862,11 +941,28 @@ pub fn spawn_all(rt: &tokio::runtime::Runtime, state: Arc<Mutex<CoreState>>) {
         }
     });
     composition_tick(&state); // boot pass, inline — matches every other chore's boot-then-interval shape
+
+    // TRDD-2JOIAH2G — the abandoned-sweep chore: control ONCE at boot, then the 60s interval.
+    // Same blocking-pool shape as the other spawn_blocking chores; one task awaiting each tick
+    // means no overlap guard is needed (same construction as resident_blob_scan above). The
+    // control runs on the spawned pool thread (not inline on main) so its thread identity
+    // matches the sweep's — thead-local theap state is what the sweep reaches.
+    let s = state.clone();
+    rt.spawn(async move {
+        let _ = tokio::task::spawn_blocking(abandoned_control_pass).await;
+        let mut tick = tokio::time::interval(Duration::from_secs(60));
+        tick.tick().await; // the first tick fires immediately — boot did the control, skip to 60s
+        loop {
+            tick.tick().await;
+            let s2 = s.clone();
+            let _ = tokio::task::spawn_blocking(move || abandoned_sweep_tick(&s2)).await;
+        }
+    });
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{collect_drop_pct, composition_line};
+    use super::{collect_drop_pct, composition_line, control_passes};
 
     #[test]
     fn composition_line_subtracts_window_est_from_commit() {
@@ -917,5 +1013,15 @@ mod tests {
     #[test]
     fn collect_drop_pct_before_zero_yields_zero() {
         assert_eq!(collect_drop_pct(0, 0), (0, 0));
+    }
+
+    #[test]
+    fn control_passes_at_150_mb_boundary() {
+        // Of the 200 MB ballast, >= 150 MB back = healthy instrument. Exactly 150 passes, 149
+        // fails — the boundary is inclusive by the card's `>= 150` wording.
+        assert!(control_passes(150));
+        assert!(control_passes(200));
+        assert!(!control_passes(149));
+        assert!(!control_passes(0));
     }
 }
