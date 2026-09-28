@@ -56,16 +56,52 @@ pub struct MimallocInfo {
     pub page_faults: u64,
     /// Abandoned mimalloc pages (pages whose owning thread died; reclaimable by any thread via
     /// the reclaim path). 0 also means "could not read" — a missing counter says so once on
-    /// stderr rather than lying low, see `pages_abandoned_current`.
+    /// stderr rather than lying low, see `mimalloc_stats_fields`.
     pub pages_abandoned: u64,
+    /// Peak of the abandoned-pages counter (mi_stat_count_t.peak of `pages_abandoned`). The
+    /// exit-dump reading (TRDD-2JOIAH2G round-98) showed abandoned peak 19.6K vs current 146 —
+    /// the pool DID drain within one boot — so the peak is the number that answers "how big did
+    /// it get", carried here on every read so no instrument has to re-derive it.
+    pub pages_abandoned_peak: u64,
+    /// `committed.current` from the stats JSON. Parity twin of `current_commit_bytes` (which
+    /// comes from `mi_process_info`): two read paths, one quantity — a disagreement between them
+    /// is a bug in one of the paths, which is exactly what a discriminator instrument is for.
+    pub committed_current_bytes: u64,
+    /// Cumulative bytes mimalloc has RESET (decommitted-in-place, os.c reset path) since boot —
+    /// `MI_STAT_COUNTER(reset)`, serialized as a bare integer by the JSON writer (stats.c
+    /// mi_json_buf_print_counter_value). Answers "does mimalloc decommit under pressure".
+    pub reset_total_bytes: u64,
+    /// Cumulative bytes mimalloc has PURGED (madvise/msync discard) since boot — same shape as
+    /// `reset_total_bytes`.
+    pub purged_total_bytes: u64,
 }
 
-/// Read `pages_abandoned.current` from `mi_stats_get_json`. The binding allocates the JSON via
+/// One read of the mimalloc stats JSON — the fields this module's instruments need, parsed in a
+/// single `mi_stats_get_json` call (each call allocates the JSON buffer + parses it, so callers
+/// that need several fields must NOT make several calls). 0 on any parse failure; a missing
+/// counter says so once on stderr rather than lying low (the WARNED contract below).
+struct MimallocStatsFields {
+    pages_abandoned: u64,
+    pages_abandoned_peak: u64,
+    committed_current_bytes: u64,
+    reset_total_bytes: u64,
+    purged_total_bytes: u64,
+}
+
+/// Read the stats fields from `mi_stats_get_json`. The binding allocates the JSON via
 /// mimalloc's own allocator and hands it back for `mi_free` — copy the bytes out, free the
-/// buffer, then parse the named field. Hand-mirroring `mi_stats_t` (74-bin arrays in macro
+/// buffer, then parse the named fields. Hand-mirroring `mi_stats_t` (74-bin arrays in macro
 /// order) to call `mi_subproc_stats_get` directly would be a layout-drift trap; here the C side
 /// validates size+version and a parse failure is loud (one-time stderr warn, reading 0).
-fn pages_abandoned_current() -> u64 {
+///
+/// PAYLOAD SHAPE (verified against the vendored writer, stats.c `mi_stats_get_json_from`,
+/// libmimalloc-sys-0.1.49): `MI_STAT_COUNT` fields serialize as objects
+/// `{ "total": N, "peak": N, "current": N }` (mi_json_buf_print_count_value) — so
+/// `committed` and `pages_abandoned` are objects; `MI_STAT_COUNTER` fields serialize as BARE
+/// INTEGERS (mi_json_buf_print_counter_value → mi_json_buf_print_value) — so `reset` and
+/// `purged` are plain numbers with no `.total` suffix in the JSON. Reading them as objects
+/// would parse to 0 forever.
+fn mimalloc_stats_fields() -> MimallocStatsFields {
     static WARNED: std::sync::Once = std::sync::Once::new();
     let mut unavailable = false;
     let read = unsafe {
@@ -78,10 +114,13 @@ fn pages_abandoned_current() -> u64 {
             libmimalloc_sys::mi_free(raw.cast());
             serde_json::from_slice::<serde_json::Value>(&bytes)
                 .ok()
-                .and_then(|v| {
-                    v.get("pages_abandoned")
-                        .and_then(|s| s.get("current"))
-                        .and_then(serde_json::Value::as_u64)
+                .map(|v| MimallocStatsFields {
+                    pages_abandoned: get_u64(&v, &["pages_abandoned", "current"]),
+                    pages_abandoned_peak: get_u64(&v, &["pages_abandoned", "peak"]),
+                    committed_current_bytes: get_u64(&v, &["committed", "current"]),
+                    // COUNTERS are bare integers in the JSON — `v["reset"]` IS the total.
+                    reset_total_bytes: get_u64(&v, &["reset"]),
+                    purged_total_bytes: get_u64(&v, &["purged"]),
                 })
         }
     };
@@ -89,18 +128,39 @@ fn pages_abandoned_current() -> u64 {
         Some(v) => v,
         None => {
             unavailable = true;
-            0
+            MimallocStatsFields {
+                pages_abandoned: 0,
+                pages_abandoned_peak: 0,
+                committed_current_bytes: 0,
+                reset_total_bytes: 0,
+                purged_total_bytes: 0,
+            }
         }
     };
     if unavailable {
         WARNED.call_once(|| {
             eprintln!(
-                "{} alcore: mimalloc pages_abandoned UNAVAILABLE (mi_stats_get_json/parse failed) — abandoned readings report 0",
+                "{} alcore: mimalloc stats UNAVAILABLE (mi_stats_get_json/parse failed) — abandoned/committed/reset/purged readings report 0",
                 crate::log_ts()
             );
         });
     }
     value
+}
+
+/// Path-lookup helper: walk `keys` down the JSON value, returning 0 when any hop is missing or
+/// not a u64. (serde_json's `.pointer()` needs a `/`-joined pointer string; explicit hops keep
+/// the failure mode obvious.) 0 on parse failure is the module's existing contract — the
+/// one-time stderr warn above is the loud half.
+fn get_u64(v: &serde_json::Value, keys: &[&str]) -> u64 {
+    let mut cur = v;
+    for k in keys {
+        match cur.get(k) {
+            Some(next) => cur = next,
+            None => return 0,
+        }
+    }
+    cur.as_u64().unwrap_or(0)
 }
 
 pub fn mimalloc_info() -> MimallocInfo {
@@ -117,12 +177,17 @@ pub fn mimalloc_info() -> MimallocInfo {
             &mut page_faults,
         );
     }
+    let stats = mimalloc_stats_fields();
     MimallocInfo {
         current_rss_bytes: current_rss as u64,
         peak_rss_bytes: peak_rss as u64,
         current_commit_bytes: current_commit as u64,
         page_faults: page_faults as u64,
-        pages_abandoned: pages_abandoned_current(),
+        pages_abandoned: stats.pages_abandoned,
+        pages_abandoned_peak: stats.pages_abandoned_peak,
+        committed_current_bytes: stats.committed_current_bytes,
+        reset_total_bytes: stats.reset_total_bytes,
+        purged_total_bytes: stats.purged_total_bytes,
     }
 }
 
@@ -328,7 +393,17 @@ mod tests {
     use super::*;
 
     fn mi(current_rss: u64) -> MimallocInfo {
-        MimallocInfo { current_rss_bytes: current_rss, peak_rss_bytes: current_rss, current_commit_bytes: current_rss, page_faults: 1, pages_abandoned: 0 }
+        MimallocInfo {
+            current_rss_bytes: current_rss,
+            peak_rss_bytes: current_rss,
+            current_commit_bytes: current_rss,
+            page_faults: 1,
+            pages_abandoned: 0,
+            pages_abandoned_peak: 0,
+            committed_current_bytes: current_rss,
+            reset_total_bytes: 0,
+            purged_total_bytes: 0,
+        }
     }
 
     fn snap(cap_bytes: u64) -> CulpritSnapshot {
@@ -507,5 +582,36 @@ mod tests {
         for line in d.lines() {
             assert!(line.starts_with("alcore: RSS HARD CAP —"), "line not prefixed for grep: {line}");
         }
+    }
+
+    #[test]
+    fn stats_fields_parse_counts_as_objects_and_counters_as_bare_integers() {
+        // TRDD-2JOIAH2G round-98: the parse extension for committed/reset/purged/peak. The JSON
+        // shape is pinned by the vendored writer (stats.c mi_stats_get_json_from):
+        // MI_STAT_COUNT fields are OBJECTS {total, peak, current}, MI_STAT_COUNTER fields are
+        // BARE INTEGERS — so `reset`/`purged` must NOT be read with a `.total` hop (the payload
+        // has no such key; reading it would parse to 0 forever and silently gut the
+        // decommit-policy instrument). The fixture below mirrors the writer's exact emission.
+        let json = serde_json::json!({
+            "stat_version": 5,
+            "pages": { "total": 10, "peak": 12, "current": 8 },
+            "committed": { "total": 2147483648u64, "peak": 2201170432u64, "current": 2097152000u64 },
+            "reset": 4294967296u64,
+            "purged": 1073741824u64,
+            "pages_abandoned": { "total": 20000, "peak": 19600, "current": 146 }
+        });
+        assert_eq!(get_u64(&json, &["committed", "current"]), 2_097_152_000);
+        assert_eq!(get_u64(&json, &["pages_abandoned", "current"]), 146);
+        assert_eq!(get_u64(&json, &["pages_abandoned", "peak"]), 19_600);
+        // The counter shape is the load-bearing assertion: a `.total` hop on these keys returns 0.
+        assert_eq!(get_u64(&json, &["reset"]), 4_294_967_296);
+        assert_eq!(get_u64(&json, &["purged"]), 1_073_741_824);
+        // Missing keys / non-u64 shapes degrade to 0 — the module's existing contract.
+        assert_eq!(get_u64(&json, &["nope"]), 0);
+        assert_eq!(get_u64(&json, &["committed", "nope", "deeper"]), 0);
+        assert_eq!(get_u64(&json, &["committed", "total"]), 2_147_483_648);
+        let mut s = json.clone();
+        s["reset"] = serde_json::Value::String("not a number".into());
+        assert_eq!(get_u64(&s, &["reset"]), 0);
     }
 }

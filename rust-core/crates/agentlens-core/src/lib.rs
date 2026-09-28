@@ -812,6 +812,18 @@ pub fn log_ts() -> String {
     chrono::Local::now().format("%Y-%m-%dT%H:%M:%S%z").to_string()
 }
 
+/// Boot-uptime stamp for every instrument line (TRDD-2JOIAH2G round-98 item B): `[up 42s] `,
+/// spliced between the `alcore: ` lead and the message. Boot phase is MEASURED, never inferred —
+/// round-96 had to reconstruct boot-A uptime from kill-block adjacency because no line carried it.
+/// The OnceLock seeds at FIRST CALL, not a `ctor` hook: every caller is a chore armed at boot, so
+/// the first call sits within milliseconds of process start, and one less init hook keeps the
+/// boot path plain. Seconds-only keeps the stamp one format — greppable and parseable at any age.
+pub fn uptime_prefix() -> String {
+    static BOOT: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    let secs = BOOT.get_or_init(std::time::Instant::now).elapsed().as_secs();
+    format!("[up {secs}s] ")
+}
+
 /// One POST body through the transforms into the store. Never fails toward the wire — the
 /// frozen contract answers 200 whatever happens; failures are counted, not surfaced.
 /// The parse half of an OTLP POST — pure, so the HTTP handler runs it BEFORE taking the state

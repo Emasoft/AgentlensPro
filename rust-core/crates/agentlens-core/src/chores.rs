@@ -618,9 +618,25 @@ fn composition_tick(state: &Arc<Mutex<CoreState>>) {
     let stripped_cache_mb = cache_mb(&stripped_cached);
     let mi = crate::rss_guard::mimalloc_info();
     let commit_mb = mi.current_commit_bytes / MB;
+    // TRDD-2JOIAH2G round-98 Task A: committed/reset/purged answer "does mimalloc decommit under
+    // pressure" — the composition line's shape is frozen except for this suffix. `reset`/`purged`
+    // are cumulative-since-boot counters (bare integers in the stats JSON), so 0 genuinely means
+    // "nothing ever decommitted" and is printed; the omitted pieces are the ones with no reading.
+    let mut mi_suffix = String::new();
+    if mi.committed_current_bytes > 0 {
+        mi_suffix.push_str(&format!(", mi committed {} MB", mi.committed_current_bytes / MB));
+    }
+    mi_suffix.push_str(&format!(", mi reset {} MB, mi purged {} MB", mi.reset_total_bytes / MB, mi.purged_total_bytes / MB));
+    if mi.pages_abandoned > 0 {
+        mi_suffix.push_str(&format!(", mi abandoned {} pages", mi.pages_abandoned));
+    }
+    if mi.pages_abandoned_peak > 0 {
+        mi_suffix.push_str(&format!(" (peak {})", mi.pages_abandoned_peak));
+    }
     println!(
-        "{} {}",
+        "{} {}{}{}",
         crate::log_ts(),
+        crate::uptime_prefix(),
         composition_line(
             commit_mb,
             mi.current_rss_bytes / MB,
@@ -631,7 +647,8 @@ fn composition_tick(state: &Arc<Mutex<CoreState>>) {
             0, // persist_bytes: spec-reserved parameter; the line's shape does not print it
             summary_cache_mb,
             stripped_cache_mb,
-        )
+        ),
+        mi_suffix
     );
 
     // TRDD-2JOIAH2G collect-probe: force mimalloc's FULL collect (visits ALL heaps, including
@@ -647,8 +664,9 @@ fn composition_tick(state: &Arc<Mutex<CoreState>>) {
         let after_mb = after.current_commit_bytes / MB;
         let (dropped, pct) = collect_drop_pct(commit_mb, after_mb);
         println!(
-            "{} alcore: collect-probe: before {commit_mb} MB, after {after_mb} MB, dropped {dropped} MB ({pct}% of before)",
-            crate::log_ts()
+            "{} {}alcore: collect-probe: before {commit_mb} MB, after {after_mb} MB, dropped {dropped} MB ({pct}% of before)",
+            crate::log_ts(),
+            crate::uptime_prefix()
         );
     }
 }
@@ -683,8 +701,9 @@ fn abandoned_sweep_tick(_state: &Arc<Mutex<CoreState>>) {
         // silent behind the gate (round-84 review fold 3: a permanent parse failure must
         // not disable the instrument invisibly).
         println!(
-            "{} alcore: abandoned-sweep: pages UNAVAILABLE or zero ({}) — no sweep",
+            "{} {}alcore: abandoned-sweep: pages UNAVAILABLE or zero ({}) — no sweep",
             crate::log_ts(),
+            crate::uptime_prefix(),
             before.pages_abandoned
         );
         return;
@@ -714,8 +733,9 @@ fn abandoned_sweep_tick(_state: &Arc<Mutex<CoreState>>) {
     let commit_delta =
         (after.current_commit_bytes as i64 - before.current_commit_bytes as i64) / MB as i64;
     println!(
-        "{} alcore: abandoned-sweep: pages {} -> {} (delta {pages_delta}), commit {} -> {} MB (delta {commit_delta} MB)",
+        "{} {}alcore: abandoned-sweep: pages {} -> {} (delta {pages_delta}), commit {} -> {} MB (delta {commit_delta} MB)",
         crate::log_ts(),
+        crate::uptime_prefix(),
         before.pages_abandoned,
         after.pages_abandoned,
         before.current_commit_bytes / MB,
@@ -787,13 +807,15 @@ fn abandoned_control_pass() {
     let thread = format!("{:?}", std::thread::current().id());
     if control_passes(delta) {
         println!(
-            "{} alcore: abandoned-control: pages {before} -> {after} (delta {delta}) — PASS, thread {thread}",
-            crate::log_ts()
+            "{} {}alcore: abandoned-control: pages {before} -> {after} (delta {delta}) — PASS, thread {thread}",
+            crate::log_ts(),
+            crate::uptime_prefix()
         );
     } else {
         println!(
-            "{} alcore: abandoned-control: pages {before} -> {after} (delta {delta}) — FAILED (delta {delta} < 100), thread {thread}",
-            crate::log_ts()
+            "{} {}alcore: abandoned-control: pages {before} -> {after} (delta {delta}) — FAILED (delta {delta} < 100), thread {thread}",
+            crate::log_ts(),
+            crate::uptime_prefix()
         );
     }
 }

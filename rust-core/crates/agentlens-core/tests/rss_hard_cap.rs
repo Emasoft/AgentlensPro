@@ -33,7 +33,17 @@ fn snap(cap_bytes: u64) -> CulpritSnapshot {
 }
 
 fn fake_mimalloc(current_rss_bytes: u64) -> MimallocInfo {
-    MimallocInfo { current_rss_bytes, peak_rss_bytes: current_rss_bytes, current_commit_bytes: current_rss_bytes, page_faults: 9, pages_abandoned: 0 }
+    MimallocInfo {
+        current_rss_bytes,
+        peak_rss_bytes: current_rss_bytes,
+        current_commit_bytes: current_rss_bytes,
+        page_faults: 9,
+        pages_abandoned: 0,
+        pages_abandoned_peak: 0,
+        committed_current_bytes: current_rss_bytes,
+        reset_total_bytes: 0,
+        purged_total_bytes: 0,
+    }
 }
 
 fn tmp_log(tag: &str) -> std::path::PathBuf {
