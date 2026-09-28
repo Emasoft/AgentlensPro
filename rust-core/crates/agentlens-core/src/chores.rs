@@ -678,13 +678,34 @@ fn abandoned_sweep_tick(_state: &Arc<Mutex<CoreState>>) {
     const MB: u64 = 1024 * 1024;
     const SWEEP_MIN_PAGES: u64 = 10_000;
     let before = crate::rss_guard::mimalloc_info();
+    if before.pages_abandoned == 0 {
+        // Nothing to sweep; also the parse-failure path reads 0 — say so rather than sit
+        // silent behind the gate (round-84 review fold 3: a permanent parse failure must
+        // not disable the instrument invisibly).
+        println!(
+            "{} alcore: abandoned-sweep: pages UNAVAILABLE or zero ({}) — no sweep",
+            crate::log_ts(),
+            before.pages_abandoned
+        );
+        return;
+    }
     if before.pages_abandoned <= SWEEP_MIN_PAGES {
         return;
     }
+    // Page-backed pressure ONLY (round-84 review fold 1): 16 MB blocks are HUGE-class —
+    // they never enter page queues and freeing them never touches the abandoned-page
+    // paths (reclaim_on_free / mi_abandoned_page_try_free fire only for page-backed
+    // objects). Draining the pool requires same-size-class pressure: thousands of
+    // small/medium objects (64 KiB page class) and several large objects (512 KiB,
+    // inside the ~1 MiB large-page bound), so the page-queue machinery must reclaim
+    // abandoned pages to satisfy the allocations.
     for _ in 0..4 {
-        let blocks: Vec<Vec<u8>> = (0..8).map(|_| vec![1u8; 16 * 1024 * 1024]).collect();
-        std::hint::black_box(&blocks);
-        drop(blocks);
+        let small: Vec<Vec<u8>> = (0..4000).map(|_| vec![1u8; 16 * 1024]).collect();
+        std::hint::black_box(&small);
+        drop(small);
+        let large: Vec<Vec<u8>> = (0..64).map(|_| vec![1u8; 512 * 1024]).collect();
+        std::hint::black_box(&large);
+        drop(large);
     }
     let after = crate::rss_guard::mimalloc_info();
     // Signed deltas: the pool can also GROW from the pressure (fresh pages may be abandoned
@@ -707,6 +728,13 @@ fn abandoned_sweep_tick(_state: &Arc<Mutex<CoreState>>) {
 /// counter is read, the ballast dropped, the counter read again: with `purge_delay=0`
 /// (ALCORE_MIMALLOC_PURGE_DELAY_MS, serverControl.ts) the decommit happens at free time, so a
 /// healthy instrument recovers >= 150 MB. PASS/FAIL is the instrument verdict, not the server's.
+///
+/// COVERAGE LIMIT (round-84 review fold 2, mandatory): this control validates the COMMIT-counter
+/// reading only. It does NOT and CANNOT validate the pages_abandoned delta — abandons happen on
+/// thread death / full-page abandonment and cannot be synthesized in-process. A passing control
+/// therefore does NOT make sweep interpretations valid: a zero abandoned-delta must not be read
+/// as "live-in-page" until the pressure mechanism is demonstrated to move the counter at least
+/// once (or source-verified end-to-end alloc→reclaim).
 fn abandoned_control_pass() {
     const MB: u64 = 1024 * 1024;
     const CONTROL_BYTES: usize = 200 * 1024 * 1024;
