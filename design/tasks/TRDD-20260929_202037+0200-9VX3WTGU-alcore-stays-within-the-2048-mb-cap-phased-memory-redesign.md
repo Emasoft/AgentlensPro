@@ -4,7 +4,7 @@ title: alcore stays within the 2048 MB cap — phased memory redesign
 column: dev
 status: tasked
 created: 2026-09-29T20:20:37+0200
-updated: 2026-09-29T20:25:24+0200
+updated: 2026-09-29T21:38:17+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: feature
@@ -15,6 +15,7 @@ mandated-by: none
 approved: true
 approval-judge: main-agent@agentlenspro
 approval-datetime: 2026-09-29T20:20:37+0200
+implementation-commits: [e13f537c]
 ---
 
 # alcore stays within the 2048 MB cap — phased memory redesign
@@ -153,3 +154,7 @@ Cap 2048 MB. `check_and_enforce`. Ingestion durability (spans → NDJSON day fil
 ## Amendment 1 — dashboard reads: DuckDB pagination + SQL stats (owner directive 2026-09-29, verbatim)
 
 Owner: 'i still see 600 cards loaded in memory.. why does it needs so many cards at the same time? if it is for displaying the dashboard, duck db pagination is enough for a lazy loading pagination, especially if only one tree branch can be expanded at any time. if it is for computing statistics and find culprits, using duckdb sql functions it is way faster and only returns the list with the results. why those?' — DESIGN RULE ADOPTED: the dashboard NEVER receives the whole card corpus. Card listing endpoints serve DuckDB-paginated pages (keyset pagination on cards.duckdb seq; one expanded tree branch fetched at a time); statistics and culprit searches run as DuckDB SQL aggregations returning small result lists, never in-Rust scans of the corpus; the per-rebuild whole-corpus materialization (Phase C target) and the whole-corpus summary/stripped caches SHRINK to a hot-set consistent with this rule. Scope landing: extends Phase C (summary/snapshot shrinks to what a page query needs) and Phase E (session_summary_sql wiring is the stats-engine exemplar); the dashboard-side pagination contract (media/src message protocol) is Phase E scope, implemented with Phase C's card-layer changes. The LRU caches (bodies 200, accounts 200, composition 64, overlay 500, hook ring 600->500) are re-judged against this rule when Phase G touches their consumers: keep only what a paginated + SQL-stats dashboard actually reads hot.
+
+## STATE — Phase 0 deployed, attribution gate running (2026-09-29T21:45+0200)
+
+PHASE 0 LANDED AND DEPLOYED: commit e13f537c (visit-API mi_live_bytes via raw mi_subproc_* externs — v3 has NO mi_heap_get_backing, nm-verified; composition line carries mi live / mi free-in-page ALWAYS LAST, ? MB when unmeasured, saturating free-in-page; ballast 100→8 MB gated AGENTLENS_ABANDON_CONTROL=1 default-OFF with visible SKIPPED line; threshold 30→2 pages). Gates: workspace 753 passed / 0 failed (main session's own run, exit 0; the worker's reported pre-existing log_reader_parity watcher failure did NOT reproduce), clippy -D warnings clean; review fork VERDICT COMMIT CLEAN. Deploy: release build 1m22s + cp + codesign destination (replacing existing signature) + --version exit 64 (runs) + server restart pid 43146; FIRST LIVE READING up=0s: committed 663 MB, live 27 MB, free-in-page 635 MB — 96% of commit already freed-resident AT BOOT, confirming the freed-resident diagnosis. AUTHORITY RULE (from the mint review): this card's body is the authoritative spec; the ~/.claude/plans/ancient-pondering-sloth.md file is a frozen pre-approval snapshot. REVIEW-FORK MINORS TO LAND AS CLAUSES (all three, from the Phase 0 review): (1) OLD TRDD-2JOIAH2G BASELINES ARE REGIME-RETIRED — boot baselines 625-1194 MB and abandoned-peak 531-532 MB included the 100 MB ballast + ungated control; post-Phase 0 baselines are re-derived fresh, a delta against the old figures is NOT a churn win; (2) GATE OPERATING NOTES — a ?-heavy first hour is the contract working (walk can fail under pressure), not instrument failure; live/free-in-page jitter a few MB tick-to-tick under concurrent frees — compare 60s+ window slopes, never single ticks; (3) CONSISTENCY CHECK — live + free-in-page vs committed is printed by the line itself; systematic drift beyond jitter = counting bug (cross-heap double-count unproven-but-unlikely; abandoned pages are per-heap in v3). NEXT: 24h attribution gate (started 2026-09-29T21:36, ends ~2026-09-30T21:36) — read free-in-page slope composition at the end, re-rank C/F/D/E/G per the plan's gate clause; then Phase A (pressure ladder). Pending card-touch fixes from the Amendment 1 review (4 MINORs: TS-side pagination implementation unassigned — add media/src to Phase E scope; NEVER-rule binds dashboard-facing endpoints only; LRU re-judgment re-anchored to 'whichever phase touches their consumers first'; one honest framing sentence — pagination is the contract, the 600-card memory fix comes from C+G+E combined).
