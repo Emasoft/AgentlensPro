@@ -4,7 +4,7 @@ title: alcore stays within the 2048 MB cap — phased memory redesign
 column: dev
 status: tasked
 created: 2026-09-29T20:20:37+0200
-updated: 2026-09-29T20:20:37+0200
+updated: 2026-09-29T20:25:24+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: feature
@@ -149,3 +149,7 @@ Cap 2048 MB. `check_and_enforce`. Ingestion durability (spans → NDJSON day fil
 ## Approval log
 
 - 2026-09-29T20:20:37+0200 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+
+## Amendment 1 — dashboard reads: DuckDB pagination + SQL stats (owner directive 2026-09-29, verbatim)
+
+Owner: 'i still see 600 cards loaded in memory.. why does it needs so many cards at the same time? if it is for displaying the dashboard, duck db pagination is enough for a lazy loading pagination, especially if only one tree branch can be expanded at any time. if it is for computing statistics and find culprits, using duckdb sql functions it is way faster and only returns the list with the results. why those?' — DESIGN RULE ADOPTED: the dashboard NEVER receives the whole card corpus. Card listing endpoints serve DuckDB-paginated pages (keyset pagination on cards.duckdb seq; one expanded tree branch fetched at a time); statistics and culprit searches run as DuckDB SQL aggregations returning small result lists, never in-Rust scans of the corpus; the per-rebuild whole-corpus materialization (Phase C target) and the whole-corpus summary/stripped caches SHRINK to a hot-set consistent with this rule. Scope landing: extends Phase C (summary/snapshot shrinks to what a page query needs) and Phase E (session_summary_sql wiring is the stats-engine exemplar); the dashboard-side pagination contract (media/src message protocol) is Phase E scope, implemented with Phase C's card-layer changes. The LRU caches (bodies 200, accounts 200, composition 64, overlay 500, hook ring 600->500) are re-judged against this rule when Phase G touches their consumers: keep only what a paginated + SQL-stats dashboard actually reads hot.
