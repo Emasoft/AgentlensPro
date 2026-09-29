@@ -176,6 +176,125 @@ fn get_u64(v: &serde_json::Value, keys: &[&str]) -> u64 {
     cur.as_u64().unwrap_or(0)
 }
 
+// ---- TRDD-9VX3WTGU Phase 0: byte-level live instrument ------------------------------------
+//
+// The binding surface actually available (verified against the vendored sources AND the compiled
+// static lib on this machine, libmimalloc-sys-0.1.49):
+//
+//   * The crate enables only the `extended` feature, and build.rs selects the vendored
+//     **v3** C tree when `v2` is absent (build.rs:7-11; target/debug/build output confirms
+//     `cargo:INCLUDE_DIR=.../v3/include`). v3's `mi_heap_get_backing`/`mi_heap_get_default`
+//     do not exist at all (v2-only, heap.c:200-211) — the compiled lib has zero
+//     `mi_heap_get_backing` symbols.
+//   * v3 DOES expose a heap-enumeration surface: `mi_subproc_visit_heaps` (init.c:586) walks
+//     the `subproc->heaps` linked list under `heaps_lock`; `subproc_main.heaps = &heap_main`
+//     at init (init.c:283), and every `mi_heap_new` registers itself (heap.c:127-133). Rust's
+//     mimalloc never calls `mi_heap_new`, so in practice the list is just `heap_main` — but
+//     the walk is the correct, future-proof form.
+//   * v3's `mi_heap_visit_blocks` (arena.c:2287) visits every page REGISTERED TO ONE HEAP via
+//     the per-heap arena-page bitmaps plus the heap's `os_abandoned_pages` list. Ordinary
+//     thread allocations run through theaps whose pages register under their owning heap
+//     (`_mi_theap_heap(theap)`, arena.c:753-769), and all theaps default to `heap_main`
+//     (init.c:618), so walking every heap in the subproc covers every page.
+//   * With `visit_all_blocks = false` the visitor fires once per page area; `_mi_heap_area_init`
+//     (theap.c:538) fills `area.used` = `page->used` (live block count) and `area.block_size` =
+//     usable block size — so `used * block_size` is the live-bytes total WITHOUT touching
+//     individual blocks. `nm` confirms all four symbols are in the linked static lib.
+//
+// The `mi_subproc_visit_heaps` + `mi_subproc_current` pair is NOT in the Rust binding
+// (extended.rs has no `mi_subproc_*`), so those two are declared here against the same static
+// lib — signatures from v3's mimalloc.h:350-358 (`mi_subproc_id_t` is a 1-pointer struct).
+unsafe extern "C" {
+    fn mi_subproc_current() -> MiSubprocId;
+    fn mi_subproc_visit_heaps(
+        subproc: MiSubprocId,
+        visitor: mi_heap_visit_fun,
+        arg: *mut std::ffi::c_void,
+    ) -> bool;
+}
+
+/// `mi_subproc_id_t` — abstract 1-pointer handle (v3 mimalloc.h:350).
+#[repr(C)]
+struct MiSubprocId(*mut std::ffi::c_void);
+
+/// `mi_heap_visit_fun` — per-heap visitor (v3 mimalloc.h:357). Return false to stop.
+#[allow(non_camel_case_types)] // mirrors the C typedef name verbatim — the mimalloc surface
+type mi_heap_visit_fun = unsafe extern "C" fn(heap: *mut libmimalloc_sys::mi_heap_t, arg: *mut std::ffi::c_void) -> bool;
+
+/// Visitor state: sums `area.used * area.block_size` over every page area. With
+/// `visit_all_blocks = false` the C side calls the BLOCK visitor exactly once per area with a
+/// null block (arena.c:2226), passing the area — so this one extern fn serves both the heap
+/// walk (via a shim) and the per-page accumulation.
+struct LiveBytesAcc {
+    live_bytes: u64,
+    heaps_visited: u32,
+}
+
+/// Per-page-area accumulator, the `mi_block_visit_fun` handed to `mi_heap_visit_blocks`.
+unsafe extern "C" fn live_bytes_block_visitor(
+    _heap: *const libmimalloc_sys::mi_heap_t,
+    area: *const libmimalloc_sys::mi_heap_area_t,
+    _block: *mut std::ffi::c_void,
+    _block_size: usize,
+    arg: *mut std::ffi::c_void,
+) -> bool {
+    let acc = &mut *(arg as *mut LiveBytesAcc);
+    if !area.is_null() {
+        let a = unsafe { &*area };
+        acc.live_bytes = acc.live_bytes.saturating_add(a.used as u64 * a.block_size as u64);
+    }
+    true
+}
+
+/// Per-heap shim, the `mi_heap_visit_fun` handed to `mi_subproc_visit_heaps`: runs
+/// `mi_heap_visit_blocks` on this heap with the same accumulator. A `false` return from the
+/// block visitor (never ours) or a failed visit aborts the heap walk.
+unsafe extern "C" fn live_bytes_heap_visitor(
+    heap: *mut libmimalloc_sys::mi_heap_t,
+    arg: *mut std::ffi::c_void,
+) -> bool {
+    let acc = &mut *(arg as *mut LiveBytesAcc);
+    let ok = unsafe {
+        libmimalloc_sys::mi_heap_visit_blocks(heap, false, Some(live_bytes_block_visitor), arg)
+    };
+    if ok {
+        acc.heaps_visited += 1;
+    }
+    ok
+}
+
+/// Total bytes of LIVE (allocated) blocks across every heap in the current subprocess —
+/// TRDD-9VX3WTGU Phase 0's byte-level instrument. `None` only when the walk itself fails (no
+/// subprocess handle, or a heap visit errored): a working walk with 0 live bytes is a real
+/// reading, not a failure.
+///
+/// Runs on the 60s composition tick. Allocation cost: the two visitor state structs live on
+/// the caller's stack (passed by `&mut` through `arg`), and `mi_heap_visit_blocks` with
+/// `visit_all_blocks = false` reads page metadata only — it never walks individual blocks —
+/// so the walk allocates ~nothing. Concurrency: mimalloc's own caveat (arena.c:2249) is that
+/// the visit assumes it is the only thread running with the heap; the read takes
+/// `heaps_lock` inside the C side for the heap list but page counts can shift under a
+/// concurrent free — the composition line is a diagnostic, a ±few-MB skew between `live` and
+/// `committed` sampled microseconds apart is acceptable, and the number is never used for a
+/// kill decision (the RSS guard keys on phys footprint, not this).
+pub fn mi_live_bytes() -> Option<u64> {
+    let mut acc = LiveBytesAcc { live_bytes: 0, heaps_visited: 0 };
+    let arg = &mut acc as *mut LiveBytesAcc as *mut std::ffi::c_void;
+    let ok = unsafe {
+        let subproc = mi_subproc_current();
+        if subproc.0.is_null() {
+            false
+        } else {
+            mi_subproc_visit_heaps(subproc, live_bytes_heap_visitor, arg)
+        }
+    };
+    if ok {
+        Some(acc.live_bytes)
+    } else {
+        None
+    }
+}
+
 pub fn mimalloc_info() -> MimallocInfo {
     let (mut current_rss, mut peak_rss, mut current_commit, mut page_faults) = (0usize, 0usize, 0usize, 0usize);
     unsafe {

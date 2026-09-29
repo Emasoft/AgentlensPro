@@ -534,6 +534,43 @@ pub fn composition_line(
     )
 }
 
+/// The mi-suffix appended after `composition_line`'s text on the 60s composition tick. PURE so
+/// the full line's exact shape is unit-testable (the tick itself takes the state lock and
+/// prints — this builder only formats). Field order is the frozen shape: committed (omitted
+/// when 0 — a missing reading must not read as "zero committed"), reset, purged, abandoned
+/// (with peak when nonzero), and TRDD-9VX3WTGU Phase 0's live/free-in-page pair ALWAYS last:
+///
+/// * `live` = walked live-block bytes (`rss_guard::mi_live_bytes`) — what the process actually
+///   holds in allocated blocks.
+/// * `free-in-page` = committed − live, saturating — the residue inside pages mimalloc still
+///   holds (partially-used pages + freed-but-undecommitted), the number Phases C/F/D re-rank
+///   against.
+/// * A failed walk (`None`) prints `?` for BOTH fields: an unmeasurable quantity must be
+///   visible, not read as 0 — same contract as `none MB` for the caches above.
+fn mi_suffix(mi: &crate::rss_guard::MimallocInfo, live_bytes: Option<u64>) -> String {
+    const MB: u64 = 1024 * 1024;
+    let mut s = String::new();
+    if mi.committed_current_bytes > 0 {
+        s.push_str(&format!(", mi committed {} MB", mi.committed_current_bytes / MB));
+    }
+    s.push_str(&format!(", mi reset {} MB, mi purged {} MB", mi.reset_total_bytes / MB, mi.purged_total_bytes / MB));
+    if mi.pages_abandoned > 0 {
+        s.push_str(&format!(", mi abandoned {} pages", mi.pages_abandoned));
+    }
+    if mi.pages_abandoned_peak > 0 {
+        s.push_str(&format!(" (peak {})", mi.pages_abandoned_peak));
+    }
+    match live_bytes {
+        Some(live) => {
+            let live_mb = live / MB;
+            let free_in_page_mb = mi.committed_current_bytes.saturating_sub(live) / MB;
+            s.push_str(&format!(", mi live {live_mb} MB, mi free-in-page {free_in_page_mb} MB"));
+        }
+        None => s.push_str(", mi live ? MB, mi free-in-page ? MB"),
+    }
+    s
+}
+
 /// TRDD-2JOIAH2G — one composition report: what the committed bytes ARE, in one server.log line.
 /// Phase 1 runs under the state lock and touches nothing heavier than counter reads, ≤20 `Arc`
 /// refcount bumps and one aggregate SELECT (see the comment at that call); phase 2 — the only
@@ -618,21 +655,8 @@ fn composition_tick(state: &Arc<Mutex<CoreState>>) {
     let stripped_cache_mb = cache_mb(&stripped_cached);
     let mi = crate::rss_guard::mimalloc_info();
     let commit_mb = mi.current_commit_bytes / MB;
-    // TRDD-2JOIAH2G round-98 Task A: committed/reset/purged answer "does mimalloc decommit under
-    // pressure" — the composition line's shape is frozen except for this suffix. `reset`/`purged`
-    // are cumulative-since-boot counters (bare integers in the stats JSON), so 0 genuinely means
-    // "nothing ever decommitted" and is printed; the omitted pieces are the ones with no reading.
-    let mut mi_suffix = String::new();
-    if mi.committed_current_bytes > 0 {
-        mi_suffix.push_str(&format!(", mi committed {} MB", mi.committed_current_bytes / MB));
-    }
-    mi_suffix.push_str(&format!(", mi reset {} MB, mi purged {} MB", mi.reset_total_bytes / MB, mi.purged_total_bytes / MB));
-    if mi.pages_abandoned > 0 {
-        mi_suffix.push_str(&format!(", mi abandoned {} pages", mi.pages_abandoned));
-    }
-    if mi.pages_abandoned_peak > 0 {
-        mi_suffix.push_str(&format!(" (peak {})", mi.pages_abandoned_peak));
-    }
+    let live_bytes = crate::rss_guard::mi_live_bytes();
+    let suffix = mi_suffix(&mi, live_bytes);
     println!(
         "{} {}{}{}",
         crate::log_ts(),
@@ -648,7 +672,7 @@ fn composition_tick(state: &Arc<Mutex<CoreState>>) {
             summary_cache_mb,
             stripped_cache_mb,
         ),
-        mi_suffix
+        suffix
     );
 
     // TRDD-2JOIAH2G collect-probe: force mimalloc's FULL collect (visits ALL heaps, including
@@ -750,8 +774,8 @@ fn abandoned_sweep_tick(_state: &Arc<Mutex<CoreState>>) {
 /// thread lifecycle.
 ///
 /// Mechanism: a GENUINELY NEW OS thread (`std::thread::Builder`, NOT a tokio blocking-pool
-/// thread — the pool reuses threads, killing freshness) allocates 200 × 512 KiB page-backed
-/// objects (~100 MB) and exits. mimalloc's thread-done path UNCONDITIONALLY abandons every
+/// thread — the pool reuses threads, killing freshness) allocates 16 × 512 KiB page-backed
+/// objects (~8 MB) and exits. mimalloc's thread-done path UNCONDITIONALLY abandons every
 /// page the dying thread owned (round-64 mechanics — the same path that formed the 316-page
 /// stop-block residual), so `pages_abandoned` MUST move. The ballast is LEAKED, not dropped
 /// (round-90 review, blocking fold 1): the drop self-cancels the measurement — fill-time
@@ -770,7 +794,24 @@ fn abandoned_sweep_tick(_state: &Arc<Mutex<CoreState>>) {
 /// this control FAILs only if the abandon mechanism or the counter-reading path itself is
 /// broken. Read-path noise: each `mimalloc_info()` read allocates (JSON buffer + parse), so
 /// deltas under a few MB / a few pages are read-noise, not signal — hence the 100-page floor.
+///
+/// TRDD-9VX3WTGU Phase 0: TWO changes. (1) The ballast shrank 200 → 16 objects (100 MB → 8 MB
+/// leaked at every boot): the instrument was proven (its positive control passed repeatedly),
+/// and an UNCONDITIONAL 100 MB-per-boot permanent leak is exactly the kind of standing residue
+/// this redesign is out to kill — 8 MB keeps the same 4-blocks-per-2MiB-page geometry, so the
+/// mechanism under test is unchanged. (2) The whole pass is gated behind
+/// `AGENTLENS_ABANDON_CONTROL=1` (default OFF): it is a one-time instrument calibration, not a
+/// recurring need — the skip must be VISIBLE (one boot log line) so an operator who expects it
+/// can tell "off" from "ran and passed".
 fn abandoned_control_pass() {
+    if std::env::var("AGENTLENS_ABANDON_CONTROL").ok().as_deref() != Some("1") {
+        println!(
+            "{} {}alcore: abandoned-control: SKIPPED (set AGENTLENS_ABANDON_CONTROL=1 to run the boot-time positive control)",
+            crate::log_ts(),
+            crate::uptime_prefix()
+        );
+        return;
+    }
     let before = crate::rss_guard::mimalloc_info().pages_abandoned;
     let spawned = std::thread::Builder::new()
         .name("alcore-abandon-control".into())
@@ -779,7 +820,7 @@ fn abandoned_control_pass() {
             // the non-zeroed form memsets every byte (precedent: rss_guard.rs's control test).
             // 512 KiB objects are page-backed large-class — never the HUGE class (round-84
             // fold 1), so every object lands on page-queue pages.
-            let ballast: Vec<Vec<u8>> = (0..200).map(|_| vec![1u8; 512 * 1024]).collect();
+            let ballast: Vec<Vec<u8>> = (0..16).map(|_| vec![1u8; 512 * 1024]).collect();
             std::hint::black_box(&ballast);
             // LEAK, not drop (round-90 review, blocking fold 1): the control's premise is
             // "pages OWNED at exit are abandoned by thread death". Dropping the ballast
@@ -789,7 +830,7 @@ fn abandoned_control_pass() {
             // so the after-read returns to ~baseline on a perfectly healthy instrument.
             // Forgetting the Vec keeps the pages owned-at-exit: thread death is then the ONLY
             // thing that can reclaim them, and _mi_thread_done abandons every one.
-            // 100 MB leaked once at boot is bounded and irrelevant next to the 2+ GB commit.
+            // 8 MB leaked once at boot is bounded and irrelevant next to the 2+ GB commit.
             std::mem::forget(ballast);
         })
         .expect("failed to spawn alcore-abandon-control thread");
@@ -821,14 +862,15 @@ fn abandoned_control_pass() {
 }
 
 /// The control's pass threshold, pure so it is testable without a live mimalloc. GEOMETRY-
-/// DERIVED (round-90 review, blocking fold 2): 200 × 512 KiB = 100 MB in 2 MiB large pages
-/// = 4 blocks/page ≈ 50 pages — the review's arithmetic; the threshold is set at 30 to sit
-/// clear of read-noise (a few pages) while staying below the dominant-geometry expectation,
-/// and the FIRST live delta is calibration data: if the observed delta sits far from 50,
+/// DERIVED (round-90 review, blocking fold 2; re-derived for the Phase 0 ballast, TRDD-9VX3WTGU):
+/// 16 × 512 KiB = 8 MB in 2 MiB large pages = 4 blocks/page ≈ 4 pages — the same arithmetic at
+/// the shrunken ballast. The threshold sits at 2: one page is indistinguishable from read-noise
+/// (the round-90 reasoning), two clear it while staying below the dominant-geometry expectation,
+/// and the FIRST live delta is calibration data: if the observed delta sits far from 4,
 /// the geometry assumption (4-per-page) is what's wrong, not the counter. Signed — the pool
 /// can also SHRINK if the sweep's churn races the control.
 fn control_passes(delta_pages: i64) -> bool {
-    delta_pages >= 30
+    delta_pages >= 2
 }
 
 /// Arm every recurring chore on `rt`. Called once from `main` after the state is built and before
@@ -1054,7 +1096,25 @@ pub fn spawn_all(rt: &tokio::runtime::Runtime, state: Arc<Mutex<CoreState>>) {
 
 #[cfg(test)]
 mod tests {
-    use super::{collect_drop_pct, composition_line, control_passes};
+    use super::{collect_drop_pct, composition_line, control_passes, mi_suffix};
+    use crate::rss_guard::MimallocInfo;
+
+    /// A stats-shaped MimallocInfo for suffix tests: the fields the mi-suffix reads, at
+    /// plausible magnitudes. `mimalloc_info()` itself needs a live mimalloc (test binaries
+    /// don't link one as global allocator) — the suffix builder is pure over the struct.
+    fn fake_mi() -> MimallocInfo {
+        MimallocInfo {
+            current_rss_bytes: 1800 * 1024 * 1024,
+            peak_rss_bytes: 1900 * 1024 * 1024,
+            current_commit_bytes: 2048 * 1024 * 1024,
+            page_faults: 9,
+            pages_abandoned: 146,
+            pages_abandoned_peak: 19_600,
+            committed_current_bytes: 2048 * 1024 * 1024,
+            reset_total_bytes: 3 * 1024 * 1024,
+            purged_total_bytes: 0,
+        }
+    }
 
     #[test]
     fn composition_line_subtracts_window_est_from_commit() {
@@ -1066,6 +1126,57 @@ mod tests {
              stripped-cache 300 MB, card rows 32000 (~120 MB text, \
              DuckDB own allocator, limit 256 MiB), derived slack = commit - window est = 1648 MB"
         );
+    }
+
+    #[test]
+    fn full_line_shape_with_live_and_free_in_page() {
+        // TRDD-9VX3WTGU Phase 0: the FULL composition line's exact shape, including the new
+        // suffix tail. The suffix builder is the format half of composition_tick; pairing it
+        // with composition_line here pins the whole line a `grep alcore: composition` would
+        // see. Plausible values: commit 2048 MB, live 640 MB → free-in-page 1408 MB.
+        let mi = fake_mi();
+        let live = 640 * 1024 * 1024;
+        let line = format!(
+            "{}{}",
+            composition_line(
+                mi.current_commit_bytes / (1024 * 1024),
+                mi.current_rss_bytes / (1024 * 1024),
+                5000,
+                400,
+                32_000,
+                120,
+                0,
+                Some(500),
+                Some(300),
+            ),
+            mi_suffix(&mi, Some(live))
+        );
+        assert_eq!(
+            line,
+            "alcore: composition: mimalloc commit 2048 MB, process rss 1800 MB, \
+             window.spans 5000 (~400 MB sampled est), summary-cache 500 MB, \
+             stripped-cache 300 MB, card rows 32000 (~120 MB text, \
+             DuckDB own allocator, limit 256 MiB), derived slack = commit - window est = 1648 MB, \
+             mi committed 2048 MB, mi reset 3 MB, mi purged 0 MB, mi abandoned 146 pages \
+             (peak 19600), mi live 640 MB, mi free-in-page 1408 MB"
+        );
+    }
+
+    #[test]
+    fn mi_suffix_unmeasured_live_prints_question_marks() {
+        // A failed walk must print `?` for BOTH fields, never 0 — "unmeasured" and
+        // "zero bytes" are different facts (same contract as the caches' `none MB`).
+        let s = mi_suffix(&fake_mi(), None);
+        assert!(s.ends_with(", mi live ? MB, mi free-in-page ? MB"), "{s}");
+        assert!(s.contains("mi committed 2048 MB"), "{s}");
+    }
+
+    #[test]
+    fn mi_suffix_live_over_commit_saturates_free_in_page() {
+        // free-in-page is saturating: a live reading above committed (the two counters are
+        // sampled microseconds apart) yields 0, never an underflow panic.
+        let s = mi_suffix(&fake_mi(), Some(3 * 1024 * 1024 * 1024));
+        assert!(s.ends_with(", mi live 3072 MB, mi free-in-page 0 MB"), "{s}");
     }
 
     #[test]
@@ -1108,14 +1219,15 @@ mod tests {
     }
 
     #[test]
-    fn control_passes_at_30_page_boundary() {
-        // Geometry-derived threshold (round-90): 200 x 512 KiB in 2 MiB large pages = ~50
-        // pages; the bar sits at 30 — clear of read-noise, below the dominant-geometry
-        // expectation. Exactly 30 passes, 29 fails. The delta is signed: a shrinking pool
-        // (sweep churn racing the control) fails too.
-        assert!(control_passes(30));
-        assert!(control_passes(50));
-        assert!(!control_passes(29));
+    fn control_passes_at_2_page_boundary() {
+        // Geometry-derived threshold re-derived for the Phase 0 ballast (TRDD-9VX3WTGU):
+        // 16 x 512 KiB in 2 MiB large pages = ~4 pages; the bar sits at 2 — one page is
+        // read-noise, two clear it, below the dominant-geometry expectation. Exactly 2 passes,
+        // 1 fails. The delta is signed: a shrinking pool (sweep churn racing the control)
+        // fails too.
+        assert!(control_passes(2));
+        assert!(control_passes(4));
+        assert!(!control_passes(1));
         assert!(!control_passes(0));
         assert!(!control_passes(-5));
     }
