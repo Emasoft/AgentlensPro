@@ -2563,17 +2563,17 @@
   {
    "decision": "deny",
    "code": "RUNAWAY_FANOUT",
-   "reason": "AgentLens burn-gate: 9 subagent launches in the last 60s — runaway fan-out. From this project: explore, fork. Let the in-flight wave settle, then relaunch this agent (retry in ~60s is usually enough). Override: AGENTLENS_GATE=off."
+   "reason": "AgentLens burn-gate: 9 subagent launches in the last 60s — runaway fan-out. From this project: explore, fork. Let the in-flight wave settle, then relaunch this agent (retry in ~60s is usually enough). When fanning out, launch agents ONE at a time with a ~10 s pause between launches — simultaneous launches trigger API rate limiting. Override: AGENTLENS_GATE=off."
   },
   {
    "decision": "warn",
    "code": "RUNAWAY_FANOUT",
-   "reason": "[deny downgraded to warning: AGENTLENS_GATE_MODE=warn] AgentLens burn-gate: 9 subagent launches in the last 60s — runaway fan-out. From this project: explore, fork. Let the in-flight wave settle, then relaunch this agent (retry in ~60s is usually enough). Override: AGENTLENS_GATE=off."
+   "reason": "[deny downgraded to warning: AGENTLENS_GATE_MODE=warn] AgentLens burn-gate: 9 subagent launches in the last 60s — runaway fan-out. From this project: explore, fork. Let the in-flight wave settle, then relaunch this agent (retry in ~60s is usually enough). When fanning out, launch agents ONE at a time with a ~10 s pause between launches — simultaneous launches trigger API rate limiting. Override: AGENTLENS_GATE=off."
   },
   {
    "decision": "deny",
    "code": "COLD_RESUME_FANOUT",
-   "reason": "AgentLens burn-gate: a rate-limit stall ended 2min ago (turn died in session sess-cal… in …/projA), so the fan-out's agent prefix caches are past their 5-min TTL (doc-matrix), and 1 agent(s) already launched since — that first launch IS the cache warm-up. Every further agent launched before it lands re-pays the full prefix at the write rate. Retry this launch in ~60s. Override: AGENTLENS_GATE=off."
+   "reason": "AgentLens burn-gate: a rate-limit stall ended 2min ago (turn died in session sess-cal… in …/projA), so the fan-out's agent prefix caches are past their 5-min TTL (doc-matrix), and 1 agent(s) already launched since — that first launch IS the cache warm-up. Every further agent launched before it lands re-pays the full prefix at the write rate. Retry this launch in ~60s. When fanning out, launch agents ONE at a time with a ~10 s pause between launches — simultaneous launches trigger API rate limiting. Override: AGENTLENS_GATE=off."
   },
   {
    "decision": "warn",
@@ -2583,7 +2583,7 @@
   {
    "decision": "deny",
    "code": "FORK_STORM_FORMING",
-   "reason": "AgentLens burn-gate: fork of a ~350k-token parent into a COLD cache (idle 67min > its 60-min TTL (doc-matrix)) with 2 launches already in 2min — a fork storm is forming; each fork re-pays the full parent prefix at the cache-WRITE rate. Warm the cache with ONE agent first, or compact the parent before fanning out. Retry in ~60s. Override: AGENTLENS_GATE=off."
+   "reason": "AgentLens burn-gate: fork of a ~350k-token parent into a COLD cache (idle 67min > its 60-min TTL (doc-matrix)) with 2 launches already in 2min — a fork storm is forming; each fork re-pays the full parent prefix at the cache-WRITE rate. Warm the cache with ONE agent first, or compact the parent before fanning out. Retry in ~60s. When fanning out, launch agents ONE at a time with a ~10 s pause between launches — simultaneous launches trigger API rate limiting. Override: AGENTLENS_GATE=off."
   },
   {
    "decision": "warn",
@@ -2608,17 +2608,17 @@
   {
    "decision": "deny",
    "code": "COLD_RESUME_FANOUT",
-   "reason": "AgentLens burn-gate: a rate-limit stall ended 9min ago, so the fan-out's agent prefix caches are past their 5-min TTL (doc-matrix), and 2 agent(s) already launched since — that first launch IS the cache warm-up. Every further agent launched before it lands re-pays the full prefix at the write rate. Retry this launch in ~60s. Override: AGENTLENS_GATE=off."
+   "reason": "AgentLens burn-gate: a rate-limit stall ended 9min ago, so the fan-out's agent prefix caches are past their 5-min TTL (doc-matrix), and 2 agent(s) already launched since — that first launch IS the cache warm-up. Every further agent launched before it lands re-pays the full prefix at the write rate. Retry this launch in ~60s. When fanning out, launch agents ONE at a time with a ~10 s pause between launches — simultaneous launches trigger API rate limiting. Override: AGENTLENS_GATE=off."
   },
   {
    "decision": "deny",
    "code": "COLD_RESUME_FANOUT",
-   "reason": "AgentLens burn-gate: a rate-limit stall ended 1min ago (turn died in session sess-cal… in …/x), so the fan-out's agent prefix caches are past their 5-min TTL (doc-matrix), and 1 agent(s) already launched since — that first launch IS the cache warm-up. Every further agent launched before it lands re-pays the full prefix at the write rate. Retry this launch in ~60s. Override: AGENTLENS_GATE=off."
+   "reason": "AgentLens burn-gate: a rate-limit stall ended 1min ago (turn died in session sess-cal… in …/x), so the fan-out's agent prefix caches are past their 5-min TTL (doc-matrix), and 1 agent(s) already launched since — that first launch IS the cache warm-up. Every further agent launched before it lands re-pays the full prefix at the write rate. Retry this launch in ~60s. When fanning out, launch agents ONE at a time with a ~10 s pause between launches — simultaneous launches trigger API rate limiting. Override: AGENTLENS_GATE=off."
   },
   {
    "decision": "deny",
    "code": "FORK_STORM_FORMING",
-   "reason": "AgentLens burn-gate: fork of a ~350k-token parent into a COLD cache (idle 67min > its 60-min TTL (doc-matrix)) with 3 launches already in 2min (from this project: explore, fork) — a fork storm is forming; each fork re-pays the full parent prefix at the cache-WRITE rate. Warm the cache with ONE agent first, or compact the parent before fanning out. Retry in ~60s. Override: AGENTLENS_GATE=off."
+   "reason": "AgentLens burn-gate: fork of a ~350k-token parent into a COLD cache (idle 67min > its 60-min TTL (doc-matrix)) with 3 launches already in 2min (from this project: explore, fork) — a fork storm is forming; each fork re-pays the full parent prefix at the cache-WRITE rate. Warm the cache with ONE agent first, or compact the parent before fanning out. Retry in ~60s. When fanning out, launch agents ONE at a time with a ~10 s pause between launches — simultaneous launches trigger API rate limiting. Override: AGENTLENS_GATE=off."
   },
   {
    "decision": "warn",
@@ -2628,7 +2628,7 @@
   {
    "decision": "deny",
    "code": "FORK_STORM_FORMING",
-   "reason": "AgentLens burn-gate: fork of a ~350k-token parent into a COLD cache (idle 7min > its 60-min TTL (doc-matrix)) with 3 launches already in 2min — a fork storm is forming; each fork re-pays the full parent prefix at the cache-WRITE rate. Warm the cache with ONE agent first, or compact the parent before fanning out. Retry in ~60s. Override: AGENTLENS_GATE=off."
+   "reason": "AgentLens burn-gate: fork of a ~350k-token parent into a COLD cache (idle 7min > its 60-min TTL (doc-matrix)) with 3 launches already in 2min — a fork storm is forming; each fork re-pays the full parent prefix at the cache-WRITE rate. Warm the cache with ONE agent first, or compact the parent before fanning out. Retry in ~60s. When fanning out, launch agents ONE at a time with a ~10 s pause between launches — simultaneous launches trigger API rate limiting. Override: AGENTLENS_GATE=off."
   },
   {
    "decision": "warn",

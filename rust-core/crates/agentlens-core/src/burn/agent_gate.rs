@@ -408,7 +408,7 @@ warm-up this rule is protecting — denying it would cause the cold cache it pre
         }
         return deny(
             "RUNAWAY_FANOUT",
-            format!("{runaway_base} Let the in-flight wave settle, then relaunch this agent (retry in ~60s is usually enough). Override: AGENTLENS_GATE=off."),
+            format!("{runaway_base} Let the in-flight wave settle, then relaunch this agent (retry in ~60s is usually enough). When fanning out, launch agents ONE at a time with a ~10 s pause between launches — simultaneous launches trigger API rate limiting. Override: AGENTLENS_GATE=off."),
         );
     }
     let starts120 = f(state, "startsLast2min").unwrap_or(0.0);
@@ -426,7 +426,7 @@ warm-up this rule is protecting — denying it would cause the cold cache it pre
         return deny(
             "FORK_STORM_FORMING",
             format!(
-                "AgentLens burn-gate: fork of a ~{parent_k}-token parent into a COLD cache (idle {}min > its {}) with {} launches already in 2min{kinds_clause} — a fork storm is forming; each fork re-pays the full parent prefix at the cache-WRITE rate. Warm the cache with ONE agent first, or compact the parent before fanning out. Retry in ~60s. Override: AGENTLENS_GATE=off.",
+                "AgentLens burn-gate: fork of a ~{parent_k}-token parent into a COLD cache (idle {}min > its {}) with {} launches already in 2min{kinds_clause} — a fork storm is forming; each fork re-pays the full parent prefix at the cache-WRITE rate. Warm the cache with ONE agent first, or compact the parent before fanning out. Retry in ~60s. When fanning out, launch agents ONE at a time with a ~10 s pause between launches — simultaneous launches trigger API rate limiting. Override: AGENTLENS_GATE=off.",
                 fmt_js_num(idle_min.unwrap_or(f64::NAN)),
                 ttl_phrase_v(ttl),
                 fmt_js_num(starts120)
@@ -456,7 +456,7 @@ warm-up this rule is protecting — denying it would cause the cold cache it pre
         return deny(
             "COLD_RESUME_FANOUT",
             format!(
-                "{cold_resume_base} Every further agent launched before it lands re-pays the full prefix at the write rate. Retry this launch in ~60s. Override: AGENTLENS_GATE=off."
+                "{cold_resume_base} Every further agent launched before it lands re-pays the full prefix at the write rate. Retry this launch in ~60s. When fanning out, launch agents ONE at a time with a ~10 s pause between launches — simultaneous launches trigger API rate limiting. Override: AGENTLENS_GATE=off."
             ),
         );
     }

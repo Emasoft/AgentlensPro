@@ -122,6 +122,9 @@ suite('agentGate — evaluateAgentGate (TRDD-GOD0108C)', () => {
     // a session id and a directory are things the reader can neither act on nor is owed.
     assert.ok(!d.reason?.includes('777b8f52'), `session must NOT be named: ${d.reason ?? ''}`)
     assert.ok(!d.reason?.includes('…/agentlens'), `workspace must NOT be named: ${d.reason ?? ''}`)
+    // Owner directive 2026-10-01: the deny teaches the cadence, before the Override hatch.
+    assert.ok(d.reason?.includes('ONE at a time with a ~10 s pause'), d.reason ?? '')
+    assert.ok(d.reason?.endsWith('Override: AGENTLENS_GATE=off.'), d.reason ?? '')
   })
 
   test('runaway fan-out never denies a FORK: it warns with the count and lets it pass (TRDD-3EZ6SJ2Z)', () => {
@@ -190,6 +193,9 @@ suite('agentGate — evaluateAgentGate (TRDD-GOD0108C)', () => {
     // are cold either way — but whose session died is not this agent's business.
     assert.ok(!d.reason?.includes('c8a95d7e'), `foreign stalled session must NOT be named: ${d.reason ?? ''}`)
     assert.ok(!d.reason?.includes('ai-maestro-janitor'), `foreign workspace must NOT be named: ${d.reason ?? ''}`)
+    // Owner directive 2026-10-01: the deny teaches the cadence, before the Override hatch.
+    assert.ok(d.reason?.includes('ONE at a time with a ~10 s pause'), d.reason ?? '')
+    assert.ok(d.reason?.endsWith('Override: AGENTLENS_GATE=off.'), d.reason ?? '')
   })
 
   test('cold resume: a stall in the caller OWN project IS named — it is theirs, and knowing which session helps', () => {
@@ -221,6 +227,9 @@ suite('agentGate — evaluateAgentGate (TRDD-GOD0108C)', () => {
     const d = evaluateAgentGate({ subagent_type: 'fork' }, s)
     assert.strictEqual(d.decision, 'deny')
     assert.strictEqual(d.code, 'FORK_STORM_FORMING')
+    // Owner directive 2026-10-01: the deny teaches the cadence, before the Override hatch.
+    assert.ok(d.reason?.includes('ONE at a time with a ~10 s pause'), d.reason ?? '')
+    assert.ok(d.reason?.endsWith('Override: AGENTLENS_GATE=off.'), d.reason ?? '')
   })
 
   test('a keep-warm fork under cold-resume gets pinger wording, not the COLD_RESUME_FANOUT fork-exemption wording', () => {

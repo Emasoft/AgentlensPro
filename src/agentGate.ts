@@ -350,7 +350,9 @@ export function evaluateAgentGate(
     }
     return deny('RUNAWAY_FANOUT',
       `${runawayBase} Let the in-flight wave settle, then relaunch this agent ` +
-      `(retry in ~60s is usually enough). Override: AGENTLENS_GATE=off.`)
+      `(retry in ~60s is usually enough). When fanning out, launch agents ONE at a time with ` +
+      `a ~10 s pause between launches — simultaneous launches trigger API rate limiting. ` +
+      `Override: AGENTLENS_GATE=off.`)
   }
   // CC ≥2.1.229 performs the "warm the cache with ONE agent first" remedy itself for WORKFLOW
   // same-prefix siblings (stagger; CLAUDE_CODE_WORKFLOW_PREFIX_STAGGER_MS=0 disables). Staggered
@@ -369,7 +371,9 @@ export function evaluateAgentGate(
       // population and the message attributes other projects' launches to the caller.
       `${ttlPhrase(ttl)}) with ${state.startsLast2min} launches already in 2min${kinds ? ` (from this project: ${kinds})` : ''} — a fork ` +
       `storm is forming; each fork re-pays the full parent prefix at the cache-WRITE rate. Warm the cache with ` +
-      `ONE agent first, or compact the parent before fanning out. Retry in ~60s. Override: AGENTLENS_GATE=off.`)
+      `ONE agent first, or compact the parent before fanning out. Retry in ~60s. When fanning out, ` +
+      `launch agents ONE at a time with a ~10 s pause between launches — simultaneous launches ` +
+      `trigger API rate limiting. Override: AGENTLENS_GATE=off.`)
   }
   if (coldResume && state.startsLast2min >= 1) {
     const stallWho = fmtStallOrigin(state)
@@ -397,7 +401,9 @@ export function evaluateAgentGate(
     return deny('COLD_RESUME_FANOUT',
       `${coldResumeBase} ` +
       `Every further agent launched before it lands re-pays the full prefix at the write rate. ` +
-      `Retry this launch in ~60s. Override: AGENTLENS_GATE=off.`)
+      `Retry this launch in ~60s. When fanning out, launch agents ONE at a time with a ~10 s ` +
+      `pause between launches — simultaneous launches trigger API rate limiting. ` +
+      `Override: AGENTLENS_GATE=off.`)
   }
 
   // ── warn tier: real cost, but a single launch is a legitimate choice ─────────
