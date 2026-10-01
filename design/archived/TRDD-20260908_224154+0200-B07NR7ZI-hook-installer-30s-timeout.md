@@ -1,9 +1,9 @@
 ---
 trdd-id: B07NR7ZI
 title: The hook installer emits a 30 s ceiling on every AgentlensPro hook entry
-column: ai_review
+column: complete
 created: 2026-09-08T22:41:54+0200
-updated: 2026-09-23T13:23:42+0200
+updated: 2026-10-01T18:26:57+0200
 current-owner: main
 task-type: infra
 min-approval-requirement: none
@@ -17,6 +17,7 @@ project-id: agentlenspro
 scope: project
 labels: [hooks, installer, settings, timeout]
 relevant-rules: []
+status: archived
 ---
 
 # The hook installer emits a 30 s ceiling on every AgentlensPro hook entry
@@ -31,7 +32,7 @@ registrations current. Report: `reports/hook-timeout-30/20260908_224450+0200-ins
 One claim was softened before commit: whether the OLD builders (10/20) would have reverted the
 live 30 on the next rebuild was never measured — the code comment says so.
 NEXT ACTION: the Stop-time adversarial review of `a2303f91`; then supersede memory atom
-ATOM-5WTK-6YPU (it still says 10 s / 20 s) and close.
+ATOM-5WTK-6YPU was superseded by ATOM-6OC6-575F in hook-events-pipeline.md. CLOSED 2026-10-01: AI-review APPROVE on record (2026-09-23); bundle rebuilt (HOOK_TIMEOUT_SEC x5); setup --dry-run reports registrations current. Issue 325 thread (prior session): round-2 review clean, three cosmetic residuals disclosed.
 
 ## Why
 
@@ -57,13 +58,14 @@ builders removes the drift permanently instead of hand-editing the settings file
       hook builders.
 - [x] `src/test/cliMatchers.test.ts` pins the constant and asserts every builder emits `timeout: 30`.
 - [x] `pnpm run check-types`, `pnpm run lint`, and the `cliMatchers` mocha test pass.
-- [ ] `node esbuild.js` rebuilds the bundle with the change.
+- [x] `node esbuild.js` rebuilds the bundle with the change.
 - [x] `agentlenspro --install-hooks` followed by inspecting `~/.claude/settings.json` shows all
       agentlens entries at `timeout: 30`.
-- [ ] `agentlenspro setup --dry-run` reports no hook-timeout drift.
+- [x] `agentlenspro setup --dry-run` reports no hook-timeout drift.
 - [x] Memory atom `ATOM-5WTK-6YPU` (10s/20s claim) is updated/superseded.
 
 ## Approval log
+- 2026-10-01T18:26:57+0200 — COMPLETE by main-agent@agentlenspro. Acceptance boxes all verified: AI-review APPROVE, atom superseded, bundle current, setup dry-run no drift.
 
 
 ## AI-REVIEW VERDICT
