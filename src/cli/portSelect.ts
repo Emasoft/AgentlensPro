@@ -9,11 +9,19 @@ import { lockTakeoverVerdict, parsePidLock, processStartRef } from '../serverRun
 
 const SCAN_SPAN = 50
 
-/** One bind probe. A family the host does not have (no IPv6) cannot hold the port, so it is free. */
-function probe(port: number, host: string): Promise<boolean> {
+/** Is a failed bind probe proof the port is FREE? Only when the address family itself is absent
+ *  (the ::1 probe on a host without IPv6): EAFNOSUPPORT or EADDRNOTAVAIL. EADDRINUSE means held,
+ *  and anything else (EACCES, EPERM, ...) is NOT free — we refuse to assume what we could not test.
+ *  `familyOptional` is true only for ::1; a 127.0.0.1 failure of any code means not free. */
+export function freeOnProbeError(code: string | undefined, familyOptional: boolean): boolean {
+  return familyOptional && (code === 'EAFNOSUPPORT' || code === 'EADDRNOTAVAIL')
+}
+
+/** One bind probe. */
+function probe(port: number, host: string, familyOptional: boolean): Promise<boolean> {
   return new Promise(resolve => {
     const srv = net.createServer()
-    srv.once('error', (e: NodeJS.ErrnoException) => resolve(e.code === 'EADDRNOTAVAIL' || e.code === 'EAFNOSUPPORT'))
+    srv.once('error', (e: NodeJS.ErrnoException) => resolve(freeOnProbeError(e.code, familyOptional)))
     srv.once('listening', () => srv.close(() => resolve(true)))
     srv.listen(port, host)
   })
@@ -23,7 +31,7 @@ function probe(port: number, host: string): Promise<boolean> {
  *  URLs say `localhost`, which Node may resolve to ::1 first, so a squatter on ::1 would receive
  *  the CLI's requests even though our own bind succeeds. */
 export async function isPortFree(port: number): Promise<boolean> {
-  return (await probe(port, '127.0.0.1')) && (await probe(port, '::1'))
+  return (await probe(port, '127.0.0.1', false)) && (await probe(port, '::1', true))
 }
 
 /** preferred if free; preferred if held by OUR server (isOurs); else the first free port in

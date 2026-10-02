@@ -1034,6 +1034,12 @@ export async function serverCommand(argv: string[]): Promise<void> {
       // Hook-revive entry (hookHandlers.reviveDaemonDetached): the SAME guarded start as `start`, run
       // detached. Unlike `start` it must NOT lift the revive brake or reset the crash-loop backoff —
       // the hook already honoured both, and a revive is not an operator's deliberate start.
+      // Refuse HERE too, not only in the hook's pre-check: this verb is runnable by hand and by any
+      // stale hook build. AGENTLENS_NO_REVIVE is the env half of the brake (reviveBraked() reads the
+      // on-disk NO_REVIVE flag); ensureServer re-checks the kill-switch and the brake as a backstop.
+      if (agentlensDisabled() || reviveBraked() || process.env.AGENTLENS_NO_REVIVE === '1') {
+        throw new Error('server revive refused: the kill-switch or the NO_REVIVE brake is armed (`agentlenspro server start` is the deliberate override for the brake).')
+      }
       await ensureServer('hook-revive')
       return
     case 'status':

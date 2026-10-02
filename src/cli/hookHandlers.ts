@@ -319,6 +319,15 @@ export function resetReviveBackoff(): void {
   try { fs.rmSync(reviveBackoffStatePath(), { force: true }) } catch { /* best effort */ }
 }
 
+/** What a revive spawns — a function so a test can assert it without launching anything. The
+ *  executable is THIS process's own node (`process.execPath`, never a bare `node` off PATH) running
+ *  the cli.js that THIS bundle ships beside (cliJsPath() walks from __dirname, never cwd), so a
+ *  revive can only run the build that triggered it. The env is the hook's full environment, which
+ *  carries every AGENTLENS_* / *_PORT pin the operator set. */
+export function reviveSpawnSpec(baseEnv: NodeJS.ProcessEnv = process.env): { file: string; args: string[]; env: NodeJS.ProcessEnv } {
+  return { file: process.execPath, args: [cliJsPath(), 'server', 'revive'], env: { ...baseEnv, MIMALLOC_VERBOSE: '1' } }
+}
+
 /** Fire a DETACHED server revive without waiting (the hook must exit 0 fast). A short-TTL mtime lock
  *  collapses a burst of N hooks into ONE spawn; the server's own pidfile guard rejects a second
  *  canonical instance if two race. Never throws, never blocks. */
@@ -389,8 +398,8 @@ function reviveDaemonDetached(): void {
       // server.log, so a refusal is readable. ensureServer stamps the provenance ('hook-revive',
       // TRDD-8VGQK9L9) and MIMALLOC_PURGE_DELAY (TRDD-2JOIAH2G R1); MIMALLOC_VERBOSE (rounds 58-60
       // probe: option dump at boot, exit stats at an rss_guard kill) rides through its inherited env.
-      const env = { ...process.env, MIMALLOC_VERBOSE: '1' }
-      const child = spawn(process.execPath, [cliJsPath(), 'server', 'revive'], { cwd: dataDir(), env, detached: true, stdio: ['ignore', outFd, outFd] })
+      const spec = reviveSpawnSpec()
+      const child = spawn(spec.file, spec.args, { cwd: dataDir(), env: spec.env, detached: true, stdio: ['ignore', outFd, outFd] })
       child.unref()
     } finally {
       // The CHILD holds its own duplicate of the descriptor, so the parent must drop its copy or

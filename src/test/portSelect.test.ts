@@ -1,11 +1,14 @@
 import * as assert from 'assert'
 import { spawnSync } from 'child_process'
 import * as fs from 'fs'
+import * as http from 'http'
 import * as net from 'net'
 import * as os from 'os'
 import * as path from 'path'
 import { mcpEndpoint } from '../cli/cliCore'
-import { chooseServerPorts, isPortFree, pickPort, readChosenPort, writePortsFile } from '../cli/portSelect'
+import { reviveSpawnSpec } from '../cli/hookHandlers'
+import { chooseServerPorts, freeOnProbeError, isPortFree, pickPort, readChosenPort, writePortsFile } from '../cli/portSelect'
+import { cliJsPath, findServerPid, serverCommand } from '../cli/serverControl'
 import { freePort } from './helpers/freePort'
 
 // Real sockets, real files — no mocks. Each test that opens a listener closes it in finally.
@@ -147,5 +150,69 @@ suite('portSelect', () => {
       assert.strictEqual(new Set([r.otlp, r.ui, r.mcp]).size, 3)
       assert.notStrictEqual(r.ui, ui)
     } finally { await release(s) }
+  })
+})
+
+/** Run `fn` with env vars set, restoring them after. */
+async function withEnv(vars: Record<string, string>, fn: () => Promise<void> | void): Promise<void> {
+  const saved: Record<string, string | undefined> = {}
+  for (const k of Object.keys(vars)) { saved[k] = process.env[k]; process.env[k] = vars[k] }
+  try { await fn() } finally {
+    for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v }
+  }
+}
+
+suite('portSelect — probe verdicts, revive spawn identity, REST identity, revive refusal', () => {
+  test('only a missing ::1 family counts as free: EAFNOSUPPORT/EADDRNOTAVAIL on ::1; EADDRINUSE, EACCES, EPERM, unknown never', () => {
+    assert.strictEqual(freeOnProbeError('EAFNOSUPPORT', true), true)
+    assert.strictEqual(freeOnProbeError('EADDRNOTAVAIL', true), true)
+    for (const c of ['EADDRINUSE', 'EACCES', 'EPERM', 'EINVAL', undefined]) assert.strictEqual(freeOnProbeError(c, true), false, String(c))
+    assert.strictEqual(freeOnProbeError('EADDRNOTAVAIL', false), false) // 127.0.0.1 must always bind
+  })
+
+  test('revive spawns process.execPath on the bundle-relative cli.js (cwd-independent), env pins forwarded', () => {
+    const spec = reviveSpawnSpec({ UI_PORT: '5000', MCP_PORT: '5316', OTLP_PORT: '5318', AGENTLENS_DATA_DIR: '/x/data' })
+    assert.strictEqual(spec.file, process.execPath)
+    assert.deepStrictEqual(spec.args, [cliJsPath(), 'server', 'revive'])
+    assert.ok(path.isAbsolute(spec.args[0]) && path.basename(spec.args[0]) === 'cli.js' && fs.existsSync(spec.args[0]))
+    for (const [k, v] of [['UI_PORT', '5000'], ['MCP_PORT', '5316'], ['OTLP_PORT', '5318'], ['AGENTLENS_DATA_DIR', '/x/data']]) assert.strictEqual(spec.env[k], v)
+    const cwd = process.cwd()
+    const elsewhere = fs.mkdtempSync(path.join(os.tmpdir(), 'portsel-'))
+    try { process.chdir(elsewhere); assert.strictEqual(cliJsPath(), spec.args[0]) } finally { process.chdir(cwd); fs.rmSync(elsewhere, { recursive: true, force: true }) }
+  })
+
+  test('findServerPid keeps the REST rung: no pidfile + a server reporting THIS data dir is found; another dir is not; ports.json is NOT honoured without the pidfile', async () => {
+    const dir = tmpDir()
+    let reportedDir = dir
+    const srv = http.createServer((_req, res) => { res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify({ pid: 424242, dataDir: reportedDir })) })
+    await new Promise<void>(r => srv.listen(0, '127.0.0.1', r))
+    const port = (srv.address() as net.AddressInfo).port
+    try {
+      await withEnv({ AGENTLENS_DATA_DIR: dir, AGENTLENS_UI_URL: `http://127.0.0.1:${port}` }, async () => {
+        assert.strictEqual(await findServerPid(), 424242)
+        reportedDir = path.join(dir, 'other')
+        assert.strictEqual(await findServerPid(), null)
+        // Decision: clientPort stays pidfile-gated. It is synchronous and the REST probe needs the very
+        // port ports.json would supply, so REST identity cannot gate it; REST-only servers predate ports.json.
+        writePortsFile(dir, { otlp: 4318, ui: 3001, mcp: 4999 })
+        assert.strictEqual(readChosenPort(dir, 'mcp'), undefined)
+      })
+    } finally { await new Promise<void>(r => srv.close(() => r())); fs.rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  test('`server revive` refuses under NO_REVIVE env, kill-switch env, and the on-disk brake — before any spawn', async () => {
+    const dir = tmpDir()
+    try {
+      await withEnv({ AGENTLENS_DATA_DIR: dir, AGENTLENS_NO_REVIVE: '1' }, async () => {
+        await assert.rejects(serverCommand(['revive']), /server revive refused/)
+      })
+      await withEnv({ AGENTLENS_DATA_DIR: dir, AGENTLENS_DISABLED: '1' }, async () => {
+        await assert.rejects(serverCommand(['revive']), /server revive refused/)
+      })
+      fs.writeFileSync(path.join(dir, 'NO_REVIVE'), 'test')
+      await withEnv({ AGENTLENS_DATA_DIR: dir }, async () => {
+        await assert.rejects(serverCommand(['revive']), /server revive refused/)
+      })
+    } finally { fs.rmSync(dir, { recursive: true, force: true }) }
   })
 })
