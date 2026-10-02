@@ -155,16 +155,33 @@ export function alcoreBin(
  *  setup.ts:109-111 would bind port 0 (kernel-assigned, i.e. unreachable) for an exported-but-
  *  empty UI_PORT. Unifying those three spellings is worth doing, but it changes setup.ts's
  *  behaviour and belongs in its own diff, not in the cutover. */
-export function alcoreServeArgs(env: NodeJS.ProcessEnv = process.env, dir: string = dataDir()): string[] {
+export function alcoreServeArgs(env: NodeJS.ProcessEnv = process.env, dir: string = dataDir(), ports?: { otlp: number; ui: number; mcp: number }): string[] {
+  // Unset env falls back to the ports the last `server start` bound (ports.json), so the spawn
+  // paths that cannot probe (hook revive, setup) rebind what the clients already dial.
+  const port = (raw: string | undefined, key: 'otlp' | 'ui' | 'mcp', fallback: number): string =>
+    ports ? String(ports[key]) : envPort(raw, readChosenPort(dir, key) ?? fallback)
   return [
     'serve',
     '--data-dir', dir,
     // alcore refuses to boot without the dashboard assets (TRDD-VHH7FXGC).
     '--media-dir', findMediaDir(),
-    '--otlp-port', envPort(env.OTLP_PORT, 4318),
-    '--ui-port', envPort(env.UI_PORT, 3000),
-    '--mcp-port', envPort(env.MCP_PORT, 4316),
+    '--otlp-port', port(env.OTLP_PORT, 'otlp', 4318),
+    '--ui-port', port(env.UI_PORT, 'ui', 3000),
+    '--mcp-port', port(env.MCP_PORT, 'mcp', 4316),
   ]
+}
+
+import { chooseServerPorts, isPortFree, portHolder, readChosenPort } from './portSelect'
+
+/** Pick the ports for a fresh `alcore serve` (see chooseServerPorts) — a port held by OUR server
+ *  (same data dir, per findServerPid) is kept. */
+async function resolveServerPorts(env: NodeJS.ProcessEnv, dir: string): Promise<{ otlp: number; ui: number; mcp: number }> {
+  const ours = async (): Promise<boolean> => (await findServerPid().catch(() => null)) !== null
+  return chooseServerPorts(
+    { otlp: Number(envPort(env.OTLP_PORT, 4318)), ui: Number(envPort(env.UI_PORT, 3000)), mcp: Number(envPort(env.MCP_PORT, 4316)) },
+    dir,
+    ours,
+  )
 }
 
 // Paths under the data dir, each named ONCE. They were built inline at several call sites, so a
@@ -207,7 +224,7 @@ export { ALCORE_MIMALLOC_PURGE_DELAY_MS }
  *  and the diagnostics `--start-server`/`--dashboard` globals all land here — so the caller says.
  *  The default is a truthful "unknown", never a guess: an unlabelled path in the log is a lead, a
  *  wrong label is a dead end. */
-export async function ensureServer(startedBy = 'ensureServer:unknown', opts: { overrideBrake?: boolean } = {}): Promise<void> {
+export async function ensureServer(startedBy = 'ensureServer:unknown', opts: { overrideBrake?: boolean; attempt?: number } = {}): Promise<void> {
   // FIRST — before we even probe the network. A disabled AgentlensPro must cost nothing: no socket,
   // no retry timeout, and above all no spawn.
   if (agentlensDisabled()) {
@@ -277,7 +294,10 @@ export async function ensureServer(startedBy = 'ensureServer:unknown', opts: { o
   // one grep of server.log instead of a day of inference (TRDD-8VGQK9L9). The mimalloc purge delay
   // rides here too (TRDD-2JOIAH2G R1) — alcore-spawn only, never a global override.
   const env = { ...process.env, [STARTED_BY_ENV]: startedBy, MIMALLOC_PURGE_DELAY: ALCORE_MIMALLOC_PURGE_DELAY_MS }
-  const child = spawn(alcore, alcoreServeArgs(), { cwd: dataDir(), env, detached: true, stdio: ['ignore', outFd, outFd] })
+  // Owner rule 2026-10-02: never bind (or talk to) a port another process holds. Probe-then-bind is
+  // a race, so a bind failure at boot (see the 'died' branch) re-picks ports, up to 3 attempts.
+  const ports = await resolveServerPorts(process.env, dataDir())
+  const child = spawn(alcore, alcoreServeArgs(process.env, dataDir(), ports), { cwd: dataDir(), env, detached: true, stdio: ['ignore', outFd, outFd] })
   // Without this, an async spawn failure (EMFILE, EAGAIN) emits an unhandled 'error' event and the
   // process dies with a raw stack trace instead of the actionable message below.
   let spawnError: Error | null = null
@@ -314,7 +334,11 @@ export async function ensureServer(startedBy = 'ensureServer:unknown', opts: { o
       const raceWinnerAlive = winner !== null && processAlive(winner)
       const verdict = startupVerdict({ answered, childExited, anotherServing, raceWinnerAlive, deadlinePassed: Date.now() >= deadline })
       if (verdict === 'died') {
-        throw new Error(`the server exited during startup — it never answered.${logProblem}\n${logTail(8, logStart)}`)
+        const tail = logTail(8, logStart)
+        // alcore logs "port N (MCP) already in use" / "<which> listener failed" when it loses a bind race.
+        const attempt = opts.attempt ?? 0
+        if (/already in use|listener failed/.test(tail) && attempt < 2) return ensureServer(startedBy, { ...opts, attempt: attempt + 1 })
+        throw new Error(`the server exited during startup — it never answered.${logProblem}\n${tail}`)
       }
       continue // 'keep-waiting' — alive and still starting; 'timed-out' falls out of the loop below
     }
@@ -682,6 +706,10 @@ export async function showStatus(): Promise<void> {
       return
     }
     console.log(`server: NOT RUNNING (${(e as Error).message})`)
+    // A squatter on the OTLP port is why the next `server start` will refuse (it never switches
+    // OTLP: exporters target a fixed endpoint), so say so here, where the operator looks first.
+    const otlp = Number(envPort(process.env.OTLP_PORT, 4318))
+    if (!(await isPortFree(otlp))) console.log(`server: WARNING OTLP port ${otlp} is held by ${portHolder(otlp)} — start will refuse until it is freed (or set OTLP_PORT and re-run agentlenspro --install-otel)`)
     return
   }
   const up = s.uptimeSec

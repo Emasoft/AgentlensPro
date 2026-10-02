@@ -29,15 +29,26 @@ export function envPort(raw: string | undefined, fallback: number): string {
   return String(raw?.trim() && Number.isInteger(n) && n > 0 && n < 65536 ? n : fallback)
 }
 
+import { dataDir } from '../dataDir'
+import { readChosenPort } from './portSelect'
+
+/** A client-side port: a usable env value wins; else the port the last `server start` actually
+ *  bound (ports.json — it differs from the default when another process held it); else the
+ *  default. */
+export function clientPort(raw: string | undefined, key: 'ui' | 'mcp', fallback: number): string {
+  const fromEnv = envPort(raw, 0)
+  return fromEnv !== '0' ? fromEnv : String(readChosenPort(dataDir(), key) ?? fallback)
+}
+
 /** MCP JSON-RPC endpoint of the running server. */
 export function mcpEndpoint(): string {
-  return process.env.AGENTLENS_MCP_URL || `http://localhost:${envPort(process.env.MCP_PORT, 4316)}/mcp`
+  return process.env.AGENTLENS_MCP_URL || `http://localhost:${clientPort(process.env.MCP_PORT, 'mcp', 4316)}/mcp`
 }
 
 /** The UI/dashboard server's default base — ONE definition so dashboardUrl and uiBaseUrl can never
  *  drift on the fallback port. Each still honors its own env override. */
 function defaultUiUrl(): string {
-  return `http://localhost:${envPort(process.env.UI_PORT, 3000)}`
+  return `http://localhost:${clientPort(process.env.UI_PORT, 'ui', 3000)}`
 }
 
 /** Dashboard URL (UI port). */
