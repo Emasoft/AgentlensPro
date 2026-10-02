@@ -1350,7 +1350,8 @@ export interface HookConfigCheck { verify: Verify; detail: string }
  *  file does not exist). Pure so the absent-file and mismatch cases are unit-testable. */
 export function compareHookConfig(served: Record<string, unknown>, onDisk: Record<string, unknown> | null): HookConfigCheck {
   if (onDisk === null) return { verify: 'SKIP', detail: 'no hook-config.json yet; server serves defaults' }
-  const diff = Object.keys(onDisk).filter(k => typeof onDisk[k] === 'boolean' && onDisk[k] !== served[k])
+  const isPrim = (v: unknown): boolean => typeof v === 'boolean' || typeof v === 'number' || typeof v === 'string'
+  const diff = Object.keys(onDisk).filter(k => isPrim(onDisk[k]) && onDisk[k] !== served[k])
   if (diff.length > 0) return { verify: 'FAIL', detail: `server hook-config differs from hook-config.json for ${diff.join(', ')}` }
   return { verify: 'PASS', detail: 'server hook-config matches hook-config.json on disk; per-request re-read is server_stats.rs behaviour, not exercised here (read-only check); registrations need a Claude Code restart' }
 }
@@ -1369,14 +1370,21 @@ const stepHookHotConfig: StepDef = {
       return { result: { step: this.name, found: 'server up', action: 'GET /api/hook-config', verify: 'FAIL', detail: `unexpected /api/hook-config reply (HTTP ${r.status})` }, acted: false }
     }
     const file = reply.file ?? path.join(ctx.dataDir, 'hook-config.json')
-    let onDisk: Record<string, unknown> | null
-    if (!fs.existsSync(file)) onDisk = null
-    else {
-      try { onDisk = JSON.parse(fs.readFileSync(file, 'utf-8')) as Record<string, unknown> } catch (e) {
-        return { result: { step: this.name, found: 'hook-config.json', action: 'parse file', verify: 'FAIL', detail: `hook-config.json unparseable: ${(e as Error).message.slice(0, 120)}` }, acted: false }
+    // null = file absent; throws on unparseable JSON.
+    const readDisk = (): Record<string, unknown> | null => fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf-8')) as Record<string, unknown> : null
+    let c: HookConfigCheck
+    try {
+      c = compareHookConfig(reply.config, readDisk())
+      if (c.verify === 'FAIL') {
+        // A dashboard save landing between the GET and the file read is a benign race: re-GET and
+        // re-read ONCE, and fail only if the disagreement persists.
+        const r2 = await httpJson(ctx.uiPort, 'GET', '/api/hook-config').catch(() => ({ status: 0, json: null }))
+        const cfg2 = (r2.json as { config?: Record<string, unknown> } | null)?.config
+        if (r2.status === 200 && cfg2) c = compareHookConfig(cfg2, readDisk())
       }
+    } catch (e) {
+      return { result: { step: this.name, found: 'hook-config.json', action: 'parse file', verify: 'FAIL', detail: `hook-config.json unparseable: ${(e as Error).message.slice(0, 120)}` }, acted: false }
     }
-    const c = compareHookConfig(reply.config, onDisk)
     return { result: { step: this.name, found: 'hook-config.json', action: 'GET /api/hook-config vs file', verify: c.verify, detail: c.detail }, acted: false }
   },
 }
@@ -1427,6 +1435,15 @@ export function memoryCheckFromLog(logFile: string, nowMs: number = Date.now()):
       line = buf.toString('utf-8').split('\n').filter(l => l.includes('alcore: composition:')).pop() ?? null
     } finally { fs.closeSync(fd) }
   } catch { return { verify: 'SKIP', detail: 'server.log absent or unreadable' } }
+  // Age the LINE, not the file: any log line refreshes the mtime, so a dead composition chore on a
+  // still-logging server would otherwise pass stale numbers. Every server.log line starts with its
+  // own wall-clock stamp (log_ts), so the line carries its time and no server.pid is needed.
+  const stamp = line ? /^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)([+-]\d\d)(\d\d)/.exec(line) : null
+  if (line && !stamp) return { verify: 'SKIP', detail: `composition line has no timestamp: ${line.slice(-200)}` }
+  if (stamp) {
+    const lineAge = nowMs - Date.parse(`${stamp[1]}${stamp[2]}:${stamp[3]}`)
+    if (!(lineAge <= COMPOSITION_STALE_MS)) return { verify: 'SKIP', detail: `no fresh composition line (newest composition line is ${Math.round(lineAge / 1000)}s old)` }
+  }
   const c = checkCompositionLine(line)
   if (c.verdict === 'WARN') return { verify: 'SKIP', detail: `composition line unparseable: ${(line ?? '').slice(-200)}` }
   if (c.verdict === 'SKIP') return { verify: 'SKIP', detail: c.detail }

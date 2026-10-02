@@ -45,6 +45,8 @@ suite('setup memory self-check parser', () => {
 })
 suite('setup hook-config + memory-log self-checks', () => {
   const tmp = (): string => fs.mkdtempSync(path.join(os.tmpdir(), 'al-selfcheck-'))
+  // A server.log line as the server writes it: wall-clock stamp, uptime tag, then the message.
+  const stamped = (ageSec: number, msg: string): string => `${new Date(Date.now() - ageSec * 1000).toISOString().slice(0, 19)}+0000 [up 60s] ${msg}\n`
   const write = (dir: string, text: string): string => { const p = path.join(dir, 'server.log'); fs.writeFileSync(p, text); return p }
 
   // missing hook-config.json is an explicit SKIP, not a pass
@@ -62,13 +64,13 @@ suite('setup hook-config + memory-log self-checks', () => {
   // a fresh, healthy line passes
   test('memory log: fresh healthy line is PASS', () => {
     const d = tmp()
-    try { assert.strictEqual(memoryCheckFromLog(write(d, line(690, '600', '90') + '\n')).verify, 'PASS') } finally { fs.rmSync(d, { recursive: true, force: true }) }
+    try { assert.strictEqual(memoryCheckFromLog(write(d, stamped(5, line(690, '600', '90')))).verify, 'PASS') } finally { fs.rmSync(d, { recursive: true, force: true }) }
   })
   // an unparseable composition line is a broken instrument: never PASS
   test('memory log: unparseable line is SKIP, not PASS', () => {
     const d = tmp()
     try {
-      const r = memoryCheckFromLog(write(d, 'alcore: composition: garbage mi live x\n'))
+      const r = memoryCheckFromLog(write(d, stamped(5, 'alcore: composition: garbage mi live x')))
       assert.strictEqual(r.verify, 'SKIP')
       assert.ok(r.detail.includes('unparseable'))
     } finally { fs.rmSync(d, { recursive: true, force: true }) }
@@ -77,13 +79,33 @@ suite('setup hook-config + memory-log self-checks', () => {
   test('memory log: stale server.log is SKIP', () => {
     const d = tmp()
     try {
-      const p = write(d, line(690, '600', '90') + '\n')
+      const p = write(d, stamped(5, line(690, '600', '90')))
       const old = new Date(Date.now() - COMPOSITION_STALE_MS - 60_000)
       fs.utimesSync(p, old, old)
       const r = memoryCheckFromLog(p)
       assert.strictEqual(r.verify, 'SKIP')
       assert.ok(r.detail.includes('no fresh composition line'))
     } finally { fs.rmSync(d, { recursive: true, force: true }) }
+  })
+  // a freshly written file whose newest composition line is old (dead chore, server still logging) is SKIP
+  test('memory log: fresh file but old composition line is SKIP', () => {
+    const d = tmp()
+    try {
+      const r = memoryCheckFromLog(write(d, stamped(COMPOSITION_STALE_MS / 1000 + 60, line(690, '600', '90')) + stamped(1, 'alcore: something else')))
+      assert.strictEqual(r.verify, 'SKIP')
+      assert.ok(r.detail.includes('no fresh composition line'))
+    } finally { fs.rmSync(d, { recursive: true, force: true }) }
+  })
+  // a composition line with no leading timestamp cannot be aged
+  test('memory log: composition line without a timestamp is SKIP', () => {
+    const d = tmp()
+    try { assert.strictEqual(memoryCheckFromLog(write(d, line(690, '600', '90') + '\n')).verify, 'SKIP') } finally { fs.rmSync(d, { recursive: true, force: true }) }
+  })
+  // numeric and string knobs are compared too, not only booleans
+  test('hook-config: a differing number or string is FAIL', () => {
+    assert.strictEqual(compareHookConfig({ deadlineMs: 2000 }, { deadlineMs: 4000 }).verify, 'FAIL')
+    assert.strictEqual(compareHookConfig({ gateMode: 'warn' }, { gateMode: 'enforce' }).verify, 'FAIL')
+    assert.strictEqual(compareHookConfig({ deadlineMs: 2000 }, { deadlineMs: 2000 }).verify, 'PASS')
   })
   // an absent log is SKIP
   test('memory log: absent file is SKIP', () => {
