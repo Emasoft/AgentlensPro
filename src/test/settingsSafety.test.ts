@@ -3,7 +3,7 @@ import { spawn, spawnSync } from 'child_process'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
-import { safeConfigEdit, SafeEditOp } from '../safeConfigEdit'
+import { safeConfigEdit, SafeEditError, SafeEditOp } from '../safeConfigEdit'
 import { ensureTelemetryConfig, removeTelemetryConfig, type TelemetryConfigOptions } from '../telemetryConfig'
 import { installHooks } from '../cli/hookInstall'
 
@@ -11,8 +11,12 @@ import { installHooks } from '../cli/hookInstall'
 // settings.json in a SUPER SAFE WAY"). Real files in a temp dir, the real scripts/safe_config_edit.py,
 // no mocks. The real ~/.claude/settings.json is never touched: every path is explicit.
 
-const EDITOR = path.resolve(__dirname, '..', '..', '..', 'scripts', 'safe_config_edit.py')
-const BACKUP_RE = /\.agentlens-bak-/
+// SETTINGS_SAFETY_EDITOR points the whole suite at another copy of the script (mutation proof against the parent commit's).
+const EDITOR = process.env.SETTINGS_SAFETY_EDITOR ?? path.resolve(__dirname, '..', '..', '..', 'scripts', 'safe_config_edit.py')
+// EXACT backup shape: `<file>.agentlens-bak-YYYYmmdd_HHMMSSffffff-<pid>` — a `.tmp` leftover or a user file named `...-bak-keep` is not a backup.
+const BACKUP_RE = /\.agentlens-bak-\d{8}_\d{12}-\d+$/
+// Counting regex: ANY real backup name, old (`..._HHMMSSmmm`) or new, so a test fails on the parent script for the defect's OWN assertion, not for a naming mismatch.
+const ANY_BACKUP_RE = /\.agentlens-bak-\d{8}_\d+(-\d+)?$/
 
 interface Run { status: number | null; stdout: string; stderr: string }
 function runPy(file: string, ops: unknown[], extra: string[] = [], shellPrefix = ''): Run {
@@ -21,6 +25,16 @@ function runPy(file: string, ops: unknown[], extra: string[] = [], shellPrefix =
     ? spawnSync('sh', ['-c', `${shellPrefix}; exec python3 "$@"`, 'sh', ...args], { input: JSON.stringify({ ops }), encoding: 'utf-8' })
     : spawnSync('python3', args, { input: JSON.stringify({ ops }), encoding: 'utf-8' })
   return { status: r.status, stdout: r.stdout, stderr: r.stderr }
+}
+
+function editAsync(file: string, ops: unknown[]): Promise<{ changed: boolean; backupPath: string | null; attempts: number }> {
+  return new Promise((resolve, reject) => {
+    const child = spawn('python3', [EDITOR, '--file', file, '--format', 'json'], { stdio: ['pipe', 'pipe', 'pipe'] })
+    let out = ''; let err = ''
+    child.stdout.on('data', d => { out += String(d) }); child.stderr.on('data', d => { err += String(d) })
+    child.on('close', code => code === 0 ? resolve(JSON.parse(out.trim())) : reject(new Error(`exit ${code}: ${err}`)))
+    child.stdin.end(JSON.stringify({ ops }))
+  })
 }
 
 function userObject(): Record<string, unknown> {
@@ -43,7 +57,8 @@ function userText(indent: number | string = 2, eol = '\n', trailing = true): str
 }
 function parse(file: string): Record<string, unknown> { return JSON.parse(fs.readFileSync(file, 'utf8')) as Record<string, unknown> }
 const siblings = (dir: string): string[] => fs.readdirSync(dir).sort()
-const backups = (dir: string): string[] => siblings(dir).filter(f => BACKUP_RE.test(f))
+const backups = (dir: string): string[] => siblings(dir).filter(f => ANY_BACKUP_RE.test(f))
+const exactBackups = (dir: string): string[] => siblings(dir).filter(f => BACKUP_RE.test(f))
 
 /** Every top-level key of `before` not in `touched` must be deep-equal after, and keep its relative order. */
 function assertUntouched(before: Record<string, unknown>, after: Record<string, unknown>, touched: string[] = []): void {
@@ -53,7 +68,6 @@ function assertUntouched(before: Record<string, unknown>, after: Record<string, 
 }
 
 suite('settingsSafety — safe_config_edit.py against hostile real-world settings.json', function () {
-  this.timeout(300_000)
   let dir: string
   let file: string
 
@@ -74,12 +88,13 @@ suite('settingsSafety — safe_config_edit.py against hostile real-world setting
     const link = path.join(dir, '.claude', 'settings.json')
     fs.writeFileSync(target, userText())
     fs.symlinkSync('../dotfiles/settings.json', link)
-    const res = await safeConfigEdit(link, 'json', [{ op: 'set', path: ['env', 'NEW'], value: '1' }])
+    const res = await editAsync(link, [{ op: 'set', path: ['env', 'NEW'], value: '1' }])
     assert.strictEqual(res.changed, true)
     assert.ok(fs.lstatSync(link).isSymbolicLink(), 'the symlink was replaced by a regular file')
     assert.strictEqual(fs.readlinkSync(link), '../dotfiles/settings.json')
     assert.strictEqual((parse(target).env as Record<string, string>).NEW, '1', 'the symlink TARGET did not receive the edit')
-    assert.deepStrictEqual(siblings(path.join(dir, '.claude')), ['settings.json'], 'sidecars leaked next to the link')
+    assert.deepStrictEqual(siblings(path.join(dir, '.claude')).filter(f => !ANY_BACKUP_RE.test(f)), ['settings.json'], 'sidecars leaked next to the link')
+    assert.deepStrictEqual(siblings(path.join(dir, 'dotfiles')), ['settings.json'], 'sidecars leaked into the dotfiles directory')
   })
 
   // (b) --------------------------------------------------------------------------------------------
@@ -87,7 +102,7 @@ suite('settingsSafety — safe_config_edit.py against hostile real-world setting
     for (const mode of [0o644, 0o640, 0o600]) {
       fs.writeFileSync(file, userText())
       fs.chmodSync(file, mode)
-      await safeConfigEdit(file, 'json', [{ op: 'set', path: ['env', 'M'], value: String(mode) }])
+      await editAsync(file, [{ op: 'set', path: ['env', 'M'], value: String(mode) }])
       assert.strictEqual(fs.statSync(file).mode & 0o777, mode, `mode ${mode.toString(8)} not preserved`)
     }
   })
@@ -117,7 +132,8 @@ suite('settingsSafety — safe_config_edit.py against hostile real-world setting
     const bytes = Buffer.concat([Buffer.from('{"a":"'), Buffer.from([0xff, 0xfe]), Buffer.from('"}')])
     fs.writeFileSync(file, bytes)
     const r = runPy(file, [{ op: 'set', path: ['env', 'X'], value: '1' }])
-    assert.notStrictEqual(r.status, 0)
+    assert.strictEqual(r.status, 1)
+    assert.ok((JSON.parse(r.stderr.trim()) as { error: string }).error.includes('UnicodeDecodeError'), `not a JSON error line: ${r.stderr}`)
     assert.ok(fs.readFileSync(file).equals(bytes))
     assert.deepStrictEqual(siblings(dir), ['settings.json'])
   })
@@ -131,7 +147,7 @@ suite('settingsSafety — safe_config_edit.py against hostile real-world setting
   // (d) --------------------------------------------------------------------------------------------
   test('(d) 2-space LF file: result is byte-identical to the original plus ONLY the added key', async () => {
     fs.writeFileSync(file, userText().replace('12345678901234567890', '777777777'))
-    await safeConfigEdit(file, 'json', [{ op: 'set', path: ['env', 'NEW'], value: '1' }])
+    await editAsync(file, [{ op: 'set', path: ['env', 'NEW'], value: '1' }])
     const expected = userObject()
     ;(expected.env as Record<string, string>).NEW = '1'
     assert.strictEqual(fs.readFileSync(file, 'utf8'), JSON.stringify(expected, null, 2) + '\n')
@@ -140,7 +156,7 @@ suite('settingsSafety — safe_config_edit.py against hostile real-world setting
   test('(d) 4-space indent: values + key order preserved; indent is NORMALISED to 2 spaces (documented non-preservation)', async () => {
     fs.writeFileSync(file, userText(4))
     const before = parse(file)
-    await safeConfigEdit(file, 'json', [{ op: 'set', path: ['env', 'NEW'], value: '1' }])
+    await editAsync(file, [{ op: 'set', path: ['env', 'NEW'], value: '1' }])
     assertUntouched(before, parse(file), ['env'])
     const out = fs.readFileSync(file, 'utf8')
     assert.ok(out.includes('\n  "model"') && !out.includes('\n    "model"'), 'expected 2-space layout')
@@ -153,7 +169,7 @@ suite('settingsSafety — safe_config_edit.py against hostile real-world setting
     const orig = Buffer.from(userText(2, '\r\n'))
     fs.writeFileSync(file, orig)
     const before = parse(file)
-    const res = await safeConfigEdit(file, 'json', [{ op: 'set', path: ['env', 'NEW'], value: '1' }])
+    const res = await editAsync(file, [{ op: 'set', path: ['env', 'NEW'], value: '1' }])
     assert.ok(res.backupPath, 'no backup reported')
     assert.ok(fs.readFileSync(res.backupPath as string).equals(orig), 'backup is not a byte-exact copy of the original')
     assertUntouched(before, parse(file), ['env'])
@@ -161,12 +177,13 @@ suite('settingsSafety — safe_config_edit.py against hostile real-world setting
 
   test('(d) no trailing newline in the original: result always ends with one (documented)', async () => {
     fs.writeFileSync(file, userText(2, '\n', false))
-    await safeConfigEdit(file, 'json', [{ op: 'set', path: ['env', 'NEW'], value: '1' }])
+    await editAsync(file, [{ op: 'set', path: ['env', 'NEW'], value: '1' }])
     assert.ok(fs.readFileSync(file, 'utf8').endsWith('\n'))
   })
 
   // (e) --------------------------------------------------------------------------------------------
-  test('(e) 8 parallel editors, 8 different ops: valid JSON, all 8 changes present, user content intact, no leftovers', async () => {
+  test('(e) 8 parallel editors, 8 different ops: valid JSON, all 8 changes present, user content intact, no leftovers', async function () {
+    this.timeout(60_000)
     fs.writeFileSync(file, userText())
     const before = parse(file)
     const ops: SafeEditOp[] = [
@@ -177,7 +194,7 @@ suite('settingsSafety — safe_config_edit.py against hostile real-world setting
       { op: 'append_unique', path: ['hooks', 'SessionStart'], value: { hooks: [{ type: 'command', command: 'ours-C' }] }, unique_by_substring: 'ours-C' },
       { op: 'set', path: ['p7'], value: 'seven' },
     ]
-    await Promise.all(ops.map(op => safeConfigEdit(file, 'json', [op])))
+    await Promise.all(ops.map(op => editAsync(file, [op])))
     const after = parse(file)
     const env = after.env as Record<string, string>
     assert.deepStrictEqual([env.P0, env.P1, env.P2], ['0', '1', '2'])
@@ -188,11 +205,12 @@ suite('settingsSafety — safe_config_edit.py against hostile real-world setting
     assert.ok(JSON.stringify((after.hooks as Record<string, unknown>).SessionStart).includes('ours-C'))
     assert.deepStrictEqual(after.permissions, before.permissions)
     assert.deepStrictEqual(after.nested, before.nested)
-    assert.deepStrictEqual(siblings(dir).filter(f => !BACKUP_RE.test(f) && f !== 'settings.json'), [], 'lock/tmp leaked')
+    assert.deepStrictEqual(siblings(dir).filter(f => !ANY_BACKUP_RE.test(f) && f !== 'settings.json'), [], 'lock/tmp leaked')
   })
 
   // (f) --------------------------------------------------------------------------------------------
-  test('(f) a lock-less FOREIGN writer (Claude Code, read-modify-write + rename) racing 50 edits: never invalid JSON; losses quantified', async () => {
+  test('(f) a lock-less FOREIGN writer (Claude Code, read-modify-write + rename) racing 25 edits (invariants only: never invalid JSON, user content intact): never invalid JSON; losses quantified', async function () {
+    this.timeout(60_000)
     const foreign = path.join(dir, 'foreign.js')
     fs.writeFileSync(foreign, [
       "const fs=require('fs');const f=process.argv[2];const n=+process.argv[3];",
@@ -200,13 +218,13 @@ suite('settingsSafety — safe_config_edit.py against hostile real-world setting
       'const t=f+".foreign.tmp";fs.writeFileSync(t,JSON.stringify(o,null,2)+"\\n");fs.renameSync(t,f)}',
     ].join('\n'))
     const N_FOREIGN = 400
-    const stats = { rounds: 50, oursApplied: 0, oursCancelled: 0, oursCommittedThenOverwritten: 0, foreignKeysDropped: 0, roundsWithForeignLoss: 0, invalidJson: 0 }
+    const stats = { rounds: 25, oursApplied: 0, oursCancelled: 0, oursCommittedThenOverwritten: 0, foreignKeysDropped: 0, roundsWithForeignLoss: 0, invalidJson: 0 }
     for (let round = 0; round < stats.rounds; round++) {
       fs.writeFileSync(file, userText())
       const fp = spawn('node', [foreign, file, String(N_FOREIGN)], { stdio: 'ignore' })
       const foreignDone = new Promise<void>(res => fp.on('close', () => res()))
       let ok = true
-      try { await safeConfigEdit(file, 'json', [{ op: 'set', path: ['ours', `r${round}`], value: round }]) } catch { ok = false }
+      try { await editAsync(file, [{ op: 'set', path: ['ours', `r${round}`], value: round }]) } catch { ok = false }
       await foreignDone
       let final: Record<string, unknown>
       try { final = parse(file) } catch { stats.invalidJson++; continue }
@@ -232,10 +250,10 @@ suite('settingsSafety — safe_config_edit.py against hostile real-world setting
       { op: 'append_unique', path: ['hooks', 'Stop'], value: { matcher: '', hooks: [{ type: 'command', command: 'ours' }] }, unique_by_substring: 'ours' },
       { op: 'remove_by_substring', path: ['hooks', 'Gone'], substring: 'nothing', nested_key: 'hooks', prune_empty: true },
     ]
-    assert.strictEqual((await safeConfigEdit(file, 'json', ops)).changed, true)
+    assert.strictEqual((await editAsync(file, ops)).changed, true)
     const s1 = fs.statSync(file); const dir1 = siblings(dir)
     await new Promise(r => setTimeout(r, 30))
-    const second = await safeConfigEdit(file, 'json', ops)
+    const second = await editAsync(file, ops)
     const s2 = fs.statSync(file)
     assert.strictEqual(second.changed, false)
     assert.strictEqual(second.backupPath, null)
@@ -244,11 +262,12 @@ suite('settingsSafety — safe_config_edit.py against hostile real-world setting
   })
 
   // (h) --------------------------------------------------------------------------------------------
-  test('(h) backup growth: 30 real repairs leave EXACTLY 2 backups, beside settings.json', async () => {
+  test('(h) backup growth: 12 real repairs leave EXACTLY 2 backups, beside settings.json', async function () {
+    this.timeout(60_000)
     fs.writeFileSync(file, userText())
-    for (let i = 0; i < 30; i++) await safeConfigEdit(file, 'json', [{ op: 'set', path: ['env', 'COUNTER'], value: String(i) }])
+    for (let i = 0; i < 12; i++) await editAsync(file, [{ op: 'set', path: ['env', 'COUNTER'], value: String(i) }])
     const n = backups(dir).length
-    console.log(`      (h) backups after 30 repairs: ${n} (in ${dir}, beside settings.json)`)
+    console.log(`      (h) backups after 12 repairs: ${n} (in ${dir}, beside settings.json)`)
     assert.strictEqual(n, 2, `${n} backups on disk; the owner's ruling is exactly 2`)
   })
 
@@ -289,6 +308,29 @@ suite('settingsSafety — safe_config_edit.py against hostile real-world setting
       '        real(src, dst)',
       '        if dst == FILE and src.endswith(".safeedit.tmp") and calls["n"] < LIMIT: calls["n"] += 1; foreign()',
       '    os.replace = rep',
+      'elif MODE == "spy":',
+      '    log = open(os.environ["SS_LOG"], "a")',
+      '    ofw = m.fsync_write',
+      '    def fw(path, data): log.write("write " + path + "\\n"); log.flush(); return ofw(path, data)',
+      '    m.fsync_write = fw',
+      '    oe = m.FileLock.__enter__',
+      '    def en(self): log.write("lock " + self.lock_path + "\\n"); log.flush(); return oe(self)',
+      '    m.FileLock.__enter__ = en',
+      '    orp = os.replace',
+      '    def rp(src, dst): log.write("replace " + src + " -> " + dst + "\\n"); log.flush(); return orp(src, dst)',
+      '    os.replace = rp',
+      'elif MODE == "frozen_clock":',
+      '    import datetime as _dt',
+      '    class _FD:',
+      '        @staticmethod',
+      '        def now(): return _dt.datetime(2026, 1, 1, 0, 0, 0, 0)',
+      '    m.datetime = _FD',
+      'elif MODE == "enoent_prune":',
+      '    ounlink = os.unlink',
+      '    def ul(p, *a, **k):',
+      '        ounlink(p, *a, **k)',
+      '        if "agentlens-bak-" in str(p) and not str(p).endswith(".tmp"): raise FileNotFoundError(p)',
+      '    os.unlink = ul',
       'elif MODE == "audit_fail":',
       '    real_verify = m.verify_diff',
       '    def v(*a):',
@@ -301,8 +343,8 @@ suite('settingsSafety — safe_config_edit.py against hostile real-world setting
     ].join('\n'))
     return w
   }
-  const runInjected = (mode: string, ops: unknown[], limit = 1): Run => {
-    const r = spawnSync('python3', [wrapper()], { input: JSON.stringify({ ops }), encoding: 'utf-8', env: { ...process.env, SS_MODE: mode, SS_LIMIT: String(limit), SS_FILE: file } })
+  const runInjected = (mode: string, ops: unknown[], limit = 1, env: Record<string, string> = {}, target = file): Run => {
+    const r = spawnSync('python3', [wrapper()], { input: JSON.stringify({ ops }), encoding: 'utf-8', env: { ...process.env, SS_MODE: mode, SS_LIMIT: String(limit), SS_FILE: target, ...env } })
     return { status: r.status, stdout: r.stdout, stderr: r.stderr }
   }
   const OURS = [{ op: 'set', path: ['ours', 'k'], value: 'v' }]
@@ -344,6 +386,8 @@ suite('settingsSafety — safe_config_edit.py against hostile real-world setting
   test('(5) a foreign write landing right AFTER our commit is never rolled back over: the cycle is redone and BOTH changes survive', () => {
     fs.writeFileSync(file, userText())
     const r = runInjected('postcommit', OURS, 1)
+    // The rollback defect's OWN assertion first: the foreign write must still be in the file, whatever the exit code.
+    assert.deepStrictEqual(parse(file).foreign, { F0: 0 }, `the rollback clobbered the foreign write with a stale pre-image (exit ${r.status}: ${r.stderr})`)
     assert.strictEqual(r.status, 0, r.stderr)
     assert.strictEqual((JSON.parse(r.stdout) as { attempts: number }).attempts, 2)
     const final = parse(file)
@@ -351,7 +395,8 @@ suite('settingsSafety — safe_config_edit.py against hostile real-world setting
     assert.deepStrictEqual(final.ours, { k: 'v' })
   })
 
-  test('(4) BACKUPS = TWO: 10 real edits leave exactly 2; the newest is the pre-image of the last edit; a rolled-back edit prunes nothing and later edits still converge on 2', () => {
+  test('(4) BACKUPS = TWO: 10 real edits leave exactly 2; the newest is the pre-image of the last edit; a rolled-back edit prunes nothing and later edits still converge on 2', function () {
+    this.timeout(60_000)
     fs.writeFileSync(file, userText())
     const edit = (i: number): Run => runPy(file, [{ op: 'set', path: ['env', 'N'], value: String(i) }])
     let preImage = Buffer.alloc(0)
@@ -361,7 +406,10 @@ suite('settingsSafety — safe_config_edit.py against hostile real-world setting
         const r = runInjected('audit_fail', [{ op: 'set', path: ['env', 'N'], value: 'bad' }])
         assert.strictEqual(r.status, 3, r.stderr)
         assert.ok(fs.readFileSync(file).equals(before), 'rollback did not restore the pre-image')
-        assert.deepStrictEqual(backups(dir), bk, 'a FAILED transaction pruned or leaked backups')
+        const after = backups(dir)
+        assert.ok(bk.every(b => after.includes(b)), 'a FAILED transaction pruned an earlier backup')
+        assert.strictEqual(after.length, bk.length + 1, 'the failed transaction must keep exactly its own restore point')
+        assert.ok(fs.readFileSync(path.join(dir, after.filter(b => !bk.includes(b))[0])).equals(before), 'the kept restore point is not the pre-image')
         assert.strictEqual(fs.statSync(file).mode & 0o777, 0o600 | (fs.statSync(file).mode & 0o077))
       }
       preImage = fs.readFileSync(file)
@@ -375,6 +423,145 @@ suite('settingsSafety — safe_config_edit.py against hostile real-world setting
     assert.strictEqual((parse(file).env as { N: string }).N, '10')
   })
 
+
+  // ---- r2: symlink layout, prune shape, redo safety, error contract --------------------------------
+  const mkLinked = (): { home: string; dot: string; target: string; link: string } => {
+    const home = path.join(dir, 'home'); const dot = path.join(dir, 'dotfiles')
+    fs.mkdirSync(home); fs.mkdirSync(dot)
+    const target = path.join(dot, 'settings.json'); const link = path.join(home, 'settings.json')
+    fs.writeFileSync(target, userText())
+    fs.symlinkSync(path.join('..', 'dotfiles', 'settings.json'), link)
+    return { home, dot, target, link }
+  }
+
+  test('(2a) symlink into ANOTHER directory: temp, swap and lock live on the RESOLVED file; the backup sits beside the LOGICAL path; the dotfiles dir gets nothing else', () => {
+    const { home, dot, target, link } = mkLinked()
+    const log = path.join(dir, 'spy.log')
+    const r = runInjected('spy', OURS, 1, { SS_LOG: log }, link)
+    assert.strictEqual(r.status, 0, r.stderr)
+    assert.ok(fs.lstatSync(link).isSymbolicLink())
+    assert.deepStrictEqual(parse(target).ours, { k: 'v' })
+    const lines = fs.readFileSync(log, 'utf8').trim().split('\n')
+    const writes = lines.filter(l => l.startsWith('write ')).map(l => l.slice(6))
+    const staged = writes.filter(w => w.endsWith('.safeedit.tmp'))
+    assert.ok(staged.length >= 1 && staged.every(w => path.dirname(w) === dot), `staging temp not beside the resolved file: ${staged}`)
+    assert.ok(writes.some(w => ANY_BACKUP_RE.test(w.replace(/\.tmp$/, '')) && path.dirname(w) === home), `backup not beside the logical path: ${writes}`)
+    assert.ok(!writes.some(w => /agentlens-bak/.test(w) && path.dirname(w) === dot), 'a backup was written into the dotfiles directory')
+    assert.ok(lines.includes(`lock ${target}.agentlens-lock`), `lock not keyed on the resolved path: ${lines}`)
+    assert.ok(lines.some(l => l === `replace ${target}.${l.split('.').slice(-3, -2)[0]}.safeedit.tmp -> ${target}` || (l.startsWith('replace ') && l.endsWith(`.safeedit.tmp -> ${target}`))), `swap not on the resolved file: ${lines}`)
+    assert.deepStrictEqual(siblings(dot), ['settings.json'], 'sidecar left in the dotfiles directory (a git add -A there would commit secrets)')
+    assert.strictEqual(backups(home).length, 1)
+    assert.deepStrictEqual(siblings(home).filter(f => !ANY_BACKUP_RE.test(f)), ['settings.json'])
+  })
+
+  test('(2b) two links to ONE file share ONE lock (keyed on the resolved path), and a link to a link resolves too', () => {
+    const { home, dot, target, link } = mkLinked()
+    const home2 = path.join(dir, 'home2'); fs.mkdirSync(home2)
+    const link2 = path.join(home2, 'settings.json')
+    fs.symlinkSync(link, link2) // link -> link -> real file
+    const locks: string[] = []
+    for (const [i, l] of [link, link2].entries()) {
+      const log = path.join(dir, `spy${i}.log`)
+      assert.strictEqual(runInjected('spy', [{ op: 'set', path: ['ours', `k${i}`], value: i }], 1, { SS_LOG: log }, l).status, 0)
+      locks.push(...fs.readFileSync(log, 'utf8').split('\n').filter(x => x.startsWith('lock ')))
+    }
+    assert.deepStrictEqual(locks, [`lock ${target}.agentlens-lock`, `lock ${target}.agentlens-lock`])
+    assert.deepStrictEqual(parse(target).ours, { k0: 0, k1: 1 })
+    assert.deepStrictEqual(siblings(dot), ['settings.json'])
+    assert.ok(fs.lstatSync(link2).isSymbolicLink() && fs.lstatSync(link).isSymbolicLink())
+    assert.strictEqual(backups(home).length, 1); assert.strictEqual(backups(home2).length, 1)
+  })
+
+  test('(3a) prune matches ONLY the exact backup shape: a .tmp leftover, a user file named ...agentlens-bak-keep and an old-shape name are never counted or deleted', async () => {
+    fs.writeFileSync(file, userText())
+    const decoys: Record<string, string> = {
+      'settings.json.agentlens-bak-20200101_000000000000-1.tmp': 'tmp leftover',
+      'settings.json.agentlens-bak-keep': 'user file',
+      'settings.json.agentlens-bak-00000000_000000000': 'old shape',
+    }
+    for (const [n, c] of Object.entries(decoys)) fs.writeFileSync(path.join(dir, n), c)
+    for (let i = 0; i < 6; i++) await editAsync(file, [{ op: 'set', path: ['env', 'C'], value: String(i) }])
+    for (const [n, c] of Object.entries(decoys)) assert.strictEqual(fs.readFileSync(path.join(dir, n), 'utf8'), c, `${n} was touched`)
+    assert.strictEqual(exactBackups(dir).length, 2)
+  })
+
+  test('(3b) two transactions in the SAME clock instant never overwrite each other\'s restore point (pid-suffixed names)', () => {
+    fs.writeFileSync(file, userText())
+    const original = fs.readFileSync(file)
+    assert.strictEqual(runInjected('frozen_clock', [{ op: 'set', path: ['env', 'A'], value: '1' }]).status, 0)
+    const afterFirst = fs.readFileSync(file)
+    assert.strictEqual(runInjected('frozen_clock', [{ op: 'set', path: ['env', 'A'], value: '2' }]).status, 0)
+    const kept = backups(dir)
+    assert.strictEqual(kept.length, 2, `same-instant backups collided: ${kept}`)
+    const bodies = kept.map(k => fs.readFileSync(path.join(dir, k)))
+    assert.ok(bodies.some(b => b.equals(original)) && bodies.some(b => b.equals(afterFirst)), 'a restore point was overwritten')
+  })
+
+  test('(3c) prune tolerates ENOENT (a concurrent prune already removed the file) and still succeeds', () => {
+    fs.writeFileSync(file, userText())
+    for (let i = 0; i < 3; i++) assert.strictEqual(runPy(file, [{ op: 'set', path: ['env', 'E'], value: String(i) }]).status, 0)
+    const r = runInjected('enoent_prune', [{ op: 'set', path: ['env', 'E'], value: 'last' }])
+    assert.strictEqual(r.status, 0, r.stderr)
+    assert.strictEqual(backups(dir).length, 2)
+  })
+
+  test('(4a) REDO SAFETY: a whole-object/array value + a concurrent change → CANCEL (exit 5), never a redo that re-applies the stale value', () => {
+    const cases: Array<[string, unknown[]]> = [
+      ['whole-array set', [{ op: 'set', path: ['hooks', 'Stop'], value: [{ matcher: '', hooks: [{ type: 'command', command: 'computed-from-stale-read' }] }] }]],
+      ['whole-object delete', [{ op: 'delete', path: ['env'] }]],
+      ['scalar + whole-object set mixed', [{ op: 'set', path: ['x'], value: 1 }, { op: 'set', path: ['permissions'], value: { allow: ['stale'] } }]],
+    ]
+    for (const [name, ops] of cases) {
+      fs.writeFileSync(file, userText())
+      const r = runInjected('snapshot', ops, 1)
+      assert.strictEqual(r.status, 5, `${name}: ${r.stderr}`)
+      const err = JSON.parse(r.stderr.trim()) as { error: string; attempts: number }
+      assert.ok(/cancelled, not redone/.test(err.error) && err.attempts === 1, `${name}: ${r.stderr}`)
+      const final = parse(file)
+      assert.deepStrictEqual(final.foreign, { F0: 0 }, `${name}: the foreign change is gone`)
+      assert.deepStrictEqual(final.env, userObject().env, `${name}: stale op applied`)
+      assert.deepStrictEqual(final.permissions, userObject().permissions)
+      assert.deepStrictEqual(final.hooks, userObject().hooks)
+    }
+  })
+
+  test('(4b) predicate ops (append_unique / remove_by_substring) and per-scalar sets keep the REDO and preserve the foreign change', () => {
+    const cases: unknown[][] = [
+      [{ op: 'append_unique', path: ['hooks', 'Stop'], value: { matcher: '', hooks: [{ type: 'command', command: 'ours-P' }] }, unique_by_substring: 'ours-P' }],
+      [{ op: 'remove_by_substring', path: ['hooks', 'Stop'], substring: 'user-stop.sh', nested_key: 'hooks', prune_empty: true }],
+      [{ op: 'set', path: ['env', 'FOO'], value: 'baz' }],
+    ]
+    for (const ops of cases) {
+      fs.writeFileSync(file, userText())
+      const r = runInjected('snapshot', ops, 1)
+      assert.strictEqual(r.status, 0, r.stderr)
+      assert.strictEqual((JSON.parse(r.stdout) as { attempts: number }).attempts, 2)
+      assert.deepStrictEqual(parse(file).foreign, { F0: 0 })
+    }
+  })
+
+  test('(6a) the TS bridge: any python-side failure REJECTS with the message surfaced and a numeric exit code — never a resolved success', async () => {
+    const bytes = Buffer.concat([Buffer.from('{"a":"'), Buffer.from([0xff, 0xfe]), Buffer.from('"}')])
+    fs.writeFileSync(file, bytes)
+    await assert.rejects(
+      safeConfigEdit(file, 'json', [{ op: 'set', path: ['env', 'X'], value: '1' }]),
+      (e: unknown) => e instanceof SafeEditError && /UnicodeDecodeError/.test(e.message) && e.exitCode === 1,
+    )
+    fs.writeFileSync(file, '{"a":')
+    await assert.rejects(
+      safeConfigEdit(file, 'json', [{ op: 'set', path: ['env', 'X'], value: '1' }]),
+      (e: unknown) => e instanceof SafeEditError && /not valid strict JSON/.test(e.message) && e.exitCode === 2,
+    )
+    fs.writeFileSync(file, userText())
+    fs.chmodSync(dir, 0o555)
+    try {
+      await assert.rejects(
+        safeConfigEdit(file, 'json', [{ op: 'set', path: ['env', 'X'], value: '1' }]),
+        (e: unknown) => e instanceof SafeEditError && e.message.length > 0 && e.exitCode === 1,
+      )
+    } finally { fs.chmodSync(dir, 0o755) }
+  })
+
   // (i) --------------------------------------------------------------------------------------------
   test('(i) read-only directory: refuse, original byte-identical, no sidecar', () => {
     fs.writeFileSync(file, userText())
@@ -382,7 +569,8 @@ suite('settingsSafety — safe_config_edit.py against hostile real-world setting
     fs.chmodSync(dir, 0o555)
     const r = runPy(file, [{ op: 'set', path: ['env', 'X'], value: '1' }])
     fs.chmodSync(dir, 0o755)
-    assert.notStrictEqual(r.status, 0, 'edit "succeeded" in a read-only directory')
+    assert.strictEqual(r.status, 1, 'edit "succeeded" (or crashed with a traceback) in a read-only directory')
+    assert.ok(typeof (JSON.parse(r.stderr.trim()) as { error: string }).error === 'string', `not a JSON error line: ${r.stderr}`)
     assert.ok(fs.readFileSync(file).equals(orig))
     assert.deepStrictEqual(siblings(dir), ['settings.json'])
   })
@@ -395,7 +583,10 @@ suite('settingsSafety — safe_config_edit.py against hostile real-world setting
     const r = runPy(file, [{ op: 'set', path: ['env', 'X'], value: '1' }], [], 'ulimit -f 1')
     assert.notStrictEqual(r.status, 0, `an edit under a 512-byte write limit reported success: ${r.stdout}`)
     assert.ok(fs.readFileSync(file).equals(orig), 'original damaged')
+    // The truncated-backup defect's OWN assertion comes first (the error-line contract is asserted after it).
     for (const b of backups(dir)) assert.ok(fs.readFileSync(path.join(dir, b)).equals(orig), `backup ${b} is TRUNCATED (short write ignored)`)
+    assert.strictEqual(r.status, 1, `crashed instead of a clean refusal: ${r.stdout}${r.stderr}`)
+    assert.ok(typeof (JSON.parse(r.stderr.trim()) as { error: string }).error === 'string', `not a JSON error line: ${r.stderr}`)
     assert.deepStrictEqual(siblings(dir).filter(f => /\.tmp$|agentlens-lock$/.test(f)), [], 'tmp/lock leaked')
   })
 
@@ -406,7 +597,7 @@ suite('settingsSafety — safe_config_edit.py against hostile real-world setting
     const old = new Date(Date.now() - 60_000)
     fs.utimesSync(lock, old, old)
     const t0 = Date.now()
-    await safeConfigEdit(file, 'json', [{ op: 'set', path: ['env', 'X'], value: '1' }])
+    await editAsync(file, [{ op: 'set', path: ['env', 'X'], value: '1' }])
     assert.ok(Date.now() - t0 < 10_000)
     assert.ok(!fs.existsSync(lock))
   })

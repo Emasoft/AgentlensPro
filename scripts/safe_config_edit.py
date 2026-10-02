@@ -82,6 +82,10 @@ class LockTimeout(Exception):
 class ConcurrentModification(Exception):
     exit_code = 5
 
+    def __init__(self, message, redo_safe=True):
+        super().__init__(message)
+        self.redo_safe = redo_safe
+
 
 class BadSpec(Exception):
     exit_code = 6
@@ -354,10 +358,13 @@ def fsync_write(path, data):
         os.close(fd)
 
 
-def atomic_backup(target, raw):
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S") + f"{datetime.now().microsecond // 1000:03d}"
-    backup = f"{target}.agentlens-bak-{ts}"
-    tmp = f"{backup}.{os.getpid()}.tmp"
+
+def atomic_backup(base, raw):
+    # Microseconds + pid: two transactions in the same second (or the same millisecond, from two
+    # processes) must never share a name, or the second silently overwrites the first one's restore point.
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S%f")
+    backup = f"{base}.agentlens-bak-{stamp}-{os.getpid()}"
+    tmp = f"{backup}.tmp"
     try:
         fsync_write(tmp, raw)
         os.replace(tmp, backup)
@@ -371,39 +378,10 @@ def atomic_backup(target, raw):
     return backup
 
 
-
 # Backups kept on disk per target. Every real repair writes one, and agentlenspro repairs on launch, so
 # without a cap they grow without bound beside ~/.claude/settings.json. Two is the owner's ruling
 # (2026-10-02): the pristine pre-image of the latest edit (the restore copy) plus the one before it.
 BACKUPS_KEPT = 2
-
-
-def is_backup_name(base, name):
-    """`<base>.agentlens-bak-YYYYmmdd_HHMMSSmmm` exactly — never a `.tmp` staging file or a stranger's file."""
-    prefix = base + ".agentlens-bak-"
-    suffix = name[len(prefix):]
-    return (
-        name.startswith(prefix)
-        and len(suffix) == 18
-        and suffix[:8].isdigit()
-        and suffix[8] == "_"
-        and suffix[9:].isdigit()
-    )
-
-
-def prune_backups(target):
-    """Keep only the BACKUPS_KEPT newest backups of `target`. Called ONLY after a transaction has
-    committed AND passed its post-commit audit, under the lock: before that, the newest backup is the
-    one the rollback needs, and an aborted transaction must leave every earlier backup alone. The
-    timestamp is fixed-width, so a lexical sort is chronological."""
-    directory = os.path.dirname(target) or "."
-    base = os.path.basename(target)
-    mine = sorted(n for n in os.listdir(directory) if is_backup_name(base, n))
-    for old in mine[:-BACKUPS_KEPT]:
-        try:
-            os.unlink(os.path.join(directory, old))
-        except FileNotFoundError:
-            pass
 
 
 def match_mode(tmp, target):
@@ -419,6 +397,35 @@ def identity(path):
     """(inode, mtime_ns, size) — changes whenever another process atomically replaces the file."""
     st = os.stat(path)
     return (st.st_ino, st.st_mtime_ns, st.st_size)
+
+
+
+def is_backup_name(base, name):
+    """EXACTLY `<base>.agentlens-bak-YYYYmmdd_HHMMSSffffff-<pid>`: never a `.tmp` staging leftover, and
+    never a user file that merely looks similar (`...agentlens-bak-keep`)."""
+    prefix = base + ".agentlens-bak-"
+    if not name.startswith(prefix):
+        return False
+    stamp, sep, pid = name[len(prefix):].partition("-")
+    return (
+        len(stamp) == 21 and stamp[:8].isdigit() and stamp[8] == "_" and stamp[9:].isdigit()
+        and sep == "-" and pid.isdigit()
+    )
+
+
+def prune_backups(base):
+    """Keep only the BACKUPS_KEPT newest backups of `base`. Called ONLY after a transaction has committed
+    AND passed its post-commit audit, and only while the caller still holds the lock: before that, the
+    newest backup is the restore point, and an aborted transaction must leave every earlier one alone.
+    The stamp is fixed-width, so a lexical sort is chronological."""
+    directory = os.path.dirname(base) or "."
+    name = os.path.basename(base)
+    mine = sorted(n for n in os.listdir(directory) if is_backup_name(name, n))
+    for old in mine[:-BACKUPS_KEPT]:
+        try:
+            os.unlink(os.path.join(directory, old))
+        except FileNotFoundError:
+            pass  # a concurrent prune got there first
 
 
 class FileLock:
@@ -489,11 +496,36 @@ def read_json_or_refuse(target, create_if_missing):
     return raw, tree
 
 
-def transact_json(target, ops, create_if_missing, do_backup):
+
+def has_container_op(tree, ops):
+    """True when an op writes or removes a WHOLE object/array. Such a value was computed by the caller from
+    a read taken before the lock, so re-applying it after another process changed the file would erase
+    that process's change — a concurrent change must cancel, never redo (per-scalar and predicate ops are
+    re-evaluated against the fresh tree on a redo and are safe)."""
+    for op in ops:
+        kind = op.get("op")
+        if kind == "set" and isinstance(op.get("value"), (dict, list)):
+            return True
+        if kind == "delete":
+            node = tree
+            for seg in op["path"]:
+                node = node.get(seg) if isinstance(node, dict) else None
+            if isinstance(node, (dict, list)):
+                return True
+    return False
+
+
+def transact_json(target, ops, create_if_missing, do_backup, logical=None):
+    """`target` is the RESOLVED file (staging, swap, mode, identity all happen on it, so a symlinked
+    settings.json keeps its link and the temp sibling shares the real file's volume). Backups sit beside
+    the LOGICAL path the caller named — never inside a dotfiles repo, where a `git add -A` would commit
+    secrets from settings env."""
+    logical = logical or target
     raw, tree = read_json_or_refuse(target, create_if_missing)
     # Identity of the file the snapshot came from, checked again immediately before the swap. Taken right
     # after the read; a write landing between the two is still caught by the gate-4 content compare.
     snap = identity(target) if raw is not None else None
+    redo_safe = not has_container_op(tree, ops)
     new_tree, changed = apply_ops(tree, ops)
     if not changed:
         return {"changed": False, "backupPath": None}
@@ -505,7 +537,7 @@ def transact_json(target, ops, create_if_missing, do_backup):
     if json.dumps(reparsed, sort_keys=True) != json.dumps(new_tree, sort_keys=True):
         raise VerifyFailed("serialize→parse round-trip mismatch")
 
-    backup = atomic_backup(target, raw) if (do_backup and raw is not None) else None
+    backup = atomic_backup(logical, raw) if (do_backup and raw is not None) else None
 
     tmp = f"{target}.{os.getpid()}.safeedit.tmp"
     try:
@@ -521,24 +553,24 @@ def transact_json(target, ops, create_if_missing, do_backup):
             with open(target, "r", encoding="utf-8", newline="") as f:
                 current = f.read()
             if raw is not None and current != raw:
-                raise ConcurrentModification(f"{target} was modified during the transaction")
+                raise ConcurrentModification(f"{target} was modified during the transaction", redo_safe)
             if raw is None:
-                raise ConcurrentModification(f"{target} appeared during the transaction")
+                raise ConcurrentModification(f"{target} appeared during the transaction", redo_safe)
         except FileNotFoundError:
             if raw is not None:
-                raise ConcurrentModification(f"{target} vanished during the transaction")
+                raise ConcurrentModification(f"{target} vanished during the transaction", redo_safe)
 
         # gate 4b: re-check the file's identity as the very last step before the swap. The content
         # compare above spends a read+decode of the whole file between looking and swapping; a stat is
-        # orders of magnitude shorter, so a foreign atomic rename (Claude Code takes no lock of ours)
-        # has far less room to land in the gap — and it is detected even when it rewrote identical bytes.
+        # several times shorter, so a foreign atomic rename (Claude Code takes no lock of ours) has less
+        # room to land in the gap — and it is detected even when it rewrote identical bytes.
         if snap is not None:
             try:
                 now = identity(target)
             except FileNotFoundError:
-                raise ConcurrentModification(f"{target} vanished during the transaction")
+                raise ConcurrentModification(f"{target} vanished during the transaction", redo_safe)
             if now != snap:
-                raise ConcurrentModification(f"{target} was replaced during the transaction")
+                raise ConcurrentModification(f"{target} was replaced during the transaction", redo_safe)
 
         match_mode(tmp, target)
         os.replace(tmp, target)  # COMMIT (atomic)
@@ -553,20 +585,31 @@ def transact_json(target, ops, create_if_missing, do_backup):
     # WHY this check exists: the rollback below puts the PRE-image back. If another process (Claude Code
     # takes none of our locks) replaced the file between our swap and this audit, the file no longer
     # holds what we wrote, the audit would fail, and rolling back would overwrite THEIR newer write with
-    # our stale backup. Their write is not ours to undo: redo the whole cycle from a fresh snapshot.
+    # our stale pre-image. Their write is not ours to undo: redo the whole cycle from a fresh snapshot.
     if committed_raw != serialized:
-        raise ConcurrentModification(f"{target} was replaced by another process right after the commit")
+        raise ConcurrentModification(f"{target} was replaced by another process right after the commit", redo_safe)
     committed = json.loads(committed_raw)
     try:
         verify_diff(tree, committed, ops)
     except VerifyFailed:
         if backup:
-            match_mode(backup, target)
-            os.replace(backup, target)  # roll back — leave the user whole
+            # Restore from the in-memory snapshot via a temp beside the RESOLVED file: the backup may sit
+            # on another volume (symlinked settings.json), where os.replace(backup, target) fails EXDEV.
+            # The backup file itself stays as a restore point.
+            rollback = f"{target}.{os.getpid()}.rollback.tmp"
+            try:
+                fsync_write(rollback, raw)
+                match_mode(rollback, target)
+                os.replace(rollback, target)  # roll back — leave the user whole
+            finally:
+                try:
+                    os.unlink(rollback)
+                except FileNotFoundError:
+                    pass
         raise
 
     if backup:
-        prune_backups(target)  # only now: the transaction is committed AND audited
+        prune_backups(logical)  # only now: the transaction is committed AND audited, and we hold the lock
     return {"changed": True, "backupPath": backup}
 
 
@@ -697,8 +740,7 @@ def transact_toml(target, ops, create_if_missing, do_backup):
     return {"changed": True, "backupPath": backup}
 
 
-# ---------------------------------------------------------------------------
-# ---------------------------------------------------------------------------
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--file", required=True)
@@ -717,34 +759,53 @@ def main():
         print(json.dumps({"error": f"bad spec on stdin: {e}"}), file=sys.stderr)
         sys.exit(BadSpec.exit_code)
 
-    # WHY realpath: settings.json is often a SYMLINK (dotfiles managers). os.replace over the link would
-    # swap it for a regular file and leave the user's managed target stale; resolving it first makes the
-    # lock, backups, staging file and swap all happen beside — and on — the real file.
-    target = os.path.realpath(os.path.expanduser(args.file))
-    if args.create_if_missing:
-        os.makedirs(os.path.dirname(target) or ".", exist_ok=True)
+    # WHY two paths: settings.json is often a SYMLINK (dotfiles managers). os.replace over the link would
+    # swap it for a regular file and leave the user's managed target stale, so the write path (staging
+    # temp, swap, mode, identity check, lock) works on the RESOLVED file. Backups stay beside the LOGICAL
+    # path the caller named, out of the user's dotfiles repo.
+    logical = os.path.abspath(os.path.expanduser(args.file))
+    target = os.path.realpath(logical)
 
-    attempts = 0
-    last_error = None
-    while attempts < max(1, args.retries):
-        attempts += 1
-        try:
-            with FileLock(target):
-                fn = transact_json if args.format == "json" else transact_toml
-                result = fn(target, ops, args.create_if_missing, not args.no_backup)
-            result["attempts"] = attempts
-            print(json.dumps(result))
-            return
-        except ConcurrentModification as e:
-            last_error = e  # someone else won the race — re-snapshot and retry
-            time.sleep(0.2 * attempts)
-        except (Refused, VerifyFailed, LockTimeout, BadSpec, Unsupported) as e:
-            print(json.dumps({"error": str(e), "attempts": attempts}), file=sys.stderr)
-            sys.exit(e.exit_code)
+    # Any failure we did not anticipate (EFBIG/ENOSPC, read-only directory, invalid UTF-8) must still end
+    # as ONE JSON error line and a non-zero exit — never a bare traceback the caller has to parse. The
+    # original file is untouched in all of them: every write goes through a staged temp.
+    try:
+        if args.create_if_missing:
+            os.makedirs(os.path.dirname(target) or ".", exist_ok=True)
 
-    print(json.dumps({"error": f"cancelled after {attempts} attempts: {last_error}", "attempts": attempts}), file=sys.stderr)
-    sys.exit(ConcurrentModification.exit_code)
+        attempts = 0
+        last_error = None
+        while attempts < max(1, args.retries):
+            attempts += 1
+            try:
+                with FileLock(target):
+                    if args.format == "json":
+                        result = transact_json(target, ops, args.create_if_missing, not args.no_backup, logical)
+                    else:
+                        result = transact_toml(target, ops, args.create_if_missing, not args.no_backup)
+                result["attempts"] = attempts
+                print(json.dumps(result))
+                return
+            except ConcurrentModification as e:
+                if not e.redo_safe:
+                    # A whole object/array value was computed from a read taken before the lock; redoing
+                    # it would re-apply that stale value over the other writer's change.
+                    print(json.dumps({"error": f"cancelled, not redone: {e}; the ops carry a whole object/array value computed from an earlier read, which a redo would re-apply over the other writer's change", "attempts": attempts}), file=sys.stderr)
+                    sys.exit(ConcurrentModification.exit_code)
+                last_error = e  # someone else won the race — re-snapshot and retry
+                time.sleep(0.2 * attempts)
+            except (Refused, VerifyFailed, LockTimeout, BadSpec, Unsupported) as e:
+                print(json.dumps({"error": str(e), "attempts": attempts}), file=sys.stderr)
+                sys.exit(e.exit_code)
+
+        print(json.dumps({"error": f"cancelled after {attempts} attempts: {last_error}", "attempts": attempts}), file=sys.stderr)
+        sys.exit(ConcurrentModification.exit_code)
+    except Exception as e:  # SystemExit is a BaseException and passes through untouched
+        print(json.dumps({"error": f"{type(e).__name__}: {e}"}), file=sys.stderr)
+        sys.exit(1)
 
 
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 if __name__ == "__main__":
     main()
