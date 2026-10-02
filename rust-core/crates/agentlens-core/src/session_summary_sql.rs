@@ -111,20 +111,16 @@ pub struct SessionSummarySql {
     conn: Connection,
 }
 
-impl Default for SessionSummarySql {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl SessionSummarySql {
-    pub fn new() -> SessionSummarySql {
+    /// `tmp_dir` is the DuckDB spill directory (`<data_dir>/tmp/session-summary`), created here.
+    pub fn new(tmp_dir: &Path) -> SessionSummarySql {
         let conn = Connection::open_in_memory().expect("open the session-summary database");
         // `threads=2` and a memory limit, for the same reasons transcript_sql gives: this is a
         // streaming scan of at most two segment files on a machine that is also serving, not the
-        // only workload on the box. NO `temp_directory`, so an over-limit query fails LOUDLY
-        // instead of quietly writing gigabytes to the SSD (TRDD-2C23ROPZ's axis).
-        conn.execute_batch("SET threads=2; SET memory_limit='1GB'; SET temp_directory='';")
+        // only workload on the box. An over-limit query spills to `tmp_dir` (latency + disk)
+        // instead of ballooning the process past its cap (TRDD-9VX3WTGU Phase B).
+        let spill = agentlens_store::spill_sql(tmp_dir).expect("create the session-summary spill dir");
+        conn.execute_batch(&format!("SET threads=2; SET memory_limit='{}'; {spill}", agentlens_store::SERVER_MEMORY_LIMIT))
             .expect("configure the session-summary database");
         conn.execute_batch(&format!("CREATE TABLE session_summary ({SCHEMA_COLUMNS});"))
             .expect("create the empty session_summary table");
@@ -411,4 +407,22 @@ fn first_nonzero(cols: &[&str]) -> String {
     }
     sql.push_str("ELSE 0 END");
     sql
+}
+
+#[cfg(test)]
+mod spill_tests {
+    use super::*;
+
+    /// `new` declares the 512MiB server limit and a real spill dir at the given path.
+    #[test]
+    fn new_declares_512mib_and_the_given_spill_dir() {
+        let tmp = std::env::temp_dir().join(format!("al-ss-spill-{}", std::process::id())).join("tmp/session-summary");
+        let s = SessionSummarySql::new(&tmp);
+        let lim: String = s.conn.query_row("SELECT current_setting('memory_limit')", [], |r| r.get(0)).unwrap();
+        let dir: String = s.conn.query_row("SELECT current_setting('temp_directory')", [], |r| r.get(0)).unwrap();
+        assert_eq!(lim, "512.0 MiB");
+        assert_eq!(dir, tmp.to_string_lossy());
+        assert!(tmp.is_dir());
+        let _ = std::fs::remove_dir_all(tmp.parent().unwrap().parent().unwrap());
+    }
 }

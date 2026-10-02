@@ -215,6 +215,38 @@ pub fn fsynced_parts_snapshot_for_test() -> std::collections::HashSet<PathBuf> {
     FSYNCED_PARTS.get().map(|m| m.lock().unwrap_or_else(|e| e.into_inner()).clone()).unwrap_or_default()
 }
 
+/// A spill file older than this belongs to no live query (queries are seconds long).
+pub const SPILL_MAX_AGE: Duration = Duration::from_secs(3600);
+
+/// The DuckDB spill directories, relative to the data dir: `agentlens_store::open_store`,
+/// `statusline_store::open_duck`, `SessionSummarySql` (the transcript/evidence connections use
+/// the store one).
+const SPILL_DIRS: [&str; 3] = ["store/tmp", "statusline/tmp", "tmp/session-summary"];
+
+/// Unlink the files in the spill dirs: all of them when `max_age` is None (boot), else only those
+/// older than `max_age`. Returns the count removed. Missing dirs are fine. DuckDB spill files from
+/// a killed process are never cleaned by DuckDB itself, so without this a crash loop fills the disk.
+pub fn clean_spill_dirs(data_dir: &Path, max_age: Option<Duration>) -> usize {
+    let mut removed = 0;
+    for sub in SPILL_DIRS {
+        let Ok(rd) = std::fs::read_dir(data_dir.join(sub)) else { continue };
+        for e in rd.flatten() {
+            let Ok(meta) = e.metadata() else { continue };
+            if !meta.is_file() {
+                continue;
+            }
+            let old_enough = match max_age {
+                None => true,
+                Some(age) => meta.modified().ok().and_then(|m| m.elapsed().ok()).is_some_and(|el| el > age),
+            };
+            if old_enough && std::fs::remove_file(e.path()).is_ok() {
+                removed += 1;
+            }
+        }
+    }
+    removed
+}
+
 pub fn bodies_pass(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
     let data_dir = {
         let Ok(st) = state.lock_timed() else { return };
@@ -279,12 +311,12 @@ pub fn bodies_pass(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
     // CLI's sizing. Measured 2026-09-02: at that sizing the pass's DuckDB scans became the
     // machine's dominant IO/CPU load (stall samples: 10,694 DuckDB frames, all inside
     // `MultiFileFunction<Parquet>` waits). Match the server's other two in-process DuckDB uses
-    // (statusline_store.rs, bodies_evidence.rs): threads=2, memory_limit="2GB".
+    // (statusline_store.rs, bodies_evidence.rs): threads=2, memory_limit=SERVER_MEMORY_LIMIT.
     let threads = 2;
     // Timed from the store open, not the tick: TRDD-768NEX6E's acceptance wants one pass's wall
     // time on the log line, and the open is where the per-pass parquet rebuild scans happen.
     let started = std::time::Instant::now();
-    let mut store = match agentlens_store::open_store(&store_dir, "2GB", threads) {
+    let mut store = match agentlens_store::open_store(&store_dir, agentlens_store::SERVER_MEMORY_LIMIT, threads) {
         Ok(s) => s,
         Err(e) => {
             eprintln!("{} alcore: bodies pass cannot open the store: {e}", crate::log_ts());
@@ -878,6 +910,19 @@ fn control_passes(delta_pages: i64) -> bool {
 /// before setting its interval), so a server that is restarted more often than a chore's period
 /// still performs it.
 pub fn spawn_all(rt: &tokio::runtime::Runtime, state: Arc<Mutex<CoreState>>) {
+    // Spill dirs are emptied BEFORE any DuckDB connection of this process opens (none has yet).
+    let data_dir = state.lock_timed().unwrap_or_else(|e| e.into_inner()).data_dir.clone();
+    clean_spill_dirs(&data_dir, None);
+    let dd = data_dir.clone();
+    rt.spawn(async move {
+        let mut tick = tokio::time::interval(Duration::from_secs(60));
+        tick.tick().await; // boot cleanup ran inline above
+        loop {
+            tick.tick().await;
+            let dd = dd.clone();
+            let _ = tokio::task::spawn_blocking(move || clean_spill_dirs(&dd, Some(SPILL_MAX_AGE))).await;
+        }
+    });
     // Boot passes, in the TS's order.
     //
     // The hook-spool drain runs FIRST (TRDD-465EXTJ6). Events spooled while the server was down
@@ -1230,5 +1275,31 @@ mod tests {
         assert!(!control_passes(1));
         assert!(!control_passes(0));
         assert!(!control_passes(-5));
+    }
+
+    /// `clean_spill_dirs` removes a >1h-old spill file, keeps a fresh one, tolerates missing dirs,
+    /// and with no age limit (boot) removes everything.
+    #[test]
+    fn clean_spill_dirs_removes_only_stale_files_unless_boot() {
+        let dd = std::env::temp_dir().join(format!("al-spill-clean-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dd);
+        assert_eq!(super::clean_spill_dirs(&dd, None), 0, "missing dirs are not an error");
+        for sub in ["store/tmp", "statusline/tmp", "tmp/session-summary"] {
+            std::fs::create_dir_all(dd.join(sub)).unwrap();
+        }
+        let stale = dd.join("store/tmp/duckdb_temp_storage-0.tmp");
+        let fresh = dd.join("statusline/tmp/duckdb_temp_storage-1.tmp");
+        let boot_only = dd.join("tmp/session-summary/duckdb_temp_storage-2.tmp");
+        for f in [&stale, &fresh, &boot_only] {
+            std::fs::write(f, b"x").unwrap();
+        }
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(2 * 3600);
+        std::fs::File::options().write(true).open(&stale).unwrap().set_modified(old).unwrap();
+
+        assert_eq!(super::clean_spill_dirs(&dd, Some(super::SPILL_MAX_AGE)), 1);
+        assert!(!stale.exists() && fresh.exists() && boot_only.exists());
+        assert_eq!(super::clean_spill_dirs(&dd, None), 2, "boot removes every file");
+        assert!(!fresh.exists() && !boot_only.exists());
+        let _ = std::fs::remove_dir_all(&dd);
     }
 }

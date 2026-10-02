@@ -22,6 +22,13 @@ use serde_json::{Map, Value};
 /// tool result), and the default rejects the file outright rather than the record.
 pub const MAX_OBJECT_SIZE: u64 = 268_435_456;
 
+/// Phase B asked for 512MiB, but the NDJSON reader allocates a ~2x`MAX_OBJECT_SIZE` (512MiB) buffer
+/// per thread, which spilling cannot help ("Out of Memory ... 512.0 MiB (1.0 MiB/512.0 MiB used)"
+/// in transcriptsql_parity at 512MiB; burn_seismic_matches_end_to_end also fails at 1GB). 2GB (the
+/// pre-Phase-B value, now WITH a spill dir) is the smallest limit tried that passes; lowering
+/// MAX_OBJECT_SIZE or threads would change behaviour, so that is left to the owner.
+pub const TRANSCRIPT_MEMORY_LIMIT: &str = "2GB";
+
 const HARD_MAX_ROWS: i64 = 2000;
 /// Token-lean default, same rationale as `run_diagnostics_sql`.
 const DEFAULT_ROWS: i64 = 50;
@@ -85,6 +92,8 @@ pub struct TranscriptSqlOptions<'a> {
     pub window_hours: Option<f64>,
     pub limit: Option<f64>,
     pub projects_dirs: Vec<PathBuf>,
+    /// DuckDB spill directory (`<data_dir>/store/tmp`), created at connection open.
+    pub tmp_dir: PathBuf,
 }
 
 /// `stripComments` + the single-statement / read-only checks, fail-CLOSED.
@@ -344,7 +353,7 @@ pub fn run_transcript_sql(opts: &TranscriptSqlOptions<'_>, now_ms: f64) -> Value
 
     let limit = js_floor(opts.limit.unwrap_or(DEFAULT_ROWS as f64)).clamp(1, HARD_MAX_ROWS);
     let paths: Vec<&Path> = files.iter().map(|(p, _)| p.as_path()).collect();
-    match query(&paths, &sql, limit) {
+    match query(&opts.tmp_dir, &paths, &sql, limit) {
         Ok((columns, rows, capped, torn_lines)) => {
             let mut extra = String::new();
             if capped {
@@ -391,17 +400,23 @@ fn json_num(n: f64) -> Value {
 }
 
 /// Fileless DuckDB, opened per call — same reasoning as `bodies_evidence::with_duck`: a persistent
-/// .duckdb measured 300x write amplification, and no `temp_directory` so an over-limit query fails
-/// LOUDLY instead of quietly writing gigabytes to the SSD.
+/// .duckdb measured 300x write amplification; past the small memory limit it spills to `tmp_dir`
+/// (latency + disk) instead of ballooning the process past its cap.
+fn open_spilling(tmp_dir: &Path) -> Result<duckdb::Connection, String> {
+    let con = duckdb::Connection::open_in_memory().map_err(|e| e.to_string())?;
+    let spill = crate::spill_sql(tmp_dir).map_err(|e| format!("spill dir {}: {e}", tmp_dir.display()))?;
+    con.execute_batch(&format!("SET memory_limit = '{TRANSCRIPT_MEMORY_LIMIT}'; SET threads = 2; {spill}"))
+        .map_err(|e| e.to_string())?;
+    Ok(con)
+}
+
 fn query(
+    tmp_dir: &Path,
     files: &[&Path],
     sql: &str,
     limit: i64,
 ) -> Result<(Vec<String>, Vec<Value>, bool, i64), String> {
-    let con = duckdb::Connection::open_in_memory().map_err(|e| e.to_string())?;
-    for stmt in ["SET memory_limit = '2GB'", "SET threads = 2", "SET temp_directory = ''"] {
-        con.execute_batch(stmt).map_err(|e| e.to_string())?;
-    }
+    let con = open_spilling(tmp_dir)?;
     // Paths come from OUR directory walk (never from the caller); the quote-escape is
     // belt-and-braces.
     let list = files
@@ -566,15 +581,10 @@ pub struct DuckSession {
 }
 
 impl DuckSession {
-    /// Fileless, with the same settings as `bodies_evidence::with_duck`: a persistent .duckdb
-    /// measured 300x write amplification, and no `temp_directory` so an over-limit query fails
-    /// LOUDLY instead of quietly writing gigabytes to the SSD.
-    pub fn open_in_memory() -> Result<Self, String> {
-        let con = duckdb::Connection::open_in_memory().map_err(|e| e.to_string())?;
-        for stmt in ["SET memory_limit = '2GB'", "SET threads = 2", "SET temp_directory = ''"] {
-            con.execute_batch(stmt).map_err(|e| e.to_string())?;
-        }
-        Ok(Self { con })
+    /// Fileless, with the same settings as `bodies_evidence::with_duck` (see `open_spilling`):
+    /// spills to `tmp_dir` past the small memory limit instead of ballooning the process.
+    pub fn open_in_memory(tmp_dir: &Path) -> Result<Self, String> {
+        Ok(Self { con: open_spilling(tmp_dir)? })
     }
 
     /// Run one statement and materialize its rows as JSON objects.

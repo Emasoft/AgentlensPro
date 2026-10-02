@@ -38,6 +38,11 @@ fn fixture_spans() -> Vec<Value> {
         .expect("the fixture parses")
 }
 
+/// A per-process DuckDB spill dir for `SessionSummarySql::new`.
+fn spill_dir() -> PathBuf {
+    std::env::temp_dir().join(format!("al-sessionsql-spill-{}", std::process::id()))
+}
+
 /// Write the spans as a segment the reader will accept: one JSON object per line.
 fn write_segment(name: &str, spans: &[Value]) -> (PathBuf, PathBuf) {
     let dir = std::env::temp_dir().join(format!("al-sessionsql-{}-{name}", std::process::id()));
@@ -62,7 +67,7 @@ fn sql_aggregates_reproduce_the_rust_summarizer_on_the_parity_fixture() {
     let spans = fixture_spans();
     let (dir, file) = write_segment("engine", &spans);
 
-    let mut sql = SessionSummarySql::new();
+    let mut sql = SessionSummarySql::new(&spill_dir());
     let rows = sql.refresh(&[file]);
     assert!(rows > 0, "the fixture segment must produce at least one session row");
 
@@ -116,7 +121,7 @@ fn chrono_parse_ms(iso: &str) -> f64 {
 fn sql_aggregates_match_the_ts_oracle_numbers() {
     let spans = fixture_spans();
     let (dir, file) = write_segment("oracle", &spans);
-    let mut sql = SessionSummarySql::new();
+    let mut sql = SessionSummarySql::new(&spill_dir());
     sql.refresh(&[file]);
 
     let expected: Value =
@@ -178,7 +183,7 @@ fn sql_mirrors_the_attribute_reader_rules() {
         }),
     ];
     let (dir, file) = write_segment("rules", &spans);
-    let mut sql = SessionSummarySql::new();
+    let mut sql = SessionSummarySql::new(&spill_dir());
     sql.refresh(&[file]);
     let row = sql.get("sessZ").expect("the session row");
 
@@ -237,7 +242,7 @@ fn sql_takes_the_last_model_of_a_slice_like_the_rust_engine() {
         }),
     ];
     let (dir, file) = write_segment("model", &spans);
-    let mut sql = SessionSummarySql::new();
+    let mut sql = SessionSummarySql::new(&spill_dir());
     sql.refresh(&[file]);
     let row = sql.get("sessM").expect("the session row");
 

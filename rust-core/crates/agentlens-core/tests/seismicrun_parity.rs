@@ -99,7 +99,7 @@ fn burn_seismic_matches_end_to_end() {
         let c = &case["opts"];
         // Each case gets its OWN connection: the TS opens one per call and closes it in a `finally`,
         // so a shared session would let one case's temporary state reach the next.
-        let session = agentlens_store::transcript_sql::DuckSession::open_in_memory().unwrap();
+        let session = agentlens_store::transcript_sql::DuckSession::open_in_memory(&std::env::temp_dir().join(format!("al-seismic-spill-{}", std::process::id()))).unwrap();
         let query = |sql: &str| session.query(sql);
         let files = match c["files"].as_array() {
             Some(list) => list
