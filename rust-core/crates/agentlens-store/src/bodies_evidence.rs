@@ -71,6 +71,9 @@ fn sq(v: &str) -> String {
 /// must cost latency + disk, not a kill. Opened per call because evidence queries are occasional and
 /// the parquet metadata scan is milliseconds; a resident instance would hold RSS for nothing.
 fn with_duck<T>(store_dir: &Path, f: impl FnOnce(&duckdb::Connection) -> Result<T, String>) -> Result<T, String> {
+    // Same process-wide slot as the transcript/seismic queries: card 256 + ONE transient connection
+    // must stay inside the 2048MB cap. Held until the connection closes (declared first, dropped last).
+    let _heavy = crate::transcript_sql::acquire_heavy()?;
     let con = duckdb::Connection::open_in_memory().map_err(|e| format!("duckdb open: {e}"))?;
     let mem = std::env::var("AGENTLENS_DUCKDB_MEMORY_LIMIT")
         .ok()
@@ -366,6 +369,25 @@ mod tests {
         assert_eq!(lim, "512.0 MiB");
         assert_eq!(tmp, store.join("tmp").to_string_lossy());
         assert!(store.join("tmp").is_dir(), "the spill dir must exist after open");
+        let _ = std::fs::remove_dir_all(&store);
+    }
+}
+
+#[cfg(test)]
+mod heavy_slot_tests {
+    /// `with_duck` waits while the heavy slot is held and proceeds once it is released.
+    #[test]
+    fn with_duck_waits_for_the_heavy_slot_then_proceeds() {
+        let held = crate::transcript_sql::acquire_heavy_within(std::time::Duration::from_secs(5)).unwrap();
+        let store = std::env::temp_dir().join(format!("al-evd-heavy-{}", std::process::id()));
+        let s2 = store.clone();
+        let t0 = std::time::Instant::now();
+        let h = std::thread::spawn(move || super::with_duck(&s2, |_| Ok(())).map(|_| t0.elapsed()));
+        std::thread::sleep(std::time::Duration::from_millis(400));
+        assert!(!h.is_finished(), "with_duck must wait while the slot is held");
+        drop(held);
+        let waited = h.join().unwrap().expect("with_duck proceeds after release");
+        assert!(waited >= std::time::Duration::from_millis(400));
         let _ = std::fs::remove_dir_all(&store);
     }
 }

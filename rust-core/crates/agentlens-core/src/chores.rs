@@ -318,7 +318,8 @@ pub fn bodies_pass(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
     let started = std::time::Instant::now();
     // Same heavy-DuckDB slot as transcript/seismic queries (budget: card 256MB + ONE transient 1GB);
     // busy => skip this tick, the next one retries. Declared before `store` so it drops after it.
-    let Ok(_heavy) = agentlens_store::transcript_sql::acquire_heavy_within(agentlens_store::transcript_sql::CHORE_HEAVY_WAIT) else {
+    static SKIPS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let Some(_heavy) = agentlens_store::transcript_sql::acquire_heavy_for_chore("bodies pass", &SKIPS) else {
         return;
     };
     let mut store = match agentlens_store::open_store(&store_dir, agentlens_store::SERVER_MEMORY_LIMIT, threads) {

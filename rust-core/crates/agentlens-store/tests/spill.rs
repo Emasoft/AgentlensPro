@@ -99,3 +99,37 @@ fn a_panic_while_holding_the_heavy_slot_does_not_wedge_it() {
     assert!(t.join().is_err());
     acquire_heavy_within(std::time::Duration::from_secs(5)).expect("slot must be recoverable after a poisoning panic");
 }
+
+/// A chore facing a steady stream of short heavy queries skips at most CHORE_MAX_SKIPS ticks, then runs.
+#[test]
+fn a_chore_is_not_starved_by_a_stream_of_heavy_queries() {
+    use agentlens_store::transcript_sql::{acquire_heavy_for_chore, acquire_heavy_within, CHORE_MAX_SKIPS};
+    use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+    use std::sync::Arc;
+    use std::time::Duration;
+    let stop = Arc::new(AtomicBool::new(false));
+    let s2 = stop.clone();
+    let holder = std::thread::spawn(move || {
+        while !s2.load(Ordering::SeqCst) {
+            if let Ok(g) = acquire_heavy_within(Duration::from_secs(5)) {
+                std::thread::sleep(Duration::from_millis(1300)); // longer than the 1s chore wait
+                drop(g);
+            }
+            std::thread::sleep(Duration::from_millis(30));
+        }
+    });
+    std::thread::sleep(Duration::from_millis(100));
+    let skips = AtomicU32::new(0);
+    let mut ran_on = None;
+    for tick in 1..=(CHORE_MAX_SKIPS + 1) {
+        if acquire_heavy_for_chore("test chore", &skips).is_some() {
+            ran_on = Some(tick);
+            break;
+        }
+    }
+    stop.store(true, Ordering::SeqCst);
+    holder.join().unwrap();
+    let t = ran_on.expect("the chore must run within CHORE_MAX_SKIPS + 1 ticks");
+    assert!(t <= CHORE_MAX_SKIPS + 1);
+    assert_eq!(skips.load(Ordering::SeqCst), 0, "a successful acquire resets the skip counter");
+}

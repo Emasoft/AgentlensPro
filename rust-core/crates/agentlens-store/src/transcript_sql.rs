@@ -426,8 +426,36 @@ static HEAVY: std::sync::Mutex<()> = std::sync::Mutex::new(());
 const HEAVY_WAIT: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// Wait up to `HEAVY_WAIT` for the slot, then fail with a clear "busy" error (never block forever).
-fn acquire_heavy() -> Result<HeavyGuard, String> {
+pub(crate) fn acquire_heavy() -> Result<HeavyGuard, String> {
     acquire_heavy_within(HEAVY_WAIT)
+}
+
+
+/// After this many consecutive skipped ticks a chore stops skipping and queues for the slot with the
+/// full request-style wait, so a steady stream of queries cannot starve it forever.
+pub const CHORE_MAX_SKIPS: u32 = 5;
+
+/// Slot acquisition for a periodic chore: a short wait that SKIPS the tick (None) when busy, except
+/// after `CHORE_MAX_SKIPS` consecutive skips, when it waits like a request. `skips` is that chore's
+/// own counter. Logs to stderr (server.log): each skip at debug, the forced acquire at info.
+pub fn acquire_heavy_for_chore(name: &str, skips: &std::sync::atomic::AtomicU32) -> Option<HeavyGuard> {
+    use std::sync::atomic::Ordering::Relaxed;
+    let n = skips.load(Relaxed);
+    let forced = n >= CHORE_MAX_SKIPS;
+    if forced {
+        eprintln!("[info] {name}: skipped {n} consecutive ticks, waiting for the heavy DuckDB slot");
+    }
+    match acquire_heavy_within(if forced { HEAVY_WAIT } else { CHORE_HEAVY_WAIT }) {
+        Ok(g) => {
+            skips.store(0, Relaxed);
+            Some(g)
+        }
+        Err(_) => {
+            let n = skips.fetch_add(1, Relaxed) + 1;
+            eprintln!("[debug] {name}: heavy DuckDB slot busy, skipping tick (consecutive skips: {n})");
+            None
+        }
+    }
 }
 
 /// As `acquire_heavy` with a caller-chosen bound. BLOCKS the calling thread (sleep poll): call it

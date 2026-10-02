@@ -401,7 +401,8 @@ pub fn maybe_seal(root: &Path, counters: &SealCounters, vars: &HashMap<String, S
     static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     // Share the process-wide heavy-DuckDB slot (card 256MB + ONE transient 1GB stays under the
     // 2048MB cap); if a heavy query holds it, skip this tick — the WALs wait for the next one.
-    let Ok(_heavy) = agentlens_store::transcript_sql::acquire_heavy_within(agentlens_store::transcript_sql::CHORE_HEAVY_WAIT) else {
+    static SKIPS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let Some(_heavy) = agentlens_store::transcript_sql::acquire_heavy_for_chore("statusline seal", &SKIPS) else {
         return 0;
     };
     let today = day_key(now_ms);
