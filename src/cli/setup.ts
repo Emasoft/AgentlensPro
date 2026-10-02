@@ -22,7 +22,7 @@ import { spawn, spawnSync, execFileSync } from 'child_process'
 import * as crypto from 'crypto'
 import * as fs from 'fs'
 import { agentlensDisabled, noRevivePath, reviveBraked, STARTED_BY_ENV } from './killSwitch'
-import { UsageError } from './cliErrors'
+import { EXIT, UsageError } from './cliErrors'
 import * as http from 'http'
 import * as os from 'os'
 import * as path from 'path'
@@ -1516,7 +1516,10 @@ export async function runSetup(opts: SetupOptions = {}): Promise<SetupOutcome> {
   ctx.log(ctx.dryRun
     ? `dry-run: ${rows.filter(r => r.action.startsWith('would:')).length} step(s) would act — nothing was changed`
     : `${actions} step(s) acted, ${rows.filter(r => r.verify === 'PASS').length} verified PASS${failed ? ' — SETUP FAILED' : ''}`)
-  return { exitCode: failed ? 1 : 0, steps: rows, actions, serverPid: ctx.serverPid }
+  // A dry-run that would refuse on a FOREIGN telemetry verdict must not read as a pass to a scripted deploy gate:
+  // it still mutates nothing, but exits EXIT.CONFIG (STALE-ENV alone stays 0).
+  const dryForeign = ctx.dryRun && rows.some(r => r.step === 'otel-env' && r.action.startsWith('would: refuse'))
+  return { exitCode: failed ? 1 : dryForeign ? EXIT.CONFIG : 0, steps: rows, actions, serverPid: ctx.serverPid }
 }
 
 /** argv entry for `agentlenspro setup [--dry-run] [--yes]`. */

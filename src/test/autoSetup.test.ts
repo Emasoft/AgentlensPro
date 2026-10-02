@@ -4,12 +4,14 @@
 // touched). Only the REPAIR RUNNER is injected where a test needs to count or order invocations — it never
 // replaces the detection under test.
 import * as assert from 'assert'
+import * as cp from 'child_process'
 import * as crypto from 'crypto'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
 import { AUTOSETUP_EXCLUDED_VERBS, LOCK_STALE_MS, RepairOutcome, Step, detectDrift, forceInstallTelemetry, maybeAutoSetup } from '../cli/autoSetup'
 import { EXIT } from '../cli/cliErrors'
+import { ensureServer } from '../cli/serverControl'
 import { runEnableCli } from '../cli/disableCli'
 import { FOREIGN_REASON, HOOK_PATH_VERBS, disabledNotice, killSwitchArmedForForeign } from '../cli/foreignTelemetry'
 import { AGENT_NAMES, SKILL_NAMES, installAgents, installHooks, installSkills } from '../cli/hookInstall'
@@ -951,11 +953,11 @@ suite('round 5 — deploy gates', () => {
     return `${crypto.createHash('sha256').update(fs.readFileSync(f.settingsPath)).digest('hex')}|${st.mtimeMs}|${fs.readdirSync(path.dirname(f.settingsPath)).sort().join(',')}|${SKILL_NAMES.filter(n => fs.existsSync(path.join(f.skillsDir, n, 'SKILL.md'))).length}|${agentlensDisabled()}`
   }
 
-  for (const [name, mutate, want] of [
-    ['foreign config', (c: Settings) => { c.env!.OTEL_EXPORTER_OTLP_ENDPOINT = 'https://otel.corp.example/otlp' }, 'FOREIGN'],
-    ['drifted-ours config', (c: Settings) => { delete c.env!.OTEL_LOGS_EXPORT_INTERVAL; c.env!.OTEL_LOG_USER_PROMPTS = '0' }, 'CONVERGE'],
+  for (const [name, mutate, want, wantExit] of [
+    ['foreign config', (c: Settings) => { c.env!.OTEL_EXPORTER_OTLP_ENDPOINT = 'https://otel.corp.example/otlp' }, 'FOREIGN', 78],
+    ['drifted-ours config', (c: Settings) => { delete c.env!.OTEL_LOGS_EXPORT_INTERVAL; c.env!.OTEL_LOG_USER_PROMPTS = '0' }, 'CONVERGE', 0],
   ] as const) {
-    test(`setup --dry-run with a ${name}: exit 0, verdict printed, settings bytes+mtime, backups, skills and kill-switch all unchanged`, async function () {
+    test(`setup --dry-run with a ${name}: exit ${wantExit}, verdict printed, settings bytes+mtime, backups, skills and kill-switch all unchanged`, async function () {
       this.timeout(60_000)
       const f = s.f()
       const cfg = readSettings(f)
@@ -964,7 +966,7 @@ suite('round 5 — deploy gates', () => {
       const before = state(f)
       await new Promise(r => setTimeout(r, 20))
       const r = await dryRun(f)
-      assert.strictEqual(r.exitCode, 0)
+      assert.strictEqual(r.exitCode, wantExit)
       assert.ok(r.table.includes(want), `verdict ${want} missing`)
       assert.strictEqual(state(f), before)
     })
@@ -1019,5 +1021,18 @@ suite('content-logging override warning', () => {
     const l = lines()
     await maybeAutoSetup(['budget'], { ctx: f.ctx, repair: recorder(['otel-env']).repair, stderr: l.say })
     assert.ok(!l.out.some(x => x.includes('WARNING')))
+  })
+})
+
+suite('ensureServer under DISABLED refuses without spawning', () => {
+  fixtureSuite(false)
+
+  test('throws the DISABLED refusal and starts no child: no server.pid, no alcore in the process table', async () => {
+    armKillSwitch('x')
+    await assert.rejects(() => ensureServer('test'), /DISABLED[\s\S]*refusing to start the server/)
+    assert.ok(!fs.existsSync(path.join(process.env.AGENTLENS_DATA_DIR!, 'server.pid')))
+    const snap = path.join(process.env.AGENTLENS_DATA_DIR!, 'ps.txt')
+    cp.execSync(`ps -eo pid,command > ${JSON.stringify(snap)}`)
+    assert.ok(!fs.readFileSync(snap, 'utf8').split('\n').some(l => l.includes(`--data-dir ${process.env.AGENTLENS_DATA_DIR}`)), 'no server was started on the isolated data dir')
   })
 })
