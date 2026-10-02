@@ -87,3 +87,15 @@ fn concurrent_heavy_sessions_serialize() {
     assert_eq!(MAX_LIVE.load(Ordering::SeqCst), 1, "two heavy sessions overlapped");
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// A panic while holding the heavy slot must not wedge it: the next acquire recovers the poisoned lock.
+#[test]
+fn a_panic_while_holding_the_heavy_slot_does_not_wedge_it() {
+    use agentlens_store::transcript_sql::acquire_heavy_within;
+    let t = std::thread::spawn(|| {
+        let _g = acquire_heavy_within(std::time::Duration::from_secs(5)).expect("first acquire");
+        panic!("deliberate panic while holding the heavy slot");
+    });
+    assert!(t.join().is_err());
+    acquire_heavy_within(std::time::Duration::from_secs(5)).expect("slot must be recoverable after a poisoning panic");
+}

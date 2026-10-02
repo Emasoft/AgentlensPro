@@ -316,6 +316,11 @@ pub fn bodies_pass(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
     // Timed from the store open, not the tick: TRDD-768NEX6E's acceptance wants one pass's wall
     // time on the log line, and the open is where the per-pass parquet rebuild scans happen.
     let started = std::time::Instant::now();
+    // Same heavy-DuckDB slot as transcript/seismic queries (budget: card 256MB + ONE transient 1GB);
+    // busy => skip this tick, the next one retries. Declared before `store` so it drops after it.
+    let Ok(_heavy) = agentlens_store::transcript_sql::acquire_heavy_within(agentlens_store::transcript_sql::CHORE_HEAVY_WAIT) else {
+        return;
+    };
     let mut store = match agentlens_store::open_store(&store_dir, agentlens_store::SERVER_MEMORY_LIMIT, threads) {
         Ok(s) => s,
         Err(e) => {

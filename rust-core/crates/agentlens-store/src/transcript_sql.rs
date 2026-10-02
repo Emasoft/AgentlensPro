@@ -413,7 +413,12 @@ fn open_spilling(tmp_dir: &Path) -> Result<(HeavyGuard, duckdb::Connection), Str
     Ok((heavy, con))
 }
 
-type HeavyGuard = std::sync::MutexGuard<'static, ()>;
+/// Admission token for the one heavy DuckDB slot; hold it for the life of the connection.
+pub type HeavyGuard = std::sync::MutexGuard<'static, ()>;
+
+/// How long a background chore (bodies pass, statusline seal) waits for the slot before SKIPPING
+/// its tick: the next tick retries, so a chore never queues behind a 60s-bounded request.
+pub const CHORE_HEAVY_WAIT: std::time::Duration = std::time::Duration::from_secs(1);
 
 /// Process-wide: at most ONE transcript/seismic DuckDB connection (each may hold up to
 /// `TRANSCRIPT_MEMORY_LIMIT`) at a time — two concurrent ones would exceed the 2048 MB process cap.
@@ -422,6 +427,14 @@ const HEAVY_WAIT: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// Wait up to `HEAVY_WAIT` for the slot, then fail with a clear "busy" error (never block forever).
 fn acquire_heavy() -> Result<HeavyGuard, String> {
+    acquire_heavy_within(HEAVY_WAIT)
+}
+
+/// As `acquire_heavy` with a caller-chosen bound. BLOCKS the calling thread (sleep poll): call it
+/// only from spawn_blocking / a plain thread, never from a tokio worker.
+// ponytail: try_lock poll is unfair under contention (no FIFO) — fine at today's request rate;
+// upgrade = a fair semaphore if contention appears.
+pub fn acquire_heavy_within(wait: std::time::Duration) -> Result<HeavyGuard, String> {
     let start = std::time::Instant::now();
     loop {
         match HEAVY.try_lock() {
@@ -429,7 +442,7 @@ fn acquire_heavy() -> Result<HeavyGuard, String> {
             // A panicked holder leaves no state behind (the mutex guards nothing), so poison is harmless.
             Err(std::sync::TryLockError::Poisoned(p)) => return Ok(p.into_inner()),
             Err(std::sync::TryLockError::WouldBlock) => {
-                if start.elapsed() > HEAVY_WAIT {
+                if start.elapsed() > wait {
                     return Err("busy: another heavy transcript/seismic query is running; retry shortly".to_owned());
                 }
                 std::thread::sleep(std::time::Duration::from_millis(50));

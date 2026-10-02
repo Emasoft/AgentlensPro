@@ -399,6 +399,11 @@ fn to_base36(mut n: u64) -> String {
 /// the TS re-entrancy latch is unnecessary by construction (noted, not dropped silently).
 pub fn maybe_seal(root: &Path, counters: &SealCounters, vars: &HashMap<String, String>, now_ms: f64) -> u64 {
     static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    // Share the process-wide heavy-DuckDB slot (card 256MB + ONE transient 1GB stays under the
+    // 2048MB cap); if a heavy query holds it, skip this tick — the WALs wait for the next one.
+    let Ok(_heavy) = agentlens_store::transcript_sql::acquire_heavy_within(agentlens_store::transcript_sql::CHORE_HEAVY_WAIT) else {
+        return 0;
+    };
     let today = day_key(now_ms);
     let mut sealed = 0u64;
     for stream in STATUSLINE_STREAMS {
