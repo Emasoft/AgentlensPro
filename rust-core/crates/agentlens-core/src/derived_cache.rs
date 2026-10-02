@@ -108,6 +108,14 @@ impl<T> VersionedCache<T> {
     pub fn stats(&self) -> (u64, u64) {
         (self.hits, self.misses)
     }
+
+
+    /// Drop the stored value so the next `get` recomputes (memory-pressure ladder). Leaves
+    /// `version` and the hit/miss counters alone — no data_version moves, only the memo is shed.
+    pub fn clear(&mut self) {
+        self.cached = None;
+    }
+
 }
 
 #[cfg(test)]

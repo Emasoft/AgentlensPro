@@ -1,7 +1,7 @@
 //! Hard memory ceiling — owner directive: "alcore must not use more than 2 gb of ram. if it ever
 //! uses more than that, it must exit with error and a log that will allow us to identify the
-//! culprit, so we will fix the code." This is FAIL-FAST, not a valve: `lib.rs::rss_budget_bytes`
-//! (default 4096 MB) already narrows the summarization window as RSS climbs — a soft mitigation
+//! culprit, so we will fix the code." This is FAIL-FAST, not a valve: `lib.rs`'s staged pressure
+//! ladder (`pressure_fracs` of this cap) already sheds caches then narrows the window — a soft mitigation
 //! that can fail to bring memory back down (a leak outside the window, or growth in the card
 //! store / span store / a non-Rust allocator). This module is the backstop.
 //!
@@ -22,6 +22,9 @@
 use std::io::Write;
 use std::path::Path;
 
+/// Hard ceiling in bytes. `AGENTLENS_RSS_HARD_CAP_MB` overrides; default 2048 MB per the owner
+/// directive. A non-positive or unparseable override is ignored (never disables the cap by
+/// accident) — parse failures fall back to the default rather than turning the guard off.
 /// Hard ceiling in bytes. `AGENTLENS_RSS_HARD_CAP_MB` overrides; default 2048 MB per the owner
 /// directive. A non-positive or unparseable override is ignored (never disables the cap by
 /// accident) — parse failures fall back to the default rather than turning the guard off.
@@ -387,6 +390,37 @@ pub fn primary_metric(fallback_rss: impl FnOnce() -> u64) -> (&'static str, u64)
         Some(fp) => ("phys_footprint", fp),
         None => ("rss", fallback_rss()),
     }
+}
+
+
+/// Pressure-ladder stage fractions of the hard cap: (stage 1, stage 2, stage 3).
+/// macOS keys on phys_footprint. The non-macOS row is APPROXIMATE: RSS excludes the
+/// freed-but-resident pages mimalloc retains that phys_footprint counts, so those fractions are
+/// a starting point to tune in soak. No Windows binary ships (src/rustBinResolve.ts SHIPPED_TARGETS).
+pub const fn pressure_fracs() -> (f64, f64, f64) {
+    if cfg!(target_os = "macos") {
+        (0.70, 0.80, 0.90)
+    } else {
+        (0.75, 0.85, 0.92)
+    }
+}
+
+// Hot knobs (env > config.json `.retention.<key>` > per-OS default), re-read each tick.
+const PRESSURE_STAGE1: crate::retention_config::Knob = crate::retention_config::Knob {
+    key: "pressureStage1Frac", env: "AGENTLENS_PRESSURE_STAGE1_FRAC", def: pressure_fracs().0, min: 0.05,
+};
+const PRESSURE_STAGE2: crate::retention_config::Knob = crate::retention_config::Knob {
+    key: "pressureStage2Frac", env: "AGENTLENS_PRESSURE_STAGE2_FRAC", def: pressure_fracs().1, min: 0.05,
+};
+const PRESSURE_STAGE3: crate::retention_config::Knob = crate::retention_config::Knob {
+    key: "pressureStage3Frac", env: "AGENTLENS_PRESSURE_STAGE3_FRAC", def: pressure_fracs().2, min: 0.05,
+};
+
+/// Absolute byte thresholds of stages 1..=3 for `cap` bytes, with hot overrides applied.
+pub fn pressure_thresholds(data_dir: &Path, cap: u64) -> [u64; 3] {
+    use crate::retention_config::resolve_knob;
+    [PRESSURE_STAGE1, PRESSURE_STAGE2, PRESSURE_STAGE3]
+        .map(|k| (resolve_knob(data_dir, &k) * cap as f64) as u64)
 }
 
 /// Everything the breach diagnostic needs, gathered from counters the caller already tracks —

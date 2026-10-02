@@ -260,6 +260,8 @@ pub struct CoreState {
     /// changes far more slowly, which is why the TS puts it on its own 30s timer. Empty until the
     /// first scan completes — and empty is the honest answer then, not a claim of "no blobs".
     pub latest_resident_blobs: Vec<Value>,
+    /// Memory-pressure ladder stage 0..=3 (see `pressure_stage`).
+    pub pressure_stage: u8,
     /// The shared HMAC key behind the signed viewer-role assertion (embedAuth.ts / AgentlensPro#4).
     /// `None` means the embed feature is DISABLED, and a present viewer header then resolves to
     /// `invalid` (403) — never a downgrade to full access. Past boot this is always `Some`: the
@@ -605,6 +607,7 @@ impl CoreState {
             lifecycle: collector_lifecycle::record_start(&collector_lifecycle::lifecycle_file(data_dir), now),
             log_env: agentlens_logscan::discovery::Env::from_process(),
             latest_resident_blobs: Vec::new(),
+            pressure_stage: 0,
             // Not loaded here: `open` must not create a key file as a side effect of constructing
             // state (every test would mint one). The BINARY loads it at boot and refuses to start
             // if it is unusable — see bin/alcore.rs.
@@ -646,23 +649,28 @@ impl CoreState {
         }
     }
 
-/// RSS budget for the summarization window, in bytes. `AGENTLENS_RSS_BUDGET_MB` overrides;
-/// default 4096 MB.
-///
-/// Chosen against measurement, not taste: the TS server sat at ~1.5 GB on this machine's real
-/// corpus, and an alcore flood reached 10.25 GB before wedging. 4 GB leaves generous headroom over
-/// normal operation while cutting in well before the window can take the process down. A budget
-/// this guard never reaches would be decoration.
-pub fn rss_budget_bytes() -> u64 {
-    std::env::var("AGENTLENS_RSS_BUDGET_MB")
-        .ok()
-        .and_then(|v| v.trim().parse::<u64>().ok())
-        .filter(|v| *v > 0)
-        .unwrap_or(4096)
-        * 1024
-        * 1024
 }
 
+/// Pressure-ladder stage (0..=3) for `metric` against ascending `thresholds`. Moves UP at most one
+/// stage per call; moves DOWN one stage only once the metric is 10% of the hard cap below the
+/// current stage threshold (hysteresis), so a metric hovering at a boundary does not flap.
+pub fn pressure_stage(metric: u64, thresholds: [u64; 3], prev: u8, cap: u64) -> u8 {
+    let prev = prev.min(3);
+    if prev < 3 && metric >= thresholds[prev as usize] {
+        return prev + 1;
+    }
+    if prev > 0 && metric < thresholds[prev as usize - 1].saturating_sub(cap / 10) {
+        return prev - 1;
+    }
+    prev
+}
+
+/// Kill switch: `AGENTLENS_PRESSURE_LADDER=off` disables the ladder (default on).
+pub fn pressure_ladder_enabled(env_value: Option<&str>) -> bool {
+    !env_value.is_some_and(|v| v.trim().eq_ignore_ascii_case("off"))
+}
+
+impl CoreState {
     /// The flush tick's prune (server.ts flushSpanAppends): the window shrank ⇒ every derived
     /// view must be rebuilt.
     pub fn prune_window(&mut self, now_ms: i64) {
@@ -680,8 +688,47 @@ pub fn rss_budget_bytes() -> u64 {
         // Memory pressure FIRST: narrowing the window is what makes the following prune evict.
         // Order is load-bearing — halving after the prune would defer every cut by a full tick,
         // and the tick is 5s while a flood can add ~11k spans/s.
-        let rss_now = crate::server_stats::rss_bytes();
-        let narrowed = self.window.apply_memory_pressure(rss_now, Self::rss_budget_bytes());
+        // WHY the ladder keys on `primary_metric` against fractions of the HARD cap: the old valve
+        // measured RSS against a 4096 MB budget while the kill used phys_footprint at 2048 MB, so
+        // it never fired before the kill. Actions run on an UPWARD edge only (not every tick).
+        let mut narrowed = false;
+        if pressure_ladder_enabled(std::env::var("AGENTLENS_PRESSURE_LADDER").ok().as_deref()) {
+            let cap = rss_guard::rss_hard_cap_bytes();
+            let metric = rss_guard::primary_metric(crate::server_stats::rss_bytes).1;
+            let thresholds = rss_guard::pressure_thresholds(&self.data_dir, cap);
+            let prev = self.pressure_stage;
+            let new = pressure_stage(metric, thresholds, prev, cap);
+            self.pressure_stage = new;
+            if new > prev {
+                if new >= 1 {
+                    self.stripped_cache.clear();
+                }
+                if new >= 2 {
+                    self.summary_cache.clear();
+                    self.latest_resident_blobs.clear();
+                    // u64::MAX over a budget of 1 forces the time window to halve (floored at 5 min).
+                    narrowed = self.window.apply_memory_pressure(u64::MAX, 1);
+                }
+                if new == 3 {
+                    let cut = (self.window.max_spans / 2).max(10_000);
+                    if cut < self.window.max_spans {
+                        self.window.max_spans = cut;
+                        narrowed = true;
+                    }
+                }
+                println!("{} alcore: memory pressure stage {prev} -> {new} (metric {metric} B)", crate::log_ts());
+            } else if new < 3 {
+                // Below stage 2 the window may step back toward its configured size (the stage-2
+                // edge halves it, so recovering while still at stage 2 would undo the cut).
+                if new < 2 {
+                    narrowed = self.window.apply_memory_pressure(0, 1);
+                }
+                if new < 3 && self.window.max_spans != span_window::max_spans_default() {
+                    self.window.max_spans = span_window::max_spans_default();
+                    narrowed = true;
+                }
+            }
+        }
         // Hard ceiling, separate from and higher-severity than the soft valve above: if RSS is
         // still over AGENTLENS_RSS_HARD_CAP_MB (default 2048) after the soft valve had its
         // chance, the leak isn't in the summarization window this tick narrows — exit now with a
