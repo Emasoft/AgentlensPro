@@ -341,9 +341,14 @@ def apply_ops(tree, ops):
 # Atomic IO helpers
 # ---------------------------------------------------------------------------
 def fsync_write(path, data):
+    # WHY a loop: os.write may write FEWER bytes than asked — a full disk or RLIMIT_FSIZE returns a
+    # short count with NO error. Ignoring the count silently produced a TRUNCATED backup (and a
+    # truncated staged file) that nothing re-read. Looping makes the next write raise instead.
+    pending = memoryview(data.encode("utf-8"))
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     try:
-        os.write(fd, data.encode("utf-8"))
+        while pending:
+            pending = pending[os.write(fd, pending):]
         os.fsync(fd)
     finally:
         os.close(fd)
@@ -353,9 +358,67 @@ def atomic_backup(target, raw):
     ts = datetime.now().strftime("%Y%m%d_%H%M%S") + f"{datetime.now().microsecond // 1000:03d}"
     backup = f"{target}.agentlens-bak-{ts}"
     tmp = f"{backup}.{os.getpid()}.tmp"
-    fsync_write(tmp, raw)
-    os.replace(tmp, backup)
+    try:
+        fsync_write(tmp, raw)
+        os.replace(tmp, backup)
+    except BaseException:
+        # a failed backup (disk full) must not leave its half-written temp behind
+        try:
+            os.unlink(tmp)
+        except FileNotFoundError:
+            pass
+        raise
     return backup
+
+
+
+# Backups kept on disk per target. Every real repair writes one, and agentlenspro repairs on launch, so
+# without a cap they grow without bound beside ~/.claude/settings.json. Two is the owner's ruling
+# (2026-10-02): the pristine pre-image of the latest edit (the restore copy) plus the one before it.
+BACKUPS_KEPT = 2
+
+
+def is_backup_name(base, name):
+    """`<base>.agentlens-bak-YYYYmmdd_HHMMSSmmm` exactly — never a `.tmp` staging file or a stranger's file."""
+    prefix = base + ".agentlens-bak-"
+    suffix = name[len(prefix):]
+    return (
+        name.startswith(prefix)
+        and len(suffix) == 18
+        and suffix[:8].isdigit()
+        and suffix[8] == "_"
+        and suffix[9:].isdigit()
+    )
+
+
+def prune_backups(target):
+    """Keep only the BACKUPS_KEPT newest backups of `target`. Called ONLY after a transaction has
+    committed AND passed its post-commit audit, under the lock: before that, the newest backup is the
+    one the rollback needs, and an aborted transaction must leave every earlier backup alone. The
+    timestamp is fixed-width, so a lexical sort is chronological."""
+    directory = os.path.dirname(target) or "."
+    base = os.path.basename(target)
+    mine = sorted(n for n in os.listdir(directory) if is_backup_name(base, n))
+    for old in mine[:-BACKUPS_KEPT]:
+        try:
+            os.unlink(os.path.join(directory, old))
+        except FileNotFoundError:
+            pass
+
+
+def match_mode(tmp, target):
+    """Staging files are born 0600; give the replacement the mode the user's file already had, or a
+    0644 settings.json silently turns 0600 (and a shared 0640 one locks its group out)."""
+    try:
+        os.chmod(tmp, os.stat(target).st_mode & 0o7777)
+    except FileNotFoundError:
+        pass  # creating a new file: keep the private 0600 default
+
+
+def identity(path):
+    """(inode, mtime_ns, size) — changes whenever another process atomically replaces the file."""
+    st = os.stat(path)
+    return (st.st_ino, st.st_mtime_ns, st.st_size)
 
 
 class FileLock:
@@ -405,7 +468,8 @@ class FileLock:
 # ---------------------------------------------------------------------------
 def read_json_or_refuse(target, create_if_missing):
     try:
-        with open(target, "r", encoding="utf-8") as f:
+        # newline="" = no CRLF→LF translation, so `raw` (which becomes the backup) is the file's exact text
+        with open(target, "r", encoding="utf-8", newline="") as f:
             raw = f.read()
     except FileNotFoundError:
         if create_if_missing:
@@ -427,6 +491,9 @@ def read_json_or_refuse(target, create_if_missing):
 
 def transact_json(target, ops, create_if_missing, do_backup):
     raw, tree = read_json_or_refuse(target, create_if_missing)
+    # Identity of the file the snapshot came from, checked again immediately before the swap. Taken right
+    # after the read; a write landing between the two is still caught by the gate-4 content compare.
+    snap = identity(target) if raw is not None else None
     new_tree, changed = apply_ops(tree, ops)
     if not changed:
         return {"changed": False, "backupPath": None}
@@ -447,9 +514,11 @@ def transact_json(target, ops, create_if_missing, do_backup):
             staged = json.loads(f.read())
         verify_diff(tree, staged, ops)
 
-        # gate 4: the target must not have changed under us since the snapshot
+        # gate 4: the target must not have changed under us since the snapshot. newline="" keeps the
+        # compare (and the backup, which is written from `raw`) byte-exact: text mode would translate
+        # CRLF to LF and the backup of a CRLF file would no longer be a copy of it.
         try:
-            with open(target, "r", encoding="utf-8") as f:
+            with open(target, "r", encoding="utf-8", newline="") as f:
                 current = f.read()
             if raw is not None and current != raw:
                 raise ConcurrentModification(f"{target} was modified during the transaction")
@@ -459,6 +528,19 @@ def transact_json(target, ops, create_if_missing, do_backup):
             if raw is not None:
                 raise ConcurrentModification(f"{target} vanished during the transaction")
 
+        # gate 4b: re-check the file's identity as the very last step before the swap. The content
+        # compare above spends a read+decode of the whole file between looking and swapping; a stat is
+        # orders of magnitude shorter, so a foreign atomic rename (Claude Code takes no lock of ours)
+        # has far less room to land in the gap — and it is detected even when it rewrote identical bytes.
+        if snap is not None:
+            try:
+                now = identity(target)
+            except FileNotFoundError:
+                raise ConcurrentModification(f"{target} vanished during the transaction")
+            if now != snap:
+                raise ConcurrentModification(f"{target} was replaced during the transaction")
+
+        match_mode(tmp, target)
         os.replace(tmp, target)  # COMMIT (atomic)
     finally:
         try:
@@ -466,15 +548,25 @@ def transact_json(target, ops, create_if_missing, do_backup):
         except FileNotFoundError:
             pass
 
-    with open(target, "r", encoding="utf-8") as f:  # gate 5: post-commit audit
-        committed = json.loads(f.read())
+    with open(target, "r", encoding="utf-8", newline="") as f:  # gate 5: post-commit audit
+        committed_raw = f.read()
+    # WHY this check exists: the rollback below puts the PRE-image back. If another process (Claude Code
+    # takes none of our locks) replaced the file between our swap and this audit, the file no longer
+    # holds what we wrote, the audit would fail, and rolling back would overwrite THEIR newer write with
+    # our stale backup. Their write is not ours to undo: redo the whole cycle from a fresh snapshot.
+    if committed_raw != serialized:
+        raise ConcurrentModification(f"{target} was replaced by another process right after the commit")
+    committed = json.loads(committed_raw)
     try:
         verify_diff(tree, committed, ops)
     except VerifyFailed:
         if backup:
+            match_mode(backup, target)
             os.replace(backup, target)  # roll back — leave the user whole
         raise
 
+    if backup:
+        prune_backups(target)  # only now: the transaction is committed AND audited
     return {"changed": True, "backupPath": backup}
 
 
@@ -606,6 +698,7 @@ def transact_toml(target, ops, create_if_missing, do_backup):
 
 
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--file", required=True)
@@ -624,7 +717,10 @@ def main():
         print(json.dumps({"error": f"bad spec on stdin: {e}"}), file=sys.stderr)
         sys.exit(BadSpec.exit_code)
 
-    target = os.path.expanduser(args.file)
+    # WHY realpath: settings.json is often a SYMLINK (dotfiles managers). os.replace over the link would
+    # swap it for a regular file and leave the user's managed target stale; resolving it first makes the
+    # lock, backups, staging file and swap all happen beside — and on — the real file.
+    target = os.path.realpath(os.path.expanduser(args.file))
     if args.create_if_missing:
         os.makedirs(os.path.dirname(target) or ".", exist_ok=True)
 
