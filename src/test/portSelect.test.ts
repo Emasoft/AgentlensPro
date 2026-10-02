@@ -6,7 +6,7 @@ import * as net from 'net'
 import * as os from 'os'
 import * as path from 'path'
 import { mcpEndpoint } from '../cli/cliCore'
-import { reviveSpawnSpec } from '../cli/hookHandlers'
+import { reviveBackoffGate, reviveBackoffStatus, reviveSpawnSpec } from '../cli/hookHandlers'
 import { chooseServerPorts, freeOnProbeError, isPortFree, pickPort, readChosenPort, writePortsFile } from '../cli/portSelect'
 import { ALCORE_MIMALLOC_PURGE_DELAY_MS, alcoreSpawnEnv, cliJsPath, findServerPid, REVIVE_STARTED_BY, serverCommand } from '../cli/serverControl'
 import { STARTED_BY_ENV } from '../cli/killSwitch'
@@ -188,6 +188,27 @@ suite('portSelect — probe verdicts, revive spawn identity, REST identity, revi
     assert.strictEqual(alcoreEnv.MIMALLOC_PURGE_DELAY, ALCORE_MIMALLOC_PURGE_DELAY_MS)
     assert.strictEqual(alcoreEnv.MIMALLOC_VERBOSE, '1')
     assert.strictEqual(alcoreEnv.UI_PORT, '5000')
+  })
+
+  test('a REFUSED revive (child exits at once, no live owner) advances the crash-loop backoff, so later hooks do not spawn', async () => {
+    // A refusal (OTLP / pinned port held by a stranger) ends the revive child within a second with no
+    // server alive — to the hook that is a quick death, which the existing gate counts at the NEXT
+    // hook that finds no owner. No refusal-specific bookkeeping exists or is needed; this pins the
+    // timeline: spawn, refused, then every hook inside the growing hold is told not to spawn.
+    const dir = tmpDir()
+    try {
+      await withEnv({ AGENTLENS_DATA_DIR: dir }, () => {
+        const t0 = 1_000_000_000_000
+        assert.strictEqual(reviveBackoffGate(t0), false)            // hook #1 spawns `server revive`; it is refused and exits
+        assert.strictEqual(reviveBackoffGate(t0 + 20_000), true)    // hook #2 (stampede lock expired): quick death counted, held
+        const s = reviveBackoffStatus(t0 + 20_000)
+        assert.deepStrictEqual([s.holding, s.consecutiveQuickDeaths, s.backoffUntilMs], [true, 1, t0 + 50_000])
+        assert.strictEqual(reviveBackoffGate(t0 + 40_000), true)    // inside the window: no spawn, no new boot
+        assert.strictEqual(reviveBackoffGate(t0 + 51_000), false)   // window over: one more attempt
+        assert.strictEqual(reviveBackoffGate(t0 + 80_000), true)    // refused again: held, and longer
+        assert.strictEqual(reviveBackoffStatus(t0 + 80_000).backoffUntilMs, t0 + 80_000 + 60_000)
+      })
+    } finally { fs.rmSync(dir, { recursive: true, force: true }) }
   })
 
   test('findServerPid keeps the REST rung: no pidfile + a server reporting THIS data dir is found; another dir is not; ports.json is NOT honoured without the pidfile', async () => {
