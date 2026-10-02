@@ -253,7 +253,7 @@ function kindOfKey(key: string): TelemetryConflict['kind'] {
 }
 
 /** Printable form of a value: withheld for credential-bearing keys, URLs without userinfo/query. */
-function shown(key: string, value: string): string {
+export function shown(key: string, value: string): string {
   if (SECRET_KEY.test(key)) return 'value withheld'
   try {
     const u = new URL(value)

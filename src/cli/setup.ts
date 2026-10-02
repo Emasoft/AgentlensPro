@@ -31,7 +31,7 @@ import { countNdjsonLinesAuto } from '../ndjsonLines'
 import { readFsMarkers } from '../environment/runtime'
 import {
   TelemetryConflict, TelemetryVerdictRow, ensureTelemetryConfig, forceInstallManagedTelemetry, formatTelemetryConflicts,
-  formatTelemetryVerdict, ownedTelemetryKeys, sameTelemetryValue, telemetryVerdict, verdictConflicts as detectConflictsFromRows,
+  formatTelemetryVerdict, ownedTelemetryKeys, sameTelemetryValue, shown as shownValue, telemetryVerdict, verdictConflicts as detectConflictsFromRows,
 } from '../telemetryConfig'
 import { disableForForeignTelemetry, enableIfForeign } from './foreignTelemetry'
 import { effectiveBodiesDir, RAW_BODIES_KEY } from '../captureConfig'
@@ -53,6 +53,8 @@ export interface SetupOptions {
   yes?: boolean
   /** `--force-install-telemetry`: overwrite a foreign telemetry config with agentlenspro's (per invocation). */
   forceInstall?: boolean
+  /** `--json`: build the full JSON document into SetupOutcome.json and print no table/detection text. */
+  json?: boolean
   /** Where the foreign-telemetry guard looks besides ~/.claude/settings.json (managed-settings files, process env).
    *  Production leaves it unset (real OS paths + process.env); tests pin it so a developer's company config or
    *  OTEL_* shell exports cannot leak into a fixture run. */
@@ -88,6 +90,8 @@ export interface SetupOutcome {
    *  a second run over a converged install MUST report 0. */
   actions: number
   serverPid: number | null
+  /** `--json`: the full untruncated document (steps + per-key telemetry verdict + hook drift). */
+  json?: unknown
 }
 
 export interface Ctx {
@@ -1487,9 +1491,50 @@ const STEPS: StepDef[] = [stepEnvironment, stepData, stepSpoolMigration, stepOte
  *  not start the server or run the self-test, which is what a full runSetup would do. */
 export const REPAIR_STEPS = { hooks: stepHooks, skill: stepSkill, 'otel-env': stepOtel } as const
 
+/** Full hook drift list, per event: what differs (timeout old→new, command form, missing). Read-only. */
+function hookDriftList(settingsPath: string): Array<{ event: string; problem: string }> {
+  const s = readSettingsFresh(settingsPath)
+  if (s === 'unparseable') return [{ event: '*', problem: 'settings.json is not parseable' }]
+  const hooks = settingsHooks(s === 'absent' ? {} : s)
+  const out: Array<{ event: string; problem: string }> = []
+  const events = new Set([...Object.keys(hooks), ...HOOK_EVENTS, ...GATE_EVENTS, ...REVIEW_EVENTS])
+  for (const ev of events) {
+    const matchers = Array.isArray(hooks[ev]) ? hooks[ev] : []
+    const r = rebuildEventMatchers(matchers, ev, false, HOOK_CMD, GATE_CMD, REVIEW_CMD)
+    if (JSON.stringify(r.rebuilt) === JSON.stringify(matchers)) continue
+    const ours = matchers.flatMap(m => m.hooks ?? []).filter(h => isOurHookCommand(h.command))
+    if (ours.length === 0) { out.push({ event: ev, problem: 'missing: no agentlenspro registration' }); continue }
+    let any = false
+    for (const h of ours) {
+      if (h.timeout !== undefined && h.timeout !== HOOK_TIMEOUT_SEC) { out.push({ event: ev, problem: `timeout ${h.timeout} → ${HOOK_TIMEOUT_SEC} (${h.command})` }); any = true }
+    }
+    for (const c of r.removedCommands) if (isStaleGeneration(c)) { out.push({ event: ev, problem: `command form: ${c} → current` }); any = true }
+    if (!any) out.push({ event: ev, problem: 'registration shape differs (matcher / duplicates / ordering)' })
+  }
+  return out
+}
+
+/** The `--json` document piece for otel-env: per-key verdict with redacted file/env values and would-write. */
+function verdictDocument(ctx: Ctx): unknown {
+  const d = otelDrift(ctx)
+  if (d === 'unparseable') return { error: 'settings.json unparseable' }
+  const s = readSettingsFresh(ctx.settingsPath)
+  const fileEnv = (s !== 'absent' && s !== 'unparseable' && s.env && typeof s.env === 'object' ? s.env : {}) as Record<string, unknown>
+  const procEnv = ctx.telemetryProbe.processEnv ?? process.env
+  const val = (v: unknown, key: string): string | null => (v === undefined ? null : shownValue(key, String(v)))
+  return d.rows.map(r => ({
+    key: r.key, verdict: r.state, scope: r.scope, source: r.source, detail: r.detail,
+    fileValue: val(fileEnv[r.key], r.key), envValue: val(procEnv[r.key], r.key),
+    wouldWrite: r.scope === 'user' && (r.state === 'ABSENT' || r.state === 'CONVERGE') ? shownValue(r.key, d.expected[r.key] ?? '') : null,
+  }))
+}
+
 export async function runSetup(opts: SetupOptions = {}): Promise<SetupOutcome> {
+  if (opts.json) opts = { ...opts, log: () => { /* --json: stdout carries ONE document only */ } }
   const ctx = resolveCtx(opts)
-  printDetection(ctx)
+  // The documents describe what was FOUND, so they are computed before any step can change it.
+  const found = opts.json ? { verdict: verdictDocument(ctx), hooks: hookDriftList(ctx.settingsPath) } : null
+  if (!opts.json) printDetection(ctx)
 
   const rows: StepResult[] = []
   let actions = 0
@@ -1519,16 +1564,20 @@ export async function runSetup(opts: SetupOptions = {}): Promise<SetupOutcome> {
   // A dry-run that would refuse on a FOREIGN telemetry verdict must not read as a pass to a scripted deploy gate:
   // it still mutates nothing, but exits EXIT.CONFIG (STALE-ENV alone stays 0).
   const dryForeign = ctx.dryRun && rows.some(r => r.step === 'otel-env' && r.action.startsWith('would: refuse'))
-  return { exitCode: failed ? 1 : dryForeign ? EXIT.CONFIG : 0, steps: rows, actions, serverPid: ctx.serverPid }
+  const exitCode = failed ? 1 : dryForeign ? EXIT.CONFIG : 0
+  const json = found ? { dryRun: ctx.dryRun, exitCode, steps: rows, telemetryVerdict: found.verdict, hookDrift: found.hooks } : undefined
+  return { exitCode, steps: rows, actions, serverPid: ctx.serverPid, json }
 }
 
 /** argv entry for `agentlenspro setup [--dry-run] [--yes]`. */
 export async function runSetupCli(argv: string[], forceInstall = false): Promise<number> {
-  const known = new Set(['--dry-run', '--yes'])
+  const known = new Set(['--dry-run', '--yes', '--json'])
   const unknown = argv.filter(a => !known.has(a))
   // UsageError, not Error: a plain Error maps to exit 1 (the watchers' ABORT signal), and a typo'd
   // flag must read as 64 (bad command line) like every other management verb — TRDD-PIB6T4RU.
-  if (unknown.length) throw new UsageError(`setup does not understand: ${unknown.join(' ')} (flags: --dry-run --yes)`)
-  const outcome = await runSetup({ dryRun: argv.includes('--dry-run'), yes: argv.includes('--yes'), forceInstall })
+  if (unknown.length) throw new UsageError(`setup does not understand: ${unknown.join(' ')} (flags: --dry-run --yes --json)`)
+  const json = argv.includes('--json')
+  const outcome = await runSetup({ dryRun: argv.includes('--dry-run'), yes: argv.includes('--yes'), forceInstall, json })
+  if (json) console.log(JSON.stringify(outcome.json, null, 2))
   return outcome.exitCode
 }

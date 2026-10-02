@@ -36,7 +36,7 @@ usage:
                                               Exit 69 = agentlenspro is DISABLED (the command did not run; the
                                               message names the reactivation command, usually
                                               'agentlenspro enable'); exit 78 = another telemetry setup blocks it.
-  agentlenspro setup [--dry-run] [--yes]      detect → converge → verify: install or repair everything
+  agentlenspro setup [--dry-run] [--yes] [--json]  detect → converge → verify: install or repair everything
                                               (server, DB, hooks, skill, telemetry env), then self-test.
                                               Starts with a read-only environment probe (platform,
                                               Node floor, native deps, port squatters, disk) that

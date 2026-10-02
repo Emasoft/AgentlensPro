@@ -1078,3 +1078,51 @@ suite('setup --dry-run under Claude Code: stale snapshot vs shell-set pipeline',
     } finally { f.cleanup() }
   })
 })
+
+suite('setup --json: one untruncated document, same exit codes, nothing mutated', () => {
+  const s = fixtureSuite(true)
+  async function js(f: Fx): Promise<{ exitCode: number; doc: { exitCode: number; steps: Array<{ step: string; detail?: string }>; telemetryVerdict: Array<{ key: string; verdict: string; fileValue: string | null; wouldWrite: string | null }>; hookDrift: Array<{ event: string; problem: string }> } }> {
+    const o = await runSetup({
+      dryRun: true, yes: true, json: true, home: f.home, dataDir: f.dataDir, settingsPath: f.settingsPath, skillsDir: f.skillsDir, agentsDir: f.agentsDir,
+      repoRoot: REPO_ROOT, pathEnv: f.pathEnv, uiPort: await freePort(), mcpPort: await freePort(), otlpPort: 4318,
+      telemetryProbe: { managedSettingsPaths: [f.managedPath], processEnv: {} },
+    })
+    return { exitCode: o.exitCode, doc: JSON.parse(JSON.stringify(o.json)) }
+  }
+
+  test('--dry-run --json on a foreign config: exit 78, FOREIGN key present, header value redacted, nothing mutated', async function () {
+    this.timeout(60_000)
+    const f = s.f()
+    const cfg = readSettings(f)
+    cfg.env!.OTEL_EXPORTER_OTLP_ENDPOINT = 'https://otel.corp.example/otlp'
+    cfg.env!.OTEL_EXPORTER_OTLP_HEADERS = 'Authorization=Bearer SUPERSECRET'
+    writeSettings(f, cfg)
+    const before = fs.readFileSync(f.settingsPath, 'utf8')
+    const r = await js(f)
+    assert.strictEqual(r.exitCode, 78)
+    assert.strictEqual(r.doc.exitCode, 78)
+    assert.ok(r.doc.telemetryVerdict.some(k => k.key === 'OTEL_EXPORTER_OTLP_ENDPOINT' && k.verdict === 'FOREIGN'))
+    assert.ok(!JSON.stringify(r.doc).includes('SUPERSECRET'))
+    assert.strictEqual(fs.readFileSync(f.settingsPath, 'utf8'), before)
+    assert.ok(r.doc.steps.every(x => x.step.length > 0))
+  })
+
+  test('--dry-run --json on drifted-ours: exit 0, CONVERGE keys listed with would-write, hook timeout drift listed in full', async function () {
+    this.timeout(60_000)
+    const f = s.f()
+    const cfg = readSettings(f)
+    cfg.env!.OTEL_LOG_USER_PROMPTS = '0'
+    const hooks = cfg.hooks as Record<string, Array<{ hooks: Array<{ timeout?: number }> }>>
+    for (const ev of Object.keys(hooks)) for (const m of hooks[ev]) for (const h of m.hooks) if (h.timeout !== undefined) h.timeout = 30
+    writeSettings(f, cfg)
+    const before = fs.readFileSync(f.settingsPath, 'utf8')
+    const r = await js(f)
+    assert.strictEqual(r.exitCode, 0)
+    const row = r.doc.telemetryVerdict.find(k => k.key === 'OTEL_LOG_USER_PROMPTS')!
+    assert.strictEqual(row.verdict, 'CONVERGE')
+    assert.strictEqual(row.fileValue, '0')
+    assert.strictEqual(row.wouldWrite, '1')
+    assert.ok(r.doc.hookDrift.some(d => /timeout 30 → 120/.test(d.problem)), JSON.stringify(r.doc.hookDrift))
+    assert.strictEqual(fs.readFileSync(f.settingsPath, 'utf8'), before)
+  })
+})
