@@ -2870,9 +2870,12 @@ async fn handle(
                         crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
                     }
                     "burn_seismic" => {
-                        let dirs = {
+                        let (dirs, tmp_dir) = {
                             let st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
-                            agentlens_logscan::discovery::claude_projects_dirs(&st.log_env)
+                            (
+                                agentlens_logscan::discovery::claude_projects_dirs(&st.log_env),
+                                st.data_dir.join("store").join(agentlens_store::TMP_DIR),
+                            )
                         };
                         let scope_s = args.get("scope").and_then(Value::as_str).unwrap_or("fleet").to_owned();
                         let workspace = args.get("workspace").and_then(Value::as_str).map(str::to_owned);
@@ -2932,7 +2935,7 @@ async fn handle(
                             };
                             // One session for the whole analysis: the three statements are only
                             // consistent with each other if they see the same connection.
-                            let seismic = match agentlens_store::transcript_sql::DuckSession::open_in_memory() {
+                            let seismic = match agentlens_store::transcript_sql::DuckSession::open_in_memory(&tmp_dir) {
                                 Ok(sess) => bs::burn_seismic(&opts, &|sql| sess.query(sql), now),
                                 // The TS reaches the same place by failing to import the binding.
                                 Err(_) => bs::burn_seismic(&opts, &|_| Err("duckdb unavailable".to_owned()), now),
@@ -3063,9 +3066,12 @@ async fn handle(
                     "run_transcript_sql" => {
                         // DuckDB over a BOUNDED set of transcript files — blocking, so
                         // spawn_blocking with the state lock released first.
-                        let dirs = {
+                        let (dirs, tmp_dir) = {
                             let st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
-                            agentlens_logscan::discovery::claude_projects_dirs(&st.log_env)
+                            (
+                                agentlens_logscan::discovery::claude_projects_dirs(&st.log_env),
+                                st.data_dir.join("store").join(agentlens_store::TMP_DIR),
+                            )
                         };
                         let preset = args.get("preset").and_then(Value::as_str).map(str::to_owned);
                         let sql = args.get("sql").and_then(Value::as_str).map(str::to_owned);
@@ -3081,6 +3087,7 @@ async fn handle(
                                 window_hours,
                                 limit,
                                 projects_dirs: dirs,
+                                tmp_dir,
                             };
                             agentlens_store::transcript_sql::run_transcript_sql(&opts, crate::now_ms() as f64)
                         })

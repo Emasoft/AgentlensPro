@@ -66,20 +66,25 @@ fn sq(v: &str) -> String {
 }
 
 /// Fileless DuckDB, opened PER CALL. `:memory:` is not a preference — a persistent .duckdb measured
-/// 300× write amplification. No temp_directory: an over-limit query must fail LOUDLY, never quietly
-/// write gigabytes to the SSD. Opened per call because evidence queries are occasional and the
-/// parquet metadata scan is milliseconds; a resident instance would hold RSS for nothing.
-fn with_duck<T>(f: impl FnOnce(&duckdb::Connection) -> Result<T, String>) -> Result<T, String> {
+/// 300× write amplification. Spills to `<store>/tmp` past the (small) memory limit: DuckDB's
+/// allocator is invisible to mimalloc but counts toward the process cap, so an over-limit query
+/// must cost latency + disk, not a kill. Opened per call because evidence queries are occasional and
+/// the parquet metadata scan is milliseconds; a resident instance would hold RSS for nothing.
+fn with_duck<T>(store_dir: &Path, f: impl FnOnce(&duckdb::Connection) -> Result<T, String>) -> Result<T, String> {
+    // Same process-wide slot as the transcript/seismic queries: card 256 + ONE transient connection
+    // must stay inside the 2048MB cap. Held until the connection closes (declared first, dropped last).
+    let _heavy = crate::transcript_sql::acquire_heavy()?;
     let con = duckdb::Connection::open_in_memory().map_err(|e| format!("duckdb open: {e}"))?;
     let mem = std::env::var("AGENTLENS_DUCKDB_MEMORY_LIMIT")
         .ok()
         .map(|s| s.trim().to_owned())
         .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "2GB".to_owned());
+        .unwrap_or_else(|| crate::SERVER_MEMORY_LIMIT.to_owned());
+    let spill = crate::spill_sql(&store_dir.join(crate::TMP_DIR)).map_err(|e| format!("duckdb spill dir: {e}"))?;
     for stmt in [
         format!("SET memory_limit = {}", sq(&mem)),
         "SET threads = 2".to_owned(),
-        "SET temp_directory = ''".to_owned(),
+        spill,
         "SET preserve_insertion_order = false".to_owned(),
     ] {
         con.execute_batch(&stmt).map_err(|e| format!("duckdb {stmt}: {e}"))?;
@@ -160,7 +165,7 @@ pub fn list_body_evidence(
         let sql = format!(
             "SELECT src_name, body_id, session_id, epoch_ms(ts) AS ts_ms, raw_bytes, kind FROM {scan} {where_sql}"
         );
-        for r in with_duck(|con| query_rows(con, &sql, 6))? {
+        for r in with_duck(store_dir, |con| query_rows(con, &sql, 6))? {
             rows.push(EvidenceRow {
                 src_name: r[0].clone().unwrap_or_default(),
                 // NOT null-guarded, matching the TS `String(r.body_id)` — a store row without a
@@ -255,7 +260,7 @@ pub fn load_body_texts(
         ));
     };
 
-    with_duck(|con| {
+    with_duck(store_dir, |con| {
         // A spool row that fell through carries no body_id — resolve it by src_name first.
         let unresolved: Vec<usize> = from_store.iter().copied().filter(|i| selection[*i].body_id.is_none()).collect();
         if !unresolved.is_empty() {
@@ -347,4 +352,42 @@ pub fn load_body_texts(
         Ok(())
     })?;
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    /// `with_duck` declares the 512MiB server limit and a real spill dir at `<store>/tmp`.
+    #[test]
+    fn with_duck_declares_512mib_and_a_store_tmp_spill_dir() {
+        let store = std::env::temp_dir().join(format!("al-evd-spill-{}", std::process::id()));
+        let (lim, tmp): (String, String) = super::with_duck(&store, |c| {
+            let l = c.query_row("SELECT current_setting('memory_limit')", [], |r| r.get(0)).map_err(|e| e.to_string())?;
+            let t = c.query_row("SELECT current_setting('temp_directory')", [], |r| r.get(0)).map_err(|e| e.to_string())?;
+            Ok((l, t))
+        })
+        .expect("with_duck");
+        assert_eq!(lim, "512.0 MiB");
+        assert_eq!(tmp, store.join("tmp").to_string_lossy());
+        assert!(store.join("tmp").is_dir(), "the spill dir must exist after open");
+        let _ = std::fs::remove_dir_all(&store);
+    }
+}
+
+#[cfg(test)]
+mod heavy_slot_tests {
+    /// `with_duck` waits while the heavy slot is held and proceeds once it is released.
+    #[test]
+    fn with_duck_waits_for_the_heavy_slot_then_proceeds() {
+        let held = crate::transcript_sql::acquire_heavy_within(std::time::Duration::from_secs(5)).unwrap();
+        let store = std::env::temp_dir().join(format!("al-evd-heavy-{}", std::process::id()));
+        let s2 = store.clone();
+        let t0 = std::time::Instant::now();
+        let h = std::thread::spawn(move || super::with_duck(&s2, |_| Ok(())).map(|_| t0.elapsed()));
+        std::thread::sleep(std::time::Duration::from_millis(400));
+        assert!(!h.is_finished(), "with_duck must wait while the slot is held");
+        drop(held);
+        let waited = h.join().unwrap().expect("with_duck proceeds after release");
+        assert!(waited >= std::time::Duration::from_millis(400));
+        let _ = std::fs::remove_dir_all(&store);
+    }
 }

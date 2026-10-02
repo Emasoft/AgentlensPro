@@ -22,6 +22,13 @@ use serde_json::{Map, Value};
 /// tool result), and the default rejects the file outright rather than the record.
 pub const MAX_OBJECT_SIZE: u64 = 268_435_456;
 
+/// Phase B asked for 512MiB, but the NDJSON reader allocates a ~2x`MAX_OBJECT_SIZE` (512MiB) buffer
+/// per thread, which spilling cannot help ("Out of Memory ... 512.0 MiB (1.0 MiB/512.0 MiB used)"
+/// in transcriptsql_parity at 512MiB even with threads=1 — one allocation of 512MiB cannot fit in a
+/// 512MiB limit). Measured: threads=1 + 1GB passes both parity tests; threads=2 + 1GB fails
+/// burn_seismic. So these connections run threads=1 at 1GB, serialized by `HEAVY`.
+pub const TRANSCRIPT_MEMORY_LIMIT: &str = "1GB";
+
 const HARD_MAX_ROWS: i64 = 2000;
 /// Token-lean default, same rationale as `run_diagnostics_sql`.
 const DEFAULT_ROWS: i64 = 50;
@@ -85,6 +92,8 @@ pub struct TranscriptSqlOptions<'a> {
     pub window_hours: Option<f64>,
     pub limit: Option<f64>,
     pub projects_dirs: Vec<PathBuf>,
+    /// DuckDB spill directory (`<data_dir>/store/tmp`), created at connection open.
+    pub tmp_dir: PathBuf,
 }
 
 /// `stripComments` + the single-statement / read-only checks, fail-CLOSED.
@@ -344,7 +353,7 @@ pub fn run_transcript_sql(opts: &TranscriptSqlOptions<'_>, now_ms: f64) -> Value
 
     let limit = js_floor(opts.limit.unwrap_or(DEFAULT_ROWS as f64)).clamp(1, HARD_MAX_ROWS);
     let paths: Vec<&Path> = files.iter().map(|(p, _)| p.as_path()).collect();
-    match query(&paths, &sql, limit) {
+    match query(&opts.tmp_dir, &paths, &sql, limit) {
         Ok((columns, rows, capped, torn_lines)) => {
             let mut extra = String::new();
             if capped {
@@ -391,17 +400,118 @@ fn json_num(n: f64) -> Value {
 }
 
 /// Fileless DuckDB, opened per call — same reasoning as `bodies_evidence::with_duck`: a persistent
-/// .duckdb measured 300x write amplification, and no `temp_directory` so an over-limit query fails
-/// LOUDLY instead of quietly writing gigabytes to the SSD.
+/// .duckdb measured 300x write amplification; past the small memory limit it spills to `tmp_dir`
+/// (latency + disk) instead of ballooning the process past its cap.
+fn open_spilling(tmp_dir: &Path) -> Result<(HeavyGuard, duckdb::Connection), String> {
+    // Guard FIRST so it is acquired before the connection exists and (declared first in the
+    // returned tuple) dropped after the connection closes.
+    let heavy = acquire_heavy()?;
+    let con = duckdb::Connection::open_in_memory().map_err(|e| e.to_string())?;
+    let spill = crate::spill_sql(tmp_dir).map_err(|e| format!("spill dir {}: {e}", tmp_dir.display()))?;
+    con.execute_batch(&format!("SET memory_limit = '{TRANSCRIPT_MEMORY_LIMIT}'; SET threads = 1; {spill}"))
+        .map_err(|e| e.to_string())?;
+    Ok((heavy, con))
+}
+
+/// Admission token for the one heavy DuckDB slot; hold it for the life of the connection.
+pub type HeavyGuard = std::sync::MutexGuard<'static, ()>;
+
+/// How long a background chore (bodies pass, statusline seal) waits for the slot before SKIPPING
+/// its tick: the next tick retries, so a chore never queues behind a 60s-bounded request.
+pub const CHORE_HEAVY_WAIT: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// Process-wide: at most ONE transcript/seismic DuckDB connection (each may hold up to
+/// `TRANSCRIPT_MEMORY_LIMIT`) at a time — two concurrent ones would exceed the 2048 MB process cap.
+static HEAVY: std::sync::Mutex<()> = std::sync::Mutex::new(());
+const HEAVY_WAIT: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Wait up to `HEAVY_WAIT` for the slot, then fail with a clear "busy" error (never block forever).
+pub(crate) fn acquire_heavy() -> Result<HeavyGuard, String> {
+    acquire_heavy_within(HEAVY_WAIT)
+}
+
+
+/// After this many consecutive skipped ticks a chore stops skipping and queues for the slot with the
+/// full request-style wait, so a steady stream of queries cannot starve it forever.
+pub const CHORE_MAX_SKIPS: u32 = 5;
+
+/// Slot acquisition for a periodic chore: a short wait that SKIPS the tick (None) when busy, except
+/// after `CHORE_MAX_SKIPS` consecutive skips, when it waits like a request. `skips` is that chore's
+/// own counter. Logs to stderr (server.log): each skip at debug, the forced acquire at info.
+pub fn acquire_heavy_for_chore(name: &str, skips: &std::sync::atomic::AtomicU32) -> Option<HeavyGuard> {
+    use std::sync::atomic::Ordering::Relaxed;
+    let n = skips.load(Relaxed);
+    let forced = n >= CHORE_MAX_SKIPS;
+    if forced {
+        eprintln!("[info] {name}: skipped {n} consecutive ticks, waiting for the heavy DuckDB slot");
+    }
+    match acquire_heavy_inner(if forced { HEAVY_WAIT } else { CHORE_HEAVY_WAIT }, forced) {
+        Ok(g) => {
+            skips.store(0, Relaxed);
+            Some(g)
+        }
+        Err(_) => {
+            let n = skips.fetch_add(1, Relaxed) + 1;
+            eprintln!("[debug] {name}: heavy DuckDB slot busy, skipping tick (consecutive skips: {n})");
+            None
+        }
+    }
+}
+
+/// As `acquire_heavy` with a caller-chosen bound. BLOCKS the calling thread (sleep poll): call it
+/// only from spawn_blocking / a plain thread, never from a tokio worker.
+// ponytail: try_lock poll is unfair under contention (no FIFO) — fine at today's request rate;
+// upgrade = a fair semaphore if contention appears.
+pub fn acquire_heavy_within(wait: std::time::Duration) -> Result<HeavyGuard, String> {
+    acquire_heavy_inner(wait, false)
+}
+
+/// Number of chores currently in their forced (starvation-bound) wait. While non-zero, ordinary
+/// acquirers yield before trying, so the chore gets the next slot that frees instead of losing the
+/// race to a holder that re-acquires with no gap.
+static CHORE_WAITING: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+struct ChoreWaiting;
+impl ChoreWaiting {
+    fn enter() -> Self {
+        CHORE_WAITING.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        ChoreWaiting
+    }
+}
+impl Drop for ChoreWaiting {
+    fn drop(&mut self) {
+        CHORE_WAITING.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+fn acquire_heavy_inner(wait: std::time::Duration, forced_chore: bool) -> Result<HeavyGuard, String> {
+    let _waiting = forced_chore.then(ChoreWaiting::enter);
+    let start = std::time::Instant::now();
+    loop {
+        // Yield to a forced chore (bounded by this caller's own wait).
+        let yielding = !forced_chore && CHORE_WAITING.load(std::sync::atomic::Ordering::SeqCst) > 0;
+        if !yielding {
+            match HEAVY.try_lock() {
+                Ok(g) => return Ok(g),
+                // A panicked holder leaves no state behind (the mutex guards nothing), so poison is harmless.
+                Err(std::sync::TryLockError::Poisoned(p)) => return Ok(p.into_inner()),
+                Err(std::sync::TryLockError::WouldBlock) => {}
+            }
+        }
+        if start.elapsed() > wait {
+            return Err("busy: another heavy transcript/seismic query is running; retry shortly".to_owned());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}
+
 fn query(
+    tmp_dir: &Path,
     files: &[&Path],
     sql: &str,
     limit: i64,
 ) -> Result<(Vec<String>, Vec<Value>, bool, i64), String> {
-    let con = duckdb::Connection::open_in_memory().map_err(|e| e.to_string())?;
-    for stmt in ["SET memory_limit = '2GB'", "SET threads = 2", "SET temp_directory = ''"] {
-        con.execute_batch(stmt).map_err(|e| e.to_string())?;
-    }
+    let (_heavy, con) = open_spilling(tmp_dir)?;
     // Paths come from OUR directory walk (never from the caller); the quote-escape is
     // belt-and-braces.
     let list = files
@@ -562,19 +672,17 @@ fn civil_from_days(z: i64) -> (i64, i64, i64) {
 /// seam it needs is a session, not a one-shot query helper. Opening per query would also re-pay the
 /// `read_json` scan setup each time.
 pub struct DuckSession {
+    // Field order matters: the connection closes before the process-wide slot is released.
     con: duckdb::Connection,
+    _heavy: HeavyGuard,
 }
 
 impl DuckSession {
-    /// Fileless, with the same settings as `bodies_evidence::with_duck`: a persistent .duckdb
-    /// measured 300x write amplification, and no `temp_directory` so an over-limit query fails
-    /// LOUDLY instead of quietly writing gigabytes to the SSD.
-    pub fn open_in_memory() -> Result<Self, String> {
-        let con = duckdb::Connection::open_in_memory().map_err(|e| e.to_string())?;
-        for stmt in ["SET memory_limit = '2GB'", "SET threads = 2", "SET temp_directory = ''"] {
-            con.execute_batch(stmt).map_err(|e| e.to_string())?;
-        }
-        Ok(Self { con })
+    /// Fileless, with the same settings as `bodies_evidence::with_duck` (see `open_spilling`):
+    /// spills to `tmp_dir` past the small memory limit instead of ballooning the process.
+    pub fn open_in_memory(tmp_dir: &Path) -> Result<Self, String> {
+        let (_heavy, con) = open_spilling(tmp_dir)?;
+        Ok(Self { con, _heavy })
     }
 
     /// Run one statement and materialize its rows as JSON objects.

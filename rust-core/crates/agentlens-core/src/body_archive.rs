@@ -132,7 +132,8 @@ pub fn extract_archive(
 
 fn open_body_store(data_dir: &Path) -> Result<agentlens_store::Store, String> {
     let threads = std::thread::available_parallelism().map(|n| n.get().saturating_sub(2).max(4)).unwrap_or(4);
-    agentlens_store::open_store(&data_dir.join("store"), agentlens_store::DEFAULT_MEMORY_LIMIT, threads).map_err(|e| e.to_string())
+    // Export-only and short-lived: 1GB (was 8GB DEFAULT_MEMORY_LIMIT); spills to <store>/tmp past it.
+    agentlens_store::open_store(&data_dir.join("store"), "1GB", threads).map_err(|e| e.to_string())
 }
 
 /// exportBodiesFromStore — the store half of the export (TRDD-K3WDPR7M): once ingestPass

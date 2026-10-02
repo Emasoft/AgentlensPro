@@ -224,17 +224,18 @@ pub fn relation_for(root: &Path, stream: &str, since_ms: Option<f64>, until_ms: 
 }
 
 /// The fileless DuckDB every read and seal uses — ':memory:' is measured, not a preference
-/// (a persistent .duckdb showed 300x write amplification); no temp spill (an over-limit query
-/// must fail loudly, not quietly write gigabytes).
-fn open_duck(vars: &HashMap<String, String>) -> Result<Connection, String> {
+/// (a persistent .duckdb showed 300x write amplification); an over-limit query spills to
+/// `<root>/tmp` (latency + disk) instead of ballooning the process past its cap.
+fn open_duck(root: &Path, vars: &HashMap<String, String>) -> Result<Connection, String> {
     let con = Connection::open_in_memory().map_err(|e| e.to_string())?;
     let limit = vars
         .get("AGENTLENS_DUCKDB_MEMORY_LIMIT")
         .map(|s| s.trim())
         .filter(|s| !s.is_empty())
-        .unwrap_or("2GB");
+        .unwrap_or(agentlens_store::SERVER_MEMORY_LIMIT);
+    let spill = agentlens_store::spill_sql(&root.join(agentlens_store::TMP_DIR)).map_err(|e| format!("statusline spill dir: {e}"))?;
     con.execute_batch(&format!(
-        "SET memory_limit='{}'; SET threads=2; SET temp_directory=''; SET preserve_insertion_order=false;",
+        "SET memory_limit='{}'; SET threads=2; {spill} SET preserve_insertion_order=false;",
         limit.replace('\'', "''")
     ))
     .map_err(|e| e.to_string())?;
@@ -398,6 +399,12 @@ fn to_base36(mut n: u64) -> String {
 /// the TS re-entrancy latch is unnecessary by construction (noted, not dropped silently).
 pub fn maybe_seal(root: &Path, counters: &SealCounters, vars: &HashMap<String, String>, now_ms: f64) -> u64 {
     static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    // Share the process-wide heavy-DuckDB slot (card 256MB + ONE transient 1GB stays under the
+    // 2048MB cap); if a heavy query holds it, skip this tick — the WALs wait for the next one.
+    static SKIPS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let Some(_heavy) = agentlens_store::transcript_sql::acquire_heavy_for_chore("statusline seal", &SKIPS) else {
+        return 0;
+    };
     let today = day_key(now_ms);
     let mut sealed = 0u64;
     for stream in STATUSLINE_STREAMS {
@@ -433,7 +440,7 @@ pub fn maybe_seal(root: &Path, counters: &SealCounters, vars: &HashMap<String, S
                         continue;
                     }
                 }
-                if seal_one(&target, rows, counters, vars) {
+                if seal_one(root, &target, rows, counters, vars) {
                     sealed += 1;
                 }
             }
@@ -454,7 +461,7 @@ fn inference_collapsed(cols: &[String]) -> bool {
 /// Convert ONE WAL to a parquet part and delete it — only after PROVING the part holds every
 /// row. Never panics out of the seal path; every failure removes the untrustworthy part and
 /// keeps the WAL for the next tick.
-fn seal_one(wal: &Path, expect_rows: usize, counters: &SealCounters, vars: &HashMap<String, String>) -> bool {
+fn seal_one(root: &Path, wal: &Path, expect_rows: usize, counters: &SealCounters, vars: &HashMap<String, String>) -> bool {
     static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let dir = wal.parent().expect("wal lives in a partition dir");
     let out = dir.join(part_name(SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
@@ -465,7 +472,7 @@ fn seal_one(wal: &Path, expect_rows: usize, counters: &SealCounters, vars: &Hash
         return false;
     }
     let run = || -> Result<bool, String> {
-        let con = open_duck(vars)?;
+        let con = open_duck(root, vars)?;
         let wal_q = q(&wal.to_string_lossy());
         let cols: Vec<String> = {
             let mut stmt = con
@@ -559,7 +566,7 @@ pub fn query_statusline(
     vars: &HashMap<String, String>,
 ) -> Result<Option<Vec<Map<String, Value>>>, String> {
     let Some(rel) = relation_for(root, stream, since_ms, until_ms) else { return Ok(None) };
-    let con = open_duck(vars)?;
+    let con = open_duck(root, vars)?;
     let mut wheres: Vec<String> = Vec::new();
     if let Some(since) = since_ms {
         wheres.push(format!("ts >= {}", crate::summarize::helpers::fmt_js_num(since)));
@@ -608,4 +615,22 @@ fn duck_to_json(v: agentlens_store::duckdb::types::Value) -> Result<Value, Strin
         D::Text(s) => Value::from(s),
         other => return Err(format!("unsupported duckdb value in statusline query: {other:?}")),
     })
+}
+
+#[cfg(test)]
+mod spill_tests {
+    use super::*;
+
+    /// `open_duck` declares the 512MiB server limit and a real spill dir at `<root>/tmp`.
+    #[test]
+    fn open_duck_declares_512mib_and_a_root_tmp_spill_dir() {
+        let root = std::env::temp_dir().join(format!("al-sl-spill-{}", std::process::id()));
+        let con = open_duck(&root, &HashMap::new()).expect("open_duck");
+        let lim: String = con.query_row("SELECT current_setting('memory_limit')", [], |r| r.get(0)).unwrap();
+        let tmp: String = con.query_row("SELECT current_setting('temp_directory')", [], |r| r.get(0)).unwrap();
+        assert_eq!(lim, "512.0 MiB");
+        assert_eq!(tmp, root.join("tmp").to_string_lossy());
+        assert!(root.join("tmp").is_dir());
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }

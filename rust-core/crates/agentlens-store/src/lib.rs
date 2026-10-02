@@ -10,7 +10,8 @@
 //! Contracts ported deliberately:
 //! - part names are epoch-ms + pid + per-store seq — COPY TO silently OVERWRITES, so name
 //!   collisions destroy data; the refuse-to-overwrite check stays as defence in depth.
-//! - `SET temp_directory=''` — an over-limit query FAILS instead of silently spilling GBs.
+//! - `temp_directory` is `<store>/tmp` — an over-limit query spills there (latency + disk) instead
+//!   of ballooning the process past its cap and getting it killed.
 //! - parquet reads use `union_by_name := true` AND staging unions use `UNION ALL BY NAME`
 //!   (TRDD-219K7C1N: two schema generations otherwise silently drop or loudly break columns).
 //! - GATE 1: a body must reconstruct byte-identically BEFORE anything is written; GATE 2:
@@ -40,6 +41,19 @@ pub const PARTS_DIR: &str = "parts";
 /// TRDD-9SYRK6SW — the per-call cache facts captured before the bodies pass deletes a body.
 pub const API_CALLS_DIR: &str = "api_calls";
 pub const DEFAULT_MEMORY_LIMIT: &str = "8GB";
+/// Every server-resident DuckDB connection (statusline, evidence, transcript SQL, summaries, the
+/// bodies pass) caps here: the process runs under a 2048 MB cap and DuckDB's allocator is invisible
+/// to mimalloc but counts in phys_footprint, so the per-connection limits must sum well below it.
+pub const SERVER_MEMORY_LIMIT: &str = "512MiB";
+/// Spill directory name under a store/statusline dir.
+pub const TMP_DIR: &str = "tmp";
+
+/// Create `dir` and return the `SET temp_directory` statement for it. Past `memory_limit` DuckDB
+/// spills here, so an over-limit query costs latency + disk instead of getting the process killed.
+pub fn spill_sql(dir: &Path) -> std::io::Result<String> {
+    fs::create_dir_all(dir)?;
+    Ok(format!("SET temp_directory = '{}';", dir.to_string_lossy().replace('\'', "''")))
+}
 pub const TS_TOLERANCE_MS: i64 = 2000;
 
 pub struct Store {
@@ -139,11 +153,13 @@ pub fn open_store(dir: &Path, memory_limit: &str, threads: usize) -> duckdb::Res
     for sub in [BLOBS_DIR, BODIES_DIR, PARTS_DIR, API_CALLS_DIR] {
         let _ = fs::create_dir_all(dir.join(sub));
     }
+    // Spill under <store>/tmp so an over-limit query becomes latency + disk, not a process kill.
+    let spill = spill_sql(&dir.join(TMP_DIR)).map_err(|e| duckdb::Error::ToSqlConversionFailure(Box::new(e)))?;
     let con = Connection::open_in_memory()?;
     con.execute_batch(&format!(
         "SET memory_limit = '{memory_limit}';
          SET threads = {threads};
-         SET temp_directory = '';
+         {spill}
          SET preserve_insertion_order = false;
          SET enable_object_cache = true;
          CREATE TABLE blob (sha VARCHAR, n INTEGER, data VARCHAR);

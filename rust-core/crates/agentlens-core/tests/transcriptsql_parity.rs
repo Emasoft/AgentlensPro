@@ -75,6 +75,7 @@ fn run_transcript_sql_matches() {
             window_hours: c["windowHours"].as_f64(),
             limit: c["limit"].as_f64(),
             projects_dirs: dirs.clone(),
+            tmp_dir: std::env::temp_dir().join(format!("al-transcript-spill-{}", std::process::id())),
         };
         let got = ts::run_transcript_sql(&opts, now);
         // Same redaction the generator applied: `filename=true` puts absolute paths in the result,
