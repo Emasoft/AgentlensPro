@@ -32,9 +32,9 @@ suite('agentlenspro — rebuildEventMatchers (hook install/uninstall)', () => {
     if (!gate) return assert.fail('gate matcher entry must be present after install')
     assert.strictEqual(gate.hooks[0].command, GATE_CMD)
     // The pin exists so a ceiling change is a deliberate act, not drift — USER order 2026-09-08
-    // raised every hook timeout to 30s via the single HOOK_TIMEOUT_SEC constant.
+    // raised every hook timeout to 30s, then 2026-10-02 to 120s, via the single HOOK_TIMEOUT_SEC constant.
     assert.strictEqual(gate.hooks[0].timeout, HOOK_TIMEOUT_SEC)
-    assert.strictEqual(HOOK_TIMEOUT_SEC, 30)
+    assert.strictEqual(HOOK_TIMEOUT_SEC, 120)
     assert.ok(!('async' in gate.hooks[0]), 'gate hook must be SYNC — an async hook cannot deny')
   })
 

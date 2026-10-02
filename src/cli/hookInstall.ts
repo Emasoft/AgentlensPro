@@ -184,8 +184,11 @@ const isSpyglass = (h: HookCommandEntry): boolean =>
 // while these builders still emitted 10/20 — the installer and the file disagreed, and which value
 // a rebuild would have kept was never measured. ONE constant, ONE number, no per-builder drift. The
 // inner network budgets in hookHandlers.ts (AGENTLENS_HOOK_TIMEOUT 2s / AGENTLENS_GATE_TIMEOUT 4s)
-// are the child's own deadlines inside this ceiling and did not move.
-export const HOOK_TIMEOUT_SEC = 30
+// are the child's own deadlines inside this ceiling and did not move. → ALL raised to 120s on
+// 2026-10-02 (USER order 'extend the timeouts of all hooks'; owner picked 120): the SYNC hooks
+// (gate, review-gate, review-supervisor) can now stall a turn up to 2 min when the server is
+// wedged — the inner network budgets in hookHandlers.ts still bound the common path.
+export const HOOK_TIMEOUT_SEC = 120
 
 /** The lifecycle forwarder: async, so it cannot block a turn. Every timeout is a silently dropped
  *  capture event plus a warning in the user's terminal; async means the ceiling never delays a
@@ -436,7 +439,7 @@ export async function installHooks(uninstall: boolean, opts: InstallHooksOptions
     if (removedOurs > 0) log(`migrated ${removedOurs} previous-generation agentlens entr${removedOurs === 1 ? 'y' : 'ies'}`)
   }
   log(`changed=${result.changed}${result.backupPath ? ` backup=${result.backupPath}` : ''} attempts=${result.attempts}`)
-  log('restart Claude Code sessions to pick up the hook change')
+  log('hook registrations load at Claude Code session start (restart sessions once); hook behavior is hot via hook-config.json (agentlenspro --hooks gate=warn|enforce|off) and AGENTLENS_GATE, no restart')
   return { changed: result.changed, addedEvents: added, removedOurs, removedSpyglass, backupPath: result.backupPath }
 }
 

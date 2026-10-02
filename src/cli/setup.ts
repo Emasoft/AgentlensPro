@@ -39,7 +39,7 @@ import {
   CLI_BIN, GATE_CMD, GATE_EVENTS, GATE_MATCHER, HOOK_CMD, HOOK_EVENTS, HookMatcher,
   REVIEW_CMD, REVIEW_EVENTS, SUPERVISOR_CMD, SUPERVISOR_EVENTS, isStaleGeneration,
   installHooks, installSkill, isOurHookCommand, rebuildEventMatchers, resolveOnPath,
-  sha256File, SKILL_NAMES, findPackageRoot, skillTreeHash, installAgents, AGENT_NAMES,
+  HOOK_TIMEOUT_SEC, sha256File, SKILL_NAMES, findPackageRoot, skillTreeHash, installAgents, AGENT_NAMES,
 } from './hookInstall'
 import { alcoreBin, alcoreServeArgs, ALCORE_MIMALLOC_PURGE_DELAY_MS, resolveBinNativeDir } from './serverControl'
 import { parsePidLock } from '../serverRuntime'
@@ -247,6 +247,8 @@ function hooksConverged(s: Settings): boolean {
 }
 
 /** Independent post-install assertion: exactly one v2 entry per event, zero stale entries. */
+/** Independent post-install assertion: exactly one v2 entry per event, zero stale entries, every
+ *  agentlenspro entry at HOOK_TIMEOUT_SEC (a command match alone would pass a leftover 30s registration). */
 function verifyHooksState(s: Settings): string | null {
   const hooks = settingsHooks(s)
   for (const ev of HOOK_EVENTS) {
@@ -275,6 +277,9 @@ function verifyHooksState(s: Settings): string | null {
       for (const h of m.hooks ?? []) {
         if (isStaleGeneration(h.command)) {
           return `${ev}: stale previous-generation registration survived: ${h.command}`
+        }
+        if (isOurHookCommand(h.command) && h.timeout !== HOOK_TIMEOUT_SEC) {
+          return `${ev}: '${h.command}' timeout ${h.timeout}s, expected ${HOOK_TIMEOUT_SEC}s`
         }
       }
     }
@@ -858,7 +863,7 @@ const stepHooks: StepDef = {
       .filter(h => isStaleGeneration(h.command)).length
     const found = state === 'absent'
       ? 'no settings.json'
-      : converged ? 'registrations current' : `needs converge (${staleCount} stale/legacy entr${staleCount === 1 ? 'y' : 'ies'})`
+      : converged ? 'registrations current' : staleCount === 0 ? 'needs converge (registration drift: timeout or shape)' : `needs converge (${staleCount} stale/legacy entr${staleCount === 1 ? 'y' : 'ies'})`
 
     if (ctx.dryRun) {
       return {
@@ -1339,6 +1344,89 @@ const stepSelfTest: StepDef = {
   },
 }
 
+// Hook BEHAVIOR is hot: the server re-reads hook-config.json per request, so a POST must be
+// visible to the next GET with no restart. Flips advisorEnabled (PostToolUse advisory — the
+// least invasive switch) and ALWAYS restores the original value, even when the assertion fails.
+// READ-ONLY against the live server (never POSTs: a flipped config is read by every session's
+// gates machine-wide and a killed setup would skip any restore). Hook BEHAVIOR is hot — the
+// server re-reads hook-config.json per request — so GET /api/hook-config must agree with the
+// file on disk; registrations in settings.json are only read at Claude Code session start.
+const stepHookHotConfig: StepDef = {
+  name: 'hook-hot-config',
+  async run(ctx) {
+    if (ctx.dryRun) {
+      return { result: { step: this.name, found: 'hook-config.json', action: 'would: GET /api/hook-config and compare with the file (read-only)', verify: 'SKIP', detail: 'dry-run' }, acted: false }
+    }
+    const r = await httpJson(ctx.uiPort, 'GET', '/api/hook-config').catch(() => ({ status: 0, json: null }))
+    const reply = r.json as { config?: Record<string, unknown>; file?: string } | null
+    if (r.status !== 200 || !reply?.config || typeof reply.config.gateEnabled !== 'boolean') {
+      return { result: { step: this.name, found: 'server up', action: 'GET /api/hook-config', verify: 'FAIL', detail: `unexpected /api/hook-config reply (HTTP ${r.status})` }, acted: false }
+    }
+    let onDisk: Record<string, unknown> | null = null
+    try { onDisk = JSON.parse(fs.readFileSync(reply.file ?? path.join(ctx.dataDir, 'hook-config.json'), 'utf-8')) as Record<string, unknown> } catch { /* no file yet: defaults served */ }
+    const diff = onDisk ? Object.keys(onDisk).filter(k => typeof onDisk![k] === 'boolean' && onDisk![k] !== reply.config![k]) : []
+    if (diff.length > 0) {
+      return { result: { step: this.name, found: 'hook-config.json', action: 'compare file vs GET', verify: 'FAIL', detail: `server config differs from file for ${diff.join(', ')} — not re-read per call` }, acted: false }
+    }
+    return {
+      result: { step: this.name, found: 'hook-config.json', action: 'GET /api/hook-config vs file', verify: 'PASS', detail: 'hook behavior hot-reloads (hook-config.json re-read per call); registrations need a Claude Code restart' },
+      acted: false,
+    }
+  },
+}
+
+export interface MemoryCheck { verdict: 'PASS' | 'INFO' | 'WARN' | 'SKIP'; detail: string }
+
+/** Parse one server.log composition line: PASS when live + free-in-page is within 1 MB of
+ *  committed (measured rounding bound); INFO (never FAIL — an unexplained ~1 MB committed class
+ *  was not ruled out) on larger drift, and INFO when free-in-page exceeds half of committed
+ *  (~664 of ~690 MB at boot, expected until Phase D streaming restore lands); WARN when the line
+ *  is unparseable; SKIP when unmeasured. Never throws. */
+export function checkCompositionLine(line: string | null): MemoryCheck {
+  if (!line) return { verdict: 'SKIP', detail: 'no composition line in server.log yet' }
+  const num = (re: RegExp): number | null | undefined => {
+    const m = re.exec(line)
+    return m ? (m[1] === '?' ? null : Number(m[1])) : undefined
+  }
+  const live = num(/mi live (\d+|\?) MB/)
+  const free = num(/mi free-in-page (\d+|\?) MB/)
+  const committed = num(/mi committed (\d+) MB/)
+  if (live === undefined || free === undefined) return { verdict: 'WARN', detail: `unparseable composition line: ${line.slice(0, 200)}` }
+  if (live === null || free === null) return { verdict: 'SKIP', detail: 'mi live/free-in-page unmeasured (?)' }
+  if (committed == null) return { verdict: 'SKIP', detail: 'no mi committed reading on the line' }
+  // The mi fields are the END of the line, so keep the tail when quoting it.
+  const drift = Math.abs(committed - (live + free))
+  if (drift > 1) return { verdict: 'INFO', detail: `live ${live} + free-in-page ${free} MB differs from committed ${committed} MB by ${drift} MB: ${line.slice(-200)}` }
+  if (free > committed / 2) return { verdict: 'INFO', detail: `free-in-page ${free} MB > 50% of committed ${committed} MB — expected until Phase D (streaming restore) lands: ${line.slice(-200)}` }
+  return { verdict: 'PASS', detail: `committed ${committed} MB = live ${live} + free-in-page ${free} (±1)` }
+}
+
+const stepMemoryCheck: StepDef = {
+  name: 'memory-check',
+  async run(ctx) {
+    if (ctx.dryRun) {
+      return { result: { step: this.name, found: 'server.log', action: 'would: check last composition line (live + free-in-page ≈ committed)', verify: 'SKIP', detail: 'dry-run' }, acted: false }
+    }
+    let line: string | null = null
+    try {
+      const fd = fs.openSync(path.join(ctx.dataDir, 'server.log'), 'r')
+      try {
+        const size = fs.fstatSync(fd).size
+        const len = Math.min(size, 256 * 1024) // tail only — never the whole log
+        const buf = Buffer.alloc(len)
+        fs.readSync(fd, buf, 0, len, size - len)
+        line = buf.toString('utf-8').split('\n').filter(l => l.includes('alcore: composition:')).pop() ?? null
+      } finally { fs.closeSync(fd) }
+    } catch { /* log absent/unreadable → SKIP below */ }
+    const c = checkCompositionLine(line)
+    // Verify has no WARN/INFO state: only SKIP is distinct; the rest pass, flagged in the detail.
+    return {
+      result: { step: this.name, found: 'server.log', action: 'composition line check', verify: c.verdict === 'SKIP' ? 'SKIP' : 'PASS', detail: c.verdict === 'PASS' ? c.detail : `${c.verdict}: ${c.detail}` },
+      acted: false,
+    }
+  },
+}
+
 // ── Detection banner (read-only first pass) ─────────────────────────────────────────────────
 
 function printDetection(ctx: Ctx): void {
@@ -1368,7 +1456,7 @@ function printDetection(ctx: Ctx): void {
 
 // ── Runner ──────────────────────────────────────────────────────────────────────────────────
 
-const STEPS: StepDef[] = [stepEnvironment, stepData, stepSpoolMigration, stepHooks, stepSkill, stepOtel, stepOldPackage, stepServer, stepSelfTest]
+const STEPS: StepDef[] = [stepEnvironment, stepData, stepSpoolMigration, stepHooks, stepSkill, stepOtel, stepOldPackage, stepServer, stepSelfTest, stepHookHotConfig, stepMemoryCheck]
 
 export async function runSetup(opts: SetupOptions = {}): Promise<SetupOutcome> {
   const ctx = resolveCtx(opts)
