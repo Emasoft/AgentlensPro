@@ -198,6 +198,10 @@ gate also honors the `AGENTLENS_GATE=off` environment variable, read on each inv
 `GET /api/hook-config` agrees with the file on disk) and `memory-check` (the last 60-second
 composition line in `server.log`: live + free-in-page should equal committed within 1 MB).
 
+The synchronous hooks (gate, review-gate, review-supervisor) are registered with a 120 s ceiling, so
+under a wedged server or extreme load one can hold a turn for up to 120 s; the escape hatch is
+`AGENTLENS_GATE=off` (or `agentlenspro --hooks gate=off`).
+
 ## Rules for agents
 
 1. **Batch** — N answers = ONE `batch` invocation, never N separate calls (each call costs a

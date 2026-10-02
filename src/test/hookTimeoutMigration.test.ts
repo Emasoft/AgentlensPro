@@ -1,6 +1,10 @@
 import * as assert from 'assert'
+import * as fs from 'fs'
+import * as os from 'os'
+import * as path from 'path'
+import { safeConfigEdit } from '../safeConfigEdit'
 import {
-  buildEventOps, rebuildEventMatchers, HOOK_CMD, GATE_CMD, REVIEW_CMD, HOOK_EVENTS, GATE_EVENTS,
+  buildEventOps, isOurHookCommand, rebuildEventMatchers, HOOK_CMD, GATE_CMD, REVIEW_CMD, HOOK_EVENTS, GATE_EVENTS,
   REVIEW_EVENTS, SUPERVISOR_EVENTS, HOOK_TIMEOUT_SEC, type HookMatcher,
 } from '../cli/hookInstall'
 
@@ -25,5 +29,31 @@ suite('hook timeout migration — an old registration is rewritten on the next i
   // registrations already at HOOK_TIMEOUT_SEC need no change
   test('registrations already at HOOK_TIMEOUT_SEC are idempotent (no ops)', () => {
     for (const ev of EVENTS) assert.deepStrictEqual(buildEventOps(ev, at(fresh(ev), HOOK_TIMEOUT_SEC), false), [], ev)
+  })
+})
+suite('hook timeout migration — ops applied through the real safe_config_edit engine', () => {
+  // a settings.json whose agentlenspro entries sit at 30s is rewritten to 120s, and a second apply is a no-op
+  test('applying buildEventOps to a 30s settings.json yields 120s everywhere, then changes nothing', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'al-hooktimeout-'))
+    const file = path.join(dir, 'settings.json')
+    try {
+      const hooks: Record<string, HookMatcher[]> = {}
+      for (const ev of EVENTS) hooks[ev] = at(fresh(ev), 30)
+      fs.writeFileSync(file, JSON.stringify({ hooks }, null, 2))
+      const read = (): Record<string, HookMatcher[]> => (JSON.parse(fs.readFileSync(file, 'utf8')) as { hooks: Record<string, HookMatcher[]> }).hooks
+      // One engine call for every event (one python spawn, not ~30).
+      const before = read()
+      const ops = EVENTS.flatMap(ev => {
+        const o = buildEventOps(ev, before[ev] ?? [], false)
+        assert.ok(o.length > 0, ev)
+        return o
+      })
+      await safeConfigEdit(file, 'json', ops)
+      const after = read()
+      const entries = Object.values(after).flat().flatMap(m => m.hooks).filter(h => isOurHookCommand(h.command))
+      assert.ok(entries.length > 0)
+      for (const h of entries) assert.strictEqual(h.timeout, HOOK_TIMEOUT_SEC, h.command)
+      for (const ev of EVENTS) assert.deepStrictEqual(buildEventOps(ev, after[ev] ?? [], false), [], `${ev}: second apply must change nothing`)
+    } finally { fs.rmSync(dir, { recursive: true, force: true }) }
   })
 })

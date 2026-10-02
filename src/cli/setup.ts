@@ -1344,13 +1344,19 @@ const stepSelfTest: StepDef = {
   },
 }
 
-// Hook BEHAVIOR is hot: the server re-reads hook-config.json per request, so a POST must be
-// visible to the next GET with no restart. Flips advisorEnabled (PostToolUse advisory — the
-// least invasive switch) and ALWAYS restores the original value, even when the assertion fails.
-// READ-ONLY against the live server (never POSTs: a flipped config is read by every session's
-// gates machine-wide and a killed setup would skip any restore). Hook BEHAVIOR is hot — the
-// server re-reads hook-config.json per request — so GET /api/hook-config must agree with the
-// file on disk; registrations in settings.json are only read at Claude Code session start.
+export interface HookConfigCheck { verify: Verify; detail: string }
+
+/** Compare the server's served hook config with hook-config.json as parsed from disk (null = the
+ *  file does not exist). Pure so the absent-file and mismatch cases are unit-testable. */
+export function compareHookConfig(served: Record<string, unknown>, onDisk: Record<string, unknown> | null): HookConfigCheck {
+  if (onDisk === null) return { verify: 'SKIP', detail: 'no hook-config.json yet; server serves defaults' }
+  const diff = Object.keys(onDisk).filter(k => typeof onDisk[k] === 'boolean' && onDisk[k] !== served[k])
+  if (diff.length > 0) return { verify: 'FAIL', detail: `server hook-config differs from hook-config.json for ${diff.join(', ')}` }
+  return { verify: 'PASS', detail: 'server hook-config matches hook-config.json on disk; per-request re-read is server_stats.rs behaviour, not exercised here (read-only check); registrations need a Claude Code restart' }
+}
+
+// READ-ONLY against the live server: it never POSTs, because a flipped config is read by every
+// session's gates machine-wide and a killed setup would skip any restore.
 const stepHookHotConfig: StepDef = {
   name: 'hook-hot-config',
   async run(ctx) {
@@ -1362,16 +1368,16 @@ const stepHookHotConfig: StepDef = {
     if (r.status !== 200 || !reply?.config || typeof reply.config.gateEnabled !== 'boolean') {
       return { result: { step: this.name, found: 'server up', action: 'GET /api/hook-config', verify: 'FAIL', detail: `unexpected /api/hook-config reply (HTTP ${r.status})` }, acted: false }
     }
-    let onDisk: Record<string, unknown> | null = null
-    try { onDisk = JSON.parse(fs.readFileSync(reply.file ?? path.join(ctx.dataDir, 'hook-config.json'), 'utf-8')) as Record<string, unknown> } catch { /* no file yet: defaults served */ }
-    const diff = onDisk ? Object.keys(onDisk).filter(k => typeof onDisk![k] === 'boolean' && onDisk![k] !== reply.config![k]) : []
-    if (diff.length > 0) {
-      return { result: { step: this.name, found: 'hook-config.json', action: 'compare file vs GET', verify: 'FAIL', detail: `server config differs from file for ${diff.join(', ')} — not re-read per call` }, acted: false }
+    const file = reply.file ?? path.join(ctx.dataDir, 'hook-config.json')
+    let onDisk: Record<string, unknown> | null
+    if (!fs.existsSync(file)) onDisk = null
+    else {
+      try { onDisk = JSON.parse(fs.readFileSync(file, 'utf-8')) as Record<string, unknown> } catch (e) {
+        return { result: { step: this.name, found: 'hook-config.json', action: 'parse file', verify: 'FAIL', detail: `hook-config.json unparseable: ${(e as Error).message.slice(0, 120)}` }, acted: false }
+      }
     }
-    return {
-      result: { step: this.name, found: 'hook-config.json', action: 'GET /api/hook-config vs file', verify: 'PASS', detail: 'hook behavior hot-reloads (hook-config.json re-read per call); registrations need a Claude Code restart' },
-      acted: false,
-    }
+    const c = compareHookConfig(reply.config, onDisk)
+    return { result: { step: this.name, found: 'hook-config.json', action: 'GET /api/hook-config vs file', verify: c.verify, detail: c.detail }, acted: false }
   },
 }
 
@@ -1401,29 +1407,40 @@ export function checkCompositionLine(line: string | null): MemoryCheck {
   return { verdict: 'PASS', detail: `committed ${committed} MB = live ${live} + free-in-page ${free} (±1)` }
 }
 
+/** The composition tick fires every 60 s; a log untouched for 2.5 ticks has no fresh line. */
+export const COMPOSITION_STALE_MS = 150_000
+
+/** Check the newest composition line in server.log (tail only, never the whole log). The step
+ *  model has no WARN state, so an unparseable line (a broken instrument) and a stale or absent log
+ *  both map to SKIP — never PASS. Never throws. */
+export function memoryCheckFromLog(logFile: string, nowMs: number = Date.now()): { verify: Verify; detail: string } {
+  let line: string | null = null
+  try {
+    const fd = fs.openSync(logFile, 'r')
+    try {
+      const st = fs.fstatSync(fd)
+      const age = nowMs - st.mtimeMs
+      if (age > COMPOSITION_STALE_MS) return { verify: 'SKIP', detail: `no fresh composition line (server.log last written ${Math.round(age / 1000)}s ago)` }
+      const len = Math.min(st.size, 256 * 1024) // tail only — never the whole log
+      const buf = Buffer.alloc(len)
+      fs.readSync(fd, buf, 0, len, st.size - len)
+      line = buf.toString('utf-8').split('\n').filter(l => l.includes('alcore: composition:')).pop() ?? null
+    } finally { fs.closeSync(fd) }
+  } catch { return { verify: 'SKIP', detail: 'server.log absent or unreadable' } }
+  const c = checkCompositionLine(line)
+  if (c.verdict === 'WARN') return { verify: 'SKIP', detail: `composition line unparseable: ${(line ?? '').slice(-200)}` }
+  if (c.verdict === 'SKIP') return { verify: 'SKIP', detail: c.detail }
+  return { verify: 'PASS', detail: c.verdict === 'PASS' ? c.detail : `${c.verdict}: ${c.detail}` }
+}
+
 const stepMemoryCheck: StepDef = {
   name: 'memory-check',
   async run(ctx) {
     if (ctx.dryRun) {
       return { result: { step: this.name, found: 'server.log', action: 'would: check last composition line (live + free-in-page ≈ committed)', verify: 'SKIP', detail: 'dry-run' }, acted: false }
     }
-    let line: string | null = null
-    try {
-      const fd = fs.openSync(path.join(ctx.dataDir, 'server.log'), 'r')
-      try {
-        const size = fs.fstatSync(fd).size
-        const len = Math.min(size, 256 * 1024) // tail only — never the whole log
-        const buf = Buffer.alloc(len)
-        fs.readSync(fd, buf, 0, len, size - len)
-        line = buf.toString('utf-8').split('\n').filter(l => l.includes('alcore: composition:')).pop() ?? null
-      } finally { fs.closeSync(fd) }
-    } catch { /* log absent/unreadable → SKIP below */ }
-    const c = checkCompositionLine(line)
-    // Verify has no WARN/INFO state: only SKIP is distinct; the rest pass, flagged in the detail.
-    return {
-      result: { step: this.name, found: 'server.log', action: 'composition line check', verify: c.verdict === 'SKIP' ? 'SKIP' : 'PASS', detail: c.verdict === 'PASS' ? c.detail : `${c.verdict}: ${c.detail}` },
-      acted: false,
-    }
+    const c = memoryCheckFromLog(path.join(ctx.dataDir, 'server.log'))
+    return { result: { step: this.name, found: 'server.log', action: 'composition line check', verify: c.verify, detail: c.detail }, acted: false }
   },
 }
 
