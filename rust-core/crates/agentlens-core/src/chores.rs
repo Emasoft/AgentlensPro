@@ -920,6 +920,8 @@ pub fn spawn_all(rt: &tokio::runtime::Runtime, state: Arc<Mutex<CoreState>>) {
         loop {
             tick.tick().await;
             let dd = dd.clone();
+            // Unlinking a spill file a live query still holds is safe on macOS/Linux (the open fd keeps
+            // the data until close) and no Windows binary ships, so this age sweep cannot break a query.
             let _ = tokio::task::spawn_blocking(move || clean_spill_dirs(&dd, Some(SPILL_MAX_AGE))).await;
         }
     });

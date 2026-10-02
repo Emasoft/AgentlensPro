@@ -34,7 +34,7 @@ fn duck_session_declares_512mib_and_the_given_tmp() {
     let tmp = scratch("session").join("tmp");
     let s = DuckSession::open_in_memory(&tmp).expect("open");
     let rows = s.query("SELECT current_setting('memory_limit') AS m, current_setting('temp_directory') AS t").unwrap();
-    assert_eq!(rows[0]["m"], "1.8 GiB"); // TRANSCRIPT_MEMORY_LIMIT = 2GB
+    assert_eq!(rows[0]["m"], "953.6 MiB"); // TRANSCRIPT_MEMORY_LIMIT = 1GB
     assert_eq!(rows[0]["t"], tmp.to_string_lossy().as_ref());
     assert!(tmp.is_dir());
     let _ = std::fs::remove_dir_all(tmp.parent().unwrap());
@@ -60,4 +60,30 @@ fn an_over_limit_sort_spills_and_leaves_no_tmp_file_behind() {
     control.execute_batch("SET memory_limit='64MB'; SET threads=2; SET temp_directory='';").unwrap();
     assert!(control.query_row(BIG_SORT, [], |r| r.get::<_, i64>(0)).is_err(), "no spill dir => the same sort must fail");
     let _ = std::fs::remove_dir_all(tmp.parent().unwrap());
+}
+
+/// Two concurrent `DuckSession`s serialize: the process-wide heavy-query slot admits one at a time.
+#[test]
+fn concurrent_heavy_sessions_serialize() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static LIVE: AtomicUsize = AtomicUsize::new(0);
+    static MAX_LIVE: AtomicUsize = AtomicUsize::new(0);
+    let base = scratch("serialize");
+    let handles: Vec<_> = (0..2)
+        .map(|i| {
+            let tmp = base.join(format!("tmp{i}"));
+            std::thread::spawn(move || {
+                let _s = DuckSession::open_in_memory(&tmp).expect("open");
+                let now = LIVE.fetch_add(1, Ordering::SeqCst) + 1;
+                MAX_LIVE.fetch_max(now, Ordering::SeqCst);
+                std::thread::sleep(std::time::Duration::from_millis(300));
+                LIVE.fetch_sub(1, Ordering::SeqCst);
+            })
+        })
+        .collect();
+    for h in handles {
+        h.join().unwrap();
+    }
+    assert_eq!(MAX_LIVE.load(Ordering::SeqCst), 1, "two heavy sessions overlapped");
+    let _ = std::fs::remove_dir_all(&base);
 }
