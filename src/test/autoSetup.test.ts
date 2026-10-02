@@ -15,7 +15,8 @@ import { FOREIGN_REASON, HOOK_PATH_VERBS, disabledNotice, killSwitchArmedForFore
 import { AGENT_NAMES, SKILL_NAMES, installAgents, installHooks, installSkills } from '../cli/hookInstall'
 import { agentlensDisabled, armKillSwitch, killSwitchPath, overrideKillSwitchEnv } from '../cli/killSwitch'
 import { cliMain } from '../cli/main'
-import { Ctx, REPAIR_STEPS, resolveCtx } from '../cli/setup'
+import { Ctx, REPAIR_STEPS, resolveCtx, runSetup } from '../cli/setup'
+import { freePort } from './helpers/freePort'
 import { RULE_NAMES, disableAgentlensSurfaces, enableAgentlensSurfaces } from '../cli/surfaces'
 import { TelemetryVerdictRow, ensureTelemetryConfig, telemetryVerdict } from '../telemetryConfig'
 
@@ -930,5 +931,93 @@ suite('round 4 — shell-set pipelines, write ordering, read-only diagnostics', 
     assert.ok(!agentlensDisabled())
     armKillSwitch('x')
     for (const verb of ['cache-state', 'last-compact', 'model-headroom', 'statusline-history']) assert.strictEqual(disabledNotice([verb]), null, verb)
+  })
+})
+
+suite('round 5 — deploy gates', () => {
+  const s = fixtureSuite(true)
+
+  async function dryRun(f: Fx): Promise<{ exitCode: number; table: string }> {
+    const out: string[] = []
+    const o = await runSetup({
+      dryRun: true, yes: true, home: f.home, dataDir: f.dataDir, settingsPath: f.settingsPath, skillsDir: f.skillsDir, agentsDir: f.agentsDir,
+      repoRoot: REPO_ROOT, pathEnv: f.pathEnv, uiPort: await freePort(), mcpPort: await freePort(), otlpPort: await freePort(),
+      telemetryProbe: { managedSettingsPaths: [f.managedPath], processEnv: {} }, log: l => { out.push(l) },
+    })
+    return { exitCode: o.exitCode, table: out.join('\n') + JSON.stringify(o.steps) }
+  }
+  const state = (f: Fx): string => {
+    const st = fs.statSync(f.settingsPath)
+    return `${crypto.createHash('sha256').update(fs.readFileSync(f.settingsPath)).digest('hex')}|${st.mtimeMs}|${fs.readdirSync(path.dirname(f.settingsPath)).sort().join(',')}|${SKILL_NAMES.filter(n => fs.existsSync(path.join(f.skillsDir, n, 'SKILL.md'))).length}|${agentlensDisabled()}`
+  }
+
+  for (const [name, mutate, want] of [
+    ['foreign config', (c: Settings) => { c.env!.OTEL_EXPORTER_OTLP_ENDPOINT = 'https://otel.corp.example/otlp' }, 'FOREIGN'],
+    ['drifted-ours config', (c: Settings) => { delete c.env!.OTEL_LOGS_EXPORT_INTERVAL; c.env!.OTEL_LOG_USER_PROMPTS = '0' }, 'CONVERGE'],
+  ] as const) {
+    test(`setup --dry-run with a ${name}: exit 0, verdict printed, settings bytes+mtime, backups, skills and kill-switch all unchanged`, async function () {
+      this.timeout(60_000)
+      const f = s.f()
+      const cfg = readSettings(f)
+      mutate(cfg)
+      writeSettings(f, cfg)
+      const before = state(f)
+      await new Promise(r => setTimeout(r, 20))
+      const r = await dryRun(f)
+      assert.strictEqual(r.exitCode, 0)
+      assert.ok(r.table.includes(want), `verdict ${want} missing`)
+      assert.strictEqual(state(f), before)
+    })
+  }
+
+  test('diagnostics while DISABLED spawn no server and exit cleanly', async function () {
+    this.timeout(60_000)
+    const f = s.f()
+    armKillSwitch('x')
+    const savedHome = process.env.HOME
+    const savedNo = process.env.AGENTLENS_NO_AUTOSETUP
+    process.env.HOME = f.home
+    process.env.AGENTLENS_NO_AUTOSETUP = '1'
+    const err = console.error, log = console.log
+    console.error = quiet; console.log = quiet
+    try {
+      for (const argv of [['cache-state'], ['last-compact'], ['model-headroom', 'fable'], ['statusline-history', 'project']]) {
+        const verb = argv[0]
+        const code = await cliMain(argv, async () => undefined)
+        assert.notStrictEqual(code, EXIT.DISABLED, `${verb} must not take the DISABLED stop`)
+        assert.ok(!fs.existsSync(path.join(f.dataDir, 'server.pid')), `${verb} must not start a server`)
+      }
+    } finally {
+      console.error = err; console.log = log
+      if (savedHome === undefined) delete process.env.HOME; else process.env.HOME = savedHome
+      if (savedNo === undefined) delete process.env.AGENTLENS_NO_AUTOSETUP; else process.env.AGENTLENS_NO_AUTOSETUP = savedNo
+    }
+  })
+})
+
+suite('content-logging override warning', () => {
+  const s = fixtureSuite(true)
+
+  test('an explicit OTEL_LOG_USER_PROMPTS=0 is converged with a multi-line WARNING, exactly once', async () => {
+    const f = s.f()
+    const cfg = readSettings(f)
+    cfg.env!.OTEL_LOG_USER_PROMPTS = '0'
+    writeSettings(f, cfg)
+    const l = lines()
+    await maybeAutoSetup(['budget'], { ctx: f.ctx, repair: recorder(['otel-env']).repair, stderr: l.say })
+    const w = l.out.filter(x => x.includes('WARNING'))
+    assert.strictEqual(w.length, 1)
+    assert.ok(w[0].includes('OTEL_LOG_USER_PROMPTS') && w[0].includes('explicitly set to 0') && w[0].includes('agentlenspro disable') && w[0].split('\n').length >= 3, w[0])
+    assert.strictEqual(readSettings(f).env!.OTEL_LOG_USER_PROMPTS, '1')
+    const l2 = lines()
+    await maybeAutoSetup(['budget'], { ctx: f.ctx, repair: recorder(['otel-env']).repair, stderr: l2.say })
+    assert.deepStrictEqual(l2.out, [], 'no warning on later launches')
+  })
+
+  test('already 1: no warning', async () => {
+    const f = s.f()
+    const l = lines()
+    await maybeAutoSetup(['budget'], { ctx: f.ctx, repair: recorder(['otel-env']).repair, stderr: l.say })
+    assert.ok(!l.out.some(x => x.includes('WARNING')))
   })
 })

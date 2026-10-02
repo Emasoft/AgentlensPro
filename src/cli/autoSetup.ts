@@ -217,6 +217,11 @@ export async function ensureInstalled(trigger: Trigger, verb: string, deps: Auto
     try {
       // Re-detect under the lock: the previous holder may have just fixed everything.
       const { drifts, conflicts, nothingInstalled, converge: converged } = detectDrift(ctx)
+      // Content-logging flags the user EXPLICITLY set to 0/false are about to be forced on: remember the old
+      // values now (the repair rewrites them) so the override gets a loud warning, once — after the write the
+      // value is 1, so later launches find nothing to warn about.
+      const oldEnv = (() => { const s = readSettingsFresh(ctx.settingsPath); return s !== "absent" && s !== "unparseable" && s.env && typeof s.env === "object" ? s.env as Record<string, unknown> : {} })()
+      const overridden = converged.filter(k => /^OTEL_LOG_/.test(k) && ["0", "false"].includes(String(oldEnv[k]).toLowerCase()))
       if (nothingInstalled && trigger === "launch" && verb !== "") {
         const ok = await (deps.fullSetup ?? defaultFullSetup)(ctx)
         say(ok
@@ -234,7 +239,14 @@ export async function ensureInstalled(trigger: Trigger, verb: string, deps: Auto
         let r = outcomes.get(d.step)
         if (!r) { r = await repair(d.step, ctx); outcomes.set(d.step, r) }
         allOk &&= r.ok
-        if (r.ok && d.step === "otel-env") for (const key of converged) say(`agentlenspro: converged ${key}`)
+        if (r.ok && d.step === "otel-env") {
+          for (const key of converged) say(`agentlenspro: converged ${key}`)
+          for (const key of overridden) {
+            say(`agentlenspro: WARNING — ${key} was explicitly set to ${String(oldEnv[key])} in settings.json; it has been changed to 1.\n`
+              + "  agentlenspro requires full content capture (prompts, tool details/content, assistant responses, raw API bodies).\n"
+              + "  To opt out of that capture, disable agentlenspro: run `agentlenspro disable`.")
+          }
+        }
         say(r.ok ? `agentlenspro: restored ${d.piece} (${d.reason})${d.step === "otel-env" ? ` — ${r.detail}` : ""}` : `agentlenspro: could not restore ${d.piece} (${r.detail}) — run \`agentlenspro setup\``)
         // A forced telemetry overwrite that cannot complete (managed file needs an administrator): stop.
         if (!r.ok && d.step === "otel-env" && conflicts.length > 0) return EXIT.CONFIG

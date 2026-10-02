@@ -26,7 +26,9 @@ All notable changes to AgentlensPro are documented here.
   variables for that run only, and implies `enable`.
 - **A disabled agentlenspro says how to come back.** Any command run while disabled prints
   `agentlenspro is DISABLED`, the reason and the exact reactivation command, and exits 69.
-  `disable`/`enable` now park/restore the skills too. `server`/`daemon` restarts do not self-heal: run any other
+  `disable`/`enable` now park/restore the skills too. The content-logging flags (`OTEL_LOG_USER_PROMPTS`,
+  `OTEL_LOG_TOOL_DETAILS`, `OTEL_LOG_TOOL_CONTENT`, `OTEL_LOG_ASSISTANT_RESPONSES`, raw bodies) are forced on; overriding an
+  explicit 0/false prints a multi-line warning once, with `agentlenspro disable` as the opt-out. `server`/`daemon` restarts do not self-heal: run any other
   agentlenspro command or `agentlenspro enable` to repair. The read-only diagnostics `cache-state`, `last-compact`,
   `model-headroom` and `statusline-history` skip both the per-launch check and the DISABLED stop.
 
