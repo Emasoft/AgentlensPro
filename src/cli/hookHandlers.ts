@@ -19,8 +19,8 @@ import * as fs from 'fs'
 import * as path from 'path'
 import { isImageReadPath } from '../shared/imageReads'
 import { uiBaseUrl, dataDir } from './cliCore'
-import { alcoreBin, alcoreServeArgs, ALCORE_MIMALLOC_PURGE_DELAY_MS, resolveBinNativeDir } from './serverControl'
-import { agentlensDisabled, reviveBraked, STARTED_BY_ENV } from './killSwitch'
+import { alcoreBin, cliJsPath, resolveBinNativeDir } from './serverControl'
+import { agentlensDisabled, reviveBraked } from './killSwitch'
 import { atomicWriteFileSync, lockTakeoverVerdict, parsePidLock, processStartRef } from '../serverRuntime'
 
 // D3K7QM2P/1a — hook durability. When the server can't take a hook event (down, or shedding under
@@ -381,14 +381,16 @@ function reviveDaemonDetached(): void {
       outFd = fs.openSync(path.join(dataDir(), 'server.log'), 'a')
     } catch { /* keep 'ignore' — reviving matters more than logging it */ }
     try {
-      // Provenance stamp for the server's boot line (TRDD-8VGQK9L9): of the spawn paths this
-      // is the one a human never invoked, so it is the one most worth naming in the log.
-      // MIMALLOC_PURGE_DELAY: TRDD-2JOIAH2G R1 — see serverControl.ts (alcore-spawn paths only).
-      // MIMALLOC_VERBOSE: TRDD-2JOIAH2G rounds 58-60 probe — verbose boot prints mimalloc's option
-      // dump (proves purge_delay parse) and, at any kill (rss_guard exit(1)), the full exit stats
-      // block whose abandoned/reclaima/purged counters discriminate live-vs-retained.
-      const env = { ...process.env, [STARTED_BY_ENV]: 'hook-revive', MIMALLOC_PURGE_DELAY: ALCORE_MIMALLOC_PURGE_DELAY_MS, MIMALLOC_VERBOSE: '1' }
-      const child = spawn(alcore, alcoreServeArgs(), { cwd: dataDir(), env, detached: true, stdio: ['ignore', outFd, outFd] })
+      // ONE start path (owner rule 2026-10-02, port guard): revive runs the CLI's own `server revive`
+      // — the same ensureServer as `server start`, so it probes the ports, refuses a squatted pinned
+      // port, and re-picks on a lost bind race — detached so the hook still exits at once. Spawning
+      // alcore directly here bypassed all of that: a squatted port made every revive exit(1)
+      // silently while the hook spool dropped its oldest events. The child's output goes to
+      // server.log, so a refusal is readable. ensureServer stamps the provenance ('hook-revive',
+      // TRDD-8VGQK9L9) and MIMALLOC_PURGE_DELAY (TRDD-2JOIAH2G R1); MIMALLOC_VERBOSE (rounds 58-60
+      // probe: option dump at boot, exit stats at an rss_guard kill) rides through its inherited env.
+      const env = { ...process.env, MIMALLOC_VERBOSE: '1' }
+      const child = spawn(process.execPath, [cliJsPath(), 'server', 'revive'], { cwd: dataDir(), env, detached: true, stdio: ['ignore', outFd, outFd] })
       child.unref()
     } finally {
       // The CHILD holds its own duplicate of the descriptor, so the parent must drop its copy or

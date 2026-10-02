@@ -11,6 +11,8 @@ import * as http from 'http'
 import * as os from 'os'
 import * as path from 'path'
 import { UsageError } from './cliErrors'
+import { dataDir } from '../dataDir'
+import { readChosenPort } from './portSelect'
 
 // The fallback ports below are the SAME `MCP_PORT` / `UI_PORT` the server binds, not literals. The
 // isolation recipe ("own DATA_DIR + own ports") sets those two for the server, and nothing sets the
@@ -29,12 +31,8 @@ export function envPort(raw: string | undefined, fallback: number): string {
   return String(raw?.trim() && Number.isInteger(n) && n > 0 && n < 65536 ? n : fallback)
 }
 
-import { dataDir } from '../dataDir'
-import { readChosenPort } from './portSelect'
-
 /** A client-side port: a usable env value wins; else the port the last `server start` actually
- *  bound (ports.json — it differs from the default when another process held it); else the
- *  default. */
+ *  bound (ports.json — honoured only while that server is alive); else the default. */
 export function clientPort(raw: string | undefined, key: 'ui' | 'mcp', fallback: number): string {
   const fromEnv = envPort(raw, 0)
   return fromEnv !== '0' ? fromEnv : String(readChosenPort(dataDir(), key) ?? fallback)

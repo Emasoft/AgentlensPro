@@ -21,7 +21,8 @@ import { agentlensDisabled, killSwitchPath, noRevivePath, reviveBraked, STARTED_
 import { resetReviveBackoff, reviveBackoffStatus } from './hookHandlers'
 import { UsageError } from './cliErrors'
 import { assertKnownFlags } from './argHelpers'
-import { lockTakeoverVerdict, parsePidLock, processStartRef } from '../serverRuntime'
+import { parsePidLock } from '../serverRuntime'
+import { chooseServerPorts, isPortFree, liveLockPid, portHolder, processAlive, readChosenPort, removePortsFile, writePortsFile } from './portSelect'
 import { npmPlatformBin } from '../rustBinResolve'
 
 /** Count of hook events durably spooled to disk but not yet reingested (server was down / shedding).
@@ -171,15 +172,15 @@ export function alcoreServeArgs(env: NodeJS.ProcessEnv = process.env, dir: strin
   ]
 }
 
-import { chooseServerPorts, isPortFree, portHolder, readChosenPort } from './portSelect'
-
 /** Pick the ports for a fresh `alcore serve` (see chooseServerPorts) — a port held by OUR server
  *  (same data dir, per findServerPid) is kept. */
-async function resolveServerPorts(env: NodeJS.ProcessEnv, dir: string): Promise<{ otlp: number; ui: number; mcp: number }> {
+async function resolveServerPorts(env: NodeJS.ProcessEnv): Promise<{ otlp: number; ui: number; mcp: number }> {
   const ours = async (): Promise<boolean> => (await findServerPid().catch(() => null)) !== null
+  // An explicitly set (valid) env port is PINNED: it never moves, a held one refuses the start.
+  const pinned = (raw: string | undefined): boolean => envPort(raw, 0) !== '0'
   return chooseServerPorts(
     { otlp: Number(envPort(env.OTLP_PORT, 4318)), ui: Number(envPort(env.UI_PORT, 3000)), mcp: Number(envPort(env.MCP_PORT, 4316)) },
-    dir,
+    { ui: pinned(env.UI_PORT), mcp: pinned(env.MCP_PORT) },
     ours,
   )
 }
@@ -296,74 +297,87 @@ export async function ensureServer(startedBy = 'ensureServer:unknown', opts: { o
   const env = { ...process.env, [STARTED_BY_ENV]: startedBy, MIMALLOC_PURGE_DELAY: ALCORE_MIMALLOC_PURGE_DELAY_MS }
   // Owner rule 2026-10-02: never bind (or talk to) a port another process holds. Probe-then-bind is
   // a race, so a bind failure at boot (see the 'died' branch) re-picks ports, up to 3 attempts.
-  const ports = await resolveServerPorts(process.env, dataDir())
-  const child = spawn(alcore, alcoreServeArgs(process.env, dataDir(), ports), { cwd: dataDir(), env, detached: true, stdio: ['ignore', outFd, outFd] })
-  // Without this, an async spawn failure (EMFILE, EAGAIN) emits an unhandled 'error' event and the
-  // process dies with a raw stack trace instead of the actionable message below.
-  let spawnError: Error | null = null
-  child.on('error', (err) => { spawnError = err })
-  // Startup is O(store): opening the DB and running the first scan takes longer on the machines that
-  // have used AgentlensPro the most. A FIXED 20 s budget therefore failed precisely there — observed
-  // 2026-08-01 on a store of 2.89M spans, where the server came up and served correctly and the CLI
-  // still announced "did not become ready", which reads as a failure. The operator then re-runs
-  // `server start`, the single-owner guard correctly refuses it, and now the machine looks wedged.
-  // So the wait is bounded by LIVENESS rather than by a guessed constant: keep waiting while the
-  // process we started is alive, and give up IMMEDIATELY when it is not.
-  let childExited = false
-  child.on('exit', () => { childExited = true })
-  child.unref()
-  if (typeof outFd === 'number') fs.closeSync(outFd)
-  const deadline = Date.now() + readyTimeoutMs()
-  while (Date.now() < deadline) {
-    await sleep(250)
-    if (spawnError) throw new Error(`failed to spawn the server: ${(spawnError as Error).message}`)
-    let answered = true
-    try { await init() } catch { answered = false }
-    if (!answered) {
-      // findServerPid() is only consulted when our child is GONE: our spawn also exits, correctly,
-      // whenever another server won the single-instance race — and that case is a success, not a death.
-      const anotherServing = childExited ? await findServerPid().catch(() => null) !== null : false
-      // findServerPid alone is NOT enough to recognize a lost race (TRDD-861LC4VW, second half,
-      // observed live 2026-08-13 19:23): it only sees a server that already SERVES, but a race
-      // winner spends seconds-to-minutes BOOTING first (first DB open is O(store)), during which
-      // it answers nothing — so the loser's exit was declared 'died' and restart printed FAIL
-      // while the winner came up healthy moments later. Our own child's scoped log names the
-      // winner ("Refusing to start: another ... server (pid N) already owns"); a LIVE pid there
-      // means the race was lost to a booting server: keep waiting for it to answer.
-      const winner = childExited ? raceWinnerPid(logStart) : null
-      const raceWinnerAlive = winner !== null && processAlive(winner)
-      const verdict = startupVerdict({ answered, childExited, anotherServing, raceWinnerAlive, deadlinePassed: Date.now() >= deadline })
-      if (verdict === 'died') {
-        const tail = logTail(8, logStart)
-        // alcore logs "port N (MCP) already in use" / "<which> listener failed" when it loses a bind race.
-        const attempt = opts.attempt ?? 0
-        if (/already in use|listener failed/.test(tail) && attempt < 2) return ensureServer(startedBy, { ...opts, attempt: attempt + 1 })
-        throw new Error(`the server exited during startup — it never answered.${logProblem}\n${tail}`)
+  const ports = await resolveServerPorts(process.env)
+  // The wait loop below dials the MCP/UI URLs through cliCore, which only honours ports.json for a
+  // LIVE pidfile owner and ports.json is written only after success — so point THIS process's
+  // explicit-URL overrides at the ports we chose for the duration, and restore them on every exit.
+  const savedUrls = { mcp: process.env.AGENTLENS_MCP_URL, ui: process.env.AGENTLENS_UI_URL }
+  if (savedUrls.mcp === undefined) process.env.AGENTLENS_MCP_URL = `http://localhost:${ports.mcp}/mcp`
+  if (savedUrls.ui === undefined) process.env.AGENTLENS_UI_URL = `http://localhost:${ports.ui}`
+  try {
+    const child = spawn(alcore, alcoreServeArgs(process.env, dataDir(), ports), { cwd: dataDir(), env, detached: true, stdio: ['ignore', outFd, outFd] })
+    // Without this, an async spawn failure (EMFILE, EAGAIN) emits an unhandled 'error' event and the
+    // process dies with a raw stack trace instead of the actionable message below.
+    let spawnError: Error | null = null
+    child.on('error', (err) => { spawnError = err })
+    // Startup is O(store): opening the DB and running the first scan takes longer on the machines that
+    // have used AgentlensPro the most. A FIXED 20 s budget therefore failed precisely there — observed
+    // 2026-08-01 on a store of 2.89M spans, where the server came up and served correctly and the CLI
+    // still announced "did not become ready", which reads as a failure. The operator then re-runs
+    // `server start`, the single-owner guard correctly refuses it, and now the machine looks wedged.
+    // So the wait is bounded by LIVENESS rather than by a guessed constant: keep waiting while the
+    // process we started is alive, and give up IMMEDIATELY when it is not.
+    let childExited = false
+    child.on('exit', () => { childExited = true })
+    child.unref()
+    if (typeof outFd === 'number') fs.closeSync(outFd)
+    const deadline = Date.now() + readyTimeoutMs()
+    while (Date.now() < deadline) {
+      await sleep(250)
+      if (spawnError) throw new Error(`failed to spawn the server: ${(spawnError as Error).message}`)
+      let answered = true
+      try { await init() } catch { answered = false }
+      if (!answered) {
+        // findServerPid() is only consulted when our child is GONE: our spawn also exits, correctly,
+        // whenever another server won the single-instance race — and that case is a success, not a death.
+        const anotherServing = childExited ? await findServerPid().catch(() => null) !== null : false
+        // findServerPid alone is NOT enough to recognize a lost race (TRDD-861LC4VW, second half,
+        // observed live 2026-08-13 19:23): it only sees a server that already SERVES, but a race
+        // winner spends seconds-to-minutes BOOTING first (first DB open is O(store)), during which
+        // it answers nothing — so the loser's exit was declared 'died' and restart printed FAIL
+        // while the winner came up healthy moments later. Our own child's scoped log names the
+        // winner ("Refusing to start: another ... server (pid N) already owns"); a LIVE pid there
+        // means the race was lost to a booting server: keep waiting for it to answer.
+        const winner = childExited ? raceWinnerPid(logStart) : null
+        const raceWinnerAlive = winner !== null && processAlive(winner)
+        const verdict = startupVerdict({ answered, childExited, anotherServing, raceWinnerAlive, deadlinePassed: Date.now() >= deadline })
+        if (verdict === 'died') {
+          const tail = logTail(8, logStart)
+          // alcore reports a lost bind race as "…already in use…" (its own MCP line, or the OS error text).
+          const attempt = opts.attempt ?? 0
+          if (/in use/i.test(tail) && attempt < 2) return ensureServer(startedBy, { ...opts, attempt: attempt + 1 })
+          throw new Error(`the server exited during startup — it never answered.${logProblem}\n${tail}`)
+        }
+        continue // 'keep-waiting' — alive and still starting; 'timed-out' falls out of the loop below
       }
-      continue // 'keep-waiting' — alive and still starting; 'timed-out' falls out of the loop below
+      // Report the pid that is actually SERVING, not the child we spawned. The two differ whenever
+      // another process (a hook's ensureServer, a concurrent CLI) wins the single-instance race: our
+      // child refuses the data dir and exits, and init() then succeeds against THEIRS. Printing
+      // child.pid there names a process that is already dead, with the authority of a status line —
+      // it cost a real debugging session, where `ps eww` on the reported pid showed none of the
+      // environment we had just started the server with, because that was not the server.
+      const serving = await findServerPid().catch(() => null)
+      const who = serving === null || serving === child.pid
+        ? `pid ${serving ?? child.pid}`
+        : `pid ${serving} — an already-running server won the single-instance race; our spawn (${child.pid}) exited`
+      // Persist the choice only now, and only when OUR child is the server (a race winner wrote its own).
+      if (serving === null || serving === child.pid) writePortsFile(dataDir(), ports)
+      console.log(`server started (${who}) — logs: ${serverLogPath()}`)
+      return
     }
-    // Report the pid that is actually SERVING, not the child we spawned. The two differ whenever
-    // another process (a hook's ensureServer, a concurrent CLI) wins the single-instance race: our
-    // child refuses the data dir and exits, and init() then succeeds against THEIRS. Printing
-    // child.pid there names a process that is already dead, with the authority of a status line —
-    // it cost a real debugging session, where `ps eww` on the reported pid showed none of the
-    // environment we had just started the server with, because that was not the server.
-    const serving = await findServerPid().catch(() => null)
-    const who = serving === null || serving === child.pid
-      ? `pid ${serving ?? child.pid}`
-      : `pid ${serving} — an already-running server won the single-instance race; our spawn (${child.pid}) exited`
-    console.log(`server started (${who}) — logs: ${serverLogPath()}`)
-    return
+    // The budget is spent and the process is still alive: say exactly that. "Did not become ready"
+    // reads as "it failed"; the truthful claim is that it has not answered YET, and the difference
+    // decides whether the operator re-runs a start that will be refused or simply waits.
+    const still = childExited ? 'the process we started has exited' : 'the server process is still alive'
+    throw new Error(
+      `the server has not answered within ${Math.round(readyTimeoutMs() / 1000)}s — ${still}. ` +
+      'A large span store makes the first open slow; raise AGENTLENS_SERVER_READY_TIMEOUT_MS, or run ' +
+      `\`agentlenspro server status\` in a moment to see whether it came up on its own.${logProblem}\n${logTail(8, logStart)}`,
+    )
+  } finally {
+    if (savedUrls.mcp === undefined) delete process.env.AGENTLENS_MCP_URL
+    if (savedUrls.ui === undefined) delete process.env.AGENTLENS_UI_URL
   }
-  // The budget is spent and the process is still alive: say exactly that. "Did not become ready"
-  // reads as "it failed"; the truthful claim is that it has not answered YET, and the difference
-  // decides whether the operator re-runs a start that will be refused or simply waits.
-  const still = childExited ? 'the process we started has exited' : 'the server process is still alive'
-  throw new Error(
-    `the server has not answered within ${Math.round(readyTimeoutMs() / 1000)}s — ${still}. ` +
-    'A large span store makes the first open slow; raise AGENTLENS_SERVER_READY_TIMEOUT_MS, or run ' +
-    `\`agentlenspro server status\` in a moment to see whether it came up on its own.${logProblem}\n${logTail(8, logStart)}`,
-  )
 }
 
 /** What a start attempt should DO next, as a pure decision over the four things we can observe.
@@ -413,11 +427,6 @@ export function raceWinnerPid(fromOffset: number): number | null {
   } catch {
     return null // no log ⇒ no refusal evidence; the verdict falls back to the other signals
   }
-}
-
-/** Signal-0 liveness probe. EPERM would also mean alive, but every process here is same-user. */
-function processAlive(pid: number): boolean {
-  try { process.kill(pid, 0); return true } catch { return false }
 }
 
 /** How long to wait for a freshly-spawned server to answer. Generous by default because the wait is
@@ -486,22 +495,9 @@ export function logTail(lines = 8, fromOffset = 0): string {
  *  server it reaches reports the same data dir. There is no port-based rung any more: `lsof` on a
  *  port can never say whose data dir the listener owns, which is the question. */
 export async function findServerPid(): Promise<number | null> {
-  try {
-    // TRDD-PIDFILEAT: parsePidLock understands both the current JSON {pid,start} lock shape and the
-    // legacy bare-numeric one. lockTakeoverVerdict is the server's own takeover rule, reused so the
-    // CLI and the boot guard cannot disagree about whether a lock names a live owner: a recycled pid
-    // (alive, different start reference) is NOT the server, and signalling it would hit a stranger.
-    const lock = parsePidLock(fs.readFileSync(pidfilePath(), 'utf-8'))
-    if (lock !== null) {
-      const verdict = lockTakeoverVerdict({
-        lockPid: lock.pid,
-        lockStartRef: lock.start,
-        pidAlive: processAlive(lock.pid),
-        currentStartRef: lock.start === null ? null : processStartRef(lock.pid),
-      })
-      if (verdict === 'live-owner' || verdict === 'legacy-kill0-only') return lock.pid
-    }
-  } catch { /* no/unreadable pidfile — fall through to the data-dir-checked REST probe */ }
+  // The pidfile identity check lives in portSelect.liveLockPid (TRDD-PIDFILEAT: shares the server's own takeover rule).
+  const owner = liveLockPid(dataDir())
+  if (owner !== null) return owner
   try {
     const stats = await apiRequest('GET', '/api/server-stats') as { pid?: unknown; dataDir?: unknown }
     // Guard the conversion: a payload without `pid` yields NaN, and NaN is not null, so a downstream
@@ -530,7 +526,12 @@ export async function stopServer(): Promise<void> {
     // `init()` — "is anything answering the MCP port?" — which is a different question: with a
     // foreign server on that port the CLI reported "did not stop within 10s" about a process it
     // had already killed, and with the port free but the target alive it would report success.
-    if (await findServerPid() === null) { console.log(`server stopped (pid ${pid})`); return }
+    if (await findServerPid() === null) {
+      // ports.json describes THIS server's ports; once it is gone it must not outlive it.
+      removePortsFile(dataDir())
+      console.log(`server stopped (pid ${pid})`)
+      return
+    }
   }
   // Says PROCESS, deliberately. This loop now waits for the process to be gone, not for the MCP
   // port to stop accepting — the port closes early in shutdown, so the old wording could report
@@ -1029,6 +1030,12 @@ export async function serverCommand(argv: string[]): Promise<void> {
       clearReviveBrake()
       resetReviveBackoff() // same contract as `start` — see its own comment
       return
+    case 'revive':
+      // Hook-revive entry (hookHandlers.reviveDaemonDetached): the SAME guarded start as `start`, run
+      // detached. Unlike `start` it must NOT lift the revive brake or reset the crash-loop backoff —
+      // the hook already honoured both, and a revive is not an operator's deliberate start.
+      await ensureServer('hook-revive')
+      return
     case 'status':
       await showStatus()
       return
@@ -1181,7 +1188,7 @@ export function daemonUninstall(opts: { launchAgentsDir?: string } = {}): { path
 
 /** The bundled CLI entry (standalone/cli.js). Same layout walk as `findMediaDir` — the package
  *  root is one level up from the bundled cli.js but two up from out/cli/. */
-function cliJsPath(): string {
+export function cliJsPath(): string {
   const candidates = [
     path.join(__dirname, 'cli.js'),                              // bundled: standalone/
     path.resolve(__dirname, '..', 'standalone', 'cli.js'),       // src/cli/ compiled in-place
