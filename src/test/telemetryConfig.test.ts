@@ -12,7 +12,7 @@ import {
 // All tests run entirely against fixture files in a per-test temp dir — the real
 // ~/.claude/settings.json is NEVER touched (TRDD-M36W16L0).
 
-type Opts = Required<Pick<TelemetryConfigOptions, 'settingsPath' | 'markerPath' | 'bodiesDir' | 'otlpPort' | 'dataDir'>>
+type Opts = Required<Pick<TelemetryConfigOptions, 'settingsPath' | 'markerPath' | 'bodiesDir' | 'otlpPort' | 'dataDir' | 'managedSettingsPaths' | 'processEnv'>>
 type Marker = { keys: Record<string, { hadKey: boolean; priorValue: string | null }> }
 
 suite('telemetryConfig', () => {
@@ -26,10 +26,12 @@ suite('telemetryConfig', () => {
       markerPath:   path.join(dir, 'telemetry-managed.json'),
       bodiesDir:    path.join(dir, 'otel-bodies'),
       otlpPort:     4318,
-      // Pin the data dir at the tmp fixture: capture is resolved from <dataDir>/config.json, so
-      // without this the suite would read the REAL ~/.agentlens/config.json and pass or fail
-      // depending on whether the developer happens to have raw-body capture on (TRDD-BKF5NZD3).
       dataDir:      dir,
+      // The foreign-pipeline guard also reads the managed-settings files and the process env: pin both so a
+      // developer's company config or OTEL_* shell exports (this suite runs inside Claude Code sessions) cannot
+      // leak into a fixture run.
+      managedSettingsPaths: [],
+      processEnv:   {},
     }
   })
 
@@ -56,7 +58,8 @@ suite('telemetryConfig', () => {
     }
     await writeSettings(original)
 
-    const ins = await ensureTelemetryConfig(opts)
+    // The user's `console` exporter is a DIFFERENT pipeline, so only --force-install-telemetry replaces it.
+    const ins = await ensureTelemetryConfig({ ...opts, forceInstall: true })
     assert.strictEqual(ins.changed, true)
     const envAfter = await readEnv()
     assert.strictEqual(envAfter?.OTEL_TRACES_EXPORTER, 'otlp')          // overridden to enable telemetry
@@ -81,7 +84,7 @@ suite('telemetryConfig', () => {
 
   test('records and restores a user value that differs from ours', async () => {
     await writeSettings({ env: { OTEL_LOG_USER_PROMPTS: '0' } })        // user opted OUT
-    await ensureTelemetryConfig(opts)
+    await ensureTelemetryConfig({ ...opts, forceInstall: true })
 
     const marker = JSON.parse(await fs.readFile(opts.markerPath, 'utf-8')) as Marker
     assert.strictEqual(marker.keys.OTEL_LOG_USER_PROMPTS.hadKey, true)
@@ -116,44 +119,27 @@ suite('telemetryConfig', () => {
     assert.strictEqual((await fs.stat(opts.bodiesDir)).isDirectory(), true)
   })
 
-  test('OTEL_LOG_RAW_API_BODIES points at the configured bodies dir — but ONLY when opted in', async () => {
-    // CONTRACT CHANGE (TRDD-BKF5NZD3): raw-body capture used to be wired unconditionally, which made
-    // it impossible to turn off — the server re-added the key on every boot while Claude Code dumped
-    // the whole conversation to disk on every request (~35 GB/day). It is now opt-in.
-    await ensureTelemetryConfig({ ...opts, captureRawBodies: false })
-    assert.strictEqual((await readEnv())?.OTEL_LOG_RAW_API_BODIES, undefined, 'off by default')
-
-    await ensureTelemetryConfig({ ...opts, captureRawBodies: true })
+  test('OTEL_LOG_RAW_API_BODIES is ALWAYS written, pointing at the configured bodies dir (mandatory since 2026-10-02)', async () => {
+    // Owner reversal of TRDD-BKF5NZD3: "raw body dumps is not an optin, its mandatory".
+    await ensureTelemetryConfig(opts)
     assert.strictEqual((await readEnv())?.OTEL_LOG_RAW_API_BODIES, `file:${opts.bodiesDir}`)
   })
 
-  test('capture OFF removes a key the REMOVED spool wrote, not just the default dir', async () => {
-    // THE OUTAGE THIS PINS (2026-08-06): the delete guard compared the live key against
-    // `file:${effectiveBodiesDir(dataDir)}` — the default dir only. The RAM-disk spool is removed
-    // (TRDD-Z53IJFE9), but a legacy install upgraded past it still has the spool path in
-    // settings.json, so the guard must carry that path as a literal: capture OFF must delete it —
-    // leaving it is the ~35 GB/day burn.
-    const legacySpoolValue = 'file:/Volumes/AgentLensSpool/otel-bodies'
-    await writeSettings({ env: { OTEL_LOG_RAW_API_BODIES: legacySpoolValue } })
-
-    await ensureTelemetryConfig({ ...opts, captureRawBodies: false })
-
-    assert.strictEqual(
-      (await readEnv())?.OTEL_LOG_RAW_API_BODIES, undefined,
-      'capture is off, so the removed spool key we wrote must be DELETED — leaving it is the ~35 GB/day burn',
-    )
+  test('a key the removed spool wrote is OURS: converged to the SSD dir, not refused as foreign', async () => {
+    // A legacy install upgraded past TRDD-Z53IJFE9 still has the spool path in settings.json. agentlenspro
+    // wrote it itself, so it is ownership evidence (ownedBodyValues), not another pipeline.
+    await writeSettings({ env: { OTEL_LOG_RAW_API_BODIES: 'file:/Volumes/AgentLensSpool/otel-bodies' } })
+    await ensureTelemetryConfig(opts)
+    assert.strictEqual((await readEnv())?.OTEL_LOG_RAW_API_BODIES, `file:${opts.bodiesDir}`)
   })
 
-  test('capture OFF leaves a raw-body key pointing somewhere we never wrote', async () => {
-    // The counter-case that keeps the fix honest: widening the delete must not become
-    // "delete any OTEL_LOG_RAW_API_BODIES". A user who points the sink at their OWN directory
-    // made that choice deliberately; silently deleting a value we never wrote is overreach.
+  test('a raw-body key pointing somewhere we never wrote is FOREIGN: refused, nothing written', async () => {
     const foreign = 'file:/somewhere/the/user/chose'
-    await writeSettings({ env: { OTEL_LOG_RAW_API_BODIES: foreign } })
-
-    await ensureTelemetryConfig({ ...opts, captureRawBodies: false })
-
-    assert.strictEqual((await readEnv())?.OTEL_LOG_RAW_API_BODIES, foreign, 'not ours — leave it')
+    await writeSettings({ env: { OTEL_LOG_RAW_API_BODIES: foreign, KEEP: 'me' } })
+    const before = await fs.readFile(opts.settingsPath, 'utf-8')
+    await assert.rejects(ensureTelemetryConfig(opts), /OTEL_LOG_RAW_API_BODIES/)
+    assert.strictEqual(await fs.readFile(opts.settingsPath, 'utf-8'), before, 'settings.json byte-identical')
+    await assert.rejects(fs.access(opts.markerPath), 'no marker written either')
   })
 
   test('status reports managed / user / absent per key', async () => {
@@ -164,7 +150,7 @@ suite('telemetryConfig', () => {
     assert.strictEqual(pre.keys.find(k => k.key === 'OTEL_TRACES_EXPORTER')?.status, 'user')
     assert.strictEqual(pre.keys.find(k => k.key === 'OTEL_LOGS_EXPORTER')?.status, 'absent')
 
-    await ensureTelemetryConfig(opts)
+    await ensureTelemetryConfig({ ...opts, forceInstall: true })
     const post = await telemetryConfigStatus(opts)
     assert.strictEqual(post.installed, true)
     assert.ok(post.keys.every(k => k.status === 'managed'))

@@ -90,8 +90,16 @@ export function reviveBraked(): boolean {
  * `AGENTLENS_DISABLED=1` is honored too, for the cases where env DOES reach the process (tests,
  * a supervisor that spawns the server directly). The FILE is the one that reaches running agents.
  */
+// `--force-install-telemetry` overrides AGENTLENS_DISABLED for THIS process only (owner order 2026-10-02: "overrides
+// all env vars and enable agentlenspro. but the next time agentlenspro is executed ... it will regularly disabled
+// again"). An in-process flag: process.env is never mutated, nothing is persisted, so the very next run sees the
+// variable again. Children spawned by the flagged verb still inherit the env as it was (a spawn site that must not
+// pass AGENTLENS_DISABLED to its child has to strip it explicitly, in that child's env only).
+let envHalfOverridden = false
+export function overrideKillSwitchEnv(on = true): void { envHalfOverridden = on }
+
 export function killSwitchHalf(): 'env' | 'file' | null {
-  if (process.env.AGENTLENS_DISABLED === '1') return 'env'
+  if (process.env.AGENTLENS_DISABLED === '1' && !envHalfOverridden) return 'env'
   try { return fs.existsSync(killSwitchPath()) ? 'file' : null } catch { return null }
 }
 

@@ -46,7 +46,7 @@ import { makeRssSampler } from './serverRuntime'
  */
 export function defaultBodiesDir(): string {
   const dir = agentlensDataDir()
-  return resolveBodiesReadScope(dir, process.env).dirs[0] ?? path.join(dir, 'otel-bodies')
+  return resolveBodiesReadScope(dir).dirs[0] ?? path.join(dir, 'otel-bodies')
 }
 
 // Bounded scan caps — same convention as HOG_SCAN_CAP / CAUSE_SCAN_CAP in mcpServer.ts, sized for

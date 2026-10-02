@@ -52,6 +52,8 @@ If `agentlenspro` is not on PATH, (re)install the package — `npm install -g ag
 (or the Homebrew formula; developers working from a checkout use `npm link`). This skill never
 installs the server itself; the CLI starts it on demand.
 
+If any agentlenspro command prints "agentlenspro is DISABLED", run the reactivate command it prints; do not retry the original command.
+
 ## Version floor — check this FIRST if a command is "unknown"
 
 This document describes **agentlenspro 2.21.0+**. `statusline-history` and its `--project` flag do
@@ -190,13 +192,12 @@ agentlenspro batch '<json-array>'           # N tools in ONE invocation: [{"tool
 
 Two layers, two lifecycles. Hook **registrations** (the entries in Claude Code's settings.json) are
 read only at session start: after `agentlenspro setup` or `--install-hooks` restart sessions once.
-Hook **behavior** is hot: the server re-reads `<data dir>/hook-config.json` on every request, so
+Hook **behavior** is hot: the server re-reads the dashboard toggle file (`~/.agentlens/hook-config.json`, created when a toggle is saved) on every request, so
 `agentlenspro --hooks gate=off|warn|enforce capture=on|off advisor=on|off cacheguard=on|off` (or
 `POST /api/hook-config` with a JSON patch) takes effect in every running session immediately. The
 gate also honors the `AGENTLENS_GATE=off` environment variable, read on each invocation.
-`agentlenspro setup` ends with two read-only self-checks: `hook-hot-config` (the server's
-`GET /api/hook-config` agrees with the file on disk) and `memory-check` (the last 60-second
-composition line in `server.log`: live + free-in-page should equal committed within 1 MB).
+`agentlenspro setup` ends with a read-only `memory-check` (the last 60-second composition line in
+`server.log`: live + free-in-page should equal committed within 1 MB).
 
 The synchronous hooks (gate, review-gate, review-supervisor) are registered with a 120 s ceiling, so
 under a wedged server or extreme load one can hold a turn for up to 120 s; the escape hatch is

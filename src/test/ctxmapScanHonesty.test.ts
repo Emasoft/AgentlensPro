@@ -4,7 +4,6 @@ import * as os from 'os'
 import * as path from 'path'
 import { runCtxmapCli } from '../cli/ctxmapCli'
 import { EXIT } from '../cli/cliErrors'
-import { RAW_BODIES_ENV } from '../captureConfig'
 import { DATA_DIR_ENV } from '../dataDir'
 
 // TRDD-M8SV6LK5 — `ctxmap`'s two scanning verbs must not answer a question they failed to answer.
@@ -18,13 +17,12 @@ interface Fixture { data: string; bodies: string; env: NodeJS.ProcessEnv }
 
 /** A data dir with an `otel-bodies` dir. The removed RAM-disk spool's second-dir shape is gone
  *  (TRDD-Z53IJFE9), so a scan fixture needs exactly one capture dir. */
-function fixture(opts: { capture?: boolean } = {}): Fixture {
+function fixture(): Fixture {
   const data = fs.mkdtempSync(path.join(os.tmpdir(), 'ctxmap-scan-'))
   const bodies = path.join(data, 'otel-bodies')
   fs.mkdirSync(bodies, { recursive: true })
   const env: NodeJS.ProcessEnv = { ...process.env }
   env[DATA_DIR_ENV] = data
-  if (opts.capture !== undefined) env[RAW_BODIES_ENV] = opts.capture ? '1' : '0'
   return { data, bodies, env }
 }
 
@@ -113,14 +111,14 @@ suite('ctxmap --list: one unreadable dir must not blind the scan', () => {
 
 suite('ctxmap --list: an empty feed is a healthy machine, not a bad command line', () => {
   test('nothing captured yet exits UNKNOWN, never USAGE', async () => {
-    const f = fixture({ capture: false })
+    const f = fixture()
     const { code, out, err } = await run(f, ['--list'])
 
     assert.notStrictEqual(code, EXIT.USAGE,
       'EX_USAGE is documented as never coming from a healthy invocation — 64 sends a harness hunting for its own bug')
     assert.strictEqual(code, EXIT.UNKNOWN, 'the enum\'s own meaning: no value in the feed')
     assert.strictEqual(out, '', 'nothing may be printed to stdout that a caller could parse as a listing')
-    assert.ok(/raw-body capture is OFF/.test(err),
-      `the reason must be actionable, not just the dirs looked in — got: ${err.trim()}`)
+    assert.ok(/no captured requests found in: /.test(err),
+      `the message must name where it looked — got: ${err.trim()}`)
   })
 })

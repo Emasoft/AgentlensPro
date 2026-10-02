@@ -44,6 +44,7 @@ function brakeReviveForThisSuite(): void {
 
 const REPO_ROOT = path.resolve(__dirname, '..', '..', '..')
 
+
 interface Fixture {
   home: string
   dataDir: string
@@ -81,6 +82,7 @@ function setupOpts(f: Fixture, ports: { ui: number; mcp: number; otlp: number },
     settingsPath: f.settingsPath,
     skillsDir: f.skillsDir,
     repoRoot: REPO_ROOT,
+    telemetryProbe: { managedSettingsPaths: [], processEnv: {} }, // a developer's company config / OTEL_* exports must not leak in
     uiPort: ports.ui,
     mcpPort: ports.mcp,
     otlpPort: ports.otlp,
@@ -182,11 +184,10 @@ suite('setup — virgin HOME full converge (real server on ephemeral ports)', ()
 
   test('every owned telemetry env key holds exactly the expected value for the fixture ports', () => {
     const env = (readSettings(f).env ?? {}) as Record<string, string>
-    // capture=false: setup must NOT wire raw-body capture by default (TRDD-BKF5NZD3 — it costs
-    // ~35 GB/day, so a fresh install must never turn it on behind the user's back).
-    const expected = ownedTelemetryKeys(path.join(f.dataDir, 'otel-bodies'), ports.otlp, false)
+    // Raw-body capture is mandatory (owner reversal 2026-10-02): the key is part of the expected table.
+    const expected = ownedTelemetryKeys(path.join(f.dataDir, 'otel-bodies'), ports.otlp)
     for (const [k, v] of Object.entries(expected)) assert.strictEqual(env[k], v, k)
-    assert.ok(!('OTEL_LOG_RAW_API_BODIES' in env), 'a default setup must not arm raw-body capture')
+    assert.strictEqual(env.OTEL_LOG_RAW_API_BODIES, `file:${path.join(f.dataDir, 'otel-bodies')}`, 'a default setup arms raw-body capture')
   })
 
   test('the final self-test verified the OTLP→get_recent_sessions round-trip and the hook/gate handlers', () => {
@@ -297,7 +298,7 @@ suite('setup — repair matrix (broken fixtures, real converge)', () => {
 
   test('wrong + truncated telemetry env is repaired to the full expected key set', () => {
     const env = (readSettings(f).env ?? {}) as Record<string, string>
-    const expected = ownedTelemetryKeys(path.join(f.dataDir, 'otel-bodies'), ports.otlp, false)
+    const expected = ownedTelemetryKeys(path.join(f.dataDir, 'otel-bodies'), ports.otlp)
     for (const [k, v] of Object.entries(expected)) assert.strictEqual(env[k], v, k)
     assert.strictEqual(stepOf(repaired, 'otel-env').verify, 'PASS')
   })
@@ -323,9 +324,10 @@ suite('setup — fail-fast refusals (no silent continue)', () => {
       const ports = { ui: await freePort(), mcp: await freePort(), otlp: await freePort() }
       const outcome = await runSetup(setupOpts(f, ports))
       assert.strictEqual(outcome.exitCode, 1, 'must exit non-zero')
-      assert.strictEqual(stepOf(outcome, 'hooks').verify, 'FAIL')
+      // The telemetry step runs FIRST (owner order 2026-10-02), so it is the one that refuses the unparseable file.
+      assert.strictEqual(stepOf(outcome, 'otel-env').verify, 'FAIL')
       assert.strictEqual(fs.readFileSync(f.settingsPath, 'utf8'), truncated, 'the unparseable file must not be touched')
-      for (const name of ['skill', 'otel-env', 'old-package', 'server', 'final-test']) {
+      for (const name of ['hooks', 'skill', 'old-package', 'server', 'final-test']) {
         assert.strictEqual(stepOf(outcome, name).action, 'not run', `${name} must not run after the failure (fail-fast)`)
       }
       assert.strictEqual(outcome.serverPid, null, 'no server may be started after a failed step')
@@ -347,7 +349,7 @@ suite('setup — fail-fast refusals (no silent continue)', () => {
         const outcome = await runSetup(setupOpts(f, ports, { repoRoot: bogusRoot }))
         assert.strictEqual(outcome.exitCode, 1)
         assert.strictEqual(stepOf(outcome, 'skill').verify, 'FAIL')
-        for (const name of ['otel-env', 'old-package', 'server', 'final-test']) {
+        for (const name of ['old-package', 'server', 'final-test']) {
           assert.strictEqual(stepOf(outcome, name).action, 'not run', `${name} must not run after the skill failure`)
         }
       } finally { fs.rmSync(bogusRoot, { recursive: true, force: true }) }

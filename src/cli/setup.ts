@@ -29,8 +29,12 @@ import * as path from 'path'
 import { loadSqlJs } from '../forensicsDb'
 import { countNdjsonLinesAuto } from '../ndjsonLines'
 import { readFsMarkers } from '../environment/runtime'
-import { ensureTelemetryConfig, ownedTelemetryKeys } from '../telemetryConfig'
-import { rawBodyCaptureEnabled, effectiveBodiesDir, RAW_BODIES_KEY } from '../captureConfig'
+import {
+  TelemetryConflict, detectTelemetryConflicts, ensureTelemetryConfig, forceInstallManagedTelemetry, formatTelemetryConflicts,
+  ownedTelemetryKeys,
+} from '../telemetryConfig'
+import { disableForForeignTelemetry, enableIfForeign } from './foreignTelemetry'
+import { effectiveBodiesDir, RAW_BODIES_KEY } from '../captureConfig'
 import { alstoreBin as resolveAlstoreBin, rustIngestPass } from '../rustStorePass'
 import { safeConfigEdit } from '../safeConfigEdit'
 import { DEFAULT_MAX_BYTES_PER_PASS, IngestPassResult } from '../store/ingestPass'
@@ -47,6 +51,12 @@ import { parsePidLock } from '../serverRuntime'
 export interface SetupOptions {
   dryRun?: boolean
   yes?: boolean
+  /** `--force-install-telemetry`: overwrite a foreign telemetry config with agentlenspro's (per invocation). */
+  forceInstall?: boolean
+  /** Where the foreign-telemetry guard looks besides ~/.claude/settings.json (managed-settings files, process env).
+   *  Production leaves it unset (real OS paths + process.env); tests pin it so a developer's company config or
+   *  OTEL_* shell exports cannot leak into a fixture run. */
+  telemetryProbe?: { managedSettingsPaths?: string[]; processEnv?: NodeJS.ProcessEnv }
   /** Injectable roots/ports — tests point ALL of them at temp fixtures + ephemeral ports.
    *  Defaults are the real machine paths/env (the production behavior). */
   home?: string
@@ -83,6 +93,8 @@ export interface SetupOutcome {
 export interface Ctx {
   dryRun: boolean
   yes: boolean
+  forceInstall: boolean
+  telemetryProbe: { managedSettingsPaths?: string[]; processEnv?: NodeJS.ProcessEnv }
   home: string
   dataDir: string
   settingsPath: string
@@ -104,6 +116,8 @@ export function resolveCtx(opts: SetupOptions): Ctx {
   return {
     dryRun: !!opts.dryRun,
     yes: !!opts.yes,
+    forceInstall: !!opts.forceInstall,
+    telemetryProbe: opts.telemetryProbe ?? {},
     home,
     dataDir: opts.dataDir ?? process.env.DATA_DIR ?? path.join(home, '.agentlens'),
     settingsPath: opts.settingsPath ?? process.env.AGENTLENS_CLAUDE_SETTINGS ?? path.join(home, '.claude', 'settings.json'),
@@ -223,7 +237,7 @@ function renderTable(rows: StepResult[]): string {
 
 type Settings = Record<string, unknown>
 
-function readSettingsFresh(file: string): Settings | 'absent' | 'unparseable' {
+export function readSettingsFresh(file: string): Settings | 'absent' | 'unparseable' {
   if (!fs.existsSync(file)) return 'absent'
   try { return JSON.parse(fs.readFileSync(file, 'utf8')) as Settings } catch { return 'unparseable' }
 }
@@ -233,7 +247,7 @@ function settingsHooks(s: Settings): Record<string, HookMatcher[]> {
 }
 
 /** Would installHooks change anything? Mirrors the installer's change detection without writing. */
-function hooksConverged(s: Settings): boolean {
+export function hooksConverged(s: Settings): boolean {
   const hooks = settingsHooks(s)
   const events = new Set([...Object.keys(hooks), ...HOOK_EVENTS, ...GATE_EVENTS, ...REVIEW_EVENTS])
   for (const ev of events) {
@@ -540,14 +554,11 @@ export async function runSpoolMigration(ctx: Ctx, deps: SpoolMigrationDeps): Pro
     deps.detachVolume(SPOOL_VOLUME)
   }
 
-  // ACT 3 — REWRITE THE SETTINGS PATH via safeConfigEdit. Only the key's VALUE moves; capture
-  // stays exactly as the user left it (this is a location migration, not a capture-policy change).
+  // ACT 3 — REWRITE THE SETTINGS PATH via safeConfigEdit. Only the key's VALUE moves, to the one
+  // bodies dir (raw capture is mandatory since 2026-10-02 — there is no off state to preserve).
   let settingsRewritten = false
   if (detected.settingsPathPointsAtSpool) {
-    const captureOn = rawBodyCaptureEnabled(ctx.dataDir, process.env)
-    const ops = captureOn
-      ? [{ op: 'set' as const, path: ['env', RAW_BODIES_KEY], value: `file:${effectiveBodiesDir(ctx.dataDir, true)}` }]
-      : [{ op: 'delete' as const, path: ['env', RAW_BODIES_KEY] }]
+    const ops = [{ op: 'set' as const, path: ['env', RAW_BODIES_KEY], value: `file:${effectiveBodiesDir(ctx.dataDir)}` }]
     await safeConfigEdit(ctx.settingsPath, 'json', ops, { createIfMissing: true })
     settingsRewritten = true
   }
@@ -1013,70 +1024,88 @@ const stepSkill: StepDef = {
   },
 }
 
+/** Read-only telemetry-env drift check shared by stepOtel and the auto-launch repair path, so the two
+ *  can never disagree on what "converged" means. 'unparseable' = settings.json cannot be read.
+ *  `conflicts` non-empty = ANOTHER telemetry pipeline is
+ *  configured (company gateway / managed settings / shell env): nothing may be written. */
+export function otelDrift(ctx: Ctx): 'unparseable' | {
+  bodiesDir: string; expected: Record<string, string>; converged: boolean; found: string; conflicts: TelemetryConflict[]
+} {
+  // Raw-body capture is MANDATORY (owner reversal 2026-10-02, TRDD-AGZ0XZKW): the key is always owned.
+  const bodiesDir = effectiveBodiesDir(ctx.dataDir)
+  const expected = ownedTelemetryKeys(bodiesDir, ctx.otlpPort)
+  const state = readSettingsFresh(ctx.settingsPath)
+  if (state === 'unparseable') return 'unparseable'
+  const env = (state !== 'absent' && state.env && typeof state.env === 'object' ? state.env : {}) as Record<string, unknown>
+  const missing = Object.keys(expected).filter(k => env[k] === undefined)
+  const wrong = Object.keys(expected).filter(k => env[k] !== undefined && env[k] !== expected[k])
+  const conflicts = detectTelemetryConflicts({
+    settingsPath: ctx.settingsPath, markerPath: path.join(ctx.dataDir, 'telemetry-managed.json'),
+    bodiesDir, otlpPort: ctx.otlpPort, dataDir: ctx.dataDir, ...ctx.telemetryProbe,
+  })
+  const converged = conflicts.length === 0 && missing.length === 0 && wrong.length === 0
+  const found = conflicts.length > 0
+    ? `${conflicts.length} conflicting key(s) — another telemetry pipeline is configured`
+    : converged ? 'telemetry env current' : `${missing.length} missing, ${wrong.length} wrong key(s)`
+  return { bodiesDir, expected, converged, found, conflicts }
+}
+
 const stepOtel: StepDef = {
   name: 'otel-env',
   async run(ctx) {
     const markerPath = path.join(ctx.dataDir, 'telemetry-managed.json')
-    // Raw-body capture is opt-in (TRDD-BKF5NZD3). Resolve it ONCE and feed the SAME value to both
-    // the expected-table and ensure(), or setup's verify would demand a key ensure deliberately
-    // deleted (or vice-versa) and the repairer would fight itself on every run.
-    const captureRawBodies = rawBodyCaptureEnabled(ctx.dataDir, process.env)
-    // Same ONE bodies-dir resolution as ensure()'s default (spool when capture is on) — a
-    // hard-coded legacy path here made setup's verify/repair fight the spool-aware CLI writer.
-    const bodiesDir = effectiveBodiesDir(ctx.dataDir, captureRawBodies)
-    const expected = ownedTelemetryKeys(bodiesDir, ctx.otlpPort, captureRawBodies)
-    const state = readSettingsFresh(ctx.settingsPath)
-    if (state === 'unparseable') {
+    const drift = otelDrift(ctx)
+    if (drift === 'unparseable') {
       return { result: { step: this.name, found: 'settings.json unparseable', action: 'refused', verify: 'FAIL', detail: 'fix the file manually, then re-run setup' }, acted: false }
     }
-    const env = (state !== 'absent' && state.env && typeof state.env === 'object' ? state.env : {}) as Record<string, unknown>
-    const missing = Object.keys(expected).filter(k => env[k] === undefined)
-    const wrong = Object.keys(expected).filter(k => env[k] !== undefined && env[k] !== expected[k])
-    // A LEFTOVER capture key is drift too — and the kind that costs ~35 GB/day. Without this,
-    // `converged` would be true (the key simply isn't in `expected`), setup would skip ensure(), and
-    // the repairer would happily report a healthy install while the burn kept running.
-    // PRESENCE, not a value match. When capture is off the key must be ABSENT, so any value is
-    // stale. Comparing against `file:${bodiesDir}` only caught the key when it happened to point
-    // at today's resolved dir — a user who had capture on with a different bodies dir, then turned
-    // it off, kept a live key Claude Code still honours: ~35 GB/day of raw bodies still being
-    // written while setup reported converged/PASS. That is the exact burn the kill-switch exists
-    // for, hidden by the tool meant to detect it.
-    const staleCapture = !captureRawBodies && env[RAW_BODIES_KEY] !== undefined
-    const converged = missing.length === 0 && wrong.length === 0 && !staleCapture
-    const found = converged
-      ? 'telemetry env current'
-      : `${missing.length} missing, ${wrong.length} wrong key(s)${staleCapture ? ', raw-body capture to remove' : ''}`
+    const { bodiesDir, expected, converged, found, conflicts } = drift
+    // A foreign pipeline (owner order 2026-10-02): refuse and write NOTHING unless --force-install-telemetry
+    // was given. A conflicting SHELL export can never be fixed by a settings edit, so it refuses even then.
+    if (conflicts.length > 0 && (!ctx.forceInstall || conflicts.some(c => c.scope === 'shell'))) {
+      // Disable again, like the launch path (kill-switch re-armed, skills parked) — but never in a dry run.
+      const note = ctx.dryRun ? '' : `\nagentlenspro has disabled itself: ${disableForForeignTelemetry({ dataDir: ctx.dataDir, skillsDir: ctx.skillsDir, rulesDir: path.join(ctx.home, '.claude', 'rules') }).length} skill(s) moved to ${path.join(ctx.dataDir, 'disabled-surfaces')}, hooks are no-ops`
+      return { result: { step: this.name, found, action: 'refused', verify: 'FAIL', detail: formatTelemetryConflicts(conflicts) + note }, acted: !ctx.dryRun }
+    }
 
     if (ctx.dryRun) {
       return { result: { step: this.name, found, action: converged ? 'none' : 'would: wire telemetry env (verified transaction)', verify: 'SKIP', detail: 'dry-run' }, acted: false }
     }
     let acted = false
-    if (!converged) {
-      await ensureTelemetryConfig({ settingsPath: ctx.settingsPath, markerPath, bodiesDir, otlpPort: ctx.otlpPort, dataDir: ctx.dataDir, captureRawBodies })
+    let backup = ''
+    if (conflicts.some(c => c.scope === 'managed')) {
+      // The organisation's managed-settings file: overwrite through safeConfigEdit when this user can
+      // write it; otherwise exit with the administrator message (never escalate).
+      try {
+        for (const m of await forceInstallManagedTelemetry(conflicts, { bodiesDir, otlpPort: ctx.otlpPort, dataDir: ctx.dataDir, ...ctx.telemetryProbe })) {
+          backup += `; managed ${m.file}${m.backupPath ? ` backup ${m.backupPath}` : ''}`
+        }
+      } catch (e) {
+        return { result: { step: this.name, found, action: 'refused', verify: 'FAIL', detail: (e as Error).message }, acted: false }
+      }
       acted = true
     }
-    // VERIFY — independent re-parse; every owned key must hold exactly the expected value, and the
-    // opted-out capture key must be GONE (verifying only what we wrote would miss what we failed to
-    // delete — the whole defect this TRDD fixes).
+    if (!converged) {
+      const r = await ensureTelemetryConfig({ settingsPath: ctx.settingsPath, markerPath, bodiesDir, otlpPort: ctx.otlpPort, dataDir: ctx.dataDir, forceInstall: ctx.forceInstall, ...ctx.telemetryProbe })
+      if (r.backupPath) backup += `; backup ${r.backupPath}`
+      acted = true
+    }
+    // VERIFY — independent re-parse; every owned key must hold exactly the expected value.
     const after = readSettingsFresh(ctx.settingsPath)
     if (after === 'absent' || after === 'unparseable') {
       return { result: { step: this.name, found, action: acted ? 'wired' : 'none', verify: 'FAIL', detail: `post-state ${after}` }, acted }
     }
     const envAfter = (after.env && typeof after.env === 'object' ? after.env : {}) as Record<string, unknown>
     const bad = Object.keys(expected).find(k => envAfter[k] !== expected[k])
-    // Same presence test as the detection above — a verify that is laxer than its detection can
-    // confirm a repair that did not happen.
-    const stillStale = !captureRawBodies && envAfter[RAW_BODIES_KEY] !== undefined
-    const verifyFail = bad ?? (stillStale ? RAW_BODIES_KEY : undefined)
+    // Our telemetry is in place and nothing foreign remains: a kill-switch armed for the foreign-telemetry
+    // reason has no more reason to stand (an operator-armed one is never touched).
+    if (!bad) enableIfForeign({ dataDir: ctx.dataDir, skillsDir: ctx.skillsDir, rulesDir: path.join(ctx.home, '.claude', 'rules') })
     return {
       result: {
         step: this.name, found, action: acted ? 'wired' : 'none',
-        verify: verifyFail ? 'FAIL' : 'PASS',
+        verify: bad ? 'FAIL' : 'PASS',
         detail: bad
           ? `${bad} = ${JSON.stringify(envAfter[bad])} (expected ${JSON.stringify(expected[bad])})`
-          : stillStale
-            ? `${RAW_BODIES_KEY} still set (capture is off — it must be absent)`
-            : `${Object.keys(expected).length} key(s) exact${captureRawBodies ? '' : '; raw-body capture off'}`,
+          : `${Object.keys(expected).length} key(s) exact${backup}`,
       },
       acted,
     }
@@ -1344,51 +1373,6 @@ const stepSelfTest: StepDef = {
   },
 }
 
-export interface HookConfigCheck { verify: Verify; detail: string }
-
-/** Compare the server's served hook config with hook-config.json as parsed from disk (null = the
- *  file does not exist). Pure so the absent-file and mismatch cases are unit-testable. */
-export function compareHookConfig(served: Record<string, unknown>, onDisk: Record<string, unknown> | null): HookConfigCheck {
-  if (onDisk === null) return { verify: 'SKIP', detail: 'no hook-config.json yet; server serves defaults' }
-  const isPrim = (v: unknown): boolean => typeof v === 'boolean' || typeof v === 'number' || typeof v === 'string'
-  const diff = Object.keys(onDisk).filter(k => isPrim(onDisk[k]) && onDisk[k] !== served[k])
-  if (diff.length > 0) return { verify: 'FAIL', detail: `server hook-config differs from hook-config.json for ${diff.join(', ')}` }
-  return { verify: 'PASS', detail: 'server hook-config matches hook-config.json on disk; per-request re-read is server_stats.rs behaviour, not exercised here (read-only check); registrations need a Claude Code restart' }
-}
-
-// READ-ONLY against the live server: it never POSTs, because a flipped config is read by every
-// session's gates machine-wide and a killed setup would skip any restore.
-const stepHookHotConfig: StepDef = {
-  name: 'hook-hot-config',
-  async run(ctx) {
-    if (ctx.dryRun) {
-      return { result: { step: this.name, found: 'hook-config.json', action: 'would: GET /api/hook-config and compare with the file (read-only)', verify: 'SKIP', detail: 'dry-run' }, acted: false }
-    }
-    const r = await httpJson(ctx.uiPort, 'GET', '/api/hook-config').catch(() => ({ status: 0, json: null }))
-    const reply = r.json as { config?: Record<string, unknown>; file?: string } | null
-    if (r.status !== 200 || !reply?.config || typeof reply.config.gateEnabled !== 'boolean') {
-      return { result: { step: this.name, found: 'server up', action: 'GET /api/hook-config', verify: 'FAIL', detail: `unexpected /api/hook-config reply (HTTP ${r.status})` }, acted: false }
-    }
-    const file = reply.file ?? path.join(ctx.dataDir, 'hook-config.json')
-    // null = file absent; throws on unparseable JSON.
-    const readDisk = (): Record<string, unknown> | null => fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf-8')) as Record<string, unknown> : null
-    let c: HookConfigCheck
-    try {
-      c = compareHookConfig(reply.config, readDisk())
-      if (c.verify === 'FAIL') {
-        // A dashboard save landing between the GET and the file read is a benign race: re-GET and
-        // re-read ONCE, and fail only if the disagreement persists.
-        const r2 = await httpJson(ctx.uiPort, 'GET', '/api/hook-config').catch(() => ({ status: 0, json: null }))
-        const cfg2 = (r2.json as { config?: Record<string, unknown> } | null)?.config
-        if (r2.status === 200 && cfg2) c = compareHookConfig(cfg2, readDisk())
-      }
-    } catch (e) {
-      return { result: { step: this.name, found: 'hook-config.json', action: 'parse file', verify: 'FAIL', detail: `hook-config.json unparseable: ${(e as Error).message.slice(0, 120)}` }, acted: false }
-    }
-    return { result: { step: this.name, found: 'hook-config.json', action: 'GET /api/hook-config vs file', verify: c.verify, detail: c.detail }, acted: false }
-  },
-}
-
 export interface MemoryCheck { verdict: 'PASS' | 'INFO' | 'WARN' | 'SKIP'; detail: string }
 
 /** Parse one server.log composition line: PASS when live + free-in-page is within 1 MB of
@@ -1490,7 +1474,13 @@ function printDetection(ctx: Ctx): void {
 
 // ── Runner ──────────────────────────────────────────────────────────────────────────────────
 
-const STEPS: StepDef[] = [stepEnvironment, stepData, stepSpoolMigration, stepHooks, stepSkill, stepOtel, stepOldPackage, stepServer, stepSelfTest, stepHookHotConfig, stepMemoryCheck]
+// stepOtel runs BEFORE hooks and skills: the telemetry verdict comes first, so a foreign setup stops the run
+// before anything else is installed (owner order 2026-10-02; the same order as autoSetup.ensureInstalled).
+const STEPS: StepDef[] = [stepEnvironment, stepData, stepSpoolMigration, stepOtel, stepHooks, stepSkill, stepOldPackage, stepServer, stepSelfTest, stepMemoryCheck]
+
+/** The three steps the auto-launch path may run on their own (autoSetup.ts) — a partial repair must
+ *  not start the server or run the self-test, which is what a full runSetup would do. */
+export const REPAIR_STEPS = { hooks: stepHooks, skill: stepSkill, 'otel-env': stepOtel } as const
 
 export async function runSetup(opts: SetupOptions = {}): Promise<SetupOutcome> {
   const ctx = resolveCtx(opts)
@@ -1525,12 +1515,12 @@ export async function runSetup(opts: SetupOptions = {}): Promise<SetupOutcome> {
 }
 
 /** argv entry for `agentlenspro setup [--dry-run] [--yes]`. */
-export async function runSetupCli(argv: string[]): Promise<number> {
+export async function runSetupCli(argv: string[], forceInstall = false): Promise<number> {
   const known = new Set(['--dry-run', '--yes'])
   const unknown = argv.filter(a => !known.has(a))
   // UsageError, not Error: a plain Error maps to exit 1 (the watchers' ABORT signal), and a typo'd
   // flag must read as 64 (bad command line) like every other management verb — TRDD-PIB6T4RU.
   if (unknown.length) throw new UsageError(`setup does not understand: ${unknown.join(' ')} (flags: --dry-run --yes)`)
-  const outcome = await runSetup({ dryRun: argv.includes('--dry-run'), yes: argv.includes('--yes') })
+  const outcome = await runSetup({ dryRun: argv.includes('--dry-run'), yes: argv.includes('--yes'), forceInstall })
   return outcome.exitCode
 }

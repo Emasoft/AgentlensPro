@@ -394,8 +394,8 @@ the ingestion daemon **is** the standalone server, kept always-on by the hooks t
 
 ### Body store — content-addressed, verify-then-delete (TRDD-K3WDPR7M)
 
-Raw OTEL request/response bodies (opt-in capture — `src/captureConfig.ts`,
-`agentlenspro config set captureRawBodies on|off`) no longer accumulate as loose JSON files or
+Raw OTEL request/response bodies (mandatory capture — `src/captureConfig.ts`,
+`telemetryConfig.ts` owns the settings key) no longer accumulate as loose JSON files or
 feed a gzip archiver. They are ingested into a **content-addressed body store** at
 `<dataDir>/store/` (`src/store/db.ts`, `bodyStore.ts`, `ingestPass.ts`):
 

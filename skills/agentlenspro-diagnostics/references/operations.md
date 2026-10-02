@@ -70,8 +70,7 @@ agentlenspro server restart                       # apply it
 ```
 
 Knobs: `spansRetentionDays` (30) · `summaryWindowHours` (24) · `bodiesMaxGb` (8) ·
-`bodiesRetentionDays` (31) · `captureRawBodies` (off) — the one boolean knob,
-`config set captureRawBodies on|off`; when on, bodies land directly on the SSD at
+`bodiesRetentionDays` (31). Raw-body capture is mandatory (no knob): bodies land directly on the SSD at
 `~/.agentlens/otel-bodies` and the drain ingests them every 60 s (the RAM-disk spool and the
 `bodiesMaxAgeHours`/72h batching wait were removed in TRDD-Z53IJFE9). A
 `set` on a corrupt config file REFUSES to write rather than clobbering it. Recipe — keep a year of

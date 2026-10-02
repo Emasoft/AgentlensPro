@@ -329,17 +329,11 @@ agentlenspro config set spansRetentionDays 90    # persist a change (restart the
 
 Each knob is resolved at boot with the precedence **environment variable > `config.json` > built-in default** — the env var stays the ephemeral ops override, the file is the durable setting you set once. Every value has a safety floor (e.g. days ≥ 1), and a below-floor value from any source is clamped. Restart the server/daemon (`agentlenspro server restart`) after a change.
 
-### Raw-body capture — opt-in, off by default
+### Raw-body capture — mandatory
 
-Claude Code can be told to dump the full raw request/response body of every LLM call to disk (`OTEL_LOG_RAW_API_BODIES`) — useful for deep forensic replay, but expensive if left running unmanaged (on the order of tens of MB/min of writes). AgentlensPro keeps this **off by default** and only wires it up through a verified toggle:
+Claude Code dumps the full raw request/response body of every LLM call to disk (`OTEL_LOG_RAW_API_BODIES`, bodies land in `<data-dir>/otel-bodies`). AgentlensPro **requires** it — together with the rest of the telemetry, the hooks and the status line it reads, it is non-functional without it — so there is no switch: install, `agentlenspro setup` and every CLI launch converge `OTEL_LOG_RAW_API_BODIES` through the same verified settings transaction as every other telemetry key. The cost (tens of GB/day under heavy use) is accepted and bounded by the body store's retention knobs above (`bodiesMaxGb`, `bodiesRetentionDays`).
 
-```bash
-agentlenspro config set captureRawBodies on    # turn capture on
-agentlenspro config set captureRawBodies off   # turn capture off (the default)
-agentlenspro spool ensure                      # re-create the RAM-disk spool after a reboot
-```
-
-Turning capture **on** (macOS only) mounts a RAM-disk spool (`AgentLensSpool`, 2 GB default, resizable with `AGENTLENS_SPOOL_MB`) and points the raw-body writes at it, so the write itself lands in volatile memory instead of wearing the SSD — the durable copy is the compressed body store described below. If the RAM disk cannot be created, capture is **refused** (non-zero exit) rather than silently falling back to writing raw bodies to disk. A LaunchAgent re-creates the spool at login so a reboot doesn't leave capture pointed at a RAM disk that no longer exists. Restart your Claude Code sessions after toggling — the env var is read at launch.
+**If another telemetry setup is already in place** (a company gateway, an enterprise managed-settings file, an `OTEL_*` variable exported in your shell), agentlenspro will not overwrite it: the launch exits non-zero, writes nothing, and **disables itself** (the kill-switch is armed, so every hook is a no-op, and its skills move to `<data-dir>/disabled-surfaces/skills`; its agents stay). To proceed, remove the other setup yourself — the next launch repairs and re-enables — or run any command once with `--force-install-telemetry`, which REPLACES it with agentlenspro's (the managed-settings file needs administrator rights; a shell export must be unset by you).
 
 ### The body store — bodies are deduplicated and compressed, not hoarded on disk
 

@@ -26,6 +26,16 @@ export const USAGE = `agentlenspro — AI-agent observability: server, dashboard
 
 usage:
   agentlenspro                                start the server in the foreground (serves the dashboard)
+  agentlenspro --force-install-telemetry <verb>
+                                              (global, per invocation) overwrite an EXISTING telemetry
+                                              setup (company gateway, managed settings) with agentlenspro's.
+                                              Without it agentlenspro refuses to run beside one: it exits
+                                              non-zero, disables its hooks and skills, and touches nothing.
+                                              Every launch also restores missing/stale skills, agents,
+                                              hooks and telemetry env by itself (AGENTLENS_NO_AUTOSETUP=1 off).
+                                              Exit 69 = agentlenspro is DISABLED (the command did not run; the
+                                              message names the reactivation command, usually
+                                              'agentlenspro enable'); exit 78 = another telemetry setup blocks it.
   agentlenspro setup [--dry-run] [--yes]      detect → converge → verify: install or repair everything
                                               (server, DB, hooks, skill, telemetry env), then self-test.
                                               Starts with a read-only environment probe (platform,
@@ -99,8 +109,6 @@ usage:
   agentlenspro config get <key>               one retention knob's effective value + where it came from
   agentlenspro config set <key> <value>       persist a retention knob to ~/.agentlens/config.json
                                               (survives uninstall/upgrade; restart to apply; env still wins)
-                                              captureRawBodies on|off turns raw-body capture on/off
-                                              (opt-in, default off; bodies go to <data-dir>/otel-bodies)
   agentlenspro env [facet] [--json] [--out F]  detect the runtime environment: terminal kind, OS,
                                               Claude/ai-maestro/CI/container context, filesystem/worktree,
                                               user, network/VPN/proxy, cloud (AWS/Azure/GCP), tooling,

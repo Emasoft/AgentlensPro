@@ -51,7 +51,7 @@ Spawning is the skill's job (/agentlenspro-visualize-context) — this command o
 spawn left behind. Every number that says "measured" came from count_tokens; nothing is estimated.`
 
 const dataDir = (): string => resolveDataDir().dir
-const bodyDirs = (): string[] => resolveBodiesReadScope(dataDir(), process.env).dirs
+const bodyDirs = (): string[] => resolveBodiesReadScope(dataDir()).dirs
 const fmt = (n: number): string => n.toLocaleString('en-US')
 
 /** Rough per-agent input cost of a spawn, used ONLY for the pre-flight estimate. Deliberately coarse

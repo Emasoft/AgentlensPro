@@ -62,7 +62,7 @@ export interface BurnInvestigation {
     dirsScanned: string[]
     dirsMissing: string[]
     /** Set when the scan could not see the corpus. The caller must not read the totals as facts. */
-    blind?: 'capture-off' | 'no-bodies-dir' | 'dirs-empty-in-window'
+    blind?: 'no-bodies-dir' | 'dirs-empty-in-window'
     /** TRDD-4FMHW124: sub-ranges with hook events but ZERO bodies — measured capture outages.
      *  Distinct from `complete`: complete means "scanned everything present"; a gap means the
      *  corpus itself has a hole, so totals under-count whatever burned inside it. */
@@ -469,11 +469,10 @@ export function investigateBurn(opts: InvestigateOptions = {}): BurnInvestigatio
       return {
         dirs: ok ? [opts.bodiesDir as string] : [],
         missing: ok ? [] : [opts.bodiesDir as string],
-        captureOn: true,
         spoolConfigured: false,
       }
     })()
-    : resolveBodiesReadScope(dataDir, opts.env ?? process.env)
+    : resolveBodiesReadScope(dataDir)
   const hookDir = opts.hookEventsDir ?? path.join(dataDir, 'hook-events')
   const hours = Math.min(48, Math.max(0.25, opts.windowHours ?? 5))
   const untilMs = opts.untilMs ?? Date.now()
@@ -540,26 +539,20 @@ export function investigateBurn(opts: InvestigateOptions = {}): BurnInvestigatio
   // investigator CANNOT SEE, not that nothing happened — so it must say so, and coverage.complete
   // must be false. Only a corpus that was actually read can support a "nothing burned" verdict.
   const nothingScanned = reqList.files.length === 0 && respList.files.length === 0
-  const blind: 'capture-off' | 'no-bodies-dir' | 'dirs-empty-in-window' | undefined =
+  const blind: 'no-bodies-dir' | 'dirs-empty-in-window' | undefined =
     !nothingScanned ? undefined
       : scope.dirs.length === 0 ? 'no-bodies-dir'
-        : !scope.captureOn ? 'capture-off'
-          : 'dirs-empty-in-window'
+        : 'dirs-empty-in-window'
 
   const where = scope.dirs.length ? scope.dirs.map(shortWs).join(', ') : '(none exist)'
   const absent = scope.missing.length ? ` Missing: ${scope.missing.map(shortWs).join(', ')}.` : ''
   const blindVerdict =
     blind === 'no-bodies-dir'
       ? `BLIND — no raw-body directory exists, so this window was never observed.${absent} `
-        + 'This is NOT evidence that nothing burned: turn capture on with `agentlenspro config set '
-        + 'captureRawBodies on`, and meanwhile use `agentlenspro --risk` / `get_burn_status`, which '
+        + 'This is NOT evidence that nothing burned: run `agentlenspro setup` (it wires raw-body capture), and meanwhile use `agentlenspro --risk` / `get_burn_status`, which '
         + 'read the live feed and never go blind.'
-      : blind === 'capture-off'
-        ? `BLIND — raw-body capture is OFF and ${where} holds nothing for this window, so there is `
-          + 'nothing to investigate FROM. This is NOT evidence that nothing burned — cross-check with '
-          + '`agentlenspro --risk` / `get_burn_status` (live feed, never blind).'
-        : `BLIND — scanned ${where} and found 0 request/response bodies in the window.${absent} `
-          + 'Capture is on, so either the window predates capture, the spool was drained/unmounted, or '
+      : `BLIND — scanned ${where} and found 0 request/response bodies in the window.${absent} `
+          + 'Either the window predates capture, the spool was drained/unmounted, or '
           + 'the bounds are wrong. This is NOT evidence that nothing burned — cross-check with '
           + '`agentlenspro --risk` / `get_burn_status` (live feed, never blind).'
 

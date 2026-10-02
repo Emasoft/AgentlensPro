@@ -28,7 +28,7 @@ import { loadScaledTimeout, skipIfUnmeasurable } from './loadAware'
 // Do not "fix" a mismatch between these figures and a fresh measurement; both are true, minutes
 // apart. What is NOT expected is the legacy column changing — that dir has been static for days
 // (TRDD-8TM7I49X).
-const REAL_BODIES_DIRS = resolveBodiesReadScope(path.join(process.env.AGENTLENS_TEST_REAL_HOME || os.homedir(), '.agentlens'), process.env).dirs
+const REAL_BODIES_DIRS = resolveBodiesReadScope(path.join(process.env.AGENTLENS_TEST_REAL_HOME || os.homedir(), '.agentlens')).dirs
 
 /** Up to `n` real captured request bodies, taken from the FIRST dir that can supply them and
  *  topped up from the next only when it cannot. `REAL_BODIES_DIRS` is spool-first, so in practice

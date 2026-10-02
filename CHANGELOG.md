@@ -8,6 +8,26 @@ All notable changes to AgentlensPro are documented here.
 
 ### Changed
 
+- **The install heals itself at every CLI launch.** Each non-hook launch checks the skills (tree hash),
+  agents (bytes), hook registrations (now at a 120 s timeout, was 30 s) and the per-key telemetry env,
+  and repairs only what is missing or stale through the same steps as `setup`, all via the verified
+  `safeConfigEdit` transaction. Silent when current (~2-4 ms). A full `setup` runs only when nothing is
+  installed. `AGENTLENS_NO_AUTOSETUP=1` turns it off; hook-path verbs are never touched.
+  `setup` gains a read-only memory-composition self-check and runs its telemetry step first.
+- **BREAKING: raw body dumps are mandatory.** `OTEL_LOG_RAW_API_BODIES` is now an always-owned telemetry
+  key converged on install and every launch; the `captureRawBodies` knob, `AGENTLENS_CAPTURE_RAW_BODIES`
+  and the capture-off delete path are removed. The cost is bounded by `bodiesMaxGb` / `bodiesRetentionDays`.
+- **Foreign telemetry stops agentlenspro.** If settings.json, an enterprise managed-settings file or the
+  shell already configures another telemetry pipeline (company gateway), agentlenspro writes nothing,
+  disables itself (kill-switch armed: hooks no-op; skills parked in `<data-dir>/disabled-surfaces/`;
+  agents stay) and exits 78 with the conflicting keys (credentials withheld). It re-enables on its own
+  once the other setup is removed. `agentlenspro --force-install-telemetry <command>` replaces the
+  foreign telemetry (managed file only if writable), overrides `AGENTLENS_DISABLED` and OTEL_* shell
+  variables for that run only, and implies `enable`.
+- **A disabled agentlenspro says how to come back.** Any command run while disabled prints
+  `agentlenspro is DISABLED`, the reason and the exact reactivation command, and exits 69.
+  `disable`/`enable` now park/restore the skills too.
+
 - **BREAKING: the RAM-disk body spool is removed completely (TRDD-Z53IJFE9).** The `agentlenspro
   spool` CLI verb, the `bodiesMaxAgeHours` config knob, the `AGENTLENS_BODIES_MAX_AGE_HOURS` env
   var, and the `summary.bodies.spool` summary key are removed or ignored — the CLI verb and the

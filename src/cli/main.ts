@@ -28,6 +28,8 @@ import { runEnvCli } from './envCli'
 import { runDisableCli, runEnableCli } from './disableCli'
 import { ensureServer, openDashboard, serverCommand, daemonCommand } from './serverControl'
 import { runSetupCli } from './setup'
+import { forceInstallTelemetry, maybeAutoSetup } from './autoSetup'
+import { disabledNotice } from './foreignTelemetry'
 import { runBudgetCli } from './budgetCli'
 import { runWatchCli } from './watchCli'
 import { runCtxmapCli } from './ctxmapCli'
@@ -138,7 +140,11 @@ export const LATENCY_EXEMPT: Readonly<Record<string, string>> = {
   'hook-context-cost': 'an analysis verb that streams the day buckets of the log-event sink (~170 MB/day); asked deliberately, never per turn',
 }
 
-export async function cliMain(argv: string[], startServer: () => Promise<unknown>): Promise<number> {
+export async function cliMain(rawArgv: string[], startServer: () => Promise<unknown>): Promise<number> {
+  // `--force-install-telemetry` is a GLOBAL, per-invocation flag (owner order 2026-10-02): consumed here, before
+  // any verb parses its own flags, so no verb ever sees it and nothing persists it.
+  const forceInstall = rawArgv.includes('--force-install-telemetry')
+  const argv = rawArgv.filter(a => a !== '--force-install-telemetry')
   const cmd = argv[0]
 
   // Zero-side-effect global flags FIRST (see the dispatch-order note above).
@@ -193,6 +199,31 @@ export async function cliMain(argv: string[], startServer: () => Promise<unknown
     return 0
   }
 
+  // The install heals itself at every launch (owner order 2026-10-02, TRDD-AGZ0XZKW): missing or stale
+  // skills/agents/hooks/telemetry env are restored here, AFTER the describe-only paths above (help and
+  // version never mutate anything) and BEFORE the verb runs. Silent when current. A non-null result is
+  // an exit code: another telemetry setup is in place, so the verb must not run (autoSetup.ts).
+  if (forceInstall) {
+    // `--force-install-telemetry` = enable + overwrite + full restore (autoSetup.ts), then the verb. Alone, with no
+    // verb, it only reports what it did — it must not start the foreground server.
+    const code = await forceInstallTelemetry(cmd ?? '')
+    if (code !== null) return code
+    if (cmd === undefined) return 0
+  } else {
+    const blocked = await maybeAutoSetup(argv)
+    if (blocked !== null) return blocked
+  }
+
+  // Disabled (kill-switch flag or AGENTLENS_DISABLED): say so, name the reactivation command, exit
+  // EXIT.DISABLED without running the verb (owner order 2026-10-02) — written for an agent as much as a
+  // human. After maybeAutoSetup on purpose: a switch armed for foreign telemetry is lifted there once that
+  // setup is gone. Hook-path verbs, enable/disable/setup and `server status` pass through.
+  const disabled = disabledNotice(argv)
+  if (disabled) {
+    console.error(disabled.text)
+    return disabled.code
+  }
+
   switch (cmd) {
     case 'hook':
       return exitNow(await runHookCommand('hook'))
@@ -237,11 +268,11 @@ export async function cliMain(argv: string[], startServer: () => Promise<unknown
       // fixed at launch; a settings edit reaches nothing that is already running (see killSwitch.ts).
       return runDisableCli(argv.slice(1))
     case 'enable':
-      return runEnableCli()
+      return runEnableCli(forceInstall)
     case 'telemetry':
       return runTelemetryCli(argv.slice(1))
     case 'setup':
-      return runSetupCli(argv.slice(1))
+      return runSetupCli(argv.slice(1), forceInstall)
     case 'server':
       await serverCommand(argv.slice(1))
       return 0

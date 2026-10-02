@@ -1,32 +1,29 @@
-// Raw-body capture must be OPT-IN, and turning it off must STICK (TRDD-BKF5NZD3).
-//
-// The defect these tests pin: OTEL_LOG_RAW_API_BODIES was an unconditionally-owned telemetry key that
-// the server force-converged on EVERY boot. Deleting it from settings.json was therefore futile — any
-// hook that revived the server put it straight back (measured on 2026-07-14: removed 04:22, re-added
-// 15:07), and Claude Code kept dumping the whole conversation to disk on every request (~35 GB/day).
-// So the contract is: OFF by default; OFF actively DELETES the key; OFF survives a re-converge; and
-// no undo path (uninstall) may resurrect it.
+// Raw-body capture is MANDATORY (owner reversal 2026-10-02 of TRDD-BKF5NZD3, under TRDD-AGZ0XZKW):
+// "raw body dumps is not an optin, its mandatory". There is no knob, no env override and no delete
+// path any more — OTEL_LOG_RAW_API_BODIES is a plain owned telemetry key, converged on install and on
+// every CLI launch. These tests pin that, plus the single bodies-dir resolution and the reader scope.
 import * as assert from 'assert'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
-import {
-  RAW_BODIES_ENV, RAW_BODIES_KEY, effectiveBodiesDir, loadCaptureConfig, rawBodyCaptureEnabled,
-  rawBodyCaptureWithSource, resolveBodiesReadScope, setRawBodyCapture,
-} from '../captureConfig'
-import { ensureTelemetryConfig, ownedTelemetryKeys, removeTelemetryConfig } from '../telemetryConfig'
+import { RAW_BODIES_KEY, effectiveBodiesDir, resolveBodiesReadScope } from '../captureConfig'
+import { TelemetryConflictError, ensureTelemetryConfig, ownedTelemetryKeys, removeTelemetryConfig } from '../telemetryConfig'
 
 function tmp(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'agentlens-capture-'))
 }
 
-/** A settings.json + the telemetryConfig options pointing at it. Never touches the real ~/.claude. */
+/** A settings.json + the telemetryConfig options pointing at it. Never touches the real ~/.claude, and pins
+ *  the managed-settings paths and the process env so a developer's own OTEL_* exports cannot leak in. */
 function fixture(): { dir: string; settingsPath: string; markerPath: string; bodiesDir: string; opts: Record<string, unknown> } {
   const dir = tmp()
   const settingsPath = path.join(dir, 'settings.json')
   const markerPath = path.join(dir, 'telemetry-managed.json')
   const bodiesDir = path.join(dir, 'otel-bodies')
-  return { dir, settingsPath, markerPath, bodiesDir, opts: { settingsPath, markerPath, bodiesDir, dataDir: dir, otlpPort: 4318 } }
+  return {
+    dir, settingsPath, markerPath, bodiesDir,
+    opts: { settingsPath, markerPath, bodiesDir, dataDir: dir, otlpPort: 4318, managedSettingsPaths: [], processEnv: {} },
+  }
 }
 
 function envOf(settingsPath: string): Record<string, string> {
@@ -34,211 +31,86 @@ function envOf(settingsPath: string): Record<string, string> {
   return s.env ?? {}
 }
 
-suite('captureConfig — the durable opt-in knob', () => {
-  teardown(() => { delete process.env[RAW_BODIES_ENV] })
-
-  test('default is OFF — a setting that silently costs ~35 GB/day is not a default', () => {
-    const dir = tmp()
-    const { enabled, source } = rawBodyCaptureWithSource(dir, {})
-    assert.strictEqual(enabled, false)
-    assert.strictEqual(source, 'default')
-  })
-
-  test('the file setting is honored and round-trips', () => {
-    const dir = tmp()
-    setRawBodyCapture(dir, true)
-    assert.deepStrictEqual(loadCaptureConfig(dir), { rawBodies: true })
-    assert.deepStrictEqual(rawBodyCaptureWithSource(dir, {}), { enabled: true, source: 'file' })
-    setRawBodyCapture(dir, false)
-    assert.deepStrictEqual(rawBodyCaptureWithSource(dir, {}), { enabled: false, source: 'file' })
-  })
-
-  test('env overrides the file (ops override, same precedence as retention)', () => {
-    const dir = tmp()
-    setRawBodyCapture(dir, false)
-    assert.strictEqual(rawBodyCaptureEnabled(dir, { [RAW_BODIES_ENV]: 'on' }), true)
-    setRawBodyCapture(dir, true)
-    assert.strictEqual(rawBodyCaptureEnabled(dir, { [RAW_BODIES_ENV]: 'off' }), false)
-  })
-
-  test('a typo in the env var is NOT read as consent — it falls through to the file/default', () => {
-    const dir = tmp()
-    // "maybe" must not enable a 35 GB/day sink. Anything unrecognized falls through.
-    assert.strictEqual(rawBodyCaptureEnabled(dir, { [RAW_BODIES_ENV]: 'maybe' }), false)
-    setRawBodyCapture(dir, true)
-    assert.strictEqual(rawBodyCaptureEnabled(dir, { [RAW_BODIES_ENV]: 'maybe' }), true) // file still wins
-  })
-
-  test('setting capture PRESERVES the retention section — one file, two sections', () => {
-    const dir = tmp()
-    fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ retention: { bodiesMaxGb: 4 } }))
-    setRawBodyCapture(dir, true)
-    const obj = JSON.parse(fs.readFileSync(path.join(dir, 'config.json'), 'utf-8'))
-    assert.deepStrictEqual(obj.retention, { bodiesMaxGb: 4 }, 'retention must survive a capture write')
-    assert.deepStrictEqual(obj.capture, { rawBodies: true })
-  })
-
-  test('a corrupt config.json is REFUSED, never clobbered', () => {
-    const dir = tmp()
-    fs.writeFileSync(path.join(dir, 'config.json'), '{ not json')
-    assert.throws(() => setRawBodyCapture(dir, true))
-    assert.strictEqual(fs.readFileSync(path.join(dir, 'config.json'), 'utf-8'), '{ not json', 'left untouched')
-  })
-
-  test('a missing/corrupt config reads as all-defaults — config must never crash server boot', () => {
-    const dir = tmp()
-    assert.deepStrictEqual(loadCaptureConfig(dir), {}) // absent
-    fs.writeFileSync(path.join(dir, 'config.json'), '{ not json')
-    assert.deepStrictEqual(loadCaptureConfig(dir), {}) // corrupt → defaults (and the default is SAFE)
-    assert.strictEqual(rawBodyCaptureEnabled(dir, {}), false)
-  })
-})
-
-suite('telemetry converge — capture off must actually stop the burn', () => {
-  test('capture OFF: the key is never written', async () => {
+suite('raw-body capture is mandatory — the key is always owned and always converged', () => {
+  test('a plain install writes the key, pointing at the bodies dir', async () => {
     const f = fixture()
-    await ensureTelemetryConfig({ ...f.opts, captureRawBodies: false })
-    assert.ok(!(RAW_BODIES_KEY in envOf(f.settingsPath)), 'must not wire a sink the user did not ask for')
-    // ...but the rest of the telemetry wiring IS applied — capture is opt-in, not telemetry itself.
-    assert.strictEqual(envOf(f.settingsPath).CLAUDE_CODE_ENABLE_TELEMETRY, '1')
-  })
-
-  test('capture ON: the key IS written (the feature still works — it is opt-in, not removed)', async () => {
-    const f = fixture()
-    await ensureTelemetryConfig({ ...f.opts, captureRawBodies: true })
+    await ensureTelemetryConfig(f.opts)
     assert.strictEqual(envOf(f.settingsPath)[RAW_BODIES_KEY], `file:${f.bodiesDir}`)
   })
 
-  test('THE BUG: converging with capture off DELETES a key left over from when it was on', async () => {
+  test('a key that went missing is RESTORED by the next converge (the per-launch repair path)', async () => {
     const f = fixture()
-    await ensureTelemetryConfig({ ...f.opts, captureRawBodies: true })
+    await ensureTelemetryConfig(f.opts)
+    const s = JSON.parse(fs.readFileSync(f.settingsPath, 'utf-8')) as { env: Record<string, string> }
+    delete s.env[RAW_BODIES_KEY]
+    fs.writeFileSync(f.settingsPath, JSON.stringify(s, null, 2))
+    const r = await ensureTelemetryConfig(f.opts)
+    assert.strictEqual(r.changed, true)
     assert.strictEqual(envOf(f.settingsPath)[RAW_BODIES_KEY], `file:${f.bodiesDir}`)
-
-    // The user turns capture off. Merely dropping the key from `owned` would leave it in the file
-    // forever (the converge loop only touches OWNED keys) and Claude Code would keep writing.
-    const r = await ensureTelemetryConfig({ ...f.opts, captureRawBodies: false })
-    assert.ok(r.removed.includes(RAW_BODIES_KEY), 'ensure must REPORT the removal')
-    assert.ok(!(RAW_BODIES_KEY in envOf(f.settingsPath)), 'ensure must DELETE the key, not just stop adding it')
   })
 
-  test('THE REGRESSION GUARD: a second boot must NOT re-arm it', async () => {
+  test('a key pointing at a DIFFERENT dir is another pipeline: refused, nothing written (never silently re-pointed)', async () => {
     const f = fixture()
-    await ensureTelemetryConfig({ ...f.opts, captureRawBodies: true })
-    await ensureTelemetryConfig({ ...f.opts, captureRawBodies: false })
-    // This is the exact loop that defeated the 04:22 fix: a hook revived the server, the server
-    // re-converged, and the key came back. It must now stay gone across any number of boots.
-    await ensureTelemetryConfig({ ...f.opts, captureRawBodies: false })
-    await ensureTelemetryConfig({ ...f.opts, captureRawBodies: false })
-    assert.ok(!(RAW_BODIES_KEY in envOf(f.settingsPath)), 'a server boot must never resurrect the burn')
+    fs.writeFileSync(f.settingsPath, JSON.stringify({ env: { [RAW_BODIES_KEY]: 'file:/my/own/dir', USER_KEY: 'kept' } }, null, 2))
+    const before = fs.readFileSync(f.settingsPath, 'utf-8')
+    await assert.rejects(ensureTelemetryConfig(f.opts), TelemetryConflictError)
+    assert.strictEqual(fs.readFileSync(f.settingsPath, 'utf-8'), before)
   })
 
-  test('capture off does NOT clobber a sink the user points somewhere else', async () => {
+  test('a repeated converge is idempotent — no change, key still present', async () => {
     const f = fixture()
-    fs.writeFileSync(f.settingsPath, JSON.stringify({ env: { [RAW_BODIES_KEY]: 'file:/my/own/dir' } }, null, 2))
-    const r = await ensureTelemetryConfig({ ...f.opts, captureRawBodies: false })
-    assert.ok(!r.removed.includes(RAW_BODIES_KEY))
-    assert.strictEqual(envOf(f.settingsPath)[RAW_BODIES_KEY], 'file:/my/own/dir',
-      'we only delete the value WE would have written — a user-chosen sink is theirs')
+    await ensureTelemetryConfig(f.opts)
+    const again = await ensureTelemetryConfig(f.opts)
+    assert.strictEqual(again.changed, false)
+    assert.strictEqual(envOf(f.settingsPath)[RAW_BODIES_KEY], `file:${f.bodiesDir}`)
   })
 
-  test('uninstall must NOT restore the key while capture is off', async () => {
+  test('uninstall restores the PRIOR state of the key like every other owned key (there is no capture-off state)', async () => {
     const f = fixture()
-    // Reproduce THIS machine's marker: the user had the key BEFORE AgentLens ever ran, so a faithful
-    // "restore prior state" uninstall would put the ~35 GB/day sink back — an uninstall that makes
-    // the burn WORSE. Capture-off must outlive the removal of our wiring.
-    fs.writeFileSync(f.settingsPath, JSON.stringify({ env: { [RAW_BODIES_KEY]: `file:${f.bodiesDir}` } }, null, 2))
-    await ensureTelemetryConfig({ ...f.opts, captureRawBodies: true })   // marker records hadKey:true
-    await ensureTelemetryConfig({ ...f.opts, captureRawBodies: false })  // user turns it off
-
-    const r = await removeTelemetryConfig({ ...f.opts, captureRawBodies: false })
-    assert.ok(!r.restored.includes(RAW_BODIES_KEY), 'uninstall must not resurrect the burn')
+    await ensureTelemetryConfig(f.opts)
+    await removeTelemetryConfig(f.opts)
     assert.ok(!(RAW_BODIES_KEY in envOf(f.settingsPath)))
   })
 
-  test('ownedTelemetryKeys reflects the same decision ensure acts on (verify cannot drift)', () => {
-    const off = ownedTelemetryKeys('/b', 4318, false)
-    const on = ownedTelemetryKeys('/b', 4318, true)
-    assert.ok(!(RAW_BODIES_KEY in off), 'setup must not VERIFY a key ensure deliberately deleted')
-    assert.strictEqual(on[RAW_BODIES_KEY], 'file:/b')
+  test('ownedTelemetryKeys always carries the key (setup VERIFY demands exactly what ensure writes)', () => {
+    assert.strictEqual(ownedTelemetryKeys('/b', 4318)[RAW_BODIES_KEY], 'file:/b')
   })
 })
 
 // The single-writer contract (TRDD-Z53IJFE9): the RAM-disk spool is REMOVED, so the bodies dir is
 // always the SSD dir under the data dir. There is ONE resolution of the bodies dir
 // (effectiveBodiesDir), and every writer of ensureTelemetryConfig must converge the SAME value.
-suite('effectiveBodiesDir — the one bodies-dir resolution (TRDD-Z53IJFE9 × TRDD-BKF5NZD3 converge)', () => {
-  test('capture on → the SSD dir under the data dir (the removed spool can never redirect it)', () => {
+suite('effectiveBodiesDir — the one bodies-dir resolution (TRDD-Z53IJFE9)', () => {
+  test('the SSD dir under the data dir', () => {
     const dir = tmp()
-    assert.strictEqual(effectiveBodiesDir(dir, true), path.join(dir, 'otel-bodies'))
+    assert.strictEqual(effectiveBodiesDir(dir), path.join(dir, 'otel-bodies'))
   })
-  test('capture off → the same SSD dir (the knob changes the key, never the path)', () => {
-    const dir = tmp()
-    assert.strictEqual(effectiveBodiesDir(dir, false), path.join(dir, 'otel-bodies'))
-  })
-  test('a legacy spool path in config.json is IGNORED (and dropped on the next capture write)', () => {
-    const dir = tmp()
-    fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ capture: { rawBodies: true, spoolDir: '/Volumes/TestSpool/otel-bodies' } }))
-    assert.strictEqual(effectiveBodiesDir(dir, true), path.join(dir, 'otel-bodies'))
-    setRawBodyCapture(dir, false)
-    assert.deepStrictEqual(loadCaptureConfig(dir), { rawBodies: false }, 'the legacy spool key is dropped')
+
+  test('a BLIND converge (the server-boot shape) writes that SSD value', async () => {
+    const f = fixture()
+    const { bodiesDir: _omit, ...blind } = f.opts as { bodiesDir: string } & Record<string, unknown>
+    await ensureTelemetryConfig(blind)
+    assert.strictEqual(envOf(f.settingsPath)[RAW_BODIES_KEY], `file:${path.join(f.dir, 'otel-bodies')}`)
   })
 })
 
 // The READER's counterpart (TRDD-8N3KQW2R). effectiveBodiesDir answers "where should Claude Code
-// WRITE now" — a single answer. A reader needs every dir that can still HOLD bodies: capture may be
-// off while yesterday's corpus is still on disk. Resolving readers through the writer's answer is
-// what made investigate_burn report "nothing burned here" during a measured 2.3M tok/min burn.
+// WRITE" — a single answer. A reader needs to know which dirs exist and which are missing, so it can
+// say WHY it is blind instead of reporting an empty window as an empty world.
 suite('resolveBodiesReadScope — where a READER looks (TRDD-8N3KQW2R)', () => {
   test('an existing bodies dir is the one scanned dir', () => {
     const dir = tmp()
     fs.mkdirSync(path.join(dir, 'otel-bodies'), { recursive: true })
-    setRawBodyCapture(dir, true)
-    const s = resolveBodiesReadScope(dir, {})
+    const s = resolveBodiesReadScope(dir)
     assert.deepStrictEqual(s.dirs, [path.join(dir, 'otel-bodies')])
     assert.deepStrictEqual(s.missing, [])
     assert.strictEqual(s.spoolConfigured, false)
   })
 
   test('a body dir that does not exist is reported missing, not silently skipped', () => {
-    // Between `config set captureRawBodies on` and the first mkdir the dir is simply absent, and
-    // a reader that hides that fact reports an empty window as an empty world.
     const dir = tmp()
-    setRawBodyCapture(dir, true)
-    const s = resolveBodiesReadScope(dir, {})
+    const s = resolveBodiesReadScope(dir)
     assert.deepStrictEqual(s.dirs, [])
     assert.deepStrictEqual(s.missing, [path.join(dir, 'otel-bodies')])
-  })
-
-  test('capture OFF still resolves the dirs — old bodies remain readable after capture stops', () => {
-    const dir = tmp()
-    fs.mkdirSync(path.join(dir, 'otel-bodies'), { recursive: true })
-    setRawBodyCapture(dir, false)
-    const s = resolveBodiesReadScope(dir, {})
-    assert.strictEqual(s.captureOn, false)
-    assert.deepStrictEqual(s.dirs, [path.join(dir, 'otel-bodies')], 'a reader must still see the dir capture wrote yesterday')
-  })
-
-  test('nothing on disk → no dirs, and the candidate listed as missing', () => {
-    const dir = tmp()
-    const s = resolveBodiesReadScope(dir, {})
-    assert.deepStrictEqual(s.dirs, [])
-    assert.strictEqual(s.missing.length, 1)
-  })
-
-  test('exactly one candidate, never a duplicate', () => {
-    const dir = tmp()
-    fs.mkdirSync(path.join(dir, 'otel-bodies'), { recursive: true })
-    setRawBodyCapture(dir, true)
-    assert.deepStrictEqual(resolveBodiesReadScope(dir, {}).dirs, [path.join(dir, 'otel-bodies')])
-  })
-
-  test('a BLIND converge (the server-boot shape) writes the SSD value, not a stale spool path', async () => {
-    const f = fixture()
-    setRawBodyCapture(f.dir, true)
-    // No bodiesDir in the options — exactly how the server boot calls ensure. The resolved value
-    // must be the SSD dir under the data dir (a stale legacy spool path in config.json is ignored).
-    const { bodiesDir: _omit, ...blind } = f.opts as { bodiesDir: string } & Record<string, unknown>
-    await ensureTelemetryConfig(blind)
-    assert.strictEqual(envOf(f.settingsPath)[RAW_BODIES_KEY], `file:${path.join(f.dir, 'otel-bodies')}`)
   })
 })

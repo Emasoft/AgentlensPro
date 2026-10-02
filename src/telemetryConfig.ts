@@ -22,8 +22,9 @@
 import * as path from 'path'
 import * as os from 'os'
 import * as fs from 'fs/promises'
+import * as fsSync from 'fs'
 import { safeConfigEdit, SafeEditOp } from './safeConfigEdit'
-import { rawBodyCaptureEnabled, effectiveBodiesDir, RAW_BODIES_KEY } from './captureConfig'
+import { effectiveBodiesDir, RAW_BODIES_KEY } from './captureConfig'
 import { envPort } from './cli/cliCore'
 
 export interface TelemetryConfigOptions {
@@ -35,14 +36,16 @@ export interface TelemetryConfigOptions {
   bodiesDir?: string
   /** OTLP collector port the endpoint should point at. Default: 4318 */
   otlpPort?: number
-  /** AgentLens data dir — where the durable capture knob lives. Default: ~/.agentlens */
+  /** AgentLens data dir — the default bodies dir lives under it. Default: ~/.agentlens */
   dataDir?: string
-  /**
-   * Capture raw API bodies? Default: resolved from the durable knob (env > config.json > OFF).
-   * Pin it only in tests, or where the caller has already resolved it. When FALSE, ensure() actively
-   * DELETES our key from settings.json — see the note there (TRDD-BKF5NZD3).
-   */
-  captureRawBodies?: boolean
+  /** Enterprise managed-settings files the foreign-pipeline guard reads. Default: the OS locations
+   *  (managedSettingsPaths()). Tests pin it so a developer's real company config cannot leak in. */
+  managedSettingsPaths?: string[]
+  /** Process env the foreign-pipeline guard reads. Default: process.env. */
+  processEnv?: NodeJS.ProcessEnv
+  /** `--force-install-telemetry`: replace foreign keys in the USER settings.json (one transaction, backup
+   *  kept) instead of refusing. Managed settings are replaced separately (forceInstallManagedTelemetry). */
+  forceInstall?: boolean
 }
 
 /**
@@ -62,14 +65,17 @@ interface TelemetryMarker {
   /** did settings.env exist at all before AgentLens first managed it? */
   envPreexisting: boolean
   keys: Record<string, ManagedKeyRecord>
+  /** Every value agentlenspro itself wrote per key (newest last, capped) — the OWNERSHIP EVIDENCE the
+   *  foreign-pipeline guard needs: a value in this list is ours to converge, any other differing value
+   *  is someone else's pipeline. Absent in markers written before 2026-10-02 (legacy: see
+   *  detectTelemetryConflicts). */
+  written?: Record<string, string[]>
 }
 
 export interface EnsureResult {
   changed: boolean
   added: string[]
   overrode: string[]
-  /** Owned keys DELETED because the user opted out of them (today: raw-body capture). */
-  removed: string[]
   settingsPath: string
   markerPath: string
   bodiesDir: string
@@ -92,40 +98,25 @@ export interface StatusResult {
 }
 
 function resolveOptions(options: TelemetryConfigOptions): {
-  settingsPath: string; markerPath: string; bodiesDir: string; otlpPort: number; captureRawBodies: boolean
-  /** Every `file:` value this installer could have written, for the capture-OFF delete guard. */
+  settingsPath: string; markerPath: string; bodiesDir: string; otlpPort: number
+  /** Every `file:` value agentlenspro itself could have written to OTEL_LOG_RAW_API_BODIES — the
+   *  ownership evidence the foreign-pipeline guard compares against (detectTelemetryConflicts). */
   ownedBodyValues: string[]
 } {
   const home = os.homedir()
   const dataDir = options.dataDir ?? path.join(home, '.agentlens')
-  // Resolved from the durable knob (env > config.json > OFF) unless the caller pins it. This is
-  // the whole point of TRDD-BKF5NZD3: capture is a DECISION, not wiring we force-converge.
-  const captureRawBodies = options.captureRawBodies ?? rawBodyCaptureEnabled(dataDir, process.env)
-  // Resolved ONCE and reused by both `bodiesDir` and `ownedBodyValues`. Duplicating the expression
-  // is how the two silently diverge, and a divergence here re-opens exactly the bug this file was
-  // fixed for: the delete guard stops recognising a value we ourselves wrote.
-  const resolvedBodiesDir = options.bodiesDir ?? effectiveBodiesDir(dataDir, captureRawBodies)
+  const bodiesDir = options.bodiesDir ?? effectiveBodiesDir(dataDir)
   return {
     settingsPath: options.settingsPath ?? path.join(home, '.claude', 'settings.json'),
     markerPath:   options.markerPath   ?? path.join(home, '.agentlens', 'telemetry-managed.json'),
     // Default through the ONE bodies-dir resolution (the SSD dir under the data dir, TRDD-Z53IJFE9 —
     // the RAM-disk spool is removed) so every caller converges the same value.
-    bodiesDir:    resolvedBodiesDir,
+    bodiesDir,
     otlpPort:     options.otlpPort     ?? 4318,
-    captureRawBodies,
-    // BOTH values this installer could ever have written, because the capture-OFF delete guard must
-    // recognise a key written while capture was ON. The removed RAM-disk spool's bodies path is
-    // carried as a LITERAL: a legacy install upgraded past TRDD-Z53IJFE9 still has
-    // `file:/Volumes/AgentLensSpool/otel-bodies` in settings.json, and capture-OFF must delete it —
-    // the 2026-08-06 outage was exactly this guard not matching the then-current spool value, which
-    // let the key survive every repair until the 2 GB volume filled and capture died silently.
-    ownedBodyValues: [
-      ...new Set([
-        resolvedBodiesDir,
-        effectiveBodiesDir(dataDir, false),
-        '/Volumes/AgentLensSpool/otel-bodies',
-      ]),
-    ].map(d => `file:${d}`),
+    // The removed RAM-disk spool's bodies path is carried as a LITERAL: a legacy install upgraded past
+    // TRDD-Z53IJFE9 still has `file:/Volumes/AgentLensSpool/otel-bodies` in settings.json — a value
+    // agentlenspro wrote itself, so it is OURS to converge, not a foreign pipeline.
+    ownedBodyValues: [...new Set([bodiesDir, effectiveBodiesDir(dataDir), '/Volumes/AgentLensSpool/otel-bodies'])].map(d => `file:${d}`),
   }
 }
 
@@ -135,14 +126,17 @@ function resolveOptions(options: TelemetryConfigOptions): {
  * this session (TRDD-M36W16L0 STATE). Every value is a string — settings.json env values
  * are strings, and Claude Code reads these as env vars.
  *
- * Everything here is cheap, idempotent WIRING (where to send, in what format, how often) — which is
- * why force-converging it on every server boot is correct. `OTEL_LOG_RAW_API_BODIES` is the ONE
- * exception: it is a capture policy costing ~35 GB/day (Claude Code re-serializes the whole
- * conversation to disk on every request), so it is owned ONLY when the user opted in. While it was
- * owned unconditionally, deleting it from settings.json was futile — the next server boot put it
- * back (TRDD-BKF5NZD3).
+ * Everything here is idempotent WIRING that every install owns and force-converges on install and on
+ * every CLI launch (autoSetup.ts) — including `OTEL_LOG_RAW_API_BODIES`. OWNER REVERSAL 2026-10-02
+ * (TRDD-AGZ0XZKW, reversing the opt-in of TRDD-BKF5NZD3): raw body dumps are MANDATORY — "if you
+ * install agentlenspro you know you are installing a tool that reads the raw dumps and all telemetry
+ * and hooks and the status line, etc. all of it." Claude Code re-serializes the whole conversation
+ * to disk on every request (~35 GB/day); that cost is ACCEPTED and bounded by the store's retention:
+ * live bodies are archived oldest-first past `bodiesMaxGb` (AGENTLENS_BODIES_MAX_GB, default 8) and
+ * archives are deleted after `bodiesRetentionDays` (AGENTLENS_BODIES_RETENTION_DAYS, default 31) —
+ * src/retentionConfig.ts. There is no opt-out and no delete path.
  */
-function ownedKeys(bodiesDir: string, otlpPort: number, captureRawBodies: boolean): Record<string, string> {
+function ownedKeys(bodiesDir: string, otlpPort: number): Record<string, string> {
   return {
     CLAUDE_CODE_ENABLE_TELEMETRY:                      '1',
     CLAUDE_CODE_ENHANCED_TELEMETRY_BETA:               '1',
@@ -159,7 +153,7 @@ function ownedKeys(bodiesDir: string, otlpPort: number, captureRawBodies: boolea
     OTEL_LOG_TOOL_DETAILS:                             '1',
     OTEL_LOG_TOOL_CONTENT:                             '1',
     OTEL_LOG_ASSISTANT_RESPONSES:                      '1',
-    ...(captureRawBodies ? { [RAW_BODIES_KEY]: `file:${bodiesDir}` } : {}),
+    [RAW_BODIES_KEY]:                                  `file:${bodiesDir}`,
     OTEL_METRICS_INCLUDE_SESSION_ID:                   'true',
     OTEL_METRICS_INCLUDE_VERSION:                      'true',
     OTEL_METRICS_INCLUDE_ENTRYPOINT:                   'true',
@@ -170,11 +164,158 @@ function ownedKeys(bodiesDir: string, otlpPort: number, captureRawBodies: boolea
 /** The expected key→value telemetry env table for a given bodies dir / OTLP port. Exported
  *  for `agentlenspro setup`, whose VERIFY step must compare the settings file against the
  *  expected values through a path independent of the writer (falsify-the-layer discipline) —
- *  re-exporting the ONE table keeps setup from growing a drift-prone copy. `captureRawBodies` is
- *  REQUIRED (not defaulted) so a caller cannot accidentally verify against a table that demands a
- *  key the user opted out of — verify must expect exactly what ensure writes. */
-export function ownedTelemetryKeys(bodiesDir: string, otlpPort: number, captureRawBodies: boolean): Record<string, string> {
-  return ownedKeys(bodiesDir, otlpPort, captureRawBodies)
+ *  re-exporting the ONE table keeps setup from growing a drift-prone copy. */
+export function ownedTelemetryKeys(bodiesDir: string, otlpPort: number): Record<string, string> {
+  return ownedKeys(bodiesDir, otlpPort)
+}
+// ── Foreign-pipeline guard (owner order 2026-10-02, TRDD-AGZ0XZKW) ──────────────────────────────
+// "if the tool finds an already configured telemetry that uses different parameters and outputs from
+// those of agentlenspro, then it must stop and report an error message". A company intranet collector
+// or central gateway is typically set in the ENTERPRISE MANAGED settings (which override user
+// settings) or already exported in the shell, so all three places are read. The verdict is computed
+// BEFORE any write: a mixed state (one foreign key + one absent key) writes NOTHING.
+// There is NO skip path (owner order 2026-10-02: "without telemetry raw dumps agentlenspro is non
+// functional, so it cannot be skipped"): a foreign verdict stops the run with an error and disables
+// agentlenspro (foreignTelemetry.ts). `--force-install-telemetry` (per invocation, never persisted)
+// is "exactly to overwrite the company settings of telemetry, and write the agentlenspro settings
+// instead": it replaces the foreign keys in the user settings.json AND in the managed-settings file
+// (when writable — never by privilege escalation). A conflicting SHELL export cannot be fixed by any
+// settings edit, so that one is reported and the run stops.
+
+export interface TelemetryConflict {
+  key: string
+  /** the file the value came from, or "process environment" */
+  source: string
+  /** where it lives: ~/.claude/settings.json (replaceable by --force-install), the enterprise managed
+   *  settings (an administrator's), or the shell env (the user unsets it) */
+  scope: 'user' | 'managed' | 'shell'
+  kind: 'endpoint' | 'path' | 'protocol' | 'exporter' | 'headers' | 'value'
+  /** human text; a credential-bearing value is withheld, a URL is shown without userinfo/query */
+  detail: string
+}
+
+export class TelemetryConflictError extends Error {
+  constructor(readonly conflicts: TelemetryConflict[]) {
+    super(formatTelemetryConflicts(conflicts))
+    this.name = 'TelemetryConflictError'
+  }
+}
+
+export function formatTelemetryConflicts(conflicts: TelemetryConflict[], verb?: string): string {
+  // With a verb (the dispatcher's refusal) the message is written for an AI agent as much as a human:
+  // what happened, why, the exact reactivation command — in that order, one sentence each.
+  const lines = verb !== undefined
+    ? [`agentlenspro is DISABLED — ${verb || 'start'} did not run.`, 'Reason: another telemetry setup is already in place, and agentlenspro cannot work without its own telemetry and raw body dumps; it will not touch that setup unless told to.']
+    : ['agentlenspro cannot run: another telemetry setup is already in place, and agentlenspro cannot work without its own telemetry and raw body dumps. It will not touch that setup unless told to.']
+  for (const c of conflicts) lines.push(`  ${c.key} in ${c.source}: ${c.kind} — ${c.detail}`)
+  const files = [...new Set(conflicts.filter(c => c.scope !== 'shell').map(c => c.source))]
+  if (files.length > 0) {
+    lines.push(`To reactivate: remove the existing telemetry setup from ${files.join(', ')}, or run: agentlenspro --force-install-telemetry <any command> (it REPLACES the existing telemetry with agentlenspro's; a managed-settings file needs administrator rights).`)
+  }
+  for (const c of conflicts.filter(c => c.scope === 'shell')) {
+    lines.push(`To reactivate: unset ${c.key} in your shell — it is exported there, and no settings edit (and no flag) can change the shell.`)
+  }
+  return lines.join('\n')
+}
+
+/** Enterprise managed-settings files (they override ~/.claude/settings.json, so a company gateway
+ *  lives here). macOS / Linux+WSL / Windows locations from the Claude Code settings docs — from
+ *  documentation knowledge, NOT verified against a live managed install (none exists on the dev
+ *  machine). Each is also scanned as `<dir>/managed-settings.d/*.json` (drop-in directory). */
+export function managedSettingsPaths(): string[] {
+  return [
+    '/Library/Application Support/ClaudeCode/managed-settings.json',
+    '/etc/claude-code/managed-settings.json',
+    'C:\\Program Files\\ClaudeCode\\managed-settings.json',
+  ]
+}
+
+/** Not written by agentlenspro: any of these present means ANOTHER pipeline is configured. */
+const OTHER_PIPELINE_KEYS: ReadonlyArray<{ key: string; kind: TelemetryConflict['kind'] }> = [
+  { key: 'OTEL_EXPORTER_OTLP_HEADERS', kind: 'headers' },
+  { key: 'OTEL_EXPORTER_OTLP_TRACES_HEADERS', kind: 'headers' },
+  { key: 'OTEL_EXPORTER_OTLP_LOGS_HEADERS', kind: 'headers' },
+  { key: 'OTEL_EXPORTER_OTLP_METRICS_HEADERS', kind: 'headers' },
+  { key: 'OTEL_EXPORTER_OTLP_TRACES_ENDPOINT', kind: 'endpoint' },
+  { key: 'OTEL_EXPORTER_OTLP_LOGS_ENDPOINT', kind: 'endpoint' },
+  { key: 'OTEL_EXPORTER_OTLP_METRICS_ENDPOINT', kind: 'endpoint' },
+]
+
+const LOCAL_ENDPOINT = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?\/?$/
+const SECRET_KEY = /HEADERS|TOKEN|SECRET|PASSWORD|AUTH|CREDENTIAL/i
+
+function kindOfKey(key: string): TelemetryConflict['kind'] {
+  if (key === RAW_BODIES_KEY) return 'path'
+  if (key.endsWith('_ENDPOINT')) return 'endpoint'
+  if (key.endsWith('_PROTOCOL')) return 'protocol'
+  if (key.endsWith('_EXPORTER')) return 'exporter'
+  return 'value'
+}
+
+/** Printable form of a value: withheld for credential-bearing keys, URLs without userinfo/query. */
+function shown(key: string, value: string): string {
+  if (SECRET_KEY.test(key)) return 'value withheld'
+  try {
+    const u = new URL(value)
+    return u.protocol === 'file:' ? value : `${u.protocol}//${u.host}${u.pathname}`
+  } catch { return value }
+}
+
+function readEnvSync(file: string): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(fsSync.readFileSync(file, 'utf-8')) as { env?: unknown }
+    return parsed.env && typeof parsed.env === 'object' && !Array.isArray(parsed.env) ? parsed.env as Record<string, unknown> : {}
+  } catch { return {} } // absent or unparseable: ensureTelemetryConfig refuses an unparseable user file itself
+}
+
+function readMarkerSync(markerPath: string): TelemetryMarker | null {
+  try {
+    const m = JSON.parse(fsSync.readFileSync(markerPath, 'utf-8')) as TelemetryMarker
+    return m && typeof m.keys === 'object' && m.keys !== null ? m : null
+  } catch { return null }
+}
+
+/** Compute EVERY conflict, across ~/.claude/settings.json, the managed-settings files and the process
+ *  env, without writing anything. Per owned key: absent ok; equal to ours ok; a value agentlenspro
+ *  wrote earlier (marker `written`; for a marker that predates it, any key the marker manages; a
+ *  local OTLP endpoint; a known raw-body dir) ok; anything else = foreign. Managed settings and the
+ *  process env can only be judged by value (no marker covers them). */
+export function detectTelemetryConflicts(
+  options: TelemetryConfigOptions = {},
+): TelemetryConflict[] {
+  const { settingsPath, markerPath, bodiesDir, otlpPort, ownedBodyValues } = resolveOptions(options)
+  const owned = ownedKeys(bodiesDir, otlpPort)
+  const marker = readMarkerSync(markerPath)
+  const byValue = (key: string, v: string): boolean =>
+    (key === 'OTEL_EXPORTER_OTLP_ENDPOINT' && LOCAL_ENDPOINT.test(v)) || (key === RAW_BODIES_KEY && ownedBodyValues.includes(v))
+  const byMarker = (key: string, v: string): boolean =>
+    byValue(key, v) || (marker !== null && (marker.written ? (marker.written[key] ?? []).includes(v) : key in marker.keys))
+  const conflicts: TelemetryConflict[] = []
+  const scan = (env: Record<string, unknown>, source: string, scope: TelemetryConflict['scope'], isOurs: (key: string, v: string) => boolean): void => {
+    for (const [key, want] of Object.entries(owned)) {
+      const raw = env[key]
+      if (raw === undefined) continue
+      const v = String(raw)
+      if (v === want || isOurs(key, v)) continue
+      conflicts.push({ key, source, scope, kind: kindOfKey(key), detail: `found ${shown(key, v)}, agentlenspro wants ${shown(key, want)}` })
+    }
+    for (const { key, kind } of OTHER_PIPELINE_KEYS) {
+      const raw = env[key]
+      if (raw === undefined) continue
+      const v = String(raw)
+      if (kind === 'endpoint' && LOCAL_ENDPOINT.test(v)) continue // a local collector is not a company gateway
+      conflicts.push({ key, source, scope, kind, detail: `not managed by agentlenspro, so another telemetry pipeline is configured (found ${shown(key, v)})` })
+    }
+  }
+  scan(readEnvSync(settingsPath), settingsPath, 'user', byMarker)
+  for (const base of options.managedSettingsPaths ?? managedSettingsPaths()) {
+    const files = [base]
+    const dropIns = path.join(path.dirname(base), 'managed-settings.d')
+    try { files.push(...fsSync.readdirSync(dropIns).filter(f => f.endsWith('.json')).sort().map(f => path.join(dropIns, f))) } catch { /* no drop-in dir */ }
+    for (const f of files) scan(readEnvSync(f), f, 'managed', byValue)
+  }
+  scan(options.processEnv ?? process.env, 'process environment', 'shell', byValue)
+  return conflicts
 }
 
 /**
@@ -256,12 +397,17 @@ async function readMarker(markerPath: string): Promise<TelemetryMarker | null> {
  * so a later uninstall can restore it exactly.
  */
 export async function ensureTelemetryConfig(options: TelemetryConfigOptions = {}): Promise<EnsureResult> {
-  const { settingsPath, markerPath, bodiesDir, otlpPort, captureRawBodies, ownedBodyValues } = resolveOptions(options)
-  const owned = ownedKeys(bodiesDir, otlpPort, captureRawBodies)
+  const { settingsPath, markerPath, bodiesDir, otlpPort } = resolveOptions(options)
+  const owned = ownedKeys(bodiesDir, otlpPort)
 
   const { settings } = await readSettingsOrThrow(settingsPath)
   const { env, envPreexisting } = extractEnv(settings, settingsPath)
   const existingMarker = await readMarker(markerPath)
+
+  // Stop BEFORE any op if another telemetry pipeline is configured (see the guard above): the whole
+  // verdict is computed first, so a mixed state (one foreign key + one absent key) writes nothing.
+  const conflicts = detectTelemetryConflicts(options)
+  if (conflicts.length > 0 && !options.forceInstall) throw new TelemetryConflictError(conflicts)
 
   // Keep any prior-state records from an earlier install untouched — the FIRST record of a
   // key is the only truthful one. Overwriting it with the now-installed value would make
@@ -269,7 +415,6 @@ export async function ensureTelemetryConfig(options: TelemetryConfigOptions = {}
   const markerKeys: Record<string, ManagedKeyRecord> = { ...(existingMarker?.keys ?? {}) }
   const added: string[] = []
   const overrode: string[] = []
-  const removed: string[] = []
   let changed = false
 
   const ops: SafeEditOp[] = []
@@ -283,33 +428,29 @@ export async function ensureTelemetryConfig(options: TelemetryConfigOptions = {}
     if (env[key] !== value) { ops.push({ op: 'set', path: ['env', key], value }); changed = true }
   }
 
-  // Capture OFF must ACTIVELY DELETE the key, not merely stop owning it. Dropping it from `owned`
-  // is NOT enough: the loop above only touches owned keys, so a key already in settings.json would
-  // sit there forever and Claude Code would keep dumping every conversation to disk. This delete is
-  // what makes "off" mean off (TRDD-BKF5NZD3).
-  //
-  // Guard: delete ONLY a value WE would have written. A user who points the sink at their own
-  // directory made that choice deliberately and owns its cost — silently deleting a config we never
-  // wrote would be the same overreach that force-converging was.
-  //
-  // `ownedBodyValues` is that set, and it must cover every value we (or the removed RAM-disk spool,
-  // TRDD-Z53IJFE9) ever wrote. Comparing against `file:${bodiesDir}` alone was the 2026-08-06
-  // outage: at delete time capture is off by definition, so `bodiesDir` resolved to the DEFAULT dir
-  // and could never equal a key holding the then-configured SPOOL path. The key therefore survived
-  // every repair, Claude Code kept honouring it, and it filled the 2 GB RAM spool to 100% until
-  // capture died silently. Meanwhile the detector in cli/setup.ts tests PRESENCE, so setup reported
-  // drift, "wired" it, verified, and FAILED forever — the two halves disagreed on "a key we wrote".
-  if (!captureRawBodies && ownedBodyValues.includes(String(env[RAW_BODIES_KEY] ?? ''))) {
-    ops.push({ op: 'delete', path: ['env', RAW_BODIES_KEY] })
-    removed.push(RAW_BODIES_KEY)
+  // --force-install-telemetry only (otherwise conflicts is empty or we threw): the foreign-only keys
+  // (headers, per-signal endpoints) of the USER file go in the SAME transaction, and their prior values
+  // are recorded in the marker so an uninstall restores the company setup exactly.
+  for (const c of conflicts.filter(c => c.scope === 'user')) {
+    if (!OTHER_PIPELINE_KEYS.some(o => o.key === c.key) || !(c.key in env)) continue
+    if (!(c.key in markerKeys)) markerKeys[c.key] = { hadKey: true, priorValue: String(env[c.key]) }
+    ops.push({ op: 'delete', path: ['env', c.key] })
     changed = true
   }
 
+  // Remember what WE wrote (the ownership evidence for the guard). Seeded from a legacy marker's
+  // managed keys' current values is deliberately NOT done: only values written by this code count.
+  const written: Record<string, string[]> = { ...(existingMarker?.written ?? {}) }
+  for (const [key, value] of Object.entries(owned)) {
+    const list = written[key] ?? []
+    if (!list.includes(value)) written[key] = [...list, value].slice(-8)
+  }
   const marker: TelemetryMarker = {
     version: 1,
     managedAt: existingMarker?.managedAt ?? new Date().toISOString(),
     envPreexisting: existingMarker?.envPreexisting ?? envPreexisting,
     keys: markerKeys,
+    written,
   }
   const markerChanged = JSON.stringify(existingMarker) !== JSON.stringify(marker)
 
@@ -333,7 +474,55 @@ export async function ensureTelemetryConfig(options: TelemetryConfigOptions = {}
     await atomicWriteJson(markerPath, marker)
   }
 
-  return { changed, added, overrode, removed, settingsPath, markerPath, bodiesDir, backupPath }
+  return { changed, added, overrode, settingsPath, markerPath, bodiesDir, backupPath }
+}
+
+/** Thrown when the managed-settings file cannot be rewritten by this user (root-owned is normal). */
+export class ManagedSettingsNotWritableError extends Error {
+  constructor(readonly file: string, why: string) {
+    super(`${file} cannot be rewritten by this user (${why}) — replacing it needs administrator rights (e.g. re-run with sudo). agentlenspro never escalates privileges itself.`)
+    this.name = 'ManagedSettingsNotWritableError'
+  }
+}
+
+/** `--force-install-telemetry` for the enterprise managed-settings file(s): overwrite each conflicting
+ *  owned key with agentlenspro's value and delete the foreign-only keys, in ONE safeConfigEdit
+ *  transaction per file (its backup path is returned). Never escalates: an unwritable file throws
+ *  ManagedSettingsNotWritableError before anything is attempted. */
+export async function forceInstallManagedTelemetry(
+  conflicts: TelemetryConflict[], options: TelemetryConfigOptions = {},
+): Promise<Array<{ file: string; backupPath: string | null }>> {
+  const { bodiesDir, otlpPort } = resolveOptions(options)
+  const owned = ownedKeys(bodiesDir, otlpPort)
+  const byFile = new Map<string, TelemetryConflict[]>()
+  for (const c of conflicts.filter(c => c.scope === 'managed')) byFile.set(c.source, [...(byFile.get(c.source) ?? []), c])
+  const done: Array<{ file: string; backupPath: string | null }> = []
+  for (const [file, list] of byFile) {
+    for (const target of [file, path.dirname(file)]) {
+      try { fsSync.accessSync(target, fsSync.constants.W_OK) } catch (e) { throw new ManagedSettingsNotWritableError(file, `${path.basename(target) === path.basename(file) ? 'file' : 'directory'} not writable: ${(e as NodeJS.ErrnoException).code}`) }
+    }
+    const ops: SafeEditOp[] = list.map(c => c.key in owned
+      ? { op: 'set' as const, path: ['env', c.key], value: owned[c.key] }
+      : { op: 'delete' as const, path: ['env', c.key] })
+    const r = await safeConfigEdit(file, 'json', ops)
+    done.push({ file, backupPath: r.backupPath ?? null })
+  }
+  return done
+}
+
+/**
+ * Delete OTEL_LOG_RAW_API_BODIES from settings.json — ONLY for `agentlenspro disable` (the global
+ * emergency brake). Raw capture is mandatory for an enabled install, so this is the one deliberate
+ * strip, undone by `enable` (ensureTelemetryConfig re-converges it). Goes through safeConfigEdit
+ * like every settings.json write; returns false when the key was not there.
+ */
+export async function removeRawBodiesKey(options: TelemetryConfigOptions = {}): Promise<boolean> {
+  const { settingsPath } = resolveOptions(options)
+  const { settings } = await readSettingsOrThrow(settingsPath)
+  const { env } = extractEnv(settings, settingsPath)
+  if (!(RAW_BODIES_KEY in env)) return false
+  await safeConfigEdit(settingsPath, 'json', [{ op: 'delete', path: ['env', RAW_BODIES_KEY] }])
+  return true
 }
 
 /**
@@ -341,7 +530,7 @@ export async function ensureTelemetryConfig(options: TelemetryConfigOptions = {}
  * marker. Idempotent: with no marker there is nothing to undo. Never touches non-owned keys.
  */
 export async function removeTelemetryConfig(options: TelemetryConfigOptions = {}): Promise<RemoveResult> {
-  const { settingsPath, markerPath, captureRawBodies } = resolveOptions(options)
+  const { settingsPath, markerPath } = resolveOptions(options)
   const marker = await readMarker(markerPath)
   if (!marker) return { changed: false, restored: [], deleted: [], settingsPath }
 
@@ -369,17 +558,6 @@ export async function removeTelemetryConfig(options: TelemetryConfigOptions = {}
   const finalEnv: Record<string, string> = { ...env }
   const ops: SafeEditOp[] = []
   for (const [key, rec] of Object.entries(marker.keys)) {
-    // "Uninstall = restore prior state" is the right contract for WIRING — but not for raw-body
-    // capture the user has switched OFF. On this machine the marker truthfully records
-    // hadKey:true (the key predated AgentLens), so a faithful restore would put the ~35 GB/day sink
-    // BACK and Claude Code would resume dumping every conversation to disk — an uninstall that makes
-    // the burn worse. Capture-off is an explicit intent that must outlive the removal of our wiring,
-    // so we delete rather than restore. Turning capture back on re-installs it (TRDD-BKF5NZD3).
-    if (key === RAW_BODIES_KEY && !captureRawBodies) {
-      if (key in finalEnv) { ops.push({ op: 'delete', path: ['env', key] }); delete finalEnv[key] }
-      deleted.push(key)
-      continue
-    }
     if (rec.hadKey && rec.priorValue !== null) {
       if (finalEnv[key] !== rec.priorValue) ops.push({ op: 'set', path: ['env', key], value: rec.priorValue })
       finalEnv[key] = rec.priorValue // re-set exactly what the user had
@@ -411,8 +589,8 @@ export async function removeTelemetryConfig(options: TelemetryConfigOptions = {}
 
 /** Per-key install status for `agentlens telemetry status`. Tolerates a corrupt marker. */
 export async function telemetryConfigStatus(options: TelemetryConfigOptions = {}): Promise<StatusResult> {
-  const { settingsPath, markerPath, bodiesDir, otlpPort, captureRawBodies } = resolveOptions(options)
-  const owned = ownedKeys(bodiesDir, otlpPort, captureRawBodies)
+  const { settingsPath, markerPath, bodiesDir, otlpPort } = resolveOptions(options)
+  const owned = ownedKeys(bodiesDir, otlpPort)
   const { settings } = await readSettingsOrThrow(settingsPath)
   const env = (typeof settings.env === 'object' && settings.env !== null && !Array.isArray(settings.env))
     ? settings.env as Record<string, string>

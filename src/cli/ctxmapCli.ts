@@ -159,7 +159,7 @@ function safeReaddir(d: string): string[] {
  *  — the same defect once blinded investigate_burn). */
 function bodyScope(): ReturnType<typeof resolveBodiesReadScope> {
   const { dir } = resolveDataDir()
-  return resolveBodiesReadScope(dir, process.env)
+  return resolveBodiesReadScope(dir)
 }
 function bodyDirs(): string[] {
   return bodyScope().dirs
@@ -901,9 +901,7 @@ export async function runCtxmapCli(argv: string[]): Promise<number> {
         // in cliErrors.ts as "never emitted by a healthy invocation", so a harness that reads 64 goes
         // hunting for a bug in its own call. EXIT.UNKNOWN is that enum's own "no value in the feed".
         const scope = bodyScope()
-        console.error(`no captured requests found in: ${scope.dirs.join(', ') || '(no readable body dirs)'}`
-          + (scope.captureOn ? '' : ' — raw-body capture is OFF, so nothing is being written'
-            + ' (agentlenspro --install-otel wires it)'))
+        console.error(`no captured requests found in: ${scope.dirs.join(', ') || '(no readable body dirs)'}`)
         return EXIT.UNKNOWN
       }
       return emit(files.map(f => path.basename(f)).join('\n'), `${files.length} request(s)`)

@@ -70,8 +70,8 @@ workspace and model in each line, so it often ends the investigation by itself.
 > **It is a FORENSIC tool: it reads raw request/response bodies off disk, so it is only as good as
 > the capture.** If `coverage.blind` is set (or the verdict starts with `BLIND`), it saw NOTHING —
 > that is an absence of DATA, never evidence that nothing burned. `coverage.dirsScanned` /
-> `dirsMissing` tell you where it looked. Turn capture on with
-> `agentlenspro config set captureRawBodies on`, and meanwhile use **`agentlenspro --risk`** and
+> `dirsMissing` tell you where it looked. Run
+> `agentlenspro setup` (it wires raw-body capture), and meanwhile use **`agentlenspro --risk`** and
 > **`get_burn_status`** — they read the LIVE feed and never go blind. Never close an investigation
 > on a blind result: a `--windowHours 1` scan once reported "nothing burned here" while
 > `get_burn_status` showed 2.3M tokens/min, because it was reading the wrong directory

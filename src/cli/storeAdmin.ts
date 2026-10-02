@@ -92,7 +92,7 @@ export async function runStoreCli(argv: string[]): Promise<number> {
   // Locate each parked name's file across the live dirs (spool + legacy). A name whose file is
   // gone is a GHOST: its capture time is unrecoverable, so it is reported and LEFT PARKED —
   // inventing a ts for it would be fabrication (same rule the v1→v2 recovery followed).
-  const dirs = resolveBodiesReadScope(dataDir(), process.env).dirs
+  const dirs = resolveBodiesReadScope(dataDir()).dirs
   const found: string[] = []
   const ghosts: string[] = []
   const ambiguous: string[] = []

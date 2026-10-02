@@ -15,7 +15,7 @@ import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
 import { detectLegacySpool, SpoolMigrationDeps, runSpoolMigration, Ctx } from '../cli/setup'
-import { RAW_BODIES_ENV, RAW_BODIES_KEY, effectiveBodiesDir, rawBodyCaptureEnabled, setRawBodyCapture } from '../captureConfig'
+import { RAW_BODIES_KEY, effectiveBodiesDir } from '../captureConfig'
 
 const SPOOL_VALUE = 'file:/Volumes/AgentLensSpool/otel-bodies'
 const SPOOL_VOLUME = '/Volumes/AgentLensSpool'
@@ -86,7 +86,7 @@ function ctxFixture(env: Record<string, string>): { ctx: Ctx; settingsPath: stri
   const settingsPath = path.join(dir, 'settings.json')
   fs.writeFileSync(settingsPath, JSON.stringify({ env }, null, 2))
   const ctx: Ctx = {
-    dryRun: false, yes: true, home: dir, dataDir: dir, settingsPath,
+    dryRun: false, yes: true, forceInstall: false, telemetryProbe: {}, home: dir, dataDir: dir, settingsPath,
     skillsDir: path.join(dir, 'skills'), agentsDir: path.join(dir, 'agents'), repoRoot: dir,
     uiPort: 0, mcpPort: 0, otlpPort: 0, pathEnv: '', log: () => {}, serverPid: null,
   }
@@ -329,38 +329,20 @@ suite('setup spool-migration — settings rewrite seam', () => {
 // ── F3 (review round 2): the settings CONTENT after migration, through the REAL safeConfigEdit ──
 // The stub deps stub only the volume/drain/plist seams — the config write inside ACT 3 is the
 // real safeConfigEdit (real python editor over a real temp settings file), so these tests pin
-// WHAT it writes, not just that it was called. Capture resolution reads <dataDir>/config.json
-// (setRawBodyCapture is the real writer) and process.env.AGENTLENS_CAPTURE_RAW_BODIES, which
-// must be clear for the file setting to decide — same teardown discipline as captureConfig.test.
+// WHAT it writes, not just that it was called. Raw capture is mandatory (2026-10-02), so the
+// migration always points the key at the SSD dir — there is no capture-off state to preserve.
 
 suite('setup spool-migration — the settings file content after migration (F3, real safeConfigEdit)', () => {
-  teardown(() => { delete process.env[RAW_BODIES_ENV] })
-
-  test('capture ON: the spool value is rewritten to the effective SSD path', async () => {
-    const f = ctxFixture({ OTEL_LOG_RAW_API_BODIES: SPOOL_VALUE })
-    const s = stubDeps({ volumeMounted: true })
-    try {
-      setRawBodyCapture(f.ctx.dataDir, true) // the file half of the resolution — the real knob
-      assert.strictEqual(rawBodyCaptureEnabled(f.ctx.dataDir, process.env), true, 'precondition: the migration must see capture on')
-      const { result } = await runSpoolMigration(f.ctx, s.deps)
-      assert.strictEqual(result.verify, 'PASS', result.detail)
-      const env = envOf(f.settingsPath)
-      assert.strictEqual(env[RAW_BODIES_KEY], `file:${effectiveBodiesDir(f.ctx.dataDir, true)}`,
-        'capture stays ON and the path moves to the SSD dir resolved through effectiveBodiesDir')
-      assert.ok(!env[RAW_BODIES_KEY].includes('/Volumes/AgentLensSpool'), 'no spool path survives in the value')
-    } finally { fs.rmSync(f.dir, { recursive: true, force: true }); fs.rmSync(s.volume, { recursive: true, force: true }) }
-  })
-
-  test('capture OFF: the env key is DELETED, not pointed anywhere', async () => {
+  test('the spool value is rewritten to the effective SSD path (capture is mandatory — there is no off state)', async () => {
     const f = ctxFixture({ OTEL_LOG_RAW_API_BODIES: SPOOL_VALUE, UNRELATED_KEY: 'kept' })
     const s = stubDeps({ volumeMounted: true })
     try {
-      // No config written: the default (OFF) governs, and no ops env override is set.
-      assert.strictEqual(rawBodyCaptureEnabled(f.ctx.dataDir, process.env), false, 'precondition: the migration must see capture off')
       const { result } = await runSpoolMigration(f.ctx, s.deps)
       assert.strictEqual(result.verify, 'PASS', result.detail)
       const env = envOf(f.settingsPath)
-      assert.ok(!(RAW_BODIES_KEY in env), 'capture off ⇒ the key is deleted — pointing it at the SSD dir would silently turn a 35 GB/day sink back on')
+      assert.strictEqual(env[RAW_BODIES_KEY], `file:${effectiveBodiesDir(f.ctx.dataDir)}`,
+        'the path moves to the SSD dir resolved through effectiveBodiesDir')
+      assert.ok(!env[RAW_BODIES_KEY].includes('/Volumes/AgentLensSpool'), 'no spool path survives in the value')
       // The other env keys the file carried survive the edit (the transactional editor's contract).
       assert.strictEqual(env.UNRELATED_KEY, 'kept', 'safeConfigEdit must not touch anything but the target key')
     } finally { fs.rmSync(f.dir, { recursive: true, force: true }); fs.rmSync(s.volume, { recursive: true, force: true }) }

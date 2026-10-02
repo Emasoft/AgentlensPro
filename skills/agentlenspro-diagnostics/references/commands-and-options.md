@@ -28,8 +28,8 @@ rate-limit turn deaths (StopFailure), compaction boundaries + trigger (PreCompac
 session lifecycle — into `~/.agentlens/hook-events/` (NDJSON daily buckets, 31d retention).
 Query: `GET /api/hook-events?session=&ev=&since=&until=&limit=` on the UI port.
 
-Bodies lifecycle: raw capture is opt-in and off by default (`agentlenspro config set
-captureRawBodies on|off`); when on, bodies land directly on the SSD at
+Bodies lifecycle: raw capture is mandatory (every install converges `OTEL_LOG_RAW_API_BODIES`);
+bodies land directly on the SSD at
 `~/.agentlens/otel-bodies` (the RAM-disk spool was removed, TRDD-Z53IJFE9) and are drained every
 60 s. Live plain files are ingested into a content-addressed store
 (`~/.agentlens/store/` — fileless DuckDB → immutable zstd Parquet, deduped across turns,

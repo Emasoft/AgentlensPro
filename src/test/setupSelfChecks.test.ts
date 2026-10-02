@@ -2,7 +2,7 @@ import * as assert from 'assert'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
-import { checkCompositionLine, compareHookConfig, memoryCheckFromLog, COMPOSITION_STALE_MS } from '../cli/setup'
+import { checkCompositionLine, memoryCheckFromLog, COMPOSITION_STALE_MS } from '../cli/setup'
 
 // Real composition_line + mi_suffix shape (rust-core chores.rs), with the committed field first.
 const head = 'alcore: composition: mimalloc commit 690 MB, process rss 700 MB, window.spans 10 (~5 MB sampled est), summary-cache none MB, stripped-cache none MB, card rows 3 (~1 MB text, DuckDB own allocator, limit 256 MiB), derived slack = commit - window est = 685 MB'
@@ -43,24 +43,12 @@ suite('setup memory self-check parser', () => {
     assert.strictEqual(checkCompositionLine('not a composition line').verdict, 'WARN')
   })
 })
-suite('setup hook-config + memory-log self-checks', () => {
+suite('setup memory-log self-check', () => {
   const tmp = (): string => fs.mkdtempSync(path.join(os.tmpdir(), 'al-selfcheck-'))
   // A server.log line as the server writes it: wall-clock stamp, uptime tag, then the message.
   const stamped = (ageSec: number, msg: string): string => `${new Date(Date.now() - ageSec * 1000).toISOString().slice(0, 19)}+0000 [up 60s] ${msg}\n`
   const write = (dir: string, text: string): string => { const p = path.join(dir, 'server.log'); fs.writeFileSync(p, text); return p }
 
-  // missing hook-config.json is an explicit SKIP, not a pass
-  test('hook-config: absent file is SKIP', () => {
-    assert.strictEqual(compareHookConfig({ gateEnabled: true }, null).verify, 'SKIP')
-  })
-  // served config equal to the file
-  test('hook-config: matching file is PASS', () => {
-    assert.strictEqual(compareHookConfig({ gateEnabled: true, advisorEnabled: false }, { gateEnabled: true, advisorEnabled: false }).verify, 'PASS')
-  })
-  // served config differing from the file
-  test('hook-config: a differing boolean is FAIL', () => {
-    assert.strictEqual(compareHookConfig({ gateEnabled: true }, { gateEnabled: false }).verify, 'FAIL')
-  })
   // a fresh, healthy line passes
   test('memory log: fresh healthy line is PASS', () => {
     const d = tmp()
@@ -100,12 +88,6 @@ suite('setup hook-config + memory-log self-checks', () => {
   test('memory log: composition line without a timestamp is SKIP', () => {
     const d = tmp()
     try { assert.strictEqual(memoryCheckFromLog(write(d, line(690, '600', '90') + '\n')).verify, 'SKIP') } finally { fs.rmSync(d, { recursive: true, force: true }) }
-  })
-  // numeric and string knobs are compared too, not only booleans
-  test('hook-config: a differing number or string is FAIL', () => {
-    assert.strictEqual(compareHookConfig({ deadlineMs: 2000 }, { deadlineMs: 4000 }).verify, 'FAIL')
-    assert.strictEqual(compareHookConfig({ gateMode: 'warn' }, { gateMode: 'enforce' }).verify, 'FAIL')
-    assert.strictEqual(compareHookConfig({ deadlineMs: 2000 }, { deadlineMs: 2000 }).verify, 'PASS')
   })
   // an absent log is SKIP
   test('memory log: absent file is SKIP', () => {
