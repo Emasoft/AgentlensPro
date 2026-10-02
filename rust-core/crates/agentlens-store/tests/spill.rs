@@ -133,3 +133,32 @@ fn a_chore_is_not_starved_by_a_stream_of_heavy_queries() {
     assert!(t <= CHORE_MAX_SKIPS + 1);
     assert_eq!(skips.load(Ordering::SeqCst), 0, "a successful acquire resets the skip counter");
 }
+
+/// A holder that re-acquires with ZERO gap cannot starve a chore in its forced wait: ordinary
+/// acquirers yield, so the chore gets the slot within about one holder cycle.
+#[test]
+fn a_forced_chore_wins_against_a_zero_gap_holder() {
+    use agentlens_store::transcript_sql::{acquire_heavy_for_chore, acquire_heavy_within, CHORE_MAX_SKIPS};
+    use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+    let stop = Arc::new(AtomicBool::new(false));
+    let s2 = stop.clone();
+    let holder = std::thread::spawn(move || {
+        while !s2.load(Ordering::SeqCst) {
+            if let Ok(g) = acquire_heavy_within(Duration::from_secs(10)) {
+                std::thread::sleep(Duration::from_millis(300));
+                drop(g); // immediately loops to re-acquire: no gap
+            }
+        }
+    });
+    std::thread::sleep(Duration::from_millis(100));
+    let skips = AtomicU32::new(CHORE_MAX_SKIPS); // already at the bound => forced wait
+    let t0 = Instant::now();
+    let got = acquire_heavy_for_chore("zero-gap test chore", &skips);
+    let waited = t0.elapsed();
+    stop.store(true, Ordering::SeqCst);
+    drop(got);
+    holder.join().unwrap();
+    assert!(waited < Duration::from_secs(2), "forced chore must get the next free slot, waited {waited:?}");
+}

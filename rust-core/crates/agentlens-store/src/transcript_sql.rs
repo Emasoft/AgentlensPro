@@ -445,7 +445,7 @@ pub fn acquire_heavy_for_chore(name: &str, skips: &std::sync::atomic::AtomicU32)
     if forced {
         eprintln!("[info] {name}: skipped {n} consecutive ticks, waiting for the heavy DuckDB slot");
     }
-    match acquire_heavy_within(if forced { HEAVY_WAIT } else { CHORE_HEAVY_WAIT }) {
+    match acquire_heavy_inner(if forced { HEAVY_WAIT } else { CHORE_HEAVY_WAIT }, forced) {
         Ok(g) => {
             skips.store(0, Relaxed);
             Some(g)
@@ -463,19 +463,45 @@ pub fn acquire_heavy_for_chore(name: &str, skips: &std::sync::atomic::AtomicU32)
 // ponytail: try_lock poll is unfair under contention (no FIFO) — fine at today's request rate;
 // upgrade = a fair semaphore if contention appears.
 pub fn acquire_heavy_within(wait: std::time::Duration) -> Result<HeavyGuard, String> {
+    acquire_heavy_inner(wait, false)
+}
+
+/// Number of chores currently in their forced (starvation-bound) wait. While non-zero, ordinary
+/// acquirers yield before trying, so the chore gets the next slot that frees instead of losing the
+/// race to a holder that re-acquires with no gap.
+static CHORE_WAITING: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+struct ChoreWaiting;
+impl ChoreWaiting {
+    fn enter() -> Self {
+        CHORE_WAITING.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        ChoreWaiting
+    }
+}
+impl Drop for ChoreWaiting {
+    fn drop(&mut self) {
+        CHORE_WAITING.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+fn acquire_heavy_inner(wait: std::time::Duration, forced_chore: bool) -> Result<HeavyGuard, String> {
+    let _waiting = forced_chore.then(ChoreWaiting::enter);
     let start = std::time::Instant::now();
     loop {
-        match HEAVY.try_lock() {
-            Ok(g) => return Ok(g),
-            // A panicked holder leaves no state behind (the mutex guards nothing), so poison is harmless.
-            Err(std::sync::TryLockError::Poisoned(p)) => return Ok(p.into_inner()),
-            Err(std::sync::TryLockError::WouldBlock) => {
-                if start.elapsed() > wait {
-                    return Err("busy: another heavy transcript/seismic query is running; retry shortly".to_owned());
-                }
-                std::thread::sleep(std::time::Duration::from_millis(50));
+        // Yield to a forced chore (bounded by this caller's own wait).
+        let yielding = !forced_chore && CHORE_WAITING.load(std::sync::atomic::Ordering::SeqCst) > 0;
+        if !yielding {
+            match HEAVY.try_lock() {
+                Ok(g) => return Ok(g),
+                // A panicked holder leaves no state behind (the mutex guards nothing), so poison is harmless.
+                Err(std::sync::TryLockError::Poisoned(p)) => return Ok(p.into_inner()),
+                Err(std::sync::TryLockError::WouldBlock) => {}
             }
         }
+        if start.elapsed() > wait {
+            return Err("busy: another heavy transcript/seismic query is running; retry shortly".to_owned());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
     }
 }
 
