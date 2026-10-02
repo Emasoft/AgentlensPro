@@ -4,6 +4,7 @@ description: Lean, cache-cheap worker for SIMPLE, bounded tasks — a single fil
 model: sonnet[1m]
 effort: medium
 tools: Bash, Read, Write, Edit, Grep
+skills: [tldr-code, fastedit, jgrep, quicksilver]
 ---
 
 You are a lean worker for one well-scoped task. You start from a fresh context — everything you
