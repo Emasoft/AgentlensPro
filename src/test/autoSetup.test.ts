@@ -1036,3 +1036,45 @@ suite('ensureServer under DISABLED refuses without spawning', () => {
     assert.ok(!fs.readFileSync(snap, 'utf8').split('\n').some(l => l.includes(`--data-dir ${process.env.AGENTLENS_DATA_DIR}`)), 'no server was started on the isolated data dir')
   })
 })
+
+suite('setup --dry-run under Claude Code: stale snapshot vs shell-set pipeline', () => {
+  async function dry(f: Fx): Promise<{ exitCode: number; text: string }> {
+    const out: string[] = []
+    const o = await runSetup({
+      dryRun: true, yes: true, home: f.home, dataDir: f.dataDir, settingsPath: f.settingsPath, skillsDir: f.skillsDir, agentsDir: f.agentsDir,
+      repoRoot: REPO_ROOT, pathEnv: f.pathEnv, uiPort: await freePort(), mcpPort: await freePort(), otlpPort: 4318,
+      telemetryProbe: { managedSettingsPaths: [f.managedPath], processEnv: f.ctx.telemetryProbe.processEnv }, log: l => { out.push(l) },
+    })
+    return { exitCode: o.exitCode, text: out.join('\n') + JSON.stringify(o.steps) }
+  }
+  const snap = (f: Fx): string => `${fs.statSync(f.settingsPath).mtimeMs}|${fs.readFileSync(f.settingsPath, 'utf8')}|${fs.readdirSync(path.dirname(f.settingsPath)).sort().join(',')}`
+
+  test('file holds OUR value, env (CLAUDECODE=1) differs: exit 0, STALE-ENV printed, nothing mutated', async function () {
+    this.timeout(60_000)
+    const f = makeFx({ CLAUDECODE: '1', OTEL_EXPORTER_OTLP_ENDPOINT: 'https://old.corp.example/otlp' })
+    try {
+      await installAll(f)
+      const before = snap(f)
+      const r = await dry(f)
+      assert.strictEqual(r.exitCode, 0)
+      assert.ok(r.text.includes('STALE-ENV'))
+      assert.strictEqual(snap(f), before)
+    } finally { f.cleanup() }
+  })
+
+  test('file LACKS the key, env (CLAUDECODE=1) carries a non-ours routing value: exit 78 (FOREIGN), nothing mutated', async function () {
+    this.timeout(60_000)
+    const f = makeFx({ CLAUDECODE: '1', OTEL_EXPORTER_OTLP_ENDPOINT: 'https://corp.example/otlp' })
+    try {
+      await installAll(f)
+      const cfg = readSettings(f)
+      delete cfg.env!.OTEL_EXPORTER_OTLP_ENDPOINT
+      writeSettings(f, cfg)
+      const before = snap(f)
+      const r = await dry(f)
+      assert.strictEqual(r.exitCode, 78)
+      assert.ok(r.text.includes('FOREIGN'))
+      assert.strictEqual(snap(f), before)
+    } finally { f.cleanup() }
+  })
+})

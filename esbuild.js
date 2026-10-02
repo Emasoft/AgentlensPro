@@ -23,8 +23,15 @@ const esbuildProblemMatcherPlugin = {
 	},
 };
 
+// AGENTLENS_BUNDLE_OUT=<path>: build ONLY the CLI bundle to that file and touch nothing else. /opt/homebrew/bin/agentlenspro
+// is an npm link to this repo, so a plain `node esbuild.js` rewrites standalone/cli.js and media/*.js under every live
+// caller at once; this builds a scratch copy for testing first. The path must sit inside the repo (e.g.
+// builds_dev/<name>/cli.js, two levels down) because the bundle resolves scripts/safe_config_edit.py and the package
+// root (skills/, agents/) relative to its own location.
+const bundleOut = process.env.AGENTLENS_BUNDLE_OUT;
+
 async function main() {
-	const mediaCtx = await esbuild.context({
+	const mediaCtx = bundleOut ? null : await esbuild.context({
 		entryPoints: ['media/src/dashboard.tsx'],
 		bundle: true,
 		format: 'iife',
@@ -39,7 +46,7 @@ async function main() {
 		plugins: [esbuildProblemMatcherPlugin],
 	});
 
-	const sidebarCtx = await esbuild.context({
+	const sidebarCtx = bundleOut ? null : await esbuild.context({
 		entryPoints: ['media/src/sidebarWebview.ts'],
 		bundle: true,
 		format: 'iife',
@@ -60,7 +67,7 @@ async function main() {
 		sourcemap: !production,
 		sourcesContent: false,
 		platform: 'node',
-		outfile: 'standalone/cli.js',
+		outfile: bundleOut || 'standalone/cli.js',
 		logLevel: 'silent',
 		// sql.js resolves from node_modules at runtime — inlining its WASM loader would bloat the
 		// CLI for a path only `setup` touches. @duckdb/node-api loads prebuilt platform-specific
@@ -71,14 +78,17 @@ async function main() {
 	});
 
 	if (watch) {
+		if (bundleOut) throw new Error('AGENTLENS_BUNDLE_OUT is a one-shot scratch build; --watch is not supported with it');
 		await mediaCtx.watch();
 		await sidebarCtx.watch();
 		await cliCtx.watch();
 	} else {
-		await mediaCtx.rebuild();
-		await mediaCtx.dispose();
-		await sidebarCtx.rebuild();
-		await sidebarCtx.dispose();
+		if (mediaCtx && sidebarCtx) {
+			await mediaCtx.rebuild();
+			await mediaCtx.dispose();
+			await sidebarCtx.rebuild();
+			await sidebarCtx.dispose();
+		}
 		await cliCtx.rebuild();
 		await cliCtx.dispose();
 	}
