@@ -53,6 +53,7 @@ If `agentlenspro` is not on PATH, (re)install the package — `npm install -g ag
 installs the server itself; the CLI starts it on demand.
 
 If any agentlenspro command prints "agentlenspro is DISABLED", run the reactivate command it prints; do not retry the original command.
+`server`/`daemon` restarts do not self-heal the install: run any other agentlenspro command, or `agentlenspro enable`, to repair.
 
 ## Version floor — check this FIRST if a command is "unknown"
 

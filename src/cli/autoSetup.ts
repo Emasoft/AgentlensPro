@@ -36,11 +36,11 @@ import * as path from "path"
 import { AGENT_NAMES, SKILL_NAMES, skillTreeHash } from "./hookInstall"
 import * as fs from "fs"
 import { EXIT } from "./cliErrors"
-import { HOOK_PATH_VERBS, disableForForeignTelemetry, enableIfForeign, killSwitchArmedForForeign } from "./foreignTelemetry"
+import { HOOK_PATH_VERBS, READ_ONLY_VERBS, disableForForeignTelemetry, enableIfForeign, killSwitchArmedForForeign } from "./foreignTelemetry"
 import { agentlensDisabled, overrideKillSwitchEnv } from "./killSwitch"
 import { SurfaceDirs, enableAgentlensSurfaces } from "./surfaces"
 import { Ctx, REPAIR_STEPS, hooksConverged, otelDrift, readSettingsFresh, resolveCtx, runSetup } from "./setup"
-import { TelemetryConflict, formatTelemetryConflicts } from "../telemetryConfig"
+import { TelemetryConflict, TelemetryVerdictRow, formatTelemetryConflicts } from "../telemetryConfig"
 
 // WHY excluded: hook-path verbs run inside Claude Code turns under a timeout (a repair would blow
 // the deadline, and its verify step execs the registered hooks — recursion) and must never be blocked;
@@ -49,7 +49,7 @@ import { TelemetryConflict, formatTelemetryConflicts } from "../telemetryConfig"
 // of them may be blocked by the very state they exist to handle. `enable` runs ensureInstalled('enable')
 // itself (see runEnableCli), so it refuses while a foreign telemetry setup is still in place.
 export const AUTOSETUP_EXCLUDED_VERBS: ReadonlySet<string> = new Set([
-  ...HOOK_PATH_VERBS, "server", "daemon", "setup", "disable", "enable", "telemetry",
+  ...HOOK_PATH_VERBS, ...READ_ONLY_VERBS, "server", "daemon", "setup", "disable", "enable", "telemetry",
 ])
 
 export const LOCK_STALE_MS = 10 * 60 * 1000
@@ -57,7 +57,11 @@ export const LOCK_STALE_MS = 10 * 60 * 1000
 export type Step = keyof typeof REPAIR_STEPS
 export type Trigger = "enable" | "launch"
 export interface Drift { piece: string; step: Step | null; reason: string }
-export interface Detection { drifts: Drift[]; conflicts: TelemetryConflict[]; nothingInstalled: boolean }
+export interface Detection {
+  drifts: Drift[]; conflicts: TelemetryConflict[]; nothingInstalled: boolean
+  /** the full per-key telemetry verdict, user keys that will be converged, and Claude Code stale-snapshot rows */
+  rows: TelemetryVerdictRow[]; converge: string[]; staleEnv: TelemetryVerdictRow[]
+}
 export interface RepairOutcome { ok: boolean; detail: string }
 
 export interface AutoSetupDeps {
@@ -82,6 +86,9 @@ function sameBytes(a: string, b: string): boolean {
 export function detectDrift(ctx: Ctx): Detection {
   const drifts: Drift[] = []
   let conflicts: TelemetryConflict[] = []
+  let rows: TelemetryVerdictRow[] = []
+  let converge: string[] = []
+  let staleEnv: TelemetryVerdictRow[] = []
 
   const settings = readSettingsFresh(ctx.settingsPath)
   if (settings === "unparseable") {
@@ -91,6 +98,9 @@ export function detectDrift(ctx: Ctx): Detection {
     const otel = otelDrift(ctx)
     if (otel !== "unparseable") {
       conflicts = otel.conflicts
+      rows = otel.rows
+      converge = otel.converge
+      staleEnv = otel.staleEnv
       if (!otel.converged) drifts.push({ piece: "telemetry env", step: "otel-env", reason: otel.found })
     }
     if (settings === "absent" || !hooksConverged(settings)) {
@@ -121,7 +131,7 @@ export function detectDrift(ctx: Ctx): Detection {
   }
   if (agentDrift.length > 0) drifts.push({ piece: "agents", step: "skill", reason: agentDrift.join(", ") })
 
-  return { drifts, conflicts, nothingInstalled: skillsPresent === 0 && agentsPresent === 0 && settings === "absent" }
+  return { drifts, conflicts, rows, converge, staleEnv, nothingInstalled: skillsPresent === 0 && agentsPresent === 0 && settings === "absent" }
 }
 
 /** Exclusive-create lock; the loser skips (the winner repairs). Stale after LOCK_STALE_MS by mtime. */
@@ -162,6 +172,8 @@ async function defaultFullSetup(ctx: Ctx): Promise<boolean> {
  *  naming `agentlenspro setup` and the user's verb carries on. */
 export async function maybeAutoSetup(argv: string[], deps: AutoSetupDeps = {}): Promise<number | null> {
   const verb = argv[0] ?? ""
+  // AGENTLENS_NO_AUTOSETUP=1 turns the check off ENTIRELY: nothing but this env check runs — no settings read,
+  // no write, no kill-switch armed. (The read-only verdict per key is `agentlenspro setup --dry-run`.)
   if (AUTOSETUP_EXCLUDED_VERBS.has(verb) || (deps.env ?? process.env).AGENTLENS_NO_AUTOSETUP === "1") return null
   return ensureInstalled("launch", verb, deps)
 }
@@ -180,6 +192,11 @@ export async function ensureInstalled(trigger: Trigger, verb: string, deps: Auto
 
     // STEP 1 — the telemetry verdict, before any other action.
     const first = detectDrift(ctx)
+    // Under Claude Code the shell env is a snapshot of settings.json from session start: a routing value that
+    // differs from the CURRENT file is stale, not foreign — warn once per launch and carry on (never disable).
+    if (first.staleEnv.length > 0) {
+      say(`agentlenspro: stale session env (restart Claude Code to pick up the new settings): ${first.staleEnv.map(r => r.key).join(", ")}`)
+    }
     if (first.conflicts.length > 0) {
       const shell = first.conflicts.some(c => c.scope === "shell")
       if (!ctx.forceInstall || shell) {
@@ -199,7 +216,7 @@ export async function ensureInstalled(trigger: Trigger, verb: string, deps: Auto
     if (!release) return null // another launch is repairing right now
     try {
       // Re-detect under the lock: the previous holder may have just fixed everything.
-      const { drifts, conflicts, nothingInstalled } = detectDrift(ctx)
+      const { drifts, conflicts, nothingInstalled, converge: converged } = detectDrift(ctx)
       if (nothingInstalled && trigger === "launch" && verb !== "") {
         const ok = await (deps.fullSetup ?? defaultFullSetup)(ctx)
         say(ok
@@ -217,6 +234,7 @@ export async function ensureInstalled(trigger: Trigger, verb: string, deps: Auto
         let r = outcomes.get(d.step)
         if (!r) { r = await repair(d.step, ctx); outcomes.set(d.step, r) }
         allOk &&= r.ok
+        if (r.ok && d.step === "otel-env") for (const key of converged) say(`agentlenspro: converged ${key}`)
         say(r.ok ? `agentlenspro: restored ${d.piece} (${d.reason})${d.step === "otel-env" ? ` — ${r.detail}` : ""}` : `agentlenspro: could not restore ${d.piece} (${r.detail}) — run \`agentlenspro setup\``)
         // A forced telemetry overwrite that cannot complete (managed file needs an administrator): stop.
         if (!r.ok && d.step === "otel-env" && conflicts.length > 0) return EXIT.CONFIG

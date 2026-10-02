@@ -30,8 +30,8 @@ import { loadSqlJs } from '../forensicsDb'
 import { countNdjsonLinesAuto } from '../ndjsonLines'
 import { readFsMarkers } from '../environment/runtime'
 import {
-  TelemetryConflict, detectTelemetryConflicts, ensureTelemetryConfig, forceInstallManagedTelemetry, formatTelemetryConflicts,
-  ownedTelemetryKeys,
+  TelemetryConflict, TelemetryVerdictRow, ensureTelemetryConfig, forceInstallManagedTelemetry, formatTelemetryConflicts,
+  formatTelemetryVerdict, ownedTelemetryKeys, sameTelemetryValue, telemetryVerdict, verdictConflicts as detectConflictsFromRows,
 } from '../telemetryConfig'
 import { disableForForeignTelemetry, enableIfForeign } from './foreignTelemetry'
 import { effectiveBodiesDir, RAW_BODIES_KEY } from '../captureConfig'
@@ -1030,24 +1030,29 @@ const stepSkill: StepDef = {
  *  configured (company gateway / managed settings / shell env): nothing may be written. */
 export function otelDrift(ctx: Ctx): 'unparseable' | {
   bodiesDir: string; expected: Record<string, string>; converged: boolean; found: string; conflicts: TelemetryConflict[]
+  rows: TelemetryVerdictRow[]; converge: string[]; staleEnv: TelemetryVerdictRow[]
 } {
   // Raw-body capture is MANDATORY (owner reversal 2026-10-02, TRDD-AGZ0XZKW): the key is always owned.
   const bodiesDir = effectiveBodiesDir(ctx.dataDir)
   const expected = ownedTelemetryKeys(bodiesDir, ctx.otlpPort)
   const state = readSettingsFresh(ctx.settingsPath)
   if (state === 'unparseable') return 'unparseable'
-  const env = (state !== 'absent' && state.env && typeof state.env === 'object' ? state.env : {}) as Record<string, unknown>
-  const missing = Object.keys(expected).filter(k => env[k] === undefined)
-  const wrong = Object.keys(expected).filter(k => env[k] !== undefined && env[k] !== expected[k])
-  const conflicts = detectTelemetryConflicts({
+  // The verdict (telemetryConfig.ts) is the ONE judge: ABSENT/CONVERGE rows are repaired, FOREIGN rows block,
+  // STALE-ENV rows (a Claude Code session's inherited snapshot) only warn.
+  const rows = telemetryVerdict({
     settingsPath: ctx.settingsPath, markerPath: path.join(ctx.dataDir, 'telemetry-managed.json'),
     bodiesDir, otlpPort: ctx.otlpPort, dataDir: ctx.dataDir, ...ctx.telemetryProbe,
   })
-  const converged = conflicts.length === 0 && missing.length === 0 && wrong.length === 0
+  const conflicts = detectConflictsFromRows(rows)
+  const userRows = rows.filter(r => r.scope === 'user')
+  const missing = userRows.filter(r => r.state === 'ABSENT').length
+  const converge = userRows.filter(r => r.state === 'CONVERGE').map(r => r.key)
+  const staleEnv = rows.filter(r => r.state === 'STALE-ENV')
+  const converged = conflicts.length === 0 && missing === 0 && converge.length === 0
   const found = conflicts.length > 0
     ? `${conflicts.length} conflicting key(s) — another telemetry pipeline is configured`
-    : converged ? 'telemetry env current' : `${missing.length} missing, ${wrong.length} wrong key(s)`
-  return { bodiesDir, expected, converged, found, conflicts }
+    : converged ? 'telemetry env current' : `${missing} missing, ${converge.length} to converge`
+  return { bodiesDir, expected, converged, found, conflicts, rows, converge, staleEnv }
 }
 
 const stepOtel: StepDef = {
@@ -1058,17 +1063,17 @@ const stepOtel: StepDef = {
     if (drift === 'unparseable') {
       return { result: { step: this.name, found: 'settings.json unparseable', action: 'refused', verify: 'FAIL', detail: 'fix the file manually, then re-run setup' }, acted: false }
     }
-    const { bodiesDir, expected, converged, found, conflicts } = drift
+    const { bodiesDir, expected, converged, found, conflicts, rows } = drift
     // A foreign pipeline (owner order 2026-10-02): refuse and write NOTHING unless --force-install-telemetry
     // was given. A conflicting SHELL export can never be fixed by a settings edit, so it refuses even then.
     if (conflicts.length > 0 && (!ctx.forceInstall || conflicts.some(c => c.scope === 'shell'))) {
       // Disable again, like the launch path (kill-switch re-armed, skills parked) — but never in a dry run.
       const note = ctx.dryRun ? '' : `\nagentlenspro has disabled itself: ${disableForForeignTelemetry({ dataDir: ctx.dataDir, skillsDir: ctx.skillsDir, rulesDir: path.join(ctx.home, '.claude', 'rules') }).length} skill(s) moved to ${path.join(ctx.dataDir, 'disabled-surfaces')}, hooks are no-ops`
-      return { result: { step: this.name, found, action: 'refused', verify: 'FAIL', detail: formatTelemetryConflicts(conflicts) + note }, acted: !ctx.dryRun }
+      return { result: { step: this.name, found, action: 'refused', verify: 'FAIL', detail: formatTelemetryConflicts(conflicts) + note + (ctx.dryRun ? `\nverdict (dry-run, nothing written):\n${formatTelemetryVerdict(rows)}` : '') }, acted: !ctx.dryRun }
     }
 
     if (ctx.dryRun) {
-      return { result: { step: this.name, found, action: converged ? 'none' : 'would: wire telemetry env (verified transaction)', verify: 'SKIP', detail: 'dry-run' }, acted: false }
+      return { result: { step: this.name, found, action: converged ? 'none' : 'would: wire telemetry env (verified transaction)', verify: 'SKIP', detail: `dry-run — verdict, nothing written:\n${formatTelemetryVerdict(rows)}` }, acted: false }
     }
     let acted = false
     let backup = ''
@@ -1095,7 +1100,7 @@ const stepOtel: StepDef = {
       return { result: { step: this.name, found, action: acted ? 'wired' : 'none', verify: 'FAIL', detail: `post-state ${after}` }, acted }
     }
     const envAfter = (after.env && typeof after.env === 'object' ? after.env : {}) as Record<string, unknown>
-    const bad = Object.keys(expected).find(k => envAfter[k] !== expected[k])
+    const bad = Object.keys(expected).find(k => envAfter[k] === undefined || !sameTelemetryValue(k, String(envAfter[k]), expected[k]))
     // Our telemetry is in place and nothing foreign remains: a kill-switch armed for the foreign-telemetry
     // reason has no more reason to stand (an operator-armed one is never touched).
     if (!bad) enableIfForeign({ dataDir: ctx.dataDir, skillsDir: ctx.skillsDir, rulesDir: path.join(ctx.home, '.claude', 'rules') })

@@ -275,47 +275,134 @@ function readMarkerSync(markerPath: string): TelemetryMarker | null {
   } catch { return null }
 }
 
-/** Compute EVERY conflict, across ~/.claude/settings.json, the managed-settings files and the process
- *  env, without writing anything. Per owned key: absent ok; equal to ours ok; a value agentlenspro
- *  wrote earlier (marker `written`; for a marker that predates it, any key the marker manages; a
- *  local OTLP endpoint; a known raw-body dir) ok; anything else = foreign. Managed settings and the
- *  process env can only be judged by value (no marker covers them). */
-export function detectTelemetryConflicts(
-  options: TelemetryConfigOptions = {},
-): TelemetryConflict[] {
+export type VerdictState = 'OURS' | 'ABSENT' | 'CONVERGE' | 'FOREIGN' | 'STALE-ENV'
+
+export interface TelemetryVerdictRow {
+  key: string
+  source: string
+  scope: TelemetryConflict['scope']
+  state: VerdictState
+  detail: string
+}
+
+/** ONLY these owned keys decide WHERE telemetry goes, so only they can be FOREIGN. Every other owned key
+ *  (export intervals, OTEL_LOG_* flags, OTEL_METRICS_INCLUDE_*, temporality, the CLAUDE_CODE_* toggles) is
+ *  tuning: agentlenspro is a full-telemetry tool (owner order), so a differing value in the USER settings
+ *  simply converges. In managed settings and the shell such tuning keys are ignored (not ours to change). */
+const ROUTING_OWNED: ReadonlySet<string> = new Set([
+  'OTEL_EXPORTER_OTLP_ENDPOINT', 'OTEL_EXPORTER_OTLP_PROTOCOL',
+  'OTEL_TRACES_EXPORTER', 'OTEL_LOGS_EXPORTER', 'OTEL_METRICS_EXPORTER', RAW_BODIES_KEY,
+])
+
+/** localhost / 127.0.0.1 / ::1 are one spelling of "this machine"; a trailing slash is not a difference. */
+function normalizeValue(key: string, v: string): string {
+  if (!key.endsWith('_ENDPOINT')) return v
+  try {
+    const u = new URL(v)
+    const loop = ['localhost', '127.0.0.1', '[::1]', '::1'].includes(u.hostname)
+    return `${u.protocol}//${loop ? 'loopback' : u.host}${loop && u.port ? `:${u.port}` : ''}${u.pathname.replace(/\/$/, '')}`
+  } catch { return v }
+}
+export const sameTelemetryValue = (key: string, a: string, b: string): boolean => normalizeValue(key, a) === normalizeValue(key, b)
+const sameValue = sameTelemetryValue
+
+/** Judge every telemetry key, read-only, across ~/.claude/settings.json, the managed-settings files and the
+ *  process env. Per key: ABSENT (will be written) / OURS (equal, loopback spellings equivalent) / CONVERGE
+ *  (differs but is tuning, or a value agentlenspro wrote earlier: marker `written`, a local OTLP endpoint, a
+ *  known raw-body dir) / FOREIGN (a routing key pointing elsewhere, or another pipeline's headers/per-signal
+ *  endpoints) / STALE-ENV. STALE-ENV: under Claude Code (CLAUDECODE=1) the shell env is a SNAPSHOT of
+ *  settings.json taken at session start, not user intent — a routing value that differs from the CURRENT file
+ *  is a stale snapshot (restart Claude Code), never a reason to disable. Keys agentlenspro neither manages
+ *  nor routes with (OTEL_RESOURCE_ATTRIBUTES, OTEL_SERVICE_NAME, ...) are never looked at. */
+export function telemetryVerdict(options: TelemetryConfigOptions = {}): TelemetryVerdictRow[] {
   const { settingsPath, markerPath, bodiesDir, otlpPort, ownedBodyValues } = resolveOptions(options)
   const owned = ownedKeys(bodiesDir, otlpPort)
   const marker = readMarkerSync(markerPath)
+  const procEnv = options.processEnv ?? process.env
+  const underClaudeCode = procEnv.CLAUDECODE === '1'
   const byValue = (key: string, v: string): boolean =>
     (key === 'OTEL_EXPORTER_OTLP_ENDPOINT' && LOCAL_ENDPOINT.test(v)) || (key === RAW_BODIES_KEY && ownedBodyValues.includes(v))
   const byMarker = (key: string, v: string): boolean =>
     byValue(key, v) || (marker !== null && (marker.written ? (marker.written[key] ?? []).includes(v) : key in marker.keys))
-  const conflicts: TelemetryConflict[] = []
-  const scan = (env: Record<string, unknown>, source: string, scope: TelemetryConflict['scope'], isOurs: (key: string, v: string) => boolean): void => {
-    for (const [key, want] of Object.entries(owned)) {
-      const raw = env[key]
-      if (raw === undefined) continue
-      const v = String(raw)
-      if (v === want || isOurs(key, v)) continue
-      conflicts.push({ key, source, scope, kind: kindOfKey(key), detail: `found ${shown(key, v)}, agentlenspro wants ${shown(key, want)}` })
-    }
-    for (const { key, kind } of OTHER_PIPELINE_KEYS) {
-      const raw = env[key]
-      if (raw === undefined) continue
-      const v = String(raw)
-      if (kind === 'endpoint' && LOCAL_ENDPOINT.test(v)) continue // a local collector is not a company gateway
-      conflicts.push({ key, source, scope, kind, detail: `not managed by agentlenspro, so another telemetry pipeline is configured (found ${shown(key, v)})` })
-    }
+  const rows: TelemetryVerdictRow[] = []
+  const push = (key: string, source: string, scope: TelemetryConflict['scope'], state: VerdictState, detail: string): void => { rows.push({ key, source, scope, state, detail }) }
+  const otherPipeline = (v: string, kind: TelemetryConflict['kind']): boolean => !(kind === 'endpoint' && LOCAL_ENDPOINT.test(v))
+  const otherDetail = (key: string, v: string): string => `not managed by agentlenspro, so another telemetry pipeline is configured (found ${shown(key, v)})`
+
+  const userEnv = readEnvSync(settingsPath)
+  for (const [key, want] of Object.entries(owned)) {
+    const raw = userEnv[key]
+    if (raw === undefined) { push(key, settingsPath, 'user', 'ABSENT', `will be written: ${shown(key, want)}`); continue }
+    const v = String(raw)
+    if (sameValue(key, v, want)) { push(key, settingsPath, 'user', 'OURS', 'equal'); continue }
+    const detail = `found ${shown(key, v)}, agentlenspro wants ${shown(key, want)}`
+    push(key, settingsPath, 'user', !ROUTING_OWNED.has(key) || byMarker(key, v) ? 'CONVERGE' : 'FOREIGN', detail)
   }
-  scan(readEnvSync(settingsPath), settingsPath, 'user', byMarker)
+  for (const { key, kind } of OTHER_PIPELINE_KEYS) {
+    const raw = userEnv[key]
+    if (raw !== undefined && otherPipeline(String(raw), kind)) push(key, settingsPath, 'user', 'FOREIGN', otherDetail(key, String(raw)))
+  }
   for (const base of options.managedSettingsPaths ?? managedSettingsPaths()) {
     const files = [base]
     const dropIns = path.join(path.dirname(base), 'managed-settings.d')
     try { files.push(...fsSync.readdirSync(dropIns).filter(f => f.endsWith('.json')).sort().map(f => path.join(dropIns, f))) } catch { /* no drop-in dir */ }
-    for (const f of files) scan(readEnvSync(f), f, 'managed', byValue)
+    for (const f of files) {
+      const env = readEnvSync(f)
+      for (const [key, want] of Object.entries(owned)) {
+        if (!ROUTING_OWNED.has(key) || env[key] === undefined) continue
+        const v = String(env[key])
+        if (sameValue(key, v, want) || byValue(key, v)) push(key, f, 'managed', 'OURS', 'equal')
+        else push(key, f, 'managed', 'FOREIGN', `found ${shown(key, v)}, agentlenspro wants ${shown(key, want)}`)
+      }
+      for (const { key, kind } of OTHER_PIPELINE_KEYS) {
+        const raw = env[key]
+        if (raw !== undefined && otherPipeline(String(raw), kind)) push(key, f, 'managed', 'FOREIGN', otherDetail(key, String(raw)))
+      }
+    }
   }
-  scan(options.processEnv ?? process.env, 'process environment', 'shell', byValue)
-  return conflicts
+  const shellKeys = [...Object.keys(owned).filter(k => ROUTING_OWNED.has(k)), ...OTHER_PIPELINE_KEYS.map(o => o.key)]
+  for (const key of shellKeys) {
+    const raw = procEnv[key]
+    if (raw === undefined) continue
+    const v = String(raw)
+    const other = OTHER_PIPELINE_KEYS.find(o => o.key === key)
+    if (underClaudeCode) {
+      // STALE only when settings.json HOLDS the key, that value is OURS, and the env differs (the state right
+      // after --force-install-telemetry: the session still carries the old snapshot). A key the file LACKS but
+      // the shell exports is a shell-set pipeline: writing ours would override it on the next restart, so it
+      // falls through to the ordinary shell rules (FOREIGN). A file value that is itself foreign is already
+      // judged by the user rows.
+      const cur = userEnv[key]
+      const fileOurs = cur !== undefined && !other && sameValue(key, String(cur), owned[key])
+      if (fileOurs && sameValue(key, v, String(cur))) { push(key, 'process environment', 'shell', 'OURS', 'equals the current settings.json value'); continue }
+      if (fileOurs) { push(key, 'process environment', 'shell', 'STALE-ENV', 'inherited from the Claude Code session snapshot and different from the current settings.json'); continue }
+      if (cur !== undefined) continue
+    }
+    if (other) {
+      if (otherPipeline(v, other.kind)) push(key, 'process environment', 'shell', 'FOREIGN', otherDetail(key, v))
+      continue
+    }
+    const want = owned[key]
+    if (sameValue(key, v, want) || byValue(key, v)) push(key, 'process environment', 'shell', 'OURS', 'equal')
+    else push(key, 'process environment', 'shell', 'FOREIGN', `found ${shown(key, v)}, agentlenspro wants ${shown(key, want)}`)
+  }
+  return rows
+}
+
+/** The FOREIGN rows as conflicts (what blocks agentlenspro). */
+export function verdictConflicts(rows: TelemetryVerdictRow[]): TelemetryConflict[] {
+  return rows.filter(r => r.state === 'FOREIGN').map(r => ({
+    key: r.key, source: r.source, scope: r.scope, kind: OTHER_PIPELINE_KEYS.find(o => o.key === r.key)?.kind ?? kindOfKey(r.key), detail: r.detail,
+  }))
+}
+
+export function detectTelemetryConflicts(options: TelemetryConfigOptions = {}): TelemetryConflict[] {
+  return verdictConflicts(telemetryVerdict(options))
+}
+
+/** One line per key for `setup --dry-run` / AGENTLENS_NO_AUTOSETUP=1: the verdict, nothing written. */
+export function formatTelemetryVerdict(rows: TelemetryVerdictRow[]): string {
+  return rows.map(r => `  ${r.state.padEnd(9)} ${r.key} (${r.source}) — ${r.detail}`).join('\n')
 }
 
 /**

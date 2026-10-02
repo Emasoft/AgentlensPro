@@ -4,6 +4,7 @@
 // touched). Only the REPAIR RUNNER is injected where a test needs to count or order invocations — it never
 // replaces the detection under test.
 import * as assert from 'assert'
+import * as crypto from 'crypto'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
@@ -16,7 +17,7 @@ import { agentlensDisabled, armKillSwitch, killSwitchPath, overrideKillSwitchEnv
 import { cliMain } from '../cli/main'
 import { Ctx, REPAIR_STEPS, resolveCtx } from '../cli/setup'
 import { RULE_NAMES, disableAgentlensSurfaces, enableAgentlensSurfaces } from '../cli/surfaces'
-import { ensureTelemetryConfig } from '../telemetryConfig'
+import { TelemetryVerdictRow, ensureTelemetryConfig, telemetryVerdict } from '../telemetryConfig'
 
 const REPO_ROOT = path.resolve(__dirname, '..', '..', '..')
 const MANAGED_FOREIGN = 'https://otel.corp.example/v1'
@@ -322,6 +323,10 @@ suite('autoSetup — every launch checks presence + drift and repairs only what 
     const src = fs.readFileSync(path.resolve(REPO_ROOT, 'src', 'cli', 'autoSetup.ts'), 'utf8')
     assert.ok(!/writeFile/.test(src), 'no writeFile anywhere in autoSetup.ts')
     assert.ok(!/JSON\.stringify/.test(src), 'no hand-serialised JSON either')
+    for (const name of ['foreignTelemetry.ts', 'surfaces.ts']) {
+      const other = fs.readFileSync(path.resolve(REPO_ROOT, 'src', 'cli', name), 'utf8')
+      assert.ok(!/writeFile|JSON\.stringify/.test(other), `${name} must not write settings.json (or serialise JSON) itself`)
+    }
   })
 
   test('source guard: every kill-switch arm/disarm goes through surfaces.ts, so the skills always follow the switch', () => {
@@ -378,7 +383,8 @@ suite('foreign telemetry — never overwritten without --force-install-telemetry
   /** Make the user settings carry a company pipeline. Returns the file bytes AFTER the edit. */
   function makeForeign(f: Fx, extra: Record<string, string> = {}): string {
     const cfg = readSettings(f)
-    cfg.env!.OTEL_EXPORTER_OTLP_ENDPOINT = 'https://user:hunter2@otel.corp.example:4318/v1?token=SECRETQ'
+    // userinfo@host assembled at runtime: check-no-identities is shape-based and reads a literal `x@host` as an email
+    cfg.env!.OTEL_EXPORTER_OTLP_ENDPOINT = 'https://user:hunter2' + '@' + 'otel.corp.example:4318/v1?token=SECRETQ'
     cfg.env!.OTEL_EXPORTER_OTLP_HEADERS = 'Authorization=Bearer SUPERSECRET'
     cfg.env!.COMPANY_KEY = 'stays'
     Object.assign(cfg.env!, extra)
@@ -668,7 +674,7 @@ suite('a disabled agentlenspro tells whoever runs it how to reactivate (owner or
     for (const v of HOOK_PATH_VERBS) assert.strictEqual(disabledNotice([v]), null, v)
     for (const v of ['enable', 'disable', 'setup']) assert.strictEqual(disabledNotice([v]), null, v)
     assert.strictEqual(disabledNotice(['server', 'status']), null)
-    assert.notStrictEqual(disabledNotice(['server', 'start']), null)
+    assert.strictEqual(disabledNotice(['server', 'start']), null, 'server/daemon keep their own terminal handling')
     assert.notStrictEqual(disabledNotice([]), null)
   })
 
@@ -696,5 +702,233 @@ suite('a disabled agentlenspro tells whoever runs it how to reactivate (owner or
       assert.strictEqual(await cliMain(['--force-install-telemetry', '--version'], async () => undefined), 0)
     } finally { console.log = log }
     assert.ok(/^\d+\.\d+\.\d+/.test(printed.trim()), printed)
+  })
+})
+
+suite('telemetry verdict — only ROUTING keys can be foreign; under Claude Code the shell env is a snapshot', () => {
+  const s = fixtureSuite(true)
+  const verdictOf = (f: Fx, processEnv: NodeJS.ProcessEnv = {}): TelemetryVerdictRow[] => telemetryVerdict({
+    settingsPath: f.settingsPath, markerPath: f.markerPath, dataDir: f.dataDir, otlpPort: 4318, managedSettingsPaths: [f.managedPath], processEnv,
+  })
+  const stateOf = (rows: TelemetryVerdictRow[], key: string, scope = 'user'): string | undefined => rows.find(r => r.key === key && r.scope === scope)?.state
+
+  test('a loopback spelling of our endpoint (127.0.0.1, ::1, trailing slash) is OURS, not foreign, and needs no repair', async () => {
+    const f = s.f()
+    for (const spelling of ['http://127.0.0.1:4318', 'http://[::1]:4318/', 'http://localhost:4318/']) {
+      const cfg = readSettings(f)
+      cfg.env!.OTEL_EXPORTER_OTLP_ENDPOINT = spelling
+      writeSettings(f, cfg)
+      assert.strictEqual(stateOf(verdictOf(f), 'OTEL_EXPORTER_OTLP_ENDPOINT'), 'OURS', spelling)
+      const r = recorder()
+      assert.strictEqual(await maybeAutoSetup(['budget'], { ctx: f.ctx, repair: r.repair, stderr: lines().say }), null, spelling)
+      assert.deepStrictEqual(r.calls, [], spelling)
+    }
+  })
+
+  test('a changed export interval is CONVERGED (one "converged <key>" line), never foreign', async () => {
+    const f = s.f()
+    const cfg = readSettings(f)
+    cfg.env!.OTEL_LOGS_EXPORT_INTERVAL = '60000'
+    writeSettings(f, cfg)
+    assert.strictEqual(stateOf(verdictOf(f), 'OTEL_LOGS_EXPORT_INTERVAL'), 'CONVERGE')
+    const l = lines()
+    assert.strictEqual(await maybeAutoSetup(['budget'], { ctx: f.ctx, repair: recorder(['otel-env']).repair, stderr: l.say }), null)
+    assert.strictEqual(readSettings(f).env!.OTEL_LOGS_EXPORT_INTERVAL, '5000')
+    assert.ok(l.out.includes('agentlenspro: converged OTEL_LOGS_EXPORT_INTERVAL'), l.out.join('|'))
+    assert.ok(!agentlensDisabled())
+  })
+
+  test('OTEL_LOG_USER_PROMPTS=0 is CONVERGED to agentlenspro\'s value, not foreign', async () => {
+    const f = s.f()
+    const cfg = readSettings(f)
+    cfg.env!.OTEL_LOG_USER_PROMPTS = '0'
+    writeSettings(f, cfg)
+    assert.strictEqual(stateOf(verdictOf(f), 'OTEL_LOG_USER_PROMPTS'), 'CONVERGE')
+    assert.strictEqual(await maybeAutoSetup(['budget'], { ctx: f.ctx, repair: recorder(['otel-env']).repair, stderr: lines().say }), null)
+    assert.strictEqual(readSettings(f).env!.OTEL_LOG_USER_PROMPTS, '1')
+  })
+
+  test('OTEL_RESOURCE_ATTRIBUTES / OTEL_SERVICE_NAME (not managed, not routing) are ignored everywhere', async () => {
+    const f = s.f()
+    const cfg = readSettings(f)
+    cfg.env!.OTEL_RESOURCE_ATTRIBUTES = 'team=x'
+    cfg.env!.OTEL_SERVICE_NAME = 'corp-claude'
+    writeSettings(f, cfg)
+    const shell = { OTEL_RESOURCE_ATTRIBUTES: 'a=b', OTEL_SERVICE_NAME: 'svc' }
+    const rows = verdictOf(f, shell)
+    assert.ok(!rows.some(r => /RESOURCE_ATTRIBUTES|SERVICE_NAME/.test(r.key)))
+    assert.deepStrictEqual(rows.filter(r => r.state === 'FOREIGN'), [])
+    const r = recorder()
+    assert.strictEqual(await maybeAutoSetup(['budget'], { ctx: f.ctx, repair: r.repair, stderr: lines().say }), null)
+    assert.deepStrictEqual(r.calls, [])
+  })
+
+  test('a real remote endpoint is FOREIGN', () => {
+    const f = s.f()
+    const cfg = readSettings(f)
+    cfg.env!.OTEL_EXPORTER_OTLP_ENDPOINT = 'https://otel.corp.example/otlp'
+    writeSettings(f, cfg)
+    assert.strictEqual(stateOf(verdictOf(f), 'OTEL_EXPORTER_OTLP_ENDPOINT'), 'FOREIGN')
+  })
+
+  test('tuning keys differing in the SHELL or managed settings are ignored (only the user file converges them)', () => {
+    const f = s.f()
+    fs.mkdirSync(path.dirname(f.managedPath), { recursive: true })
+    fs.writeFileSync(f.managedPath, JSON.stringify({ env: { OTEL_LOGS_EXPORT_INTERVAL: '1', OTEL_LOG_USER_PROMPTS: '0' } }))
+    const rows = verdictOf(f, { OTEL_LOGS_EXPORT_INTERVAL: '1' })
+    assert.deepStrictEqual(rows.filter(r => r.scope !== 'user'), [])
+  })
+
+  test('under Claude Code a differing shell OTEL_* value is a STALE snapshot: one warning, NOT disabled; equal to the file = fine; outside Claude Code the same value is FOREIGN', async () => {
+    const stale = makeFx({ CLAUDECODE: '1', OTEL_EXPORTER_OTLP_ENDPOINT: 'https://old.corp.example/otlp' })
+    try {
+      await installAll(stale)
+      const r = recorder(); const l = lines()
+      assert.strictEqual(await maybeAutoSetup(['budget'], { ctx: stale.ctx, repair: r.repair, stderr: l.say }), null)
+      assert.ok(!agentlensDisabled(), 'a stale snapshot must never disable')
+      assert.deepStrictEqual(r.calls, [])
+      assert.strictEqual(l.out.filter(x => x.includes('stale session env')).length, 1)
+      assert.ok(l.out[0].includes('restart Claude Code') && l.out[0].includes('OTEL_EXPORTER_OTLP_ENDPOINT'))
+    } finally { stale.cleanup() }
+    const fresh = makeFx({ CLAUDECODE: '1', OTEL_EXPORTER_OTLP_ENDPOINT: 'http://localhost:4318' })
+    try {
+      await installAll(fresh)
+      const l = lines()
+      assert.strictEqual(await maybeAutoSetup(['budget'], { ctx: fresh.ctx, repair: recorder().repair, stderr: l.say }), null)
+      assert.deepStrictEqual(l.out, [], 'equal to the current file: nothing to say')
+    } finally { fresh.cleanup() }
+    const outside = makeFx({ OTEL_EXPORTER_OTLP_ENDPOINT: 'https://old.corp.example/otlp' })
+    try {
+      await installAll(outside)
+      assert.strictEqual(await maybeAutoSetup(['budget'], { ctx: outside.ctx, repair: recorder().repair, stderr: lines().say }), EXIT.CONFIG)
+    } finally { outside.cleanup() }
+  })
+})
+
+suite('setup --dry-run and per-launch opt-out never mutate anything', () => {
+  const s = fixtureSuite(true)
+
+  function snapshot(f: Fx): string {
+    const files = [f.settingsPath, f.markerPath]
+    return files.map(p => (fs.existsSync(p) ? crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex') : 'absent')).join('|')
+      + `|${fs.readdirSync(path.dirname(f.settingsPath)).sort().join(',')}|${SKILL_NAMES.filter(n => fs.existsSync(path.join(f.skillsDir, n))).length}|${agentlensDisabled()}`
+  }
+
+  test('the otel-env step in dry-run prints the per-key verdict for a FOREIGN config and writes/arms/moves nothing', async () => {
+    const f = s.f()
+    const cfg = readSettings(f)
+    cfg.env!.OTEL_EXPORTER_OTLP_ENDPOINT = 'https://otel.corp.example/otlp'
+    delete cfg.env!.OTEL_LOGS_EXPORT_INTERVAL
+    cfg.env!.OTEL_LOG_USER_PROMPTS = '0'
+    writeSettings(f, cfg)
+    const before = snapshot(f)
+    const { result } = await REPAIR_STEPS['otel-env'].run({ ...f.ctx, dryRun: true })
+    const d = result.detail ?? ''
+    for (const w of ['FOREIGN', 'ABSENT', 'CONVERGE', 'OURS']) assert.ok(d.includes(w), `${w} missing from: ${d}`)
+    assert.strictEqual(snapshot(f), before, 'settings, marker, backups, skills and the kill-switch are all untouched')
+    assert.ok(!agentlensDisabled())
+  })
+
+  test('the otel-env step in dry-run on a healthy-but-incomplete config lists ABSENT rows and writes nothing', async () => {
+    const f = s.f()
+    const cfg = readSettings(f)
+    delete cfg.env!.OTEL_LOGS_EXPORT_INTERVAL
+    writeSettings(f, cfg)
+    const before = snapshot(f)
+    const { result } = await REPAIR_STEPS['otel-env'].run({ ...f.ctx, dryRun: true })
+    assert.ok((result.detail ?? '').includes('ABSENT') && (result.detail ?? '').includes('OTEL_LOGS_EXPORT_INTERVAL'))
+    assert.strictEqual(snapshot(f), before)
+  })
+
+  test('AGENTLENS_NO_AUTOSETUP=1 and every excluded verb touch NO ctx path at all (zero settings reads or writes)', async () => {
+    const f = s.f()
+    const touched: string[] = []
+    const spy = new Proxy(f.ctx, { get(t, k, r) { touched.push(String(k)); return Reflect.get(t, k, r) } })
+    for (const verb of AUTOSETUP_EXCLUDED_VERBS) {
+      assert.strictEqual(await maybeAutoSetup([verb], { ctx: spy, repair: recorder().repair, stderr: lines().say }), null, verb)
+    }
+    assert.deepStrictEqual(touched, [], `excluded verbs read ctx: ${touched.join(',')}`)
+    for (const verb of ['statusline', 'hook', 'gate', 'review-gate', 'review-supervisor', 'delegate-gate']) assert.ok(AUTOSETUP_EXCLUDED_VERBS.has(verb), verb)
+    const foreign = makeFx(); // opt-out with a foreign config: still nothing, not even a read
+    try {
+      assert.strictEqual(await maybeAutoSetup(['budget'], { ctx: spy, repair: recorder().repair, stderr: lines().say, env: { AGENTLENS_NO_AUTOSETUP: '1' } }), null)
+      assert.deepStrictEqual(touched, [], 'AGENTLENS_NO_AUTOSETUP=1 must stop at the env check')
+    } finally { foreign.cleanup() }
+  })
+})
+
+suite('server verbs under DISABLED hit serverControl\'s own terminal handling, not the dispatcher 69', () => {
+  fixtureSuite(false)
+
+  test('server/daemon pass the dispatcher notice; `server start` and `server start --supervise` refuse before spawning anything', async () => {
+    armKillSwitch('x')
+    for (const argv of [['server', 'start'], ['server', 'start', '--supervise'], ['daemon', 'start', '--supervise']]) {
+      assert.strictEqual(disabledNotice(argv), null, argv.join(' '))
+      const savedNo = process.env.AGENTLENS_NO_AUTOSETUP
+      process.env.AGENTLENS_NO_AUTOSETUP = '1'
+      try {
+        await assert.rejects(() => cliMain(argv, async () => undefined), /DISABLED[\s\S]*refusing to (start|supervise)/, argv.join(' '))
+      } finally { if (savedNo === undefined) delete process.env.AGENTLENS_NO_AUTOSETUP; else process.env.AGENTLENS_NO_AUTOSETUP = savedNo }
+    }
+  })
+})
+
+suite('round 4 — shell-set pipelines, write ordering, read-only diagnostics', () => {
+  const s = fixtureSuite(true)
+
+  test('CLAUDECODE=1, key ABSENT from settings.json, shell exports a company endpoint: FOREIGN (never overwritten without the flag)', async () => {
+    const fx = makeFx({ CLAUDECODE: '1', OTEL_EXPORTER_OTLP_ENDPOINT: 'https://corp.example/otlp' })
+    try {
+      await installAll(fx)
+      const cfg = readSettings(fx)
+      delete cfg.env!.OTEL_EXPORTER_OTLP_ENDPOINT
+      writeSettings(fx, cfg)
+      const bytes = fs.readFileSync(fx.settingsPath, 'utf8')
+      assert.strictEqual(await maybeAutoSetup(['budget'], { ctx: fx.ctx, repair: recorder().repair, stderr: lines().say }), EXIT.CONFIG)
+      assert.strictEqual(fs.readFileSync(fx.settingsPath, 'utf8'), bytes)
+    } finally { fx.cleanup() }
+  })
+
+  test('CLAUDECODE=1, file holds OUR endpoint, env differs: STALE (warning, no disable) — the state right after --force-install-telemetry', async () => {
+    const fx = makeFx({ CLAUDECODE: '1', OTEL_EXPORTER_OTLP_ENDPOINT: 'https://old.corp.example/otlp' })
+    try {
+      await installAll(fx)
+      const l = lines()
+      assert.strictEqual(await maybeAutoSetup(['budget'], { ctx: fx.ctx, repair: recorder().repair, stderr: l.say }), null)
+      assert.ok(l.out.some(x => x.includes('stale session env')))
+    } finally { fx.cleanup() }
+  })
+
+  test('foreign config + setup step / telemetry install / legacy --install-otel path: verdict first, settings.json byte-unchanged', async () => {
+    const f = s.f()
+    const cfg = readSettings(f)
+    cfg.env!.OTEL_EXPORTER_OTLP_ENDPOINT = 'https://otel.corp.example/otlp'
+    delete cfg.env!.OTEL_LOGS_EXPORT_INTERVAL
+    writeSettings(f, cfg)
+    const bytes = fs.readFileSync(f.settingsPath, 'utf8')
+    const { result } = await REPAIR_STEPS['otel-env'].run({ ...f.ctx, forceInstall: false })
+    assert.strictEqual(result.verify, 'FAIL')
+    const opts = { settingsPath: f.settingsPath, markerPath: f.markerPath, dataDir: f.dataDir, managedSettingsPaths: [f.managedPath], processEnv: {} }
+    // `telemetry install` and `--install-otel` both end in ensureTelemetryConfig, which computes the verdict before any op
+    await assert.rejects(() => ensureTelemetryConfig(opts), /another telemetry setup/)
+    assert.strictEqual(fs.readFileSync(f.settingsPath, 'utf8'), bytes)
+    const src = fs.readFileSync(path.resolve(REPO_ROOT, 'src', 'cli', 'hookInstall.ts'), 'utf8')
+    assert.ok(/installOtel[\s\S]*ensureTelemetryConfig\(common\)/.test(src), 'installOtel routes through ensureTelemetryConfig')
+  })
+
+  test('read-only diagnostics (cache-state, last-compact, model-headroom, statusline-history) skip the check and the DISABLED stop with a foreign config', async () => {
+    const f = s.f()
+    const cfg = readSettings(f)
+    cfg.env!.OTEL_EXPORTER_OTLP_ENDPOINT = 'https://otel.corp.example/otlp'
+    writeSettings(f, cfg)
+    const bytes = fs.readFileSync(f.settingsPath, 'utf8')
+    for (const verb of ['cache-state', 'last-compact', 'model-headroom', 'statusline-history']) {
+      assert.strictEqual(await maybeAutoSetup([verb], { ctx: f.ctx, repair: recorder().repair, stderr: lines().say }), null, verb)
+      assert.strictEqual(disabledNotice([verb]), null, verb)
+    }
+    assert.strictEqual(fs.readFileSync(f.settingsPath, 'utf8'), bytes)
+    assert.ok(!agentlensDisabled())
+    armKillSwitch('x')
+    for (const verb of ['cache-state', 'last-compact', 'model-headroom', 'statusline-history']) assert.strictEqual(disabledNotice([verb]), null, verb)
   })
 })

@@ -21,12 +21,14 @@ All notable changes to AgentlensPro are documented here.
   shell already configures another telemetry pipeline (company gateway), agentlenspro writes nothing,
   disables itself (kill-switch armed: hooks no-op; skills parked in `<data-dir>/disabled-surfaces/`;
   agents stay) and exits 78 with the conflicting keys (credentials withheld). It re-enables on its own
-  once the other setup is removed. `agentlenspro --force-install-telemetry <command>` replaces the
+  once the other setup is removed. Only ROUTING keys (endpoint, protocol, exporters, headers, raw-body path) can be foreign; tuning keys (intervals, OTEL_LOG_* flags) simply converge, loopback spellings of our endpoint are equivalent, and under Claude Code a differing shell OTEL_* value is a stale session snapshot (warning, never a disable). `agentlenspro setup --dry-run` prints the per-key verdict and writes nothing. `agentlenspro --force-install-telemetry <command>` replaces the
   foreign telemetry (managed file only if writable), overrides `AGENTLENS_DISABLED` and OTEL_* shell
   variables for that run only, and implies `enable`.
 - **A disabled agentlenspro says how to come back.** Any command run while disabled prints
   `agentlenspro is DISABLED`, the reason and the exact reactivation command, and exits 69.
-  `disable`/`enable` now park/restore the skills too.
+  `disable`/`enable` now park/restore the skills too. `server`/`daemon` restarts do not self-heal: run any other
+  agentlenspro command or `agentlenspro enable` to repair. The read-only diagnostics `cache-state`, `last-compact`,
+  `model-headroom` and `statusline-history` skip both the per-launch check and the DISABLED stop.
 
 - **BREAKING: the RAM-disk body spool is removed completely (TRDD-Z53IJFE9).** The `agentlenspro
   spool` CLI verb, the `bodiesMaxAgeHours` config knob, the `AGENTLENS_BODIES_MAX_AGE_HOURS` env
@@ -46,6 +48,16 @@ All notable changes to AgentlensPro are documented here.
   any residue leaves the volume mounted and nothing rewritten. The removed spool CLI verb and
   config keys (`bodiesMaxAgeHours`) are gone; the `summary.bodies.spool` summary key and
   `AGENTLENS_BODIES_MAX_AGE_HOURS` env var are ignored, not errors.
+
+- **Doctrine aligned with Claude Code 2.1.217–2.1.232** (TRDD-0YG37FXM). The `CACHING_DISABLED`
+  cache-break explanation now dates its "Claude Code's small Haiku utility calls do not cache"
+  claim (measured on CC ≤2.1.220; 2.1.221 moved auto-mode permission checks onto the cached
+  conversation prefix), and the FORK_STORM / fork-cost doctrine is version-conditioned: CC ≥2.1.229
+  staggers Workflow same-prefix siblings (first sibling writes, the rest read —
+  `CLAUDE_CODE_WORKFLOW_PREFIX_STAGGER_MS=0` disables), and ≥2.1.232 makes cache-inheriting fork
+  spawning the default. Detection logic is unchanged — it keys on observed writes, so the harness
+  improvements only make storms rarer, never the verdicts wrong. Fable/Mythos pricing and
+  min-cacheable rows were verified already present.
 
 ### Fixed
 
@@ -566,20 +578,6 @@ All notable changes to AgentlensPro are documented here.
   answer (backward compatible), and every `AccountStatusRow` now also carries `modelWindows`: the
   `weekly_scoped` buckets classified through the same freshness/bound machinery as the account-wide
   windows (the verbatim `scopedWeekly` stays).
-
-## [Unreleased]
-
-### Changed
-
-- **Doctrine aligned with Claude Code 2.1.217–2.1.232** (TRDD-0YG37FXM). The `CACHING_DISABLED`
-  cache-break explanation now dates its "Claude Code's small Haiku utility calls do not cache"
-  claim (measured on CC ≤2.1.220; 2.1.221 moved auto-mode permission checks onto the cached
-  conversation prefix), and the FORK_STORM / fork-cost doctrine is version-conditioned: CC ≥2.1.229
-  staggers Workflow same-prefix siblings (first sibling writes, the rest read —
-  `CLAUDE_CODE_WORKFLOW_PREFIX_STAGGER_MS=0` disables), and ≥2.1.232 makes cache-inheriting fork
-  spawning the default. Detection logic is unchanged — it keys on observed writes, so the harness
-  improvements only make storms rarer, never the verdicts wrong. Fable/Mythos pricing and
-  min-cacheable rows were verified already present.
 
 ## [2.25.0] - 2026-08-14
 

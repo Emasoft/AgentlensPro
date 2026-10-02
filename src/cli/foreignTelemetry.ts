@@ -21,9 +21,14 @@ export const HOOK_PATH_VERBS: ReadonlySet<string> = new Set([
   "hook", "gate", "review-gate", "review-supervisor", "delegate-gate", "statusline",
 ])
 
-/** Verbs that must keep working while disabled — they are how one gets back. `server status` is checked
- *  separately (it needs argv[1]). */
-const DISABLED_PASSTHROUGH: ReadonlySet<string> = new Set(["enable", "disable", "setup"])
+/** Verbs that must keep working while disabled — they are how one gets back (and the server verbs, see below). */
+// server/daemon pass through ON PURPOSE: serverControl has its own terminal DISABLED handling (ensureServer and the
+// supervisor throw BEFORE spawning anything), so a supervising launchd never sees the dispatcher's 69 as a crash to retry.
+/** Read-only diagnostics other tools call from their hooks: they only read data on disk, so they skip BOTH the
+ *  per-launch check and the DISABLED stop — a diagnostic call must never write settings.json or disable anything. */
+export const READ_ONLY_VERBS: ReadonlySet<string> = new Set(["cache-state", "last-compact", "model-headroom", "statusline-history"])
+
+const DISABLED_PASSTHROUGH: ReadonlySet<string> = new Set(["enable", "disable", "setup", "server", "daemon"])
 
 /** Is the kill-switch armed, and for THIS reason? (A missing/unreadable flag reads as no.) */
 export function killSwitchArmedForForeign(): boolean {
@@ -52,10 +57,11 @@ function recordedReason(): string | null {
  *  when the verb may run. Hook-path verbs return null: they are silent no-ops and handle the switch
  *  themselves. */
 export function disabledNotice(argv: string[]): { text: string; code: number } | null {
+  const verb = argv[0] ?? ""
+  // Checked BEFORE the kill-switch stat: statusline runs on every Claude render and must cost nothing here.
+  if (HOOK_PATH_VERBS.has(verb) || READ_ONLY_VERBS.has(verb) || DISABLED_PASSTHROUGH.has(verb)) return null
   const half = killSwitchHalf()
   if (half === null) return null
-  const verb = argv[0] ?? ""
-  if (HOOK_PATH_VERBS.has(verb) || DISABLED_PASSTHROUGH.has(verb) || (verb === "server" && argv[1] === "status")) return null
   const reason = recordedReason()
   const lines = [`agentlenspro is DISABLED — ${verb || "start"} did not run.`]
   if (half === "env") {
