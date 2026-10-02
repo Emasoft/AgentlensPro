@@ -8,7 +8,8 @@ import * as path from 'path'
 import { mcpEndpoint } from '../cli/cliCore'
 import { reviveSpawnSpec } from '../cli/hookHandlers'
 import { chooseServerPorts, freeOnProbeError, isPortFree, pickPort, readChosenPort, writePortsFile } from '../cli/portSelect'
-import { cliJsPath, findServerPid, serverCommand } from '../cli/serverControl'
+import { ALCORE_MIMALLOC_PURGE_DELAY_MS, alcoreSpawnEnv, cliJsPath, findServerPid, REVIVE_STARTED_BY, serverCommand } from '../cli/serverControl'
+import { STARTED_BY_ENV } from '../cli/killSwitch'
 import { freePort } from './helpers/freePort'
 
 // Real sockets, real files — no mocks. Each test that opens a listener closes it in finally.
@@ -179,6 +180,14 @@ suite('portSelect — probe verdicts, revive spawn identity, REST identity, revi
     const cwd = process.cwd()
     const elsewhere = fs.mkdtempSync(path.join(os.tmpdir(), 'portsel-'))
     try { process.chdir(elsewhere); assert.strictEqual(cliJsPath(), spec.args[0]) } finally { process.chdir(cwd); fs.rmSync(elsewhere, { recursive: true, force: true }) }
+  })
+
+  test('the alcore spawn built from a revive keeps the old direct-revive env: label hook-revive, MIMALLOC_PURGE_DELAY, MIMALLOC_VERBOSE', () => {
+    const alcoreEnv = alcoreSpawnEnv(REVIVE_STARTED_BY, reviveSpawnSpec({ UI_PORT: '5000' }).env)
+    assert.strictEqual(alcoreEnv[STARTED_BY_ENV], 'hook-revive')
+    assert.strictEqual(alcoreEnv.MIMALLOC_PURGE_DELAY, ALCORE_MIMALLOC_PURGE_DELAY_MS)
+    assert.strictEqual(alcoreEnv.MIMALLOC_VERBOSE, '1')
+    assert.strictEqual(alcoreEnv.UI_PORT, '5000')
   })
 
   test('findServerPid keeps the REST rung: no pidfile + a server reporting THIS data dir is found; another dir is not; ports.json is NOT honoured without the pidfile', async () => {

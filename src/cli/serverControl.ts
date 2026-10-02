@@ -211,6 +211,18 @@ export const DEFAULT_MAX_OLD_SPACE_MB = 6144
 const ALCORE_MIMALLOC_PURGE_DELAY_MS = '0'
 export { ALCORE_MIMALLOC_PURGE_DELAY_MS }
 
+/** The started-by label of a hook revive. Log attribution greps it (TRDD-8VGQK9L9), so the OLD direct
+ *  revive and the `server revive` chain must stamp the same string. */
+export const REVIVE_STARTED_BY = 'hook-revive'
+
+/** The env an alcore spawn gets — a pure function so a test can assert it. `baseEnv` carries whatever
+ *  the caller was started with: a revive child inherits MIMALLOC_VERBOSE=1 from the hook
+ *  (hookHandlers.reviveSpawnSpec), and it reaches alcore here through the spread, as it did when the
+ *  hook spawned alcore directly. */
+export function alcoreSpawnEnv(startedBy: string, baseEnv: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  return { ...baseEnv, [STARTED_BY_ENV]: startedBy, MIMALLOC_PURGE_DELAY: ALCORE_MIMALLOC_PURGE_DELAY_MS }
+}
+
 /** Start the standalone server if the MCP endpoint is unreachable; wait until it answers.
  *
  *  Honors the GLOBAL kill-switch. This is the LAST hole through which a disabled AgentlensPro could
@@ -294,7 +306,7 @@ export async function ensureServer(startedBy = 'ensureServer:unknown', opts: { o
   // brake state it observes, so "who started this server, and was the brake set?" is answered by
   // one grep of server.log instead of a day of inference (TRDD-8VGQK9L9). The mimalloc purge delay
   // rides here too (TRDD-2JOIAH2G R1) — alcore-spawn only, never a global override.
-  const env = { ...process.env, [STARTED_BY_ENV]: startedBy, MIMALLOC_PURGE_DELAY: ALCORE_MIMALLOC_PURGE_DELAY_MS }
+  const env = alcoreSpawnEnv(startedBy)
   // Owner rule 2026-10-02: never bind (or talk to) a port another process holds. Probe-then-bind is
   // a race, so a bind failure at boot (see the 'died' branch) re-picks ports, up to 3 attempts.
   const ports = await resolveServerPorts(process.env)
@@ -1040,7 +1052,7 @@ export async function serverCommand(argv: string[]): Promise<void> {
       if (agentlensDisabled() || reviveBraked() || process.env.AGENTLENS_NO_REVIVE === '1') {
         throw new Error('server revive refused: the kill-switch or the NO_REVIVE brake is armed (`agentlenspro server start` is the deliberate override for the brake).')
       }
-      await ensureServer('hook-revive')
+      await ensureServer(REVIVE_STARTED_BY)
       return
     case 'status':
       await showStatus()
