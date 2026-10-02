@@ -127,19 +127,20 @@ pub struct Counters {
 }
 
 /// A copy of everything a summary rebuild reads, taken under the state lock so the rebuild can
-/// run outside it (TRDD-HFV4AIT7). Both fields hold `Arc`s, so building one is a pointer copy per
-/// span/card — never a deep clone of the window.
+/// run outside it (TRDD-HFV4AIT7). Every field holds `Arc`s, so building one is a pointer copy per
+/// span/card — never a deep clone of the window or of the card corpus.
 pub struct SummaryInputs {
     pub version: u64,
     pub spans: Vec<Arc<Value>>,
-    /// The card corpus as its RAW stored JSON, in first-insert order (TRDD-XTFDRTH2).
+    /// The card corpus as shared pointers into the card store's resident parsed layer, in
+    /// first-insert order (TRDD-9VX3WTGU Phase C).
     ///
-    /// Strings, not `Value`s, because the DuckDB connection lives inside `CoreState` and can only
-    /// be read under the state lock: copying the stored text is the cheapest thing that can cross
-    /// that boundary, and the PARSE — the expensive half, and the one that allocates a tree per
-    /// card — then happens in `summary_from`, off the lock. Handing `Value`s here would drag the
-    /// whole deserialization back under the guard that TRDD-HFV4AIT7 emptied.
-    pub log_cards: Vec<String>,
+    /// This WAS the raw stored JSON text (`Vec<String>`, ~69 MB over 37k cards) copied out of
+    /// DuckDB under the state lock and re-parsed in `summary_from` on EVERY pass — at the 25 ms
+    /// rebuild cadence that copy-and-parse was the dominant allocation-churn former behind the
+    /// 2048 MB kills. A snapshot is now one refcount bump per card, so the lock hold is O(cards)
+    /// pointer copies and the parse is gone entirely.
+    pub log_cards: Vec<Arc<Value>>,
     /// The session→account map the summarizer resolves `accountId` through (TRDD-465EXTJ6).
     ///
     /// It has to travel IN the snapshot: `summary_over` is deliberately a free function with no
@@ -289,7 +290,8 @@ pub struct CoreState {
 impl CoreState {
     /// putLogSession — upsert by sessionId.
     pub fn put_log_session(&mut self, card: Value) {
-        self.cards.put(&card);
+        // The card is already a parsed `Value` here, so the resident layer costs no extra parse.
+        self.cards.put_arc(Arc::new(card));
         self.data_version += 1;
     }
 
@@ -298,10 +300,9 @@ impl CoreState {
     /// keep their timelines in RAM; every colder card keeps headers only.
     pub fn demote_cold_timelines(&mut self, hot_cards: usize) {
         // TRDD-XTFDRTH2: the ranking (`last_active` DESC, first-insert ASC on ties) and the strip
-        // now run inside the card table — see `CardStore::demote_cold`. The `Arc::make_mut`
-        // copy-on-write this replaces existed only because a rebuild in flight could still be
-        // holding the very `Arc` being stripped; a snapshot is now a copy of the JSON text, so
-        // there is nothing shared left to protect.
+        // run inside the card table — see `CardStore::demote_cold`, which also strips the resident
+        // parsed layer (copy-on-write via `Arc::make_mut`, so a rebuild still holding the
+        // pre-demotion pointer keeps a consistent view).
         self.cards.demote_cold(hot_cards);
     }
 
@@ -333,29 +334,26 @@ impl CoreState {
     /// computeSessionSummary (server.ts:2240) — summarizeSpans over the live window, then, when
     /// any log session exists, the feed-collision merge + the subagent link, sorted newest-first.
     pub fn session_summary(&self, now_ms: f64) -> Value {
-        Self::summary_over(&self.window.spans, self.cards.cards(), &self.accounts.snapshot(), now_ms).0
+        Self::summary_over(&self.window.spans, &self.cards.parsed_cards(), &self.accounts.snapshot(), now_ms).0
     }
 
     /// The inputs of one summary rebuild, copied under the state lock so the rebuild itself runs
-    /// OUTSIDE it (TRDD-HFV4AIT7). The spans are `Arc`s, so that half is a pointer copy; the cards
-    /// are their raw stored JSON, so that half is a string copy and NOT a 32k-tree deserialization
-    /// (see `SummaryInputs::log_cards`).
+    /// OUTSIDE it (TRDD-HFV4AIT7). Spans and cards are both `Arc`s, so the whole snapshot is a
+    /// pointer copy: no card text crosses the lock and nothing is parsed (TRDD-9VX3WTGU Phase C —
+    /// `cards_json()` is now only the cold-boot/CLI/parity read of the TABLE).
     pub fn summary_snapshot(&self) -> SummaryInputs {
         SummaryInputs {
             version: self.data_version,
             spans: self.window.spans.clone(),
-            log_cards: self.cards.cards_json(),
+            log_cards: self.cards.parsed_cards(),
             accounts: Arc::new(self.accounts.snapshot()),
         }
     }
 
     /// The off-lock half: `summary_over` on a snapshot. Free function shape on purpose — it takes
-    /// no `&self`, so it cannot accidentally be called while the lock is held. The card parse
-    /// happens HERE, which is why the snapshot carries text.
+    /// no `&self`, so it cannot accidentally be called while the lock is held.
     pub fn summary_from(inputs: &SummaryInputs, now_ms: f64) -> (Value, IndexMap<String, Vec<Value>>) {
-        let cards: Vec<Value> =
-            inputs.log_cards.iter().map(|j| serde_json::from_str(j).expect("a stored session card parses")).collect();
-        Self::summary_over(&inputs.spans, cards, &inputs.accounts, now_ms)
+        Self::summary_over(&inputs.spans, &inputs.log_cards, &inputs.accounts, now_ms)
     }
 
     /// Store a summary built off the lock, together with the attribution map built WITH it. The
@@ -374,9 +372,15 @@ impl CoreState {
     /// Returns the merged summary AND `otelAttributionBySession` (server.ts:2245) — the OTEL
     /// api_request entries per claude_code session, captured off the PRE-merge sessions so the
     /// `/api/timeline` graft still has them after the merge displaces the OTEL twin.
+    ///
+    /// TRDD-9VX3WTGU Phase C: the summary stays a `serde_json::Value` (24 MCP tools and the
+    /// dashboard read that shape), so each log card still has to become an OWNED `Value` inside
+    /// the merged `sessions` array — the one deep copy that remains. What is gone is everything
+    /// around it: the text copy and parse of the whole corpus, the clone of the OTEL sessions
+    /// array before the merge, and the clone of every displaced OTEL card's api_request entries.
     fn summary_over(
         spans: &[Arc<Value>],
-        log_cards: Vec<Value>,
+        log_cards: &[Arc<Value>],
         accounts: &IndexMap<String, String>,
         now_ms: f64,
     ) -> (Value, IndexMap<String, Vec<Value>>) {
@@ -390,38 +394,67 @@ impl CoreState {
         // windows, and anything keyed on the account (P5 capacity calibration) silently never ran.
         let mut summary = summarize::summarizer::summarize_spans(spans, &|sid| accounts.get(sid).cloned());
         let mut attribution: IndexMap<String, Vec<Value>> = IndexMap::new();
-        for s in summary.get("sessions").and_then(Value::as_array).map(Vec::as_slice).unwrap_or(&[]) {
+        if log_cards.is_empty() {
+            // No merge: every OTEL card survives into the served summary, so its entries are
+            // CLONED (the card keeps its timeline).
+            for s in summary.get("sessions").and_then(Value::as_array).map(Vec::as_slice).unwrap_or(&[]) {
+                if s.get("source").and_then(Value::as_str) != Some("claude_code") {
+                    continue;
+                }
+                let entries: Vec<Value> = s
+                    .get("timeline")
+                    .and_then(Value::as_array)
+                    .map(|t| t.iter().filter(|e| e.get("type").and_then(Value::as_str) == Some("api_request")).cloned().collect())
+                    .unwrap_or_default();
+                if !entries.is_empty() {
+                    if let Some(id) = s.get("sessionId").and_then(Value::as_str) {
+                        attribution.insert(id.to_owned(), entries);
+                    }
+                }
+            }
+            return (summary, attribution);
+        }
+        // The merge REWRITES the cards it keeps and takes them by VALUE. A log card is shared with
+        // the resident layer, so it is copied out here (the one remaining deep copy, see above);
+        // the OTEL sessions are MOVED out of the summary instead of cloned — the merged list
+        // replaces the `sessions` key below, so nothing reads the original again.
+        let log: Vec<Value> = log_cards.iter().map(|c| (**c).clone()).collect();
+        let mut otel: Vec<Value> = match summary.get_mut("sessions").map(Value::take) {
+            Some(Value::Array(a)) => a,
+            _ => Vec::new(),
+        };
+        // Attribution is captured off the PRE-merge OTEL sessions. A card the merge is about to
+        // DROP (`is_displaced_otel`, the merge's own predicate) donates its api_request entries by
+        // MOVE; a surviving card keeps its timeline, so its entries are cloned.
+        let wins = feed_merge::log_wins_ids(&log);
+        for s in &mut otel {
             if s.get("source").and_then(Value::as_str) != Some("claude_code") {
                 continue;
             }
-            let entries: Vec<Value> = s
-                .get("timeline")
-                .and_then(Value::as_array)
-                .map(|t| t.iter().filter(|e| e.get("type").and_then(Value::as_str) == Some("api_request")).cloned().collect())
-                .unwrap_or_default();
+            let is_api = |e: &Value| e.get("type").and_then(Value::as_str) == Some("api_request");
+            let displaced = feed_merge::is_displaced_otel(s, &wins);
+            let Some(timeline) = s.get_mut("timeline").and_then(Value::as_array_mut) else { continue };
+            let entries: Vec<Value> = if displaced {
+                std::mem::take(timeline).into_iter().filter(|e| is_api(e)).collect()
+            } else {
+                timeline.iter().filter(|e| is_api(e)).cloned().collect()
+            };
             if !entries.is_empty() {
                 if let Some(id) = s.get("sessionId").and_then(Value::as_str) {
                     attribution.insert(id.to_owned(), entries);
                 }
             }
         }
-        if !log_cards.is_empty() {
-            let otel: Vec<Value> = summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
-            // The merge REWRITES the cards it keeps, and it now receives them by VALUE: the caller
-            // parsed them out of the card table, so this function owns the only copy and the deep
-            // clone the `Arc<Value>` map forced here is gone (TRDD-XTFDRTH2).
-            let mut merged =
-                feed_merge::link_subagent_transcripts(feed_merge::merge_otel_and_log_sessions(otel, log_cards));
-            // Date.parse(b.startTime || '0') - Date.parse(a.startTime || '0'), newest first.
-            merged.sort_by(|a, b| {
-                let k = |c: &Value| {
-                    let st = c.get("startTime").and_then(Value::as_str).unwrap_or("");
-                    if st.is_empty() { -62_167_219_200_000.0 } else { summarize::helpers::parse_iso_ms(st).unwrap_or(f64::NAN) }
-                };
-                k(b).partial_cmp(&k(a)).unwrap_or(std::cmp::Ordering::Equal)
-            });
-            summary.as_object_mut().expect("summary object").insert("sessions".into(), Value::Array(merged));
-        }
+        let mut merged = feed_merge::link_subagent_transcripts(feed_merge::merge_otel_and_log_sessions(otel, log));
+        // Date.parse(b.startTime || '0') - Date.parse(a.startTime || '0'), newest first.
+        merged.sort_by(|a, b| {
+            let k = |c: &Value| {
+                let st = c.get("startTime").and_then(Value::as_str).unwrap_or("");
+                if st.is_empty() { -62_167_219_200_000.0 } else { summarize::helpers::parse_iso_ms(st).unwrap_or(f64::NAN) }
+            };
+            k(b).partial_cmp(&k(a)).unwrap_or(std::cmp::Ordering::Equal)
+        });
+        summary.as_object_mut().expect("summary object").insert("sessions".into(), Value::Array(merged));
         (summary, attribution)
     }
 
@@ -444,7 +477,7 @@ impl CoreState {
         let Self { summary_cache, window, cards, data_version, otel_attribution, accounts, .. } = self;
         let accounts = accounts.snapshot();
         summary_cache.get(*data_version, || {
-            let (summary, attribution) = Self::summary_over(&window.spans, cards.cards(), &accounts, now_ms);
+            let (summary, attribution) = Self::summary_over(&window.spans, &cards.parsed_cards(), &accounts, now_ms);
             *otel_attribution = attribution;
             summary
         })

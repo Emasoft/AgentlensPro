@@ -57,6 +57,7 @@
 //! telemetry silently — the failure mode this project treats as worse than a crash.
 
 use std::path::Path;
+use std::sync::Arc;
 
 use indexmap::IndexMap;
 use serde_json::Value;
@@ -91,8 +92,30 @@ const SCHEMA: &str = "CREATE TABLE cards (
     seq BIGINT NOT NULL,
     last_active_ms DOUBLE NOT NULL,
     timeline_len BIGINT NOT NULL,
+    parent_session_id VARCHAR,
+    source VARCHAR,
     card VARCHAR NOT NULL
-)";
+);
+CREATE INDEX idx_cards_active ON cards (last_active_ms DESC, seq ASC);
+CREATE INDEX idx_cards_parent ON cards (parent_session_id)";
+
+
+/// One keyset page of ROOT cards (TRDD-9VX3WTGU Phase C, Amendment 1).
+///
+/// POINT-IN-TIME PER REQUEST: each page is its own query, not a snapshot. An upsert moves a card's
+/// `last_active_ms` (it keeps `seq`), so a walk interleaved with ingest never repeats a card whose
+/// activity only moves forward (it jumps ahead of the cursor, which only advances backward in
+/// time) — but it can MISS a not-yet-delivered card that was just touched, and it can repeat one
+/// whose `last_active_ms` DECREASES between two pages (a re-parse of a shorter transcript).
+/// Consumers key cards by `sessionId`; a refresh restarts the walk.
+pub struct CardPage {
+    pub sessions: Vec<Value>,
+    /// `(last_active_ms, seq)` of the last card in `sessions`; `Some` only when `has_more`.
+    pub next_cursor: Option<(f64, i64)>,
+    pub has_more: bool,
+    /// Count of ALL root cards (not of this page) — what the whole listing would hold.
+    pub total: i64,
+}
 
 pub struct CardStore {
     conn: Connection,
@@ -106,6 +129,16 @@ pub struct CardStore {
     /// to the old `save_cards` full-store persist path would show up as this counter growing once
     /// per backfill chunk instead of staying flat.
     full_scan_calls: std::sync::atomic::AtomicUsize,
+    /// TRDD-9VX3WTGU Phase C — the RESIDENT PARSED layer: the same corpus as the table, as shared
+    /// `Arc<Value>` trees in first-insert order (an `IndexMap` upsert keeps its slot, exactly like
+    /// `ON CONFLICT DO UPDATE` keeps `seq`). The summary rebuild used to copy ~69 MB of card text
+    /// out of DuckDB and re-parse every card on EVERY pass (25 ms cadence under ingest) — the
+    /// dominant allocation-churn former; a snapshot is now one refcount bump per card.
+    ///
+    /// It lives HERE, not in `CoreState`, so it cannot drift from the table: every write path
+    /// (`put`, `clear`, `demote_cold`) updates both inside the same method, including the callers
+    /// that reach the store directly (tests call `st.cards.clear()`).
+    parsed: IndexMap<String, Arc<Value>>,
 }
 
 impl CardStore {
@@ -137,7 +170,12 @@ impl CardStore {
             "SET memory_limit='{MEMORY_LIMIT}'; SET threads=2; DROP TABLE IF EXISTS cards; {SCHEMA};"
         ))
         .expect("create the card store schema");
-        CardStore { conn, next_seq: 0, full_scan_calls: std::sync::atomic::AtomicUsize::new(0) }
+        CardStore {
+            conn,
+            next_seq: 0,
+            full_scan_calls: std::sync::atomic::AtomicUsize::new(0),
+            parsed: IndexMap::new(),
+        }
     }
 
     /// TRDD-ORGJ0E3G follow-up — how many times `persist_records()` (the whole-store scan) has
@@ -164,21 +202,44 @@ impl CardStore {
     /// The key is `unwrap_or("")`, exactly as the `IndexMap` version was: a card with no
     /// `sessionId` has always occupied the one `""` slot rather than accumulating rows.
     pub fn put(&mut self, card: &Value) {
-        let id = card.get("sessionId").and_then(Value::as_str).unwrap_or("");
-        let last_active = crate::log_reader::last_active_ms(card);
+        self.put_arc(Arc::new(card.clone()));
+    }
+
+    /// `put`, taking the card already shared: the one write path, so the table row and the
+    /// resident parsed layer are updated together. `CoreState::put_log_session` owns its card and
+    /// wraps it here with no extra clone.
+    ///
+    /// `parent_session_id` / `source` are the query KEYS the pagination and stats endpoints read
+    /// (TRDD-9VX3WTGU Phase C): extracted once at write time so no read ever needs `json_extract`
+    /// over the card text. An empty or absent `parentSessionId` is NULL — a root — matching
+    /// `link_subagent_transcripts`, which treats the empty string as "no parent". Non-Claude
+    /// sources (codex / opencode / copilot) set no parent, so they land as roots.
+    pub fn put_arc(&mut self, card: Arc<Value>) {
+        let id = card.get("sessionId").and_then(Value::as_str).unwrap_or("").to_owned();
+        let last_active = crate::log_reader::last_active_ms(&card);
         let timeline_len = card.get("timeline").and_then(Value::as_array).map_or(0, Vec::len) as i64;
-        let json = serde_json::to_string(card).expect("a session card is serializable");
+        let parent = card.get("parentSessionId").and_then(Value::as_str).filter(|p| !p.is_empty()).map(str::to_owned);
+        let source = card.get("source").and_then(Value::as_str).map(str::to_owned);
+        let json = serde_json::to_string(&*card).expect("a session card is serializable");
+        // WHY the indexed columns are in DO UPDATE too: an upsert moves `last_active_ms` (and, in
+        // principle, the parent), and the page query orders and filters on exactly those.
         self.conn
             .execute(
-                "INSERT INTO cards (session_id, seq, last_active_ms, timeline_len, card) VALUES (?, ?, ?, ?, ?)
+                "INSERT INTO cards (session_id, seq, last_active_ms, timeline_len, parent_session_id, source, card)
+                 VALUES (?, ?, ?, ?, ?, ?, ?)
                  ON CONFLICT (session_id) DO UPDATE SET
-                     last_active_ms = excluded.last_active_ms,
-                     timeline_len   = excluded.timeline_len,
-                     card           = excluded.card",
-                agentlens_store::duckdb::params![id, self.next_seq, last_active, timeline_len, json],
+                     last_active_ms    = excluded.last_active_ms,
+                     timeline_len      = excluded.timeline_len,
+                     parent_session_id = excluded.parent_session_id,
+                     source            = excluded.source,
+                     card              = excluded.card",
+                agentlens_store::duckdb::params![id, self.next_seq, last_active, timeline_len, parent, source, json],
             )
             .expect("upsert a session card");
         self.next_seq += 1;
+        // `IndexMap::insert` on an existing key replaces the value and KEEPS the slot, like the
+        // table keeps `seq`.
+        self.parsed.insert(id, card);
     }
 
     pub fn len(&self) -> usize {
@@ -277,6 +338,7 @@ impl CardStore {
     pub fn clear(&mut self) {
         self.conn.execute_batch("DELETE FROM cards").expect("clear the card store");
         self.next_seq = 0;
+        self.parsed.clear();
     }
 
     /// demoteColdTimelines' storage half: only the `hot_cards` most-recently-active cards keep
@@ -324,8 +386,135 @@ impl CardStore {
                     agentlens_store::duckdb::params![stripped, id],
                 )
                 .expect("store a demoted card");
+            // The resident layer must follow the table or a summary rebuilt from it would keep
+            // serving a timeline the store already dropped. `Arc::make_mut` is copy-on-write: a
+            // rebuild still holding the old pointer keeps its (consistent) pre-demotion view and
+            // this layer gets its own stripped copy.
+            if let Some(resident) = self.parsed.get_mut(&id) {
+                if let Some(obj) = Arc::make_mut(resident).as_object_mut() {
+                    crate::log_reader::strip_timeline_value(obj);
+                }
+            }
         }
     }
+
+
+    /// Every card as a shared pointer, first-insert order — the summary rebuild input. One
+    /// refcount bump per card; no text copy, no parse (TRDD-9VX3WTGU Phase C). `cards()` /
+    /// `cards_json()` stay for the cold-boot, CLI and parity paths that read the TABLE.
+    pub fn parsed_cards(&self) -> Vec<Arc<Value>> {
+        self.parsed.values().cloned().collect()
+    }
+
+    /// One keyset page of ROOT cards (`parent_session_id IS NULL`), newest activity first,
+    /// strictly AFTER `after` in the order `(last_active_ms DESC, seq ASC)`. Reads the key
+    /// columns through `idx_cards_active`; only the page's cards TEXT is materialized.
+    pub fn page(&self, after: Option<(f64, i64)>, limit: usize) -> CardPage {
+        let total: i64 = self
+            .conn
+            .query_row("SELECT count(*) FROM cards WHERE parent_session_id IS NULL", [], |r| r.get(0))
+            .expect("count the root cards");
+        let fetch = limit as i64 + 1;
+        const HEAD: &str = "SELECT card, seq, last_active_ms FROM cards WHERE parent_session_id IS NULL";
+        const TAIL: &str = " ORDER BY last_active_ms DESC, seq ASC LIMIT ?";
+        let read = |r: &agentlens_store::duckdb::Row<'_>| -> agentlens_store::duckdb::Result<(String, i64, f64)> {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+        };
+        let mut rows: Vec<(String, i64, f64)> = match after {
+            Some((ms, seq)) => {
+                let mut stmt = self
+                    .conn
+                    .prepare(&format!("{HEAD} AND (last_active_ms < ? OR (last_active_ms = ? AND seq > ?)){TAIL}"))
+                    .expect("prepare the page query");
+                let it = stmt
+                    .query_map(agentlens_store::duckdb::params![ms, ms, seq, fetch], read)
+                    .expect("run the page query");
+                it.map(|r| r.expect("read a page row")).collect()
+            }
+            None => {
+                let mut stmt = self.conn.prepare(&format!("{HEAD}{TAIL}")).expect("prepare the first page query");
+                let it = stmt.query_map(agentlens_store::duckdb::params![fetch], read).expect("run the first page query");
+                it.map(|r| r.expect("read a page row")).collect()
+            }
+        };
+        let has_more = rows.len() > limit;
+        rows.truncate(limit);
+        let next_cursor = if has_more { rows.last().map(|(_, seq, ms)| (*ms, *seq)) } else { None };
+        CardPage { sessions: rows.iter().map(|(j, _, _)| parse(j)).collect(), next_cursor, has_more, total }
+    }
+
+    /// The direct children (`parent_session_id = parent_id`) of one card, first-insert order.
+    pub fn children(&self, parent_id: &str) -> Vec<Value> {
+        self.query_cards("SELECT card FROM cards WHERE parent_session_id = ? ORDER BY seq", [parent_id])
+    }
+
+    pub fn child_count(&self, parent_id: &str) -> i64 {
+        self.conn
+            .query_row("SELECT count(*) FROM cards WHERE parent_session_id = ?", [parent_id], |r| r.get(0))
+            .expect("count the child cards")
+    }
+
+    /// The cards named by `ids` (unknown ids are simply absent), first-insert order.
+    pub fn by_ids(&self, ids: &[&str]) -> Vec<Value> {
+        if ids.is_empty() {
+            return Vec::new();
+        }
+        let marks = vec!["?"; ids.len()].join(",");
+        self.query_cards(
+            &format!("SELECT card FROM cards WHERE session_id IN ({marks}) ORDER BY seq"),
+            agentlens_store::duckdb::params_from_iter(ids.iter()),
+        )
+    }
+
+    /// `{total, roots, subagents, bySource}` from the KEY COLUMNS only — a COUNT and a GROUP BY,
+    /// never `json_extract` over the card text (that is the O(corpus) scan Amendment 1 bans). A
+    /// card with no `source` is counted under `"unknown"`.
+    pub fn stats_key(&self) -> Value {
+        let (total, roots): (i64, i64) = self
+            .conn
+            .query_row(
+                "SELECT count(*), count(*) FILTER (WHERE parent_session_id IS NULL) FROM cards",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .expect("count the cards by kind");
+        let mut stmt = self
+            .conn
+            .prepare("SELECT source, count(*) FROM cards GROUP BY source ORDER BY source NULLS LAST")
+            .expect("prepare the source breakdown");
+        let rows = stmt
+            .query_map([], |r| Ok((r.get::<_, Option<String>>(0)?, r.get::<_, i64>(1)?)))
+            .expect("group the cards by source");
+        let mut by_source = serde_json::Map::new();
+        for r in rows {
+            let (source, n) = r.expect("read a source row");
+            let key = source.unwrap_or_else(|| "unknown".to_owned());
+            let prev = by_source.get(&key).and_then(Value::as_i64).unwrap_or(0);
+            by_source.insert(key, Value::from(prev + n));
+        }
+        serde_json::json!({ "total": total, "roots": roots, "subagents": total - roots, "bySource": by_source })
+    }
+
+    /// The root card with the newest activity (ties: first inserted) — the `idx_cards_active`
+    /// head. `None` on an empty store.
+    pub fn newest_root_id(&self) -> Option<String> {
+        self.conn
+            .query_row(
+                "SELECT session_id FROM cards WHERE parent_session_id IS NULL
+                 ORDER BY last_active_ms DESC, seq ASC LIMIT 1",
+                [],
+                |r| r.get::<_, String>(0),
+            )
+            .optional()
+            .expect("find the newest root card")
+    }
+
+    fn query_cards<P: agentlens_store::duckdb::Params>(&self, sql: &str, params: P) -> Vec<Value> {
+        let mut stmt = self.conn.prepare(sql).expect("prepare a card query");
+        let rows = stmt.query_map(params, |r| r.get::<_, String>(0)).expect("run a card query");
+        rows.map(|r| parse(&r.expect("read a card row"))).collect()
+    }
+
 }
 
 /// A stored card is a string THIS process wrote with `serde_json::to_string`; a parse failure

@@ -620,6 +620,90 @@ fn strip_one_session(s: &Value) -> Value {
     Value::Object(c)
 }
 
+
+/// Default and ceiling for `GET /api/cards/page?limit=`.
+const CARDS_PAGE_DEFAULT_LIMIT: usize = 50;
+const CARDS_PAGE_MAX_LIMIT: usize = 200;
+
+/// `GET /api/cards/page|children|by-ids` and `GET /api/stats/overview` (TRDD-9VX3WTGU Phase C,
+/// Amendment 1: the dashboard never receives the whole corpus). Blocking — run it on
+/// `spawn_blocking`. Every answer comes from the DuckDB card table (key columns + the page cards
+/// own text), NOT from the memoized summary, so none of them waits on, or is invalidated by, a
+/// summary rebuild; they are the raw LOG cards (no OTEL merge stamps), header-stripped by
+/// `strip_one_session` exactly like `/api/summary`.
+///
+/// The store lock is held for the queries only; stripping happens after it is released.
+fn cards_route(
+    state: &Arc<Mutex<CoreState>>,
+    path: &str,
+    q: &std::collections::HashMap<String, String>,
+) -> (StatusCode, String) {
+    let bad = |msg: &str| (StatusCode::BAD_REQUEST, error_json(msg));
+    let strip_all = |v: Vec<Value>| -> Vec<Value> { v.iter().map(strip_one_session).collect() };
+    let Ok(st) = state.lock_timed() else { return (StatusCode::INTERNAL_SERVER_ERROR, error_json("state poisoned")) };
+    match path {
+        "/api/cards/page" => {
+            let limit = match q.get("limit") {
+                None => CARDS_PAGE_DEFAULT_LIMIT,
+                Some(v) => match v.parse::<usize>() {
+                    Ok(n) if (1..=CARDS_PAGE_MAX_LIMIT).contains(&n) => n,
+                    _ => return bad(&format!("limit must be an integer in 1..={CARDS_PAGE_MAX_LIMIT}")),
+                },
+            };
+            // `<last_active_ms>:<seq>` — exactly what `nextCursor` emits. A malformed cursor is a
+            // 400, never "start over": silently restarting would loop a buggy client forever.
+            let after = match q.get("cursor").filter(|c| !c.is_empty()) {
+                None => None,
+                Some(c) => {
+                    let parsed = c.split_once(':').and_then(|(ms, seq)| Some((ms.parse::<f64>().ok()?, seq.parse::<i64>().ok()?)));
+                    match parsed {
+                        Some((ms, seq)) if ms.is_finite() => Some((ms, seq)),
+                        _ => return bad("cursor must be <last_active_ms>:<seq>"),
+                    }
+                }
+            };
+            let page = st.cards.page(after, limit);
+            drop(st);
+            let next = page.next_cursor.map(|(ms, seq)| Value::from(format!("{ms}:{seq}"))).unwrap_or(Value::Null);
+            let body = serde_json::json!({
+                "sessions": strip_all(page.sessions),
+                "nextCursor": next,
+                "hasMore": page.has_more,
+                "total": page.total,
+            });
+            (StatusCode::OK, body.to_string())
+        }
+        "/api/cards/children" => {
+            let Some(parent) = q.get("parentId").filter(|p| !p.is_empty()) else { return bad("parentId is required") };
+            let kids = st.cards.children(parent);
+            let total = st.cards.child_count(parent);
+            drop(st);
+            (StatusCode::OK, serde_json::json!({ "sessions": strip_all(kids), "total": total }).to_string())
+        }
+        "/api/cards/by-ids" => {
+            let ids: Vec<&str> = q.get("ids").map(|s| s.split(',').filter(|i| !i.is_empty()).collect()).unwrap_or_default();
+            let found = st.cards.by_ids(&ids);
+            drop(st);
+            (StatusCode::OK, serde_json::json!({ "sessions": strip_all(found) }).to_string())
+        }
+        "/api/stats/overview" => {
+            let mut stats = st.cards.stats_key();
+            let active = st.cards.newest_root_id();
+            drop(st);
+            // `activeSessionId`: the root card with the newest activity. `lastReceivedAtMs` is
+            // null until Phase E adds a maintained field — deriving it here would mean scanning
+            // the span window's `receivedAt` stamps, an O(window) walk this endpoint exists to
+            // avoid.
+            if let Some(o) = stats.as_object_mut() {
+                o.insert("activeSessionId".into(), active.map_or(Value::Null, Value::from));
+                o.insert("lastReceivedAtMs".into(), Value::Null);
+            }
+            (StatusCode::OK, stats.to_string())
+        }
+        _ => (StatusCode::NOT_FOUND, error_json("not found")),
+    }
+}
+
 /// The query params of a request (the TS `new URLSearchParams(rawUrl.slice(qIdx + 1))` — last
 /// value wins for a repeated key, which URLSearchParams.get answers as FIRST; our handlers never
 /// send repeated keys, so the difference is unobservable on the frozen surface).
@@ -1316,6 +1400,9 @@ async fn handle(
     // one version compare (a hit) or one off-lock rebuild — never a held lock.
     let reads_summary = (method == Method::GET || method == Method::HEAD)
         && (path == "/" || path == "/events" || path.starts_with("/api/"))
+        // The card/stats routes read the DuckDB card table directly, so warming the summary for
+        // them would spend a whole-corpus rebuild on a request that never reads it.
+        && !(path.starts_with("/api/cards/") || path == "/api/stats/overview")
         && viewer_role != crate::embed_auth::ViewerRole::Invalid
         && !restricted_block;
     if reads_summary {
@@ -2028,6 +2115,15 @@ async fn handle(
                 .to_string()
         };
         json_response(StatusCode::OK, body)
+    } else if method == Method::GET && (path.starts_with("/api/cards/") || path == "/api/stats/overview") {
+        // TRDD-9VX3WTGU Phase C — DuckDB-paginated card reads + key-column stats. Blocking DuckDB
+        // work, so spawn_blocking like the composition/history routes below; see `cards_route`.
+        let q = query_of(&req);
+        let (state, route) = (state.clone(), path.clone());
+        let (status, body) = tokio::task::spawn_blocking(move || cards_route(&state, &route, &q))
+            .await
+            .map_err(|e| format!("cards route join failed: {e}"))?;
+        json_response(status, body)
     } else if method == Method::GET && path.starts_with("/api/composition/") {
         // Row 32 (server.ts:4208). Reconstructs the per-turn composition by STREAMING the session's
         // raw .jsonl — multi-GB files are routine, so this runs on spawn_blocking and the Env is

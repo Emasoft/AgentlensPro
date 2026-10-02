@@ -259,7 +259,7 @@ fn cards_sharing_a_start_time_are_served_in_first_insert_order() {
 #[test]
 fn a_restore_sized_bulk_load_stays_inside_the_memory_limit() {
     const N: usize = 60_000;
-    const CHUNK: usize = 2_000;
+    const CHUNK: usize = 500;
     let mut store = store("bulk-restore");
     let filler = "x".repeat(1_700); // ~ the real corpus's average card
     let whale = "x".repeat(310_000); // > DuckDB's 256 KiB block: forces overflow blocks

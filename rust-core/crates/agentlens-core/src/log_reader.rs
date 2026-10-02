@@ -885,7 +885,7 @@ impl DurableState {
             // state lock for the whole restore, so no reader can see a half-loaded store.
             // ponytail: rows-only chunking; the honest ceiling is bytes (2,000 × 100 KB cards would
             // be 200 MB) — add a byte accumulator if cards ever grow past ~10 KB on average.
-            const RESTORE_CHUNK: usize = 2_000;
+            const RESTORE_CHUNK: usize = 500;
             state.cards.begin();
             let now = std::time::SystemTime::now();
             for (n, (_, mut card)) in cards.into_iter().enumerate() {

@@ -85,6 +85,23 @@ fn stamp_plain(card: &mut Value, source: &str) {
     o.shift_remove("coverageNote");
 }
 
+/// The sessionIds of the log cards whose source PREFERS the log feed — the cards that displace an
+/// OTEL twin on collision. One definition: `merge_otel_and_log_sessions` and the attribution
+/// capture in `CoreState::summary_over` both read it, so they cannot disagree about which OTEL
+/// cards the merge drops.
+pub fn log_wins_ids(log_sessions: &[Value]) -> HashSet<String> {
+    log_sessions
+        .iter()
+        .filter(|c| preferred_data_source(s(c, "source")) == "log")
+        .map(|c| s(c, "sessionId").to_owned())
+        .collect()
+}
+
+/// True when the merge DROPS this OTEL-feed card because a log card in `log_wins_ids` replaces it.
+pub fn is_displaced_otel(card: &Value, log_wins_ids: &HashSet<String>) -> bool {
+    s(card, "dataSource") == "otel" && log_wins_ids.contains(s(card, "sessionId"))
+}
+
 /// mergeOtelAndLogSessions — on a sessionId collision the source's preferred feed wins; every
 /// non-colliding card is kept; order is `[...keptLog, ...keptOtel]` (callers sort).
 pub fn merge_otel_and_log_sessions(mut otel_sessions: Vec<Value>, mut log_sessions: Vec<Value>) -> Vec<Value> {
@@ -94,16 +111,9 @@ pub fn merge_otel_and_log_sessions(mut otel_sessions: Vec<Value>, mut log_sessio
         }
         return otel_sessions;
     }
-    let log_wins_ids: HashSet<String> = log_sessions
-        .iter()
-        .filter(|c| preferred_data_source(s(c, "source")) == "log")
-        .map(|c| s(c, "sessionId").to_owned())
-        .collect();
+    let wins = log_wins_ids(&log_sessions);
     let otel_ids: HashSet<String> = otel_sessions.iter().map(|c| s(c, "sessionId").to_owned()).collect();
-    let mut kept_otel: Vec<Value> = otel_sessions
-        .drain(..)
-        .filter(|c| !(s(c, "dataSource") == "otel" && log_wins_ids.contains(s(c, "sessionId"))))
-        .collect();
+    let mut kept_otel: Vec<Value> = otel_sessions.drain(..).filter(|c| !is_displaced_otel(c, &wins)).collect();
     let kept_otel_ids: HashSet<String> = kept_otel.iter().map(|c| s(c, "sessionId").to_owned()).collect();
     let mut kept_log: Vec<Value> = log_sessions.drain(..).filter(|c| !kept_otel_ids.contains(s(c, "sessionId"))).collect();
     for c in &mut kept_otel {
