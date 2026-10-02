@@ -93,6 +93,7 @@ pub mod forensics_sql;
 pub mod forensics_compare;
 pub mod subscription_usage;
 pub mod summarize;
+pub mod summary_engine;
 pub mod token_estimator;
 pub mod tokens_by_cause;
 pub mod ui;
@@ -152,6 +153,11 @@ pub struct SummaryInputs {
     /// `Arc`, matching the two fields above, so building a snapshot stays a pointer copy — a deep
     /// clone here would reintroduce the under-lock stall HFV4AIT7 removed.
     pub accounts: Arc<IndexMap<String, String>>,
+    /// The card store epoch the snapshot belongs to (bumped by `clear`).
+    pub epoch: u64,
+    /// The caches previous outputs, handed over for in-place patching (see `summary_engine`).
+    pub prev: summary_engine::Prev,
+    pub engine: Arc<summary_engine::SummaryEngine>,
 }
 
 pub struct CoreState {
@@ -230,6 +236,10 @@ pub struct CoreState {
     /// memoized by data_version (derived_cache.rs).
     pub summary_cache: derived_cache::VersionedCache<Value>,
     pub stripped_cache: derived_cache::VersionedCache<Value>,
+    /// The incremental summary rebuild (TRDD-9VX3WTGU Phase C part 2). `Arc` so the off-lock rebuild
+    /// owns a handle without touching the state lock; `force_full` is set wherever the OTEL window
+    /// changes wholesale (prune, pressure ladder, clear).
+    pub summary_engine: Arc<summary_engine::SummaryEngine>,
     /// The shared CallBodyRegistry's account half: fed by the logs ingest, read when a log card
     /// is built (accountId, TRDD-BURNWDGT).
     pub accounts: account_registry::AccountRegistry,
@@ -341,30 +351,44 @@ impl CoreState {
     /// OUTSIDE it (TRDD-HFV4AIT7). Spans and cards are both `Arc`s, so the whole snapshot is a
     /// pointer copy: no card text crosses the lock and nothing is parsed (TRDD-9VX3WTGU Phase C —
     /// `cards_json()` is now only the cold-boot/CLI/parity read of the TABLE).
-    pub fn summary_snapshot(&self) -> SummaryInputs {
+    pub fn summary_snapshot(&mut self) -> SummaryInputs {
         SummaryInputs {
             version: self.data_version,
             spans: self.window.spans.clone(),
             log_cards: self.cards.parsed_cards(),
+            epoch: self.cards.epoch(),
             accounts: Arc::new(self.accounts.snapshot()),
+            // TRDD-9VX3WTGU Phase C part 2: the previous outputs LEAVE the caches here so the
+            // engine can patch them in place (see `summary_engine`). `&mut self` is for this.
+            prev: summary_engine::Prev {
+                summary: self.summary_cache.take_arc(),
+                stripped: self.stripped_cache.take_arc(),
+            },
+            engine: self.summary_engine.clone(),
         }
     }
 
     /// The off-lock half: `summary_over` on a snapshot. Free function shape on purpose — it takes
     /// no `&self`, so it cannot accidentally be called while the lock is held.
-    pub fn summary_from(inputs: &SummaryInputs, now_ms: f64) -> (Value, IndexMap<String, Vec<Value>>) {
-        Self::summary_over(&inputs.spans, &inputs.log_cards, &inputs.accounts, now_ms)
+    pub fn summary_from(inputs: &mut SummaryInputs, now_ms: f64) -> summary_engine::SummaryBuild {
+        let _ = now_ms;
+        let prev = std::mem::take(&mut inputs.prev);
+        inputs.engine.build(inputs.version, &inputs.spans, &inputs.log_cards, inputs.epoch, &inputs.accounts, prev)
     }
 
     /// Store a summary built off the lock, together with the attribution map built WITH it. The
     /// two must move as one — the `/api/timeline` graft reads the map for the cards the summary
     /// serves — so the map is replaced only when the summary actually lands (a rebuild that lost
     /// the race is discarded whole).
-    pub fn store_summary(&mut self, version: u64, summary: Value, attribution: IndexMap<String, Vec<Value>>) -> std::sync::Arc<Value> {
+    pub fn store_summary(&mut self, version: u64, build: summary_engine::SummaryBuild) -> std::sync::Arc<Value> {
         let will_store = self.summary_cache.is_empty() || version > self.summary_cache.version();
-        let stored = self.summary_cache.store_if_newer(version, summary);
+        let stored = self.summary_cache.store_arc_if_newer(version, build.summary);
         if will_store {
-            self.otel_attribution = attribution;
+            self.otel_attribution = build.attribution;
+            // The stripped twin lands with the summary it was derived from, never alone.
+            if let Some(stripped) = build.stripped {
+                self.stripped_cache.store_arc_if_newer(version, stripped);
+            }
         }
         stored
     }
@@ -378,7 +402,7 @@ impl CoreState {
     /// the merged `sessions` array — the one deep copy that remains. What is gone is everything
     /// around it: the text copy and parse of the whole corpus, the clone of the OTEL sessions
     /// array before the merge, and the clone of every displaced OTEL card's api_request entries.
-    fn summary_over(
+    pub(crate) fn summary_over(
         spans: &[Arc<Value>],
         log_cards: &[Arc<Value>],
         accounts: &IndexMap<String, String>,
@@ -632,6 +656,7 @@ impl CoreState {
             sweeper: None,
             summary_cache: derived_cache::VersionedCache::default(),
             stripped_cache: derived_cache::VersionedCache::default(),
+            summary_engine: Arc::new(summary_engine::SummaryEngine::default()),
             accounts: account_registry::AccountRegistry::default(),
             bodies: call_body_registry::CallBodyRegistry::default(),
             composition: context_composition_index::ContextCompositionIndex::default(),
@@ -669,6 +694,8 @@ impl CoreState {
     pub fn clear_spans(&mut self) {
         self.window.spans.clear();
         self.writer.clear();
+        // The OTEL window changed wholesale: rebuild every merged card rather than trust a diff.
+        self.summary_engine.force_full.store(true, std::sync::atomic::Ordering::Relaxed);
         self.data_version += 1;
     }
 
@@ -809,6 +836,8 @@ impl CoreState {
             );
         }
         if self.window.prune(now_ms) || narrowed {
+            // Any prune / pressure-ladder narrowing: a full rebuild is the simplest correct rule.
+            self.summary_engine.force_full.store(true, std::sync::atomic::Ordering::Relaxed);
             self.data_version += 1;
         }
         // Only when it is long enough to be someone else's latency. A per-tick line would be noise

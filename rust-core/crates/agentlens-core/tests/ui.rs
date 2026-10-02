@@ -435,7 +435,10 @@ fn small_routes_embed_status_hook_config_clear_action_and_log_scan_stats() {
     get(ui, "/api/summary", "");
     let r = get(ui, "/api/debug/log-scan-stats", "");
     let v: serde_json::Value = serde_json::from_str(body_of(&r)).unwrap();
-    assert_eq!(v["derivedCaches"]["stripped"], serde_json::json!({ "hits": 1, "misses": 2 }));
+    // Phase C part 2: with log cards the summary engine stores the stripped twin EAGERLY with the
+    // summary (one miss), and the read that follows is then a HIT — so a data change + read is
+    // (hits +1, misses +1), not the lazy miss-only of the cold/no-card path above.
+    assert_eq!(v["derivedCaches"]["stripped"], serde_json::json!({ "hits": 2, "misses": 2 }));
     {
         let mut st = state.lock().unwrap();
         st.cards.clear();

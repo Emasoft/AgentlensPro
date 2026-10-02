@@ -139,6 +139,9 @@ pub struct CardStore {
     /// (`put`, `clear`, `demote_cold`) updates both inside the same method, including the callers
     /// that reach the store directly (tests call `st.cards.clear()`).
     parsed: IndexMap<String, Arc<Value>>,
+    /// Bumped by every `clear`; slots restart from 0 after one, so a consumer that remembers slot
+    /// positions (the summary engine) can tell a restart from ordinary growth.
+    epoch: u64,
 }
 
 impl CardStore {
@@ -175,6 +178,7 @@ impl CardStore {
             next_seq: 0,
             full_scan_calls: std::sync::atomic::AtomicUsize::new(0),
             parsed: IndexMap::new(),
+            epoch: 0,
         }
     }
 
@@ -339,6 +343,12 @@ impl CardStore {
         self.conn.execute_batch("DELETE FROM cards").expect("clear the card store");
         self.next_seq = 0;
         self.parsed.clear();
+        self.epoch += 1;
+    }
+
+    /// Bumped by every `clear`; see the field.
+    pub fn epoch(&self) -> u64 {
+        self.epoch
     }
 
     /// demoteColdTimelines' storage half: only the `hot_cards` most-recently-active cards keep

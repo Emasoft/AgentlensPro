@@ -299,7 +299,7 @@ fn rebuild_once(state: &Arc<Mutex<CoreState>>) {
     // The timer starts before the snapshot: it clones the window's spans and the log cards under
     // the state lock, and that is part of the cost being rationed (and the part that blocks ingest).
     let started = std::time::Instant::now();
-    let inputs = {
+    let mut inputs = {
         let Ok(mut st) = state.lock_timed() else { return };
         let version = st.data_version;
         if st.summary_cache.current(version).is_some() {
@@ -307,10 +307,10 @@ fn rebuild_once(state: &Arc<Mutex<CoreState>>) {
         }
         st.summary_snapshot()
     };
-    let (summary, attribution) = CoreState::summary_from(&inputs, crate::now_ms() as f64);
+    let build = CoreState::summary_from(&mut inputs, crate::now_ms() as f64);
     let took = started.elapsed();
     if let Ok(mut st) = state.lock_timed() {
-        st.store_summary(inputs.version, summary, attribution);
+        st.store_summary(inputs.version, build);
     }
     // Recorded even if the store above failed on a poisoned lock: the CPU and the allocation churn
     // were spent either way, and that is what the back-off rations.
@@ -448,7 +448,7 @@ pub fn summary_now(state: &Arc<Mutex<CoreState>>, now_ms: f64) -> Result<(u64, A
         }
     };
 
-    let inputs = {
+    let mut inputs = {
         let mut st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
         let version = st.data_version;
         // Re-check under the gate — the rebuild we waited for very likely stored this version.
@@ -457,9 +457,9 @@ pub fn summary_now(state: &Arc<Mutex<CoreState>>, now_ms: f64) -> Result<(u64, A
         }
         st.summary_snapshot()
     };
-    let (summary, attribution) = CoreState::summary_from(&inputs, now_ms);
+    let build = CoreState::summary_from(&mut inputs, now_ms);
     let mut st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
-    Ok((inputs.version, st.store_summary(inputs.version, summary, attribution)))
+    Ok((inputs.version, st.store_summary(inputs.version, build)))
 }
 
 /// `/api/summary`'s body and the shell's inlined copy: strip_session_detail over `summary_now`,
@@ -594,7 +594,7 @@ pub fn strip_session_detail(summary: &Value) -> Value {
 /// One element of `strip_session_detail's `sessions` array: drop `fileOps`/`generatedFiles`/
 /// `generatedFilesTruncated`, blank `timeline` in place (appending it when absent, matching the
 /// old insert-then-remove order exactly), and clone every other field.
-fn strip_one_session(s: &Value) -> Value {
+pub(crate) fn strip_one_session(s: &Value) -> Value {
     let Some(sobj) = s.as_object() else {
         let mut c = Map::new();
         c.insert("timeline".into(), Value::Array(Vec::new()));

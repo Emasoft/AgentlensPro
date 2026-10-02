@@ -79,8 +79,12 @@ fn reference(st: &CoreState) -> (Value, Value) {
     (summary, serde_json::to_value(attribution).unwrap())
 }
 
-fn rebuilt(st: &CoreState) -> (Value, Value) {
-    let (summary, attribution) = CoreState::summary_from(&st.summary_snapshot(), now_ms() as f64);
+fn rebuilt(st: &mut CoreState) -> (Value, Value) {
+    // The real flow: snapshot (takes the caches previous outputs), build, store.
+    let mut inputs = st.summary_snapshot();
+    let build = CoreState::summary_from(&mut inputs, now_ms() as f64);
+    let attribution = build.attribution.clone();
+    let summary = (*st.store_summary(inputs.version, build)).clone();
     (summary, serde_json::to_value(attribution).unwrap())
 }
 
@@ -102,7 +106,7 @@ fn summary_and_attribution_are_byte_identical_to_the_table_derived_reference() {
     let mut st = CoreState::open(&tmp("parity"));
     seed(&mut st);
     let (want_s, want_a) = reference(&st);
-    let (got_s, got_a) = rebuilt(&st);
+    let (got_s, got_a) = rebuilt(&mut st);
     assert_eq!(serde_json::to_string(&got_s).unwrap(), serde_json::to_string(&want_s).unwrap(), "summary bytes");
     assert_eq!(serde_json::to_string(&got_a).unwrap(), serde_json::to_string(&want_a).unwrap(), "otel_attribution bytes");
     // The corpus is not vacuous: the collision displaced the OTEL twin (its entries were MOVED
@@ -118,10 +122,10 @@ fn replacing_the_sessions_key_keeps_the_summary_key_order() {
     // back under the same key, so the key order of the summary must be unchanged.
     let mut st = CoreState::open(&tmp("keyorder"));
     ingest_post(&mut st, "/v1/traces", otel_trace("only", "bbbbbbbbbbbbbbb1").as_bytes());
-    let (no_log, _) = rebuilt(&st);
+    let (no_log, _) = rebuilt(&mut st);
     let keys_before: Vec<String> = no_log.as_object().unwrap().keys().cloned().collect();
     st.put_log_session(log_card("only", "claude_code", "2026-08-01T10:00:00.000Z", None, 1));
-    let (with_log, _) = rebuilt(&st);
+    let (with_log, _) = rebuilt(&mut st);
     let keys_after: Vec<String> = with_log.as_object().unwrap().keys().cloned().collect();
     assert_eq!(keys_before, keys_after);
 }
@@ -130,27 +134,27 @@ fn replacing_the_sessions_key_keeps_the_summary_key_order() {
 fn interleaved_puts_and_rebuilds_equal_a_full_rebuild_every_step() {
     let mut st = CoreState::open(&tmp("incremental"));
     seed(&mut st);
-    let check = |st: &CoreState, step: &str| {
+    let check = |st: &mut CoreState, step: &str| {
         let (ws, wa) = reference(st);
         let (gs, ga) = rebuilt(st);
         assert_eq!(gs, ws, "summary after {step}");
         assert_eq!(ga, wa, "attribution after {step}");
     };
-    check(&st, "seed");
+    check(&mut st, "seed");
     // An UPSERT (same id, new content) keeps its slot and replaces the resident card.
     st.put_log_session(log_card("cx", "codex", "2026-08-02T09:00:00.000Z", None, 4));
-    check(&st, "upsert");
+    check(&mut st, "upsert");
     // A NEW card.
     st.put_log_session(log_card("fresh", "claude_code", "2026-08-03T09:00:00.000Z", None, 2));
-    check(&st, "insert");
+    check(&mut st, "insert");
     // Demotion strips timelines in the table AND the resident layer.
     st.demote_cold_timelines(2);
-    check(&st, "demote");
+    check(&mut st, "demote");
     // A put AFTER demotion re-arms a timeline on a demoted card.
     st.put_log_session(log_card("dup", "claude_code", "2026-08-01T10:00:00.000Z", None, 5));
-    check(&st, "re-put after demote");
+    check(&mut st, "re-put after demote");
     st.cards.clear();
-    check(&st, "clear");
+    check(&mut st, "clear");
 }
 
 #[test]

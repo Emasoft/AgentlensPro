@@ -60,6 +60,30 @@ impl<T> VersionedCache<T> {
         value
     }
 
+
+    /// `store_if_newer` for a value the caller already wrapped in an `Arc`. The summary engine
+    /// (TRDD-9VX3WTGU Phase C part 2) records the pointer it published so it can recognise its own
+    /// previous output next pass; wrapping inside the cache would hide that pointer from it.
+    pub fn store_arc_if_newer(&mut self, version: u64, value: Arc<T>) -> Arc<T> {
+        if let Some(v) = self.cached.as_ref().filter(|_| self.version >= version) {
+            return v.clone();
+        }
+        self.cached = Some(value.clone());
+        self.version = version;
+        self.misses += 1;
+        value
+    }
+
+    /// Hand the cached `Arc` to the caller and leave the cache EMPTY (its version is kept). The
+    /// summary engine takes its previous output this way so that, when no reader still holds it,
+    /// `Arc::try_unwrap` yields the value for in-place patching instead of a deep copy. While the
+    /// value is out, `cached_any`/`current` answer `None` and readers wait on the rebuild gate —
+    /// a pass is now O(changed cards), so that wait is short.
+    pub fn take_arc(&mut self) -> Option<(u64, Arc<T>)> {
+        let v = self.cached.take()?;
+        Some((self.version, v))
+    }
+
     /// The cached value and the version it was built for, WHATEVER that version is — the
     /// serve-stale half of a non-blocking rebuild (TRDD-2R36W8Q1).
     ///

@@ -78,7 +78,7 @@ pub fn stamp_identity_merge(winner: &mut Value, loser_data_source: &str) {
     );
 }
 
-fn stamp_plain(card: &mut Value, source: &str) {
+pub fn stamp_plain(card: &mut Value, source: &str) {
     let o = obj(card);
     o.insert("tokensSource".into(), source.into());
     // `coverageNote = undefined` — the key vanishes from the wire.
@@ -100,6 +100,31 @@ pub fn log_wins_ids(log_sessions: &[Value]) -> HashSet<String> {
 /// True when the merge DROPS this OTEL-feed card because a log card in `log_wins_ids` replaces it.
 pub fn is_displaced_otel(card: &Value, log_wins_ids: &HashSet<String>) -> bool {
     s(card, "dataSource") == "otel" && log_wins_ids.contains(s(card, "sessionId"))
+}
+
+/// Does an OTEL-feed card for the same sessionId lose to log card `log_source` (the merge DROPS the
+/// OTEL card)? The per-card form of `is_displaced_otel`, for callers that have no `wins` set.
+pub fn otel_displaced_by(otel: &Value, log_source: &str) -> bool {
+    s(otel, "dataSource") == "otel" && preferred_data_source(log_source) == "log"
+}
+
+/// What `merge_otel_and_log_sessions` does with ONE log card, given what its OTEL twin did:
+/// `None` (no twin) → stamped `log`; `Some(true)` (twin displaced) → stamped log-wins; `Some(false)`
+/// (twin survives) → the log card is dropped. Shared with the summary engine's per-card patch.
+pub fn merge_one_log_card(card: &Value, twin_displaced: Option<bool>) -> Option<Value> {
+    match twin_displaced {
+        Some(false) => None,
+        Some(true) => {
+            let mut c = card.clone();
+            stamp_log_wins(&mut c);
+            Some(c)
+        }
+        None => {
+            let mut c = card.clone();
+            stamp_plain(&mut c, "log");
+            Some(c)
+        }
+    }
 }
 
 /// mergeOtelAndLogSessions — on a sessionId collision the source's preferred feed wins; every
@@ -130,6 +155,92 @@ pub fn merge_otel_and_log_sessions(mut otel_sessions: Vec<Value>, mut log_sessio
     kept_log
 }
 
+/// Is this log card an async/sync spawn PLACEHOLDER — the left side of a subagent link?
+pub fn is_link_placeholder(p: &Value) -> bool {
+    s(p, "source") == "claude_code" && s(p, "dataSource") == "log" && !s(p, "parentSessionId").is_empty()
+}
+
+/// The sessionId of the `agent-<id>` transcript twin a placeholder links to.
+pub fn link_twin_id(p: &Value) -> String {
+    format!("agent-{}", s(p, "sessionId"))
+}
+
+/// May placeholder `p` link to the candidate transcript `t`? Everything `link_subagent_transcripts`
+/// checks about the PAIR (not about list membership or an earlier winner). Shared with the summary
+/// engine, which links one pair at a time, so the two cannot drift.
+pub fn link_pair_ok(p: &Value, t: &Value) -> bool {
+    if s(t, "source") != "claude_code" || s(t, "dataSource") != "log" {
+        return false;
+    }
+    // `t.parentSessionId !== undefined && t.parentSessionId !== p.parentSessionId`
+    if let Some(tp) = t.get("parentSessionId").filter(|v| !v.is_null()) {
+        if tp != p.get("parentSessionId").unwrap_or(&Value::Null) {
+            return false;
+        }
+    }
+    let t_traffic = f(t, "inputTokens") + f(t, "outputTokens") + f(t, "cacheReadTokens") + f(t, "cacheCreateTokens");
+    let p_traffic = f(p, "inputTokens") + f(p, "outputTokens") + f(p, "cacheReadTokens") + f(p, "cacheCreateTokens");
+    // `!(x > 0.0)` is NOT `x <= 0.0` here and must not be "simplified" into it: the
+    // negated form is TRUE for NaN, which is the TS `!(t > 0)` this ports and the only
+    // reason a NaN-token feed loses to a real-traffic one instead of winning by accident.
+    #[allow(clippy::neg_cmp_op_on_partial_ord)]
+    if !(t_traffic > 0.0) && p_traffic > 0.0 {
+        return false;
+    }
+    true
+}
+
+/// The merged card that replaces transcript `t` once placeholder `p` linked to it (the transcript
+/// wins, the placeholder contributes the spawn taxonomy and is recorded in `mergedFrom`).
+pub fn linked_winner(p: &Value, t: &Value) -> Value {
+    let t_id = s(t, "sessionId").to_owned();
+    let t_traffic = f(t, "inputTokens") + f(t, "outputTokens") + f(t, "cacheReadTokens") + f(t, "cacheCreateTokens");
+    let mut w = t.clone();
+    {
+        let o = obj(&mut w);
+        o.insert("parentSessionId".into(), p.get("parentSessionId").cloned().unwrap_or(Value::Null));
+        o.insert("initiator".into(), "agent".into());
+        // Spawn taxonomy — written as the placeholder carries it; an absent field on the
+        // placeholder writes `undefined`, which drops the key (so a transcript-side value
+        // is REPLACED by absence, exactly as the TS literal does).
+        for k in ["spawnedByTurn", "spawnKind", "spawnModelOverride", "spawnIsolation", "spawnSubagentType"] {
+            match p.get(k).filter(|v| !v.is_null()) {
+                Some(v) => {
+                    o.insert(k.into(), v.clone());
+                }
+                None => {
+                    o.shift_remove(k);
+                }
+            }
+        }
+        // spawnAsync: tTraffic > 0 ? undefined : (p.spawnAsync || undefined)
+        if t_traffic > 0.0 || !p.get("spawnAsync").is_some_and(|v| v.as_bool() == Some(true)) {
+            o.shift_remove("spawnAsync");
+        } else {
+            o.insert("spawnAsync".into(), true.into());
+        }
+        for k in ["userRequest", "model", "workspace"] {
+            let tv = s(t, k);
+            // `t.x || p.x` — '' on t falls back to p's raw value (may be '' or absent).
+            let chosen: Value = if !tv.is_empty() {
+                Value::from(tv)
+            } else {
+                p.get(k).cloned().unwrap_or(Value::Null)
+            };
+            if chosen.is_null() {
+                o.shift_remove(k);
+            } else {
+                o.insert(k.into(), chosen);
+            }
+        }
+        let mut merged_from: Vec<Value> = t.get("mergedFrom").and_then(Value::as_array).cloned().unwrap_or_default();
+        merged_from.push(Value::from(s(p, "sessionId")));
+        merged_from.retain(|id| id.as_str() != Some(t_id.as_str()));
+        o.insert("mergedFrom".into(), Value::Array(merged_from));
+    }
+    w
+}
+
 /// linkSubagentTranscripts — collapse each async/sync spawn placeholder with its
 /// `agent-<id>` transcript twin into ONE child card (the transcript wins, the placeholder
 /// contributes the spawn taxonomy and is recorded in `mergedFrom`).
@@ -138,80 +249,22 @@ pub fn link_subagent_transcripts(sessions: Vec<Value>) -> Vec<Value> {
     let mut winners: HashMap<String, Value> = HashMap::new();
     let mut consumed: HashSet<String> = HashSet::new();
     for (pi, p) in sessions.iter().enumerate() {
-        if s(p, "source") != "claude_code" || s(p, "dataSource") != "log" || s(p, "parentSessionId").is_empty() {
+        if !is_link_placeholder(p) {
             continue;
         }
-        let Some(&ti) = by_id.get(&format!("agent-{}", s(p, "sessionId"))) else { continue };
+        let Some(&ti) = by_id.get(&link_twin_id(p)) else { continue };
         if ti == pi {
             continue;
         }
         let t = &sessions[ti];
-        if s(t, "source") != "claude_code" || s(t, "dataSource") != "log" {
-            continue;
-        }
-        // `t.parentSessionId !== undefined && t.parentSessionId !== p.parentSessionId`
-        if let Some(tp) = t.get("parentSessionId").filter(|v| !v.is_null()) {
-            if tp != p.get("parentSessionId").unwrap_or(&Value::Null) {
-                continue;
-            }
-        }
-        let t_traffic = f(t, "inputTokens") + f(t, "outputTokens") + f(t, "cacheReadTokens") + f(t, "cacheCreateTokens");
-        let p_traffic = f(p, "inputTokens") + f(p, "outputTokens") + f(p, "cacheReadTokens") + f(p, "cacheCreateTokens");
-        // `!(x > 0.0)` is NOT `x <= 0.0` here and must not be "simplified" into it: the
-        // negated form is TRUE for NaN, which is the TS `!(t > 0)` this ports and the only
-        // reason a NaN-token feed loses to a real-traffic one instead of winning by accident.
-        #[allow(clippy::neg_cmp_op_on_partial_ord)]
-        if !(t_traffic > 0.0) && p_traffic > 0.0 {
+        if !link_pair_ok(p, t) {
             continue;
         }
         let t_id = s(t, "sessionId").to_owned();
         if winners.contains_key(&t_id) {
             continue;
         }
-        let mut w = t.clone();
-        {
-            let o = obj(&mut w);
-            o.insert("parentSessionId".into(), p.get("parentSessionId").cloned().unwrap_or(Value::Null));
-            o.insert("initiator".into(), "agent".into());
-            // Spawn taxonomy — written as the placeholder carries it; an absent field on the
-            // placeholder writes `undefined`, which drops the key (so a transcript-side value
-            // is REPLACED by absence, exactly as the TS literal does).
-            for k in ["spawnedByTurn", "spawnKind", "spawnModelOverride", "spawnIsolation", "spawnSubagentType"] {
-                match p.get(k).filter(|v| !v.is_null()) {
-                    Some(v) => {
-                        o.insert(k.into(), v.clone());
-                    }
-                    None => {
-                        o.shift_remove(k);
-                    }
-                }
-            }
-            // spawnAsync: tTraffic > 0 ? undefined : (p.spawnAsync || undefined)
-            if t_traffic > 0.0 || !p.get("spawnAsync").is_some_and(|v| v.as_bool() == Some(true)) {
-                o.shift_remove("spawnAsync");
-            } else {
-                o.insert("spawnAsync".into(), true.into());
-            }
-            for k in ["userRequest", "model", "workspace"] {
-                let tv = s(t, k);
-                // `t.x || p.x` — '' on t falls back to p's raw value (may be '' or absent).
-                let chosen: Value = if !tv.is_empty() {
-                    Value::from(tv)
-                } else {
-                    p.get(k).cloned().unwrap_or(Value::Null)
-                };
-                if chosen.is_null() {
-                    o.shift_remove(k);
-                } else {
-                    o.insert(k.into(), chosen);
-                }
-            }
-            let mut merged_from: Vec<Value> = t.get("mergedFrom").and_then(Value::as_array).cloned().unwrap_or_default();
-            merged_from.push(Value::from(s(p, "sessionId")));
-            merged_from.retain(|id| id.as_str() != Some(t_id.as_str()));
-            o.insert("mergedFrom".into(), Value::Array(merged_from));
-        }
-        winners.insert(t_id, w);
+        winners.insert(t_id, linked_winner(p, t));
         consumed.insert(s(p, "sessionId").to_owned());
     }
     if winners.is_empty() {
