@@ -12,7 +12,7 @@
 // data-science tooling all set it for their own purposes, and a stray value in the environment
 // would silently relocate this tool's entire store — the user's history would appear to vanish
 // while the old directory sat untouched on disk. Every other knob here is namespaced
-// (`AGENTLENS_UI_URL`, `AGENTLENS_CAPTURE_RAW_BODIES`, `AGENTLENS_GATE`, …); `DATA_DIR` was the
+// (`AGENTLENS_UI_URL`, `AGENTLENS_DISABLED`, `AGENTLENS_GATE`, …); `DATA_DIR` was the
 // lone exception, and it was the one pointing at everything.
 //
 // So `AGENTLENS_DATA_DIR` is canonical and wins. The bare `DATA_DIR` is still honoured because it

@@ -14,9 +14,11 @@ All notable changes to AgentlensPro are documented here.
   `safeConfigEdit` transaction. Silent when current (~2-4 ms). A full `setup` runs only when nothing is
   installed. `AGENTLENS_NO_AUTOSETUP=1` turns it off; hook-path verbs are never touched.
   `setup` gains a read-only memory-composition self-check and runs its telemetry step first.
-- **BREAKING: raw body dumps are mandatory.** `OTEL_LOG_RAW_API_BODIES` is now an always-owned telemetry
-  key converged on install and every launch; the `captureRawBodies` knob, `AGENTLENS_CAPTURE_RAW_BODIES`
-  and the capture-off delete path are removed. The cost is bounded by `bodiesMaxGb` / `bodiesRetentionDays`.
+- **BREAKING: raw body capture is mandatory.** `OTEL_LOG_RAW_API_BODIES` is an always-owned telemetry
+  key converged on install and written by every CLI launch. `AGENTLENS_CAPTURE_RAW_BODIES` and the config
+  key `capture.rawBodies` are removed and ignored if still set, as is the `captureRawBodies` knob; the
+  capture-off delete path is gone. Stored bodies are bounded only by `bodiesMaxGb` for the live dir —
+  age pruning is not yet implemented (TRDD-Y1M56VMY).
 - **Foreign telemetry stops agentlenspro.** If settings.json, an enterprise managed-settings file or the
   shell already configures another telemetry pipeline (company gateway), agentlenspro writes nothing,
   disables itself (kill-switch armed: hooks no-op; skills parked in `<data-dir>/disabled-surfaces/`;

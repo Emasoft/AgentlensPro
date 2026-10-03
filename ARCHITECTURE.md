@@ -401,7 +401,7 @@ feed a gzip archiver. They are ingested into a **content-addressed body store** 
 
 ```text
 Claude Code raw body write
-  → live bodies dir (plain files: DATA_DIR/otel-bodies, or the RAM-disk spool when capture is on)
+  → live bodies dir (plain files: DATA_DIR/otel-bodies)
   → ingestPass(): sectionize the body into literal + shared-span parts (src/store/sections.ts),
     hash each span (its content IS its address), write new spans + body/part metadata into an
     IN-MEMORY DuckDB instance — never a persistent .duckdb file (see below)
@@ -425,14 +425,11 @@ Parquet parts on boot) — re-ingesting a body that shares spans with an earlier
 bytes for those spans. This is most of where the size reduction below comes from, not compression
 alone.
 
-**RAM-disk spool (opt-in capture only, macOS).** When raw-body capture is on, the *write itself*
-is the SSD wear the store cannot avoid downstream, so `src/ramdisk.ts` mounts a RAM-disk volume
-(`AgentLensSpool`) and Claude Code's `OTEL_LOG_RAW_API_BODIES` is pointed at it instead of a real
-path — the live bodies dir the pipeline above drains is then volatile memory, not disk. A
-boot-time LaunchAgent (`agentlenspro spool ensure`, `src/cli/spoolLaunchAgent.ts`) re-creates the
-spool at login, since a reboot destroys the RAM disk but Claude Code reads the env var only at
-launch; the drain runs every 60s in spool mode (vs. hourly otherwise) with an emergency cap so a
-runaway producer cannot fill volatile memory.
+**RAM-disk spool — retired.** An earlier release pointed `OTEL_LOG_RAW_API_BODIES` at a macOS
+RAM-disk volume (`AgentLensSpool`) to spare the SSD the capture writes. The spool code is gone;
+bodies now land directly on the SSD, bounded only by `bodiesMaxGb` for the live dir (age pruning
+is not yet implemented, TRDD-Y1M56VMY). `agentlenspro setup` still migrates a leftover spool
+volume, settings path and LaunchAgent from an older install (`src/cli/setup.ts`).
 
 **Legacy `.wad` archive — read-only fallback, not the current write path.** Before this store, an
 hourly archiver pass gzip-packed each body into a monthly `.wad` volume (`src/bodyArchive.ts`)
@@ -451,7 +448,7 @@ they all share, so the bar cannot drift apart per call site. `verifyBodyInStore(
 things before any delete: the body reconstructs byte-identically from the durable store, a body row
 exists for *that* `src_name` (not merely the same content under another name — the row is what
 time-window queries and exports see), and, when the caller knows it, the row's `ts` matches the
-capture time (±2 s). It gates the live/spool reclaim (`ingestPass.ts`), the `.wad` drain
+capture time (±2 s). It gates the live reclaim (`ingestPass.ts`), the `.wad` drain
 (`migrateArchive.ts`), the retention purge (`purgeArchiveVolumes`, which now requires the gate and
 keeps any unproven volume regardless of age), and the explicit `POST /api/bodies/purge`
 (`verifyVolumeInStore` in `src/store/archiveVerify.ts` proves a whole volume lump-by-lump; the

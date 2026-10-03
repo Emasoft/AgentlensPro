@@ -179,7 +179,7 @@ delegate, write it down, compact after) with this project's verified rates.
 
 #### Emergency stop: `agentlenspro disable` / `enable`
 
-If AgentlensPro (or something it configured) is misbehaving, `agentlenspro disable [reason]` is the global brake: it drops a flag file that disarms every hook, the burn-gate, server auto-revive, and background ingestion **in every Claude Code session already running**, on that session's very next hook fire — no restart needed. It also stops the running server and turns off raw-body capture (see [Raw-body capture](#raw-body-capture--opt-in-off-by-default)), since a kill switch that left either running would still be writing to disk. `agentlenspro enable` clears the flag; hooks resume on their next fire.
+If AgentlensPro (or something it configured) is misbehaving, `agentlenspro disable [reason]` is the global brake: it drops a flag file that disarms every hook, the burn-gate, server auto-revive, and background ingestion **in every Claude Code session already running**, on that session's very next hook fire — no restart needed. It also stops the running server and removes the mandatory raw-body capture key (see [Raw-body capture](#raw-body-capture--mandatory)), since a kill switch that left either running would still be writing to disk. `agentlenspro enable` clears the flag and restores the key; hooks resume on their next fire.
 
 A `settings.json` edit cannot do this on its own — a session that already loaded its config at launch keeps using it until it restarts. The flag file is the one channel that reaches every already-running process.
 
