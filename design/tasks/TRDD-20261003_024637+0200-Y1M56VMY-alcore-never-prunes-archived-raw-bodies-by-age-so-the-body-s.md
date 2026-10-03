@@ -4,7 +4,7 @@ title: alcore never prunes archived raw bodies by age so the body store grows wi
 column: todo
 status: tasked
 created: 2026-10-03T02:46:37+0200
-updated: 2026-10-03T02:46:37+0200
+updated: 2026-10-03T02:48:47+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -27,9 +27,15 @@ Comparable enforced knobs to copy the shape from: spans `run_retention` (agentle
 The over-cap valve (bodiesMaxGb) has no dedicated test; chores_bodies_spool_drain.rs covers only the 10 s age drain.
 ## Done when
 1. alcore deletes stored body data older than bodiesRetentionDays (whole units only, never a partial one, floor 1 day), on the chores tick.
-2. A test fails if the age prune is disabled; a test fails if the bodiesMaxGb valve is disabled.
-3. Related: TRDD-7NHUU6GK (archive retention gate keeps a volume holding a re-emitted body) - check whether it is the same mechanism before implementing.
+2. A test fails if the age prune is disabled.
+3. src/telemetryConfig.ts:136-139 comment made true.
 
 ## Approval log
 
 - 2026-10-03T02:46:37+0200 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+
+## Premise verification (2026-10-03)
+
+- Every non-test deletion in rust-core was read: agentlens-store/src/pass.rs:381,412 delete LIVE body files only after their content is store-proved (ingest, not retention; pass.rs:268 max_age_ms is an ingest age gate); agentlens-core/src/body_archive.rs:353 `bodies_purge` is the manual POST /api/bodies/purge that deletes legacy archive VOLUMES once proven in the store; agentlens-store/src/lib.rs:296 `DELETE FROM {table}` empties the in-memory table after COPY to Parquet. All other remove_* calls are under #[cfg(test)]. No code deletes store/Parquet data by age. Premise VERIFIED.
+- TRDD-7NHUU6GK's "archive retention gate" is the purge's proof gate, not an age prune.
+- False doctrine to fix with this card: src/telemetryConfig.ts:136-139 comment says "archives are deleted after bodiesRetentionDays" — not true under alcore.
