@@ -111,6 +111,29 @@ fn body_matches_the_frozen_key_order_exactly() {
     assert_eq!(body["gate"], json!({ "mode": "enforce", "enabled": true, "captureEnabled": true, "advisorEnabled": true, "checks": 0, "denies": 0, "warns": 0, "advisories": 0 }));
 }
 
+
+/// TRDD-X70L1O3S: only a Claude Code span ticks `last_ingest_activity_ms` (the CAPTURE DOWN
+/// "sessions active" clock). Codex/Copilot/OpenCode never write raw bodies, so counting their
+/// spans made a non-Claude-only machine show CAPTURE DOWN forever.
+#[test]
+fn only_claude_spans_tick_the_capture_activity_clock() {
+    let data = tmp("activity-clock");
+    let mut st = CoreState::open(&data);
+    let non_claude = json!({ "resourceSpans": [{ "scopeSpans": [{ "spans": [{
+        "name": "invoke_agent copilot",
+        "traceId": "0123456789abcdef0123456789abcdef", "spanId": "0123456789abcdef",
+        "startTimeUnixNano": (now_ms() as i128 * 1_000_000).to_string(),
+        "attributes": [{ "key": "session.id", "value": { "stringValue": "cp1" } }]
+    }] }] }] })
+    .to_string();
+    ingest_post(&mut st, "/v1/traces", non_claude.as_bytes());
+    assert_eq!(st.last_ingest_activity_ms, 0, "a non-Claude span must not stamp activity");
+    assert_eq!(server_stats(&st, now_ms())["bodies"]["captureDownSince"], Value::Null);
+
+    ingest_post(&mut st, "/v1/traces", trace_payload("s1").as_bytes());
+    assert!(st.last_ingest_activity_ms > 0, "a Claude Code span stamps activity");
+}
+
 #[test]
 fn the_values_the_core_owns_move_with_the_state() {
     let data = tmp("live");

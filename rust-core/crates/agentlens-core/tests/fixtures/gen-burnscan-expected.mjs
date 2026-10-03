@@ -30,9 +30,7 @@
 //    other test would notice.
 //  - burnscan-noresp/ has requests but no responses; a MISSING dir gives blind=no-bodies-dir.
 //
-// NOT COVERED, deliberately: blind='capture-off' is unreachable through investigateBurn's public
-// API (the bodiesDir override hardcodes captureOn:true), so it is pinned by a Rust unit test
-// instead and carries no oracle.
+// blind='capture-off' no longer exists — raw-body capture is mandatory (owner order 2026-10-02), so there is no capture-off verdict to pin.
 
 import fs from 'node:fs'
 import os from 'node:os'

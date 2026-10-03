@@ -1071,7 +1071,15 @@ pub fn ingest_parsed(state: &mut CoreState, kind: &'static str, payload: Value, 
         // sessions are active. Same condition deliberately: a payload that parsed but yielded no
         // spans is NOT capture activity, and counting it would make a feed that is connected but
         // producing nothing look alive, which is the one thing this clock exists to detect.
-        state.last_ingest_activity_ms = now;
+        //
+        // TRDD-X70L1O3S: …and only a CLAUDE CODE span counts. This clock feeds CAPTURE DOWN
+        // ("sessions active but no raw body landed"), and only Claude Code honours
+        // OTEL_LOG_RAW_API_BODIES; Codex/Copilot/OpenCode spans would tick it forever with no
+        // body ever coming, so a Codex-only machine showed CAPTURE DOWN permanently. Ingest
+        // re-prefixes every stored Claude span `claude_code.` (agentlens-ingest module docs).
+        if spans.iter().any(|s| s.get("name").and_then(Value::as_str).is_some_and(|n| n.starts_with("claude_code."))) {
+            state.last_ingest_activity_ms = now;
+        }
     }
     for span in spans {
         state.window.add(span, now);
