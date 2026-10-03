@@ -505,15 +505,27 @@ fn watcher_advances_a_card_on_growth_without_waiting_for_the_backstop() {
     // every file from 0 (a full sweep, all 5 fixture files statted again), and the table refills.
     state.lock().unwrap().clear_all();
     assert!(state.lock().unwrap().cards.is_empty());
+    // Wait for the sweep to be FULLY booked, not merely for the card. The cold scan flushes its
+    // chunk into the card map (log_reader.rs cold_scan_chunked -> flush) BEFORE the sweeper takes
+    // the lock again to `log_scan.add` the sweep's file count, so the card becomes visible a
+    // moment before `files_statted` moves; asserting on the counter the instant the card appears
+    // raced that second lock acquisition (observed under load as left == statted_before). A
+    // targeted sweep adds one file per named path, so reaching +5 is still the FULL signature.
+    // Snapshot under a short guard and assert after it drops: a failing assert while holding
+    // the guard poisons the lock and turns this into a second panic on the sweeper thread.
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-    while std::time::Instant::now() < deadline && state.lock().unwrap().cards.get(sid).is_none() {
+    let (refilled, statted_after) = loop {
+        let (turns, statted) = {
+            let st = state.lock().unwrap();
+            (st.cards.get(sid).map(|c| c["turns"].clone()), st.log_scan.files_statted)
+        };
+        if (turns.is_some() && statted >= statted_before + 5) || std::time::Instant::now() >= deadline {
+            break (turns, statted);
+        }
         std::thread::sleep(std::time::Duration::from_millis(50));
-    }
-    {
-        let st = state.lock().unwrap();
-        assert_eq!(st.cards.get(sid).unwrap()["turns"], turns0 + 1, "re-read from byte 0 sees the grown file");
-        assert_eq!(st.log_scan.files_statted, statted_before + 5, "the post-clear sweep was FULL");
-    }
+    };
+    assert_eq!(refilled, Some(serde_json::json!(turns0 + 1)), "re-read from byte 0 sees the grown file");
+    assert!(statted_after >= statted_before + 5, "the post-clear sweep was FULL: statted {statted_before} -> {statted_after}");
 
     // A graceful stop flushes the durable state (offsets for the file that grew).
     // `SweeperHandle::stop()` was split into `signal()` + `join_within(Duration)` (TRDD-N60JUWU3)

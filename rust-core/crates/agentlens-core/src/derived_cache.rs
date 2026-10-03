@@ -67,6 +67,7 @@ impl<T> VersionedCache<T> {
     /// Equal is allowed when empty — the cold start (version 0) and a pressure-ladder `clear` both
     /// rebuild at the version the slot already remembers.
     pub fn would_store(&self, version: u64) -> bool {
+        // Defensive: rebuild_gate already serializes production rebuilds (ui.rs rebuild_once and summary_now hold it from snapshot to store); this guard keeps a future ungated caller from moving the cache backwards.
         if self.cached.is_some() { version > self.version } else { version >= self.version }
     }
 
