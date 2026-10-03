@@ -111,7 +111,7 @@ export const CONNECT_TIMEOUT_MS = Math.max(200, Number(process.env.AGENTLENS_CON
  *  ECONNFAIL = connect refused/failed, ECONNTIMEOUT = connect deadline expired: both mean nothing
  *  accepted the connection. ERESPONSETIMEOUT = something accepted it but never answered. An HTTP
  *  error status or an unparsable body stays a plain Error (something DID answer). */
-export type ApiErrorCode = 'ECONNFAIL' | 'ECONNTIMEOUT' | 'ERESPONSETIMEOUT'
+export type ApiErrorCode = 'ECONNFAIL' | 'ECONNTIMEOUT' | 'ERESPONSETIMEOUT' | 'ERESET'
 export class ApiRequestError extends Error {
   constructor(message: string, readonly code: ApiErrorCode) { super(message) }
 }
@@ -303,9 +303,16 @@ export function apiRequest(method: string, apiPath: string, payload?: unknown, t
     deadline.unref?.()
     // 'close' fires after every outcome (end, error, destroy), so the timer can never outlive the request.
     req.on('close', () => clearTimeout(deadline))
+    // WHY ERESET is split from ECONNFAIL: an error AFTER the socket connected (ECONNRESET, "socket hang up")
+    // means something accepted the connection, so it is NOT evidence the server is down. Typing it ECONNFAIL
+    // made isConnectFailure() true and let storeAdmin rewrite the store under an accepted-then-crashing server.
+    let connected = false
+    req.on('socket', sock => { if (sock.connecting) sock.once('connect', () => { connected = true }); else connected = true })
     // WHY typed: classification by message text once let the connect-timeout text bypass the
     // 'unreachable' wrapper and read as "something serves the port" (status said RUNNING for a dead address).
-    req.on('error', e => reject(e instanceof ApiRequestError ? e : new ApiRequestError(`server unreachable at ${uiBaseUrl()}: ${e.message}`, 'ECONNFAIL')))
+    req.on('error', e => reject(e instanceof ApiRequestError ? e : connected
+      ? new ApiRequestError(`server at ${uiBaseUrl()} accepted the connection then dropped it: ${e.message}`, 'ERESET')
+      : new ApiRequestError(`server unreachable at ${uiBaseUrl()}: ${e.message}`, 'ECONNFAIL')))
     if (body) req.write(body)
     req.end()
   })

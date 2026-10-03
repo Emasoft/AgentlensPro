@@ -86,6 +86,15 @@ suite('status / store-guard classification of apiRequest failures (typed codes, 
     } finally { await close(s) }
   })
 
+  test('a server that accepts then drops the socket: ERESET, NOT a connect failure (store guard must treat it as UP)', async () => {
+    const s = net.createServer(sock => { sock.on('error', () => undefined); sock.destroy() }) // accept, then reset before any header
+    await new Promise<void>(r => s.listen(0, '127.0.0.1', () => r()))
+    try {
+      process.env.AGENTLENS_UI_URL = `http://127.0.0.1:${(s.address() as net.AddressInfo).port}`
+      await assert.rejects(apiRequest('GET', '/api/server-stats', undefined, PROBE_TIMEOUT_MS), (e: unknown) => e instanceof ApiRequestError && e.code === 'ERESET' && !isConnectFailure(e))
+    } finally { await new Promise<void>(r => s.close(() => r())) }
+  })
+
   test('🐌 a live lock owner + a silent listener: status says RUNNING (pid N) — did not answer … (busy?)', async function () {
     this.timeout(30_000)
     lockOwnedByUs()
