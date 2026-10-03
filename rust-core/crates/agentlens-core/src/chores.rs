@@ -913,16 +913,25 @@ fn control_passes(delta_pages: i64) -> bool {
     delta_pages >= 2
 }
 
-/// Arm every recurring chore on `rt`. Called once from `main` after the state is built and before
-/// the listeners bind. Boot-time passes run INLINE first (the TS calls each chore once at startup
-/// before setting its interval), so a server that is restarted more often than a chore's period
-/// still performs it.
-pub fn spawn_all(rt: &tokio::runtime::Runtime, state: Arc<Mutex<CoreState>>) {
+/// Arm every recurring chore. Called once from `main` after the state is built and before the
+/// listeners bind. The hook-spool boot drain runs INLINE first (the TS calls each chore once at
+/// startup before setting its interval), so a server that is restarted more often than a chore's
+/// period still performs it; the other boot passes run as a task on `bg`.
+///
+/// TRDD-RVKQDLRD: TWO runtimes. `rt` is the normal-priority request runtime and keeps every
+/// durability/latency chore (5s span flush + window prune, account-timeline flush, lifecycle
+/// heartbeat, periodic hook-spool drain): at background QoS under CPU load their cadence stalls
+/// (tests/shutdown_flush.rs lost its "nothing flushed yet" premise that way) and a crash would
+/// lose more buffered data. `bg` is the background-QoS runtime and takes the heavy housekeeping
+/// (boot passes, span/purge/bodies/composition ticks, resident and abandoned scans, statusline
+/// seal, spill cleanup).
+pub fn spawn_all(rt: &tokio::runtime::Runtime, bg: &tokio::runtime::Runtime, state: Arc<Mutex<CoreState>>) {
     // Spill dirs are emptied BEFORE any DuckDB connection of this process opens (none has yet).
     let data_dir = state.lock_timed().unwrap_or_else(|e| e.into_inner()).data_dir.clone();
     clean_spill_dirs(&data_dir, None);
     let dd = data_dir.clone();
-    rt.spawn(async move {
+    // TRDD-RVKQDLRD: spill cleanup is disk housekeeping -> `bg`.
+    bg.spawn(async move {
         let mut tick = tokio::time::interval(Duration::from_secs(60));
         tick.tick().await; // boot cleanup ran inline above
         loop {
@@ -939,6 +948,11 @@ pub fn spawn_all(rt: &tokio::runtime::Runtime, state: Arc<Mutex<CoreState>>) {
     // are the oldest data in the system and the only copy of themselves; reingesting them before
     // the purge pass means a bucket-retention sweep can never delete the bucket they are about to
     // land in. It is also idempotent, so a crash mid-drain simply leaves the rest for next boot.
+    //
+    // TRDD-RVKQDLRD: the drain stays INLINE (synchronous, before `spawn_all` returns, i.e. before
+    // the listeners bind). It is cheap, and it keeps drain-before-live-ingest ordering: were it
+    // moved to the background task, a live hook event arriving on the freshly bound listener
+    // could be ingested before older spooled events. Only the expensive passes below moved.
     {
         let mut st = state.lock_timed().unwrap_or_else(|e| e.into_inner());
         let now = crate::now_ms();
@@ -946,12 +960,33 @@ pub fn spawn_all(rt: &tokio::runtime::Runtime, state: Arc<Mutex<CoreState>>) {
         let d = crate::hook_events::drain_hook_spool(&mut st, now, usize::MAX);
         log_spool_drain(&d);
     }
-    span_tick(&state, crate::now_ms() as f64);
-    purge_tick(&state, crate::now_ms() as f64);
-    bodies_pass(&state, crate::now_ms() as f64);
+    // TRDD-RVKQDLRD: span_tick, purge_tick, bodies_pass and composition_tick run as ONE task on
+    // `bg` (the background-QoS runtime built in alcore.rs), NOT inline before the listeners bind.
+    // Inline they delayed the ports by the whole bodies pass (6-374 s measured) and ran at normal
+    // priority, competing with the user's apps. Their relative order is unchanged, and purge
+    // still runs after the inline drain above, so drain-before-purge holds.
+    {
+        let s = state.clone();
+        bg.spawn(async move {
+            let boot =tokio::task::spawn_blocking(move || {
+                span_tick(&s, crate::now_ms() as f64);
+                purge_tick(&s, crate::now_ms() as f64);
+                bodies_pass(&s, crate::now_ms() as f64);
+                composition_tick(&s); // boot pass — same task, same relative order as before
+            })
+            .await;
+            if let Err(e) = boot {
+                // Fail loudly: the old inline shape took the process down on a panic here, and a
+                // JoinError swallowed by `let _` would silently skip retention for the whole run.
+                eprintln!("{} alcore: boot chores failed: {e}", crate::log_ts());
+                std::process::exit(1);
+            }
+        });
+    }
 
+    // TRDD-RVKQDLRD: daily span retention/compression is heavy housekeeping -> `bg`.
     let s = state.clone();
-    rt.spawn(async move {
+    bg.spawn(async move {
         let mut tick = tokio::time::interval(Duration::from_secs(24 * 3600));
         tick.tick().await; // the first tick fires immediately — boot already ran this pass
         loop {
@@ -962,8 +997,9 @@ pub fn spawn_all(rt: &tokio::runtime::Runtime, state: Arc<Mutex<CoreState>>) {
         }
     });
 
+    // TRDD-RVKQDLRD: hourly bucket purge is heavy housekeeping -> `bg`.
     let s = state.clone();
-    rt.spawn(async move {
+    bg.spawn(async move {
         let mut tick = tokio::time::interval(Duration::from_secs(3600));
         tick.tick().await;
         loop {
@@ -978,10 +1014,11 @@ pub fn spawn_all(rt: &tokio::runtime::Runtime, state: Arc<Mutex<CoreState>>) {
     // growing SSD dir (measured going 162MB -> 1.4MB free in ~2 minutes from ONE subagent).
     // On the blocking pool — a pass runs DuckDB ingestion and byte-for-byte reconstruction.
     let s = state.clone();
+    // TRDD-RVKQDLRD: DuckDB ingestion + reconstruction, can run tens of seconds -> `bg`.
     let bodies_interval: u64 = 60;
-    rt.spawn(async move {
+    bg.spawn(async move {
         let mut tick = tokio::time::interval(Duration::from_secs(bodies_interval));
-        tick.tick().await; // boot pass ran inline above
+        tick.tick().await; // boot pass runs in the boot-chores task above
         loop {
             tick.tick().await;
             let s2 = s.clone();
@@ -995,8 +1032,9 @@ pub fn spawn_all(rt: &tokio::runtime::Runtime, state: Arc<Mutex<CoreState>>) {
     // NON-OVERLAP is by construction here, not by a flag: this is ONE task awaiting each scan
     // before the next tick, so the TS's `residentScanRunning` guard has nothing to guard. A
     // `spawn` per tick would need it back.
+    // TRDD-RVKQDLRD: diagnostic scan, not on a durability path -> `bg`.
     let s = state.clone();
-    rt.spawn(async move {
+    bg.spawn(async move {
         resident_blob_scan(&s, crate::now_ms() as f64).await;
         let mut tick = tokio::time::interval(Duration::from_secs(30));
         tick.tick().await; // boot pass just ran
@@ -1009,6 +1047,9 @@ pub fn spawn_all(rt: &tokio::runtime::Runtime, state: Arc<Mutex<CoreState>>) {
     // The 5s flush + window prune (server.ts flushSpanAppends, SAVE_INTERVAL_MS): settle anything
     // still buffered (ingest_post already flushes per payload) and prune the summarization window
     // by time — trimming memory is not data loss, every trimmed span is on disk.
+    // TRDD-RVKQDLRD: stays on `rt` (normal priority): this is the durability flush. Its first
+    // tick fires immediately; at background QoS under load that tick landed after
+    // tests/shutdown_flush.rs's POST and flushed early, and a crash would lose more spans.
     let s = state.clone();
     rt.spawn(async move {
         let mut tick = tokio::time::interval(Duration::from_secs(5));
@@ -1041,6 +1082,7 @@ pub fn spawn_all(rt: &tokio::runtime::Runtime, state: Arc<Mutex<CoreState>>) {
         .filter(|ms| *ms != 0)
         .unwrap_or(60_000)
         .max(1000) as u64;
+    // TRDD-RVKQDLRD: durability flush (fsync of account changes) -> stays on `rt`.
     rt.spawn(async move {
         let mut tick = tokio::time::interval(Duration::from_millis(account_flush));
         loop {
@@ -1054,6 +1096,8 @@ pub fn spawn_all(rt: &tokio::runtime::Runtime, state: Arc<Mutex<CoreState>>) {
     // The 30s lifecycle heartbeat (server.ts:1730, TRDD-PJC8N1HO spec 2): a crash then leaves
     // lastHeartbeat as a truthful downtime-gap boundary. The TS pairs this with scheduleDurableSave;
     // the Rust durable cadences live on the sweeper thread (P5e), so only the heartbeat is here.
+    // TRDD-RVKQDLRD: tiny lock hold whose whole value is a truthful downtime boundary after a
+    // crash; a stalled background heartbeat would falsify it -> stays on `rt`.
     let s = state.clone();
     rt.spawn(async move {
         let mut tick = tokio::time::interval(Duration::from_secs(30));
@@ -1075,7 +1119,8 @@ pub fn spawn_all(rt: &tokio::runtime::Runtime, state: Arc<Mutex<CoreState>>) {
         (st.statusline.root.clone(), st.statusline.counters.clone())
     };
     let sl_vars: std::collections::HashMap<String, String> = std::env::vars().collect();
-    rt.spawn(async move {
+    // TRDD-RVKQDLRD: DuckDB WAL re-encode, never takes the state lock -> `bg`.
+    bg.spawn(async move {
         let mut tick = tokio::time::interval(Duration::from_secs(60));
         loop {
             tick.tick().await;
@@ -1100,6 +1145,8 @@ pub fn spawn_all(rt: &tokio::runtime::Runtime, state: Arc<Mutex<CoreState>>) {
         .filter(|ms| *ms != 0)
         .unwrap_or(30_000)
         .max(5_000) as u64;
+    // TRDD-RVKQDLRD: spooled hook events are the only copy of themselves until drained, and the
+    // drain holds the state lock request handlers use -> stays on `rt`, not at background QoS.
     let s = state.clone();
     rt.spawn(async move {
         let mut tick = tokio::time::interval(Duration::from_millis(hook_spool_drain_ms));
@@ -1117,17 +1164,17 @@ pub fn spawn_all(rt: &tokio::runtime::Runtime, state: Arc<Mutex<CoreState>>) {
     // while exit stats say post-GC committed == peak, so what matters is naming the LIVE bytes.
     // One tick, on the blocking pool (the serialization half moves real bytes); a skipped or
     // overlapping tick costs one missing line, which is fine for a 60s diagnostic.
+    // TRDD-RVKQDLRD: diagnostic -> `bg`.
     let s = state.clone();
-    rt.spawn(async move {
+    bg.spawn(async move {
         let mut tick = tokio::time::interval(Duration::from_secs(60));
-        tick.tick().await; // boot pass ran inline below
+        tick.tick().await; // boot pass runs in the boot-chores task above
         loop {
             tick.tick().await;
             let s2 = s.clone();
             let _ = tokio::task::spawn_blocking(move || composition_tick(&s2)).await;
         }
     });
-    composition_tick(&state); // boot pass, inline — matches every other chore's boot-then-interval shape
 
     // TRDD-2JOIAH2G — the abandoned-sweep chore: control ONCE at boot, then the 60s interval.
     // Same blocking-pool shape as the other spawn_blocking chores; one task awaiting each tick
@@ -1136,8 +1183,9 @@ pub fn spawn_all(rt: &tokio::runtime::Runtime, state: Arc<Mutex<CoreState>>) {
     // reused, and thread DEATH is the mechanism under test — the allocating thread must
     // actually die); `pages_abandoned` is a process-global stat, so the reading thread's
     // identity does not matter.
+    // TRDD-RVKQDLRD: diagnostic -> `bg`.
     let s = state.clone();
-    rt.spawn(async move {
+    bg.spawn(async move {
         let _ = tokio::task::spawn_blocking(abandoned_control_pass).await;
         let mut tick = tokio::time::interval(Duration::from_secs(60));
         tick.tick().await; // the first tick fires immediately — boot did the control, skip to 60s

@@ -1369,6 +1369,14 @@ pub fn start_sweeper(
                 watch_attached,
                 watch_failed: watch_failed.len(),
             }));
+            // TRDD-RVKQDLRD: this thread DELIBERATELY stays at normal priority (no background QoS).
+            // The steady-state loop does NOT always take the state lock in short chunks: sweep
+            // ingestion is chunked (SCAN_CHUNK per lock) and the 1h backfill is bounded (<=200
+            // cards per lock), but `durable.tick` -> `save_cards` calls
+            // `st.cards.persist_records()` UNDER the state lock: a `SELECT * FROM cards` plus a
+            // JSON parse of every card, a full-corpus hold. At background QoS that hold would be
+            // preempted while request threads wait on the lock (priority inversion), so lowering
+            // this thread would make requests slower, not the machine quieter.
             let backstop = if watch_attached > 0 { FULL_RESCAN } else { poll_interval };
             let mut next_full = Instant::now() + backstop;
             let mut pending: Vec<PathBuf> = Vec::new();

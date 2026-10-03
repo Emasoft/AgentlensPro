@@ -33,6 +33,7 @@ pub mod admission;
 pub mod account_registry;
 pub mod all_accounts;
 pub mod account_state_timeline;
+pub mod bg_qos;
 pub mod body_archive;
 pub mod body_writers;
 pub mod burn;

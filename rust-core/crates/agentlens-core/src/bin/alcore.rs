@@ -250,6 +250,17 @@ fn main() {
         );
     }
 
+    // TRDD-RVKQDLRD: the global rayon pool is used by the log scan (`cold_scan_chunked`). It is
+    // deliberately NOT lowered to background QoS: rayon also runs the pre-bind boot sweep (and a
+    // stale-version cold scan) that the listeners wait on, so starving it would delay startup.
+    // Only the thread count is pinned: 4 threads, a prior measurement found 4 faster than the ncpu
+    // default for the cold scan. Must be configured before the first `par_iter` (the pool is
+    // created lazily on first use); fail loudly if a pool already exists.
+    if let Err(e) = rayon::ThreadPoolBuilder::new().num_threads(4).build_global() {
+        eprintln!("{} alcore: rayon pool: {e}", agentlens_core::log_ts());
+        exit(1);
+    }
+
     let mut sweeper: Option<agentlens_core::log_reader::SweeperHandle> = None;
     if log_scan {
         // The boot sweep is synchronous (the card map is populated before the listeners bind);
@@ -309,15 +320,42 @@ fn main() {
         eprintln!("{} alcore: runtime: {e}", agentlens_core::log_ts());
         exit(1);
     });
+    // TRDD-RVKQDLRD: a SECOND runtime for the chores, every thread (workers AND its blocking pool)
+    // at background QoS. macOS QoS is per-thread and tokio reuses blocking threads across tasks,
+    // so the only clean split from the request-serving runtime above is a separate runtime.
+    // Small on purpose (2 workers, 4 blocking): chores must not out-run the user's apps.
+    let bg_rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .max_blocking_threads(4)
+        .thread_name("alcore-bg")
+        .on_thread_start(agentlens_core::bg_qos::set_background_qos)
+        .enable_all()
+        .build()
+        .unwrap_or_else(|e| {
+            eprintln!("{} alcore: background runtime: {e}", agentlens_core::log_ts());
+            exit(1);
+        });
+    // TRDD-RVKQDLRD: startup self-check of the PRODUCTION wiring — read the QoS class back from a
+    // worker task and from a blocking-pool task of `bg_rt`, so a start hook that silently failed
+    // to apply is visible in the log instead of assumed.
+    #[cfg(target_os = "macos")]
+    bg_rt.spawn(async {
+        let worker = agentlens_core::bg_qos::current_qos_name();
+        let blocking = tokio::task::spawn_blocking(agentlens_core::bg_qos::current_qos_name).await.unwrap_or("join-failed");
+        eprintln!("{} alcore: qos self-check: bg-runtime worker={worker} blocking={blocking}", agentlens_core::log_ts());
+    });
     let addr: std::net::SocketAddr = format!("{bind}:{port}").parse().unwrap_or_else(|_| usage("bad bind/port"));
     // Every recurring maintenance task, armed in ONE library call. These used to be declared
     // inline here; they moved to `agentlens_core::chores` so they are reachable from an
     // integration test — the measured cost of the old shape is that `run_burn_tick`, still
     // declared below, HAS NO TEST and cannot have one from outside the binary.
-    // `spawn_all` runs the boot passes inline first (as the TS calls each chore once before
-    // setting its interval), so a server restarted more often than a chore's period still
-    // performs it.
-    agentlens_core::chores::spawn_all(&rt, state.clone());
+    // `spawn_all` runs the boot passes first (as the TS calls each chore once before setting its
+    // interval), so a server restarted more often than a chore's period still performs it — as a
+    // task on the background runtime, so the listeners below no longer wait for them.
+    // TRDD-RVKQDLRD: BOTH runtimes are passed: durability/latency chores (5s span flush, account
+    // flush, heartbeat, hook-drain tick) stay on the normal-priority `rt`; heavy housekeeping goes
+    // to `bg_rt`. All chores on `bg_rt` made tests/shutdown_flush.rs fail under CPU load.
+    agentlens_core::chores::spawn_all(&rt, &bg_rt, state.clone());
     let ui_addr: std::net::SocketAddr = format!("{bind}:{ui_port}").parse().unwrap_or_else(|_| usage("bad bind/ui-port"));
     let serve = agentlens_core::serve_otlp(addr, state.clone(), |bound| {
         println!("{} alcore: OTLP listening on http://{bound}", agentlens_core::log_ts());
@@ -441,7 +479,13 @@ fn main() {
     // blocks UNBOUNDED on every still-running background task (the DuckDB bodies pass `chores.rs`
     // runs via `spawn_blocking` can take tens of seconds), so dropping `rt` implicitly was itself
     // a SECOND, unbounded starvation point behind the state-lock one this change fixes.
+    // TRDD-RVKQDLRD: the background runtime runs the chores (incl. the DuckDB bodies pass), so it
+    // is stopped under the same shared budget and BEFORE the pid lock is released. `rt` goes
+    // FIRST: a bodies pass on `bg_rt` is uncancellable and can run tens of seconds, so shutting
+    // `bg_rt` first could consume the whole budget before the request runtime (which owns the
+    // span flush) got any of it.
     rt.shutdown_timeout(remaining(stop_deadline));
+    bg_rt.shutdown_timeout(remaining(stop_deadline));
 
     // Released LAST, after the runtime (and everything it was running) has actually stopped —
     // releasing it any earlier reopens the double-owner window `pid_lock::claim` guards against:
