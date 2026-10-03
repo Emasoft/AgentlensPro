@@ -7,7 +7,7 @@ import { spawn, execFileSync } from 'child_process'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
-import { apiRequest, dataDir, dashboardUrl, envPort, fmtGb, fmtMb, init, mcpEndpoint, sleep, CONNECT_TIMEOUT_MS } from './cliCore'
+import { apiRequest, dataDir, dashboardUrl, envPort, fmtGb, fmtMb, init, mcpEndpoint, sleep, CONNECT_TIMEOUT_MS, PROBE_TIMEOUT_MS } from './cliCore'
 import { dataDirSource, dataPath } from '../dataDir'
 import { agentlensDisabled, killSwitchPath, noRevivePath, reviveBraked, STARTED_BY_ENV } from './killSwitch'
 // resetReviveBackoff/reviveBackoffStatus (TRDD-JJLI6GEH) — a deliberate `server start`/`restart`
@@ -511,7 +511,8 @@ export async function findServerPid(): Promise<number | null> {
   const owner = liveLockPid(dataDir())
   if (owner !== null) return owner
   try {
-    const stats = await apiRequest('GET', '/api/server-stats') as { pid?: unknown; dataDir?: unknown }
+    // PROBE_TIMEOUT_MS: a foreign listener that accepts TCP but never answers HTTP must read as "not ours", not hang the port guard.
+    const stats = await apiRequest('GET', '/api/server-stats', undefined, PROBE_TIMEOUT_MS) as { pid?: unknown; dataDir?: unknown }
     // Guard the conversion: a payload without `pid` yields NaN, and NaN is not null, so a downstream
     // `pid === null` check would pass it straight through to process.kill(NaN).
     const pid = Number(stats.pid)
@@ -691,7 +692,7 @@ export async function showStatus(): Promise<void> {
     )
   }
   let s: ServerStats
-  try { s = await apiRequest('GET', '/api/server-stats') as unknown as ServerStats } catch (e) {
+  try { s = await apiRequest('GET', '/api/server-stats', undefined, PROBE_TIMEOUT_MS) as unknown as ServerStats } catch (e) {
     // A response (however wrong) means SOMETHING is serving the port — an older build without
     // the stats endpoint, or a foreign process. Only a connection failure means "not running".
     if (!String((e as Error).message).includes('unreachable')) {

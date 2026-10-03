@@ -16,7 +16,7 @@ import { readManifest, repairStore } from '../store/migrate'
 import { makeTsRepairStep, parkedMtimeTsMap, emptyCorrections } from '../store/tsRecovery'
 import { alstoreBin, rustUnpark } from '../rustStorePass'
 import { reviveDisabledOnDisk } from './hookHandlers'
-import { apiRequest } from './cliCore'
+import { apiRequest, PROBE_TIMEOUT_MS } from './cliCore'
 import { execFileSync } from 'child_process'
 
 /** Names of processes that can WRITE the store, found by snapshotting the process table.
@@ -133,7 +133,7 @@ export async function runStoreCli(argv: string[]): Promise<number> {
   // inode and would keep writing into the renamed backup — so the server must be down, and the
   // hook revive must be braked or the next tool call resurrects it mid-rewrite.
   let serverUp = false
-  try { await apiRequest('GET', '/api/server-stats'); serverUp = true } catch { /* down — good */ }
+  try { await apiRequest('GET', '/api/server-stats', undefined, PROBE_TIMEOUT_MS); serverUp = true } catch { /* down — good */ }
   if (serverUp) {
     console.error('REFUSED: the server is running — it would keep writing into the swapped-out store. Run `agentlenspro server stop --stay-down` first.')
     return 1

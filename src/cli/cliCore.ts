@@ -12,7 +12,7 @@ import * as os from 'os'
 import * as path from 'path'
 import { UsageError } from './cliErrors'
 import { dataDir } from '../dataDir'
-import { readChosenPort } from './portSelect'
+import { liveLockPid, readChosenPort } from './portSelect'
 
 // The fallback ports below are the SAME `MCP_PORT` / `UI_PORT` the server binds, not literals. The
 // isolation recipe ("own DATA_DIR + own ports") sets those two for the server, and nothing sets the
@@ -240,8 +240,18 @@ export function firstSentence(s: unknown): string {
   return one.length > 140 ? `${one.slice(0, 140)}…` : one
 }
 
+/** Default TOTAL response deadline for apiRequest — generous (matches the hook timeout) because MCP
+ *  passthroughs, forensics scans, SQL tools waiting for the heavy-query slot, ctxmap and store-admin
+ *  verbs legitimately run long and any caller nobody updated must keep working. WHY a total deadline
+ *  exists at all: armConnectDeadline bounds only the connect, so a foreign process that accepts TCP
+ *  on the UI port but never speaks HTTP hung `server start` (resolveServerPorts -> findServerPid ->
+ *  GET /api/server-stats) forever. PROBES pass PROBE_TIMEOUT_MS explicitly. */
+export const API_TIMEOUT_MS = Math.max(200, Number(process.env.AGENTLENS_API_TIMEOUT_MS) || 120_000)
+/** Short deadline for liveness/identity probes (findServerPid, status, port guard): a healthy server answers in ms. */
+export const PROBE_TIMEOUT_MS = 3_000
+
 /** Plain HTTP JSON helper for the server's /api/* routes (REST on the UI port, not JSON-RPC). */
-export function apiRequest(method: string, apiPath: string, payload?: unknown): Promise<Record<string, unknown>> {
+export function apiRequest(method: string, apiPath: string, payload?: unknown, timeoutMs: number = API_TIMEOUT_MS): Promise<Record<string, unknown>> {
   const u = new URL(apiPath, uiBaseUrl())
   const body = payload === undefined ? null : JSON.stringify(payload)
   return new Promise((resolve, reject) => {
@@ -263,7 +273,17 @@ export function apiRequest(method: string, apiPath: string, payload?: unknown): 
     })
     // Same unbounded-connect exposure as rpc() above — same bound, for the same reason.
     armConnectDeadline(req, uiBaseUrl())
-    req.on('error', e => reject(new Error(`server unreachable at ${uiBaseUrl()}: ${e.message}`)))
+    const owner = liveLockPid(dataDir())
+    const deadline = setTimeout(() => {
+      req.destroy(new Error(
+        `server did not answer within ${Math.round(timeoutMs / 1000)}s on port ${u.port}${owner ? ` (pid ${owner})` : ''} — ` +
+        'not an agentlens server / not answering (the port is held by a process that accepts connections but does not speak HTTP)'
+      ))
+    }, timeoutMs)
+    deadline.unref?.()
+    // 'close' fires after every outcome (end, error, destroy), so the timer can never outlive the request.
+    req.on('close', () => clearTimeout(deadline))
+    req.on('error', e => reject(new Error(e.message.startsWith('server did not answer') || e.message.startsWith('no connection') ? e.message : `server unreachable at ${uiBaseUrl()}: ${e.message}`)))
     if (body) req.write(body)
     req.end()
   })
