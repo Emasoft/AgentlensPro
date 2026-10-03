@@ -149,6 +149,31 @@ fn random_interleavings_equal_a_full_rebuild_at_every_step() {
         let mut span_n = 0u64;
         for step in 0..60 {
             let op = r.next() % 100;
+            // Mutations the ops below do not reach, applied BEFORE the step own op so the two compose:
+            // an account learned or CHANGED mid-run (the OTEL side joins it); a feed-preference flip on an
+            // existing id (claude_code logs win their OTEL twin, every other source loses to it); and a
+            // cold-boot restore (engine and both caches gone, cards re-inserted in REVERSE so slots reshuffle).
+            let extra = r.next() % 100;
+            if extra < 12 {
+                let uuid = *r.pick(&["acct-1", "acct-2", "acct-3"]);
+                st.accounts.record(r.pick(&IDS), uuid);
+            } else if extra < 22 {
+                let id = *r.pick(&IDS);
+                if let Some(mut c) = st.cards.cards().into_iter().find(|c| c["sessionId"] == id) {
+                    c["source"] = json!(if c["source"] == "codex" { "claude_code" } else { "codex" });
+                    st.put_log_session(c);
+                }
+            } else if extra < 28 {
+                incremental += st.summary_engine.incremental_passes.load(Ordering::Relaxed);
+                st.summary_engine = Arc::new(agentlens_core::summary_engine::SummaryEngine::default());
+                st.summary_cache.clear();
+                st.stripped_cache.clear();
+                let all = st.cards.cards();
+                st.cards.clear();
+                for c in all.into_iter().rev() {
+                    st.put_log_session(c);
+                }
+            }
             let what = match op {
                 0..=39 => {
                     st.put_log_session(random_card(&mut r));
@@ -290,4 +315,125 @@ fn a_reader_holding_the_previous_summary_gets_a_consistent_old_view_and_the_patc
     st.put_log_session(card("h2", "claude_code", "2026-08-09T10:00:00.000Z", None, 99, 1));
     assert_equals_full(&mut st, "after change with a reader holding the old Arc");
     assert_eq!(serde_json::to_string(&*held).unwrap(), held_bytes, "the reader's Arc was never mutated");
+}
+
+
+/// An EMPTY prune (nothing aged out, nothing narrowed) must not bump `data_version` or force a full
+/// rebuild: the 5 s flush tick calls it forever, and a forced full pass there is the churn the
+/// engine exists to remove. No wall-clock input reaches the summary (`summarize_spans` and the merge
+/// take no `now`), so nothing but a real eviction can make the summary stale.
+#[test]
+fn an_empty_prune_forces_no_rebuild_and_the_next_pass_is_incremental() {
+    let mut st = CoreState::open(&tmp("empty-prune"));
+    st.put_log_session(card("a", "claude_code", "2026-08-01T10:00:00.000Z", None, 1, 1));
+    ingest_post(&mut st, "/v1/traces", otel_trace("o", 1).as_bytes());
+    assert_equals_full(&mut st, "seed");
+    let version = st.data_version;
+    st.prune_window(now_ms());
+    assert_eq!(st.data_version, version, "a prune that evicted nothing must not bump the data version");
+    assert!(!st.summary_engine.force_full.load(Ordering::Relaxed), "a prune that evicted nothing must not force a full rebuild");
+    let (full, incr) = (st.summary_engine.full_passes.load(Ordering::Relaxed), st.summary_engine.incremental_passes.load(Ordering::Relaxed));
+    assert_equals_full(&mut st, "after an empty prune");
+    assert_eq!(st.summary_engine.full_passes.load(Ordering::Relaxed), full, "no full pass after an empty prune");
+    assert_eq!(st.summary_engine.incremental_passes.load(Ordering::Relaxed), incr + 1, "the pass was incremental");
+}
+
+/// A build the cache REFUSES (a newer summary landed first) is dropped whole. The engine already
+/// advanced its own state for it, so the next pass must NOT patch from that state: the previous
+/// output in the cache is not the one the engine published, which the pointer check turns into a
+/// full rebuild. That is why a dropped build needs no re-marking of the ids it drained.
+#[test]
+fn a_dropped_build_makes_the_next_pass_a_full_rebuild_that_still_matches() {
+    let mut st = CoreState::open(&tmp("dropped"));
+    st.put_log_session(card("a", "claude_code", "2026-08-01T10:00:00.000Z", None, 1, 1));
+    assert_equals_full(&mut st, "seed");
+    st.put_log_session(card("b", "claude_code", "2026-08-02T10:00:00.000Z", None, 2, 1));
+    let mut inputs = st.summary_snapshot(); // takes the cache's previous output
+    let slow = CoreState::summary_from(&mut inputs, 0.0); // the engine's state now includes "b"
+    // A newer summary lands first (an inline build at a later data version, as `hook_events` does).
+    st.data_version += 1;
+    let newer = st.build_session_summary(0.0);
+    let newer_version = st.summary_cache.version();
+    let served = st.store_summary(inputs.version, slow);
+    assert!(Arc::ptr_eq(&served, &newer), "the late, older build is refused and the newer summary is served");
+    assert_eq!(st.summary_cache.version(), newer_version, "the cache never moves backwards");
+    st.put_log_session(card("c", "claude_code", "2026-08-03T10:00:00.000Z", None, 3, 1));
+    let full_before = st.summary_engine.full_passes.load(Ordering::Relaxed);
+    let got = assert_equals_full(&mut st, "pass after a dropped build");
+    assert_eq!(got.summary["sessions"].as_array().unwrap().len(), 3);
+    assert!(st.summary_engine.full_passes.load(Ordering::Relaxed) > full_before, "an unrecognised previous output forces a full rebuild");
+}
+
+
+/// The exact interleaving the empty-slot rule exists for: a slow OLD build (A) is still running while
+/// a newer pass (X) lands and a third (B) snapshots, which EMPTIES the slot again. A's late store
+/// hits an empty slot that remembers a newer version and must be refused, not moved backwards.
+#[test]
+fn a_late_old_build_cannot_land_in_the_slot_a_newer_pass_emptied() {
+    let mut st = CoreState::open(&tmp("late-old"));
+    st.put_log_session(card("a", "claude_code", "2026-08-01T10:00:00.000Z", None, 1, 1));
+    assert_equals_full(&mut st, "seed");
+    st.put_log_session(card("b", "claude_code", "2026-08-02T10:00:00.000Z", None, 2, 1));
+    let mut a = st.summary_snapshot();
+    let build_a = CoreState::summary_from(&mut a, 0.0); // slow pass A, version of "b"
+    st.put_log_session(card("c", "claude_code", "2026-08-03T10:00:00.000Z", None, 3, 1));
+    assert_equals_full(&mut st, "newer pass X lands"); // cache holds X's version
+    st.put_log_session(card("d", "claude_code", "2026-08-04T10:00:00.000Z", None, 4, 1));
+    let mut b = st.summary_snapshot(); // pass B takes X's output: the slot is empty again
+    assert!(st.summary_cache.is_empty());
+    let x_version = st.summary_cache.version();
+    assert!(a.version < x_version);
+    st.store_summary(a.version, build_a);
+    assert!(st.summary_cache.is_empty(), "the late old build did not land in the emptied slot");
+    assert_eq!(st.summary_cache.version(), x_version, "the cache did not move backwards");
+    let build_b = CoreState::summary_from(&mut b, 0.0);
+    let got = st.store_summary(b.version, build_b);
+    assert_eq!(got["sessions"].as_array().unwrap().len(), 4);
+    assert_equals_full(&mut st, "after pass B");
+}
+
+/// The race the version guard exists for: concurrent snapshot -> build -> store loops (no rebuild
+/// gate here, which is the worst case) against a writer. A late OLD build landing in the slot a
+/// newer pass emptied (`take_arc`) used to be accepted and moved the cache backwards; the next pass
+/// then patched from stale inputs. The cache version must never decrease, and once the dust settles
+/// one more rebuild must equal the independent full rebuild.
+#[test]
+fn concurrent_rebuilds_never_move_the_cache_backwards_and_the_end_state_is_exact() {
+    use std::sync::atomic::{AtomicBool, AtomicU64};
+    use std::sync::Mutex;
+    let state = Arc::new(Mutex::new(CoreState::open(&tmp("race"))));
+    for i in 0..4 {
+        state.lock().unwrap().put_log_session(card(&format!("s{i}"), "claude_code", &format!("2026-08-0{}T10:00:00.000Z", i + 1), None, 1, 1));
+    }
+    let stop = Arc::new(AtomicBool::new(false));
+    let regressions = Arc::new(AtomicU64::new(0));
+    let workers: Vec<_> = (0..3)
+        .map(|_| {
+            let (state, stop, regressions) = (state.clone(), stop.clone(), regressions.clone());
+            std::thread::spawn(move || {
+                let mut last = 0u64;
+                while !stop.load(Ordering::Relaxed) {
+                    let mut inputs = state.lock().unwrap().summary_snapshot();
+                    let build = CoreState::summary_from(&mut inputs, 0.0);
+                    let mut st = state.lock().unwrap();
+                    st.store_summary(inputs.version, build);
+                    let v = st.summary_cache.version();
+                    if v < last {
+                        regressions.fetch_add(1, Ordering::Relaxed);
+                    }
+                    last = v;
+                }
+            })
+        })
+        .collect();
+    for i in 0..400 {
+        state.lock().unwrap().put_log_session(card(&format!("s{}", i % 7), "claude_code", &format!("2026-08-0{}T10:00:00.000Z", i % 9 + 1), None, i % 5, 1));
+        std::thread::yield_now();
+    }
+    stop.store(true, Ordering::Relaxed);
+    for w in workers {
+        w.join().unwrap();
+    }
+    assert_eq!(regressions.load(Ordering::Relaxed), 0, "the summary cache moved backwards");
+    assert_equals_full(&mut state.lock().unwrap(), "after the race");
 }

@@ -46,6 +46,18 @@ use crate::{feed_merge, summarize, CoreState};
 
 const OTEL_BASE: u64 = 1 << 40;
 
+
+/// `Arc::try_unwrap` failures: a reader still held the previous summary (or its stripped twin), so
+/// `take_sessions` deep-copied the sessions array instead of moving it — one full-corpus copy each.
+/// Process-wide, like the rebuild gate in `ui.rs`: one server (one engine) per process, and a
+/// field on `SummaryEngine` cannot be added through `fastedit` (the struct and its impl share a
+/// name). Served on `/api/debug/log-scan-stats` as `summaryEngine.sharedCopies`.
+static SHARED_COPIES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+pub fn shared_copies() -> u64 {
+    SHARED_COPIES.load(AtomicOrdering::Relaxed)
+}
+
 /// What a rebuild produces. `stripped` is `None` on the full/legacy fallback (the request path
 /// derives it lazily, as before).
 pub struct SummaryBuild {
@@ -111,13 +123,17 @@ fn order(a: (f64, u64), b: (f64, u64)) -> Ordering {
 
 /// The `sessions` array out of a previous output. Unique Arc → moved; shared → one copy of the
 /// array (the documented ceiling).
+/// Each shared copy is counted in `SHARED_COPIES` so the ceiling is visible, not silent.
 fn take_sessions(a: Arc<Value>) -> Vec<Value> {
     match Arc::try_unwrap(a) {
         Ok(mut v) => match v.get_mut("sessions").map(Value::take) {
             Some(Value::Array(arr)) => arr,
             _ => Vec::new(),
         },
-        Err(shared) => shared.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default(),
+        Err(shared) => {
+            SHARED_COPIES.fetch_add(1, AtomicOrdering::Relaxed);
+            shared.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default()
+        }
     }
 }
 

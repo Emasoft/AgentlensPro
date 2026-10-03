@@ -97,7 +97,8 @@ fn a_panic_while_holding_the_heavy_slot_does_not_wedge_it() {
         panic!("deliberate panic while holding the heavy slot");
     });
     assert!(t.join().is_err());
-    acquire_heavy_within(std::time::Duration::from_secs(5)).expect("slot must be recoverable after a poisoning panic");
+    // Bound (not discarded): the guard is held to the end of the test, as the recovery check intends.
+    let _held = acquire_heavy_within(std::time::Duration::from_secs(5)).expect("slot must be recoverable after a poisoning panic");
 }
 
 /// A chore facing a steady stream of short heavy queries skips at most CHORE_MAX_SKIPS ticks, then runs.

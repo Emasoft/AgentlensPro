@@ -381,7 +381,7 @@ impl CoreState {
     /// serves — so the map is replaced only when the summary actually lands (a rebuild that lost
     /// the race is discarded whole).
     pub fn store_summary(&mut self, version: u64, build: summary_engine::SummaryBuild) -> std::sync::Arc<Value> {
-        let will_store = self.summary_cache.is_empty() || version > self.summary_cache.version();
+        let will_store = self.summary_cache.would_store(version);
         let stored = self.summary_cache.store_arc_if_newer(version, build.summary);
         if will_store {
             self.otel_attribution = build.attribution;

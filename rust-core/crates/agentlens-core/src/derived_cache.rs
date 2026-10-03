@@ -50,8 +50,8 @@ impl<T> VersionedCache<T> {
     /// the caller gets whatever is current instead. Counts a miss only when it actually stores,
     /// so the hit/miss ratio still reads as "rebuilds vs reuses".
     pub fn store_if_newer(&mut self, version: u64, value: T) -> Arc<T> {
-        if let Some(v) = self.cached.as_ref().filter(|_| self.version >= version) {
-            return v.clone();
+        if !self.would_store(version) {
+            return self.cached.clone().unwrap_or_else(|| Arc::new(value));
         }
         let value = Arc::new(value);
         self.cached = Some(value.clone());
@@ -60,13 +60,23 @@ impl<T> VersionedCache<T> {
         value
     }
 
+    /// Would a build for `version` land? A held value only yields to a STRICTLY newer build. An
+    /// EMPTY slot (its value was `take_arc`ed by the rebuild in flight) still remembers the version
+    /// it held and refuses anything OLDER than that: without this a late old build stored into the
+    /// emptied slot would move the cache backwards and the next pass would patch from stale inputs.
+    /// Equal is allowed when empty — the cold start (version 0) and a pressure-ladder `clear` both
+    /// rebuild at the version the slot already remembers.
+    pub fn would_store(&self, version: u64) -> bool {
+        if self.cached.is_some() { version > self.version } else { version >= self.version }
+    }
+
 
     /// `store_if_newer` for a value the caller already wrapped in an `Arc`. The summary engine
     /// (TRDD-9VX3WTGU Phase C part 2) records the pointer it published so it can recognise its own
     /// previous output next pass; wrapping inside the cache would hide that pointer from it.
     pub fn store_arc_if_newer(&mut self, version: u64, value: Arc<T>) -> Arc<T> {
-        if let Some(v) = self.cached.as_ref().filter(|_| self.version >= version) {
-            return v.clone();
+        if !self.would_store(version) {
+            return self.cached.clone().unwrap_or(value);
         }
         self.cached = Some(value.clone());
         self.version = version;
@@ -166,4 +176,43 @@ mod tests {
         let v = c.cached_value().unwrap();
         assert_eq!(serde_json::to_vec(v.as_ref()).unwrap().len(), 7); // "hello" quoted
     }
+
+
+    /// A held value yields only to a STRICTLY newer build.
+    #[test]
+    fn a_held_value_yields_only_to_a_strictly_newer_build() {
+        let mut c = VersionedCache::default();
+        c.store_if_newer(5, json!("five"));
+        assert!(!c.would_store(4) && !c.would_store(5) && c.would_store(6));
+        assert_eq!(*c.store_if_newer(4, json!("late")), json!("five"), "a late older build is discarded, the held value served");
+        assert_eq!(c.version(), 5);
+    }
+
+    /// The slot a rebuild in flight emptied (`take_arc`) still remembers its version: a late OLDER
+    /// build must not land in it (that moved the cache backwards), while an equal or newer one may.
+    #[test]
+    fn an_emptied_slot_refuses_an_older_build_but_takes_an_equal_or_newer_one() {
+        let mut c = VersionedCache::default();
+        c.store_if_newer(5, json!("five"));
+        let (v, _held) = c.take_arc().expect("held");
+        assert_eq!(v, 5);
+        assert!(c.is_empty() && !c.would_store(4) && c.would_store(5) && c.would_store(6));
+        assert_eq!(*c.store_arc_if_newer(4, Arc::new(json!("late"))), json!("late"), "the refused build is handed back to its caller");
+        assert!(c.is_empty(), "the refused build did not land");
+        c.store_arc_if_newer(5, Arc::new(json!("same")));
+        assert_eq!(c.version(), 5);
+        assert!(!c.is_empty());
+    }
+
+    /// Cold start (version 0, empty) and a pressure-ladder `clear` both rebuild at the version the
+    /// slot remembers.
+    #[test]
+    fn a_cold_or_cleared_slot_accepts_the_version_it_remembers() {
+        let mut c: VersionedCache<serde_json::Value> = VersionedCache::default();
+        assert!(c.would_store(0));
+        c.store_if_newer(7, json!(1));
+        c.clear();
+        assert!(c.would_store(7) && !c.would_store(6));
+    }
+
 }

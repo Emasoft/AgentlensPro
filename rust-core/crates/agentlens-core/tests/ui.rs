@@ -431,6 +431,7 @@ fn small_routes_embed_status_hook_config_clear_action_and_log_scan_stats() {
     assert_eq!(v["derivedCaches"]["stripped"], serde_json::json!({ "hits": 1, "misses": 1 }));
     assert_eq!(v["derivedCaches"]["sidebar"], serde_json::json!({ "hits": 0, "misses": 0 }));
     assert!(v["dataVersion"].is_u64());
+    assert!(v["summaryEngine"]["sharedCopies"].is_u64(), "the shared-copy counter is served: {v}");
     state.lock().unwrap().put_log_session(serde_json::json!({ "sessionId": "bump", "source": "codex", "timeline": [] }));
     get(ui, "/api/summary", "");
     let r = get(ui, "/api/debug/log-scan-stats", "");

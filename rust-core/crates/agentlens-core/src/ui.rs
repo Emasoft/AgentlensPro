@@ -1808,6 +1808,9 @@ async fn handle(
                 "fullReads": s.full_reads,
                 "filesStatted": s.files_statted,
                 "dataVersion": st.data_version,
+                // Summary rebuilds that deep-copied the sessions array because a reader still held
+                // the previous summary — each one is a full-corpus copy (see `summary_engine`).
+                "summaryEngine": { "sharedCopies": crate::summary_engine::shared_copies() },
                 "derivedCaches": {
                     "summary": { "hits": sh, "misses": sm },
                     "stripped": { "hits": th, "misses": tm },
