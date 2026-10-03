@@ -4,7 +4,7 @@ title: Replace the Node CLI on every hook and statusline path with small dedicat
 column: design
 status: tasked
 created: 2026-10-03T20:40:31+0200
-updated: 2026-10-03T21:06:43+0200
+updated: 2026-10-03T21:13:10+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: refactor
@@ -26,7 +26,7 @@ The 230 ms CPU / 71 MB figure was measured on `--version` at load average 92-112
 ## Scope
 Five verbs: hook (15 events), gate (PreToolUse+PostToolUse), review-gate (Stop, SubagentStop), review-supervisor (Stop, UserPromptSubmit), statusline. Each moves off the Node CLI (to a focused Rust binary, one multi-call binary, or a curl call in the existing wrapper: see Options to benchmark) and keeps the exact output contract listed in the inventory (kill-switch first, stdout contract, exit 0, timeouts, spool/revive for hook, fail-open for gate, inner-command passthrough for statusline).
 ## Open decision (pending measurement)
-DuckDB allows concurrent writes inside one process; across processes it needs a server: the Quack client-server extension (DuckDB >= 1.5.3, documented experimental) or DuckLake with a PostgreSQL catalog. Candidates being benchmarked: shared file, per-session file, spool file read later by DuckDB, plain POST to alcore, Quack client attached to alcore. Pick per hook kind by CPU-ms per event, binary size, and zero lost events under 22 concurrent sessions.
+DuckDB allows concurrent writes inside one process; across processes it needs a server: the Quack client-server extension (DuckDB >= 1.5.3, documented experimental) or DuckLake with a PostgreSQL catalog. Candidates being benchmarked: curl in the existing wrapper (no new binary), shared file, per-session file, spool file read later by DuckDB, plain POST to alcore, Quack client attached to alcore; packaged as per-verb binaries or one multi-call binary. Pick per hook kind by CPU-ms per event, binary size, and zero lost events under at least 3x today's 22 concurrent sessions (see Scope notes).
 ## Constraints
 review-supervisor matches the literal command string "agentlenspro review-gate" in settings files; renaming the hook command needs that check updated in the same change. Settings changes need owner approval.
 
@@ -42,7 +42,7 @@ review-supervisor matches the literal command string "agentlenspro review-gate" 
 - "an sql server  is designed to accept transactions from multiple clients at the same time. you should read duckdb docs."
 - "you can update the duckdb version to take advantage of the new features and bugfixes" (the DuckDB crate bump, tracked under TRDD-9VX3WTGU)
 
-## Verified DuckDB constraints
+## DuckDB constraints (documented, plus labelled inferences)
 
 - DuckDB docs (duckdb.org/docs/current/connect/concurrency.html): "one process can both read and write to the database"; "multiple processes can read from the database, but no processes can write"; concurrency control is "all within that single writer process".
 - Multi-process writes are supported through the Quack protocol (core extension, DuckDB >= 1.5.3, documented "still subject to change") or DuckLake with a PostgreSQL catalog.
@@ -55,7 +55,7 @@ review-supervisor matches the literal command string "agentlenspro review-gate" 
 - (b) One multi-call Rust binary (argv[0]/subcommand) instead of five.
 - (c) Per-verb binaries.
 - (d) DuckDB-linked client via Quack vs std-only HTTP client.
-- Size (worst case, inferred from alstore at 39.9 MB / 11.8 MB gzipped; a minimal DuckDB-only client is unmeasured; only strip -S was measured, saving 0 bytes): five separate DuckDB-linked binaries x 4 platforms would add about 240 MB gzipped. A hook client built into an already DuckDB-linked binary adds close to nothing. Pending: whether Quack can be statically linked in the bundled build or must be downloaded at runtime (a runtime download is unacceptable on a hook path).
+- Size (worst case, inferred from alstore at 39.9 MB / 11.8 MB gzipped; a minimal DuckDB-only client is unmeasured; only strip -S was measured, saving 0 bytes): five separate DuckDB-linked binaries x 4 platforms would add about 240 MB gzipped. A hook client built into an already DuckDB-linked binary should add little (unmeasured). Pending: whether Quack can be statically linked in the bundled build or must be downloaded at runtime (a runtime download is unacceptable on a hook path).
 
 ## Scope notes
 
@@ -69,4 +69,5 @@ review-supervisor matches the literal command string "agentlenspro review-gate" 
 
 ## Related
 
-TRDD-9VX3WTGU (DuckDB redesign): coordinate the gate contract with its post-cutover API. Not a prerequisite: review-gate and review-supervisor never call alcore, and the redesign does not change /api/hook-events or /api/statusline-samples. After the benchmark, split this card into derived cards: statusline+hook transport, gate, review-gate+review-supervisor port (last), plus EHTs for setup/--install-hooks migration with the review-supervisor string-match fix, and for packaging/codesign.
+TRDD-9VX3WTGU (DuckDB redesign): coordinate the gate contract with its post-cutover API. Not a prerequisite: review-gate and review-supervisor never call alcore (inventory read the code). The DUCKPLAN specs keep the HTTP contracts of POST /api/hook-events (H10), POST /api/statusline-samples (H9) and POST /api/agent-gate (H23) under golden-diff parity (SPEC-golden-capture-and-clock rows H9/H10/H23; SPEC-operation-catalog C27 "golden diff; ui.rs:558,1858 stay green"); only the storage behind them changes (hook_event table, dual-written during the soak). A hook binary built against today's contract therefore survives the cutover, provided the goldens stay green. After the benchmark, split this card into derived cards: statusline+hook transport, gate, review-gate+review-supervisor port (last), plus EHTs for setup/--install-hooks migration with the review-supervisor string-match fix, and for packaging/codesign.
+The title records the owner's directive (Rust binaries); the curl-in-wrapper option is benchmarked as a baseline, not a substitute chosen without the owner.
