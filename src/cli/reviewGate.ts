@@ -373,6 +373,7 @@ export interface AssistantContentBlock {
 interface TranscriptEntry {
   type?: unknown
   isSidechain?: unknown
+  agentId?: unknown
   message?: { content?: AssistantContentBlock[] | string }
 }
 
@@ -482,7 +483,7 @@ export interface GateScan {
 /** ONE scan for both gates. Pure — the whole "relative position, not turn boundaries" rule lives
  *  here, so it is testable without a real transcript file. WHAT counts as work is decided in the
  *  triggers module; `cwd` is the hook's, for resolving relative write targets. */
-export function scanTranscriptLines(lines: string[], cwd = process.cwd()): GateScan {
+export function scanTranscriptLines(lines: string[], cwd = process.cwd(), ownAgentId?: string): GateScan {
   let work: GateScan['work'] = null
   let lastProposal = -1
   const roles: GateScan['roles'] = { measure: -1, review: -1 }
@@ -491,9 +492,13 @@ export function scanTranscriptLines(lines: string[], cwd = process.cwd()): GateS
   for (let i = 0; i < lines.length; i++) {
     let e: TranscriptEntry
     try { e = JSON.parse(lines[i]) as TranscriptEntry } catch { continue }
-    // Subagent turns are marked `isSidechain: true` — a child's prose must never be scored as the
-    // parent's work.
-    if (e?.isSidechain === true) continue
+    // Sidechain entries are a child agent's turns — their prose must never be scored as the
+    // parent's work. EXCEPT a subagent's OWN transcript: every one of its entries is
+    // `isSidechain: true` and carries its own `agentId`, so skipping them all made the SubagentStop
+    // gate scan nothing and always allow (TRDD-LZ2JDIJP: 382 of 387 writing subagents since
+    // 2026-09-15 were never reviewed). Keep an entry whose agentId is the caller's own; its nested
+    // grandchildren carry a different agentId and stay excluded. The main gate passes no id.
+    if (e?.isSidechain === true && !(ownAgentId !== undefined && e.agentId === ownAgentId)) continue
     const content = e?.message?.content
     if (e?.type === 'user') {
       // The transcript's OWN spawning prompt is its FIRST non-sidechain `user` entry — read ONCE,
@@ -650,7 +655,7 @@ export function subagentExempt(agentType: string, ownRole: Role | null): boolean
   return t === '' || REVIEWER_AGENT_TYPES.has(t) || JANITOR_AGENT_RE.test(t) || ownRole !== null
 }
 
-async function runSubagentGate(input: ReviewGateInput): Promise<string | null> {
+export async function runSubagentGate(input: ReviewGateInput): Promise<string | null> {
   // ONE demand per return: the harness sets this once a Stop hook already blocked this same stop.
   if (input?.stop_hook_active === true) return null
   const type = String(input?.agent_type ?? '')
@@ -664,7 +669,9 @@ async function runSubagentGate(input: ReviewGateInput): Promise<string | null> {
     return null
   }
   let scan: GateScan
-  try { scan = scanTranscriptLines(fs.readFileSync(own, 'utf8').split('\n'), hookCwd(input)) } catch {
+  // `agent_id` lets the scan keep this agent's own sidechain entries (TRDD-LZ2JDIJP).
+  const ownAgentId = typeof input?.agent_id === 'string' ? input.agent_id : undefined
+  try { scan = scanTranscriptLines(fs.readFileSync(own, 'utf8').split('\n'), hookCwd(input), ownAgentId) } catch {
     process.stderr.write('[review-gate] allowing UNREVIEWED: agent_transcript_path is unreadable for ' + JSON.stringify(type) + '\n')
     return null
   }

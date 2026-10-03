@@ -11,6 +11,7 @@ import {
   NO_REVIEW_SENTINEL, NO_REVIEW_SENTINEL_EXAMPLES,
 } from '../cli/reviewGate'
 import { PROPOSAL_MARKER } from '../cli/reviewGateTriggers'
+import { runSubagentGate } from '../cli/reviewGate'
 
 // `agentlenspro review-gate` — pure decision-function tests (owner order 2026-09-15 rewrite: ONE
 // shared scan/decide pair, `scanTranscriptLines` / `decideGate`, replaces the separate main/subagent
@@ -721,5 +722,47 @@ suite('reviewGate — runMainGate / runReviewGate end to end', () => {
     assert.strictEqual(subagentExempt('ai-maestro-janitor:janitor-memory-subconscious-agent', null), true)
     const scan = scanTranscriptLines(lines, '/repo')
     assert.strictEqual(decideGate(scan), 'review')
+  })
+})
+
+// ── SubagentStop sees the worker's OWN sidechain entries (TRDD-LZ2JDIJP) ─────────────────────────
+// A subagent's own transcript is isSidechain:true on every entry, each carrying its own agentId.
+// Skipping all sidechain entries made the gate scan nothing: 382 of 387 writing subagents were never reviewed.
+suite('reviewGate — runSubagentGate: own sidechain entries are scanned (TRDD-LZ2JDIJP)', () => {
+  const sc = (agentId: string, entry: Record<string, unknown>): string => JSON.stringify({ isSidechain: true, agentId, ...entry })
+  const scUser = (agentId: string, text: string): string => sc(agentId, { type: 'user', message: { role: 'user', content: text } })
+  const scAssistant = (agentId: string, blocks: unknown[]): string => sc(agentId, { type: 'assistant', message: { content: blocks } })
+  const writeBlock = bashBlock("fastedit create evals/x.md --force --content 'a'")
+  const mkTranscript = (lines: string[]): string => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rg-sub-'))
+    const file = path.join(dir, 'agent-w1.jsonl')
+    fs.writeFileSync(file, lines.join('\n') + '\n')
+    return file
+  }
+  const stop = (agent_transcript_path: string) =>
+    runSubagentGate({ hook_event_name: 'SubagentStop', agent_id: 'w1', agent_type: 'general-purpose', agent_transcript_path, cwd: CWD })
+
+  test('a worker whose every entry is its own sidechain and which wrote a file is BLOCKED', async () => {
+    const t = mkTranscript([scUser('w1', 'do the thing'), scAssistant('w1', [writeBlock])])
+    const out = await stop(t)
+    assert.ok(out !== null, 'the worker wrote and spawned no reviewer — must block')
+    assert.strictEqual((JSON.parse(out) as { decision: string }).decision, 'block')
+  })
+
+  test('the same write attributed to a nested grandchild (other agentId) is excluded → allow', async () => {
+    const t = mkTranscript([scUser('w1', 'do the thing'), scAssistant('grandchild', [writeBlock])])
+    assert.strictEqual(await stop(t), null)
+  })
+
+  test('`ROLE: MEASURE` mid-sentence does not exempt a worker; as a whole line it does (existing declaredRoleOwnTranscript behaviour)', async () => {
+    const mid = mkTranscript([scUser('w1', 'Explain how ROLE: MEASURE works in the gate'), scAssistant('w1', [writeBlock])])
+    assert.ok(await stop(mid) !== null, 'a mid-sentence mention must not exempt')
+    const whole = mkTranscript([scUser('w1', 'preamble\nROLE: MEASURE\nmeasure it'), scAssistant('w1', [writeBlock])])
+    assert.strictEqual(await stop(whole), null, 'a whole-line marker anywhere in the brief self-exempts (unanchored by design)')
+  })
+
+  test('the MAIN Stop gate still ignores a transcript whose only write is a sidechain entry', async () => {
+    const t = mkTranscript([scUser('w1', 'x'), scAssistant('w1', [writeBlock])])
+    assert.strictEqual(await runMainGate({ transcript_path: t, cwd: CWD }), null)
   })
 })
