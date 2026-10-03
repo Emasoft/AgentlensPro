@@ -257,20 +257,22 @@ pub fn bodies_pass(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
     // spool went the free-space back-pressure valve: it existed to relieve a 2GB RAM disk that
     // filled in minutes, a hazard the SSD dir does not have — `bodiesMaxGb`'s over-cap valve
     // below still guards it).
-    let scope = crate::burn::guard::resolve_bodies_read_scope(&data_dir, &std::env::vars().collect());
+    let scope = crate::burn::guard::resolve_bodies_read_scope(&data_dir);
 
-    if scope.capture_on {
-        // server.ts:818-823 — the sink precondition, once per pass tick, warnings on TRANSITIONS
-        // only (a per-tick repeat is filtered out by the day it matters). TRDD-U0L78B3Z.
-        let problem = crate::server_stats::probe_sink(&crate::burn::guard::default_bodies_dir(&data_dir));
-        if let Ok(mut st) = state.lock_timed() {
-            if problem != st.sink_problem {
-                match &problem {
-                    Some(p) => eprintln!("{} alcore: bodies sink precondition FAILED: {p} (TRDD-4FMHW124)", crate::log_ts()),
-                    None => eprintln!("{} alcore: bodies sink precondition recovered", crate::log_ts()),
-                }
-                st.sink_problem = problem;
+    // WHY no capture switch here: raw-body capture is mandatory (owner order 2026-10-02), so the
+    // sink probe, the drain and the over-cap valve below run on every tick unconditionally. The
+    // old opt-in gated only this probe (never the drain), so a fresh install silently skipped the
+    // one check that says "the capture dir is not writable".
+    // server.ts:818-823 — the sink precondition, once per pass tick, warnings on TRANSITIONS
+    // only (a per-tick repeat is filtered out by the day it matters). TRDD-U0L78B3Z.
+    let problem = crate::server_stats::probe_sink(&crate::burn::guard::default_bodies_dir(&data_dir));
+    if let Ok(mut st) = state.lock_timed() {
+        if problem != st.sink_problem {
+            match &problem {
+                Some(p) => eprintln!("{} alcore: bodies sink precondition FAILED: {p} (TRDD-4FMHW124)", crate::log_ts()),
+                None => eprintln!("{} alcore: bodies sink precondition recovered", crate::log_ts()),
             }
+            st.sink_problem = problem;
         }
     }
 

@@ -88,7 +88,6 @@ fn opts_for(dir: &str, until_ms: f64, window_hours: Option<f64>, max_files: Opti
         scope: BodiesScope {
             dirs: if ok { vec![p.to_string_lossy().into_owned()] } else { vec![] },
             missing: if ok { vec![] } else { vec![p.to_string_lossy().into_owned()] },
-            capture_on: true,
         },
         hook_events_dir: fixtures().join("burnscan-hooks"),
         home: fixtures().to_string_lossy().into_owned(),
@@ -157,24 +156,17 @@ fn blind_and_no_response_verdicts_are_decided_by_the_scan() {
     }
 }
 
-/// `blind` is a THREE-valued classification and conflating its members is what let this tool answer
-/// "nothing burned here" during a measured 2.3M tok/min burn.
+/// `blind` separates "read nothing because no dir exists" from "read an empty window" (and both from
+/// a corpus that was read); conflating them is what let this tool answer "nothing burned here"
+/// during a measured 2.3M tok/min burn. There is no capture-off cause: capture is mandatory.
 #[test]
-fn blind_classification_separates_its_three_causes() {
+fn blind_classification_separates_its_causes() {
     let o = oracle();
     let until = o["untilMs"].as_f64().unwrap();
     let blind_of = |c: &Case| scan_window(&opts_for(c.dir, until, c.hours, c.max_files), until).blind;
     assert_eq!(blind_of(&CASES[0]), None, "a corpus that was READ is never blind");
     assert_eq!(blind_of(&CASES[2]), Some("dirs-empty-in-window"));
     assert_eq!(blind_of(&CASES[4]), Some("no-bodies-dir"));
-
-    // capture-off has NO oracle: investigateBurn's `bodiesDir` override hardcodes captureOn:true,
-    // so the branch is unreachable through the TS public API. Pinned here against the source.
-    let mut off = opts_for("burnscan-bodies", until, Some(0.01), None);
-    off.scope.capture_on = false;
-    let out = scan_window(&off, until);
-    assert_eq!(out.blind, Some("capture-off"));
-    assert!(out.verdict_override.unwrap().starts_with("BLIND — raw-body capture is OFF"));
 }
 
 /// Slice 2's detectors key on these; nothing else in the report exposes them, so a regression in

@@ -132,7 +132,6 @@ pub struct ReqRec {
 pub struct BodiesScope {
     pub dirs: Vec<String>,
     pub missing: Vec<String>,
-    pub capture_on: bool,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -514,8 +513,6 @@ pub fn scan_window(opts: &InvestigateOptions, now_ms: f64) -> ScanOutcome {
         None
     } else if opts.scope.dirs.is_empty() {
         Some("no-bodies-dir")
-    } else if !opts.scope.capture_on {
-        Some("capture-off")
     } else {
         Some("dirs-empty-in-window")
     };
@@ -533,18 +530,13 @@ pub fn scan_window(opts: &InvestigateOptions, now_ms: f64) -> ScanOutcome {
     let blind_verdict = match blind {
         Some("no-bodies-dir") => format!(
             "BLIND — no raw-body directory exists, so this window was never observed.{absent} \
-This is NOT evidence that nothing burned: turn capture on with `agentlenspro config set \
-captureRawBodies on`, and meanwhile use `agentlenspro --risk` / `get_burn_status`, which \
+This is NOT evidence that nothing burned: run `agentlenspro setup` (it wires raw-body capture), \
+and meanwhile use `agentlenspro --risk` / `get_burn_status`, which \
 read the live feed and never go blind."
-        ),
-        Some("capture-off") => format!(
-            "BLIND — raw-body capture is OFF and {where_s} holds nothing for this window, so there is \
-nothing to investigate FROM. This is NOT evidence that nothing burned — cross-check with \
-`agentlenspro --risk` / `get_burn_status` (live feed, never blind)."
         ),
         _ => format!(
             "BLIND — scanned {where_s} and found 0 request/response bodies in the window.{absent} \
-Capture is on, so either the window predates capture, the spool was drained/unmounted, or \
+Either the window predates capture, the spool was drained/unmounted, or \
 the bounds are wrong. This is NOT evidence that nothing burned — cross-check with \
 `agentlenspro --risk` / `get_burn_status` (live feed, never blind)."
         ),
@@ -774,7 +766,7 @@ mod tests {
         write_resp(&dir, "r0.response.json", before, "claude-sonnet-4", 0.0, 150_000.0, 0.0);
         write_resp(&dir, "r1.response.json", after, "claude-sonnet-4", 0.0, 150_000.0, 0.0);
         let opts = InvestigateOptions {
-            scope: BodiesScope { dirs: vec![dir.to_string_lossy().into_owned()], missing: vec![], capture_on: true },
+            scope: BodiesScope { dirs: vec![dir.to_string_lossy().into_owned()], missing: vec![] },
             hook_events_dir: dir.join("hook-events"),
             home: dir.to_string_lossy().into_owned(),
             window_hours: Some(48.0),

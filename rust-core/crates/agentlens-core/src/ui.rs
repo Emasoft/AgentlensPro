@@ -3170,12 +3170,11 @@ async fn handle(
                         // Resolved ONCE, outside the closure: `investigate` is called per window and
                         // re-statting the candidate dirs on every call would let the scope shift
                         // mid-report, so two windows in one report could disagree about coverage.
-                        let rl_scope = crate::burn::guard::resolve_bodies_read_scope(&rl_data_dir, &std::env::vars().collect());
+                        let rl_scope = crate::burn::guard::resolve_bodies_read_scope(&rl_data_dir);
                         let rl_scope_dirs: Vec<String> =
                             rl_scope.dirs.iter().map(|p| p.to_string_lossy().into_owned()).collect();
                         let rl_scope_missing: Vec<String> =
                             rl_scope.missing.iter().map(|p| p.to_string_lossy().into_owned()).collect();
-                        let rl_capture_on = rl_scope.capture_on;
                         let opts = crate::rate_limit_report::RateLimitReportOptions {
                             window_hours: args.get("windowHours").and_then(Value::as_f64),
                             max_episodes: args.get("maxEpisodes").and_then(Value::as_f64),
@@ -3192,7 +3191,6 @@ async fn handle(
                                     scope: crate::burn::investigator_scan::BodiesScope {
                                         dirs: rl_scope_dirs.clone(),
                                         missing: rl_scope_missing.clone(),
-                                        capture_on: rl_capture_on,
                                     },
                                     hook_events_dir: hook_dir.clone(),
                                     home: home.clone(),
@@ -3238,12 +3236,11 @@ async fn handle(
                         // The multi-dir scope (captureConfig.resolveBodiesReadScope): one dir
                         // since TRDD-Z53IJFE9 step D (the RAM-disk spool is gone), but the list
                         // shape is kept so `missing` can name unreadable dirs.
-                        let scope = crate::burn::guard::resolve_bodies_read_scope(&data_dir, &std::env::vars().collect());
+                        let scope = crate::burn::guard::resolve_bodies_read_scope(&data_dir);
                         let opts = crate::burn::investigator_scan::InvestigateOptions {
                             scope: crate::burn::investigator_scan::BodiesScope {
                                 dirs: scope.dirs.iter().map(|p| p.to_string_lossy().into_owned()).collect(),
                                 missing: scope.missing.iter().map(|p| p.to_string_lossy().into_owned()).collect(),
-                                capture_on: scope.capture_on,
                             },
                             hook_events_dir: hook_dir,
                             home: home.clone(),

@@ -432,43 +432,18 @@ fn bodies_dir_candidates(data_dir: &Path) -> (Vec<PathBuf>, Vec<PathBuf>) {
     candidates.into_iter().partition(|d| std::fs::metadata(d).is_ok_and(|m| m.is_dir()))
 }
 
-/// captureConfig.rawBodyCaptureEnabled — env > config.json > default, and the DEFAULT IS OFF: a
-/// default that silently costs ~35 GB/day is not one a user consented to.
-///
-/// A typo (`AGENTLENS_CAPTURE_RAW_BODIES=treu`) is NOT consent — it falls through to the file and
-/// then the default, rather than being read as either true or false.
-pub fn raw_body_capture_enabled(data_dir: &Path, vars: &std::collections::HashMap<String, String>) -> bool {
-    fn parse_bool(raw: &str) -> Option<bool> {
-        match raw.trim().to_ascii_lowercase().as_str() {
-            "1" | "true" | "on" | "yes" => Some(true),
-            "0" | "false" | "off" | "no" => Some(false),
-            _ => None,
-        }
-    }
-    if let Some(v) = vars.get("AGENTLENS_CAPTURE_RAW_BODIES").and_then(|s| parse_bool(s)) {
-        return v;
-    }
-    std::fs::read_to_string(data_dir.join("config.json"))
-        .ok()
-        .and_then(|t| serde_json::from_str::<Value>(&t).ok())
-        .and_then(|v| v.get("capture")?.get("rawBodies")?.as_bool())
-        .unwrap_or(false)
-}
-
 /// captureConfig.resolveBodiesReadScope — the readable bodies dirs, with the missing ones named
 /// alongside. Returns a list (and `missing`) so a report can say what it actually read
-/// (`coverage.dirsScanned`) instead of implying it read everything.
+/// (`coverage.dirsScanned`) instead of implying it read everything. There is deliberately no
+/// "capture on/off" field: raw-body capture is mandatory (owner order 2026-10-02), so a scope is
+/// never "off" — an empty one means the dir is missing or the window is empty, nothing else.
 pub struct BodiesReadScope {
     pub dirs: Vec<PathBuf>,
     pub missing: Vec<PathBuf>,
-    pub capture_on: bool,
 }
 
-pub fn resolve_bodies_read_scope(data_dir: &Path, vars: &std::collections::HashMap<String, String>) -> BodiesReadScope {
+/// The readable bodies dirs, with the missing ones named alongside (captureConfig.resolveBodiesReadScope).
+pub fn resolve_bodies_read_scope(data_dir: &Path) -> BodiesReadScope {
     let (dirs, missing) = bodies_dir_candidates(data_dir);
-    BodiesReadScope {
-        dirs,
-        missing,
-        capture_on: raw_body_capture_enabled(data_dir, vars),
-    }
+    BodiesReadScope { dirs, missing }
 }

@@ -565,7 +565,7 @@
       },
       "attribution": [],
       "findings": [],
-      "verdict": "BLIND — scanned ~/burnscan-bodies and found 0 request/response bodies in the window. Capture is on, so either the window predates capture, the spool was drained/unmounted, or the bounds are wrong. This is NOT evidence that nothing burned — cross-check with `agentlenspro --risk` / `get_burn_status` (live feed, never blind)."
+      "verdict": "BLIND — scanned ~/burnscan-bodies and found 0 request/response bodies in the window. Either the window predates capture, the spool was drained/unmounted, or the bounds are wrong. This is NOT evidence that nothing burned — cross-check with `agentlenspro --risk` / `get_burn_status` (live feed, never blind)."
     },
     "noResponses": {
       "window": {
@@ -646,7 +646,7 @@
       },
       "attribution": [],
       "findings": [],
-      "verdict": "BLIND — no raw-body directory exists, so this window was never observed. Missing: ~/no-such-burnscan-dir. This is NOT evidence that nothing burned: turn capture on with `agentlenspro config set captureRawBodies on`, and meanwhile use `agentlenspro --risk` / `get_burn_status`, which read the live feed and never go blind."
+      "verdict": "BLIND — no raw-body directory exists, so this window was never observed. Missing: ~/no-such-burnscan-dir. This is NOT evidence that nothing burned: run `agentlenspro setup` (it wires raw-body capture), and meanwhile use `agentlenspro --risk` / `get_burn_status`, which read the live feed and never go blind."
     },
     "capHit": {
       "window": {

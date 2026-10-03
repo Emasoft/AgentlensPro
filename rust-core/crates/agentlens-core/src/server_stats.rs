@@ -396,12 +396,11 @@ pub const CAPTURE_ACTIVITY_WINDOW_MS: i64 = 10 * 60_000;
 /// TRDD-U0L78B3Z: the comparison `ui.rs`'s debug route says "belongs to the caller" — that caller
 /// was `server.ts` (retired in `567fc5c2`) and the comparison went with it, so the CLI's
 /// `CAPTURE DOWN` row could never fire on alcore. Same predicate as server.ts:825-827
-/// (`active && !captured`, gated on capture being on). STATELESS, unlike the TS: it kept the tick
+/// (`active && !captured`; the old "capture on" gate is gone — capture is mandatory). STATELESS, unlike the TS: it kept the tick
 /// at which the transition was first seen, which cannot predate this process — so the "since" here
 /// is the moment the window closed on the newest body, floored at boot (no body ever ⇒ boot).
 /// `now_ms` is a parameter so the test needs no wall clock.
 pub fn capture_down_since(
-    capture_on: bool,
     now_ms: i64,
     last_activity_ms: i64,
     newest_body_ms: Option<i64>,
@@ -409,7 +408,7 @@ pub fn capture_down_since(
 ) -> Option<i64> {
     let active = last_activity_ms > now_ms - CAPTURE_ACTIVITY_WINDOW_MS;
     let captured = newest_body_ms.is_some_and(|n| n > now_ms - CAPTURE_ACTIVITY_WINDOW_MS);
-    (capture_on && active && !captured)
+    (active && !captured)
         .then(|| newest_body_ms.map_or(started_at_ms, |n| (n + CAPTURE_ACTIVITY_WINDOW_MS).max(started_at_ms)))
 }
 
@@ -474,7 +473,7 @@ pub fn server_stats(st: &CoreState, now_ms: i64) -> Value {
     // rendered "capture: unknown (server predates capture reporting)" for every alcore boot because
     // `bodies.live` was absent. Every readable capture dir (spool + legacy), same low-frequency
     // scan cost as the TS's single-dir version this mirrors (bodyArchive.ts `liveBodiesLiveness`).
-    let bodies_scope = crate::burn::guard::resolve_bodies_read_scope(data_dir, &std::env::vars().collect());
+    let bodies_scope = crate::burn::guard::resolve_bodies_read_scope(data_dir);
     let (live_files, live_newest_ms) = live_bodies_liveness(&bodies_scope.dirs);
     // TRDD-ZIWEB0UW remainder: the `live` gauge above shipped without its `parked` sibling, so
     // `server status` silently dropped the PARKED suffix that warns of TRDD-8TM7I49X bodies
@@ -545,11 +544,11 @@ pub fn server_stats(st: &CoreState, now_ms: i64) -> Value {
             // TRDD-U0L78B3Z: null = up, else the CLI prints `CAPTURE DOWN <N>m` (serverControl.ts
             // `bodiesCaptureLine`). Direct child of `bodies`, which is where the CLI reads it.
             "captureDownSince": capture_down_since(
-                bodies_scope.capture_on, now_ms, st.last_ingest_activity_ms,
+                now_ms, st.last_ingest_activity_ms,
                 live_newest_ms.map(|n| n as i64), st.started_at_ms,
             ).map(Value::from).unwrap_or(Value::Null),
-            // Read, never probed here: the chore probes once per pass tick (chores.rs, capture on
-            // only) and this route reports its last reading — server.ts:2947 read a variable too.
+            // Read, never probed here: the chore probes once per pass tick (chores.rs)
+            // and this route reports its last reading — server.ts:2947 read a variable too.
             "sinkProblem": st.sink_problem.clone().map(Value::from).unwrap_or(Value::Null),
             "parked": match parked {
                 Some((files, bytes, on_disk)) => json!({ "files": files, "bytes": bytes, "onDisk": on_disk }),
@@ -616,23 +615,22 @@ mod capture_block_tests {
     use std::time::{Duration, SystemTime};
 
     /// TRDD-U0L78B3Z: the CLI's CAPTURE DOWN row fires only when sessions are active AND no body
-    /// landed inside the window, and only with capture on; `since` never predates boot.
+    /// landed inside the window; `since` never predates boot. There is no "capture off" case: capture
+    /// is mandatory, so a host with active sessions and no fresh body is always an alarm.
     #[test]
     fn capture_down_since_fires_only_on_active_and_not_captured() {
         const W: i64 = CAPTURE_ACTIVITY_WINDOW_MS;
         let (now, boot) = (1_000_000 * 60, 0);
         // active + fresh body ⇒ up
-        assert_eq!(capture_down_since(true, now, now - 1, Some(now - 1), boot), None);
+        assert_eq!(capture_down_since(now, now - 1, Some(now - 1), boot), None);
         // active + stale body ⇒ down since the window closed on that body
-        assert_eq!(capture_down_since(true, now, now - 1, Some(now - 3 * W), boot), Some(now - 2 * W));
+        assert_eq!(capture_down_since(now, now - 1, Some(now - 3 * W), boot), Some(now - 2 * W));
         // active + no body ever ⇒ down since boot
-        assert_eq!(capture_down_since(true, now, now - 1, None, boot), Some(boot));
+        assert_eq!(capture_down_since(now, now - 1, None, boot), Some(boot));
         // stale body older than this process ⇒ floored at boot, never "before we existed"
-        assert_eq!(capture_down_since(true, now, now - 1, Some(now - 3 * W), now - W), Some(now - W));
+        assert_eq!(capture_down_since(now, now - 1, Some(now - 3 * W), now - W), Some(now - W));
         // idle host (no activity) ⇒ up, whatever the bodies say
-        assert_eq!(capture_down_since(true, now, now - 2 * W, None, boot), None);
-        // capture off ⇒ never an alarm
-        assert_eq!(capture_down_since(false, now, now - 1, None, boot), None);
+        assert_eq!(capture_down_since(now, now - 2 * W, None, boot), None);
     }
 
     /// TRDD-ZIWEB0UW: `bodies.live` must report the real file count and newest mtime — a zeroed

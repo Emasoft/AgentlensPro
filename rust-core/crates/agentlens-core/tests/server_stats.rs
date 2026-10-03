@@ -115,11 +115,9 @@ fn body_matches_the_frozen_key_order_exactly() {
 fn the_values_the_core_owns_move_with_the_state() {
     let data = tmp("live");
     // Knobs from the data dir's config (env > file > default, floor last) + the hook config file.
-    // `capture.rawBodies` on, and the env override cleared, so the CAPTURE DOWN wiring below is
-    // decided by THIS file — an ambient AGENTLENS_CAPTURE_RAW_BODIES=off would otherwise make the
-    // detector read null for a reason the test never set (TRDD-U0L78B3Z).
-    std::env::remove_var("AGENTLENS_CAPTURE_RAW_BODIES");
-    std::fs::write(data.join("config.json"), r#"{"retention":{"spansRetentionDays":7,"logEventsRetentionDays":0.2},"capture":{"rawBodies":true}}"#).unwrap();
+    // No capture switch exists (capture is mandatory), so CAPTURE DOWN wiring below depends only on
+    // sessions + bodies on disk (TRDD-U0L78B3Z).
+    std::fs::write(data.join("config.json"), r#"{"retention":{"spansRetentionDays":7,"logEventsRetentionDays":0.2}}"#).unwrap();
     std::fs::write(data.join("hook-config.json"), r#"{"gateMode":"warn","advisorEnabled":false}"#).unwrap();
     // On-disk sidecars the stats measure: two daily buckets (+ one non-bucket file ignored), one
     // archive volume with a 2-line index and a torn tail, two spooled hook events.
