@@ -8,30 +8,24 @@
 //! the three contributors to the 8.7 GB mimalloc heap. Here the corpus is JSON TEXT in one
 //! long-lived DuckDB connection; a reader gets a `Vec` it drops when it is done.
 //!
-//! ## TRDD-TOIM26HP — the database is a FILE under the data dir, and it is REPLACED at every boot
+//! ## TRDD-TOIM26HP / TRDD-9VX3WTGU — the database is a FILE under the data dir, REUSED when valid
 //!
 //! XTFDRTH2 landed this table in `Connection::open_in_memory()`, so the corpus was still 100%
 //! resident: the win was the SHAPE of the bytes, not their residency. `<data_dir>/cards.duckdb`
 //! hands the residency decision to DuckDB's buffer pool, and [`MEMORY_LIMIT`] is what makes that
 //! decision bounded instead of "whatever DuckDB feels like".
 //!
-//! It is a SPILL file, not a durable store — `open` deletes the previous boot's database before
-//! opening, and drops the table if the delete could not happen. Two reasons, and the first is a
-//! correctness one:
+//! TOIM26HP made it a SPILL file deleted at every boot, because nothing could tell a stale
+//! database from a good one: `DurableState::restore` treats a stale `LOG_INGEST_VERSION` as
+//! "restore nothing, cold-rescan" without clearing the store, so a database that outlived the
+//! process would have served cards built under OLD semantics. TRDD-9VX3WTGU wires that gate into
+//! the database itself — a `meta` table (ingest version, card schema version, `restore_complete`,
+//! `clear_in_progress`) — so `open` can keep the file and a start no longer redoes the 40k
+//! indexed inserts of the restore. The rule and the fallbacks are on [`CardStore::open`].
 //!
-//! 1. `DurableState::restore` (log_reader.rs) treats a stale `LOG_INGEST_VERSION` as "restore
-//!    nothing, cold-rescan", and it does NOT clear the card store — it never had to, because a
-//!    fresh `CoreState` always had an empty one. A database that outlived the process would keep
-//!    serving cards built under the OLD ingest semantics, and the version stamp — the ONLY
-//!    mechanism that exists to invalidate them — would silently stop working.
-//! 2. A `CoreState` is not a singleton in tests: `tests/log_reader_parity.rs` opens four of them
-//!    over one data dir, with the earlier ones still alive. Deleting the file first gives each one
-//!    its own inode instead of four live writers on one database.
-//!
-//! Because every boot starts empty, the delta-log replay is unchanged and its idempotency question
-//! does not arise (it is upsert-idempotent regardless — `ON CONFLICT DO UPDATE`). Reusing a
-//! previous boot's corpus would remove the replay entirely, but it must first wire that version
-//! gate into this constructor; that is a follow-up, not a change this module can make alone.
+//! Tests that assumed a fresh store per open must give each open its OWN data dir: two live
+//! stores over one reusable file would be two writers on one database (DuckDB's file lock is
+//! fcntl, which POSIX does not enforce between two opens inside one process).
 //!
 //! ## What `IndexMap` used to provide for free, and now has to be built
 //!
@@ -100,6 +94,22 @@ CREATE INDEX idx_cards_active ON cards (last_active_ms DESC, seq ASC);
 CREATE INDEX idx_cards_parent ON cards (parent_session_id)";
 
 
+/// TRDD-9VX3WTGU — the card-store layout version, stamped into `meta`. Bump it whenever `SCHEMA`
+/// or the PERSISTED SHAPE of a card row changes (e.g. what the write-time persist-strip removes):
+/// a database stamped with another value is deleted and rebuilt, never reused. Starts at 1 — a
+/// database from before the `meta` table existed has no stamp at all and is rebuilt too.
+pub const CARD_SCHEMA_VERSION: u64 = 1;
+
+/// TRDD-9VX3WTGU — the reuse gate lives in the same file as the cards it vouches for (a stamp in a
+/// sidecar file could disagree with the database it describes). Four keys, all text:
+/// `ingest_version` (`LOG_INGEST_VERSION` the rows were built under), `card_schema_version`,
+/// `restore_complete` ("1" once a full restore finished — a database filled by a restore that was
+/// killed half-way is NOT a complete corpus), `clear_in_progress` ("1" from the `/api/clear` DELETE
+/// until the rescan finished — an empty database next to still-valid saved offsets would never
+/// refill).
+const META_SCHEMA: &str = "CREATE TABLE meta (key VARCHAR PRIMARY KEY, value VARCHAR NOT NULL)";
+
+
 /// One keyset page of ROOT cards (TRDD-9VX3WTGU Phase C, Amendment 1).
 ///
 /// POINT-IN-TIME PER REQUEST: each page is its own query, not a snapshot. An upsert moves a card's
@@ -142,11 +152,31 @@ pub struct CardStore {
     /// Bumped by every `clear`; slots restart from 0 after one, so a consumer that remembers slot
     /// positions (the summary engine) can tell a restart from ordinary growth.
     epoch: u64,
+    /// TRDD-9VX3WTGU — `open` kept the previous run's database (the reuse gate passed). Read by
+    /// `DurableState::restore` to skip the snapshot load and the 40k inserts.
+    reused: bool,
 }
 
 impl CardStore {
-    /// Open `<data_dir>/cards.duckdb`, EMPTY. See the module header for why a previous boot's
-    /// corpus is never reused.
+    /// Open `<data_dir>/cards.duckdb`, REUSING the previous run's corpus when — and only when — it
+    /// is provably the complete corpus of the current semantics (TRDD-9VX3WTGU; this replaces the
+    /// TRDD-TOIM26HP delete-at-every-boot, which paid the 40k indexed INSERTs of a full restore on
+    /// every start).
+    ///
+    /// REUSE iff ALL hold: the file opens cleanly; `meta` exists; `ingest_version` ==
+    /// `LOG_INGEST_VERSION`; `card_schema_version` == [`CARD_SCHEMA_VERSION`]; `restore_complete`
+    /// is 1; `clear_in_progress` is 0. Anything else — including a corrupt file, a WAL whose
+    /// checksum fails (a fatal open in DuckDB), a newer storage format, or a database written by a
+    /// build that had no `meta` (the one-time migration) — DELETES the database and starts empty,
+    /// and the caller (`DurableState::restore`) refills it from the card snapshot + offsets pair
+    /// exactly as before. NEVER a cold scan with the offsets kept: a store emptied behind valid
+    /// offsets would never refill (the tailer cold-scans only when it holds no offsets).
+    ///
+    /// On reuse the resident parsed layer is rebuilt here, one parse per card, in `seq` order, and
+    /// `next_seq` resumes at `max(seq)+1` (a counter restarting at 0 would sort new cards before
+    /// old ones and break the first-insert tie order).
+    ///
+    /// Prints ONE line naming the decision and its reason.
     ///
     /// No `Default`: a card store without a data dir is not a thing, and the impl only ever
     /// existed to satisfy clippy's `new_without_default`, which does not apply to a constructor
@@ -154,23 +184,52 @@ impl CardStore {
     pub fn open(data_dir: &Path) -> CardStore {
         std::fs::create_dir_all(data_dir).expect("create the data dir for the card store");
         let path = data_dir.join(CARD_DB_FILE);
+        let wal = data_dir.join(format!("{CARD_DB_FILE}.wal"));
+        let reason = match Self::try_reuse(&path) {
+            // WHY the resident scan is part of the gate: before reuse a corrupt file healed itself
+            // because every start deleted it; now a bad row would panic on EVERY start, permanently.
+            // `count(*)` alone is answered from metadata, so it does not prove the card column is
+            // readable — only reading and parsing every card does. `conn` is dropped at the end of
+            // the `Err` arm, releasing the file before it is deleted below.
+            Ok(conn) => match Self::load_resident(&conn) {
+                Ok((parsed, next_seq)) => {
+                    eprintln!(
+                        "{} alcore: card store — reusing {CARD_DB_FILE}: {} cards, ingest v{}, schema v{CARD_SCHEMA_VERSION}, restore complete, no clear in progress",
+                        crate::log_ts(),
+                        parsed.len(),
+                        crate::log_reader::LOG_INGEST_VERSION
+                    );
+                    return CardStore {
+                        conn,
+                        next_seq,
+                        full_scan_calls: std::sync::atomic::AtomicUsize::new(0),
+                        parsed,
+                        epoch: 0,
+                        reused: true,
+                    };
+                }
+                Err(reason) => reason,
+            },
+            Err(reason) => reason,
+        };
+        eprintln!(
+            "{} alcore: card store — NOT reusing {CARD_DB_FILE} ({reason}); starting empty, a full restore from the card snapshot rebuilds it",
+            crate::log_ts()
+        );
         // Best-effort: a missing file is the NORMAL case (first boot), so this cannot be an
-        // `expect`. The `DROP TABLE IF EXISTS` below is what actually guarantees an empty corpus —
-        // deleting the file is how each store gets its OWN inode, which is what keeps two live
-        // stores over one data dir from sharing a database (and a WAL).
+        // `expect`. The `DROP TABLE IF EXISTS` below is what actually guarantees an empty corpus.
         let _ = std::fs::remove_file(&path);
-        let _ = std::fs::remove_file(data_dir.join(format!("{CARD_DB_FILE}.wal")));
+        let _ = std::fs::remove_file(&wal);
         let conn =
             Connection::open(&path).unwrap_or_else(|e| panic!("open the card store at {}: {e}", path.display()));
-        // `threads=2` matches statusline_store's connection: these are point queries and a
-        // 32k-row sort, not an analytical scan, and a per-connection thread pool sized to the
-        // machine would be pure overhead in a process that already runs its own executor.
-        //
-        // NOT `SET temp_directory=''` (which the Parquet stores use to make an over-limit query
-        // FAIL rather than spill): here a spill is the intended behaviour of a bounded buffer
-        // pool, and failing the summary rebuild instead would lose the whole corpus from the wire.
+        Self::configure(&conn).expect("configure the card store connection");
+        // `restore_complete` starts at 0: only the end of a full restore (`mark_restore_complete`)
+        // vouches for the corpus, so a boot killed half-way through the restore is rebuilt.
         conn.execute_batch(&format!(
-            "SET memory_limit='{MEMORY_LIMIT}'; SET threads=2; DROP TABLE IF EXISTS cards; {SCHEMA};"
+            "DROP TABLE IF EXISTS cards; DROP TABLE IF EXISTS meta; {SCHEMA}; {META_SCHEMA};
+             INSERT INTO meta VALUES ('ingest_version', '{}'), ('card_schema_version', '{CARD_SCHEMA_VERSION}'),
+                                     ('restore_complete', '0'), ('clear_in_progress', '0');",
+            crate::log_reader::LOG_INGEST_VERSION
         ))
         .expect("create the card store schema");
         CardStore {
@@ -179,7 +238,117 @@ impl CardStore {
             full_scan_calls: std::sync::atomic::AtomicUsize::new(0),
             parsed: IndexMap::new(),
             epoch: 0,
+            reused: false,
         }
+    }
+
+    /// `threads=2` matches statusline_store's connection: these are point queries and a 32k-row
+    /// sort, not an analytical scan, and a per-connection thread pool sized to the machine would
+    /// be pure overhead in a process that already runs its own executor.
+    ///
+    /// NOT `SET temp_directory=''` (which the Parquet stores use to make an over-limit query FAIL
+    /// rather than spill): here a spill is the intended behaviour of a bounded buffer pool, and
+    /// failing the summary rebuild instead would lose the whole corpus from the wire.
+    fn configure(conn: &Connection) -> agentlens_store::duckdb::Result<()> {
+        conn.execute_batch(&format!("SET memory_limit='{MEMORY_LIMIT}'; SET threads=2;"))
+    }
+
+    /// The reuse gate (see `open`): `Ok(conn)` only when every condition holds, else the reason
+    /// the database cannot be trusted. The connection is dropped on every `Err`, releasing the
+    /// file before `open` deletes it.
+    fn try_reuse(path: &Path) -> Result<Connection, String> {
+        if !path.exists() {
+            return Err("no database file".to_owned());
+        }
+        let conn = Connection::open(path).map_err(|e| format!("the file does not open cleanly: {e}"))?;
+        Self::configure(&conn).map_err(|e| format!("cannot configure the connection: {e}"))?;
+        let mut stmt = conn
+            .prepare("SELECT key, value FROM meta")
+            .map_err(|e| format!("no readable meta table (a database from before the reuse gate): {e}"))?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+            .map_err(|e| format!("meta table unreadable: {e}"))?;
+        let meta: std::collections::HashMap<String, String> =
+            rows.collect::<Result<_, _>>().map_err(|e| format!("meta table unreadable: {e}"))?;
+        drop(stmt);
+        let want_ingest = crate::log_reader::LOG_INGEST_VERSION.to_string();
+        let want_schema = CARD_SCHEMA_VERSION.to_string();
+        let get = |k: &str| meta.get(k).map(String::as_str);
+        if get("ingest_version") != Some(want_ingest.as_str()) {
+            return Err(format!("ingest version {:?} != {want_ingest}", get("ingest_version")));
+        }
+        if get("card_schema_version") != Some(want_schema.as_str()) {
+            return Err(format!("card schema version {:?} != {want_schema}", get("card_schema_version")));
+        }
+        if get("restore_complete") != Some("1") {
+            return Err("the previous restore never completed".to_owned());
+        }
+        if get("clear_in_progress") != Some("0") {
+            return Err("an /api/clear was in progress".to_owned());
+        }
+        // The table itself must be readable too: a header that opens but a card table that does not
+        // is exactly the damage a reuse must not paper over.
+        conn.query_row("SELECT count(*) FROM cards", [], |r| r.get::<_, i64>(0))
+            .map_err(|e| format!("the cards table is unreadable: {e}"))?;
+        Ok(conn)
+    }
+
+    /// Rebuild the resident parsed layer from the table: one parse per card, `seq` order, plus the
+    /// next ordinal. The same shape `put_arc` leaves behind, so a reused store and a restored one
+    /// serve the same summary.
+    fn load_resident(conn: &Connection) -> Result<(IndexMap<String, Arc<Value>>, i64), String> {
+        let mut stmt = conn
+            .prepare("SELECT session_id, card FROM cards ORDER BY seq")
+            .map_err(|e| format!("cannot prepare the resident-layer scan: {e}"))?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+            .map_err(|e| format!("the cards table is unreadable: {e}"))?;
+        let mut parsed = IndexMap::new();
+        for r in rows {
+            let (id, json) = r.map_err(|e| format!("a card row is unreadable: {e}"))?;
+            let card = serde_json::from_str(&json).map_err(|e| format!("card {id} is not valid JSON: {e}"))?;
+            parsed.insert(id, Arc::new(card));
+        }
+        drop(stmt);
+        let next_seq: i64 = conn
+            .query_row("SELECT COALESCE(MAX(seq), -1) + 1 FROM cards", [], |r| r.get(0))
+            .map_err(|e| format!("cannot read the next card ordinal: {e}"))?;
+        Ok((parsed, next_seq))
+    }
+
+    /// True when `open` kept the previous run's corpus (the gate in `open` passed).
+    pub fn reused(&self) -> bool {
+        self.reused
+    }
+
+    fn set_meta(&self, key: &str, value: &str) {
+        self.conn
+            .execute("UPDATE meta SET value = ? WHERE key = ?", agentlens_store::duckdb::params![value, key])
+            .expect("update the card store meta");
+    }
+
+    /// The full restore finished: from now on this database is a complete corpus and the next
+    /// boot may reuse it. Set by `DurableState::restore` after the LAST card is committed.
+    pub fn mark_restore_complete(&self) {
+        self.set_meta("restore_complete", "1");
+    }
+
+    /// The `/api/clear` rescan finished: the corpus is whole again (see `clear`).
+    pub fn finish_clear(&self) {
+        self.set_meta("clear_in_progress", "0");
+    }
+
+    /// Drop every row WITHOUT the `/api/clear` flag — for `restore`, which found a reused database
+    /// whose offsets are version-stale and must fall back to the cold-rescan path on an empty
+    /// store (the flag would be wrong: no rescan is pending on a sweeper message).
+    pub fn discard_cards(&mut self) {
+        // `restore_complete` goes back to 0 with the rows: an empty database must not vouch for a
+        // complete corpus; the restore that follows sets it to 1 again when it returns.
+        self.conn
+            .execute_batch("DELETE FROM cards; UPDATE meta SET value = '0' WHERE key = 'restore_complete'")
+            .expect("discard the stale card store");
+        self.next_seq = 0;
+        self.parsed.clear();
     }
 
     /// TRDD-ORGJ0E3G follow-up — how many times `persist_records()` (the whole-store scan) has
@@ -219,6 +388,14 @@ impl CardStore {
     /// `link_subagent_transcripts`, which treats the empty string as "no parent". Non-Claude
     /// sources (codex / opencode / copilot) set no parent, so they land as roots.
     pub fn put_arc(&mut self, card: Arc<Value>) {
+        // TRDD-9VX3WTGU: strip BEFORE the row and the resident layer are derived, so both hold the
+        // same persist-stripped form. WHY here and not only in `demote_cold`: a card that arrives
+        // idle for more than the hot age is already timeline-EMPTY when it is put (the parse-time
+        // strip), so `demote_cold`'s `timeline_len > 0` candidate filter never touches it and its
+        // fileOps / backgroundSpans / generatedFiles would sit in the database forever — the
+        // TWDGR75R growth ("re-parse roughly doubled cards.duckdb"), now permanent because the
+        // database outlives the boot. A card WITH a timeline (the hot set) is left exactly as is.
+        let card = persist_strip_cold(card);
         let id = card.get("sessionId").and_then(Value::as_str).unwrap_or("").to_owned();
         let last_active = crate::log_reader::last_active_ms(&card);
         let timeline_len = card.get("timeline").and_then(Value::as_array).map_or(0, Vec::len) as i64;
@@ -227,6 +404,16 @@ impl CardStore {
         let json = serde_json::to_string(&*card).expect("a session card is serializable");
         // WHY the indexed columns are in DO UPDATE too: an upsert moves `last_active_ms` (and, in
         // principle, the parent), and the page query orders and filters on exactly those.
+        //
+        // TRDD-9VX3WTGU ORDERING CONTRACT — reuse depends on it: this is ONE autocommit statement
+        // (or a transaction the caller closes before returning), and DuckDB syncs its WAL at every
+        // commit (F_FULLFSYNC on macOS). The offsets log is saved LATER, on the same sweeper
+        // thread (`DurableState::tick`, after the sweep's cards were put) and WITHOUT an fsync, so
+        // a saved offset can never be ahead of a durable card. A reused database is therefore
+        // always at least as fresh as the offsets next to it ("card ahead of offsets" is harmless:
+        // the file reads as changed and is re-parsed over the row; "offsets ahead of cards" would
+        // leave a stale card that nothing ever refreshes). Do not batch puts across the offsets
+        // save, and do not move the offsets save before the puts of its sweep.
         self.conn
             .execute(
                 "INSERT INTO cards (session_id, seq, last_active_ms, timeline_len, parent_session_id, source, card)
@@ -339,8 +526,21 @@ impl CardStore {
     }
 
     /// `/api/clear` — the cards go with the spans.
+    ///
+    /// TRDD-9VX3WTGU: `clear_in_progress` is set in the SAME transaction as the DELETE, and cleared
+    /// by [`CardStore::finish_clear`] only once the sweeper's rescan finished. WHY: the database now
+    /// outlives the process, and the offsets log on disk is untouched until the first save after
+    /// the rescan — a crash in between would otherwise leave an EMPTY database next to still-valid
+    /// offsets, which read every file as unchanged, so the cards would never come back. With the
+    /// flag set the next boot refuses to reuse the database and rebuilds it from the snapshot.
     pub fn clear(&mut self) {
-        self.conn.execute_batch("DELETE FROM cards").expect("clear the card store");
+        // WHY one transaction: a separate autocommit DELETE before it means a crash between the two leaves an empty database with clear_in_progress=0, which the next boot would REUSE next to still-valid offsets, so the cards never come back — the DELETE and the flag must commit together.
+        self.conn
+            .execute_batch(
+                "BEGIN TRANSACTION; DELETE FROM cards;
+                 UPDATE meta SET value = '1' WHERE key = 'clear_in_progress'; COMMIT",
+            )
+            .expect("clear the card store");
         self.next_seq = 0;
         self.parsed.clear();
         self.epoch += 1;
@@ -388,7 +588,11 @@ impl CardStore {
         for (id, json) in cold {
             let mut card = parse(&json);
             let Some(obj) = card.as_object_mut() else { continue };
+            // TRDD-9VX3WTGU: the persist-strip too, so a hot card that falls out of the hot set
+            // reaches the same shape `put_arc` gives a card that arrived cold (invariant: empty
+            // timeline <=> persist-stripped). `strip_timeline_value` keeps its truncation bump.
             crate::log_reader::strip_timeline_value(obj);
+            persist_strip_map(obj);
             let stripped = serde_json::to_string(&card).expect("a stripped card is serializable");
             self.conn
                 .execute(
@@ -403,6 +607,7 @@ impl CardStore {
             if let Some(resident) = self.parsed.get_mut(&id) {
                 if let Some(obj) = Arc::make_mut(resident).as_object_mut() {
                     crate::log_reader::strip_timeline_value(obj);
+                    persist_strip_map(obj);
                 }
             }
         }
@@ -525,6 +730,41 @@ impl CardStore {
         rows.map(|r| parse(&r.expect("read a card row"))).collect()
     }
 
+}
+
+/// TRDD-9VX3WTGU — the persist-strip of a card whose timeline is already empty: drops `fileOps`,
+/// `generatedFiles`, `generatedFilesTruncated` and empties `backgroundSpans`, exactly the fields
+/// `log_reader::strip_card_for_persist` drops (so a stored row equals what the card snapshot would
+/// hold), WITHOUT inserting keys the card did not have and WITHOUT touching the timeline or its
+/// truncation counters. Returns whether anything changed.
+fn persist_strip_map(obj: &mut serde_json::Map<String, Value>) -> bool {
+    let mut changed = obj.shift_remove("fileOps").is_some();
+    changed |= obj.shift_remove("generatedFiles").is_some();
+    changed |= obj.shift_remove("generatedFilesTruncated").is_some();
+    if let Some(Value::Array(spans)) = obj.get_mut("backgroundSpans") {
+        if !spans.is_empty() {
+            spans.clear();
+            changed = true;
+        }
+    }
+    changed
+}
+
+/// `put_arc`'s write-time strip: a card with no timeline entries is persist-stripped, a card with
+/// timeline entries (the hot set) is returned untouched. Clones only when something must go.
+fn persist_strip_cold(card: Arc<Value>) -> Arc<Value> {
+    let Some(obj) = card.as_object() else { return card };
+    if obj.get("timeline").and_then(Value::as_array).is_some_and(|t| !t.is_empty()) {
+        return card;
+    }
+    let dirty = ["fileOps", "generatedFiles", "generatedFilesTruncated"].iter().any(|k| obj.contains_key(*k))
+        || obj.get("backgroundSpans").and_then(Value::as_array).is_some_and(|s| !s.is_empty());
+    if !dirty {
+        return card;
+    }
+    let mut stripped = obj.clone();
+    persist_strip_map(&mut stripped);
+    Arc::new(Value::Object(stripped))
 }
 
 /// A stored card is a string THIS process wrote with `serde_json::to_string`; a parse failure

@@ -408,7 +408,10 @@ fn durable_state_round_trips_offsets_and_stripped_cards_and_skips_the_cold_resca
 
     // Run 2: restore → the 7 cards are back, 5 offsets import, and the boot sweep touches ONLY
     // the grown file (from 0 — the accumulator is not persisted), never the other four.
-    let state2 = std::sync::Mutex::new(CoreState::open(&data.join("spans")));
+    // TRDD-9VX3WTGU: each start gets its OWN card-store dir. Run 1's completed database is still
+    // open here, and a second open of that reusable file would be two writers on one database;
+    // a fresh dir makes this start a FULL restore from the snapshot, which is what this test pins.
+    let state2 = std::sync::Mutex::new(CoreState::open(&data.join("spans2")));
     let mut tailer2 = LogTailer::default();
     let mut durable2 = DurableState::open(&data);
     let (restored, imported, skipped) = durable2.restore(&mut tailer2, &mut state2.lock().unwrap(), &env).unwrap();
@@ -449,7 +452,7 @@ fn durable_state_round_trips_offsets_and_stripped_cards_and_skips_the_cold_resca
     std::fs::write(&cp, cp_body.lines().next().unwrap().to_owned() + "\n").unwrap(); // shrunk
     let mut tailer3 = LogTailer::default();
     let mut durable3 = DurableState::open(&data);
-    let (_, imported, skipped) = durable3.restore(&mut tailer3, &mut CoreState::open(&data.join("spans")), &env).unwrap();
+    let (_, imported, skipped) = durable3.restore(&mut tailer3, &mut CoreState::open(&data.join("spans3")), &env).unwrap();
     // Per-case first: the tuple alone says "one file that should have skipped did not" without
     // saying WHICH, and guessing between the two cost a full CI round-trip once already.
     assert!(!tailer3.file_state.contains_key(&codex), "rotated file was resumed");
@@ -458,8 +461,15 @@ fn durable_state_round_trips_offsets_and_stripped_cards_and_skips_the_cold_resca
 
     // A version-stale stamp restores NOTHING (cold rescan), whatever the logs hold.
     std::fs::write(data.join("log-delta-version.json"), "{\"v\":1}").unwrap();
+    //
+    // TRDD-9VX3WTGU: the OLD assertion opened a fresh store, which was empty whatever restore did.
+    // The invariant now has to hold against a store that still HOLDS cards: run 2's completed
+    // database is reused by this open (its meta is current), and the stale offsets stamp must make
+    // restore discard those cards rather than serve them next to a cold rescan.
+    drop(state2);
     let mut tailer4 = LogTailer::default();
-    let mut st4 = CoreState::open(&data.join("spans"));
+    let mut st4 = CoreState::open(&data.join("spans2"));
+    assert!(st4.cards.reused() && st4.cards.len() == 7, "precondition: a populated, reusable database");
     assert_eq!(DurableState::open(&data).restore(&mut tailer4, &mut st4, &env).unwrap(), (0, 0, 0));
     assert!(st4.cards.is_empty() && tailer4.file_state.is_empty());
 }

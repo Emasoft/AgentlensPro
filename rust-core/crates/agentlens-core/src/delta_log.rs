@@ -109,6 +109,17 @@ impl DeltaLog {
         Ok(map)
     }
 
+
+    /// TRDD-9VX3WTGU — seed the written-hashes from `records` WITHOUT reading the files, for a
+    /// start that reused `cards.duckdb` and so has no reason to load (parse + re-serialize) the
+    /// 72 MB snapshot. `records` must be exactly what the next `save` will compute, so an
+    /// unchanged corpus costs zero bytes. Known gap, by design: a record the snapshot lags behind
+    /// the database on (changed after the last pre-crash save) is not re-appended until it changes
+    /// again — the snapshot is only the FALLBACK for a database that cannot be reused.
+    pub fn seed_written(&mut self, records: &IndexMap<String, Value>) {
+        self.written = records.iter().map(|(k, v)| (k.clone(), hash_json(&serde_json::to_string(v).unwrap_or_default()))).collect();
+    }
+
     /// Rewrite the snapshot from `records`, VERIFY it from disk, then drop the delta.
     fn compact(&self, records: &IndexMap<String, Value>) -> Result<u64, String> {
         let mut body = String::new();

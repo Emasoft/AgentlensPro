@@ -1,0 +1,330 @@
+//! TRDD-9VX3WTGU — `cards.duckdb` is REUSED across restarts when its `meta` table vouches for it,
+//! so a start no longer redoes the 40k indexed inserts of the restore.
+//!
+//! Real DuckDB files in temp dirs, no mocks. Every "restart" drops the previous store first (two
+//! live stores over one reusable file would be two writers on one database), and a test that needs
+//! two starts side by side gives each its OWN data dir.
+
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+
+use agentlens_core::card_store::{CardStore, CARD_DB_FILE};
+use agentlens_core::delta_log::DeltaLog;
+use agentlens_core::log_reader::{DurableState, LogTailer};
+use agentlens_core::ui::strip_session_detail;
+use agentlens_core::{ingest_post, CoreState};
+use agentlens_logscan::discovery::{Env, Platform};
+use agentlens_store::duckdb::Connection;
+use serde_json::{json, Value};
+
+fn dir(name: &str) -> PathBuf {
+    let d = std::env::temp_dir().join(format!("al-cardreuse-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&d);
+    std::fs::create_dir_all(&d).expect("create the test dir");
+    d
+}
+
+fn cold_card(id: &str, start: &str) -> Value {
+    json!({
+        "sessionId": id, "source": "claude_code", "startTime": start, "durationMs": 1000.0,
+        "timeline": [], "timelineTruncatedCount": 4,
+        "fileOps": { "reads": [{ "path": "/x", "bytes": 10 }] },
+        "backgroundSpans": [{ "spanId": "bg" }],
+        "generatedFiles": [{ "path": "/g" }], "generatedFilesTruncated": false
+    })
+}
+
+fn ids(s: &CardStore) -> Vec<String> {
+    s.cards().iter().map(|c| c["sessionId"].as_str().unwrap_or_default().to_owned()).collect()
+}
+
+/// A completed corpus of three cards (a, b, c) left behind by a "previous run" in a fresh dir.
+fn seeded(name: &str) -> PathBuf {
+    let d = dir(name);
+    let mut s = CardStore::open(&d);
+    for (id, start) in [("a", "2026-08-01T10:00:00.000Z"), ("b", "2026-08-01T11:00:00.000Z"), ("c", "2026-08-01T09:00:00.000Z")] {
+        s.put(&cold_card(id, start));
+    }
+    s.mark_restore_complete();
+    d
+}
+
+/// Edit the meta table of a store that is NOT open (the previous run is gone).
+fn meta_sql(d: &Path, sql: &str) {
+    let c = Connection::open(d.join(CARD_DB_FILE)).expect("open the database directly");
+    c.execute_batch(sql).expect("edit the meta table");
+}
+
+fn assert_rebuilt(d: &Path, why: &str) {
+    let s = CardStore::open(d);
+    assert!(!s.reused(), "{why}: the database must NOT be reused");
+    assert!(s.is_empty(), "{why}: a rebuilt database starts empty");
+    assert!(s.parsed_cards().is_empty(), "{why}: and so does the resident layer");
+}
+
+/// A matching, completed database is kept: rows, `seq` order and the resident layer survive, and
+/// the next card is ordered AFTER the old ones (next_seq = max(seq)+1, not 0).
+#[test]
+fn a_matching_completed_database_is_reused_with_its_order_and_next_seq() {
+    let d = seeded("reuse");
+    let mut s = CardStore::open(&d);
+    assert!(s.reused());
+    assert_eq!(ids(&s), ["a", "b", "c"], "first-insert order survives the restart");
+    assert_eq!(s.parsed_cards().len(), 3, "the resident parsed layer was rebuilt from the table");
+    s.put(&cold_card("d", "2026-08-01T08:00:00.000Z"));
+    s.put(&cold_card("a", "2026-08-01T10:30:00.000Z")); // upsert keeps its slot
+    assert_eq!(ids(&s), ["a", "b", "c", "d"], "a new card sorts after the old ones; an upsert keeps its slot");
+    let parsed: Vec<String> = s.parsed_cards().iter().map(|c| c["sessionId"].as_str().unwrap().to_owned()).collect();
+    assert_eq!(parsed, ["a", "b", "c", "d"], "the resident layer has the same order as the table");
+}
+
+/// The database was built under another ingest version: deleted and rebuilt.
+#[test]
+fn a_database_from_another_ingest_version_is_rebuilt() {
+    let d = seeded("ingest");
+    meta_sql(&d, "UPDATE meta SET value = '1' WHERE key = 'ingest_version'");
+    assert_rebuilt(&d, "ingest version mismatch");
+}
+
+/// The database was built under another card schema version: deleted and rebuilt.
+#[test]
+fn a_database_from_another_card_schema_version_is_rebuilt() {
+    let d = seeded("schema");
+    meta_sql(&d, "UPDATE meta SET value = '999' WHERE key = 'card_schema_version'");
+    assert_rebuilt(&d, "schema version mismatch");
+}
+
+/// A database from before the meta table existed (the one-time migration) is rebuilt.
+#[test]
+fn a_database_with_no_meta_table_is_rebuilt() {
+    let d = seeded("nometa");
+    meta_sql(&d, "DROP TABLE meta");
+    assert_rebuilt(&d, "missing meta");
+}
+
+/// A database whose restore never finished (killed half-way) is rebuilt: it is not the corpus.
+#[test]
+fn a_database_whose_restore_never_completed_is_rebuilt() {
+    let d = dir("incomplete");
+    {
+        let mut s = CardStore::open(&d);
+        s.put(&cold_card("a", "2026-08-01T10:00:00.000Z"));
+        // no mark_restore_complete(): the process died during the restore
+    }
+    assert_rebuilt(&d, "restore_complete=0");
+}
+
+/// `/api/clear` flagged the database and the rescan never finished: rebuilt; once the rescan
+/// finished (`finish_clear`) the same database is reusable again.
+#[test]
+fn a_database_with_a_clear_in_progress_is_rebuilt_until_the_rescan_finishes() {
+    let d = seeded("clear");
+    {
+        let mut s = CardStore::open(&d);
+        assert!(s.reused());
+        s.clear();
+        s.put(&cold_card("x", "2026-08-01T10:00:00.000Z")); // the rescan has begun refilling it
+    }
+    assert_rebuilt(&d, "clear_in_progress=1");
+
+    let d = seeded("clear-done");
+    {
+        let mut s = CardStore::open(&d);
+        s.clear();
+        s.put(&cold_card("x", "2026-08-01T10:00:00.000Z"));
+        s.finish_clear();
+    }
+    let s = CardStore::open(&d);
+    assert!(s.reused(), "after the rescan finished the corpus is whole again");
+    assert_eq!(ids(&s), ["x"]);
+}
+
+/// A file that is not a database at all: deleted and rebuilt, not a crash loop.
+#[test]
+fn a_corrupt_database_file_is_rebuilt() {
+    let d = seeded("corrupt");
+    std::fs::write(d.join(CARD_DB_FILE), b"this is not a duckdb file, it is garbage ".repeat(500)).unwrap();
+    assert_rebuilt(&d, "corrupt file");
+}
+
+
+/// Valid meta (all four keys pass the gate) but one row whose `card` is not JSON: the resident
+/// scan is part of the reuse gate, so this is rebuilt, not a panic on every start.
+#[test]
+fn a_card_row_that_is_not_json_is_rebuilt_not_a_panic() {
+    let d = seeded("bad-row");
+    meta_sql(&d, "UPDATE cards SET card = '{not json' WHERE session_id = 'b'");
+    assert_rebuilt(&d, "an unparseable card row");
+}
+
+/// The write-time persist-strip: a card with no timeline entries is stored persist-stripped (row
+/// AND resident layer), a card WITH a timeline (the hot set) is stored whole, and a card that
+/// lacks the stripped keys gains none.
+#[test]
+fn a_cold_card_is_persist_stripped_at_write_and_a_hot_card_is_not() {
+    let d = dir("strip");
+    let mut s = CardStore::open(&d);
+    s.put(&cold_card("cold", "2026-08-01T10:00:00.000Z"));
+    let mut hot = cold_card("hot", "2026-08-01T11:00:00.000Z");
+    hot["timeline"] = json!([{ "type": "api_request" }]);
+    s.put(&hot);
+    s.put(&json!({ "sessionId": "bare", "timeline": [] }));
+
+    let cold = s.get("cold").unwrap();
+    for gone in ["fileOps", "generatedFiles", "generatedFilesTruncated"] {
+        assert!(cold.get(gone).is_none(), "{gone} must be stripped from a cold card's row");
+    }
+    assert_eq!(cold["backgroundSpans"], json!([]));
+    assert_eq!(cold["timelineTruncatedCount"], 4, "the truncation counter is untouched");
+    assert_eq!(s.get("hot").unwrap(), hot, "a card with a timeline is stored exactly as given");
+    assert_eq!(s.get("bare").unwrap(), json!({ "sessionId": "bare", "timeline": [] }), "no keys are invented");
+    let resident = s.parsed_cards();
+    assert_eq!(*resident[0], cold, "the resident layer holds the same stripped form as the row");
+
+    // SIZE: 300 cold cards that arrive with big fileOps must not bloat the corpus.
+    for i in 0..300 {
+        let mut c = cold_card(&format!("big{i}"), "2026-08-01T10:00:00.000Z");
+        c["fileOps"] = json!({ "reads": (0..50).map(|n| json!({ "path": format!("/some/long/path/{n}"), "bytes": n })).collect::<Vec<_>>() });
+        s.put(&c);
+    }
+    let (rows, bytes) = s.corpus_bytes().unwrap();
+    assert!(bytes / (rows as u64) < 500, "stripped cold rows stay small: {bytes} bytes over {rows} rows");
+}
+
+/// A hot card that falls out of the hot set reaches the same stripped shape.
+#[test]
+fn a_demoted_card_is_persist_stripped_too() {
+    let d = dir("demote");
+    let mut s = CardStore::open(&d);
+    for (id, start) in [("old", "2026-08-01T08:00:00.000Z"), ("new", "2026-08-01T12:00:00.000Z")] {
+        let mut c = cold_card(id, start);
+        c["timeline"] = json!([{ "type": "api_request" }]);
+        s.put(&c);
+    }
+    s.demote_cold(1);
+    let old = s.get("old").unwrap();
+    assert_eq!(old["timeline"], json!([]));
+    assert_eq!(old["timelineTruncatedCount"], 5, "the demotion bump (4 + 1 entry) is kept");
+    assert!(old.get("fileOps").is_none() && old.get("generatedFiles").is_none());
+    assert!(s.get("new").unwrap().get("fileOps").is_some(), "the hot card keeps everything");
+}
+
+// ── DurableState level: parity and the first save ────────────────────────────────────────────
+
+fn fixtures() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests").join("fixtures")
+}
+
+fn copy_tree(src: &Path, dst: &Path) {
+    std::fs::create_dir_all(dst).unwrap();
+    for e in std::fs::read_dir(src).unwrap().flatten() {
+        let p = e.path();
+        let to = dst.join(e.file_name());
+        if p.is_dir() { copy_tree(&p, &to) } else { std::fs::copy(&p, &to).unwrap(); }
+    }
+}
+
+const PARENT: &str = "cccccccc-1111-2222-3333-444444444444";
+
+fn otel_twin() -> String {
+    json!({ "resourceSpans": [{ "scopeSpans": [{ "spans": [{
+        "name": "claude_code.api_request",
+        "traceId": "00000000000000000000000000000abc", "spanId": "0000000000000abc",
+        "startTimeUnixNano": "1785578400000000000",
+        "attributes": [
+            { "key": "session.id", "value": { "stringValue": PARENT } },
+            { "key": "input_tokens", "value": { "intValue": "100" } }
+        ]
+    }] }] }] })
+    .to_string()
+}
+
+struct Boot {
+    st: Mutex<CoreState>,
+    tailer: LogTailer,
+    durable: DurableState,
+}
+
+/// One start: open the card store at `store`, restore against the shared durable dir `data`.
+fn boot(store: &Path, data: &Path, env: &Env) -> (Boot, (usize, usize, usize)) {
+    let st = Mutex::new(CoreState::open(store));
+    let mut tailer = LogTailer::default();
+    let mut durable = DurableState::open(data);
+    let r = durable.restore(&mut tailer, &mut st.lock().unwrap(), env).unwrap();
+    (Boot { st, tailer, durable }, r)
+}
+
+/// The previous run: a cold boot over the fixture tree at the fixture's COLD now, then a forced
+/// save (a graceful stop). Leaves `<data>/a/cards.duckdb` complete plus the snapshot/offsets pair.
+fn previous_run(name: &str) -> (PathBuf, Env, f64) {
+    let home = dir(&format!("{name}-home"));
+    copy_tree(&fixtures().join("logs-home"), &home);
+    let data = dir(&format!("{name}-data"));
+    let env = Env { home, platform: Platform::Darwin, vars: HashMap::new() };
+    let expected: Value = serde_json::from_str(&std::fs::read_to_string(fixtures().join("log-reader-expected.json")).unwrap()).unwrap();
+    let cold_now = expected["nowColdMs"].as_i64().unwrap();
+    let (mut b, r) = boot(&data.join("a"), &data, &env);
+    assert_eq!(r, (0, 0, 0), "nothing persisted yet");
+    let (scanned, _) = b.tailer.sweep(&env, cold_now, None);
+    b.st.lock().unwrap().ingest_scanned(scanned);
+    b.durable.mark_dirty();
+    b.durable.tick(&b.tailer, &b.st, true);
+    (data, env, cold_now as f64)
+}
+
+/// SUMMARY FIELD PARITY (not byte parity): the summary served after a REUSED start equals the one
+/// served after a full-restore start from the same snapshot + offsets pair, on every field the
+/// served summary carries — including a session that has an OTEL twin (the one place the merge
+/// reads timeline / backgroundSpans). Compared after `strip_session_detail`, the form
+/// `/api/summary` serves; the reused store may hold RICHER hot-set timelines than a restore, and
+/// those are exactly what that stripping blanks.
+#[test]
+fn a_reused_start_serves_the_same_summary_as_a_full_restore_start() {
+    let (data, env, now) = previous_run("parity");
+
+    let (reused, r1) = boot(&data.join("a"), &data, &env);
+    assert!(reused.st.lock().unwrap().cards.reused(), "the previous run's database was reused");
+    let (restored, r2) = boot(&data.join("c"), &data, &env);
+    assert!(!restored.st.lock().unwrap().cards.reused(), "a fresh dir has nothing to reuse: full restore");
+    assert_eq!(r1, (7, 5, 0));
+    assert_eq!(r2, (7, 5, 0), "same cards, same offsets either way");
+
+    let served = |b: &Boot| {
+        let mut st = b.st.lock().unwrap();
+        ingest_post(&mut st, "/v1/traces", otel_twin().as_bytes());
+        let summary = st.session_summary(now);
+        let twin = summary["sessions"].as_array().unwrap().iter().find(|s| s["sessionId"] == PARENT).cloned().unwrap();
+        assert!(twin["coverageNote"].is_string(), "the OTEL twin was merged (so the merge path is what is compared)");
+        strip_session_detail(&summary)
+    };
+    assert_eq!(served(&reused), served(&restored));
+}
+
+/// After a reused start the first save writes only real changes: the delta-log hashes were seeded
+/// from the stored cards without loading the snapshot, so an unchanged corpus appends 0 bytes.
+#[test]
+fn the_first_save_after_a_reused_start_appends_nothing_to_the_card_delta() {
+    let (data, env, _) = previous_run("firstsave");
+    let before = DeltaLog::new(&data, "log-sessions").disk_bytes();
+    let (mut b, r) = boot(&data.join("a"), &data, &env);
+    assert!(b.st.lock().unwrap().cards.reused());
+    assert_eq!(r.0, 7);
+    let (scanned, s) = b.tailer.sweep(&env, 1_785_578_400_000 + 600_000, None);
+    assert!(scanned.is_empty() && s.changed == 0, "the offsets said every file is unchanged");
+    b.durable.mark_dirty();
+    b.durable.tick(&b.tailer, &b.st, true);
+    assert_eq!(DeltaLog::new(&data, "log-sessions").disk_bytes(), before, "0 bytes appended to the card snapshot/delta");
+}
+
+/// A reused database next to an offsets log stamped with another ingest version must not be
+/// trusted: the cards are discarded and the legacy "stale stamp, restore nothing" path runs.
+#[test]
+fn a_reused_database_next_to_a_stale_version_stamp_is_discarded() {
+    let (data, env, _) = previous_run("stale");
+    std::fs::write(data.join("log-delta-version.json"), "{\"v\":1}").unwrap();
+    let (b, r) = boot(&data.join("a"), &data, &env);
+    assert!(b.st.lock().unwrap().cards.reused(), "the gate itself passed (meta is current)");
+    assert_eq!(r, (0, 0, 0), "but the offsets stamp is stale: cold rescan");
+    assert!(b.st.lock().unwrap().cards.is_empty() && b.tailer.file_state.is_empty());
+}

@@ -7,11 +7,10 @@
 //!
 //! * **the file exists under the data dir** — that is the whole point of the card: the corpus is
 //!   on disk and DuckDB's buffer pool decides what is resident.
-//! * **a database left by a previous boot is REPLACED, never reused.** `DurableState::restore`
-//!   treats a stale `LOG_INGEST_VERSION` as "restore nothing, cold-rescan" and does not clear the
-//!   store, because until now a fresh `CoreState` always had an empty one. A store that survived
-//!   the process would keep serving cards built under the OLD ingest semantics, with the version
-//!   stamp — the only mechanism that exists to invalidate them — silently doing nothing.
+//! * **a database left by a boot whose restore never completed is REPLACED, never reused.**
+//!   (TRDD-9VX3WTGU: a database whose `meta` table vouches for it IS reused — see
+//!   `tests/card_reuse.rs`; one without that vouching is deleted, because a store that survived the
+//!   process unchecked would keep serving cards built under the OLD ingest semantics.)
 //! * **two stores over ONE data dir in ONE process do not interfere.** That is not hypothetical:
 //!   `tests/log_reader_parity.rs::durable_state_round_trips_offsets_and_stripped_cards_and_skips_the_cold_rescan`
 //!   opens four `CoreState`s over one data dir with the earlier ones still alive.
@@ -39,8 +38,12 @@ fn open_puts_the_database_on_disk_under_the_data_dir() {
     assert_eq!(s.len(), 1);
 }
 
+// TRDD-9VX3WTGU: the OLD invariant here was "a database left by a previous boot is ALWAYS replaced".
+// The new one is "replaced unless its meta table vouches for it" (tests/card_reuse.rs pins the
+// reuse side). This test now pins the replace side for a database whose restore NEVER COMPLETED:
+// the previous boot below never calls `mark_restore_complete`, exactly as a boot killed mid-restore.
 #[test]
-fn a_database_left_by_a_previous_boot_is_replaced_not_reused() {
+fn a_database_left_by_a_boot_whose_restore_never_completed_is_replaced_not_reused() {
     let dir = data_dir("reboot");
     {
         let mut first = CardStore::open(&dir);
@@ -64,6 +67,10 @@ fn a_database_left_by_a_previous_boot_is_replaced_not_reused() {
     assert_eq!(ids, ["x", "y"]);
 }
 
+// TRDD-9VX3WTGU: this only holds because neither store ever completed a restore (`restore_complete`
+// stays 0), so the second open deletes the file out from under the live first one and gets its own
+// inode, as before. Two stores over a COMPLETED, reusable database would share one file — tests that
+// need two starts of the same corpus use separate data dirs (tests/card_reuse.rs).
 #[test]
 fn two_stores_over_one_data_dir_in_one_process_do_not_interfere() {
     let dir = data_dir("two");

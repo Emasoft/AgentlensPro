@@ -753,6 +753,29 @@ pub fn strip_card_for_persist(card: &Value) -> Value {
     Value::Object(c)
 }
 
+
+/// A Claude card that wrote cache but is missing the 1h-tier field (TRDD-ORGJ0E3G): a candidate
+/// for the usage-only backfill. A pure predicate on the card, shared by both restore branches.
+fn needs_1h_field(obj: &Map<String, Value>) -> bool {
+    obj.get("source").and_then(Value::as_str) == Some("claude_code")
+        && !obj.contains_key("cacheCreate1hTokens")
+        && obj.get("cacheCreateTokens").and_then(Value::as_f64).unwrap_or(0.0) > 0.0
+}
+
+/// Built once, not per card: a walk of every discovered Claude transcript, keyed by the session id
+/// it backs. `discover_all` is a full filesystem walk, so it runs only when a candidate exists
+/// (`any_candidates`) — an in-memory pre-scan of the cards decides, with no disk I/O.
+fn claude_transcript_paths(env: &Env, any_candidates: bool) -> HashMap<String, PathBuf> {
+    if !any_candidates {
+        return HashMap::new();
+    }
+    discover_all(env)
+        .into_iter()
+        .filter(|f| f.source == LogSource::Claude)
+        .map(|f| (session_id_for_file(&f.path, &f.source), f.path))
+        .collect()
+}
+
 /// The durable-state sidecars under the data dir, the save cadence, and the restore.
 pub struct DurableState {
     cards: crate::delta_log::DeltaLog,
@@ -836,7 +859,7 @@ impl DurableState {
     /// it only queues `(session_id, path)` for a card that is missing a field added by a later
     /// parser (`cacheCreate1hTokens`, currently) AND whose source file still exists, for
     /// `run_1h_backfill` to patch after boot with a usage-only pass over that one file.
-    pub fn restore(&mut self, tailer: &mut LogTailer, state: &mut crate::CoreState, env: &Env) -> Result<(usize, usize, usize), String> {
+    fn restore_from_snapshot(&mut self, tailer: &mut LogTailer, state: &mut crate::CoreState, env: &Env) -> Result<(usize, usize, usize), String> {
         let cards = self.cards.load()?;
         let offsets = self.offsets.load()?;
         if !self.version_is_current() {
@@ -856,32 +879,16 @@ impl DurableState {
             // eligible card has already been backfilled. A cheap in-memory pre-scan of the already-
             // loaded `cards` map (no disk I/O) decides whether the walk is needed AT ALL this boot;
             // once every flagged card has been reparsed once, this is `false` forever after.
-            let any_candidates = cards.values().any(|c| {
-                c.as_object().is_some_and(|obj| {
-                    obj.get("source").and_then(Value::as_str) == Some("claude_code")
-                        && !obj.contains_key("cacheCreate1hTokens")
-                        && obj.get("cacheCreateTokens").and_then(Value::as_f64).unwrap_or(0.0) > 0.0
-                })
-            });
-            // Built once, not per-card: a walk of every discovered Claude transcript, keyed by
-            // the session id it backs — the same lookup `transcript_path_for` does per-call, done
-            // here in one pass since restore may see thousands of cards.
-            let claude_paths: HashMap<String, PathBuf> = if any_candidates {
-                discover_all(env)
-                    .into_iter()
-                    .filter(|f| f.source == LogSource::Claude)
-                    .map(|f| (session_id_for_file(&f.path, &f.source), f.path))
-                    .collect()
-            } else {
-                HashMap::new()
-            };
+            let any_candidates = cards.values().any(|c| c.as_object().is_some_and(needs_1h_field));
+            let claude_paths = claude_transcript_paths(env, any_candidates);
             // Bounded chunks, not one transaction over the whole corpus (TRDD-5JZQFVO8, 2026-09-08):
             // an open DuckDB transaction's rows are charged to card_store::MEMORY_LIMIT (256 MiB)
             // until COMMIT, and at 35,258 cards / 64 MB the pool filled part-way through, `put`
             // panicked, and the sweeper's death exited the process at every boot. Whether the PK
             // index also needs the checkpoint a COMMIT gives it is measured by the boot on the real
             // corpus, not asserted here. Atomicity across the whole restore protected nothing: the
-            // store is recreated at every boot (card_store.rs `open`), and this thread holds the
+            // store is empty here (`CardStore::open` found nothing reusable and `restore_complete`
+            // stays 0 until the final commit below, so a kill mid-restore is rebuilt), and this thread holds the
             // state lock for the whole restore, so no reader can see a half-loaded store.
             // ponytail: rows-only chunking; the honest ceiling is bytes (2,000 × 100 KB cards would
             // be 200 MB) — add a byte accumulator if cards ever grow past ~10 KB on average.
@@ -902,29 +909,7 @@ impl DurableState {
                     // Missing the 1h-tier field (TRDD-ORGJ0E3G) and it actually wrote cache — queue
                     // its (session_id, path) for the post-boot usage-only backfill, iff the file
                     // still exists. Never touches the card or its offset here.
-                    let needs_1h_field = obj.get("source").and_then(Value::as_str) == Some("claude_code")
-                        && !obj.contains_key("cacheCreate1hTokens")
-                        && obj.get("cacheCreateTokens").and_then(Value::as_f64).unwrap_or(0.0) > 0.0;
-                    if needs_1h_field {
-                        if let Some(session_id) = obj.get("sessionId").and_then(Value::as_str) {
-                            if let Some(path) = claude_paths.get(session_id) {
-                                // Item 1: skip a file older than REPARSE_MAX_AGE — see the
-                                // constant's comment. An unreadable mtime is treated as "too old"
-                                // (fail closed: never force I/O on a file we can't even stat).
-                                let recent = std::fs::metadata(path)
-                                    .and_then(|m| m.modified())
-                                    .ok()
-                                    .and_then(|mtime| now.duration_since(mtime).ok())
-                                    .is_some_and(|age| age <= REPARSE_MAX_AGE);
-                                if recent {
-                                    self.pending_1h_backfill.push((session_id.to_string(), path.clone()));
-                                    backfill_candidates += 1;
-                                } else {
-                                    too_old += 1;
-                                }
-                            }
-                        }
-                    }
+                    self.queue_1h_candidate(obj, &claude_paths, now, &mut backfill_candidates, &mut too_old);
                 }
                 state.put_log_session(card);
                 if (n + 1) % RESTORE_CHUNK == 0 {
@@ -943,6 +928,112 @@ impl DurableState {
         }
         let (imported, skipped) = tailer.import_file_state(&offsets);
         Ok((restored, imported, skipped))
+    }
+
+
+    /// The restore (server.ts startup), TRDD-9VX3WTGU edition: when `cards.duckdb` was REUSED
+    /// (`CardStore::open`'s gate passed) the corpus is already in the store and the 40k inserts are
+    /// skipped; otherwise the full restore from the card snapshot + offsets pair runs, unchanged.
+    /// Either way, once it returns `Ok`, the store is marked `restore_complete` — WHY it is set
+    /// here and not by the store: only the restore knows the corpus is whole (a kill mid-restore
+    /// returns early / never gets here, so the next boot sees 0 and rebuilds).
+    pub fn restore(&mut self, tailer: &mut LogTailer, state: &mut crate::CoreState, env: &Env) -> Result<(usize, usize, usize), String> {
+        let out = if state.cards.reused() { self.restore_reused(tailer, state, env)? } else { self.restore_from_snapshot(tailer, state, env)? };
+        state.cards.mark_restore_complete();
+        Ok(out)
+    }
+
+    /// TRDD-9VX3WTGU — the reuse branch of [`DurableState::restore`]. The parsed layer and
+    /// `next_seq` were rebuilt by `CardStore::open`; this seeds the delta-log hashes, recomputes
+    /// the 1h-backfill candidates, demotes once, bumps `data_version` once and imports the offsets
+    /// — all before the caller binds its listeners (the state lock is held for the whole restore).
+    fn restore_reused(&mut self, tailer: &mut LogTailer, state: &mut crate::CoreState, env: &Env) -> Result<(usize, usize, usize), String> {
+        if !self.version_is_current() {
+            // WHY not reuse: the offsets (and the card snapshot) are stamped with another ingest
+            // semantics — or not stamped at all — so the offsets about to be imported would not
+            // describe this corpus. Discard the rows and take the legacy path, which sees the same
+            // stale stamp, restores nothing and tombstones the stale entries on the next save
+            // (skipping `self.cards.load()` here would leave them in the snapshot to be trusted
+            // as current once the first save re-stamps the version).
+            eprintln!("{} alcore: card store reuse refused — the offsets log is stamped with another ingest version; discarding the cards and cold-rescanning", crate::log_ts());
+            state.cards.discard_cards();
+            return self.restore_from_snapshot(tailer, state, env);
+        }
+        let offsets = self.offsets.load()?;
+        let restored = state.cards.len();
+        // Backfill candidates are recomputed from the parsed cards (the queue is in-memory only,
+        // so a crash mid-backfill would otherwise never resume). `discover_all` only if any card
+        // qualifies — the same gate as the full restore.
+        let parsed = state.cards.parsed_cards();
+        let any_candidates = parsed.iter().any(|c| c.as_object().is_some_and(needs_1h_field));
+        let claude_paths = claude_transcript_paths(env, any_candidates);
+        let now = std::time::SystemTime::now();
+        let (mut backfill_candidates, mut too_old) = (0usize, 0usize);
+        if any_candidates {
+            for c in &parsed {
+                if let Some(obj) = c.as_object() {
+                    self.queue_1h_candidate(obj, &claude_paths, now, &mut backfill_candidates, &mut too_old);
+                }
+            }
+        }
+        drop(parsed);
+        // Idempotent (rows already demoted are skipped); needed because the hot-set size may have
+        // changed between boots. Once, not per card.
+        state.demote_cold_timelines(crate::summarize::retention::timeline_hot_cards());
+        // Seed the delta-log hashes with exactly what `save_cards` would compute (persist_records
+        // = strip_card_for_persist of every stored card), taken from the resident parsed layer so
+        // the 72 MB snapshot is never loaded and the table is not scanned a second time. Without
+        // it the first save would append the whole corpus (72 MB) and compact. WHY AFTER the
+        // demotion: cards demoted at this start are persisted stripped; hashing them before the
+        // demotion would make the first save see them as changed and append them again.
+        let records: IndexMap<String, Value> = state
+            .cards
+            .parsed_cards()
+            .iter()
+            .map(|c| (c.get("sessionId").and_then(Value::as_str).unwrap_or("").to_owned(), strip_card_for_persist(c)))
+            .collect();
+        self.cards.seed_written(&records);
+        drop(records);
+        // The full restore bumps `data_version` once per card; a reused store would stay at 0 and
+        // version-keyed caches (summary, SSE pusher) would see no change after the build.
+        state.data_version += 1;
+        if backfill_candidates > 0 || too_old > 0 {
+            eprintln!("{} alcore: log-ingest 1h-tier backfill — flagged {backfill_candidates} transcript(s) for a usage-only cache_create_1h pass after boot ({too_old} skipped, older than {} days)", crate::log_ts(), REPARSE_MAX_AGE.as_secs() / 86_400);
+        }
+        let (imported, skipped) = tailer.import_file_state(&offsets);
+        Ok((restored, imported, skipped))
+    }
+
+    /// Queue `(session_id, path)` for the post-boot usage-only 1h backfill when the card is
+    /// missing the field, actually wrote cache, its transcript still exists and is recent. Never
+    /// touches the card or its offset. Shared by the full restore and the reuse branch.
+    fn queue_1h_candidate(
+        &mut self,
+        obj: &Map<String, Value>,
+        claude_paths: &HashMap<String, PathBuf>,
+        now: std::time::SystemTime,
+        backfill_candidates: &mut usize,
+        too_old: &mut usize,
+    ) {
+        if !needs_1h_field(obj) {
+            return;
+        }
+        let Some(session_id) = obj.get("sessionId").and_then(Value::as_str) else { return };
+        let Some(path) = claude_paths.get(session_id) else { return };
+        // Item 1: skip a file older than REPARSE_MAX_AGE — see the constant's comment. An
+        // unreadable mtime is treated as "too old" (fail closed: never force I/O on a file we
+        // can't even stat).
+        let recent = std::fs::metadata(path)
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|mtime| now.duration_since(mtime).ok())
+            .is_some_and(|age| age <= REPARSE_MAX_AGE);
+        if recent {
+            self.pending_1h_backfill.push((session_id.to_string(), path.clone()));
+            *backfill_candidates += 1;
+        } else {
+            *too_old += 1;
+        }
     }
 
     /// TRDD-ORGJ0E3G — one bounded slice of the usage-only backfill, replacing the full-card
@@ -1054,6 +1145,14 @@ impl DurableState {
     }
 
     /// saveOffsetsNow — a save that wrote bytes counts as one write (persistStats.offsetsWrites).
+    ///
+    /// TRDD-9VX3WTGU ORDERING CONTRACT — reuse of `cards.duckdb` depends on it: this runs only
+    /// from `tick`, on the sweeper thread, AFTER the sweep's cards were put (each `put_arc` is a
+    /// committed, WAL-fsynced DuckDB statement), and the offsets log is written WITHOUT an fsync.
+    /// So an offset on disk never describes a file whose card is not already durable in the
+    /// database. Saving offsets before the sweep's puts, or from another thread, would let a
+    /// reused database sit BEHIND its offsets: the file reads as unchanged and the stale card is
+    /// never refreshed.
     fn save_offsets(&mut self, tailer: &LogTailer, state: &std::sync::Mutex<crate::CoreState>) {
         match self.offsets.save(&tailer.export_file_state()) {
             Ok(r) if r.bytes > 0 => {
@@ -1381,6 +1480,14 @@ pub fn start_sweeper(
             let mut next_full = Instant::now() + backstop;
             let mut pending: Vec<PathBuf> = Vec::new();
             let mut needs_full = false;
+            // TRDD-9VX3WTGU: `/api/clear` emptied the card store and set `clear_in_progress` in
+            // its meta table; it stays set until the full rescan this flag tracks has put every
+            // card back (see `CardStore::clear`). Residual window, accepted: a SECOND clear that
+            // lands while the first rescan runs has its flag reset by the first rescan's end; the
+            // second rescan then runs with the flag already 0 (a crash inside it would be reused
+            // as an incomplete corpus). Two clears back to back are an operator action, and the
+            // alternative is a counter threaded through the clear message.
+            let mut clear_pending = false;
             loop {
                 // TRDD-ORGJ0E3G follow-up: drain every message ALREADY queued (non-blocking,
                 // try_recv until Empty) before even considering a backfill chunk. Without this a
@@ -1399,6 +1506,7 @@ pub fn start_sweeper(
                         Ok(Msg::Clear) => {
                             tailer.clear();
                             needs_full = true;
+                            clear_pending = true;
                         }
                         Err(std::sync::mpsc::TryRecvError::Empty) => break,
                         Err(std::sync::mpsc::TryRecvError::Disconnected) => {
@@ -1448,6 +1556,7 @@ pub fn start_sweeper(
                     Ok(Msg::Clear) => {
                         tailer.clear();
                         needs_full = true;
+                        clear_pending = true;
                     }
                     // Review fix: `wait` above is capped to 50ms while a backfill chunk is
                     // pending, so a Timeout here does NOT mean the FULL_RESCAN backstop (up to
@@ -1480,12 +1589,14 @@ pub fn start_sweeper(
                             Ok(Msg::Clear) => {
                                 tailer.clear();
                                 needs_full = true;
+                                clear_pending = true;
                                 break;
                             }
                             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => break,
                         }
                     }
                 }
+                let full_sweep = needs_full;
                 let (scanned, sweep) = if needs_full {
                     // A full sweep subsumes every pending hint and re-arms the backstop.
                     // TRDD-2JOIAH2G R5: chunks flush straight into the card map under a short
@@ -1517,6 +1628,12 @@ pub fn start_sweeper(
                         durable.mark_dirty();
                         st.ingest_scanned(scanned);
                     }
+                }
+                // The rescan of a `/api/clear` has put every card (flushed chunks + the remainder
+                // ingested just above): the corpus is whole again, so the next boot may reuse it.
+                if clear_pending && full_sweep {
+                    clear_pending = false;
+                    state.lock_timed().expect("core state").cards.finish_clear();
                 }
                 durable.tick(&tailer, &state, false);
             }
