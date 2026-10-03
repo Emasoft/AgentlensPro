@@ -314,6 +314,24 @@ dashboard/OTLP). Hook registration changes need a Claude session restart to take
   affected — a missing/corrupt binary there would hit `noServerAvailableError`, there being no
   TypeScript server to fall back to silently).
 
+
+- **Ports: UI and MCP move out of a squatter's way, OTLP never moves, pinned ports refuse.** Owner
+  rule 2026-10-02 ("always check if another process is using a port and switch to a different
+  port"). `server start`, the hook revive and `agentlenspro setup` all pick ports with
+  `chooseServerPorts` (`src/cli/portSelect.ts`): an unset UI/MCP port that is busy switches to the
+  next free one (scan of 50, probing 127.0.0.1 and ::1) and the choice is recorded in
+  `<dataDir>/ports.json`, which the CLI verbs and `setup` read back — honoured only while
+  `<dataDir>/server.pid` names a live owner, and written only after a verified start (never from a
+  dry-run; `server stop` removes it). **OTLP 4318 never moves** (Claude Code's exporters are
+  configured to it, so a moved listener silently loses telemetry): a busy 4318 refuses to start,
+  naming the holder pid and the remedy. A port pinned by `UI_PORT`/`MCP_PORT`/`OTLP_PORT` is honoured
+  exactly and refuses when busy by a stranger. Evidence: `src/test/portSelect.test.ts` (chooser,
+  ports.json liveness, revive refusal and backoff), `src/test/setupPorts.test.ts` (setup follows
+  ports.json); smoke-run against a squatted UI port (switched to 3001) and a squatted OTLP port
+  (refused, zero alcore spawned) in `docs_dev/*-portguard-finish-report.md`. Known gap: the
+  REST rung of `findServerPid` has no response deadline, so a squatter that accepts TCP but never
+  answers HTTP hangs `server start`/`status`/`stop` (an HTTP-answering squatter is handled).
+
 ## HOW TOKEN USAGE / CACHE ECONOMICS WORK — read before reasoning about burn OR writing any cost/attribution code (doc-verified 2026-07-11, re-affirmed after a live mis-scaling)
 
 This is the model both the human AND the code must obey. Getting it wrong produces confident

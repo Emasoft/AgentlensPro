@@ -48,6 +48,7 @@ import {
 import { alcoreBin, alcoreServeArgs, ALCORE_MIMALLOC_PURGE_DELAY_MS, resolveBinNativeDir } from './serverControl'
 import { parsePidLock } from '../serverRuntime'
 
+import { chooseServerPorts, readChosenPort, writePortsFile } from './portSelect'
 export interface SetupOptions {
   dryRun?: boolean
   yes?: boolean
@@ -117,24 +118,28 @@ export function resolveCtx(opts: SetupOptions): Ctx {
   const home = opts.home ?? os.homedir()
   const repoRoot = opts.repoRoot ?? findPackageRoot(__dirname)
   if (!repoRoot) throw new Error(`cannot locate the agentlenspro package root above ${__dirname}`)
+  const dataDir = opts.dataDir ?? process.env.DATA_DIR ?? path.join(home, '.agentlens')
+  // Same resolution as the server start (serverControl.alcoreServeArgs): env first, then the
+  // ports the running server recorded in ports.json (honoured only while its pidfile is live),
+  // then the canonical default — so detection, probes and the self-test dial where the clients do.
+  const port = (raw: string | undefined, key: 'otlp' | 'ui' | 'mcp', fallback: number): number =>
+    Number(envPort(raw, readChosenPort(dataDir, key) ?? fallback))
   return {
     dryRun: !!opts.dryRun,
     yes: !!opts.yes,
     forceInstall: !!opts.forceInstall,
     telemetryProbe: opts.telemetryProbe ?? {},
     home,
-    dataDir: opts.dataDir ?? process.env.DATA_DIR ?? path.join(home, '.agentlens'),
+    dataDir,
     settingsPath: opts.settingsPath ?? process.env.AGENTLENS_CLAUDE_SETTINGS ?? path.join(home, '.claude', 'settings.json'),
     skillsDir: opts.skillsDir ?? path.join(home, '.claude', 'skills'),
     agentsDir: opts.agentsDir ?? path.join(home, '.claude', 'agents'),
     repoRoot,
-    // TRDD-99HUNXJS: was `Number(process.env.UI_PORT ?? 3000)` — `Number('')` is 0, so
-    // `UI_PORT=''` silently bound the health-check/status URLs to a kernel-assigned port
-    // while the real server (serverControl.ts, same `envPort`) fell back to 3000. `envPort`
-    // is the one validated parser shared with the spawn path; use it here too.
-    uiPort: opts.uiPort ?? Number(envPort(process.env.UI_PORT, 3000)),
-    mcpPort: opts.mcpPort ?? Number(envPort(process.env.MCP_PORT, 4316)),
-    otlpPort: opts.otlpPort ?? Number(envPort(process.env.OTLP_PORT, 4318)),
+    // TRDD-99HUNXJS: `Number(process.env.UI_PORT ?? 3000)` made `UI_PORT=''` bind port 0 (`Number('')`);
+    // `envPort` is the one validated parser shared with the spawn path.
+    uiPort: opts.uiPort ?? port(process.env.UI_PORT, 'ui', 3000),
+    mcpPort: opts.mcpPort ?? port(process.env.MCP_PORT, 'mcp', 4316),
+    otlpPort: opts.otlpPort ?? port(process.env.OTLP_PORT, 'otlp', 4318),
     pathEnv: opts.pathEnv ?? process.env.PATH ?? '',
     log: opts.log ?? ((line: string) => console.log(line)),
     serverPid: null,
@@ -1301,6 +1306,34 @@ const stepServer: StepDef = {
   },
 }
 
+/** Owner rule 2026-10-02 — never squat a busy port. Wraps stepServer with the SAME chooser the
+ *  `agentlenspro server start` path uses: env-pinned ports and OTLP refuse loudly naming the holder,
+ *  unpinned UI/MCP move to the next free port; a port held by our own running server is kept. The
+ *  chosen ports go back into ctx so the server step, the verify probes and the final self-test all
+ *  dial what is actually bound. ports.json is written only after the server step verified PASS,
+ *  never from a dry-run (a dry-run claims nothing and writes nothing). */
+const stepServerGuarded: StepDef = {
+  name: stepServer.name,
+  async run(ctx) {
+    if (!ctx.dryRun) {
+      try {
+        const pinned = (raw: string | undefined): boolean => envPort(raw, 0) !== '0'
+        const chosen = await chooseServerPorts(
+          { otlp: ctx.otlpPort, ui: ctx.uiPort, mcp: ctx.mcpPort },
+          { ui: pinned(process.env.UI_PORT), mcp: pinned(process.env.MCP_PORT) },
+          async () => (await serverStats(ctx)) !== null,
+        )
+        ctx.otlpPort = chosen.otlp; ctx.uiPort = chosen.ui; ctx.mcpPort = chosen.mcp
+      } catch (e) {
+        return { result: { step: this.name, found: 'port claim', action: 'start server', verify: 'FAIL', detail: (e as Error).message }, acted: false }
+      }
+    }
+    const out = await stepServer.run(ctx)
+    if (!ctx.dryRun && out.result.verify === 'PASS') writePortsFile(ctx.dataDir, { otlp: ctx.otlpPort, ui: ctx.uiPort, mcp: ctx.mcpPort })
+    return out
+  },
+}
+
 const stepSelfTest: StepDef = {
   name: 'final-test',
   async run(ctx) {
@@ -1485,7 +1518,7 @@ function printDetection(ctx: Ctx): void {
 
 // stepOtel runs BEFORE hooks and skills: the telemetry verdict comes first, so a foreign setup stops the run
 // before anything else is installed (owner order 2026-10-02; the same order as autoSetup.ensureInstalled).
-const STEPS: StepDef[] = [stepEnvironment, stepData, stepSpoolMigration, stepOtel, stepHooks, stepSkill, stepOldPackage, stepServer, stepSelfTest, stepMemoryCheck]
+const STEPS: StepDef[] = [stepEnvironment, stepData, stepSpoolMigration, stepOtel, stepHooks, stepSkill, stepOldPackage, stepServerGuarded, stepSelfTest, stepMemoryCheck]
 
 /** The three steps the auto-launch path may run on their own (autoSetup.ts) — a partial repair must
  *  not start the server or run the self-test, which is what a full runSetup would do. */
