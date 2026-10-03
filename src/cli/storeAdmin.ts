@@ -16,7 +16,8 @@ import { readManifest, repairStore } from '../store/migrate'
 import { makeTsRepairStep, parkedMtimeTsMap, emptyCorrections } from '../store/tsRecovery'
 import { alstoreBin, rustUnpark } from '../rustStorePass'
 import { reviveDisabledOnDisk } from './hookHandlers'
-import { apiRequest, PROBE_TIMEOUT_MS } from './cliCore'
+import { apiRequest, isConnectFailure, PROBE_TIMEOUT_MS } from './cliCore'
+import { liveLockPid } from './portSelect'
 import { execFileSync } from 'child_process'
 
 /** Names of processes that can WRITE the store, found by snapshotting the process table.
@@ -132,8 +133,14 @@ export async function runStoreCli(argv: string[]): Promise<number> {
   // The staged rewrite swaps the store DIRECTORY. A running server holds open handles on the old
   // inode and would keep writing into the renamed backup — so the server must be down, and the
   // hook revive must be braked or the next tool call resurrects it mid-rewrite.
-  let serverUp = false
-  try { await apiRequest('GET', '/api/server-stats', undefined, PROBE_TIMEOUT_MS); serverUp = true } catch { /* down — good */ }
+  // "Server up" decides whether the store may be rewritten, so every doubt resolves to UP: a live
+  // lock owner is up outright (a slow-but-healthy own server can miss any probe deadline — judging
+  // by the probe alone read it as DOWN and the store got rewritten under it), and a probe that was
+  // ACCEPTED but timed out or got any HTTP answer is up too. Only a connection failure is down.
+  let serverUp = liveLockPid(dataDir()) !== null
+  if (!serverUp) {
+    try { await apiRequest('GET', '/api/server-stats', undefined, PROBE_TIMEOUT_MS); serverUp = true } catch (e) { serverUp = !isConnectFailure(e) }
+  }
   if (serverUp) {
     console.error('REFUSED: the server is running — it would keep writing into the swapped-out store. Run `agentlenspro server stop --stay-down` first.')
     return 1

@@ -7,7 +7,7 @@ import { spawn, execFileSync } from 'child_process'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
-import { apiRequest, dataDir, dashboardUrl, envPort, fmtGb, fmtMb, init, mcpEndpoint, sleep, CONNECT_TIMEOUT_MS, PROBE_TIMEOUT_MS } from './cliCore'
+import { apiRequest, ApiRequestError, dataDir, dashboardUrl, envPort, fmtGb, fmtMb, init, mcpEndpoint, sleep, CONNECT_TIMEOUT_MS, PROBE_TIMEOUT_MS, STATUS_TIMEOUT_MS } from './cliCore'
 import { dataDirSource, dataPath } from '../dataDir'
 import { agentlensDisabled, killSwitchPath, noRevivePath, reviveBraked, STARTED_BY_ENV } from './killSwitch'
 // resetReviveBackoff/reviveBackoffStatus (TRDD-JJLI6GEH) — a deliberate `server start`/`restart`
@@ -692,12 +692,22 @@ export async function showStatus(): Promise<void> {
     )
   }
   let s: ServerStats
-  try { s = await apiRequest('GET', '/api/server-stats', undefined, PROBE_TIMEOUT_MS) as unknown as ServerStats } catch (e) {
-    // A response (however wrong) means SOMETHING is serving the port — an older build without
-    // the stats endpoint, or a foreign process. Only a connection failure means "not running".
-    if (!String((e as Error).message).includes('unreachable')) {
+  try { s = await apiRequest('GET', '/api/server-stats', undefined, STATUS_TIMEOUT_MS) as unknown as ServerStats } catch (e) {
+    // Classified by the typed error code, never by message text (a connect TIMEOUT once slipped past a
+    // substring test and was reported as RUNNING). Three distinct facts:
+    //  - an answer that is not stats (plain Error): SOMETHING serves the port — an older build or a foreign process;
+    //  - ERESPONSETIMEOUT: something ACCEPTED the connection but did not answer — busy server or a foreign squatter;
+    //  - connect failure / connect timeout: nothing accepted the connection — falls through to "not running".
+    if (!(e instanceof ApiRequestError)) {
       const pid = await findServerPid()
       console.log(`server: RUNNING but does not serve /api/server-stats (older build?)${pid ? ` pid=${pid}` : ''} — restart it: agentlenspro server restart`)
+      return
+    }
+    if (e.code === 'ERESPONSETIMEOUT') {
+      const owner = liveLockPid(dataDir())
+      console.log(owner !== null
+        ? `server: RUNNING (pid ${owner}) — did not answer within ${Math.round(STATUS_TIMEOUT_MS / 1000)}s (busy?)`
+        : `server: a process on the UI port accepted the connection but is not answering within ${Math.round(STATUS_TIMEOUT_MS / 1000)}s — not an agentlens server for this data dir (${e.message})`)
       return
     }
     // The pidfile may still name a live process — and if it does, THAT outranks the probe timeout,

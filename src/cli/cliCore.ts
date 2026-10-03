@@ -106,14 +106,29 @@ interface JsonRpcResponse { error?: JsonRpcError; result?: unknown }
 // `serverControl.ts::showStatus` cites it when a probe times out against a server later proven alive.
 export const CONNECT_TIMEOUT_MS = Math.max(200, Number(process.env.AGENTLENS_CONNECT_TIMEOUT_MS) || 800)
 
+/** Typed failure of apiRequest, so callers classify by `code` instead of substring-matching text
+ *  (the substring match is what once reported a connect TIMEOUT — nothing answering — as RUNNING).
+ *  ECONNFAIL = connect refused/failed, ECONNTIMEOUT = connect deadline expired: both mean nothing
+ *  accepted the connection. ERESPONSETIMEOUT = something accepted it but never answered. An HTTP
+ *  error status or an unparsable body stays a plain Error (something DID answer). */
+export type ApiErrorCode = 'ECONNFAIL' | 'ECONNTIMEOUT' | 'ERESPONSETIMEOUT'
+export class ApiRequestError extends Error {
+  constructor(message: string, readonly code: ApiErrorCode) { super(message) }
+}
+/** True when nothing accepted the connection (the only evidence that a server is NOT running). */
+export function isConnectFailure(e: unknown): boolean {
+  return e instanceof ApiRequestError && (e.code === 'ECONNFAIL' || e.code === 'ECONNTIMEOUT')
+}
+
 /** Arm a connect deadline on an in-flight request. Cleared the moment the socket connects or the
  *  response starts; on expiry the request is destroyed with a precise reason, so the caller gets a
  *  fail-fast error instead of a process that looks wedged. Returns the clear function. */
 function armConnectDeadline(req: http.ClientRequest, endpoint: string): () => void {
   const timer = setTimeout(() => {
-    req.destroy(new Error(
+    req.destroy(new ApiRequestError(
       `no connection to ${endpoint} within ${CONNECT_TIMEOUT_MS}ms — the address is not answering ` +
-      '(a DROP, not a refusal); raise AGENTLENS_CONNECT_TIMEOUT_MS if this endpoint is simply slow to accept'
+      '(a DROP, not a refusal); raise AGENTLENS_CONNECT_TIMEOUT_MS if this endpoint is simply slow to accept',
+      'ECONNTIMEOUT',
     ))
   }, CONNECT_TIMEOUT_MS)
   timer.unref?.()
@@ -250,6 +265,9 @@ export const API_TIMEOUT_MS = Math.max(200, Number(process.env.AGENTLENS_API_TIM
 /** Short deadline for liveness/identity probes (findServerPid, status, port guard): a healthy server answers in ms. */
 export const PROBE_TIMEOUT_MS = 3_000
 
+/** Deadline for the interactive `server status` probe: a busy-but-healthy server may need longer than the guard's identity probe. */
+export const STATUS_TIMEOUT_MS = 10_000
+
 /** Plain HTTP JSON helper for the server's /api/* routes (REST on the UI port, not JSON-RPC). */
 export function apiRequest(method: string, apiPath: string, payload?: unknown, timeoutMs: number = API_TIMEOUT_MS): Promise<Record<string, unknown>> {
   const u = new URL(apiPath, uiBaseUrl())
@@ -273,17 +291,21 @@ export function apiRequest(method: string, apiPath: string, payload?: unknown, t
     })
     // Same unbounded-connect exposure as rpc() above — same bound, for the same reason.
     armConnectDeadline(req, uiBaseUrl())
-    const owner = liveLockPid(dataDir())
     const deadline = setTimeout(() => {
-      req.destroy(new Error(
+      // Resolved HERE, not per request: it reads a file, and only a timed-out request needs the pid.
+      const owner = liveLockPid(dataDir())
+      req.destroy(new ApiRequestError(
         `server did not answer within ${Math.round(timeoutMs / 1000)}s on port ${u.port}${owner ? ` (pid ${owner})` : ''} — ` +
-        'not an agentlens server / not answering (the port is held by a process that accepts connections but does not speak HTTP)'
+        'not an agentlens server / not answering (the port is held by a process that accepts connections but does not speak HTTP)',
+        'ERESPONSETIMEOUT',
       ))
     }, timeoutMs)
     deadline.unref?.()
     // 'close' fires after every outcome (end, error, destroy), so the timer can never outlive the request.
     req.on('close', () => clearTimeout(deadline))
-    req.on('error', e => reject(new Error(e.message.startsWith('server did not answer') || e.message.startsWith('no connection') ? e.message : `server unreachable at ${uiBaseUrl()}: ${e.message}`)))
+    // WHY typed: classification by message text once let the connect-timeout text bypass the
+    // 'unreachable' wrapper and read as "something serves the port" (status said RUNNING for a dead address).
+    req.on('error', e => reject(e instanceof ApiRequestError ? e : new ApiRequestError(`server unreachable at ${uiBaseUrl()}: ${e.message}`, 'ECONNFAIL')))
     if (body) req.write(body)
     req.end()
   })
