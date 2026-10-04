@@ -1,10 +1,10 @@
 ---
 trdd-id: LHCHVK9Z
 title: Ingest architecture - spool to typed native DuckDB with versioned per-topic producer schemas
-column: human_review
+column: todo
 status: tasked
 created: 2026-10-04T03:36:28+0200
-updated: 2026-10-04T16:37:02+0200
+updated: 2026-10-05T01:29:30+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: feature
@@ -298,6 +298,7 @@ Backfill tool: scripts_dev/digest-backfill/backfill.py (gitignored), proven on o
 - 2026-10-04T03:58:15+0200 — column → design by main-agent@agentlenspro. design recorded; owner items open (wrong-typed policy, NOT NULL); child slice card carries the implementation
 - 2026-10-04T06:32:53+0200 — column → dev by main-agent@agentlenspro. owner ordered the build, D-H/D-I
 - 2026-10-04T08:11:58+0200 — column → human_review by main-agent@agentlenspro. built and checked against real data; wiring needs the owner's go-ahead
+- 2026-10-05T01:29:30+0200 — column → todo by main-agent@agentlenspro. review in the owner's stead 2026-10-05: three confirmed unfixed defects in the tap rejection path (d8de334d); not dev, because nobody is working on it
 
 ## Review findings 2026-10-04
 
@@ -313,3 +314,9 @@ Backfill tool: scripts_dev/digest-backfill/backfill.py (gitignored), proven on o
 - CORRECTION: "several MiB" for the size-cap overshoot is taken from a code comment about hook payloads, not measured. The test names t2, t11 and t23 come from the earlier review and were not confirmed against the test file.
 - NOTE: `body()` (API request and response spools) never calls `invalid_fields`, so those spools are outside the rejection check altogether.
 - SCOPE: "Not fixed" in the bullets above is the agent's record of the state of the code, not an owner decision to leave it. No card exists yet for fixing the three confirmed defects.
+
+## Review 2026-10-05 (in the owner's stead)
+
+- Verdict: returned to todo. This verdict rests on the reading of spool_tap.rs recorded in the section "Review findings 2026-10-04", not on a fresh review: three defects were confirmed there and are unfixed (rejected lines share the writer queue with valid lines; rejectedByTopic has two key shapes; the rejected-file cap is checked before the write only).
+- Owed before this card can be accepted: fix or explicitly accept each of the three defects with a test; re-run the tap rejection tests serially at low load and show by a mutation that the rejection test fails on its assertion when invalid_fields is disabled.
+- Unchanged and still the owner's: switching the ingest path on, packaging aldigest and alspool into the npm tarball, the backfill against the real data directory (section "Owner decisions pending").
