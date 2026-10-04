@@ -17,10 +17,15 @@
 //! counted, and logged at most once a minute per spool. This is the ONE place an error is not
 //! propagated, because during the transition the existing stores remain the system of record and the
 //! digest copy must never be able to take capture down. For the same reason every hook, status-line
-//! and OTLP write runs on the blocking pool, outside the global state lock its caller holds (see
-//! `off_request_path`): a spool file lock held by another process stalls only that write. The price
-//! is that a write queued but not yet started at shutdown is lost from the spool, not from the
-//! existing stores.
+//! and OTLP write is queued (never blocking its caller, which may hold the global state lock) to ONE
+//! writer thread owned by the tap (see `enqueue`): lines reach the files in arrival order, a spool
+//! file lock held by another process stalls only that thread, and a full queue drops (and counts) the
+//! batch instead of piling up. At graceful shutdown the queue is closed and drained (bounded wait)
+//! before the final seal (if it cannot finish within 5 s the seal is skipped); only such a batch is
+//! lost from the spool, never from the existing stores. The queue is bounded by count and by bytes; a
+//! refused batch is counted (`droppedQueueFull`), and a dead writer shows as `writerDead`.
+//! `ts_ns` of a spool line is stamped by the writer when the line is written (agentlens-spool), so
+//! under a backlog it lags the moment of receipt by the queue delay; this is deliberate, not changed.
 //!
 //! SCHEDULE. `seal_and_collect` runs every `interval` (chores.rs): it seals every spool, then runs
 //! `aldigest collect` as a CHILD process (one collect can reach ~730 MiB RSS; alcore is capped at
@@ -32,6 +37,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc::{channel, sync_channel, Receiver, RecvTimeoutError, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
@@ -68,6 +75,26 @@ const COLLECT_TIMEOUT: Duration = Duration::from_secs(600);
 const COLLECT_MAX_FILES: u64 = 10;
 const COLLECT_MAX_RUNS: u32 = 20;
 const REGISTER_TIMEOUT: Duration = Duration::from_secs(120);
+const VIEWS_TIMEOUT: Duration = Duration::from_secs(120);
+const LEDGER_TIMEOUT: Duration = Duration::from_secs(120);
+/// Writer queue capacity in batches (one hook / status line / OTLP group each).
+const QUEUE_CAPACITY: usize = 4096;
+/// The writer queue also holds at most this many payload bytes: a count bound alone would let 4096
+/// slots of 1 MiB OTLP batches pile up 4 GiB behind a stalled spool lock. A single batch larger than
+/// the bound is still accepted when nothing is queued. Test knob: `ALCORE_INGEST_QUEUE_MAX_BYTES`.
+const QUEUE_MAX_BYTES: usize = 64 << 20;
+const QUEUE_MAX_BYTES_ENV: &str = "ALCORE_INGEST_QUEUE_MAX_BYTES";
+/// How long graceful shutdown waits for the writer thread to drain the queue.
+const WRITER_JOIN_TIMEOUT: Duration = Duration::from_secs(5);
+/// Retention of loaded spool files in `done/<spool>/`. OFF unless the owner opts in by setting this
+/// environment variable (a positive number of seconds; anything else is ignored with one warning):
+/// an automatic delete is not ours to enable. The owner's design proposal suggests 600 s (done/
+/// files kept 600 seconds, failed/ files NEVER deleted automatically): the rows are committed in
+/// events.duckdb together with the ledger row before a file reaches done/, so the file is only a
+/// copy, and the disk budget measured about 0.25 GB/day of spool for the default sources. When on, a
+/// file is deleted only if the ledger (`_ingest.files`, status complete) names it and its
+/// `completed_at` is at least that old; the file mtime is never consulted.
+const DONE_RETENTION_ENV: &str = "ALCORE_INGEST_DONE_RETENTION_SECS";
 /// One `append_many` call carries at most this many payload bytes (one lock hold, one bounded
 /// batch): a ready file is therefore never larger than the 4 MiB seal threshold plus this plus a line.
 const BATCH_MAX_BYTES: usize = 1 << 20;
@@ -111,7 +138,24 @@ struct Stats {
     last_error_logged: HashMap<String, Instant>,
     bodies_skipped: u64,
     last_collect: Option<Value>,
+    /// Outcome of the last `aldigest views` attempt; the views are rebuilt until one succeeds.
+    views: Option<Value>,
+    views_ok: bool,
+    done_deleted: u64,
+    done_deleted_bytes: u64,
+    done_delete_errors: u64,
+    dropped_queue_full: u64,
+    dropped_after_shutdown: u64,
+    /// Batches refused because the writer thread is gone (it panicked); `writer_dead` is the state.
+    dropped_writer_dead: u64,
+    writer_dead: bool,
+    /// The last views / ledger-query failure text logged, so an unchanged failure is not logged every tick.
+    views_logged: Option<String>,
+    ledger_logged: Option<String>,
 }
+
+/// One writer-queue entry: a spool name and the lines to append to it, in order.
+type Batch = (String, Vec<Vec<u8>>);
 
 pub struct SpoolTap {
     ingest_dir: PathBuf,
@@ -121,6 +165,15 @@ pub struct SpoolTap {
     interval: Duration,
     /// Enabled sources (see ALL_SOURCES); a source not in the list is never written.
     sources: Vec<String>,
+    /// `Some` only when `ALCORE_INGEST_DONE_RETENTION_SECS` opted in (see DONE_RETENTION_ENV).
+    done_retention: Option<Duration>,
+    /// Producer end of the writer queue; `None` before start finishes and after shutdown closed it.
+    tx: Mutex<Option<SyncSender<Batch>>>,
+    /// Signalled (or disconnected) when the writer thread exits; shutdown waits on it with a timeout.
+    writer_done: Mutex<Option<Receiver<()>>>,
+    /// Payload bytes queued or being written; bounded by `queue_max_bytes`.
+    queued_bytes: AtomicUsize,
+    queue_max_bytes: usize,
     /// Spool names of the CURRENT (highest) version of every topic.
     spools: HashSet<String>,
     /// "source/topic" -> spool, current version only.
@@ -208,7 +261,32 @@ pub fn start(manifest: &Path, aldigest_bin: &Path, interval_secs: u64, sources: 
     // writer only creates it at the first seal, so the start-up collect would otherwise fail.
     let ready = ingest_dir.join("ready");
     std::fs::create_dir_all(&ready).map_err(|e| format!("{}: {e}", ready.display()))?;
+    let done_retention = match std::env::var(DONE_RETENTION_ENV) {
+        Ok(v) => match v.trim().parse::<u64>() {
+            Ok(n) if n > 0 => Some(Duration::from_secs(n)),
+            _ => {
+                eprintln!("{} alcore: spool tap: {DONE_RETENTION_ENV}={v:?} is not a positive integer — ignored, done/ files are kept", log_ts());
+                None
+            }
+        },
+        Err(_) => None,
+    };
+    let queue_max_bytes = match std::env::var(QUEUE_MAX_BYTES_ENV) {
+        Ok(v) => match v.trim().parse::<usize>() {
+            Ok(n) if n > 0 => n,
+            _ => {
+                eprintln!("{} alcore: spool tap: {QUEUE_MAX_BYTES_ENV}={v:?} is not a positive integer — ignored, using {QUEUE_MAX_BYTES}", log_ts());
+                QUEUE_MAX_BYTES
+            }
+        },
+        Err(_) => QUEUE_MAX_BYTES,
+    };
     let tap = SpoolTap {
+        done_retention,
+        tx: Mutex::new(None),
+        writer_done: Mutex::new(None),
+        queued_bytes: AtomicUsize::new(0),
+        queue_max_bytes,
         db: ingest_dir.join("events.duckdb"),
         ingest_dir,
         manifest: manifest.to_path_buf(),
@@ -220,7 +298,22 @@ pub fn start(manifest: &Path, aldigest_bin: &Path, interval_secs: u64, sources: 
         stats: Mutex::new(Stats::default()),
     };
     match tap.register() {
-        Ok(()) => Ok(Start::Tap(Arc::new(tap))),
+        Ok(()) => {
+            let tap = Arc::new(tap);
+            let (tx, rx) = sync_channel::<Batch>(QUEUE_CAPACITY);
+            let writer = Arc::clone(&tap);
+            let (done_tx, done_rx) = channel::<()>();
+            std::thread::Builder::new()
+                .name("spool-tap-writer".into())
+                .spawn(move || {
+                    writer.write_loop(rx);
+                    let _ = done_tx.send(());
+                })
+                .map_err(|e| format!("cannot start the spool tap writer thread: {e}"))?;
+            *tap.tx.lock().unwrap_or_else(|e| e.into_inner()) = Some(tx);
+            *tap.writer_done.lock().unwrap_or_else(|e| e.into_inner()) = Some(done_rx);
+            Ok(Start::Tap(tap))
+        }
         Err(e) => {
             let reason = format!("aldigest register failed: {e}");
             eprintln!("{} alcore: SPOOL TAP DISABLED for this process — {reason}. The existing stores are unaffected.", log_ts());
@@ -301,10 +394,10 @@ impl SpoolTap {
     }
 
     /// `lines` in batches of at most BATCH_MAX_BYTES, each one lock hold.
-    fn write_lines(&self, spool: &str, lines: &[String]) {
+    fn write_lines(&self, spool: &str, lines: &[Vec<u8>]) {
         let (mut start, mut bytes) = (0, 0);
         let flush = |range: std::ops::Range<usize>| {
-            let refs: Vec<&[u8]> = lines[range].iter().map(|l| l.as_bytes()).collect();
+            let refs: Vec<&[u8]> = lines[range].iter().map(Vec::as_slice).collect();
             self.write(spool, &refs);
         };
         for (i, l) in lines.iter().enumerate() {
@@ -322,20 +415,42 @@ impl SpoolTap {
         self.sources.iter().any(|s| s == source)
     }
 
-    /// Runs `work` on the blocking pool so the caller (which holds the global state lock) never waits
-    /// on a spool file lock; outside a tokio runtime (a unit test) it runs inline.
-    /// Every tap write (hook, status line, OTLP) runs on the blocking pool, off the request path and
-    /// outside the global state lock the callers hold: a spool file lock held by another process
-    /// stalls only that write, never a POST or a chore (ERROR POLICY: the tap must not delay capture).
-    /// At shutdown a write queued but not yet started on the pool can be lost from the spool (the
-    /// existing stores still have the item). Outside a tokio runtime (a unit test) it runs inline.
-    fn off_request_path(self: &Arc<Self>, work: impl FnOnce(&SpoolTap) + Send + 'static) {
-        if tokio::runtime::Handle::try_current().is_ok() {
-            let tap = Arc::clone(self);
-            // ponytail: unbounded queue of detached writers; see otlp.
-            tokio::task::spawn_blocking(move || work(&tap));
+    /// Hands one batch of lines of ONE spool to the writer thread; never blocks the caller (a hook,
+    /// status-line or OTLP POST that may hold the global state lock). One thread and one FIFO channel
+    /// keep the lines in arrival order and bound the memory a stalled spool lock can pile up: a full
+    /// queue drops the batch and counts it in `droppedQueueFull` (the existing stores still have the
+    /// item), logged at most once a minute. After shutdown closed the channel a batch is dropped the
+    /// same way. Why not `spawn_blocking` per write: tasks of one session could reach the file out of
+    /// order, and a stalled lock parked an unbounded number of them on tokio's shared blocking pool.
+    fn enqueue(&self, spool: String, lines: Vec<Vec<u8>>) {
+        let n: usize = lines.iter().map(Vec::len).sum();
+        let prev = self.queued_bytes.fetch_add(n, Ordering::SeqCst);
+        let refused = if prev != 0 && prev + n > self.queue_max_bytes {
+            Some(("full", "the writer queue is over its byte bound"))
         } else {
-            work(self);
+            match self.tx.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+                Some(tx) => match tx.try_send((spool, lines)) {
+                    Ok(()) => None,
+                    Err(TrySendError::Full(_)) => Some(("full", "the writer queue is full")),
+                    Err(TrySendError::Disconnected(_)) => Some(("dead", "the writer thread is dead")),
+                },
+                None => Some(("shutdown", "the tap is shut down")),
+            }
+        };
+        let Some((kind, why)) = refused else { return };
+        self.queued_bytes.fetch_sub(n, Ordering::SeqCst);
+        let mut s = self.stats();
+        match kind {
+            "full" => s.dropped_queue_full += 1,
+            "dead" => {
+                s.dropped_writer_dead += 1;
+                s.writer_dead = true;
+            }
+            _ => s.dropped_after_shutdown += 1,
+        }
+        // Once per process and kind: a stalled or dead writer would otherwise log per item.
+        if s.last_error_logged.insert(format!("<queue:{kind}>"), Instant::now()).is_none() {
+            eprintln!("{} alcore: spool tap: batch dropped, {why} (capture unaffected; counted in /api/ingest-status; logged once)", log_ts());
         }
     }
 
@@ -345,10 +460,7 @@ impl SpoolTap {
         }
         let topic = snake_case(event);
         match self.spool_of("hook", &topic) {
-            Some(spool) => {
-                let (spool, raw) = (spool.to_owned(), raw.to_vec());
-                self.off_request_path(move |tap| tap.write(&spool, &[&raw]));
-            }
+            Some(spool) => self.enqueue(spool.to_owned(), vec![raw.to_vec()]),
             None => self.note_unknown([(format!("hook/{topic}"), 1)]),
         }
     }
@@ -374,12 +486,12 @@ impl SpoolTap {
             line.push_str(&v.to_string());
         }
         line.push('}');
-        self.off_request_path(move |tap| tap.write(spool, &[line.as_bytes()]));
+        self.enqueue(spool.to_owned(), vec![line.into_bytes()]);
     }
 
     /// One line per log record / span of a parsed OTLP POST. Called by the OTLP handler BEFORE
     /// `ingest_parsed` and outside the state lock: the request pays only for building the line
-    /// strings; the file writes run on the blocking pool, not awaited by the request.
+    /// strings; the file writes happen on the tap's writer thread (see `enqueue`).
     pub fn otlp(self: &Arc<Self>, kind: &str, payload: &Value) {
         let (source, items) = match kind {
             "logs" if !self.wants("events") => return,
@@ -403,14 +515,9 @@ impl SpoolTap {
         if groups.is_empty() {
             return;
         }
-        let tap = Arc::clone(self);
-        // ponytail: unbounded queue of detached writers; a stalled disk lets them pile up. Bound it
-        // with a semaphore if that is ever observed.
-        tokio::task::spawn_blocking(move || {
-            for (spool, lines) in &groups {
-                tap.write_lines(spool, lines);
-            }
-        });
+        for (spool, lines) in groups {
+            self.enqueue(spool, lines.into_iter().map(String::into_bytes).collect());
+        }
     }
 
     /// An API body file the bodies pass just ingested: the line is built by concatenation around the
@@ -454,8 +561,29 @@ impl SpoolTap {
         }
     }
 
-    /// Graceful shutdown: seal only; the next start collects.
+    /// The writer thread: appends batches in arrival order until every sender is gone and the queue
+    /// is drained.
+    fn write_loop(&self, rx: Receiver<Batch>) {
+        while let Ok((spool, lines)) = rx.recv() {
+            self.write_lines(&spool, &lines);
+            self.queued_bytes.fetch_sub(lines.iter().map(Vec::len).sum(), Ordering::SeqCst);
+        }
+    }
+
+    /// Graceful shutdown: close the queue and wait up to WRITER_JOIN_TIMEOUT for the writer to drain
+    /// it, then seal; the next start collects. Queued writes are flushed, not lost. If the writer does
+    /// not finish in time (it may be blocked on a spool lock) the seal is skipped, since sealing would
+    /// block on the same lock: no path may hang shutdown.
     pub fn seal_for_shutdown(&self) {
+        drop(self.tx.lock().unwrap_or_else(|e| e.into_inner()).take());
+        let done = self.writer_done.lock().unwrap_or_else(|e| e.into_inner()).take();
+        if let Some(done) = done {
+            // Ok (signalled) and Disconnected (the writer exited or panicked) both mean it is gone.
+            if let Err(RecvTimeoutError::Timeout) = done.recv_timeout(WRITER_JOIN_TIMEOUT) {
+                eprintln!("{} alcore: spool tap: the writer did not drain within {} s at shutdown — seal skipped, queued lines are lost from the spool (the existing stores have them)", log_ts(), WRITER_JOIN_TIMEOUT.as_secs());
+                return;
+            }
+        }
         self.seal_logged();
     }
 
@@ -519,7 +647,144 @@ impl SpoolTap {
             }
         }
         self.stats().last_collect = Some(record);
+        // Both still under `.collect.lock`: `aldigest views` writes the database, so it must never
+        // overlap a collect child.
+        self.rebuild_views_once();
+        self.purge_done();
         drop(lock);
+    }
+
+    /// `aldigest views` once per process (the catalog only changes at `register`, which ran at
+    /// start); a failure is reported in the status, logged once per distinct message, and retried on
+    /// the next tick; it never blocks the collect before it or the retention after it.
+    fn rebuild_views_once(&self) {
+        if self.stats().views_ok {
+            return;
+        }
+        let mut cmd = Command::new(&self.aldigest_bin);
+        cmd.arg("views").arg("--db").arg(&self.db);
+        let at_ms = crate::now_ms();
+        let (ok, msg, record) = match run_child(cmd, VIEWS_TIMEOUT) {
+            Ok(o) => {
+                let ok = o.code == Some(0) && !o.timed_out;
+                let msg = format!("exit={:?}{}: {}{}", o.code, if o.timed_out { " (TIMED OUT, killed)" } else { "" }, o.stdout.trim(), if o.stderr.trim().is_empty() { String::new() } else { format!(" | stderr: {}", o.stderr.trim()) });
+                (ok, msg, json!({ "atMs": at_ms, "exit": o.code, "timedOut": o.timed_out, "summary": o.stdout.trim(), "stderr": o.stderr.trim() }))
+            }
+            Err(e) => (false, e.clone(), json!({ "atMs": at_ms, "error": e })),
+        };
+        let mut s = self.stats();
+        if ok {
+            println!("{} alcore: ingest views: {msg}", log_ts());
+        } else if s.views_logged.as_ref() != Some(&msg) {
+            eprintln!("{} alcore: ingest views failed (retried every tick, logged once per distinct message): {msg}", log_ts());
+            s.views_logged = Some(msg);
+        }
+        s.views = Some(record);
+        s.views_ok = ok;
+    }
+
+    /// The ledger's complete files: (spool, file name) -> `completed_at` in epoch seconds.
+    fn complete_ledger(&self) -> Result<HashMap<(String, String), i64>, String> {
+        let mut cmd = Command::new(&self.aldigest_bin);
+        cmd.arg("query").arg("--db").arg(&self.db).arg("--sql").arg("SELECT spool, source_name, CAST(epoch(completed_at) AS BIGINT) AS done_s FROM _ingest.files WHERE status = 'complete'");
+        let out = run_child(cmd, LEDGER_TIMEOUT)?;
+        if out.timed_out || out.code != Some(0) {
+            return Err(format!("exit {:?}{}: {}", out.code, if out.timed_out { " (TIMED OUT)" } else { "" }, out.stderr.trim()));
+        }
+        let mut ledger = HashMap::new();
+        for line in out.stdout.lines().filter(|l| !l.trim().is_empty()) {
+            let row: Value = serde_json::from_str(line).map_err(|e| format!("unreadable ledger row {line:?}: {e}"))?;
+            let (Some(spool), Some(name), Some(done_s)) = (row["spool"].as_str(), row["source_name"].as_str(), row["done_s"].as_i64()) else {
+                return Err(format!("unexpected ledger row {line:?}"));
+            };
+            ledger.insert((spool.to_owned(), name.to_owned()), done_s);
+        }
+        Ok(ledger)
+    }
+
+    /// Only when the owner opted in (`done_retention`): delete a regular file directly inside
+    /// `done/<spool>/` (registered spools only) when the database ledger lists it as complete AND its
+    /// `completed_at` is at least the retention old. A file with no complete ledger row is never
+    /// deleted, and the file mtime is never consulted (a backfilled file has an old mtime; a clock jump
+    /// must not delete everything). If the ledger cannot be read nothing is deleted this tick.
+    /// `failed/`, `ready/` and `inbox/` are never touched; symlinks are never followed (a `done/<spool>`
+    /// that is a symlink is skipped, and so is any entry that is not a regular file). An error is
+    /// logged and counted.
+    fn purge_done(&self) {
+        let Some(retention) = self.done_retention else { return };
+        let ledger = match self.complete_ledger() {
+            Ok(l) => l,
+            Err(e) => {
+                let mut s = self.stats();
+                s.done_delete_errors += 1;
+                if s.ledger_logged.as_ref() != Some(&e) {
+                    eprintln!("{} alcore: ingest done retention: cannot read the ledger, deleting nothing this tick (logged once per distinct message): {e}", log_ts());
+                    s.ledger_logged = Some(e);
+                }
+                return;
+            }
+        };
+        self.stats().ledger_logged = None;
+        let (mut deleted, mut bytes, mut errors) = (0u64, 0u64, 0u64);
+        let now_s = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64);
+        let mut fail = |what: &str, e: &dyn std::fmt::Display| {
+            errors += 1;
+            eprintln!("{} alcore: ingest done retention: {what}: {e}", log_ts());
+        };
+        for spool in &self.spools {
+            let dir = self.ingest_dir.join("done").join(spool);
+            match std::fs::symlink_metadata(&dir) {
+                Ok(m) if m.file_type().is_dir() => {}
+                Ok(_) => continue,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(e) => {
+                    fail(&dir.display().to_string(), &e);
+                    continue;
+                }
+            }
+            let rd = match std::fs::read_dir(&dir) {
+                Ok(rd) => rd,
+                Err(e) => {
+                    fail(&dir.display().to_string(), &e);
+                    continue;
+                }
+            };
+            for ent in rd {
+                let ent = match ent {
+                    Ok(ent) => ent,
+                    Err(e) => {
+                        fail(&dir.display().to_string(), &e);
+                        continue;
+                    }
+                };
+                let path = ent.path();
+                let Some(done_s) = ent.file_name().to_str().and_then(|n| ledger.get(&(spool.clone(), n.to_owned()))) else { continue };
+                if now_s.saturating_sub(*done_s) < retention.as_secs() as i64 {
+                    continue;
+                }
+                let meta = match std::fs::symlink_metadata(&path) {
+                    Ok(m) => m,
+                    Err(e) => {
+                        fail(&path.display().to_string(), &e);
+                        continue;
+                    }
+                };
+                if !meta.file_type().is_file() {
+                    continue;
+                }
+                match std::fs::remove_file(&path) {
+                    Ok(()) => {
+                        deleted += 1;
+                        bytes += meta.len();
+                    }
+                    Err(e) => fail(&path.display().to_string(), &e),
+                }
+            }
+        }
+        let mut s = self.stats();
+        s.done_deleted += deleted;
+        s.done_deleted_bytes += bytes;
+        s.done_delete_errors += errors;
     }
 
     pub fn status_json(&self) -> Value {
@@ -536,6 +801,15 @@ impl SpoolTap {
             "writeErrorsBySpool": s.write_errors_by_spool,
             "bodiesSkipped": s.bodies_skipped,
             "lastCollect": s.last_collect,
+            "views": s.views,
+            "doneDeleted": s.done_deleted,
+            "doneDeletedBytes": s.done_deleted_bytes,
+            "doneDeleteErrors": s.done_delete_errors,
+            "doneRetentionSecs": self.done_retention.map(|d| d.as_secs()),
+            "droppedQueueFull": s.dropped_queue_full,
+            "droppedAfterShutdown": s.dropped_after_shutdown,
+            "droppedWriterDead": s.dropped_writer_dead,
+            "writerDead": s.writer_dead,
         })
     }
 }

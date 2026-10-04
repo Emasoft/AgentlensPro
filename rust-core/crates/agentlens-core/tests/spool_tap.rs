@@ -89,10 +89,15 @@ fn media_dir(tag: &str) -> PathBuf {
 
 /// Start alcore on `data` with `extra` arguments and wait until both HTTP listeners accept.
 fn launch(tag: &str, data: &Path, extra: &[String]) -> Server {
+    launch_env(tag, data, extra, &[])
+}
+
+/// `launch` with extra environment variables for the alcore process.
+fn launch_env(tag: &str, data: &Path, extra: &[String], env: &[(&str, &str)]) -> Server {
     // free_port() cannot reserve a port: another test of this binary may take it first, so a boot
     // that died on "already in use" is retried with fresh ports (any other death is a real failure).
     for _ in 0..4 {
-        match try_launch(tag, data, extra) {
+        match try_launch(tag, data, extra, env) {
             Ok(s) => return s,
             Err(log) if log.contains("already in use") => {}
             Err(log) => panic!("alcore did not come up: {log}"),
@@ -101,7 +106,7 @@ fn launch(tag: &str, data: &Path, extra: &[String]) -> Server {
     panic!("alcore could not get free ports in 4 attempts");
 }
 
-fn try_launch(tag: &str, data: &Path, extra: &[String]) -> Result<Server, String> {
+fn try_launch(tag: &str, data: &Path, extra: &[String], env: &[(&str, &str)]) -> Result<Server, String> {
     let log = data.parent().unwrap().join(format!("{tag}-alcore.log"));
     let logf = std::fs::File::create(&log).unwrap();
     let (otlp, ui) = (free_port(), free_port());
@@ -112,6 +117,7 @@ fn try_launch(tag: &str, data: &Path, extra: &[String]) -> Result<Server, String
         .arg(media_dir(tag))
         .args(["--otlp-port", &otlp.to_string(), "--ui-port", &ui.to_string(), "--mcp-port", &free_port().to_string(), "--no-log-scan"])
         .args(extra)
+        .envs(env.iter().copied())
         .stdout(logf.try_clone().unwrap())
         .stderr(logf)
         .spawn()
@@ -604,7 +610,8 @@ fn t11_shutdown_seals_and_hook_bytes_are_verbatim() {
     assert_eq!(s.post_ui("/api/statusline-samples", &statusline_main(1)), 200);
     s.post_otlp("/v1/logs", &logs_body());
     s.post_otlp("/v1/traces", &traces_body());
-    wait_for("the OTLP writes", 30, || s.status()["linesWritten"] == 7);
+    // No wait for the writes: the events were posted immediately before the stop signal, and the
+    // graceful stop must drain the writer queue before it seals.
     let data = s.stop();
     let inbox = data.join("ingest/inbox");
     for e in std::fs::read_dir(&inbox).unwrap() {
@@ -683,4 +690,100 @@ fn t14_a_blocked_spool_lock_never_stalls_the_capture_path() {
     wait_collected(&s, first["atMs"].as_u64().unwrap());
     let _lock = hold_collect_lock(&data);
     assert_eq!(rows(&data.join("ingest/events.duckdb"), "hook_session_end_v1").len(), 3);
+}
+
+/// The files directly inside `done/<spool>/`.
+fn done_files(data: &Path, spool: &str) -> Vec<PathBuf> {
+    match std::fs::read_dir(data.join("ingest/done").join(spool)) {
+        Ok(rd) => rd.map(|e| e.unwrap().path()).collect(),
+        Err(_) => Vec::new(),
+    }
+}
+
+/// 15. After start and one tick the unified views exist in schema `u` (queryable) and the status reports `aldigest views` exit 0.
+#[test]
+fn t15_the_unified_views_are_built_once_after_start() {
+    let data = scratch("t15-data");
+    let s = launch("t15", &data, &tap_args(Some(1)));
+    wait_for("the views", 90, || s.status()["views"]["exit"] == 0);
+    let _lock = hold_collect_lock(&data);
+    let r = query(&data.join("ingest/events.duckdb"), "SELECT count(*) AS n FROM u.\"hook__session_end\"");
+    assert_eq!(r[0]["n"], 0);
+}
+
+/// 16. With the retention switched on, a loaded file the ledger lists as complete leaves done/ on a later tick while its row stays in the table and the counters rise; a done/ file with no ledger row and a failed/ file survive.
+#[test]
+fn t16_ledger_confirmed_done_files_are_deleted_nothing_else() {
+    let data = scratch("t16-data");
+    let s = launch_env("t16", &data, &tap_args(Some(2)), &[("ALCORE_INGEST_DONE_RETENTION_SECS", "1")]);
+    assert_eq!(s.status()["doneRetentionSecs"], 1);
+    wait_for("the start-up collect", 90, || s.status()["lastCollect"]["exit"] == 0);
+    let old = std::time::UNIX_EPOCH + Duration::from_secs(86400);
+    let plant = |stage: &str| {
+        let dir = data.join("ingest").join(stage).join("hook_session_end_v1");
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("planted.ndjson");
+        std::fs::write(&f, "{}\n").unwrap();
+        std::fs::File::options().write(true).open(&f).unwrap().set_modified(old).unwrap();
+        f
+    };
+    let (planted_failed, planted_done) = (plant("failed"), plant("done"));
+    assert_eq!(s.post_ui("/api/hook-events", &session_end(1)), 200);
+    wait_for("the loaded file in done/", 90, || done_files(&data, "hook_session_end_v1").len() == 2);
+    wait_for("the loaded file gone from done/", 90, || done_files(&data, "hook_session_end_v1").len() == 1 && s.status()["doneDeleted"].as_u64().unwrap() >= 1);
+    let st = s.status();
+    assert!(st["doneDeletedBytes"].as_u64().unwrap() > 0 && st["doneDeleteErrors"] == 0, "{st}");
+    assert!(planted_failed.exists(), "a failed/ file was deleted");
+    assert!(planted_done.exists(), "a done/ file with no ledger row was deleted");
+    let _lock = hold_collect_lock(&data);
+    assert_eq!(rows(&data.join("ingest/events.duckdb"), "hook_session_end_v1").len(), 1);
+}
+
+/// 17. With the retention variable unset a loaded file is still in done/ after two more ticks and the status says no retention.
+#[test]
+fn t17_done_files_are_kept_by_default() {
+    let data = scratch("t17-data");
+    let s = launch("t17", &data, &tap_args(Some(1)));
+    wait_for("the start-up collect", 90, || s.status()["lastCollect"]["exit"] == 0);
+    assert_eq!(s.post_ui("/api/hook-events", &session_end(1)), 200);
+    wait_for("the file in done/", 90, || !done_files(&data, "hook_session_end_v1").is_empty());
+    let first = wait_collected(&s, now_ms());
+    wait_collected(&s, first["atMs"].as_u64().unwrap());
+    assert_eq!(done_files(&data, "hook_session_end_v1").len(), 1);
+    let st = s.status();
+    assert_eq!((&st["doneDeleted"], &st["doneRetentionSecs"]), (&json!(0), &Value::Null));
+}
+
+/// 18. 200 hook events posted one after the other land in the spool file in posting order.
+#[test]
+fn t18_hook_events_reach_the_file_in_posting_order() {
+    let data = scratch("t18-data");
+    let s = launch("t18", &data, &tap_args(None));
+    wait_for("the start-up collect", 90, || s.status()["lastCollect"]["exit"] == 0);
+    for n in 1..=200 {
+        assert_eq!(s.post_ui("/api/hook-events", &session_end(n)), 200);
+    }
+    wait_for("200 lines written", 60, || s.status()["linesWritten"] == 200);
+    let ids: Vec<u32> = spool_lines(&data, "hook_session_end_v1").iter().map(|l| serde_json::from_str::<Value>(payload_text(l)).unwrap()["session_id"].as_str().unwrap().rsplit('-').next().unwrap().parse().unwrap()).collect();
+    assert_eq!(ids, (1..=200).collect::<Vec<u32>>());
+}
+
+/// 19. With a 1-byte queue bound and the spool lock held, the first batch is accepted, the rest are dropped and counted, every POST still answers 200, and the accepted line lands once the lock is released.
+#[test]
+fn t19_a_full_queue_drops_and_counts_without_failing_the_request() {
+    let data = scratch("t19-data");
+    let s = launch_env("t19", &data, &tap_args(None), &[("ALCORE_INGEST_QUEUE_MAX_BYTES", "1")]);
+    wait_for("the start-up collect", 90, || s.status()["lastCollect"]["exit"] == 0);
+    let dir = data.join("ingest/inbox/hook_session_end_v1");
+    std::fs::create_dir_all(&dir).unwrap();
+    let held = std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(dir.join("current.ndjson")).unwrap();
+    held.lock_exclusive().unwrap();
+    for n in 1..=5 {
+        assert_eq!(s.post_ui("/api/hook-events", &session_end(n)), 200);
+    }
+    let st = s.status();
+    assert_eq!((&st["droppedQueueFull"], &st["writerDead"]), (&json!(4), &json!(false)), "{st}");
+    held.unlock().unwrap();
+    drop(held);
+    wait_for("the accepted line", 30, || s.status()["linesWritten"] == 1);
 }
