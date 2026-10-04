@@ -787,3 +787,22 @@ fn t19_a_full_queue_drops_and_counts_without_failing_the_request() {
     drop(held);
     wait_for("the accepted line", 30, || s.status()["linesWritten"] == 1);
 }
+
+/// 20. In a zone 14 h from UTC with a 30 s retention, a freshly loaded file survives several ticks (its age is seconds, not hours) and is deleted only once 30 s have passed.
+#[test]
+fn t20_retention_age_is_correct_far_from_utc() {
+    let data = scratch("t20-data");
+    let s = launch_env("t20", &data, &tap_args(Some(2)), &[("ALCORE_INGEST_DONE_RETENTION_SECS", "30"), ("TZ", "Pacific/Kiritimati")]);
+    wait_for("the start-up collect", 90, || s.status()["lastCollect"]["exit"] == 0);
+    assert_eq!(s.post_ui("/api/hook-events", &session_end(1)), 200);
+    wait_for("the loaded file in done/", 90, || done_files(&data, "hook_session_end_v1").len() == 1);
+    let loaded = Instant::now();
+    let after = wait_collected(&s, now_ms());
+    wait_collected(&s, after["atMs"].as_u64().unwrap());
+    if loaded.elapsed() < Duration::from_secs(25) {
+        assert_eq!(done_files(&data, "hook_session_end_v1").len(), 1, "a file younger than the retention was deleted (age computed with a zone-offset clock)");
+        assert_eq!(s.status()["doneDeleted"], 0);
+    }
+    wait_for("the file gone after the retention", 120, || done_files(&data, "hook_session_end_v1").is_empty());
+    assert!(loaded.elapsed() >= Duration::from_secs(25), "deleted before the retention elapsed");
+}

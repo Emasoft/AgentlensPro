@@ -306,7 +306,21 @@ pub fn start(manifest: &Path, aldigest_bin: &Path, interval_secs: u64, sources: 
             std::thread::Builder::new()
                 .name("spool-tap-writer".into())
                 .spawn(move || {
-                    writer.write_loop(rx);
+                    // A panic in write_loop must be visible without further traffic (enqueue only
+                    // notices a dead writer on the next send), so the guard flags it on unwind.
+                    struct DeathWatch<'a>(&'a SpoolTap);
+                    impl Drop for DeathWatch<'_> {
+                        fn drop(&mut self) {
+                            if std::thread::panicking() {
+                                self.0.stats().writer_dead = true;
+                                eprintln!("{} alcore: spool tap: the writer thread panicked — spool writes are dropped from now on (the existing stores are unaffected)", log_ts());
+                            }
+                        }
+                    }
+                    {
+                        let _watch = DeathWatch(&writer);
+                        writer.write_loop(rx);
+                    }
                     let _ = done_tx.send(());
                 })
                 .map_err(|e| format!("cannot start the spool tap writer thread: {e}"))?;
@@ -683,21 +697,27 @@ impl SpoolTap {
         s.views_ok = ok;
     }
 
-    /// The ledger's complete files: (spool, file name) -> `completed_at` in epoch seconds.
-    fn complete_ledger(&self) -> Result<HashMap<(String, String), i64>, String> {
+    /// The ledger's complete files whose `completed_at` is at least `min_age_s` old, as (spool, file
+    /// name). `_ingest.files.completed_at` is TIMESTAMPTZ (agentlens-digest register.rs:78) and collect
+    /// writes it with `get_current_timestamp()` (collect.rs:160), an absolute instant. The age is taken
+    /// in SQL with `date_diff('second', completed_at, get_current_timestamp())`, both absolute, so it is
+    /// correct in any machine time zone and never compares against a Rust clock (`-` on two DOUBLE
+    /// epochs or two TIMESTAMPTZ has no binder in this DuckDB build, so date_diff it is). Filtering in
+    /// SQL keeps the result to the rows due.
+    fn complete_ledger(&self, min_age_s: u64) -> Result<HashSet<(String, String)>, String> {
         let mut cmd = Command::new(&self.aldigest_bin);
-        cmd.arg("query").arg("--db").arg(&self.db).arg("--sql").arg("SELECT spool, source_name, CAST(epoch(completed_at) AS BIGINT) AS done_s FROM _ingest.files WHERE status = 'complete'");
+        cmd.arg("query").arg("--db").arg(&self.db).arg("--sql").arg(format!("SELECT spool, source_name FROM _ingest.files WHERE status = 'complete' AND date_diff('second', completed_at, get_current_timestamp()) >= {min_age_s}"));
         let out = run_child(cmd, LEDGER_TIMEOUT)?;
         if out.timed_out || out.code != Some(0) {
             return Err(format!("exit {:?}{}: {}", out.code, if out.timed_out { " (TIMED OUT)" } else { "" }, out.stderr.trim()));
         }
-        let mut ledger = HashMap::new();
+        let mut ledger = HashSet::new();
         for line in out.stdout.lines().filter(|l| !l.trim().is_empty()) {
             let row: Value = serde_json::from_str(line).map_err(|e| format!("unreadable ledger row {line:?}: {e}"))?;
-            let (Some(spool), Some(name), Some(done_s)) = (row["spool"].as_str(), row["source_name"].as_str(), row["done_s"].as_i64()) else {
+            let (Some(spool), Some(name)) = (row["spool"].as_str(), row["source_name"].as_str()) else {
                 return Err(format!("unexpected ledger row {line:?}"));
             };
-            ledger.insert((spool.to_owned(), name.to_owned()), done_s);
+            ledger.insert((spool.to_owned(), name.to_owned()));
         }
         Ok(ledger)
     }
@@ -712,8 +732,7 @@ impl SpoolTap {
     /// logged and counted.
     fn purge_done(&self) {
         let Some(retention) = self.done_retention else { return };
-        let ledger = match self.complete_ledger() {
-            Ok(l) => l,
+        let ledger = match self.complete_ledger(retention.as_secs()) {
             Err(e) => {
                 let mut s = self.stats();
                 s.done_delete_errors += 1;
@@ -723,10 +742,10 @@ impl SpoolTap {
                 }
                 return;
             }
+            Ok(l) => l,
         };
         self.stats().ledger_logged = None;
         let (mut deleted, mut bytes, mut errors) = (0u64, 0u64, 0u64);
-        let now_s = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64);
         let mut fail = |what: &str, e: &dyn std::fmt::Display| {
             errors += 1;
             eprintln!("{} alcore: ingest done retention: {what}: {e}", log_ts());
@@ -758,12 +777,13 @@ impl SpoolTap {
                     }
                 };
                 let path = ent.path();
-                let Some(done_s) = ent.file_name().to_str().and_then(|n| ledger.get(&(spool.clone(), n.to_owned()))) else { continue };
-                if now_s.saturating_sub(*done_s) < retention.as_secs() as i64 {
+                if !ent.file_name().to_str().is_some_and(|n| ledger.contains(&(spool.clone(), n.to_owned()))) {
                     continue;
                 }
+                // A file that vanished between read_dir and here is not an error: skip it.
                 let meta = match std::fs::symlink_metadata(&path) {
                     Ok(m) => m,
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
                     Err(e) => {
                         fail(&path.display().to_string(), &e);
                         continue;
@@ -777,6 +797,7 @@ impl SpoolTap {
                         deleted += 1;
                         bytes += meta.len();
                     }
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
                     Err(e) => fail(&path.display().to_string(), &e),
                 }
             }
