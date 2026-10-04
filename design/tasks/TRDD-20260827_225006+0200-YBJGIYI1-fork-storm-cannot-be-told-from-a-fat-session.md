@@ -3,7 +3,7 @@ trdd-id: YBJGIYI1
 title: FORK_STORM cannot be distinguished from one fat session rewriting its own prefix
 column: human_review
 created: 2026-08-27T22:50:06+0200
-updated: 2026-10-04T12:50:47+0200
+updated: 2026-10-04T13:47:35+0200
 current-owner: claude-session-2026-09-02
 task-type: bugfix
 scope: project
@@ -150,6 +150,7 @@ A fixture with 3 cold full-prefix spikes, one fingerprint, ONE session id must c
   first-hand re-check above. Vetoable at `human_review`; the USER may require the mutation run to
   be observed (revert the `:163` gate, run `cargo test --lib`, restore) before accepting.
 - 2026-09-24T09:07:59+0200 — column → human_review. Owed run PASSED 2026-09-24: burnscan_parity 9/9 passed; mutation of the fam_sessions gate (investigator.rs:163, biggest_fam_sessions>=2 -> >=0) fails exactly 2 of 3 fork_storm_discriminator_tests as claimed, restored clean (git diff empty). Report: reports/owed-runs/20260924_085621+0200-owed-runs.md
+- 2026-10-04T13:47:20+0200 — worker wJ: box 4 re-run. Gate conjunct 'biggest_fam_sessions >= 2' removed at investigator.rs:163; cargo test -p agentlens-core --lib fork_storm_discriminator: exit 101, 2 of 3 FAILED (unextractable_session_ids_fall_to_the_honest_label_not_the_flattering_one, one_session_repeating_a_fingerprint_is_a_fat_session_not_a_storm; two_distinct_sessions_sharing_a_fingerprint_is_a_real_fork_storm stayed ok). Restored, git diff empty, re-run: 3 passed.
 
 ## STATE — 2026-09-05T14:33:32+0200 — HISTORICAL (superseded above; the gate has now actually run)
 
@@ -241,4 +242,4 @@ Full report: `reports/ai-review/20260905_142355+0200-YBJGIYI1.md`
 - [x] 1. FORK_STORM gate needs session id on request record and biggest_fam_sessions >= 2 (verified: burn/investigator.rs:128,163, FAT_SESSION_REWRITES fallback; cv1 2026-10-04)
 - [x] 2. two sessions give FORK_STORM, one gives FAT_SESSION_REWRITES, none gives FAT (verified: lib fork_storm_discriminator ok. 3 passed)
 - [x] 3. burnscan_parity passes (verified: ok. 9 passed)
-- [ ] 4. mutation of the gate fails 2 of 3 tests (NOT re-run by the verifier: rests on the card's own 2026-09-24 record, mutation reruns not run)
+- [x] 4. mutation of the gate fails 2 of 3 tests (NOT re-run by the verifier: rests on the card's own 2026-09-24 record, mutation reruns not run)

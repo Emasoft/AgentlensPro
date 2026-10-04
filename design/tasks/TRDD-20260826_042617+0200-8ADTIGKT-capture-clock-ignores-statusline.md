@@ -3,7 +3,7 @@ trdd-id: 8ADTIGKT
 title: The capture-liveness clock ignores statusline samples so a statusline-only machine never raises CAPTURE DOWN
 column: dev
 created: 2026-08-26T04:26:17+0200
-updated: 2026-09-24T09:13:51+0200
+updated: 2026-10-04T13:47:49+0200
 current-owner: AgentlensPro session
 task-type: bugfix
 severity: LOW
@@ -85,6 +85,7 @@ against the diff rather than against the card's prose.
 - 2026-09-24T08:57:34+0200 — column → human_review by main-session. AI review verified, evidence in reports/board-triage ai_review-A/B/C triage
 - 2026-09-24T08:57:49+0200 — main-session (board update A): moved ai_review -> human_review; AI review verified per reports/board-triage ai_review-A/B/C triage rows. In this project's mono-agent rule the session moves ai_review->human_review; the owner moves human_review->complete.
 - 2026-09-24T09:13:51+0200 — column → dev by main-session. Acceptance box 2 ('a test pins it') is dead: its pinning test (src/test/serverEndpoints.test.ts) spawns standalone/server.js, deleted in 567fc5c2 with no successor build target -- the whole test suite's suiteSetup fails before running. No Rust test replaces it for the ui.rs:1449 statusline-bump fix. Needs either a new Rust test on the /api/statusline-samples handler or removal of the dead TS suite plus a note on what now pins the fix.
+- 2026-10-04T13:47:20+0200 — worker wJ: added tests/ui.rs capture_activity_moves_when_a_statusline_sample_is_posted (POST /api/statusline-samples, then /api/debug/capture-activity moves off 0). Stamp line commented out: FAILED (lastIngestActivityAt 0); restored, 2 passed.
 
 ## Notes and lessons learned
 

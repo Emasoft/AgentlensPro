@@ -2225,6 +2225,28 @@ fn capture_activity_reports_zero_until_an_ingest_produces_spans() {
     assert!(at > 0, "spans arrived, so the liveness clock must have moved off 0: {v}");
 }
 
+
+
+/// A statusline sample IS capture activity (TRDD-8ADTIGKT): a statusline-only machine must not
+/// read as a dead capture feed. Spans never arrive here, so only the status-line handler can move
+/// the clock off 0.
+#[test]
+fn capture_activity_moves_when_a_statusline_sample_is_posted() {
+    let (_otlp, ui, _state) = start_servers();
+
+    let before = get(ui, "/api/debug/capture-activity", "");
+    let v: serde_json::Value = serde_json::from_str(body_of(&before)).unwrap();
+    assert_eq!(v["lastIngestActivityAt"], 0, "no ingest yet must read 0: {v}");
+
+    let r = post(ui, "/api/statusline-samples", r#"{"session_id":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa","model":{"id":"claude-opus-5"}}"#);
+    assert!(r.starts_with("HTTP/1.1 200"), "{r}");
+
+    let after = get(ui, "/api/debug/capture-activity", "");
+    let v: serde_json::Value = serde_json::from_str(body_of(&after)).unwrap();
+    let at = v["lastIngestActivityAt"].as_i64().expect("a bare number, the TS shape");
+    assert!(at > 0, "a statusline sample must move the liveness clock off 0: {v}");
+}
+
 /// Pins `strip_session_detail`'s exact serialized byte output across a top-level key order with
 /// `sessions` in the middle, a fully-populated session, a session missing `timeline` entirely, a
 /// non-object array element, a non-array `sessions` value, and a non-object summary — so a rewrite

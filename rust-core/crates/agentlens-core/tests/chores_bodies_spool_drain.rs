@@ -58,3 +58,45 @@ fn fresh_body_is_ingested_and_round_trips() {
 
     let _ = std::fs::remove_dir_all(&tmp);
 }
+
+
+
+/// The over-cap emergency valve (TRDD-V79W9T2R): under `bodiesMaxGb` a body captured moments ago
+/// is left alone (the 10s cutoff); once the staged bytes exceed the cap, the same body is ingested
+/// at age 0 and reclaimed. The knob floors at 0.5 GB (set via config.json), so the cap is crossed with a SPARSE junk
+/// file (apparent length 513 MiB, no disk used; unreadable, so the pass keeps it).
+///
+/// MUTATION CHECK: change `if over_cap { 0 } else { 10_000 }` in `bodies_pass` to `10_000` and
+/// the second half MUST fail (the fresh body is still there).
+#[test]
+fn over_cap_valve_drains_a_body_younger_than_the_age_cutoff() {
+    let tmp = std::env::temp_dir().join(format!("al-bodies-over-cap-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    let data_dir = tmp.join("data");
+    let bodies_dir = data_dir.join("otel-bodies");
+    std::fs::create_dir_all(&bodies_dir).unwrap();
+
+    let name = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.request.json";
+    write_aged(&bodies_dir.join(name), &body("young"), 0);
+    let state = Arc::new(Mutex::new(CoreState::open(&data_dir)));
+
+    // Control: under the cap a 0s-old body is below the 10s cutoff, so one pass keeps it.
+    bodies_pass(&state, agentlens_core::now_ms() as f64);
+    assert!(bodies_dir.join(name).exists(), "under the cap a fresh body must wait out the 10s cutoff");
+
+    // Drop the cap to its 0.5 GB floor (default is 8 GB), then push the staged bytes over it
+    // without writing them.
+    std::fs::write(data_dir.join("config.json"), r#"{"retention":{"bodiesMaxGb":0.5}}"#).unwrap();
+    // mode 000: counted by `staged_body_bytes` (metadata only) but the pass cannot read it, so it
+    // is skipped instead of being slurped and parsed (513 MiB of it exhausts memory).
+    let junk_path = bodies_dir.join("bbbbbbbb-bbbb-cccc-dddd-eeeeeeeeeeee.response.json");
+    let junk = std::fs::File::create(&junk_path).unwrap();
+    junk.set_len(513 * 1024 * 1024).unwrap();
+    drop(junk);
+    std::fs::set_permissions(&junk_path, std::os::unix::fs::PermissionsExt::from_mode(0o000)).unwrap();
+
+    bodies_pass(&state, agentlens_core::now_ms() as f64);
+    assert!(!bodies_dir.join(name).exists(), "over the cap the valve must ingest at age 0 and reclaim the fresh body");
+
+    let _ = std::fs::remove_dir_all(&tmp);
+}
