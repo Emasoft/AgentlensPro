@@ -78,7 +78,9 @@ const REGISTER_TIMEOUT: Duration = Duration::from_secs(120);
 const VIEWS_TIMEOUT: Duration = Duration::from_secs(120);
 const LEDGER_TIMEOUT: Duration = Duration::from_secs(120);
 
+/// done/ names put to the ledger per tick (the window rotates, see `purge_done`). Test knob: `ALCORE_INGEST_PURGE_BATCH`.
 const PURGE_BATCH: usize = 500;
+const PURGE_BATCH_ENV: &str = "ALCORE_INGEST_PURGE_BATCH";
 
 /// A done/ file name is put in a SQL string literal only if it is plain; anything else is skipped.
 fn purge_name_ok(n: &str) -> bool {
@@ -152,8 +154,16 @@ struct Stats {
     done_deleted: u64,
     done_deleted_bytes: u64,
     done_delete_errors: u64,
-    /// Ledger queries the retention purge has run; stays 0 while done/ holds no regular file.
+    /// Ledger queries the retention purge ATTEMPTED (counted before the child runs, so failed and timed-out ones count too); stays 0 while done/ holds no regular file.
     done_ledger_queries: u64,
+    /// Last done/ file name examined by the rotating purge window; `None` = start from the head.
+    done_cursor: Option<String>,
+    /// done/ names put to the ledger, cumulative.
+    done_examined: u64,
+    /// Names examined on the last tick that the ledger did not return (not complete, or not old enough).
+    done_unledgered: u64,
+    /// A full batch that deleted nothing has been logged (once per process).
+    done_stuck_logged: bool,
     dropped_queue_full: u64,
     dropped_after_shutdown: u64,
     /// Batches refused because the writer thread is gone (it panicked); `writer_dead` is the state.
@@ -184,6 +194,8 @@ pub struct SpoolTap {
     /// Payload bytes queued or being written; bounded by `queue_max_bytes`.
     queued_bytes: AtomicUsize,
     queue_max_bytes: usize,
+    /// done/ names examined per retention tick (PURGE_BATCH unless the test knob overrides it).
+    purge_batch: usize,
     /// Spool names of the CURRENT (highest) version of every topic.
     spools: HashSet<String>,
     /// "source/topic" -> spool, current version only.
@@ -291,8 +303,19 @@ pub fn start(manifest: &Path, aldigest_bin: &Path, interval_secs: u64, sources: 
         },
         Err(_) => QUEUE_MAX_BYTES,
     };
+    let purge_batch = match std::env::var(PURGE_BATCH_ENV) {
+        Ok(v) => match v.trim().parse::<usize>() {
+            Ok(n) if n > 0 => n,
+            _ => {
+                eprintln!("{} alcore: spool tap: {PURGE_BATCH_ENV}={v:?} is not a positive integer — ignored, using {PURGE_BATCH}", log_ts());
+                PURGE_BATCH
+            }
+        },
+        Err(_) => PURGE_BATCH,
+    };
     let tap = SpoolTap {
         done_retention,
+        purge_batch,
         tx: Mutex::new(None),
         writer_done: Mutex::new(None),
         queued_bytes: AtomicUsize::new(0),
@@ -717,8 +740,9 @@ impl SpoolTap {
     /// are at most `PURGE_BATCH`, each passed `purge_name_ok` (safe as a SQL string literal), so the
     /// result never exceeds the list asked about. `date_diff('second', …)` counts second boundaries, so
     /// a file may be due up to one second early.
-    /// ponytail: at most PURGE_BATCH (500) done/ files are examined per tick, oldest name first; a
-    /// bigger done/ drains 500 per tick. Upgrade path: a purged mark in the ledger, or a larger batch.
+    /// ponytail: at most PURGE_BATCH (500) done/ files are examined per tick, in a window that rotates
+    /// through done/ (see `purge_done`), so a full pass over N files takes N/500 ticks and un-ledgered
+    /// files at the head cannot starve the rest. Upgrade path: a purged mark in the ledger, or a larger batch.
     fn complete_ledger(&self, min_age_s: u64, names: &[&str]) -> Result<HashSet<(String, String)>, String> {
         self.stats().done_ledger_queries += 1;
         let list = names.iter().map(|n| format!("'{n}'")).collect::<Vec<_>>().join(",");
@@ -748,10 +772,14 @@ impl SpoolTap {
     /// that is a symlink is skipped, and so is any entry that is not a regular file). An error is
     /// logged and counted.
     /// The done/ listing comes FIRST: with no regular file there, no ledger query (no child) runs. At
-    /// most `PURGE_BATCH` names (ascending, so oldest first: names start with a nanosecond timestamp)
-    /// are put to the ledger per tick; a name outside `[0-9A-Za-z._-]` is never listed and never
+    /// most `purge_batch` names are put to the ledger per tick, as a rotating window over the sorted
+    /// names (they start with a nanosecond timestamp): each tick takes the next names AFTER the last
+    /// one examined (`Stats::done_cursor`) and wraps to the start when the end is reached. A head-only
+    /// window would be pinned forever by files with no complete ledger row, which never leave done/.
+    /// A name outside `[0-9A-Za-z._-]` is never listed and never
     /// deleted (it is used as a SQL string literal, so it is not quoted, it is refused).
-    /// ponytail: 500 files per tick is the ceiling; a bigger backlog drains over several ticks.
+    /// ponytail: 500 names per tick is the ceiling; the window rotates, so a full pass over N files
+    /// takes N/500 ticks. Upgrade path: a purged mark in the ledger, or a larger batch.
     fn purge_done(&self) {
         let Some(retention) = self.done_retention else { return };
         let errors = std::cell::Cell::new(0u64);
@@ -799,7 +827,17 @@ impl SpoolTap {
             }
         }
         cands.sort();
-        cands.truncate(PURGE_BATCH);
+        // Rotating window: the next `purge_batch` names after the cursor; an empty remainder wraps to the head.
+        let cursor = self.stats().done_cursor.clone();
+        let mut start = cursor.as_ref().map_or(0, |c| cands.partition_point(|x| x.0.as_str() <= c.as_str()));
+        if start >= cands.len() {
+            start = 0;
+        }
+        let end = (start + self.purge_batch).min(cands.len());
+        let full_batch = end - start == self.purge_batch;
+        // A window that reaches the end resets the cursor, so the next tick starts at the head.
+        self.stats().done_cursor = if end < cands.len() { Some(cands[end - 1].0.clone()) } else { None };
+        let cands: Vec<_> = cands.drain(start..end).collect();
         let (mut deleted, mut bytes) = (0u64, 0u64);
         if !cands.is_empty() {
             let names: Vec<&str> = cands.iter().map(|c| c.0.as_str()).collect();
@@ -813,7 +851,12 @@ impl SpoolTap {
                     }
                 }
                 Ok(ledger) => {
-                    self.stats().ledger_logged = None;
+                    {
+                        let mut s = self.stats();
+                        s.ledger_logged = None;
+                        s.done_examined += cands.len() as u64;
+                        s.done_unledgered = cands.iter().filter(|c| !ledger.contains(&(c.1.clone(), c.0.clone()))).count() as u64;
+                    }
                     for (name, spool, path) in &cands {
                         if !ledger.contains(&(spool.clone(), name.clone())) {
                             continue;
@@ -843,6 +886,10 @@ impl SpoolTap {
             }
         }
         let mut s = self.stats();
+        if full_batch && deleted == 0 && errors.get() == 0 && !s.done_stuck_logged {
+            s.done_stuck_logged = true;
+            eprintln!("{} alcore: ingest done retention: a full batch of {} done/ names deleted nothing (none is complete in the ledger yet, or none is old enough); the window rotates on (logged once per process)", log_ts(), self.purge_batch);
+        }
         s.done_deleted += deleted;
         s.done_deleted_bytes += bytes;
         s.done_delete_errors += errors.get();
@@ -867,6 +914,8 @@ impl SpoolTap {
             "doneDeletedBytes": s.done_deleted_bytes,
             "doneDeleteErrors": s.done_delete_errors,
             "doneLedgerQueries": s.done_ledger_queries,
+            "doneExamined": s.done_examined,
+            "doneUnledgered": s.done_unledgered,
             "doneRetentionSecs": self.done_retention.map(|d| d.as_secs()),
             "droppedQueueFull": s.dropped_queue_full,
             "droppedAfterShutdown": s.dropped_after_shutdown,

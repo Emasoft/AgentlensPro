@@ -29,6 +29,7 @@ async function getJson(port: string, p: string): Promise<Record<string, unknown>
 }
 
 /** Start via the CLI path under `extra` env, run `body`, then stop via the CLI path and prove the child is gone. */
+/** Start via the CLI path under `extra` env, run `body`, then stop via the CLI path and prove the child is gone. */
 async function withServer(extra: NodeJS.ProcessEnv, body: (c: { ui: string; data: string }) => Promise<void>): Promise<{ pid: number; data: string }> {
   const saved = Object.fromEntries(KEYS.map(k => [k, process.env[k]]))
   const data = fs.mkdtempSync(path.join(os.tmpdir(), 'agentlens-e2e-data-'))
@@ -45,9 +46,16 @@ async function withServer(extra: NodeJS.ProcessEnv, body: (c: { ui: string; data
     await stopServer()
     assert.strictEqual(alive(pid), false, `server pid ${pid} still alive after stopServer()`)
   } finally {
-    // Only our own child (the pid owning OUR temp data dir) is ever signalled.
+    // Only our own child is ever signalled: the pid owning OUR temp data dir. When ensureServer threw
+    // after the child started, pid is still 0, so read the pidfile the child wrote in OUR data dir.
+    if (pid === 0) {
+      try { pid = Number(fs.readFileSync(path.join(data, 'server.pid'), 'utf8').trim()) || 0 } catch { /* no child started */ }
+    }
     if (pid > 0 && alive(pid)) { try { process.kill(pid, 'SIGKILL') } catch { /* gone */ } }
     for (const k of KEYS) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k] }
+    // The two temp dirs this helper created above (never anything else).
+    fs.rmSync(data, { recursive: true, force: true })
+    fs.rmSync(home, { recursive: true, force: true })
   }
   return { pid, data }
 }
@@ -70,6 +78,7 @@ suite('ingest end to end — the CLI start path with a real alcore', function ()
     const r = await withServer({ AGENTLENS_INGEST: 'on', AGENTLENS_ALDIGEST_BIN: ALDIGEST, AGENTLENS_INGEST_MANIFEST: MANIFEST }, async ({ ui, data }) => {
       const st = await getJson(ui, '/api/ingest-status')
       assert.strictEqual(st.enabled, true, `tap must be ON: ${JSON.stringify(st)}`)
+      assert.ok('doneLedgerQueries' in st, `/api/ingest-status lacks doneLedgerQueries: the debug alcore is stale, rebuild it (cargo build -p agentlens-core -p agentlens-digest): ${JSON.stringify(st)}`)
       const sources = st.sources as string[]
       assert.ok(Array.isArray(sources) && sources.includes('hooks'), `default sources must list hooks: ${JSON.stringify(sources)}`)
       assert.ok(!sources.includes('bodies'), `bodies must be opt-in, not default: ${JSON.stringify(sources)}`)

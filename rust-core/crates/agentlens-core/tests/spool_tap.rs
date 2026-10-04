@@ -808,6 +808,26 @@ fn t20_retention_age_is_correct_far_from_utc() {
 }
 
 
+/// 22. With a batch of 2 and three un-ledgered files sorting before one really loaded file, the rotating window still reaches the loaded file and deletes it, and the three un-ledgered files survive. `ALCORE_INGEST_PURGE_BATCH` is a test knob like `ALCORE_INGEST_QUEUE_MAX_BYTES`.
+#[test]
+fn t22_unledgered_files_at_the_head_do_not_stop_retention() {
+    let data = scratch("t22-data");
+    let s = launch_env("t22", &data, &tap_args(Some(1)), &[("ALCORE_INGEST_DONE_RETENTION_SECS", "1"), ("ALCORE_INGEST_PURGE_BATCH", "2")]);
+    wait_for("the start-up collect", 90, || s.status()["lastCollect"]["exit"] == 0);
+    let dir = data.join("ingest/done/hook_session_end_v1");
+    std::fs::create_dir_all(&dir).unwrap();
+    let planted: Vec<PathBuf> = (0..3).map(|i| dir.join(format!("0000000000000000000-planted{i}.ndjson"))).collect();
+    for f in &planted {
+        std::fs::write(f, "{}\n").unwrap();
+    }
+    assert_eq!(s.post_ui("/api/hook-events", &session_end(1)), 200);
+    wait_for("the loaded file in done/", 90, || done_files(&data, "hook_session_end_v1").len() == 4);
+    wait_for("the loaded file gone from done/", 120, || done_files(&data, "hook_session_end_v1").len() == 3);
+    assert!(planted.iter().all(|f| f.exists()), "an un-ledgered done/ file was deleted");
+    let st = s.status();
+    assert!(st["doneExamined"].as_u64().unwrap() >= 1 && st["doneUnledgered"].as_u64().is_some(), "{st}");
+}
+
 /// 21. With retention on and an empty done/ two ticks run no ledger query (`doneLedgerQueries` stays 0 while `lastCollect` advances); once a done/ file exists the counter rises.
 #[test]
 fn t21_an_empty_done_runs_no_ledger_query() {
