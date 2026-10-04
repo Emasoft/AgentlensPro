@@ -18,7 +18,7 @@
 //! SIZE BOUND. `aldigest collect` loads a ready file in one memory-limited DuckDB transaction, so
 //! the writer bounds the file size: an appender that finds `current.ndjson` at least `seal_bytes`
 //! long after its own write seals it itself, still under the lock (the same rename as `seal`).
-//! A ready file is therefore never larger than `seal_bytes` plus one line.
+//! A ready file is therefore never larger than `seal_bytes` plus one line (`append_many`: plus one batch).
 //!
 //! No fsync: a killed process loses nothing it already wrote, a power loss may lose the tail of
 //! the unsynced spool. A torn line (a write that failed half way) makes its sealed file fail at
@@ -119,25 +119,40 @@ fn torn(path: &Path, written: usize, total: usize, why: &str) -> String {
     }
 }
 
-/// What a successful `append` did.
+/// What a successful `append` / `append_many` did.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Appended {
-    /// The line is in `current.ndjson`.
+    /// The lines are in `current.ndjson`.
     Written,
-    /// The line is written and the file had reached `seal_bytes`: this append sealed it into the ready file.
+    /// The lines are written and the file had reached `seal_bytes`: this append sealed it into the ready file.
     Sealed(PathBuf),
-    /// The line is written (never retry it, that would duplicate it) but the seal that was due failed.
+    /// The lines are written (never retry them, that would duplicate them) but the seal that was due failed.
     SealFailed(String),
 }
 
-/// Append `stdin` as one spool line; when the file then holds at least `seal_bytes`, seal it
-/// before releasing the lock. Validation happens before anything is created. Once the line is
-/// written nothing may turn the call into an `Err`: a later failure is `Appended::SealFailed`.
-pub fn append(ingest_dir: &Path, spool: &str, stdin: &[u8], seal_bytes: u64) -> Res<Appended> {
+/// Append every payload as its own spool line under ONE lock hold; when the file then holds at
+/// least `seal_bytes`, seal it before releasing the lock. Every payload is validated before
+/// anything is created or written, so one bad payload writes nothing. Each line is stamped with
+/// its own `ts_ns`, read under the lock and never smaller than the previous line's. Once the lines
+/// are written nothing may turn the call into an `Err`: a later failure is `Appended::SealFailed`.
+///
+/// The seal check runs once per call, so a ready file can exceed `seal_bytes` by one whole batch:
+/// callers keep a batch small (the alcore tap caps it at 1 MiB).
+pub fn append_many(ingest_dir: &Path, spool: &str, payloads: &[&[u8]], seal_bytes: u64) -> Res<Appended> {
     check_spool(spool)?;
-    let payload = validate_payload(stdin)?;
-    if payload.len() + LINE_OVERHEAD_MAX > MAX_LINE_BYTES {
-        return Err(format!("payload is {} bytes: its spool line would exceed {MAX_LINE_BYTES} bytes, the loader's maximum object size", payload.len()));
+    if payloads.is_empty() {
+        return Err("no payload given".to_owned());
+    }
+    let mut texts: Vec<&str> = Vec::with_capacity(payloads.len());
+    let mut total = 0usize;
+    for (i, raw) in payloads.iter().enumerate() {
+        // A single payload keeps its bare message (the `alspool append` contract); a batch names the offender.
+        let text = validate_payload(raw).map_err(|e| if payloads.len() == 1 { e } else { format!("payload {i}: {e}") })?;
+        if text.len() + LINE_OVERHEAD_MAX > MAX_LINE_BYTES {
+            return Err(format!("payload is {} bytes: its spool line would exceed {MAX_LINE_BYTES} bytes, the loader's maximum object size", text.len()));
+        }
+        total += text.len() + LINE_OVERHEAD_MAX;
+        texts.push(text);
     }
     let dir = ingest_dir.join("inbox").join(spool);
     std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
@@ -150,10 +165,17 @@ pub fn append(ingest_dir: &Path, spool: &str, stdin: &[u8], seal_bytes: u64) -> 
         if !path_names_file(&f, &path)? {
             continue;
         }
-        // The clock is read under the lock, so file order equals ts_ns order within a file.
-        let line = format!("{{\"ts_ns\":{},\"payload\":{payload}}}\n", now_ns()?);
-        write_line(&f, &path, line.as_bytes())?;
-        // The line is written: from here no failure may be reported as an `Err`, and the lock is
+        // The clock is read under the lock, so file order equals ts_ns order within a file; the
+        // clock may step back between two reads, so a line never goes below its predecessor.
+        let mut buf = String::with_capacity(total);
+        let mut last = 0u128;
+        for text in &texts {
+            let ts = now_ns()?.max(last);
+            last = ts;
+            buf.push_str(&format!("{{\"ts_ns\":{ts},\"payload\":{text}}}\n"));
+        }
+        write_line(&f, &path, buf.as_bytes())?;
+        // The lines are written: from here no failure may be reported as an `Err`, and the lock is
         // released by dropping `f` when this function returns (after the seal's rename).
         return Ok(match f.metadata() {
             Ok(m) if m.len() < seal_bytes => Appended::Written,
@@ -165,6 +187,11 @@ pub fn append(ingest_dir: &Path, spool: &str, stdin: &[u8], seal_bytes: u64) -> 
         });
     }
     Err(format!("{}: sealed {MAX_ATTEMPTS} times while waiting for the lock, giving up", path.display()))
+}
+
+/// Append `stdin` as one spool line (`append_many` of one payload).
+pub fn append(ingest_dir: &Path, spool: &str, stdin: &[u8], seal_bytes: u64) -> Res<Appended> {
+    append_many(ingest_dir, spool, &[stdin], seal_bytes)
 }
 
 /// Move `current.ndjson` to a fresh ready file. The caller holds the exclusive lock on the open

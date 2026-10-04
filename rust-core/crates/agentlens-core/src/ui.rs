@@ -1530,6 +1530,12 @@ async fn handle(
                         let now = crate::now_ms();
                         st.statusline.append(payload, stream, now as f64);
                         st.persist.statusline_samples += 1;
+                        // SPOOL TAP: here, with the nested `payload` map still whole — the store's
+                        // append above flattens it, and the digest schemas are nested. The tap drops
+                        // the two keys the CLI adds (`hook_event_name`, `statusline_stream`).
+                        if let Some(tap) = &st.spool_tap {
+                            tap.statusline(payload, stream);
+                        }
                         // A statusline sample IS capture activity (TRDD-8ADTIGKT, TRDD-465EXTJ6).
                         // Without this bump a statusline-only machine could never trip CAPTURE
                         // DOWN — a silent blind spot rather than a false alarm, which is the
@@ -1551,7 +1557,8 @@ async fn handle(
             Ok(payload) => {
                 let (status, body) = {
                     let mut st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
-                    crate::hook_events::ingest_hook_event(&mut st, &payload, crate::now_ms())
+                    // `buf` is the exact POST body: the spool tap writes these bytes, not a re-serialised Value.
+                    crate::hook_events::ingest_hook_event(&mut st, &payload, &buf, crate::now_ms())
                 };
                 json_response(StatusCode::from_u16(status).unwrap_or(StatusCode::OK), body.to_string())
             }
@@ -1765,6 +1772,15 @@ async fn handle(
                     .cloned()
             });
             serde_json::json!({ "found": span.is_some(), "value": value.unwrap_or(Value::Null) }).to_string()
+        };
+        json_response(StatusCode::OK, body)
+    } else if method == Method::GET && path == "/api/ingest-status" {
+        // The digest spool tap's counters (spool_tap.rs). Inside the same chain as every
+        // neighbouring /api route, so it passes the same viewer-role, cross-origin and admission
+        // gates above; it carries counts and names only, no paths.
+        let body = {
+            let st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
+            crate::spool_tap::status(&st).to_string()
         };
         json_response(StatusCode::OK, body)
     } else if method == Method::GET && path == "/api/debug/capture-activity" {

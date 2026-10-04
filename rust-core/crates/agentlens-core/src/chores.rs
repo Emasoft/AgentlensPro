@@ -248,9 +248,9 @@ pub fn clean_spill_dirs(data_dir: &Path, max_age: Option<Duration>) -> usize {
 }
 
 pub fn bodies_pass(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
-    let data_dir = {
+    let (data_dir, tap) = {
         let Ok(st) = state.lock_timed() else { return };
-        st.data_dir.clone()
+        (st.data_dir.clone(), st.spool_tap.clone())
     };
     // The ONE bodies dir, `<data>/otel-bodies` — capture writes straight to it (TRDD-Z53IJFE9
     // step D removed the RAM-disk spool that this chore used to drain alongside it, and with the
@@ -389,7 +389,20 @@ pub fn bodies_pass(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
                 durable_source: true,
                 ..Default::default()
             };
-            let res = agentlens_store::pass::ingest_pass(&mut store, &opts, &mut skip, &mut stranded, &mut fsynced);
+            // SPOOL TAP: the API-body receive point. Claude Code writes the body files itself, so
+            // this pass is the only place alcore ever holds their text; `ingest_pass_observed` calls
+            // the observer with the text it already read, and only AFTER the store accepted the file
+            // (a file the pass retries is therefore spooled once). Bodies ingested before the tap was
+            // switched on are not spooled: backfilling them is a separate step.
+            // Installed only when the `bodies` source is enabled (it is off by default: disk growth).
+            let body_tap = tap.as_ref().filter(|t| t.wants("bodies"));
+            let mut tap_observer = |name: &str, raw: &str| {
+                if let Some(tap) = body_tap {
+                    tap.body(name, raw);
+                }
+            };
+            let observer: Option<&mut agentlens_store::pass::BodyObserver<'_>> = if body_tap.is_some() { Some(&mut tap_observer) } else { None };
+            let res = agentlens_store::pass::ingest_pass_observed(&mut store, &opts, &mut skip, &mut stranded, &mut fsynced, observer);
             ingested += res.ingested;
             deleted += res.deleted;
             bytes_freed += res.bytes_freed;
@@ -1025,6 +1038,26 @@ pub fn spawn_all(rt: &tokio::runtime::Runtime, bg: &tokio::runtime::Runtime, sta
             let _ = tokio::task::spawn_blocking(move || bodies_pass(&s2, crate::now_ms() as f64)).await;
         }
     });
+
+    // The digest spool tap's seal + collect (spool_tap.rs), only when the tap is on. Its first tick
+    // fires immediately, which IS the start-up collect: whatever the previous process sealed (or left
+    // in current.ndjson at a hard kill) is loaded now, off the boot path on `bg`. `aldigest collect`
+    // runs as a child process under its own `.collect.lock` — NOT `with_chores_lock`, which a
+    // ten-minute collect would hold against the bodies pass and the status-line seal — so a busy
+    // tick is skipped rather than queued. One task awaiting each tick means ticks never overlap.
+    let tap = state.lock_timed().unwrap_or_else(|e| e.into_inner()).spool_tap.clone();
+    if let Some(tap) = tap {
+        bg.spawn(async move {
+            let mut tick = tokio::time::interval(tap.interval());
+            // After a long collect, do not replay the ticks it overran back to back.
+            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                tick.tick().await;
+                let t = tap.clone();
+                let _ = tokio::task::spawn_blocking(move || t.seal_and_collect()).await;
+            }
+        });
+    }
 
     // The 30s resident-blob scan (server.ts:1497), boot pass included (:1498). 30s and not the
     // burn tick's 4s for the TS's own stated reason: bodies parse once then hit the LRU cache, so

@@ -15,6 +15,9 @@ agentlens-logscan = { path = "../agentlens-logscan" }
 # verify-before-delete gate query the DuckDB body store IN-PROCESS (the endpoints ARE store
 # operations; the pass alone stays an alstore exec).
 agentlens-store = { path = "../agentlens-store" }
+# The spool tap (src/spool_tap.rs, TRDD-LHCHVK9Z): the digest spool WRITER, which links no DuckDB.
+# alcore never depends on agentlens-digest — the loader runs as the `aldigest` child process.
+agentlens-spool = { path = "../agentlens-spool" }
 # get_cache_event_log renders wall-clock LOCAL time and reports the IANA zone name
 # (toLocaleTimeString('en-GB') + Intl.DateTimeFormat().resolvedOptions().timeZone). std has NO
 # local-time support at all, and both crates were ALREADY in the workspace lock as transitive

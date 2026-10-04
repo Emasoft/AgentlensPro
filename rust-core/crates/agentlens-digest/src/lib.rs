@@ -47,3 +47,22 @@ pub fn open(db: &Path) -> Res<Connection> {
     configure(&conn)?;
     Ok(conn)
 }
+
+
+/// Open an EXISTING database file READ-ONLY (a missing file is an error, never created) and
+/// configure the connection. Used by `aldigest query`: a reader must not be able to change, or
+/// even lock out writers of, the database.
+pub fn open_read_only(db: &Path) -> Res<Connection> {
+    let config = duckdb::Config::default().access_mode(duckdb::AccessMode::ReadOnly).map_err(|e| format!("open {}: {e}", db.display()))?;
+    let conn = Connection::open_with_flags(db, config).map_err(|e| format!("open {} read-only: {e}", db.display()))?;
+    configure(&conn)?;
+    Ok(conn)
+}
+
+/// Run one SELECT (no trailing semicolon) and return each result row as one JSON object text:
+/// column name -> value, produced by DuckDB's `to_json` over the whole row.
+pub fn query_json_rows(conn: &Connection, sql: &str) -> Res<Vec<String>> {
+    let mut stmt = conn.prepare(&format!("SELECT CAST(to_json(q) AS VARCHAR) FROM ({sql}) AS q")).map_err(|e| format!("query: {e}"))?;
+    let rows = stmt.query_map([], |r| r.get::<_, String>(0)).map_err(|e| format!("query: {e}"))?;
+    rows.collect::<Result<Vec<String>, _>>().map_err(|e| format!("query: {e}"))
+}

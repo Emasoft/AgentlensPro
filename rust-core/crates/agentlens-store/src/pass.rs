@@ -254,6 +254,25 @@ pub fn ingest_pass(
     stranded_names: &mut HashSet<String>,
     fsynced_parts: &mut HashSet<PathBuf>,
 ) -> PassResult {
+    ingest_pass_observed(store, opts, skip_names, stranded_names, fsynced_parts, None)
+}
+
+/// `observer(file_name, file_text)`.
+pub type BodyObserver<'a> = dyn FnMut(&str, &str) + 'a;
+
+/// `ingest_pass` plus an optional observer, called as `observer(file_name, file_text)` for every
+/// body file this pass ingested into the store (only AFTER `ingest_body` succeeded, so a file that
+/// is retried is observed once; a name already in `skip_names` was ingested by an earlier pass and
+/// is not observed). The observer does no file IO of its own here: the text is the one this pass
+/// already read.
+pub fn ingest_pass_observed(
+    store: &mut Store,
+    opts: &PassOptions,
+    skip_names: &mut HashSet<String>,
+    stranded_names: &mut HashSet<String>,
+    fsynced_parts: &mut HashSet<PathBuf>,
+    mut observer: Option<&mut BodyObserver<'_>>,
+) -> PassResult {
     let mut res = PassResult::default();
     let mut relocate_failures = 0u32;
     // One span cache for the WHOLE pass — later settle chunks mostly re-reference the spans
@@ -487,6 +506,9 @@ pub fn ingest_pass(
             };
             match ingest_body(store, &f.name, &raw, f.mtime_ms) {
                 Ok(r) => {
+                    if let Some(observe) = observer.as_mut() {
+                        observe(&f.name, &raw);
+                    }
                     res.ingested += 1;
                     res.bytes_in += f.size;
                     res.bytes_stored += r.new_bytes;

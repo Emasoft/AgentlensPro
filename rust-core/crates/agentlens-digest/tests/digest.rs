@@ -1632,3 +1632,77 @@ fn d1_spools_lists_only_the_current_version_of_each_topic() {
 fn d2_max_object_bytes_is_the_spool_line_limit() {
     assert_eq!(agentlens_digest::MAX_OBJECT_BYTES, 67_108_864);
 }
+
+
+fn aldigest_query(db: &Path, sql: &str) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_aldigest")).args(["query", "--db"]).arg(db).args(["--sql", sql]).output().unwrap()
+}
+
+/// E1. `aldigest query` opens the database READ-ONLY and prints each row as one JSON object per line (column name -> value, nested STRUCTs as objects); it never creates a missing database and refuses anything that is not a SELECT, leaving the file byte-identical.
+#[test]
+fn e1_query_prints_rows_as_json_lines_and_cannot_write() {
+    let fx = Fx::new("e1");
+    register_where(&fx, &only(&[SE]));
+    for i in [7, 8] {
+        ok(&alspool_append(&fx.ingest(), SE, &session_end_payload(i).to_string()));
+    }
+    ok(&alspool_seal(&fx.ingest()));
+    assert_eq!(fx.collect().rows, 2);
+    let before = std::fs::read(fx.db()).unwrap();
+    let out = aldigest_query(&fx.db(), &format!("SELECT session_id, effort, _meta_record_ordinal FROM {} ORDER BY _meta_record_ordinal", t(SE)));
+    ok(&out);
+    let rows: Vec<Value> = String::from_utf8_lossy(&out.stdout).lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+    assert_eq!(
+        rows,
+        [json!({"session_id": "aaaaaaaa-7", "effort": {"level": "high"}, "_meta_record_ordinal": 0}), json!({"session_id": "aaaaaaaa-8", "effort": {"level": "high"}, "_meta_record_ordinal": 1})]
+    );
+    // Not a SELECT: refused (the statement is wrapped in a subquery, and the connection is read-only anyway).
+    for bad in [format!("DELETE FROM {}", t(SE)), format!("SELECT 1; DELETE FROM {}", t(SE)), "CREATE TABLE x (i INT)".to_owned()] {
+        let out = aldigest_query(&fx.db(), &bad);
+        assert!(!out.status.success(), "{bad} was accepted");
+    }
+    assert_eq!(std::fs::read(fx.db()).unwrap(), before, "the database file changed");
+    let missing = fx.root.join("missing.duckdb");
+    assert!(!aldigest_query(&missing, "SELECT 1").status.success());
+    assert!(!missing.exists(), "a missing database was created");
+}
+
+
+fn collect_max(fx: &Fx, max: &str) -> String {
+    let out = Command::new(env!("CARGO_BIN_EXE_aldigest")).args(["collect", "--db"]).arg(fx.db()).arg("--ingest-dir").arg(fx.ingest()).args(["--max-files", max]).output().unwrap();
+    ok(&out);
+    String::from_utf8_lossy(&out.stdout).trim().to_owned()
+}
+
+/// E2. `collect --max-files 10` over 25 ready files loads 10, 10 and 5 in three runs, reporting what remains, and ends with the same rows as one unbounded run; a bad value is a usage error.
+#[test]
+fn e2_max_files_bounds_a_run_and_reports_the_rest() {
+    let sessions = |fx: &Fx| -> Vec<Value> { aldigest_rows(&fx.db(), &format!("SELECT session_id FROM {} ORDER BY session_id", t(SE))) };
+    let fill = |fx: &Fx| {
+        register_where(fx, &only(&[SE]));
+        for i in 0..25 {
+            ok(&alspool_append(&fx.ingest(), SE, &session_end_payload(i).to_string()));
+            ok(&alspool_seal(&fx.ingest()));
+        }
+    };
+    let bounded = Fx::new("e2-bounded");
+    fill(&bounded);
+    assert_eq!(collect_max(&bounded, "10"), "loaded files=10 rows=10 failed=0 reconciled=0 remaining=15");
+    assert_eq!(collect_max(&bounded, "10"), "loaded files=10 rows=10 failed=0 reconciled=0 remaining=5");
+    assert_eq!(collect_max(&bounded, "10"), "loaded files=5 rows=5 failed=0 reconciled=0 remaining=0");
+    let unbounded = Fx::new("e2-unbounded");
+    fill(&unbounded);
+    assert_eq!(unbounded.collect().rows, 25);
+    assert_eq!(sessions(&bounded), sessions(&unbounded));
+    assert_eq!(sessions(&bounded).len(), 25);
+    for bad in ["0", "x"] {
+        let out = Command::new(env!("CARGO_BIN_EXE_aldigest")).args(["collect", "--db"]).arg(bounded.db()).arg("--ingest-dir").arg(bounded.ingest()).args(["--max-files", bad]).output().unwrap();
+        assert_eq!(out.status.code(), Some(64), "{bad}");
+    }
+}
+
+fn aldigest_rows(db: &Path, sql: &str) -> Vec<Value> {
+    let out = aldigest_query(db, sql);
+    ok(&out);
+    String::from_utf8_lossy(&out.stdout).lines().map(|l| serde_json::from_str(l).unwrap()).collect()
+}

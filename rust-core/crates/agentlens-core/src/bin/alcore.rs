@@ -58,7 +58,7 @@ async fn terminate_signal() {
 
 fn usage(msg: &str) -> ! {
     eprintln!("{} alcore: {msg}", agentlens_core::log_ts());
-    eprintln!("usage: alcore serve --data-dir DIR --media-dir DIR [--otlp-port N] [--ui-port N] [--mcp-port N] [--bind HOST] [--no-log-scan]");
+    eprintln!("usage: alcore serve --data-dir DIR --media-dir DIR [--otlp-port N] [--ui-port N] [--mcp-port N] [--bind HOST] [--no-log-scan] [--ingest-manifest PATH --aldigest-bin PATH [--ingest-sources LIST]]");
     exit(64);
 }
 
@@ -82,10 +82,36 @@ fn main() {
     let mut mcp_port: u16 = 4317;
     let mut bind = "127.0.0.1".to_owned();
     let mut log_scan = true;
+    // The digest spool tap (spool_tap.rs): ON only when BOTH --ingest-manifest and --aldigest-bin
+    // are given. --ingest-interval-secs is a hidden test knob (the seal + collect period).
+    let mut ingest_manifest: Option<String> = None;
+    let mut aldigest_bin: Option<String> = None;
+    let mut ingest_interval_secs: Option<u64> = None;
+    // --ingest-sources hooks,statusline,events,spans,bodies (default: all but bodies). API bodies are
+    // OFF unless asked for: measured at about 7 GB/day of spool plus about 16 GB/day of events.duckdb
+    // growth (the typed tables store each body's messages again, with no de-duplication).
+    let mut ingest_sources: Option<Vec<String>> = None;
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
             "--no-log-scan" => log_scan = false,
+            "--ingest-manifest" => {
+                i += 1;
+                ingest_manifest = Some(args.get(i).cloned().unwrap_or_else(|| usage("--ingest-manifest needs a path")));
+            }
+            "--aldigest-bin" => {
+                i += 1;
+                aldigest_bin = Some(args.get(i).cloned().unwrap_or_else(|| usage("--aldigest-bin needs a path")));
+            }
+            "--ingest-sources" => {
+                i += 1;
+                let v = args.get(i).cloned().unwrap_or_else(|| usage("--ingest-sources needs a comma separated list"));
+                ingest_sources = Some(agentlens_core::spool_tap::parse_sources(&v).unwrap_or_else(|e| usage(&e)));
+            }
+            "--ingest-interval-secs" => {
+                i += 1;
+                ingest_interval_secs = Some(args.get(i).and_then(|v| v.parse().ok()).filter(|n| *n > 0).unwrap_or_else(|| usage("--ingest-interval-secs needs a positive number of seconds")));
+            }
             "--data-dir" => {
                 i += 1;
                 data_dir = args.get(i).cloned().unwrap_or_else(|| usage("--data-dir needs a path"));
@@ -119,6 +145,14 @@ fn main() {
     }
     if media_dir.is_empty() {
         usage("--media-dir is required");
+    }
+    // Checked here, before the pid lock or any file is touched: half a tap configuration is a
+    // mistake, never a silent "tap off".
+    if ingest_manifest.is_some() != aldigest_bin.is_some() {
+        usage("--ingest-manifest and --aldigest-bin must be given together (the digest spool tap needs both, and is off when neither is given)");
+    }
+    if (ingest_interval_secs.is_some() || ingest_sources.is_some()) && ingest_manifest.is_none() {
+        usage("--ingest-interval-secs and --ingest-sources only apply together with --ingest-manifest and --aldigest-bin");
     }
     // Boot-time check, not first-request: a wrong dir would otherwise report "UI/API listening"
     // and hand every browser a bare 404 — the exact silent-dark-dashboard failure of VHH7FXGC.
@@ -230,8 +264,33 @@ fn main() {
         }
     };
     let state = Arc::new(Mutex::new(agentlens_core::CoreState::open(std::path::Path::new(&data_dir))));
+    // Kept outside the state for the final seal in the shutdown sequence below.
+    let mut spool_tap: Option<Arc<agentlens_core::spool_tap::SpoolTap>> = None;
+    let mut spool_tap_off_reason: Option<String> = None;
+    // The digest spool tap, after the pid lock (so two servers can never register against one
+    // database) and BEFORE `chores::spawn_all`, whose boot drain of spooled hook events is already
+    // a tap call site. An unreadable manifest is a startup error; a failing `aldigest register`
+    // leaves the tap off for this process (the existing stores stay the system of record) and
+    // says why on /api/ingest-status. Outside the state lock: register is a child process.
+    if let (Some(manifest), Some(bin)) = (&ingest_manifest, &aldigest_bin) {
+        let interval = ingest_interval_secs.unwrap_or(agentlens_core::spool_tap::DEFAULT_INTERVAL_SECS);
+        let sources = ingest_sources.clone().unwrap_or_else(|| agentlens_core::spool_tap::DEFAULT_SOURCES.iter().map(|s| (*s).to_owned()).collect());
+        match agentlens_core::spool_tap::start(std::path::Path::new(manifest), std::path::Path::new(bin), interval, sources, std::path::Path::new(&data_dir)) {
+            Ok(agentlens_core::spool_tap::Start::Tap(tap)) => spool_tap = Some(tap),
+            Ok(agentlens_core::spool_tap::Start::Disabled(reason)) => spool_tap_off_reason = Some(reason),
+            Err(e) => {
+                eprintln!("{} alcore: --ingest-manifest {manifest}: {e}", agentlens_core::log_ts());
+                agentlens_core::pid_lock::release(std::path::Path::new(&data_dir));
+                exit(1);
+            }
+        }
+    }
     {
         let mut st = state.lock_timed().expect("state");
+        st.spool_tap = spool_tap.clone();
+        if let Some(reason) = spool_tap_off_reason {
+            st.spool_tap_off_reason = reason;
+        }
         st.embed_key = Some(embed_key);
         // What /api/server-stats reports as `ports` — the listeners this process ACTUALLY binds.
         // `mcp` used to be left at the env/TS default (4316) while nothing bound it, so the server
@@ -486,6 +545,14 @@ fn main() {
     // span flush) got any of it.
     rt.shutdown_timeout(remaining(stop_deadline));
     bg_rt.shutdown_timeout(remaining(stop_deadline));
+
+    // The digest spool tap's last seal, AFTER both runtimes stopped: the OTLP tap writes on the
+    // blocking pool and a hook/status-line write can be in flight at the signal, so sealing any
+    // earlier would leave lines in current.ndjson. Seal only, no collect — a restart must stay fast
+    // and the next start's first tick collects.
+    if let Some(tap) = &spool_tap {
+        tap.seal_for_shutdown();
+    }
 
     // Released LAST, after the runtime (and everything it was running) has actually stopped —
     // releasing it any earlier reopens the double-owner window `pid_lock::claim` guards against:

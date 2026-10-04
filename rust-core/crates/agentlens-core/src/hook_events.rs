@@ -191,7 +191,11 @@ pub fn statusline_stream(ev: &str) -> Option<&'static str> {
 
 /// server.ts ingestHookEvent — validate → route/divert → append → ring → stats → (P5) StopFailure
 /// capacity auto-calibration. Returns the HTTP-shaped (status, body).
-pub fn ingest_hook_event(st: &mut crate::CoreState, payload: &Value, now_ms: i64) -> (u16, Value) {
+///
+/// `raw` is the exact text `payload` was parsed from (the POST body, or the spooled file's text):
+/// the spool tap writes THOSE bytes, because a re-serialised `Value` would alter integers beyond
+/// 64 bits and drop duplicate keys.
+pub fn ingest_hook_event(st: &mut crate::CoreState, payload: &Value, raw: &[u8], now_ms: i64) -> (u16, Value) {
     let Some(p) = payload.as_object() else {
         return (400, json!({ "error": "payload must be a JSON object with hook_event_name" }));
     };
@@ -204,6 +208,12 @@ pub fn ingest_hook_event(st: &mut crate::CoreState, payload: &Value, now_ms: i64
         // both must, or a skew would split the history in two.
         st.statusline.append(p, stream, now_ms as f64);
         st.persist.statusline_samples += 1;
+        // SPOOL TAP: right after the dedicated endpoint's own append (ui.rs /api/statusline-samples),
+        // for the same reason that append is here — an older CLI posts samples through THIS route, and
+        // both must feed the same spool or a version skew would split the history in two.
+        if let Some(tap) = &st.spool_tap {
+            tap.statusline(p, stream);
+        }
         return (200, json!({ "ok": true, "routed": "statusline" }));
     }
     if !st.hook_runtime.capture_enabled {
@@ -213,6 +223,13 @@ pub fn ingest_hook_event(st: &mut crate::CoreState, payload: &Value, now_ms: i64
     }
     match append_hook_event(&st.data_dir.join("hook-events"), p, now_ms) {
         Ok((rec, bytes)) => {
+            // SPOOL TAP: after the capture gate (a dropped event is not spooled: the tap inherits
+            // the user's capture switch) AND after the existing store accepted the event. The CLI
+            // spools a payload it could not deliver and the boot/periodic drain re-delivers it
+            // here, so tapping before this append could write one event twice.
+            if let Some(tap) = &st.spool_tap {
+                tap.hook(ev, raw);
+            }
             // Cloned before the ring takes ownership — the calibration branch below needs the
             // record's own ts/session/payload after this push.
             let rec_for_calibration = rec.clone();
@@ -322,7 +339,7 @@ pub fn drain_hook_spool(st: &mut crate::CoreState, now_ms: i64, max_files: usize
         // exact byte string to look for. `build_hook_event_record` is pure and takes the same
         // `now_ms` the ingest below uses, so the two cannot disagree.
         let expected_line = payload.as_object().map(|p| build_hook_event_record(p, now_ms).to_string());
-        let (status, body) = ingest_hook_event(st, &payload, now_ms);
+        let (status, body) = ingest_hook_event(st, &payload, raw.as_bytes(), now_ms);
         if status != 200 {
             quarantine(&file, &rejected_dir, &mut out);
             continue;

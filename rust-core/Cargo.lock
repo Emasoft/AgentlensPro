@@ -15,6 +15,7 @@ dependencies = [
  "agentlens-ingest",
  "agentlens-logscan",
  "agentlens-spanstore",
+ "agentlens-spool",
  "agentlens-store",
  "base64 0.22.1",
  "bytes",

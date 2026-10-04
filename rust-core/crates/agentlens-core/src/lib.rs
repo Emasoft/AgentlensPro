@@ -84,6 +84,7 @@ pub mod shutdown;
 pub mod skill_attribution;
 pub mod span_window;
 pub mod spawn_rollup;
+pub mod spool_tap;
 pub mod statusline_store;
 pub mod burn_seismic;
 pub mod seismic_stats;
@@ -296,6 +297,13 @@ pub struct CoreState {
     /// alcore's own 60s task through the free `statusline_store::maybe_seal`, which shares only
     /// the Arc'd counters — never this lock.
     pub statusline: statusline_store::StatuslineStore,
+    /// The digest spool tap (spool_tap.rs): `Some` only when `alcore serve` got both
+    /// `--ingest-manifest` and `--aldigest-bin` and `aldigest register` succeeded. `None` = alcore
+    /// behaves exactly as before the tap existed. `Arc` so the OTLP handler and the bodies pass can
+    /// hold it without the state lock.
+    pub spool_tap: Option<Arc<spool_tap::SpoolTap>>,
+    /// Why `spool_tap` is `None`, for `/api/ingest-status`.
+    pub spool_tap_off_reason: String,
 }
 
 impl CoreState {
@@ -687,6 +695,8 @@ impl CoreState {
             },
             advisory_issued: std::collections::HashMap::new(),
             statusline: statusline_store::StatuslineStore::new(data_dir.join("statusline")),
+            spool_tap: None,
+            spool_tap_off_reason: "not configured: alcore serve was started without --ingest-manifest and --aldigest-bin".to_owned(),
         }
     }
 
@@ -1090,6 +1100,7 @@ pub fn ingest_parsed(state: &mut CoreState, kind: &'static str, payload: Value, 
 async fn handle(
     req: Request<Incoming>,
     state: Arc<Mutex<CoreState>>,
+    tap: Option<Arc<spool_tap::SpoolTap>>,
 ) -> Result<Response<Full<Bytes>>, String> {
     // The discovery probe matches the RAW url (path+query, no strip) — server.ts:4414 compares
     // req.url exactly, so a query string must NOT match.
@@ -1131,6 +1142,13 @@ async fn handle(
     let t_parse = profile.then(std::time::Instant::now);
     let parsed = parse_payload(&path, &buf);
     let parse_ns = t_parse.map(|t| t.elapsed().as_nanos() as u64).unwrap_or(0);
+    // SPOOL TAP — placed HERE, between the parse and the lock, for two reasons: it must read the
+    // payload BEFORE `ingest_parsed` below consumes it (`process_traces` takes it by value and
+    // moves/stamps its fields), and it must run OUTSIDE the state lock, which every request
+    // serialises on. It only builds the line strings; the file writes go to the blocking pool.
+    if let (Some(tap), Some((kind, payload))) = (&tap, &parsed) {
+        tap.otlp(kind, payload);
+    }
     let t_wait = profile.then(std::time::Instant::now);
     {
         let mut st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
@@ -1157,12 +1175,18 @@ pub async fn serve_otlp(
 ) -> std::io::Result<()> {
     let listener = tokio::net::TcpListener::bind(addr).await?;
     on_bound(listener.local_addr()?);
+    // The tap handle is read ONCE here, not per request: `handle` runs between the parse and the
+    // state lock, and taking the lock just to look at a field that never changes after boot would
+    // add a lock wait to every POST of a server that has the tap off. `CoreState.spool_tap` stays
+    // the single owner; this is a clone of its `Arc`.
+    let tap = state.lock_timed().unwrap_or_else(|e| e.into_inner()).spool_tap.clone();
     loop {
         let (stream, _) = listener.accept().await?;
         let io = hyper_util::rt::TokioIo::new(stream);
         let state = state.clone();
+        let tap = tap.clone();
         tokio::spawn(async move {
-            let svc = service_fn(move |req| handle(req, state.clone()));
+            let svc = service_fn(move |req| handle(req, state.clone(), tap.clone()));
             // An Err from the service aborts this connection — exactly the overflow contract.
             let _ = hyper::server::conn::http1::Builder::new().serve_connection(io, svc).await;
         });

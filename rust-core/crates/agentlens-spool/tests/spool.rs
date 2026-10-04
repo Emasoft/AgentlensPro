@@ -507,3 +507,57 @@ fn s16_a_failed_seal_after_the_write_exits_2_and_keeps_the_line() {
     assert_eq!(out.status.code(), Some(64));
     assert!(!bad.join("inbox").exists());
 }
+
+
+/// 17. `append_many` writes every payload verbatim as its own line in order, under one lock hold, with non-decreasing `ts_ns`; a one-element call equals `append`.
+#[test]
+fn s17_append_many_writes_every_payload_as_its_own_line_in_order() {
+    let dir = scratch("s17");
+    let payloads: Vec<String> = (0..50).map(|i| format!(r#"{{"seq": {i},  "big":18446744073709551616, "d":0.123456789012345678901234567890}}"#)).collect();
+    let refs: Vec<&[u8]> = payloads.iter().map(|p| p.as_bytes()).collect();
+    let before = now_ns();
+    assert_eq!(agentlens_spool::append_many(&dir, SP, &refs, agentlens_spool::DEFAULT_SEAL_BYTES).unwrap(), agentlens_spool::Appended::Written);
+    let after = now_ns();
+    let lines = lines_of(&current(&dir, SP));
+    assert_eq!(lines.len(), 50);
+    let mut last = 0u128;
+    for (line, payload) in lines.iter().zip(&payloads) {
+        let (ts, rest) = line.strip_prefix("{\"ts_ns\":").unwrap().split_once(",\"payload\":").unwrap();
+        assert_eq!(rest, format!("{payload}}}"), "payload verbatim");
+        let ts: u128 = ts.parse().unwrap();
+        assert!(ts >= last && (before..=after).contains(&ts), "ts_ns {ts} not non-decreasing inside [{before}, {after}]");
+        last = ts;
+    }
+    agentlens_spool::append_many(&dir, SP, &[br#"{"seq":50}"#], agentlens_spool::DEFAULT_SEAL_BYTES).unwrap();
+    ok(&append(&dir, SP, br#"{"seq":51}"#));
+    let all = lines_of(&current(&dir, SP));
+    assert_eq!(all.len(), 52);
+    assert!(all[50].ends_with(r#""payload":{"seq":50}}"#) && all[51].ends_with(r#""payload":{"seq":51}}"#));
+}
+
+/// 18. One invalid payload in a batch (or an empty batch) is an `Err` that writes nothing, not even the directory; the single-payload message is the bare one.
+#[test]
+fn s18_append_many_validates_everything_before_writing_anything() {
+    let dir = scratch("s18");
+    let err = agentlens_spool::append_many(&dir, SP, &[br#"{"a":1}"#, b"[1]", br#"{"a":3}"#], 1).unwrap_err();
+    assert!(err.starts_with("payload 1: "), "{err}");
+    assert!(!dir.join("inbox").exists(), "something was written");
+    assert!(agentlens_spool::append_many(&dir, SP, &[], 1).is_err());
+    let single = agentlens_spool::append_many(&dir, SP, &[b"[1]"], 1).unwrap_err();
+    assert!(single.starts_with("payload must be one JSON object"), "a lone payload keeps the bare `alspool append` message: {single}");
+    assert!(!dir.join("inbox").exists());
+}
+
+/// 19. A batch that takes the file past `seal_bytes` seals it once, whole: no line is lost, split or duplicated.
+#[test]
+fn s19_append_many_seals_once_after_the_batch() {
+    let dir = scratch("s19");
+    let payloads: Vec<String> = (0..10).map(|i| format!(r#"{{"seq":{i},"pad":"{}"}}"#, "x".repeat(1000))).collect();
+    let refs: Vec<&[u8]> = payloads.iter().map(|p| p.as_bytes()).collect();
+    let got = agentlens_spool::append_many(&dir, SP, &refs, 4000).unwrap();
+    assert!(matches!(got, agentlens_spool::Appended::Sealed(_)), "{got:?}");
+    let ready = ready_files(&dir, SP);
+    assert_eq!(ready.len(), 1);
+    assert_eq!(lines_of(&ready[0]).len(), 10);
+    assert!(!current(&dir, SP).exists());
+}

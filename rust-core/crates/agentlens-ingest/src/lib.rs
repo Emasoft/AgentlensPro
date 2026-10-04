@@ -305,6 +305,127 @@ pub fn bare_log_event_name(name: &str) -> &str {
     name.strip_prefix("claude_code.").unwrap_or(name)
 }
 
+
+/// The merged attribute list of one log record (record, body key-values, scope, resource; first
+/// occurrence of a key wins). Shared by `process_logs` and `log_tap_records` so the spool tap
+/// sees exactly the attributes the transform sees.
+fn merged_log_attrs(rec: &Map<String, Value>, scope_attrs: &[Attr], resource_attrs: &[Attr]) -> Vec<Attr> {
+    let record_attrs = to_span_attributes_ref(rec.get("attributes"));
+    let body_attrs = attrs_from_body_kv(rec.get("body"));
+    merge_attributes(&[&record_attrs, &body_attrs, scope_attrs, resource_attrs])
+}
+
+/// The event name of one log record, resolved exactly as `process_logs` resolves it.
+fn log_event_name(attrs: &[Attr], rec: &Map<String, Value>) -> String {
+    resolve_log_event_name(&get_attr_from(attrs, &["event.name", "event_name", "name", "event"]), rec)
+}
+
+/// An OTLP AnyValue as plain JSON for the digest spool: stringValue -> string, intValue -> integer
+/// (also when sent as a string, as OTLP/JSON does for 64-bit values), doubleValue / boolValue as
+/// they are, arrayValue -> array, kvlistValue -> object. An unknown wrapper is kept whole.
+fn any_value_plain(v: &Value) -> Value {
+    let Some(o) = v.as_object() else { return v.clone() };
+    if let Some(s) = o.get("stringValue") {
+        return s.clone();
+    }
+    if let Some(i) = o.get("intValue") {
+        return match i {
+            Value::String(s) => s.parse::<i64>().map(Value::from).or_else(|_| s.parse::<u64>().map(Value::from)).unwrap_or_else(|_| i.clone()),
+            other => other.clone(),
+        };
+    }
+    for k in ["doubleValue", "boolValue", "bytesValue"] {
+        if let Some(x) = o.get(k) {
+            return x.clone();
+        }
+    }
+    if let Some(items) = o.get("arrayValue").and_then(|a| a.get("values")).and_then(Value::as_array) {
+        return Value::Array(items.iter().map(any_value_plain).collect());
+    }
+    if let Some(items) = o.get("kvlistValue").and_then(|a| a.get("values")).and_then(Value::as_array) {
+        return Value::Object(flatten_attrs(&items.iter().filter_map(|i| i.as_object().cloned()).collect::<Vec<Attr>>()));
+    }
+    v.clone()
+}
+
+/// `[{key, value: AnyValue}]` as one flat JSON object.
+fn flatten_attrs(attrs: &[Attr]) -> Map<String, Value> {
+    let mut flat = Map::with_capacity(attrs.len() + 1);
+    for a in attrs {
+        if let (Some(k), Some(v)) = (a.get("key").and_then(Value::as_str), a.get("value")) {
+            flat.insert(k.to_owned(), any_value_plain(v));
+        }
+    }
+    flat
+}
+
+/// Spool tap (agentlens-core `spool_tap`): one `(bare event name, flat attributes)` per log record
+/// of an OTLP logs payload, in payload order. Pure: the payload is only read.
+pub fn log_tap_records(payload: &Value) -> Vec<(String, Map<String, Value>)> {
+    let mut out = Vec::new();
+    for rl in payload.get("resourceLogs").and_then(Value::as_array).map(Vec::as_slice).unwrap_or(&[]).iter().filter_map(Value::as_object) {
+        let resource_attrs = to_span_attributes_ref(rl.get("resource").and_then(Value::as_object).and_then(|r| r.get("attributes")));
+        for sl in rl.get("scopeLogs").and_then(Value::as_array).map(Vec::as_slice).unwrap_or(&[]).iter().filter_map(Value::as_object) {
+            let scope_attrs = to_span_attributes_ref(sl.get("scope").and_then(Value::as_object).and_then(|s| s.get("attributes")));
+            for rec in sl.get("logRecords").and_then(Value::as_array).map(Vec::as_slice).unwrap_or(&[]).iter().filter_map(Value::as_object) {
+                let attrs = merged_log_attrs(rec, &scope_attrs, &resource_attrs);
+                let bare = bare_log_event_name(&log_event_name(&attrs, rec)).to_owned();
+                out.push((bare, flatten_attrs(&attrs)));
+            }
+        }
+    }
+    out
+}
+
+/// Spool tap: one `(span name as received, flat attributes + _span)` per span of an OTLP traces
+/// payload. `_span` carries the identifying fields of the span AS RECEIVED, before the Codex
+/// trace-id remapping, gen_ai injection and `_agentlens.collector_path` stamping of `process_traces`.
+pub fn span_tap_records(payload: &Value) -> Vec<(String, Map<String, Value>)> {
+    let nano = |v: &Value| match v {
+        Value::String(s) => s.parse::<u64>().map(Value::from).unwrap_or_else(|_| v.clone()),
+        other => other.clone(),
+    };
+    let mut out = Vec::new();
+    for rs in payload.get("resourceSpans").and_then(Value::as_array).map(Vec::as_slice).unwrap_or(&[]).iter().filter_map(Value::as_object) {
+        for ss in rs.get("scopeSpans").and_then(Value::as_array).map(Vec::as_slice).unwrap_or(&[]).iter().filter_map(Value::as_object) {
+            for span in ss.get("spans").and_then(Value::as_array).map(Vec::as_slice).unwrap_or(&[]).iter().filter_map(Value::as_object) {
+                let mut flat = flatten_attrs(&to_span_attributes_ref(span.get("attributes")));
+                let mut header = Map::new();
+                for k in ["traceId", "spanId"] {
+                    if let Some(v) = span.get(k) {
+                        header.insert(k.to_owned(), v.clone());
+                    }
+                }
+                // Same rule as process_traces: an empty parentSpanId is absent.
+                if let Some(p) = span.get("parentSpanId").filter(|p| p.as_str().is_some_and(|s| !s.is_empty())) {
+                    header.insert("parentSpanId".to_owned(), p.clone());
+                }
+                let name = span.get("name").and_then(Value::as_str).unwrap_or("").to_owned();
+                if span.get("name").is_some() {
+                    header.insert("name".to_owned(), Value::String(name.clone()));
+                }
+                for k in ["startTimeUnixNano", "endTimeUnixNano"] {
+                    if let Some(v) = span.get(k) {
+                        header.insert(k.to_owned(), nano(v));
+                    }
+                }
+                if let Some(st) = span.get("status").and_then(Value::as_object) {
+                    let mut status = Map::new();
+                    for k in ["code", "message"] {
+                        if let Some(v) = st.get(k) {
+                            status.insert(k.to_owned(), v.clone());
+                        }
+                    }
+                    header.insert("status".to_owned(), Value::Object(status));
+                }
+                flat.insert("_span".to_owned(), Value::Object(header));
+                out.push((name, flat));
+            }
+        }
+    }
+    out
+}
+
 // ── genAiContent.ts ───────────────────────────────────────────────────────────────
 
 pub fn format_gen_ai_event_content(raw: &str, event_name: &str) -> String {
@@ -597,11 +718,9 @@ impl IngestState {
             for sl in rl.get("scopeLogs").and_then(Value::as_array).map(Vec::as_slice).unwrap_or(&[]).iter().filter_map(Value::as_object) {
                 let scope_attrs = to_span_attributes_ref(sl.get("scope").and_then(Value::as_object).and_then(|s| s.get("attributes")));
                 for rec in sl.get("logRecords").and_then(Value::as_array).map(Vec::as_slice).unwrap_or(&[]).iter().filter_map(Value::as_object) {
-                    let record_attrs = to_span_attributes_ref(rec.get("attributes"));
-                    let body_attrs = attrs_from_body_kv(rec.get("body"));
-                    let mut attrs = merge_attributes(&[&record_attrs, &body_attrs, &scope_attrs, &resource_attrs]);
+                    let mut attrs = merged_log_attrs(rec, &scope_attrs, &resource_attrs);
 
-                    let event_name = resolve_log_event_name(&get_attr_from(&attrs, &["event.name", "event_name", "name", "event"]), rec);
+                    let event_name = log_event_name(&attrs, rec);
                     let bare_event = bare_log_event_name(&event_name).to_owned();
                     let log_tool_name = get_attr_from(&attrs, &["tool.name", "tool_name"]);
                     let is_codex_event = event_name.starts_with("codex.");
@@ -984,4 +1103,52 @@ mod tests {
         assert_eq!(s2, "codex:conv-1:prompt-2", "a second prompt opens a new cycle");
         assert_eq!(n.session_by_otel_trace_id("t1"), Some(s1.as_str()));
     }
+
+
+    #[test]
+    fn log_tap_flattens_every_any_value_and_merges_like_process_logs() {
+        let payload = json!({ "resourceLogs": [{
+            "resource": { "attributes": [{ "key": "service.name", "value": { "stringValue": "svc" } }, { "key": "n", "value": { "stringValue": "resource-loses" } }] },
+            "scopeLogs": [{ "scope": { "attributes": [{ "key": "scope.k", "value": { "boolValue": true } }] }, "logRecords": [{
+                "attributes": [
+                    { "key": "event.name", "value": { "stringValue": "claude_code.api_request" } },
+                    { "key": "n", "value": { "intValue": "9223372036854775807" } },
+                    { "key": "big", "value": { "intValue": "18446744073709551615" } },
+                    { "key": "d", "value": { "doubleValue": 0.5 } },
+                    { "key": "arr", "value": { "arrayValue": { "values": [{ "stringValue": "a" }, { "intValue": 7 }] } } },
+                    { "key": "kv", "value": { "kvlistValue": { "values": [{ "key": "x", "value": { "intValue": "3" } }] } } },
+                ],
+            }] }],
+        }] });
+        let recs = log_tap_records(&payload);
+        assert_eq!(recs.len(), 1);
+        assert_eq!(recs[0].0, "api_request", "the bare event name");
+        assert_eq!(
+            Value::Object(recs[0].1.clone()),
+            json!({ "event.name": "claude_code.api_request", "n": 9223372036854775807i64, "big": 18446744073709551615u64, "d": 0.5,
+                    "arr": ["a", 7], "kv": { "x": 3 }, "scope.k": true, "service.name": "svc" })
+        );
+    }
+
+    #[test]
+    fn span_tap_takes_the_span_as_received() {
+        let payload = json!({ "resourceSpans": [{ "scopeSpans": [{ "spans": [
+            { "traceId": "t1", "spanId": "s1", "name": "claude_code.llm_request", "startTimeUnixNano": "1755600000000000000", "endTimeUnixNano": "1755600001000000000",
+              "attributes": [{ "key": "session.id", "value": { "stringValue": "sess-1" } }] },
+            { "traceId": "t2", "spanId": "s2", "parentSpanId": "p2", "name": "x", "startTimeUnixNano": "1", "endTimeUnixNano": "2",
+              "status": { "code": 2, "message": "boom" } },
+        ] }] }] });
+        let recs = span_tap_records(&payload);
+        assert_eq!(recs.len(), 2);
+        assert_eq!(recs[0].0, "claude_code.llm_request");
+        assert_eq!(
+            Value::Object(recs[0].1.clone()),
+            json!({ "session.id": "sess-1", "_span": { "traceId": "t1", "spanId": "s1", "name": "claude_code.llm_request",
+                    "startTimeUnixNano": 1755600000000000000u64, "endTimeUnixNano": 1755600001000000000u64 } }),
+            "no parentSpanId and no status in the first, and nothing stamped"
+        );
+        assert_eq!(recs[1].1["_span"]["parentSpanId"], "p2");
+        assert_eq!(recs[1].1["_span"]["status"], json!({ "code": 2, "message": "boom" }));
+    }
+
 }

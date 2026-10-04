@@ -197,7 +197,7 @@ fn record_failure(conn: &Connection, spool: &Spool, name: &str, size: u64, messa
     Ok(())
 }
 
-fn collect_spool(conn: &Connection, root: &Path, spool: &Spool, files: Vec<PathBuf>, on_stage: &mut dyn FnMut(Stage), sum: &mut Summary) -> Res<()> {
+fn collect_spool(conn: &Connection, root: &Path, spool: &Spool, files: Vec<PathBuf>, on_stage: &mut dyn FnMut(Stage), sum: &mut Summary, budget: &mut Budget) -> Res<()> {
     let done_dir = root.join("done").join(&spool.name);
     let failed_dir = root.join("failed").join(&spool.name);
     let mut pending = Vec::new();
@@ -218,6 +218,10 @@ fn collect_spool(conn: &Connection, root: &Path, spool: &Spool, files: Vec<PathB
         stmts.push((producer_type.as_str(), conn.prepare(sql).map_err(|e| err(producer_type, e))?));
     }
     for (file, name) in pending {
+        if !budget.take() {
+            budget.remaining += 1;
+            continue;
+        }
         let size = std::fs::metadata(&file).map_err(|e| err(&file.display().to_string(), e))?.len();
         match load_file(conn, spool, &mut stmts, &file, &name, size, on_stage) {
             Ok(rows) => {
@@ -246,6 +250,35 @@ pub fn collect(conn: &Connection, ingest_dir: &Path) -> Res<Summary> {
 
 /// [`collect`] with an observer called at each [`Stage`].
 pub fn collect_with(conn: &Connection, ingest_dir: &Path, on_stage: &mut dyn FnMut(Stage)) -> Res<Summary> {
+    collect_limited(conn, ingest_dir, None, on_stage).map(|(sum, _)| sum)
+}
+
+/// How many more files this run may load or fail (`None` = no limit), and how many ready files it left.
+struct Budget {
+    left: Option<u64>,
+    remaining: u64,
+}
+
+impl Budget {
+    /// Claim one file slot; false when the run is out of slots.
+    fn take(&mut self) -> bool {
+        match &mut self.left {
+            None => true,
+            Some(0) => false,
+            Some(n) => {
+                *n -= 1;
+                true
+            }
+        }
+    }
+}
+
+/// [`collect_with`] that stops after `max_files` files were loaded or failed (reconciled files do
+/// not count) and returns how many ready files it left behind. MEASURED reason: one `aldigest
+/// collect` process grows in RSS with every committed API-body file (65 to 687 MiB over 72 files;
+/// it is DuckDB itself, no setting bounds it) and stays under 300 MiB when it handles about 10, so
+/// a caller bounds a process by file count and starts a fresh one for the rest.
+pub fn collect_limited(conn: &Connection, ingest_dir: &Path, max_files: Option<u64>, on_stage: &mut dyn FnMut(Stage)) -> Res<(Summary, u64)> {
     let root = std::fs::canonicalize(ingest_dir).map_err(|e| err(&ingest_dir.display().to_string(), e))?;
     let ready = root.join("ready");
     crate::register::check_layout(conn)?;
@@ -263,11 +296,17 @@ pub fn collect_with(conn: &Connection, ingest_dir: &Path, on_stage: &mut dyn FnM
         }
     }
     let mut sum = Summary::default();
+    let mut budget = Budget { left: max_files, remaining: 0 };
     for spool in &spools {
         let dir = ready.join(&spool.name);
         if dir.is_dir() {
-            collect_spool(conn, &root, spool, ndjson_files(&dir)?, on_stage, &mut sum)?;
+            let files = ndjson_files(&dir)?;
+            if budget.left == Some(0) {
+                budget.remaining += files.len() as u64;
+            } else {
+                collect_spool(conn, &root, spool, files, on_stage, &mut sum, &mut budget)?;
+            }
         }
     }
-    Ok(sum)
+    Ok((sum, budget.remaining))
 }
