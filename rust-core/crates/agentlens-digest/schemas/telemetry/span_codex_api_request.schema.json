@@ -1,0 +1,102 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agentlenspro:telemetry.span.codex_api_request:v1",
+  "title": "OTel span codex_api_request attributes (not emitted by Claude Code)",
+  "type": "object",
+  "properties": {
+    "attempt": {
+      "type": "integer"
+    },
+    "auth.env_codex_api_key_enabled": {
+      "type": "boolean"
+    },
+    "auth.env_codex_api_key_present": {
+      "type": "boolean"
+    },
+    "auth.env_openai_api_key_present": {
+      "type": "boolean"
+    },
+    "auth.env_refresh_token_url_override_present": {
+      "type": "boolean"
+    },
+    "auth.header_attached": {
+      "type": "boolean"
+    },
+    "auth.header_name": {
+      "type": "string"
+    },
+    "auth.mode": {
+      "type": "string"
+    },
+    "duration_ms": {
+      "type": "string"
+    },
+    "endpoint": {
+      "type": "string"
+    },
+    "env": {
+      "type": "string"
+    },
+    "event.name": {
+      "type": "string"
+    },
+    "host.name": {
+      "type": "string"
+    },
+    "http.response.status_code": {
+      "type": "integer"
+    },
+    "service.name": {
+      "type": "string"
+    },
+    "service.version": {
+      "type": "string"
+    },
+    "success": {
+      "type": "boolean"
+    },
+    "telemetry.sdk.language": {
+      "type": "string"
+    },
+    "telemetry.sdk.name": {
+      "type": "string"
+    },
+    "telemetry.sdk.version": {
+      "type": "string"
+    },
+    "_span": {
+      "type": "object",
+      "properties": {
+        "traceId": {
+          "type": "string"
+        },
+        "spanId": {
+          "type": "string"
+        },
+        "parentSpanId": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "startTimeUnixNano": {
+          "type": "integer"
+        },
+        "endTimeUnixNano": {
+          "type": "integer"
+        },
+        "status": {
+          "type": "object",
+          "properties": {
+            "code": {
+              "type": "integer"
+            },
+            "message": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  }
+}

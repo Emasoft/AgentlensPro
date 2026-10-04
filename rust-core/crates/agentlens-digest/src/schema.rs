@@ -376,6 +376,19 @@ pub fn load_manifest(path: &Path) -> Res<Vec<Producer>> {
     Ok(out)
 }
 
+/// The current producer of every source+topic: the highest `version`, sorted by source then topic
+/// (owner ruling D-G: the lookup that lets a producer pick the schema, and so the spool, to write to).
+pub fn current_versions(producers: &[Producer]) -> Vec<&Producer> {
+    let mut current: std::collections::BTreeMap<(&str, &str), &Producer> = std::collections::BTreeMap::new();
+    for p in producers {
+        let slot = current.entry((&p.source, &p.topic)).or_insert(p);
+        if p.version > slot.version {
+            *slot = p;
+        }
+    }
+    current.into_values().collect()
+}
+
 
 /// `aldigest rehash`: recompute the canonical sha256 of every schema file the manifest names and
 /// rewrite the `sha256` fields in place (same key order, 2-space indent, trailing newline).

@@ -39,6 +39,9 @@
     "files_retained_fresh": {
       "x-duckdb-type": "VARCHAR"
     },
+    "history_entries_pruned": {
+      "type": "string"
+    },
     "host.arch": {
       "type": "string"
     },

@@ -614,7 +614,7 @@
       "spool": "telemetry_event_assistant_response_v1",
       "valid_from": null,
       "schema": "telemetry/event_assistant_response.schema.json",
-      "sha256": "d527826042e9aaff3273a4fa58323407ac0b8ca0a17c0b5e551e1d12a0891cce"
+      "sha256": "79e91025628e1bc0090d12860fd4d1f4e2d2d17477831be59cf3917a2cf15806"
     },
     {
       "producer_type": "telemetry_event_at_mention_v1",
@@ -724,7 +724,7 @@
       "spool": "telemetry_event_managed_settings_resolved_v1",
       "valid_from": null,
       "schema": "telemetry/event_managed_settings_resolved.schema.json",
-      "sha256": "72cd1f741caa50ad7d5c0683083fbffbd3119c504bb8615f1183432bf4ad2870"
+      "sha256": "a55f01992e800d1caa5d6fc6d535b993fa5273d66d9dfa3cd0a19843f0a768b0"
     },
     {
       "producer_type": "telemetry_event_mcp_server_connection_v1",
@@ -768,7 +768,7 @@
       "spool": "telemetry_event_plugin_loaded_v1",
       "valid_from": null,
       "schema": "telemetry/event_plugin_loaded.schema.json",
-      "sha256": "281c3b901882b753a19de9bbc39c6f1436a879370e764da226f84bf6498fb7fa"
+      "sha256": "3e59dd6fd2f9da78a326bd64efa275b8e3f9eec31fa7bcae6b5e194620d3a968"
     },
     {
       "producer_type": "telemetry_event_retention_sweep_v1",
@@ -779,7 +779,7 @@
       "spool": "telemetry_event_retention_sweep_v1",
       "valid_from": null,
       "schema": "telemetry/event_retention_sweep.schema.json",
-      "sha256": "7b198e7abc8ed3cc02c815339144ddf37293cd5da695545a46a77662eb8efb97"
+      "sha256": "d985a807054c62588c5487a9d0f0a9f3410e6dd7b28fde6fe95364b9ca4c86a8"
     },
     {
       "producer_type": "telemetry_event_skill_activated_v1",
@@ -801,7 +801,7 @@
       "spool": "telemetry_event_subagent_completed_v1",
       "valid_from": null,
       "schema": "telemetry/event_subagent_completed.schema.json",
-      "sha256": "3b662eb4441b394832affbbf547d58175068f521fd32223dd4acadee51ba5466"
+      "sha256": "883669e0cc16113ccded7a8cbb78e4adfb6ec4d99235fb0c67edf038680906eb"
     },
     {
       "producer_type": "telemetry_event_tool_decision_v1",
@@ -903,6 +903,105 @@
       "sha256": "edf46b6444b27b8e794391c2fc99ecaa15a29dc42f8622f214beaa379692fd67"
     },
     {
+      "producer_type": "telemetry_span_api_error_v1",
+      "source": "telemetry_span",
+      "topic": "api_error",
+      "version": 1,
+      "claude_code_version": "2.1.285",
+      "spool": "telemetry_span_api_error_v1",
+      "valid_from": null,
+      "schema": "telemetry/span_api_error.schema.json",
+      "sha256": "ba8e6ef96bcc8fa57033b9d4504dd0cdea5c55c62b8064a8f9cb603ed16a6e8f"
+    },
+    {
+      "producer_type": "telemetry_span_api_request_v1",
+      "source": "telemetry_span",
+      "topic": "api_request",
+      "version": 1,
+      "claude_code_version": "2.1.285",
+      "spool": "telemetry_span_api_request_v1",
+      "valid_from": null,
+      "schema": "telemetry/span_api_request.schema.json",
+      "sha256": "8e4cdb3dcd4ca00593d50035a6547544c324e253c16bff10137f8e23e4c59e33"
+    },
+    {
+      "producer_type": "telemetry_span_auth_v1",
+      "source": "telemetry_span",
+      "topic": "auth",
+      "version": 1,
+      "claude_code_version": "n/a",
+      "spool": "telemetry_span_auth_v1",
+      "valid_from": null,
+      "schema": "telemetry/span_auth.schema.json",
+      "sha256": "7d3ebf1af26013d2cc1faec31f4f29c9ea2bf64feb60a65f8e4091f9ccca653d"
+    },
+    {
+      "producer_type": "telemetry_span_codex_api_request_v1",
+      "source": "telemetry_span",
+      "topic": "codex_api_request",
+      "version": 1,
+      "claude_code_version": "n/a",
+      "spool": "telemetry_span_codex_api_request_v1",
+      "valid_from": null,
+      "schema": "telemetry/span_codex_api_request.schema.json",
+      "sha256": "73af4630c9248e4f19ac22d98a9ec0e9aad850f8ee2212de446dd125fce22d2f"
+    },
+    {
+      "producer_type": "telemetry_span_compaction_v1",
+      "source": "telemetry_span",
+      "topic": "compaction",
+      "version": 1,
+      "claude_code_version": "2.1.285",
+      "spool": "telemetry_span_compaction_v1",
+      "valid_from": null,
+      "schema": "telemetry/span_compaction.schema.json",
+      "sha256": "2cfd5043ad5979923ba6d77e1324fb7c4a791f4cb2555532862099a7f4f6462f"
+    },
+    {
+      "producer_type": "telemetry_span_endpoint_session_execute_with_v1",
+      "source": "telemetry_span",
+      "topic": "endpoint_session_execute_with",
+      "version": 1,
+      "claude_code_version": "n/a",
+      "spool": "telemetry_span_endpoint_session_execute_with_v1",
+      "valid_from": null,
+      "schema": "telemetry/span_endpoint_session_execute_with.schema.json",
+      "sha256": "60b5f8c84e8c2cbff2cb22b51403e799117d91f33928dfdbb4548d48738302ce"
+    },
+    {
+      "producer_type": "telemetry_span_fs_read_file_v1",
+      "source": "telemetry_span",
+      "topic": "fs_read_file",
+      "version": 1,
+      "claude_code_version": "n/a",
+      "spool": "telemetry_span_fs_read_file_v1",
+      "valid_from": null,
+      "schema": "telemetry/span_fs_read_file.schema.json",
+      "sha256": "af4ba81a1fe9833656876fd3d88f264eb61af98c10e5b6174361243a5175172e"
+    },
+    {
+      "producer_type": "telemetry_span_list_models_v1",
+      "source": "telemetry_span",
+      "topic": "list_models",
+      "version": 1,
+      "claude_code_version": "n/a",
+      "spool": "telemetry_span_list_models_v1",
+      "valid_from": null,
+      "schema": "telemetry/span_list_models.schema.json",
+      "sha256": "55cc8a8e14e61ffa48201aa621ec79b9d6fc7493e7ead6b69abc7c8b80931e32"
+    },
+    {
+      "producer_type": "telemetry_span_tool_result_v1",
+      "source": "telemetry_span",
+      "topic": "tool_result",
+      "version": 1,
+      "claude_code_version": "2.1.285",
+      "spool": "telemetry_span_tool_result_v1",
+      "valid_from": null,
+      "schema": "telemetry/span_tool_result.schema.json",
+      "sha256": "9a61abe8b52d8d06de40d425e058dd41fc43be64702c04392f45bef0649e3a8a"
+    },
+    {
       "producer_type": "api_request_core_v1",
       "source": "api_request",
       "topic": "core",
@@ -911,7 +1010,7 @@
       "spool": "api_request",
       "valid_from": null,
       "schema": "api/request_core.schema.json",
-      "sha256": "fce10e21243d6e69896dce7877bcbd5e58f558a6224f9d7b24bc8c1d58ba1eb0"
+      "sha256": "20dae1a062628ab33d4e5ac42983e1e273a9ef6a7308cf7c2e38917aea5321d0"
     },
     {
       "producer_type": "api_request_system_v1",
@@ -922,7 +1021,7 @@
       "spool": "api_request",
       "valid_from": null,
       "schema": "api/request_system.schema.json",
-      "sha256": "8a01e2ac92607baae6341c831be0e11713e9460869a326c4ed9e3fc264b7beaa"
+      "sha256": "409f2df47cf71ee94b0510bda9e3571696999986c8423d277941ffdb3ae093fe"
     },
     {
       "producer_type": "api_request_tools_v1",
@@ -933,7 +1032,7 @@
       "spool": "api_request",
       "valid_from": null,
       "schema": "api/request_tools.schema.json",
-      "sha256": "1834ba298049546e341ea315d232adce836e3770b2291609c7a46ae475f6a343"
+      "sha256": "855fbad27deb558abac4e43a90a5c472a5f2679fb30db84d5afee559d24d6a9b"
     },
     {
       "producer_type": "api_request_messages_v1",
@@ -944,7 +1043,7 @@
       "spool": "api_request",
       "valid_from": null,
       "schema": "api/request_messages.schema.json",
-      "sha256": "121011bb6e3cd6fa7bad042cee8ed00affab942972f31543fbf00ee123a6b8b7"
+      "sha256": "1f319c0745fa719ddfaf02999a5025b03292881bf514ff63674ba31fc758e3de"
     },
     {
       "producer_type": "api_response_core_v1",
@@ -955,7 +1054,7 @@
       "spool": "api_response",
       "valid_from": null,
       "schema": "api/response_core.schema.json",
-      "sha256": "c6e0ee2270ce2219c2fa708d2c88cdc097d6962f03f3901b3d43c1d5ba585e46"
+      "sha256": "0e616a77c4b9ba53bd14b7200c9a8acc24be536a8baf321bebdbfcb445de9cb3"
     },
     {
       "producer_type": "api_response_usage_v1",
@@ -966,7 +1065,7 @@
       "spool": "api_response",
       "valid_from": null,
       "schema": "api/response_usage.schema.json",
-      "sha256": "0e18426eaa56661df023dda5aeb9609b05b16452124ae39fe132398f57efba56"
+      "sha256": "62f2f3163de092d9079748fa8deba15c60dd759c09c44e4ecc60a856e0273f92"
     },
     {
       "producer_type": "api_response_content_v1",
@@ -977,7 +1076,7 @@
       "spool": "api_response",
       "valid_from": null,
       "schema": "api/response_content.schema.json",
-      "sha256": "251d01ea78700da0b058901252ae1206494f2e453e00da99dfc515b27bcf7c8c"
+      "sha256": "7725929ccdfa342c485f403e411663a84f98a70d845ace3c187fb7810d813e8a"
     }
   ]
 }

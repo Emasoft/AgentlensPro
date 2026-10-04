@@ -11,6 +11,15 @@
 //! path's before acting: a missing path or a different inode means "sealed meanwhile". An appender
 //! then retries from the open; a sealer has lost the race and does nothing.
 //!
+//! The lock belongs to the open descriptor: dropping the `File` releases it. Nothing unlocks
+//! explicitly, because an explicit unlock that failed after a successful write or rename would
+//! report a failure for work that is done (a producer's retry would then duplicate the line).
+//!
+//! SIZE BOUND. `aldigest collect` loads a ready file in one memory-limited DuckDB transaction, so
+//! the writer bounds the file size: an appender that finds `current.ndjson` at least `seal_bytes`
+//! long after its own write seals it itself, still under the lock (the same rename as `seal`).
+//! A ready file is therefore never larger than `seal_bytes` plus one line.
+//!
 //! No fsync: a killed process loses nothing it already wrote, a power loss may lose the tail of
 //! the unsynced spool. A torn line (a write that failed half way) makes its sealed file fail at
 //! collect, which is the loud outcome the digest pipeline wants.
@@ -29,6 +38,18 @@ pub type Res<T> = Result<T, String>;
 /// How often `append` reopens the file because it was sealed between open and lock.
 pub const MAX_ATTEMPTS: u32 = 100;
 
+/// `alspool append` seals `current.ndjson` itself once the file holds at least this many bytes,
+/// so a ready file never exceeds this plus one line. It bounds the size of the files
+/// `aldigest collect` loads (one memory-limited DuckDB transaction per file).
+pub const DEFAULT_SEAL_BYTES: u64 = 4_194_304;
+
+/// The loader's `maximum_object_size` (agentlens-digest `MAX_OBJECT_BYTES`; this crate does not
+/// depend on that one, keep the two equal): a spool line larger than this fails its whole file at collect.
+pub const MAX_LINE_BYTES: usize = 67_108_864;
+
+/// Longest envelope around a payload: `{"ts_ns":` + 20 digits (a u64) + `,"payload":` + `}` + newline.
+pub const LINE_OVERHEAD_MAX: usize = 9 + 20 + 11 + 1 + 1;
+
 /// Spool names follow the manifest rule: non-empty ASCII letters, digits and underscores.
 pub fn is_ident(s: &str) -> bool {
     !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
@@ -46,12 +67,12 @@ fn now_ns() -> Res<u128> {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos()).map_err(|e| format!("system clock is before 1970: {e}"))
 }
 
-/// The payload text of one stdin document: trailing ASCII whitespace removed, then valid UTF-8,
-/// no raw newline (a line is one line), and syntactically exactly one JSON object. The text is
-/// returned verbatim, never re-serialised.
+/// The payload text of one stdin document: leading and trailing ASCII whitespace removed, then
+/// valid UTF-8, no raw newline (a line is one line), and syntactically exactly one JSON object.
+/// The text is returned verbatim, never re-serialised.
 pub fn validate_payload(raw: &[u8]) -> Res<&str> {
     let text = std::str::from_utf8(raw).map_err(|e| format!("payload is not valid UTF-8: {e}"))?;
-    let text = text.trim_end_matches(|c: char| c.is_ascii_whitespace());
+    let text = text.trim_matches(|c: char| c.is_ascii_whitespace());
     if text.is_empty() {
         return Err("payload is empty".to_owned());
     }
@@ -98,10 +119,26 @@ fn torn(path: &Path, written: usize, total: usize, why: &str) -> String {
     }
 }
 
-/// Append `stdin` as one spool line. Validation happens before anything is created.
-pub fn append(ingest_dir: &Path, spool: &str, stdin: &[u8]) -> Res<()> {
+/// What a successful `append` did.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Appended {
+    /// The line is in `current.ndjson`.
+    Written,
+    /// The line is written and the file had reached `seal_bytes`: this append sealed it into the ready file.
+    Sealed(PathBuf),
+    /// The line is written (never retry it, that would duplicate it) but the seal that was due failed.
+    SealFailed(String),
+}
+
+/// Append `stdin` as one spool line; when the file then holds at least `seal_bytes`, seal it
+/// before releasing the lock. Validation happens before anything is created. Once the line is
+/// written nothing may turn the call into an `Err`: a later failure is `Appended::SealFailed`.
+pub fn append(ingest_dir: &Path, spool: &str, stdin: &[u8], seal_bytes: u64) -> Res<Appended> {
     check_spool(spool)?;
     let payload = validate_payload(stdin)?;
+    if payload.len() + LINE_OVERHEAD_MAX > MAX_LINE_BYTES {
+        return Err(format!("payload is {} bytes: its spool line would exceed {MAX_LINE_BYTES} bytes, the loader's maximum object size", payload.len()));
+    }
     let dir = ingest_dir.join("inbox").join(spool);
     std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let path = dir.join("current.ndjson");
@@ -116,10 +153,33 @@ pub fn append(ingest_dir: &Path, spool: &str, stdin: &[u8]) -> Res<()> {
         // The clock is read under the lock, so file order equals ts_ns order within a file.
         let line = format!("{{\"ts_ns\":{},\"payload\":{payload}}}\n", now_ns()?);
         write_line(&f, &path, line.as_bytes())?;
-        FileExt::unlock(&f).map_err(|e| format!("{}: unlock: {e}", path.display()))?;
-        return Ok(());
+        // The line is written: from here no failure may be reported as an `Err`, and the lock is
+        // released by dropping `f` when this function returns (after the seal's rename).
+        return Ok(match f.metadata() {
+            Ok(m) if m.len() < seal_bytes => Appended::Written,
+            Ok(_) => match seal_locked(&path, ingest_dir, spool) {
+                Ok(ready) => Appended::Sealed(ready),
+                Err(e) => Appended::SealFailed(e),
+            },
+            Err(e) => Appended::SealFailed(format!("{}: {e}", path.display())),
+        });
     }
     Err(format!("{}: sealed {MAX_ATTEMPTS} times while waiting for the lock, giving up", path.display()))
+}
+
+/// Move `current.ndjson` to a fresh ready file. The caller holds the exclusive lock on the open
+/// descriptor of that very file and has checked it is non-empty and still at `path`; the rename
+/// runs while the lock is held, so no appender can write between the check and the move.
+fn seal_locked(path: &Path, ingest_dir: &Path, spool: &str) -> Res<PathBuf> {
+    let ready = ingest_dir.join("ready").join(spool);
+    std::fs::create_dir_all(&ready).map_err(|e| format!("{}: {e}", ready.display()))?;
+    let dest = ready.join(format!("{}-{}.ndjson", now_ns()?, std::process::id()));
+    // rename(2) replaces silently; the name is unique per (ns, pid), so an existing one is a bug.
+    if dest.exists() {
+        return Err(format!("{}: already exists", dest.display()));
+    }
+    std::fs::rename(path, &dest).map_err(|e| format!("rename {} -> {}: {e}", path.display(), dest.display()))?;
+    Ok(dest)
 }
 
 /// Seal one spool: `Some(ready file)` when a non-empty `current.ndjson` was moved, `None` when
@@ -140,17 +200,8 @@ fn seal_one(ingest_dir: &Path, spool: &str) -> Res<Option<PathBuf>> {
     if f.metadata().map_err(|e| format!("{}: {e}", path.display()))?.len() == 0 {
         return Ok(None);
     }
-    let ready = ingest_dir.join("ready").join(spool);
-    std::fs::create_dir_all(&ready).map_err(|e| format!("{}: {e}", ready.display()))?;
-    let dest = ready.join(format!("{}-{}.ndjson", now_ns()?, std::process::id()));
-    // rename(2) replaces silently; the name is unique per (ns, pid), so an existing one is a bug.
-    if dest.exists() {
-        return Err(format!("{}: already exists", dest.display()));
-    }
-    // Renamed while the lock is still held: no appender can write between the check and the move.
-    std::fs::rename(&path, &dest).map_err(|e| format!("rename {} -> {}: {e}", path.display(), dest.display()))?;
-    FileExt::unlock(&f).map_err(|e| format!("{}: unlock: {e}", path.display()))?;
-    Ok(Some(dest))
+    // `f` stays open, and so locked, until this function returns: after the rename.
+    seal_locked(&path, ingest_dir, spool).map(Some)
 }
 
 /// Seal every spool directory of `<ingest_dir>/inbox` (or only `only`); returns the ready files

@@ -1,0 +1,124 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agentlenspro:telemetry.span.api_error:v1",
+  "title": "Claude Code OTel span claude_code.api_error attributes",
+  "x-claude-code-version": "2.1.285",
+  "type": "object",
+  "properties": {
+    "app.entrypoint": {
+      "type": "string"
+    },
+    "app.version": {
+      "type": "string"
+    },
+    "attempt": {
+      "type": "integer"
+    },
+    "client_request_id": {
+      "type": "string"
+    },
+    "duration_ms": {
+      "type": "integer"
+    },
+    "error": {
+      "type": "string"
+    },
+    "event.name": {
+      "type": "string"
+    },
+    "event.sequence": {
+      "type": "integer"
+    },
+    "event.timestamp": {
+      "type": "string"
+    },
+    "host.arch": {
+      "type": "string"
+    },
+    "model": {
+      "type": "string"
+    },
+    "organization.id": {
+      "type": "string"
+    },
+    "os.type": {
+      "type": "string"
+    },
+    "os.version": {
+      "type": "string"
+    },
+    "prompt.id": {
+      "type": "string"
+    },
+    "query_source": {
+      "type": "string"
+    },
+    "request_id": {
+      "type": "string"
+    },
+    "service.name": {
+      "type": "string"
+    },
+    "service.version": {
+      "type": "string"
+    },
+    "session.id": {
+      "type": "string"
+    },
+    "speed": {
+      "type": "string"
+    },
+    "status_code": {
+      "type": "integer"
+    },
+    "terminal.type": {
+      "type": "string"
+    },
+    "user.account_id": {
+      "type": "string"
+    },
+    "user.account_uuid": {
+      "type": "string"
+    },
+    "user.email": {
+      "type": "string"
+    },
+    "user.id": {
+      "type": "string"
+    },
+    "_span": {
+      "type": "object",
+      "properties": {
+        "traceId": {
+          "type": "string"
+        },
+        "spanId": {
+          "type": "string"
+        },
+        "parentSpanId": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "startTimeUnixNano": {
+          "type": "integer"
+        },
+        "endTimeUnixNano": {
+          "type": "integer"
+        },
+        "status": {
+          "type": "object",
+          "properties": {
+            "code": {
+              "type": "integer"
+            },
+            "message": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  }
+}

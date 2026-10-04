@@ -6,7 +6,7 @@
   "type": "object",
   "properties": {
     "agent_path_count": {
-      "x-duckdb-type": "VARCHAR"
+      "type": "integer"
     },
     "app.entrypoint": {
       "type": "string"
@@ -21,7 +21,7 @@
       "type": "string"
     },
     "command_path_count": {
-      "x-duckdb-type": "VARCHAR"
+      "type": "integer"
     },
     "enabled_via": {
       "type": "string",
@@ -44,16 +44,16 @@
       "type": "string"
     },
     "has_hooks": {
-      "x-duckdb-type": "VARCHAR"
+      "type": "boolean"
     },
     "has_mcp": {
-      "x-duckdb-type": "VARCHAR"
+      "type": "boolean"
     },
     "host.arch": {
       "type": "string"
     },
     "host_owned_mcp": {
-      "x-duckdb-type": "VARCHAR"
+      "type": "boolean"
     },
     "marketplace.name": {
       "type": "string"
@@ -112,7 +112,7 @@
       "type": "string"
     },
     "skill_path_count": {
-      "x-duckdb-type": "VARCHAR"
+      "type": "integer"
     },
     "terminal.type": {
       "type": "string"

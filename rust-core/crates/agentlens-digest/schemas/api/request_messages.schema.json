@@ -8,6 +8,9 @@
     "link": {
       "type": "object",
       "properties": {
+        "body_id": {
+          "type": "string"
+        },
         "request_id": {
           "type": "string"
         },

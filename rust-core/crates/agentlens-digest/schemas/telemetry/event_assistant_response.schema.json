@@ -58,7 +58,7 @@
       "type": "string"
     },
     "response_length": {
-      "x-duckdb-type": "VARCHAR"
+      "type": "integer"
     },
     "service.name": {
       "type": "string"

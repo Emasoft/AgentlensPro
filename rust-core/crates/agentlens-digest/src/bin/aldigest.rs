@@ -1,6 +1,7 @@
 //! aldigest — spool NDJSON → typed native DuckDB tables (TRDD-LHCHVK9Z, TRDD-VXD881R6).
 //!
 //!   aldigest describe --manifest M            print every producer, its table and columns
+//!   aldigest spools --manifest M              one line per source+topic, current (highest) version only: source, topic, producer_type, spool (TAB separated)
 //!   aldigest rehash --manifest M              rewrite the manifest's sha256 fields from the schema files
 //!   aldigest register --db DB --manifest M    install the catalog, tables and digest macros
 //!   aldigest collect --db DB --ingest-dir DIR load ready/<spool>/*.ndjson exactly once
@@ -17,7 +18,7 @@ use std::process::exit;
 
 fn usage(msg: &str) -> ! {
     eprintln!("aldigest: {msg}");
-    eprintln!("usage: aldigest describe --manifest M | rehash --manifest M | register --db DB --manifest M | collect --db DB --ingest-dir DIR");
+    eprintln!("usage: aldigest describe --manifest M | spools --manifest M | rehash --manifest M | register --db DB --manifest M | collect --db DB --ingest-dir DIR");
     exit(64);
 }
 
@@ -63,6 +64,13 @@ fn run(args: &[String]) -> Res<()> {
             let f = flags(rest, &["manifest"]);
             for p in schema::load_manifest(&f["manifest"])? {
                 println!("{}", p.describe());
+            }
+        }
+        "spools" => {
+            let f = flags(rest, &["manifest"]);
+            let producers = schema::load_manifest(&f["manifest"])?;
+            for p in schema::current_versions(&producers) {
+                println!("{}\t{}\t{}\t{}", p.source, p.topic, p.producer_type, p.spool);
             }
         }
         "rehash" => {

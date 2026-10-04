@@ -308,7 +308,7 @@ fn t02_round_trip_statusline_main() {
 fn t03_every_producer_loads_a_required_only_line() {
     let fx = Fx::new("t03");
     let producers = register_where(&fx, &|_| true);
-    assert_eq!(producers.len(), 89);
+    assert_eq!(producers.len(), 98);
     let mut spools: Vec<&str> = producers.iter().map(|p| p.spool.as_str()).collect();
     spools.sort_unstable();
     spools.dedup();
@@ -1182,7 +1182,7 @@ use agentlens_digest::schema::qident;
 // ---------------------------------------------------------------- step (e): telemetry and API-body producers
 
 /// The sources added by step (e) and how many producers each has in the manifest.
-const NEW_SOURCES: [(&str, usize); 4] = [("telemetry_event", 27), ("telemetry_span", 6), ("api_request", 4), ("api_response", 3)];
+const NEW_SOURCES: [(&str, usize); 4] = [("telemetry_event", 27), ("telemetry_span", 15), ("api_request", 4), ("api_response", 3)];
 const API_REQUEST: [&str; 4] = ["api_request_core_v1", "api_request_system_v1", "api_request_tools_v1", "api_request_messages_v1"];
 const API_RESPONSE: [&str; 3] = ["api_response_core_v1", "api_response_usage_v1", "api_response_content_v1"];
 
@@ -1223,13 +1223,13 @@ fn deep_merge(into: &mut Value, from: &Value) {
     }
 }
 
-/// t15. Every one of the 40 new producers (27 events, 6 spans, 4 request and 3 response topics) loads a line
+/// t15. Every one of the 49 new producers (27 events, 15 spans, 4 request and 3 response topics) loads a line
 /// carrying a value for every property, and every column reads back equal to what was sent.
 #[test]
 fn t15_every_new_producer_round_trips_a_full_line() {
     let fx = Fx::new("t15");
     let producers = register_where(&fx, &is_new_source);
-    assert_eq!(producers.len(), 40);
+    assert_eq!(producers.len(), 49);
     for (src, n) in NEW_SOURCES {
         assert_eq!(producers.iter().filter(|p| p.source == src).count(), n, "producers of {src}");
     }
@@ -1300,18 +1300,18 @@ fn t17_untyped_telemetry_attributes_are_varchar_and_take_any_json_value() {
     let fx = Fx::new("t17");
     register_where(&fx, &only(&["telemetry_event_hook_execution_complete_v1", "telemetry_event_managed_settings_resolved_v1", "telemetry_event_tool_result_v1"]));
     let hook = "telemetry_event_hook_execution_complete_v1";
-    fx.put(hook, "a.ndjson", &lines(&[json!({"num_hooks": 3, "total_duration_ms": 1.5, "num_success": true, "stdout_chars": "12"})]));
+    fx.put(hook, "a.ndjson", &lines(&[json!({"num_hooks": 3, "total_duration_ms": 1.5, "num_success": true, "stdout_chars": "12", "system_message_chars": ["x", "y"]})]));
     let managed = "telemetry_event_managed_settings_resolved_v1";
-    fx.put(managed, "a.ndjson", &lines(&[json!({"managed_settings.sources": ["user", "project"]})]));
+    fx.put(managed, "a.ndjson", &lines(&[json!({"managed_settings.sources": {"user": "a", "project": "b"}})]));
     let tool = "telemetry_event_tool_result_v1";
     fx.put(tool, "a.ndjson", &lines(&[json!({"duration_ms": "17", "tool_result_size_bytes": "9", "tool_name": "Bash", "event.sequence": 4})]));
     assert_eq!(fx.collect(), Summary { files_loaded: 3, rows: 3, files_failed: 0, files_reconciled: 0 });
     let conn = fx.conn();
     assert_eq!(
-        select(&conn, &["typeof(num_hooks)", "num_hooks", "total_duration_ms", "num_success", "stdout_chars"], &t(hook), "1")[0],
-        vec![s("VARCHAR"), s("3"), s("1.5"), s("true"), s("12")]
+        select(&conn, &["typeof(num_hooks)", "num_hooks", "total_duration_ms", "num_success", "stdout_chars", "system_message_chars"], &t(hook), "1")[0],
+        vec![s("VARCHAR"), s("3"), s("1.5"), s("true"), s("12"), s("[\"x\",\"y\"]")]
     );
-    assert_eq!(select(&conn, &["typeof(\"managed_settings.sources\")", "\"managed_settings.sources\""], &t(managed), "1")[0], vec![s("VARCHAR"), s("[\"user\",\"project\"]")]);
+    assert_eq!(select(&conn, &["typeof(\"managed_settings.sources\")", "\"managed_settings.sources\""], &t(managed), "1")[0], vec![s("JSON"), s("{\"user\":\"a\",\"project\":\"b\"}")]);
     assert_eq!(
         select(&conn, &["typeof(duration_ms)", "duration_ms", "tool_result_size_bytes", "tool_name", "\"event.sequence\""], &t(tool), "1")[0],
         vec![s("VARCHAR"), s("17"), s("9"), s("Bash"), s("4")]
@@ -1358,7 +1358,7 @@ fn t18_telemetry_span_round_trips_with_its_envelope() {
 
 fn api_link(i: usize) -> Value {
     json!({
-        "request_id": format!("req_aaaaaaaa{i}"), "message_id": format!("msg_bbbb2222{i}"), "message_uuid": format!("uuid-aaaaaaaa-{i}"),
+        "body_id": format!("body-aaaaaaaa-{i}"), "request_id": format!("req_aaaaaaaa{i}"), "message_id": format!("msg_bbbb2222{i}"), "message_uuid": format!("uuid-aaaaaaaa-{i}"),
         "session_id": format!("aaaaaaaa-{i}"), "query_source": "repl_main_thread", "model": "model-aaaaaaaa"
     })
 }
@@ -1401,12 +1401,12 @@ fn t19_api_request_round_trips_into_four_topic_tables_with_equal_keys() {
     let ord = "_meta_record_ordinal";
     let core = select(
         &conn,
-        &["link.request_id", "link.session_id", "link.model", "body.model", "body.max_tokens", "body.stream", "array_to_string(body.betas, '|')", "body.metadata.user_id",
+        &["link.request_id", "link.body_id", "link.session_id", "link.model", "body.model", "body.max_tokens", "body.stream", "array_to_string(body.betas, '|')", "body.metadata.user_id",
           "CAST(body.thinking AS VARCHAR)", "body.temperature", "CAST(body.tool_choice AS VARCHAR)", "body.fallbacks IS NULL"],
         &tb(API_REQUEST[0]),
         ord,
     );
-    assert_eq!(core[1], [s("req_aaaaaaaa1"), s("aaaaaaaa-1"), s("model-aaaaaaaa"), s("model-aaaaaaaa"), s("4096"), s("true"), s("beta-a|beta-b"), s("user-aaaaaaaa"),
+    assert_eq!(core[1], [s("req_aaaaaaaa1"), s("body-aaaaaaaa-1"), s("aaaaaaaa-1"), s("model-aaaaaaaa"), s("model-aaaaaaaa"), s("4096"), s("true"), s("beta-a|beta-b"), s("user-aaaaaaaa"),
         s("{\"type\":\"adaptive\"}"), s("1.0"), s("{\"type\":\"auto\"}"), s("true")]);
     // `system` is one JSON column: a string once, an array of blocks once (json_type tells them apart).
     let system = select(&conn, &["json_type(body.system)", "CAST(body.system AS VARCHAR)", "json_extract_string(body.system, '$[1].text')", "json_extract_string(body.system, '$[1].cache_control.type')"], &tb(API_REQUEST[1]), ord);
@@ -1465,12 +1465,16 @@ fn t20_a_line_without_body_loads_null_but_a_line_without_payload_fails() {
 }
 
 /// t21. An api_response line round-trips (usage tokens compare as integers, cache_creation is a struct, content is a list of
-/// JSON blocks), an error-shaped response keeps its error content, and requests join responses on link.request_id.
+/// JSON blocks), an error-shaped response keeps its error content, and requests join responses on link.body_id (a pair whose link has no request_id joins too).
 #[test]
 fn t21_api_response_round_trips_and_joins_its_request() {
     let fx = Fx::new("t21");
     register_where(&fx, &|e| e["source"] == "api_request" || e["source"] == "api_response");
-    fx.put("api_request", "a.ndjson", &lines(&[api_request_payload(0, json!("s")), api_request_payload(1, json!("s"))]));
+    let anonymous = |mut p: Value| {
+        p["link"].as_object_mut().unwrap().remove("request_id"); // 206 of 400 real index lines have none
+        p
+    };
+    fx.put("api_request", "a.ndjson", &lines(&[api_request_payload(0, json!("s")), api_request_payload(1, json!("s")), anonymous(api_request_payload(2, json!("s")))]));
     let ok = json!({"link": api_link(0), "body": {
         "id": "msg_bbbb22220", "type": "message", "role": "assistant", "model": "model-aaaaaaaa", "stop_reason": "end_turn", "stop_sequence": null,
         "content": [{"type": "text", "text": "hi"}, {"type": "tool_use", "id": "toolu_aaaaaaaa", "name": "tool_a", "input": {"path": "/x"}}],
@@ -1481,8 +1485,9 @@ fn t21_api_response_round_trips_and_joins_its_request() {
         "context_management": {"applied_edits": []}, "diagnostics": {"cache_miss_reason": "ttl"}
     }});
     let error = json!({"link": api_link(1), "body": {"type": "error", "error": {"type": "overloaded_error", "message": "Overloaded"}}});
-    fx.put("api_response", "a.ndjson", &lines(&[ok, error]));
-    assert_eq!(fx.collect(), Summary { files_loaded: 2, rows: 4, files_failed: 0, files_reconciled: 0 });
+    let anon = anonymous(json!({"link": api_link(2), "body": {"id": "msg_bbbb22222", "type": "message", "role": "assistant", "model": "model-aaaaaaaa"}}));
+    fx.put("api_response", "a.ndjson", &lines(&[ok, error, anon]));
+    assert_eq!(fx.collect(), Summary { files_loaded: 2, rows: 6, files_failed: 0, files_reconciled: 0 });
     let conn = fx.conn();
     let ord = "_meta_record_ordinal";
     let keys = |pt: &str| select(&conn, &["_meta_ingest_id", "_meta_record_ordinal"], &t(pt), "1, 2");
@@ -1513,14 +1518,21 @@ fn t21_api_response_round_trips_and_joins_its_request() {
     let content = select(&conn, &["len(body.content)", "json_extract_string(body.content[1], '$.text')", "json_extract_string(body.content[2], '$.name')", "json_extract_string(body.content[2], '$.input.path')"], &t(API_RESPONSE[2]), ord);
     assert_eq!(content[0], [s("2"), s("hi"), s("tool_a"), s("/x")]);
     assert_eq!(select(&conn, &["body.content IS NULL"], &t(API_RESPONSE[2]), ord)[1], [s("true")]);
-    // Request and response meet on link.request_id.
+    // Request and response meet on link.body_id, which every line has; request_id is absent from about half of the real ones.
     let joined = select(
         &conn,
-        &["q.link.request_id", "r.body.type", "q.body.model"],
-        &format!("{} q JOIN {} r ON q.link.request_id = r.link.request_id", t(API_REQUEST[0]), t(API_RESPONSE[0])),
+        &["q.link.body_id", "q.link.request_id", "r.body.type", "q.body.model"],
+        &format!("{} q JOIN {} r ON q.link.body_id = r.link.body_id", t(API_REQUEST[0]), t(API_RESPONSE[0])),
         "1",
     );
-    assert_eq!(joined, vec![vec![s("req_aaaaaaaa0"), s("message"), s("model-aaaaaaaa")], vec![s("req_aaaaaaaa1"), s("error"), s("model-aaaaaaaa")]]);
+    assert_eq!(
+        joined,
+        vec![
+            vec![s("body-aaaaaaaa-0"), s("req_aaaaaaaa0"), s("message"), s("model-aaaaaaaa")],
+            vec![s("body-aaaaaaaa-1"), s("req_aaaaaaaa1"), s("error"), s("model-aaaaaaaa")],
+            vec![s("body-aaaaaaaa-2"), None, s("message"), s("model-aaaaaaaa")],
+        ]
+    );
 }
 
 /// t22. Timing (printed, not asserted): collect of one file holding one synthetic request body of about 2 MB, through the four
@@ -1543,4 +1555,80 @@ fn t22_timing_one_2mb_request_body() {
     assert_eq!(sum.rows, 1);
     assert_eq!(one(&conn, "len(body.messages)", &t(API_REQUEST[3])), s("3"));
     println!("TIMING api_request-2MB               lines=1     bytes={:<8} collect_ms={ms:>9.2}", text.len());
+}
+
+// ---------------------------------------------------------------- final pass: observed types, spools lookup
+
+/// t23. Attributes observed as integer or boolean in real data are BIGINT / BOOLEAN columns, an observed object is a JSON
+/// column, and `history_entries_pruned` is a VARCHAR column: each loads a value of its JSON type and reads it back unchanged.
+#[test]
+fn t23_observed_attribute_types_are_typed_columns() {
+    type Case = (&'static str, Value, Vec<(&'static str, &'static str)>);
+    let fx = Fx::new("t23");
+    let cases: Vec<Case> = vec![
+        ("telemetry_event_assistant_response_v1", json!({"response_length": 42}), vec![("response_length", "BIGINT")]),
+        (
+            "telemetry_event_subagent_completed_v1",
+            json!({"duration_ms": 1, "total_tokens": 2, "total_tool_uses": 3, "is_async": true, "is_built_in": false, "model_swapped": true}),
+            vec![("duration_ms", "BIGINT"), ("total_tokens", "BIGINT"), ("total_tool_uses", "BIGINT"), ("is_async", "BOOLEAN"), ("is_built_in", "BOOLEAN"), ("model_swapped", "BOOLEAN")],
+        ),
+        (
+            "telemetry_event_plugin_loaded_v1",
+            json!({"agent_path_count": 1, "command_path_count": 2, "skill_path_count": 3, "has_hooks": true, "has_mcp": false, "host_owned_mcp": true}),
+            vec![("agent_path_count", "BIGINT"), ("command_path_count", "BIGINT"), ("skill_path_count", "BIGINT"), ("has_hooks", "BOOLEAN"), ("has_mcp", "BOOLEAN"), ("host_owned_mcp", "BOOLEAN")],
+        ),
+        ("telemetry_event_managed_settings_resolved_v1", json!({"managed_settings.sources": {"user": "a"}}), vec![("managed_settings.sources", "JSON")]),
+        ("telemetry_event_retention_sweep_v1", json!({"history_entries_pruned": "7"}), vec![("history_entries_pruned", "VARCHAR")]),
+    ];
+    register_where(&fx, &|e| cases.iter().any(|(pt, _, _)| e["producer_type"] == *pt));
+    for (pt, payload, _) in &cases {
+        fx.put(pt, "a.ndjson", &lines(std::slice::from_ref(payload)));
+    }
+    assert_eq!(fx.collect(), Summary { files_loaded: 5, rows: 5, files_failed: 0, files_reconciled: 0 });
+    let conn = fx.conn();
+    for (pt, payload, columns) in &cases {
+        for (col, ty) in columns {
+            let (kind, back) = (format!("typeof(\"{col}\")"), format!("to_json(\"{col}\")"));
+            let got = select(&conn, &[kind.as_str(), back.as_str()], &t(pt), "1");
+            assert_eq!(got[0][0], s(ty), "{pt}.{col}");
+            assert_eq!(serde_json::from_str::<Value>(got[0][1].as_deref().unwrap()).unwrap(), payload[*col], "{pt}.{col} value");
+        }
+    }
+}
+
+fn aldigest_spools(manifest: &Path) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_aldigest")).args(["spools", "--manifest"]).arg(manifest).output().unwrap()
+}
+
+/// D1. `aldigest spools` prints one TAB separated line per source+topic with the CURRENT (highest) version only: of the two
+/// versions of the test topic only v2, wherever it stands in the manifest; the crate manifest lists every topic once.
+#[test]
+fn d1_spools_lists_only_the_current_version_of_each_topic() {
+    let fx = Fx::new("d1");
+    let (v1, v2) = version_pair(&fx);
+    let other = entry(&session_end_doc(), "hook", "other_topic", 1, "hook_other_topic_v1", Value::Null, &fx.root.join("versions/other.schema.json"));
+    for (name, order) in [("m-a", [&v2, &v1, &other]), ("m-b", [&other, &v1, &v2])] {
+        let manifest = write_manifest(&fx.root.join(name), &order.map(Clone::clone));
+        let out = aldigest_spools(&manifest);
+        ok(&out);
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout),
+            "hook\tother_topic\thook_other_topic_v1\thook_other_topic_v1\nhook\tsession_end\thook_session_end_v2\thook_session_end_v2\n",
+            "{name}"
+        );
+    }
+    // The crate manifest holds one version of every topic: exactly one line per producer, spool taken from the manifest.
+    let out = aldigest_spools(&crate_dir().join("schemas/manifest.json"));
+    ok(&out);
+    let text = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert_eq!(text.lines().count(), crate_manifest()["producers"].as_array().unwrap().len());
+    assert!(text.lines().all(|l| l.split('\t').count() == 4));
+    assert!(text.lines().any(|l| l == "telemetry_span\tapi_error\ttelemetry_span_api_error_v1\ttelemetry_span_api_error_v1"));
+    assert!(text.lines().any(|l| l == "api_request\tcore\tapi_request_core_v1\tapi_request"));
+}
+
+/// D2. The loader's maximum object size is the 64 MiB that `alspool append` enforces on a spool line (agentlens-spool `MAX_LINE_BYTES`).
+#[test]
+fn d2_max_object_bytes_is_the_spool_line_limit() {
+    assert_eq!(agentlens_digest::MAX_OBJECT_BYTES, 67_108_864);
 }

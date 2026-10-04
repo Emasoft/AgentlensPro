@@ -91,7 +91,7 @@
       ]
     },
     "managed_settings.sources": {
-      "x-duckdb-type": "VARCHAR"
+      "x-duckdb-type": "JSON"
     },
     "managed_settings.trigger": {
       "type": "string",

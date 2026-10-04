@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agentlenspro:telemetry.span.endpoint_session_execute_with:v1",
+  "title": "OTel span endpoint_session_execute_with attributes (not emitted by Claude Code)",
+  "type": "object",
+  "properties": {
+    "api.path": {
+      "type": "string"
+    },
+    "busy_ns": {
+      "type": "integer"
+    },
+    "code.file.path": {
+      "type": "string"
+    },
+    "code.line.number": {
+      "type": "integer"
+    },
+    "code.module.name": {
+      "type": "string"
+    },
+    "http.method": {
+      "type": "string"
+    },
+    "idle_ns": {
+      "type": "integer"
+    },
+    "target": {
+      "type": "string"
+    },
+    "thread.id": {
+      "type": "integer"
+    },
+    "thread.name": {
+      "type": "string"
+    },
+    "_span": {
+      "type": "object",
+      "properties": {
+        "traceId": {
+          "type": "string"
+        },
+        "spanId": {
+          "type": "string"
+        },
+        "parentSpanId": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "startTimeUnixNano": {
+          "type": "integer"
+        },
+        "endTimeUnixNano": {
+          "type": "integer"
+        },
+        "status": {
+          "type": "object",
+          "properties": {
+            "code": {
+              "type": "integer"
+            },
+            "message": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  }
+}

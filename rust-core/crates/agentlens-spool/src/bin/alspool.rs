@@ -1,11 +1,15 @@
 //! alspool — the spool writer (TRDD-LHCHVK9Z). Touches only the filesystem, never a database.
 //!
-//!   alspool append --ingest-dir D --spool S    one JSON object on stdin -> one line of D/inbox/S/current.ndjson
+//!   alspool append --ingest-dir D --spool S [--seal-bytes N]
+//!       one JSON object on stdin -> one line of D/inbox/S/current.ndjson; when the file then holds
+//!       at least N bytes (default 4194304) the append seals it itself, under the same lock
 //!   alspool seal --ingest-dir D [--spool S]    move non-empty current.ndjson files to D/ready/S/
 //!
-//! Any error exits non-zero with the message on stderr and writes nothing.
+//! Any error exits non-zero with the message on stderr and writes nothing, with ONE exception:
+//! exit 2 means the line WAS appended (do not retry it: that would duplicate it) but the seal
+//! that was due failed; the next append tries the seal again.
 
-use agentlens_spool::{append, seal, Res};
+use agentlens_spool::{append, seal, Appended, Res, DEFAULT_SEAL_BYTES};
 use std::collections::HashMap;
 use std::io::Read;
 use std::path::PathBuf;
@@ -13,7 +17,7 @@ use std::process::exit;
 
 fn usage(msg: &str) -> ! {
     eprintln!("alspool: {msg}");
-    eprintln!("usage: alspool append --ingest-dir D --spool S | seal --ingest-dir D [--spool S]");
+    eprintln!("usage: alspool append --ingest-dir D --spool S [--seal-bytes N] | seal --ingest-dir D [--spool S]");
     exit(64);
 }
 
@@ -41,10 +45,20 @@ fn run(args: &[String]) -> Res<()> {
     let rest = &args[1..];
     match cmd.as_str() {
         "append" => {
-            let f = flags(rest, &["ingest-dir", "spool"], &[]);
+            let f = flags(rest, &["ingest-dir", "spool"], &["seal-bytes"]);
+            let seal_bytes = match f.get("seal-bytes") {
+                Some(v) => v.parse::<u64>().unwrap_or_else(|_| usage(&format!("--seal-bytes needs a number of bytes, got {v:?}"))),
+                None => DEFAULT_SEAL_BYTES,
+            };
             let mut stdin = Vec::new();
             std::io::stdin().lock().read_to_end(&mut stdin).map_err(|e| format!("stdin: {e}"))?;
-            append(&PathBuf::from(&f["ingest-dir"]), &f["spool"], &stdin)
+            match append(&PathBuf::from(&f["ingest-dir"]), &f["spool"], &stdin, seal_bytes)? {
+                Appended::Written | Appended::Sealed(_) => Ok(()),
+                Appended::SealFailed(why) => {
+                    eprintln!("alspool: the line was appended (do not retry it) but sealing the full file failed: {why}");
+                    exit(2);
+                }
+            }
         }
         "seal" => {
             let f = flags(rest, &["ingest-dir"], &["spool"]);

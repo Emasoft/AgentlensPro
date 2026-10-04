@@ -24,7 +24,7 @@
       "type": "string"
     },
     "duration_ms": {
-      "x-duckdb-type": "VARCHAR"
+      "type": "integer"
     },
     "event.name": {
       "type": "string",
@@ -43,10 +43,10 @@
       "type": "string"
     },
     "is_async": {
-      "x-duckdb-type": "VARCHAR"
+      "type": "boolean"
     },
     "is_built_in": {
-      "x-duckdb-type": "VARCHAR"
+      "type": "boolean"
     },
     "message.uuid": {
       "type": "string"
@@ -55,7 +55,7 @@
       "type": "string"
     },
     "model_swapped": {
-      "x-duckdb-type": "VARCHAR"
+      "type": "boolean"
     },
     "organization.id": {
       "type": "string"
@@ -91,10 +91,10 @@
       "type": "string"
     },
     "total_tokens": {
-      "x-duckdb-type": "VARCHAR"
+      "type": "integer"
     },
     "total_tool_uses": {
-      "x-duckdb-type": "VARCHAR"
+      "type": "integer"
     },
     "user.account_id": {
       "type": "string"
