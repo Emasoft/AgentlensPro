@@ -4,7 +4,7 @@ title: Generators that require plain out/ read a stale build with no script to r
 column: todo
 status: tasked
 created: 2026-09-25T00:09:31+0200
-updated: 2026-10-04T12:58:21+0200
+updated: 2026-10-04T13:24:25+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -34,3 +34,4 @@ Next action: list every generator under rust-core/crates/agentlens-core/tests/fi
 ## Notes and lessons learned
 
 2026-10-04: this card also carries box 3 of the closed TRDD-MF4YQWWA: after the generator runs again, regenerate the burnscan expected fixture and require a zero diff and burnscan_parity passing.
+2026-10-04: gen-burnscan-expected.mjs repointed to out/test/burnInvestigator.js (the only generator importing plain out/; all others already use out/test/). compile-tests + regeneration: zero diff on every expected fixture; burnscan_parity 9 passed. Box 3 of TRDD-MF4YQWWA satisfied.

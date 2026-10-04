@@ -17,6 +17,15 @@ const dir = new URL('.', import.meta.url).pathname
 const root = join(dir, 'statusline-tree')
 
 const NOW = 1787000000000
+
+// PIN the wall clock and pid the store reads. StatuslineStore files a batch under the day it is
+// WRITTEN (Date.now() in flush) and names WALs/parts after Date.now() + process.pid, so an unpinned
+// run wrote statusline-tree/*/<run day>/ — and the rmSync below then deleted the committed dated
+// directory, leaving a `git add -u` one step from deleting fixtures (TRDD-BZFYC809). The values are
+// those of the committed tree (2026-09-24, pid 6308), so a regeneration on any day lands on the same paths.
+const PINNED_CLOCK_MS = 1790286491695
+Date.now = () => PINNED_CLOCK_MS
+Object.defineProperty(process, 'pid', { value: 6308 })
 const J = (v) => JSON.parse(JSON.stringify(v, (_k, x) => (typeof x === 'bigint' ? Number(x) : x)))
 
 // ── Pure-function cases (flattenSample / dayKey) ───────────────────────────────────────────

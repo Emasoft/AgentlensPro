@@ -1,7 +1,8 @@
-// Regenerates update-payload-expected.json from the COMPILED TS updatePayload module (the parity
-// oracle) over the summarize fixture, with the clock PINNED. Run from the repo root AFTER
-// `pnpm run compile-tests`:
-//   node rust-core/crates/agentlens-core/tests/fixtures/gen-update-payload-expected.mjs
+// RETIRED (TRDD-DGLBZRBR). This generator required out/test/updatePayload.js, whose source
+// src/updatePayload.ts was removed in 567fc5c2 (TS server retired), so it can never run again.
+// update-payload-expected.json is now a FROZEN GOLDEN: the Rust test update_payload_parity.rs
+// reads it as-is. Do not regenerate or hand-edit it; the code below is kept only as a record of how it was made.
+throw new Error('gen-update-payload-expected.mjs is retired: src/updatePayload.ts was removed in 567fc5c2; update-payload-expected.json is a frozen golden file')
 import { createRequire } from 'module'
 import { readFileSync, writeFileSync } from 'fs'
 const require = createRequire(import.meta.url)

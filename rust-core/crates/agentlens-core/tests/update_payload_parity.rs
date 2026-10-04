@@ -1,7 +1,8 @@
 //! Cross-engine parity for the update-payload derivations (TRDD-DMWOBWFH P4f): expected by the
-//! COMPILED TS src/updatePayload.ts over the summarize fixture with a pinned clock
-//! (tests/fixtures/gen-update-payload-expected.mjs). Regenerate after any change there:
-//!   pnpm run compile-tests && node rust-core/crates/agentlens-core/tests/fixtures/gen-update-payload-expected.mjs
+//! TS src/updatePayload.ts over the summarize fixture with a pinned clock. That oracle is FROZEN:
+//! the TS module was removed in 567fc5c2, so tests/fixtures/update-payload-expected.json is a
+//! golden file and tests/fixtures/gen-update-payload-expected.mjs is retired (it throws at once);
+//! it cannot be regenerated (TRDD-DGLBZRBR).
 
 use agentlens_core::summarize::summarizer::summarize_spans;
 use agentlens_core::update_payload::{compute_analytics_data, compute_sidebar_data, compute_sidebar_payload};

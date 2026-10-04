@@ -4,7 +4,7 @@ title: gen-update-payload-expected.mjs requires a module the TS server retiremen
 column: backburner
 status: tasked
 created: 2026-09-25T00:09:23+0200
-updated: 2026-09-25T00:09:27+0200
+updated: 2026-10-04T13:24:39+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -30,3 +30,7 @@ Evidence: reports/cc-alignment/20260924_234354+0200-I9b2-main-verify.md, Step 1.
 ## STATE
 
 Next action: decide whether to retire gen-update-payload-expected.mjs and treat update-payload-expected.json as a frozen golden file, documenting that in the Rust test's own comment/name rather than leaving a dead generator that fails on a fresh checkout. — 2026-09-25
+
+## Notes
+
+2026-10-04: generator retired (throws at top with the reason); Rust test comment says the oracle is frozen; update_payload_parity 1 passed.

@@ -4,7 +4,7 @@ title: gen-statusline-expected.mjs deletes committed dated fixtures when run on 
 column: todo
 status: tasked
 created: 2026-09-25T00:17:38+0200
-updated: 2026-09-25T00:23:13+0200
+updated: 2026-10-04T13:24:37+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -31,3 +31,7 @@ A second run on the same day deletes nothing new.
 ## Approval log
 
 - 2026-09-25T00:17:38+0200 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+
+## Notes
+
+2026-10-04: gen-statusline-expected.mjs now pins Date.now and process.pid to the committed tree's values (2026-09-24, pid 6308). Main part and WAL regenerate byte-identical; the subagent part is renamed once (ms 779 to 695) because the committed one was sealed 84 ms later; stable on re-run. statusline_parity 3 passed.

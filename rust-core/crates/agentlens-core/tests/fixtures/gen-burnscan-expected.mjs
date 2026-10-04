@@ -40,7 +40,9 @@ import { fileURLToPath } from 'node:url'
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 os.homedir = () => HERE // stubbed BEFORE the module under test reads it
 
-const { investigateBurn } = await import(path.join(HERE, '../../../../../out/burnInvestigator.js'))
+// out/test/, NOT plain out/: compile-tests (the only script) builds out/test/; nothing rebuilds plain
+// out/, so importing it silently read a stale build and produced false fixture drift (TRDD-Z228SAC7).
+const { investigateBurn } = await import(path.join(HERE, '../../../../../out/test/burnInvestigator.js'))
 
 const BODIES = path.join(HERE, 'burnscan-bodies')
 const NORESP = path.join(HERE, 'burnscan-noresp')
