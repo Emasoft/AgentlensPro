@@ -3,11 +3,12 @@ trdd-id: ZIWEB0UW
 title: alcore /api/server-stats lacks the capture block so status prints capture unknown
 column: deploy
 created: 2026-09-01T19:46:50+0200
-updated: 2026-10-05T01:28:04+0200
+updated: 2026-10-05T01:52:21+0200
 current-owner: agentlenspro-15
 task-type: bugfix
 implementation-commits: [0c19090d, 3b7bfcd6]
 status: tasked
+release-via: deploy
 ---
 
 # alcore's server-stats has no `capture` block — `server status` prints "capture: unknown"
@@ -84,3 +85,4 @@ Deploy lesson captured as ATOM-SFLG-1NSX (in-place cp SIGKILL).
 - Re-run by the main agent, exit 0, 2 passed: cargo test -p agentlens-core --lib with the filters live_bodies_liveness_counts_request_response_files_and_finds_the_newest and parked_bodies_gauge_reads_stranded_names_and_reports_ghosts (module server_stats::capture_block_tests).
 - Read by the main agent: server_stats.rs emits bodies.live {files, newestMs} and bodies.parked {files, bytes, onDisk} or null; serverControl.ts prints "unknown (server predates capture reporting)" only when bodies.live is absent.
 - Not done: no mutation was run on these two tests (the reviewer argued from the empty-versus-populated assertions); the TypeScript test src/test/parkedBodies.test.ts was not run; `server status` against the live collector was not checked, since that needs the deployed build.
+- Owed checks done on 2026-10-05 (report docs_dev/20261005_014206+0200-review-ZIWEB0UW-owed.md): src/test/bodiesCaptureLine.test.ts covers the "unknown" branch and passes; a mutation making live_bodies_liveness return (0, None) turned live_bodies_liveness_counts_request_response_files_and_finds_the_newest red on its assertion and was undone with the working-tree checksum unchanged. The earlier bullet saying no mutation was run is superseded by this one.

@@ -1,9 +1,9 @@
 ---
 trdd-id: C19SUVPH
 title: The ingest flood bench cannot send statusline POSTs so a load arm cannot vary statusline alone
-column: human_review
+column: todo
 created: 2026-09-23T19:14:50+0200
-updated: 2026-10-04T12:47:42+0200
+updated: 2026-10-05T01:52:23+0200
 current-owner: main-session
 created-by: main-session
 task-type: infra
@@ -15,6 +15,7 @@ approved: true
 approval-judge: main-session
 approval-datetime: 2026-09-23T19:14:50+0200
 implementation-commits: [bbf40fdf, ea835fdf, d18dc9a1, fb61c4f4, 9b599f21, 79dd2828]
+status: tasked
 ---
 
 # The ingest flood bench cannot send statusline POSTs so a load arm cannot vary statusline alone
@@ -35,6 +36,7 @@ related: [EQCGAVGV].
 - 2026-09-24T08:57:34+0200 — column → human_review by main-session. AI review verified, evidence in reports/board-triage ai_review-A/B/C triage
 - 2026-09-24T08:57:49+0200 — main-session (board update A): moved ai_review -> human_review; AI review verified per reports/board-triage ai_review-A/B/C triage rows. In this project's mono-agent rule the session moves ai_review->human_review; the owner moves human_review->complete.
 - 2026-09-24T08:58:02+0200 — main-session note: this card carries the open owner question on the human_review policy for AI-approved mandate cards (shared with 9SOYXKNE) — moved to human_review per this batch's instruction; the policy question itself remains for the owner.
+- 2026-10-05T01:52:23+0200 — column → todo by main-agent@agentlenspro. review in the owner's stead 2026-10-05: no committed test; not dev, because nobody is working on it
 
 ## Evidence
 
@@ -78,3 +80,9 @@ Against fb61c4f4, each worker now fires at its stagger instead of one pace later
 ## Notes
 
 2026-10-04: code and tests verified at HEAD 7dab99a0 (report 20261004_123622+0200-close-verify-cv4.md); stays in human_review because box 2 (rate flags agree with target counters over 5 min) was only ever true on an isolated collector run of 2026-09-23, and the dataDir refusal was never exercised; the owner confirms after the next deploy / push.
+
+## Review 2026-10-05 (in the owner's stead)
+
+- Verdict: returned to todo. No committed test of any kind covers scripts/bench/alcore-ingest-flood.mjs; every acceptance claim rests on gitignored reports of one run on 2026-09-23. Not deploy, because nothing here waits on a deploy. Reviewer report: docs_dev/20261005_014637+0200-review-C19SUVPH.md (gitignored).
+- Verified: the refusal to target --ui-port 3000 or --otlp-port 4318 exits 2 before any http call (run by the reviewer; the guard and its position before the first http.request read by the main agent); bad flag values exit 2 with "bad arguments".
+- Owed: a committed test for the port refusal, the argument validation and the statusline-only mix; the data-directory half of the refusal has never been exercised; the 5-minute agreement between the rate flags and the target counters re-run on an isolated collector at low load. Known and unfixed: --rate together with --sessions silently ignores --sessions.

@@ -1,14 +1,15 @@
 ---
 trdd-id: L6V1UUW0
 title: The hook-spool never drains while the server is up, and every spooled hook spawns a doomed revive
-column: human_review
+column: todo
 created: 2026-09-02T09:31:25+0200
-updated: 2026-10-04T12:47:01+0200
+updated: 2026-10-05T01:52:25+0200
 current-owner: main-session
 task-type: bugfix
 priority: high
 min-approval-requirement: none
 related: [465EXTJ6, 2R36W8Q1, D3K7QM2P]
+status: tasked
 ---
 
 # The hook-spool never drains while the server is up, and every spooled hook spawns a doomed revive
@@ -96,3 +97,12 @@ past the original backlog.
 - 2026-09-24T08:57:35+0200 — column → human_review by main-session. AI review verified, evidence in reports/board-triage ai_review-A/B/C triage
 - 2026-09-24T08:57:49+0200 — main-session (board update A): moved ai_review -> human_review; AI review verified per reports/board-triage ai_review-A/B/C triage rows. In this project's mono-agent rule the session moves ai_review->human_review; the owner moves human_review->complete.
 2026-09-24T09:17:06+0200 — AI re-review at HEAD 3faa709c: acceptance still holds — 52155adf (the only later commit touching hookHandlers.ts) only changed the AGENTLENS_HOOK_TIMEOUT/AGENTLENS_GATE_TIMEOUT constants, not this card's pidfileOwnerAlive/reviveDaemonDetached guard or the spool-drain interval logic; cargo test -p agentlens-core --test hook_spool_drain 2/2 pass, npx mocha hookSpool.test.js 9/9 pass (matches the card's own noted 11-vs-9 typo).
+- 2026-10-05T01:52:25+0200 — column → todo by main-agent@agentlenspro. review in the owner's stead 2026-10-05: box 3 guard has no test; not dev, because nobody is working on it
+
+## Review 2026-10-05 (in the owner's stead)
+
+- Verdict: returned to todo for one missing test. Boxes 1 to 3 hold on reading; the periodic drain function is tested (cargo test -p agentlens-core --test hook_spool_drain, 2 passed, run by the reviewer). Reviewer report: docs_dev/20261005_015107+0200-review-L6V1UUW0.md (gitignored).
+- Owed test (box 3): nothing asserts that reviveDaemonDetached skips the spawn when pidfileOwnerAlive() is true; only the predicate is tested, so the guard line in src/cli/hookHandlers.ts could be deleted with every test green. Test to write: with server.pid naming a live pid, call forwardHookEvent against a dead port and assert that no revive is spawned.
+- Also found: the live-pid predicate test takes only the legacy branch (a mutation of the 'live-owner' comparison stayed green on the first attempt); the card cites chores.rs lines 589-605, the tick is now near lines 1172-1195; the timer tick itself has no test.
+- Environment, not this card's code: the test hookSpool "a live revived child is reaped" fails deterministically at low load (twice at load 10 to 12) because standalone/cli.js is a bundle built on 2026-10-01 that has no `server revive` verb (0 occurrences, checked by the main agent; the source has it in src/cli/serverControl.ts). The same stale bundle is what the installed agentlenspro runs, so hook revives are no-ops on this machine until the bundle is rebuilt, which is reserved to the owner (see TRDD-E9RM51XG).
+- Box 4 (spooled count reaches 0 on the live collector, no new revive refusals) stays unchecked: it needs the deployed collector.
