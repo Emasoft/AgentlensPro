@@ -4,7 +4,7 @@ title: Tests that spawn standalone/cli.js silently test a stale bundle
 column: backburner
 status: tasked
 created: 2026-10-03T03:22:45+0200
-updated: 2026-10-03T03:22:45+0200
+updated: 2026-10-04T11:58:25+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -24,3 +24,4 @@ The mocha suite compiles src to out/ but some harnesses spawn the esbuild bundle
 ## Approval log
 
 - 2026-10-03T03:22:45+0200 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+2026-10-04: on a machine where the installed bundle predates the server revive verb, a hook that finds the collector dead cannot revive it (unit test "a live revived child is reaped" fails for that reason; reports/ingest-redesign/20261004_102654+0200-revive-test-failure.md). Remedy is node esbuild.js plus a server restart, which is a deploy and the owner's decision.

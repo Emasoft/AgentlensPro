@@ -4,7 +4,7 @@ title: Ingest architecture - spool to typed native DuckDB with versioned per-top
 column: human_review
 status: tasked
 created: 2026-10-04T03:36:28+0200
-updated: 2026-10-04T11:19:16+0200
+updated: 2026-10-04T11:58:25+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: feature
@@ -16,14 +16,14 @@ approved: true
 approval-judge: main-agent@agentlenspro
 approval-datetime: 2026-10-04T03:36:28+0200
 npt: [VXD881R6]
-implementation-commits: [69b7d406, 6085ee91, 6f8d1d16, fdb7996c, c594c472, e9cc75cf, 125bd44b, 22299b2f, 301d7947, 9cca67b4, 6f9e2727, 8b25ab4a, 852ae3ca, a7cefe42]
+implementation-commits: [69b7d406, 6085ee91, 6f8d1d16, fdb7996c, c594c472, e9cc75cf, 125bd44b, 22299b2f, 301d7947, 9cca67b4, 6f9e2727, 8b25ab4a, 852ae3ca, a7cefe42, b8baf734, f97b191b]
 ---
 
 # Ingest architecture - spool to typed native DuckDB with versioned per-topic producer schemas
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-10-04T11:04:03+0200
 
-NEXT ACTION: owner decisions (section "Owner decisions pending"); nothing else is in flight. Known gap: no test asserts that AGENTLENS_INGEST=on with no resolvable alcore still shows the caller's own error.
+NEXT ACTION: owner decisions (section "Owner decisions pending"). No work is in flight. NOT verified by anyone: a real alcore started by the CLI with the ingest flags; the full agentlens-core test suite; writerDead after a real writer panic (no way to make the writer panic without a production hook). Nothing is deployed. Known gap: no test asserts that AGENTLENS_INGEST=on with no resolvable alcore still shows the caller's own error.
 BUILT: crates agentlens-digest (aldigest) and agentlens-spool (alspool), 98 producers; opt-in alcore tap (e9cc75cf, 301d7947, 8b25ab4a) writing hooks, status line, telemetry events and spans, API bodies off by default; CLI opt-in AGENTLENS_INGEST=on in source only (9cca67b4; the installed bundle standalone/cli.js is stale and ignores it until node esbuild.js runs). NOT deployed: the running collector has no tap. No real alcore has been started by the CLI with these flags. Real saved data was loaded through test converters for hooks, telemetry and API bodies; the status line was only compared with its stored flattened columns.
 NOT covered by any schema: telemetry metrics (nothing captures them), transcripts, and the raw nested status-line JSON (never observed on disk).
 SUPERSEDED body sections (kept for history, do NOT act on them): "Design (follows proposal v9 ...)" where it says the collector lives inside alcore and seals to ready/ (the writer seals; the collector is the aldigest binary); "Build order" steps 1-6 (done differently, see "What is built"); the two "OWNER:" bullets and the "How a hook names its producer_type" bullet under "Open" (decided under D-I, see "Decisions"); in "Agent reading" the bullet about a collector-assigned _meta_event_id joining topic tables (the join key is (_meta_ingest_id, _meta_record_ordinal)).
@@ -255,9 +255,10 @@ Backfill tool: scripts_dev/digest-backfill/backfill.py (gitignored), proven on o
 - 301d7947: hook and status-line tap writes left the state lock (a held spool lock stalled every POST; test t14).
 - 9cca67b4: CLI opt-in AGENTLENS_INGEST=on, never stops capture when aldigest is missing.
 - 852ae3ca: AGENTLENS_INGEST_SOURCES is split, trimmed and rejoined; docs and card follow the tap as built.
-- a7cefe42: a panicked spool writer sets writerDead at once; the retention age is computed in SQL on two absolute instants (completed_at is TIMESTAMPTZ; test t20 under TZ=Pacific/Kiritimati); spool_tap tests 20 of 20 with --test-threads=2 (a fully parallel run failed under machine load).
+- a7cefe42: a panicked spool writer sets writerDead at once; the retention age is computed in SQL on two absolute instants (completed_at is TIMESTAMPTZ; test t20 under TZ=Pacific/Kiritimati); spool_tap tests 20 of 20 with --test-threads=2 (one fully parallel run failed during development; four later parallel runs passed 20 of 20, so the cause was not established; possibly flaky: the failing test name and assertion text were not captured, so record them at the next failure; report docs_dev is gitignored, the result lines are: default parallel x4 exit 0, --test-threads=2 exit 0).
 - 8b25ab4a: tap writes go through one bounded writer thread (4096 batches, 64 MiB; a refused batch is dropped from the spool only and counted, `droppedQueueFull` and `writerDead` in /api/ingest-status); `aldigest views` runs once per process after a collect; optional done/ retention (`ALCORE_INGEST_DONE_RETENTION_SECS`, off by default, deletes only files the ledger lists complete and that old). This replaces the bullet above that says file writes go to the blocking pool.
-- Found while testing, unrelated to this work: (a) standalone/cli.js on this machine is stale and lacks server revive (unit test "a live revived child is reaped" fails at HEAD too; report reports/ingest-redesign/20261004_102654+0200-revive-test-failure.md); (b) rustOpenCode real-db parity test fails: native and JS truncate resultSummary differently at a multi-byte character. Each needs its own card.
+- Found while testing, unrelated to this work: (a) standalone/cli.js on this machine is stale and lacks server revive (unit test "a live revived child is reaped" fails at HEAD too; report reports/ingest-redesign/20261004_102654+0200-revive-test-failure.md); (b) rustOpenCode real-db parity test fails: native and JS truncate resultSummary differently at a multi-byte character. Both already have a card (see below).
+- Unrelated findings already carded: rustOpenCode truncation parity is TRDD-YVQI5DYD; the stale CLI bundle cause is TRDD-E9RM51XG.
 
 
 
@@ -271,7 +272,7 @@ Backfill tool: scripts_dev/digest-backfill/backfill.py (gitignored), proven on o
 1. Free disk space first: the volume is 98% full (about 50 GB free) and rust-core/target alone is about 51 GB of regenerable build output.
 2. `cargo build --release --manifest-path rust-core/Cargo.toml -p agentlens-core -p agentlens-digest` (`alspool` is not needed: the tap links the spool library).
 3. Stop the server first (`agentlenspro server stop`), then copy `alcore` into `bin-native/darwin-arm64/`, then `codesign -s - --force bin-native/darwin-arm64/alcore` (without it macOS kills the binary before main); check `./bin-native/darwin-arm64/alcore --version` exits 0.
-4. `aldigest` is run from `rust-core/target/release/` (or the path in `AGENTLENS_ALDIGEST_BIN`): check `aldigest --help` exits 0, an unsigned or killed aldigest may only show when alcore spawns it, as a failed register (tap disabled at start), collect or views record in /api/ingest-status; sign it with the same codesign command if that happens.
+4. `aldigest` is run from `rust-core/target/release/` (or the path in `AGENTLENS_ALDIGEST_BIN`): `aldigest --help` exiting 0 only shows the binary can start at all. A kill when alcore spawns it shows only in `/api/ingest-status`, as a failed register (tap disabled at start), collect or views record; sign it with the same codesign command if that happens.
 5. `node esbuild.js` (the CLI bundle `standalone/cli.js` on this machine dates from 2026-10-01 and lacks the `server revive` verb, so the hook revive of a dead collector is broken today regardless of this work), then confirm which `agentlenspro` is on PATH: `ls -ld "$(readlink -f "$(which agentlenspro)")"`.
 6. Start with `AGENTLENS_INGEST=on agentlenspro server start`. Read from the code by a worker, not run: no server was started with these flags. `server restart`, the hook revive verb `server revive` (both in `serverCommand`) and `server start` all call `ensureServer`, and `ensureServer` spawns alcore with `alcoreServeArgs(process.env, ...)`; so all three pass the ingest flags whenever the variable is in the environment of the process that runs them. The `--supervise` loop and `setup` call `alcoreServeArgs` too.
 7. A hook-spawned revive inherits Claude Code's environment, not the shell's (`reviveDaemonDetached` in hookHandlers.ts passes the hook's own environment to the `server revive` child), so the variable must be exported where Claude Code is launched. Re-check `/api/ingest-status` after any revive: a revive without the variable restarts alcore with the tap off, silently.
@@ -286,6 +287,7 @@ Backfill tool: scripts_dev/digest-backfill/backfill.py (gitignored), proven on o
 - Running the backfill (`scripts_dev/digest-backfill/backfill.py`, gitignored, proven on one day) against the real data directory.
 - API bodies through this path need a de-duplicating design first.
 - The opt-in variable name and whether it should become a config setting.
+- done/ retention reads every old complete ledger row on each tick; before switching retention on for long, add a purged mark to the ledger or an anti-join against the done/ listing (unmeasured with a large ledger).
 
 ## Approval log
 

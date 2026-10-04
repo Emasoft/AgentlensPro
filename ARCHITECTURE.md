@@ -550,7 +550,7 @@ flowchart LR
   the typed tables store each request's message history again without de-duplication), against about
   0.25 GB per day for all other sources together (status line about 0.16 GB, estimated at 2 KiB per
   sample; hooks 35 MB; telemetry events 26.5 MB; spans 29.8 MB). Each figure is spool plus database
-  growth; for the default sources that is about 0.13 GB per day of spool, which stays in `done/` while
+  growth; for the four default sources (status line, hooks, telemetry events, spans) that is about 0.13 GB per day of spool, which stays in `done/` while
   retention is off, and about 0.12 GB per day of database. `--ingest-sources` opts them in.
 - **CLI opt-in.** `AGENTLENS_INGEST=on` makes `agentlenspro server start` (and the hook revive) pass the
   two flags; `AGENTLENS_INGEST_SOURCES` selects sources; if `aldigest` or the manifest cannot be found
