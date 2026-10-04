@@ -397,4 +397,43 @@ suite('safe_config_edit.py — transactional config editor', () => {
     assert.strictEqual(r.status, 2)
     assert.strictEqual(fs.readFileSync(toml, 'utf-8'), corrupt)
   })
+
+  // TRDD-AHM7OUG1 — the TOML path mirrors the JSON path's backup pruning, mode and byte-exact backup.
+  const tomlEdit = (toml: string, n: number) => runEditor(toml, {
+    ops: [{ op: 'ensure_line_in_section', section: 'otel', key_prefix: 'level', line: `level = ${n}` }],
+  }, ['--format', 'toml'])
+  const needPy311 = (ctx: Mocha.Context) => {
+    const ver = execFileSync('python3', ['-c', 'import sys; print(sys.version_info >= (3, 11))'], { encoding: 'utf-8' }).trim()
+    if (ver !== 'True') { ctx.skip() }
+  }
+
+  test('TOML mode: only the two newest backups are kept', function () {
+    needPy311(this)
+    const toml = path.join(dir, 'config.toml')
+    fs.writeFileSync(toml, '[otel]\nlevel = 0\n')
+    for (let n = 1; n <= 4; n++) assert.strictEqual(tomlEdit(toml, n).status, 0)
+    const baks = fs.readdirSync(dir).filter(f => f.startsWith('config.toml.agentlens-bak-'))
+    assert.strictEqual(baks.length, 2, `backups: ${baks.join(', ')}`)
+  })
+
+  test('TOML mode: a 0644 config stays 0644 after an edit', function () {
+    needPy311(this)
+    const toml = path.join(dir, 'config.toml')
+    fs.writeFileSync(toml, '[otel]\nlevel = 0\n')
+    fs.chmodSync(toml, 0o644)
+    assert.strictEqual(tomlEdit(toml, 1).status, 0)
+    assert.strictEqual(fs.statSync(toml).mode & 0o777, 0o644)
+  })
+
+  test('TOML mode: the backup of a CRLF file is byte-exact', function () {
+    needPy311(this)
+    const toml = path.join(dir, 'config.toml')
+    const crlf = '[otel]\r\nlevel = 0\r\n'
+    fs.writeFileSync(toml, crlf)
+    const r = tomlEdit(toml, 1)
+    assert.strictEqual(r.status, 0, r.stderr)
+    const bak = fs.readdirSync(dir).find(f => f.startsWith('config.toml.agentlens-bak-'))
+    assert.ok(bak, 'a backup exists')
+    assert.strictEqual(fs.readFileSync(path.join(dir, bak), 'utf-8'), crlf)
+  })
 })

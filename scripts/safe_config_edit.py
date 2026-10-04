@@ -627,7 +627,9 @@ def transact_toml(target, ops, create_if_missing, do_backup):
             raise BadSpec("TOML mode supports only ensure_line_in_section ops")
 
     try:
-        with open(target, "r", encoding="utf-8") as f:
+        # newline="" (TRDD-AHM7OUG1): no CRLF→LF translation, so `raw` — which becomes the backup —
+        # is the file's exact text, as on the JSON path. The gate-4 compare below must match.
+        with open(target, "r", encoding="utf-8", newline="") as f:
             raw = f.read()
     except FileNotFoundError:
         if not create_if_missing:
@@ -724,19 +726,23 @@ def transact_toml(target, ops, create_if_missing, do_backup):
     try:
         fsync_write(tmp, serialized)
         try:
-            with open(target, "r", encoding="utf-8") as f:
+            with open(target, "r", encoding="utf-8", newline="") as f:
                 if raw is not None and f.read() != raw:
                     raise ConcurrentModification(f"{target} was modified during the transaction")
         except FileNotFoundError:
             if raw is not None:
                 raise ConcurrentModification(f"{target} vanished during the transaction")
         os.makedirs(os.path.dirname(target) or ".", exist_ok=True)
+        # TRDD-AHM7OUG1: staging files are born 0600; without this a 0644 config.toml turns 0600.
+        match_mode(tmp, target)
         os.replace(tmp, target)
     finally:
         try:
             os.unlink(tmp)
         except FileNotFoundError:
             pass
+    if backup:
+        prune_backups(target)  # TRDD-AHM7OUG1: committed, still under the lock — keep BACKUPS_KEPT, as the JSON path does
     return {"changed": True, "backupPath": backup}
 
 
