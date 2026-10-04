@@ -1,10 +1,10 @@
 ---
 trdd-id: VXD881R6
 title: Ingest slice 1 - SessionEnd hook events from spool file to typed DuckDB table via a precompiled digest macro
-column: design
-status: tasked
+column: complete
+status: archived
 created: 2026-10-04T03:53:31+0200
-updated: 2026-10-04T06:32:51+0200
+updated: 2026-10-04T08:12:11+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: feature
@@ -15,12 +15,13 @@ mandated-by: none
 approved: true
 approval-judge: main-agent@agentlenspro
 approval-datetime: 2026-10-04T03:53:31+0200
+implementation-commits: [69b7d406, 6f8d1d16]
 ---
 
 # Ingest slice 1 - SessionEnd hook events from spool file to typed DuckDB table via a precompiled digest macro
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-10-04T03:59:08+0200
-NEXT ACTION: wait for the schema set (LHCHVK9Z build step 1), then build.
+NEXT ACTION: DONE inside crate agentlens-digest (commits 69b7d406, 6f8d1d16), in a broader form than this card specified: all hook events and the status line, spool groups, no view. The body below is the original slice plan and is superseded by TRDD-LHCHVK9Z "What is built".
 Architecture and owner rulings: TRDD-LHCHVK9Z (read it first).
 
 ## Scope
@@ -69,3 +70,8 @@ Never a debug build (it would compile DuckDB from scratch; disk is 97% full). Ad
 
 - 2026-10-04T03:53:31+0200 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-10-04T03:58:52+0200 — column → design by main-agent@agentlenspro. waits on the schema set (parent build step 1); design being corrected
+- 2026-10-04T08:12:11+0200 — COMPLETE by main-agent@agentlenspro. built inside agentlens-digest, see LHCHVK9Z.
+
+## Acceptance
+
+- [x] Delivered inside crate agentlens-digest (commits 69b7d406, 6f8d1d16), in a broader form than this card specified; see TRDD-LHCHVK9Z "What is built".

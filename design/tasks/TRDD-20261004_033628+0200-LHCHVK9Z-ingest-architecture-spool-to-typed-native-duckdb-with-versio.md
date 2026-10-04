@@ -1,10 +1,10 @@
 ---
 trdd-id: LHCHVK9Z
 title: Ingest architecture - spool to typed native DuckDB with versioned per-topic producer schemas
-column: dev
+column: human_review
 status: tasked
 created: 2026-10-04T03:36:28+0200
-updated: 2026-10-04T06:32:53+0200
+updated: 2026-10-04T08:11:58+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: feature
@@ -16,15 +16,20 @@ approved: true
 approval-judge: main-agent@agentlenspro
 approval-datetime: 2026-10-04T03:36:28+0200
 npt: [VXD881R6]
+implementation-commits: [69b7d406, 6085ee91, 6f8d1d16, fdb7996c, c594c472]
 ---
 
 # Ingest architecture - spool to typed native DuckDB with versioned per-topic producer schemas
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-10-04T03:58:01+0200
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-10-04T08:11:40+0200
 
-NEXT ACTION: build per D-H: (b) added schemas, (c) generator crate agentlens-digest, (d) digest macros + collect, (e) remaining producers, (f) query-unification plan.
-OWNER items open: wrong-typed line policy; NOT NULL for required fields.
-Related: TRDD-9VX3WTGU (memory cap; Amendment 7), TRDD-HH1NP0KD (hook binary; owns build step 7).
+NEXT ACTION: owner review of what is built (below), then the wiring card: make alcore, the hooks and the status line write through alspool and run aldigest collect on a schedule. Nothing is wired yet and no live database exists.
+BUILT as a library and two binaries (crates agentlens-digest and agentlens-spool, 98 producers), NOT wired: nothing in production writes a spool line yet. Loaded with real saved data through test converters for hooks, telemetry and API bodies; the status line was only compared with its stored flattened columns, never loaded. PLANNED (D-H part 4): section "Query unification plan".
+NOT covered by any schema: telemetry metrics (nothing captures them), transcripts, and the raw nested status-line JSON (never observed on disk).
+SUPERSEDED body sections (kept for history, do NOT act on them): "Design (follows proposal v9 ...)" where it says the collector lives inside alcore and seals to ready/ (the writer seals; the collector is the aldigest binary); "Build order" steps 1-6 (done differently, see "What is built"); the two "OWNER:" bullets and the "How a hook names its producer_type" bullet under "Open" (decided under D-I, see "Decisions"); in "Agent reading" the bullet about a collector-assigned _meta_event_id joining topic tables (the join key is (_meta_ingest_id, _meta_record_ordinal)).
+Related: TRDD-VXD881R6 (first slice, done inside the crate), TRDD-HH1NP0KD (hook binary; alspool now exists and is the writer it should call), TRDD-9VX3WTGU (memory cap).
+
+
 
 
 
@@ -125,8 +130,101 @@ D-I (2026-10-04):
 - reports/hook-binaries/: spool append 6.8 ms CPU/event vs 237 ms Node; shared DuckDB file loses events under 22 concurrent hooks.
 - scripts_dev/duckplan-e6, duckplan-e7: PK/unique indexes hit fatal OOM at a 512 MB limit.
 
+## What is built (2026-10-04)
+
+- 69b7d406 agentlens-digest: generator (JSON schema to DuckDB schema + events table + stored digest macro), catalog `_ingest.producer_types` (binding and timeline), ledger `_ingest.files`, `aldigest describe|register|collect`. Layout as in the prototype setup script: one DuckDB schema and one `events` table per producer_type, top-level payload fields as columns, nested objects STRUCT, arrays LIST, no key or index.
+- 6085ee91 agentlens-spool: `alspool append|seal`, 512 KB, no DuckDB.
+- 6f8d1d16 loader fixes: null payload is an error; layout version; rehash; reserved names.
+- fdb7996c telemetry events, spans, API bodies.
+- c594c472 corrections from real data; writer seals at 4 MiB; `aldigest spools`.
+- Producers (98): hook 33, statusline_main 14, statusline_subagent 2, telemetry_event 27, telemetry_span 15, api_request 4, api_response 3.
+- Line format every producer writes: {"ts_ns": <unix ns, set by alspool under the file lock>, "payload": <native JSON, verbatim>}. API bodies: payload = {"link": {body_id, request_id, message_id, message_uuid, session_id, query_source, model}, "body": <the body>}.
+- Tests: agentlens-digest 47, agentlens-spool 16, clippy -D warnings clean (re-run by the main agent at each commit).
+- Binary sizes, append timings and the mutation results are the building workers' measurements; the main agent re-ran tests and clippy at each commit, not the real-data loads.
+
+## Checked against real saved data (reports under reports/ingest-redesign/, gitignored, this machine only)
+
+- Hooks (20261004_070249+0200-hook-schemas-vs-real-data.md): 11 of 13 event spools in the 3 newest files loaded n/n, 20,049 rows. hook_stop and hook_pre_tool_use failed on a missing required `cwd`: 1 Stop line of 10,176 and the only PreToolUse line. 20 of 33 hook events have no saved sample; their schemas rest on the Agent SDK types alone.
+- Status line (20261004_073924+0200-statusline-schemas-vs-stored.md): compared with 1,023,625 main and 222,329 subagent stored rows (flattened parquet). 10 of 14 main topics supported with compatible types (prompt_cache.miss_causes is stored today as six columns because alcore flattens it; the schema declares the raw object); pr, vim, worktree, rate_limits.spend_limit and subagent effort have no evidence. The raw nested payload is not on disk.
+- Telemetry and API bodies (20261004_074054+0200-telemetry-bodies-vs-real-data.md and docs_dev/20261004_080733+0200-digest-final-pass-report.md): after the corrections, 81 files, 31,878 rows, 0 failed; no observed type differs from the declared one; request joins response on link.body_id 400 of 400. 15 telemetry event names and telemetry_span_hook have no saved sample.
+- Speed (D-B): collect steady state 2.9 ms per file (200 files of 5 hook lines), 15 ms per 500-line file; a 20-line status-line file across 14 topic tables 3-4 ms; one alspool append 7.05 ms wall, 3.59 ms CPU, against a 6.33 ms process-spawn floor.
+
+## Decisions made by the agent under D-I (each from a test or a measurement; the owner may overrule any)
+
+1. Schemas describe what Claude Code emits (hook payload, status-line payload, telemetry attributes, API body), not the formats AgentlensPro saves today.
+2. Topic tables (D-A): producers that share a spool read the same file, each with a schema of its own topic; rows join on (_meta_ingest_id, _meta_record_ordinal). One scan per topic table: staging in a temp table is no faster for small files and about 2x faster only on a 2 MB body (20261004_070821+0200-scan-strategy-timing.md).
+3. The digester is the `aldigest collect` process; a producer only appends a line with `alspool`. A hook opening DuckDB itself lost events under concurrency (reports/hook-binaries/).
+4. A producer picks its spool by name; `aldigest spools` lists the current one per source+topic. A new schema version gets a new producer_type AND a new spool, so one file never holds two shapes.
+5. A file whose load raises goes to failed/ whole, with an error file and a ledger row; other files keep loading. One bad line therefore withholds its file (measured: one Stop line withheld 10,175 good lines of a file the test converter built from three days of saved data). The writer seals at 4 MiB, which bounds that loss; failed files are kept for a human.
+6. NOT NULL only for top-level fields the Agent SDK types mark required (hooks). Status line, telemetry and API bodies are all nullable: measured records lack fields the docs call always present. `cwd` stays required for Stop and PreToolUse (2 anomalous lines of about 20,000).
+7. A line with no payload is an error; a payload of {} is not (every optional field may be absent).
+8. No autodetection (D-E): unknown keys are ignored, the schema files in the crate are edited by hand when the owner reports a change, `aldigest rehash` rewrites the hashes, and an edited schema is refused for a producer_type already installed in a database.
+9. Telemetry line shape, a contract the future receiver must write: flat attribute object with the names as emitted; spans add `_span` with the OTLP JSON names. Metrics are deferred: nothing captures them.
+10. Skills, agents and rules (named by the owner as topics) are not fields of an API body; they are text inside system and messages. Extracting them at load time would break D-B and D-C; they are left to queries.
+11. One open spool file per producer (inbox/<spool>/current.ndjson), not per session: the loader routes by directory, and the writer seals by size.
+12. memory_limit stays 256 MB: at that limit the densest real bodies load up to 14.6 MiB per file and fail at 21.9 MiB; the writer keeps files at about 4 MiB.
+
+## Query unification plan (D-H part 4: a PLAN, not built; specs are written after the system is built, D-G)
+
+Goal (owner, D-A and D-H): behind the scenes a topic is split over one table per schema version; queries must see ONE long-lived table and go only to the tables they need.
+Evidence: reports/ingest-redesign/20261004_073237+0200-unified-view-sql-tests.md (DuckDB 1.5.6, synthetic, 3 versions x 2,000,000 rows with DISJOINT time ranges; gitignored, this machine only). Claims marked (measured) come from it; everything else is design.
+
+### SQL objects, all generated from the catalog
+Schema `u`. Names use a double underscore between source and topic, and a source or topic name may not contain a double underscore, so names cannot be ambiguous.
+1. `u.<source>__<topic>`: one VIEW per source+topic. One explicit SELECT per installed version, combined with UNION ALL BY NAME (measured correct on 2M rows per version). Each branch selects the four ordering columns, every payload column under its CANONICAL name and type, and the constants `_meta_version` and `_meta_producer_type`.
+2. `u.<source>__<topic>_between(t_from, t_to)`: a TABLE MACRO, the same branches with `_meta_recorded_at >= t_from AND _meta_recorded_at < t_to` in each. It carries NO validity dates: a row of an old version recorded after the next version appeared (a session still running the old Claude Code, a file collected late) must still be returned. It is a convenience with the same result as the view plus a time filter.
+3. `u.<source>__all`: for a source split over several topic tables, a VIEW that joins the topic views on the UNION of their (_meta_ingest_id, _meta_record_ordinal) keys, so an event is kept even when one topic has no row for it. Ordering columns and a payload name present in several topics (session_id) are taken from the first topic, by name, that has a row for the event; each topic contributes its own payload columns.
+4. `_ingest.table_timeline` (exists): which version of a topic was current when. `valid_from` is the date the owner gives when he reports a Claude Code change (D-E); null means since the beginning. It DESCRIBES the lifeline; it never filters rows. `superseded_by IS NULL` marks the current version.
+
+### How one schema change is declared (schema keywords, written when the owner reports the change)
+- Rename: `"x-replaces": "<old name>"` on the new property (exists; stored in replaces_json).
+- Anything that is not a pure rename: a mapping expression, kept in a separate tracked file `schemas/mappings.json` keyed by producer_type and column, OUTSIDE the schema hash. Each one is a single scalar SQL expression over the older version's columns, validated by binding it against the old version's table. The generator puts the expression in that version branch. This covers a unit change (`duration_s * 1000`), an enum value renamed (CASE), a field split or merged, a STRUCT restructured, and a JSON column that became typed. Without a declaration a same-named field is unioned as is: a meaning change the owner did not report is invisible to the system, by ruling D-E (no autodetection).
+- A field that moved to another topic is declared the same way (an entry in `schemas/mappings.json`) with the other topic view as the expression source; it is resolved in `u.<source>__all` with COALESCE. A topic that was split or merged gets a new topic name; its link to the old topic is declared in the same mapping file. Both are the hard cases and are listed as open below.
+- Canonical type of a column: the type of the newest version, EXCEPT that when any version holds it as VARCHAR or JSON the canonical type is that wider type, because a STRUCT-versus-VARCHAR union binds and then fails at run time for rows it cannot convert, and casting text to a STRUCT fails (both measured). A retype inside a STRUCT or a LIST needs a mapping expression in `schemas/mappings.json`; the generator must refuse to emit a view it cannot type rather than leave it to the union.
+- A canonical-name collision (a rename target that an older version already used for a different field) is a generation error.
+
+### How a query reaches only the right tables
+- With a time predicate, DuckDB dropped the versions whose tables hold no row in the range at PLAN time, from column min/max statistics, and scanned one table: 245,760 rows scanned for 86,400 returned, 1.1 ms against 0.9 ms on the table directly (measured, with disjoint time ranges). When ranges overlap the view is still correct: an overlapping table is scanned and filtered, so pruning is lost, not rows.
+- `WHERE _meta_version = 2` folds the other branches away: 5.8 against 5.7 ms at one thread, 2.0 against 1.7 ms at 14 (measured).
+- No predicate: every version is scanned, as it must be. Aggregating 6,000,000 rows through the view cost 0.95-1.00x one physical table at threads=1 and 1.2-1.7x at 14 threads (measured).
+- Cross-topic join, no index, hash join: 2M x 2M rows in 137 ms warm (152 ms fresh) at threads=1, 26 ms at 14; one ingest id in 1-2 ms (measured, two tables). Memory under a 256 MB limit: no spill, peak 212-239 MB on fresh connections, and one warm 14-thread run reported 326 MB, above the limit, so the limit does not bound that metric. A 14-way status-line join is unmeasured. Wide joins must be filtered by time or ingest id first.
+- Time semantics: `_meta_recorded_at` is the moment the line was appended to the spool. For telemetry and API bodies the event time is a payload column; a query on event time filters that column and gets no pruning guarantee.
+
+### Generation
+- One SQL statement over `_ingest.producer_types` and `duckdb_columns()` produced the CREATE VIEW text for a topic, verified equal to the hand-written view for a one-hop rename and a scalar retype (measured). The client executes the text.
+- A separate command `aldigest views` regenerates ALL `u` objects on every run, topics first and `__all` views after, so a generator fix reaches an existing database; a bad mapping fails that command and never blocks installing a schema. The cost of regenerating about 90 views is unmeasured.
+- Every producer gets a topic view: hooks, status line, telemetry, API bodies.
+
+### Open, to settle when built
+- Rename chains longer than one hop; rename plus retype in one step.
+- Field moved between topics, topic split, topic merge: declared as above, untested.
+- `SELECT *` column order follows names, not positions, and changes when a version is added; readers must name columns.
+- No row key spans versions: `_meta_event_id` is per table. The key is (_meta_ingest_id, _meta_record_ordinal).
+- Prepared statements bound to a view whose shape changed must be re-prepared.
+- Deduplication (transcripts replay message ids; a producer writing to old and new spool during a transition): a per-source rule, not designed here.
+- Derived topics the owner named (skills, agents, rules) are text inside the API-body system and messages columns: views over `u.api_request__system` and `u.api_request__messages`, not ingest-time tables (D-B, D-C).
+
+### Acceptance checks for the build
+A topic with three versions and data in each: a rename, an added field, a scalar retype, a mapping-expression unit change, and a STRUCT-versus-VARCHAR retype; assert every row and value through the view, assert the generator refuses an untypable column, assert a late old-version row is returned by view and macro, and assert with EXPLAIN that a time predicate scans one table when ranges are disjoint.
+
+Reviewed twice by adversarial forks on 2026-10-04; open after review: the timeline describes versions but does not route queries (routing is by table statistics); a 14-table status-line join is unmeasured.
+
+## Open after the build of 2026-10-04
+
+- OWNER go-ahead needed: wiring. Changing the live hooks and status line means editing settings.json (through safeConfigEdit) and changing the running collector.
+- Not built: the OTLP receiver that writes telemetry lines; the body writer that builds {link, body}; a seal and collect schedule; the `u` views of the query plan; readers ported to the new tables; backfill of saved data; transcripts and their deduplication; metrics.
+- Measured, not explained: one `aldigest collect` over 400 real bodies peaks at about 730 MiB process RSS at the 256 MB DuckDB limit, the same for 1, 5 or 25 bodies per file, while a single file alone peaks at 86-173 MiB. Until explained, run the collector as its own short-lived process, not inside alcore (2048 MB cap, TRDD-9VX3WTGU).
+- The raw status-line JSON has never been observed; capture one payload when wiring.
+- valid_from is null for all 98 producers (all are version 1).
+- The 22-process concurrency test does not go red when the append inode re-check is removed; only the deterministic spool test does. The 100-attempt retry bound and the torn-line message are untested.
+- Shipping aldigest (41.5 MB) and alspool for four platforms; no rust-core CI job yet (TRDD-NDKKOABG).
+- No advisor agent existed in the building session; adversarial review forks stood in for it.
+- alspool exit code 2 means the line WAS appended and only the due seal failed: a caller must not retry it. After a failed auto-seal the next append retries the seal, so a ready file can exceed the threshold by more than one line.
+- A producer needs the manifest (or the output of `aldigest spools`) to know its spool name; how that reaches the hook side is part of the wiring.
+
 ## Approval log
 
 - 2026-10-04T03:36:28+0200 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-10-04T03:58:15+0200 — column → design by main-agent@agentlenspro. design recorded; owner items open (wrong-typed policy, NOT NULL); child slice card carries the implementation
 - 2026-10-04T06:32:53+0200 — column → dev by main-agent@agentlenspro. owner ordered the build, D-H/D-I
+- 2026-10-04T08:11:58+0200 — column → human_review by main-agent@agentlenspro. built and checked against real data; wiring needs the owner's go-ahead
