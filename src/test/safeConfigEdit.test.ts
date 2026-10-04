@@ -436,4 +436,25 @@ suite('safe_config_edit.py — transactional config editor', () => {
     assert.ok(bak, 'a backup exists')
     assert.strictEqual(fs.readFileSync(path.join(dir, bak), 'utf-8'), crlf)
   })
+
+  test('TOML mode: a CRLF file stays CRLF after an edit (replaced and appended lines too)', function () {
+    needPy311(this)
+    const toml = path.join(dir, 'config.toml')
+    fs.writeFileSync(toml, '[profile]\r\nname = "u"\r\n\r\n[otel]\r\nlevel = 0\r\n')
+    const r = runEditor(toml, { ops: [
+      { op: 'ensure_line_in_section', section: 'otel', key_prefix: 'level', line: 'level = 1' },
+      { op: 'ensure_line_in_section', section: 'extra', key_prefix: 'k', line: 'k = 2' },
+    ] }, ['--format', 'toml'])
+    assert.strictEqual(r.status, 0, r.stderr)
+    assert.strictEqual(fs.readFileSync(toml, 'utf-8'), '[profile]\r\nname = "u"\r\n\r\n[otel]\r\nlevel = 1\r\n\r\n[extra]\r\nk = 2\r\n')
+  })
+
+  test('TOML mode: first creation of a missing file succeeds with the private 0600 mode, as the JSON path', function () {
+    needPy311(this)
+    const toml = path.join(dir, 'new.toml')
+    const r = runEditor(toml, { ops: [{ op: 'ensure_line_in_section', section: 'otel', key_prefix: 'level', line: 'level = 1' }] }, ['--format', 'toml', '--create-if-missing'])
+    assert.strictEqual(r.status, 0, r.stderr)
+    assert.strictEqual(fs.readFileSync(toml, 'utf-8'), '[otel]\nlevel = 1')
+    assert.strictEqual(fs.statSync(toml).mode & 0o777, 0o600)
+  })
 })

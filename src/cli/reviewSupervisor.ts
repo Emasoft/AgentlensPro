@@ -20,7 +20,7 @@
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
-import { readTranscriptTail, hookCwd, isNoReviewSentinel, toolUseWork, declaredRole, isFloorPrompt, deniedToolUseIds } from './reviewGate'
+import { readTranscriptTail, hookCwd, isNoReviewSentinel, toolUseWork, declaredRole, isFloorPrompt, deniedToolUseIds, isDeniedEdit } from './reviewGate'
 import type { AssistantContentBlock } from './reviewGate'
 import { textArms } from './reviewGateTriggers'
 
@@ -87,7 +87,7 @@ export function scanSupervision(lines: string[], cwd: string): SupervisorScan {
         if (declaredRole(String(b.input?.prompt ?? '')) === 'review' && isFork) { forks++; unreviewed = 0 }
         continue
       }
-      if (typeof b.id === 'string' && denied.has(b.id)) continue // delegate-gate deny never ran (TRDD-PNB9FNJ0)
+      if (isDeniedEdit(b, denied)) continue // delegate-gate deny never ran (TRDD-PNB9FNJ0)
       if (toolUseWork(b, cwd) !== null) { work++; unreviewed++ }
     }
   }

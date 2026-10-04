@@ -791,4 +791,11 @@ suite('reviewGate — scanTranscriptLines: a delegate-gate-denied edit does not 
     const scan = scanTranscriptLines([assistantLine([editWithId('toolu_q1')]), deniedResult('toolu_q1', false)], CWD)
     assert.strictEqual(scan.work?.cause, 'edit')
   })
+
+  // The gate denies editor tools only; a Bash that RAN, wrote, failed and printed the sentence is work.
+  test('a write-shaped Bash whose error result quotes the deny sentence still arms', () => {
+    const bash = { type: 'tool_use', id: 'toolu_b1', name: 'Bash', input: { command: 'sed -i s/a/b/ /repo/src/a.ts' } }
+    const scan = scanTranscriptLines([assistantLine([bash]), deniedResult('toolu_b1', true)], CWD)
+    assert.strictEqual(scan.work?.cause, 'write-shaped command')
+  })
 })

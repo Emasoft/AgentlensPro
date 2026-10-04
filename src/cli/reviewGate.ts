@@ -412,6 +412,14 @@ export function deniedToolUseIds(lines: string[]): Set<string> {
   return ids
 }
 
+
+/** A tool_use the delegate gate denied. EDITOR tools only: the gate denies Edit/Write/NotebookEdit,
+ *  while a Bash command that really ran can exit non-zero and print the deny sentence (a grep over
+ *  this repo does) — skipping it as "never ran" would hide a real write from both gates. */
+export function isDeniedEdit(b: AssistantContentBlock, denied: Set<string>): boolean {
+  return typeof b.id === 'string' && denied.has(b.id) && typeof b.name === 'string' && EDITORS.has(b.name)
+}
+
 /** The one arming block of a turn, and WHY. `null` from the editor branch means the edit landed
  *  under an ephemeral root (the scratchpad, reports/) and is not work. */
 export function toolUseWork(b: AssistantContentBlock, cwd: string): { cause: ArmCause; detail: string } | null {
@@ -564,7 +572,7 @@ export function scanTranscriptLines(lines: string[], cwd = process.cwd(), ownAge
         continue
       }
       // A delegate-gate-denied call never ran (TRDD-PNB9FNJ0) — not work.
-      if (typeof b.id === 'string' && denied.has(b.id)) continue
+      if (isDeniedEdit(b, denied)) continue
       const w = toolUseWork(b, cwd)
       if (w !== null) work = { index: i, ...w }
     }

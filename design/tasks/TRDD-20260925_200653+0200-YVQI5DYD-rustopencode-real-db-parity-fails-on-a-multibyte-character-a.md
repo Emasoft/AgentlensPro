@@ -4,7 +4,7 @@ title: rustOpenCode real-db parity fails on a multibyte character at the truncat
 column: todo
 status: tasked
 created: 2026-09-25T20:06:53+0200
-updated: 2026-10-04T13:02:14+0200
+updated: 2026-10-04T13:42:03+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -28,3 +28,4 @@ STATE 2026-09-25T20:08:20+0200: Carded from the 2026-09-25 full-suite verificati
 ## Notes
 
 - 2026-10-04T13:02:12+0200 — worker wB: snip in src/timelineRetention.ts now drops a split surrogate pair like Rust utf16_slice; no gen-*.mjs fixture imports timelineRetention. Test 'snip never cuts inside a surrogate pair' red without fix, green with; the REAL db parity test passes on the same db.
+2026-10-04 read-only check of snip callers: all 14 snip call sites and 6 capText sites in src/logReader.ts and timelineRetention.ts only retain the result; none compares a length against the cap to detect truncation. No generator under rust-core tests/fixtures imports timelineRetention directly (gen-sessionreports-expected.mjs reaches logReader; not run, it regenerates fixtures). Mutation check: reverting snip turns the timelineRetention surrogate test red (1 failing), restored.

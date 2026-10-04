@@ -642,9 +642,12 @@ def transact_toml(target, ops, create_if_missing, do_backup):
         raise Refused(f"{target} exists but is not valid TOML ({e}). REFUSING to touch it.")
 
     lines = raw.split("\n") if raw is not None else []
+    eol_cr = "\r" if raw is not None and "\r\n" in raw else ""
     changed = False
     for op in ops:
-        section, prefix, line = op["section"], op["key_prefix"], op["line"]
+        # A CRLF file split on "\n" keeps a trailing "\r" on every line; an op line without one would be
+        # written LF-only (mixed endings) and would never compare equal to the file's own copy of it.
+        section, prefix, line = op["section"], op["key_prefix"], op["line"] + eol_cr
         # TRDD-CODXTOML1: the key may already exist as an explicit sub-table header
         # ([otel.exporter.otlp-http]) rather than an inline line in the section body. The line
         # scan below cannot see that form — a header line TERMINATES the body range — and
@@ -661,8 +664,10 @@ def transact_toml(target, ops, create_if_missing, do_backup):
             if key_in_tree:
                 continue  # section exists only via sub-table headers and already carries the key
             if lines and lines[-1].strip():
-                lines.append("")
-            lines.extend([header, line])
+                lines.append(eol_cr)
+            elif lines and lines[-1] == "":
+                lines[-1] = eol_cr  # the blank separator after a trailing newline must be CRLF too
+            lines.extend([header + eol_cr, line])
             changed = True
             continue
         end = next(

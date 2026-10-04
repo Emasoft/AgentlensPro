@@ -229,4 +229,9 @@ suite('reviewSupervisor — a delegate-gate-denied edit is not work (TRDD-PNB9FN
     assert.deepStrictEqual(scanSupervision([assistant([editId('t1')]), result('t1', true)], CWD), { work: 0, forks: 0, unreviewed: 0 })
     assert.deepStrictEqual(scanSupervision([assistant([editId('t2')]), result('t2', false)], CWD), { work: 1, forks: 0, unreviewed: 1 })
   })
+
+  test('a write-shaped Bash whose error result quotes the deny sentence still counts', () => {
+    const bash = { type: 'tool_use', id: 't3', name: 'Bash', input: { command: 'sed -i s/a/b/ /proj/src/a.ts' } }
+    assert.deepStrictEqual(scanSupervision([assistant([bash]), result('t3', true)], CWD), { work: 1, forks: 0, unreviewed: 1 })
+  })
 })
