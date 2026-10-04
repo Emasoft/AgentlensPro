@@ -77,6 +77,14 @@ const COLLECT_MAX_RUNS: u32 = 20;
 const REGISTER_TIMEOUT: Duration = Duration::from_secs(120);
 const VIEWS_TIMEOUT: Duration = Duration::from_secs(120);
 const LEDGER_TIMEOUT: Duration = Duration::from_secs(120);
+
+const PURGE_BATCH: usize = 500;
+
+/// A done/ file name is put in a SQL string literal only if it is plain; anything else is skipped.
+fn purge_name_ok(n: &str) -> bool {
+    !n.is_empty() && n.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+}
+
 /// Writer queue capacity in batches (one hook / status line / OTLP group each).
 const QUEUE_CAPACITY: usize = 4096;
 /// The writer queue also holds at most this many payload bytes: a count bound alone would let 4096
@@ -144,6 +152,8 @@ struct Stats {
     done_deleted: u64,
     done_deleted_bytes: u64,
     done_delete_errors: u64,
+    /// Ledger queries the retention purge has run; stays 0 while done/ holds no regular file.
+    done_ledger_queries: u64,
     dropped_queue_full: u64,
     dropped_after_shutdown: u64,
     /// Batches refused because the writer thread is gone (it panicked); `writer_dead` is the state.
@@ -697,20 +707,23 @@ impl SpoolTap {
         s.views_ok = ok;
     }
 
-    /// The ledger's complete files whose `completed_at` is at least `min_age_s` old, as (spool, file
-    /// name). `_ingest.files.completed_at` is TIMESTAMPTZ (agentlens-digest register.rs:78) and collect
-    /// writes it with `get_current_timestamp()` (collect.rs:160), an absolute instant. The age is taken
-    /// in SQL with `date_diff('second', completed_at, get_current_timestamp())`, both absolute, so it is
-    /// correct in any machine time zone and never compares against a Rust clock (`-` on two DOUBLE
-    /// epochs or two TIMESTAMPTZ has no binder in this DuckDB build, so date_diff it is). Filtering in
-    /// SQL does NOT bound the result: every complete row older than the retention is returned on every
-    /// tick, including rows whose file is already deleted, so the result grows with the ledger.
-    /// `date_diff('second', …)` counts second boundaries, so a file may be due up to one second early.
-    /// ponytail: unbounded per-tick result; upgrade path is a purged mark in the ledger, or an
-    /// anti-join against the done/ listing.
-    fn complete_ledger(&self, min_age_s: u64) -> Result<HashSet<(String, String)>, String> {
+    /// Of the given done/ file names, the ledger's complete (spool, name) rows whose `completed_at` is
+    /// at least `min_age_s` old. `_ingest.files.completed_at` is TIMESTAMPTZ (agentlens-digest
+    /// register.rs:78) and collect writes it with `get_current_timestamp()` (collect.rs:160), an
+    /// absolute instant. The age is taken in SQL with `date_diff('second', completed_at,
+    /// get_current_timestamp())`, both absolute, so it is correct in any machine time zone and never
+    /// compares against a Rust clock (`-` on two DOUBLE epochs or two TIMESTAMPTZ has no binder in this
+    /// DuckDB build, so date_diff it is). The query is bounded by `source_name IN (<names>)`: the names
+    /// are at most `PURGE_BATCH`, each passed `purge_name_ok` (safe as a SQL string literal), so the
+    /// result never exceeds the list asked about. `date_diff('second', …)` counts second boundaries, so
+    /// a file may be due up to one second early.
+    /// ponytail: at most PURGE_BATCH (500) done/ files are examined per tick, oldest name first; a
+    /// bigger done/ drains 500 per tick. Upgrade path: a purged mark in the ledger, or a larger batch.
+    fn complete_ledger(&self, min_age_s: u64, names: &[&str]) -> Result<HashSet<(String, String)>, String> {
+        self.stats().done_ledger_queries += 1;
+        let list = names.iter().map(|n| format!("'{n}'")).collect::<Vec<_>>().join(",");
         let mut cmd = Command::new(&self.aldigest_bin);
-        cmd.arg("query").arg("--db").arg(&self.db).arg("--sql").arg(format!("SELECT spool, source_name FROM _ingest.files WHERE status = 'complete' AND date_diff('second', completed_at, get_current_timestamp()) >= {min_age_s}"));
+        cmd.arg("query").arg("--db").arg(&self.db).arg("--sql").arg(format!("SELECT spool, source_name FROM _ingest.files WHERE status = 'complete' AND source_name IN ({list}) AND date_diff('second', completed_at, get_current_timestamp()) >= {min_age_s}"));
         let out = run_child(cmd, LEDGER_TIMEOUT)?;
         if out.timed_out || out.code != Some(0) {
             return Err(format!("exit {:?}{}: {}", out.code, if out.timed_out { " (TIMED OUT)" } else { "" }, out.stderr.trim()));
@@ -734,26 +747,20 @@ impl SpoolTap {
     /// `failed/`, `ready/` and `inbox/` are never touched; symlinks are never followed (a `done/<spool>`
     /// that is a symlink is skipped, and so is any entry that is not a regular file). An error is
     /// logged and counted.
+    /// The done/ listing comes FIRST: with no regular file there, no ledger query (no child) runs. At
+    /// most `PURGE_BATCH` names (ascending, so oldest first: names start with a nanosecond timestamp)
+    /// are put to the ledger per tick; a name outside `[0-9A-Za-z._-]` is never listed and never
+    /// deleted (it is used as a SQL string literal, so it is not quoted, it is refused).
+    /// ponytail: 500 files per tick is the ceiling; a bigger backlog drains over several ticks.
     fn purge_done(&self) {
         let Some(retention) = self.done_retention else { return };
-        let ledger = match self.complete_ledger(retention.as_secs()) {
-            Err(e) => {
-                let mut s = self.stats();
-                s.done_delete_errors += 1;
-                if s.ledger_logged.as_ref() != Some(&e) {
-                    eprintln!("{} alcore: ingest done retention: cannot read the ledger, deleting nothing this tick (logged once per distinct message): {e}", log_ts());
-                    s.ledger_logged = Some(e);
-                }
-                return;
-            }
-            Ok(l) => l,
-        };
-        self.stats().ledger_logged = None;
-        let (mut deleted, mut bytes, mut errors) = (0u64, 0u64, 0u64);
-        let mut fail = |what: &str, e: &dyn std::fmt::Display| {
-            errors += 1;
+        let errors = std::cell::Cell::new(0u64);
+        let fail = |what: &str, e: &dyn std::fmt::Display| {
+            errors.set(errors.get() + 1);
             eprintln!("{} alcore: ingest done retention: {what}: {e}", log_ts());
         };
+        // (file name, spool, path) of every regular file in a registered done/<spool>/.
+        let mut cands: Vec<(String, String, std::path::PathBuf)> = Vec::new();
         for spool in &self.spools {
             let dir = self.ingest_dir.join("done").join(spool);
             match std::fs::symlink_metadata(&dir) {
@@ -780,36 +787,65 @@ impl SpoolTap {
                         continue;
                     }
                 };
+                let Some(name) = ent.file_name().to_str().filter(|n| purge_name_ok(n)).map(str::to_owned) else { continue };
                 let path = ent.path();
-                if !ent.file_name().to_str().is_some_and(|n| ledger.contains(&(spool.clone(), n.to_owned()))) {
-                    continue;
-                }
                 // A file that vanished between read_dir and here is not an error: skip it.
-                let meta = match std::fs::symlink_metadata(&path) {
-                    Ok(m) => m,
-                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
-                    Err(e) => {
-                        fail(&path.display().to_string(), &e);
-                        continue;
-                    }
-                };
-                if !meta.file_type().is_file() {
-                    continue;
-                }
-                match std::fs::remove_file(&path) {
-                    Ok(()) => {
-                        deleted += 1;
-                        bytes += meta.len();
-                    }
+                match std::fs::symlink_metadata(&path) {
+                    Ok(m) if m.file_type().is_file() => cands.push((name, spool.clone(), path)),
+                    Ok(_) => {}
                     Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
                     Err(e) => fail(&path.display().to_string(), &e),
+                }
+            }
+        }
+        cands.sort();
+        cands.truncate(PURGE_BATCH);
+        let (mut deleted, mut bytes) = (0u64, 0u64);
+        if !cands.is_empty() {
+            let names: Vec<&str> = cands.iter().map(|c| c.0.as_str()).collect();
+            match self.complete_ledger(retention.as_secs(), &names) {
+                Err(e) => {
+                    errors.set(errors.get() + 1);
+                    let mut s = self.stats();
+                    if s.ledger_logged.as_ref() != Some(&e) {
+                        eprintln!("{} alcore: ingest done retention: cannot read the ledger, deleting nothing this tick (logged once per distinct message): {e}", log_ts());
+                        s.ledger_logged = Some(e);
+                    }
+                }
+                Ok(ledger) => {
+                    self.stats().ledger_logged = None;
+                    for (name, spool, path) in &cands {
+                        if !ledger.contains(&(spool.clone(), name.clone())) {
+                            continue;
+                        }
+                        // Re-check: the entry may have changed since the listing.
+                        let meta = match std::fs::symlink_metadata(path) {
+                            Ok(m) => m,
+                            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                            Err(e) => {
+                                fail(&path.display().to_string(), &e);
+                                continue;
+                            }
+                        };
+                        if !meta.file_type().is_file() {
+                            continue;
+                        }
+                        match std::fs::remove_file(path) {
+                            Ok(()) => {
+                                deleted += 1;
+                                bytes += meta.len();
+                            }
+                            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                            Err(e) => fail(&path.display().to_string(), &e),
+                        }
+                    }
                 }
             }
         }
         let mut s = self.stats();
         s.done_deleted += deleted;
         s.done_deleted_bytes += bytes;
-        s.done_delete_errors += errors;
+        s.done_delete_errors += errors.get();
     }
 
     pub fn status_json(&self) -> Value {
@@ -830,6 +866,7 @@ impl SpoolTap {
             "doneDeleted": s.done_deleted,
             "doneDeletedBytes": s.done_deleted_bytes,
             "doneDeleteErrors": s.done_delete_errors,
+            "doneLedgerQueries": s.done_ledger_queries,
             "doneRetentionSecs": self.done_retention.map(|d| d.as_secs()),
             "droppedQueueFull": s.dropped_queue_full,
             "droppedAfterShutdown": s.dropped_after_shutdown,

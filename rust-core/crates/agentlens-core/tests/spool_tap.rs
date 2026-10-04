@@ -806,3 +806,19 @@ fn t20_retention_age_is_correct_far_from_utc() {
     wait_for("the file gone after the retention", 120, || done_files(&data, "hook_session_end_v1").is_empty());
     assert!(loaded.elapsed() >= Duration::from_secs(25), "deleted before the retention elapsed");
 }
+
+
+/// 21. With retention on and an empty done/ two ticks run no ledger query (`doneLedgerQueries` stays 0 while `lastCollect` advances); once a done/ file exists the counter rises.
+#[test]
+fn t21_an_empty_done_runs_no_ledger_query() {
+    let data = scratch("t21-data");
+    let s = launch_env("t21", &data, &tap_args(Some(1)), &[("ALCORE_INGEST_DONE_RETENTION_SECS", "1")]);
+    let first = wait_collected(&s, 0);
+    wait_collected(&s, first["atMs"].as_u64().unwrap());
+    assert_eq!(s.status()["doneLedgerQueries"], 0, "a ledger query ran with nothing in done/");
+    let dir = data.join("ingest/done/hook_session_end_v1");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("planted.ndjson"), "{}\n").unwrap();
+    wait_for("a ledger query once done/ has a file", 90, || s.status()["doneLedgerQueries"].as_u64().unwrap() >= 1);
+    assert!(dir.join("planted.ndjson").exists(), "a file with no ledger row was deleted");
+}
