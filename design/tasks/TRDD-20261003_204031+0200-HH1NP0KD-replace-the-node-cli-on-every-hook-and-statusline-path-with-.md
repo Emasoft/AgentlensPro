@@ -4,7 +4,7 @@ title: Replace the Node CLI on every hook and statusline path with small dedicat
 column: design
 status: tasked
 created: 2026-10-03T20:40:31+0200
-updated: 2026-10-03T21:13:10+0200
+updated: 2026-10-04T03:38:31+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: refactor
@@ -71,3 +71,4 @@ review-supervisor matches the literal command string "agentlenspro review-gate" 
 
 TRDD-9VX3WTGU (DuckDB redesign): coordinate the gate contract with its post-cutover API. Not a prerequisite: review-gate and review-supervisor never call alcore (inventory read the code). The DUCKPLAN specs keep the HTTP contracts of POST /api/hook-events (H10), POST /api/statusline-samples (H9) and POST /api/agent-gate (H23) under golden-diff parity (SPEC-golden-capture-and-clock rows H9/H10/H23; SPEC-operation-catalog C27 "golden diff; ui.rs:558,1858 stay green"); only the storage behind them changes (hook_event table, dual-written during the soak). A hook binary built against today's contract therefore survives the cutover, provided the goldens stay green. After the benchmark, split this card into derived cards: statusline+hook transport, gate, review-gate+review-supervisor port (last), plus EHTs for setup/--install-hooks migration with the review-supervisor string-match fix, and for packaging/codesign.
 The title records the owner's directive (Rust binaries); the curl-in-wrapper option is benchmarked as a baseline, not a substitute chosen without the owner.
+2026-10-04: the owner adopted a spool-based ingest architecture (TRDD-LHCHVK9Z). This card's POST-first step 1 needs revisiting against it; gate hooks stay synchronous.
