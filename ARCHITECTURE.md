@@ -499,6 +499,41 @@ both intact rather than truncating the corpus. A crash mid-append can only lose 
 line, which `load()` drops on the next read — the record it belonged to is simply re-derived and
 re-appended on the next save.
 
+### Digest ingest path (opt-in, not the system of record)
+
+A second, typed ingestion path that is **off by default**: the existing stores stay the system of
+record during the transition. It is built from two crates and an opt-in tap in `alcore`
+(TRDD-LHCHVK9Z).
+
+```mermaid
+flowchart LR
+    P[alcore tap: hook events, status line, telemetry events, spans] --> I["ingest/inbox/&lt;spool&gt;/current.ndjson"]
+    I -- "seal at ~4 MiB or every 60 s" --> R["ingest/ready/&lt;spool&gt;/"]
+    R -- "aldigest collect, one transaction per file" --> D[("ingest/events.duckdb")]
+    R --> DONE[done/ or failed/]
+```
+
+- **Spool.** One JSON line per item, `{"ts_ns", "payload"}`, appended to
+  `<dataDir>/ingest/inbox/<spool>/current.ndjson` and sealed into `ready/<spool>/` at about 4 MiB or by
+  the 60 s tick. `agentlens-spool` (binary `alspool`: `append [--seal-bytes]`, `seal`) is the writer.
+- **Loader.** `agentlens-digest` (binary `aldigest`: `describe`, `spools`, `rehash`, `register`,
+  `collect [--max-files]`, `query`; a `views` command is planned) loads each sealed file in one
+  transaction together with its ledger row into `<dataDir>/ingest/events.duckdb`, then moves it to
+  `done/` or `failed/`. There is one DuckDB schema and `events` table per `producer_type`; a stored table
+  macro per producer holds the field-to-column mapping.
+- **Producers.** 98: hook 33, statusline 16, telemetry_event 27, telemetry_span 15, api_request 4,
+  api_response 3. The schemas live in `rust-core/crates/agentlens-digest/schemas/` and are edited by hand
+  when Claude Code changes; a changed schema needs a new `producer_type` version.
+- **The tap.** `alcore serve --ingest-manifest PATH --aldigest-bin PATH [--ingest-sources LIST]`. Without
+  both of the first two flags nothing changes (half a configuration is a startup error). With them,
+  `alcore` writes each received hook event, status-line sample, telemetry event and span as a spool line
+  next to the existing stores, and every 60 s seals and runs `aldigest collect` as a child process
+  (`--max-files 10` per process, because one collect process grows with every committed body file — 65 to
+  687 MiB over 72 files, DuckDB itself). A failed tap write is counted and never fails the capture path.
+- **API bodies are off by default**: the median day measured about 22.6 GB of bodies against 35 MB of hook
+  events and 26.5 MB of telemetry events, and the typed tables store each request history again without
+  de-duplication. `--ingest-sources` opts them in.
+
 ---
 
 ## 6. Session Summarizer

@@ -4,7 +4,7 @@ title: Ingest architecture - spool to typed native DuckDB with versioned per-top
 column: human_review
 status: tasked
 created: 2026-10-04T03:36:28+0200
-updated: 2026-10-04T08:11:58+0200
+updated: 2026-10-04T10:06:01+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: feature
@@ -16,14 +16,14 @@ approved: true
 approval-judge: main-agent@agentlenspro
 approval-datetime: 2026-10-04T03:36:28+0200
 npt: [VXD881R6]
-implementation-commits: [69b7d406, 6085ee91, 6f8d1d16, fdb7996c, c594c472]
+implementation-commits: [69b7d406, 6085ee91, 6f8d1d16, fdb7996c, c594c472, e9cc75cf]
 ---
 
 # Ingest architecture - spool to typed native DuckDB with versioned per-topic producer schemas
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-10-04T08:11:40+0200
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-10-04T10:06:31+0200
 
-NEXT ACTION: owner review of what is built (below), then the wiring card: make alcore, the hooks and the status line write through alspool and run aldigest collect on a schedule. Nothing is wired yet and no live database exists.
+NEXT ACTION: owner decision to switch the path on for this machine (rebuild alcore, ad-hoc codesign, start the server with AGENTLENS_INGEST=on once the CLI opt-in lands, then watch /api/ingest-status). Pending in the build: aldigest views, packaging of aldigest/alspool/schemas, CLI opt-in.
 BUILT as a library and two binaries (crates agentlens-digest and agentlens-spool, 98 producers), NOT wired: nothing in production writes a spool line yet. Loaded with real saved data through test converters for hooks, telemetry and API bodies; the status line was only compared with its stored flattened columns, never loaded. PLANNED (D-H part 4): section "Query unification plan".
 NOT covered by any schema: telemetry metrics (nothing captures them), transcripts, and the raw nested status-line JSON (never observed on disk).
 SUPERSEDED body sections (kept for history, do NOT act on them): "Design (follows proposal v9 ...)" where it says the collector lives inside alcore and seals to ready/ (the writer seals; the collector is the aldigest binary); "Build order" steps 1-6 (done differently, see "What is built"); the two "OWNER:" bullets and the "How a hook names its producer_type" bullet under "Open" (decided under D-I, see "Decisions"); in "Agent reading" the bullet about a collector-assigned _meta_event_id joining topic tables (the join key is (_meta_ingest_id, _meta_record_ordinal)).
@@ -220,7 +220,31 @@ Reviewed twice by adversarial forks on 2026-10-04; open after review: the timeli
 - Shipping aldigest (41.5 MB) and alspool for four platforms; no rust-core CI job yet (TRDD-NDKKOABG).
 - No advisor agent existed in the building session; adversarial review forks stood in for it.
 - alspool exit code 2 means the line WAS appended and only the due seal failed: a caller must not retry it. After a failed auto-seal the next append retries the seal, so a ready file can exceed the threshold by more than one line.
-- A producer needs the manifest (or the output of `aldigest spools`) to know its spool name; how that reaches the hook side is part of the wiring.
+- A producer needs the manifest (or the output of `aldigest spools`) to know its spool name; - A producer needs the manifest (or the output of `aldigest spools`) to know its spool name; how that reaches the hook side is part of the wiring.
+- 2026-10-04 later: the tap, the source switch and the collect bound are built (see "Built after the first review"); the 730 MiB collect peak is explained (DuckDB growth per committed body file) and bounded.
+
+## Built after the first review (2026-10-04)
+
+The alcore tap (commit e9cc75cf), opt-in:
+- Switch: alcore serve --ingest-manifest PATH --aldigest-bin PATH [--ingest-sources LIST]. Without both flags nothing changes (a test asserts no file or directory is created); half a configuration is a startup error; if aldigest register fails, alcore boots with the tap disabled and /api/ingest-status says why.
+- Taps sit where the item is still whole: hook events verbatim (exact POST or spooled bytes), status line (nested payload before flattening, minus the two CLI-added keys, also on the legacy route), telemetry events and spans (one line per record from the parsed OTLP body, before ingest_parsed, outside the state lock), API bodies (after the store accepted the file).
+- File writes go to the blocking pool, one lock per spool per POST (agentlens_spool::append_many). An item whose name has no spool in the manifest is counted and reported, never written; a failed tap write is counted and never fails capture.
+- Schedule: every 60 s seal, then aldigest collect as a child process under its own lock, --max-files 10 per process, repeated within a tick. Shutdown seals only.
+- Also added: aldigest query (read-only) and aldigest collect --max-files.
+- Checks: clippy -D warnings exit 0 for the five packages; tests core 749 (13 new), digest 49, spool 19, store 52, ingest 4. Not deployed: the running collector is untouched.
+
+Measurements (reports/ingest-redesign/, gitignored):
+- Disk budget, 20261004_091622+0200-ingest-disk-budget.md: median day hooks 35.0 MB, telemetry events 26.5 MB, spans 29.8 MB, status line 0.16 GB (estimated), API bodies 22.61 GB.
+- Collect RSS growth, 20261004_092653+0200-collect-rss-growth.md: 65 to 687 MiB over 72 body files, DuckDB itself, bounded by --max-files 10 per process.
+- Tap overhead (commit e9cc75cf, isolated release instance): about +0.65 ms median on a 100-record OTLP logs POST, +0.04 ms on a hook POST, RSS unchanged after 2000 POSTs.
+- View generator, 20261004_091832+0200-view-generator-sql.md: 323 ms for the 98 producers, 19 assertions pass.
+- Backfill tool, 20261004_092052+0200-backfill-tool.md: one day, 71 files, 32,528 rows, 0 failures, a re-run loads 0.
+
+Decision: API bodies are not spooled by default. Measured reason: 22.61 GB on the median day for bodies against tens of MB for the other sources, and the typed tables store each request history again without de-duplication (about 7 GB/day of spool and 16 GB/day of database growth).
+
+Decision: collect runs as a child process, 10 files per process. Measured reason: one collect process grows with every committed body file (65 to 687 MiB over 72 files, DuckDB itself) and stays under 300 MiB at about 10 files.
+
+Backfill tool: scripts_dev/digest-backfill/backfill.py (gitignored), proven on one day, never run against the real data directory.
 
 ## Approval log
 

@@ -6,6 +6,19 @@ All notable changes to AgentlensPro are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- **Opt-in digest ingest path (off by default).** A second, typed ingestion path next to the existing
+  stores, which stay the system of record. `alcore serve --ingest-manifest PATH --aldigest-bin PATH
+  [--ingest-sources LIST]` makes `alcore` write each hook event, status-line sample, telemetry event and
+  span as a spool line and, every 60 s, seal the spool and run `aldigest collect` as a child process into
+  `<dataDir>/ingest/events.duckdb` (one typed table per producer, 98 producers; schemas in
+  `rust-core/crates/agentlens-digest/schemas/`). Without both flags nothing changes; half a configuration
+  is a startup error; a failed tap write never fails capture. API bodies are not spooled unless listed in
+  `--ingest-sources`. New binaries: `aldigest` (`describe`, `spools`, `rehash`, `register`,
+  `collect [--max-files]`, `query`) and `alspool` (`append [--seal-bytes]`, `seal`). Not enabled by
+  default and not yet packaged with the npm tarball.
+
 ### Changed
 
 - **The install heals itself at every CLI launch.** Each non-hook launch checks the skills (tree hash),
