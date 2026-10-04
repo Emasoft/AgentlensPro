@@ -1,0 +1,104 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agentlenspro:statusline.subagent.core:v1",
+  "title": "Claude Code subagent status-line stdin payload: topic core",
+  "x-claude-code-version": "2.1.285",
+  "type": "object",
+  "properties": {
+    "agent_id": {
+      "type": "string"
+    },
+    "agent_type": {
+      "type": "string"
+    },
+    "columns": {
+      "type": "integer"
+    },
+    "cwd": {
+      "type": "string"
+    },
+    "permission_mode": {
+      "type": "string"
+    },
+    "prompt_id": {
+      "type": "string"
+    },
+    "scratchpad_dir": {
+      "type": "string"
+    },
+    "session_id": {
+      "type": "string"
+    },
+    "tasks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "contextWindowSize": {
+            "type": "integer"
+          },
+          "cwd": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "effort": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "low",
+                  "medium",
+                  "high",
+                  "xhigh",
+                  "max"
+                ]
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "x-duckdb-type": "JSON"
+          },
+          "id": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "startTime": {
+            "type": "integer"
+          },
+          "status": {
+            "type": "string"
+          },
+          "tokenCount": {
+            "type": "integer"
+          },
+          "tokenSamples": {
+            "type": "array",
+            "items": {
+              "type": "integer"
+            }
+          },
+          "type": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ]
+      }
+    },
+    "transcript_path": {
+      "type": "string"
+    }
+  }
+}

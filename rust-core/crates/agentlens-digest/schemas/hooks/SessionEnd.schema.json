@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agentlenspro:hook.SessionEnd:v1",
+  "title": "Claude Code hook input: SessionEnd",
+  "x-claude-code-version": "2.1.285",
+  "type": "object",
+  "properties": {
+    "agent_id": {
+      "type": "string"
+    },
+    "agent_type": {
+      "type": "string"
+    },
+    "cwd": {
+      "type": "string"
+    },
+    "effort": {
+      "type": "object",
+      "properties": {
+        "level": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "level"
+      ]
+    },
+    "hook_event_name": {
+      "type": "string",
+      "const": "SessionEnd"
+    },
+    "permission_mode": {
+      "type": "string"
+    },
+    "prompt_id": {
+      "type": "string"
+    },
+    "reason": {
+      "type": "string",
+      "enum": [
+        "resume",
+        "clear",
+        "logout",
+        "prompt_input_exit",
+        "other"
+      ]
+    },
+    "scratchpad_dir": {
+      "type": "string"
+    },
+    "session_id": {
+      "type": "string"
+    },
+    "transcript_path": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "cwd",
+    "hook_event_name",
+    "reason",
+    "session_id",
+    "transcript_path"
+  ]
+}

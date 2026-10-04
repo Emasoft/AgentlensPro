@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agentlenspro:statusline.main.pr:v1",
+  "title": "Claude Code status-line stdin payload (main status line): topic pr",
+  "x-claude-code-version": "2.1.285",
+  "type": "object",
+  "properties": {
+    "pr": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "mr"
+          ]
+        },
+        "number": {
+          "type": "integer"
+        },
+        "review_state": {
+          "type": "string",
+          "enum": [
+            "approved",
+            "pending",
+            "changes_requested",
+            "draft"
+          ]
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "number",
+        "url"
+      ]
+    },
+    "session_id": {
+      "type": "string"
+    }
+  }
+}

@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agentlenspro:hook.TaskCompleted:v1",
+  "title": "Claude Code hook input: TaskCompleted",
+  "x-claude-code-version": "2.1.285",
+  "type": "object",
+  "properties": {
+    "agent_id": {
+      "type": "string"
+    },
+    "agent_type": {
+      "type": "string"
+    },
+    "cwd": {
+      "type": "string"
+    },
+    "effort": {
+      "type": "object",
+      "properties": {
+        "level": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "level"
+      ]
+    },
+    "hook_event_name": {
+      "type": "string",
+      "const": "TaskCompleted"
+    },
+    "permission_mode": {
+      "type": "string"
+    },
+    "prompt_id": {
+      "type": "string"
+    },
+    "scratchpad_dir": {
+      "type": "string"
+    },
+    "session_id": {
+      "type": "string"
+    },
+    "task_description": {
+      "type": "string"
+    },
+    "task_id": {
+      "type": "string"
+    },
+    "task_subject": {
+      "type": "string"
+    },
+    "team_name": {
+      "type": "string"
+    },
+    "teammate_name": {
+      "type": "string"
+    },
+    "transcript_path": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "cwd",
+    "hook_event_name",
+    "session_id",
+    "task_id",
+    "task_subject",
+    "transcript_path"
+  ]
+}

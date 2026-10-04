@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agentlenspro:statusline.main.vim:v1",
+  "title": "Claude Code status-line stdin payload (main status line): topic vim",
+  "x-claude-code-version": "2.1.285",
+  "type": "object",
+  "properties": {
+    "session_id": {
+      "type": "string"
+    },
+    "vim": {
+      "type": "object",
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "NORMAL",
+            "INSERT",
+            "VISUAL",
+            "VISUAL LINE"
+          ]
+        }
+      },
+      "required": [
+        "mode"
+      ]
+    }
+  }
+}

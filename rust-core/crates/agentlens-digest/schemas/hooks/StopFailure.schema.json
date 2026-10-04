@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agentlenspro:hook.StopFailure:v1",
+  "title": "Claude Code hook input: StopFailure",
+  "x-claude-code-version": "2.1.285",
+  "type": "object",
+  "properties": {
+    "agent_id": {
+      "type": "string"
+    },
+    "agent_type": {
+      "type": "string"
+    },
+    "cwd": {
+      "type": "string"
+    },
+    "effort": {
+      "type": "object",
+      "properties": {
+        "level": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "level"
+      ]
+    },
+    "error": {
+      "type": "string",
+      "enum": [
+        "authentication_failed",
+        "oauth_org_not_allowed",
+        "account_on_hold",
+        "verification_required",
+        "billing_error",
+        "rate_limit",
+        "overloaded",
+        "invalid_request",
+        "model_not_found",
+        "server_error",
+        "unknown",
+        "max_output_tokens",
+        "cloud_credential_error"
+      ]
+    },
+    "error_details": {
+      "type": "string"
+    },
+    "hook_event_name": {
+      "type": "string",
+      "const": "StopFailure"
+    },
+    "last_assistant_message": {
+      "type": "string"
+    },
+    "permission_mode": {
+      "type": "string"
+    },
+    "prompt_id": {
+      "type": "string"
+    },
+    "scratchpad_dir": {
+      "type": "string"
+    },
+    "session_id": {
+      "type": "string"
+    },
+    "transcript_path": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "cwd",
+    "error",
+    "hook_event_name",
+    "session_id",
+    "transcript_path"
+  ]
+}

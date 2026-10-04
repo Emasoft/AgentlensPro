@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agentlenspro:statusline.main.context_window:v1",
+  "title": "Claude Code status-line stdin payload (main status line): topic context_window",
+  "x-claude-code-version": "2.1.285",
+  "type": "object",
+  "properties": {
+    "context_window": {
+      "type": "object",
+      "properties": {
+        "context_window_size": {
+          "type": "integer"
+        },
+        "current_usage": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "properties": {
+            "cache_creation_input_tokens": {
+              "type": "integer"
+            },
+            "cache_read_input_tokens": {
+              "type": "integer"
+            },
+            "input_tokens": {
+              "type": "integer"
+            },
+            "output_tokens": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "cache_creation_input_tokens",
+            "cache_read_input_tokens",
+            "input_tokens",
+            "output_tokens"
+          ]
+        },
+        "remaining_percentage": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "total_input_tokens": {
+          "type": "integer"
+        },
+        "total_output_tokens": {
+          "type": "integer"
+        },
+        "used_percentage": {
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "context_window_size",
+        "current_usage",
+        "remaining_percentage",
+        "total_input_tokens",
+        "total_output_tokens",
+        "used_percentage"
+      ]
+    },
+    "session_id": {
+      "type": "string"
+    }
+  }
+}

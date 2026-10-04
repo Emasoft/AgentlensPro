@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agentlenspro:statusline.main.effort:v1",
+  "title": "Claude Code status-line stdin payload (main status line): topic effort",
+  "x-claude-code-version": "2.1.285",
+  "type": "object",
+  "properties": {
+    "effort": {
+      "type": "object",
+      "properties": {
+        "level": {
+          "type": "string",
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ]
+        }
+      },
+      "required": [
+        "level"
+      ]
+    },
+    "session_id": {
+      "type": "string"
+    }
+  }
+}

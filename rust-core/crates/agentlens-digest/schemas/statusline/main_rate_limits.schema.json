@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agentlenspro:statusline.main.rate_limits:v1",
+  "title": "Claude Code status-line stdin payload (main status line): topic rate_limits",
+  "x-claude-code-version": "2.1.285",
+  "type": "object",
+  "properties": {
+    "rate_limits": {
+      "type": "object",
+      "properties": {
+        "five_hour": {
+          "type": "object",
+          "properties": {
+            "resets_at": {
+              "type": "integer"
+            },
+            "used_percentage": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "resets_at",
+            "used_percentage"
+          ]
+        },
+        "seven_day": {
+          "type": "object",
+          "properties": {
+            "resets_at": {
+              "type": "integer"
+            },
+            "used_percentage": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "resets_at",
+            "used_percentage"
+          ]
+        },
+        "spend_limit": {
+          "type": "object",
+          "properties": {
+            "limit_usd": {
+              "type": "number"
+            },
+            "period": {
+              "type": "string",
+              "enum": [
+                "daily",
+                "weekly",
+                "monthly"
+              ]
+            },
+            "resets_at": {
+              "type": "integer"
+            },
+            "used_percentage": {
+              "type": "number"
+            },
+            "used_usd": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "resets_at",
+            "used_percentage"
+          ]
+        }
+      }
+    },
+    "session_id": {
+      "type": "string"
+    }
+  }
+}

@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agentlenspro:hook.SessionStart:v1",
+  "title": "Claude Code hook input: SessionStart",
+  "x-claude-code-version": "2.1.285",
+  "type": "object",
+  "properties": {
+    "agent_id": {
+      "type": "string"
+    },
+    "agent_type": {
+      "type": "string"
+    },
+    "context_tokens": {
+      "type": "number"
+    },
+    "cwd": {
+      "type": "string"
+    },
+    "effort": {
+      "type": "object",
+      "properties": {
+        "level": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "level"
+      ]
+    },
+    "estimated_cache_write_usd": {
+      "type": "number"
+    },
+    "hook_event_name": {
+      "type": "string",
+      "const": "SessionStart"
+    },
+    "model": {
+      "type": "string"
+    },
+    "permission_mode": {
+      "type": "string"
+    },
+    "prompt_cache_likely_expired": {
+      "type": "boolean"
+    },
+    "prompt_id": {
+      "type": "string"
+    },
+    "scratchpad_dir": {
+      "type": "string"
+    },
+    "seconds_since_last_response": {
+      "type": "number"
+    },
+    "session_id": {
+      "type": "string"
+    },
+    "session_title": {
+      "type": "string"
+    },
+    "source": {
+      "type": "string",
+      "enum": [
+        "startup",
+        "resume",
+        "clear",
+        "compact",
+        "fork"
+      ]
+    },
+    "transcript_path": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "cwd",
+    "hook_event_name",
+    "session_id",
+    "source",
+    "transcript_path"
+  ]
+}

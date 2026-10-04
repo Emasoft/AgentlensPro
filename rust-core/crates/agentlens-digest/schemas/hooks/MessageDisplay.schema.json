@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agentlenspro:hook.MessageDisplay:v1",
+  "title": "Claude Code hook input: MessageDisplay",
+  "x-claude-code-version": "2.1.285",
+  "type": "object",
+  "properties": {
+    "agent_id": {
+      "type": "string"
+    },
+    "agent_type": {
+      "type": "string"
+    },
+    "cwd": {
+      "type": "string"
+    },
+    "delta": {
+      "type": "string"
+    },
+    "effort": {
+      "type": "object",
+      "properties": {
+        "level": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "level"
+      ]
+    },
+    "final": {
+      "type": "boolean"
+    },
+    "hook_event_name": {
+      "type": "string",
+      "const": "MessageDisplay"
+    },
+    "index": {
+      "type": "number"
+    },
+    "message_id": {
+      "type": "string"
+    },
+    "permission_mode": {
+      "type": "string"
+    },
+    "prompt_id": {
+      "type": "string"
+    },
+    "scratchpad_dir": {
+      "type": "string"
+    },
+    "session_id": {
+      "type": "string"
+    },
+    "transcript_path": {
+      "type": "string"
+    },
+    "turn_id": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "cwd",
+    "delta",
+    "final",
+    "hook_event_name",
+    "index",
+    "message_id",
+    "session_id",
+    "transcript_path",
+    "turn_id"
+  ]
+}

@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agentlenspro:hook.InstructionsLoaded:v1",
+  "title": "Claude Code hook input: InstructionsLoaded",
+  "x-claude-code-version": "2.1.285",
+  "type": "object",
+  "properties": {
+    "agent_id": {
+      "type": "string"
+    },
+    "agent_type": {
+      "type": "string"
+    },
+    "cwd": {
+      "type": "string"
+    },
+    "effort": {
+      "type": "object",
+      "properties": {
+        "level": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "level"
+      ]
+    },
+    "file_path": {
+      "type": "string"
+    },
+    "globs": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "hook_event_name": {
+      "type": "string",
+      "const": "InstructionsLoaded"
+    },
+    "load_reason": {
+      "type": "string",
+      "enum": [
+        "compact",
+        "session_start",
+        "nested_traversal",
+        "path_glob_match",
+        "include"
+      ]
+    },
+    "memory_type": {
+      "type": "string",
+      "enum": [
+        "User",
+        "Project",
+        "Local",
+        "Managed"
+      ]
+    },
+    "parent_file_path": {
+      "type": "string"
+    },
+    "permission_mode": {
+      "type": "string"
+    },
+    "prompt_id": {
+      "type": "string"
+    },
+    "scratchpad_dir": {
+      "type": "string"
+    },
+    "session_id": {
+      "type": "string"
+    },
+    "transcript_path": {
+      "type": "string"
+    },
+    "trigger_file_path": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "cwd",
+    "file_path",
+    "hook_event_name",
+    "load_reason",
+    "memory_type",
+    "session_id",
+    "transcript_path"
+  ]
+}

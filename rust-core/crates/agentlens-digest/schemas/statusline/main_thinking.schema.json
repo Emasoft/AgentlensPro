@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agentlenspro:statusline.main.thinking:v1",
+  "title": "Claude Code status-line stdin payload (main status line): topic thinking",
+  "x-claude-code-version": "2.1.285",
+  "type": "object",
+  "properties": {
+    "session_id": {
+      "type": "string"
+    },
+    "thinking": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "enabled"
+      ]
+    }
+  }
+}

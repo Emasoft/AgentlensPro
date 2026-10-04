@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agentlenspro:statusline.main.workspace:v1",
+  "title": "Claude Code status-line stdin payload (main status line): topic workspace",
+  "x-claude-code-version": "2.1.285",
+  "type": "object",
+  "properties": {
+    "session_id": {
+      "type": "string"
+    },
+    "workspace": {
+      "type": "object",
+      "properties": {
+        "added_dirs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "current_dir": {
+          "type": "string"
+        },
+        "git_worktree": {
+          "type": "string"
+        },
+        "project_dir": {
+          "type": "string"
+        },
+        "repo": {
+          "type": "object",
+          "properties": {
+            "host": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "owner": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "host",
+            "name",
+            "owner"
+          ]
+        }
+      },
+      "required": [
+        "added_dirs",
+        "current_dir",
+        "project_dir"
+      ]
+    }
+  }
+}

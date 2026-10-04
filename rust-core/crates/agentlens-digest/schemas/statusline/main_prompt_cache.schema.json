@@ -1,0 +1,118 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agentlenspro:statusline.main.prompt_cache:v1",
+  "title": "Claude Code status-line stdin payload (main status line): topic prompt_cache",
+  "x-claude-code-version": "2.1.285",
+  "type": "object",
+  "properties": {
+    "prompt_cache": {
+      "type": "object",
+      "properties": {
+        "cache_write_tokens": {
+          "type": "integer"
+        },
+        "caching_observed": {
+          "type": "boolean"
+        },
+        "expected_rebuilds": {
+          "type": "integer"
+        },
+        "expires_at": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "hit_ratio": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "last_miss_at": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "last_miss_cause": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "properties": {
+            "causes": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "system_char_delta": {
+              "type": "integer"
+            },
+            "tools_added": {
+              "type": "integer"
+            },
+            "tools_removed": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "causes"
+          ]
+        },
+        "miss_causes": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "x-duckdb-type": "JSON"
+        },
+        "miss_recache_tokens": {
+          "type": "integer"
+        },
+        "misses": {
+          "type": "integer"
+        },
+        "recache_tokens_if_cold": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "requests": {
+          "type": "integer"
+        },
+        "ttl": {
+          "type": "string",
+          "enum": [
+            "5m",
+            "1h"
+          ]
+        },
+        "warm": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "cache_write_tokens",
+        "caching_observed",
+        "expected_rebuilds",
+        "expires_at",
+        "hit_ratio",
+        "last_miss_at",
+        "last_miss_cause",
+        "miss_causes",
+        "miss_recache_tokens",
+        "misses",
+        "recache_tokens_if_cold",
+        "requests",
+        "ttl",
+        "warm"
+      ]
+    },
+    "session_id": {
+      "type": "string"
+    }
+  }
+}

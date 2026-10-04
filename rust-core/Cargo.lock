@@ -45,6 +45,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "agentlens-digest"
+version = "0.1.0"
+dependencies = [
+ "agentlens-digest",
+ "duckdb",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
 name = "agentlens-ingest"
 version = "0.1.0"
 dependencies = [

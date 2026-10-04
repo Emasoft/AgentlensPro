@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agentlenspro:hook.PreModelSwitch:v1",
+  "title": "Claude Code hook input: PreModelSwitch",
+  "x-claude-code-version": "2.1.285",
+  "type": "object",
+  "properties": {
+    "agent_id": {
+      "type": "string"
+    },
+    "agent_type": {
+      "type": "string"
+    },
+    "cache_ttl": {
+      "type": "string",
+      "enum": [
+        "5m",
+        "1h"
+      ]
+    },
+    "context_tokens": {
+      "type": "number"
+    },
+    "cwd": {
+      "type": "string"
+    },
+    "effort": {
+      "type": "object",
+      "properties": {
+        "level": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "level"
+      ]
+    },
+    "estimated_cache_write_usd": {
+      "type": "number"
+    },
+    "from_model": {
+      "type": "string"
+    },
+    "hook_event_name": {
+      "type": "string",
+      "const": "PreModelSwitch"
+    },
+    "permission_mode": {
+      "type": "string"
+    },
+    "pricing": {
+      "type": "string",
+      "enum": [
+        "configured",
+        "catalog",
+        "default"
+      ]
+    },
+    "prompt_cache_warm": {
+      "type": "boolean"
+    },
+    "prompt_id": {
+      "type": "string"
+    },
+    "requested_model": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "scratchpad_dir": {
+      "type": "string"
+    },
+    "session_id": {
+      "type": "string"
+    },
+    "source": {
+      "type": "string",
+      "enum": [
+        "sdk",
+        "command",
+        "picker"
+      ]
+    },
+    "to_model": {
+      "type": "string"
+    },
+    "transcript_path": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "cache_ttl",
+    "context_tokens",
+    "cwd",
+    "estimated_cache_write_usd",
+    "from_model",
+    "hook_event_name",
+    "pricing",
+    "prompt_cache_warm",
+    "requested_model",
+    "session_id",
+    "source",
+    "to_model",
+    "transcript_path"
+  ]
+}

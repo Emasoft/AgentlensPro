@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agentlenspro:statusline.main.cost:v1",
+  "title": "Claude Code status-line stdin payload (main status line): topic cost",
+  "x-claude-code-version": "2.1.285",
+  "type": "object",
+  "properties": {
+    "cost": {
+      "type": "object",
+      "properties": {
+        "total_api_duration_ms": {
+          "type": "integer"
+        },
+        "total_cost_usd": {
+          "type": "number"
+        },
+        "total_duration_ms": {
+          "type": "integer"
+        },
+        "total_lines_added": {
+          "type": "integer"
+        },
+        "total_lines_removed": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "total_api_duration_ms",
+        "total_cost_usd",
+        "total_duration_ms",
+        "total_lines_added",
+        "total_lines_removed"
+      ]
+    },
+    "session_id": {
+      "type": "string"
+    }
+  }
+}

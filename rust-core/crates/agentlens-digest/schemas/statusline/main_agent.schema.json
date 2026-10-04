@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agentlenspro:statusline.main.agent:v1",
+  "title": "Claude Code status-line stdin payload (main status line): topic agent",
+  "x-claude-code-version": "2.1.285",
+  "type": "object",
+  "properties": {
+    "agent": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ]
+    },
+    "session_id": {
+      "type": "string"
+    }
+  }
+}

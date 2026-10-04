@@ -1,0 +1,37 @@
+# agentlens-digest — spool NDJSON lines → typed native DuckDB tables, through precompiled SQL
+# table macros (TRDD-LHCHVK9Z owner directive D-H, TRDD-VXD881R6 slice 1).
+[package]
+name = "agentlens-digest"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+# Every test binary statically links DuckDB (tens of MB each): the only test target is
+# tests/digest.rs, so the lib and the bin build no empty test harness of their own.
+[lib]
+test = false
+doctest = false
+
+[dependencies]
+duckdb = { version = "1.10506.0", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+# preserve_order: column order == property order of the schema file, whatever else in the
+# workspace unifies this feature (canonical hashing sorts keys explicitly, see schema.rs).
+serde_json = { version = "1", features = ["preserve_order"] }
+sha2 = "0.10"
+
+[features]
+# Test-only crash points in the `aldigest` binary (tests 7 and 8). OFF by default: a plain
+# `cargo build` carries none of that code (proof recorded in the build report).
+crashpoints = []
+
+[dev-dependencies]
+# Self dev-dependency: switches `crashpoints` on for `cargo test` / `cargo clippy --all-targets`
+# only (resolver 2 keeps dev-dependency features out of normal builds), so the integration test
+# is never silently skipped the way a `required-features` test target is.
+agentlens-digest = { path = ".", features = ["crashpoints"] }
+
+[[bin]]
+name = "aldigest"
+path = "src/bin/aldigest.rs"
+test = false
