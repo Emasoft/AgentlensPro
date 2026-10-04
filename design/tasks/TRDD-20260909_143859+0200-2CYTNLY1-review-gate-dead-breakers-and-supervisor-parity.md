@@ -3,7 +3,7 @@ trdd-id: 2CYTNLY1
 title: Delete the review gate's dead breakers and give the supervisor the gate's work definition
 column: human_review
 created: 2026-09-09T14:38:59+0200
-updated: 2026-09-24T09:41:30+0200
+updated: 2026-10-04T13:04:51+0200
 current-owner: main
 task-type: refactor
 priority: medium
@@ -195,6 +195,7 @@ verified against the live source, not restated from memory.
 - 2026-09-24T08:57:33+0200 — column → human_review by main-session. AI review verified, evidence in reports/board-triage ai_review-A/B/C triage
 - 2026-09-24T08:57:49+0200 — main-session (board update A): moved ai_review -> human_review; AI review verified per reports/board-triage ai_review-A/B/C triage rows. In this project's mono-agent rule the session moves ai_review->human_review; the owner moves human_review->complete.
 - 2026-09-24T09:07:16+0200 — board fix-up worker: re-pointed `related` from 9FG0LSPG (now superseded, archived) to 40M4UPK3 (Enforce the propose then two-fork review then wait then act loop at PreToolUse, column: dev). No `parent-trdd:` field exists on this card, only `related:`, so that is the field edited; 40M4UPK3 is chosen as the card's live successor-in-spirit for the review-gate work stream since 9FG0LSPG is terminal and this card's own work (2CYTNLY1, human_review) is still open.
+2026-10-04: worker wA re-review at HEAD plus the PNB9FNJ0 diff -- VERDICT APPROVE. Acceptance re-checked: check-types, lint, compile-tests exit 0; scoped runs reviewGate|reviewSupervisor 105 passing, review-gate triggers|review-loop 66 passing, killSwitch 27 passing, 0 failing. scanSupervision reuses toolUseWork/textArms (parity test for sed -i, git push, proposal present), killSwitchHalf is the single truth and the stderr-line test names the env half, dead breaker plumbing absent. The new import reviewGate to delegateGate is a cycle (delegateGate imports readTranscriptTail); safe because the constant is read inside a function. Owner kill-switch question stays OPEN. Owner moves human_review to complete.
 
 ## Notes and lessons learned
 

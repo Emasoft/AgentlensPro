@@ -12,6 +12,7 @@ import {
 } from '../cli/reviewGate'
 import { PROPOSAL_MARKER } from '../cli/reviewGateTriggers'
 import { runSubagentGate } from '../cli/reviewGate'
+import { DELEGATE_DENY_REASON } from '../cli/delegateGate'
 
 // `agentlenspro review-gate` — pure decision-function tests (owner order 2026-09-15 rewrite: ONE
 // shared scan/decide pair, `scanTranscriptLines` / `decideGate`, replaces the separate main/subagent
@@ -764,5 +765,30 @@ suite('reviewGate — runSubagentGate: own sidechain entries are scanned (TRDD-L
   test('the MAIN Stop gate still ignores a transcript whose only write is a sidechain entry', async () => {
     const t = mkTranscript([scUser('w1', 'x'), scAssistant('w1', [writeBlock])])
     assert.strictEqual(await runMainGate({ transcript_path: t, cwd: CWD }), null)
+  })
+})
+
+// ── A delegate-gate-denied Edit never ran, so it must not arm (TRDD-PNB9FNJ0) ────────────────────
+suite('reviewGate — scanTranscriptLines: a delegate-gate-denied edit does not arm', () => {
+  const editWithId = (id: string) => ({ type: 'tool_use', id, name: 'Edit', input: { file_path: '/repo/src/a.ts' } })
+  // The deny text is the one the delegate gate itself emits; the wrapper around it is the test's guess.
+  const deniedResult = (id: string, isError: boolean): string =>
+    JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: id, is_error: isError, content: `PreToolUse:Edit hook error: ${DELEGATE_DENY_REASON}` }] } })
+
+  test('a denied Edit (is_error tool_result carrying the deny text) is not work', () => {
+    const scan = scanTranscriptLines([assistantLine([editWithId('toolu_d1')]), deniedResult('toolu_d1', true)], CWD)
+    assert.strictEqual(scan.work, null)
+  })
+
+  test('an allowed Edit still arms, and the deny of a DIFFERENT tool_use does not un-arm it', () => {
+    const allowed = scanTranscriptLines([assistantLine([editWithId('toolu_a1')]), toolResultLine('toolu_a1', 'updated')], CWD)
+    assert.strictEqual(allowed.work?.cause, 'edit')
+    const other = scanTranscriptLines([assistantLine([editWithId('toolu_a2')]), deniedResult('toolu_other', true)], CWD)
+    assert.strictEqual(other.work?.cause, 'edit')
+  })
+
+  test('the deny text quoted in a NON-error result (an Edit echoing file content) does not un-arm', () => {
+    const scan = scanTranscriptLines([assistantLine([editWithId('toolu_q1')]), deniedResult('toolu_q1', false)], CWD)
+    assert.strictEqual(scan.work?.cause, 'edit')
   })
 })

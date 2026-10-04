@@ -26,6 +26,7 @@ import * as os from 'os'
 import * as path from 'path'
 import { agentlensDisabled, killSwitchHalf, killSwitchPath } from './killSwitch'
 import { readStdin } from './hookHandlers'
+import { DELEGATE_DENY_REASON } from './delegateGate'
 import {
   commandWriteReason, isEphemeralTarget, textArms, PROPOSAL_MARKER,
   NO_REVIEW_SENTINEL, NO_REVIEW_SENTINEL_EXAMPLES, isNoReviewSentinel,
@@ -369,6 +370,7 @@ export interface AssistantContentBlock {
   id?: unknown
   tool_use_id?: unknown
   content?: unknown
+  is_error?: unknown
 }
 interface TranscriptEntry {
   type?: unknown
@@ -383,6 +385,31 @@ export function resultText(c: unknown): string {
   if (typeof c === 'string') return c
   if (!Array.isArray(c)) return ''
   return c.map((x) => String((x as { text?: unknown })?.text ?? '')).join('\n')
+}
+
+
+/** tool_use ids whose paired tool_result is the delegate gate's own PreToolUse deny (TRDD-PNB9FNJ0).
+ *  A denied Edit leaves its tool_use in the transcript though nothing was written, so arming on it
+ *  demanded a review fork per denied edit. Requires `is_error === true` AND the deny reason's own
+ *  lead sentence: a successful Edit result echoes file content, which can quote that sentence (this
+ *  very repo does), and matching it alone would let a real write un-arm itself. The marker is read
+ *  from `DELEGATE_DENY_REASON` inside the function — delegateGate imports this module, so a
+ *  module-level read would see it undefined when this file loads first. The tool_result wrapper the
+ *  harness puts around a hook deny is unmeasured; a substring match tolerates any wrapper. */
+export function deniedToolUseIds(lines: string[]): Set<string> {
+  const marker = DELEGATE_DENY_REASON.split(' (')[0]
+  const ids = new Set<string>()
+  for (const line of lines) {
+    if (!line.includes(marker)) continue
+    let e: TranscriptEntry
+    try { e = JSON.parse(line) as TranscriptEntry } catch { continue }
+    const content = e?.message?.content
+    if (e?.type !== 'user' || !Array.isArray(content)) continue
+    for (const b of content) {
+      if (b?.type === 'tool_result' && b.is_error === true && typeof b.tool_use_id === 'string' && resultText(b.content).includes(marker)) ids.add(b.tool_use_id)
+    }
+  }
+  return ids
 }
 
 /** The one arming block of a turn, and WHY. `null` from the editor branch means the edit landed
@@ -489,6 +516,7 @@ export function scanTranscriptLines(lines: string[], cwd = process.cwd(), ownAge
   const roles: GateScan['roles'] = { measure: -1, review: -1 }
   let ownRole: Role | null = null
   let sawFirstUser = false
+  const denied = deniedToolUseIds(lines)
   for (let i = 0; i < lines.length; i++) {
     let e: TranscriptEntry
     try { e = JSON.parse(lines[i]) as TranscriptEntry } catch { continue }
@@ -535,6 +563,8 @@ export function scanTranscriptLines(lines: string[], cwd = process.cwd(), ownAge
         if (role === 'measure') roles.measure = Math.max(roles.measure, i)
         continue
       }
+      // A delegate-gate-denied call never ran (TRDD-PNB9FNJ0) — not work.
+      if (typeof b.id === 'string' && denied.has(b.id)) continue
       const w = toolUseWork(b, cwd)
       if (w !== null) work = { index: i, ...w }
     }

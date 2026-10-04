@@ -2,6 +2,7 @@ import * as assert from 'assert'
 import { judge, scanSupervision, gateIsRegistered, contextEvent, UNREVIEWED_ALARM } from '../cli/reviewSupervisor'
 import { commandWriteReason } from '../cli/reviewGateTriggers'
 import { NO_REVIEW_SENTINEL } from '../cli/reviewGate'
+import { DELEGATE_DENY_REASON } from '../cli/delegateGate'
 
 // The supervisor's whole purpose is to be the check that STILL WORKS when the review gate does not,
 // so shipping it untested would have been the same mistake it exists to catch. Its own review said
@@ -216,5 +217,16 @@ suite('reviewSupervisor — the injection channel cannot be silently dropped', (
     for (const e of ['SessionStart', 'PreToolUse', 'Bogus', '']) {
       assert.strictEqual(contextEvent(e), 'UserPromptSubmit', `${e} must not be echoed back`)
     }
+  })
+})
+
+suite('reviewSupervisor — a delegate-gate-denied edit is not work (TRDD-PNB9FNJ0)', () => {
+  const editId = (id: string) => ({ type: 'tool_use', id, name: 'Edit', input: { file_path: '/proj/src/a.ts' } })
+  const result = (id: string, isError: boolean): string =>
+    JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: id, is_error: isError, content: `PreToolUse:Edit hook error: ${DELEGATE_DENY_REASON}` }] } })
+
+  test('denied Edit counts nothing; an allowed Edit and a non-error quote of the deny text still count', () => {
+    assert.deepStrictEqual(scanSupervision([assistant([editId('t1')]), result('t1', true)], CWD), { work: 0, forks: 0, unreviewed: 0 })
+    assert.deepStrictEqual(scanSupervision([assistant([editId('t2')]), result('t2', false)], CWD), { work: 1, forks: 0, unreviewed: 1 })
   })
 })
