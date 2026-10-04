@@ -16,14 +16,14 @@ approved: true
 approval-judge: main-agent@agentlenspro
 approval-datetime: 2026-10-04T03:36:28+0200
 npt: [VXD881R6]
-implementation-commits: [69b7d406, 6085ee91, 6f8d1d16, fdb7996c, c594c472, e9cc75cf, 125bd44b, 22299b2f, 301d7947, 9cca67b4, 6f9e2727, 8b25ab4a]
+implementation-commits: [69b7d406, 6085ee91, 6f8d1d16, fdb7996c, c594c472, e9cc75cf, 125bd44b, 22299b2f, 301d7947, 9cca67b4, 6f9e2727, 8b25ab4a, 852ae3ca, a7cefe42]
 ---
 
 # Ingest architecture - spool to typed native DuckDB with versioned per-topic producer schemas
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-10-04T11:04:03+0200
 
-NEXT ACTION: owner decisions (section "Owner decisions pending"); nothing else is in flight.
+NEXT ACTION: owner decisions (section "Owner decisions pending"); nothing else is in flight. Known gap: no test asserts that AGENTLENS_INGEST=on with no resolvable alcore still shows the caller's own error.
 BUILT: crates agentlens-digest (aldigest) and agentlens-spool (alspool), 98 producers; opt-in alcore tap (e9cc75cf, 301d7947, 8b25ab4a) writing hooks, status line, telemetry events and spans, API bodies off by default; CLI opt-in AGENTLENS_INGEST=on in source only (9cca67b4; the installed bundle standalone/cli.js is stale and ignores it until node esbuild.js runs). NOT deployed: the running collector has no tap. No real alcore has been started by the CLI with these flags. Real saved data was loaded through test converters for hooks, telemetry and API bodies; the status line was only compared with its stored flattened columns.
 NOT covered by any schema: telemetry metrics (nothing captures them), transcripts, and the raw nested status-line JSON (never observed on disk).
 SUPERSEDED body sections (kept for history, do NOT act on them): "Design (follows proposal v9 ...)" where it says the collector lives inside alcore and seals to ready/ (the writer seals; the collector is the aldigest binary); "Build order" steps 1-6 (done differently, see "What is built"); the two "OWNER:" bullets and the "How a hook names its producer_type" bullet under "Open" (decided under D-I, see "Decisions"); in "Agent reading" the bullet about a collector-assigned _meta_event_id joining topic tables (the join key is (_meta_ingest_id, _meta_record_ordinal)).
@@ -245,7 +245,7 @@ Decision: API bodies are not spooled by default. Estimated from measured ratios:
 
 Decision: collect runs as a child process, 10 files per process. Measured reason: one collect process grows with every committed body file (65 to 687 MiB over 72 files, DuckDB itself) and stays under 300 MiB at about 10 files.
 
-Decision: done/ retention is off by default and opt-in (an automatic delete is the owner's call); when on it is ledger-checked. Known ceiling: the whole complete ledger is read every tick.
+Decision: done/ retention is off by default and opt-in (an automatic delete is the owner's call); when on it is ledger-checked. Known ceiling: with retention on, every tick reads all complete ledger rows older than the retention, including rows whose file is already deleted; the result grows with the ledger.
 
 Decision: tap writes go through one bounded writer thread; a full queue drops from the spool only, counted. Reason: per-write blocking tasks could reorder lines and pile up without bound.
 
@@ -254,6 +254,8 @@ Backfill tool: scripts_dev/digest-backfill/backfill.py (gitignored), proven on o
 - 125bd44b + 22299b2f: aldigest views (schema u rebuilt in one transaction; 57 digest tests).
 - 301d7947: hook and status-line tap writes left the state lock (a held spool lock stalled every POST; test t14).
 - 9cca67b4: CLI opt-in AGENTLENS_INGEST=on, never stops capture when aldigest is missing.
+- 852ae3ca: AGENTLENS_INGEST_SOURCES is split, trimmed and rejoined; docs and card follow the tap as built.
+- a7cefe42: a panicked spool writer sets writerDead at once; the retention age is computed in SQL on two absolute instants (completed_at is TIMESTAMPTZ; test t20 under TZ=Pacific/Kiritimati); spool_tap tests 20 of 20 with --test-threads=2 (a fully parallel run failed under machine load).
 - 8b25ab4a: tap writes go through one bounded writer thread (4096 batches, 64 MiB; a refused batch is dropped from the spool only and counted, `droppedQueueFull` and `writerDead` in /api/ingest-status); `aldigest views` runs once per process after a collect; optional done/ retention (`ALCORE_INGEST_DONE_RETENTION_SECS`, off by default, deletes only files the ledger lists complete and that old). This replaces the bullet above that says file writes go to the blocking pool.
 - Found while testing, unrelated to this work: (a) standalone/cli.js on this machine is stale and lacks server revive (unit test "a live revived child is reaped" fails at HEAD too; report reports/ingest-redesign/20261004_102654+0200-revive-test-failure.md); (b) rustOpenCode real-db parity test fails: native and JS truncate resultSummary differently at a multi-byte character. Each needs its own card.
 
@@ -269,12 +271,12 @@ Backfill tool: scripts_dev/digest-backfill/backfill.py (gitignored), proven on o
 1. Free disk space first: the volume is 98% full (about 50 GB free) and rust-core/target alone is about 51 GB of regenerable build output.
 2. `cargo build --release --manifest-path rust-core/Cargo.toml -p agentlens-core -p agentlens-digest` (`alspool` is not needed: the tap links the spool library).
 3. Stop the server first (`agentlenspro server stop`), then copy `alcore` into `bin-native/darwin-arm64/`, then `codesign -s - --force bin-native/darwin-arm64/alcore` (without it macOS kills the binary before main); check `./bin-native/darwin-arm64/alcore --version` exits 0.
-4. `aldigest` is run from `rust-core/target/release/` (or the path in `AGENTLENS_ALDIGEST_BIN`): check `aldigest --help` exits 0, and run the same `codesign -s - --force` on it if it exits 137.
+4. `aldigest` is run from `rust-core/target/release/` (or the path in `AGENTLENS_ALDIGEST_BIN`): check `aldigest --help` exits 0, an unsigned or killed aldigest may only show when alcore spawns it, as a failed register (tap disabled at start), collect or views record in /api/ingest-status; sign it with the same codesign command if that happens.
 5. `node esbuild.js` (the CLI bundle `standalone/cli.js` on this machine dates from 2026-10-01 and lacks the `server revive` verb, so the hook revive of a dead collector is broken today regardless of this work), then confirm which `agentlenspro` is on PATH: `ls -ld "$(readlink -f "$(which agentlenspro)")"`.
-6. Start with `AGENTLENS_INGEST=on agentlenspro server start`. Read from the code (not run): `server restart` (serverControl.ts:1106-1108) and the hook revive verb `server revive` (serverControl.ts:1112-1122) both call `ensureServer`, as `server start` does (serverControl.ts:1073), and `ensureServer` spawns alcore with `alcoreServeArgs(process.env, ...)` (serverControl.ts:376); so all three pass the ingest flags whenever the variable is in the environment of the process that runs them. The `--supervise` loop (serverControl.ts:960) and `setup` (setup.ts:1274) use the same function.
-7. A hook-spawned revive inherits Claude Code's environment, not the shell's (hookHandlers.ts:328 passes the hook's own environment to the `server revive` child), so the variable must be exported where Claude Code is launched. Re-check `/api/ingest-status` after any revive: a revive without the variable restarts alcore with the tap off, silently.
-8. Watch `GET /api/ingest-status`: lines per spool, unknown names, write errors, last collect, `views`, `droppedQueueFull` and `writerDead` (both must stay 0 / false), and the size of `<dataDir>/ingest/`.
-9. Roll back by unsetting the variable and restarting. That leaves `ingest/inbox`, `ingest/ready`, `ingest/done` and `events.duckdb` on disk, inert: nothing deletes them, and they are loaded again if the path is re-enabled. Disk with the default sources and done/ retention off (`ALCORE_INGEST_DONE_RETENTION_SECS` unset): `done/` grows by about 0.13 GB per day (spool of hooks, status line, events and spans, median day) and nothing prunes it; the database grows by about 0.12 GB per day (16.3 + 15.5 + 17.0 + 67.8 MB by source), about 0.25 GB per day together. All figures are estimates from reports/ingest-redesign/20261004_091622+0200-ingest-disk-budget.md.
+6. Start with `AGENTLENS_INGEST=on agentlenspro server start`. Read from the code by a worker, not run: no server was started with these flags. `server restart`, the hook revive verb `server revive` (both in `serverCommand`) and `server start` all call `ensureServer`, and `ensureServer` spawns alcore with `alcoreServeArgs(process.env, ...)`; so all three pass the ingest flags whenever the variable is in the environment of the process that runs them. The `--supervise` loop and `setup` call `alcoreServeArgs` too.
+7. A hook-spawned revive inherits Claude Code's environment, not the shell's (`reviveDaemonDetached` in hookHandlers.ts passes the hook's own environment to the `server revive` child), so the variable must be exported where Claude Code is launched. Re-check `/api/ingest-status` after any revive: a revive without the variable restarts alcore with the tap off, silently.
+8. Watch `GET /api/ingest-status`: lines per spool, unknown names, write errors, last collect, `views`, `droppedQueueFull` and `writerDead` (`writerDead` must stay false; `droppedQueueFull` and `droppedWriterDead` must stay 0), and the size of `<dataDir>/ingest/`.
+9. Roll back by unsetting the variable and restarting. That leaves `ingest/inbox`, `ingest/ready`, `ingest/done` and `events.duckdb` on disk, inert: nothing deletes them, and they are loaded again if the path is re-enabled. Disk with the default sources and done/ retention off (`ALCORE_INGEST_DONE_RETENTION_SECS` unset): `done/` grows by about 0.13 GB per day (spool of hooks, status line, events and spans, median day) and nothing prunes it; the database grows by about 0.12 GB per day (16.3 + 15.5 + 17.0 + 67.8 MB by source), about 0.25 GB per day together. All figures are estimates from reports/ingest-redesign/20261004_091622+0200-ingest-disk-budget.md. Leave `ALCORE_INGEST_DONE_RETENTION_SECS` unset at first; never set `ALCORE_INGEST_QUEUE_MAX_BYTES` (test knob).
 
 ## Owner decisions pending (2026-10-04)
 
