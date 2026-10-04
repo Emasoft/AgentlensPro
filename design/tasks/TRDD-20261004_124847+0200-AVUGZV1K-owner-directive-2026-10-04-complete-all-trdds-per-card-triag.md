@@ -4,7 +4,7 @@ title: Owner directive 2026-10-04 complete all TRDDs - per-card triage then work
 column: dev
 status: tasked
 created: 2026-10-04T12:48:47+0200
-updated: 2026-10-04T13:59:37+0200
+updated: 2026-10-04T15:00:38+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: audit
@@ -50,3 +50,4 @@ Board at start: todo 53, human_review 32, backburner 32, dev 22, testing 11, blo
 
 2026-10-04: complete YE15B2JK DCWJY2JJ MF4YQWWA KBK9J59Y U0L78B3Z X4YTS5BF 4TOU4V8E P08Q5TK1 Z0YKJ67N JGM1JKN0 OHZGLDNG; superseded 5PUD8RKE ZW4APOPI GG0WOHEV; publish 0Y8BMVK2. MF4YQWWA was closed before its regeneration claim was true; commit 20bdbd3e made it true (the burnscan generator runs again and regenerating changes no fixture). P08Q5TK1 rests on a source read only, with no test. The tool refuses writes to archived cards, so both notes are recorded here.
 2026-10-04 (second run): complete ME89GHUA YVQI5DYD YVJYOJ81 Z228SAC7 BZFYC809 DGLBZRBR 8ADTIGKT V79W9T2R YBJGIYI1; superseded Z8B5BDB5 (by YVQI5DYD). Left open with notes: VDQ2N8PX FGN5TY7E 4EV3OJ19 AHM7OUG1 PNB9FNJ0 BA0DCW98 J2K6IM4R 2CYTNLY1 8YM21R5X 2C23ROPZ.
+2026-10-04 caution: seven closes (ME89GHUA YVQI5DYD YVJYOJ81 Z228SAC7 BZFYC809 DGLBZRBR V79W9T2R) were made on a one-line acceptance list written by the closing worker to satisfy the tool, not by an independent verifier. Checked afterwards by the main agent: the tests behind ME89GHUA, YVQI5DYD, Z228SAC7, BZFYC809, DGLBZRBR passed in its own runs; V79W9T2R's mutation was run by a later worker and its test file needed a serialization fix; YVJYOJ81 (changelog entries) was never compared with the commit list.

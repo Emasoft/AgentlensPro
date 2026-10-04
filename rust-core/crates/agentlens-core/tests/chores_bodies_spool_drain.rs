@@ -13,6 +13,12 @@ use std::sync::{Arc, Mutex};
 
 use agentlens_core::{chores::bodies_pass, CoreState};
 
+// `bodies_pass` takes the process-wide heavy DuckDB slot (agentlens_store::transcript_sql::HEAVY)
+// and SKIPS its tick when it cannot get it within 1s. That skip is the production behaviour under
+// contention, not what these tests are about, so they run one at a time: without this, two tests
+// calling `bodies_pass` in parallel make the loser's pass a no-op and its assertion fails.
+static SLOT: Mutex<()> = Mutex::new(());
+
 fn body(tag: &str) -> String {
     let big = "b".repeat(300);
     format!("{{\"model\":\"claude-opus-5\",\"messages\":[{{\"role\":\"user\",\"content\":\"{big}-{tag}\"}}],\"n\":1}}")
@@ -29,6 +35,7 @@ fn write_aged(p: &std::path::Path, raw: &str, age_secs: u64) -> i64 {
 
 #[test]
 fn fresh_body_is_ingested_and_round_trips() {
+    let _serial = SLOT.lock().unwrap_or_else(|e| e.into_inner());
     let tmp = std::env::temp_dir().join(format!("al-bodies-ssd-drain-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&tmp);
     let data_dir = tmp.join("data");
@@ -63,13 +70,14 @@ fn fresh_body_is_ingested_and_round_trips() {
 
 /// The over-cap emergency valve (TRDD-V79W9T2R): under `bodiesMaxGb` a body captured moments ago
 /// is left alone (the 10s cutoff); once the staged bytes exceed the cap, the same body is ingested
-/// at age 0 and reclaimed. The knob floors at 0.5 GB (set via config.json), so the cap is crossed with a SPARSE junk
-/// file (apparent length 513 MiB, no disk used; unreadable, so the pass keeps it).
+/// at age 0 and reclaimed. The knob floors at `BODIES_MAX_GB.min` (set via config.json), so the cap is crossed with a
+/// SPARSE junk file (apparent length floor + 1 MiB, no disk used; unreadable, so the pass keeps it).
 ///
 /// MUTATION CHECK: change `if over_cap { 0 } else { 10_000 }` in `bodies_pass` to `10_000` and
 /// the second half MUST fail (the fresh body is still there).
 #[test]
 fn over_cap_valve_drains_a_body_younger_than_the_age_cutoff() {
+    let _serial = SLOT.lock().unwrap_or_else(|e| e.into_inner());
     let tmp = std::env::temp_dir().join(format!("al-bodies-over-cap-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&tmp);
     let data_dir = tmp.join("data");
@@ -84,14 +92,16 @@ fn over_cap_valve_drains_a_body_younger_than_the_age_cutoff() {
     bodies_pass(&state, agentlens_core::now_ms() as f64);
     assert!(bodies_dir.join(name).exists(), "under the cap a fresh body must wait out the 10s cutoff");
 
-    // Drop the cap to its 0.5 GB floor (default is 8 GB), then push the staged bytes over it
-    // without writing them.
-    std::fs::write(data_dir.join("config.json"), r#"{"retention":{"bodiesMaxGb":0.5}}"#).unwrap();
+    // Drop the cap to its floor (the default is higher), then push the staged bytes over it
+    // without writing them. Both the knob key and the junk size derive from the knob itself.
+    let knob = &agentlens_core::retention_config::BODIES_MAX_GB;
+    std::fs::write(data_dir.join("config.json"), format!(r#"{{"retention":{{"{}":{}}}}}"#, knob.key, knob.min)).unwrap();
+    let over_cap_bytes = (knob.min * 1024.0 * 1024.0 * 1024.0) as u64 + 1024 * 1024;
     // mode 000: counted by `staged_body_bytes` (metadata only) but the pass cannot read it, so it
-    // is skipped instead of being slurped and parsed (513 MiB of it exhausts memory).
+    // is skipped instead of being slurped and parsed (over half a GiB of it exhausts memory).
     let junk_path = bodies_dir.join("bbbbbbbb-bbbb-cccc-dddd-eeeeeeeeeeee.response.json");
     let junk = std::fs::File::create(&junk_path).unwrap();
-    junk.set_len(513 * 1024 * 1024).unwrap();
+    junk.set_len(over_cap_bytes).unwrap();
     drop(junk);
     std::fs::set_permissions(&junk_path, std::os::unix::fs::PermissionsExt::from_mode(0o000)).unwrap();
 

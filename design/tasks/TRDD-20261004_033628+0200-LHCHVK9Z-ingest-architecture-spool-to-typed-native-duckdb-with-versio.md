@@ -4,7 +4,7 @@ title: Ingest architecture - spool to typed native DuckDB with versioned per-top
 column: human_review
 status: tasked
 created: 2026-10-04T03:36:28+0200
-updated: 2026-10-04T11:58:25+0200
+updated: 2026-10-04T15:00:37+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: feature
@@ -23,7 +23,7 @@ implementation-commits: [69b7d406, 6085ee91, 6f8d1d16, fdb7996c, c594c472, e9cc7
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-10-04T11:04:03+0200
 
-NEXT ACTION: owner decisions (section "Owner decisions pending"). No work is in flight. NOT verified by anyone: a real alcore started by the CLI with the ingest flags; the full agentlens-core test suite; writerDead after a real writer panic (no way to make the writer panic without a production hook). Nothing is deployed. Known gap: no test asserts that AGENTLENS_INGEST=on with no resolvable alcore still shows the caller's own error.
+NEXT ACTION: owner decisions (section "Owner decisions pending"). No work is in flight. Verified since: a real alcore started by the CLI with the ingest flags, with a real collect and views run (src/test/ingestEndToEnd.test.ts); the full agentlens-core suite (a worker run, 119 result lines, no failure). Still NOT verified: writerDead after a real writer panic. Nothing is deployed. Known gap: no test asserts that AGENTLENS_INGEST=on with no resolvable alcore still shows the caller's own error.
 BUILT: crates agentlens-digest (aldigest) and agentlens-spool (alspool), 98 producers; opt-in alcore tap (e9cc75cf, 301d7947, 8b25ab4a) writing hooks, status line, telemetry events and spans, API bodies off by default; CLI opt-in AGENTLENS_INGEST=on in source only (9cca67b4; the installed bundle standalone/cli.js is stale and ignores it until node esbuild.js runs). NOT deployed: the running collector has no tap. No real alcore has been started by the CLI with these flags. Real saved data was loaded through test converters for hooks, telemetry and API bodies; the status line was only compared with its stored flattened columns.
 NOT covered by any schema: telemetry metrics (nothing captures them), transcripts, and the raw nested status-line JSON (never observed on disk).
 SUPERSEDED body sections (kept for history, do NOT act on them): "Design (follows proposal v9 ...)" where it says the collector lives inside alcore and seals to ready/ (the writer seals; the collector is the aldigest binary); "Build order" steps 1-6 (done differently, see "What is built"); the two "OWNER:" bullets and the "How a hook names its producer_type" bullet under "Open" (decided under D-I, see "Decisions"); in "Agent reading" the bullet about a collector-assigned _meta_event_id joining topic tables (the join key is (_meta_ingest_id, _meta_record_ordinal)).
@@ -259,6 +259,9 @@ Backfill tool: scripts_dev/digest-backfill/backfill.py (gitignored), proven on o
 - 8b25ab4a: tap writes go through one bounded writer thread (4096 batches, 64 MiB; a refused batch is dropped from the spool only and counted, `droppedQueueFull` and `writerDead` in /api/ingest-status); `aldigest views` runs once per process after a collect; optional done/ retention (`ALCORE_INGEST_DONE_RETENTION_SECS`, off by default, deletes only files the ledger lists complete and that old). This replaces the bullet above that says file writes go to the blocking pool.
 - Found while testing, unrelated to this work: (a) standalone/cli.js on this machine is stale and lacks server revive (unit test "a live revived child is reaped" fails at HEAD too; report reports/ingest-redesign/20261004_102654+0200-revive-test-failure.md); (b) rustOpenCode real-db parity test fails: native and JS truncate resultSummary differently at a multi-byte character. Both already have a card (see below).
 - Unrelated findings already carded: rustOpenCode truncation parity is TRDD-YVQI5DYD; the stale CLI bundle cause is TRDD-E9RM51XG.
+- 2026-10-04: src/test/ingestEndToEnd.test.ts runs a real collect and a real aldigest views through an alcore started by the CLI path (ensureServer, AGENTLENS_INGEST=on, isolated data dir and ports): the ledger holds complete rows, the unified hook and status-line views return exactly the posted rows, done/ keeps the files. This closes the "no real alcore started by the CLI" and "collect path under the CLI start" gaps; still NOT deployed.
+- 2026-10-04 finding: /api/hook-events answers 2xx for a hook event that lacks a field its schema requires (cwd, transcript_path, source or reason by topic), and the collect then fails the WHOLE spool file, so every other event in that file goes to failed/ with it. Real Claude Code hooks carry those fields; a malformed or foreign client can still poison a file. Owner ruling D-D says anomalies are errors, so the load failing is intended; that one bad line takes the file with it is a consequence to decide on (reject at the tap, or load the valid lines and report the bad one).
+- 2026-10-04: hook transport measured (reports/ingest-redesign/20261004_141111+0200-hook-transport-bench.md): alspool append 4.24 ms CPU median per event, 0 of 1980 events lost with 66 concurrent writers, against 105 ms CPU for a bare node start. Adopting it means rewriting hook commands in the user settings: owner.
 
 
 
