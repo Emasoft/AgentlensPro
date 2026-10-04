@@ -62,3 +62,57 @@ export function npmPlatformBin(
   const p = path.join(baseDir, platformArch, name)
   return exists(p) ? p : null
 }
+
+
+/** The repo checkout root, for the dev-only resolver rungs: the first of 1-3 levels above this
+ *  module (bundled `standalone/`, `src/`, `out/test/`) that holds `rust-core/`. Null in an
+ *  installed package, which ships no rust-core/. A candidate must hold BOTH `rust-core/` and a
+ *  `package.json` named exactly `agentlenspro`: an installed copy sitting under an unrelated
+ *  project that has its own `rust-core/` must not make us run a binary found by directory name. */
+export function defaultRepoRoot(start: string = __dirname): string | null {
+  for (const up of [['..'], ['..', '..'], ['..', '..', '..']]) {
+    const c = path.resolve(start, ...up)
+    if (!fs.existsSync(path.join(c, 'rust-core'))) continue
+    try {
+      if (JSON.parse(fs.readFileSync(path.join(c, 'package.json'), 'utf8')).name === 'agentlenspro') return c
+    } catch {
+      // no readable package.json: not our checkout
+    }
+  }
+  return null
+}
+
+/** `aldigest`, the ingest-digest sidecar, or null when it cannot be found (never throws: it is
+ *  optional, see alcoreServeArgs). Order: `AGENTLENS_ALDIGEST_BIN` (explicit — authoritative, a
+ *  bad value is null, not a fall-through); then the file next to the resolved alcore; then, for a
+ *  repo checkout only, `rust-core/target/release/aldigest`. */
+export function aldigestBin(
+  env: NodeJS.ProcessEnv = process.env,
+  alcore: string | null = null,
+  repoRoot: string | null = defaultRepoRoot(),
+): string | null {
+  const v = env.AGENTLENS_ALDIGEST_BIN?.trim()
+  if (v) return isExecutableFile(v) ? v : null
+  const candidates: string[] = []
+  if (alcore) candidates.push(path.join(path.dirname(alcore), 'aldigest'))
+  if (repoRoot) candidates.push(path.join(repoRoot, 'rust-core', 'target', 'release', 'aldigest'))
+  return candidates.find(isExecutableFile) ?? null
+}
+
+/** The ingest schemas `manifest.json`, or null. Order: `AGENTLENS_INGEST_MANIFEST` (explicit,
+ *  authoritative); then `ingest-schemas/manifest.json` at the package root, found from the alcore
+ *  path (`<root>/bin-native/<platform-arch>/alcore`); then, for a repo checkout only,
+ *  `rust-core/crates/agentlens-digest/schemas/manifest.json`. */
+export function ingestManifestPath(
+  env: NodeJS.ProcessEnv = process.env,
+  alcore: string | null = null,
+  repoRoot: string | null = defaultRepoRoot(),
+): string | null {
+  const isFile = (p: string): boolean => { try { return fs.statSync(p).isFile() } catch { return false } }
+  const v = env.AGENTLENS_INGEST_MANIFEST?.trim()
+  if (v) return isFile(v) ? v : null
+  const candidates: string[] = []
+  if (alcore) candidates.push(path.resolve(path.dirname(alcore), '..', '..', 'ingest-schemas', 'manifest.json'))
+  if (repoRoot) candidates.push(path.join(repoRoot, 'rust-core', 'crates', 'agentlens-digest', 'schemas', 'manifest.json'))
+  return candidates.find(isFile) ?? null
+}

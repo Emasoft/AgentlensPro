@@ -23,7 +23,7 @@ import { UsageError } from './cliErrors'
 import { assertKnownFlags } from './argHelpers'
 import { parsePidLock } from '../serverRuntime'
 import { chooseServerPorts, isPortFree, liveLockPid, portHolder, processAlive, readChosenPort, removePortsFile, writePortsFile } from './portSelect'
-import { npmPlatformBin } from '../rustBinResolve'
+import { aldigestBin, ingestManifestPath, npmPlatformBin } from '../rustBinResolve'
 
 /** Count of hook events durably spooled to disk but not yet reingested (server was down / shedding).
  *  Zero in the healthy case; a non-zero, non-shrinking value means the daemon isn't draining. */
@@ -142,6 +142,44 @@ export function alcoreBin(
   )
 }
 
+const INGEST_SOURCE_NAMES = ['hooks', 'statusline', 'events', 'spans', 'bodies']
+const warnedOnce = new Set<string>()
+/** Test-only: forget which warnings were already printed. */
+export function resetIngestWarnings(): void { warnedOnce.clear() }
+/** alcoreServeArgs runs several times per command; print each distinct warning once per process. */
+function warnOnce(msg: string): void {
+  if (warnedOnce.has(msg)) return
+  warnedOnce.add(msg)
+  process.stderr.write(msg)
+}
+
+/** The alcore the server will start, or null. `alcoreBin` throws on a corrupt install (line ~137);
+ *  this ONE catch exists because the caller resolves alcore itself right after and reports the real
+ *  error, so the optional ingest path must neither change which error the user sees nor add one. */
+function alcoreForIngest(env: NodeJS.ProcessEnv, installed: string): string | null {
+  try { return alcoreBin(env, installed) } catch { return null }
+}
+
+/** The ingest flags for `alcore serve`, or [] (with a once-only stderr warning) when the opt-in
+ *  cannot be honoured. Never throws. */
+export function ingestArgs(env: NodeJS.ProcessEnv, alcore: string | null): string[] {
+  const aldigest = alcore ? aldigestBin(env, alcore) : null
+  const manifest = alcore ? ingestManifestPath(env, alcore) : null
+  const missing = [alcore ? '' : 'alcore binary', alcore && !aldigest ? 'aldigest binary' : '', alcore && !manifest ? 'ingest schemas manifest' : ''].filter(Boolean)
+  if (!alcore || !aldigest || !manifest) {
+    warnOnce(`warning: AGENTLENS_INGEST=on but the ${missing.join(' and ')} could not be found; starting the server without the ingest path (set AGENTLENS_ALDIGEST_BIN / AGENTLENS_INGEST_MANIFEST)\n`)
+    return []
+  }
+  const args = ['--ingest-manifest', manifest, '--aldigest-bin', aldigest]
+  const sources = env.AGENTLENS_INGEST_SOURCES?.trim()
+  if (sources) {
+    const names = sources.split(',').map((s) => s.trim())
+    if (names.every((n) => INGEST_SOURCE_NAMES.includes(n))) args.push('--ingest-sources', sources)
+    else warnOnce(`warning: AGENTLENS_INGEST_SOURCES=${JSON.stringify(sources)} is invalid; not passing --ingest-sources (valid names: ${INGEST_SOURCE_NAMES.join(', ')})\n`)
+  }
+  return args
+}
+
 /** `alcore serve` argv for the CUTOVER, which must bind the ports the rest of the product already
  *  assumes: with `MCP_PORT`/`UI_PORT` unset, `cliCore.mcpEndpoint` resolves :4316 and the dashboard
  *  :3000; every telemetry writer uses :4318. When they ARE set, both sides read them through the
@@ -161,7 +199,7 @@ export function alcoreServeArgs(env: NodeJS.ProcessEnv = process.env, dir: strin
   // paths that cannot probe (hook revive, setup) rebind what the clients already dial.
   const port = (raw: string | undefined, key: 'otlp' | 'ui' | 'mcp', fallback: number): string =>
     ports ? String(ports[key]) : envPort(raw, readChosenPort(dir, key) ?? fallback)
-  return [
+  const args = [
     'serve',
     '--data-dir', dir,
     // alcore refuses to boot without the dashboard assets (TRDD-VHH7FXGC).
@@ -170,6 +208,20 @@ export function alcoreServeArgs(env: NodeJS.ProcessEnv = process.env, dir: strin
     '--ui-port', port(env.UI_PORT, 'ui', 3000),
     '--mcp-port', port(env.MCP_PORT, 'mcp', 4316),
   ]
+  // The digest ingest path is OPT-IN (AGENTLENS_INGEST=on) and OFF by default: it is not yet the
+  // system of record (the existing stores are), and its API-body capture is off by default because
+  // of measured disk growth. When opted in but aldigest or the manifest cannot be resolved the
+  // server still starts WITHOUT the ingest flags and warns on stderr: a missing optional binary
+  // must never stop capture, which matches alcore booting with the tap disabled when
+  // `aldigest register` fails.
+  // AGENTLENS_INGEST_SOURCES is validated here (hooks, statusline, events, spans, bodies): alcore
+  // exits with a usage error on a bad value and capture would stop, so a bad value is dropped with
+  // a warning and the two ingest flags are still passed.
+  // Each warning prints once per process: this function runs several times in one command.
+  // The ingest branch looks next to the SAME alcore the server starts (alcoreBin), and a throw from
+  // it (corrupt install) is swallowed in alcoreForIngest only, so this function adds no new throw.
+  if (env.AGENTLENS_INGEST === 'on') args.push(...ingestArgs(env, alcoreForIngest(env, path.join(dir, 'bin', 'alcore'))))
+  return args
 }
 
 /** Pick the ports for a fresh `alcore serve` (see chooseServerPorts) — a port held by OUR server
