@@ -3,7 +3,7 @@ trdd-id: ZSX34J8F
 title: rust-core target debug accumulates thousands of build generations and nothing ever prunes them
 column: backburner
 created: 2026-09-02T07:20:41+0200
-updated: 2026-10-04T15:47:46+0200
+updated: 2026-10-04T16:32:53+0200
 current-owner: agentlenspro-15
 task-type: infra
 project-id: agentlenspro
@@ -39,3 +39,11 @@ a cargo job owns the tree (a sweep mid-build corrupts the build).
 
 ## Notes and lessons learned
 2026-10-04: retention rule STATED — keep the newest 2 generations per crate (newest = mtime of .fingerprint/<crate>-<hash>), older ones removable. scripts/cargo-target-retention.sh reports by default (one find+du pass, grouped in awk; 600-entry synthetic tree in about 1 s) and removes only with --apply (refused unless the path ends in /target and holds CACHEDIR.TAG or debug/.fingerprint; symlinks never followed; every path printed first); --apply tested on synthetic trees only. Measured on rust-core/target (totals only): du -sk target 53,656,372 KiB; du -sk target/debug 37,465,116 KiB; 1,838 .fingerprint entries. The per-crate generation breakdown on the real target was NOT completed (the first per-entry version was too slow and was stopped). Applying the rule to the real target is the owner's decision; acceptance (before/after numbers) is still owed.
+
+## Review findings 2026-10-04
+
+- DEFECT in the rule itself, VERIFIED on rust-core/target/debug/.fingerprint: one crate name has many generations that are live AT THE SAME TIME, one per cargo unit. `libduckdb-sys` has three per build (build-script-build, run-build-script, lib); `agentlens-core` has one per integration test target plus lib and test-lib (14 or more with the same day's mtime). "Keep the newest 2 per crate" therefore removes live units on `--apply`: all but two of agentlens-core's test targets, and for libduckdb-sys possibly the run-build-script output, which is the compiled DuckDB the card wanted to keep. The result is a rebuild, not corruption, but DO NOT run `--apply` with this rule. A correct rule ranks per (crate, unit kind and target name read from the files inside the fingerprint directory), not per crate.
+- The process guard matches only a first command word whose basename is exactly `cargo` or `rustc`; it is checked once before the removal loop (a cargo started afterwards is not seen). Accepted as is.
+- `CARGO_RETENTION_PS_SNAPSHOT` set in the environment replaces `ps` and so disables the guard in production too; it is documented as a test knob. `--force-while-building` already exists as the explicit override.
+- The `--apply` guard `no CACHEDIR.TAG and no <profile>/.fingerprint` can never fire, because the script already exits earlier when `<profile>/.fingerprint` is missing.
+- Read and found sound: symlink refusals at every level, `--profile` restricted to one plain path segment, removal paths come only from the one-level listing under the profile directory, every path printed before `rm -rf --`.

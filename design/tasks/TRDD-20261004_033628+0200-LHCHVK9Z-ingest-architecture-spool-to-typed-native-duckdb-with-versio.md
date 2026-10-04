@@ -4,7 +4,7 @@ title: Ingest architecture - spool to typed native DuckDB with versioned per-top
 column: human_review
 status: tasked
 created: 2026-10-04T03:36:28+0200
-updated: 2026-10-04T15:00:37+0200
+updated: 2026-10-04T16:31:25+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: feature
@@ -298,3 +298,13 @@ Backfill tool: scripts_dev/digest-backfill/backfill.py (gitignored), proven on o
 - 2026-10-04T03:58:15+0200 — column → design by main-agent@agentlenspro. design recorded; owner items open (wrong-typed policy, NOT NULL); child slice card carries the implementation
 - 2026-10-04T06:32:53+0200 — column → dev by main-agent@agentlenspro. owner ordered the build, D-H/D-I
 - 2026-10-04T08:11:58+0200 — column → human_review by main-agent@agentlenspro. built and checked against real data; wiring needs the owner's go-ahead
+
+## Review findings 2026-10-04
+
+- VERIFIED by reading `reject` and `enqueue`: rejected lines go through the same bounded writer queue as valid lines, so a flood of invalid events can fill the queue and valid lines are then dropped and counted in droppedQueueFull. Not fixed. Options: a separate small channel for rejected lines, or refuse rejected lines first when the queue is near its bound.
+- VERIFIED: `statusline` calls `reject(spool, spool, ...)`, so rejectedByTopic keys are the spool name for the status line and `source/topic` for hooks and telemetry: two key shapes in one map. Not fixed.
+- VERIFIED: `write_rejected` checks the file size before the write only; `reject` always enqueues exactly one line, so the overshoot past REJECTED_FILE_MAX_BYTES is at most one line (which for a hook payload can be several MiB). Not fixed.
+- VERIFIED, harmless: `ts_ns` is taken before the line is queued, so rejected lines can be slightly out of order in the file.
+- REFUTED for the schemas as they stand (measured with jq over schemas/manifest.json on 2026-10-04): the review said the shared-spool union of required fields could reject valid lines. The four spools with more than one producer (api_request 4, api_response 3, statusline_main 14, statusline_subagent 2) have NO `required` list in any of their 23 schemas, so the union is empty and cannot reject anything today. LATENT: it becomes live the day one of those schemas gains a top-level `required` field; and two producers that disagree on Scalar versus Array for the same field are resolved by HashMap iteration order.
+- REFUTED for the schemas as they stand: the review said `Shape::Any` for a field with `x-duckdb-type` misses object/array failures. Only 6 required fields carry `x-duckdb-type`, all of them `JSON` with no `type`; a JSON column accepts an object or array, so presence-only checking is right for them. LATENT if a required field ever gets a scalar `x-duckdb-type`.
+- NOT VERIFIED: the evidence for d8de334d. The review says each test passed once in separate runs at load 60 to 150 and that test t23 was only seen red on a timeout, never on its assertion. System load at 16:26 on 2026-10-04 was 146, so no test was re-run. Still owed, when load is under about 20: the two new tests plus t2 and t11 with `--test-threads=1`, and one mutation (disable `invalid_fields`) that must turn t23 red on its assertion.
