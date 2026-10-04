@@ -508,31 +508,46 @@ record during the transition. It is built from two crates and an opt-in tap in `
 ```mermaid
 flowchart LR
     P[alcore tap: hook events, status line, telemetry events, spans] --> I["ingest/inbox/&lt;spool&gt;/current.ndjson"]
-    I -- "seal at ~4 MiB or every 60 s" --> R["ingest/ready/&lt;spool&gt;/"]
+    I -- "seal at 4 MiB, 60 s tick" --> R["ingest/ready/&lt;spool&gt;/"]
     R -- "aldigest collect, one transaction per file" --> D[("ingest/events.duckdb")]
     R --> DONE[done/ or failed/]
 ```
 
 - **Spool.** One JSON line per item, `{"ts_ns", "payload"}`, appended to
-  `<dataDir>/ingest/inbox/<spool>/current.ndjson` and sealed into `ready/<spool>/` at about 4 MiB or by
-  the 60 s tick. `agentlens-spool` (binary `alspool`: `append [--seal-bytes]`, `seal`) is the writer.
+  `<dataDir>/ingest/inbox/<spool>/current.ndjson` and sealed into `ready/<spool>/`. The writer seals once the file
+  reaches 4 MiB, so a ready file is the threshold plus the last batch (files of up to 5.4 MiB were
+  measured); the 60 s tick exists only with the alcore tap on. `agentlens-spool` (binary `alspool`: `append [--seal-bytes]`, `seal`) is the writer.
 - **Loader.** `agentlens-digest` (binary `aldigest`: `describe`, `spools`, `rehash`, `register`,
-  `collect [--max-files]`, `query`; a `views` command is planned) loads each sealed file in one
+  `collect [--max-files]`, `views`, `query`) loads each sealed file in one
   transaction together with its ledger row into `<dataDir>/ingest/events.duckdb`, then moves it to
   `done/` or `failed/`. There is one DuckDB schema and `events` table per `producer_type`; a stored table
   macro per producer holds the field-to-column mapping.
+- **Views.** `aldigest views --db DB` rebuilds, in one transaction, schema `u`: one view per
+  source+topic that unions every schema version by name (`u."<source>__<topic>"`), a
+  `_between(t_from, t_to)` table macro, and `u."<source>__all"` joining a source's topic tables on
+  (_meta_ingest_id, _meta_record_ordinal). Schema `u` is owned by the command and dropped and recreated
+  on every run. `query` is a read-only helper used by the tests.
 - **Producers.** 98: hook 33, statusline 16, telemetry_event 27, telemetry_span 15, api_request 4,
   api_response 3. The schemas live in `rust-core/crates/agentlens-digest/schemas/` and are edited by hand
-  when Claude Code changes; a changed schema needs a new `producer_type` version.
+  when Claude Code changes; a changed schema needs a new `producer_type` version. 5 span producers are
+  not Claude Code's (Codex and Rust-tracing spans) and are marked `n/a`.
 - **The tap.** `alcore serve --ingest-manifest PATH --aldigest-bin PATH [--ingest-sources LIST]`. Without
   both of the first two flags nothing changes (half a configuration is a startup error). With them,
   `alcore` writes each received hook event, status-line sample, telemetry event and span as a spool line
   next to the existing stores, and every 60 s seals and runs `aldigest collect` as a child process
   (`--max-files 10` per process, because one collect process grows with every committed body file — 65 to
-  687 MiB over 72 files, DuckDB itself). A failed tap write is counted and never fails the capture path.
-- **API bodies are off by default**: the median day measured about 22.6 GB of bodies against 35 MB of hook
-  events and 26.5 MB of telemetry events, and the typed tables store each request history again without
-  de-duplication. `--ingest-sources` opts them in.
+  687 MiB over 72 files, DuckDB itself). A failed tap write is counted and never fails the capture path; every tap write runs off the
+  request path, outside alcore's state lock.
+- **API bodies are off by default.** Estimated from measured ratios over seven days, the new path would
+  cost about 22.6 GB per median day for bodies (6.8 GB of spool plus 15.8 GB of database growth, because
+  the typed tables store each request's message history again without de-duplication), against about
+  0.25 GB per day for all other sources together (status line about 0.16 GB, estimated at 2 KiB per
+  sample; hooks 35 MB; telemetry events 26.5 MB; spans 29.8 MB). `--ingest-sources` opts them in.
+- **CLI opt-in.** `AGENTLENS_INGEST=on` makes `agentlenspro server start` (and the hook revive) pass the
+  two flags; `AGENTLENS_INGEST_SOURCES` selects sources; if `aldigest` or the manifest cannot be found
+  the server starts without the path and warns. Not in the npm tarball: `aldigest`, `alspool` and the
+  schemas are found only from a repo checkout or through `AGENTLENS_ALDIGEST_BIN` /
+  `AGENTLENS_INGEST_MANIFEST`.
 
 ---
 

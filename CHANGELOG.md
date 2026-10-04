@@ -16,8 +16,10 @@ All notable changes to AgentlensPro are documented here.
   `rust-core/crates/agentlens-digest/schemas/`). Without both flags nothing changes; half a configuration
   is a startup error; a failed tap write never fails capture. API bodies are not spooled unless listed in
   `--ingest-sources`. New binaries: `aldigest` (`describe`, `spools`, `rehash`, `register`,
-  `collect [--max-files]`, `query`) and `alspool` (`append [--seal-bytes]`, `seal`). Not enabled by
-  default and not yet packaged with the npm tarball.
+  `collect [--max-files]`, `views`) and `alspool` (`append [--seal-bytes]`, `seal`). Opt in from the CLI
+  with `AGENTLENS_INGEST=on` (sources: `AGENTLENS_INGEST_SOURCES`; binary and manifest overrides:
+  `AGENTLENS_ALDIGEST_BIN`, `AGENTLENS_INGEST_MANIFEST`). Not enabled by default and not yet packaged
+  with the npm tarball.
 
 ### Changed
 

@@ -4,7 +4,7 @@ title: Ingest architecture - spool to typed native DuckDB with versioned per-top
 column: human_review
 status: tasked
 created: 2026-10-04T03:36:28+0200
-updated: 2026-10-04T10:06:01+0200
+updated: 2026-10-04T11:04:32+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: feature
@@ -16,14 +16,14 @@ approved: true
 approval-judge: main-agent@agentlenspro
 approval-datetime: 2026-10-04T03:36:28+0200
 npt: [VXD881R6]
-implementation-commits: [69b7d406, 6085ee91, 6f8d1d16, fdb7996c, c594c472, e9cc75cf]
+implementation-commits: [69b7d406, 6085ee91, 6f8d1d16, fdb7996c, c594c472, e9cc75cf, 125bd44b, 22299b2f, 301d7947, 9cca67b4]
 ---
 
 # Ingest architecture - spool to typed native DuckDB with versioned per-topic producer schemas
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-10-04T10:06:31+0200
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-10-04T11:04:03+0200
 
-NEXT ACTION: owner decision to switch the path on for this machine (rebuild alcore, ad-hoc codesign, start the server with AGENTLENS_INGEST=on once the CLI opt-in lands, then watch /api/ingest-status). Pending in the build: aldigest views, packaging of aldigest/alspool/schemas, CLI opt-in.
+NEXT ACTION: (1) commit the in-flight alcore change (single ordered writer thread with a bounded queue; aldigest views run once per process under .collect.lock; opt-in done/ retention checked against the ledger) once its worker reports and the main agent has read the diff; (2) owner decisions below; nothing is deployed.
 BUILT as a library and two binaries (crates agentlens-digest and agentlens-spool, 98 producers), NOT wired: nothing in production writes a spool line yet. Loaded with real saved data through test converters for hooks, telemetry and API bodies; the status line was only compared with its stored flattened columns, never loaded. PLANNED (D-H part 4): section "Query unification plan".
 NOT covered by any schema: telemetry metrics (nothing captures them), transcripts, and the raw nested status-line JSON (never observed on disk).
 SUPERSEDED body sections (kept for history, do NOT act on them): "Design (follows proposal v9 ...)" where it says the collector lives inside alcore and seals to ready/ (the writer seals; the collector is the aldigest binary); "Build order" steps 1-6 (done differently, see "What is built"); the two "OWNER:" bullets and the "How a hook names its producer_type" bullet under "Open" (decided under D-I, see "Decisions"); in "Agent reading" the bullet about a collector-assigned _meta_event_id joining topic tables (the join key is (_meta_ingest_id, _meta_record_ordinal)).
@@ -245,6 +245,10 @@ Decision: API bodies are not spooled by default. Measured reason: 22.61 GB on th
 Decision: collect runs as a child process, 10 files per process. Measured reason: one collect process grows with every committed body file (65 to 687 MiB over 72 files, DuckDB itself) and stays under 300 MiB at about 10 files.
 
 Backfill tool: scripts_dev/digest-backfill/backfill.py (gitignored), proven on one day, never run against the real data directory.
+- 125bd44b + 22299b2f: aldigest views (schema u rebuilt in one transaction; 57 digest tests).
+- 301d7947: hook and status-line tap writes left the state lock (a held spool lock stalled every POST; test t14).
+- 9cca67b4: CLI opt-in AGENTLENS_INGEST=on, never stops capture when aldigest is missing.
+- Found while testing, unrelated to this work: (a) standalone/cli.js on this machine is stale and lacks server revive (unit test "a live revived child is reaped" fails at HEAD too; report reports/ingest-redesign/20261004_102654+0200-revive-test-failure.md); (b) rustOpenCode real-db parity test fails: native and JS truncate resultSummary differently at a multi-byte character. Each needs its own card.
 
 ## Approval log
 
@@ -252,3 +256,22 @@ Backfill tool: scripts_dev/digest-backfill/backfill.py (gitignored), proven on o
 - 2026-10-04T03:58:15+0200 — column → design by main-agent@agentlenspro. design recorded; owner items open (wrong-typed policy, NOT NULL); child slice card carries the implementation
 - 2026-10-04T06:32:53+0200 — column → dev by main-agent@agentlenspro. owner ordered the build, D-H/D-I
 - 2026-10-04T08:11:58+0200 — column → human_review by main-agent@agentlenspro. built and checked against real data; wiring needs the owner's go-ahead
+
+## Switch-on procedure for this machine (owner decision, NOT done)
+
+1. Free disk space first: the volume is 98% full (about 50 GB free) and rust-core/target alone is about 51 GB of regenerable build output.
+2. `cargo build --release --manifest-path rust-core/Cargo.toml -p agentlens-core -p agentlens-digest -p agentlens-spool`.
+3. Copy `alcore` into `bin-native/darwin-arm64/`, then `codesign -s - --force bin-native/darwin-arm64/alcore` (without it macOS kills the binary before main; check `./bin-native/darwin-arm64/alcore --version` exits 0).
+4. `node esbuild.js` (the CLI bundle `standalone/cli.js` on this machine dates from 2026-10-01 and lacks the `server revive` verb, so the hook revive of a dead collector is broken today regardless of this work).
+5. Start the server with `AGENTLENS_INGEST=on agentlenspro server restart`; the variable must also be present in the environment Claude Code runs hooks in, or a hook-revived server starts without the path.
+6. Watch `GET /api/ingest-status` (lines per spool, unknown names, write errors, last collect) and the size of `<dataDir>/ingest/`.
+7. Roll back by unsetting the variable and restarting; an existing `ingest/` directory is then ignored. Expected cost with the default sources: about 0.25 GB per day of spool until done/ retention is switched on (`ALCORE_INGEST_DONE_RETENTION_SECS`, off by default), plus database growth of about 0.1 GB per day (estimates from reports/ingest-redesign/20261004_091622+0200-ingest-disk-budget.md).
+
+## Owner decisions pending (2026-10-04)
+
+- Packaging `aldigest`/`alspool`/schemas into the npm tarball (checklist: reports/ingest-redesign/20261004_091628+0200-packaging-and-deploy-survey.md; about 41 MB more per platform uncompressed).
+- Switching the path on (procedure above).
+- Enabling done/ retention.
+- Running the backfill (`scripts_dev/digest-backfill/backfill.py`, gitignored, proven on one day) against the real data directory.
+- API bodies through this path need a de-duplicating design first.
+- The opt-in variable name and whether it should become a config setting.
