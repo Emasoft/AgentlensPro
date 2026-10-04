@@ -1,10 +1,10 @@
 ---
 trdd-id: LHCHVK9Z
 title: Ingest architecture - spool to typed native DuckDB with versioned per-topic producer schemas
-column: design
+column: dev
 status: tasked
 created: 2026-10-04T03:36:28+0200
-updated: 2026-10-04T03:58:15+0200
+updated: 2026-10-04T06:32:53+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: feature
@@ -22,7 +22,7 @@ npt: [VXD881R6]
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-10-04T03:58:01+0200
 
-NEXT ACTION: build step 1: generate the JSON schema set + index for the current Claude Code version and show it to the owner.
+NEXT ACTION: build per D-H: (b) added schemas, (c) generator crate agentlens-digest, (d) digest macros + collect, (e) remaining producers, (f) query-unification plan.
 OWNER items open: wrong-typed line policy; NOT NULL for required fields.
 Related: TRDD-9VX3WTGU (memory cap; Amendment 7), TRDD-HH1NP0KD (hook binary; owns build step 7).
 
@@ -52,6 +52,10 @@ D-F (2026-10-04):
 
 D-G (2026-10-04):
 > no, keep my proposal into docs_dev. because it is only a prototype. the true rust hooks and sql functions are still to be decided and built. you don't want to use python for such time critical thing, don't you? all must be small rust digesters, each ultrafast and a ligh wrapper around duckdb sql queries. a set of json schemas for the current hooks and telemetry output must be generated from the current claude code version and a index must be written to let those rust digesters pick the right json schema for each producer. once the final system is built, then that will be written down as specs.
+D-H (2026-10-04):
+> examine all the telemetry saved files and the raw dumps of the api responses and the json of the statusline and that of each hook. create a schema of each one of them. then create a rust program that read the schema, generates the tables as in the prototype, and bind each schema to the generated table. then write the rust code and the sql functions necessary to ingest each type and pass it to duckdb as new row of a set of tables. then plan the sql functions that can map the fractured sequence of tables making the queries go automatically to the right tables and produce a query result that was as if the tables where one table only.
+D-I (2026-10-04):
+> be sure to complete the task by yourself. decide the rest by yourself based on tests and verified facts. do not stop until you completed the new ingestion system. you are in charge. remember to use tldr-code skill, fastedit skill, jgrep skill and quicksilver to save tokens.
 
 ## Agent reading (NOT part of the ruling; correct it if the owner disagrees)
 
@@ -64,6 +68,7 @@ D-G (2026-10-04):
 - D-C (third message): the digest SQL for each producer_type is generated ONCE when the schema is registered and already maps every JSON field to its column and topic table; the collector does no per-line parsing, validation or splitting of its own — DuckDB reads the sealed file with the fixed types.
 - D-D (fourth message): the field-to-column mapping lives inside a stored SQL function per producer_type, created once at schema registration. Agent's proposed mechanism (not stated by the owner): one DuckDB table macro per producer_type and topic, e.g. digest_<producer>_<topic>(path), whose body is a fixed SELECT of each JSON field into its column over read_ndjson(path, columns={explicit types}); the collector only runs INSERT INTO <topic table> SELECT * FROM digest_...(sealed_file) for each topic, as prepared statements, inside the one transaction with the ledger row. DuckDB table macros are SELECT-only, so the INSERT wrapper is a prepared statement, not part of the macro.
 - D-G: the proposal stays in docs_dev/ as a prototype; no Python in the pipeline. Every producer is digested by a small Rust digester that is a light wrapper around DuckDB SQL. A set of JSON schemas for the current hook and telemetry outputs is generated from the current Claude Code version, and an index lets each digester pick the right schema for its producer. Specs are written only after the final system is built. Agent's reading of "digester": the collector-side component that runs the precompiled digest SQL for one producer_type; the hook-side writer only appends to the spool (a hook process opening DuckDB itself was measured to lose events under concurrency).
+- D-H/D-I: the owner orders the build and delegates the remaining decisions to the agent, to be settled by tests and verified facts. The new crate is named agentlens-digest because rust-core/crates/agentlens-ingest already exists (the OTLP ingest crate). Agent defaults in force: digester runs collector-side; schema chosen by producer name; a file whose load raises goes to failed/; hook lines are wrapped as {"ts_ns", "payload"}.
 
 ## Design (follows proposal v9 — docs_dev/duckdb-native-ingest-proposal/, gitignored, this machine only)
 
@@ -124,3 +129,4 @@ D-G (2026-10-04):
 
 - 2026-10-04T03:36:28+0200 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-10-04T03:58:15+0200 — column → design by main-agent@agentlenspro. design recorded; owner items open (wrong-typed policy, NOT NULL); child slice card carries the implementation
+- 2026-10-04T06:32:53+0200 — column → dev by main-agent@agentlenspro. owner ordered the build, D-H/D-I

@@ -4,7 +4,7 @@ title: Ingest slice 1 - SessionEnd hook events from spool file to typed DuckDB t
 column: design
 status: tasked
 created: 2026-10-04T03:53:31+0200
-updated: 2026-10-04T03:58:52+0200
+updated: 2026-10-04T06:32:51+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: feature
@@ -56,6 +56,7 @@ The spool writer binary (TRDD-HH1NP0KD), sealing inbox->ready, retention deletio
 
 ## Open
 - OWNER: the producer line is the raw hook payload wrapped with a writer-added ts_ns (hook payloads carry no timestamp). Today's alcore envelope {ev, payload, session, ts} is not reused.
+- The crate name agentlens-ingest in this card is taken by the existing OTLP crate; the new crate is agentlens-digest (see TRDD-LHCHVK9Z D-H).
 
 ## Related
 Parent architecture card: TRDD-LHCHVK9Z (build step 2; it uses the SessionEnd schema from build step 1).
