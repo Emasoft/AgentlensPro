@@ -1853,6 +1853,35 @@ fn f5_a_conflicting_catalog_fails_the_run_and_leaves_u_unchanged() {
     let err = views(&conn).unwrap_err();
     assert!(err.contains("hook.conf") && err.contains("\"x\"") && err.contains("nothing was written"), "{err}");
     assert_eq!(u_objects(&conn), before, "schema u changed although the run failed");
+    assert_eq!(count(&conn, "duckdb_views() WHERE temporary AND view_name LIKE 'g\\_%' ESCAPE '\\'"), 0, "the generator temp views must be rolled back too");
+}
+
+
+/// F6. `views` owns schema `u`: a view and a macro a user created there are gone after the next run, and the generated objects are all back.
+#[test]
+fn f6_a_second_run_removes_whatever_the_catalog_does_not_imply() {
+    let fx = Fx::new("f6");
+    register_where(&fx, &only(&[SE, "statusline_main_cost_v1", "statusline_main_model_v1"]));
+    let conn = fx.conn();
+    let first = views(&conn).unwrap();
+    let generated = u_objects(&conn);
+    conn.execute_batch("CREATE VIEW u.stale_thing AS SELECT 1 AS x; CREATE MACRO u.stale_macro() AS 1").unwrap();
+    assert_eq!(u_objects(&conn).len(), generated.len() + 2);
+    assert_eq!(views(&conn).unwrap(), first);
+    assert_eq!(u_objects(&conn), generated, "the hand-made objects must be gone and nothing generated lost");
+}
+
+/// F7. `views` succeeds on a catalog with a real manifest but no rows, and on a catalog with zero producers (zero counts, empty `u`).
+#[test]
+fn f7_views_on_an_empty_database_and_on_a_catalog_without_producers() {
+    let fx = Fx::new("f7");
+    register_where(&fx, &only(&[SE]));
+    assert_eq!(views(&fx.conn()).unwrap(), ViewsSummary { topic_views: 1, macros: 1, all_views: 0 });
+    let fx = Fx::new("f7b");
+    register(&fx.conn(), &[]).unwrap();
+    let conn = fx.conn();
+    assert_eq!(views(&conn).unwrap(), ViewsSummary { topic_views: 0, macros: 0, all_views: 0 });
+    assert!(u_objects(&conn).is_empty());
 }
 
 /// G4. A double underscore in a source or topic name is a manifest compile error (it is the separator of the unified view names).
