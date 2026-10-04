@@ -1,9 +1,11 @@
 //! aldigest — spool NDJSON → typed native DuckDB tables (TRDD-LHCHVK9Z, TRDD-VXD881R6).
 //!
 //!   aldigest describe --manifest M            print every producer, its table and columns
+//!   aldigest rehash --manifest M              rewrite the manifest's sha256 fields from the schema files
 //!   aldigest register --db DB --manifest M    install the catalog, tables and digest macros
 //!   aldigest collect --db DB --ingest-dir DIR load ready/<spool>/*.ndjson exactly once
 //!
+//! Writing the spool is `alspool` (crate agentlens-spool), which does not link DuckDB.
 //! Any error exits non-zero. Test-only crash points (cargo feature `crashpoints`, off by
 //! default): with ALDIGEST_CRASH_AT=after_insert|after_commit the process writes the file named
 //! by ALDIGEST_CRASH_MARKER at that point of `collect` and then parks until it is killed.
@@ -15,7 +17,7 @@ use std::process::exit;
 
 fn usage(msg: &str) -> ! {
     eprintln!("aldigest: {msg}");
-    eprintln!("usage: aldigest describe --manifest M | register --db DB --manifest M | collect --db DB --ingest-dir DIR");
+    eprintln!("usage: aldigest describe --manifest M | rehash --manifest M | register --db DB --manifest M | collect --db DB --ingest-dir DIR");
     exit(64);
 }
 
@@ -62,6 +64,11 @@ fn run(args: &[String]) -> Res<()> {
             for p in schema::load_manifest(&f["manifest"])? {
                 println!("{}", p.describe());
             }
+        }
+        "rehash" => {
+            let f = flags(rest, &["manifest"]);
+            let changed = schema::rehash_manifest(&f["manifest"])?;
+            println!("rehashed {changed} producer(s)");
         }
         "register" => {
             let f = flags(rest, &["db", "manifest"]);

@@ -4,7 +4,7 @@
 //! * [`schema`] reads `schemas/manifest.json` and compiles each producer's JSON Schema into a
 //!   table layout (port of the prototype `setup_duckdb_native_v2.py`).
 //! * [`register`] installs the catalog (`_ingest`), one table and one table macro
-//!   `_ingest.digest_<producer_type>(path, ingest_id, ingested_at)` per producer.
+//!   `_ingest.digest_<producer_type>(dg_path, dg_ingest_id, dg_ingested_at)` per producer.
 //! * [`collect`] loads spool files `<ingest_dir>/ready/<spool>/*.ndjson` exactly once.
 //!
 //! Spool line: `{"ts_ns": <unix ns>, "payload": <native JSON exactly as emitted>}`.

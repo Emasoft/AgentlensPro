@@ -13,7 +13,7 @@ use sha2::{Digest, Sha256};
 use std::path::Path;
 
 /// Top-level payload property names the digest macros own.
-const RESERVED_NAMES: [&str; 2] = ["ts_ns", "payload"];
+const RESERVED_NAMES: [&str; 5] = ["ts_ns", "payload", "dg_path", "dg_ingest_id", "dg_ingested_at"];
 const RESERVED_PREFIX: &str = "_meta_";
 
 #[derive(Deserialize)]
@@ -122,7 +122,7 @@ pub fn producer_schema_name(producer_type: &str) -> String {
     format!("p_{}_{}", base.trim_end_matches('_'), &sha256_hex(producer_type)[..8])
 }
 
-fn is_ident(s: &str) -> bool {
+pub fn is_ident(s: &str) -> bool {
     !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
@@ -232,7 +232,12 @@ fn duckdb_type(node: &Value, at: &str) -> Res<String> {
                 .filter(|p| !p.is_empty())
                 .ok_or_else(|| format!("{at}: object without fixed properties needs \"x-duckdb-type\""))?;
             let mut fields = Vec::new();
+            let mut lowered: std::collections::HashMap<String, &str> = std::collections::HashMap::new();
             for (name, child) in props {
+                // STRUCT field names are case-insensitive in DuckDB, like column names.
+                if let Some(other) = lowered.insert(name.to_lowercase(), name) {
+                    return Err(format!("{at}: properties {other:?} and {name:?} differ only in letter case (DuckDB field names are case-insensitive)"));
+                }
                 fields.push(format!("{} {}", qident(name), duckdb_type(child, &format!("{at}/{name}"))?));
             }
             Ok(format!("STRUCT({})", fields.join(", ")))
@@ -256,9 +261,16 @@ fn compile_columns(doc: &Value) -> Res<Vec<Column>> {
         .ok_or("top-level object must declare at least one property")?;
     let required: Vec<&str> = doc.get("required").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).collect()).unwrap_or_default();
     let mut columns = Vec::new();
+    let mut lowered: std::collections::HashMap<String, &str> = std::collections::HashMap::new();
     for (name, node) in props {
-        if RESERVED_NAMES.contains(&name.as_str()) || name.starts_with(RESERVED_PREFIX) {
+        // DuckDB identifiers are case-insensitive: compare the lower-cased name everywhere.
+        let lower = name.to_lowercase();
+        if RESERVED_NAMES.contains(&lower.as_str()) || lower.starts_with(RESERVED_PREFIX) {
             return Err(format!("top-level property {name:?} is reserved for the digest envelope"));
+        }
+        // Two columns of one table that differ only in case would collide inside DuckDB.
+        if let Some(other) = lowered.insert(lower, name) {
+            return Err(format!("top-level properties {other:?} and {name:?} differ only in letter case (DuckDB column names are case-insensitive)"));
         }
         let replaces = match node.get("x-replaces") {
             None => None,
@@ -362,4 +374,33 @@ pub fn load_manifest(path: &Path) -> Res<Vec<Producer>> {
         });
     }
     Ok(out)
+}
+
+
+/// `aldigest rehash`: recompute the canonical sha256 of every schema file the manifest names and
+/// rewrite the `sha256` fields in place (same key order, 2-space indent, trailing newline).
+/// Returns how many hashes changed. The schema files are the source of truth (owner ruling D-E),
+/// edited by hand; this does no other validation, the next [`load_manifest`] does.
+pub fn rehash_manifest(path: &Path) -> Res<usize> {
+    let text = std::fs::read_to_string(path).map_err(|e| format!("manifest {}: {e}", path.display()))?;
+    let mut doc: Value = serde_json::from_str(&text).map_err(|e| format!("manifest {}: {e}", path.display()))?;
+    let base = path.parent().unwrap_or_else(|| Path::new(""));
+    let entries = doc.get_mut("producers").and_then(Value::as_array_mut).ok_or("manifest needs a producers array")?;
+    let mut changed = 0;
+    for entry in entries {
+        let obj = entry.as_object_mut().ok_or("every producers entry must be an object")?;
+        let schema = obj.get("schema").and_then(Value::as_str).ok_or("a producers entry has no schema path")?;
+        let schema_path = base.join(schema);
+        let schema_text = std::fs::read_to_string(&schema_path).map_err(|e| format!("schema {}: {e}", schema_path.display()))?;
+        let schema_json: Value = serde_json::from_str(&schema_text).map_err(|e| format!("schema {}: {e}", schema_path.display()))?;
+        let hash = schema_hash(&schema_json);
+        let slot = obj.get_mut("sha256").ok_or_else(|| format!("entry for {}: no sha256 field", schema_path.display()))?;
+        if slot.as_str() != Some(hash.as_str()) {
+            *slot = Value::String(hash);
+            changed += 1;
+        }
+    }
+    let out = serde_json::to_string_pretty(&doc).map_err(|e| format!("manifest {}: {e}", path.display()))? + "\n";
+    std::fs::write(path, out).map_err(|e| format!("manifest {}: {e}", path.display()))?;
+    Ok(changed)
 }

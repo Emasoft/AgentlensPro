@@ -105,7 +105,12 @@ fn move_unique(src: &Path, dir: &Path, name: &str) -> Res<PathBuf> {
 fn ndjson_files(dir: &Path) -> Res<Vec<PathBuf>> {
     let mut files = Vec::new();
     for entry in std::fs::read_dir(dir).map_err(|e| err(&dir.display().to_string(), e))? {
-        let path = entry.map_err(|e| err(&dir.display().to_string(), e))?.path();
+        let entry = entry.map_err(|e| err(&dir.display().to_string(), e))?;
+        // Dot entries (macOS `.DS_Store`, editor temp files) are never spool files.
+        if entry.file_name().to_string_lossy().starts_with('.') {
+            continue;
+        }
+        let path = entry.path();
         if path.is_file() && path.extension().is_some_and(|x| x == "ndjson") {
             files.push(path);
         }
@@ -243,11 +248,16 @@ pub fn collect(conn: &Connection, ingest_dir: &Path) -> Res<Summary> {
 pub fn collect_with(conn: &Connection, ingest_dir: &Path, on_stage: &mut dyn FnMut(Stage)) -> Res<Summary> {
     let root = std::fs::canonicalize(ingest_dir).map_err(|e| err(&ingest_dir.display().to_string(), e))?;
     let ready = root.join("ready");
+    crate::register::check_layout(conn)?;
     let spools = load_catalog(conn)?;
     let entries = std::fs::read_dir(&ready).map_err(|e| err(&ready.display().to_string(), e))?;
     for entry in entries {
         let entry = entry.map_err(|e| err("ready", e))?;
         let name = entry.file_name().to_string_lossy().into_owned();
+        // Dot entries (macOS `.DS_Store`) are ignored; every other unknown entry is an error.
+        if name.starts_with('.') {
+            continue;
+        }
         if !entry.path().is_dir() || !spools.iter().any(|s| s.name == name) {
             return Err(format!("{}: not a directory named after a registered spool", entry.path().display()));
         }

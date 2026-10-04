@@ -11,7 +11,7 @@ use duckdb::Connection;
 use serde_json::{json, Value};
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
 const TS0: i64 = 1_700_000_000_123_456_789;
@@ -714,10 +714,10 @@ fn compile_props(name: &str, props: Value, sha: Option<&str>) -> Result<Vec<Prod
     load_manifest(&write_manifest(&fx.root, &[e]))
 }
 
-/// Guard: payload properties named ts_ns, payload, or starting with _meta_ are rejected at compile time.
+/// Guard: payload properties named ts_ns, payload, dg_path, dg_ingest_id, dg_ingested_at (macro parameters) or starting with _meta_ are rejected at compile time, whatever their letter case.
 #[test]
 fn g1_reserved_property_names_are_rejected() {
-    for (i, name) in ["ts_ns", "payload", "_meta_extra"].into_iter().enumerate() {
+    for (i, name) in ["ts_ns", "payload", "_meta_extra", "dg_path", "dg_ingest_id", "dg_ingested_at", "DG_Path"].into_iter().enumerate() {
         let err = compile_props(&format!("g1-{i}"), json!({"cwd": {"type": "string"}, name: {"type": "string"}}), None).unwrap_err();
         assert!(err.contains(name) && err.contains("reserved"), "{err}");
     }
@@ -807,4 +807,372 @@ fn x4_unknown_spool_directory_is_an_error() {
     fx.put("not_a_spool", "a.ndjson", "{}\n");
     let err = collect(&fx.conn(), &fx.ingest()).unwrap_err();
     assert!(err.contains("not_a_spool"), "{err}");
+}
+
+// ---------------------------------------------------------------- fix pass A (review of 69b7d406)
+
+fn ok(out: &Output) {
+    assert!(out.status.success(), "exit {:?}: {}", out.status.code(), String::from_utf8_lossy(&out.stderr));
+}
+
+/// Register a one-producer manifest `hook_<topic>_v1` of `doc` into the fixture database.
+fn register_doc(fx: &Fx, doc: &Value, topic: &str, spool: &str) -> Vec<Producer> {
+    let e = entry(doc, "hook", topic, 1, spool, Value::Null, &fx.root.join(format!("{topic}.schema.json")));
+    let producers = load_manifest(&write_manifest(&fx.root.join("m"), &[e])).unwrap();
+    register(&fx.conn(), &producers).unwrap();
+    producers
+}
+
+/// A1. Properties named like the former macro parameters (`path`, `ingest_id`, `ingested_at`) register and round-trip.
+#[test]
+fn a1_payload_properties_named_like_former_macro_parameters_round_trip() {
+    let fx = Fx::new("a1");
+    let props = json!({"path": {"type": "string"}, "ingest_id": {"type": "string"}, "ingested_at": {"type": "string"}, "cwd": {"type": "string"}});
+    register_doc(&fx, &json!({"type": "object", "properties": props, "required": ["path"]}), "param", "hook_param_v1");
+    let payload = json!({"path": "/p/aaaaaaaa", "ingest_id": "i-aaaaaaaa", "ingested_at": "t-aaaaaaaa", "cwd": "/work"});
+    fx.put("hook_param_v1", "a.ndjson", &lines(&[payload]));
+    assert_eq!(fx.collect().rows, 1);
+    assert_eq!(
+        select(&fx.conn(), &["path", "ingest_id", "ingested_at", "cwd", "_meta_ingest_id"], &t("hook_param_v1"), "1")[0],
+        vec![s("/p/aaaaaaaa"), s("i-aaaaaaaa"), s("t-aaaaaaaa"), s("/work"), s("1")]
+    );
+}
+
+/// A2. A line whose payload is absent or null fails the whole file, even for status-line topics with no NOT NULL column; `{}` is not an error.
+#[test]
+fn a2_absent_or_null_payload_fails_the_file_but_an_empty_object_loads() {
+    let fx = Fx::new("a2");
+    register_where(&fx, &only(&["statusline_main_cost_v1", "statusline_main_core_v1"]));
+    let spool = "statusline_main";
+    fx.put(spool, "a.ndjson", &lines(&[json!({})]));
+    assert_eq!(fx.collect(), Summary { files_loaded: 1, rows: 1, files_failed: 0, files_reconciled: 0 });
+    let good = line(TS0, &json!({"cost": {"total_duration_ms": 9}}));
+    fx.put(spool, "b0.ndjson", &format!("{good}\n{}\n", json!({"ts_ns": TS0})));
+    fx.put(spool, "b1.ndjson", &format!("{good}\n{}\n", json!({"ts_ns": TS0, "payload": null})));
+    assert_eq!(fx.collect(), Summary { files_loaded: 0, rows: 0, files_failed: 2, files_reconciled: 0 });
+    let conn = fx.conn();
+    for pt in ["statusline_main_cost_v1", "statusline_main_core_v1"] {
+        assert_eq!(count(&conn, &t(pt)), 1, "only the `{{}}` row of a.ndjson is in {pt}");
+    }
+    assert_eq!(one(&conn, "\"cost\" IS NULL", &t("statusline_main_cost_v1")), s("true"));
+    assert_eq!(count(&conn, "_ingest.files WHERE status = 'failed' AND error_message LIKE '%absent or null payload%'"), 2);
+    assert_eq!(fx.names("failed", spool), ["b0.ndjson", "b0.ndjson.error.txt", "b1.ndjson", "b1.ndjson.error.txt"]);
+}
+
+/// A3. The catalog stores its layout version; register and collect refuse another version, an old layout without catalog_meta, and a catalog_meta that does not hold exactly one row.
+#[test]
+fn a3_catalog_layout_version_is_stored_and_enforced() {
+    let fx = Fx::new("a3");
+    let producers = register_where(&fx, &only(&[SE]));
+    let conn = fx.conn();
+    let current = agentlens_digest::register::LAYOUT_VERSION;
+    assert_eq!(select(&conn, &["layout_version"], "_ingest.catalog_meta", "1"), vec![vec![s(&current.to_string())]]);
+    fx.put(SE, "a.ndjson", &lines(&[session_end_payload(0)]));
+    let refused = |what: &str, needle: &str| {
+        let e = register(&conn, &producers).unwrap_err();
+        assert!(e.contains(needle), "register after {what}: {e}");
+        let e = collect(&conn, &fx.ingest()).unwrap_err();
+        assert!(e.contains(needle), "collect after {what}: {e}");
+    };
+    conn.execute_batch("UPDATE _ingest.catalog_meta SET layout_version = 99").unwrap();
+    let e = register(&conn, &producers).unwrap_err();
+    assert!(e.contains("99") && e.contains(&current.to_string()), "both versions are named: {e}");
+    refused("a version change", "99");
+    conn.execute_batch(&format!("UPDATE _ingest.catalog_meta SET layout_version = {current}")).unwrap();
+    assert_eq!(register(&conn, &producers).unwrap(), 0, "the restored version is accepted again");
+    conn.execute_batch(&format!("INSERT INTO _ingest.catalog_meta VALUES ({current})")).unwrap(); // two rows, both current
+    refused("a second row", "exactly one row");
+    conn.execute_batch("DELETE FROM _ingest.catalog_meta").unwrap();
+    refused("no row", "exactly one row");
+    conn.execute_batch("DROP TABLE _ingest.catalog_meta").unwrap();
+    refused("losing catalog_meta", "old layout");
+    assert_eq!(count(&conn, &t(SE)), 0, "nothing was loaded through a refused catalog");
+}
+
+/// A4. A producer already installed with the same hash but another spool is an error; another valid_from (also to/from null) is applied and the timeline refreshed.
+#[test]
+fn a4_changed_spool_is_refused_and_changed_valid_from_is_applied() {
+    let fx = Fx::new("a4");
+    let (v1, v2) = version_pair(&fx);
+    let conn = fx.conn();
+    let manifest = |name: &str, entries: &[Value]| load_manifest(&write_manifest(&fx.root.join(name), entries)).unwrap();
+    assert_eq!(register(&conn, &manifest("m1", &[v1.clone(), v2.clone()])).unwrap(), 2);
+
+    let mut moved = v2.clone();
+    moved["spool"] = json!("elsewhere_v2");
+    let before = catalog_snapshot(&conn);
+    let e = register(&conn, &manifest("m2", &[v1.clone(), moved])).unwrap_err();
+    assert!(e.contains("hook_session_end_v2") && e.contains("spool") && e.contains("elsewhere_v2"), "{e}");
+    assert_eq!(catalog_snapshot(&conn), before, "a refused register wrote nothing");
+
+    for from in [s("2026-12-01"), None, s("2027-01-15")] {
+        let mut changed = v2.clone();
+        changed["valid_from"] = from.clone().map_or(Value::Null, Value::String);
+        assert_eq!(register(&conn, &manifest("m3", &[v1.clone(), changed])).unwrap(), 0, "nothing new is installed");
+        assert_eq!(
+            select(&conn, &["producer_type", "valid_from", "valid_to", "superseded_by"], "_ingest.table_timeline", "version"),
+            vec![vec![s(SE), None, from.clone(), s("hook_session_end_v2")], vec![s("hook_session_end_v2"), from, None, None]]
+        );
+    }
+}
+
+/// A5. The three constant catalog columns are gone from producer_types.
+#[test]
+fn a5_constant_catalog_columns_are_gone() {
+    let fx = Fx::new("a5");
+    register_where(&fx, &only(&[SE]));
+    let conn = fx.conn();
+    assert_eq!(count(&conn, "duckdb_columns() WHERE schema_name = '_ingest' AND column_name IN ('recorded_at_pointer', 'recorded_at_encoding', 'order_pointers_json')"), 0);
+    assert!(count(&conn, "duckdb_columns() WHERE schema_name = '_ingest' AND table_name = 'producer_types' AND column_name = 'reader_columns_sql'") == 1, "the check must see the columns it allows");
+}
+
+/// A6. collect ignores dot entries in ready/ and in each spool directory; any other unknown entry in ready/ stays an error.
+#[test]
+fn a6_dot_entries_are_ignored_other_unknown_entries_are_errors() {
+    let fx = session_end_fixture("a6");
+    let ready = fx.ingest().join("ready");
+    std::fs::write(ready.join(".DS_Store"), "x").unwrap();
+    std::fs::create_dir_all(ready.join(".hidden_dir")).unwrap();
+    fx.put(SE, ".DS_Store", "x");
+    fx.put(SE, ".hidden.ndjson", &lines(&[session_end_payload(9)]));
+    fx.put(SE, "a.ndjson", &lines(&[session_end_payload(0)]));
+    assert_eq!(fx.collect(), Summary { files_loaded: 1, rows: 1, files_failed: 0, files_reconciled: 0 });
+    assert_eq!(fx.names("ready", SE), [".DS_Store", ".hidden.ndjson"], "dot entries are left alone");
+    assert_eq!(count(&fx.conn(), &t(SE)), 1);
+    std::fs::write(ready.join("stray_file"), "x").unwrap();
+    let e = collect(&fx.conn(), &fx.ingest()).unwrap_err();
+    assert!(e.contains("stray_file"), "{e}");
+}
+
+/// A7. Top-level properties, and fields of a nested object (also inside a list), that differ only in letter case are a compile error; reserved names are matched case-insensitively.
+#[test]
+fn a7_names_differing_only_in_letter_case_are_a_compile_error() {
+    let string = json!({"type": "string"});
+    let e = compile_props("a7-top", json!({"Cwd": string, "cwd": string}), None).unwrap_err();
+    assert!(e.contains("letter case") && e.contains("Cwd") && e.contains("cwd"), "{e}");
+    let nested = json!({"type": "object", "properties": {"Ab": string, "aB": string}});
+    let e = compile_props("a7-nested", json!({"x": nested}), None).unwrap_err();
+    assert!(e.contains("letter case") && e.contains("/x"), "{e}");
+    let e = compile_props("a7-list", json!({"x": {"type": "array", "items": nested}}), None).unwrap_err();
+    assert!(e.contains("letter case") && e.contains("/x/*"), "{e}");
+    compile_props("a7-ok", json!({"cwd": string, "cwd2": string, "x": {"type": "object", "properties": {"Ab": string, "ab2": string}}}), None).unwrap();
+    for name in ["Payload", "TS_NS", "_META_extra", "DG_Path"] {
+        let e = compile_props("a7-reserved", json!({name: string}), None).unwrap_err();
+        assert!(e.contains(name) && e.contains("reserved"), "{e}");
+    }
+}
+
+/// A8. A successor without valid_from leaves valid_to of the superseded row NULL; `superseded_by IS NULL` (not valid_to) finds the current version.
+#[test]
+fn a8_current_version_is_superseded_by_null_not_valid_to() {
+    let fx = Fx::new("a8");
+    let (v1, mut v2) = version_pair(&fx);
+    v2["valid_from"] = Value::Null;
+    let both = load_manifest(&write_manifest(&fx.root.join("m"), &[v1, v2])).unwrap();
+    let conn = fx.conn();
+    assert_eq!(register(&conn, &both).unwrap(), 2);
+    assert_eq!(
+        select(&conn, &["producer_type", "valid_from", "valid_to", "superseded_by"], "_ingest.table_timeline", "version"),
+        vec![vec![s(SE), None, None, s("hook_session_end_v2")], vec![s("hook_session_end_v2"), None, None, None]]
+    );
+    assert_eq!(select(&conn, &["producer_type"], "_ingest.table_timeline WHERE superseded_by IS NULL", "1"), vec![vec![s("hook_session_end_v2")]]);
+}
+
+// ---------------------------------------------------------------- fix pass B (aldigest rehash)
+
+fn rehash(manifest: &Path) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_aldigest")).args(["rehash", "--manifest"]).arg(manifest).output().unwrap()
+}
+
+/// One byte more in the schema's title: a hand edit of a schema file.
+fn edit_title(schema: &Path) {
+    let mut doc: Value = serde_json::from_str(&std::fs::read_to_string(schema).unwrap()).unwrap();
+    let title = format!("{}x", doc["title"].as_str().unwrap());
+    doc["title"] = json!(title);
+    std::fs::write(schema, serde_json::to_string_pretty(&doc).unwrap()).unwrap();
+}
+
+/// B1. After a hand edit of a schema file, load fails on the stale hash; rehash fixes it (format kept) and register on a FRESH database succeeds.
+#[test]
+fn b1_rehash_after_a_schema_edit_registers_on_a_fresh_database() {
+    let fx = Fx::new("b1");
+    let schema = fx.root.join("m/s.schema.json");
+    let manifest = write_manifest(&fx.root.join("m"), &[entry(&session_end_doc(), "hook", "session_end", 1, SE, Value::Null, &schema)]);
+    let original = std::fs::read_to_string(&manifest).unwrap();
+    edit_title(&schema);
+    assert!(load_manifest(&manifest).unwrap_err().contains("sha256"));
+    let out = rehash(&manifest);
+    ok(&out);
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "rehashed 1 producer(s)\n");
+    assert_eq!(register(&fx.conn(), &load_manifest(&manifest).unwrap()).unwrap(), 1);
+    let text = std::fs::read_to_string(&manifest).unwrap();
+    assert_ne!(text, original);
+    let parsed: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(text, serde_json::to_string_pretty(&parsed).unwrap() + "\n", "2-space indent and a trailing newline");
+    let keys: Vec<&str> = parsed["producers"][0].as_object().unwrap().keys().map(String::as_str).collect();
+    assert_eq!(keys, ["producer_type", "source", "topic", "version", "claude_code_version", "spool", "valid_from", "schema", "sha256"]);
+}
+
+/// B2. The same edit plus rehash against a database where that producer_type is ALREADY installed is refused (owner ruling D-A).
+#[test]
+fn b2_an_edited_and_rehashed_schema_is_refused_when_already_installed() {
+    let fx = Fx::new("b2");
+    let schema = fx.root.join("m/s.schema.json");
+    let manifest = write_manifest(&fx.root.join("m"), &[entry(&session_end_doc(), "hook", "session_end", 1, SE, Value::Null, &schema)]);
+    let conn = fx.conn();
+    assert_eq!(register(&conn, &load_manifest(&manifest).unwrap()).unwrap(), 1);
+    edit_title(&schema);
+    ok(&rehash(&manifest));
+    let e = register(&conn, &load_manifest(&manifest).unwrap()).unwrap_err();
+    assert!(e.contains(SE) && e.contains("new producer_type"), "{e}");
+}
+
+fn copy_dir(src: &Path, dst: &Path) {
+    std::fs::create_dir_all(dst).unwrap();
+    for e in std::fs::read_dir(src).unwrap() {
+        let e = e.unwrap();
+        let to = dst.join(e.file_name());
+        if e.path().is_dir() {
+            copy_dir(&e.path(), &to);
+        } else {
+            std::fs::copy(e.path(), &to).unwrap();
+        }
+    }
+}
+
+/// B3. rehash of the real, consistent crate manifest (a copy) changes nothing, byte for byte: the file format is the one rehash writes.
+#[test]
+fn b3_rehash_of_the_crate_manifest_is_a_byte_for_byte_no_op() {
+    let fx = Fx::new("b3");
+    copy_dir(&crate_dir().join("schemas"), &fx.root.join("schemas"));
+    let copy = fx.root.join("schemas/manifest.json");
+    let original = std::fs::read(&copy).unwrap();
+    let out = rehash(&copy);
+    ok(&out);
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "rehashed 0 producer(s)\n");
+    assert_eq!(std::fs::read(&copy).unwrap(), original);
+}
+
+// ---------------------------------------------------------------- fix pass C (alspool -> aldigest, end to end)
+
+/// The `alspool` binary of the agentlens-spool crate, built once into a private target dir (it
+/// links no DuckDB, and the digest test binary cannot name another package's binary).
+fn alspool() -> PathBuf {
+    static BIN: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    BIN.get_or_init(|| {
+        let target = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("alspool-build");
+        let out = Command::new(std::env::var("CARGO").expect("cargo sets CARGO for test runs"))
+            .args(["build", "--offline", "--quiet", "-p", "agentlens-spool", "--manifest-path"])
+            .arg(crate_dir().join("../../Cargo.toml"))
+            .arg("--target-dir")
+            .arg(&target)
+            .output()
+            .unwrap();
+        ok(&out);
+        target.join("debug/alspool")
+    })
+    .clone()
+}
+
+fn alspool_append(ingest: &Path, spool: &str, payload: &str) -> Output {
+    let mut child = Command::new(alspool())
+        .args(["append", "--ingest-dir"])
+        .arg(ingest)
+        .args(["--spool", spool])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    std::io::Write::write_all(&mut child.stdin.take().unwrap(), payload.as_bytes()).unwrap();
+    child.wait_with_output().unwrap()
+}
+
+fn alspool_seal(ingest: &Path) -> Output {
+    Command::new(alspool()).args(["seal", "--ingest-dir"]).arg(ingest).output().unwrap()
+}
+
+fn aldigest_collect(fx: &Fx) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_aldigest")).args(["collect", "--db"]).arg(fx.db()).arg("--ingest-dir").arg(fx.ingest()).output().unwrap()
+}
+
+fn now_ns() -> i128 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos() as i128
+}
+
+/// C1. append, then seal, then register, then collect: one row, the payload fields match, `_meta_recorded_at_ns` is inside the test window.
+#[test]
+fn c1_append_seal_register_collect_gives_one_row() {
+    let fx = Fx::new("c1");
+    register_where(&fx, &only(&[SE]));
+    let before = now_ns();
+    ok(&alspool_append(&fx.ingest(), SE, &session_end_payload(7).to_string()));
+    let after = now_ns();
+    ok(&alspool_seal(&fx.ingest()));
+    assert_eq!(fx.collect(), Summary { files_loaded: 1, rows: 1, files_failed: 0, files_reconciled: 0 });
+    let row = select(&fx.conn(), &["session_id", "cwd", "effort.level", "_meta_recorded_at_ns"], &t(SE), "1").remove(0);
+    assert_eq!(row[..3], [s("aaaaaaaa-7"), s("/work/aaaaaaaa"), s("high")]);
+    let ns: i128 = row[3].clone().unwrap().parse().unwrap();
+    assert!((before..=after).contains(&ns), "recorded_at_ns {ns} outside [{before}, {after}]");
+}
+
+/// C2. 22 `alspool append` processes x 50 payloads of ~8 KiB while a loop runs `alspool seal` then `aldigest collect`: exactly the 1100 (proc, seq) pairs, pads intact, nothing in failed/, ts_ns never decreasing in a file.
+#[test]
+fn c2_concurrent_appends_while_sealing_and_collecting_lose_nothing() {
+    const PROCS: usize = 22;
+    const PER_PROC: usize = 50;
+    const SPOOL: &str = "hook_load_v1";
+    let fx = Fx::new("c2");
+    let props = json!({"proc": {"type": "integer"}, "seq": {"type": "integer"}, "pad": {"type": "string"}});
+    register_doc(&fx, &json!({"type": "object", "properties": props, "required": ["proc", "seq", "pad"]}), "load", SPOOL);
+    let stop = std::sync::atomic::AtomicBool::new(false);
+    std::thread::scope(|scope| {
+        let pump = scope.spawn(|| loop {
+            // Read the flag first: the iteration that sees it set is the final seal + collect.
+            let last = stop.load(std::sync::atomic::Ordering::SeqCst);
+            ok(&alspool_seal(&fx.ingest()));
+            let out = aldigest_collect(&fx);
+            ok(&out);
+            assert!(String::from_utf8_lossy(&out.stdout).contains("failed=0"), "{}", String::from_utf8_lossy(&out.stdout));
+            if last {
+                break;
+            }
+        });
+        let writers: Vec<_> = (0..PROCS)
+            .map(|p| {
+                let fx = &fx;
+                scope.spawn(move || {
+                    for s in 0..PER_PROC {
+                        let payload = json!({"proc": p, "seq": s, "pad": "x".repeat(8192 + (p + s) % 64)});
+                        ok(&alspool_append(&fx.ingest(), SPOOL, &payload.to_string()));
+                    }
+                })
+            })
+            .collect();
+        for w in writers {
+            w.join().unwrap();
+        }
+        stop.store(true, std::sync::atomic::Ordering::SeqCst);
+        pump.join().unwrap();
+    });
+    assert!(fx.names("failed", SPOOL).is_empty(), "failed/: {:?}", fx.names("failed", SPOOL));
+    assert!(fx.names("ready", SPOOL).is_empty() && !fx.ingest().join("inbox").join(SPOOL).join("current.ndjson").exists());
+    let conn = fx.conn();
+    assert_eq!(count(&conn, "_ingest.files WHERE status <> 'complete'"), 0);
+    let got = select(&conn, &["proc", "seq", "length(pad)"], &t("hook_load_v1"), "proc, seq");
+    let expected: Vec<Vec<Option<String>>> =
+        (0..PROCS).flat_map(|p| (0..PER_PROC).map(move |q| vec![s(&p.to_string()), s(&q.to_string()), s(&(8192 + (p + q) % 64).to_string())])).collect();
+    assert_eq!(got, expected, "lost, duplicated or damaged rows");
+    let mut total = 0;
+    for name in fx.names("done", SPOOL) {
+        let mut last = 0u64;
+        for l in std::fs::read_to_string(fx.ingest().join("done").join(SPOOL).join(&name)).unwrap().lines() {
+            let ts = serde_json::from_str::<Value>(l).unwrap()["ts_ns"].as_u64().unwrap();
+            assert!(ts >= last, "{name}: ts_ns went backwards");
+            last = ts;
+            total += 1;
+        }
+    }
+    assert_eq!(total, PROCS * PER_PROC);
+    println!("c2: {} sealed files", fx.names("done", SPOOL).len());
 }
