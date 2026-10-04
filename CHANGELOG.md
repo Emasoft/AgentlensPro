@@ -22,6 +22,22 @@ All notable changes to AgentlensPro are documented here.
   with the npm tarball. After a collect the tap runs `aldigest views` once per process, and
   `ALCORE_INGEST_DONE_RETENTION_SECS` (off by default) deletes loaded `done/` files that the ledger lists
   as complete and that old.
+- **`agentlenspro hook-context-cost`** reports, per hook matcher, how many hook dispatches ran and how
+  much context their output injected (`--hours`, capped at 168; `--json` keeps the raw field names).
+  `hook_name` is the matcher that fired, not the hook that injected, and `stdout_chars` is shown but not
+  counted as injected context (TRDD-ZQQYRYBO I15).
+- **Past idle gaps are judged by the tier the cache was written at, not today's TTL regime.** The
+  per-turn timeline entry gains `cacheCreateTokens1h` (`cache_create_tokens_1h` in Rust), unset when the
+  transcript carries no tier split, which is distinct from 0. A new cache-break cause,
+  `IDLE_TTL_PARTIAL_EXPIRY`, covers a last write that had both a 5m and a 1h slice with a gap between
+  5 min and 1 h, and every idle-gap verdict carries `ttlGapSource`: `measured` only when a tier was
+  read, otherwise `assumed` (the 5-minute floor; silence never implies 1h). The label also falls back to
+  `assumed` when an earlier write in the same prefix segment carried a 1h slice or an unobserved tier
+  (TRDD-ZQQYRYBO I6c2, TRDD-EJ6DIP5D).
+- **Context composition counts the CC 2.1.281 `instructions` and `prompt_snapshot` attachments**: one
+  `claudemd` row per non-empty instructions file and one `system` row for the system prompt (auto-memory
+  files fold into `claudemd`). Raw response bodies are paired with their request by `request_body_id`
+  when the capture carries it, falling back to span id and timestamp (TRDD-ZQQYRYBO I9, I12a).
 
 ### Changed
 
@@ -82,6 +98,23 @@ All notable changes to AgentlensPro are documented here.
 
 ### Fixed
 
+- **Cache-risk causes are graded by the Claude Code version that ran them.** From 2.1.273 `/upgrade` and
+  `/extra-usage` are no longer a cache risk and `/login`/`/logout` are `ambiguous`; from 2.1.267 plugin
+  reload, plugin change and MCP toggle are `ambiguous`; from 2.1.260 an `/effort` change on Fable 5.1 is
+  `ambiguous`. Every other model and version stays `certain` (TRDD-ZQQYRYBO I6).
+- **Compaction is detected by one shared predicate** (`system`+`compact_boundary`, `isCompactSummary`, or
+  `type: "summary"`) in both engines; a boundary-only compaction previously never reset the dedup set and
+  rendered no post-compact block. Dedup is now by content hash since the last boundary, and
+  `meta.attachmentKind` can no longer be `"instructionsRule"` (a rules file reads `claudemd`)
+  (TRDD-ZQQYRYBO I9b).
+- **`hook-context-cost` counts dispatches, not hook fires**: Claude Code emits one event per dispatch
+  covering every matching hook, so the SubagentStart average already is the per-spawn figure
+  (TRDD-ZQQYRYBO I15).
+- **The 1h cache-write backfill replaces the withdrawn re-parse** described in the cost entry below: a
+  card missing `cacheCreate1hTokens` is patched from a usage-only read of its transcript, never rebuilt;
+  it runs one 200-file chunk per sweeper iteration after waiting changes drain, saves only the patched
+  cards, and the 60 s full sweep can no longer be skipped by a steady stream of changes
+  (TRDD-ORGJ0E3G, TRDD-TWDGR75R).
 - **A session/card's `cost_usd` (and `speedBlendedCostUsd`) billed every cache write at the
   5-minute rate, even when the transcript's own `usage.cache_creation.ephemeral_1h_input_tokens`
   showed it was 1-hour tier.** Main-conversation sessions on a subscription are ~100% 1h-tagged

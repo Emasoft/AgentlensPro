@@ -4,7 +4,7 @@ title: CHANGELOG lacks entries for the alignment commits after ef1577b6
 column: todo
 status: tasked
 created: 2026-09-25T00:09:07+0200
-updated: 2026-09-25T00:22:50+0200
+updated: 2026-10-04T13:08:07+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: docs
@@ -32,6 +32,7 @@ Known user-visible contract changes to name: meta.attachmentKind can no longer b
 
 Next action: run the git log query above, draft the CHANGELOG.md entries covering the alignment commits, and land them in one commit with the standard TRDD subject tag. — 2026-09-25
 Correction: 7f0b3d4e, 8eb2af75 and ef1577b6 DID add CHANGELOG entries for this stream; the debt starts after ef1577b6.
+2026-10-04 wF: CHANGELOG [Unreleased] gained entries for hook-context-cost, ttlGapSource/IDLE_TTL_PARTIAL_EXPIRY/cacheCreateTokens1h, instructions+prompt_snapshot attachments and request_body_id pairing (Added); version-graded cache-risk causes, one compaction predicate with attachmentKind no longer instructionsRule, dispatch counting, usage-only 1h backfill (Fixed). Docs card, no test.
 
 ## Git result
 
