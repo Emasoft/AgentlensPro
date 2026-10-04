@@ -86,7 +86,12 @@ export function flatten(s: string): string {
 /** Truncate to `maxChars` WITHOUT retaining the parent (see `flatten`). The one sanctioned way
  *  to shorten a transcript-derived string that will be retained. */
 export function snip(s: string, maxChars: number): string {
-  return s.length <= maxChars ? s : flatten(s.slice(0, maxChars))
+  if (s.length <= maxChars) return s
+  // A cut between the halves of a surrogate pair would leave a lone high surrogate (JSON-encodes
+  // as U+FFFD). The Rust port (utf16_slice) drops the whole split pair, so drop the half here
+  // too — otherwise the two engines diverge by one character at the boundary (TRDD-YVQI5DYD).
+  const end = maxChars > 0 && /[\uD800-\uDBFF]/.test(s[maxChars - 1]) ? maxChars - 1 : maxChars
+  return flatten(s.slice(0, end))
 }
 
 /** How recently a session must have been active for its card to carry a timeline OUT OF THE

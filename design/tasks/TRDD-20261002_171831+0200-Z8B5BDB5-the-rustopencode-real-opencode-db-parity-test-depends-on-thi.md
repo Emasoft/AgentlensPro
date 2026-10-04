@@ -4,7 +4,7 @@ title: The rustOpenCode REAL opencode db parity test depends on this machine's l
 column: todo
 status: tasked
 created: 2026-10-02T17:18:31+0200
-updated: 2026-10-02T17:18:31+0200
+updated: 2026-10-04T13:02:15+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -24,3 +24,7 @@ The test 'rustOpenCode P3d cross-engine parity: the REAL opencode db on this mac
 ## Approval log
 
 - 2026-10-02T17:18:31+0200 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+
+## Notes
+
+- 2026-10-04T13:02:12+0200 — worker wB: NOT gated. After the YVQI5DYD snip fix the real-db test passes; the 2026-10-02 failure is most likely the same one-char divergence (unproven). No evidence of live-db drift, so no opt-in skip added; owner may still choose to gate it.

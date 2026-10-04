@@ -4,7 +4,7 @@ import * as os from 'os'
 import * as path from 'path'
 import { LogReader, type LogSessionResult } from '../logReader'
 import {
-  pushBounded, capTimeline, capText, attachFullResult, stripTimeline, entryCost,
+  pushBounded, capTimeline, capText, snip, attachFullResult, stripTimeline, entryCost,
   timelineMaxEntries, timelineMaxBytes,
   DEFAULT_TIMELINE_MAX_ENTRIES, DEFAULT_TIMELINE_MAX_BYTES, FIELD_MAX_CHARS,
   TIMELINE_MAX_ENTRIES_ENV, TIMELINE_MAX_BYTES_ENV, type TimelineHolder,
@@ -23,6 +23,13 @@ type ClaudeScanner = { _scanClaude(): LogSessionResult[] }
 const scanClaude = (r: LogReader): LogSessionResult[] => (r as unknown as ClaudeScanner)._scanClaude()
 
 suite('timelineRetention — bounded in-memory timelines (TRDD-66IXMIGN)', () => {
+  test('snip never cuts inside a surrogate pair — drops the half pair like the Rust utf16_slice (TRDD-YVQI5DYD)', () => {
+    const s = 'ab' + '\u{1F600}' + 'cd' // 4-byte char occupies UTF-16 units 2-3
+    assert.strictEqual(snip(s, 3), 'ab', 'cut between the pair halves drops the whole character')
+    assert.strictEqual(snip(s, 4), 'ab\u{1F600}', 'cut after the pair keeps it')
+    assert.strictEqual(snip(s, 2), 'ab')
+  })
+
   test('pushBounded evicts oldest-first with amortized slack and counts evictions', () => {
     // Amortized policy: overflow is allowed up to max + max/4, then ONE splice trims to max.
     const holder: TimelineHolder = { timeline: [] }

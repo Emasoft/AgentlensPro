@@ -4,7 +4,7 @@ title: The TypeScript log reader's fill of cacheCreateTokens1h has no test
 column: todo
 status: tasked
 created: 2026-09-25T00:57:07+0200
-updated: 2026-09-25T00:57:07+0200
+updated: 2026-10-04T13:02:13+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -32,3 +32,7 @@ log_reader_parity. Cites reports/cc-alignment/20260925_005341+0200-head-156a6768
 ## Approval log
 
 - 2026-09-25T00:57:07+0200 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+
+## Notes
+
+- 2026-10-04T13:02:12+0200 — worker wB: added src/test/logReader.cache1h.test.ts (1h present gives 40, tier split absent gives undefined); 1 passing. Not mutation-tested (logReader.ts out of slice).
