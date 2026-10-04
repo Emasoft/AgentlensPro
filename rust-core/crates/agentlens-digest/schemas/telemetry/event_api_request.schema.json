@@ -1,0 +1,156 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agentlenspro:telemetry.event.api_request:v1",
+  "title": "Claude Code OTel event claude_code.api_request attributes",
+  "x-claude-code-version": "2.1.285",
+  "type": "object",
+  "properties": {
+    "agent.name": {
+      "type": "string"
+    },
+    "app.entrypoint": {
+      "type": "string"
+    },
+    "app.version": {
+      "type": "string"
+    },
+    "cache_creation_tokens": {
+      "type": "integer"
+    },
+    "cache_read_tokens": {
+      "type": "integer"
+    },
+    "ccr.session.id": {
+      "type": "string"
+    },
+    "client_request_id": {
+      "type": "string"
+    },
+    "cost_usd": {
+      "type": "number"
+    },
+    "cost_usd_micros": {
+      "type": "integer"
+    },
+    "duration_ms": {
+      "type": "integer"
+    },
+    "effort": {
+      "type": "string",
+      "enum": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    "event.name": {
+      "type": "string",
+      "const": "api_request"
+    },
+    "event.sequence": {
+      "type": "integer"
+    },
+    "event.timestamp": {
+      "type": "string"
+    },
+    "host.arch": {
+      "type": "string"
+    },
+    "input_tokens": {
+      "type": "integer"
+    },
+    "marketplace.name": {
+      "type": "string"
+    },
+    "mcp_server.name": {
+      "type": "string"
+    },
+    "mcp_tool.name": {
+      "type": "string"
+    },
+    "message.uuid": {
+      "type": "string"
+    },
+    "model": {
+      "type": "string"
+    },
+    "organization.id": {
+      "type": "string"
+    },
+    "os.type": {
+      "type": "string"
+    },
+    "os.version": {
+      "type": "string"
+    },
+    "output_tokens": {
+      "type": "integer"
+    },
+    "plugin.name": {
+      "type": "string"
+    },
+    "prompt.id": {
+      "type": "string"
+    },
+    "query_source": {
+      "type": "string"
+    },
+    "request_id": {
+      "type": "string"
+    },
+    "service.name": {
+      "type": "string"
+    },
+    "service.version": {
+      "type": "string"
+    },
+    "session.id": {
+      "type": "string"
+    },
+    "skill.name": {
+      "type": "string"
+    },
+    "speed": {
+      "type": "string",
+      "enum": [
+        "fast",
+        "normal"
+      ]
+    },
+    "terminal.type": {
+      "type": "string"
+    },
+    "ttft_ms": {
+      "type": "integer"
+    },
+    "user.account_id": {
+      "type": "string"
+    },
+    "user.account_uuid": {
+      "type": "string"
+    },
+    "user.email": {
+      "type": "string"
+    },
+    "user.id": {
+      "type": "string"
+    },
+    "vcs.owner.name": {
+      "type": "string"
+    },
+    "vcs.provider.name": {
+      "type": "string"
+    },
+    "vcs.repository.name": {
+      "type": "string"
+    },
+    "vcs.repository.url.full": {
+      "type": "string"
+    },
+    "wsl.version": {
+      "type": "string"
+    }
+  }
+}

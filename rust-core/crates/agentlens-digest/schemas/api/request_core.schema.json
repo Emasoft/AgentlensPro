@@ -1,0 +1,102 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agentlenspro:api_request.core:v1",
+  "title": "Anthropic Messages API request envelope: topic core",
+  "x-claude-code-version": "2.1.285",
+  "type": "object",
+  "properties": {
+    "link": {
+      "type": "object",
+      "properties": {
+        "request_id": {
+          "type": "string"
+        },
+        "message_id": {
+          "type": "string"
+        },
+        "message_uuid": {
+          "type": "string"
+        },
+        "session_id": {
+          "type": "string"
+        },
+        "query_source": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        }
+      }
+    },
+    "body": {
+      "type": "object",
+      "properties": {
+        "model": {
+          "type": "string"
+        },
+        "max_tokens": {
+          "type": "integer"
+        },
+        "stream": {
+          "type": "boolean"
+        },
+        "betas": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "fallbacks": {
+          "x-duckdb-type": "JSON"
+        },
+        "metadata": {
+          "type": "object",
+          "properties": {
+            "user_id": {
+              "type": "string"
+            }
+          }
+        },
+        "thinking": {
+          "x-duckdb-type": "JSON"
+        },
+        "output_config": {
+          "x-duckdb-type": "JSON"
+        },
+        "context_management": {
+          "x-duckdb-type": "JSON"
+        },
+        "diagnostics": {
+          "x-duckdb-type": "JSON"
+        },
+        "thread": {
+          "x-duckdb-type": "JSON"
+        },
+        "tool_choice": {
+          "x-duckdb-type": "JSON"
+        },
+        "temperature": {
+          "type": "number"
+        },
+        "stop_sequences": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "cache_control": {
+          "x-duckdb-type": "JSON"
+        },
+        "container": {
+          "x-duckdb-type": "JSON"
+        },
+        "service_tier": {
+          "type": "string"
+        },
+        "inference_geo": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

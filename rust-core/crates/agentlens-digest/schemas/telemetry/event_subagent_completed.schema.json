@@ -1,0 +1,127 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agentlenspro:telemetry.event.subagent_completed:v1",
+  "title": "Claude Code OTel event claude_code.subagent_completed attributes",
+  "x-claude-code-version": "2.1.285",
+  "type": "object",
+  "properties": {
+    "agent.source": {
+      "type": "string"
+    },
+    "agent_type": {
+      "type": "string"
+    },
+    "app.entrypoint": {
+      "type": "string"
+    },
+    "app.version": {
+      "type": "string"
+    },
+    "ccr.session.id": {
+      "type": "string"
+    },
+    "client_request_id": {
+      "type": "string"
+    },
+    "duration_ms": {
+      "x-duckdb-type": "VARCHAR"
+    },
+    "event.name": {
+      "type": "string",
+      "const": "subagent_completed"
+    },
+    "event.sequence": {
+      "type": "integer"
+    },
+    "event.timestamp": {
+      "type": "string"
+    },
+    "final_model": {
+      "type": "string"
+    },
+    "host.arch": {
+      "type": "string"
+    },
+    "is_async": {
+      "x-duckdb-type": "VARCHAR"
+    },
+    "is_built_in": {
+      "x-duckdb-type": "VARCHAR"
+    },
+    "message.uuid": {
+      "type": "string"
+    },
+    "model": {
+      "type": "string"
+    },
+    "model_swapped": {
+      "x-duckdb-type": "VARCHAR"
+    },
+    "organization.id": {
+      "type": "string"
+    },
+    "os.type": {
+      "type": "string"
+    },
+    "os.version": {
+      "type": "string"
+    },
+    "plugin.name": {
+      "type": "string"
+    },
+    "plugin_id_hash": {
+      "type": "string"
+    },
+    "prompt.id": {
+      "type": "string"
+    },
+    "request_id": {
+      "type": "string"
+    },
+    "service.name": {
+      "type": "string"
+    },
+    "service.version": {
+      "type": "string"
+    },
+    "session.id": {
+      "type": "string"
+    },
+    "terminal.type": {
+      "type": "string"
+    },
+    "total_tokens": {
+      "x-duckdb-type": "VARCHAR"
+    },
+    "total_tool_uses": {
+      "x-duckdb-type": "VARCHAR"
+    },
+    "user.account_id": {
+      "type": "string"
+    },
+    "user.account_uuid": {
+      "type": "string"
+    },
+    "user.email": {
+      "type": "string"
+    },
+    "user.id": {
+      "type": "string"
+    },
+    "vcs.owner.name": {
+      "type": "string"
+    },
+    "vcs.provider.name": {
+      "type": "string"
+    },
+    "vcs.repository.name": {
+      "type": "string"
+    },
+    "vcs.repository.url.full": {
+      "type": "string"
+    },
+    "wsl.version": {
+      "type": "string"
+    }
+  }
+}

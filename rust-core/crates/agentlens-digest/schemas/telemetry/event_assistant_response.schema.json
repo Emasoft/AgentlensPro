@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agentlenspro:telemetry.event.assistant_response:v1",
+  "title": "Claude Code OTel event claude_code.assistant_response attributes",
+  "x-claude-code-version": "2.1.285",
+  "type": "object",
+  "properties": {
+    "app.entrypoint": {
+      "type": "string"
+    },
+    "app.version": {
+      "type": "string"
+    },
+    "ccr.session.id": {
+      "type": "string"
+    },
+    "client_request_id": {
+      "type": "string"
+    },
+    "event.name": {
+      "type": "string",
+      "const": "assistant_response"
+    },
+    "event.sequence": {
+      "type": "integer"
+    },
+    "event.timestamp": {
+      "type": "string"
+    },
+    "host.arch": {
+      "type": "string"
+    },
+    "message.uuid": {
+      "type": "string"
+    },
+    "model": {
+      "type": "string"
+    },
+    "organization.id": {
+      "type": "string"
+    },
+    "os.type": {
+      "type": "string"
+    },
+    "os.version": {
+      "type": "string"
+    },
+    "prompt.id": {
+      "type": "string"
+    },
+    "query_source": {
+      "type": "string"
+    },
+    "request_id": {
+      "type": "string"
+    },
+    "response": {
+      "type": "string"
+    },
+    "response_length": {
+      "x-duckdb-type": "VARCHAR"
+    },
+    "service.name": {
+      "type": "string"
+    },
+    "service.version": {
+      "type": "string"
+    },
+    "session.id": {
+      "type": "string"
+    },
+    "terminal.type": {
+      "type": "string"
+    },
+    "user.account_id": {
+      "type": "string"
+    },
+    "user.account_uuid": {
+      "type": "string"
+    },
+    "user.email": {
+      "type": "string"
+    },
+    "user.id": {
+      "type": "string"
+    },
+    "vcs.owner.name": {
+      "type": "string"
+    },
+    "vcs.provider.name": {
+      "type": "string"
+    },
+    "vcs.repository.name": {
+      "type": "string"
+    },
+    "vcs.repository.url.full": {
+      "type": "string"
+    },
+    "wsl.version": {
+      "type": "string"
+    }
+  }
+}

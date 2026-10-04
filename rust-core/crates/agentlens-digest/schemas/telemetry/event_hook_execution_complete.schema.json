@@ -1,0 +1,150 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agentlenspro:telemetry.event.hook_execution_complete:v1",
+  "title": "Claude Code OTel event claude_code.hook_execution_complete attributes",
+  "x-claude-code-version": "2.1.285",
+  "type": "object",
+  "properties": {
+    "additional_context_chars": {
+      "x-duckdb-type": "VARCHAR"
+    },
+    "app.entrypoint": {
+      "type": "string"
+    },
+    "app.version": {
+      "type": "string"
+    },
+    "ccr.session.id": {
+      "type": "string"
+    },
+    "client_request_id": {
+      "type": "string"
+    },
+    "event.name": {
+      "type": "string",
+      "const": "hook_execution_complete"
+    },
+    "event.sequence": {
+      "type": "integer"
+    },
+    "event.timestamp": {
+      "type": "string"
+    },
+    "hook_definitions": {
+      "type": "string"
+    },
+    "hook_event": {
+      "type": "string"
+    },
+    "hook_name": {
+      "type": "string"
+    },
+    "hook_source": {
+      "type": "string",
+      "enum": [
+        "policySettings",
+        "merged"
+      ]
+    },
+    "host.arch": {
+      "type": "string"
+    },
+    "initial_user_message_chars": {
+      "x-duckdb-type": "VARCHAR"
+    },
+    "managed_only": {
+      "type": "string"
+    },
+    "message.uuid": {
+      "type": "string"
+    },
+    "num_blocking": {
+      "x-duckdb-type": "VARCHAR"
+    },
+    "num_cancelled": {
+      "x-duckdb-type": "VARCHAR"
+    },
+    "num_hooks": {
+      "x-duckdb-type": "VARCHAR"
+    },
+    "num_non_blocking_error": {
+      "x-duckdb-type": "VARCHAR"
+    },
+    "num_outputs_persisted": {
+      "x-duckdb-type": "VARCHAR"
+    },
+    "num_success": {
+      "x-duckdb-type": "VARCHAR"
+    },
+    "organization.id": {
+      "type": "string"
+    },
+    "os.type": {
+      "type": "string"
+    },
+    "os.version": {
+      "type": "string"
+    },
+    "prompt.id": {
+      "type": "string"
+    },
+    "request_id": {
+      "type": "string"
+    },
+    "safe_mode": {
+      "type": "string",
+      "enum": [
+        "true",
+        "false"
+      ]
+    },
+    "service.name": {
+      "type": "string"
+    },
+    "service.version": {
+      "type": "string"
+    },
+    "session.id": {
+      "type": "string"
+    },
+    "stdout_chars": {
+      "x-duckdb-type": "VARCHAR"
+    },
+    "system_message_chars": {
+      "x-duckdb-type": "VARCHAR"
+    },
+    "terminal.type": {
+      "type": "string"
+    },
+    "total_duration_ms": {
+      "x-duckdb-type": "VARCHAR"
+    },
+    "user.account_id": {
+      "type": "string"
+    },
+    "user.account_uuid": {
+      "type": "string"
+    },
+    "user.email": {
+      "type": "string"
+    },
+    "user.id": {
+      "type": "string"
+    },
+    "vcs.owner.name": {
+      "type": "string"
+    },
+    "vcs.provider.name": {
+      "type": "string"
+    },
+    "vcs.repository.name": {
+      "type": "string"
+    },
+    "vcs.repository.url.full": {
+      "type": "string"
+    },
+    "wsl.version": {
+      "type": "string"
+    }
+  }
+}

@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agentlenspro:api_response.content:v1",
+  "title": "Anthropic Messages API response envelope: topic content",
+  "x-claude-code-version": "2.1.285",
+  "type": "object",
+  "properties": {
+    "link": {
+      "type": "object",
+      "properties": {
+        "request_id": {
+          "type": "string"
+        },
+        "message_id": {
+          "type": "string"
+        },
+        "message_uuid": {
+          "type": "string"
+        },
+        "session_id": {
+          "type": "string"
+        },
+        "query_source": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        }
+      }
+    },
+    "body": {
+      "type": "object",
+      "properties": {
+        "content": {
+          "type": "array",
+          "items": {
+            "x-duckdb-type": "JSON"
+          }
+        }
+      }
+    }
+  }
+}

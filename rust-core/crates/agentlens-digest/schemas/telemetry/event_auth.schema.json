@@ -1,0 +1,114 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agentlenspro:telemetry.event.auth:v1",
+  "title": "Claude Code OTel event claude_code.auth attributes",
+  "x-claude-code-version": "2.1.285",
+  "type": "object",
+  "properties": {
+    "action": {
+      "type": "string",
+      "enum": [
+        "login",
+        "logout"
+      ]
+    },
+    "app.entrypoint": {
+      "type": "string"
+    },
+    "app.version": {
+      "type": "string"
+    },
+    "auth_method": {
+      "type": "string"
+    },
+    "ccr.session.id": {
+      "type": "string"
+    },
+    "client_request_id": {
+      "type": "string"
+    },
+    "error_category": {
+      "type": "string"
+    },
+    "event.name": {
+      "type": "string",
+      "const": "auth"
+    },
+    "event.sequence": {
+      "type": "integer"
+    },
+    "event.timestamp": {
+      "type": "string"
+    },
+    "host.arch": {
+      "type": "string"
+    },
+    "message.uuid": {
+      "type": "string"
+    },
+    "organization.id": {
+      "type": "string"
+    },
+    "os.type": {
+      "type": "string"
+    },
+    "os.version": {
+      "type": "string"
+    },
+    "prompt.id": {
+      "type": "string"
+    },
+    "request_id": {
+      "type": "string"
+    },
+    "service.name": {
+      "type": "string"
+    },
+    "service.version": {
+      "type": "string"
+    },
+    "session.id": {
+      "type": "string"
+    },
+    "status_code": {
+      "type": "string"
+    },
+    "success": {
+      "type": "string",
+      "enum": [
+        "true",
+        "false"
+      ]
+    },
+    "terminal.type": {
+      "type": "string"
+    },
+    "user.account_id": {
+      "type": "string"
+    },
+    "user.account_uuid": {
+      "type": "string"
+    },
+    "user.email": {
+      "type": "string"
+    },
+    "user.id": {
+      "type": "string"
+    },
+    "vcs.owner.name": {
+      "type": "string"
+    },
+    "vcs.provider.name": {
+      "type": "string"
+    },
+    "vcs.repository.name": {
+      "type": "string"
+    },
+    "vcs.repository.url.full": {
+      "type": "string"
+    },
+    "wsl.version": {
+      "type": "string"
+    }
+  }
+}

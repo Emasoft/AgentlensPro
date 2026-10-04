@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agentlenspro:api_response.core:v1",
+  "title": "Anthropic Messages API response envelope: topic core",
+  "x-claude-code-version": "2.1.285",
+  "type": "object",
+  "properties": {
+    "link": {
+      "type": "object",
+      "properties": {
+        "request_id": {
+          "type": "string"
+        },
+        "message_id": {
+          "type": "string"
+        },
+        "message_uuid": {
+          "type": "string"
+        },
+        "session_id": {
+          "type": "string"
+        },
+        "query_source": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        }
+      }
+    },
+    "body": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        },
+        "role": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "stop_reason": {
+          "type": "string"
+        },
+        "stop_sequence": {
+          "type": "string"
+        },
+        "stop_details": {
+          "x-duckdb-type": "JSON"
+        },
+        "container": {
+          "x-duckdb-type": "JSON"
+        },
+        "context_management": {
+          "x-duckdb-type": "JSON"
+        },
+        "diagnostics": {
+          "x-duckdb-type": "JSON"
+        },
+        "input_transformations": {
+          "x-duckdb-type": "JSON"
+        },
+        "error": {
+          "x-duckdb-type": "JSON"
+        }
+      }
+    }
+  }
+}

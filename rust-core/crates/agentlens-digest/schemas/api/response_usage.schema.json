@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agentlenspro:api_response.usage:v1",
+  "title": "Anthropic Messages API response envelope: topic usage",
+  "x-claude-code-version": "2.1.285",
+  "type": "object",
+  "properties": {
+    "link": {
+      "type": "object",
+      "properties": {
+        "request_id": {
+          "type": "string"
+        },
+        "message_id": {
+          "type": "string"
+        },
+        "message_uuid": {
+          "type": "string"
+        },
+        "session_id": {
+          "type": "string"
+        },
+        "query_source": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        }
+      }
+    },
+    "body": {
+      "type": "object",
+      "properties": {
+        "usage": {
+          "type": "object",
+          "properties": {
+            "input_tokens": {
+              "type": "integer"
+            },
+            "output_tokens": {
+              "type": "integer"
+            },
+            "cache_read_input_tokens": {
+              "type": "integer"
+            },
+            "cache_creation_input_tokens": {
+              "type": "integer"
+            },
+            "cache_creation": {
+              "type": "object",
+              "properties": {
+                "ephemeral_5m_input_tokens": {
+                  "type": "integer"
+                },
+                "ephemeral_1h_input_tokens": {
+                  "type": "integer"
+                }
+              }
+            },
+            "service_tier": {
+              "type": "string"
+            },
+            "speed": {
+              "type": "string"
+            },
+            "inference_geo": {
+              "type": "string"
+            },
+            "server_tool_use": {
+              "x-duckdb-type": "JSON"
+            },
+            "output_tokens_details": {
+              "x-duckdb-type": "JSON"
+            },
+            "iterations": {
+              "x-duckdb-type": "JSON"
+            },
+            "fallback_credit": {
+              "x-duckdb-type": "JSON"
+            }
+          }
+        }
+      }
+    }
+  }
+}

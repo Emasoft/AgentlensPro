@@ -1,0 +1,130 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agentlenspro:telemetry.span.hook:v1",
+  "title": "Claude Code OTel span claude_code.hook attributes",
+  "x-claude-code-version": "2.1.285",
+  "type": "object",
+  "properties": {
+    "app.entrypoint": {
+      "type": "string"
+    },
+    "app.version": {
+      "type": "string"
+    },
+    "ccr.session.id": {
+      "type": "string"
+    },
+    "duration_ms": {
+      "x-duckdb-type": "VARCHAR"
+    },
+    "hook_definitions": {
+      "type": "string"
+    },
+    "hook_event": {
+      "type": "string"
+    },
+    "hook_name": {
+      "type": "string"
+    },
+    "host.arch": {
+      "type": "string"
+    },
+    "num_blocking": {
+      "x-duckdb-type": "VARCHAR"
+    },
+    "num_cancelled": {
+      "x-duckdb-type": "VARCHAR"
+    },
+    "num_hooks": {
+      "x-duckdb-type": "VARCHAR"
+    },
+    "num_non_blocking_error": {
+      "x-duckdb-type": "VARCHAR"
+    },
+    "num_success": {
+      "x-duckdb-type": "VARCHAR"
+    },
+    "organization.id": {
+      "type": "string"
+    },
+    "os.type": {
+      "type": "string"
+    },
+    "os.version": {
+      "type": "string"
+    },
+    "service.name": {
+      "type": "string"
+    },
+    "service.version": {
+      "type": "string"
+    },
+    "session.id": {
+      "type": "string"
+    },
+    "terminal.type": {
+      "type": "string"
+    },
+    "user.account_id": {
+      "type": "string"
+    },
+    "user.account_uuid": {
+      "type": "string"
+    },
+    "user.email": {
+      "type": "string"
+    },
+    "user.id": {
+      "type": "string"
+    },
+    "vcs.owner.name": {
+      "type": "string"
+    },
+    "vcs.provider.name": {
+      "type": "string"
+    },
+    "vcs.repository.name": {
+      "type": "string"
+    },
+    "vcs.repository.url.full": {
+      "type": "string"
+    },
+    "wsl.version": {
+      "type": "string"
+    },
+    "_span": {
+      "type": "object",
+      "properties": {
+        "traceId": {
+          "type": "string"
+        },
+        "spanId": {
+          "type": "string"
+        },
+        "parentSpanId": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "startTimeUnixNano": {
+          "type": "integer"
+        },
+        "endTimeUnixNano": {
+          "type": "integer"
+        },
+        "status": {
+          "type": "object",
+          "properties": {
+            "code": {
+              "type": "integer"
+            },
+            "message": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  }
+}

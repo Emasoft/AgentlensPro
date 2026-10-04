@@ -308,7 +308,7 @@ fn t02_round_trip_statusline_main() {
 fn t03_every_producer_loads_a_required_only_line() {
     let fx = Fx::new("t03");
     let producers = register_where(&fx, &|_| true);
-    assert_eq!(producers.len(), 49);
+    assert_eq!(producers.len(), 89);
     let mut spools: Vec<&str> = producers.iter().map(|p| p.spool.as_str()).collect();
     spools.sort_unstable();
     spools.dedup();
@@ -1175,4 +1175,372 @@ fn c2_concurrent_appends_while_sealing_and_collecting_lose_nothing() {
     }
     assert_eq!(total, PROCS * PER_PROC);
     println!("c2: {} sealed files", fx.names("done", SPOOL).len());
+}
+
+use agentlens_digest::schema::qident;
+
+// ---------------------------------------------------------------- step (e): telemetry and API-body producers
+
+/// The sources added by step (e) and how many producers each has in the manifest.
+const NEW_SOURCES: [(&str, usize); 4] = [("telemetry_event", 27), ("telemetry_span", 6), ("api_request", 4), ("api_response", 3)];
+const API_REQUEST: [&str; 4] = ["api_request_core_v1", "api_request_system_v1", "api_request_tools_v1", "api_request_messages_v1"];
+const API_RESPONSE: [&str; 3] = ["api_response_core_v1", "api_response_usage_v1", "api_response_content_v1"];
+
+fn is_new_source(e: &Value) -> bool {
+    NEW_SOURCES.iter().any(|(src, _)| e["source"] == *src)
+}
+
+/// A value for EVERY property of the schema node, nested objects and lists included
+/// (a JSON override gets an object, any other override a string).
+fn full(node: &Value) -> Value {
+    if let Some(ov) = node.get("x-duckdb-type").and_then(Value::as_str) {
+        return if ov == "JSON" { json!({"k": 1}) } else { json!("x") };
+    }
+    match node["type"].as_str().unwrap() {
+        "string" => json!("x"),
+        "integer" => json!(1),
+        "number" => json!(1.5),
+        "boolean" => json!(true),
+        "array" => json!([full(&node["items"])]),
+        "object" => Value::Object(node["properties"].as_object().unwrap().iter().map(|(k, v)| (k.clone(), full(v))).collect()),
+        other => panic!("unexpected schema type {other}"),
+    }
+}
+
+fn deep_merge(into: &mut Value, from: &Value) {
+    match (into, from) {
+        (Value::Object(a), Value::Object(b)) => {
+            for (k, v) in b {
+                match a.get_mut(k) {
+                    Some(slot) => deep_merge(slot, v),
+                    None => {
+                        a.insert(k.clone(), v.clone());
+                    }
+                }
+            }
+        }
+        (slot, v) => *slot = v.clone(),
+    }
+}
+
+/// t15. Every one of the 40 new producers (27 events, 6 spans, 4 request and 3 response topics) loads a line
+/// carrying a value for every property, and every column reads back equal to what was sent.
+#[test]
+fn t15_every_new_producer_round_trips_a_full_line() {
+    let fx = Fx::new("t15");
+    let producers = register_where(&fx, &is_new_source);
+    assert_eq!(producers.len(), 40);
+    for (src, n) in NEW_SOURCES {
+        assert_eq!(producers.iter().filter(|p| p.source == src).count(), n, "producers of {src}");
+    }
+    let mut spools: Vec<&str> = producers.iter().map(|p| p.spool.as_str()).collect();
+    spools.sort_unstable();
+    spools.dedup();
+    for spool in &spools {
+        // One line per spool: the full payloads of every producer in it, merged (api topics share link and body).
+        let mut payload = json!({});
+        for p in producers.iter().filter(|p| p.spool == *spool) {
+            deep_merge(&mut payload, &full(&p.schema_json));
+        }
+        fx.put(spool, "f.ndjson", &lines(&[payload]));
+    }
+    assert_eq!(fx.collect(), Summary { files_loaded: spools.len() as u64, rows: spools.len() as u64, files_failed: 0, files_reconciled: 0 });
+    let conn = fx.conn();
+    for p in &producers {
+        let sent = full(&p.schema_json);
+        let exprs: Vec<String> = p.columns.iter().map(|c| format!("to_json({})", qident(&c.name))).collect();
+        let exprs: Vec<&str> = exprs.iter().map(String::as_str).collect();
+        let got = select(&conn, &exprs, &p.qualified_table(), "1");
+        assert_eq!(got.len(), 1, "{}", p.producer_type);
+        for (c, cell) in p.columns.iter().zip(&got[0]) {
+            let back: Value = serde_json::from_str(cell.as_deref().unwrap_or("null")).unwrap();
+            assert_eq!(back, sent[c.name.as_str()], "{} column {}", p.producer_type, c.name);
+        }
+    }
+}
+
+/// A value of the column type and its expected `CAST(... AS VARCHAR)`, distinct per column index.
+fn sample(ty: &str, i: usize) -> (Value, String) {
+    match ty {
+        "VARCHAR" => (json!(format!("v{i}-aaaaaaaa")), format!("v{i}-aaaaaaaa")),
+        "BIGINT" => (json!(i), i.to_string()),
+        "DOUBLE" => (json!(i as f64 + 0.25), format!("{}.25", i)),
+        "BOOLEAN" => (json!(true), "true".to_owned()),
+        other => panic!("no sample for {other}"),
+    }
+}
+
+/// t16. A telemetry event whose attribute names contain dots (`session.id`, `vcs.repository.url.full`) round-trips,
+/// every column of the table compared with the value sent.
+#[test]
+fn t16_telemetry_event_with_dotted_attribute_names_round_trips() {
+    const PT: &str = "telemetry_event_api_request_v1";
+    let fx = Fx::new("t16");
+    let p = register_where(&fx, &only(&[PT])).remove(0);
+    assert!(p.columns.iter().filter(|c| c.name.contains('.')).count() >= 10, "the event must have dotted columns");
+    assert!(p.columns.iter().all(|c| !c.not_null), "no telemetry column is NOT NULL");
+    let mut payload = serde_json::Map::new();
+    let mut expected = Vec::new();
+    for (i, c) in p.columns.iter().enumerate() {
+        let (v, text) = sample(&c.ty, i + 1);
+        payload.insert(c.name.clone(), v);
+        expected.push(Some(text));
+    }
+    fx.put(PT, "a.ndjson", &lines(&[Value::Object(payload)]));
+    assert_eq!(fx.collect().rows, 1);
+    let quoted: Vec<String> = p.columns.iter().map(|c| qident(&c.name)).collect();
+    let exprs: Vec<&str> = quoted.iter().map(String::as_str).collect();
+    assert_eq!(select(&fx.conn(), &exprs, &p.qualified_table(), "1"), vec![expected]);
+}
+
+/// t17. Attributes the drafts leave untyped are VARCHAR columns: an integer, a double, a boolean and an array
+/// sent for them load as their JSON text; typed attributes sent as strings by `tool_result` stay strings.
+#[test]
+fn t17_untyped_telemetry_attributes_are_varchar_and_take_any_json_value() {
+    let fx = Fx::new("t17");
+    register_where(&fx, &only(&["telemetry_event_hook_execution_complete_v1", "telemetry_event_managed_settings_resolved_v1", "telemetry_event_tool_result_v1"]));
+    let hook = "telemetry_event_hook_execution_complete_v1";
+    fx.put(hook, "a.ndjson", &lines(&[json!({"num_hooks": 3, "total_duration_ms": 1.5, "num_success": true, "stdout_chars": "12"})]));
+    let managed = "telemetry_event_managed_settings_resolved_v1";
+    fx.put(managed, "a.ndjson", &lines(&[json!({"managed_settings.sources": ["user", "project"]})]));
+    let tool = "telemetry_event_tool_result_v1";
+    fx.put(tool, "a.ndjson", &lines(&[json!({"duration_ms": "17", "tool_result_size_bytes": "9", "tool_name": "Bash", "event.sequence": 4})]));
+    assert_eq!(fx.collect(), Summary { files_loaded: 3, rows: 3, files_failed: 0, files_reconciled: 0 });
+    let conn = fx.conn();
+    assert_eq!(
+        select(&conn, &["typeof(num_hooks)", "num_hooks", "total_duration_ms", "num_success", "stdout_chars"], &t(hook), "1")[0],
+        vec![s("VARCHAR"), s("3"), s("1.5"), s("true"), s("12")]
+    );
+    assert_eq!(select(&conn, &["typeof(\"managed_settings.sources\")", "\"managed_settings.sources\""], &t(managed), "1")[0], vec![s("VARCHAR"), s("[\"user\",\"project\"]")]);
+    assert_eq!(
+        select(&conn, &["typeof(duration_ms)", "duration_ms", "tool_result_size_bytes", "tool_name", "\"event.sequence\""], &t(tool), "1")[0],
+        vec![s("VARCHAR"), s("17"), s("9"), s("Bash"), s("4")]
+    );
+}
+
+/// t18. A span line round-trips: attributes and the `_span` envelope, `_span.status.code` included; the OTLP JSON form
+/// that writes the nanosecond fields as strings loads into the same BIGINT columns.
+#[test]
+fn t18_telemetry_span_round_trips_with_its_envelope() {
+    const PT: &str = "telemetry_span_tool_v1";
+    let fx = Fx::new("t18");
+    register_where(&fx, &only(&[PT]));
+    let attrs = |i: usize| json!({"tool_name": "Bash", "duration_ms": 40 + i, "gen_ai.tool.call.id": format!("toolu_aaaaaaaa{i}"), "session.id": "aaaaaaaa"});
+    let mut numeric = attrs(0);
+    numeric["_span"] = json!({
+        "traceId": "aaaaaaaa00000000aaaaaaaa00000000", "spanId": "bbbb222200000000", "parentSpanId": "cccc333300000000",
+        "name": "claude_code.tool", "startTimeUnixNano": 1_700_000_000_000_000_000_i64, "endTimeUnixNano": 1_700_000_000_040_000_000_i64,
+        "status": {"code": 2, "message": "denied"}
+    });
+    let mut otlp = attrs(1);
+    otlp["_span"] = json!({
+        "traceId": "aaaaaaaa00000000aaaaaaaa00000001", "spanId": "bbbb222200000001", "name": "claude_code.tool",
+        "startTimeUnixNano": "1700000001000000000", "endTimeUnixNano": "1700000001041000000", "status": {"code": 1}
+    });
+    let bare = attrs(2); // a span line without the envelope: all `_span` fields NULL
+    fx.put(PT, "a.ndjson", &lines(&[numeric, otlp, bare]));
+    assert_eq!(fx.collect().rows, 3);
+    let conn = fx.conn();
+    let got = select(
+        &conn,
+        &["tool_name", "duration_ms", "\"gen_ai.tool.call.id\"", "\"session.id\"", "_span.traceId", "_span.spanId", "_span.parentSpanId", "_span.name",
+          "_span.startTimeUnixNano", "_span.endTimeUnixNano", "_span.status.code", "_span.status.message", "typeof(_span.startTimeUnixNano)"],
+        &t(PT),
+        "_meta_record_ordinal",
+    );
+    assert_eq!(got[0][..12], [s("Bash"), s("40"), s("toolu_aaaaaaaa0"), s("aaaaaaaa"), s("aaaaaaaa00000000aaaaaaaa00000000"), s("bbbb222200000000"), s("cccc333300000000"),
+        s("claude_code.tool"), s("1700000000000000000"), s("1700000000040000000"), s("2"), s("denied")]);
+    assert_eq!(got[0][12], s("BIGINT"));
+    assert_eq!(got[1][4..12], [s("aaaaaaaa00000000aaaaaaaa00000001"), s("bbbb222200000001"), None, s("claude_code.tool"), s("1700000001000000000"), s("1700000001041000000"), s("1"), None]);
+    assert_eq!(got[2][..4], [s("Bash"), s("42"), s("toolu_aaaaaaaa2"), s("aaaaaaaa")]);
+    assert_eq!(got[2][4..12], [None, None, None, None, None, None, None, None]);
+}
+
+fn api_link(i: usize) -> Value {
+    json!({
+        "request_id": format!("req_aaaaaaaa{i}"), "message_id": format!("msg_bbbb2222{i}"), "message_uuid": format!("uuid-aaaaaaaa-{i}"),
+        "session_id": format!("aaaaaaaa-{i}"), "query_source": "repl_main_thread", "model": "model-aaaaaaaa"
+    })
+}
+
+/// A request envelope with every topic's fields: string and block content mixed, tools with a nested input_schema.
+fn api_request_payload(i: usize, system: Value) -> Value {
+    json!({"link": api_link(i), "body": {
+        "model": "model-aaaaaaaa", "max_tokens": 4096, "stream": true, "betas": ["beta-a", "beta-b"], "metadata": {"user_id": "user-aaaaaaaa"},
+        "thinking": {"type": "adaptive"}, "temperature": 1.0, "tool_choice": {"type": "auto"}, "system": system,
+        "tools": [
+            {"name": "tool_a", "description": "does a", "type": "custom", "eager_input_streaming": true, "cache_control": {"type": "ephemeral"},
+             "input_schema": {"type": "object", "properties": {"path": {"type": "string", "items": {"nested": [1, 2]}}}, "required": ["path"]}},
+            {"name": "tool_b", "input_schema": {"type": "object"}, "defer_loading": true}
+        ],
+        "messages": [
+            {"role": "user", "content": "hello aaaaaaaa"},
+            {"role": "assistant", "content": [{"type": "text", "text": "hi"}, {"type": "tool_use", "id": "toolu_aaaaaaaa", "name": "tool_a", "input": {"path": "/x"}}]},
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_aaaaaaaa", "content": "ok"}], "output_config": {"effort": "high"}}
+        ]
+    }})
+}
+
+/// t19. An api_request line with string and array `system`, string and block-array message content and tools with a nested
+/// input_schema lands in the four topic tables, with equal (_meta_ingest_id, _meta_record_ordinal) key sets.
+#[test]
+fn t19_api_request_round_trips_into_four_topic_tables_with_equal_keys() {
+    let fx = Fx::new("t19");
+    register_where(&fx, &only(&API_REQUEST));
+    let sys_array = json!([{"type": "text", "text": "sys A"}, {"type": "text", "text": "sys B", "cache_control": {"type": "ephemeral"}}]);
+    fx.put("api_request", "a.ndjson", &lines(&[api_request_payload(0, json!("You are aaaaaaaa")), api_request_payload(1, sys_array)]));
+    assert_eq!(fx.collect(), Summary { files_loaded: 1, rows: 2, files_failed: 0, files_reconciled: 0 });
+    let conn = fx.conn();
+    let tb = |pt: &str| t(pt);
+    let key = |pt: &str| select(&conn, &["_meta_ingest_id", "_meta_record_ordinal"], &tb(pt), "1, 2");
+    let keys = key(API_REQUEST[0]);
+    assert_eq!(keys.len(), 2);
+    for pt in &API_REQUEST[1..] {
+        assert_eq!(key(pt), keys, "{pt}");
+    }
+    let ord = "_meta_record_ordinal";
+    let core = select(
+        &conn,
+        &["link.request_id", "link.session_id", "link.model", "body.model", "body.max_tokens", "body.stream", "array_to_string(body.betas, '|')", "body.metadata.user_id",
+          "CAST(body.thinking AS VARCHAR)", "body.temperature", "CAST(body.tool_choice AS VARCHAR)", "body.fallbacks IS NULL"],
+        &tb(API_REQUEST[0]),
+        ord,
+    );
+    assert_eq!(core[1], [s("req_aaaaaaaa1"), s("aaaaaaaa-1"), s("model-aaaaaaaa"), s("model-aaaaaaaa"), s("4096"), s("true"), s("beta-a|beta-b"), s("user-aaaaaaaa"),
+        s("{\"type\":\"adaptive\"}"), s("1.0"), s("{\"type\":\"auto\"}"), s("true")]);
+    // `system` is one JSON column: a string once, an array of blocks once (json_type tells them apart).
+    let system = select(&conn, &["json_type(body.system)", "CAST(body.system AS VARCHAR)", "json_extract_string(body.system, '$[1].text')", "json_extract_string(body.system, '$[1].cache_control.type')"], &tb(API_REQUEST[1]), ord);
+    assert_eq!(system[0], [s("VARCHAR"), s("\"You are aaaaaaaa\""), None, None]);
+    assert_eq!(system[1][0], s("ARRAY"));
+    assert_eq!(system[1][1], s("[{\"type\":\"text\",\"text\":\"sys A\"},{\"type\":\"text\",\"text\":\"sys B\",\"cache_control\":{\"type\":\"ephemeral\"}}]"));
+    assert_eq!(system[1][2..], [s("sys B"), s("ephemeral")]);
+    let tools = select(
+        &conn,
+        &["len(body.tools)", "body.tools[1].name", "body.tools[1].description", "body.tools[1].type", "body.tools[1].eager_input_streaming", "json_extract_string(body.tools[1].input_schema, '$.properties.path.type')",
+          "json_extract_string(body.tools[1].input_schema, '$.properties.path.items.nested[1]')", "json_extract_string(body.tools[1].input_schema, '$.required[0]')", "json_extract_string(body.tools[1].cache_control, '$.type')",
+          "body.tools[2].name", "body.tools[2].description IS NULL", "body.tools[2].defer_loading", "json_extract_string(body.tools[2].input_schema, '$.type')"],
+        &tb(API_REQUEST[2]),
+        ord,
+    );
+    assert_eq!(tools[0], [s("2"), s("tool_a"), s("does a"), s("custom"), s("true"), s("string"), s("2"), s("path"), s("ephemeral"), s("tool_b"), s("true"), s("true"), s("object")]);
+    let messages = select(
+        &conn,
+        &["len(body.messages)", "body.messages[1].role", "json_type(body.messages[1].content)", "json_extract_string(body.messages[1].content, '$')", "body.messages[1].output_config IS NULL",
+          "json_type(body.messages[2].content)", "json_extract_string(body.messages[2].content, '$[1].input.path')", "json_extract_string(body.messages[3].content, '$[0].tool_use_id')",
+          "json_extract_string(body.messages[3].output_config, '$.effort')"],
+        &tb(API_REQUEST[3]),
+        ord,
+    );
+    assert_eq!(messages[0], [s("3"), s("user"), s("VARCHAR"), s("hello aaaaaaaa"), s("true"), s("ARRAY"), s("/x"), s("toolu_aaaaaaaa"), s("high")]);
+    assert_eq!(messages[1], messages[0]);
+}
+
+/// t20. `body` is a nullable struct: a line with no `body` key (or `"body": null`) loads with a NULL body and its link intact in
+/// every topic table; a line with no payload still fails its file.
+#[test]
+fn t20_a_line_without_body_loads_null_but_a_line_without_payload_fails() {
+    let fx = Fx::new("t20");
+    register_where(&fx, &only(&API_REQUEST));
+    let link_only = json!({"link": api_link(0)});
+    let null_body = json!({"link": api_link(1), "body": null});
+    fx.put("api_request", "a.ndjson", &lines(&[link_only, null_body]));
+    assert_eq!(fx.collect(), Summary { files_loaded: 1, rows: 2, files_failed: 0, files_reconciled: 0 });
+    {
+        // One connection per database file at a time (see t12): this one is dropped before the next collect.
+        let conn = fx.conn();
+        for pt in API_REQUEST {
+            assert_eq!(
+                select(&conn, &["body IS NULL", "link.request_id"], &t(pt), "_meta_record_ordinal"),
+                vec![vec![s("true"), s("req_aaaaaaaa0")], vec![s("true"), s("req_aaaaaaaa1")]],
+                "{pt}"
+            );
+        }
+    }
+    let good = line(TS0, &api_request_payload(2, json!("s")));
+    fx.put("api_request", "b.ndjson", &format!("{good}\n{}\n", json!({"ts_ns": TS0})));
+    assert_eq!(fx.collect(), Summary { files_loaded: 0, rows: 0, files_failed: 1, files_reconciled: 0 });
+    let conn = fx.conn();
+    assert_eq!(count(&conn, &t(API_REQUEST[0])), 2, "nothing of the failed file was loaded");
+    assert_eq!(count(&conn, "_ingest.files WHERE status = 'failed' AND error_message LIKE '%absent or null payload%'"), 1);
+}
+
+/// t21. An api_response line round-trips (usage tokens compare as integers, cache_creation is a struct, content is a list of
+/// JSON blocks), an error-shaped response keeps its error content, and requests join responses on link.request_id.
+#[test]
+fn t21_api_response_round_trips_and_joins_its_request() {
+    let fx = Fx::new("t21");
+    register_where(&fx, &|e| e["source"] == "api_request" || e["source"] == "api_response");
+    fx.put("api_request", "a.ndjson", &lines(&[api_request_payload(0, json!("s")), api_request_payload(1, json!("s"))]));
+    let ok = json!({"link": api_link(0), "body": {
+        "id": "msg_bbbb22220", "type": "message", "role": "assistant", "model": "model-aaaaaaaa", "stop_reason": "end_turn", "stop_sequence": null,
+        "content": [{"type": "text", "text": "hi"}, {"type": "tool_use", "id": "toolu_aaaaaaaa", "name": "tool_a", "input": {"path": "/x"}}],
+        "usage": {"input_tokens": 12, "output_tokens": 34, "cache_read_input_tokens": 56, "cache_creation_input_tokens": 78,
+                  "cache_creation": {"ephemeral_5m_input_tokens": 70, "ephemeral_1h_input_tokens": 8},
+                  "service_tier": "standard", "speed": "standard", "inference_geo": "us", "server_tool_use": {"web_search_requests": 0},
+                  "output_tokens_details": {"thinking_tokens": 5}, "iterations": [{"type": "message"}], "fallback_credit": null},
+        "context_management": {"applied_edits": []}, "diagnostics": {"cache_miss_reason": "ttl"}
+    }});
+    let error = json!({"link": api_link(1), "body": {"type": "error", "error": {"type": "overloaded_error", "message": "Overloaded"}}});
+    fx.put("api_response", "a.ndjson", &lines(&[ok, error]));
+    assert_eq!(fx.collect(), Summary { files_loaded: 2, rows: 4, files_failed: 0, files_reconciled: 0 });
+    let conn = fx.conn();
+    let ord = "_meta_record_ordinal";
+    let keys = |pt: &str| select(&conn, &["_meta_ingest_id", "_meta_record_ordinal"], &t(pt), "1, 2");
+    assert_eq!(keys(API_RESPONSE[0]), keys(API_RESPONSE[1]));
+    assert_eq!(keys(API_RESPONSE[0]), keys(API_RESPONSE[2]));
+    let core = select(
+        &conn,
+        &["body.id", "body.type", "body.role", "body.model", "body.stop_reason", "body.stop_sequence IS NULL", "CAST(body.context_management AS VARCHAR)", "json_extract_string(body.diagnostics, '$.cache_miss_reason')", "body.error IS NULL"],
+        &t(API_RESPONSE[0]),
+        ord,
+    );
+    assert_eq!(core[0], [s("msg_bbbb22220"), s("message"), s("assistant"), s("model-aaaaaaaa"), s("end_turn"), s("true"), s("{\"applied_edits\":[]}"), s("ttl"), s("true")]);
+    // The error response keeps its error content; the id and the other topics' fields are simply absent.
+    assert_eq!(core[1][..2], [None, s("error")]);
+    let err = select(&conn, &["json_extract_string(body.error, '$.type')", "json_extract_string(body.error, '$.message')"], &t(API_RESPONSE[0]), ord);
+    assert_eq!(err[1], [s("overloaded_error"), s("Overloaded")]);
+    let usage = select(
+        &conn,
+        &["typeof(body.usage.input_tokens)", "body.usage.input_tokens + body.usage.output_tokens", "body.usage.cache_read_input_tokens + body.usage.cache_creation_input_tokens",
+          "typeof(body.usage.cache_creation.ephemeral_5m_input_tokens)", "body.usage.cache_creation.ephemeral_5m_input_tokens + body.usage.cache_creation.ephemeral_1h_input_tokens",
+          "body.usage.service_tier", "body.usage.speed", "body.usage.inference_geo", "CAST(body.usage.server_tool_use AS VARCHAR)", "json_extract_string(body.usage.output_tokens_details, '$.thinking_tokens')",
+          "json_extract_string(body.usage.iterations, '$[0].type')", "body.usage.fallback_credit IS NULL"],
+        &t(API_RESPONSE[1]),
+        ord,
+    );
+    assert_eq!(usage[0], [s("BIGINT"), s("46"), s("134"), s("BIGINT"), s("78"), s("standard"), s("standard"), s("us"), s("{\"web_search_requests\":0}"), s("5"), s("message"), s("true")]);
+    assert_eq!(select(&conn, &["body.usage IS NULL"], &t(API_RESPONSE[1]), ord)[1], [s("true")]);
+    let content = select(&conn, &["len(body.content)", "json_extract_string(body.content[1], '$.text')", "json_extract_string(body.content[2], '$.name')", "json_extract_string(body.content[2], '$.input.path')"], &t(API_RESPONSE[2]), ord);
+    assert_eq!(content[0], [s("2"), s("hi"), s("tool_a"), s("/x")]);
+    assert_eq!(select(&conn, &["body.content IS NULL"], &t(API_RESPONSE[2]), ord)[1], [s("true")]);
+    // Request and response meet on link.request_id.
+    let joined = select(
+        &conn,
+        &["q.link.request_id", "r.body.type", "q.body.model"],
+        &format!("{} q JOIN {} r ON q.link.request_id = r.link.request_id", t(API_REQUEST[0]), t(API_RESPONSE[0])),
+        "1",
+    );
+    assert_eq!(joined, vec![vec![s("req_aaaaaaaa0"), s("message"), s("model-aaaaaaaa")], vec![s("req_aaaaaaaa1"), s("error"), s("model-aaaaaaaa")]]);
+}
+
+/// t22. Timing (printed, not asserted): collect of one file holding one synthetic request body of about 2 MB, through the four
+/// request topics.
+#[test]
+fn t22_timing_one_2mb_request_body() {
+    let fx = Fx::new("t22");
+    register_where(&fx, &only(&API_REQUEST));
+    let block = "x".repeat(100_000);
+    let blocks: Vec<Value> = (0..20).map(|i| json!({"type": "text", "text": format!("{i}{block}")})).collect();
+    let mut payload = api_request_payload(0, json!("s"));
+    payload["body"]["messages"][0]["content"] = json!(blocks);
+    let text = lines(&[payload]);
+    assert!(text.len() >= 2_000_000, "body is {} bytes", text.len());
+    fx.put("api_request", "a.ndjson", &text);
+    let conn = fx.conn();
+    let start = Instant::now();
+    let sum = collect(&conn, &fx.ingest()).unwrap();
+    let ms = start.elapsed().as_secs_f64() * 1000.0;
+    assert_eq!(sum.rows, 1);
+    assert_eq!(one(&conn, "len(body.messages)", &t(API_REQUEST[3])), s("3"));
+    println!("TIMING api_request-2MB               lines=1     bytes={:<8} collect_ms={ms:>9.2}", text.len());
 }

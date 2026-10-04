@@ -1,0 +1,137 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agentlenspro:telemetry.event.retention_sweep:v1",
+  "title": "Claude Code OTel event claude_code.retention_sweep attributes",
+  "x-claude-code-version": "2.1.285",
+  "type": "object",
+  "properties": {
+    "app.entrypoint": {
+      "type": "string"
+    },
+    "app.version": {
+      "type": "string"
+    },
+    "artifacts_deleted": {
+      "x-duckdb-type": "VARCHAR"
+    },
+    "ccr.session.id": {
+      "type": "string"
+    },
+    "client_request_id": {
+      "type": "string"
+    },
+    "error_count": {
+      "x-duckdb-type": "VARCHAR"
+    },
+    "event.name": {
+      "type": "string",
+      "const": "retention_sweep"
+    },
+    "event.sequence": {
+      "type": "integer"
+    },
+    "event.timestamp": {
+      "type": "string"
+    },
+    "files_past_cutoff": {
+      "x-duckdb-type": "VARCHAR"
+    },
+    "files_retained_fresh": {
+      "x-duckdb-type": "VARCHAR"
+    },
+    "host.arch": {
+      "type": "string"
+    },
+    "message.uuid": {
+      "type": "string"
+    },
+    "organization.id": {
+      "type": "string"
+    },
+    "os.type": {
+      "type": "string"
+    },
+    "os.version": {
+      "type": "string"
+    },
+    "period_days": {
+      "x-duckdb-type": "VARCHAR"
+    },
+    "prompt.id": {
+      "type": "string"
+    },
+    "request_id": {
+      "type": "string"
+    },
+    "result": {
+      "type": "string",
+      "enum": [
+        "complete",
+        "skipped"
+      ]
+    },
+    "service.name": {
+      "type": "string"
+    },
+    "service.version": {
+      "type": "string"
+    },
+    "session.id": {
+      "type": "string"
+    },
+    "session_files_deleted": {
+      "x-duckdb-type": "VARCHAR"
+    },
+    "skip_reason": {
+      "type": "string",
+      "enum": [
+        "user_source_disabled",
+        "settings_unknowable",
+        "settings_invalid_key_set"
+      ]
+    },
+    "terminal.type": {
+      "type": "string"
+    },
+    "transcripts_deleted": {
+      "x-duckdb-type": "VARCHAR"
+    },
+    "transcripts_exempted_desktop": {
+      "x-duckdb-type": "VARCHAR"
+    },
+    "used_default": {
+      "type": "string",
+      "enum": [
+        "true",
+        "false"
+      ]
+    },
+    "user.account_id": {
+      "type": "string"
+    },
+    "user.account_uuid": {
+      "type": "string"
+    },
+    "user.email": {
+      "type": "string"
+    },
+    "user.id": {
+      "type": "string"
+    },
+    "vcs.owner.name": {
+      "type": "string"
+    },
+    "vcs.provider.name": {
+      "type": "string"
+    },
+    "vcs.repository.name": {
+      "type": "string"
+    },
+    "vcs.repository.url.full": {
+      "type": "string"
+    },
+    "wsl.version": {
+      "type": "string"
+    }
+  }
+}

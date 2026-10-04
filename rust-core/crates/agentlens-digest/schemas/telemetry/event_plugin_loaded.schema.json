@@ -1,0 +1,148 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agentlenspro:telemetry.event.plugin_loaded:v1",
+  "title": "Claude Code OTel event claude_code.plugin_loaded attributes",
+  "x-claude-code-version": "2.1.285",
+  "type": "object",
+  "properties": {
+    "agent_path_count": {
+      "x-duckdb-type": "VARCHAR"
+    },
+    "app.entrypoint": {
+      "type": "string"
+    },
+    "app.version": {
+      "type": "string"
+    },
+    "ccr.session.id": {
+      "type": "string"
+    },
+    "client_request_id": {
+      "type": "string"
+    },
+    "command_path_count": {
+      "x-duckdb-type": "VARCHAR"
+    },
+    "enabled_via": {
+      "type": "string",
+      "enum": [
+        "default-enable",
+        "org-policy",
+        "admin-install",
+        "seed-mount",
+        "user-install"
+      ]
+    },
+    "event.name": {
+      "type": "string",
+      "const": "plugin_loaded"
+    },
+    "event.sequence": {
+      "type": "integer"
+    },
+    "event.timestamp": {
+      "type": "string"
+    },
+    "has_hooks": {
+      "x-duckdb-type": "VARCHAR"
+    },
+    "has_mcp": {
+      "x-duckdb-type": "VARCHAR"
+    },
+    "host.arch": {
+      "type": "string"
+    },
+    "host_owned_mcp": {
+      "x-duckdb-type": "VARCHAR"
+    },
+    "marketplace.name": {
+      "type": "string"
+    },
+    "message.uuid": {
+      "type": "string"
+    },
+    "organization.id": {
+      "type": "string"
+    },
+    "os.type": {
+      "type": "string"
+    },
+    "os.version": {
+      "type": "string"
+    },
+    "plugin.name": {
+      "type": "string"
+    },
+    "plugin.scope": {
+      "type": "string",
+      "enum": [
+        "official",
+        "community",
+        "org",
+        "user-local",
+        "default-bundle"
+      ]
+    },
+    "plugin.version": {
+      "type": "string"
+    },
+    "plugin_id_hash": {
+      "type": "string"
+    },
+    "prompt.id": {
+      "type": "string"
+    },
+    "request_id": {
+      "type": "string"
+    },
+    "safe_mode": {
+      "type": "string",
+      "enum": [
+        "true",
+        "false"
+      ]
+    },
+    "service.name": {
+      "type": "string"
+    },
+    "service.version": {
+      "type": "string"
+    },
+    "session.id": {
+      "type": "string"
+    },
+    "skill_path_count": {
+      "x-duckdb-type": "VARCHAR"
+    },
+    "terminal.type": {
+      "type": "string"
+    },
+    "user.account_id": {
+      "type": "string"
+    },
+    "user.account_uuid": {
+      "type": "string"
+    },
+    "user.email": {
+      "type": "string"
+    },
+    "user.id": {
+      "type": "string"
+    },
+    "vcs.owner.name": {
+      "type": "string"
+    },
+    "vcs.provider.name": {
+      "type": "string"
+    },
+    "vcs.repository.name": {
+      "type": "string"
+    },
+    "vcs.repository.url.full": {
+      "type": "string"
+    },
+    "wsl.version": {
+      "type": "string"
+    }
+  }
+}

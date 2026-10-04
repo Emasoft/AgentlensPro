@@ -1,0 +1,218 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agentlenspro:telemetry.span.llm_request:v1",
+  "title": "Claude Code OTel span claude_code.llm_request attributes",
+  "x-claude-code-version": "2.1.285",
+  "type": "object",
+  "properties": {
+    "agent_id": {
+      "type": "string"
+    },
+    "app.entrypoint": {
+      "type": "string"
+    },
+    "app.version": {
+      "type": "string"
+    },
+    "attempt": {
+      "type": "integer"
+    },
+    "cache_creation_tokens": {
+      "type": "integer"
+    },
+    "cache_read_tokens": {
+      "type": "integer"
+    },
+    "ccr.session.id": {
+      "type": "string"
+    },
+    "client_request_id": {
+      "type": "string"
+    },
+    "duration_ms": {
+      "type": "integer"
+    },
+    "effort": {
+      "type": "string",
+      "enum": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    "error": {
+      "type": "string"
+    },
+    "error_class": {
+      "type": "string"
+    },
+    "first_content_ms": {
+      "type": "integer"
+    },
+    "gen_ai.request.model": {
+      "type": "string"
+    },
+    "gen_ai.response.finish_reasons": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "gen_ai.response.id": {
+      "type": "string"
+    },
+    "gen_ai.system": {
+      "type": "string",
+      "enum": [
+        "anthropic"
+      ]
+    },
+    "host.arch": {
+      "type": "string"
+    },
+    "input_tokens": {
+      "type": "integer"
+    },
+    "llm_request.context": {
+      "type": "string",
+      "enum": [
+        "interaction",
+        "tool",
+        "standalone"
+      ]
+    },
+    "model": {
+      "type": "string"
+    },
+    "organization.id": {
+      "type": "string"
+    },
+    "os.type": {
+      "type": "string"
+    },
+    "os.version": {
+      "type": "string"
+    },
+    "output_tokens": {
+      "type": "integer"
+    },
+    "parent_agent_id": {
+      "type": "string"
+    },
+    "query_source": {
+      "type": "string"
+    },
+    "query_source_safe": {
+      "type": "string"
+    },
+    "request_id": {
+      "type": "string"
+    },
+    "response.has_tool_call": {
+      "x-duckdb-type": "VARCHAR"
+    },
+    "service.name": {
+      "type": "string"
+    },
+    "service.version": {
+      "type": "string"
+    },
+    "session.id": {
+      "type": "string"
+    },
+    "span.type": {
+      "type": "string"
+    },
+    "speed": {
+      "type": "string",
+      "enum": [
+        "fast",
+        "normal"
+      ]
+    },
+    "status_code": {
+      "type": "integer"
+    },
+    "stop_reason": {
+      "type": "string"
+    },
+    "success": {
+      "type": "boolean"
+    },
+    "terminal.type": {
+      "type": "string"
+    },
+    "ttft_ms": {
+      "type": "integer"
+    },
+    "user.account_id": {
+      "type": "string"
+    },
+    "user.account_uuid": {
+      "type": "string"
+    },
+    "user.email": {
+      "type": "string"
+    },
+    "user.id": {
+      "type": "string"
+    },
+    "vcs.owner.name": {
+      "type": "string"
+    },
+    "vcs.provider.name": {
+      "type": "string"
+    },
+    "vcs.repository.name": {
+      "type": "string"
+    },
+    "vcs.repository.url.full": {
+      "type": "string"
+    },
+    "workflow.name": {
+      "type": "string"
+    },
+    "workflow.run_id": {
+      "type": "string"
+    },
+    "wsl.version": {
+      "type": "string"
+    },
+    "_span": {
+      "type": "object",
+      "properties": {
+        "traceId": {
+          "type": "string"
+        },
+        "spanId": {
+          "type": "string"
+        },
+        "parentSpanId": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "startTimeUnixNano": {
+          "type": "integer"
+        },
+        "endTimeUnixNano": {
+          "type": "integer"
+        },
+        "status": {
+          "type": "object",
+          "properties": {
+            "code": {
+              "type": "integer"
+            },
+            "message": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  }
+}
