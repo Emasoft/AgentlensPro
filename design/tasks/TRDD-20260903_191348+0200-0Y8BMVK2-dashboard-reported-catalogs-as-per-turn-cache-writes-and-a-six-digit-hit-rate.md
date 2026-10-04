@@ -1,9 +1,9 @@
 ---
 trdd-id: 0Y8BMVK2
 title: The dashboard reported skill and agent catalogs as per-turn cache writes and a six-digit hit rate
-column: human_review
+column: publish
 created: 2026-09-03T19:13:48+0200
-updated: 2026-09-24T08:57:49+0200
+updated: 2026-10-04T12:46:44+0200
 current-owner: main-session
 task-type: bugfix
 severity: HIGH
@@ -12,6 +12,7 @@ relevant-files: [media/src/tabs/Agents.tsx, media/src/tabs/Traces.tsx, src/share
 release-via: publish
 implementation-commits: [574eeba5]
 related: [V8W9A8FZ, DIZ289UQ]
+status: tasked
 ---
 
 # The dashboard reported catalogs as per-turn cache writes and a six-digit hit rate
@@ -83,6 +84,7 @@ gate blaming forks) addressed — INFERRED from the titles, not from a record li
   claim to).
 - 2026-09-24T08:57:32+0200 — column → human_review by main-session. AI review verified, evidence in reports/board-triage ai_review-A/B/C triage
 - 2026-09-24T08:57:49+0200 — main-session (board update A): moved ai_review -> human_review; AI review verified per reports/board-triage ai_review-A/B/C triage rows. In this project's mono-agent rule the session moves ai_review->human_review; the owner moves human_review->complete.
+- 2026-10-04T12:46:44+0200 — column → publish by main-agent@agentlenspro. Owner directive 2026-10-04 "complete all TRDDs!". Independent verification 20261004_123602+0200-close-verify-cv3.md, HEAD 7dab99a0: helper tested (cacheHitRate 5/5, mocha 8 passing), defects 2-4 verified by source reading only, no automated webview test; awaits the next npm release, which is the owner's act.
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-03 19:13
 

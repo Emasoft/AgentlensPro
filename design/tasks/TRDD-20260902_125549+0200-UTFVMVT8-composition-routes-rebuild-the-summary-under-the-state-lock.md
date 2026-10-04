@@ -3,7 +3,7 @@ trdd-id: UTFVMVT8
 title: The composition routes hold the state lock for seconds at ui.rs:560 and the dominant statement is not yet isolated
 column: human_review
 created: 2026-09-02T12:55:49+0200
-updated: 2026-09-24T09:13:11+0200
+updated: 2026-10-04T12:47:05+0200
 current-owner: main-session
 task-type: bugfix
 priority: high
@@ -285,6 +285,7 @@ implementation-commits: [4e19ed4b, 428a1dec]
 ## Notes and lessons learned
 
 - Empty section on creation.
+2026-10-04: code and tests verified at HEAD 7dab99a0 (report 20261004_123719+0200-close-verify-cv2.md); stays in human_review because boxes 3 and 4 (no lock hold >= 1000 ms after deploy, project fills) were only ever true on the live collector; the owner confirms after the next deploy / push.
 
 ## ⏵ AI-REVIEW VERDICT 2026-09-23T12:55:59+0200 — APPROVE
 

@@ -3,7 +3,7 @@ trdd-id: C19SUVPH
 title: The ingest flood bench cannot send statusline POSTs so a load arm cannot vary statusline alone
 column: human_review
 created: 2026-09-23T19:14:50+0200
-updated: 2026-09-24T08:58:03+0200
+updated: 2026-10-04T12:47:42+0200
 current-owner: main-session
 created-by: main-session
 task-type: infra
@@ -74,3 +74,7 @@ Known limit: when --rate and --sessions are both given, --rate wins and --sessio
 ## Behaviour change for older recipes (9b599f21)
 
 Against fb61c4f4, each worker now fires at its stagger instead of one pace later, so a run delivers up to one more request per worker. Against HFV4AIT7-era runs (no stagger, no deadline cap) the count is the same or up to one fewer per worker, none land after the deadline, and elapsed equals --seconds instead of overrunning by up to one pace. underRate does not report the --sessions lane (targetReqPerSec is 0).
+
+## Notes
+
+2026-10-04: code and tests verified at HEAD 7dab99a0 (report 20261004_123622+0200-close-verify-cv4.md); stays in human_review because box 2 (rate flags agree with target counters over 5 min) was only ever true on an isolated collector run of 2026-09-23, and the dataDir refusal was never exercised; the owner confirms after the next deploy / push.

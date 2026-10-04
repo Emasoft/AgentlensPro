@@ -1,9 +1,9 @@
 ---
 trdd-id: 5PUD8RKE
 title: alcore's bodies chore drains only the legacy dir and would abandon the RAM spool
-column: human_review
+column: superseded
 created: 2026-08-27T20:31:38+0200
-updated: 2026-09-24T13:36:35+0200
+updated: 2026-10-04T12:41:20+0200
 current-owner: main
 task-type: bugfix
 severity: HIGH
@@ -13,6 +13,8 @@ relevant-rules: []
 created-by: TRDD-DMWOBWFH TS-core-to-Rust gap inventory (GAP-12)
 blocked-by: []
 implementation-commits: [d1e6e08d]
+status: archived
+superseded-by: [Z53IJFE9]
 ---
 
 ## ⏵ AI-REVIEW VERDICT 2026-09-05 — APPROVE. Ready for `human_review`; the USER makes that move.
@@ -133,6 +135,7 @@ backpressure cluster (`ensureRamDisk`/`ramDiskInfo`/`spoolSizeMb`, `applySpoolBa
 
 - 2026-09-24T08:57:33+0200 — column → human_review by main-session. AI review verified, evidence in reports/board-triage ai_review-A/B/C triage
 - 2026-09-24T08:57:49+0200 — main-session (board update A): moved ai_review -> human_review; AI review verified per reports/board-triage ai_review-A/B/C triage rows. In this project's mono-agent rule the session moves ai_review->human_review; the owner moves human_review->complete.
+- 2026-10-04T12:41:20+0200 — SUPERSEDED by main-agent@agentlenspro. Owner directive 2026-10-04 "complete all TRDDs!". Independent verification 20261004_123724+0200-close-verify-cv1.md, HEAD 7dab99a0: the spool-first drain, gauge and cap this card describes were deleted at HEAD by the work of Z53IJFE9 (commit f579942e); closing as complete would assert deleted behaviour..
 
 ## Notes and lessons learned
 

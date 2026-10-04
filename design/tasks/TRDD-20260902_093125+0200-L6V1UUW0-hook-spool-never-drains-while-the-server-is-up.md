@@ -3,7 +3,7 @@ trdd-id: L6V1UUW0
 title: The hook-spool never drains while the server is up, and every spooled hook spawns a doomed revive
 column: human_review
 created: 2026-09-02T09:31:25+0200
-updated: 2026-09-24T09:17:21+0200
+updated: 2026-10-04T12:47:01+0200
 current-owner: main-session
 task-type: bugfix
 priority: high
@@ -89,6 +89,7 @@ past the original backlog.
 
 - A field named `spooled` is a directory listing (`server_stats.rs:553`), not a counter — read the emitter
   before pairing a number with a mechanism.
+2026-10-04: code and tests verified at HEAD 7dab99a0 (report 20261004_123724+0200-close-verify-cv1.md); stays in human_review because box 4 (live: spooled reaches 0 without restart) was only ever true on the live collector, and the mocha hookSpool test for box 3 was not run; the owner confirms after the next deploy / push.
 
 ## Approval log
 

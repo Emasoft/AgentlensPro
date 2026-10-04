@@ -1,9 +1,9 @@
 ---
 trdd-id: KBK9J59Y
 title: A checkbox count cannot triage cards whose criteria are prose — print ticked beside open
-column: human_review
+column: complete
 created: 2026-09-04T18:19:29+0200
-updated: 2026-09-24T08:57:52+0200
+updated: 2026-10-04T12:40:48+0200
 current-owner: main-session
 task-type: audit
 project-id: agentlenspro
@@ -16,6 +16,7 @@ npt: []
 eht: []
 blocked-by: []
 related: [9SYRK6SW, CS2W7E77, HSPUF5XH]
+status: archived
 ---
 
 ## ⏵ AI-REVIEW VERDICT 2026-09-05 — APPROVE. Ready for `human_review`; the USER makes that move.
@@ -155,3 +156,4 @@ Out of scope, noted: `YBJGIYI1`'s Approval log says "Queued to `todo`, not start
 
 - 2026-09-24T08:57:35+0200 — column → human_review by main-session. AI review verified, evidence in reports/board-triage ai_review-A/B/C triage
 - 2026-09-24T08:57:49+0200 — main-session (board update A): moved ai_review -> human_review; AI review verified per reports/board-triage ai_review-A/B/C triage rows. In this project's mono-agent rule the session moves ai_review->human_review; the owner moves human_review->complete.
+- 2026-10-04T12:40:48+0200 — COMPLETE by main-agent@agentlenspro. Owner directive 2026-10-04 "complete all TRDDs!". Independent verification 20261004_123622+0200-close-verify-cv4.md, HEAD 7dab99a0: scripts/board-boxes.sh run exit 0, prints distinct NO BOXES and all WRITTEN boxes ticked labels; boxes 1 (per-card decisions) and 3 (dated counts) rest on recorded one-time evidence..

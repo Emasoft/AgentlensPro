@@ -4,7 +4,7 @@ title: agentlenspro <verb> --help prints the global usage for every management v
 column: backburner
 status: tasked
 created: 2026-09-24T19:17:48+0200
-updated: 2026-09-24T19:17:48+0200
+updated: 2026-10-04T12:46:32+0200
 current-owner: emanuelesabetta
 created-by: emanuelesabetta
 task-type: bugfix
@@ -15,6 +15,7 @@ mandated-by: none
 approved: true
 approval-judge: emanuelesabetta
 approval-datetime: 2026-09-24T19:17:48+0200
+implementation-commits: [3e5521ca]
 ---
 
 # agentlenspro <verb> --help prints the global usage for every management verb

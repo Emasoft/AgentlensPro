@@ -3,7 +3,7 @@ trdd-id: P08Q5TK1
 title: The RSS guard's culprit log prints a non-mimalloc lower bound from whole-process RSS
 column: backburner
 created: 2026-09-23T12:25:14+0200
-updated: 2026-09-23T12:25:29+0200
+updated: 2026-10-04T12:41:00+0200
 current-owner: main-session
 created-by: main-session
 task-type: bugfix
@@ -17,6 +17,7 @@ approval-datetime: 2026-09-23T12:25:14+0200
 project-id: agentlenspro
 scope: project
 related: [WKLD508O, 7RM5YW2T]
+implementation-commits: [ffc9840c]
 ---
 
 # The RSS guard's culprit log prints a non-mimalloc lower bound from whole-process RSS

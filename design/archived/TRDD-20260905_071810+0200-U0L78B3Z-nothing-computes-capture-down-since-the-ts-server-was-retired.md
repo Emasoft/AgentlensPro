@@ -1,9 +1,9 @@
 ---
 trdd-id: U0L78B3Z
 title: Nothing computes CAPTURE DOWN since the TS server was retired so the liveness clock ticks unread
-column: human_review
+column: complete
 created: 2026-09-05T07:18:10+0200
-updated: 2026-09-24T09:13:11+0200
+updated: 2026-10-04T12:40:30+0200
 current-owner: main-session
 task-type: bugfix
 priority: high
@@ -11,6 +11,7 @@ min-approval-requirement: none
 created-by: 8ADTIGKT
 related: [8ADTIGKT, 4FMHW124, 1B98LCVR, 5PUD8RKE, FGN5TY7E]
 implementation-commits: [a55074bd, 7659b9ca]
+status: archived
 ---
 
 # Nothing computes CAPTURE DOWN since the TS server was retired so the liveness clock ticks unread
@@ -271,6 +272,7 @@ spool sat 100% full for ~18h and 117 request bodies were written as ZERO BYTES.
 - 2026-09-24T08:57:37+0200 — column → human_review by main-session. AI review verified, evidence in reports/board-triage ai_review-A/B/C triage
 - 2026-09-24T08:57:49+0200 — main-session (board update A): moved ai_review -> human_review; AI review verified per reports/board-triage ai_review-A/B/C triage rows. In this project's mono-agent rule the session moves ai_review->human_review; the owner moves human_review->complete.
 2026-09-24T09:12:59+0200 — AI re-review at HEAD 954fe1a0: acceptance still holds — CAPTURE_ACTIVITY_WINDOW_MS, capture_down_since (server_stats.rs:519-540) and the bodies.captureDownSince splice (:676) are unchanged by 221705cb/e00af58b (those add unrelated OTLP-count fields to the same bodies object). cargo test -p agentlens-core --lib -- capture_down_since_fires_only_on_active_and_not_captured -> 1 passed; cargo test -p agentlens-core --test server_stats -> 3 passed.
+- 2026-10-04T12:40:30+0200 — COMPLETE by main-agent@agentlenspro. Owner directive 2026-10-04 "complete all TRDDs!". Independent verification 20261004_123724+0200-close-verify-cv1.md, HEAD 7dab99a0: lib capture_down_since ok 1 passed, server_stats ok 4 passed, wiring read at server_stats.rs and ui.rs; box 2 mutation claim and the earlier live curl rest on recorded one-time evidence..
 
 ## Notes and lessons learned
 

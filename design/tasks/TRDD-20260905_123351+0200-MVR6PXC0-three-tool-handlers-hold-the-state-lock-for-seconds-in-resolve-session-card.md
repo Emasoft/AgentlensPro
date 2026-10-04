@@ -3,7 +3,7 @@ trdd-id: MVR6PXC0
 title: Three MCP tool handlers hold the state lock for one to four seconds inside their per-candidate resolve_session_card closure
 column: human_review
 created: 2026-09-05T12:33:51+0200
-updated: 2026-09-24T09:13:11+0200
+updated: 2026-10-04T12:47:18+0200
 current-owner: main-session
 task-type: bugfix
 priority: high
@@ -142,6 +142,7 @@ three tools.
       carried the link, which a review fork correctly refused to count as "the box-3 note").
 
 ## Notes and lessons learned
+2026-10-04: code and tests verified at HEAD 7dab99a0 (report 20261004_123719+0200-close-verify-cv2.md); stays in human_review because box 2 (24-invocation recipe, no hold >= 1000 ms) was only ever true on the live collector; the owner confirms after the next deploy / push.
 
 ## Approval log
 

@@ -1,14 +1,16 @@
 ---
 trdd-id: ZW4APOPI
 title: alcore never drains the RAM-disk spool so it is 100 percent full and capture is silently losing bodies
-column: human_review
+column: superseded
 created: 2026-08-29T07:37:08+0200
-updated: 2026-09-24T13:36:36+0200
+updated: 2026-10-04T12:41:24+0200
 current-owner: claude-agentlenspro
 task-type: bugfix
 project-id: agentlenspro
 parent-trdd: YU8QPU89
 blocked-by: []
+status: archived
+superseded-by: [Z53IJFE9]
 ---
 
 # alcore never drains the RAM spool — it is full, and capture is losing data now
@@ -348,3 +350,4 @@ AI re-review at HEAD 3faa709c (2026-09-24T09:13:29+0200): acceptance still holds
 
 - 2026-09-24T08:57:39+0200 — column → human_review by main-session. AI review verified, evidence in reports/board-triage ai_review-A/B/C triage
 - 2026-09-24T08:57:49+0200 — main-session (board update A): moved ai_review -> human_review; AI review verified per reports/board-triage ai_review-A/B/C triage rows. In this project's mono-agent rule the session moves ai_review->human_review; the owner moves human_review->complete.
+- 2026-10-04T12:41:24+0200 — SUPERSEDED by main-agent@agentlenspro. Owner directive 2026-10-04 "complete all TRDDs!". Independent verification 20261004_123724+0200-close-verify-cv1.md, HEAD 7dab99a0: the spool-first drain, gauge and cap this card describes were deleted at HEAD by the work of Z53IJFE9 (commit f579942e)..

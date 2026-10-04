@@ -1,15 +1,16 @@
 ---
 trdd-id: X4YTS5BF
 title: The full mocha suite has 17 failures and only 7 of them belong to an open card
-column: human_review
+column: complete
 created: 2026-09-05T10:43:43+0200
-updated: 2026-09-24T08:57:55+0200
+updated: 2026-10-04T12:40:51+0200
 implementation-commits: [f3235678, 244fbfef]
 current-owner: main-session
 task-type: bugfix
 priority: high
 min-approval-requirement: none
 related: [B7DSTJLS, CS2W7E77, U0L78B3Z]
+status: archived
 ---
 
 # The full mocha suite has 17 failures and only 7 of them belong to an open card
@@ -136,5 +137,6 @@ Test-execution boxes (89/89, 2654/10/6, 5/5) were verified from saved report fil
   — those remain the worker's. Verdict is the session's from this line on.
 - 2026-09-24T08:57:38+0200 — column → human_review by main-session. AI review verified, evidence in reports/board-triage ai_review-A/B/C triage
 - 2026-09-24T08:57:49+0200 — main-session (board update A): moved ai_review -> human_review; AI review verified per reports/board-triage ai_review-A/B/C triage rows. In this project's mono-agent rule the session moves ai_review->human_review; the owner moves human_review->complete.
+- 2026-10-04T12:40:51+0200 — COMPLETE by main-agent@agentlenspro. Owner directive 2026-10-04 "complete all TRDDs!". Independent verification 20261004_123622+0200-close-verify-cv4.md, HEAD 7dab99a0: compile-tests exit 0; mocha grep rustIngest P3b, setup repair matrix, setup fail-fast: 11 passing (37s); box 4 (full-suite count 2654/10/6) rests on a recorded one-time report, full suite not rerun..
 
 ## Notes and lessons learned

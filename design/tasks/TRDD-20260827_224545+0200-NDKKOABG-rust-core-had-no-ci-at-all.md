@@ -3,7 +3,7 @@ trdd-id: NDKKOABG
 title: rust-core was never built or tested by CI — add the job, with caching
 column: human_review
 created: 2026-08-27T22:45:45+0200
-updated: 2026-09-24T08:57:53+0200
+updated: 2026-10-04T12:47:44+0200
 current-owner: main-session
 task-type: infra
 scope: project
@@ -180,3 +180,7 @@ python3 -c "import yaml; print(list(yaml.safe_load(open('.github/workflows/ci.ym
   ruleset, permission, or release behaviour changes.
 - 2026-09-24T08:57:36+0200 — column → human_review by main-session. AI review verified, evidence in reports/board-triage ai_review-A/B/C triage
 - 2026-09-24T08:57:49+0200 — main-session (board update A): moved ai_review -> human_review; AI review verified per reports/board-triage ai_review-A/B/C triage rows. In this project's mono-agent rule the session moves ai_review->human_review; the owner moves human_review->complete.
+
+## Notes
+
+2026-10-04: code and tests verified at HEAD 7dab99a0 (report 20261004_123602+0200-close-verify-cv3.md); stays in human_review because boxes 2 and 5 (rust CI job green, cold-cache fits the 40 min timeout) were only ever true on the remote CI at the older commit 3e294e16; the owner confirms after the next deploy / push.

@@ -1,9 +1,9 @@
 ---
 trdd-id: GG0WOHEV
 title: A background worker's open interval makes the review gate demand one fork per write-then-Stop cycle
-column: backburner
+column: superseded
 created: 2026-09-10T03:58:08+0200
-updated: 2026-09-10T04:24:02+0200
+updated: 2026-10-04T12:41:29+0200
 current-owner: main
 task-type: spike
 priority: low
@@ -17,6 +17,8 @@ blocked-by: []
 npt: []
 eht: []
 implementation-commits: []
+status: archived
+superseded-by: [A37YM37G]
 ---
 
 # A background worker's open interval makes the review gate demand one fork per write-then-Stop cycle
@@ -71,6 +73,7 @@ target.
 ## Approval log
 
 - (none)
+- 2026-10-04T12:41:29+0200 — SUPERSEDED by main-agent@agentlenspro. Owner directive 2026-10-04 "complete all TRDDs!". Independent verification 20261004_123622+0200-close-verify-cv4.md, HEAD 7dab99a0: the open-worker-interval gate mechanism its no-change decision was about was deleted (reviewGateEffects.ts removed in 268f3080); its parents are already superseded by A37YM37G..
 
 ## Notes and lessons learned
 

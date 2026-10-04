@@ -1,15 +1,16 @@
 ---
 trdd-id: YE15B2JK
 title: Claude Code now reports cache state in the statusline payload so cache-expired should read it instead of inferring
-column: human_review
+column: complete
 created: 2026-09-01T18:30:59+0200
-updated: 2026-09-24T09:17:21+0200
+updated: 2026-10-04T12:40:33+0200
 current-owner: main-session
 task-type: feature
 scope: project
 project-id: agentlenspro
 relevant-rules: []
 implementation-commits: [494eb779, 2d06942b]
+status: archived
 ---
 
 # Read the statusline's own cache fields instead of inferring expiry
@@ -86,6 +87,7 @@ Code is at 2.1.252 here. The field names in the directive are described, not quo
 - 2026-09-24T08:57:38+0200 — column → human_review by main-session. AI review verified, evidence in reports/board-triage ai_review-A/B/C triage
 - 2026-09-24T08:57:49+0200 — main-session (board update A): moved ai_review -> human_review; AI review verified per reports/board-triage ai_review-A/B/C triage rows. In this project's mono-agent rule the session moves ai_review->human_review; the owner moves human_review->complete.
 2026-09-24T09:17:06+0200 — AI re-review at HEAD 3faa709c: acceptance still holds — DCWJY2JJ's ad96a436/4c3480eb only touched cacheStateCli.ts's warm-bit tri-state handling; cacheExpiredCli.ts's own diff (ad96a436) is additive (tri-state type doc) and its commit message states cache-expired is unaffected, branching on expired never warm; npx mocha cacheExpiredAuthoritative.test.js 5/5 pass, verb behavior unchanged.
+- 2026-10-04T12:40:33+0200 — COMPLETE by main-agent@agentlenspro. Owner directive 2026-10-04 "complete all TRDDs!". Independent verification 20261004_123602+0200-close-verify-cv3.md, HEAD 7dab99a0: mocha grep cache-expired/cache-state 16 passing exit 0 (cacheExpiredAuthoritative 5 tests); box 1 (field names from a live row) rests on a one-time recorded live row, names re-verified in code at statuslineStore.ts GUARANTEED_COLUMNS..
 
 ## Notes and lessons learned
 

@@ -13,8 +13,8 @@
 // had (env override wins; then `<dataDir>/bin/<name>` for a locally-copied dev binary). A plain
 // `npm i -g agentlenspro` has neither of those — this is what lets it run the Rust binaries at
 // all. It is also the one that returns null instead of throwing: an unsupported platform, or a
-// dev checkout where CI has not staged `bin-native/`, must fall back to the TS server rather than
-// crash the CLI.
+// dev checkout where CI has not staged `bin-native/`, must yield null so the caller can report
+// "no server available" (there is no TS server to fall back to) rather than crash the CLI.
 //
 // win32-x64 is deliberately absent: rust-core/crates/agentlens-core/src/pid_lock.rs calls
 // `libc::kill`/`libc::EPERM` with no `#[cfg(unix)]` guard, so the crate does not build for

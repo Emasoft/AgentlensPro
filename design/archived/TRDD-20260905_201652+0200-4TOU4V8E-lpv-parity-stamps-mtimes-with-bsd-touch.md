@@ -1,9 +1,9 @@
 ---
 trdd-id: 4TOU4V8E
 title: lpv_parity stamps fixture mtimes through touch -d @epoch, which BSD touch rejects
-column: human_review
+column: complete
 created: 2026-09-05T20:16:52+0200
-updated: 2026-09-24T08:57:50+0200
+updated: 2026-10-04T12:40:32+0200
 current-owner: agentlenspro-b2
 task-type: bugfix
 min-approval-requirement: none
@@ -13,6 +13,7 @@ relevant-files: [rust-core/crates/agentlens-core/tests/lpv_parity.rs]
 labels: [rust-core, tests, portability]
 priority: high
 implementation-commits: [644a9113]
+status: archived
 ---
 
 # lpv_parity stamps fixture mtimes through `touch -d @epoch`, which BSD touch rejects
@@ -150,6 +151,7 @@ Owed runs 2026-09-23T13:16:38+0200: cargo test -p agentlens-core --test lpv_pari
   including doctests on a stock PATH.
 - 2026-09-24T08:57:33+0200 — column → human_review by main-session. AI review verified, evidence in reports/board-triage ai_review-A/B/C triage
 - 2026-09-24T08:57:49+0200 — main-session (board update A): moved ai_review -> human_review; AI review verified per reports/board-triage ai_review-A/B/C triage rows. In this project's mono-agent rule the session moves ai_review->human_review; the owner moves human_review->complete.
+- 2026-10-04T12:40:32+0200 — COMPLETE by main-agent@agentlenspro. Owner directive 2026-10-04 "complete all TRDDs!". Independent verification 20261004_123719+0200-close-verify-cv2.md, HEAD 7dab99a0: lpv_parity ok 10 passed; stamp_mtimes uses set_modified, no touch subprocess (tests/lpv_parity.rs:40); no box rests on recorded one-time evidence..
 
 ## AI-REVIEW VERDICT
 
