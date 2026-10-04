@@ -703,7 +703,11 @@ impl SpoolTap {
     /// in SQL with `date_diff('second', completed_at, get_current_timestamp())`, both absolute, so it is
     /// correct in any machine time zone and never compares against a Rust clock (`-` on two DOUBLE
     /// epochs or two TIMESTAMPTZ has no binder in this DuckDB build, so date_diff it is). Filtering in
-    /// SQL keeps the result to the rows due.
+    /// SQL does NOT bound the result: every complete row older than the retention is returned on every
+    /// tick, including rows whose file is already deleted, so the result grows with the ledger.
+    /// `date_diff('second', …)` counts second boundaries, so a file may be due up to one second early.
+    /// ponytail: unbounded per-tick result; upgrade path is a purged mark in the ledger, or an
+    /// anti-join against the done/ listing.
     fn complete_ledger(&self, min_age_s: u64) -> Result<HashSet<(String, String)>, String> {
         let mut cmd = Command::new(&self.aldigest_bin);
         cmd.arg("query").arg("--db").arg(&self.db).arg("--sql").arg(format!("SELECT spool, source_name FROM _ingest.files WHERE status = 'complete' AND date_diff('second', completed_at, get_current_timestamp()) >= {min_age_s}"));
