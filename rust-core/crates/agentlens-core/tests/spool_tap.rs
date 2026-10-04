@@ -488,6 +488,8 @@ fn t5_a_failing_tap_write_never_fails_the_capture_path() {
     std::fs::create_dir_all(data.join("ingest/inbox")).unwrap();
     std::fs::write(data.join("ingest/inbox/hook_session_end_v1"), "a file where the spool directory must go").unwrap();
     assert_eq!(s.post_ui("/api/hook-events", &session_end(1)), 200, "the capture path must not see the tap's failure");
+    // The tap write runs on the blocking pool, so its failure is counted a moment after the POST returns.
+    wait_for("the failed write to be counted", 30, || s.status()["writeErrors"] == 1);
     let st = s.status();
     assert_eq!(st["writeErrors"], 1, "{st}");
     assert_eq!(st["writeErrorsBySpool"]["hook_session_end_v1"], 1);
@@ -550,6 +552,8 @@ fn t8_the_legacy_statusline_route_spools_without_the_cli_keys() {
     let sub = json!({"hook_event_name": "SubagentStatusLineSample", "session_id": "aaaaaaaa-sl-5", "agent_id": "agent-aaaaaaaa"});
     assert_eq!(s.post_ui("/api/hook-events", &main.to_string()), 200);
     assert_eq!(s.post_ui("/api/hook-events", &sub.to_string()), 200);
+    // The tap writes run on the blocking pool, a moment after the POSTs return.
+    wait_for("both status-line writes", 30, || s.status()["linesWritten"] == 2);
     let st = s.status();
     assert_eq!((written(&st, "statusline_main"), written(&st, "statusline_subagent")), (1, 1), "{st}");
     let m: Value = serde_json::from_str(payload_text(&spool_lines(&data, "statusline_main")[0])).unwrap();
@@ -582,6 +586,7 @@ fn t10_the_tap_inherits_the_capture_switch() {
     assert_eq!(status, 200);
     assert!(body.contains("captureEnabled=false"), "the gate did not drop the event: {body}");
     assert_eq!(s.post_ui("/api/statusline-samples", &statusline_main(1)), 200);
+    wait_for("the status-line write", 30, || s.status()["linesWritten"] == 1);
     let st = s.status();
     assert_eq!((written(&st, "hook_session_end_v1"), written(&st, "statusline_main")), (0, 1), "{st}");
 }
@@ -651,4 +656,31 @@ fn t13_bodies_are_off_by_default() {
         .stdin(Stdio::null()).output().unwrap();
     assert_eq!(bad.status.code(), Some(64));
     assert!(String::from_utf8_lossy(&bad.stderr).contains("unknown source \"nonsense\""));
+}
+
+
+/// 14. A tap write blocked on a spool file lock (another process holds `current.ndjson`) never delays a POST: hook and status-line writes run off the request path, and once the lock is released the queued lines reach the table.
+#[test]
+fn t14_a_blocked_spool_lock_never_stalls_the_capture_path() {
+    let data = scratch("t14-data");
+    let s = launch("t14", &data, &tap_args(Some(3)));
+    wait_for("the start-up collect", 90, || s.status()["lastCollect"]["exit"] == 0);
+    let dir = data.join("ingest/inbox/hook_session_end_v1");
+    std::fs::create_dir_all(&dir).unwrap();
+    let held = std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(dir.join("current.ndjson")).unwrap();
+    held.lock_exclusive().unwrap();
+    let t0 = Instant::now();
+    for n in 1..=3 {
+        assert_eq!(s.post_ui("/api/hook-events", &session_end(n)), 200);
+    }
+    assert_eq!(s.post_ui("/api/statusline-samples", &statusline_main(1)), 200);
+    assert!(t0.elapsed() < Duration::from_secs(2), "the POSTs waited {:?} on the spool lock", t0.elapsed());
+    held.unlock().unwrap();
+    drop(held);
+    wait_for("the 4 queued writes", 30, || s.status()["linesWritten"] == 4);
+    let first = wait_collected(&s, now_ms());
+    // A tick that sealed before the lines landed collects nothing of them: the next tick does.
+    wait_collected(&s, first["atMs"].as_u64().unwrap());
+    let _lock = hold_collect_lock(&data);
+    assert_eq!(rows(&data.join("ingest/events.duckdb"), "hook_session_end_v1").len(), 3);
 }

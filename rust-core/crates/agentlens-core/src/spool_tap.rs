@@ -16,7 +16,11 @@
 //! ERROR POLICY. A tap write that fails does NOT fail or delay the capture path that called it: it is
 //! counted, and logged at most once a minute per spool. This is the ONE place an error is not
 //! propagated, because during the transition the existing stores remain the system of record and the
-//! digest copy must never be able to take capture down.
+//! digest copy must never be able to take capture down. For the same reason every hook, status-line
+//! and OTLP write runs on the blocking pool, outside the global state lock its caller holds (see
+//! `off_request_path`): a spool file lock held by another process stalls only that write. The price
+//! is that a write queued but not yet started at shutdown is lost from the spool, not from the
+//! existing stores.
 //!
 //! SCHEDULE. `seal_and_collect` runs every `interval` (chores.rs): it seals every spool, then runs
 //! `aldigest collect` as a CHILD process (one collect can reach ~730 MiB RSS; alcore is capped at
@@ -318,20 +322,40 @@ impl SpoolTap {
         self.sources.iter().any(|s| s == source)
     }
 
-    pub fn hook(&self, event: &str, raw: &[u8]) {
+    /// Runs `work` on the blocking pool so the caller (which holds the global state lock) never waits
+    /// on a spool file lock; outside a tokio runtime (a unit test) it runs inline.
+    /// Every tap write (hook, status line, OTLP) runs on the blocking pool, off the request path and
+    /// outside the global state lock the callers hold: a spool file lock held by another process
+    /// stalls only that write, never a POST or a chore (ERROR POLICY: the tap must not delay capture).
+    /// At shutdown a write queued but not yet started on the pool can be lost from the spool (the
+    /// existing stores still have the item). Outside a tokio runtime (a unit test) it runs inline.
+    fn off_request_path(self: &Arc<Self>, work: impl FnOnce(&SpoolTap) + Send + 'static) {
+        if tokio::runtime::Handle::try_current().is_ok() {
+            let tap = Arc::clone(self);
+            // ponytail: unbounded queue of detached writers; see otlp.
+            tokio::task::spawn_blocking(move || work(&tap));
+        } else {
+            work(self);
+        }
+    }
+
+    pub fn hook(self: &Arc<Self>, event: &str, raw: &[u8]) {
         if !self.wants("hooks") {
             return;
         }
         let topic = snake_case(event);
         match self.spool_of("hook", &topic) {
-            Some(spool) => self.write(spool, &[raw]),
+            Some(spool) => {
+                let (spool, raw) = (spool.to_owned(), raw.to_vec());
+                self.off_request_path(move |tap| tap.write(&spool, &[&raw]));
+            }
             None => self.note_unknown([(format!("hook/{topic}"), 1)]),
         }
     }
 
     /// A status-line sample without the two keys the CLI adds. Re-serialised (a key is dropped), but
     /// each value is written with its own `to_string`, so nothing is cloned.
-    pub fn statusline(&self, payload: &Map<String, Value>, stream: &str) {
+    pub fn statusline(self: &Arc<Self>, payload: &Map<String, Value>, stream: &str) {
         if !self.wants("statusline") {
             return;
         }
@@ -350,7 +374,7 @@ impl SpoolTap {
             line.push_str(&v.to_string());
         }
         line.push('}');
-        self.write(spool, &[line.as_bytes()]);
+        self.off_request_path(move |tap| tap.write(spool, &[line.as_bytes()]));
     }
 
     /// One line per log record / span of a parsed OTLP POST. Called by the OTLP handler BEFORE
