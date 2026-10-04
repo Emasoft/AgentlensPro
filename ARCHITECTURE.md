@@ -508,7 +508,7 @@ record during the transition. It is built from two crates and an opt-in tap in `
 ```mermaid
 flowchart LR
     P[alcore tap: hook events, status line, telemetry events, spans] --> I["ingest/inbox/&lt;spool&gt;/current.ndjson"]
-    I -- "seal at 4 MiB, 60 s tick" --> R["ingest/ready/&lt;spool&gt;/"]
+    I -- "seal at 4 MiB, or 60 s tick (tap only)" --> R["ingest/ready/&lt;spool&gt;/"]
     R -- "aldigest collect, one transaction per file" --> D[("ingest/events.duckdb")]
     R --> DONE[done/ or failed/]
 ```
@@ -536,8 +536,15 @@ flowchart LR
   `alcore` writes each received hook event, status-line sample, telemetry event and span as a spool line
   next to the existing stores, and every 60 s seals and runs `aldigest collect` as a child process
   (`--max-files 10` per process, because one collect process grows with every committed body file — 65 to
-  687 MiB over 72 files, DuckDB itself). A failed tap write is counted and never fails the capture path; every tap write runs off the
-  request path, outside alcore's state lock.
+  687 MiB over 72 files, DuckDB itself). A failed tap write is counted and never fails the capture path. Hook, status-line and OTLP lines
+  are queued to one writer thread, so a caller (which may hold alcore's state lock) never waits and
+  arrival order is kept. The queue is bounded (4096 batches, 64 MiB); a refused batch is dropped from the
+  spool only (the existing stores still have it) and counted in `/api/ingest-status` (`droppedQueueFull`,
+  `writerDead`). API body lines, when enabled, are written by the bodies pass itself. `ts_ns` is stamped
+  when the line is written, so under a backlog it lags the moment of receipt.
+- **After a collect.** The tap runs `aldigest views` once per process. `done/` files are kept forever
+  unless `ALCORE_INGEST_DONE_RETENTION_SECS` is set; then a file is deleted only when the ledger lists it
+  complete and that old. `failed/` is never deleted.
 - **API bodies are off by default.** Estimated from measured ratios over seven days, the new path would
   cost about 22.6 GB per median day for bodies (6.8 GB of spool plus 15.8 GB of database growth, because
   the typed tables store each request's message history again without de-duplication), against about

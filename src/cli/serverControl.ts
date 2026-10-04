@@ -171,11 +171,11 @@ export function ingestArgs(env: NodeJS.ProcessEnv, alcore: string | null): strin
     return []
   }
   const args = ['--ingest-manifest', manifest, '--aldigest-bin', aldigest]
-  const sources = env.AGENTLENS_INGEST_SOURCES?.trim()
-  if (sources) {
-    const names = sources.split(',').map((s) => s.trim())
-    if (names.every((n) => INGEST_SOURCE_NAMES.includes(n))) args.push('--ingest-sources', sources)
-    else warnOnce(`warning: AGENTLENS_INGEST_SOURCES=${JSON.stringify(sources)} is invalid; not passing --ingest-sources (valid names: ${INGEST_SOURCE_NAMES.join(', ')})\n`)
+  // Split, trim, drop empty items: " " or "hooks,,spans" must never reach alcore malformed; an empty list is unset.
+  const names = (env.AGENTLENS_INGEST_SOURCES ?? '').split(',').map((s) => s.trim()).filter(Boolean)
+  if (names.length) {
+    if (names.every((n) => INGEST_SOURCE_NAMES.includes(n))) args.push('--ingest-sources', names.join(','))
+    else warnOnce(`warning: AGENTLENS_INGEST_SOURCES=${JSON.stringify(env.AGENTLENS_INGEST_SOURCES)} is invalid; not passing --ingest-sources (valid names: ${INGEST_SOURCE_NAMES.join(', ')})\n`)
   }
   return args
 }

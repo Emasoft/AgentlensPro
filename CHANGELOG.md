@@ -19,7 +19,9 @@ All notable changes to AgentlensPro are documented here.
   `collect [--max-files]`, `views`) and `alspool` (`append [--seal-bytes]`, `seal`). Opt in from the CLI
   with `AGENTLENS_INGEST=on` (sources: `AGENTLENS_INGEST_SOURCES`; binary and manifest overrides:
   `AGENTLENS_ALDIGEST_BIN`, `AGENTLENS_INGEST_MANIFEST`). Not enabled by default and not yet packaged
-  with the npm tarball.
+  with the npm tarball. After a collect the tap runs `aldigest views` once per process, and
+  `ALCORE_INGEST_DONE_RETENTION_SECS` (off by default) deletes loaded `done/` files that the ledger lists
+  as complete and that old.
 
 ### Changed
 

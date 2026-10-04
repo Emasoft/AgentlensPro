@@ -46,7 +46,7 @@ suite('ingest opt-in', () => {
     assert.strictEqual(valueOf(a, '--aldigest-bin'), bin)
     assert.strictEqual(valueOf(a, '--ingest-sources'), undefined)
     const b = alcoreServeArgs({ ...env, AGENTLENS_INGEST_SOURCES: 'hooks, spans' }, dir)
-    assert.strictEqual(valueOf(b, '--ingest-sources'), 'hooks, spans')
+    assert.strictEqual(valueOf(b, '--ingest-sources'), 'hooks,spans', 'items are trimmed and rejoined')
   })
 
   test('on but aldigest missing: unchanged argument list plus one stderr warning naming it', () => {
@@ -100,7 +100,7 @@ suite('ingest opt-in', () => {
     const bin = exe(path.join(tmp, 'b7', 'aldigest'))
     const man = file(path.join(tmp, 'm7', 'manifest.json'))
     const env = { ...ON, AGENTLENS_ALDIGEST_BIN: bin, AGENTLENS_INGEST_MANIFEST: man }
-    for (const bad of ['otel,logs', 'hooks,,spans', ',']) {
+    for (const bad of ['otel,logs', 'hooks,otel']) {
       resetIngestWarnings()
       const { result, err } = captureStderr(() => alcoreServeArgs({ ...env, AGENTLENS_INGEST_SOURCES: bad }, path.join(tmp, 'd7')))
       assert.strictEqual(valueOf(result, '--ingest-sources'), undefined)
@@ -110,6 +110,23 @@ suite('ingest opt-in', () => {
     }
     const ok = alcoreServeArgs({ ...env, AGENTLENS_INGEST_SOURCES: 'statusline,bodies' }, path.join(tmp, 'd7'))
     assert.strictEqual(valueOf(ok, '--ingest-sources'), 'statusline,bodies')
+  })
+
+  test('AGENTLENS_INGEST_SOURCES: empty items are dropped; an all-empty value is unset, with no warning', () => {
+    const bin = exe(path.join(tmp, 'b10', 'aldigest'))
+    const man = file(path.join(tmp, 'm10', 'manifest.json'))
+    const env = { ...ON, AGENTLENS_ALDIGEST_BIN: bin, AGENTLENS_INGEST_MANIFEST: man }
+    const dir = path.join(tmp, 'd10')
+    const run = (v: string): { result: string[]; err: string } => captureStderr(() => alcoreServeArgs({ ...env, AGENTLENS_INGEST_SOURCES: v }, dir))
+    const a = run('hooks,,spans')
+    assert.strictEqual(valueOf(a.result, '--ingest-sources'), 'hooks,spans')
+    assert.strictEqual(a.err, '')
+    for (const empty of [' ', ',', ' , ,']) {
+      const r = run(empty)
+      assert.strictEqual(valueOf(r.result, '--ingest-sources'), undefined, JSON.stringify(empty))
+      assert.strictEqual(valueOf(r.result, '--aldigest-bin'), bin)
+      assert.strictEqual(r.err, '')
+    }
   })
 
   test('a warning prints once per process: two calls, one line', () => {
