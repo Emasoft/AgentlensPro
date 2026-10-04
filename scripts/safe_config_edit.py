@@ -642,12 +642,21 @@ def transact_toml(target, ops, create_if_missing, do_backup):
         raise Refused(f"{target} exists but is not valid TOML ({e}). REFUSING to touch it.")
 
     lines = raw.split("\n") if raw is not None else []
-    eol_cr = "\r" if raw is not None and "\r\n" in raw else ""
+    file_cr = "\r" if raw is not None and "\r\n" in raw else ""
+
+    def own_eol(lo, hi):
+        # WHY per line, not per file: a file may mix LF and CRLF lines. A file-wide flag stamped CR on
+        # every written line and made an op line compare unequal to its own LF copy (rewritten, or
+        # appended twice). Endings come from the neighbouring line instead; the last element of the
+        # split has no "\n" after it, so it carries no ending evidence. No evidence: the file-wide flag.
+        for i in range(min(hi, len(lines) - 1) - 1, lo - 1, -1):
+            if lines[i].strip():
+                return "\r" if lines[i].endswith("\r") else ""
+        return file_cr
+
     changed = False
     for op in ops:
-        # A CRLF file split on "\n" keeps a trailing "\r" on every line; an op line without one would be
-        # written LF-only (mixed endings) and would never compare equal to the file's own copy of it.
-        section, prefix, line = op["section"], op["key_prefix"], op["line"] + eol_cr
+        section, prefix, bare = op["section"], op["key_prefix"], op["line"]
         # TRDD-CODXTOML1: the key may already exist as an explicit sub-table header
         # ([otel.exporter.otlp-http]) rather than an inline line in the section body. The line
         # scan below cannot see that form — a header line TERMINATES the body range — and
@@ -663,11 +672,12 @@ def transact_toml(target, ops, create_if_missing, do_backup):
         if idx == -1:
             if key_in_tree:
                 continue  # section exists only via sub-table headers and already carries the key
+            eol = own_eol(0, len(lines))
             if lines and lines[-1].strip():
-                lines.append(eol_cr)
+                lines.append(eol)
             elif lines and lines[-1] == "":
-                lines[-1] = eol_cr  # the blank separator after a trailing newline must be CRLF too
-            lines.extend([header + eol_cr, line])
+                lines[-1] = eol  # the blank separator after a trailing newline takes the same ending
+            lines.extend([header + eol, bare + eol])
             changed = True
             continue
         end = next(
@@ -679,13 +689,14 @@ def transact_toml(target, ops, create_if_missing, do_backup):
             (i for i in range(idx + 1, end) if lines[i].strip().startswith(prefix)), -1
         )
         if existing != -1:
-            if lines[existing] != line:
-                lines[existing] = line
+            have = lines[existing]
+            if have.rstrip("\r") != bare:  # compare without the line's own ending
+                lines[existing] = bare + ("\r" if have.endswith("\r") else "")
                 changed = True
         else:
             if key_in_tree:
                 continue  # present as a sub-table form the line scan cannot express — skip
-            lines.insert(idx + 1, line)
+            lines.insert(idx + 1, bare + own_eol(idx, end))
             changed = True
 
     if not changed:

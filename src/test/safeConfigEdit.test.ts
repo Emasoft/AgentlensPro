@@ -449,6 +449,28 @@ suite('safe_config_edit.py — transactional config editor', () => {
     assert.strictEqual(fs.readFileSync(toml, 'utf-8'), '[profile]\r\nname = "u"\r\n\r\n[otel]\r\nlevel = 1\r\n\r\n[extra]\r\nk = 2\r\n')
   })
 
+  // Mixed endings: a file-wide CRLF flag used to stamp CR on every written line and made an op line
+  // compare unequal to its own LF copy. Endings are decided per line.
+  test('TOML mode: a mixed-ending file with the op line already present (LF copy) is left byte-identical', function () {
+    needPy311(this)
+    const toml = path.join(dir, 'config.toml')
+    const mixed = '[profile]\r\nname = "u"\r\n\r\n[otel]\nlevel = 1\n[other]\r\nk = 1\r\n'
+    fs.writeFileSync(toml, mixed)
+    const r = tomlEdit(toml, 1)
+    assert.strictEqual(r.status, 0, r.stderr)
+    assert.strictEqual(fs.readFileSync(toml, 'utf-8'), mixed)
+    assert.deepStrictEqual(fs.readdirSync(dir).filter(f => f.startsWith('config.toml.agentlens-bak-')), [])
+  })
+
+  test('TOML mode: a replaced line keeps its own ending in a mixed-ending file', function () {
+    needPy311(this)
+    const toml = path.join(dir, 'config.toml')
+    fs.writeFileSync(toml, '[profile]\r\nname = "u"\r\n\r\n[otel]\nlevel = 0\n[other]\r\nk = 1\r\n')
+    const r = tomlEdit(toml, 2)
+    assert.strictEqual(r.status, 0, r.stderr)
+    assert.strictEqual(fs.readFileSync(toml, 'utf-8'), '[profile]\r\nname = "u"\r\n\r\n[otel]\nlevel = 2\n[other]\r\nk = 1\r\n')
+  })
+
   test('TOML mode: first creation of a missing file succeeds with the private 0600 mode, as the JSON path', function () {
     needPy311(this)
     const toml = path.join(dir, 'new.toml')

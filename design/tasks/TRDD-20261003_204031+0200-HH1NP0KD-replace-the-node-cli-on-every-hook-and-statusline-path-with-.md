@@ -4,7 +4,7 @@ title: Replace the Node CLI on every hook and statusline path with small dedicat
 column: design
 status: tasked
 created: 2026-10-03T20:40:31+0200
-updated: 2026-10-04T08:12:12+0200
+updated: 2026-10-04T14:11:34+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: refactor
@@ -56,6 +56,7 @@ review-supervisor matches the literal command string "agentlenspro review-gate" 
 - (c) Per-verb binaries.
 - (d) DuckDB-linked client via Quack vs std-only HTTP client.
 - Size (worst case, inferred from alstore at 39.9 MB / 11.8 MB gzipped; a minimal DuckDB-only client is unmeasured; only strip -S was measured, saving 0 bytes): five separate DuckDB-linked binaries x 4 platforms would add about 240 MB gzipped. A hook client built into an already DuckDB-linked binary should add little (unmeasured). Pending: whether Quack can be statically linked in the bundled build or must be downloaded at runtime (a runtime download is unacceptable on a hook path).
+- 2026-10-04 bench (load avg 55-112): alspool append CPU 4.24 ms median (p95 4.91, max 5.65), wall 11.7 ms median under load; 66 concurrent writers, 1980/1980 events written, 0 torn, 0 errors; node -e '' CPU 105 ms, node cli.js --version CPU 235 ms; alspool 512 KB release vs cli.js 699 KB. Report: reports/ingest-redesign/20261004_141111+0200-hook-transport-bench.md
 
 ## Scope notes
 
