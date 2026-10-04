@@ -1,0 +1,24 @@
+# agentlens-spool — the spool writer (`alspool append|seal`, TRDD-LHCHVK9Z). It never links
+# DuckDB: a producer's hot path is one tiny process that only touches the filesystem.
+[package]
+name = "agentlens-spool"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+# The only tests are tests/spool.rs (they drive the real `alspool` binary).
+[lib]
+test = false
+doctest = false
+
+[dependencies]
+# Kernel flock: released on ANY process death (SIGKILL included), so a killed writer can never
+# leave a stale lock behind.
+fs2 = "0.4"
+# raw_value: syntax-check the payload without re-serialising it.
+serde_json = { version = "1", features = ["raw_value"] }
+
+[[bin]]
+name = "alspool"
+path = "src/bin/alspool.rs"
+test = false
