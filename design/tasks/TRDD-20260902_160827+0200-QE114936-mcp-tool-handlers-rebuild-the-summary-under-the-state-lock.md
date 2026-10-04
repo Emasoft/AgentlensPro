@@ -3,7 +3,7 @@ trdd-id: QE114936
 title: Twenty MCP tool handlers still rebuild the session summary under the state lock
 column: human_review
 created: 2026-09-02T16:08:27+0200
-updated: 2026-09-24T09:13:11+0200
+updated: 2026-10-04T12:53:34+0200
 current-owner: main-session
 task-type: bugfix
 priority: high
@@ -44,6 +44,7 @@ is what settles that.
 - 2026-09-24T08:57:37+0200 — column → human_review by main-session. AI review verified, evidence in reports/board-triage ai_review-A/B/C triage
 - 2026-09-24T08:57:49+0200 — main-session (board update A): moved ai_review -> human_review; AI review verified per reports/board-triage ai_review-A/B/C triage rows. In this project's mono-agent rule the session moves ai_review->human_review; the owner moves human_review->complete.
 2026-09-24T09:12:59+0200 — AI re-review at HEAD 954fe1a0: acceptance still holds — grep -c 'st.build_session_summary(' ui.rs is 0; the three guard tests (mcp_handlers_never_rebuild_the_summary_under_the_lock, no_new_core_state_method_wraps_a_summary_rebuild, no_other_file_rebuilds_the_summary_from_a_caller_holding_the_lock) still exist at ui.rs:4485/4508/4531 and pass: cargo test -p agentlens-core --lib -- <the three names> -> 3 passed, 0 failed.
+- 2026-10-04 — main-agent@agentlenspro: box 3 is delegated to MVR6PXC0, which stays in human_review awaiting the owner's live confirmation; box 3 is NOT ticked and this card waits on MVR6PXC0.
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-05T12:33:51+0200
 

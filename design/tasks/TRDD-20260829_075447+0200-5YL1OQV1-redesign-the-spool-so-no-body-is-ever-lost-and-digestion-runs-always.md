@@ -3,13 +3,13 @@ trdd-id: 5YL1OQV1
 title: Redesign the spool so no body is ever lost and digestion runs continuously in the background
 column: design
 created: 2026-08-29T07:54:47+0200
-updated: 2026-09-24T13:36:31+0200
+updated: 2026-10-04T12:54:30+0200
 current-owner: claude-agentlenspro
 task-type: refactor
 project-id: agentlenspro
 parent-trdd: DMWOBWFH
-npt: [ZW4APOPI]
-blocked-by: [ZW4APOPI]
+npt: []
+blocked-by: []
 ---
 
 # Redesign the spool — no loss, ever; continuous background digestion
@@ -36,6 +36,7 @@ totals matched, which is not a checksum — `du` reports allocated blocks, so on
 nearly a tautology. `cp -a` is very likely exact; it was not proven.) **That was a manual recovery
 of a symptom; this card is the cause.**
 2026-09-24 — proposed superseded by TRDD-Z53IJFE9 (owner directive 2026-09-24); the column move is the owner's.
+2026-10-04 — main-agent@agentlenspro: blocked-by ZW4APOPI cleared. ZW4APOPI is superseded by Z53IJFE9, which already deleted the RAM-disk spool this redesign would have rebuilt, so nothing is left for this card to start after it; the card's own disposition (supersede by Z53IJFE9) stays the owner's move.
 
 ## The constraint that makes this hard — state it before proposing anything
 

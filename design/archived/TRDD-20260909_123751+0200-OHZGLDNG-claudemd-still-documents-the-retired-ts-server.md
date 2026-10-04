@@ -1,9 +1,9 @@
 ---
 trdd-id: OHZGLDNG
 title: CLAUDE.md still documents the TypeScript server retired in 567fc5c2
-column: human_review
+column: complete
 created: 2026-09-09T12:37:51+0200
-updated: 2026-10-04T12:46:57+0200
+updated: 2026-10-04T12:53:30+0200
 current-owner: main
 task-type: docs
 min-approval-requirement: none
@@ -13,9 +13,10 @@ labels: [docs, claude-md, alcore, stale-doctrine]
 blocked-by: []
 npt: []
 eht: []
-implementation-commits: []
+implementation-commits: [e07dc2ae]
 relevant-rules: []
 related: [4EV3OJ19, 5JZQFVO8, 1B98LCVR]
+status: archived
 ---
 
 ## Why
@@ -87,6 +88,11 @@ line 270 goes looking for the guard in a file that has not existed for eight day
 Filed at `todo` like the two sibling cards of 2026-09-09 (Tier-0 docs work that should drain),
 not `backburner`. The CLAUDE.md working copy is currently modified by the janitor's wikimem
 index regeneration; the fix is made on top of that, never by reverting it.
+- [x] 1. no standalone/server.ts in CLAUDE.md, esbuild.js has 3 entryPoints (verified 2026-10-04: grep -c 0, entryPoints count 3)
+- [x] 2. sql.js line rewritten to name src/logReader.ts (verified by cv3 2026-10-04)
+- [x] 3. no-binary behaviour and pid_lock.rs named, no 'fall back to the TS server' left in CLAUDE.md (verified by cv3 2026-10-04: CLAUDE.md:272)
+- [x] 4. src/rustBinResolve.ts comment fixed (verified 2026-10-04: line 17 now reads 'there is no TS server to fall back to'; committed e07dc2ae)
+- [x] 5. pnpm run check-identities exit 0 (re-run 2026-10-04: OK)
 
 ## Notes and lessons learned
 Fixed 2026-09-23: (1) L133 - 'standalone/server.ts + standalone/cli.ts -> standalone/*.js, 4 targets' -> item 3 now says standalone/cli.ts is the only TS entrypoint, server is alcore (rust-core), retired in 567fc5c2; esbuild target count corrected to 3 (verified: esbuild.js entryPoints at lines 28,43,56). (2) L135 - '/api/* shim on standalone/server.ts' -> alcore serves /api/* + dashboard directly (rust-core/crates/agentlens-core/src/ui.rs). (3) L151 - 'standalone server resolves sql.js' -> src/logReader.ts resolves sql.js via injected sqlFactory as a JS-path fallback; production OpenCode ingestion runs through the Rust engine rustParseOpenCodeSync (rust-core/crates/agentlens-logscan/src/opencode.rs), verified via grep: no require.resolve('sql.js') survives in standalone/cli.ts, only in src/logReader.ts and src/forensicsDb.ts (forensics.db, unrelated to OpenCode ingestion). (4) L257 (was 247-248) - 'rustBinResolve falls back to the TS server' -> npmPlatformBin returns null, serverControl.ts alcoreBin turns that into noServerAvailableError, no TS fallback exists (verified: src/rustBinResolve.ts:38-46,55-63, src/cli/serverControl.ts:32-36,103-133). (5) L270 (was 262) - 'guard in standalone/server.ts' -> guard is rust-core/crates/agentlens-core/src/pid_lock.rs claim/release (verified: fn signatures at claim():59, release():121, atomic_exclusive_write():15, doctrine of atomic-create/stale-lock-takeover/ownership-checked-release confirmed against the code). (6) L312 (was 303-304) - 'rustBinResolve would fall back to the TS server silently' -> reworded to name noServerAvailableError, no silent TS fallback. Acceptance items 1-4 satisfied; item 5 (check-no-identities) verified exit 0. All edits made via fastedit edit --replace on markdown headings (Architecture / Gotchas / DISTRIBUTION vs DEVELOPMENT / Operations); fastedit diff confirmed each change against git HEAD is a clean single-sentence replace with nothing else altered. One self-caught defect during editing: a --replace on the Architecture heading initially omitted the 'Dual ingestion -> SQLite' subsection from the snippet, which fastedit interpreted as a deletion of that subsection; caught via git diff review and restored verbatim in a follow-up edit. Out of scope per orchestrator's hard limits (touch only CLAUDE.md + this card): src/rustBinResolve.ts:15-17's own comment ('must fall back to the TS server rather than crash the CLI') is still stale and should be fixed in a follow-up touching that source file.
@@ -100,6 +106,7 @@ Round 3 (2026-09-23): (a) fixed L143 and L145 in the Dual ingestion section — 
 - 2026-09-23T06:05:45+0200 — column → ai_review by main. CLAUDE.md stale-TS-server sentences fixed via fastedit, verified with fastedit diff + git diff; check-no-identities exit 0
 - 2026-09-24T08:57:37+0200 — column → human_review by main-session. AI review verified, evidence in reports/board-triage ai_review-A/B/C triage
 - 2026-09-24T08:57:49+0200 — main-session (board update A): moved ai_review -> human_review; AI review verified per reports/board-triage ai_review-A/B/C triage rows. In this project's mono-agent rule the session moves ai_review->human_review; the owner moves human_review->complete.
+- 2026-10-04T12:53:30+0200 — COMPLETE by main-agent@agentlenspro. Owner directive 2026-10-04 "complete all TRDDs!". Independent verification docs_dev/20261004_123602+0200-close-verify-cv3.md, HEAD 8b9e9637: boxes 1-3 verified in CLAUDE.md/esbuild.js, box 4 comment fixed in src/rustBinResolve.ts (committed e07dc2ae, grep confirms no fallback claim), box 5 check-identities re-run exit 0..
 
 ## ⏵ AI-REVIEW VERDICT 2026-09-23T13:00:09+0200 — APPROVE
 

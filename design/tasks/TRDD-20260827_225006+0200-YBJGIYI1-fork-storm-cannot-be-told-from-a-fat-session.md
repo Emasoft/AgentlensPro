@@ -3,7 +3,7 @@ trdd-id: YBJGIYI1
 title: FORK_STORM cannot be distinguished from one fat session rewriting its own prefix
 column: human_review
 created: 2026-08-27T22:50:06+0200
-updated: 2026-09-24T09:07:59+0200
+updated: 2026-10-04T12:50:47+0200
 current-owner: claude-session-2026-09-02
 task-type: bugfix
 scope: project
@@ -235,3 +235,10 @@ never gates on it. Scoping: `reports/fork-storm-discrimination/20260901_225709+0
 Full report: `reports/ai-review/20260905_142355+0200-YBJGIYI1.md`
 
 **Verdict: REJECT — STATE block asserts "burnscan_parity 9/9" as a verified gate for commit 06649a73, but its own cited report declines to claim this and git history (532baacb, same day) shows it was actually red 6/9 at that point; correct the claim before re-submitting to human_review.**
+
+## Acceptance
+
+- [x] 1. FORK_STORM gate needs session id on request record and biggest_fam_sessions >= 2 (verified: burn/investigator.rs:128,163, FAT_SESSION_REWRITES fallback; cv1 2026-10-04)
+- [x] 2. two sessions give FORK_STORM, one gives FAT_SESSION_REWRITES, none gives FAT (verified: lib fork_storm_discriminator ok. 3 passed)
+- [x] 3. burnscan_parity passes (verified: ok. 9 passed)
+- [ ] 4. mutation of the gate fails 2 of 3 tests (NOT re-run by the verifier: rests on the card's own 2026-09-24 record, mutation reruns not run)

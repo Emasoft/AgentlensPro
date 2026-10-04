@@ -3,7 +3,7 @@ trdd-id: 2C23ROPZ
 title: rust-core debug builds are the host's dominant disk writer — bound the dev profile
 column: human_review
 created: 2026-09-01T22:05:22+0200
-updated: 2026-09-24T08:58:06+0200
+updated: 2026-10-04T12:51:02+0200
 current-owner: agentlenspro-15
 task-type: infra
 external-refs: [https://github.com/Emasoft/AgentlensPro/issues/18]
@@ -156,3 +156,11 @@ logscan 73 · ingest 70 · libduckdb-sys 18; `build/libduckdb-sys-*`: four dirs 
 
 - 2026-09-24T08:57:32+0200 — column → human_review by main-session. AI review verified, evidence in reports/board-triage ai_review-A/B/C triage
 - 2026-09-24T08:57:49+0200 — main-session (board update A): moved ai_review -> human_review; AI review verified per reports/board-triage ai_review-A/B/C triage rows. In this project's mono-agent rule the session moves ai_review->human_review; the owner moves human_review->complete.
+
+## Acceptance
+
+- [x] 1. dev profile bounded (verified: rust-core/Cargo.toml:22-26 debug line-tables-only, package."*" debug=false; cv4 2026-10-04)
+- [x] 2. CI cache key keyed on Cargo.toml, so rotated/unaffected (verified: .github/workflows/ci.yml:226 and :289 hashFiles('rust-core/Cargo.toml'))
+- [ ] 3. before/after bytes recorded on the card (card text only; numbers unreproduced by the card's own admission)
+- [ ] 4. test/clippy gates unchanged (NOT RUN by the verifier: crate tree dirty from another worker, disk 97%; rests on card text)
+- [x] 5. commit and changelog (verified: git show --stat 636cb99e touches ci.yml, CHANGELOG.md, Cargo.toml only; CHANGELOG cites TRDD-2C23ROPZ; issue 18 closed)
