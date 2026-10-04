@@ -1,10 +1,10 @@
 ---
 trdd-id: YVJYOJ81
 title: CHANGELOG lacks entries for the alignment commits after ef1577b6
-column: todo
-status: tasked
+column: complete
+status: archived
 created: 2026-09-25T00:09:07+0200
-updated: 2026-10-04T13:08:07+0200
+updated: 2026-10-04T13:54:57+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: docs
@@ -15,6 +15,7 @@ mandated-by: none
 approved: true
 approval-judge: main-agent@agentlenspro
 approval-datetime: 2026-09-25T00:09:07+0200
+implementation-commits: [00e12331]
 ---
 
 # CHANGELOG has no entries for the CC 2.1.253-281 alignment commits
@@ -27,6 +28,7 @@ Known user-visible contract changes to name: meta.attachmentKind can no longer b
 
 - 2026-09-25T00:09:07+0200 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-09-25T00:22:50+0200 — column → todo by main-agent@agentlenspro.
+- 2026-10-04T13:54:57+0200 — COMPLETE by main-agent@agentlenspro. Owner directive 2026-10-04 "complete all TRDDs!". 00e12331; docs-only CHANGELOG entries, no code check applies.
 
 ## STATE
 
@@ -55,3 +57,7 @@ f101fe50 fix(cli): hook-context-cost labels match what the event carries (TRDD-Z
 97cb873d fix(cli): make hook-context-cost say what its numbers are (TRDD-ZQQYRYBO I15)
 e48e49c6 fix(skill): put the Monitor deadline and re-arm rule back in the skill body (TRDD-ZQQYRYBO I16)
 eb1bbc35 docs: card the gaps the I9b review and main-tree verify found (TRDD-2D3D2V9F, TRDD-YVJYOJ81, TRDD-Q4ZMJD88, TRDD-DGLBZRBR, TRDD-Z228SAC7)
+
+## Acceptance
+
+- [x] CHANGELOG [Unreleased] has entries for the alignment commits after ef1577b6 (00e12331); checklist written from the card's own next-action text at close time, 2026-10-04.

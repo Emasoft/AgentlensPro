@@ -3,7 +3,7 @@ trdd-id: 2CYTNLY1
 title: Delete the review gate's dead breakers and give the supervisor the gate's work definition
 column: human_review
 created: 2026-09-09T14:38:59+0200
-updated: 2026-10-04T13:04:51+0200
+updated: 2026-10-04T13:56:15+0200
 current-owner: main
 task-type: refactor
 priority: medium
@@ -16,7 +16,7 @@ related: [40M4UPK3, 0E3W5C45]
 blocked-by: []
 npt: []
 eht: []
-implementation-commits: [53a30222, 86abd4ef]
+implementation-commits: [53a30222, 86abd4ef, 90446356]
 ---
 
 # Delete the review gate's dead breakers and give the supervisor the gate's work definition
@@ -201,6 +201,7 @@ verified against the live source, not restated from memory.
 
 - (none yet)
 Owed runs 2026-09-23T13:16:38+0200: pnpm run check-types -> exit=0 (settles Box1's 'not re-run, cannot execute pnpm'); npx mocha (scoped config, no full-suite spec) out/test/test/reviewGate.test.js out/test/test/reviewGateEffects.test.js out/test/test/reviewGateTriggers.test.js out/test/test/reviewSupervisor.test.js -> 134 passing (reviewGate*, three files) + 27 passing (reviewSupervisor) = 161 passing, 0 failing, exit=0 (partially settles Box2's 'not re-run'; killSwitch.test.ts and reviewSupervisorRunner.test.ts were not in this task's authorized file list and were not run).
+2026-10-04: code and tests done at 90446356; effective only after the installed hook bundle is rebuilt (owner).
 
 ## AI-REVIEW VERDICT
 Box1 (check-types/eslint exit 0 at 53a30222/86abd4ef): not re-run by this review — cannot execute pnpm; STATE's own claim is the only source.

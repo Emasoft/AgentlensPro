@@ -3,7 +3,7 @@ trdd-id: PNB9FNJ0
 title: A delegate-gate-denied Edit still arms the review gate so every denied edit costs a fork
 column: todo
 created: 2026-09-10T18:55:00+0200
-updated: 2026-10-04T13:42:08+0200
+updated: 2026-10-04T13:55:39+0200
 current-owner: main
 task-type: bugfix
 min-approval-requirement: none
@@ -11,7 +11,7 @@ priority: high
 blocked-by: []
 npt: []
 eht: []
-implementation-commits: []
+implementation-commits: [90446356, d320275c]
 project-id: agentlenspro
 scope: project
 labels: [review-gate, delegate-gate, fork-cost]
@@ -47,3 +47,4 @@ reviewSupervisor.ts gets the same skip.
 ## Notes
 
 2026-10-04 follow-up from review: the skip is restricted to editor tools (isDeniedEdit in reviewGate.ts, used by the gate and the supervisor); a write-shaped Bash whose error result quotes the deny sentence still arms/counts. Tests: reviewGate 'a write-shaped Bash whose error result quotes the deny sentence still arms', reviewSupervisor '...still counts'; red against the unrestricted skip (2 failing), green after (18 passing).
+2026-10-04: code and tests done at 90446356 and d320275c; effective only after the installed hook bundle is rebuilt (owner). Live box stays unticked.

@@ -3,7 +3,7 @@ trdd-id: 8YM21R5X
 title: A buried role marker in a spawned agent's own brief still self-exempts it from its SubagentStop gate
 column: backburner
 created: 2026-09-24T09:10:39+0200
-updated: 2026-10-04T13:04:46+0200
+updated: 2026-10-04T13:56:18+0200
 current-owner: emanuelesabetta
 created-by: emanuelesabetta
 task-type: security
@@ -35,3 +35,4 @@ Measure the real wrapped shape of a MEASURE/REVIEW agent's own first transcript 
 
 2026-09-24: a fork's own first entry arrives as '...</fork-boilerplate>' then 'Your directive: ROLE: REVIEW' on one line (seen by a review fork 2026-09-24, inferred), so the unanchored regex does not even match a fork; forks are exempted by the separate review-fork rule; the residual concerns non-fork subagents such as lean-worker -- measure one real lean-worker transcript's first entry.
 2026-10-04: worker wA SKIPPED, not measured. The only in-repo fixtures of a spawned agent's first entry are synthetic (a lean-worker is a raw prompt string, a fork carries a fork-boilerplate preamble); none is a captured real shape, and real transcripts were out of bounds. Anchoring blind could de-exempt real roled agents. Needs one measured real lean-worker first entry first.
+2026-10-04: skipped today (commit 90446356 records it): no measured transcript shape exists to anchor the role marker to. Still owed: a measured transcript shape, then the anchoring. Not implemented, no commit recorded.

@@ -3,7 +3,7 @@ trdd-id: VDQ2N8PX
 title: Rust parses MCP_PORT by its own rules so the server and the CLI can still disagree
 column: todo
 created: 2026-09-04T10:19:22+0200
-updated: 2026-10-04T13:02:36+0200
+updated: 2026-10-04T13:53:20+0200
 related: [4MJT92J7, 99HUNXJS, EGGERLEO, Q9WD3K5R, 1B98LCVR]
 current-owner: main-session
 task-type: bugfix
@@ -16,7 +16,7 @@ severity: low
 relevant-rules: []
 npt: []
 eht: []
-implementation-commits: [c17ef591, 0f1e9433]
+implementation-commits: [c17ef591, 0f1e9433, 34569e8f]
 external-refs: []
 ---
 
@@ -150,3 +150,4 @@ one TRDD-Q9WD3K5R names about a two-language repo. Options, cheapest first:
 ## Notes
 
 2026-10-04 — server_stats.rs: mcp_port_from_env filters 0 (falls back to 4316); test capture_block_tests::mcp_port_from_env_rejects_zero_and_invalid_spellings red without the filter (MCP_PORT=Some("0") left 0 right 4316), green with it; lib server_stats 4 passed, clippy -D warnings clean. Box 3 left open: '3e3' stays 4316 and is pinned in the test; whether it converges is TRDD-EGGERLEO's, the owner's call.
+2026-10-04: code and test landed at 34569e8f; box 3 ('3e3' convergence) is still owed, decision belongs to TRDD-EGGERLEO / the owner. Not closed.

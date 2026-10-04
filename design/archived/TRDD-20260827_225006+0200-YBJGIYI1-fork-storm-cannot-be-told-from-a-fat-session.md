@@ -1,9 +1,9 @@
 ---
 trdd-id: YBJGIYI1
 title: FORK_STORM cannot be distinguished from one fat session rewriting its own prefix
-column: human_review
+column: complete
 created: 2026-08-27T22:50:06+0200
-updated: 2026-10-04T13:47:35+0200
+updated: 2026-10-04T13:59:02+0200
 current-owner: claude-session-2026-09-02
 task-type: bugfix
 scope: project
@@ -11,7 +11,8 @@ project-id: agentlenspro
 parent-trdd: DMWOBWFH
 min-approval-requirement: none
 priority: high
-implementation-commits: [06649a73]
+implementation-commits: [06649a73, 75015915]
+status: archived
 ---
 
 # FORK_STORM cannot be distinguished from one fat session rewriting its own prefix
@@ -151,6 +152,7 @@ A fixture with 3 cold full-prefix spikes, one fingerprint, ONE session id must c
   be observed (revert the `:163` gate, run `cargo test --lib`, restore) before accepting.
 - 2026-09-24T09:07:59+0200 — column → human_review. Owed run PASSED 2026-09-24: burnscan_parity 9/9 passed; mutation of the fam_sessions gate (investigator.rs:163, biggest_fam_sessions>=2 -> >=0) fails exactly 2 of 3 fork_storm_discriminator_tests as claimed, restored clean (git diff empty). Report: reports/owed-runs/20260924_085621+0200-owed-runs.md
 - 2026-10-04T13:47:20+0200 — worker wJ: box 4 re-run. Gate conjunct 'biggest_fam_sessions >= 2' removed at investigator.rs:163; cargo test -p agentlens-core --lib fork_storm_discriminator: exit 101, 2 of 3 FAILED (unextractable_session_ids_fall_to_the_honest_label_not_the_flattering_one, one_session_repeating_a_fingerprint_is_a_fat_session_not_a_storm; two_distinct_sessions_sharing_a_fingerprint_is_a_real_fork_storm stayed ok). Restored, git diff empty, re-run: 3 passed.
+- 2026-10-04T13:59:02+0200 — COMPLETE by main-agent@agentlenspro. Owner directive 2026-10-04 "complete all TRDDs!". 75015915; checks run by the main agent: clippy -D warnings exit 0; chores_bodies_spool_drain 2 passed; ui capture_activity 2 passed; --lib 90 passed; box 4 ticked (removing the two-session condition fails 2 of 3 discriminator tests).
 
 ## STATE — 2026-09-05T14:33:32+0200 — HISTORICAL (superseded above; the gate has now actually run)
 

@@ -3,7 +3,7 @@ trdd-id: J2K6IM4R
 title: The review gate arms on a write verb invoked with --help
 column: ai_review
 created: 2026-09-23T14:12:31+0200
-updated: 2026-10-04T13:04:48+0200
+updated: 2026-10-04T13:56:06+0200
 current-owner: main-session
 created-by: emanuelesabetta
 task-type: bugfix
@@ -14,6 +14,7 @@ mandated-by: none
 approved: true
 approval-judge: emanuelesabetta
 approval-datetime: 2026-09-23T14:12:31+0200
+implementation-commits: [954fe1a0, 90446356]
 ---
 
 # The review gate arms on a write verb invoked with --help
@@ -78,3 +79,4 @@ Acceptance (added): [x] --snippet 'a --help b' still arms; [x] sub -- x --help s
 ## Implementation
 
 2026-09-24 — Implemented per the STATE block's authoritative rule: added hasStandaloneHelp(args) in src/cli/reviewGateTriggers.ts (near segmentWriteReason/Resolve) and wired it into the two exempt-CLI call sites (fastedit sub-verb check in deployOrDesignVerbWriteReason; memgrep /-mem-/ check in segmentWriteReason). A standalone -h/--help token (preceding token not starting with '-', scan stops at bare --) cancels only the CLI-verb arm; the independent redirect pass still arms on a same-segment redirect. tldr/trddgrep intentionally excluded per the card's evidence. Added a must-arm/must-not-arm test covering every case from the card's two lists to the D7 suite in src/test/reviewGateTriggers.test.ts. Verified: pnpm check-types exit 0, pnpm lint exit 0 (0 errors), pnpm compile-tests exit 0, mocha on out/test/test/reviewGateTriggers.test.js: 41/41 passing. Mutation check: forcing hasStandaloneHelp to always return false failed exactly the new test (1 failing) and left the other 40 green; restored and reverified green (41/41).
+2026-10-04: code and tests done at 90446356; effective only after the installed hook bundle is rebuilt (owner).

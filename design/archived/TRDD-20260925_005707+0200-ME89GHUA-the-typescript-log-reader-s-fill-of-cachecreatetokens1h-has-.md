@@ -1,10 +1,10 @@
 ---
 trdd-id: ME89GHUA
 title: The TypeScript log reader's fill of cacheCreateTokens1h has no test
-column: todo
-status: tasked
+column: complete
+status: archived
 created: 2026-09-25T00:57:07+0200
-updated: 2026-10-04T13:02:13+0200
+updated: 2026-10-04T13:54:48+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -15,6 +15,7 @@ mandated-by: none
 approved: true
 approval-judge: main-agent@agentlenspro
 approval-datetime: 2026-09-25T00:57:07+0200
+implementation-commits: [fb8392fe]
 ---
 
 # The TypeScript log reader's fill of cacheCreateTokens1h has no test
@@ -32,7 +33,12 @@ log_reader_parity. Cites reports/cc-alignment/20260925_005341+0200-head-156a6768
 ## Approval log
 
 - 2026-09-25T00:57:07+0200 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-10-04T13:54:48+0200 — COMPLETE by main-agent@agentlenspro. Owner directive 2026-10-04 "complete all TRDDs!". fb8392fe; checks run by the main agent: check-types, lint, compile-tests exit 0; whole unit suite 2951 passing, 12 pending, 1 failing (the hook-spool revive test, failing before this work because the installed CLI bundle is stale, TRDD-E9RM51XG).
 
 ## Notes
 
 - 2026-10-04T13:02:12+0200 — worker wB: added src/test/logReader.cache1h.test.ts (1h present gives 40, tier split absent gives undefined); 1 passing. Not mutation-tested (logReader.ts out of slice).
+
+## Acceptance
+
+- [x] A mocha test covers the cacheCreateTokens1h fill for both the 1h-present and 1h-absent shapes (src/test/logReader.cache1h.test.ts, fb8392fe); checklist written from the card's own next-action text at close time, 2026-10-04.

@@ -4,7 +4,7 @@ title: Owner directive 2026-10-04 complete all TRDDs - per-card triage then work
 column: dev
 status: tasked
 created: 2026-10-04T12:48:47+0200
-updated: 2026-10-04T12:58:44+0200
+updated: 2026-10-04T13:59:37+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: audit
@@ -44,7 +44,9 @@ Board at start: todo 53, human_review 32, backburner 32, dev 22, testing 11, blo
 - approval of a proposal: 1 card. I5O38KKP add pricing check step to ci.yml and publish.yml.
 - settings or hook registration change: 1 card. X8MW8K92 install hook, unregister standalone gate, live fork probe.
 - other: 2 cards. N60JUWU3 test-hook design for 120 s mutex hold, then deploy; 4FLTDMHA leak process gone, kill-on-Drop guard possible.
+2026-10-04 correction: the grouping above was a shallow first triage. A second read of the deploy and decision groups (reports in gitignored docs_dev) found: deploy-only alcore X70L1O3S 9SOYXKNE ORGJ0E3G MBQ9LXAN; deploy-only CLI bundle LZ2JDIJP; probably already live, live check only GR6WHHK5 9SYRK6SW; code first 5JZQFVO8 7RM5YW2T YGETIBJS E9RM51XG N60JUWU3; decision first 563B8WYH Z53IJFE9; stale TOIM26HP. Of the 15 decision cards only VW0V6QLK and E32TO0XC are the owner's; EGGERLEO BLAV6W15 ZSX34J8F 0D6QK5CW 2JOIAH2G M2VK8T4P HH1NP0KD are decidable from tests or measurement; WKLD508O DIZ289UQ XTFDRTH2 0E3W5C45 IXVHM52P are sign-offs on finished boxes (IXVHM52P box 1 stops the live server: owner); 7FA3NIXU is stale. RVKQDLRD carries another session's uncommitted edits and must not be touched or staged.
 
 ## Closes made under the directive
 
-2026-10-04: complete YE15B2JK DCWJY2JJ MF4YQWWA KBK9J59Y U0L78B3Z X4YTS5BF 4TOU4V8E P08Q5TK1 Z0YKJ67N JGM1JKN0 OHZGLDNG; superseded 5PUD8RKE ZW4APOPI GG0WOHEV; publish 0Y8BMVK2. MF4YQWWA was closed prematurely (see its approval log). P08Q5TK1 rests on a source read only.
+2026-10-04: complete YE15B2JK DCWJY2JJ MF4YQWWA KBK9J59Y U0L78B3Z X4YTS5BF 4TOU4V8E P08Q5TK1 Z0YKJ67N JGM1JKN0 OHZGLDNG; superseded 5PUD8RKE ZW4APOPI GG0WOHEV; publish 0Y8BMVK2. MF4YQWWA was closed before its regeneration claim was true; commit 20bdbd3e made it true (the burnscan generator runs again and regenerating changes no fixture). P08Q5TK1 rests on a source read only, with no test. The tool refuses writes to archived cards, so both notes are recorded here.
+2026-10-04 (second run): complete ME89GHUA YVQI5DYD YVJYOJ81 Z228SAC7 BZFYC809 DGLBZRBR 8ADTIGKT V79W9T2R YBJGIYI1; superseded Z8B5BDB5 (by YVQI5DYD). Left open with notes: VDQ2N8PX FGN5TY7E 4EV3OJ19 AHM7OUG1 PNB9FNJ0 BA0DCW98 J2K6IM4R 2CYTNLY1 8YM21R5X 2C23ROPZ.
