@@ -3,7 +3,7 @@ trdd-id: 4EV3OJ19
 title: The setup self-test revives alcore on the default ports because execRegisteredCommand pins the data dir but not the ports
 column: todo
 created: 2026-09-09T12:18:08+0200
-updated: 2026-09-09T12:45:02+0200
+updated: 2026-10-04T13:08:01+0200
 current-owner: main
 task-type: bugfix
 min-approval-requirement: none
@@ -111,3 +111,4 @@ A test that:
    reason.
 
 ## Notes and lessons learned
+2026-10-04 wF: shape (1) done — execRegisteredCommand (exported) pins UI_PORT/MCP_PORT/OTLP_PORT from ctx; test src/test/setupRevivePorts.test.ts 'execRegisteredCommand passes UI_PORT, MCP_PORT and OTLP_PORT from the ctx, not the ambient env' red without the pins (AssertionError: UI_PORT pinned), green with (59 passing in the grepped suites). Shape (2), a data-dir port record read by reviveDaemonDetached so every exec of the registered hook is covered, remains the larger follow-up and is NOT done; acceptance bullets 2-3 (forced failed POST observing the revived argv) not exercised.

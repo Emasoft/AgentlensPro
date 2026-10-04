@@ -313,7 +313,7 @@ function verifyHooksState(s: Settings): string | null {
 /** Execute a registered hook command string with a synthetic stdin payload — the strongest
  *  possible verify: the EXACT string the hook runner will exec, resolved through the same
  *  PATH. Returns null on contract compliance (exit 0), else the violation. */
-function execRegisteredCommand(ctx: Ctx, command: string, payload: string, expectSilent: boolean): string | null {
+export function execRegisteredCommand(ctx: Ctx, command: string, payload: string, expectSilent: boolean): string | null {
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     PATH: ctx.pathEnv,
@@ -325,6 +325,12 @@ function execRegisteredCommand(ctx: Ctx, command: string, payload: string, expec
     HOME: ctx.home,
     AGENTLENS_DATA_DIR: ctx.dataDir,
     AGENTLENS_UI_URL: `http://127.0.0.1:${ctx.uiPort}`,
+    // TRDD-4EV3OJ19: a failed hook POST revives alcore via alcoreServeArgs(), which reads these
+    // three from the hook process's own env. Unpinned, the revive binds the DEFAULT ports instead
+    // of the ones this setup converged to (same pins as setup's own server spawn).
+    UI_PORT: String(ctx.uiPort),
+    MCP_PORT: String(ctx.mcpPort),
+    OTLP_PORT: String(ctx.otlpPort),
     AGENTLENS_HOOK_TIMEOUT: '4', // doubled 2026-09-05 with every other hook budget (TRDD-GXKRBK1Q)
     AGENTLENS_GATE_TIMEOUT: '4',
   }
