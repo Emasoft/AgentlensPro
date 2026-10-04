@@ -3,7 +3,7 @@ trdd-id: VDQ2N8PX
 title: Rust parses MCP_PORT by its own rules so the server and the CLI can still disagree
 column: todo
 created: 2026-09-04T10:19:22+0200
-updated: 2026-09-24T08:57:06+0200
+updated: 2026-10-04T13:02:36+0200
 related: [4MJT92J7, 99HUNXJS, EGGERLEO, Q9WD3K5R, 1B98LCVR]
 current-owner: main-session
 task-type: bugfix
@@ -133,8 +133,8 @@ one TRDD-Q9WD3K5R names about a two-language repo. Options, cheapest first:
 
 ## Acceptance
 
-- [ ] `MCP_PORT=0` does not yield `Ports.mcp == 0`.
-- [ ] A Rust test asserting the table above, so the TS and Rust rows can be compared by reading
+- [x] `MCP_PORT=0` does not yield `Ports.mcp == 0`.
+- [x] A Rust test asserting the table above, so the TS and Rust rows can be compared by reading
       two test files rather than by reasoning about two parsers.
 - [ ] Decide whether `'3e3'` converges here or in TRDD-EGGERLEO, not both.
 
@@ -146,3 +146,7 @@ one TRDD-Q9WD3K5R names about a two-language repo. Options, cheapest first:
   Rust at all.
 - [[TRDD-EGGERLEO]] — the `'3e3'`/`0x1F80` strictness question on the TS side.
 2026-09-24T08:56:26+0200 — migrated from superseded TRDD-4MJT92J7 (duplicate, same server_stats.rs:68 target, filed 16:04:40 same day, this card is the survivor): (a) server_stats.rs:575 canonical-flag observation (st.ports.otlp == 4318); (b) implementation-commits c17ef591/0f1e9433 are the already-landed freePort.ts doc-comment fix for this port-parsing defect class (TS side; the Rust-side '>0' filter at server_stats.rs:68 remains the open WORK-S item on this card).
+
+## Notes
+
+2026-10-04 — server_stats.rs: mcp_port_from_env filters 0 (falls back to 4316); test capture_block_tests::mcp_port_from_env_rejects_zero_and_invalid_spellings red without the filter (MCP_PORT=Some("0") left 0 right 4316), green with it; lib server_stats 4 passed, clippy -D warnings clean. Box 3 left open: '3e3' stays 4316 and is pinned in the test; whether it converges is TRDD-EGGERLEO's, the owner's call.

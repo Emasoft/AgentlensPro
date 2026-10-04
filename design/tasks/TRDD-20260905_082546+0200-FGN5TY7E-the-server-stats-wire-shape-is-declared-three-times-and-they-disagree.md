@@ -3,7 +3,7 @@ trdd-id: FGN5TY7E
 title: The server-stats bodies shape is hand-declared twice in one file and the two declarations disagree
 column: testing
 created: 2026-09-05T08:25:46+0200
-updated: 2026-09-05T16:49:28+0200
+updated: 2026-10-04T13:02:28+0200
 current-owner: main-session
 task-type: refactor
 priority: high
@@ -129,7 +129,7 @@ a parameter read — it could not see `serverControl.ts:521`, the read TRDD-U0L7
       This card's first version counted `burnGuard.ts:110` as a third declaration from an unopened
       grep line; it is a `BurnGuardOptions` parameter member. Record the number found AND what each
       hit turned out to be — a hit is a field name, not a declaration of this object.
-- [ ] Something FAILS when producer and consumer diverge: a test that asserts the declared shape
+- [x] Something FAILS when producer and consumer diverge: a test that asserts the declared shape
       against a real `/api/server-stats` response, so a field declared-but-never-sent is caught by
       CI rather than by a human noticing a row that never renders. Mutation-verified — delete a
       field from the emitter and confirm it goes red.
@@ -156,3 +156,4 @@ Boxes 1 and 2 are genuinely done and well-evidenced. Box 4's partial state is ho
 **Verdict: REJECT — run the box-3 mutation (delete a field from the emitter, confirm the frozen-shape test goes red) and fix `implementation-commits:` to `[0c01a3e1, 7659b9ca]` before resubmitting.**
 
 ## Notes and lessons learned
+2026-10-04 — box 3 mutation run: removed the sinkProblem line from the bodies json! in server_stats.rs; tests/server_stats.rs::body_matches_the_frozen_key_order_exactly went red at line 77 (left [archive,lastPass,live,captureDownSince,parked] right [...captureDownSince,sinkProblem,parked]); file restored, --test server_stats 4 passed. Box 4 left open: the two unsent fields (reclaimedSinceBoot, lastNonZeroPassAt) need either the unported bodies purge or a TS declaration change plus a rebuilt, deployed binary; that is the owner's decision.

@@ -60,9 +60,15 @@ pub struct Ports {
 
 impl Default for Ports {
     fn default() -> Ports {
-        let mcp = std::env::var("MCP_PORT").ok().and_then(|s| s.trim().parse().ok()).unwrap_or(4316);
-        Ports { ui: 3001, mcp, otlp: 4319 }
+        Ports { ui: 3001, mcp: mcp_port_from_env(std::env::var("MCP_PORT").ok().as_deref()), otlp: 4319 }
     }
+}
+
+/// Reporting-field parse of MCP_PORT. `u16` bounds the top and rejects negatives but not 0, and
+/// `MCP_PORT=0` would make the status endpoint advertise a dead port 0 (TRDD-VDQ2N8PX), so 0 falls
+/// back to the default like any other invalid value. Binds nothing: `alcore serve` binds from flags.
+fn mcp_port_from_env(raw: Option<&str>) -> u16 {
+    raw.and_then(|s| s.trim().parse().ok()).filter(|p| *p > 0).unwrap_or(4316)
 }
 
 /// `package.json` `version`, resolved once — the build that is answering (server.ts
@@ -613,6 +619,30 @@ pub fn server_stats(st: &CoreState, now_ms: i64) -> Value {
 mod capture_block_tests {
     use super::*;
     use std::time::{Duration, SystemTime};
+
+    /// TRDD-VDQ2N8PX: the MCP_PORT reporting parse. `0` must not be reported (the one row where
+    /// the u16 type alone disagrees with the TS `envPort`); every other invalid spelling already
+    /// falls back to 4316. `3e3` stays 4316 here — whether it converges is TRDD-EGGERLEO's call.
+    #[test]
+    fn mcp_port_from_env_rejects_zero_and_invalid_spellings() {
+        for (raw, want) in [
+            (None, 4316),
+            (Some("0"), 4316),
+            (Some(""), 4316),
+            (Some("   "), 4316),
+            (Some("abc"), 4316),
+            (Some("-1"), 4316),
+            (Some("65536"), 4316),
+            (Some("80.5"), 4316),
+            (Some("8080/evil"), 4316),
+            (Some("3e3"), 4316),
+            (Some("8080"), 8080),
+            (Some(" 8080 "), 8080),
+            (Some("65535"), 65535),
+        ] {
+            assert_eq!(mcp_port_from_env(raw), want, "MCP_PORT={raw:?}");
+        }
+    }
 
     /// TRDD-U0L78B3Z: the CLI's CAPTURE DOWN row fires only when sessions are active AND no body
     /// landed inside the window; `since` never predates boot. There is no "capture off" case: capture
