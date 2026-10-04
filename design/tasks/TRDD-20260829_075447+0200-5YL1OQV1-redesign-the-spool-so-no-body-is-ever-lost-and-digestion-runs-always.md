@@ -3,7 +3,7 @@ trdd-id: 5YL1OQV1
 title: Redesign the spool so no body is ever lost and digestion runs continuously in the background
 column: design
 created: 2026-08-29T07:54:47+0200
-updated: 2026-10-04T12:54:30+0200
+updated: 2026-10-04T12:58:27+0200
 current-owner: claude-agentlenspro
 task-type: refactor
 project-id: agentlenspro
@@ -183,3 +183,4 @@ plainly rather than letting "recovered, 0 failed" imply the incident was made wh
 
 The defect was never in the digestion: nothing pointed it at the spool, and the timer was an order
 of magnitude too slow for the buffer it guarded.
+2026-10-04: no npt on Z53IJFE9 added. This redesign targeted the RAM-disk spool, which Z53IJFE9 removed (steps B-E committed); its precondition was the bodies_pass scope hole of ZW4APOPI, and the SSD dir is now drained every 60 s. Z53IJFE9 is a supersession, not a prerequisite; the card's disposition stays the owner's move.

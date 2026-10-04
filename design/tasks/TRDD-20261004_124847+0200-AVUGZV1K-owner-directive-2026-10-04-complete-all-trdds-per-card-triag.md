@@ -4,7 +4,7 @@ title: Owner directive 2026-10-04 complete all TRDDs - per-card triage then work
 column: dev
 status: tasked
 created: 2026-10-04T12:48:47+0200
-updated: 2026-10-04T12:48:47+0200
+updated: 2026-10-04T12:58:44+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: audit
@@ -32,3 +32,19 @@ Board at start: todo 53, human_review 32, backburner 32, dev 22, testing 11, blo
 ## Approval log
 
 - 2026-10-04T12:48:47+0200 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+
+## Cards that need the owner, grouped by the act that unblocks them (first triage 2026-10-04, unverified leads)
+
+- deploy (rebuild alcore, codesign, copy into bin-native, restart the collector): 12 cards. TOIM26HP live RSS delta; 5JZQFVO8 real-corpus boot, deploy awaits word; ORGJ0E3G backfill never armed live; X70L1O3S fix runs only after rebuild; 7RM5YW2T live cpu/rss target missed; MBQ9LXAN per-frame live measurement; GR6WHHK5 merged, not deployed; 9SOYXKNE live OTLP count needs rebuild; 563B8WYH live outage, fix in 2JOIAH2G; 9SYRK6SW restart-and-verify parquet unrun; RVKQDLRD deploy, then verify flaky shutdown test; Z53IJFE9 live acceptance, then worktree removal.
+- rebuild the installed CLI bundle (node esbuild.js) and restart: 3 cards. LZ2JDIJP review gate effective after build; E9RM51XG stale bundle remedy; YGETIBJS deploy step, first wait for 40M4UPK3 and BA0DCW98.
+- git push and CI green: 2 cards. EJDNNDY3 CI sets alcore, five boxes unticked; QJPUG1WP only the CI rust job owed.
+- npm publish / release (tag push): 2 cards. HSPUF5XH release gate, 15 open blockers first; IXMB2JVD box 1 post-release.
+- a measurement on the live collector or the real data directory: 10 cards. CEAZZHHO 24 h of session ids; 21QXUL1P 24 h bodies-dir sampler; DX8PYPLO re-measure gated on 2JOIAH2G R0b; 2R36W8Q1 re-measure boxes 2, 3, 5; 768NEX6E vmmap on the live pid; 3EZ6SJ2Z one real fork launch; BFUZ1THR captured statusline row needed; V8W9A8FZ one measured advisory; VRW14OB0 first-fork-after-cold pair; IPEPUEL5 credits-regime capture needed.
+- a named decision by the owner: 16 cards. WKLD508O the 2 GB cap decision; EGGERLEO strict decimal port parsing; DIZ289UQ accept TTL-tier substitution; XTFDRTH2 accept on boxes 1-2; BLAV6W15 accept one-path expansion deviation; 0E3W5C45 amend rule, rule on marker trade; 7FA3NIXU change or keep 4 MB anchor; VW0V6QLK rewrite OS login on 21 cards; ZSX34J8F cargo retention rule; IXVHM52P close or re-park; LHCHVK9Z wrong-typed policy, NOT NULL, switch-on; 0D6QK5CW go/no on 81BW1CS9, then deploy; 2JOIAH2G step-0 and queue answer, then deploy; M2VK8T4P approve deploy-path signing change; E32TO0XC pull the card forward; HH1NP0KD go-ahead on spool hook path, then hook change.
+- approval of a proposal: 1 card. I5O38KKP add pricing check step to ci.yml and publish.yml.
+- settings or hook registration change: 1 card. X8MW8K92 install hook, unregister standalone gate, live fork probe.
+- other: 2 cards. N60JUWU3 test-hook design for 120 s mutex hold, then deploy; 4FLTDMHA leak process gone, kill-on-Drop guard possible.
+
+## Closes made under the directive
+
+2026-10-04: complete YE15B2JK DCWJY2JJ MF4YQWWA KBK9J59Y U0L78B3Z X4YTS5BF 4TOU4V8E P08Q5TK1 Z0YKJ67N JGM1JKN0 OHZGLDNG; superseded 5PUD8RKE ZW4APOPI GG0WOHEV; publish 0Y8BMVK2. MF4YQWWA was closed prematurely (see its approval log). P08Q5TK1 rests on a source read only.
