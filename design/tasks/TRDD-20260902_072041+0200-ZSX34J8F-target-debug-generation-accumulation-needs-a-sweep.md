@@ -3,7 +3,7 @@ trdd-id: ZSX34J8F
 title: rust-core target debug accumulates thousands of build generations and nothing ever prunes them
 column: backburner
 created: 2026-09-02T07:20:41+0200
-updated: 2026-10-04T16:32:53+0200
+updated: 2026-10-04T16:37:10+0200
 current-owner: agentlenspro-15
 task-type: infra
 project-id: agentlenspro
@@ -47,3 +47,9 @@ a cargo job owns the tree (a sweep mid-build corrupts the build).
 - `CARGO_RETENTION_PS_SNAPSHOT` set in the environment replaces `ps` and so disables the guard in production too; it is documented as a test knob. `--force-while-building` already exists as the explicit override.
 - The `--apply` guard `no CACHEDIR.TAG and no <profile>/.fingerprint` can never fire, because the script already exits earlier when `<profile>/.fingerprint` is missing.
 - Read and found sound: symlink refusals at every level, `--profile` restricted to one plain path segment, removal paths come only from the one-level listing under the profile directory, every path printed before `rm -rf --`.
+- CORRECTION (second review of these findings): "Accepted as is" on the process guard is the agent's reading, not an owner acceptance.
+- CORRECTION: "A correct rule ranks per (crate, unit kind and target name)" is an untested proposal, not an established fix. The same listing shows two `lib-libduckdb_sys` generations created in the same minute, so even per-unit ranking has siblings that are live at the same time (different feature sets or dependency hashes).
+- CORRECTION: the evidence was a listing of fingerprint DIRECTORY mtimes read by the agent, while the script ranks by the newest FILE mtime; which entries `--apply` would remove was read from the code, not taken from the script's own report mode on the real tree (not run: load average was 146). "The run-build-script output is the compiled DuckDB" is inferred from cargo's layout.
+- MISSED by the first read, both from reading the script, neither run: `--keep 0` is accepted and marks every generation removable; the removal loop `cut -f5 | while read -r p` sets no `IFS=`, so a path with leading or trailing blanks would be altered before `rm -rf`.
+- OPEN: the script header still advertises `--apply` with no warning; a note on this card is not a guard. Making `--apply` refuse until the rule is corrected is proposed to the owner, not done.
+- DO NOT run scripts/cargo-target-retention.sh --apply: the keep-newest-2-per-crate rule removes live cargo units; see the section "Review findings 2026-10-04" at the end of this card.
