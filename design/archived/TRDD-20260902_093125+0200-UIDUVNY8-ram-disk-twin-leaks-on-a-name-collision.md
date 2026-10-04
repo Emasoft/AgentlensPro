@@ -1,14 +1,16 @@
 ---
 trdd-id: UIDUVNY8
 title: ensureRamDisk leaks a twin volume when the spool name is already taken
-column: human_review
+column: superseded
 created: 2026-09-02T09:31:25+0200
-updated: 2026-09-24T13:36:31+0200
+updated: 2026-10-05T01:52:22+0200
 current-owner: main-session
 task-type: bugfix
 priority: normal
 min-approval-requirement: none
 related: [ZW4APOPI, 5PUD8RKE]
+status: archived
+superseded-by: [Z53IJFE9]
 ---
 
 # ensureRamDisk leaks a twin volume when the spool name is already taken
@@ -58,6 +60,7 @@ related: [ZW4APOPI, 5PUD8RKE]
   → 1 at 15:30 — circumstantial, as the verdict says. Nothing struck, nothing split.
 - 2026-09-24T08:57:38+0200 — column → human_review by main-session. AI review verified, evidence in reports/board-triage ai_review-A/B/C triage
 - 2026-09-24T08:57:49+0200 — main-session (board update A): moved ai_review -> human_review; AI review verified per reports/board-triage ai_review-A/B/C triage rows. In this project's mono-agent rule the session moves ai_review->human_review; the owner moves human_review->complete.
+- 2026-10-05T01:52:22+0200 — SUPERSEDED by main-agent@agentlenspro. the code this card fixes was deleted by 3c031ab8 (TRDD-Z53IJFE9).
 
 ## Notes and lessons learned
 
@@ -78,3 +81,8 @@ related: [ZW4APOPI, 5PUD8RKE]
 - `column: ai_review` with one open box is internally consistent here (the STATE block explicitly asks the reviewer to decide on box 3), not a mis-columned card.
 
 **Verdict: APPROVE** — boxes 1–2 verified first-hand against the actual diff and test assertions (not just commit-message claims); box 3's non-completion is a documented, deliberate scope decision (not a hidden gap or out-of-scope appendix), correctly left for `human_review` to accept or demand a real two-process repro.
+
+## Review 2026-10-05 (in the owner's stead)
+
+- Verdict: superseded by TRDD-Z53IJFE9. Commit 3c031ab8 (2026-09-25, "remove the RAM-disk body spool from the TypeScript codebase") deleted src/ramdisk.ts, src/test/ramdiskSpool.test.ts and src/test/ramdiskTwin.test.ts.
+- Checked by the main agent: neither file exists, and no file under src/, standalone/cli.ts or rust-core/crates mentions ensureRamDisk or ramdisk. There is nothing left for this card's fix to apply to. Reviewer report: docs_dev/20261005_014512+0200-review-UIDUVNY8.md (gitignored).
