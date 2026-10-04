@@ -842,3 +842,79 @@ fn t21_an_empty_done_runs_no_ledger_query() {
     wait_for("a ledger query once done/ has a file", 90, || s.status()["doneLedgerQueries"].as_u64().unwrap() >= 1);
     assert!(dir.join("planted.ndjson").exists(), "a file with no ledger row was deleted");
 }
+
+/// A valid payload of one of the three hook producers of t23, with its checked field removed (`None`) or replaced (`Some`) when `edit` says so.
+fn hook_payload(event: &str, n: u32, edit: Option<(&str, Option<Value>)>) -> String {
+    let mut p = json!({"hook_event_name": event, "session_id": format!("aaaaaaaa-hook-{n}"), "cwd": "/work/aaaaaaaa", "transcript_path": "/t/aaaaaaaa.jsonl"});
+    let extra = match event {
+        "Stop" => json!({"stop_hook_active": false}),
+        "PostToolBatch" => json!({"tool_calls": []}),
+        _ => json!({"cache_ttl": "5m", "context_tokens": 5, "estimated_cache_write_usd": 1.5, "from_model": "a", "pricing": "p", "prompt_cache_warm": true, "requested_model": null, "source": "x", "to_model": "b"}),
+    };
+    p.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+    if let Some((field, value)) = edit {
+        match value {
+            Some(v) => p[field] = v,
+            None => {
+                p.as_object_mut().unwrap().remove(field);
+            }
+        }
+    }
+    p.to_string()
+}
+
+/// 23. Three hook producers each get a valid event, one lacking a required field and one with a required field of a type the loader cannot coerce (object for a boolean, string for an array, array for a number): the tap spools only the valid ones, counts and stores the rest under rejected/, and the real collect after the tick fails no file and loads every valid event.
+#[test]
+fn t23_an_event_that_would_fail_its_file_is_not_spooled() {
+    let data = scratch("t23-data");
+    let s = launch("t23", &data, &tap_args(Some(2)));
+    wait_for("the start-up collect", 90, || s.status()["lastCollect"]["exit"] == 0);
+    let cases = [("Stop", "stop_hook_active", json!({}), "hook_stop_v1"), ("PostToolBatch", "tool_calls", json!("x"), "hook_post_tool_batch_v1"), ("PostModelSwitch", "context_tokens", json!([]), "hook_post_model_switch_v1")];
+    for (n, (event, field, wrong, _)) in cases.iter().enumerate() {
+        let n = n as u32;
+        assert_eq!(s.post_ui("/api/hook-events", &hook_payload(event, n, None)), 200);
+        assert_eq!(s.post_ui("/api/hook-events", &hook_payload(event, n + 10, Some((field, None)))), 200, "a rejected event must still be answered normally");
+        assert_eq!(s.post_ui("/api/hook-events", &hook_payload(event, n + 20, Some((field, Some(wrong.clone()))))), 200);
+    }
+    wait_for("the 3 valid lines and 6 rejections", 60, || {
+        let st = s.status();
+        st["linesWritten"] == 3 && st["rejectedInvalid"] == 6
+    });
+    let st = s.status();
+    assert_eq!(st["rejectedByTopic"], json!({"hook/stop": 2, "hook/post_tool_batch": 2, "hook/post_model_switch": 2}), "{st}");
+    assert_eq!(st["rejectedFields"]["hook/stop"], json!(["stop_hook_active"]), "{st}");
+    assert_eq!((&st["rejectedNotStored"], &st["writeErrors"]), (&json!(0), &json!(0)), "{st}");
+    let collect = wait_collected(&s, now_ms());
+    assert!(collect["summary"].as_str().unwrap().contains("failed=0"), "{collect}");
+    let failed: Vec<PathBuf> = cases.iter().flat_map(|c| std::fs::read_dir(data.join("ingest/failed").join(c.3)).into_iter().flatten().map(|e| e.unwrap().path())).collect();
+    assert!(failed.is_empty(), "files failed at collect: {failed:?}");
+    let _lock = hold_collect_lock(&data);
+    for (n, c) in cases.iter().enumerate() {
+        let r = rows(&data.join("ingest/events.duckdb"), c.3);
+        assert_eq!((r.len(), &r[0]["session_id"]), (1, &json!(format!("aaaaaaaa-hook-{n}"))), "{}", c.3);
+        // The evidence survived the tick (rejected/ is never sealed, collected or deleted): 2 lines in the spool line format.
+        let kept = std::fs::read_to_string(data.join("ingest/rejected").join(format!("{}.ndjson", c.3))).unwrap();
+        let lines: Vec<Value> = kept.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+        assert_eq!(lines.len(), 2, "{}: {kept}", c.3);
+        assert!(lines.iter().all(|l| l["ts_ns"].is_u64() && l["payload"]["session_id"].is_string()), "{kept}");
+    }
+}
+
+/// 24. An event with every required field plus a field the schema does not know is spooled and loads (unknown fields are ignored), and nothing is rejected.
+#[test]
+fn t24_an_unknown_extra_field_is_ignored_not_rejected() {
+    let data = scratch("t24-data");
+    let s = launch("t24", &data, &tap_args(Some(2)));
+    wait_for("the start-up collect", 90, || s.status()["lastCollect"]["exit"] == 0);
+    let mut p: Value = serde_json::from_str(&session_end(7)).unwrap();
+    p["zz_unknown_field"] = json!({"a": [1, 2]});
+    assert_eq!(s.post_ui("/api/hook-events", &p.to_string()), 200);
+    wait_for("the line written", 60, || written(&s.status(), "hook_session_end_v1") == 1);
+    let collect = wait_collected(&s, now_ms());
+    assert!(collect["summary"].as_str().unwrap().contains("failed=0"), "{collect}");
+    let st = s.status();
+    assert_eq!((&st["rejectedInvalid"], &st["rejectedNotStored"]), (&json!(0), &json!(0)), "{st}");
+    let _lock = hold_collect_lock(&data);
+    let r = rows(&data.join("ingest/events.duckdb"), "hook_session_end_v1");
+    assert_eq!((r.len(), &r[0]["session_id"]), (1, &json!("aaaaaaaa-hook-7")));
+}

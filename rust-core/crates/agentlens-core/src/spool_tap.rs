@@ -27,14 +27,23 @@
 //! `ts_ns` of a spool line is stamped by the writer when the line is written (agentlens-spool), so
 //! under a backlog it lags the moment of receipt by the queue delay; this is deliberate, not changed.
 //!
+//! REJECTED ITEMS (PROPOSED amendment to owner ruling D-D, NOT a decision; the owner may rule to
+//! revert it). An item that lacks a required top-level field of its producer schema (or has one in a
+//! shape the loader cannot coerce, see `Shape`) would make `aldigest collect` fail its WHOLE spool
+//! file, every valid line with it. The tap therefore does not spool such an item: it counts it
+//! (`rejectedInvalid`, `rejectedByTopic`, `rejectedFields` in /api/ingest-status) and stores its line
+//! under `<ingest>/rejected/<spool>.ndjson` (capped at 4 MiB a file, then only counted in
+//! `rejectedNotStored`). That directory is never sealed, collected or deleted. `aldigest collect`
+//! is unchanged: it still treats an anomaly as an error and still moves a failing file to failed/.
+//!
 //! SCHEDULE. `seal_and_collect` runs every `interval` (chores.rs): it seals every spool, then runs
 //! `aldigest collect` as a CHILD process (one collect can reach ~730 MiB RSS; alcore is capped at
 //! 2048 MB) under its own `.collect.lock`, never the cross-process chores lock, so a ten-minute
 //! collect cannot block the bodies pass. At graceful shutdown only `seal_for_shutdown` runs: the
 //! next start collects.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
-use std::io::Read;
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -114,6 +123,12 @@ const UNKNOWN_NAMES_MAX: usize = 1000;
 const ERROR_LOG_EVERY: Duration = Duration::from_secs(60);
 /// The two keys the CLI adds to a status-line sample; they are not part of Claude Code's payload.
 const STATUSLINE_CLI_KEYS: [&str; 2] = ["hook_event_name", "statusline_stream"];
+/// Writer-queue name prefix of a rejected-event batch (see `SpoolTap::reject`).
+const REJECTED_PREFIX: &str = "rejected/";
+/// One rejected/<spool>.ndjson stops taking lines past this size; later ones are only counted.
+const REJECTED_FILE_MAX_BYTES: u64 = 4 << 20;
+/// Offending field names remembered per source/topic for /api/ingest-status.
+const REJECTED_FIELDS_MAX: usize = 8;
 
 /// `SessionEnd` -> `session_end`: how the manifest topics of the hook producers were derived.
 pub fn snake_case(name: &str) -> String {
@@ -141,6 +156,13 @@ fn span_topic(name: &str) -> String {
 #[derive(Default)]
 struct Stats {
     written: BTreeMap<String, u64>,
+    /// Items not spooled because they would fail their file (see `reject`), total and per source/topic.
+    rejected_invalid: u64,
+    rejected_by_topic: BTreeMap<String, u64>,
+    /// The offending field names seen per source/topic, at most REJECTED_FIELDS_MAX each.
+    rejected_fields: BTreeMap<String, BTreeSet<String>>,
+    /// Rejected items whose line was not stored under rejected/ (file at its cap, or a write failure).
+    rejected_not_stored: u64,
     unknown: BTreeMap<String, u64>,
     unknown_overflow: u64,
     write_errors: u64,
@@ -200,6 +222,8 @@ pub struct SpoolTap {
     spools: HashSet<String>,
     /// "source/topic" -> spool, current version only.
     topic_spool: HashMap<String, String>,
+    /// spool -> required top-level fields whose absence (or wrong shape) fails the file; see `Shape`.
+    required: HashMap<String, BTreeMap<String, Shape>>,
     stats: Mutex<Stats>,
 }
 
@@ -211,23 +235,114 @@ pub enum Start {
 }
 
 /// Plain serde_json on purpose: alcore must not link the digest crate (a second DuckDB).
-fn parse_manifest(path: &Path) -> Result<(HashSet<String>, HashMap<String, String>), String> {
+/// Plain serde_json on purpose: alcore must not link the digest crate (a second DuckDB).
+/// Third result: per spool, the required top-level payload fields whose absence fails the file (see `required_fields`).
+fn parse_manifest(path: &Path) -> Result<Parsed, String> {
     let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let doc: Value = serde_json::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
     let producers = doc.get("producers").and_then(Value::as_array).ok_or_else(|| format!("{}: no `producers` array", path.display()))?;
-    let mut best: HashMap<String, (i64, String)> = HashMap::new();
+    let mut best: HashMap<String, (i64, String, String)> = HashMap::new();
     for p in producers {
         let field = |k: &str| p.get(k).and_then(Value::as_str).ok_or_else(|| format!("{}: a producer has no string field `{k}`", path.display()));
-        let (source, topic, spool) = (field("source")?, field("topic")?, field("spool")?);
+        let (source, topic, spool, schema) = (field("source")?, field("topic")?, field("spool")?, field("schema")?);
         let version = p.get("version").and_then(Value::as_i64).ok_or_else(|| format!("{}: a producer has no integer `version`", path.display()))?;
         let key = format!("{source}/{topic}");
-        if best.get(&key).is_none_or(|(v, _)| *v < version) {
-            best.insert(key, (version, spool.to_owned()));
+        if best.get(&key).is_none_or(|(v, _, _)| *v < version) {
+            best.insert(key, (version, spool.to_owned(), schema.to_owned()));
         }
     }
-    let topic_spool: HashMap<String, String> = best.into_iter().map(|(k, (_, s))| (k, s)).collect();
+    // The schema path is relative to the manifest (an absolute one is used as is), like digest does.
+    let base = path.parent().unwrap_or_else(|| Path::new(""));
+    let mut required: HashMap<String, BTreeMap<String, Shape>> = HashMap::new();
+    for (_, spool, schema) in best.values() {
+        let sp = base.join(schema);
+        let text = std::fs::read_to_string(&sp).map_err(|e| format!("{}: {e}", sp.display()))?;
+        let doc: Value = serde_json::from_str(&text).map_err(|e| format!("{}: {e}", sp.display()))?;
+        // Several topics may share one spool (the status line does): every line is loaded by each of
+        // their producers, so the spool needs the union of their required fields.
+        let slot = required.entry(spool.clone()).or_default();
+        for (name, shape) in required_fields(&doc) {
+            let cur = slot.entry(name).or_insert(Shape::Any);
+            if *cur == Shape::Any {
+                *cur = shape;
+            }
+        }
+    }
+    let topic_spool: HashMap<String, String> = best.into_iter().map(|(k, (_, s, _))| (k, s)).collect();
     let spools = topic_spool.values().cloned().collect();
-    Ok((spools, topic_spool))
+    Ok((spools, topic_spool, required))
+}
+
+
+/// What `aldigest collect` enforces on a required top-level field beyond its presence, MEASURED
+/// against the loader (read_ndjson with an explicit STRUCT type, ignore_errors = false), not read
+/// from a spec: DuckDB coerces a scalar JSON value into any scalar column (a number, bool, object
+/// or array into VARCHAR; a number or a string like "5" into a number or BOOLEAN) and fails the
+/// file only for a value it cannot coerce. What fails for certain, and is cheap to see without
+/// walking into the value: absent or JSON null (NOT NULL), an object or array where the schema
+/// says boolean / integer / number, anything but an array where it says array. A WRONG TYPE
+/// beyond that (a non-numeric string for a number, a wrong element inside an array) can still fail
+/// a file; it is not checked here and `aldigest collect` counts it as a failed file.
+#[derive(Clone, Copy, PartialEq)]
+enum Shape {
+    Any,
+    Scalar,
+    Array,
+}
+
+
+/// spool -> required top-level fields and the shape check of each.
+type Required = HashMap<String, BTreeMap<String, Shape>>;
+
+/// What `parse_manifest` returns: the current spools, source/topic -> spool, and the required fields.
+type Parsed = (HashSet<String>, HashMap<String, String>, Required);
+
+#[derive(Clone, Copy, PartialEq)]
+enum Got {
+    Null,
+    Object,
+    Array,
+    Scalar,
+}
+
+fn got_value(v: &Value) -> Got {
+    match v {
+        Value::Null => Got::Null,
+        Value::Object(_) => Got::Object,
+        Value::Array(_) => Got::Array,
+        _ => Got::Scalar,
+    }
+}
+
+/// Mirrors `nullable_of` of agentlens-digest/src/schema.rs (alcore must not link that crate): a
+/// `type` list with "null", or a union branch of type null. Such a column is not NOT NULL.
+fn nullable(node: &Value) -> bool {
+    node.get("type").and_then(Value::as_array).is_some_and(|t| t.iter().any(|x| x.as_str() == Some("null")))
+        || ["anyOf", "oneOf"].iter().any(|kw| node.get(kw).and_then(Value::as_array).is_some_and(|bs| bs.iter().any(|b| b.get("type").and_then(Value::as_str) == Some("null"))))
+}
+
+/// The top-level `required` properties of a producer schema that digest makes NOT NULL (nested
+/// `required` is not enforced by digest either), each with the shape check that applies to it.
+fn required_fields(doc: &Value) -> Vec<(String, Shape)> {
+    let props = doc.get("properties").and_then(Value::as_object);
+    doc.get("required")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .filter_map(|name| {
+            let node = props?.get(name)?;
+            if nullable(node) {
+                return None;
+            }
+            let shape = match (node.get("x-duckdb-type"), node.get("type").and_then(Value::as_str)) {
+                (None, Some("boolean" | "integer" | "number")) => Shape::Scalar,
+                (None, Some("array")) => Shape::Array,
+                _ => Shape::Any,
+            };
+            Some((name.to_owned(), shape))
+        })
+        .collect()
 }
 
 struct ChildOut {
@@ -277,7 +392,7 @@ fn run_child(mut cmd: Command, timeout: Duration) -> Result<ChildOut, String> {
 /// another layout version) does NOT stop alcore: the existing stores are the system of record, so
 /// the tap stays off for this process and the reason is reported loudly and by /api/ingest-status.
 pub fn start(manifest: &Path, aldigest_bin: &Path, interval_secs: u64, sources: Vec<String>, data_dir: &Path) -> Result<Start, String> {
-    let (spools, topic_spool) = parse_manifest(manifest)?;
+    let (spools, topic_spool, required) = parse_manifest(manifest)?;
     let ingest_dir = data_dir.join("ingest");
     // `ready/` is created up front: `aldigest collect` fails on an ingest dir without one, and the
     // writer only creates it at the first seal, so the start-up collect would otherwise fail.
@@ -328,6 +443,7 @@ pub fn start(manifest: &Path, aldigest_bin: &Path, interval_secs: u64, sources: 
         sources,
         spools,
         topic_spool,
+        required,
         stats: Mutex::new(Stats::default()),
     };
     match tap.register() {
@@ -428,6 +544,50 @@ impl SpoolTap {
         }
     }
 
+
+    /// The required top-level fields of `spool` that `payload` (seen through `got`) lacks or has in a
+    /// shape digest cannot load; empty when the line would load, or when the spool has none.
+    fn invalid_fields(&self, spool: &str, got: impl Fn(&str) -> Option<Got>) -> Vec<String> {
+        let Some(required) = self.required.get(spool) else { return Vec::new() };
+        required
+            .iter()
+            .filter(|(name, shape)| match (got(name), shape) {
+                (None | Some(Got::Null), _) => true,
+                (Some(Got::Object | Got::Array), Shape::Scalar) => true,
+                (Some(g), Shape::Array) => g != Got::Array,
+                _ => false,
+            })
+            .map(|(n, _)| n.clone())
+            .collect()
+    }
+
+    /// An item that would fail its whole spool file at `aldigest collect` (every other line of the
+    /// file with it) is NOT spooled: counted per `key` (source/topic), its offending field names
+    /// kept (bounded), logged once per key, and its line stored under `rejected/` so the evidence
+    /// is not destroyed. The caller still answers its request normally: this never fails capture.
+    fn reject(&self, key: &str, spool: &str, fields: Vec<String>, payload: Option<String>) {
+        {
+            let mut s = self.stats();
+            s.rejected_invalid += 1;
+            *s.rejected_by_topic.entry(key.to_owned()).or_default() += 1;
+            let names = s.rejected_fields.entry(key.to_owned()).or_default();
+            for f in &fields {
+                if names.len() < REJECTED_FIELDS_MAX {
+                    names.insert(f.clone());
+                }
+            }
+            if s.last_error_logged.insert(format!("<rejected:{key}>"), Instant::now()).is_none() {
+                eprintln!("{} alcore: spool tap: {key} event lacks or mis-types required field(s) {fields:?} — not spooled (it would fail its whole spool file), kept under ingest/rejected/, counted in /api/ingest-status; logged once per topic", log_ts());
+            }
+        }
+        let Some(text) = payload else {
+            self.stats().rejected_not_stored += 1;
+            return;
+        };
+        let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
+        self.enqueue(format!("{REJECTED_PREFIX}{spool}"), vec![format!("{{\"ts_ns\":{ts},\"payload\":{text}}}").into_bytes()]);
+    }
+
     fn write(&self, spool: &str, payloads: &[&[u8]]) {
         let n = payloads.len() as u64;
         match append_many(&self.ingest_dir, spool, payloads, DEFAULT_SEAL_BYTES) {
@@ -507,7 +667,28 @@ impl SpoolTap {
         }
         let topic = snake_case(event);
         match self.spool_of("hook", &topic) {
-            Some(spool) => self.enqueue(spool.to_owned(), vec![raw.to_vec()]),
+            Some(spool) => {
+                // Borrowed values (RawValue): only the top-level keys are copied, so a multi-MiB
+                // tool_response is not parsed into a tree. Bytes that are not an object fall
+                // through to the writer, which counts them as a write error as before.
+                if let Ok(fields) = serde_json::from_slice::<BTreeMap<String, &serde_json::value::RawValue>>(raw) {
+                    let got = |n: &str| {
+                        fields.get(n).map(|v| match v.get().as_bytes()[0] {
+                            b'n' => Got::Null,
+                            b'{' => Got::Object,
+                            b'[' => Got::Array,
+                            _ => Got::Scalar,
+                        })
+                    };
+                    let bad = self.invalid_fields(spool, got);
+                    if !bad.is_empty() {
+                        let line = std::str::from_utf8(raw).ok().map(|t| t.trim_matches(|c: char| c.is_ascii_whitespace()).to_owned()).filter(|t| !t.contains(['\n', '\r'])).or_else(|| serde_json::from_slice::<Value>(raw).ok().map(|v| v.to_string()));
+                        self.reject(&format!("hook/{topic}"), spool, bad, line);
+                        return;
+                    }
+                }
+                self.enqueue(spool.to_owned(), vec![raw.to_vec()]);
+            }
             None => self.note_unknown([(format!("hook/{topic}"), 1)]),
         }
     }
@@ -521,6 +702,11 @@ impl SpoolTap {
         let spool = if stream == "subagent" { "statusline_subagent" } else { "statusline_main" };
         if !self.spools.contains(spool) {
             self.note_unknown([(spool.to_owned(), 1)]);
+            return;
+        }
+        let bad = self.invalid_fields(spool, |n| payload.get(n).map(got_value));
+        if !bad.is_empty() {
+            self.reject(spool, spool, bad, Some(Value::Object(payload.clone()).to_string()));
             return;
         }
         let mut line = String::from("{");
@@ -552,7 +738,14 @@ impl SpoolTap {
         for (name, record) in items {
             let topic = if source == "telemetry_span" { span_topic(&name) } else { name };
             match self.spool_of(source, &topic) {
-                Some(spool) => groups.entry(spool.to_owned()).or_default().push(Value::Object(record).to_string()),
+                Some(spool) => {
+                    let bad = self.invalid_fields(spool, |n| record.get(n).map(got_value));
+                    if bad.is_empty() {
+                        groups.entry(spool.to_owned()).or_default().push(Value::Object(record).to_string());
+                    } else {
+                        self.reject(&format!("{source}/{topic}"), spool, bad, Some(Value::Object(record).to_string()));
+                    }
+                }
                 None => *unknown.entry(format!("{source}/{topic}")).or_default() += 1,
             }
         }
@@ -612,8 +805,44 @@ impl SpoolTap {
     /// is drained.
     fn write_loop(&self, rx: Receiver<Batch>) {
         while let Ok((spool, lines)) = rx.recv() {
-            self.write_lines(&spool, &lines);
+            // A batch named `rejected/<spool>` is evidence, not a spool (see `reject`); a spool name
+            // is letters, digits and underscores only, so the prefix cannot collide with one.
+            match spool.strip_prefix(REJECTED_PREFIX) {
+                Some(name) => self.write_rejected(name, &lines),
+                None => self.write_lines(&spool, &lines),
+            }
             self.queued_bytes.fetch_sub(lines.iter().map(Vec::len).sum(), Ordering::SeqCst);
+        }
+    }
+
+    /// Appends already-built rejected lines to `<ingest>/rejected/<spool>.ndjson`. That directory is
+    /// outside `inbox/ready/done/failed`: `seal`, `collect` and the done/ retention purge never look
+    /// at it, and no code deletes from it. Past REJECTED_FILE_MAX_BYTES the line is counted, not stored.
+    fn write_rejected(&self, spool: &str, lines: &[Vec<u8>]) {
+        let dir = self.ingest_dir.join("rejected");
+        let path = dir.join(format!("{spool}.ndjson"));
+        let stored = (|| -> std::io::Result<bool> {
+            std::fs::create_dir_all(&dir)?;
+            let f = std::fs::OpenOptions::new().append(true).create(true).open(&path)?;
+            f.lock_exclusive()?;
+            if f.metadata()?.len() >= REJECTED_FILE_MAX_BYTES {
+                return Ok(false);
+            }
+            let mut buf = Vec::new();
+            for l in lines {
+                buf.extend_from_slice(l);
+                buf.push(b'\n');
+            }
+            (&f).write_all(&buf)?;
+            Ok(true)
+        })();
+        match stored {
+            Ok(true) => {}
+            Ok(false) => self.stats().rejected_not_stored += lines.len() as u64,
+            Err(e) => {
+                self.stats().rejected_not_stored += lines.len() as u64;
+                self.note_error(spool, &format!("rejected-event store {}: {e}", path.display()));
+            }
         }
     }
 
@@ -908,6 +1137,10 @@ impl SpoolTap {
             "writeErrors": s.write_errors,
             "writeErrorsBySpool": s.write_errors_by_spool,
             "bodiesSkipped": s.bodies_skipped,
+            "rejectedInvalid": s.rejected_invalid,
+            "rejectedByTopic": s.rejected_by_topic,
+            "rejectedFields": s.rejected_fields,
+            "rejectedNotStored": s.rejected_not_stored,
             "lastCollect": s.last_collect,
             "views": s.views,
             "doneDeleted": s.done_deleted,
