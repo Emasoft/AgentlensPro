@@ -28,14 +28,13 @@ const PORT_VARS: readonly PortVar[] = VARS.map(v => v.env)
 // ratified and TRDD-99HUNXJS's STATE block explicitly declined to re-litigate. If that decision
 // is ever revisited (refuse-and-exit instead of fallback) these rows are SUPPOSED to go red —
 // update them alongside the decision; do not soften the oracle back into a call.
-const REJECTED = ['', '   ', 'abc', '0', '-1', '65536', '80.5', '8080/evil']
+const REJECTED = ['', '   ', 'abc', '0', '-1', '65536', '80.5', '8080/evil', '3e3', '0x50', '0b11']
 
 // Accepted -> the number itself, regardless of that variable's fallback.
 const ACCEPTED_TODAY: Array<[string, number]> = [
   ['8080', 8080], // positive control: a table of nothing but fallbacks is satisfied by a parser
   //                 that ignores its argument entirely, so one valid input must survive intact.
-  ['3e3', 3000], // ACCEPTED_TODAY (Number('3e3') === 3000). Only carries information on MCP/OTLP, where
-  //                accepted (3000) differs from the fallback. Whether it SHOULD be: TRDD-EGGERLEO.
+  ['+8080', 8080], // Rust's u16 parse accepts a leading plus, so the CLI must too (TRDD-EGGERLEO).
   ['1', 1], // boundary: with '0'/'-1' above, the only rows exercising `n > 0`.
   ['65535', 65535], // boundary: with '65536' above, the only rows exercising `n < 65536`.
 ]

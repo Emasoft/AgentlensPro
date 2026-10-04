@@ -41,6 +41,9 @@ All notable changes to AgentlensPro are documented here.
 
 ### Changed
 
+- **`UI_PORT` / `MCP_PORT` / `OTLP_PORT` values that are not plain decimal integers (for example `3e3`,
+  `0x50`, `80.5`) are now rejected by the CLI**, as the server already rejected them, with a stderr
+  warning, and fall back to the default port (TRDD-EGGERLEO). A leading `+` is still accepted, as by the server.
 - **The install heals itself at every CLI launch.** Each non-hook launch checks the skills (tree hash),
   agents (bytes), hook registrations (now at a 120 s timeout, was 30 s) and the per-key telemetry env,
   and repairs only what is missing or stale through the same steps as `setup`, all via the verified

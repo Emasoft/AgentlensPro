@@ -27,15 +27,39 @@ import { liveLockPid, readChosenPort } from './portSelect'
  *  unvalidated value into a URL turns `UI_PORT=abc` into an `Invalid URL` throw and
  *  `UI_PORT=8080/evil` into a silent path injection. */
 export function envPort(raw: string | undefined, fallback: number): string {
-  const n = Number(raw?.trim())
-  return String(raw?.trim() && Number.isInteger(n) && n > 0 && n < 65536 ? n : fallback)
+  // Decimal digits only (optional leading `+`): bare `Number()` also takes `3e3`, `0x1F80`, `0b11`,
+  // which the Rust server (`u16` parse, server_stats.rs `mcp_port_from_env`) rejects, so the CLI and
+  // the server would resolve one MCP_PORT to different ports. `+` stays because Rust accepts it
+  // (TRDD-EGGERLEO). Tested on the TRIMMED value: `" 8080 "` must stay valid.
+  const t = raw?.trim() ?? ''
+  const n = /^\+?\d+$/.test(t) ? Number(t) : NaN
+  return String(n > 0 && n < 65536 ? n : fallback)
 }
+
+
+const warnedPorts = new Set<string>()
+/** A port variable that is SET but rejected by `envPort` falls back silently otherwise, and the CLI
+ *  would then dial a different port than before the guard tightened (TRDD-EGGERLEO). One stderr line
+ *  per process, variable and value; never changes control flow or the exit code. `used` is the port
+ *  the caller actually ended up with. Empty/blank counts as unset, as in `envPort`. */
+export function warnIfPortRejected(name: string, raw: string | undefined, used: string): void {
+  if (!raw?.trim() || envPort(raw, 0) !== '0') return
+  const msg = `warning: ${name}=${JSON.stringify(raw)} is not a plain decimal port (1-65535); using ${used}\n`
+  if (warnedPorts.has(msg)) return
+  warnedPorts.add(msg)
+  process.stderr.write(msg)
+}
+
+/** Test seam: forget which port warnings were already printed. */
+export function resetPortWarnings(): void { warnedPorts.clear() }
 
 /** A client-side port: a usable env value wins; else the port the last `server start` actually
  *  bound (ports.json — honoured only while that server is alive); else the default. */
 export function clientPort(raw: string | undefined, key: 'ui' | 'mcp', fallback: number): string {
   const fromEnv = envPort(raw, 0)
-  return fromEnv !== '0' ? fromEnv : String(readChosenPort(dataDir(), key) ?? fallback)
+  const used = fromEnv !== '0' ? fromEnv : String(readChosenPort(dataDir(), key) ?? fallback)
+  warnIfPortRejected(`${key.toUpperCase()}_PORT`, raw, used)
+  return used
 }
 
 /** MCP JSON-RPC endpoint of the running server. */

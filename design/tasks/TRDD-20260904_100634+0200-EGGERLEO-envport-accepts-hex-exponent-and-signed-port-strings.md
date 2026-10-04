@@ -3,7 +3,7 @@ trdd-id: EGGERLEO
 title: envPort accepts hex exponent and signed forms that nobody types as a port
 column: todo
 created: 2026-09-04T10:06:34+0200
-updated: 2026-09-04T16:56:24+0200
+updated: 2026-10-04T14:25:24+0200
 current-owner: main-session
 task-type: bugfix
 project-id: agentlenspro
@@ -200,10 +200,10 @@ when the shape is earned.
 
 ## Acceptance
 
-- [ ] Decide whether non-decimal literals should be rejected, or documented as accepted.
-- [ ] If rejected: `/^\d+$/` guard in `envPort`, and the `3e3` row in
+- [x] Decide whether non-decimal literals should be rejected, or documented as accepted.
+- [x] If rejected: `/^\d+$/` guard in `envPort`, and the `3e3` row in
       `src/test/setupPortEnv.test.ts` moves from ACCEPTED to REJECTED.
-- [ ] The decision recorded here before the code lands (same discipline TRDD-99HUNXJS used).
+- [x] The decision recorded here before the code lands (same discipline TRDD-99HUNXJS used).
 
 ## Related
 
@@ -211,3 +211,8 @@ when the shape is earned.
   today's behaviour, deliberately, with a comment pointing here. Those rows are supposed to go
   red if this card changes the parser.
 - TRDD-BSDR4TRM — where `envPort`'s fallback semantics were ratified.
+
+## Notes
+
+2026-10-04 DECISION (main agent, under the owner instruction "decide the rest by yourself based on tests and verified facts"): REJECT non-decimal literals. Reason: the Rust server already rejects these spellings (server_stats.rs mcp_port_from_env parses u16), so the change makes the two engines agree rather than choosing a new policy. Guard is the card's corrected /^\+?\d+$/ on the trimmed value because Rust accepts a leading plus. Affected callers: clientPort (UI/MCP URLs), alcoreServeArgs, setup resolveCtx, resolveServerPorts, telemetryConfig; a previously accepted spelling now falls back to the default port.
+2026-10-04 DONE: envPort guard in src/cli/cliCore.ts; warnIfPortRejected prints one stderr warning per variable and value (wired in clientPort only). Tests: cliCoreUrls.test.ts suite 'envPort agrees with the server' (18 rows from the Rust table plus card vectors, plus the warn-once test), setupPortEnv.test.ts 3e3/0x50/0b11 now REJECTED and +8080 ACCEPTED; red with the old parser 13 failing, green 68 passing. OWED: warning calls in alcoreServeArgs (serverControl.ts) and the setup.ts port closure, outside this slice.

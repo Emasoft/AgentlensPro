@@ -4,9 +4,10 @@
 // server happened to answer :4316 on the reviewer's machine.
 
 import * as assert from 'assert'
+import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
-import { dashboardUrl, envPort, mcpEndpoint, uiBaseUrl } from '../cli/cliCore'
+import { dashboardUrl, envPort, mcpEndpoint, resetPortWarnings, uiBaseUrl } from '../cli/cliCore'
 import { statsOwnership } from '../cli/serverControl'
 
 const KEYS = ['UI_PORT', 'MCP_PORT', 'AGENTLENS_UI_URL', 'AGENTLENS_MCP_URL', 'AGENTLENS_DASHBOARD_URL'] as const
@@ -46,6 +47,53 @@ suite('cliCore — endpoint defaults follow the port env', () => {
       assert.strictEqual(uiBaseUrl(), 'http://localhost:3000', `UI_PORT=${JSON.stringify(bad)}`)
       assert.strictEqual(mcpEndpoint(), 'http://localhost:4316/mcp', `MCP_PORT=${JSON.stringify(bad)}`)
       assert.strictEqual(envPort(bad, 4318), '4318')
+    }
+  })
+})
+
+// TRDD-EGGERLEO: the expected column is the SAME table as the Rust test
+// `mcp_port_from_env_rejects_zero_and_invalid_spellings` (server_stats.rs), plus the spellings the
+// card ran. Rust's `u16` parse takes a leading `+`, so '+8080' must be accepted here too; the
+// server rejects `3e3`/hex/binary, so the CLI must not resolve them to a different port.
+suite('cliCore — envPort agrees with the server on which spellings are ports (TRDD-EGGERLEO)', () => {
+  const FB = 4316
+  const rows: Array<[string | undefined, number]> = [
+    [undefined, FB], ['0', FB], ['', FB], ['   ', FB], ['abc', FB], ['-1', FB], ['65536', FB],
+    ['80.5', FB], ['8080/evil', FB], ['3e3', FB], ['0x50', FB], ['0x1F80', FB], ['0b11', FB],
+    ['8080', 8080], [' 8080 ', 8080], ['65535', 65535], ['+8080', 8080], ['08080', 8080],
+  ]
+  for (const [raw, want] of rows) {
+    test(`envPort(${JSON.stringify(raw)}) -> ${want}`, () => {
+      assert.strictEqual(envPort(raw, FB), String(want))
+    })
+  }
+
+  test('a set-but-rejected port warns once on stderr and falls back; unset and valid warn nothing', () => {
+    const saved = process.env.MCP_PORT
+    const savedDir = process.env.DATA_DIR
+    // Own data dir: a live collector's ports.json on this machine must not change the fallback.
+    process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'agentlens-envport-'))
+    const realWrite = process.stderr.write
+    const seen: string[] = []
+    process.stderr.write = ((s: string | Uint8Array) => { seen.push(String(s)); return true }) as typeof process.stderr.write
+    try {
+      resetPortWarnings()
+      process.env.MCP_PORT = '3e3'
+      assert.strictEqual(mcpEndpoint(), 'http://localhost:4316/mcp')
+      mcpEndpoint()
+      assert.strictEqual(seen.length, 1, 'one warning per variable and value')
+      assert.ok(seen[0].includes('MCP_PORT="3e3"') && seen[0].includes('using 4316'), seen[0])
+      seen.length = 0
+      process.env.MCP_PORT = '8080'
+      mcpEndpoint()
+      delete process.env.MCP_PORT
+      mcpEndpoint()
+      assert.deepStrictEqual(seen, [])
+    } finally {
+      process.stderr.write = realWrite
+      fs.rmSync(process.env.DATA_DIR!, { recursive: true, force: true })
+      if (savedDir === undefined) delete process.env.DATA_DIR; else process.env.DATA_DIR = savedDir
+      if (saved === undefined) delete process.env.MCP_PORT; else process.env.MCP_PORT = saved
     }
   })
 })
