@@ -3,7 +3,7 @@ trdd-id: ZSX34J8F
 title: rust-core target debug accumulates thousands of build generations and nothing ever prunes them
 column: backburner
 created: 2026-09-02T07:20:41+0200
-updated: 2026-09-02T07:20:41+0200
+updated: 2026-10-04T15:47:46+0200
 current-owner: agentlenspro-15
 task-type: infra
 project-id: agentlenspro
@@ -38,3 +38,4 @@ before/after recorded here; the live `alcore` binary (`target/release`) untouche
 a cargo job owns the tree (a sweep mid-build corrupts the build).
 
 ## Notes and lessons learned
+2026-10-04: retention rule STATED — keep the newest 2 generations per crate (newest = mtime of .fingerprint/<crate>-<hash>), older ones removable. scripts/cargo-target-retention.sh reports by default (one find+du pass, grouped in awk; 600-entry synthetic tree in about 1 s) and removes only with --apply (refused unless the path ends in /target and holds CACHEDIR.TAG or debug/.fingerprint; symlinks never followed; every path printed first); --apply tested on synthetic trees only. Measured on rust-core/target (totals only): du -sk target 53,656,372 KiB; du -sk target/debug 37,465,116 KiB; 1,838 .fingerprint entries. The per-crate generation breakdown on the real target was NOT completed (the first per-entry version was too slow and was stopped). Applying the rule to the real target is the owner's decision; acceptance (before/after numbers) is still owed.
