@@ -32,6 +32,10 @@ pub const PRESERVE_INSERTION_ORDER: bool = true;
 /// DuckDB's default `maximum_object_size` is 16 MiB; one spool line may exceed it.
 pub const MAX_OBJECT_BYTES: u64 = 67_108_864;
 
+
+/// The unified query views of schema `u` (see the module).
+pub mod views;
+
 /// Apply the three provisional settings. `preserve_insertion_order` is what makes
 /// `row_number() OVER ()` equal the line position (the record ordinal).
 pub fn configure(conn: &Connection) -> Res<()> {

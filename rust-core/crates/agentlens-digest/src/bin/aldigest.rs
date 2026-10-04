@@ -6,20 +6,21 @@
 //!   aldigest register --db DB --manifest M    install the catalog, tables and digest macros
 //!   aldigest collect --db DB --ingest-dir DIR [--max-files N]  load ready/<spool>/*.ndjson exactly once; with --max-files stop after N files were loaded or failed and report `remaining=K` ready files
 //!   aldigest query --db DB --sql SQL          read-only: run one SELECT, print each row as one JSON object per line
+//!   aldigest views --db DB                    (re)generate, in one transaction, every object of schema `u` from the catalog: `u."<source>__<topic>"` views, `u."<source>__<topic>_between"(t_from, t_to)` macros, `u."<source>__all"` views; prints the counts; an untypable column or name collision fails the command and writes nothing
 //!
 //! Writing the spool is `alspool` (crate agentlens-spool), which does not link DuckDB.
 //! Any error exits non-zero. Test-only crash points (cargo feature `crashpoints`, off by
 //! default): with ALDIGEST_CRASH_AT=after_insert|after_commit the process writes the file named
 //! by ALDIGEST_CRASH_MARKER at that point of `collect` and then parks until it is killed.
 
-use agentlens_digest::{collect, open, open_read_only, query_json_rows, register, schema, Res};
+use agentlens_digest::{collect, open, open_read_only, query_json_rows, register, schema, views, Res};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::exit;
 
 fn usage(msg: &str) -> ! {
     eprintln!("aldigest: {msg}");
-    eprintln!("usage: aldigest describe --manifest M | spools --manifest M | rehash --manifest M | register --db DB --manifest M | collect --db DB --ingest-dir DIR [--max-files N] | query --db DB --sql SQL");
+    eprintln!("usage: aldigest describe --manifest M | spools --manifest M | rehash --manifest M | register --db DB --manifest M | collect --db DB --ingest-dir DIR [--max-files N] | query --db DB --sql SQL | views --db DB");
     exit(64);
 }
 
@@ -112,6 +113,11 @@ fn run(args: &[String]) -> Res<()> {
             for row in query_json_rows(&open_read_only(&f["db"])?, sql)? {
                 println!("{row}");
             }
+        }
+        "views" => {
+            let f = flags(rest, &["db"]);
+            let s = views::views(&open(&f["db"])?)?;
+            println!("views topic_views={} macros={} all_views={}", s.topic_views, s.macros, s.all_views);
         }
         other => usage(&format!("unknown command {other}")),
     }

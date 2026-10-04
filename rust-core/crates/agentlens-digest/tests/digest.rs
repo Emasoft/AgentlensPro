@@ -1706,3 +1706,165 @@ fn aldigest_rows(db: &Path, sql: &str) -> Vec<Value> {
     ok(&out);
     String::from_utf8_lossy(&out.stdout).lines().map(|l| serde_json::from_str(l).unwrap()).collect()
 }
+
+
+// ---------------------------------------------------------------- query unification views (schema `u`)
+
+use agentlens_digest::views::{views, ViewsSummary};
+use std::collections::BTreeSet;
+
+/// Names of the views, or of the table macros, of schema `u`.
+fn u_names(conn: &Connection, kind: &str) -> Vec<String> {
+    let from = if kind == "view" {
+        "(SELECT view_name AS name FROM duckdb_views() WHERE schema_name = 'u')"
+    } else {
+        "(SELECT function_name AS name FROM duckdb_functions() WHERE schema_name = 'u' AND function_type = 'table_macro')"
+    };
+    select(conn, &["name"], from, "1").into_iter().map(|r| r[0].clone().unwrap()).collect()
+}
+
+/// Every object of schema `u` with its definition, sorted: what a `views` run must leave unchanged or reproduce.
+fn u_objects(conn: &Connection) -> Vec<Vec<Option<String>>> {
+    select(
+        conn,
+        &["kind", "name", "def"],
+        "(SELECT 'view' AS kind, view_name AS name, sql AS def FROM duckdb_views() WHERE schema_name = 'u' UNION ALL SELECT 'macro', function_name, CAST(macro_definition AS VARCHAR) FROM duckdb_functions() WHERE schema_name = 'u')",
+        "1, 2",
+    )
+}
+
+/// F1. After registering the crate manifest `views` succeeds, creates one view and one `_between` macro per distinct source+topic
+/// plus one `__all` view per source with several topics, and every one of them answers (a view with `count(*)`, a macro over a time range).
+#[test]
+fn f1_every_view_and_macro_of_the_crate_manifest_answers() {
+    let fx = Fx::new("f1");
+    let producers = register_where(&fx, &|_| true);
+    let topics: BTreeSet<(&str, &str)> = producers.iter().map(|p| (p.source.as_str(), p.topic.as_str())).collect();
+    let sources: BTreeSet<&str> = topics.iter().map(|(s, _)| *s).collect();
+    let multi = sources.iter().filter(|s| topics.iter().filter(|(src, _)| src == *s).count() > 1).count();
+    assert!(multi > 0 && topics.len() > sources.len(), "the crate manifest must have multi-topic sources");
+    let conn = fx.conn();
+    let summary = views(&conn).unwrap();
+    assert_eq!(summary, ViewsSummary { topic_views: topics.len(), macros: topics.len(), all_views: multi });
+    let views_made = u_names(&conn, "view");
+    assert_eq!(views_made.len(), topics.len() + multi);
+    for v in &views_made {
+        assert_eq!(count(&conn, &format!("u.\"{v}\"")), 0, "{v}");
+    }
+    let macros = u_names(&conn, "macro");
+    assert_eq!(macros.len(), topics.len());
+    for m in &macros {
+        assert_eq!(count(&conn, &format!("u.\"{m}\"(to_timestamp(0), to_timestamp(1))")), 0, "{m}");
+    }
+}
+
+/// F2. Two versions of a topic (v2 renames `reason` to `end_reason` via x-replaces and adds `duration_ms`), rows loaded into both through collect:
+/// the view returns all rows under the canonical (v2) names, the renamed column carries the v1 values, the added column is NULL for v1 rows,
+/// `_meta_version` is right, and the `_between` macro filters on recorded time across versions (a v1 row later than a v2 row is found by a later window).
+#[test]
+fn f2_two_versions_unify_by_name_and_the_between_macro_spans_versions() {
+    let fx = Fx::new("f2");
+    let (v1, v2) = version_pair(&fx);
+    register(&fx.conn(), &load_manifest(&write_manifest(&fx.root.join("m"), &[v1, v2])).unwrap()).unwrap();
+    let mut p2 = session_end_payload(9);
+    let reason = p2.as_object_mut().unwrap().remove("reason").unwrap();
+    assert_eq!(reason, "clear");
+    p2["end_reason"] = json!("logout");
+    p2["duration_ms"] = json!(42);
+    fx.put("hook_session_end_v2", "b.ndjson", &(line(TS0, &p2) + "\n"));
+    let later = TS0 + 7_200_000_000_000; // two hours after the v2 row
+    fx.put(SE, "a.ndjson", &format!("{}\n{}\n", line(later, &session_end_payload(0)), line(later + 1, &session_end_payload(1))));
+    assert_eq!(fx.collect().rows, 3);
+    let conn = fx.conn();
+    views(&conn).unwrap();
+    assert_eq!(
+        select(&conn, &["session_id", "end_reason", "duration_ms", "_meta_version", "_meta_producer_type"], "u.\"hook__session_end\"", "session_id"),
+        vec![
+            vec![s("aaaaaaaa-0"), s("clear"), None, s("1"), s(SE)],
+            vec![s("aaaaaaaa-1"), s("clear"), None, s("1"), s(SE)],
+            vec![s("aaaaaaaa-9"), s("logout"), s("42"), s("2"), s("hook_session_end_v2")],
+        ]
+    );
+    assert_eq!(count(&conn, "duckdb_columns() WHERE schema_name = 'u' AND table_name = 'hook__session_end' AND column_name = 'reason'"), 0, "the old name is gone");
+    let between = |from: i64, to: i64| select(&conn, &["session_id"], &format!("u.\"hook__session_end_between\"(to_timestamp({from}), to_timestamp({to}))"), "1");
+    assert_eq!(between(1_700_003_600, 1_700_010_800), vec![vec![s("aaaaaaaa-0")], vec![s("aaaaaaaa-1")]], "the later window holds the two v1 rows only");
+    assert_eq!(between(1_700_000_000, 1_700_000_001), vec![vec![s("aaaaaaaa-9")]], "the early window holds the v2 row only");
+}
+
+/// F3. One status-line spool line loaded into its 14 topic tables is ONE row of `u."statusline_main__all"`, with columns of at least three topics.
+#[test]
+fn f3_all_view_joins_the_topics_of_one_event_into_one_row() {
+    let fx = Fx::new("f3");
+    let producers = register_where(&fx, &|e| e["source"] == "statusline_main");
+    assert_eq!(producers.len(), 14);
+    fx.put("statusline_main", "a.ndjson", &lines(&[statusline_main_payload(0)]));
+    assert_eq!(fx.collect().rows, 1);
+    let conn = fx.conn();
+    views(&conn).unwrap();
+    for p in &producers {
+        assert_eq!(count(&conn, &format!("u.\"statusline_main__{}\"", p.topic)), 1, "{}", p.topic);
+    }
+    assert_eq!(count(&conn, "u.\"statusline_main__all\""), 1);
+    let cols = select(&conn, &["column_name"], "(SELECT column_name FROM duckdb_columns() WHERE schema_name = 'u' AND table_name = 'statusline_main__all' AND column_name NOT LIKE '\\_meta\\_%' ESCAPE '\\')", "1");
+    let prefixes: BTreeSet<String> = cols.iter().map(|c| c[0].clone().unwrap().split_once("__").expect("topic__column").0.to_owned()).collect();
+    assert!(prefixes.len() >= 3, "{prefixes:?}");
+    assert!(prefixes.iter().all(|p| producers.iter().any(|q| &q.topic == p)), "{prefixes:?}");
+}
+
+/// F4. `views` is idempotent: the binary and a second library run leave exactly the same objects, and the binary prints the counts.
+#[test]
+fn f4_views_twice_gives_the_same_objects() {
+    let fx = Fx::new("f4");
+    register_where(&fx, &only(&[SE, "statusline_main_cost_v1", "statusline_main_model_v1"]));
+    let out = Command::new(env!("CARGO_BIN_EXE_aldigest")).args(["views", "--db"]).arg(fx.db()).output().unwrap();
+    ok(&out);
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "views topic_views=3 macros=3 all_views=1\n");
+    let conn = fx.conn();
+    let first = u_objects(&conn);
+    assert_eq!(first.len(), 7);
+    assert_eq!(views(&conn).unwrap(), ViewsSummary { topic_views: 3, macros: 3, all_views: 1 });
+    assert_eq!(u_objects(&conn), first);
+}
+
+/// F5. A column whose STRUCT has different fields in two versions cannot be unified: `views` fails naming source, topic and column,
+/// and schema `u` (built by an earlier successful run) is left exactly as it was.
+#[test]
+fn f5_a_conflicting_catalog_fails_the_run_and_leaves_u_unchanged() {
+    let fx = Fx::new("f5");
+    let base = session_end_doc();
+    let with_x = |field: &str, id: &str| {
+        let mut d = base.clone();
+        d["$id"] = json!(id);
+        d["properties"]["x"] = json!({"type": "object", "properties": {field: {"type": "string"}}});
+        d
+    };
+    let dir = fx.root.join("f5");
+    let good = entry(&base, "hook", "ok_topic", 1, "hook_ok_topic_v1", Value::Null, &dir.join("ok.schema.json"));
+    let c1 = entry(&with_x("a", "agentlenspro:hook.conf:v1"), "hook", "conf", 1, "hook_conf_v1", Value::Null, &dir.join("c1.schema.json"));
+    let c2 = entry(&with_x("b", "agentlenspro:hook.conf:v2"), "hook", "conf", 2, "hook_conf_v2", json!("2026-11-01"), &dir.join("c2.schema.json"));
+    register(&fx.conn(), &load_manifest(&write_manifest(&fx.root.join("m1"), &[good.clone(), c1.clone()])).unwrap()).unwrap();
+    let conn = fx.conn();
+    views(&conn).unwrap();
+    let before = u_objects(&conn);
+    assert_eq!(before.len(), 5, "two topic views, two macros, one __all view");
+    drop(conn);
+    register(&fx.conn(), &load_manifest(&write_manifest(&fx.root.join("m2"), &[good, c1, c2])).unwrap()).unwrap();
+    let conn = fx.conn();
+    let err = views(&conn).unwrap_err();
+    assert!(err.contains("hook.conf") && err.contains("\"x\"") && err.contains("nothing was written"), "{err}");
+    assert_eq!(u_objects(&conn), before, "schema u changed although the run failed");
+}
+
+/// G4. A double underscore in a source or topic name is a manifest compile error (it is the separator of the unified view names).
+#[test]
+fn g4_double_underscore_in_source_or_topic_is_a_compile_error() {
+    let fx = Fx::new("g4");
+    let doc = session_end_doc();
+    for (source, topic, bad) in [("hook__x", "session_end", "hook__x"), ("hook", "a__b", "a__b")] {
+        let e = entry(&doc, source, topic, 1, "sp", Value::Null, &fx.root.join("s.schema.json"));
+        let err = load_manifest(&write_manifest(&fx.root.join("m"), &[e])).unwrap_err();
+        assert!(err.contains("double underscore") && err.contains(bad), "{err}");
+    }
+    let e = entry(&doc, "hook_x", "a_b", 1, "sp", Value::Null, &fx.root.join("s.schema.json"));
+    load_manifest(&write_manifest(&fx.root.join("m"), &[e])).unwrap();
+}

@@ -346,6 +346,10 @@ pub fn load_manifest(path: &Path) -> Res<Vec<Producer>> {
             if !is_ident(v) {
                 return Err(fail(format!("{what} {v:?} must be non-empty ASCII letters, digits and underscores")));
             }
+            // `aldigest views` names its objects <source>__<topic>: a double underscore inside either part would make that name ambiguous.
+            if what != "spool" && v.contains("__") {
+                return Err(fail(format!("{what} {v:?} must not contain a double underscore (the separator of the unified view names)")));
+            }
         }
         let expected = format!("{}_{}_v{}", e.source, e.topic, e.version);
         if pt != expected {
