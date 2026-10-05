@@ -1,9 +1,9 @@
 ---
 trdd-id: J2K6IM4R
 title: The review gate arms on a write verb invoked with --help
-column: ai_review
+column: complete
 created: 2026-09-23T14:12:31+0200
-updated: 2026-10-04T13:56:06+0200
+updated: 2026-10-05T07:46:49+0200
 current-owner: main-session
 created-by: emanuelesabetta
 task-type: bugfix
@@ -14,7 +14,8 @@ mandated-by: none
 approved: true
 approval-judge: emanuelesabetta
 approval-datetime: 2026-09-23T14:12:31+0200
-implementation-commits: [954fe1a0, 90446356]
+implementation-commits: [954fe1a0, 4c824213]
+status: archived
 ---
 
 # The review gate arms on a write verb invoked with --help
@@ -41,6 +42,7 @@ Superseded body claims: the Fix section's "--snippet '--help' is a real write" i
 - 2026-09-23T14:12:31+0200 — MANDATE issued by emanuelesabetta (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-09-24T09:47:46+0200 — column → ai_review by main-session. --help exemption landed in 954fe1a0; all boxes ticked; mutation-checked
 2026-10-04: worker wA re-read the 4 acceptance boxes against src/test/reviewGateTriggers.test.ts (suite review-loop D7, test 'a standalone -h/--help exempts fastedit/memgrep write verbs; anything else still arms' covers both directions and every must-arm/must-not-arm case); scoped run review-gate triggers|review-loop: 66 passing, 0 failing. All boxes were already ticked and hold.
+- 2026-10-05T07:46:49+0200 — COMPLETE by main-agent@agentlenspro. review in the owner's stead, order of 2026-10-05 on TRDD-AVUGZV1K; entry Review 2026-10-05 on the card.
 
 ## Symptom
 
@@ -80,3 +82,26 @@ Acceptance (added): [x] --snippet 'a --help b' still arms; [x] sub -- x --help s
 
 2026-09-24 — Implemented per the STATE block's authoritative rule: added hasStandaloneHelp(args) in src/cli/reviewGateTriggers.ts (near segmentWriteReason/Resolve) and wired it into the two exempt-CLI call sites (fastedit sub-verb check in deployOrDesignVerbWriteReason; memgrep /-mem-/ check in segmentWriteReason). A standalone -h/--help token (preceding token not starting with '-', scan stops at bare --) cancels only the CLI-verb arm; the independent redirect pass still arms on a same-segment redirect. tldr/trddgrep intentionally excluded per the card's evidence. Added a must-arm/must-not-arm test covering every case from the card's two lists to the D7 suite in src/test/reviewGateTriggers.test.ts. Verified: pnpm check-types exit 0, pnpm lint exit 0 (0 errors), pnpm compile-tests exit 0, mocha on out/test/test/reviewGateTriggers.test.js: 41/41 passing. Mutation check: forcing hasStandaloneHelp to always return false failed exactly the new test (1 failing) and left the other 40 green; restored and reverified green (41/41).
 2026-10-04: code and tests done at 90446356; effective only after the installed hook bundle is rebuilt (owner).
+
+## Review 2026-10-05
+
+- 2026-10-05 review, verdict ACCEPT after one added test file. This entry stands in for `human_review` under the owner's order of 2026-10-05 recorded on TRDD-AVUGZV1K; the card goes from `ai_review` to `complete` without resting in that column. The review became development: the reviewing session added one test file (commit 4c824213, test only, no change to src/cli/reviewGateTriggers.ts).
+- Run first-hand by the main agent after its own compile (`tsc -p tsconfig.test.json` exit 0), each file alone with `mocha --no-config --require src/test/setup.js --ui tdd --timeout 10000`: out/test/test/reviewGateTriggers.test.js exit 0, 41 passing; out/test/test/reviewGateHelpExemption.test.js exit 0, 3 passing. `eslint --quiet` on the source and both test files exit 0. `tsc --noEmit -p tsconfig.json` exit 0 (the src half of check-types; the media half was not run; 954fe1a0 touches no media file).
+- What was found: the acceptance tick "sub -- x --help still arms" had no test until 4c824213. With the line `if (args[i] === '--') return false` removed from hasStandaloneHelp, the existing test stayed green (41 passing, by a worker's report), because its case `-- --help` is already rejected by the option-value guard. Also unpinned before 4c824213: the `-h` spelling on the must-still-arm side, and memgrep on the must-still-arm side.
+- Mutations, each run by a worker. (1) Exemption turned off: the old test red, `AssertionError: fastedit multi-edit --help` (read by the main agent in the captured output); this first mutation also reformatted neighbouring lines. (2) Option-value guard removed: by a worker's report the old test went red at `fastedit edit f.ts --dry-run --help` (a loop, so only its first failing case was seen); in the new file, read by the main agent in the captured output, tests 2 and 3 red, actual null against 'fastedit edit' and 'memgrep new-mem-atom', test 1 green. (3) `--` stop removed: the old test green as said above; in the new file, read by the main agent in the captured output, test 1 red, actual null against 'fastedit edit', tests 2 and 3 green. The source was restored byte-identical after each run by the workers' checks; the main agent read the same sha256 (315f96cc...) after the first run and at the end.
+- The other must-still-arm cases of the old test were read in the test and not individually mutated. They rest on the tokenizer, the segment split and the redirect pass, which 954fe1a0 did not change: its source diff, read by the main agent, adds hasStandaloneHelp and its comment and changes the two call sites (the memgrep /-mem-/ line and the fastedit sub-verb line), nothing else. Both call sites pass the same args to the same function.
+- The three new cases live in src/test/reviewGateHelpExemption.test.ts and not in the old test's list, because fastedit could not address the anonymous test callback ("Symbol not found") and that refusal was not worked around with another write tool. The old test says nothing about the new file.
+- Not verified: the fastedit and memgrep parser evidence the exempt list rests on (taken from this card and its code comment); the behaviour of the installed hook in a live session.
+- Corrections to this card. The STATE head above is dated 2026-09-23 and describes the rule before it was implemented; its "Today:" sentences are not the current code. hasStandaloneHelp sits at src/cli/reviewGateTriggers.ts lines 237 to 243, not 223 to 231. Commit 90446356 changed this card's file by 3 lines and no file of this card's code (it is the TRDD-PNB9FNJ0 change), so it is removed from implementation-commits, which becomes [954fe1a0, 4c824213]. The note of 2026-10-04 that the change is effective only after the bundle is rebuilt is wrong for 954fe1a0: that commit is dated 2026-09-24, standalone/cli.js was built on 2026-10-01 and contains hasStandaloneHelp (a worker's grep; that the installed hook runs that file is inferred). Two later commits of 2026-09-25 touched these files (90d0d8a6 the source and the test, d5c90dfd the test only); neither adds or removes a line mentioning help or hasStandaloneHelp (the main agent's grep of both diffs). 4c824213 adds a test only, so nothing waits for a build.
+- Links read before the move: no npt, eht, parent-trdd or blocked-by in the frontmatter; no other card names this one in those fields (a measuring worker's grep); the body names TRDD-2CYTNLY1 (human_review) and TRDD-A37YM37G (complete) as related only.
+
+## Acceptance checklist 2026-10-05
+
+- [x] `fastedit multi-edit --help` and `fastedit delete --help | head` do not arm. The compiled gate returns null for both and for `fastedit delete f.ts --help | head` (evaluated by the main agent, 2026-10-05); the first and the f.ts form without `| head` are asserted in reviewGateTriggers.test.ts.
+- [x] `fastedit edit f --replace x --snippet '--help'` still arms. The compiled gate returns 'fastedit edit' for this exact text (evaluated by the main agent); the test asserts the same rule on `--dry-run --help`, `--snippet=--help` and `--dry-run -h`, not on this exact text.
+- [x] A test for each direction exists: five must-not-arm and seven must-still-arm cases in reviewGateTriggers.test.ts, three more must-still-arm tests in reviewGateHelpExemption.test.ts.
+- [x] check-types, lint and the review-gate mocha tests pass: `tsc --noEmit` on tsconfig.json and on media/tsconfig.json both exit 0, `eslint --quiet` on the source and both test files exit 0, 41 and 3 passing (all run by the main agent, 2026-10-05; the whole lint and the whole suite were not run).
+- [x] `--snippet 'a --help b'` still arms: asserted in reviewGateTriggers.test.ts.
+- [x] `sub -- x --help` still arms: asserted since commit 4c824213 in reviewGateHelpExemption.test.ts and seen red with the `--` stop removed; before that commit this box was ticked with no test behind it.
+- [x] The second segment of `fastedit --help && fastedit edit f ...` still arms: asserted in reviewGateTriggers.test.ts.
+- [x] Each exempt CLI's evidence is cited in the code comment next to the rule: read by the main agent in the 954fe1a0 source diff (fastedit: argparse; memgrep: clap). The evidence itself was not re-verified.
