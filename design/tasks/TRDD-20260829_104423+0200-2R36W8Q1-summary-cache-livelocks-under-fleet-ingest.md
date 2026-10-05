@@ -1,11 +1,11 @@
 ---
 trdd-id: 2R36W8Q1
 title: The summary cache is keyed on a version that moves faster than a rebuild completes, so the UI path livelocks under fleet ingest
-column: ai_review
+column: todo
 pre-block-column: 
 unblock-when: [trdd:UTFVMVT8 terminal]
 created: 2026-08-29T10:44:23+0200
-updated: 2026-10-05T02:17:39+0200
+updated: 2026-10-05T02:28:02+0200
 current-owner: main-session
 task-type: bugfix
 scope: project
@@ -389,3 +389,8 @@ is not a criterion, so it now names the sample size and the statistic.
 ## Approval log
 
 - 2026-10-05T02:17:39+0200 — column → ai_review by main-agent@agentlenspro. its only blocker TRDD-UTFVMVT8 was completed 2026-10-05; restored to its pre-block column Cleared blocked-by (--clear-blocker override).
+- 2026-10-05T02:28:02+0200 — column → todo by main-agent@agentlenspro. unblocked by TRDD-UTFVMVT8 but not yet read; not ai_review, because nobody is reviewing it
+
+## Review 2026-10-05 (in the owner's stead)
+
+- Moved to ai_review earlier today by the main agent only because its blocker TRDD-UTFVMVT8 completed; the card was NOT read then. ai_review claims a review nobody is doing, so it is moved to todo until it is read. The directive card lists it as needing boxes 2, 3 and 5 re-measured on the live collector.

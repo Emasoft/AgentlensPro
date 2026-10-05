@@ -1,9 +1,9 @@
 ---
 trdd-id: XTFDRTH2
 title: Session cards live in a DuckDB table upserted on ingest, not in a 32k-entry IndexMap
-column: human_review
+column: complete
 created: 2026-09-05T22:06:10+0200
-updated: 2026-09-24T09:24:15+0200
+updated: 2026-10-05T02:28:01+0200
 implementation-commits: [f29bc3b6, 8069c6a9, e00af58b, 13209791, 12c4c4a7, 46a0268c, ac289d8d]
 current-owner: main-session
 task-type: refactor
@@ -16,6 +16,7 @@ npt: [YILE6N3T, 7RM5YW2T]
 related: [7YPQWKPG, Q9WD3K5R, FSMISF5K]
 relevant-files: [rust-core/crates/agentlens-core/src/lib.rs, rust-core/crates/agentlens-core/src/log_reader.rs, rust-core/crates/agentlens-core/src/feed_merge.rs]
 labels: [rust-core, memory, duckdb]
+status: archived
 ---
 
 # Session cards live in a DuckDB table upserted on ingest, not in a 32k-entry IndexMap
@@ -163,6 +164,7 @@ Owed runs 2026-09-23T13:16:38+0200: cargo test -p agentlens-core --test card_sto
 - 2026-09-05T22:06:10+0200 — Authored into `todo` as an NPT-gated child of the USER-approved
   7YPQWKPG (Tier 0: scope already ruled by the USER).
 - 2026-09-24T09:07:56+0200 — column → human_review. Owed run PASSED 2026-09-24: cargo test -p agentlens-core 644 passed / 0 failed (106 blocks), card claim HOLDS (grew from 616/104). Report: reports/owed-runs/20260924_085621+0200-owed-runs.md
+- 2026-10-05T02:28:01+0200 — COMPLETE by main-agent@agentlenspro. reviewed in the owner's stead 2026-10-05: table and upsert verified; boxes were met when ticked; the resident map re-added later belongs to TRDD-9VX3WTGU.
 
 ## ⏵ AI-REVIEW VERDICT 2026-09-23T12:55:59+0200 — APPROVE
 
@@ -177,3 +179,10 @@ Ready for human_review; the owner makes that move. Full report: reports/ai-revie
 ## Notes
 
 2026-09-24: owner note: box 3's mimalloc bound was a 0.1 GB soft pass at landing -- today's RSS-cap exits show mimalloc current 2559-2877 MB (in-run ratchet, TRDD-EQCGAVGV) -- the owed 644/0 test run addressed box 2 only.
+
+## Review 2026-10-05 (in the owner's stead)
+
+- Verdict: accepted and completed as the historical landing of the DuckDB card table and its upsert. All three boxes were ticked and were true when ticked. Reviewer report: docs_dev/20261005_022536+0200-review-XTFDRTH2.md (gitignored).
+- IMPORTANT for any later reader: the design in this card's TITLE no longer holds today. A resident parsed map of the whole corpus is back in CardStore (card_store.rs: `parsed: IndexMap<String, Arc<Value>>`, read by the main agent), re-added deliberately under TRDD-9VX3WTGU. That card owns the resident layer and its memory cost; this card does not claim it is gone.
+- Verified today: the table schema and the INSERT ... ON CONFLICT upsert exist (reviewer read); tests cards_sharing_a_start_time and iteration_is_first_insert pass (reviewer run, 2 passed); a one-line mutation making the upsert lose its slot turned the tie-order test red on its assertion, undone with the working-tree checksum unchanged; whole crate suite 763 passed, 0 failed (main agent run).
+- Not re-measured: box 3 (resident heap) was a soft pass on 2026-09-06 by this card's STATE (10.6 GB against a 10.7 GB threshold, pid 78233), a 0.1 GB margin, and the resident map added later changes what that number would be today. The tie-order test reads through the resident layer, so it pins that layer's ordering; the table-only ordering rests on iteration_is_first_insert, which was not mutated. Nine other card_store tests were not re-run on their own today (the full-suite run covers them).

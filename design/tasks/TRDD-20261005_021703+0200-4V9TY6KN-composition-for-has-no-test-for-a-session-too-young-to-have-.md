@@ -4,7 +4,7 @@ title: composition_for has no test for a session too young to have a known proje
 column: todo
 status: tasked
 created: 2026-10-05T02:17:03+0200
-updated: 2026-10-05T02:17:03+0200
+updated: 2026-10-05T02:28:03+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -24,3 +24,7 @@ Follow-up of TRDD-UTFVMVT8 (accepted 2026-10-05). composition_for in rust-core/c
 ## Approval log
 
 - 2026-10-05T02:17:03+0200 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+
+## Correction 2026-10-05
+
+- The mechanism in the body ("skips caching an answer while the project is not yet known") is the reviewer's reading of composition_for, not checked by the main agent beyond the two lines `let project_known = project.is_some();` and `if project_known {` in ui.rs. Read the function before writing the test; the "done when" may need rewording.

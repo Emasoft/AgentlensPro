@@ -4,7 +4,7 @@ title: Owner directive 2026-10-04 complete all TRDDs - per-card triage then work
 column: dev
 status: tasked
 created: 2026-10-04T12:48:47+0200
-updated: 2026-10-05T02:17:18+0200
+updated: 2026-10-05T02:28:52+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: audit
@@ -77,3 +77,8 @@ Board at start: todo 53, human_review 32, backburner 32, dev 22, testing 11, blo
 - Reviews so far, replacing the earlier tallies: complete UTFVMVT8; deploy ZIWEB0UW 9SOYXKNE; blocked QE114936 (by MVR6PXC0); superseded UIDUVNY8; todo LHCHVK9Z C19SUVPH L6V1UUW0 MVR6PXC0. Ten human_review cards remain.
 - The full-suite evidence line above should read "tracked files at commit 8d515e76 plus card edits": that run itself produced one untracked file, now carried by its own card TRDD-IIT13XCA.
 - The installed bundle (2026-10-01) predates the pidfile-owner guard that TRDD-L6V1UUW0 adds, so the doomed revive that card fixes is probably still happening on this machine until the bundle is rebuilt: inferred from the bundle's date, not read or observed.
+- Exception to the verdict-to-column mapping, applied to UTFVMVT8, YILE6N3T and XTFDRTH2: a live-only box that this card's own STATE records as met after a past deploy counts as met, provided the whole STATE was read for a later contradicting entry. For UTFVMVT8 the entry about pid 53886 was read after the move: it is the BEFORE measurement (the log read up to 14:28, with the 273.9 s hold), earlier than the fix deployed at 16:34 as pid 18695, so it does not contradict the completion.
+- Why UTFVMVT8 was completed while MVR6PXC0 and L6V1UUW0 went back for a test: its central claim has a guard that went red under mutation and its live boxes were measured; the untested part (the young-session guard) was split to TRDD-4V9TY6KN, not waived. The reviewer's own verdict for it was core-claim-live-only. Neither red run of that guard (on UTFVMVT8 or QE114936) was seen first-hand by the main agent.
+- Reviews so far, replacing every earlier tally (11 of the 20 decided): complete UTFVMVT8 YILE6N3T XTFDRTH2; deploy ZIWEB0UW 9SOYXKNE; blocked QE114936 (by MVR6PXC0); superseded UIDUVNY8; todo LHCHVK9Z C19SUVPH L6V1UUW0 MVR6PXC0. Nine remain in human_review: 6SPXOV0P NDKKOABG SIGBCMGL 2C23ROPZ 9SYRK6SW DIZ289UQ 0E3W5C45 BLAV6W15 2CYTNLY1.
+- QE114936 still fails lint BLOCKED-WITHOUT-PROBE after unblock-when was set to [trdd:MVR6PXC0]; ten other blocked cards fail the same rule; the field lint wants was not identified.
+- XTFDRTH2 declares npt [YILE6N3T, 7RM5YW2T], and 7RM5YW2T is still open (blocked by EQCGAVGV), so lint reports ORDER-NPT-VIOLATED now that XTFDRTH2 is complete. Judged a mis-declared sibling link, not a real prerequisite: XTFDRTH2 was built, deployed and measured on 2026-09-06 with 7RM5YW2T open, and its own body calls the CPU cost "TRDD-7RM5YW2T own box, not this card". Both are children of 7YPQWKPG, which lists both as its npt (the GRAPH-TWO-PARENTS error predates today). The archived card could not be edited to drop the link if the line above this one in the tool output said refused.
