@@ -71,10 +71,11 @@ fn body_matches_the_frozen_key_order_exactly() {
     // `CAPTURE DOWN` / `SINK:` rows could never fire against alcore. This line freezes the
     // EMITTER's key set only — a field dropped here goes red; a field the TS interface
     // (`serverControl.ts` `ServerStatsBodies`) declares without a producer is NOT seen here
-    // (it still declares `reclaimedSinceBoot`/`lastNonZeroPassAt`, unsent; `spool` REMOVED from
+    // (it declared `reclaimedSinceBoot`/`lastNonZeroPassAt` unsent until 2026-10-05, when
+    // TRDD-HDUETCU7 started sending both — additive, same precedent as the notes above; `spool` REMOVED from
     // the emitter 2026-09-26, TRDD-Z53IJFE9 step D — the RAM-disk spool is gone, so the gauge had
     // nothing left to report). TRDD-FGN5TY7E's producer↔consumer gate is therefore half-built: this half.
-    assert_eq!(keys(&body["bodies"]), ["archive", "lastPass", "live", "captureDownSince", "sinkProblem", "parked"]);
+    assert_eq!(keys(&body["bodies"]), ["archive", "lastPass", "reclaimedSinceBoot", "lastNonZeroPassAt", "live", "captureDownSince", "sinkProblem", "parked"]);
     assert_eq!(body["bodies"]["captureDownSince"], Value::Null, "fresh boot, no activity ⇒ up");
     assert_eq!(keys(&body["bodies"]["archive"]), ["volumes", "bytes", "entries"]);
     assert_eq!(keys(&body["hookEvents"]), ["files", "bytes", "receivedSinceBoot", "spooled"]);

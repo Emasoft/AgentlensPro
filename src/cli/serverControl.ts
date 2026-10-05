@@ -627,8 +627,9 @@ export async function stopServer(): Promise<void> {
 export interface ServerStatsBodies {
   archive: { volumes: number; entries: number; bytes: number }
   lastPass: { removedFiles: number; keptBytes: number }
-  // TRDD-C5L779YI: cumulative reclaim. NOT SENT by alcore (the bodies purge is unported) — absent
-  // is not zero, so the renderer falls back to the legacy last-pass line, never "0 since boot".
+  // TRDD-C5L779YI: cumulative reclaim. Sent by alcore since TRDD-HDUETCU7; an older server omits
+  // both, and absent is not zero, so the renderer still falls back to the legacy last-pass line,
+  // never "0 since boot".
   reclaimedSinceBoot?: number
   lastNonZeroPassAt?: number
   // TRDD-4FMHW124 / TRDD-U0L78B3Z: null = up. Absent is not "healthy", it is "not reported".

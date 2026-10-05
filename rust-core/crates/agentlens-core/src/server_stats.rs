@@ -481,6 +481,15 @@ pub fn server_stats(st: &CoreState, now_ms: i64) -> Value {
     // scan cost as the TS's single-dir version this mirrors (bodyArchive.ts `liveBodiesLiveness`).
     let bodies_scope = crate::burn::guard::resolve_bodies_read_scope(data_dir);
     let (live_files, live_newest_ms) = live_bodies_liveness(&bodies_scope.dirs);
+    // TRDD-HDUETCU7: ONE value feeds both `persistence.bodiesLastPurge` and `bodies.lastPass` (the TS
+    // kept them as the same object). `keptBytes` is read LIVE here, never stored: a stored figure goes
+    // stale on every skipped tick and the CLI prints it as "backlog ... not yet reclaimed".
+    let bp = crate::chores::bodies_pass_stats();
+    let kept_bytes: u64 = bodies_scope.dirs.iter().map(|d| crate::chores::staged_body_bytes(d)).sum();
+    let last_pass = json!({
+        "at": bp.last_at_ms, "removedFiles": bp.last_removed_files, "freedBytes": bp.last_freed_bytes,
+        "keptFiles": live_files, "keptBytes": kept_bytes,
+    });
     // TRDD-ZIWEB0UW remainder: the `live` gauge above shipped without its `parked` sibling, so
     // `server status` silently dropped the PARKED suffix that warns of TRDD-8TM7I49X bodies
     // pinned forever. Both live dirs are scanned — a parked name can belong to either.
@@ -535,17 +544,21 @@ pub fn server_stats(st: &CoreState, now_ms: i64) -> Value {
             // The log-event sink IS ported now (C2b). These two are the SAME counters the
             // `logEvents` row reports as persistedSinceBoot/Bytes — the TS spreads the whole
             // persistStats object here (`...p`), so both places carry them and a reader may
-            // legitimately use either. NOT PORTED, still: the bodies purge and the spool below.
+            // legitimately use either. The bodies reclaim pass IS ported and its counters are sent
+            // (TRDD-HDUETCU7); `bodiesLastPurge` is the last-pass object under its TS name, not the
+            // POST /api/bodies/purge archive purge.
             "logEventWrites": p.log_event_writes, "logEventBytes": p.log_event_bytes,
             "statuslineSamples": p.statusline_samples,
             "gateChecks": p.gate_checks, "gateDenies": p.gate_denies, "gateWarns": p.gate_warns, "gateAdvisories": p.gate_advisories,
-            "bodiesLastPurge": { "at": 0, "removedFiles": 0, "freedBytes": 0, "keptFiles": 0, "keptBytes": 0 },
+            "bodiesLastPurge": last_pass.clone(),
             "totalBytesWritten": p.span_append_bytes + p.offsets_bytes + p.cards_bytes + p.hook_event_bytes,
             "files": { "spans": total_bytes, "offsets": offsets_bytes_on_disk, "cards": cards_bytes_on_disk },
         },
         "bodies": {
             "archive": { "volumes": volumes, "bytes": archive_bytes, "entries": entries },
-            "lastPass": { "at": 0, "removedFiles": 0, "freedBytes": 0, "keptFiles": 0, "keptBytes": 0 },
+            "lastPass": last_pass,
+            "reclaimedSinceBoot": bp.reclaimed_since_boot,
+            "lastNonZeroPassAt": bp.last_non_zero_pass_at_ms,
             "live": { "files": live_files, "newestMs": live_newest_ms.map(num).unwrap_or(Value::Null) },
             // TRDD-U0L78B3Z: null = up, else the CLI prints `CAPTURE DOWN <N>m` (serverControl.ts
             // `bodiesCaptureLine`). Direct child of `bodies`, which is where the CLI reads it.

@@ -207,6 +207,40 @@ const DRAIN_MAX_PASSES: usize = 16;
 /// below can read it; nothing else needs to reach it from outside `bodies_pass`.
 static FSYNCED_PARTS: OnceLock<Mutex<std::collections::HashSet<PathBuf>>> = OnceLock::new();
 
+
+/// The last bodies-pass reading (TRDD-HDUETCU7), held here and not in `CoreState`; `server_stats`
+/// reads it through `bodies_pass_stats()`. The type is `crate::BodiesPassStats`.
+// ponytail: this static is per PROCESS, not per data dir: alcore owns exactly one data dir (pid
+// lock), so only a test binary running two passes over two dirs would see them summed; move it
+// into `CoreState` if that ever matters.
+static BODIES_PASS_STATS: Mutex<crate::BodiesPassStats> = Mutex::new(crate::BodiesPassStats {
+    last_at_ms: 0,
+    last_removed_files: 0,
+    last_freed_bytes: 0,
+    reclaimed_since_boot: 0,
+    last_non_zero_pass_at_ms: 0,
+});
+
+/// A copy of the last bodies-pass reading (TRDD-HDUETCU7).
+pub fn bodies_pass_stats() -> crate::BodiesPassStats {
+    *BODIES_PASS_STATS.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Record one COMPLETED pass (TRDD-HDUETCU7). The TS overwrote its last-pass object on every pass,
+/// an empty one included. Only `bodies_pass` calls this, and only on the paths that ran a pass (or
+/// found nothing staged): the other early exits did not run one, so they must not claim one, and
+/// they delete nothing, so no count is lost.
+fn record_bodies_pass(now_ms: f64, deleted: u64, bytes_freed: u64) {
+    let mut s = BODIES_PASS_STATS.lock().unwrap_or_else(|e| e.into_inner());
+    s.last_at_ms = now_ms as i64;
+    s.last_removed_files = deleted;
+    s.last_freed_bytes = bytes_freed;
+    s.reclaimed_since_boot += deleted;
+    if deleted > 0 {
+        s.last_non_zero_pass_at_ms = now_ms as i64;
+    }
+}
+
 /// Test-only introspection: there is no other way for an integration test to observe that the
 /// fsync barrier skipped an already-proven part rather than re-fsyncing it, since `ingest_pass`
 /// reports no per-part counters. Returns a snapshot (cloned, so the lock is never held past this
@@ -288,6 +322,10 @@ pub fn bodies_pass(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
     // nothing. `over_cap`/emergency-valve reasoning below still re-checks per dir once real work
     // exists — this is only the fast "nothing to do" exit.
     if scope.dirs.iter().all(|d| staged_body_bytes(d) == 0) {
+        // TRDD-HDUETCU7: an idle tick is a completed, empty pass. The TS overwrote its last-pass
+        // object every pass; without this a healthy idle server shows a stale `at` that reads as
+        // a dead chore.
+        record_bodies_pass(now_ms, 0, 0);
         return;
     }
 
@@ -426,6 +464,8 @@ pub fn bodies_pass(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
     }
     agentlens_store::pass::save_pass_state(&state_file, &skip, &stranded);
     drop(lock);
+    // TRDD-HDUETCU7: publish the real counts (the locals used to reach only the log line below).
+    record_bodies_pass(now_ms, deleted, bytes_freed);
 
     // `failed` is in the line because "deleted" alone cannot distinguish a drained legacy park
     // from one that failed verify and is now re-examined every tick (TRDD-6SPXOV0P review): the
@@ -444,7 +484,6 @@ pub fn bodies_pass(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
             if any_over_cap { " (OVER CAP — drained at age 0)" } else { "" }
         );
     }
-    let _ = now_ms;
 }
 
 /// `INGEST_MAX_BYTES_PER_PASS` (server.ts:597) — `Math.max(16MB, Number(env) || DEFAULT)`. Same JS

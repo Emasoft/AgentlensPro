@@ -129,6 +129,20 @@ pub struct Counters {
     pub spans_appended: u64,
 }
 
+
+/// The last bodies-pass reading, kept so `/api/server-stats` can report it (TRDD-HDUETCU7).
+/// Written ONLY by the bodies-pass chore (`chores::record_bodies_pass`), read by
+/// `server_stats::server_stats`. Mirrors the retired TS server bodiesLastPurge/bodies.lastPass
+/// (one object, overwritten every completed pass, including an empty one).
+#[derive(Debug, Default, Clone, Copy)]
+pub struct BodiesPassStats {
+    pub last_at_ms: i64,
+    pub last_removed_files: u64,
+    pub last_freed_bytes: u64,
+    pub reclaimed_since_boot: u64,
+    pub last_non_zero_pass_at_ms: i64,
+}
+
 /// A copy of everything a summary rebuild reads, taken under the state lock so the rebuild can
 /// run outside it (TRDD-HFV4AIT7). Every field holds `Arc`s, so building one is a pointer copy per
 /// span/card — never a deep clone of the window or of the card corpus.
