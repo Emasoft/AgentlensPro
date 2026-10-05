@@ -1,13 +1,14 @@
 ---
 trdd-id: SIGBCMGL
 title: Align agentlenspro taxonomies and diagnostics with Claude Code 2.1.233→2.1.252
-column: human_review
+column: todo
 created: 2026-09-01T19:20:48+0200
-updated: 2026-09-24T09:17:21+0200
+updated: 2026-10-05T02:42:12+0200
 current-owner: agentlenspro-15
 task-type: feature
 implementation-commits: [2d06942b, 46576993]
 related: [YE15B2JK, BFUZ1THR, VY1IUVUM, B7DSTJLS]
+status: tasked
 ---
 
 # Align agentlenspro with the CC 2.1.233→2.1.252 changelog
@@ -95,6 +96,7 @@ Done this session (commits named below); remaining boxes are docs/design work, n
 - 2026-09-24T08:57:37+0200 — column → human_review by main-session. AI review verified, evidence in reports/board-triage ai_review-A/B/C triage
 - 2026-09-24T08:57:49+0200 — main-session (board update A): moved ai_review -> human_review; AI review verified per reports/board-triage ai_review-A/B/C triage rows. In this project's mono-agent rule the session moves ai_review->human_review; the owner moves human_review->complete.
 2026-09-24T09:17:06+0200 — AI re-review at HEAD 3faa709c: acceptance still holds — later pricing commits (897f51eb/f7610871/8f00e737/2abda566) changed rate values and forensics-indexer timestamp threading, not this card's modelPricing/1.1x-premium documentation (still present pricing.ts:74-76) or its other boxes (statuslineStore.ts GUARANTEED_COLUMNS, hookInstall.ts PreModelSwitch/PostModelSwitch, no-op grep claims); npx mocha pricing.test.js 25/25 pass.
+- 2026-10-05T02:42:12+0200 — column → todo by main-agent@agentlenspro. review in the owner's stead 2026-10-05: a deliberate break of the guaranteed columns left 15 tests green; not dev, because nobody is working on it
 
 ## AI review verdict — run: 2026-09-05T15:26:20+0200
 
@@ -123,3 +125,11 @@ gateway sample.
 Full report: `reports/ai-review/20260905_152620+0200-SIGBCMGL.md`
 
 **Verdict: APPROVE**
+
+## Review 2026-10-05 (in the owner's stead)
+
+- Verdict: returned to todo for missing tests. Every box has code, but a deliberate break left the tests green. Reviewer report: docs_dev/20261005_023845+0200-review-SIGBCMGL.md (gitignored).
+- The break: the reviewer deleted the prompt_cache_expires_at line from GUARANTEED_COLUMNS in src/statuslineStore.ts and all 15 cache tests stayed green; undone, working-tree checksum unchanged. So nothing pins the guaranteed prompt_cache columns.
+- Checked by the main agent: no file under src/test names PreModelSwitch, so the PreModelSwitch and PostModelSwitch entries of HOOK_EVENTS have no test; prompt_cache_expires_at appears in two test files only as input data; no .rs file under rust-core/crates contains prompt_cache_expires_at, so that part exists in TypeScript only (the reviewer says TRDD-MR5809LU tracks the Rust side; not opened by the main agent).
+- Owed: a test that fails when a guaranteed prompt_cache column is removed from the template (for example: read an empty store and assert the column binds), and a test that asserts the two model-switch hook events are in HOOK_EVENTS and are accepted end to end.
+- Not re-verified: the Claude Code changelog claims this card quotes (no web access in the review). TRDD-ZQQYRYBO extends this card for 2.1.253 onwards (reviewer).

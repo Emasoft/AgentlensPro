@@ -3,7 +3,7 @@ trdd-id: 7YPQWKPG
 title: DuckDB is the memory and alcore keeps no resident data model
 column: dev
 created: 2026-09-02T22:05:41+0200
-updated: 2026-09-06T04:42:39+0200
+updated: 2026-10-05T02:35:10+0200
 current-owner: main-session
 task-type: refactor
 priority: critical
@@ -269,3 +269,7 @@ no-climb non-regression is verified here. Report:
   action (repo has no design/requirements/PRRD.md).
 
 ## Notes and lessons learned
+
+## Note 2026-10-05
+
+- This card's title says alcore keeps no resident data model. That is no longer true in the code, by a deliberate later decision: TRDD-9VX3WTGU (dev) plans a resident parsed card layer by name with a memory budget, and commit 4306a017 (its Phase C part 1) re-added `parsed: IndexMap<String, Arc<Value>>` to CardStore. Children completed on 2026-10-05 in the owner's stead: YILE6N3T and XTFDRTH2. Children still open: 7RM5YW2T (blocked), BLAV6W15 (todo). Whether this parent should be superseded by 9VX3WTGU or reworded was not decided.

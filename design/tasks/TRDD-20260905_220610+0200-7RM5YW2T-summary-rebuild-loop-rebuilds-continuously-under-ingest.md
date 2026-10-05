@@ -3,7 +3,7 @@ trdd-id: 7RM5YW2T
 title: The 25 ms summary rebuild loop rebuilds the whole window continuously under ingest and is the mimalloc churn
 column: blocked
 created: 2026-09-05T22:06:10+0200
-updated: 2026-09-23T13:17:58+0200
+updated: 2026-10-05T02:35:00+0200
 current-owner: main-session
 implementation-commits: [bd0d48e3, 6698af32, bb8d5f8e, 67e5478cc62f28a49e3877db3885ee3fd727d6ed]
 task-type: bugfix
@@ -134,6 +134,7 @@ churn cut.
 - **A pure-arithmetic test is not evidence the arithmetic is consulted.** `REBUILD_COST_FACTOR 4→0`
   and disabling the check both had to be shown red at the WIRING level; the six arithmetic tests
   stay green under the second mutation.
+- TRDD-XTFDRTH2 was completed on 2026-10-05 while still listing this card in its npt (lint: ORDER-NPT-VIOLATED; the archived card cannot be edited). Read in context, XTFDRTH2 names this card only as the bound on a residual it calls "NOT a defect" (the corpus copy made under the state lock during a summary rebuild is "bounded by the rebuild cadence TRDD-7RM5YW2T rationed"). When this card is worked, check whether XTFDRTH2's heap figure of 2026-09-06 (10.6 GB against a 10.7 GB threshold) depended on that cadence.
 
 ## Approval log
 

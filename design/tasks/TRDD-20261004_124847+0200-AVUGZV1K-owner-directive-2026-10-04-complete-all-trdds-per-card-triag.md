@@ -4,7 +4,7 @@ title: Owner directive 2026-10-04 complete all TRDDs - per-card triage then work
 column: dev
 status: tasked
 created: 2026-10-04T12:48:47+0200
-updated: 2026-10-05T02:28:52+0200
+updated: 2026-10-05T02:42:12+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: audit
@@ -82,3 +82,10 @@ Board at start: todo 53, human_review 32, backburner 32, dev 22, testing 11, blo
 - Reviews so far, replacing every earlier tally (11 of the 20 decided): complete UTFVMVT8 YILE6N3T XTFDRTH2; deploy ZIWEB0UW 9SOYXKNE; blocked QE114936 (by MVR6PXC0); superseded UIDUVNY8; todo LHCHVK9Z C19SUVPH L6V1UUW0 MVR6PXC0. Nine remain in human_review: 6SPXOV0P NDKKOABG SIGBCMGL 2C23ROPZ 9SYRK6SW DIZ289UQ 0E3W5C45 BLAV6W15 2CYTNLY1.
 - QE114936 still fails lint BLOCKED-WITHOUT-PROBE after unblock-when was set to [trdd:MVR6PXC0]; ten other blocked cards fail the same rule; the field lint wants was not identified.
 - XTFDRTH2 declares npt [YILE6N3T, 7RM5YW2T], and 7RM5YW2T is still open (blocked by EQCGAVGV), so lint reports ORDER-NPT-VIOLATED now that XTFDRTH2 is complete. Judged a mis-declared sibling link, not a real prerequisite: XTFDRTH2 was built, deployed and measured on 2026-09-06 with 7RM5YW2T open, and its own body calls the CPU cost "TRDD-7RM5YW2T own box, not this card". Both are children of 7YPQWKPG, which lists both as its npt (the GRAPH-TWO-PARENTS error predates today). The archived card could not be edited to drop the link if the line above this one in the tool output said refused.
+- Plain restatement of the XTFDRTH2 note above (ignore its last sentence): trddgrep REFUSED the edit, because archived cards are immutable. The mis-declared-link judgment was first made from a few lines and then confirmed by reading the passage in context; the question is carried on 7RM5YW2T. TRDD-9VX3WTGU was opened and does own the resident card map (it plans the layer by name and budgets 200 to 350 MB for it).
+- Wording correction for YILE6N3T (archived): "met" is too strong for its fourth box. The RSS figure was recorded and compared, and that card itself calls it still rising and stale. The silent prune skip is now carried by the new card minted in step 1 (TRDD-DYKJUYX3).
+- Rule added after XTFDRTH2: a card's npt, eht, parent and blocked-by links and lint are read BEFORE any move to a terminal column, because that move cannot be undone.
+- Decision recorded on BLAV6W15: one open path is accepted as the meaning of the single-expansion directive; the main agent's judgment, open to the owner's overrule.
+- Reviews so far, replacing every earlier tally (13 of the 20 decided): complete UTFVMVT8 YILE6N3T XTFDRTH2; deploy ZIWEB0UW 9SOYXKNE 9SYRK6SW; blocked QE114936 (by MVR6PXC0); superseded UIDUVNY8; todo LHCHVK9Z C19SUVPH L6V1UUW0 MVR6PXC0 BLAV6W15. Seven remain in human_review: 6SPXOV0P NDKKOABG SIGBCMGL 2C23ROPZ DIZ289UQ 0E3W5C45 2CYTNLY1.
+- Reviews so far, replacing every earlier tally (16 of the 20 decided): complete UTFVMVT8 YILE6N3T XTFDRTH2 2C23ROPZ NDKKOABG; deploy ZIWEB0UW 9SOYXKNE 9SYRK6SW; blocked QE114936 (by MVR6PXC0); superseded UIDUVNY8; todo LHCHVK9Z C19SUVPH L6V1UUW0 MVR6PXC0 BLAV6W15 SIGBCMGL. Four remain in human_review: 6SPXOV0P DIZ289UQ 0E3W5C45 2CYTNLY1.
+- Pattern across the six returns to todo: in five of them the change reads right and no test fails when it is undone (C19SUVPH, L6V1UUW0, MVR6PXC0, BLAV6W15, SIGBCMGL).

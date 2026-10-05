@@ -1,9 +1,9 @@
 ---
 trdd-id: 9SYRK6SW
 title: api_call staging table writer at the bodies-pass ingest site
-column: human_review
+column: deploy
 created: 2026-09-03T04:47:31+0200
-updated: 2026-09-24T09:08:02+0200
+updated: 2026-10-05T02:34:54+0200
 current-owner: main-session
 task-type: feature
 priority: high
@@ -13,6 +13,8 @@ created-by: main-session
 npt: []
 eht: []
 blocked-by: []
+release-via: deploy
+status: tasked
 ---
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-05T12:24:45+0200
@@ -374,6 +376,7 @@ implementation, and step 3 is the one that outlives it.
   verified first-hand": the first hand was the worker's, and box 5's test-run half is still deferred.
   The verdict is the session's from this line on.
 - 2026-09-24T09:08:02+0200 — column → human_review. Owed run PASSED 2026-09-24: cargo test -p agentlens-store 42 passed / 0 failed (7 blocks), card claim HOLDS (grew from 38). STEP 3 (restart-and-verify parquet survival) still genuinely unperformed -- requires a live-server restart, out of this run's scope, as the card itself already documents. Report: reports/owed-runs/20260924_085621+0200-owed-runs.md
+- 2026-10-05T02:34:54+0200 — column → deploy by main-agent@agentlenspro. reviewed in the owner's stead 2026-10-05: store tests re-run by the main agent, red mutation by the reviewer; only the live restart check remains
 
 ## AI review verdict — 2026-09-05T14:20:42+0200
 
@@ -408,3 +411,11 @@ Ready for human_review; the owner makes that move.
 A review-fork spawned in the same session correctly found the first-pass verdict above was right to APPROVE the acceptance boxes (1-6, all met, code unchanged since c92a90c3) but wrong to leave the STATE block's demonstrably false present-tense claim in place with only a non-blocking suggestion to fix it later. The STATE block is this project's own authoritative, currency-sensitive section (trdd-design-tasks.md item 10: kept current on every edit, wins on disagreement), and this review was itself an edit-worthy touch (verification-and-evidence.md: fix what you find immediately).
 ACTION TAKEN: the STATE line has been corrected in place (trddgrep edit, at-line 20) from an unconditional 'DEPLOYED and writing' to 'WAS deployed and writing as of 2026-09-05 - dormant, not broken, as of 2026-09-23', naming the file:line root cause (chores.rs:50-52, scope.dirs.is_empty() before open_store). A second review-fork then found that mutating the FIRST verdict section's own heading/closing line (rather than appending a new dated section) destroyed the audit trail of what the first pass actually said, and that labeling the heading REQUEST CHANGES while the body said the fix was already applied was self-contradictory. Both are now fixed: the first verdict section above is restored to its original APPROVE text verbatim, and this second, separately dated section records the correction instead of overwriting the first.
 Net effect: verdict is APPROVE. The STATE block no longer asserts a false present-tense claim; the acceptance boxes hold; no further code, test, or column change is needed. Ready for human_review; the owner makes that move.
+
+## Review 2026-10-05 (in the owner's stead)
+
+- Verdict: accepted, pending deploy. All six ticked boxes are verified here; the one step never run is VERIFICATION step 3 (restart the collector and check the api_calls parquet parts survive and stay readable), which needs the live collector and the real data directory. Reviewer report: docs_dev/20261005_023119+0200-review-9SYRK6SW.md (gitignored).
+- Re-run by the main agent: cargo test -p agentlens-store --test api_call -- --test-threads=1, exit 0, 7 passed. Read by the main agent in agentlens-store: API_CALLS_DIR is in the store-open directory list, the flush table list and the fsync barrier (lib.rs and pass.rs).
+- Mutation by the reviewer: one line in append_body_row made the parsed branch never taken; 7 of 7 api_call tests went red on their assertions; undone, working-tree checksum unchanged. Reviewer also ran the roundtrip tests (3 passed) and the nine unit tests of the api_call module.
+- Read only, no test can assert it: the body is parsed once. Known and recorded by the card: the TypeScript twin has no api_calls writer.
+- Links: npt [], eht [], blocked-by []; parent TRDD-CAJ5RCP9 (todo). Cards waiting on this one: GVA8TTJF, IRNHEN4Z and QSFYIHUO (planned; they want real rows from a deployed collector) and the release gate HSPUF5XH. Moving this card to deploy does not release them.

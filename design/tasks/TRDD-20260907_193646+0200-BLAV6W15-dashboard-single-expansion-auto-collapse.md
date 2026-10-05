@@ -1,9 +1,9 @@
 ---
 trdd-id: BLAV6W15
 title: Only one node may be expanded in the dashboard at a time — expanding one collapses the rest
-column: human_review
+column: todo
 created: 2026-09-07T19:36:46+0200
-updated: 2026-09-08T10:33:37+0200
+updated: 2026-10-05T02:34:56+0200
 current-owner: main
 task-type: feature
 parent-trdd: 7YPQWKPG
@@ -17,6 +17,7 @@ implementation-commits: [3da5ef49, 63926a3f]
 project-id: agentlenspro
 scope: project
 labels: [dashboard, preact, memory, media]
+status: tasked
 ---
 
 # Only one node may be expanded in the dashboard at a time
@@ -181,3 +182,17 @@ leaf, branch, trace or session collapses every other expanded node.
   acceptable under this directive, but worth recording.
 - `media/src` must not re-declare anything `src/shared/` exports; `pnpm run check-mirrors` fails
   the build if it does.
+
+## Review 2026-10-05 (in the owner's stead)
+
+- Verdict: returned to todo. What was built works and its one test passes, but the test runs in no build, the branch level is untested, and part of the directive is not enforced. Reviewer report: docs_dev/20261005_023323+0200-review-BLAV6W15.md (gitignored).
+- DECISION taken by the main agent in the owner's stead (owner order of 2026-10-05, quoted on TRDD-AVUGZV1K), on the deviation this card's STATE says the owner was never asked about: ONE OPEN PATH is accepted as the meaning of "only one node may be expanded". Reason: a branch renders inside its parent session's mounted body, so collapsing the parent to honour a literal single node would unmount the branch being opened; and the memory goal is met, since at most two ids of heavy detail stay resident (evictDetailExcept). This is a judgment from the code's structure, not a preference the owner expressed; the owner can overrule it.
+- Verified: `node scripts/test-dashboard-single-expansion.js` exit 0, all 8 checks pass (run by the reviewer and again by the main agent); `node scripts/check-single-expansion.js` OK; tsc --noEmit on media/tsconfig.json clean and check-no-mirrors OK (reviewer). Mutation by the reviewer: evictDetailExcept([id]) changed to evict everything in setExpandedTraceId; the check "the newly-expanded node keeps its own cached data" went red; undone, working-tree checksum unchanged.
+- Owed 1: scripts/test-dashboard-single-expansion.js is referenced by no package.json script and no workflow (0 references, checked by the main agent), so the only behavioural test never runs. Wire it into compile/package or the unit suite.
+- Owed 2: it tests the session level only. setExpandedBranchId, the kept ancestor, and clearing the branch when the session changes have no test; nothing validates that the branch id belongs to the expanded session.
+- Owed 3: leaf, step and tool-call panels in media/src/tabs/Traces.tsx keep their own local open flags (useState), so they are not governed by the rule at all. Either bring them under it or record on this card that the directive stops at sessions and branches; the directive's words say "leaf".
+- Not checked: lint was not run; that a collapsed subtree is really unmounted is read from the JSX gate, not observed in a browser; no live-UI check is recorded in STATE. Links: npt [], eht [], blocked-by []; parent TRDD-7YPQWKPG (dev).
+
+## Approval log
+
+- 2026-10-05T02:34:56+0200 — column → todo by main-agent@agentlenspro. review in the owner's stead 2026-10-05: behavioural test unwired, branch level untested, leaf panels ungoverned; not dev, because nobody is working on it
