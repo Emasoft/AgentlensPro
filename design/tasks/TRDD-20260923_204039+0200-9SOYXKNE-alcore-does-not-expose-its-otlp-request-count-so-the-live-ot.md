@@ -3,7 +3,7 @@ trdd-id: 9SOYXKNE
 title: alcore does not expose its OTLP request count so the live OTLP request rate cannot be measured
 column: deploy
 created: 2026-09-23T20:40:39+0200
-updated: 2026-10-05T01:52:08+0200
+updated: 2026-10-05T03:36:33+0200
 current-owner: main-session
 created-by: main-session
 task-type: feature
@@ -51,3 +51,4 @@ Held in ai_review, with its AI review passed, pending the user's decision on the
 - Mutation by the reviewer: the logs increment in ingest_parsed was changed to the traces one; the_values_the_core_owns_move_with_the_state went red on its assertion; undone, working-tree checksum unchanged.
 - Gap: no test asserts logs_payloads over HTTP (only in-process through ingest_post). The HTTP handler sends all three kinds through the same ingest_parsed call, read by the main agent in lib.rs.
 - First check after deploy, before reading any rate: each of the three counters moves at all under real exporter traffic. A body the server cannot parse (for example protobuf) is counted in parseErrors and in no per-kind counter, so a kind that only ever arrives unparsed would read zero.
+DEPLOY CHECK 2026-10-05 (read-only; reviewer report docs_dev/20261005_033327+0200-deploy-cards-check.md, re-measured by the main agent): this card's code is in the binary the live collector runs. `grep -ac tracesPayloads` gives 1 on bin-native/darwin-arm64/alcore (built Oct 3 13:04) and 0 on the 2026-09-24 backup, and the running process pid 13922 started Oct 3 17:22, after that build. So nothing here waits for a build or a deploy, and `deploy` is not a true description of this card. What remains is the live check that the three otlp counters move, a read of /api/server-stats, which could NOT be run: the collector's UI port closes every connection with an empty reply (see the new card named in the directive card TRDD-AVUGZV1K). The column was left unchanged in this pass.

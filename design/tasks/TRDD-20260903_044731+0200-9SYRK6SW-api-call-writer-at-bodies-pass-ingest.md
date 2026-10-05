@@ -3,7 +3,7 @@ trdd-id: 9SYRK6SW
 title: api_call staging table writer at the bodies-pass ingest site
 column: deploy
 created: 2026-09-03T04:47:31+0200
-updated: 2026-10-05T02:34:54+0200
+updated: 2026-10-05T03:36:33+0200
 current-owner: main-session
 task-type: feature
 priority: high
@@ -419,3 +419,4 @@ Net effect: verdict is APPROVE. The STATE block no longer asserts a false presen
 - Mutation by the reviewer: one line in append_body_row made the parsed branch never taken; 7 of 7 api_call tests went red on their assertions; undone, working-tree checksum unchanged. Reviewer also ran the roundtrip tests (3 passed) and the nine unit tests of the api_call module.
 - Read only, no test can assert it: the body is parsed once. Known and recorded by the card: the TypeScript twin has no api_calls writer.
 - Links: npt [], eht [], blocked-by []; parent TRDD-CAJ5RCP9 (todo). Cards waiting on this one: GVA8TTJF, IRNHEN4Z and QSFYIHUO (planned; they want real rows from a deployed collector) and the release gate HSPUF5XH. Moving this card to deploy does not release them.
+DEPLOY CHECK 2026-10-05 (read-only; reviewer report docs_dev/20261005_033327+0200-deploy-cards-check.md, re-measured by the main agent): the writer's code is in the binary the live collector runs. `grep -ac 'CREATE TABLE api_call'` gives 1 on bin-native/darwin-arm64/alcore (built Oct 3 13:04) and 1 on the 2026-09-24 backup; the running process pid 13922 started Oct 3 17:22. So nothing here waits for a build or a deploy, and `deploy` is not a true description of this card. By this card's own text raw body capture is off on this machine, so the writer is dormant; that was not re-verified, because the data directory was not read. What remains is the live restart check with capture on, which is the owner's (a restart of the live collector). This card has no `implementation-commits`; the reviewer found c92a90c3 (2026-09-03) as the commit that added api_call.rs, not verified further. The column was left unchanged in this pass.
