@@ -1,10 +1,10 @@
 ---
 trdd-id: HDUETCU7
 title: alcore sends the bodies pass counters as literal zeros and never sends the cumulative reclaim fields the status line was built to render
-column: todo
+column: testing
 status: tasked
 created: 2026-10-05T12:21:29+0200
-updated: 2026-10-05T12:21:37+0200
+updated: 2026-10-05T18:03:48+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -16,6 +16,7 @@ approved: true
 approval-judge: main-agent@agentlenspro
 approval-datetime: 2026-10-05T12:21:29+0200
 related: [FGN5TY7E, C5L779YI, U0L78B3Z]
+implementation-commits: [97f6806a]
 ---
 
 # alcore sends the bodies pass counters as literal zeros and never sends the cumulative reclaim fields the status line was built to render
@@ -38,3 +39,15 @@ Removing the cumulative line and its two declarations instead is the owner's dec
 ## Approval log
 
 - 2026-10-05T12:21:29+0200 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-10-05T18:03:48+0200 — column → testing by main-agent@agentlenspro. code landed in 97f6806a; the full crate test run is owed
+
+## Implementation 2026-10-05 (commit 97f6806a)
+
+- What landed: bodies_pass records files removed, bytes freed, the pass time, a since-boot file count and the time of the last pass that removed anything; /api/server-stats sends them as bodies.lastPass, persistence.bodiesLastPurge, bodies.reclaimedSinceBoot and bodies.lastNonZeroPassAt. Source and tests only. Not deployed: the live collector sends zeros until alcore is rebuilt and restarted, which is the owner's act.
+- Readers of persistence.bodiesLastPurge, named for box 4 AFTER the code was written (the box asked for them first): the emitter in server_stats.rs, and tests/server_stats.rs (the persistence key list and the object's five inner keys). A worker's git grep over tracked files found no other reader in src, media/src, standalone, skills, agents or scripts.
+- Decisions by the session, not the owner: an idle tick with nothing staged records an empty pass (the retired TypeScript server overwrote the object every pass, by a worker's read of 567fc5c2^:standalone/server.ts); the CLI does not print the pass time, so this has no visible effect in server status today. keptBytes and keptFiles are read live at request time; keptFiles is the live file count, a departure from the TypeScript server, which always sent 0. bodiesLastPurge and lastPass are the same object, as in that server.
+- The counters live in a process-level static in chores.rs and not in CoreState, because the editing tool refused the CoreState edit, not on merit. Known costs: one shared set of counters per process (the new test file holds a single test for that reason), not reset by CoreState::open, and the struct is declared in lib.rs while stored in chores.rs.
+- Checks run by a worker on 2026-10-05: cargo test -p agentlens-core --test chores_bodies_pass_stats --test server_stats, 1 and 4 passed (the main agent read the final run's output whole: no warnings); with the literal zeros restored the new test failed at its removedFiles assertion, left 0 right 1 (read by grep of the output), then passed again. That mutation run started at a load of 42, against the session's own rule. After the last test run two comments in server_stats.rs were moved and rewrapped by replacing the whole function; a comparison of the full diff before and after shows comment lines only. The committed server_stats.rs has not been compiled since.
+- Checks NOT run: the rest of the agentlens-core suite (four other test files call bodies_pass; the crate's unit tests), cargo clippy, pnpm check-types. No box is ticked until the full crate run is recorded here; a red run reopens the commit.
+- Corrections to the commit message, recorded here because the commit is not amended: 'the only cost' should read 'the known cost'; its list of early exits that record nothing omits the poisoned state lock and the empty scope; 'no warnings' holds for the final run only; 'Semantics follow the retired TypeScript server' has the keptFiles exception above; 'printed last pass archived 0' is by the source, never rendered.
+- Known limits: freedBytes includes relocated stranded files and can exceed the bytes of removedFiles; a store pass that examines files and removes none is not covered by the test; the module header of server_stats.rs still lists the body archive among subsystems not ported, which box 3 as written (the comment near line 538) does not cover.
