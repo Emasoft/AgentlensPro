@@ -1,9 +1,9 @@
 ---
 trdd-id: BA0DCW98
 title: A quoted role marker in untrusted prompt text self-exempts an agent from its own review gate
-column: ai_review
+column: blocked
 created: 2026-09-13T21:35:48+0200
-updated: 2026-10-04T13:55:48+0200
+updated: 2026-10-05T11:47:09+0200
 current-owner: emanuelesabetta
 created-by: emanuelesabetta
 task-type: security
@@ -14,7 +14,14 @@ mandated-by: none
 approved: true
 approval-judge: emanuelesabetta
 approval-datetime: 2026-09-13T21:35:48+0200
-implementation-commits: [90446356]
+implementation-commits: [25113e6d, 7ecc6ad7]
+related: [8YM21R5X]
+blocked-by: [8YM21R5X]
+pre-block-column: ai_review
+unblock-when: [trdd:8YM21R5X]
+blocker-probe: [trddgrep, why, BA0DCW98]
+blocker-holds-if: not-match:READY
+status: tasked
 ---
 
 # A quoted role marker in untrusted prompt text self-exempts an agent from its own review gate
@@ -71,6 +78,7 @@ rather than an in-place fix.
 - 2026-09-13T21:35:48+0200 — MANDATE issued by emanuelesabetta (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 2026-09-24T09:06:30+0200 -- Implementation (worker, TRDD-BA0DCW98). Split declaredRole into two predicates in src/cli/reviewGate.ts: declaredRole (credit path, reads the parent's own Agent tool_use input.prompt -- never harness-wrapped) is now anchored to the prompt's literal FIRST non-whitespace line (candidate option 3), closing the hole for the parent-gate-release direction. declaredRoleOwnTranscript (self-exemption path, feeds ownRole/subagentExempt, reads a spawned agent's OWN first transcript entry) is LEFT UNANCHORED, unchanged, on live orchestrator direction: per TRDD-3U8AIHXK that read may carry harness-added preamble ahead of the marker, so anchoring it without measuring the real wrapped shape risks falsely de-exempting every real REVIEW/MEASURE fork and deadlocking the gate. Box 2 (implement in exemptRoleStrict, i.e. the self-exemption predicate the card's own title describes) is therefore left UNCHECKED -- the literal self-exempt scenario in the card title is NOT fully closed; only its credit-side counterpart is. Follow-up needed: measure a real MEASURE/REVIEW fork's own first transcript entry to learn the actual wrapped shape, then anchor declaredRoleOwnTranscript the same way. Sites checked: reviewGate.ts declaredRole (fixed) + declaredRoleOwnTranscript (deliberately left, documented); reviewSupervisor.ts:86 (reads b.input?.prompt, same shape as the credit site, automatically covered, no edit needed); reviewLoop.ts roleFromPromptFirstLine (already first-line-anchored, untouched per scope boundary -- file owned by TRDD-40M4UPK3) and ownFileRole (substring match on own transcript first 5 lines, feeds mayWrite's WRITE-DENIAL for role forks -- false positive only makes the agent MORE restricted, not less, so left as-is, not a self-exemption vector); reviewGateTriggers.ts NOT touched (owned by TRDD-J2K6IM4R, concurrently modified by another worker during this session -- its diff in git status is NOT mine). Tests: reviewGate.test.ts declaredRole suite rewritten for first-line semantics (cases a/b/c/d from the assignment all present); new declaredRoleOwnTranscript suite locks the deliberately-unchanged loose behavior. Checks: check-types, lint (0 errors, 456 pre-existing warnings), compile-tests all exit 0; mocha --grep reviewGate|reviewSupervisor: 95 passing. Mutation check: reverted declaredRole's anchor, confirmed 4 tests including the 50-line-buried case (b) go red, restored via file copy, reconfirmed 95 passing. Reports: reports/ba0dcw98/.
 - 2026-09-24T09:47:45+0200 — column → ai_review by main-session. first-line credit anchoring landed in 25113e6d and 7ecc6ad7; box 2 residual carded as 8YM21R5X
+- 2026-10-05T11:47:09+0200 — column → blocked by main-agent@agentlenspro. review of 2026-10-05 in the owner's stead, see the Review section
 
 ## Notes
 
@@ -78,3 +86,9 @@ rather than an in-place fix.
 2026-09-24: review-fork correction to the note above -- the directive's self-exemption sentence (line ~138, describing subagentExempt/ownRole via declaredRoleOwnTranscript) WAS wrong and DID need a fix (my first pass wrongly called it already-correct): it borrowed declaredRole's first-line wording for a check that is deliberately unanchored. Fixed to state the two checks separately, with the residual pointed at TRDD-8YM21R5X. Also fixed a self-contradictory demandText() parenthetical ('nothing before it, not even blank lines with text' vs the code's actual leading-blank-line tolerance) and corrected the mutation report's list of which tests actually failed (verified from the log: 6 failures were the buried-marker, second-marker, short-preceding-prose, first-line-anchor MUTATION CHECK, one scanTranscriptLines test, and the new parity test -- NOT the trailing-prose or dollar-anchor tests as first written). Added a supervisor-side parity test. Full detail: reports/ba0dcw98/20260924_092919+0200-predeploy-review-fixes.md. types/lint/compile-tests/mocha all still green (137/137).
 2026-10-04: worker wA re-ran the gate suites (scoped run reviewGate|reviewSupervisor: 105 passing, 0 failing). Box 2 is re-scoped to TRDD-8YM21R5X (declaredRoleOwnTranscript anchoring) and stays unticked here.
 2026-10-04: code and tests done at 90446356; effective only after the installed hook bundle is rebuilt (owner).
+
+## Review 2026-10-05 (in the owner's stead)
+
+- Verdict: NOT closable; to `blocked` by TRDD-8YM21R5X, coming from `ai_review`. What is open, by one worker's read at HEAD and a second worker's check: declaredRoleOwnTranscript in src/cli/reviewGate.ts matches the marker as a whole line anywhere in a spawned agent's first transcript entry, and a match exempts that agent from its own stop gate. Two tests lock this by design: one asserts the predicate returns a role for a brief with text before the marker (in the suite titled "declaredRoleOwnTranscript: self-exemption, unanchored by design"), and one asserts the gate lets such a worker stop (its title ends "as a whole line it does"). By TRDD-8YM21R5X's own note a fork's first entry does not match that pattern and forks are exempted by a separate rule, so the open part concerns non-fork workers; neither half was measured on a real transcript. The credit side is closed: declaredRole compares the first non-blank line only (test "a marker buried after 50+ lines of quoted external material is NOT credited"). No test was run for this entry; the 1-minute load was above 100. The main agent read both cards whole and none of the source.
+- Corrections to this card's own record, by the same two reads: the names exemptRoleStrict and creditRoleLoose no longer exist in src/cli/reviewGate.ts. `implementation-commits` now lists 25113e6d and 7ecc6ad7, the commits that changed the predicates and the directive strings (this card's log line of 2026-09-24 names them); 90446356 had been listed as the tree state of the 2026-10-04 re-run of the suites, and it is TRDD-PNB9FNJ0's change, with no line touching either predicate. The note "effective only after the installed hook bundle is rebuilt" does not hold for this card: standalone/cli.js, file date 2026-10-01, already holds both predicates as at HEAD.
+- Box 2 stays unticked. After TRDD-8YM21R5X closes, this card returns to `ai_review`, and box 2 must then be ticked on that card's evidence; unblocking alone does not close this card. Rewriting box 2 to cover the credit side only would narrow a security acceptance after the fact; in the reviewing session's judgment that is the owner's to decide.
