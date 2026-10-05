@@ -3,7 +3,7 @@ trdd-id: FGN5TY7E
 title: The server-stats bodies shape is hand-declared twice in one file and the two declarations disagree
 column: testing
 created: 2026-09-05T08:25:46+0200
-updated: 2026-10-05T12:21:41+0200
+updated: 2026-10-05T12:30:11+0200
 current-owner: main-session
 task-type: refactor
 priority: high
@@ -124,9 +124,9 @@ a parameter read — it could not see `serverControl.ts:521`, the read TRDD-U0L7
 
 ## Acceptance
 
-- [ ] ONE declaration of the server-stats `bodies` shape, or a generated/shared type, consumed by
+- [x] ONE declaration of the server-stats `bodies` shape, or a generated/shared type, consumed by
       every reader (`serverControl.ts` ×2 today, plus any found by the search below).
-- [ ] A search establishes the FULL declaration set FIRST — `grep -rn` for the field names across
+- [x] A search establishes the FULL declaration set FIRST — `grep -rn` for the field names across
       `src/`, `media/src/`, `standalone/`, and **open every hit to see what type it belongs to**.
       This card's first version counted `burnGuard.ts:110` as a third declaration from an unopened
       grep line; it is a `BurnGuardOptions` parameter member. Record the number found AND what each
@@ -164,3 +164,4 @@ Boxes 1 and 2 are genuinely done and well-evidenced. Box 4's partial state is ho
 ## Review 2026-10-05 (in the owner's stead)
 
 Box 4 is split out to TRDD-HDUETCU7 and stays unticked here; it can tick when that card closes or when the owner rewords it. The reviewing session first proposed deleting the two declarations; an adversarial review and a read of TRDD-C5L779YI (archived, so it takes no link back) showed that would remove the only consumer of that card's accepted fix. This card called box 4 the owner's decision; splitting it is the option this card's own head names, taken under the order of 2026-10-05 as the session's reading. The head's "run the box-3 mutation" is done by the note of 2026-10-04, which this session did not see run. Boxes 1 and 2 were not re-verified in this entry. No test was run for this entry.
+Boxes 1 and 2 ticked on 2026-10-05 at commit 11c34385. Number of declarations of the server-stats bodies object found: one, ServerStatsBodies at src/cli/serverControl.ts line 627. Every hit below was opened by a read-only worker (report in gitignored docs_dev); the main agent ran the bodies search itself and read the matched lines, and read the worker's report, not the files. Search for `bodies:` as a member or annotation over src, media/src and standalone, tests excluded, 15 hits: serverControl.ts 648 (a Pick of the one declaration) and 707 (a member typed with it), both uses; serverControl.ts 836, the status line's template text; burnGuard.ts 67 and 289, a boolean sources.bodies and its literal; cli/diagnosticsCli.ts 256, sources.bodies typed unknown; shared/branchSerialize.ts 31, SerialBody[]; media/src/CopyBranchButton.tsx 113, a literal of that type; store/validate.ts 28 and 78, a number and its literal; cli/ctxmapCli.ts 244, a local array; and four comment lines (bodiesActivity.ts 156, cacheBreakTimeline.ts 302, store/ingestPass.ts 117, store/sections.ts 4). Search for the emitter's key names as typed members: lastPass, captureDownSince, sinkProblem and parked are all inside ServerStatsBodies; burnGuard.ts 110 is the BurnGuardOptions parameter member this card already describes; no type names two or more of the keys together outside the one declaration. One fragment remains: parkedSuffix at serverControl.ts 678 hand-copies the three-key parked sub-shape as a parameter type. The other readers of the response were opened and none touches bodies: serverControl.ts 567 (pid and dataDir), 747 (cast to ServerStats, so through the one declaration), setup.ts 213 (StatsShape has no bodies), storeAdmin.ts 142 (result discarded). Not covered: tests, gitignored and generated files, and a cast that spells the keys some other way. No build or test was run. Box 3 stays ticked on the note of 2026-10-04, which this session did not see run. Box 4 is the only open box.
