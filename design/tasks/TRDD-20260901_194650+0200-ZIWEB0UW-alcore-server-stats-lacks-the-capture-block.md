@@ -3,7 +3,7 @@ trdd-id: ZIWEB0UW
 title: alcore /api/server-stats lacks the capture block so status prints capture unknown
 column: deploy
 created: 2026-09-01T19:46:50+0200
-updated: 2026-10-05T03:36:32+0200
+updated: 2026-10-05T05:31:28+0200
 current-owner: agentlenspro-15
 task-type: bugfix
 implementation-commits: [0c19090d, 3b7bfcd6]
@@ -87,3 +87,4 @@ Deploy lesson captured as ATOM-SFLG-1NSX (in-place cp SIGKILL).
 - Not done: no mutation was run on these two tests (the reviewer argued from the empty-versus-populated assertions); the TypeScript test src/test/parkedBodies.test.ts was not run; `server status` against the live collector was not checked, since that needs the deployed build.
 - Owed checks done on 2026-10-05 (report docs_dev/20261005_014206+0200-review-ZIWEB0UW-owed.md): src/test/bodiesCaptureLine.test.ts covers the "unknown" branch and passes; a mutation making live_bodies_liveness return (0, None) turned live_bodies_liveness_counts_request_response_files_and_finds_the_newest red on its assertion and was undone with the working-tree checksum unchanged. The earlier bullet saying no mutation was run is superseded by this one.
 DEPLOY CHECK 2026-10-05 (read-only; reviewer report docs_dev/20261005_033327+0200-deploy-cards-check.md, three facts re-measured by the main agent): this card's code is in the binary the live collector runs. `grep -ac live_bodies_liveness` on bin-native/darwin-arm64/alcore gives 2 (and 2 on the 2026-09-24 backup, so it has been in every build since), the binary was built Oct 3 13:04 and the running process pid 13922 started Oct 3 17:22. So nothing here waits for a build or a deploy, and `deploy` is not a true description of this card. What remains is its live check, the capture line in `agentlenspro server status`, which could NOT be run: the collector's UI port closes every connection with an empty reply (see the new card named in the directive card TRDD-AVUGZV1K). The column was left unchanged in this pass.
+- 2026-10-05 05:30, owed test run: out/test/test/parkedBodies.test.js was run alone by a worker (by its report): 13 passing. The main agent read the `13 passing` line of the captured output; the exit code (0) and the clean test compile are the worker's report, and the main agent did not run the file itself. A green run of an existing test does not show it would fail if this card's change were undone: the mutation owed on this card is still not run.
