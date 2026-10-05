@@ -4,7 +4,7 @@ title: Three review-gate rules have no test that fails when they change
 column: todo
 status: tasked
 created: 2026-10-05T02:55:14+0200
-updated: 2026-10-05T02:55:14+0200
+updated: 2026-10-05T10:08:19+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -15,6 +15,7 @@ mandated-by: none
 approved: true
 approval-judge: main-agent@agentlenspro
 approval-datetime: 2026-10-05T02:55:14+0200
+related: [2CYTNLY1, 0E3W5C45]
 ---
 
 # Three review-gate rules have no test that fails when they change

@@ -3,7 +3,7 @@ trdd-id: DIZ289UQ
 title: The burn-gate blames review forks for cache thrash it cannot attribute
 column: todo
 created: 2026-09-05T10:28:09+0200
-updated: 2026-10-05T05:31:27+0200
+updated: 2026-10-05T10:10:44+0200
 current-owner: main-session
 task-type: bugfix
 priority: high
@@ -15,7 +15,11 @@ status: tasked
 
 # The burn-gate blames review forks for cache thrash it cannot attribute
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-09-05T11:43:19+0200
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative for column and next action) — 2026-10-05
+
+Column `todo`, returned by the review of 2026-10-05. The head below says `ai_review`; that is history, and its other content was not re-checked. Three of the five acceptance boxes are open by disclosed substitution and wait for the owner's accept or reject (review entry of 2026-10-05). The two owed test files were run by a worker on 2026-10-05: agentGate 58 passing, burnGuard 13 passing; the main agent read the passing lines, the exit codes are the worker's report. NEXT ACTION: the owner rules on the substitutions. The head below also lists a skill reinstall check and a review fork as remaining; whether they were done was not verified.
+
+## Earlier head (2026-09-05T11:43:19+0200) - kept; its column and next action are superseded above
 
 **STATUS: COMMITTED, in `ai_review`.** The final gate (`reports_dev/diz-final.txt`) exited 0 on
 every stage at 11:42 on 2026-09-05 — types, eslint, compile-tests, mocha (92 passing), both

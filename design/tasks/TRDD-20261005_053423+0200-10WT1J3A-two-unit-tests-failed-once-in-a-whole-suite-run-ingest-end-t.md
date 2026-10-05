@@ -4,7 +4,7 @@ title: Two tests failed once in a whole-suite run on 2026-10-05 - cause unknown
 column: todo
 status: tasked
 created: 2026-10-05T05:34:23+0200
-updated: 2026-10-05T05:37:35+0200
+updated: 2026-10-05T10:08:19+0200
 current-owner: main-agent@AgentlensPro
 created-by: main-agent@AgentlensPro
 task-type: bugfix
@@ -42,3 +42,4 @@ Acceptance:
 - Read first-hand, failure 2: `ingest end to end — the CLI start path with a real alcore`, case `AGENTLENS_INGEST=on: tap is ON, default sources, a hook event is spooled, ingest/ exists; stop reaps the child`, AssertionError `no spooled line within 90 s` with stats `"linesWritten":0`, `"rejectedInvalid":1`, `"rejectedByTopic":{"hook/session_start":1}`, and rejectedFields for hook/session_start beginning `"cwd","source","tran` (the line is cut there in the capture), at out/test/test/ingestEndToEnd.test.js line 149. That the rejection caused the missing spooled line is not shown.
 - On overlap: the failing run's output is complete (summary present, 6 minutes, file time 05:27); the second run's output stops inside the ingest end to end test with `server started (pid 32797)` and file time 05:29. So the second run very probably began after the failing run ended, and competing runs probably do not explain the failures. Inferred from file times and contents.
 - Also not known: whether either failure depends on the state of the live collector, whose UI port was returning empty replies that morning (TRDD-YGC8ZO36); both tests exercise the CLI start and revive path, the ground of TRDD-L6V1UUW0. Order dependence inside the suite is possible too (compare TRDD-B7DSTJLS), so a pass when run alone would not clear either test.
+- The body numbers the ingest test as failing test 1 and the hook-spool test as 2; this section numbers them the other way round: refer to them by name. The body lists a third rejected field `transcript_path`; the capture is cut at `tran`, so that name is a completion, not a reading.

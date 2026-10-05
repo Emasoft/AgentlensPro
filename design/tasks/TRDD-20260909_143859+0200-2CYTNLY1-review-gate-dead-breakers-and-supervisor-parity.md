@@ -3,7 +3,7 @@ trdd-id: 2CYTNLY1
 title: Delete the review gate's dead breakers and give the supervisor the gate's work definition
 column: human_review
 created: 2026-09-09T14:38:59+0200
-updated: 2026-10-05T03:22:02+0200
+updated: 2026-10-05T10:12:00+0200
 current-owner: main
 task-type: refactor
 priority: medium
@@ -23,7 +23,11 @@ status: tasked
 
 # Delete the review gate's dead breakers and give the supervisor the gate's work definition
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-10 04:30
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative for column and next action) — 2026-10-05
+
+Column `human_review`. Reviewed 2026-10-05 under TRDD-AVUGZV1K. The head below opens with the pull into `dev`; that is history. Its advice to navigate by symbol still applies. What is open: the kill-switch question in the Approval log, which this session treats as the owner's (the agent's reading of the directive, not the owner's words). Rules the review found untested are carried by TRDD-GI1LC8FX. NEXT ACTION: none on this card until that question is answered.
+
+## Earlier head (2026-09-10 04:30) - kept; its column and next action are superseded above
 
 Pulled `todo` → `dev` at 03:49 by the janitor keep-going resume, after TRDD-3U8AIHXK reached
 `testing`. The §Scope line numbers date from 2026-09-09 and are STALE since 3f498995 (the
@@ -239,3 +243,4 @@ Recount 2026-09-23T13:23:23+0200: without the stale out/test/test/reviewGateEffe
 - Links: npt [], eht [], blocked-by []; related 40M4UPK3 (dev) and 0E3W5C45.
 - CORRECTION 2026-10-05, after adversarial review of the entry above. (1) "none of it is in effect until the owner rebuilds the bundle" is unverified and probably wrong. Read by the main agent: the `agentlenspro` command resolves to this repo's standalone/cli.js, built 2026-10-01 18:31; commits 53a30222 and 86abd4ef are dated 2026-09-10; the bundle contains `killSwitchHalf` (3 times) and `scanSupervision` (2 times). That those two commits are in the running bundle is an INFERENCE from the dates and those two names. The third commit listed on this card, 90446356 of 2026-10-04, is newer than the bundle; its subject names TRDD-PNB9FNJ0 and whether any of the five boxes needs it was not read. So whether anything on this card waits for a deploy is OPEN and is not decided in this entry. (2) The entry above omits that the owner kill-switch question recorded in the Approval log on 2026-09-10 (should the gate honour only the FILE half of AGENTLENS_DISABLED) is still OPEN. This review does not decide it. (3) "the new card minted in step 1" means TRDD-GI1LC8FX; the gap it carries from this card (the reason floor of 8) is outside the five boxes by the reviewer's reading, which is why it is not registered as this card's EHT.
 - COLUMN SETTLED 2026-10-05: back in `human_review`; the earlier `deploy` and its "column → deploy" Approval-log line are withdrawn. Read by the main agent: the five acceptance boxes are all ticked; they were run at 53a30222 and 86abd4ef (2026-09-10), re-reviewed on 2026-10-04, and in this session eslint on the four gate files exits 0 and reviewSupervisor has 30 passing. Both commits are older than the bundle built 2026-10-01 18:31, which contains `killSwitchHalf` and `scanSupervision`; that the bundle holds this card's change is an inference from those dates and names. 90446356 is removed from `implementation-commits`: `git show --stat` shows it landed TRDD-PNB9FNJ0's code (reviewGate.ts, reviewSupervisor.ts and their tests) and added only a re-review note to this card. So nothing on this card waits for a deploy. What keeps it out of `complete`: box 5 leaves "item 2" as the owner question in the Approval log of 2026-09-10 (should the gate honour only the FILE half of the kill switch and ignore AGENTLENS_DISABLED=1). It is unanswered, it is a design preference, and completing the card would archive it. The gap TRDD-GI1LC8FX carries from this card (the reason floor of 8) is outside the five boxes by the reviewer's reading. The STATE head still says NEXT ACTION `ai_review` and was not rewritten.
+- Correction to the entry above that says "in this session eslint on the four gate files exits 0 and reviewSupervisor has 30 passing": that run was made before the session was cleared on 2026-10-05, so it is a prior-session run. The session summary disagrees with this entry on whether box 2 was run at both commits; which is right was not re-checked.
