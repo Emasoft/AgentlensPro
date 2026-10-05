@@ -3,19 +3,21 @@ trdd-id: FGN5TY7E
 title: The server-stats bodies shape is hand-declared twice in one file and the two declarations disagree
 column: testing
 created: 2026-09-05T08:25:46+0200
-updated: 2026-10-04T13:53:23+0200
+updated: 2026-10-05T12:21:41+0200
 current-owner: main-session
 task-type: refactor
 priority: high
 min-approval-requirement: none
 created-by: U0L78B3Z
-related: [U0L78B3Z, ZIWEB0UW, 8ADTIGKT]
+related: [U0L78B3Z, ZIWEB0UW, 8ADTIGKT, HDUETCU7]
 implementation-commits: [0c01a3e1, 7659b9ca, 34569e8f]
 ---
 
 # The server-stats bodies shape is hand-declared twice in one file and the two declarations disagree
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-09-05T16:49:28+0200
+
+**2026-10-05: parts of this head are superseded; read "Review 2026-10-05" at the end of the card first.** The box-3 mutation named below as the next action is recorded as run on 2026-10-04. Box 4 is split out to TRDD-HDUETCU7 and is no longer decided here. What remains: re-verify boxes 1 and 2 at the current source, then decide the column.
 
 **`ai_review` → `testing` (REJECTED 16:46, accepted by the orchestrator).** Boxes 1–2 verified met by
 the review; box 3 is PARTIAL by the card's own 11:21 STATE and its mutation run — delete a field from
@@ -158,3 +160,7 @@ Boxes 1 and 2 are genuinely done and well-evidenced. Box 4's partial state is ho
 ## Notes and lessons learned
 2026-10-04 — box 3 mutation run: removed the sinkProblem line from the bodies json! in server_stats.rs; tests/server_stats.rs::body_matches_the_frozen_key_order_exactly went red at line 77 (left [archive,lastPass,live,captureDownSince,parked] right [...captureDownSince,sinkProblem,parked]); file restored, --test server_stats 4 passed. Box 4 left open: the two unsent fields (reclaimedSinceBoot, lastNonZeroPassAt) need either the unported bodies purge or a TS declaration change plus a rebuilt, deployed binary; that is the owner's decision.
 2026-10-04: code landed at 34569e8f; boxes 1, 2 and 4 are still unticked on the card (declaration set, single declaration, unsent reclaimedSinceBoot/lastNonZeroPassAt decision); owed by the main agent or owner decision on box 4. Not closed.
+
+## Review 2026-10-05 (in the owner's stead)
+
+Box 4 is split out to TRDD-HDUETCU7 and stays unticked here; it can tick when that card closes or when the owner rewords it. The reviewing session first proposed deleting the two declarations; an adversarial review and a read of TRDD-C5L779YI (archived, so it takes no link back) showed that would remove the only consumer of that card's accepted fix. This card called box 4 the owner's decision; splitting it is the option this card's own head names, taken under the order of 2026-10-05 as the session's reading. The head's "run the box-3 mutation" is done by the note of 2026-10-04, which this session did not see run. Boxes 1 and 2 were not re-verified in this entry. No test was run for this entry.
