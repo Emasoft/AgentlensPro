@@ -1,11 +1,11 @@
 ---
 trdd-id: 2R36W8Q1
 title: The summary cache is keyed on a version that moves faster than a rebuild completes, so the UI path livelocks under fleet ingest
-column: blocked
-pre-block-column: ai_review
+column: ai_review
+pre-block-column: 
 unblock-when: [trdd:UTFVMVT8 terminal]
 created: 2026-08-29T10:44:23+0200
-updated: 2026-09-05T14:35:52+0200
+updated: 2026-10-05T02:17:39+0200
 current-owner: main-session
 task-type: bugfix
 scope: project
@@ -13,7 +13,8 @@ project-id: agentlenspro
 parent-trdd: YU8QPU89
 relevant-rules: []
 implementation-commits: [481c94e4]
-blocked-by: [UTFVMVT8]
+blocked-by: []
+status: tasked
 ---
 
 # Summary cache livelocks under fleet ingest
@@ -384,3 +385,7 @@ is not a criterion, so it now names the sample size and the statistic.
 **Defect found — frontmatter/process, not code.** `blocked-by: [UTFVMVT8]` is still set (line 14) while `column: ai_review`. Per `trdd-design-tasks.md`, "`blocked` applies whenever `blocked-by:` is non-empty" — a card carrying a live `blocked-by` has no business advancing columns without either clearing the field or being in `column: blocked`. Checked what it points at: `TRDD-...-UTFVMVT8-...md` is still `column: testing` with one un-ticked acceptance box (`[ ]` — the young-session `project` probe, box 4), i.e. the blocking TRDD's own gate for `testing → ai_review` ("Then `testing → ai_review`") has not fired. The commit history (`061d2ed2`) shows `blocked-by` was added deliberately, not left over from a template, so it was never cleared even though this card ticked over to `ai_review` in a later commit (`d6717988`). Two readings are both plausible — (a) 2R36W8Q1's own acceptance (server-stats p99) is genuinely independent of UTFVMVT8's leftover composition-index/project-tag box and the field is just stale housekeeping, or (b) the dependency was real and got skipped — but the card does not say which, and the rule does not grant a silent-independence exception. This must be resolved (either remove `blocked-by` with a one-line rationale, or hold this card at `blocked`) before `human_review`.
 
 **Verdict: REJECT — `blocked-by: [UTFVMVT8]` is still set while `column: ai_review` and the named blocker (UTFVMVT8) is itself still `testing` with an open acceptance box; clear or justify the field before re-submitting.**
+
+## Approval log
+
+- 2026-10-05T02:17:39+0200 — column → ai_review by main-agent@agentlenspro. its only blocker TRDD-UTFVMVT8 was completed 2026-10-05; restored to its pre-block column Cleared blocked-by (--clear-blocker override).

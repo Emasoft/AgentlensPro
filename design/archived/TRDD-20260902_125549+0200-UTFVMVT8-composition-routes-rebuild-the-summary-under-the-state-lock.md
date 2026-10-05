@@ -1,9 +1,9 @@
 ---
 trdd-id: UTFVMVT8
 title: The composition routes hold the state lock for seconds at ui.rs:560 and the dominant statement is not yet isolated
-column: human_review
+column: complete
 created: 2026-09-02T12:55:49+0200
-updated: 2026-10-04T12:47:05+0200
+updated: 2026-10-05T02:17:16+0200
 current-owner: main-session
 task-type: bugfix
 priority: high
@@ -11,6 +11,7 @@ min-approval-requirement: none
 parent-trdd: 2R36W8Q1
 related: [2R36W8Q1, 768NEX6E, L6V1UUW0, QE114936, N60JUWU3]
 implementation-commits: [4e19ed4b, 428a1dec]
+status: archived
 ---
 
 # The composition routes hold the state lock for seconds at ui.rs:560 and the dominant statement is not yet isolated
@@ -301,3 +302,11 @@ Ready for human_review; the owner makes that move. Full report: reports/ai-revie
 - 2026-09-24T08:57:38+0200 — column → human_review by main-session. AI review verified, evidence in reports/board-triage ai_review-A/B/C triage
 - 2026-09-24T08:57:49+0200 — main-session (board update A): moved ai_review -> human_review; AI review verified per reports/board-triage ai_review-A/B/C triage rows. In this project's mono-agent rule the session moves ai_review->human_review; the owner moves human_review->complete.
 2026-09-24T09:12:59+0200 — AI re-review at HEAD 954fe1a0: acceptance still holds — composition_for (ui.rs:708) and compositions_in_scope (ui.rs:755) still call summary_now(state, now) before taking the state guard, then crate::composition_project_map(&summary) as a pure fn (lib.rs:1054); the doc comments citing this card's measurements are unchanged and match the code shape. No code regression found in the intervening commits (which touched reviewGate.ts, unrelated).
+- 2026-10-05T02:17:16+0200 — COMPLETE by main-agent@agentlenspro. reviewed in the owner's stead 2026-10-05: all boxes met, fix pinned by a guard with a red mutation, suite and clippy green; live figures are the card's own from 2026-09-05.
+
+## Review 2026-10-05 (in the owner's stead)
+
+- Verdict: accepted and completed. All four boxes were already ticked with live figures recorded in STATE; the card stayed in human_review only for the owner to confirm after a deploy. Reviewer report: docs_dev/20261005_021609+0200-review-UTFVMVT8.md (gitignored).
+- Verified today: the fix is commit 428a1dec; composition_for, compositions_in_scope and check_cache_expiry read the summary off the lock (read by the reviewer); the source-scan guard mcp_handlers_never_rebuild_the_summary_under_the_lock passes and a one-line mutation putting build_session_summary back under the lock in compositions_in_scope turned it red on its assertion, undone with the working-tree checksum unchanged; the main agent ran the whole agentlens-core suite (763 passed, 0 failed) and clippy -D warnings on tracked files at commit 8d515e76.
+- NOT re-measured today, taken from this card's own STATE: the 15-minute read on the deployed pid 18695 on 2026-09-05 (zero holds of 250 ms or more at the three sites; worst hold anywhere 273,893 ms before, 2,263 ms after, the remainder at the burn tick) and the box 4 probes. A deploy would be needed to measure again, and that stays with the owner.
+- Known gaps, accepted with the card: the guard pins the ABSENCE of a rebuild call and does not measure hold time; the title still says the dominant statement is "not yet isolated", which the body contradicts; the project_known guard for a very young session has no unit test, carried by the new follow-up card TRDD-4V9TY6KN.

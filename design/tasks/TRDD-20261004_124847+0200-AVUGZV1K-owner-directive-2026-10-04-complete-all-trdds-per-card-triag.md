@@ -4,7 +4,7 @@ title: Owner directive 2026-10-04 complete all TRDDs - per-card triage then work
 column: dev
 status: tasked
 created: 2026-10-04T12:48:47+0200
-updated: 2026-10-05T02:13:59+0200
+updated: 2026-10-05T02:17:18+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: audit
@@ -74,3 +74,6 @@ Board at start: todo 53, human_review 32, backburner 32, dev 22, testing 11, blo
 - Reviewer workers must not run pnpm in this checkout: it aborted wanting to purge node_modules when run without a terminal (nothing was changed). They call node_modules/.bin/tsc and node_modules/.bin/mocha directly.
 - Evidence usable by every Rust card reviewed today: on 2026-10-05, at a load average between 6 and 13, the main agent ran `cargo test -p agentlens-core -- --test-threads=4` (exit 0, 119 result lines all ok, 763 passed, 0 failed) and `cargo clippy -p agentlens-core --all-targets -- -D warnings` (clean), on the tree at commit 8d515e76 plus card edits only.
 - Reviews so far, updated: deploy ZIWEB0UW 9SOYXKNE QE114936; superseded UIDUVNY8; todo LHCHVK9Z C19SUVPH L6V1UUW0 MVR6PXC0.
+- Reviews so far, replacing the earlier tallies: complete UTFVMVT8; deploy ZIWEB0UW 9SOYXKNE; blocked QE114936 (by MVR6PXC0); superseded UIDUVNY8; todo LHCHVK9Z C19SUVPH L6V1UUW0 MVR6PXC0. Ten human_review cards remain.
+- The full-suite evidence line above should read "tracked files at commit 8d515e76 plus card edits": that run itself produced one untracked file, now carried by its own card TRDD-IIT13XCA.
+- The installed bundle (2026-10-01) predates the pidfile-owner guard that TRDD-L6V1UUW0 adds, so the doomed revive that card fixes is probably still happening on this machine until the bundle is rebuilt: inferred from the bundle's date, not read or observed.
