@@ -886,4 +886,39 @@ mod stall_filter_tests {
         let got = last_rate_limit_stop(&evs, 2000.0).expect("a rate-limit stall");
         assert_eq!(got["ts"], json!(1200.0));
     }
+
+    // TRDD-HNPT6JRG: goes through build_gate_state because the helper tests above stay green even if
+    // the call site stops using the helper; this one pins what the gate actually emits.
+    #[test]
+    fn build_gate_state_ignores_a_non_rate_limit_stop_failure() {
+        let (mut st, dir) = fresh_state("non-rate-limit");
+        st.recent_hook_events.push(json!({"ev": "StopFailure", "ts": 1000.0, "session": "s1",
+            "payload": {"error": "server_error", "error_details": "500 Internal Server Error"}}));
+        let state = super::build_gate_state(&mut st, 2000.0, json!({}), "caller", None, None);
+        assert_eq!(state["lastStopFailureMs"], json!(null));
+        drop(st);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn build_gate_state_keeps_the_rate_limit_stall_when_a_newer_failure_is_not_one() {
+        let (mut st, dir) = fresh_state("newer-non-rate-limit");
+        st.recent_hook_events.push(json!({"ev": "StopFailure", "ts": 1000.0, "session": "s1",
+            "payload": {"error": "rate_limit", "error_details": "429 Too Many Requests"}}));
+        st.recent_hook_events.push(json!({"ev": "StopFailure", "ts": 1500.0, "session": "s2",
+            "payload": {"error": "server_error", "error_details": "500 Internal Server Error"}}));
+        let state = super::build_gate_state(&mut st, 2000.0, json!({}), "caller", None, None);
+        assert_eq!(state["lastStopFailureMs"], json!(1000.0));
+        drop(st);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // A fresh CoreState on a unique temp dir; the hook-event ring is seeded from that dir, so it must start empty.
+    fn fresh_state(tag: &str) -> (crate::CoreState, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!("al-gate-{}-{}", tag, crate::now_ns()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let st = crate::CoreState::open(&dir);
+        assert!(st.recent_hook_events.is_empty());
+        (st, dir)
+    }
 }
