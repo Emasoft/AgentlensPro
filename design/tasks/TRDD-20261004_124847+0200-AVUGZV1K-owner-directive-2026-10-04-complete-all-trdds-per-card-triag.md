@@ -4,7 +4,7 @@ title: Owner directive 2026-10-04 complete all TRDDs - per-card triage then work
 column: dev
 status: tasked
 created: 2026-10-04T12:48:47+0200
-updated: 2026-10-05T11:31:07+0200
+updated: 2026-10-05T11:34:26+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: audit
@@ -18,6 +18,20 @@ approval-datetime: 2026-10-04T12:48:47+0200
 ---
 
 # Owner directive 2026-10-04 complete all TRDDs - per-card triage then work in waves
+
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-10-05 11:33
+
+- Orders in force, quoted verbatim below (first paragraph, and the section Owner order 2026-10-05): "complete all TRDDs!" and "decide yourself. base your decisions on verified facts and tests. you are in charge, complete all TRDDs reviews in my stead." That the second covers review acts is the agent's reading, as that section says.
+- The paragraph beginning "Never under this directive without the owner" still applies in full; nothing since has lifted any part of it. The card does not say whose words that paragraph is; the 2026-10-05 section repeats the list as the agent's reading.
+- Delegated reviews: all 20 carry a verdict. The tally is the bullet beginning "State of the 20 delegated reviews, replacing every earlier tally (2026-10-05, after the gate cards were settled)"; the bullets after it leave open whether `deploy` is the true column of ZIWEB0UW, 9SOYXKNE and 9SYRK6SW.
+- Work columns, closed on 2026-10-05: J2K6IM4R and HNPT6JRG to `complete`, GXKRBK1Q to `superseded`. Columns read at 11:32 from the frontmatter only: BA0DCW98 `ai_review`; FGN5TY7E, DRH4ZRGB and Z0A777XW `testing`. Their bodies were not read. FGN5TY7E touches server control, so its tests may start servers; Z0A777XW names the live port and pidfile; DRH4ZRGB has the EHT 7FA3NIXU.
+- Operating rules are bullets below; find them by their opening words: "Reviewer workers must not run pnpm", "Trap for reviewers: .mocharc.cjs", "Rule added after XTFDRTH2", "Method notes from that card", and the sentence "Method note: a fetched page read through a summarising tool is not a reading of the page."
+- Tool facts met on 2026-10-05: cards are written by workers through trddgrep; `new` needs `--author` (main-agent@agentlenspro was used); `move` needs `--approver` and `--reason`; `append` needs `--create` for a new heading; `edit` needs `--at-line` and does not bump `updated`; archived cards refuse writes, so corrections for them are recorded on this card.
+- Never stage, restore or edit, another session's uncommitted work as of 11:32: the RVKQDLRD card, .claude/project/memory/ssd-write-economics.md, and the untracked rust-core/crates/agentlens-core/agentlens-prompts-claude.md.
+- The agent's own procedure, not ratified by the owner (how deep each review should go was put to the owner and is unanswered): read the card whole; gather tests, mutations in both directions and links before writing; one entry, one review; read the diff whole before an irreversible move; never dispatch a move in the response that requests its review; run no test while the 1-minute load is above 20. Broken twice on 2026-10-05: one test re-run at a load of 55, and workers dispatched before their review returned.
+- Open questions the agent treats as the owner's: restart or diagnosis of the live collector (TRDD-YGC8ZO36); two orphan test servers alive at 11:32, pids 32797 and 50556 (the permission classifier refused the agent's signal to the first); the mutation on 6SPXOV0P, refused by the permission classifier and not routed through a worker; the review questions on 0E3W5C45, 2CYTNLY1, DIZ289UQ and BLAV6W15.
+- Owed by the agent: a card for the lifecycle `error_type` mapping; the `deploy` column question above; stale heads on those three cards and on the cards returned to `todo`; a head on 6SPXOV0P; and everything in the bullet beginning "Carried over from 2026-10-04 and not yet acted on", which is still open as far as this session knows.
+- NEXT ACTION: read BA0DCW98 whole, with its links and lint (the only candidate not in `testing`), and work it by the procedure above. Local main was 1086 commits ahead of the upstream as last fetched at 11:32; this session ran no push.
 
 Owner directive, quoted verbatim: "complete all TRDDs!" (2026-10-04, mid-session).
 
