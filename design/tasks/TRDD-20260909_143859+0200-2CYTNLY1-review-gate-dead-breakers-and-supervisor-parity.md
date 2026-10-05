@@ -1,9 +1,9 @@
 ---
 trdd-id: 2CYTNLY1
 title: Delete the review gate's dead breakers and give the supervisor the gate's work definition
-column: deploy
+column: human_review
 created: 2026-09-09T14:38:59+0200
-updated: 2026-10-05T03:18:10+0200
+updated: 2026-10-05T03:22:02+0200
 current-owner: main
 task-type: refactor
 priority: medium
@@ -16,8 +16,8 @@ related: [40M4UPK3, 0E3W5C45]
 blocked-by: []
 npt: []
 eht: []
-implementation-commits: [53a30222, 86abd4ef, 90446356]
-release-via: deploy
+implementation-commits: [53a30222, 86abd4ef]
+release-via: none
 status: tasked
 ---
 
@@ -199,6 +199,7 @@ verified against the live source, not restated from memory.
 - 2026-09-24T09:07:16+0200 — board fix-up worker: re-pointed `related` from 9FG0LSPG (now superseded, archived) to 40M4UPK3 (Enforce the propose then two-fork review then wait then act loop at PreToolUse, column: dev). No `parent-trdd:` field exists on this card, only `related:`, so that is the field edited; 40M4UPK3 is chosen as the card's live successor-in-spirit for the review-gate work stream since 9FG0LSPG is terminal and this card's own work (2CYTNLY1, human_review) is still open.
 2026-10-04: worker wA re-review at HEAD plus the PNB9FNJ0 diff -- VERDICT APPROVE. Acceptance re-checked: check-types, lint, compile-tests exit 0; scoped runs reviewGate|reviewSupervisor 105 passing, review-gate triggers|review-loop 66 passing, killSwitch 27 passing, 0 failing. scanSupervision reuses toolUseWork/textArms (parity test for sed -i, git push, proposal present), killSwitchHalf is the single truth and the stderr-line test names the env half, dead breaker plumbing absent. The new import reviewGate to delegateGate is a cycle (delegateGate imports readTranscriptTail); safe because the constant is read inside a function. Owner kill-switch question stays OPEN. Owner moves human_review to complete.
 - 2026-10-05T02:55:26+0200 — column → deploy by main-agent@agentlenspro. reviewed in the owner's stead 2026-10-05: five boxes verified in source and tests; takes effect only when the installed bundle is rebuilt
+- 2026-10-05T03:21:57+0200 — column → human_review. returned by the main agent - nothing on this card waits for a deploy; an owner question is open.
 
 ## Notes and lessons learned
 
@@ -237,3 +238,4 @@ Recount 2026-09-23T13:23:23+0200: without the stale out/test/test/reviewGateEffe
 - Gap outside the five boxes, carried by the new card minted in step 1 (TRDD-GI1LC8FX): the sentinel reason floor of 8 has no test that fails if the floor changes.
 - Links: npt [], eht [], blocked-by []; related 40M4UPK3 (dev) and 0E3W5C45.
 - CORRECTION 2026-10-05, after adversarial review of the entry above. (1) "none of it is in effect until the owner rebuilds the bundle" is unverified and probably wrong. Read by the main agent: the `agentlenspro` command resolves to this repo's standalone/cli.js, built 2026-10-01 18:31; commits 53a30222 and 86abd4ef are dated 2026-09-10; the bundle contains `killSwitchHalf` (3 times) and `scanSupervision` (2 times). That those two commits are in the running bundle is an INFERENCE from the dates and those two names. The third commit listed on this card, 90446356 of 2026-10-04, is newer than the bundle; its subject names TRDD-PNB9FNJ0 and whether any of the five boxes needs it was not read. So whether anything on this card waits for a deploy is OPEN and is not decided in this entry. (2) The entry above omits that the owner kill-switch question recorded in the Approval log on 2026-09-10 (should the gate honour only the FILE half of AGENTLENS_DISABLED) is still OPEN. This review does not decide it. (3) "the new card minted in step 1" means TRDD-GI1LC8FX; the gap it carries from this card (the reason floor of 8) is outside the five boxes by the reviewer's reading, which is why it is not registered as this card's EHT.
+- COLUMN SETTLED 2026-10-05: back in `human_review`; the earlier `deploy` and its "column → deploy" Approval-log line are withdrawn. Read by the main agent: the five acceptance boxes are all ticked; they were run at 53a30222 and 86abd4ef (2026-09-10), re-reviewed on 2026-10-04, and in this session eslint on the four gate files exits 0 and reviewSupervisor has 30 passing. Both commits are older than the bundle built 2026-10-01 18:31, which contains `killSwitchHalf` and `scanSupervision`; that the bundle holds this card's change is an inference from those dates and names. 90446356 is removed from `implementation-commits`: `git show --stat` shows it landed TRDD-PNB9FNJ0's code (reviewGate.ts, reviewSupervisor.ts and their tests) and added only a re-review note to this card. So nothing on this card waits for a deploy. What keeps it out of `complete`: box 5 leaves "item 2" as the owner question in the Approval log of 2026-09-10 (should the gate honour only the FILE half of the kill switch and ignore AGENTLENS_DISABLED=1). It is unanswered, it is a design preference, and completing the card would archive it. The gap TRDD-GI1LC8FX carries from this card (the reason floor of 8) is outside the five boxes by the reviewer's reading. The STATE head still says NEXT ACTION `ai_review` and was not rewritten.
