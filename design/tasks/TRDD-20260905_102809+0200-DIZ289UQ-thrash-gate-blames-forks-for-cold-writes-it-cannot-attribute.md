@@ -1,15 +1,16 @@
 ---
 trdd-id: DIZ289UQ
 title: The burn-gate blames review forks for cache thrash it cannot attribute
-column: human_review
+column: todo
 created: 2026-09-05T10:28:09+0200
-updated: 2026-09-24T09:17:21+0200
+updated: 2026-10-05T03:18:10+0200
 current-owner: main-session
 task-type: bugfix
 priority: high
 min-approval-requirement: none
 related: [0YG37FXM, THRGX41P, VY1IUVUM, U0L78B3Z]
 implementation-commits: [3979a57d]
+status: tasked
 ---
 
 # The burn-gate blames review forks for cache thrash it cannot attribute
@@ -271,3 +272,8 @@ warning text), and `implementation-commits:` should gain `7659b9ca`. None of the
 functional regressions.
 
 ## Notes and lessons learned
+
+## Review 2026-10-05 (in the owner's stead)
+
+- Reviewed in the owner's stead 2026-10-05 (reviewer report docs_dev/20261005_025853+0200-review-DIZ289UQ.md). Returned to `todo`: three of five acceptance boxes are open. Verified: boxes 4 and 5 hold for the Rust side - the reviewer ran `burnguard_parity` and `agentgate_parity` (each exit 0, 1 passed) and one mutation (bodies_activity.rs:103 reading the 5m field in place of the 1h field) turned burnguard_parity red on its assertion (`report.thrash.count: got 4 expected 3`), undone and checksum-restored. These are the reviewer's runs; the main agent read the report and did not re-run them. The TypeScript tests agentGate.test.ts and burnGuard.test.ts were NOT run in this review. Commit 3979a57d is an ancestor of main (main agent's check). Owed before this card can be accepted: (a) box 1 - the exact request/response measurement on a real review fork (the ctxvis exact-pair recipe the card names) was never run; the existing table pairs by mtime window only; (b) box 3 - the THRASH_ACTIVE message prints a miss-reason histogram and a sender count but no session or request ids; (c) a fixture where the thrash count differs from the top source's count (the card's own untested seam); (d) the STATE head still says `ai_review` and is stale. PROPOSAL AWAITING THE OWNER, not decided here: box 2 asks for a request-shape discriminator; what shipped is the response TTL tier (`is_subagent_write = tier_1h == Some(0.0)`). Whether the tier rule classifies correctly is a fact and the parity fixtures cover it on a subscription account; on a usage-credits account main turns are also 5m and would be misattributed (follow-up TRDD-IPEPUEL5). Whether to reword box 2 to the shipped mechanism or require the request-shape check is the owner's preference. The reviewer's evidence favours rewording and keeping IPEPUEL5 for the credits case. Note: a fork's write on the caller's 1h tier is not told apart from a caller rewrite at all; it is harmless only because forks are exempt from the THRASH_ACTIVE deny. Relation to TRDD-0D6QK5CW: independent rule of the same family; that card cites this one's fork exemption as precedent and stays blocked by TRDD-81BW1CS9.
+- CORRECTION 2026-10-05, after adversarial review of the entry above. (1) "boxes 4 and 5 hold for the Rust side" overstates. Box 4 was READ by the reviewer in both languages (the message text in rust-core/crates/agentlens-core/src/burn/agent_gate.rs near line 472 and in src/agentGate.ts), not tested. Box 5 asks for one regression test per changed rule; what was shown is two parity tests passing and one mutation going red, and nobody listed the changed rules against tests. (2) The main agent has since re-run both parity tests: `burnguard_parity` exit 0, 1 passed; `agentgate_parity` exit 0, 1 passed; and read burn/agent_gate.rs lines 358-388. The reviewer gave that path without the `burn/` directory. (3) A parity test shows the Rust code equals the TypeScript oracle; it does not show the tier rule classifies real traffic correctly. By the reviewer's report the evidence for that is a 205-write sample on this card, from one machine on a subscription account, which nobody re-measured in this review. (4) By the reviewer's summary, boxes 1 and 3 are open by a disclosed substitution like box 2 (its table marks box 1 UNTESTED / LIVE-ONLY and box 3 PARTIAL); the main agent did not read the boxes on this card. All three are PROPOSALS AWAITING THE OWNER; items (a) and (b) above are owed only if the owner refuses the substitution for that box. (5) Item (a) needs a live fork and the captured request spool in the real data directory, which the review spec rules out; it is not pullable until that is lifted. (6) Strike "harmless". By the reviewer's reading a fork's write on the 1h tier would be counted as caller thrash. In the branch at lines 384-388 an active thrash denies only the keep-warm pinger and warns every other launch with "This launch is not the cause". Other users of the count (`thrash_source` at lines 572 and 634) and the deployed binary were not read. (7) The TypeScript tests agentGate.test.ts and burnGuard.test.ts were skipped by the reviewer as "pnpm forbidden". Review spec v2 gives the pnpm commands; the prompt that reviewer was given was not re-read. Running those two test files is owed and pullable now. (8) The STATE head of this card still says `ai_review`; it was not rewritten in this review.

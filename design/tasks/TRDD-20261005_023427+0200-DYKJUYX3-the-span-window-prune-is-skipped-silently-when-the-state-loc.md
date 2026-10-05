@@ -4,7 +4,7 @@ title: The span window prune is skipped silently when the state lock is busy
 column: todo
 status: tasked
 created: 2026-10-05T02:34:27+0200
-updated: 2026-10-05T02:34:27+0200
+updated: 2026-10-05T03:18:11+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -24,3 +24,8 @@ Follow-up of TRDD-YILE6N3T (completed 2026-10-05). The chore that prunes the spa
 ## Approval log
 
 - 2026-10-05T02:34:27+0200 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+
+## Correction 2026-10-05
+
+- The multi-second holds of the state lock cited in the body were measured on 2026-09-05 (cards QE114936 and MVR6PXC0), and the QE114936 fix removed most of them; they are not a current measurement.
+- The clause "and the QE114936 fix removed most of them" in the correction above was not re-verified after the session was cleared and its source was not re-read; treat it as unverified. What stands is that the cited holds were measured on 2026-09-05 and are not a current measurement.

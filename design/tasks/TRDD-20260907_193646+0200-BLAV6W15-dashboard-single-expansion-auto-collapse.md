@@ -3,7 +3,7 @@ trdd-id: BLAV6W15
 title: Only one node may be expanded in the dashboard at a time — expanding one collapses the rest
 column: todo
 created: 2026-09-07T19:36:46+0200
-updated: 2026-10-05T02:34:56+0200
+updated: 2026-10-05T03:18:11+0200
 current-owner: main
 task-type: feature
 parent-trdd: 7YPQWKPG
@@ -192,6 +192,8 @@ leaf, branch, trace or session collapses every other expanded node.
 - Owed 2: it tests the session level only. setExpandedBranchId, the kept ancestor, and clearing the branch when the session changes have no test; nothing validates that the branch id belongs to the expanded session.
 - Owed 3: leaf, step and tool-call panels in media/src/tabs/Traces.tsx keep their own local open flags (useState), so they are not governed by the rule at all. Either bring them under it or record on this card that the directive stops at sessions and branches; the directive's words say "leaf".
 - Not checked: lint was not run; that a collapsed subtree is really unmounted is read from the JSX gate, not observed in a browser; no live-UI check is recorded in STATE. Links: npt [], eht [], blocked-by []; parent TRDD-7YPQWKPG (dev).
+- CORRECTION: the bullet above headed DECISION is withdrawn as a decision. It is a PROPOSAL awaiting the owner. Whether "only one node may be expanded" means a literal single node or one open path is a preference on the owner's own directive, not something a fact or a test settles, and this card's STATE itself says a single-id model is feasible (ancestors derived as render state), so "collapsing the parent would unmount the branch" describes today's implementation, not a limit on every implementation. The three owed items do not depend on the answer; do not build branch-level tests that assume the path model is final.
+- CORRECTION 2 (2026-10-05): the last sentence of the CORRECTION above contradicts itself. Owed 2 is the branch-level tests and it DOES depend on the owner's answer (single node or one open path). Owed 3 holds a second choice for the owner (bring the leaf, step and tool-call panels under the rule, or record that the directive stops at sessions and branches). Owed 1 was not re-read for this note.
 
 ## Approval log
 

@@ -3,7 +3,7 @@ trdd-id: 6SPXOV0P
 title: 307 files remain parked with a ts-row mismatch after the TRDD-8TM7I49X repair
 column: human_review
 created: 2026-08-26T20:13:05+0200
-updated: 2026-09-24T13:36:35+0200
+updated: 2026-10-05T03:18:10+0200
 eht: [7NHUU6GK]
 current-owner: main
 task-type: bugfix
@@ -11,6 +11,8 @@ severity: MEDIUM
 priority: 3
 labels: [bodies, ingest, silent-failure, capacity]
 relevant-rules: []
+release-via: none
+status: tasked
 ---
 
 ## ⏵ AI-REVIEW VERDICT 2026-09-05 — APPROVE, and it still cannot reach `complete`.
@@ -410,7 +412,13 @@ Sizing is the USER's call regardless, and no agent should reclaim space to paper
 - 2026-09-24T08:57:33+0200 — column → human_review by main-session. AI review verified, evidence in reports/board-triage ai_review-A/B/C triage
 - 2026-09-24T08:57:49+0200 — main-session (board update A): moved ai_review -> human_review; AI review verified per reports/board-triage ai_review-A/B/C triage rows. In this project's mono-agent rule the session moves ai_review->human_review; the owner moves human_review->complete.
 - 2026-09-24T08:58:02+0200 — main-session note: eht: [7NHUU6GK] is at column backburner (not terminal), so this move to human_review does not open the door to complete — the card cannot reach complete until 7NHUU6GK terminates.
+- 2026-10-05T03:18:02+0200 — column → human_review. returned after adversarial review - deploy lies past complete and this card has an open EHT
 
 ## Notes and lessons learned
 
 AI re-review at HEAD 3faa709c (2026-09-24T09:13:29+0200): acceptance still holds — pass.rs still has reclaimed_reemitted/TS_TOLERANCE_MS and the reclaim-not-park branch unchanged; the later commit f5926457 changes hook-spool drain cadence and DuckDB memory sizing in chores.rs, not the pass.rs reclaim logic. Reran cargo test -p agentlens-store --test pass -> 7/7 passed including legacy_stranded_name_drains_through_the_gate_and_the_parked_set_reaches_zero and ts_only_mismatch_on_a_reemitted_file_reclaims_not_parks_and_leaves_the_row_alone. Card still cannot reach complete: eht 7NHUU6GK remains non-terminal.
+
+## Review 2026-10-05 (in the owner's stead)
+
+- Reviewed in the owner's stead 2026-10-05 (reviewer report docs_dev/20261005_025833+0200-review-6SPXOV0P.md). Accepted pending live verification; goes to `deploy`. Verified by the main agent first hand: (1) rust-core/crates/agentlens-store/src/pass.rs:471-498 - a stranded name with no relocate target is removed from the stranded set and inserted into the skip names, so it reaches the gate; (2) the test `legacy_stranded_name_drains_through_the_gate_and_the_parked_set_reaches_zero` (rust-core/crates/agentlens-store/tests/pass.rs:162-200) passes, exit 0, 1 passed, 7 filtered out; (3) commits aa0caa40 and f9605164 exist and f9605164 is an ancestor of main. NOT demonstrated: that the test fails when the fix is undone. The reviewer's mutation (deleting the `stranded_names.remove` line) was refused by the permission classifier and no mutation was applied; by reading, the `stranded.is_empty()` assertion would fail, which is an inference, not a run. Only the one named test was run, not the other seven in that test file. LIVE-ONLY, for the owner: that the 307 parked names reached 0 on the real store and that the running alcore contains f9605164 - neither was read, under the directive's no-real-data-directory rule. Stale citation: the `unparked N (M still stranded)` message is at src/cli/storeAdmin.ts:182, not :175 (:89 and :123 for the other two messages). This card cannot reach `complete` while its EHT TRDD-7NHUU6GK sits in `backburner`.
+- CORRECTION 2026-10-05, after adversarial review of the entry above. (1) The move to `deploy` is withdrawn and the card is back in `human_review`: on this board `deploy` comes after `complete`, and this card cannot reach `complete` while its EHT TRDD-7NHUU6GK is open. `release-via` is set to none, which is what its absence meant at HEAD. (2) "Accepted" is withdrawn. What holds: the code was read and the one named test passes. That the test can fail was not demonstrated; the review procedure allows skipping the mutation only for a long rebuild, which was not the reason here. (3) Owed: one mutation run - delete the line `stranded_names.remove(&f.name);` at rust-core/crates/agentlens-store/src/pass.rs:495, run `cargo test --manifest-path rust-core/Cargo.toml -p agentlens-store --test pass -- legacy_stranded_name_drains_through_the_gate_and_the_parked_set_reaches_zero --exact --test-threads=1`, expect the `stranded.is_empty()` assertion to fail, then restore the line. The permission classifier refused it to the reviewer and the main agent did not retry it by another route. The reading that it would fail rests on `ingest_pass` (pass.rs:250-258) handing the caller's stranded set straight through, which the main agent read; whether anything else in the pass removes the name was not read. (4) All three storeAdmin.ts citations in STATE are stale, not one: :88 is now :89, :122 is now :123, :175 is now :182. (5) "an ancestor of main" means the local main branch. (6) The test file now holds eight tests (cargo printed 7 filtered out beside the 1 run); the "7/7" on this card is an older count. (7) Not read: that the parked set is 0 on the real store, and that the running alcore contains f9605164. The first is one read-only query; the second has no recorded answer, because the deployed binary carries no link to a commit. The no-real-data-directory limit comes from the review spec the previous session wrote; whether the owner set it was not checked. (8) The STATE head of this card is dated 2026-09-02 and was not rewritten in this review.
