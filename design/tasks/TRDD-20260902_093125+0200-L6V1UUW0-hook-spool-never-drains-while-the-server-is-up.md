@@ -3,7 +3,7 @@ trdd-id: L6V1UUW0
 title: The hook-spool never drains while the server is up, and every spooled hook spawns a doomed revive
 column: todo
 created: 2026-09-02T09:31:25+0200
-updated: 2026-10-05T01:52:25+0200
+updated: 2026-10-05T01:57:58+0200
 current-owner: main-session
 task-type: bugfix
 priority: high
@@ -106,3 +106,5 @@ past the original backlog.
 - Also found: the live-pid predicate test takes only the legacy branch (a mutation of the 'live-owner' comparison stayed green on the first attempt); the card cites chores.rs lines 589-605, the tick is now near lines 1172-1195; the timer tick itself has no test.
 - Environment, not this card's code: the test hookSpool "a live revived child is reaped" fails deterministically at low load (twice at load 10 to 12) because standalone/cli.js is a bundle built on 2026-10-01 that has no `server revive` verb (0 occurrences, checked by the main agent; the source has it in src/cli/serverControl.ts). The same stale bundle is what the installed agentlenspro runs, so hook revives are no-ops on this machine until the bundle is rebuilt, which is reserved to the owner (see TRDD-E9RM51XG).
 - Box 4 (spooled count reaches 0 on the live collector, no new revive refusals) stays unchecked: it needs the deployed collector.
+- CORRECTION to the bullet above that begins "Environment, not this card's code": its last sentence is WRONG and is withdrawn. The installed bundle's own reviveDaemonDetached spawns alcore directly (read by the main agent in standalone/cli.js: it calls spawn(alcore, alcoreServeArgs(), detached)); it never used a `server revive` verb, so nothing shows hook revives are broken on this machine. What is true: the bundle has no `case "revive"` among its server verbs, while the test hookSpool "a live revived child is reaped" is compiled from current source, whose revive spawns `cli.js server revive`; the test fails on that mismatch between test and bundle. "0 occurrences" was a count of the quoted token only; the word revive occurs 40 times in the bundle.
+- Verified by the main agent after the move: the guard `if (pidfileOwnerAlive()) return` is in reviveDaemonDetached in src/cli/hookHandlers.ts; src/test/hookSpool.test.ts has three tests of the predicate and none of the skipped spawn; cargo test -p agentlens-core --test hook_spool_drain re-run, 2 passed.

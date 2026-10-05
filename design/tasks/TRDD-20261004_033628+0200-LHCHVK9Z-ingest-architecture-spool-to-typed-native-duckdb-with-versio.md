@@ -4,7 +4,7 @@ title: Ingest architecture - spool to typed native DuckDB with versioned per-top
 column: todo
 status: tasked
 created: 2026-10-04T03:36:28+0200
-updated: 2026-10-05T01:29:30+0200
+updated: 2026-10-05T01:57:58+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: feature
@@ -320,3 +320,4 @@ Backfill tool: scripts_dev/digest-backfill/backfill.py (gitignored), proven on o
 - Verdict: returned to todo. This verdict rests on the reading of spool_tap.rs recorded in the section "Review findings 2026-10-04", not on a fresh review: three defects were confirmed there and are unfixed (rejected lines share the writer queue with valid lines; rejectedByTopic has two key shapes; the rejected-file cap is checked before the write only).
 - Owed before this card can be accepted: fix or explicitly accept each of the three defects with a test; re-run the tap rejection tests serially at low load and show by a mutation that the rejection test fails on its assertion when invalid_fields is disabled.
 - Unchanged and still the owner's: switching the ingest path on, packaging aldigest and alspool into the npm tarball, the backfill against the real data directory (section "Owner decisions pending").
+- CORRECTION to step 5 of the section "Switch-on procedure for this machine": the claim that the stale bundle "lacks the `server revive` verb, so the hook revive of a dead collector is broken today regardless of this work" is not supported. The bundle of 2026-10-01 does lack that verb, but its own hook revive spawns alcore directly and does not use it (read in standalone/cli.js on 2026-10-05). Rebuilding the bundle is still needed for AGENTLENS_INGEST to reach the CLI and for the source-compiled hookSpool revive test to pass.

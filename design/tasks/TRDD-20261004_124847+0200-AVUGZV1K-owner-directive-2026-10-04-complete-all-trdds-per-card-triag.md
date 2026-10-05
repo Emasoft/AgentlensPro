@@ -4,7 +4,7 @@ title: Owner directive 2026-10-04 complete all TRDDs - per-card triage then work
 column: dev
 status: tasked
 created: 2026-10-04T12:48:47+0200
-updated: 2026-10-05T01:29:41+0200
+updated: 2026-10-05T02:13:59+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: audit
@@ -68,3 +68,9 @@ Board at start: todo 53, human_review 32, backburner 32, dev 22, testing 11, blo
 - Why `deploy` and not `complete` for those cards: trddgrep accepted the move human_review to deploy for ZIWEB0UW on 2026-10-05, and deploy is the column that says code is reviewed and a deploy is awaited. The second review argued deploy should follow complete; rejected, because complete would claim an acceptance item that is still open.
 - ZIWEB0UW was moved before the amended rule existed: its mutation and its TypeScript test (src/test/parkedBodies.test.ts) are still owed and will be run when the load allows; if either fails the card returns to todo.
 - Batch bounds, amended: at most 19 reviewers, serial, a total of 6 million subagent tokens, and no reviewer is started while the 1-minute load average is above 20 (it was 43 at 01:30 on 2026-10-05, so the batch is waiting).
+- Commits ee4b6b6e and 8d515e76 belong together: the first holds only the UIDUVNY8 rename under a message describing five cards (git add stopped at the renamed file's old path), the second holds the other four cards. A card moved to a terminal column is relocated by trddgrep with the rename already staged, so only the new path is added from now on.
+- CORRECTION for the archived card UIDUVNY8 (the tool refuses writes to archived cards, so it is recorded here): its review bullet says no file mentions ensureRamDisk or ramdisk. Only the first half holds. ensureRamDisk and the code that created the volume are gone, but a dozen files under src/ still mention the RAM disk in comments, tests and migration code, and src/cli/setup.ts still detaches an old disk image with hdiutil. Nobody checked whether a leaked volume still exists on this machine. The superseded verdict stands.
+- Reviews so far (2026-10-05): deploy ZIWEB0UW 9SOYXKNE; superseded UIDUVNY8; todo LHCHVK9Z C19SUVPH L6V1UUW0 MVR6PXC0. Common cause of the returns to todo: the change is right on reading but no test would fail if it were undone.
+- Reviewer workers must not run pnpm in this checkout: it aborted wanting to purge node_modules when run without a terminal (nothing was changed). They call node_modules/.bin/tsc and node_modules/.bin/mocha directly.
+- Evidence usable by every Rust card reviewed today: on 2026-10-05, at a load average between 6 and 13, the main agent ran `cargo test -p agentlens-core -- --test-threads=4` (exit 0, 119 result lines all ok, 763 passed, 0 failed) and `cargo clippy -p agentlens-core --all-targets -- -D warnings` (clean), on the tree at commit 8d515e76 plus card edits only.
+- Reviews so far, updated: deploy ZIWEB0UW 9SOYXKNE QE114936; superseded UIDUVNY8; todo LHCHVK9Z C19SUVPH L6V1UUW0 MVR6PXC0.

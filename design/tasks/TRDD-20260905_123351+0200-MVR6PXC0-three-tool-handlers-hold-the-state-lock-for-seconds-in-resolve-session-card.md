@@ -1,9 +1,9 @@
 ---
 trdd-id: MVR6PXC0
 title: Three MCP tool handlers hold the state lock for one to four seconds inside their per-candidate resolve_session_card closure
-column: human_review
+column: todo
 created: 2026-09-05T12:33:51+0200
-updated: 2026-10-04T12:47:18+0200
+updated: 2026-10-05T01:57:56+0200
 current-owner: main-session
 task-type: bugfix
 priority: high
@@ -11,6 +11,7 @@ min-approval-requirement: none
 created-by: QE114936
 related: [QE114936, UTFVMVT8, 2R36W8Q1, RAPDS7OX]
 implementation-commits: [3b9018e0]
+status: tasked
 ---
 
 # Three MCP tool handlers hold the state lock for one to four seconds inside their per-candidate resolve_session_card closure
@@ -155,6 +156,7 @@ three tools.
 - 2026-09-24T08:57:36+0200 — column → human_review by main-session. AI review verified, evidence in reports/board-triage ai_review-A/B/C triage
 - 2026-09-24T08:57:49+0200 — main-session (board update A): moved ai_review -> human_review; AI review verified per reports/board-triage ai_review-A/B/C triage rows. In this project's mono-agent rule the session moves ai_review->human_review; the owner moves human_review->complete.
 2026-09-24T09:12:59+0200 — AI re-review at HEAD 954fe1a0: acceptance still holds — resolve_session_card_offlock (ui.rs:906-935) still releases the state guard across reparse_session_card after the DuckDB migration (e00af58b): lock 1 is now st.cards.contains(session_id) (indexed point query, was contains_key on the IndexMap), lock 2 the stamp+store, lock 3 the OTEL graft — same three-lock snapshot-then-work shape; all four timeline_of call sites (ui.rs:2311/3461/3527/3583) still route through it.
+- 2026-10-05T01:57:56+0200 — column → todo by main-agent@agentlenspro. review in the owner's stead 2026-10-05: the off-lock reparse has no test; not dev, because nobody is working on it
 
 ## ⏵ AI-REVIEW VERDICT 2026-09-23T12:55:59+0200 — APPROVE
 
@@ -163,3 +165,10 @@ Box 2 (zero >=1000ms lock holds at the four sites) — met. Evidence: reports/mv
 Box 3 (QE114936 box-3 note updated) — not independently re-checked; out of scope (lives in QE114936's own file).
 Findings: no blocking findings. Verified all four call sites (ui.rs:2311/3461/3527/3583) route through resolve_session_card_offlock by reading each match arm; single-lookup callers correctly left on the unsplit resolve_session_card.
 Ready for human_review; the owner makes that move. Full report: reports/ai-review/20260923_125559+0200-batch-B.md
+
+## Review 2026-10-05 (in the owner's stead)
+
+- Verdict: returned to todo for a missing test. The fix is visible by reading: the per-candidate transcript reparse runs with no state guard alive, through resolve_session_card_offlock in rust-core/crates/agentlens-core/src/ui.rs. Reviewer report: docs_dev/20261005_015444+0200-review-MVR6PXC0.md (gitignored).
+- Checked by the main agent: no test file and no test module references resolve_session_card_offlock (grep over the crate's src and tests), so moving the reparse back under the lock would leave every test green. No mutation was possible for the same reason.
+- Owed: a test that fails if the reparse runs under the guard (for example: run the off-lock resolver on a thread against a large fixture transcript and assert another thread can take the state lock during it), and the contention test the card itself says is missing.
+- Live-only and unchanged: the timing result over 24 invocations on a loaded collector.

@@ -1,9 +1,9 @@
 ---
 trdd-id: QE114936
 title: Twenty MCP tool handlers still rebuild the session summary under the state lock
-column: human_review
+column: deploy
 created: 2026-09-02T16:08:27+0200
-updated: 2026-10-04T12:53:34+0200
+updated: 2026-10-05T02:13:59+0200
 current-owner: main-session
 task-type: bugfix
 priority: high
@@ -11,6 +11,8 @@ min-approval-requirement: none
 created-by: UTFVMVT8
 related: [UTFVMVT8, 2R36W8Q1, HFV4AIT7, MVR6PXC0]
 implementation-commits: [2b38a39b, 1a00cec6]
+release-via: deploy
+status: tasked
 ---
 
 # Twenty MCP tool handlers still rebuild the session summary under the state lock
@@ -45,6 +47,7 @@ is what settles that.
 - 2026-09-24T08:57:49+0200 — main-session (board update A): moved ai_review -> human_review; AI review verified per reports/board-triage ai_review-A/B/C triage rows. In this project's mono-agent rule the session moves ai_review->human_review; the owner moves human_review->complete.
 2026-09-24T09:12:59+0200 — AI re-review at HEAD 954fe1a0: acceptance still holds — grep -c 'st.build_session_summary(' ui.rs is 0; the three guard tests (mcp_handlers_never_rebuild_the_summary_under_the_lock, no_new_core_state_method_wraps_a_summary_rebuild, no_other_file_rebuilds_the_summary_from_a_caller_holding_the_lock) still exist at ui.rs:4485/4508/4531 and pass: cargo test -p agentlens-core --lib -- <the three names> -> 3 passed, 0 failed.
 - 2026-10-04 — main-agent@agentlenspro: box 3 is delegated to MVR6PXC0, which stays in human_review awaiting the owner's live confirmation; box 3 is NOT ticked and this card waits on MVR6PXC0.
+- 2026-10-05T02:13:59+0200 — column → deploy by main-agent@agentlenspro. reviewed in the owner's stead 2026-10-05: guards pass with a red mutation; full crate suite and clippy run by the main agent; box 3 waits on MVR6PXC0 and a deploy
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-05T12:33:51+0200
 
@@ -294,3 +297,10 @@ the off-lock summary through its callers.
 - **A rename is a cheaper guardrail than either.** `session_status_over` / `burn_status_over` take
   the summary as a parameter, so the obligation is visible AT THE CALL SITE and the type system
   carries it. `live_session_status` hid the same work behind a name that promised nothing.
+
+## Review 2026-10-05 (in the owner's stead)
+
+- Verdict: accepted, pending deploy. Boxes 1 and 2 are verified here; box 3 (the live hold read) stays open and now depends on TRDD-MVR6PXC0, which was returned to todo today for a missing test. Reviewer report: docs_dev/20261005_015700+0200-review-QE114936.md (gitignored).
+- Box 1, by the reviewer: the three source-scan guards in ui.rs (mcp_handlers_never_rebuild_the_summary_under_the_lock, no_new_core_state_method_wraps_a_summary_rebuild, no_other_file_rebuilds_the_summary_from_a_caller_holding_the_lock) pass, and a one-line mutation putting build_session_summary back under the lock in sse_response turned the first guard red on its assertion; undone, working-tree checksum unchanged.
+- Box 2, run by the main agent on 2026-10-05 at a load average between 6 and 13: `cargo test -p agentlens-core -- --test-threads=4` exit 0, 119 result lines all ok, 763 passed, 0 failed, 0 ignored; `cargo clippy -p agentlens-core --all-targets -- -D warnings` clean.
+- Limits of this evidence: the guards are textual and pin the ABSENCE of the rebuild call under a guard, they do not measure hold time, and they are blind to a rebuild reached through a name not in their list. The twenty handlers were not each re-read line by line. One site still rebuilds under the lock by design and is pinned by the third guard (hook_events.rs, the StopFailure branch). The card's STATE cites the guards at ui.rs lines 4485, 4508 and 4531; they are now near 4617, 4640 and 4663.
