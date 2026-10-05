@@ -1,9 +1,9 @@
 ---
 trdd-id: GXKRBK1Q
 title: Double every hook timeout the installer writes and every hook's own network budget
-column: dev
+column: superseded
 created: 2026-09-05T15:39:31+0200
-updated: 2026-09-24T09:17:29+0200
+updated: 2026-10-05T11:30:47+0200
 current-owner: main-session
 task-type: bugfix
 priority: high
@@ -13,6 +13,8 @@ project-id: agentlenspro
 related: [3EZ6SJ2Z, X4YTS5BF]
 relevant-rules: []
 implementation-commits: [52155adf]
+status: archived
+superseded-by: [B07NR7ZI]
 ---
 
 # Double every hook timeout the installer writes and every hook's own network budget
@@ -57,6 +59,7 @@ this card's scope, which is the four installer entries plus the two network budg
 - 2026-09-24T08:57:49+0200 — main-session (board update A): moved ai_review -> human_review; AI review verified per reports/board-triage ai_review-A/B/C triage rows. In this project's mono-agent rule the session moves ai_review->human_review; the owner moves human_review->complete.
 2026-09-24T09:17:06+0200 — AI re-review at HEAD 3faa709c: REJECTED. This card's approved acceptance (installer writes 10/10/20/10 outer ceilings, verify-read-back 10/10/20/10) no longer holds — a2303f91 (TRDD-B07NR7ZI, 2026-09-08, USER order) replaced all four hookInstall.ts builders with one flat HOOK_TIMEOUT_SEC=30 constant, and src/test/cliMatchers.test.ts:37 now pins assert.strictEqual(HOOK_TIMEOUT_SEC, 30), contradicting this card's approved 10/10/20/10 values. The doubling intent is superseded, not broken, by a later explicit user order; the card needs reconciling (close as superseded by TRDD-B07NR7ZI, or rewrite acceptance to match current values) rather than re-approval as written.
 - 2026-09-24T09:17:29+0200 — column → dev by main-session. Acceptance criteria (10/10/20/10 hook timeouts) stale at HEAD — superseded by a2303f91/TRDD-B07NR7ZI's flat 30s HOOK_TIMEOUT_SEC; needs reconciliation before re-approval.
+- 2026-10-05T11:30:47+0200 — SUPERSEDED by main-agent@agentlenspro. review of 2026-10-05 in the owner's stead, see the Review section.
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-09-05T16:06:03+0200
 
@@ -118,3 +121,10 @@ failing open.
       pick up the hook change"; whether CC ≥ 2.1.240 reloads live is a LOCAL memory note, not verified here.
 
 ## Notes and lessons learned
+
+## Review 2026-10-05 (in the owner's stead)
+
+- Outer ceilings SUPERSEDED; the card leaves `dev` for `superseded`, superseded-by TRDD-B07NR7ZI. Read by the main agent at HEAD: src/cli/hookInstall.ts line 191 sets one constant HOOK_TIMEOUT_SEC = 120 and src/test/cliMatchers.test.ts line 37 pins 120; by a worker's read all five builders use the constant and none writes a literal. This card's 10/10/20/10 were replaced by 30 (TRDD-B07NR7ZI, commit a2303f91, owner order of 2026-09-08) and then by 120 (commit 63eb7f58, which names TRDD-9VX3WTGU, by a worker's read of the log; that card was not read).
+- The inner budgets this card doubled remain in source: hookHandlers.ts defaults AGENTLENS_HOOK_TIMEOUT to 2 and AGENTLENS_GATE_TIMEOUT to 4 (lines 445 and 473, read by the main agent), and setup.ts gives its verify step 4 for both (lines 334 and 335). By a worker's read no test asserts those values, so this is a source read on one day. TRDD-B07NR7ZI leaves them alone by its own text. With the ceiling at 120 the inner budgets, not the ceiling, now bound each hook's network call.
+- Why `superseded` and not `complete` (the reviewing session's judgment): the work was done, measured and approved on 2026-09-05, but `complete` would freeze three ticked boxes that state 10/10/20/10, which is false at HEAD. The owner's order to relax the timeouts was met and then exceeded by the two later raises.
+- The STATE head and the AI-REVIEW VERDICT block above describe 2026-09-05; neither is current. No test was run for this entry. By a worker's read no open card lists this one as a prerequisite, effect or blocker, and lint names nothing for it.
