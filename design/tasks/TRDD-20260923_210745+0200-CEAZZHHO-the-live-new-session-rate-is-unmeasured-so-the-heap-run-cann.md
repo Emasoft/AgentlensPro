@@ -3,7 +3,7 @@ trdd-id: CEAZZHHO
 title: The live new-session rate is unmeasured so the heap run cannot calibrate session churn
 column: ai_review
 created: 2026-09-23T21:07:45+0200
-updated: 2026-10-08T18:37:25+0200
+updated: 2026-10-08T18:40:33+0200
 current-owner: main-session
 created-by: main-session
 task-type: spike
@@ -35,3 +35,7 @@ Acceptance: [x] new sessions/hour with the time span and source stated (1.67/h s
 ## Measured (2026-10-08)
 
 Source: sealed statusline parquet parts (~/.agentlens/statusline/main/*/part-*.parquet, 1204 files spanning 2026-09-11 00:25 .. 2026-10-08 17:13 = 664.8 h) — a source that spans process restarts, per the card's requirement. Ids only: ts + session_id read per part, first-seen timestamp per distinct id, never content. RESULTS: 435 distinct ids; steady 1.67 new sessions/h (Oct 7 full day: 40 ids/24 h); peak burst hour 16/h (2026-10-06 15:00); active-hour mean 2.64/h (Oct 6-8, 36 hours with >=1); whole-span 0.65/h. Days with no sealed parts: 2026-09-12..09-22 and 2026-10-04. DERIVED AND RECORDED ON EQCGAVGV: --new-session-every 225 s (= 16/h, one live peak hour per 1-h arm — the heap-run arms run minutes-to-hours so peak-rate churn is the sizing case; a steady-rate arm would use 2100 s). Both acceptance boxes ticked. Report: reports/ceazzhho/20261008_184700+0200-new-session-rate.md.
+
+## Review round 3 (2026-10-08) — the visibility qualifier
+
+The work-review fork's one substantive finding, ACCEPTED: these numbers are a STATUSLINE-VISIBILITY rate, not a session-creation rate — a session that never POSTs a statusline sample (subagents post to a separate stream, headless runs, sessions killed before their first tick) is invisible to the sealed main-stream parts, so 1.67/h steady and 16/h peak are LOWER BOUNDS on true churn. The card pre-authorized the collector's session cards as the alternative source that counts everything the sweeper saw; the cheaper statusline source was used and the blind spot was unnamed. Disposition: the qualifier is now recorded HERE and on EQCGAVGV's calibration line; the heap-run owner (or this session, on a later pass) may re-count from log-session cards if churn calibration proves sensitive to the gap. The DERIVED --new-session-every 225 s stands as a sizing choice on a lower-bound rate — churn may be FASTER than 225 s models, meaning the bench under-churns relative to reality, which is the conservative direction for a heap-ratchet hunt (it cannot manufacture a per-session leak no real session exhibits, but it may miss one that churns faster than modeled).
