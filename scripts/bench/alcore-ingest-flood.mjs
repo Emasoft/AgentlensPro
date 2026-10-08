@@ -4,6 +4,13 @@
 // server-side counter delta (spans_appended / hook receivedSinceBoot).
 //
 // No deps — plain Node http, keep-alive agents.
+//
+// TRDD-PQ40PZ9D: --mix transcripts appends synthetic Claude Code JSONL to
+// <isolated-home>/.claude/projects/bench-transcripts/ to drive log-sweeper card rebuilds;
+// it refuses the real home (subtree guard). In this mode reqPerSec/ok2xx count FILE APPENDS
+// (not http posts), underRate means "appends under target", and targetDownAtSec means the
+// append target (fs) went down. Acceptance deltas: logSessionsDelta>=1, summaryMissesDelta>=1,
+// dataVersionDelta>0 — the snapshot's /api/summary read is what drives the summary miss/rebuild.
 import http from 'node:http';
 import path from 'node:path';
 import os from 'node:os';
@@ -24,6 +31,9 @@ const FLAG_TO_KEY = {
   '--concurrency': 'concurrency', '--sessions': 'sessions', '--spans-per-session': 'spansPerSession',
   '--rate': 'rate', '--spans-per-request': 'spansPerRequest', '--new-session-every': 'newSessionEvery',
   '--progress-sec': 'progressSec', '--subagent-share': 'subagentShare',
+  // TRDD-PQ40PZ9D (transcripts mode): --lines-per-sec is the TOTAL append rate across ALL
+  // workers (not per-worker); --transcripts-home must be an isolated scratch home.
+  '--transcripts-home': 'transcriptsHome', '--lines-per-sec': 'linesPerSec',
 };
 
 function parseArgs(argv) {
@@ -34,6 +44,9 @@ function parseArgs(argv) {
     // which --sessions cannot express — --sessions only ever meant "N Claude Code sessions each at
     // their measured spans/s peak", a statement about OTLP, not about a statusline-only arm.
     rate: 0, spansPerRequest: 20, newSessionEvery: 0, progressSec: 300, subagentShare: 0.31, allowLive: false,
+    // TRDD-PQ40PZ9D: transcripts mode appends synthetic Claude Code JSONL lines to
+    // <transcriptsHome>/.claude/projects/bench-transcripts/<session>.jsonl.
+    transcriptsHome: '', linesPerSec: 5,
   };
   const errors = [];
   const given = new Set();
@@ -54,6 +67,11 @@ function parseArgs(argv) {
       errors.push(`invalid value for ${a}: ${JSON.stringify(raw)}`);
       continue;
     }
+    if (a === '--transcripts-home') {
+      out[key] = raw;
+      given.add(key);
+      continue;
+    }
     const value = Number(raw);
     if (!Number.isFinite(value) || value < 0) {
       errors.push(`invalid value for ${a}: ${JSON.stringify(raw)}`);
@@ -69,7 +87,7 @@ function parseArgs(argv) {
  *  flag combination fails fast (exit 2) instead of burning the run's --seconds. */
 function validateArgs(out, given) {
   const errors = [];
-  if (!['otlp', 'hooks', 'both', 'statusline'].includes(out.mix)) errors.push(`--mix must be one of otlp,hooks,both,statusline, got ${JSON.stringify(out.mix)}`);
+  if (!['otlp', 'hooks', 'both', 'statusline', 'transcripts'].includes(out.mix)) errors.push(`--mix must be one of otlp,hooks,both,statusline,transcripts, got ${JSON.stringify(out.mix)}`);
   if (!(out.concurrency >= 1)) errors.push('--concurrency must be >= 1');
   // Array.from({ length: 2.5 }) makes 2 workers while paceMsPerReq is computed from the
   // un-truncated 2.5 — the pacing math and the actual worker count would then disagree.
@@ -89,6 +107,13 @@ function validateArgs(out, given) {
   if (!(out.spansPerSession >= 1)) errors.push('--spans-per-session must be >= 1');
   if (!(out.newSessionEvery === 0 || out.newSessionEvery >= 1)) errors.push('--new-session-every must be 0 or >= 1');
   if (!Number.isInteger(out.sessions)) errors.push('--sessions must be an integer');
+  // TRDD-PQ40PZ9D: transcripts mode is paced ONLY by --lines-per-sec (total lines/s across
+  // workers); --rate and --sessions express http-request/span rates a transcript append
+  // cannot honour.
+  if (out.mix === 'transcripts' && (given.has('rate') || given.has('sessions'))) errors.push('--rate and --sessions are not valid with --mix transcripts (use --lines-per-sec)');
+  if (!Number.isInteger(out.linesPerSec) || out.linesPerSec < 1) errors.push('--lines-per-sec must be an integer >= 1');
+  if (out.mix === 'transcripts' && !out.transcriptsHome) errors.push('--mix transcripts requires --transcripts-home');
+  if (out.mix !== 'transcripts' && out.transcriptsHome) errors.push('--transcripts-home is only valid with --mix transcripts');
   return errors;
 }
 
@@ -220,6 +245,60 @@ function makeHookBody() {
     tool_input: { command: 'echo bench' },
     cwd: '/tmp/al-bench-data',
   });
+}
+
+
+// TRDD-PQ40PZ9D: synthetic Claude Code assistant JSONL transcript line. Shape pinned to what the
+// log-scan parser actually reads (agentlens-logscan/src/lib.rs:842 assistant branch):
+// `type:"assistant"`, `message.model`, `message.id` (usage dedup per message.id — :851),
+// `message.content[]` blocks, `message.usage{input_tokens,output_tokens,cache_read_input_tokens,
+// cache_creation_input_tokens}` (disjoint_anthropic :147), top-level `timestamp` (ISO,
+// parse_iso_ms in agentlens-spanstore/src/lib.rs:165 — len>=20, optional ms fraction), top-level
+// `cwd` (:762 — first truthy cwd becomes the card's workspace). Top-level `sessionId` is NOT
+// read — the session id IS the file stem (:1279), so the bench names files
+// `<home>/.claude/projects/bench-transcripts/<session>.jsonl`. `cache_creation` tier sub-object
+// is OMITTED: an older-CC shape the parser legally reports as "no tier sub-object". One row per
+// fresh `msg_w<i>_<session>_<n>` id — every row is a first row, so no usage row is dropped by
+// the per-message.id dedup; the worker-index prefix keeps two workers appending to one session
+// from colliding ids.
+function makeTranscriptLine(i, n) {
+  const session = pickSession();
+  const model = MODELS[Math.floor(Math.random() * MODELS.length)];
+  const ts = new Date().toISOString(); // parse_iso_ms accepts ISO-with-ms (len>=20, optional frac)
+  const line = {
+    type: 'assistant',
+    timestamp: ts,
+    cwd: BENCH_PROJECT_DIR, // first row's cwd becomes the card workspace (lib.rs:762)
+    message: {
+      id: `msg_w${i}_${session}_${n}`,
+      model,
+      content: [{ type: 'text', text: `bench turn ${n}: ` + 'x'.repeat(200) }],
+      usage: {
+        input_tokens: 500 + Math.floor(Math.random() * 5000),
+        output_tokens: 50 + Math.floor(Math.random() * 800),
+        cache_read_input_tokens: Math.floor(Math.random() * 200000),
+        cache_creation_input_tokens: Math.floor(Math.random() * 20000),
+      },
+    },
+  };
+  return { session, line: JSON.stringify(line) };
+}
+
+
+// Transcripts mode state: the fixed project-dir slug under <home>/.claude/projects/ and the
+// per-run memo of created transcript files (growSessionWindow can mint a new session id at any
+// tick, so the file for a session is ensured lazily right before its first append).
+const TRANSCRIPT_SLUG = 'bench-transcripts';
+const transcriptFilesEnsured = new Set();
+function ensureTranscriptFile(home, session) {
+  const dir = path.join(home, '.claude', 'projects', TRANSCRIPT_SLUG);
+  fs.mkdirSync(dir, { recursive: true });
+  const p = path.join(dir, `${session}.jsonl`);
+  if (!transcriptFilesEnsured.has(p)) {
+    if (!fs.existsSync(p)) fs.writeFileSync(p, '');
+    transcriptFilesEnsured.add(p);
+  }
+  return p;
 }
 
 /**
@@ -390,6 +469,7 @@ function pick(mix) {
   if (mix === 'otlp') return 'otlp';
   if (mix === 'hooks') return 'hooks';
   if (mix === 'statusline') return 'statusline';
+  if (mix === 'transcripts') return 'transcripts';
   return Math.random() < 0.5 ? 'otlp' : 'hooks';
 }
 
@@ -436,6 +516,7 @@ async function worker(i, agentOtlp, agentUi, state, mix, counters, paceMsPerReq)
   // deliver ~268/300, about 11% short, by calculation) and could false-flag underRate.
   // No-op when paceMsPerReq is 0.
   let nextAt = Date.now() - paceMsPerReq;
+  let transcriptLineNo = 0;
   while (Date.now() < state.deadline && !state.stopped) {
     if (paceMsPerReq > 0) {
       nextAt += paceMsPerReq;
@@ -449,8 +530,33 @@ async function worker(i, agentOtlp, agentUi, state, mix, counters, paceMsPerReq)
     // Re-check after any sleep above: the deadline may have passed while we were waiting, and a
     // request sent past it would count against a window this run no longer owns.
     if (Date.now() >= state.deadline || state.stopped) break;
-    const kind = pick(mix);
     const t0 = performance.now();
+    if (mix === 'transcripts') {
+      // TRDD-PQ40PZ9D: the append IS the request. No pacing loop of its own — the shared
+      // loop above (stagger, deadline cap, behind-schedule guard) applies unchanged; this
+      // branch only replaces the http post with the fs append.
+      const { session, line } = makeTranscriptLine(i, ++transcriptLineNo);
+      try {
+        const p = ensureTranscriptFile(args.transcriptsHome, session);
+        fs.appendFileSync(p, line + '\n');
+        const elapsed = performance.now() - t0;
+        counters.requests++;
+        counters.ok++;
+        counters.lat.transcripts.push(elapsed);
+        // In transcripts mode an append failure is NOT a server-down signal (a local fs error
+        // says nothing about alcore's health) — but the 20-fail/30s early-stop still guards
+        // against a wedged fs target, which is the failure mode this mode can actually hit.
+        noteRequestOutcome(state, true);
+      } catch (e) {
+        const elapsed = performance.now() - t0;
+        counters.requests++;
+        counters.bad++;
+        counters.lat.transcripts.push(elapsed);
+        noteRequestOutcome(state, false);
+      }
+      continue;
+    }
+    const kind = pick(mix);
     const status = kind === 'otlp'
       ? await post(agentOtlp, args.otlpPort, '/v1/traces', makeOtlpBody(args.spansPerRequest))
       : kind === 'hooks'
@@ -524,10 +630,14 @@ let lastFetchErrorMessage = null;
  *  that it failed. */
 async function fetchSnapshot(uiPort) {
   try {
-    const [server, logScan] = await Promise.all([
-      getJson(uiPort, '/api/server-stats'),
-      getJson(uiPort, '/api/debug/log-scan-stats'),
-    ]);
+    const reads = [getJson(uiPort, '/api/server-stats'), getJson(uiPort, '/api/debug/log-scan-stats')];
+    // TRDD-PQ40PZ9D: transcripts mode is append-only — nothing in it reads /api/summary, so the
+    // derived summary cache would never miss or rebuild on its own. Each snapshot tick therefore
+    // ALSO GETs /api/summary (result discarded), acting as the reader that drives real
+    // miss/rebuild cycles off the sweeper's data_version bumps; without this,
+    // summaryMissesDelta would sit at 0 no matter how much the sweeper parsed.
+    if (args.mix === 'transcripts') reads.push(getJson(uiPort, '/api/summary').then(() => null));
+    const [server, logScan] = await Promise.all(reads);
     lastFetchErrorMessage = null;
     return {
       ts: Date.now(),
@@ -538,6 +648,10 @@ async function fetchSnapshot(uiPort) {
       statuslineReceived: server.statusline.receivedSinceBoot,
       statuslinePersisted: server.persistence.statuslineSamples,
       summaryMisses: logScan.derivedCaches.summary.misses,
+      // server_stats.rs:538 — the session-card count (cards.len()); ui.rs:1826 — the sweeper's
+      // dataVersion, bumped by every put_log_session write.
+      logSessions: server.logSessions,
+      dataVersion: logScan.dataVersion,
     };
   } catch (e) {
     lastFetchErrorMessage = e && e.message ? e.message : String(e);
@@ -546,6 +660,43 @@ async function fetchSnapshot(uiPort) {
 }
 
 async function main() {
+  // TRDD-PQ40PZ9D: transcripts-mode runtime guard — refuse to write anywhere the live corpus
+  // could be polluted. Subtree checks, not just equality: --transcripts-home ~/.claude/projects
+  // would pass an equality check yet its files match the live sweeper's
+  // ~/.claude/projects/**/*.jsonl glob. os.userInfo().homedir (the passwd entry), NOT
+  // os.homedir() (follows $HOME) — an isolated instance is routinely launched with
+  // HOME=<scratch>, which would make os.homedir() compare against the wrong directory and let
+  // the guard miss the hit. Runs BEFORE the first fetchSnapshot and before any worker starts.
+  if (args.mix === 'transcripts') {
+    const REAL_HOME = realpathOrResolve(os.userInfo().homedir);
+    const realClaude = realpathOrResolve(path.join(REAL_HOME, '.claude'));
+    const resolvedHome = realpathOrResolve(args.transcriptsHome);
+    if (
+      resolvedHome === realClaude || resolvedHome.startsWith(realClaude + path.sep)
+      || resolvedHome === REAL_HOME || resolvedHome.startsWith(REAL_HOME + path.sep)
+      || resolvedHome === '/'
+    ) {
+      console.error(`refusing: --transcripts-home ${args.transcriptsHome} is the real home (or its .claude); pass an isolated scratch home`);
+      process.exit(2);
+    }
+    // Bootstrap the fixed bench project dir + one file per current session-window id; the
+    // worker lazily ensures files for session ids the window grows into.
+    for (const s of sessionWindow) ensureTranscriptFile(args.transcriptsHome, s);
+    // Symlink ceiling: the lexical resolve() above passes on a nonexistent scratch leaf, but a
+    // symlinked home could write through into the real tree — after the bootstrap mkdir,
+    // re-resolve and refuse if it resolves into the real home or its .claude.
+    const resolvedAfterMkdir = realpathOrResolve(args.transcriptsHome);
+    if (resolvedAfterMkdir !== resolvedHome) {
+      if (
+        resolvedAfterMkdir === realClaude || resolvedAfterMkdir.startsWith(realClaude + path.sep)
+        || resolvedAfterMkdir === REAL_HOME || resolvedAfterMkdir.startsWith(REAL_HOME + path.sep)
+        || resolvedAfterMkdir === '/'
+      ) {
+        console.error(`refusing: --transcripts-home ${args.transcriptsHome} resolves (symlink) into the real home; pass an isolated scratch home`);
+        process.exit(2);
+      }
+    }
+  }
   // Item 5/7 read #1: the FIRST /api/server-stats read doubles as the live-dataDir check below —
   // no separate probe GET, so a refusal never needed to have sent one either.
   let before = await fetchSnapshot(args.uiPort);
@@ -582,16 +733,26 @@ async function main() {
   let tickSucceeded = false;
   const agentOtlp = new http.Agent({ keepAlive: true, maxSockets: args.concurrency });
   const agentUi = new http.Agent({ keepAlive: true, maxSockets: args.concurrency });
-  const counters = { requests: 0, ok: 0, bad: 0, lat: { otlp: [], hooks: [], statusline: [] } };
+  const counters = { requests: 0, ok: 0, bad: 0, lat: { otlp: [], hooks: [], statusline: [], transcripts: [] } };
+  // lat.transcripts: append latency is fs-shaped, not http-shaped — its own bucket so the
+  // percentiles of the http kinds stay meaningful (latencySummary handles any array).
   const started = Date.now();
   const state = { started, deadline: started + args.seconds * 1000, stopped: false, failCount: 0, failStartMs: null, targetDownAtSec: null };
 
   // --rate targets total requests/s directly (any mix, incl. statusline, which --sessions/
   // --spans-per-session cannot express — those only ever meant OTLP spans/s). --rate takes
-  // precedence; the legacy --sessions lane is unchanged when --rate is absent (item 2).
+  // precedence (rejected with --mix transcripts); the legacy --sessions lane is unchanged when
+  // --rate is absent (item 2). TRDD-PQ40PZ9D: transcripts mode reuses this SAME machinery —
+  // --lines-per-sec IS the total lines/s across all workers, paced exactly like --rate, so the
+  // shared loop's stagger/deadline/behind-schedule logic applies unchanged. In this mode
+  // reqPerSec/ok2xx count FILE APPENDS (not http posts); underRate means "appends under
+  // target"; and targetDownAtSec means the append target (fs) went down.
   let targetReqPerSec = 0;
   let paceMsPerReq = 0;
-  if (args.rate > 0) {
+  if (args.mix === 'transcripts') {
+    targetReqPerSec = args.linesPerSec;
+    paceMsPerReq = (1000 * args.concurrency) / args.linesPerSec;
+  } else if (args.rate > 0) {
     targetReqPerSec = args.rate;
     paceMsPerReq = (1000 * args.concurrency) / args.rate;
   } else {
@@ -673,7 +834,7 @@ async function main() {
     latencyMs: {
       otlp: latencySummary(counters.lat.otlp),
       hooks: latencySummary(counters.lat.hooks),
-      statusline: latencySummary(counters.lat.statusline),
+      transcripts: latencySummary(counters.lat.transcripts),
     },
     statuslineBodyBytesMean: statuslineBodyBytes.count > 0 ? statuslineBodyBytes.total / statuslineBodyBytes.count : null,
     spansAppendedDelta: delta('spansTotal'),
@@ -681,6 +842,8 @@ async function main() {
     statuslineReceivedDelta: delta('statuslineReceived'),
     statuslinePersistedDelta: delta('statuslinePersisted'),
     summaryMissesDelta: delta('summaryMisses'),
+    logSessionsDelta: delta('logSessions'),
+    dataVersionDelta: delta('dataVersion'),
     revived,
     deltaBasis,
     targetDownAtSec: state.targetDownAtSec,
