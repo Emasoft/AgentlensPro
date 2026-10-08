@@ -1,9 +1,9 @@
 ---
 trdd-id: Z0A777XW
 title: The footprint sampler for the heap run hardcodes the live port and pidfile and is not tracked
-column: testing
+column: ai_review
 created: 2026-09-23T20:40:50+0200
-updated: 2026-10-08T16:25:23+0200
+updated: 2026-10-08T16:27:45+0200
 current-owner: main-session
 created-by: main-session
 task-type: infra
@@ -24,6 +24,7 @@ status: tasked
 - 2026-09-23T20:40:50+0200 — MANDATE issued by main-session (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-09-24T09:47:46+0200 — column → testing by main-session. sampler landed in 9c363bb8; box 3 needs an isolated-instance run
 - 2026-10-08T16:23:52+0200 — column → testing by main-agent@agentlenspro. All five boxes ticked; box 3 executed 2026-10-08 against an isolated alcore (4 numeric-footprint rows, evidence on the card); awaiting review per board flow
+- 2026-10-08T16:27:45+0200 — column → ai_review by main-agent@agentlenspro. All five boxes ticked, box 3 evidence durable at reports/z0a777xw/20261008-box3-samples.tsv, four review rounds run; per the owner directive the session reviews in the owner's stead, so it proceeds to ai_review rather than parking
 
 ## Body
 
@@ -50,3 +51,4 @@ Every consumer of the TSV (e.g. scripts_dev/alcore-heap/per_interval_corr.py and
 2026-10-08T16:25:00+0200 — Box 3's run executed against an ISOLATED alcore: spawned from the repo's bin-native/darwin-arm64/alcore (2026-10-03 build) with HOME=/tmp/z0a777xw-alcore/home, DATA_DIR /tmp/z0a777xw-alcore/data, --ui-port 3901 --otlp-port 4398 --mcp-port 3998 --no-log-scan (pid 67024, /tmp/z0a777xw-alcore/data/server.pid). The live collector was NOT touched (it was down before the run: revive backoff, stale pidfile naming a dead pid). Sampler: scripts/bench/alcore-footprint-sampler.sh --ui-port 3901 --pidfile /tmp/z0a777xw-alcore/data/server.pid --seconds 120 --interval 30 --out /tmp/z0a777xw-alcore/samples.tsv. RESULT: 4 data rows (header excluded), every phys_footprint_mb numeric (12, 12, 14, 13), correct 12-column header, exit 0 — the criterion 'yields 4-5 data rows, each with a numeric footprint' is met. TSV preserved at /tmp/z0a777xw-alcore/samples.tsv; report notes the review fork's caveat that otlp_* columns sample a pre-97f6806a binary (zeros here by absence of traffic, which coincidentally matches what the newer build would also serve under zero traffic).
 2026-10-08T16:40:00+0200 — cleanup: the isolated alcore (pid 67024) was SIGTERMed and confirmed gone; its artifacts (samples.tsv, server.log, sampler.log, data/, home/) remain under /tmp/z0a777xw-alcore/ (tmp-cleared, not a repo path). The live collector was never touched.
 2026-10-08T16:45:00+0200 — review-round-2 corrections: (1) The TSV evidence was copied out of /tmp (reboot-ephemeral) to reports/z0a777xw/20261008-box3-samples.tsv; the card now cites that durable path. (2) The otlp zeros-vs-NA caveat on the previous entry was WRONG about the binary: otlp.* landed in commit 221705cb on 2026-09-23, and the isolated binary was built 2026-10-03, so it DOES serve the fields — the explicit 0s are true values from a server with no OTLP traffic, not an NA path miss. The NA fallback was not exercised by this run (it was by the 2026-09-24 5s/2s bogus-port run, which produced all-NA rows). (3) The operational facts about the live collector (down, revive backoff) belong to the session log, not this card; they remain recorded in the earlier entry for audit but the box's evidence is the TSV alone.
+2026-10-08T16:58:00+0200 — review-round-3 corrections and next step: (1) The durable TSV citation is reports/z0a777xw/20261008-box3-samples.tsv (already copied; the /tmp mention in the earlier entry is superseded). (2) The 16:40 same-column move is recorded as a no-op that polluted the approval log — this entry is the stated reason it will not be repeated. (3) NEXT ACTION: the card is done and reviewed by four review rounds under the owner directive; it moves to ai_review now (not left parked in testing with no named step).
