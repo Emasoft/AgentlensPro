@@ -1,9 +1,9 @@
 ---
 trdd-id: QSFYIHUO
 title: Migrate cache-history consumers off raw-body scanning onto api_calls/cache_turns
-column: planned
+column: todo
 created: 2026-09-03T04:47:31+0200
-updated: 2026-09-03T04:59:59+0200
+updated: 2026-10-09T00:25:02+0200
 current-owner: main-session
 task-type: refactor
 priority: high
@@ -12,7 +12,8 @@ parent-trdd: CAJ5RCP9
 created-by: main-session
 npt: []
 eht: []
-blocked-by: [9SYRK6SW, GVA8TTJF]
+blocked-by: []
+status: tasked
 ---
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-03
@@ -79,5 +80,6 @@ re-run, diff. For `cache_break_timeline`, additionally delete the session's resp
 between capture and re-run to prove the ZERO-bodies claim.
 
 ## Approval log
+- 2026-10-09T00:25:02+0200 — column → todo by main-agent@agentlenspro. both blockers' CODE landed (9SYRK6SW committed + was deployed 2026-09-05; GVA8TTJF fb09facf) — schema and views are stable and proven by tests; migration work needs no live collector, its acceptance does
 
 ## Notes and lessons learned
