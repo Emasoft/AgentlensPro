@@ -3,7 +3,7 @@ trdd-id: Z0A777XW
 title: The footprint sampler for the heap run hardcodes the live port and pidfile and is not tracked
 column: testing
 created: 2026-09-23T20:40:50+0200
-updated: 2026-09-24T09:47:46+0200
+updated: 2026-10-08T16:23:52+0200
 current-owner: main-session
 created-by: main-session
 task-type: infra
@@ -14,6 +14,7 @@ mandated-by: none
 approved: true
 approval-judge: main-session
 approval-datetime: 2026-09-23T20:40:50+0200
+status: tasked
 ---
 
 # The footprint sampler for the heap run hardcodes the live port and pidfile and is not tracked
@@ -22,6 +23,7 @@ approval-datetime: 2026-09-23T20:40:50+0200
 
 - 2026-09-23T20:40:50+0200 — MANDATE issued by main-session (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-09-24T09:47:46+0200 — column → testing by main-session. sampler landed in 9c363bb8; box 3 needs an isolated-instance run
+- 2026-10-08T16:23:52+0200 — column → testing by main-agent@agentlenspro. All five boxes ticked; box 3 executed 2026-10-08 against an isolated alcore (4 numeric-footprint rows, evidence on the card); awaiting review per board flow
 
 ## Body
 
@@ -30,7 +32,7 @@ Move it to scripts/bench/alcore-footprint-sampler.sh (tracked) with --ui-port, -
 Acceptance:
 - [x] refuses to run without explicit --ui-port and --pidfile
 - [x] produces the ratchet-correlation-samples.tsv header plus the four otlp_* columns
-- [ ] a 2-minute run at a 30 s interval against an isolated alcore yields 4-5 data rows (header excluded), each with a numeric footprint
+- [x] a 2-minute run at a 30 s interval against an isolated alcore yields 4-5 data rows (header excluded), each with a numeric footprint
 - [x] pnpm run check-identities passes (the old script hardcodes a real home path)
 - [x] an absent otlp.* field is written as NA
 
@@ -45,3 +47,5 @@ Every consumer of the TSV (e.g. scripts_dev/alcore-heap/per_interval_corr.py and
 
 2026-09-24T08:56:00+0200 — Implemented tracked scripts/bench/alcore-footprint-sampler.sh (scripts_dev/alcore-heap/sample.sh left untouched). Adds required --ui-port/--pidfile (refuses without both), --out/--seconds/--interval, and the 4 otlp_* columns from /api/server-stats otlp.* with NA on any missing field, never 0, never a crash. Verified: bash -n OK, shellcheck OK, no-args and missing-pidfile refusal (exit 1 + usage), a 5s/2s run against a bogus port+pidfile produced a well-formed 3-row TSV with all NA fields and exit 0, pnpm run check-identities OK plus a manual grep for the new untracked file. Box 3 (2-minute run against an isolated alcore) left UNCHECKED: this worker may not start/stop alcore or touch ~/.agentlens/ports per its assignment restriction; the row-cadence/NA logic exercised at 5s/2s scale is the same code path. Report: reports/z0a777xw/20260924_085444+0200-impl.md
 2026-09-24T09:05:00+0200 — Review-fork findings addressed: (1) reformatted the single-line inline 'Acceptance: [ ] ... [ ] ...' into a 5-item bullet list SOLELY so trddgrep check-box could count/tick boxes (it counts 0 on an inline non-bulleted line) — wording of each criterion is verbatim unchanged, no criterion added/removed/reworded. (2) validated the footprint-parsing regex (inherited unchanged from scripts_dev/alcore-heap/sample.sh, not introduced by this card) against two real non-alcore processes on this machine: a small one (zsh, footprint reported in KB) correctly yields NA since the regex only matches '[0-9]+ MB', and a large one (rust-analyzer, 933 MB) correctly extracts 933. This is a pre-existing KB-vs-MB unit limitation in the upstream script, out of this card's scope (card is about port/pidfile/otlp columns, not footprint-unit robustness) — alcore itself runs in the multi-hundred-MB to multi-GB range, so the MB-only regex is not expected to misfire against the real target. Not fixed here; flagging for a future card if a small-process use ever needs it. (3) --seconds/--interval take no numeric validation (a non-numeric value fails at the arithmetic expansion with a raw bash error rather than a clean usage message) — accepted as a known minor gap, skipped per YAGNI; --ui-port/--pidfile (the two flags the card's acceptance criteria actually gate on) are validated.
+2026-10-08T16:25:00+0200 — Box 3's run executed against an ISOLATED alcore: spawned from the repo's bin-native/darwin-arm64/alcore (2026-10-03 build) with HOME=/tmp/z0a777xw-alcore/home, DATA_DIR /tmp/z0a777xw-alcore/data, --ui-port 3901 --otlp-port 4398 --mcp-port 3998 --no-log-scan (pid 67024, /tmp/z0a777xw-alcore/data/server.pid). The live collector was NOT touched (it was down before the run: revive backoff, stale pidfile naming a dead pid). Sampler: scripts/bench/alcore-footprint-sampler.sh --ui-port 3901 --pidfile /tmp/z0a777xw-alcore/data/server.pid --seconds 120 --interval 30 --out /tmp/z0a777xw-alcore/samples.tsv. RESULT: 4 data rows (header excluded), every phys_footprint_mb numeric (12, 12, 14, 13), correct 12-column header, exit 0 — the criterion 'yields 4-5 data rows, each with a numeric footprint' is met. TSV preserved at /tmp/z0a777xw-alcore/samples.tsv; report notes the review fork's caveat that otlp_* columns sample a pre-97f6806a binary (zeros here by absence of traffic, which coincidentally matches what the newer build would also serve under zero traffic).
+2026-10-08T16:40:00+0200 — cleanup: the isolated alcore (pid 67024) was SIGTERMed and confirmed gone; its artifacts (samples.tsv, server.log, sampler.log, data/, home/) remain under /tmp/z0a777xw-alcore/ (tmp-cleared, not a repo path). The live collector was never touched.

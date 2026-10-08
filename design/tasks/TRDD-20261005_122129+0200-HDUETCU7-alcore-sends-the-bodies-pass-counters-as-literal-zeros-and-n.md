@@ -4,7 +4,7 @@ title: alcore sends the bodies pass counters as literal zeros and never sends th
 column: testing
 status: tasked
 created: 2026-10-05T12:21:29+0200
-updated: 2026-10-08T16:15:59+0200
+updated: 2026-10-08T16:23:34+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -57,3 +57,4 @@ Removing the cumulative line and its two declarations instead is the owner's dec
 
 Full crate test run recorded 2026-10-08 16:14: cargo test -p agentlens-core (via --manifest-path rust-core/Cargo.toml), exit 0, 766 passed / 0 failed across 120 suites, no compiler warnings. Both named test files green: chores_bodies_pass_stats 1/1, server_stats 4/4 integration (plus 4 in-module capture_block_tests unit tests). Run started at load 12.24 (under the 20 threshold), finished at 16:13. Evidence: reports/hduetcu7/20261008_161351+0200-full-crate-test-run.md, raw output /tmp/alcore-full-test.txt. The one mutation run's caveat (load 42) from 2026-10-05 stands as recorded; this clean full run at an in-rule load supersedes the 'no box ticked until the full crate run' hold.
 2026-10-08 16:20: All four boxes ticked on the green full-crate run. Box 4's reader sweep was performed by a worker on 2026-10-05 (recorded under Implementation) and the bodiesLastPurge feed decision landed with commit 97f6806a; nothing in this run contradicts it. Next: the card owes a column move to ai_review/human review per the board flow — not yet made, recorded as pending.
+2026-10-08 16:35, mutation re-run against TODAY's tree (the first review round found the 2026-10-05 red-run predates the last comment edits): chores.rs backed up to /tmp, the real-counts call replaced with literal zeros via fastedit (diff-verified), single test run — bodies_pass_publishes_its_counters FAILED at the removedFiles assertion (left 0, right 1), exit 101 — then chores.rs restored from backup (git diff clean). Box 2's evidence is now current. Wording correction per the same review: today's full-crate green run directly verified the pass path and lifted the card's own hold; boxes 1, 3 and 4 rest on the prior recorded implementation work plus this re-run, not on today's run alone.
