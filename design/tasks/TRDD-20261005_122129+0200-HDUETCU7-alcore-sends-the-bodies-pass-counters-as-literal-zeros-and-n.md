@@ -4,7 +4,7 @@ title: alcore sends the bodies pass counters as literal zeros and never sends th
 column: ai_review
 status: tasked
 created: 2026-10-05T12:21:29+0200
-updated: 2026-10-08T16:31:08+0200
+updated: 2026-10-08T16:46:07+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -30,6 +30,7 @@ By the same worker's read (docs_dev, gitignored; not re-read by the main agent):
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-10-08T17:20:00+0200
 
 All four boxes ticked. Full-crate run 766 passed / 0 failed, exit 0 (durable evidence: reports/hduetcu7/20261008_161351+0200-full-crate-test-run.md). Mutation red-run current against today's tree: the chores.rs counter-recording call zeroed, the test FAILED at removedFiles (left 0, right 1, exit 101), source restored clean (durable: reports/hduetcu7/20261008-mutation-red-run.txt). The test observes the struct bodies_pass_stats(), whose values the wire emitter reads — a recorded clarification of box 2's 'emitted figures' wording. clippy and pnpm check-types are OWED and unrun (recorded; no box depends on them by the session's assertion, unverified by derivation). Column ai_review, review-pending: the fork verdicts over the review rounds have landed (rounds 1-5 all dispositioned); the card's verifiability ends at this machine until the owner pushes — reports/ is gitignored. NEXT ACTION: ai_review pass over the card and its landed code (97f6806a), then human_review. The five rounds of body entries below are superseded BY THIS BLOCK; the 17:10 consolidation entry (2026-10-08) carries the same facts.
+2026-10-08 17:55, closure verified: the unfiltered (and --strict) validate run over the whole corpus was read in full — 409 findings, none names this card or Z0A777XW (the earlier id-filtered clean is now proven clean; the 409 are pre-existing board conditions on other cards). The review loop is closed on the RECORD; the substantive ai_review pass over the landed code (97f6806a) is this card's stated NEXT ACTION and is the fresh-eyes check the loop never substituted itself for.
 
 ## Acceptance
 
