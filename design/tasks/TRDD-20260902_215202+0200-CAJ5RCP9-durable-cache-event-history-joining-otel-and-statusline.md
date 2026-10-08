@@ -3,7 +3,7 @@ trdd-id: CAJ5RCP9
 title: Durable cache-event history that joins the OTEL ledger with the statusline feed
 column: todo
 created: 2026-09-02T21:52:02+0200
-updated: 2026-09-24T08:59:04+0200
+updated: 2026-10-08T20:20:22+0200
 current-owner: main-session
 task-type: feature
 priority: high
@@ -126,3 +126,7 @@ reason — so neither source alone answers "why did this turn cold-write".
 ## Board-triage flag 2026-09-24
 
 eht: lists six ids (9SYRK6SW, IRNHEN4Z, GVA8TTJF, QSFYIHUO, N6A8VX3G, TP3BA3ED), but the STATE block's own "Split into 5 depth-1 EHT children" section names and discusses only five (9SYRK6SW, N6A8VX3G, GVA8TTJF, QSFYIHUO, IRNHEN4Z). TP3BA3ED is not mentioned anywhere in STATE — no description of what it covers, no ordering, no dispatch status. FLAGGED, not removed: this card cannot reach complete until TP3BA3ED is also terminal, so whoever resumes this card should first determine what TP3BA3ED is and whether it belongs in this eht: list at all.
+
+## GVA8TTJF deviation mirror (2026-10-08)
+
+Box 3's joined query exists in design (worker in flight): the statusline join keys are session_id + interval (turn min/max ts ±60s) — NOT the token-column equality the WHAT wording implied — because statusline's per-tick cumulative counters and api_call's per-request buckets are different units that never compare equal. The token facts the box wanted are the join's OUTPUT columns (cache_read/creation/miss_reason alongside writePct), which is the intent of box 3 satisfied. Recorded here so the deviation is visible from the parent.
