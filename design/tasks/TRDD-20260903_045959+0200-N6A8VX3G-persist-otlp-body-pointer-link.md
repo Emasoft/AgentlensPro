@@ -3,7 +3,7 @@ trdd-id: N6A8VX3G
 title: Persist the OTLP body-pointer link so response rows gain a session_id
 column: dev
 created: 2026-09-03T04:59:59+0200
-updated: 2026-10-08T18:58:21+0200
+updated: 2026-10-08T19:56:30+0200
 current-owner: main-session
 task-type: feature
 priority: high
@@ -55,12 +55,12 @@ one-call-lagged, neither a same-call pair. This card is only about the same-call
 
 ## ACCEPTANCE
 
-- [ ] A resolved request↔response pair at `call_body_registry.rs` produces one durable link row
+- [x] A resolved request↔response pair at `call_body_registry.rs` produces one durable link row [IMPLEMENTED AS: one durable row per POINTER event carrying both sides' pairing keys (request_body_id/span_id) — the pair is resolved by GVA8TTJF's SQL join, not at ingest; reading recorded on the card]
       with `session_id` populated from the request side.
-- [ ] The link table survives a server restart (parquet, not in-memory).
+- [x] The link table survives a server restart (parquet, not in-memory). [NDJSON DeltaLog — durable-on-disk, reloaded at boot, boot-compacted; demonstrated: kill -9 → restart → delta compacted into snapshot, verified-from-disk]
 - [ ] GVA8TTJF's `cache_turns` join, once wired to use this link, resolves a response row's
       `session_id` via the link (verify with a real pair, not a synthetic one).
-- [ ] No `device_id`/`account_uuid` column exists anywhere in the new table.
+- [x] No `device_id`/`account_uuid` column exists anywhere in the new table. [confirmed: row construction drops them, grep 0 on live rows, unit test asserts absence]
 
 ## VERIFICATION
 
@@ -81,3 +81,7 @@ Claimed to dev. Design re-based ON SOURCE READS: the card's 'parquet writer at c
 ## Design-review round 1 (2026-10-08) — three required amendments
 
 The design fork accepted the DeltaLog re-base with three REQUIRED amendments, forwarded to the worker: (1) ERROR SEMANTICS pinned — the link append must never fail the ingest: on Err, one eprintln and continue (the sweeper's 'could not save (partial)' pattern), no ?/panic. (2) BOOT-COMPACT replaces never-compact — after load() at boot, save() once: bounds the delta to per-boot volume (~10k rows/2.2MB per DAY of live ingest makes never-compact ~800MB/year with boot parse costs, the 'trivial' claim was false) and heals a torn trailing line after kill -9 (read_lines tolerates one torn tail; DuckDB read_ndjson_auto does NOT — without this the SQL consumer errors after every hard crash). (3) The data_dir construction trap named (other DeltaLogs live in the sweeper which owns data_dir — thread it explicitly, no hacks) and the row constructor extracted as a pure fn body_link_row(p) -> (String, Value) so the unit test is reachable. Also recorded: pending-Vec loses rows forever on a kill (pointer events are transient, nothing re-delivers) — immediate-append preferred; a same-key-different-content row (spool rewrite) appends a later line that wins on replay, graceful. Durable rows outlive the registry's LRU eviction (200x400) — GVA8TTJF's join covers all history, not just the resident window: the real benefit, worth stating on GVA8TTJF with the NDJSON read path + torn-line note.
+
+## Implemented (2026-10-08)
+
+Immediate-append DeltaLog 'body-links' at the ingest site (lib.rs:1101-1111, after/beside record_ingested); pure fn body_link_row (lib.rs:1058); boot-compact via new DeltaLog::compact_now (delta_log.rs:234 — direct compact bypassing save()'s 256KiB size gate) called in DurableState::restore (log_reader.rs:945-950). Worker's isolated run: one real request+response pair through /v1/logs produced both link rows (verbatim in docs_dev/20261008_195338+0200-N6A8VX3G-impl-report.md) with request_body_id shared, session_id populated, zero identity fields; kill -9 → restart showed the delta compacted into body-links.snapshot.ndjson with the delta deleted — the torn-tail heal demonstrated end to end. Gates: cargo build 0, clippy -D warnings 0 (core+store), 2 new unit tests + 4 callbodyregistry_parity tests pass, check-identities OK. MAIN-SESSION DIFF VERIFICATION (the standing four-part obligation from round-2 review): (1) NO ?/panic on the append — if let Err + eprintln, log-and-continue, confirmed at the call site; (2) boot-compact present via compact_now (direct compact, correct form per round-2's size-gate finding — save(same map) would have been a no-op below 256KiB); (3) body_link_row is an extracted pure fn with the unit test calling it; (4) data_dir threaded through CoreState::open (the constructor that already owns it) — no hack. All four PASS. Deliberate omissions recorded: server-stats bodyLinkBytes gauge dropped (optional, not trivial under the single-handle design); no compaction cadence beyond boot (ceiling: delta bounded to per-boot volume). Design-choice record: immediate-append over pending-Vec (transient OTLP records are lost forever on kill from a pending Vec). Deviation: rows use fixed-width fields with '' for absent Options (keeps read_ndjson_auto schema stable) — reasonable, recorded.

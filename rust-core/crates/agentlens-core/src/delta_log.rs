@@ -226,6 +226,17 @@ impl DeltaLog {
         Ok(SaveResult { appended, deleted: 0, bytes: body.len() as u64, compacted: false })
     }
 
+    /// TRDD-N6A8VX3G — unconditional compaction for boot, bypassing save()'s size gate: after
+    /// load(), one verified snapshot rewrite drops the delta, bounding it to per-boot volume and
+    /// healing a torn trailing line a hard kill can leave (read_lines tolerates ONE torn tail;
+    /// the SQL consumer's read_ndjson_auto does not — the damage must be healed, not tolerated).
+    /// No-op while the delta is empty: the snapshot already holds everything.
+    pub fn compact_now(&mut self, records: &IndexMap<String, Value>) -> Result<u64, String> {
+        if size_of(&self.delta_path) == 0 {
+            return Ok(0);
+        }
+        self.compact(records)
+    }
     /// Total bytes on disk (both files).
     pub fn disk_bytes(&self) -> u64 {
         size_of(&self.snapshot_path) + size_of(&self.delta_path)

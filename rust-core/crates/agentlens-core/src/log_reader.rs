@@ -938,6 +938,18 @@ impl DurableState {
     /// here and not by the store: only the restore knows the corpus is whole (a kill mid-restore
     /// returns early / never gets here, so the next boot sees 0 and rebuilds).
     pub fn restore(&mut self, tailer: &mut LogTailer, state: &mut crate::CoreState, env: &Env) -> Result<(usize, usize, usize), String> {
+        // TRDD-N6A8VX3G: load the body-link rows and compact them into the verified snapshot
+        // immediately — compact_now bypasses save()'s size gate, so the delta stays bounded to
+        // per-boot volume and a torn trailing line left by a hard kill is healed before any
+        // SQL consumer reads the file. Append-only facts: no deletion-diffing ever runs on them.
+        match state.body_links.load() {
+            Ok(records) => {
+                if let Err(e) = state.body_links.compact_now(&records) {
+                    eprintln!("{} alcore: could not compact body-links: {e}", crate::log_ts());
+                }
+            }
+            Err(e) => eprintln!("{} alcore: could not load body-links: {e}", crate::log_ts()),
+        }
         let out = if state.cards.reused() { self.restore_reused(tailer, state, env)? } else { self.restore_from_snapshot(tailer, state, env)? };
         state.cards.mark_restore_complete();
         Ok(out)

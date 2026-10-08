@@ -315,6 +315,12 @@ pub struct CoreState {
     /// `--ingest-manifest` and `--aldigest-bin` and `aldigest register` succeeded. `None` = alcore
     /// behaves exactly as before the tap existed. `Arc` so the OTLP handler and the bodies pass can
     /// hold it without the state lock.
+    /// TRDD-N6A8VX3G: the durable request↔response link rows (one per BodyPointer ingested).
+    /// Key: format!("{span_or_req}:{kind}:{ts}") — unique per pointer. Appended per ingest via
+    /// append_changed (zero bytes when unchanged); load()+compact_now() at boot rewrites the
+    /// delta into the verified snapshot. GVA8TTJF reads the ndjson files directly (DuckDB
+    /// read_ndjson_auto over the body-links.*.ndjson glob).
+    pub body_links: delta_log::DeltaLog,
     pub spool_tap: Option<Arc<spool_tap::SpoolTap>>,
     /// Why `spool_tap` is `None`, for `/api/ingest-status`.
     pub spool_tap_off_reason: String,
@@ -709,6 +715,9 @@ impl CoreState {
             },
             advisory_issued: std::collections::HashMap::new(),
             statusline: statusline_store::StatuslineStore::new(data_dir.join("statusline")),
+            // TRDD-N6A8VX3G: same data-dir-rooted delta-log family as log-sessions/log-offsets;
+            // constructed here because CoreState::open is the one site that owns data_dir.
+            body_links: crate::delta_log::DeltaLog::new(data_dir, "body-links"),
             spool_tap: None,
             spool_tap_off_reason: "not configured: alcore serve was started without --ingest-manifest and --aldigest-bin".to_owned(),
         }
@@ -1040,6 +1049,27 @@ fn record_ingest_profile(parse_ns: u64, wait_ns: u64, held_ns: u64) {
     }
 }
 
+/// TRDD-N6A8VX3G — one durable request↔response link row per ingested BodyPointer. Pure so the
+/// unit test can call it directly (inline construction at the ingest site would make the test
+/// unreachable). The pair is NOT resolved here: rows carry both sides' pairing keys
+/// (request_body_id / span_id) and GVA8TTJF's SQL join resolves the pair.
+/// NO device_id, NO account_uuid — they ARE on the wire (metadata.user_id) but the no-identities
+/// doctrine forbids persisting them anywhere.
+fn body_link_row(p: &agentlens_ingest::BodyPointer) -> (String, Value) {
+    (
+        format!("{}:{}:{}", p.span_id.as_deref().unwrap_or(""), p.kind, p.ts),
+        serde_json::json!({
+            "session_id": p.session_id,
+            "span_id": p.span_id.as_deref().unwrap_or(""),
+            "kind": p.kind,
+            "stem": p.body_ref.as_deref().unwrap_or(""),
+            "request_id": p.request_id.as_deref().unwrap_or(""),
+            "request_body_id": p.request_body_id.as_deref().unwrap_or(""),
+            "message_id": p.message_id.as_deref().unwrap_or(""),
+            "ts_ms": p.ts,
+        }),
+    )
+}
 pub fn ingest_parsed(state: &mut CoreState, kind: &'static str, payload: Value, path: &str) {
     let now = now_ms();
     let mut spans: Vec<Value> = match kind {
@@ -1064,6 +1094,19 @@ pub fn ingest_parsed(state: &mut CoreState, kind: &'static str, payload: Value, 
             // returned these as data since P3b; until now nothing consumed them, so every
             // per-session drill-down would have resolved to an empty registry.
             for p in r.body_pointers {
+                // TRDD-N6A8VX3G: a durable link row per pointer — the response side written by
+                // 9SYRK6SW's api_call table joins to a session through these rows. Immediate-append
+                // (ingest_parsed holds &mut state; a pending Vec would lose rows to a process kill
+                // — pointer events are transient OTLP records, nothing re-delivers them).
+                // The append must NEVER fail the ingest: a disk-full/corrupt-file error here logs
+                // one line and continues (mirrors the sweeper's "could not save log cards
+                // (partial)" — no `?`, no panic).
+                let (key, row) = body_link_row(&p);
+                let mut rec = IndexMap::new();
+                rec.insert(key, row);
+                if let Err(e) = state.body_links.append_changed(&rec) {
+                    eprintln!("{} alcore: could not append body link: {e}", crate::log_ts());
+                }
                 state.bodies.record_ingested(p);
             }
             // server.ts persistDroppedLogEvent (TRDD-AMEA4O4Z): every event the rich-event gate
@@ -1370,6 +1413,104 @@ pub fn current_lock_holder() -> Option<(String, u64)> {
     Some((format!("{}:{}", loc.file(), loc.line()), held_ms))
 }
 
+#[cfg(test)]
+mod body_links_tests {
+    use super::*;
+
+    #[test]
+    fn body_link_rows_carry_both_sides_and_no_identity_fields() {
+        // TRDD-N6A8VX3G: two BodyPointers (request + response) sharing a span_id — both link rows
+        // land in the DeltaLog with the right keys, and no device_id/account_uuid field anywhere
+        // (they are on the wire in metadata.user_id; the no-identities doctrine keeps them out of
+        // every persisted row).
+        let dir = std::env::temp_dir().join(format!("agentlens-body-links-test-{}", now_ns()));
+        let mut log = delta_log::DeltaLog::new(&dir, "body-links");
+        let req = agentlens_ingest::BodyPointer {
+            session_id: "sess-test-1".to_owned(),
+            kind: "request",
+            body_ref: Some("req-body-file".to_owned()),
+            inline_body: None,
+            request_id: None,
+            span_id: Some("span-42".to_owned()),
+            model: None,
+            query_source: None,
+            request_body_id: Some("rbid-7".to_owned()),
+            message_id: None,
+            message_uuid: None,
+            ts: 1_000,
+        };
+        let resp = agentlens_ingest::BodyPointer {
+            session_id: "sess-test-1".to_owned(),
+            kind: "response",
+            body_ref: Some("resp-body-file".to_owned()),
+            inline_body: None,
+            request_id: Some("req-9".to_owned()),
+            span_id: Some("span-42".to_owned()),
+            model: None,
+            query_source: None,
+            request_body_id: Some("rbid-7".to_owned()),
+            message_id: Some("msg-3".to_owned()),
+            message_uuid: None,
+            ts: 1_500,
+        };
+        let mut records = IndexMap::new();
+        for p in [&req, &resp] {
+            let (k, v) = body_link_row(p);
+            records.insert(k, v);
+        }
+        let saved = log.append_changed(&records).expect("append");
+        assert_eq!(saved.appended, 2, "both rows appended");
+        // Reload from disk — the durable state is what GVA8TTJF's join reads.
+        let mut reloaded = delta_log::DeltaLog::new(&dir, "body-links");
+        let map = reloaded.load().expect("load");
+        assert_eq!(map.len(), 2);
+        let req_row = map.get("span-42:request:1000").expect("request row key");
+        let resp_row = map.get("span-42:response:1500").expect("response row key");
+        assert_eq!(req_row["session_id"], "sess-test-1");
+        assert_eq!(req_row["stem"], "req-body-file");
+        assert_eq!(req_row["request_body_id"], "rbid-7");
+        assert_eq!(resp_row["request_body_id"], "rbid-7", "the exact pairing key on both sides");
+        assert_eq!(resp_row["message_id"], "msg-3");
+        assert_eq!(resp_row["ts_ms"], 1_500);
+        for row in [req_row, resp_row] {
+            let obj = row.as_object().expect("row is an object");
+            assert!(obj.get("device_id").is_none(), "no device_id (no-identities doctrine)");
+            assert!(obj.get("account_uuid").is_none(), "no account_uuid (no-identities doctrine)");
+            assert_eq!(obj.len(), 8, "exactly the spec'd row shape");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn identical_reingest_costs_zero_bytes() {
+        // Dedup safety: a re-ingested pointer with identical content re-appends nothing
+        // (append_changed skips unchanged hashes), per the spec's dedup-safe key.
+        let dir = std::env::temp_dir().join(format!("agentlens-body-links-dedup-test-{}", now_ns()));
+        let mut log = delta_log::DeltaLog::new(&dir, "body-links");
+        let p = agentlens_ingest::BodyPointer {
+            session_id: "sess-test-1".to_owned(),
+            kind: "request",
+            body_ref: Some("f".to_owned()),
+            inline_body: None,
+            request_id: None,
+            span_id: Some("s".to_owned()),
+            model: None,
+            query_source: None,
+            request_body_id: None,
+            message_id: None,
+            message_uuid: None,
+            ts: 5,
+        };
+        let (k, v) = body_link_row(&p);
+        let mut rec = IndexMap::new();
+        rec.insert(k, v);
+        log.append_changed(&rec).expect("first append");
+        let again = log.append_changed(&rec).expect("second append");
+        assert_eq!(again.appended, 0, "unchanged row costs zero bytes");
+        assert_eq!(again.bytes, 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
 #[cfg(test)]
 mod lock_timed_tests {
     use super::*;
