@@ -3,7 +3,7 @@ trdd-id: QSFYIHUO
 title: Migrate cache-history consumers off raw-body scanning onto api_calls/cache_turns
 column: todo
 created: 2026-09-03T04:47:31+0200
-updated: 2026-10-09T00:25:02+0200
+updated: 2026-10-09T00:49:36+0200
 current-owner: main-session
 task-type: refactor
 priority: high
@@ -83,3 +83,7 @@ between capture and re-run to prove the ZERO-bodies claim.
 - 2026-10-09T00:25:02+0200 — column → todo by main-agent@agentlenspro. both blockers' CODE landed (9SYRK6SW committed + was deployed 2026-09-05; GVA8TTJF fb09facf) — schema and views are stable and proven by tests; migration work needs no live collector, its acceptance does
 
 ## Notes and lessons learned
+
+## Step 1 landed (2026-10-09) — cache_event_log.rs
+
+cc49a819. Durable-first enrichment: LedgerEnv gains store_dir (ui.rs threads data_dir/store); load_store_facts = ONE windowed DuckDB scan of the api_call parts (kind='response', ts_ms >= ledger window since) keyed by response stem == OTEL request_id (otelCallEvents.ts:11-13 measured basis); enrich_durable_then_body falls back to the untouched enrich_from_body only when the store has no row (pre-store traffic / capture off). Acceptance test: store seeded through the REAL writer, NO body file, whole ledger driven through a real span segment (numeric ns startTime — the ISO-string parse path returns ts=0, a fixture trap measured here); asserts miss reason + missed tokens + 1-hour TTL all from the DURABLE row. Gates: build 0, clippy -D warnings 0, ccevent_parity 6/6 UNCHANGED (store_dir None == old path), new test 1/1, identities 0. Review round 1 dispositions ALL applied: (1) window filter on the scan; (2) or_insert first-wins note recorded (unique API stems make collisions theoretical); (3) TTL assertion restored. Steps 2 (cache_break_timeline) and 3 (investigator_scan) NOT started — one file at a time per the card.
