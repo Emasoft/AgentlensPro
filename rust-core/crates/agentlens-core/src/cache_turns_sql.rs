@@ -261,6 +261,11 @@ pub const ACCEPTANCE_SQL: &str = "SELECT session_id, ts, model, prompt_id, cache
 
 /// The entry the ui.rs dispatch arm calls: `preset` names a canned query, `sql` is raw caller
 /// SQL over the `api_calls`/`statusline`/`turns` CTEs. window_hours scopes the statusline side.
+/// CONTRACT SPLIT (review round 3): this entry requires BOTH sides (Err naming the absent one)
+/// because its flagship preset is the acceptance SQL, which needs `turns`;
+/// run_cache_turns_sql instead adds the statusline/turns CTEs only when present and serves
+/// api_calls-only queries during a statusline-blind window. Do not "unify" them in either
+/// direction.
 pub fn run_preset_or_sql(
     data_dir: &Path,
     preset: Option<&str>,
