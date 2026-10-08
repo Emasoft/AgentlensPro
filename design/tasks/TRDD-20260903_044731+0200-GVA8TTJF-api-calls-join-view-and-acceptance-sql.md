@@ -3,7 +3,7 @@ trdd-id: GVA8TTJF
 title: api_calls coalesced view, cache_turns statusline join, and the acceptance SQL
 column: dev
 created: 2026-09-03T04:47:31+0200
-updated: 2026-10-08T20:23:41+0200
+updated: 2026-10-08T20:30:44+0200
 current-owner: main-session
 task-type: feature
 priority: high
@@ -121,3 +121,4 @@ Grace write CONFIRMED; no further review round on it. Two records: (1) DOMINANCE
 ## Exit-confirmation (2026-10-08) — SEVENTH diff-check added
 
 The exit-review confirmed the ended loop stays ended (the consolidation write changes no code/evidence/falsifiable claim). It added one item to the parent's diff-check list, making it SEVEN: (7) a test asserts at least one UNPAIRED-HALF row survives into the view output — the falsifiable form of 'full-outer semantics pinned'; without it, item 1 (full-outer present) could pass while a LEFT JOIN silently drops unpaired responses. The list as consolidated: (1) full-outer kept halves, (2) BETWEEN min/max±60s interval, (3) real-writer fixtures, (4) explicit guard assertions, (5) no bare glob, (6) no ignore_errors on read_ndjson_auto, (7) unpaired-half-survival test. This is the last card entry before the STATE-head consolidation at pass-recording.
+DISPOSITION: forwarded to the in-flight worker as an amendment — ONE unpaired-half survival test pointed at api_calls_relation's OWN output (a response link row with request_body_id='' and a span_id matching no request link row must survive with its own fields and session_id from its own link row), explicitly NOT at the final statusline join turns, where unpaired halves correctly do NOT survive. Owner split: checks 1-6 are parent-executed diff verifications at pass-recording; check 7 is worker-owned code; when-the-test-exists is the pass-recording checklist item. No further round (regress-bound fork Q1/Q2: check absorbed by the exit-review that minted it; two-rounds-max spent).
