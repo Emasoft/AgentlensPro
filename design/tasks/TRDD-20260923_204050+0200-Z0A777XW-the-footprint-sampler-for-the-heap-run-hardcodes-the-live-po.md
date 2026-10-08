@@ -1,9 +1,9 @@
 ---
 trdd-id: Z0A777XW
 title: The footprint sampler for the heap run hardcodes the live port and pidfile and is not tracked
-column: ai_review
+column: human_review
 created: 2026-09-23T20:40:50+0200
-updated: 2026-10-08T16:50:49+0200
+updated: 2026-10-08T17:18:05+0200
 current-owner: main-session
 created-by: main-session
 task-type: infra
@@ -24,6 +24,7 @@ status: tasked
 All five boxes ticked. Box 3's evidence: reports/z0a777xw/20261008-box3-samples.tsv (4 data rows, footprints 12/12/14/13 MB numeric, exit 0) from the isolated-alcore run — own HOME/DATA_DIR/ports, pid 67024, SIGTERMed and confirmed gone 2026-10-08 16:40 (verified once at that instant by the same session; not re-derivable evidence). The binary served otlp.* (221705cb, 2026-09-23): the explicit 0s are true zero-traffic values; the mtime-based 'built 2026-10-03' provenance is superseded — mtime proves when the file was written, not what was compiled into it; the behavioral NA-vs-zeros evidence settles it. The same-column no-op move stands repudiated; the ban is on PURPOSELESS same-column moves, not on recording transitions with a reason. Column ai_review, review-pending per the consolidation entry. NEXT ACTION: ai_review pass, then human_review. Earlier body entries are superseded BY THIS BLOCK. reports/ is gitignored — verifiable on this machine only until push.
 2026-10-08 17:45, final-round additions: (1) The pure-move proof was completed — the committed diff of THIS file shows the STATE section as exactly two symmetric line pairs (heading + body block removed from the bottom, added after the title), zero character changes. (2) trddgrep validate and lint were re-run after the restructure: no findings on this card or HDUETCU7 (the tool's output names only unrelated archived cards). (3) This head intentionally omits the owed-checks fact (clippy/check-types) — those attach to the CODE-change card HDUETCU7; this card's box-3 evidence is a sampler TSV against a pre-existing binary, and no code change on this card owes a lint run. (4) The review loop is closed: rounds 1-8 all dispositioned; no fork verdict is pending against the current state.
 2026-10-08 18:30, loop-state reconciliation (the ratification fork's one concrete ask): the session's clerical review loop ended 2026-10-08 with the ratification recorded on the sibling card HDUETCU7 (its STATE head, 18:15 entry) — every finding across the rounds dispositioned, evidence durable under reports/, no pending verdicts. THIS head's 17:45 entry already carried the same closure facts; nothing on this card is superseded by the ratification. Residual limits acknowledged once, here: the cmp content-identity proof covers copy-vs-original only (the chain terminates at a /tmp artifact); the fork verdicts live in the session transcript, so on-card closure claims are self-attestation; all evidence is machine-local until the owner pushes. This entry is the last append to this head — the ai_review pass over the board work starts by reading code, not records.
+2026-10-08 19:30: the substantive ai_review pass over the shared commit 97f6806a (this card's sibling) returned ACCEPT — clean clippy, clean check-types, one non-blocking known-limit recorded (record-after-save gap on the sibling card). No code on THIS card was touched by that commit beyond the emitter it shares; its box-3 evidence (the sampler TSV) was already verified. NEXT: human_review.
 
 ## Approval log
 
@@ -31,6 +32,7 @@ All five boxes ticked. Box 3's evidence: reports/z0a777xw/20261008-box3-samples.
 - 2026-09-24T09:47:46+0200 — column → testing by main-session. sampler landed in 9c363bb8; box 3 needs an isolated-instance run
 - 2026-10-08T16:23:52+0200 — column → testing by main-agent@agentlenspro. All five boxes ticked; box 3 executed 2026-10-08 against an isolated alcore (4 numeric-footprint rows, evidence on the card); awaiting review per board flow
 - 2026-10-08T16:27:45+0200 — column → ai_review by main-agent@agentlenspro. All five boxes ticked, box 3 evidence durable at reports/z0a777xw/20261008-box3-samples.tsv, four review rounds run; per the owner directive the session reviews in the owner's stead, so it proceeds to ai_review rather than parking
+- 2026-10-08T17:18:05+0200 — column → human_review by main-agent@agentlenspro. The substantive ai_review pass over the shared commit returned ACCEPT (clippy/check-types clean); this card's own evidence (sampler TSV, isolated run) verified earlier; proceeds to human_review per the board flow
 
 ## Body
 
