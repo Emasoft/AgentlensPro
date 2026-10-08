@@ -559,7 +559,6 @@ export function scanTranscriptLines(lines: string[], cwd = process.cwd(), ownAge
       if (b.name === 'Agent') {
         // SPAWN credit. MEASURE: any subagent type whose prompt carries the marker — a cheap-worker
         // is a valid MEASURE agent. REVIEW REQUIRES A FORK and a whole-line marker: a worker brief
-        // is a valid MEASURE agent. REVIEW REQUIRES A FORK and a whole-line marker: a worker brief
         // that merely mentions "ROLE: REVIEW" while DESCRIBING this gate's protocol (e.g. this very
         // file's own prose) must not release the gate with no reviewer ever spawned (adversarial
         // review of 268f3080, finding b) — the owner's spec names the review agent a fork, the
