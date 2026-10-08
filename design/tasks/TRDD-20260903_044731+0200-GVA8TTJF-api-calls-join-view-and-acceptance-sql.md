@@ -3,7 +3,7 @@ trdd-id: GVA8TTJF
 title: api_calls coalesced view, cache_turns statusline join, and the acceptance SQL
 column: dev
 created: 2026-09-03T04:47:31+0200
-updated: 2026-10-08T20:20:22+0200
+updated: 2026-10-08T20:21:29+0200
 current-owner: main-session
 task-type: feature
 priority: high
@@ -109,3 +109,7 @@ Claimed to dev; worker dispatched with spec docs_dev/20261008-GVA8TTJF-join-view
 ## Design-review round 1 (2026-10-08) — four amendments
 
 Forwarded to the worker; the parent checks the diff for these before recording anything: (1) HALF-PAIR SEMANTICS PINNED — FULL-OUTER: unpaired requests kept with NULL response fields; unpaired responses kept with session_id from their OWN link row (preserves CAJ5RCP9's full-history goal; dropping either half silently was the unnamed fork). (2) INTERVAL-ANCHORED WINDOW (SQL-CHANGING): the fixed 60s window around request-arrival ts joins the collapsed tick FARTHEST from the anchor and fails exactly on long streaming turns (60s+ routine); fixed by carrying min_ts/max_ts per collapsed turn and joining api.ts_ms BETWEEN min-60s AND max+60s. (3) FIXTURES THROUGH THE REAL WRITER — hand-built parquet drifts from the real ~26-column writer schema; tests build api_call parts through agentlens-store's ingest+flush. (4) COVERAGE: test 1 asserts response-side link session resolution explicitly; stem/span_id guards get failing-row assertions, not just request_body_id. Plus: prompt_id stability (inherited from the flood bench's model, never verified against the real WAL) gets a settling query when live data exists; the sketch's FROM shape is superseded (link-resolved triples drive, parts side-join); the token-join deviation is MIRRORED on CAJ5RCP9 (its box-3 intent was token-fact retrieval — the join retrieves them as payload, which satisfies the letter, but the parent card should say so).
+
+## Amendment-review confirmation (2026-10-08)
+
+Round-2 fork confirmed the four amendment writes: the interval form STRICTLY DOMINATES the fixed window (degenerates to it exactly when a turn is short, strictly contains it when long — no data distribution where the fixed window joins a row the interval form would wrongly include), so the unmeasured turn-length premise is moot as justification; a turn-length histogram remains worthwhile only as grace-width calibration, not as a gate. GRACE WIDTH = 60s, kept for continuity with the old window's constant, tunable — recorded here so the constant is not unexplained. The CAJ5RCP9 mirror is one-way (GVA8TTJF stays authoritative). The parent's diff check before any pass remains: full-outer kept halves, BETWEEN interval, real-writer fixtures, explicit guard assertions, no bare glob, no ignore_errors on read_ndjson_auto.
