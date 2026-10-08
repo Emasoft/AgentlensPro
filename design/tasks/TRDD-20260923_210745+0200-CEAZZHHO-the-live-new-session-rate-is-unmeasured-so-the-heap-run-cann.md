@@ -3,7 +3,7 @@ trdd-id: CEAZZHHO
 title: The live new-session rate is unmeasured so the heap run cannot calibrate session churn
 column: ai_review
 created: 2026-09-23T21:07:45+0200
-updated: 2026-10-08T18:43:00+0200
+updated: 2026-10-08T18:45:28+0200
 current-owner: main-session
 created-by: main-session
 task-type: spike
@@ -43,3 +43,7 @@ The work-review fork's one substantive finding, ACCEPTED: these numbers are a ST
 ## Review round 4 (2026-10-08) — two amendments + the subagent count
 
 Round-4 fork findings, accepted: (a) QUALIFIER AMENDED on this card and EQCGAVGV: the lower bound is conservative for only HALF the acceptance space — under-churn cannot fake a leak (no false attribution) but risks a false EXCLUSION of churn-proportional candidates (a leak proportional to session count scales down with under-modeled churn, potentially below the arm's >=5 MB/min attribution threshold, and a null would then be read as exclusion). EQCGAVGV's own mandated power report (achieved power at 5/10 MB/min) is the real safety net, not the 'conservative' label. (b) STRUCTURAL vs CORROBORATIVE: PQ40PZ9D's id uniqueness is guaranteed STRUCTURALLY by the msg_w prefix (per-worker counter i in the id), with the 1126-id zero-dup scan only corroboration — recorded so no future reader re-runs the scan to verify a design fact. (c) THE SUBAGENT BLIND SPOT MEASURED (was the one cheap missing count): ~/.agentlens/statusline/subagent/ sealed parts (1082 files, 2026-09-23..10-08) carry 291 distinct subagent ids = 0.78/h over the span, 0.68/h over Oct 6-8 (49 ids/72h) versus main-stream 1.32/h same window. COMBINED VISIBILITY RATE: ~2.0/h on Oct 6-8 (1.32 main + 0.68 subagent) — the true churn is HIGHER than the main-stream-only 1.32/h, so the lower-bound claim is confirmed and its gap is now measured, not just asserted. Subagent churn does NOT dominate (about half the main rate). The 225 s sizing stands.
+
+## Review round 5 (2026-10-08) — two one-line corrections
+
+Round-5 fork accepted all four amendment writes with two follow-ups, both applied: (a) the subagent count measures the SECOND stream, not the whole gap — a subagent dying before its first statusline tick is as invisible to subagent/ as a never-ticking session is to main/, and short-lived subagents make that bias STRONGER there; 'gap measured' must not be read as 'gap closed'; headless/no-statusline sessions remain invisible with unknown size. (b) the combined steady rate makes the card's own steady-rate constant stale: 3600/2.0 = ~1800 s, not 2100 (which fed from main-only 1.67/h); the 16/h peak is also main-only (no combined peak-hour table was computed), so 225 s stands provisionally for peak sizing — recompute from a combined table if a steady-rate arm or subagent-burst peak matters. Double-counting check: NOT double-counting — main and subagent ids are disjoint namespaces (uuid vs agent-…), and alcore's card map holds them as separate cards, the population the heap run stresses. The false-exclusion caution is analytic, not measured: it assumes the leak is proportional to live session count; per-request or per-byte leaks do not scale with churn — the power report remains the load-bearing check either way.
