@@ -3114,6 +3114,33 @@ async fn handle(
                         .map_err(|e| format!("transcript sql join failed: {e}"))?;
                         crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
                     }
+                    "run_cache_turns_sql" => {
+                        // TRDD-GVA8TTJF — DuckDB over the api_call parts + body-links + the
+                        // statusline stream. Blocking; spawn_blocking with the lock released.
+                        let data_dir = {
+                            let st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
+                            st.data_dir.clone()
+                        };
+                        let preset = args.get("preset").and_then(Value::as_str).map(str::to_owned);
+                        let sql = args.get("sql").and_then(Value::as_str).map(str::to_owned);
+                        let window = args.get("window").and_then(Value::as_f64);
+                        let limit = args.get("limit").and_then(Value::as_f64);
+                        let payload = tokio::task::spawn_blocking(move || {
+                            crate::cache_turns_sql::run_preset_or_sql(
+                                &data_dir,
+                                preset.as_deref(),
+                                sql.as_deref(),
+                                window,
+                                limit,
+                            )
+                        })
+                        .await
+                        .map_err(|e| format!("cache turns sql join failed: {e}"))?;
+                        // Errors fold INTO the payload (sibling contract): a SQL error is a
+                        // structured tool answer, not a hard failed call.
+                        let payload = payload.unwrap_or_else(|e| serde_json::json!({ "error": e }));
+                        crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
+                    }
                     "get_subscription_usage" => {
                         // The one tool here that talks to the network. Blocking transport + file
                         // locks, so it runs on spawn_blocking with the state lock released first.

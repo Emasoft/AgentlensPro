@@ -40,6 +40,7 @@ pub mod burn;
 pub mod burn_calibration;
 pub mod cache_break;
 pub mod cache_break_timeline;
+pub mod cache_turns_sql;
 pub mod cache_creation_forensics;
 pub mod cache_event_log;
 pub mod heartbeat_cost;
