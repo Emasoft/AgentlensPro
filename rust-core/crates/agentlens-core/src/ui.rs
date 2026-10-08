@@ -3370,9 +3370,9 @@ async fn handle(
                         // A bounded body scan PLUS a span-store walk, so it goes on spawn_blocking
                         // with the state lock released.
                         let now = crate::now_ms() as f64;
-                        let (bodies_dir, spans_dir) = {
+                        let (bodies_dir, spans_dir, store_dir) = {
                             let st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
-                            (crate::burn::guard::default_bodies_dir(&st.data_dir), st.data_dir.join("spans"))
+                            (crate::burn::guard::default_bodies_dir(&st.data_dir), st.data_dir.join("spans"), st.data_dir.join("store"))
                         };
                         let s = |k: &str| args.get(k).and_then(Value::as_str).map(str::to_owned);
                         let n = |k: &str| args.get(k).and_then(Value::as_f64);
@@ -3405,6 +3405,7 @@ async fn handle(
                             let env = crate::cache_event_log::LedgerEnv {
                                 bodies_dir: &bodies_dir,
                                 spans_dir: &spans_dir,
+                                store_dir: Some(&store_dir),
                                 projects_dirs: &projects_dirs,
                                 project_env_dir: project_env_dir.as_deref(),
                                 cwd: &cwd,

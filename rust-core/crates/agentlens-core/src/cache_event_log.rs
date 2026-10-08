@@ -21,6 +21,8 @@
 
 use std::path::{Path, PathBuf};
 
+use agentlens_store::duckdb::Connection;
+
 use chrono::TimeZone;
 use indexmap::IndexMap;
 use serde_json::{Map, Value};
@@ -127,6 +129,9 @@ pub struct CacheEventLogOptions {
 pub struct LedgerEnv<'a> {
     pub bodies_dir: &'a Path,
     pub spans_dir: &'a Path,
+    /// `<dataDir>/store` — QSFYIHUO: the durable api_call facts are read FIRST; the raw body
+    /// file is only a FALLBACK for ids the store has no row for. None in tests without a store.
+    pub store_dir: Option<&'a Path>,
     /// `claudeProjectsDirs()` — the roots whose directory NAMES are the ownership fact.
     pub projects_dirs: &'a [PathBuf],
     /// `process.env.CLAUDE_PROJECT_DIR?.trim()`.
@@ -181,6 +186,71 @@ fn from_body(e: &CacheCreationEvent) -> NormalizedCall {
         from_body: true,
         ..NormalizedCall::default()
     }
+}
+
+/// QSFYIHUO step 1: enrich from the DURABLE store row first; the raw body file is the FALLBACK
+/// for ids the store has no row for (pre-store traffic, capture off). Parity for the control
+/// case (bodies on disk + store row: the store row and the body carry the same facts), a FIX
+/// for the deleted-bodies case (store row survives the delete).
+fn enrich_durable_then_body(
+    env: &LedgerEnv,
+    store_facts: &std::collections::HashMap<String, (f64, Option<String>, Option<f64>)>,
+    request_id: Option<&str>,
+    call: &mut NormalizedCall,
+) {
+    let Some(request_id) = request_id.filter(|s| !s.is_empty()) else { return };
+    let mut enriched = false;
+    if let Some((t1h, reason, missed)) = store_facts.get(request_id) {
+        call.cache_create_1h = *t1h;
+        if let Some(t) = reason {
+            call.cache_miss_reason = Some(t.clone());
+            call.cache_missed_tokens = *missed;
+        }
+        enriched = true;
+    }
+    if !enriched {
+        enrich_from_body(env.bodies_dir, Some(request_id), call);
+    }
+}
+
+/// QSFYIHUO step 1 — the DURABLE enrichment: ONE query over the api_call parts, keyed by the
+/// response stem (= the OTEL `request_id`, otelCallEvents.ts:11-13), returning the 1h write
+/// split and the miss reason the spanstore does not carry. The bodies pass DELETES the bodies
+/// after ingest (TRDD-9SYRK6SW) — the store keeps the facts after the files are gone, which is
+/// the entire reason this card exists. Response rows only: request rows never carry these.
+fn load_store_facts(store_dir: &Path, since_ms: Option<f64>) -> std::collections::HashMap<String, (f64, Option<String>, Option<f64>)> {
+    let mut out = std::collections::HashMap::new();
+    let Some(parts) = agentlens_store::parquet_scan(store_dir, agentlens_store::API_CALLS_DIR) else {
+        return out; // no parts yet — every id falls back to the body file
+    };
+    let Ok(con) = Connection::open_in_memory() else { return out };
+    if con.execute_batch("SET memory_limit='256MiB'; SET threads=2;").is_err() {
+        return out;
+    }
+    // Review round 1 finding: the scan is windowed to the ledger's window — the parts corpus
+    // grows for months (IRNHEN4Z's count hazard) and this is an on-demand user-facing query.
+    // The enrichment target ids all come from events already inside [since, now].
+    let window_filter = since_ms.map_or(String::new(), |s| format!(" AND ts_ms >= {}", s as i64));
+    let Ok(mut stmt) = con.prepare(&format!(
+        "SELECT stem, COALESCE(tier_1h_tokens, 0), cache_miss_reason, cache_missed_input_tokens \
+         FROM {parts} WHERE kind = 'response'{window_filter}"
+    )) else { return out };
+    let mut rows = match stmt.query([]) {
+        Ok(r) => r,
+        Err(_) => return out,
+    };
+    while let Ok(Some(row)) = rows.next() {
+        let stem: String = match row.get(0) { Ok(v) => v, Err(_) => continue };
+        let t1h: f64 = row.get::<_, i64>(1).unwrap_or(0) as f64;
+        let reason: Option<String> = row.get(2).ok();
+        let missed: Option<i64> = row.get(3).ok();
+        // or_insert = first-scanned wins. Response stems are API-assigned unique req_<id>s, so
+        // a same-stem-different-content collision (re-ingest) is theoretical; if it ever fires,
+        // the stale row would beat a fresher one — revisit with a ts ordering before relying on
+        // multi-row stems.
+        out.entry(stem).or_insert((t1h, reason, missed.map(|m| m as f64)));
+    }
+    out
 }
 
 /// Read the two things OTEL does not carry from a call's raw body, when it is still on the spool:
@@ -358,6 +428,9 @@ pub fn build_cache_event_log(opts: &CacheEventLogOptions, env: &LedgerEnv) -> Va
         .map(|r| r.events)
         .unwrap_or_default();
     let using_otel = !otel.is_empty();
+    // QSFYIHUO step 1: load the durable response facts ONCE (the ids to look up are only known
+    // per-event, but the store query is a full-part scan — one scan, not one per call).
+    let store_facts = env.store_dir.map(|d| load_store_facts(d, Some(since))).unwrap_or_default();
     let calls: Vec<NormalizedCall> = if using_otel {
         otel.iter()
             .map(|e| {
@@ -377,7 +450,7 @@ pub fn build_cache_event_log(opts: &CacheEventLogOptions, env: &LedgerEnv) -> Va
                     from_body: false,
                     ..NormalizedCall::default()
                 };
-                enrich_from_body(env.bodies_dir, e.request_id.as_deref(), &mut c);
+                enrich_durable_then_body(env, &store_facts, e.request_id.as_deref(), &mut c);
                 c
             })
             .collect()
@@ -643,4 +716,79 @@ pub fn format_cache_event_log(log: &Value, format: &str) -> Value {
     m.insert("text".into(), Value::String(lines.join("\n")));
     m.insert("coverage".into(), log.get("coverage").cloned().unwrap_or(Value::Null));
     Value::Object(m)
+}
+
+#[cfg(test)]
+mod qs_step1_tests {
+
+#[test]
+fn enrich_prefers_the_durable_store_row_when_bodies_are_gone() {
+    // QSFYIHUO acceptance box 1, deleted-bodies case: a store with the response row and NO
+    // body file must still enrich (1h split + miss reason) — the facts survive the delete.
+    let data = std::env::temp_dir().join(format!("qs-{}-enrich", std::process::id()));
+    let _ = std::fs::remove_dir_all(&data);
+    std::fs::create_dir_all(data.join("bodies")).unwrap();
+    // Seed the store through the REAL writer: one response body ingested, then the body file
+    // removed (the bodies pass's delete gate is what does this in production).
+    let mut store = agentlens_store::open_store(&data.join("store"), agentlens_store::DEFAULT_MEMORY_LIMIT, 4).unwrap();
+    let raw = r#"{"id":"msg_x","model":"claude-opus-5","stop_reason":"end_turn","usage":{"input_tokens":10,"output_tokens":2,"cache_read_input_tokens":5,"cache_creation_input_tokens":7,"cache_creation":{"ephemeral_5m_input_tokens":3,"ephemeral_1h_input_tokens":4}},"diagnostics":{"cache_miss_reason":{"type":"below_min_cacheable","cache_missed_input_tokens":99}}}"#;
+    agentlens_store::ingest_body(&mut store, "req_x.response.json", raw, 1_700_000_000_000).unwrap();
+    agentlens_store::flush_detailed(&mut store).unwrap();
+    drop(store);
+    let bodies_dir = data.join("bodies");
+    let store_dir = data.join("store");
+    let zone = crate::cache_event_log::DisplayZone::system();
+    // Ownership fact: a projects dir NAMED for the project, containing <session>.jsonl.
+    let proj = data.join("claude-projects").join("proj-x");
+    std::fs::create_dir_all(&proj).unwrap();
+    std::fs::write(proj.join("sess-q.jsonl"), "{}\n").unwrap();
+    let dirs: Vec<std::path::PathBuf> = vec![data.join("claude-projects")];
+    let env = crate::cache_event_log::LedgerEnv {
+        bodies_dir: &bodies_dir,
+        spans_dir: &data.join("spans"),
+        store_dir: Some(store_dir.as_path()),
+        projects_dirs: &dirs,
+        project_env_dir: Some("proj-x"),
+        cwd: "/w",
+        zone: &zone,
+        now_ms: 1_700_000_100_000.0,
+    };
+    // Drive the enrichment through the PUBLIC entry: one OTEL event whose request_id names the
+    // response row. build_cache_event_log needs a spans store to read; give it the real span
+    // format instead of an empty dir so scan_call_events succeeds with zero events... simpler:
+    // call the module's enrichment indirectly is not possible (private), so exercise the whole
+    // ledger with a real span segment carrying one api_request event with request_id=req_x.
+    // The spanstore format is ndjson segments; write one.
+    std::fs::create_dir_all(env.spans_dir).unwrap();
+    let seg = env.spans_dir.join("2023-11-14.ndjson");
+    let attr = |k: &str, v: serde_json::Value| serde_json::json!({"key": k, "value": {"stringValue": v}});
+    let attrn = |k: &str, v: i64| serde_json::json!({"key": k, "value": {"intValue": v}});
+    let span = serde_json::json!({
+        "name": "claude_code.api_request",
+        "startTime": 1_700_000_000_000_000_000i64,
+        "attributes": [
+            attr("session.id", serde_json::json!("sess-q")), attr("request_id", serde_json::json!("req_x")),
+            attr("model", serde_json::json!("claude-opus-5")), attrn("input_tokens", 10), attrn("output_tokens", 2),
+            attrn("cache_read_tokens", 5), attrn("cache_creation_tokens", 7)
+        ]
+    });
+    std::fs::write(&seg, format!("{span}\n")).unwrap();
+    let opts = crate::cache_event_log::CacheEventLogOptions {
+        session_id: Some("sess-q".into()),
+        window_hours: Some(24.0),
+        ..Default::default()
+    };
+    let log = crate::cache_event_log::build_cache_event_log(&opts, &env);
+    let rows = log["rows"].as_array().cloned().unwrap_or_default();
+    assert_eq!(rows.len(), 1, "one ledger row: {log}");
+    let row = &rows[0];
+    assert_eq!(row["cacheMissReason"], serde_json::json!("below_min_cacheable"), "miss reason from the DURABLE row, body file absent: {row}");
+    assert_eq!(row["cacheMissedTokens"], serde_json::json!(99));
+    // The 1h/5m split rides the durable row too: the ttl derivation is what separates a TTL
+    // expiry from a genuine break, and the split (5m=3, 1h=4) is the whole story. The row
+    // surfaces it via cacheWriteTtl when the write is 1h-majority (4 > 3).
+    assert_eq!(row["cacheWriteTtl"], serde_json::json!("1-hour"), "TTL split from the DURABLE row: {row}");
+    let _ = std::fs::remove_dir_all(&data);
+}
+
 }

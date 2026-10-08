@@ -108,6 +108,7 @@ fn run(o: &Value, opts: &CacheEventLogOptions, c: &Case) -> Value {
     let env = LedgerEnv {
         bodies_dir: &bodies(),
         spans_dir: &c.spans,
+        store_dir: None,
         projects_dirs: &dirs,
         project_env_dir: c.project_env_dir.as_deref(),
         cwd: "/w/alpha",
@@ -123,6 +124,7 @@ fn raw(o: &Value, opts: &CacheEventLogOptions, c: &Case) -> Value {
     let env = LedgerEnv {
         bodies_dir: &bodies(),
         spans_dir: &c.spans,
+        store_dir: None,
         projects_dirs: &dirs,
         project_env_dir: c.project_env_dir.as_deref(),
         cwd: "/w/alpha",
