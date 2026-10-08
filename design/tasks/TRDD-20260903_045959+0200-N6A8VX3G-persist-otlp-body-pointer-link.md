@@ -3,7 +3,7 @@ trdd-id: N6A8VX3G
 title: Persist the OTLP body-pointer link so response rows gain a session_id
 column: dev
 created: 2026-09-03T04:59:59+0200
-updated: 2026-10-08T18:54:41+0200
+updated: 2026-10-08T18:58:21+0200
 current-owner: main-session
 task-type: feature
 priority: high
@@ -77,3 +77,7 @@ one-call-lagged, neither a same-call pair. This card is only about the same-call
 ## Dispatched (2026-10-08)
 
 Claimed to dev. Design re-based ON SOURCE READS: the card's 'parquet writer at call_body_registry.rs' becomes a DeltaLog (NDJSON delta+snapshot, the EXISTING durable plumbing — delta_log.rs) at the record_ingested site (lib.rs:1067), because call_body_registry.rs has no flush plumbing and the card says 'reuse existing flush plumbing — do not invent a new one'. Rows carry both sides' pairing keys (request_body_id/message_id from CC >=2.1.274) so GVA8TTJF resolves the pair in SQL; pair resolution itself stays in-memory. Each pointer event = one durable row (the card's 'one row per resolved pair' implemented as one row per pointer event carrying its side's keys — joinable by request_body_id/span_id). No device_id/account_uuid (no-identities doctrine) — they ARE on the wire in metadata.user_id and are dropped at row construction. Parquet-to-NDJSON substitution + the per-pointer reading recorded on GVA8TTJF next. Worker spec: docs_dev/20261008-N6A8VX3G-body-links-spec.md; lean-worker dispatched (load 15.75, under the card's 20 bar). Uncommitted — main session commits.
+
+## Design-review round 1 (2026-10-08) — three required amendments
+
+The design fork accepted the DeltaLog re-base with three REQUIRED amendments, forwarded to the worker: (1) ERROR SEMANTICS pinned — the link append must never fail the ingest: on Err, one eprintln and continue (the sweeper's 'could not save (partial)' pattern), no ?/panic. (2) BOOT-COMPACT replaces never-compact — after load() at boot, save() once: bounds the delta to per-boot volume (~10k rows/2.2MB per DAY of live ingest makes never-compact ~800MB/year with boot parse costs, the 'trivial' claim was false) and heals a torn trailing line after kill -9 (read_lines tolerates one torn tail; DuckDB read_ndjson_auto does NOT — without this the SQL consumer errors after every hard crash). (3) The data_dir construction trap named (other DeltaLogs live in the sweeper which owns data_dir — thread it explicitly, no hacks) and the row constructor extracted as a pure fn body_link_row(p) -> (String, Value) so the unit test is reachable. Also recorded: pending-Vec loses rows forever on a kill (pointer events are transient, nothing re-delivers) — immediate-append preferred; a same-key-different-content row (spool rewrite) appends a later line that wins on replay, graceful. Durable rows outlive the registry's LRU eviction (200x400) — GVA8TTJF's join covers all history, not just the resident window: the real benefit, worth stating on GVA8TTJF with the NDJSON read path + torn-line note.
