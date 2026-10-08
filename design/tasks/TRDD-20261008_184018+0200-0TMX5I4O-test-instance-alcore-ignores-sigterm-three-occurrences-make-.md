@@ -4,7 +4,7 @@ title: Test-instance alcore ignores SIGTERM - three occurrences make it a patter
 column: backburner
 status: tasked
 created: 2026-10-08T18:40:18+0200
-updated: 2026-10-08T18:40:18+0200
+updated: 2026-10-08T18:43:15+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -24,3 +24,7 @@ Test alcore instances repeatedly survive SIGTERM within a normal wait: the orpha
 ## Approval log
 
 - 2026-10-08T18:40:18+0200 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+
+## Splitting observation
+
+Round-4 fork addition: the card's three hypotheses need a DISCRIMINATING observation, not re-derivation - grep the test instance's server.log for the shutdown path's own lines in the window between SIGTERM and SIGKILL; which lines appear (or none) splits the three hypotheses (handler-not-installed vs handler-deferred vs pid_lock gating).

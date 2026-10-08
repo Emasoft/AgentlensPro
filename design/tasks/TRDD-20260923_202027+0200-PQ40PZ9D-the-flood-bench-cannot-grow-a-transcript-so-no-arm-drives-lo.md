@@ -3,7 +3,7 @@ trdd-id: PQ40PZ9D
 title: The flood bench cannot grow a transcript so no arm drives log-sweeper rebuilds
 column: human_review
 created: 2026-09-23T20:20:27+0200
-updated: 2026-10-08T18:40:05+0200
+updated: 2026-10-08T18:43:15+0200
 current-owner: main-session
 created-by: main-session
 task-type: infra
@@ -40,3 +40,7 @@ Acceptance: [x] the isolated instance's summary misses and session-card count ri
 ## Review round 3 (2026-10-08)
 
 The work-review fork's findings, dispositioned: (1) id-counter scope CONFIRMED PER-WORKER — transcriptLineNo is declared inside worker() (line 519), and an all-1126-lines scan found 1126 distinct ids, zero dups; the single-sampled-file gap is closed. (2) 'Parser accepts with silently defaulted fields' ceiling NAMED: all 16 bench cards share one synthetic cwd/workspace (single-project slug) — a fidelity ceiling a real fleet would not have; acceptable for a churn/heap bench, recorded here as the ceiling. (3) refusal-error message says 'the real home (or its .claude)' for every branch including '/' — cosmetic, left. (4) SIGTERM-insufficient-against-test-alcore is now a THREE-occurrence pattern (pids 32797/50556 orphans, this run's 43823) — filed as its own card, not a note. (5) Column: this card's live run WAS the test; testing → human_review is the honest hop (the substantive code pass happened in two adversarial spec rounds + the parent's diff read).
+
+## Review round 4 (2026-10-08)
+
+Round-4 fork: the id-uniqueness closure was over-claimed as scan-proven. CORRECTED: uniqueness is guaranteed STRUCTURALLY by the msg_w${i} worker-index prefix in the id (each worker's counter is its own), with the 1126-distinct-ids zero-dup scan across all 16 files as corroboration only. No further action.

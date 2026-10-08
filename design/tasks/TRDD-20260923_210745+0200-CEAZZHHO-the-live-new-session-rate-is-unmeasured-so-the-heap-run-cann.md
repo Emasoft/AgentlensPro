@@ -3,7 +3,7 @@ trdd-id: CEAZZHHO
 title: The live new-session rate is unmeasured so the heap run cannot calibrate session churn
 column: ai_review
 created: 2026-09-23T21:07:45+0200
-updated: 2026-10-08T18:40:33+0200
+updated: 2026-10-08T18:43:00+0200
 current-owner: main-session
 created-by: main-session
 task-type: spike
@@ -39,3 +39,7 @@ Source: sealed statusline parquet parts (~/.agentlens/statusline/main/*/part-*.p
 ## Review round 3 (2026-10-08) — the visibility qualifier
 
 The work-review fork's one substantive finding, ACCEPTED: these numbers are a STATUSLINE-VISIBILITY rate, not a session-creation rate — a session that never POSTs a statusline sample (subagents post to a separate stream, headless runs, sessions killed before their first tick) is invisible to the sealed main-stream parts, so 1.67/h steady and 16/h peak are LOWER BOUNDS on true churn. The card pre-authorized the collector's session cards as the alternative source that counts everything the sweeper saw; the cheaper statusline source was used and the blind spot was unnamed. Disposition: the qualifier is now recorded HERE and on EQCGAVGV's calibration line; the heap-run owner (or this session, on a later pass) may re-count from log-session cards if churn calibration proves sensitive to the gap. The DERIVED --new-session-every 225 s stands as a sizing choice on a lower-bound rate — churn may be FASTER than 225 s models, meaning the bench under-churns relative to reality, which is the conservative direction for a heap-ratchet hunt (it cannot manufacture a per-session leak no real session exhibits, but it may miss one that churns faster than modeled).
+
+## Review round 4 (2026-10-08) — two amendments + the subagent count
+
+Round-4 fork findings, accepted: (a) QUALIFIER AMENDED on this card and EQCGAVGV: the lower bound is conservative for only HALF the acceptance space — under-churn cannot fake a leak (no false attribution) but risks a false EXCLUSION of churn-proportional candidates (a leak proportional to session count scales down with under-modeled churn, potentially below the arm's >=5 MB/min attribution threshold, and a null would then be read as exclusion). EQCGAVGV's own mandated power report (achieved power at 5/10 MB/min) is the real safety net, not the 'conservative' label. (b) STRUCTURAL vs CORROBORATIVE: PQ40PZ9D's id uniqueness is guaranteed STRUCTURALLY by the msg_w prefix (per-worker counter i in the id), with the 1126-id zero-dup scan only corroboration — recorded so no future reader re-runs the scan to verify a design fact. (c) THE SUBAGENT BLIND SPOT MEASURED (was the one cheap missing count): ~/.agentlens/statusline/subagent/ sealed parts (1082 files, 2026-09-23..10-08) carry 291 distinct subagent ids = 0.78/h over the span, 0.68/h over Oct 6-8 (49 ids/72h) versus main-stream 1.32/h same window. COMBINED VISIBILITY RATE: ~2.0/h on Oct 6-8 (1.32 main + 0.68 subagent) — the true churn is HIGHER than the main-stream-only 1.32/h, so the lower-bound claim is confirmed and its gap is now measured, not just asserted. Subagent churn does NOT dominate (about half the main rate). The 225 s sizing stands.
