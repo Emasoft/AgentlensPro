@@ -3,7 +3,7 @@ trdd-id: GVA8TTJF
 title: api_calls coalesced view, cache_turns statusline join, and the acceptance SQL
 column: dev
 created: 2026-09-03T04:47:31+0200
-updated: 2026-10-08T20:22:48+0200
+updated: 2026-10-08T20:23:41+0200
 current-owner: main-session
 task-type: feature
 priority: high
@@ -117,3 +117,7 @@ Round-2 fork confirmed the four amendment writes: the interval form STRICTLY DOM
 ## STATE consolidation obligation (2026-10-08, review round 3 — confirms the grace write; chain ended)
 
 Grace write CONFIRMED; no further review round on it. Two records: (1) DOMINANCE PHRASING CLAUSE: 'strictly dominates' is true of join MEMBERSHIP (the interval's match set is a superset containing the fixed window's, strictly larger on long turns; short turns degenerate to it) — but the interval also ADMITS more matched rows per turn when ticks are sparse (a tick 45s after the last sample joins that the fixed window missed): intended semantics, a superset-where-it-matters, not 'same matches plus safer'. (2) STATE HEAD OWED BEFORE ai_review — the card spans multiple sessions of accumulation (one 2026-09-03 entry + four 2026-10-08 entries); at the pass-recording turn the parent consolidates a STATE head right after the title: NEXT ACTION (await worker report → six-part diff check: full-outer kept halves, BETWEEN min/max±60s interval, real-writer fixtures, explicit guard assertions, no bare glob, no ignore_errors on read_ndjson_auto → record pass), the authoritative design summary (link-table pairing via request_body_id/span_id with <> '' guards, interval window grace=60s tunable, full-outer half-pairs, pending-deploy live acceptance), and the SUPERSEDED list (the WHAT's 4-column token join wording, the fixed-window form, the parquet assumption for the link table, the FROM api_parts-sketch join shape). No further card entries until that consolidation.
+
+## Exit-confirmation (2026-10-08) — SEVENTH diff-check added
+
+The exit-review confirmed the ended loop stays ended (the consolidation write changes no code/evidence/falsifiable claim). It added one item to the parent's diff-check list, making it SEVEN: (7) a test asserts at least one UNPAIRED-HALF row survives into the view output — the falsifiable form of 'full-outer semantics pinned'; without it, item 1 (full-outer present) could pass while a LEFT JOIN silently drops unpaired responses. The list as consolidated: (1) full-outer kept halves, (2) BETWEEN min/max±60s interval, (3) real-writer fixtures, (4) explicit guard assertions, (5) no bare glob, (6) no ignore_errors on read_ndjson_auto, (7) unpaired-half-survival test. This is the last card entry before the STATE-head consolidation at pass-recording.
