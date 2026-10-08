@@ -1,9 +1,9 @@
 ---
 trdd-id: PQ40PZ9D
 title: The flood bench cannot grow a transcript so no arm drives log-sweeper rebuilds
-column: dev
+column: testing
 created: 2026-09-23T20:20:27+0200
-updated: 2026-10-08T18:32:51+0200
+updated: 2026-10-08T18:33:11+0200
 current-owner: main-session
 created-by: main-session
 task-type: infra
@@ -15,6 +15,7 @@ approved: true
 approval-judge: main-session
 approval-datetime: 2026-09-23T20:20:27+0200
 status: tasked
+implementation-commits: [df44e8de]
 ---
 
 # The flood bench cannot grow a transcript so no arm drives log-sweeper rebuilds
@@ -29,6 +30,7 @@ Acceptance: [x] the isolated instance's summary misses and session-card count ri
 
 - 2026-09-23T20:20:27+0200 — MANDATE issued by main-session (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-10-08T17:40:51+0200 — column → dev by main-agent@agentlenspro.
+- 2026-10-08T18:33:11+0200 — column → testing by main-agent@agentlenspro.
 
 ## Implemented (2026-10-08)
 
