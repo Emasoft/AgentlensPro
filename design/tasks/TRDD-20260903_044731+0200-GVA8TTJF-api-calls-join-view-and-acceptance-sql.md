@@ -3,7 +3,7 @@ trdd-id: GVA8TTJF
 title: api_calls coalesced view, cache_turns statusline join, and the acceptance SQL
 column: planned
 created: 2026-09-03T04:47:31+0200
-updated: 2026-09-03T08:34:55+0200
+updated: 2026-10-08T20:01:19+0200
 current-owner: main-session
 task-type: feature
 priority: high
@@ -91,3 +91,7 @@ pattern), not as SQL `CREATE VIEW` statements:
 ## Approval log
 
 ## Notes and lessons learned
+
+## N6A8VX3G landed — join requirements for THIS card (2026-10-08)
+
+The link table is real: NDJSON DeltaLog at <dataDir>/body-links.delta.ndjson (+ .snapshot.ndjson after each boot's compact_now), row = {"k":"<span>:<kind>:<ts>","v":{session_id, span_id, kind, stem, request_id, request_body_id, message_id, ts_ms}} — read with read_ndjson_auto. TWO HARD REQUIREMENTS before this card's acceptance SQL is written: (1) GUARD THE EMPTY-STRING KEYS: N6A8VX3G rows default absent Options to '' (fixed-width schema stability) — on pre-2.1.274 traffic request_body_id is '' on BOTH a request row and a response row of DIFFERENT calls, which cross-match in an equality join (NULL would have been join-safe; '' is not). Every join on request_body_id/message_id/stem MUST add <> '' guards, or the cache_turns join silently produces false pairs. (2) THE LINK RESOLVES session_id BY STEM/PTR-KEYS, NOT RESOLUTION: response api_call rows written by 9SYRK6SW carry session_id only when extract_meta found it in the body; the link table's job is the durable stem↔session binding plus the exact pairing keys — join api_call.stem to link.stem (with kind awareness), not to a nonexistent in-memory resolution step. Also: the link table's rows are NDJSON (the card's parquet parenthetical was superseded — read_ndjson_auto does NOT tolerate a torn trailing line; the boot-compact heals it, but a snapshot older than the last crash delta is the readable form).
