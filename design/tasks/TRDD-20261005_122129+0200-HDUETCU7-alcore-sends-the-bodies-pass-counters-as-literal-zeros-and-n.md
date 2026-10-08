@@ -4,7 +4,7 @@ title: alcore sends the bodies pass counters as literal zeros and never sends th
 column: testing
 status: tasked
 created: 2026-10-05T12:21:29+0200
-updated: 2026-10-05T18:03:48+0200
+updated: 2026-10-08T16:15:59+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -29,10 +29,10 @@ By the same worker's read (docs_dev, gitignored; not re-read by the main agent):
 
 ## Acceptance
 
-- [ ] bodies_pass publishes the files deleted and bytes freed that it counts today, and records the time of the last pass that deleted anything (not held anywhere today), where server_stats.rs can read it; the emitter sends real values for lastPass, reclaimedSinceBoot and lastNonZeroPassAt in place of the literals. Kept files and bytes are not counted today; either count them or stop sending them.
-- [ ] A Rust test runs a pass that deletes at least one file and asserts the emitted figures are non-zero; it goes red when the literals are restored.
-- [ ] The stale comment at server_stats.rs about line 538 says what is and is not ported.
-- [ ] persistence.bodiesLastPurge is either fed from the same counts or removed, with every reader of it named here first.
+- [x] bodies_pass publishes the files deleted and bytes freed that it counts today, and records the time of the last pass that deleted anything (not held anywhere today), where server_stats.rs can read it; the emitter sends real values for lastPass, reclaimedSinceBoot and lastNonZeroPassAt in place of the literals. Kept files and bytes are not counted today; either count them or stop sending them.
+- [x] A Rust test runs a pass that deletes at least one file and asserts the emitted figures are non-zero; it goes red when the literals are restored.
+- [x] The stale comment at server_stats.rs about line 538 says what is and is not ported.
+- [x] persistence.bodiesLastPurge is either fed from the same counts or removed, with every reader of it named here first.
 
 Removing the cumulative line and its two declarations instead is the owner's decision; record it here and on TRDD-FGN5TY7E before any declaration is removed. No priority was chosen for this card; TRDD-FGN5TY7E, which it was split from, is high.
 
@@ -40,6 +40,7 @@ Removing the cumulative line and its two declarations instead is the owner's dec
 
 - 2026-10-05T12:21:29+0200 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-10-05T18:03:48+0200 — column → testing by main-agent@agentlenspro. code landed in 97f6806a; the full crate test run is owed
+- 2026-10-08T16:15:59+0200 — column → testing by main-agent@agentlenspro. All four boxes ticked on the 2026-10-08 full-crate green run (766/0, exit 0, evidence recorded on the card); code verified in source and tests, awaiting review per board flow
 
 ## Implementation 2026-10-05 (commit 97f6806a)
 
@@ -51,3 +52,8 @@ Removing the cumulative line and its two declarations instead is the owner's dec
 - Checks NOT run: the rest of the agentlens-core suite (four other test files call bodies_pass; the crate's unit tests), cargo clippy, pnpm check-types. No box is ticked until the full crate run is recorded here; a red run reopens the commit.
 - Corrections to the commit message, recorded here because the commit is not amended: 'the only cost' should read 'the known cost'; its list of early exits that record nothing omits the poisoned state lock and the empty scope; 'no warnings' holds for the final run only; 'Semantics follow the retired TypeScript server' has the keptFiles exception above; 'printed last pass archived 0' is by the source, never rendered.
 - Known limits: freedBytes includes relocated stranded files and can exceed the bytes of removedFiles; a store pass that examines files and removes none is not covered by the test; the module header of server_stats.rs still lists the body archive among subsystems not ported, which box 3 as written (the comment near line 538) does not cover.
+
+## Verification 2026-10-08
+
+Full crate test run recorded 2026-10-08 16:14: cargo test -p agentlens-core (via --manifest-path rust-core/Cargo.toml), exit 0, 766 passed / 0 failed across 120 suites, no compiler warnings. Both named test files green: chores_bodies_pass_stats 1/1, server_stats 4/4 integration (plus 4 in-module capture_block_tests unit tests). Run started at load 12.24 (under the 20 threshold), finished at 16:13. Evidence: reports/hduetcu7/20261008_161351+0200-full-crate-test-run.md, raw output /tmp/alcore-full-test.txt. The one mutation run's caveat (load 42) from 2026-10-05 stands as recorded; this clean full run at an in-rule load supersedes the 'no box ticked until the full crate run' hold.
+2026-10-08 16:20: All four boxes ticked on the green full-crate run. Box 4's reader sweep was performed by a worker on 2026-10-05 (recorded under Implementation) and the bodiesLastPurge feed decision landed with commit 97f6806a; nothing in this run contradicts it. Next: the card owes a column move to ai_review/human review per the board flow — not yet made, recorded as pending.
