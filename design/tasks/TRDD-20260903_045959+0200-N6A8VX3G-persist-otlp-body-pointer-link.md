@@ -3,7 +3,7 @@ trdd-id: N6A8VX3G
 title: Persist the OTLP body-pointer link so response rows gain a session_id
 column: testing
 created: 2026-09-03T04:59:59+0200
-updated: 2026-10-08T20:04:30+0200
+updated: 2026-10-09T00:16:17+0200
 current-owner: main-session
 task-type: feature
 priority: high
@@ -99,3 +99,7 @@ Four follow-ups, all accepted: (1) BOX-1 CONTRACT CLARIFIED: the ticked per-poin
 ## Review round 3 — loop exit + two amendments (2026-10-08)
 
 The round-3 fork found the loop's own exit condition and two amendments, all applied: (1) TORN-TAIL TEST DOWNGRADED from complete-blocker to test-and-document — the trace shows read_lines drops the torn tail, compaction rewrites from the parsed map, so the falsifier would guard an ALREADY-GUARDED path (delta_log's own compaction-verify + the sweeper's daily production exercise); write the 5-line test when the card is next touched, but a passing test of an already-tolerated path is not a gate; the gate is 'test exists and passes, or the guarded failure mode is documented as unreachable'. (2) CONTRACT LINKAGE MADE ONE-WAY: this card's acceptance ends at 'rows carry both sides' keys, faithfully' — whether the join guards them is GVA8TTJF's acceptance, not this card's; the cross-reference stands as a note, removed as a contract term. (3) RESTART-TIMING MEASUREMENT, now executable: corpus = ~700k synthetic link rows (1 year at the measured rate, ~140MB delta); metric = wall-clock of restore's body-links block (load+compact_now); baseline = same boot with an empty delta; verdict — under ~1s the ceiling sleeps, tens of seconds the ratio gate becomes near-term. (4) THE LOOP ENDS HERE per its own criterion: a round is value-positive iff a finding changes code, evidence, or a falsifiable claim; round 4 was wording-only (value-negative), and no further round on this chain fires without a named code/evidence change. The meta-verdict precedent (record-review loop ended as value-negative) applies.
+
+## GVA8TTJF wired the link (2026-10-09)
+
+GVA8TTJF's api_calls_relation resolves a response row's session_id via the link table in real DuckDB tests (unpaired-half survival test asserts session from the response's OWN link row; paired test asserts the request-side session through the pair) — acceptance box 3's synthetic-form is now proven at the SQL level; the real-pair live form stays pending-deploy with GVA8TTJF.

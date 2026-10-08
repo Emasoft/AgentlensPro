@@ -1,9 +1,9 @@
 ---
 trdd-id: GVA8TTJF
 title: api_calls coalesced view, cache_turns statusline join, and the acceptance SQL
-column: dev
+column: ai_review
 created: 2026-09-03T04:47:31+0200
-updated: 2026-10-08T20:30:44+0200
+updated: 2026-10-09T00:15:44+0200
 current-owner: main-session
 task-type: feature
 priority: high
@@ -14,6 +14,7 @@ npt: []
 eht: []
 blocked-by: [9SYRK6SW, N6A8VX3G]
 status: tasked
+implementation-commits: [fb09facf]
 ---
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-03
@@ -91,6 +92,7 @@ pattern), not as SQL `CREATE VIEW` statements:
 
 ## Approval log
 - 2026-10-08T20:07:30+0200 — column → dev by main-agent@agentlenspro.
+- 2026-10-09T00:15:44+0200 — column → ai_review by main-agent@agentlenspro. implementation + 7-check adversarial review complete; live acceptance pending owner deploy
 
 ## Notes and lessons learned
 
@@ -122,3 +124,7 @@ Grace write CONFIRMED; no further review round on it. Two records: (1) DOMINANCE
 
 The exit-review confirmed the ended loop stays ended (the consolidation write changes no code/evidence/falsifiable claim). It added one item to the parent's diff-check list, making it SEVEN: (7) a test asserts at least one UNPAIRED-HALF row survives into the view output — the falsifiable form of 'full-outer semantics pinned'; without it, item 1 (full-outer present) could pass while a LEFT JOIN silently drops unpaired responses. The list as consolidated: (1) full-outer kept halves, (2) BETWEEN min/max±60s interval, (3) real-writer fixtures, (4) explicit guard assertions, (5) no bare glob, (6) no ignore_errors on read_ndjson_auto, (7) unpaired-half-survival test. This is the last card entry before the STATE-head consolidation at pass-recording.
 DISPOSITION: forwarded to the in-flight worker as an amendment — ONE unpaired-half survival test pointed at api_calls_relation's OWN output (a response link row with request_body_id='' and a span_id matching no request link row must survive with its own fields and session_id from its own link row), explicitly NOT at the final statusline join turns, where unpaired halves correctly do NOT survive. Owner split: checks 1-6 are parent-executed diff verifications at pass-recording; check 7 is worker-owned code; when-the-test-exists is the pass-recording checklist item. No further round (regress-bound fork Q1/Q2: check absorbed by the exit-review that minted it; two-rounds-max spent).
+
+## Implemented + reviewed (2026-10-09) — parent-executed after worker deaths
+
+OWNERSHIP NOTE (review item): the lean-worker died 3x on transient API timeouts after ~3h of reading with nothing on disk; the PARENT implemented everything (stop + take-over after the owner asked what the wait was for). Implemented per the spec + 7 amendments: cache_turns_sql.rs (api_calls_relation coalesced through the body-links link table with <>'' guards + the parse_filename stem bridge; cache_turns_relation per-turn collapse + 60s window + writePct; run_cache_turns_sql CTE surface; run_preset_or_sql + ACCEPTANCE_SQL) + ui.rs run_cache_turns_sql arm (spawn_blocking, lock released). 4 real-DuckDB tests through the REAL writers incl. check 7 (survival at the api_calls level). Gates: build 0, clippy -D warnings 0, 4/4, identities 0. Report: docs_dev/20261009-0000-GVA8TTJF-impl-report.md (gitignored). SEVEN CHECKS ALL PASS (review fork verdict): 1 kept-halves PASS (paired-req UNION orphan-resp shape), 2 window PASS w/ named limit, 3 real-writer PASS, 4 guards PASS (falsifiably failed pre-fix), 5 no-glob PASS, 6 no-ignore_errors PASS, 7 right-level PASS. Review dispositions APPLIED in code: (a) payload error-folding — tool_ok_lean takes &Value, sibling folds errors INTO the payload; the arm does unwrap_or_else(json!({error})) instead of ? so a SQL error is a structured answer, not a failed call; (b) from-turns heuristic DELETED — the full WITH always builds (extra CTEs harmless; heuristic missed newline variants). NAMED LIMITS (not blockers): (1) latest-tick collapse — a call near the START of a long turn can fall outside 60s of the LATEST tick and miss the join (spec-conformant cost of the prescribed collapse); (2) UNION BY NAME schema-growth — orphan arm aliases explicitly, paired arm projects from req.*/resp.*; a future api_call column addition updates both arms; per-column projection when next touched. Commit fb09facf. Live acceptance pending-deploy (owner).
