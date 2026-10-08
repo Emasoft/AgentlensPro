@@ -1,9 +1,9 @@
 ---
 trdd-id: N6A8VX3G
 title: Persist the OTLP body-pointer link so response rows gain a session_id
-column: dev
+column: testing
 created: 2026-09-03T04:59:59+0200
-updated: 2026-10-08T19:56:30+0200
+updated: 2026-10-08T19:57:37+0200
 current-owner: main-session
 task-type: feature
 priority: high
@@ -14,6 +14,7 @@ npt: []
 eht: []
 blocked-by: []
 status: tasked
+implementation-commits: [34668285]
 ---
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-03
@@ -71,6 +72,7 @@ one-call-lagged, neither a same-call pair. This card is only about the same-call
 
 ## Approval log
 - 2026-10-08T18:51:39+0200 — column → dev by main-agent@agentlenspro.
+- 2026-10-08T19:57:37+0200 — column → testing by main-agent@agentlenspro.
 
 ## Notes and lessons learned
 
