@@ -3,7 +3,7 @@ trdd-id: Z0A777XW
 title: The footprint sampler for the heap run hardcodes the live port and pidfile and is not tracked
 column: ai_review
 created: 2026-09-23T20:40:50+0200
-updated: 2026-10-08T16:31:21+0200
+updated: 2026-10-08T16:43:50+0200
 current-owner: main-session
 created-by: main-session
 task-type: infra
@@ -22,6 +22,7 @@ status: tasked
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-10-08T17:22:00+0200
 
 All five boxes ticked. Box 3's evidence: reports/z0a777xw/20261008-box3-samples.tsv (4 data rows, footprints 12/12/14/13 MB numeric, exit 0) from the isolated-alcore run — own HOME/DATA_DIR/ports, pid 67024, SIGTERMed and confirmed gone 2026-10-08 16:40 (verified once at that instant by the same session; not re-derivable evidence). The binary served otlp.* (221705cb, 2026-09-23): the explicit 0s are true zero-traffic values; the mtime-based 'built 2026-10-03' provenance is superseded — mtime proves when the file was written, not what was compiled into it; the behavioral NA-vs-zeros evidence settles it. The same-column no-op move stands repudiated; the ban is on PURPOSELESS same-column moves, not on recording transitions with a reason. Column ai_review, review-pending per the consolidation entry. NEXT ACTION: ai_review pass, then human_review. Earlier body entries are superseded BY THIS BLOCK. reports/ is gitignored — verifiable on this machine only until push.
+2026-10-08 17:45, final-round additions: (1) The pure-move proof was completed — the committed diff of THIS file shows the STATE section as exactly two symmetric line pairs (heading + body block removed from the bottom, added after the title), zero character changes. (2) trddgrep validate and lint were re-run after the restructure: no findings on this card or HDUETCU7 (the tool's output names only unrelated archived cards). (3) This head intentionally omits the owed-checks fact (clippy/check-types) — those attach to the CODE-change card HDUETCU7; this card's box-3 evidence is a sampler TSV against a pre-existing binary, and no code change on this card owes a lint run. (4) The review loop is closed: rounds 1-8 all dispositioned; no fork verdict is pending against the current state.
 
 ## Approval log
 
