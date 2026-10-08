@@ -1,9 +1,9 @@
 ---
 trdd-id: GVA8TTJF
 title: api_calls coalesced view, cache_turns statusline join, and the acceptance SQL
-column: planned
+column: dev
 created: 2026-09-03T04:47:31+0200
-updated: 2026-10-08T20:03:16+0200
+updated: 2026-10-08T20:17:54+0200
 current-owner: main-session
 task-type: feature
 priority: high
@@ -13,6 +13,7 @@ created-by: main-session
 npt: []
 eht: []
 blocked-by: [9SYRK6SW, N6A8VX3G]
+status: tasked
 ---
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-03
@@ -89,6 +90,7 @@ pattern), not as SQL `CREATE VIEW` statements:
       own row, which carries none natively).
 
 ## Approval log
+- 2026-10-08T20:07:30+0200 — column → dev by main-agent@agentlenspro.
 
 ## Notes and lessons learned
 
@@ -99,3 +101,7 @@ The link table is real: NDJSON DeltaLog at <dataDir>/body-links.delta.ndjson (+ 
 ## Correction (2026-10-08, review round 2)
 
 The 'TWO HARD REQUIREMENTS' entry above is marked: CONTINGENT on N6A8VX3G reaching a terminal column (it is in testing; if its wire-path gap or torn-tail question changes the row shape, this entry goes stale). The <> '' guard is recorded as a NAMED DEFECT OF THE ROW FORMAT — NULL at the source was the better contract (own the burden once); consumer-side guards own it forever and punish omission silently. This card's SQL design work does NOT need the deployed binary: its blockers' CODE is landed (9SYRK6SW in deploy pending the owner's restart, N6A8VX3G in testing); per the mono-agent hygiene rule the parent may move this card to todo and begin design against the landed code while the column formally stays blocked-by-terminal.
+
+## Dispatched (2026-10-08)
+
+Claimed to dev; worker dispatched with spec docs_dev/20261008-GVA8TTJF-join-views-spec.md. Design choices made by the parent (recorded for the implementer): (a) relations live in a NEW agentlens-core module cache_turns_sql.rs mirroring statusline_store.rs's relation_for/varchar_session_id/open_duck patterns — the transcript_sql preset surface reads transcript FILES and cannot see the store/data dirs; a sibling dispatch arm 'run_cache_turns_sql' in ui.rs exposes it. (b) PAIRING THROUGH THE LINK TABLE: request↔response pairs via link rows (request_body_id exact, span_id fallback), then stems join api_call parts — api_call columns alone cannot pair (response stem = request_id; cc_prev_req points at the PREVIOUS call, not the same one). (c) DEVIATION from the card's WHAT, reasoned: the statusline join is session_id + abs(ts delta) <= 60s ONLY — the card's '4 raw token-bucket columns' as JOIN KEYS would over-constrain (statusline's context_window.current_usage_* are per-tick cumulative views, api_call's buckets are per-request; different units, never equal). Tokens are the join's PAYLOAD (output columns), not its keys. (d) collapse statusline to one row per turn via (session_id, COALESCE(prompt_id, ts-bucket)) taking the LAST sample per group; NULL-prompt_id old-CC streams collapse per-tick (honest: same as uncollapsed, never wrong). (e) LIVE ACCEPTANCE IS PENDING-DEPLOY: the blockers' code is landed but the deployed binary predates 9SYRK6SW — the acceptance query runs against real data only after the owner's rebuild+restart; unit tests prove the SQL against synthetic real-DuckDB files now. (f) subagent stream excluded from v1 per the card's own false-negative note.
