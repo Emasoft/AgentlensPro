@@ -184,6 +184,51 @@ suite('reviewGate — worker writes reach the main gate', () => {
     })
   })
 
+  test('a worker whose one Bash command chains three card records has nothing reviewable', () => {
+    withWorkers((t, s) => {
+      addWorker(s, 'agent-i', 'toolu_W9', 'fast-worker', [userStringLine('record it'), assistantLine([bashBlock('trddgrep set X f v; trddgrep append X H l; trddgrep move X ai_review')])])
+      assert.strictEqual(workerWriteDetail(t, 'toolu_W9', CWD), null)
+    })
+  })
+
+  test('the same card-record chain ending in a pipe to tail has nothing reviewable', () => {
+    withWorkers((t, s) => {
+      addWorker(s, 'agent-j', 'toolu_W10', 'fast-worker', [userStringLine('record it'), assistantLine([bashBlock('trddgrep set X f v; trddgrep append X H l; trddgrep move X ai_review 2>&1 | tail -1')])])
+      assert.strictEqual(workerWriteDetail(t, 'toolu_W10', CWD), null)
+    })
+  })
+
+  test('a build chained to a sed -i is reported as the sed alone, never as the build', () => {
+    withWorkers((t, s) => {
+      addWorker(s, 'agent-k', 'toolu_W11', 'lean-worker', [userStringLine('fix it'), assistantLine([bashBlock('pnpm run compile && sed -i s/a/b/ src/a.ts')])])
+      const detail = workerWriteDetail(t, 'toolu_W11', CWD)
+      assert.ok(detail !== null && detail.includes('sed -i') && !detail.includes('pnpm run compile'), String(detail))
+    })
+  })
+
+  test('a card append chained to a redirect into src is reported as the redirect', () => {
+    withWorkers((t, s) => {
+      addWorker(s, 'agent-l', 'toolu_W12', 'fast-worker', [userStringLine('record it'), assistantLine([bashBlock('trddgrep append X H l; cat > src/x')])])
+      const detail = workerWriteDetail(t, 'toolu_W12', CWD)
+      assert.ok(detail !== null && detail.includes('redirect into src/x'), String(detail))
+    })
+  })
+
+  test('a card record chained to agentlenspro setup is reported as the settings write', () => {
+    withWorkers((t, s) => {
+      addWorker(s, 'agent-m', 'toolu_W13', 'fast-worker', [userStringLine('record it'), assistantLine([bashBlock('agentlenspro setup; trddgrep set X f v')])])
+      const detail = workerWriteDetail(t, 'toolu_W13', CWD)
+      assert.ok(detail !== null && detail.includes('agentlenspro config write'), String(detail))
+    })
+  })
+
+  test("a bash -c string is never dropped, even when its one reason is a card record", () => {
+    withWorkers((t, s) => {
+      addWorker(s, 'agent-n', 'toolu_W14', 'fast-worker', [userStringLine('record it'), assistantLine([bashBlock("bash -c 'trddgrep set X f v; sed -i s/a/b/ src/a.ts'")])])
+      assert.strictEqual(workerWriteDetail(t, 'toolu_W14', CWD), 'fast-worker: trddgrep set')
+    })
+  })
+
   test('a worker-write block asks the main agent to list files outside git too', () => {
     assert.ok(mainBlockReason('worker write', 'lean-worker: Edit a.ts', 'review').includes('outside git'))
   })

@@ -29,7 +29,7 @@ import { agentlensDisabled, killSwitchHalf, killSwitchPath } from './killSwitch'
 import { readStdin } from './hookHandlers'
 import { DELEGATE_DENY_REASON } from './delegateGate'
 import {
-  commandWriteReason, isNeverGatedTarget, textArms, PROPOSAL_MARKER, isSingleSegment, recordWrite,
+  commandWriteReason, isNeverGatedTarget, textArms, PROPOSAL_MARKER, commandWriteReasons, recordWrite,
   NO_REVIEW_SENTINEL, NO_REVIEW_SENTINEL_EXAMPLES, isNoReviewSentinel,
 } from './reviewGateTriggers'
 import type { ArmCause } from './reviewGateTriggers'
@@ -477,10 +477,20 @@ export function workerWriteDetail(transcriptPath: string, toolUseId: string, cwd
       if (e?.type !== 'assistant' || !Array.isArray(content)) continue
       for (const b of content) {
         if (b?.type !== 'tool_use' || isDeniedEdit(b, denied)) continue
-        const w = toolUseWork(b, cwd)
-        // A build or record detail hides a write only in a SINGLE-segment command: commandWriteReason reports the first reason.
-        const single = b.name !== 'Bash' || isSingleSegment(String(b.input?.command ?? ''))
-        if (w !== null && !(single && DEPLOY_OR_RECORD_RE.test(w.detail))) details.push(w.detail)
+        if (b.name !== 'Bash') {
+          const w = toolUseWork(b, cwd)
+          if (w !== null) details.push(w.detail)
+          continue
+        }
+        // Each reason of a Bash command is judged on its own, so a card record chained before a real write
+        // does not hide that write. A nested shell string or eval reports ONE reason for all its text
+        // (see the commandWriteReasons shortcut), and that reason may be the record while the write sits
+        // behind it, so nothing is dropped there.
+        const command = String(b.input?.command ?? '')
+        const nested = /(^|[\s;&|])(bash|sh|zsh)\s+-c\b|(^|[\s;&|])eval\s/.test(command)
+        for (const reason of commandWriteReasons(command, cwd)) {
+          if (nested || !DEPLOY_OR_RECORD_RE.test(reason)) details.push(reason)
+        }
       }
     }
     const distinct = Array.from(new Set(details))

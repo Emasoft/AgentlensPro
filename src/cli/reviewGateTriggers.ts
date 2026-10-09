@@ -331,6 +331,15 @@ function classifyCommand(words: Word[], via: string | null, cwd: string, resolve
  *  `>|`, attached or spaced; `2>&1`/`>&2` are fd dups, not files) — in that order so a heredoc
  *  commit whose body holds a bare `>` is reported as the commit it is, not as a redirect. */
 export function commandWriteReason(cmd: string, cwd: string): string | null {
+  return commandWriteReasons(cmd, cwd)[0] ?? null
+}
+
+/** Every reason a shell command is a write, in the order the segment pass then the redirect pass
+ *  finds them ([] when its text shows only reads). The worker path needs every segment's reason:
+ *  a card record chained before a real write must not hide that write. */
+export function commandWriteReasons(cmd: string, cwd: string): string[] {
+  // shortcut: a bash -c / eval string contributes only its first reason, upgrade if workers start chaining inside one
+  const reasons: string[] = []
   // `words` drives CLASSIFICATION (does this contain a `git commit`-shaped write?) and must
   // fail OPEN on a heredoc we can't parse — losing the command text would hide a real write.
   const words = shellWords(stripHeredocBodies(cmd, true))
@@ -385,7 +394,7 @@ export function commandWriteReason(cmd: string, cwd: string): string | null {
 
   for (let idx = 0; idx < segments.length; idx++) {
     const reason = classifyCommand(segments[idx], null, cwd, resolve, idx)
-    if (reason !== null) return reason
+    if (reason !== null) reasons.push(reason)
   }
   // The redirect scan is the noisy pass (any bare `>` anywhere counts), so it takes the FAIL
   // CLOSED strip instead: an unterminated heredoc has its unparsed region dropped rather than
@@ -407,9 +416,9 @@ export function commandWriteReason(cmd: string, cwd: string): string | null {
     const m = /^\d*(?:>\||>>?)(.*)$/.exec(redirectWords[i].word)
     if (!m || m[1].startsWith('&')) continue
     const target = m[1] !== '' ? m[1] : (redirectWords[i + 1]?.word ?? '')
-    if (!isEphemeralTarget(resolve(target, segIdx), cwd)) return `redirect into ${target || '(no target)'}`
+    if (!isEphemeralTarget(resolve(target, segIdx), cwd)) reasons.push(`redirect into ${target || '(no target)'}`)
   }
-  return null
+  return reasons
 }
 
 
@@ -599,11 +608,6 @@ const SEGMENT_SEPARATOR_RE = /^(\||\|\||&&|;|&)$/
 /** The folders a record write may touch: the TRDD lifecycle folders and the project memory. */
 const CARD_DIRS = ['design/tasks/', 'design/proposals/', 'design/archived/', '.claude/project/memory/']
 const isWord = (w: Word | undefined, s: string): boolean => w !== undefined && !w.quoted && w.word === s
-
-/** True when the command is ONE segment: no unquoted `;` `&&` `||` `|` `&` word. */
-export function isSingleSegment(cmd: string): boolean {
-  return shellWords(stripHeredocBodies(cmd, true)).every((w) => w.quoted || !SEGMENT_SEPARATOR_RE.test(w.word))
-}
 
 /** A literal path a record write may touch: no shell metacharacter, no `..` segment, inside CARD_DIRS. */
 function isCardPath(p: string, cwd: string): boolean {

@@ -6,6 +6,7 @@ import {
   commandWriteReason, isEphemeralTarget, shellWords, textArms, PROPOSAL_MARKER,
   GIT_WRITE_SUBCOMMANDS, GH_MUTATING_VERBS, PKG_WRITE_VERBS, ALL_ARGS_ARE_TARGETS, LAST_ARG_IS_TARGET,
   scriptRunnerReason, isNeverGatedTarget, isNoReviewSentinel,
+  commandWriteReasons,
 } from '../cli/reviewGateTriggers'
 import { stripHeredocBodies, recordWrite } from '../cli/reviewGateTriggers'
 
@@ -386,6 +387,10 @@ suite('review-gate triggers: write-shaped commands', () => {
     for (const cmd of PASS) assert.strictEqual(commandWriteReason(cmd, CWD), null, cmd)
   })
 
+  test('commandWriteReason is the first of commandWriteReasons on every ARM and PASS row', () => {
+    for (const cmd of [...ARM.map(([c]) => c), ...PASS]) assert.strictEqual(commandWriteReason(cmd, CWD), commandWriteReasons(cmd, CWD)[0] ?? null, cmd)
+  })
+
   test('every member of every verb set arms — a hand-picked sample left most untested', () => {
     for (const sub of GIT_WRITE_SUBCOMMANDS) assert.strictEqual(commandWriteReason(`git ${sub} x`, CWD), `git ${sub}`)
     for (const verb of GH_MUTATING_VERBS) assert.strictEqual(commandWriteReason(`gh pr ${verb} 1`, CWD), `gh pr ${verb}`)
@@ -393,6 +398,32 @@ suite('review-gate triggers: write-shaped commands', () => {
     for (const c of ALL_ARGS_ARE_TARGETS) assert.strictEqual(commandWriteReason(`${c} /tmp/a src/b`, CWD), `${c} src/b`)
     for (const c of LAST_ARG_IS_TARGET) assert.strictEqual(commandWriteReason(`${c} src/a /tmp/b`, CWD), null, `${c}: last arg ephemeral`)
     for (const c of LAST_ARG_IS_TARGET) assert.strictEqual(commandWriteReason(`${c} /tmp/a src/b`, CWD), `${c} src/b`)
+  })
+})
+
+suite('review-gate triggers: commandWriteReasons reports every segment', () => {
+  test('a chain of card records reports each record in order', () => {
+    assert.deepStrictEqual(commandWriteReasons('trddgrep set X f v; trddgrep append X H l; trddgrep move X ai_review', CWD), ['trddgrep set', 'trddgrep append', 'trddgrep move'])
+  })
+
+  test('a write piped into a read reports only the write', () => {
+    assert.deepStrictEqual(commandWriteReasons('trddgrep set X f v 2>&1 | tail -1', CWD), ['trddgrep set'])
+  })
+
+  test('a build chained to a sed -i reports both segments', () => {
+    assert.deepStrictEqual(commandWriteReasons('pnpm run compile && sed -i s/a/b/ src/a.ts', CWD), ['pnpm run compile', 'sed -i'])
+  })
+
+  test('a segment reason comes before a redirect reason', () => {
+    assert.deepStrictEqual(commandWriteReasons('trddgrep append X H l; cat > src/x', CWD), ['trddgrep append', 'redirect into src/x'])
+  })
+
+  test('a redirect into a same-command literal under /tmp reports nothing', () => {
+    assert.deepStrictEqual(commandWriteReasons('SP=/tmp/x; trddgrep set X f v; cat > $SP/f', CWD), ['trddgrep set'])
+  })
+
+  test('a read-only command reports no reasons', () => {
+    assert.deepStrictEqual(commandWriteReasons('ls -la', CWD), [])
   })
 })
 
