@@ -625,6 +625,12 @@ suite('reviewGate — messages', () => {
     assert.ok(!t.includes(REVIEW_ROLE_RULE))
   })
 
+  test("demandText('measure') names fast-worker as the preferred measurer and requires a numbered step list", () => {
+    const t = demandText('measure')
+    assert.ok(t.includes('fast-worker'))
+    assert.ok(t.includes('numbered'))
+  })
+
   test('every demandText carries NO_REVIEW_SENTINEL, PROPOSAL_MARKER, the word LAST and `review-gate --directive`', () => {
     for (const d of ['review', 'measure', 'both'] as const) {
       const t = demandText(d)

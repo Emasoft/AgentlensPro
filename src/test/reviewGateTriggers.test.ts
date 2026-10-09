@@ -30,6 +30,14 @@ suite('review-gate triggers: a $VAR/suffix write target resolves through the rec
     assert.strictEqual(commandWriteReason('SP=/tmp/x; cat > ${SP}/f', CWD), null)
   })
 
+  test('a "$SP"/f write after SP=/tmp/x is scratch: the quoted suffix still resolves to /tmp/x/f', () => {
+    assert.strictEqual(commandWriteReason('SP=/tmp/x; cat > "$SP"/f', CWD), null)
+  })
+
+  test('a $SP"/f" write after SP=/tmp/x is scratch: the shell joins the quoted suffix to /tmp/x/f', () => {
+    assert.strictEqual(commandWriteReason('SP=/tmp/x; cat > $SP"/f"', CWD), null)
+  })
+
   test('a $SP/../../etc/f escape from the recorded /tmp/x still arms', () => {
     assert.strictEqual(commandWriteReason('SP=/tmp/x; cat > $SP/../../etc/f', CWD), 'redirect into $SP/../../etc/f')
   })
@@ -485,6 +493,10 @@ suite('review-loop D7: additional write-shaped verbs (fastedit/trddgrep/prrdgrep
 
   test('a fastedit write into src still arms', () => {
     assert.strictEqual(commandWriteReason('fastedit edit src/a.ts --replace f', CWD), 'fastedit edit')
+  })
+
+  test('a flag-first `fastedit edit --replace x /tmp/a.md` stays armed (fail closed: its first non-flag word is `x`, not the /tmp file)', () => {
+    assert.strictEqual(commandWriteReason('fastedit edit --replace x /tmp/a.md', CWD), 'fastedit edit')
   })
 
   test('a flag value that looks like /tmp does not stand in for the file (fail closed)', () => {

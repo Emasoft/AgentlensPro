@@ -156,8 +156,8 @@ THE AGENTS:
   Tell it to hunt the recurring failure shape — a PROXY read in place of the thing (a pipe's exit
   status for the tool's, a preview for the file, one run for the variance, an assumed format for the
   real one) — and to name the single WEAKEST link with ONE settling command. Only a \`fork\` spawn credits the REVIEW role; a \`ROLE: REVIEW\` line in any other agent's prompt credits nothing.
-- MEASURE (proposals only): any subagent type; a \`cheap-worker\` (haiku[1m] xhigh, no inherited
-  conversation context) is PREFERRED — maximum reasoning depth on the smallest model. Its prompt carries THIS LINE VERBATIM:
+- MEASURE (proposals only): any subagent type; a \`fast-worker\` (haiku[1m], medium effort, no inherited
+  conversation context) is PREFERRED — the measurer only reads or runs simple commands, so the cheapest fast model with an exact step list is enough. Its prompt is a numbered step list (one assumption per step, each with the exact command to run and what to report), and carries THIS LINE VERBATIM:
   "${MEASURE_ROLE_RULE}"
 Each agent does its one job and returns; neither spawns reviewers of its own (a roled agent is
 exempt from this gate, so the regress stops there).
@@ -558,8 +558,9 @@ export function scanTranscriptLines(lines: string[], cwd = process.cwd(), ownAge
       }
       if (b?.type !== 'tool_use') continue
       if (b.name === 'Agent') {
-        // SPAWN credit. MEASURE: any subagent type whose prompt carries the marker — a cheap-worker
-        // is a valid MEASURE agent. REVIEW REQUIRES A FORK and a whole-line marker: a worker brief
+        // SPAWN credit. MEASURE: any subagent type whose prompt carries the marker — a fast-worker
+        // is the preferred MEASURE agent; any other type still credits. REVIEW REQUIRES A FORK and a
+        // whole-line marker: a worker brief
         // that merely mentions "ROLE: REVIEW" while DESCRIBING this gate's protocol (e.g. this very
         // file's own prose) must not release the gate with no reviewer ever spawned (adversarial
         // review of 268f3080, finding b) — the owner's spec names the review agent a fork, the
@@ -609,8 +610,10 @@ export const ARM_CAUSE_TEXT: Record<ArmCause, string> = {
 
 const REVIEW_DEMAND = 'Spawn ONE adversarial REVIEW fork (Agent tool, subagent_type "fork") and COPY THIS LINE '
   + 'VERBATIM INTO ITS PROMPT: "' + REVIEW_ROLE_RULE + '"'
-const MEASURE_DEMAND = 'Spawn ONE MEASURE agent (any subagent type — a `cheap-worker` (haiku[1m] xhigh, no inherited '
-  + 'conversation context) is PREFERRED — maximum reasoning depth on the smallest model) and COPY THIS LINE VERBATIM '
+// owner decision 2026-10-09 — the measurer only reads or runs simple commands, so the cheapest fast model with an exact step list is enough (TRDD-9YWTNFU8).
+const MEASURE_DEMAND = 'Spawn ONE MEASURE agent (any subagent type; a `fast-worker` (haiku[1m], medium effort, no inherited '
+  + 'conversation context) is PREFERRED, and its prompt is a numbered step list, one assumption per step, each with the exact '
+  + 'command to run and what to report) and COPY THIS LINE VERBATIM '
   + 'INTO ITS PROMPT: "' + MEASURE_ROLE_RULE + '"'
 
 /** What the blocked agent must spawn, and how the gate releases. One text for both gates so the

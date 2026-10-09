@@ -214,8 +214,10 @@ const REDIRECT_WORD_RE = /^\d*(?:>\||>>?|<{1,3})/
 // their effective value is unmodelled, so a use of `$S` after them must stay undecidable).
 const ASSIGNMENT_RE = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/
 /** Resolves a word that is `$NAME`/`${NAME}`, optionally followed by `/suffix`, to a same-command
- *  literal assignment recorded before `segIdx`. Any other shape (`$(mktemp)`, `${NAME:-x}`, a name
- *  with no recorded literal) is returned unchanged and arms. */
+ *  literal assignment recorded STRICTLY BEFORE `segIdx` (shell semantics: `$S` expands before a
+ *  same-segment prefix assignment applies — `S=/tmp/b tee "$S"` reads the OLD value of S, and an
+ *  assignment only takes effect for LATER segments). Any other shape (`$(mktemp)`, `${NAME:-x}`,
+ *  a name with no recorded literal) is returned unchanged and arms. */
 type Resolve = (word: string, segIdx: number) => string
 
 // TRDD-J2K6IM4R: `fastedit multi-edit --help` armed the gate — argparse prints help and exits
