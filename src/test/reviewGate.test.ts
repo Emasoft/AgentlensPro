@@ -8,7 +8,7 @@ import {
   demandText, mainBlockReason, subagentBlockReason, ARM_CAUSE_TEXT,
   REVIEW_GATE_DIRECTIVE, REVIEW_ROLE_RULE, MEASURE_ROLE_RULE, declaredRole, declaredRoleOwnTranscript,
   runMainGate, runReviewGate, agentCannotSpawn, declaredToolsHaveAgent,
-  NO_REVIEW_SENTINEL, NO_REVIEW_SENTINEL_EXAMPLES,
+  NO_REVIEW_SENTINEL, NO_REVIEW_SENTINEL_EXAMPLES, workerReturnId, workerWriteDetail,
 } from '../cli/reviewGate'
 import { PROPOSAL_MARKER } from '../cli/reviewGateTriggers'
 import { runSubagentGate } from '../cli/reviewGate'
@@ -28,6 +28,146 @@ const userStringLine = (content: string): string => JSON.stringify({ type: 'user
 const userTextLine = (text: string): string => JSON.stringify({ type: 'user', message: { content: [{ type: 'text', text }] } })
 const toolResultLine = (toolUseId: string, content: unknown): string =>
   JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: toolUseId, content }] } })
+
+// ── Worker writes reach the MAIN gate (TRDD-9YWTNFU8) ─────────────────────────────────────────────
+// A background worker has no Agent tool, so its own SubagentStop gate releases it. Its writes reach
+// the main gate only through its return, a `queue-operation` line; these tests pin that path.
+suite('reviewGate — worker writes reach the main gate', () => {
+  const notification = (toolUseId: string): string =>
+    `<task-notification>\n<task-id>abc123</task-id>\n<tool-use-id>${toolUseId}</tool-use-id>\n<status>completed</status>\n</task-notification>`
+  const returnLine = (toolUseId: string): string =>
+    JSON.stringify({ type: 'queue-operation', operation: 'enqueue', content: notification(toolUseId) })
+  const reportWrites = (): string => 'lean-worker: Edit a.ts'
+
+  test('workerReturnId reads the spawning tool_use id from a real queue-operation return', () => {
+    assert.strictEqual(workerReturnId(returnLine('toolu_W1')), 'toolu_W1')
+  })
+
+  test('the same notification copied into a user or an attachment entry is not a return', () => {
+    const asUser = JSON.stringify({ type: 'user', message: { content: [{ type: 'text', text: notification('toolu_W1') }] } })
+    const asAttachment = JSON.stringify({ type: 'attachment', attachment: { type: 'queued_command', prompt: notification('toolu_W1') } })
+    assert.strictEqual(workerReturnId(asUser), null)
+    assert.strictEqual(workerReturnId(asAttachment), null)
+  })
+
+  test('a queue-operation whose notification has no <status> tag is not a return', () => {
+    const noStatus = JSON.stringify({ type: 'queue-operation', operation: 'enqueue', content: notification('toolu_W1').replace('<status>completed</status>', '') })
+    assert.strictEqual(workerReturnId(noStatus), null)
+  })
+
+  test('a user tool_result that merely quotes the tool-use-id tag is not a return', () => {
+    const quoting = JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'toolu_X', content: '<tool-use-id>toolu_W1</tool-use-id>' }] } })
+    assert.strictEqual(workerReturnId(quoting), null)
+  })
+
+  test('a return whose worker reports writes arms the main gate as a worker write, and the review is demanded', () => {
+    const scan = scanTranscriptLines([userStringLine('go'), returnLine('toolu_W1')], CWD, undefined, (id) => (id === 'toolu_W1' ? reportWrites() : null))
+    assert.deepStrictEqual(scan.work, { index: 1, cause: 'worker write', detail: 'lean-worker: Edit a.ts' })
+    assert.strictEqual(decideGate(scan), 'review')
+  })
+
+  test('a return whose worker reports no writes leaves the scan unarmed', () => {
+    assert.strictEqual(scanTranscriptLines([returnLine('toolu_W1')], CWD, undefined, () => null).work, null)
+  })
+
+  test('without the callback a return line never arms, so the SubagentStop scan is unchanged', () => {
+    assert.strictEqual(scanTranscriptLines([returnLine('toolu_W1')], CWD).work, null)
+  })
+
+  test('a fork REVIEW spawn AFTER the return releases the gate', () => {
+    const lines = [returnLine('toolu_W1'), assistantLine([agentBlock('fork', 'ROLE: REVIEW\nreview it')])]
+    assert.strictEqual(decideGate(scanTranscriptLines(lines, CWD, undefined, reportWrites)), null)
+  })
+
+  test('a fork REVIEW spawn BEFORE the return does not release the gate', () => {
+    const lines = [assistantLine([agentBlock('fork', 'ROLE: REVIEW\nreview it')]), returnLine('toolu_W1')]
+    assert.strictEqual(decideGate(scanTranscriptLines(lines, CWD, undefined, reportWrites)), 'review')
+  })
+
+  test('a heartbeat floor BEFORE the return does not stop the return from being demanded', () => {
+    const lines = [userStringLine('[janitor-heartbeat] tick'), returnLine('toolu_W1')]
+    assert.strictEqual(decideGate(scanTranscriptLines(lines, CWD, undefined, reportWrites)), 'review')
+  })
+
+  test('a heartbeat floor AFTER the return clears it', () => {
+    const lines = [returnLine('toolu_W1'), userStringLine('[janitor-heartbeat] tick')]
+    assert.strictEqual(scanTranscriptLines(lines, CWD, undefined, reportWrites).work, null)
+  })
+
+  test('a SendMessage resume is a second return with the same id, demanded again after a fork in between', () => {
+    const fork = assistantLine([agentBlock('fork', 'ROLE: REVIEW\nreview it')])
+    const once = scanTranscriptLines([returnLine('toolu_W1'), fork], CWD, undefined, reportWrites)
+    assert.strictEqual(decideGate(once), null)
+    const resumed = scanTranscriptLines([returnLine('toolu_W1'), fork, returnLine('toolu_W1')], CWD, undefined, reportWrites)
+    assert.deepStrictEqual(resumed.work, { index: 2, cause: 'worker write', detail: 'lean-worker: Edit a.ts' })
+    assert.strictEqual(decideGate(resumed), 'review')
+  })
+
+  // Lays out `<dir>/main/subagents/` as the harness does; `main.jsonl` itself need not exist.
+  const withWorkers = (run: (transcript: string, subagents: string) => void): void => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rg-ww-'))
+    try {
+      const subagents = path.join(dir, 'main', 'subagents')
+      fs.mkdirSync(subagents, { recursive: true })
+      run(path.join(dir, 'main.jsonl'), subagents)
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  }
+  const addWorker = (subagents: string, name: string, toolUseId: string, agentType: string, entries: string[]): void => {
+    fs.writeFileSync(path.join(subagents, `${name}.meta.json`), JSON.stringify({ toolUseId, agentType }))
+    fs.writeFileSync(path.join(subagents, `${name}.jsonl`), entries.join('\n') + '\n')
+  }
+  const editOf = (file: string) => ({ type: 'tool_use', name: 'Edit', input: { file_path: `/repo/src/${file}` } })
+
+  test("workerWriteDetail reports the worker's own Edit as '<agentType>: Edit a.ts'", () => {
+    withWorkers((t, s) => {
+      addWorker(s, 'agent-a', 'toolu_W1', 'lean-worker', [userStringLine('do it'), assistantLine([editBlock])])
+      assert.strictEqual(workerWriteDetail(t, 'toolu_W1', CWD), 'lean-worker: Edit a.ts')
+    })
+  })
+
+  test('a worker whose only write-shaped command is `pnpm run compile` has nothing reviewable', () => {
+    withWorkers((t, s) => {
+      addWorker(s, 'agent-b', 'toolu_W2', 'lean-worker', [userStringLine('build'), assistantLine([bashBlock('pnpm run compile')])])
+      assert.strictEqual(workerWriteDetail(t, 'toolu_W2', CWD), null)
+    })
+  })
+
+  test('a worker whose first user entry declares ROLE: MEASURE is a measurer, not a writer', () => {
+    withWorkers((t, s) => {
+      addWorker(s, 'agent-c', 'toolu_W3', 'fast-worker', [userStringLine('ROLE: MEASURE\nmeasure it'), assistantLine([editBlock])])
+      assert.strictEqual(workerWriteDetail(t, 'toolu_W3', CWD), null)
+    })
+  })
+
+  test('a janitor worker is skipped even when it wrote a file', () => {
+    withWorkers((t, s) => {
+      addWorker(s, 'agent-d', 'toolu_W4', 'ai-maestro-janitor:janitor-memory-subconscious-agent', [userStringLine('go'), assistantLine([editBlock])])
+      assert.strictEqual(workerWriteDetail(t, 'toolu_W4', CWD), null)
+    })
+  })
+
+  test('a return whose id matches no worker meta file has nothing to report', () => {
+    withWorkers((t, s) => {
+      addWorker(s, 'agent-a', 'toolu_W1', 'lean-worker', [userStringLine('do it'), assistantLine([editBlock])])
+      assert.strictEqual(workerWriteDetail(t, 'toolu_NONE', CWD), null)
+    })
+  })
+
+  test('distinct writes are listed up to three with "(+N more)", and a repeated write counts once', () => {
+    withWorkers((t, s) => {
+      addWorker(s, 'agent-e', 'toolu_W5', 'lean-worker', [userStringLine('go'), assistantLine([editOf('a.ts')]), assistantLine([editOf('a.ts')]), assistantLine([editOf('b.ts')]), assistantLine([editOf('c.ts')]), assistantLine([editOf('d.ts')])])
+      assert.strictEqual(workerWriteDetail(t, 'toolu_W5', CWD), 'lean-worker: Edit a.ts, Edit b.ts, Edit c.ts (+1 more)')
+    })
+  })
+
+  test('a worker write tells the main agent to run git status and git diff first; an ordinary edit does not', () => {
+    const reason = mainBlockReason('worker write', 'lean-worker: Edit a.ts', 'review')
+    assert.ok(reason.includes('git status --short') && reason.includes('git diff'))
+    assert.ok(!mainBlockReason('edit', 'Edit a.ts', 'review').includes('git status'))
+  })
+})
 
 // ── KEPT VERBATIM — agentCannotSpawn / declaredToolsHaveAgent (built-in + plugin-cache), unchanged ──
 suite('reviewGate — agentCannotSpawn / declaredToolsHaveAgent (built-in + plugin-cache)', () => {

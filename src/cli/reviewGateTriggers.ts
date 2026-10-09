@@ -22,7 +22,7 @@ import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
 
-export type ArmCause = 'edit' | 'write-shaped command' | 'proposal text'
+export type ArmCause = 'edit' | 'write-shaped command' | 'proposal text' | 'worker write'
 
 /** THE PROPOSAL MARKER (owner order 2026-09-15). A text block is a proposal iff a line STARTS with
  *  `PROPOSAL FOR ACTION - PLEASE REVIEW` (bold or heading prefix allowed; any dash). Case-sensitive,

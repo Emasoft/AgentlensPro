@@ -438,6 +438,51 @@ export function hookCwd(input: ReviewGateInput): string {
   return typeof input?.cwd === 'string' && input.cwd !== '' ? input.cwd : process.cwd()
 }
 
+/** Writes that are not a reviewable diff: a build, a deploy, or a card or memory record. */
+const DEPLOY_OR_RECORD_RE = /^(node esbuild\.js|(pnpm|npm) run |agentlenspro |trddgrep |prrdgrep |specgrep |memgrep )/
+
+/** What ONE background worker wrote, as the detail of a `worker write` block, or null. The worker's
+ *  transcript sits beside the main one at `<base>/subagents/agent-<x>.jsonl`, and its `.meta.json`
+ *  holds the tool_use id the return names. Skipped: a janitor agent (its writes are the janitor's, as
+ *  everywhere in this file) and a ROLED agent (its own fork is the review, not work to review). Never
+ *  throws: a read or parse error is named on stderr and allowed, because a throw here would wedge the
+ *  main session's Stop. */
+export function workerWriteDetail(transcriptPath: string, toolUseId: string, cwd: string): string | null {
+  try {
+    const dir = path.join(path.dirname(transcriptPath), path.basename(transcriptPath, '.jsonl'), 'subagents')
+    let meta: { file: string; agentType: string } | null = null
+    for (const file of fs.readdirSync(dir)) {
+      if (!file.endsWith('.meta.json')) continue
+      const m = JSON.parse(fs.readFileSync(path.join(dir, file), 'utf8')) as { toolUseId?: unknown; agentType?: unknown }
+      if (m.toolUseId === toolUseId) { meta = { file, agentType: String(m.agentType ?? '') }; break }
+    }
+    if (meta === null) return null
+    if (JANITOR_AGENT_RE.test(meta.agentType.trim().toLowerCase())) return null
+    const rawLines = fs.readFileSync(path.join(dir, meta.file.replace(/\.meta\.json$/, '.jsonl')), 'utf8').split('\n').filter(Boolean)
+    const entries = rawLines.map((l) => JSON.parse(l) as TranscriptEntry)
+    const firstUser = entries.find((e) => e?.type === 'user')
+    if (firstUser !== undefined && declaredRoleOwnTranscript(userPromptText(firstUser.message?.content)) !== null) return null
+    const denied = deniedToolUseIds(rawLines)
+    const details: string[] = []
+    for (const e of entries) {
+      const content = e?.message?.content
+      if (e?.type !== 'assistant' || !Array.isArray(content)) continue
+      for (const b of content) {
+        if (b?.type !== 'tool_use' || isDeniedEdit(b, denied)) continue
+        const w = toolUseWork(b, cwd)
+        if (w !== null && !DEPLOY_OR_RECORD_RE.test(w.detail)) details.push(w.detail)
+      }
+    }
+    const distinct = Array.from(new Set(details))
+    if (distinct.length === 0) return null
+    const more = distinct.length > 3 ? ` (+${distinct.length - 3} more)` : ''
+    return `${meta.agentType}: ${distinct.slice(0, 3).join(', ')}${more}`
+  } catch (err) {
+    process.stderr.write(`[review-gate] worker transcript unreadable for ${toolUseId}: ${String(err)}\n`)
+    return null
+  }
+}
+
 /** Read only the tail of a (possibly huge) transcript — the answer is always near the end. */
 export function readTranscriptTail(transcriptPath: string, maxBytes = 4 * 1024 * 1024): string[] | null {
   try {
@@ -454,6 +499,21 @@ export function readTranscriptTail(transcriptPath: string, maxBytes = 4 * 1024 *
   } catch {
     return null
   }
+}
+
+/** A background worker's RETURN, as the main transcript records it: a `queue-operation` enqueue
+ *  whose content is a `<task-notification>` with the spawning Agent's tool_use id and a `<status>`.
+ *  Returns that id, or null. The same text is also copied into `user` and `attachment` entries, and
+ *  those copies must not count (they would double-count, and other entries can quote the text), so
+ *  only the queue-operation shape is accepted. The pre-check keeps JSON.parse off almost every line. */
+export function workerReturnId(line: string): string | null {
+  if (!line.includes('<tool-use-id>')) return null
+  let e: { type?: unknown; operation?: unknown; content?: unknown }
+  try { e = JSON.parse(line) as typeof e } catch { return null }
+  if (e?.type !== 'queue-operation' || e.operation !== 'enqueue' || typeof e.content !== 'string') return null
+  if (!e.content.trimStart().startsWith('<task-notification>') || !e.content.includes('<status>')) return null
+  const m = /<tool-use-id>([^<\s]+)<\/tool-use-id>/.exec(e.content)
+  return m === null ? null : m[1]
 }
 
 // ── The shared scan and decision (Stop AND SubagentStop) ─────────────────────────────────────────
@@ -518,7 +578,7 @@ export interface GateScan {
 /** ONE scan for both gates. Pure — the whole "relative position, not turn boundaries" rule lives
  *  here, so it is testable without a real transcript file. WHAT counts as work is decided in the
  *  triggers module; `cwd` is the hook's, for resolving relative write targets. */
-export function scanTranscriptLines(lines: string[], cwd = process.cwd(), ownAgentId?: string): GateScan {
+export function scanTranscriptLines(lines: string[], cwd = process.cwd(), ownAgentId?: string, workerWrote?: (toolUseId: string) => string | null): GateScan {
   let work: GateScan['work'] = null
   let lastProposal = -1
   const roles: GateScan['roles'] = { measure: -1, review: -1 }
@@ -526,6 +586,22 @@ export function scanTranscriptLines(lines: string[], cwd = process.cwd(), ownAge
   let sawFirstUser = false
   const denied = deniedToolUseIds(lines)
   for (let i = 0; i < lines.length; i++) {
+    // WORKER WRITES (TRDD-9YWTNFU8). A background worker (lean/cheap/fast/smart-worker) has no Agent
+    // tool, so its own SubagentStop gate releases it, and nothing looked at what it wrote: two Rust fix
+    // rounds went unreviewed on 2026-10-09. Its return, a `queue-operation` line, is where those writes
+    // become the main agent's to review, so only the main gate passes `workerWrote`.
+    // KNOWN LIMITS: a return whose queue-operation line lies before the 4 MB tail is not seen; a worker
+    // whose notification was never recorded (session cleared first) is not seen; workers spawned by
+    // workers are not scanned; a heartbeat turn is blocked when a worker returns inside it (intended:
+    // that is the 2026-10-09 15:15 case). Without `workerWrote` this branch never runs.
+    if (workerWrote !== undefined) {
+      const returned = workerReturnId(lines[i])
+      if (returned !== null) {
+        const detail = workerWrote(returned)
+        if (detail !== null) work = { index: i, cause: 'worker write', detail }
+        continue
+      }
+    }
     let e: TranscriptEntry
     try { e = JSON.parse(lines[i]) as TranscriptEntry } catch { continue }
     // Sidechain entries are a child agent's turns — their prose must never be scored as the
@@ -606,6 +682,7 @@ export const ARM_CAUSE_TEXT: Record<ArmCause, string> = {
   'edit': 'edited a file',
   'write-shaped command': 'ran a write-shaped command',
   'proposal text': `wrote a "${PROPOSAL_MARKER}" proposal`,
+  'worker write': 'a worker you spawned wrote files',
 }
 
 const REVIEW_DEMAND = 'Spawn ONE adversarial REVIEW fork (Agent tool, subagent_type "fork") and COPY THIS LINE '
@@ -639,7 +716,11 @@ export function demandText(d: Demand): string {
  *  a long turn's earlier blocks can be outside it. */
 export function mainBlockReason(cause: ArmCause, detail: string, demand: Demand): string {
   const what = detail === '' ? ARM_CAUSE_TEXT[cause] : `${ARM_CAUSE_TEXT[cause]}: ${detail}`
-  return `Review gate: ${what} after the last review (scanned: the transcript's last 4 MB). ${demandText(demand)}`
+  // WHY: a worker's files are already on disk and its report only describes them, so the fork must review the real diff.
+  const gitFirst = cause === 'worker write'
+    ? 'FIRST, in an earlier response than the fork spawn, run `git status --short` and `git diff` on the files the worker changed (print new files too), so the fork reviews the real change and not a description. '
+    : ''
+  return `Review gate: ${what} after the last review (scanned: the transcript's last 4 MB). ${gitFirst}${demandText(demand)}`
 }
 
 export function subagentBlockReason(cause: ArmCause, detail: string, demand: Demand): string {
@@ -661,7 +742,8 @@ export async function runMainGate(input: ReviewGateInput): Promise<string | null
     process.stderr.write('[review-gate] allowing UNREVIEWED: could not read the transcript tail\n')
     return null
   }
-  const scan = scanTranscriptLines(lines, hookCwd(input))
+  // Only the main gate passes workerWrote: a worker's writes are reviewed at its return (see scanTranscriptLines).
+  const scan = scanTranscriptLines(lines, hookCwd(input), undefined, (id) => workerWriteDetail(transcript, id, hookCwd(input)))
   const demand = decideGate(scan)
   // A demand implies an arming block was found (`work !== null`); the second test only narrows
   // the type, so the message can never name a cause the scan did not find.
