@@ -360,6 +360,16 @@ suite('reviewGate — scanTranscriptLines', () => {
     assert.strictEqual(scan.work, null)
   })
 
+  test('a Write into ~/.claude/plans/ is never gated and does not arm', () => {
+    const planWrite = { type: 'tool_use', id: 'toolu_p1', name: 'Write', input: { file_path: path.join(os.homedir(), '.claude', 'plans', 'p.md') } }
+    assert.strictEqual(scanTranscriptLines([assistantLine([planWrite])], CWD).work, null)
+  })
+
+  test('a Write to a src file still arms with the edit cause', () => {
+    const srcWrite = { type: 'tool_use', id: 'toolu_p2', name: 'Write', input: { file_path: '/repo/src/a.ts' } }
+    assert.strictEqual(scanTranscriptLines([assistantLine([srcWrite])], CWD).work?.cause, 'edit')
+  })
+
   test("a text block starting with `PROPOSAL FOR ACTION - PLEASE REVIEW` sets work cause 'proposal text' AND lastProposal at its index", () => {
     const scan = scanTranscriptLines([assistantLine([{ type: 'text', text: 'PROPOSAL FOR ACTION - PLEASE REVIEW\n\ndo X' }])], CWD)
     assert.deepStrictEqual(scan.work, { index: 0, cause: 'proposal text', detail: '' })

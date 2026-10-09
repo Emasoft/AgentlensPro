@@ -17,6 +17,40 @@ import { stripHeredocBodies } from '../cli/reviewGateTriggers'
 
 const CWD = '/proj'
 
+suite('review-gate triggers: a $VAR/suffix write target resolves through the recorded literal', () => {
+  test('a redirect to $SP/f.py after SP=/tmp/x is scratch, not work', () => {
+    assert.strictEqual(commandWriteReason('SP=/tmp/x; cat > $SP/f.py', CWD), null)
+  })
+
+  test('a quoted "$SP/f.json" redirect after SP=/tmp/x is scratch, not work', () => {
+    assert.strictEqual(commandWriteReason('SP=/tmp/x; q > "$SP/f.json"', CWD), null)
+  })
+
+  test('the braced ${SP}/f form after SP=/tmp/x is scratch, not work', () => {
+    assert.strictEqual(commandWriteReason('SP=/tmp/x; cat > ${SP}/f', CWD), null)
+  })
+
+  test('a $SP/../../etc/f escape from the recorded /tmp/x still arms', () => {
+    assert.strictEqual(commandWriteReason('SP=/tmp/x; cat > $SP/../../etc/f', CWD), 'redirect into $SP/../../etc/f')
+  })
+
+  test('a $SP reassigned to a repo path before the write still arms', () => {
+    assert.strictEqual(commandWriteReason('SP=/tmp/x; SP=src; cat > $SP/f', CWD), 'redirect into $SP/f')
+  })
+
+  test('an assignment in a segment that also runs a command records nothing, so $SP/f still arms', () => {
+    assert.strictEqual(commandWriteReason('SP=/tmp/x cat > $SP/f', CWD), 'redirect into $SP/f')
+  })
+
+  test('a $SP/$OTHER suffix (an expansion, not a literal) still arms', () => {
+    assert.strictEqual(commandWriteReason('SP=/tmp/x; cat > $SP/$OTHER', CWD), 'redirect into $SP/$OTHER')
+  })
+
+  test('a $UNSET/f target with no recorded literal still arms', () => {
+    assert.strictEqual(commandWriteReason('cat > $UNSET/f', CWD), 'redirect into $UNSET/f')
+  })
+})
+
 suite('review-gate triggers: write-shaped commands', () => {
   // Real shapes from this session's own JSONL (41 distinct main-conversation commands), genericized.
   const ARM: [string, string][] = [
@@ -81,7 +115,7 @@ suite('review-gate triggers: write-shaped commands', () => {
     ['memgrep new-mem-atom x', 'memgrep new-mem-atom'],
     ['S=$(mktemp); echo x > "$S"', 'redirect into $S'],                       // undecidable assignment ⇒ arm
     ['S=/tmp/a; S=$X; echo x > "$S"', 'redirect into $S'],                    // reassignment deletes the resolved value
-    ['S=/tmp/a; echo x > "$S/../../etc/x"', 'redirect into $S/../../etc/x'],  // not a bare $VAR ⇒ never resolved
+    ['S=/tmp/a; echo x > "$S/../../etc/x"', 'redirect into $S/../../etc/x'],  // $S/../.. resolves to /etc/x ⇒ arm
     ['echo x > /tmp/$X', 'redirect into /tmp/$X'],                           // still has a $ after stripping ⇒ arm
     ['echo x > /tmp/../etc/$$', 'redirect into /tmp/../etc/$$'],             // literal `..` escapes /tmp ⇒ arm
     ['echo x >| src/a.ts', 'redirect into src/a.ts'],
@@ -430,6 +464,31 @@ suite('review-loop D7: additional write-shaped verbs (fastedit/trddgrep/prrdgrep
     for (const cmd of ['fastedit read f.ts', 'fastedit search x dir', 'fastedit diff f.ts']) {
       assert.strictEqual(commandWriteReason(cmd, CWD), null, cmd)
     }
+  })
+
+  test('fastedit duplicate with an ephemeral SOURCE still arms: the write lands in the destination', () => {
+    assert.strictEqual(commandWriteReason('fastedit duplicate /tmp/a.md src/b.md', CWD), 'fastedit duplicate')
+  })
+
+  test('fastedit join with an ephemeral parts DIRECTORY still arms: the write lands in the -o target', () => {
+    assert.strictEqual(commandWriteReason('fastedit join /tmp/parts -o src/x.md', CWD), 'fastedit join')
+  })
+
+  test('fastedit split with an ephemeral SOURCE still arms: the parts are written under --out', () => {
+    assert.strictEqual(commandWriteReason('fastedit split /tmp/big.md --out src/', CWD), 'fastedit split')
+  })
+
+  test('a fastedit write into reports/ or /tmp is scratch, not work', () => {
+    assert.strictEqual(commandWriteReason('fastedit create /tmp/a.md', CWD), null)
+    assert.strictEqual(commandWriteReason('fastedit create reports/x.md', CWD), null)
+  })
+
+  test('a fastedit write into src still arms', () => {
+    assert.strictEqual(commandWriteReason('fastedit edit src/a.ts --replace f', CWD), 'fastedit edit')
+  })
+
+  test('a flag value that looks like /tmp does not stand in for the file (fail closed)', () => {
+    assert.strictEqual(commandWriteReason('fastedit create --content-file /tmp/c.txt src/new.ts', CWD), 'fastedit create')
   })
 
   // TRDD-J2K6IM4R: a standalone -h/--help on a fastedit/memgrep write verb never runs the

@@ -213,11 +213,9 @@ const REDIRECT_WORD_RE = /^\d*(?:>\||>>?|<{1,3})/
 // `local`/`declare`) fails this test, so they are deliberately NOT collected (fail closed:
 // their effective value is unmodelled, so a use of `$S` after them must stay undecidable).
 const ASSIGNMENT_RE = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/
-/** Resolves a word that is EXACTLY `$NAME`/`${NAME}` to a same-command literal assignment
- *  recorded STRICTLY BEFORE `segIdx` (shell semantics: `$S` expands before a same-segment
- *  prefix assignment applies — `S=/tmp/b tee "$S"` reads the OLD value of S, and an assignment
- *  only takes effect for LATER segments). Any other shape (`$NAME/sub`, `$(mktemp)`,
- *  `${NAME:-x}`) is returned unchanged — undecidable, so it stays undecidable and arms. */
+/** Resolves a word that is `$NAME`/`${NAME}`, optionally followed by `/suffix`, to a same-command
+ *  literal assignment recorded before `segIdx`. Any other shape (`$(mktemp)`, `${NAME:-x}`, a name
+ *  with no recorded literal) is returned unchanged and arms. */
 type Resolve = (word: string, segIdx: number) => string
 
 // TRDD-J2K6IM4R: `fastedit multi-edit --help` armed the gate — argparse prints help and exits
@@ -245,7 +243,7 @@ function hasStandaloneHelp(args: string[]): boolean {
 /** `via` names the launcher (`xargs`, `find -exec`) when the targets are not in this segment's text. */
 function segmentWriteReason(base: string, args: string[], via: string | null, cwd: string, resolve: Resolve, segIdx: number): string | null {
   const flagless = args.filter((a) => !a.startsWith('-'))
-  const deployOrDesign = deployOrDesignVerbWriteReason(base, args)
+  const deployOrDesign = deployOrDesignVerbWriteReason(base, args, cwd)
   if (deployOrDesign !== null) return deployOrDesign
   if (base === 'git') {
     let j = 0 // skip global options; `-C dir` / `-c k=v` / `--git-dir x` take a value
@@ -374,10 +372,13 @@ export function commandWriteReason(cmd: string, cwd: string): string | null {
     }
     cumulative.push(next)
   }
+  // WHY: `$SP/file` (a scratchpad redirect) blocked a session three times on 2026-10-09, so the suffix
+  // must resolve too; isEphemeralTarget still judges the joined path, so `$SP/../..` still arms.
   const resolve: Resolve = (word, segIdx) => {
-    const m = /^\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?$/.exec(word)
+    const m = /^(?:\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*))(\/.*)?$/.exec(word)
     if (m === null) return word
-    return cumulative[segIdx]?.get(m[1]) ?? word
+    const value = cumulative[segIdx]?.get(m[1] ?? m[2])
+    return value === undefined ? word : value + (m[3] ?? '')
   }
 
   for (let idx = 0; idx < segments.length; idx++) {
@@ -419,16 +420,25 @@ const FASTEDIT_WRITE_VERBS = new Set([
   'edit', 'multi-edit', 'batch-edit', 'create', 'duplicate', 'split', 'join',
   'delete', 'move', 'rename', 'rename-all', 'move-to-file', 'undo',
 ])
+
+// WHY: only these verbs write the file named by their first positional, so only they may exempt an
+// ephemeral target. A duplicate/join/split source or a move/rename symbol in /tmp says nothing about the write.
+const FASTEDIT_FILE_FIRST_VERBS = new Set(['create', 'edit', 'batch-edit', 'delete', 'undo'])
 const TRDDGREP_WRITE_VERBS = new Set(['new', 'set', 'append', 'check-box', 'move', 'edit', 'fix'])
 
 /** D7: fastedit / trddgrep / prrdgrep / specgrep write verbs, and the deploy commands
  *  (`node esbuild.js`, `pnpm|npm run package|compile|watch|local`, `agentlenspro server
  *  start|stop|restart`). */
-function deployOrDesignVerbWriteReason(base: string, args: string[]): string | null {
+function deployOrDesignVerbWriteReason(base: string, args: string[], cwd: string): string | null {
   if (base === 'fastedit') {
     const sub = args[0] ?? ''
     if (!FASTEDIT_WRITE_VERBS.has(sub)) return null
-    return hasStandaloneHelp(args) ? null : `fastedit ${sub}`
+    if (hasStandaloneHelp(args)) return null
+    // WHY: a file-first write into reports/, *_dev/ or /tmp is scratch, not work. Only the first positional
+    // counts, and one after a flag arms (`--content-file /tmp/c src/new.ts`: /tmp/c is that flag's value).
+    const k = args.findIndex((a, n) => n > 0 && !a.startsWith('-'))
+    if (FASTEDIT_FILE_FIRST_VERBS.has(sub) && k > 0 && !args[k - 1].startsWith('-') && isEphemeralTarget(args[k], cwd)) return null
+    return `fastedit ${sub}`
   }
   if (base === 'trddgrep') {
     let j = 0

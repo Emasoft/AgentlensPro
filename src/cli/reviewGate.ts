@@ -28,7 +28,7 @@ import { agentlensDisabled, killSwitchHalf, killSwitchPath } from './killSwitch'
 import { readStdin } from './hookHandlers'
 import { DELEGATE_DENY_REASON } from './delegateGate'
 import {
-  commandWriteReason, isEphemeralTarget, textArms, PROPOSAL_MARKER,
+  commandWriteReason, isNeverGatedTarget, textArms, PROPOSAL_MARKER,
   NO_REVIEW_SENTINEL, NO_REVIEW_SENTINEL_EXAMPLES, isNoReviewSentinel,
 } from './reviewGateTriggers'
 import type { ArmCause } from './reviewGateTriggers'
@@ -424,7 +424,8 @@ export function isDeniedEdit(b: AssistantContentBlock, denied: Set<string>): boo
 export function toolUseWork(b: AssistantContentBlock, cwd: string): { cause: ArmCause; detail: string } | null {
   if (typeof b.name === 'string' && EDITORS.has(b.name)) {
     const file = String(b.input?.file_path ?? b.input?.notebook_path ?? '')
-    return isEphemeralTarget(file, cwd) ? null : { cause: 'edit', detail: `${b.name} ${path.basename(file)}` }
+    // WHY: plan files under ~/.claude/plans/ are documents, not code, so a Write there must not arm the gate.
+    return isNeverGatedTarget(file, cwd) ? null : { cause: 'edit', detail: `${b.name} ${path.basename(file)}` }
   }
   if (b.name === 'Bash') {
     const why = commandWriteReason(String(b.input?.command ?? ''), cwd)
