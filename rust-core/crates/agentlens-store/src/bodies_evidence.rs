@@ -28,7 +28,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use crate::sections::{reassemble, sha256_hex, Part};
-use crate::{parquet_scan, BLOBS_DIR, BODIES_DIR, PARTS_DIR};
+use crate::{parquet_scan, API_CALLS_DIR, BLOBS_DIR, BODIES_DIR, PARTS_DIR};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct EvidenceRow {
@@ -352,6 +352,87 @@ pub fn load_body_texts(
         Ok(())
     })?;
     Ok(out)
+}
+
+/// One request row's persisted prefix (QSFYIHUO step 2), as selected by [`list_prefix_rows`].
+/// `prefix_json` is carried RAW — the version policy (S1) is the CONSUMER's, because only it knows
+/// what falling back means for its query; this layer must not guess.
+#[derive(Debug, Clone)]
+pub struct PrefixRow {
+    /// The api_call row key (the filename stem, `.request.json` stripped).
+    pub stem: String,
+    pub ts_ms: Option<f64>,
+    pub session_id: Option<String>,
+    pub model: Option<String>,
+    pub previous_message_id: Option<String>,
+    pub prefix_json: Option<String>,
+}
+
+/// The persisted TurnPrefix rows for the cache-break read path.
+///
+/// W1 (delegation review watch-item, QSFYIHUO round-2 S2): the top-K is a TWO-STAGE query, never
+/// one statement that projects `prefix_json` corpus-wide. Stage 1 selects ONLY the narrow columns
+/// (`stem, ts_ms, session_id, model, previous_message_id`) with the window filter and — when the
+/// caller passes no window — `ORDER BY ts_ms DESC LIMIT k`. The guarantee is RESULT-level: only
+/// the ≤k selected rows' prefix values ever reach the consumer. It is NOT an IO guarantee —
+/// DuckDB still decodes the wide column for the row groups the scan touches (uuid stems carry no
+/// zonemaps) — but the prefix corpus beyond the top-K is never materialized or returned. Stage 2
+/// joins back for `prefix_json` filtered to the selected stems alone. The store's own parts are
+/// written by `flush_detailed` with the same column set, so `union_by_name` over parts of mixed
+/// generations fills `prefix_json` with NULL on pre-step-2 parts — exactly the fallback signal
+/// the consumer wants.
+///
+/// NULL `prefix_json` rows are RETURNED (not filtered): a row may be wanted for its narrow fields
+/// even where the prefix is absent, and the consumer's dedup then lets the body scan decide.
+pub fn list_prefix_rows(
+    store_dir: &Path,
+    ts_from_ms: Option<f64>,
+    k: usize,
+) -> Result<Vec<PrefixRow>, String> {
+    let Some(scan) = parquet_scan(store_dir, API_CALLS_DIR) else { return Ok(Vec::new()) };
+    with_duck(store_dir, |con| {
+        let mut where_parts: Vec<String> = Vec::new();
+        where_parts.push("kind = 'request'".to_owned());
+        if let Some(t) = ts_from_ms {
+            where_parts.push(format!("ts_ms >= {}", t.floor() as i64));
+        }
+        let where_sql = format!("WHERE {}", where_parts.join(" AND "));
+        // STAGE 1 — narrow projection, top-K BEFORE any wide column is touched.
+        let stage1 = format!(
+            "SELECT stem, ts_ms, session_id, model, previous_message_id FROM {scan} {where_sql} \
+             ORDER BY ts_ms DESC NULLS LAST LIMIT {k}"
+        );
+        let narrow = query_rows(con, &stage1, 5)?;
+        if narrow.is_empty() {
+            return Ok(Vec::new());
+        }
+        // STAGE 2 — prefix_json ONLY for the selected stems (already ≤ k). kind is re-guarded:
+        // a response row sharing a stem string with a request must never overwrite its prefix.
+        let stems: Vec<String> = narrow.iter().filter_map(|r| r[0].clone()).map(|s| sq(&s)).collect();
+        let stem_list = stems.join(",");
+        let stage2 = format!("SELECT stem, prefix_json FROM {scan} WHERE kind = 'request' AND stem IN ({stem_list})");
+        let wide = query_rows(con, &stage2, 2)?;
+        let prefix_by_stem: HashMap<String, Option<String>> = wide
+            .into_iter()
+            .filter_map(|r| {
+                let stem = r[0].clone()?;
+                // A stem can appear once per part generation; LAST wins is arbitrary and fine —
+                // ingest never writes two rows for one (stem, kind) capture event.
+                Some((stem, r[1].clone()))
+            })
+            .collect();
+        Ok(narrow
+            .into_iter()
+            .map(|r| PrefixRow {
+                stem: r[0].clone().unwrap_or_default(),
+                ts_ms: r[1].as_ref().and_then(|s| s.parse::<f64>().ok()),
+                session_id: r[2].clone(),
+                model: r[3].clone(),
+                previous_message_id: r[4].clone(),
+                prefix_json: prefix_by_stem.get(&r[0].clone().unwrap_or_default()).cloned().flatten(),
+            })
+            .collect())
+    })
 }
 
 #[cfg(test)]

@@ -386,3 +386,80 @@ fn an_unparseable_body_still_ingests_and_writes_no_api_call_row() {
 
     let _ = fs::remove_dir_all(store_dir.parent().unwrap());
 }
+
+// ── QSFYIHUO step 2: the prefix_json column + the W1 two-stage read ──────────────
+
+use agentlens_store::bodies_evidence::list_prefix_rows;
+use agentlens_store::pass::ingest_pass_observed_with;
+
+/// Drive one pass WITH an extractor installed (the production shape), for `n` request bodies.
+fn pass_with_extractor(bodies: &Path, store_dir: &Path, tag: &str, n: usize) {
+    let mut store = open_store(store_dir, "1GB", 4).expect("open");
+    let opts = PassOptions { bodies_dir: bodies.to_path_buf(), ..Default::default() };
+    let (mut skip, mut stranded, mut fsynced) = (HashSet::new(), HashSet::new(), HashSet::new());
+    let mut extractor = |parsed: Option<&serde_json::Value>| -> Option<String> {
+        let p = parsed?;
+        let model = p.get("model").and_then(|m| m.as_str()).unwrap_or("?").to_owned();
+        Some(format!("{{\"v\":1,\"p\":{{\"model\":\"{model}-ext-{tag}\"}}}}"))
+    };
+    let r = ingest_pass_observed_with(&mut store, &opts, &mut skip, &mut stranded, &mut fsynced, None, Some(&mut extractor));
+    assert!(r.failed.is_empty(), "pass must be clean: {:?}", r.failed);
+    assert_eq!(r.ingested, n as u64, "all bodies ingested");
+}
+
+#[test]
+fn extractor_backed_pass_persists_prefix_json_and_list_prefix_rows_reads_it_back() {
+    let (bodies, store_dir) = fixture("prefix");
+    write_body(&bodies, "2f8caaaa-0000-4000-8000-000000000011.request.json", &request_body("sess-p", "req_p1"), 60_000);
+    write_body(&bodies, "req_p2.response.json", &response_body("msg_p2"), 50_000);
+
+    pass_with_extractor(&bodies, &store_dir, "one", 2);
+
+    // The read path returns the request row with the extractor's envelope, verbatim.
+    let rows = list_prefix_rows(&store_dir, None, 100).expect("prefix query");
+    assert_eq!(rows.len(), 1, "request rows only: {rows:?}");
+    assert_eq!(rows[0].stem, "2f8caaaa-0000-4000-8000-000000000011");
+    assert_eq!(rows[0].session_id.as_deref(), Some("sess-p"));
+    let pj = rows[0].prefix_json.as_deref().expect("the extractor's prefix MUST land on the row");
+    assert_eq!(pj, "{\"v\":1,\"p\":{\"model\":\"claude-opus-5-ext-one\"}}", "envelope verbatim: {pj}");
+}
+
+#[test]
+fn a_null_prefix_row_still_lists_with_none_and_the_window_filters_in_sql() {
+    let (bodies, store_dir) = fixture("prefixnull");
+    // Two request bodies: one ingested WITH the extractor (recent), one WITHOUT (older) —
+    // a mixed-generation store.
+    write_body(&bodies, "2f8caaaa-0000-4000-8000-000000000021.request.json", &request_body("sess-n1", "req_n1"), 60_000);
+    pass_with_extractor(&bodies, &store_dir, "hot", 1);
+
+    let mut store = open_store(&store_dir, "1GB", 4).expect("open");
+    let opts = PassOptions { bodies_dir: bodies.clone(), ..Default::default() };
+    let (mut skip, mut stranded, mut fsynced) = (HashSet::new(), HashSet::new(), HashSet::new());
+    write_body(&bodies, "2f8caaaa-0000-4000-8000-000000000022.request.json", &request_body("sess-n2", "req_n2"), 120_000);
+    let r = ingest_pass_observed_with(&mut store, &opts, &mut skip, &mut stranded, &mut fsynced, None, None);
+    assert_eq!(r.ingested, 1, "second pass ingests the older body without an extractor: {:?}", r.failed);
+    drop(store);
+
+    // Unwindowed top-2: BOTH rows come back, the NULL-prefix one honestly carrying None.
+    let rows = list_prefix_rows(&store_dir, None, 2).expect("query");
+    assert_eq!(rows.len(), 2, "both request rows list: {rows:?}");
+    let by_stem: std::collections::HashMap<&str, &agentlens_store::bodies_evidence::PrefixRow> =
+        rows.iter().map(|r| (r.stem.as_str(), r)).collect();
+    assert!(by_stem["2f8caaaa-0000-4000-8000-000000000021"].prefix_json.is_some(), "extractor-fed row has its prefix");
+    assert_eq!(
+        by_stem["2f8caaaa-0000-4000-8000-000000000022"].prefix_json, None,
+        "pre-extractor row carries None — the body-scan fallback signal"
+    );
+
+    // Windowed: only the RECENT row (60s old) is inside a 90s window; the 120s-old one is out.
+    let since = (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as f64) - 90_000.0;
+    let rows = list_prefix_rows(&store_dir, Some(since), 100).expect("windowed query");
+    assert_eq!(rows.len(), 1, "the window filters in SQL: {rows:?}");
+    assert_eq!(rows[0].stem, "2f8caaaa-0000-4000-8000-000000000021");
+
+    // W1/S2: the top-K precedes the wide projection — a cap of 1 returns exactly the most
+    // recent row, and the query never had to read prefix_json beyond the selected stem.
+    let rows = list_prefix_rows(&store_dir, None, 1).expect("capped query");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].stem, "2f8caaaa-0000-4000-8000-000000000021", "top-1 by ts DESC");
+}

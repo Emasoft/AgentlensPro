@@ -189,7 +189,12 @@ pub fn open_store(dir: &Path, memory_limit: &str, threads: usize) -> duckdb::Res
            msg_id VARCHAR, stop_reason VARCHAR, input_tokens BIGINT, output_tokens BIGINT,
            cache_read_tokens BIGINT, cache_creation_tokens BIGINT, tier_5m_tokens BIGINT,
            tier_1h_tokens BIGINT, cache_missed_input_tokens BIGINT, cache_miss_reason VARCHAR,
-           service_tier VARCHAR
+           service_tier VARCHAR,
+           -- QSFYIHUO step 2: the serialized TurnPrefix (v:1 envelope) captured at ingest, so the
+           -- cache-break timeline classifies turns with the body file deleted. Nullable: NULL rows
+           -- and pre-extractor parts (union_by_name fills the column with NULL) fall back to the
+           -- body scan at the read site.
+           prefix_json VARCHAR
          );"
     ))?;
     let mut known = HashSet::new();
@@ -341,7 +346,9 @@ fn extract_meta(parsed: Option<&serde_json::Value>, src_name: &str) -> (Option<S
 }
 
 /// The api_call row for one ingested FILE (TRDD-9SYRK6SW). Reuses the caller's parsed `Value` —
-/// `raw` is never parsed a second time.
+/// `raw` is never parsed a second time. `prefix_json` is the caller's (extractor-backed) serialized
+/// TurnPrefix for request rows — the store cannot derive it itself (agentlens-core's extractor,
+/// crate cycle) — and None leaves the column NULL, the read site's body-scan fallback signal.
 fn append_api_call_row(
     store: &mut Store,
     parsed: &serde_json::Value,
@@ -349,8 +356,13 @@ fn append_api_call_row(
     raw_bytes: u64,
     ts_ms: i64,
     session_id: Option<&str>,
+    prefix_json: Option<String>,
 ) -> Result<(), String> {
     let r = api_call::extract_api_call_meta(parsed, src_name, ts_ms, raw_bytes, session_id);
+    // Write-boundary guard (QSFYIHUO step 2): prefix_json is REQUEST-only. A caller that hands a
+    // prefix for a response file (or a misrouted extractor) must not pollute response rows — the
+    // column's NULL-on-response is part of the read contracts.
+    let prefix_json = if r.kind == "request" { prefix_json } else { None };
     let mut app = store.con.appender("api_call").map_err(|e| e.to_string())?;
     app.append_row(duckdb::params![
         r.stem,
@@ -379,12 +391,21 @@ fn append_api_call_row(
         r.cache_missed_input_tokens,
         r.cache_miss_reason,
         r.service_tier,
+        prefix_json,
     ])
     .map_err(|e| e.to_string())?;
     app.flush().map_err(|e| e.to_string())
 }
 
-fn append_body_row(store: &mut Store, body_id: &str, src_name: &str, raw: &str, raw_bytes: u64, ts_ms: i64) -> Result<(), String> {
+fn append_body_row(
+    store: &mut Store,
+    body_id: &str,
+    src_name: &str,
+    raw: &str,
+    raw_bytes: u64,
+    ts_ms: i64,
+    prefix_json: Option<String>,
+) -> Result<(), String> {
     // ONE parse per file, shared by both extractors — never a second `serde_json::from_str` over
     // `raw` (TRDD-9SYRK6SW acceptance). The nested parse inside `extract_meta` is a DIFFERENT
     // string (the embedded `metadata.user_id` JSON), not a re-parse of the body.
@@ -398,7 +419,7 @@ fn append_body_row(store: &mut Store, body_id: &str, src_name: &str, raw: &str, 
     // A body that is not JSON gets no api_call row (its bytes stay reconstructible from the
     // store, so the facts are re-derivable); the `body` row still lands, as it always has.
     if let Some(p) = parsed.as_ref() {
-        append_api_call_row(store, p, src_name, raw_bytes, ts_ms, session_id.as_deref())?;
+        append_api_call_row(store, p, src_name, raw_bytes, ts_ms, session_id.as_deref(), prefix_json)?;
     }
     let sql = format!(
         "INSERT INTO body VALUES ({}, {}, {}, {}, make_timestamp({}), {}, {}, {})",
@@ -422,13 +443,28 @@ fn append_body_row(store: &mut Store, body_id: &str, src_name: &str, raw: &str, 
 /// ingestBody: idempotent, and GATE 1 — refuses anything that does not reconstruct
 /// byte-identically BEFORE a single row is written.
 pub fn ingest_body(store: &mut Store, src_name: &str, raw: &str, ts_ms: i64) -> Result<IngestResult, String> {
+    ingest_body_with(store, src_name, raw, ts_ms, None)
+}
+
+/// `ingest_body` plus the QSFYIHUO step-2 prefix capture: `prefix_json` (the caller-injected
+/// extractor's serialized TurnPrefix for a REQUEST row, v:1 envelope) is persisted on the api_call
+/// row. Both ingest paths — content-dedup and fresh — carry it, so a re-emitted body also keeps its
+/// prefix. `None` writes NULL (alstore CLI, tests, pre-extractor callers), the read site's
+/// fallback signal.
+pub fn ingest_body_with(
+    store: &mut Store,
+    src_name: &str,
+    raw: &str,
+    ts_ms: i64,
+    prefix_json: Option<String>,
+) -> Result<IngestResult, String> {
     let body_id = body_id_of(raw);
     let raw_bytes = raw.len() as u64;
 
     if store.body_ids.contains(&body_id) {
         // Content dedup — but each capture event still gets its own (src_name, ts) body row.
         if !store.bodies_named.contains(&named_key(&body_id, src_name)) {
-            append_body_row(store, &body_id, src_name, raw, raw_bytes, ts_ms)?;
+            append_body_row(store, &body_id, src_name, raw, raw_bytes, ts_ms, prefix_json)?;
         }
         return Ok(IngestResult { body_id, raw_bytes, new_blobs: 0, new_bytes: 0, existed: true });
     }
@@ -457,7 +493,7 @@ pub fn ingest_body(store: &mut Store, src_name: &str, raw: &str, ts_ms: i64) -> 
         app.flush().map_err(|e| e.to_string())?;
     }
 
-    append_body_row(store, &body_id, src_name, raw, raw_bytes, ts_ms)?;
+    append_body_row(store, &body_id, src_name, raw, raw_bytes, ts_ms, prefix_json)?;
 
     {
         let mut app = store.con.appender("part").map_err(|e| e.to_string())?;

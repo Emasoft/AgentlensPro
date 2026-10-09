@@ -92,6 +92,15 @@ pub struct ApiCallRow {
     pub cache_missed_input_tokens: Option<i64>,
     pub cache_miss_reason: Option<String>,
     pub service_tier: Option<String>,
+
+    // ── request-only, QSFYIHUO step 2 ───────────────────────────────────────────
+    /// The serialized TurnPrefix of the request, persisted AT INGEST so the cache-break timeline
+    /// can classify turns after the bodies pass deletes the body. Written by the caller-injected
+    /// extractor (agentlens-core's `extract_turn_prefix`; the store cannot depend on that crate —
+    /// cycle), wrapped in the v:1 codec envelope (`turn_prefix_codec::PREFIX_VERSION`). NULL on
+    /// pre-extractor rows and on all response rows; a NULL here means the consumer falls back to
+    /// the body scan.
+    pub prefix_json: Option<String>,
 }
 
 /// The row key: the filename with its shared `.request.json`/`.response.json` suffix stripped.

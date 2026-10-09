@@ -95,7 +95,15 @@ fn body_links_relation(data_dir: &Path) -> Option<String> {
 /// The api_calls COALESCED relation — one row per CALL: request facts (fingerprints, billing) + response facts (token buckets, miss reason), session_id resolved for BOTH kinds via the link table. None when no api_call parquet parts exist (blind, never a bare glob).
 pub fn api_calls_relation(store_dir: &Path, data_dir: &Path) -> Option<String> {
     let parts = agentlens_store::parquet_scan(store_dir, agentlens_store::API_CALLS_DIR)?;
-    let parts = varchar_session_id(&format!("SELECT * FROM {parts}"));
+    // A5 (QSFYIHUO step 2): SELECT * over the parts projection named — the coalesce below reads
+    // only these 21 columns, and naming them keeps the api_calls view narrow as the row grows.
+    // prefix_json is deliberately excluded (nothing in this view consumes it); so are
+    // cache_missed_input_tokens and service_tier (pre-existing wide columns this view never read).
+    const API_VIEW_COLUMNS: &str = "stem, kind, ts_ms, model, session_id, system_fps, tools_fp, \
+         first_user_fp, breakpoint_positions, billing_header, cc_prev_req, previous_message_id, \
+         cache_read_tokens, cache_creation_tokens, cache_miss_reason, input_tokens, output_tokens, \
+         tier_5m_tokens, tier_1h_tokens, stop_reason, msg_id";
+    let parts = varchar_session_id(&format!("SELECT {API_VIEW_COLUMNS} FROM {parts}"));
     let links = body_links_relation(data_dir);
     let links = links.unwrap_or_else(|| {
         // No links at all: an empty-typed relation keeps the SQL shape uniform — the coalesce

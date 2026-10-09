@@ -793,6 +793,9 @@ impl GitAnchor {
     }
 }
 
+// PartialEq + Debug for the QSFYIHUO step-2 codec round-trip test: the S3 invariant
+// (from_prefix_json is the EXACT inverse of to_prefix_json) is asserted as deep equality.
+#[derive(Clone, Debug, PartialEq)]
 pub struct PrefixTool {
     pub name: String,
     pub deferred: bool,
@@ -806,6 +809,7 @@ impl PrefixTool {
     }
 }
 
+#[derive(Clone, Debug, PartialEq)]
 pub struct PrefixBlock {
     pub layer: Layer,
     pub kind: BlockContentKind,
@@ -833,6 +837,7 @@ impl PrefixBlock {
     }
 }
 
+#[derive(Clone, Debug, PartialEq)]
 pub struct TurnPrefix {
     pub model: String,
     /// Request parameters rendered into the prompt. Kept SEPARATE (they were one blended `effort`
@@ -2217,10 +2222,58 @@ fn scan_sessions_and_responses(
 
     // Parse requests → compact turns, grouped by session. Same chunk discipline.
     let mut by_session: IndexMap<String, Vec<ScannedTurn>> = IndexMap::new();
+
+    // QSFYIHUO step 2 — STORE-FIRST PREFIX PASS. The api_call rows carry each request's serialized
+    // TurnPrefix (v:1), captured at ingest before the settle gate deletes the body file, so turns
+    // classify with ZERO raw bodies on disk. Windowed + capped IN SQL (W1/S2: a two-stage
+    // narrow-then-join query — prefix_json is never projected corpus-wide). The S1 policy lives in
+    // `from_prefix_json`: a missing/unknown version makes THAT row None, and a None prefix is NOT
+    // marked store-covered, so the row falls through to the body scan below (pre-extractor parts,
+    // NULL columns, future shapes). Dedup is by request stem: a stem fed from the store skips its
+    // body-scan row — the store row is the same capture (proven bytes) with the prefix in hand.
+    // Mixed-provenance sessions are therefore sound (S3's exact-inverse round-trip is what makes a
+    // store-fed prefix behave identically to a body-extracted one); three consecutive store-fed
+    // prefixes supply prev2 for SubagentInterleave exactly as body-fed ones do, since
+    // classify_turns reads turns[i-2] regardless of provenance.
+    let mut store_covered: HashSet<String> = HashSet::new();
+    let mut store_fed = 0usize;
+    match agentlens_store::bodies_evidence::list_prefix_rows(store_dir, ts_from_ms, scan_cap) {
+        Ok(rows) => {
+            for r in rows {
+                let Some(prefix) = crate::turn_prefix_codec::from_prefix_json(r.prefix_json.as_deref()) else { continue };
+                let sid = r.session_id.clone().unwrap_or_else(|| "(no-session)".to_owned());
+                store_covered.insert(r.stem.clone());
+                store_fed += 1;
+                by_session.entry(sid).or_default().push(ScannedTurn {
+                    body_ref: format!("store-prefix:{}", r.stem),
+                    // The documented null-ts sentinel (the stamp() block above): 0 sorts LAST and
+                    // is excluded from windows — `now` would FABRICATE a capture ts.
+                    mtime_ms: r.ts_ms.unwrap_or(0.0),
+                    previous_message_id: r.previous_message_id.clone(),
+                    session_id: r.session_id.clone(),
+                    // N6 ruling: account ids are ruled out of the store (no-identities doctrine);
+                    // a store-fed turn reports no accountUuid — one diagnostic field degrades.
+                    account_uuid: None,
+                    prefix: Some(prefix),
+                });
+            }
+        }
+        Err(e) => {
+            // The store pass is an ENHANCEMENT, not a gate: a store open/scan failure degrades to
+            // the body scan (which still reads the api_call-less bodies corpus), surfaced in the
+            // note below. Fail-fast does not apply here — the fallback IS the documented path.
+            eprintln!("{} cache-break: store prefix pass failed, falling back to body scan: {e}", crate::log_ts());
+        }
+    }
+
     for chunk in req_slice.chunks(EVIDENCE_LOAD_CHUNK) {
         let mut owned = chunk.to_vec();
         let texts = load_body_texts(store_dir, spool, &mut owned, EVIDENCE_LOAD_CHUNK).unwrap_or_default();
         for row in &owned {
+            // Store-fed stems skip their body-scan row (dedup by request stem, store wins).
+            if store_covered.contains(agentlens_store::api_call::stem_of(&row.src_name)) {
+                continue;
+            }
             let Some(body) = parse_bounded(texts.get(&row.src_name), MAX_REQUEST_BYTES) else { continue };
             let uid = parse_user_id(body.get("metadata").and_then(|m| m.get("user_id")).unwrap_or(&Value::Null));
             let sid = uid.session_id.clone().unwrap_or_else(|| "(no-session)".to_owned());
@@ -2246,14 +2299,19 @@ fn scan_sessions_and_responses(
         Some(h) if h != 0.0 => format!(" in the last {}h", fmt_js_num(h)),
         _ => String::new(),
     };
+    let note_suffix = if store_fed > 0 {
+        format!(" {store_fed} turn prefix(es) came from the durable api_call store (no body parse).")
+    } else {
+        String::new()
+    };
     let note = if complete {
         format!(
-            "Scanned all {req_matched} request body(ies){window_phrase} across {sessions_found} session(s) — {from_store} from the Parquet store, {} from the raw spool (drained history stays in evidence).",
+            "Scanned all {req_matched} request body(ies){window_phrase} across {sessions_found} session(s) — {from_store} from the Parquet store, {} from the raw spool (drained history stays in evidence).{note_suffix}",
             req_slice.len() - from_store
         )
     } else {
         format!(
-            "SAMPLE: {} most-recent of {req_matched} matching request body(ies) across {sessions_found} session(s) (cap {scan_cap}; {from_store} store / {} spool). Not full history.",
+            "SAMPLE: {} most-recent of {req_matched} matching request body(ies) across {sessions_found} session(s) (cap {scan_cap}; {from_store} store / {} spool). Not full history.{note_suffix}",
             req_slice.len(),
             req_slice.len() - from_store
         )

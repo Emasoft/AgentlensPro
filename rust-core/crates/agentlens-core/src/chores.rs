@@ -440,7 +440,24 @@ pub fn bodies_pass(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
                 }
             };
             let observer: Option<&mut agentlens_store::pass::BodyObserver<'_>> = if body_tap.is_some() { Some(&mut tap_observer) } else { None };
-            let res = agentlens_store::pass::ingest_pass_observed(&mut store, &opts, &mut skip, &mut stranded, &mut fsynced, observer);
+            // QSFYIHUO step 2 (S6 wiring): the prefix extractor is threaded HERE, at the one
+            // production ingest site, so request rows carry their serialized TurnPrefix before the
+            // settle gate deletes the body file. A future caller that bypasses this site writes
+            // NULL prefix rows and the read site falls back to the body scan — the wiring test
+            // (tests/chores_prefix_wiring.rs) pins this exact construction.
+            let mut prefix_extractor = |parsed: Option<&Value>| -> Option<String> {
+                let p = crate::cache_break_timeline::extract_turn_prefix(parsed)?;
+                Some(crate::turn_prefix_codec::to_prefix_json(&p))
+            };
+            let res = agentlens_store::pass::ingest_pass_observed_with(
+                &mut store,
+                &opts,
+                &mut skip,
+                &mut stranded,
+                &mut fsynced,
+                observer,
+                Some(&mut prefix_extractor),
+            );
             ingested += res.ingested;
             deleted += res.deleted;
             bytes_freed += res.bytes_freed;

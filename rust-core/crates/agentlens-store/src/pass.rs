@@ -26,7 +26,7 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::{flush_detailed, ingest_body, Store, VerifyItem, API_CALLS_DIR, BLOBS_DIR, BODIES_DIR, PARTS_DIR};
+use crate::{flush_detailed, ingest_body_with, Store, VerifyItem, API_CALLS_DIR, BLOBS_DIR, BODIES_DIR, PARTS_DIR};
 
 pub const DEFAULT_MAX_BYTES_PER_PASS: u64 = 512 * 1024 * 1024;
 pub const DEFAULT_BATCH: usize = 200;
@@ -254,11 +254,20 @@ pub fn ingest_pass(
     stranded_names: &mut HashSet<String>,
     fsynced_parts: &mut HashSet<PathBuf>,
 ) -> PassResult {
-    ingest_pass_observed(store, opts, skip_names, stranded_names, fsynced_parts, None)
+    ingest_pass_observed_with(store, opts, skip_names, stranded_names, fsynced_parts, None, None)
 }
 
 /// `observer(file_name, file_text)`.
 pub type BodyObserver<'a> = dyn FnMut(&str, &str) + 'a;
+
+/// `prefix_extractor(parsed_body) -> prefix_json` — the QSFYIHUO step-2 seam. agentlens-core
+/// injects its `extract_turn_prefix` + serialization here because the store cannot depend on that
+/// crate (cycle). `None` (alstore CLI, tests) leaves `prefix_json` NULL, the read site's fallback
+/// signal. COST MODEL: `ingest_body` parses the body PRIVATELY (inside `append_body_row`), so the
+/// pass cannot reuse that `Value` — with an extractor installed this seam causes a REAL second
+/// `serde_json` parse of each non-response file (same bytes the ingest parse reads); without one,
+/// no extra parse happens at all.
+pub type PrefixExtractor<'a> = dyn FnMut(Option<&serde_json::Value>) -> Option<String> + 'a;
 
 /// `ingest_pass` plus an optional observer, called as `observer(file_name, file_text)` for every
 /// body file this pass ingested into the store (only AFTER `ingest_body` succeeded, so a file that
@@ -271,7 +280,22 @@ pub fn ingest_pass_observed(
     skip_names: &mut HashSet<String>,
     stranded_names: &mut HashSet<String>,
     fsynced_parts: &mut HashSet<PathBuf>,
+    observer: Option<&mut BodyObserver<'_>>,
+) -> PassResult {
+    ingest_pass_observed_with(store, opts, skip_names, stranded_names, fsynced_parts, observer, None)
+}
+
+/// `ingest_pass_observed` plus the optional prefix extractor, run at INGEST time (before the body
+/// file is deleted by the settle gate) so the serialized TurnPrefix lands on the api_call row while
+/// the bytes are still in hand.
+pub fn ingest_pass_observed_with(
+    store: &mut Store,
+    opts: &PassOptions,
+    skip_names: &mut HashSet<String>,
+    stranded_names: &mut HashSet<String>,
+    fsynced_parts: &mut HashSet<PathBuf>,
     mut observer: Option<&mut BodyObserver<'_>>,
+    mut prefix_extractor: Option<&mut PrefixExtractor<'_>>,
 ) -> PassResult {
     let mut res = PassResult::default();
     let mut relocate_failures = 0u32;
@@ -504,7 +528,21 @@ pub fn ingest_pass_observed(
                 Ok(r) => r,
                 Err(_) => continue, // vanished mid-pass — fine
             };
-            match ingest_body(store, &f.name, &raw, f.mtime_ms) {
+            // QSFYIHUO step 2: serialize the prefix while the bytes are in hand. Request files
+            // only — a response has no TurnPrefix (mirrors extract_api_call_meta's kind test), so
+            // the parse+extract is skipped for .response. files rather than discarded at the row.
+            // ONE parse shared with ingest_body_with's meta extraction is not possible (that parse
+            // lives inside append_body_row), so this is the pass's own parse — but only when an
+            // extractor is installed, never on the CLI/test path.
+            let prefix_json = if f.name.contains(".response.") {
+                None
+            } else {
+                prefix_extractor.as_deref_mut().and_then(|ex| {
+                    let parsed = serde_json::from_str::<serde_json::Value>(&raw).ok();
+                    ex(parsed.as_ref())
+                })
+            };
+            match ingest_body_with(store, &f.name, &raw, f.mtime_ms, prefix_json) {
                 Ok(r) => {
                     if let Some(observe) = observer.as_mut() {
                         observe(&f.name, &raw);
