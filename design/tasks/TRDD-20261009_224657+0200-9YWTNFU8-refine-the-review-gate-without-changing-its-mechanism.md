@@ -1,10 +1,10 @@
 ---
 trdd-id: 9YWTNFU8
 title: Refine the review gate without changing its mechanism
-column: dev
+column: ai_review
 status: tasked
 created: 2026-10-09T22:46:57+0200
-updated: 2026-10-09T22:46:57+0200
+updated: 2026-10-10T00:20:06+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: refactor
@@ -15,6 +15,7 @@ mandated-by: none
 approved: true
 approval-judge: main-agent@agentlenspro
 approval-datetime: 2026-10-09T22:46:57+0200
+implementation-commits: [a189abf4, a00d0aff, cba2de2b, 0b51ab77, ac13cf3a, 90432969]
 ---
 
 # Refine the review gate without changing its mechanism
@@ -115,3 +116,16 @@ then `pnpm run check-types` and `pnpm run lint`. After step 5: `node esbuild.js`
 ## Approval log
 
 - 2026-10-09T22:46:57+0200 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-10-10T00:06:56+0200 — column → ai_review by main-agent@agentlenspro.
+
+## Implemented (2026-10-10)
+
+All five steps landed, in the binding order 1, 4, 3, 2, 5: a189abf4 (false triggers), a00d0aff (fast-worker measurer), cba2de2b (a returned worker's code arms the main gate), 0b51ab77 (one card append and one path-limited card commit ride each review), ac13cf3a (record-exemption leaks closed, quieter supervisor, shorter block text).
+Gate tests: 248 passing; check-types and lint clean. Bundle rebuilt with node esbuild.js after the last commit (bundle and commit carry the same timestamp, and the three gate source files have no uncommitted diff); the global agentlenspro command resolves to this repo's standalone/cli.js. The live bundle also carries a pre-existing uncommitted src/cli/hookInstall.ts change (three worker agent names added to AGENT_NAMES), so it is not byte-for-byte commit 90432969.
+The plan as a whole, and steps 3, 2 and 5 individually, were measured by a fast-worker from a numbered step list and reviewed by a fork before code was written; steps 1 and 4 were covered by the plan-level review only. Every step's real source diff was reviewed by a fork before or at commit. Design changes forced by those reviews: commits stay gated unless path-limited to card folders; the record exemption is one append plus one commit per review; the review credit stays unconditional (no git-diff precondition); the supervisor is silent on Stop only when the gate will demand and the agent can spawn; worker record writes are not demanded at return.
+Live evidence 2026-10-10: the refined gate blocked the implementing session when a cheap-worker returned with code, naming the cause 'a worker you spawned wrote files' and asking for git diff first.
+Known limits left open: a worker whose return was never recorded (session cleared) is not seen; workers spawned by workers are not scanned; a return outside the 4 MB tail is not seen; recording turns that use trddgrep edit/set/move still arm, so review chains are shortened, not ended; a quoted script that merely mentions a write verb can still arm (fail-closed, left as is).
+Not done, by owner decision pending the new architecture: enforcing proposal-before-write in a PreToolUse hook, and demanding the review at write time instead of at Stop.
+Still unreviewed and outside this card: the uncommitted Rust changes from the two Step-3 fix rounds of 2026-10-09 (investigator_scan.rs, lib.rs, burnscan_store_parity.rs).
+Second live event 2026-10-10: the refined gate falsely blocked on a fast-worker that had only chained trddgrep set/append/move in one Bash command. Fixed in 90432969: commandWriteReasons returns every reason of a command and the worker path drops only builds and card/memory records, so a record-only chain demands nothing while a build or record followed by a real write is still reported. A bash -c or eval string is always reported (fail closed).
+Estimates stated in session that are weaker than measured facts: the share of record-only review demands the exemption removes (no past commit used the path-limited form it requires, so on past behaviour it is small until agents adopt the form); and that the step-2 build with the two leaks never ran live (no evidence it ran; not proven).
