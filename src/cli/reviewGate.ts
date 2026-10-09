@@ -30,7 +30,7 @@ import { readStdin } from './hookHandlers'
 import { DELEGATE_DENY_REASON } from './delegateGate'
 import {
   commandWriteReason, isNeverGatedTarget, textArms, PROPOSAL_MARKER, commandWriteReasons, recordWrite,
-  NO_REVIEW_SENTINEL, NO_REVIEW_SENTINEL_EXAMPLES, isNoReviewSentinel,
+  NO_REVIEW_SENTINEL, NO_REVIEW_SENTINEL_EXAMPLES, isNoReviewSentinel, shellWords, stripHeredocBodies,
 } from './reviewGateTriggers'
 import type { ArmCause } from './reviewGateTriggers'
 // Re-exported so existing importers of these three names from THIS module keep working — the
@@ -447,6 +447,27 @@ export function hookCwd(input: ReviewGateInput): string {
 // A worker's card text is covered when the main agent commits the card, because a card commit not preceded by a review arms.
 const DEPLOY_OR_RECORD_RE = /^(node esbuild\.js|(pnpm|npm) run |agentlenspro server |trddgrep |prrdgrep |specgrep |memgrep )/
 
+
+const NESTED_SHELLS = new Set(['bash', 'sh', 'zsh', 'dash', 'ksh'])
+
+/** Whether a Bash command runs a nested shell (`bash -c`, `/bin/bash -lc`) or an `eval`: its argument is
+ *  a command the classifier never reads whole, so one reason may hide a write behind it. Judged on shell
+ *  words, so a quoted mention of `bash -c` inside a card line does not count. */
+function runsNestedShell(command: string): boolean {
+  const words = shellWords(stripHeredocBodies(command, true))
+  return words.some((w, i) => {
+    if (w.quoted) return false
+    if (w.word === 'eval') return true
+    if (!NESTED_SHELLS.has(path.basename(w.word))) return false
+    for (let j = i + 1; j < words.length; j++) {
+      const n = words[j]
+      if (!n.quoted && /^(\||\|\||&&|;|&)$/.test(n.word)) break
+      if (!n.quoted && /^-[A-Za-z]*c$/.test(n.word)) return true
+    }
+    return false
+  })
+}
+
 /** What ONE background worker wrote, as the detail of a `worker write` block, or null. The worker's
  *  transcript sits beside the main one at `<base>/subagents/agent-<x>.jsonl`, and its `.meta.json`
  *  holds the tool_use id the return names. Skipped: a janitor agent (its writes are the janitor's, as
@@ -486,8 +507,10 @@ export function workerWriteDetail(transcriptPath: string, toolUseId: string, cwd
         // does not hide that write. A nested shell string or eval reports ONE reason for all its text
         // (see the commandWriteReasons shortcut), and that reason may be the record while the write sits
         // behind it, so nothing is dropped there.
+        // Token-based (runsNestedShell): a quoted mention of bash -c in a card line is not a nested shell,
+        // while a path-qualified shell or a clustered -lc-style option still counts.
         const command = String(b.input?.command ?? '')
-        const nested = /(^|[\s;&|])(bash|sh|zsh)\s+-c\b|(^|[\s;&|])eval\s/.test(command)
+        const nested = runsNestedShell(command)
         for (const reason of commandWriteReasons(command, cwd)) {
           if (nested || !DEPLOY_OR_RECORD_RE.test(reason)) details.push(reason)
         }

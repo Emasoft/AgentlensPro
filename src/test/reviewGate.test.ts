@@ -229,6 +229,41 @@ suite('reviewGate — worker writes reach the main gate', () => {
     })
   })
 
+  test('a path-qualified bash -c string is reported, not dropped, when its one reason is a card record', () => {
+    withWorkers((t, s) => {
+      addWorker(s, 'agent-o', 'toolu_W15', 'fast-worker', [userStringLine('record it'), assistantLine([bashBlock("/bin/bash -c 'trddgrep set X f v; sed -i s/a/b/ src/a.ts'")])])
+      assert.strictEqual(workerWriteDetail(t, 'toolu_W15', CWD), 'fast-worker: trddgrep set')
+    })
+  })
+
+  test('a quoted bash -c or eval mention inside a card append is not a nested shell, so the record is dropped', () => {
+    withWorkers((t, s) => {
+      addWorker(s, 'agent-p', 'toolu_W16', 'fast-worker', [userStringLine('record it'), assistantLine([bashBlock('trddgrep append X H "a bash -c or eval string is always reported"')])])
+      assert.strictEqual(workerWriteDetail(t, 'toolu_W16', CWD), null)
+    })
+  })
+
+  test('a quoted eval word in an echo is not a nested shell, so the card record after it is dropped', () => {
+    withWorkers((t, s) => {
+      addWorker(s, 'agent-q', 'toolu_W17', 'fast-worker', [userStringLine('record it'), assistantLine([bashBlock('echo "eval is fine"; trddgrep set X f v')])])
+      assert.strictEqual(workerWriteDetail(t, 'toolu_W17', CWD), null)
+    })
+  })
+
+  test('an eval runs its argument, so the card record it wraps is reported, not dropped', () => {
+    withWorkers((t, s) => {
+      addWorker(s, 'agent-r', 'toolu_W18', 'fast-worker', [userStringLine('record it'), assistantLine([bashBlock('eval "trddgrep set X f v"')])])
+      assert.strictEqual(workerWriteDetail(t, 'toolu_W18', CWD), 'fast-worker: trddgrep set')
+    })
+  })
+
+  test('a plain chain of two card records with no shell has nothing reviewable', () => {
+    withWorkers((t, s) => {
+      addWorker(s, 'agent-s', 'toolu_W19', 'fast-worker', [userStringLine('record it'), assistantLine([bashBlock('trddgrep set X f v; trddgrep append X H l')])])
+      assert.strictEqual(workerWriteDetail(t, 'toolu_W19', CWD), null)
+    })
+  })
+
   test('a worker-write block asks the main agent to list files outside git too', () => {
     assert.ok(mainBlockReason('worker write', 'lean-worker: Edit a.ts', 'review').includes('outside git'))
   })
