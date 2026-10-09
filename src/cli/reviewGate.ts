@@ -16,8 +16,9 @@
 // agents and by background workers, so every 5-minute cron fire spawned a review pair. That, plus
 // role credit that EXPIRED when a measure agent returned (a background notification is one JSONL
 // line, so its heading can never sit at a line start and the credit was lost every time), is the
-// loop that drained the owner's window on 2026-09-14/15. A worker's writes are reviewed by its
-// own SubagentStop gate; the main agent's by its Stop gate; nobody's by a clock.
+// loop that drained the owner's window on 2026-09-14/15. A worker that can spawn is reviewed by its
+// own SubagentStop gate; a worker without the Agent tool is reviewed by the main gate at its return
+// (TRDD-9YWTNFU8); the main agent's writes by its Stop gate; nobody's by a clock.
 // A ROLED SPAWN NOW CREDITS ITS ROLE PERMANENTLY at the spawn index. Both gates share one scan and
 // one decision (`scanTranscriptLines` / `decideGate`), so the criteria cannot drift between them.
 
@@ -28,7 +29,7 @@ import { agentlensDisabled, killSwitchHalf, killSwitchPath } from './killSwitch'
 import { readStdin } from './hookHandlers'
 import { DELEGATE_DENY_REASON } from './delegateGate'
 import {
-  commandWriteReason, isNeverGatedTarget, textArms, PROPOSAL_MARKER,
+  commandWriteReason, isNeverGatedTarget, textArms, PROPOSAL_MARKER, isSingleSegment, recordWrite,
   NO_REVIEW_SENTINEL, NO_REVIEW_SENTINEL_EXAMPLES, isNoReviewSentinel,
 } from './reviewGateTriggers'
 import type { ArmCause } from './reviewGateTriggers'
@@ -137,6 +138,8 @@ WHAT ARMS IT (owner order 2026-09-15):
 - a PROPOSAL: a text block with a line that starts "${PROPOSAL_MARKER}" (a heading or bold prefix is
   fine), followed by the proposal → demands a MEASURE agent AND the REVIEW fork. A proposal that
   lacks that exact line is not a proposal to this gate and triggers nothing.
+- a WORKER RETURN: a non-roled, non-janitor agent you spawned returns having written files → demands ONE REVIEW fork; run \`git status --short\` and \`git diff\` on its files in an earlier response first;
+- NOT a write, though it looks like one: after a fork REVIEW, ONE \`trddgrep append\` to a card that review's prompt names, and ONE path-limited card commit (\`git add <card> && git commit -F msg -- <card>\`, paths under design/tasks, design/proposals, design/archived or .claude/project/memory) do not arm — recording a review is not new work. Everything else does: trddgrep edit/set/move/new, memgrep writes, a commit without \`-- <paths>\`, a second append.
 
 WHAT NEVER ARMS IT: plain prose, status lines, read-only commands, files changed on disk by someone
 else (there is no mtime walk), a janitor heartbeat prompt (\`[janitor-heartbeat]\`) or a user interrupt (Esc / Ctrl-C,
@@ -439,7 +442,8 @@ export function hookCwd(input: ReviewGateInput): string {
 }
 
 /** Writes that are not a reviewable diff: a build, a deploy, or a card or memory record. */
-const DEPLOY_OR_RECORD_RE = /^(node esbuild\.js|(pnpm|npm) run |agentlenspro |trddgrep |prrdgrep |specgrep |memgrep )/
+// `agentlenspro server` only: `agentlenspro config write` rewrites ~/.claude/settings.json, which IS reviewable.
+const DEPLOY_OR_RECORD_RE = /^(node esbuild\.js|(pnpm|npm) run |agentlenspro server |trddgrep |prrdgrep |specgrep |memgrep )/
 
 /** What ONE background worker wrote, as the detail of a `worker write` block, or null. The worker's
  *  transcript sits beside the main one at `<base>/subagents/agent-<x>.jsonl`, and its `.meta.json`
@@ -459,7 +463,9 @@ export function workerWriteDetail(transcriptPath: string, toolUseId: string, cwd
     if (meta === null) return null
     if (JANITOR_AGENT_RE.test(meta.agentType.trim().toLowerCase())) return null
     const rawLines = fs.readFileSync(path.join(dir, meta.file.replace(/\.meta\.json$/, '.jsonl')), 'utf8').split('\n').filter(Boolean)
-    const entries = rawLines.map((l) => JSON.parse(l) as TranscriptEntry)
+    // A torn last line (the worker is still appending) is skipped: a throw here released the worker's code.
+    const entries: TranscriptEntry[] = []
+    for (const l of rawLines) { try { entries.push(JSON.parse(l) as TranscriptEntry) } catch { /* torn line */ } }
     const firstUser = entries.find((e) => e?.type === 'user')
     if (firstUser !== undefined && declaredRoleOwnTranscript(userPromptText(firstUser.message?.content)) !== null) return null
     const denied = deniedToolUseIds(rawLines)
@@ -470,7 +476,9 @@ export function workerWriteDetail(transcriptPath: string, toolUseId: string, cwd
       for (const b of content) {
         if (b?.type !== 'tool_use' || isDeniedEdit(b, denied)) continue
         const w = toolUseWork(b, cwd)
-        if (w !== null && !DEPLOY_OR_RECORD_RE.test(w.detail)) details.push(w.detail)
+        // A build or record detail hides a write only in a SINGLE-segment command: commandWriteReason reports the first reason.
+        const single = b.name !== 'Bash' || isSingleSegment(String(b.input?.command ?? ''))
+        if (w !== null && !(single && DEPLOY_OR_RECORD_RE.test(w.detail))) details.push(w.detail)
       }
     }
     const distinct = Array.from(new Set(details))
@@ -584,6 +592,9 @@ export function scanTranscriptLines(lines: string[], cwd = process.cwd(), ownAge
   const roles: GateScan['roles'] = { measure: -1, review: -1 }
   let ownRole: Role | null = null
   let sawFirstUser = false
+  // The last REVIEW fork's prompt, and which record writes it has already exempted (TRDD-9YWTNFU8). Reset at every REVIEW credit.
+  let lastReviewPrompt: string | null = null
+  let recordUsed = { append: false, commit: false }
   const denied = deniedToolUseIds(lines)
   for (let i = 0; i < lines.length; i++) {
     // WORKER WRITES (TRDD-9YWTNFU8). A background worker (lean/cheap/fast/smart-worker) has no Agent
@@ -594,6 +605,7 @@ export function scanTranscriptLines(lines: string[], cwd = process.cwd(), ownAge
     // whose notification was never recorded (session cleared first) is not seen; workers spawned by
     // workers are not scanned; a heartbeat turn is blocked when a worker returns inside it (intended:
     // that is the 2026-10-09 15:15 case). Without `workerWrote` this branch never runs.
+    // a worker that ran in another cwd (a worktree) has its relative targets judged against the main session's cwd.
     if (workerWrote !== undefined) {
       const returned = workerReturnId(lines[i])
       if (returned !== null) {
@@ -626,7 +638,13 @@ export function scanTranscriptLines(lines: string[], cwd = process.cwd(), ownAge
         // The sentinel is a definitive statement, not a pending spawn — credit BOTH roles.
         // `isNoReviewSentinel` rejects a block carrying anything after the reason line, so prose
         // after it cannot ride along.
-        if (isNoReviewSentinel(text)) { roles.measure = Math.max(roles.measure, i); roles.review = Math.max(roles.review, i); continue }
+        if (isNoReviewSentinel(text)) {
+          roles.measure = Math.max(roles.measure, i)
+          roles.review = Math.max(roles.review, i)
+          lastReviewPrompt = null
+          recordUsed = { append: false, commit: false }
+          continue
+        }
         // A MARKED proposal is work. Plain prose is not — for one day EVERY text block was, and that
         // livelocked idle turns (TRDD-0E3W5C45). The marker is decided in the triggers module.
         if (textArms(text)) { work = { index: i, cause: 'proposal text', detail: '' }; lastProposal = i }
@@ -644,12 +662,26 @@ export function scanTranscriptLines(lines: string[], cwd = process.cwd(), ownAge
         // un-credits it.
         const role = declaredRole(String(b.input?.prompt ?? ''))
         const isFork = String(b.input?.subagent_type ?? '').trim().toLowerCase() === 'fork'
-        if (role === 'review' && isFork) roles.review = Math.max(roles.review, i)
+        if (role === 'review' && isFork) {
+          roles.review = Math.max(roles.review, i)
+          lastReviewPrompt = String(b.input?.prompt ?? '')
+          recordUsed = { append: false, commit: false }
+        }
         if (role === 'measure') roles.measure = Math.max(roles.measure, i)
         continue
       }
       // A delegate-gate-denied call never ran (TRDD-PNB9FNJ0) — not work.
       if (isDeniedEdit(b, denied)) continue
+      // RECORD WRITES ARE NOT NEW WORK (TRDD-9YWTNFU8): one card append and one path-limited card commit ride each review,
+      // and only a record naming that review's card; a review's own bookkeeping must not spawn a review of its note.
+      if (b.name === 'Bash') {
+        const rec = recordWrite(String(b.input?.command ?? ''), cwd)
+        if (rec !== null && lastReviewPrompt !== null && roles.review !== -1 && (work === null || work.index <= roles.review) && !recordUsed[rec.kind]
+          && (rec.kind === 'commit' || new RegExp(`(^|[^A-Za-z0-9])${rec.id}([^A-Za-z0-9]|$)`, 'i').test(lastReviewPrompt))) {
+          recordUsed[rec.kind] = true
+          continue
+        }
+      }
       const w = toolUseWork(b, cwd)
       if (w !== null) work = { index: i, ...w }
     }
@@ -718,7 +750,7 @@ export function mainBlockReason(cause: ArmCause, detail: string, demand: Demand)
   const what = detail === '' ? ARM_CAUSE_TEXT[cause] : `${ARM_CAUSE_TEXT[cause]}: ${detail}`
   // WHY: a worker's files are already on disk and its report only describes them, so the fork must review the real diff.
   const gitFirst = cause === 'worker write'
-    ? 'FIRST, in an earlier response than the fork spawn, run `git status --short` and `git diff` on the files the worker changed (print new files too), so the fork reviews the real change and not a description. '
+    ? 'FIRST, in an earlier response than the fork spawn, run `git status --short` and `git diff` on the files the worker changed (print new files too, or `cat` a file that is outside git), so the fork reviews the real change and not a description. '
     : ''
   return `Review gate: ${what} after the last review (scanned: the transcript's last 4 MB). ${gitFirst}${demandText(demand)}`
 }

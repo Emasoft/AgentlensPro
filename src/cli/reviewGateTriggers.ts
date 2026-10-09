@@ -589,3 +589,87 @@ export function isNoReviewSentinel(text: string): boolean {
   const reason = firstLine.replace(/^[\s—:-]+/, '').trim()
   return reason.length >= 8
 }
+
+// ── Record writes after a review (TRDD-9YWTNFU8) ─────────────────────────────────────────────────
+// 17 of 38 audited review forks reviewed nothing but the note recording the previous review, in chains
+// of 6 to 9. Writing down what a review found, on the card that review was about, is not new work, so
+// it does not arm. This RELAXES coverage, so exactly two shapes qualify and any doubt returns null.
+
+const SEGMENT_SEPARATOR_RE = /^(\||\|\||&&|;|&)$/
+/** The folders a record write may touch: the TRDD lifecycle folders and the project memory. */
+const CARD_DIRS = ['design/tasks/', 'design/proposals/', 'design/archived/', '.claude/project/memory/']
+const isWord = (w: Word | undefined, s: string): boolean => w !== undefined && !w.quoted && w.word === s
+
+/** True when the command is ONE segment: no unquoted `;` `&&` `||` `|` `&` word. */
+export function isSingleSegment(cmd: string): boolean {
+  return shellWords(stripHeredocBodies(cmd, true)).every((w) => w.quoted || !SEGMENT_SEPARATOR_RE.test(w.word))
+}
+
+/** A literal path a record write may touch: no shell metacharacter, no `..` segment, inside CARD_DIRS. */
+function isCardPath(p: string, cwd: string): boolean {
+  if (p === '' || /[$`~*?{}[\]]/.test(p) || p.split('/').includes('..')) return false
+  const rel = path.relative(cwd, path.resolve(cwd, p))
+  return CARD_DIRS.some((d) => rel.startsWith(d))
+}
+
+/** The paths of a `git commit` argument list, or null. Paths must follow `--`, and every word before it
+ *  must be an option or the value of -m/-F: a bare word there is a pathspec git would commit too. Options
+ *  that widen the commit (-a, -i, -o, -p and their clusters, and the long forms) are refused on every
+ *  word, quoted or not. */
+function commitPaths(args: string[], cwd: string): string[] | null {
+  const dd = args.indexOf('--')
+  if (dd < 0 || dd === args.length - 1) return null
+  const flags = args.slice(0, dd)
+  if (flags.some((a) => /^(--(all|amend|patch|include|only)(=|$)|-[a-zA-Z]*[aipo])/.test(a))) return null
+  for (let i = 0; i < flags.length; i++) {
+    if (flags[i] === '-m' || flags[i] === '-F') {
+      i++
+      if (i >= flags.length) return null
+    } else if (!flags[i].startsWith('-')) return null
+  }
+  const paths = args.slice(dd + 1)
+  return paths.every((p) => isCardPath(p, cwd)) ? paths : null
+}
+
+/** `[NAME=value …] trddgrep [--design-dir <dir>]… append <card-id> …`, as one segment; or null. */
+function trddAppend(words: Word[]): { kind: 'append'; id: string } | null {
+  let k = 0
+  while (k < words.length && !words[k].quoted && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[k].word)) k++
+  if (!isWord(words[k], 'trddgrep')) return null
+  for (k++; isWord(words[k], '--design-dir'); k += 2) {
+    if (words[k + 1] === undefined) return null
+  }
+  if (!isWord(words[k], 'append')) return null
+  const m = /^(?:TRDD-)?([A-Za-z0-9]{8})$/.exec(words[k + 1]?.word ?? '')
+  return m === null ? null : { kind: 'append', id: m[1].toUpperCase() }
+}
+
+/** The record a command makes, or null. Exactly two shapes qualify:
+ *  (append) one `trddgrep append <card-id> …` segment;
+ *  (commit) `git commit … -- <card paths>`, or `git add <card paths> && git commit … -- <the same paths>`.
+ *  Anything else, or any doubt, returns null: the command arms the gate as it always did. */
+export function recordWrite(cmd: string, cwd: string): { kind: 'append'; id: string } | { kind: 'commit' } | null {
+  const words = shellWords(stripHeredocBodies(cmd, true))
+  // A redirect writes wherever its target says, so an unquoted `<` or `>` is a doubt even when glued to a
+  // word (`line>src/x` stays one word to shellWords). A `$` or backtick expands at run time, and
+  // `"$(rm -rf src)"` stays one quoted word to shellWords, so either is a doubt too.
+  if (words.some((w) => (!w.quoted && /[<>]/.test(w.word)) || /[$`]/.test(w.word))) return null
+  const seps: number[] = []
+  words.forEach((w, i) => { if (!w.quoted && SEGMENT_SEPARATOR_RE.test(w.word)) seps.push(i) })
+  if (seps.length === 0) {
+    const append = trddAppend(words)
+    if (append !== null) return append
+    const isCommit = isWord(words[0], 'git') && isWord(words[1], 'commit') && commitPaths(words.slice(2).map((w) => w.word), cwd) !== null
+    return isCommit ? { kind: 'commit' } : null
+  }
+  // `git add <paths> && git commit …`: exactly one `&&`, and nothing else in the command.
+  if (seps.length !== 1 || !isWord(words[seps[0]], '&&')) return null
+  const before = words.slice(0, seps[0])
+  const after = words.slice(seps[0] + 1)
+  if (!isWord(before[0], 'git') || !isWord(before[1], 'add') || !isWord(after[0], 'git') || !isWord(after[1], 'commit')) return null
+  const adds = before.slice(2).map((w) => w.word)
+  const paths = commitPaths(after.slice(2).map((w) => w.word), cwd)
+  // Each add must be a path the commit names: `git add x && git commit` would commit the whole index, so
+  // files staged earlier would ride along, while `git commit -- <paths>` commits only those paths.
+  return adds.length > 0 && paths !== null && adds.every((a) => paths.includes(a)) ? { kind: 'commit' } : null
+}

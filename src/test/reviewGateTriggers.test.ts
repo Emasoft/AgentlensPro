@@ -7,7 +7,7 @@ import {
   GIT_WRITE_SUBCOMMANDS, GH_MUTATING_VERBS, PKG_WRITE_VERBS, ALL_ARGS_ARE_TARGETS, LAST_ARG_IS_TARGET,
   scriptRunnerReason, isNeverGatedTarget, isNoReviewSentinel,
 } from '../cli/reviewGateTriggers'
-import { stripHeredocBodies } from '../cli/reviewGateTriggers'
+import { stripHeredocBodies, recordWrite } from '../cli/reviewGateTriggers'
 
 // WHAT ARMS the review gate (TRDD-0E3W5C45). The ARM rows are the guard against the fail-OPEN
 // direction (a write that goes unreviewed); the PASS rows guard the fail-CLOSED direction (the
@@ -606,6 +606,56 @@ suite('review-loop D3: isNeverGatedTarget (moved from delegateGate.ts, behaviour
     assert.strictEqual(isNeverGatedTarget(plansFile, CWD), true)
     assert.strictEqual(isNeverGatedTarget('src/x.ts', CWD), false)
     assert.strictEqual(isNeverGatedTarget('', CWD), false)
+  })
+})
+
+// ── recordWrite: the only two record shapes that do not re-arm after a review (TRDD-9YWTNFU8) ─────
+suite('review-gate-triggers — recordWrite', () => {
+  test('a trddgrep append naming a card id is an append record, with the id upper-cased', () => {
+    assert.deepStrictEqual(recordWrite('trddgrep append ABCD1234 "## H" "line"', CWD), { kind: 'append', id: 'ABCD1234' })
+    assert.deepStrictEqual(recordWrite('trddgrep append TRDD-abcd1234 H l', CWD), { kind: 'append', id: 'ABCD1234' })
+  })
+
+  test('a NAME=value prefix and a --design-dir pair before append still make an append record', () => {
+    assert.deepStrictEqual(recordWrite('AIM_PILLAR_ALLOW_WRITE=1 trddgrep --design-dir /r/design append ABCD1234 H l', CWD), { kind: 'append', id: 'ABCD1234' })
+  })
+
+  test('an append chained to another command is not a record', () => {
+    assert.strictEqual(recordWrite('trddgrep append ABCD1234 H l && rm -rf src', CWD), null)
+  })
+
+  test('an append whose output is redirected, spaced or glued, is not a record', () => {
+    assert.strictEqual(recordWrite('trddgrep append ABCD1234 H l > src/x', CWD), null)
+    assert.strictEqual(recordWrite('trddgrep append ABCD1234 H l>src/x', CWD), null)
+  })
+
+  test('an append whose quoted argument runs a command is not a record', () => {
+    assert.strictEqual(recordWrite('trddgrep append ABCD1234 H "$(rm -rf src)"', CWD), null)
+  })
+
+  test('the other trddgrep write verbs are not records', () => {
+    assert.strictEqual(recordWrite('trddgrep edit ABCD1234 --expect a --replace b', CWD), null)
+    assert.strictEqual(recordWrite('trddgrep set ABCD1234 status done', CWD), null)
+  })
+
+  test('a path-limited git commit of card files is a commit record, alone or after git add', () => {
+    assert.deepStrictEqual(recordWrite('git add design/tasks/a.md && git commit -F /tmp/m -- design/tasks/a.md', CWD), { kind: 'commit' })
+    assert.deepStrictEqual(recordWrite('git commit -m x -- design/tasks/a.md', CWD), { kind: 'commit' })
+  })
+
+  test('a commit that is not path-limited, or that stages or targets differently, is not a record', () => {
+    assert.strictEqual(recordWrite('git add design/tasks/a.md && git commit -m x', CWD), null)
+    assert.strictEqual(recordWrite('git commit -am x -- design/tasks/a.md', CWD), null)
+    assert.strictEqual(recordWrite('git commit --amend -m x -- design/tasks/a.md', CWD), null)
+    assert.strictEqual(recordWrite('git -C /r commit -m x -- design/tasks/a.md', CWD), null)
+    assert.strictEqual(recordWrite('git add -A && git commit -m x -- design/tasks/a.md', CWD), null)
+  })
+
+  test('a commit of a path outside the card folders is not a record', () => {
+    assert.strictEqual(recordWrite('git commit -m x -- src/a.ts', CWD), null)
+    assert.strictEqual(recordWrite('git commit -m x -- design/requirements/PRRD.md', CWD), null)
+    assert.strictEqual(recordWrite('git commit -m x -- design/tasks/../../src/a.ts', CWD), null)
+    assert.strictEqual(recordWrite('git add src/a.ts && git commit -m x -- design/tasks/a.md', CWD), null)
   })
 })
 

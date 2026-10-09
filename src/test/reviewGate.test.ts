@@ -162,6 +162,32 @@ suite('reviewGate — worker writes reach the main gate', () => {
     })
   })
 
+  test('a worker transcript with one torn line still reports the Edit after it', () => {
+    withWorkers((t, s) => {
+      addWorker(s, 'agent-f', 'toolu_W6', 'lean-worker', [userStringLine('do it'), '{"type":"assistant","message":', assistantLine([editBlock])])
+      assert.strictEqual(workerWriteDetail(t, 'toolu_W6', CWD), 'lean-worker: Edit a.ts')
+    })
+  })
+
+  test('a worker that runs agentlenspro --install-hooks is reported, since that rewrites settings.json', () => {
+    withWorkers((t, s) => {
+      addWorker(s, 'agent-g', 'toolu_W7', 'lean-worker', [userStringLine('wire it'), assistantLine([bashBlock('agentlenspro --install-hooks')])])
+      assert.strictEqual(workerWriteDetail(t, 'toolu_W7', CWD), 'lean-worker: agentlenspro config write')
+    })
+  })
+
+  test('a build chained to a sed -i is reported, while the lone build above is not', () => {
+    withWorkers((t, s) => {
+      addWorker(s, 'agent-h', 'toolu_W8', 'lean-worker', [userStringLine('fix it'), assistantLine([bashBlock('pnpm run compile && sed -i s/a/b/ src/a.ts')])])
+      const detail = workerWriteDetail(t, 'toolu_W8', CWD)
+      assert.ok(detail !== null && detail.startsWith('lean-worker: '), String(detail))
+    })
+  })
+
+  test('a worker-write block asks the main agent to list files outside git too', () => {
+    assert.ok(mainBlockReason('worker write', 'lean-worker: Edit a.ts', 'review').includes('outside git'))
+  })
+
   test('a worker write tells the main agent to run git status and git diff first; an ordinary edit does not', () => {
     const reason = mainBlockReason('worker write', 'lean-worker: Edit a.ts', 'review')
     assert.ok(reason.includes('git status --short') && reason.includes('git diff'))
@@ -921,6 +947,66 @@ suite('reviewGate — runSubagentGate: own sidechain entries are scanned (TRDD-L
   test('the MAIN Stop gate still ignores a transcript whose only write is a sidechain entry', async () => {
     const t = mkTranscript([scUser('w1', 'x'), scAssistant('w1', [writeBlock])])
     assert.strictEqual(await runMainGate({ transcript_path: t, cwd: CWD }), null)
+  })
+})
+
+// ── Record writes after a review (TRDD-9YWTNFU8) ─────────────────────────────────────────────────
+// One card append and one path-limited card commit ride each review; a second of either arms, and a
+// write that is not a record arms whatever came before it.
+suite('reviewGate — scanTranscriptLines: record writes after a review', () => {
+  const CARD = 'ABCD1234'
+  const reviewOf = (id: string) => agentBlock('fork', `ROLE: REVIEW\nReview the change recorded on TRDD-${id}.`)
+  const append = (id: string) => bashBlock(`trddgrep append ${id} "## Review" "no findings"`)
+  const cardCommit = bashBlock('git commit -m x -- design/tasks/a.md')
+  // Each inner array is one assistant entry, in transcript order.
+  const gate = (entries: unknown[][]) => decideGate(scanTranscriptLines(entries.map((blocks) => assistantLine(blocks)), CWD))
+
+  test('a review followed by one card append releases the gate', () => {
+    assert.strictEqual(gate([[reviewOf(CARD)], [append(CARD)]]), null)
+  })
+
+  test('a review followed by one card append and one path-limited card commit releases the gate', () => {
+    assert.strictEqual(gate([[reviewOf(CARD)], [append(CARD)], [cardCommit]]), null)
+  })
+
+  test('a second append after the review arms the gate', () => {
+    assert.strictEqual(gate([[reviewOf(CARD)], [append(CARD)], [append(CARD)]]), 'review')
+  })
+
+  test('a second card commit after the review arms the gate', () => {
+    assert.strictEqual(gate([[reviewOf(CARD)], [cardCommit], [cardCommit]]), 'review')
+  })
+
+  test('a second review re-opens one append and one card commit', () => {
+    assert.strictEqual(gate([[reviewOf(CARD)], [cardCommit], [reviewOf(CARD)], [cardCommit]]), null)
+  })
+
+  test('an append to a card the review did not name arms the gate', () => {
+    assert.strictEqual(gate([[reviewOf(CARD)], [append('WXYZ9876')]]), 'review')
+  })
+
+  test('an id that is only a substring of a longer token in the review prompt does not count as named', () => {
+    assert.strictEqual(gate([[reviewOf(`X${CARD}Y`)], [append(CARD)]]), 'review')
+  })
+
+  test('an edit after the review arms the gate, and an append after that edit is not exempt', () => {
+    assert.strictEqual(gate([[reviewOf(CARD)], [editBlock], [append(CARD)]]), 'review')
+  })
+
+  test('an append with no review at all arms the gate', () => {
+    assert.strictEqual(gate([[append(CARD)]]), 'review')
+  })
+
+  test('a no-review sentinel is not a review to record against', () => {
+    assert.strictEqual(gate([[{ type: 'text', text: `${NO_REVIEW_SENTINEL} — rate-limited` }], [append(CARD)]]), 'review')
+  })
+
+  test('a trddgrep edit after the review arms the gate', () => {
+    assert.strictEqual(gate([[reviewOf(CARD)], [bashBlock('trddgrep edit ABCD1234 --expect a --replace b')]]), 'review')
+  })
+
+  test('a commit that is not path-limited after the review arms the gate', () => {
+    assert.strictEqual(gate([[reviewOf(CARD)], [bashBlock('git add design/tasks/a.md && git commit -m x')]]), 'review')
   })
 })
 
