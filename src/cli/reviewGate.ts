@@ -443,6 +443,8 @@ export function hookCwd(input: ReviewGateInput): string {
 
 /** Writes that are not a reviewable diff: a build, a deploy, or a card or memory record. */
 // `agentlenspro server` only: `agentlenspro config write` rewrites ~/.claude/settings.json, which IS reviewable.
+// A worker's own trddgrep/memgrep record writes are ignored ON PURPOSE: demanding a fork at every card- or memory-writing worker's return would bring the review-of-a-record chain back through workers.
+// A worker's card text is covered when the main agent commits the card, because a card commit not preceded by a review arms.
 const DEPLOY_OR_RECORD_RE = /^(node esbuild\.js|(pnpm|npm) run |agentlenspro server |trddgrep |prrdgrep |specgrep |memgrep )/
 
 /** What ONE background worker wrote, as the detail of a `worker write` block, or null. The worker's
@@ -675,6 +677,7 @@ export function scanTranscriptLines(lines: string[], cwd = process.cwd(), ownAge
       // RECORD WRITES ARE NOT NEW WORK (TRDD-9YWTNFU8): one card append and one path-limited card commit ride each review,
       // and only a record naming that review's card; a review's own bookkeeping must not spawn a review of its note.
       if (b.name === 'Bash') {
+        // The exemption is granted on the command TEXT, so a denied or failed append still uses up this review's one append (the safe direction: the retry arms).
         const rec = recordWrite(String(b.input?.command ?? ''), cwd)
         if (rec !== null && lastReviewPrompt !== null && roles.review !== -1 && (work === null || work.index <= roles.review) && !recordUsed[rec.kind]
           && (rec.kind === 'commit' || new RegExp(`(^|[^A-Za-z0-9])${rec.id}([^A-Za-z0-9]|$)`, 'i').test(lastReviewPrompt))) {
@@ -729,18 +732,10 @@ const MEASURE_DEMAND = 'Spawn ONE MEASURE agent (any subagent type; a `fast-work
  *  two can never drift. */
 export function demandText(d: Demand): string {
   const parts = d === 'review' ? [REVIEW_DEMAND] : d === 'measure' ? [MEASURE_DEMAND] : [MEASURE_DEMAND, REVIEW_DEMAND]
-  return parts.join(' ') + ' A spawned agent cannot see this message, so a rule you do not paste into its '
-    + 'prompt never reaches it. A spawn whose prompt\'s literal FIRST line is its ROLE marker credits that '
-    + 'role at the spawn, permanently. A spawn counts ONLY if the ROLE marker is the FIRST NON-BLANK line '
-    + 'of its prompt (only leading blank lines may precede it — no prose) and, for '
-    + 'REVIEW, only if the spawn is a fork — a marker that is not the first line, extra words on the marker '
-    + 'line, a non-fork REVIEW spawn, or a '
-    + 'prompt carrying both markers credit nothing. THE EXIT IS POSITIONAL: put the spawn tool_use(s) LAST in the response, after the '
-    + 'turn\'s last edit, write-shaped command or "' + PROPOSAL_MARKER + '" line — one of those after the spawn '
-    + 're-arms this gate; plain text after it does not. Run `agentlenspro review-gate --directive` for the full '
-    + 'directive, then act on the findings. If you CANNOT spawn — ' + NO_REVIEW_SENTINEL_EXAMPLES.join(', ')
-    + ' — emit a text block whose ENTIRE content is "' + NO_REVIEW_SENTINEL + ' — <reason>", nothing after the '
-    + 'reason; that is the only other way out.'
+  return parts.join(' ') + ' A spawn counts ONLY if the ROLE marker is the FIRST NON-BLANK line of its prompt, and REVIEW only from a fork. '
+    + 'Put the spawn tool_use(s) LAST in the response, after the turn\'s last edit, write-shaped command or "' + PROPOSAL_MARKER + '" line: a write or proposal after the spawn re-arms this gate. '
+    + 'If you CANNOT spawn — ' + NO_REVIEW_SENTINEL_EXAMPLES.join(', ') + ' — emit a text block whose ENTIRE content is "' + NO_REVIEW_SENTINEL + ' — <reason>"; that is the only other way out. '
+    + 'Full rules: `agentlenspro review-gate --directive`.'
 }
 
 /** The block message names WHAT armed the gate and WHICH agents it wants. It names the scanned

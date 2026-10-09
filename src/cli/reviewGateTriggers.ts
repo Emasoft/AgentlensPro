@@ -612,36 +612,36 @@ function isCardPath(p: string, cwd: string): boolean {
   return CARD_DIRS.some((d) => rel.startsWith(d))
 }
 
-/** The paths of a `git commit` argument list, or null. Paths must follow `--`, and every word before it
- *  must be an option or the value of -m/-F: a bare word there is a pathspec git would commit too. Options
- *  that widen the commit (-a, -i, -o, -p and their clusters, and the long forms) are refused on every
- *  word, quoted or not. */
+/** The paths of a git commit argument list, or null. Before --, the ONLY words accepted are -m <value>, -F <value>, -q and --quiet: an ALLOWLIST, because a denylist grows one flag at a time and every option it misses either widens the commit (-a, --fixup, --amend, --include) or skips the repo's hooks (--no-verify skips the pre-commit identity check). Paths must follow --, and each must be a card path. */
 function commitPaths(args: string[], cwd: string): string[] | null {
   const dd = args.indexOf('--')
   if (dd < 0 || dd === args.length - 1) return null
   const flags = args.slice(0, dd)
-  if (flags.some((a) => /^(--(all|amend|patch|include|only)(=|$)|-[a-zA-Z]*[aipo])/.test(a))) return null
   for (let i = 0; i < flags.length; i++) {
     if (flags[i] === '-m' || flags[i] === '-F') {
       i++
       if (i >= flags.length) return null
-    } else if (!flags[i].startsWith('-')) return null
+    } else if (flags[i] !== '-q' && flags[i] !== '--quiet') return null
   }
   const paths = args.slice(dd + 1)
   return paths.every((p) => isCardPath(p, cwd)) ? paths : null
 }
 
-/** `[NAME=value …] trddgrep [--design-dir <dir>]… append <card-id> …`, as one segment; or null. */
-function trddAppend(words: Word[]): { kind: 'append'; id: string } | null {
+/** [NAME=value …] trddgrep [--design-dir <dir>]… append <card-id> …, as one segment; or null. Every --design-dir must name THIS project's design/ folder, because an append into another corpus is a write the gate would release unreviewed. A --design-dir after the id is refused whether quoted or not: the shell strips quotes before trddgrep reads its argv. */
+function trddAppend(words: Word[], cwd: string): { kind: 'append'; id: string } | null {
+  const ownDesign = path.resolve(cwd, 'design')
   let k = 0
   while (k < words.length && !words[k].quoted && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[k].word)) k++
   if (!isWord(words[k], 'trddgrep')) return null
   for (k++; isWord(words[k], '--design-dir'); k += 2) {
-    if (words[k + 1] === undefined) return null
+    const dir = words[k + 1]
+    if (dir === undefined || path.resolve(cwd, dir.word) !== ownDesign) return null
   }
   if (!isWord(words[k], 'append')) return null
   const m = /^(?:TRDD-)?([A-Za-z0-9]{8})$/.exec(words[k + 1]?.word ?? '')
-  return m === null ? null : { kind: 'append', id: m[1].toUpperCase() }
+  if (m === null) return null
+  if (words.slice(k + 2).some((w) => w.word === '--design-dir' || w.word.startsWith('--design-dir='))) return null
+  return { kind: 'append', id: m[1].toUpperCase() }
 }
 
 /** The record a command makes, or null. Exactly two shapes qualify:
@@ -657,7 +657,7 @@ export function recordWrite(cmd: string, cwd: string): { kind: 'append'; id: str
   const seps: number[] = []
   words.forEach((w, i) => { if (!w.quoted && SEGMENT_SEPARATOR_RE.test(w.word)) seps.push(i) })
   if (seps.length === 0) {
-    const append = trddAppend(words)
+    const append = trddAppend(words, cwd)
     if (append !== null) return append
     const isCommit = isWord(words[0], 'git') && isWord(words[1], 'commit') && commitPaths(words.slice(2).map((w) => w.word), cwd) !== null
     return isCommit ? { kind: 'commit' } : null

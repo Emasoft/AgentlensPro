@@ -55,6 +55,67 @@ function writeTranscript(p: string, lines: string[]): void {
   fs.writeFileSync(p, lines.join('\n') + '\n')
 }
 
+suite('review-supervisor — Stop is silent only where the gate will speak (end-to-end)', () => {
+  test('Stop with one unreviewed edit and no fork: the gate will demand a review, so the supervisor prints nothing', async function () {
+    this.timeout(20_000)
+    const f = makeFixture()
+    try {
+      writeTranscript(f.transcript, [assistantLine([editBlock])])
+      const r = await runSupervisor(f.cwd, JSON.stringify({ transcript_path: f.transcript, hook_event_name: 'Stop' }))
+      assert.strictEqual(r.code, 0, r.stderr)
+      assert.strictEqual(r.stdout, '', 'the gate blocks this Stop with the same demand, so a repeat warning is noise')
+    } finally { f.cleanup() }
+  })
+
+  test('Stop with one unreviewed edit from an agent that cannot spawn: the gate lets it stop, so the warning stays', async function () {
+    this.timeout(20_000)
+    const f = makeFixture()
+    try {
+      writeTranscript(f.transcript, [assistantLine([editBlock])])
+      const payload = JSON.stringify({ transcript_path: f.transcript, hook_event_name: 'Stop', agent_type: 'Explore' })
+      const r = await runSupervisor(f.cwd, payload)
+      assert.strictEqual(r.code, 0, r.stderr)
+      const out = JSON.parse(r.stdout) as { systemMessage: string }
+      assert.ok(out.systemMessage.includes('Review supervisor'), r.stdout)
+    } finally { f.cleanup() }
+  })
+
+  test('UserPromptSubmit with the same single unreviewed edit still warns: only Stop is silenced', async function () {
+    this.timeout(20_000)
+    const f = makeFixture()
+    try {
+      writeTranscript(f.transcript, [assistantLine([editBlock])])
+      const r = await runSupervisor(f.cwd, JSON.stringify({ transcript_path: f.transcript, hook_event_name: 'UserPromptSubmit' }))
+      assert.strictEqual(r.code, 0, r.stderr)
+      const out = JSON.parse(r.stdout) as { hookSpecificOutput: { hookEventName: string } }
+      assert.strictEqual(out.hookSpecificOutput.hookEventName, 'UserPromptSubmit')
+    } finally { f.cleanup() }
+  })
+
+  test('Stop with three unreviewed edits raises the alarm, which the gate never silences', async function () {
+    this.timeout(20_000)
+    const f = makeFixture()
+    try {
+      writeTranscript(f.transcript, [assistantLine([editBlock]), assistantLine([editBlock]), assistantLine([editBlock])])
+      const r = await runSupervisor(f.cwd, JSON.stringify({ transcript_path: f.transcript, hook_event_name: 'Stop' }))
+      assert.strictEqual(r.code, 0, r.stderr)
+      const out = JSON.parse(r.stdout) as { systemMessage: string }
+      assert.ok(out.systemMessage.includes('REVIEW SUPERVISOR'), r.stdout)
+    } finally { f.cleanup() }
+  })
+
+  test('Stop with a nonexistent transcript still reports the review as UNVERIFIED, because the unreadable warning is never silenced', async function () {
+    this.timeout(20_000)
+    const f = makeFixture()
+    try {
+      const payload = JSON.stringify({ transcript_path: path.join(f.cwd, 'does-not-exist.jsonl'), hook_event_name: 'Stop' })
+      const r = await runSupervisor(f.cwd, payload)
+      assert.strictEqual(r.code, 0, r.stderr)
+      const out = JSON.parse(r.stdout) as { systemMessage: string }
+      assert.ok(out.systemMessage.includes('UNVERIFIED'), r.stdout)
+    } finally { f.cleanup() }
+  })
+})
 suite('review-supervisor — real CLI runner (end-to-end)', () => {
   test('ALARM: unreviewed backlog past the threshold — non-blocking output, Stop event, alarm text', async function () {
     this.timeout(20_000)

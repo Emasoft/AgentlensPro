@@ -122,6 +122,26 @@ suite('reviewSupervisor — scan', () => {
   })
 })
 
+suite('reviewSupervisor — a record write after a review is not counted (B2)', () => {
+  const srcEdit = { type: 'tool_use', name: 'Edit', input: { file_path: CWD + '/src/a.ts' } }
+  const append = { type: 'tool_use', name: 'Bash', input: { command: 'trddgrep append ABCD1234 H l' } }
+  const recordCommit = { type: 'tool_use', name: 'Bash', input: { command: 'git commit -m x -- design/tasks/a.md' } }
+
+  test('after a review, a card append and a card commit are not counted: one later Edit is one unreviewed change', () => {
+    const s = scanSupervision([assistant([reviewFork]), assistant([append]), assistant([recordCommit]), assistant([srcEdit])], CWD)
+    assert.strictEqual(s.unreviewed, 1)
+  })
+
+  test('with no review before them, the same record commands still count as work', () => {
+    const s = scanSupervision([assistant([append]), assistant([recordCommit]), assistant([srcEdit])], CWD)
+    assert.strictEqual(s.unreviewed, 3)
+  })
+
+  test('a record write after a change that has not been reviewed still counts', () => {
+    const s = scanSupervision([assistant([reviewFork]), assistant([srcEdit]), assistant([append])], CWD)
+    assert.strictEqual(s.unreviewed, 2)
+  })
+})
 suite('reviewSupervisor — gate registration probe', () => {
   test('finds the gate in the settings cascade', () => {
     assert.ok(gateIsRegistered(['a'], () => settings('agentlenspro review-gate')))

@@ -711,6 +711,18 @@ suite('reviewGate — decideGate', () => {
 })
 
 // ── subagentExempt ────────────────────────────────────────────────────────────────────────────────
+suite('reviewGate — demandText is short enough to read inside a block (C)', () => {
+  test('the demandText for a review spawn is under 1200 characters and says a write after the spawn re-arms the gate', () => {
+    const t = demandText('review')
+    assert.ok(t.length < 1200, 'demandText review is ' + t.length + ' characters')
+    assert.ok(t.includes('re-arms'))
+  })
+
+  test('the demandText for a both spawn is under 2700 characters', () => {
+    const t = demandText('both')
+    assert.ok(t.length < 2700, 'demandText both is ' + t.length + ' characters')
+  })
+})
 suite('reviewGate — subagentExempt', () => {
   test("'' and 'fork' (case-folded, padded) are exempt", () => {
     assert.strictEqual(subagentExempt('', null), true)

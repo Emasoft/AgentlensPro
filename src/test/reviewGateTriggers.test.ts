@@ -617,7 +617,7 @@ suite('review-gate-triggers — recordWrite', () => {
   })
 
   test('a NAME=value prefix and a --design-dir pair before append still make an append record', () => {
-    assert.deepStrictEqual(recordWrite('AIM_PILLAR_ALLOW_WRITE=1 trddgrep --design-dir /r/design append ABCD1234 H l', CWD), { kind: 'append', id: 'ABCD1234' })
+    assert.deepStrictEqual(recordWrite('AIM_PILLAR_ALLOW_WRITE=1 trddgrep --design-dir ' + CWD + '/design append ABCD1234 H l', CWD), { kind: 'append', id: 'ABCD1234' })
   })
 
   test('an append chained to another command is not a record', () => {
@@ -659,6 +659,31 @@ suite('review-gate-triggers — recordWrite', () => {
   })
 })
 
+// ── recordWrite binds a record to this project and to the repo's hooks (TRDD-9YWTNFU8 review leaks) ─────
+suite('review-gate-triggers — recordWrite binds the record to this project', () => {
+  test('an append into another project corpus is not a record, before or after the id', () => {
+    assert.strictEqual(recordWrite('trddgrep append ABCD1234 H l --design-dir /other/design', CWD), null)
+    assert.strictEqual(recordWrite('trddgrep --design-dir /other/design append ABCD1234 H l', CWD), null)
+  })
+
+  test('an append naming this project design folder, relative or absolute, is still a record', () => {
+    assert.deepStrictEqual(recordWrite('trddgrep --design-dir design append ABCD1234 H l', CWD), { kind: 'append', id: 'ABCD1234' })
+    assert.deepStrictEqual(recordWrite('trddgrep --design-dir ' + CWD + '/design append ABCD1234 H l', CWD), { kind: 'append', id: 'ABCD1234' })
+  })
+
+  test('--create and --no-bump after the id keep an append a record', () => {
+    assert.deepStrictEqual(recordWrite('trddgrep append ABCD1234 H l --create', CWD), { kind: 'append', id: 'ABCD1234' })
+    assert.deepStrictEqual(recordWrite('trddgrep append ABCD1234 H l --no-bump', CWD), { kind: 'append', id: 'ABCD1234' })
+  })
+
+  test('a commit that skips hooks, fixes up or amends is not a record; the quiet and message forms are', () => {
+    assert.strictEqual(recordWrite('git commit --no-verify -m x -- design/tasks/a.md', CWD), null)
+    assert.strictEqual(recordWrite('git commit --fixup=abc -- design/tasks/a.md', CWD), null)
+    assert.strictEqual(recordWrite('git commit -n -m x -- design/tasks/a.md', CWD), null)
+    assert.deepStrictEqual(recordWrite('git commit -q -m x -- design/tasks/a.md', CWD), { kind: 'commit' })
+    assert.deepStrictEqual(recordWrite('git commit --quiet -F /tmp/m -- design/tasks/a.md', CWD), { kind: 'commit' })
+  })
+})
 suite('review-loop: isNoReviewSentinel (moved from reviewGate.ts, behaviour unchanged)', () => {
   test('a sentinel with a real reason releases; a bare or reasonless one does not', () => {
     assert.strictEqual(isNoReviewSentinel('REVIEW-GATE: NO REVIEW POSSIBLE — rate-limited'), true)

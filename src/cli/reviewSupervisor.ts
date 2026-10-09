@@ -20,9 +20,9 @@
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
-import { readTranscriptTail, hookCwd, isNoReviewSentinel, toolUseWork, declaredRole, isFloorPrompt, deniedToolUseIds, isDeniedEdit } from './reviewGate'
+import { readTranscriptTail, hookCwd, isNoReviewSentinel, toolUseWork, declaredRole, isFloorPrompt, deniedToolUseIds, isDeniedEdit, decideGate, scanTranscriptLines, agentCannotSpawn } from './reviewGate'
 import type { AssistantContentBlock } from './reviewGate'
-import { textArms } from './reviewGateTriggers'
+import { textArms, recordWrite } from './reviewGateTriggers'
 
 export interface SupervisorScan {
   /** Consequential actions (edits, write-shaped commands, marked proposals) seen in the window. */
@@ -87,6 +87,9 @@ export function scanSupervision(lines: string[], cwd: string): SupervisorScan {
         if (declaredRole(String(b.input?.prompt ?? '')) === 'review' && isFork) { forks++; unreviewed = 0 }
         continue
       }
+      // A record write (card append or card commit) after a review, with nothing landed since, is not work.
+      // Deliberately cruder than the gate's own rule (no one-per-review cap, no id match): it errs toward under-warning, which this advisory hook accepts. Do not copy the full rule here; two copies drift.
+      if (b.name === 'Bash' && forks > 0 && unreviewed === 0 && recordWrite(String(b.input?.command ?? ''), cwd) !== null) continue
       if (isDeniedEdit(b, denied)) continue // delegate-gate deny never ran (TRDD-PNB9FNJ0)
       if (toolUseWork(b, cwd) !== null) { work++; unreviewed++ }
     }
@@ -162,6 +165,8 @@ export function judge(scan: SupervisorScan, registered: boolean, transcriptReada
 interface SupervisorInput {
   transcript_path?: unknown
   session_id?: unknown
+  /** The agent type, when the hook fires inside a subagent: the gate's cannot-spawn test reads it. */
+  agent_type?: unknown
   hook_event_name?: unknown
   hookEventName?: unknown
   /** The session's working directory — read via `hookCwd` (reviewGate.ts), never `process.cwd()`,
@@ -220,6 +225,16 @@ export async function runReviewSupervisor(): Promise<number> {
   const verdict = judge(scan, registered, lines !== null)
   if (verdict.level === 'ok') return 0
   const event = String(input?.hook_event_name ?? input?.hookEventName ?? '')
+  // Silent ONLY where the gate will speak (its own Stop block repeats this warning). The gate lets a cannot-spawn
+  // agent stop silently, so that case stays warned; a throw here answers false, so it never silences.
+  const gateSpeaks = (ls: string[]): boolean => {
+    try {
+      return decideGate(scanTranscriptLines(ls, hookCwd(input))) !== null && !agentCannotSpawn(String(input.agent_type ?? ''))
+    } catch {
+      return false
+    }
+  }
+  if (verdict.level === 'warn' && event === 'Stop' && lines !== null && gateSpeaks(lines)) return 0
   const tag = verdict.level === 'alarm' ? '🚨 REVIEW SUPERVISOR' : '⚠ Review supervisor'
 
   // NEVER BLOCKS (owner, 2026-09-03: "the supervisor does not need to be blocking. it just need to
