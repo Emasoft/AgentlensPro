@@ -3,7 +3,7 @@ trdd-id: EQCGAVGV
 title: The cause of alcore's in-run heap ratchet is unknown - correlate before choosing a fix
 column: blocked
 created: 2026-09-23T12:31:46+0200
-updated: 2026-09-23T23:17:10+0200
+updated: 2026-10-10T04:37:39+0200
 current-owner: main-session
 created-by: main-session
 task-type: spike
@@ -15,7 +15,7 @@ approved: true
 approval-judge: main-session
 approval-datetime: 2026-09-23T12:31:46+0200
 npt: [C19SUVPH, PQ40PZ9D, 9SOYXKNE, Z0A777XW, CEAZZHHO]
-blocked-by: [PQ40PZ9D, Z0A777XW, CEAZZHHO]
+blocked-by: [PQ40PZ9D, Z0A777XW]
 pre-block-column: dev
 ---
 
