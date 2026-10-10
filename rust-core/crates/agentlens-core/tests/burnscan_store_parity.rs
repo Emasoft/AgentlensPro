@@ -186,6 +186,8 @@ fn pre_step3_rows_fall_back_and_store_pass_failure_fails_open() {
     // would have — the fallback is faithful.
     assert_eq!(scan.partial["coverage"]["requestFilesScanned"], serde_json::json!(2), "overlap file not double-counted");
     assert!(scan.reqs.iter().all(|r| r.workspace == "/w/sp"), "fallback row keeps its workspace");
+    // The NULL-version row's file is still on disk, so the body walk serves it: nothing is body-less.
+    assert_eq!(scan.partial["coverage"]["storeRequestsWithoutFacts"], serde_json::json!(0), "{}", scan.partial["coverage"]);
 
     // A3d: a NONSENSE store_dir fails open to the body walk (dirs still hold the files).
     let mut o2 = o.clone();
@@ -313,6 +315,54 @@ fn response_in_both_store_and_spool_is_counted_once() {
     assert_eq!(scan.resps.len(), 1, "one response, not store row + file");
     assert_eq!(scan.cc, 12_000.0);
     assert_eq!(scan.partial["coverage"]["responseFilesScanned"], serde_json::json!(1));
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+
+#[test]
+fn body_less_no_facts_request_timestamp_closes_a_capture_gap() {
+    let (root, spool, store) = fixture("nofacts-gap");
+    let min = 60_000u64;
+    let t: u64 = 1_787_700_000_000;
+    // The only capture between two store-served rows (+10 and +60 min) is a request ingested
+    // WITHOUT the raw-facts extractor (+35 min) whose body is then deleted. Without its
+    // timestamp the 50-min stretch is a gap (minimum 30 min); with it both halves are 25 min.
+    write_at(&spool.join("c5aaaaaa-0000-4000-8000-000000000001.request.json"), &req_body("a1a1a1a1-1111-4222-8333-444444444444", "req_ga"), t + 35 * min);
+    ingest(&store, &spool, true, false);
+    write_at(&spool.join("c5aaaaaa-0000-4000-8000-000000000002.request.json"), &req_body("b2b2b2b2-1111-4222-8333-444444444444", "req_gb"), t + 10 * min);
+    write_at(&spool.join("req_gb.response.json"), &resp_body("msg_gb", 12_000), t + 60 * min);
+    ingest(&store, &spool, true, true);
+    assert_eq!(fs::read_dir(&spool).unwrap().count(), 0, "spool must be fully drained");
+    hook_event(&root, t + 35 * min);
+
+    let scan = scan_window(&opts_for(&root, &spool, &store, 70.0 / 60.0, (t + 70 * min) as f64), (t + 70 * min) as f64);
+    assert!(scan.blind.is_none());
+    assert_eq!(scan.partial["coverage"]["storeRequestsWithoutFacts"], serde_json::json!(1), "{}", scan.partial["coverage"]);
+    assert!(scan.partial["coverage"].get("captureGaps").is_none(), "the body-less row's timestamp is a capture: {}", scan.partial["coverage"]);
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn capped_request_listing_makes_the_without_facts_count_an_upper_bound() {
+    let (root, spool, store) = fixture("capped");
+    let t: u64 = 1_787_800_000_000;
+    // max_files clamps to a floor of 100, so 101 pre-step-3 request files (raw_facts_v NULL, files
+    // kept on disk) guarantee the listing drops one that still has a body.
+    for i in 0..101u64 {
+        write_at(&spool.join(format!("c6aaaaaa-0000-4000-8000-{i:012}.request.json")), &req_body("c3c3c3c3-1111-4222-8333-444444444444", &format!("req_c{i}")), t + i * 1000);
+    }
+    ingest(&store, &spool, false, false);
+    let mut o = opts_for(&root, &spool, &store, 1.0, t as f64 + 600_000.0);
+    o.max_files = Some(100.0);
+
+    let scan = scan_window(&o, t as f64 + 600_000.0);
+    let cov = &scan.partial["coverage"];
+    assert_eq!(cov["complete"], serde_json::json!(false), "{cov}");
+    let note = cov["note"].as_str().unwrap_or("");
+    assert!(note.contains("Up to 1 request(s)") && note.contains("capped"), "{note}");
+    assert!(!note.contains("the full window"), "{note}");
 
     let _ = fs::remove_dir_all(&root);
 }

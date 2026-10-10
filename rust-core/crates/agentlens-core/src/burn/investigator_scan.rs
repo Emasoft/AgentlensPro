@@ -465,7 +465,11 @@ fn load_store_window(store_dir: &Path, since_ms: f64, until_ms: f64) -> Option<S
                 Ok(None) => break,
                 Err(_) => return None,
             };
-            stems.insert(row.get::<_, String>(0).ok()?);
+            // A bad VALUE (NULL / non-string stem) skips just that row, as before step 3; only an iteration
+            // Err fails the load, because it means the window may be truncated, not merely one row odd.
+            if let Ok(stem) = row.get::<_, String>(0) {
+                stems.insert(stem);
+            }
         }
     }
     Some(StoreWindow { resps, reqs, stems, no_facts })
@@ -709,16 +713,26 @@ the totals below are not a burn measurement.",
     if store_ok {
         // F2: a request row with no facts and no body cannot be attributed or fork-storm-checked;
         // say so in the note and in a counter, instead of letting `complete` imply full attribution.
-        let without_facts_note = if store_without_facts > 0 {
+        // When the request listing was capped, `req_file_stems` lacks files that exist, so the count
+        // is only an upper bound and the note must say so instead of asserting bodies are gone.
+        let without_facts_note = if store_without_facts > 0 && req_files.len() < req_present {
+            format!(" Up to {store_without_facts} request(s) are in the store without workspace/fingerprint facts; the file listing was capped, so some may still have a body on disk. Those without one are unattributed and under-counted in attribution and fork-storm detection.")
+        } else if store_without_facts > 0 {
             format!(" {store_without_facts} request(s) are in the store without workspace/fingerprint facts and their bodies are gone, so attribution and fork-storm detection under-count them.")
         } else {
             String::new()
         };
         coverage.insert("storeRequestsWithoutFacts".into(), json!(store_without_facts));
+        // Why: "the full window" contradicts the without-facts suffix, so claim it only when the count is 0.
+        let store_lead = if store_without_facts > 0 {
+            "store-first: the window was read from the api_call store (SQL, no file cap)"
+        } else {
+            "store-first: the full window came from the api_call store (SQL, no file cap)"
+        };
         coverage.insert(
             "note".into(),
             json!(format!(
-                "store-first: the full window came from the api_call store (SQL, no file cap) plus {} body file(s) the store lacks — scanned {where_s}{absent}.{gap_note}{without_facts_note}",
+                "{store_lead} plus {} body file(s) the store lacks — scanned {where_s}{absent}.{gap_note}{without_facts_note}",
                 body_only_reqs + body_only_resps
             )),
         );
