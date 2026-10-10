@@ -162,11 +162,8 @@ fn pre_step3_rows_fall_back_and_store_pass_failure_fails_open() {
     drop(store_con);
     write_at(&spool.join("c2aaaaaa-0000-4000-8000-000000000002.request.json"), &b, base_ms + 60_000);
     let mut store_con = agentlens_store::open_store(&store, agentlens_store::DEFAULT_MEMORY_LIMIT, 4).expect("reopen");
-    // Pass 2's skip set already names file `a`, so it is NOT re-ingested — and the settle gate
-    // deletes it (durable). The pre-step-3 (NULL raw_facts_v) row therefore has NO body on disk
-    // and NO trusted trio: scan_window must fall back per-row and re-scan it — but there is no
-    // file. To exercise the fallback faithfully, re-plant file `a` AFTER pass 2 (same bytes, same
-    // mtime); the pass never sees it, so it survives for the body walk.
+    // delete_after=false in both passes, so file `a` (the NULL raw_facts_v row) is still on disk:
+    // scan_window must re-scan it with the body walk, because the store row has no trusted trio.
     let mut raw_facts_extractor = |raw: &str| agentlens_core::burn::investigator_scan::extract_raw_facts(raw, 6 * 1024 * 1024);
     let r2 = ingest_pass_observed_with(&mut store_con, &opts, &mut skip, &mut stranded, &mut fsynced, None, None, Some(&mut raw_facts_extractor));
     assert_eq!(r2.ingested, 1, "pass 2 ingests only the new body: {:?}", r2.failed);
@@ -215,4 +212,107 @@ fn fingerprint_is_faithful_when_messages_starts_after_the_first_chunk() {
     let f = extract_raw_facts(&body, 6 * 1024 * 1024);
     assert_eq!(f.workspace, "/w/sp");
     assert_eq!(f.fp_2600, djb2(js_slice(&body[bp..], 2600)), "fingerprint across a chunk boundary");
+}
+
+/// One real ingest pass over `spool` into `store`; `with_facts` selects the raw-facts extractor.
+fn ingest(store: &Path, spool: &Path, delete_after: bool, with_facts: bool) {
+    let mut con = agentlens_store::open_store(store, agentlens_store::DEFAULT_MEMORY_LIMIT, 4).expect("open");
+    let opts = StorePassOptions { bodies_dir: spool.to_path_buf(), delete_after, ..Default::default() };
+    let (mut skip, mut stranded, mut fsynced) = (HashSet::new(), HashSet::new(), HashSet::new());
+    let mut raw_facts_extractor = |raw: &str| agentlens_core::burn::investigator_scan::extract_raw_facts(raw, 6 * 1024 * 1024);
+    let r = ingest_pass_observed_with(
+        &mut con, &opts, &mut skip, &mut stranded, &mut fsynced, None, None,
+        if with_facts { Some(&mut raw_facts_extractor) } else { None },
+    );
+    assert!(r.failed.is_empty(), "pass failed: {:?}", r.failed);
+}
+
+fn opts_for(root: &Path, spool: &Path, store: &Path, hours: f64, until_ms: f64) -> InvestigateOptions {
+    InvestigateOptions {
+        scope: BodiesScope { dirs: vec![spool.to_string_lossy().into_owned()], missing: vec![] },
+        store_dir: Some(store.to_path_buf()),
+        hook_events_dir: root.join("hook-events"),
+        home: "/w/home".to_owned(),
+        window_hours: Some(hours),
+        until_ms: Some(until_ms),
+        max_files: None,
+    }
+}
+
+fn hook_event(root: &Path, ts_ms: u64) {
+    let mut payload = serde_json::Map::new();
+    payload.insert("hook_event_name".into(), serde_json::json!("PreToolUse"));
+    agentlens_core::hook_events::append_hook_event(&root.join("hook-events"), &payload, ts_ms as i64).expect("hook event");
+}
+
+#[test]
+fn drained_spool_store_rows_are_not_a_capture_gap_but_a_real_hole_still_is() {
+    let (root, spool, store) = fixture("gaps");
+    let min = 60_000u64;
+    let t: u64 = 1_787_000_000_000;
+    // One request at +20 min and one response at +40 min, both ingested (and deleted).
+    write_at(&spool.join("c3aaaaaa-0000-4000-8000-000000000001.request.json"), &req_body("dddddddd-1111-4222-8333-444444444444", "req_g1"), t + 20 * min);
+    write_at(&spool.join("req_g1.response.json"), &resp_body("msg_g1", 12_000), t + 40 * min);
+    ingest(&store, &spool, true, true);
+    assert!(!spool.join("req_g1.response.json").exists(), "spool must be fully drained");
+    // Hook events: +30 min (inside the 1 h window, between the two store rows) and +90 min.
+    hook_event(&root, t + 30 * min);
+    hook_event(&root, t + 90 * min);
+
+    // 1 h window [t, t+60]: store rows at +20/+40 leave 20-min stretches only -> no gap, although
+    // the spool is empty and a hook event sits in the middle. Before the fix the whole hour was a gap.
+    let a = scan_window(&opts_for(&root, &spool, &store, 1.0, (t + 60 * min) as f64), (t + 60 * min) as f64);
+    assert!(a.blind.is_none());
+    assert_eq!(a.resps.len(), 1);
+    assert!(a.partial["coverage"].get("captureGaps").is_none(), "store rows are captured bodies: {}", a.partial["coverage"]);
+
+    // 2 h window [t, t+120]: +40 -> +120 is 80 min of nothing and the +90 hook event proves the
+    // hook dir is really read (the same dir that produced no gap above).
+    let b = scan_window(&opts_for(&root, &spool, &store, 2.0, (t + 120 * min) as f64), (t + 120 * min) as f64);
+    let gaps = b.partial["coverage"]["captureGaps"].as_array().unwrap_or_else(|| panic!("gap expected: {}", b.partial["coverage"]));
+    assert_eq!(gaps.len(), 1, "{gaps:?}");
+    assert_eq!(gaps[0]["hookEventsDuring"], serde_json::json!(1));
+    assert!((gaps[0]["hours"].as_f64().unwrap() - 80.0 / 60.0).abs() < 1e-9, "{gaps:?}");
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn request_without_facts_and_without_body_is_counted_and_disclosed() {
+    let (root, spool, store) = fixture("nofacts");
+    let t: u64 = 1_787_500_000_000;
+    let a = spool.join("c4aaaaaa-0000-4000-8000-000000000001.request.json");
+    let b = spool.join("c4aaaaaa-0000-4000-8000-000000000002.request.json");
+    write_at(&a, &req_body("eeeeeeee-1111-4222-8333-444444444444", "req_na"), t);
+    ingest(&store, &spool, true, false); // pre-step-3 row: raw_facts_v NULL
+    write_at(&b, &req_body("ffffffff-1111-4222-8333-444444444444", "req_nb"), t + 60_000);
+    ingest(&store, &spool, true, true);
+    assert!(!a.exists() && !b.exists(), "all bodies deleted");
+
+    let scan = scan_window(&opts_for(&root, &spool, &store, 1.0, t as f64 + 600_000.0), t as f64 + 600_000.0);
+    assert!(scan.blind.is_none(), "store rows count as seen");
+    assert_eq!(scan.reqs.len(), 1, "only the request with facts is served");
+    let cov = &scan.partial["coverage"];
+    assert_eq!(cov["storeRequestsWithoutFacts"], serde_json::json!(1), "{cov}");
+    let note = cov["note"].as_str().unwrap_or("");
+    assert!(note.contains("1 request(s) are in the store without workspace/fingerprint facts"), "{note}");
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn response_in_both_store_and_spool_is_counted_once() {
+    let (root, spool, store) = fixture("dupresp");
+    let t: u64 = 1_787_600_000_000;
+    let r = spool.join("req_dup.response.json");
+    write_at(&r, &resp_body("msg_dup", 12_000), t);
+    ingest(&store, &spool, false, true); // delete_after=false: the file stays next to its store row
+    assert!(r.exists(), "the spool file must still exist for the overlap to be real");
+
+    let scan = scan_window(&opts_for(&root, &spool, &store, 1.0, t as f64 + 600_000.0), t as f64 + 600_000.0);
+    assert_eq!(scan.resps.len(), 1, "one response, not store row + file");
+    assert_eq!(scan.cc, 12_000.0);
+    assert_eq!(scan.partial["coverage"]["responseFilesScanned"], serde_json::json!(1));
+
+    let _ = fs::remove_dir_all(&root);
 }

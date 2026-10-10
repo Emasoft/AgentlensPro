@@ -357,17 +357,23 @@ pub fn fmt_k(n: f64) -> String {
     }
 }
 
+/// What `load_store_window` returns. `no_facts` = (stem, ts_ms) of request rows with a NULL
+/// `raw_facts_v`: not served from the store, but their ts_ms is a proof of capture.
+#[derive(Default)]
+struct StoreWindow {
+    resps: Vec<RespRec>,
+    reqs: Vec<ReqRec>,
+    stems: std::collections::HashSet<String>,
+    no_facts: Vec<(String, f64)>,
+}
+
 /// scan_window's store half (QSFYIHUO step 3): responses and request facts from ONE windowed SQL
 /// SELECT each over the api_call parts — the connection discipline of step-1's load_store_facts
 /// (cache_event_log.rs): in-memory connection, 256 MiB, threads=2, `ts_ms >= since AND ts_ms <= until`.
 /// Returns None when the store has no parts or the query fails (A3d: fail-open — the caller then
 /// walks the bodies, the pre-step-3 behavior). Rows come back ORDERED BY ts_ms (A3c) because the
 /// attribution table and fingerprint-family tallies are insertion-ordered.
-fn load_store_window(
-    store_dir: &Path,
-    since_ms: f64,
-    until_ms: f64,
-) -> Option<(Vec<RespRec>, Vec<ReqRec>, std::collections::HashSet<String>)> {
+fn load_store_window(store_dir: &Path, since_ms: f64, until_ms: f64) -> Option<StoreWindow> {
     let parts = agentlens_store::parquet_scan(store_dir, agentlens_store::API_CALLS_DIR)?;
     let con = Connection::open_in_memory().ok()?;
     if con.execute_batch("SET memory_limit='256MiB'; SET threads=2;").is_err() {
@@ -387,7 +393,14 @@ fn load_store_window(
     {
         let Ok(mut stmt) = con.prepare(&resp_sql) else { return None };
         let Ok(mut rows) = stmt.query([]) else { return None };
-        while let Ok(Some(row)) = rows.next() {
+        loop {
+            // A row-iteration error must fail the WHOLE load open (None): `while let Ok(Some(..))`
+            // would treat it as end-of-data and serve a silently truncated window as complete.
+            let row = match rows.next() {
+                Ok(Some(row)) => row,
+                Ok(None) => break,
+                Err(_) => return None,
+            };
             let (ts, model, cc, cr, out, inp): (f64, String, f64, f64, f64, f64) = (
                 row.get(0).ok()?, row.get(1).ok()?, row.get(2).ok()?, row.get(3).ok()?, row.get(4).ok()?, row.get(5).ok()?,
             );
@@ -396,21 +409,30 @@ fn load_store_window(
     }
 
     // Requests: the five first-class facts + version. raw_facts_v IS the fallback key (A1):
-    // NULL (pre-step-3 rows) means the trio is NOT trusted — the row is DROPPED here and the
-    // body walk below re-scans that file (its stem is not in the returned stem set), so a
-    // NULL-version row never double-serves. A non-NULL version trusts the trio as extracted,
-    // including legitimately-empty values.
+    // NULL (pre-step-3 rows) means the trio is NOT trusted — the row is not served from the store
+    // and the body walk re-scans its file (its stem is not in the returned stem set), so a
+    // NULL-version row never double-serves. Its stem and ts_ms are still returned in `no_facts`:
+    // a body WAS captured for it (not a capture gap), and with the body gone it is a request the
+    // scan cannot attribute, which the coverage must say. A non-NULL version trusts the trio as
+    // extracted, including legitimately-empty values.
     let req_sql = format!(
         "SELECT ts_ms, COALESCE(model, '?'), COALESCE(raw_bytes, 0), workspace, fp_2600, \
          COALESCE(image_bytes, 0), session_id, raw_facts_v, stem \
          FROM {parts} WHERE kind = 'request' AND {window} ORDER BY ts_ms"
     );
     let mut reqs: Vec<ReqRec> = Vec::new();
+    let mut no_facts: Vec<(String, f64)> = Vec::new();
     let mut stems: std::collections::HashSet<String> = std::collections::HashSet::new();
     {
         let Ok(mut stmt) = con.prepare(&req_sql) else { return None };
         let Ok(mut rows) = stmt.query([]) else { return None };
-        while let Ok(Some(row)) = rows.next() {
+        loop {
+            // See the response loop: an iteration error fails the whole load open.
+            let row = match rows.next() {
+                Ok(Some(row)) => row,
+                Ok(None) => break,
+                Err(_) => return None,
+            };
             let ts: f64 = row.get(0).ok()?;
             let model: String = row.get(1).ok()?;
             let size: f64 = row.get::<_, i64>(2).ok()? as f64;
@@ -422,7 +444,10 @@ fn load_store_window(
             let stem: String = row.get(8).ok()?;
             let (workspace, fp_2600, image_bytes) = match rfv {
                 Some(_) => (workspace.unwrap_or_default(), fp_2600.unwrap_or_default(), image_bytes),
-                None => continue, // untrusted trio — the body walk re-scans this file
+                None => {
+                    no_facts.push((stem, ts)); // untrusted trio — the body walk re-scans this file
+                    continue;
+                }
             };
             stems.insert(stem);
             reqs.push(ReqRec { ts, size, model, workspace, fingerprint: fp_2600, image_bytes, session_id });
@@ -433,13 +458,17 @@ fn load_store_window(
         let stem_sql = format!("SELECT stem FROM {parts} WHERE kind = 'response' AND {window}");
         let Ok(mut stmt) = con.prepare(&stem_sql) else { return None };
         let Ok(mut rows) = stmt.query([]) else { return None };
-        while let Ok(Some(row)) = rows.next() {
-            if let Ok(s) = row.get::<_, String>(0) {
-                stems.insert(s);
-            }
+        loop {
+            // See the response loop: an iteration error fails the whole load open.
+            let row = match rows.next() {
+                Ok(Some(row)) => row,
+                Ok(None) => break,
+                Err(_) => return None,
+            };
+            stems.insert(row.get::<_, String>(0).ok()?);
         }
     }
-    Some((resps, reqs, stems))
+    Some(StoreWindow { resps, reqs, stems, no_facts })
 }
 
 /// The scan half of investigateBurn: everything decided by the corpus alone.
@@ -467,9 +496,21 @@ pub fn scan_window(opts: &InvestigateOptions, now_ms: f64) -> ScanOutcome {
     };
     let store_load = opts.store_dir.as_ref().and_then(|sd| load_store_window(sd, since_ms, until_ms));
     let store_ok = store_load.is_some();
-    let (store_resps, store_reqs, store_stems) = store_load.unwrap_or_default();
+    let StoreWindow { resps: store_resps, reqs: store_reqs, stems: store_stems, no_facts: store_no_facts } = store_load.unwrap_or_default();
     let store_resp_count = store_resps.len();
     let store_req_count = store_reqs.len();
+    // Every store row proves a body was captured at its ts_ms, spooled or not — NULL-version request
+    // rows included. Gap detection must see them, or a drained spool reads as a window-wide hole.
+    let store_ts: Vec<f64> = store_resps
+        .iter()
+        .map(|r| r.ts)
+        .chain(store_reqs.iter().map(|r| r.ts))
+        .chain(store_no_facts.iter().map(|(_, t)| *t))
+        .collect();
+    // NULL-version rows WITH a spool file are re-scanned by the body walk and must not be counted;
+    // only the file-less ones are unservable (no trusted trio, body gone).
+    let req_file_stems: std::collections::HashSet<String> = req_files.iter().map(&stem_of_file).collect();
+    let store_without_facts = store_no_facts.iter().filter(|(s, _)| !req_file_stems.contains(s)).count();
 
     let resps = if store_ok {
         let mut out = store_resps;
@@ -629,7 +670,8 @@ the totals below are not a burn measurement.",
     let capture_gaps: Vec<CaptureGap> = if blind.is_some() || capped {
         Vec::new()
     } else {
-        let mtimes: Vec<f64> = req_files.iter().chain(resp_files.iter()).map(|f| f.mtime).collect();
+        let mut mtimes: Vec<f64> = req_files.iter().chain(resp_files.iter()).map(|f| f.mtime).collect();
+        mtimes.extend_from_slice(&store_ts); // F1: store rows are captured bodies too (empty when !store_ok)
         find_capture_gaps(&mtimes, since_ms, until_ms, &opts.hook_events_dir)
     };
     let worst_gap = capture_gaps.iter().max_by(|a, b| a.hours.total_cmp(&b.hours));
@@ -665,10 +707,18 @@ the totals below are not a burn measurement.",
         json!(blind.is_none() && req_files.len() == req_present && resp_files.len() == resp_present),
     );
     if store_ok {
+        // F2: a request row with no facts and no body cannot be attributed or fork-storm-checked;
+        // say so in the note and in a counter, instead of letting `complete` imply full attribution.
+        let without_facts_note = if store_without_facts > 0 {
+            format!(" {store_without_facts} request(s) are in the store without workspace/fingerprint facts and their bodies are gone, so attribution and fork-storm detection under-count them.")
+        } else {
+            String::new()
+        };
+        coverage.insert("storeRequestsWithoutFacts".into(), json!(store_without_facts));
         coverage.insert(
             "note".into(),
             json!(format!(
-                "store-first: the full window came from the api_call store (SQL, no file cap) plus {} body file(s) the store lacks — scanned {where_s}{absent}.{gap_note}",
+                "store-first: the full window came from the api_call store (SQL, no file cap) plus {} body file(s) the store lacks — scanned {where_s}{absent}.{gap_note}{without_facts_note}",
                 body_only_reqs + body_only_resps
             )),
         );
