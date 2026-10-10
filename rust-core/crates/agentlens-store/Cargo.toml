@@ -13,6 +13,9 @@ sha2 = "0.10"
 # Kernel flock for the single-pass-per-store lock: auto-released on ANY process death
 # (SIGKILL included), so an orphaned pass can never leave a stale lock behind.
 fs2 = "0.4"
+# raw_facts.rs: the Environment-block / model regexes moved here from agentlens-core
+# (QSFYIHUO step 3, A2 hoist).
+regex = "1"
 
 [[bin]]
 name = "alstore"

@@ -23,6 +23,7 @@ pub mod pass;
 pub mod bodies_evidence;
 pub mod sections;
 pub mod transcript_sql;
+pub mod raw_facts;
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -194,7 +195,15 @@ pub fn open_store(dir: &Path, memory_limit: &str, threads: usize) -> duckdb::Res
            -- cache-break timeline classifies turns with the body file deleted. Nullable: NULL rows
            -- and pre-extractor parts (union_by_name fills the column with NULL) fall back to the
            -- body scan at the read site.
-           prefix_json VARCHAR
+           prefix_json VARCHAR,
+           -- QSFYIHUO step 3: raw-text-only request facts (A1). raw_facts_v is THE fallback key:
+           -- NULL (pre-step-3 rows, responses) means the three fact columns are NOT trusted and
+           -- the consumer scans the body; non-NULL (1 = current extractor) means they are trusted
+           -- as extracted, including legitimately-empty values (workspace empty, image_bytes 0,
+           -- fp_2600 empty when the post-messages tail is at most 2600 UTF-16 units).
+           -- No backfill: a NULL-version row whose body file has been settled away is permanently
+           -- unservable; the burn scan serves only rows ingested from this version forward.
+           raw_facts_v INTEGER, workspace VARCHAR, fp_2600 VARCHAR, image_bytes BIGINT
          );"
     ))?;
     let mut known = HashSet::new();
@@ -349,6 +358,9 @@ fn extract_meta(parsed: Option<&serde_json::Value>, src_name: &str) -> (Option<S
 /// `raw` is never parsed a second time. `prefix_json` is the caller's (extractor-backed) serialized
 /// TurnPrefix for request rows — the store cannot derive it itself (agentlens-core's extractor,
 /// crate cycle) — and None leaves the column NULL, the read site's body-scan fallback signal.
+/// `raw_facts` is the step-3 seam product (raw-text-only facts + version); it is stamped
+/// REQUEST-only here, same write-boundary discipline as prefix_json.
+#[allow(clippy::too_many_arguments)] // positional appender feed: 26 (now 30) values, one per column
 fn append_api_call_row(
     store: &mut Store,
     parsed: &serde_json::Value,
@@ -357,12 +369,21 @@ fn append_api_call_row(
     ts_ms: i64,
     session_id: Option<&str>,
     prefix_json: Option<String>,
+    raw_facts: Option<(i32, raw_facts::RawFacts)>,
 ) -> Result<(), String> {
     let r = api_call::extract_api_call_meta(parsed, src_name, ts_ms, raw_bytes, session_id);
     // Write-boundary guard (QSFYIHUO step 2): prefix_json is REQUEST-only. A caller that hands a
     // prefix for a response file (or a misrouted extractor) must not pollute response rows — the
     // column's NULL-on-response is part of the read contracts.
     let prefix_json = if r.kind == "request" { prefix_json } else { None };
+    // Same boundary for the step-3 trio + version (A1): responses carry NULL on all four.
+    let (rfv, workspace, fp_2600, image_bytes) = match r.kind {
+        "request" => match raw_facts {
+            Some((v, f)) => (Some(v), Some(f.workspace), Some(f.fp_2600), Some(f.image_bytes as i64)),
+            None => (None, None, None, None),
+        },
+        _ => (None, None, None, None),
+    };
     let mut app = store.con.appender("api_call").map_err(|e| e.to_string())?;
     app.append_row(duckdb::params![
         r.stem,
@@ -392,11 +413,16 @@ fn append_api_call_row(
         r.cache_miss_reason,
         r.service_tier,
         prefix_json,
+        rfv,
+        workspace,
+        fp_2600,
+        image_bytes,
     ])
     .map_err(|e| e.to_string())?;
     app.flush().map_err(|e| e.to_string())
 }
 
+#[allow(clippy::too_many_arguments)] // same positional feed, threaded through to the api_call row
 fn append_body_row(
     store: &mut Store,
     body_id: &str,
@@ -405,6 +431,7 @@ fn append_body_row(
     raw_bytes: u64,
     ts_ms: i64,
     prefix_json: Option<String>,
+    raw_facts: Option<(i32, raw_facts::RawFacts)>,
 ) -> Result<(), String> {
     // ONE parse per file, shared by both extractors — never a second `serde_json::from_str` over
     // `raw` (TRDD-9SYRK6SW acceptance). The nested parse inside `extract_meta` is a DIFFERENT
@@ -419,7 +446,7 @@ fn append_body_row(
     // A body that is not JSON gets no api_call row (its bytes stay reconstructible from the
     // store, so the facts are re-derivable); the `body` row still lands, as it always has.
     if let Some(p) = parsed.as_ref() {
-        append_api_call_row(store, p, src_name, raw_bytes, ts_ms, session_id.as_deref(), prefix_json)?;
+        append_api_call_row(store, p, src_name, raw_bytes, ts_ms, session_id.as_deref(), prefix_json, raw_facts)?;
     }
     let sql = format!(
         "INSERT INTO body VALUES ({}, {}, {}, {}, make_timestamp({}), {}, {}, {})",
@@ -443,7 +470,7 @@ fn append_body_row(
 /// ingestBody: idempotent, and GATE 1 — refuses anything that does not reconstruct
 /// byte-identically BEFORE a single row is written.
 pub fn ingest_body(store: &mut Store, src_name: &str, raw: &str, ts_ms: i64) -> Result<IngestResult, String> {
-    ingest_body_with(store, src_name, raw, ts_ms, None)
+    ingest_body_with(store, src_name, raw, ts_ms, None, None)
 }
 
 /// `ingest_body` plus the QSFYIHUO step-2 prefix capture: `prefix_json` (the caller-injected
@@ -457,6 +484,7 @@ pub fn ingest_body_with(
     raw: &str,
     ts_ms: i64,
     prefix_json: Option<String>,
+    raw_facts: Option<(i32, raw_facts::RawFacts)>,
 ) -> Result<IngestResult, String> {
     let body_id = body_id_of(raw);
     let raw_bytes = raw.len() as u64;
@@ -464,7 +492,7 @@ pub fn ingest_body_with(
     if store.body_ids.contains(&body_id) {
         // Content dedup — but each capture event still gets its own (src_name, ts) body row.
         if !store.bodies_named.contains(&named_key(&body_id, src_name)) {
-            append_body_row(store, &body_id, src_name, raw, raw_bytes, ts_ms, prefix_json)?;
+            append_body_row(store, &body_id, src_name, raw, raw_bytes, ts_ms, prefix_json, raw_facts)?;
         }
         return Ok(IngestResult { body_id, raw_bytes, new_blobs: 0, new_bytes: 0, existed: true });
     }
@@ -493,7 +521,7 @@ pub fn ingest_body_with(
         app.flush().map_err(|e| e.to_string())?;
     }
 
-    append_body_row(store, &body_id, src_name, raw, raw_bytes, ts_ms, prefix_json)?;
+    append_body_row(store, &body_id, src_name, raw, raw_bytes, ts_ms, prefix_json, raw_facts)?;
 
     {
         let mut app = store.con.appender("part").map_err(|e| e.to_string())?;

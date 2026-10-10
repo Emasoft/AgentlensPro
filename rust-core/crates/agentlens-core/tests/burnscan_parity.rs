@@ -89,6 +89,7 @@ fn opts_for(dir: &str, until_ms: f64, window_hours: Option<f64>, max_files: Opti
             dirs: if ok { vec![p.to_string_lossy().into_owned()] } else { vec![] },
             missing: if ok { vec![] } else { vec![p.to_string_lossy().into_owned()] },
         },
+        store_dir: None, // parity anchor: None == pre-step-3 body-only behavior
         hook_events_dir: fixtures().join("burnscan-hooks"),
         home: fixtures().to_string_lossy().into_owned(),
         window_hours,

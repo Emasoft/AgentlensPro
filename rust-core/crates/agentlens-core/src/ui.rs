@@ -3240,6 +3240,10 @@ async fn handle(
                                     window_hours: Some(hours),
                                     until_ms: Some(until),
                                     max_files: Some(max_files),
+                                    // QSFYIHUO step 3: the rate-limit arm reads the same store
+                                    // (data_dir/store) the burn arm does — mirroring
+                                    // cache_event_log.rs's store threading.
+                                    store_dir: Some(rl_data_dir.join("store")),
                                 };
                                 let mut inv = crate::burn::investigator::investigate_burn(&io, now);
                                 crate::burn::investigator::attach_causing_calls(&mut inv, &home, &projects_dirs);
@@ -3290,6 +3294,9 @@ async fn handle(
                             window_hours: args.get("windowHours").and_then(Value::as_f64),
                             until_ms,
                             max_files: args.get("maxFiles").and_then(Value::as_f64),
+                            // QSFYIHUO step 3: store-first scan for the burn arm (mirrors
+                            // cache_event_log.rs:739's store threading).
+                            store_dir: Some(data_dir.join("store")),
                         };
                         let payload = match bad_iso {
                             Some(s) => crate::mcp_tools::error_payload(&format!(

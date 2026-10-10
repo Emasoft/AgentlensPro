@@ -193,7 +193,7 @@ fn scan_seeds_store_prefixes_without_double_counting_or_dropping_turns() {
     let mut extractor = |parsed: Option<&serde_json::Value>| -> Option<String> {
         agentlens_core::cache_break_timeline::extract_turn_prefix(parsed).map(|p| to_prefix_json(&p))
     };
-    let r = ingest_pass_observed_with(&mut store_con, &opts, &mut skip, &mut stranded, &mut fsynced, None, Some(&mut extractor));
+    let r = ingest_pass_observed_with(&mut store_con, &opts, &mut skip, &mut stranded, &mut fsynced, None, Some(&mut extractor), None);
     assert!(r.failed.is_empty(), "pass 1 failed: {:?}", r.failed);
 
     // Pass 2 — WITHOUT the extractor, on a spool holding ONLY the new t4 (pass 1 deleted what it
@@ -203,7 +203,7 @@ fn scan_seeds_store_prefixes_without_double_counting_or_dropping_turns() {
     // scan sees one row for the stem, not two.
     write_aged(&spool.join("c0fefefe-0000-4000-8000-000000000004.request.json"), &t4, 60_000);
     let (mut skip2, mut stranded2, mut fsynced2) = (HashSet::new(), HashSet::new(), HashSet::new());
-    let r2 = ingest_pass_observed_with(&mut store_con, &opts, &mut skip2, &mut stranded2, &mut fsynced2, None, None);
+    let r2 = ingest_pass_observed_with(&mut store_con, &opts, &mut skip2, &mut stranded2, &mut fsynced2, None, None, None);
     assert_eq!(r2.ingested, 1, "pass 2 ingests only t4: {:?}", r2.failed);
     drop(store_con);
     write_aged(&spool.join("c0fefefe-0000-4000-8000-000000000001.request.json"), &t1, 240_000); // the overlap copy

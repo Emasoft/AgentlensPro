@@ -254,7 +254,7 @@ pub fn ingest_pass(
     stranded_names: &mut HashSet<String>,
     fsynced_parts: &mut HashSet<PathBuf>,
 ) -> PassResult {
-    ingest_pass_observed_with(store, opts, skip_names, stranded_names, fsynced_parts, None, None)
+    ingest_pass_observed_with(store, opts, skip_names, stranded_names, fsynced_parts, None, None, None)
 }
 
 /// `observer(file_name, file_text)`.
@@ -269,6 +269,12 @@ pub type BodyObserver<'a> = dyn FnMut(&str, &str) + 'a;
 /// no extra parse happens at all.
 pub type PrefixExtractor<'a> = dyn FnMut(Option<&serde_json::Value>) -> Option<String> + 'a;
 
+/// `raw_facts_extractor(raw_text) -> RawFacts` — the QSFYIHUO step-3 seam (A2 hoist). agentlens-core
+/// imports the helpers from `crate::raw_facts` and injects a thin wrapper; no parse is involved —
+/// the extractor reads the RAW text the pass already holds, replicating scan_request's bounds.
+/// `None` (alstore CLI, tests) leaves `raw_facts_v`/the trio NULL, the read site's fallback key.
+pub type RawFactsExtractor<'a> = dyn FnMut(&str) -> (i32, crate::raw_facts::RawFacts) + 'a;
+
 /// `ingest_pass` plus an optional observer, called as `observer(file_name, file_text)` for every
 /// body file this pass ingested into the store (only AFTER `ingest_body` succeeded, so a file that
 /// is retried is observed once; a name already in `skip_names` was ingested by an earlier pass and
@@ -282,12 +288,13 @@ pub fn ingest_pass_observed(
     fsynced_parts: &mut HashSet<PathBuf>,
     observer: Option<&mut BodyObserver<'_>>,
 ) -> PassResult {
-    ingest_pass_observed_with(store, opts, skip_names, stranded_names, fsynced_parts, observer, None)
+    ingest_pass_observed_with(store, opts, skip_names, stranded_names, fsynced_parts, observer, None, None)
 }
 
 /// `ingest_pass_observed` plus the optional prefix extractor, run at INGEST time (before the body
 /// file is deleted by the settle gate) so the serialized TurnPrefix lands on the api_call row while
 /// the bytes are still in hand.
+#[allow(clippy::too_many_arguments)] // 3 seams + observer are the point of this entrypoint
 pub fn ingest_pass_observed_with(
     store: &mut Store,
     opts: &PassOptions,
@@ -296,6 +303,7 @@ pub fn ingest_pass_observed_with(
     fsynced_parts: &mut HashSet<PathBuf>,
     mut observer: Option<&mut BodyObserver<'_>>,
     mut prefix_extractor: Option<&mut PrefixExtractor<'_>>,
+    mut raw_facts_extractor: Option<&mut RawFactsExtractor<'_>>,
 ) -> PassResult {
     let mut res = PassResult::default();
     let mut relocate_failures = 0u32;
@@ -542,7 +550,16 @@ pub fn ingest_pass_observed_with(
                     ex(parsed.as_ref())
                 })
             };
-            match ingest_body_with(store, &f.name, &raw, f.mtime_ms, prefix_json) {
+            // QSFYIHUO step 3 (A1/A3a): raw-text facts for request files only — responses carry
+            // NULL on raw_facts_v + the trio (write-boundary guard in append_api_call_row is the
+            // backstop). NO parse: the extractor reads the raw text the pass already holds, with
+            // scan_request's exact bounds (6 MiB cap, chunked carry, early break).
+            let raw_facts = if f.name.contains(".response.") {
+                None
+            } else {
+                raw_facts_extractor.as_deref_mut().map(|ex| ex(&raw))
+            };
+            match ingest_body_with(store, &f.name, &raw, f.mtime_ms, prefix_json, raw_facts) {
                 Ok(r) => {
                     if let Some(observe) = observer.as_mut() {
                         observe(&f.name, &raw);

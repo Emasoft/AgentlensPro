@@ -402,7 +402,7 @@ fn pass_with_extractor(bodies: &Path, store_dir: &Path, tag: &str, n: usize) {
         let model = p.get("model").and_then(|m| m.as_str()).unwrap_or("?").to_owned();
         Some(format!("{{\"v\":1,\"p\":{{\"model\":\"{model}-ext-{tag}\"}}}}"))
     };
-    let r = ingest_pass_observed_with(&mut store, &opts, &mut skip, &mut stranded, &mut fsynced, None, Some(&mut extractor));
+    let r = ingest_pass_observed_with(&mut store, &opts, &mut skip, &mut stranded, &mut fsynced, None, Some(&mut extractor), None);
     assert!(r.failed.is_empty(), "pass must be clean: {:?}", r.failed);
     assert_eq!(r.ingested, n as u64, "all bodies ingested");
 }
@@ -436,7 +436,7 @@ fn a_null_prefix_row_still_lists_with_none_and_the_window_filters_in_sql() {
     let opts = PassOptions { bodies_dir: bodies.clone(), ..Default::default() };
     let (mut skip, mut stranded, mut fsynced) = (HashSet::new(), HashSet::new(), HashSet::new());
     write_body(&bodies, "2f8caaaa-0000-4000-8000-000000000022.request.json", &request_body("sess-n2", "req_n2"), 120_000);
-    let r = ingest_pass_observed_with(&mut store, &opts, &mut skip, &mut stranded, &mut fsynced, None, None);
+    let r = ingest_pass_observed_with(&mut store, &opts, &mut skip, &mut stranded, &mut fsynced, None, None, None);
     assert_eq!(r.ingested, 1, "second pass ingests the older body without an extractor: {:?}", r.failed);
     drop(store);
 

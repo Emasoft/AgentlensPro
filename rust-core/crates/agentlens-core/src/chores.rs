@@ -449,6 +449,11 @@ pub fn bodies_pass(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
                 let p = crate::cache_break_timeline::extract_turn_prefix(parsed)?;
                 Some(crate::turn_prefix_codec::to_prefix_json(&p))
             };
+            // QSFYIHUO step 3: the raw-facts extractor, threaded at the same one production site.
+            // Wraps the hoisted store-side extractor with the same 6 MiB bound scan_request uses.
+            let mut raw_facts_extractor = |raw: &str| {
+                crate::burn::investigator_scan::extract_raw_facts(raw, 6 * 1024 * 1024)
+            };
             let res = agentlens_store::pass::ingest_pass_observed_with(
                 &mut store,
                 &opts,
@@ -457,6 +462,7 @@ pub fn bodies_pass(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
                 &mut fsynced,
                 observer,
                 Some(&mut prefix_extractor),
+                Some(&mut raw_facts_extractor),
             );
             ingested += res.ingested;
             deleted += res.deleted;

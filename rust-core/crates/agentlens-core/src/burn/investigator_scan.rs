@@ -26,7 +26,6 @@ use std::collections::BTreeMap;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
-use regex::Regex;
 use serde_json::{json, Map, Value};
 
 use crate::hook_events::{read_hook_events, HookEventFilter};
@@ -143,6 +142,11 @@ pub struct InvestigateOptions {
     pub window_hours: Option<f64>,
     pub until_ms: Option<f64>,
     pub max_files: Option<f64>,
+    /// The Parquet api_call store (QSFYIHUO step 3). `None` == the pre-step-3 body-only behavior —
+    /// the parity anchor burnscan_parity pins. When set, responses and request facts are read
+    /// store-FIRST (SQL over api_calls), with the body walk only as per-row fallback for rows the
+    /// store lacks or whose `raw_facts_v` is NULL (pre-step-3 rows, the A1 fallback key).
+    pub store_dir: Option<PathBuf>,
 }
 
 /// The scan half's whole product: the measured records slice 2's detectors consume, plus the
@@ -248,89 +252,18 @@ fn scan_responses(files: &[FileRec]) -> Vec<RespRec> {
     out
 }
 
-fn ws_re() -> &'static Regex {
-    static RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
-    RE.get_or_init(|| Regex::new(r#"Primary working directory: ([^\\\n"]+)"#).unwrap())
-}
+// QSFYIHUO step 3 (A2 hoist): ws_re/model_re/looks_like_workspace moved to agentlens_store::raw_facts.
+use agentlens_store::raw_facts::{looks_like_workspace, model_re, ws_re};
+use agentlens_store::duckdb::Connection;
 
-fn model_re() -> &'static Regex {
-    static RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
-    RE.get_or_init(|| Regex::new(r#""model"\s*:\s*"([^"]+)""#).unwrap())
-}
+// QSFYIHUO step 3 (A2 hoist): sum_image_bytes/djb2/to_base36/utf16_len moved to agentlens_store::raw_facts.
+use agentlens_store::raw_facts::{djb2, sum_image_bytes};
 
-/// An Environment-block workspace is always absolute — posix `/…` or Windows `C:\…`.
-pub fn looks_like_workspace(s: &str) -> bool {
-    if s.starts_with('/') {
-        return true;
-    }
-    let b = s.as_bytes();
-    b.len() >= 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && (b[2] == b'\\' || b[2] == b'/')
-}
-
-/// `/"data"\s*:\s*"([A-Za-z0-9+/=]{20000,})/g` hand-rolled: the regex crate expands a `{20000,}`
-/// repeat literally and blows its compiled-size limit, so the bounded run is counted directly.
-/// Semantics preserved exactly — greedy run, and the scan resumes at the END of a counted match
-/// (JS sets lastIndex there) but only one char past the anchor when the run is too short.
-fn sum_image_bytes(text: &str) -> f64 {
-    const NEEDLE: &str = "\"data\"";
-    let b = text.as_bytes();
-    let mut total = 0f64;
-    let mut from = 0usize;
-    while let Some(rel) = text[from..].find(NEEDLE) {
-        let start = from + rel;
-        let mut i = start + NEEDLE.len();
-        while i < b.len() && (b[i] as char).is_whitespace() {
-            i += 1;
-        }
-        if i < b.len() && b[i] == b':' {
-            i += 1;
-            while i < b.len() && (b[i] as char).is_whitespace() {
-                i += 1;
-            }
-            if i < b.len() && b[i] == b'"' {
-                i += 1;
-                let run_start = i;
-                while i < b.len() && (b[i].is_ascii_alphanumeric() || b[i] == b'+' || b[i] == b'/' || b[i] == b'=') {
-                    i += 1;
-                }
-                let run = i - run_start;
-                if run >= 20_000 {
-                    total += run as f64; // base64 is ASCII, so byte length IS the UTF-16 length
-                    from = i;
-                    continue;
-                }
-            }
-        }
-        from = start + 1;
-    }
-    total
-}
-
-/// djb2 over UTF-16 code units. `((h << 5) + h + c) >>> 0`: the shift is a signed int32 op that
-/// may go negative, the additions are exact doubles, and `>>> 0` is ToUint32 — which is what the
-/// `as u32` truncation reproduces. Iterating bytes or chars instead of code units diverges the
-/// moment a transcript holds an emoji.
-pub fn djb2(s: &str) -> String {
-    let mut h: u32 = 5381;
-    for c in s.encode_utf16() {
-        let shifted = (h as i32).wrapping_shl(5) as i64;
-        h = (shifted + h as i64 + c as i64) as u32;
-    }
-    to_base36(h)
-}
-
-fn to_base36(mut n: u32) -> String {
-    if n == 0 {
-        return "0".to_owned();
-    }
-    const D: &[u8] = b"0123456789abcdefghijklmnopqrstuvwxyz";
-    let mut out = Vec::new();
-    while n > 0 {
-        out.push(D[(n % 36) as usize]);
-        n /= 36;
-    }
-    out.reverse();
-    String::from_utf8(out).unwrap()
+/// The store-seam wrapper (QSFYIHUO step 3): the raw-text-only facts, extracted with
+/// scan_request's own bounds (A3a) so a store row is bit-identical to what the body path computes.
+/// The version stamps `raw_facts_v` (A1) — the sole fallback key at the read site.
+pub fn extract_raw_facts(raw: &str, max_scan_bytes: usize) -> (i32, agentlens_store::raw_facts::RawFacts) {
+    (agentlens_store::raw_facts::RAW_FACTS_VERSION, agentlens_store::raw_facts::extract_raw_facts(raw, max_scan_bytes))
 }
 
 /// scanRequest — bounded per-request read: head chunk for model + fingerprint, then a chunked
@@ -424,6 +357,91 @@ pub fn fmt_k(n: f64) -> String {
     }
 }
 
+/// scan_window's store half (QSFYIHUO step 3): responses and request facts from ONE windowed SQL
+/// SELECT each over the api_call parts — the connection discipline of step-1's load_store_facts
+/// (cache_event_log.rs): in-memory connection, 256 MiB, threads=2, `ts_ms >= since AND ts_ms <= until`.
+/// Returns None when the store has no parts or the query fails (A3d: fail-open — the caller then
+/// walks the bodies, the pre-step-3 behavior). Rows come back ORDERED BY ts_ms (A3c) because the
+/// attribution table and fingerprint-family tallies are insertion-ordered.
+fn load_store_window(
+    store_dir: &Path,
+    since_ms: f64,
+    until_ms: f64,
+) -> Option<(Vec<RespRec>, Vec<ReqRec>, std::collections::HashSet<String>)> {
+    let parts = agentlens_store::parquet_scan(store_dir, agentlens_store::API_CALLS_DIR)?;
+    let con = Connection::open_in_memory().ok()?;
+    if con.execute_batch("SET memory_limit='256MiB'; SET threads=2;").is_err() {
+        return None;
+    }
+    let window = format!("ts_ms >= {} AND ts_ms <= {}", since_ms as i64, until_ms as i64);
+
+    // Responses: RespRec maps 1:1 onto response columns — a pure SQL swap, same skip-zero
+    // semantics as scan_responses (`u.x || 0` then a 0 is kept — RespRec keeps the value and
+    // detectors see identical numbers).
+    let resp_sql = format!(
+        "SELECT ts_ms, COALESCE(model, '?'), COALESCE(cache_creation_tokens, 0), \
+         COALESCE(cache_read_tokens, 0), COALESCE(output_tokens, 0), COALESCE(input_tokens, 0) \
+         FROM {parts} WHERE kind = 'response' AND {window} ORDER BY ts_ms"
+    );
+    let mut resps: Vec<RespRec> = Vec::new();
+    {
+        let Ok(mut stmt) = con.prepare(&resp_sql) else { return None };
+        let Ok(mut rows) = stmt.query([]) else { return None };
+        while let Ok(Some(row)) = rows.next() {
+            let (ts, model, cc, cr, out, inp): (f64, String, f64, f64, f64, f64) = (
+                row.get(0).ok()?, row.get(1).ok()?, row.get(2).ok()?, row.get(3).ok()?, row.get(4).ok()?, row.get(5).ok()?,
+            );
+            resps.push(RespRec { ts, model, cc, cr, out, inp });
+        }
+    }
+
+    // Requests: the five first-class facts + version. raw_facts_v IS the fallback key (A1):
+    // NULL (pre-step-3 rows) means the trio is NOT trusted — the row is DROPPED here and the
+    // body walk below re-scans that file (its stem is not in the returned stem set), so a
+    // NULL-version row never double-serves. A non-NULL version trusts the trio as extracted,
+    // including legitimately-empty values.
+    let req_sql = format!(
+        "SELECT ts_ms, COALESCE(model, '?'), COALESCE(raw_bytes, 0), workspace, fp_2600, \
+         COALESCE(image_bytes, 0), session_id, raw_facts_v, stem \
+         FROM {parts} WHERE kind = 'request' AND {window} ORDER BY ts_ms"
+    );
+    let mut reqs: Vec<ReqRec> = Vec::new();
+    let mut stems: std::collections::HashSet<String> = std::collections::HashSet::new();
+    {
+        let Ok(mut stmt) = con.prepare(&req_sql) else { return None };
+        let Ok(mut rows) = stmt.query([]) else { return None };
+        while let Ok(Some(row)) = rows.next() {
+            let ts: f64 = row.get(0).ok()?;
+            let model: String = row.get(1).ok()?;
+            let size: f64 = row.get::<_, i64>(2).ok()? as f64;
+            let workspace: Option<String> = row.get(3).ok()?;
+            let fp_2600: Option<String> = row.get(4).ok()?;
+            let image_bytes: f64 = row.get::<_, i64>(5).ok()? as f64;
+            let session_id: Option<String> = row.get(6).ok()?;
+            let rfv: Option<i32> = row.get(7).ok()?;
+            let stem: String = row.get(8).ok()?;
+            let (workspace, fp_2600, image_bytes) = match rfv {
+                Some(_) => (workspace.unwrap_or_default(), fp_2600.unwrap_or_default(), image_bytes),
+                None => continue, // untrusted trio — the body walk re-scans this file
+            };
+            stems.insert(stem);
+            reqs.push(ReqRec { ts, size, model, workspace, fingerprint: fp_2600, image_bytes, session_id });
+        }
+    }
+    // Response stems join the set so the caller can skip body files the store already served.
+    {
+        let stem_sql = format!("SELECT stem FROM {parts} WHERE kind = 'response' AND {window}");
+        let Ok(mut stmt) = con.prepare(&stem_sql) else { return None };
+        let Ok(mut rows) = stmt.query([]) else { return None };
+        while let Ok(Some(row)) = rows.next() {
+            if let Ok(s) = row.get::<_, String>(0) {
+                stems.insert(s);
+            }
+        }
+    }
+    Some((resps, reqs, stems))
+}
+
 /// The scan half of investigateBurn: everything decided by the corpus alone.
 pub fn scan_window(opts: &InvestigateOptions, now_ms: f64) -> ScanOutcome {
     // `clamp`, not `.max().min()`: it PROPAGATES NaN the way Math.min(48, Math.max(0.25, NaN))
@@ -435,9 +453,53 @@ pub fn scan_window(opts: &InvestigateOptions, now_ms: f64) -> ScanOutcome {
 
     let (req_files, req_present) = list_window(&opts.scope.dirs, ".request.json", since_ms, until_ms, cap);
     let (resp_files, resp_present) = list_window(&opts.scope.dirs, ".response.json", since_ms, until_ms, cap);
-    let resps = scan_responses(&resp_files);
-    let mut reqs: Vec<ReqRec> = req_files.iter().filter_map(|f| scan_request(f, 6 * 1024 * 1024)).collect();
-    reqs.sort_by(|a, b| a.ts.total_cmp(&b.ts));
+
+    // ── Store-first pass (QSFYIHUO step 3) ──────────────────────────────────────
+    // With store_dir set, responses and request facts come from the api_call rows FIRST; the body
+    // walk runs only per-row: a body file the store has no row for. Dedup is by stem — the store
+    // row is the same capture with proven bytes, so store wins. A store-query FAILURE degrades
+    // the whole scan to the body walk (A3d fail-open — the fallback IS the documented path). The
+    // SQL returns the FULL window, no file cap (A3c) — coverage must state that explicitly.
+    // No backfill: a pre-step-3 (NULL raw_facts_v) row whose body has been settled away is unservable.
+    let stem_of_file = |f: &FileRec| -> String {
+        f.p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
+            .trim_end_matches(".request.json").trim_end_matches(".response.json").to_owned()
+    };
+    let store_load = opts.store_dir.as_ref().and_then(|sd| load_store_window(sd, since_ms, until_ms));
+    let store_ok = store_load.is_some();
+    let (store_resps, store_reqs, store_stems) = store_load.unwrap_or_default();
+    let store_resp_count = store_resps.len();
+    let store_req_count = store_reqs.len();
+
+    let resps = if store_ok {
+        let mut out = store_resps;
+        for f in &resp_files {
+            if !store_stems.contains(&stem_of_file(f)) {
+                out.extend(scan_responses(std::slice::from_ref(f)));
+            }
+        }
+        out.sort_by(|a, b| a.ts.total_cmp(&b.ts));
+        out
+    } else {
+        scan_responses(&resp_files)
+    };
+
+    let reqs: Vec<ReqRec> = if store_ok {
+        let mut out = store_reqs;
+        for f in &req_files {
+            if !store_stems.contains(&stem_of_file(f)) {
+                if let Some(r) = scan_request(f, 6 * 1024 * 1024) {
+                    out.push(r);
+                }
+            }
+        }
+        out.sort_by(|a, b| a.ts.total_cmp(&b.ts));
+        out
+    } else {
+        let mut out: Vec<ReqRec> = req_files.iter().filter_map(|f| scan_request(f, 6 * 1024 * 1024)).collect();
+        out.sort_by(|a, b| a.ts.total_cmp(&b.ts));
+        out
+    };
 
     // Totals — exact billed usage from the responses.
     let (mut cc, mut cr, mut out_t) = (0f64, 0f64, 0f64);
@@ -507,8 +569,11 @@ pub fn scan_window(opts: &InvestigateOptions, now_ms: f64) -> ScanOutcome {
     // ── Blind-spot classification ───────────────────────────────────────────────
     // Zero scanned files has TWO very different meanings, and conflating them is what let this tool
     // answer "nothing burned here" during a measured 2.3M tok/min burn. An empty corpus means the
-    // investigator CANNOT SEE, not that nothing happened.
-    let nothing_scanned = req_files.is_empty() && resp_files.is_empty();
+    // investigator CANNOT SEE, not that nothing happened. QSFYIHUO step 3: a drained spool with a
+    // live store is NOT blind — store rows in the window count as seen.
+    let store_row_count = store_resp_count + store_req_count;
+    let store_saw_rows = store_ok && store_row_count > 0;
+    let nothing_scanned = req_files.is_empty() && resp_files.is_empty() && !store_saw_rows;
     let blind: Option<&'static str> = if !nothing_scanned {
         None
     } else if opts.scope.dirs.is_empty() {
@@ -584,31 +649,48 @@ the totals below are not a burn measurement.",
     let mut coverage = Map::new();
     // `num()`, never `json!(f64)`: serde_json Number equality does NOT bridge PosInt vs Float, so a
     // count emitted as 5.0 compares unequal to the oracle's 5 while every digit matches.
-    coverage.insert("requestFilesScanned".into(), json!(req_files.len()));
-    coverage.insert("responseFilesScanned".into(), json!(resp_files.len()));
+    // QSFYIHUO step 3: store-served rows count toward the scanned counts (they are seen), and the
+    // note states the no-cap SQL explicitly (A3c) when the store served the window.
+    // A body file the store ALSO served must count once, not twice: add only the body files whose
+    // stem the store lacks (store_stems is empty and both store counts are 0 when !store_ok).
+    let body_only_reqs = req_files.iter().filter(|f| !store_stems.contains(&stem_of_file(f))).count();
+    let body_only_resps = resp_files.iter().filter(|f| !store_stems.contains(&stem_of_file(f))).count();
+    coverage.insert("requestFilesScanned".into(), json!(body_only_reqs + store_req_count));
+    coverage.insert("responseFilesScanned".into(), json!(body_only_resps + store_resp_count));
     coverage.insert("bytesOnDisk".into(), num(req_files.iter().map(|f| f.size).sum::<f64>()));
     // A blind scan is never "complete" — it saw nothing, which is the opposite of full coverage.
+    // Emitted BEFORE the store/body split so the store path carries the key too.
     coverage.insert(
         "complete".into(),
         json!(blind.is_none() && req_files.len() == req_present && resp_files.len() == resp_present),
     );
-    coverage.insert(
-        "note".into(),
-        json!(format!(
-            "{}{gap_note}",
-            if let Some(b) = blind {
-                format!("BLIND ({b}): scanned {where_s} — 0 bodies in the window.{absent} Totals are not a measurement.")
-            } else if req_files.len() == req_present {
-                format!("full coverage of the window (scanned {where_s})")
-            } else {
-                format!(
-                    "CAP HIT: scanned the {} largest of {req_present} request files (responses {}/{resp_present}) — totals reflect the scanned set only",
-                    req_files.len(),
-                    resp_files.len()
-                )
-            }
-        )),
-    );
+    if store_ok {
+        coverage.insert(
+            "note".into(),
+            json!(format!(
+                "store-first: the full window came from the api_call store (SQL, no file cap) plus {} body file(s) the store lacks — scanned {where_s}{absent}.{gap_note}",
+                body_only_reqs + body_only_resps
+            )),
+        );
+    } else {
+        coverage.insert(
+            "note".into(),
+            json!(format!(
+                "{}{gap_note}",
+                if let Some(b) = blind {
+                    format!("BLIND ({b}): scanned {where_s} — 0 bodies in the window.{absent} Totals are not a measurement.")
+                } else if req_files.len() == req_present {
+                    format!("full coverage of the window (scanned {where_s})")
+                } else {
+                    format!(
+                        "CAP HIT: scanned the {} largest of {req_present} request files (responses {}/{resp_present}) — totals reflect the scanned set only",
+                        req_files.len(),
+                        resp_files.len()
+                    )
+                }
+            )),
+        );
+    }
     coverage.insert("dirsScanned".into(), json!(opts.scope.dirs));
     coverage.insert("dirsMissing".into(), json!(opts.scope.missing));
     if let Some(b) = blind {
@@ -766,6 +848,7 @@ mod tests {
         write_resp(&dir, "r0.response.json", before, "claude-sonnet-4", 0.0, 150_000.0, 0.0);
         write_resp(&dir, "r1.response.json", after, "claude-sonnet-4", 0.0, 150_000.0, 0.0);
         let opts = InvestigateOptions {
+            store_dir: None,
             scope: BodiesScope { dirs: vec![dir.to_string_lossy().into_owned()], missing: vec![] },
             hook_events_dir: dir.join("hook-events"),
             home: dir.to_string_lossy().into_owned(),

@@ -753,9 +753,10 @@ fn str_or<'a>(v: Option<&'a Value>, default: &'a str) -> &'a str {
 ///
 /// Was duplicated privately in seven modules; they agreed by luck rather than by construction
 /// (one had drifted to `encode_utf16().count()` — same answer, different code to keep in step).
-pub fn utf16_len(s: &str) -> usize {
-    s.chars().map(char::len_utf16).sum()
-}
+/// QSFYIHUO step 3 (A2 hoist): the implementation now lives in
+/// `agentlens_store::raw_facts::utf16_len`; this re-export keeps this crate's many callers stable.
+// removal: after all in-core callers are re-pointed at agentlens_store::raw_facts (counted debt)
+pub use agentlens_store::raw_facts::utf16_len;
 
 /// `s.slice(n)` — the REST of the string from UTF-16 offset `n`. The mirror of `js_slice`, which
 /// takes the first `n`. `s.slice(-n)` (the LAST n units) is `js_slice_from(s, utf16_len(s) - n)`.
