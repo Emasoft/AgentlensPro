@@ -1,10 +1,10 @@
 ---
 trdd-id: 9YWTNFU8
 title: Refine the review gate without changing its mechanism
-column: ai_review
+column: human_review
 status: tasked
 created: 2026-10-09T22:46:57+0200
-updated: 2026-10-10T00:29:11+0200
+updated: 2026-10-10T04:52:27+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: refactor
@@ -117,6 +117,7 @@ then `pnpm run check-types` and `pnpm run lint`. After step 5: `node esbuild.js`
 
 - 2026-10-09T22:46:57+0200 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-10-10T00:06:56+0200 — column → ai_review by main-agent@agentlenspro.
+- 2026-10-10T04:52:27+0200 — column → human_review by main-agent@agentlenspro. all five steps implemented and reviewed per step, live in the bundle, gate suites 253 passing on re-run; owner commissioned the refinement
 
 ## Implemented (2026-10-10)
 
@@ -131,3 +132,4 @@ Second live event 2026-10-10: the refined gate falsely blocked on a fast-worker 
 Estimates stated in session that are weaker than measured facts: the share of record-only review demands the exemption removes (no past commit used the path-limited form it requires, so on past behaviour it is small until agents adopt the form); and that the step-2 build with the two leaks never ran live (no evidence it ran; not proven).
 Pre-existing holes in the main command classifier, measured 2026-10-10 and NOT fixed by this card: a write inside bash -lc '...' (clustered option), inside a script fed by heredoc, in bash script.sh, or in $SHELL -c is invisible to both gates. Needs its own card.
 The record exemption for the main agent (one append plus one path-limited card commit per review) is proven by unit tests; its first live use is the commit of this very update.
+Verification re-run 2026-10-10T04:5x+0200 on da380f32 (the three gate source files have no uncommitted diff; src/cli/hookInstall.ts still carries its unrelated uncommitted change): compile-tests exit 0; gate and supervisor suites 253 passing, exit 0; check-types exit 0; lint exit 0 (warnings only, not counted). The mocha command in 'Verification per step' FAILS as written (ReferenceError: suite is not defined) because --no-config drops the tdd interface; the working command adds --ui tdd. The classifier holes this card says need their own card are now TRDD-YR1598P5 (backburner), which also carries an unconfirmed observation of a second false-trigger spelling (a redirect into a scratchpad path written as a variable plus a dot suffix). This card has no acceptance checklist; it moves to human_review as implemented, per-step reviewed, live and re-verified, for the owner who commissioned the refinement.
