@@ -1,9 +1,9 @@
 ---
 trdd-id: CEAZZHHO
 title: The live new-session rate is unmeasured so the heap run cannot calibrate session churn
-column: ai_review
+column: complete
 created: 2026-09-23T21:07:45+0200
-updated: 2026-10-08T18:45:28+0200
+updated: 2026-10-10T04:36:38+0200
 current-owner: main-session
 created-by: main-session
 task-type: spike
@@ -14,7 +14,7 @@ mandated-by: none
 approved: true
 approval-judge: main-session
 approval-datetime: 2026-09-23T21:07:45+0200
-status: tasked
+status: archived
 ---
 
 # The live new-session rate is unmeasured so the heap run cannot calibrate session churn
@@ -23,7 +23,12 @@ TRDD-EQCGAVGV's arms use --new-session-every to reproduce session churn (a per-s
 
 Measure distinct new session ids per hour over at least 24 h from a source that spans process restarts (the sealed statusline parts via DuckDB, or the collector's session cards), counting ids only, never content.
 
-Acceptance: [x] new sessions/hour with the time span and source stated (1.67/h steady Oct 7 full day; 16/h peak burst; 2.64/h active-hour; 0.65/h whole span; source = sealed statusline parts 2026-09-11..10-08, 664.8 h, ids only); [x] the derived --new-session-every value recorded on EQCGAVGV (225 s for peak-rate churn, 2100 s steady — see its calibration line). related: [EQCGAVGV].
+## Acceptance
+
+- [x] new sessions/hour with the time span and source stated (1.67/h steady Oct 7 full day; 16/h peak burst; 2.64/h active-hour; 0.65/h whole span; source = sealed statusline parts 2026-09-11..10-08, 664.8 h, ids only)
+- [x] the derived --new-session-every value recorded on EQCGAVGV (225 s for peak-rate churn, 2100 s steady — see its calibration line)
+
+related: [EQCGAVGV].
 
 ## Approval log
 
@@ -31,6 +36,7 @@ Acceptance: [x] new sessions/hour with the time span and source stated (1.67/h s
 - 2026-10-08T18:33:49+0200 — column → dev by main-agent@agentlenspro.
 - 2026-10-08T18:37:13+0200 — column → ai_review by main-agent@agentlenspro.
 - 2026-10-08T18:37:25+0200 — column → ai_review by main-agent@agentlenspro.
+- 2026-10-10T04:36:38+0200 — COMPLETE by main-agent@agentlenspro. both acceptance boxes ticked and re-verified 2026-10-10: the report exists and EQCGAVGV line 29 carries the derived --new-session-every value; five review rounds applied; nothing left to do on this spike.
 
 ## Measured (2026-10-08)
 
