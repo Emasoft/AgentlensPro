@@ -1082,12 +1082,16 @@ suite('server start — the install heals itself when the server is started (TRD
   test('the DEFAULT check of cliMain is the real autoSetupOnServerStart (a no-op default fails this)', async () => {
     const f = s.f()
     fs.writeFileSync(path.join(f.dataDir, '.autosetup.lock'), '')
+    // Without a ~/.claude dir, an armed kill-switch or AGENTLENS_DISABLED, the real check returns before printing its line.
+    fs.mkdirSync(path.join(f.home, '.claude'), { recursive: true })
+    overrideKillSwitchEnv(false)
     const savedEnv: Record<string, string | undefined> = {}
-    for (const k of ['HOME', 'DATA_DIR', 'AGENTLENS_NO_AUTOSETUP', 'AGENTLENS_CLAUDE_SETTINGS']) savedEnv[k] = process.env[k]
+    for (const k of ['HOME', 'DATA_DIR', 'AGENTLENS_NO_AUTOSETUP', 'AGENTLENS_CLAUDE_SETTINGS', 'AGENTLENS_DISABLED']) savedEnv[k] = process.env[k]
     process.env.HOME = f.home
     process.env.DATA_DIR = f.dataDir
     delete process.env.AGENTLENS_NO_AUTOSETUP
     delete process.env.AGENTLENS_CLAUDE_SETTINGS
+    delete process.env.AGENTLENS_DISABLED
     const err: string[] = []
     const realWrite = process.stderr.write
     process.stderr.write = ((chunk: string | Uint8Array): boolean => { err.push(String(chunk)); return true }) as typeof process.stderr.write
@@ -1096,6 +1100,7 @@ suite('server start — the install heals itself when the server is started (TRD
     } finally {
       process.stderr.write = realWrite
       for (const [k, v] of Object.entries(savedEnv)) { if (v === undefined) delete process.env[k]; else process.env[k] = v }
+      overrideKillSwitchEnv(false)
     }
     assert.ok(err.some(x => x.startsWith('agentlenspro: install check skipped:')), `the default check never ran: ${err.join('|')}`)
     assert.ok(!fs.existsSync(path.join(f.dataDir, 'server.pid')), 'no collector was started')
