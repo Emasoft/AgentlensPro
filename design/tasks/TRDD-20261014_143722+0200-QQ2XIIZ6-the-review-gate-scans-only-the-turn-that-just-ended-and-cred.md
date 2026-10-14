@@ -4,7 +4,7 @@ title: The review gate scans only the turn that just ended and credits only non-
 column: dev
 status: tasked
 created: 2026-10-14T14:37:22+0200
-updated: 2026-10-14T16:19:09+0200
+updated: 2026-10-14T16:47:36+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -74,3 +74,4 @@ STATE 2026-10-14 16:25 (supersedes the RESUME 15:40 IN FLIGHT/OPEN lines above w
 
 2026-10-14 16:15 — Owner, verbatim: "until now i've seen no review text on the terminal. you should change the text color of the system message in yellow to make it more easy to see. and ideally it should be collapsed by default and expanded when clicked upon." The SubagentStop systemMessage lands in the fork's own transcript, never the main terminal. Investigated fix: a mod at ~/.claude/skills/agentlenspro-review-display/ that reads the fork's answer at turn.complete and redraws its task-notification row in the warning (yellow) colour, compact by default, full on ctrl+o; per-row click only in fullscreen. Evidence: docs_dev/20261014_160036+0200-review-display-mod-api.md. Not yet built.
 2026-10-14 16:15 — Gate false positive: a MEASURE fork's report write into the gitignored docs_dev/ (target `docs_dev/$(date …)-….md`, written with fastedit create) demanded a REVIEW, although *_dev/ writes are exempt for the main agent. Each MEASURE thus triggers a fresh REVIEW demand (self-feeding). Fix: exempt worker writes by the static directory prefix of the target, the same rule as the main agent's writes. Found by the review fork on the measure report, 2026-10-14.
+2026-10-14 16:50 — the review-display mod, if built, ships as a versioned component of TRDD-YL3EWT6N (agentlenspro installs it into ~/.claude/skills/agentlenspro-review-display/); 'Next step is the mod design' in the 16:25 STATE line means: candidate, pending owner approval and the owner's 'agentlenspro is a tool, not a plugin' constraint.
