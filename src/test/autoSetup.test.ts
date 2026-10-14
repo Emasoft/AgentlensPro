@@ -14,10 +14,10 @@ import { EXIT } from '../cli/cliErrors'
 import { ensureServer } from '../cli/serverControl'
 import { runEnableCli } from '../cli/disableCli'
 import { FOREIGN_REASON, HOOK_PATH_VERBS, disabledNotice, killSwitchArmedForForeign } from '../cli/foreignTelemetry'
-import { AGENT_NAMES, SKILL_NAMES, installAgents, installHooks, installSkills } from '../cli/hookInstall'
+import { AGENT_NAMES, SKILL_NAMES, SUPERVISOR_CMD, installAgents, installHooks, installSkills } from '../cli/hookInstall'
 import { agentlensDisabled, armKillSwitch, killSwitchPath, overrideKillSwitchEnv } from '../cli/killSwitch'
 import { cliMain } from '../cli/main'
-import { Ctx, REPAIR_STEPS, resolveCtx, runSetup } from '../cli/setup'
+import { Ctx, REPAIR_STEPS, hookDriftList, hooksConverged, resolveCtx, runSetup } from '../cli/setup'
 import { freePort } from './helpers/freePort'
 import { RULE_NAMES, disableAgentlensSurfaces, enableAgentlensSurfaces } from '../cli/surfaces'
 import { TelemetryVerdictRow, ensureTelemetryConfig, telemetryVerdict } from '../telemetryConfig'
@@ -197,6 +197,26 @@ suite('autoSetup — every launch checks presence + drift and repairs only what 
     assert.deepStrictEqual(r.calls, ['hooks'])
   })
 
+  // The two drift checks once iterated the HOOK/GATE/REVIEW events only, so a settings.json with NO
+  // UserPromptSubmit key read as "converged" and the supervisor's registration was never restored —
+  // not by a launch, not even by `setup` (whose verify then failed with nothing able to repair it).
+  // Both checks now read hookInstall's INSTALLED_EVENTS, the installer's own list.
+  test('the supervisor UserPromptSubmit registration removed entirely is detected and repaired', async () => {
+    const f = s.f()
+    const cfg = readSettings(f)
+    const hooks = cfg.hooks as Record<string, unknown>
+    assert.ok(JSON.stringify(hooks.UserPromptSubmit ?? null).includes(SUPERVISOR_CMD), 'baseline: the installer registered the supervisor on UserPromptSubmit')
+    delete hooks.UserPromptSubmit
+    writeSettings(f, cfg)
+    assert.strictEqual(hooksConverged(readSettings(f)), false, 'the drift check must see the missing event')
+    assert.ok(hookDriftList(f.settingsPath).some(d => d.event === 'UserPromptSubmit'), 'the --json drift list must name it')
+    const r = recorder(['hooks'])
+    await maybeAutoSetup(['budget'], { ctx: f.ctx, repair: r.repair, stderr: lines().say })
+    assert.deepStrictEqual(r.calls, ['hooks'])
+    const after = readSettings(f).hooks as Record<string, unknown>
+    assert.ok(JSON.stringify(after.UserPromptSubmit ?? null).includes(SUPERVISOR_CMD), 'the repair put the supervisor back on UserPromptSubmit')
+    assert.strictEqual(hooksConverged(readSettings(f)), true)
+  })
   test('a missing telemetry key AND a wrong local endpoint are restored; every OTHER key is preserved and a backup is made', async () => {
     const f = s.f()
     const cfg = readSettings(f)

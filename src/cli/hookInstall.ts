@@ -109,6 +109,15 @@ export const SUPERVISOR_CMD = 'agentlenspro review-supervisor'
 // described, so verify against the binary before trusting any claim here.
 export const SUPERVISOR_EVENTS = ['UserPromptSubmit', 'Stop']
 
+// EVERY event the installer registers on, as ONE list that the installer and setup's two drift checks
+// (hooksConverged, hookDriftList) all read. They were three hand-spelled unions, and the two drift checks
+// never learned SUPERVISOR_EVENTS/DELEGATE_EVENTS: with no `UserPromptSubmit` key at all they reported
+// "converged", so the supervisor's registration was never repaired — not by a launch, not even by
+// `setup`, whose verify then failed on it with nothing able to fix it. A new event family goes HERE.
+export const INSTALLED_EVENTS: readonly string[] = [
+  ...new Set([...HOOK_EVENTS, ...GATE_EVENTS, ...REVIEW_EVENTS, ...SUPERVISOR_EVENTS, ...DELEGATE_EVENTS]),
+]
+
 // EVERY command this generation registers. `isStaleGeneration` is what setup uses to decide an
 // entry is a leftover to strip, and it MUST be derived from this set rather than re-spelled as a
 // chain of `!==` at each call site. It was three such chains, and when SUPERVISOR_CMD was added
@@ -400,7 +409,7 @@ export async function installHooks(uninstall: boolean, opts: InstallHooksOptions
   let removedSpyglass = 0
   let removedOurs = 0
   let added = 0
-  const events = new Set([...Object.keys(hooks), ...(uninstall ? [] : [...HOOK_EVENTS, ...GATE_EVENTS, ...REVIEW_EVENTS, ...SUPERVISOR_EVENTS, ...DELEGATE_EVENTS])])
+  const events = new Set([...Object.keys(hooks), ...(uninstall ? [] : INSTALLED_EVENTS)])
   for (const ev of events) {
     const matchers = Array.isArray(hooks[ev]) ? hooks[ev] : []
     const r = rebuildEventMatchers(matchers, ev, uninstall, HOOK_CMD, GATE_CMD, REVIEW_CMD)

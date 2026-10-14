@@ -41,7 +41,7 @@ import { DEFAULT_MAX_BYTES_PER_PASS, IngestPassResult } from '../store/ingestPas
 import { envPort, sleep } from './cliCore'
 import {
   CLI_BIN, GATE_CMD, GATE_EVENTS, GATE_MATCHER, HOOK_CMD, HOOK_EVENTS, HookMatcher,
-  REVIEW_CMD, REVIEW_EVENTS, SUPERVISOR_CMD, SUPERVISOR_EVENTS, isStaleGeneration,
+  INSTALLED_EVENTS, REVIEW_CMD, REVIEW_EVENTS, SUPERVISOR_CMD, SUPERVISOR_EVENTS, isStaleGeneration,
   installHooks, installSkill, isOurHookCommand, rebuildEventMatchers, resolveOnPath,
   HOOK_TIMEOUT_SEC, sha256File, SKILL_NAMES, findPackageRoot, skillTreeHash, installAgents, AGENT_NAMES,
 } from './hookInstall'
@@ -258,7 +258,7 @@ function settingsHooks(s: Settings): Record<string, HookMatcher[]> {
 /** Would installHooks change anything? Mirrors the installer's change detection without writing. */
 export function hooksConverged(s: Settings): boolean {
   const hooks = settingsHooks(s)
-  const events = new Set([...Object.keys(hooks), ...HOOK_EVENTS, ...GATE_EVENTS, ...REVIEW_EVENTS])
+  const events = new Set([...Object.keys(hooks), ...INSTALLED_EVENTS])
   for (const ev of events) {
     const matchers = Array.isArray(hooks[ev]) ? hooks[ev] : []
     const r = rebuildEventMatchers(matchers, ev, false, HOOK_CMD, GATE_CMD, REVIEW_CMD)
@@ -1531,12 +1531,12 @@ const STEPS: StepDef[] = [stepEnvironment, stepData, stepSpoolMigration, stepOte
 export const REPAIR_STEPS = { hooks: stepHooks, skill: stepSkill, 'otel-env': stepOtel } as const
 
 /** Full hook drift list, per event: what differs (timeout old→new, command form, missing). Read-only. */
-function hookDriftList(settingsPath: string): Array<{ event: string; problem: string }> {
+export function hookDriftList(settingsPath: string): Array<{ event: string; problem: string }> {
   const s = readSettingsFresh(settingsPath)
   if (s === 'unparseable') return [{ event: '*', problem: 'settings.json is not parseable' }]
   const hooks = settingsHooks(s === 'absent' ? {} : s)
   const out: Array<{ event: string; problem: string }> = []
-  const events = new Set([...Object.keys(hooks), ...HOOK_EVENTS, ...GATE_EVENTS, ...REVIEW_EVENTS])
+  const events = new Set([...Object.keys(hooks), ...INSTALLED_EVENTS])
   for (const ev of events) {
     const matchers = Array.isArray(hooks[ev]) ? hooks[ev] : []
     const r = rebuildEventMatchers(matchers, ev, false, HOOK_CMD, GATE_CMD, REVIEW_CMD)
