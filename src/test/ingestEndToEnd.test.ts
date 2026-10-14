@@ -87,9 +87,11 @@ suite('ingest end to end — the CLI start path with a real alcore', function ()
       assert.ok(Array.isArray(sources) && sources.includes('hooks'), `default sources must list hooks: ${JSON.stringify(sources)}`)
       assert.ok(!sources.includes('bodies'), `bodies must be opt-in, not default: ${JSON.stringify(sources)}`)
 
+      // The spool tap rejects a hook item that lacks a field its schema requires (validator d8de334d; this test
+      // predates it). SessionStart requires cwd, transcript_path and source, so the payload must carry all three.
       const post = await fetch(`http://127.0.0.1:${ui}/api/hook-events`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ hook_event_name: 'SessionStart', session_id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa' }),
+        body: JSON.stringify({ hook_event_name: 'SessionStart', session_id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', cwd: '/tmp/synthetic', transcript_path: '/tmp/synthetic/t.jsonl', source: 'startup' }),
       })
       assert.ok(post.status >= 200 && post.status < 300, `hook POST -> ${post.status}`)
 
