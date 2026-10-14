@@ -16,7 +16,7 @@ import { runEnableCli } from '../cli/disableCli'
 import { FOREIGN_REASON, HOOK_PATH_VERBS, disabledNotice, killSwitchArmedForForeign } from '../cli/foreignTelemetry'
 import { AGENT_NAMES, SKILL_NAMES, SUPERVISOR_CMD, installAgents, installHooks, installSkills, skillFiles } from '../cli/hookInstall'
 import { agentlensDisabled, armKillSwitch, killSwitchPath, overrideKillSwitchEnv } from '../cli/killSwitch'
-import { pushNotice } from '../cli/launchNotices'
+import { beginLaunchNotices, endLaunchNotices, pushNotice, takeNotices } from '../cli/launchNotices'
 import { DISPATCHED_VERBS, cliMain } from '../cli/main'
 import { Ctx, REPAIR_STEPS, hookDriftList, hooksConverged, resolveCtx, runSetup } from '../cli/setup'
 import { freePort } from './helpers/freePort'
@@ -1222,14 +1222,35 @@ suite('launch notices — held for a single tool call, printed before every othe
   })
 
   test('held lines never leak from an earlier in-process invocation into the next one', async () => {
-    const seq: Seq = []
+    // An earlier invocation that never ended (an active buffer still holding a line): the reset must drop it.
+    beginLaunchNotices()
     pushNotice('agentlenspro: LEFTOVER from an earlier call')
+    const seq: Seq = []
     await inFixtureEnv(s.f(), {}, () => captured(seq, () => cliMain(['server', 'status'], async () => undefined, {
       launchCheck: async () => null, serverCommand: async () => undefined, serverStartCheck: async () => undefined,
     })))
     assert.strictEqual(indexOf(seq, 'err', 'LEFTOVER'), -1, JSON.stringify(seq))
   })
 
+  // A caller of the launch check that is NOT inside a cliMain invocation has nobody to flush the buffer: its lines
+  // must print at once, never wait in a buffer that vanishes with the process (review of 6a31062d).
+  test('outside a cliMain invocation a notice prints at once; inside one it is held', () => {
+    endLaunchNotices()
+    const err: string[] = []
+    const realWrite = process.stderr.write
+    process.stderr.write = ((c: string | Uint8Array): boolean => { err.push(String(c)); return true }) as typeof process.stderr.write
+    try {
+      pushNotice('agentlenspro: OUTSIDE an invocation')
+      assert.ok(err.some(t => t.includes('OUTSIDE an invocation')), 'a notice outside an invocation must print at once')
+      beginLaunchNotices()
+      pushNotice('agentlenspro: INSIDE an invocation')
+      assert.ok(!err.some(t => t.includes('INSIDE an invocation')), 'a notice inside an invocation must be held')
+      assert.deepStrictEqual(takeNotices(), ['agentlenspro: INSIDE an invocation'])
+    } finally {
+      process.stderr.write = realWrite
+      endLaunchNotices()
+    }
+  })
   test('DISPATCHED_VERBS is exactly the set of case labels of the cliMain switch', () => {
     const src = fs.readFileSync(path.join(REPO_ROOT, 'src', 'cli', 'main.ts'), 'utf8')
     const labels = [...src.matchAll(/case '([^']+)':/g)].map(m => m[1])

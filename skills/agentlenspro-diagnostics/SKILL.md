@@ -141,10 +141,13 @@ Three more things a program needs:
   and prints a digest instead; on a refusal the file is **not** written.
 - **A refusal never writes `--out`.** A file containing `{"error": …}` is worse than no file,
   because the next reader finds it and trusts it.
-- **A refusal may carry a `notices` array.** If the same launch repaired the install or warned (a first-run or
-  `agentlenspro: restored …` line), those lines travel INSIDE the refusal — `{"tool": "...", "error": "...",
-  "notices": ["agentlenspro: ..."]}` — so stderr is still exactly one JSON object. The key is absent when there
-  is nothing to report; on any other exit the same lines print on stderr as plain text.
+- **A refused single tool call may carry a `notices` array.** If the same launch repaired the install or warned
+  (a first-run or `agentlenspro: restored …` line), those lines travel INSIDE the refusal —
+  `{"tool": "...", "error": "...", "notices": ["agentlenspro: ..."]}` — so stderr is still exactly one JSON object.
+  The key is absent when there is nothing to report. Everywhere else the same lines print on stderr as plain text:
+  AFTER the output of a successful tool call, and BEFORE the output of every other command, of `batch`, and of a
+  call that fails on its arguments. A `batch` in which tools refuse prints one JSON object per refusal, so its
+  stderr is not a single object.
 
 ## When a command fails — read the failure, don't retry blindly
 

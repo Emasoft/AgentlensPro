@@ -54,6 +54,8 @@ export const AUTOSETUP_EXCLUDED_VERBS: ReadonlySet<string> = new Set([
   // help of ANY shape: the owner doctrine is "HELP IS TOTAL — describe, never do" (main.ts). `help <known verb>`
   // returns before this check, but `help <unknown>` fell through to it, so a mistyped help request on a fresh
   // machine ran the first-run full setup — installing skills, agents, hooks and telemetry AND starting a collector.
+  // `help <known tool>` fell through too and no longer self-heals either — right under "help is total": the next
+  // ordinary tool call heals the install. (`help <known management verb>` already returned before the check.)
   "help",
 ])
 

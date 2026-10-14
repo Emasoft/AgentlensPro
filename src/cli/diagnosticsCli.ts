@@ -627,6 +627,8 @@ export async function runDiagnosticsCli(argv: string[]): Promise<void> {
   // so stderr stays one parseable object. Every other path here — any ops flag (`--guard` never returns), usage,
   // `list`, `help`, `batch` — prints them now, before it runs, exactly as it always did. A new ops flag is covered
   // without touching this line: any field set on `ops` counts.
+  // A new KEYWORD sub-command (one more entry like 'list' or 'batch' below) is NOT covered automatically: add it to
+  // the list, or it is treated as a tool call and its notices wait until it returns — forever, if it never does.
   const anyOp = otelOp !== null || statuslineOp !== null || hooksOp !== null
     || Object.values(ops).some(v => v !== false && v !== null && v !== undefined)
   const singleToolCall = !anyOp && rest[0] !== undefined && !['-h', '--help', 'list', 'help', 'batch'].includes(rest[0])

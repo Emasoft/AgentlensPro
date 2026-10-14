@@ -103,6 +103,8 @@ suite('CLI usage contract', () => {
     // A help request of any shape must never run the launch install check. Before "help" joined
     // AUTOSETUP_EXCLUDED_VERBS this call fell through to it, and on an empty HOME the first-run full setup
     // installed ~/.claude and started a collector on the test data dir that nothing stopped.
+    // Both must point at the suite's temp dirs, or the listing below compares [] with [] and proves nothing.
+    assert.ok(process.env.HOME && process.env.DATA_DIR, 'the suite must isolate HOME and DATA_DIR for this check')
     const listing = (): string[][] => [process.env.HOME as string, process.env.DATA_DIR as string]
       .map(dir => (fs.existsSync(dir) ? fs.readdirSync(dir).sort() : []))
     const before = listing()

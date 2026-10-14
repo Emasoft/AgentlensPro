@@ -31,7 +31,11 @@ function runCli(args: string[], env: NodeJS.ProcessEnv, stdin?: string): Promise
   })
 }
 
-/** Isolated child env: empty temp HOME, no ambient AgentlensPro endpoint/knob leakage. */
+/** Isolated child env: empty temp HOME, no ambient AgentlensPro endpoint/knob leakage. The launch install check is
+ *  OFF by default (AGENTLENS_NO_AUTOSETUP=1): every spawned CLI here starts on an EMPTY HOME, which since b867797a makes
+ *  the first ordinary launch run the full first-run setup — including its server step, which on a CI runner with OTLP
+ *  4318 free would start a real alcore under a temp HOME the test then deletes. This suite tests dispatch, not install
+ *  (autoSetup.test.ts owns that); a test that needs the check deletes the key from the returned env. */
 function isolatedEnv(home: string, overrides: Record<string, string> = {}): NodeJS.ProcessEnv {
   const env = { ...process.env }
   for (const k of Object.keys(env)) {
@@ -41,7 +45,7 @@ function isolatedEnv(home: string, overrides: Record<string, string> = {}): Node
   delete env.UI_PORT
   delete env.MCP_PORT
   delete env.OTLP_PORT
-  return { ...env, HOME: home, USERPROFILE: home, ...overrides }
+  return { ...env, HOME: home, USERPROFILE: home, AGENTLENS_NO_AUTOSETUP: '1', ...overrides }
 }
 
 function mkHome(): string {
@@ -164,7 +168,11 @@ suite('agentlenspro — diagnostics dispatch parity (absorbed agentlens-cli.js s
       () => ({ error: 'Agent "nope" not found. Accepted forms: bare agent id, agent-<id>, or a full sessionId.' }),
     )
     try {
-      const r = await runCli(['get_agent_tokens', '--agentId', 'nope'], isolatedEnv(home, { AGENTLENS_MCP_URL: stub.url }))
+      // The launch check must RUN here (isolatedEnv turns it off by default): the empty HOME makes this a first run,
+      // whose notice is what has to travel inside the refusal.
+      const env = isolatedEnv(home, { AGENTLENS_MCP_URL: stub.url })
+      delete env.AGENTLENS_NO_AUTOSETUP
+      const r = await runCli(['get_agent_tokens', '--agentId', 'nope'], env)
       assert.notStrictEqual(r.code, 0, 'a refusal must not exit 0')
       assert.strictEqual(r.stdout.trim(), '', `stdout must stay parse-safe, got: ${r.stdout}`)
       // The empty HOME makes this launch a FIRST RUN, so the install check has a notice to print. It used to land on

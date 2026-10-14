@@ -30,7 +30,7 @@ import { ensureServer, openDashboard, serverCommand, daemonCommand } from './ser
 import { runSetupCli } from './setup'
 import { autoSetupOnServerStart, forceInstallTelemetry, maybeAutoSetup } from './autoSetup'
 import { disabledNotice } from './foreignTelemetry'
-import { beginLaunchNotices, flushNoticesToStderr } from './launchNotices'
+import { beginLaunchNotices, endLaunchNotices, flushNoticesToStderr } from './launchNotices'
 import { runBudgetCli } from './budgetCli'
 import { runWatchCli } from './watchCli'
 import { runCtxmapCli } from './ctxmapCli'
@@ -174,12 +174,14 @@ function reachesDiagnosticsSurface(cmd: string | undefined, argv: string[]): boo
 export async function cliMain(rawArgv: string[], startServer: () => Promise<unknown>, deps: CliMainDeps = {}): Promise<number> {
   // The launch install check's notices belong to THIS invocation only (launchNotices.ts, TRDD-YL3EWT6N item 7):
   // reset first, so an earlier in-process call can never leak lines in; and whatever is still held when the verb
-  // returns — not printed on entry, not folded into a refusal — prints now, after the verb's own output.
+  // returns — not printed on entry, not folded into a refusal — prints now, after the verb's own output. Then the
+  // invocation ends: a notice pushed outside it prints at once instead of waiting in a buffer nobody flushes.
   beginLaunchNotices()
   try {
     return await cliMainBody(rawArgv, startServer, deps)
   } finally {
     flushNoticesToStderr()
+    endLaunchNotices()
   }
 }
 

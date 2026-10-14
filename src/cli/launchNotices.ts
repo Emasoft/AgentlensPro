@@ -13,13 +13,26 @@
 
 let pending: string[] = []
 
-/** Start an empty buffer. cliMain calls this once at the start of every invocation. */
+// True only between cliMain's beginLaunchNotices and endLaunchNotices: outside an invocation nothing holds lines.
+let active = false
+
+/** Start an empty buffer and mark an invocation active. cliMain calls this once at the start of every invocation. */
 export function beginLaunchNotices(): void {
   pending = []
+  active = true
 }
 
-/** Hold one notice line — the launch check's `say` (autoSetup.ts maybeAutoSetup). */
+/** The invocation is over: from here on a notice prints at once (pushNotice). cliMain calls this in its finally,
+ *  after the last flush. */
+export function endLaunchNotices(): void {
+  active = false
+}
+
+/** Hold one notice line — the launch check's `say` (autoSetup.ts maybeAutoSetup). OUTSIDE a cliMain invocation (no
+ *  beginLaunchNotices without its endLaunchNotices) the line prints on stderr at once: a caller that is not inside
+ *  cliMain has nobody to flush the buffer, and a held line there would vanish without a trace. */
 export function pushNotice(line: string): void {
+  if (!active) { process.stderr.write(`${line}\n`); return }
   pending.push(line)
 }
 
