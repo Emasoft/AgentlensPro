@@ -9,6 +9,7 @@ import {
   REVIEW_GATE_DIRECTIVE, REVIEW_ROLE_RULE, MEASURE_ROLE_RULE, declaredRole, declaredRoleOwnTranscript,
   runMainGate, runReviewGate, agentCannotSpawn, declaredToolsHaveAgent,
   NO_REVIEW_SENTINEL, NO_REVIEW_SENTINEL_EXAMPLES, workerReturnId, workerWriteDetail,
+  isTurnStart, readCurrentTurn, isCreditedFork,
 } from '../cli/reviewGate'
 import { PROPOSAL_MARKER } from '../cli/reviewGateTriggers'
 import { runSubagentGate } from '../cli/reviewGate'
@@ -660,19 +661,19 @@ suite('reviewGate — scanTranscriptLines', () => {
     assert.strictEqual(scan.roles.review, 0)
   })
 
-  test('a `lean-worker` spawn whose prompt starts `ROLE: MEASURE` still credits measure', () => {
+  test('a `lean-worker` spawn whose prompt starts `ROLE: MEASURE` earns NO measure credit: only a fork does (QQ2XIIZ6)', () => {
     const scan = scanTranscriptLines([assistantLine([agentBlock('lean-worker', 'ROLE: MEASURE\nsettle it')])], CWD)
-    assert.strictEqual(scan.roles.measure, 0)
+    assert.strictEqual(scan.roles.measure, -1)
     assert.strictEqual(scan.roles.review, -1)
   })
 
-  test('an Agent spawn whose prompt starts `ROLE: MEASURE` credits roles.measure; a second marker on a later line is ignored, and no marker credits nothing', () => {
-    const measureScan = scanTranscriptLines([assistantLine([agentBlock('lean-worker', 'ROLE: MEASURE\nsettle it')])], CWD)
+  test('an Agent FORK spawn whose prompt starts `ROLE: MEASURE` credits roles.measure; a second marker on a later line is ignored, and no marker credits nothing', () => {
+    const measureScan = scanTranscriptLines([assistantLine([agentBlock('fork', 'ROLE: MEASURE\nsettle it')])], CWD)
     assert.strictEqual(measureScan.roles.measure, 0)
     assert.strictEqual(measureScan.roles.review, -1)
     // TRDD-BA0DCW98: only the FIRST line is read, so a second marker line can no longer make
     // "both" true — the first line alone decides, and here it is exactly `ROLE: MEASURE`.
-    const secondLineIgnoredScan = scanTranscriptLines([assistantLine([agentBlock('lean-worker', 'ROLE: MEASURE\nROLE: REVIEW\n')])], CWD)
+    const secondLineIgnoredScan = scanTranscriptLines([assistantLine([agentBlock('fork', 'ROLE: MEASURE\nROLE: REVIEW\n')])], CWD)
     assert.deepStrictEqual(secondLineIgnoredScan.roles, { measure: 0, review: -1 })
     const neitherScan = scanTranscriptLines([assistantLine([agentBlock('lean-worker', 'just do it')])], CWD)
     assert.deepStrictEqual(neitherScan.roles, { measure: -1, review: -1 })
@@ -883,9 +884,11 @@ suite('reviewGate — messages', () => {
     assert.ok(!t.includes(REVIEW_ROLE_RULE))
   })
 
-  test("demandText('measure') names fast-worker as the preferred measurer and requires a numbered step list", () => {
+  test("demandText('measure') names a MEASURE fork with no isolation, and requires a numbered step list", () => {
     const t = demandText('measure')
-    assert.ok(t.includes('fast-worker'))
+    assert.ok(t.includes('MEASURE fork'))
+    assert.ok(t.includes('NO isolation parameter'))
+    assert.ok(!t.includes('fast-worker'))
     assert.ok(t.includes('numbered'))
   })
 
@@ -917,7 +920,8 @@ suite('reviewGate — messages', () => {
     assert.ok(REVIEW_GATE_DIRECTIVE.includes('[janitor-heartbeat]'))
     assert.ok(REVIEW_GATE_DIRECTIVE.includes('interrupted'))
     assert.ok(REVIEW_GATE_DIRECTIVE.includes('ai-maestro-janitor'))
-    assert.ok(REVIEW_GATE_DIRECTIVE.includes('Only a `fork` spawn credits the REVIEW role'))
+    assert.ok(REVIEW_GATE_DIRECTIVE.includes('Only a `fork` spawn with NO `isolation` parameter credits a role'))
+    assert.ok(REVIEW_GATE_DIRECTIVE.includes('only the turn that just ended decides'))
     for (const ex of NO_REVIEW_SENTINEL_EXAMPLES) assert.ok(REVIEW_GATE_DIRECTIVE.includes(ex), ex)
   })
 
@@ -1132,4 +1136,297 @@ suite('reviewGate — scanTranscriptLines: a delegate-gate-denied edit does not 
     const scan = scanTranscriptLines([assistantLine([bash]), deniedResult('toolu_b1', true)], CWD)
     assert.strictEqual(scan.work?.cause, 'write-shaped command')
   })
+
+
+  // ── The turn scope and the fork-only, unisolated credit (QQ2XIIZ6) ──────────────────────────────────
+  // Fixtures copy the entry SHAPES measured on real transcripts (2026-10-14), not their text: a turn
+  // starts at a non-sidechain `user` entry with an object `turnPosition`; a heartbeat is one of those
+  // with `isMeta: true`; the Stop hook's feedback is `isMeta` with no `turnPosition`.
+  suite('reviewGate — per-turn scope and the fork-only credit (QQ2XIIZ6)', () => {
+    const turnStart = (content: unknown, turnOrigin = 'human', turnIndex = 1): string => JSON.stringify({
+      parentUuid: 'p', isSidechain: false, promptId: `prompt-${turnIndex}`, type: 'user',
+      message: { role: 'user', content }, turnOrigin, turnPosition: { promptIndex: turnIndex, turnIndex }, userType: 'external',
+    })
+    const heartbeat = (turnIndex: number): string => JSON.stringify({
+      parentUuid: 'p', isSidechain: false, isMeta: true, promptId: `hb-${turnIndex}`, type: 'user',
+      message: { role: 'user', content: '[janitor-heartbeat]\n/x/dispatcher-stub.py\nHandle this fire.' },
+      turnOrigin: 'scheduled', turnPosition: { promptIndex: turnIndex, turnIndex }, userType: 'external',
+    })
+    const stopFeedback = (): string => JSON.stringify({
+      parentUuid: 'p', isSidechain: false, isMeta: true, type: 'user',
+      message: { role: 'user', content: 'Stop hook feedback: [review-gate] demanded a review' },
+    })
+    const attachment = (text: string): string => JSON.stringify({
+      parentUuid: 'p', isSidechain: false, type: 'attachment', attachment: { type: 'hook_success', content: text },
+    })
+    const notification = (id: string): string =>
+      `<task-notification>\n<task-id>t1</task-id>\n<tool-use-id>${id}</tool-use-id>\n<status>completed</status>\n</task-notification>`
+    const enqueue = (id: string): string => JSON.stringify({ type: 'queue-operation', operation: 'enqueue', content: notification(id) })
+    const forkSpawn = (prompt: string, isolation?: string) =>
+      ({ type: 'tool_use', name: 'Agent', input: { subagent_type: 'fork', prompt, ...(isolation === undefined ? {} : { isolation }) } })
+    const withFile = <T>(lines: string[], run: (file: string) => T): T => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rg-turn-'))
+      try {
+        const file = path.join(dir, 'main.jsonl')
+        fs.writeFileSync(file, lines.join('\n') + '\n')
+        return run(file)
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true })
+      }
+    }
+    const runGate = (lines: string[]): Promise<string | null> =>
+      withFile(lines, (file) => runMainGate({ transcript_path: file, cwd: CWD }))
+    const reasonOf = (out: string | null): string => (JSON.parse(out as string) as { reason: string }).reason
+
+    test('isTurnStart: a non-sidechain user entry with a turnPosition object starts a turn, even when isMeta; feedback, tool results, sidechain entries and heartbeat attachments do not', () => {
+      assert.strictEqual(JSON.parse(heartbeat(2)).isMeta, true)
+      assert.strictEqual(isTurnStart(JSON.parse(turnStart('fix it'))), true)
+      assert.strictEqual(isTurnStart(JSON.parse(heartbeat(2))), true)
+      assert.strictEqual(isTurnStart(JSON.parse(stopFeedback())), false)
+      assert.strictEqual(isTurnStart(JSON.parse(toolResultLine('t1', 'ok'))), false)
+      assert.strictEqual(isTurnStart(JSON.parse(JSON.stringify({ type: 'user', isSidechain: true, turnPosition: { turnIndex: 2 }, message: { content: 'x' } }))), false)
+      assert.strictEqual(isTurnStart(JSON.parse(attachment('[janitor-heartbeat] status: quiet'))), false)
+    })
+
+    test('edit → isMeta Stop-hook feedback → BLOCKS: the feedback does not start a new turn', async () => {
+      const out = await runGate([turnStart('fix it'), assistantLine([editBlock]), stopFeedback()])
+      assert.ok(out !== null, 'the feedback must not end the turn that wrote the file')
+      assert.ok(reasonOf(out).includes('edited a file'))
+    })
+
+    test('an edit in an earlier human turn does not block a later human turn with no writes', async () => {
+      const out = await runGate([
+        turnStart('edit it', 'human', 1), assistantLine([editBlock]), assistantLine([{ type: 'text', text: 'done' }]),
+        turnStart('what time is it', 'human', 2), assistantLine([{ type: 'text', text: 'noon' }]),
+      ])
+      assert.strictEqual(out, null)
+    })
+
+    test('a heartbeat turn after a written human turn, with no writes, PASSES', async () => {
+      const out = await runGate([
+        turnStart('edit it', 'human', 1), assistantLine([editBlock]),
+        heartbeat(2), assistantLine([{ type: 'text', text: 'janitor heartbeat' }]),
+      ])
+      assert.strictEqual(out, null)
+    })
+
+    test('a heartbeat turn that writes and spawns no review BLOCKS', async () => {
+      const out = await runGate([
+        turnStart('hi', 'human', 1), assistantLine([{ type: 'text', text: 'hello' }]),
+        heartbeat(2), assistantLine([editBlock]),
+      ])
+      assert.ok(out !== null)
+      assert.ok(reasonOf(out).includes('edited a file'))
+    })
+
+    test('an attachment quoting [janitor-heartbeat] between an edit and the Stop does not start a turn, so the edit still BLOCKS', async () => {
+      const out = await runGate([
+        turnStart('edit it'), assistantLine([editBlock]),
+        attachment('[janitor-heartbeat] status: quiet'), assistantLine([{ type: 'text', text: 'ok' }]),
+      ])
+      assert.ok(out !== null, 'an attachment mid-turn must not split the turn and release the edit')
+    })
+
+    test('a REVIEW fork with isolation "worktree" earns no credit and BLOCKS; the same fork without isolation PASSES', async () => {
+      const isolated = await runGate([turnStart('edit it'), assistantLine([editBlock]), assistantLine([forkSpawn('ROLE: REVIEW\nattack it', 'worktree')])])
+      assert.ok(isolated !== null, 'an isolated spawn must not release the gate')
+      const plain = await runGate([turnStart('edit it'), assistantLine([editBlock]), assistantLine([forkSpawn('ROLE: REVIEW\nattack it')])])
+      assert.strictEqual(plain, null)
+    })
+
+    test('a review fork from an earlier turn does not release a later turn\'s edit', async () => {
+      const out = await runGate([
+        turnStart('edit it', 'human', 1), assistantLine([editBlock]), assistantLine([forkSpawn('ROLE: REVIEW\nreview it')]),
+        turnStart('edit again', 'human', 2), assistantLine([editBlock]),
+      ])
+      assert.ok(out !== null, 'the review belongs to the earlier turn')
+    })
+
+    test('a MEASURE spawn credits only as a fork with no isolation: a lean-worker earns nothing, an isolated fork earns nothing, a plain fork credits', () => {
+      const proposal = { type: 'text', text: 'PROPOSAL FOR ACTION - PLEASE REVIEW\nswitch the store to WAL' }
+      const measureBy = (block: unknown): number => scanTranscriptLines([assistantLine([proposal]), assistantLine([block])], CWD).roles.measure
+      assert.strictEqual(measureBy({ type: 'tool_use', name: 'Agent', input: { subagent_type: 'lean-worker', prompt: 'ROLE: MEASURE\nsettle it' } }), -1)
+      assert.strictEqual(measureBy({ type: 'tool_use', name: 'Agent', input: { subagent_type: 'fork', prompt: 'ROLE: MEASURE\nsettle it', isolation: 'worktree' } }), -1)
+      assert.strictEqual(measureBy({ type: 'tool_use', name: 'Agent', input: { subagent_type: 'fork', prompt: 'ROLE: MEASURE\nsettle it' } }), 1)
+    })
+
+    test('isCreditedFork: a case-folded fork with no isolation credits; any non-empty isolation, or another subagent type, does not', () => {
+      assert.strictEqual(isCreditedFork({ subagent_type: 'FORK' }), true)
+      assert.strictEqual(isCreditedFork({ subagent_type: ' fork ', isolation: '' }), true)
+      assert.strictEqual(isCreditedFork({ subagent_type: 'fork', isolation: 'worktree' }), false)
+      assert.strictEqual(isCreditedFork({ subagent_type: 'fork', isolation: false }), false)
+      assert.strictEqual(isCreditedFork({ subagent_type: 'lean-worker' }), false)
+    })
+
+    test('a worker return enqueued just before a task-notification turn is counted: the main gate blocks on the worker write', async () => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rg-ret-'))
+      try {
+        const subagents = path.join(dir, 'main', 'subagents')
+        fs.mkdirSync(subagents, { recursive: true })
+        fs.writeFileSync(path.join(subagents, 'agent-w.meta.json'), JSON.stringify({ toolUseId: 'toolu_W1', agentType: 'lean-worker' }))
+        fs.writeFileSync(path.join(subagents, 'agent-w.jsonl'), assistantLine([editBlock]) + '\n')
+        const transcript = path.join(dir, 'main.jsonl')
+        const spawnTurn = [turnStart('spawn the worker', 'human', 1), assistantLine([{ type: 'text', text: 'spawned' }])]
+        const returnTurn = [turnStart(notification('toolu_W1'), 'human', 2), assistantLine([{ type: 'text', text: 'worker finished' }])]
+        fs.writeFileSync(transcript, [...spawnTurn, enqueue('toolu_W1'), ...returnTurn].join('\n') + '\n')
+        const out = await runMainGate({ transcript_path: transcript, cwd: CWD })
+        assert.ok(out !== null, 'the return belongs to this turn, so its worker write must block')
+        assert.ok(reasonOf(out).includes('a worker you spawned wrote files'))
+        fs.writeFileSync(transcript, [...spawnTurn, ...returnTurn].join('\n') + '\n')
+        assert.strictEqual(await runMainGate({ transcript_path: transcript, cwd: CWD }), null, 'with no enqueue line there is no return to judge')
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true })
+      }
+    })
+
+  test('readCurrentTurn returns the current turn from its start with the non-conversation run before it, across chunk boundaries and multi-byte text', () => {
+    const lines = [
+      turnStart('old é—', 'human', 1), assistantLine([editBlock]), enqueue('toolu_X'),
+      turnStart('new ✓ prompt', 'human', 2), assistantLine([{ type: 'text', text: 'ok ✓' }]),
+    ]
+    withFile(lines, (file) => {
+      assert.deepStrictEqual(readCurrentTurn(file, { chunkBytes: 16 }), lines.slice(2))
+      assert.deepStrictEqual(readCurrentTurn(file), lines.slice(2))
+    })
+  })
+
+    test('readCurrentTurn reads a file with no turn start whole, and returns null for an unreadable path', () => {
+      const sc = (entry: Record<string, unknown>): string => JSON.stringify({ isSidechain: true, agentId: 'w1', ...entry })
+      const lines = [sc({ type: 'user', message: { role: 'user', content: 'do it' } }), sc({ type: 'assistant', message: { content: [editBlock] } })]
+      withFile(lines, (file) => assert.deepStrictEqual(readCurrentTurn(file), lines))
+      assert.strictEqual(readCurrentTurn('/nonexistent/rg-turn/x.jsonl'), null)
+    })
+
+    test('a turn longer than 4 MB still shows its first write: no fixed window cuts the turn short', async () => {
+      const filler = assistantLine([{ type: 'text', text: 'x'.repeat(1024 * 1024) }])
+      const out = await runGate([turnStart('edit it'), assistantLine([editBlock]), filler, filler, filler, filler, filler])
+      assert.ok(out !== null, 'the edit lies more than 4 MB before the Stop and must still block')
+    })
+
+    test('runSubagentGate: a worker whose only reviewer is an isolated fork is still BLOCKED; a plain fork releases it', async () => {
+      const sc = (entry: Record<string, unknown>): string => JSON.stringify({ isSidechain: true, agentId: 'w1', ...entry })
+      const userLine = sc({ type: 'user', message: { role: 'user', content: 'do the thing' } })
+      const writeLine = sc({ type: 'assistant', message: { content: [bashBlock("fastedit create evals/x.md --force --content 'a'")] } })
+      const spawnLine = (input: Record<string, unknown>): string => sc({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Agent', input }] } })
+      const stopWith = (lines: string[]): Promise<string | null> => withFile(lines, (file) => runSubagentGate({
+        hook_event_name: 'SubagentStop', agent_id: 'w1', agent_type: 'general-purpose', agent_transcript_path: file, cwd: CWD,
+      }))
+      assert.notStrictEqual(await stopWith([userLine, writeLine, spawnLine({ subagent_type: 'fork', isolation: 'worktree', prompt: 'ROLE: REVIEW\nattack it' })]), null)
+      assert.strictEqual(await stopWith([userLine, writeLine, spawnLine({ subagent_type: 'fork', prompt: 'ROLE: REVIEW\nattack it' })]), null)
+    })
+
+
+    // Captures what a call writes to stderr (the review gate's own notices), without changing what it returns.
+    const captureStderr = async <T>(run: () => Promise<T> | T): Promise<{ result: T; stderr: string }> => {
+      const real = process.stderr.write
+      let stderr = ''
+      process.stderr.write = ((chunk: string | Uint8Array): boolean => { stderr += String(chunk); return true }) as typeof process.stderr.write
+      try {
+        return { result: await run(), stderr }
+      } finally {
+        process.stderr.write = real
+      }
+    }
+    const withFileAsync = async <T>(lines: string[], run: (file: string) => Promise<T>): Promise<T> => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rg-disp-'))
+      try {
+        const file = path.join(dir, 'agent-f1.jsonl')
+        fs.writeFileSync(file, lines.join('\n') + '\n')
+        return await run(file)
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true })
+      }
+    }
+    const finished = (agent_type: string, last: string, file: string): Promise<string | null> => runSubagentGate({
+      hook_event_name: 'SubagentStop', agent_id: 'f1', agent_type, agent_transcript_path: file, last_assistant_message: last, cwd: CWD,
+    })
+
+    test('skipUnstartedTurn: the new prompt is already written and unanswered, so the window is the last COMPLETED turn', () => {
+      const lines = [turnStart('edit it', 'human', 1), assistantLine([editBlock]), turnStart('next question', 'human', 2)]
+      withFile(lines, (file) => {
+        assert.deepStrictEqual(readCurrentTurn(file, { skipUnstartedTurn: true }), lines.slice(0, 2))
+        assert.deepStrictEqual(readCurrentTurn(file), [lines[2]], 'without the option the unanswered turn is the window')
+      })
+    })
+
+    test('skipUnstartedTurn: the new prompt is not yet written, so the completed turn is the window either way', () => {
+      const lines = [turnStart('edit it', 'human', 1), assistantLine([editBlock])]
+      withFile(lines, (file) => assert.deepStrictEqual(readCurrentTurn(file, { skipUnstartedTurn: true }), lines))
+    })
+
+    test('skipUnstartedTurn: a worker return enqueued before the unanswered turn belongs to that turn, not the completed one', () => {
+      const lines = [turnStart('edit it', 'human', 1), assistantLine([editBlock]), enqueue('toolu_Y'), turnStart('next', 'human', 2)]
+      withFile(lines, (file) => assert.deepStrictEqual(readCurrentTurn(file, { skipUnstartedTurn: true }), lines.slice(0, 2)))
+    })
+
+    test('skipUnstartedTurn: a first turn with no answer yet has no completed turn to judge', () => {
+      withFile([turnStart('first question', 'human', 1)], (file) => assert.deepStrictEqual(readCurrentTurn(file, { skipUnstartedTurn: true }), []))
+    })
+
+    test('a main transcript with no turn start is judged whole and the stderr names it; a subagent transcript with none prints nothing', async () => {
+      const lines = [userStringLine('no turn start here'), assistantLine([editBlock])]
+      await withFileAsync(lines, async (file) => {
+        const main = await captureStderr(() => readCurrentTurn(file, { warnNoTurnStart: true }))
+        assert.deepStrictEqual(main.result, lines)
+        assert.ok(main.stderr.includes(`no turn start found in ${file}; judging the whole transcript`), main.stderr)
+        const sub = await captureStderr(() => readCurrentTurn(file))
+        assert.deepStrictEqual(sub.result, lines)
+        assert.strictEqual(sub.stderr, '')
+      })
+    })
+
+    test('a finished review fork shows its report to the USER as systemMessage, exactly as written', async () => {
+      const report = 'ADVERSARIAL-REVIEW\n\nFinding 1: the reader drops the last line when the file ends without a newline.'
+      const out = await withFileAsync([userStringLine('review the change')], (file) => finished('fork', report, file))
+      assert.deepStrictEqual(JSON.parse(out as string), { systemMessage: report })
+    })
+
+    test('the review heading may follow # and spaces, and a MEASURE report is shown the same way', async () => {
+      const report = '  ## MEASURE-AND-VERIFY-REPORT\nASSUMPTION 1: the file exists\nCOMMAND: ls\nOBSERVED: yes\nVERDICT: confirmed'
+      const out = await withFileAsync([userStringLine('measure it')], (file) => finished('fork', report, file))
+      assert.deepStrictEqual(JSON.parse(out as string), { systemMessage: report })
+    })
+
+    test('an agent whose last message is not a review shows nothing, and the review word below the first line does not count', async () => {
+      const plain = await withFileAsync([userStringLine('rename it')], (file) => finished('general-purpose', 'Renamed the file.', file))
+      assert.strictEqual(plain, null)
+      const buried = await withFileAsync([userStringLine('rename it')], (file) => finished('general-purpose', 'Summary first.\nADVERSARIAL-REVIEW is below', file))
+      assert.strictEqual(buried, null)
+    })
+
+    test('an agent the gate blocks gets the block decision and no systemMessage', async () => {
+      const out = await withFileAsync([userStringLine('edit it'), assistantLine([bashBlock("fastedit create evals/x.md --force --content 'a'")])],
+        (file) => finished('general-purpose', 'ADVERSARIAL-REVIEW\nlooked at it', file))
+      const parsed = JSON.parse(out as string) as Record<string, unknown>
+      assert.strictEqual(parsed.decision, 'block')
+      assert.strictEqual('systemMessage' in parsed, false)
+    })
+
+    test('a review longer than the display cap is cut to exactly the cap and names the full transcript', async () => {
+      const report = 'ADVERSARIAL-REVIEW\n' + 'x'.repeat(12000)
+      await withFileAsync([userStringLine('review the change')], async (file) => {
+        const message = (JSON.parse(await finished('fork', report, file) as string) as { systemMessage: string }).systemMessage
+        assert.strictEqual(message.length, 9500)
+        assert.ok(message.startsWith('ADVERSARIAL-REVIEW\n'))
+        assert.ok(message.endsWith(`… (truncated; full text: ${file})`), message.slice(-120))
+      })
+    })
+
+    test('a review of exactly the cap is shown whole', async () => {
+      const report = 'ADVERSARIAL-REVIEW\n' + 'x'.repeat(9500 - 'ADVERSARIAL-REVIEW\n'.length)
+      const out = await withFileAsync([userStringLine('review the change')], (file) => finished('fork', report, file))
+      assert.deepStrictEqual(JSON.parse(out as string), { systemMessage: report })
+    })
+
+    test('a long review with no transcript path says so on stderr and shows nothing', async () => {
+      const report = 'ADVERSARIAL-REVIEW\n' + 'x'.repeat(12000)
+      const { result, stderr } = await captureStderr(() => runSubagentGate({
+        hook_event_name: 'SubagentStop', agent_id: 'f1', agent_type: 'fork', last_assistant_message: report, cwd: CWD,
+      }))
+      assert.strictEqual(result, null)
+      assert.ok(stderr.includes('review display skipped'), stderr)
+    })
+
+  })
+
 })

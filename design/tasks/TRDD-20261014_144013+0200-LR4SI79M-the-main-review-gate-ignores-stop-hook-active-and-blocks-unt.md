@@ -4,7 +4,7 @@ title: The forced review gate can be overridden by Claude Code's 9-consecutive-S
 column: todo
 status: tasked
 created: 2026-10-14T14:40:13+0200
-updated: 2026-10-14T14:43:23+0200
+updated: 2026-10-14T14:45:29+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: spike
@@ -42,3 +42,5 @@ Title above is superseded by the frontmatter title: the gate refusing to release
 Evidence correction: the 2026-10-14 nine-block override was driven by the goal checker's repeated Stop feedback; whether review-gate blocks count toward CLAUDE_CODE_STOP_HOOK_BLOCK_CAP is unverified.
 Interaction with TRDD-QQ2XIIZ6: once the gate scans only the last turn, a cap override or an interrupted turn loses that turn's review permanently (no carry-over), so this card becomes more urgent when QQ2XIIZ6 deploys.
 Open owner decision: whether to remove the REVIEW-GATE NO REVIEW POSSIBLE text escape.
+Wording correction: the visible Stop feedback before the override was the goal checker's; review-gate blocks were not ruled out.
+Spike questions: (1) does the cap count consecutive blocks per hook or across all Stop hooks? (2) is raising CLAUDE_CODE_STOP_HOOK_BLOCK_CAP acceptable to the owner, given it also lengthens goal-checker loops? Exit: both answered with evidence, and a decision recorded.

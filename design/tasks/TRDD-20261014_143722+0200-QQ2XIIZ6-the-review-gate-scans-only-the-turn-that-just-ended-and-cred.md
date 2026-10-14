@@ -4,7 +4,7 @@ title: The review gate scans only the turn that just ended and credits only non-
 column: dev
 status: tasked
 created: 2026-10-14T14:37:22+0200
-updated: 2026-10-14T14:43:13+0200
+updated: 2026-10-14T15:10:08+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -49,6 +49,7 @@ Pointer (2026-10-14): the out-of-scope item above now lives in TRDD-LR4SI79M (ha
 - [ ] A heartbeat-fired turn (attachment entry) is a turn start; its own writes are demanded, earlier ones are not.
 - [ ] The scan reads backward to the turn start; no fixed 4 MB tail.
 - [ ] When deployed, rewrite the pending sentence in ~/.claude/rules/turn-protocol-and-review.md in present tense.
+- [ ] At deploy, supersede the hook-events-pipeline memory atoms that describe the pre-change gate in the present tense (RJ09 4 MB tail, BDF5 credit predicate without isolation) and refresh their reviewGate.ts / reviewSupervisor.ts line citations.
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-10-14
 
@@ -58,3 +59,6 @@ The acceptance box 'Stop-hook feedback does not start a new turn' protects owner
 Per-turn scope means a cap override loses the turn's review permanently; see TRDD-LR4SI79M.
 Open owner decision: remove the NO REVIEW POSSIBLE text escape? (no box until the owner answers)
 Rule-file box means the owner's user-scope rule turn-protocol-and-review.md.
+Supersedes the first STATE line: implementation runs in the MAIN checkout (non-isolated worker), and the heartbeat question is settled below.
+Orchestrator re-measured 2026-10-14 on the session transcript: all 116 heartbeat prompts are type user entries with an object turnPosition, turnOrigin scheduled and isMeta true; 6 attachment entries also contain the heartbeat text and 4 of them sit mid-turn, so attachments must NOT start a turn and isMeta must NOT exclude one. Turn start = type user && turnPosition object && isSidechain not true.
+An abandoned isolated worktree (.claude/worktrees/agent-aacd564da94c0b2ba) holds partial uncommitted reviewGate.ts edits; superseded, not to be merged; keep until this card closes.
