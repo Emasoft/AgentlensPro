@@ -162,6 +162,7 @@ suite('ingest end to end — the CLI start path with a real alcore', function ()
       // (a record is keyed by its atMs). Done when at least the hook spool and the statusline spool loaded.
       const seen = new Map<number, { exit?: number; timedOut?: boolean; summary?: string }>()
       let loaded = 0, failed = 0
+      let timeouts = 0
       const deadline = Date.now() + 240_000
       while (Date.now() < deadline && !(loaded >= 2 && st.views)) {   // bounded: 240 s, the tick period is 60 s
         try {
@@ -171,7 +172,11 @@ suite('ingest end to end — the CLI start path with a real alcore', function ()
           // early, so a timeout re-polls until the deadline; the assertions below remain the failure path. Any other
           // error is a real failure and is rethrown.
           const name = (err as { name?: string }).name
-          if (name === 'TimeoutError' || name === 'AbortError') continue
+          if (name === 'TimeoutError' || name === 'AbortError') {
+            timeouts += 1
+            await sleep(250)
+            continue
+          }
           throw err
         }
         const rec = st.lastCollect as { atMs?: number; exit?: number; timedOut?: boolean; summary?: string } | null
@@ -185,7 +190,7 @@ suite('ingest end to end — the CLI start path with a real alcore', function ()
         await sleep(250)
       }
       const ledger = failed === 0 ? [] : await query(db, 'SELECT spool, source_name, status, error_message FROM _ingest.files')
-      assert.ok(loaded >= 2 && failed === 0, `collect must have loaded files and failed none: loaded=${loaded} failed=${failed} records=${JSON.stringify([...seen.values()])} ledger: ${JSON.stringify(ledger)}`)
+      assert.ok(loaded >= 2 && failed === 0, `collect must have loaded files and failed none: loaded=${loaded} failed=${failed} timeouts=${timeouts} records=${JSON.stringify([...seen.values()])} ledger: ${JSON.stringify(ledger)}`)
       const vw = st.views as { exit?: number } | null
       assert.ok(vw && vw.exit === 0, `views must have exited 0: ${JSON.stringify(st.views)}`)
       assert.strictEqual(st.writeErrors, 0)
