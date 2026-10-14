@@ -164,7 +164,16 @@ suite('ingest end to end — the CLI start path with a real alcore', function ()
       let loaded = 0, failed = 0
       const deadline = Date.now() + 240_000
       while (Date.now() < deadline && !(loaded >= 2 && st.views)) {   // bounded: 240 s, the tick period is 60 s
-        st = await getJson(ui, '/api/ingest-status')
+        try {
+          st = await getJson(ui, '/api/ingest-status')
+        } catch (err) {
+          // WHY: one status response that is slow under load (getJson's 10 s AbortSignal.timeout) must not end the wait
+          // early, so a timeout re-polls until the deadline; the assertions below remain the failure path. Any other
+          // error is a real failure and is rethrown.
+          const name = (err as { name?: string }).name
+          if (name === 'TimeoutError' || name === 'AbortError') continue
+          throw err
+        }
         const rec = st.lastCollect as { atMs?: number; exit?: number; timedOut?: boolean; summary?: string } | null
         if (rec && !seen.has(Number(rec.atMs))) {
           seen.set(Number(rec.atMs), rec)
