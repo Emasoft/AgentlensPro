@@ -3,7 +3,7 @@ trdd-id: CS2W7E77
 title: The five P5 window auto-calibration tests fail deterministically on a burn-config ENOENT
 column: todo
 created: 2026-09-04T14:22:35+0200
-updated: 2026-09-24T08:56:49+0200
+updated: 2026-10-14T21:10:23+0200
 current-owner: main-session
 task-type: bugfix
 project-id: agentlenspro
@@ -146,3 +146,12 @@ handoff that edit owed.
 
 ## Notes and lessons learned
 2026-09-24T08:56:26+0200 — from superseded/duplicate TRDD-XI3UZUTK (same 5 P5 failures, same suite): the boot log showed "file watching unavailable ... falling back to a 5s full poll" — supports the timing/race hypothesis (5s poll interval racing a tighter test timeout) named as the leading candidate cause here.
+
+## Release-gate runs (2026-10-14)
+
+Run 1: HEAD ed0fbd5e plus the uncommitted TRDD-QQ2XIIZ6 card edit (committed afterwards as 4685acfe); node esbuild.js exit 0; pnpm run test:unit exit 0, 3165 passing, 14 pending, 0 failing (9 min).
+Run 2: HEAD 4685acfe; pnpm run test:unit exit 2, 3163 passing, 14 pending, 2 failing (12 min). Both failures were mocha 10 s timeouts in cliDispatch.test.js: "`list --definitely-not-a-real-flag` exits 64" (286 ms in run 1) and "a tool-level refusal exits non-zero" (1874 ms in run 1).
+Both runs used the working tree, not a clean checkout: it carries the owner-pending AGENT_NAMES hunk in src/cli/hookInstall.ts and the untracked agents/cheap-worker.md, agents/fast-worker.md and agents/smart-worker.md (plus unrelated dirty docs, cards and memory pages). A run counts toward this gate only if the release ships exactly the tree it ran on.
+Run 2 cause, settled from the log: a machine-wide starvation window of about 85 s. 23 consecutive spawned-CLI tests slowed 3-40x, including --version, -v and --help, which contact neither the in-process MCP stub nor any server (-v 238 ms to 9432 ms); the run recovered afterwards. Load average at the time was 195-267, from two iOS Simulator apps, a Jump Desktop session and fsearch, none of them test processes. Not a stub stall, not a live-server stall. Re-run in isolation under the same load, the two tests took at most 487 ms and 2604 ms.
+Found while triaging: cliDispatch test 2 ran the first-run launch setup on the default ports 3000/4316/4318, the live collector's, and setup's server step can SIGTERM a server whose data dir differs (TRDD-V2HFI30L). Fixed on the test side: test 2 now pins three free ports and pre-sets the revive brake in its own data dir, asserting the first-run-failed notice, no server.pid and no surviving alcore. The spawning suites in cliDispatch.test.ts run under a 60 s ceiling instead of mocha's 10 s default; all assertions unchanged.
+The count of two consecutive green full-suite runs restarts after the cliDispatch test fix lands; the product fix in TRDD-V2HFI30L restarts it again when it lands.

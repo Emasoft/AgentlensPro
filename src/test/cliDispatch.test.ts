@@ -6,6 +6,9 @@ import * as path from 'path'
 import { spawn } from 'child_process'
 import type { AddressInfo } from 'net'
 import { McpStub, startMcpStub } from './helpers/mcpStub'
+import { freePort } from './helpers/freePort'
+import { assertNoSurvivingServer } from './helpers/noSurvivingServer'
+import { dataDirFrom, NO_REVIVE_FILE } from '../dataDir'
 
 // ── the single `agentlenspro` executable — dispatch contracts (TRDD-7284WCW7) ─────────────
 // Spawns the REAL built CLI (standalone/cli.js) with HOME pointed at an EMPTY temp dir and
@@ -52,7 +55,20 @@ function mkHome(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'al-cli-home-'))
 }
 
-suite('agentlenspro — zero-side-effect global flags', () => {
+/** The suites that spawn the real CLI run under this ceiling instead of mocha's 10 s default; a test that sets its
+ *  own timeout keeps it (the network-help suite's single test sets 30 s).
+ *  WHY: on 2026-10-14 a machine-wide starvation window of about 85 s (load average 195-267 from iOS Simulator apps,
+ *  a remote-desktop session and a file indexer) slowed 23 consecutive spawned-CLI tests 3-40× — `-v` went from
+ *  238 ms to 9432 ms with no stub and no server involved — and timed out two of them at 10 s. The same tests then
+ *  measured 0.2-2.6 s in isolation under the same load. A spawn's cost is the machine's, not the code's: this
+ *  ceiling only stops load from reading as a failure, and every assertion is unchanged (TRDD-CS2W7E77). */
+const SPAWN_SUITE_TIMEOUT_MS = 60_000
+
+/** The launch check's notice when the first-run full setup fails (autoSetup.ts, ensureInstalled). */
+const FIRST_RUN_SETUP_FAILED = 'agentlenspro: first-run setup failed — run `agentlenspro setup` to see why'
+
+suite('agentlenspro — zero-side-effect global flags', function () {
+  this.timeout(SPAWN_SUITE_TIMEOUT_MS)
   test('--version prints the exact package.json version, exits 0, and creates NOTHING under HOME', async () => {
     // Field defect: v1 booted the whole span store to parse --version (and then exited 1).
     // The empty-HOME-stays-empty assertion is the no-side-effects proof.
@@ -87,7 +103,8 @@ suite('agentlenspro — zero-side-effect global flags', () => {
   })
 })
 
-suite('agentlenspro — diagnostics dispatch parity (absorbed agentlens-cli.js surface)', () => {
+suite('agentlenspro — diagnostics dispatch parity (absorbed agentlens-cli.js surface)', function () {
+  this.timeout(SPAWN_SUITE_TIMEOUT_MS)
   test('`list --desc` prints every tool from the live tools/list schema, one per line', async () => {
     // The CLI must have no local tool registry — names/descriptions come from the server.
     const home = mkHome()
@@ -170,8 +187,22 @@ suite('agentlenspro — diagnostics dispatch parity (absorbed agentlens-cli.js s
     try {
       // The launch check must RUN here (isolatedEnv turns it off by default): the empty HOME makes this a first run,
       // whose notice is what has to travel inside the refusal.
-      const env = isolatedEnv(home, { AGENTLENS_MCP_URL: stub.url })
+      // ISOLATION (TRDD-V2HFI30L): that first run is a FULL setup. Its server step SIGTERMs any server answering
+      // /api/server-stats on the UI port whose data dir differs — before every spawn gate — and otherwise spawns a
+      // detached alcore. With the ports left at their defaults (isolatedEnv deletes them) that server is the
+      // developer's LIVE collector. Pinned free ports leave the step's stats probe empty, so there is nothing to kill;
+      // the revive brake, set in the child's own data dir, then fails the step before any spawn. The notice is
+      // therefore the deterministic "first-run setup failed" one, and no process outlives the test.
+      const env = isolatedEnv(home, {
+        AGENTLENS_MCP_URL: stub.url,
+        UI_PORT: String(await freePort()),
+        MCP_PORT: String(await freePort()),
+        OTLP_PORT: String(await freePort()),
+      })
       delete env.AGENTLENS_NO_AUTOSETUP
+      const dataDir = dataDirFrom(env)
+      fs.mkdirSync(dataDir, { recursive: true })
+      fs.writeFileSync(path.join(dataDir, NO_REVIVE_FILE), 'cliDispatch: the launch setup must not start a server\n')
       const r = await runCli(['get_agent_tokens', '--agentId', 'nope'], env)
       assert.notStrictEqual(r.code, 0, 'a refusal must not exit 0')
       assert.strictEqual(r.stdout.trim(), '', `stdout must stay parse-safe, got: ${r.stdout}`)
@@ -182,6 +213,10 @@ suite('agentlenspro — diagnostics dispatch parity (absorbed agentlens-cli.js s
       assert.ok(payload.error.includes('not found'), r.stderr)
       assert.ok(Array.isArray(payload.notices) && payload.notices.length > 0 && payload.notices.every(n => n.startsWith('agentlenspro:')),
         `the first-run notice must be folded into the refusal: ${r.stderr}`)
+      assert.ok((payload.notices ?? []).includes(FIRST_RUN_SETUP_FAILED),
+        `the braked server step must fail the first-run setup, and the notice must say so: ${r.stderr}`)
+      assert.ok(!fs.existsSync(path.join(dataDir, 'server.pid')), 'the launch setup must not have started a server')
+      assertNoSurvivingServer(dataDir)
     } finally { await stub.close(); fs.rmSync(home, { recursive: true, force: true }) }
   })
 
@@ -568,7 +603,8 @@ suite('agentlenspro — diagnostics dispatch parity (absorbed agentlens-cli.js s
   })
 })
 
-suite('agentlenspro — help is TOTAL: --help anywhere never executes the verb', () => {
+suite('agentlenspro — help is TOTAL: --help anywhere never executes the verb', function () {
+  this.timeout(SPAWN_SUITE_TIMEOUT_MS)
   // Owner directive 2026-08-05, from a live incident: `agentlenspro disable --help` EXECUTED the
   // disable — it armed <dataDir>/DISABLED, stopped the running server, disarmed every hook on the
   // machine and stripped the telemetry env, because runDisableCli folds non-flag args into the
