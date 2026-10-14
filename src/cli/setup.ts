@@ -45,10 +45,9 @@ import {
   installHooks, installSkill, isOurHookCommand, rebuildEventMatchers, resolveOnPath,
   HOOK_TIMEOUT_SEC, sha256File, SKILL_NAMES, findPackageRoot, skillFiles, skillTreeHash, installAgents, AGENT_NAMES,
 } from './hookInstall'
-import { alcoreBin, alcoreServeArgs, ALCORE_MIMALLOC_PURGE_DELAY_MS, resolveBinNativeDir } from './serverControl'
-import { parsePidLock } from '../serverRuntime'
+import { alcoreBin, alcoreServeArgs, ALCORE_MIMALLOC_PURGE_DELAY_MS, resolveBinNativeDir, statsOwnership } from './serverControl'
 
-import { chooseServerPorts, readChosenPort, writePortsFile } from './portSelect'
+import { chooseServerPorts, liveLockPid, readChosenPort, writePortsFile } from './portSelect'
 export interface SetupOptions {
   dryRun?: boolean
   yes?: boolean
@@ -148,22 +147,38 @@ export function resolveCtx(opts: SetupOptions): Ctx {
 
 // ── Local transport bound to the ctx ports (cliCore reads env — setup must not) ────────────
 
-function httpJson(port: number, method: string, p: string, payload?: unknown): Promise<{ status: number; json: unknown }> {
+/** Overall budgets for setup's own HTTP calls (TRDD-V2HFI30L). The socket timeout each call also sets is an IDLE
+ *  timeout — every byte resets it — so a server that trickled one byte every few seconds held setup forever. The
+ *  overall deadline bounds the whole exchange. 10 s is twice the idle timeout, so a slow but healthy server under
+ *  load still answers in time; the MCP budget keeps the same margin over its 10 s idle timeout. */
+export const HTTP_TOTAL_DEADLINE_MS = 10_000
+const MCP_TOTAL_DEADLINE_MS = 15_000
+
+export function httpJson(port: number, method: string, p: string, payload?: unknown): Promise<{ status: number; json: unknown }> {
   const body = payload === undefined ? null : JSON.stringify(payload)
   return new Promise((resolve, reject) => {
+    let settled = false
+    const settle = (finish: () => void): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(deadline)
+      finish()
+    }
     const req = http.request({
       hostname: '127.0.0.1', port, path: p, method,
       headers: body ? { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) } : {},
     }, res => {
       let raw = ''
       res.on('data', (c: Buffer) => { raw += c })
-      res.on('end', () => {
+      res.on('error', e => settle(() => reject(e)))
+      res.on('end', () => settle(() => {
         let json: unknown = null
         try { json = JSON.parse(raw) } catch { /* non-JSON body (e.g. the dashboard HTML) */ }
         resolve({ status: res.statusCode ?? 0, json })
-      })
+      }))
     })
-    req.on('error', reject)
+    req.on('error', e => settle(() => reject(e)))
+    const deadline = setTimeout(() => settle(() => { req.destroy(); reject(new Error('timeout')) }), HTTP_TOTAL_DEADLINE_MS)
     req.setTimeout(5000, () => req.destroy(new Error('timeout')))
     if (body) req.write(body)
     req.end()
@@ -173,6 +188,13 @@ function httpJson(port: number, method: string, p: string, payload?: unknown): P
 async function mcpCall(port: number, method: string, params: unknown): Promise<unknown> {
   const body = JSON.stringify({ jsonrpc: '2.0', id: Date.now(), method, params })
   return new Promise((resolve, reject) => {
+    let settled = false
+    const settle = (finish: () => void): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(deadline)
+      finish()
+    }
     const req = http.request({
       hostname: '127.0.0.1', port, path: '/mcp', method: 'POST',
       headers: {
@@ -183,7 +205,8 @@ async function mcpCall(port: number, method: string, params: unknown): Promise<u
     }, res => {
       let raw = ''
       res.on('data', (c: Buffer) => { raw += c })
-      res.on('end', () => {
+      res.on('error', e => settle(() => reject(e)))
+      res.on('end', () => settle(() => {
         const line = raw.split('\n').find(l => l.startsWith('data:'))
         const payload = line ? line.slice(5).trim() : raw
         try {
@@ -191,19 +214,24 @@ async function mcpCall(port: number, method: string, params: unknown): Promise<u
           if (j.error) return reject(new Error(j.error.message || 'rpc error'))
           resolve(j.result)
         } catch { reject(new Error(`bad MCP response (${res.statusCode}): ${raw.slice(0, 200)}`)) }
-      })
+      }))
     })
-    req.on('error', reject)
+    // TRDD-V2HFI30L: the overall bound, see HTTP_TOTAL_DEADLINE_MS.
+    const deadline = setTimeout(() => settle(() => { req.destroy(); reject(new Error('timeout')) }), MCP_TOTAL_DEADLINE_MS)
+    req.on('error', e => settle(() => reject(e)))
     req.setTimeout(10_000, () => req.destroy(new Error('timeout')))
     req.write(body)
     req.end()
   })
 }
 
-interface StatsShape {
+/** A /api/server-stats answer. `dataDir` and `ports` are optional because the answer comes from whatever
+ *  listens on the UI port: a build from before data-dir reporting (82d3776) or a foreign HTTP service may omit
+ *  them (TRDD-V2HFI30L). */
+export interface StatsShape {
   pid: number
-  dataDir: string
-  ports: { ui: number; mcp: number; otlp: number }
+  dataDir?: string
+  ports?: { ui: number; mcp: number; otlp: number }
   spans?: { store?: { totalSpans: number }; inMemory?: number }
   hookEvents?: { receivedSinceBoot: number }
 }
@@ -214,6 +242,84 @@ async function serverStats(ctx: Ctx): Promise<StatsShape | null> {
     if (r.status === 200 && r.json && typeof r.json === 'object') return r.json as StatsShape
     return null
   } catch { return null }
+}
+
+/** A directory as the filesystem sees it: symlinks resolved (realpath), or path.resolve for a path that does
+ *  not exist yet. */
+function canonicalDir(p: string): string {
+  try { return fs.realpathSync.native(p) } catch { return path.resolve(p) }
+}
+
+/** Is the server that answered /api/server-stats OURS, the one that owns ctx.dataDir? (TRDD-V2HFI30L)
+ *  Checked in findServerPid's order: (a) pidfile identity — `<ctx.dataDir>/server.pid` names a live owner
+ *  (liveLockPid checks the start reference, so a recycled pid is not it) and that owner is the pid the server
+ *  reports; else (b) the data dir it reports is ctx.dataDir with symlinks resolved on both sides (statsOwnership).
+ *  A server that reports no data dir (statsOwnership's 'unknown': a build from before data-dir reporting, 82d3776,
+ *  or a foreign HTTP service) is therefore FOREIGN unless (a) matched.
+ *  WHY: the old test was "any 200 JSON on the UI port", so an isolated setup (a test, a second instance) on the
+ *  default ports adopted the developer's live collector as its own, then SIGTERMed it for its data dir. */
+export function statsAreOurs(ctx: Ctx, stats: StatsShape): boolean {
+  const owner = liveLockPid(ctx.dataDir)
+  if (owner !== null && owner === stats.pid) return true
+  const reported = typeof stats.dataDir === 'string' ? canonicalDir(stats.dataDir) : undefined
+  return statsOwnership(reported, canonicalDir(ctx.dataDir)) === 'ours'
+}
+
+/** Whether `port`, one of the three listeners, is held by OUR server. Per port (TRDD-V2HFI30L): the stats come
+ *  from the UI port, so a server that is ours there makes a port ours only when it reports that port as its own;
+ *  otherwise a stranger on 4318 passed the OTLP refusal because our server answered on 3000. */
+async function portHeldByOurs(ctx: Ctx, kind: 'otlp' | 'ui' | 'mcp', port: number): Promise<boolean> {
+  const stats = await serverStats(ctx)
+  return stats !== null && statsAreOurs(ctx, stats) && stats.ports?.[kind] === port
+}
+
+/** The server signature the pidfile check has always required (PR-15 review): `alcore` (TRDD-1B98LCVR box 4),
+ *  plus a legacy TS-server pidfile and an `agentlenspro` CLI process. */
+const SERVER_CMD_RE = /standalone[/\\]server\.js|agentlenspro|[/\\]alcore(?:\s|$)/
+
+/** The command line of `pid`, read from ONE `ps` snapshot (never a live grep), or null when no such process
+ *  runs or ps failed. */
+function processCommand(pid: number): string | null {
+  try {
+    const out = execFileSync('ps', ['-eo', 'pid=,command='], { encoding: 'utf-8', timeout: 5_000 })
+    for (const line of out.split('\n')) {
+      const m = /^\s*(\d+)\s+(.*)$/.exec(line)
+      if (m !== null && Number(m[1]) === pid) return m[2]
+    }
+  } catch { /* ps failed: nothing about the pid is provable */ }
+  return null
+}
+
+/** The `--data-dir` value of an `alcore serve` command line, or null. */
+function alcoreServeDataDir(cmd: string): string | null {
+  const m = /(?:^|[/\\])alcore\s+serve\s(?:.*\s)?--data-dir\s+(.+?)(?=\s+--[a-z]|$)/.exec(cmd)
+  return m === null ? null : m[1]
+}
+
+/** `pid` when it is provably OUR server's process, else null: the ONLY pids setup may signal (TRDD-V2HFI30L).
+ *  Provable means (a) `<ctx.dataDir>/server.pid` names it as a live owner AND its command line is a server's
+ *  (the PR-15 guard stays: a legacy bare-numeric lock has no start reference, so liveness alone could be a
+ *  recycled pid), or (b) a ps snapshot shows it running `alcore serve --data-dir <ctx.dataDir>`.
+ *  A pid that a stats answer reports about itself is never enough: whatever answers the UI port can name any
+ *  pid, and the old code sent SIGTERM to exactly that number. */
+function ownServerPid(ctx: Ctx, pid: number): number | null {
+  if (!Number.isInteger(pid) || pid <= 0) return null
+  const cmd = processCommand(pid)
+  if (cmd === null) return null
+  if (liveLockPid(ctx.dataDir) === pid && SERVER_CMD_RE.test(cmd)) return pid
+  const dir = alcoreServeDataDir(cmd)
+  return dir !== null && canonicalDir(dir) === canonicalDir(ctx.dataDir) ? pid : null
+}
+
+/** The refusal for a UI port answered by a server that is not ours: who it is, and how the user stops it. */
+function foreignServerDetail(ctx: Ctx, stats: StatsShape): string {
+  const dir = typeof stats.dataDir === 'string' ? stats.dataDir : null
+  // `server stop` resolves its target from AGENTLENS_DATA_DIR first (dataDir.ts resolveDataDirFrom), so naming
+  // that variable reaches the other instance even when DATA_DIR is also set.
+  const remedy = dir !== null
+    ? `stop it with \`AGENTLENS_DATA_DIR='${dir}' agentlenspro server stop\`, or pin UI_PORT, MCP_PORT and OTLP_PORT to free ports`
+    : 'stop it, or pin UI_PORT, MCP_PORT and OTLP_PORT to free ports'
+  return `the server on UI port ${ctx.uiPort} (pid ${stats.pid}, data dir ${dir ?? 'not reported'}) does not own ${ctx.dataDir}; setup never stops another instance: ${remedy}`
 }
 
 // ── The result table (heavy header rule, light body — same family as heartbeat-cost) ───────
@@ -1181,60 +1287,67 @@ const stepServer: StepDef = {
     // status` showed RUNNING, because its stats answer was slow. Collapsing that timeout into
     // "not running" is worse than cosmetic: the real-run remedy for "not running" is SPAWNING,
     // which slams into the single-owner data-dir guard and reports a confusing failure. So when
-    // HTTP says nothing, consult the pidfile under ctx.dataDir (kill(pid, 0) = liveness): an
-    // alive owner means "unresponsive — restart", never "absent — start".
+    // HTTP says nothing, consult the pidfile under ctx.dataDir: an alive owner means
+    // "unresponsive — restart", never "absent — start".
+    // The owner goes through ownServerPid, the same identity check every signal below uses
+    // (TRDD-V2HFI30L): liveLockPid reads both lock shapes (TRDD-PIDFILEAT) and checks the start
+    // reference, and the server-command guard (PR-15 review) still refuses a recycled pid — the
+    // real-run path SIGTERMs this number, and a wrongly-spared real server is still protected by
+    // its own single-owner boot guard (the safe failure direction).
     let stalePid: number | null = null
     if (pre === null) {
-      try {
-        // TRDD-PIDFILEAT: parsePidLock understands both the current JSON {pid,start} lock shape and
-        // the legacy bare-numeric one — a plain Number(...) on the JSON shape reads NaN and would
-        // silently misclassify every up-to-date install as "not running".
-        const lock = parsePidLock(fs.readFileSync(path.join(ctx.dataDir, 'server.pid'), 'utf-8'))
-        if (lock !== null) {
-          const pid = lock.pid
-          process.kill(pid, 0)
-          // PID-REUSE GUARD (PR-15 review): kill(pid, 0) proves SOME process is alive, not that
-          // it is OUR server — the OS reuses pids, and the real-run path SIGTERMs this number.
-          // Only claim the pid when its command line looks like an AgentlensPro server; anything
-          // else means the pidfile is stale and the honest classification is "not running" (a
-          // wrongly-spared real server is still protected by its own single-owner boot guard,
-          // which refuses the duplicate spawn cleanly — the safe failure direction).
-          const cmd = execFileSync('ps', ['-p', String(pid), '-o', 'command='],
-            { encoding: 'utf-8', timeout: 5_000 }).trim()
-          // `[/\\]alcore(\s|$)` catches the Rust server (TRDD-1B98LCVR box 4 — standalone/server.js
-          // no longer exists); the other two arms stay for a legacy TS-server pidfile and a
-          // `agentlenspro` CLI process encountered on an install this check hasn't caught up to.
-          if (/standalone[/\\]server\.js|agentlenspro|[/\\]alcore(?:\s|$)/.test(cmd)) stalePid = pid
-        }
-      } catch { /* no pidfile, a dead pid, or ps failed — genuinely not running */ }
+      const owner = liveLockPid(ctx.dataDir)
+      if (owner !== null) stalePid = ownServerPid(ctx, owner)
     }
     const preSpanCount = pre?.spans?.store?.totalSpans ?? storeSpanCount(ctx.dataDir)
-    const healthy = pre !== null
-      && path.resolve(pre.dataDir) === path.resolve(ctx.dataDir)
-      && pre.ports.ui === ctx.uiPort && pre.ports.mcp === ctx.mcpPort && pre.ports.otlp === ctx.otlpPort
+    const preOurs = pre !== null && statsAreOurs(ctx, pre)
+    const healthy = pre !== null && preOurs
+      && pre.ports?.ui === ctx.uiPort && pre.ports?.mcp === ctx.mcpPort && pre.ports?.otlp === ctx.otlpPort
     const found = pre
-      ? `running pid=${pre.pid} (dataDir ${pre.dataDir === ctx.dataDir ? 'matches' : 'MISMATCH'})`
+      ? `running pid=${pre.pid} (dataDir ${preOurs ? 'matches' : 'MISMATCH'})`
       : stalePid !== null
         ? `unresponsive (pid ${stalePid} alive, stats probe got no answer in 5s)`
         : 'not running'
 
     if (ctx.dryRun) {
-      return { result: { step: this.name, found, action: healthy ? 'none' : (pre !== null || stalePid !== null ? 'would: graceful restart from this install' : 'would: start server'), verify: 'SKIP', detail: 'dry-run' }, acted: false }
+      const would = healthy ? 'none'
+        : pre !== null && !preOurs ? 'would: refuse (another instance answers on the UI port)'
+          : pre !== null || stalePid !== null ? 'would: graceful restart from this install' : 'would: start server'
+      return { result: { step: this.name, found, action: would, verify: 'SKIP', detail: 'dry-run' }, acted: false }
     }
     if (healthy) {
       ctx.serverPid = pre.pid
       return { result: { step: this.name, found, action: 'none', verify: 'PASS', detail: `dashboard+MCP+OTLP already serving ${preSpanCount} span(s)` }, acted: false }
     }
 
-    // ACT — graceful stop of a mismatched/old/unresponsive server (SIGTERM = span-flush), then
+    // TRDD-V2HFI30L: setup never stops a server it cannot prove is its own. The old code SIGTERMed
+    // `pre.pid` — a number the UI port's answerer reported about itself — whenever the reported data
+    // dir differed, so an isolated setup (a test, a second instance) on the default ports killed the
+    // developer's live collector. A foreign server is refused with its pid, data dir and the remedy.
+    if (pre !== null && !preOurs) {
+      return { result: { step: this.name, found, action: 'refuse', verify: 'FAIL', detail: foreignServerDetail(ctx, pre) }, acted: false }
+    }
+    // ACT — graceful stop of a mismatched/old/unresponsive server OF OURS (SIGTERM = span-flush), then
     // start from THIS install's bundle. The unresponsive case uses the pidfile pid: skipping the
     // stop and going straight to spawn would hit the single-owner guard.
-    const stopPid = pre?.pid ?? stalePid
-    if (stopPid !== null && stopPid !== undefined) {
+    const stopPid = pre !== null ? ownServerPid(ctx, pre.pid) : stalePid
+    if (pre !== null && stopPid === null) {
+      return {
+        result: {
+          step: this.name, found, action: 'refuse', verify: 'FAIL',
+          detail: `the server on UI port ${ctx.uiPort} reports this data dir but its pid ${pre.pid} is not provably ours (not the live owner in ${path.join(ctx.dataDir, 'server.pid')}, not \`alcore serve --data-dir ${ctx.dataDir}\`), so setup will not signal it: stop it yourself, or pin UI_PORT, MCP_PORT and OTLP_PORT to free ports`,
+        },
+        acted: false,
+      }
+    }
+    if (stopPid !== null) {
       try { process.kill(stopPid, 'SIGTERM') } catch { /* already gone */ }
       const gone = async (): Promise<boolean> =>
         (await serverStats(ctx)) === null && (() => { try { process.kill(stopPid, 0); return false } catch { return true } })()
-      for (let i = 0; i < 40 && !(await gone()); i++) await sleep(250)
+      // Wall clock, not a try count (TRDD-V2HFI30L): each stats probe can itself take seconds, so
+      // "40 tries" stretched the promised 10s to minutes.
+      const stopBy = Date.now() + 10_000
+      while (Date.now() < stopBy && !(await gone())) await sleep(250)
       if (!(await gone())) {
         return { result: { step: this.name, found, action: 'stop old server', verify: 'FAIL', detail: `pid ${stopPid} did not stop within 10s` }, acted: true }
       }
@@ -1287,11 +1400,13 @@ const stepServer: StepDef = {
 
     // VERIFY — through the network, never the child handle: dashboard 200, OTLP accepts,
     // pid is NEW, and the loaded span count did not shrink (data preservation assertion).
+    // Up to 30s of wall clock — DB open + first log scan can be slow; counted in time, not tries,
+    // because each probe can itself take seconds (TRDD-V2HFI30L).
     let post: StatsShape | null = null
-    for (let i = 0; i < 120; i++) { // up to 30s — DB open + first log scan can be slow
+    const readyBy = Date.now() + 30_000
+    while (post === null && Date.now() < readyBy) {
       await sleep(250)
       post = await serverStats(ctx)
-      if (post) break
     }
     if (!post) {
       return { result: { step: this.name, found, action: 'start server', verify: 'FAIL', detail: `not ready within 30s — check ${logFile}` }, acted: true }
@@ -1318,8 +1433,9 @@ const stepServer: StepDef = {
 
 /** Owner rule 2026-10-02 — never squat a busy port. Wraps stepServer with the SAME chooser the
  *  `agentlenspro server start` path uses: env-pinned ports and OTLP refuse loudly naming the holder,
- *  unpinned UI/MCP move to the next free port; a port held by our own running server is kept. The
- *  chosen ports go back into ctx so the server step, the verify probes and the final self-test all
+ *  unpinned UI/MCP move to the next free port; a port held by our own running server (our data dir,
+ *  reporting that port as its own) is kept. The chosen ports go back into ctx so the server step,
+ *  the verify probes and the final self-test all
  *  dial what is actually bound. ports.json is written only after the server step verified PASS,
  *  never from a dry-run (a dry-run claims nothing and writes nothing). */
 const stepServerGuarded: StepDef = {
@@ -1331,11 +1447,17 @@ const stepServerGuarded: StepDef = {
         const chosen = await chooseServerPorts(
           { otlp: ctx.otlpPort, ui: ctx.uiPort, mcp: ctx.mcpPort },
           { ui: pinned(process.env.UI_PORT), mcp: pinned(process.env.MCP_PORT) },
-          async () => (await serverStats(ctx)) !== null,
+          // TRDD-V2HFI30L: ours = this setup's own server AND reporting that very port — "any 200 on
+          // the UI port" adopted another instance's ports, after which the server step SIGTERMed it.
+          (kind, port) => portHeldByOurs(ctx, kind, port),
         )
         ctx.otlpPort = chosen.otlp; ctx.uiPort = chosen.ui; ctx.mcpPort = chosen.mcp
       } catch (e) {
-        return { result: { step: this.name, found: 'port claim', action: 'start server', verify: 'FAIL', detail: (e as Error).message }, acted: false }
+        // The chooser's refusal names the port holder's pid; when another instance answers on the UI
+        // port, also name its data dir and how to stop it (TRDD-V2HFI30L).
+        const holder = await serverStats(ctx)
+        const hint = holder !== null && !statsAreOurs(ctx, holder) ? `\n${foreignServerDetail(ctx, holder)}` : ''
+        return { result: { step: this.name, found: 'port claim', action: 'start server', verify: 'FAIL', detail: (e as Error).message + hint }, acted: false }
       }
     }
     const out = await stepServer.run(ctx)
@@ -1374,7 +1496,9 @@ const stepSelfTest: StepDef = {
     // …2. and back out through the DIAGNOSTICS door (the get_recent_sessions MCP tool):
     // the round-trip proves collector → span store → summarizer → repository → MCP in one go.
     let seen = false
-    for (let i = 0; i < 40 && !seen; i++) {
+    // 10s of wall clock, not 40 tries: each MCP call can itself take seconds (TRDD-V2HFI30L).
+    const seenBy = Date.now() + 10_000
+    while (!seen && Date.now() < seenBy) {
       try {
         // The stateless Streamable-HTTP endpoint still wants the MCP handshake once per
         // client; it is cheap, so re-issue it per attempt rather than track session state.
