@@ -125,6 +125,37 @@ export function declaredRoleOwnTranscript(prompt: string): Role | null {
   return m === r ? null : (m ? 'measure' : 'review')
 }
 
+/** A declared role for the worker-write scan. `investigate` relaxes that scan only; it never credits a gate role
+ *  (`declaredRole` and `Role` stay MEASURE/REVIEW), so an INVESTIGATE fork cannot satisfy a MEASURE demand. */
+export type WorkerRole = Role | 'investigate'
+
+/** The TEXT blocks of a transcript entry, joined; a tool_result block is skipped, never read. Unlike
+ *  `userPromptText`, an entry that ALSO carries a tool_result still yields its text, because a fork's first
+ *  user entry is exactly that shape (measured, TRDD-QQ2XIIZ6). */
+function firstEntryText(content: unknown): string {
+  if (typeof content === 'string') return content
+  if (!Array.isArray(content)) return ''
+  return content
+    .filter((b) => (b as AssistantContentBlock)?.type === 'text')
+    .map((b) => String((b as { text?: unknown }).text ?? ''))
+    .join('\n')
+}
+
+/** The ROLE a background worker declared in its OWN first transcript entry, for workerWriteDetail only.
+ *  WHY (TRDD-QQ2XIIZ6, measured 2026-10-14): a fork's first user entry is `[tool_result, text]`, the text being
+ *  `<fork-boilerplate>…</fork-boilerplate>` then a line `Your directive: ROLE: X`. The old read
+ *  (`userPromptText`, which returns '' for any entry holding a tool_result, then declaredRoleOwnTranscript)
+ *  therefore never matched a fork, so the role exemption never ran and every role fork's report or scratch
+ *  write armed the gate. The line read is the first one starting `Your directive: ` (fork shape), else the
+ *  first non-blank line (a plain prompt); it must match whole, anchored, so a ROLE line anywhere else — quoted
+ *  later in a directive, on line 5 of a fresh worker's prompt, or after other text — never counts. */
+export function workerDeclaredRole(content: unknown): WorkerRole | null {
+  const lines = firstEntryText(content).split('\n')
+  const line = lines.find((l) => l.startsWith('Your directive: ')) ?? lines.find((l) => l.trim() !== '') ?? ''
+  const m = /^(?:Your directive: )?ROLE: (MEASURE|REVIEW|INVESTIGATE)\s*$/.exec(line)
+  return m === null ? null : (m[1].toLowerCase() as WorkerRole)
+}
+
 
 /** The credit test BOTH roles share (owner spec 2026-10-14). A spawn credits its ROLE only when it is a
  *  `fork` (case-folded) with NO `isolation` parameter. WHY a fork: it inherits the parent's conversation
@@ -491,7 +522,8 @@ function runsNestedShell(command: string): boolean {
 /** What ONE background worker wrote, as the detail of a `worker write` block, or null. The worker's
  *  transcript sits beside the main one at `<base>/subagents/agent-<x>.jsonl`, and its `.meta.json`
  *  holds the tool_use id the return names. Skipped: a janitor agent (its writes are the janitor's, as
- *  everywhere in this file) and a ROLED agent (its own fork is the review, not work to review). Never
+ *  everywhere in this file). A ROLED agent (workerDeclaredRole) is scanned like any worker, except that an
+ *  unresolvable write target inside an ephemeral directory is its scratch, not work (TRDD-QQ2XIIZ6). Never
  *  throws: a read or parse error is named on stderr and allowed, because a throw here would wedge the
  *  main session's Stop. */
 export function workerWriteDetail(transcriptPath: string, toolUseId: string, cwd: string): string | null {
@@ -510,7 +542,10 @@ export function workerWriteDetail(transcriptPath: string, toolUseId: string, cwd
     const entries: TranscriptEntry[] = []
     for (const l of rawLines) { try { entries.push(JSON.parse(l) as TranscriptEntry) } catch { /* torn line */ } }
     const firstUser = entries.find((e) => e?.type === 'user')
-    if (firstUser !== undefined && declaredRoleOwnTranscript(userPromptText(firstUser.message?.content)) !== null) return null
+    // A declared role no longer skips the worker (TRDD-QQ2XIIZ6, amendment A): it relaxes ONLY an unresolvable
+    // target inside an ephemeral directory (a `$(date +%s)` stamp, a loop variable), so a role fork's resolvable
+    // write outside those directories still arms. workerDeclaredRole, not userPromptText: see its WHY.
+    const roleScratch = firstUser !== undefined && workerDeclaredRole(firstUser.message?.content) !== null
     const denied = deniedToolUseIds(rawLines)
     const details: string[] = []
     for (const e of entries) {
@@ -531,7 +566,7 @@ export function workerWriteDetail(transcriptPath: string, toolUseId: string, cwd
         // while a path-qualified shell or a clustered -lc-style option still counts.
         const command = String(b.input?.command ?? '')
         const nested = runsNestedShell(command)
-        for (const reason of commandWriteReasons(command, cwd)) {
+        for (const reason of commandWriteReasons(command, cwd, { roleScratch })) {
           if (nested || !DEPLOY_OR_RECORD_RE.test(reason)) details.push(reason)
         }
       }

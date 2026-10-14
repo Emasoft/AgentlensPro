@@ -8,10 +8,10 @@ import {
   demandText, mainBlockReason, subagentBlockReason, ARM_CAUSE_TEXT,
   REVIEW_GATE_DIRECTIVE, REVIEW_ROLE_RULE, MEASURE_ROLE_RULE, declaredRole, declaredRoleOwnTranscript,
   runMainGate, runReviewGate, agentCannotSpawn, declaredToolsHaveAgent,
-  NO_REVIEW_SENTINEL, NO_REVIEW_SENTINEL_EXAMPLES, workerReturnId, workerWriteDetail,
+  NO_REVIEW_SENTINEL, NO_REVIEW_SENTINEL_EXAMPLES, workerReturnId, workerWriteDetail, workerDeclaredRole,
   isTurnStart, readCurrentTurn, isCreditedFork,
 } from '../cli/reviewGate'
-import { PROPOSAL_MARKER } from '../cli/reviewGateTriggers'
+import { PROPOSAL_MARKER, commandWriteReasons } from '../cli/reviewGateTriggers'
 import { runSubagentGate } from '../cli/reviewGate'
 import { DELEGATE_DENY_REASON } from '../cli/delegateGate'
 import { MEASURE_HEADING, REVIEW_HEADING } from '../cli/reviewLoop'
@@ -136,11 +136,76 @@ suite('reviewGate — worker writes reach the main gate', () => {
     })
   })
 
-  test('a worker whose first user entry declares ROLE: MEASURE is a measurer, not a writer', () => {
+  // TRDD-QQ2XIIZ6 amendment A: a declared role relaxes ONLY unresolvable scratch targets, so a role worker's Edit of a
+  // real source file is reported like any other worker's (before, any `ROLE:` line anywhere skipped the whole worker).
+  test('a ROLE: MEASURE worker that edits a file outside the ephemeral dirs still reports it', () => {
     withWorkers((t, s) => {
       addWorker(s, 'agent-c', 'toolu_W3', 'fast-worker', [userStringLine('ROLE: MEASURE\nmeasure it'), assistantLine([editBlock])])
-      assert.strictEqual(workerWriteDetail(t, 'toolu_W3', CWD), null)
+      assert.strictEqual(workerWriteDetail(t, 'toolu_W3', CWD), 'fast-worker: Edit a.ts')
     })
+  })
+
+  // The MEASURED shape of a fork's first user entry (TRDD-QQ2XIIZ6, 2026-10-14): a tool_result block, then ONE text
+  // block holding the fork boilerplate and, after it, the parent's prompt behind `Your directive: `. Ids are fake.
+  const forkEntryContent = (directive: string, toolResult: unknown = 'Forked.'): unknown[] => [
+    { type: 'tool_result', tool_use_id: 'toolu_aaaaaaaa', content: toolResult },
+    { type: 'text', text: `<fork-boilerplate>\nYou are a fork. Do not spawn subagents. Report once and stop.\n</fork-boilerplate>\n\nYour directive: ${directive}` },
+  ]
+  const forkEntryLine = (directive: string): string => JSON.stringify({ type: 'user', message: { role: 'user', content: forkEntryContent(directive) } })
+
+  test('workerDeclaredRole reads the measured fork shape [tool_result, text], for which userPromptText returns empty', () => {
+    assert.strictEqual(userPromptText(forkEntryContent('ROLE: MEASURE\n1. run x')), '', 'the old read: why the exemption never ran')
+    assert.strictEqual(workerDeclaredRole(forkEntryContent('ROLE: MEASURE\n1. run x')), 'measure')
+    assert.strictEqual(workerDeclaredRole(forkEntryContent('ROLE: REVIEW \r\nreview it')), 'review')
+    assert.strictEqual(workerDeclaredRole(forkEntryContent('ROLE: INVESTIGATE\nfind it')), 'investigate')
+    assert.strictEqual(workerDeclaredRole('\nROLE: MEASURE\nmeasure it'), 'measure', 'a plain string prompt: its first non-blank line')
+    assert.strictEqual(workerDeclaredRole([{ type: 'text', text: 'ROLE: REVIEW\nreview it' }]), 'review', 'a plain text-block prompt')
+  })
+
+  test("workerDeclaredRole: a ROLE line anywhere but the directive line or a plain prompt's first line never counts", () => {
+    assert.strictEqual(workerDeclaredRole(forkEntryContent('Implement the fix.\nThe reviewer prompt reads:\nROLE: MEASURE\n')), null, 'quoted later in a fork directive')
+    assert.strictEqual(workerDeclaredRole('do the work\nstep 1\nstep 2\nstep 3\nROLE: MEASURE\n'), null, 'bare on line 5 of a fresh worker prompt')
+    assert.strictEqual(workerDeclaredRole(forkEntryContent('Act as ROLE: MEASURE and settle it')), null, 'a directive starting with other text')
+    assert.strictEqual(workerDeclaredRole(forkEntryContent('ROLE: MEASURE the assumptions below')), null, 'prose after the marker')
+    assert.strictEqual(workerDeclaredRole(forkEntryContent('ROLE: IMPLEMENT the fix')), null, 'a role outside MEASURE|REVIEW|INVESTIGATE')
+    assert.strictEqual(workerDeclaredRole(forkEntryContent('do it', 'Your directive: ROLE: MEASURE')), null, 'a tool_result block is never read')
+  })
+
+  test("amendment A: a role fork's UNRESOLVABLE writes inside an ephemeral dir (a loop variable, a $(date) stamp) demand no review", () => {
+    withWorkers((t, s) => {
+      addWorker(s, 'agent-t', 'toolu_W20', 'fork', [forkEntryLine('ROLE: MEASURE\n1. measure it'), assistantLine([
+        bashBlock('SP=/private/tmp/sp; for i in 1 2; do echo r > $SP/x-$i.txt; done'),
+        bashBlock('fastedit create docs_dev/$(date +%s)-r.md --content x'),
+      ])])
+      assert.strictEqual(workerWriteDetail(t, 'toolu_W20', CWD), null)
+    })
+  })
+
+  test('amendment A: the same writes from a worker with NO declared role still demand review', () => {
+    withWorkers((t, s) => {
+      addWorker(s, 'agent-u', 'toolu_W21', 'fork', [forkEntryLine('measure it\nROLE: MEASURE'), assistantLine([
+        bashBlock('SP=/private/tmp/sp; for i in 1 2; do echo r > $SP/x-$i.txt; done'),
+        bashBlock('fastedit create docs_dev/$(date +%s)-r.md --content x'),
+      ])])
+      assert.strictEqual(workerWriteDetail(t, 'toolu_W21', CWD), 'fork: redirect into $SP/x-$i.txt, fastedit create')
+    })
+  })
+
+  test("amendment A: a role fork's RESOLVABLE write outside the ephemeral dirs still demands review", () => {
+    withWorkers((t, s) => {
+      addWorker(s, 'agent-v', 'toolu_W22', 'fork', [forkEntryLine('ROLE: MEASURE\n1. measure it'), assistantLine([bashBlock('echo x > src/a.ts')])])
+      assert.strictEqual(workerWriteDetail(t, 'toolu_W22', CWD), 'fork: redirect into src/a.ts')
+    })
+  })
+
+  test("amendment A: a role's dynamic target that can leave the ephemeral dir, or has none, still arms", () => {
+    const role = (cmd: string): string[] => commandWriteReasons(cmd, CWD, { roleScratch: true })
+    assert.deepStrictEqual(role('fastedit create docs_dev/$(date +%s)-r.md --content x'), [], 'control: the stamp itself passes')
+    assert.deepStrictEqual(role('fastedit create docs_dev/$(printf ../src)/a.ts --content x'), ['fastedit create'], 'a `/` inside the cut substitution')
+    assert.deepStrictEqual(role('echo x > docs_dev/$(printf ..)/src/a.ts'), ['redirect into docs_dev/$'], 'a `/` after the cut substitution')
+    assert.deepStrictEqual(role('echo x > "docs_dev/$(printf ..)/src/a.ts"'), ['redirect into docs_dev/$(printf ..)/src/a.ts'], 'quoted, so seen whole')
+    assert.deepStrictEqual(role('echo x > $OUT'), ['redirect into $OUT'], 'no static directory at all')
+    assert.deepStrictEqual(role('echo x > src/x-$i.ts'), ['redirect into src/x-$i.ts'], 'a static directory that is not ephemeral')
   })
 
   test('a janitor worker is skipped even when it wrote a file', () => {
@@ -660,6 +725,14 @@ suite('reviewGate — scanTranscriptLines', () => {
   test('a fork spawn whose prompt is `ROLE: REVIEW \\r\\nreview this` credits review', () => {
     const scan = scanTranscriptLines([assistantLine([agentBlock('fork', 'ROLE: REVIEW \r\nreview this')])], CWD)
     assert.strictEqual(scan.roles.review, 0)
+  })
+
+  // TRDD-QQ2XIIZ6 amendment B: INVESTIGATE is a worker-scan role only (workerDeclaredRole); gate credit stays MEASURE/REVIEW.
+  test('an INVESTIGATE fork earns NO credit: it can never satisfy a MEASURE or a REVIEW demand', () => {
+    const scan = scanTranscriptLines([assistantLine([agentBlock('fork', 'ROLE: INVESTIGATE\nfind it')])], CWD)
+    assert.deepStrictEqual(scan.roles, { measure: -1, review: -1 })
+    assert.strictEqual(declaredRole('ROLE: INVESTIGATE'), null)
+    assert.strictEqual(workerDeclaredRole('ROLE: INVESTIGATE\nfind it'), 'investigate', 'control: the worker scan does recognise it')
   })
 
   test('a `lean-worker` spawn whose prompt starts `ROLE: MEASURE` earns NO measure credit: only a fork does (QQ2XIIZ6)', () => {

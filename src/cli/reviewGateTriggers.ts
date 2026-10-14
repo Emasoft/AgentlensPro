@@ -183,6 +183,41 @@ export function isEphemeralTarget(target: string, cwd: string): boolean {
   return /^(reports|[a-z]+_dev)\//.test(path.relative(cwd, abs))
 }
 
+/** A DECLARED-ROLE worker's write target the classifier cannot resolve, whose STATIC directory is nevertheless
+ *  ephemeral — so the write is that role's report or scratch output. TRDD-QQ2XIIZ6, round-2 review amendment A:
+ *  a role (`ROLE: MEASURE|REVIEW|INVESTIGATE`, read by reviewGate's workerDeclaredRole) relaxes ONLY the fail-closed
+ *  rule for UNRESOLVABLE targets; a resolvable write outside the ephemeral dirs (a role fork writing `src/a.ts`)
+ *  still demands review, so labelling a worker a role never switches review off for its real writes.
+ *  Unresolvable = still holds `$` or a backtick after the same-command literal assignments were applied (a
+ *  `$(date +%s)` stamp, a `for i …` loop variable). Exempt only when (1) the text before the first `$`/backtick,
+ *  cut at its last `/`, is a non-empty directory that is itself ephemeral (judged by isEphemeralTarget on a probe
+ *  file inside it, after normalising `..`), and (2) the remainder from the first `$`/backtick holds no `/`, so it
+ *  is one file name inside that directory and cannot climb or descend out of it (the review of revision 1: a
+ *  static prefix alone is unsound when the dynamic part can be `$(printf ../src)/a.ts`). Accepted residual: an
+ *  unassigned variable whose runtime VALUE holds `../` — only a declared-role worker could use it. */
+export function isRoleScratchTarget(target: string, cwd: string): boolean {
+  const cut = target.search(/[$`]/)
+  if (cut < 0) return false
+  if (target.slice(cut).includes('/')) return false
+  const dir = target.slice(0, target.lastIndexOf('/', cut) + 1)
+  if (dir === '' || /[~*?{}[\]]/.test(dir)) return false
+  return isEphemeralTarget(path.join(dir, '_'), cwd)
+}
+
+/** WHY: `(` is a shellWords separator, so an UNQUOTED `docs_dev/$(date +%s)-r.md` reaches the target checks as
+ *  `docs_dev/$` — the substitution and everything after its `)` are out of sight, and that is exactly where the
+ *  round-1 review's `$(printf ../src)/a.ts` puts its `/`, so isRoleScratchTarget's no-`/` rule alone would pass
+ *  it (TRDD-QQ2XIIZ6). For a target the tokenizer cut there (it ends in `$`), the RAW command must show EVERY
+ *  `<target>(` as a flat substitution — no nested paren, quote, backslash or backtick — holding no `/`, then a word
+ *  tail holding none, then the word's end. Anything else fails closed. */
+export function isFlatCutSubstitution(cmd: string, target: string): boolean {
+  const opens = cmd.split(`${target}(`).length - 1
+  if (opens === 0) return false
+  const esc = target.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const flat = new RegExp(`${esc}\\([^()'"\\\\\`/]*\\)[^\\s;&|<>()'"\\\\\`/]*(?=$|[\\s;&|<>()])`, 'g')
+  return (cmd.match(flat) ?? []).length === opens
+}
+
 // Exported as arrays so the tests can LOOP them: a hand-picked sample left most members untested
 // (review 2026-09-08), and an untested alternation is one a refactor can drop unnoticed.
 export const GIT_WRITE_SUBCOMMANDS = ['commit', 'push', 'pull', 'mv', 'rm', 'am', 'apply', 'checkout',
@@ -219,6 +254,10 @@ const ASSIGNMENT_RE = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/
  *  assignment only takes effect for LATER segments). Any other shape (`$(mktemp)`, `${NAME:-x}`,
  *  a name with no recorded literal) is returned unchanged and arms. */
 type Resolve = (word: string, segIdx: number) => string
+/** Whether a write target is exempt: `isEphemeralTarget` after `resolve`, or — for a declared-role worker only
+ *  — `isRoleScratchTarget`. Built once per command in commandWriteReasons and threaded to every target check, so
+ *  the redirect pass, the tee/rm/cp targets and the fastedit file-first target all judge alike (TRDD-QQ2XIIZ6). */
+type Scratch = (target: string, segIdx: number) => boolean
 
 // TRDD-J2K6IM4R: `fastedit multi-edit --help` armed the gate — argparse prints help and exits
 // before ANY subcommand handler runs, so nothing is written, yet the classifier only looked at
@@ -243,9 +282,9 @@ function hasStandaloneHelp(args: string[]): boolean {
 }
 
 /** `via` names the launcher (`xargs`, `find -exec`) when the targets are not in this segment's text. */
-function segmentWriteReason(base: string, args: string[], via: string | null, cwd: string, resolve: Resolve, segIdx: number): string | null {
+function segmentWriteReason(base: string, args: string[], via: string | null, cwd: string, scratch: Scratch, segIdx: number): string | null {
   const flagless = args.filter((a) => !a.startsWith('-'))
-  const deployOrDesign = deployOrDesignVerbWriteReason(base, args, cwd)
+  const deployOrDesign = deployOrDesignVerbWriteReason(base, args, scratch, segIdx)
   if (deployOrDesign !== null) return deployOrDesign
   if (base === 'git') {
     let j = 0 // skip global options; `-C dir` / `-c k=v` / `--git-dir x` take a value
@@ -286,7 +325,7 @@ function segmentWriteReason(base: string, args: string[], via: string | null, cw
     if (args.includes('-delete')) return 'find -delete'
     for (let e = 0; e < args.length; e++) {
       if (!/^-(exec|execdir|ok|okdir)$/.test(args[e])) continue
-      const r = classifyCommand(args.slice(e + 1).map((word) => ({ word, quoted: false })), 'find -exec', cwd, resolve, segIdx)
+      const r = classifyCommand(args.slice(e + 1).map((word) => ({ word, quoted: false })), 'find -exec', cwd, scratch, segIdx)
       if (r !== null) return r
     }
     return null
@@ -294,9 +333,9 @@ function segmentWriteReason(base: string, args: string[], via: string | null, cw
   if (ALL_ARGS_ARE_TARGETS.includes(base) || LAST_ARG_IS_TARGET.includes(base)) {
     if (via !== null) return `${base} via ${via} (targets unknown)`
     const targets = ALL_ARGS_ARE_TARGETS.includes(base) ? flagless : flagless.slice(-1)
-    // `resolve` turns a same-command literal `$VAR` target into its recorded value before the
+    // `scratch` resolves a same-command literal `$VAR` target to its recorded value before the
     // ephemeral check; the reported message still names the original text (`t`), not the value.
-    const bad = targets.find((t) => !isEphemeralTarget(resolve(t, segIdx), cwd))
+    const bad = targets.find((t) => !scratch(t, segIdx))
     return bad === undefined ? null : `${base} ${bad}`
   }
   return null
@@ -304,7 +343,7 @@ function segmentWriteReason(base: string, args: string[], via: string | null, cw
 
 /** The command word of one segment (after wrappers, env assignments and a wrapper's own
  *  options), classified. A quoted word in command position is not a command. */
-function classifyCommand(words: Word[], via: string | null, cwd: string, resolve: Resolve, segIdx: number): string | null {
+function classifyCommand(words: Word[], via: string | null, cwd: string, scratch: Scratch, segIdx: number): string | null {
   let i = 0
   let inWrapper = false
   while (i < words.length && !words[i].quoted) {
@@ -323,7 +362,7 @@ function classifyCommand(words: Word[], via: string | null, cwd: string, resolve
     i++
   }
   if (i >= words.length || words[i].quoted) return null
-  return segmentWriteReason(path.basename(words[i].word), words.slice(i + 1).map((w) => w.word), via, cwd, resolve, segIdx)
+  return segmentWriteReason(path.basename(words[i].word), words.slice(i + 1).map((w) => w.word), via, cwd, scratch, segIdx)
 }
 
 /** Why a shell command is a write, or null when its text shows only reads. Each segment's
@@ -336,8 +375,10 @@ export function commandWriteReason(cmd: string, cwd: string): string | null {
 
 /** Every reason a shell command is a write, in the order the segment pass then the redirect pass
  *  finds them ([] when its text shows only reads). The worker path needs every segment's reason:
- *  a card record chained before a real write must not hide that write. */
-export function commandWriteReasons(cmd: string, cwd: string): string[] {
+ *  a card record chained before a real write must not hide that write.
+ *  `opts.roleScratch`: the caller verified the writer declared a ROLE (reviewGate's workerDeclaredRole), so an
+ *  UNRESOLVABLE target inside an ephemeral directory is that role's scratch, not a write (isRoleScratchTarget). */
+export function commandWriteReasons(cmd: string, cwd: string, opts: { roleScratch?: boolean } = {}): string[] {
   // shortcut: a bash -c / eval string contributes only its first reason, upgrade if workers start chaining inside one
   const reasons: string[] = []
   // `words` drives CLASSIFICATION (does this contain a `git commit`-shaped write?) and must
@@ -392,8 +433,17 @@ export function commandWriteReasons(cmd: string, cwd: string): string[] {
     return value === undefined ? word : value + (m[3] ?? '')
   }
 
+  // WHY (TRDD-QQ2XIIZ6, amendment A): every write target is judged here, after `resolve`. A declared-role worker
+  // additionally passes an UNRESOLVABLE target whose static directory is ephemeral (isRoleScratchTarget) and, when
+  // the tokenizer cut it at a `$(`, whose hidden substitution and tail hold no `/` (isFlatCutSubstitution); a
+  // resolvable target outside the ephemeral dirs still arms for every caller, role or not.
+  const scratch: Scratch = (target, segIdx) => {
+    const r = resolve(target, segIdx)
+    if (isEphemeralTarget(r, cwd)) return true
+    return opts.roleScratch === true && isRoleScratchTarget(r, cwd) && (!r.endsWith('$') || isFlatCutSubstitution(cmd, target))
+  }
   for (let idx = 0; idx < segments.length; idx++) {
-    const reason = classifyCommand(segments[idx], null, cwd, resolve, idx)
+    const reason = classifyCommand(segments[idx], null, cwd, scratch, idx)
     if (reason !== null) reasons.push(reason)
   }
   // The redirect scan is the noisy pass (any bare `>` anywhere counts), so it takes the FAIL
@@ -416,7 +466,7 @@ export function commandWriteReasons(cmd: string, cwd: string): string[] {
     const m = /^\d*(?:>\||>>?)(.*)$/.exec(redirectWords[i].word)
     if (!m || m[1].startsWith('&')) continue
     const target = m[1] !== '' ? m[1] : (redirectWords[i + 1]?.word ?? '')
-    if (!isEphemeralTarget(resolve(target, segIdx), cwd)) reasons.push(`redirect into ${target || '(no target)'}`)
+    if (!scratch(target, segIdx)) reasons.push(`redirect into ${target || '(no target)'}`)
   }
   return reasons
 }
@@ -440,15 +490,17 @@ const TRDDGREP_WRITE_VERBS = new Set(['new', 'set', 'append', 'check-box', 'move
 /** D7: fastedit / trddgrep / prrdgrep / specgrep write verbs, and the deploy commands
  *  (`node esbuild.js`, `pnpm|npm run package|compile|watch|local`, `agentlenspro server
  *  start|stop|restart`). */
-function deployOrDesignVerbWriteReason(base: string, args: string[], cwd: string): string | null {
+function deployOrDesignVerbWriteReason(base: string, args: string[], scratch: Scratch, segIdx: number): string | null {
   if (base === 'fastedit') {
     const sub = args[0] ?? ''
     if (!FASTEDIT_WRITE_VERBS.has(sub)) return null
     if (hasStandaloneHelp(args)) return null
     // WHY: a file-first write into reports/, *_dev/ or /tmp is scratch, not work. Only the first positional
     // counts, and one after a flag arms (`--content-file /tmp/c src/new.ts`: /tmp/c is that flag's value).
+    // The target is judged by `scratch` (TRDD-QQ2XIIZ6), like every redirect and tee target: a same-command literal
+    // `$VAR` resolves first, and only a declared-role worker's unresolvable stamp may pass isRoleScratchTarget.
     const k = args.findIndex((a, n) => n > 0 && !a.startsWith('-'))
-    if (FASTEDIT_FILE_FIRST_VERBS.has(sub) && k > 0 && !args[k - 1].startsWith('-') && isEphemeralTarget(args[k], cwd)) return null
+    if (FASTEDIT_FILE_FIRST_VERBS.has(sub) && k > 0 && !args[k - 1].startsWith('-') && scratch(args[k], segIdx)) return null
     return `fastedit ${sub}`
   }
   if (base === 'trddgrep') {
