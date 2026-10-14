@@ -4,7 +4,7 @@ title: agentlenspro detects and reinstalls missing or outdated hooks skills agen
 column: dev
 status: tasked
 created: 2026-10-14T16:43:38+0200
-updated: 2026-10-14T19:59:24+0200
+updated: 2026-10-14T23:26:49+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: feature
@@ -15,7 +15,7 @@ mandated-by: none
 approved: true
 approval-judge: main-agent@agentlenspro
 approval-datetime: 2026-10-14T16:43:38+0200
-implementation-commits: [ab5b1274, 87440d7e, d73b20cc, a065129a, 1069f1c8, 857cc34a, 765c44f2, 403b1137, ae4979be, 6a31062d, f6504dee]
+implementation-commits: [ab5b1274, 87440d7e, d73b20cc, a065129a, 1069f1c8, 857cc34a, 765c44f2, 403b1137, ae4979be, 6a31062d, f6504dee, 42017224]
 ---
 
 # agentlenspro detects and reinstalls missing or outdated hooks skills agents and rules in user scope
@@ -49,6 +49,7 @@ From the review of 1069f1c8, resolved by 3c: the check runs only after the verb 
 Related: TRDD-22BOPTBU (setup in an isolated HOME can run a global npm rm -g agentlens-dashboard), found while measuring 3c.
 Owner question (2026-10-14, measured): `batch` with a refusing member exits 2 with the successful results on stdout and several JSON objects back to back on stderr — it already breaks the single-call exit-2 contract (stdout empty, one JSON object), which SKILL.md documents for single calls only. Item 7 left batch unchanged (no regression). Should batch follow the contract (e.g. one top-level object with per-member results and errors), or is the contract single-call only by design?
 Correction to 6a31062d's commit message: launch notices print AFTER the output only for a successful single tool call; on a parse/usage error thrown before the call (exit 64) or a thrown FAIL, cliMain's finally prints them BEFORE the error text that standalone/cli.ts prints.
+Follow-up (review of 42017224): with the read-only hot-path verbs excluded from the self-heal, an agent loop that only ever runs cache-expired, cache-state or last-compact on a fresh machine is never set up and answers 'cannot answer' forever. Consider naming `agentlenspro setup` in that answer when nothing is installed.
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-10-14
 

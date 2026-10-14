@@ -4,7 +4,7 @@ title: setup checks the revive brake and kill-switch in the process-env data dir
 column: todo
 status: tasked
 created: 2026-10-14T22:22:03+0200
-updated: 2026-10-14T22:22:48+0200
+updated: 2026-10-14T23:26:29+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -30,3 +30,4 @@ reviveBraked() and agentlensDisabled() read the process-env data dir, not ctx.da
 The UI probe of the environment step (its /api/server-stats httpJson call, src/cli/setup.ts) accepts any 200 response, whatever server answers on the UI port.
 The `pre && !preOurs` refusal branch of stepServer in src/cli/setup.ts is untested and reachable only in a race, because the port chooser refuses a foreign port first.
 One run of setupOwnership on a pre-973aead7 HEAD failed at an earlier setup step for an unexplained reason. If it recurs in a release-gate run, triage it; do not re-roll.
+reviveBraked() (src/cli/killSwitch.ts) checks only the NO_REVIVE file in the data dir, not the AGENTLENS_NO_REVIVE env that tests set. So a setup run in an empty HOME with free default ports, as on CI, could spawn a detached alcore even though the test meant to brake it. Found in the review of gate run B2.

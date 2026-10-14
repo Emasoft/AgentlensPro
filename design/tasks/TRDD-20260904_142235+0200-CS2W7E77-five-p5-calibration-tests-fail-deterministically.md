@@ -3,7 +3,7 @@ trdd-id: CS2W7E77
 title: The five P5 window auto-calibration tests fail deterministically on a burn-config ENOENT
 column: todo
 created: 2026-09-04T14:22:35+0200
-updated: 2026-10-14T21:10:23+0200
+updated: 2026-10-14T23:26:27+0200
 current-owner: main-session
 task-type: bugfix
 project-id: agentlenspro
@@ -155,3 +155,7 @@ Both runs used the working tree, not a clean checkout: it carries the owner-pend
 Run 2 cause, settled from the log: a machine-wide starvation window of about 85 s. 23 consecutive spawned-CLI tests slowed 3-40x, including --version, -v and --help, which contact neither the in-process MCP stub nor any server (-v 238 ms to 9432 ms); the run recovered afterwards. Load average at the time was 195-267, from external machine load, none of it test processes. Not a stub stall, not a live-server stall. Re-run in isolation under the same load, the two tests took at most 487 ms and 2604 ms.
 Found while triaging: cliDispatch test 2 ran the first-run launch setup on the default ports 3000/4316/4318, the live collector's, and setup's server step can SIGTERM a server whose data dir differs (TRDD-V2HFI30L). Mitigated on the test side (a port taken first by another process is still exposed until TRDD-V2HFI30L lands): test 2 now pins three free ports and pre-sets the revive brake in its own data dir, asserting the first-run-failed notice, no server.pid and no surviving alcore. Three of the four spawning suites in cliDispatch.test.ts run under a 60 s ceiling instead of mocha's 10 s default (the network-help suite's single test keeps its own 30 s); all assertions unchanged.
 The count of two consecutive green full-suite runs restarts after the cliDispatch test fix lands; the product fix in TRDD-V2HFI30L restarts it again when it lands.
+Run A1: HEAD 29ec567a; exit 2, 3169 passing, 14 pending, 2 failing at load average about 300: hookScripts 'a server that HANGS' (5444 ms against an absolute 5 s bound) and logReader.fileMetaCache 'exactly ONE directory walk' (got 2). Both were load-sensitive tests, not product defects; fixed in 0bb935cb (a control-relative bound; the walk memo held fresh in the test).
+Run B1: HEAD 0bb935cb; exit 0, 3171 passing, 14 pending, 0 failing. The CLI hot-path latency guard SKIPPED (machine 4.6x oversubscribed, limit 2x).
+Run B2: HEAD 0bb935cb; exit 1, 3171 passing, 13 pending, 1 failing. The latency guard RAN for the first time today and caught a real defect: cache-expired was not excluded from the launch self-heal, so it ran a full first-run setup (1590 ms against a 1500 ms ceiling). Fixed in 42017224.
+Gate rule added 2026-10-14: the latency guard skips whenever load average / CPUs > 2, which held in every run today except B2. So a green pair counts only if at least one of its two runs actually EXECUTED the hot-path latency guard (its log shows the test passing, not a SKIPPED line). Each run also records its HEAD and the dirty working-tree files it ran with.
