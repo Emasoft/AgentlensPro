@@ -39,6 +39,7 @@ import { alstoreBin as resolveAlstoreBin, rustIngestPass } from '../rustStorePas
 import { safeConfigEdit } from '../safeConfigEdit'
 import { DEFAULT_MAX_BYTES_PER_PASS, IngestPassResult } from '../store/ingestPass'
 import { envPort, sleep } from './cliCore'
+import { dataDirFrom } from '../dataDir'
 import {
   CLI_BIN, GATE_CMD, GATE_EVENTS, GATE_MATCHER, HOOK_CMD, HOOK_EVENTS, HookMatcher,
   INSTALLED_EVENTS, REVIEW_CMD, REVIEW_EVENTS, SUPERVISOR_CMD, SUPERVISOR_EVENTS, isStaleGeneration,
@@ -117,7 +118,11 @@ export function resolveCtx(opts: SetupOptions): Ctx {
   const home = opts.home ?? os.homedir()
   const repoRoot = opts.repoRoot ?? findPackageRoot(__dirname)
   if (!repoRoot) throw new Error(`cannot locate the agentlenspro package root above ${__dirname}`)
-  const dataDir = opts.dataDir ?? process.env.DATA_DIR ?? path.join(home, '.agentlens')
+  // The shared resolver (src/dataDir.ts), against THIS home: AGENTLENS_DATA_DIR, then DATA_DIR, then
+  // <home>/.agentlens. WHY (TRDD-TYOQA14F): this read only DATA_DIR and ignored AGENTLENS_DATA_DIR, the canonical
+  // variable every other verb honours first, so `agentlenspro setup` and the launch self-heal converged and started
+  // a server in ~/.agentlens while server stop/status, the hooks and findServerPid used the user's own dir.
+  const dataDir = opts.dataDir ?? dataDirFrom({ ...process.env, HOME: home })
   // Same resolution as the server start (serverControl.alcoreServeArgs): env first, then the
   // ports the running server recorded in ports.json (honoured only while its pidfile is live),
   // then the canonical default — so detection, probes and the self-test dial where the clients do.
@@ -811,13 +816,16 @@ async function gatherEnvFacts(ctx: Ctx): Promise<EnvFacts> {
   const resolvable = (mod: string): boolean => {
     try { require.resolve(mod); return true } catch { return false }
   }
-  // Foreign-process heuristic: OTLP port answers ⇒ occupied; ours iff the paired UI port serves
-  // /api/server-stats. A foreign OTLP squatter would silently eat every span the hooks emit.
+  // Foreign-process heuristic: OTLP port answers ⇒ occupied; ours iff our own server reports that OTLP port
+  // (portHeldByOurs). A foreign OTLP squatter would silently eat every span the hooks emit.
   let otlpBusy = false
   try { await httpJson(ctx.otlpPort, 'GET', '/'); otlpBusy = true } catch { otlpBusy = false }
   let uiIsOurs = false
   if (otlpBusy) {
-    try { uiIsOurs = (await httpJson(ctx.uiPort, 'GET', '/api/server-stats')).status === 200 } catch { uiIsOurs = false }
+    // OUR server, by pidfile identity or data dir, AND reporting this OTLP port as its own (portHeldByOurs).
+    // WHY (TRDD-TYOQA14F): the old test was any 200 on the UI port, so a foreign server answering there hid an
+    // OTLP squatter and suppressed this warning.
+    uiIsOurs = await portHeldByOurs(ctx, 'otlp', ctx.otlpPort)
   }
   let freeDiskBytes: number | null = null
   try {
@@ -875,7 +883,7 @@ export function judgeEnvFacts(facts: EnvFacts): StepResult {
   // Degradable heuristics — warn, never block.
   const warns: string[] = []
   if (!facts.sqljsResolvable) warns.push('sql.js not resolvable — OpenCode SQLite ingestion degrades to per-message JSON')
-  if (facts.otlpPortBusyForeign) warns.push('OTLP port answers but the UI port is not our server — a foreign process may be squatting the collector port')
+  if (facts.otlpPortBusyForeign) warns.push('OTLP port answers but our server does not hold it — a foreign process may be squatting the collector port')
   if (!facts.claudeDirPresent) warns.push('~/.claude absent — no Claude Code on this machine yet? hooks/skill will install for its first run')
   if (facts.freeDiskBytes !== null && facts.freeDiskBytes < 2 ** 30) warns.push(`low disk: ${(facts.freeDiskBytes / 2 ** 20).toFixed(0)}MB free at the data dir`)
   return {
@@ -1279,7 +1287,8 @@ const stepOldPackage: StepDef = {
   },
 }
 
-const stepServer: StepDef = {
+/** Exported for the direct-run test of its foreign-server refusal (TRDD-TYOQA14F). */
+export const stepServer: StepDef = {
   name: 'server',
   async run(ctx) {
     const pre = await serverStats(ctx)
@@ -1358,7 +1367,7 @@ const stepServer: StepDef = {
     // spawn site with no guard, discovered when a server booted minutes after `agentlenspro
     // disable`. The server now also refuses at its own boot — this check just makes setup report
     // the refusal honestly instead of spawning a child that immediately exits 78.
-    if (agentlensDisabled()) {
+    if (agentlensDisabled(ctx.dataDir)) {
       return { result: { step: this.name, found, action: 'start server', verify: 'FAIL', detail: 'AgentlensPro is DISABLED — run `agentlenspro enable` first' }, acted: false }
     }
     // The NO_REVIVE brake refuses this spawn too: `setup` is idempotent and re-run casually, so a
@@ -1367,8 +1376,15 @@ const stepServer: StepDef = {
     // Sits BELOW the graceful stop of a mismatched/unresponsive server on purpose, beside the
     // DISABLED gate: the brake forbids a SPAWN, not a stop, and "braked ⇒ no server" is the state
     // an operator armed it for — leaving a stale server up would be the surprising outcome.
-    if (reviveBraked()) {
-      return { result: { step: this.name, found, action: 'start server', verify: 'FAIL', detail: `revive brake is set (${noRevivePath()}) — \`agentlenspro server start\` clears it` }, acted: false }
+    // Both flags are read in ctx.dataDir, the dir this step is about to start a server in, not the env-resolved one:
+    // they differ whenever the data dir comes from options (TRDD-TYOQA14F).
+    // DELIBERATE ASYMMETRY (TRDD-TYOQA14F): setup honours the FILE brake but NOT the AGENTLENS_NO_REVIVE env. That
+    // env is documented as a brake on AUTOMATIC revives (hookHandlers.ts reviveDaemonDetached, `server revive`),
+    // set by tests and by an operator supervising the daemon externally; an explicit `agentlenspro setup` is a
+    // deliberate start, and the real-server setup tests (setupVerb.test.ts) run with that env set and still expect
+    // setup to start a server.
+    if (reviveBraked(ctx.dataDir)) {
+      return { result: { step: this.name, found, action: 'start server', verify: 'FAIL', detail: `revive brake is set (${noRevivePath(ctx.dataDir)}) — \`agentlenspro server start\` clears it` }, acted: false }
     }
     // alcore is the only server this package ships (TRDD-1B98LCVR box 4) — no binary means the
     // step fails honestly rather than spawning a TS bundle that no longer exists.

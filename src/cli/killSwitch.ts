@@ -31,9 +31,12 @@ import { NO_REVIVE_FILE } from '../dataDir'
  * checked on every single hook, so arming it is never slow to take effect.
  */
 
-/** Path of the global flag. Exported so `disable`/`enable`/`status` all agree on ONE location. */
-export function killSwitchPath(): string {
-  return path.join(dataDir(), 'DISABLED')
+/** Path of the global flag. Exported so `disable`/`enable`/`status` all agree on ONE location.
+ *  Every helper below takes an optional `dir`, defaulting to the env-resolved data dir. `setup` passes its own
+ *  ctx.dataDir, which can come from options rather than the env, so it checks the flags of the dir it is about to
+ *  start a server in (TRDD-TYOQA14F). */
+export function killSwitchPath(dir: string = dataDir()): string {
+  return path.join(dir, 'DISABLED')
 }
 
 /** Env var every server spawner stamps on the child, naming the PATH that started it. The server
@@ -49,8 +52,8 @@ export function killSwitchPath(): string {
 export const STARTED_BY_ENV = 'AGENTLENS_STARTED_BY'
 
 /** Path of the narrow server-revive brake (hooks may still spool; they just won't spawn a server). */
-export function noRevivePath(): string {
-  return path.join(dataDir(), NO_REVIVE_FILE)
+export function noRevivePath(dir: string = dataDir()): string {
+  return path.join(dir, NO_REVIVE_FILE)
 }
 
 /** Is the narrow revive brake armed? Checks NO_REVIVE ONLY — deliberately NOT the global DISABLED
@@ -75,8 +78,8 @@ export function noRevivePath(): string {
  *  hook failing open loses a spawn (missed capture); a start failing open mid-rewrite SPAWNS into
  *  the swap (corruption). Unreadable therefore means BRAKED. Proven on this machine: statSync
  *  throws EACCES on /var/root/x while existsSync returns false for the same path. */
-export function reviveBraked(): boolean {
-  try { fs.statSync(noRevivePath()); return true } catch (e) {
+export function reviveBraked(dir: string = dataDir()): boolean {
+  try { fs.statSync(noRevivePath(dir)); return true } catch (e) {
     return (e as NodeJS.ErrnoException).code !== 'ENOENT'
   }
 }
@@ -98,9 +101,9 @@ export function reviveBraked(): boolean {
 let envHalfOverridden = false
 export function overrideKillSwitchEnv(on = true): void { envHalfOverridden = on }
 
-export function killSwitchHalf(): 'env' | 'file' | null {
+export function killSwitchHalf(dir: string = dataDir()): 'env' | 'file' | null {
   if (process.env.AGENTLENS_DISABLED === '1' && !envHalfOverridden) return 'env'
-  try { return fs.existsSync(killSwitchPath()) ? 'file' : null } catch { return null }
+  try { return fs.existsSync(killSwitchPath(dir)) ? 'file' : null } catch { return null }
 }
 
 /**
@@ -108,8 +111,8 @@ export function killSwitchHalf(): 'env' | 'file' | null {
  * any network call and any read of stdin — a disabled AgentlensPro must cost the host session
  * nothing at all, not even a blocked pipe.
  */
-export function agentlensDisabled(): boolean {
-  return killSwitchHalf() !== null
+export function agentlensDisabled(dir: string = dataDir()): boolean {
+  return killSwitchHalf(dir) !== null
 }
 
 /** Arm the global kill-switch. Idempotent. Returns the flag path. */

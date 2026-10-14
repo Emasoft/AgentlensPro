@@ -9,7 +9,7 @@ import type { AddressInfo } from 'net'
 import { freePort } from './helpers/freePort'
 import { assertNoSurvivingServer } from './helpers/noSurvivingServer'
 import { startTrickleServer } from './helpers/trickleServer'
-import { HTTP_TOTAL_DEADLINE_MS, httpJson, ownServerPid, resolveCtx, runSetup, SetupOutcome, statsAreOurs } from '../cli/setup'
+import { HTTP_TOTAL_DEADLINE_MS, httpJson, ownServerPid, resolveCtx, runSetup, SetupOutcome, statsAreOurs, stepServer } from '../cli/setup'
 import { liveLockPid } from '../cli/portSelect'
 import { NO_REVIVE_FILE } from '../dataDir'
 
@@ -107,19 +107,18 @@ function decoyAlive(d: ChildProcess): boolean {
   try { process.kill(d.pid as number, 0); return true } catch { return false }
 }
 
-/** Runs `fn` with the revive brake set in the fixture's own data dir. reviveBraked() resolves its data dir from
- *  the process env, so AGENTLENS_DATA_DIR points it at the fixture for the duration, then is restored. UI_PORT and
- *  MCP_PORT are cleared for the duration too (review of 973aead7): setup reads "pinned" from the process env, so a
- *  developer shell exporting either would flip these tests onto the pinned path; a test that pins one sets it in
- *  its own body.
- *  A mocha TIMEOUT does not stop `fn`: its body keeps running in the background with the env still pointed at the
- *  fixture while the next test starts. That can only contaminate a run that is already red. */
+/** Runs `fn` with the revive brake set in the fixture's own data dir. setup reads the brake in ctx.dataDir
+ *  (TRDD-TYOQA14F), so passing the fixture's dataDir option is enough; before that fix this helper had to point
+ *  AGENTLENS_DATA_DIR at the fixture too. UI_PORT and MCP_PORT are cleared for the duration (review of 973aead7):
+ *  setup reads "pinned" from the process env, so a developer shell exporting either would flip these tests onto
+ *  the pinned path; a test that pins one sets it in its own body.
+ *  A mocha TIMEOUT does not stop `fn`: its body keeps running in the background with the env still changed while
+ *  the next test starts. That can only contaminate a run that is already red. */
 async function withBrakedFixture(fn: (f: Fixture) => Promise<void>): Promise<void> {
   const f = makeFixture()
   fs.mkdirSync(f.dataDir, { recursive: true })
   fs.writeFileSync(path.join(f.dataDir, NO_REVIVE_FILE), 'setupOwnership: setup must not start a server\n')
-  const saved = { AGENTLENS_DATA_DIR: process.env.AGENTLENS_DATA_DIR, UI_PORT: process.env.UI_PORT, MCP_PORT: process.env.MCP_PORT }
-  process.env.AGENTLENS_DATA_DIR = f.dataDir
+  const saved = { UI_PORT: process.env.UI_PORT, MCP_PORT: process.env.MCP_PORT }
   delete process.env.UI_PORT
   delete process.env.MCP_PORT
   try {
@@ -278,5 +277,86 @@ suite('setup — adopts and signals only its own server (TRDD-V2HFI30L)', () => 
       assertNoSurvivingServer(path.join(root, 'data'))
       fs.rmSync(root, { recursive: true, force: true })
     }
+  })
+})
+
+// ── setup reads ITS OWN data dir and the flags in it (TRDD-TYOQA14F) ─────────────────────────────
+// resolveCtx ignored AGENTLENS_DATA_DIR, the canonical variable, and the server step read the revive brake and the
+// kill-switch from the env-resolved data dir instead of ctx.dataDir. The environment step called ANY 200 on the UI
+// port "ours". Each test below is real: runSetup or stepServer over a temp HOME on free ports, never the defaults.
+suite('setup — its own data dir, the flags in it, and the squatter warning (TRDD-TYOQA14F)', () => {
+  test('resolveCtx honours AGENTLENS_DATA_DIR, the canonical data-dir variable', () => {
+    const saved = { AGENTLENS_DATA_DIR: process.env.AGENTLENS_DATA_DIR, DATA_DIR: process.env.DATA_DIR }
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'al-own-ctx-'))
+    try {
+      const x = path.join(root, 'canonical')
+      process.env.AGENTLENS_DATA_DIR = x
+      delete process.env.DATA_DIR
+      assert.strictEqual(resolveCtx({ home: root, repoRoot: REPO_ROOT }).dataDir, x)
+    } finally {
+      for (const [k, v] of Object.entries(saved)) {
+        if (v === undefined) delete process.env[k]
+        else process.env[k] = v
+      }
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('the server step reads the revive brake in ITS data dir, not the env-resolved one', async function () {
+    this.timeout(120_000)
+    await withBrakedFixture(async f => {
+      // The env points at a DIFFERENT dir with no brake. Before the fix the step read the brake there and went on to
+      // spawn; AGENTLENS_ALCORE=/usr/bin/false makes that spawn harmless (it exits at once), so a red run starts
+      // nothing real.
+      const elsewhere = fs.mkdtempSync(path.join(os.tmpdir(), 'al-own-env-'))
+      const saved = { AGENTLENS_DATA_DIR: process.env.AGENTLENS_DATA_DIR, AGENTLENS_ALCORE: process.env.AGENTLENS_ALCORE }
+      process.env.AGENTLENS_DATA_DIR = elsewhere
+      process.env.AGENTLENS_ALCORE = '/usr/bin/false'
+      try {
+        const o = await runSetup(setupOpts(f, { ui: await freePort(), mcp: await freePort(), otlp: await freePort() }))
+        const s = stepOf(o, 'server')
+        assert.strictEqual(s.verify, 'FAIL', `${s.found}: ${s.detail}`)
+        assert.ok((s.detail ?? '').includes(`revive brake is set (${path.join(f.dataDir, NO_REVIVE_FILE)})`), `the brake in the fixture dir must stop the step: ${s.detail}`)
+        assert.ok(!fs.existsSync(path.join(f.dataDir, 'server.log')), 'a braked step must not reach the spawn')
+      } finally {
+        for (const [k, v] of Object.entries(saved)) {
+          if (v === undefined) delete process.env[k]
+          else process.env[k] = v
+        }
+        fs.rmSync(elsewhere, { recursive: true, force: true })
+      }
+    })
+  })
+
+  test('the environment step warns when the OTLP port answers and the UI port is another instance', async function () {
+    this.timeout(120_000)
+    await withBrakedFixture(async f => {
+      // Something answers HTTP on the OTLP port, and the UI port is answered by a server that owns another data dir.
+      const otlp = await startStatsServer(() => ({}))
+      const fake = await startStatsServer(port => ({ pid: 1, dataDir: '/elsewhere/agentlens', ports: { ui: port, mcp: 1, otlp: otlp.port } }))
+      try {
+        const o = await runSetup({ ...setupOpts(f, { ui: fake.port, mcp: await freePort(), otlp: otlp.port }), dryRun: true })
+        const env = stepOf(o, 'environment')
+        assert.match(env.detail ?? '', /squatting the collector port/, `a foreign UI answer must not hide an OTLP squatter: ${env.detail}`)
+      } finally { await fake.close(); await otlp.close() }
+    })
+  })
+
+  test('the server step refuses a server that owns another data dir, and never signals it', async function () {
+    this.timeout(60_000)
+    await withBrakedFixture(async f => {
+      const decoy = spawnDecoy()
+      const fake = await startStatsServer(port => ({ pid: decoy.pid, dataDir: '/elsewhere/agentlens', ports: { ui: port, mcp: 1, otlp: 2 } }))
+      try {
+        // Run directly, past the port chooser that refuses such a port first: this branch is otherwise reachable only
+        // in a race.
+        const ctx = resolveCtx(setupOpts(f, { ui: fake.port, mcp: await freePort(), otlp: await freePort() }))
+        const { result } = await stepServer.run(ctx)
+        assert.strictEqual(result.verify, 'FAIL', `${result.found}: ${result.detail}`)
+        assert.strictEqual(result.action, 'refuse')
+        assert.match(result.detail ?? '', /does not own/, 'only the foreign-server branch says "does not own"')
+        assert.ok(decoyAlive(decoy), 'setup signalled a server that owns another data dir')
+      } finally { decoy.kill('SIGKILL'); await fake.close() }
+    })
   })
 })
