@@ -26,7 +26,8 @@ const sleep = (ms: number): Promise<void> => new Promise(r => setTimeout(r, ms))
 const alive = (pid: number): boolean => { try { process.kill(pid, 0); return true } catch { return false } }
 
 async function getJson(port: string, p: string): Promise<Record<string, unknown>> {
-  const r = await fetch(`http://127.0.0.1:${port}${p}`)
+  // WHY: a wedged server must not hang one request past the loop's wall-clock deadline (that would end in a bare mocha timeout).
+  const r = await fetch(`http://127.0.0.1:${port}${p}`, { signal: AbortSignal.timeout(10_000) })
   assert.strictEqual(r.status, 200, `GET ${p} -> ${r.status}`)
   return await r.json() as Record<string, unknown>
 }
@@ -120,13 +121,14 @@ suite('ingest end to end — the CLI start path with a real alcore', function ()
   })
 
   test('a real collect and views run: the ledger, the hook and statusline views hold exactly what was posted; done/ keeps the loaded files', async function () {
-    // WHY 315 s: the wait loop below is bounded by a 240 s wall-clock deadline, not an iteration count (an iteration
+    // WHY 375 s: the wait loop below is bounded by a 240 s wall-clock deadline, not an iteration count (an iteration
     // count can outlast mocha's timeout under load). withServer's stopServer may take up to 15 s after the body, and
-    // the 60 s margin covers the server start and the final queries.
-    this.timeout(240_000 + 60_000 + 15_000)
+    // the 120 s margin covers the server start under load (ensureServer, inside withServer) and the final queries;
+    // the start time under load was not measured.
+    this.timeout(240_000 + 120_000 + 15_000)
     // Waits for the tap's own periodic tick (60 s: the CLI does not pass --ingest-interval-secs). WHY 240 s: the
-    // seal+collect tick runs on the background-QoS runtime (chores.rs, TRDD-RVKQDLRD), which was starved past 150 s
-    // under a load spike, so this waits for at least three ticks plus margin.
+    // seal+collect tick runs on the background-QoS runtime (chores.rs, TRDD-RVKQDLRD), which was not seen within 150 s in
+    // one run; load starvation of the background-QoS tick is the inferred cause, so this waits for at least three ticks plus margin.
     const ids = { start: 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', end: 'cccccccc-cccc-cccc-cccc-cccccccccccc', sl: 'dddddddd-dddd-dddd-dddd-dddddddddddd' }
     const query = async (db: string, sql: string): Promise<Record<string, unknown>[]> => {
       // The collect/views children hold the database read-write while they run; a read-only open then
