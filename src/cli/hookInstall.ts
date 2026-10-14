@@ -742,13 +742,18 @@ export function skillFiles(dir: string): string[] {
  *  in place (a user's note, a file an older release shipped), so hashing them made installed ≠
  *  shipped FOREVER — every launch re-ran the skill repair, rewrote nothing, failed verify and printed
  *  "could not restore skills". A listed file that is absent (or not a regular file) still differs:
- *  the result is then a `missing:<rel>` marker, never a hex digest, so it equals no shipped hash. */
+ *  its absence is hashed under a separator (`\x01`) that a present file never uses, so the result
+ *  stays a hex digest and still differs from the shipped hash. */
 export function skillTreeHash(dir: string, files?: readonly string[]): string | null {
   if (!fs.existsSync(path.join(dir, 'SKILL.md'))) return null
   const h = crypto.createHash('sha256')
   for (const rel of files ?? skillFiles(dir)) {
     const file = path.join(dir, rel)
-    if (!fs.statSync(file, { throwIfNoEntry: false })?.isFile()) return `missing:${rel}`
+    if (!fs.statSync(file, { throwIfNoEntry: false })?.isFile()) {
+      h.update(rel)
+      h.update('\x01')      // a separator no present file uses: an absent file never hashes like a present one
+      continue
+    }
     h.update(rel)         // a rename with identical bytes is still drift
     h.update('\0')
     h.update(fs.readFileSync(file))
