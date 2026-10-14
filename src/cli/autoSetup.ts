@@ -33,7 +33,7 @@
 // `agentlenspro disable` is never undone here and is never auto-repaired around.
 
 import * as path from "path"
-import { AGENT_NAMES, SKILL_NAMES, skillTreeHash } from "./hookInstall"
+import { AGENT_NAMES, SKILL_NAMES, skillFiles, skillTreeHash } from "./hookInstall"
 import * as fs from "fs"
 import { EXIT } from "./cliErrors"
 import { HOOK_PATH_VERBS, READ_ONLY_VERBS, disableForForeignTelemetry, enableIfForeign, killSwitchArmedForForeign } from "./foreignTelemetry"
@@ -111,9 +111,12 @@ export function detectDrift(ctx: Ctx): Detection {
   const skillDrift: string[] = []
   let skillsPresent = 0
   for (const name of SKILL_NAMES) {
-    const shipped = skillTreeHash(path.join(ctx.repoRoot, "skills", name))
+    const shippedDir = path.join(ctx.repoRoot, "skills", name)
+    const shipped = skillTreeHash(shippedDir)
     if (shipped === null) continue // incomplete package: `agentlenspro setup` reports it, a repair cannot fix it
-    const installed = skillTreeHash(path.join(ctx.skillsDir, name))
+    // The installed copy is hashed over the SHIPPED file list only: installSkill leaves unshipped extras in
+    // place, and hashing them made every launch re-run a repair that could never converge (see skillTreeHash).
+    const installed = skillTreeHash(path.join(ctx.skillsDir, name), skillFiles(shippedDir))
     if (installed !== null) skillsPresent++
     if (installed !== shipped) skillDrift.push(`${name} ${installed === null ? "missing" : "stale"}`)
   }

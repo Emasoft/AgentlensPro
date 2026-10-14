@@ -729,19 +729,29 @@ export function skillFiles(dir: string): string[] {
   return out.sort()
 }
 
-/** One hash over a skill's WHOLE tree — every shipped file's relative path AND bytes. Returns
- *  null when the directory has no SKILL.md (not installed / not shipped).
+/** One hash over a skill's tree — every listed file's relative path AND bytes. Returns null when
+ *  the directory has no SKILL.md (not installed / not shipped).
  *
  *  Hashing only SKILL.md would make setup's drift check blind to exactly the payload that makes
  *  a multi-file skill worth shipping: a changed template or script would read as "current"
- *  forever, and the user would keep running last release's template while setup reported green. */
-export function skillTreeHash(dir: string): string | null {
+ *  forever, and the user would keep running last release's template while setup reported green.
+ *
+ *  `files` restricts the hash to a given relative-path list: pass `skillFiles(<shipped dir>)` when
+ *  hashing an INSTALLED copy. Without it every file found in `dir` is hashed, which is right for the
+ *  shipped side and wrong for the installed side: installSkill deliberately leaves unshipped extras
+ *  in place (a user's note, a file an older release shipped), so hashing them made installed ≠
+ *  shipped FOREVER — every launch re-ran the skill repair, rewrote nothing, failed verify and printed
+ *  "could not restore skills". A listed file that is absent (or not a regular file) still differs:
+ *  the result is then a `missing:<rel>` marker, never a hex digest, so it equals no shipped hash. */
+export function skillTreeHash(dir: string, files?: readonly string[]): string | null {
   if (!fs.existsSync(path.join(dir, 'SKILL.md'))) return null
   const h = crypto.createHash('sha256')
-  for (const rel of skillFiles(dir)) {
+  for (const rel of files ?? skillFiles(dir)) {
+    const file = path.join(dir, rel)
+    if (!fs.statSync(file, { throwIfNoEntry: false })?.isFile()) return `missing:${rel}`
     h.update(rel)         // a rename with identical bytes is still drift
     h.update('\0')
-    h.update(fs.readFileSync(path.join(dir, rel)))
+    h.update(fs.readFileSync(file))
   }
   return h.digest('hex')
 }

@@ -43,7 +43,7 @@ import {
   CLI_BIN, GATE_CMD, GATE_EVENTS, GATE_MATCHER, HOOK_CMD, HOOK_EVENTS, HookMatcher,
   INSTALLED_EVENTS, REVIEW_CMD, REVIEW_EVENTS, SUPERVISOR_CMD, SUPERVISOR_EVENTS, isStaleGeneration,
   installHooks, installSkill, isOurHookCommand, rebuildEventMatchers, resolveOnPath,
-  HOOK_TIMEOUT_SEC, sha256File, SKILL_NAMES, findPackageRoot, skillTreeHash, installAgents, AGENT_NAMES,
+  HOOK_TIMEOUT_SEC, sha256File, SKILL_NAMES, findPackageRoot, skillFiles, skillTreeHash, installAgents, AGENT_NAMES,
 } from './hookInstall'
 import { alcoreBin, alcoreServeArgs, ALCORE_MIMALLOC_PURGE_DELAY_MS, resolveBinNativeDir } from './serverControl'
 import { parsePidLock } from '../serverRuntime'
@@ -958,10 +958,14 @@ const stepSkill: StepDef = {
       const src = path.join(ctx.repoRoot, 'skills', name)
       const dst = path.join(ctx.skillsDir, name)
       const srcHash = skillTreeHash(src)
+      // The INSTALLED copy is hashed over the SHIPPED file list only (see skillTreeHash): an unshipped
+      // extra that installSkill leaves in place must not read as drift, or this step re-runs on every
+      // launch, rewrites nothing and fails its own verify below.
+      const srcFiles = srcHash === null ? [] : skillFiles(src)
       return {
         name, src: path.join(src, 'SKILL.md'), dst, srcExists: srcHash !== null,
-        srcHash,
-        dstHash: skillTreeHash(dst),
+        srcHash, srcFiles,
+        dstHash: skillTreeHash(dst, srcFiles),
       }
     })
     const missing = skills.filter(s => !s.srcExists)
@@ -1019,7 +1023,7 @@ const stepSkill: StepDef = {
     // VERIFY — hash compare on a FRESH read of both trees (not the writer's buffer), for EVERY
     // skill and agent. One bad apple fails the step and is named, so "PASS" can never mean "the
     // first one was fine and the rest were not looked at".
-    const bad = skills.filter(s => skillTreeHash(s.dst) !== s.srcHash)
+    const bad = skills.filter(s => skillTreeHash(s.dst, s.srcFiles) !== s.srcHash)
     const badAgents = AGENT_NAMES.filter(name => {
       const src = path.join(ctx.repoRoot, 'agents', `${name}.md`)
       const dst = path.join(ctx.agentsDir, `${name}.md`)

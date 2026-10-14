@@ -14,7 +14,7 @@ import { EXIT } from '../cli/cliErrors'
 import { ensureServer } from '../cli/serverControl'
 import { runEnableCli } from '../cli/disableCli'
 import { FOREIGN_REASON, HOOK_PATH_VERBS, disabledNotice, killSwitchArmedForForeign } from '../cli/foreignTelemetry'
-import { AGENT_NAMES, SKILL_NAMES, SUPERVISOR_CMD, installAgents, installHooks, installSkills } from '../cli/hookInstall'
+import { AGENT_NAMES, SKILL_NAMES, SUPERVISOR_CMD, installAgents, installHooks, installSkills, skillFiles } from '../cli/hookInstall'
 import { agentlensDisabled, armKillSwitch, killSwitchPath, overrideKillSwitchEnv } from '../cli/killSwitch'
 import { cliMain } from '../cli/main'
 import { Ctx, REPAIR_STEPS, hookDriftList, hooksConverged, resolveCtx, runSetup } from '../cli/setup'
@@ -168,6 +168,54 @@ suite('autoSetup — every launch checks presence + drift and repairs only what 
     await maybeAutoSetup(['budget'], { ctx: f.ctx, repair: r.repair, stderr: l.say })
     assert.deepStrictEqual(r.calls, ['skill'])
     assert.ok(l.out.some(x => x.includes(`${SKILL_NAMES[0]} stale`)))
+  })
+
+  // installSkill deliberately leaves unshipped files in place, and the drift check used to hash EVERY file in the
+  // installed dir: one extra file made installed ≠ shipped forever, so every launch re-ran the skill repair,
+  // rewrote nothing, failed verify and printed "could not restore skills". Only shipped paths are compared now.
+  test('an unshipped extra file in an installed skill is NOT drift: no repair, silent, and setup verifies PASS', async () => {
+    const f = s.f()
+    const extra = path.join(f.skillsDir, SKILL_NAMES[0], 'my-own-note.md')
+    fs.writeFileSync(extra, 'user content\n')
+    assert.deepStrictEqual(detectDrift(f.ctx).drifts, [], 'an extra file must not read as drift')
+    const r = recorder(['skill']); const l = lines()
+    assert.strictEqual(await maybeAutoSetup(['budget'], { ctx: f.ctx, repair: r.repair, stderr: l.say }), null)
+    assert.deepStrictEqual(r.calls, [])
+    assert.deepStrictEqual(l.out, [])
+    const { result } = await REPAIR_STEPS.skill.run(f.ctx)
+    assert.strictEqual(result.verify, 'PASS', `setup's skill step must verify with an extra present: ${JSON.stringify(result)}`)
+    assert.strictEqual(result.action, 'none')
+    assert.ok(fs.existsSync(extra), 'the extra file is never deleted')
+  })
+
+  test('a CHANGED shipped payload file (not SKILL.md) is drift and is repaired', async () => {
+    const f = s.f()
+    const name = 'agentlenspro-scan-and-fix'
+    const rel = skillFiles(path.join(REPO_ROOT, 'skills', name)).find(x => x !== 'SKILL.md')
+    assert.ok(rel, 'the fixture skill must ship a payload file beyond SKILL.md')
+    const victim = path.join(f.skillsDir, name, rel as string)
+    fs.writeFileSync(victim, 'tampered\n')
+    const r = recorder(['skill']); const l = lines()
+    await maybeAutoSetup(['budget'], { ctx: f.ctx, repair: r.repair, stderr: l.say })
+    assert.deepStrictEqual(r.calls, ['skill'])
+    assert.ok(l.out.some(x => x.includes(`${name} stale`)), l.out.join('|'))
+    assert.ok(fs.readFileSync(victim).equals(fs.readFileSync(path.join(REPO_ROOT, 'skills', name, rel as string))), 'the real step restored the shipped bytes')
+    assert.deepStrictEqual(detectDrift(f.ctx).drifts, [])
+  })
+
+  test('a DELETED shipped payload file (not SKILL.md) is drift and is repaired', async () => {
+    const f = s.f()
+    const name = 'agentlenspro-scan-and-fix'
+    const rel = skillFiles(path.join(REPO_ROOT, 'skills', name)).find(x => x !== 'SKILL.md')
+    assert.ok(rel, 'the fixture skill must ship a payload file beyond SKILL.md')
+    const victim = path.join(f.skillsDir, name, rel as string)
+    fs.rmSync(victim)
+    const r = recorder(['skill']); const l = lines()
+    await maybeAutoSetup(['budget'], { ctx: f.ctx, repair: r.repair, stderr: l.say })
+    assert.deepStrictEqual(r.calls, ['skill'])
+    assert.ok(l.out.some(x => x.includes(`${name} stale`)), l.out.join('|'))
+    assert.ok(fs.existsSync(victim), 'the real step put the shipped file back')
+    assert.deepStrictEqual(detectDrift(f.ctx).drifts, [])
   })
 
   test('a missing agent restores ONLY the skill step (it owns skills + agents)', async () => {
