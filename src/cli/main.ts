@@ -28,7 +28,7 @@ import { runEnvCli } from './envCli'
 import { runDisableCli, runEnableCli } from './disableCli'
 import { ensureServer, openDashboard, serverCommand, daemonCommand } from './serverControl'
 import { runSetupCli } from './setup'
-import { forceInstallTelemetry, maybeAutoSetup } from './autoSetup'
+import { autoSetupOnServerStart, forceInstallTelemetry, maybeAutoSetup } from './autoSetup'
 import { disabledNotice } from './foreignTelemetry'
 import { runBudgetCli } from './budgetCli'
 import { runWatchCli } from './watchCli'
@@ -274,11 +274,17 @@ export async function cliMain(rawArgv: string[], startServer: () => Promise<unkn
     case 'setup':
       return runSetupCli(argv.slice(1), forceInstall)
     case 'server':
+      // The install heals itself when the server is STARTED too (owner 2026-10-14, TRDD-YL3EWT6N): `server` is excluded
+      // from maybeAutoSetup above because hooks reach it, so `start`/`restart` run the check here, before the verb.
+      // `revive` (the hook path) does not. Never throws, never blocks the start (autoSetup.ts autoSetupOnServerStart).
+      await autoSetupOnServerStart(argv)
       await serverCommand(argv.slice(1))
       return 0
     case 'daemon':
       // The always-on ingestion daemon (D3K7QM2P) — same process as `server`, named for its role;
       // adds hook-spool depth to status. `daemon start --supervise` is what launchd runs.
+      // `daemon start|restart` (incl. the launchd `daemon start --supervise`) is a server start: same check as `server`.
+      await autoSetupOnServerStart(argv)
       await daemonCommand(argv.slice(1))
       return 0
     case 'dashboard':

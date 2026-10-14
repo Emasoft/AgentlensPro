@@ -9,7 +9,7 @@ import * as crypto from 'crypto'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
-import { AUTOSETUP_EXCLUDED_VERBS, LOCK_STALE_MS, RepairOutcome, Step, detectDrift, forceInstallTelemetry, maybeAutoSetup } from '../cli/autoSetup'
+import { AUTOSETUP_EXCLUDED_VERBS, LOCK_STALE_MS, RepairOutcome, Step, autoSetupOnServerStart, claudeCodePresent, detectDrift, forceInstallTelemetry, maybeAutoSetup } from '../cli/autoSetup'
 import { EXIT } from '../cli/cliErrors'
 import { ensureServer } from '../cli/serverControl'
 import { runEnableCli } from '../cli/disableCli'
@@ -944,6 +944,118 @@ suite('server verbs under DISABLED hit serverControl\'s own terminal handling, n
   })
 })
 
+// TRDD-YL3EWT6N item 3: `server|daemon start|restart` run the install check too — they are excluded from the
+// per-launch check (maybeAutoSetup) because hooks reach them, so before this a server start never repaired anything.
+// Real files in a temp HOME; only the repair runner is injected (it runs the REAL step where a test restores).
+suite('server start — the install heals itself when the server is started (TRDD-YL3EWT6N)', () => {
+  const s = fixtureSuite(true)
+  const skill0 = (f: Fx): string => path.join(f.skillsDir, SKILL_NAMES[0])
+
+  test('server start/restart and daemon start/restart restore a missing skill; stop, status and revive never run the check', async () => {
+    const f = s.f()
+    for (const argv of [['server', 'start'], ['server', 'restart'], ['daemon', 'start', '--supervise'], ['daemon', 'restart']]) {
+      fs.rmSync(skill0(f), { recursive: true })
+      const r = recorder(['skill']); const l = lines()
+      await autoSetupOnServerStart(argv, { ctx: f.ctx, repair: r.repair, stderr: l.say })
+      assert.deepStrictEqual(r.calls, ['skill'], argv.join(' '))
+      assert.ok(fs.existsSync(path.join(skill0(f), 'SKILL.md')), `${argv.join(' ')} must restore the skill`)
+      assert.ok(l.out.some(x => x.includes('restored skills')), l.out.join('|'))
+    }
+    fs.rmSync(skill0(f), { recursive: true })
+    for (const argv of [['server', 'stop'], ['server', 'status'], ['server', 'revive'], ['daemon', 'status'], ['daemon'], ['budget']]) {
+      const r = recorder(['skill']); const l = lines()
+      await autoSetupOnServerStart(argv, { ctx: f.ctx, repair: r.repair, stderr: l.say })
+      assert.deepStrictEqual(r.calls, [], `${argv.join(' ')} must not run the check (revive is the hook path)`)
+      assert.deepStrictEqual(l.out, [])
+    }
+  })
+
+  test('AGENTLENS_NO_AUTOSETUP=1: a server start does not repair', async () => {
+    const f = s.f()
+    fs.rmSync(skill0(f), { recursive: true })
+    const r = recorder(['skill']); const l = lines()
+    await autoSetupOnServerStart(['server', 'start'], { ctx: f.ctx, repair: r.repair, stderr: l.say, env: { AGENTLENS_NO_AUTOSETUP: '1' } })
+    assert.deepStrictEqual(r.calls, [])
+    assert.deepStrictEqual(l.out, [])
+    assert.ok(!fs.existsSync(skill0(f)), 'nothing restored')
+  })
+
+  test('a fresh lock held by another process: the server start skips the repair AND says so in one line', async () => {
+    const f = s.f()
+    fs.rmSync(skill0(f), { recursive: true })
+    fs.writeFileSync(path.join(f.dataDir, '.autosetup.lock'), '')
+    const r = recorder(['skill']); const l = lines()
+    await autoSetupOnServerStart(['server', 'start'], { ctx: f.ctx, repair: r.repair, stderr: l.say })
+    assert.deepStrictEqual(r.calls, [])
+    assert.deepStrictEqual(l.out, ['agentlenspro: install check skipped: another agentlenspro is repairing'])
+    // The launch path keeps its silent skip — only the server trigger reports it.
+    const l2 = lines()
+    await maybeAutoSetup(['budget'], { ctx: f.ctx, repair: recorder().repair, stderr: l2.say })
+    assert.deepStrictEqual(l2.out, [], 'a launch still skips silently')
+  })
+
+  test('Claude Code absent (no ~/.claude, no `claude` on PATH): skipped and nothing created; a `claude` on PATH alone counts as present', async () => {
+    const e = makeFx()
+    try {
+      const binOnly = path.join(e.home, 'bin')
+      const ctx: Ctx = { ...e.ctx, pathEnv: binOnly }
+      assert.strictEqual(claudeCodePresent(ctx), false)
+      const r = recorder(); const l = lines()
+      await autoSetupOnServerStart(['server', 'start'], { ctx, repair: r.repair, stderr: l.say, fullSetup: async () => { throw new Error('full setup must not run') } })
+      assert.deepStrictEqual(r.calls, [])
+      assert.deepStrictEqual(l.out, [])
+      assert.ok(!fs.existsSync(path.join(e.home, '.claude')), 'no ~/.claude tree is created where Claude Code is absent')
+      fs.writeFileSync(path.join(binOnly, 'claude'), '#!/bin/sh\nexit 0\n')
+      fs.chmodSync(path.join(binOnly, 'claude'), 0o755)
+      assert.strictEqual(claudeCodePresent(ctx), true)
+      // fullSetup is injected so a regression onto the launch-only first-run path is a FAILED assert, never a real
+      // runSetup — which would start a real collector on the fixture's data dir.
+      let full = 0
+      const r2 = recorder()
+      await autoSetupOnServerStart(['server', 'start'], { ctx, repair: r2.repair, stderr: lines().say, fullSetup: async () => { full++; return true } })
+      assert.strictEqual(full, 0, 'a server start never runs the first-run full setup (it starts a server)')
+      assert.deepStrictEqual(r2.calls, ['otel-env', 'hooks', 'skill'], 'nothing installed + Claude present: the per-piece repairs, never a full setup')
+    } finally { e.cleanup() }
+  })
+
+  test('a parked surface stays parked across a server start, whoever armed the switch (operator or foreign telemetry)', async () => {
+    for (const reason of ['operator reason', FOREIGN_REASON]) {
+      const f = s.f()
+      disableAgentlensSurfaces(reason, { dataDir: f.dataDir, skillsDir: f.skillsDir, rulesDir: path.join(f.home, '.claude', 'rules') })
+      assert.ok(!fs.existsSync(skill0(f)), 'baseline: the skill is parked')
+      const r = recorder(['skill']); const l = lines()
+      await autoSetupOnServerStart(['server', 'start'], { ctx: f.ctx, repair: r.repair, stderr: l.say })
+      assert.deepStrictEqual(r.calls, [], reason)
+      assert.ok(!fs.existsSync(skill0(f)), `${reason}: the skill stays parked`)
+      assert.ok(agentlensDisabled(), `${reason}: the switch stays armed`)
+      enableAgentlensSurfaces({ dataDir: f.dataDir, skillsDir: f.skillsDir, rulesDir: path.join(f.home, '.claude', 'rules') })
+    }
+  })
+
+  test('foreign telemetry: a server start writes nothing, arms nothing, prints one line, and never refuses', async () => {
+    const f = s.f()
+    const cfg = readSettings(f)
+    cfg.env!.OTEL_EXPORTER_OTLP_ENDPOINT = 'https://otel.corp.example:4318/v1'
+    writeSettings(f, cfg)
+    const bytes = fs.readFileSync(f.settingsPath, 'utf8')
+    fs.rmSync(skill0(f), { recursive: true })
+    const r = recorder(['skill']); const l = lines()
+    await autoSetupOnServerStart(['server', 'start'], { ctx: f.ctx, repair: r.repair, stderr: l.say })
+    assert.deepStrictEqual(r.calls, [])
+    assert.strictEqual(fs.readFileSync(f.settingsPath, 'utf8'), bytes, 'settings.json byte-identical')
+    assert.strictEqual(agentlensDisabled(), false, 'a server start never arms the kill-switch')
+    assert.ok(!fs.existsSync(path.join(f.dataDir, 'disabled-surfaces')), 'nothing parked')
+    assert.deepStrictEqual(l.out.filter(x => x.includes('install check skipped')).length, 1, l.out.join('|'))
+  })
+
+  test('a check that throws never escapes: one line, and the start goes on', async () => {
+    const f = s.f()
+    fs.rmSync(skill0(f), { recursive: true })
+    const l = lines()
+    await autoSetupOnServerStart(['server', 'start'], { ctx: f.ctx, repair: async () => { throw new Error('boom') }, stderr: l.say })
+    assert.ok(l.out.some(x => x.includes('boom')), l.out.join('|'))
+  })
+})
 suite('round 4 — shell-set pipelines, write ordering, read-only diagnostics', () => {
   const s = fixtureSuite(true)
 

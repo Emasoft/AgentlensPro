@@ -33,7 +33,7 @@
 // `agentlenspro disable` is never undone here and is never auto-repaired around.
 
 import * as path from "path"
-import { AGENT_NAMES, SKILL_NAMES, skillFiles, skillTreeHash } from "./hookInstall"
+import { AGENT_NAMES, SKILL_NAMES, resolveOnPath, skillFiles, skillTreeHash } from "./hookInstall"
 import * as fs from "fs"
 import { EXIT } from "./cliErrors"
 import { HOOK_PATH_VERBS, READ_ONLY_VERBS, disableForForeignTelemetry, enableIfForeign, killSwitchArmedForForeign } from "./foreignTelemetry"
@@ -54,8 +54,11 @@ export const AUTOSETUP_EXCLUDED_VERBS: ReadonlySet<string> = new Set([
 
 export const LOCK_STALE_MS = 10 * 60 * 1000
 
+// "server" = `server|daemon start|restart` (autoSetupOnServerStart): it repairs like a launch but never arms, lifts
+// or works around the kill-switch, never runs the first-run full setup (that starts a server), and reports a held lock.
+export type Trigger = "enable" | "launch" | "server"
+
 export type Step = keyof typeof REPAIR_STEPS
-export type Trigger = "enable" | "launch"
 export interface Drift { piece: string; step: Step | null; reason: string }
 export interface Detection {
   drifts: Drift[]; conflicts: TelemetryConflict[]; nothingInstalled: boolean
@@ -181,8 +184,40 @@ export async function maybeAutoSetup(argv: string[], deps: AutoSetupDeps = {}): 
   return ensureInstalled("launch", verb, deps)
 }
 
-/** THE install/repair order, shared by `enable` and every launch (see the header). Returns null when the
- *  caller may proceed, or the exit code it must return. Never throws. */
+/** Is Claude Code on this machine at all? Present when `~/.claude` exists OR `claude` resolves on PATH. A server
+ *  started where neither holds (a Docker image, a CI box) has nobody to install skills, agents or hooks FOR, and
+ *  writing them would create a `~/.claude` tree inside the container. */
+export function claudeCodePresent(ctx: Pick<Ctx, "home" | "pathEnv">): boolean {
+  return fs.existsSync(path.join(ctx.home, ".claude")) || resolveOnPath("claude", ctx.pathEnv) !== null
+}
+
+/** The server/daemon sub-verbs that START a collector — the only ones the server-start check runs for. `revive`
+ *  is deliberately absent: it is the hook path's detached start, and hooks run on every tool call. */
+const SERVER_START_SUBVERBS: ReadonlySet<string> = new Set(["start", "restart"])
+
+/** The install heals itself when the SERVER is started too (owner 2026-10-14, TRDD-YL3EWT6N: "automatically install
+ *  or reinstall them ... when the cli is executed or the server is started"). `server`/`daemon` stay excluded from
+ *  the per-launch check (maybeAutoSetup) because they are also reached from hooks; this runs for
+ *  `server|daemon start|restart` only, before the verb. Same gates as a launch — AGENTLENS_NO_AUTOSETUP, an armed
+ *  kill-switch, and here also "Claude Code absent". Never throws and never blocks or fails the start: every outcome
+ *  is at most one stderr line, and the server starts regardless. */
+export async function autoSetupOnServerStart(argv: string[], deps: AutoSetupDeps = {}): Promise<void> {
+  const [cmd, sub] = argv
+  if ((cmd !== "server" && cmd !== "daemon") || !SERVER_START_SUBVERBS.has(sub ?? "")) return
+  if ((deps.env ?? process.env).AGENTLENS_NO_AUTOSETUP === "1") return
+  const say = deps.stderr ?? ((line: string) => { process.stderr.write(`${line}\n`) })
+  try {
+    const ctx = deps.ctx ?? resolveCtx({ log: () => { /* quiet */ } })
+    if (!claudeCodePresent(ctx)) return
+    await ensureInstalled("server", `${cmd} ${sub}`, { ...deps, ctx })
+  } catch (e) {
+    say(`agentlenspro: install check failed (${(e as Error).message.slice(0, 160)}) — the server starts anyway; run \`agentlenspro setup\``)
+  }
+}
+
+/** THE install/repair order, shared by `enable`, every launch and a server start (see the header). Returns null
+ *  when the caller may proceed, or the exit code it must return (the server-start caller ignores it: it reports,
+ *  it never refuses the start). Never throws. */
 export async function ensureInstalled(trigger: Trigger, verb: string, deps: AutoSetupDeps = {}): Promise<number | null> {
   const say = deps.stderr ?? ((line: string) => { process.stderr.write(`${line}\n`) })
   try {
@@ -191,7 +226,9 @@ export async function ensureInstalled(trigger: Trigger, verb: string, deps: Auto
     const dirs: SurfaceDirs = { dataDir: ctx.dataDir, skillsDir: ctx.skillsDir, rulesDir: path.join(ctx.home, ".claude", "rules") }
     // A kill-switch an operator armed (or AGENTLENS_DISABLED) is theirs: a launch never repairs around it.
     // `enable` IS the operator's explicit lift, so it goes on to the verdict.
-    if (trigger === "launch" && agentlensDisabled() && !killSwitchArmedForForeign()) return null
+    // A server start never repairs around ANY armed switch, operator- or foreign-armed: lifting a switch is a
+    // launch's or `enable`'s decision, never a side effect of starting the collector.
+    if (trigger !== "enable" && agentlensDisabled() && (trigger === "server" || !killSwitchArmedForForeign())) return null
 
     // STEP 1 — the telemetry verdict, before any other action.
     const first = detectDrift(ctx)
@@ -201,6 +238,13 @@ export async function ensureInstalled(trigger: Trigger, verb: string, deps: Auto
       say(`agentlenspro: stale session env (restart Claude Code to pick up the new settings): ${first.staleEnv.map(r => r.key).join(", ")}`)
     }
     if (first.conflicts.length > 0) {
+      // A server start never blocks, never disables and never writes over another telemetry setup: it is not the
+      // place to arm the kill-switch (that would refuse the very start the operator asked for). One line, then the
+      // server starts; the next ordinary launch or `agentlenspro setup` reports the conflict in full.
+      if (trigger === "server") {
+        say("agentlenspro: install check skipped: another telemetry setup is in place — run `agentlenspro setup` to see it")
+        return null
+      }
       const shell = first.conflicts.some(c => c.scope === "shell")
       if (!ctx.forceInstall || shell) {
         // STEP 2a — FOREIGN and no (usable) --force-install-telemetry: disable AGAIN (even if `enable` was just
@@ -216,7 +260,12 @@ export async function ensureInstalled(trigger: Trigger, verb: string, deps: Auto
     }
 
     const release = takeLock(ctx.dataDir)
-    if (!release) return null // another launch is repairing right now
+    if (!release) {
+      // A launch skips silently (the winner repairs). A server start reports the skip: the operator ran a
+      // deliberate start and should learn that the install check did not run this time (TRDD-YL3EWT6N).
+      if (trigger === "server") say("agentlenspro: install check skipped: another agentlenspro is repairing")
+      return null
+    }
     try {
       // Re-detect under the lock: the previous holder may have just fixed everything.
       const { drifts, conflicts, nothingInstalled, converge: converged } = detectDrift(ctx)
@@ -225,6 +274,9 @@ export async function ensureInstalled(trigger: Trigger, verb: string, deps: Auto
       // value is 1, so later launches find nothing to warn about.
       const oldEnv = (() => { const s = readSettingsFresh(ctx.settingsPath); return s !== "absent" && s !== "unparseable" && s.env && typeof s.env === "object" ? s.env as Record<string, unknown> : {} })()
       const overridden = converged.filter(k => /^OTEL_LOG_/.test(k) && ["0", "false"].includes(String(oldEnv[k]).toLowerCase()))
+      // Launch only: a first-run full setup also STARTS the server, so running it from the `server` trigger would
+      // start a collector from inside a collector start. The server trigger falls through to the per-piece repairs
+      // below, which install everything except the server (which the verb itself is starting).
       if (nothingInstalled && trigger === "launch" && verb !== "") {
         const ok = await (deps.fullSetup ?? defaultFullSetup)(ctx)
         say(ok
