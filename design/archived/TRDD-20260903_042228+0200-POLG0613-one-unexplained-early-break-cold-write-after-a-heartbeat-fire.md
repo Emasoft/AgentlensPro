@@ -1,15 +1,16 @@
 ---
 trdd-id: POLG0613
 title: One unexplained early-break cold write after a heartbeat fire
-column: testing
+column: cancelled
 created: 2026-09-03T04:22:28+0200
-updated: 2026-09-03T04:46:59+0200
+updated: 2026-10-15T00:21:11+0200
 current-owner: main-session
 task-type: spike
 priority: normal
 min-approval-requirement: none
-blocked-by: [CAJ5RCP9]
+blocked-by: []
 related: [B9ERTBZ9]
+status: archived
 ---
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-03
@@ -105,3 +106,12 @@ should NOT cause one.
   `~/.claude/rules/how-to-fix-issues-of-other-projects.md`).
 - Do not name a cause that cannot be told apart from the alternatives
   (TRDD-B9ERTBZ9's standing bar).
+
+## Closure (2026-10-15)
+
+Closed as NOT REPRODUCIBLE, per this card's own STATE NEXT ACTION ('close once CAJ5RCP9 child 1, the api_calls writer, lands'). That child is TRDD-9SYRK6SW, commit c92a90c3, in the running binary. H1 was falsified by live capture (2026-09-03). H2-H4 were never measured, and cannot be for the original 21:29:49 event because its bodies are deleted. The acceptance text ('cause named, OR all four hypotheses falsified with measurements') is therefore NOT met; this is a documented not-reproducible verdict, disclosed to the owner. A future event is diffable via the api_call table only while raw body capture is on (it is off on this machine).
+Terminal state chosen: CANCELLED, not complete. The investigation cannot reach its acceptance (the original event's bodies are deleted), so 'complete' would claim a finding that does not exist.
+
+## Approval log
+
+- 2026-10-15T00:21:11+0200 — CANCELLED by main-agent@agentlenspro. not reproducible; acceptance unreachable, bodies deleted; see Closure.

@@ -3,7 +3,7 @@ trdd-id: HSPUF5XH
 title: Bump and publish agentlenspro only after every open card is terminal and every known issue is fixed
 column: blocked
 created: 2026-09-03T10:48:30+0200
-updated: 2026-10-15T00:15:48+0200
+updated: 2026-10-15T00:22:27+0200
 current-owner: main-session
 task-type: infra
 min-approval-requirement: user
@@ -12,7 +12,7 @@ created-by: main-session
 npt: []
 eht: []
 pre-block-column: todo
-blocked-by: [2R36W8Q1, N60JUWU3, UTFVMVT8, CAJ5RCP9, 9SYRK6SW, QE114936, POLG0613, 768NEX6E, 7YPQWKPG, 7NHUU6GK, ZSX34J8F, 2R0AXCKL, 2TQHNMEC, U0L78B3Z, CS2W7E77]
+blocked-by: [2R36W8Q1, N60JUWU3, CAJ5RCP9, 9SYRK6SW, QE114936, 768NEX6E, 7YPQWKPG, 7NHUU6GK, ZSX34J8F, 2R0AXCKL, 2TQHNMEC, CS2W7E77]
 post-release-verification: [IXMB2JVD]
 ---
 
@@ -207,3 +207,7 @@ setup honours AGENTLENS_DATA_DIR (c24058ce); users who set only it may meet a on
 setup refuses rather than migrating when a server owns a different data dir: changing DATA_DIR and re-running setup no longer stops the old server (973aead7, 29ec567a).
 cache-expired no longer runs the first-run self-heal (42017224).
 Do not run the TRDD-CS2W7E77 release pair until the owner's pending decisions are made and HSPUF5XH's other blockers are terminal; any later code change voids it.
+setup's HTTP calls have overall deadlines (10 s, MCP 15 s) and its stop, verify and self-test loops are wall-clock bounded, so a stalled server fails setup within seconds instead of hanging (973aead7).
+setup refuses a stranger on the OTLP port even when our own server answers on the UI port: ownership is checked per port (973aead7).
+setup no longer stops or restarts a server it cannot prove is its own; a server run from a renamed AGENTLENS_ALCORE binary is refused as 'not provably ours' (29ec567a).
+review-gate: the gate no longer demands a review for a declared-role worker's scratch writes (temp, mktemp and date-stamped paths in ephemeral dirs); writes outside scratch dirs still arm it (df8bfc70, 668fc421, d476914a, ed0fbd5e, ed0fbd5e's follow-up). Known residual, open on TRDD-QQ2XIIZ6: an mktemp assignment that may not run (a compound-command body, a continuation) can leave the variable holding an inherited value; it needs a declared-role worker evading on purpose.

@@ -3,7 +3,7 @@ trdd-id: 9SYRK6SW
 title: api_call staging table writer at the bodies-pass ingest site
 column: deploy
 created: 2026-09-03T04:47:31+0200
-updated: 2026-10-05T03:36:33+0200
+updated: 2026-10-15T00:20:25+0200
 current-owner: main-session
 task-type: feature
 priority: high
@@ -15,6 +15,7 @@ eht: []
 blocked-by: []
 release-via: deploy
 status: tasked
+implementation-commits: [c92a90c3]
 ---
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-05T12:24:45+0200
