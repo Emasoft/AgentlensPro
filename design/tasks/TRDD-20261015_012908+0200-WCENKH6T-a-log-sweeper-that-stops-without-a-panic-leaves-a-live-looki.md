@@ -4,7 +4,7 @@ title: A log-sweeper that stops without a panic leaves a live-looking collector 
 column: todo
 status: tasked
 created: 2026-10-15T01:29:08+0200
-updated: 2026-10-15T01:29:08+0200
+updated: 2026-10-15T01:43:36+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -15,6 +15,7 @@ mandated-by: none
 approved: true
 approval-judge: main-agent@agentlenspro
 approval-datetime: 2026-10-15T01:29:08+0200
+project-id: agentlenspro
 ---
 
 # A log-sweeper that stops without a panic leaves a live-looking collector that nothing restarts

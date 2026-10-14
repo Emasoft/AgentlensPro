@@ -3,7 +3,7 @@ trdd-id: HSPUF5XH
 title: Bump and publish agentlenspro only after every open card is terminal and every known issue is fixed
 column: blocked
 created: 2026-09-03T10:48:30+0200
-updated: 2026-10-15T01:30:21+0200
+updated: 2026-10-15T01:51:48+0200
 current-owner: main-session
 task-type: infra
 min-approval-requirement: user
@@ -12,8 +12,10 @@ created-by: main-session
 npt: []
 eht: []
 pre-block-column: todo
-blocked-by: [2R36W8Q1, N60JUWU3, CAJ5RCP9, 9SYRK6SW, QE114936, 768NEX6E, 7YPQWKPG, 7NHUU6GK, ZSX34J8F, 2R0AXCKL, 2TQHNMEC, CS2W7E77, DA0GN1CS, H3D5ZBO1, 0BDOV3WC]
+blocked-by: [2R36W8Q1, N60JUWU3, CAJ5RCP9, 9SYRK6SW, QE114936, 768NEX6E, 7YPQWKPG, 7NHUU6GK, ZSX34J8F, 2R0AXCKL, 2TQHNMEC, CS2W7E77, DA0GN1CS, H3D5ZBO1, 0BDOV3WC, KMF02UEX, WCENKH6T, 3RVTC1HY, TYJSS45N]
 post-release-verification: [IXMB2JVD]
+blocker-probe: [trddgrep, why, HSPUF5XH]
+blocker-holds-if: not-match:READY
 ---
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-03
@@ -201,6 +203,7 @@ TRDD-CS2W7E77: focused serverCalibration run passed 5/5 on 2026-10-14 with alcor
 Environment: the collector was RUNNING but not answering on port 3000 after a 'revive backoff: 6 quick crashes' warning (not restarted); more than a dozen agent worktrees under .claude/worktrees likely cause the 5 s 'git worktree list' timeouts that crash janitor detectors; the main checkout carries unrelated dirty files (src/cli/hookInstall.ts AGENT_NAMES, agents/*.md, untracked agents/cheap-worker.md fast-worker.md smart-worker.md, a staged empty design/requirements/PRRD.md) that must be handled before merging to main.
 These four lines duplicate the uncommitted STATE lines on TRDD-AVUGZV1K so they are restorable from git; this card is authoritative for them.
 
+
 ## Release notes owed (CHANGELOG)
 
 setup honours AGENTLENS_DATA_DIR (c24058ce); users who set only it may meet a one-time refusal naming a stray ~/.agentlens server and its stop command.
@@ -211,3 +214,10 @@ setup's HTTP calls have overall deadlines (10 s, MCP 15 s) and its stop, verify 
 setup refuses a stranger on the OTLP port even when our own server answers on the UI port: ownership is checked per port (973aead7).
 setup no longer stops or restarts a server it cannot prove is its own; a server run from a renamed AGENTLENS_ALCORE binary is refused as 'not provably ours' (29ec567a).
 review-gate: the gate no longer demands a review for a declared-role worker's scratch writes (temp, mktemp and date-stamped paths in ephemeral dirs); writes outside scratch dirs still arm it (df8bfc70, 668fc421, d476914a, ed0fbd5e, ed0fbd5e's follow-up). Known residual, open on TRDD-QQ2XIIZ6: an mktemp assignment that may not run (a compound-command body, a continuation) can leave the variable holding an inherited value; it needs a declared-role worker evading on purpose.
+- TRDD-DA0GN1CS (when commit 1 lands): the periodic card save no longer scans DuckDB under the state lock; a DuckDB out-of-memory there poisoned the lock and stopped all ingestion while the server looked alive.
+- TRDD-0BDOV3WC (when fixed): an out-of-memory read at boot no longer deletes cards.duckdb.
+- TRDD-3RVTC1HY (when fixed): any panic exits the server so the hook revive restarts it.
+
+## Notes
+
+2026-10-15: KMF02UEX, WCENKH6T, 3RVTC1HY and TYJSS45N added as blockers (0BDOV3WC was added in commit 44875736). The poisoned-lock incident (TRDD-DA0GN1CS) showed the same zombie can recur through any DuckDB .expect under the state lock in steady state or through a silently stopped sweeper, and 0BDOV3WC can lose cards on any restart whose reuse read runs out of memory; this card's title requires every open card to be terminal. The blocker-probe covers only the listed ids.

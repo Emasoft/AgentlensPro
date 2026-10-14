@@ -4,7 +4,7 @@ title: demote_cold runs a corpus-wide DuckDB window under the state lock and pan
 column: todo
 status: tasked
 created: 2026-10-15T01:29:08+0200
-updated: 2026-10-15T01:29:08+0200
+updated: 2026-10-15T01:43:36+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -15,12 +15,13 @@ mandated-by: none
 approved: true
 approval-judge: main-agent@agentlenspro
 approval-datetime: 2026-10-15T01:29:08+0200
+project-id: agentlenspro
 ---
 
 # demote_cold runs a corpus-wide DuckDB window under the state lock and panics on out-of-memory
 
 ## Problem
-`CardStore::demote_cold` (rust-core/crates/agentlens-core/src/card_store.rs:567-616) ranks ALL rows with a window function (`row_number() OVER (ORDER BY last_active_ms DESC, seq ASC)`) on every call past the hot-set size, and it runs on the lock-held ingest path (`ingest_scanned`, lib.rs:353-371). It has four `.expect` calls on DuckDB statements (:582, :585, :586, :602). A DuckDB out-of-memory there panics while the state lock is held: the same failure class as TRDD-DA0GN1CS (verified by code read in reports_dev/da0gn1cs-measure.md section 10; not yet observed firing).
+`CardStore::demote_cold` (rust-core/crates/agentlens-core/src/card_store.rs:567-616) ranks ALL rows with a window function (`row_number() OVER (ORDER BY last_active_ms DESC, seq ASC)`) on every call past the hot-set size, and it runs on the lock-held ingest path (`ingest_scanned`, lib.rs:353-372). It has four `.expect` calls on DuckDB statements (:582, :585, :586, :602). A DuckDB out-of-memory there panics while the state lock is held: the same failure class as TRDD-DA0GN1CS (the four .expect calls and the whole-table window verified by MEASURE, reports_dev/da0gn1cs-measure.md section 10; the call under the lock read by the main agent: `CoreState::ingest_scanned(&mut self)` at lib.rs:353-372 calls `demote_cold_timelines`; not yet observed firing).
 
 ## Fix direction
 Bound the scan (only rows with timeline_len > 0 beyond the hot set), move the DuckDB work off the state lock, and return an error instead of panicking.
