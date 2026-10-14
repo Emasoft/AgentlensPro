@@ -120,7 +120,10 @@ suite('ingest end to end — the CLI start path with a real alcore', function ()
   })
 
   test('a real collect and views run: the ledger, the hook and statusline views hold exactly what was posted; done/ keeps the loaded files', async function () {
-    this.timeout(300_000)
+    // WHY 315 s: the wait loop below is bounded by a 240 s wall-clock deadline, not an iteration count (an iteration
+    // count can outlast mocha's timeout under load). withServer's stopServer may take up to 15 s after the body, and
+    // the 60 s margin covers the server start and the final queries.
+    this.timeout(240_000 + 60_000 + 15_000)
     // Waits for the tap's own periodic tick (60 s: the CLI does not pass --ingest-interval-secs). WHY 240 s: the
     // seal+collect tick runs on the background-QoS runtime (chores.rs, TRDD-RVKQDLRD), which was starved past 150 s
     // under a load spike, so this waits for at least three ticks plus margin.
@@ -157,7 +160,8 @@ suite('ingest end to end — the CLI start path with a real alcore', function ()
       // (a record is keyed by its atMs). Done when at least the hook spool and the statusline spool loaded.
       const seen = new Map<number, { exit?: number; timedOut?: boolean; summary?: string }>()
       let loaded = 0, failed = 0
-      for (let i = 0; i < 960 && !(loaded >= 2 && st.views); i++) {   // bounded: 240 s, the tick period is 60 s
+      const deadline = Date.now() + 240_000
+      while (Date.now() < deadline && !(loaded >= 2 && st.views)) {   // bounded: 240 s, the tick period is 60 s
         st = await getJson(ui, '/api/ingest-status')
         const rec = st.lastCollect as { atMs?: number; exit?: number; timedOut?: boolean; summary?: string } | null
         if (rec && !seen.has(Number(rec.atMs))) {
