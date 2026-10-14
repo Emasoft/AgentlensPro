@@ -4,7 +4,7 @@ title: agentlenspro detects and reinstalls missing or outdated hooks skills agen
 column: dev
 status: tasked
 created: 2026-10-14T16:43:38+0200
-updated: 2026-10-14T16:56:36+0200
+updated: 2026-10-14T17:21:19+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: feature
@@ -15,7 +15,7 @@ mandated-by: none
 approved: true
 approval-judge: main-agent@agentlenspro
 approval-datetime: 2026-10-14T16:43:38+0200
-implementation-commits: [ab5b1274]
+implementation-commits: [ab5b1274, 87440d7e, d73b20cc, a065129a]
 ---
 
 # agentlenspro detects and reinstalls missing or outdated hooks skills agents and rules in user scope
@@ -39,7 +39,11 @@ implementation-commits: [ab5b1274]
 Owner decisions pending (asked 2026-10-14, no answer yet): (a) agent names keep vs agentlens-* prefix vs stop shipping the generic workers; (b) commit or revert the uncommitted hookInstall.ts AGENT_NAMES hunk; (c) downgrades; (d) dev loop when running from a git checkout; plus whether to ship the review-gate part of turn-protocol-and-review.md as a versioned rule. Review evidence: docs_dev/*measure-versioned-selfheal.md, docs_dev/*measure-selfheal-rev2.md.
 Additions from the card review: (5a) before stamping all 6 agents, live-check that an agent carrying a version: key still appears in the Agent tool listing and spawns; (3a) item 3 must name its 'Claude Code absent' criterion — no helper exists today (MEASURE rev2 step 4); proposed: skip when neither ~/.claude exists nor `claude` resolves on PATH. Related: the review-display mod (TRDD-QQ2XIIZ6) would ship as one more versioned component of this feature.
 Follow-up from the review of 87440d7e (pre-existing, not caused by it): installSkill copies onto the destination path, so a symlink or dangling symlink there makes the repair write THROUGH it (outside the skill dir) or fail on every launch, and a directory where a shipped file belongs fails with EISDIR every launch. Fix: unlink (or rename aside) the destination before copying. Separate increment.
+Review of a065129a: (i) the full suite is RED at HEAD — two cliDispatch tests fail on the old code too: an exit-2 refusal's stderr begins with the launch auto-setup's 'agentlenspro:' line instead of JSON (plan item 7), and `heartbeat-cost` creates ~/.agentlens and ~/.claude under HOME before failing fast (the launch first-run setup runs before a fail-fast verb). Both block TRDD-CS2W7E77's 'two consecutive full-suite runs' release gate. (ii) setupVerb flaked once under load (memory-check SKIP vs PASS), passed on two re-runs.
+Review of a065129a: when the Dockerfile is repaired (it still runs the retired standalone/server.js), set ENV AGENTLENS_NO_AUTOSETUP=1 — a container that mounts ~/.claude read-write would otherwise install skills/agents/hooks into the host's ~/.claude; claudeCodePresent cannot tell a mounted ~/.claude from a real install.
+Review of a065129a (minor, open): `server --flag start` and a bare `server` (if it means start) skip the check because argv is read positionally; a drift the repair can never fix repeats one repair attempt and one stderr line per launchd restart — a same-drift back-off would be cheap.
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-10-14
 
 2026-10-14 16:50: item 1 landed (ab5b1274), item 2 in dev, item 3 next. Items 4-6 need the owner's answers to decisions (a)-(d) — do NOT start them; the frontmatter's approved/mandate covers items 1-3 only. Evidence files under docs_dev/ are gitignored local scratch: the decisive facts are restated in this card's Plan.
+2026-10-14 17:35: items 1-3 landed (ab5b1274, 87440d7e + d73b20cc, a065129a); follow-up 3b (run the server-start check concurrently with the start, plus a cliMain wiring test) in dev. Items 4-6 still wait for the owner's decisions (a)-(d).
