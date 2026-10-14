@@ -4,7 +4,7 @@ title: agentlenspro detects and reinstalls missing or outdated hooks skills agen
 column: dev
 status: tasked
 created: 2026-10-14T16:43:38+0200
-updated: 2026-10-14T17:36:35+0200
+updated: 2026-10-14T17:39:35+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: feature
@@ -15,7 +15,7 @@ mandated-by: none
 approved: true
 approval-judge: main-agent@agentlenspro
 approval-datetime: 2026-10-14T16:43:38+0200
-implementation-commits: [ab5b1274, 87440d7e, d73b20cc, a065129a, 1069f1c8, 857cc34a]
+implementation-commits: [ab5b1274, 87440d7e, d73b20cc, a065129a, 1069f1c8, 857cc34a, 765c44f2]
 ---
 
 # agentlenspro detects and reinstalls missing or outdated hooks skills agents and rules in user scope
