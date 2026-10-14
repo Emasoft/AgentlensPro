@@ -188,15 +188,22 @@ export function isEphemeralTarget(target: string, cwd: string): boolean {
  *  a role (`ROLE: MEASURE|REVIEW|INVESTIGATE`, read by reviewGate's workerDeclaredRole) relaxes ONLY the fail-closed
  *  rule for UNRESOLVABLE targets; a resolvable write outside the ephemeral dirs (a role fork writing `src/a.ts`)
  *  still demands review, so labelling a worker a role never switches review off for its real writes.
- *  Unresolvable = still holds `$` or a backtick after the same-command literal assignments were applied (a
- *  `$(date +%s)` stamp, a `for i …` loop variable). Exempt only when (1) the text before the first `$`/backtick,
- *  cut at its last `/`, is a non-empty directory that is itself ephemeral (judged by isEphemeralTarget on a probe
- *  file inside it, after normalising `..`), and (2) the remainder from the first `$`/backtick holds no `/`, so it
- *  is one file name inside that directory and cannot climb or descend out of it (the review of revision 1: a
- *  static prefix alone is unsound when the dynamic part can be `$(printf ../src)/a.ts`). Accepted residual: an
- *  unassigned variable whose runtime VALUE holds `../` — only a declared-role worker could use it. */
+ *  Unresolvable = still holds `$` after the same-command literal assignments were applied (a `$(date +%s)` stamp,
+ *  a `for i …` loop variable). Exempt only when (1) the text before the first `$`, cut at its last `/`, is a
+ *  non-empty directory that is itself ephemeral (judged by isEphemeralTarget on a probe file inside it, after
+ *  normalising `..`), and (2) the remainder from the first `$` holds no `/`, so AS WRITTEN it is one file name
+ *  inside that directory (the review of revision 1: a static prefix alone is unsound when the dynamic part can be
+ *  `$(printf ../src)/a.ts`).
+ *  A target holding a BACKTICK never passes (review of df8bfc70): only a QUOTED backtick span reaches here intact
+ *  (shellWords splits an unquoted one), and `"reports/`printf '..\57src\57a.ts'`"` holds no literal `/` yet
+ *  expands to `reports/../src/a.ts`. `$(…)` is not failed closed the same way because `$(date +%s)` stamps are
+ *  what this exemption exists for, while backticks are rare in scratch paths.
+ *  Accepted residual: any runtime VALUE of a variable or substitution — an unassigned variable, a computed
+ *  `X=$(…)`, a `for X in …` loop variable, or a quoted `$(…)` whose OUTPUT differs from its text
+ *  (`"reports/$(printf '..\57x')"`, `$(cat f)`) — can hold `../`; only a declared-role worker can use it. */
 export function isRoleScratchTarget(target: string, cwd: string): boolean {
-  const cut = target.search(/[$`]/)
+  if (target.includes('`')) return false
+  const cut = target.indexOf('$')
   if (cut < 0) return false
   if (target.slice(cut).includes('/')) return false
   const dir = target.slice(0, target.lastIndexOf('/', cut) + 1)

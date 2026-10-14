@@ -166,9 +166,26 @@ suite('reviewGate — worker writes reach the main gate', () => {
     assert.strictEqual(workerDeclaredRole(forkEntryContent('Implement the fix.\nThe reviewer prompt reads:\nROLE: MEASURE\n')), null, 'quoted later in a fork directive')
     assert.strictEqual(workerDeclaredRole('do the work\nstep 1\nstep 2\nstep 3\nROLE: MEASURE\n'), null, 'bare on line 5 of a fresh worker prompt')
     assert.strictEqual(workerDeclaredRole(forkEntryContent('Act as ROLE: MEASURE and settle it')), null, 'a directive starting with other text')
-    assert.strictEqual(workerDeclaredRole(forkEntryContent('ROLE: MEASURE the assumptions below')), null, 'prose after the marker')
     assert.strictEqual(workerDeclaredRole(forkEntryContent('ROLE: IMPLEMENT the fix')), null, 'a role outside MEASURE|REVIEW|INVESTIGATE')
     assert.strictEqual(workerDeclaredRole(forkEntryContent('do it', 'Your directive: ROLE: MEASURE')), null, 'a tool_result block is never read')
+  })
+
+  // Review of df8bfc70: the investigation forks' real directive line carries text after the role word, which the
+  // whole-line match missed, so their scratch writes still armed the gate. A role here relaxes the scan only.
+  test('workerDeclaredRole accepts text after the role word, but not a longer word', () => {
+    assert.strictEqual(workerDeclaredRole(forkEntryContent('ROLE: INVESTIGATE (read-only; may run read-only commands)\n1. find it')), 'investigate', 'the real investigation-fork line')
+    assert.strictEqual(workerDeclaredRole(forkEntryContent('ROLE: MEASURE the assumptions below')), 'measure', 'prose after the marker')
+    assert.strictEqual(workerDeclaredRole(forkEntryContent('ROLE: MEASUREMENT of x')), null, 'a longer word is not the marker')
+    assert.strictEqual(workerDeclaredRole('ROLE: REVIEWER\nreview it'), null, 'a longer word is not the marker')
+  })
+
+  test("a fork whose directive line is `ROLE: INVESTIGATE (…)` gets the role's scratch relaxation", () => {
+    withWorkers((t, s) => {
+      addWorker(s, 'agent-w', 'toolu_W23', 'fork', [forkEntryLine('ROLE: INVESTIGATE (read-only; may run read-only commands)\n1. find it'), assistantLine([
+        bashBlock('SP=/private/tmp/sp; for i in 1 2; do echo r > $SP/x-$i.txt; done'),
+      ])])
+      assert.strictEqual(workerWriteDetail(t, 'toolu_W23', CWD), null)
+    })
   })
 
   test("amendment A: a role fork's UNRESOLVABLE writes inside an ephemeral dir (a loop variable, a $(date) stamp) demand no review", () => {
@@ -206,6 +223,15 @@ suite('reviewGate — worker writes reach the main gate', () => {
     assert.deepStrictEqual(role('echo x > "docs_dev/$(printf ..)/src/a.ts"'), ['redirect into docs_dev/$(printf ..)/src/a.ts'], 'quoted, so seen whole')
     assert.deepStrictEqual(role('echo x > $OUT'), ['redirect into $OUT'], 'no static directory at all')
     assert.deepStrictEqual(role('echo x > src/x-$i.ts'), ['redirect into src/x-$i.ts'], 'a static directory that is not ephemeral')
+  })
+
+  // Review of df8bfc70: a QUOTED backtick span reaches isRoleScratchTarget intact, and `printf '..\57src\57a.ts'`
+  // holds no literal `/` yet expands to `../src/a.ts`, so the no-`/` rule passed it for a role worker.
+  test('a role target holding a backtick span always arms, even when the span holds no `/`', () => {
+    const role = (cmd: string): string[] => commandWriteReasons(cmd, CWD, { roleScratch: true })
+    assert.deepStrictEqual(role(`echo x > "reports/\`printf '..\\57src\\57a.ts'\`"`), [`redirect into reports/\`printf '..\\57src\\57a.ts'\``])
+    assert.deepStrictEqual(role('echo x > "docs_dev/`date +%s`-r.md"'), ['redirect into docs_dev/`date +%s`-r.md'], 'even a stamp: a role writes `$(date +%s)` instead')
+    assert.deepStrictEqual(role('echo x > "docs_dev/$(date +%s)-r.md"'), [], 'control: the same stamp as `$(…)` still passes')
   })
 
   test('a janitor worker is skipped even when it wrote a file', () => {

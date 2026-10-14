@@ -147,12 +147,17 @@ function firstEntryText(content: unknown): string {
  *  (`userPromptText`, which returns '' for any entry holding a tool_result, then declaredRoleOwnTranscript)
  *  therefore never matched a fork, so the role exemption never ran and every role fork's report or scratch
  *  write armed the gate. The line read is the first one starting `Your directive: ` (fork shape), else the
- *  first non-blank line (a plain prompt); it must match whole, anchored, so a ROLE line anywhere else — quoted
- *  later in a directive, on line 5 of a fresh worker's prompt, or after other text — never counts. */
+ *  first non-blank line (a plain prompt); the marker must START that line, so a ROLE line anywhere else — quoted
+ *  later in a directive, on line 5 of a fresh worker's prompt, or after other text — never counts. Text AFTER
+ *  the role word is allowed: the investigation forks' real line is `ROLE: INVESTIGATE (read-only; …)`, which a
+ *  whole-line match missed (review of df8bfc70); `\b` still refuses a longer word (`ROLE: MEASUREMENT`). This is
+ *  deliberately looser than declaredRole's credit test (first line exactly `ROLE: MEASURE`/`ROLE: REVIEW`,
+ *  fixture K): a role here only relaxes the scan of unresolvable scratch targets (isRoleScratchTarget), it never
+ *  credits a gate role. */
 export function workerDeclaredRole(content: unknown): WorkerRole | null {
   const lines = firstEntryText(content).split('\n')
   const line = lines.find((l) => l.startsWith('Your directive: ')) ?? lines.find((l) => l.trim() !== '') ?? ''
-  const m = /^(?:Your directive: )?ROLE: (MEASURE|REVIEW|INVESTIGATE)\s*$/.exec(line)
+  const m = /^(?:Your directive: )?ROLE: (MEASURE|REVIEW|INVESTIGATE)\b/.exec(line)
   return m === null ? null : (m[1].toLowerCase() as WorkerRole)
 }
 
