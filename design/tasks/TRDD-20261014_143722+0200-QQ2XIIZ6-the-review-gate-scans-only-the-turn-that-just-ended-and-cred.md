@@ -4,7 +4,7 @@ title: The review gate scans only the turn that just ended and credits only non-
 column: dev
 status: tasked
 created: 2026-10-14T14:37:22+0200
-updated: 2026-10-14T14:40:57+0200
+updated: 2026-10-14T14:43:13+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -24,6 +24,7 @@ project-id: agentlenspro
 
 - 2026-10-14T14:37:22+0200 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-10-14 — authority is the owner's direct request in the session (quotes Q1-Q3), not a self-issued mandate.
+- 2026-10-14 — quotes Q1-Q4 (Q4 added after the first approval line).
 
 ## User directives (verbatim, 2026-10-14)
 
@@ -52,3 +53,8 @@ Pointer (2026-10-14): the out-of-scope item above now lives in TRDD-LR4SI79M (ha
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-10-14
 
 Implementation in progress in a worker worktree based on checkpoint 4a9e87e9 (branch fix/setup-agent-preflight in the main checkout). OPEN: the turn-start discriminator for heartbeat-fired turns (attachment entries) is not yet confirmed; heartbeat floor detection (isFloorPrompt reads message content) may be inert on attachments. Rule file edited and marked pending.
+Turn boundary MEASURED 2026-10-14 (supersedes the Scope line and the heartbeat acceptance wording): a turn starts at a type user entry whose turnPosition is an object and isSidechain is not true; heartbeat prompts are such user entries with turnOrigin scheduled, not attachments; Stop-hook feedback, tool results, /clear and /exit lack turnPosition. Implementation moved to a non-isolated worker in the main checkout (the isolated worktree guard refused fastedit text naming git).
+The acceptance box 'Stop-hook feedback does not start a new turn' protects owner Q4 — do not weaken it.
+Per-turn scope means a cap override loses the turn's review permanently; see TRDD-LR4SI79M.
+Open owner decision: remove the NO REVIEW POSSIBLE text escape? (no box until the owner answers)
+Rule-file box means the owner's user-scope rule turn-protocol-and-review.md.
