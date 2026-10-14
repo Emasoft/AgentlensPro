@@ -4,7 +4,7 @@ title: The review gate scans only the turn that just ended and credits only non-
 column: dev
 status: tasked
 created: 2026-10-14T14:37:22+0200
-updated: 2026-10-14T15:36:39+0200
+updated: 2026-10-14T16:16:02+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -68,3 +68,8 @@ Open: if SubagentStop systemMessage is not shown in the main terminal, emit the 
 RESUME 2026-10-14 15:40: branch fix/setup-agent-preflight holds 9105ecde (per-turn gate, fork-only credit, review display via SubagentStop systemMessage) and 12f00588 (unique markers [AGENTLENSPRO-REVIEW-REPORT] / [AGENTLENSPRO-MEASURE-REPORT], defined once in reviewLoop.ts, shared markerOpening). Both are live via the npm link (node esbuild.js); no collector restart was needed because hooks run the CLI.
 IN FLIGHT: markerOpening loosening (accept marker followed by any non-word char, fixing **[MARKER]** Task:, backticked marker + text, [MARKER]:) — uncommitted until its review; owner rule file ~/.claude/rules/turn-protocol-and-review.md being updated to the new markers and to say forks return as completion notifications (backup docs_dev/turn-protocol-and-review.md.bak-20261014b).
 OPEN: (1) owner has not confirmed whether the review appears in the main terminal — the hook's systemMessage was recorded as hook_system_message only in the fork's own transcript; fallback plan: emit it from the main Stop hook of the turn that receives the fork's task-notification. (2) owner decision pending: remove the NO REVIEW POSSIBLE text escape. (3) memory follow-ups: re-add IJC5's [^1]-[^3] lesson references; drop the 'uncommitted' note in atom 8ZOJ once the markers commit. (4) the branch must be merged to main (--no-ff) before the release work continues.
+
+## Follow-ups
+
+2026-10-14 16:15 — Owner, verbatim: "until now i've seen no review text on the terminal. you should change the text color of the system message in yellow to make it more easy to see. and ideally it should be collapsed by default and expanded when clicked upon." The SubagentStop systemMessage lands in the fork's own transcript, never the main terminal. Investigated fix: a mod at ~/.claude/skills/agentlenspro-review-display/ that reads the fork's answer at turn.complete and redraws its task-notification row in the warning (yellow) colour, compact by default, full on ctrl+o; per-row click only in fullscreen. Evidence: docs_dev/20261014_160036+0200-review-display-mod-api.md. Not yet built.
+2026-10-14 16:15 — Gate false positive: a MEASURE fork's report write into the gitignored docs_dev/ (target `docs_dev/$(date …)-….md`, written with fastedit create) demanded a REVIEW, although *_dev/ writes are exempt for the main agent. Each MEASURE thus triggers a fresh REVIEW demand (self-feeding). Fix: exempt worker writes by the static directory prefix of the target, the same rule as the main agent's writes. Found by the review fork on the measure report, 2026-10-14.
