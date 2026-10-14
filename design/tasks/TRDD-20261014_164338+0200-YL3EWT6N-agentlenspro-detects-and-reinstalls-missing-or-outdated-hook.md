@@ -4,7 +4,7 @@ title: agentlenspro detects and reinstalls missing or outdated hooks skills agen
 column: dev
 status: tasked
 created: 2026-10-14T16:43:38+0200
-updated: 2026-10-14T17:39:35+0200
+updated: 2026-10-14T17:40:39+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: feature
@@ -46,6 +46,7 @@ Correction to the review-of-a065129a line (i): that heartbeat-cost creates ~/.ag
 Open (? INFERRED, not read): whether launchd's daemon start --supervise re-runs the install check per alcore child crash or only per supervisor start. Residual from 1069f1c8 (? INFERRED, not measured): while the check runs synchronously under --supervise, the supervisor does not drain the child's piped stderr; a child writing more than ~64 KB of stderr in that window would block.
 Found while testing 1069f1c8 (pre-existing on a065129a): cliUsageContract fails its after-all isolation guard — `help <unknown>` falls through to a path that starts a test alcore on the suite temp root, which is left running. Another red-suite item for the CS2W7E77 gate.
 From the review of 1069f1c8, resolved by 3c: the check runs only after the verb RESOLVES, so every throw before that skips it — ensureServer refusals (kill-switch/port, no alcore binary, spawn failure, exited during startup, start did not answer) and runSupervise's NO_REVIVE brake `process.exit(75)` at entry; nothing was started on any of them, so skipping is correct. No process.exit on server start failure paths; they all throw. The default serverStartCheck is pinned by a test that fails with a no-op default.
+Related: TRDD-22BOPTBU (setup in an isolated HOME can run a global npm rm -g agentlens-dashboard), found while measuring 3c.
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-10-14
 
