@@ -1,5 +1,6 @@
 import * as assert from 'assert'
 import * as path from 'path'
+import * as fs from 'fs'
 import { spawn } from 'child_process'
 import { cliMain, MANAGEMENT_VERBS } from '../cli/main'
 import { UsageError } from '../cli/cliErrors'
@@ -99,6 +100,12 @@ suite('CLI usage contract', () => {
     // happen is usage text with a success code, so assert on that rather than on the mechanism —
     // pinning the throw would make this fail on a harmless refactor and teach its reader to
     // delete it.
+    // A help request of any shape must never run the launch install check. Before "help" joined
+    // AUTOSETUP_EXCLUDED_VERBS this call fell through to it, and on an empty HOME the first-run full setup
+    // installed ~/.claude and started a collector on the test data dir that nothing stopped.
+    const listing = (): string[][] => [process.env.HOME as string, process.env.DATA_DIR as string]
+      .map(dir => (fs.existsSync(dir) ? fs.readdirSync(dir).sort() : []))
+    const before = listing()
     let answeredSuccessfully = false
     try {
       const { code } = await captureLog(() => cliMain(['help', 'definitely-not-a-verb'], async () => undefined))
@@ -106,5 +113,7 @@ suite('CLI usage contract', () => {
     } catch { /* thrown = reported = correct */ }
     assert.strictEqual(answeredSuccessfully, false,
       'an unknown name must not be answered with usage and a success code')
+    assert.deepStrictEqual(listing(), before,
+      'a help request must create nothing under HOME or the data dir (no install, no collector)')
   })
 })

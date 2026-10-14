@@ -50,6 +50,10 @@ import { TelemetryConflict, TelemetryVerdictRow, formatTelemetryConflicts } from
 // itself (see runEnableCli), so it refuses while a foreign telemetry setup is still in place.
 export const AUTOSETUP_EXCLUDED_VERBS: ReadonlySet<string> = new Set([
   ...HOOK_PATH_VERBS, ...READ_ONLY_VERBS, "server", "daemon", "setup", "disable", "enable", "telemetry",
+  // help of ANY shape: the owner doctrine is "HELP IS TOTAL — describe, never do" (main.ts). `help <known verb>`
+  // returns before this check, but `help <unknown>` fell through to it, so a mistyped help request on a fresh
+  // machine ran the first-run full setup — installing skills, agents, hooks and telemetry AND starting a collector.
+  "help",
 ])
 
 export const LOCK_STALE_MS = 10 * 60 * 1000
