@@ -4,12 +4,13 @@ import * as http from 'http'
 import * as net from 'net'
 import * as os from 'os'
 import * as path from 'path'
-import { spawn, type ChildProcess } from 'child_process'
+import { execFileSync, spawn, type ChildProcess } from 'child_process'
 import type { AddressInfo } from 'net'
 import { freePort } from './helpers/freePort'
 import { assertNoSurvivingServer } from './helpers/noSurvivingServer'
 import { startTrickleServer } from './helpers/trickleServer'
-import { HTTP_TOTAL_DEADLINE_MS, httpJson, resolveCtx, runSetup, SetupOutcome, statsAreOurs } from '../cli/setup'
+import { HTTP_TOTAL_DEADLINE_MS, httpJson, ownServerPid, resolveCtx, runSetup, SetupOutcome, statsAreOurs } from '../cli/setup'
+import { liveLockPid } from '../cli/portSelect'
 import { NO_REVIVE_FILE } from '../dataDir'
 
 // ── setup adopts and signals only ITS OWN server (TRDD-V2HFI30L) ────────────────────────────────
@@ -107,19 +108,28 @@ function decoyAlive(d: ChildProcess): boolean {
 }
 
 /** Runs `fn` with the revive brake set in the fixture's own data dir. reviveBraked() resolves its data dir from
- *  the process env, so AGENTLENS_DATA_DIR points it at the fixture for the duration, then is restored. */
+ *  the process env, so AGENTLENS_DATA_DIR points it at the fixture for the duration, then is restored. UI_PORT and
+ *  MCP_PORT are cleared for the duration too (review of 973aead7): setup reads "pinned" from the process env, so a
+ *  developer shell exporting either would flip these tests onto the pinned path; a test that pins one sets it in
+ *  its own body.
+ *  A mocha TIMEOUT does not stop `fn`: its body keeps running in the background with the env still pointed at the
+ *  fixture while the next test starts. That can only contaminate a run that is already red. */
 async function withBrakedFixture(fn: (f: Fixture) => Promise<void>): Promise<void> {
   const f = makeFixture()
   fs.mkdirSync(f.dataDir, { recursive: true })
   fs.writeFileSync(path.join(f.dataDir, NO_REVIVE_FILE), 'setupOwnership: setup must not start a server\n')
-  const saved = process.env.AGENTLENS_DATA_DIR
+  const saved = { AGENTLENS_DATA_DIR: process.env.AGENTLENS_DATA_DIR, UI_PORT: process.env.UI_PORT, MCP_PORT: process.env.MCP_PORT }
   process.env.AGENTLENS_DATA_DIR = f.dataDir
+  delete process.env.UI_PORT
+  delete process.env.MCP_PORT
   try {
     await fn(f)
     assertNoSurvivingServer(f.dataDir)
   } finally {
-    if (saved === undefined) delete process.env.AGENTLENS_DATA_DIR
-    else process.env.AGENTLENS_DATA_DIR = saved
+    for (const [k, v] of Object.entries(saved)) {
+      if (v === undefined) delete process.env[k]
+      else process.env[k] = v
+    }
     fs.rmSync(f.home, { recursive: true, force: true })
   }
 }
@@ -213,5 +223,60 @@ suite('setup — adopts and signals only its own server (TRDD-V2HFI30L)', () => 
       fs.writeFileSync(path.join(real, 'server.pid'), String(process.pid))
       assert.strictEqual(statsAreOurs(ctx, { pid: process.pid }), true, 'the pidfile owner is ours even with no data dir reported')
     } finally { fs.rmSync(root, { recursive: true, force: true }) }
+  })
+
+  // Review of 973aead7: a legacy bare-numeric pidfile carries no start reference, so a recycled pid passes the
+  // liveness check and only the command-line signature stands between it and a SIGTERM. Hooks spawn
+  // `agentlenspro …` CLI processes constantly, so a signature arm matching `agentlenspro` let a recycled pid
+  // that now runs a CLI process through. A CLI process is never a server.
+  test('a legacy pidfile naming a live `agentlenspro` CLI process is not our server; `alcore serve --data-dir <ours>` is', async function () {
+    this.timeout(30_000)
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'al-own-sig-'))
+    const kids: ChildProcess[] = []
+    // A spawned child shows its parent's command line until it has exec'd; wait until ps shows the real one.
+    const commandOf = (pid: number): string => {
+      try { return execFileSync('ps', ['-p', String(pid), '-o', 'command='], { encoding: 'utf8' }).trim() } catch { return '' }
+    }
+    const waitForCommand = async (pid: number, needle: string): Promise<void> => {
+      const by = Date.now() + 10_000
+      while (!commandOf(pid).includes(needle)) {
+        if (Date.now() > by) assert.fail(`pid ${pid} never showed "${needle}" (ps: ${commandOf(pid)})`)
+        await new Promise(r => setTimeout(r, 50))
+      }
+    }
+    try {
+      const dataDir = path.join(root, 'data')
+      fs.mkdirSync(dataDir)
+      const ctx = resolveCtx({ home: root, dataDir, repoRoot: REPO_ROOT, uiPort: 1, mcpPort: 2, otlpPort: 3 })
+
+      // A CLI-shaped process: node running a script NAMED agentlenspro.
+      const cliScript = path.join(root, 'agentlenspro')
+      fs.writeFileSync(cliScript, 'setInterval(() => {}, 1000)\n')
+      const cli = spawn(process.execPath, [cliScript, 'statusline'], { stdio: 'ignore' })
+      kids.push(cli)
+      await waitForCommand(cli.pid as number, 'agentlenspro statusline')
+      fs.writeFileSync(path.join(dataDir, 'server.pid'), String(cli.pid))
+      assert.strictEqual(liveLockPid(dataDir), cli.pid, 'precondition: the legacy pidfile names a live owner')
+      assert.strictEqual(ownServerPid(ctx, cli.pid as number), null, 'a CLI process named by a legacy pidfile is not our server')
+
+      // Control: a server-shaped process, `<dir>/alcore serve --data-dir <ours>`, IS ours.
+      const alcore = path.join(root, 'bin', 'alcore')
+      fs.mkdirSync(path.dirname(alcore))
+      fs.writeFileSync(alcore, '#!/bin/sh\nwhile :; do sleep 1; done\n')
+      fs.chmodSync(alcore, 0o755)
+      const srv = spawn(alcore, ['serve', '--data-dir', dataDir], { stdio: 'ignore' })
+      kids.push(srv)
+      await waitForCommand(srv.pid as number, `alcore serve --data-dir ${dataDir}`)
+      fs.writeFileSync(path.join(dataDir, 'server.pid'), String(srv.pid))
+      assert.strictEqual(ownServerPid(ctx, srv.pid as number), srv.pid, 'control: our alcore server is ours')
+    } finally {
+      await Promise.all(kids.map(k => new Promise<void>(done => {
+        if (k.exitCode !== null || k.signalCode !== null) return done()
+        k.once('exit', () => done())
+        k.kill('SIGKILL')
+      })))
+      assertNoSurvivingServer(path.join(root, 'data'))
+      fs.rmSync(root, { recursive: true, force: true })
+    }
   })
 })

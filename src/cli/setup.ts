@@ -274,8 +274,10 @@ async function portHeldByOurs(ctx: Ctx, kind: 'otlp' | 'ui' | 'mcp', port: numbe
 }
 
 /** The server signature the pidfile check has always required (PR-15 review): `alcore` (TRDD-1B98LCVR box 4),
- *  plus a legacy TS-server pidfile and an `agentlenspro` CLI process. */
-const SERVER_CMD_RE = /standalone[/\\]server\.js|agentlenspro|[/\\]alcore(?:\s|$)/
+ *  plus a legacy TS-server pidfile. NOT `agentlenspro` (TRDD-V2HFI30L, review of 973aead7): a CLI process is never
+ *  a server, and hooks spawn `agentlenspro …` constantly, so with a legacy bare-numeric lock (no start reference)
+ *  a recycled pid now running a CLI process matched that arm, and setup would have SIGTERMed it. */
+const SERVER_CMD_RE = /standalone[/\\]server\.js|[/\\]alcore(?:\s|$)/
 
 /** The command line of `pid`, read from ONE `ps` snapshot (never a live grep), or null when no such process
  *  runs or ps failed. */
@@ -302,7 +304,7 @@ function alcoreServeDataDir(cmd: string): string | null {
  *  recycled pid), or (b) a ps snapshot shows it running `alcore serve --data-dir <ctx.dataDir>`.
  *  A pid that a stats answer reports about itself is never enough: whatever answers the UI port can name any
  *  pid, and the old code sent SIGTERM to exactly that number. */
-function ownServerPid(ctx: Ctx, pid: number): number | null {
+export function ownServerPid(ctx: Ctx, pid: number): number | null {
   if (!Number.isInteger(pid) || pid <= 0) return null
   const cmd = processCommand(pid)
   if (cmd === null) return null
