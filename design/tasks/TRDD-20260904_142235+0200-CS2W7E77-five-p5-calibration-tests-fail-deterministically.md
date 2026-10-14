@@ -3,7 +3,7 @@ trdd-id: CS2W7E77
 title: The five P5 window auto-calibration tests fail deterministically on a burn-config ENOENT
 column: todo
 created: 2026-09-04T14:22:35+0200
-updated: 2026-10-14T23:44:49+0200
+updated: 2026-10-15T00:31:10+0200
 current-owner: main-session
 task-type: bugfix
 project-id: agentlenspro
@@ -167,3 +167,5 @@ TESTED-STATE SNAPSHOT (the review of C2: CI publishes from the committed tree, s
 (2) The untracked agents: agents/cheap-worker.md sha256 342771634460d4329e2632c4acd41f016e5b7f78c560694c90d9ccb4bd789aa3, agents/fast-worker.md sha256 65e8a919280ff63da8ab800ef0e6b7f1bf25b94e99eff0c30d75f50dc784b1c8, agents/smart-worker.md sha256 7965c97dceb7fed18817652263b3c2a7815884dc7088cbeeab70e1fef899319b.
 (3) agents/agentlens-tldr-worker.md and agents/micro-worker.md each gain the line `skills: [ultimate-bug-scanner]`; git diff sha256 4bedd1d1028820927e366ab9289b090fcf4e1b357fb1383fb290a496096cd1f4.
 If the owner commits all of these unchanged, the pair counts. Any other outcome means one more pair on the committed tree. Keep this card open, not complete, until then.
+CORRECTION 2026-10-15 (found by the MEASURE of the N60JUWU3 proposal, then checked by the main agent with ls and git log): the TS tests pick the alcore binary as AGENTLENS_ALCORE, then rust-core/target/release/alcore, then bin-native (src/test/helpers/freePort.ts:150-175). None of today's gate runs (1, 2, A1, B1, B2, C1, C2) set AGENTLENS_ALCORE, and rust-core/target/release/alcore was built 2026-10-08 19:50. Eight rust-core commits landed after it (34668285, fb09facf, e6a26473, cc49a819, d74c74dd, cbe06222, 5577ce98, 7c40d383, through 2026-10-10). So the C1/C2 pair tested HEAD's TypeScript against Rust from 2026-10-08. It does NOT cover those eight Rust commits.
+Gate rule added: before each counted run, build alcore from HEAD (`cargo build --release --manifest-path rust-core/Cargo.toml -p agentlens-core --bin alcore`), record the binary's mtime and the HEAD in the run line, and confirm the binary is newer than the last rust-core commit. This rewrites only rust-core/target/; the live collector runs from bin-native and is not touched. CI already builds fresh (ci.yml:229) and passes the binary via AGENTLENS_ALCORE.
