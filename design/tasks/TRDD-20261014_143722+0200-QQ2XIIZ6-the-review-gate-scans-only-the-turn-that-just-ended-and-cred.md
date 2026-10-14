@@ -4,7 +4,7 @@ title: The review gate scans only the turn that just ended and credits only non-
 column: dev
 status: tasked
 created: 2026-10-14T14:37:22+0200
-updated: 2026-10-14T15:10:08+0200
+updated: 2026-10-14T15:36:39+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -62,3 +62,9 @@ Rule-file box means the owner's user-scope rule turn-protocol-and-review.md.
 Supersedes the first STATE line: implementation runs in the MAIN checkout (non-isolated worker), and the heartbeat question is settled below.
 Orchestrator re-measured 2026-10-14 on the session transcript: all 116 heartbeat prompts are type user entries with an object turnPosition, turnOrigin scheduled and isMeta true; 6 attachment entries also contain the heartbeat text and 4 of them sit mid-turn, so attachments must NOT start a turn and isMeta must NOT exclude one. Turn start = type user && turnPosition object && isSidechain not true.
 An abandoned isolated worktree (.claude/worktrees/agent-aacd564da94c0b2ba) holds partial uncommitted reviewGate.ts edits; superseded, not to be merged; keep until this card closes.
+Committed 9105ecde and live via the npm link (built before review; two review rounds found no blocker).
+Commit-message corrections: the review display is UNCONFIRMED in the terminal — the hook's systemMessage was recorded as hook_system_message in the fork's own transcript and not in the parent's, and the owner has not confirmed seeing it; the 338-test/tsc/eslint figures were worker-reported; mid-turn typed messages were not observed to start a turn (one message, 293 turn starts, one session).
+Open: if SubagentStop systemMessage is not shown in the main terminal, emit the review from the main Stop hook of the turn that receives the fork's task-notification.
+RESUME 2026-10-14 15:40: branch fix/setup-agent-preflight holds 9105ecde (per-turn gate, fork-only credit, review display via SubagentStop systemMessage) and 12f00588 (unique markers [AGENTLENSPRO-REVIEW-REPORT] / [AGENTLENSPRO-MEASURE-REPORT], defined once in reviewLoop.ts, shared markerOpening). Both are live via the npm link (node esbuild.js); no collector restart was needed because hooks run the CLI.
+IN FLIGHT: markerOpening loosening (accept marker followed by any non-word char, fixing **[MARKER]** Task:, backticked marker + text, [MARKER]:) — uncommitted until its review; owner rule file ~/.claude/rules/turn-protocol-and-review.md being updated to the new markers and to say forks return as completion notifications (backup docs_dev/turn-protocol-and-review.md.bak-20261014b).
+OPEN: (1) owner has not confirmed whether the review appears in the main terminal — the hook's systemMessage was recorded as hook_system_message only in the fork's own transcript; fallback plan: emit it from the main Stop hook of the turn that receives the fork's task-notification. (2) owner decision pending: remove the NO REVIEW POSSIBLE text escape. (3) memory follow-ups: re-add IJC5's [^1]-[^3] lesson references; drop the 'uncommitted' note in atom 8ZOJ once the markers commit. (4) the branch must be merged to main (--no-ff) before the release work continues.
