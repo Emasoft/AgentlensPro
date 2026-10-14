@@ -3,7 +3,7 @@ trdd-id: HSPUF5XH
 title: Bump and publish agentlenspro only after every open card is terminal and every known issue is fixed
 column: blocked
 created: 2026-09-03T10:48:30+0200
-updated: 2026-10-14T15:38:20+0200
+updated: 2026-10-14T15:39:28+0200
 current-owner: main-session
 task-type: infra
 min-approval-requirement: user
@@ -195,3 +195,8 @@ to `publish.yml` — a present token silently masks OIDC.
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-10-14
 
 2026-10-14: still blocked by 13 cards (trddgrep why HSPUF5XH); see TRDD-AVUGZV1K STATE for the release work not yet done (setup preflight, Docker, dist guard, CS2W7E77 full-suite runs).
+2026-10-14 release-goal state (owner goal: fix all issues, complete all TRDDs, publish). Work happens on branch fix/setup-agent-preflight; the review-gate work there (TRDD-QQ2XIIZ6, TRDD-LR4SI79M) is a detour the owner ordered mid-goal.
+NOT DONE: setup stepSkill agent preflight (dry-run returns before agent drift is checked; skills install before a missing agent source is detected) — only checkpoints cf6af337 and 4a9e87e9 exist, no fix; Dockerfile still copies and runs the retired standalone/server.js (lines 39, 65) and lacks a target-platform alcore build, media/index.html and sidebar.js; scripts/check-dist-contents.js checks only forbidden paths, not declared skills/agents or Git tracking.
+TRDD-CS2W7E77: focused serverCalibration run passed 5/5 on 2026-10-14 with alcore built at rust-core/target/release; the first full unit-suite run in a fresh worktree had 2,979 passing, 45 pending, 73 failing (exit 73), with 45 Cannot find module lines naming standalone/cli — run node esbuild.js before the suite; two consecutive full-suite runs are still required.
+Environment: the collector was RUNNING but not answering on port 3000 after a 'revive backoff: 6 quick crashes' warning (not restarted); more than a dozen agent worktrees under .claude/worktrees likely cause the 5 s 'git worktree list' timeouts that crash janitor detectors; the main checkout carries unrelated dirty files (src/cli/hookInstall.ts AGENT_NAMES, agents/*.md, untracked agents/cheap-worker.md fast-worker.md smart-worker.md, a staged empty design/requirements/PRRD.md) that must be handled before merging to main.
+These four lines duplicate the uncommitted STATE lines on TRDD-AVUGZV1K so they are restorable from git; this card is authoritative for them.
