@@ -102,6 +102,26 @@ function stepOf(o: SetupOutcome, name: string) {
   return s
 }
 
+/** memory-check may SKIP with exactly "no composition line in server.log yet". WHY: since 0a9efdf7
+ *  (TRDD-RVKQDLRD) the boot composition pass runs at background QoS after the other boot chores, so on a
+ *  loaded machine its first line can land after setup's last step reads server.log, and the step maps that
+ *  to SKIP by design. Every other SKIP, and every other memory-check outcome, still fails. */
+function assertStepVerified(s: { step: string; verify: string; detail?: string }): void {
+  if (s.step === 'memory-check' && s.verify === 'SKIP' && s.detail === 'no composition line in server.log yet') return
+  assert.strictEqual(s.verify, 'PASS', `${s.step}: ${s.detail}`)
+}
+
+/** Polls server.log every 2 s for up to 120 s for the boot composition line. The SKIP above is honest only if
+ *  that pass does write its line later: a composition pass that never writes one must fail here, not pass. */
+async function awaitCompositionLine(logFile: string): Promise<void> {
+  const deadline = Date.now() + 120_000
+  for (;;) {
+    if (fs.existsSync(logFile) && fs.readFileSync(logFile, 'utf8').includes('alcore: composition:')) return
+    if (Date.now() >= deadline) assert.fail(`no 'alcore: composition:' line in ${logFile} within 120 s: the composition pass never wrote one (0a9efdf7, TRDD-RVKQDLRD)`)
+    await new Promise(resolve => setTimeout(resolve, 2_000))
+  }
+}
+
 /** Structural snapshot of a tree: sorted relative paths + content sha256 (mtime-free). */
 function treeSnapshot(root: string): string {
   const entries: string[] = []
@@ -156,11 +176,13 @@ suite('setup — virgin HOME full converge (real server on ephemeral ports)', ()
     f?.cleanup()
   })
 
-  test('first run converges a virgin HOME: every step verifies PASS, exit 0', () => {
+  test('first run converges a virgin HOME: every step verifies PASS, exit 0', async function () {
+    this.timeout(150_000)
     // The full install path — data, hooks, skill, otel, server, self-test — green in one run.
     assert.strictEqual(first.exitCode, 0, JSON.stringify(first.steps, null, 2))
-    for (const s of first.steps) assert.strictEqual(s.verify, 'PASS', `${s.step}: ${s.detail}`)
+    for (const s of first.steps) assertStepVerified(s)
     assert.ok(first.actions >= 4, `expected >=4 acting steps on a virgin HOME, got ${first.actions}`)
+    if (stepOf(first, 'memory-check').detail === 'no composition line in server.log yet') await awaitCompositionLine(path.join(f.dataDir, 'server.log'))
   })
 
   test('hooks land exactly once per lifecycle event as v2 command strings (independent re-parse)', () => {
@@ -201,7 +223,7 @@ suite('setup — virgin HOME full converge (real server on ephemeral ports)', ()
     // "already current" and act on nothing, while VERIFY still re-proves the state.
     assert.strictEqual(second.exitCode, 0, JSON.stringify(second.steps, null, 2))
     assert.strictEqual(second.actions, 0, JSON.stringify(second.steps, null, 2))
-    for (const s of second.steps) assert.strictEqual(s.verify, 'PASS', `${s.step}: ${s.detail}`)
+    for (const s of second.steps) assertStepVerified(s)
     assert.strictEqual(stepOf(second, 'server').action, 'none', 'the healthy server must not be restarted')
   })
 })
