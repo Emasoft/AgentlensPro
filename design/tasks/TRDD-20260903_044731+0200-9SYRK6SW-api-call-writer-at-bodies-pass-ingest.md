@@ -3,7 +3,7 @@ trdd-id: 9SYRK6SW
 title: api_call staging table writer at the bodies-pass ingest site
 column: deploy
 created: 2026-09-03T04:47:31+0200
-updated: 2026-10-15T00:20:25+0200
+updated: 2026-10-15T00:24:00+0200
 current-owner: main-session
 task-type: feature
 priority: high
@@ -421,3 +421,9 @@ Net effect: verdict is APPROVE. The STATE block no longer asserts a false presen
 - Read only, no test can assert it: the body is parsed once. Known and recorded by the card: the TypeScript twin has no api_calls writer.
 - Links: npt [], eht [], blocked-by []; parent TRDD-CAJ5RCP9 (todo). Cards waiting on this one: GVA8TTJF, IRNHEN4Z and QSFYIHUO (planned; they want real rows from a deployed collector) and the release gate HSPUF5XH. Moving this card to deploy does not release them.
 DEPLOY CHECK 2026-10-05 (read-only; reviewer report docs_dev/20261005_033327+0200-deploy-cards-check.md, re-measured by the main agent): the writer's code is in the binary the live collector runs. `grep -ac 'CREATE TABLE api_call'` gives 1 on bin-native/darwin-arm64/alcore (built Oct 3 13:04) and 1 on the 2026-09-24 backup; the running process pid 13922 started Oct 3 17:22. So nothing here waits for a build or a deploy, and `deploy` is not a true description of this card. By this card's own text raw body capture is off on this machine, so the writer is dormant; that was not re-verified, because the data directory was not read. What remains is the live restart check with capture on, which is the owner's (a restart of the live collector). This card has no `implementation-commits`; the reviewer found c92a90c3 (2026-09-03) as the commit that added api_call.rs, not verified further. The column was left unchanged in this pass.
+
+## Verification step 3 (2026-10-15)
+
+PASS on an ISOLATED instance: its own data dir and HOME, `env -i`, free ports, --no-log-scan; the live collector was untouched. One api_calls part (6 rows: 3 request, 3 response) written by the first process survived a graceful SIGTERM stop and a fresh start byte-identical (same name, size, sha256) and fully readable (unreadable=0). The binary used (bin-native/darwin-arm64/alcore, 2.34.0) wrote the api_calls parts itself; bin-native has no recorded commit link. Report: reports_dev/9syrk-restart-survival.md (gitignored).
+Limits: one part only; graceful stop only (no hard kill mid-flush); the restarted server's own reads of the api_call relation were not queried (DuckDB read the parquet directly, per this card's recipe).
+Column stays `deploy`: step 3 was framed as a live-collector check, and on this machine raw body capture is OFF, so the live collector has never exercised the writer. OWNER QUESTION: accept the isolated verification as `live`, or turn capture on and re-run step 3 on the live collector?
