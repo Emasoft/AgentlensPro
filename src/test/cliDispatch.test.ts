@@ -297,7 +297,10 @@ suite('agentlenspro — diagnostics dispatch parity (absorbed agentlens-cli.js s
   test('`heartbeat-cost` fails fast (non-zero) when the server is unreachable — no silent fallback', async () => {
     const home = mkHome()
     try {
-      const r = await runCli(['heartbeat-cost'], isolatedEnv(home, { AGENTLENS_MCP_URL: 'http://127.0.0.1:1/mcp' }))
+      // The invariant is the VERB's own fail-fast path: it writes nothing. The launch install check is switched off
+      // here because, since b867797a (TRDD-AGZ0XZKW, owner-ordered), the first ordinary launch on an EMPTY HOME
+      // installs skills, agents, hooks and telemetry — that behaviour is tested in autoSetup.test.ts, not here.
+      const r = await runCli(['heartbeat-cost'], isolatedEnv(home, { AGENTLENS_MCP_URL: 'http://127.0.0.1:1/mcp', AGENTLENS_NO_AUTOSETUP: '1' }))
       assert.notStrictEqual(r.code, 0)
       assert.ok(r.stderr.includes('FAIL'), r.stderr)
       assert.deepStrictEqual(fs.readdirSync(home), [], 'a failed call must not create anything under HOME')
