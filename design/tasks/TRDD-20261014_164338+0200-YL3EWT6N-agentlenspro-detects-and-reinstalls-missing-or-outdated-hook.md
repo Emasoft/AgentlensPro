@@ -4,7 +4,7 @@ title: agentlenspro detects and reinstalls missing or outdated hooks skills agen
 column: dev
 status: tasked
 created: 2026-10-14T16:43:38+0200
-updated: 2026-10-14T17:29:56+0200
+updated: 2026-10-14T17:36:35+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: feature
@@ -15,7 +15,7 @@ mandated-by: none
 approved: true
 approval-judge: main-agent@agentlenspro
 approval-datetime: 2026-10-14T16:43:38+0200
-implementation-commits: [ab5b1274, 87440d7e, d73b20cc, a065129a, 1069f1c8]
+implementation-commits: [ab5b1274, 87440d7e, d73b20cc, a065129a, 1069f1c8, 857cc34a]
 ---
 
 # agentlenspro detects and reinstalls missing or outdated hooks skills agents and rules in user scope
@@ -45,9 +45,11 @@ Review of a065129a (minor, open): `server --flag start` and a bare `server` (if 
 Correction to the review-of-a065129a line (i): that heartbeat-cost creates ~/.agentlens and ~/.claude BECAUSE the launch first-run setup runs before a fail-fast verb is INFERRED (the worker observed only that both were created).
 Open (? INFERRED, not read): whether launchd's daemon start --supervise re-runs the install check per alcore child crash or only per supervisor start. Residual from 1069f1c8 (? INFERRED, not measured): while the check runs synchronously under --supervise, the supervisor does not drain the child's piped stderr; a child writing more than ~64 KB of stderr in that window would block.
 Found while testing 1069f1c8 (pre-existing on a065129a): cliUsageContract fails its after-all isolation guard — `help <unknown>` falls through to a path that starts a test alcore on the suite temp root, which is left running. Another red-suite item for the CS2W7E77 gate.
+From the review of 1069f1c8, resolved by 3c: the check runs only after the verb RESOLVES, so every throw before that skips it — ensureServer refusals (kill-switch/port, no alcore binary, spawn failure, exited during startup, start did not answer) and runSupervise's NO_REVIVE brake `process.exit(75)` at entry; nothing was started on any of them, so skipping is correct. No process.exit on server start failure paths; they all throw. The default serverStartCheck is pinned by a test that fails with a no-op default.
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-10-14
 
 2026-10-14 16:50: item 1 landed (ab5b1274), item 2 in dev, item 3 next. Items 4-6 need the owner's answers to decisions (a)-(d) — do NOT start them; the frontmatter's approved/mandate covers items 1-3 only. Evidence files under docs_dev/ are gitignored local scratch: the decisive facts are restated in this card's Plan.
 2026-10-14 17:35: items 1-3 landed (ab5b1274, 87440d7e + d73b20cc, a065129a); follow-up 3b (run the server-start check concurrently with the start, plus a cliMain wiring test) in dev. Items 4-6 still wait for the owner's decisions (a)-(d).
 2026-10-14 17:29: items 1-3 and follow-up 3b landed (ab5b1274, 87440d7e + d73b20cc, a065129a, 1069f1c8); 3b runs the server-start check AFTER the verb (concurrent would still run its synchronous prefix first). Correction: the previous STATE line is stamped 17:35 but was written at 17:21. Items 4-6 still wait for the owner's decisions (a)-(d). Next: plan item 7 and the red-suite findings.
+2026-10-14 17:36: items 1-3, 3b and 3c landed. MEASURED (3c, isolated HOME/DATA_DIR on free ports): `daemon start --supervise` restores a deleted skill 2 s after the start while the supervisor keeps running, so the check runs under launchd. Next: the red-suite findings (two cliDispatch failures, cliUsageContract stray alcore) and plan item 7. Items 4-6 still wait for the owner's decisions (a)-(d).
