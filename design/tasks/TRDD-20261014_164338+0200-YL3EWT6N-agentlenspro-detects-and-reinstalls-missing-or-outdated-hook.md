@@ -4,7 +4,7 @@ title: agentlenspro detects and reinstalls missing or outdated hooks skills agen
 column: dev
 status: tasked
 created: 2026-10-14T16:43:38+0200
-updated: 2026-10-14T17:40:39+0200
+updated: 2026-10-14T18:10:49+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: feature
@@ -15,7 +15,7 @@ mandated-by: none
 approved: true
 approval-judge: main-agent@agentlenspro
 approval-datetime: 2026-10-14T16:43:38+0200
-implementation-commits: [ab5b1274, 87440d7e, d73b20cc, a065129a, 1069f1c8, 857cc34a, 765c44f2]
+implementation-commits: [ab5b1274, 87440d7e, d73b20cc, a065129a, 1069f1c8, 857cc34a, 765c44f2, 403b1137, ae4979be, 6a31062d]
 ---
 
 # agentlenspro detects and reinstalls missing or outdated hooks skills agents and rules in user scope
@@ -47,6 +47,8 @@ Open (? INFERRED, not read): whether launchd's daemon start --supervise re-runs 
 Found while testing 1069f1c8 (pre-existing on a065129a): cliUsageContract fails its after-all isolation guard — `help <unknown>` falls through to a path that starts a test alcore on the suite temp root, which is left running. Another red-suite item for the CS2W7E77 gate.
 From the review of 1069f1c8, resolved by 3c: the check runs only after the verb RESOLVES, so every throw before that skips it — ensureServer refusals (kill-switch/port, no alcore binary, spawn failure, exited during startup, start did not answer) and runSupervise's NO_REVIVE brake `process.exit(75)` at entry; nothing was started on any of them, so skipping is correct. No process.exit on server start failure paths; they all throw. The default serverStartCheck is pinned by a test that fails with a no-op default.
 Related: TRDD-22BOPTBU (setup in an isolated HOME can run a global npm rm -g agentlens-dashboard), found while measuring 3c.
+Owner question (2026-10-14, measured): `batch` with a refusing member exits 2 with the successful results on stdout and several JSON objects back to back on stderr — it already breaks the single-call exit-2 contract (stdout empty, one JSON object), which SKILL.md documents for single calls only. Item 7 left batch unchanged (no regression). Should batch follow the contract (e.g. one top-level object with per-member results and errors), or is the contract single-call only by design?
+Correction to 6a31062d's commit message: launch notices print AFTER the output only for a successful single tool call; on a parse/usage error thrown before the call (exit 64) or a thrown FAIL, cliMain's finally prints them BEFORE the error text that standalone/cli.ts prints.
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-10-14
 
@@ -54,3 +56,4 @@ Related: TRDD-22BOPTBU (setup in an isolated HOME can run a global npm rm -g age
 2026-10-14 17:35: items 1-3 landed (ab5b1274, 87440d7e + d73b20cc, a065129a); follow-up 3b (run the server-start check concurrently with the start, plus a cliMain wiring test) in dev. Items 4-6 still wait for the owner's decisions (a)-(d).
 2026-10-14 17:29: items 1-3 and follow-up 3b landed (ab5b1274, 87440d7e + d73b20cc, a065129a, 1069f1c8); 3b runs the server-start check AFTER the verb (concurrent would still run its synchronous prefix first). Correction: the previous STATE line is stamped 17:35 but was written at 17:21. Items 4-6 still wait for the owner's decisions (a)-(d). Next: plan item 7 and the red-suite findings.
 2026-10-14 17:36: items 1-3, 3b and 3c landed. MEASURED (3c, isolated HOME/DATA_DIR on free ports): `daemon start --supervise` restores a deleted skill 2 s after the start while the supervisor keeps running, so the check runs under launchd. Next: the red-suite findings (two cliDispatch failures, cliUsageContract stray alcore) and plan item 7. Items 4-6 still wait for the owner's decisions (a)-(d).
+2026-10-14 18:10: plan item 7 landed (6a31062d): a refused single tool call leaves one JSON object on stderr, launch notices folded in as `notices`. The three pre-existing red-suite failures are fixed: A by 6a31062d, B by ae4979be (stale test), C by 403b1137 (help never runs the launch check). Review follow-ups of those three commits in dev. Items 4-6 still wait for the owner's decisions (a)-(d); one more owner question below (batch).
