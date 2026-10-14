@@ -1459,6 +1459,23 @@ suite('reviewGate — scanTranscriptLines: a delegate-gate-denied edit does not 
     assert.strictEqual(none, null)
   })
 
+
+  test('a marker followed by a colon or by decorated text still displays; one followed by a letter, digit, underscore or hyphen does not', async () => {
+    const opening = [
+      `**${REVIEW_HEADING}** Task: review the change\nFinding 1: the reader drops the last line.`,
+      `\`${REVIEW_HEADING}\` the change\nFinding 1: the reader drops the last line.`,
+      `${REVIEW_HEADING}: review of the change\nFinding 1: the reader drops the last line.`,
+    ]
+    for (const report of opening) {
+      const out = await withFileAsync([userStringLine('review the change')], (file) => finished('fork', report, file))
+      assert.deepStrictEqual(JSON.parse(out as string), { systemMessage: report }, report)
+    }
+    for (const glued of [`${REVIEW_HEADING}X`, `${REVIEW_HEADING}7`, `${REVIEW_HEADING}_x`, `${REVIEW_HEADING}-x`]) {
+      const out = await withFileAsync([userStringLine('review it')], (file) => finished('general-purpose', glued, file))
+      assert.strictEqual(out, null, glued)
+    }
+  })
+
   })
 
 })

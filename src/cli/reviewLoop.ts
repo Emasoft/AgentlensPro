@@ -25,15 +25,16 @@ export type Role = 'measure' | 'review'
 export const MEASURE_HEADING = '[AGENTLENSPRO-MEASURE-REPORT]'
 export const REVIEW_HEADING = '[AGENTLENSPRO-REVIEW-REPORT]'
 
-/** The report marker a line OPENS with, or null. Decoration comes off first: leading and trailing `#`, `*`,
- *  backticks and whitespace. The line opens with a marker when it IS the marker, or starts with it followed by
- *  whitespace (`[MARKER] notes`). WHY one helper: the display (reviewGate.ts) and this loop's result classifier
- *  must agree on what a report heading is, or a message could display yet not classify, or the reverse. WHY the
- *  start of the line only: a marker quoted mid-line or on a later line is a mention, not the report's heading. */
+/** The report marker a line OPENS with, or null. Leading decoration comes off first: `#`, `*`, backticks and
+ *  whitespace. The line opens with a marker when it starts with the marker and the next character is absent or is
+ *  not a letter, digit, underscore or hyphen: `[MARKER]`, `**[MARKER]** Task`, `` `[MARKER]` `` and `[MARKER]:` all
+ *  open, while `[MARKER]X` does not (it is one word). WHY one helper: the display (reviewGate.ts) and this loop's
+ *  result classifier must agree on what a report heading is. WHY the start of the line only: a marker quoted
+ *  mid-line or on a later line is a mention, not the report's heading. */
 export function markerOpening(line: string): string | null {
-  const core = line.replace(/^[#*`\s]+/, '').replace(/[#*`\s]+$/, '')
+  const core = line.replace(/^[#*`\s]+/, '')
   for (const marker of [MEASURE_HEADING, REVIEW_HEADING]) {
-    if (core === marker || (core.startsWith(marker) && /^\s/.test(core.slice(marker.length)))) return marker
+    if (core.startsWith(marker) && !/^[A-Za-z0-9_-]/.test(core.slice(marker.length))) return marker
   }
   return null
 }
@@ -372,8 +373,9 @@ function roleFromPromptFirstLine(prompt: string): Role | null {
   return null
 }
 /** Heading of a RESULT block: some line OPENS with a report marker (`markerOpening`, the same test the display
- *  uses). Both or neither => null — one agent claiming both jobs is the shape this loop replaces. */
-function resultRole(text: string): Role | null {
+ *  uses). Both or neither => null — one agent claiming both jobs is the shape this loop replaces. Exported so the
+ *  both-markers rule is tested directly. */
+export function resultRole(text: string): Role | null {
   const openers = new Set(text.split('\n').map(markerOpening))
   const m = openers.has(MEASURE_HEADING)
   const r = openers.has(REVIEW_HEADING)
