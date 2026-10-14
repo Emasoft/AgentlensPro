@@ -198,9 +198,10 @@ const SERVER_START_SUBVERBS: ReadonlySet<string> = new Set(["start", "restart"])
 /** The install heals itself when the SERVER is started too (owner 2026-10-14, TRDD-YL3EWT6N: "automatically install
  *  or reinstall them ... when the cli is executed or the server is started"). `server`/`daemon` stay excluded from
  *  the per-launch check (maybeAutoSetup) because they are also reached from hooks; this runs for
- *  `server|daemon start|restart` only, before the verb. Same gates as a launch — AGENTLENS_NO_AUTOSETUP, an armed
- *  kill-switch, and here also "Claude Code absent". Never throws and never blocks or fails the start: every outcome
- *  is at most one stderr line, and the server starts regardless. */
+ *  `server|daemon start|restart` only, and main.ts runs it AFTER the verb resolves (once the server answers, or once
+ *  the `--supervise` child is spawned), so it never delays the start. Same gates as a launch — AGENTLENS_NO_AUTOSETUP,
+ *  an armed kill-switch, and here also "Claude Code absent". Never throws and never blocks, delays or fails the start:
+ *  every outcome is at most one stderr line. */
 export async function autoSetupOnServerStart(argv: string[], deps: AutoSetupDeps = {}): Promise<void> {
   const [cmd, sub] = argv
   if ((cmd !== "server" && cmd !== "daemon") || !SERVER_START_SUBVERBS.has(sub ?? "")) return
@@ -211,7 +212,7 @@ export async function autoSetupOnServerStart(argv: string[], deps: AutoSetupDeps
     if (!claudeCodePresent(ctx)) return
     await ensureInstalled("server", `${cmd} ${sub}`, { ...deps, ctx })
   } catch (e) {
-    say(`agentlenspro: install check failed (${(e as Error).message.slice(0, 160)}) — the server starts anyway; run \`agentlenspro setup\``)
+    say(`agentlenspro: install check failed (${(e as Error).message.slice(0, 160)}) — the server start is not affected; run \`agentlenspro setup\``)
   }
 }
 

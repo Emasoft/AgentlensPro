@@ -1055,6 +1055,25 @@ suite('server start — the install heals itself when the server is started (TRD
     await autoSetupOnServerStart(['server', 'start'], { ctx: f.ctx, repair: async () => { throw new Error('boom') }, stderr: l.say })
     assert.ok(l.out.some(x => x.includes('boom')), l.out.join('|'))
   })
+
+  // The wiring itself: the tests above call autoSetupOnServerStart directly, so deleting its call from main.ts failed
+  // nothing. This drives cliMain with the verb and the check injected (no collector is ever spawned) and pins both
+  // that the check runs and that it runs AFTER the verb — run first, the check was collector downtime.
+  test('cliMain runs the install check AFTER the verb for server/daemon start|restart (deleting either call fails this)', async () => {
+    const f = s.f()
+    for (const argv of [['server', 'start'], ['server', 'restart'], ['daemon', 'start'], ['daemon', 'restart']]) {
+      const order: string[] = []
+      const verb = async (a: string[]): Promise<void> => { order.push(`verb ${a.join(' ')}`) }
+      const code = await cliMain(argv, async () => undefined, {
+        serverCommand: verb,
+        daemonCommand: verb,
+        serverStartCheck: async (a: string[]) => { order.push(`check ${a.join(' ')}`) },
+      })
+      assert.strictEqual(code, 0, argv.join(' '))
+      assert.deepStrictEqual(order, [`verb ${argv.slice(1).join(' ')}`, `check ${argv.join(' ')}`], argv.join(' '))
+    }
+    assert.ok(!fs.existsSync(path.join(f.dataDir, 'server.pid')), 'no collector was started')
+  })
 })
 suite('round 4 — shell-set pipelines, write ordering, read-only diagnostics', () => {
   const s = fixtureSuite(true)

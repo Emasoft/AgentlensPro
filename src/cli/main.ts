@@ -140,7 +140,16 @@ export const LATENCY_EXEMPT: Readonly<Record<string, string>> = {
   'hook-context-cost': 'an analysis verb that streams the day buckets of the log-event sink (~170 MB/day); asked deliberately, never per turn',
 }
 
-export async function cliMain(rawArgv: string[], startServer: () => Promise<unknown>): Promise<number> {
+/** Test seams for the server/daemon verbs — the verb itself and the install check that follows it — so a test can
+ *  prove the wiring (the check runs, and runs AFTER the verb) without spawning a collector. Production passes none. */
+export interface CliMainDeps {
+  serverCommand?: (argv: string[]) => Promise<void>
+  daemonCommand?: (argv: string[]) => Promise<void>
+  serverStartCheck?: (argv: string[]) => Promise<void>
+}
+
+// The CLI dispatcher. `deps` is a test seam only (CliMainDeps); production calls it with two arguments.
+export async function cliMain(rawArgv: string[], startServer: () => Promise<unknown>, deps: CliMainDeps = {}): Promise<number> {
   // `--force-install-telemetry` is a GLOBAL, per-invocation flag (owner order 2026-10-02): consumed here, before
   // any verb parses its own flags, so no verb ever sees it and nothing persists it.
   const forceInstall = rawArgv.includes('--force-install-telemetry')
@@ -275,17 +284,21 @@ export async function cliMain(rawArgv: string[], startServer: () => Promise<unkn
       return runSetupCli(argv.slice(1), forceInstall)
     case 'server':
       // The install heals itself when the server is STARTED too (owner 2026-10-14, TRDD-YL3EWT6N): `server` is excluded
-      // from maybeAutoSetup above because hooks reach it, so `start`/`restart` run the check here, before the verb.
-      // `revive` (the hook path) does not. Never throws, never blocks the start (autoSetup.ts autoSetupOnServerStart).
-      await autoSetupOnServerStart(argv)
-      await serverCommand(argv.slice(1))
+      // from maybeAutoSetup above because hooks reach it, so `start`/`restart` run the check here. `revive` (the hook
+      // path) does not. The check runs AFTER the verb, never before it: run first, every millisecond of it (drift
+      // hashing, a safeConfigEdit subprocess under a lock, a synchronous `--version` probe) was collector downtime, and
+      // run "concurrently" its synchronous prefix would still execute before the verb's first await. `start`/`restart`
+      // resolve once the server answers; `--supervise` resolves once the child is spawned. Never throws.
+      await (deps.serverCommand ?? serverCommand)(argv.slice(1))
+      await (deps.serverStartCheck ?? autoSetupOnServerStart)(argv)
       return 0
     case 'daemon':
       // The always-on ingestion daemon (D3K7QM2P) — same process as `server`, named for its role;
       // adds hook-spool depth to status. `daemon start --supervise` is what launchd runs.
-      // `daemon start|restart` (incl. the launchd `daemon start --supervise`) is a server start: same check as `server`.
-      await autoSetupOnServerStart(argv)
-      await daemonCommand(argv.slice(1))
+      // `daemon start|restart` (incl. the launchd `daemon start --supervise`) is a server start: same check as `server`,
+      // after the verb for the same reason.
+      await (deps.daemonCommand ?? daemonCommand)(argv.slice(1))
+      await (deps.serverStartCheck ?? autoSetupOnServerStart)(argv)
       return 0
     case 'dashboard':
       await ensureServer('dashboard')
