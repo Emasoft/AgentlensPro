@@ -47,6 +47,13 @@ async function withServer(extra: NodeJS.ProcessEnv, body: (c: { ui: string; data
     assert.ok(pid > 0, 'ensureServer returned but no server owns the data dir')
     await body({ ui, data })
     await stopServer()
+    // WHY: stopServer returns once the data dir's pidfile is released, and alcore releases it as the last
+    // statement of main, so the process can still be running its exit path. In this test mocha is alcore's
+    // parent: once it exits it stays a zombie until the event loop reaps it, and kill(pid, 0) succeeds on a
+    // zombie. Each sleep yields to the event loop, so poll (bounded: 10 s) before asserting that it is gone.
+    for (let i = 0; i < 40 && alive(pid); i++) {
+      await sleep(250)
+    }
     assert.strictEqual(alive(pid), false, `server pid ${pid} still alive after stopServer()`)
     afterStop?.({ data })
   } finally {
@@ -112,8 +119,11 @@ suite('ingest end to end — the CLI start path with a real alcore', function ()
     assert.ok(r.pid > 0)
   })
 
-  test('a real collect and views run: the ledger, the hook and statusline views hold exactly what was posted; done/ keeps the loaded files', async () => {
-    // Waits for the tap's own periodic tick (60 s: the CLI does not pass --ingest-interval-secs), so up to ~75 s.
+  test('a real collect and views run: the ledger, the hook and statusline views hold exactly what was posted; done/ keeps the loaded files', async function () {
+    this.timeout(300_000)
+    // Waits for the tap's own periodic tick (60 s: the CLI does not pass --ingest-interval-secs). WHY 240 s: the
+    // seal+collect tick runs on the background-QoS runtime (chores.rs, TRDD-RVKQDLRD), which was starved past 150 s
+    // under a load spike, so this waits for at least three ticks plus margin.
     const ids = { start: 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', end: 'cccccccc-cccc-cccc-cccc-cccccccccccc', sl: 'dddddddd-dddd-dddd-dddd-dddddddddddd' }
     const query = async (db: string, sql: string): Promise<Record<string, unknown>[]> => {
       // The collect/views children hold the database read-write while they run; a read-only open then
@@ -147,7 +157,7 @@ suite('ingest end to end — the CLI start path with a real alcore', function ()
       // (a record is keyed by its atMs). Done when at least the hook spool and the statusline spool loaded.
       const seen = new Map<number, { exit?: number; timedOut?: boolean; summary?: string }>()
       let loaded = 0, failed = 0
-      for (let i = 0; i < 600 && !(loaded >= 2 && st.views); i++) {   // bounded: 150 s, the tick period is 60 s
+      for (let i = 0; i < 960 && !(loaded >= 2 && st.views); i++) {   // bounded: 240 s, the tick period is 60 s
         st = await getJson(ui, '/api/ingest-status')
         const rec = st.lastCollect as { atMs?: number; exit?: number; timedOut?: boolean; summary?: string } | null
         if (rec && !seen.has(Number(rec.atMs))) {

@@ -6,7 +6,7 @@ import * as path from 'path'
 import { spawn } from 'child_process'
 import { freePort } from './helpers/freePort'
 import { assertNoSurvivingServer } from './helpers/noSurvivingServer'
-import { runSetup, runSetupCli, SetupOutcome } from '../cli/setup'
+import { NO_COMPOSITION_LINE_DETAIL, runSetup, runSetupCli, SetupOutcome } from '../cli/setup'
 import { GATE_CMD, GATE_MATCHER, HOOK_CMD, HOOK_EVENTS, REVIEW_CMD, SUPERVISOR_CMD } from '../cli/hookInstall'
 import { ownedTelemetryKeys } from '../telemetryConfig'
 
@@ -107,7 +107,7 @@ function stepOf(o: SetupOutcome, name: string) {
  *  loaded machine its first line can land after setup's last step reads server.log, and the step maps that
  *  to SKIP by design. Every other SKIP, and every other memory-check outcome, still fails. */
 function assertStepVerified(s: { step: string; verify: string; detail?: string }): void {
-  if (s.step === 'memory-check' && s.verify === 'SKIP' && s.detail === 'no composition line in server.log yet') return
+  if (s.step === 'memory-check' && s.verify === 'SKIP' && s.detail === NO_COMPOSITION_LINE_DETAIL) return
   assert.strictEqual(s.verify, 'PASS', `${s.step}: ${s.detail}`)
 }
 
@@ -182,7 +182,7 @@ suite('setup — virgin HOME full converge (real server on ephemeral ports)', ()
     assert.strictEqual(first.exitCode, 0, JSON.stringify(first.steps, null, 2))
     for (const s of first.steps) assertStepVerified(s)
     assert.ok(first.actions >= 4, `expected >=4 acting steps on a virgin HOME, got ${first.actions}`)
-    if (stepOf(first, 'memory-check').detail === 'no composition line in server.log yet') await awaitCompositionLine(path.join(f.dataDir, 'server.log'))
+    if (stepOf(first, 'memory-check').detail === NO_COMPOSITION_LINE_DETAIL) await awaitCompositionLine(path.join(f.dataDir, 'server.log'))
   })
 
   test('hooks land exactly once per lifecycle event as v2 command strings (independent re-parse)', () => {

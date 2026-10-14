@@ -1427,13 +1427,16 @@ const stepSelfTest: StepDef = {
 
 export interface MemoryCheck { verdict: 'PASS' | 'INFO' | 'WARN' | 'SKIP'; detail: string }
 
+/** The memory-check detail when server.log has no composition line yet. Exported: the setupVerb test matches it. */
+export const NO_COMPOSITION_LINE_DETAIL = 'no composition line in server.log yet'
+
 /** Parse one server.log composition line: PASS when live + free-in-page is within 1 MB of
  *  committed (measured rounding bound); INFO (never FAIL — an unexplained ~1 MB committed class
  *  was not ruled out) on larger drift, and INFO when free-in-page exceeds half of committed
  *  (~664 of ~690 MB at boot, expected until Phase D streaming restore lands); WARN when the line
  *  is unparseable; SKIP when unmeasured. Never throws. */
 export function checkCompositionLine(line: string | null): MemoryCheck {
-  if (!line) return { verdict: 'SKIP', detail: 'no composition line in server.log yet' }
+  if (!line) return { verdict: 'SKIP', detail: NO_COMPOSITION_LINE_DETAIL }
   const num = (re: RegExp): number | null | undefined => {
     const m = re.exec(line)
     return m ? (m[1] === '?' ? null : Number(m[1])) : undefined
