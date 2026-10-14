@@ -258,11 +258,15 @@ suite('reviewGate — worker writes reach the main gate', () => {
     assert.deepStrictEqual(role('echo x > "docs_dev/$(date +%s)-r.md"'), [], 'control: the `$(…)` stamp')
   })
 
-  test('a cut `$(…)` whose hidden text spells `..` arms for a role: `rm -rf reports/$(printf ..)` removes the project', () => {
+  // Round-2 review of d476914a: `rm` refuses `..` as an operand's last component, so the case that writes into the
+  // project root is `cp` / `mv` into `reports/$(printf ..)`. `tar -C` would too, but the gate classifies no `tar`.
+  test('a cut `$(…)` whose hidden text spells `..` arms for a role: `cp x reports/$(printf ..)` writes into the project root', () => {
     const role = (cmd: string): string[] => commandWriteReasons(cmd, CWD, { roleScratch: true })
-    assert.deepStrictEqual(role('rm -rf reports/$(printf ..)'), ['rm reports/$'])
+    assert.deepStrictEqual(role('cp x reports/$(printf ..)'), ['cp reports/$'])
+    assert.deepStrictEqual(role('mv x docs_dev/$(printf ..)'), ['mv docs_dev/$'])
     assert.deepStrictEqual(role('echo x > docs_dev/$(printf ..)-x'), ['redirect into docs_dev/$'], '`..` with a word tail')
-    assert.deepStrictEqual(role('rm -rf reports/$(date +%s)'), [], 'control: a stamp still passes')
+    assert.deepStrictEqual(role('rm -rf reports/$(printf ..)'), ['rm reports/$'], 'pinned: harmless today, `rm` refuses a trailing `..`')
+    assert.deepStrictEqual(role('cp x reports/$(date +%s)'), [], 'control: a stamp still passes')
   })
 
   // Review of 668fc421: role forks write scratch as `D=$(mktemp -d); cat > "$D/x"`, and `$D` is unresolvable with no
@@ -293,6 +297,44 @@ suite('reviewGate — worker writes reach the main gate', () => {
 
   test('the same mktemp write from a worker with NO declared role still demands review', () => {
     assert.deepStrictEqual(commandWriteReasons('D=$(mktemp -d); cat > "$D/min.ts"', CWD), ['redirect into $D/min.ts'])
+  })
+
+  // Round-2 review of d476914a: an EMPTY D (a failed mktemp, or an assignment that never took effect) turns
+  // `$D/<name>` into `/<name>`, so `<name>` must be ONE path component; and an assignment that may not take effect
+  // in this shell, or a rebinding such as `${D:=…}`, leaves D holding something other than the fresh directory.
+  test('a mktemp target with more than one path component arms: an empty D would make it an absolute path', () => {
+    const role = (cmd: string): string[] => commandWriteReasons(cmd, CWD, { roleScratch: true })
+    assert.deepStrictEqual(role('D=$(mktemp -d); cat > "$D/a/b"'), ['redirect into $D/a/b'])
+    assert.deepStrictEqual(role('D=$(mktemp -d) true; cat > "$D/Volumes/x/src/a.ts"'), ['redirect into $D/Volumes/x/src/a.ts'], 'after a prefix assignment')
+    assert.deepStrictEqual(role('( D=$(mktemp -d) ); cat > "$D/Volumes/x/src/a.ts"'), ['redirect into $D/Volumes/x/src/a.ts'], 'after a subshell assignment')
+  })
+
+  test('a mktemp assignment that may not take effect in this shell exempts nothing', () => {
+    const role = (cmd: string): string[] => commandWriteReasons(cmd, CWD, { roleScratch: true })
+    assert.deepStrictEqual(role('D=$(mktemp -d) true; cat > "$D/m.ts"'), ['redirect into $D/m.ts'], 'a prefix assignment sets D for `true` only')
+    assert.deepStrictEqual(role('( D=$(mktemp -d) ); cat > "$D/m.ts"'), ['redirect into $D/m.ts'], 'a subshell')
+    assert.deepStrictEqual(role('( a; D=$(mktemp -d); b ); cat > "$D/m.ts"'), ['redirect into $D/m.ts'], 'a subshell, the assignment mid-list')
+    assert.deepStrictEqual(role('D=$(mktemp -d) | cat; cat > "$D/m.ts"'), ['redirect into $D/m.ts'], 'a pipeline stage')
+    assert.deepStrictEqual(role('false && D=$(mktemp -d); cat > "$D/m.ts"'), ['redirect into $D/m.ts'], 'a conditional branch')
+  })
+
+  test('a rebinding, a quoted tail, a shadowed mktemp or a moved PATH disqualifies the mktemp variable', () => {
+    const role = (cmd: string): string[] => commandWriteReasons(cmd, CWD, { roleScratch: true })
+    assert.deepStrictEqual(role('D=$(mktemp -d); : "${D:=/abs/src}"; cat > "$D/a.ts"'), ['redirect into $D/a.ts'], '`${D:=…}` rebinds an empty D')
+    assert.deepStrictEqual(role('D=$(mktemp -d); : "${D=/abs/src}"; cat > "$D/a.ts"'), ['redirect into $D/a.ts'], '`${D=…}`')
+    assert.deepStrictEqual(role(': "${D:=/abs/src}"; cat > "$D/a.ts"'), ['redirect into $D/a.ts'], 'pinned: no mktemp at all')
+    assert.deepStrictEqual(role('D="$(mktemp -d)"x; cat > "$D/m.ts"'), ['redirect into $D/m.ts'], 'pinned: a quoted mktemp with a tail')
+    assert.deepStrictEqual(role('mktemp() { echo /x; }; D=$(mktemp -d); cat > "$D/m.ts"'), ['redirect into $D/m.ts'], 'a function named mktemp')
+    assert.deepStrictEqual(role("alias mktemp='echo /x'; D=$(mktemp -d); cat > \"$D/m.ts\""), ['redirect into $D/m.ts'], 'an alias named mktemp')
+    assert.deepStrictEqual(role('PATH=/x:$PATH; D=$(mktemp -d); cat > "$D/m.ts"'), ['redirect into $D/m.ts'], 'PATH moved')
+    assert.deepStrictEqual(role('path=(/x $path); D=$(mktemp -d); cat > "$D/m.ts"'), ['redirect into $D/m.ts'], "zsh's path array is tied to PATH")
+  })
+
+  test('controls: a plain top-level `D=$(mktemp -d)` still exempts a one-component write', () => {
+    const role = (cmd: string): string[] => commandWriteReasons(cmd, CWD, { roleScratch: true })
+    assert.deepStrictEqual(role('D=$(mktemp -d); cp x "$D/m.ts"'), [])
+    assert.deepStrictEqual(role('D=$(mktemp -d); cat > "$D/m.ts"'), [])
+    assert.deepStrictEqual(role('D=$(mktemp -d) && cat > "$D/m.ts" || exit 1'), [], '`&&` after the assignment')
   })
   test('a janitor worker is skipped even when it wrote a file', () => {
     withWorkers((t, s) => {

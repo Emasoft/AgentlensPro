@@ -195,7 +195,8 @@ export function isEphemeralTarget(target: string, cwd: string): boolean {
  *  no `..` and no backslash.
  *  WHY a CONTENT rule (review of 668fc421): the danger is what the dynamic part can expand to, not its syntax. A
  *  `/` lets it climb or descend (the round-1 review's `$(printf ../src)/a.ts`); `..` as a whole name is the parent
- *  directory itself (`rm -rf "reports/$(printf ..)"` removes the project); a backslash escape spells either without
+ *  directory itself (`cp x "reports/$(printf ..)"` and `mv` write into the project root; `rm` itself refuses a
+ *  trailing `..`); a backslash escape spells either without
  *  writing it (`'..\57src\57a.ts'`, `'\56\56'`). One rule covers `$(…)` and backtick spans alike, so a backtick
  *  stamp (`docs_dev/`date +%s`-r.md`) passes like `$(date +%s)` does. Only a QUOTED backtick span reaches here
  *  whole: shellWords treats an unquoted backtick as a command separator, so the target word ends AT the backtick
@@ -218,7 +219,8 @@ export function isRoleScratchTarget(target: string, cwd: string): boolean {
  *  it (TRDD-QQ2XIIZ6). For a target the tokenizer cut there (it ends in `$`), the RAW command must show EVERY
  *  `<target>(` as a flat substitution — no nested paren, quote, backslash or backtick — holding no `/`, then a word
  *  tail holding none, then the word's end; and neither may hold `..`, the content rule isRoleScratchTarget cannot
- *  apply to text it never sees (`rm -rf reports/$(printf ..)` removes the project). Anything else fails closed. */
+ *  apply to text it never sees (`cp x reports/$(printf ..)` and `mv` write into the project root; `rm` itself
+ *  refuses a trailing `..`). Anything else fails closed. */
 export function isFlatCutSubstitution(cmd: string, target: string): boolean {
   const opens = cmd.split(`${target}(`).length - 1
   if (opens === 0) return false
@@ -232,29 +234,81 @@ export function isFlatCutSubstitution(cmd: string, target: string): boolean {
  *  output is unknowable here, and on macOS it is under /var/folders, not /tmp), only a mark isMktempTarget reads. */
 const MKTEMP: unique symbol = Symbol('mktemp')
 const MKTEMP_FLAGS = String.raw`(?:[ \t]+(?:-[dq]{1,2}|-t[ \t]+[A-Za-z0-9._-]+))*`
+/** `NAME=$(mktemp …)` where the shell certainly runs it in THIS shell: it STARTS a command (the command's start, a
+ *  new line or a `;` before it) and ENDS one (the end, a new line, `;`, `&&` or `||` after it).
+ *  WHY (round-2 review of d476914a): wherever the assignment may not take effect, D keeps the value it had before —
+ *  empty, or one inherited from the environment — and `$D/<name>` then writes there. A prefix assignment
+ *  (`D=$(mktemp -d) true` sets D for `true` only), a pipeline stage (`D=… | cat`, `x | D=…`), a backgrounded one
+ *  (`D=… &`), a conditional branch (`x && D=…`, `x || D=…`) and a subshell opener (`( D=…`) therefore do not
+ *  match; a subshell the assignment sits deeper inside is atTopLevel's job. */
+const certainMktempAssignment = (name: string): RegExp =>
+  new RegExp(String.raw`(?<=(?:^|[\n;])[ \t]*)${name}=("?)\$\(mktemp${MKTEMP_FLAGS}[ \t]*\)\1(?=[ \t]*(?:$|[\n;]|&&|\|\|))`, 'g')
+
+/** Whether offset `at` of `text` is outside every subshell: no `(`, `$(` or backtick opened before it and not yet
+ *  closed. An assignment inside one (`( a; D=$(mktemp -d); b ); cat > "$D/x"`) dies with it. Single quotes hide
+ *  parens from the shell; whatever this count gets wrong (a `)` ending a `case` arm, a paren in double-quoted prose)
+ *  leaves the depth non-zero, which fails closed. */
+function atTopLevel(text: string, at: number): boolean {
+  let depth = 0
+  let tick = false
+  let q: string | null = null
+  for (let i = 0; i < at; i++) {
+    const c = text[i]
+    if (q === "'") { if (c === "'") q = null; continue }
+    if (c === '\\') { i++; continue }
+    if (c === "'" && q === null) q = c
+    else if (c === '"') q = q === null ? '"' : null
+    else if (c === '`') tick = !tick
+    else if (c === '(') depth++
+    else if (c === ')') depth--
+  }
+  return depth === 0 && !tick
+}
 
 /** Whether the assignment word `name=value` of a pure-assignment segment stores a fresh mktemp path.
  *  WHY (review of 668fc421): role forks write scratch as `D=$(mktemp -d); cat > "$D/x"`, which armed the gate
  *  because `$D` is unresolvable and has no static directory. Unquoted `D=$(mktemp -d)` reaches here cut as `D=$`
  *  (the `(` is a separator) with `mktemp` heading the NEXT segment; quoted `D="$(mktemp -d)"` arrives whole. Either
- *  way the RAW command decides, and fails closed unless EVERY bare mention of `name` is such an assignment (a second
- *  assignment, `for D in`, `read D`, `D+=` or `export D` disqualifies it), with only `-d`, `-q` and `-t <prefix>` —
- *  never a template argument (one with no `/` is created in the CWD), `-p` or `--tmpdir` — and nothing in the
- *  command names TMPDIR, which would move mktemp's directory. */
+ *  way the command TEXT decides (heredoc bodies stripped: they are data, not shell), and it fails closed unless:
+ *  - every mention of `name` is a certain top-level assignment (certainMktempAssignment, atTopLevel). A second
+ *    assignment, `for D in`, `read D`, `D+=`, `export D`, or any `${D…}` other than a plain `${D}` (`${D:=/src}` and
+ *    `${D=/src}` rebind an empty D; round-2 review of d476914a) disqualifies it;
+ *  - every `mktemp` in the command is such an assignment, so a function or alias named mktemp defined in the command
+ *    (`mktemp() { echo /x; }`), or a call this check does not model, disqualifies it;
+ *  - only `-d`, `-q` and `-t <prefix>` are passed — never a template argument (one with no `/` is created in the
+ *    cwd), `-p` or `--tmpdir`;
+ *  - nothing in the command names TMPDIR, PATH, or zsh's `path` array (tied to PATH), which would move mktemp's
+ *    directory or replace the command itself.
+ *  Accepted residual, usable by a declared-role worker only: `eval` of an obfuscated name (`eval "$(printf
+ *  '\104=…')"`); `source` or `.` of a file; an alias or function named mktemp, or a TMPDIR, set OUTSIDE the command
+ *  (the shell profile, the agent's environment); and a failed `mktemp -q`, which leaves D empty — bounded by
+ *  isMktempTarget's one-component rule to a name at the filesystem root. */
 function isMktempAssignment(cmd: string, name: string, value: string, quoted: boolean, nextSeg: Word[] | undefined): boolean {
   const cutShape = value === '$' && !quoted && nextSeg?.[0]?.word === 'mktemp'
   const wholeShape = quoted && value.startsWith('$(mktemp')
-  if ((!cutShape && !wholeShape) || /TMPDIR/.test(cmd)) return false
-  const mentions = cmd.match(new RegExp(`(?<![\\w$-])(?<!\\$\\{)${name}(?!\\w)`, 'g')) ?? []
-  const assignments = cmd.match(new RegExp(`(?<![\\w$-])${name}=("?)\\$\\(mktemp${MKTEMP_FLAGS}[ \\t]*\\)\\1(?=$|[\\s;&|)])`, 'g')) ?? []
-  return assignments.length > 0 && mentions.length === assignments.length
+  if (!cutShape && !wholeShape) return false
+  if (/TMPDIR|(?<![A-Za-z0-9_])PATH(?![A-Za-z0-9_])|(?<![\w$/.-])path(?:\[[^\]]*\])?\+?=/.test(cmd)) return false
+  const text = stripHeredocBodies(cmd, true)
+  const certain = (re: RegExp): number => {
+    let n = 0
+    for (let m = re.exec(text); m !== null; m = re.exec(text)) if (atTopLevel(text, m.index)) n++
+    return n
+  }
+  const assignments = certain(certainMktempAssignment(name))
+  if (assignments === 0) return false
+  if ((text.match(/(?<![\w-])mktemp(?![\w-])/g) ?? []).length !== certain(certainMktempAssignment('[A-Za-z_][A-Za-z0-9_]*'))) return false
+  const bare = text.match(new RegExp(String.raw`(?<![\w$-])(?<!\$\{)${name}(?!\w)`, 'g')) ?? []
+  const braced = text.match(new RegExp(String.raw`\$\{${name}(?![\w}])`, 'g')) ?? []
+  return bare.length + braced.length === assignments
 }
 
-/** A write target `$D`, `${D}`, `$D/<name>` or `${D}/<name>` whose D holds MKTEMP at this segment, `<name>` holding
- *  no `..`, backslash, `$`, backtick, glob or whitespace — so it cannot leave the fresh directory, and an mktemp
- *  that failed (D empty) cannot turn `"$D"/*` into `/*`. */
+/** A write target `$D`, `${D}`, `$D/<name>` or `${D}/<name>` whose D holds MKTEMP at this segment, `<name>` ONE path
+ *  component holding no `..`, backslash, `$`, backtick, glob or whitespace. One component is what keeps an EMPTY D
+ *  harmless (round-2 review of d476914a): a failed mktemp turns `$D/<name>` into `/<name>` at the filesystem root,
+ *  where `$D/Volumes/<proj>/src/a.ts` would have become a write into the project. A glob is refused for the same
+ *  reason: `"$D"/*` would become `/*`. */
 function isMktempTarget(target: string, assigned: Map<string, string | typeof MKTEMP> | undefined): boolean {
-  const m = /^(?:\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*))(?:\/(.+))?$/.exec(target)
+  const m = /^(?:\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*))(?:\/([^/]+))?$/.exec(target)
   if (m === null || assigned?.get(m[1] ?? m[2]) !== MKTEMP) return false
   return m[3] === undefined || !/\.\.|[\\$`*?[\]{}~\s]/.test(m[3])
 }
