@@ -49,7 +49,7 @@ From the review of 1069f1c8, resolved by 3c: the check runs only after the verb 
 Related: TRDD-22BOPTBU (setup in an isolated HOME can run a global npm rm -g agentlens-dashboard), found while measuring 3c.
 Owner question (2026-10-14, measured): `batch` with a refusing member exits 2 with the successful results on stdout and several JSON objects back to back on stderr — it already breaks the single-call exit-2 contract (stdout empty, one JSON object), which SKILL.md documents for single calls only. Item 7 left batch unchanged (no regression). Should batch follow the contract (e.g. one top-level object with per-member results and errors), or is the contract single-call only by design?
 Correction to 6a31062d's commit message: launch notices print AFTER the output only for a successful single tool call; on a parse/usage error thrown before the call (exit 64) or a thrown FAIL, cliMain's finally prints them BEFORE the error text that standalone/cli.ts prints.
-Follow-up (review of 42017224): with the read-only hot-path verbs excluded from the self-heal, an agent loop that only ever runs cache-expired, cache-state or last-compact on a fresh machine is never set up and answers 'cannot answer' forever. Consider naming `agentlenspro setup` in that answer when nothing is installed.
+NOT PLANNED, proposal only. Follow-up (review of 42017224): with the read-only hot-path verbs excluded from the self-heal, an agent loop that only ever runs cache-expired, cache-state or last-compact on a fresh machine is never set up and answers 'cannot answer' forever. Consider naming `agentlenspro setup` in that answer when nothing is installed.
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-10-14
 
