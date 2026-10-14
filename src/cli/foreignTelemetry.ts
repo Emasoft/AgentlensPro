@@ -24,9 +24,15 @@ export const HOOK_PATH_VERBS: ReadonlySet<string> = new Set([
 /** Verbs that must keep working while disabled — they are how one gets back (and the server verbs, see below). */
 // server/daemon pass through ON PURPOSE: serverControl has its own terminal DISABLED handling (ensureServer and the
 // supervisor throw BEFORE spawning anything), so a supervising launchd never sees the dispatcher's 69 as a crash to retry.
-/** Read-only diagnostics other tools call from their hooks: they only read data on disk, so they skip BOTH the
- *  per-launch check and the DISABLED stop — a diagnostic call must never write settings.json or disable anything. */
-export const READ_ONLY_VERBS: ReadonlySet<string> = new Set(["cache-state", "last-compact", "model-headroom", "statusline-history"])
+/** Read-only diagnostics other tools poll from their hooks and loops: they never write user config, and may query
+ *  the running server read-only (cache-expired asks it over MCP when no harness-reported sample exists), so they
+ *  skip BOTH the per-launch check and the DISABLED stop — a diagnostic call must never write settings.json or
+ *  disable anything.
+ *  WHY cache-expired is here (TRDD-CS2W7E77): 896be44a excluded this class because a read must never write
+ *  settings.json, and cache-expired was missed. So on a fresh machine a polled `agentlenspro cache-expired` ran a
+ *  full first-run setup that wrote settings, hooks and telemetry env and could start a server. Found by the CLI
+ *  hot-path latency guard in gate run B2. */
+export const READ_ONLY_VERBS: ReadonlySet<string> = new Set(["cache-expired", "cache-state", "last-compact", "model-headroom", "statusline-history"])
 
 const DISABLED_PASSTHROUGH: ReadonlySet<string> = new Set(["enable", "disable", "setup", "server", "daemon"])
 

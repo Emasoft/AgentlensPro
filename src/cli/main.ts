@@ -95,9 +95,11 @@ export const HOT_PATH_BUDGET_MS: Readonly<Record<string, number>> = {
   hook: 2_000,
   gate: 2_500,
   statusline: 2_000,
-  // Not run by Claude Code, but polled in loops by agents and heartbeats, and both are documented to
-  // answer with the server DOWN. Neither touches the network today; the budget is what catches the
-  // day one of them grows a fetch.
+  // Not run by Claude Code, but polled in loops by agents and heartbeats, and documented to answer with the
+  // server DOWN. cache-state and last-compact read only local files; cache-expired queries the server over MCP
+  // when no harness-reported sample exists, bounded by the connect deadline (cliCore.ts CONNECT_TIMEOUT_MS,
+  // 800 ms), and its budget covers that wait. None of them may run the launch self-heal (READ_ONLY_VERBS;
+  // autoSetup.test.ts pins every key here to AUTOSETUP_EXCLUDED_VERBS).
   'cache-expired': 1_500,
   'cache-state': 1_500,
   'last-compact': 1_500,

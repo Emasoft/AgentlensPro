@@ -17,7 +17,7 @@ import { FOREIGN_REASON, HOOK_PATH_VERBS, disabledNotice, killSwitchArmedForFore
 import { AGENT_NAMES, SKILL_NAMES, SUPERVISOR_CMD, installAgents, installHooks, installSkills, skillFiles } from '../cli/hookInstall'
 import { agentlensDisabled, armKillSwitch, killSwitchPath, overrideKillSwitchEnv } from '../cli/killSwitch'
 import { beginLaunchNotices, endLaunchNotices, pushNotice, takeNotices } from '../cli/launchNotices'
-import { DISPATCHED_VERBS, cliMain } from '../cli/main'
+import { DISPATCHED_VERBS, HOT_PATH_BUDGET_MS, cliMain } from '../cli/main'
 import { Ctx, REPAIR_STEPS, hookDriftList, hooksConverged, resolveCtx, runSetup } from '../cli/setup'
 import { freePort } from './helpers/freePort'
 import { startMcpStub } from './helpers/mcpStub'
@@ -336,6 +336,13 @@ suite('autoSetup — every launch checks presence + drift and repairs only what 
     }
   })
 
+  // TRDD-CS2W7E77, gate run B2: cache-expired, a hot-path read verb polled in loops, was not excluded from the
+  // launch self-heal, so in an empty HOME it ran a full first-run setup inside its 1.5 s latency budget. The
+  // self-heal is unbounded work no hot path can afford, so EVERY hot-path verb must be excluded from it.
+  test('every hot-path verb (HOT_PATH_BUDGET_MS) is excluded from the launch self-heal', () => {
+    const missing = Object.keys(HOT_PATH_BUDGET_MS).filter(v => !AUTOSETUP_EXCLUDED_VERBS.has(v))
+    assert.deepStrictEqual(missing, [], `hot-path verb(s) that would run the first-run setup: ${missing.join(', ')}`)
+  })
   test('AGENTLENS_NO_AUTOSETUP=1 never repairs', async () => {
     const f = s.f()
     fs.rmSync(path.join(f.skillsDir, SKILL_NAMES[0]), { recursive: true })
