@@ -4,10 +4,10 @@
 // WHAT ARMS IT (owner order 2026-09-15, replacing every earlier arming rule):
 //   - a WRITE — an Edit/Write/NotebookEdit outside the ephemeral roots, or a write-shaped Bash
 //     command (git commit, sed -i, a redirect outside /tmp, …; `commandWriteReason`) — demands ONE
-//     adversarial REVIEW fork (`ROLE: REVIEW`, heading ADVERSARIAL-REVIEW);
+//     adversarial REVIEW fork (`ROLE: REVIEW`, heading REVIEW_HEADING);
 //   - a PROPOSAL — a text block with a line that starts `PROPOSAL FOR ACTION - PLEASE REVIEW`
 //     (`PROPOSAL_LINE`) — demands a MEASURE agent (`ROLE: MEASURE`, heading
-//     MEASURE-AND-VERIFY-REPORT) AND the REVIEW fork. A proposal without that exact line is not a
+//     MEASURE_HEADING) AND the REVIEW fork. A proposal without that exact line is not a
 //     proposal to this gate; it triggers nothing on Stop or SubagentStop.
 // WHAT NEVER ARMS IT: a janitor heartbeat turn (`[janitor-heartbeat]`), a turn the user interrupted
 // (`[Request interrupted by user…]`, Esc / Ctrl-C), a janitor subagent, the review fork itself, an
@@ -33,6 +33,7 @@ import {
   NO_REVIEW_SENTINEL, NO_REVIEW_SENTINEL_EXAMPLES, isNoReviewSentinel, shellWords, stripHeredocBodies,
 } from './reviewGateTriggers'
 import type { ArmCause } from './reviewGateTriggers'
+import { markerOpening, MEASURE_HEADING, REVIEW_HEADING } from './reviewLoop'
 // Re-exported so existing importers of these three names from THIS module keep working — the
 // definitions themselves live in reviewGateTriggers.ts.
 export { NO_REVIEW_SENTINEL, NO_REVIEW_SENTINEL_EXAMPLES, isNoReviewSentinel }
@@ -47,13 +48,13 @@ export { NO_REVIEW_SENTINEL, NO_REVIEW_SENTINEL_EXAMPLES, isNoReviewSentinel }
 // line of prose before the marker would silently fail to credit.
 export const REVIEW_ROLE_RULE = 'Begin your prompt with its FIRST line being exactly "ROLE: REVIEW" '
   + '(nothing before it), and '
-  + 'begin your final message with the heading ADVERSARIAL-REVIEW. Answer in ONE turn. Make ZERO '
+  + 'begin your final message with the heading ' + REVIEW_HEADING + '. Answer in ONE turn. Make ZERO '
   + 'tool calls — no SendMessage, no Read, no Bash, none. Put every finding INLINE in your final '
   + 'message and stop.'
 
 export const MEASURE_ROLE_RULE = 'Begin your prompt with its FIRST line being exactly "ROLE: MEASURE" '
   + '(nothing before it), and '
-  + 'begin your final message with the heading MEASURE-AND-VERIFY-REPORT. Settle EVERY load-bearing '
+  + 'begin your final message with the heading ' + MEASURE_HEADING + '. Settle EVERY load-bearing '
   + 'assumption the proposal rests on and report each as ASSUMPTION / COMMAND / OBSERVED / VERDICT '
   + '(confirmed | refuted | unmeasurable). There is NO cap on how many tool calls this takes — measure '
   + 'properly; a half-measured report that stops mid-way is worse than none, and a cap is what makes '
@@ -1030,19 +1031,16 @@ export async function runSubagentGate(input: ReviewGateInput): Promise<string | 
 /** Longest `systemMessage` the review display emits. WHY a cap: a review is long, and the terminal is not
  *  a file viewer; the full text stays one `Read` away at the transcript path. */
 const REVIEW_DISPLAY_MAX_CHARS = 9500
-/** The opening headings of the two reports the display shows: the REVIEW fork's and a MEASURE agent's. */
-const REVIEW_HEADINGS = ['ADVERSARIAL-REVIEW', 'MEASURE-AND-VERIFY-REPORT']
 
-/** The `systemMessage` for a finished agent whose last message opens with a review heading, or null.
- *  WHY `systemMessage` and not `additionalContext`: it is shown to the USER only and never enters the model's
- *  context, so the review does not spend the model's window twice (once as its own output, once as a hook
- *  injection). The heading is read from the first non-blank line, ignoring leading `#` and spaces. */
+/** The `systemMessage` for a finished agent whose last message OPENS with a report marker, or null. The first
+ *  non-blank line decides, through `markerOpening`: decoration such as `**`, backticks or surrounding whitespace
+ *  is not a barrier, but the marker must be at the START of that line. A marker quoted mid-line or on a later
+ *  line does not trigger the display. WHY `systemMessage` and not `additionalContext`: it is shown to the USER
+ *  only and never enters the model's context, so the review does not spend the model's window twice. */
 function reviewDisplay(input: ReviewGateInput): string | null {
   const text = typeof input?.last_assistant_message === 'string' ? input.last_assistant_message : ''
   const firstLine = text.split('\n').find((line) => line.trim() !== '')
-  if (firstLine === undefined) return null
-  const heading = firstLine.replace(/^[#\s]+/, '')
-  if (!REVIEW_HEADINGS.some((h) => heading.startsWith(h))) return null
+  if (firstLine === undefined || markerOpening(firstLine) === null) return null
   if (text.length <= REVIEW_DISPLAY_MAX_CHARS) return JSON.stringify({ systemMessage: text })
   const transcriptPath = input.agent_transcript_path
   if (typeof transcriptPath !== 'string') {

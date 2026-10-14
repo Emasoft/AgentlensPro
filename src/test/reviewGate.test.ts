@@ -14,6 +14,7 @@ import {
 import { PROPOSAL_MARKER } from '../cli/reviewGateTriggers'
 import { runSubagentGate } from '../cli/reviewGate'
 import { DELEGATE_DENY_REASON } from '../cli/delegateGate'
+import { MEASURE_HEADING, REVIEW_HEADING } from '../cli/reviewLoop'
 
 // `agentlenspro review-gate` — pure decision-function tests (owner order 2026-09-15 rewrite: ONE
 // shared scan/decide pair, `scanTranscriptLines` / `decideGate`, replaces the separate main/subagent
@@ -1375,57 +1376,88 @@ suite('reviewGate — scanTranscriptLines: a delegate-gate-denied edit does not 
       })
     })
 
-    test('a finished review fork shows its report to the USER as systemMessage, exactly as written', async () => {
-      const report = 'ADVERSARIAL-REVIEW\n\nFinding 1: the reader drops the last line when the file ends without a newline.'
+  test('a finished review fork shows its report to the USER as systemMessage, exactly as written', async () => {
+    const report = `${REVIEW_HEADING}\n\nFinding 1: the reader drops the last line when the file ends without a newline.`
+    const out = await withFileAsync([userStringLine('review the change')], (file) => finished('fork', report, file))
+    assert.deepStrictEqual(JSON.parse(out as string), { systemMessage: report })
+  })
+
+  test('the review heading may follow # and spaces, and a MEASURE report is shown the same way', async () => {
+    const report = `  ## * ${MEASURE_HEADING}   \nASSUMPTION 1: the file exists\nCOMMAND: ls\nOBSERVED: yes\nVERDICT: confirmed`
+    const out = await withFileAsync([userStringLine('measure it')], (file) => finished('fork', report, file))
+    assert.deepStrictEqual(JSON.parse(out as string), { systemMessage: report })
+  })
+
+  test('an agent whose last message is not a report shows nothing, and the retired review and measure headings no longer trigger the display', async () => {
+    const plain = await withFileAsync([userStringLine('rename it')], (file) => finished('general-purpose', 'Renamed the file.', file))
+    assert.strictEqual(plain, null)
+    for (const retired of ['ADVERSARIAL-REVIEW\nlooked at it', 'MEASURE-AND-VERIFY-REPORT\nVERDICT: confirmed']) {
+      const out = await withFileAsync([userStringLine('rename it')], (file) => finished('general-purpose', retired, file))
+      assert.strictEqual(out, null, retired)
+    }
+  })
+
+  test('an agent the gate blocks gets the block decision and no systemMessage', async () => {
+    const out = await withFileAsync([userStringLine('edit it'), assistantLine([bashBlock("fastedit create evals/x.md --force --content 'a'")])],
+      (file) => finished('general-purpose', `${REVIEW_HEADING}\nlooked at it`, file))
+    const parsed = JSON.parse(out as string) as Record<string, unknown>
+    assert.strictEqual(parsed.decision, 'block')
+    assert.strictEqual('systemMessage' in parsed, false)
+  })
+
+  test('a review longer than the display cap is cut to exactly the cap and names the full transcript', async () => {
+    const report = `${REVIEW_HEADING}\n` + 'x'.repeat(12000)
+    await withFileAsync([userStringLine('review the change')], async (file) => {
+      const message = (JSON.parse(await finished('fork', report, file) as string) as { systemMessage: string }).systemMessage
+      assert.strictEqual(message.length, 9500)
+      assert.ok(message.startsWith(`${REVIEW_HEADING}\n`))
+      assert.ok(message.endsWith(`… (truncated; full text: ${file})`), message.slice(-120))
+    })
+  })
+
+  test('a review of exactly the cap is shown whole', async () => {
+    const report = `${REVIEW_HEADING}\n` + 'x'.repeat(9500 - `${REVIEW_HEADING}\n`.length)
+    const out = await withFileAsync([userStringLine('review the change')], (file) => finished('fork', report, file))
+    assert.deepStrictEqual(JSON.parse(out as string), { systemMessage: report })
+  })
+
+  test('a long review with no transcript path says so on stderr and shows nothing', async () => {
+    const report = `${REVIEW_HEADING}\n` + 'x'.repeat(12000)
+    const { result, stderr } = await captureStderr(() => runSubagentGate({
+      hook_event_name: 'SubagentStop', agent_id: 'f1', agent_type: 'fork', last_assistant_message: report, cwd: CWD,
+    }))
+    assert.strictEqual(result, null)
+    assert.ok(stderr.includes('review display skipped'), stderr)
+  })
+
+
+  test('a marker quoted mid-line or on a later line does not trigger the display', async () => {
+    const quoted = [
+      `Summary first.\n${REVIEW_HEADING}\nis below`,
+      `I will open with ${REVIEW_HEADING} once the check passes`,
+      `The verdict follows the ${REVIEW_HEADING} marker`,
+    ]
+    for (const last of quoted) {
+      const out = await withFileAsync([userStringLine('review it')], (file) => finished('general-purpose', last, file))
+      assert.strictEqual(out, null, last)
+    }
+  })
+
+
+  test('a marker decorated with **, backticks or same-line text still displays; a marker run into a word does not', async () => {
+    const decorated = [
+      `**${REVIEW_HEADING}**\nFinding 1: the reader drops the last line.`,
+      `\`${REVIEW_HEADING}\`\nFinding 1: the reader drops the last line.`,
+      `${REVIEW_HEADING} notes on the first pass\nFinding 1: the reader drops the last line.`,
+    ]
+    for (const report of decorated) {
       const out = await withFileAsync([userStringLine('review the change')], (file) => finished('fork', report, file))
-      assert.deepStrictEqual(JSON.parse(out as string), { systemMessage: report })
-    })
-
-    test('the review heading may follow # and spaces, and a MEASURE report is shown the same way', async () => {
-      const report = '  ## MEASURE-AND-VERIFY-REPORT\nASSUMPTION 1: the file exists\nCOMMAND: ls\nOBSERVED: yes\nVERDICT: confirmed'
-      const out = await withFileAsync([userStringLine('measure it')], (file) => finished('fork', report, file))
-      assert.deepStrictEqual(JSON.parse(out as string), { systemMessage: report })
-    })
-
-    test('an agent whose last message is not a review shows nothing, and the review word below the first line does not count', async () => {
-      const plain = await withFileAsync([userStringLine('rename it')], (file) => finished('general-purpose', 'Renamed the file.', file))
-      assert.strictEqual(plain, null)
-      const buried = await withFileAsync([userStringLine('rename it')], (file) => finished('general-purpose', 'Summary first.\nADVERSARIAL-REVIEW is below', file))
-      assert.strictEqual(buried, null)
-    })
-
-    test('an agent the gate blocks gets the block decision and no systemMessage', async () => {
-      const out = await withFileAsync([userStringLine('edit it'), assistantLine([bashBlock("fastedit create evals/x.md --force --content 'a'")])],
-        (file) => finished('general-purpose', 'ADVERSARIAL-REVIEW\nlooked at it', file))
-      const parsed = JSON.parse(out as string) as Record<string, unknown>
-      assert.strictEqual(parsed.decision, 'block')
-      assert.strictEqual('systemMessage' in parsed, false)
-    })
-
-    test('a review longer than the display cap is cut to exactly the cap and names the full transcript', async () => {
-      const report = 'ADVERSARIAL-REVIEW\n' + 'x'.repeat(12000)
-      await withFileAsync([userStringLine('review the change')], async (file) => {
-        const message = (JSON.parse(await finished('fork', report, file) as string) as { systemMessage: string }).systemMessage
-        assert.strictEqual(message.length, 9500)
-        assert.ok(message.startsWith('ADVERSARIAL-REVIEW\n'))
-        assert.ok(message.endsWith(`… (truncated; full text: ${file})`), message.slice(-120))
-      })
-    })
-
-    test('a review of exactly the cap is shown whole', async () => {
-      const report = 'ADVERSARIAL-REVIEW\n' + 'x'.repeat(9500 - 'ADVERSARIAL-REVIEW\n'.length)
-      const out = await withFileAsync([userStringLine('review the change')], (file) => finished('fork', report, file))
-      assert.deepStrictEqual(JSON.parse(out as string), { systemMessage: report })
-    })
-
-    test('a long review with no transcript path says so on stderr and shows nothing', async () => {
-      const report = 'ADVERSARIAL-REVIEW\n' + 'x'.repeat(12000)
-      const { result, stderr } = await captureStderr(() => runSubagentGate({
-        hook_event_name: 'SubagentStop', agent_id: 'f1', agent_type: 'fork', last_assistant_message: report, cwd: CWD,
-      }))
-      assert.strictEqual(result, null)
-      assert.ok(stderr.includes('review display skipped'), stderr)
-    })
+      assert.deepStrictEqual(JSON.parse(out as string), { systemMessage: report }, report)
+    }
+    const glued = `${REVIEW_HEADING}notes`
+    const none = await withFileAsync([userStringLine('review it')], (file) => finished('general-purpose', glued, file))
+    assert.strictEqual(none, null)
+  })
 
   })
 
