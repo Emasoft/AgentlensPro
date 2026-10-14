@@ -4,7 +4,7 @@ title: agentlenspro detects and reinstalls missing or outdated hooks skills agen
 column: dev
 status: tasked
 created: 2026-10-14T16:43:38+0200
-updated: 2026-10-14T16:47:24+0200
+updated: 2026-10-14T16:56:36+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: feature
@@ -38,6 +38,7 @@ implementation-commits: [ab5b1274]
 6. BLOCKED — downgrade policy (owner). 7. TODO — warnings to <dataDir>/autosetup.log, stderr only on exit 0, buffered until exit (no mechanism exists yet).
 Owner decisions pending (asked 2026-10-14, no answer yet): (a) agent names keep vs agentlens-* prefix vs stop shipping the generic workers; (b) commit or revert the uncommitted hookInstall.ts AGENT_NAMES hunk; (c) downgrades; (d) dev loop when running from a git checkout; plus whether to ship the review-gate part of turn-protocol-and-review.md as a versioned rule. Review evidence: docs_dev/*measure-versioned-selfheal.md, docs_dev/*measure-selfheal-rev2.md.
 Additions from the card review: (5a) before stamping all 6 agents, live-check that an agent carrying a version: key still appears in the Agent tool listing and spawns; (3a) item 3 must name its 'Claude Code absent' criterion — no helper exists today (MEASURE rev2 step 4); proposed: skip when neither ~/.claude exists nor `claude` resolves on PATH. Related: the review-display mod (TRDD-QQ2XIIZ6) would ship as one more versioned component of this feature.
+Follow-up from the review of 87440d7e (pre-existing, not caused by it): installSkill copies onto the destination path, so a symlink or dangling symlink there makes the repair write THROUGH it (outside the skill dir) or fail on every launch, and a directory where a shipped file belongs fails with EISDIR every launch. Fix: unlink (or rename aside) the destination before copying. Separate increment.
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-10-14
 
