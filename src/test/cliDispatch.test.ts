@@ -57,11 +57,12 @@ function mkHome(): string {
 
 /** The suites that spawn the real CLI run under this ceiling instead of mocha's 10 s default; a test that sets its
  *  own timeout keeps it (the network-help suite's single test sets 30 s).
- *  WHY: on 2026-10-14 a machine-wide starvation window of about 85 s (load average 195-267 from iOS Simulator apps,
- *  a remote-desktop session and a file indexer) slowed 23 consecutive spawned-CLI tests 3-40× — `-v` went from
- *  238 ms to 9432 ms with no stub and no server involved — and timed out two of them at 10 s. The same tests then
- *  measured 0.2-2.6 s in isolation under the same load. A spawn's cost is the machine's, not the code's: this
- *  ceiling only stops load from reading as a failure, and every assertion is unchanged (TRDD-CS2W7E77). */
+ *  WHY: on 2026-10-14 a machine-wide starvation window of about 85 s (load average 195-267, from processes outside
+ *  the test suite) slowed 23 consecutive spawned-CLI tests 3-40× — `-v` went from 238 ms to 9432 ms with no stub
+ *  and no server involved — and timed out two of them at 10 s. The same tests then measured 0.2-2.6 s in isolation
+ *  under the same load. A spawn's cost is the machine's, not the code's: this ceiling absorbs the measured window
+ *  (worst single test 9.4 s), not any load — a 40× slowdown of the slowest test here would still exceed it — and
+ *  every assertion is unchanged (TRDD-CS2W7E77). */
 const SPAWN_SUITE_TIMEOUT_MS = 60_000
 
 /** The launch check's notice when the first-run full setup fails (autoSetup.ts, ensureInstalled). */
@@ -191,8 +192,10 @@ suite('agentlenspro — diagnostics dispatch parity (absorbed agentlens-cli.js s
       // /api/server-stats on the UI port whose data dir differs — before every spawn gate — and otherwise spawns a
       // detached alcore. With the ports left at their defaults (isolatedEnv deletes them) that server is the
       // developer's LIVE collector. Pinned free ports leave the step's stats probe empty, so there is nothing to kill;
-      // the revive brake, set in the child's own data dir, then fails the step before any spawn. The notice is
-      // therefore the deterministic "first-run setup failed" one, and no process outlives the test.
+      // the revive brake, set in the child's own data dir, stops that step before any spawn should it be reached.
+      // The notice reads "first-run setup failed" whichever step fails first, so the test proves that setup failed
+      // and no server outlived it, not that the brake fired. A pinned free port another process takes first (a second
+      // suite running at once) could still be adopted and killed; only TRDD-V2HFI30L closes that.
       const env = isolatedEnv(home, {
         AGENTLENS_MCP_URL: stub.url,
         UI_PORT: String(await freePort()),

@@ -3,7 +3,7 @@ trdd-id: HSPUF5XH
 title: Bump and publish agentlenspro only after every open card is terminal and every known issue is fixed
 column: blocked
 created: 2026-09-03T10:48:30+0200
-updated: 2026-10-14T15:39:28+0200
+updated: 2026-10-14T21:18:41+0200
 current-owner: main-session
 task-type: infra
 min-approval-requirement: user
@@ -12,7 +12,7 @@ created-by: main-session
 npt: []
 eht: []
 pre-block-column: todo
-blocked-by: [2R36W8Q1, N60JUWU3, UTFVMVT8, CAJ5RCP9, 9SYRK6SW, QE114936, POLG0613, 768NEX6E, 7YPQWKPG, 7NHUU6GK, ZSX34J8F, 2R0AXCKL, 2TQHNMEC, U0L78B3Z, CS2W7E77]
+blocked-by: [2R36W8Q1, N60JUWU3, UTFVMVT8, CAJ5RCP9, 9SYRK6SW, QE114936, POLG0613, 768NEX6E, 7YPQWKPG, 7NHUU6GK, ZSX34J8F, 2R0AXCKL, 2TQHNMEC, U0L78B3Z, CS2W7E77, V2HFI30L]
 post-release-verification: [IXMB2JVD]
 ---
 
