@@ -188,24 +188,25 @@ export function isEphemeralTarget(target: string, cwd: string): boolean {
  *  a role (`ROLE: MEASURE|REVIEW|INVESTIGATE`, read by reviewGate's workerDeclaredRole) relaxes ONLY the fail-closed
  *  rule for UNRESOLVABLE targets; a resolvable write outside the ephemeral dirs (a role fork writing `src/a.ts`)
  *  still demands review, so labelling a worker a role never switches review off for its real writes.
- *  Unresolvable = still holds `$` after the same-command literal assignments were applied (a `$(date +%s)` stamp,
- *  a `for i …` loop variable). Exempt only when (1) the text before the first `$`, cut at its last `/`, is a
- *  non-empty directory that is itself ephemeral (judged by isEphemeralTarget on a probe file inside it, after
- *  normalising `..`), and (2) the remainder from the first `$` holds no `/`, so AS WRITTEN it is one file name
- *  inside that directory (the review of revision 1: a static prefix alone is unsound when the dynamic part can be
- *  `$(printf ../src)/a.ts`).
- *  A target holding a BACKTICK never passes (review of df8bfc70): only a QUOTED backtick span reaches here intact
- *  (shellWords splits an unquoted one), and `"reports/`printf '..\57src\57a.ts'`"` holds no literal `/` yet
- *  expands to `reports/../src/a.ts`. `$(…)` is not failed closed the same way because `$(date +%s)` stamps are
- *  what this exemption exists for, while backticks are rare in scratch paths.
- *  Accepted residual: any runtime VALUE of a variable or substitution — an unassigned variable, a computed
- *  `X=$(…)`, a `for X in …` loop variable, or a quoted `$(…)` whose OUTPUT differs from its text
- *  (`"reports/$(printf '..\57x')"`, `$(cat f)`) — can hold `../`; only a declared-role worker can use it. */
+ *  Unresolvable = still holds `$` or a backtick after the same-command literal assignments were applied (a
+ *  `$(date +%s)` stamp, a `for i …` loop variable). Exempt only when (1) the text before the first `$` or backtick,
+ *  cut at its last `/`, is a non-empty directory that is itself ephemeral (judged by isEphemeralTarget on a probe
+ *  file inside it, after normalising `..`), and (2) the DYNAMIC remainder from that `$` or backtick holds no `/`,
+ *  no `..` and no backslash.
+ *  WHY a CONTENT rule (review of 668fc421): the danger is what the dynamic part can expand to, not its syntax. A
+ *  `/` lets it climb or descend (the round-1 review's `$(printf ../src)/a.ts`); `..` as a whole name is the parent
+ *  directory itself (`rm -rf "reports/$(printf ..)"` removes the project); a backslash escape spells either without
+ *  writing it (`'..\57src\57a.ts'`, `'\56\56'`). One rule covers `$(…)` and backtick spans alike, so a backtick
+ *  stamp (`docs_dev/`date +%s`-r.md`) passes like `$(date +%s)` does. Only a QUOTED backtick span reaches here
+ *  whole: shellWords treats an unquoted backtick as a command separator, so the target word ends AT the backtick
+ *  and the span's text becomes its own segment — a gap for every caller, not only roles (recorded on TRDD-QQ2XIIZ6).
+ *  Accepted residual: a dynamic part whose OUTPUT is computed rather than spelled — an unassigned or runtime
+ *  variable, a computed `X=$(…)`, a `for X in …` loop variable, `$(cat f)`, `$(printf %s%s . .)` — can still
+ *  expand to `..` or `../`; only a declared-role worker can use it. */
 export function isRoleScratchTarget(target: string, cwd: string): boolean {
-  if (target.includes('`')) return false
-  const cut = target.indexOf('$')
+  const cut = target.search(/[$`]/)
   if (cut < 0) return false
-  if (target.slice(cut).includes('/')) return false
+  if (/[/\\]|\.\./.test(target.slice(cut))) return false
   const dir = target.slice(0, target.lastIndexOf('/', cut) + 1)
   if (dir === '' || /[~*?{}[\]]/.test(dir)) return false
   return isEphemeralTarget(path.join(dir, '_'), cwd)
@@ -216,15 +217,47 @@ export function isRoleScratchTarget(target: string, cwd: string): boolean {
  *  round-1 review's `$(printf ../src)/a.ts` puts its `/`, so isRoleScratchTarget's no-`/` rule alone would pass
  *  it (TRDD-QQ2XIIZ6). For a target the tokenizer cut there (it ends in `$`), the RAW command must show EVERY
  *  `<target>(` as a flat substitution — no nested paren, quote, backslash or backtick — holding no `/`, then a word
- *  tail holding none, then the word's end. Anything else fails closed. */
+ *  tail holding none, then the word's end; and neither may hold `..`, the content rule isRoleScratchTarget cannot
+ *  apply to text it never sees (`rm -rf reports/$(printf ..)` removes the project). Anything else fails closed. */
 export function isFlatCutSubstitution(cmd: string, target: string): boolean {
   const opens = cmd.split(`${target}(`).length - 1
   if (opens === 0) return false
   const esc = target.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
   const flat = new RegExp(`${esc}\\([^()'"\\\\\`/]*\\)[^\\s;&|<>()'"\\\\\`/]*(?=$|[\\s;&|<>()])`, 'g')
-  return (cmd.match(flat) ?? []).length === opens
+  const found = cmd.match(flat) ?? []
+  return found.length === opens && found.every((m) => !m.includes('..', target.length))
 }
 
+/** The value a same-command `D=$(mktemp …)` records in commandWriteReasons' assignment map: not a path (mktemp's
+ *  output is unknowable here, and on macOS it is under /var/folders, not /tmp), only a mark isMktempTarget reads. */
+const MKTEMP: unique symbol = Symbol('mktemp')
+const MKTEMP_FLAGS = String.raw`(?:[ \t]+(?:-[dq]{1,2}|-t[ \t]+[A-Za-z0-9._-]+))*`
+
+/** Whether the assignment word `name=value` of a pure-assignment segment stores a fresh mktemp path.
+ *  WHY (review of 668fc421): role forks write scratch as `D=$(mktemp -d); cat > "$D/x"`, which armed the gate
+ *  because `$D` is unresolvable and has no static directory. Unquoted `D=$(mktemp -d)` reaches here cut as `D=$`
+ *  (the `(` is a separator) with `mktemp` heading the NEXT segment; quoted `D="$(mktemp -d)"` arrives whole. Either
+ *  way the RAW command decides, and fails closed unless EVERY bare mention of `name` is such an assignment (a second
+ *  assignment, `for D in`, `read D`, `D+=` or `export D` disqualifies it), with only `-d`, `-q` and `-t <prefix>` —
+ *  never a template argument (one with no `/` is created in the CWD), `-p` or `--tmpdir` — and nothing in the
+ *  command names TMPDIR, which would move mktemp's directory. */
+function isMktempAssignment(cmd: string, name: string, value: string, quoted: boolean, nextSeg: Word[] | undefined): boolean {
+  const cutShape = value === '$' && !quoted && nextSeg?.[0]?.word === 'mktemp'
+  const wholeShape = quoted && value.startsWith('$(mktemp')
+  if ((!cutShape && !wholeShape) || /TMPDIR/.test(cmd)) return false
+  const mentions = cmd.match(new RegExp(`(?<![\\w$-])(?<!\\$\\{)${name}(?!\\w)`, 'g')) ?? []
+  const assignments = cmd.match(new RegExp(`(?<![\\w$-])${name}=("?)\\$\\(mktemp${MKTEMP_FLAGS}[ \\t]*\\)\\1(?=$|[\\s;&|)])`, 'g')) ?? []
+  return assignments.length > 0 && mentions.length === assignments.length
+}
+
+/** A write target `$D`, `${D}`, `$D/<name>` or `${D}/<name>` whose D holds MKTEMP at this segment, `<name>` holding
+ *  no `..`, backslash, `$`, backtick, glob or whitespace — so it cannot leave the fresh directory, and an mktemp
+ *  that failed (D empty) cannot turn `"$D"/*` into `/*`. */
+function isMktempTarget(target: string, assigned: Map<string, string | typeof MKTEMP> | undefined): boolean {
+  const m = /^(?:\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*))(?:\/(.+))?$/.exec(target)
+  if (m === null || assigned?.get(m[1] ?? m[2]) !== MKTEMP) return false
+  return m[3] === undefined || !/\.\.|[\\$`*?[\]{}~\s]/.test(m[3])
+}
 // Exported as arrays so the tests can LOOP them: a hand-picked sample left most members untested
 // (review 2026-09-08), and an untested alternation is one a refactor can drop unnoticed.
 export const GIT_WRITE_SUBCOMMANDS = ['commit', 'push', 'pull', 'mv', 'rm', 'am', 'apply', 'checkout',
@@ -418,16 +451,20 @@ export function commandWriteReasons(cmd: string, cwd: string, opts: { roleScratc
   // (`S=/tmp/b tee …`) records nothing, because that VAR is not yet set for anything in THIS
   // segment. `cumulative[i]` is the literal map as of the START of segment `i` (segments
   // 0..i-1 applied); a later reassignment whose value is not itself a plain literal deletes the
-  // entry rather than keeping the stale value, so it still fails closed.
-  const cumulative: Map<string, string>[] = [new Map()]
-  for (const seg of segments) {
+  // entry rather than keeping the stale value, so it still fails closed. The one non-literal value
+  // recorded is MKTEMP, for a `D=$(mktemp …)` (isMktempAssignment): it never resolves to a path, and
+  // only a declared-role worker's `$D` / `$D/<name>` target may use it (isMktempTarget).
+  const cumulative: Map<string, string | typeof MKTEMP>[] = [new Map()]
+  for (let k = 0; k < segments.length; k++) {
+    const seg = segments[k]
     const next = new Map(cumulative[cumulative.length - 1])
     if (seg.every((w) => ASSIGNMENT_RE.test(w.word))) {
-      for (const w of seg) {
+      seg.forEach((w, j) => {
         const m = ASSIGNMENT_RE.exec(w.word) as RegExpExecArray
-        if (/[$`~*?{}[\]]/.test(m[2])) next.delete(m[1])
-        else next.set(m[1], m[2])
-      }
+        if (!/[$`~*?{}[\]]/.test(m[2])) next.set(m[1], m[2])
+        else if (isMktempAssignment(cmd, m[1], m[2], w.quoted, j === seg.length - 1 ? segments[k + 1] : undefined)) next.set(m[1], MKTEMP)
+        else next.delete(m[1])
+      })
     }
     cumulative.push(next)
   }
@@ -437,17 +474,20 @@ export function commandWriteReasons(cmd: string, cwd: string, opts: { roleScratc
     const m = /^(?:\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*))(\/.*)?$/.exec(word)
     if (m === null) return word
     const value = cumulative[segIdx]?.get(m[1] ?? m[2])
-    return value === undefined ? word : value + (m[3] ?? '')
+    return typeof value === 'string' ? value + (m[3] ?? '') : word
   }
 
   // WHY (TRDD-QQ2XIIZ6, amendment A): every write target is judged here, after `resolve`. A declared-role worker
   // additionally passes an UNRESOLVABLE target whose static directory is ephemeral (isRoleScratchTarget) and, when
-  // the tokenizer cut it at a `$(`, whose hidden substitution and tail hold no `/` (isFlatCutSubstitution); a
-  // resolvable target outside the ephemeral dirs still arms for every caller, role or not.
+  // the tokenizer cut it at a `$(`, whose hidden substitution and tail hold no `/` or `..` (isFlatCutSubstitution),
+  // and a `$D` / `$D/<name>` target whose D holds a same-command `$(mktemp …)` (isMktempTarget); a resolvable target
+  // outside the ephemeral dirs still arms for every caller, role or not.
   const scratch: Scratch = (target, segIdx) => {
     const r = resolve(target, segIdx)
     if (isEphemeralTarget(r, cwd)) return true
-    return opts.roleScratch === true && isRoleScratchTarget(r, cwd) && (!r.endsWith('$') || isFlatCutSubstitution(cmd, target))
+    if (opts.roleScratch !== true) return false
+    if (isMktempTarget(target, cumulative[segIdx])) return true
+    return isRoleScratchTarget(r, cwd) && (!r.endsWith('$') || isFlatCutSubstitution(cmd, target))
   }
   for (let idx = 0; idx < segments.length; idx++) {
     const reason = classifyCommand(segments[idx], null, cwd, scratch, idx)

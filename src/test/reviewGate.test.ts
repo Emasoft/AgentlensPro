@@ -179,6 +179,11 @@ suite('reviewGate — worker writes reach the main gate', () => {
     assert.strictEqual(workerDeclaredRole('ROLE: REVIEWER\nreview it'), null, 'a longer word is not the marker')
   })
 
+  test('workerDeclaredRole refuses a hyphenated role word (`ROLE: REVIEW-ish`), which a plain word boundary let through', () => {
+    assert.strictEqual(workerDeclaredRole(forkEntryContent('ROLE: REVIEW-ish of the draft')), null)
+    assert.strictEqual(workerDeclaredRole('ROLE: MEASURE-and-fix\nfix it'), null)
+    assert.strictEqual(workerDeclaredRole(forkEntryContent('ROLE: REVIEW: the draft')), 'review', 'punctuation after the word still declares it')
+  })
   test("a fork whose directive line is `ROLE: INVESTIGATE (…)` gets the role's scratch relaxation", () => {
     withWorkers((t, s) => {
       addWorker(s, 'agent-w', 'toolu_W23', 'fork', [forkEntryLine('ROLE: INVESTIGATE (read-only; may run read-only commands)\n1. find it'), assistantLine([
@@ -188,6 +193,14 @@ suite('reviewGate — worker writes reach the main gate', () => {
     })
   })
 
+  test('control: the same fork with NO role line demands review for the same scratch writes', () => {
+    withWorkers((t, s) => {
+      addWorker(s, 'agent-y', 'toolu_W25', 'fork', [forkEntryLine('read-only; may run read-only commands\n1. find it'), assistantLine([
+        bashBlock('SP=/private/tmp/sp; for i in 1 2; do echo r > $SP/x-$i.txt; done'),
+      ])])
+      assert.strictEqual(workerWriteDetail(t, 'toolu_W25', CWD), 'fork: redirect into $SP/x-$i.txt')
+    })
+  })
   test("amendment A: a role fork's UNRESOLVABLE writes inside an ephemeral dir (a loop variable, a $(date) stamp) demand no review", () => {
     withWorkers((t, s) => {
       addWorker(s, 'agent-t', 'toolu_W20', 'fork', [forkEntryLine('ROLE: MEASURE\n1. measure it'), assistantLine([
@@ -225,15 +238,62 @@ suite('reviewGate — worker writes reach the main gate', () => {
     assert.deepStrictEqual(role('echo x > src/x-$i.ts'), ['redirect into src/x-$i.ts'], 'a static directory that is not ephemeral')
   })
 
-  // Review of df8bfc70: a QUOTED backtick span reaches isRoleScratchTarget intact, and `printf '..\57src\57a.ts'`
-  // holds no literal `/` yet expands to `../src/a.ts`, so the no-`/` rule passed it for a role worker.
-  test('a role target holding a backtick span always arms, even when the span holds no `/`', () => {
+  // Review of 668fc421: the danger in a role's dynamic target is its CONTENT, not its syntax. A backslash escape
+  // spells `../` without writing it (`'..\57src\57a.ts'`, `'\56\56\57src\57a.ts'`), in `$(…)` and backticks alike.
+  test('a role target whose quoted `$(…)` spells `..` through a backslash escape arms', () => {
     const role = (cmd: string): string[] => commandWriteReasons(cmd, CWD, { roleScratch: true })
-    assert.deepStrictEqual(role(`echo x > "reports/\`printf '..\\57src\\57a.ts'\`"`), [`redirect into reports/\`printf '..\\57src\\57a.ts'\``])
-    assert.deepStrictEqual(role('echo x > "docs_dev/`date +%s`-r.md"'), ['redirect into docs_dev/`date +%s`-r.md'], 'even a stamp: a role writes `$(date +%s)` instead')
-    assert.deepStrictEqual(role('echo x > "docs_dev/$(date +%s)-r.md"'), [], 'control: the same stamp as `$(…)` still passes')
+    assert.deepStrictEqual(role(`echo x > "reports/$(printf '..\\57src\\57a.ts')"`), [`redirect into reports/$(printf '..\\57src\\57a.ts')`])
+    assert.deepStrictEqual(role(`echo x > "reports/$(printf '\\56\\56\\57src\\57a.ts')"`), [`redirect into reports/$(printf '\\56\\56\\57src\\57a.ts')`])
   })
 
+  test('the same escapes in a quoted backtick span arm too', () => {
+    const role = (cmd: string): string[] => commandWriteReasons(cmd, CWD, { roleScratch: true })
+    assert.deepStrictEqual(role(`echo x > "reports/\`printf '..\\57src\\57a.ts'\`"`), [`redirect into reports/\`printf '..\\57src\\57a.ts'\``])
+    assert.deepStrictEqual(role(`echo x > "reports/\`printf '\\56\\56\\57src\\57a.ts'\`"`), [`redirect into reports/\`printf '\\56\\56\\57src\\57a.ts'\``])
+  })
+
+  test('a backtick stamp in a role target passes like the same `$(date +%s)` stamp', () => {
+    const role = (cmd: string): string[] => commandWriteReasons(cmd, CWD, { roleScratch: true })
+    assert.deepStrictEqual(role('echo x > "docs_dev/`date +%s`-r.md"'), [])
+    assert.deepStrictEqual(role('echo x > "docs_dev/$(date +%s)-r.md"'), [], 'control: the `$(…)` stamp')
+  })
+
+  test('a cut `$(…)` whose hidden text spells `..` arms for a role: `rm -rf reports/$(printf ..)` removes the project', () => {
+    const role = (cmd: string): string[] => commandWriteReasons(cmd, CWD, { roleScratch: true })
+    assert.deepStrictEqual(role('rm -rf reports/$(printf ..)'), ['rm reports/$'])
+    assert.deepStrictEqual(role('echo x > docs_dev/$(printf ..)-x'), ['redirect into docs_dev/$'], '`..` with a word tail')
+    assert.deepStrictEqual(role('rm -rf reports/$(date +%s)'), [], 'control: a stamp still passes')
+  })
+
+  // Review of 668fc421: role forks write scratch as `D=$(mktemp -d); cat > "$D/x"`, and `$D` is unresolvable with no
+  // static directory, so isRoleScratchTarget alone armed on it (this session's fastedit reproduction fork).
+  test("a role worker's write into a same-command `$(mktemp -d)` directory demands no review", () => {
+    const role = (cmd: string): string[] => commandWriteReasons(cmd, CWD, { roleScratch: true })
+    assert.deepStrictEqual(role('D=$(mktemp -d); cat > "$D/min.ts"'), [])
+    assert.deepStrictEqual(role('D="$(mktemp -d -t fe)"\necho x > ${D}/a.ts && rm -rf "$D"'), [], 'quoted, `-t <prefix>`, braces, a cleanup rm')
+    withWorkers((t, s) => {
+      addWorker(s, 'agent-x', 'toolu_W24', 'fork', [forkEntryLine('ROLE: INVESTIGATE (read-only; may run read-only commands)\n1. reproduce it'), assistantLine([
+        bashBlock("D=$(mktemp -d)\ncat > \"$D/min.ts\" <<'EOF'\nexport const a = 1\nEOF\nfastedit edit \"$D/min.ts\" --replace a --snippet x"),
+      ])])
+      assert.strictEqual(workerWriteDetail(t, 'toolu_W24', CWD), null)
+    })
+  })
+
+  test('a mktemp variable never exempts a target that leaves it, a template or relocated mktemp, a rebinding, or an early use', () => {
+    const role = (cmd: string): string[] => commandWriteReasons(cmd, CWD, { roleScratch: true })
+    assert.deepStrictEqual(role('D=$(mktemp -d); cat > "$D/../src/a.ts"'), ['redirect into $D/../src/a.ts'], 'climbs out')
+    assert.deepStrictEqual(role('D=$(mktemp -d /x/src); cat > "$D/min.ts"'), ['redirect into $D/min.ts'], 'a template path')
+    assert.deepStrictEqual(role('D=$(mktemp -d tmp.XXXXXX); cat > "$D/min.ts"'), ['redirect into $D/min.ts'], 'a bare template is created in the cwd')
+    assert.deepStrictEqual(role('D=$(mktemp -d -p src); cat > "$D/min.ts"'), ['redirect into $D/min.ts'], '-p moves it')
+    assert.deepStrictEqual(role('TMPDIR=src; D=$(mktemp -d); cat > "$D/min.ts"'), ['redirect into $D/min.ts'], 'TMPDIR moves it')
+    assert.deepStrictEqual(role('D=$(mktemp -d); for D in src; do echo x > $D/a.ts; done'), ['redirect into $D/a.ts'], 'a loop rebinds D')
+    assert.deepStrictEqual(role('echo x > "$D/a.ts"; D=$(mktemp -d)'), ['redirect into $D/a.ts'], 'used before it is assigned')
+    assert.deepStrictEqual(role('D=$(mktemp -d); rm -rf "$D"/*'), ['rm $D/*'], 'a glob: a failed mktemp would make it /*')
+  })
+
+  test('the same mktemp write from a worker with NO declared role still demands review', () => {
+    assert.deepStrictEqual(commandWriteReasons('D=$(mktemp -d); cat > "$D/min.ts"', CWD), ['redirect into $D/min.ts'])
+  })
   test('a janitor worker is skipped even when it wrote a file', () => {
     withWorkers((t, s) => {
       addWorker(s, 'agent-d', 'toolu_W4', 'ai-maestro-janitor:janitor-memory-subconscious-agent', [userStringLine('go'), assistantLine([editBlock])])
