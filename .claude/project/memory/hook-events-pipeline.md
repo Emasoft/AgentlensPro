@@ -57,7 +57,7 @@ non-rare tool — into `GATE_MATCHER`, and how its per-call cost is bounded CLI-
 
 - [[hook-burn-gate]] — the burn gate: the one PreToolUse/PostToolUse hook (Task/Agent/Workflow matcher), its four denied disaster launches, and the RUNAWAY_FANOUT fork exception.
 - [[hook-install-and-timeouts]] — how hooks are installed (only through --install-hooks) and which timeouts setup writes into settings.json.
-- [[review-gate-per-turn-scan]] — the Stop review gate's transcript scan: the 4 MB tail, carry-over to the last credited review, and the per-turn scope (TRDD-QQ2XIIZ6).
+- [[review-gate-per-turn-scan]] — the Stop review gate's per-turn scan: it reads only the current turn, back to readCurrentTurn's start; the 4 MB tail remains only for delegateGate (TRDD-QQ2XIIZ6).
 - [[review-gate-credit-and-isolation]] — which forks the review gate credits (REVIEW and MEASURE predicates) and why a review fork must spawn with no isolation parameter.
 - [[review-gate-stop-hook-cap]] — why runMainGate ignores stop_hook_active, the open question of whether Claude Code's 9-block cap is per hook, and the 2026-10-14 goal pause attribution (TRDD-LR4SI79M).
 - [[claude-code-transcript-turn-shapes]] — the transcript record shapes the review gate's turn-boundary logic depends on (what starts a turn, what only looks like one).
