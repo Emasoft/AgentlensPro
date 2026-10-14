@@ -1074,6 +1074,32 @@ suite('server start — the install heals itself when the server is started (TRD
     }
     assert.ok(!fs.existsSync(path.join(f.dataDir, 'server.pid')), 'no collector was started')
   })
+
+  // The wiring test above INJECTS serverStartCheck, so a cliMain whose DEFAULT check were a no-op would still pass it.
+  // This drives cliMain with only the verb stubbed: the REAL autoSetupOnServerStart must run after it. A fresh repair
+  // lock keeps it from writing anything, so its server trigger prints one "install check skipped" line (or, when this
+  // machine's own telemetry env reads as foreign, the foreign-telemetry skip line, which has the same prefix).
+  test('the DEFAULT check of cliMain is the real autoSetupOnServerStart (a no-op default fails this)', async () => {
+    const f = s.f()
+    fs.writeFileSync(path.join(f.dataDir, '.autosetup.lock'), '')
+    const savedEnv: Record<string, string | undefined> = {}
+    for (const k of ['HOME', 'DATA_DIR', 'AGENTLENS_NO_AUTOSETUP', 'AGENTLENS_CLAUDE_SETTINGS']) savedEnv[k] = process.env[k]
+    process.env.HOME = f.home
+    process.env.DATA_DIR = f.dataDir
+    delete process.env.AGENTLENS_NO_AUTOSETUP
+    delete process.env.AGENTLENS_CLAUDE_SETTINGS
+    const err: string[] = []
+    const realWrite = process.stderr.write
+    process.stderr.write = ((chunk: string | Uint8Array): boolean => { err.push(String(chunk)); return true }) as typeof process.stderr.write
+    try {
+      assert.strictEqual(await cliMain(['server', 'start'], async () => undefined, { serverCommand: async () => undefined }), 0)
+    } finally {
+      process.stderr.write = realWrite
+      for (const [k, v] of Object.entries(savedEnv)) { if (v === undefined) delete process.env[k]; else process.env[k] = v }
+    }
+    assert.ok(err.some(x => x.startsWith('agentlenspro: install check skipped:')), `the default check never ran: ${err.join('|')}`)
+    assert.ok(!fs.existsSync(path.join(f.dataDir, 'server.pid')), 'no collector was started')
+  })
 })
 suite('round 4 — shell-set pipelines, write ordering, read-only diagnostics', () => {
   const s = fixtureSuite(true)
