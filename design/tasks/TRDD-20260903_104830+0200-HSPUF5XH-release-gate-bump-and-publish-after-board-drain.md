@@ -3,7 +3,7 @@ trdd-id: HSPUF5XH
 title: Bump and publish agentlenspro only after every open card is terminal and every known issue is fixed
 column: blocked
 created: 2026-09-03T10:48:30+0200
-updated: 2026-09-24T09:06:25+0200
+updated: 2026-10-14T15:38:20+0200
 current-owner: main-session
 task-type: infra
 min-approval-requirement: user
@@ -191,3 +191,7 @@ Per `.claude/project/memory/agentlenspro-publish-pipeline.md` and
 **NEVER** publish locally (the 1.0.0 bootstrap is the only sanctioned
 exception, already done), and **NEVER** add a `registry-url:` / auth token
 to `publish.yml` — a present token silently masks OIDC.
+
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-10-14
+
+2026-10-14: still blocked by 13 cards (trddgrep why HSPUF5XH); see TRDD-AVUGZV1K STATE for the release work not yet done (setup preflight, Docker, dist guard, CS2W7E77 full-suite runs).
