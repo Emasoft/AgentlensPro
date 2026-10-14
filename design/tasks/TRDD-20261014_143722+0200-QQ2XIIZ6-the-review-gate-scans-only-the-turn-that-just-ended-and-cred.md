@@ -4,7 +4,7 @@ title: The review gate scans only the turn that just ended and credits only non-
 column: dev
 status: tasked
 created: 2026-10-14T14:37:22+0200
-updated: 2026-10-14T16:16:02+0200
+updated: 2026-10-14T16:19:09+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -68,6 +68,7 @@ Open: if SubagentStop systemMessage is not shown in the main terminal, emit the 
 RESUME 2026-10-14 15:40: branch fix/setup-agent-preflight holds 9105ecde (per-turn gate, fork-only credit, review display via SubagentStop systemMessage) and 12f00588 (unique markers [AGENTLENSPRO-REVIEW-REPORT] / [AGENTLENSPRO-MEASURE-REPORT], defined once in reviewLoop.ts, shared markerOpening). Both are live via the npm link (node esbuild.js); no collector restart was needed because hooks run the CLI.
 IN FLIGHT: markerOpening loosening (accept marker followed by any non-word char, fixing **[MARKER]** Task:, backticked marker + text, [MARKER]:) — uncommitted until its review; owner rule file ~/.claude/rules/turn-protocol-and-review.md being updated to the new markers and to say forks return as completion notifications (backup docs_dev/turn-protocol-and-review.md.bak-20261014b).
 OPEN: (1) owner has not confirmed whether the review appears in the main terminal — the hook's systemMessage was recorded as hook_system_message only in the fork's own transcript; fallback plan: emit it from the main Stop hook of the turn that receives the fork's task-notification. (2) owner decision pending: remove the NO REVIEW POSSIBLE text escape. (3) memory follow-ups: re-add IJC5's [^1]-[^3] lesson references; drop the 'uncommitted' note in atom 8ZOJ once the markers commit. (4) the branch must be merged to main (--no-ff) before the release work continues.
+STATE 2026-10-14 16:25 (supersedes the RESUME 15:40 IN FLIGHT/OPEN lines above where they differ): OPEN (1) is ANSWERED — the owner reported seeing no review text in the terminal (the card's Follow-ups quote should read 'and  ideally' with two spaces, as the owner typed it). Next step is the mod design in docs_dev/20261014_160036+0200-review-display-mod-api.md; the main-Stop-hook fallback is NOT ruled out (whether a main-session Stop systemMessage renders, and with ANSI colour, is unverified). IN FLIGHT markerOpening loosening LANDED in cd369160. IN FLIGHT rule-file update FAILED: fastedit refused every attempt, ~/.claude/rules/turn-protocol-and-review.md equals its backup, awaiting the owner's choice of write route. OPEN (2) NO REVIEW POSSIBLE escape and OPEN (4) merge to main still stand. Follow-ups line 2 correction: the docs_dev/$(date …) target as the cause of the false positive and the 'self-feeding' generalisation are INFERRED from one occurrence — verify in src/cli/reviewGate.ts before fixing. Commit b4e0e3c7's message attributes the fork-transcript observation to the owner; the owner reported only that no review text appeared.
 
 ## Follow-ups
 
