@@ -30,6 +30,7 @@ import { ensureServer, openDashboard, serverCommand, daemonCommand } from './ser
 import { runSetupCli } from './setup'
 import { autoSetupOnServerStart, forceInstallTelemetry, maybeAutoSetup } from './autoSetup'
 import { disabledNotice } from './foreignTelemetry'
+import { beginLaunchNotices, flushNoticesToStderr } from './launchNotices'
 import { runBudgetCli } from './budgetCli'
 import { runWatchCli } from './watchCli'
 import { runCtxmapCli } from './ctxmapCli'
@@ -141,15 +142,48 @@ export const LATENCY_EXEMPT: Readonly<Record<string, string>> = {
 }
 
 /** Test seams for the server/daemon verbs — the verb itself and the install check that follows it — so a test can
- *  prove the wiring (the check runs, and runs AFTER the verb) without spawning a collector. Production passes none. */
+ *  prove the wiring (the check runs, and runs AFTER the verb) without spawning a collector; and for the launch check
+ *  and the diagnostics surface, so a test can prove WHEN the launch notices print (TRDD-YL3EWT6N item 7) without a
+ *  server or a real install. Production passes none. */
 export interface CliMainDeps {
   serverCommand?: (argv: string[]) => Promise<void>
   daemonCommand?: (argv: string[]) => Promise<void>
   serverStartCheck?: (argv: string[]) => Promise<void>
+  launchCheck?: (argv: string[]) => Promise<number | null>
+  diagnostics?: (argv: string[]) => Promise<void>
+}
+
+/** Every verb the dispatch switch in cliMainBody handles itself; any other name falls to its `default`, the
+ *  diagnostics surface. Pinned to the switch's `case` labels by a test (autoSetup.test.ts), so a new case cannot be
+ *  missed here — a miss would hold that verb's launch notices until it returns, or forever if it never does. */
+export const DISPATCHED_VERBS: ReadonlySet<string> = new Set([
+  'hook', 'gate', 'review-gate', 'review-supervisor', 'delegate-gate', 'statusline', 'statusline-history',
+  'get_account_status', 'disable', 'enable', 'telemetry', 'setup', 'server', 'daemon', 'dashboard', 'cache-expired',
+  'cache-state', 'last-compact', 'model-headroom', 'hook-context-cost', 'search', 'budget', 'watch',
+  'heartbeat-cost', 'config', 'store', 'env', 'ctxmap', 'ctxvis',
+])
+
+/** Does this invocation go to the diagnostics surface (runDiagnosticsCli) — the only place a tool can refuse? */
+function reachesDiagnosticsSurface(cmd: string | undefined, argv: string[]): boolean {
+  if (cmd === undefined) return false // the bare foreground server
+  if (cmd === 'get_account_status') return !argv.includes('--all') // only the plural form is file-backed
+  return !DISPATCHED_VERBS.has(cmd)
 }
 
 // The CLI dispatcher. `deps` is a test seam only (CliMainDeps); production calls it with two arguments.
 export async function cliMain(rawArgv: string[], startServer: () => Promise<unknown>, deps: CliMainDeps = {}): Promise<number> {
+  // The launch install check's notices belong to THIS invocation only (launchNotices.ts, TRDD-YL3EWT6N item 7):
+  // reset first, so an earlier in-process call can never leak lines in; and whatever is still held when the verb
+  // returns — not printed on entry, not folded into a refusal — prints now, after the verb's own output.
+  beginLaunchNotices()
+  try {
+    return await cliMainBody(rawArgv, startServer, deps)
+  } finally {
+    flushNoticesToStderr()
+  }
+}
+
+async function cliMainBody(rawArgv: string[], startServer: () => Promise<unknown>, deps: CliMainDeps): Promise<number> {
   // `--force-install-telemetry` is a GLOBAL, per-invocation flag (owner order 2026-10-02): consumed here, before
   // any verb parses its own flags, so no verb ever sees it and nothing persists it.
   const forceInstall = rawArgv.includes('--force-install-telemetry')
@@ -219,7 +253,9 @@ export async function cliMain(rawArgv: string[], startServer: () => Promise<unkn
     if (code !== null) return code
     if (cmd === undefined) return 0
   } else {
-    const blocked = await maybeAutoSetup(argv)
+    const blocked = await (deps.launchCheck ?? maybeAutoSetup)(argv)
+    // A non-null code means the check STOPPED the verb (another telemetry setup is in place): its held lines are the
+    // reason, and the finally in cliMain prints them on the way out — no verb output can come before them.
     if (blocked !== null) return blocked
   }
 
@@ -229,10 +265,17 @@ export async function cliMain(rawArgv: string[], startServer: () => Promise<unkn
   // setup is gone. Hook-path verbs, enable/disable/setup and `server status` pass through.
   const disabled = disabledNotice(argv)
   if (disabled) {
+    flushNoticesToStderr() // the launch check's lines came first; keep that order
     console.error(disabled.text)
     return disabled.code
   }
 
+  // ONE decision for the launch notices (launchNotices.ts, TRDD-YL3EWT6N item 7): only the diagnostics surface can end
+  // in a tool refusal, whose stderr must be exactly one JSON object, so only there do they wait (runDiagnosticsCli
+  // folds them into a refusal or prints them for its own non-tool sub-commands). Every other verb prints them now,
+  // BEFORE it runs, exactly as before — including the ones that never return (watch, budget --watch, the bare
+  // foreground server), which would otherwise hold them forever.
+  if (!reachesDiagnosticsSurface(cmd, argv)) flushNoticesToStderr()
   switch (cmd) {
     case 'hook':
       return exitNow(await runHookCommand('hook'))
@@ -268,7 +311,7 @@ export async function cliMain(rawArgv: string[], startServer: () => Promise<unkn
       // goes over the wire: it needs the live session accessors, which only the server has.
       if (argv.includes('--all')) return runAllAccountsCli(argv.slice(1))
       // Not `--all`: fall through to the diagnostics surface, which proxies it to the server.
-      await runDiagnosticsCli(argv)
+      await (deps.diagnostics ?? runDiagnosticsCli)(argv)
       return 0
     case 'disable':
       // THE GLOBAL BRAKE. Arms <dataDir>/DISABLED, which disarms every hook, the burn-gate, server
@@ -386,7 +429,7 @@ export async function cliMain(rawArgv: string[], startServer: () => Promise<unkn
     default:
       // Everything else — list/help <tool>/call/batch/<tool>/ops flags — is the diagnostics
       // surface (schemas fetched live from the server).
-      await runDiagnosticsCli(argv)
+      await (deps.diagnostics ?? runDiagnosticsCli)(argv)
       return 0
   }
 }

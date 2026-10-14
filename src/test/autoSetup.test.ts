@@ -16,9 +16,11 @@ import { runEnableCli } from '../cli/disableCli'
 import { FOREIGN_REASON, HOOK_PATH_VERBS, disabledNotice, killSwitchArmedForForeign } from '../cli/foreignTelemetry'
 import { AGENT_NAMES, SKILL_NAMES, SUPERVISOR_CMD, installAgents, installHooks, installSkills, skillFiles } from '../cli/hookInstall'
 import { agentlensDisabled, armKillSwitch, killSwitchPath, overrideKillSwitchEnv } from '../cli/killSwitch'
-import { cliMain } from '../cli/main'
+import { pushNotice } from '../cli/launchNotices'
+import { DISPATCHED_VERBS, cliMain } from '../cli/main'
 import { Ctx, REPAIR_STEPS, hookDriftList, hooksConverged, resolveCtx, runSetup } from '../cli/setup'
 import { freePort } from './helpers/freePort'
+import { startMcpStub } from './helpers/mcpStub'
 import { RULE_NAMES, disableAgentlensSurfaces, enableAgentlensSurfaces } from '../cli/surfaces'
 import { TelemetryVerdictRow, ensureTelemetryConfig, telemetryVerdict } from '../telemetryConfig'
 
@@ -1104,6 +1106,134 @@ suite('server start — the install heals itself when the server is started (TRD
     }
     assert.ok(err.some(x => x.startsWith('agentlenspro: install check skipped:')), `the default check never ran: ${err.join('|')}`)
     assert.ok(!fs.existsSync(path.join(f.dataDir, 'server.pid')), 'no collector was started')
+  })
+})
+// TRDD-YL3EWT6N item 7: the launch install check's notices are HELD (launchNotices.ts) and print where they belong —
+// folded into a single tool call's refusal (the exit-2 contract: stderr is exactly one JSON object), after a single
+// tool call's output otherwise, and BEFORE every other verb runs, as they always did. In-process, so the order of
+// stdout and stderr writes is observable in one sequence.
+suite('launch notices — held for a single tool call, printed before every other verb (TRDD-YL3EWT6N item 7)', () => {
+  const s = fixtureSuite(false)
+  type Seq = Array<['out' | 'err', string]>
+  const NOTICE = 'agentlenspro: restored skills (a test notice)'
+  const holdNotice = async (): Promise<null> => { pushNotice(NOTICE); return null }
+  const indexOf = (seq: Seq, stream: 'out' | 'err', text: string): number => seq.findIndex(([s2, t]) => s2 === stream && t.includes(text))
+
+  /** Run `fn` with HOME/DATA_DIR on the fixture and every switch that could stop a launch cleared; restores all. */
+  async function inFixtureEnv<T>(f: Fx, extra: Record<string, string>, fn: () => Promise<T>): Promise<T> {
+    overrideKillSwitchEnv(false)
+    const keys = ['HOME', 'DATA_DIR', 'AGENTLENS_NO_AUTOSETUP', 'AGENTLENS_DISABLED', 'AGENTLENS_MCP_URL']
+    const saved = Object.fromEntries(keys.map(k => [k, process.env[k]]))
+    process.env.HOME = f.home
+    process.env.DATA_DIR = f.dataDir
+    for (const k of ['AGENTLENS_NO_AUTOSETUP', 'AGENTLENS_DISABLED', 'AGENTLENS_MCP_URL']) delete process.env[k]
+    Object.assign(process.env, extra)
+    try { return await fn() } finally {
+      for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v }
+      overrideKillSwitchEnv(false)
+    }
+  }
+
+  /** stdout and stderr writes into ONE ordered sequence; process.exitCode restored (a refusal sets it to 2). */
+  async function captured(seq: Seq, fn: () => Promise<number>): Promise<number> {
+    const out = process.stdout.write
+    const err = process.stderr.write
+    const exitCode = process.exitCode
+    process.stdout.write = ((c: string | Uint8Array): boolean => { seq.push(['out', String(c)]); return true }) as typeof process.stdout.write
+    process.stderr.write = ((c: string | Uint8Array): boolean => { seq.push(['err', String(c)]); return true }) as typeof process.stderr.write
+    try { return await fn() } finally {
+      process.stdout.write = out
+      process.stderr.write = err
+      process.exitCode = exitCode
+    }
+  }
+
+  test('a single tool call prints the held notices AFTER its own output (seam: injected diagnostics surface)', async () => {
+    const seq: Seq = []
+    const code = await inFixtureEnv(s.f(), {}, () => captured(seq, () => cliMain(['get_burn_status'], async () => undefined, {
+      launchCheck: holdNotice, diagnostics: async () => { console.log('TOOL RESULT') },
+    })))
+    assert.strictEqual(code, 0)
+    const iOut = indexOf(seq, 'out', 'TOOL RESULT')
+    const iNote = indexOf(seq, 'err', NOTICE)
+    assert.ok(iOut >= 0 && iNote > iOut, JSON.stringify(seq))
+  })
+
+  test('a real single tool call holds the notices past the server round trip and prints them after the result', async () => {
+    const seq: Seq = []
+    let noticeAtFirstRequest: boolean | null = null
+    const stub = await startMcpStub([{ name: 'get_burn_status', description: 'x' }], () => ({ ok: 'the result' }),
+      () => { if (noticeAtFirstRequest === null) noticeAtFirstRequest = indexOf(seq, 'err', NOTICE) >= 0 })
+    try {
+      const code = await inFixtureEnv(s.f(), { AGENTLENS_MCP_URL: stub.url }, () => captured(seq, () =>
+        cliMain(['get_burn_status'], async () => undefined, { launchCheck: holdNotice })))
+      assert.strictEqual(code, 0)
+      assert.strictEqual(noticeAtFirstRequest, false, 'the notice must still be held while the tool runs')
+      const iOut = indexOf(seq, 'out', 'the result')
+      assert.ok(iOut >= 0 && indexOf(seq, 'err', NOTICE) > iOut, JSON.stringify(seq))
+    } finally { await stub.close() }
+  })
+
+  test('a real refusal folds the held notices into its ONE JSON object and prints nothing else', async () => {
+    const seq: Seq = []
+    const stub = await startMcpStub([{ name: 'get_burn_status', description: 'x' }], () => ({ error: 'nothing to report' }))
+    try {
+      await inFixtureEnv(s.f(), { AGENTLENS_MCP_URL: stub.url }, () => captured(seq, () =>
+        cliMain(['get_burn_status'], async () => undefined, { launchCheck: holdNotice })))
+      assert.strictEqual(seq.filter(([st]) => st === 'out').map(([, t]) => t).join(''), '', 'stdout stays empty on a refusal')
+      const payload = JSON.parse(seq.filter(([st]) => st === 'err').map(([, t]) => t).join('')) as Record<string, unknown>
+      assert.deepStrictEqual(payload, { tool: 'get_burn_status', error: 'nothing to report', notices: [NOTICE] })
+    } finally { await stub.close() }
+  })
+
+  test('a non-tool diagnostics sub-command (batch) prints the held notices BEFORE it reaches the server', async () => {
+    const seq: Seq = []
+    let noticeAtFirstRequest: boolean | null = null
+    const stub = await startMcpStub([], () => ({}),
+      () => { if (noticeAtFirstRequest === null) noticeAtFirstRequest = indexOf(seq, 'err', NOTICE) >= 0 })
+    try {
+      const code = await inFixtureEnv(s.f(), { AGENTLENS_MCP_URL: stub.url }, () => captured(seq, () =>
+        cliMain(['batch', '[]'], async () => undefined, { launchCheck: holdNotice })))
+      assert.strictEqual(code, 0)
+      assert.strictEqual(noticeAtFirstRequest, true, `batch must print the notice before it runs: ${JSON.stringify(seq)}`)
+    } finally { await stub.close() }
+  })
+
+  test('a verb the switch handles prints the held notices BEFORE it runs (watch and the foreground server never return)', async () => {
+    const seq: Seq = []
+    const code = await inFixtureEnv(s.f(), {}, () => captured(seq, () => cliMain(['server', 'status'], async () => undefined, {
+      launchCheck: holdNotice, serverCommand: async () => { console.log('SERVER VERB') }, serverStartCheck: async () => undefined,
+    })))
+    assert.strictEqual(code, 0)
+    const iNote = indexOf(seq, 'err', NOTICE)
+    assert.ok(iNote >= 0 && iNote < indexOf(seq, 'out', 'SERVER VERB'), JSON.stringify(seq))
+  })
+
+  test('a launch check that STOPS the verb prints its held lines, and the verb never runs', async () => {
+    const seq: Seq = []
+    let ran = false
+    const code = await inFixtureEnv(s.f(), {}, () => captured(seq, () => cliMain(['server', 'status'], async () => undefined, {
+      launchCheck: async () => { pushNotice('agentlenspro: BLOCKED by another telemetry setup'); return EXIT.CONFIG },
+      serverCommand: async () => { ran = true }, serverStartCheck: async () => undefined,
+    })))
+    assert.strictEqual(code, EXIT.CONFIG)
+    assert.strictEqual(ran, false)
+    assert.ok(indexOf(seq, 'err', 'BLOCKED by another telemetry setup') >= 0, JSON.stringify(seq))
+  })
+
+  test('held lines never leak from an earlier in-process invocation into the next one', async () => {
+    const seq: Seq = []
+    pushNotice('agentlenspro: LEFTOVER from an earlier call')
+    await inFixtureEnv(s.f(), {}, () => captured(seq, () => cliMain(['server', 'status'], async () => undefined, {
+      launchCheck: async () => null, serverCommand: async () => undefined, serverStartCheck: async () => undefined,
+    })))
+    assert.strictEqual(indexOf(seq, 'err', 'LEFTOVER'), -1, JSON.stringify(seq))
+  })
+
+  test('DISPATCHED_VERBS is exactly the set of case labels of the cliMain switch', () => {
+    const src = fs.readFileSync(path.join(REPO_ROOT, 'src', 'cli', 'main.ts'), 'utf8')
+    const labels = [...src.matchAll(/case '([^']+)':/g)].map(m => m[1])
+    assert.deepStrictEqual([...new Set(labels)].sort(), [...DISPATCHED_VERBS].sort())
   })
 })
 suite('round 4 — shell-set pipelines, write ordering, read-only diagnostics', () => {

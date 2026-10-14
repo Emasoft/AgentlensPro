@@ -134,13 +134,17 @@ around. It was not always true: before 2.22.0 a refusal printed `{"error": …}`
 exited **0**, so a consumer read a refusal as an answer (issue #9 §1). If you must support an
 older binary, check for a top-level `error` key as well as the exit code.
 
-Two more things a program needs:
+Three more things a program needs:
 
 - **`--json` is a global.** It works on every tool and overrides the human rendering, so a tool
   that normally prints a table still gives you JSON. `--out FILE` writes the full payload to disk
   and prints a digest instead; on a refusal the file is **not** written.
 - **A refusal never writes `--out`.** A file containing `{"error": …}` is worse than no file,
   because the next reader finds it and trusts it.
+- **A refusal may carry a `notices` array.** If the same launch repaired the install or warned (a first-run or
+  `agentlenspro: restored …` line), those lines travel INSIDE the refusal — `{"tool": "...", "error": "...",
+  "notices": ["agentlenspro: ..."]}` — so stderr is still exactly one JSON object. The key is absent when there
+  is nothing to report; on any other exit the same lines print on stderr as plain text.
 
 ## When a command fails — read the failure, don't retry blindly
 

@@ -19,6 +19,7 @@ import {
 } from './cliCore'
 import { EXIT, UsageError } from './cliErrors'
 import { strArg, assertKnownFlags } from './argHelpers'
+import { flushNoticesToStderr, takeNotices } from './launchNotices'
 import { installAgents, installHooks, installOtel, installSkills, installStatusline } from './hookInstall'
 import { ensureServer, openDashboard, showStatus, stopServer } from './serverControl'
 
@@ -515,8 +516,11 @@ function toolError(result: unknown): string | null {
 function emit(tool: string, result: unknown, globals: { out: string | null; json?: boolean }): void {
   const err = toolError(result)
   if (err !== null) {
+    // The launch check's held notices travel INSIDE the refusal (TRDD-YL3EWT6N item 7): stderr stays exactly one
+    // parseable JSON value — the exit-2 contract — and no notice is lost. The key is omitted when there are none.
     process.exitCode = EXIT.UNKNOWN
-    console.error(JSON.stringify({ tool, error: err }, null, 2))
+    const notices = takeNotices()
+    console.error(JSON.stringify(notices.length > 0 ? { tool, error: err, notices } : { tool, error: err }, null, 2))
     return
   }
   // `--json` overrides the human rendering: a caller who asked for JSON gets JSON even from a tool
@@ -618,6 +622,15 @@ export async function runDiagnosticsCli(argv: string[]): Promise<void> {
     else rest.push(argv[i])
   }
 
+  // The launch install check's held notices (launchNotices.ts, TRDD-YL3EWT6N item 7) wait ONLY for a single tool
+  // call — `call <tool>` or `<tool> …`, the two paths that end in emit(), where a refusal folds them into its JSON
+  // so stderr stays one parseable object. Every other path here — any ops flag (`--guard` never returns), usage,
+  // `list`, `help`, `batch` — prints them now, before it runs, exactly as it always did. A new ops flag is covered
+  // without touching this line: any field set on `ops` counts.
+  const anyOp = otelOp !== null || statuslineOp !== null || hooksOp !== null
+    || Object.values(ops).some(v => v !== false && v !== null && v !== undefined)
+  const singleToolCall = !anyOp && rest[0] !== undefined && !['-h', '--help', 'list', 'help', 'batch'].includes(rest[0])
+  if (!singleToolCall) flushNoticesToStderr()
   // Settings mutation is standalone — no server needed, exits after the transaction.
   if (otelOp) {
     await installOtel(otelOp === 'uninstall')

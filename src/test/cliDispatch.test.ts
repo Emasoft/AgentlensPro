@@ -5,6 +5,7 @@ import * as os from 'os'
 import * as path from 'path'
 import { spawn } from 'child_process'
 import type { AddressInfo } from 'net'
+import { McpStub, startMcpStub } from './helpers/mcpStub'
 
 // ── the single `agentlenspro` executable — dispatch contracts (TRDD-7284WCW7) ─────────────
 // Spawns the REAL built CLI (standalone/cli.js) with HOME pointed at an EMPTY temp dir and
@@ -81,39 +82,6 @@ suite('agentlenspro — zero-side-effect global flags', () => {
     } finally { fs.rmSync(home, { recursive: true, force: true }) }
   })
 })
-
-// A minimal MCP stub: answers initialize, tools/list, tools/call over plain JSON (the CLI
-// accepts plain-JSON responses on the Streamable-HTTP endpoint). Real HTTP, real CLI child.
-interface McpStub { url: string; calls: Array<{ method: string; params: unknown }>; close: () => Promise<void> }
-function startMcpStub(tools: Array<Record<string, unknown>>, callResult: (name: string) => unknown): Promise<McpStub> {
-  return new Promise((resolve) => {
-    const calls: Array<{ method: string; params: unknown }> = []
-    const server = http.createServer((req, res) => {
-      const chunks: Buffer[] = []
-      req.on('data', (c: Buffer) => chunks.push(c))
-      req.on('end', () => {
-        const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as { id: number; method: string; params: unknown }
-        calls.push({ method: body.method, params: body.params })
-        let result: unknown = {}
-        if (body.method === 'tools/list') result = { tools }
-        if (body.method === 'tools/call') {
-          const name = (body.params as { name: string }).name
-          result = { content: [{ type: 'text', text: JSON.stringify(callResult(name)) }] }
-        }
-        res.writeHead(200, { 'Content-Type': 'application/json' })
-        res.end(JSON.stringify({ jsonrpc: '2.0', id: body.id, result }))
-      })
-    })
-    server.listen(0, '127.0.0.1', () => {
-      const port = (server.address() as AddressInfo).port
-      resolve({
-        url: `http://127.0.0.1:${port}/mcp`,
-        calls,
-        close: () => new Promise<void>((r) => server.close(() => r())),
-      })
-    })
-  })
-}
 
 suite('agentlenspro — diagnostics dispatch parity (absorbed agentlens-cli.js surface)', () => {
   test('`list --desc` prints every tool from the live tools/list schema, one per line', async () => {
@@ -199,9 +167,28 @@ suite('agentlenspro — diagnostics dispatch parity (absorbed agentlens-cli.js s
       const r = await runCli(['get_agent_tokens', '--agentId', 'nope'], isolatedEnv(home, { AGENTLENS_MCP_URL: stub.url }))
       assert.notStrictEqual(r.code, 0, 'a refusal must not exit 0')
       assert.strictEqual(r.stdout.trim(), '', `stdout must stay parse-safe, got: ${r.stdout}`)
-      const payload = JSON.parse(r.stderr) as { tool: string; error: string }
+      // The empty HOME makes this launch a FIRST RUN, so the install check has a notice to print. It used to land on
+      // stderr ahead of the refusal and break JSON.parse; it now travels inside the refusal (TRDD-YL3EWT6N item 7).
+      const payload = JSON.parse(r.stderr) as { tool: string; error: string; notices?: string[] }
       assert.strictEqual(payload.tool, 'get_agent_tokens')
       assert.ok(payload.error.includes('not found'), r.stderr)
+      assert.ok(Array.isArray(payload.notices) && payload.notices.length > 0 && payload.notices.every(n => n.startsWith('agentlenspro:')),
+        `the first-run notice must be folded into the refusal: ${r.stderr}`)
+    } finally { await stub.close(); fs.rmSync(home, { recursive: true, force: true }) }
+  })
+
+  test('a refusal with nothing to report carries NO notices key — the field appears only when something happened', async () => {
+    const home = mkHome()
+    const stub = await startMcpStub(
+      [{ name: 'get_agent_tokens', description: 'x', inputSchema: { properties: { agentId: { type: 'string' } } } }],
+      () => ({ error: 'Agent "nope" not found.' }),
+    )
+    try {
+      const r = await runCli(['get_agent_tokens', '--agentId', 'nope'], isolatedEnv(home, { AGENTLENS_MCP_URL: stub.url, AGENTLENS_NO_AUTOSETUP: '1' }))
+      assert.notStrictEqual(r.code, 0)
+      assert.strictEqual(r.stdout.trim(), '')
+      const payload = JSON.parse(r.stderr) as Record<string, unknown>
+      assert.deepStrictEqual(Object.keys(payload).sort(), ['error', 'tool'], r.stderr)
     } finally { await stub.close(); fs.rmSync(home, { recursive: true, force: true }) }
   })
 

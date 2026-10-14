@@ -38,6 +38,7 @@ import * as fs from "fs"
 import { EXIT } from "./cliErrors"
 import { HOOK_PATH_VERBS, READ_ONLY_VERBS, disableForForeignTelemetry, enableIfForeign, killSwitchArmedForForeign } from "./foreignTelemetry"
 import { agentlensDisabled, overrideKillSwitchEnv } from "./killSwitch"
+import { pushNotice } from "./launchNotices"
 import { SurfaceDirs, enableAgentlensSurfaces } from "./surfaces"
 import { Ctx, REPAIR_STEPS, hooksConverged, otelDrift, readSettingsFresh, resolveCtx, runSetup } from "./setup"
 import { TelemetryConflict, TelemetryVerdictRow, formatTelemetryConflicts } from "../telemetryConfig"
@@ -185,7 +186,10 @@ export async function maybeAutoSetup(argv: string[], deps: AutoSetupDeps = {}): 
   // AGENTLENS_NO_AUTOSETUP=1 turns the check off ENTIRELY: nothing but this env check runs — no settings read,
   // no write, no kill-switch armed. (The read-only verdict per key is `agentlenspro setup --dry-run`.)
   if (AUTOSETUP_EXCLUDED_VERBS.has(verb) || (deps.env ?? process.env).AGENTLENS_NO_AUTOSETUP === "1") return null
-  return ensureInstalled("launch", verb, deps)
+  // The lines are HELD, not printed (launchNotices.ts, TRDD-YL3EWT6N item 7): printed before the verb they broke the
+  // exit-2 contract — a refused tool call must leave exactly one JSON object on stderr. cliMain prints them, or a
+  // refusal folds them into its JSON. An injected `stderr` (the tests) still receives them directly.
+  return ensureInstalled("launch", verb, { ...deps, stderr: deps.stderr ?? pushNotice })
 }
 
 /** Is Claude Code on this machine at all? Present when `~/.claude` exists OR `claude` resolves on PATH. A server
