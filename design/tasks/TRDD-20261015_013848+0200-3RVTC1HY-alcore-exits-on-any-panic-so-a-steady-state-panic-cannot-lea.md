@@ -1,10 +1,10 @@
 ---
 trdd-id: 3RVTC1HY
 title: alcore exits on any panic so a steady-state panic cannot leave a live-looking zombie
-column: blocked
+column: todo
 status: tasked
 created: 2026-10-15T01:38:48+0200
-updated: 2026-10-15T11:05:29+0200
+updated: 2026-10-16T00:48:08+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -15,9 +15,9 @@ mandated-by: none
 approved: true
 approval-judge: main-agent@agentlenspro
 approval-datetime: 2026-10-15T01:38:48+0200
-blocked-by: [0BDOV3WC]
+blocked-by: []
 eht: [TYJSS45N]
-pre-block-column: todo
+pre-block-column: 
 project-id: agentlenspro
 blocker-probe: [trddgrep, why, 3RVTC1HY]
 blocker-holds-if: not-match:READY
@@ -54,7 +54,9 @@ Every restart re-runs the reuse path, and that path deletes cards.duckdb after a
 
 - 2026-10-15T01:38:48+0200 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-10-15T01:39:06+0200 — column → blocked by main-agent@agentlenspro. waits for TRDD-0BDOV3WC (every restart re-runs the reuse path)
+- 2026-10-16T00:48:08+0200 — column → todo by main-agent@agentlenspro. blocker TRDD-0BDOV3WC complete (4d5db2dc) Cleared blocked-by (--clear-blocker override).
 
 ## Notes and lessons learned
 
 2026-10-15: f9e0742e (TRDD-KMF02UEX) removed the panics on the demote path (the DuckDB .expect calls in demote_cold and its parse/serialize .expect). Panic sites under the state lock that remain on the ingest and restore paths (reports_dev/kmf02uex-facts.md section 2; other lock holders not surveyed): the serialize .expect and the upsert in put_arc (every put), begin/commit in the restore, set_meta in mark_restore_complete, discard_cards, and len() where restore_reused still calls it.
+2026-10-16: motivating incident — the live collector stayed a live-looking zombie for over 28 hours after a log-sweeper panic poisoned the state lock (2026-10-14 16:21:56); exit-on-panic would have turned it into a restart. Unblocked: TRDD-0BDOV3WC landed in 4d5db2dc.

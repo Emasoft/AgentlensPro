@@ -1,10 +1,10 @@
 ---
 trdd-id: 0BDOV3WC
 title: A DuckDB out-of-memory read at boot makes the card store delete cards.duckdb and can lose cards
-column: todo
-status: tasked
+column: complete
+status: archived
 created: 2026-10-15T01:29:03+0200
-updated: 2026-10-15T11:45:53+0200
+updated: 2026-10-16T00:47:58+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -16,11 +16,23 @@ approved: true
 approval-judge: main-agent@agentlenspro
 approval-datetime: 2026-10-15T01:29:03+0200
 project-id: agentlenspro
+implementation-commits: [4d5db2dc]
 ---
 
 # A DuckDB out-of-memory read at boot makes the card store delete cards.duckdb and can lose cards
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-10-15
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-10-16
+- STATUS: implemented in rust-core/crates/agentlens-core/src/card_store.rs (commit: see implementation-commits); NOT deployed (the live collector runs a binary from 2026-10-03; deploy and restart are the owner's call).
+- FIX: an out-of-memory boot read (count, full scan, or a row read) no longer deletes cards.duckdb. The store reopens the file at a boot-only REBUILD_MEMORY_LIMIT of 1024 MiB, re-runs the reuse checks, copies cards and meta into cards.duckdb.rebuild (ATTACH, INSERT SELECT, CHECKPOINT, DETACH, FORCE CHECKPOINT, checked close), removes the old WAL, syncs, renames the rebuild over cards.duckdb, syncs the directory, and reloads at 256 MiB (at 1024 MiB with a loud warning if it no longer fits). Any failure BEFORE the rename removes the rebuild files and takes the old rebuild-from-snapshot path; nothing after the rename deletes the file (a failure there panics naming the kept file). Meta-stage failures keep the old path. This treats the symptom; TRDD-USSG465Q owns the cause.
+- EVIDENCE: reports_dev/0bdov3wc-rewrite-measure.md (lossless: count, distinct ids, sum(hash) of all 7 columns, meta, indexes, PRIMARY KEY equal, shown by the scratch probe's INSERT SELECT on the live and 30-rewrite copies (reports_dev/0bdov3wc-rewrite-measure.md) and by tests t1/t5 on the churn corpus; fresh file 123 MiB, boot-read floor (80,88] MiB), reports_dev/0bdov3wc-impl-report.md (gates: clippy -D warnings, card_store unit 18, card_reuse 17, card_store 12, card_store_file 3, lib 118; mutations m1-m6 each fail their tests; an isolated alcore on a copy of the 30-rewrite database rewrote 749,219,840 -> 128,987,136 bytes, 41,819 cards, and reused it at 256 MiB; this run logged row count and file size only).
+- Correction to commit 4d5db2dc's message: it attributes 'lossless by sum(hash)' to the isolated alcore run; that run logged only rows and sizes.
+- DESIGN HISTORY: five proposals were sent to review. The third (paging plus stop-instead-of-delete) was blocked; the fourth (paging only) was refuted by its own measurement (production-usable page shapes need 184 MiB with ORDER BY and 112 MiB with a Rust sort on the live copy, not 96; the 30-rewrite copy fails both at 256); the fifth (this rewrite) was accepted with fixes over two rounds. Owner authority for proceeding past two rounds: the order of 2026-10-05 recorded verbatim on TRDD-AVUGZV1K: "decide yourself. base your decisions on verified facts and tests. you are in charge, complete all TRDDs reviews in my stead." The stop/exit-78/knob design and its owner veto point are gone.
+- MEASURED FACTS kept for later cards: every whole-card rewrite leaves one dead row holding the whole old card and checkpoints never reclaim it (30-rewrite -> 40-rewrite copy: dead-row proxy +310 = 31 cards x 10 rounds, used blocks +322 = about 84 MB = 10 x 8.4 MB of rewritten text); the runtime readers page() first page and demotion need (224,232] MiB on the 30-rewrite copy (cold); lowering memory_limit on a connection is accepted; a stale WAL beside a renamed fresh file is ignored on a read-only open but stays on disk.
+- RESIDUALS: (1) boot memory: a rewrite boot peaks at 1.84-1.88 GB RSS vs 1.33-1.34 GB for an ordinary boot (4 interleaved runs each, --no-log-scan, MIMALLOC_PURGE_DELAY=0), about 217 MiB below the 2048 MiB hard cap; the RSS guard is first polled after CoreState::open returns, so a cap exit can only happen after the rename and the next boot reuses the compact file (a cap exit after the rename leaves the complete compact file in place and the next boot reuses it; ingest after the rename is protected by the existing reuse-path ordering contract (TRDD-9VX3WTGU), not by this change; cap exits already end most boots (1,056 of 1,334 since 2026-09-27), so this adds one more to that baseline); a production-shaped boot (log scan on) was not measured. (2) If the live card data ever outgrows the 1024 MiB rebuild limit, every boot repeats a failed rewrite and falls back to the lossy path; if the fresh file cannot load even at 1024 MiB, boot panics (crash loop). (3) `reused()` is now true after a rewrite, so DurableState imports offsets and skips the snapshot restore (correct: the content is complete) — TRDD-6B7VV2Z7 and TRDD-9VX3WTGU reason about that path. (4) DuckDB spill residue cards.duckdb.tmp is not cleaned up. (5) The live-clone FATAL "Failed to delete all rows from index. Only deleted 0 out of 1 rows" (on a copy of the live file, not on the 30-rewrite copy) is unexplained; production never wrote to that file after the copy point.
+- LIVE OUTAGE FOUND 2026-10-15: the live collector (pid 55408, binary 2026-10-03) has been a zombie since 2026-10-14 16:21:56: thread log-sweeper panicked at card_store.rs:520 "scan the cards for persistence ... Out of Memory Error" and the state lock is poisoned; no cards ingested since. That panic site was removed from source by commit e3c3c388 (TRDD-DA0GN1CS) but never deployed. Reported to the owner; restart/deploy awaits the owner.
+- NEXT: deploy with the next release (owner); TRDD-USSG465Q (stop whole-card rewrites) is the cause fix.
+
+## SUPERSEDED STATE (2026-10-15 morning; replaced by the STATE block above)
 
 - STATUS: revisions 1 and 2 were reviewed (the limit of the propose-then-review protocol); revision 3 folds in round 2 and the second measurement but is itself UNREVIEWED, and WAITS FOR THE OWNER's decision on the three open points. No code written.
 - MECHANISM (verified, reports_dev/0bdov3wc-facts.md, read by the main agent at card_store.rs:185-318): try_reuse (count) and load_resident (one `SELECT session_id, card FROM cards ORDER BY seq`) both report "the cards table is unreadable"; open then deletes cards.duckdb and the restore rebuilds from the NDJSON snapshot while importing the newer offsets, so idle sessions missing from the stale snapshot are never re-read. 8 of the last 10 refusals were out-of-memory; between about 14 and 10,900 cards were absent after each (counts per refusal, not identities).
@@ -46,13 +58,14 @@ At boot, `try_reuse`/`load_resident` read the cards table at the 256 MiB DuckDB 
 - TRDD-DA0GN1CS commit 2 (exit on any panic) must not land before this card: every restart re-runs this path.
 
 ## Acceptance
-- [ ] The failing statement is identified from a reproduction, not inferred.
-- [ ] An out-of-memory read never deletes cards.duckdb; a test forces the OOM (small memory_limit) and asserts the file survives and the next boot reuses it.
-- [ ] A test proves no card is lost across an OOM refusal.
+- [x] The failing statement is identified from a reproduction, not inferred.
+- [x] An out-of-memory read never deletes cards.duckdb; a test forces the OOM (small memory_limit) and asserts the file survives and the next boot reuses it.
+- [x] A test proves no card is lost across an OOM refusal.
 
 ## Approval log
 
 - 2026-10-15T01:29:03+0200 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-10-16T00:47:58+0200 — COMPLETE by main-agent@agentlenspro. fix committed in 4d5db2dc; acceptance boxes 1-3 met by reproduction and tests t1-t6; deploy tracked on TRDD-HSPUF5XH.
 
 ## Recommendation for the owner
 
@@ -65,3 +78,4 @@ At boot, `try_reuse`/`load_resident` read the cards table at the 256 MiB DuckDB 
 ## Notes and lessons learned
 
 2026-10-15: at 256 MiB demotion succeeded on all three measured copies (cold connections; TRDD-BSLCSCYK). Their demotion floors sit below their boot-read floors (live copy at most 96 vs 256 MiB, compact at most 32 vs 88, large-r30 at most 256 vs about 352); that this order holds at every bloat level between them is INFERRED. Production demotes on a warm connection after upserts, whose extra memory is unmeasured, so a demotion failure on a file whose boot read still passes is not ruled out; it is not shown to cause the refusal either: on these copies the timeline cards hold about 8.4 MB of card text, and their growth while demotion keeps failing is unmeasured. The live copy has the same cards content as the live file at its last write: a clone of the live file plus its WAL (last written 16:21:48 on 2026-10-14) was compared on row count, max(rowid), total card-text bytes, and a sum of row hashes over session_id, card, last_active_ms, seq and timeline_len (MEASURED with DuckDB 1.5.6 on clones; parent_session_id, source, the meta table and the physical layout were not compared); it demotes at no more than 96 MiB on its own checkpointed layout. This corrects the Relevance line in the archived TRDD-BSLCSCYK Results.
+2026-10-16: boxes 2 and 3 hold while the corpus can be copied under the 1024 MiB rebuild limit.

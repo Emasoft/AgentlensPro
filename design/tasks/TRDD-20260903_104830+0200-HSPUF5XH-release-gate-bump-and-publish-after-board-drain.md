@@ -3,7 +3,7 @@ trdd-id: HSPUF5XH
 title: Bump and publish agentlenspro only after every open card is terminal and every known issue is fixed
 column: blocked
 created: 2026-09-03T10:48:30+0200
-updated: 2026-10-15T18:49:36+0200
+updated: 2026-10-16T00:49:38+0200
 current-owner: main-session
 task-type: infra
 min-approval-requirement: user
@@ -12,7 +12,7 @@ created-by: main-session
 npt: []
 eht: []
 pre-block-column: todo
-blocked-by: [2R36W8Q1, N60JUWU3, CAJ5RCP9, 9SYRK6SW, QE114936, 768NEX6E, 7YPQWKPG, 7NHUU6GK, ZSX34J8F, 2R0AXCKL, 2TQHNMEC, CS2W7E77, H3D5ZBO1, 0BDOV3WC, WCENKH6T, 3RVTC1HY, TYJSS45N, 6B7VV2Z7, WCG7I5D8, USSG465Q]
+blocked-by: [2R36W8Q1, N60JUWU3, CAJ5RCP9, 9SYRK6SW, QE114936, 768NEX6E, 7YPQWKPG, 7NHUU6GK, ZSX34J8F, 2R0AXCKL, 2TQHNMEC, CS2W7E77, H3D5ZBO1, WCENKH6T, 3RVTC1HY, TYJSS45N, 6B7VV2Z7, WCG7I5D8, USSG465Q]
 post-release-verification: [IXMB2JVD]
 blocker-probe: [trddgrep, why, HSPUF5XH]
 blocker-holds-if: not-match:READY
@@ -246,3 +246,5 @@ review-gate: the gate no longer demands a review for a declared-role worker's sc
 
 2026-10-15: BSLCSCYK is listed because demotion failing at 256 MiB would leave timelines unstripped and resident memory growing; MEPIRHI4 (failure handling of one card) is not listed, as no repeating per-card failure has been shown; the title-level drain rule still covers it.
 2026-10-15: BSLCSCYK removed from blocked-by; it was completed and archived in b0fd9bc5 but left in this list until now.
+2026-10-16: the live collector (pid 55408, bin-native binary from 2026-10-03) has been a zombie since 2026-10-14 16:21:56 (log-sweeper panic 'scan the cards for persistence' OOM, state lock poisoned, no ingest). The panic site was removed by e3c3c388 (TRDD-DA0GN1CS); 4d5db2dc (TRDD-0BDOV3WC) adds the lossless OOM rewrite. Deploying the current alcore and restarting needs the owner's approval; back up ~/.agentlens card files first.
+2026-10-16: deploy facts for the owner's choice: deploying the current alcore ships every change since the 2026-10-03 binary, unexercised in production; recipe per CLAUDE.md: `node esbuild.js`/cargo release build, copy into bin-native without overwriting the running file in place, `codesign -s - --force` on the copy, check `alcore --version` does not exit 137, back up the full ~/.agentlens card set (cards.duckdb, its .wal, the card snapshot), then `agentlenspro server restart`. A restart with the OLD binary keeps the lossy OOM delete path, and the live cards.duckdb passes the boot read at 256 MiB but fails at 224 (thin margin), so a plain restart can delete and rebuild the card store and lose cards.
