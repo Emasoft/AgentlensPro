@@ -3,7 +3,7 @@ trdd-id: CS2W7E77
 title: The five P5 window auto-calibration tests fail deterministically on a burn-config ENOENT
 column: todo
 created: 2026-09-04T14:22:35+0200
-updated: 2026-10-15T03:38:39+0200
+updated: 2026-10-15T03:43:53+0200
 current-owner: main-session
 task-type: bugfix
 project-id: agentlenspro
@@ -174,3 +174,5 @@ Gate rule addition 2026-10-15: after building alcore for a counted run, run rust
 2026-10-15 Rust baseline at fc05d2c9 (no rust-core commit since 2026-10-10): release build exit 0, clippy --workspace --all-targets -- -D warnings exit 0 (replayed from cache in 1.58 s), cargo test --workspace 956 passed 0 failed (reports_dev/rust-head-check.md). The next counted pair must run after TRDD-DA0GN1CS commit 1, with alcore rebuilt from that HEAD.
 Run D1: HEAD e3c3c388, alcore rust-core/target/release built from a tree whose rust-core equals HEAD (sha256 a0b2be3a68dbca63230bb8b320e237477933d14be4d55ae78c0ecb9411de1a77, mtime 03:16:31, --version exit 64), AGENTLENS_ALCORE unset; pnpm run test:unit exit 0, 3177 passing, 13 pending, 0 failing; the latency guard RAN; load 6.9/14.1/17.2 on 14 CPUs at start. Working tree as in reports_dev/ts-run-status.txt (the owner-pending AGENT_NAMES hunk and the untracked agents/*-worker.md; TESTED-STATE hashes not re-taken). Counts as run 1 of a new pair only if no further code commit lands before run 2.
 Run D1 TESTED-STATE: all five hashes match the snapshot (hookInstall diff 760d8073…, cheap-worker 34277163…, fast-worker 65e8a919…, smart-worker 7965c97d…, agents diff 4bedd1d1…), taken by the main agent after the run from files this session did not edit. D1 counts as run 1 of a pair provided no further code commit lands before run 2.
+Run D1 COUNTS (corrected 2026-10-15): the retroactive no-op rebuild compiled nothing but changed the sha to 650e12886dd01047b29b6eeb46ba7e8be406e9eea514f76d8c85e8ef324b0489, because cargo re-copied deps/alcore-06e80c189b6fa61d over the codesigned output (now flags adhoc,linker-signed, same 03:16 build). A scratch copy of that deps file named alcore and re-signed with codesign -s - --force reproduces a0b2be3a68dbca63230bb8b320e237477933d14be4d55ae78c0ecb9411de1a77 exactly (checked by the main agent), so D1 ran this build code plus an ad-hoc signature.
+Gate rule detail 2026-10-15: do NOT codesign rust-core/target/release/alcore. The linker ad-hoc signature runs (--version exit 64), and a codesign makes the next cargo build re-copy the output, changing the sha. Order: build, then a no-op build (no Compiling line), then alcore --version (exit not 137), then the sha256 taken last, then the run. Clean means `git status --short --untracked-files=no rust-core/` prints nothing. The codesign step in CLAUDE.md applies to the bin-native copy, not to target/.
