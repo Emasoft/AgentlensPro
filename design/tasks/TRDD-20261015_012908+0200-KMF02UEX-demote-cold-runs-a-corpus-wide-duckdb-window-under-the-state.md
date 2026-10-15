@@ -4,7 +4,7 @@ title: demote_cold runs a corpus-wide DuckDB window under the state lock and pan
 column: todo
 status: tasked
 created: 2026-10-15T01:29:08+0200
-updated: 2026-10-15T01:43:36+0200
+updated: 2026-10-15T03:38:43+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -33,3 +33,7 @@ Bound the scan (only rows with timeline_len > 0 beyond the hot set), move the Du
 ## Approval log
 
 - 2026-10-15T01:29:08+0200 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+
+## Notes and lessons learned
+
+2026-10-15: when this card rewrites demote_cold, also correct the TRDD-RVKQDLRD QoS comment in log_reader.rs start_sweeper (from e3c3c388): say "each non-empty ingest batch" (ingest_scanned returns early on an empty batch), "once the corpus exceeds the hot set" (demote_cold returns early below it), and that the hold's duration is unmeasured.
