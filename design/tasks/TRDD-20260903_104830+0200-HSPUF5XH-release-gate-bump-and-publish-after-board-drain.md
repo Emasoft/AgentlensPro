@@ -3,7 +3,7 @@ trdd-id: HSPUF5XH
 title: Bump and publish agentlenspro only after every open card is terminal and every known issue is fixed
 column: blocked
 created: 2026-09-03T10:48:30+0200
-updated: 2026-10-15T14:57:41+0200
+updated: 2026-10-15T16:35:15+0200
 current-owner: main-session
 task-type: infra
 min-approval-requirement: user
@@ -237,6 +237,7 @@ review-gate: the gate no longer demands a review for a declared-role worker's sc
 2026-10-15: ZRXECDAQ met at f7a4945a (16 of 16 Linux runs of the memory-edge test) and moved to complete; removed from blocked-by.
 2026-10-15: 10NGH2BR added to blocked-by: the rss_guard primary_metric test failed 2 of 10 Linux full lib runs at 84f3b0f8; CI runs that test on Linux with no retry.
 2026-10-15: 7EZE3AIZ met (84f3b0f8, 7c077027; shutdown test ok in 20 of 20 full lib runs) and moved to complete; removed from blocked-by.
+2026-10-15: gate evidence at 7c077027 (macOS): cargo clippy --workspace --all-targets -- -D warnings exit 0; cargo test --workspace 980 passed 0 failed; pnpm run test:unit 3177 passing 0 failing; release build fresh, --version exit 64. Boxes stay unticked: they are run after the board drains, and pnpm run compile, the live deploy, the hold read and the api_call check were not run.
 
 ## Notes and lessons learned
 
