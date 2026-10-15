@@ -4,7 +4,7 @@ title: A current-version card store refusal imports offsets ahead of a stale sna
 column: todo
 status: tasked
 created: 2026-10-15T04:28:04+0200
-updated: 2026-10-15T05:18:31+0200
+updated: 2026-10-15T05:25:06+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -16,6 +16,7 @@ approved: true
 approval-judge: main-agent@agentlenspro
 approval-datetime: 2026-10-15T04:28:04+0200
 project-id: agentlenspro
+npt: [0R0NGVK6]
 ---
 
 # A current-version card store refusal imports offsets ahead of a stale snapshot and loses idle cards
@@ -23,6 +24,7 @@ project-id: agentlenspro
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-10-15
 **PLAN 2026-10-15 (revision 2, reviewed round 2 of 2): B' plus per-chunk progress replaces option C (C is now backburner card 53Y38MXJ).**
 - Commit 1 (next; independent of the owner): `DurableState::ingest_chunk` appends each flushed chunk's read positions with `append_changed` right after that chunk's cards are put (both ingest closures, plus the boot remainder and the full-sweep remainder; targeted sweeps keep saving on the 60 s tick). The version-stale branch of `restore_from_snapshot` tombstones both logs and stamps the version before the cold rescan. The appends are added to the persistence counters. Lands after card 0R0NGVK6.
+  - Commit 1 must also: derive each record key exactly as `export_file_state` does (`PathBuf::from(&s.file).to_string_lossy()`), or the next save tombstones and re-appends every key; append only on the lock's Ok arm (a poisoned lock puts nothing and appends nothing); rebuild T3 with more than SCAN_CHUNK generated files (precedent tests/log_reader_parity.rs:168-200), a simulated death after chunk 1, and the mutation 'append once after the sweep instead of per chunk'; add T7 (after appends, a forced tick with no change writes 0 offsets bytes and the version stamp is current). Narrow claim: no `Drop` in agentlens-core/src/*.rs saves state (subfolders unchecked; dropping a DuckDB connection checkpoints without changing content). Other readers of the three files (checked by main 2026-10-15): server_stats.rs:500-501 reads only disk sizes; the TS src/store/deltaLog.ts is not on the live path.
 - Commit 2 (B': a refused reuse imports no read positions and rewrites log-offsets empty before mark_restore_complete): sequenced after TRDD-0BDOV3WC (owner decision a) and after measuring cards.duckdb growth from a restore plus a full re-upsert. It changes 6 import-count asserts in tests/log_reader_parity.rs (:418 :460 :750 :857 :907 :929); :460 and :907 must move to the reuse path or a direct import_file_state call to keep their skip coverage.
 **CORRECTIONS (review 2026-10-15):** the B' crash loop: mechanism VERIFIED by main on 2026-10-15 (the startup sweep persists no read positions until it returns); whether a cap death lands inside a full rescan is UNMEASURED. Frequency: IF TRDD-0BDOV3WC turns an out-of-memory boot read into a stop (owner decision a, pending) — not 'after'. Facts marked VERIFIED in reports_dev/6b7vv2z7-facts.md were checked by the investigation agent unless this block names main.
 **RESIDUALS:** a death during the restore phase keeps no progress; per-chunk positions are a subset of the export (positions with no card are saved by the next tick); a resumed rescan runs on the sequential incremental path (INFERRED slower); clear-rescan progress is card YNKNLNO5.

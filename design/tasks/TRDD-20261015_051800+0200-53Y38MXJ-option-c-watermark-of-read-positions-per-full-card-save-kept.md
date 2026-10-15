@@ -4,7 +4,7 @@ title: Option C watermark of read positions per full card save kept as an option
 column: backburner
 status: tasked
 created: 2026-10-15T05:18:00+0200
-updated: 2026-10-15T05:18:00+0200
+updated: 2026-10-15T05:25:34+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: feature
@@ -24,9 +24,9 @@ At each FULL card save, persist the read positions (log offsets) exported at tha
 
 ## Why it was set aside on 2026-10-15
 Decided in review round 1 plus the advisor, while planning TRDD-6B7VV2Z7:
-- Until TRDD-6B7VV2Z7's per-chunk progress lands, C shares the verified no-progress loop at a smaller scale, because the card snapshot lags by days (TRDD-WCG7I5D8).
+- Until TRDD-6B7VV2Z7's per-chunk progress lands, C shares the no-progress mechanism (verified by main) at a smaller scale, because the card snapshot lags by days (TRDD-WCG7I5D8); whether a cap death lands inside its re-read is unmeasured.
 - It adds a second offsets log, clear-race and version-stamp special cases, a first-start fallback, seeding, and new boot-fatal load errors.
-- All of that is for an event TRDD-0BDOV3WC should make rare.
+- All of that is for an event that becomes rare IF the owner accepts TRDD-0BDOV3WC decision (a) (stop instead of delete on an out-of-memory boot read); until then 8 of the last 10 refusals were out-of-memory errors.
 
 ## When to revisit
 Only if refused reuses stay frequent after TRDD-0BDOV3WC and TRDD-6B7VV2Z7 land, measured. Do not revive it standalone.
