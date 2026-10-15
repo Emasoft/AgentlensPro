@@ -4,7 +4,7 @@ title: A current-version card store refusal imports offsets ahead of a stale sna
 column: blocked
 status: tasked
 created: 2026-10-15T04:28:04+0200
-updated: 2026-10-15T07:43:33+0200
+updated: 2026-10-15T08:49:30+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -17,7 +17,7 @@ approval-judge: main-agent@agentlenspro
 approval-datetime: 2026-10-15T04:28:04+0200
 project-id: agentlenspro
 npt: [A2KNXCNH]
-blocked-by: [A2KNXCNH, 0BDOV3WC, USSG465Q]
+blocked-by: [0BDOV3WC, USSG465Q]
 pre-block-column: todo
 blocker-probe: [trddgrep, why, 6B7VV2Z7]
 blocker-holds-if: not-match:READY
@@ -42,6 +42,7 @@ Evidence (local, gitignored): reports_dev/6b7vv2z7-optionC-measure.md, reports_d
 - SUPERSEDED 2026-10-15 (see PLAN above): RECOMMENDED OPTION C: at each FULL card save, after cards.save succeeds, also persist the offsets exported at that moment (a watermark delta log); on a current-version refusal import the watermark set (or nothing, once, when no watermark exists yet), and rewrite log-offsets to that set before mark_restore_complete. Files changed since the last full card save re-read from byte 0, so missing and stale cards are rebuilt; gone-file cards survive; OpenCode included. Cost: a delta log appended every 5 min with changed offset records only (check against the SSD write budget).
 - FREQUENCY: after TRDD-0BDOV3WC turns out-of-memory into a stop, this path fires only on a CARD_SCHEMA_VERSION bump, an incomplete restore, a clear in progress, or corruption. Option C adds a permanent write path for a rare event; the section-0 ordering fix is needed regardless.
 - SUPERSEDED 2026-10-15 (see PLAN above): NEXT: proposal for option C plus the ordering fix, with the test recipe in the facts report section 4 (stale snapshot, grown and new transcripts, fresh-store boot, kill-in-boot-sweep reboot, gone-file control, no-watermark fallback).
+2026-10-15: A2KNXCNH landed in 15eb1ff0. B' must also close its residual: after a version bump plus an early death or refused reuse, no stale-version card may be restored for an existing file; add a test for it.
 
 ## Problem
 When the card store refuses to reuse cards.duckdb with a CURRENT ingest version (out-of-memory, a card-schema version mismatch, missing meta, restore_complete != 1, clear_in_progress, open or configure failure, unreadable count or scan, invalid JSON or row), `restore_from_snapshot` restores cards from the NDJSON snapshot and then imports the offsets unconditionally (log_reader.rs:940). Offsets are newer than the snapshot, and the sweep skips every file whose offset record matches (`unchanged()`), so a card missing from or staler in the snapshot is never rebuilt until its file changes. A LOG_INGEST_VERSION bump is NOT affected (a CARD_SCHEMA_VERSION bump IS: it refuses with the log-delta version current): a version-stale restore returns before importing offsets and cold-rescans (log_reader.rs:873-882, verified by MEASURE 2026-10-15). Evidence: reports_dev/0bdov3wc-facts.md Q4, reports_dev/0bdov3wc-measure2.md section 6.
