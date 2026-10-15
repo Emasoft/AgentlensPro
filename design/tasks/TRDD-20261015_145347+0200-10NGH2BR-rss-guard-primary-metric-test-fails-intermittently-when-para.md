@@ -4,7 +4,7 @@ title: rss_guard primary_metric test fails intermittently when parallel tests fr
 column: human_review
 status: tasked
 created: 2026-10-15T14:53:47+0200
-updated: 2026-10-15T18:39:00+0200
+updated: 2026-10-15T18:49:35+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -59,3 +59,4 @@ The card moves to human_review for this decision.
 ## Notes
 
 2026-10-15: this card was worked entirely while in column todo; it never passed through dev, testing or ai_review.
+2026-10-15: the message of commit ac4ca857 overstates two points this card states correctly: cc0cee02 removes only the shared-process failure path (other tests in the same process offsetting the measurement), not every way the test can fail; and the 64 MiB concurrent free in the mechanism probe defeated the test's measurement in a separate probe binary, not the test itself.
