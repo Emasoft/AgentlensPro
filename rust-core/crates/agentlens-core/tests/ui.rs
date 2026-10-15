@@ -635,13 +635,39 @@ fn hook_events_ingest_read_and_lifecycle_mapping() {
 fn write_prompts_file_and_branch_dump() {
     let (_otlp, ui, _state) = start_servers();
 
+    // Removes the file it guards on drop, so an assertion failure cannot leave it behind.
+    struct RemoveOnDrop(std::path::PathBuf);
+    impl Drop for RemoveOnDrop {
+        fn drop(&mut self) {
+            // A panic while already unwinding aborts the whole test binary, so only report then.
+            match std::fs::remove_file(&self.0) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) if std::thread::panicking() => eprintln!("remove the test's prompts file {}: {e} (not panicking again: already unwinding)", self.0.display()),
+                Err(e) => panic!("remove the test's prompts file {}: {e}", self.0.display()),
+            }
+        }
+    }
+
     // write-prompts-file: first entry creates the header; a second appends; a malformed body is
     // logged and STILL 200 empty. The file lands in the server's cwd.
+    // WHY the guard: the test writes into the real cwd, which is in the repo tree. The old cross-volume
+    // rename into temp_dir failed silently, so the file accumulated a pair per run and from the second
+    // run on header creation was never exercised (TRDD-KBPB3UMH). The leftover removal below and the
+    // drop guard keep every run on the header path, and the guard also covers a failed assertion.
+    let file = std::env::current_dir().unwrap().join("agentlens-prompts-claude.md");
+    match std::fs::remove_file(&file) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => panic!("remove the leftover prompts file {}: {e}", file.display()),
+    }
+    let _guard = RemoveOnDrop(file.clone());
     let r = post(ui, "/api/write-prompts-file", r#"{"agent":"claude_code","label":"test label","prompt":"the prompt body"}"#);
     assert!(r.starts_with("HTTP/1.1 200") && body_of(&r).is_empty(), "{r}");
-    let file = std::env::current_dir().unwrap().join("agentlens-prompts-claude.md");
     let text = std::fs::read_to_string(&file).unwrap();
     assert!(text.starts_with("# AgentLens Prompts — Claude\n\n## "), "{text}");
+    // A fresh file holds exactly one entry after the first post; an accumulated file (TRDD-KBPB3UMH) holds more.
+    assert_eq!(text.matches("\n## ").count(), 1, "a fresh file holds exactly one entry after the first post: {text}");
     assert!(text.contains(" — test label\n\nthe prompt body\n\n---\n\n"), "{text}");
     let r = post(ui, "/api/write-prompts-file", r#"{"agent":"claude_code","label":"second","prompt":"p2"}"#);
     assert!(r.starts_with("HTTP/1.1 200"), "{r}");
@@ -650,8 +676,8 @@ fn write_prompts_file_and_branch_dump() {
     assert_eq!(text2.matches("# AgentLens Prompts").count(), 1, "header once");
     let r = post(ui, "/api/write-prompts-file", "not json");
     assert!(r.starts_with("HTTP/1.1 200") && body_of(&r).is_empty(), "fire-and-forget: {r}");
-    // The test wrote into the real cwd — stage it out of the tree, never leave repo litter.
-    let _ = std::fs::rename(&file, std::env::temp_dir().join("agentlens-prompts-claude.md"));
+    drop(_guard);
+    assert!(!file.exists(), "the drop guard removed the prompts file");
 
     // branch-dump: a fixture HOME with one project dir; CLAUDE_CONFIG_DIR steers discovery.
     let home = std::env::temp_dir().join(format!("al-branchdump-{}", std::process::id()));
