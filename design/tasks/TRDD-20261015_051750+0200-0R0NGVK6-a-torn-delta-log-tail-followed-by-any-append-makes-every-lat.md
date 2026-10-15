@@ -1,10 +1,10 @@
 ---
 trdd-id: 0R0NGVK6
 title: A torn delta-log tail followed by any append makes every later boot fail
-column: todo
+column: testing
 status: tasked
 created: 2026-10-15T05:17:50+0200
-updated: 2026-10-15T05:29:49+0200
+updated: 2026-10-15T07:38:00+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -15,6 +15,7 @@ mandated-by: none
 approved: true
 approval-judge: main-agent@agentlenspro
 approval-datetime: 2026-10-15T05:17:50+0200
+implementation-commits: [3ee0c44c]
 ---
 
 # A torn delta-log tail followed by any append makes every later boot fail
@@ -31,12 +32,19 @@ Residual, not fixed here: nothing in DeltaLog is fsynced, so a power loss or ker
 Before any append in `save`/`append_changed`, if the delta file is non-empty and does not end with a newline, truncate it to just after its last newline (0 if none). The dropped fragment is exactly what replay already ignores, so no record is lost; `load()` stays read-only. Test: write records, append a raw torn fragment, append again through the API, assert `load()` succeeds with every complete record. Mutation: remove the heal and `load()` returns Err.
 
 ## Acceptance
-- [ ] heal before append in both append paths
-- [ ] test plus recorded mutation result
-- [ ] clippy -D warnings clean and cargo test -p agentlens-core green
-- [ ] read_lines: not-found ⇒ empty, other I/O error ⇒ Err, per-line UTF-8 decoding with torn-tail tolerance
-- [ ] tests: torn JSON tail (save and append_changed paths, data under COMPACT_MIN_BYTES), torn UTF-8 tail, corrupt middle line ⇒ Err, delta path is a directory ⇒ Err; mutations recorded
+- [x] heal before append in both append paths
+- [x] test plus recorded mutation result
+- [x] clippy -D warnings clean and cargo test -p agentlens-core green
+- [x] read_lines: not-found ⇒ empty, other I/O error ⇒ Err, per-line UTF-8 decoding with torn-tail tolerance
+- [x] tests: torn JSON tail (save and append_changed paths, data under COMPACT_MIN_BYTES), torn UTF-8 tail, corrupt middle line ⇒ Err, delta path is a directory ⇒ Err; mutations recorded
 
 ## Approval log
 
 - 2026-10-15T05:17:50+0200 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-10-15T07:38:00+0200 — column → testing by main-agent@agentlenspro. fix landed in 3ee0c44c; Rust and TS suites green
+
+## Results
+
+2026-10-15: fixed in 3ee0c44c. Rust: cargo test -p agentlens-core 799 passed / 0 failed (worker-reported, reports_dev/0r0ngvk6-r2-full.txt); clippy -D warnings clean; mutations caught (heal no-op 6 fail, read_to_string-else-empty 3, errors-to-empty 1, always-truncate 1, first-block-only 1). Full cargo test -p agentlens-core 799/0 ran on the round-2 tree; rounds 3-4 changed doc comments and one blank test line only (clippy -D warnings clean and delta_log 12/12 re-run after). Release build OK, no-op rebuild compiled nothing, --version exit 64, sha256 a1f2f64b158be870f93db728ae12ca1f4fb18c186914fb8c3cc3e6a4ca169896 (unchanged at run end); TS unit suite 3177 passing, 0 failing, 13 pending (exit 0, AGENTLENS_ALCORE unset, CLI hot-path latency guard ran and passed). Live collector not redeployed (owner's call).
+Residuals (not fixed here): `written` is updated before the write, so a failed heal or append leaves written ahead of disk; nothing is fsynced; a complete record of 16 MiB or more is treated as torn and truncated; on the log-sessions reuse path a dropped torn record stays missing from the snapshot pair until its card changes (the seed_written lag).
+Frequency: 0 occurrences of the loud variant in the current server.log (2026-10-15).

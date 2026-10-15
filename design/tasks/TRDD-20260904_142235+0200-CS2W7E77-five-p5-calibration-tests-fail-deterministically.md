@@ -3,7 +3,7 @@ trdd-id: CS2W7E77
 title: The five P5 window auto-calibration tests fail deterministically on a burn-config ENOENT
 column: todo
 created: 2026-09-04T14:22:35+0200
-updated: 2026-10-15T03:43:53+0200
+updated: 2026-10-15T07:38:01+0200
 current-owner: main-session
 task-type: bugfix
 project-id: agentlenspro
@@ -176,3 +176,4 @@ Run D1: HEAD e3c3c388, alcore rust-core/target/release built from a tree whose r
 Run D1 TESTED-STATE: all five hashes match the snapshot (hookInstall diff 760d8073…, cheap-worker 34277163…, fast-worker 65e8a919…, smart-worker 7965c97d…, agents diff 4bedd1d1…), taken by the main agent after the run from files this session did not edit. D1 counts as run 1 of a pair provided no further code commit lands before run 2.
 Run D1 COUNTS (corrected 2026-10-15): the retroactive no-op rebuild compiled nothing but changed the sha to 650e12886dd01047b29b6eeb46ba7e8be406e9eea514f76d8c85e8ef324b0489, because cargo re-copied deps/alcore-06e80c189b6fa61d over the codesigned output (now flags adhoc,linker-signed, same 03:16 build). A scratch copy of that deps file named alcore and re-signed with codesign -s - --force reproduces a0b2be3a68dbca63230bb8b320e237477933d14be4d55ae78c0ecb9411de1a77 exactly (checked by the main agent), so D1 ran this build code plus an ad-hoc signature.
 Gate rule detail 2026-10-15: do NOT codesign rust-core/target/release/alcore. The linker ad-hoc signature runs (--version exit 64), and a codesign makes the next cargo build re-copy the output, changing the sha. Order: build, then a no-op build (no Compiling line), then alcore --version (exit not 137), then the sha256 taken last, then the run, then the sha256 again at run end (another agent's build in this tree could replace the binary mid-run); a changed sha voids the run. Clean means `git status --short --untracked-files=no rust-core/` prints nothing. The codesign step in CLAUDE.md applies to the bin-native copy, not to target/.
+2026-10-15: code commit 3ee0c44c (TRDD-0R0NGVK6, delta_log.rs) landed after run D1, so D1 no longer counts as run 1 of a pair; the pair restarts with the next full green run at or after 3ee0c44c (and again after A2KNXCNH if that lands first). TS unit run at 3ee0c44c: 3177 passing, 0 failing, 13 pending (exit 0, latency guard RAN, AGENTLENS_ALCORE unset, alcore rebuilt from HEAD, no-op rebuild compiled nothing, --version exit 64), binary sha256 a1f2f64b158be870f93db728ae12ca1f4fb18c186914fb8c3cc3e6a4ca169896 (same at run end).
