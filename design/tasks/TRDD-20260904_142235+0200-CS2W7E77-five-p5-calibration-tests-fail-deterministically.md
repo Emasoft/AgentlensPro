@@ -3,7 +3,7 @@ trdd-id: CS2W7E77
 title: The five P5 window auto-calibration tests fail deterministically on a burn-config ENOENT
 column: todo
 created: 2026-09-04T14:22:35+0200
-updated: 2026-10-15T13:25:55+0200
+updated: 2026-10-15T14:55:14+0200
 current-owner: main-session
 task-type: bugfix
 project-id: agentlenspro
@@ -181,3 +181,4 @@ Gate rule detail 2026-10-15: do NOT codesign rust-core/target/release/alcore. Th
 2026-10-15: code commit f9e0742e (TRDD-KMF02UEX) landed after 15eb1ff0; the run pair restarts. TS unit at f9e0742e: 3177 passing, 0 failing, 13 pending (exit=0 written into the log file, latency guard RAN with 4 checks passed, AGENTLENS_ALCORE unset, alcore rebuilt from HEAD with mtime 10:51:10, no-op rebuild compiled nothing, --version exit 64, load 12.78 at start), binary sha256 34e2f8db45446c1c68c0f85e845f9563ff0698ca94f3060e68ef4930ead09e70 (same at run end). The run also tested the other uncommitted files in the working tree (CLAUDE.md, memory pages, cards), which the five hashes do not cover; TESTED-STATE hashes re-taken after the run, all five match the snapshot. Counts as run 1 of a pair at f9e0742e if no further code commit lands before run 2.
 2026-10-15: code commits b4cdf24c, 3f152419 (test only) and 6afa002b landed after the f9e0742e run, so the pair restarts at or after 6afa002b; the next counted run must rebuild alcore from 6afa002b per the gate rules above.
 2026-10-15: these local runs are the only test evidence for this branch: CI has not run on it since 2026-09-02 (see TRDD-HSPUF5XH Notes).
+2026-10-15: test-only commits 84f3b0f8 and 7c077027 (TRDD-7EZE3AIZ) landed after the 6afa002b line above, so the pair restarts at 7c077027; run 1 is the gate run at 7c077027 (reports_dev/gate-7c077027/).

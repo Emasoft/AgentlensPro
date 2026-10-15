@@ -1,10 +1,10 @@
 ---
 trdd-id: 7EZE3AIZ
 title: shutdown test times_out_and_names_the_holder fails intermittently under parallel test load
-column: todo
-status: tasked
+column: complete
+status: archived
 created: 2026-10-15T13:28:34+0200
-updated: 2026-10-15T14:21:06+0200
+updated: 2026-10-15T14:57:14+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -16,6 +16,7 @@ approved: true
 approval-judge: main-agent@agentlenspro
 approval-datetime: 2026-10-15T13:28:34+0200
 blocked-by: []
+implementation-commits: [84f3b0f8, 7c077027]
 ---
 
 # shutdown test times_out_and_names_the_holder fails intermittently under parallel test load
@@ -23,6 +24,8 @@ blocked-by: []
 ## Approval log
 
 - 2026-10-15T13:28:34+0200 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+2026-10-15 — Worked while in todo; the board never showed it in an active column, and the move goes from todo to complete directly (the same as KMF02UEX).
+- 2026-10-15T14:57:14+0200 — COMPLETE by main-agent@agentlenspro. acceptance met and verified by the orchestrator.
 
 ## Problem
 
@@ -44,6 +47,13 @@ Also replace the 50 ms sleep with a handshake (a channel the holder thread signa
 
 ## Acceptance
 
-- [ ] The timing assertion no longer depends on sub-50 ms slack: the bound is measured from just before flush_with_deadline and still fails if the call waits for the 2000 ms holder (verified by a mutation that makes flush wait for the lock).
-- [ ] The holder-site assertion cannot be failed by another test holding a different state lock, and the exact-site check still runs somewhere deterministic.
-- [ ] 20 consecutive cargo test -p agentlens-core --lib runs under parallel load show zero failures of this test (runs recorded).
+- [x] The timing assertion no longer depends on sub-50 ms slack: the bound is measured from just before flush_with_deadline and still fails if the call waits for the 2000 ms holder (verified by a mutation that makes flush wait for the lock).
+- [x] The holder-site assertion cannot be failed by another test holding a different state lock, and the exact-site check still runs somewhere deterministic.
+- [x] 20 consecutive cargo test -p agentlens-core --lib runs under parallel load show zero failures of this test (runs recorded).
+
+## Results
+
+2026-10-15 — Fixed by 84f3b0f8, test code only (production has one state mutex per process, bin/alcore.rs:266). The shutdown unit test waits on an mpsc handshake instead of a 50 ms sleep, starts its clock just before flush_with_deadline with a 1000 ms bound, and checks a named holder only for its form. lib.rs records_and_clears_the_holder became lock_timed_guard_locks_and_releases, whose release check 7c077027 made a try_lock so it fails instead of hanging. The exact-site checks moved to tests/lock_holder_site.rs, one test alone in its own process.
+2026-10-15 — Box 1, mutations at 84f3b0f8: try_lock made blocking fails the unit test and lock_holder_site (expected TimedOut); a 1500 ms sleep before the TimedOut return fails the unit test with should return close to the deadline.
+2026-10-15 — Box 2: the unit test accepts any named holder of the right form; the exact-site check runs in lock_holder_site, deterministic because it is the only test in its process and CoreState::open starts no thread; removing the HOLDER_SITE store fails it with holder recorded. lock_holder_site passed 10 of 10 on macOS and 5 of 5 on linux/amd64.
+2026-10-15 — Box 3: 20 full cargo test -p agentlens-core --lib runs at default threads, as two consecutive batches of 10 (macOS at 84f3b0f8; linux/amd64 emulated at 84f3b0f8, rebuild proven), with the shutdown test ok in all 20. At the earlier rate of about 1 run in 3 to 4, 20 clean runs would let a surviving bug through with probability about 0.03 to 0.3 percent. 7c077027 changes only lock_timed_tests. Two of the Linux runs failed a different test, rss_guard::tests::primary_metric_reports_a_real_measurement_never_zero, now TRDD-10NGH2BR.
