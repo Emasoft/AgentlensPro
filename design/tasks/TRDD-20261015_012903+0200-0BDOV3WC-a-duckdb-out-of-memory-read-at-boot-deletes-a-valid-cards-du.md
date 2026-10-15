@@ -4,7 +4,7 @@ title: A DuckDB out-of-memory read at boot makes the card store delete cards.duc
 column: todo
 status: tasked
 created: 2026-10-15T01:29:03+0200
-updated: 2026-10-15T04:39:06+0200
+updated: 2026-10-15T05:39:16+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -58,3 +58,4 @@ At boot, `try_reuse`/`load_resident` read the cards table at the 256 MiB DuckDB 
 
 - RECOMMENDED DEFAULTS (main agent, 2026-10-15): (a) accept stop-instead-of-delete; (b) a setting file in the data dir, because reaching the hook revive through settings.json is inferred (new, undesigned infrastructure: it needs its own small design); (c) compaction as its own card (USSG465Q), measured first.
 - WHAT THE DECISION GATES: this card blocks TRDD-3RVTC1HY (exit on any panic) and the release (HSPUF5XH). If (a) is no, revision 3 shrinks to the paged boot read only, today's delete-on-error path stays, and TRDD-3RVTC1HY stays blocked indefinitely unless its dependency is re-decided.
+- New evidence for decision (c), 2026-10-15 (reports_dev/6b7vv2z7-reupsert-growth.md, MEASURED): dead row versions do not raise the boot read's memory need — 1x, 2x and 3x row slots all pass at 80 MiB. The live copy still needs 256 MiB with only ~2,400 dead slots and 80.8 MB of card text, so its need is NOT explained by dead rows. Untested hypothesis: a few very large hot cards (max 2.3 MB vs 0.3 MB in the test set; 31 cards with timelines). If it holds, compaction alone would not fix the boot out-of-memory error; test before choosing compaction as the remedy.
