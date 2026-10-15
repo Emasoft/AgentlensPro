@@ -1562,7 +1562,8 @@ mod lock_timed_tests {
         let g = m.lock_timed().unwrap();
         let _ = &*g;
         drop(g);
-        assert!(m.lock_timed().is_ok(), "the guard should release the mutex on drop");
+        // try_lock, not lock_timed: if the guard failed to release, a blocking relock on this thread would hang instead of failing.
+        assert!(m.try_lock().is_ok(), "the guard should release the mutex on drop");
     }
 
     #[test]
