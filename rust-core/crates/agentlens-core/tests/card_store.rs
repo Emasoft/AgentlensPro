@@ -14,6 +14,7 @@
 //!   `preserve_order`) and float round-tripping (`float_roundtrip`).
 
 use agentlens_core::card_store::CardStore;
+use agentlens_core::log_reader;
 use serde_json::{json, Value};
 
 fn card(id: &str, start: &str, duration_ms: f64, timeline: usize) -> Value {
@@ -153,7 +154,7 @@ fn persist_records_are_stripped_and_in_first_insert_order() {
     s.put(&a);
     s.put(&card("b", "2026-08-01T10:00:00.000Z", 0.0, 1));
 
-    let recs = s.persist_records();
+    let recs = log_reader::persist_records_from(&s.persist_snapshot());
     assert_eq!(recs.keys().cloned().collect::<Vec<_>>(), ["a", "b"]);
     let ra = &recs["a"];
     assert_eq!(ra["timeline"], json!([]));
@@ -163,6 +164,67 @@ fn persist_records_are_stripped_and_in_first_insert_order() {
     assert_eq!(ra["sessionId"], "a", "headers survive");
     // The STORED card is untouched — persist strips a copy, it is not a mutation.
     assert_eq!(s.get("a").unwrap()["timeline"].as_array().unwrap().len(), 2);
+}
+
+/// Checks the save path's resident-layer records against the table, record for record and in order.
+/// Both sides are compared as serialized strings, because `IndexMap` and `Value` equality ignore order.
+fn assert_resident_matches_table(s: &CardStore, when: &str) {
+    let resident = s.persist_snapshot();
+    assert_eq!(resident.len(), s.len(), "{when}: the resident layer holds exactly the table's rows");
+    // Unstripped and in order. strip_card_for_persist empties timeline and backgroundSpans and drops fileOps
+    // for every card, so the stripped comparison below cannot see a skipped demotion or a missing strip on
+    // write; this comparison can.
+    let unstripped_resident: Vec<String> = s.parsed_cards().iter().map(|c| serde_json::to_string(&**c).unwrap()).collect();
+    let unstripped_table: Vec<String> = s.cards().iter().map(|c| serde_json::to_string(c).unwrap()).collect();
+    assert_eq!(unstripped_resident, unstripped_table, "{when}: the unstripped layers agree in order");
+    let from_resident: Vec<(String, String)> = log_reader::persist_records_from(&resident)
+        .iter()
+        .map(|(k, v)| (k.clone(), serde_json::to_string(v).unwrap()))
+        .collect();
+    let from_table: Vec<(String, String)> = s
+        .cards_json()
+        .iter()
+        .map(|j| {
+            let v: Value = serde_json::from_str(j).unwrap();
+            let r = log_reader::strip_card_for_persist(&v);
+            (v["sessionId"].as_str().unwrap_or("").to_owned(), serde_json::to_string(&r).unwrap())
+        })
+        .collect();
+    assert_eq!(from_resident, from_table, "{when}: the same records in the same order");
+}
+
+/// DA0GN1CS: the persist input built from the RESIDENT layer must equal what the TABLE holds, after
+/// every write path that touches either side: put, an upsert (keeps its slot), a card with no
+/// sessionId (keyed ""), a demotion, and a reopen that rebuilds the resident layer from the table.
+#[test]
+fn persist_records_from_the_resident_layer_equal_the_table() {
+    let dir = std::env::temp_dir().join(format!("al-cardstore-resident-eq-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut s = CardStore::open(&dir);
+    s.put(&card("a", "2026-08-01T10:00:00.000Z", 0.0, 2));
+    s.put(&card("b", "2026-08-01T10:30:00.000Z", 0.0, 3));
+    s.put(&card("c", "2026-08-01T11:00:00.000Z", 0.0, 1));
+    // A cold card with fileOps, generatedFiles and backgroundSpans: put_arc must persist-strip it before both the row and the resident layer see it.
+    s.put(&json!({
+        "sessionId": "d", "source": "claude_code", "startTime": "2026-08-01T11:30:00.000Z", "durationMs": 0.0,
+        "timeline": [], "fileOps": { "reads": [{ "path": "/x" }] }, "generatedFiles": [{ "path": "/g" }],
+        "backgroundSpans": [{ "spanId": "bg" }]
+    }));
+    s.put(&json!({ "source": "codex", "timeline": [{ "type": "x" }, { "type": "y" }] }));
+    assert_resident_matches_table(&s, "after put");
+
+    s.put(&card("b", "2026-08-01T10:30:00.000Z", 5000.0, 3));
+    assert_resident_matches_table(&s, "after an upsert of b");
+
+    s.demote_cold(2);
+    assert_resident_matches_table(&s, "after demote_cold(2)");
+
+    s.mark_restore_complete();
+    drop(s);
+    let s = CardStore::open(&dir);
+    assert!(s.reused(), "the reopen must reuse the table, so the resident layer is rebuilt from it");
+    assert_eq!(s.len(), 5, "the reopen keeps all five rows");
+    assert_resident_matches_table(&s, "after the reopen");
 }
 
 #[test]

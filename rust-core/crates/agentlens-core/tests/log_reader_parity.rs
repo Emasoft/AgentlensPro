@@ -1060,15 +1060,16 @@ fn run_1h_backfill_step_persists_before_returning_so_a_hard_exit_loses_nothing()
     assert_eq!(card3b, card3, "nothing left to backfill -- the step's own durable write is what stopped it being re-queued, not a later graceful save");
 }
 
-/// TRDD-ORGJ0E3G follow-up: `run_1h_backfill_step` must NOT trigger `CardStore::persist_records()`
-/// (the whole-store `SELECT * FROM cards` + JSON-parse-every-card scan) — that full-store cost,
-/// called once per 200-file chunk (~45x on the measured 8,846-file corpus), is the suspected
-/// driver behind the RSS-cap exits this backfill exists to reduce. Builds a corpus with several
-/// cards that already carry `cacheCreate1hTokens` (so they are NOT re-persisted) plus one card
-/// that needs backfilling, runs one step, and asserts `CardStore::full_scan_calls()` stayed at
-/// its pre-step value — the step's own persistence must go through the narrower per-chunk path.
-/// Mutation-tested below: reverting `save_cards_for` to call `save_cards` (the old whole-store
-/// path) makes this fail.
+/// TRDD-ORGJ0E3G follow-up: `run_1h_backfill_step` must NOT trigger `CardStore::persist_snapshot()`,
+/// the whole-store persist input. Since DA0GN1CS the whole-store save is an O(corpus) strip-and-hash
+/// with no DuckDB scan, and calling it once per 200-file chunk (~45x on the measured 8,846-file corpus)
+/// was the suspected driver behind the RSS-cap exits this backfill exists to reduce. Builds a corpus
+/// with several cards that already carry `cacheCreate1hTokens` (so they are NOT re-persisted) plus one
+/// card that needs backfilling, runs one step, and asserts `CardStore::full_scan_calls()` stayed at its
+/// pre-step value — the step's own persistence must go through the narrower per-chunk path.
+/// Mutation-tested under TRDD-ORGJ0E3G against the old counter; since DA0GN1CS it holds by construction
+/// (reverting `save_cards_for` to `save_cards` reaches `persist_snapshot`, which counts). Only meaningful
+/// together with `a_forced_whole_store_save_counts_in_full_scan_calls`, the positive control below.
 #[test]
 fn run_1h_backfill_step_does_not_scan_the_whole_card_store() {
     let home = scratch_home("backfill-no-full-scan");
@@ -1111,7 +1112,7 @@ fn run_1h_backfill_step_does_not_scan_the_whole_card_store() {
     let scans_before = state2.lock().unwrap().cards.full_scan_calls();
     durable2.run_1h_backfill_step(&state2);
     let scans_after = state2.lock().unwrap().cards.full_scan_calls();
-    assert_eq!(scans_after, scans_before, "run_1h_backfill_step must not run CardStore::persist_records() (the whole-store scan)");
+    assert_eq!(scans_after, scans_before, "run_1h_backfill_step must not run CardStore::persist_snapshot() (the whole-store persist input)");
 
     // And the patch is still durable per the hard-exit contract already covered above (real
     // hard-exit model: forget, don't drop — see the comment on the durability test above).
@@ -1124,6 +1125,29 @@ fn run_1h_backfill_step_does_not_scan_the_whole_card_store() {
     durable3.restore(&mut tailer3, &mut state3.lock().unwrap(), &env).unwrap();
     let card3 = state3.lock().unwrap().cards.get(parent_id).unwrap().clone();
     assert!(card3["cacheCreate1hTokens"].as_f64().unwrap() > 0.0, "the scoped save must still make the patch durable");
+}
+
+/// Positive control for `run_1h_backfill_step_does_not_scan_the_whole_card_store`: a forced whole-store
+/// save (`tick(force = true)`) MUST pass through `CardStore::persist_snapshot()` and count in
+/// `full_scan_calls()`. Without this, the zero-growth assertion in the negative test could hold
+/// merely because the counter never moves.
+#[test]
+fn a_forced_whole_store_save_counts_in_full_scan_calls() {
+    let home = scratch_home("full-save-counts");
+    let env = Env { home: home.clone(), platform: Platform::Darwin, vars: HashMap::new() };
+    let data = std::env::temp_dir().join(format!("al-full-save-counts-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&data);
+    std::fs::create_dir_all(&data).unwrap();
+
+    let state = std::sync::Mutex::new(CoreState::open(&data.join("spans")));
+    let mut tailer = LogTailer::default();
+    let mut durable = DurableState::open(&data);
+    durable.restore(&mut tailer, &mut state.lock().unwrap(), &env).unwrap();
+    let before = state.lock().unwrap().cards.full_scan_calls();
+    durable.mark_dirty();
+    durable.tick(&tailer, &state, true);
+    let after = state.lock().unwrap().cards.full_scan_calls();
+    assert_eq!(after, before + 1, "a whole-store save must count in full_scan_calls, or the negative assertion above is vacuous");
 }
 
 /// Review-fork follow-up (TRDD-ORGJ0E3G): the "already has the key" re-check inside

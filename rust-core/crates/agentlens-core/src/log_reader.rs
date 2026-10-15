@@ -754,6 +754,17 @@ pub fn strip_card_for_persist(card: &Value) -> Value {
 }
 
 
+/// persistence record builder: the delta log's records for a set of resident cards, keyed by
+/// sessionId ("" when absent, the contract put_log_session keeps). DA0GN1CS: built from the resident
+/// layer in first-insert order, so no DuckDB scan is needed.
+pub fn persist_records_from(cards: &[Arc<Value>]) -> IndexMap<String, Value> {
+    cards
+        .iter()
+        .map(|c| (c.get("sessionId").and_then(Value::as_str).unwrap_or("").to_owned(), strip_card_for_persist(c)))
+        .collect()
+}
+
+
 /// A Claude card that wrote cache but is missing the 1h-tier field (TRDD-ORGJ0E3G): a candidate
 /// for the usage-only backfill. A pure predicate on the card, shared by both restore branches.
 fn needs_1h_field(obj: &Map<String, Value>) -> bool {
@@ -992,18 +1003,13 @@ impl DurableState {
         // Idempotent (rows already demoted are skipped); needed because the hot-set size may have
         // changed between boots. Once, not per card.
         state.demote_cold_timelines(crate::summarize::retention::timeline_hot_cards());
-        // Seed the delta-log hashes with exactly what `save_cards` would compute (persist_records
-        // = strip_card_for_persist of every stored card), taken from the resident parsed layer so
-        // the 72 MB snapshot is never loaded and the table is not scanned a second time. Without
-        // it the first save would append the whole corpus (72 MB) and compact. WHY AFTER the
-        // demotion: cards demoted at this start are persisted stripped; hashing them before the
-        // demotion would make the first save see them as changed and append them again.
-        let records: IndexMap<String, Value> = state
-            .cards
-            .parsed_cards()
-            .iter()
-            .map(|c| (c.get("sessionId").and_then(Value::as_str).unwrap_or("").to_owned(), strip_card_for_persist(c)))
-            .collect();
+        // Seed the delta-log hashes with exactly what `save_cards` would compute. Both call
+        // `persist_records_from` over the resident layer, so the seeded hashes and the saved records
+        // cannot drift, and the 72 MB snapshot is never loaded. Without the seed the first save would
+        // append the whole corpus (72 MB) and compact. WHY AFTER the demotion: cards demoted at this start
+        // are persisted stripped; hashing them before the demotion would make the first save see them as
+        // changed and append them again.
+        let records = persist_records_from(&state.cards.parsed_cards());
         self.cards.seed_written(&records);
         drop(records);
         // The full restore bumps `data_version` once per card; a reused store would stay at 0 and
@@ -1122,13 +1128,11 @@ impl DurableState {
         // applied chunk, undoing the whole run. Force each chunk's patches onto the delta-append
         // path BEFORE returning, so a hard exit loses at most one in-flight chunk.
         //
-        // TRDD-ORGJ0E3G follow-up: this used to call `save_cards`, which rebuilds
-        // `persist_records()` — a `SELECT * FROM cards` over the WHOLE store plus a JSON parse of
-        // every card (`card_store.rs:222-235`) — once per 200-file chunk (~45 times on the
-        // measured 8,846-file corpus), the suspected driver behind the RSS-cap exits this backfill
-        // exists to reduce (TRDD-WKLD508O/TWDGR75R). `save_cards_for` below persists ONLY the
-        // session_ids this chunk actually patched, so the cost is proportional to the chunk
-        // (≤200 cards), not the corpus.
+        // TRDD-ORGJ0E3G follow-up: this used to call `save_cards`, which persisted the WHOLE store once
+        // per 200-file chunk (~45 times on the measured 8,846-file corpus), the suspected driver behind
+        // the RSS-cap exits this backfill exists to reduce (TRDD-WKLD508O/TWDGR75R). `save_cards_for`
+        // below persists ONLY the session_ids this chunk actually patched, so the cost is proportional
+        // to the chunk (≤200 cards), not the corpus.
         if chunk_filled > 0 {
             self.mark_dirty();
             self.save_cards_for(state, &patched_ids);
@@ -1180,10 +1184,18 @@ impl DurableState {
     }
 
     fn save_cards(&mut self, state: &std::sync::Mutex<crate::CoreState>) {
-        let records: IndexMap<String, Value> = {
+        // DA0GN1CS: the state lock covers only a copy of the resident layer's Arc handles (one
+        // refcount bump per card). WHY: the previous whole-store persist ran
+        // `SELECT session_id, card FROM cards ORDER BY seq` under this lock, the OOM site that panicked
+        // the sweeper while it held the lock and poisoned the mutex (2026-10-03 and 2026-10-14). The
+        // resident layer is the same corpus in the same order, so the records are built from the snapshot
+        // after the lock is released.
+        let snap = {
             let st = state.lock_timed().expect("core state");
-            st.cards.persist_records()
+            st.cards.persist_snapshot()
         };
+        let records = persist_records_from(&snap);
+        drop(snap);
         match self.cards.save(&records) {
             Ok(r) if r.bytes > 0 => {
                 self.stamp_version();
@@ -1199,8 +1211,8 @@ impl DurableState {
     }
 
     /// TRDD-ORGJ0E3G follow-up — `run_1h_backfill_step`'s own persistence path. Unlike
-    /// `save_cards` above (whole-store `persist_records()`, a `SELECT * FROM cards` plus a JSON
-    /// parse of every card — cheap at shutdown/timer cadence, expensive called ~45x per backfill),
+    /// `save_cards` above (a whole-store persist: every card stripped and diffed against the delta
+    /// log — cheap at shutdown/timer cadence, expensive called ~45x per backfill),
     /// this locks the state ONLY to fetch the handful of `session_ids` this one chunk patched
     /// (`st.cards.get(id)`, bounded by chunk size — never a whole-store read under the lock) and
     /// appends just those records via `DeltaLog::append_changed`, which — unlike `DeltaLog::save`
@@ -1481,13 +1493,13 @@ pub fn start_sweeper(
                 watch_failed: watch_failed.len(),
             }));
             // TRDD-RVKQDLRD: this thread DELIBERATELY stays at normal priority (no background QoS).
-            // The steady-state loop does NOT always take the state lock in short chunks: sweep
-            // ingestion is chunked (SCAN_CHUNK per lock) and the 1h backfill is bounded (<=200
-            // cards per lock), but `durable.tick` -> `save_cards` calls
-            // `st.cards.persist_records()` UNDER the state lock: a `SELECT * FROM cards` plus a
-            // JSON parse of every card, a full-corpus hold. At background QoS that hold would be
-            // preempted while request threads wait on the lock (priority inversion), so lowering
-            // this thread would make requests slower, not the machine quieter.
+            // Most of its lock holds are short (sweep ingestion is chunked, SCAN_CHUNK per lock;
+            // the 1h backfill is bounded, <=200 cards per lock), but each ingest chunk ends in
+            // demote_cold's corpus-wide window query under the lock (TRDD-KMF02UEX). At background
+            // QoS that hold would be preempted while request threads wait on the lock (priority
+            // inversion), so lowering this thread would make requests slower, not the machine
+            // quieter. Since DA0GN1CS the periodic save no longer adds a full-corpus scan under the
+            // lock; re-decide this under RVKQDLRD once KMF02UEX lands.
             let backstop = if watch_attached > 0 { FULL_RESCAN } else { poll_interval };
             let mut next_full = Instant::now() + backstop;
             let mut pending: Vec<PathBuf> = Vec::new();
