@@ -4,7 +4,7 @@ title: The review gate scans only the turn that just ended and credits only non-
 column: dev
 status: tasked
 created: 2026-10-14T14:37:22+0200
-updated: 2026-10-15T11:14:11+0200
+updated: 2026-10-15T11:18:56+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -86,4 +86,4 @@ STATE 2026-10-14 16:25 (supersedes the RESUME 15:40 IN FLIGHT/OPEN lines above w
 
 ## Notes and lessons learned
 
-2026-10-15: false positive. The Stop gate reported "ran a write-shaped command: trddgrep append" for a turn whose only occurrence of that text was inside the --content argument of a fastedit create into docs_dev (a quoted argument parsed as a command). Same family as the open shellWords residuals.
+2026-10-15: false positive. The Stop gate reported "ran a write-shaped command: trddgrep append" for a turn whose only occurrence of that text was inside the --content argument of a fastedit create into docs_dev (INFERRED: the same turn also ran an earlier fastedit create that failed on unbalanced quoting, where the text may have stood at command position; which of the two the gate classified is untested). Same family as the open shellWords residuals.
