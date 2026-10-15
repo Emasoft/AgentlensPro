@@ -76,6 +76,14 @@ pub const CARD_DB_FILE: &str = "cards.duckdb";
 /// units keep the constant, the setting, and `current_setting('memory_limit')` all saying 256.
 const MEMORY_LIMIT: &str = "256MiB";
 
+/// TRDD-0BDOV3WC — the limit of the ONE compacting rewrite, boot-only: an OOM boot read is copied
+/// into a fresh file on a connection at this limit. WHY 1024 MiB: the copy
+/// `INSERT INTO fresh.cards SELECT * FROM cards` runs out of memory at 256 MiB on the 30-rewrite
+/// copy and passes at 1024 MiB, with peak RSS 524-841 MiB in the scratch probe
+/// (reports_dev/0bdov3wc-rewrite-measure.md). The steady-state connection keeps MEMORY_LIMIT. This
+/// treats the OOM symptom; TRDD-USSG465Q owns the cause (whole-card rewrites leave a dead row per rewrite).
+const REBUILD_MEMORY_LIMIT: &str = "1024MiB";
+
 /// The one table. `card` is JSON TEXT, not DuckDB's `JSON` type: the served bytes must be
 /// byte-identical to what the TS server produced, and a `JSON` column normalizes (it re-emits the
 /// document from a parsed form, which can reorder keys and reformat numbers). VARCHAR round-trips
@@ -109,6 +117,12 @@ pub const CARD_SCHEMA_VERSION: u64 = 1;
 /// refill).
 const META_SCHEMA: &str = "CREATE TABLE meta (key VARCHAR PRIMARY KEY, value VARCHAR NOT NULL)";
 
+/// TRDD-0BDOV3WC — the resident scan: the statement `load_resident` runs to build the resident parsed layer.
+const RESIDENT_SCAN_SQL: &str = "SELECT session_id, card FROM cards ORDER BY seq";
+
+/// The resident parsed layer: every card as a shared tree, in first-insert order (see `CardStore::parsed`).
+type ResidentCards = IndexMap<String, Arc<Value>>;
+
 
 /// One keyset page of ROOT cards (TRDD-9VX3WTGU Phase C, Amendment 1).
 ///
@@ -125,6 +139,63 @@ pub struct CardPage {
     pub has_more: bool,
     /// Count of ALL root cards (not of this page) — what the whole listing would hold.
     pub total: i64,
+}
+
+/// Why a reuse attempt was refused (TRDD-0BDOV3WC). The variant picks the recovery: `NotEligible`
+/// is the rebuild-from-snapshot path, `OutOfMemory` is the compacting rewrite. It is decided by the
+/// stage that failed, never by the text of an error. The one text inspected is DuckDB's
+/// "Out of Memory Error" inside a scan, which is how DuckDB reports that condition.
+enum Refusal {
+    NotEligible(String),
+    OutOfMemory(String),
+}
+
+impl Refusal {
+    fn text(&self) -> &str {
+        match self {
+            Refusal::NotEligible(text) | Refusal::OutOfMemory(text) => text,
+        }
+    }
+}
+
+/// Classify a DuckDB error raised by a scan or a count: out of memory when DuckDB says so,
+/// otherwise an ordinary refusal. `what` names the stage that failed.
+fn scan_refusal(err: &agentlens_store::duckdb::Error, what: &str) -> Refusal {
+    let text = format!("{what}: {err}");
+    if err.to_string().contains("Out of Memory Error") {
+        Refusal::OutOfMemory(text)
+    } else {
+        Refusal::NotEligible(text)
+    }
+}
+
+/// What `open` did with the file (TRDD-0BDOV3WC). `reused()` is true for `Reused` and `Rewritten`.
+#[derive(Debug)]
+// `Rebuilt`'s reason is logged where the decision is made, and no production path reads the payloads: the
+// variants keep them so the outcome is a complete record. Allowed in every build, not only tests.
+#[allow(dead_code)]
+pub(crate) enum OpenOutcome {
+    /// The previous run's file was reused as it stood.
+    Reused,
+    /// The file was compacted by a rewrite and reused. `warning` is set when the fresh file does not
+    /// load at the reopen limit, so the store keeps the rebuild limit.
+    Rewritten { rows: usize, bytes_before: u64, bytes_after: u64, warning: Option<String> },
+    /// The rewrite failed before the swap; the file was rebuilt from the snapshot.
+    RewriteFailed(String),
+    /// The reuse was refused; the file was rebuilt from the snapshot.
+    Rebuilt(String),
+}
+
+/// The three memory limits of `open_with_limits` (TRDD-0BDOV3WC). Production passes MEMORY_LIMIT
+/// as `read` and `reopen`, and REBUILD_MEMORY_LIMIT as `rebuild`. A test passes a small `read` to
+/// reproduce an out-of-memory boot read.
+pub(crate) struct OpenLimits<'a> {
+    /// The reuse attempt's limit.
+    pub(crate) read: &'a str,
+    /// The compacting rewrite's limit, boot-only.
+    pub(crate) rebuild: &'a str,
+    /// The steady-state limit: the fresh file is loaded at it first after the swap (see `finish_swap`).
+    pub(crate) reopen: &'a str,
 }
 
 pub struct CardStore {
@@ -157,9 +228,9 @@ pub struct CardStore {
     /// Exists only so a test can assert that the card text is read for exactly the cards being
     /// demoted, and never when no timeline card lies beyond the hot set.
     demote_card_fetches: std::sync::atomic::AtomicUsize,
-    /// TRDD-9VX3WTGU — `open` kept the previous run's database (the reuse gate passed). Read by
-    /// `DurableState::restore` to skip the snapshot load and the 40k inserts.
-    reused: bool,
+    /// TRDD-9VX3WTGU / TRDD-0BDOV3WC — how `open` got this store: reused as it was, rewritten
+    /// compactly, or rebuilt from the snapshot, with the reason. `reused()` reads it.
+    outcome: OpenOutcome,
 }
 
 impl CardStore {
@@ -177,46 +248,71 @@ impl CardStore {
     /// exactly as before. NEVER a cold scan with the offsets kept: a store emptied behind valid
     /// offsets would never refill (the tailer cold-scans only when it holds no offsets).
     ///
+    /// TRDD-0BDOV3WC: a reuse that runs out of memory at [`MEMORY_LIMIT`] is not a refusal. The file
+    /// is complete but too big for one scan, so it is compacted by a rewrite and reused instead; see
+    /// `open_with_limits`.
+    ///
     /// On reuse the resident parsed layer is rebuilt here, one parse per card, in `seq` order, and
     /// `next_seq` resumes at `max(seq)+1` (a counter restarting at 0 would sort new cards before
     /// old ones and break the first-insert tie order).
     ///
-    /// Prints ONE line naming the decision and its reason.
+    /// Prints ONE line naming the decision and its reason (a rewrite prints its own lines).
     ///
     /// No `Default`: a card store without a data dir is not a thing, and the impl only ever
     /// existed to satisfy clippy's `new_without_default`, which does not apply to a constructor
     /// that takes an argument.
     pub fn open(data_dir: &Path) -> CardStore {
+        Self::open_with_limits(
+            data_dir,
+            OpenLimits { read: MEMORY_LIMIT, rebuild: REBUILD_MEMORY_LIMIT, reopen: MEMORY_LIMIT },
+        )
+    }
+
+    /// The whole `open`, with its three memory limits (see [`OpenLimits`]), in order:
+    ///
+    /// a. Leftovers of an earlier rewrite (`cards.duckdb.rebuild`, `.rebuild.wal`) are removed. A
+    ///    rewrite is the corpus only after its rename, so they are never reused.
+    /// b. The reuse attempt at `read`: a file reused as it stands gives `Reused`.
+    /// c. Refused as NotEligible: the rebuild-from-snapshot path, `Rebuilt(reason)`.
+    /// d. Refused as OutOfMemory: the compacting rewrite (`rewrite_in_place`). A failure BEFORE the
+    ///    rename removes the rebuild files and takes the rebuild-from-snapshot path,
+    ///    `RewriteFailed(reason)`. A failure AFTER the rename never deletes `cards.duckdb` (see
+    ///    `finish_swap`).
+    pub(crate) fn open_with_limits(data_dir: &Path, limits: OpenLimits<'_>) -> CardStore {
         std::fs::create_dir_all(data_dir).expect("create the data dir for the card store");
         let path = data_dir.join(CARD_DB_FILE);
         let wal = data_dir.join(format!("{CARD_DB_FILE}.wal"));
-        let reason = match Self::try_reuse(&path) {
-            // WHY the resident scan is part of the gate: before reuse a corrupt file healed itself
-            // because every start deleted it; now a bad row would panic on EVERY start, permanently.
-            // `count(*)` alone is answered from metadata, so it does not prove the card column is
-            // readable — only reading and parsing every card does. `conn` is dropped at the end of
-            // the `Err` arm, releasing the file before it is deleted below.
-            Ok(conn) => match Self::load_resident(&conn) {
-                Ok((parsed, next_seq)) => {
-                    eprintln!(
-                        "{} alcore: card store — reusing {CARD_DB_FILE}: {} cards, ingest v{}, schema v{CARD_SCHEMA_VERSION}, restore complete, no clear in progress",
-                        crate::log_ts(),
-                        parsed.len(),
-                        crate::log_reader::LOG_INGEST_VERSION
-                    );
-                    return CardStore {
-                        conn,
-                        next_seq,
-                        full_scan_calls: std::sync::atomic::AtomicUsize::new(0),
-                        demote_card_fetches: std::sync::atomic::AtomicUsize::new(0),
-                        parsed,
-                        epoch: 0,
-                        reused: true,
-                    };
+        remove_rebuild_leftovers(data_dir);
+        let (reason, outcome) = match Self::try_reuse(&path, limits.read) {
+            Ok((conn, parsed, next_seq)) => {
+                eprintln!(
+                    "{} alcore: card store — reusing {CARD_DB_FILE}: {} cards, ingest v{}, schema v{CARD_SCHEMA_VERSION}, restore complete, no clear in progress",
+                    crate::log_ts(),
+                    parsed.len(),
+                    crate::log_reader::LOG_INGEST_VERSION
+                );
+                return Self::assemble(conn, parsed, next_seq, OpenOutcome::Reused);
+            }
+            Err(Refusal::NotEligible(reason)) => (reason.clone(), OpenOutcome::Rebuilt(reason)),
+            Err(Refusal::OutOfMemory(reason)) => {
+                eprintln!(
+                    "{} alcore: card store — reusing {CARD_DB_FILE} ran out of memory at {} ({reason}); rewriting it compactly at {}",
+                    crate::log_ts(),
+                    limits.read,
+                    limits.rebuild
+                );
+                match Self::rewrite_in_place(data_dir, &path, &limits) {
+                    Ok((conn, parsed, next_seq, outcome)) => return Self::assemble(conn, parsed, next_seq, outcome),
+                    Err(failure) => {
+                        remove_rebuild_leftovers(data_dir);
+                        eprintln!(
+                            "{} alcore: card store rewrite failed: {failure}; falling back to a rebuild from the snapshot",
+                            crate::log_ts()
+                        );
+                        (failure.clone(), OpenOutcome::RewriteFailed(failure))
+                    }
                 }
-                Err(reason) => reason,
-            },
-            Err(reason) => reason,
+            }
         };
         eprintln!(
             "{} alcore: card store — NOT reusing {CARD_DB_FILE} ({reason}); starting empty, a full restore from the card snapshot rebuilds it",
@@ -228,7 +324,7 @@ impl CardStore {
         let _ = std::fs::remove_file(&wal);
         let conn =
             Connection::open(&path).unwrap_or_else(|e| panic!("open the card store at {}: {e}", path.display()));
-        Self::configure(&conn).expect("configure the card store connection");
+        Self::configure(&conn, limits.reopen).expect("configure the card store connection");
         // `restore_complete` starts at 0: only the end of a full restore (`mark_restore_complete`)
         // vouches for the corpus, so a boot killed half-way through the restore is rebuilt.
         conn.execute_batch(&format!(
@@ -238,14 +334,24 @@ impl CardStore {
             crate::log_reader::LOG_INGEST_VERSION
         ))
         .expect("create the card store schema");
+        Self::assemble(conn, IndexMap::new(), 0, outcome)
+    }
+
+    /// The one constructor: every outcome of `open` ends here.
+    fn assemble(
+        conn: Connection,
+        parsed: IndexMap<String, Arc<Value>>,
+        next_seq: i64,
+        outcome: OpenOutcome,
+    ) -> CardStore {
         CardStore {
             conn,
-            next_seq: 0,
+            next_seq,
             full_scan_calls: std::sync::atomic::AtomicUsize::new(0),
             demote_card_fetches: std::sync::atomic::AtomicUsize::new(0),
-            parsed: IndexMap::new(),
+            parsed,
             epoch: 0,
-            reused: false,
+            outcome,
         }
     }
 
@@ -256,76 +362,218 @@ impl CardStore {
     /// NOT `SET temp_directory=''` (which the Parquet stores use to make an over-limit query FAIL
     /// rather than spill): here a spill is the intended behaviour of a bounded buffer pool, and
     /// failing the summary rebuild instead would lose the whole corpus from the wire.
-    fn configure(conn: &Connection) -> agentlens_store::duckdb::Result<()> {
-        conn.execute_batch(&format!("SET memory_limit='{MEMORY_LIMIT}'; SET threads=2;"))
+    ///
+    /// `limit` is the buffer pool's ceiling: [`MEMORY_LIMIT`] in production, [`REBUILD_MEMORY_LIMIT`]
+    /// for the compacting rewrite, and a smaller value only in a test that needs an out-of-memory read.
+    fn configure(conn: &Connection, limit: &str) -> agentlens_store::duckdb::Result<()> {
+        conn.execute_batch(&format!("SET memory_limit='{limit}'; SET threads=2;"))
     }
 
-    /// The reuse gate (see `open`): `Ok(conn)` only when every condition holds, else the reason
-    /// the database cannot be trusted. The connection is dropped on every `Err`, releasing the
-    /// file before `open` deletes it.
-    fn try_reuse(path: &Path) -> Result<Connection, String> {
+    /// The reuse attempt at `read_limit` (see `open`): the gate — the file opens, `configure`, then
+    /// `check_meta` — followed by `load_resident`. `Ok` is the reusable corpus. Every `Err` drops the
+    /// connection before returning, releasing the file for the caller to delete or rewrite.
+    ///
+    /// WHY the resident scan is part of the gate: before reuse a corrupt file healed itself because
+    /// every start deleted it; now a bad row would panic on EVERY start, permanently. `count(*)` alone
+    /// is answered from metadata, so it does not prove the card column is readable — only reading and
+    /// parsing every card does.
+    fn try_reuse(path: &Path, read_limit: &str) -> Result<(Connection, ResidentCards, i64), Refusal> {
         if !path.exists() {
-            return Err("no database file".to_owned());
+            return Err(Refusal::NotEligible("no database file".to_owned()));
         }
-        let conn = Connection::open(path).map_err(|e| format!("the file does not open cleanly: {e}"))?;
-        Self::configure(&conn).map_err(|e| format!("cannot configure the connection: {e}"))?;
-        let mut stmt = conn
-            .prepare("SELECT key, value FROM meta")
-            .map_err(|e| format!("no readable meta table (a database from before the reuse gate): {e}"))?;
-        let rows = stmt
-            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
-            .map_err(|e| format!("meta table unreadable: {e}"))?;
-        let meta: std::collections::HashMap<String, String> =
-            rows.collect::<Result<_, _>>().map_err(|e| format!("meta table unreadable: {e}"))?;
-        drop(stmt);
-        let want_ingest = crate::log_reader::LOG_INGEST_VERSION.to_string();
-        let want_schema = CARD_SCHEMA_VERSION.to_string();
-        let get = |k: &str| meta.get(k).map(String::as_str);
-        if get("ingest_version") != Some(want_ingest.as_str()) {
-            return Err(format!("ingest version {:?} != {want_ingest}", get("ingest_version")));
-        }
-        if get("card_schema_version") != Some(want_schema.as_str()) {
-            return Err(format!("card schema version {:?} != {want_schema}", get("card_schema_version")));
-        }
-        if get("restore_complete") != Some("1") {
-            return Err("the previous restore never completed".to_owned());
-        }
-        if get("clear_in_progress") != Some("0") {
-            return Err("an /api/clear was in progress".to_owned());
-        }
-        // The table itself must be readable too: a header that opens but a card table that does not
-        // is exactly the damage a reuse must not paper over.
-        conn.query_row("SELECT count(*) FROM cards", [], |r| r.get::<_, i64>(0))
-            .map_err(|e| format!("the cards table is unreadable: {e}"))?;
-        Ok(conn)
+        let conn = Connection::open(path)
+            .map_err(|e| Refusal::NotEligible(format!("the file does not open cleanly: {e}")))?;
+        Self::configure(&conn, read_limit)
+            .map_err(|e| Refusal::OutOfMemory(format!("cannot configure the connection at {read_limit}: {e}")))?;
+        Self::check_meta(&conn)?;
+        let (parsed, next_seq) = Self::load_resident(&conn)?;
+        Ok((conn, parsed, next_seq))
     }
 
     /// Rebuild the resident parsed layer from the table: one parse per card, `seq` order, plus the
     /// next ordinal. The same shape `put_arc` leaves behind, so a reused store and a restored one
     /// serve the same summary.
-    fn load_resident(conn: &Connection) -> Result<(IndexMap<String, Arc<Value>>, i64), String> {
+    fn load_resident(conn: &Connection) -> Result<(IndexMap<String, Arc<Value>>, i64), Refusal> {
         let mut stmt = conn
-            .prepare("SELECT session_id, card FROM cards ORDER BY seq")
-            .map_err(|e| format!("cannot prepare the resident-layer scan: {e}"))?;
+            .prepare(RESIDENT_SCAN_SQL)
+            .map_err(|e| scan_refusal(&e, "cannot prepare the resident-layer scan"))?;
         let rows = stmt
             .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
-            .map_err(|e| format!("the cards table is unreadable: {e}"))?;
+            .map_err(|e| scan_refusal(&e, "the cards table is unreadable"))?;
         let mut parsed = IndexMap::new();
         for r in rows {
-            let (id, json) = r.map_err(|e| format!("a card row is unreadable: {e}"))?;
-            let card = serde_json::from_str(&json).map_err(|e| format!("card {id} is not valid JSON: {e}"))?;
+            let (id, json) = r.map_err(|e| scan_refusal(&e, "a card row is unreadable"))?;
+            let card = serde_json::from_str(&json)
+                .map_err(|e| Refusal::NotEligible(format!("card {id} is not valid JSON: {e}")))?;
             parsed.insert(id, Arc::new(card));
         }
         drop(stmt);
         let next_seq: i64 = conn
             .query_row("SELECT COALESCE(MAX(seq), -1) + 1 FROM cards", [], |r| r.get(0))
-            .map_err(|e| format!("cannot read the next card ordinal: {e}"))?;
+            .map_err(|e| scan_refusal(&e, "cannot read the next card ordinal"))?;
         Ok((parsed, next_seq))
     }
 
-    /// True when `open` kept the previous run's corpus (the gate in `open` passed).
+    /// The meta checks and the row count of the reuse gate (see `try_reuse`), shared with the rewrite,
+    /// which must not copy a database the gate would refuse. Every meta failure is `NotEligible`: an
+    /// out-of-memory meta read means meta was never validated, which is the rebuild path. The count is
+    /// classified by `scan_refusal`.
+    fn check_meta(conn: &Connection) -> Result<(), Refusal> {
+        let mut stmt = conn.prepare("SELECT key, value FROM meta").map_err(|e| {
+            Refusal::NotEligible(format!("no readable meta table (a database from before the reuse gate): {e}"))
+        })?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+            .map_err(|e| Refusal::NotEligible(format!("meta table unreadable: {e}")))?;
+        let meta: std::collections::HashMap<String, String> = rows
+            .collect::<Result<_, _>>()
+            .map_err(|e| Refusal::NotEligible(format!("meta table unreadable: {e}")))?;
+        drop(stmt);
+        let want_ingest = crate::log_reader::LOG_INGEST_VERSION.to_string();
+        let want_schema = CARD_SCHEMA_VERSION.to_string();
+        let get = |k: &str| meta.get(k).map(String::as_str);
+        if get("ingest_version") != Some(want_ingest.as_str()) {
+            return Err(Refusal::NotEligible(format!("ingest version {:?} != {want_ingest}", get("ingest_version"))));
+        }
+        if get("card_schema_version") != Some(want_schema.as_str()) {
+            return Err(Refusal::NotEligible(format!(
+                "card schema version {:?} != {want_schema}",
+                get("card_schema_version")
+            )));
+        }
+        if get("restore_complete") != Some("1") {
+            return Err(Refusal::NotEligible("the previous restore never completed".to_owned()));
+        }
+        if get("clear_in_progress") != Some("0") {
+            return Err(Refusal::NotEligible("an /api/clear was in progress".to_owned()));
+        }
+        // The table itself must be readable too: a header that opens but a card table that does not
+        // is exactly the damage a reuse must not paper over.
+        conn.query_row("SELECT count(*) FROM cards", [], |r| r.get::<_, i64>(0))
+            .map_err(|e| scan_refusal(&e, "the cards table is unreadable"))?;
+        Ok(())
+    }
+
+
+    /// TRDD-0BDOV3WC step d — copy every card and meta row of `path` into `<data_dir>/cards.duckdb.rebuild`
+    /// through one connection at `rebuild_limit`, and return the copied card count. The source is read
+    /// through the same meta and count checks as the reuse gate, so a database the gate would refuse is
+    /// never copied. The copy's schema is `SCHEMA` and `META_SCHEMA` with only the table names qualified
+    /// (one source for the layout, so the copy cannot drift from what `open` creates); the two indexes keep
+    /// their unqualified names, which DuckDB requires.
+    fn rewrite_compact(data_dir: &Path, path: &Path, rebuild_limit: &str) -> Result<usize, String> {
+        let rebuild = data_dir.join(format!("{CARD_DB_FILE}.rebuild"));
+        let conn = Connection::open(path).map_err(|e| format!("open {} for the rewrite: {e}", path.display()))?;
+        Self::configure(&conn, rebuild_limit)
+            .map_err(|e| format!("configure the rewrite connection at {rebuild_limit}: {e}"))?;
+        Self::check_meta(&conn).map_err(|refusal| refusal.text().to_owned())?;
+        let rebuild_sql = rebuild.display().to_string().replace('\'', "''");
+        let fresh_schema =
+            SCHEMA.replace("CREATE TABLE cards", "CREATE TABLE fresh.cards").replace("ON cards", "ON fresh.cards");
+        let fresh_meta = META_SCHEMA.replace("CREATE TABLE meta", "CREATE TABLE fresh.meta");
+        conn.execute_batch(&format!(
+            "ATTACH '{rebuild_sql}' AS fresh;
+             {fresh_schema};
+             {fresh_meta};
+             INSERT INTO fresh.cards SELECT * FROM cards;
+             INSERT INTO fresh.meta SELECT * FROM meta;"
+        ))
+        .map_err(|e| format!("copy the corpus into {}: {e}", rebuild.display()))?;
+        let rows: i64 = conn
+            .query_row("SELECT count(*) FROM fresh.cards", [], |r| r.get(0))
+            .map_err(|e| format!("count the copied cards: {e}"))?;
+        conn.execute_batch("CHECKPOINT fresh; DETACH fresh; FORCE CHECKPOINT")
+            .map_err(|e| format!("checkpoint {}: {e}", rebuild.display()))?;
+        // WHY the explicit close: a dropped duckdb-rs connection swallows its close error, and a close
+        // error here means the rewrite's WAL state is unknown. Returning Err leaves the WAL untouched.
+        conn.close().map_err(|(_, e)| format!("close the rewrite connection: {e}"))?;
+        Ok(rows as usize)
+    }
+
+    /// TRDD-0BDOV3WC steps d to f: copy the corpus into `cards.duckdb.rebuild`, swap it in, and load it.
+    /// Every `Err` comes BEFORE the rename, so `cards.duckdb` is still the previous file and the caller may
+    /// take the rebuild-from-snapshot path. After the rename nothing returns `Err` (see `finish_swap`).
+    fn rewrite_in_place(
+        data_dir: &Path,
+        path: &Path,
+        limits: &OpenLimits<'_>,
+    ) -> Result<(Connection, ResidentCards, i64, OpenOutcome), String> {
+        let bytes_before = std::fs::metadata(path).map_err(|e| format!("stat {}: {e}", path.display()))?.len();
+        let rows = Self::rewrite_compact(data_dir, path, limits.rebuild)?;
+        if let Some(warning) = swap_in_rebuild(data_dir)? {
+            eprintln!(
+                "{} alcore: card store — WARNING: {warning}; the rewritten {CARD_DB_FILE} is in place and is kept",
+                crate::log_ts()
+            );
+        }
+        Ok(Self::finish_swap(path, rows, bytes_before, limits))
+    }
+
+    /// TRDD-0BDOV3WC — after the rename the fresh file IS the corpus, so nothing here may delete
+    /// `cards.duckdb`. WHY: today's delete-and-rebuild path would throw away the complete fresh file and
+    /// rebuild from the card snapshot, which lags the live corpus — the very loss this rewrite exists to
+    /// prevent. So a refusal here panics, naming the file that is kept, instead of returning `Err`.
+    ///
+    /// WHY the reopen limit is tried FIRST: the normal path then loads the resident layer with DuckDB's pool
+    /// at the read limit (256 MiB), and only a file that does not fit there is loaded at the rebuild limit,
+    /// with a warning. Measured (reports_dev/0bdov3wc-impl-report.md, section 9): this order lowered the peak
+    /// RSS from 1.95 GB to 1.85 GB, so the DuckDB pool is a small part of the peak. The composition log lines
+    /// report the mimalloc live size (about 0.5 to 0.9 GB), which is the larger share.
+    fn finish_swap(
+        path: &Path,
+        rows: usize,
+        bytes_before: u64,
+        limits: &OpenLimits<'_>,
+    ) -> (Connection, ResidentCards, i64, OpenOutcome) {
+        let bytes_after = std::fs::metadata(path)
+            .unwrap_or_else(|e| panic!("stat the rewritten {}: {e}; the file is kept", path.display()))
+            .len();
+        let (conn, parsed, next_seq, warning) = match Self::try_reuse(path, limits.reopen) {
+            Ok((conn, parsed, next_seq)) => (conn, parsed, next_seq, None),
+            Err(Refusal::OutOfMemory(reason)) => {
+                let (conn, parsed, next_seq) = Self::try_reuse(path, limits.rebuild).unwrap_or_else(|refusal| {
+                    panic!(
+                        "the rewritten {} does not load at the rebuild limit {}: {}; the file is kept",
+                        path.display(),
+                        limits.rebuild,
+                        refusal.text()
+                    )
+                });
+                let warning = format!("the fresh file does not load at the reopen limit {}: {reason}", limits.reopen);
+                (conn, parsed, next_seq, Some(warning))
+            }
+            Err(Refusal::NotEligible(reason)) => panic!(
+                "the rewritten {} does not load at the reopen limit {}: {reason}; the file is kept",
+                path.display(),
+                limits.reopen
+            ),
+        };
+        let running = if warning.is_some() { limits.rebuild } else { limits.reopen };
+        if let Some(w) = &warning {
+            eprintln!(
+                "{} alcore: card store — WARNING: the live card data has outgrown the read limit {} ({w}); the store keeps the rebuild limit {} (TRDD-USSG465Q owns the cause)",
+                crate::log_ts(),
+                limits.reopen,
+                limits.rebuild
+            );
+        }
+        eprintln!(
+            "{} alcore: card store — rewrote {CARD_DB_FILE} compactly: {rows} cards, {bytes_before} bytes before, {bytes_after} after; reusing it at memory limit {running}",
+            crate::log_ts()
+        );
+        (conn, parsed, next_seq, OpenOutcome::Rewritten { rows, bytes_before, bytes_after, warning })
+    }
+
+
+    /// True when `open` kept the previous run's corpus: reused as it stood, or compacted and reused.
     pub fn reused(&self) -> bool {
-        self.reused
+        matches!(self.outcome, OpenOutcome::Reused | OpenOutcome::Rewritten { .. })
+    }
+
+    /// How `open` got this store (see [`OpenOutcome`]). Read by the tests only.
+    #[cfg(test)]
+    pub(crate) fn open_outcome(&self) -> &OpenOutcome {
+        &self.outcome
     }
 
     fn set_meta(&self, key: &str, value: &str) {
@@ -842,6 +1090,60 @@ fn parse(json: &str) -> Value {
     serde_json::from_str(json).expect("a stored session card parses")
 }
 
+/// TRDD-0BDOV3WC step a — removes what a rewrite leaves before its rename, one log line per file. A
+/// rewrite is the corpus only after its rename, so these files are never reused. Absent files are the
+/// normal case and are not an error.
+fn remove_rebuild_leftovers(data_dir: &Path) {
+    for name in [format!("{CARD_DB_FILE}.rebuild"), format!("{CARD_DB_FILE}.rebuild.wal")] {
+        let file = data_dir.join(&name);
+        match std::fs::remove_file(&file) {
+            Ok(()) => eprintln!("{} alcore: card store — removed the leftover {name} of an earlier rewrite", crate::log_ts()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => panic!("remove the leftover {}: {e}", file.display()),
+        }
+    }
+}
+
+/// TRDD-0BDOV3WC step e — makes `<data_dir>/cards.duckdb.rebuild` the database. Every failure before the
+/// rename is `Err`, and the caller removes the rebuild files, so the previous file stays. ORDER IS
+/// LOAD-BEARING: the WAL is removed BEFORE the rename, so a stale WAL never sits beside the new file
+/// (DuckDB would replay it into the copy). A crash before the rename leaves the old checkpointed file plus
+/// leftovers, which the next boot removes; a crash after it leaves the complete fresh file. After the
+/// rename only the directory sync can fail: that is `Ok(Some(warning))`, because the fresh file is in place
+/// and must not be deleted.
+fn swap_in_rebuild(data_dir: &Path) -> Result<Option<String>, String> {
+    let path = data_dir.join(CARD_DB_FILE);
+    let rebuild = data_dir.join(format!("{CARD_DB_FILE}.rebuild"));
+    let wal = data_dir.join(format!("{CARD_DB_FILE}.wal"));
+    // WHY refuse a rebuild WAL that holds rows: the swap renames only the file, so rows still in the
+    // rebuild's WAL would be lost when the rebuild file replaces cards.duckdb. Checkpointing on close should
+    // leave the WAL empty; a non-empty one is a defect, and failing here (before the rename) keeps the rows.
+    let rebuild_wal = data_dir.join(format!("{CARD_DB_FILE}.rebuild.wal"));
+    match std::fs::metadata(&rebuild_wal) {
+        Ok(meta) if meta.len() > 0 => {
+            return Err(format!("{} holds {} uncheckpointed bytes; refusing to swap its file in", rebuild_wal.display(), meta.len()));
+        }
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(format!("stat {}: {e}", rebuild_wal.display())),
+    }
+    if wal.exists() {
+        std::fs::remove_file(&wal).map_err(|e| format!("remove {}: {e}", wal.display()))?;
+    }
+    std::fs::File::open(&rebuild)
+        .and_then(|file| file.sync_all())
+        .map_err(|e| format!("sync {}: {e}", rebuild.display()))?;
+    std::fs::rename(&rebuild, &path)
+        .map_err(|e| format!("rename {} over {}: {e}", rebuild.display(), path.display()))?;
+    #[cfg(unix)]
+    {
+        if let Err(e) = std::fs::File::open(data_dir).and_then(|dir| dir.sync_all()) {
+            return Ok(Some(format!("sync the data dir after the rename: {e}")));
+        }
+    }
+    Ok(None)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1137,4 +1439,254 @@ mod tests {
             store.conn.query_row("SELECT current_setting('threads')", [], |r| r.get(0)).expect("read back threads");
         assert_eq!(threads, 2);
     }
+
+    /// TRDD-0BDOV3WC — one card of the churn corpus: a root card with a 270000-character payload whose
+    /// last-active instant moves with `round`, so every round is an upsert that changes the row.
+    fn blob_card(id: usize, round: usize) -> Value {
+        serde_json::json!({
+            "sessionId": format!("c{id}"),
+            "source": "claude_code",
+            "startTime": "2026-08-01T10:00:00.000Z",
+            "durationMs": ((round * 8 + id + 1) * 1000) as f64,
+            "payload": "x".repeat(270_000),
+        })
+    }
+
+    /// TRDD-0BDOV3WC — the churn corpus: 8 cards and 1 + 10 rounds of puts through the production path, so
+    /// the file holds the dead rows of 88 upserts. With `keep_wal` the last round is left in the WAL.
+    fn churned_corpus(dir: &Path, keep_wal: bool) {
+        let mut s = CardStore::open(dir);
+        for round in 0..11 {
+            if keep_wal && round == 10 {
+                s.conn.execute_batch("PRAGMA disable_checkpoint_on_shutdown").expect("keep the last round in the WAL");
+            }
+            for id in 0..8 {
+                s.put(&blob_card(id, round));
+            }
+        }
+        s.mark_restore_complete();
+    }
+
+    /// TRDD-0BDOV3WC — (rows, distinct session ids, max seq, sum of row hashes) over every column, read on a
+    /// SEPARATE connection at 2048 MiB, so it fingerprints the file independently of the store under test.
+    fn canon(path: &Path) -> (i64, i64, i64, String) {
+        let conn = Connection::open(path).expect("open the file for its fingerprint");
+        conn.execute_batch("SET memory_limit='2048MiB'").expect("raise the limit for the fingerprint");
+        conn.query_row(
+            "SELECT count(*), count(DISTINCT session_id), max(seq),
+                    CAST(sum(hash(session_id, seq, last_active_ms, timeline_len, parent_session_id, source, card)) AS VARCHAR)
+             FROM cards",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )
+        .expect("fingerprint the cards")
+    }
+
+    /// The two files a rewrite leaves until its rename: the rebuild file and its WAL.
+    fn rebuild_files(dir: &Path) -> [std::path::PathBuf; 2] {
+        [dir.join(format!("{CARD_DB_FILE}.rebuild")), dir.join(format!("{CARD_DB_FILE}.rebuild.wal"))]
+    }
+
+    /// TRDD-0BDOV3WC — a corpus whose one-shot read runs out of memory is rewritten losslessly and smaller,
+    /// leaves no rebuild files behind, and is reused at the normal limit afterwards.
+    #[test]
+    fn rewrite_is_lossless_and_compacts() {
+        let dir = data_dir("rewrite-lossless");
+        churned_corpus(&dir, false);
+        let path = dir.join(CARD_DB_FILE);
+        let before = canon(&path);
+        let bytes_before = std::fs::metadata(&path).expect("stat the corpus").len();
+        match CardStore::try_reuse(&path, "4MiB") {
+            Err(Refusal::OutOfMemory(text)) => {
+                assert!(text.contains("Out of Memory Error"), "precondition: unexpected text: {text}")
+            }
+            Err(Refusal::NotEligible(text)) => panic!("precondition: the one-shot read must run out of memory: {text}"),
+            Ok(_) => panic!("precondition: the one-shot read at 4MiB must be refused"),
+        }
+        let store = CardStore::open_with_limits(&dir, OpenLimits { read: "4MiB", rebuild: "256MiB", reopen: "12MiB" });
+        match store.open_outcome() {
+            OpenOutcome::Rewritten { rows, bytes_before: recorded, bytes_after, warning } => {
+                assert_eq!(*rows, 8, "every card is copied");
+                assert_eq!(*recorded, bytes_before, "the bytes before the rewrite");
+                assert_eq!(*bytes_after, std::fs::metadata(&path).expect("stat the rewritten file").len());
+                assert!(warning.is_none(), "the fresh file loads at 12MiB: {warning:?}");
+            }
+            other => panic!("expected a rewrite, got {other:?}"),
+        }
+        assert!(store.reused(), "a rewritten corpus is reused");
+        let next_seq = store.next_seq;
+        drop(store);
+        assert_eq!(canon(&path), before, "the rewrite must not change any row");
+        let rewritten = Connection::open(&path).expect("open the rewritten file for its schema");
+        let indexes: Vec<String> = rewritten
+            .prepare("SELECT index_name FROM duckdb_indexes() WHERE table_name = 'cards'")
+            .expect("prepare the index listing")
+            .query_map([], |r| r.get::<_, String>(0))
+            .expect("list the indexes")
+            .collect::<Result<_, _>>()
+            .expect("read the index names");
+        assert!(
+            indexes.iter().any(|i| i == "idx_cards_active") && indexes.iter().any(|i| i == "idx_cards_parent"),
+            "the rewritten file must keep both indexes: {indexes:?}"
+        );
+        let constraints: Vec<String> = rewritten
+            .prepare("SELECT constraint_type FROM duckdb_constraints() WHERE table_name = 'cards'")
+            .expect("prepare the constraint listing")
+            .query_map([], |r| r.get::<_, String>(0))
+            .expect("list the constraints")
+            .collect::<Result<_, _>>()
+            .expect("read the constraint types");
+        assert!(constraints.iter().any(|c| c == "PRIMARY KEY"), "the rewritten table must keep its primary key: {constraints:?}");
+        drop(rewritten);
+        assert_eq!(next_seq, before.2 + 1, "next_seq resumes after the highest seq");
+        let bytes_now = std::fs::metadata(&path).expect("stat the file").len();
+        assert!(bytes_now < bytes_before, "the rewritten file must be smaller: {bytes_now} >= {bytes_before}");
+        for leftover in rebuild_files(&dir) {
+            assert!(!leftover.exists(), "{} must not remain", leftover.display());
+        }
+        assert!(!dir.join(format!("{CARD_DB_FILE}.wal")).exists(), "no WAL after a clean close");
+        let again = CardStore::open_with_limits(&dir, OpenLimits { read: "12MiB", rebuild: "256MiB", reopen: "12MiB" });
+        assert!(matches!(again.open_outcome(), OpenOutcome::Reused), "a second open reuses: {:?}", again.open_outcome());
+    }
+
+    /// TRDD-0BDOV3WC — a rewrite that cannot finish at its own limit falls back to the rebuild path and
+    /// leaves no rebuild files behind.
+    #[test]
+    fn a_failed_rewrite_falls_back() {
+        let dir = data_dir("rewrite-fail");
+        churned_corpus(&dir, false);
+        let store = CardStore::open_with_limits(&dir, OpenLimits { read: "4MiB", rebuild: "4MiB", reopen: "12MiB" });
+        match store.open_outcome() {
+            OpenOutcome::RewriteFailed(reason) => {
+                // DuckDB reports the same memory exhaustion as "Out of Memory Error" in a scan and as
+                // "failed to pin block" in a checkpoint; the 4 MiB rewrite fails in its checkpoint.
+                assert!(
+                    reason.contains("Out of Memory") || reason.contains("failed to pin block"),
+                    "the rewrite must fail for lack of memory: {reason}"
+                )
+            }
+            other => panic!("expected a failed rewrite, got {other:?}"),
+        }
+        assert!(!store.reused(), "a failed rewrite is not a reuse");
+        drop(store);
+        for leftover in rebuild_files(&dir) {
+            assert!(!leftover.exists(), "{} must not remain", leftover.display());
+        }
+    }
+
+    /// TRDD-0BDOV3WC — leftovers of an earlier rewrite are removed at the next open, and the store still reuses.
+    #[test]
+    fn leftovers_are_removed() {
+        let dir = data_dir("leftovers");
+        let mut s = CardStore::open(&dir);
+        s.put(&card("s0", 1000.0, 2, 8));
+        s.mark_restore_complete();
+        drop(s);
+        for leftover in rebuild_files(&dir) {
+            std::fs::write(&leftover, b"garbage").expect("plant a leftover");
+        }
+        let store = CardStore::open(&dir);
+        for leftover in rebuild_files(&dir) {
+            assert!(!leftover.exists(), "{} must be removed", leftover.display());
+        }
+        assert!(matches!(store.open_outcome(), OpenOutcome::Reused), "outcome: {:?}", store.open_outcome());
+    }
+
+    /// TRDD-0BDOV3WC — the swap removes a stale WAL before the rename, so the file swapped in holds the
+    /// rebuild's content and nothing of the previous file.
+    #[test]
+    fn swap_removes_the_stale_wal() {
+        let source = data_dir("swap-source");
+        let mut s = CardStore::open(&source);
+        s.put(&card("rebuilt", 2000.0, 0, 8));
+        s.mark_restore_complete();
+        drop(s);
+        let dir = data_dir("swap-wal");
+        let mut s = CardStore::open(&dir);
+        s.put(&card("old", 1000.0, 0, 8));
+        s.mark_restore_complete();
+        drop(s);
+        let wal = dir.join(format!("{CARD_DB_FILE}.wal"));
+        std::fs::write(&wal, b"a stale WAL that must not survive the swap").expect("plant a stale WAL");
+        std::fs::copy(source.join(CARD_DB_FILE), dir.join(format!("{CARD_DB_FILE}.rebuild")))
+            .expect("plant the rebuild file");
+        let warning = swap_in_rebuild(&dir).expect("the swap must succeed");
+        assert!(
+            !cfg!(target_os = "macos") || warning.is_none(),
+            "the directory sync must succeed on macOS: {warning:?}"
+        );
+        assert!(!wal.exists(), "the stale WAL must be removed");
+        assert!(!dir.join(format!("{CARD_DB_FILE}.rebuild")).exists(), "the rebuild file must be renamed away");
+        let store = CardStore::open(&dir);
+        assert!(store.get("rebuilt").is_some(), "the swapped-in file holds the rebuild's card");
+        assert!(store.get("old").is_none(), "the previous file's card must be gone");
+    }
+
+    /// TRDD-0BDOV3WC F2 — a rebuild whose WAL holds rows is refused before the rename: those rows are not in
+    /// the rebuild file, so swapping the file in would lose them. `cards.duckdb` is left exactly as it was.
+    #[test]
+    fn swap_refuses_a_rebuild_wal_that_holds_rows() {
+        let source = data_dir("swap-refuse-source");
+        let mut s = CardStore::open(&source);
+        s.put(&card("rebuilt", 2000.0, 0, 8));
+        s.mark_restore_complete();
+        drop(s);
+        let dir = data_dir("swap-refuse");
+        let mut s = CardStore::open(&dir);
+        s.put(&card("old", 1000.0, 0, 8));
+        s.mark_restore_complete();
+        drop(s);
+        let db = dir.join(CARD_DB_FILE);
+        let before = std::fs::read(&db).expect("read the previous file");
+        let rebuild = dir.join(format!("{CARD_DB_FILE}.rebuild"));
+        std::fs::copy(source.join(CARD_DB_FILE), &rebuild).expect("plant a valid rebuild file");
+        std::fs::write(dir.join(format!("{CARD_DB_FILE}.rebuild.wal")), b"rows not yet checkpointed")
+            .expect("plant a non-empty rebuild WAL");
+        let err = swap_in_rebuild(&dir).expect_err("a rebuild whose WAL holds rows must be refused");
+        assert!(err.contains("rebuild.wal"), "unexpected error: {err}");
+        assert!(std::fs::read(&db).expect("read the previous file") == before, "cards.duckdb must be unchanged");
+        assert!(rebuild.exists(), "the rebuild file must not be renamed away");
+    }
+
+    /// TRDD-0BDOV3WC — a WAL the writer never checkpointed is carried into the rewrite, so the rewritten file
+    /// holds the logical corpus and not only the checkpointed part of it.
+    #[test]
+    fn a_wal_is_carried_into_the_rewrite() {
+        let dir = data_dir("wal-carried");
+        churned_corpus(&dir, true);
+        let wal = dir.join(format!("{CARD_DB_FILE}.wal"));
+        assert!(wal.exists(), "precondition: the writer left a WAL behind");
+        let copy = data_dir("wal-carried-copy");
+        std::fs::create_dir_all(&copy).expect("create the copy");
+        std::fs::copy(dir.join(CARD_DB_FILE), copy.join(CARD_DB_FILE)).expect("copy the database");
+        std::fs::copy(&wal, copy.join(format!("{CARD_DB_FILE}.wal"))).expect("copy the WAL");
+        // Opening the copy replays its WAL, so its fingerprint is the logical corpus.
+        let expected = canon(&copy.join(CARD_DB_FILE));
+        let store = CardStore::open_with_limits(&dir, OpenLimits { read: "4MiB", rebuild: "256MiB", reopen: "12MiB" });
+        assert!(matches!(store.open_outcome(), OpenOutcome::Rewritten { .. }), "outcome: {:?}", store.open_outcome());
+        drop(store);
+        assert_eq!(canon(&dir.join(CARD_DB_FILE)), expected, "the rewrite must carry the WAL's rows");
+        assert!(!wal.exists(), "no WAL after the rewrite");
+    }
+
+    /// TRDD-0BDOV3WC A2 — once the swap has put the fresh file in place, a reopen failure keeps that file:
+    /// the store runs at the rebuild limit with a warning, and nothing deletes the corpus.
+    #[test]
+    fn a_reopen_failure_keeps_the_fresh_file() {
+        let dir = data_dir("reopen-failure");
+        churned_corpus(&dir, false);
+        let path = dir.join(CARD_DB_FILE);
+        let before = canon(&path);
+        let store = CardStore::open_with_limits(&dir, OpenLimits { read: "4MiB", rebuild: "256MiB", reopen: "4MiB" });
+        assert!(
+            matches!(store.open_outcome(), OpenOutcome::Rewritten { warning: Some(_), .. }),
+            "expected a rewrite with a warning, got {:?}",
+            store.open_outcome()
+        );
+        assert!(store.reused(), "the rewritten corpus is still reused");
+        drop(store);
+        assert!(path.exists(), "the fresh file must survive a reopen failure");
+        assert_eq!(canon(&path), before, "the fresh file must hold the whole corpus");
+    }
+
 }
