@@ -24,7 +24,7 @@ project-id: agentlenspro
 `tests/ui.rs::write_prompts_file_and_branch_dump` (rust-core/crates/agentlens-core/tests/ui.rs:635-654) makes the in-process server write `agentlens-prompts-claude.md` into the test process's real cwd (the crate dir), then tries to tidy it with `let _ = std::fs::rename(&file, std::env::temp_dir().join(...))`. On this machine the repo lives on /Volumes/EmaUITEK4TBSSD and temp_dir() is on the boot volume, so the rename is cross-device and fails (EXDEV, inferred from the volumes); `let _ =` swallows the error.
 
 ## Evidence (main agent, 2026-10-15)
-- The untracked rust-core/crates/agentlens-core/agentlens-prompts-claude.md holds 11 pairs of the test's entries ("test label" / "second"), dated 2026-10-05 through 2026-10-15 00:47, one pair per test run: the file is never removed and grows with every run.
+- The untracked rust-core/crates/agentlens-core/agentlens-prompts-claude.md holds 10 pairs of the test's entries (32-byte header plus 10 x 105 bytes = its 1,082-byte size) ("test label" / "second"), with entry stamps 2026-10-05 00:12 through 2026-10-15 00:47 (apparently UTC: the file's mtime is 02:47 CEST), one pair per test run: the file is never removed and grows with every run.
 - Consequence for the test itself: its first assertion claims "first entry creates the header", but from the second run on the file already exists, so the header-creation path is no longer exercised; "header once" still passes because the header was written on the first run only.
 
 ## Fix direction
