@@ -569,8 +569,10 @@ impl CardStore {
     /// DuckDB or serde failure comes back as `Err` (the caller counts and logs it; the next batch
     /// retries) instead of a panic under the lock. NOT measured: the per-card UPDATE's memory at
     /// 256 MiB with 80 KB to 2.3 MB cards (at low limits on small test cards it failed before the
-    /// old read did). The first failing card aborts the loop, so one bad row blocks every later
-    /// candidate until it is fixed.
+    /// old read did). An Err stops the pass at the first failing card (fail-fast, TRDD-MEPIRHI4):
+    /// the hotter candidates before it stay demoted; with the pinned order a card that fails on
+    /// every batch blocks only the colder candidates after it, and the alcore.demoteColdError
+    /// counter and the first-failure log line name it.
     ///
     /// The early return reads the resident layer, not `count(*)`: below the hot set no DuckDB
     /// statement runs at all (layer and table hold the same rows — `persist_snapshot` debug-asserts
@@ -777,13 +779,16 @@ impl CardStore {
 /// TRDD-KMF02UEX — `demote_cold`'s candidate query: session ids ONLY, never card text. The window
 /// ranks ALL cards (the cut must fall in the right place) and the `timeline_len > 0` filter runs
 /// after it. Shared with the in-module tests, so their "the new query fits" precondition measures
-/// the query production actually runs.
+/// the query production actually runs. `ORDER BY rn` pins the order the query already returned
+/// (hottest beyond the hot set first, coldest last; measured equal to the unordered output on a
+/// clone of the live copy with Python DuckDB 1.5.6, TRDD-MEPIRHI4), so an abort on a failing card
+/// blocks only the colder candidates after it.
 const DEMOTE_CANDIDATES_SQL: &str = "WITH ranked AS (
          SELECT session_id, timeline_len,
                 row_number() OVER (ORDER BY last_active_ms DESC, seq ASC) AS rn
          FROM cards
      )
-     SELECT session_id FROM ranked WHERE rn > ? AND timeline_len > 0";
+     SELECT session_id FROM ranked WHERE rn > ? AND timeline_len > 0 ORDER BY rn";
 
 /// TRDD-9VX3WTGU — the persist-strip of a card whose timeline is already empty: drops `fileOps`,
 /// `generatedFiles`, `generatedFilesTruncated` and empties `backgroundSpans`, exactly the fields
@@ -958,6 +963,21 @@ mod tests {
             let resident = s.parsed.get(&id).expect("resident card");
             assert_eq!(timeline_len(resident) > 0, keeps, "resident layer, {id}");
         }
+    }
+
+
+    /// TRDD-MEPIRHI4 — the candidate query returns the hottest card beyond the hot set first and
+    /// the coldest last, so an abort on a failing card blocks only the colder candidates after it.
+    /// Cards are put in a SHUFFLED order (durations 3,7,1,8,2,6,4,5 thousand ms), so the window
+    /// order differs from both insertion order and its reverse.
+    #[test]
+    fn demote_cold_candidates_come_hottest_first() {
+        let mut s = CardStore::open(&data_dir("demote-order-pinned"));
+        for (i, d) in [3, 7, 1, 8, 2, 6, 4, 5].into_iter().enumerate() {
+            s.put(&card(&format!("s{i}"), d as f64 * 1000.0, 2, 8));
+        }
+        let expected: Vec<String> = ["s1", "s5", "s7", "s6", "s0", "s4", "s2"].map(String::from).to_vec();
+        assert_eq!(candidate_ids(&s, 1), Ok(expected));
     }
 
     /// TRDD-59OONXOV — `demote_cold` strips the resident card only after its table UPDATE

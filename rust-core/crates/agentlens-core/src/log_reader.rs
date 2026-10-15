@@ -1553,9 +1553,12 @@ pub fn start_sweeper(
             // (ingest_scanned returns early on an empty one), once the corpus exceeds the hot set
             // (demote_cold returns early below it), ends in demote_cold's keys-only candidate query
             // plus, per demoted card, one primary-key fetch and UPDATE, under the lock
-            // (TRDD-KMF02UEX); that hold's duration is unmeasured. At background QoS that hold
-            // would be preempted while request threads wait on the lock (priority inversion), so
-            // lowering this thread would make requests slower, not the machine quieter. Since
+            // (TRDD-KMF02UEX); a forced 30-card pass (hot_cards 1) took 0.58-1.64 s on scratch
+            // clones (cold, no lock, timer including the connection open; the upper figure on a
+            // synthetic regrowth), almost all of it per-card fetch and UPDATE (TRDD-074C0DK8); the
+            // hold under the real lock is unmeasured. At background QoS that hold would be
+            // preempted while request threads wait on the lock (priority inversion), so lowering
+            // this thread would make requests slower, not the machine quieter. Since
             // DA0GN1CS the periodic save no longer adds a full-corpus scan under the lock;
             // re-decide this under RVKQDLRD.
             let backstop = if watch_attached > 0 { FULL_RESCAN } else { poll_interval };
