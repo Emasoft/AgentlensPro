@@ -4,7 +4,7 @@ title: A DuckDB out-of-memory read at boot makes the card store delete cards.duc
 column: todo
 status: tasked
 created: 2026-10-15T01:29:03+0200
-updated: 2026-10-15T11:30:21+0200
+updated: 2026-10-15T11:45:53+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -64,4 +64,4 @@ At boot, `try_reuse`/`load_resident` read the cards table at the 256 MiB DuckDB 
 
 ## Notes and lessons learned
 
-2026-10-15: on the three measured copies (cold connections), the demotion floor sits below the boot-read floor (live copy at most 96 vs 256 MiB, compact at most 32 vs 88, large-r30 at most 256 vs about 352; TRDD-BSLCSCYK), so there a file bloated enough to fail demotion already fails the boot read; production demotes on a warm connection after upserts, whose extra memory is unmeasured, so a demotion failure can at most hasten a restart the bloat already dooms, not shown to cause it. The live copy is INFERRED to be the 16:21 state: the live main file was last written 16:05:29 and its WAL 16:21:48 on 2026-10-14; the copy was written 04:09 on 2026-10-15, 27.8 MB larger with no WAL beside it, consistent with the WAL replayed into it. It demotes at no more than 96 MiB. This corrects the Relevance line in the archived TRDD-BSLCSCYK Results.
+2026-10-15: at 256 MiB demotion succeeded on all three measured copies (cold connections; TRDD-BSLCSCYK). Their demotion floors sit below their boot-read floors (live copy at most 96 vs 256 MiB, compact at most 32 vs 88, large-r30 at most 256 vs about 352); that this order holds at every bloat level between them is INFERRED. Production demotes on a warm connection after upserts, whose extra memory is unmeasured, so a demotion failure on a file whose boot read still passes is not ruled out; it is not shown to cause the refusal either: on these copies the timeline cards hold about 8.4 MB of card text, and their growth while demotion keeps failing is unmeasured. The live copy has the same cards content as the live file at its last write: a clone of the live file plus its WAL (last written 16:21:48 on 2026-10-14) was compared on row count, max(rowid), total card-text bytes, and a sum of row hashes over session_id, card, last_active_ms, seq and timeline_len (MEASURED with DuckDB 1.5.6 on clones; parent_session_id, source, the meta table and the physical layout were not compared); it demotes at no more than 96 MiB on its own checkpointed layout. This corrects the Relevance line in the archived TRDD-BSLCSCYK Results.
