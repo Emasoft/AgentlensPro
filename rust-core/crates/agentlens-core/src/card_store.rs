@@ -1059,6 +1059,9 @@ mod tests {
             .expect("unique index on timeline_len");
         let err = s.demote_cold(1).expect_err("precondition: the second per-card UPDATE violates the unique index");
         assert!(err.contains("store the demoted card"), "precondition: unexpected error: {err}");
+        // TRDD-MEPIRHI4 box 2: abort, not skip-and-continue. Four candidates (s3, s2, s1, s0; s4 is hot):
+        // the pass stops at the second, so a skip that reported its failures at the end would fetch all four.
+        assert_eq!(s.demote_card_fetches(), 2, "the pass must stop at the first failing card");
         let mut stripped = 0;
         for i in 0..5 {
             let id = format!("s{i}");
