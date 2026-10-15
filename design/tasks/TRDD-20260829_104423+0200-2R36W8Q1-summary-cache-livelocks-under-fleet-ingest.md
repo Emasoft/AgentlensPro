@@ -5,7 +5,7 @@ column: todo
 pre-block-column: 
 unblock-when: [trdd:UTFVMVT8 terminal]
 created: 2026-08-29T10:44:23+0200
-updated: 2026-10-15T07:12:18+0200
+updated: 2026-10-15T07:15:30+0200
 current-owner: main-session
 task-type: bugfix
 scope: project
@@ -45,7 +45,7 @@ the two gates are independent may clear the field with that one-line reason. The
 are carried from the 08-29 runs — re-measure them in the re-submission or state why the carry holds.
 `implementation-commits` now names `481c94e4` (the `REBUILDER_ACTIVE` change), which was missing.
 
-**Previous STATE (12:55) — LAST BOX MET — `ai_review`.** The 1/s × 260 s soak the NEXT ACTION below asked for ran on
+SUPERSEDED 2026-10-15 (see the triage line above): **Previous STATE (12:55) — LAST BOX MET — `ai_review`.** The 1/s × 260 s soak the NEXT ACTION below asked for ran on
 2026-09-05 12:48–12:54 against the live alcore restarted at 11:51 (built from `7caad610`, which
 carries this card's summary-cache change and QE114936's twenty handler rewrites), with no build
 or test overlapping it: p50 0.524 s, p99 0.955 s, max 1.281 s, 1 of 260 samples over 1 s. No

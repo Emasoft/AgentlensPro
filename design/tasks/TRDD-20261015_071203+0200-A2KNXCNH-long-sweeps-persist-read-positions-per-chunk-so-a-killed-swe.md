@@ -4,7 +4,7 @@ title: Long sweeps persist read positions per chunk so a killed sweep resumes in
 column: todo
 status: tasked
 created: 2026-10-15T07:12:03+0200
-updated: 2026-10-15T07:12:08+0200
+updated: 2026-10-15T07:15:30+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -22,6 +22,8 @@ npt: [0R0NGVK6]
 
 ## What
 Commit 1 of TRDD-6B7VV2Z7's revision-2 plan, split out 2026-10-15 so it can land now while 6B7VV2Z7's own fix (B') waits for TRDD-0BDOV3WC and TRDD-USSG465Q. `DurableState::ingest_chunk` appends each flushed chunk's read positions with `append_changed` right after that chunk's cards are put (both ingest closures, plus the boot remainder and the full-sweep remainder; targeted sweeps keep saving on the 60 s tick); the version-stale branch of `restore_from_snapshot` tombstones both logs and stamps the version before the cold rescan; the appends count in the persistence counters. Full spec and test list (T3 with more than SCAN_CHUNK files and a death after chunk 1, T4, T6 poisoned lock, T7 steady-state 0 bytes; key derivation as export_file_state; append only on the lock Ok arm): TRDD-6B7VV2Z7 STATE PLAN.
+Copied 2026-10-15 from TRDD-6B7VV2Z7: Commit 1 must also: derive each record key exactly as `export_file_state` does (`PathBuf::from(&s.file).to_string_lossy()`), or the next save tombstones and re-appends every key; append only on the lock's Ok arm (a poisoned lock puts nothing and appends nothing); rebuild T3 with more than SCAN_CHUNK generated files (precedent tests/log_reader_parity.rs:168-200), a simulated death after chunk 1, and the mutation 'append once after the sweep instead of per chunk'; add T7 (after appends, a forced tick with no change writes 0 offsets bytes and the version stamp is current). Narrow claim: no `Drop` in agentlens-core/src/*.rs saves state (subfolders unchecked; dropping a DuckDB connection checkpoints without changing content). Other readers of the three files (checked by main 2026-10-15): log-delta-version.json is read and written only by DurableState (log_reader.rs:832); standalone/cli.js references none of the three file names and contains no deltaLog symbol; server_stats.rs:500-501 reads only disk sizes.
+Version-stale branch (log_reader.rs 876-882): before its early return call self.offsets.save(&{}), self.cards.save(&{}), then self.stamp_version() LAST (a kill midway re-runs it idempotently). Bundled because append_changed fills `written`, so the first tick may write 0 bytes and skip the stamp (stamp_version runs only when bytes > 0); a death before a card save would then discard the scan. Measured once-per-version-bump cost (reports_dev/6b7vv2z7-rev2-measure.md): ~1.55 MB of log-sessions tombstones, the stale 72 MB snapshot stays; log-offsets compacts to empty. Targeted sweeps (sweep_paths) are excluded and keep saving on the 60 s tick. Mutations: T3 append once after the sweep instead of per chunk; T4 skip stamp_version; T6 append outside the lock's Ok arm; T7 drop the persistence-counter update.
 
 ## Why
 VERIFIED (main, 2026-10-15): the startup sweep persists no read positions until it returns, so any long sweep killed partway restarts from the beginning.
