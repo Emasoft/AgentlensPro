@@ -51,6 +51,78 @@ fn size_of(p: &Path) -> u64 {
     fs::metadata(p).map(|m| m.len()).unwrap_or(0)
 }
 
+/// TRDD-0R0NGVK6 — before any append, repair a delta whose last line has no '\n'. A kill or a
+/// partial write mid-append can leave one; the next append would be glued onto it, and the glued
+/// line, once another line follows, is a corrupt MID-FILE line every later load() refuses (for
+/// log-offsets alcore then exits at every start). The repair follows replay's own rule: a
+/// trailing fragment that does not decode as UTF-8 JSON is a torn tail replay already ignores,
+/// so it is truncated away (nothing load() returned is dropped); a trailing line that IS a
+/// complete record (under 16 MiB; a longer fragment is treated as torn) only lacks its '\n', so
+/// a '\n' is appended instead. Whether a dropped torn record is persisted again depends on how
+/// `written` was seeded: after load() (log-offsets on every start, log-sessions on a refused reuse,
+/// body-links at boot) its key is absent and the next full save() re-appends it; after
+/// seed_written (log-sessions' reuse path) the key is present and the record stays missing from
+/// the snapshot pair until that card changes — the lag seed_written already documents
+/// (cards.duckdb still holds it). Concurrency: appends to one delta are serialized in-process (the
+/// sweeper thread for log-sessions/log-offsets, the state lock for body-links) and pid_lock gives
+/// one server per data dir, so no append races the repair; the body-links SQL reader
+/// (cache_turns_sql.rs, read_ndjson_auto, ignore_errors=false) already rejects a torn tail, so the
+/// repair cannot make it worse. Checks the last byte first; block-scans backwards only when needed.
+fn heal_torn_tail(file: &Path) -> Result<(), String> {
+    use std::io::{Read, Seek, SeekFrom};
+    const BLOCK: u64 = 64 * 1024;
+    // A trailing fragment at least this long is treated as torn without decoding it (bounded read).
+    const MAX_DECODE: u64 = 16 * 1024 * 1024;
+    let err = |e: std::io::Error| format!("{}: heal torn tail: {e}", file.display());
+    let mut f = match fs::OpenOptions::new().read(true).write(true).open(file) {
+        Ok(f) => f,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(err(e)),
+    };
+    let len = f.metadata().map_err(err)?.len();
+    if len == 0 {
+        return Ok(());
+    }
+    let mut last = [0u8; 1];
+    f.seek(SeekFrom::Start(len - 1)).map_err(err)?;
+    f.read_exact(&mut last).map_err(err)?;
+    if last[0] == b'\n' {
+        return Ok(()); // clean tail — the common case, one byte read
+    }
+    let mut buf = vec![0u8; BLOCK as usize];
+    let mut end = len;
+    let keep = loop {
+        if end == 0 {
+            break 0;
+        }
+        let start = end.saturating_sub(BLOCK);
+        let n = (end - start) as usize;
+        f.seek(SeekFrom::Start(start)).map_err(err)?;
+        f.read_exact(&mut buf[..n]).map_err(err)?;
+        if let Some(p) = buf[..n].iter().rposition(|b| *b == b'\n') {
+            break start + p as u64 + 1;
+        }
+        end = start;
+    };
+    let frag_len = len - keep;
+    if frag_len < MAX_DECODE {
+        let mut frag = vec![0u8; frag_len as usize];
+        f.seek(SeekFrom::Start(keep)).map_err(err)?;
+        f.read_exact(&mut frag).map_err(err)?;
+        let complete = std::str::from_utf8(&frag).ok().is_some_and(|s| serde_json::from_str::<Value>(s).is_ok());
+        if complete {
+            // A complete record missing only its '\n': replay returned it, so keep it.
+            f.seek(SeekFrom::End(0)).map_err(err)?;
+            f.write_all(b"\n").map_err(err)?;
+            println!("{} alcore: delta-log: appended the missing newline after a complete last line of {}", crate::log_ts(), file.display());
+            return Ok(());
+        }
+    }
+    f.set_len(keep).map_err(err)?;
+    println!("{} alcore: delta-log: healed torn tail of {} ({} byte(s) dropped)", crate::log_ts(), file.display(), frag_len);
+    Ok(())
+}
+
 impl DeltaLog {
     pub fn new(dir: &Path, name: &str) -> DeltaLog {
         DeltaLog {
@@ -63,18 +135,31 @@ impl DeltaLog {
     /// Read one NDJSON file: blank lines skipped, ONE torn trailing line tolerated, a corrupt line
     /// anywhere else is an error (the file is damaged — say so instead of silently dropping
     /// records the caller believes are persisted). A missing file is empty.
+    ///
+    /// TRDD-0R0NGVK6 — read BYTES and decode per line. The old `read_to_string(..) else empty`
+    /// turned a torn multi-byte UTF-8 char at the tail (or ANY read error) into an empty file,
+    /// silently dropping every record in it. Now only not-found is empty; any other error is Err,
+    /// and a line that fails UTF-8 decoding takes the same torn-tail rule as one that fails JSON.
+    /// Behaviour change: a permission or I/O error used to read as an empty file; it is now an Err —
+    /// fail-fast for log-sessions/log-offsets (the start exits, naming the path), and body-links' boot
+    /// path logs it and skips its compaction (it used to compact a silently-empty delta away).
     fn read_lines(file: &Path) -> Result<Vec<Value>, String> {
-        let Ok(raw) = fs::read_to_string(file) else { return Ok(Vec::new()) };
-        let lines: Vec<&str> = raw.split('\n').collect();
+        let raw = match fs::read(file) {
+            Ok(b) => b,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => return Err(format!("{}: {e}", file.display())),
+        };
+        let blank = |l: &[u8]| l.iter().all(u8::is_ascii_whitespace);
+        let lines: Vec<&[u8]> = raw.split(|b| *b == b'\n').collect();
         let mut out = Vec::new();
         for (i, ln) in lines.iter().enumerate() {
-            if ln.trim().is_empty() {
+            if blank(ln) {
                 continue;
             }
-            match serde_json::from_str::<Value>(ln) {
-                Ok(v) => out.push(v),
-                Err(_) => {
-                    if lines[i + 1..].iter().all(|l| l.trim().is_empty()) {
+            match std::str::from_utf8(ln).ok().and_then(|s| serde_json::from_str::<Value>(s).ok()) {
+                Some(v) => out.push(v),
+                None => {
+                    if lines[i + 1..].iter().all(|l| blank(l)) {
                         break;
                     }
                     return Err(format!("{}: corrupt line {} (not a torn tail — the file is damaged)", file.display(), i + 1));
@@ -192,6 +277,10 @@ impl DeltaLog {
             let bytes = self.compact(records)?;
             return Ok(SaveResult { appended, deleted, bytes, compacted: true });
         }
+        // TRDD-0R0NGVK6: append branch only (compaction above rewrites the snapshot and removes the
+        // delta). Cut a torn tail a kill mid-append left, or this body is glued onto it and becomes
+        // a corrupt mid-file line every later load() refuses; replay already ignored the fragment.
+        heal_torn_tail(&self.delta_path)?;
         let mut f = fs::OpenOptions::new()
             .create(true)
             .append(true)
@@ -217,6 +306,9 @@ impl DeltaLog {
         if body.is_empty() {
             return Ok(SaveResult::default());
         }
+        // TRDD-0R0NGVK6: same torn-tail heal as save()'s append branch — a kill mid-append must not
+        // leave a fragment this body gets glued onto (a corrupt mid-file line load() refuses).
+        heal_torn_tail(&self.delta_path)?;
         let mut f = fs::OpenOptions::new()
             .create(true)
             .append(true)
