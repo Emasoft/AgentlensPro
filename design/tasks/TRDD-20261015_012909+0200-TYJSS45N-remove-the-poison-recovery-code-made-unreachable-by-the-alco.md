@@ -1,10 +1,10 @@
 ---
 trdd-id: TYJSS45N
 title: Remove the poison-recovery code made unreachable by the alcore panic hook
-column: todo
+column: backburner
 status: tasked
 created: 2026-10-15T01:29:09+0200
-updated: 2026-10-15T01:50:31+0200
+updated: 2026-10-15T03:22:10+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -16,10 +16,10 @@ approved: true
 approval-judge: main-agent@agentlenspro
 approval-datetime: 2026-10-15T01:29:09+0200
 blocked-by: []
-pre-block-column: 
+pre-block-column:
 project-id: agentlenspro
-blocker-probe: 
-blocker-holds-if: 
+blocker-probe:
+blocker-holds-if:
 ---
 
 # Remove the poison-recovery code made unreachable by the alcore panic hook
@@ -36,3 +36,8 @@ After TRDD-3RVTC1HY (a panic hook in the alcore binary that exits the process), 
 - 2026-10-15T01:29:09+0200 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-10-15T01:42:14+0200 — column → blocked by main-agent@agentlenspro. follows TRDD-3RVTC1HY
 - 2026-10-15T01:50:19+0200 — column → todo by main-agent@agentlenspro. not blocked: it is an EHT of 3RVTC1HY; its body gates the work on 3RVTC1HY landing Cleared blocked-by (--clear-blocker override).
+- 2026-10-15T03:22:06+0200 — column → backburner by main-agent@agentlenspro. pull when TRDD-3RVTC1HY reaches testing: until the panic hook lands the poison-recovery code is still reachable, and a todo card would be drained early
+
+## Notes and lessons learned
+
+2026-10-15: parked in backburner, not todo: it is an EHT of 3RVTC1HY, and a blocked-by on 3RVTC1HY would make a cycle with that EHT. Pull it when 3RVTC1HY reaches testing.

@@ -3,7 +3,7 @@ trdd-id: N60JUWU3
 title: The graceful shutdown needs the state lock and has no timeout, so a long holder starves the stop into a SIGKILL
 column: testing
 created: 2026-09-02T16:36:33+0200
-updated: 2026-09-03T06:08:16+0200
+updated: 2026-10-15T03:22:18+0200
 current-owner: main-session
 task-type: bugfix
 priority: high
@@ -15,7 +15,7 @@ implementation-commits: [420e6bb9]
 
 # The graceful shutdown needs the state lock and has no timeout, so a long holder starves the stop into a SIGKILL
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-03T06:08:16+0200
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-03T06:08:16+0200 (see also the 2026-10-15 note under Notes and lessons learned: the save_cards full-corpus hold is gone since e3c3c388)
 
 **Owed post-deploy check DONE — PASS, but it closes no acceptance box.** `agentlenspro server
 stop` on pid 2074 (the new binary, 60+ min uptime) returned in **7s** (exit 0, well under the 15s
@@ -193,3 +193,4 @@ cooperative request path.
 ## Notes and lessons learned
 
 - Empty section on creation.
+2026-10-15 (TRDD-DA0GN1CS commit e3c3c388): the periodic save_cards no longer runs persist_records' whole-table DuckDB scan under the state lock; it copies the resident layer's Arc handles under a short lock and strips them off it. Long-holder analyses on this card that count the save's full-corpus hold must not count it after e3c3c388. The remaining corpus-scaled DuckDB query under the lock on the sweeper is demote_cold's window query (TRDD-KMF02UEX).

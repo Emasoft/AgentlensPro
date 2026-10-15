@@ -214,7 +214,7 @@ setup's HTTP calls have overall deadlines (10 s, MCP 15 s) and its stop, verify 
 setup refuses a stranger on the OTLP port even when our own server answers on the UI port: ownership is checked per port (973aead7).
 setup no longer stops or restarts a server it cannot prove is its own; a server run from a renamed AGENTLENS_ALCORE binary is refused as 'not provably ours' (29ec567a).
 review-gate: the gate no longer demands a review for a declared-role worker's scratch writes (temp, mktemp and date-stamped paths in ephemeral dirs); writes outside scratch dirs still arm it (df8bfc70, 668fc421, d476914a, ed0fbd5e, ed0fbd5e's follow-up). Known residual, open on TRDD-QQ2XIIZ6: an mktemp assignment that may not run (a compound-command body, a continuation) can leave the variable holding an inherited value; it needs a declared-role worker evading on purpose.
-- TRDD-DA0GN1CS (when commit 1 lands): the periodic card save no longer scans DuckDB under the state lock; a DuckDB out-of-memory there poisoned the lock and stopped all ingestion while the server looked alive.
+- TRDD-DA0GN1CS (landed in e3c3c388; ships in the next release): the periodic card save no longer scans DuckDB under the state lock; a DuckDB out-of-memory there poisoned the lock and stopped all ingestion while the server looked alive.
 - TRDD-0BDOV3WC (when fixed): an out-of-memory read at boot no longer deletes cards.duckdb.
 - TRDD-3RVTC1HY (when fixed): any panic exits the server so the hook revive restarts it.
 
