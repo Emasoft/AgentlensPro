@@ -4,7 +4,7 @@ title: demote_cold still ranks every card in DuckDB under the state lock on ever
 column: todo
 status: tasked
 created: 2026-10-15T11:01:39+0200
-updated: 2026-10-15T11:01:39+0200
+updated: 2026-10-15T11:14:02+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -31,3 +31,7 @@ Rank the candidates from the resident layer (parsed already holds every card, wi
 ## Approval log
 
 - 2026-10-15T11:01:39+0200 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+
+## Notes and lessons learned
+
+2026-10-15: corrections that could not reach the archived TRDD-KMF02UEX. Its Results line "Box 1 NOT met" gives 16 MiB as measured: that was measured on the component queries (the window alone, the candidate keys alone), not on the exact candidate query, as this card Problem says. The f515aeff commit message also overstates three things: trddgrep itself named no route in its refusal (the worker named a user ruling or a successor card, citing trddgrep help); the CS2W7E77 run is run 1 of a pair only if no further code commit lands before run 2; the MOVED line on KMF02UEX lost its final period, so it is not byte-verbatim with this card acceptance.
