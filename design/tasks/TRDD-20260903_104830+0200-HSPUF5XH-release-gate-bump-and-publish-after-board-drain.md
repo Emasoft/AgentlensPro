@@ -3,7 +3,7 @@ trdd-id: HSPUF5XH
 title: Bump and publish agentlenspro only after every open card is terminal and every known issue is fixed
 column: blocked
 created: 2026-09-03T10:48:30+0200
-updated: 2026-10-15T13:45:29+0200
+updated: 2026-10-15T14:23:25+0200
 current-owner: main-session
 task-type: infra
 min-approval-requirement: user
@@ -12,7 +12,7 @@ created-by: main-session
 npt: []
 eht: []
 pre-block-column: todo
-blocked-by: [2R36W8Q1, N60JUWU3, CAJ5RCP9, 9SYRK6SW, QE114936, 768NEX6E, 7YPQWKPG, 7NHUU6GK, ZSX34J8F, 2R0AXCKL, 2TQHNMEC, CS2W7E77, H3D5ZBO1, 0BDOV3WC, ZRXECDAQ, WCENKH6T, 3RVTC1HY, TYJSS45N, 6B7VV2Z7, WCG7I5D8, USSG465Q, 7EZE3AIZ]
+blocked-by: [2R36W8Q1, N60JUWU3, CAJ5RCP9, 9SYRK6SW, QE114936, 768NEX6E, 7YPQWKPG, 7NHUU6GK, ZSX34J8F, 2R0AXCKL, 2TQHNMEC, CS2W7E77, H3D5ZBO1, 0BDOV3WC, WCENKH6T, 3RVTC1HY, TYJSS45N, 6B7VV2Z7, WCG7I5D8, USSG465Q, 7EZE3AIZ]
 post-release-verification: [IXMB2JVD]
 blocker-probe: [trddgrep, why, HSPUF5XH]
 blocker-holds-if: not-match:READY
@@ -233,6 +233,8 @@ review-gate: the gate no longer demands a review for a declared-role worker's sc
 2026-10-15: correction to the inconsistency line above: four cards overlap, not three. 7NHUU6GK, ZSX34J8F, 2R0AXCKL and 2TQHNMEC are all in blocked-by and all in column backburner (checked 2026-10-15), while the User-gated list says backburner cards do not block this gate.
 2026-10-15: unowned, recorded here: the GitHub Dependabot Updates workflow failed on each of its 5 newest runs (2026-09-29 to 2026-10-07, gh run list); cause not examined.
 2026-10-15: the Blocking cards table above is stale: it lists ids (for example EAK9R8IY, DMWOBWFH, IXMB2JVD) that are not in blocked-by. The STATE block works from blocked-by.
+2026-10-15: correction to the line above that says this card s own box: it means the box cargo test rust-core core crate green on this card (an apostrophe was lost in shell quoting).
+2026-10-15: ZRXECDAQ met at f7a4945a (16 of 16 Linux runs of the memory-edge test) and moved to complete; removed from blocked-by.
 
 ## Notes and lessons learned
 

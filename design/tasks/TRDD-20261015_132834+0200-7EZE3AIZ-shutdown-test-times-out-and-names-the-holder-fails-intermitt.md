@@ -4,7 +4,7 @@ title: shutdown test times_out_and_names_the_holder fails intermittently under p
 column: todo
 status: tasked
 created: 2026-10-15T13:28:34+0200
-updated: 2026-10-15T13:39:04+0200
+updated: 2026-10-15T14:21:06+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -34,6 +34,8 @@ Mechanism A, timing (read in shutdown.rs, margin INFERRED from the code, not mea
 Mechanism B, shared holder statics (read in shutdown.rs and its own comment): HOLDER_SITE and HOLDER_SINCE_NS in lib.rs are process-wide and shared by every Mutex<CoreState> in the test binary. The test tolerates None but asserts that a named holder contains shutdown.rs, so a concurrently running test that holds another state lock can make it name that site instead (occurrence 2 named ui.rs:371).
 2026-10-15 — Correction to the first line above: three local failures with at least two different symptoms (occurrence 1 recorded no symptom). The CI claim is VERIFIED: ci.yml:299 runs cargo test --manifest-path rust-core/Cargo.toml --workspace, with no --no-fail-fast and no retry (read 2026-10-15).
 Mechanism C, inferred from the code, never observed: the test sleeps 50 ms to let the holder thread take the lock. If that thread is not scheduled in time, flush_with_deadline takes the lock first, returns Flushed, and the test panics with expected TimedOut.
+2026-10-15 — Occurrence 4, 2026-10-15, linux/amd64 emulated, commit f7a4945a, full lib run 3 of 3 (reports_dev/linux-memory-edge-runs-f7a4945a/fulllib-3.txt): panicked at shutdown.rs:81, holder site should point at this file's lock_timed call, got crates/agentlens-core/src/ui.rs:452 (holding for 31 ms). Mechanism B, with a second holder site after ui.rs:371; the first occurrence on Linux, 1 of 3 full lib runs there.
+2026-10-15 — Correction to the counts above: four local failures so far (macOS 3, Linux 1), two of them Mechanism B. Found while reading lib.rs: lock_timed_tests::records_and_clears_the_holder asserts the exact site and a cleared slot on the same process-wide HOLDER_SITE, so it shares Mechanism B (never observed failing).
 
 ## Fix direction
 
