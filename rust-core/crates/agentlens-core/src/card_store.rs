@@ -991,7 +991,6 @@ mod tests {
         assert_eq!(candidate_ids(&s, 1), Ok(expected));
     }
 
-
     /// TRDD-MEPIRHI4 — a candidate missing from the resident layer (table and `parsed` diverged)
     /// is an `Err` raised BEFORE the card is fetched or stripped: nothing is touched, in either layer.
     #[test]
@@ -1076,10 +1075,15 @@ mod tests {
 
     /// TRDD-KMF02UEX — the failure the rewrite removes: at a memory limit where the old one-shot
     /// query runs out of memory, the keys-only candidate query fits and `demote_cold` succeeds.
-    /// Window measured on this exact setup (reports_dev/kmf02uex-impl-report.md, 5 runs per limit):
-    /// the old query fails through 8 MiB and passes from 9; `demote_cold(1)` fails at 6 MiB (in its
-    /// per-card UPDATEs) and succeeds from 7. With 4 KB entries no limit separates them — the
-    /// UPDATEs then need more memory than the old query — hence 1 KB.
+    /// TRDD-ZRXECDAQ — the limit sits mid-window in THIS test's own sequence (one store: old query,
+    /// candidate_ids, demote_cold), measured 5 runs per limit at 6afa002b on macOS arm64 and on
+    /// linux/amd64 (emulated, Debian), identical counts on both (reports_dev/zrx-seq-probe.md):
+    /// demote_cold fails at 6656 KiB and succeeds from 7168; the old query fails through 8192 KiB
+    /// and passes at 8448, where on a fresh store it still failed 1 run in 3, so that edge is not
+    /// deterministic. 7680 KiB is at least 512 KiB from both edges (6656-7168, 8192-8448). The
+    /// earlier 8 MiB setting had at most 256 KiB to the old-query edge. A DuckDB bump can move these
+    /// edges: re-measure on both platforms. With 4 KB entries no limit separates the two queries
+    /// (the UPDATEs then need more memory than the old query), hence 1 KB.
     #[test]
     fn demote_cold_succeeds_where_the_old_one_shot_query_runs_out_of_memory() {
         let mut s = CardStore::open(&data_dir("demote-oom"));
@@ -1089,7 +1093,7 @@ mod tests {
         fill(&mut s, 50, 20, 1000);
         // Checked: below current usage the SET itself fails, and an ignored failure would leave
         // the limit unchanged and the test passing vacuously.
-        s.conn.execute_batch("SET memory_limit='8MiB'").expect("lower the memory limit");
+        s.conn.execute_batch("SET memory_limit='7680KiB'").expect("lower the memory limit");
         let old = old_query_ids(&s, 1).expect_err("precondition: the old one-shot query runs out of memory here");
         assert!(old.contains("Out of Memory"), "precondition: unexpected error from the old query: {old}");
         let new = candidate_ids(&s, 1).expect("precondition: the keys-only candidate query fits");
