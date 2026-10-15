@@ -4,7 +4,7 @@ title: demote_cold returns on its first failing card and skips a missing residen
 column: todo
 status: tasked
 created: 2026-10-15T11:13:54+0200
-updated: 2026-10-15T11:45:54+0200
+updated: 2026-10-15T11:49:29+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -43,4 +43,4 @@ Decide skip-and-continue versus abort under the owner fail-fast rule (CLAUDE.md:
 ## Results
 
 2026-10-15 — Candidate order measured (reports_dev/demote-trio-facts.md Q1): on clones of the live copy and of large-r30 at 256 MiB, threads 2, hot_cards 1, the 30-id candidate sequence was identical across 10 runs on one connection and 10 on fresh connections. Stable here, not guaranteed: the final SELECT has no ORDER BY.
-2026-10-15 — The unordered candidate output equals ORDER BY rn ascending (cards just past the hot set first, coldest last) on a clone of the live copy, 5 repeats, Python DuckDB 1.5.6 (same engine version as the Rust build, a different binding); large-r30 untested. The visiting order is stable for a given candidate set; the set itself changes between batches. Commit 2a pins the order, and its order test confirms it on the Rust build.
+2026-10-15 — The unordered candidate output equals ORDER BY rn ascending (cards just past the hot set first, coldest last) on a clone of the live copy, 5 repeats, Python DuckDB 1.5.6 (same engine version as the Rust build, a different binding); large-r30 untested. The visiting order is stable for a given candidate set; the set itself changes between batches. Commit 2a will pin the order; its order test is to confirm it on the Rust build.

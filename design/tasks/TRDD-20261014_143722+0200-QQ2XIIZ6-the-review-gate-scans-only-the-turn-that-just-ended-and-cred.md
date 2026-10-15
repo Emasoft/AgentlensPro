@@ -4,7 +4,7 @@ title: The review gate scans only the turn that just ended and credits only non-
 column: dev
 status: tasked
 created: 2026-10-14T14:37:22+0200
-updated: 2026-10-15T11:45:54+0200
+updated: 2026-10-15T11:49:29+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -87,5 +87,5 @@ STATE 2026-10-14 16:25 (supersedes the RESUME 15:40 IN FLIGHT/OPEN lines above w
 ## Notes and lessons learned
 
 2026-10-15: false positive. The Stop gate reported "ran a write-shaped command: trddgrep append" for a turn whose only occurrence of that text was inside the --content argument of a fastedit create into docs_dev (INFERRED: the same turn also ran an earlier fastedit create that failed on unbalanced quoting, where the text may have stood at command position; which of the two the gate classified is untested). Same family as the open shellWords residuals.
-2026-10-15: second false positive, INFERRED mechanism: a roled MEASURE fork wrote only a /tmp clone it then removed (cp to $D/cards.duckdb, rm $D), and the parent gate demanded a review for a worker write; the targets go through a variable the gate could not resolve, the same family as the unresolved-variable residual above.
-A third occurrence the same turn: the main agent own cp into a mktemp dir under /tmp ($T) armed the gate the same way.
+2026-10-15: second firing, by design (an unresolved variable target counts as a write; the target was /tmp scratch): a roled MEASURE fork wrote only a /tmp clone it then removed (cp to $D/cards.duckdb, rm $D), and the parent gate demanded a review for a worker write; the targets go through a variable the gate could not resolve, the same family as the unresolved-variable residual above.
+A third firing, in the next turn: the main agent ran its own cp into a mktemp dir under /tmp ($T) armed the gate the same way.
