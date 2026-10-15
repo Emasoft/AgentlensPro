@@ -1,10 +1,10 @@
 ---
 trdd-id: A2KNXCNH
 title: Long sweeps persist read positions per chunk so a killed sweep resumes instead of restarting
-column: todo
+column: dev
 status: tasked
 created: 2026-10-15T07:12:03+0200
-updated: 2026-10-15T07:41:43+0200
+updated: 2026-10-15T07:43:23+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -36,3 +36,4 @@ VERIFIED (main, 2026-10-15): the startup sweep persists no read positions until 
 ## Approval log
 
 - 2026-10-15T07:12:03+0200 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-10-15T07:43:23+0200 — column → dev by main-agent@agentlenspro. prerequisite 0R0NGVK6 complete (2b3004b0); implementation worker started 2026-10-15 07:39, shortly before that completion, with its code dependency 3ee0c44c already landed
