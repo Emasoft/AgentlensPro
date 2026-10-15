@@ -4,7 +4,7 @@ title: A DuckDB out-of-memory read at boot makes the card store delete cards.duc
 column: todo
 status: tasked
 created: 2026-10-15T01:29:03+0200
-updated: 2026-10-15T11:27:25+0200
+updated: 2026-10-15T11:30:21+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -64,4 +64,4 @@ At boot, `try_reuse`/`load_resident` read the cards table at the 256 MiB DuckDB 
 
 ## Notes and lessons learned
 
-2026-10-15: demotion is not a path into the boot out-of-memory refusal: on all three measured copies its floor sits below the boot-read floor (live copy at most 96 vs 256 MiB, compact at most 32 vs 88, large-r30 at most 256 vs about 352; TRDD-BSLCSCYK), so a file bloated enough to make demotion fail already fails the boot read. The live copy, a copy of the live file unchanged since the collector stuck at 16:21 on 2026-10-14 (INFERRED from file timestamps), demotes at no more than 96 MiB, about 160 MiB below the limit. This corrects the Relevance line in the archived TRDD-BSLCSCYK Results.
+2026-10-15: on the three measured copies (cold connections), the demotion floor sits below the boot-read floor (live copy at most 96 vs 256 MiB, compact at most 32 vs 88, large-r30 at most 256 vs about 352; TRDD-BSLCSCYK), so there a file bloated enough to fail demotion already fails the boot read; production demotes on a warm connection after upserts, whose extra memory is unmeasured, so a demotion failure can at most hasten a restart the bloat already dooms, not shown to cause it. The live copy is INFERRED to be the 16:21 state: the live main file was last written 16:05:29 and its WAL 16:21:48 on 2026-10-14; the copy was written 04:09 on 2026-10-15, 27.8 MB larger with no WAL beside it, consistent with the WAL replayed into it. It demotes at no more than 96 MiB. This corrects the Relevance line in the archived TRDD-BSLCSCYK Results.

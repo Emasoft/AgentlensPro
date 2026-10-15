@@ -4,7 +4,7 @@ title: Card updates are a delete plus an insert in DuckDB and the cards.duckdb t
 column: todo
 status: tasked
 created: 2026-10-15T04:28:05+0200
-updated: 2026-10-15T11:27:25+0200
+updated: 2026-10-15T11:30:21+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -38,4 +38,4 @@ Periodically compact the cards table (rewrite it in seq order and swap, or a CHE
 ## Notes and lessons learned
 
 2026-10-15 (INFERRED, not measured): each demote_cold UPDATE (f9e0742e) rewrites a large timeline card as its stripped form, which under the DuckDB update model may leave a dead version of the large row, a further source of the growth this card tracks.
-2026-10-15: the bloat also governs demotion. TRDD-BSLCSCYK measured the post-f9e0742e per-card UPDATE path at 224 < floor <= 256 MiB on large-r30, the same bracket as the old one-shot read, against 64 < floor <= 96 on the live copy and 16 < floor <= 32 on the compact copy. Demotion fails only on a file whose boot read already exceeds 256 MiB (the floors measured on all three copies); timelines then stay resident (31 cards, about 8.4 MB of card text on the copies; growth toward the RSS wall unmeasured).
+2026-10-15: the bloat also governs demotion. TRDD-BSLCSCYK measured the post-f9e0742e per-card UPDATE path at 224 < floor <= 256 MiB on large-r30, the same bracket as the old one-shot read, against 64 < floor <= 96 on the live copy and 16 < floor <= 32 on the compact copy. On the three measured copies (cold connections), demotion failed only where the boot read already needs more than 256 MiB (warm-connection overhead unmeasured); timelines then stay resident (31 cards, about 8.4 MB of card text on the copies; growth toward the RSS wall unmeasured).
