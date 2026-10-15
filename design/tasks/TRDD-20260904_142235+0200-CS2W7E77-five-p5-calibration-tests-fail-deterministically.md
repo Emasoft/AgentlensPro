@@ -3,7 +3,7 @@ trdd-id: CS2W7E77
 title: The five P5 window auto-calibration tests fail deterministically on a burn-config ENOENT
 column: todo
 created: 2026-09-04T14:22:35+0200
-updated: 2026-10-15T16:35:15+0200
+updated: 2026-10-15T18:39:07+0200
 current-owner: main-session
 task-type: bugfix
 project-id: agentlenspro
@@ -183,3 +183,6 @@ Gate rule detail 2026-10-15: do NOT codesign rust-core/target/release/alcore. Th
 2026-10-15: these local runs are the only test evidence for this branch: CI has not run on it since 2026-09-02 (see TRDD-HSPUF5XH Notes).
 2026-10-15: test-only commits 84f3b0f8 and 7c077027 (TRDD-7EZE3AIZ) landed after the 6afa002b line above, so the pair restarts at 7c077027; run 1 is the gate run at 7c077027 (reports_dev/gate-7c077027/).
 Run E1: HEAD 7c077027 (code identical at 8a9e472f: git diff --stat 7c077027 8a9e472f over src rust-core media standalone package.json scripts is empty). alcore built from HEAD, no-op rebuild compiled nothing, --version exit 64, binary sha256 bc61198a9f2032b91452ebf4a3d4ba6fea549c37deab917a848ba01c44bc869c before and after the run, AGENTLENS_ALCORE unset, rust-core tree clean. pnpm run test:unit exit 0, 3177 passing, 13 pending, 0 failing; the CLI hot-path latency guard RAN and passed (6734 ms); load 10.7 at start. TESTED-STATE: all five hashes match the snapshot. Also at this HEAD: clippy --workspace --all-targets -D warnings exit 0, cargo test --workspace exit 0 (980 passed, 0 failed, 147 result lines). Counts as run 1 of a pair only if no code commit lands before run 2; the TRDD-10NGH2BR fix will be one, so the pair restarts after it (reports_dev/gate-7c077027/).
+2026-10-15: test-only commit cc0cee02 (TRDD-10NGH2BR) landed after run E1, so the pair restarts at cc0cee02; run E1 at 7c077027 no longer counts as run 1.
+2026-10-15: correction to Run E1: its load 10.7 was read at the start of the whole gate, not at the start of the TypeScript suite; the reading at the gate's end was 20.20 (1 minute) and 37.47 (15 minutes).
+2026-10-15: correction to Run E1: the TypeScript run also tested the other uncommitted files in the working tree (CLAUDE.md, memory pages, cards), which the five TESTED-STATE hashes do not cover.

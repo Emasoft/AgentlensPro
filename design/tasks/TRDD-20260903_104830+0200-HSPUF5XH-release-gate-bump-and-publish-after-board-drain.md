@@ -3,7 +3,7 @@ trdd-id: HSPUF5XH
 title: Bump and publish agentlenspro only after every open card is terminal and every known issue is fixed
 column: blocked
 created: 2026-09-03T10:48:30+0200
-updated: 2026-10-15T16:35:15+0200
+updated: 2026-10-15T18:40:03+0200
 current-owner: main-session
 task-type: infra
 min-approval-requirement: user
@@ -12,7 +12,7 @@ created-by: main-session
 npt: []
 eht: []
 pre-block-column: todo
-blocked-by: [2R36W8Q1, N60JUWU3, CAJ5RCP9, 9SYRK6SW, QE114936, 768NEX6E, 7YPQWKPG, 7NHUU6GK, ZSX34J8F, 2R0AXCKL, 2TQHNMEC, CS2W7E77, H3D5ZBO1, 0BDOV3WC, WCENKH6T, 3RVTC1HY, TYJSS45N, 6B7VV2Z7, WCG7I5D8, USSG465Q, 10NGH2BR]
+blocked-by: [2R36W8Q1, N60JUWU3, CAJ5RCP9, 9SYRK6SW, QE114936, 768NEX6E, 7YPQWKPG, 7NHUU6GK, ZSX34J8F, 2R0AXCKL, 2TQHNMEC, CS2W7E77, H3D5ZBO1, 0BDOV3WC, WCENKH6T, 3RVTC1HY, TYJSS45N, 6B7VV2Z7, WCG7I5D8, USSG465Q]
 post-release-verification: [IXMB2JVD]
 blocker-probe: [trddgrep, why, HSPUF5XH]
 blocker-holds-if: not-match:READY
@@ -135,6 +135,7 @@ unless the user says otherwise:
 - 2R0AXCKL — real-corpus-tests-time-out-under-host-contention (backburner)
 - TP3BA3ED — ts-store-twin-flushes-only-three-dirs (backburner)
 - 2TQHNMEC — every-bodies-pass-rebuilds-the-dedup-sets-from-the-whole-corpus (backburner)
+- 10NGH2BR — rss-guard-primary-metric-test-fails-intermittently (human_review)
 
 ## Definition of done — board drain
 
@@ -238,6 +239,8 @@ review-gate: the gate no longer demands a review for a declared-role worker's sc
 2026-10-15: 10NGH2BR added to blocked-by: the rss_guard primary_metric test failed 2 of 10 Linux full lib runs at 84f3b0f8; CI runs that test on Linux with no retry.
 2026-10-15: 7EZE3AIZ met (84f3b0f8, 7c077027; shutdown test ok in 20 of 20 full lib runs) and moved to complete; removed from blocked-by.
 2026-10-15: gate evidence at 7c077027 (macOS): cargo clippy --workspace --all-targets -- -D warnings exit 0; cargo test --workspace 980 passed 0 failed; pnpm run test:unit 3177 passing 0 failing; release build fresh, --version exit 64. Boxes stay unticked: they are run after the board drains, and pnpm run compile, the live deploy, the hold read and the api_call check were not run.
+2026-10-15: possible CI timeout, inferred and not measured on a CI runner. The rust job in ci.yml (line 254) runs clippy and then cargo test --manifest-path rust-core/Cargo.toml --workspace, under timeout-minutes: 40 (line 257). On 2026-09-02 that job took 2 to 10 minutes on GitHub's runner (runs 33667160582, 33666353235, 33646696194), for the suite as it was then. On this Mac at 7c077027 the durations of the 147 test-result lines summed to 1460 s, compile time not counted, the slowest 514.62 s; the 1-minute load was 10.7 at the start and 20.2 at the end, the 15-minute load 37.5 at the end. In an emulated linux/amd64 container under host load at cc0cee02 the first 80 binaries took 3206 s summed, tests/card_store.rs alone 2825.87 s. Whether today's suite fits in 40 minutes on a native runner is unknown until CI runs.
+2026-10-15: 10NGH2BR removed from blocked-by and listed under User-gated cards. It blocked the release because CI runs that test on Linux with no retry; cc0cee02 runs it alone in its own process, which removes the shared-process failure path by construction, and the moved test passed 20 of 20 Linux runs. What remains on 10NGH2BR is an owner decision on the wording of boxes 1 and 3 and a cause that is not established, so the release no longer waits on it. The same rule was not applied to the four backburner cards still in blocked-by (7NHUU6GK, ZSX34J8F, 2R0AXCKL, 2TQHNMEC), which stay for the owner or a later pass.
 
 ## Notes and lessons learned
 
