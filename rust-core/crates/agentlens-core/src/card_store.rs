@@ -571,8 +571,8 @@ impl CardStore {
     /// 256 MiB with 80 KB to 2.3 MB cards (at low limits on small test cards it failed before the
     /// old read did). An Err stops the pass at the first failing card (fail-fast, TRDD-MEPIRHI4):
     /// the hotter candidates before it stay demoted; with the pinned order a card that fails on
-    /// every batch blocks only the colder candidates after it, and the alcore.demoteColdError
-    /// counter and the first-failure log line name it.
+    /// every batch blocks only the colder candidates after it; the alcore.demoteColdError
+    /// counter counts it and the first-failure log line names it.
     ///
     /// The early return reads the resident layer, not `count(*)`: below the hot set no DuckDB
     /// statement runs at all (layer and table hold the same rows — `persist_snapshot` debug-asserts
@@ -607,6 +607,15 @@ impl CardStore {
             .map_err(|e| format!("prepare the demoted-card update: {e}"))?;
         let mut demoted = 0;
         for id in candidates {
+            // TRDD-MEPIRHI4: a candidate missing from the resident layer means the table and
+            // `parsed` have diverged (the DA0GN1CS parity). f9e0742e stripped the table row and
+            // skipped the resident strip silently, hiding it. Fail fast BEFORE touching the card:
+            // the Err repeats on every batch until that session is put again (put_arc re-inserts
+            // it), a clear empties both layers, or a restart rebuilds the resident layer from the
+            // table; the first-failure log line names the card.
+            if !self.parsed.contains_key(&id) {
+                return Err(format!("demotion candidate {id} has no resident entry"));
+            }
             self.demote_card_fetches.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             // `query_row` errors on a missing row too, so a candidate that vanished is an `Err`,
             // never a panic.
@@ -632,6 +641,8 @@ impl CardStore {
             // stripping it BEFORE a failed UPDATE would serve a stripped card the table still holds
             // whole. `Arc::make_mut` is copy-on-write: a rebuild still holding the old pointer keeps
             // its (consistent) pre-demotion view and this layer gets its own stripped copy.
+            // Always Some here: checked at the top of the loop (TRDD-MEPIRHI4); do not turn it
+            // into an expect, which would panic under the state lock.
             if let Some(resident) = self.parsed.get_mut(&id) {
                 if let Some(obj) = Arc::make_mut(resident).as_object_mut() {
                     crate::log_reader::strip_timeline_value(obj);
@@ -978,6 +989,58 @@ mod tests {
         }
         let expected: Vec<String> = ["s1", "s5", "s7", "s6", "s0", "s4", "s2"].map(String::from).to_vec();
         assert_eq!(candidate_ids(&s, 1), Ok(expected));
+    }
+
+
+    /// TRDD-MEPIRHI4 — a candidate missing from the resident layer (table and `parsed` diverged)
+    /// is an `Err` raised BEFORE the card is fetched or stripped: nothing is touched, in either layer.
+    #[test]
+    fn demote_cold_fails_before_touching_a_candidate_missing_from_the_resident_layer() {
+        let mut s = CardStore::open(&data_dir("demote-missing-resident"));
+        for (i, d) in [3, 7, 1, 8, 2, 6, 4, 5].into_iter().enumerate() {
+            s.put(&card(&format!("s{i}"), d as f64 * 1000.0, 2, 8));
+        }
+        // s1 is the first candidate in the pinned hottest-first order.
+        s.parsed.shift_remove("s1");
+        let err = s.demote_cold(1).expect_err("a candidate with no resident entry must be an Err");
+        assert!(err.contains("s1") && err.contains("no resident entry"), "unexpected error: {err}");
+        assert_eq!(s.demote_card_fetches(), 0);
+        for i in 0..8 {
+            let id = format!("s{i}");
+            assert!(table_timeline_len(&s, &id) > 0, "table stripped, {id}");
+            if i != 1 {
+                let resident = s.parsed.get(&id).expect("resident card");
+                assert_eq!(timeline_len(resident), 2, "resident layer stripped, {id}");
+            }
+        }
+        assert!(!s.parsed.contains_key("s1"), "s1 must stay absent");
+    }
+
+    /// TRDD-MEPIRHI4 — the cards ahead of a missing candidate in the same pass stay demoted in both
+    /// layers, and the Err drops their count: demote_cold returns no count on failure.
+    #[test]
+    fn demote_cold_keeps_hotter_candidates_demoted_when_a_later_candidate_is_missing() {
+        let mut s = CardStore::open(&data_dir("demote-missing-later"));
+        for (i, d) in [3, 7, 1, 8, 2, 6, 4, 5].into_iter().enumerate() {
+            s.put(&card(&format!("s{i}"), d as f64 * 1000.0, 2, 8));
+        }
+        // s7 is the third candidate in the pinned hottest-first order, after s1 and s5.
+        s.parsed.shift_remove("s7");
+        let err = s.demote_cold(1).expect_err("a later candidate with no resident entry must be an Err");
+        assert!(err.contains("s7") && err.contains("no resident entry"), "unexpected error: {err}");
+        assert_eq!(s.demote_card_fetches(), 2);
+        for id in ["s1", "s5"] {
+            assert_eq!(table_timeline_len(&s, id), 0, "table, {id}");
+            let resident = s.parsed.get(id).expect("resident card");
+            assert_eq!(timeline_len(resident), 0, "resident layer, {id}");
+        }
+        for id in ["s3", "s6", "s0", "s4", "s2"] {
+            assert!(table_timeline_len(&s, id) > 0, "table, {id}");
+            let resident = s.parsed.get(id).expect("resident card");
+            assert_eq!(timeline_len(resident), 2, "resident layer, {id}");
+        }
+        assert!(table_timeline_len(&s, "s7") > 0, "table, s7");
+        assert!(!s.parsed.contains_key("s7"), "s7 must stay absent");
     }
 
     /// TRDD-59OONXOV — `demote_cold` strips the resident card only after its table UPDATE
