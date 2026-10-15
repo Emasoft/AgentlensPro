@@ -4,7 +4,7 @@ title: Card updates are a delete plus an insert in DuckDB and the cards.duckdb t
 column: todo
 status: tasked
 created: 2026-10-15T04:28:05+0200
-updated: 2026-10-15T07:12:18+0200
+updated: 2026-10-15T11:02:34+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -34,3 +34,7 @@ Periodically compact the cards table (rewrite it in seq order and swap, or a CHE
 ## Approval log
 
 - 2026-10-15T04:28:05+0200 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+
+## Notes and lessons learned
+
+2026-10-15 (INFERRED, not measured): each demote_cold UPDATE (f9e0742e) rewrites a large timeline card as its stripped form, which under the DuckDB update model may leave a dead version of the large row, a further source of the growth this card tracks.
