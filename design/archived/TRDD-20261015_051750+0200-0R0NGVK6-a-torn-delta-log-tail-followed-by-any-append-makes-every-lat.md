@@ -1,10 +1,10 @@
 ---
 trdd-id: 0R0NGVK6
 title: A torn delta-log tail followed by any append makes every later boot fail
-column: testing
-status: tasked
+column: complete
+status: archived
 created: 2026-10-15T05:17:50+0200
-updated: 2026-10-15T07:38:00+0200
+updated: 2026-10-15T07:41:54+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -42,6 +42,7 @@ Before any append in `save`/`append_changed`, if the delta file is non-empty and
 
 - 2026-10-15T05:17:50+0200 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-10-15T07:38:00+0200 — column → testing by main-agent@agentlenspro. fix landed in 3ee0c44c; Rust and TS suites green
+- 2026-10-15T07:41:54+0200 — COMPLETE by main-agent@agentlenspro. every acceptance box ticked with evidence (3ee0c44c; Rust 799/0, TS 3177/0/13, gate checks); deployment is not an acceptance item, as with DA0GN1CS.
 
 ## Results
 
