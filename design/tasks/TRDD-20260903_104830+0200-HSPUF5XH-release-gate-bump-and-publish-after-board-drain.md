@@ -3,7 +3,7 @@ trdd-id: HSPUF5XH
 title: Bump and publish agentlenspro only after every open card is terminal and every known issue is fixed
 column: blocked
 created: 2026-09-03T10:48:30+0200
-updated: 2026-10-15T13:39:02+0200
+updated: 2026-10-15T13:45:29+0200
 current-owner: main-session
 task-type: infra
 min-approval-requirement: user
@@ -231,6 +231,8 @@ review-gate: the gate no longer demands a review for a declared-role worker's sc
 2026-10-15: correction to the CI line above: origin/main was re-fetched on 2026-10-15 and is still 3e294e16 (2026-09-02); the count of local commits not on it was 1268 before 6afa002b and 1269 after, and it grows with every commit.
 2026-10-15: correction to the 7EZE3AIZ line above: the CS2W7E77 pair is two pnpm run test:unit runs (mocha), which do not run cargo test. The Rust flake threatens this card s own box cargo test rust-core core crate green and the CI Rust step (ci.yml:299), not the CS2W7E77 pair.
 2026-10-15: correction to the inconsistency line above: four cards overlap, not three. 7NHUU6GK, ZSX34J8F, 2R0AXCKL and 2TQHNMEC are all in blocked-by and all in column backburner (checked 2026-10-15), while the User-gated list says backburner cards do not block this gate.
+2026-10-15: unowned, recorded here: the GitHub Dependabot Updates workflow failed on each of its 5 newest runs (2026-09-29 to 2026-10-07, gh run list); cause not examined.
+2026-10-15: the Blocking cards table above is stale: it lists ids (for example EAK9R8IY, DMWOBWFH, IXMB2JVD) that are not in blocked-by. The STATE block works from blocked-by.
 
 ## Notes and lessons learned
 

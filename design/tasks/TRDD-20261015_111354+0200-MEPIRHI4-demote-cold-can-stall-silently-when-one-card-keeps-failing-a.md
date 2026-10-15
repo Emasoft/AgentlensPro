@@ -4,7 +4,7 @@ title: demote_cold returns on its first failing card and skips a missing residen
 column: todo
 status: tasked
 created: 2026-10-15T11:13:54+0200
-updated: 2026-10-15T13:38:27+0200
+updated: 2026-10-15T13:45:29+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -34,6 +34,7 @@ Decide skip-and-continue versus abort under the owner fail-fast rule (CLAUDE.md:
 ## Approval log
 
 - 2026-10-15T11:13:54+0200 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+2026-10-15 — Worked while in todo; the board never showed it in an active column, and the move goes from todo to complete directly (the same as KMF02UEX).
 
 ## Notes and lessons learned
 
