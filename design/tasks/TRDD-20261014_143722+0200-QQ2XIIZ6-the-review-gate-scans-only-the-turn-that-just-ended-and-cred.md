@@ -4,7 +4,7 @@ title: The review gate scans only the turn that just ended and credits only non-
 column: dev
 status: tasked
 created: 2026-10-14T14:37:22+0200
-updated: 2026-10-15T11:49:29+0200
+updated: 2026-10-15T13:39:00+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -83,6 +83,8 @@ STATE 2026-10-14 16:25 (supersedes the RESUME 15:40 IN FLIGHT/OPEN lines above w
 2026-10-14 — Accepted residual of the role-scratch relaxation, usable by a declared-role worker only. Content rule: a dynamic part whose output is computed rather than spelled (an unassigned or runtime variable, a computed `X=$(…)`, a `for X in …` variable, `$(cat f)`, `$(printf %s%s . .)`) can still expand to `..` or `../`. mktemp exemption: `eval` of an obfuscated name; `source` or `.` of a file; an alias or function named mktemp, or a TMPDIR, set OUTSIDE the command (the shell profile, the agent's environment); and a failed `mktemp -q`, which leaves D empty and is bounded by the one-component rule to a name at the filesystem root.
 2026-10-14 — OPEN, found by the gate review of ed0fbd5e: the mktemp exemption counts an assignment that may never run. Examples: a compound-command body on its own line (if/then, while, for, case, a function body), a line after a trailing && or ||, a backslash-newline continuation, a `)` inside double quotes, and an apostrophe in a # comment, which both miscount atTopLevel. The variable then keeps its INHERITED value, not an empty one, so the one-component bound does not help. Reproducer, role-exempt and writing into the project root: `if false; then` / `PWD=$(mktemp -d)` / `fi` / `cp x "$PWD/CLAUDE.md"` (on four lines). The same works with HOME, OLDPWD and CLAUDE_PROJECT_DIR. ed0fbd5e's subject ("surely holds a fresh mktemp dir") overclaims. Proposed fix, awaiting the owner: count an mktemp assignment only at the very START of the command (only whitespace and earlier qualifying mktemp assignments before it), and delete atTopLevel.
 2026-10-15 residual: the gate arms on a write verb followed by a dry-run flag (`AIM_PILLAR_ALLOW_WRITE=1 trddgrep --design-dir X fix <ID> --dry-run`, which wrote nothing). Likely the same family (unverified): git clean -n, git add --dry-run, git commit --dry-run, git mv -n. A fix must be an allowlist of verified (tool, verb, flag) triples with the flag in the last command segment, never a blanket --dry-run exemption.
+2026-10-15 — Two more gate firings on worker writes whose targets the gate could not resolve (measured from the workers transcripts and the gate messages): the Linux-run worker wrote with fastedit create to $B and $S/src/run.sh, and the CI-search worker redirected into $S and $D/ci-log-$id.txt, all inside reports_dev or the session scratchpad. The gate drops a value holding $ from its literal map, so it cannot prove the target exempt (the open F=$SP/x item). Mitigation in use: worker prompts now require literal absolute write targets. Open question, unverified: whether a literal /private/tmp path is treated as /tmp by the exemption.
+2026-10-15 — Correction to the line above: the target SHAPES ($B, $S/src/run.sh, $S, $D/ci-log-$id.txt) were measured from the transcripts; that they resolved inside reports_dev or the session scratchpad is INFERRED. Also observed: the first of these firings labelled a lean-worker write as fork:, while the second labelled its fast-worker correctly; the writer behind the third firing (also labelled fork:) is not attributed.
 
 ## Notes and lessons learned
 

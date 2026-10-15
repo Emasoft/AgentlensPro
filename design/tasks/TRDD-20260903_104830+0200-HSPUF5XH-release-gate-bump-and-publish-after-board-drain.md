@@ -3,7 +3,7 @@ trdd-id: HSPUF5XH
 title: Bump and publish agentlenspro only after every open card is terminal and every known issue is fixed
 column: blocked
 created: 2026-09-03T10:48:30+0200
-updated: 2026-10-15T11:51:17+0200
+updated: 2026-10-15T13:39:02+0200
 current-owner: main-session
 task-type: infra
 min-approval-requirement: user
@@ -12,7 +12,7 @@ created-by: main-session
 npt: []
 eht: []
 pre-block-column: todo
-blocked-by: [2R36W8Q1, N60JUWU3, CAJ5RCP9, 9SYRK6SW, QE114936, 768NEX6E, 7YPQWKPG, 7NHUU6GK, ZSX34J8F, 2R0AXCKL, 2TQHNMEC, CS2W7E77, H3D5ZBO1, 0BDOV3WC, ZRXECDAQ, WCENKH6T, 3RVTC1HY, TYJSS45N, 6B7VV2Z7, WCG7I5D8, USSG465Q]
+blocked-by: [2R36W8Q1, N60JUWU3, CAJ5RCP9, 9SYRK6SW, QE114936, 768NEX6E, 7YPQWKPG, 7NHUU6GK, ZSX34J8F, 2R0AXCKL, 2TQHNMEC, CS2W7E77, H3D5ZBO1, 0BDOV3WC, ZRXECDAQ, WCENKH6T, 3RVTC1HY, TYJSS45N, 6B7VV2Z7, WCG7I5D8, USSG465Q, 7EZE3AIZ]
 post-release-verification: [IXMB2JVD]
 blocker-probe: [trddgrep, why, HSPUF5XH]
 blocker-holds-if: not-match:READY
@@ -224,6 +224,13 @@ review-gate: the gate no longer demands a review for a declared-role worker's sc
 2026-10-15: DA0GN1CS completed (commit 1 e3c3c388; Rust 791/0, TS 3177/0) and left blocked-by; the rest of its class stays as blockers (3RVTC1HY, 0BDOV3WC, KMF02UEX, WCENKH6T).
 2026-10-15: 6B7VV2Z7, WCG7I5D8 and USSG465Q added as blockers; they are the loss mechanism (6B7VV2Z7), the snapshot lag that multiplies it (WCG7I5D8), and the file bloat inferred to drive the boot out-of-memory (USSG465Q) behind TRDD-0BDOV3WC.
 2026-10-15: TRDD-KBPB3UMH closed with a mitigation, not its original goal: the test still writes agentlens-prompts-claude.md into the crate dir while it runs (the endpoint writes to the server's cwd by design), and only guarantees cleanup. Decision: accepted as the final fix for a test-only, low-severity issue; the residual same-tree race and fixed-name removal are recorded on the archived card.
+2026-10-15: CI has not run on this branch since 2026-09-02. ci.yml triggers only on push or pull request to main, origin/main is at 3e294e16 (2026-09-02), and 1268 local commits are not on origin/main, so every CI-only failure (Linux, runner size, cargo test --workspace concurrency) is untested for all of them. Running CI needs a push or a pull request, which is the owner decision. Raised with the owner 2026-10-15.
+2026-10-15: inconsistency recorded, not fixed: 7NHUU6GK, ZSX34J8F and 2R0AXCKL are in blocked-by, yet this card lists all three under User-gated cards (backburner, NOT blocking this gate). The owner or a later pass decides which statement holds.
+2026-10-15: MEPIRHI4 (b4cdf24c, 6afa002b) and 59OONXOV (3f152419) landed; neither is in blocked-by.
+2026-10-15: 7EZE3AIZ added to blocked-by: the shutdown test flake, three local occurrences, never run by CI; a rerun-until-green would make the CS2W7E77 pair meaningless.
+2026-10-15: correction to the CI line above: origin/main was re-fetched on 2026-10-15 and is still 3e294e16 (2026-09-02); the count of local commits not on it was 1268 before 6afa002b and 1269 after, and it grows with every commit.
+2026-10-15: correction to the 7EZE3AIZ line above: the CS2W7E77 pair is two pnpm run test:unit runs (mocha), which do not run cargo test. The Rust flake threatens this card s own box cargo test rust-core core crate green and the CI Rust step (ci.yml:299), not the CS2W7E77 pair.
+2026-10-15: correction to the inconsistency line above: four cards overlap, not three. 7NHUU6GK, ZSX34J8F, 2R0AXCKL and 2TQHNMEC are all in blocked-by and all in column backburner (checked 2026-10-15), while the User-gated list says backburner cards do not block this gate.
 
 ## Notes and lessons learned
 
