@@ -586,54 +586,7 @@ mod tests {
         }
     }
 
-    #[test]
-    fn primary_metric_reports_a_real_measurement_never_zero() {
-        // THE TEST THAT WAS MISSING. Every other test here covers the env parser or the format
-        // string; nothing ever called the measurement, so a metric that always read 0 shipped and
-        // silently disabled the cap at every threshold (TRDD-WKLD508O, measured 2026-09-07 — two
-        // probes at 512 MB and 1 MB both ran to timeout with no guard output).
-        //
-        // IT ASSERTS ON A DELTA, NOT ON AN ABSOLUTE FLOOR — and that is the whole design. My first
-        // version asserted `> 8 MB` against whatever the binary happened to weigh, which cannot
-        // tell "the metric works" from "the binary is bigger than the floor". It then failed at
-        // 2,556,336 bytes, and an absolute floor gives no way to decide whether that is a broken
-        // metric or an honest reading of a small test binary. Dirtying a KNOWN amount first makes
-        // the two predict opposite results: a working metric must rise by roughly what was
-        // touched, a broken one cannot.
-        //
-        // WHAT THIS DOES **NOT** PROVE, stated here because I claimed it did: rising with dirtied
-        // memory does NOT prove the right FIELD is being read. `ri_resident_size` sits directly
-        // before `ri_phys_footprint` in the struct, so an off-by-one-field read tracks real memory
-        // just as faithfully and passes this test — while silently giving back RSS, the very
-        // counter the module's header rejects. `rusage_fields_agree_with_an_independent_syscall`
-        // is what pins the offset; this test only shows the counter is LIVE.
-        //
-        // `vec![1u8; N]` must memset every byte, so every page is faulted in — no volatile loop is
-        // needed and an earlier version's one was dead weight justified by a comment about
-        // `vec![0u8; N]`, which can take a zero-page path and is not what this writes.
-        const DIRTY: usize = 64 * 1024 * 1024;
-        let (_, before) = primary_metric(crate::server_stats::rss_bytes);
-        let ballast: Vec<u8> = vec![1u8; DIRTY];
-        let (name, after) = primary_metric(crate::server_stats::rss_bytes);
-        std::hint::black_box(&ballast);
-
-        // `after > before` FIRST, with its own message. Folding this into a `saturating_sub` prints
-        // "moved 0 bytes" for a SHRINKING metric, which reads as "static" and hides the direction —
-        // the reader at 3am then chases the wrong failure.
-        assert!(
-            after > before,
-            "{name} did not rise after dirtying {DIRTY} bytes: {before} -> {after} (it FELL or held)",
-        );
-        // Half of what was dirtied, so a concurrent test thread's frees cannot make this flaky,
-        // while a metric reading an unrelated field (user time in ns, page-in counts) cannot pass.
-        let grew = after - before;
-        assert!(
-            grew > (DIRTY / 2) as u64,
-            "{name} moved only {grew} bytes ({before} -> {after}) after dirtying {DIRTY} — a counter \
-             that does not track real memory cannot key a hard cap",
-        );
-    }
-
+    // primary_metric_reports_a_real_measurement_never_zero lives in tests/rss_guard_metric.rs: it measures a process-wide memory counter, so it must run alone in its own process (TRDD-10NGH2BR).
     /// THE OFFSET ORACLE, and the reason the `size_of` check it replaced was theatre: that check
     /// compared `libc`'s struct against a number I typed, i.e. the crate against itself, and every
     /// field after the UUID is a `u64` — so any permutation preserves 96 bytes and passes.
