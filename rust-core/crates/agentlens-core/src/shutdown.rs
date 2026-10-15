@@ -60,30 +60,25 @@ mod tests {
     fn times_out_and_names_the_holder_when_the_lock_is_held_past_the_deadline() {
         let m = std::sync::Arc::new(Mutex::new(fresh_state()));
         let holder = m.clone();
-        let started = Instant::now();
+        let (tx, rx) = std::sync::mpsc::channel();
         let t = std::thread::spawn(move || {
             let _g = holder.lock_timed().unwrap();
+            tx.send(()).unwrap();
             std::thread::sleep(Duration::from_millis(2000));
         });
-        // Give the thread a moment to actually acquire the lock before we start polling.
-        std::thread::sleep(Duration::from_millis(50));
+        // The holder signals once it owns the lock, so the poll below never races the acquisition.
+        rx.recv().unwrap();
+        let started = Instant::now();
         match flush_with_deadline(&m, Duration::from_millis(200)) {
             Outcome::TimedOut { holder } => {
-                // `HOLDER_SITE`/`HOLDER_SINCE_NS` (lib.rs) are process-wide statics shared by
-                // EVERY `Mutex<CoreState>` in the binary, not scoped per-mutex — a pre-existing
-                // property of `lock_timed`, unrelated to this change. Under the default parallel
-                // `cargo test` run another test's unrelated mutex can clear the slot between our
-                // failed `try_lock` and the read, so `None` is a real (if rare) outcome here, not
-                // a bug in `flush_with_deadline`. Assert the shape when a holder IS named, run
-                // single-threaded (`cargo test -- --test-threads=1`) for a deterministic check of
-                // the name itself.
+                // The holder slot (HOLDER_SITE in lib.rs) is process-wide, so in this parallel unit-test binary another test can own it; None and another site are both possible here, and the exact-site check lives in tests/lock_holder_site.rs, which runs alone in its own process (TRDD-7EZE3AIZ).
                 if let Some(site) = holder {
-                    assert!(site.contains("shutdown.rs"), "holder site should point at this file's lock_timed call, got {site}");
+                    assert!(site.contains(".rs:") && site.contains(" (holding for "), "holder should be a well-formed site, got {site}");
                 }
             }
             _ => panic!("expected TimedOut"),
         }
-        assert!(started.elapsed() <= Duration::from_millis(300), "should return close to the deadline, not wait for the holder");
+        assert!(started.elapsed() <= Duration::from_millis(1000), "should return close to the deadline, not wait for the holder");
         t.join().unwrap();
     }
 

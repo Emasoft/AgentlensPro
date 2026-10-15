@@ -1556,19 +1556,13 @@ mod lock_timed_tests {
     }
 
     #[test]
-    fn records_and_clears_the_holder() {
+    fn lock_timed_guard_locks_and_releases() {
+        // The holder-slot checks (HOLDER_SITE) live in tests/lock_holder_site.rs, which runs alone in its own process: this unit-test binary is parallel, so a guard on another mutex can store or clear the process-wide slot while this guard lives (TRDD-7EZE3AIZ).
         let m: Mutex<CoreState> = Mutex::new(fresh_state());
-        let line_of_lock;
-        {
-            let _g = m.lock_timed().unwrap();
-            line_of_lock = line!() - 1;
-            let ptr = HOLDER_SITE.load(Ordering::Acquire);
-            assert!(!ptr.is_null(), "holder should be recorded while the guard is alive");
-            let loc: &'static Location<'static> = unsafe { &*ptr };
-            assert!(loc.file().ends_with("lib.rs"));
-            assert_eq!(loc.line(), line_of_lock);
-        }
-        assert!(HOLDER_SITE.load(Ordering::Acquire).is_null(), "holder should clear on drop");
+        let g = m.lock_timed().unwrap();
+        let _ = &*g;
+        drop(g);
+        assert!(m.lock_timed().is_ok(), "the guard should release the mutex on drop");
     }
 
     #[test]
