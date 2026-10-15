@@ -459,6 +459,11 @@ pub fn server_stats(st: &CoreState, now_ms: i64) -> Value {
     // It just never surfaced it, so every swallowed payload was invisible.
     let degradations = {
         let mut d = Map::new();
+        // TRDD-KMF02UEX — `demote_cold` failures under the state lock, counted (and retried on the
+        // next ingest batch) instead of panicking. Inserted first: this map is name-sorted.
+        if st.counters.demote_cold_errors > 0 {
+            d.insert("alcore.demoteColdError".into(), Value::from(st.counters.demote_cold_errors));
+        }
         if st.counters.parse_errors > 0 {
             d.insert("standalone.otlpIngestError".into(), Value::from(st.counters.parse_errors));
         }

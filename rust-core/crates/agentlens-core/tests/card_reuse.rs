@@ -203,7 +203,7 @@ fn a_demoted_card_is_persist_stripped_too() {
         c["timeline"] = json!([{ "type": "api_request" }]);
         s.put(&c);
     }
-    s.demote_cold(1);
+    assert_eq!(s.demote_cold(1).expect("demote"), 1);
     let old = s.get("old").unwrap();
     assert_eq!(old["timeline"], json!([]));
     assert_eq!(old["timelineTruncatedCount"], 5, "the demotion bump (4 + 1 entry) is kept");

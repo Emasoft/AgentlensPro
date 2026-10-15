@@ -1549,12 +1549,15 @@ pub fn start_sweeper(
             }));
             // TRDD-RVKQDLRD: this thread DELIBERATELY stays at normal priority (no background QoS).
             // Most of its lock holds are short (sweep ingestion is chunked, SCAN_CHUNK per lock;
-            // the 1h backfill is bounded, <=200 cards per lock), but each ingest chunk ends in
-            // demote_cold's corpus-wide window query under the lock (TRDD-KMF02UEX). At background
-            // QoS that hold would be preempted while request threads wait on the lock (priority
-            // inversion), so lowering this thread would make requests slower, not the machine
-            // quieter. Since DA0GN1CS the periodic save no longer adds a full-corpus scan under the
-            // lock; re-decide this under RVKQDLRD once KMF02UEX lands.
+            // the 1h backfill is bounded, <=200 cards per lock), but each non-empty ingest batch
+            // (ingest_scanned returns early on an empty one), once the corpus exceeds the hot set
+            // (demote_cold returns early below it), ends in demote_cold's keys-only candidate query
+            // plus, per demoted card, one primary-key fetch and UPDATE, under the lock
+            // (TRDD-KMF02UEX); that hold's duration is unmeasured. At background QoS that hold
+            // would be preempted while request threads wait on the lock (priority inversion), so
+            // lowering this thread would make requests slower, not the machine quieter. Since
+            // DA0GN1CS the periodic save no longer adds a full-corpus scan under the lock;
+            // re-decide this under RVKQDLRD.
             let backstop = if watch_attached > 0 { FULL_RESCAN } else { poll_interval };
             let mut next_full = Instant::now() + backstop;
             let mut pending: Vec<PathBuf> = Vec::new();

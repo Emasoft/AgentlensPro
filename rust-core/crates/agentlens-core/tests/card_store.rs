@@ -114,10 +114,10 @@ fn demote_cold_strips_all_but_the_hottest_and_accumulates_the_counter() {
     s.put(&card("mid", "2026-08-01T11:00:00.000Z", 0.0, 4));
     s.put(&card("nostart", "", 5.0, 1)); // unparseable start → 0 → coldest
 
-    s.demote_cold(4);
+    assert_eq!(s.demote_cold(4).expect("demote"), 0);
     assert_eq!(s.get("old").unwrap()["timeline"].as_array().unwrap().len(), 3, "under the cap nothing moves");
 
-    s.demote_cold(2);
+    assert_eq!(s.demote_cold(2).expect("demote"), 2);
     let tl = |id: &str| s.get(id).unwrap()["timeline"].as_array().unwrap().len();
     assert_eq!((tl("newest"), tl("mid"), tl("old"), tl("nostart")), (2, 4, 0, 0));
     assert_eq!(s.get("old").unwrap()["timelineTruncatedCount"], 3);
@@ -125,7 +125,7 @@ fn demote_cold_strips_all_but_the_hottest_and_accumulates_the_counter() {
     assert!(s.get("newest").unwrap().get("timelineTruncatedCount").is_none());
 
     // Idempotent: a second pass over already-stripped cards must not double the counter.
-    s.demote_cold(2);
+    assert_eq!(s.demote_cold(2).expect("demote"), 0, "already-stripped cards are not candidates");
     assert_eq!(s.get("old").unwrap()["timelineTruncatedCount"], 3);
 }
 
@@ -138,7 +138,7 @@ fn demote_cold_breaks_ties_on_first_insert_order() {
     for id in ["first", "second", "third", "fourth"] {
         s.put(&card(id, "2026-08-01T10:00:00.000Z", 0.0, 2));
     }
-    s.demote_cold(2);
+    assert_eq!(s.demote_cold(2).expect("demote"), 2, "the two latest-inserted are demoted");
     let tl = |id: &str| s.get(id).unwrap()["timeline"].as_array().unwrap().len();
     assert_eq!((tl("first"), tl("second")), (2, 2), "the two earliest-inserted keep their timelines");
     assert_eq!((tl("third"), tl("fourth")), (0, 0), "the two latest-inserted are demoted");
@@ -216,7 +216,7 @@ fn persist_records_from_the_resident_layer_equal_the_table() {
     s.put(&card("b", "2026-08-01T10:30:00.000Z", 5000.0, 3));
     assert_resident_matches_table(&s, "after an upsert of b");
 
-    s.demote_cold(2);
+    s.demote_cold(2).expect("demote");
     assert_resident_matches_table(&s, "after demote_cold(2)");
 
     s.mark_restore_complete();

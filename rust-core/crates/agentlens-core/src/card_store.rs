@@ -153,6 +153,10 @@ pub struct CardStore {
     /// Bumped by every `clear`; slots restart from 0 after one, so a consumer that remembers slot
     /// positions (the summary engine) can tell a restart from ordinary growth.
     epoch: u64,
+    /// TRDD-KMF02UEX — counts `demote_cold`'s primary-key card fetches (one per demotion candidate).
+    /// Exists only so a test can assert that the card text is read for exactly the cards being
+    /// demoted, and never when no timeline card lies beyond the hot set.
+    demote_card_fetches: std::sync::atomic::AtomicUsize,
     /// TRDD-9VX3WTGU — `open` kept the previous run's database (the reuse gate passed). Read by
     /// `DurableState::restore` to skip the snapshot load and the 40k inserts.
     reused: bool,
@@ -204,6 +208,7 @@ impl CardStore {
                         conn,
                         next_seq,
                         full_scan_calls: std::sync::atomic::AtomicUsize::new(0),
+                        demote_card_fetches: std::sync::atomic::AtomicUsize::new(0),
                         parsed,
                         epoch: 0,
                         reused: true,
@@ -237,6 +242,7 @@ impl CardStore {
             conn,
             next_seq: 0,
             full_scan_calls: std::sync::atomic::AtomicUsize::new(0),
+            demote_card_fetches: std::sync::atomic::AtomicUsize::new(0),
             parsed: IndexMap::new(),
             epoch: 0,
             reused: false,
@@ -356,6 +362,12 @@ impl CardStore {
     /// has run. Test-only signal; see the field doc above.
     pub fn full_scan_calls(&self) -> usize {
         self.full_scan_calls.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// TRDD-KMF02UEX — how many primary-key card fetches `demote_cold` has made. Test-only signal;
+    /// see the field doc above.
+    pub fn demote_card_fetches(&self) -> usize {
+        self.demote_card_fetches.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Wrap a bulk-insert caller in one transaction. `put` itself stays autocommit — the
@@ -537,7 +549,7 @@ impl CardStore {
     }
 
     /// demoteColdTimelines' storage half: only the `hot_cards` most-recently-active cards keep
-    /// their timelines; every colder card is stripped to headers.
+    /// their timelines; every colder card is stripped to headers. Returns how many cards it demoted.
     ///
     /// The candidate query filters on `timeline_len > 0` AFTER ranking, never before — the rank
     /// has to be computed over ALL cards or the cut would fall in the wrong place. Already-stripped
@@ -545,59 +557,89 @@ impl CardStore {
     /// accumulates, so re-stripping an empty timeline would still be a no-op, but not re-reading
     /// and re-writing 30k unchanged rows is the point).
     ///
-    /// The window operator carries `session_id` and the sort keys ONLY, and the card text is
-    /// joined back afterwards for the few rows that survive the filter. Ranking with `card` inside
-    /// the CTE would materialize the whole corpus on every sweep — the transient churn that is
-    /// this card's whole subject.
-    pub fn demote_cold(&mut self, hot_cards: usize) {
-        if self.len() <= hot_cards {
-            return;
+    /// TRDD-KMF02UEX — WHY keys only, then one primary-key fetch per demoted card: this runs under
+    /// the state lock at the end of every non-empty ingest batch. The previous query joined the
+    /// `card` text of EVERY timeline card back onto the window in one shot, demoted or not; on a
+    /// scratch copy of a regrown file that read failed at 224 MiB and passed at the production
+    /// limit of 256 MiB (that production reaches such a file is inferred, not observed), and its
+    /// `.expect` WOULD have panicked with the lock held, poisoning the mutex (never observed
+    /// firing). Measured instead, on the component queries (the window alone, the candidate keys
+    /// alone): at or under 16 MiB, and a primary-key fetch of the largest (2.3 MB) card at or
+    /// under 8 MiB. So card text is read only for a card actually being demoted, and every
+    /// DuckDB or serde failure comes back as `Err` (the caller counts and logs it; the next batch
+    /// retries) instead of a panic under the lock. NOT measured: the per-card UPDATE's memory at
+    /// 256 MiB with 80 KB to 2.3 MB cards (at low limits on small test cards it failed before the
+    /// old read did). The first failing card aborts the loop, so one bad row blocks every later
+    /// candidate until it is fixed.
+    ///
+    /// The early return reads the resident layer, not `count(*)`: below the hot set no DuckDB
+    /// statement runs at all (layer and table hold the same rows — `persist_snapshot` debug-asserts
+    /// it). Per card the table is written FIRST and the resident layer stripped only after the
+    /// UPDATE returned Ok, so an error part-way leaves every card stripped in both or in neither.
+    pub fn demote_cold(&mut self, hot_cards: usize) -> Result<usize, String> {
+        if self.parsed.len() <= hot_cards {
+            return Ok(0);
         }
-        let mut stmt = self
+        let candidates: Vec<String> = {
+            let mut stmt = self
+                .conn
+                .prepare(DEMOTE_CANDIDATES_SQL)
+                .map_err(|e| format!("prepare the demotion candidate query: {e}"))?;
+            let rows = stmt
+                .query_map([hot_cards as i64], |r| r.get::<_, String>(0))
+                .map_err(|e| format!("run the demotion candidate query: {e}"))?;
+            rows.collect::<Result<_, _>>().map_err(|e| format!("read a demotion candidate: {e}"))?
+        };
+        if candidates.is_empty() {
+            return Ok(0);
+        }
+        // Prepared once per call; both borrow only `self.conn`, so the loop may still touch the
+        // other fields (`parsed`, the counter) directly.
+        let mut fetch = self
             .conn
-            .prepare(
-                "WITH ranked AS (
-                     SELECT session_id, row_number() OVER (ORDER BY last_active_ms DESC, seq ASC) AS rn
-                     FROM cards
-                 )
-                 SELECT c.session_id, c.card
-                 FROM cards c JOIN ranked r USING (session_id)
-                 WHERE r.rn > ? AND c.timeline_len > 0",
-            )
-            .expect("prepare the demotion scan");
-        let rows = stmt
-            .query_map([hot_cards as i64], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
-            .expect("scan the cold cards");
-        let cold: Vec<(String, String)> = rows.map(|r| r.expect("read a cold card row")).collect();
-        drop(stmt);
-        for (id, json) in cold {
-            let mut card = parse(&json);
+            .prepare("SELECT card FROM cards WHERE session_id = ?")
+            .map_err(|e| format!("prepare the demoted-card fetch: {e}"))?;
+        let mut update = self
+            .conn
+            .prepare("UPDATE cards SET card = ?, timeline_len = 0 WHERE session_id = ?")
+            .map_err(|e| format!("prepare the demoted-card update: {e}"))?;
+        let mut demoted = 0;
+        for id in candidates {
+            self.demote_card_fetches.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            // `query_row` errors on a missing row too, so a candidate that vanished is an `Err`,
+            // never a panic.
+            let json: String = fetch
+                .query_row([&id], |r| r.get(0))
+                .map_err(|e| format!("fetch the demotion candidate {id}: {e}"))?;
+            // Parsed locally, not through `parse`, whose `.expect` would panic under the lock.
+            let mut card: Value =
+                serde_json::from_str(&json).map_err(|e| format!("parse the demotion candidate {id}: {e}"))?;
             let Some(obj) = card.as_object_mut() else { continue };
             // TRDD-9VX3WTGU: the persist-strip too, so a hot card that falls out of the hot set
             // reaches the same shape `put_arc` gives a card that arrived cold (invariant: empty
             // timeline <=> persist-stripped). `strip_timeline_value` keeps its truncation bump.
             crate::log_reader::strip_timeline_value(obj);
             persist_strip_map(obj);
-            let stripped = serde_json::to_string(&card).expect("a stripped card is serializable");
-            self.conn
-                .execute(
-                    "UPDATE cards SET card = ?, timeline_len = 0 WHERE session_id = ?",
-                    agentlens_store::duckdb::params![stripped, id],
-                )
-                .expect("store a demoted card");
-            // The resident layer must follow the table or a summary rebuilt from it would keep
-            // serving a timeline the store already dropped. `Arc::make_mut` is copy-on-write: a
-            // rebuild still holding the old pointer keeps its (consistent) pre-demotion view and
-            // this layer gets its own stripped copy.
+            let stripped =
+                serde_json::to_string(&card).map_err(|e| format!("serialize the demoted card {id}: {e}"))?;
+            update
+                .execute(agentlens_store::duckdb::params![stripped, id])
+                .map_err(|e| format!("store the demoted card {id}: {e}"))?;
+            // Only now, with the UPDATE committed: the resident layer must follow the table or a
+            // summary rebuilt from it would keep serving a timeline the store already dropped — and
+            // stripping it BEFORE a failed UPDATE would serve a stripped card the table still holds
+            // whole. `Arc::make_mut` is copy-on-write: a rebuild still holding the old pointer keeps
+            // its (consistent) pre-demotion view and this layer gets its own stripped copy.
             if let Some(resident) = self.parsed.get_mut(&id) {
                 if let Some(obj) = Arc::make_mut(resident).as_object_mut() {
                     crate::log_reader::strip_timeline_value(obj);
                     persist_strip_map(obj);
                 }
             }
+            demoted += 1;
         }
+        Ok(demoted)
     }
-
 
     /// Every card as a shared pointer, first-insert order — the summary rebuild input. One
     /// refcount bump per card; no text copy, no parse (TRDD-9VX3WTGU Phase C). `cards()` /
@@ -732,6 +774,17 @@ impl CardStore {
 
 }
 
+/// TRDD-KMF02UEX — `demote_cold`'s candidate query: session ids ONLY, never card text. The window
+/// ranks ALL cards (the cut must fall in the right place) and the `timeline_len > 0` filter runs
+/// after it. Shared with the in-module tests, so their "the new query fits" precondition measures
+/// the query production actually runs.
+const DEMOTE_CANDIDATES_SQL: &str = "WITH ranked AS (
+         SELECT session_id, timeline_len,
+                row_number() OVER (ORDER BY last_active_ms DESC, seq ASC) AS rn
+         FROM cards
+     )
+     SELECT session_id FROM ranked WHERE rn > ? AND timeline_len > 0";
+
 /// TRDD-9VX3WTGU — the persist-strip of a card whose timeline is already empty: drops `fileOps`,
 /// `generatedFiles`, `generatedFilesTruncated` and empties `backgroundSpans`, exactly the fields
 /// `log_reader::strip_card_for_persist` drops (so a stored row equals what the card snapshot would
@@ -792,6 +845,162 @@ mod tests {
         let store = CardStore::open(&data_dir("dberror"));
         store.conn.execute_batch("DROP TABLE cards").expect("drop the table for the test");
         store.get("anything");
+    }
+
+    /// A card with `entries` timeline entries of `payload` bytes each. Its last-active instant is
+    /// start + `duration_ms`, so distinct durations give `demote_cold` a strict order.
+    fn card(id: &str, duration_ms: f64, entries: usize, payload: usize) -> Value {
+        serde_json::json!({
+            "sessionId": id,
+            "source": "claude_code",
+            "startTime": "2026-08-01T10:00:00.000Z",
+            "durationMs": duration_ms,
+            "timeline": (0..entries)
+                .map(|i| serde_json::json!({ "type": "api_request", "i": i, "payload": "x".repeat(payload) }))
+                .collect::<Vec<_>>(),
+        })
+    }
+
+    fn timeline_len(card: &Value) -> usize {
+        card.get("timeline").and_then(Value::as_array).map_or(0, Vec::len)
+    }
+
+    /// `n` cards `s0..s{n-1}`, each more recently active than the one before.
+    fn fill(s: &mut CardStore, n: usize, entries: usize, payload: usize) {
+        for i in 0..n {
+            s.put(&card(&format!("s{i}"), (i as f64 + 1.0) * 1000.0, entries, payload));
+        }
+    }
+
+    /// The one-shot query `demote_cold` ran before TRDD-KMF02UEX, verbatim: it joins the card TEXT
+    /// of every timeline card onto the window. Every row (both columns) is consumed.
+    fn old_query_ids(s: &CardStore, hot_cards: usize) -> Result<Vec<String>, String> {
+        let mut stmt = s
+            .conn
+            .prepare(
+                "WITH ranked AS (
+                     SELECT session_id, row_number() OVER (ORDER BY last_active_ms DESC, seq ASC) AS rn
+                     FROM cards
+                 )
+                 SELECT c.session_id, c.card
+                 FROM cards c JOIN ranked r USING (session_id)
+                 WHERE r.rn > ? AND c.timeline_len > 0",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([hot_cards as i64], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+            .map_err(|e| e.to_string())?;
+        rows.map(|r| r.map(|(id, _card)| id)).collect::<Result<_, _>>().map_err(|e| e.to_string())
+    }
+
+    /// The keys-only candidate query production runs now.
+    fn candidate_ids(s: &CardStore, hot_cards: usize) -> Result<Vec<String>, String> {
+        let mut stmt = s.conn.prepare(DEMOTE_CANDIDATES_SQL).map_err(|e| e.to_string())?;
+        let rows = stmt.query_map([hot_cards as i64], |r| r.get::<_, String>(0)).map_err(|e| e.to_string())?;
+        rows.collect::<Result<_, _>>().map_err(|e| e.to_string())
+    }
+
+    fn table_timeline_len(s: &CardStore, id: &str) -> i64 {
+        s.conn
+            .query_row("SELECT timeline_len FROM cards WHERE session_id = ?", [id], |r| r.get(0))
+            .expect("read a timeline_len")
+    }
+
+    /// TRDD-KMF02UEX — a DuckDB error inside `demote_cold` comes back as `Err` (it used to be an
+    /// `.expect` panicking under the state lock), and nothing is stripped on the way out.
+    #[test]
+    fn demote_cold_returns_err_on_a_db_error_and_strips_nothing() {
+        let mut s = CardStore::open(&data_dir("demote-err"));
+        fill(&mut s, 50, 3, 16);
+        s.conn.execute_batch("DROP TABLE cards").expect("drop the table for the test");
+        let err = s.demote_cold(1).expect_err("a DuckDB error must come back as Err");
+        assert!(err.contains("demotion candidate"), "unexpected error: {err}");
+        assert_eq!(s.demote_card_fetches(), 0);
+        let resident = s.parsed_cards();
+        assert_eq!(resident.len(), 50);
+        assert!(resident.iter().all(|c| timeline_len(c) == 3), "a failed demotion must not strip the resident layer");
+    }
+
+    /// TRDD-KMF02UEX — the same failure under a mutex (as `CoreState` runs it) leaves the mutex
+    /// usable: no panic while the guard is held, so no poisoning.
+    #[test]
+    fn a_failing_demote_cold_does_not_poison_the_lock_it_runs_under() {
+        let mut s = CardStore::open(&data_dir("demote-poison"));
+        fill(&mut s, 50, 3, 16);
+        s.conn.execute_batch("DROP TABLE cards").expect("drop the table for the test");
+        let m = Arc::new(std::sync::Mutex::new(s));
+        let in_thread = Arc::clone(&m);
+        let result = std::thread::spawn(move || in_thread.lock().expect("lock").demote_cold(1))
+            .join()
+            .expect("demote_cold must not panic");
+        assert!(result.is_err());
+        assert!(!m.is_poisoned(), "a failed demotion must leave the lock usable");
+    }
+
+    /// TRDD-KMF02UEX — the keys-only rewrite demotes exactly the cards the old one-shot query
+    /// selected, in the table and the resident layer, with one card fetch per demoted card.
+    #[test]
+    fn demote_cold_demotes_exactly_the_cards_the_old_query_selected() {
+        let mut s = CardStore::open(&data_dir("demote-same"));
+        // Every third card arrives with no timeline (never a candidate); the rest carry two entries.
+        let entries = |i: usize| if i.is_multiple_of(3) { 0 } else { 2 };
+        for i in 0..30 {
+            s.put(&card(&format!("s{i}"), (i as f64 + 1.0) * 1000.0, entries(i), 8));
+        }
+        let expected = old_query_ids(&s, 5).expect("the old query on a small corpus");
+        assert_eq!(expected.len(), 16, "s0..s24 minus the nine timeline-free ones");
+        assert_eq!(s.demote_cold(5), Ok(expected.len()));
+        assert_eq!(s.demote_card_fetches(), expected.len());
+        for i in 0..30 {
+            let id = format!("s{i}");
+            let keeps = entries(i) > 0 && !expected.contains(&id);
+            assert_eq!(table_timeline_len(&s, &id) > 0, keeps, "table, {id}");
+            let resident = s.parsed.get(&id).expect("resident card");
+            assert_eq!(timeline_len(resident) > 0, keeps, "resident layer, {id}");
+        }
+    }
+
+    /// TRDD-KMF02UEX — the failure the rewrite removes: at a memory limit where the old one-shot
+    /// query runs out of memory, the keys-only candidate query fits and `demote_cold` succeeds.
+    /// Window measured on this exact setup (reports_dev/kmf02uex-impl-report.md, 5 runs per limit):
+    /// the old query fails through 8 MiB and passes from 9; `demote_cold(1)` fails at 6 MiB (in its
+    /// per-card UPDATEs) and succeeds from 7. With 4 KB entries no limit separates them — the
+    /// UPDATEs then need more memory than the old query — hence 1 KB.
+    #[test]
+    fn demote_cold_succeeds_where_the_old_one_shot_query_runs_out_of_memory() {
+        let mut s = CardStore::open(&data_dir("demote-oom"));
+        // FIRST, before any put: DuckDB refuses to switch the temp directory once it has been used,
+        // and with spilling allowed the old query could spill instead of failing.
+        s.conn.execute_batch("SET temp_directory=''").expect("forbid spilling");
+        fill(&mut s, 50, 20, 1000);
+        // Checked: below current usage the SET itself fails, and an ignored failure would leave
+        // the limit unchanged and the test passing vacuously.
+        s.conn.execute_batch("SET memory_limit='8MiB'").expect("lower the memory limit");
+        let old = old_query_ids(&s, 1).expect_err("precondition: the old one-shot query runs out of memory here");
+        assert!(old.contains("Out of Memory"), "precondition: unexpected error from the old query: {old}");
+        let new = candidate_ids(&s, 1).expect("precondition: the keys-only candidate query fits");
+        assert_eq!(new.len(), 49);
+        assert_eq!(s.demote_cold(1), Ok(49));
+    }
+
+    /// TRDD-KMF02UEX — no card text is read when nothing beyond the hot set has a timeline: below
+    /// the hot set no statement runs at all, and above it the keys-only query finds no candidate.
+    #[test]
+    fn demote_cold_reads_no_card_text_when_no_timeline_card_lies_beyond_the_hot_set() {
+        let mut s = CardStore::open(&data_dir("demote-none-small"));
+        fill(&mut s, 10, 2, 8);
+        assert_eq!(s.demote_cold(50), Ok(0));
+        assert_eq!(s.demote_card_fetches(), 0);
+
+        // 60 cards, timelines only on the 10 most recent: the corpus exceeds the hot set, so the
+        // candidate query runs, and every timeline card sits inside the hot set.
+        let mut s = CardStore::open(&data_dir("demote-none-big"));
+        for i in 0..60 {
+            s.put(&card(&format!("s{i}"), (i as f64 + 1.0) * 1000.0, if i >= 50 { 2 } else { 0 }, 8));
+        }
+        assert_eq!(s.demote_cold(50), Ok(0));
+        assert_eq!(s.demote_card_fetches(), 0);
+        assert_eq!(s.parsed_cards().iter().filter(|c| timeline_len(c) > 0).count(), 10);
     }
 
     /// TRDD-TOIM26HP — the connection's memory is BOUNDED. Without this the file would be a pure

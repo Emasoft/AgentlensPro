@@ -128,6 +128,9 @@ pub struct Counters {
     pub logs_payloads: u64,
     pub metrics_payloads: u64,
     pub parse_errors: u64,
+    /// TRDD-KMF02UEX — `demote_cold` calls that returned an error (served as the
+    /// `alcore.demoteColdError` degradation).
+    pub demote_cold_errors: u64,
     pub spans_appended: u64,
 }
 
@@ -291,6 +294,10 @@ pub struct CoreState {
     pub latest_resident_blobs: Vec<Value>,
     /// Memory-pressure ladder stage 0..=3 (see `pressure_stage`).
     pub pressure_stage: u8,
+    /// TRDD-KMF02UEX — the last `demote_cold` call failed. While set, further failures are counted
+    /// (`counters.demote_cold_errors`) but not logged again; the next success logs one recovery line
+    /// and clears it.
+    pub demote_failing: bool,
     /// The shared HMAC key behind the signed viewer-role assertion (embedAuth.ts / AgentlensPro#4).
     /// `None` means the embed feature is DISABLED, and a present viewer header then resolves to
     /// `invalid` (403) — never a downgrade to full access. Past boot this is always `Some`: the
@@ -344,7 +351,32 @@ impl CoreState {
         // run inside the card table — see `CardStore::demote_cold`, which also strips the resident
         // parsed layer (copy-on-write via `Arc::make_mut`, so a rebuild still holding the
         // pre-demotion pointer keeps a consistent view).
-        self.cards.demote_cold(hot_cards);
+        // TRDD-KMF02UEX: a failure is counted and logged, never a panic — this runs under the state
+        // lock, where a panic poisons the mutex for every request thread; the next ingest batch
+        // simply retries. Logged once per failing streak, not once per batch, and the streak's end
+        // is logged too, so the log shows when demotion stopped and when it resumed.
+        match self.cards.demote_cold(hot_cards) {
+            Ok(_) => {
+                if self.demote_failing {
+                    self.demote_failing = false;
+                    eprintln!(
+                        "{} alcore: demote_cold recovered ({} failed call(s) since boot)",
+                        crate::log_ts(),
+                        self.counters.demote_cold_errors
+                    );
+                }
+            }
+            Err(e) => {
+                self.counters.demote_cold_errors += 1;
+                if !self.demote_failing {
+                    self.demote_failing = true;
+                    eprintln!(
+                        "{} alcore: demote_cold failed, retried on the next ingest batch (further failures are counted, not logged): {e}",
+                        crate::log_ts()
+                    );
+                }
+            }
+        }
     }
 
     /// A sweep's output into the card map (server.ts runLogScan's loop): every card through
@@ -697,6 +729,7 @@ impl CoreState {
             log_env: agentlens_logscan::discovery::Env::from_process(),
             latest_resident_blobs: Vec::new(),
             pressure_stage: 0,
+            demote_failing: false,
             // Not loaded here: `open` must not create a key file as a side effect of constructing
             // state (every test would mint one). The BINARY loads it at boot and refuses to start
             // if it is unusable — see bin/alcore.rs.
