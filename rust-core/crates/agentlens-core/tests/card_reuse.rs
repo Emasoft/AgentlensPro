@@ -12,6 +12,7 @@ use std::sync::Mutex;
 use agentlens_core::card_store::{CardStore, CARD_DB_FILE};
 use agentlens_core::delta_log::DeltaLog;
 use agentlens_core::log_reader::{DurableState, LogTailer};
+use agentlens_core::log_reader::{ScannedFile, LOG_INGEST_VERSION, SCAN_CHUNK};
 use agentlens_core::ui::strip_session_detail;
 use agentlens_core::{ingest_post, CoreState};
 use agentlens_logscan::discovery::{Env, Platform};
@@ -327,4 +328,175 @@ fn a_reused_database_next_to_a_stale_version_stamp_is_discarded() {
     assert!(b.st.lock().unwrap().cards.reused(), "the gate itself passed (meta is current)");
     assert_eq!(r, (0, 0, 0), "but the offsets stamp is stale: cold rescan");
     assert!(b.st.lock().unwrap().cards.is_empty() && b.tailer.file_state.is_empty());
+}
+
+
+// ── TRDD-A2KNXCNH: per-chunk read positions ──────────────────────────────────────────────────
+
+fn stamp_is_current(data: &Path) -> bool {
+    std::fs::read_to_string(data.join("log-delta-version.json")).ok().and_then(|s| serde_json::from_str::<Value>(&s).ok()).and_then(|v| v["v"].as_u64())
+        == Some(LOG_INGEST_VERSION)
+}
+
+/// A fixture HOME plus `n` tiny timestamped Claude transcripts (precedent:
+/// log_reader_parity.rs `sweep_incremental_flushes_in_scan_chunk_sized_batches_and_seeds_the_gate`).
+fn home_with_generated(name: &str, n: usize) -> PathBuf {
+    use std::io::Write;
+    let home = dir(name);
+    copy_tree(&fixtures().join("logs-home"), &home);
+    let projects = home.join(".claude").join("projects").join("-Users-someone-chunk");
+    std::fs::create_dir_all(&projects).unwrap();
+    for i in 0..n {
+        let mut f = std::fs::File::create(projects.join(format!("dddddddd-1111-2222-3333-{:012}.jsonl", i))).unwrap();
+        writeln!(f, "{{\"type\":\"user\",\"timestamp\":\"2026-08-01T10:00:00.000Z\",\"cwd\":\"/Users/someone/chunk\",\"message\":{{\"role\":\"user\",\"content\":\"seed {}\"}}}}", i).unwrap();
+    }
+    home
+}
+
+/// T3: a cold sweep over more than SCAN_CHUNK files that dies after its FIRST chunk (later chunks
+/// and the remainder are never ingested, no tick runs) leaves exactly that chunk's read positions
+/// on disk, so the next start reuses the store and re-reads only the files outside chunk 1.
+/// Mutation recorded in the report: positions appended once after the sweep instead of per chunk.
+#[test]
+fn a_sweep_killed_after_its_first_chunk_resumes_from_that_chunks_positions() {
+    let home = home_with_generated("t3-home", SCAN_CHUNK + 9);
+    let data = dir("t3-data");
+    let env = Env { home, platform: Platform::Darwin, vars: HashMap::new() };
+    let now = agentlens_core::now_ms();
+    let (mut b, r) = boot(&data.join("a"), &data, &env);
+    assert_eq!(r, (0, 0, 0), "a fresh data dir restores nothing");
+    let mut chunk1: Vec<String> = Vec::new();
+    let mut calls = 0usize;
+    let (_never_ingested, s1) = {
+        let (durable, st) = (&mut b.durable, &b.st);
+        let mut ingest = |chunk: Vec<ScannedFile>| {
+            calls += 1;
+            if calls == 1 {
+                chunk1 = chunk.iter().map(|s| s.file.clone()).collect();
+                durable.ingest_chunk(st, chunk);
+            }
+        };
+        b.tailer.sweep(&env, now, Some(&mut ingest))
+    };
+    assert!(calls >= 2, "precondition: the cold sweep flushed more than one chunk ({calls})");
+    assert_eq!(chunk1.len(), SCAN_CHUNK, "chunk 1 is a full SCAN_CHUNK slice");
+    drop(b); // the simulated death: no remainder ingest, no tick
+
+    let (mut b2, r2) = boot(&data.join("a"), &data, &env);
+    assert!(b2.st.lock().unwrap().cards.reused(), "the store holding chunk 1 is reused");
+    assert_eq!((r2.1, r2.2), (chunk1.len(), 0), "exactly chunk 1's positions were persisted");
+    let (scanned, s2) = b2.tailer.sweep(&env, now, None);
+    assert_eq!(s2.full_reads as usize, s1.parsed - chunk1.len(), "only files outside chunk 1 are re-read");
+    assert_eq!(s2.incremental_reads, 0);
+    assert!(scanned.iter().all(|s| !chunk1.contains(&s.file)), "no chunk-1 file is re-read");
+}
+
+/// T4: a version-stale stamp tombstones log-offsets and stamps the version at once (log-sessions is
+/// left alone — its tombstone belongs to TRDD-6B7VV2Z7), so positions appended by the cold rescan
+/// survive a death before any tick: the next start reuses the store and re-reads only new files.
+/// Mutation recorded in the report: skip `stamp_version` in the version-stale branch.
+#[test]
+fn a_stale_version_boot_stamps_at_once_so_a_rescan_killed_before_a_tick_is_kept() {
+    use std::io::Write;
+    let (data, env, now) = previous_run("t4");
+    let now = now as i64;
+    std::fs::write(data.join("log-delta-version.json"), "{\"v\":1}").unwrap();
+    let sessions_before = DeltaLog::new(&data, "log-sessions").load().unwrap();
+    assert_eq!(sessions_before.len(), 7, "precondition: the previous run saved its cards");
+
+    let (mut b, r) = boot(&data.join("a"), &data, &env);
+    assert_eq!(r, (0, 0, 0), "a stale stamp restores nothing");
+    assert!(stamp_is_current(&data), "the version is stamped before the rescan");
+    assert!(DeltaLog::new(&data, "log-offsets").load().unwrap().is_empty(), "log-offsets replays empty");
+    assert_eq!(DeltaLog::new(&data, "log-sessions").load().unwrap(), sessions_before, "log-sessions is unchanged");
+
+    let mut appended: Vec<String> = Vec::new();
+    let (remainder, s1) = {
+        let (durable, st) = (&mut b.durable, &b.st);
+        let mut ingest = |chunk: Vec<ScannedFile>| {
+            appended.extend(chunk.iter().map(|s| s.file.clone()));
+            durable.ingest_chunk(st, chunk);
+        };
+        b.tailer.sweep(&env, now, Some(&mut ingest))
+    };
+    appended.extend(remainder.iter().map(|s| s.file.clone()));
+    if !remainder.is_empty() {
+        b.durable.ingest_chunk(&b.st, remainder);
+    }
+    assert_eq!(appended.len(), s1.parsed);
+    drop(b); // death before any tick
+
+    // One file the rescan never saw, so "only the rest is re-read" is a non-zero count.
+    let extra = env.home.join(".claude").join("projects").join("-Users-someone-proj").join("eeeeeeee-1111-2222-3333-444444444444.jsonl");
+    writeln!(std::fs::File::create(&extra).unwrap(), "{{\"type\":\"user\",\"timestamp\":\"2026-08-01T10:00:00.000Z\",\"cwd\":\"/Users/someone/proj\",\"message\":{{\"role\":\"user\",\"content\":\"late\"}}}}").unwrap();
+
+    let (mut b2, r2) = boot(&data.join("a"), &data, &env);
+    assert_eq!((r2.1, r2.2), (appended.len(), 0), "the rescan's positions were kept (store reused, not discarded)");
+    assert!(r2.0 > 0 && !b2.st.lock().unwrap().cards.is_empty(), "the reused store keeps its cards");
+    let (_, s2) = b2.tailer.sweep(&env, now, None);
+    assert_eq!(s2.full_reads, 1, "only the file that was never appended is read");
+}
+
+/// T6: a poisoned state lock puts nothing and appends nothing — log-offsets on disk is unchanged.
+/// Mutation recorded in the report: append outside the lock's Ok arm.
+#[test]
+fn ingest_chunk_on_a_poisoned_lock_appends_no_positions() {
+    let home = dir("t6-home");
+    copy_tree(&fixtures().join("logs-home"), &home);
+    let data = dir("t6-data");
+    let env = Env { home, platform: Platform::Darwin, vars: HashMap::new() };
+    let (mut b, _) = boot(&data.join("a"), &data, &env);
+    let (scanned, _) = b.tailer.sweep(&env, agentlens_core::now_ms(), None);
+    assert!(!scanned.is_empty(), "precondition: a non-empty chunk");
+    let before = std::fs::read(data.join("log-offsets.delta.ndjson")).ok();
+    let before_bytes = DeltaLog::new(&data, "log-offsets").disk_bytes();
+    std::thread::scope(|s| {
+        let h = s.spawn(|| {
+            let _g = b.st.lock().unwrap();
+            panic!("T6: poison the state lock on purpose");
+        });
+        assert!(h.join().is_err());
+    });
+    assert!(b.st.is_poisoned(), "precondition: the lock is poisoned");
+    b.durable.ingest_chunk(&b.st, scanned);
+    assert_eq!(DeltaLog::new(&data, "log-offsets").disk_bytes(), before_bytes, "no bytes appended");
+    assert_eq!(std::fs::read(data.join("log-offsets.delta.ndjson")).ok(), before, "log-offsets unchanged");
+}
+
+/// T7: per-chunk appends fill the log's hashes, so a forced tick right after writes 0 offset bytes;
+/// the appends themselves are counted in the persistence counters. Every fixture file yields a
+/// card (asserted), so the chunk positions cover the whole export and 0 bytes is the right answer.
+/// Mutation recorded in the report: drop the persistence-counter update in `ingest_chunk`.
+#[test]
+fn chunk_appends_are_counted_and_leave_a_forced_tick_nothing_to_write() {
+    let home = dir("t7-home");
+    copy_tree(&fixtures().join("logs-home"), &home);
+    let data = dir("t7-data");
+    let env = Env { home, platform: Platform::Darwin, vars: HashMap::new() };
+    let (mut b, _) = boot(&data.join("a"), &data, &env);
+    assert!(stamp_is_current(&data), "the fresh (stale) boot stamped the version");
+    let (remainder, s) = {
+        let (durable, st) = (&mut b.durable, &b.st);
+        let mut ingest = |chunk: Vec<ScannedFile>| durable.ingest_chunk(st, chunk);
+        b.tailer.sweep(&env, agentlens_core::now_ms(), Some(&mut ingest))
+    };
+    if !remainder.is_empty() {
+        b.durable.ingest_chunk(&b.st, remainder);
+    }
+    assert_eq!((s.files, s.parsed), (5, 5), "precondition: every file yields a card");
+    let disk = DeltaLog::new(&data, "log-offsets").disk_bytes();
+    let (writes, bytes) = {
+        let st = b.st.lock().unwrap();
+        (st.persist.offsets_writes, st.persist.offsets_bytes)
+    };
+    assert!(disk > 0 && writes >= 1, "the chunk positions were appended");
+    assert_eq!(bytes, disk, "persist.offsets_bytes counts exactly the appended bytes");
+    assert_eq!(DeltaLog::new(&data, "log-offsets").load().unwrap().len(), b.tailer.file_state.len());
+
+    b.durable.tick(&b.tailer, &b.st, true);
+    assert_eq!(DeltaLog::new(&data, "log-offsets").disk_bytes(), disk, "the forced tick wrote 0 offset bytes");
+    let st = b.st.lock().unwrap();
+    assert_eq!((st.persist.offsets_writes, st.persist.offsets_bytes), (writes, bytes), "and counted no offsets write");
+    drop(st);
+    assert!(stamp_is_current(&data));
 }

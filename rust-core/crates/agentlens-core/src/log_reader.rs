@@ -858,7 +858,8 @@ impl DurableState {
     /// The restore (server.ts startup): when the delta logs are CURRENT, restored cards go into
     /// the map (timelines capped, then the global tier) and the offsets seed the tailer's gate.
     /// Returns (restored cards, imported offsets, skipped offsets); version-stale logs restore
-    /// nothing and are tombstoned by the next save.
+    /// nothing: the offsets log is tombstoned and the version stamped at once (TRDD-A2KNXCNH), the
+    /// card log by the next card save.
     ///
     /// TRDD-ORGJ0E3G (usage-only backfill, replacing both the 7→8 whole-corpus version bump AND
     /// the full-card re-parse this superseded — see `LOG_INGEST_VERSION`'s doc comment and
@@ -875,8 +876,22 @@ impl DurableState {
         let offsets = self.offsets.load()?;
         if !self.version_is_current() {
             if !cards.is_empty() || !offsets.is_empty() {
-                eprintln!("{} alcore: log-ingest semantics changed (v{LOG_INGEST_VERSION}) — cold-rescanning; stale delta-log entries are tombstoned on the next durable save", crate::log_ts());
+                eprintln!("{} alcore: log-ingest semantics changed (v{LOG_INGEST_VERSION}) — cold-rescanning; stale read positions tombstoned now, stale card entries on the next durable card save", crate::log_ts());
             }
+            // TRDD-A2KNXCNH: tombstone the stale read positions and stamp the version NOW, before
+            // the cold rescan, stamp LAST (a kill between the two re-runs this branch, which is
+            // idempotent). WHY: the rescan appends per-chunk positions with `append_changed`, which
+            // fills `written`; the first tick may then write 0 offset bytes and skip
+            // `stamp_version` (it stamps only when bytes > 0), and a death before the first card
+            // save would leave current positions under a stale stamp — the next boot would discard
+            // the whole scan. log-sessions is deliberately NOT tombstoned here: without
+            // TRDD-6B7VV2Z7 (B'), a version bump followed by a refused reuse before the first card
+            // save would then restore an EMPTY snapshot next to current positions, so the cards
+            // would come back MISSING instead of stale; that tombstone belongs to 6B7VV2Z7. The `?`
+            // fails the start on a disk error (fail-fast) rather than rescanning onto a log that
+            // still holds stale positions.
+            self.offsets.save(&IndexMap::new())?;
+            self.stamp_version();
             return Ok((0, 0, 0));
         }
         let restored = cards.len();
@@ -1160,15 +1175,60 @@ impl DurableState {
         self.cards_dirty = true;
     }
 
+    /// TRDD-A2KNXCNH — ingest one flushed sweep chunk and persist ITS read positions now, so a
+    /// long sweep killed partway resumes from the last chunk instead of restarting from the first
+    /// file (before this, no position was written until the sweep returned and the 60 s tick ran).
+    ///
+    /// Each record key is derived exactly as `LogTailer::export_file_state` derives it
+    /// (`PathBuf::from(&s.file).to_string_lossy()`): a different spelling would make the next
+    /// full `save_offsets` see every key as new-plus-missing and tombstone and re-append it.
+    /// `append_changed` (never `save`) because the chunk is a SUBSET — `save` would tombstone
+    /// every other file's position. It also fills the log's `written` hashes, so the next tick
+    /// writes only what changed since.
+    ///
+    /// 9VX3WTGU ordering: the positions are built before the lock but appended only on the Ok arm
+    /// and only after the guard is dropped, i.e. after this chunk's cards were put (each put is a
+    /// committed DuckDB statement). A poisoned lock puts nothing and appends nothing — a position
+    /// on disk must never describe a file whose card is not in the database.
+    pub fn ingest_chunk(&mut self, state: &std::sync::Mutex<crate::CoreState>, chunk: Vec<ScannedFile>) {
+        let positions: IndexMap<String, Value> =
+            chunk.iter().map(|s| (PathBuf::from(&s.file).to_string_lossy().into_owned(), file_state_record(&s.state))).collect();
+        let appended = match state.lock_timed() {
+            Ok(mut core) => {
+                core.ingest_scanned(chunk);
+                self.mark_dirty();
+                true
+            }
+            Err(_) => {
+                eprintln!("{} alcore: state lock poisoned — a sweep chunk of {} file(s) was not ingested and its read positions were not saved", crate::log_ts(), positions.len());
+                false
+            }
+        };
+        if !appended {
+            return;
+        }
+        match self.offsets.append_changed(&positions) {
+            Ok(r) if r.bytes > 0 => {
+                if let Ok(mut st) = state.lock_timed() {
+                    st.persist.offsets_writes += 1;
+                    st.persist.offsets_bytes += r.bytes;
+                }
+            }
+            Ok(_) => {}
+            Err(e) => eprintln!("{} alcore: could not append chunk read positions: {e}", crate::log_ts()),
+        }
+    }
+
     /// saveOffsetsNow — a save that wrote bytes counts as one write (persistStats.offsetsWrites).
     ///
-    /// TRDD-9VX3WTGU ORDERING CONTRACT — reuse of `cards.duckdb` depends on it: this runs only
-    /// from `tick`, on the sweeper thread, AFTER the sweep's cards were put (each `put_arc` is a
-    /// committed, WAL-fsynced DuckDB statement), and the offsets log is written WITHOUT an fsync.
-    /// So an offset on disk never describes a file whose card is not already durable in the
-    /// database. Saving offsets before the sweep's puts, or from another thread, would let a
-    /// reused database sit BEHIND its offsets: the file reads as unchanged and the stale card is
-    /// never refreshed.
+    /// TRDD-9VX3WTGU ORDERING CONTRACT — reuse of `cards.duckdb` depends on it. Offsets are written
+    /// from exactly two places, both on the sweeper thread and both AFTER the cards they describe
+    /// were put (each `put_arc` is a committed, WAL-fsynced DuckDB statement): this full save, run
+    /// from `tick` after the sweep's puts, and `ingest_chunk`'s per-chunk append (TRDD-A2KNXCNH),
+    /// run after that chunk's puts. The offsets log is written WITHOUT an fsync. So an offset on
+    /// disk never describes a file whose card is not already durable in the database. Saving
+    /// offsets before the puts, or from another thread, would let a reused database sit BEHIND its
+    /// offsets: the file reads as unchanged and the stale card is never refreshed.
     fn save_offsets(&mut self, tailer: &LogTailer, state: &std::sync::Mutex<crate::CoreState>) {
         match self.offsets.save(&tailer.export_file_state()) {
             Ok(r) if r.bytes > 0 => {
@@ -1463,25 +1523,20 @@ pub fn start_sweeper(
             // event instead of waiting for the backstop (its stat gate makes a double-visit free).
             let (_watcher, watch_attached, watch_failed) = attach_watchers(&env, tx.clone());
             // TRDD-2JOIAH2G R5: the boot sweep ingests each SCAN_CHUNK under a short state lock
-            // and drops it — the only residual is the final partial chunk. The flush also marks
-            // both sidecars dirty (exactly what the old `if !scanned.is_empty()` did for the
-            // whole batch at once).
-            let mut ingest_boot = |chunk: Vec<ScannedFile>| {
-                if let Ok(mut core) = state.lock_timed() {
-                    core.ingest_scanned(chunk);
-                    durable.mark_dirty();
-                }
-            };
+            // and drops it — the only residual is the final partial chunk. TRDD-A2KNXCNH: every
+            // chunk goes through `ingest_chunk`, which puts its cards, marks both sidecars dirty
+            // and THEN appends that chunk's read positions — a boot sweep killed partway resumes
+            // from the last persisted chunk instead of re-reading the whole corpus.
+            let mut ingest_boot = |chunk: Vec<ScannedFile>| durable.ingest_chunk(&state, chunk);
             let (scanned, sweep) = tailer.sweep(&env, crate::now_ms(), Some(&mut ingest_boot));
-            // The flush marked each chunk dirty; the returned remainder is ingested below and
-            // must be marked too (old semantics: one mark for the whole batch).
+            // The remainder takes the same path, BEFORE the lock below: `ingest_chunk` takes the
+            // state lock itself, and std Mutex is not reentrant.
             if !scanned.is_empty() {
-                durable.mark_dirty();
+                durable.ingest_chunk(&state, scanned);
             }
             {
                 let mut st = state.lock_timed().expect("core state");
                 st.log_scan.add(&sweep);
-                st.ingest_scanned(scanned);
                 st.sweeper = Some(SweeperControl { tx });
             }
             let _ = boot_tx.send(Ok(BootReport {
@@ -1628,19 +1683,19 @@ pub fn start_sweeper(
                     pending.clear();
                     needs_full = false;
                     next_full = Instant::now() + backstop;
-                    let mut ingest_loop = |chunk: Vec<ScannedFile>| {
-                        if let Ok(mut core) = state.lock_timed() {
-                            core.ingest_scanned(chunk);
-                            // A flushed chunk carries new offsets: mark the sidecars dirty here,
-                            // not only for the returned remainder below.
-                            durable.mark_dirty();
-                        }
-                    };
+                    // TRDD-A2KNXCNH: each flushed chunk goes through `ingest_chunk`, which puts its
+                    // cards and THEN appends its read positions, so a sweep killed partway resumes
+                    // from the last chunk instead of re-reading everything.
+                    let mut ingest_loop = |chunk: Vec<ScannedFile>| durable.ingest_chunk(&state, chunk);
                     let (scanned, sweep) = tailer.sweep(&env, crate::now_ms(), Some(&mut ingest_loop));
+                    // The full sweep's remainder takes the same path. WHY here and not in the
+                    // post-sweep block below: that block holds the state lock, and `ingest_chunk`
+                    // takes it itself (std Mutex is not reentrant). Nothing is returned, so the
+                    // block below only records the stats for a full sweep.
                     if !scanned.is_empty() {
-                        durable.mark_dirty();
+                        durable.ingest_chunk(&state, scanned);
                     }
-                    (scanned, sweep)
+                    (Vec::new(), sweep)
                 } else {
                     let paths = std::mem::take(&mut pending);
                     tailer.sweep_paths(&env, &paths, crate::now_ms())
