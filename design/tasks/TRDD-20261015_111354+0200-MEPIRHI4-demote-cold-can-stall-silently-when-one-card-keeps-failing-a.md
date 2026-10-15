@@ -4,7 +4,7 @@ title: demote_cold returns on its first failing card and skips a missing residen
 column: todo
 status: tasked
 created: 2026-10-15T11:13:54+0200
-updated: 2026-10-15T11:18:50+0200
+updated: 2026-10-15T11:24:18+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -36,3 +36,4 @@ Decide skip-and-continue versus abort under the owner fail-fast rule (CLAUDE.md:
 ## Notes and lessons learned
 
 2026-10-15: correction to the 42998aa1 commit message: one card that keeps failing does not block every later candidate (the candidate order is not fixed and the cards before it are demoted), and MEPIRHI4 did not own the missing-resident-entry residual until this edit added its box. The measurement half moved to TRDD-BSLCSCYK.
+2026-10-15: correction to the note above and to the 2f91427d commit message: a failing card need not block every later candidate, because the candidate query has no ORDER BY so its order is not guaranteed; whether the order actually varies between batches is unmeasured, and with a stable order a card that fails every time would block the cards after it from the second batch on. Part of this card: measure order stability by running DEMOTE_CANDIDATES_SQL with hot_cards 1 ten times on one clone and comparing the id sequences. The filename slug of this card predates its retitle.
