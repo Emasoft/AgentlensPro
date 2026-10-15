@@ -960,6 +960,34 @@ mod tests {
         }
     }
 
+    /// TRDD-59OONXOV — `demote_cold` strips the resident card only after its table UPDATE
+    /// succeeded, so a failure part-way leaves each card stripped in both layers or in neither.
+    /// The failure is deterministic, with no memory limit: a UNIQUE index on `timeline_len` (every
+    /// card starts with a different non-zero length) lets the first demotion set 0 and makes the
+    /// second one violate the index inside its per-card UPDATE.
+    #[test]
+    fn demote_cold_strips_a_resident_card_only_after_its_update() {
+        let mut s = CardStore::open(&data_dir("demote-order"));
+        for i in 0..5 {
+            s.put(&card(&format!("s{i}"), (i as f64 + 1.0) * 1000.0, i + 1, 8));
+        }
+        s.conn
+            .execute_batch("CREATE UNIQUE INDEX ux_demote_test ON cards(timeline_len)")
+            .expect("unique index on timeline_len");
+        let err = s.demote_cold(1).expect_err("precondition: the second per-card UPDATE violates the unique index");
+        assert!(err.contains("store the demoted card"), "precondition: unexpected error: {err}");
+        let mut stripped = 0;
+        for i in 0..5 {
+            let id = format!("s{i}");
+            let resident = s.parsed.get(&id).expect("resident card");
+            assert_eq!(table_timeline_len(&s, &id) > 0, timeline_len(resident) > 0, "table and resident layer, {id}");
+            if timeline_len(resident) == 0 {
+                stripped += 1;
+            }
+        }
+        assert_eq!(stripped, 1, "exactly the one card whose UPDATE succeeded is stripped, in both layers");
+    }
+
     /// TRDD-KMF02UEX — the failure the rewrite removes: at a memory limit where the old one-shot
     /// query runs out of memory, the keys-only candidate query fits and `demote_cold` succeeds.
     /// Window measured on this exact setup (reports_dev/kmf02uex-impl-report.md, 5 runs per limit):
