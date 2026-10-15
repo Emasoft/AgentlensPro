@@ -4,7 +4,7 @@ title: Card updates are a delete plus an insert in DuckDB and the cards.duckdb t
 column: todo
 status: tasked
 created: 2026-10-15T04:28:05+0200
-updated: 2026-10-15T05:46:32+0200
+updated: 2026-10-15T07:12:18+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix

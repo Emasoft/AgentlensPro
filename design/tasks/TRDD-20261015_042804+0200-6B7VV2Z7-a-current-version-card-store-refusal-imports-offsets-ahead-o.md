@@ -1,10 +1,10 @@
 ---
 trdd-id: 6B7VV2Z7
 title: A current-version card store refusal imports offsets ahead of a stale snapshot and loses idle cards
-column: todo
+column: blocked
 status: tasked
 created: 2026-10-15T04:28:04+0200
-updated: 2026-10-15T05:25:06+0200
+updated: 2026-10-15T07:13:04+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -16,14 +16,18 @@ approved: true
 approval-judge: main-agent@agentlenspro
 approval-datetime: 2026-10-15T04:28:04+0200
 project-id: agentlenspro
-npt: [0R0NGVK6]
+npt: [A2KNXCNH]
+blocked-by: [A2KNXCNH, 0BDOV3WC, USSG465Q]
+pre-block-column: todo
+blocker-probe: [trddgrep, why, 6B7VV2Z7]
+blocker-holds-if: not-match:READY
 ---
 
 # A current-version card store refusal imports offsets ahead of a stale snapshot and loses idle cards
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-10-15
 **PLAN 2026-10-15 (revision 2, reviewed round 2 of 2): B' plus per-chunk progress replaces option C (C is now backburner card 53Y38MXJ).**
-- Commit 1 (next; independent of the owner): `DurableState::ingest_chunk` appends each flushed chunk's read positions with `append_changed` right after that chunk's cards are put (both ingest closures, plus the boot remainder and the full-sweep remainder; targeted sweeps keep saving on the 60 s tick). The version-stale branch of `restore_from_snapshot` tombstones both logs and stamps the version before the cold rescan. The appends are added to the persistence counters. Lands after card 0R0NGVK6.
+- Commit 1 (next; independent of the owner): `DurableState::ingest_chunk` appends each flushed chunk's read positions with `append_changed` right after that chunk's cards are put (both ingest closures, plus the boot remainder and the full-sweep remainder; targeted sweeps keep saving on the 60 s tick). The version-stale branch of `restore_from_snapshot` tombstones both logs and stamps the version before the cold rescan. The appends are added to the persistence counters. Lands after card 0R0NGVK6. Split out 2026-10-15 as card A2KNXCNH.
   - Commit 1 must also: derive each record key exactly as `export_file_state` does (`PathBuf::from(&s.file).to_string_lossy()`), or the next save tombstones and re-appends every key; append only on the lock's Ok arm (a poisoned lock puts nothing and appends nothing); rebuild T3 with more than SCAN_CHUNK generated files (precedent tests/log_reader_parity.rs:168-200), a simulated death after chunk 1, and the mutation 'append once after the sweep instead of per chunk'; add T7 (after appends, a forced tick with no change writes 0 offsets bytes and the version stamp is current). Narrow claim: no `Drop` in agentlens-core/src/*.rs saves state (subfolders unchecked; dropping a DuckDB connection checkpoints without changing content). Other readers of the three files (checked by main 2026-10-15): log-delta-version.json is read and written only by DurableState (log_reader.rs:832); standalone/cli.js references none of the three file names and contains no deltaLog symbol; server_stats.rs:500-501 reads only disk sizes.
 - Commit 2 (B': a refused reuse imports no read positions and rewrites log-offsets empty before mark_restore_complete): sequenced after TRDD-0BDOV3WC (owner decision a) and after measuring cards.duckdb growth from a restore plus a full re-upsert. It changes 6 import-count asserts in tests/log_reader_parity.rs (:418 :460 :750 :857 :907 :929); :460 and :907 must move to the reuse path or a direct import_file_state call to keep their skip coverage.
   - Re-upsert and regrow measured 2026-10-15 (reports_dev/6b7vv2z7-reupsert-growth.md, reports_dev/0bdov3wc-regrow-test.md): a full re-upsert of timeline-free cards grows the file by about 220 MB per pass but leaves the boot-read floor at 80 MiB; repeated whole rewrites of the 31 timeline cards raise it (88 → 136 MiB after 10 rounds, 352 MiB after 30, DuckDB 1.5.6). B' re-puts every re-parsed card un-stripped, timelines included, and demote_cold then rewrites the cold ones, so a B' rescan likely leaves a large old version for nearly every re-parsed card and raises the floor (INFERRED, untested); about 220 MB per refusal is a lower bound on file growth. Commit 2 is therefore sequenced after TRDD-USSG465Q and must compact after its own rescan.
@@ -50,6 +54,7 @@ On a current-version refusal, drop the offsets of files whose card is absent fro
 ## Approval log
 
 - 2026-10-15T04:28:04+0200 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-10-15T07:12:10+0200 — column → blocked by main-agent@agentlenspro. B' waits for the per-chunk progress card, 0BDOV3WC and USSG465Q
 
 ## Notes and lessons learned
 
