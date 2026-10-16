@@ -1,10 +1,10 @@
 ---
 trdd-id: USSG465Q
 title: Card updates are a delete plus an insert in DuckDB and the cards.duckdb tail is inferred to make the boot read expensive
-column: todo
+column: dev
 status: tasked
 created: 2026-10-15T04:28:05+0200
-updated: 2026-10-15T11:49:30+0200
+updated: 2026-10-16T06:35:24+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -29,13 +29,18 @@ The live cards.duckdb is 547 MB for 80.8 MB of card text (41,819 live rows, 44,2
 Periodically compact the cards table (rewrite it in seq order and swap, or a CHECKPOINT/VACUUM path if DuckDB reclaims it), off the state lock; or stop indexing last_active_ms so updates stay in place. Measure first.
 
 ## Acceptance
-- [ ] Measured on a copy of a real corpus: physical versus live rows, and the boot read's memory threshold, before and after the fix; the threshold drops.
+- [x] Measured on a copy of a real corpus: physical versus live rows, and the boot read's memory threshold, before and after the fix; the threshold drops.
 
 ## Approval log
 
 - 2026-10-15T04:28:05+0200 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-10-16T04:35:14+0200 — column → dev by main-agent@agentlenspro. implementation started (reviewed revision 2, 2026-10-16)
 
 ## Notes and lessons learned
 
 2026-10-15 (INFERRED, not measured): each demote_cold UPDATE (f9e0742e) rewrites a large timeline card as its stripped form, which under the DuckDB update model may leave a dead version of the large row, a further source of the growth this card tracks.
 2026-10-15: the bloat also governs demotion. TRDD-BSLCSCYK measured the post-f9e0742e per-card UPDATE path at 224 < floor <= 256 MiB on large-r30, the same bracket as the old one-shot read, against 64 < floor <= 96 on the live copy and 16 < floor <= 32 on the compact copy. At 256 MiB demotion succeeded on all three measured copies (cold connections); the one with at most one 32 MiB grid step of headroom (large-r30, 224 < floor <= 256) is a file whose boot read already fails at 256 MiB (warm-connection overhead unmeasured); if demotion fails, timelines stay resident (31 timeline cards, about 8.4 MB of card text on the copies; growth toward the RSS wall unmeasured).
+2026-10-16: lever (d) landed: the store opens with vacuum_rebuild_indexes=18446744073709551615 (u64::MAX). Evidence: reports_dev/ussg465q-facts.md (mechanism, DuckDB 1.5.6 source), ussg465q-levers-measure.md and -measure2.md (growth stops; a finite value is skipped silently above its row count; option is per open), -measure3.md (clones of the real store + WAL at 256 MiB: 41,974 puts, no error, worst put 606 ms vs 706 control, used blocks 1079 -> 653).
+2026-10-16: acceptance measured against its control: real store, option 96 MiB vs control 128 MiB boot-read floor after the same 41,974 puts (both started at 256); regrow recipe (30 rewrites of the 31 timeline cards): option 96 vs control 352 MiB. The floor is not a function of file size alone (the control was 870 MiB at a 128 MiB floor); the 96 vs 352 difference between two control states is unexplained.
+2026-10-16: rebuilt indexes stay consistent across reopen: on the round-3 option end state, every card upserted twice with a CHECKPOINT and reopen between (41,819 puts each, no error; used blocks 653 -> 629 -> 545), main agent, scratch livecheck.
+2026-10-16: residuals: the setting is Experimental in DuckDB 1.5.6 (a version that drops it panics at the open probe before touching files; t1 fails in CI); checkpoint pauses under the real sweep and state lock unmeasured; secondary-index damage (seen once on a scratch copy, m0b/live, cause unknown) is not detected: card OYE4GWYD tracks it.

@@ -4,7 +4,7 @@ title: A current-version card store refusal imports offsets ahead of a stale sna
 column: blocked
 status: tasked
 created: 2026-10-15T04:28:04+0200
-updated: 2026-10-16T00:45:54+0200
+updated: 2026-10-16T06:35:30+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -62,3 +62,4 @@ On a current-version refusal, drop the offsets of files whose card is absent fro
 
 2026-10-15: once TRDD-0BDOV3WC revision 3 lands, an out-of-memory error no longer refuses (it stops the server), so it leaves this card's list; the hole stays for every other current-version refusal reason, including a CARD_SCHEMA_VERSION bump.
 2026-10-16: 0BDOV3WC landed: an OOM refusal no longer goes through the snapshot path (a lossless rewrite instead), so this card's exposure shrinks to the other current-version refusal reasons (schema bump, missing meta, interrupted restore or clear, corruption); `reused()` is now true after a rewrite.
+2026-10-16: the commit-2 dependency on TRDD-USSG465Q is met (lever d landed, commit pending; its sha is to be added after the commit). Its rescan's single full re-put pass measured +142 MiB of file growth on a compact base (round 1) and no growth on the real bloated store (round 3), with used blocks falling afterwards.

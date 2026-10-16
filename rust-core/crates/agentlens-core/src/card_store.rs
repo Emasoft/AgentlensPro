@@ -84,6 +84,15 @@ const MEMORY_LIMIT: &str = "256MiB";
 /// treats the OOM symptom; TRDD-USSG465Q owns the cause (whole-card rewrites leave a dead row per rewrite).
 const REBUILD_MEMORY_LIMIT: &str = "1024MiB";
 
+/// TRDD-USSG465Q: DuckDB option `vacuum_rebuild_indexes`, passed at every open of the card file. It must
+/// equal u64::MAX. An upsert whose SET list contains an indexed column (last_active_ms is in idx_cards_active)
+/// runs as a delete plus an insert, so every update leaves a dead row. DuckDB 1.5.6 skips the checkpoint
+/// vacuum of a table that has ART indexes unless this option is set, so those dead rows are never reclaimed
+/// and the file grows. The option also SILENTLY skips any table with more rows than its value, so only the
+/// maximum is safe at any corpus size. Evidence: reports_dev/ussg465q-facts.md and
+/// reports_dev/ussg465q-levers-measure2.md (Q2).
+const VACUUM_REBUILD_INDEXES: &str = "18446744073709551615";
+
 /// The one table. `card` is JSON TEXT, not DuckDB's `JSON` type: the served bytes must be
 /// byte-identical to what the TS server produced, and a `JSON` column normalizes (it re-emits the
 /// document from a parsed form, which can reorder keys and reformat numbers). VARCHAR round-trips
@@ -186,7 +195,7 @@ pub(crate) enum OpenOutcome {
     Rebuilt(String),
 }
 
-/// The three memory limits of `open_with_limits` (TRDD-0BDOV3WC). Production passes MEMORY_LIMIT
+/// The memory limits and the vacuum setting of `open_with_limits` (TRDD-0BDOV3WC, TRDD-USSG465Q). Production passes MEMORY_LIMIT
 /// as `read` and `reopen`, and REBUILD_MEMORY_LIMIT as `rebuild`. A test passes a small `read` to
 /// reproduce an out-of-memory boot read.
 pub(crate) struct OpenLimits<'a> {
@@ -196,6 +205,10 @@ pub(crate) struct OpenLimits<'a> {
     pub(crate) rebuild: &'a str,
     /// The steady-state limit: the fresh file is loaded at it first after the swap (see `finish_swap`).
     pub(crate) reopen: &'a str,
+    /// The card database's `vacuum_rebuild_indexes`, applied at every open of the file (see
+    /// `VACUUM_REBUILD_INDEXES`). Production passes the constant. A test may pass another value to model a
+    /// file that a build with the default setting wrote.
+    pub(crate) vacuum_rebuild_indexes: &'a str,
 }
 
 pub struct CardStore {
@@ -264,7 +277,12 @@ impl CardStore {
     pub fn open(data_dir: &Path) -> CardStore {
         Self::open_with_limits(
             data_dir,
-            OpenLimits { read: MEMORY_LIMIT, rebuild: REBUILD_MEMORY_LIMIT, reopen: MEMORY_LIMIT },
+            OpenLimits {
+                read: MEMORY_LIMIT,
+                rebuild: REBUILD_MEMORY_LIMIT,
+                reopen: MEMORY_LIMIT,
+                vacuum_rebuild_indexes: VACUUM_REBUILD_INDEXES,
+            },
         )
     }
 
@@ -279,11 +297,20 @@ impl CardStore {
     ///    `RewriteFailed(reason)`. A failure AFTER the rename never deletes `cards.duckdb` (see
     ///    `finish_swap`).
     pub(crate) fn open_with_limits(data_dir: &Path, limits: OpenLimits<'_>) -> CardStore {
+        // TRDD-USSG465Q: this probe is the ONLY guard against a setting DuckDB refuses. It runs before any file
+        // is removed or opened. Without it, a refused option surfaces in try_reuse as a file that does not open,
+        // which maps to NotEligible and deletes cards.duckdb.
+        if let Err(e) = card_db_config(limits.vacuum_rebuild_indexes).and_then(Connection::open_in_memory_with_flags) {
+            panic!(
+                "card store: DuckDB refused vacuum_rebuild_indexes={}: {e}; refusing to touch the card files",
+                limits.vacuum_rebuild_indexes
+            );
+        }
         std::fs::create_dir_all(data_dir).expect("create the data dir for the card store");
         let path = data_dir.join(CARD_DB_FILE);
         let wal = data_dir.join(format!("{CARD_DB_FILE}.wal"));
         remove_rebuild_leftovers(data_dir);
-        let (reason, outcome) = match Self::try_reuse(&path, limits.read) {
+        let (reason, outcome) = match Self::try_reuse(&path, limits.read, limits.vacuum_rebuild_indexes) {
             Ok((conn, parsed, next_seq)) => {
                 eprintln!(
                     "{} alcore: card store — reusing {CARD_DB_FILE}: {} cards, ingest v{}, schema v{CARD_SCHEMA_VERSION}, restore complete, no clear in progress",
@@ -322,8 +349,8 @@ impl CardStore {
         // `expect`. The `DROP TABLE IF EXISTS` below is what actually guarantees an empty corpus.
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(&wal);
-        let conn =
-            Connection::open(&path).unwrap_or_else(|e| panic!("open the card store at {}: {e}", path.display()));
+        let conn = open_conn(&path, limits.vacuum_rebuild_indexes)
+            .unwrap_or_else(|e| panic!("open the card store at {}: {e}", path.display()));
         Self::configure(&conn, limits.reopen).expect("configure the card store connection");
         // `restore_complete` starts at 0: only the end of a full restore (`mark_restore_complete`)
         // vouches for the corpus, so a boot killed half-way through the restore is rebuilt.
@@ -377,11 +404,15 @@ impl CardStore {
     /// every start deleted it; now a bad row would panic on EVERY start, permanently. `count(*)` alone
     /// is answered from metadata, so it does not prove the card column is readable — only reading and
     /// parsing every card does.
-    fn try_reuse(path: &Path, read_limit: &str) -> Result<(Connection, ResidentCards, i64), Refusal> {
+    fn try_reuse(
+        path: &Path,
+        read_limit: &str,
+        vacuum_rebuild_indexes: &str,
+    ) -> Result<(Connection, ResidentCards, i64), Refusal> {
         if !path.exists() {
             return Err(Refusal::NotEligible("no database file".to_owned()));
         }
-        let conn = Connection::open(path)
+        let conn = open_conn(path, vacuum_rebuild_indexes)
             .map_err(|e| Refusal::NotEligible(format!("the file does not open cleanly: {e}")))?;
         Self::configure(&conn, read_limit)
             .map_err(|e| Refusal::OutOfMemory(format!("cannot configure the connection at {read_limit}: {e}")))?;
@@ -463,6 +494,8 @@ impl CardStore {
     /// their unqualified names, which DuckDB requires.
     fn rewrite_compact(data_dir: &Path, path: &Path, rebuild_limit: &str) -> Result<usize, String> {
         let rebuild = data_dir.join(format!("{CARD_DB_FILE}.rebuild"));
+        // TRDD-USSG465Q: the source is opened plain on purpose. This connection only reads the old file and runs one
+        // checkpoint, so it has no use for the vacuum option. Its one bulk INSERT goes into the fresh file and deletes nothing.
         let conn = Connection::open(path).map_err(|e| format!("open {} for the rewrite: {e}", path.display()))?;
         Self::configure(&conn, rebuild_limit)
             .map_err(|e| format!("configure the rewrite connection at {rebuild_limit}: {e}"))?;
@@ -528,26 +561,28 @@ impl CardStore {
         let bytes_after = std::fs::metadata(path)
             .unwrap_or_else(|e| panic!("stat the rewritten {}: {e}; the file is kept", path.display()))
             .len();
-        let (conn, parsed, next_seq, warning) = match Self::try_reuse(path, limits.reopen) {
-            Ok((conn, parsed, next_seq)) => (conn, parsed, next_seq, None),
-            Err(Refusal::OutOfMemory(reason)) => {
-                let (conn, parsed, next_seq) = Self::try_reuse(path, limits.rebuild).unwrap_or_else(|refusal| {
-                    panic!(
-                        "the rewritten {} does not load at the rebuild limit {}: {}; the file is kept",
-                        path.display(),
-                        limits.rebuild,
-                        refusal.text()
-                    )
-                });
-                let warning = format!("the fresh file does not load at the reopen limit {}: {reason}", limits.reopen);
-                (conn, parsed, next_seq, Some(warning))
-            }
-            Err(Refusal::NotEligible(reason)) => panic!(
-                "the rewritten {} does not load at the reopen limit {}: {reason}; the file is kept",
-                path.display(),
-                limits.reopen
-            ),
-        };
+        let (conn, parsed, next_seq, warning) =
+            match Self::try_reuse(path, limits.reopen, limits.vacuum_rebuild_indexes) {
+                Ok((conn, parsed, next_seq)) => (conn, parsed, next_seq, None),
+                Err(Refusal::OutOfMemory(reason)) => {
+                    let (conn, parsed, next_seq) =
+                        Self::try_reuse(path, limits.rebuild, limits.vacuum_rebuild_indexes).unwrap_or_else(|refusal| {
+                            panic!(
+                                "the rewritten {} does not load at the rebuild limit {}: {}; the file is kept",
+                                path.display(),
+                                limits.rebuild,
+                                refusal.text()
+                            )
+                        });
+                    let warning = format!("the fresh file does not load at the reopen limit {}: {reason}", limits.reopen);
+                    (conn, parsed, next_seq, Some(warning))
+                }
+                Err(Refusal::NotEligible(reason)) => panic!(
+                    "the rewritten {} does not load at the reopen limit {}: {reason}; the file is kept",
+                    path.display(),
+                    limits.reopen
+                ),
+            };
         let running = if warning.is_some() { limits.rebuild } else { limits.reopen };
         if let Some(w) = &warning {
             eprintln!(
@@ -1144,6 +1179,19 @@ fn swap_in_rebuild(data_dir: &Path) -> Result<Option<String>, String> {
     Ok(None)
 }
 
+/// TRDD-USSG465Q: the connection config of every open of the card file. It carries the option
+/// `vacuum_rebuild_indexes` (see `VACUUM_REBUILD_INDEXES`). A `Config` is consumed by `open_with_flags`, so
+/// each open builds its own.
+fn card_db_config(value: &str) -> agentlens_store::duckdb::Result<agentlens_store::duckdb::Config> {
+    agentlens_store::duckdb::Config::default().with("vacuum_rebuild_indexes", value)
+}
+
+/// TRDD-USSG465Q: opens the card file with the option applied. It returns the open's own errors
+/// unchanged; no caller matches on error text.
+fn open_conn(path: &Path, value: &str) -> agentlens_store::duckdb::Result<Connection> {
+    Connection::open_with_flags(path, card_db_config(value)?)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1440,6 +1488,88 @@ mod tests {
         assert_eq!(threads, 2);
     }
 
+    /// TRDD-USSG465Q — the card file opens with `vacuum_rebuild_indexes` at u64::MAX, both on the first open and on
+    /// the reuse path that every later boot takes. The expected value is the literal, not the constant, so a changed
+    /// constant cannot pass the test.
+    #[test]
+    fn the_card_file_opens_with_vacuum_rebuild_indexes_at_u64_max() {
+        let dir = data_dir("vacuum-setting");
+        let setting = |store: &CardStore| -> String {
+            store
+                .conn
+                .query_row("SELECT value FROM duckdb_settings() WHERE name = ?", ["vacuum_rebuild_indexes"], |r| r.get(0))
+                .expect("read back vacuum_rebuild_indexes")
+        };
+        let store = CardStore::open(&dir);
+        assert_eq!(setting(&store), "18446744073709551615", "the first open must apply u64::MAX");
+        store.mark_restore_complete();
+        drop(store);
+        let reused = CardStore::open(&dir);
+        assert!(reused.reused(), "the second open must take the reuse path");
+        assert_eq!(setting(&reused), "18446744073709551615", "the reuse path must apply u64::MAX too");
+    }
+
+    /// TRDD-USSG465Q — eleven rounds of upserts of the same eight cards, each checkpointed, leave the file no bigger
+    /// than after the first round: the dead rows of earlier versions are reclaimed, not kept.
+    #[test]
+    fn repeated_upserts_do_not_grow_the_card_file() {
+        let dir = data_dir("vacuum-growth");
+        let mut s = CardStore::open(&dir);
+        let mut used = Vec::new();
+        for round in 0..11 {
+            for id in 0..8 {
+                s.put(&blob_card(id, round));
+            }
+            s.conn.execute_batch("CHECKPOINT").expect("checkpoint the round");
+            used.push(
+                s.conn
+                    .query_row("SELECT used_blocks FROM pragma_database_size()", [], |r| r.get::<_, i64>(0))
+                    .expect("read the used blocks"),
+            );
+        }
+        assert!(
+            used[10] <= used[0] + 2,
+            "the used blocks grew from {} after round 1 to {} after round 11: {used:?}",
+            used[0],
+            used[10]
+        );
+    }
+
+    /// TRDD-USSG465Q — a setting DuckDB refuses panics before any card file is touched, and the file keeps its bytes.
+    #[test]
+    fn a_refused_vacuum_setting_panics_before_the_card_file_is_touched() {
+        let dir = data_dir("vacuum-refused");
+        let mut s = CardStore::open(&dir);
+        for id in 0..3 {
+            s.put(&blob_card(id, 0));
+        }
+        s.mark_restore_complete();
+        drop(s);
+        let path = dir.join(CARD_DB_FILE);
+        let before = std::fs::read(&path).expect("read the card file before the refused open");
+        let payload = match std::panic::catch_unwind(|| {
+            CardStore::open_with_limits(
+                &dir,
+                OpenLimits {
+                    read: MEMORY_LIMIT,
+                    rebuild: REBUILD_MEMORY_LIMIT,
+                    reopen: MEMORY_LIMIT,
+                    vacuum_rebuild_indexes: "not-a-number",
+                },
+            )
+        }) {
+            Ok(_) => panic!("a refused setting must panic, not open the store"),
+            Err(payload) => payload,
+        };
+        let message = payload
+            .downcast_ref::<String>()
+            .cloned()
+            .or_else(|| payload.downcast_ref::<&str>().map(|s| s.to_string()))
+            .unwrap_or_default();
+        assert!(message.contains("refusing to touch the card files"), "the panic must name the refusal: {message}");
+        assert_eq!(std::fs::read(&path).ok(), Some(before), "the card file must keep its bytes");
+    }
+
     /// TRDD-0BDOV3WC — one card of the churn corpus: a root card with a 270000-character payload whose
     /// last-active instant moves with `round`, so every round is an upsert that changes the row.
     fn blob_card(id: usize, round: usize) -> Value {
@@ -1455,7 +1585,16 @@ mod tests {
     /// TRDD-0BDOV3WC — the churn corpus: 8 cards and 1 + 10 rounds of puts through the production path, so
     /// the file holds the dead rows of 88 upserts. With `keep_wal` the last round is left in the WAL.
     fn churned_corpus(dir: &Path, keep_wal: bool) {
-        let mut s = CardStore::open(dir);
+        // TRDD-USSG465Q: an OLD-build file. At "0" the setting keeps the dead rows that the rewrite tests must compact.
+        let mut s = CardStore::open_with_limits(
+            dir,
+            OpenLimits {
+                read: MEMORY_LIMIT,
+                rebuild: REBUILD_MEMORY_LIMIT,
+                reopen: MEMORY_LIMIT,
+                vacuum_rebuild_indexes: "0",
+            },
+        );
         for round in 0..11 {
             if keep_wal && round == 10 {
                 s.conn.execute_batch("PRAGMA disable_checkpoint_on_shutdown").expect("keep the last round in the WAL");
@@ -1496,14 +1635,17 @@ mod tests {
         let path = dir.join(CARD_DB_FILE);
         let before = canon(&path);
         let bytes_before = std::fs::metadata(&path).expect("stat the corpus").len();
-        match CardStore::try_reuse(&path, "4MiB") {
+        match CardStore::try_reuse(&path, "4MiB", VACUUM_REBUILD_INDEXES) {
             Err(Refusal::OutOfMemory(text)) => {
                 assert!(text.contains("Out of Memory Error"), "precondition: unexpected text: {text}")
             }
             Err(Refusal::NotEligible(text)) => panic!("precondition: the one-shot read must run out of memory: {text}"),
             Ok(_) => panic!("precondition: the one-shot read at 4MiB must be refused"),
         }
-        let store = CardStore::open_with_limits(&dir, OpenLimits { read: "4MiB", rebuild: "256MiB", reopen: "12MiB" });
+        let store = CardStore::open_with_limits(
+            &dir,
+            OpenLimits { read: "4MiB", rebuild: "256MiB", reopen: "12MiB", vacuum_rebuild_indexes: VACUUM_REBUILD_INDEXES },
+        );
         match store.open_outcome() {
             OpenOutcome::Rewritten { rows, bytes_before: recorded, bytes_after, warning } => {
                 assert_eq!(*rows, 8, "every card is copied");
@@ -1545,7 +1687,10 @@ mod tests {
             assert!(!leftover.exists(), "{} must not remain", leftover.display());
         }
         assert!(!dir.join(format!("{CARD_DB_FILE}.wal")).exists(), "no WAL after a clean close");
-        let again = CardStore::open_with_limits(&dir, OpenLimits { read: "12MiB", rebuild: "256MiB", reopen: "12MiB" });
+        let again = CardStore::open_with_limits(
+            &dir,
+            OpenLimits { read: "12MiB", rebuild: "256MiB", reopen: "12MiB", vacuum_rebuild_indexes: VACUUM_REBUILD_INDEXES },
+        );
         assert!(matches!(again.open_outcome(), OpenOutcome::Reused), "a second open reuses: {:?}", again.open_outcome());
     }
 
@@ -1555,7 +1700,10 @@ mod tests {
     fn a_failed_rewrite_falls_back() {
         let dir = data_dir("rewrite-fail");
         churned_corpus(&dir, false);
-        let store = CardStore::open_with_limits(&dir, OpenLimits { read: "4MiB", rebuild: "4MiB", reopen: "12MiB" });
+        let store = CardStore::open_with_limits(
+            &dir,
+            OpenLimits { read: "4MiB", rebuild: "4MiB", reopen: "12MiB", vacuum_rebuild_indexes: VACUUM_REBUILD_INDEXES },
+        );
         match store.open_outcome() {
             OpenOutcome::RewriteFailed(reason) => {
                 // DuckDB reports the same memory exhaustion as "Out of Memory Error" in a scan and as
@@ -1662,7 +1810,10 @@ mod tests {
         std::fs::copy(&wal, copy.join(format!("{CARD_DB_FILE}.wal"))).expect("copy the WAL");
         // Opening the copy replays its WAL, so its fingerprint is the logical corpus.
         let expected = canon(&copy.join(CARD_DB_FILE));
-        let store = CardStore::open_with_limits(&dir, OpenLimits { read: "4MiB", rebuild: "256MiB", reopen: "12MiB" });
+        let store = CardStore::open_with_limits(
+            &dir,
+            OpenLimits { read: "4MiB", rebuild: "256MiB", reopen: "12MiB", vacuum_rebuild_indexes: VACUUM_REBUILD_INDEXES },
+        );
         assert!(matches!(store.open_outcome(), OpenOutcome::Rewritten { .. }), "outcome: {:?}", store.open_outcome());
         drop(store);
         assert_eq!(canon(&dir.join(CARD_DB_FILE)), expected, "the rewrite must carry the WAL's rows");
@@ -1677,7 +1828,10 @@ mod tests {
         churned_corpus(&dir, false);
         let path = dir.join(CARD_DB_FILE);
         let before = canon(&path);
-        let store = CardStore::open_with_limits(&dir, OpenLimits { read: "4MiB", rebuild: "256MiB", reopen: "4MiB" });
+        let store = CardStore::open_with_limits(
+            &dir,
+            OpenLimits { read: "4MiB", rebuild: "256MiB", reopen: "4MiB", vacuum_rebuild_indexes: VACUUM_REBUILD_INDEXES },
+        );
         assert!(
             matches!(store.open_outcome(), OpenOutcome::Rewritten { warning: Some(_), .. }),
             "expected a rewrite with a warning, got {:?}",
