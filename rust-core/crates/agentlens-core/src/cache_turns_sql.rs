@@ -143,12 +143,27 @@ pub fn api_calls_relation(store_dir: &Path) -> Option<String> {
          )"
     );
 
+    // WHY two arms in their own CTEs, `paired` and `orphans` (review M2 + M3, TRDD-GVA8TTJF):
+    // - `paired` is ONE row per request PART (QUALIFY per req.stem). The span fallback is a
+    //   cartesian product when several calls share a span with request_body_id '' (review case E:
+    //   2 requests x 2 responses = 4 rows), so without the rule one call fans out into several
+    //   rows. A real response beats a pair whose response part is absent (`resp.stem IS NULL`
+    //   sorts last); the nearest response in time wins, resp.stem breaks ties deterministically.
+    //   This makes call_stem unique in the relation, which cache_turns_relation's per-call
+    //   nearest-turn rule relies on.
+    // - `orphans` is every response PART the paired arm did not consume: NOT EXISTS against
+    //   `paired`, never "no pair row". A pair row whose request half has no part (body not JSON,
+    //   inline / path-less body_ref → req_stem '', not ingested yet, retention-pruned) matched no
+    //   request part, so the old `pr.resp_stem IS NULL` test dropped the response from BOTH arms
+    //   (review cases B and C: 0 rows). Together the arms partition the response parts.
+    //   QUALIFY per resp.stem keeps two response links for one stem (different keys) from
+    //   duplicating the call.
     Some(format!(
         "{pairs}, \
          api_parts AS ({parts}), \
          reqs AS (SELECT * FROM api_parts WHERE kind = 'request'), \
          resps AS (SELECT * FROM api_parts WHERE kind = 'response'), \
-         calls AS ( \
+         paired AS ( \
            SELECT \
              req.stem AS call_stem, \
              COALESCE(req.session_id, pr.session_id) AS session_id, \
@@ -160,9 +175,16 @@ pub fn api_calls_relation(store_dir: &Path) -> Option<String> {
              req.system_fps, req.tools_fp, req.first_user_fp, req.breakpoint_positions, \
              req.billing_header, req.cc_prev_req, req.previous_message_id, \
              true AS request_paired, resp.stem IS NOT NULL AS response_paired, \
-             pr.link_request_id, pr.link_msg_id \
-           FROM reqs req            LEFT JOIN pairs pr ON pr.req_stem = req.stem            LEFT JOIN resps resp ON resp.stem = pr.resp_stem \
-           UNION ALL BY NAME            SELECT \
+             pr.link_request_id, pr.link_msg_id, \
+             resp.stem AS resp_stem \
+           FROM reqs req LEFT JOIN pairs pr ON pr.req_stem = req.stem LEFT JOIN resps resp ON resp.stem = pr.resp_stem \
+           QUALIFY ROW_NUMBER() OVER ( \
+             PARTITION BY req.stem \
+             ORDER BY resp.stem IS NULL, abs(COALESCE(resp.ts_ms, 0) - COALESCE(req.ts_ms, 0)), resp.stem \
+           ) = 1 \
+         ), \
+         orphans AS ( \
+           SELECT \
              resp.stem AS call_stem, \
              COALESCE(resp.session_id, rl.link_session_id) AS session_id, \
              resp.ts_ms AS ts_ms, resp.model AS model, \
@@ -174,10 +196,15 @@ pub fn api_calls_relation(store_dir: &Path) -> Option<String> {
              NULL::VARCHAR AS cc_prev_req, NULL::VARCHAR AS previous_message_id, \
              false AS request_paired, false AS response_paired, \
              rl.link_request_id, rl.link_msg_id \
-           FROM resps resp            LEFT JOIN pairs pr ON pr.resp_stem = resp.stem            LEFT JOIN (SELECT link_stem, link_request_id, link_msg_id, link_session_id FROM links WHERE link_kind = 'response') rl \
+           FROM resps resp LEFT JOIN (SELECT link_stem, link_request_id, link_msg_id, link_session_id, link_ts FROM links WHERE link_kind = 'response') rl \
              ON regexp_replace(parse_filename(rl.link_stem, true), '\\.(request|response)$', '') = resp.stem \
-           WHERE pr.resp_stem IS NULL \
-         ) \
+           WHERE NOT EXISTS (SELECT 1 FROM paired p WHERE p.resp_stem = resp.stem) \
+           QUALIFY ROW_NUMBER() OVER ( \
+             PARTITION BY resp.stem \
+             ORDER BY rl.link_ts DESC NULLS LAST, rl.link_session_id, rl.link_msg_id \
+           ) = 1 \
+         ), \
+         calls AS (SELECT * EXCLUDE (resp_stem) FROM paired UNION ALL BY NAME SELECT * FROM orphans) \
          SELECT * FROM calls"
     ))
 }
@@ -197,6 +224,14 @@ pub fn cache_turns_relation(store_dir: &Path, data_dir: &Path, since_ms: Option<
     // to cross-check that view, so any other formula disagrees by construction: the old
     // creation / (input + read) fraction left the write out of its denominator and gave ~33,333
     // for a full cold write.
+    // WHY `matched` (review M3, TRDD-GVA8TTJF): each call is assigned to its ONE nearest turn of
+    // its session within 60 s (QUALIFY per call_stem — unique because api_calls_relation emits one
+    // row per call), and turns then LEFT JOIN that assignment. A plain turns LEFT JOIN api_calls on
+    // the 60 s window put a call on EVERY turn of the session within the window — two prompts
+    // under 60 s apart listed one cold write twice, each with a different writePct. The QUALIFY
+    // is NOT on the turn-anchored join: there it would collapse every call-less turn (all NULL
+    // call_stem, one partition) and drop a turn whose only candidate went to a nearer turn.
+    // Turns are keyed by (session_id, prompt key), the same key the `turns` collapse partitions by.
     Some(format!(
         "WITH \
          turns AS ( \
@@ -209,7 +244,18 @@ pub fn cache_turns_relation(store_dir: &Path, data_dir: &Path, since_ms: Option<
              FROM {statusline} sl \
            ) WHERE rn = 1 \
          ), \
-         api_calls AS ({api}) \
+         api_calls AS ({api}), \
+         matched AS ( \
+           SELECT api.*, sl.session_id AS turn_session_id, \
+                  COALESCE(sl.prompt_id, 'tick:' || CAST(sl.ts AS VARCHAR)) AS turn_key \
+           FROM api_calls api JOIN turns sl \
+             ON api.session_id = sl.session_id AND abs(COALESCE(api.ts_ms, 0) - sl.ts) <= 60_000 \
+           QUALIFY ROW_NUMBER() OVER ( \
+             PARTITION BY api.call_stem \
+             ORDER BY abs(COALESCE(api.ts_ms, 0) - sl.ts), sl.ts DESC, \
+                      COALESCE(sl.prompt_id, 'tick:' || CAST(sl.ts AS VARCHAR)) \
+           ) = 1 \
+         ) \
          SELECT \
            sl.session_id, sl.ts, sl.model_id AS model, \
            COALESCE(sl.prompt_id, '') AS prompt_id, \
@@ -225,8 +271,9 @@ pub fn cache_turns_relation(store_dir: &Path, data_dir: &Path, since_ms: Option<
                 ELSE NULL END AS writePct, \
            api.call_stem, api.request_paired, api.response_paired \
          FROM turns sl \
-         LEFT JOIN api_calls api \
-           ON api.session_id = sl.session_id AND abs(COALESCE(api.ts_ms, 0) - sl.ts) <= 60_000"
+         LEFT JOIN matched api \
+           ON api.turn_session_id = sl.session_id \
+          AND api.turn_key = COALESCE(sl.prompt_id, 'tick:' || CAST(sl.ts AS VARCHAR))"
     ))
 }
 
@@ -355,7 +402,12 @@ fn duck_to_json(v: agentlens_store::duckdb::types::Value) -> Result<Value, Strin
         D::UBigInt(n) => num(n as f64),
         D::Float(f) => num(f as f64),
         D::Double(f) => num(f),
-        D::Decimal(_) | D::Timestamp(_, _) => num(0.0),
+        // WHY an Err, never a number (review M5, TRDD-GVA8TTJF): this arm used to answer 0 for
+        // every DECIMAL and TIMESTAMP — a fabricated measurement for a literal like `0.5` or any
+        // `::DECIMAL`/timestamp expression. statusline_store::duck_to_json, the original this
+        // copies, refuses both; the caller casts explicitly instead.
+        D::Decimal(d) => return Err(format!("cache-turns: DECIMAL {d} not JSON-able — CAST it AS DOUBLE")),
+        D::Timestamp(_, _) => return Err("cache-turns: TIMESTAMP not JSON-able — use epoch_ms(...) or CAST AS VARCHAR".into()),
         D::Text(s) => Value::String(s),
         D::Blob(_) => return Err("cache-turns: BLOB column not JSON-able".into()),
         D::Date32(_) | D::Time64(_, _) => return Err("cache-turns: date/time not JSON-able".into()),
@@ -692,4 +744,135 @@ mod cache_turns_sql_tests {
         assert_eq!(rows[0]["link_msg_id"], Value::Null);
         let _ = std::fs::remove_dir_all(&data);
     }
+
+
+    #[test]
+    fn response_survives_when_its_pair_link_exists_but_the_request_part_does_not() {
+        // Review M2 case B: request link + response link + response PART only. The pair row exists,
+        // but its request half has no api_call part, so the paired arm cannot emit the response;
+        // the old orphan arm (`no pair row`) skipped it too, and the call was lost (0 rows).
+        let data = tmp("m2b");
+        seed_store(&data, &[("req_rb.response.json", response_body("msg_b", "claude-opus-5"), T0 + 900)]);
+        seed_links(&data, &[
+            link_row("sess-m2b", "span-m2b", "request", "/b/5a6b7c8d.request.json", "rbid-m2b", "", T0),
+            link_row("sess-m2b", "span-m2b", "response", "/b/req_rb.response.json", "rbid-m2b", "msg_b", T0 + 900),
+        ]);
+        let rows = run_cache_turns_sql(&data.join("store"), &data,
+            "SELECT call_stem, session_id, cache_read_tokens, request_paired, response_paired FROM api_calls",
+            None, None, &HashMap::new()).expect("run outer").expect("run inner");
+        assert_eq!(rows.len(), 1, "the response part survives as its own call: {rows:?}");
+        assert_eq!(rows[0]["call_stem"], json!("req_rb"));
+        assert_eq!(rows[0]["session_id"], json!("sess-m2b"), "session from its own link row");
+        assert_eq!(rows[0]["cache_read_tokens"], json!(900));
+        assert_eq!(rows[0]["request_paired"], json!(false));
+        assert_eq!(rows[0]["response_paired"], json!(false));
+        let _ = std::fs::remove_dir_all(&data);
+    }
+
+    #[test]
+    fn response_survives_when_its_request_body_was_inline() {
+        // Review M2 case C: an inline request body has a path-less body_ref, so its link stem is ''
+        // and req_stem matches no part. The pair (by request_body_id) exists; the response part
+        // must still come out of the orphan arm.
+        let data = tmp("m2c");
+        seed_store(&data, &[("req_rc.response.json", response_body("msg_c", "claude-opus-5"), T0 + 900)]);
+        seed_links(&data, &[
+            link_row("sess-m2c", "span-m2c", "request", "", "rbid-m2c", "", T0),
+            link_row("sess-m2c", "span-m2c", "response", "/b/req_rc.response.json", "rbid-m2c", "msg_c", T0 + 900),
+        ]);
+        let rows = run_cache_turns_sql(&data.join("store"), &data,
+            "SELECT call_stem, session_id, response_paired FROM api_calls",
+            None, None, &HashMap::new()).expect("run outer").expect("run inner");
+        assert_eq!(rows.len(), 1, "the response part survives as its own call: {rows:?}");
+        assert_eq!(rows[0]["call_stem"], json!("req_rc"));
+        assert_eq!(rows[0]["session_id"], json!("sess-m2c"));
+        assert_eq!(rows[0]["response_paired"], json!(false));
+        let _ = std::fs::remove_dir_all(&data);
+    }
+
+    #[test]
+    fn a_call_lands_on_its_nearest_turn_only_when_two_turns_are_within_60s() {
+        // Review M3: two prompts of one session 29.5 s apart, ONE call at T0. Both turns are inside
+        // the 60 s window; the call must appear once, on the nearer turn (p1), and p2 must still
+        // be listed, with no call.
+        let data = tmp("m3");
+        seed_store(&data, &[
+            ("2f8c1a2b.request.json", request_body("sess-m3", "claude-opus-5"), T0),
+            ("req_r1.response.json", response_body("msg_1", "claude-opus-5"), T0 + 900),
+        ]);
+        seed_links(&data, &[
+            link_row("sess-m3", "span-m3", "request", "/b/2f8c1a2b.request.json", "rbid-m3", "", T0),
+            link_row("sess-m3", "span-m3", "response", "/b/req_r1.response.json", "rbid-m3", "msg_1", T0 + 900),
+        ]);
+        seed_statusline_usage(&data, "sess-m3", Some("p1"), T0 + 500, 500, 3000);
+        seed_statusline_usage(&data, "sess-m3", Some("p2"), T0 + 30_000, 0, 3500);
+        let rows = run_cache_turns_sql(&data.join("store"), &data,
+            "SELECT prompt_id, call_stem FROM turns ORDER BY ts",
+            None, None, &HashMap::new()).expect("run outer").expect("run inner");
+        assert_eq!(rows.len(), 2, "one row per turn, the call on one of them: {rows:?}");
+        assert_eq!(rows[0]["prompt_id"], json!("p1"));
+        assert_eq!(rows[0]["call_stem"], json!("2f8c1a2b"), "the nearer turn gets the call");
+        assert_eq!(rows[1]["prompt_id"], json!("p2"));
+        assert_eq!(rows[1]["call_stem"], Value::Null, "the farther turn keeps its row, without the call");
+        let _ = std::fs::remove_dir_all(&data);
+    }
+
+    #[test]
+    fn calls_sharing_a_span_with_empty_request_body_id_stay_one_row_per_request() {
+        // Review M3 case E: two requests and two responses on ONE span, request_body_id '' — the
+        // span fallback pairs them 2 x 2. Each request part must still be exactly one call row.
+        let data = tmp("m3e");
+        seed_store(&data, &[
+            ("aaaa1111.request.json", request_body("sess-e", "claude-opus-5"), T0),
+            ("req_e1.response.json", response_body("msg_e1", "claude-opus-5"), T0 + 900),
+            ("bbbb2222.request.json", request_body("sess-e", "claude-opus-5"), T0 + 10_000),
+            ("req_e2.response.json", response_body("msg_e2", "claude-opus-5"), T0 + 10_900),
+        ]);
+        seed_links(&data, &[
+            link_row("sess-e", "span-e", "request", "/b/aaaa1111.request.json", "", "", T0),
+            link_row("sess-e", "span-e", "response", "/b/req_e1.response.json", "", "msg_e1", T0 + 900),
+            link_row("sess-e", "span-e", "request", "/b/bbbb2222.request.json", "", "", T0 + 10_000),
+            link_row("sess-e", "span-e", "response", "/b/req_e2.response.json", "", "msg_e2", T0 + 10_900),
+        ]);
+        let rows = run_cache_turns_sql(&data.join("store"), &data,
+            "SELECT call_stem, response_paired FROM api_calls WHERE request_paired ORDER BY call_stem",
+            None, None, &HashMap::new()).expect("run outer").expect("run inner");
+        assert_eq!(rows.len(), 2, "one row per request part, never one per pair: {rows:?}");
+        assert_eq!(rows[0]["call_stem"], json!("aaaa1111"));
+        assert_eq!(rows[1]["call_stem"], json!("bbbb2222"));
+        let _ = std::fs::remove_dir_all(&data);
+    }
+
+    #[test]
+    fn write_pct_is_null_when_the_turn_wrote_and_read_nothing() {
+        // write = read = 0 has no write%: the statusline view answers null, and 0/0 must not leak
+        // out as NaN. Asserted in SQL (`IS NULL` is false on a NaN), because num() would turn a
+        // NaN into JSON null and hide the difference.
+        let data = tmp("zero");
+        seed_store(&data, &[("req_r1.response.json", response_body("msg_1", "claude-opus-5"), T0)]);
+        seed_statusline_usage(&data, "sess-z", Some("p1"), T0 + 500, 0, 0);
+        let rows = run_cache_turns_sql(&data.join("store"), &data,
+            "SELECT writePct IS NULL AS write_pct_is_null, isnan(COALESCE(writePct, 0)) AS write_pct_is_nan FROM turns",
+            None, None, &HashMap::new()).expect("run outer").expect("run inner");
+        assert_eq!(rows.len(), 1, "one turn row: {rows:?}");
+        assert_eq!(rows[0]["write_pct_is_null"], json!(true));
+        assert_eq!(rows[0]["write_pct_is_nan"], json!(false));
+        let _ = std::fs::remove_dir_all(&data);
+    }
+
+    #[test]
+    fn decimal_and_timestamp_values_are_an_error_never_a_zero() {
+        // Review M5: duck_to_json answered 0 for DECIMAL and TIMESTAMP — a fabricated measurement.
+        // A bare `0.5` literal is DECIMAL in DuckDB. The conversion runs per row, so the store
+        // holds one call.
+        let data = tmp("m5");
+        seed_store(&data, &[("req_r1.response.json", response_body("msg_1", "claude-opus-5"), T0)]);
+        for sql in ["SELECT 0.5 AS d FROM api_calls", "SELECT TIMESTAMP '2024-01-01 00:00:00' AS t FROM api_calls"] {
+            let r = run_cache_turns_sql(&data.join("store"), &data, sql, None, None, &HashMap::new());
+            let err = r.expect_err(&format!("{sql} must fail, not answer a number"));
+            assert!(err.contains("not JSON-able"), "{sql}: {err}");
+        }
+        let _ = std::fs::remove_dir_all(&data);
+    }
+
 }
