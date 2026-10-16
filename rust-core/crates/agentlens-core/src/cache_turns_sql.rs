@@ -158,22 +158,53 @@ pub fn api_calls_relation(store_dir: &Path) -> Option<String> {
     //   (review cases B and C: 0 rows). Together the arms partition the response parts.
     //   QUALIFY per resp.stem keeps two response links for one stem (different keys) from
     //   duplicating the call.
-    // - `claims` + `paired`: one-per-request is not one-per-response. When pair links map TWO
-    //   request parts to ONE response (span fallback, request_body_id ''), both requests pick it
-    //   and its tokens are counted in two calls. So each response is claimed by at most one
-    //   request — the nearest by ts, call_stem breaking ties — and every losing request keeps its
-    //   row as request-only: all response facts (tokens, msg_id, link ids, resp_stem) are nulled,
-    //   response_paired false. The winner keeps resp_stem, so `orphans` still sees the claimed
-    //   response as consumed and does not emit it a second time.
+    // - `candidates` + `claims` + `paired`: one-per-request is not one-per-response. When pair
+    //   links map TWO request parts to ONE response (span fallback, request_body_id ''), both
+    //   requests pick it and its tokens would be counted in two calls. So each response is
+    //   claimed by at most one request — the nearest by ts, call_stem breaking ties.
+    //   WHY the pairing is decided on KEYS ONLY and the response joined AFTER the claim: the
+    //   previous shape joined the response first and then blanked a hand-written list of its
+    //   columns on the loser — a second copy of "which columns come from the response", so a
+    //   column it missed (or one added to API_VIEW_COLUMNS later) leaked the lost response's data
+    //   onto the loser. Now `candidates`/`claims` carry only stems, the request link's session and
+    //   the distance; `paired` LEFT JOINs the response part and its pair link ON `k.claimed`, so
+    //   every response-derived column is NULL on a losing request by construction. The winner
+    //   keeps resp_stem, so `orphans` still sees the claimed response as consumed.
+    //   WHY the distance is NULL, not 0, when either ts is missing: COALESCE(ts, 0) made a request
+    //   without a timestamp sit at epoch 0, so it could out-claim a timed request whenever the
+    //   response ts happened to be closer to 0. A NULL distance is unknown, not near: it is
+    //   ordered NULLS LAST in both windows, so any timed candidate wins over an untimed one.
     Some(format!(
         "{pairs}, \
          api_parts AS ({parts}), \
          reqs AS (SELECT * FROM api_parts WHERE kind = 'request'), \
          resps AS (SELECT * FROM api_parts WHERE kind = 'response'), \
-         per_request AS ( \
+         candidates AS ( \
            SELECT \
              req.stem AS call_stem, \
-             COALESCE(req.session_id, pr.session_id) AS session_id, \
+             pr.session_id AS pair_session_id, \
+             resp.stem AS cand_stem, \
+             CASE WHEN req.ts_ms IS NULL OR resp.ts_ms IS NULL THEN NULL \
+                  ELSE abs(resp.ts_ms - req.ts_ms) END AS pair_dist \
+           FROM reqs req LEFT JOIN pairs pr ON pr.req_stem = req.stem LEFT JOIN resps resp ON resp.stem = pr.resp_stem \
+           QUALIFY ROW_NUMBER() OVER ( \
+             PARTITION BY req.stem \
+             ORDER BY resp.stem IS NULL, \
+                      CASE WHEN req.ts_ms IS NULL OR resp.ts_ms IS NULL THEN NULL \
+                           ELSE abs(resp.ts_ms - req.ts_ms) END NULLS LAST, \
+                      resp.stem \
+           ) = 1 \
+         ), \
+         claims AS ( \
+           SELECT *, cand_stem IS NOT NULL AND ROW_NUMBER() OVER ( \
+             PARTITION BY cand_stem ORDER BY pair_dist NULLS LAST, call_stem \
+           ) = 1 AS claimed \
+           FROM candidates \
+         ), \
+         paired AS ( \
+           SELECT \
+             k.call_stem, \
+             COALESCE(req.session_id, k.pair_session_id) AS session_id, \
              req.ts_ms AS ts_ms, \
              req.model AS model, \
              resp.cache_read_tokens, resp.cache_creation_tokens, resp.cache_miss_reason, \
@@ -182,37 +213,15 @@ pub fn api_calls_relation(store_dir: &Path) -> Option<String> {
              req.system_fps, req.tools_fp, req.first_user_fp, req.breakpoint_positions, \
              req.billing_header, req.cc_prev_req, req.previous_message_id, \
              true AS request_paired, resp.stem IS NOT NULL AS response_paired, \
-             pr.link_request_id, pr.link_msg_id, \
-             resp.stem AS resp_stem, \
-             abs(COALESCE(resp.ts_ms, 0) - COALESCE(req.ts_ms, 0)) AS pair_dist \
-           FROM reqs req LEFT JOIN pairs pr ON pr.req_stem = req.stem LEFT JOIN resps resp ON resp.stem = pr.resp_stem \
+             pl.link_request_id, pl.link_msg_id, \
+             resp.stem AS resp_stem \
+           FROM claims k JOIN reqs req ON req.stem = k.call_stem \
+             LEFT JOIN resps resp ON k.claimed AND resp.stem = k.cand_stem \
+             LEFT JOIN pairs pl ON k.claimed AND pl.req_stem = k.call_stem AND pl.resp_stem = k.cand_stem \
            QUALIFY ROW_NUMBER() OVER ( \
-             PARTITION BY req.stem \
-             ORDER BY resp.stem IS NULL, abs(COALESCE(resp.ts_ms, 0) - COALESCE(req.ts_ms, 0)), resp.stem \
+             PARTITION BY k.call_stem \
+             ORDER BY pl.link_ts DESC NULLS LAST, pl.link_request_id, pl.link_msg_id \
            ) = 1 \
-         ), \
-         claims AS ( \
-           SELECT *, resp_stem IS NOT NULL AND ROW_NUMBER() OVER ( \
-             PARTITION BY resp_stem ORDER BY pair_dist, call_stem \
-           ) = 1 AS claimed \
-           FROM per_request \
-         ), \
-         paired AS ( \
-           SELECT * EXCLUDE (pair_dist, claimed) REPLACE ( \
-             CASE WHEN claimed THEN cache_read_tokens END AS cache_read_tokens, \
-             CASE WHEN claimed THEN cache_creation_tokens END AS cache_creation_tokens, \
-             CASE WHEN claimed THEN cache_miss_reason END AS cache_miss_reason, \
-             CASE WHEN claimed THEN input_tokens END AS input_tokens, \
-             CASE WHEN claimed THEN output_tokens END AS output_tokens, \
-             CASE WHEN claimed THEN tier_5m_tokens END AS tier_5m_tokens, \
-             CASE WHEN claimed THEN tier_1h_tokens END AS tier_1h_tokens, \
-             CASE WHEN claimed THEN stop_reason END AS stop_reason, \
-             CASE WHEN claimed THEN msg_id END AS msg_id, \
-             claimed AS response_paired, \
-             CASE WHEN claimed THEN link_request_id END AS link_request_id, \
-             CASE WHEN claimed THEN link_msg_id END AS link_msg_id, \
-             CASE WHEN claimed THEN resp_stem END AS resp_stem \
-           ) FROM claims \
          ), \
          orphans AS ( \
            SELECT \
@@ -908,6 +917,93 @@ mod cache_turns_sql_tests {
         assert_eq!(rows[1]["msg_id"], Value::Null);
         assert_eq!(rows[1]["link_msg_id"], Value::Null, "no fact of the lost response survives");
         let _ = std::fs::remove_dir_all(&data);
+    }
+
+
+    #[test]
+    fn a_losing_request_carries_no_response_derived_column() {
+        // TRDD-GVA8TTJF: the response is joined only onto the CLAIMED key, so every column that
+        // pairing fills in must be NULL on the loser. The column set is DERIVED from the query, not
+        // listed here: it is every column that is non-NULL on the winner and NULL on the control —
+        // a request whose pair links exist (so its session resolves through the pair, as the
+        // loser's does) but whose response part was never ingested, so nothing of a response can
+        // reach it. That difference is exactly what the response side contributes. A column added
+        // to the response side later is covered without touching this test.
+        let data = tmp("claim-cols");
+        seed_store(&data, &[
+            ("aaaa1111.request.json", request_body("sess-k", "claude-opus-5"), T0),
+            ("bbbb2222.request.json", request_body("sess-k", "claude-opus-5"), T0 + 10_000),
+            ("cccc3333.request.json", request_body("sess-c", "claude-opus-5"), T0 + 50_000),
+            ("req_k1.response.json", response_body("msg_k1", "claude-opus-5"), T0 + 900),
+        ]);
+        seed_links(&data, &[
+            link_row("sess-k", "span-k", "request", "/b/aaaa1111.request.json", "", "", T0),
+            link_row("sess-k", "span-k", "request", "/b/bbbb2222.request.json", "", "", T0 + 10_000),
+            link_row("sess-k", "span-k", "response", "/b/req_k1.response.json", "", "msg_k1", T0 + 900),
+            link_row("sess-c", "span-c", "request", "/b/cccc3333.request.json", "", "", T0 + 50_000),
+            link_row("sess-c", "span-c", "response", "/b/req_c9.response.json", "", "msg_c9", T0 + 50_900),
+        ]);
+        let rows = run_cache_turns_sql(&data.join("store"), &data,
+            "SELECT * FROM api_calls ORDER BY call_stem",
+            None, None, &HashMap::new()).expect("run outer").expect("run inner");
+        assert_eq!(rows.len(), 3, "winner, loser, control: {rows:?}");
+        let (winner, loser, control) = (&rows[0], &rows[1], &rows[2]);
+        assert_eq!(winner["call_stem"], json!("aaaa1111"));
+        assert_eq!(loser["call_stem"], json!("bbbb2222"));
+        assert_eq!(control["call_stem"], json!("cccc3333"));
+        let response_cols: Vec<&String> = winner.keys()
+            .filter(|c| winner[*c] != Value::Null && control[*c] == Value::Null)
+            .collect();
+        for must in ["cache_read_tokens", "msg_id", "link_msg_id", "link_request_id"] {
+            assert!(response_cols.iter().any(|c| c.as_str() == must),
+                "derived response column set {response_cols:?} lacks {must}: the derivation is broken");
+        }
+        let leaked: Vec<&&String> = response_cols.iter().filter(|c| loser[c.as_str()] != Value::Null).collect();
+        assert!(leaked.is_empty(), "the lost response leaked onto the loser via {leaked:?}; response columns {response_cols:?}");
+        assert_eq!(loser["response_paired"], json!(false));
+        assert_eq!(loser["request_paired"], json!(true));
+        let _ = std::fs::remove_dir_all(&data);
+    }
+
+    #[test]
+    fn a_request_without_a_timestamp_never_out_claims_a_timed_one() {
+        // TRDD-GVA8TTJF: a NULL request ts_ms is an UNKNOWN distance, ordered last — never epoch 0.
+        // The real writer only takes an i64 ts, so the NULL is made by copying a real-writer part
+        // with ts_ms replaced by NULL::BIGINT (the one column changed; every other byte the writer's).
+        // Small epoch values are deliberate: the response sits at 1_000 ms, so under the old
+        // COALESCE(ts, 0) the untimed request scored distance 1_000 and beat the timed one at
+        // distance 49_000. Its stem also sorts first, so a call_stem tie-break alone would pick it.
+        let data = tmp("nullts");
+        let src = tmp("nullts-src");
+        seed_store(&data, &[
+            ("aaaa1111.request.json", request_body("sess-n", "claude-opus-5"), 50_000),
+            ("req_n1.response.json", response_body("msg_n1", "claude-opus-5"), 1_000),
+        ]);
+        seed_store(&src, &[("0a0a0a0a.request.json", request_body("sess-n", "claude-opus-5"), 7)]);
+        let src_dir = src.join("store").join(agentlens_store::API_CALLS_DIR);
+        let dst = data.join("store").join(agentlens_store::API_CALLS_DIR).join("zz-null-ts.parquet");
+        let con = agentlens_store::duckdb::Connection::open_in_memory().unwrap();
+        con.execute_batch(&format!(
+            "COPY (SELECT * REPLACE (NULL::BIGINT AS ts_ms) FROM read_parquet('{}/*.parquet')) TO '{}' (FORMAT PARQUET)",
+            src_dir.display(), dst.display()
+        )).unwrap();
+        seed_links(&data, &[
+            link_row("sess-n", "span-n", "request", "/b/0a0a0a0a.request.json", "", "", 7),
+            link_row("sess-n", "span-n", "request", "/b/aaaa1111.request.json", "", "", 50_000),
+            link_row("sess-n", "span-n", "response", "/b/req_n1.response.json", "", "msg_n1", 1_000),
+        ]);
+        let rows = run_cache_turns_sql(&data.join("store"), &data,
+            "SELECT call_stem, ts_ms, msg_id, response_paired FROM api_calls ORDER BY call_stem",
+            None, None, &HashMap::new()).expect("run outer").expect("run inner");
+        assert_eq!(rows.len(), 2, "two request rows, the response claimed once: {rows:?}");
+        assert_eq!(rows[0]["call_stem"], json!("0a0a0a0a"));
+        assert_eq!(rows[0]["ts_ms"], Value::Null, "the fixture really carries a NULL ts: {rows:?}");
+        assert_eq!(rows[0]["response_paired"], json!(false), "the untimed request must lose: {rows:?}");
+        assert_eq!(rows[1]["call_stem"], json!("aaaa1111"));
+        assert_eq!(rows[1]["response_paired"], json!(true), "the timed request claims the response: {rows:?}");
+        assert_eq!(rows[1]["msg_id"], json!("msg_n1"));
+        let _ = std::fs::remove_dir_all(&data);
+        let _ = std::fs::remove_dir_all(&src);
     }
 
     #[test]
