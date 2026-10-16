@@ -1,10 +1,10 @@
 ---
 trdd-id: 6B7VV2Z7
 title: A current-version card store refusal imports offsets ahead of a stale snapshot and loses idle cards
-column: dev
+column: ai_review
 status: tasked
 created: 2026-10-15T04:28:04+0200
-updated: 2026-10-16T09:40:21+0200
+updated: 2026-10-16T20:15:13+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -22,6 +22,7 @@ pre-block-column:
 blocker-probe: [trddgrep, why, 6B7VV2Z7]
 blocker-holds-if: not-match:READY
 unblock-when: [trdd:A2KNXCNH terminal, trdd:0BDOV3WC terminal, trdd:USSG465Q terminal]
+implementation-commits: [3a5874a5]
 ---
 
 # A current-version card store refusal imports offsets ahead of a stale snapshot and loses idle cards
@@ -43,6 +44,7 @@ Evidence (local, gitignored): reports_dev/6b7vv2z7-optionC-measure.md, reports_d
 - FREQUENCY: after TRDD-0BDOV3WC turns out-of-memory into a stop, this path fires only on a CARD_SCHEMA_VERSION bump, an incomplete restore, a clear in progress, or corruption. Option C adds a permanent write path for a rare event; the section-0 ordering fix is needed regardless.
 - SUPERSEDED 2026-10-15 (see PLAN above): NEXT: proposal for option C plus the ordering fix, with the test recipe in the facts report section 4 (stale snapshot, grown and new transcripts, fresh-store boot, kill-in-boot-sweep reboot, gone-file control, no-watermark fallback).
 2026-10-15: A2KNXCNH landed in 15eb1ff0. B' must also close its residual: after a version bump plus an early death or refused reuse, no stale-version card may be restored for an existing file; add a test for it.
+- 2026-10-16 (card update after commit 3a5874a5, fix(log-reader): a refused store reuse no longer imports read positions ahead of the card snapshot): committed 3a5874a5. Gates, 0 failed in every gate: clippy with -D warnings; agentlens-core 826 passed; workspace 993 passed; release alcore build; pnpm test:unit 3177 passing. Mutations M-lag and M-stale each fail their test, including the outcome asserts. NOT DONE: no mutation removes the eager offsets tombstone in restore_from_snapshot (untested); the rebuilt alcore is not deployed. Evidence: docs_dev/20261016-6b7vv2z7-impl-report.md (gitignored). NEXT ACTION: ai_review of 3a5874a5.
 
 ## Problem
 When the card store refuses to reuse cards.duckdb with a CURRENT ingest version (out-of-memory, a card-schema version mismatch, missing meta, restore_complete != 1, clear_in_progress, open or configure failure, unreadable count or scan, invalid JSON or row), `restore_from_snapshot` restores cards from the NDJSON snapshot and then imports the offsets unconditionally (log_reader.rs:940). Offsets are newer than the snapshot, and the sweep skips every file whose offset record matches (`unchanged()`), so a card missing from or staler in the snapshot is never rebuilt until its file changes. A LOG_INGEST_VERSION bump is NOT affected (a CARD_SCHEMA_VERSION bump IS: it refuses with the log-delta version current): a version-stale restore returns before importing offsets and cold-rescans (log_reader.rs:873-882, verified by MEASURE 2026-10-15). Evidence: reports_dev/0bdov3wc-facts.md Q4, reports_dev/0bdov3wc-measure2.md section 6.
@@ -51,7 +53,7 @@ When the card store refuses to reuse cards.duckdb with a CURRENT ingest version 
 On a current-version refusal, drop the offsets of files whose card is absent from the snapshot (or re-read them), so the sweep rebuilds them.
 
 ## Acceptance
-- [ ] A test: cards in the store, offsets saved, snapshot stale; force a current-version refusal; after restore plus one sweep every card is present.
+- [x] A test: cards in the store, offsets saved, snapshot stale; force a current-version refusal; after restore plus one sweep every card is present.
 
 ## Approval log
 
