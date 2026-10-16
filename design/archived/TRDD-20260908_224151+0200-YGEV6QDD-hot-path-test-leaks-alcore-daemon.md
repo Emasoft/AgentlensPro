@@ -1,9 +1,9 @@
 ---
 trdd-id: YGEV6QDD
 title: The hot-path latency test revives a real alcore daemon on the canonical ports and never stops it
-column: dev
+column: complete
 created: 2026-09-08T22:41:51+0200
-updated: 2026-09-09T12:23:20+0200
+updated: 2026-10-16T21:34:59+0200
 current-owner: main
 task-type: bugfix
 min-approval-requirement: none
@@ -12,11 +12,12 @@ severity: high
 blocked-by: []
 npt: []
 eht: []
-implementation-commits: [e56795ae]
+implementation-commits: [e56795ae, 9830aefa]
 project-id: agentlenspro
 scope: project
 labels: [test, ops, server, leak]
 relevant-rules: []
+status: archived
 ---
 
 # The hot-path latency test revives a real alcore daemon on the canonical ports and never stops it
@@ -72,6 +73,7 @@ tripwire covers a child that exited before the snapshot).
 NEXT ACTION: pid 68584 is stopped only inside the 5JZQFVO8 deploy after the TRDD-81BW1CS9
 decision; pid 2218 belongs to TRDD-4FLTDMHA (origin untraced, out of this card's scope); then
 close this card.
+- 2026-10-16 CLOSED: boxes A1-A3 landed in 9830aefa (test code only: freePort() trio pinned behind the brake; assertNoSurvivingServer stops the server.pid pid only after a ps snapshot shows it carries this --data-dir; a run-level root hook in src/test/setup.js fails on any alcore serve with a --data-dir under os.tmpdir() outliving the suite, simulated leak shown failing). A4: full pnpm run test:unit at 9830aefa exit 0, 3176 passing, 14 pending, 0 failing, no isolation-guard line, no alcore before or after (the tree also carried an unrelated 1-line src/cli/hookInstall.ts change). Caveats accepted: A1 and A2 are met as written but no test fails if they are removed (the brake keeps the path they guard unreached); A3's regex misses a wrapper-launched or renamed binary, a space in the path, and DATA_DIR set without --data-dir (it fails toward missing a leak, never inventing one); its 2 s poll is not load-aware; R2 (no direct test that the brake blocks a revive) stays open as an accepted limitation. Follow-ups own their cards: 4EV3OJ19 (port pins in execRegisteredCommand), 4FLTDMHA, 81BW1CS9. Evidence: docs_dev/20261016-ygev6qdd-{verify,impl,a4}-report.md (gitignored).
 
 ## Why
 
@@ -103,13 +105,14 @@ project's own single-instance guard exists to prevent leaking into.
 
 ## Acceptance
 
-- [ ] The test pins explicit isolated ports (`MCP_PORT`/`UI_PORT`/`OTLP_PORT`) for its temp HOME
+- [x] The test pins explicit isolated ports (`MCP_PORT`/`UI_PORT`/`OTLP_PORT`) for its temp HOME
       so any revive cannot bind the canonical ports.
-- [ ] The test's `finally` reads `<tmp>/.agentlens/server.pid` (if present) and stops that pid,
+- [x] The test's `finally` reads `<tmp>/.agentlens/server.pid` (if present) and stops that pid,
       regardless of which recipe caused the revive.
-- [ ] A runner-level check confirms the process table after the suite has no `alcore` process
+- [x] A runner-level check confirms the process table after the suite has no `alcore` process
       whose `--data-dir` is under `os.tmpdir()`.
-- [ ] `pnpm run test:unit` (or the relevant mocha invocation) passes with the fix in place.
+- [x] `pnpm run test:unit` (or the relevant mocha invocation) passes with the fix in place.
 
 ## Approval log
+- 2026-10-16T21:34:59+0200 — COMPLETE by main-agent@agentlenspro. every transcribed promise met: A1-A3 in 9830aefa, A4 full suite 3176/14/0; N1 pids gone; R1 per-suite brake; R3 carded as 4EV3OJ19.
 
