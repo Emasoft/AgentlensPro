@@ -158,12 +158,19 @@ pub fn api_calls_relation(store_dir: &Path) -> Option<String> {
     //   (review cases B and C: 0 rows). Together the arms partition the response parts.
     //   QUALIFY per resp.stem keeps two response links for one stem (different keys) from
     //   duplicating the call.
+    // - `claims` + `paired`: one-per-request is not one-per-response. When pair links map TWO
+    //   request parts to ONE response (span fallback, request_body_id ''), both requests pick it
+    //   and its tokens are counted in two calls. So each response is claimed by at most one
+    //   request — the nearest by ts, call_stem breaking ties — and every losing request keeps its
+    //   row as request-only: all response facts (tokens, msg_id, link ids, resp_stem) are nulled,
+    //   response_paired false. The winner keeps resp_stem, so `orphans` still sees the claimed
+    //   response as consumed and does not emit it a second time.
     Some(format!(
         "{pairs}, \
          api_parts AS ({parts}), \
          reqs AS (SELECT * FROM api_parts WHERE kind = 'request'), \
          resps AS (SELECT * FROM api_parts WHERE kind = 'response'), \
-         paired AS ( \
+         per_request AS ( \
            SELECT \
              req.stem AS call_stem, \
              COALESCE(req.session_id, pr.session_id) AS session_id, \
@@ -176,12 +183,36 @@ pub fn api_calls_relation(store_dir: &Path) -> Option<String> {
              req.billing_header, req.cc_prev_req, req.previous_message_id, \
              true AS request_paired, resp.stem IS NOT NULL AS response_paired, \
              pr.link_request_id, pr.link_msg_id, \
-             resp.stem AS resp_stem \
+             resp.stem AS resp_stem, \
+             abs(COALESCE(resp.ts_ms, 0) - COALESCE(req.ts_ms, 0)) AS pair_dist \
            FROM reqs req LEFT JOIN pairs pr ON pr.req_stem = req.stem LEFT JOIN resps resp ON resp.stem = pr.resp_stem \
            QUALIFY ROW_NUMBER() OVER ( \
              PARTITION BY req.stem \
              ORDER BY resp.stem IS NULL, abs(COALESCE(resp.ts_ms, 0) - COALESCE(req.ts_ms, 0)), resp.stem \
            ) = 1 \
+         ), \
+         claims AS ( \
+           SELECT *, resp_stem IS NOT NULL AND ROW_NUMBER() OVER ( \
+             PARTITION BY resp_stem ORDER BY pair_dist, call_stem \
+           ) = 1 AS claimed \
+           FROM per_request \
+         ), \
+         paired AS ( \
+           SELECT * EXCLUDE (pair_dist, claimed) REPLACE ( \
+             CASE WHEN claimed THEN cache_read_tokens END AS cache_read_tokens, \
+             CASE WHEN claimed THEN cache_creation_tokens END AS cache_creation_tokens, \
+             CASE WHEN claimed THEN cache_miss_reason END AS cache_miss_reason, \
+             CASE WHEN claimed THEN input_tokens END AS input_tokens, \
+             CASE WHEN claimed THEN output_tokens END AS output_tokens, \
+             CASE WHEN claimed THEN tier_5m_tokens END AS tier_5m_tokens, \
+             CASE WHEN claimed THEN tier_1h_tokens END AS tier_1h_tokens, \
+             CASE WHEN claimed THEN stop_reason END AS stop_reason, \
+             CASE WHEN claimed THEN msg_id END AS msg_id, \
+             claimed AS response_paired, \
+             CASE WHEN claimed THEN link_request_id END AS link_request_id, \
+             CASE WHEN claimed THEN link_msg_id END AS link_msg_id, \
+             CASE WHEN claimed THEN resp_stem END AS resp_stem \
+           ) FROM claims \
          ), \
          orphans AS ( \
            SELECT \
@@ -840,6 +871,42 @@ mod cache_turns_sql_tests {
         assert_eq!(rows.len(), 2, "one row per request part, never one per pair: {rows:?}");
         assert_eq!(rows[0]["call_stem"], json!("aaaa1111"));
         assert_eq!(rows[1]["call_stem"], json!("bbbb2222"));
+        let _ = std::fs::remove_dir_all(&data);
+    }
+
+
+    #[test]
+    fn one_response_named_by_two_request_links_is_claimed_by_one_call_only() {
+        // Review of dfa6749c: two request parts on one span (request_body_id '') and ONE response
+        // part. The span fallback links BOTH requests to that response; one-per-request is not
+        // enough, the response must also be claimed once, or its tokens are counted twice.
+        let data = tmp("claim");
+        seed_store(&data, &[
+            ("aaaa1111.request.json", request_body("sess-k", "claude-opus-5"), T0),
+            ("bbbb2222.request.json", request_body("sess-k", "claude-opus-5"), T0 + 10_000),
+            ("req_k1.response.json", response_body("msg_k1", "claude-opus-5"), T0 + 900),
+        ]);
+        seed_links(&data, &[
+            link_row("sess-k", "span-k", "request", "/b/aaaa1111.request.json", "", "", T0),
+            link_row("sess-k", "span-k", "request", "/b/bbbb2222.request.json", "", "", T0 + 10_000),
+            link_row("sess-k", "span-k", "response", "/b/req_k1.response.json", "", "msg_k1", T0 + 900),
+        ]);
+        let rows = run_cache_turns_sql(&data.join("store"), &data,
+            "SELECT call_stem, cache_read_tokens, msg_id, link_msg_id, request_paired, response_paired FROM api_calls ORDER BY call_stem",
+            None, None, &HashMap::new()).expect("run outer").expect("run inner");
+        assert_eq!(rows.len(), 2, "one row per request part, no orphan for the claimed response: {rows:?}");
+        let with_tokens = rows.iter().filter(|r| r["cache_read_tokens"] == json!(900)).count();
+        assert_eq!(with_tokens, 1, "the response's tokens appear in exactly one call: {rows:?}");
+        // The nearer request (aaaa1111, 900 ms) claims it; the other keeps a request-only row.
+        assert_eq!(rows[0]["call_stem"], json!("aaaa1111"));
+        assert_eq!(rows[0]["response_paired"], json!(true));
+        assert_eq!(rows[0]["msg_id"], json!("msg_k1"));
+        assert_eq!(rows[1]["call_stem"], json!("bbbb2222"));
+        assert_eq!(rows[1]["request_paired"], json!(true));
+        assert_eq!(rows[1]["response_paired"], json!(false));
+        assert_eq!(rows[1]["cache_read_tokens"], Value::Null);
+        assert_eq!(rows[1]["msg_id"], Value::Null);
+        assert_eq!(rows[1]["link_msg_id"], Value::Null, "no fact of the lost response survives");
         let _ = std::fs::remove_dir_all(&data);
     }
 
