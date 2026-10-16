@@ -4,7 +4,7 @@ title: DeltaLog load materializes about 7x its on-disk size, stream the replay
 column: todo
 status: tasked
 created: 2026-10-16T23:25:39+0200
-updated: 2026-10-16T23:35:50+0200
+updated: 2026-10-17T01:14:41+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -33,7 +33,7 @@ TRAP: load() seeds self.written, and save(empty) tombstones only keys that seedi
 
 ## Acceptance
 
-- [ ] DeltaLog::load on a 700k-record body-links log peaks under 300 MiB phys_footprint (baseline 1993 MiB; 300 = the streaming sketch's ~50 MB pass-1 index + DuckDB table up to ~225 MiB, both from the memory-gate report, rounded up), measured in a separate process with alcore's metric.
+- [ ] One cache-turns query on a 700k-record body-links log (the streamed for_each_live path into DuckDB) peaks under 300 MiB phys_footprint, and load()'s own peak is reported as a separate figure that this box does not cover (baseline: load 1993 MiB, query 2217 MiB; 300 = the streaming sketch's ~50 MB pass-1 index + DuckDB table up to ~225 MiB, both from the memory-gate report, rounded up), measured in a separate process with alcore's metric.
 - [ ] load() still seeds self.written with hashes identical to hash_json(to_string(v)) for records written by append_changed, compact and heal_torn_tail (a test per writer).
 - [ ] The TRDD-6B7VV2Z7 card_reuse tests (stale-version tombstone, lagging positions, no double count) and the delta_log tests all still pass.
 - [ ] The real log-sessions card snapshot's load() peak is measured before and after the change (read-only, separate process).
@@ -43,3 +43,4 @@ Baseline, a fact and not a criterion (2026-10-16, docs_dev/20261016-ajgtq007-rea
 
 2026-10-16: priority. The real card-snapshot load costs 478 MiB, about 23% of the 2048 MiB cap, on every refused-reuse boot. It is not the IMMEDIATE trigger: the load-time spike rarely coincides with a death, since only 28 of 1,539 logged cap deaths fall in the first 30 s of uptime (worker count from server.log, read-only). Unmeasured: its share of the steady footprint, and the death rate on refused-reuse boots specifically (load() runs only on those; the 1,539 mix reused and refused boots, and splitting them by the refusal or cold-rescan log lines would answer it). It stays an open hypothesis for the collector's crash loop. Whether its freed pages stay committed in mimalloc and raise the steady footprint is inferred, not measured. So the card is not by itself a release blocker, but it eats about a quarter of the headroom on the upgrade boot HSPUF5XH gates. The 1.1 GB synthetic 700k/1.4M dataset is at $TMPDIR/gva8-memgate (OS tmp, may be purged); the harness that rebuilds it is scripts_dev/gva8ttjf_memgate/.
 2026-10-16: deaths split by boot type (read-only, a copy of server.log; docs_dev/20261016-ajgtq007-deaths-by-boot-type.md, worker-parsed). Boots that REUSED cards.duckdb died at the cap in 565 of 569 starts (median uptime 1.9 min); boots that REFUSED it, the only ones that run load() on the card snapshot, died in 10 of 11 (median 2.4 min). The crash loop happens without this card's load, so this card is not its cause. 11 refused boots are too few to rule out a moderate added effect.
+2026-10-17: box 1 reworded the same day it was written. load() returns the whole map by contract, so only the streamed query path can reach 300 MiB; load()'s reduction is measured separately. Out of scope but recorded: compact() holds the records, the whole new snapshot body and a second replayed map, which is likely about 2 GB for a 700k body-links log at boot (inferred, being measured).
