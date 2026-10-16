@@ -28,8 +28,8 @@ After aa61b49d made lock_timed infallible and 4ebb9196 cleaned five functions, c
 
 ## Acceptance
 
-- [ ] Every listed site is converted, or its reason to stay is recorded.
-- [ ] clippy --workspace --all-targets -D warnings stays clean, and cargo test --workspace passes apart from TRDD-WBYDQH8K's baseline signatures.
+- [ ] The site list is recorded on this card, and every site on it is converted or has its reason to stay recorded.
+- [ ] clippy --workspace --all-targets -D warnings stays clean, and cargo test --workspace passes apart from the watcher-test signatures tracked on TRDD-WBYDQH8K.
 
 ## Notes and lessons learned
 

@@ -4,7 +4,7 @@ title: A client request or a dependency's caught panic can still kill or restart
 column: todo
 status: tasked
 created: 2026-10-16T09:26:09+0200
-updated: 2026-10-16T09:26:28+0200
+updated: 2026-10-16T09:29:18+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -28,11 +28,12 @@ Residual risks of TRDD-3RVTC1HY (542ceca2), which made every panic exit alcore; 
 
 ## Acceptance
 
-- [ ] Every request-path panic source of the forms in (1) is classified reachable or not, with file:line.
+- [ ] Every panic site reachable from the HTTP and MCP handler entry points (scope by tldr impact from each handler, not by a file list) is listed on this card with file:line and classified reachable by client input or not. The list is enumerated with clippy restriction lints run over agentlens-core (indexing_slicing, string_slice, arithmetic_side_effects, integer_division, modulo_arithmetic, panic, unreachable, unwrap_used, expect_used), filtered to that reachable set.
 - [ ] Every reachable one returns an error response instead, with a test that sends that input.
-- [ ] Question (2) is answered with evidence from the dependencies' source (catch_unwind uses on threads alcore shares).
+- [ ] Question (2) is answered with evidence from the dependencies' source: no dependency panics as control flow on a thread alcore shares (a panic hook runs before catch_unwind regains control, so a caught panic is still an exit).
 - [ ] The late-panic restart has a backoff, or a recorded measured reason why none is needed.
 
 ## Notes and lessons learned
 
 2026-10-16: created from the review of c5136f6d: closing 3RVTC1HY and HFY30YBT would otherwise have frozen these risks out of sight.
+2026-10-16: VERIFIED by the main agent: [profile.release] in rust-core/Cargo.toml sets no overflow-checks, so arithmetic overflow wraps rather than panics in shipped builds; publish.yml runs pnpm lint, check-types, check-identities and test:unit but no cargo test and does not call ci.yml (grep for cargo test, uses: ./, nextest, pnpm run). Line numbers hookHandlers.ts:159 and ci.yml:299 are carried from 3RVTC1HY; re-verify when the card is pulled.
