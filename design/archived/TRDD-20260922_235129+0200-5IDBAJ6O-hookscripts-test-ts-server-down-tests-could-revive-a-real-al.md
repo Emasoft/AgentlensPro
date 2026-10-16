@@ -1,9 +1,9 @@
 ---
 trdd-id: 5IDBAJ6O
 title: hookScripts.test.ts server-down tests could revive a real alcore on the real data dir
-column: ai_review
+column: complete
 created: 2026-09-22T23:51:29+0200
-updated: 2026-10-16T11:13:23+0200
+updated: 2026-10-16T20:51:21+0200
 current-owner: agentlenspro-main-session
 created-by: agentlenspro-main-session
 task-type: bugfix
@@ -15,7 +15,7 @@ approved: true
 approval-judge: agentlenspro-main-session
 approval-datetime: 2026-09-22T23:51:29+0200
 implementation-commits: [7734c1ff, 091799ee, 668b7889, dd63e56d]
-status: tasked
+status: archived
 ---
 
 # hookScripts.test.ts server-down tests could revive a real alcore on the real data dir
@@ -24,6 +24,7 @@ status: tasked
 
 - 2026-09-22T23:51:29+0200 — MANDATE issued by agentlenspro-main-session (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-10-16T11:13:23+0200 — column → ai_review by main-agent@agentlenspro. code on main, verification not recorded; the main agent verifies next; triage row 3
+- 2026-10-16T20:51:21+0200 — COMPLETE by main-agent@agentlenspro. ai_review 2026-10-16: all 4 commits on HEAD; isolation verified in setup.js and tests; full suite 3176/14/0. Spawn-env audit not re-verified..
 
 ## Why
 
@@ -50,3 +51,10 @@ The AGENTLENS_NO_REVIVE brake stops only the spawn: reviveDaemonDetached writes 
 
 Default isolation landed in 091799ee (setup.js: temp HOME/DATA_DIR, scrubbed endpoints, sync ports, global NO_REVIVE, containment guard). VERIFIED by the orchestrator: check-types, check-identities, setup.js parses, no stray fixture. REPORTED by the worker, not re-run by the orchestrator: suite 2832/17/6, lint, real-corpus read-only (confirmed on both sides only for OpenCode). The guard is detective, not preventive (a test that points DATA_DIR at a real dir and restores it within itself is invisible to it). A spawn-env audit and a live-tmp-server clause are in progress (round 4).
 In commit 668b7889's message, the 92-call-site spawn audit and the mutation-check result are the workers' reports, not re-run by the orchestrator (who verified check-identities, zero username hits, and that setup.js parses).
+2026-10-16 closing note: round 4 landed in 668b7889 (live-server data-dir clause, isolationGuard.test.ts); the 'in progress (round 4)' line above is superseded. ai_review on HEAD 9d4ed4dc: full mocha suite 3176 passing, 14 pending, 0 failing; the server-down hook tests pass with AGENTLENS_NO_REVIVE (hookScripts.test.ts:67-82, hookHandlers.ts:362). Not re-verified: the 92-call-site spawn-env audit (claimed in 668b7889's message only). Evidence: docs_dev/20261016-ai-review-3cards-report.md (gitignored).
+
+## Acceptance
+
+- [x] hookScripts server-down tests cannot spawn a revive (AGENTLENS_NO_REVIVE in baseEnv, hookScripts.test.ts:67-82; hookHandlers.ts:362).
+- [x] Every mocha run is isolated by default: temp HOME and DATA_DIR, endpoint vars cleared, containment guard, live-server data-dir clause (setup.js; round-2 and isolationGuard tests pass).
+- [x] Full unit suite green: 3176 passing, 14 pending, 0 failing on HEAD 9d4ed4dc (2026-10-16).

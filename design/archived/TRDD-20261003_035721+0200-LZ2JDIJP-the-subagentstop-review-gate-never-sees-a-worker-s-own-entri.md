@@ -1,10 +1,10 @@
 ---
 trdd-id: LZ2JDIJP
 title: The SubagentStop review gate never sees a worker's own entries so worker writes are never reviewed
-column: ai_review
-status: tasked
+column: complete
+status: archived
 created: 2026-10-03T03:57:21+0200
-updated: 2026-10-16T11:13:24+0200
+updated: 2026-10-16T20:51:20+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -15,6 +15,7 @@ mandated-by: none
 approved: true
 approval-judge: main-agent@agentlenspro
 approval-datetime: 2026-10-03T03:57:21+0200
+implementation-commits: [24094e57]
 ---
 
 # The SubagentStop review gate never sees a worker's own entries so worker writes are never reviewed
@@ -25,3 +26,9 @@ BUG: src/cli/reviewGate.ts scanTranscriptLines does 'if (e?.isSidechain === true
 
 - 2026-10-03T03:57:21+0200 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-10-16T11:13:24+0200 — column → ai_review by main-agent@agentlenspro. code on main (fix 24094e57), verification not recorded; the main agent verifies next; triage row 5
+- 2026-10-16T20:51:20+0200 — COMPLETE by main-agent@agentlenspro. ai_review 2026-10-16: 24094e57 on HEAD; ownAgentId filter verified at src/cli/reviewGate.ts:851; tests pass in the full suite; replay box accepted on the worker report..
+
+## Acceptance
+
+- [x] A worker's own sidechain write blocks at SubagentStop; a grandchild's allows; a role marker mid-sentence does not exempt; the main gate is unchanged (reviewGate.test.ts:1228-1250, all pass in the 2026-10-16 full run 3176/14/0; fix at src/cli/reviewGate.ts:851).
+- [x] Real-data replay since 2026-09-15 reports block counts (accepted on docs_dev/20261003_040651+0200-subagent-gate-fix.md: 8731 transcripts, 491 block; the replay script is lost, not re-run).
