@@ -4,7 +4,7 @@ title: A DuckDB OOM in the boot card restore crash-looped alcore through hook-re
 column: todo
 status: tasked
 created: 2026-09-24T19:26:52+0200
-updated: 2026-09-25T06:11:40+0200
+updated: 2026-10-16T04:35:46+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -36,6 +36,7 @@ OWNER-ADJACENT evidence, orchestrator, 2026-09-24, measured over the whole ~/.ag
 
 - [ ] (a) Remove the cause without a bigger memory_limit: bound the restore to commit every N rows instead of one giant transaction -- a bigger memory_limit's buffers count toward phys_footprint and would move the crash into TRDD-WKLD508O's RSS-cap loop instead of fixing it. Propagating the panic as a Result alone changes nothing (start_sweeper's Err already exits the process); continuing to boot without the card store is forbidden -- fail fast, never silently start with an empty store.
 - [ ] (b) hook-revive (src/cli/hookHandlers.ts::reviveDaemonDetached) needs crash-loop backoff keyed on "died within T seconds of start" -- not "before listening", since TWDGR75R's cards_json OOM dies just after listening and that test would miss it. The counter lives in a file per data dir, updated atomically (2 of 20 sampled spawns raced the current mtime debounce); it resets on a run that survives T seconds, and on a manual command; and it must be VISIBLE (status line / hook output) so a stopped reviver is never a silent outage.
+2026-10-16: TRDD-3RVTC1HY (542ceca2) turns every panic into an exit. A deterministic panic more than 5 min after start escapes REVIVE_CRASH_WINDOW_MS (src/cli/hookHandlers.ts), so the hook revive restarts it with no backoff each time; the supervisor path backs off 1 s to 30 s. Consider classifying a FATAL-line exit as a crash for the backoff regardless of uptime.
 
 ## Open questions
 

@@ -1,10 +1,10 @@
 ---
 trdd-id: 3RVTC1HY
 title: alcore exits on any panic so a steady-state panic cannot leave a live-looking zombie
-column: dev
+column: testing
 status: tasked
 created: 2026-10-15T01:38:48+0200
-updated: 2026-10-16T04:30:34+0200
+updated: 2026-10-16T04:39:54+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -16,11 +16,12 @@ approved: true
 approval-judge: main-agent@agentlenspro
 approval-datetime: 2026-10-15T01:38:48+0200
 blocked-by: []
-eht: [TYJSS45N]
+eht: [TYJSS45N, HFY30YBT]
 pre-block-column: 
 project-id: agentlenspro
 blocker-probe: [trddgrep, why, 3RVTC1HY]
 blocker-holds-if: not-match:READY
+implementation-commits: [542ceca2]
 ---
 
 # alcore exits on any panic so a steady-state panic cannot leave a live-looking zombie
@@ -56,6 +57,7 @@ Every restart re-runs the reuse path, and that path deletes cards.duckdb after a
 - 2026-10-15T01:39:06+0200 — column → blocked by main-agent@agentlenspro. waits for TRDD-0BDOV3WC (every restart re-runs the reuse path)
 - 2026-10-16T00:48:08+0200 — column → todo by main-agent@agentlenspro. blocker TRDD-0BDOV3WC complete (4d5db2dc) Cleared blocked-by (--clear-blocker override).
 - 2026-10-16T01:04:18+0200 — column → dev by main-agent@agentlenspro. implementation started (reviewed proposal 2026-10-16)
+- 2026-10-16T04:35:17+0200 — column → testing by main-agent@agentlenspro. 542ceca2 landed; eht TYJSS45N must be terminal before complete; first test:unit ingest e2e failure undecided
 
 ## Notes and lessons learned
 
@@ -67,3 +69,6 @@ Every restart re-runs the reuse path, and that path deletes cards.duckdb after a
 2026-10-16: with the hook, the state lock can no longer be observed poisoned in alcore (_exit runs before the unwind), so the poisoned-lock recovery in shutdown::flush_with_deadline (shutdown.rs:35) and Outcome::Poisoned (shutdown.rs:24) are dead in the binary path: TRDD-TYJSS45N scope.
 2026-10-16: mutation results: M1 (hook removed) failed at the deadline with 'trigger fired but process did not exit' (run before R1 and R2; neither changes the hook-removed path); M2 (_exit removed) failed on the exit-code assertion, because the hook's alarm backstop killed the process with signal 14 about 10 s later. The test pins 'exits with status 1 through the hook'; it does not distinguish _exit from std::process::exit; that choice rests on the destructor-blocking argument, not on a test. R1 (alarm armed once, by the first panic) verified by reading the code; a panic stream is not reproducible in CI. Gates: clippy clean; exit_on_panic passes intact; cargo test --workspace 988 passed, 0 failed (load 16 at start, 213 at end); release build passed; pnpm run test:unit 3177 passing, 13 pending, 0 failing (load 19 at start). An earlier test:unit run had one failure (ingest end to end, loaded=0) with load 18 at start and 337 at end; the clean rerun passed.
 2026-10-16: SIGALRM disposition reset to SIG_DFL at startup, verified by reading (the test cannot tell it apart, _exit fires first). The inherited signal MASK is not reset: the live collector (pid 55408, started by the shipped spawn path) shows a blocked mask of 0 (`ps -o blocked= -p 55408`), so SIGALRM is assumed unblocked; macOS ps cannot show the ignored set.
+2026-10-16: correction to 542ceca2's commit message: it says both failures were seen only at load 200-337. The log_reader_parity.rs:510 watcher failure (left 3, right 4) ran at load 11-18, before the review fixes; it is a library test that does not spawn alcore, so the bin-only hook cannot cause it. The ingest end-to-end failure (loaded=0) ran from load 18 to 337.
+2026-10-16: box 4 is ticked on the clean test:unit rerun (3177 passing, release alcore built 03:59 after the last source change 03:08). The first run's ingest end-to-end failure (collect loaded=0 failed=0 timeouts=0) has cause UNDECIDED: its server.log was in a cleaned temp dir, and an exit-on-panic kill before the spool seal is not excluded (a seal-timing race at load 337 predicts the same symptom). Follow-up rerun under load with server.log kept: see the next note when it lands.
+2026-10-16: correction to the box-4 note above: the ingest end-to-end suite starts rust-core/target/debug/alcore (src/test/ingestEndToEnd.test.ts:18), not the release build, so the 03:59 release-binary check does not apply to it; the debug binary in the clean rerun came from the final-source cargo test --workspace run. On a failing run the test body throws before stopServer, and its finally block SIGKILLs silently, so the missing 'server stopped' line in the first run is expected. HFY30YBT added as an effects-handling task: the client-triggered kill is an effect of 542ceca2.
