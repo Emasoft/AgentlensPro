@@ -38,7 +38,7 @@ TRAP: load() seeds self.written, and save(empty) tombstones only keys that seedi
 - [ ] The TRDD-6B7VV2Z7 card_reuse tests (stale-version tombstone, lagging positions, no double count) and the delta_log tests all still pass.
 - [ ] The real log-sessions card snapshot's load() peak is measured before and after the change (read-only, separate process).
 Baseline, a fact and not a criterion (2026-10-16, docs_dev/20261016-ajgtq007-real-snapshot-report.md, copies in tmp, separate process): the real log-sessions log (74.8 MB, 41,714 records) peaks at 478.0 MiB under load(), 6.70x on disk; log-offsets (11.3 MB) peaks at 91.1 MiB. The 'after' half of this box's measurement is box 4.
-- [ ] DeltaLog::load()'s own peak on n700000 is measured and is at most half its 1993 MiB baseline, since the old peak held the raw bytes, every line's Value and a clone of each v, and the streamed replay holds one map (the target is reasoned, not measured; revise it from the first measurement, with the reason recorded).
+- [ ] DeltaLog::load()'s own peak on n700000 is measured and is at most half its 1993 MiB baseline, since the old peak held the raw bytes, every line's Value and a clone of each v, and the streamed replay holds one map (at most 997 MiB; the target is reasoned, not measured, and may only be made STRICTER after measuring — loosening it needs a separate owner decision recorded on this card before the box can be ticked).
 
 ## Notes and lessons learned
 
