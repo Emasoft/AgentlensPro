@@ -4,7 +4,7 @@ title: DeltaLog load materializes about 7x its on-disk size, stream the replay
 column: dev
 status: tasked
 created: 2026-10-16T23:25:39+0200
-updated: 2026-10-17T01:42:19+0200
+updated: 2026-10-17T01:43:12+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -48,3 +48,4 @@ Baseline, a fact and not a criterion (2026-10-16, docs_dev/20261016-ajgtq007-rea
 2026-10-16: deaths split by boot type (read-only, a copy of server.log; docs_dev/20261016-ajgtq007-deaths-by-boot-type.md, worker-parsed). Boots that REUSED cards.duckdb died at the cap in 565 of 569 starts (median uptime 1.9 min); boots that REFUSED it, the only ones that run load() on the card snapshot, died in 10 of 11 (median 2.4 min). The crash loop happens without this card's load, so this card is not its cause. 11 refused boots are too few to rule out a moderate added effect.
 2026-10-17: box 1 reworded the same day it was written. load() returns the whole map by contract, so only the streamed query path can reach 300 MiB; load()'s reduction is measured separately. Out of scope but recorded: compact() holds the records, the whole new snapshot body and a second replayed map, which is likely about 2 GB for a 700k body-links log at boot (inferred, being measured).
 2026-10-17 after 4493f824 (two-pass streaming replay), worker-measured on n700000 in separate processes, docs_dev/20261017-ajgtq007-streaming-report.md. Query 2311.6 to 780.7 MiB: the replay is 98.6 MiB and the remaining roughly 680 MiB is DuckDB (the in-memory body_links table and query). Box 1 is NOT met. load() 1995.2 to 1564.5 MiB, because it still returns a map of serde Values; box at 997 MiB NOT met. compact() peaks at 3337.3 MiB, unchanged and over the cap: a boot that compacts a 700k body-links log would die. That is a real boot risk once body-links grows (live has none today). Next candidates, none started: (a) DuckDB, with a memory_limit and temp spill, or not materializing the table; (b) load() holding raw JSON strings or RawValue instead of Value, if callers allow; (c) compact() streaming from the replay into the new snapshot without a second full map. The review's heal-between-passes concern does not hold: heal only appends a newline, and pass 2 reads up to pass 1's length (worker's reading of the code). CI installs toolchain stable and local rustc is 1.97, so is_none_or is fine.
+2026-10-17 STATE in one line: replay streamed (4493f824); query 781 MiB and load() 1565 MiB are still over their boxes; compact() moved to TRDD-1RJBOEI1.
