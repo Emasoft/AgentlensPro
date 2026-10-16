@@ -51,6 +51,56 @@ fn size_of(p: &Path) -> u64 {
     fs::metadata(p).map(|m| m.len()).unwrap_or(0)
 }
 
+
+/// TRDD-AJGTQ007 — a live key's winning line: (position of its file in the replay's file list,
+/// byte offset of the line's first byte in that file).
+type LineLoc = (usize, u64);
+
+/// TRDD-AJGTQ007 — a replay file as pass 1 left it: its path (for messages), its handle (None =
+/// not found = an empty file), and how many bytes pass 1 read. WHY keep the handle open for pass
+/// 2: compaction renames a new snapshot over the old one and deletes the delta; the open handle
+/// still reads the inode pass 1 indexed, so the offsets stay valid. WHY the length: pass 2 never
+/// reads past it, so an append that lands between the passes is not half-seen.
+struct ReplayFile {
+    path: PathBuf,
+    file: Option<fs::File>,
+    len: u64,
+}
+
+/// TRDD-AJGTQ007 — pass 1's result: every replay file, plus live key → winning line in REPLAY
+/// order. The order rule is the old map's: `insert` on a present key keeps its position, a
+/// tombstone `shift_remove`s it, so a key re-inserted after its tombstone moves to the end.
+struct ReplayIndex {
+    files: Vec<ReplayFile>,
+    live: IndexMap<String, LineLoc>,
+}
+
+impl ReplayIndex {
+    /// Every winning line as (file, offset, replay position), sorted by (file, offset) so pass 2
+    /// reads each file once, front to back. Two keys never share a line, so no ties.
+    fn winners(&self) -> Vec<(usize, u64, usize)> {
+        let mut w: Vec<(usize, u64, usize)> = self.live.values().enumerate().map(|(i, &(f, o))| (f, o, i)).collect();
+        w.sort_unstable();
+        w
+    }
+}
+
+/// The 64 KiB read buffer each replay pass streams a file through.
+const REPLAY_BUF: usize = 64 * 1024;
+
+fn is_blank(l: &[u8]) -> bool {
+    l.iter().all(u8::is_ascii_whitespace)
+}
+
+/// One NDJSON line as the replay rule reads it: UTF-8, then a whole-line `Value` parse. WHY a full
+/// `Value` and not a borrowed `{k, d}` header with `v` ignored (TRDD-AJGTQ007): this parse IS the
+/// corrupt-line test, and serde's ignore path skips checks the `Value` parse makes (it accepts a
+/// lone UTF-16 surrogate escape, which `Value` refuses), so a header would accept lines the old
+/// replay called damaged. The `Value` lives for one line only, so the memory goal is unaffected.
+fn parse_line(ln: &[u8]) -> Option<Value> {
+    std::str::from_utf8(ln).ok().and_then(|s| serde_json::from_str::<Value>(s).ok())
+}
+
 /// TRDD-0R0NGVK6 — before any append, repair a delta whose last line has no '\n'. A kill or a
 /// partial write mid-append can leave one; the next append would be glued onto it, and the glued
 /// line, once another line follows, is a corrupt MID-FILE line every later load() refuses (for
@@ -66,7 +116,7 @@ fn size_of(p: &Path) -> u64 {
 /// (cards.duckdb still holds it). Concurrency: appends to one delta are serialized in-process (the
 /// sweeper thread for log-sessions/log-offsets, the state lock for body-links) and pid_lock gives
 /// one server per data dir, so no append races the repair; the body-links SQL reader
-/// (cache_turns_sql.rs install_body_links) reads through load(), which drops a torn tail exactly as
+/// (cache_turns_sql.rs install_body_links) reads through for_each_live, the same replay as load(), which drops a torn tail exactly as
 /// replay does, so the repair cannot make it worse. Checks the last byte first; block-scans
 /// backwards only when needed.
 fn heal_torn_tail(file: &Path) -> Result<(), String> {
@@ -133,62 +183,178 @@ impl DeltaLog {
         }
     }
 
-    /// Read one NDJSON file: blank lines skipped, ONE torn trailing line tolerated, a corrupt line
-    /// anywhere else is an error (the file is damaged — say so instead of silently dropping
-    /// records the caller believes are persisted). A missing file is empty.
+    /// Pass 1 of the replay (TRDD-AJGTQ007): stream each file line by line, never collecting, and
+    /// index live key → winning line. It is also the VALIDATION pass, with read_lines' old rules:
+    /// blank lines skipped, ONE torn trailing line tolerated per file, a corrupt line anywhere else
+    /// an Err, so a damaged file fails before pass 2 hands anyone a record. A missing file is empty.
     ///
-    /// TRDD-0R0NGVK6 — read BYTES and decode per line. The old `read_to_string(..) else empty`
-    /// turned a torn multi-byte UTF-8 char at the tail (or ANY read error) into an empty file,
-    /// silently dropping every record in it. Now only not-found is empty; any other error is Err,
-    /// and a line that fails UTF-8 decoding takes the same torn-tail rule as one that fails JSON.
-    /// Behaviour change: a permission or I/O error used to read as an empty file; it is now an Err —
-    /// fail-fast for log-sessions/log-offsets (the start exits, naming the path), and body-links' boot
-    /// path logs it and skips its compaction (it used to compact a silently-empty delta away).
-    fn read_lines(file: &Path) -> Result<Vec<Value>, String> {
-        let raw = match fs::read(file) {
-            Ok(b) => b,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(e) => return Err(format!("{}: {e}", file.display())),
-        };
-        let blank = |l: &[u8]| l.iter().all(u8::is_ascii_whitespace);
-        let lines: Vec<&[u8]> = raw.split(|b| *b == b'\n').collect();
-        let mut out = Vec::new();
-        for (i, ln) in lines.iter().enumerate() {
-            if blank(ln) {
-                continue;
-            }
-            match std::str::from_utf8(ln).ok().and_then(|s| serde_json::from_str::<Value>(s).ok()) {
-                Some(v) => out.push(v),
-                None => {
-                    if lines[i + 1..].iter().all(|l| blank(l)) {
-                        break;
+    /// TRDD-0R0NGVK6 — decode bytes per line: a line that fails UTF-8 takes the same torn-tail rule
+    /// as one that fails JSON, only not-found is empty, and any other open or read error is an Err
+    /// (a permission or I/O error used to read as an empty file, silently dropping its records).
+    /// WHY stream (TRDD-AJGTQ007): the old read_lines held the whole file plus a parsed `Value` of
+    /// EVERY line, and replay then cloned each `v` into the map, about 7x the on-disk size at the
+    /// peak (1993 MiB for a 271 MB body-links log, docs_dev/20261016-gva8ttjf-memory-gate-report.md).
+    fn index_files(files: &[&Path]) -> Result<ReplayIndex, String> {
+        use std::io::{BufRead, BufReader};
+        let mut ix = ReplayIndex { files: Vec::with_capacity(files.len()), live: IndexMap::new() };
+        for (fi, path) in files.iter().enumerate() {
+            let file = match fs::File::open(path) {
+                Ok(f) => f,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    ix.files.push(ReplayFile { path: path.to_path_buf(), file: None, len: 0 });
+                    continue;
+                }
+                Err(e) => return Err(format!("{}: {e}", path.display())),
+            };
+            let io = |e: std::io::Error| format!("{}: {e}", path.display());
+            let mut rd = BufReader::with_capacity(REPLAY_BUF, &file);
+            let mut buf = Vec::new();
+            let (mut off, mut line_no) = (0u64, 0usize);
+            let mut torn: Option<usize> = None;
+            loop {
+                buf.clear();
+                let n = rd.read_until(b'\n', &mut buf).map_err(io)?;
+                if n == 0 {
+                    break;
+                }
+                line_no += 1;
+                let start = off;
+                off += n as u64;
+                let ln = buf.strip_suffix(b"\n").unwrap_or(&buf);
+                if is_blank(ln) {
+                    continue;
+                }
+                // A bad line is tolerated only when nothing but blank lines follows it.
+                if let Some(bad) = torn {
+                    return Err(format!("{}: corrupt line {bad} (not a torn tail — the file is damaged)", path.display()));
+                }
+                let Some(l) = parse_line(ln) else {
+                    torn = Some(line_no);
+                    continue;
+                };
+                // The replay rule itself, unchanged: a line without a string `k` is ignored, `d`
+                // equal to 1 deletes, otherwise a present `v` (even null) wins.
+                let Some(k) = l.get("k").and_then(Value::as_str) else { continue };
+                if l.get("d").and_then(Value::as_u64) == Some(1) {
+                    ix.live.shift_remove(k);
+                } else if l.get("v").is_some() {
+                    match ix.live.get_mut(k) {
+                        Some(loc) => *loc = (fi, start),
+                        None => {
+                            ix.live.insert(k.to_owned(), (fi, start));
+                        }
                     }
-                    return Err(format!("{}: corrupt line {} (not a torn tail — the file is damaged)", file.display(), i + 1));
                 }
             }
+            drop(rd);
+            ix.files.push(ReplayFile { path: path.to_path_buf(), file: Some(file), len: off });
         }
-        Ok(out)
+        Ok(ix)
+    }
+
+    /// Pass 2 of the replay (TRDD-AJGTQ007): re-read each file front to back, only up to pass 1's
+    /// length, and hand each WINNING line's `v` to `f(replay position, key, v)` by move, in
+    /// (file, offset) order. Superseded and tombstoned lines are skipped unparsed, and nothing is
+    /// kept: the peak is pass 1's index plus whatever `f` keeps. Every winner reaches `f` exactly
+    /// once, or this is an Err.
+    fn visit_winners(
+        files: &[ReplayFile],
+        winners: &[(usize, u64, usize)],
+        mut f: impl FnMut(usize, String, Value) -> Result<(), String>,
+    ) -> Result<(), String> {
+        use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
+        let mut next = winners.iter().peekable();
+        for (fi, rf) in files.iter().enumerate() {
+            if next.peek().is_none_or(|w| w.0 != fi) {
+                continue; // no winner in this file: do not read it again
+            }
+            let Some(file) = rf.file.as_ref() else {
+                return Err(format!("{}: pass 2 found no handle for a file pass 1 indexed", rf.path.display()));
+            };
+            let io = |e: std::io::Error| format!("{}: {e}", rf.path.display());
+            let mut fr: &fs::File = file;
+            fr.seek(SeekFrom::Start(0)).map_err(io)?;
+            let mut rd = BufReader::with_capacity(REPLAY_BUF, fr.take(rf.len));
+            let mut buf = Vec::new();
+            let mut off = 0u64;
+            while let Some(&&(wf, woff, pos)) = next.peek() {
+                if wf != fi {
+                    break;
+                }
+                buf.clear();
+                let n = rd.read_until(b'\n', &mut buf).map_err(io)?;
+                let start = off;
+                off += n as u64;
+                if n == 0 || start > woff {
+                    return Err(format!("{}: the line at byte {woff} that pass 1 indexed is gone", rf.path.display()));
+                }
+                if start < woff {
+                    continue;
+                }
+                next.next();
+                let ln = buf.strip_suffix(b"\n").unwrap_or(&buf);
+                let changed = || format!("{}: the line at byte {woff} changed after pass 1 indexed it", rf.path.display());
+                let Some(Value::Object(mut l)) = parse_line(ln) else { return Err(changed()) };
+                let Some(Value::String(k)) = l.remove("k") else { return Err(changed()) };
+                let Some(v) = l.remove("v") else { return Err(changed()) };
+                f(pos, k, v)?;
+            }
+        }
+        match next.next() {
+            Some(&(wf, woff, _)) => Err(format!("{}: the line at byte {woff} that pass 1 indexed was never reached", files[wf].path.display())),
+            None => Ok(()),
+        }
     }
 
     /// Replay files in order into a fresh map — the ONE definition of "how lines become state",
-    /// shared by load() and compaction's verify.
+    /// shared by load(), compaction's verify and for_each_live. TRDD-AJGTQ007: built on the two
+    /// streaming passes, so the map holds each live record ONCE. WHY placeholders: pass 1 fixes
+    /// the order, pass 2 delivers values in file order (not the same: insert a, insert b, update a
+    /// is order a, b but file order b, a), so each value is dropped into its slot by position.
     fn replay(files: &[&Path]) -> Result<IndexMap<String, Value>, String> {
-        let mut map = IndexMap::new();
-        for file in files {
-            for l in Self::read_lines(file)? {
-                let Some(k) = l.get("k").and_then(Value::as_str) else { continue };
-                if l.get("d").and_then(Value::as_u64) == Some(1) {
-                    map.shift_remove(k);
-                } else if let Some(v) = l.get("v") {
-                    map.insert(k.to_owned(), v.clone());
-                }
+        let ix = Self::index_files(files)?;
+        let winners = ix.winners();
+        let ReplayIndex { files, live } = ix;
+        let mut map: IndexMap<String, Value> = live.into_keys().map(|k| (k, Value::Null)).collect();
+        Self::visit_winners(&files, &winners, |pos, k, v| {
+            let Some((key, slot)) = map.get_index_mut(pos) else { return Err(format!("replay position {pos} out of range")) };
+            if *key != k {
+                return Err(format!("replay position {pos} holds {key:?}, the winning line says {k:?}"));
             }
-        }
+            *slot = v;
+            Ok(())
+        })?;
         Ok(map)
+    }
+
+    /// TRDD-AJGTQ007 — stream every live record of [snapshot, delta] to `f(key, v)` WITHOUT
+    /// building the map: the same two passes as `replay`, so the same last-wins, tombstone and
+    /// torn-tail rules, but the records arrive in file and line order of their winning lines, not
+    /// in replay order, and `self.written` is not touched. For a consumer that copies records
+    /// elsewhere (cache_turns_sql.rs install_body_links). Returns how many records it visited.
+    pub fn for_each_live(&self, mut f: impl FnMut(&str, Value) -> Result<(), String>) -> Result<usize, String> {
+        let ix = Self::index_files(&[&self.snapshot_path, &self.delta_path])?;
+        let winners = ix.winners();
+        Self::visit_winners(&ix.files, &winners, |pos, k, v| {
+            if ix.live.get_index(pos).map(|(key, _)| key.as_str()) != Some(k.as_str()) {
+                return Err(format!("replay position {pos} does not hold {k:?}"));
+            }
+            f(&k, v)
+        })?;
+        Ok(ix.live.len())
     }
 
     /// Snapshot, then deltas, later lines win. Seeds the written-hashes so the first save after a
     /// restart does not re-append every record.
+    ///
+    /// TRDD-AJGTQ007: the replay underneath streams (index_files, then visit_winners), so the peak
+    /// is the returned map plus a key index, not the files' bytes plus every line's `Value` plus a
+    /// clone of each `v`. WHY the seeding still re-serializes each record: save(empty) tombstones
+    /// only the keys seeded here, which the TRDD-6B7VV2Z7 fix relies on, and a hash of
+    /// `serde_json::to_string(v)` is exactly what changed_lines compares against. The `v` handed
+    /// over is the same parser's output from the same bytes as before, so the hashes are
+    /// byte-identical to the old load's; hashing the raw line bytes instead would not be (key order
+    /// and number spelling can differ from what to_string prints).
     pub fn load(&mut self) -> Result<IndexMap<String, Value>, String> {
         let map = Self::replay(&[&self.snapshot_path, &self.delta_path])?;
         self.written = map.iter().map(|(k, v)| (k.clone(), hash_json(&serde_json::to_string(v).unwrap_or_default()))).collect();
@@ -321,8 +487,9 @@ impl DeltaLog {
 
     /// TRDD-N6A8VX3G — unconditional compaction for boot, bypassing save()'s size gate: after
     /// load(), one verified snapshot rewrite drops the delta, bounding it to per-boot volume and
-    /// healing a torn trailing line a hard kill can leave (read_lines tolerates ONE torn tail, and
-    /// the body-links SQL consumer reads through load() too — cache_turns_sql.rs install_body_links —
+    /// healing a torn trailing line a hard kill can leave (replay tolerates ONE torn tail, and
+    /// the body-links SQL consumer reads through the same replay — cache_turns_sql.rs install_body_links,
+    /// via for_each_live —
     /// so this is cleanup, not a precondition for reading).
     /// No-op while the delta is empty: the snapshot already holds everything.
     pub fn compact_now(&mut self, records: &IndexMap<String, Value>) -> Result<u64, String> {

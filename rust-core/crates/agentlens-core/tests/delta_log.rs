@@ -225,3 +225,179 @@ fn a_delta_that_is_only_a_torn_fragment_is_replaced_by_the_append() {
     log.append_changed(&d).unwrap();
     assert_eq!(DeltaLog::new(&dir, "o").load().unwrap(), d);
 }
+
+
+/// TRDD-AJGTQ007 — every live record for_each_live visits, collected into a map (its own visit
+/// order is file/line order of the winning lines, so compare as sets of (key, value)).
+fn visit_all(log: &DeltaLog) -> Result<std::collections::BTreeMap<String, Value>, String> {
+    let mut seen = std::collections::BTreeMap::new();
+    let n = log.for_each_live(|k, v| {
+        assert!(seen.insert(k.to_owned(), v).is_none(), "{k} visited twice");
+        Ok(())
+    })?;
+    assert_eq!(n, seen.len());
+    Ok(seen)
+}
+
+fn sorted(m: &IndexMap<String, Value>) -> std::collections::BTreeMap<String, Value> {
+    m.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
+}
+
+/// TRDD-AJGTQ007 — the streaming replay keeps the old map's rules: the LAST line of a key wins
+/// (across snapshot then delta), and a tombstone deletes; for_each_live sees the same records.
+#[test]
+fn streaming_replay_last_line_wins_and_a_tombstone_deletes() {
+    let dir = tmp("stream-rules");
+    std::fs::write(dir.join("r.snapshot.ndjson"), "{\"k\":\"a\",\"v\":{\"n\":1}}\n{\"k\":\"b\",\"v\":{\"n\":2}}\n{\"k\":\"c\",\"v\":{\"n\":3}}\n").unwrap();
+    std::fs::write(dir.join("r.delta.ndjson"), "{\"k\":\"a\",\"v\":{\"n\":10}}\n{\"k\":\"b\",\"d\":1}\n{\"k\":\"a\",\"v\":{\"n\":11}}\n").unwrap();
+    let log = DeltaLog::new(&dir, "r");
+    let m = DeltaLog::new(&dir, "r").load().unwrap();
+    assert_eq!(m, recs(&[("a", json!({"n":11})), ("c", json!({"n":3}))]));
+    assert_eq!(visit_all(&log).unwrap(), sorted(&m));
+}
+
+/// TRDD-AJGTQ007 — order is the old IndexMap's: an updated key KEEPS its first position, a key
+/// re-inserted after its tombstone moves to the END. Not the file order of the winning lines
+/// (that would put "a" after "b" here).
+#[test]
+fn streaming_replay_preserves_the_old_map_order() {
+    let dir = tmp("stream-order");
+    std::fs::write(dir.join("o.snapshot.ndjson"), "{\"k\":\"a\",\"v\":1}\n{\"k\":\"b\",\"v\":2}\n{\"k\":\"c\",\"v\":3}\n").unwrap();
+    std::fs::write(dir.join("o.delta.ndjson"), "{\"k\":\"b\",\"v\":20}\n{\"k\":\"a\",\"d\":1}\n{\"k\":\"d\",\"v\":4}\n{\"k\":\"a\",\"v\":5}\n{\"k\":\"c\",\"v\":30}\n").unwrap();
+    let m = DeltaLog::new(&dir, "o").load().unwrap();
+    let order: Vec<&str> = m.keys().map(String::as_str).collect();
+    assert_eq!(order, ["b", "c", "d", "a"]);
+    assert_eq!(m, recs(&[("b", json!(20)), ("c", json!(30)), ("d", json!(4)), ("a", json!(5))]));
+}
+
+/// TRDD-AJGTQ007 — the per-line rules the old replay applied to an odd line: no string `k` is
+/// ignored, `d` must be the integer 1 to delete (1.0 is not), a `v` of null IS a record, and a
+/// duplicate field takes its last value (the `Value` parse's own rule).
+#[test]
+fn streaming_replay_keeps_the_odd_line_rules() {
+    let dir = tmp("stream-odd");
+    std::fs::write(
+        dir.join("q.delta.ndjson"),
+        "{\"k\":\"a\",\"v\":1}\n{\"k\":\"b\",\"v\":2}\n[1,2]\n7\n{\"v\":9}\n{\"k\":5,\"v\":9}\n{\"k\":\"a\",\"d\":1.0}\n{\"k\":\"n\",\"v\":null}\n{\"k\":\"x\",\"v\":1,\"v\":2}\n{\"k\":\"b\",\"d\":2}\n",
+    )
+    .unwrap();
+    let m = DeltaLog::new(&dir, "q").load().unwrap();
+    assert_eq!(m, recs(&[("a", json!(1)), ("b", json!(2)), ("n", Value::Null), ("x", json!(2))]));
+    assert_eq!(visit_all(&DeltaLog::new(&dir, "q")).unwrap(), sorted(&m));
+}
+
+/// TRDD-AJGTQ007 — a torn trailing line in EITHER file is tolerated (per file, as before), and
+/// for_each_live tolerates it too.
+#[test]
+fn streaming_replay_tolerates_a_torn_tail_in_each_file() {
+    let dir = tmp("stream-torn");
+    std::fs::write(dir.join("t.snapshot.ndjson"), "{\"k\":\"a\",\"v\":1}\n{\"k\":\"b\",\"v\":{\"ha\n\n").unwrap();
+    std::fs::write(dir.join("t.delta.ndjson"), "{\"k\":\"c\",\"v\":3}\n{\"k\":\"d\",\"v\":4}").unwrap();
+    // The delta's last line is COMPLETE without its '\n': it is a record, not a torn tail.
+    let m = DeltaLog::new(&dir, "t").load().unwrap();
+    assert_eq!(m, recs(&[("a", json!(1)), ("c", json!(3)), ("d", json!(4))]));
+    assert_eq!(visit_all(&DeltaLog::new(&dir, "t")).unwrap(), sorted(&m));
+}
+
+/// TRDD-AJGTQ007 — a corrupt line that is NOT the last non-blank one is an Err naming the line,
+/// in the snapshot too, and for_each_live refuses it before visiting any record.
+#[test]
+fn streaming_replay_refuses_a_corrupt_middle_line_before_visiting_anything() {
+    let dir = tmp("stream-corrupt");
+    std::fs::write(dir.join("c.snapshot.ndjson"), "{\"k\":\"a\",\"v\":1}\n\n{\"k\":\"b\",\"v\":\nGARBAGE\n{\"k\":\"c\",\"v\":3}\n").unwrap();
+    let err = DeltaLog::new(&dir, "c").load().unwrap_err();
+    assert!(err.contains("corrupt line 3"), "{err}");
+    let mut visited = 0;
+    let err = DeltaLog::new(&dir, "c").for_each_live(|_, _| {
+        visited += 1;
+        Ok(())
+    });
+    assert!(err.unwrap_err().contains("corrupt line 3"));
+    assert_eq!(visited, 0, "pass 1 validates every line before pass 2 hands over a record");
+}
+
+/// TRDD-AJGTQ007 — an Err from the visitor stops the visit and is returned as is.
+#[test]
+fn for_each_live_propagates_the_visitor_error() {
+    let dir = tmp("stream-err");
+    std::fs::write(dir.join("e.delta.ndjson"), "{\"k\":\"a\",\"v\":1}\n{\"k\":\"b\",\"v\":2}\n").unwrap();
+    let mut calls = 0;
+    let err = DeltaLog::new(&dir, "e").for_each_live(|_, _| {
+        calls += 1;
+        Err("appender failed".into())
+    });
+    assert_eq!(err.unwrap_err(), "appender failed");
+    assert_eq!(calls, 1);
+}
+
+/// TRDD-AJGTQ007 — for_each_live matches load() on the TS engine's own files.
+#[test]
+fn for_each_live_matches_load_on_the_ts_fixtures() {
+    let dir = fixtures().join("delta-log");
+    for name in ["small", "compacted"] {
+        let m = DeltaLog::new(&dir, name).load().unwrap();
+        assert_eq!(visit_all(&DeltaLog::new(&dir, name)).unwrap(), sorted(&m), "{name}");
+    }
+}
+
+/// TRDD-AJGTQ007 — load() seeds `written` with hash_json(to_string(v)) for every record, whoever
+/// wrote it. `written` is private, so this proves it through the two things that read it: an
+/// unchanged save after load() writes ZERO bytes (every hash equals what changed_lines computes),
+/// and save(empty) tombstones EVERY loaded key (the TRDD-6B7VV2Z7 B' fix relies on exactly that).
+fn assert_load_seeds_written(dir: &Path, name: &str, expected: &IndexMap<String, Value>) {
+    let mut log = DeltaLog::new(dir, name);
+    assert_eq!(&log.load().unwrap(), expected);
+    let r = log.save(expected).unwrap();
+    assert_eq!((r.appended, r.deleted, r.bytes), (0, 0, 0), "unchanged save after load() writes nothing");
+    let r = log.save(&IndexMap::new()).unwrap();
+    assert_eq!(r.deleted, expected.len(), "save(empty) tombstones every key load() seeded");
+    assert!(DeltaLog::new(dir, name).load().unwrap().is_empty());
+}
+
+/// Records whose serialization exercises key order, floats, escapes and non-ASCII text.
+fn awkward_records() -> IndexMap<String, Value> {
+    recs(&[
+        ("z", json!({"b": 1, "a": [1.5, -0.0, 1e300, 12345678901234567u64], "s": "q\"\\\n\t€日本"})),
+        ("y", json!({"nested": {"k": null, "t": true}, "ts_ms": 1760000000000i64})),
+        ("x", json!("plain")),
+    ])
+}
+
+/// TRDD-AJGTQ007 — seeding after records written by append_changed.
+#[test]
+fn load_seeds_written_for_records_append_changed_wrote() {
+    let dir = tmp("seed-append");
+    let r = awkward_records();
+    DeltaLog::new(&dir, "s").append_changed(&r).unwrap();
+    assert!(dir.join("s.delta.ndjson").exists() && !dir.join("s.snapshot.ndjson").exists());
+    assert_load_seeds_written(&dir, "s", &r);
+}
+
+/// TRDD-AJGTQ007 — seeding after records written by compaction (the snapshot path).
+#[test]
+fn load_seeds_written_for_records_compaction_wrote() {
+    let dir = tmp("seed-compact");
+    let mut r = awkward_records();
+    let pad = "x".repeat(1024);
+    for i in 0..(COMPACT_MIN_BYTES / 1024 + 50) {
+        r.insert(format!("p-{i}"), json!({"pad": pad, "n": i}));
+    }
+    let res = DeltaLog::new(&dir, "s").save(&r).unwrap();
+    assert!(res.compacted && !dir.join("s.delta.ndjson").exists(), "{res:?}");
+    assert_load_seeds_written(&dir, "s", &r);
+}
+
+/// TRDD-AJGTQ007 — seeding after a record heal_torn_tail completed (a complete last line that only
+/// lacked its '\n', which the heal keeps and terminates).
+#[test]
+fn load_seeds_written_for_a_record_heal_torn_tail_completed() {
+    let dir = tmp("seed-heal");
+    let mut log = DeltaLog::new(&dir, "s");
+    log.save(&recs(&[("a", json!({"n":1}))])).unwrap();
+    append_raw(&dir.join("s.delta.ndjson"), b"{\"k\":\"c\",\"v\":{\"t\":\"\xC3\xA7a\",\"f\":0.1}}");
+    let mut again = DeltaLog::new(&dir, "s");
+    again.load().unwrap();
+    again.append_changed(&recs(&[("d", json!({"n":4}))])).unwrap(); // heals: appends the '\n'
+    let all = recs(&[("a", json!({"n":1})), ("c", json!({"t":"ça","f":0.1})), ("d", json!({"n":4}))]);
+    assert_load_seeds_written(&dir, "s", &all);
+}

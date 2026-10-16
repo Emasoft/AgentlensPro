@@ -70,8 +70,8 @@ const BODY_LINK_FIELDS: [&str; 8] =
 /// `api_calls_relation` (both query entries below do it right after open_duck).
 ///
 /// WHY replay in Rust (review B1, TRDD-GVA8TTJF): the files hold `{"k":key,"v":record}` lines and
-/// `{"k":key,"d":1}` tombstones, and later lines win (delta_log.rs module doc). DeltaLog::load is
-/// DeltaLog::replay over [snapshot, delta] in file and line order — the ONE definition of how lines
+/// `{"k":key,"d":1}` tombstones, and later lines win (delta_log.rs module doc). DeltaLog::for_each_live
+/// streams DeltaLog's replay over [snapshot, delta] in file and line order — the ONE definition of how lines
 /// become state. Reading the files with read_ndjson_auto instead got all of it wrong: `v` comes back
 /// as a STRUCT (binding `t.session_id` is a Binder Error on any real file), every superseded and
 /// tombstoned line is still a row, and there is no line-number column, so a last-wins ROW_NUMBER
@@ -81,26 +81,32 @@ const BODY_LINK_FIELDS: [&str; 8] =
 /// and request_body_ids ARE UUIDs; a UUID column then fails `COALESCE` against the VARCHAR api_call
 /// side (Binder Error) and the `<> ''` guards (Conversion Error). A column declared VARCHAR leaves
 /// nothing to infer. ts_ms is cast to BIGINT once, in the projection.
-/// Errors surface: load() tolerates ONE torn trailing line (a concurrent append in flight) and
+/// Errors surface: the replay tolerates ONE torn trailing line (a concurrent append in flight) and
 /// refuses a corrupt line anywhere else — that Err fails the query, never an empty table.
 fn install_body_links(con: &Connection, data_dir: &Path) -> Result<(), String> {
-    let records = crate::delta_log::DeltaLog::new(data_dir, "body-links").load()?;
     let cols = BODY_LINK_FIELDS.iter().map(|f| format!("{f} VARCHAR")).collect::<Vec<_>>().join(", ");
     con.execute_batch(&format!("CREATE TABLE {BODY_LINKS_TABLE} ({cols});"))
         .map_err(|e| e.to_string())?;
     let mut app = con.appender(BODY_LINKS_TABLE).map_err(|e| e.to_string())?;
-    for v in records.values() {
+    // WHY for_each_live and not load() (TRDD-AJGTQ007): load() built the whole record map first,
+    // and at 700k links that peaked at 1993 MiB, over the 2048 MiB RSS cap with the query on top
+    // (docs_dev/20261016-gva8ttjf-memory-gate-report.md). for_each_live is the same replay (one
+    // definition, review B1) but hands each live record over by move, one at a time, so only its
+    // key index is held while rows go straight into the appender. Its pass 1 validates every line
+    // before the first row is appended, so a corrupt file still fails the query with no rows. Row
+    // order does not matter here: open_duck sets preserve_insertion_order=false.
+    crate::delta_log::DeltaLog::new(data_dir, "body-links").for_each_live(|_, mut v| {
         let row: Vec<Option<String>> = BODY_LINK_FIELDS
             .iter()
-            .map(|f| match v.get(*f) {
+            .map(|f| match v.get_mut(*f).map(Value::take) {
                 None | Some(Value::Null) => None,
-                Some(Value::String(s)) => Some(s.clone()),
+                Some(Value::String(s)) => Some(s),
                 // ts_ms is a JSON number; its decimal text casts back to BIGINT in the projection.
                 Some(other) => Some(other.to_string()),
             })
             .collect();
-        app.append_row(agentlens_store::duckdb::appender_params_from_iter(row)).map_err(|e| e.to_string())?;
-    }
+        app.append_row(agentlens_store::duckdb::appender_params_from_iter(row)).map_err(|e| e.to_string())
+    })?;
     app.flush().map_err(|e| e.to_string())
 }
 
