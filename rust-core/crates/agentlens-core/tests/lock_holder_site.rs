@@ -11,7 +11,7 @@ fn lock_holder_site_is_recorded_cleared_and_named_on_timeout() {
     let m = Arc::new(Mutex::new(CoreState::open(&dir)));
 
     // (a) The guard records its own acquisition line as the holder; dropping it clears the slot.
-    let g = m.lock_timed().unwrap();
+    let g = m.lock_timed();
     let line_a = line!() - 1;
     let (site, _) = current_lock_holder().expect("holder recorded");
     assert!(site.ends_with(&format!("lock_holder_site.rs:{line_a}")), "got {site}");
@@ -22,7 +22,7 @@ fn lock_holder_site_is_recorded_cleared_and_named_on_timeout() {
     let (tx, rx) = std::sync::mpsc::channel();
     let holder = m.clone();
     let t = std::thread::spawn(move || {
-        let _g = holder.lock_timed().unwrap();
+        let _g = holder.lock_timed();
         let line_of_lock = line!() - 1;
         tx.send(line_of_lock).unwrap();
         std::thread::sleep(Duration::from_millis(2000));
@@ -35,7 +35,6 @@ fn lock_holder_site_is_recorded_cleared_and_named_on_timeout() {
         }
         Outcome::TimedOut { holder: None } => panic!("expected a named holder, got None"),
         Outcome::Flushed(_) => panic!("expected TimedOut, got Flushed"),
-        Outcome::Poisoned => panic!("expected TimedOut, got Poisoned"),
     }
     t.join().unwrap();
     let _ = std::fs::remove_dir_all(&dir);

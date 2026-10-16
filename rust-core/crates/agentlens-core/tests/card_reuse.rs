@@ -437,10 +437,10 @@ fn a_stale_version_boot_stamps_at_once_so_a_rescan_killed_before_a_tick_is_kept(
     assert_eq!(s2.full_reads, 1, "only the file that was never appended is read");
 }
 
-/// T6: a poisoned state lock puts nothing and appends nothing — log-offsets on disk is unchanged.
-/// Mutation recorded in the report: append outside the lock's Ok arm.
+/// T6: a poisoned state lock makes ingest_chunk panic before anything is appended, so log-offsets on disk stay unchanged.
+/// The panic is the discriminating assertion; the byte checks after it hold because the panic comes first.
 #[test]
-fn ingest_chunk_on_a_poisoned_lock_appends_no_positions() {
+fn ingest_chunk_on_a_poisoned_lock_panics_and_appends_nothing() {
     let home = dir("t6-home");
     copy_tree(&fixtures().join("logs-home"), &home);
     let data = dir("t6-data");
@@ -458,7 +458,10 @@ fn ingest_chunk_on_a_poisoned_lock_appends_no_positions() {
         assert!(h.join().is_err());
     });
     assert!(b.st.is_poisoned(), "precondition: the lock is poisoned");
-    b.durable.ingest_chunk(&b.st, scanned);
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| b.durable.ingest_chunk(&b.st, scanned)));
+    let payload = outcome.expect_err("a poisoned state lock must make ingest_chunk panic, not skip");
+    let message = payload.downcast_ref::<&str>().copied().or_else(|| payload.downcast_ref::<String>().map(String::as_str)).unwrap_or_default();
+    assert!(message.contains("CoreState lock poisoned"), "panic should name the poisoned lock, got {message:?}");
     assert_eq!(DeltaLog::new(&data, "log-offsets").disk_bytes(), before_bytes, "no bytes appended");
     assert_eq!(std::fs::read(data.join("log-offsets.delta.ndjson")).ok(), before, "log-offsets unchanged");
 }

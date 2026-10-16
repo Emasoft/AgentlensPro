@@ -16,12 +16,6 @@ pub enum Outcome<'a> {
     /// The deadline elapsed while the lock was held elsewhere. Carries the holder site (with how
     /// long it had been held), when known, so the caller can name what it was stuck behind.
     TimedOut { holder: Option<String> },
-    /// Never constructed today — a poisoned mutex is recovered via `into_inner()` (the crate's
-    /// own convention; see `chores.rs`'s `unwrap_or_else(|e| e.into_inner())`) and returned as
-    /// `Flushed` instead, so a prior panic elsewhere never blocks a shutdown flush that could
-    /// still succeed. Kept as a distinct variant so a future caller that needs to tell "recovered
-    /// from poison" apart from "never poisoned" can do so without an API break.
-    Poisoned,
 }
 
 /// Poll `state.try_lock()` for up to `timeout`, then hand back the guard (or the reason it
@@ -32,7 +26,9 @@ pub fn flush_with_deadline(state: &Mutex<CoreState>, timeout: Duration) -> Outco
     loop {
         match state.try_lock() {
             Ok(guard) => return Outcome::Flushed(guard),
-            Err(TryLockError::Poisoned(poisoned)) => return Outcome::Flushed(poisoned.into_inner()),
+            // A poisoned CoreState lock is unreachable in alcore: its panic hook exits the process
+            // before unwinding (TRDD-3RVTC1HY), so this arm fails loud instead of recovering.
+            Err(TryLockError::Poisoned(_)) => panic!("CoreState lock poisoned"),
             Err(TryLockError::WouldBlock) => {
                 if Instant::now() >= deadline {
                     return Outcome::TimedOut {
@@ -62,7 +58,7 @@ mod tests {
         let holder = m.clone();
         let (tx, rx) = std::sync::mpsc::channel();
         let t = std::thread::spawn(move || {
-            let _g = holder.lock_timed().unwrap();
+            let _g = holder.lock_timed();
             tx.send(()).unwrap();
             std::thread::sleep(Duration::from_millis(2000));
         });
@@ -87,14 +83,13 @@ mod tests {
         let m = std::sync::Arc::new(Mutex::new(fresh_state()));
         let holder = m.clone();
         let t = std::thread::spawn(move || {
-            let _g = holder.lock_timed().unwrap();
+            let _g = holder.lock_timed();
             std::thread::sleep(Duration::from_millis(100));
         });
         std::thread::sleep(Duration::from_millis(20));
         match flush_with_deadline(&m, Duration::from_millis(2000)) {
             Outcome::Flushed(_guard) => {}
             Outcome::TimedOut { holder } => panic!("expected Flushed, timed out behind {holder:?}"),
-            Outcome::Poisoned => panic!("expected Flushed, got Poisoned"),
         }
         t.join().unwrap();
     }

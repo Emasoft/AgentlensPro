@@ -66,7 +66,7 @@ pub fn with_chores_lock<T>(data_dir: &Path, body: impl FnOnce() -> T) -> Option<
 /// segment enumeration outside the lock and re-acquire per file, which is only safe once the
 /// index is separable from the writer.
 fn span_tick(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
-    let Ok(mut st) = state.lock_timed() else { return };
+    let mut st = state.lock_timed();
     let data_dir = st.data_dir.clone();
     let days = crate::retention_config::resolve_knob(&data_dir, &crate::retention_config::SPANS_RETENTION_DAYS);
     let ran = with_chores_lock(&data_dir, || {
@@ -127,7 +127,7 @@ pub fn hook_events_retention_days(vars: &std::collections::HashMap<String, Strin
 /// straight through would let `logEventsRetentionDays: 0` wipe the store.
 fn purge_tick(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
     let (data_dir, sl_root) = {
-        let Ok(st) = state.lock_timed() else { return };
+        let st = state.lock_timed();
         (st.data_dir.clone(), st.statusline.root.clone())
     };
 
@@ -283,7 +283,7 @@ pub fn clean_spill_dirs(data_dir: &Path, max_age: Option<Duration>) -> usize {
 
 pub fn bodies_pass(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
     let (data_dir, tap) = {
-        let Ok(st) = state.lock_timed() else { return };
+        let st = state.lock_timed();
         (st.data_dir.clone(), st.spool_tap.clone())
     };
     // The ONE bodies dir, `<data>/otel-bodies` — capture writes straight to it (TRDD-Z53IJFE9
@@ -300,7 +300,8 @@ pub fn bodies_pass(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
     // server.ts:818-823 — the sink precondition, once per pass tick, warnings on TRANSITIONS
     // only (a per-tick repeat is filtered out by the day it matters). TRDD-U0L78B3Z.
     let problem = crate::server_stats::probe_sink(&crate::burn::guard::default_bodies_dir(&data_dir));
-    if let Ok(mut st) = state.lock_timed() {
+    {
+        let mut st = state.lock_timed();
         if problem != st.sink_problem {
             match &problem {
                 Some(p) => eprintln!("{} alcore: bodies sink precondition FAILED: {p} (TRDD-4FMHW124)", crate::log_ts()),
@@ -565,7 +566,8 @@ async fn resident_blob_scan(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
         None,
     );
     let rows = project_resident_blobs(&out);
-    if let Ok(mut st) = state.lock_timed() {
+    {
+        let mut st = state.lock_timed();
         st.latest_resident_blobs = rows;
     }
 }
@@ -692,7 +694,7 @@ fn mi_suffix(mi: &crate::rss_guard::MimallocInfo, live_bytes: Option<u64>) -> St
 /// allocation-heavy step, serializing the sample — runs OFF the lock.
 fn composition_tick(state: &Arc<Mutex<CoreState>>) {
     let (window_count, sample, card_corpus, summary_cached, stripped_cached) = {
-        let st = state.lock_timed().unwrap_or_else(|e| e.into_inner());
+        let st = state.lock_timed();
         let window_count = st.window.spans.len();
         // An even sample across the window, at most 20 handles: cloning an `Arc` is a refcount
         // bump, so the whole lock hold stays in microseconds. `step >= 1` here because the
@@ -1002,7 +1004,7 @@ fn control_passes(delta_pages: i64) -> bool {
 /// seal, spill cleanup).
 pub fn spawn_all(rt: &tokio::runtime::Runtime, bg: &tokio::runtime::Runtime, state: Arc<Mutex<CoreState>>) {
     // Spill dirs are emptied BEFORE any DuckDB connection of this process opens (none has yet).
-    let data_dir = state.lock_timed().unwrap_or_else(|e| e.into_inner()).data_dir.clone();
+    let data_dir = state.lock_timed().data_dir.clone();
     clean_spill_dirs(&data_dir, None);
     let dd = data_dir.clone();
     // TRDD-RVKQDLRD: spill cleanup is disk housekeeping -> `bg`.
@@ -1029,7 +1031,7 @@ pub fn spawn_all(rt: &tokio::runtime::Runtime, bg: &tokio::runtime::Runtime, sta
     // moved to the background task, a live hook event arriving on the freshly bound listener
     // could be ingested before older spooled events. Only the expensive passes below moved.
     {
-        let mut st = state.lock_timed().unwrap_or_else(|e| e.into_inner());
+        let mut st = state.lock_timed();
         let now = crate::now_ms();
         // Boot pass has no lock contention yet — drain the whole backlog, unbounded.
         let d = crate::hook_events::drain_hook_spool(&mut st, now, usize::MAX);
@@ -1107,7 +1109,7 @@ pub fn spawn_all(rt: &tokio::runtime::Runtime, bg: &tokio::runtime::Runtime, sta
     // runs as a child process under its own `.collect.lock` — NOT `with_chores_lock`, which a
     // ten-minute collect would hold against the bodies pass and the status-line seal — so a busy
     // tick is skipped rather than queued. One task awaiting each tick means ticks never overlap.
-    let tap = state.lock_timed().unwrap_or_else(|e| e.into_inner()).spool_tap.clone();
+    let tap = state.lock_timed().spool_tap.clone();
     if let Some(tap) = tap {
         bg.spawn(async move {
             let mut tick = tokio::time::interval(tap.interval());
@@ -1150,7 +1152,8 @@ pub fn spawn_all(rt: &tokio::runtime::Runtime, bg: &tokio::runtime::Runtime, sta
         let mut tick = tokio::time::interval(Duration::from_secs(5));
         loop {
             tick.tick().await;
-            if let Ok(mut st) = s.lock_timed() {
+            {
+                let mut st = s.lock_timed();
                 if st.writer.pending_appends() > 0 {
                     st.flush_spans();
                 }
@@ -1182,7 +1185,8 @@ pub fn spawn_all(rt: &tokio::runtime::Runtime, bg: &tokio::runtime::Runtime, sta
         let mut tick = tokio::time::interval(Duration::from_millis(account_flush));
         loop {
             tick.tick().await;
-            if let Ok(mut st) = s.lock_timed() {
+            {
+                let mut st = s.lock_timed();
                 st.account_timeline.flush();
             }
         }
@@ -1199,7 +1203,8 @@ pub fn spawn_all(rt: &tokio::runtime::Runtime, bg: &tokio::runtime::Runtime, sta
         tick.tick().await; // boot just wrote the start marker
         loop {
             tick.tick().await;
-            if let Ok(mut st) = s.lock_timed() {
+            {
+                let mut st = s.lock_timed();
                 let file = crate::collector_lifecycle::lifecycle_file(&st.data_dir);
                 crate::collector_lifecycle::record_heartbeat(&file, &mut st.lifecycle, crate::now_ms());
             }
@@ -1210,7 +1215,7 @@ pub fn spawn_all(rt: &tokio::runtime::Runtime, bg: &tokio::runtime::Runtime, sta
     // deliberately shares only the root path + the Arc'd counters with the store, NEVER the state
     // lock — a seal must not stall every reader for the length of a re-encode.
     let (sl_root, sl_counters) = {
-        let Ok(st) = state.lock_timed() else { return };
+        let st = state.lock_timed();
         (st.statusline.root.clone(), st.statusline.counters.clone())
     };
     let sl_vars: std::collections::HashMap<String, String> = std::env::vars().collect();
@@ -1248,7 +1253,7 @@ pub fn spawn_all(rt: &tokio::runtime::Runtime, bg: &tokio::runtime::Runtime, sta
         tick.tick().await; // boot pass already drained; wait a full period before the first tick
         loop {
             tick.tick().await;
-            let mut st = s.lock_timed().unwrap_or_else(|e| e.into_inner());
+            let mut st = s.lock_timed();
             let now = crate::now_ms();
             let d = crate::hook_events::drain_hook_spool(&mut st, now, 200);
             log_spool_drain(&d);

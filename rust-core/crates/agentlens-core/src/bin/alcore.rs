@@ -328,7 +328,7 @@ fn main() {
         }
     }
     {
-        let mut st = state.lock_timed().expect("state");
+        let mut st = state.lock_timed();
         st.spool_tap = spool_tap.clone();
         if let Some(reason) = spool_tap_off_reason {
             st.spool_tap_off_reason = reason;
@@ -490,10 +490,8 @@ fn main() {
                 while std::net::TcpStream::connect(ui_addr).is_err() {
                     std::thread::sleep(Duration::from_millis(50));
                 }
-                match trigger_state.lock_timed() {
-                    Ok(_guard) => panic!("alcore: --panic-after-ready test trigger"),
-                    Err(_) => panic!("alcore: --panic-after-ready found the state lock already poisoned"),
-                }
+                let _guard = trigger_state.lock_timed();
+                panic!("alcore: --panic-after-ready test trigger");
             })
             .expect("panic-trigger thread spawns");
     }
@@ -583,10 +581,6 @@ fn main() {
                 stop_timeout.as_millis()
             );
         }
-        // `flush_with_deadline` recovers a poisoned mutex via `into_inner()` and returns
-        // `Flushed` instead — this arm exists only for the enum's API completeness (see
-        // `shutdown::Outcome::Poisoned`'s doc comment for why nothing constructs it today).
-        agentlens_core::shutdown::Outcome::Poisoned => {}
     }
 
     if let Some(h) = sweeper {

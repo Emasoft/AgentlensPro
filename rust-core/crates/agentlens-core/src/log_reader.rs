@@ -1110,7 +1110,8 @@ impl DurableState {
         let mut chunk_filled = 0usize;
         let mut patched_ids: Vec<String> = Vec::with_capacity(take);
         {
-            if let Ok(mut st) = state.lock_timed() {
+            {
+                let mut st = state.lock_timed();
                 for (session_id, sum) in sums {
                     let Some(mut card) = st.cards.get(&session_id) else { continue };
                     let already_filled = card.as_object().is_some_and(|o| o.contains_key("cacheCreate1hTokens"));
@@ -1186,30 +1187,24 @@ impl DurableState {
     /// every other file's position. It also fills the log's `written` hashes, so the next tick
     /// writes only what changed since.
     ///
-    /// 9VX3WTGU ordering: the positions are built before the lock but appended only on the Ok arm
-    /// and only after the guard is dropped, i.e. after this chunk's cards were put (each put is a
-    /// committed DuckDB statement). A poisoned lock puts nothing and appends nothing — a position
-    /// on disk must never describe a file whose card is not in the database.
+    /// A poisoned lock now panics at the first `lock_timed()` (TRDD-TYJSS45N), so neither the puts
+    /// nor the offsets append run. Offsets are still appended strictly after the card puts of this
+    /// chunk (TRDD-9VX3WTGU): the positions are built before the lock and appended only after the
+    /// guard is dropped, and each put is a committed DuckDB statement, so a position on disk never
+    /// describes a file whose card is not in the database.
     pub fn ingest_chunk(&mut self, state: &std::sync::Mutex<crate::CoreState>, chunk: Vec<ScannedFile>) {
         let positions: IndexMap<String, Value> =
             chunk.iter().map(|s| (PathBuf::from(&s.file).to_string_lossy().into_owned(), file_state_record(&s.state))).collect();
-        let appended = match state.lock_timed() {
-            Ok(mut core) => {
-                core.ingest_scanned(chunk);
-                self.mark_dirty();
-                true
-            }
-            Err(_) => {
-                eprintln!("{} alcore: state lock poisoned — a sweep chunk of {} file(s) was not ingested and its read positions were not saved", crate::log_ts(), positions.len());
-                false
-            }
-        };
-        if !appended {
-            return;
+        // WHY: a poisoned state lock must fail loud here, not skip the chunk (the 2026-10-14 stall hid one for 28+ hours).
+        {
+            let mut core = state.lock_timed();
+            core.ingest_scanned(chunk);
+            self.mark_dirty();
         }
         match self.offsets.append_changed(&positions) {
             Ok(r) if r.bytes > 0 => {
-                if let Ok(mut st) = state.lock_timed() {
+                {
+                    let mut st = state.lock_timed();
                     st.persist.offsets_writes += 1;
                     st.persist.offsets_bytes += r.bytes;
                 }
@@ -1233,7 +1228,8 @@ impl DurableState {
         match self.offsets.save(&tailer.export_file_state()) {
             Ok(r) if r.bytes > 0 => {
                 self.stamp_version();
-                if let Ok(mut st) = state.lock_timed() {
+                {
+                    let mut st = state.lock_timed();
                     st.persist.offsets_writes += 1;
                     st.persist.offsets_bytes += r.bytes;
                 }
@@ -1251,7 +1247,7 @@ impl DurableState {
         // resident layer is the same corpus in the same order, so the records are built from the snapshot
         // after the lock is released.
         let snap = {
-            let st = state.lock_timed().expect("core state");
+            let st = state.lock_timed();
             st.cards.persist_snapshot()
         };
         let records = persist_records_from(&snap);
@@ -1259,7 +1255,8 @@ impl DurableState {
         match self.cards.save(&records) {
             Ok(r) if r.bytes > 0 => {
                 self.stamp_version();
-                if let Ok(mut st) = state.lock_timed() {
+                {
+                    let mut st = state.lock_timed();
                     st.persist.cards_writes += 1;
                     st.persist.cards_bytes += r.bytes;
                 }
@@ -1284,13 +1281,14 @@ impl DurableState {
     /// only deferred to the next full save.
     fn save_cards_for(&mut self, state: &std::sync::Mutex<crate::CoreState>, session_ids: &[String]) {
         let records: IndexMap<String, Value> = {
-            let st = state.lock_timed().expect("core state");
+            let st = state.lock_timed();
             session_ids.iter().filter_map(|id| st.cards.get(id).map(|c| (id.clone(), strip_card_for_persist(&c)))).collect()
         };
         match self.cards.append_changed(&records) {
             Ok(r) if r.bytes > 0 => {
                 self.stamp_version();
-                if let Ok(mut st) = state.lock_timed() {
+                {
+                    let mut st = state.lock_timed();
                     st.persist.cards_writes += 1;
                     st.persist.cards_bytes += r.bytes;
                 }
@@ -1509,7 +1507,7 @@ pub fn start_sweeper(
             let mut tailer = LogTailer::default();
             let mut durable = DurableState::open(&data_dir);
             let restored = {
-                let mut st = state.lock_timed().expect("core state");
+                let mut st = state.lock_timed();
                 durable.restore(&mut tailer, &mut st, &env)
             };
             let (restored_cards, offsets_imported, offsets_skipped) = match restored {
@@ -1535,7 +1533,7 @@ pub fn start_sweeper(
                 durable.ingest_chunk(&state, scanned);
             }
             {
-                let mut st = state.lock_timed().expect("core state");
+                let mut st = state.lock_timed();
                 st.log_scan.add(&sweep);
                 st.sweeper = Some(SweeperControl { tx });
             }
@@ -1707,7 +1705,7 @@ pub fn start_sweeper(
                     tailer.sweep_paths(&env, &paths, crate::now_ms())
                 };
                 {
-                    let mut st = state.lock_timed().expect("core state");
+                    let mut st = state.lock_timed();
                     st.log_scan.add(&sweep);
                     if !scanned.is_empty() {
                         durable.mark_dirty();
@@ -1718,7 +1716,7 @@ pub fn start_sweeper(
                 // ingested just above): the corpus is whole again, so the next boot may reuse it.
                 if clear_pending && full_sweep {
                     clear_pending = false;
-                    state.lock_timed().expect("core state").cards.finish_clear();
+                    state.lock_timed().cards.finish_clear();
                 }
                 durable.tick(&tailer, &state, false);
             }

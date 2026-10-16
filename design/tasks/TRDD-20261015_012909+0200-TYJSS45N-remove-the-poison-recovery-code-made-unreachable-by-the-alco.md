@@ -1,10 +1,10 @@
 ---
 trdd-id: TYJSS45N
 title: Remove the poison-recovery code made unreachable by the alcore panic hook
-column: backburner
+column: dev
 status: tasked
 created: 2026-10-15T01:29:09+0200
-updated: 2026-10-15T03:22:10+0200
+updated: 2026-10-16T07:49:14+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -28,8 +28,8 @@ blocker-holds-if:
 After TRDD-3RVTC1HY (a panic hook in the alcore binary that exits the process), the state mutex can no longer be observed poisoned in production. The poison-recovery code becomes unreachable: the `into_inner()` sites (chores.rs:226/234/249/383 per MEASURE section 5, chores.rs:695/1032/1251 per reports_dev/poison-fix-facts.md, summary_engine.rs:166, shutdown.rs:35, lib.rs:1241, and the poison branch of lock_timed at lib.rs:1386-1392) and the poison-to-error mappings in ui.rs (273/398/427/445/4411/4461/4524). Site list: reports_dev/da0gn1cs-measure.md section 5.
 
 ## Acceptance
-- [ ] Only after TRDD-3RVTC1HY lands: each site is removed or rewritten, and each removal is justified by the hook's guarantee.
-- [ ] `lib.rs` `lock_timed_tests::poisoned_mutex_still_yields_a_usable_guard` is kept (a library property) or rewritten to state the new contract.
+- [x] Only after TRDD-3RVTC1HY lands: each site is removed or rewritten, and each removal is justified by the hook's guarantee.
+- [x] `lib.rs` `lock_timed_tests::poisoned_mutex_still_yields_a_usable_guard` is kept (a library property) or rewritten to state the new contract.
 
 ## Approval log
 
@@ -37,7 +37,15 @@ After TRDD-3RVTC1HY (a panic hook in the alcore binary that exits the process), 
 - 2026-10-15T01:42:14+0200 — column → blocked by main-agent@agentlenspro. follows TRDD-3RVTC1HY
 - 2026-10-15T01:50:19+0200 — column → todo by main-agent@agentlenspro. not blocked: it is an EHT of 3RVTC1HY; its body gates the work on 3RVTC1HY landing Cleared blocked-by (--clear-blocker override).
 - 2026-10-15T03:22:06+0200 — column → backburner by main-agent@agentlenspro. pull when TRDD-3RVTC1HY reaches testing: until the panic hook lands the poison-recovery code is still reachable, and a todo card would be drained early
+- 2026-10-16T06:41:49+0200 — column → dev by main-agent@agentlenspro. pulled: 3RVTC1HY in testing (542ceca2); reviewed proposal 2026-10-16
 
 ## Notes and lessons learned
 
 2026-10-15: parked in backburner, not todo: it is an EHT of 3RVTC1HY, and a blocked-by on 3RVTC1HY would make a cycle with that EHT. Pull it when 3RVTC1HY reaches testing.
+2026-10-16: scope corrected (reports_dev/tyjss45n-facts.md): the listed chores.rs 226/234/249/383, ui.rs 273/398/427/445, summary_engine.rs 166 and spool_tap.rs sites are NOT on the CoreState lock; the CoreState sites are the lock_timed() call lines (measured at HEAD: 152 lines contain lock_timed() across src and tests, comments and the trait line included; 91 of them in ui.rs are the state poisoned map_err). The 15 non-CoreState sites stay out of scope: ui.rs 351-357 records rebuild_gate poisoning as deliberately not fatal (a decision, recorded here).
+2026-10-16: decision (main agent, under the owner standing order of 2026-10-05 recorded on TRDD-AVUGZV1K): lock_timed becomes infallible (returns StateGuard, panics with CoreState lock poisoned); this changes the library contract that T6 and the lib unit test pinned. Both become negative tests. T6 used to assert the silent ingest stall as correct.
+2026-10-16: the premise is guarded by tests/exit_on_panic.rs only for a panic hook replaced before readiness on the --no-log-scan startup path; a dependency that called set_hook lazily later would not be caught (no runtime API reports the installed hook).
+2026-10-16: only two direct CoreState acquisitions exist outside the lock_timed impl in production (shutdown.rs try_lock and the lib.rs impl internals), both handled, so the type change enumerates every other site (reports_dev/tyjss45n-proposal-measure.md step 8).
+2026-10-16: mutations and gates: M1 (poison recovered silently, guard returned) -> lib poisoned_mutex_panics_in_lock_timed FAILED (should panic, did not) and card_reuse ingest_chunk_on_a_poisoned_lock_panics_and_appends_nothing FAILED at card_reuse.rs:462 (expect_err: a poisoned state lock must make ingest_chunk panic, not skip); M2 (panic message changed to CoreState mutex poisoned) -> lib poisoned_mutex_panics_in_lock_timed FAILED (note: panic did not contain expected string). Both reverted; lib test passes again. clippy --workspace --all-targets -D warnings: exit 0. Tests: lib 121 passed; card_reuse 17 passed; lock_holder_site 1 passed; exit_on_panic 1 passed; cargo test --workspace 991 passed, 0 failed; release alcore build exit 0; pnpm test:unit 3177 passing, 13 pending, exit 0. 1-minute load 12.4 at workspace end and 19.5 at unit end (start-of-run load not recorded).
+2026-10-16: count correction: 152 is the number of lines containing lock_timed() across src and tests (comments, the trait line and test sites included); 136 is the number of production CoreState sites by category in reports_dev/tyjss45n-facts.md. Both stand, they count different things.
+2026-10-16: box 1 is met for the scope-corrected CoreState list (see the scope note); the 15 non-CoreState sites are out of scope by decision. Guard-scope audit: reports_dev/tyjss45n-guard-audit.md, 44 functions SAFE, 0 risk.

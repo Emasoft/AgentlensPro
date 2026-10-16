@@ -1243,7 +1243,7 @@ async fn handle(
     }
     let t_wait = profile.then(std::time::Instant::now);
     {
-        let mut st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
+        let mut st = state.lock_timed();
         let wait_ns = t_wait.map(|t| t.elapsed().as_nanos() as u64).unwrap_or(0);
         let t_held = profile.then(std::time::Instant::now);
         match parsed {
@@ -1271,7 +1271,7 @@ pub async fn serve_otlp(
     // state lock, and taking the lock just to look at a field that never changes after boot would
     // add a lock wait to every POST of a server that has the tap off. `CoreState.spool_tap` stays
     // the single owner; this is a clone of its `Arc`.
-    let tap = state.lock_timed().unwrap_or_else(|e| e.into_inner()).spool_tap.clone();
+    let tap = state.lock_timed().spool_tap.clone();
     loop {
         let (stream, _) = listener.accept().await?;
         let io = hyper_util::rt::TokioIo::new(stream);
@@ -1324,7 +1324,7 @@ pub fn composition_project_map(summary: &Value) -> std::collections::HashMap<Str
     map
 }
 use std::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
-use std::sync::{LockResult, MutexGuard, PoisonError};
+use std::sync::MutexGuard;
 
 static HOLDER_SITE: AtomicPtr<Location<'static>> = AtomicPtr::new(std::ptr::null_mut());
 static HOLDER_SINCE_NS: AtomicU64 = AtomicU64::new(0);
@@ -1363,9 +1363,8 @@ impl<'a> std::ops::DerefMut for StateGuard<'a> {
 impl<'a> Drop for StateGuard<'a> {
     fn drop(&mut self) {
         let held = self.since.elapsed();
-        // Clear the holder record ONLY if it's still us — a poisoned-then-recovered guard built
-        // via `into_inner()` (see LockTimed::lock_timed below) never set the record, and clearing
-        // it unconditionally there would erase whoever's actually still holding it.
+        // Clear the holder record ONLY if it is still ours: another CoreState mutex in the same process
+        // (test binaries run several) could have set the record after us, and a plain store would erase it.
         let ptr = self.site as *const Location<'static> as *mut Location<'static>;
         let _ = HOLDER_SITE.compare_exchange(ptr, std::ptr::null_mut(), Ordering::AcqRel, Ordering::Relaxed);
         if held >= std::time::Duration::from_millis(lock_trace_threshold_ms()) {
@@ -1375,14 +1374,17 @@ impl<'a> Drop for StateGuard<'a> {
 }
 
 /// `state.lock()` that attributes a long WAIT to whoever is currently holding it, and records
-/// itself as the new holder for the next waiter. Drop-in replacement for `Mutex::lock()`.
+/// itself as the new holder for the next waiter. Drop-in replacement for `Mutex::lock()`, minus
+/// the `Result`: the alcore panic hook (TRDD-3RVTC1HY) exits the process before unwinding, so a
+/// poisoned CoreState lock is never observed in production. In a test binary without that hook,
+/// a poisoned lock panics inside `lock_timed` by design.
 pub trait LockTimed {
-    fn lock_timed(&self) -> LockResult<StateGuard<'_>>;
+    fn lock_timed(&self) -> StateGuard<'_>;
 }
 
 impl LockTimed for Mutex<CoreState> {
     #[track_caller]
-    fn lock_timed(&self) -> LockResult<StateGuard<'_>> {
+    fn lock_timed(&self) -> StateGuard<'_> {
         let site = Location::caller();
         // Snapshot the holder BEFORE blocking. By the time `lock()` returns, the holder that
         // made us wait has released and CLEARED the slot, so a read after acquisition can only
@@ -1410,21 +1412,16 @@ impl LockTimed for Mutex<CoreState> {
             };
             eprintln!("{} alcore: state lock waited {} ms at {}:{}; holder {holder}", crate::log_ts(), waited.as_millis(), site.file(), site.line());
         }
-        match result {
-            Ok(guard) => {
-                HOLDER_SITE.store(site as *const _ as *mut _, Ordering::Release);
-                HOLDER_SINCE_NS.store(now_ns(), Ordering::Release);
-                Ok(StateGuard { guard, site, since: std::time::Instant::now() })
-            }
-            Err(poisoned) => {
-                // Poisoned: still hand back a usable guard (matches every existing call site's
-                // recovery pattern — `unwrap_or_else(|e| e.into_inner())` etc.) but do NOT claim
-                // the holder record, since this guard never went through the "we're now holding
-                // it" path above.
-                let guard = poisoned.into_inner();
-                Err(PoisonError::new(StateGuard { guard, site, since: std::time::Instant::now() }))
-            }
-        }
+        // A poisoned lock means a thread panicked while holding CoreState. alcore's panic hook
+        // (TRDD-3RVTC1HY) exits the process before unwinding, so production never reaches this
+        // panic; a test binary without the hook panics here by design.
+        let guard = match result {
+            Ok(guard) => guard,
+            Err(_) => panic!("CoreState lock poisoned"),
+        };
+        HOLDER_SITE.store(site as *const _ as *mut _, Ordering::Release);
+        HOLDER_SINCE_NS.store(now_ns(), Ordering::Release);
+        StateGuard { guard, site, since: std::time::Instant::now() }
     }
 }
 
@@ -1559,7 +1556,7 @@ mod lock_timed_tests {
     fn lock_timed_guard_locks_and_releases() {
         // The holder-slot checks (HOLDER_SITE) live in tests/lock_holder_site.rs, which runs alone in its own process: this unit-test binary is parallel, so a guard on another mutex can store or clear the process-wide slot while this guard lives (TRDD-7EZE3AIZ).
         let m: Mutex<CoreState> = Mutex::new(fresh_state());
-        let g = m.lock_timed().unwrap();
+        let g = m.lock_timed();
         let _ = &*g;
         drop(g);
         // try_lock, not lock_timed: if the guard failed to release, a blocking relock on this thread would hang instead of failing.
@@ -1567,7 +1564,8 @@ mod lock_timed_tests {
     }
 
     #[test]
-    fn poisoned_mutex_still_yields_a_usable_guard() {
+    #[should_panic(expected = "CoreState lock poisoned")]
+    fn poisoned_mutex_panics_in_lock_timed() {
         let m: Mutex<CoreState> = Mutex::new(fresh_state());
         {
             let wrapped = std::panic::AssertUnwindSafe(&m);
@@ -1576,13 +1574,7 @@ mod lock_timed_tests {
                 panic!("poison it");
             });
         }
-        match m.lock_timed() {
-            Ok(_) => panic!("expected poisoned"),
-            Err(poisoned) => {
-                let guard = poisoned.into_inner();
-                // Just needs to deref to a CoreState without panicking.
-                let _ = guard.data_version;
-            }
-        };
+        // alcore's panic hook makes poisoning unobservable in production; here it must panic, not return a guard.
+        let _ = m.lock_timed();
     }
 }
