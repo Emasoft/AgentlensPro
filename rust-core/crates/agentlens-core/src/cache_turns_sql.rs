@@ -129,17 +129,30 @@ pub fn api_calls_relation(store_dir: &Path) -> Option<String> {
     // Pair request-kind links to response-kind links, request_body_id FIRST (exact key,
     // CC >=2.1.274), else span_id. EVERY guarded key carries <> '' — pre-2.1.274 traffic has
     // '' on both kinds and '' = '' would cross-match different calls.
+    // WHY two equi-join arms under UNION ALL, never one `ON (rbid match) OR (span match)`
+    // (TRDD-GVA8TTJF): DuckDB cannot hash-join a disjunction, so the OR planned a
+    // BLOCKWISE_NL_JOIN — every response link against every request link. Measured with
+    // EXPLAIN ANALYZE on 700k links (350k x 350k): that one operator took 259 s of CPU, the whole
+    // query 135 s. Each arm below is a plain equality, so each plans as a HASH_JOIN.
+    // WHY arm B keeps `COALESCE(s.link_rbid,'') = ''`: it makes the arms DISJOINT on the response
+    // link (arm A requires s.link_rbid <> ''), so UNION ALL yields exactly the rows of the old OR.
+    // Drop it and a response that HAS an rbid also pairs by span with every request on its span:
+    // a second, wrong pair that lets another request claim the response, leaving the right request
+    // unpaired and its own response orphaned. Pinned by rbid_pairs_never_also_pair_by_span.
+    const PAIR_COLS: &str = "r.link_session_id AS session_id, r.link_span_id AS req_span, s.link_span_id AS resp_span, \
+         regexp_replace(parse_filename(r.link_stem, true), '\\.(request|response)$', '') AS req_stem, \
+         regexp_replace(parse_filename(s.link_stem, true), '\\.(request|response)$', '') AS resp_stem, \
+         s.link_request_id, s.link_msg_id, s.link_ts";
     let pairs = format!(
         "WITH links AS ({links}), \
          req_links AS (SELECT * FROM links WHERE link_kind = 'request'), \
          resp_links AS (SELECT * FROM links WHERE link_kind = 'response'), \
          pairs AS ( \
-           SELECT r.link_session_id AS session_id, r.link_span_id AS req_span, s.link_span_id AS resp_span, \
-                  regexp_replace(parse_filename(r.link_stem, true), '\\.(request|response)$', '') AS req_stem, regexp_replace(parse_filename(s.link_stem, true), '\\.(request|response)$', '') AS resp_stem, \
-                  s.link_request_id, s.link_msg_id, s.link_ts \
-           FROM resp_links s JOIN req_links r \
-             ON (s.link_rbid <> '' AND s.link_rbid = r.link_rbid) \
-             OR (COALESCE(s.link_rbid,'') = '' AND s.link_span_id <> '' AND s.link_span_id = r.link_span_id) \
+           SELECT {PAIR_COLS} FROM resp_links s JOIN req_links r ON s.link_rbid = r.link_rbid \
+             WHERE s.link_rbid <> '' \
+           UNION ALL \
+           SELECT {PAIR_COLS} FROM resp_links s JOIN req_links r ON s.link_span_id = r.link_span_id \
+             WHERE COALESCE(s.link_rbid,'') = '' AND s.link_span_id <> '' \
          )"
     );
 
@@ -916,6 +929,53 @@ mod cache_turns_sql_tests {
         assert_eq!(rows[1]["cache_read_tokens"], Value::Null);
         assert_eq!(rows[1]["msg_id"], Value::Null);
         assert_eq!(rows[1]["link_msg_id"], Value::Null, "no fact of the lost response survives");
+        let _ = std::fs::remove_dir_all(&data);
+    }
+
+
+    #[test]
+    fn rbid_pairs_never_also_pair_by_span() {
+        // TRDD-GVA8TTJF: `pairs` is two DISJOINT equi-join arms — by request_body_id, then by
+        // span_id for responses whose request_body_id is ''. Mixed population, exact counts:
+        // - call 1 pairs by rbid and its links share one span: the real-traffic shape that matches
+        //   BOTH arms if the span arm's `COALESCE(s.link_rbid,'') = ''` guard is dropped;
+        // - call 2 pairs by span only (request_body_id '');
+        // - calls 3 and 4 pair by rbid, but call 3's response sits on call 4's span and nearer in
+        //   time to call 4's request. Without the guard, call 4 claims call 3's response, call 3
+        //   goes unpaired and call 4's own response falls out as a fifth, orphan row.
+        let data = tmp("arms");
+        seed_store(&data, &[
+            ("aaaa1111.request.json", request_body("sess-u", "claude-opus-5"), T0),
+            ("req_m1.response.json", response_body("msg_m1", "claude-opus-5"), T0 + 900),
+            ("bbbb2222.request.json", request_body("sess-u", "claude-opus-5"), T0 + 10_000),
+            ("req_m2.response.json", response_body("msg_m2", "claude-opus-5"), T0 + 10_900),
+            ("cccc3333.request.json", request_body("sess-u", "claude-opus-5"), T0 + 20_000),
+            ("req_m3.response.json", response_body("msg_m3", "claude-opus-5"), T0 + 20_900),
+            ("dddd4444.request.json", request_body("sess-u", "claude-opus-5"), T0 + 20_800),
+            ("req_m4.response.json", response_body("msg_m4", "claude-opus-5"), T0 + 25_000),
+        ]);
+        seed_links(&data, &[
+            link_row("sess-u", "span-1", "request", "/b/aaaa1111.request.json", "rbid-1", "", T0),
+            link_row("sess-u", "span-1", "response", "/b/req_m1.response.json", "rbid-1", "msg_m1", T0 + 900),
+            link_row("sess-u", "span-2", "request", "/b/bbbb2222.request.json", "", "", T0 + 10_000),
+            link_row("sess-u", "span-2", "response", "/b/req_m2.response.json", "", "msg_m2", T0 + 10_900),
+            link_row("sess-u", "span-x", "request", "/b/cccc3333.request.json", "rbid-3", "", T0 + 20_000),
+            link_row("sess-u", "span-3", "response", "/b/req_m3.response.json", "rbid-3", "msg_m3", T0 + 20_900),
+            link_row("sess-u", "span-3", "request", "/b/dddd4444.request.json", "rbid-4", "", T0 + 20_800),
+            link_row("sess-u", "span-4", "response", "/b/req_m4.response.json", "rbid-4", "msg_m4", T0 + 25_000),
+        ]);
+        let rows = run_cache_turns_sql(&data.join("store"), &data,
+            "SELECT call_stem, msg_id, request_paired, response_paired FROM api_calls ORDER BY call_stem",
+            None, None, &HashMap::new()).expect("run outer").expect("run inner");
+        assert_eq!(rows.len(), 4, "four paired calls, no orphan response: {rows:?}");
+        let paired = rows.iter().filter(|r| r["request_paired"] == json!(true) && r["response_paired"] == json!(true)).count();
+        assert_eq!(paired, 4, "every request keeps its own response: {rows:?}");
+        for (r, (stem, msg)) in rows.iter().zip([
+            ("aaaa1111", "msg_m1"), ("bbbb2222", "msg_m2"), ("cccc3333", "msg_m3"), ("dddd4444", "msg_m4"),
+        ]) {
+            assert_eq!(r["call_stem"], json!(stem), "{rows:?}");
+            assert_eq!(r["msg_id"], json!(msg), "{stem} paired with the wrong response: {rows:?}");
+        }
         let _ = std::fs::remove_dir_all(&data);
     }
 
