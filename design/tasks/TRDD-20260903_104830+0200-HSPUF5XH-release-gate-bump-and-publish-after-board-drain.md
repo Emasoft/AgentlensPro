@@ -3,7 +3,7 @@ trdd-id: HSPUF5XH
 title: Bump and publish agentlenspro only after every open card is terminal and every known issue is fixed
 column: blocked
 created: 2026-09-03T10:48:30+0200
-updated: 2026-10-16T00:52:26+0200
+updated: 2026-10-16T04:30:38+0200
 current-owner: main-session
 task-type: infra
 min-approval-requirement: user
@@ -249,3 +249,4 @@ review-gate: the gate no longer demands a review for a declared-role worker's sc
 2026-10-16: the live collector (pid 55408, bin-native binary from 2026-10-03) has been a zombie since 2026-10-14 16:21:56 (log-sweeper panic 'scan the cards for persistence' OOM, state lock poisoned, no ingest). The panic site was removed by e3c3c388 (TRDD-DA0GN1CS); 4d5db2dc (TRDD-0BDOV3WC) adds the lossless OOM rewrite. Deploying the current alcore and restarting needs the owner's approval; back up ~/.agentlens card files first.
 2026-10-16: deploy facts for the owner's choice: deploying the current alcore ships every change since the 2026-10-03 binary, unexercised in production; recipe per CLAUDE.md: `node esbuild.js`/cargo release build, copy into bin-native without overwriting the running file in place, `codesign -s - --force` on the copy, check `alcore --version` does not exit 137, back up the full ~/.agentlens card set (cards.duckdb, its .wal, the card snapshot), then `agentlenspro server restart`. A restart with the OLD binary keeps the lossy OOM delete path, and the live cards.duckdb passes the boot read at 256 MiB but fails at 224 (thin margin), so a plain restart can delete and rebuild the card store and lose cards.
 2026-10-16: restart caveat for the hung live collector (pid 55408, poisoned state lock since 2026-10-14 16:21:56). `agentlenspro server restart` first runs stopServer (src/cli/serverControl.ts:577-612), which sends SIGTERM, waits 15 s, and then throws 'still running 15s after SIGTERM' WITHOUT escalating to SIGKILL. Whether the 2026-10-03 binary's graceful shutdown completes with the poisoned lock is UNVERIFIED (TRDD-N60JUWU3 covers shutdown waiting on the state lock). If the stop times out: after backing up the card files, kill only pid 55408 by force (kill -9 55408), then run `agentlenspro server start`. A forced kill skips the final saves; the read positions saved up to 16:21:56 survive, so log-sourced sessions should be re-read (INFERRED); OTLP spans posted during the outage were most likely refused and are not recoverable by a restart (INFERRED).
+2026-10-16: the forced-kill fallback above is the owner step inside the owner-approved restart, not a standing authorization. Before kill -9, confirm with ps -o pid=,command= -p 55408 that the pid is still alcore, or use the pid agentlenspro server status reports.

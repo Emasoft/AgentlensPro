@@ -11,6 +11,7 @@
 //! Default ports are 4319/3001 — NOT 4318/3000: the TS server still owns the canonical ports
 //! until the P4 cutover, and 4318 doubles as the canonicality key (server.ts IS_CANONICAL).
 
+use std::io::Write;
 use std::process::exit;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -56,6 +57,42 @@ async fn terminate_signal() {
     std::future::pending::<()>().await;
 }
 
+/// TRDD-3RVTC1HY: a panic on any thread but main (an unjoined std thread such as the log-sweeper, or a
+/// tokio task, which tokio catches) leaves the process running. On 2026-10-14 16:21 a log-sweeper panic
+/// poisoned the state lock and the process stayed up 28+ hours ingesting nothing, and no revive or
+/// supervisor could see it as dead. Exiting makes the death visible so the hook revive or the supervisor
+/// restarts a clean process. The hook must never take the state lock.
+fn install_exit_on_panic() {
+    static ALARM_ARMED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    let default_hook = std::panic::take_hook();
+    // SAFETY: signal(2) changes only the process-wide disposition and touches no Rust memory, so it is safe
+    // with or without other threads. It restores SIGALRM's default action (terminate): an ignored disposition
+    // (SIG_IGN) survives exec from a parent that ignores it, and would silently turn the alarm backstop below
+    // into a no-op.
+    unsafe { libc::signal(libc::SIGALRM, libc::SIG_DFL) };
+    std::panic::set_hook(Box::new(move |info| {
+        // SAFETY: alarm(2) is async-signal-safe and takes no lock. Nothing in alcore handles SIGALRM (tokio
+        // registers only SIGINT and SIGTERM), so its default action terminates the process if anything below
+        // blocks, for example a full stderr pipe or a slow backtrace symbolication. A blocked hook would be
+        // the same live-looking zombie this hook exists to remove. Armed only by the first panic, because
+        // alarm(2) re-arms on every call and a panic stream would otherwise postpone the backstop indefinitely.
+        if !ALARM_ARMED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            unsafe { libc::alarm(10) };
+        }
+        let loc = info.location().map(|l| format!("{}:{}", l.file(), l.line())).unwrap_or_else(|| "unknown location".to_owned());
+        // Written BEFORE the default hook on purpose: with RUST_BACKTRACE set, the default hook captures and
+        // symbolicates a backtrace, which can itself panic under memory pressure (a double panic aborts with
+        // exit 134), so the FATAL line with the location must already be in the log. writeln with its result
+        // ignored, NOT eprintln: eprintln panics when the stderr write fails, and a panic inside the hook aborts.
+        let _ = writeln!(std::io::stderr(), "{} alcore: FATAL — a thread panicked at {loc}; exiting so the hook revive or supervisor restarts a clean process", agentlens_core::log_ts());
+        default_hook(info);
+        // SAFETY: _exit(2) is async-signal-safe and never returns. std::process::exit runs atexit handlers and
+        // DuckDB C++ static destructors while other threads may still hold DuckDB locks, so it can block, and a
+        // blocked exit is the zombie again; _exit cannot block. Nothing is flushed on this path either way: spans
+        // not yet written by the 5 s chores flush are lost, the same as kill -9.
+        unsafe { libc::_exit(1) };
+    }));
+}
 fn usage(msg: &str) -> ! {
     eprintln!("{} alcore: {msg}", agentlens_core::log_ts());
     eprintln!("usage: alcore serve --data-dir DIR --media-dir DIR [--otlp-port N] [--ui-port N] [--mcp-port N] [--bind HOST] [--no-log-scan] [--ingest-manifest PATH --aldigest-bin PATH [--ingest-sources LIST]]");
@@ -63,6 +100,7 @@ fn usage(msg: &str) -> ! {
 }
 
 fn main() {
+    install_exit_on_panic();
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.first().map(String::as_str) != Some("serve") {
         usage("command required (serve)");
@@ -87,6 +125,9 @@ fn main() {
     let mut ingest_manifest: Option<String> = None;
     let mut aldigest_bin: Option<String> = None;
     let mut ingest_interval_secs: Option<u64> = None;
+    // Hidden test knob, like --ingest-interval-secs (deliberately not in usage()): it can only crash the
+    // process its own spawner started. The trigger thread itself is spawned just before block_on.
+    let mut panic_after_ready = false;
     // --ingest-sources hooks,statusline,events,spans,bodies (default: all but bodies). API bodies are
     // OFF unless asked for: measured at about 7 GB/day of spool plus about 16 GB/day of events.duckdb
     // growth (the typed tables store each body's messages again, with no de-duplication).
@@ -95,6 +136,7 @@ fn main() {
     while i < args.len() {
         match args[i].as_str() {
             "--no-log-scan" => log_scan = false,
+            "--panic-after-ready" => panic_after_ready = true,
             "--ingest-manifest" => {
                 i += 1;
                 ingest_manifest = Some(args.get(i).cloned().unwrap_or_else(|| usage("--ingest-manifest needs a path")));
@@ -436,6 +478,25 @@ fn main() {
     let serve_mcp = agentlens_core::ui::serve_mcp(mcp_addr, state.clone(), hub, |bound| {
         println!("{} alcore: MCP listening on http://{bound}/mcp", agentlens_core::log_ts());
     });
+    // TEST KNOB (--panic-after-ready): reproduces the zombie PRECONDITION, a panic while holding the state
+    // lock. It waits for the UI listener, which binds only once block_on runs, and never gives up (the test
+    // deadline bounds it). With the hook installed the lock cannot poison: _exit runs before the unwind drops
+    // the guard. The zombie itself appears only when the hook is removed (the mutation check).
+    if panic_after_ready {
+        let trigger_state = state.clone();
+        std::thread::Builder::new()
+            .name("panic-trigger".to_owned())
+            .spawn(move || {
+                while std::net::TcpStream::connect(ui_addr).is_err() {
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+                match trigger_state.lock_timed() {
+                    Ok(_guard) => panic!("alcore: --panic-after-ready test trigger"),
+                    Err(_) => panic!("alcore: --panic-after-ready found the state lock already poisoned"),
+                }
+            })
+            .expect("panic-trigger thread spawns");
+    }
     rt.block_on(async move {
         tokio::select! {
             r = serve => {

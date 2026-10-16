@@ -1,10 +1,10 @@
 ---
 trdd-id: 3RVTC1HY
 title: alcore exits on any panic so a steady-state panic cannot leave a live-looking zombie
-column: todo
+column: dev
 status: tasked
 created: 2026-10-15T01:38:48+0200
-updated: 2026-10-16T00:48:08+0200
+updated: 2026-10-16T04:30:34+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -45,18 +45,25 @@ Every restart re-runs the reuse path, and that path deletes cards.duckdb after a
 - Run `pnpm run test:unit` against the rebuilt binary; the TS real-boot suites spawn rust-core/target/release/alcore.
 
 ## Acceptance
-- [ ] TRDD-0BDOV3WC is complete.
-- [ ] The hook is the first statement in main, and the binary-level test passes; the test fails when the hook is removed.
-- [ ] exit versus _exit is decided and recorded with its reason.
-- [ ] cargo clippy and cargo test pass, and `pnpm run test:unit` passes against the rebuilt binary.
+- [x] TRDD-0BDOV3WC is complete.
+- [x] The hook is the first statement in main, and the binary-level test passes; the test fails when the hook is removed.
+- [x] exit versus _exit is decided and recorded with its reason.
+- [x] cargo clippy and cargo test pass, and `pnpm run test:unit` passes against the rebuilt binary.
 
 ## Approval log
 
 - 2026-10-15T01:38:48+0200 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-10-15T01:39:06+0200 — column → blocked by main-agent@agentlenspro. waits for TRDD-0BDOV3WC (every restart re-runs the reuse path)
 - 2026-10-16T00:48:08+0200 — column → todo by main-agent@agentlenspro. blocker TRDD-0BDOV3WC complete (4d5db2dc) Cleared blocked-by (--clear-blocker override).
+- 2026-10-16T01:04:18+0200 — column → dev by main-agent@agentlenspro. implementation started (reviewed proposal 2026-10-16)
 
 ## Notes and lessons learned
 
 2026-10-15: f9e0742e (TRDD-KMF02UEX) removed the panics on the demote path (the DuckDB .expect calls in demote_cold and its parse/serialize .expect). Panic sites under the state lock that remain on the ingest and restore paths (reports_dev/kmf02uex-facts.md section 2; other lock holders not surveyed): the serialize .expect and the upsert in put_arc (every put), begin/commit in the restore, set_meta in mark_restore_complete, discard_cards, and len() where restore_reused still calls it.
 2026-10-16: motivating incident — the live collector stayed a live-looking zombie for over 28 hours after a log-sweeper panic poisoned the state lock (2026-10-14 16:21:56); exit-on-panic would have turned it into a restart. Unblocked: TRDD-0BDOV3WC landed in 4d5db2dc.
+2026-10-16: exit vs _exit decided: libc::_exit(1). std::process::exit runs atexit handlers and DuckDB static destructors while other threads may hold DuckDB locks, so it can block, and a blocked exit is the zombie again; _exit cannot. rss_guard keeps exit (separate). The hook arms a 10 s alarm(2) once, on the first panic, to bound a blocked stderr write or backtrace; the supervisor drains stderr continuously (src/cli/serverControl.ts:961), so the alarm is a backstop.
+2026-10-16: deviation from the design: the test trigger is a hidden flag --panic-after-ready, not a cargo feature, because agentlens-core has no [features] section and CI runs cargo test --manifest-path rust-core/Cargo.toml --workspace (.github/workflows/ci.yml:299) without features, so a feature-gated test would never run in CI (precedent: --ingest-interval-secs).
+2026-10-16: behaviour changes: every tokio task or handler panic now exits the process (tokio catches them today; MEASURE found 0 of 40,352 recorded panics on a tokio thread, all on the log-sweeper); a request-triggered panic now restarts the collector, losing up to 5 s of spans and refusing OTLP during the restart; a deterministic panic more than 5 min after start escapes REVIVE_CRASH_WINDOW_MS (no backoff, the supervisor path backs off 1 s to 30 s); an install with neither hooks nor the supervisor does not restart at all; rusqlite scalar callbacks (forensics_db.rs:239-277) no longer turn a panic into an SQL error (no panic site there today). Request-path unwrap/expect sites, UNCLASSIFIED: ui.rs 1 (line 1192, before its first cfg(test) at line 4394), mcp.rs 1 (line 32), mcp_tools.rs 3 (lines 683, 2313, 3263), lib.rs ingest_post and ingest_parsed 0; full list in docs_dev/20261016-3rvtc1hy-impl-report.md.
+2026-10-16: with the hook, the state lock can no longer be observed poisoned in alcore (_exit runs before the unwind), so the poisoned-lock recovery in shutdown::flush_with_deadline (shutdown.rs:35) and Outcome::Poisoned (shutdown.rs:24) are dead in the binary path: TRDD-TYJSS45N scope.
+2026-10-16: mutation results: M1 (hook removed) failed at the deadline with 'trigger fired but process did not exit' (run before R1 and R2; neither changes the hook-removed path); M2 (_exit removed) failed on the exit-code assertion, because the hook's alarm backstop killed the process with signal 14 about 10 s later. The test pins 'exits with status 1 through the hook'; it does not distinguish _exit from std::process::exit; that choice rests on the destructor-blocking argument, not on a test. R1 (alarm armed once, by the first panic) verified by reading the code; a panic stream is not reproducible in CI. Gates: clippy clean; exit_on_panic passes intact; cargo test --workspace 988 passed, 0 failed (load 16 at start, 213 at end); release build passed; pnpm run test:unit 3177 passing, 13 pending, 0 failing (load 19 at start). An earlier test:unit run had one failure (ingest end to end, loaded=0) with load 18 at start and 337 at end; the clean rerun passed.
+2026-10-16: SIGALRM disposition reset to SIG_DFL at startup, verified by reading (the test cannot tell it apart, _exit fires first). The inherited signal MASK is not reset: the live collector (pid 55408, started by the shipped spawn path) shows a blocked mask of 0 (`ps -o blocked= -p 55408`), so SIGALRM is assumed unblocked; macOS ps cannot show the ignored set.
