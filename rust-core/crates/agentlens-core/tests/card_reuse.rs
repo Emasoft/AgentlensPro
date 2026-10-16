@@ -701,3 +701,62 @@ fn a_stale_version_boot_tombstones_the_card_snapshot_so_a_deleted_transcript_is_
     assert!(!got.contains_key(B_ID), "B's stale card must not be restored");
     assert_same_cards(&got, &fresh_parse(&env.home, "tstale-ref", now), "after a stale-version start");
 }
+
+
+/// T-double (TRDD-6B7VV2Z7 B' review): a refused reuse restores the snapshot into the map and then
+/// re-reads every file from offset 0. That is safe only because a re-parse REPLACES the card
+/// (`put_arc`'s upsert sets `card = excluded.card`); an ingest that ADDED to an existing card would
+/// double every card that was current in the snapshot. Run at the HOT now so timelines are
+/// non-empty (at the cold now the parse-time strip empties them and a timeline check is vacuous);
+/// compare the LIVE cards (the persisted form blanks the timeline), through the production
+/// `ingest_chunk` path, and again after the 1h backfill (which sets one field, never adds).
+/// Mutation recorded in the report: `put_log_session` sums `turns` and concatenates `timeline`
+/// into an existing card with the same id.
+#[test]
+fn a_refused_reuse_rebuilds_current_snapshot_cards_without_double_counting() {
+    let home = dir("tdouble-home");
+    copy_tree(&fixtures().join("logs-home"), &home);
+    let data = dir("tdouble-data");
+    let env = Env { home, platform: Platform::Darwin, vars: HashMap::new() };
+    let expected: Value = serde_json::from_str(&std::fs::read_to_string(fixtures().join("log-reader-expected.json")).unwrap()).unwrap();
+    let hot_now = expected["nowHotMs"].as_i64().unwrap();
+    let live = |b: &Boot| -> BTreeMap<String, Value> {
+        let st = b.st.lock().unwrap();
+        st.cards.parsed_cards().iter().map(|c| (c["sessionId"].as_str().unwrap_or("").to_owned(), (**c).clone())).collect()
+    };
+
+    // The previous run: a cold sweep at the hot now, then a graceful stop (full card + offset save).
+    let (mut b, r) = boot(&data.join("a"), &data, &env);
+    assert_eq!(r, (0, 0, 0), "a fresh data dir restores nothing");
+    sweep_through_durable(&mut b, &env, hot_now, None);
+    b.durable.mark_dirty();
+    b.durable.tick(&b.tailer, &b.st, true);
+    let before = live(&b);
+    drop(b);
+    assert!(before.values().any(|c| c["timeline"].as_array().is_some_and(|t| !t.is_empty())), "precondition: a hot card has a non-empty timeline");
+    assert!(before.get(PARENT).and_then(|c| c["turns"].as_u64()).is_some_and(|t| t > 0), "precondition: the parent card has turns");
+
+    // A start that cannot reuse its store: the snapshot goes into the map, no position is imported,
+    // and one sweep re-reads every file from offset 0 over those very cards.
+    let (mut b, r) = boot(&data.join("b"), &data, &env);
+    assert!(!b.st.lock().unwrap().cards.reused(), "a fresh store dir: the reuse is refused");
+    assert_eq!(r, (before.len(), 0, 0), "every card is restored and no read position is imported");
+    let s = sweep_through_durable(&mut b, &env, hot_now, None);
+    assert!(s >= 1, "precondition: the sweep flushed through ingest_chunk");
+
+    let check = |got: &BTreeMap<String, Value>, label: &str| {
+        assert_eq!(got.keys().collect::<Vec<_>>(), before.keys().collect::<Vec<_>>(), "{label}: the same card ids");
+        for (id, want) in &before {
+            let g = &got[id];
+            for f in ["turns", "inputTokens", "outputTokens", "cacheReadTokens", "cacheCreateTokens", "cacheCreate1hTokens", "speedBlendedCostUsd", "totalLlmCalls", "totalToolCalls"] {
+                assert_eq!(g.get(f), want.get(f), "{label}: card {id} field {f}");
+            }
+            let tl = |c: &Value| c["timeline"].as_array().map_or(0, Vec::len);
+            assert_eq!(tl(g), tl(want), "{label}: card {id} timeline length");
+            assert_eq!(g, want, "{label}: card {id} equals its pre-boot form");
+        }
+    };
+    check(&live(&b), "refused reuse then one sweep");
+    b.durable.run_1h_backfill(&b.st);
+    check(&live(&b), "after the 1h backfill");
+}
