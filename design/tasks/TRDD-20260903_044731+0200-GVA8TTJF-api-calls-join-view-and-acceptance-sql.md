@@ -1,9 +1,9 @@
 ---
 trdd-id: GVA8TTJF
 title: api_calls coalesced view, cache_turns statusline join, and the acceptance SQL
-column: testing
+column: ai_review
 created: 2026-09-03T04:47:31+0200
-updated: 2026-10-16T21:42:46+0200
+updated: 2026-10-16T21:43:42+0200
 current-owner: main-session
 task-type: feature
 priority: high
@@ -94,9 +94,10 @@ pattern), not as SQL `CREATE VIEW` statements:
 - 2026-10-08T20:07:30+0200 — column → dev by main-agent@agentlenspro.
 - 2026-10-09T00:15:44+0200 — column → ai_review by main-agent@agentlenspro. implementation + 7-check adversarial review complete; live acceptance pending owner deploy
 - 2026-10-16T21:42:38+0200 — column → testing by main-agent@agentlenspro. ai_review done: code on HEAD (fb09facf), synthetic tests pass; live acceptance boxes 2, 3, 5 need the alcore rebuild and restart
+- 2026-10-16T21:43:42+0200 — column → ai_review by main-agent@agentlenspro. correction: the earlier move to testing said 'ai_review done', but no code review of fb09facf had happened, only a blocker triage plus synthetic tests; back to ai_review for a real review
 
 ## Notes and lessons learned
-2026-10-16: blocked-by [9SYRK6SW, N6A8VX3G] cleared (not moved to npt: an NPT must be terminal before its parent passes dev, and neither is, and CAJ5RCP9 already claims both as EHTs). The dependency was build order and is satisfied. Both landed before this card entered dev (34668285 at 19:57, dev at 20:07 on 2026-10-08; 9SYRK6SW's writer has written 4752 api_call parts). The one remaining gate for live boxes 2, 3 and 5 is an alcore rebuild from HEAD, codesign and restart: the deployed bin-native alcore is dated 2026-10-03 and contains neither body-links nor run_cache_turns_sql (strings count 0), and the collector is currently down in an RSS-cap crash loop. Synthetic tests pass: cache_turns_sql 4/4, body_link 2/2. Box wording is left for the owner: box 1 names a call_id that does not exist (pairing is via link rows), box 3 names run_diagnostics_sql where the arm is run_cache_turns_sql. Evidence: docs_dev/20261016-gva8-n6a8-cycle-report.md (gitignored).
+2026-10-16: blocked-by [9SYRK6SW, N6A8VX3G] cleared (not moved to npt: an NPT must be terminal before its parent passes dev, and neither is, and CAJ5RCP9 already claims both as EHTs). The dependency was build order and is satisfied. Figures in this note (timestamps, 4752 parts, strings count 0) are reported by the triage worker and not re-checked by main; that CAJ5RCP9 claims both as EHTs is inferred from lint output that showed one of them. Both landed before this card entered dev (34668285 at 19:57, dev at 20:07 on 2026-10-08; 9SYRK6SW's writer has written 4752 api_call parts). The one remaining gate for live boxes 2, 3 and 5 is an alcore rebuild from HEAD, codesign and restart: the deployed bin-native alcore is dated 2026-10-03 and contains neither body-links nor run_cache_turns_sql (strings count 0), and the collector is currently down in an RSS-cap crash loop. Synthetic tests pass: cache_turns_sql 4/4, body_link 2/2. Box wording is left for the owner: box 1 names a call_id that does not exist (pairing is via link rows), box 3 names run_diagnostics_sql where the arm is run_cache_turns_sql. Evidence: docs_dev/20261016-gva8-n6a8-cycle-report.md (gitignored).
 
 ## N6A8VX3G landed — join requirements for THIS card (2026-10-08)
 
