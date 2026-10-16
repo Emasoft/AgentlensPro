@@ -3,7 +3,7 @@ trdd-id: HSPUF5XH
 title: Bump and publish agentlenspro only after every open card is terminal and every known issue is fixed
 column: blocked
 created: 2026-09-03T10:48:30+0200
-updated: 2026-10-16T09:17:54+0200
+updated: 2026-10-16T09:23:16+0200
 current-owner: main-session
 task-type: infra
 min-approval-requirement: user
@@ -12,7 +12,7 @@ created-by: main-session
 npt: []
 eht: []
 pre-block-column: todo
-blocked-by: [2R36W8Q1, N60JUWU3, CAJ5RCP9, 9SYRK6SW, QE114936, 768NEX6E, 7YPQWKPG, 7NHUU6GK, ZSX34J8F, 2R0AXCKL, 2TQHNMEC, CS2W7E77, H3D5ZBO1, WCENKH6T, 3RVTC1HY, 6B7VV2Z7, WCG7I5D8, WBYDQH8K]
+blocked-by: [2R36W8Q1, N60JUWU3, CAJ5RCP9, 9SYRK6SW, QE114936, 768NEX6E, 7YPQWKPG, 7NHUU6GK, ZSX34J8F, 2R0AXCKL, 2TQHNMEC, CS2W7E77, H3D5ZBO1, WCENKH6T, 6B7VV2Z7, WCG7I5D8, WBYDQH8K, ATXO2E1J]
 post-release-verification: [IXMB2JVD]
 blocker-probe: [trddgrep, why, HSPUF5XH]
 blocker-holds-if: not-match:READY
@@ -243,6 +243,7 @@ review-gate: the gate no longer demands a review for a declared-role worker's sc
 2026-10-15: 10NGH2BR removed from blocked-by and listed under User-gated cards. It blocked the release because CI runs that test on Linux with no retry; cc0cee02 runs it alone in its own process, which removes the shared-process failure path by construction, and the moved test passed 20 of 20 Linux runs. What remains on 10NGH2BR is an owner decision on the wording of boxes 1 and 3 and a cause that is not established, so the release no longer waits on it. The same rule was not applied to the four backburner cards still in blocked-by (7NHUU6GK, ZSX34J8F, 2R0AXCKL, 2TQHNMEC), which stay for the owner or a later pass.
 2026-10-16: the deployable set now includes 542ceca2 (TRDD-3RVTC1HY): any panic now exits the collector and the hook revive or supervisor restarts it; a request-triggered panic restarts it (five unclassified request-path sites: card HFY30YBT). Keep 3RVTC1HY on this card's blocker list until it is terminal.
 2026-10-16: drops TYJSS45N (complete); adds WBYDQH8K (the watcher test fails about one run in five on an unmodified tree, a known issue the release gate requires fixed).
+2026-10-16: adds ATXO2E1J (functions and closures that still return a Result that cannot fail).
 
 ## Notes and lessons learned
 
@@ -254,3 +255,4 @@ review-gate: the gate no longer demands a review for a declared-role worker's sc
 2026-10-16: the forced-kill fallback above is the owner step inside the owner-approved restart, not a standing authorization. Before kill -9, confirm with ps -o pid=,command= -p 55408 that the pid is still alcore, or use the pid agentlenspro server status reports.
 2026-10-16: the deployable set now includes ddb58799 (TRDD-USSG465Q): the card store opens with vacuum_rebuild_indexes at u64::MAX, so checkpoints reclaim dead rows; a DuckDB that refuses the option makes alcore panic at boot before touching the card files.
 2026-10-16: USSG465Q removed from blocked-by: it is complete (ddb58799).
+2026-10-16: drops 3RVTC1HY (complete; not yet deployed, which is this card's step).

@@ -1,10 +1,10 @@
 ---
 trdd-id: 3RVTC1HY
 title: alcore exits on any panic so a steady-state panic cannot leave a live-looking zombie
-column: testing
-status: tasked
+column: complete
+status: archived
 created: 2026-10-15T01:38:48+0200
-updated: 2026-10-16T09:06:27+0200
+updated: 2026-10-16T09:23:09+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -58,6 +58,7 @@ Every restart re-runs the reuse path, and that path deletes cards.duckdb after a
 - 2026-10-16T00:48:08+0200 — column → todo by main-agent@agentlenspro. blocker TRDD-0BDOV3WC complete (4d5db2dc) Cleared blocked-by (--clear-blocker override).
 - 2026-10-16T01:04:18+0200 — column → dev by main-agent@agentlenspro. implementation started (reviewed proposal 2026-10-16)
 - 2026-10-16T04:35:17+0200 — column → testing by main-agent@agentlenspro. 542ceca2 landed; eht TYJSS45N must be terminal before complete; first test:unit ingest e2e failure undecided
+- 2026-10-16T09:23:09+0200 — COMPLETE by main-agent@agentlenspro. 542ceca2 landed, acceptance met, EHTs terminal.
 
 ## Notes and lessons learned
 
@@ -75,3 +76,5 @@ Every restart re-runs the reuse path, and that path deletes cards.duckdb after a
 2026-10-16: rerun result (the follow-up promised in the box-4 note): ingestEndToEnd.test.js run 8 times alone (docs_dev/20261016-ingest-e2e-rerun-report.md), all 8 passed at load 12-24; runs 1-6 used target/debug/alcore built 03:09, after the last alcore.rs change at 03:08 (mtime), and that binary contains the hook's FATAL line, so the debug-binary basis of box 4 is now VERIFIED by mtime rather than inferred from ordering; runs 7-8 ran on a binary rebuilt mid-run with the in-progress TRDD-USSG465Q edit and are not counted. No FATAL or panic line in 23 copied server.log files. The first run's failure is NOT an exit-on-panic kill (VERIFIED by reading src/test/ingestEndToEnd.test.ts): getJson rethrows every error except a timeout, so a dead server would have failed the test with fetch failed, not with the assertion, and timeouts=0 means every status poll was answered for the whole wait window; the server was alive and its background collect never completed (only a death in the last ~250 ms of the window would escape this). Cause of that collect stall at load 337: UNDECIDED.
 2026-10-16: scope of the 'NOT an exit-on-panic kill' line above: it rules out a kill that leaves the server dead; a restart onto the same ports would also give loaded=0 with timeouts=0. Excluded by reading src/cli/serverControl.ts ensureServer (line 292): the test's start path spawns alcore detached and unref'd with no supervisor (line ~372), retrying only on a port-bind failure at boot before it returns, and the test posts to /api/hook-events directly, so no hook revive runs. A server that died in the window would have stayed dead.
 2026-10-16: the line-510 watcher failure is a baseline signature (4/20 on 542ceca2^, before this card's commit; TRDD-WBYDQH8K); it does not block this card.
+2026-10-16: waits in testing only on its EHT HFY30YBT (pulled to dev 2026-10-16); TYJSS45N is complete.
+2026-10-16: both EHTs terminal (TYJSS45N complete with aa61b49d and 4ebb9196; HFY30YBT complete, classification only); all four acceptance boxes ticked. Not deployed: the live collector still runs the old binary; deploying is TRDD-HSPUF5XH's step and needs the owner.
