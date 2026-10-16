@@ -3,7 +3,7 @@ trdd-id: HSPUF5XH
 title: Bump and publish agentlenspro only after every open card is terminal and every known issue is fixed
 column: blocked
 created: 2026-09-03T10:48:30+0200
-updated: 2026-10-16T20:28:55+0200
+updated: 2026-10-16T20:30:00+0200
 current-owner: main-session
 task-type: infra
 min-approval-requirement: user
@@ -161,6 +161,7 @@ unless the user says otherwise:
       burn-tick hold ≥ 250ms observed over the window).
 - [ ] The `api_call` table is observed filling on the live server (per
       9SYRK6SW's own acceptance recipe).
+- [ ] Upgrade boot from a v2.33.1 data dir on a full corpus with the release alcore: record peak RSS against the cap and confirm the boot finishes its cold rescan (B' crash-loop check from 6B7VV2Z7; see Notes 2026-10-16).
 
 ## Release recipe (run only after every box above is checked)
 
@@ -248,7 +249,7 @@ review-gate: the gate no longer demands a review for a declared-role worker's sc
 2026-10-16: adds OLKITCS7 (request-path panics beyond unwrap and expect, the dependency caught-panic question, and the late-panic restart without backoff). Also noted there: publish.yml does not run cargo test, so a release must come from a commit CI passed.
 2026-10-16: adds JDQR0HDT (the snapshot restore path can bring back cards a schema bump or an interrupted clear meant to drop).
 2026-10-16: 6B7VV2Z7 complete (3a5874a5 fix, aecdade6 test) and removed from blocked-by. Carried here because that card is archived and frozen: (1) the local alcore is NOT redeployed with 3a5874a5; deploy = release build, copy into bin-native/<platform>/, codesign, server restart. (2) Every refused-reuse boot now cold-rescans the whole corpus; neither that cost nor how often a current-version refusal happens is measured (the closing note's 'rare path' is an inference). (3) The eager offsets tombstone in restore_from_snapshot is untested; that it protects a later reused boot comes from its own code comment. (4) aecdade6's after-backfill check likely had no backfill candidate (the fixtures already carry cacheCreate1hTokens), so it shows no harm to filled cards, not that filling keeps totals. Verification of 6B7VV2Z7's closing STATE: the assert_same_cards calls at tests/card_reuse.rs:637 and :667 and the helper's body (:519-527: no missing or extra card id, every card equal) are verified by reading; they compare the persisted form.
-2026-10-16: OPEN release check from 6B7VV2Z7 (its archived card, line 42, names the B' crash loop): the startup sweep persists no read positions until it returns, so a boot that dies at the RSS cap inside a full cold rescan repeats it on every restart. 0BDOV3WC took out-of-memory off this path; the remaining triggers are a card-schema bump, missing meta, an interrupted restore or clear, corruption, and a MISSING store. cards.duckdb (card_store.rs, CARD_SCHEMA_VERSION 1) did not exist at v2.33.1, so the first boot after upgrading from 2.33.1 likely takes this path (inferred, not run). Before publishing: boot an upgrade from a 2.33.1 data dir on a full corpus and record peak RSS against the cap; owners of the memory side are USSG465Q and 9VX3WTGU.
+2026-10-16: OPEN release check from 6B7VV2Z7 (its archived card, line 42, names the B' crash loop): the startup sweep persists no read positions until it returns, so a boot that dies at the RSS cap inside a full cold rescan repeats it on every restart. 0BDOV3WC took out-of-memory off this path; the remaining triggers are a card-schema bump, missing meta, an interrupted restore or clear, corruption, and a MISSING store. cards.duckdb (card_store.rs, CARD_SCHEMA_VERSION 1) did not exist at v2.33.1, so the first boot after upgrading from 2.33.1 likely takes this path (checked 2026-10-16: tag v2.33.1 exists, card_store.rs is absent there, LOG_INGEST_VERSION is 7 at both, so that boot is a missing-store refusal, not version-stale; the boot itself is not run, and whether 2.33.1 boots already re-parsed everything is unknown). Before publishing: boot an upgrade from a 2.33.1 data dir on a full corpus and record peak RSS against the cap; the memory side is owned by USSG465Q (file bloat); related: 9VX3WTGU (store reuse). Enforced as a gate box under Definition of done — gates green.
 
 ## Notes and lessons learned
 
