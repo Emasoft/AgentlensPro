@@ -4,7 +4,7 @@ title: DeltaLog load materializes about 7x its on-disk size, stream the replay
 column: todo
 status: tasked
 created: 2026-10-16T23:25:39+0200
-updated: 2026-10-16T23:29:22+0200
+updated: 2026-10-16T23:29:37+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -37,4 +37,8 @@ TRAP: load() seeds self.written, and save(empty) tombstones only keys that seedi
 - [ ] load() still seeds self.written with hashes identical to hash_json(to_string(v)) for records written by append_changed, compact and heal_torn_tail (a test per writer).
 - [ ] The TRDD-6B7VV2Z7 card_reuse tests (stale-version tombstone, lagging positions, no double count) and the delta_log tests all still pass.
 - [ ] The real log-sessions card snapshot's load() peak is measured before and after the change (read-only, separate process).
-- [x] MEASURED BASELINE (2026-10-16, docs_dev/20261016-ajgtq007-real-snapshot-report.md, copies in tmp, separate process): the real log-sessions log (74.8 MB, 41,714 records) peaks at 478.0 MiB under load(), 6.70x on disk; log-offsets (11.3 MB) peaks at 91.1 MiB. The 'after' half of this box's measurement is box 4.
+Baseline, a fact and not a criterion (2026-10-16, docs_dev/20261016-ajgtq007-real-snapshot-report.md, copies in tmp, separate process): the real log-sessions log (74.8 MB, 41,714 records) peaks at 478.0 MiB under load(), 6.70x on disk; log-offsets (11.3 MB) peaks at 91.1 MiB. The 'after' half of this box's measurement is box 4.
+
+## Notes and lessons learned
+
+2026-10-16: priority. The real card-snapshot load costs 478 MiB, about 23% of the 2048 MiB cap, on every refused-reuse boot. It is NOT the crash-loop trigger: only 28 of 1,539 logged cap deaths fall in the first 30 s of uptime (worker count from server.log, read-only). Whether its freed pages stay committed in mimalloc and raise the steady footprint is inferred, not measured. So the card is not by itself a release blocker, but it eats about a quarter of the headroom on the upgrade boot HSPUF5XH gates. The 1.1 GB synthetic 700k/1.4M dataset is at $TMPDIR/gva8-memgate (OS tmp, may be purged); the harness that rebuilds it is scripts_dev/gva8ttjf_memgate/.
