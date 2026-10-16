@@ -3,7 +3,7 @@ trdd-id: HSPUF5XH
 title: Bump and publish agentlenspro only after every open card is terminal and every known issue is fixed
 column: blocked
 created: 2026-09-03T10:48:30+0200
-updated: 2026-10-16T20:27:18+0200
+updated: 2026-10-16T20:28:55+0200
 current-owner: main-session
 task-type: infra
 min-approval-requirement: user
@@ -218,7 +218,7 @@ review-gate: the gate no longer demands a review for a declared-role worker's sc
 - TRDD-DA0GN1CS (landed in e3c3c388; ships in the next release): the periodic card save no longer scans DuckDB under the state lock; a DuckDB out-of-memory there poisoned the lock and stopped all ingestion while the server looked alive.
 - TRDD-0BDOV3WC (when fixed): an out-of-memory read at boot no longer deletes cards.duckdb.
 - TRDD-3RVTC1HY (when fixed): any panic exits the server so the hook revive restarts it.
-- TRDD-6B7VV2Z7 (3a5874a5): after a refused card-store reuse the server no longer trusts saved read positions that ran ahead of the card snapshot; it re-reads every log file, so missing or stale session cards are rebuilt (that boot is slower).
+- TRDD-6B7VV2Z7 (3a5874a5): when the card database is missing, unreadable or refused at startup, the server no longer trusts saved read positions that ran ahead of the card snapshot; it re-reads every log file, so missing or stale session cards are rebuilt. After an ingest-version upgrade, a deleted transcript's stale card no longer comes back.
 
 ## Notes
 
@@ -247,7 +247,8 @@ review-gate: the gate no longer demands a review for a declared-role worker's sc
 2026-10-16: adds ATXO2E1J (functions and closures that still return a Result that cannot fail).
 2026-10-16: adds OLKITCS7 (request-path panics beyond unwrap and expect, the dependency caught-panic question, and the late-panic restart without backoff). Also noted there: publish.yml does not run cargo test, so a release must come from a commit CI passed.
 2026-10-16: adds JDQR0HDT (the snapshot restore path can bring back cards a schema bump or an interrupted clear meant to drop).
-2026-10-16: 6B7VV2Z7 complete (3a5874a5 fix, aecdade6 test) and removed from blocked-by. Carried here because that card is archived and frozen: (1) the local alcore is NOT redeployed with 3a5874a5; deploy = release build, codesign, server restart. (2) Every refused-reuse boot now cold-rescans the whole corpus; neither that cost nor how often a current-version refusal happens is measured (the closing note's 'rare path' is an inference). (3) The eager offsets tombstone in restore_from_snapshot is untested; that it protects a later reused boot comes from its own code comment. (4) aecdade6's after-backfill check likely had no backfill candidate (the fixtures already carry cacheCreate1hTokens), so it shows no harm to filled cards, not that filling keeps totals. Corrections to 6B7VV2Z7's closing STATE: T-lag's assert_same_cards at tests/card_reuse.rs:637 and :667 is verified by reading; it compares the persisted form.
+2026-10-16: 6B7VV2Z7 complete (3a5874a5 fix, aecdade6 test) and removed from blocked-by. Carried here because that card is archived and frozen: (1) the local alcore is NOT redeployed with 3a5874a5; deploy = release build, copy into bin-native/<platform>/, codesign, server restart. (2) Every refused-reuse boot now cold-rescans the whole corpus; neither that cost nor how often a current-version refusal happens is measured (the closing note's 'rare path' is an inference). (3) The eager offsets tombstone in restore_from_snapshot is untested; that it protects a later reused boot comes from its own code comment. (4) aecdade6's after-backfill check likely had no backfill candidate (the fixtures already carry cacheCreate1hTokens), so it shows no harm to filled cards, not that filling keeps totals. Verification of 6B7VV2Z7's closing STATE: the assert_same_cards calls at tests/card_reuse.rs:637 and :667 and the helper's body (:519-527: no missing or extra card id, every card equal) are verified by reading; they compare the persisted form.
+2026-10-16: OPEN release check from 6B7VV2Z7 (its archived card, line 42, names the B' crash loop): the startup sweep persists no read positions until it returns, so a boot that dies at the RSS cap inside a full cold rescan repeats it on every restart. 0BDOV3WC took out-of-memory off this path; the remaining triggers are a card-schema bump, missing meta, an interrupted restore or clear, corruption, and a MISSING store. cards.duckdb (card_store.rs, CARD_SCHEMA_VERSION 1) did not exist at v2.33.1, so the first boot after upgrading from 2.33.1 likely takes this path (inferred, not run). Before publishing: boot an upgrade from a 2.33.1 data dir on a full corpus and record peak RSS against the cap; owners of the memory side are USSG465Q and 9VX3WTGU.
 
 ## Notes and lessons learned
 
