@@ -32,14 +32,6 @@ use serde_json::{Map, Value};
 
 use agentlens_store::duckdb::Connection;
 
-fn q(p: &str) -> String {
-    format!("'{}'", p.replace('\'', "''"))
-}
-
-/// DuckDB's per-object cap for read_ndjson_auto — same rationale as transcript_sql.rs:21
-/// (a link row is tiny, but the cap is a one-line guard against a pathological line).
-const MAX_OBJECT_SIZE: usize = 8 * 1024 * 1024;
-
 /// Copy of statusline_store::varchar_session_id (fn-private there): cast session_id to VARCHAR
 /// PER FILE before any union — DuckDB infers UUID per file and one non-UUID id kills the union.
 fn varchar_session_id(inner: &str) -> String {
@@ -65,35 +57,56 @@ fn open_duck(spill_root: &Path, vars: &HashMap<String, String>) -> Result<Connec
     Ok(con)
 }
 
-/// The body-links relation: snapshot + delta (each alone is valid), NO ignore_errors — a torn
-/// tail must fail loudly here; the boot compact (TRDD-N6A8VX3G) is what heals it. Parsed to the
-/// `v` sub-object's 8 fields. None when NEITHER file exists (no links were ever written).
-fn body_links_relation(data_dir: &Path) -> Option<String> {
-    let snap = data_dir.join("body-links.snapshot.ndjson");
-    let delta = data_dir.join("body-links.delta.ndjson");
-    let mut files: Vec<String> = Vec::new();
-    if snap.is_file() {
-        files.push(q(&snap.to_string_lossy()));
+/// The table `install_body_links` creates in the query's connection and `api_calls_relation`
+/// reads. The connection is ':memory:' (open_duck), so the table dies with it.
+const BODY_LINKS_TABLE: &str = "body_links";
+
+/// The 8 fields of a body-links record (lib.rs body_link_row), in the table's column order.
+const BODY_LINK_FIELDS: [&str; 8] =
+    ["session_id", "span_id", "kind", "stem", "request_id", "request_body_id", "message_id", "ts_ms"];
+
+/// Materialize the body-links DeltaLog (TRDD-N6A8VX3G) into `con` as table `body_links`, every
+/// column VARCHAR at creation. MUST run on the connection before any SQL that embeds
+/// `api_calls_relation` (both query entries below do it right after open_duck).
+///
+/// WHY replay in Rust (review B1, TRDD-GVA8TTJF): the files hold `{"k":key,"v":record}` lines and
+/// `{"k":key,"d":1}` tombstones, and later lines win (delta_log.rs module doc). DeltaLog::load is
+/// DeltaLog::replay over [snapshot, delta] in file and line order — the ONE definition of how lines
+/// become state. Reading the files with read_ndjson_auto instead got all of it wrong: `v` comes back
+/// as a STRUCT (binding `t.session_id` is a Binder Error on any real file), every superseded and
+/// tombstoned line is still a row, and there is no line-number column, so a last-wins ROW_NUMBER
+/// "ordered by line" has no sound order under a parallel scan — and it would be a second source of
+/// truth drifting from replay.
+/// WHY VARCHAR at creation (review B2): read_ndjson_auto infers UUID per file, and real session_ids
+/// and request_body_ids ARE UUIDs; a UUID column then fails `COALESCE` against the VARCHAR api_call
+/// side (Binder Error) and the `<> ''` guards (Conversion Error). A column declared VARCHAR leaves
+/// nothing to infer. ts_ms is cast to BIGINT once, in the projection.
+/// Errors surface: load() tolerates ONE torn trailing line (a concurrent append in flight) and
+/// refuses a corrupt line anywhere else — that Err fails the query, never an empty table.
+fn install_body_links(con: &Connection, data_dir: &Path) -> Result<(), String> {
+    let records = crate::delta_log::DeltaLog::new(data_dir, "body-links").load()?;
+    let cols = BODY_LINK_FIELDS.iter().map(|f| format!("{f} VARCHAR")).collect::<Vec<_>>().join(", ");
+    con.execute_batch(&format!("CREATE TABLE {BODY_LINKS_TABLE} ({cols});"))
+        .map_err(|e| e.to_string())?;
+    let mut app = con.appender(BODY_LINKS_TABLE).map_err(|e| e.to_string())?;
+    for v in records.values() {
+        let row: Vec<Option<String>> = BODY_LINK_FIELDS
+            .iter()
+            .map(|f| match v.get(*f) {
+                None | Some(Value::Null) => None,
+                Some(Value::String(s)) => Some(s.clone()),
+                // ts_ms is a JSON number; its decimal text casts back to BIGINT in the projection.
+                Some(other) => Some(other.to_string()),
+            })
+            .collect();
+        app.append_row(agentlens_store::duckdb::appender_params_from_iter(row)).map_err(|e| e.to_string())?;
     }
-    if delta.is_file() {
-        files.push(q(&delta.to_string_lossy()));
-    }
-    if files.is_empty() {
-        return None;
-    }
-    let list = files.join(",");
-    Some(format!(
-        // read_ndjson_auto FLATTENS the single top-level `v` object into columns (candidate
-        // bindings measured: kind/message_id/request_body_id/... directly on the alias).
-        "SELECT t.session_id AS link_session_id, t.span_id AS link_span_id, t.kind AS link_kind, \
-         t.stem AS link_stem, t.request_id AS link_request_id, t.request_body_id AS link_rbid, \
-         t.message_id AS link_msg_id, t.ts_ms AS link_ts \
-         FROM read_ndjson_auto([{list}], union_by_name=true, ignore_errors=false, maximum_object_size={MAX_OBJECT_SIZE}) t"
-    ))
+    app.flush().map_err(|e| e.to_string())
 }
 
 /// The api_calls COALESCED relation — one row per CALL: request facts (fingerprints, billing) + response facts (token buckets, miss reason), session_id resolved for BOTH kinds via the link table. None when no api_call parquet parts exist (blind, never a bare glob).
-pub fn api_calls_relation(store_dir: &Path, data_dir: &Path) -> Option<String> {
+/// The SQL reads table `body_links`: run it only on a connection install_body_links has prepared.
+pub fn api_calls_relation(store_dir: &Path) -> Option<String> {
     let parts = agentlens_store::parquet_scan(store_dir, agentlens_store::API_CALLS_DIR)?;
     // A5 (QSFYIHUO step 2): SELECT * over the parts projection named — the coalesce below reads
     // only these 21 columns, and naming them keeps the api_calls view narrow as the row grows.
@@ -104,16 +117,15 @@ pub fn api_calls_relation(store_dir: &Path, data_dir: &Path) -> Option<String> {
          cache_read_tokens, cache_creation_tokens, cache_miss_reason, input_tokens, output_tokens, \
          tier_5m_tokens, tier_1h_tokens, stop_reason, msg_id";
     let parts = varchar_session_id(&format!("SELECT {API_VIEW_COLUMNS} FROM {parts}"));
-    let links = body_links_relation(data_dir);
-    let links = links.unwrap_or_else(|| {
-        // No links at all: an empty-typed relation keeps the SQL shape uniform — the coalesce
-        // still yields request rows with their OWN session_id, response rows with none.
-        "SELECT '' AS link_session_id, '' AS link_span_id, '' AS link_kind, '' AS link_stem, \
-         '' AS link_request_id, '' AS link_rbid, '' AS link_msg_id, NULL::BIGINT AS link_ts \
-         WHERE false"
-        .to_owned()
-    });
-
+    // The link side reads the table install_body_links created on the query's connection: one row
+    // per LIVE key (DeltaLog replay — last line wins, tombstones dropped), every column VARCHAR.
+    // No links ever written ⇒ the table is empty, and the coalesce still yields request rows with
+    // their OWN session_id and response rows with none.
+    let links = format!(
+        "SELECT session_id AS link_session_id, span_id AS link_span_id, kind AS link_kind, \
+         stem AS link_stem, request_id AS link_request_id, request_body_id AS link_rbid, \
+         message_id AS link_msg_id, CAST(ts_ms AS BIGINT) AS link_ts FROM {BODY_LINKS_TABLE}"
+    );
     // Pair request-kind links to response-kind links, request_body_id FIRST (exact key,
     // CC >=2.1.274), else span_id. EVERY guarded key carries <> '' — pre-2.1.274 traffic has
     // '' on both kinds and '' = '' would cross-match different calls.
@@ -177,7 +189,7 @@ pub fn api_calls_relation(store_dir: &Path, data_dir: &Path) -> Option<String> {
 pub fn cache_turns_relation(store_dir: &Path, data_dir: &Path, since_ms: Option<f64>) -> Option<String> {
     let sl_root = data_dir.join("statusline");
     let statusline = crate::statusline_store::relation_for(&sl_root, "main", since_ms, None)?;
-    let api = api_calls_relation(store_dir, data_dir)?;
+    let api = api_calls_relation(store_dir)?;
     Some(format!(
         "WITH \
          turns AS ( \
@@ -226,7 +238,7 @@ pub fn run_cache_turns_sql(
     // it without any statusline data). The statusline/turns CTEs are added only when their
     // side exists — a query referencing a missing CTE is then an honest DuckDB error naming
     // the absent side, not a fake empty result.
-    let Some(api_alone) = api_calls_relation(store_dir, data_dir) else { return Ok(None) };
+    let Some(api_alone) = api_calls_relation(store_dir) else { return Ok(None) };
     let statusline_rel = crate::statusline_store::relation_for(&data_dir.join("statusline"), "main", since_ms, None);
     let turns_rel = match &statusline_rel {
         // cache_turns_relation re-derives both; reuse the pieces to keep one SQL shape.
@@ -244,6 +256,7 @@ pub fn run_cache_turns_sql(
         .map(|l| format!("LIMIT {}", l as i64))
         .unwrap_or_default();
     let con = open_duck(data_dir, vars)?;
+    install_body_links(&con, data_dir)?;
     let mut stmt = con
         .prepare(&format!("WITH {} {sql} {lim}", withs.join(", ")))
         .map_err(|e| e.to_string())?;
@@ -292,13 +305,14 @@ pub fn run_preset_or_sql(
     };
     // ALWAYS build the full WITH — extra CTEs are harmless to an api_calls-only query, and a
     // heuristic sniffing "from turns" in caller SQL misses newline variants (review round 2).
-    let api_rel = api_calls_relation(&store_dir, data_dir).ok_or("BLIND: no api_call parts")?;
+    let api_rel = api_calls_relation(&store_dir).ok_or("BLIND: no api_call parts")?;
     let sl_rel = crate::statusline_store::relation_for(&data_dir.join("statusline"), "main", since_ms, None)
         .ok_or("BLIND: no statusline samples")?;
     let turns_rel = cache_turns_relation(&store_dir, data_dir, since_ms).ok_or("BLIND: cache_turns")?;
     let sql_text = format!("WITH api_calls AS ({api_rel}), statusline AS ({sl_rel}), turns AS ({turns_rel}) {chosen}");
     let lim = limit.map(|l| format!(" LIMIT {}", l as i64)).unwrap_or_default();
     let con = open_duck(data_dir, &vars)?;
+    install_body_links(&con, data_dir)?;
     let mut stmt = con.prepare(&format!("{sql_text}{lim}")).map_err(|e| e.to_string())?;
     let mut rows = stmt.query([]).map_err(|e| e.to_string())?;
     let mut names: Option<Vec<String>> = None;
@@ -355,7 +369,9 @@ fn num(f: f64) -> Value {
 #[cfg(test)]
 mod cache_turns_sql_tests {
     use super::super::cache_turns_sql::{api_calls_relation, cache_turns_relation, run_cache_turns_sql};
-    use serde_json::{json, Map};
+    use crate::delta_log::DeltaLog;
+    use indexmap::IndexMap;
+    use serde_json::{json, Map, Value};
     use std::collections::HashMap;
     use std::path::{Path, PathBuf};
 
@@ -390,13 +406,17 @@ mod cache_turns_sql_tests {
         .replace("claude-x", model)
     }
 
-    fn link_row(session: &str, span: &str, kind: &str, stem: &str, rbid: &str, msg: &str, ts: i64) -> String {
-        json!({
-            "session_id": session, "span_id": span, "kind": kind, "stem": stem,
-            "request_id": if kind == "response" { format!("req-{msg}") } else { "".to_string() },
-            "request_body_id": rbid, "message_id": msg, "ts_ms": ts
-        })
-        .to_string()
+    /// One body-link record in production's exact shape: lib.rs body_link_row's key
+    /// (`span:kind:ts`) and its 8-field value. Persisted only through DeltaLog (seed_links).
+    fn link_row(session: &str, span: &str, kind: &str, stem: &str, rbid: &str, msg: &str, ts: i64) -> (String, Value) {
+        (
+            format!("{span}:{kind}:{ts}"),
+            json!({
+                "session_id": session, "span_id": span, "kind": kind, "stem": stem,
+                "request_id": if kind == "response" { format!("req-{msg}") } else { "".to_string() },
+                "request_body_id": rbid, "message_id": msg, "ts_ms": ts
+            }),
+        )
     }
 
     fn tmp(tag: &str) -> PathBuf {
@@ -407,8 +427,7 @@ mod cache_turns_sql_tests {
         d
     }
 
-    /// Seed api_call parts through the REAL writer and body-links through the REAL DeltaLog row
-    /// shape (hand-written NDJSON here is the row FORMAT, which is delta_log's on-disk contract).
+    /// Seed api_call parts through the REAL writer (ingest_body → flush_detailed).
     fn seed_store(data: &Path, bodies: &[(&str, String, i64)]) {
         let mut store = agentlens_store::open_store(
             &data.join("store"), agentlens_store::DEFAULT_MEMORY_LIMIT, 4).unwrap();
@@ -418,9 +437,15 @@ mod cache_turns_sql_tests {
         agentlens_store::flush_detailed(&mut store).unwrap();
     }
 
-    fn seed_links(data: &Path, rows: &[String]) {
-        let body = rows.iter().map(|r| format!("{r}\n")).collect::<String>();
-        std::fs::write(data.join("body-links.snapshot.ndjson"), body).unwrap();
+    /// Persist link records through DeltaLog ITSELF, the way production does: ingest appends with
+    /// append_changed, boot folds the delta into the snapshot with compact_now. The files are then
+    /// byte-for-byte production's on-disk format (`{"k":key,"v":record}` lines) — the old fixture
+    /// hand-wrote FLAT rows production never writes, so the tests passed against a fiction (review B1).
+    fn seed_links(data: &Path, rows: &[(String, Value)]) {
+        let recs: IndexMap<String, Value> = rows.iter().cloned().collect();
+        let mut log = DeltaLog::new(data, "body-links");
+        log.append_changed(&recs).unwrap();
+        log.compact_now(&recs).unwrap();
     }
 
     /// One sealed statusline part through the REAL store (append → flush → seal), never a
@@ -535,11 +560,102 @@ mod cache_turns_sql_tests {
     #[test]
     fn blind_when_store_or_statusline_are_empty() {
         let data = tmp("blind");
-        assert!(api_calls_relation(&data.join("store"), &data).is_none(), "no parts → None, never a bare glob");
+        assert!(api_calls_relation(&data.join("store")).is_none(), "no parts → None, never a bare glob");
         assert!(cache_turns_relation(&data.join("store"), &data, None).is_none());
         seed_statusline(&data, "sess-d", Some("p1"), T0);
         // statusline exists but no api_call parts → still blind (the join needs both sides).
         assert!(cache_turns_relation(&data.join("store"), &data, None).is_none());
+        let _ = std::fs::remove_dir_all(&data);
+    }
+
+
+    #[test]
+    fn uuid_shaped_session_and_request_body_ids_pair_and_join() {
+        // Review B2: real session_ids and request_body_ids ARE UUIDs. read_ndjson_auto inferred a
+        // UUID column for such a file, and the VARCHAR COALESCE / `<> ''` guards then failed to
+        // bind or convert. Every id here is UUID-shaped, so any untyped read of the links reaches
+        // the joins as UUID and this test errors instead of passing.
+        const SESS: &str = "0b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d";
+        const RBID: &str = "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d";
+        const RBID_ORPHAN: &str = "e2f3a4b5-c6d7-4e8f-9a0b-1c2d3e4f5a6b";
+        let data = tmp("uuid");
+        seed_store(&data, &[
+            ("3c4d5e6f.request.json", request_body(SESS, "claude-opus-5"), T0),
+            ("req_u1.response.json", response_body("msg_u1", "claude-opus-5"), T0 + 900),
+            ("req_u2.response.json", response_body("msg_u2", "claude-opus-5"), T0 + 5_000),
+        ]);
+        seed_links(&data, &[
+            link_row(SESS, "span-u", "request", "/b/3c4d5e6f.request.json", RBID, "", T0),
+            link_row(SESS, "span-u", "response", "/b/req_u1.response.json", RBID, "msg_u1", T0 + 900),
+            // Matches no request: exercises the orphan arm's COALESCE with the link session.
+            link_row(SESS, "span-v", "response", "/b/req_u2.response.json", RBID_ORPHAN, "msg_u2", T0 + 5_000),
+        ]);
+        seed_statusline(&data, SESS, Some("p1"), T0 + 500);
+        let calls = run_cache_turns_sql(&data.join("store"), &data,
+            "SELECT call_stem, session_id, response_paired FROM api_calls ORDER BY call_stem",
+            None, None, &HashMap::new()).expect("run outer").expect("run inner");
+        assert_eq!(calls.len(), 2, "one paired call + one orphan response: {calls:?}");
+        assert_eq!(calls[0]["call_stem"], json!("3c4d5e6f"));
+        assert_eq!(calls[0]["session_id"], json!(SESS));
+        assert_eq!(calls[0]["response_paired"], json!(true), "UUID request_body_id pairs");
+        assert_eq!(calls[1]["call_stem"], json!("req_u2"));
+        assert_eq!(calls[1]["session_id"], json!(SESS), "session from its own UUID link row");
+        assert_eq!(calls[1]["response_paired"], json!(false));
+        let turns = run_cache_turns_sql(&data.join("store"), &data,
+            "SELECT session_id, call_stem FROM turns ORDER BY call_stem",
+            None, None, &HashMap::new()).expect("run outer").expect("run inner");
+        assert_eq!(turns.len(), 2, "both calls join the UUID session's turn: {turns:?}");
+        for t in &turns {
+            assert_eq!(t["session_id"], json!(SESS));
+        }
+        let _ = std::fs::remove_dir_all(&data);
+    }
+
+    #[test]
+    fn a_repeated_key_takes_its_last_line_across_snapshot_and_delta() {
+        // Review B1: DeltaLog lines are last-wins per key. The STALE record sits in the snapshot
+        // and the FRESH one, under the same key, in the delta: the view must hold exactly one
+        // link row for the key, and it must be the fresh one.
+        let data = tmp("lastwins");
+        seed_store(&data, &[("req_r7.response.json", response_body("msg_7", "claude-opus-5"), T0)]);
+        let (key, stale) = link_row("sess-stale", "span-7", "response", "/b/req_r7.response.json", "", "msg_7", T0);
+        seed_links(&data, &[(key.clone(), stale)]);
+        let (fresh_key, fresh) = link_row("sess-fresh", "span-7", "response", "/b/req_r7.response.json", "", "msg_7", T0);
+        assert_eq!(key, fresh_key, "the same production key");
+        let mut log = DeltaLog::new(&data, "body-links");
+        log.load().unwrap();
+        log.append_changed(&[(fresh_key, fresh)].into_iter().collect()).unwrap();
+        assert!(data.join("body-links.snapshot.ndjson").is_file(), "stale line in the snapshot");
+        assert!(data.join("body-links.delta.ndjson").is_file(), "fresh line in the delta");
+        let rows = run_cache_turns_sql(&data.join("store"), &data,
+            "SELECT call_stem, session_id FROM api_calls",
+            None, None, &HashMap::new()).expect("run outer").expect("run inner");
+        assert_eq!(rows.len(), 1, "one row per live key, never one per line: {rows:?}");
+        assert_eq!(rows[0]["session_id"], json!("sess-fresh"), "the later line wins");
+        let _ = std::fs::remove_dir_all(&data);
+    }
+
+    #[test]
+    fn a_tombstoned_key_is_gone_from_the_view() {
+        // Review B1: a `{"k":key,"d":1}` tombstone deletes the key. The record sits in the
+        // snapshot, its tombstone in the delta; the response part survives, but with no link
+        // its session cannot be resolved.
+        let data = tmp("tomb");
+        seed_store(&data, &[("req_r8.response.json", response_body("msg_8", "claude-opus-5"), T0)]);
+        seed_links(&data, &[link_row("sess-dead", "span-8", "response", "/b/req_r8.response.json", "", "msg_8", T0)]);
+        let mut log = DeltaLog::new(&data, "body-links");
+        log.load().unwrap();
+        // save() with the full record set minus the key appends the tombstone line.
+        let r = log.save(&IndexMap::new()).unwrap();
+        assert_eq!(r.deleted, 1, "one tombstone written");
+        assert!(!r.compacted, "the tombstone must sit in the delta, the record in the snapshot");
+        let rows = run_cache_turns_sql(&data.join("store"), &data,
+            "SELECT call_stem, session_id, link_msg_id FROM api_calls",
+            None, None, &HashMap::new()).expect("run outer").expect("run inner");
+        assert_eq!(rows.len(), 1, "the response part itself survives: {rows:?}");
+        assert_eq!(rows[0]["call_stem"], json!("req_r8"));
+        assert_eq!(rows[0]["session_id"], Value::Null, "its only link was tombstoned");
+        assert_eq!(rows[0]["link_msg_id"], Value::Null);
         let _ = std::fs::remove_dir_all(&data);
     }
 }
