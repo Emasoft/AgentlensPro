@@ -1,9 +1,9 @@
 ---
 trdd-id: X8MW8K92
 title: A PreToolUse delegate gate so a Fable main session cannot edit — it plans, Sonnet workers execute
-column: dev
+column: todo
 created: 2026-09-10T14:33:51+0200
-updated: 2026-09-24T08:57:01+0200
+updated: 2026-10-16T11:13:13+0200
 current-owner: main
 task-type: infra
 min-approval-requirement: none
@@ -16,6 +16,7 @@ project-id: agentlenspro
 scope: project
 labels: [delegation, hooks, token-economy, fable]
 related: [DRH4ZRGB, JELDR3KC, GOD0108C]
+status: tasked
 ---
 
 # A PreToolUse delegate gate so a Fable main session cannot edit — it plans, Sonnet workers execute
@@ -109,6 +110,7 @@ unregistered) depends on that peer handover, which the peer has committed to.
 
 - 2026-09-10T18:54:37+0200 — OPEN (owner decision): gate `opus` too? The order names Fable, so the gate matches /fable|mythos/i only; the peer's python gate also gated opus. Not decided silently — owner's word.
 - 2026-09-10T19:20:54+0200 — REJECTED review finding, disclosed: gh/git commands stay EXEMPT from the delegate gate (per ~/.claude/rules/proactive-delegation.md: git tracking stays in the main context); the owner may overrule. gh: exempt per `~/.claude/rules/fable-plans-sonnet-executes.md` §Enforcement ("git/gh are exempt"); outward gh posts remain gated by `scripts/deny-identity-leak-to-github.js`.
+- 2026-10-16T11:13:13+0200 — column → todo by main-agent@agentlenspro. work stalled mid-way or never started; no one works it now; triage row 30
 
 ## Correction 2026-09-24
 

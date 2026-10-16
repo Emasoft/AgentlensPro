@@ -1,15 +1,18 @@
 ---
 trdd-id: 4BZPAQWM
 title: pnpm run compile is red on main — store-opener caps exceeded, and they may only go down
-column: dev
+column: blocked
 created: 2026-09-08T12:36:26+0200
-updated: 2026-09-24T11:16:30+0200
+updated: 2026-10-16T11:13:31+0200
 current-owner: main-session
 task-type: bugfix
 scope: project
 min-approval-requirement: none
 implementation-commits: [a81972f9, 7a6d6038, 8002f1f6, b79c7752, e9ec120b]
 assignee: main-session
+blocked-by: [B7DSTJLS, CS2W7E77]
+status: tasked
+pre-block-column: dev
 ---
 
 # `pnpm run compile` is red on main — store-opener caps exceeded
@@ -85,3 +88,7 @@ a judgement for whoever picks this up; both touch the store.
 - [ ] The 6 suite failures are either shown pre-existing by an actually-isolated run, or carded.
 Box 3 not ticked: every compile step except the final `node esbuild.js` exits 0 and all three bundles (media/src/dashboard.tsx, standalone/cli.ts, media/src/sidebarWebview.ts) build into reports_dev/ with exit 0; the esbuild step itself was not run because on this machine it deploys and waits on the owner (TRDD-C9BGEMSS decision 3).
 Box 4 stays open: one of the 6 failing tests, 'standalone server — P5 window auto-calibration', may belong to the now-dead capacityCalibration.ts (see TRDD-M3TWPLZO) rather than to a live store defect — not yet confirmed.
+
+## Approval log
+
+- 2026-10-16T11:13:31+0200 — column → blocked by main-agent@agentlenspro. its 6 failing suite tests are split between those two cards (commit 3e767d69); triage row 10

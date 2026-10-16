@@ -1,9 +1,9 @@
 ---
 trdd-id: N60JUWU3
 title: The graceful shutdown needs the state lock and has no timeout, so a long holder starves the stop into a SIGKILL
-column: testing
+column: todo
 created: 2026-09-02T16:36:33+0200
-updated: 2026-10-15T03:22:18+0200
+updated: 2026-10-16T11:13:15+0200
 current-owner: main-session
 task-type: bugfix
 priority: high
@@ -11,6 +11,7 @@ min-approval-requirement: none
 created-by: UTFVMVT8
 related: [UTFVMVT8, 2R36W8Q1, HFV4AIT7]
 implementation-commits: [420e6bb9]
+status: tasked
 ---
 
 # The graceful shutdown needs the state lock and has no timeout, so a long holder starves the stop into a SIGKILL
@@ -194,3 +195,7 @@ cooperative request path.
 
 - Empty section on creation.
 2026-10-15 (TRDD-DA0GN1CS commit e3c3c388): the periodic save_cards no longer runs persist_records' whole-table DuckDB scan under the state lock; it copies the resident layer's Arc handles under a short lock and strips them off it. Long-holder analyses on this card that count the save's full-corpus hold must not count it after e3c3c388. The remaining corpus-scaled DuckDB query under the lock on the sweeper is demote_cold's window query (TRDD-KMF02UEX).
+
+## Approval log
+
+- 2026-10-16T11:13:15+0200 — column → todo by main-agent@agentlenspro. work stalled mid-way or never started; no one works it now; triage row 32

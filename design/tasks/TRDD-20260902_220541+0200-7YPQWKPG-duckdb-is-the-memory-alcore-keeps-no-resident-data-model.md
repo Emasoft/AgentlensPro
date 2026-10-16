@@ -1,9 +1,9 @@
 ---
 trdd-id: 7YPQWKPG
 title: DuckDB is the memory and alcore keeps no resident data model
-column: dev
+column: human_review
 created: 2026-09-02T22:05:41+0200
-updated: 2026-10-05T02:35:10+0200
+updated: 2026-10-16T11:13:16+0200
 current-owner: main-session
 task-type: refactor
 priority: critical
@@ -14,6 +14,7 @@ npt: [YILE6N3T, 7RM5YW2T, XTFDRTH2, FSMISF5K]
 related: [768NEX6E, CAJ5RCP9, O3ICDRLO, XX1UAZHS, N60JUWU3, Q9WD3K5R]
 approved-by: user
 approved-at: 2026-09-02T22:05:41+0200
+status: tasked
 ---
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-06T04:42:39+0200
@@ -267,6 +268,7 @@ no-climb non-regression is verified here. Report:
 - 2026-09-02T22:05:41+0200 — APPROVED by USER (Tier 3: architecture ruling + PRRD golden-rule
   proposal); directive quoted verbatim in ## WHY. PRRD absent; ratification is a separate USER
   action (repo has no design/requirements/PRRD.md).
+- 2026-10-16T11:13:16+0200 — column → human_review by main-agent@agentlenspro. owner ruling: supersede by 9VX3WTGU or reword; row 2
 
 ## Notes and lessons learned
 

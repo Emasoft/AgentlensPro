@@ -1,9 +1,9 @@
 ---
 trdd-id: GR6WHHK5
 title: Boot load evicts timestamp-less codex spans within 5 s because receivedAt is stamped after writer.append
-column: testing
+column: complete
 created: 2026-09-06T02:32:43+0200
-updated: 2026-09-06T03:08:36+0200
+updated: 2026-10-16T11:13:00+0200
 current-owner: agentlenspro-b2
 task-type: bugfix
 priority: normal
@@ -15,6 +15,7 @@ eht: []
 implementation-commits: [58abca7f, c89148ce3eb20262480ddb6e652146902268b74c]
 relevant-files: [rust-core/crates/agentlens-core/src/lib.rs, rust-core/crates/agentlens-core/src/span_window.rs, rust-core/crates/agentlens-spanstore/src/writer.rs, rust-core/crates/agentlens-core/src/summarize/codex.rs]
 labels: [rust-core, memory, span-window, boot-load]
+status: archived
 ---
 
 # Boot load evicts timestamp-less codex spans within 5 s because receivedAt is stamped after writer.append
@@ -128,3 +129,4 @@ ingest site would have created a second place for "when did this span arrive" to
 - 2026-09-06T03:08:36+0200 — Merged `worktree-agent-a8a594781552e41c7` into `main`
   (c89148ce3eb20262480ddb6e652146902268b74c). `column:` stays `testing` — merged, not deployed
   (`bin-native/` untouched).
+- 2026-10-16T11:13:00+0200 — COMPLETE by main-agent@agentlenspro. 4/4 boxes ticked; fix c89148ce is on main (verified by the main agent with merge-base); no deploy step (release-via absent). Triage row 1..

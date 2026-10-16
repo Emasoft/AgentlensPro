@@ -1,9 +1,9 @@
 ---
 trdd-id: 40M4UPK3
 title: Enforce the propose then two-fork review then wait then act loop at PreToolUse
-column: dev
+column: todo
 created: 2026-09-14T08:38:31+0200
-updated: 2026-09-24T09:24:14+0200
+updated: 2026-10-16T11:13:13+0200
 current-owner: emanuelesabetta
 created-by: emanuelesabetta
 task-type: feature
@@ -15,6 +15,7 @@ approved: true
 approval-judge: emanuelesabetta
 approval-datetime: 2026-09-14T08:38:31+0200
 priority: high
+status: tasked
 ---
 
 # Enforce the propose then two-fork review then wait then act loop at PreToolUse
@@ -45,6 +46,7 @@ TRDD-1YXR6S47, TRDD-BA0DCW98, TRDD-4J1QA18G - their code paths will be deleted b
 
 - 2026-09-14T08:38:31+0200 — MANDATE issued by main-session (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-09-14 — APPROVED by emanuelesabetta: the implementation plan was approved in session via plan-mode approval. The earlier MANDATE line named a placeholder issuer.
+- 2026-10-16T11:13:13+0200 — column → todo by main-agent@agentlenspro. work stalled mid-way or never started; no one works it now; triage row 31
 
 ## Notes
 

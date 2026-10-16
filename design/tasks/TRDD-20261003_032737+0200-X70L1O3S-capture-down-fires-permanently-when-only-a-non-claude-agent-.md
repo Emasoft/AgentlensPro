@@ -1,10 +1,10 @@
 ---
 trdd-id: X70L1O3S
 title: CAPTURE DOWN fires permanently when only a non-Claude agent is active
-column: dev
+column: ai_review
 status: tasked
 created: 2026-10-03T03:27:37+0200
-updated: 2026-10-03T03:27:37+0200
+updated: 2026-10-16T11:13:23+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -28,3 +28,4 @@ Done when: a non-Claude-only payload leaves last_ingest_activity_ms untouched, a
 ## Approval log
 
 - 2026-10-03T03:27:37+0200 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-10-16T11:13:23+0200 — column → ai_review by main-agent@agentlenspro. code on main (fix 9197b784), verification not recorded; the main agent verifies next; triage row 4

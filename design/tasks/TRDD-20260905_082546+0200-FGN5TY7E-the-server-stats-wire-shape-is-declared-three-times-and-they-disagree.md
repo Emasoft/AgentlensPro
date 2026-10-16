@@ -1,9 +1,9 @@
 ---
 trdd-id: FGN5TY7E
 title: The server-stats bodies shape is hand-declared twice in one file and the two declarations disagree
-column: testing
+column: blocked
 created: 2026-09-05T08:25:46+0200
-updated: 2026-10-05T18:03:52+0200
+updated: 2026-10-16T11:13:34+0200
 current-owner: main-session
 task-type: refactor
 priority: high
@@ -11,6 +11,9 @@ min-approval-requirement: none
 created-by: U0L78B3Z
 related: [U0L78B3Z, ZIWEB0UW, 8ADTIGKT, HDUETCU7]
 implementation-commits: [0c01a3e1, 7659b9ca, 34569e8f]
+blocked-by: [HDUETCU7]
+status: tasked
+pre-block-column: testing
 ---
 
 # The server-stats bodies shape is hand-declared twice in one file and the two declarations disagree
@@ -169,3 +172,7 @@ Boxes 1 and 2 ticked on 2026-10-05 at commit 11c34385. Number of declarations of
 
 Corrections to the entry above (2026-10-05, after a review of commit d1eb1de9). Box 1 was ticked with a stated exception, as the session's judgment: two hand-written copies of the three-key parked sub-shape exist outside the one declaration, the parameter of parkedSuffix (src/cli/serverControl.ts line 678) and interface ParkedGauge (src/rustStorePass.ts line 111, read by the main agent); neither declares the bodies object, and both could be typed as ServerStatsBodies['parked']. "Every hit below was opened" overstates: the list is the bodies search plus part of the key-name search; hits in cli/surfaces.ts and storeAdmin.ts were classified by the worker and are not listed, and rustStorePass.ts was opened by the worker only around lines 122 to 135. The key-name search covered lastPass, captureDownSince, sinkProblem and parked in member form only; archive, live and spool were not searched as typed members. The names reclaimedSinceBoot and lastNonZeroPassAt were searched as plain names earlier the same day, by the main agent and by a worker, with hits only in serverControl.ts and one Rust test comment. The main agent's own run of the bodies search printed 13 lines, the worker's 15; the difference is two comment lines dropped by the main agent's filter. The sentence above saying boxes 1 and 2 were not re-verified refers to the earlier entry only. Box 3's test freezes the emitter's key set and cannot see the TypeScript interface, as this card's own review of 2026-09-05 says; it is the weakest of the three ticks.
 - 2026-10-05 18:10: TRDD-HDUETCU7's code landed as commit 97f6806a (source and tests, not deployed; its full crate test run is still owed). Box 4 here stays unticked until that card closes or the owner rewords the box. The move of this card to blocked has not been made.
+
+## Approval log
+
+- 2026-10-16T11:13:34+0200 — column → blocked by main-agent@agentlenspro. box 4 rides on HDUETCU7, which waits in human_review; triage row 8

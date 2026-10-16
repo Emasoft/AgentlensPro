@@ -1,9 +1,9 @@
 ---
 trdd-id: 5IDBAJ6O
 title: hookScripts.test.ts server-down tests could revive a real alcore on the real data dir
-column: dev
+column: ai_review
 created: 2026-09-22T23:51:29+0200
-updated: 2026-09-24T08:58:55+0200
+updated: 2026-10-16T11:13:23+0200
 current-owner: agentlenspro-main-session
 created-by: agentlenspro-main-session
 task-type: bugfix
@@ -15,6 +15,7 @@ approved: true
 approval-judge: agentlenspro-main-session
 approval-datetime: 2026-09-22T23:51:29+0200
 implementation-commits: [7734c1ff, 091799ee, 668b7889, dd63e56d]
+status: tasked
 ---
 
 # hookScripts.test.ts server-down tests could revive a real alcore on the real data dir
@@ -22,6 +23,7 @@ implementation-commits: [7734c1ff, 091799ee, 668b7889, dd63e56d]
 ## Approval log
 
 - 2026-09-22T23:51:29+0200 — MANDATE issued by agentlenspro-main-session (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-10-16T11:13:23+0200 — column → ai_review by main-agent@agentlenspro. code on main, verification not recorded; the main agent verifies next; triage row 3
 
 ## Why
 

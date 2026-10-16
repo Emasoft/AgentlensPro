@@ -1,10 +1,10 @@
 ---
 trdd-id: LZ2JDIJP
 title: The SubagentStop review gate never sees a worker's own entries so worker writes are never reviewed
-column: dev
+column: ai_review
 status: tasked
 created: 2026-10-03T03:57:21+0200
-updated: 2026-10-03T03:57:21+0200
+updated: 2026-10-16T11:13:24+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -24,3 +24,4 @@ BUG: src/cli/reviewGate.ts scanTranscriptLines does 'if (e?.isSidechain === true
 ## Approval log
 
 - 2026-10-03T03:57:21+0200 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-10-16T11:13:24+0200 — column → ai_review by main-agent@agentlenspro. code on main (fix 24094e57), verification not recorded; the main agent verifies next; triage row 5

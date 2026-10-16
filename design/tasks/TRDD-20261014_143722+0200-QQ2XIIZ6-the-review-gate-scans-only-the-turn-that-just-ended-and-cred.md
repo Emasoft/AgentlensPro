@@ -1,10 +1,10 @@
 ---
 trdd-id: QQ2XIIZ6
 title: The review gate scans only the turn that just ended and credits only non-isolated forks for REVIEW and MEASURE
-column: dev
+column: human_review
 status: tasked
 created: 2026-10-14T14:37:22+0200
-updated: 2026-10-15T13:39:00+0200
+updated: 2026-10-16T11:13:21+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -25,6 +25,7 @@ project-id: agentlenspro
 - 2026-10-14T14:37:22+0200 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-10-14 — authority is the owner's direct request in the session (quotes Q1-Q3), not a self-issued mandate.
 - 2026-10-14 — quotes Q1-Q4 (Q4 added after the first approval line).
+- 2026-10-16T11:13:21+0200 — column → human_review by main-agent@agentlenspro. owner decision on the review-display mod and the NO REVIEW POSSIBLE escape; row 14
 
 ## User directives (verbatim, 2026-10-14)
 

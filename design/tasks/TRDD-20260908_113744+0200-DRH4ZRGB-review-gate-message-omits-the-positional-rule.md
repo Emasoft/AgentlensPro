@@ -1,15 +1,18 @@
 ---
 trdd-id: DRH4ZRGB
 title: The review-gate block message omits the positional rule its own instruction violates
-column: testing
+column: blocked
 created: 2026-09-08T11:37:44+0200
-updated: 2026-09-24T08:57:20+0200
+updated: 2026-10-16T11:13:32+0200
 current-owner: main-session
 task-type: bugfix
 scope: project
 min-approval-requirement: none
 implementation-commits: [e7d1d3c7, 4521dea7, a18ff9f1, f9ec0ecc]
 eht: [7FA3NIXU]
+blocked-by: [7FA3NIXU]
+status: tasked
+pre-block-column: testing
 ---
 
 # The review-gate block message omits the positional rule its own instruction violates
@@ -295,3 +298,7 @@ Carded as TRDD-4BZPAQWM.
 ## Correction 2026-09-24
 
 Commit 847dc5c4 endorses column testing (accurate — the message work is done), but does not resolve the card's own "DO NOT CLOSE THIS CARD YET" split checklist: two of its three rows are still undone (the §The passing shape exists wikimem page has not been written; §The loop, and who drives it has not been folded into LOCAL card T2N1GOZ2). eht 7FA3NIXU is still column: backburner, so this card cannot reach complete regardless. Recorded per RULE 1 board-triage worker instruction so the next reader does not close this card prematurely.
+
+## Approval log
+
+- 2026-10-16T11:13:32+0200 — column → blocked by main-agent@agentlenspro. its eht 7FA3NIXU is backburner, not terminal; triage row 11

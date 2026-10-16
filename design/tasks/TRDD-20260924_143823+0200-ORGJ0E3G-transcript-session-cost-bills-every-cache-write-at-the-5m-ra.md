@@ -1,9 +1,9 @@
 ---
 trdd-id: ORGJ0E3G
 title: Transcript session cost bills every cache write at the 5m rate
-column: dev
+column: blocked
 created: 2026-09-24T14:38:23+0200
-updated: 2026-09-25T15:08:14+0200
+updated: 2026-10-16T11:13:33+0200
 current-owner: emanuelesabetta
 created-by: emanuelesabetta
 task-type: bugfix
@@ -15,6 +15,9 @@ approved: true
 approval-judge: emanuelesabetta
 approval-datetime: 2026-09-24T14:38:23+0200
 implementation-commits: [513623fe, 80958154, 86f4fa22, 63f41d04]
+blocked-by: [TWDGR75R]
+status: tasked
+pre-block-column: dev
 ---
 
 # Transcript session cost bills every cache write at the 5m rate
@@ -22,6 +25,7 @@ implementation-commits: [513623fe, 80958154, 86f4fa22, 63f41d04]
 ## Approval log
 
 - 2026-09-24T14:38:23+0200 — MANDATE issued by emanuelesabetta (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-10-16T11:13:33+0200 — column → blocked by main-agent@agentlenspro. deploy waits on TWDGR75R establishing the OOM cause; triage row 16
 
 ## Evidence
 

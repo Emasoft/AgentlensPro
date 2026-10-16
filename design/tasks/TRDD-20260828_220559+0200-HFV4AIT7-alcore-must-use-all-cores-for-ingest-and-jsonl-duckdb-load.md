@@ -1,14 +1,15 @@
 ---
 trdd-id: HFV4AIT7
 title: Measure and guarantee that alcore uses all CPU cores for telemetry and hook ingest and for the JSONL to DuckDB load
-column: testing
+column: todo
 created: 2026-08-28T22:05:59+0200
-updated: 2026-09-06T02:42:08+0200
+updated: 2026-10-16T11:13:16+0200
 current-owner: claude-agentlenspro
 task-type: audit
 project-id: agentlenspro
 parent-trdd: DMWOBWFH
 blocked-by: []
+status: tasked
 ---
 
 # alcore must use all CPU cores
@@ -509,3 +510,7 @@ most likely finding.
       recorded and stays under 1 s
 
 ## Notes and lessons learned
+
+## Approval log
+
+- 2026-10-16T11:13:16+0200 — column → todo by main-agent@agentlenspro. work stalled mid-way or never started; no one works it now; triage row 33; its 2026-09-05 AI review rejected it; box 1, the script, does not exist

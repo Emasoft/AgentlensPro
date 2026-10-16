@@ -1,9 +1,9 @@
 ---
 trdd-id: QJPUG1WP
 title: clippy write_with_newline in rss_guard.rs fails -D warnings on main and the CI rust job
-column: testing
+column: human_review
 created: 2026-09-10T04:51:30+0200
-updated: 2026-09-10T05:19:23+0200
+updated: 2026-10-16T11:13:20+0200
 current-owner: main
 task-type: bugfix
 min-approval-requirement: none
@@ -17,6 +17,7 @@ project-id: agentlenspro
 scope: project
 labels: [rust-core, clippy, ci]
 related: [WKLD508O, NDKKOABG, 0D6QK5CW]
+status: tasked
 ---
 
 # clippy write_with_newline in rss_guard.rs fails -D warnings on main and the CI rust job
@@ -47,4 +48,5 @@ Verified: the same `--workspace -D warnings` invocation exits 0 after the edit (
       session never pushes).
 
 ## Approval log
+- 2026-10-16T11:13:20+0200 — column → human_review by main-agent@agentlenspro. fix on main; the open box needs the owner's push and a green CI rust job; row 9
 

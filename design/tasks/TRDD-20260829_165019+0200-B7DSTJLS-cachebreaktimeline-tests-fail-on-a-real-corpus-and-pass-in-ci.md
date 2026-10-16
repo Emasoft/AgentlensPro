@@ -1,15 +1,16 @@
 ---
 trdd-id: B7DSTJLS
 title: cacheBreakTimeline tests pass in CI and fail on a developer machine, and fail differently depending on run order
-column: dev
+column: todo
 created: 2026-08-29T16:50:19+0200
-updated: 2026-09-05T20:58:36+0200
+updated: 2026-10-16T11:13:11+0200
 current-owner: main-session
 task-type: bugfix
 scope: project
 project-id: agentlenspro
 relevant-rules: []
 implementation-commits: [aef94208]
+status: tasked
 ---
 
 # cacheBreakTimeline tests fail on a real corpus and pass in CI
@@ -138,3 +139,7 @@ Analysis: reports/cachebreak-flake/20260901_195900+0200-load-dependence-analysis
 VERIFIED 2026-09-01: compile-tests 0; cacheBreakTimeline.test.js alone = 67 passing / 0 failing,
 exit 0, INCLUDING the real-corpus cost-peak test that was the full-suite run's one red (that run
 used the pre-fix out/ and ran under a deliberate load storm). → ai_review.
+
+## Approval log
+
+- 2026-10-16T11:13:11+0200 — column → todo by main-agent@agentlenspro. work stalled mid-way or never started; no one works it now; triage row 26

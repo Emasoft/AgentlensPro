@@ -1,9 +1,9 @@
 ---
 trdd-id: 2LH25PBB
 title: Store the cache read-write boundary per body so every element is classified exactly
-column: dev
+column: todo
 created: 2026-09-03T19:58:55+0200
-updated: 2026-09-04T19:01:56+0200
+updated: 2026-10-16T11:13:11+0200
 current-owner: claude-code
 task-type: feature
 severity: HIGH
@@ -13,6 +13,7 @@ parent-trdd:
 npt: []
 eht: [3UJB4MN3, AS5DZJRC, FE1RXC6D, HCK5162J]
 release-via: publish
+status: tasked
 ---
 
 # Store the cache read-write boundary per body so every element is classified exactly
@@ -324,3 +325,7 @@ column is null and a backfill pass fills it. Null means "not yet computed", neve
 - **Two false verdicts this session came from the same class of error**: reasoning from structure
   without reconciling against the billed numbers. The billed usage is the oracle; the structural
   diff explains it. When they disagree, the disagreement is the finding.
+
+## Approval log
+
+- 2026-10-16T11:13:11+0200 — column → todo by main-agent@agentlenspro. work stalled mid-way or never started; no one works it now; triage row 27
