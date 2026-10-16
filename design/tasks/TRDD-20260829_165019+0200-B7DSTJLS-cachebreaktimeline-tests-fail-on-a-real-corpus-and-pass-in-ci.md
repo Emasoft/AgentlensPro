@@ -3,7 +3,7 @@ trdd-id: B7DSTJLS
 title: cacheBreakTimeline tests pass in CI and fail on a developer machine, and fail differently depending on run order
 column: todo
 created: 2026-08-29T16:50:19+0200
-updated: 2026-10-16T11:13:11+0200
+updated: 2026-10-16T11:15:59+0200
 current-owner: main-session
 task-type: bugfix
 scope: project
@@ -128,6 +128,7 @@ Find what is unbounded, before changing any timeout. In order:
       re-derive it a third time.
 
 ## Notes and lessons learned
+2026-10-16: moved to todo by the board triage (row 26). What remains: Whole-file pass, run-order explanation, mutation check and comment update: none ticked. Commit 3e767d69 puts part of the six failing suite tests here (the rest on CS2W7E77).
 
 ## STATE (history) — 2026-09-01 — FIX LANDED, verification pending (folded into the top block on 09-05)
 

@@ -3,7 +3,7 @@ trdd-id: ORGJ0E3G
 title: Transcript session cost bills every cache write at the 5m rate
 column: blocked
 created: 2026-09-24T14:38:23+0200
-updated: 2026-10-16T11:13:33+0200
+updated: 2026-10-16T11:16:30+0200
 current-owner: emanuelesabetta
 created-by: emanuelesabetta
 task-type: bugfix
@@ -18,6 +18,7 @@ implementation-commits: [513623fe, 80958154, 86f4fa22, 63f41d04]
 blocked-by: [TWDGR75R]
 status: tasked
 pre-block-column: dev
+unblock-when: [trdd:TWDGR75R terminal]
 ---
 
 # Transcript session cost bills every cache write at the 5m rate

@@ -4,7 +4,7 @@ title: Cache-break idle judgment reads only the last write's tier and overstates
 column: todo
 status: tasked
 created: 2026-09-25T00:23:21+0200
-updated: 2026-10-16T11:13:12+0200
+updated: 2026-10-16T11:16:14+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -34,3 +34,7 @@ OPEN LIMIT (adversarial review of 76e5b134, 2026-09-25): the mirror direction (e
 - 2026-09-25T00:23:21+0200 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-09-25T05:34:00+0200 — column → dev by main-agent@agentlenspro. owner default taken 2026-09-25: label 'assumed' on mixed-tier writes
 - 2026-10-16T11:13:12+0200 — column → todo by main-agent@agentlenspro. work stalled mid-way or never started; no one works it now; triage row 29
+
+## Notes and lessons learned
+
+2026-10-16: moved to todo by the board triage (row 29). What remains: The open limit, or an explicit owner acceptance of it; neither recorded.

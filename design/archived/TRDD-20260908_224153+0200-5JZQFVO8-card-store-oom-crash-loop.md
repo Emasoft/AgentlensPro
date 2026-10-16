@@ -1,9 +1,9 @@
 ---
 trdd-id: 5JZQFVO8
 title: The collector crash-loops at boot because the card store 256 MB DuckDB pool overflows during the boot sweep upsert
-column: dev
+column: complete
 created: 2026-09-08T22:41:53+0200
-updated: 2026-09-24T08:58:47+0200
+updated: 2026-10-16T17:03:53+0200
 current-owner: main
 task-type: bugfix
 min-approval-requirement: none
@@ -18,6 +18,7 @@ project-id: agentlenspro
 scope: project
 labels: [rust, duckdb, card-store, boot, crash-loop, memory]
 relevant-rules: []
+status: archived
 ---
 
 # The collector crash-loops at boot because the card store 256 MB DuckDB pool overflows during the boot sweep upsert
@@ -142,10 +143,12 @@ exits — repeating on every subsequent hook fire.
       before implementation.
 - [x] A hook-revive boot against the real `~/.agentlens` store completes the boot sweep without
       an OOM panic.
-- [ ] `cargo test --workspace` (excluding known-hanging `tldr coupling` per project memory)
+- [x] `cargo test --workspace` (excluding known-hanging `tldr coupling` per project memory)
       passes on the affected crate.
+2026-10-16: box 5 ticked on evidence: cargo test --workspace passed 991 tests with 0 failures on the tree at aa61b49d, which contains this card's fixes 6c596b5f and 86acd104 (both on main); report docs_dev/20261016-tyjss45n-impl-report.md, Gates (commit 1).
 
 ## Approval log
+- 2026-10-16T17:03:53+0200 — COMPLETE by main-agent@agentlenspro. all 5 boxes ticked; fixes on main; workspace suite green 2026-10-16.
 
 
 ## Deploy result 2026-09-23

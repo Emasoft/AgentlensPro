@@ -3,7 +3,7 @@ trdd-id: HFV4AIT7
 title: Measure and guarantee that alcore uses all CPU cores for telemetry and hook ingest and for the JSONL to DuckDB load
 column: todo
 created: 2026-08-28T22:05:59+0200
-updated: 2026-10-16T11:13:16+0200
+updated: 2026-10-16T11:16:06+0200
 current-owner: claude-agentlenspro
 task-type: audit
 project-id: agentlenspro
@@ -510,6 +510,7 @@ most likely finding.
       recorded and stays under 1 s
 
 ## Notes and lessons learned
+2026-10-16: moved to todo by the board triage (row 33). What remains: Box 1 (the script) was never written. AI review on 2026-09-05 rejected the card back to dev; the column still says testing.
 
 ## Approval log
 

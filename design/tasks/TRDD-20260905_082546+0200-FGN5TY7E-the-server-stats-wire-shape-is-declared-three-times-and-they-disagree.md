@@ -3,7 +3,7 @@ trdd-id: FGN5TY7E
 title: The server-stats bodies shape is hand-declared twice in one file and the two declarations disagree
 column: blocked
 created: 2026-09-05T08:25:46+0200
-updated: 2026-10-16T11:13:34+0200
+updated: 2026-10-16T11:16:29+0200
 current-owner: main-session
 task-type: refactor
 priority: high
@@ -14,6 +14,7 @@ implementation-commits: [0c01a3e1, 7659b9ca, 34569e8f]
 blocked-by: [HDUETCU7]
 status: tasked
 pre-block-column: testing
+unblock-when: [trdd:HDUETCU7 terminal]
 ---
 
 # The server-stats bodies shape is hand-declared twice in one file and the two declarations disagree

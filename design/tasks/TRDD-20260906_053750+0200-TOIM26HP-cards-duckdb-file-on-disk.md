@@ -1,9 +1,9 @@
 ---
 trdd-id: TOIM26HP
 title: The session-card DuckDB store is a file under the data dir, not an in-memory database
-column: dev
+column: human_review
 created: 2026-09-06T05:37:50+0200
-updated: 2026-09-06T08:10:28+0200
+updated: 2026-10-16T11:16:42+0200
 current-owner: kraken-agent-acb4ac9d59a86a1c5
 task-type: refactor
 parent-trdd: 7YPQWKPG
@@ -12,6 +12,7 @@ scope: project
 project-id: agentlenspro
 relevant-rules: []
 implementation-commits: [486290c3]
+status: tasked
 ---
 
 # The session-card DuckDB store is a file under the data dir
@@ -132,3 +133,4 @@ card's parent's actual target), it is a follow-up that must wire the `LOG_INGEST
 
 - 2026-09-06T05:37:50+0200 — Tier 0 (`min-approval-requirement: none`): a derived refactor of one
   module inside the parent card's approved scope, authored directly in `design/tasks/`.
+- 2026-10-16T11:16:42+0200 — column → human_review by main-agent@agentlenspro. only box 4 is open: a deploy plus a live RSS measurement; a deploy needs the owner (row 17)

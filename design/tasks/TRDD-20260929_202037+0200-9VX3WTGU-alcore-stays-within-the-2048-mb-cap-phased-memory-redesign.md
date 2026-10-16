@@ -1,10 +1,10 @@
 ---
 trdd-id: 9VX3WTGU
 title: alcore stays within the 2048 MB cap — phased memory redesign
-column: dev
+column: todo
 status: tasked
 created: 2026-09-29T20:20:37+0200
-updated: 2026-10-16T09:21:29+0200
+updated: 2026-10-16T11:16:43+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: feature
@@ -153,6 +153,7 @@ Cap 2048 MB. `check_and_enforce`. Ingestion durability (spans → NDJSON day fil
 2026-10-02T20:00:00+0200 — Amendments 2-6 recorded from the approved plan (robust-chasing-crystal.md): A2 CLI 'sessions' verb (E-TS); A3 hot-knob model (registrations=restart, behavior=hot hook-config.json, ladder thresholds via config.json .pressure, memory self-check via GET /api/memory-selfcheck with setup stepSelfTest); A4 durability AT-LEAST-ONCE (ack after group-commit fsync — sibling card S1 dispatched AFTER Phase D; blackouts via D torn-tail + fsync-before-ack); A5 Phase A per-OS threshold tables (macOS 0.7/0.8/0.9 calibrated; Linux RSS APPROXIMATE 0.75/0.85/0.92; no Windows binary); A6 port-in-use check + switch to a free port before any bind (owner directive 2026-10-02). Execution order unchanged: A→B→C→F→D→E→G, TS lane after C, soak after C+F+D with named failure branch.
 2026-10-02T16:12:53+0200 — CORRECTION: the preceding entry's timestamp 2026-10-02T20:00:00+0200 was hand-typed; the real write time was ~2026-10-02T15:53+0200 (see the STATE line). Its A3/A5/'execution order unchanged' claims are superseded by the body section '## Amendments 2-6 (as dispatched)'.
 2026-10-02T16:23:00+0200 — CORRECTION 2: the 2026-10-02 Approval-log entry's A6 ('switch to a free port before any bind') is also superseded: OTLP never silently switches (a squatted 4318 refuses loudly); see Amendments A6 + A6 ADDENDUM.
+- 2026-10-16T11:16:43+0200 — column → todo by main-agent@agentlenspro. no phase is in progress; the 2026-10-16 commits naming it were card notes, not work (row 25)
 
 ## Amendment 1 — dashboard reads: DuckDB pagination + SQL stats (owner directive 2026-09-29, verbatim)
 

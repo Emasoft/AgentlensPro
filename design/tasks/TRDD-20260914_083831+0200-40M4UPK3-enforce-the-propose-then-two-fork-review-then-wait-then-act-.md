@@ -3,7 +3,7 @@ trdd-id: 40M4UPK3
 title: Enforce the propose then two-fork review then wait then act loop at PreToolUse
 column: todo
 created: 2026-09-14T08:38:31+0200
-updated: 2026-10-16T11:13:13+0200
+updated: 2026-10-16T11:16:05+0200
 current-owner: emanuelesabetta
 created-by: emanuelesabetta
 task-type: feature
@@ -54,3 +54,4 @@ Amendment A1' (2026-09-22): the marker `PROPOSAL FOR ACTION - PLEASE REVIEW` is 
 Round-2 review findings for round 3 (2026-09-22): (a) a spawned fork whose prompt does not contain the proposal's key is reported as 'role-not-spawned' although it WAS spawned -- once wired, that wrong reason invites re-spawning (the token-draining loop the owner stopped on 2026-09-15); add a distinct reason telling the agent to paste the proposal verbatim. (b) the A1' test 'two proposals sharing the same first content line' places P1's spawns BEFORE P2, so position alone excludes them from cycle 2 and the test only fails on key equality -- add the real binding test: after P2, a fork quoting P1 must not credit cycle 2 while one quoting P2 does. (c) a content-reflow test (re-wrapped/re-indented pasted proposal still binds) was requested and not added. (d) two proposals sharing >160 chars of opening text still collide, and very short content gives a weak key -- decide a minimum content length or a longer/whole-content key. (e) the markerIndex === -1 fallback in proposalKey is unreachable and would return the old marker-derived key -- delete it or return ''. (f) for a body-less proposal the message prints key "" -- drop the key there.
 2026-09-24T08:56:26+0200 — from superseded TRDD-WAW0M092 (mechanism deleted, Gen-2 mtime arm): (a) batch writes into fewer turns halves fork count — cheap, orthogonal, still true under Gen 3/4; (b) copy-rename lost-update-race objection — worth remembering if any future design reintroduces atomic-landing.
 2026-09-24: stage 2 must reuse declaredRole / declaredRoleOwnTranscript from src/cli/reviewGate.ts rather than re-deriving its own marker regex -- reviewSupervisor.ts already does this correctly (imports declaredRole, uses it at line 86), confirmed while working TRDD-BA0DCW98's directive/supervisor-parity pass; follow that precedent.
+2026-10-16: moved to todo by the board triage (row 31). What remains: A red test and the rest of the stage list.

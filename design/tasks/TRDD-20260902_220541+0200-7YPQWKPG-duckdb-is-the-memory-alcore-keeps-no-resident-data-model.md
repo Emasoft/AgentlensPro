@@ -1,20 +1,22 @@
 ---
 trdd-id: 7YPQWKPG
 title: DuckDB is the memory and alcore keeps no resident data model
-column: human_review
+column: blocked
 created: 2026-09-02T22:05:41+0200
-updated: 2026-10-16T11:13:16+0200
+updated: 2026-10-16T11:16:42+0200
 current-owner: main-session
 task-type: refactor
 priority: critical
 min-approval-requirement: user
 requested-by: user
-blocked-by: []
+blocked-by: [7RM5YW2T, FSMISF5K]
 npt: [YILE6N3T, 7RM5YW2T, XTFDRTH2, FSMISF5K]
 related: [768NEX6E, CAJ5RCP9, O3ICDRLO, XX1UAZHS, N60JUWU3, Q9WD3K5R]
 approved-by: user
 approved-at: 2026-09-02T22:05:41+0200
 status: tasked
+unblock-when: [trdd:7RM5YW2T terminal, trdd:FSMISF5K terminal]
+pre-block-column: human_review
 ---
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-06T04:42:39+0200
@@ -269,6 +271,7 @@ no-climb non-regression is verified here. Report:
   proposal); directive quoted verbatim in ## WHY. PRRD absent; ratification is a separate USER
   action (repo has no design/requirements/PRRD.md).
 - 2026-10-16T11:13:16+0200 — column → human_review by main-agent@agentlenspro. owner ruling: supersede by 9VX3WTGU or reword; row 2
+- 2026-10-16T11:16:42+0200 — column → blocked by main-agent@agentlenspro. its NPTs 7RM5YW2T and FSMISF5K are unfinished (lint ORDER-NPT-VIOLATED); the owner ruling on supersede-by-9VX3WTGU or reword is also pending (triage row 2)
 
 ## Notes and lessons learned
 

@@ -3,7 +3,7 @@ trdd-id: ZQQYRYBO
 title: Align AgentlensPro with Claude Code 2.1.253 to 2.1.281
 column: todo
 created: 2026-09-24T13:39:40+0200
-updated: 2026-10-16T11:13:12+0200
+updated: 2026-10-16T11:16:02+0200
 current-owner: emanuelesabetta
 created-by: emanuelesabetta
 task-type: refactor
@@ -121,6 +121,7 @@ Defaults taken or proposed 2026-09-25 (owner may veto):
 
 ## Notes and lessons learned
 DO NOT verify a patch with a hand-picked --test list, BECAUSE the I6c2 worktree run named 9 parity suites, omitted log_reader_parity, and a stale fixture reached main. DO run cargo test -p agentlens-core -p agentlens-logscan --no-fail-fast (the whole crate) before committing.
+2026-10-16: moved to todo by the board triage (row 28). What remains: 13 open items: I3, I5, I6, I8, I9, I12 (blocked on capture), I13, I15, I17, I18, I20, I21, I22.
 
 ## Approval log
 
