@@ -7,6 +7,7 @@ import { spawn } from 'child_process'
 import { HOT_PATH_BUDGET_MS, LATENCY_EXEMPT } from '../cli/main'
 import { MAX_RATIO_ABSOLUTE_DEADLINE, oversubscription, skipIfUnmeasurable } from './loadAware'
 import { assertNoSurvivingServer } from './helpers/noSurvivingServer'
+import { freePort } from './helpers/freePort'
 
 // TRDD-E8XIC2PM — a latency guard for every command a harness runs on its hot path.
 //
@@ -30,6 +31,9 @@ const DROP_URL = 'http://10.255.255.1:3000'
 
 interface RunResult { code: number | null; stdout: string; ms: number }
 
+/** The isolated port trio pinned into every spawned command's env (TRDD-YGEV6QDD box A1). */
+interface HotPathPorts { ui: number; mcp: number; otlp: number }
+
 function run(args: string[], env: NodeJS.ProcessEnv, stdin: string): Promise<RunResult> {
   const t0 = Date.now()
   return new Promise((resolve) => {
@@ -43,19 +47,27 @@ function run(args: string[], env: NodeJS.ProcessEnv, stdin: string): Promise<Run
   })
 }
 
-function baseEnv(home: string): NodeJS.ProcessEnv {
+function baseEnv(home: string, ports: HotPathPorts): NodeJS.ProcessEnv {
   const env = { ...process.env }
   for (const k of Object.keys(env)) if (k.startsWith('AGENTLENS_')) delete env[k]
-  delete env.DATA_DIR; delete env.UI_PORT; delete env.MCP_PORT; delete env.OTLP_PORT
+  delete env.DATA_DIR
   return {
     ...env, HOME: home, USERPROFILE: home,
+    // TRDD-YGEV6QDD box A1 — defence in depth BEHIND the brake below, not instead of it. A revive
+    // takes its ports from this env first (alcoreServeArgs, src/cli/serverControl.ts), then from
+    // ports.json, then the canonical 3000/4318/4316 — so with no pins here, a revive that slipped
+    // past the brake would bind the LIVE server's ports. These used to be DELETED, which also undid
+    // the run-wide defaults src/test/setup.js assigns; this test takes its own freePort() trio so a
+    // slipped revive cannot collide with another suite's server on those shared defaults either.
+    UI_PORT: String(ports.ui), MCP_PORT: String(ports.mcp), OTLP_PORT: String(ports.otlp),
     AGENTLENS_UI_URL: DROP_URL, AGENTLENS_MCP_URL: `${DROP_URL}/mcp`,
     AGENTLENS_GATE_TIMEOUT: '1', AGENTLENS_HOOK_TIMEOUT: '1',
     // TRDD-YGEV6QDD: the `hook`/`gate` recipes below run the REAL forwardHookEvent() path, which
     // on a failed POST (this test aims it at a black-holed address on purpose) falls through to
     // reviveDaemonDetached() (src/cli/hookHandlers.ts) — a real detached `alcore serve` with NO
-    // port args, i.e. the DEFAULT canonical ports 3000/4316/4318, only `--data-dir` following this
-    // fixture's HOME. Measured leaking a daemon for 7h (pid 850). This test measures dispatch
+    // port args, so before the pins above it took the DEFAULT canonical ports 3000/4316/4318, only
+    // `--data-dir` following this fixture's HOME. Measured leaking a daemon for 7h (pid 850). This
+    // test measures dispatch
     // latency, not revive behavior, so braking the spawn (spool still happens) is correct.
     AGENTLENS_NO_REVIVE: '1',
   }
@@ -144,16 +156,27 @@ suite('CLI hot-path latency guard (TRDD-E8XIC2PM)', () => {
     }
     if (skipIfUnmeasurable(this, MAX_RATIO_ABSOLUTE_DEADLINE)) return
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'al-lat-'))
+    // TRDD-YGEV6QDD box A1: one isolated trio for the whole test, so every recipe's possible revive
+    // would land on the same throwaway ports, never on the canonical ones.
+    const ports: HotPathPorts = { ui: await freePort(), mcp: await freePort(), otlp: await freePort() }
     try {
       const slow: string[] = []
       for (const [cmd, budget] of Object.entries(HOT_PATH_BUDGET_MS)) {
         const recipe = RECIPES[cmd]
         assert.ok(recipe, `${cmd} is classified hot-path but has no recipe here — it would be counted as covered while never running`)
-        const r = await run(recipe.args, baseEnv(home), recipe.stdin)
+        const r = await run(recipe.args, baseEnv(home, ports), recipe.stdin)
         if (r.ms >= budget) slow.push(`${cmd}: ${r.ms}ms >= ${budget}ms ceiling`)
       }
       assert.deepStrictEqual(slow, [], `a hung socket is holding the process open:\n  ${slow.join('\n  ')}`)
-    } finally { assertNoSurvivingServer(home); fs.rmSync(home, { recursive: true, force: true }) }
+    } finally {
+      // TRDD-YGEV6QDD box A2: the helper is handed the DATA dir, not HOME — baseEnv deletes DATA_DIR
+      // and every AGENTLENS_* var, so a revive resolves dataDir() to <home>/.agentlens and claims
+      // <home>/.agentlens/server.pid there. The helper stops the pid that file names (only after a ps
+      // snapshot shows that pid's argv carrying this data dir, so a recycled pid is never killed) and
+      // then runs the original argv tripwire; either finding still fails this test.
+      assertNoSurvivingServer(path.join(home, '.agentlens'))
+      fs.rmSync(home, { recursive: true, force: true })
+    }
   })
 
   test('the top-level FAILURE exit flushes too — a failed command must not truncate what it wrote', () => {

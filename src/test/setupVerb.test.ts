@@ -23,11 +23,13 @@ import { ownedTelemetryKeys } from '../telemetryConfig'
 // mocha run), reviveDaemonDetached() spawns a REAL `alcore serve` with `alcoreServeArgs()` called
 // with NO args — so it takes the fixture's `--data-dir` (from AGENTLENS_DATA_DIR, set below by
 // execRegisteredCommand) but the DEFAULT ports 3000/4316/4318, because that env carries no
-// UI_PORT/MCP_PORT/OTLP_PORT. Root-cause fix (not ours to make — non-test code): setup.ts
-// execRegisteredCommand (src/cli/setup.ts:286-299) should add `AGENTLENS_NO_REVIVE: '1'` to the
-// env it builds for the hook/gate/review execs — the self-test already owns the server's
-// lifecycle end-to-end, so a revive-on-failure during it is never wanted. Belt-and-suspenders
-// here: brake every revive the exec'd hook could ever trigger — it inherits `process.env` via
+// UI_PORT/MCP_PORT/OTLP_PORT. That missing port pin IS the product-side defect: execRegisteredCommand
+// pins the data dir but not the ports, so a revive it triggers binds the canonical ones. It is
+// non-test code and is tracked in TRDD-4EV3OJ19, not fixed here. An earlier version of this comment
+// recommended adding `AGENTLENS_NO_REVIVE: '1'` inside execRegisteredCommand instead; that
+// recommendation was REJECTED (TRDD-YGEV6QDD STATE) because the brake does not address the real
+// defect, the missing port pins. What this file does is test-side only: brake every revive the
+// exec'd hook could ever trigger — it inherits `process.env` via
 // execRegisteredCommand's spread (src/cli/setup.ts:287), which is how setting this IN-PROCESS
 // var reaches the child — scoped per-suite (never root-level: a root suiteSetup/suiteTeardown in
 // mocha's TDD ui attaches to the WHOLE RUN, leaking into every other test file) to just the

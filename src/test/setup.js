@@ -285,6 +285,62 @@ function findProcessNaming(needle) {
   }
 }
 
+// ---- TRDD-YGEV6QDD box A3: no `alcore` may outlive the run with a data dir under os.tmpdir() --------
+//
+// The per-test tripwire (helpers/noSurvivingServer.ts) only looks for the ONE data dir its test
+// hands it, and the TEST_ROOT survivor scan below only for argv naming THIS run's own root — but
+// most fixtures mkdtemp a SIBLING of that root (os.tmpdir()/al-lat-*, al-daemon-*, ...), so a
+// server leaked by a test that never called the tripwire was invisible to both. This scans every
+// `alcore ... serve ... --data-dir X` and flags X under the system tmp root.
+//
+// What it must NOT flag, and why it does not:
+//   - the live server: its data dir is ~/.agentlens (REAL_HOME), never under os.tmpdir();
+//   - a server that was ALREADY running when this run loaded (e.g. the leaked debug alcore of
+//     TRDD-4FLTDMHA, whose data dir does sit under tmpdir) — excluded by pid AND by data dir, both
+//     snapshotted at require time, before any test could have spawned anything;
+//   - another test process's servers: this mocha runs ONE process (.mocharc.cjs has no `parallel`),
+//     so every test of this run is ours, and anything a concurrent run had up at our load time is
+//     excluded above. The remaining blind spot is a SECOND, separate test run started while this one
+//     is in flight: a server it boots under tmpdir would be flagged here. Accepted, not hidden — it
+//     is a false red on a box running two suites at once, never a false green.
+// It reports and fails; it does NOT kill. The per-test tripwire already kills what it owns, and a
+// process this check cannot attribute (the blind spot above) is not ours to kill.
+//
+// Both path forms are compared: argv carries whatever string the spawner passed (usually the
+// unresolved os.tmpdir() form, /var/folders/... on macOS, while TMP_ROOT_REAL is /private/var/...),
+// and the fixture dir may already be rm'd, so realpathSync can no longer resolve it.
+const TMP_ROOT_RAW = os.tmpdir()
+// Anchored on the EXECUTABLE (first argv word ends in `alcore`, then `serve`), not the loose
+// "alcore ... serve ... --data-dir anywhere in the line" form findLiveServerDataDirs uses: a shell
+// whose own command text merely MENTIONS such a line (an agent's Bash call, a ps|grep) would
+// otherwise read as a leaked server and fail the run. Measured while building this check: the zsh
+// running a mutation probe matched the loose form.
+const ALCORE_SERVE_RE = /^\d+\s+\S*\balcore\s+serve\b.*?--data-dir[= ]+(\S+)/
+const isUnder = (p, root) => p === root || p.startsWith(root + path.sep)
+
+/** Every alcore serve line in a fresh `ps` snapshot (snapshot to a string, then search — never a
+ *  live `ps | grep`). Throws if ps cannot run: a check that silently answers "none" when it could
+ *  not look would be a false green. */
+function alcoreServeLines() {
+  const out = execFileSync('ps', ['-eo', 'pid,command'], { encoding: 'utf-8' })
+  return out.split('\n').map((l) => l.trim()).filter((l) => ALCORE_SERVE_RE.test(l))
+}
+const PREEXISTING_ALCORE_PIDS = new Set(alcoreServeLines().map((l) => Number(l.split(/\s+/)[0])))
+
+function findTmpAlcoreSurvivors() {
+  const hits = []
+  for (const line of alcoreServeLines()) {
+    if (PREEXISTING_ALCORE_PIDS.has(Number(line.split(/\s+/)[0]))) continue
+    const dir = line.match(ALCORE_SERVE_RE)[1]
+    let real = null
+    try { real = fs.realpathSync(dir) } catch { /* fixture dir already removed — judge the argv form */ }
+    const inTmp = [dir, real].some((p) => p && (isUnder(p, TMP_ROOT_RAW) || isUnder(p, TMP_ROOT_REAL)))
+    if (!inTmp) continue
+    if (real && LIVE_SERVER_DATA_DIRS.some((live) => isUnder(real, live))) continue
+    hits.push(line)
+  }
+  return hits
+}
 // Mocha "root hook plugin" shape (exports.mochaHooks) — works regardless of the configured UI
 // (`tdd` here), unlike a bare top-level before/after which only the bdd interface exposes.
 exports.mochaHooks = {
@@ -361,6 +417,25 @@ exports.mochaHooks = {
       fs.rmSync(TEST_ROOT, { recursive: true, force: true })
     }
 
+    // TRDD-YGEV6QDD box A3 (see findTmpAlcoreSurvivors). Polled like the scan above: a server whose
+    // test just stopped it may still be mid-exit. When it fires it carries the other two findings in
+    // its message, so this throw never masks the spool-leak or temp-root checks below.
+    let tmpAlcore = findTmpAlcoreSurvivors()
+    const tmpDeadline = Date.now() + 2000
+    while (tmpAlcore.length > 0 && Date.now() < tmpDeadline) {
+      await new Promise((r) => setTimeout(r, 200))
+      tmpAlcore = findTmpAlcoreSurvivors()
+    }
+    if (tmpAlcore.length > 0) {
+      const also = []
+      if (leaked) also.push(`also: a hook wrote this run's marker into the REAL spool dir ${realSpoolDir}`)
+      if (survivor) also.push(`also: a process still names the temp root (${survivor})`)
+      throw new Error(
+        `test isolation guard: alcore server(s) with a --data-dir under ${TMP_ROOT_RAW} outlived the suite ` +
+        `(not killed — find which test started them):\n  ${tmpAlcore.join('\n  ')}` +
+        (also.length > 0 ? `\n${also.join('\n')}` : ''),
+      )
+    }
     if (leaked) {
       throw new Error(
         `test isolation guard: a hook wrote this run's marker into the REAL spool dir ${realSpoolDir} ` +
