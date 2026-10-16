@@ -3,7 +3,7 @@ trdd-id: N6A8VX3G
 title: Persist the OTLP body-pointer link so response rows gain a session_id
 column: testing
 created: 2026-09-03T04:59:59+0200
-updated: 2026-10-09T00:16:17+0200
+updated: 2026-10-16T21:42:38+0200
 current-owner: main-session
 task-type: feature
 priority: high
@@ -75,6 +75,7 @@ one-call-lagged, neither a same-call pair. This card is only about the same-call
 - 2026-10-08T19:57:37+0200 — column → testing by main-agent@agentlenspro.
 
 ## Notes and lessons learned
+2026-10-16: GVA8TTJF no longer lists this card in blocked-by (its code landed before GVA8TTJF entered dev). Box 3 stays unticked: review round 3 made the contract one-way, so its live real-pair proof is GVA8TTJF's box 5, but re-wording or delegating this box is an acceptance change left to the owner. Owed before complete: the restart-timing measurement (never run; no record on card or in commits). The torn-tail item is met in its round-3 form: tests/delta_log.rs torn-tail tests pass, 12/12. The STATE NEXT ACTION is stale, since the code landed in 34668285; the real next action is the restart-timing measurement, which needs a deployed binary.
 
 ## Dispatched (2026-10-08)
 
