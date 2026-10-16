@@ -4,7 +4,7 @@ title: Functions and closures that still return a Result that can no longer fail
 column: todo
 status: tasked
 created: 2026-10-16T09:21:33+0200
-updated: 2026-10-16T09:21:36+0200
+updated: 2026-10-16T09:26:29+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: refactor
@@ -25,3 +25,12 @@ After aa61b49d made lock_timed infallible and 4ebb9196 cleaned five functions, c
 ## Approval log
 
 - 2026-10-16T09:21:33+0200 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+
+## Acceptance
+
+- [ ] Every listed site is converted, or its reason to stay is recorded.
+- [ ] clippy --workspace --all-targets -D warnings stays clean, and cargo test --workspace passes apart from TRDD-WBYDQH8K's baseline signatures.
+
+## Notes and lessons learned
+
+2026-10-16: created from the accepted review finding on 4ebb9196 (TRDD-TYJSS45N); acceptance added after the review of c5136f6d.

@@ -3,7 +3,7 @@ trdd-id: HSPUF5XH
 title: Bump and publish agentlenspro only after every open card is terminal and every known issue is fixed
 column: blocked
 created: 2026-09-03T10:48:30+0200
-updated: 2026-10-16T09:23:16+0200
+updated: 2026-10-16T09:26:35+0200
 current-owner: main-session
 task-type: infra
 min-approval-requirement: user
@@ -12,7 +12,7 @@ created-by: main-session
 npt: []
 eht: []
 pre-block-column: todo
-blocked-by: [2R36W8Q1, N60JUWU3, CAJ5RCP9, 9SYRK6SW, QE114936, 768NEX6E, 7YPQWKPG, 7NHUU6GK, ZSX34J8F, 2R0AXCKL, 2TQHNMEC, CS2W7E77, H3D5ZBO1, WCENKH6T, 6B7VV2Z7, WCG7I5D8, WBYDQH8K, ATXO2E1J]
+blocked-by: [2R36W8Q1, N60JUWU3, CAJ5RCP9, 9SYRK6SW, QE114936, 768NEX6E, 7YPQWKPG, 7NHUU6GK, ZSX34J8F, 2R0AXCKL, 2TQHNMEC, CS2W7E77, H3D5ZBO1, WCENKH6T, 6B7VV2Z7, WCG7I5D8, WBYDQH8K, ATXO2E1J, OLKITCS7]
 post-release-verification: [IXMB2JVD]
 blocker-probe: [trddgrep, why, HSPUF5XH]
 blocker-holds-if: not-match:READY
@@ -244,6 +244,7 @@ review-gate: the gate no longer demands a review for a declared-role worker's sc
 2026-10-16: the deployable set now includes 542ceca2 (TRDD-3RVTC1HY): any panic now exits the collector and the hook revive or supervisor restarts it; a request-triggered panic restarts it (five unclassified request-path sites: card HFY30YBT). Keep 3RVTC1HY on this card's blocker list until it is terminal.
 2026-10-16: drops TYJSS45N (complete); adds WBYDQH8K (the watcher test fails about one run in five on an unmodified tree, a known issue the release gate requires fixed).
 2026-10-16: adds ATXO2E1J (functions and closures that still return a Result that cannot fail).
+2026-10-16: adds OLKITCS7 (request-path panics beyond unwrap and expect, the dependency caught-panic question, and the late-panic restart without backoff). Also noted there: publish.yml does not run cargo test, so a release must come from a commit CI passed.
 
 ## Notes and lessons learned
 
