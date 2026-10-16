@@ -3,7 +3,7 @@ trdd-id: HSPUF5XH
 title: Bump and publish agentlenspro only after every open card is terminal and every known issue is fixed
 column: blocked
 created: 2026-09-03T10:48:30+0200
-updated: 2026-10-16T06:42:03+0200
+updated: 2026-10-16T09:17:54+0200
 current-owner: main-session
 task-type: infra
 min-approval-requirement: user
@@ -12,7 +12,7 @@ created-by: main-session
 npt: []
 eht: []
 pre-block-column: todo
-blocked-by: [2R36W8Q1, N60JUWU3, CAJ5RCP9, 9SYRK6SW, QE114936, 768NEX6E, 7YPQWKPG, 7NHUU6GK, ZSX34J8F, 2R0AXCKL, 2TQHNMEC, CS2W7E77, H3D5ZBO1, WCENKH6T, 3RVTC1HY, TYJSS45N, 6B7VV2Z7, WCG7I5D8]
+blocked-by: [2R36W8Q1, N60JUWU3, CAJ5RCP9, 9SYRK6SW, QE114936, 768NEX6E, 7YPQWKPG, 7NHUU6GK, ZSX34J8F, 2R0AXCKL, 2TQHNMEC, CS2W7E77, H3D5ZBO1, WCENKH6T, 3RVTC1HY, 6B7VV2Z7, WCG7I5D8, WBYDQH8K]
 post-release-verification: [IXMB2JVD]
 blocker-probe: [trddgrep, why, HSPUF5XH]
 blocker-holds-if: not-match:READY
@@ -242,6 +242,7 @@ review-gate: the gate no longer demands a review for a declared-role worker's sc
 2026-10-15: possible CI timeout, inferred and not measured on a CI runner. The rust job in ci.yml (line 254) runs clippy and then cargo test --manifest-path rust-core/Cargo.toml --workspace, under timeout-minutes: 40 (line 257). On 2026-09-02 that job took 2 to 10 minutes on GitHub's runner (runs 33667160582, 33666353235, 33646696194), for the suite as it was then. On this Mac at 7c077027 the durations of the 147 test-result lines summed to 1460 s, compile time not counted, the slowest 514.62 s; the 1-minute load was 10.7 at the start and 20.2 at the end, the 15-minute load 37.5 at the end. In an emulated linux/amd64 container under host load at cc0cee02 the first 80 binaries took 3206 s summed, tests/card_store.rs alone 2825.87 s. Whether today's suite fits in 40 minutes on a native runner is unknown until CI runs.
 2026-10-15: 10NGH2BR removed from blocked-by and listed under User-gated cards. It blocked the release because CI runs that test on Linux with no retry; cc0cee02 runs it alone in its own process, which removes the shared-process failure path by construction, and the moved test passed 20 of 20 Linux runs. What remains on 10NGH2BR is an owner decision on the wording of boxes 1 and 3 and a cause that is not established, so the release no longer waits on it. The same rule was not applied to the four backburner cards still in blocked-by (7NHUU6GK, ZSX34J8F, 2R0AXCKL, 2TQHNMEC), which stay for the owner or a later pass.
 2026-10-16: the deployable set now includes 542ceca2 (TRDD-3RVTC1HY): any panic now exits the collector and the hook revive or supervisor restarts it; a request-triggered panic restarts it (five unclassified request-path sites: card HFY30YBT). Keep 3RVTC1HY on this card's blocker list until it is terminal.
+2026-10-16: drops TYJSS45N (complete); adds WBYDQH8K (the watcher test fails about one run in five on an unmodified tree, a known issue the release gate requires fixed).
 
 ## Notes and lessons learned
 

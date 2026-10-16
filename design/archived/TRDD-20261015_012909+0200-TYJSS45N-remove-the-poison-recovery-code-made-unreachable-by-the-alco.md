@@ -1,10 +1,10 @@
 ---
 trdd-id: TYJSS45N
 title: Remove the poison-recovery code made unreachable by the alcore panic hook
-column: dev
-status: tasked
+column: complete
+status: archived
 created: 2026-10-15T01:29:09+0200
-updated: 2026-10-16T08:45:07+0200
+updated: 2026-10-16T09:17:53+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -20,6 +20,7 @@ pre-block-column:
 project-id: agentlenspro
 blocker-probe:
 blocker-holds-if:
+implementation-commits: [aa61b49d, 4ebb9196]
 ---
 
 # Remove the poison-recovery code made unreachable by the alcore panic hook
@@ -38,6 +39,7 @@ After TRDD-3RVTC1HY (a panic hook in the alcore binary that exits the process), 
 - 2026-10-15T01:50:19+0200 — column → todo by main-agent@agentlenspro. not blocked: it is an EHT of 3RVTC1HY; its body gates the work on 3RVTC1HY landing Cleared blocked-by (--clear-blocker override).
 - 2026-10-15T03:22:06+0200 — column → backburner by main-agent@agentlenspro. pull when TRDD-3RVTC1HY reaches testing: until the panic hook lands the poison-recovery code is still reachable, and a todo card would be drained early
 - 2026-10-16T06:41:49+0200 — column → dev by main-agent@agentlenspro. pulled: 3RVTC1HY in testing (542ceca2); reviewed proposal 2026-10-16
+- 2026-10-16T09:17:53+0200 — COMPLETE by main-agent@agentlenspro. both commits landed (aa61b49d, 4ebb9196), gates green except the baseline watcher flake, reviews done.
 
 ## Notes and lessons learned
 
@@ -50,3 +52,5 @@ After TRDD-3RVTC1HY (a panic hook in the alcore binary that exits the process), 
 2026-10-16: count correction: 152 is the number of lines containing lock_timed() across src and tests (comments, the trait line and test sites included); 136 is the number of production CoreState sites by category in reports_dev/tyjss45n-facts.md. Both stand, they count different things.
 2026-10-16: box 1 is met for the scope-corrected CoreState list (see the scope note); the 15 non-CoreState sites are out of scope by decision. Guard-scope audit: reports_dev/tyjss45n-guard-audit.md, 44 functions SAFE, 0 risk.
 2026-10-16: commit 2: the five functions that could no longer fail (summary_now, stripped_now, burn_status_now, burn_status_seed, sse_response) return their value directly; gates: clippy --workspace --all-targets -D warnings exit 0; cargo test -p agentlens-core stopped at the first failing binary (81 binaries reached): tests/log_reader_parity.rs watcher_advances_a_card_on_growth_without_waiting_for_the_backstop failed (left 3, right 4 at line 510); cargo test --workspace --no-fail-fast: 990 passed, 1 failed (the same test); 1-minute load 13.85 at the start of the crate run and 19.58 at the end of the workspace run. That test is flaky and not caused by commit 2: isolated runs failed 2 of 6 at aa61b49d (commit 1, 1-minute load 12.0 to 12.6) and 4 of 10 on the current tree (1-minute load 12.6 to 29.2). Correction to aa61b49d's message: lock_timed returns StateGuard<'_> (the shell dropped the apostrophe, so the message reads StateGuard<_>); the 136 CoreState sites are A92 + B25 + E3 + C6 + D7 plus shutdown, the lock_timed body and the trait line (reports_dev/tyjss45n-facts.md:38).
+2026-10-16: review of 4ebb9196. (1) Its message says push_update's let-else was the last silent skip of this shape; wrong: the same commit also removes run_burn_tick's let-else, and no codebase-wide search backs 'the last'. (2) VERIFIED: the five changed functions are called only from ui.rs and log_reader.rs references none of them, so the watcher test (it calls only log_reader::start_sweeper) cannot reach them. (3) composition_for keeps a real error source (the join map_err) and compositions_in_scope propagates it, so both Result types stay. (4) The line-510 watcher failure predates this card (4/20 on 542ceca2^, 4/20 on 4ebb9196; TRDD-WBYDQH8K) and does not block it.
+2026-10-16: close-out (docs_dev/20261016-tyjss45n-closeout-report.md): release build exit 0; pnpm run test:unit 3177 passing, 13 pending, 0 failing; clippy -W clippy::unnecessary_wraps finds no hit in the touched files. Both commits reviewed; the dispositions are in the 4ebb9196 note above. The only red gate was the baseline watcher signature (TRDD-WBYDQH8K).
