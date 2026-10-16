@@ -4,7 +4,7 @@ title: X70L1O3S capture-clock test never asserts the non-Claude span was ingeste
 column: todo
 status: tasked
 created: 2026-10-16T20:52:43+0200
-updated: 2026-10-16T20:52:43+0200
+updated: 2026-10-16T20:54:00+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -26,3 +26,9 @@ Disclosure for the 2026-10-16 closures of X70L1O3S, LZ2JDIJP and 5IDBAJ6O (archi
 ## Approval log
 
 - 2026-10-16T20:52:43+0200 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+
+## Acceptance
+
+- [ ] The test asserts the non-Claude span was ingested before asserting the clock did not move, and fails when the stamp is made unconditional (mutation run, not reasoned).
+- [ ] LZ2JDIJP's real-data replay is re-run with a committed script, OR the owner records accepting the self-reported 2026-10-03 result.
+- [ ] 5IDBAJ6O's spawn-env audit is re-verified, OR the owner records accepting it together with the two documented isolation limits.
