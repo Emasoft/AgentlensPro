@@ -190,6 +190,13 @@ pub fn cache_turns_relation(store_dir: &Path, data_dir: &Path, since_ms: Option<
     let sl_root = data_dir.join("statusline");
     let statusline = crate::statusline_store::relation_for(&sl_root, "main", since_ms, None)?;
     let api = api_calls_relation(store_dir)?;
+    // WHY writePct = 100 * write / (write + read), NULL when both are 0 (review B4, TRDD-GVA8TTJF):
+    // this is the ONE established statusline write% — src/cli/statuslineHistoryCli.ts `write_pct`
+    // (`total > 0 ? (100 * write) / total : null`, a null column read as 0), the
+    // `statusline-history cache` view CLAUDE.md names as the falsifier. The acceptance query exists
+    // to cross-check that view, so any other formula disagrees by construction: the old
+    // creation / (input + read) fraction left the write out of its denominator and gave ~33,333
+    // for a full cold write.
     Some(format!(
         "WITH \
          turns AS ( \
@@ -210,11 +217,11 @@ pub fn cache_turns_relation(store_dir: &Path, data_dir: &Path, since_ms: Option<
            api.cache_miss_reason, \
            api.cache_read_tokens, api.cache_creation_tokens, \
            api.input_tokens, api.output_tokens, api.tier_5m_tokens, api.tier_1h_tokens, \
-           CASE WHEN COALESCE(sl.context_window_current_usage_input_tokens, 0) \
+           CASE WHEN COALESCE(sl.context_window_current_usage_cache_creation_input_tokens, 0) \
                      + COALESCE(sl.context_window_current_usage_cache_read_input_tokens, 0) > 0 \
-                THEN CAST(sl.context_window_current_usage_cache_creation_input_tokens AS DOUBLE) \
-                     / (CAST(sl.context_window_current_usage_input_tokens AS DOUBLE) \
-                        + CAST(sl.context_window_current_usage_cache_read_input_tokens AS DOUBLE)) \
+                THEN 100.0 * CAST(COALESCE(sl.context_window_current_usage_cache_creation_input_tokens, 0) AS DOUBLE) \
+                     / (CAST(COALESCE(sl.context_window_current_usage_cache_creation_input_tokens, 0) AS DOUBLE) \
+                        + CAST(COALESCE(sl.context_window_current_usage_cache_read_input_tokens, 0) AS DOUBLE)) \
                 ELSE NULL END AS writePct, \
            api.call_stem, api.request_paired, api.response_paired \
          FROM turns sl \
@@ -451,6 +458,11 @@ mod cache_turns_sql_tests {
     /// One sealed statusline part through the REAL store (append → flush → seal), never a
     /// hand-built parquet. prompt_id is a TOP-LEVEL payload key (statuslineCapture.ts:15).
     fn seed_statusline(data: &Path, session: &str, prompt: Option<&str>, ts: i64) {
+        seed_statusline_usage(data, session, prompt, ts, 500, 3000);
+    }
+
+    /// seed_statusline with the turn's cache split chosen: `write` = cache_creation, `read` = cache_read.
+    fn seed_statusline_usage(data: &Path, session: &str, prompt: Option<&str>, ts: i64, write: i64, read: i64) {
         use crate::statusline_store::StatuslineStore;
         let mut st = StatuslineStore::new(data.join("statusline"));
         let mut m = Map::new();
@@ -460,8 +472,8 @@ mod cache_turns_sql_tests {
         m.insert("prompt_cache_ttl".into(), json!("1h"));
         m.insert("context_window_current_usage_input_tokens".into(), json!(1000));
         m.insert("context_window_current_usage_output_tokens".into(), json!(200));
-        m.insert("context_window_current_usage_cache_creation_input_tokens".into(), json!(500));
-        m.insert("context_window_current_usage_cache_read_input_tokens".into(), json!(3000));
+        m.insert("context_window_current_usage_cache_creation_input_tokens".into(), json!(write));
+        m.insert("context_window_current_usage_cache_read_input_tokens".into(), json!(read));
         st.append(&m, "main", ts as f64);
         st.flush(None);
     }
@@ -491,10 +503,32 @@ mod cache_turns_sql_tests {
         assert_eq!(r["cache_miss_reason"], json!("below_min_cacheable"));
         assert_eq!(r["cache_read_tokens"], json!(900));
         assert_eq!(r["cache_creation_tokens"], json!(50));
-        // writePct = 500 / (1000 + 3000) = 0.125
-        assert!((r["writePct"].as_f64().unwrap() - 0.125).abs() < 1e-9, "writePct was {:?}", r["writePct"]);
+        // writePct = 100 * 500 / (500 + 3000) = 14.2857… (statusline write%, review B4)
+        assert!((r["writePct"].as_f64().unwrap() - 100.0 * 500.0 / 3500.0).abs() < 1e-9, "writePct was {:?}", r["writePct"]);
         assert_eq!(r["call_stem"], json!("2f8c1a2b"), "request stem wins via the pair");
         assert_eq!(r["response_paired"], json!(true));
+        let _ = std::fs::remove_dir_all(&data);
+    }
+
+    #[test]
+    fn full_cold_write_turn_reads_write_pct_100() {
+        // Review B4: a full cold write (cache_read 0) is 100% write on the statusline scale. The old
+        // creation / (input + read) fraction gave 500 / 1000 = 0.5 here, so this pins the scale too.
+        let data = tmp("cold");
+        seed_store(&data, &[
+            ("2f8c1a2b.request.json", request_body("sess-c", "claude-opus-5"), T0),
+            ("req_r1.response.json", response_body("msg_1", "claude-opus-5"), T0 + 900),
+        ]);
+        seed_links(&data, &[
+            link_row("sess-c", "span-c", "request", "/b/2f8c1a2b.request.json", "rbid-1", "", T0),
+            link_row("sess-c", "span-c", "response", "/b/req_r1.response.json", "rbid-1", "msg_1", T0 + 900),
+        ]);
+        seed_statusline_usage(&data, "sess-c", Some("p1"), T0 + 500, 500, 0);
+
+        let rows = run_cache_turns_sql(&data.join("store"), &data, "SELECT writePct FROM turns",
+            None, None, &HashMap::new()).expect("run outer").expect("run inner");
+        assert_eq!(rows.len(), 1, "one turn row, got {rows:?}");
+        assert!((rows[0]["writePct"].as_f64().unwrap() - 100.0).abs() < 1e-9, "writePct was {:?}", rows[0]["writePct"]);
         let _ = std::fs::remove_dir_all(&data);
     }
 

@@ -66,8 +66,9 @@ fn size_of(p: &Path) -> u64 {
 /// (cards.duckdb still holds it). Concurrency: appends to one delta are serialized in-process (the
 /// sweeper thread for log-sessions/log-offsets, the state lock for body-links) and pid_lock gives
 /// one server per data dir, so no append races the repair; the body-links SQL reader
-/// (cache_turns_sql.rs, read_ndjson_auto, ignore_errors=false) already rejects a torn tail, so the
-/// repair cannot make it worse. Checks the last byte first; block-scans backwards only when needed.
+/// (cache_turns_sql.rs install_body_links) reads through load(), which drops a torn tail exactly as
+/// replay does, so the repair cannot make it worse. Checks the last byte first; block-scans
+/// backwards only when needed.
 fn heal_torn_tail(file: &Path) -> Result<(), String> {
     use std::io::{Read, Seek, SeekFrom};
     const BLOCK: u64 = 64 * 1024;
@@ -320,8 +321,9 @@ impl DeltaLog {
 
     /// TRDD-N6A8VX3G — unconditional compaction for boot, bypassing save()'s size gate: after
     /// load(), one verified snapshot rewrite drops the delta, bounding it to per-boot volume and
-    /// healing a torn trailing line a hard kill can leave (read_lines tolerates ONE torn tail;
-    /// the SQL consumer's read_ndjson_auto does not — the damage must be healed, not tolerated).
+    /// healing a torn trailing line a hard kill can leave (read_lines tolerates ONE torn tail, and
+    /// the body-links SQL consumer reads through load() too — cache_turns_sql.rs install_body_links —
+    /// so this is cleanup, not a precondition for reading).
     /// No-op while the delta is empty: the snapshot already holds everything.
     pub fn compact_now(&mut self, records: &IndexMap<String, Value>) -> Result<u64, String> {
         if size_of(&self.delta_path) == 0 {

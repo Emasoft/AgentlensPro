@@ -327,8 +327,8 @@ pub struct CoreState {
     /// TRDD-N6A8VX3G: the durable request↔response link rows (one per BodyPointer ingested).
     /// Key: format!("{span_or_req}:{kind}:{ts}") — unique per pointer. Appended per ingest via
     /// append_changed (zero bytes when unchanged); load()+compact_now() at boot rewrites the
-    /// delta into the verified snapshot. GVA8TTJF reads the ndjson files directly (DuckDB
-    /// read_ndjson_auto over the body-links.*.ndjson glob).
+    /// delta into the verified snapshot. GVA8TTJF reads them through DeltaLog::load into a VARCHAR
+    /// DuckDB table (cache_turns_sql.rs install_body_links), never as raw ndjson.
     pub body_links: delta_log::DeltaLog,
     pub spool_tap: Option<Arc<spool_tap::SpoolTap>>,
     /// Why `spool_tap` is `None`, for `/api/ingest-status`.
