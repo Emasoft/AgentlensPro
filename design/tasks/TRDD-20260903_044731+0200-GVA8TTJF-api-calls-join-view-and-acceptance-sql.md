@@ -3,7 +3,7 @@ trdd-id: GVA8TTJF
 title: api_calls coalesced view, cache_turns statusline join, and the acceptance SQL
 column: dev
 created: 2026-09-03T04:47:31+0200
-updated: 2026-10-16T23:23:07+0200
+updated: 2026-10-16T23:26:08+0200
 current-owner: main-session
 task-type: feature
 priority: high
@@ -90,7 +90,7 @@ pattern), not as SQL `CREATE VIEW` statements:
 - [ ] Response rows resolve a non-NULL `session_id` via the N6A8VX3G link table (not from their
       own row, which carries none natively).
 - [ ] Before run_cache_turns_sql is registered (B3): one query's peak alcore RSS on a body-links log of about 700k records is measured and fits under the RSS cap, OR the replay streams instead of materializing the whole log.
-- [ ] The acceptance query over a 700k-record body-links log completes in under 60 s on this machine. Measured 1410 s at 0b2c294b..f3f4899c; the pairs CTE's OR join is the inferred cause.
+- [ ] The acceptance query over a 700k-record body-links log completes within the MCP tool-call deadline on this machine (PROVISIONAL 60 s until that deadline is located; the number is unsourced). Measured 1410 s at 0b2c294b..f3f4899c; the pairs CTE's OR join is the inferred cause.
 
 ## Approval log
 - 2026-10-08T20:07:30+0200 — column → dev by main-agent@agentlenspro.
@@ -104,6 +104,7 @@ pattern), not as SQL `CREATE VIEW` statements:
 2026-10-16 ai_review of fb09facf: FAILED, back to dev. Blockers: B1 body-links read flat (cache_turns_sql.rs:86-91 binds t.session_id) while DeltaLog writes {"k","v"} lines (delta_log.rs:4, :212), so any real file gives a Binder Error, with no last-wins or tombstone replay; the test fixtures write flat rows. B2 link columns not VARCHAR-sealed: read_ndjson_auto infers UUID, which breaks COALESCE and the <> '' guards (reviewer-measured). B3 run_cache_turns_sql is not in assets/mcp-tools.json (0 hits), so tool_exists (mcp.rs:72) rejects it and the arm is unreachable. B4 writePct = write/(input+read) disagrees with statusline-history's 100*write/(write+read). Plus 5 MAJOR and 6 MINOR. Main verified B1's code and the delta_log format, and B3's 0 hits; B2 and B4 are reviewer-reported. Fix order and full list: docs_dev/20261016-gva8ttjf-code-review.md (gitignored), back-to-dev items 1-8.
 2026-10-16 0b2c294b (B1+B2): body-links are replayed by DeltaLog::load into an all-VARCHAR DuckDB table. load() is read-only: it calls replay only; heal_torn_tail runs only in the append paths, delta_log.rs:283/:311 (main read it). The five mutations, worker-reported per docs_dev/20261016-gva8ttjf-b1b2-fix-report.md: flat binding; raw read without replay or cast; UUID column; tombstone ignored; [delta, snapshot] order. GATE BEFORE B3 makes the query reachable: every query materializes the WHOLE body-links log in alcore memory, as serde Values plus a DuckDB copy. Keys are span:kind:ts, so they are never superseded (inferred from the key shape; no measured log has shown repeats); boot compaction drops only superseded and tombstoned lines, so with no retention the live record count, which load() holds in memory, grows without bound. At the planned ~700k rows this is an inferred 0.7-1 GB transient inside a process that dies at a 2 GB cap. Measure one query's peak RSS on a realistic log, or stream the replay, before registering the tool. Untested: ts_ms written as an f64 would fail the BIGINT cast.
 2026-10-16 memory gate MEASURED, FAILS (docs_dev/20261016-gva8ttjf-memory-gate-report.md, worker-measured in a separate process with alcore's own phys_footprint metric). On a 700k-record body-links log, DeltaLog::load alone peaks at 1993 MiB and one query at 2217 MiB from a 2.7 MiB baseline, over the 2048 MiB cap. load() scales linearly at about 2.85 KB per record against 387 B on disk: read_lines holds the whole file plus a Vec<Value>, replay clones every v, and load re-serializes each value for the written hashes. The DuckDB side adds only about 100-225 MiB. Fix direction: a streaming visitor on DeltaLog (pass 1 indexes k to the winning file and offset and validates; pass 2 appends only winning lines from a borrowed 8-field struct), with load() rebuilt on top of it so replay keeps ONE definition. Second finding, inferred without EXPLAIN: the query took 1410 s at 700k, and 316 s with only 2 api rows, so the pairs CTE dominates. Its join predicate is an OR of two equalities, which DuckDB cannot hash-join, so it likely runs as a nested loop over about 350k x 350k with threads=2. Live ~/.agentlens has no body-links files today, so 700k is the planned size, not the present one.
+2026-10-16: the streaming replay belongs to TRDD-AJGTQ007, because DeltaLog::load is shared with the card-snapshot boot path. This card's own remaining work is the pairs-CTE join (EXPLAIN ANALYZE first, then two equi-join arms kept disjoint by the COALESCE(link_rbid,'')='' guard), B3/M1 and M4. After the join fix it goes to blocked on AJGTQ007.
 
 ## N6A8VX3G landed — join requirements for THIS card (2026-10-08)
 
