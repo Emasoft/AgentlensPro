@@ -3,7 +3,7 @@ trdd-id: GVA8TTJF
 title: api_calls coalesced view, cache_turns statusline join, and the acceptance SQL
 column: dev
 created: 2026-09-03T04:47:31+0200
-updated: 2026-10-16T22:01:28+0200
+updated: 2026-10-16T22:02:40+0200
 current-owner: main-session
 task-type: feature
 priority: high
@@ -89,6 +89,7 @@ pattern), not as SQL `CREATE VIEW` statements:
       breaking the join, per ATOM-KR07-9K0D).
 - [ ] Response rows resolve a non-NULL `session_id` via the N6A8VX3G link table (not from their
       own row, which carries none natively).
+- [ ] Before run_cache_turns_sql is registered (B3): one query's peak alcore RSS on a body-links log of about 700k records is measured and fits under the RSS cap, OR the replay streams instead of materializing the whole log.
 
 ## Approval log
 - 2026-10-08T20:07:30+0200 — column → dev by main-agent@agentlenspro.
@@ -100,7 +101,7 @@ pattern), not as SQL `CREATE VIEW` statements:
 ## Notes and lessons learned
 2026-10-16: blocked-by [9SYRK6SW, N6A8VX3G] cleared (not moved to npt: an NPT must be terminal before its parent passes dev, and neither is, and CAJ5RCP9 already claims both as EHTs). The dependency was build order and is satisfied. Figures in this note (timestamps, 4752 parts, strings count 0) are reported by the triage worker and not re-checked by main; that CAJ5RCP9 claims both as EHTs is inferred from lint output that showed one of them. Both landed before this card entered dev (34668285 at 19:57, dev at 20:07 on 2026-10-08; 9SYRK6SW's writer has written 4752 api_call parts). The one remaining gate for live boxes 2, 3 and 5 is an alcore rebuild from HEAD, codesign and restart: the deployed bin-native alcore is dated 2026-10-03 and contains neither body-links nor run_cache_turns_sql (strings count 0), and the collector is currently down in an RSS-cap crash loop. Synthetic tests pass: cache_turns_sql 4/4, body_link 2/2. Box wording is left for the owner: box 1 names a call_id that does not exist (pairing is via link rows), box 3 names run_diagnostics_sql where the arm is run_cache_turns_sql. Evidence: docs_dev/20261016-gva8-n6a8-cycle-report.md (gitignored).
 2026-10-16 ai_review of fb09facf: FAILED, back to dev. Blockers: B1 body-links read flat (cache_turns_sql.rs:86-91 binds t.session_id) while DeltaLog writes {"k","v"} lines (delta_log.rs:4, :212), so any real file gives a Binder Error, with no last-wins or tombstone replay; the test fixtures write flat rows. B2 link columns not VARCHAR-sealed: read_ndjson_auto infers UUID, which breaks COALESCE and the <> '' guards (reviewer-measured). B3 run_cache_turns_sql is not in assets/mcp-tools.json (0 hits), so tool_exists (mcp.rs:72) rejects it and the arm is unreachable. B4 writePct = write/(input+read) disagrees with statusline-history's 100*write/(write+read). Plus 5 MAJOR and 6 MINOR. Main verified B1's code and the delta_log format, and B3's 0 hits; B2 and B4 are reviewer-reported. Fix order and full list: docs_dev/20261016-gva8ttjf-code-review.md (gitignored), back-to-dev items 1-8.
-2026-10-16 0b2c294b (B1+B2): body-links are replayed by DeltaLog::load into an all-VARCHAR DuckDB table. load() is read-only: it calls replay only; heal_torn_tail runs only in the append paths, delta_log.rs:283/:311 (main read it). The five mutations, worker-reported per docs_dev/20261016-gva8ttjf-b1b2-fix-report.md: flat binding; raw read without replay or cast; UUID column; tombstone ignored; [delta, snapshot] order. GATE BEFORE B3 makes the query reachable: every query materializes the WHOLE body-links log in alcore memory, as serde Values plus a DuckDB copy. Keys are span:kind:ts, so they are never superseded, and the log grows until boot compaction. At the planned ~700k rows this is an inferred 0.7-1 GB transient inside a process that dies at a 2 GB cap. Measure one query's peak RSS on a realistic log, or stream the replay, before registering the tool. Untested: ts_ms written as an f64 would fail the BIGINT cast.
+2026-10-16 0b2c294b (B1+B2): body-links are replayed by DeltaLog::load into an all-VARCHAR DuckDB table. load() is read-only: it calls replay only; heal_torn_tail runs only in the append paths, delta_log.rs:283/:311 (main read it). The five mutations, worker-reported per docs_dev/20261016-gva8ttjf-b1b2-fix-report.md: flat binding; raw read without replay or cast; UUID column; tombstone ignored; [delta, snapshot] order. GATE BEFORE B3 makes the query reachable: every query materializes the WHOLE body-links log in alcore memory, as serde Values plus a DuckDB copy. Keys are span:kind:ts, so they are never superseded (inferred from the key shape; no measured log has shown repeats); boot compaction drops only superseded and tombstoned lines, so with no retention the live record count, which load() holds in memory, grows without bound. At the planned ~700k rows this is an inferred 0.7-1 GB transient inside a process that dies at a 2 GB cap. Measure one query's peak RSS on a realistic log, or stream the replay, before registering the tool. Untested: ts_ms written as an f64 would fail the BIGINT cast.
 
 ## N6A8VX3G landed — join requirements for THIS card (2026-10-08)
 
