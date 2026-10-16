@@ -855,42 +855,48 @@ impl DurableState {
         }
     }
 
-    /// The restore (server.ts startup): when the delta logs are CURRENT, restored cards go into
-    /// the map (timelines capped, then the global tier) and the offsets seed the tailer's gate.
-    /// Returns (restored cards, imported offsets, skipped offsets); version-stale logs restore
-    /// nothing: the offsets log is tombstoned and the version stamped at once (TRDD-A2KNXCNH), the
-    /// card log by the next card save.
+    /// The restore (server.ts startup) from the card snapshot, for a store that was not reused:
+    /// when the delta logs are CURRENT, restored cards go into the map (timelines capped, then the
+    /// global tier). Returns (restored cards, 0, 0): the saved read positions are never imported
+    /// on this path — they are tombstoned and the boot sweep re-reads every file (TRDD-6B7VV2Z7,
+    /// B'; WHY at the tombstone below). Version-stale logs restore nothing: both logs are
+    /// tombstoned and then the version stamped, at once (TRDD-A2KNXCNH, TRDD-6B7VV2Z7).
     ///
     /// TRDD-ORGJ0E3G (usage-only backfill, replacing both the 7→8 whole-corpus version bump AND
     /// the full-card re-parse this superseded — see `LOG_INGEST_VERSION`'s doc comment and
     /// TRDD-TWDGR75R for why each was retracted): a card whose file has since been deleted or
     /// rotated (Claude Code's own `cleanupPeriodDays`, or a Codex/Copilot/OpenCode source that
-    /// rotated) is the ONLY copy of that session's history, and a card whose file DOES still
-    /// exist gets its history rebuilt bigger than the persisted form ever was if it is fully
-    /// re-parsed. So `restore()` never rebuilds ANY card and never touches ANY file offset here;
-    /// it only queues `(session_id, path)` for a card that is missing a field added by a later
-    /// parser (`cacheCreate1hTokens`, currently) AND whose source file still exists, for
-    /// `run_1h_backfill` to patch after boot with a usage-only pass over that one file.
-    fn restore_from_snapshot(&mut self, tailer: &mut LogTailer, state: &mut crate::CoreState, env: &Env) -> Result<(usize, usize, usize), String> {
+    /// rotated) is the ONLY copy of that session's history, so the restore keeps every card it
+    /// finds. The restore itself never rebuilds ANY card; it only queues `(session_id, path)` for
+    /// a card that is missing a field added by a later parser (`cacheCreate1hTokens`, currently)
+    /// AND whose source file still exists, for `run_1h_backfill` to patch after boot with a
+    /// usage-only pass over that one file.
+    fn restore_from_snapshot(&mut self, state: &mut crate::CoreState, env: &Env) -> Result<(usize, usize, usize), String> {
         let cards = self.cards.load()?;
         let offsets = self.offsets.load()?;
         if !self.version_is_current() {
             if !cards.is_empty() || !offsets.is_empty() {
-                eprintln!("{} alcore: log-ingest semantics changed (v{LOG_INGEST_VERSION}) — cold-rescanning; stale read positions tombstoned now, stale card entries on the next durable card save", crate::log_ts());
+                eprintln!("{} alcore: log-ingest semantics changed (v{LOG_INGEST_VERSION}) — cold-rescanning; stale read positions and card entries tombstoned now", crate::log_ts());
             }
             // TRDD-A2KNXCNH: tombstone the stale read positions and stamp the version NOW, before
-            // the cold rescan, stamp LAST (a kill between the two re-runs this branch, which is
-            // idempotent). WHY: the rescan appends per-chunk positions with `append_changed`, which
-            // fills `written`; the first tick may then write 0 offset bytes and skip
+            // the cold rescan. WHY: the rescan appends per-chunk positions with `append_changed`,
+            // which fills `written`; the first tick may then write 0 offset bytes and skip
             // `stamp_version` (it stamps only when bytes > 0), and a death before the first card
             // save would leave current positions under a stale stamp — the next boot would discard
-            // the whole scan. log-sessions is deliberately NOT tombstoned here: without
-            // TRDD-6B7VV2Z7 (B'), a version bump followed by a refused reuse before the first card
-            // save would then restore an EMPTY snapshot next to current positions, so the cards
-            // would come back MISSING instead of stale; that tombstone belongs to 6B7VV2Z7. The `?`
-            // fails the start on a disk error (fail-fast) rather than rescanning onto a log that
-            // still holds stale positions.
+            // the whole scan.
+            // TRDD-6B7VV2Z7 (B'): tombstone log-sessions here too. WHY: a death before the first
+            // card save would otherwise leave the stale snapshot under a CURRENT stamp, and the next
+            // refused reuse would restore it as if it described this ingest version. No new loss:
+            // this branch puts no card into the store and `self.cards.load()` above seeded
+            // `written` with every stale key, so the first full `save_cards` after the rescan would
+            // tombstone every key the rescan did not rebuild anyway (gone-file cards included) —
+            // this only does it earlier.
+            // ORDER: both tombstones BEFORE `stamp_version`. A death between them leaves the stale
+            // stamp, so the next boot repeats this branch, which is idempotent; the reverse order
+            // would leave a current stamp over stale cards. The `?` fails the start on a disk error
+            // (fail-fast) rather than rescanning onto logs that still hold stale entries.
             self.offsets.save(&IndexMap::new())?;
+            self.cards.save(&IndexMap::new())?;
             self.stamp_version();
             return Ok((0, 0, 0));
         }
@@ -946,14 +952,23 @@ impl DurableState {
             state.cards.commit();
             state.demote_cold_timelines(crate::summarize::retention::timeline_hot_cards());
         }
-        // Every card and every file offset is restored untouched — flagged or not — so a
-        // deleted/rotated source never loses history and no file is re-read twice for the same
-        // bytes. The flagged list is only a plan for `run_1h_backfill`; nothing here does I/O.
+        // Every card is restored untouched — flagged or not — so a deleted/rotated source never
+        // loses history. The flagged list is only a plan for `run_1h_backfill`; nothing here does I/O.
         if backfill_candidates > 0 || too_old > 0 {
             eprintln!("{} alcore: log-ingest 1h-tier backfill — flagged {backfill_candidates} transcript(s) for a usage-only cache_create_1h pass after boot ({too_old} skipped, older than {} days)", crate::log_ts(), REPARSE_MAX_AGE.as_secs() / 86_400);
         }
-        let (imported, skipped) = tailer.import_file_state(&offsets);
-        Ok((restored, imported, skipped))
+        // TRDD-6B7VV2Z7 (B'): the saved read positions are NOT imported on this path; they are
+        // tombstoned NOW and the boot sweep re-reads every file. WHY: positions always run ahead
+        // of the card snapshot after a crash — `ingest_chunk` appends them per chunk and `tick`
+        // saves offsets more often than cards — so importing them would mark as unchanged every
+        // file whose card the snapshot lacks or holds stale, and that card would stay missing or
+        // stale until its file changed again. The rescan rebuilds every card whose file exists;
+        // the snapshot puts above keep the gone-file cards. The tombstone is eager, not left to the
+        // next offsets save, so a death before that save cannot hand the stale positions to a
+        // later reused boot (`restore_reused` imports them). It relies on `self.offsets.load()`
+        // above: `save` tombstones only keys that load seeded into `written`.
+        self.offsets.save(&IndexMap::new())?;
+        Ok((restored, 0, 0))
     }
 
 
@@ -976,7 +991,7 @@ impl DurableState {
             }
             Err(e) => eprintln!("{} alcore: could not load body-links: {e}", crate::log_ts()),
         }
-        let out = if state.cards.reused() { self.restore_reused(tailer, state, env)? } else { self.restore_from_snapshot(tailer, state, env)? };
+        let out = if state.cards.reused() { self.restore_reused(tailer, state, env)? } else { self.restore_from_snapshot(state, env)? };
         state.cards.mark_restore_complete();
         Ok(out)
     }
@@ -990,12 +1005,13 @@ impl DurableState {
             // WHY not reuse: the offsets (and the card snapshot) are stamped with another ingest
             // semantics — or not stamped at all — so the offsets about to be imported would not
             // describe this corpus. Discard the rows and take the legacy path, which sees the same
-            // stale stamp, restores nothing and tombstones the stale entries on the next save
-            // (skipping `self.cards.load()` here would leave them in the snapshot to be trusted
-            // as current once the first save re-stamps the version).
+            // stale stamp, restores nothing, and tombstones BOTH logs before re-stamping the version
+            // (TRDD-A2KNXCNH, TRDD-6B7VV2Z7). That path loads both logs first, which is what seeds
+            // the keys those tombstones name; skipping the load would leave the stale entries in
+            // the snapshot to be trusted as current once the version is re-stamped.
             eprintln!("{} alcore: card store reuse refused — the offsets log is stamped with another ingest version; discarding the cards and cold-rescanning", crate::log_ts());
             state.cards.discard_cards();
-            return self.restore_from_snapshot(tailer, state, env);
+            return self.restore_from_snapshot(state, env);
         }
         let offsets = self.offsets.load()?;
         let restored = state.cards.len();

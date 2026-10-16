@@ -237,6 +237,21 @@ fn parent_card(scanned: &[ScannedFile]) -> &Value {
     scanned.iter().flat_map(|s| &s.cards).find(|c| c["sessionId"] == "cccccccc-1111-2222-3333-444444444444").expect("parent card")
 }
 
+/// TRDD-6B7VV2Z7 (B'): a start that REUSES `<data>/spans2` (complete after the previous start's
+/// restore) imports every saved read position, and its boot sweep reads no unchanged file — the
+/// skip-on-unchanged gate, which the snapshot path no longer has. The caller drops its own handle
+/// on that store first (two live stores over one file would be two writers on one database).
+fn assert_reused_start_reads_nothing(data: &Path, env: &Env, now: i64, cards: usize, files: usize) {
+    let state = std::sync::Mutex::new(CoreState::open(&data.join("spans2")));
+    assert!(state.lock().unwrap().cards.reused(), "precondition: the previous start's store is reused");
+    let mut tailer = LogTailer::default();
+    let r = DurableState::open(data).restore(&mut tailer, &mut state.lock().unwrap(), env).unwrap();
+    assert_eq!(r, (cards, files, 0), "the reused start imports every saved read position");
+    let (scanned, s) = tailer.sweep(env, now, None);
+    assert_eq!((s.files, s.full_reads), (files, 0), "a reused start re-reads no unchanged file");
+    assert!(scanned.is_empty());
+}
+
 #[test]
 fn tailer_gates_on_stat_and_tails_growth_incrementally() {
     let home = scratch_home("grow");
@@ -406,8 +421,9 @@ fn durable_state_round_trips_offsets_and_stripped_cards_and_skips_the_cold_resca
     // Between the runs one transcript grows.
     append(&home.join(CLAUDE_REL), &turn_line(9, "2026-08-01T10:00:08.000Z"));
 
-    // Run 2: restore → the 7 cards are back, 5 offsets import, and the boot sweep touches ONLY
-    // the grown file (from 0 — the accumulator is not persisted), never the other four.
+    // Run 2: restore → the 7 cards are back and no read position is imported (TRDD-6B7VV2Z7, B'),
+    // so the boot sweep reads all 5 files once, the grown one from 0 (the accumulator is not
+    // persisted). The skip-on-unchanged gate is checked on a reused start further down.
     // TRDD-9VX3WTGU: each start gets its OWN card-store dir. Run 1's completed database is still
     // open here, and a second open of that reusable file would be two writers on one database;
     // a fresh dir makes this start a FULL restore from the snapshot, which is what this test pins.
@@ -415,10 +431,10 @@ fn durable_state_round_trips_offsets_and_stripped_cards_and_skips_the_cold_resca
     let mut tailer2 = LogTailer::default();
     let mut durable2 = DurableState::open(&data);
     let (restored, imported, skipped) = durable2.restore(&mut tailer2, &mut state2.lock().unwrap(), &env).unwrap();
-    assert_eq!((restored, imported, skipped), (7, 5, 0));
+    assert_eq!((restored, imported, skipped), (7, 0, 0));
     assert_eq!(state2.lock().unwrap().cards.len(), 7);
     let (scanned, s) = tailer2.sweep(&env, now, None);
-    assert_eq!((s.files, s.changed, s.parsed, s.incremental_reads, s.full_reads), (5, 1, 1, 0, 1));
+    assert_eq!((s.files, s.changed, s.parsed, s.incremental_reads, s.full_reads), (5, 5, 5, 0, 5));
     assert_eq!(parent_card(&scanned)["turns"].as_u64().unwrap(), parent["turns"].as_u64().unwrap() + 1);
     state2.lock().unwrap().ingest_scanned(scanned);
     // Nothing else moved: the next sweep is a pure stat pass.
@@ -431,6 +447,18 @@ fn durable_state_round_trips_offsets_and_stripped_cards_and_skips_the_cold_resca
     let after = DeltaLog::new(&data, "log-sessions").disk_bytes();
     assert!(after > before);
     assert_eq!(DeltaLog::new(&data, "log-sessions").load().unwrap().len(), 7);
+    // TRDD-6B7VV2Z7 (B'): the skip-on-unchanged gate lives on the REUSED path only. The
+    // transcript grows again and the next start reuses run 2's store (complete after its
+    // restore): the 5 saved positions import, and the boot sweep touches ONLY the grown file.
+    drop(state2);
+    append(&home.join(CLAUDE_REL), &turn_line(10, "2026-08-01T10:00:09.000Z"));
+    let state2 = std::sync::Mutex::new(CoreState::open(&data.join("spans2")));
+    assert!(state2.lock().unwrap().cards.reused(), "precondition: run 2's store is reused");
+    let mut tailer2 = LogTailer::default();
+    assert_eq!(DurableState::open(&data).restore(&mut tailer2, &mut state2.lock().unwrap(), &env).unwrap(), (7, 5, 0));
+    let (scanned, s) = tailer2.sweep(&env, now, None);
+    assert_eq!((s.files, s.changed, s.parsed, s.incremental_reads, s.full_reads), (5, 1, 1, 0, 1));
+    assert_eq!(parent_card(&scanned)["turns"].as_u64().unwrap(), parent["turns"].as_u64().unwrap() + 2);
 
     // A rotated file (new inode at the same path) and a truncated one are NOT resumed.
     let codex = home.join(".codex/sessions/2026/08/01/ffffffff-1111-2222-3333-444444444444.jsonl");
@@ -450,13 +478,18 @@ fn durable_state_round_trips_offsets_and_stripped_cards_and_skips_the_cold_resca
     let cp = home.join(".copilot/session-state/abababab-1111-2222-3333-444444444444/events.jsonl");
     let cp_body = std::fs::read_to_string(&cp).unwrap();
     std::fs::write(&cp, cp_body.lines().next().unwrap().to_owned() + "\n").unwrap(); // shrunk
+    // TRDD-6B7VV2Z7 (B'): the snapshot path no longer imports read positions, so the identity
+    // guards are exercised on `import_file_state` directly (what the reused path calls), with the
+    // positions run 2 saved.
     let mut tailer3 = LogTailer::default();
-    let mut durable3 = DurableState::open(&data);
-    let (_, imported, skipped) = durable3.restore(&mut tailer3, &mut CoreState::open(&data.join("spans3")), &env).unwrap();
+    let (imported, skipped) = tailer3.import_file_state(&DeltaLog::new(&data, "log-offsets").load().unwrap());
     // Per-case first: the tuple alone says "one file that should have skipped did not" without
     // saying WHICH, and guessing between the two cost a full CI round-trip once already.
     assert!(!tailer3.file_state.contains_key(&codex), "rotated file was resumed");
     assert!(!tailer3.file_state.contains_key(&cp), "truncated file was resumed");
+    // The Claude file grew (turn 10) after its offset was saved: a size ABOVE the offset is not a
+    // truncation, so it still resumes — the third of the 3 imports.
+    assert!(tailer3.file_state.contains_key(&home.join(CLAUDE_REL)), "the grown Claude file is resumed");
     assert_eq!((imported, skipped), (3, 2));
 
     // A version-stale stamp restores NOTHING (cold rescan), whatever the logs hold.
@@ -740,20 +773,41 @@ fn restore_backfill_fills_the_correct_deduplicated_value_and_touches_nothing_els
     cards.get_mut(parent_id).unwrap().as_object_mut().unwrap().remove("cacheCreate1hTokens");
     DeltaLog::new(&data, "log-sessions").save(&cards).unwrap();
 
-    // Run 2: restore() must keep the card exactly as restored (missing the field) and must NOT
-    // touch any file offset -- every card was already parsed once; nothing here re-parses one.
+    // Run 2: restore() must keep the card exactly as restored (missing the field); restore()
+    // itself re-parses no card -- every card was already parsed once.
     let state2 = std::sync::Mutex::new(CoreState::open(&data.join("spans2")));
     let mut tailer2 = LogTailer::default();
     let mut durable2 = DurableState::open(&data);
     let (restored, imported, skipped) = durable2.restore(&mut tailer2, &mut state2.lock().unwrap(), &env).unwrap();
     assert_eq!(restored, 7, "every card is kept, not just the ones missing the field");
-    assert_eq!((imported, skipped), (5, 0), "no offset is ever dropped by this design -- all 5 import normally");
+    assert_eq!((imported, skipped), (0, 0), "the snapshot path imports no read position (TRDD-6B7VV2Z7)");
     assert!(
         state2.lock().unwrap().cards.get(parent_id).unwrap().get("cacheCreate1hTokens").is_none(),
         "the card is kept AS RESTORED -- the field is filled by run_1h_backfill, not restore()"
     );
 
-    // The boot sweep never force-rereads anything -- the file's offset was never dropped.
+    // TRDD-6B7VV2Z7 (B'): the snapshot path re-reads every file once. The scan is NOT ingested,
+    // so the store keeps the card as restored (field still missing).
+    let (_, s) = tailer2.sweep(&env, now, None);
+    assert_eq!(s.full_reads, 5, "the snapshot path re-reads every file once");
+    // Save this start's read positions and its as-restored cards, then die: the next start REUSES
+    // this store, which is where "a card flagged for backfill never has its file force-reread" is
+    // a property the boot still has to keep.
+    // Deliberate test setup, not a production state: EOF positions beside the unpatched card keep it flagged.
+    durable2.tick(&tailer2, &state2, true);
+    drop(state2);
+    let state2 = std::sync::Mutex::new(CoreState::open(&data.join("spans2")));
+    assert!(state2.lock().unwrap().cards.reused(), "precondition: run 2's store is reused");
+    let mut tailer2 = LogTailer::default();
+    let mut durable2 = DurableState::open(&data);
+    let (restored, imported, skipped) = durable2.restore(&mut tailer2, &mut state2.lock().unwrap(), &env).unwrap();
+    assert_eq!((restored, imported, skipped), (7, 5, 0), "the reused start imports every saved read position");
+    assert!(
+        state2.lock().unwrap().cards.get(parent_id).unwrap().get("cacheCreate1hTokens").is_none(),
+        "precondition: the reused store still holds the card without the field"
+    );
+
+    // The boot sweep never force-rereads anything -- the flagged file's offset was never dropped.
     let (scanned, s) = tailer2.sweep(&env, now, None);
     assert_eq!(s.full_reads, 0, "restore() never forces a re-parse; only run_1h_backfill reads the flagged file");
     assert!(scanned.is_empty());
@@ -765,7 +819,9 @@ fn restore_backfill_fills_the_correct_deduplicated_value_and_touches_nothing_els
     // 150), which is not what this test is checking.
     let before_backfill = state2.lock().unwrap().cards.get(parent_id).unwrap().clone();
 
-    // The usage-only backfill: a lean streaming pass, not a card rebuild.
+    // The usage-only backfill: a lean streaming pass, not a card rebuild. The candidate queue is
+    // private, so the fill below IS the proof `restore_reused` queued this card: a card that was
+    // not queued is never touched by `run_1h_backfill`.
     durable2.run_1h_backfill(&state2);
     let backfilled = state2.lock().unwrap().cards.get(parent_id).unwrap().clone();
     assert_eq!(backfilled["cacheCreate1hTokens"].as_f64().unwrap(), original_1h, "the field is filled with the correct deduplicated value");
@@ -823,10 +879,13 @@ fn restore_keeps_a_stale_card_untouched_when_its_file_is_gone() {
     let still = state2.lock().unwrap().cards.get(parent_id).unwrap().clone();
     assert_eq!(still, kept, "run_1h_backfill must not touch a card whose file was never queued");
 
-    let (scanned, s) = tailer2.sweep(&env, now, None);
-    assert_eq!(s.files, 4);
-    assert_eq!(s.full_reads, 0, "nothing is force-reread; the missing file is correctly left alone");
-    assert!(scanned.is_empty());
+    // TRDD-6B7VV2Z7 (B'): the snapshot path re-reads every remaining file once (the gone file is
+    // simply not there); "nothing is force-reread" is checked on a REUSED start below.
+    let (_, s) = tailer2.sweep(&env, now, None);
+    assert_eq!((s.files, s.full_reads), (4, 4), "the missing file is correctly left alone");
+    durable2.tick(&tailer2, &state2, true);
+    drop(state2);
+    assert_reused_start_reads_nothing(&data, &env, now, 7, 4);
 }
 
 #[test]
@@ -854,14 +913,18 @@ fn restore_does_not_queue_a_card_that_already_has_the_field() {
     let mut tailer2 = LogTailer::default();
     let mut durable2 = DurableState::open(&data);
     let (restored, imported, skipped) = durable2.restore(&mut tailer2, &mut state2.lock().unwrap(), &env).unwrap();
-    assert_eq!((restored, imported, skipped), (7, 5, 0), "no offset dropped and no candidate queued when every card already has the field");
+    assert_eq!((restored, imported, skipped), (7, 0, 0), "no candidate queued when every card already has the field; the snapshot path imports no read position (TRDD-6B7VV2Z7)");
     let before = state2.lock().unwrap().cards.get("cccccccc-1111-2222-3333-444444444444").unwrap().clone();
     durable2.run_1h_backfill(&state2); // must be a true no-op: nothing queued, nothing read
     let after = state2.lock().unwrap().cards.get("cccccccc-1111-2222-3333-444444444444").unwrap().clone();
     assert_eq!(before, after, "a card that already has the key is never read or touched by the backfill");
-    let (scanned, s) = tailer2.sweep(&env, now, None);
-    assert_eq!(s.full_reads, 0, "not one file is force-reread when nothing is missing");
-    assert!(scanned.is_empty());
+    // TRDD-6B7VV2Z7 (B'): the snapshot path re-reads every file once; "nothing is force-reread"
+    // is a property of a REUSED start, checked there after this sweep's positions are saved.
+    let (_, s) = tailer2.sweep(&env, now, None);
+    assert_eq!(s.full_reads, 5, "the snapshot path re-reads every file once");
+    durable2.tick(&tailer2, &state2, true);
+    drop(state2);
+    assert_reused_start_reads_nothing(&data, &env, now, 7, 5);
 }
 
 #[test]
@@ -898,13 +961,17 @@ fn backfill_of_an_unparseable_transcript_stamps_zero_once_and_is_not_retried() {
     let state2 = std::sync::Mutex::new(CoreState::open(&data.join("spans2")));
     let mut tailer2 = LogTailer::default();
     let mut durable2 = DurableState::open(&data);
+    // TRDD-6B7VV2Z7 (B'): a store that is not reused imports no read position and its restore
+    // tombstones them on disk, so load them first for the size-guard check below.
+    let saved_offsets = DeltaLog::new(&data, "log-offsets").load().unwrap();
     let (restored, imported, skipped) = durable2.restore(&mut tailer2, &mut state2.lock().unwrap(), &env).unwrap();
     assert_eq!(restored, 7);
-    // (4, 1), not (5, 0): restore() itself never drops an offset, but this test's own
-    // std::fs::write shrank the file out from under its previously-saved offset record, so
-    // import_file_state's ordinary size-mismatch guard (unrelated to this fix) skips it — the same
-    // "rotated/truncated file cold-reads" behavior any tailer restart already has.
-    assert_eq!((imported, skipped), (4, 1), "restore() itself never drops an offset; the truncated file skips via the normal size-mismatch guard");
+    assert_eq!((imported, skipped), (0, 0), "the snapshot path imports no read position (TRDD-6B7VV2Z7)");
+    // The size guard, on `import_file_state` directly (what the reused path calls) with the
+    // positions as saved: (4, 1), not (5, 0), because this test's own std::fs::write shrank the
+    // file out from under its saved offset record, so the ordinary size-mismatch guard skips it —
+    // the same "rotated/truncated file cold-reads" behavior any tailer restart already has.
+    assert_eq!(LogTailer::default().import_file_state(&saved_offsets), (4, 1), "the truncated file skips via the normal size-mismatch guard");
 
     // The backfill patches 0.0 (no usable 1h token found) and never rebuilds the card.
     durable2.run_1h_backfill(&state2);
@@ -920,23 +987,28 @@ fn backfill_of_an_unparseable_transcript_stamps_zero_once_and_is_not_retried() {
     let mut tailer3 = LogTailer::default();
     let mut durable3 = DurableState::open(&data);
     let (restored3, imported3, skipped3) = durable3.restore(&mut tailer3, &mut state3.lock().unwrap(), &env).unwrap();
-    // (7, 4, 0), not (7, 5, 0): this test's std::fs::write already broke that one file's saved
-    // offset before Run 2 (see the (4, 1) assert above) and nothing here ever re-reads the file to
-    // record a fresh one, so it stays absent from the persisted offset set from Run 2 onward — a
-    // pre-existing, unrelated fact about this test's corrupted fixture, not something this fix's
-    // "not queued again" claim is about (that claim is `restored3/imported3/skipped3` staying flat
-    // from Run 2 to Run 3, which they do).
-    assert_eq!((restored3, imported3, skipped3), (7, 4, 0), "the stamped card is not queued again");
-    durable3.run_1h_backfill(&state3); // no-op: nothing queued for the 1h backfill
-    // The ordinary tailer still cold-reads this file once, ONLY because it has no saved tail
-    // offset at all (the same broken-fixture consequence noted above) — that is the tailer's own
-    // unrelated "no prior state" behavior, not a re-flag by this fix. What this fix actually
-    // guarantees is `scanned3.is_empty()`: the unparseable content still yields no card, so
-    // `restore()`'s own candidate check (which only fires on a card missing the field) has nothing
-    // new to queue — the "not retried" claim.
+    // (7, 0, 0): a store that is not reused imports no read position (TRDD-6B7VV2Z7, B'), and
+    // Run 2 never swept, so it saved none either.
+    assert_eq!((restored3, imported3, skipped3), (7, 0, 0), "every card is restored; the snapshot path imports no read position");
+    // A re-queue is NOT observable here: the candidate queue (`pending_1h_backfill`) is private,
+    // and re-processing this unparseable file would stamp the same 0.0, so an unchanged card
+    // after the backfill holds whether or not the card was queued. What prevents the re-queue is
+    // the queue predicate (`needs_1h_field`, log_reader.rs:770-774: a card MISSING the field), so
+    // the check that can fail is that the restored card carries the stamped field.
+    let before3 = state3.lock().unwrap().cards.get(parent_id).unwrap().clone();
+    assert_eq!(before3["cacheCreate1hTokens"].as_f64(), Some(0.0), "the restored card carries the stamped field, so the queue predicate skips it");
+    durable3.run_1h_backfill(&state3);
+    assert_eq!(state3.lock().unwrap().cards.get(parent_id).unwrap(), before3, "the stamped card is unchanged by run_1h_backfill");
+    // No read position was imported, so the boot sweep is the cold scan over all 5 files (B').
+    // The count is 4, not 5: the cold path sets `full_reads` to the number of files that PARSED
+    // (`sweep`, log_reader.rs:497 `full_reads: s.parsed as u64`, fed by `cold_scan_chunked`'s
+    // filter_map over `parse_one`, log_reader.rs:238-251), so the unparseable file is read but not
+    // counted. The old 1 came from the incremental path, which counts a full read whenever
+    // `tail_one` returns, card or not (`process_file`, log_reader.rs:559, its Claude/Codex arm at
+    // 574-581). The unparseable content still yields no card.
     let (scanned3, s3) = tailer3.sweep(&env, now, None);
-    assert_eq!(s3.full_reads, 1, "the tailer cold-reads once for lack of a saved offset, unrelated to this fix");
-    assert!(scanned3.is_empty(), "the unparseable file still yields no card, so nothing is re-queued");
+    assert_eq!((s3.files, s3.full_reads), (5, 4), "no read position was imported: every file is read, the 4 that parse are counted");
+    assert!(scanned3.iter().flat_map(|s| &s.cards).all(|c| c["sessionId"] != parent_id), "the unparseable file still yields no card");
 }
 
 /// Review-fork follow-up (TRDD-ORGJ0E3G): `sum_cache_create_1h` must select and dedup rows

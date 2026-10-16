@@ -5,13 +5,13 @@
 //! live stores over one reusable file would be two writers on one database), and a test that needs
 //! two starts side by side gives each its OWN data dir.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use agentlens_core::card_store::{CardStore, CARD_DB_FILE};
 use agentlens_core::delta_log::DeltaLog;
-use agentlens_core::log_reader::{DurableState, LogTailer};
+use agentlens_core::log_reader::{persist_records_from, DurableState, LogTailer};
 use agentlens_core::log_reader::{ScannedFile, LOG_INGEST_VERSION, SCAN_CHUNK};
 use agentlens_core::ui::strip_session_detail;
 use agentlens_core::{ingest_post, CoreState};
@@ -289,7 +289,9 @@ fn a_reused_start_serves_the_same_summary_as_a_full_restore_start() {
     let (restored, r2) = boot(&data.join("c"), &data, &env);
     assert!(!restored.st.lock().unwrap().cards.reused(), "a fresh dir has nothing to reuse: full restore");
     assert_eq!(r1, (7, 5, 0));
-    assert_eq!(r2, (7, 5, 0), "same cards, same offsets either way");
+    // TRDD-6B7VV2Z7 (B'): the refused path restores the same cards but imports no read position
+    // (its boot sweep re-reads every file); only the reused path imports the 5 offsets.
+    assert_eq!(r2, (7, 0, 0), "same cards either way; the refused path imports no read position");
 
     let served = |b: &Boot| {
         let mut st = b.st.lock().unwrap();
@@ -391,9 +393,9 @@ fn a_sweep_killed_after_its_first_chunk_resumes_from_that_chunks_positions() {
     assert!(scanned.iter().all(|s| !chunk1.contains(&s.file)), "no chunk-1 file is re-read");
 }
 
-/// T4: a version-stale stamp tombstones log-offsets and stamps the version at once (log-sessions is
-/// left alone — its tombstone belongs to TRDD-6B7VV2Z7), so positions appended by the cold rescan
-/// survive a death before any tick: the next start reuses the store and re-reads only new files.
+/// T4: a version-stale stamp tombstones log-offsets AND log-sessions and stamps the version at once
+/// (the card tombstone is TRDD-6B7VV2Z7), so positions appended by the cold rescan survive a death
+/// before any tick: the next start reuses the store and re-reads only new files.
 /// Mutation recorded in the report: skip `stamp_version` in the version-stale branch.
 #[test]
 fn a_stale_version_boot_stamps_at_once_so_a_rescan_killed_before_a_tick_is_kept() {
@@ -408,7 +410,7 @@ fn a_stale_version_boot_stamps_at_once_so_a_rescan_killed_before_a_tick_is_kept(
     assert_eq!(r, (0, 0, 0), "a stale stamp restores nothing");
     assert!(stamp_is_current(&data), "the version is stamped before the rescan");
     assert!(DeltaLog::new(&data, "log-offsets").load().unwrap().is_empty(), "log-offsets replays empty");
-    assert_eq!(DeltaLog::new(&data, "log-sessions").load().unwrap(), sessions_before, "log-sessions is unchanged");
+    assert!(DeltaLog::new(&data, "log-sessions").load().unwrap().is_empty(), "log-sessions is tombstoned at once too (TRDD-6B7VV2Z7)");
 
     let mut appended: Vec<String> = Vec::new();
     let (remainder, s1) = {
@@ -502,4 +504,200 @@ fn chunk_appends_are_counted_and_leave_a_forced_tick_nothing_to_write() {
     assert_eq!((st.persist.offsets_writes, st.persist.offsets_bytes), (writes, bytes), "and counted no offsets write");
     drop(st);
     assert!(stamp_is_current(&data));
+}
+
+// ── TRDD-6B7VV2Z7 (B'): a refused reuse never imports read positions ─────────────────────────
+
+/// The persisted form of every card in a start's store, keyed by session id (order-free, and
+/// stripped the way the snapshot stores it, so two starts are compared on what they persist).
+fn persisted(b: &Boot) -> BTreeMap<String, Value> {
+    let st = b.st.lock().unwrap();
+    persist_records_from(&st.cards.parsed_cards()).into_iter().collect()
+}
+
+/// Names the first card that differs instead of dumping thousands of cards.
+fn assert_same_cards(got: &BTreeMap<String, Value>, want: &BTreeMap<String, Value>, label: &str) {
+    let missing: Vec<&String> = want.keys().filter(|k| !got.contains_key(*k)).take(5).collect();
+    let extra: Vec<&String> = got.keys().filter(|k| !want.contains_key(*k)).take(5).collect();
+    assert!(missing.is_empty() && extra.is_empty(), "{label}: {} cards vs {} expected; missing {missing:?}, extra {extra:?}", got.len(), want.len());
+    if let Some((k, w)) = want.iter().find(|(k, w)| got.get(*k) != Some(*w)) {
+        panic!("{label}: card {k} differs from a fresh parse\n got: {}\nwant: {w}", got[k]);
+    }
+}
+
+/// A cold run over `home` into its own empty data dir: the cards a fresh install builds.
+fn fresh_parse(home: &Path, name: &str, now: i64) -> BTreeMap<String, Value> {
+    let data = dir(name);
+    let env = Env { home: home.to_path_buf(), platform: Platform::Darwin, vars: HashMap::new() };
+    let (mut b, r) = boot(&data.join("a"), &data, &env);
+    assert_eq!(r, (0, 0, 0), "{name}: an empty data dir restores nothing");
+    let (scanned, _) = b.tailer.sweep(&env, now, None);
+    b.st.lock().unwrap().ingest_scanned(scanned);
+    persisted(&b)
+}
+
+/// One sweep whose chunks go through `ingest_chunk` (the boot sweeper's own path, so their read
+/// positions are appended). `chunks_before_death = Some(n)` ingests only the first n chunks and
+/// drops the rest, a death mid-sweep; `None` also ingests the remainder. Returns the chunk count.
+fn sweep_through_durable(b: &mut Boot, env: &Env, now: i64, chunks_before_death: Option<usize>) -> usize {
+    let mut calls = 0usize;
+    let remainder = {
+        let (durable, st) = (&mut b.durable, &b.st);
+        let mut ingest = |chunk: Vec<ScannedFile>| {
+            calls += 1;
+            let keep = match chunks_before_death {
+                None => true,
+                Some(n) => calls <= n,
+            };
+            if keep {
+                durable.ingest_chunk(st, chunk);
+            }
+        };
+        b.tailer.sweep(env, now, Some(&mut ingest)).0
+    };
+    if chunks_before_death.is_none() && !remainder.is_empty() {
+        b.durable.ingest_chunk(&b.st, remainder);
+    }
+    calls
+}
+
+/// T-lag (TRDD-6B7VV2Z7 acceptance): after a crash the read positions run AHEAD of the card
+/// snapshot (per-chunk appends, offsets saved more often than cards). A start that cannot reuse
+/// its store restores the snapshot but must not import those positions: it tombstones them, and
+/// one sweep serves exactly what a fresh parse builds — the grown transcript G with its new turn,
+/// the new transcript N present. Then the same lagged state, killed right after that restore
+/// (and again after chunk 1 of its sweep), resumes on the reused store to the same cards.
+/// Mutation recorded in the report: import the positions on the snapshot path again.
+#[test]
+fn a_refused_reuse_ignores_read_positions_that_ran_ahead_of_the_card_snapshot() {
+    use std::io::Write;
+    let home = home_with_generated("tlag-home", SCAN_CHUNK + 9);
+    let data = dir("tlag-data");
+    let env = Env { home: home.clone(), platform: Platform::Darwin, vars: HashMap::new() };
+    let now = agentlens_core::now_ms();
+
+    // 1-2. A full previous run: one sweep, then full card and offset saves (a graceful stop).
+    let (mut b, r) = boot(&data.join("a"), &data, &env);
+    assert_eq!(r, (0, 0, 0), "a fresh data dir restores nothing");
+    assert!(sweep_through_durable(&mut b, &env, now, None) >= 1, "precondition: the cold sweep flushed at least one SCAN_CHUNK");
+    b.durable.mark_dirty();
+    b.durable.tick(&b.tailer, &b.st, true);
+    let g_turns = b.st.lock().unwrap().cards.get(PARENT).unwrap()["turns"].as_u64().unwrap();
+    drop(b);
+    let snapshot_cards = DeltaLog::new(&data, "log-sessions").load().unwrap().len();
+
+    // 3. G grows by one turn and N appears. A reused start sweeps both through ingest_chunk (their
+    // positions are appended) and dies before any tick: no card save, so the snapshot lags.
+    let projects = home.join(".claude").join("projects");
+    let g = projects.join("-Users-someone-proj").join(format!("{PARENT}.jsonl"));
+    writeln!(
+        std::fs::OpenOptions::new().append(true).open(&g).unwrap(),
+        "{{\"type\":\"assistant\",\"timestamp\":\"2026-08-01T10:00:08.000Z\",\"message\":{{\"id\":\"msg_lag9\",\"model\":\"claude-opus-5\",\"usage\":{{\"input_tokens\":7,\"output_tokens\":1,\"cache_read_input_tokens\":0,\"cache_creation_input_tokens\":0}},\"content\":[{{\"type\":\"text\",\"text\":\"more\"}}]}}}}"
+    )
+    .unwrap();
+    let n_id = format!("dddddddd-1111-2222-3333-{:012}", SCAN_CHUNK + 9);
+    let n = projects.join("-Users-someone-chunk").join(format!("{n_id}.jsonl"));
+    writeln!(std::fs::File::create(&n).unwrap(), "{{\"type\":\"user\",\"timestamp\":\"2026-08-01T10:00:00.000Z\",\"cwd\":\"/Users/someone/chunk\",\"message\":{{\"role\":\"user\",\"content\":\"late\"}}}}").unwrap();
+    let (mut b, _) = boot(&data.join("a"), &data, &env);
+    assert!(b.st.lock().unwrap().cards.reused(), "precondition: the previous run's store is reused");
+    sweep_through_durable(&mut b, &env, now, None);
+    drop(b); // death before any tick
+    let lagged_offsets = DeltaLog::new(&data, "log-offsets").load().unwrap();
+    let lagged_cards = DeltaLog::new(&data, "log-sessions").load().unwrap();
+    assert!(lagged_offsets.contains_key(&n.to_string_lossy().into_owned()), "precondition: N's read position is on disk");
+    assert!(!lagged_cards.contains_key(&n_id), "precondition: N's card is not in the snapshot (the snapshot lags)");
+    assert_eq!(lagged_cards[PARENT]["turns"].as_u64(), Some(g_turns), "precondition: the snapshot holds G's stale turn count");
+    // The resume variants (step 6) start from copies of exactly this state.
+    let resume_dirs: Vec<(PathBuf, Option<usize>)> = [("tlag-resume-restore", None), ("tlag-resume-chunk1", Some(1))]
+        .into_iter()
+        .map(|(name, chunks)| {
+            let d = dir(name);
+            copy_tree(&data, &d);
+            (d, chunks)
+        })
+        .collect();
+
+    // 4. A start that cannot reuse its store (a fresh store dir, current version): the snapshot is
+    // restored, no read position is imported, and log-offsets on disk is tombstoned.
+    let (mut b, r) = boot(&data.join("b"), &data, &env);
+    assert!(!b.st.lock().unwrap().cards.reused(), "a fresh store dir: the reuse is refused");
+    assert_eq!(r, (snapshot_cards, 0, 0), "the snapshot is restored and no read position is imported");
+    assert!(b.tailer.file_state.is_empty(), "the tailer holds no read position after the restore");
+    assert!(DeltaLog::new(&data, "log-offsets").load().unwrap().is_empty(), "log-offsets replays empty on disk");
+
+    // 5. One sweep serves exactly what a fresh parse builds.
+    let (scanned, _) = b.tailer.sweep(&env, now, None);
+    b.st.lock().unwrap().ingest_scanned(scanned);
+    let want = fresh_parse(&home, "tlag-ref", now);
+    assert_eq!(want[PARENT]["turns"].as_u64(), Some(g_turns + 1), "precondition: the reference sees G's new turn");
+    assert!(want.contains_key(&n_id), "precondition: the reference has N");
+    let got = persisted(&b);
+    assert_eq!(got.get(PARENT).and_then(|c| c["turns"].as_u64()), Some(g_turns + 1), "G's new turn is served");
+    assert!(got.contains_key(&n_id), "N is served");
+    assert_same_cards(&got, &want, "refused reuse then one sweep");
+    drop(b);
+
+    // 6. Resume: the same lagged state, killed right after the refused restore (no sweep, no tick)
+    // or after chunk 1 of its sweep; the next start reuses that store and one sweep converges.
+    for (d, chunks) in resume_dirs {
+        let label = format!("resume after {chunks:?} chunk(s)");
+        let (mut b, r) = boot(&d.join("b"), &d, &env);
+        assert!(!b.st.lock().unwrap().cards.reused(), "{label}: the first start refuses the reuse");
+        assert_eq!((r.1, r.2), (0, 0), "{label}: no read position is imported");
+        if chunks.is_some() {
+            // >= 2 holds: a start with no imported position takes the cold path (`sweep`,
+            // log_reader.rs:473), whose `cold_scan_chunked` calls `flush(parsed)` once per
+            // SCAN_CHUNK slice inside its slice loop (log_reader.rs:235-255), the last partial slice
+            // included, and returns as its remainder only OpenCode db rows (log_reader.rs:260-264,
+            // 296). The returned remainder in log_reader_parity.rs T3 (`sweep_incremental_...`) is
+            // the INCREMENTAL path instead: it flushes only at `out.len() >= SCAN_CHUNK`
+            // (log_reader.rs:514) and returns the partial tail (log_reader.rs:525).
+            assert!(sweep_through_durable(&mut b, &env, now, chunks) >= 2, "{label}: precondition: the sweep flushed more than one chunk");
+        }
+        drop(b); // death before any tick
+        let (mut b, r) = boot(&d.join("b"), &d, &env);
+        assert!(b.st.lock().unwrap().cards.reused(), "{label}: the restored store is reused");
+        // SCAN_CHUNK: `ingest_chunk` appends one position per chunk entry, and every file in this
+        // tree parses (the cold scan's filter_map drops none), so chunk 1 is a full SCAN_CHUNK of
+        // entries. The dropped chunk 2 wrote nothing: its positions would come only from a tick.
+        let expected_imported = if chunks.is_some() { SCAN_CHUNK } else { 0 };
+        assert_eq!((r.1, r.2), (expected_imported, 0), "{label}: only positions written after the tombstone are imported");
+        let (scanned, _) = b.tailer.sweep(&env, now, None);
+        b.st.lock().unwrap().ingest_scanned(scanned);
+        assert_same_cards(&persisted(&b), &want, &label);
+    }
+}
+
+/// T-stale (TRDD-6B7VV2Z7 residual): a version-stale start tombstones the card snapshot at once,
+/// so a death before its first card save cannot leave the stale cards under the CURRENT stamp it
+/// just wrote. The next start cannot reuse its store, restores the (now empty) snapshot, and one
+/// sweep serves no card for the transcript B deleted in between — the stale snapshot would have
+/// served B's card forever. Mutation recorded in the report: drop the log-sessions tombstone.
+#[test]
+fn a_stale_version_boot_tombstones_the_card_snapshot_so_a_deleted_transcript_is_not_restored() {
+    let (data, env, now) = previous_run("tstale");
+    let now = now as i64;
+    const B_ID: &str = "ffffffff-1111-2222-3333-444444444444";
+    let b_file = env.home.join(".codex/sessions/2026/08/01").join(format!("{B_ID}.jsonl"));
+    let before = DeltaLog::new(&data, "log-sessions").load().unwrap();
+    assert!(before.len() == 7 && before.contains_key(B_ID), "precondition: the previous run saved B's card");
+
+    // 2-3. A stale stamp; the start takes the version-stale branch and dies before any save.
+    std::fs::write(data.join("log-delta-version.json"), "{\"v\":1}").unwrap();
+    let (b, r) = boot(&data.join("s"), &data, &env);
+    assert_eq!(r, (0, 0, 0), "a stale stamp restores nothing");
+    assert!(DeltaLog::new(&data, "log-sessions").load().unwrap().is_empty(), "log-sessions replays empty at once");
+    drop(b);
+
+    // 4-5. B is deleted; a start into a fresh store dir restores and sweeps.
+    std::fs::remove_file(&b_file).unwrap();
+    let (mut b, _) = boot(&data.join("t"), &data, &env);
+    assert!(!b.st.lock().unwrap().cards.reused(), "a fresh store dir: the reuse is refused");
+    let (scanned, _) = b.tailer.sweep(&env, now, None);
+    b.st.lock().unwrap().ingest_scanned(scanned);
+
+    // 6. B's card is absent and every other card equals a fresh parse.
+    let got = persisted(&b);
+    assert!(!got.contains_key(B_ID), "B's stale card must not be restored");
+    assert_same_cards(&got, &fresh_parse(&env.home, "tstale-ref", now), "after a stale-version start");
 }
