@@ -1,10 +1,10 @@
 ---
 trdd-id: 6B7VV2Z7
 title: A current-version card store refusal imports offsets ahead of a stale snapshot and loses idle cards
-column: ai_review
-status: tasked
+column: complete
+status: archived
 created: 2026-10-15T04:28:04+0200
-updated: 2026-10-16T20:17:51+0200
+updated: 2026-10-16T20:24:53+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -22,7 +22,7 @@ pre-block-column:
 blocker-probe: [trddgrep, why, 6B7VV2Z7]
 blocker-holds-if: not-match:READY
 unblock-when: [trdd:A2KNXCNH terminal, trdd:0BDOV3WC terminal, trdd:USSG465Q terminal]
-implementation-commits: [3a5874a5]
+implementation-commits: [3a5874a5, aecdade6]
 ---
 
 # A current-version card store refusal imports offsets ahead of a stale snapshot and loses idle cards
@@ -46,6 +46,7 @@ Evidence (local, gitignored): reports_dev/6b7vv2z7-optionC-measure.md, reports_d
 2026-10-15: A2KNXCNH landed in 15eb1ff0. B' must also close its residual: after a version bump plus an early death or refused reuse, no stale-version card may be restored for an existing file; add a test for it.
 - 2026-10-16 (card update after commit 3a5874a5, fix(log-reader): a refused store reuse no longer imports read positions ahead of the card snapshot): committed 3a5874a5. Gates, 0 failed in every gate: clippy with -D warnings; agentlens-core 826 passed; workspace 993 passed; release alcore build; pnpm test:unit 3177 passing. Mutations M-lag and M-stale each fail their test, including the outcome asserts. NOT DONE: no mutation removes the eager offsets tombstone in restore_from_snapshot (untested); the rebuilt alcore is not deployed. Evidence: docs_dev/20261016-6b7vv2z7-impl-report.md (gitignored). NEXT ACTION: ai_review of 3a5874a5.
 - 2026-10-16 ai_review of 3a5874a5 OPEN, card must not leave ai_review until it closes. (1) Possible double count: the snapshot puts a card in the map and the boot sweep then re-reads its file from offset 0; if ingest MERGES into an existing card instead of rebuilding it, every card current in the snapshot comes back with inflated totals/timeline. No test covers it; a worker is tracing REBUILD vs MERGE (and run_1h_backfill) and adding a totals-unchanged test (docs_dev/20261016-6b7vv2z7-doublecount-report.md). (2) Every refused-reuse boot now cold-rescans the whole corpus; cost unmeasured. (3) The 3a5874a5 message's 'Rejected:' paragraph is reasoning, not measurement. (4) Its 'gone-file cards are still kept' holds on the refused-reuse path only; the version-stale branch tombstones them. The acceptance tick stands on its literal text (every card present, proven by T-lag); a MERGE finding sends the card back to dev.
+- 2026-10-16 ai_review CLOSED (supersedes the previous entry's 'OPEN' and its MERGE trigger). Double count: none. A re-parse starts a fresh accumulator and put_arc upserts card = excluded.card (src/card_store.rs:715-730, read and confirmed); run_1h_backfill sets one field. Test a_refused_reuse_rebuilds_current_snapshot_cards_without_double_counting (aecdade6) compares the live cards (totals, cost, turns, timeline length, whole card) before and after a refused-reuse boot plus one sweep, and after the 1h backfill; it passes (card_reuse 20/20) and fails under a merging put_log_session (turns 4 vs 2). T-lag's every-card-present claim is confirmed: assert_same_cards at tests/card_reuse.rs:637 and :667, on the persisted form. Known and accepted: every refused-reuse boot cold-rescans the corpus (cost unmeasured; correctness over speed, rare path); the eager offsets tombstone has no mutation test (it only protects a LATER reused boot); the 3a5874a5 message's 'Rejected:' paragraph is reasoning and its 'gone-file cards kept' covers the refused-reuse path only. Not deployed. Evidence: docs_dev/20261016-6b7vv2z7-doublecount-report.md (gitignored).
 
 ## Problem
 When the card store refuses to reuse cards.duckdb with a CURRENT ingest version (out-of-memory, a card-schema version mismatch, missing meta, restore_complete != 1, clear_in_progress, open or configure failure, unreadable count or scan, invalid JSON or row), `restore_from_snapshot` restores cards from the NDJSON snapshot and then imports the offsets unconditionally (log_reader.rs:940). Offsets are newer than the snapshot, and the sweep skips every file whose offset record matches (`unchanged()`), so a card missing from or staler in the snapshot is never rebuilt until its file changes. A LOG_INGEST_VERSION bump is NOT affected (a CARD_SCHEMA_VERSION bump IS: it refuses with the log-delta version current): a version-stale restore returns before importing offsets and cold-rescans (log_reader.rs:873-882, verified by MEASURE 2026-10-15). Evidence: reports_dev/0bdov3wc-facts.md Q4, reports_dev/0bdov3wc-measure2.md section 6.
@@ -62,6 +63,7 @@ On a current-version refusal, drop the offsets of files whose card is absent fro
 - 2026-10-15T07:12:10+0200 — column → blocked by main-agent@agentlenspro. B' waits for the per-chunk progress card, 0BDOV3WC and USSG465Q
 - 2026-10-16T06:41:30+0200 — column → todo by main-agent@agentlenspro. blocker USSG465Q complete (ddb58799) Cleared blocked-by (--clear-blocker override).
 - 2026-10-16T09:40:21+0200 — column → dev by main-agent@agentlenspro. B' implementation started (proposal reviewed and measured 2026-10-16; spec docs_dev/20261016-6b7vv2z7-impl-spec.md)
+- 2026-10-16T20:24:53+0200 — COMPLETE by main-agent@agentlenspro. ai_review closed: no double count (aecdade6), acceptance ticked, gates 0 failed.
 
 ## Notes and lessons learned
 
