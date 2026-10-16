@@ -1,10 +1,10 @@
 ---
 trdd-id: 6B7VV2Z7
 title: A current-version card store refusal imports offsets ahead of a stale snapshot and loses idle cards
-column: blocked
+column: todo
 status: tasked
 created: 2026-10-15T04:28:04+0200
-updated: 2026-10-16T06:35:30+0200
+updated: 2026-10-16T06:41:30+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -17,8 +17,8 @@ approval-judge: main-agent@agentlenspro
 approval-datetime: 2026-10-15T04:28:04+0200
 project-id: agentlenspro
 npt: [A2KNXCNH]
-blocked-by: [USSG465Q]
-pre-block-column: todo
+blocked-by: []
+pre-block-column: 
 blocker-probe: [trddgrep, why, 6B7VV2Z7]
 blocker-holds-if: not-match:READY
 unblock-when: [trdd:A2KNXCNH terminal, trdd:0BDOV3WC terminal, trdd:USSG465Q terminal]
@@ -57,9 +57,11 @@ On a current-version refusal, drop the offsets of files whose card is absent fro
 
 - 2026-10-15T04:28:04+0200 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-10-15T07:12:10+0200 — column → blocked by main-agent@agentlenspro. B' waits for the per-chunk progress card, 0BDOV3WC and USSG465Q
+- 2026-10-16T06:41:30+0200 — column → todo by main-agent@agentlenspro. blocker USSG465Q complete (ddb58799) Cleared blocked-by (--clear-blocker override).
 
 ## Notes and lessons learned
 
 2026-10-15: once TRDD-0BDOV3WC revision 3 lands, an out-of-memory error no longer refuses (it stops the server), so it leaves this card's list; the hole stays for every other current-version refusal reason, including a CARD_SCHEMA_VERSION bump.
 2026-10-16: 0BDOV3WC landed: an OOM refusal no longer goes through the snapshot path (a lossless rewrite instead), so this card's exposure shrinks to the other current-version refusal reasons (schema bump, missing meta, interrupted restore or clear, corruption); `reused()` is now true after a rewrite.
 2026-10-16: the commit-2 dependency on TRDD-USSG465Q is met (lever d landed, commit pending; its sha is to be added after the commit). Its rescan's single full re-put pass measured +142 MiB of file growth on a compact base (round 1) and no growth on the real bloated store (round 3), with used blocks falling afterwards.
+2026-10-16: follow-up to the note above: TRDD-USSG465Q landed in ddb58799 and is complete, so its commit-2 dependency is met.

@@ -1,10 +1,10 @@
 ---
 trdd-id: USSG465Q
 title: Card updates are a delete plus an insert in DuckDB and the cards.duckdb tail is inferred to make the boot read expensive
-column: dev
-status: tasked
+column: complete
+status: archived
 created: 2026-10-15T04:28:05+0200
-updated: 2026-10-16T06:35:24+0200
+updated: 2026-10-16T06:41:27+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -16,6 +16,7 @@ approved: true
 approval-judge: main-agent@agentlenspro
 approval-datetime: 2026-10-15T04:28:05+0200
 project-id: agentlenspro
+implementation-commits: [ddb58799]
 ---
 
 # Card updates are a delete plus an insert in DuckDB and the cards.duckdb tail is inferred to make the boot read expensive
@@ -35,6 +36,7 @@ Periodically compact the cards table (rewrite it in seq order and swap, or a CHE
 
 - 2026-10-15T04:28:05+0200 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-10-16T04:35:14+0200 — column → dev by main-agent@agentlenspro. implementation started (reviewed revision 2, 2026-10-16)
+- 2026-10-16T06:41:27+0200 — COMPLETE by main-agent@agentlenspro. ddb58799 landed: acceptance measured (real store 96 vs control 128 MiB, regrow 96 vs 352 MiB); no eht; deploy tracked on HSPUF5XH.
 
 ## Notes and lessons learned
 
@@ -44,3 +46,4 @@ Periodically compact the cards table (rewrite it in seq order and swap, or a CHE
 2026-10-16: acceptance measured against its control: real store, option 96 MiB vs control 128 MiB boot-read floor after the same 41,974 puts (both started at 256); regrow recipe (30 rewrites of the 31 timeline cards): option 96 vs control 352 MiB. The floor is not a function of file size alone (the control was 870 MiB at a 128 MiB floor); the 96 vs 352 difference between two control states is unexplained.
 2026-10-16: rebuilt indexes stay consistent across reopen: on the round-3 option end state, every card upserted twice with a CHECKPOINT and reopen between (41,819 puts each, no error; used blocks 653 -> 629 -> 545), main agent, scratch livecheck.
 2026-10-16: residuals: the setting is Experimental in DuckDB 1.5.6 (a version that drops it panics at the open probe before touching files; t1 fails in CI); checkpoint pauses under the real sweep and state lock unmeasured; secondary-index damage (seen once on a scratch copy, m0b/live, cause unknown) is not detected: card OYE4GWYD tracks it.
+2026-10-16: landed in ddb58799. The DuckDB 1.5.6 source gives this setting's assignment error text as 'valid range is 0 - (max - 1)', yet u64::MAX is accepted, reads back, and stops the growth. A future DuckDB that clamped or wrapped the value would make the vacuum silently not run: t1 (reads the value back) would still pass, so t2 (repeated_upserts_do_not_grow_the_card_file, 15 -> 97 blocks without the setting) is the guard against a semantic change, and it runs in CI.
