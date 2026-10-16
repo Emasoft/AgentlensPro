@@ -1,10 +1,10 @@
 ---
 trdd-id: AJGTQ007
 title: DeltaLog load materializes about 7x its on-disk size, stream the replay
-column: todo
+column: dev
 status: tasked
 created: 2026-10-16T23:25:39+0200
-updated: 2026-10-17T01:15:24+0200
+updated: 2026-10-17T01:31:26+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -30,6 +30,7 @@ TRAP: load() seeds self.written, and save(empty) tombstones only keys that seedi
 ## Approval log
 
 - 2026-10-16T23:25:39+0200 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-10-17T01:31:26+0200 — column → dev by main-agent@agentlenspro. a worker is implementing the streaming replay (uncommitted diff in delta_log.rs and cache_turns_sql.rs; tests running)
 
 ## Acceptance
 
