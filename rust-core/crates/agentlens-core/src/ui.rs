@@ -318,14 +318,14 @@ fn rebuild_once(state: &Arc<Mutex<CoreState>>) {
     flight.last = Some((std::time::Instant::now(), took));
 }
 
-pub fn summary_now(state: &Arc<Mutex<CoreState>>, now_ms: f64) -> Result<(u64, Arc<Value>), String> {
+pub fn summary_now(state: &Arc<Mutex<CoreState>>, now_ms: f64) -> (u64, Arc<Value>) {
     // Fast path: a warm cache never queues behind a rebuild. Under sustained ingest this misses
     // essentially always (see `cached_any`), so `stale` is what actually answers the request.
     let stale = {
         let mut st = state.lock_timed();
         let version = st.data_version;
         if let Some(cached) = st.summary_cache.current(version) {
-            return Ok((version, cached));
+            return (version, cached);
         }
         st.summary_cache.cached_any()
     };
@@ -372,7 +372,7 @@ pub fn summary_now(state: &Arc<Mutex<CoreState>>, now_ms: f64) -> Result<(u64, A
                     let mut st = state.lock_timed();
                     let version = st.data_version;
                     if let Some(cached) = st.summary_cache.current(version) {
-                        return Ok((version, cached));
+                        return (version, cached);
                     }
                 }
                 if std::time::Instant::now() >= deadline {
@@ -383,7 +383,7 @@ pub fn summary_now(state: &Arc<Mutex<CoreState>>, now_ms: f64) -> Result<(u64, A
                         let mut st = state.lock_timed();
                         st.summary_cache.cached_any()
                     };
-                    return Ok(newest.unwrap_or(stale_pair));
+                    return newest.unwrap_or(stale_pair);
                 }
             }
         }
@@ -420,7 +420,7 @@ pub fn summary_now(state: &Arc<Mutex<CoreState>>, now_ms: f64) -> Result<(u64, A
                     let mut st = state.lock_timed();
                     let version = st.data_version;
                     if let Some(cached) = st.summary_cache.current(version) {
-                        return Ok((version, cached));
+                        return (version, cached);
                     }
                 }
                 match rebuild_gate().try_lock() {
@@ -438,7 +438,7 @@ pub fn summary_now(state: &Arc<Mutex<CoreState>>, now_ms: f64) -> Result<(u64, A
                         st.summary_cache.cached_any()
                     };
                     if let Some(pair) = newest.or(stale) {
-                        return Ok(pair);
+                        return pair;
                     }
                     // COLD BOOT ONLY: no summary has ever been built, so there is nothing to
                     // serve and waiting is the only correct answer. It can happen at most once per
@@ -454,29 +454,29 @@ pub fn summary_now(state: &Arc<Mutex<CoreState>>, now_ms: f64) -> Result<(u64, A
         let version = st.data_version;
         // Re-check under the gate — the rebuild we waited for very likely stored this version.
         if let Some(cached) = st.summary_cache.current(version) {
-            return Ok((version, cached));
+            return (version, cached);
         }
         st.summary_snapshot()
     };
     let build = CoreState::summary_from(&mut inputs, now_ms);
     let mut st = state.lock_timed();
-    Ok((inputs.version, st.store_summary(inputs.version, build)))
+    (inputs.version, st.store_summary(inputs.version, build))
 }
 
 /// `/api/summary`'s body and the shell's inlined copy: strip_session_detail over `summary_now`,
 /// memoized on the summary's OWN version and — like the summary — computed off the lock. The
 /// strip clones every card, so doing it under the lock was the same stall one layer down.
-pub fn stripped_now(state: &Arc<Mutex<CoreState>>, now_ms: f64) -> Result<Arc<Value>, String> {
-    let (version, summary) = summary_now(state, now_ms)?;
+pub fn stripped_now(state: &Arc<Mutex<CoreState>>, now_ms: f64) -> Arc<Value> {
+    let (version, summary) = summary_now(state, now_ms);
     {
         let mut st = state.lock_timed();
         if let Some(cached) = st.stripped_cache.current(version) {
-            return Ok(cached);
+            return cached;
         }
     }
     let stripped = strip_session_detail(&summary);
     let mut st = state.lock_timed();
-    Ok(st.stripped_cache.store_if_newer(version, stripped))
+    st.stripped_cache.store_if_newer(version, stripped)
 }
 
 /// The request-path twin of the 4 s tick's off-lock compute (TRDD-O3ICDRLO): the burn status
@@ -492,13 +492,13 @@ pub fn stripped_now(state: &Arc<Mutex<CoreState>>, now_ms: f64) -> Result<Arc<Va
 /// hold, and `burn_status_for` runs released. Callers hold the lock again only for what they
 /// store or read next (`current_account`, `latest_resident_blobs`) — do not fold the compute
 /// back under a guard.
-pub fn burn_status_now(state: &Arc<Mutex<CoreState>>, now_ms: f64) -> Result<Value, String> {
-    let (_, summary) = summary_now(state, now_ms)?;
+pub fn burn_status_now(state: &Arc<Mutex<CoreState>>, now_ms: f64) -> Value {
+    let (_, summary) = summary_now(state, now_ms);
     let (ttl, config) = {
         let mut st = state.lock_timed();
         (st.burn.ttl_context(now_ms), st.burn.config.clone())
     };
-    Ok(crate::burn_status_for(&summary, &config, &ttl, now_ms))
+    crate::burn_status_for(&summary, &config, &ttl, now_ms)
 }
 
 /// TRDD-QE114936 site 20: the value `CoreState::burn_risk_report` used to produce for itself, by
@@ -510,15 +510,15 @@ pub fn burn_status_now(state: &Arc<Mutex<CoreState>>, now_ms: f64) -> Result<Val
 /// unconditionally would trade a rare lock-held rebuild for a per-request cost on every call. The
 /// peek's own hold is a single `is_none()`. Racing another seeder is harmless — `burn_risk_report`
 /// re-checks under its own guard and keeps whichever landed first.
-fn burn_status_seed(state: &Arc<Mutex<CoreState>>, now_ms: f64) -> Result<Option<Value>, String> {
+fn burn_status_seed(state: &Arc<Mutex<CoreState>>, now_ms: f64) -> Option<Value> {
     let missing = {
         let st = state.lock_timed();
         st.burn.last_status.is_none()
     };
     if !missing {
-        return Ok(None);
+        return None;
     }
-    Ok(Some(burn_status_now(state, now_ms)?))
+    Some(burn_status_now(state, now_ms))
 }
 
 /// pushUpdate — ONE full rebuild broadcast to every client. Called from the coalesced timer.
@@ -526,7 +526,7 @@ pub fn push_update(state: &Arc<Mutex<CoreState>>, hub: &SseHub, now_ms: f64) {
     if hub.client_count() == 0 {
         return;
     }
-    let Ok((_, summary)) = summary_now(state, now_ms) else { return };
+    let (_, summary) = summary_now(state, now_ms);
     // The lock covers ONLY the three cheap reads; the payload assembly (which walks every span
     // and re-strips every card) runs after it is released.
     let (spans, gaps, build_id) = {
@@ -804,7 +804,7 @@ async fn composition_for(state: &Arc<Mutex<CoreState>>, session_id: &str, now: f
     //
     // Read the summary OFF the lock (TRDD-UTFVMVT8): resolving it under the guard rebuilt the whole
     // summary inline on a cache miss, and this guard held the state lock for seconds doing it.
-    let (_, summary) = summary_now(state, now)?;
+    let (_, summary) = summary_now(state, now);
     let project = crate::composition_project_map(&summary).remove(session_id);
     let refs = {
         let st = state.lock_timed();
@@ -842,7 +842,7 @@ pub(crate) async fn compositions_in_scope(state: &Arc<Mutex<CoreState>>, scope: 
     // the worst 274 s — and a per-statement split measured 100 % of it in the inline summary
     // rebuild the old `CoreState::composition_project_map` ran under the lock (12.6 s and 30.1 s),
     // with the id collect and `resolve_scope` at 0 ms. Only those two run under the guard now.
-    let (_, summary) = summary_now(state, now)?;
+    let (_, summary) = summary_now(state, now);
     let projects = crate::composition_project_map(&summary);
     let (ids, coverage) = {
         let st = state.lock_timed();
@@ -1123,9 +1123,9 @@ fn json_response(status: StatusCode, body: String) -> Response<SseBody> {
 
 /// The `/events` response: preamble ping + the on-connect update frame, then every broadcast
 /// frame for as long as the client stays connected.
-fn sse_response(state: &Arc<Mutex<CoreState>>, hub: &SseHub, now_ms: f64) -> Result<Response<SseBody>, String> {
+fn sse_response(state: &Arc<Mutex<CoreState>>, hub: &SseHub, now_ms: f64) -> Response<SseBody> {
     use http_body_util::BodyExt;
-    let (_, summary) = summary_now(state, now_ms)?;
+    let (_, summary) = summary_now(state, now_ms);
     let (spans, gaps, build_id) = {
         let st = state.lock_timed();
         let gaps = crate::collector_lifecycle::compute_gaps(&st.lifecycle, crate::collector_lifecycle::MIN_GAP_MS);
@@ -1157,7 +1157,7 @@ fn sse_response(state: &Arc<Mutex<CoreState>>, hub: &SseHub, now_ms: f64) -> Res
     h.insert("Content-Type", hyper::header::HeaderValue::from_static("text/event-stream"));
     h.insert("Cache-Control", hyper::header::HeaderValue::from_static("no-cache"));
     h.insert("Connection", hyper::header::HeaderValue::from_static("keep-alive"));
-    Ok(resp)
+    resp
 }
 
 /// A frame stream: the fixed head chunks first, then the client's queue until it closes.
@@ -1202,8 +1202,8 @@ fn dashboard_html(state: &Arc<Mutex<CoreState>>, media_dir: &std::path::Path, re
     let now = crate::now_ms() as f64;
     // Read per request, like the TS: 28 KB, and a dev can edit the shell without a restart.
     let tmpl = std::fs::read_to_string(media_dir.join("index.html")).map_err(|e| format!("index.html: {e}"))?;
-    let (_, summary) = summary_now(state, now)?;
-    let stripped = stripped_now(state, now)?;
+    let (_, summary) = summary_now(state, now);
+    let stripped = stripped_now(state, now);
     let (spans, build_id) = {
         let st = state.lock_timed();
         // The SAME build_id the update frames carry — the dashboard reloads on a mismatch, so a
@@ -1419,9 +1419,9 @@ async fn handle(
             error_json("restricted viewer — this surface requires a maestro assertion (AgentlensPro#4)"),
         )
     } else if path == "/events" {
-        sse_response(&state, &hub, crate::now_ms() as f64)?
+        sse_response(&state, &hub, crate::now_ms() as f64)
     } else if method == Method::GET && path == "/api/summary" {
-        json_response(StatusCode::OK, stripped_now(&state, crate::now_ms() as f64)?.to_string())
+        json_response(StatusCode::OK, stripped_now(&state, crate::now_ms() as f64).to_string())
     } else if method == Method::GET && path == "/api/server-stats" {
         let body = {
             let st = state.lock_timed();
@@ -1845,7 +1845,7 @@ async fn handle(
         let now = crate::now_ms() as f64;
         // TRDD-XX1UAZHS: the status is computed OFF the lock; the guard below only reads the
         // account and the resident blobs.
-        let status = burn_status_now(&state, now)?;
+        let status = burn_status_now(&state, now);
         let body = {
             let mut st = state.lock_timed();
             let account = st.burn.current_account(now);
@@ -1861,7 +1861,7 @@ async fn handle(
             // TRDD-QE114936 site 20: computed OFF the lock, and only when the 4 s tick has not
             // stored a status yet — `burn_risk_report` used to fill it in by rebuilding the whole
             // summary under this guard.
-            let seed = burn_status_seed(&state, now)?;
+            let seed = burn_status_seed(&state, now);
             let mut st = state.lock_timed();
             st.burn_risk_report(now, seed, None, None).to_string()
         };
@@ -2040,7 +2040,7 @@ async fn handle(
                 // guard is an O(window) rebuild that measured 12–64 s holds on the live server,
                 // during which every ingest and read path queues behind it. Nothing else in this
                 // route needs `CoreState`, so the guard disappears entirely.
-                let (_, summary) = summary_now(&state, crate::now_ms() as f64)?;
+                let (_, summary) = summary_now(&state, crate::now_ms() as f64);
                 let body = {
                     // `(s.workspace ?? '') === workspace || s.workspace?.startsWith(workspace)`
                     let sessions: Vec<Value> = summary
@@ -2244,7 +2244,7 @@ async fn handle(
                         let now = crate::now_ms() as f64;
                         // TRDD-XX1UAZHS: this guard held 4,894 ms with the compute inside it.
                         // The status is computed off the lock; the hold is the account read only.
-                        let status = burn_status_now(&state, now)?;
+                        let status = burn_status_now(&state, now);
                         let mut st = state.lock_timed();
                         let account = st.burn.current_account(now);
                         drop(st);
@@ -2262,7 +2262,7 @@ async fn handle(
                         // eighteen direct sites, one call deep where a grep here could not see it.
                         // Renamed `session_status_over` (it computes OVER a summary, it does not
                         // build one) and the summary is read off the lock and passed in.
-                        let (_, summary) = summary_now(&state, now)?;
+                        let (_, summary) = summary_now(&state, now);
                         let mut st = state.lock_timed();
                         let payload = st.session_status_over(&summary, sid.as_deref(), ws.as_deref(), now);
                         drop(st);
@@ -2271,7 +2271,7 @@ async fn handle(
                     "get_window_budget" => {
                         let now = crate::now_ms() as f64;
                         // TRDD-XX1UAZHS: compute off the lock, hold only for the account read.
-                        let status = burn_status_now(&state, now)?;
+                        let status = burn_status_now(&state, now);
                         let mut st = state.lock_timed();
                         let account = st.burn.current_account(now);
                         drop(st);
@@ -2283,7 +2283,7 @@ async fn handle(
                         let now = crate::now_ms() as f64;
                         // TRDD-QE114936: summary OFF the lock; the guard is kept only for the
                         // lifecycle gaps, which read the live `CoreState`.
-                        let (_, summary) = summary_now(&state, now)?;
+                        let (_, summary) = summary_now(&state, now);
                         let sessions: Vec<Value> = summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
                         let gaps = {
                             let st = state.lock_timed();
@@ -2408,7 +2408,7 @@ async fn handle(
                         // TRDD-QE114936: ONE off-lock summary read for the WHOLE handler — the
                         // session list here and every candidate's timeline inside `timeline_of`
                         // below. Both used to be O(window) rebuilds taken under the state lock.
-                        let (_, timeline_summary) = summary_now(&state, now as f64)?;
+                        let (_, timeline_summary) = summary_now(&state, now as f64);
                         let sessions: Vec<Value> =
                             timeline_summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
                         // TRDD-MVR6PXC0: the log env, cloned off the lock ONCE for the whole scan.
@@ -2442,7 +2442,7 @@ async fn handle(
                         // TRDD-QE114936: summary and id selection happen OFF the lock; the guard
                         // below covers only the `resolve_session_card` loop, which needs
                         // `&mut CoreState` for its reparse-on-demand fallback.
-                        let (_, summary) = summary_now(&state, now as f64)?;
+                        let (_, summary) = summary_now(&state, now as f64);
                         let sessions: Vec<Value> = summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
                         // The matched card is not known until the shaper runs, so resolve only
                         // the ONE id the query can possibly name — the normalized equivalence
@@ -2489,7 +2489,7 @@ async fn handle(
                         let now = crate::now_ms() as f64;
                         // TRDD-QE114936: summary OFF the lock (it was an O(window) rebuild held
                         // under the guard); the lock is now taken only for the log env.
-                        let (_, summary) = summary_now(&state, now)?;
+                        let (_, summary) = summary_now(&state, now);
                         let sessions: Vec<Value> = summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
                         let env = state.lock_timed().log_env.clone();
                         let a = args.clone();
@@ -2521,7 +2521,7 @@ async fn handle(
                         let now = crate::now_ms() as f64;
                         // TRDD-QE114936: summary OFF the lock (it was an O(window) rebuild held
                         // under the guard); the lock is now taken only for the log env.
-                        let (_, summary) = summary_now(&state, now)?;
+                        let (_, summary) = summary_now(&state, now);
                         let sessions: Vec<Value> = summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
                         let env = state.lock_timed().log_env.clone();
                         let a = args.clone();
@@ -2553,7 +2553,7 @@ async fn handle(
                         // TRDD-QE114936: the summary is read OFF the lock; the guard covers only
                         // the resolved timeline (the same reparse-on-demand + OTEL graft path
                         // row 30 uses), which needs `&mut CoreState`.
-                        let (_, summary) = summary_now(&state, now as f64)?;
+                        let (_, summary) = summary_now(&state, now as f64);
                         let card = summary
                             .get("sessions")
                             .and_then(Value::as_array)
@@ -2575,7 +2575,7 @@ async fn handle(
                     "get_subagent_tree" => {
                         let now = crate::now_ms() as f64;
                         // TRDD-QE114936: summary OFF the lock — nothing else here needs the state.
-                        let (_, summary) = summary_now(&state, now)?;
+                        let (_, summary) = summary_now(&state, now);
                         let sessions: Vec<Value> = summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
                         let payload = crate::mcp_tools::get_subagent_tree(&sessions, &s("sessionId").unwrap_or_default(), now);
                         crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
@@ -2626,7 +2626,7 @@ async fn handle(
                     "get_cost_rollup" | "predict_session_cost" => {
                         let now = crate::now_ms() as f64;
                         // TRDD-QE114936: summary OFF the lock — nothing else here needs the state.
-                        let (_, summary) = summary_now(&state, now)?;
+                        let (_, summary) = summary_now(&state, now);
                         let sessions: Vec<Value> = summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
                         let payload = if name == "get_cost_rollup" {
                             crate::mcp_tools::get_cost_rollup(&sessions, &args, now)
@@ -2643,7 +2643,7 @@ async fn handle(
                         // uses — reparse-on-demand + OTEL graft) and the fork-ancestor walk, both
                         // of which need `CoreState`. The multi-GB transcript parse then runs with
                         // the lock RELEASED.
-                        let (_, summary) = summary_now(&state, now as f64)?;
+                        let (_, summary) = summary_now(&state, now as f64);
                         let sessions: Vec<Value> = summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
                         let (timeline, env, ancestor) = {
                             let mut st = state.lock_timed();
@@ -2705,7 +2705,7 @@ async fn handle(
                         let now = crate::now_ms() as f64;
                         // TRDD-QE114936: summary OFF the lock; the guard covers only the two
                         // path/home reads that need `CoreState`.
-                        let (_, summary) = summary_now(&state, now)?;
+                        let (_, summary) = summary_now(&state, now);
                         let sessions: Vec<Value> = summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
                         let (dir, home) = {
                             let st = state.lock_timed();
@@ -3325,7 +3325,7 @@ async fn handle(
                         } else {
                             // TRDD-QE114936: summary OFF the lock; the guard covers only the
                             // bodies-dir path read.
-                            let (_, summary) = summary_now(&state, now)?;
+                            let (_, summary) = summary_now(&state, now);
                             let sessions: Vec<Value> =
                                 summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
                             let bodies_dir = {
@@ -3474,7 +3474,7 @@ async fn handle(
                                     crate::account_burners::known_accounts(&segments)
                                 )),
                                 Some(target) => {
-                                    let (_, summary) = summary_now(&state, now)?;
+                                    let (_, summary) = summary_now(&state, now);
                                     let sessions: Vec<Value> =
                                         summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
                                     let events = crate::burn::monitor::gather_consumption_events(&sessions, &[], now);
@@ -3532,7 +3532,7 @@ async fn handle(
                                     match err {
                                         Some(e) => crate::mcp_tools::error_payload(&e),
                                         None => {
-                                            let (_, summary) = summary_now(&state, now)?;
+                                            let (_, summary) = summary_now(&state, now);
                                             let sessions: Vec<Value> =
                                                 summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
                                             let events = crate::burn::monitor::gather_consumption_events(&sessions, &[], now);
@@ -3587,7 +3587,7 @@ async fn handle(
                         // TRDD-QE114936: ONE off-lock summary read for the WHOLE handler — the
                         // session list here and every candidate's timeline inside `timeline_of`
                         // below. The lock is now taken only for the log env.
-                        let (_, timeline_summary) = summary_now(&state, now as f64)?;
+                        let (_, timeline_summary) = summary_now(&state, now as f64);
                         let sessions: Vec<Value> =
                             timeline_summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
                         // TRDD-ZQQYRYBO I6c2: no TTL-context fetch here any more — the
@@ -3659,7 +3659,7 @@ async fn handle(
                         // benefit) and threaded into every candidate instead. The SAME read also
                         // supplies this handler's session list, so the lock is taken only for the
                         // log env.
-                        let (_, timeline_summary) = summary_now(&state, now as f64)?;
+                        let (_, timeline_summary) = summary_now(&state, now as f64);
                         let sessions: Vec<Value> =
                             timeline_summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
                         // TRDD-ZQQYRYBO I6c2: no TTL-context fetch here any more — the
@@ -3722,7 +3722,7 @@ async fn handle(
                         // this guard rebuilt the summary inline on a miss and then deep-cloned
                         // every card while holding the state lock — 10.2 s measured live. Only
                         // the TTL context still needs the guard.
-                        let (_, summary) = summary_now(&state, now as f64)?;
+                        let (_, summary) = summary_now(&state, now as f64);
                         let sessions: Vec<Value> = summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
                         let ttl = {
                             let mut st = state.lock_timed();
@@ -3790,7 +3790,7 @@ async fn handle(
                         } else {
                             let now = crate::now_ms() as f64;
                             // TRDD-XX1UAZHS: compute off the lock, hold only for account + TTL.
-                            let status = burn_status_now(&state, now)?;
+                            let status = burn_status_now(&state, now);
                             let mut st = state.lock_timed();
                             let account = st.burn.current_account(now);
                             let ttl = st.burn.ttl_context(now);
@@ -3810,7 +3810,7 @@ async fn handle(
                         let n = |k: &str| args.get(k).and_then(Value::as_f64);
                         // TRDD-QE114936 site 20 — see the `/api/burn-risk` route: off the lock,
                         // and only when the tick has not stored a status yet.
-                        let seed = burn_status_seed(&state, now)?;
+                        let seed = burn_status_seed(&state, now);
                         let mut st = state.lock_timed();
                         let payload = st.burn_risk_report(now, seed, n("fanoutThreshold"), n("spikeTokensPerMin"));
                         drop(st);
@@ -3856,7 +3856,7 @@ async fn handle(
                         // branch that needs it — the other two tools never read a card model, so
                         // they must not pay for a summary read at all.
                         let card_model = if name == "get_context_history" {
-                            let (_, summary) = summary_now(&state, crate::now_ms() as f64)?;
+                            let (_, summary) = summary_now(&state, crate::now_ms() as f64);
                             summary
                                 .get("sessions")
                                 .and_then(Value::as_array)
@@ -4001,7 +4001,7 @@ async fn handle(
         let now = crate::now_ms();
         // TRDD-QE114936: summary read OFF the lock before the guard below, instead of
         // resolve_session_card rebuilding it inline while holding `st`.
-        let (_, summary) = summary_now(&state, now as f64)?;
+        let (_, summary) = summary_now(&state, now as f64);
         let body = {
             let mut st = state.lock_timed();
             let session = resolve_session_card(&mut st, &summary, &session_id, now);
@@ -4203,7 +4203,7 @@ pub async fn run_burn_tick(state: Arc<Mutex<CoreState>>, hub: Arc<SseHub>) {
         // every install, with or without a dashboard connected, and `live_burn_status` rebuilt the
         // whole window inside the lock — the single biggest source of the 83k `__psynch_mutexwait`
         // samples under an ingest flood. `burn_status_over` below now gets a ready summary.
-        let Ok((_, tick_summary)) = summary_now(&state, crate::now_ms() as f64) else { continue };
+        let (_, tick_summary) = summary_now(&state, crate::now_ms() as f64);
         // Declared OUTSIDE the lock blocks (uninitialized — the only paths that skip the
         // assignment are the `continue`s below, which also skip every read): the rotation edge is
         // detected under the lock, and the capture it triggers runs after the lock is released.
@@ -4434,7 +4434,7 @@ mod rebuild_admission_tests {
         let dir = std::env::temp_dir().join(format!("al-admission-{}-{}", tag, std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let state = Arc::new(Mutex::new(CoreState::open(&dir)));
-        let (version, _) = summary_now(&state, crate::now_ms() as f64).expect("warm the cache");
+        let (version, _) = summary_now(&state, crate::now_ms() as f64);
         (state, version)
     }
 
@@ -4459,7 +4459,7 @@ mod rebuild_admission_tests {
         let held = rebuild_gate().lock().unwrap_or_else(|e| e.into_inner());
 
         let began = Instant::now();
-        let (served_version, _summary) = summary_now(&state, crate::now_ms() as f64).expect("served");
+        let (served_version, _summary) = summary_now(&state, crate::now_ms() as f64);
         let waited = began.elapsed();
         drop(held);
 
@@ -4493,7 +4493,7 @@ mod rebuild_admission_tests {
         let current = state.lock_timed().data_version;
 
         // Nobody holds the gate here — the reader must rebuild rather than serve the warm value.
-        let (served_version, _) = summary_now(&state, crate::now_ms() as f64).expect("served");
+        let (served_version, _) = summary_now(&state, crate::now_ms() as f64);
         assert_eq!(served_version, current, "an uncontended reader must serve the CURRENT version");
         assert_ne!(served_version, warm_version, "serving the pre-bump summary is the read-your-writes bug");
     }
@@ -4594,7 +4594,7 @@ mod rebuild_admission_tests {
 
         READER_WAITING.store(false, Ordering::Relaxed);
         let began = Instant::now();
-        let (served_version, _) = summary_now(&state, crate::now_ms() as f64).expect("served");
+        let (served_version, _) = summary_now(&state, crate::now_ms() as f64);
         let waited = began.elapsed();
 
         assert_eq!(

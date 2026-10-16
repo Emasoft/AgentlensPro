@@ -1187,7 +1187,7 @@ impl DurableState {
     /// every other file's position. It also fills the log's `written` hashes, so the next tick
     /// writes only what changed since.
     ///
-    /// A poisoned lock now panics at the first `lock_timed()` (TRDD-TYJSS45N), so neither the puts
+    /// A poisoned lock panics at the first `lock_timed()` (TRDD-TYJSS45N), so neither the puts
     /// nor the offsets append run. Offsets are still appended strictly after the card puts of this
     /// chunk (TRDD-9VX3WTGU): the positions are built before the lock and appended only after the
     /// guard is dropped, and each put is a committed DuckDB statement, so a position on disk never
