@@ -4,7 +4,7 @@ title: Functions and closures that still return a Result that can no longer fail
 column: todo
 status: tasked
 created: 2026-10-16T09:21:33+0200
-updated: 2026-10-16T09:26:29+0200
+updated: 2026-10-16T09:40:31+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: refactor

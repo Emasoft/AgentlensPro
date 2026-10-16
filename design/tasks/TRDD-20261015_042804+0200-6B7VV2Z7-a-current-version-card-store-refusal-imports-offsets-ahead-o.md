@@ -1,10 +1,10 @@
 ---
 trdd-id: 6B7VV2Z7
 title: A current-version card store refusal imports offsets ahead of a stale snapshot and loses idle cards
-column: todo
+column: dev
 status: tasked
 created: 2026-10-15T04:28:04+0200
-updated: 2026-10-16T06:41:30+0200
+updated: 2026-10-16T09:40:21+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -58,6 +58,7 @@ On a current-version refusal, drop the offsets of files whose card is absent fro
 - 2026-10-15T04:28:04+0200 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-10-15T07:12:10+0200 — column → blocked by main-agent@agentlenspro. B' waits for the per-chunk progress card, 0BDOV3WC and USSG465Q
 - 2026-10-16T06:41:30+0200 — column → todo by main-agent@agentlenspro. blocker USSG465Q complete (ddb58799) Cleared blocked-by (--clear-blocker override).
+- 2026-10-16T09:40:21+0200 — column → dev by main-agent@agentlenspro. B' implementation started (proposal reviewed and measured 2026-10-16; spec docs_dev/20261016-6b7vv2z7-impl-spec.md)
 
 ## Notes and lessons learned
 

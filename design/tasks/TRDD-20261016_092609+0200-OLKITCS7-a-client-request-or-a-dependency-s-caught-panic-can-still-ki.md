@@ -28,7 +28,7 @@ Residual risks of TRDD-3RVTC1HY (542ceca2), which made every panic exit alcore; 
 
 ## Acceptance
 
-- [ ] Every panic site reachable from the HTTP and MCP handler entry points (scope by tldr impact from each handler, not by a file list) is listed on this card with file:line and classified reachable by client input or not. The list is enumerated with clippy restriction lints run over agentlens-core (indexing_slicing, string_slice, arithmetic_side_effects, integer_division, modulo_arithmetic, panic, unreachable, unwrap_used, expect_used), filtered to that reachable set.
+- [ ] Every panic site reachable from the HTTP and MCP handler entry points (run the lints first, then keep a hit only if `tldr impact` on its enclosing function shows an HTTP or MCP handler among its transitive callers; tldr impact lists callers, not callees) is listed on this card with file:line and classified reachable by client input or not. The list is enumerated with clippy restriction lints run over agentlens-core (indexing_slicing, string_slice, arithmetic_side_effects, integer_division, modulo_arithmetic, panic, unreachable, unwrap_used, expect_used), filtered to that reachable set.
 - [ ] Every reachable one returns an error response instead, with a test that sends that input.
 - [ ] Question (2) is answered with evidence from the dependencies' source: no dependency panics as control flow on a thread alcore shares (a panic hook runs before catch_unwind regains control, so a caught panic is still an exit).
 - [ ] The late-panic restart has a backoff, or a recorded measured reason why none is needed.
