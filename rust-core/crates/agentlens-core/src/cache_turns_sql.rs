@@ -180,9 +180,17 @@ pub fn api_calls_relation(store_dir: &Path) -> Option<String> {
     //   columns on the loser — a second copy of "which columns come from the response", so a
     //   column it missed (or one added to API_VIEW_COLUMNS later) leaked the lost response's data
     //   onto the loser. Now `candidates`/`claims` carry only stems, the request link's session and
-    //   the distance; `paired` LEFT JOINs the response part and its pair link ON `k.claimed`, so
-    //   every response-derived column is NULL on a losing request by construction. The winner
-    //   keeps resp_stem, so `orphans` still sees the claimed response as consumed.
+    //   the distance; `claims` turns the claim into `claimed_stem` (the response stem on the
+    //   winner, NULL on every loser), and `paired` LEFT JOINs the response part and its pair link
+    //   on `claimed_stem`, so every response-derived column is NULL on a losing request by
+    //   construction (NULL equals nothing). The winner keeps resp_stem, so `orphans` still sees
+    //   the claimed response as consumed.
+    //   WHY the claim is folded into the join KEY, never `ON k.claimed AND resp.stem = k.cand_stem`
+    //   (TRDD-GVA8TTJF): a conjunct that is not an equality between the two sides (the left-only
+    //   boolean `k.claimed`) in a LEFT JOIN's ON kept DuckDB from extracting the equality, so both
+    //   joins planned as BLOCKWISE_NL_JOIN — every request against every response. Measured with
+    //   EXPLAIN ANALYZE on 350k requests x 350k responses: 939 s + 792 s of CPU, the whole query
+    //   927 s. A pure equality on claimed_stem plans as a HASH_JOIN with the same rows.
     //   WHY the distance is NULL, not 0, when either ts is missing: COALESCE(ts, 0) made a request
     //   without a timestamp sit at epoch 0, so it could out-claim a timed request whenever the
     //   response ts happened to be closer to 0. A NULL distance is unknown, not near: it is
@@ -209,9 +217,9 @@ pub fn api_calls_relation(store_dir: &Path) -> Option<String> {
            ) = 1 \
          ), \
          claims AS ( \
-           SELECT *, cand_stem IS NOT NULL AND ROW_NUMBER() OVER ( \
+           SELECT *, CASE WHEN ROW_NUMBER() OVER ( \
              PARTITION BY cand_stem ORDER BY pair_dist NULLS LAST, call_stem \
-           ) = 1 AS claimed \
+           ) = 1 THEN cand_stem END AS claimed_stem \
            FROM candidates \
          ), \
          paired AS ( \
@@ -229,8 +237,8 @@ pub fn api_calls_relation(store_dir: &Path) -> Option<String> {
              pl.link_request_id, pl.link_msg_id, \
              resp.stem AS resp_stem \
            FROM claims k JOIN reqs req ON req.stem = k.call_stem \
-             LEFT JOIN resps resp ON k.claimed AND resp.stem = k.cand_stem \
-             LEFT JOIN pairs pl ON k.claimed AND pl.req_stem = k.call_stem AND pl.resp_stem = k.cand_stem \
+             LEFT JOIN resps resp ON resp.stem = k.claimed_stem \
+             LEFT JOIN pairs pl ON pl.req_stem = k.call_stem AND pl.resp_stem = k.claimed_stem \
            QUALIFY ROW_NUMBER() OVER ( \
              PARTITION BY k.call_stem \
              ORDER BY pl.link_ts DESC NULLS LAST, pl.link_request_id, pl.link_msg_id \
