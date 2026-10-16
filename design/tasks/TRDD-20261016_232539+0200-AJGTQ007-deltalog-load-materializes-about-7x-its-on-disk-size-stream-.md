@@ -4,7 +4,7 @@ title: DeltaLog load materializes about 7x its on-disk size, stream the replay
 column: todo
 status: tasked
 created: 2026-10-16T23:25:39+0200
-updated: 2026-10-16T23:29:37+0200
+updated: 2026-10-16T23:35:50+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -42,3 +42,4 @@ Baseline, a fact and not a criterion (2026-10-16, docs_dev/20261016-ajgtq007-rea
 ## Notes and lessons learned
 
 2026-10-16: priority. The real card-snapshot load costs 478 MiB, about 23% of the 2048 MiB cap, on every refused-reuse boot. It is not the IMMEDIATE trigger: the load-time spike rarely coincides with a death, since only 28 of 1,539 logged cap deaths fall in the first 30 s of uptime (worker count from server.log, read-only). Unmeasured: its share of the steady footprint, and the death rate on refused-reuse boots specifically (load() runs only on those; the 1,539 mix reused and refused boots, and splitting them by the refusal or cold-rescan log lines would answer it). It stays an open hypothesis for the collector's crash loop. Whether its freed pages stay committed in mimalloc and raise the steady footprint is inferred, not measured. So the card is not by itself a release blocker, but it eats about a quarter of the headroom on the upgrade boot HSPUF5XH gates. The 1.1 GB synthetic 700k/1.4M dataset is at $TMPDIR/gva8-memgate (OS tmp, may be purged); the harness that rebuilds it is scripts_dev/gva8ttjf_memgate/.
+2026-10-16: deaths split by boot type (read-only, a copy of server.log; docs_dev/20261016-ajgtq007-deaths-by-boot-type.md, worker-parsed). Boots that REUSED cards.duckdb died at the cap in 565 of 569 starts (median uptime 1.9 min); boots that REFUSED it, the only ones that run load() on the card snapshot, died in 10 of 11 (median 2.4 min). The crash loop happens without this card's load, so this card is not its cause. 11 refused boots are too few to rule out a moderate added effect.
