@@ -3,13 +3,13 @@ trdd-id: 81BW1CS9
 title: Real capture diverted into two test-leaked tmp data dirs must be merged back into the data dir
 column: todo
 created: 2026-09-09T11:36:35+0200
-updated: 2026-09-23T06:01:10+0200
+updated: 2026-10-16T17:07:33+0200
 current-owner: main
 task-type: bugfix
 min-approval-requirement: user
 priority: high
 severity: high
-blocked-by: [5JZQFVO8]
+blocked-by: []
 npt: []
 eht: []
 implementation-commits: []
@@ -29,6 +29,7 @@ recovered, and the recovery procedure itself needs to be reviewed before it runs
 is USER because the merge writes into the real, live data store — irreversible if wrong).
 NEXT ACTION: once 5JZQFVO8 reaches deploy, inventory both tmp dirs into `reports/`, propose a
 per-store-type merge procedure, get it reviewed, then run it.
+2026-10-16: its blocker 5JZQFVO8 is complete (e5cd319d), so the block is cleared.
 
 ## Why
 

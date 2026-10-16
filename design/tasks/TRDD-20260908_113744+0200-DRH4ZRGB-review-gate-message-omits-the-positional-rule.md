@@ -3,7 +3,7 @@ trdd-id: DRH4ZRGB
 title: The review-gate block message omits the positional rule its own instruction violates
 column: blocked
 created: 2026-09-08T11:37:44+0200
-updated: 2026-10-16T11:16:30+0200
+updated: 2026-10-16T17:07:17+0200
 current-owner: main-session
 task-type: bugfix
 scope: project
@@ -14,6 +14,8 @@ blocked-by: [7FA3NIXU]
 status: tasked
 pre-block-column: testing
 unblock-when: [trdd:7FA3NIXU terminal]
+blocker-probe: [trddgrep, why, DRH4ZRGB]
+blocker-holds-if: not-match:READY
 ---
 
 # The review-gate block message omits the positional rule its own instruction violates

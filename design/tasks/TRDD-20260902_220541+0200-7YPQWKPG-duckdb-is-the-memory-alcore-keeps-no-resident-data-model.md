@@ -3,7 +3,7 @@ trdd-id: 7YPQWKPG
 title: DuckDB is the memory and alcore keeps no resident data model
 column: blocked
 created: 2026-09-02T22:05:41+0200
-updated: 2026-10-16T11:16:42+0200
+updated: 2026-10-16T17:07:34+0200
 current-owner: main-session
 task-type: refactor
 priority: critical
@@ -17,6 +17,8 @@ approved-at: 2026-09-02T22:05:41+0200
 status: tasked
 unblock-when: [trdd:7RM5YW2T terminal, trdd:FSMISF5K terminal]
 pre-block-column: human_review
+blocker-probe: [trddgrep, why, 7YPQWKPG]
+blocker-holds-if: not-match:READY
 ---
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-06T04:42:39+0200
@@ -62,6 +64,7 @@ FSMISF5K), XTFDRTH2 ai_review (merged ac289d8d), GR6WHHK5 testing (merged c89148
 **NEXT ACTION:** FSMISF5K dispatched (kraken, worktree). After it lands + deploys: re-measure
 footprint AND RSS; expect peak ≤ 3 GB and CPU ≤ 15%. If RSS still carries MADV_FREE residue,
 evaluate `MIMALLOC_PURGE_DELAY=0` / eager decommit as a one-line knob card, not a refactor.
+2026-10-16: correction to commit e5cd319d's message: its BLOCKED-WITHOUT-PROBE finding came from this triage (unblock-when alone does not satisfy the rule), not from before it; blocker-probe was added afterwards.
 
 ## WHY
 

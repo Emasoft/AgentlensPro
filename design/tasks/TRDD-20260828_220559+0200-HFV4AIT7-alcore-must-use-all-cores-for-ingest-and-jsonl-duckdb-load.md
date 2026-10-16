@@ -3,7 +3,7 @@ trdd-id: HFV4AIT7
 title: Measure and guarantee that alcore uses all CPU cores for telemetry and hook ingest and for the JSONL to DuckDB load
 column: todo
 created: 2026-08-28T22:05:59+0200
-updated: 2026-10-16T11:16:06+0200
+updated: 2026-10-16T17:07:34+0200
 current-owner: claude-agentlenspro
 task-type: audit
 project-id: agentlenspro
@@ -482,6 +482,7 @@ The reason the Rust rewrite exists at all (USER, same day): *"the typescript was
 16 cores, and the async loading of the data from the jsonl and the duckdb was stalling the
 system."* So this is not a nice-to-have benchmark; it is the acceptance test of the migration's
 purpose.
+2026-10-16: correction to the triage note above: the card's column is now todo; the phrase 'the column still says testing' described it before the move.
 
 ## What to measure (not infer)
 
