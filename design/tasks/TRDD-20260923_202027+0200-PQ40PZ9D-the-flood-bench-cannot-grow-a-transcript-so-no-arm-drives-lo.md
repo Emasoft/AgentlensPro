@@ -1,9 +1,9 @@
 ---
 trdd-id: PQ40PZ9D
 title: The flood bench cannot grow a transcript so no arm drives log-sweeper rebuilds
-column: human_review
+column: dev
 created: 2026-09-23T20:20:27+0200
-updated: 2026-10-08T18:43:15+0200
+updated: 2026-10-17T12:24:23+0200
 current-owner: main-session
 created-by: main-session
 task-type: infra
@@ -24,7 +24,7 @@ EQCGAVGV's arms need a log-growth driver: put_log_session (rust-core/crates/agen
 
 Add a mode to scripts/bench/alcore-ingest-flood.mjs that appends synthetic Claude Code JSONL (assistant turns carrying usage) to <isolated HOME>/.claude/projects/<slug>/<session>.jsonl at a configurable lines/s, refusing the passwd user's real ~/.claude (os.userInfo().homedir).
 
-Acceptance: [x] the isolated instance's summary misses and session-card count rise with the appended lines (live run 2026-10-08: summaryMissesDelta=8, logSessionsDelta=15, dataVersionDelta=128, exit 0, append rate 24.999/s vs target 25); [x] refuses the real home (subtree guard: real home, its .claude, any descendant, '/', plus a post-mkdir symlink re-resolve; 8 refusal checks exit 2); [x] the line shape is parsed by agentlens-logscan's Claude parser (cited in source: agentlens-logscan/src/lib.rs:842 assistant branch, :851 usage dedup per message.id, :762 cwd, :1279 file-stem session id, disjoint_anthropic :147, spanstore parse_iso_ms :165). related: [EQCGAVGV, C19SUVPH].
+Acceptance: [x] the isolated instance's summary misses and session-card count rise with the appended lines (live run 2026-10-08: summaryMissesDelta=8, logSessionsDelta=15, dataVersionDelta=128, exit 0, append rate 24.999/s vs target 25); [ ] refuses the real home (subtree guard: real home, its .claude, any descendant, '/', plus a post-mkdir symlink re-resolve; 8 refusal checks exit 2 (re-verification 2026-10-17 covered 6)); [x] the line shape is parsed by agentlens-logscan's Claude parser (cited in source: agentlens-logscan/src/lib.rs:842 assistant branch, :851 usage dedup per message.id, :762 cwd, :1279 file-stem session id, disjoint_anthropic :147, spanstore parse_iso_ms :165). related: [EQCGAVGV, C19SUVPH].
 
 ## Approval log
 
@@ -32,6 +32,8 @@ Acceptance: [x] the isolated instance's summary misses and session-card count ri
 - 2026-10-08T17:40:51+0200 — column → dev by main-agent@agentlenspro.
 - 2026-10-08T18:33:11+0200 — column → testing by main-agent@agentlenspro.
 - 2026-10-08T18:40:05+0200 — column → human_review by main-agent@agentlenspro.
+- 2026-10-17 — box 2 unticked by main-agent@agentlenspro: a read-only re-verification (reports_dev/pq40/20261017-verify-report.md, gitignored) showed --transcripts-home under an ANCESTOR symlink into another tree passes the pre-write guard (path.resolve does not follow it) and the bootstrap writes 16 files before the post-mkdir check refuses; proven on a scratch proxy, the real home was not touched. Box 2 is re-ticked only after the fix is verified by a seam test that shows exit 2 with zero files under the protected root, and a reverted-fix mutation that creates files.
+- 2026-10-17T12:24:23+0200 — column → dev by main-agent@agentlenspro. box 2 gap found 2026-10-17; guard fix in progress
 
 ## Implemented (2026-10-08)
 
