@@ -983,13 +983,12 @@ impl DurableState {
         // immediately — compact_now bypasses save()'s size gate, so the delta stays bounded to
         // per-boot volume and a torn trailing line left by a hard kill is healed before any
         // SQL consumer reads the file. Append-only facts: no deletion-diffing ever runs on them.
-        match state.body_links.load() {
-            Ok(records) => {
-                if let Err(e) = state.body_links.compact_now(&records) {
-                    eprintln!("{} alcore: could not compact body-links: {e}", crate::log_ts());
-                }
-            }
-            Err(e) => eprintln!("{} alcore: could not load body-links: {e}", crate::log_ts()),
+        // TRDD-1RJBOEI1: compact_from_disk, not load() + compact_now(&records): the same seeding of
+        // `written` and the same verified snapshot, streamed, so this boot step never holds the
+        // record map (load() alone peaked at 1564 MiB at 700k rows, and the old pair at 3337 MiB,
+        // over alcore's 2048 MiB cap — docs_dev/20261017-1rjboei1-streaming-compact-report.md).
+        if let Err(e) = state.body_links.compact_from_disk() {
+            eprintln!("{} alcore: could not load or compact body-links: {e}", crate::log_ts());
         }
         let out = if state.cards.reused() { self.restore_reused(tailer, state, env)? } else { self.restore_from_snapshot(state, env)? };
         state.cards.mark_restore_complete();

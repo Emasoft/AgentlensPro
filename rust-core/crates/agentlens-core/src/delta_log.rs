@@ -101,6 +101,47 @@ fn parse_line(ln: &[u8]) -> Option<Value> {
     std::str::from_utf8(ln).ok().and_then(|s| serde_json::from_str::<Value>(s).ok())
 }
 
+
+/// TRDD-1RJBOEI1 — a compaction's `<snapshot>.tmp`, written ONE record at a time through a
+/// 64 KiB buffer. WHY: compaction used to build the whole snapshot body as one String before
+/// fs::write (271 MB at 700k body-links records) on top of the records it was given; streaming
+/// keeps compaction's own write footprint at one serialized record.
+struct TmpSnapshot {
+    path: PathBuf,
+    w: std::io::BufWriter<fs::File>,
+    bytes: u64,
+}
+
+impl TmpSnapshot {
+    /// Create (or truncate) `<snapshot>.tmp`, as fs::write did.
+    fn create(snapshot: &Path) -> Result<TmpSnapshot, String> {
+        let path = PathBuf::from(format!("{}.tmp", snapshot.display()));
+        let f = fs::File::create(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        Ok(TmpSnapshot { path, w: std::io::BufWriter::with_capacity(REPLAY_BUF, f), bytes: 0 })
+    }
+
+    /// Append `{"k":<key>,"v":<json>}\n`, `json` being `serde_json::to_string(v)`. WHY spelled out
+    /// and not `to_string(&json!({"k": k, "v": v}))`: that cloned every `v`; this writes the same
+    /// bytes (compact formatter, `k` before `v`), which the byte-for-byte compaction test pins.
+    fn push(&mut self, k: &str, json: &str) -> Result<(), String> {
+        let key = serde_json::to_string(k).unwrap_or_default();
+        let io = |e: std::io::Error| format!("{}: {e}", self.path.display());
+        for part in [b"{\"k\":".as_slice(), key.as_bytes(), b",\"v\":", json.as_bytes(), b"}\n"] {
+            self.w.write_all(part).map_err(io)?;
+            self.bytes += part.len() as u64;
+        }
+        Ok(())
+    }
+
+    /// Flush and CLOSE the file (an unflushed buffer would make the from-disk verify read a short
+    /// file, and Windows will not rename a file that is still open). Returns (path, bytes written).
+    fn finish(self) -> Result<(PathBuf, u64), String> {
+        let TmpSnapshot { path, w, bytes } = self;
+        w.into_inner().map_err(|e| format!("{}: {}", path.display(), e.error()))?;
+        Ok((path, bytes))
+    }
+}
+
 /// TRDD-0R0NGVK6 — before any append, repair a delta whose last line has no '\n'. A kill or a
 /// partial write mid-append can leave one; the next append would be glued onto it, and the glued
 /// line, once another line follows, is a corrupt MID-FILE line every later load() refuses (for
@@ -373,30 +414,162 @@ impl DeltaLog {
     }
 
     /// Rewrite the snapshot from `records`, VERIFY it from disk, then drop the delta.
+    ///
+    /// TRDD-1RJBOEI1: streams. Each record is serialized and written on its own (TmpSnapshot), and
+    /// the verify re-indexes the file instead of replaying it into a second map, so compaction adds
+    /// about one key index to the `records` the caller already holds — it used to add the whole
+    /// body as a String plus a full second map (3337 MiB peak at 700k body-links records,
+    /// docs_dev/20261017-ajgtq007-streaming-report.md). Same contract as before: the snapshot is
+    /// exactly `records`, in its order (save() calls this BEFORE its changed lines reach the delta,
+    /// so `records`, not the files, is the source of truth here).
     fn compact(&self, records: &IndexMap<String, Value>) -> Result<u64, String> {
-        let mut body = String::new();
+        let mut tmp = TmpSnapshot::create(&self.snapshot_path)?;
         for (k, v) in records {
-            body.push_str(&serde_json::to_string(&serde_json::json!({ "k": k, "v": v })).unwrap_or_default());
-            body.push('\n');
+            tmp.push(k, &serde_json::to_string(v).unwrap_or_default())?;
         }
-        let tmp = PathBuf::from(format!("{}.tmp", self.snapshot_path.display()));
-        fs::write(&tmp, &body).map_err(|e| format!("{}: {e}", tmp.display()))?;
-        // PROVE the snapshot before committing to it: read the candidate BACK FROM DISK and confirm
-        // it reproduces exactly the saved record set (count + every record).
-        let reloaded = Self::replay(&[&tmp])?;
-        let mismatch = if reloaded.len() != records.len() {
-            Some(format!("holds {} records, expected {}", reloaded.len(), records.len()))
-        } else {
-            records.iter().find(|(k, v)| reloaded.get(*k) != Some(*v)).map(|(k, _)| format!("record {k:?} is not durable in the snapshot"))
-        };
-        if let Some(m) = mismatch {
-            let _ = fs::remove_file(&tmp);
+        let (tmp, bytes) = tmp.finish()?;
+        // WHY Value equality and not a hash: `records` is in memory, so the exact old check (every
+        // record equal) costs nothing extra.
+        self.commit_verified(&tmp, records.keys().map(String::as_str), |pos, v| records.get_index(pos).map(|(_, r)| r) == Some(v))?;
+        Ok(bytes)
+    }
+
+
+    /// PROVE the candidate before committing to it, then commit: re-read `tmp` BACK FROM DISK and
+    /// confirm it holds exactly `keys` (count, every key, in order) and that `same(pos, v)` holds
+    /// for every record's value as parsed back. Only then rename it over the snapshot, and only
+    /// AFTER the rename delete the delta — a short or corrupt write keeps the old snapshot AND the
+    /// delta intact.
+    ///
+    /// TRDD-1RJBOEI1: the read-back is the replay's own two passes (index_files, then visit_winners)
+    /// over `tmp`, so the verify holds one key index, never a second record map, and checks the
+    /// same parse and torn-tail rules a later load() applies. WHY a torn or corrupt `tmp` now counts
+    /// as a failed verify (it used to return the replay error and leave `tmp` behind): it IS a
+    /// failed verify, and the old snapshot and delta are untouched either way.
+    fn commit_verified<'a>(
+        &self,
+        tmp: &Path,
+        keys: impl ExactSizeIterator<Item = &'a str>,
+        mut same: impl FnMut(usize, &Value) -> bool,
+    ) -> Result<(), String> {
+        let verified = (|| -> Result<(), String> {
+            let ix = Self::index_files(&[tmp])?;
+            if ix.live.len() != keys.len() {
+                return Err(format!("holds {} records, expected {}", ix.live.len(), keys.len()));
+            }
+            if let Some((got, want)) = ix.live.keys().zip(keys).find(|(got, want)| got.as_str() != *want) {
+                return Err(format!("record {want:?} is not durable in the snapshot (found {got:?} in its place)"));
+            }
+            let winners = ix.winners();
+            Self::visit_winners(&ix.files, &winners, |pos, k, v| if same(pos, &v) { Ok(()) } else { Err(format!("record {k:?} is not durable in the snapshot")) })
+            // `ix` drops here, closing `tmp` before the rename (Windows refuses to rename an open file).
+        })();
+        if let Err(m) = verified {
+            let _ = fs::remove_file(tmp);
             return Err(format!("{}: compaction verify failed ({m}); delta KEPT, snapshot NOT replaced — no records lost", self.snapshot_path.display()));
         }
-        fs::rename(&tmp, &self.snapshot_path).map_err(|e| format!("{}: rename: {e}", self.snapshot_path.display()))?;
+        fs::rename(tmp, &self.snapshot_path).map_err(|e| format!("{}: rename: {e}", self.snapshot_path.display()))?;
         // Only AFTER the snapshot is durable AND verified.
         let _ = fs::remove_file(&self.delta_path);
-        Ok(body.len() as u64)
+        Ok(())
+    }
+
+    /// TRDD-1RJBOEI1 — the body-links boot step: what `load()` then `compact_now(&records)` did,
+    /// without ever holding the record map. Seeds `self.written` exactly as load() does (same
+    /// hashes, same replay order) and, when the delta is non-empty, rewrites the snapshot from the
+    /// streaming replay, verified from disk like every compaction. Returns the snapshot bytes
+    /// written (0 when the delta was empty).
+    ///
+    /// WHY it exists: log_reader.rs restore ran load() + compact_now at every boot, and load()'s
+    /// map alone is 1564 MiB at 700k records, so no change inside compact() could bring that boot
+    /// under alcore's 2048 MiB cap with room to spare (docs_dev/20261017-ajgtq007-streaming-report.md).
+    ///
+    /// WHY the winners are read in REPLAY order (seeking per record) and not in visit_winners' file
+    /// order: the snapshot must come out in the order load()'s map had (insert a, insert b, update
+    /// a is order a, b but file order b, a), or every later load() order — and the bytes of the
+    /// snapshot — would change. Reads are buffered and the order is mostly sequential, so a seek is
+    /// a buffer move in the common case.
+    ///
+    /// Failure semantics mirror the old pair: a source that does not replay is an Err with
+    /// `written` untouched (load() failing); a failed write or verify is an Err with `written`
+    /// already seeded (load() succeeding, then compact_now failing), and the old snapshot and the
+    /// delta stay in place.
+    pub fn compact_from_disk(&mut self) -> Result<u64, String> {
+        use std::io::{BufRead, BufReader, Seek, SeekFrom};
+        let delta_empty = size_of(&self.delta_path) == 0;
+        let ix = Self::index_files(&[&self.snapshot_path, &self.delta_path])?;
+        let mut out: Result<Option<TmpSnapshot>, String> = if delta_empty { Ok(None) } else { TmpSnapshot::create(&self.snapshot_path).map(Some) };
+        let mut written: IndexMap<String, u64> = IndexMap::with_capacity(ix.live.len());
+        let mut readers: Vec<Option<(BufReader<&fs::File>, u64)>> = Vec::with_capacity(ix.files.len());
+        for rf in &ix.files {
+            readers.push(match rf.file.as_ref() {
+                Some(file) => {
+                    let mut fr: &fs::File = file;
+                    fr.seek(SeekFrom::Start(0)).map_err(|e| format!("{}: {e}", rf.path.display()))?;
+                    Some((BufReader::with_capacity(REPLAY_BUF, fr), 0))
+                }
+                None => None,
+            });
+        }
+        let mut buf = Vec::new();
+        // The replay in a closure so that a source error can remove a half-written `tmp` below.
+        let replayed = (|| -> Result<(), String> {
+            for (key, &(fi, off)) in &ix.live {
+                let rf = &ix.files[fi];
+                let Some((rd, at)) = readers[fi].as_mut() else {
+                    return Err(format!("{}: compaction found no handle for a file pass 1 indexed", rf.path.display()));
+                };
+                let io = |e: std::io::Error| format!("{}: {e}", rf.path.display());
+                // A relative seek keeps the buffer when the line is already in it (the common case).
+                rd.seek_relative(off as i64 - *at as i64).map_err(io)?;
+                buf.clear();
+                let n = rd.read_until(b'\n', &mut buf).map_err(io)?;
+                *at = off + n as u64;
+                // Never past pass 1's length, like visit_winners: an append after pass 1 is not seen.
+                buf.truncate(rf.len.saturating_sub(off) as usize);
+                let ln = buf.strip_suffix(b"\n").unwrap_or(&buf);
+                let changed = || format!("{}: the line at byte {off} changed after pass 1 indexed it", rf.path.display());
+                let Some(Value::Object(mut l)) = parse_line(ln) else { return Err(changed()) };
+                if l.get("k").and_then(Value::as_str) != Some(key.as_str()) {
+                    return Err(changed());
+                }
+                let Some(v) = l.remove("v") else { return Err(changed()) };
+                let json = serde_json::to_string(&v).unwrap_or_default();
+                written.insert(key.clone(), hash_json(&json));
+                // A write error does not stop the pass: `written` must still be seeded (see above).
+                let pushed = match &mut out {
+                    Ok(Some(t)) => t.push(key, &json),
+                    _ => Ok(()),
+                };
+                if let Err(e) = pushed {
+                    out = Err(e);
+                }
+            }
+            Ok(())
+        })();
+        if let Err(e) = replayed {
+            // The source did not replay (load() would have failed): `written` stays untouched, and a
+            // half-written `tmp` is removed — the old snapshot and the delta were never touched.
+            if let Ok(Some(t)) = out {
+                let path = t.path.clone();
+                drop(t);
+                let _ = fs::remove_file(path);
+            }
+            return Err(e);
+        }
+        // Close the source handles before the rename and the delta delete (Windows).
+        drop(readers);
+        drop(ix);
+        self.written = written;
+        let Some(tmp) = out? else { return Ok(0) };
+        let (tmp, bytes) = tmp.finish()?;
+        let written = &self.written;
+        self.commit_verified(&tmp, written.keys().map(String::as_str), |pos, v| {
+            // WHY a hash and not the record: there is no record map here, by design. The seeded hash
+            // is of `to_string(v)` as written; the parsed-back `v` must serialize to the same bytes.
+            written.get_index(pos).map(|(_, h)| *h) == Some(hash_json(&serde_json::to_string(v).unwrap_or_default()))
+        })?;
+        Ok(bytes)
     }
 
     /// The shared half of `save`/`append_changed`: appends the ndjson `{"k":...,"v":...}` line for
@@ -493,6 +666,9 @@ impl DeltaLog {
     /// so this is cleanup, not a precondition for reading).
     /// No-op while the delta is empty: the snapshot already holds everything.
     pub fn compact_now(&mut self, records: &IndexMap<String, Value>) -> Result<u64, String> {
+        // TRDD-1RJBOEI1: boot no longer calls this after load(); log_reader.rs restore calls
+        // compact_from_disk, which does the same without holding the record map. This stays for
+        // callers that already hold the full `records` (cache_turns_sql.rs tests, the memgate harness).
         if size_of(&self.delta_path) == 0 {
             return Ok(0);
         }

@@ -401,3 +401,128 @@ fn load_seeds_written_for_a_record_heal_torn_tail_completed() {
     let all = recs(&[("a", json!({"n":1})), ("c", json!({"t":"ça","f":0.1})), ("d", json!({"n":4}))]);
     assert_load_seeds_written(&dir, "s", &all);
 }
+
+
+/// TRDD-1RJBOEI1 — a log with every replay case compaction must fold: updates (one keeps its
+/// position), a tombstone, a re-insert after its tombstone (moves to the end), a number spelled
+/// differently from what to_string prints, key order the parser keeps, and a torn delta tail.
+/// Replay order is a, c, d, b; the winning lines' file order is c, a, d, b.
+fn write_mixed_log(dir: &Path, name: &str) {
+    std::fs::write(
+        dir.join(format!("{name}.snapshot.ndjson")),
+        "{\"k\":\"a\",\"v\":{\"n\":1}}\n{\"k\":\"b\",\"v\":{\"n\":2}}\n{\"k\":\"c\",\"v\":{\"y\":1.50,\"x\":\"q\\u00e9\"}}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join(format!("{name}.delta.ndjson")),
+        "{\"k\":\"a\",\"v\":{\"n\":10,\"f\":1e3}}\n{\"k\":\"b\",\"d\":1}\n\n{\"k\":\"d\",\"v\":null}\n{\"k\":\"b\",\"v\":[true,\"€\"]}\n{\"k\":\"e\",\"v\":{\"ha",
+    )
+    .unwrap();
+}
+
+/// The snapshot bytes the pre-TRDD-1RJBOEI1 compact() wrote for `records`, inlined as the oracle.
+fn old_snapshot_bytes(records: &IndexMap<String, Value>) -> Vec<u8> {
+    let mut body = String::new();
+    for (k, v) in records {
+        body.push_str(&serde_json::to_string(&json!({ "k": k, "v": v })).unwrap());
+        body.push('\n');
+    }
+    body.into_bytes()
+}
+
+/// TRDD-1RJBOEI1 — both streaming compactions (boot's compact_from_disk and the records-driven
+/// compact behind save/compact_now) write exactly the bytes the old compact() wrote.
+#[test]
+fn streaming_compaction_writes_the_old_snapshot_byte_for_byte() {
+    let dir = tmp("compact-bytes");
+    write_mixed_log(&dir, "m");
+    let map = DeltaLog::new(&dir, "m").load().unwrap();
+    assert_eq!(map.keys().collect::<Vec<_>>(), ["a", "c", "d", "b"], "replay order, not file order");
+    let expected = old_snapshot_bytes(&map);
+    let snap = dir.join("m.snapshot.ndjson");
+
+    let bytes = DeltaLog::new(&dir, "m").compact_from_disk().unwrap();
+    assert_eq!(std::fs::read(&snap).unwrap(), expected, "compact_from_disk");
+    assert_eq!(bytes, expected.len() as u64);
+    assert!(!dir.join("m.delta.ndjson").exists() && !dir.join("m.snapshot.ndjson.tmp").exists());
+    assert_eq!(DeltaLog::new(&dir, "m").load().unwrap(), map);
+
+    write_mixed_log(&dir, "n");
+    let mut log = DeltaLog::new(&dir, "n");
+    let m = log.load().unwrap();
+    let bytes = log.compact_now(&m).unwrap();
+    assert_eq!(std::fs::read(dir.join("n.snapshot.ndjson")).unwrap(), expected, "compact_now(records)");
+    assert_eq!(bytes, expected.len() as u64);
+    assert!(!dir.join("n.delta.ndjson").exists() && !dir.join("n.snapshot.ndjson.tmp").exists());
+}
+
+/// What load() seeds into `written`, proved through its two readers (see assert_load_seeds_written)
+/// on a log whose `written` was seeded by something else.
+fn assert_seeded(log: &mut DeltaLog, dir: &Path, name: &str, expected: &IndexMap<String, Value>) {
+    let r = log.save(expected).unwrap();
+    assert_eq!((r.appended, r.deleted, r.bytes), (0, 0, 0), "unchanged save writes nothing");
+    let r = log.save(&IndexMap::new()).unwrap();
+    assert_eq!(r.deleted, expected.len(), "save(empty) tombstones every seeded key");
+    assert!(DeltaLog::new(dir, name).load().unwrap().is_empty());
+}
+
+/// TRDD-1RJBOEI1 — compact_from_disk seeds `written` as load() did, with a delta (it compacts)
+/// and without one (it only seeds and leaves the snapshot untouched, as compact_now no-oped).
+#[test]
+fn compact_from_disk_seeds_written_like_load() {
+    let dir = tmp("compact-seed");
+    write_mixed_log(&dir, "m");
+    let map = DeltaLog::new(&dir, "m").load().unwrap();
+    let mut log = DeltaLog::new(&dir, "m");
+    assert!(log.compact_from_disk().unwrap() > 0);
+    assert_seeded(&mut log, &dir, "m", &map);
+
+    let r = awkward_records();
+    std::fs::write(dir.join("s.snapshot.ndjson"), old_snapshot_bytes(&r)).unwrap();
+    let mut log = DeltaLog::new(&dir, "s");
+    assert_eq!(log.compact_from_disk().unwrap(), 0, "empty delta: no compaction");
+    assert_eq!(std::fs::read(dir.join("s.snapshot.ndjson")).unwrap(), old_snapshot_bytes(&r));
+    assert_seeded(&mut log, &dir, "s", &r);
+}
+
+/// TRDD-1RJBOEI1 — a corrupt source fails before anything is replaced or seeded, like load().
+#[test]
+fn compact_from_disk_refuses_a_corrupt_source() {
+    let dir = tmp("compact-corrupt-src");
+    std::fs::write(dir.join("x.snapshot.ndjson"), "{\"k\":\"a\",\"v\":1}\nGARBAGE\n{\"k\":\"b\",\"v\":2}\n").unwrap();
+    std::fs::write(dir.join("x.delta.ndjson"), "{\"k\":\"c\",\"v\":3}\n").unwrap();
+    let err = DeltaLog::new(&dir, "x").compact_from_disk().unwrap_err();
+    assert!(err.contains("corrupt line 2"), "{err}");
+    assert!(dir.join("x.delta.ndjson").exists() && !dir.join("x.snapshot.ndjson.tmp").exists());
+}
+
+/// TRDD-1RJBOEI1 — the from-disk verify is real: `<snapshot>.tmp` is pre-created as a symlink to
+/// /dev/null, so the write "succeeds" and the read-back is empty. Both compactions must refuse,
+/// keep the old snapshot and the delta byte for byte, and remove the bad tmp. Without the verify,
+/// the rename would install the empty file as the snapshot.
+#[cfg(unix)]
+#[test]
+fn a_corrupted_temp_snapshot_fails_verification_and_keeps_the_old_snapshot() {
+    let dir = tmp("compact-bad-tmp");
+    for name in ["m", "n"] {
+        write_mixed_log(&dir, name);
+        let snap = dir.join(format!("{name}.snapshot.ndjson"));
+        let delta = dir.join(format!("{name}.delta.ndjson"));
+        let tmp_path = dir.join(format!("{name}.snapshot.ndjson.tmp"));
+        let (snap_before, delta_before) = (std::fs::read(&snap).unwrap(), std::fs::read(&delta).unwrap());
+        std::os::unix::fs::symlink("/dev/null", &tmp_path).unwrap();
+        let mut log = DeltaLog::new(&dir, name);
+        let map = DeltaLog::new(&dir, name).load().unwrap();
+        let err = if name == "m" { log.compact_from_disk().unwrap_err() } else { log.compact_now(&map).unwrap_err() };
+        assert!(err.contains("compaction verify failed") && err.contains("expected 4"), "{name}: {err}");
+        assert_eq!(std::fs::read(&snap).unwrap(), snap_before, "{name}: old snapshot kept");
+        assert_eq!(std::fs::read(&delta).unwrap(), delta_before, "{name}: delta kept");
+        assert!(std::fs::symlink_metadata(&tmp_path).is_err(), "{name}: the bad tmp is removed");
+        assert_eq!(DeltaLog::new(&dir, name).load().unwrap(), map, "{name}: nothing lost");
+        if name == "m" {
+            // As load() succeeding then compact_now failing: `written` is still seeded.
+            let r = log.append_changed(&map).unwrap();
+            assert_eq!((r.appended, r.bytes), (0, 0), "written seeded despite the failed compaction");
+        }
+    }
+}
