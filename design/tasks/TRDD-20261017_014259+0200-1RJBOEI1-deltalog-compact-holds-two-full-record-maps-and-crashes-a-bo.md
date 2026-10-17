@@ -4,7 +4,7 @@ title: DeltaLog compact holds two full record maps and crashes a boot once body-
 column: todo
 status: tasked
 created: 2026-10-17T01:42:59+0200
-updated: 2026-10-17T01:43:10+0200
+updated: 2026-10-17T02:27:00+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -15,6 +15,7 @@ mandated-by: none
 approved: true
 approval-judge: main-agent@agentlenspro
 approval-datetime: 2026-10-17T01:42:59+0200
+implementation-commits: [5e39aa3b]
 ---
 
 # DeltaLog compact holds two full record maps and crashes a boot once body-links passes roughly 430k records
