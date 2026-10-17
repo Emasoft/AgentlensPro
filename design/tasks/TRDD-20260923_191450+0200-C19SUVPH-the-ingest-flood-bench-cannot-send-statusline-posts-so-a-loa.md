@@ -1,9 +1,9 @@
 ---
 trdd-id: C19SUVPH
 title: The ingest flood bench cannot send statusline POSTs so a load arm cannot vary statusline alone
-column: todo
+column: human_review
 created: 2026-09-23T19:14:50+0200
-updated: 2026-10-17T15:38:20+0200
+updated: 2026-10-17T20:12:06+0200
 current-owner: main-session
 created-by: main-session
 task-type: infra
@@ -14,7 +14,7 @@ mandated-by: none
 approved: true
 approval-judge: main-session
 approval-datetime: 2026-09-23T19:14:50+0200
-implementation-commits: [bbf40fdf, ea835fdf, d18dc9a1, fb61c4f4, 9b599f21, 79dd2828, d35de9f2, 782cab31]
+implementation-commits: [bbf40fdf, ea835fdf, d18dc9a1, fb61c4f4, 9b599f21, 79dd2828, d35de9f2, 782cab31, 17ed1ce4, 3f698179]
 status: tasked
 ---
 
@@ -22,6 +22,13 @@ status: tasked
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-10-17
 
+- CURRENT HEAD (2026-10-17, written at the Part 2 close; the bullets after this head are older and lose where they disagree): Parts 1 and 2 are done. Part 1 = scripts/test-flood-bench-args.js (d35de9f2, P2 precondition 782cab31). Part 2 = src/test/floodBenchRate.test.ts against a real isolated alcore (17ed1ce4, extended in 3f698179).
+- Box 1 ticked: statusline-only and OTLP-only measured against a real alcore, mutation-proven (see ## Evidence, 2026-10-17 Box 1).
+- Box 2 ticked: the 5-minute agreement was observed once locally on the pre-fix bench (17ed1ce4) with disclosures (see ## Evidence, 2026-10-17 Box 2); the committed test runs 10 s per case. admitted_total also counts the bench snapshot reads (correction in ## Evidence).
+- Box 3 ticked earlier (d35de9f2), with its stated qualifications (P2/P3 first observed on CI).
+- CI has not observed the three new test steps or the rate test yet (no push).
+- F2 (the root afterAll hook in src/test/setup.js times out on long runs) is filed as TRDD-PLK9JWTF.
+- NEXT ACTION: the owner pushes so CI observes the three new test steps and the rate test.
 - Part 1 committed in d35de9f2: scripts/test-flood-bench-args.js, wired into check-guards and ci.yml. Local run 16 passed, 1 skipped, 0 failed. Not yet observed on CI (no push).
 - Cases D1-D4 (dataDir refusal), P1-P3 (port guard), B1-B10 (bad arguments); full list in ## Part 1 test (2026-10-17).
 - Mutations M1-M5 each turned their target case red (the worker's run); the orchestrator re-ran only the green suite.
@@ -34,15 +41,15 @@ status: tasked
 - No acceptance box was ticked by this update.
 - P2 precondition landed in 782cab31: P2 runs only when nothing listens on 3000 or the server there reports ~/.agentlens (same resolver as the bench); otherwise a visible skip. Accepted residual: a server change between that check and the P2 spawn (P2 never passes --allow-live). The skip branch is untested.
 - Part 2 recipe: runs after ci.yml:119 with AGENTLENS_ALCORE; alcore takes CLI flags, and --media-dir is required; poll the counters until two reads agree; assert floors, not only equality.
-- NEXT ACTION: Part 2 (real-alcore rate test plus the 5-minute box-2 run) when the 1-minute load is under 20
+- SUPERSEDED 2026-10-17 (Part 2 is done; see the current head above) — former next action: Part 2 (real-alcore rate test plus the 5-minute box-2 run) when the 1-minute load is under 20
 
 scripts/bench/alcore-ingest-flood.mjs drives OTLP only. TRDD-EQCGAVGV's isolated run needs arms that vary statusline and OTLP independently, so the tool must: send POST /api/statusline-samples with a realistic payload at a configurable rate (including low rates, e.g. 1 per 10 s); pace OTLP independently; target a given port set (UI/API and OTLP) so it never touches the live collector's canonical ports by default.
 Known gap, not fixed: the bench's live-port refusal is keyed on the literal UI port 3000 (OTLP 4318 never moves) and does not read <dataDir>/ports.json, so a live collector whose UI port moved off 3000 is protected only by the dataDir refusal. On 2026-10-17 nothing listened on 3000 at the probe; the cause is unexplained (a moved port, or no collector running).
 
 ## Acceptance
 
-- [ ] statusline-only and OTLP-only modes (the zero-load baseline is simply not running the tool).
-- [ ] rate flags verified by the target's own counters (statusline receivedSinceBoot, spans.store.totalSpans; admitted_total counts UI-port POSTs) over 5 min.
+- [x] statusline-only and OTLP-only modes (the zero-load baseline is simply not running the tool).
+- [x] rate flags verified by the target's own counters (statusline receivedSinceBoot, spans.store.totalSpans; admitted_total counts UI-port POSTs) over 5 min.
 - [x] refuses to run against the canonical ports unless an explicit flag says so. (test-committed d35de9f2; P2/P3 first observed on CI; P1 mutation-proven; the P2 mutation was not run; the --allow-live bypass (P3) is CI-only and not yet observed)
 
 related: [EQCGAVGV].
@@ -58,10 +65,19 @@ related: [EQCGAVGV].
 - 2026-10-17T15:25:20+0200 — column → todo by main-agent@agentlenspro. Part 1 committed (d35de9f2); Part 2 waits for load < 20, nobody is working the card now
 - 2026-10-17 — box 2 unticked by main-agent@agentlenspro: its tick rested on one gitignored isolated run of 2026-09-23 on older code; it is re-ticked by the Part 2 five-minute run (load < 20).
 - 2026-10-17 — box 1 unticked by main-agent@agentlenspro: OTLP-only rests on the 2026-09-23 run only; statusline-only reaches the endpoint in d35de9f2 case D3 against a stand-in server, not alcore. Both are re-proven by Part 2.
+- 2026-10-17T17:26:08+0200 — column → dev by main-agent@agentlenspro. Part 2 implementation started
+- 2026-10-17T20:12:05+0200 — column → testing by main-agent@agentlenspro. Part 2 committed (17ed1ce4, 3f698179): real-alcore rate test green locally, mutations MB1-MB4 as expected; boxes 1-2 ticked
+- 2026-10-17T20:12:06+0200 — column → human_review by main-agent@agentlenspro. all three boxes ticked with disclosures in ## Evidence; owner to push so CI observes the new test steps and the rate test
 
 ## Evidence
 
 The statusline POST handler is agentlens-core/src/ui.rs:1426-1444 (POST /api/statusline-samples); payload shape is any JSON object with an optional statusline_stream:"subagent" field (ui.rs:1439), not a fixed schema struct on this path. No per-route auth/header check on this handler; it relies on the global CSRF Origin gate (ui.rs:6-14,548-569) applied to every non-GET/HEAD request.
+- 2026-10-17 Box 1 (statusline-only and OTLP-only modes): src/test/floodBenchRate.test.ts (17ed1ce4, extended in 3f698179) boots a real isolated alcore (free ports, temp HOME and data dir, --no-log-scan, scrubbed env). Case S (statusline) measured ok2xx 20, statusline 20, admitted 22, spans 0. Case O (otlp, 20 spans per request) measured ok2xx 20, spans 400, statusline 0, admitted 2. Mutations: M1-M6 red on 17ed1ce4; on 3f698179, MB1 (no budget, no break) red at 17 of 14, MB2 (no budget) red at 15 of 14, MB3 (M6) red on spans-zero, MB4 (no break) green as expected. CI has not observed it yet (no push).
+- 2026-10-17 Box 2 (rate flags verified by the target's own counters over 5 min): the 5-minute agreement was observed once locally on 17ed1ce4's bench, BEFORE the deadline fix, using rust-core/target/release/alcore built from dbbadf86 (sha256 3e9aecfa2e519606f728bfcd6ad8b16821f64c5abab203909bbe4d3be043af14, built 2026-10-17 17:29). Results: S 600/600, admitted 602, spans 0; O 600 requests, 12000 spans, statusline 0. The fix only removes deadline-edge sends, and 600 = 2N. Disclosures: (a) a leftover duplicate PQ40PZ9D agent wrote the bench at 18:29 during that run (Case S spawned on a cmp-verified bench at about 18:19; Case O's bench at about 18:24 on unverified content, though its possible edits could not touch the otlp path); (b) the load spiked to about 76-127 during the run and the floor still held; (c) mocha exited 1 only because of the root afterAll hook (TRDD-PLK9JWTF). To get exit 0 on a 5-minute run, pass a larger global --timeout (e.g. 120000).
+- 2026-10-17 The committed test runs 10 s per case. The rate ceiling is 2N, held by the bench's shared send budget (mutation-proven by MB2) plus the deadline break (defence in depth, MB4). The 2N figure is code-read (measure r2 section 3) and confirmed by MB2. The total never exceeds the ideal schedule's count; which worker sends the last unit may change.
+- 2026-10-17 Correction (appended, box 2 text unchanged): admitted_total counts EVERY non-exempt UI-port request, including the bench's own snapshot reads (+2 per run with --progress-sec 100000), not only the statusline POSTs.
+- 2026-10-17 Known and not fixed: the bench's own spansAppendedDelta can undercount by about 5 s of spans, because totalSpans counts flushed segments only and the flush runs every 5 s; TRDD-EQCGAVGV's arms must not use that field without a settle. Statusline persistence is unproven (received and persisted are one counter). The deadline fix's F1 mechanism is INFERRED by code reading, with early timer wakes measured at 11 of 4000.
+- 2026-10-17 Process note: a leftover duplicate agent from an earlier session wrote this card's bench file for hours alongside this session's worker, breaking one writer per file. It removed its own edits; the committed fix 3f583f6d stands.
 
 ## Implementation spec (2026-09-23, after two review rounds)
 
