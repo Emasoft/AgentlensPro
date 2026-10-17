@@ -1,18 +1,18 @@
 ---
 trdd-id: 4BZPAQWM
 title: pnpm run compile is red on main — store-opener caps exceeded, and they may only go down
-column: blocked
+column: dev
 created: 2026-09-08T12:36:26+0200
-updated: 2026-10-17T10:31:31+0200
+updated: 2026-10-17T11:08:25+0200
 current-owner: main-session
 task-type: bugfix
 scope: project
 min-approval-requirement: none
 implementation-commits: [a81972f9, 7a6d6038, 8002f1f6, b79c7752, e9ec120b]
 assignee: main-session
-blocked-by: [B7DSTJLS]
+blocked-by: []
 status: tasked
-pre-block-column: dev
+pre-block-column: 
 unblock-when: [trdd:B7DSTJLS terminal]
 blocker-probe: [trddgrep, why, 4BZPAQWM]
 blocker-holds-if: not-match:READY
@@ -95,3 +95,11 @@ Box 4 stays open: one of the 6 failing tests, 'standalone server — P5 window a
 ## Approval log
 
 - 2026-10-16T11:13:31+0200 — column → blocked by main-agent@agentlenspro. its 6 failing suite tests are split between those two cards (commit 3e767d69); triage row 10
+- 2026-10-17T11:08:14+0200 — column → dev by main-agent@agentlenspro. blocker B7DSTJLS is complete (c4085381); the main agent works the regression found 2026-10-17 Cleared blocked-by (--clear-blocker override).
+
+## Regression 2026-10-17 and fix plan
+
+Measured 2026-10-17 at HEAD of fix/setup-agent-preflight (not main): check-duckdb-only red, non-test openers 27 > 22, test openers 12 > 8; all source-only compile steps green; check-dist-contents green only against the on-disk bundles, not rebuilt from HEAD; the dashboard and sidebar bundles were not built (the AGENTLENS_BUNDLE_OUT override builds only the CLI bundle). Report docs_dev/20261017-4bz-compile-report.md (gitignored scratch).
+Cause (docs_dev/20261017-4bz-openers-report.md): the guard rule is unchanged since 8002f1f6; 9 files added openers. Non-test: investigator_scan.rs (cbe06222, QSFYIHUO), cache_event_log.rs (cc49a819, QSFYIHUO), cache_turns_sql.rs (fb09facf, GVA8TTJF) are reusable; agentlens-digest/src/lib.rs (69b7d406) needs its own handle (separate database file for the aldigest process, kept out of alcore); digest/src/views.rs is a false positive (a type import). Test: card_reuse.rs (94125a8d) and spill.rs (cdb13539) need a raw handle; chores_prefix_wiring.rs (d74c74dd) probably reusable; digest/tests/digest.rs is a false positive.
+Plan (advisor-reviewed, not yet implemented; no cap raise): (a) narrow the guard pattern so a bare duckdb::Connection type import no longer counts (Connection::open still covers open, open_in_memory, open_with_flags), re-run the guard at 8002f1f6 and HEAD and confirm only the two type-import files drop; (b) add ONE pub opener in agentlens-store/src/lib.rs taking explicit in-memory-or-file target, memory_limit, threads and temp_directory, with no silent defaults, and migrate the two older private copies (statusline_store::open_duck, bodies_evidence::with_duck) with settings verified identical; (c) migrate investigator_scan, cache_event_log and all three opens in cache_turns_sql.rs (including its test module at :863 and :1350); (d) migrate the tests chores_prefix_wiring, card_reuse and spill if the helper can express their needs, else a defended raise logged as a narrowing; (e) lower both caps to the exact new counts and mutation-check the guard. Expected non-test count 21. Each step its own commit, cargo test and clippy -D warnings green at a 1-minute load at or below 20; alcore memory behaviour must not change (TRDD-H8F9S7MY).
+Next: a MEASURE pass of per-site DuckDB settings, the guard exemption mechanism and crate dependencies, then a reviewed proposal.
