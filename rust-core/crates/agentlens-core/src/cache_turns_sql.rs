@@ -564,7 +564,7 @@ mod cache_turns_sql_tests {
     }
 
     /// Persist link records through DeltaLog ITSELF, the way production does: ingest appends with
-    /// append_changed, boot folds the delta into the snapshot with compact_now. The files are then
+    /// append_changed, boot folds the delta into the snapshot with compact_from_disk. The files are then
     /// byte-for-byte production's on-disk format (`{"k":key,"v":record}` lines) — the old fixture
     /// hand-wrote FLAT rows production never writes, so the tests passed against a fiction (review B1).
     fn seed_links(data: &Path, rows: &[(String, Value)]) {
