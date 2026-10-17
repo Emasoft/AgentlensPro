@@ -4,7 +4,7 @@ title: Bring the Rust statusline GUARANTEED_COLUMNS back in line with the TypeSc
 column: human_review
 status: tasked
 created: 2026-10-17T07:01:42+0200
-updated: 2026-10-17T09:24:14+0200
+updated: 2026-10-17T09:26:57+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -19,6 +19,13 @@ implementation-commits: [0bdad550, c7a43535]
 ---
 
 # Bring the Rust statusline GUARANTEED_COLUMNS back in line with the TypeScript column list
+
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-10-17
+
+- Fixed: 0bdad550 guarantees prompt_id and prompt_cache_ttl in the Rust GUARANTEED_COLUMNS; c7a43535 casts prompt_id to VARCHAR at the relation. See the Fixed section for the measured errors and tests.
+- The first body paragraph is superseded. The gap measured 16 columns, not 19. The Binder error was measured, so it is no longer unverified. Which list governs is answered: the Rust list governs alcore; the TS list still binds the statusline-history CLI. The 'not a drive-by edit' caution applies to aligning all 15 remaining TS-only columns, not to the two that were added after three review rounds and a measured failure.
+- Evidence levels: the seal COPY going through varchar_session_id was read by a worker; the main agent did not read it. 'This predates 0bdad550' is inferred, not run against the old code.
+- NEXT ACTION: the owner decides how to close the card (column human_review).
 
 Found 2026-10-17 in the TRDD-GVA8TTJF round-2 review (item m2). rust-core/crates/agentlens-core/src/statusline_store.rs GUARANTEED_COLUMNS (24 entries) decides the layout of every statusline data file written from then on, and it is reported to be 19 columns behind the TypeScript list it was copied from (src/statuslineStore.ts GUARANTEED_COLUMNS). Verified 2026-10-17: prompt_cache_ttl is in the TypeScript list (src/statuslineStore.ts:220) and absent from the Rust file. The reported consequence, a DuckDB Binder error in the cache_turns query when a sample lacks that key, is not verified here. prompt_id is not in the TypeScript GUARANTEED_COLUMNS list (its only mention there is a comment at line 28) and is absent from the Rust file too. The cache_turns query does read sl.prompt_id (PARTITION BY, the MIN/MAX windows and turn_key in cache_turns_relation, commit 56d960e1). What is unverified is whether statusline_store::relation_for projects a column that is missing from older files as NULL or fails to bind; the tests pass only because seed_statusline_usage always writes prompt_id. Changing the list changes the on-disk schema of new files, so this needs its own design and review, not a drive-by edit. First step: establish which list governs (the Rust writer is live; the TypeScript list survives as reference), then diff the two and record the exact missing columns here.
 
