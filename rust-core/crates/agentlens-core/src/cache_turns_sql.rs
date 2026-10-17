@@ -455,7 +455,8 @@ pub fn run_preset_or_sql(
     // milliseconds passed as hours; not derived from retention.
     if let Some(h) = window_hours {
         if !(h.is_finite() && h > 0.0 && h <= 8_760.0) {
-            return Err(format!("window_hours must be finite, > 0 and <= 8760 (one year), got {h}"));
+            // WHY the message says window (hours), not window_hours: the only caller, the ui.rs dispatch arm, reads the MCP argument as window, so an MCP caller was shown an error naming an argument it never passed.
+            return Err(format!("window (hours) must be finite, > 0 and <= 8760 (one year), got {h}"));
         }
     }
     if let Some(l) = limit {
@@ -1504,8 +1505,8 @@ mod cache_turns_sql_tests {
         for bad in [-1.0, 0.0, f64::NAN, f64::INFINITY, 8_760.5] {
             let err = acceptance(&data, Some(bad), None).expect_err("window_hours outside (0, 8760] must be refused");
             assert!(
-                err.contains("window_hours") && !err.contains("BLIND"),
-                "window_hours {bad}: the new check must name the argument, got {err:?}"
+                err.contains("window (hours) must be") && !err.contains("BLIND"),
+                "window_hours {bad}: the refusal must name the argument as window (hours), got {err:?}"
             );
         }
         for ok in [8_760.0, 0.05] {
