@@ -498,11 +498,10 @@ fn compact_from_disk_refuses_a_corrupt_source() {
 
 /// TRDD-1RJBOEI1, retargeted by TRDD-O8MGRU72 — `<snapshot>.tmp` is pre-created as a symlink to
 /// /dev/null, so every write "succeeds" while nothing reaches a file. This used to reach the
-/// from-disk verify (an empty read-back); since O8MGRU72 the sync before the rename refuses it first
-/// (measured on macOS: F_FULLFSYNC on /dev/null fails with ENODEV, os error 19). Both compactions
-/// must refuse, keep the old snapshot and the delta byte for byte, and remove the bad tmp. The
-/// verify itself has no fixture left: a regular file that sync_all accepted holds what was written,
-/// so a test can no longer make a synced tmp read back short without a fault hook.
+/// from-disk verify (an empty read-back); since O8MGRU72 the sync before the rename may refuse it
+/// first. Both compactions must refuse, keep the old snapshot and the delta byte for byte, and
+/// remove the bad tmp. The verify-failure path itself is pinned by the unit test inside
+/// src/delta_log.rs, which hands commit_verified a temp file that differs from the records.
 #[cfg(unix)]
 #[test]
 fn an_unsyncable_temp_snapshot_is_refused_and_keeps_the_old_snapshot() {
@@ -517,7 +516,12 @@ fn an_unsyncable_temp_snapshot_is_refused_and_keeps_the_old_snapshot() {
         let mut log = DeltaLog::new(&dir, name);
         let map = DeltaLog::new(&dir, name).load().unwrap();
         let err = if name == "m" { log.compact_from_disk().unwrap_err() } else { log.compact_now(&map).unwrap_err() };
-        assert!(err.contains(".tmp: sync:") && !err.contains("verify"), "{name}: refused at the sync: {err}");
+        // Which gate refuses depends on the OS, so the test asserts a refusal, not the gate: on macOS
+        // the temp-file sync (F_FULLFSYNC on /dev/null, ENODEV, measured); on Linux fsync on a
+        // character device is unmeasured here (expected EINVAL, which also fails the sync, but if
+        // it succeeded the empty read-back would fail the verify instead). Either way the file
+        // state below must be the same, so the test means the same on both OSes.
+        assert!(err.contains(".tmp: sync:") || err.contains("compaction verify failed"), "{name}: refused at the sync or the verify: {err}");
         assert_eq!(std::fs::read(&snap).unwrap(), snap_before, "{name}: old snapshot kept");
         assert_eq!(std::fs::read(&delta).unwrap(), delta_before, "{name}: delta kept");
         assert!(std::fs::symlink_metadata(&tmp_path).is_err(), "{name}: the bad tmp is removed");

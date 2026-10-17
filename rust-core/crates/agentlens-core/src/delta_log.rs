@@ -246,6 +246,16 @@ fn heal_torn_tail(file: &Path) -> Result<(), String> {
     Ok(())
 }
 
+
+/// TRDD-O8MGRU72 — true when a directory sync failed because the FILESYSTEM cannot sync a
+/// directory (some network, FUSE and exFAT mounts), not because the sync itself failed. WHY a
+/// separate function: commit_verified treats only this class as "durability not provable here,
+/// proceed"; the unit tests pin the classification without a production fault hook.
+#[cfg(unix)]
+fn dir_sync_unsupported(e: &std::io::Error) -> bool {
+    e.kind() == std::io::ErrorKind::Unsupported || matches!(e.raw_os_error(), Some(c) if c == libc::EINVAL || c == libc::ENOTSUP || c == libc::EOPNOTSUPP)
+}
+
 impl DeltaLog {
     pub fn new(dir: &Path, name: &str) -> DeltaLog {
         DeltaLog {
@@ -510,23 +520,37 @@ impl DeltaLog {
         // finish() synced the file contents; the rename itself is a directory entry change that can
         // still be lost on a power loss until the parent directory is synced. On Linux fsync on a
         // read-only directory fd is the documented way; on macOS std issues F_FULLFSYNC, which APFS
-        // accepts on a directory fd (observed in the delta_log tests on this machine). Windows has no
-        // directory handle without backup semantics and is not a shipped target, so the sync is
-        // unix-only. A failed directory sync returns Err and KEEPS the delta (never delete the only
-        // other copy while durability is unproven). What a later load() then sees: from
-        // compact_from_disk, the same records (the snapshot is the replay of snapshot + that delta);
-        // from compact() via save(), every key at either its new value or the value its last delta
-        // line holds, never a fabricated record: the same "this save did not persist" outcome a
-        // failed verify already has, and save() returns the Err.
+        // accepts on a directory fd (observed in the delta_log tests on this machine). A failed
+        // directory sync returns Err and KEEPS the delta (never delete the only other copy while
+        // durability is unproven), except where the filesystem cannot sync a directory at all (see
+        // dir_sync_unsupported). What a later load() then sees: from compact_from_disk, the same
+        // records (the snapshot is the replay of snapshot + that delta); from compact() via save(),
+        // every key at either its new value or the value its last delta line holds, never a
+        // fabricated record: the same "this save did not persist" outcome a failed verify already
+        // has, and save() returns the Err.
+        //
+        // WHY unix-only: Windows is not a release target (publish.yml builds no win32 leg; see the
+        // comment there on why win32-x64 is absent, near publish.yml:219), and Windows has no
+        // portable directory fsync (a directory handle needs FILE_FLAG_BACKUP_SEMANTICS, and
+        // FlushFileBuffers on it is not a documented durability guarantee).
         #[cfg(unix)]
         {
             let dir = match self.snapshot_path.parent() {
                 Some(d) if !d.as_os_str().is_empty() => d,
                 _ => Path::new("."),
             };
-            fs::File::open(dir)
-                .and_then(|d| d.sync_all())
-                .map_err(|e| format!("{}: directory sync after compaction failed ({e}); snapshot replaced, delta KEPT", dir.display()))?;
+            let d = fs::File::open(dir).map_err(|e| format!("{}: open for directory sync after compaction failed ({e}); snapshot replaced, delta KEPT", dir.display()))?;
+            if let Err(e) = d.sync_all() {
+                // WHY tolerate these and only these: some network, FUSE and exFAT mounts reject
+                // fsync on a directory outright (EINVAL / ENOTSUP / EOPNOTSUPP). There it fails on
+                // EVERY compaction, so keeping the delta would make it grow without bound while
+                // durability can never be proven there anyway. Any other error (EIO and the like)
+                // is a real failure on a filesystem that does sync directories: Err, delta KEPT.
+                if !dir_sync_unsupported(&e) {
+                    return Err(format!("{}: directory sync after compaction failed ({e}); snapshot replaced, delta KEPT", dir.display()));
+                }
+                eprintln!("{}: directory sync not supported by this filesystem ({e}); rename durability not provable here, removing the delta anyway", dir.display());
+            }
         }
         // Only AFTER the snapshot is durable AND verified.
         let _ = fs::remove_file(&self.delta_path);
@@ -747,5 +771,66 @@ impl DeltaLog {
     /// Total bytes on disk (both files).
     pub fn disk_bytes(&self) -> u64 {
         size_of(&self.snapshot_path) + size_of(&self.delta_path)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    /// TRDD-O8MGRU72 — which directory-sync errors commit_verified tolerates. Only "this
+    /// filesystem cannot sync a directory" (EINVAL, ENOTSUP, EOPNOTSUPP, ErrorKind::Unsupported)
+    /// proceeds to remove the delta; a real I/O failure must not. WHY only the classifier: no real
+    /// fixture on a local APFS/ext4 tmpdir makes a directory fsync return these, and the task
+    /// forbids a production fault hook, so the end-to-end branch (eprintln + delta removed) is
+    /// unexercised here.
+    #[cfg(unix)]
+    #[test]
+    fn only_unsupported_directory_sync_errors_are_tolerated() {
+        for c in [libc::EINVAL, libc::ENOTSUP, libc::EOPNOTSUPP] {
+            assert!(dir_sync_unsupported(&std::io::Error::from_raw_os_error(c)), "os error {c} is tolerated");
+        }
+        assert!(dir_sync_unsupported(&std::io::Error::from(std::io::ErrorKind::Unsupported)));
+        for c in [libc::EIO, libc::ENOSPC, libc::EACCES, libc::EBADF] {
+            assert!(!dir_sync_unsupported(&std::io::Error::from_raw_os_error(c)), "os error {c} stays an Err");
+        }
+        assert!(!dir_sync_unsupported(&std::io::Error::other("x")));
+    }
+
+    /// TRDD-O8MGRU72 — the from-disk verify-failure path of commit_verified, driven directly. WHY a
+    /// unit test and not a fixture in tests/delta_log.rs: since finish() syncs the temp file, no
+    /// fixture can make a synced regular file read back different from what was written, so the
+    /// only way to reach a failed verify without a production fault hook is to hand commit_verified
+    /// a temp file whose content differs from the expected records. Two cases: a missing record
+    /// (the count check) and a changed value (the per-record comparison). Each must Err naming the
+    /// verify, remove the temp file, and leave the old snapshot and the delta byte for byte.
+    #[test]
+    fn a_temp_snapshot_that_differs_from_the_records_fails_verify_and_keeps_snapshot_and_delta() {
+        let dir = std::env::temp_dir().join(format!("al-deltalog-unit-{}-verify", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let expected: IndexMap<String, Value> = [("a".to_string(), json!(1)), ("b".to_string(), json!({"x": 2}))].into_iter().collect();
+        let cases = [
+            ("missing", "{\"k\":\"a\",\"v\":1}\n"),
+            ("changed", "{\"k\":\"a\",\"v\":1}\n{\"k\":\"b\",\"v\":{\"x\":3}}\n"),
+        ];
+        for (name, tmp_body) in cases {
+            let log = DeltaLog::new(&dir, name);
+            let snap_before = b"{\"k\":\"a\",\"v\":0}\n".to_vec();
+            let delta_before = b"{\"k\":\"a\",\"v\":1}\n{\"k\":\"b\",\"v\":{\"x\":2}}\n".to_vec();
+            fs::write(&log.snapshot_path, &snap_before).unwrap();
+            fs::write(&log.delta_path, &delta_before).unwrap();
+            let tmp = PathBuf::from(format!("{}.tmp", log.snapshot_path.display()));
+            fs::write(&tmp, tmp_body).unwrap();
+            let err = log
+                .commit_verified(&tmp, expected.keys().map(String::as_str), |pos, v| expected.get_index(pos).map(|(_, r)| r) == Some(v))
+                .unwrap_err();
+            assert!(err.contains("verify failed"), "{name}: refused by the verify: {err}");
+            assert!(fs::symlink_metadata(&tmp).is_err(), "{name}: the temp snapshot is removed");
+            assert_eq!(fs::read(&log.snapshot_path).unwrap(), snap_before, "{name}: old snapshot byte-identical");
+            assert_eq!(fs::read(&log.delta_path).unwrap(), delta_before, "{name}: delta still present");
+        }
+        let _ = fs::remove_dir_all(&dir);
     }
 }
