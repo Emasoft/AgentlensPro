@@ -3,7 +3,7 @@ trdd-id: C19SUVPH
 title: The ingest flood bench cannot send statusline POSTs so a load arm cannot vary statusline alone
 column: todo
 created: 2026-09-23T19:14:50+0200
-updated: 2026-10-05T01:52:23+0200
+updated: 2026-10-17T15:26:10+0200
 current-owner: main-session
 created-by: main-session
 task-type: infra
@@ -14,19 +14,35 @@ mandated-by: none
 approved: true
 approval-judge: main-session
 approval-datetime: 2026-09-23T19:14:50+0200
-implementation-commits: [bbf40fdf, ea835fdf, d18dc9a1, fb61c4f4, 9b599f21, 79dd2828]
+implementation-commits: [bbf40fdf, ea835fdf, d18dc9a1, fb61c4f4, 9b599f21, 79dd2828, d35de9f2]
 status: tasked
 ---
 
 # The ingest flood bench cannot send statusline POSTs so a load arm cannot vary statusline alone
+
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-10-17
+
+- Part 1 committed in d35de9f2: scripts/test-flood-bench-args.js, wired into check-guards and ci.yml. Local run 16 passed, 1 skipped, 0 failed. Not yet observed on CI (no push).
+- Cases D1-D4 (dataDir refusal), P1-P3 (port guard), B1-B10 (bad arguments); full list in ## Part 1 test (2026-10-17).
+- Mutations M1-M5 each turned their target case red (the worker's run); the orchestrator re-ran only the green suite.
+- The stats endpoints come from a stand-in HTTP server inside the test: a real alcore cannot report the live ~/.agentlens as its data dir (one owner per data dir), so nothing else could reach that refusal.
+- D1 on CI (~/.agentlens absent) is first observed on CI; until then it rests on reading the code. P2 and P3 are likewise first observed on CI.
+- Statusline received and persisted are one counter (p.statusline_samples), so the 2026-09-23 result 600 received = 600 persisted was never a two-sided check.
+- Still unverified: the target-down exit 3; the hooks mix and the both mix; admitted_total; the 5-minute agreement between the rate flags and the target counters (box 2).
+- Known and unfixed: --rate together with --sessions silently ignores --sessions.
+- Part 2 (deferred): a real-alcore rate test. In CI it goes after ci.yml:119, where AGENTLENS_ALCORE is downloaded. alcore takes flags, not env vars (--media-dir is required). It waits for the 1-minute load to drop under 20 (it was 54.6).
+- No acceptance box was ticked by this update.
+- P2 has no mutation yet. Its local safety relies on the live collector reporting ~/.agentlens as its dataDir; a follow-up commit adds that precondition (P2 is skipped when the server on port 3000 reports a different dataDir).
+- Part 2 recipe: runs after ci.yml:119 with AGENTLENS_ALCORE; alcore takes CLI flags, and --media-dir is required; poll the counters until two reads agree; assert floors, not only equality.
+- NEXT ACTION: Part 2 (real-alcore rate test plus the 5-minute box-2 run) when the 1-minute load is under 20
 
 scripts/bench/alcore-ingest-flood.mjs drives OTLP only. TRDD-EQCGAVGV's isolated run needs arms that vary statusline and OTLP independently, so the tool must: send POST /api/statusline-samples with a realistic payload at a configurable rate (including low rates, e.g. 1 per 10 s); pace OTLP independently; target a given port set (UI/API and OTLP) so it never touches the live collector's canonical ports by default.
 
 ## Acceptance
 
 - [x] statusline-only and OTLP-only modes (the zero-load baseline is simply not running the tool).
-- [x] rate flags verified by the target's own counters (statusline receivedSinceBoot, spans.store.totalSpans; admitted_total counts UI-port POSTs) over 5 min.
-- [x] refuses to run against the canonical ports unless an explicit flag says so.
+- [ ] rate flags verified by the target's own counters (statusline receivedSinceBoot, spans.store.totalSpans; admitted_total counts UI-port POSTs) over 5 min.
+- [x] refuses to run against the canonical ports unless an explicit flag says so. (test-committed d35de9f2; P2/P3 first observed on CI)
 
 related: [EQCGAVGV].
 
@@ -37,6 +53,9 @@ related: [EQCGAVGV].
 - 2026-09-24T08:57:49+0200 — main-session (board update A): moved ai_review -> human_review; AI review verified per reports/board-triage ai_review-A/B/C triage rows. In this project's mono-agent rule the session moves ai_review->human_review; the owner moves human_review->complete.
 - 2026-09-24T08:58:02+0200 — main-session note: this card carries the open owner question on the human_review policy for AI-approved mandate cards (shared with 9SOYXKNE) — moved to human_review per this batch's instruction; the policy question itself remains for the owner.
 - 2026-10-05T01:52:23+0200 — column → todo by main-agent@agentlenspro. review in the owner's stead 2026-10-05: no committed test; not dev, because nobody is working on it
+- 2026-10-17T15:03:04+0200 — column → dev by main-agent@agentlenspro. Part 1 test (refusals, args) in progress per round-2-reviewed spec docs_dev/20261017-c19-args-test-spec.md; Part 2 real-alcore rate test deferred until load < 20
+- 2026-10-17T15:25:20+0200 — column → todo by main-agent@agentlenspro. Part 1 committed (d35de9f2); Part 2 waits for load < 20, nobody is working the card now
+- 2026-10-17 — box 2 unticked by main-agent@agentlenspro: its tick rested on one gitignored isolated run of 2026-09-23 on older code; it is re-ticked by the Part 2 five-minute run (load < 20).
 
 ## Evidence
 
@@ -86,3 +105,17 @@ Against fb61c4f4, each worker now fires at its stagger instead of one pace later
 - Verdict: returned to todo. No committed test of any kind covers scripts/bench/alcore-ingest-flood.mjs; every acceptance claim rests on gitignored reports of one run on 2026-09-23. Not deploy, because nothing here waits on a deploy. Reviewer report: docs_dev/20261005_014637+0200-review-C19SUVPH.md (gitignored).
 - Verified: the refusal to target --ui-port 3000 or --otlp-port 4318 exits 2 before any http call (run by the reviewer; the guard and its position before the first http.request read by the main agent); bad flag values exit 2 with "bad arguments".
 - Owed: a committed test for the port refusal, the argument validation and the statusline-only mix; the data-directory half of the refusal has never been exercised; the 5-minute agreement between the rate flags and the target counters re-run on an isolated collector at low load. Known and unfixed: --rate together with --sessions silently ignores --sessions.
+
+## Part 1 test (2026-10-17)
+
+Test file scripts/test-flood-bench-args.js, commit d35de9f2, wired into check-guards and ci.yml. Local run: 16 passed, 1 skipped, 0 failed; not yet observed on CI.
+- D1: the server-reported dataDir is ~/.agentlens, so the bench refuses with 0 POST.
+- D2: a symlink spelling of D1 also refuses. Local only; skipped when ~/.agentlens is absent.
+- D3: a scratch dataDir is accepted and posts.
+- D4: an absent dataDir warns and continues.
+- P1: --otlp-port 4318 is refused with 0 requests.
+- P2: --ui-port 3000 is refused with 0 requests. It runs only after D1 passes.
+- P3: --allow-live gets past the port guard. CI only, because --allow-live lifts both gates.
+- B1 to B10: bad arguments, each matched by its own error line, with 0 requests.
+The stats endpoints are served by a stand-in HTTP server inside the test, because a real alcore cannot report the live ~/.agentlens as its data dir (one owner per data dir).
+Mutations: M1 to M5 each turned their target case red. That is the worker's run; the orchestrator re-ran only the green suite.
