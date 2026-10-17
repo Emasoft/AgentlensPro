@@ -88,6 +88,9 @@ jobs:
       - name: Transcripts-guard regression test (TRDD-PQ40PZ9D)
         run: node scripts/test-flood-transcripts-guard.js
 
+      - name: Flood-bench refusal and argument test (TRDD-C19SUVPH)
+        run: node scripts/test-flood-bench-args.js
+
       # TRDD-EAK9R8IY: ci.yml enumerates checks individually rather than running `pnpm run
       # compile`, so a guard wired only into compile/package silently never runs on PRs — this
       # one was, until a review caught it. Keep this list and package.json's compile script in
