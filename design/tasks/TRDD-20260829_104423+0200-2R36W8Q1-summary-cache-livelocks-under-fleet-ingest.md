@@ -5,7 +5,7 @@ column: todo
 pre-block-column: 
 unblock-when: [trdd:UTFVMVT8 terminal]
 created: 2026-08-29T10:44:23+0200
-updated: 2026-10-17T20:39:26+0200
+updated: 2026-10-17T20:40:39+0200
 current-owner: main-session
 task-type: bugfix
 scope: project
@@ -20,7 +20,7 @@ status: tasked
 # Summary cache livelocks under fleet ingest
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-05T14:35:52+0200 (triage line added 2026-10-15)
-**2026-10-15 triage (reports_dev/2r36w8q1-triage.md):** the frontmatter column `todo` is current; this block's 'blocked by UTFVMVT8' is superseded (UTFVMVT8 is complete; the unblock-when predicate is met). The fix (481c94e4) is on HEAD; later commits e867ad3a (summary patched in place), 13209791 (log_sessions deleted) and the 2048 MB RSS cap mean the 2026-09-05 numbers describe an older binary. NEXT: re-measure boxes 2, 3 and 5 passively on a running current-code collector (the live collector is stuck on old code since 2026-10-14 16:21 until the owner restarts it), run the box-4 test, rewrite this block, then move to ai_review.
+**2026-10-17 (supersedes the NEXT below where they disagree):** box 4 is re-verified at d8b491f4 (pass 15/15; the named test is the only failure with the guard disabled; see ## Acceptance, c0f1ca8b). NEXT: boxes 2, 3 and 5, waiting on the owner choosing between (A) redeploying the live collector, which matches this card, and (B) an isolated flood-bench rig with a pre-fix A/B and a window prefill, which gives rig figures. B needs no owner action, so the card stays in todo, not blocked. **2026-10-15 triage (reports_dev/2r36w8q1-triage.md):** the frontmatter column `todo` is current; this block's 'blocked by UTFVMVT8' is superseded (UTFVMVT8 is complete; the unblock-when predicate is met). The fix (481c94e4) is on HEAD; later commits e867ad3a (summary patched in place), 13209791 (log_sessions deleted) and the 2048 MB RSS cap mean the 2026-09-05 numbers describe an older binary. NEXT: re-measure boxes 2, 3 and 5 passively on a running current-code collector (the live collector is stuck on old code since 2026-10-14 16:21 until the owner restarts it), run the box-4 test, rewrite this block, then move to ai_review.
 
 SUPERSEDED 2026-10-15 (see the triage line above): **`blocked` (pre-block `ai_review`) — the 14:21 AI review REJECTED on process, not code:** `blocked-by:
 [UTFVMVT8]` was set deliberately in `061d2ed2` and never cleared, and UTFVMVT8 is still `testing` with
