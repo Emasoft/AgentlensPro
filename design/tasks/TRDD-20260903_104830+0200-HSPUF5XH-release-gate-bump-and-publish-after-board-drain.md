@@ -3,7 +3,7 @@ trdd-id: HSPUF5XH
 title: Bump and publish agentlenspro only after every open card is terminal and every known issue is fixed
 column: blocked
 created: 2026-09-03T10:48:30+0200
-updated: 2026-10-17T03:06:46+0200
+updated: 2026-10-17T03:07:42+0200
 current-owner: main-session
 task-type: infra
 min-approval-requirement: user
@@ -12,7 +12,7 @@ created-by: main-session
 npt: []
 eht: []
 pre-block-column: todo
-blocked-by: [2R36W8Q1, N60JUWU3, CAJ5RCP9, 9SYRK6SW, QE114936, 768NEX6E, 7YPQWKPG, 7NHUU6GK, ZSX34J8F, 2R0AXCKL, 2TQHNMEC, CS2W7E77, H3D5ZBO1, WCENKH6T, WCG7I5D8, WBYDQH8K, ATXO2E1J, OLKITCS7, JDQR0HDT]
+blocked-by: [2R36W8Q1, N60JUWU3, CAJ5RCP9, 9SYRK6SW, QE114936, 768NEX6E, 7YPQWKPG, 7NHUU6GK, ZSX34J8F, 2R0AXCKL, 2TQHNMEC, CS2W7E77, H3D5ZBO1, WCENKH6T, WCG7I5D8, WBYDQH8K, ATXO2E1J, OLKITCS7, JDQR0HDT, O8MGRU72]
 post-release-verification: [IXMB2JVD]
 blocker-probe: [trddgrep, why, HSPUF5XH]
 blocker-holds-if: not-match:READY
@@ -252,7 +252,7 @@ review-gate: the gate no longer demands a review for a declared-role worker's sc
 2026-10-16: OPEN release check from 6B7VV2Z7 (its archived card, line 42, names the B' crash loop): the startup sweep persists no read positions until it returns, so a boot that dies at the RSS cap inside a full cold rescan repeats it on every restart. 0BDOV3WC took out-of-memory off this path; the remaining triggers are a card-schema bump, missing meta, an interrupted restore or clear, corruption, and a MISSING store. cards.duckdb (card_store.rs, CARD_SCHEMA_VERSION 1) did not exist at v2.33.1, so the first boot after upgrading from 2.33.1 likely takes this path (checked 2026-10-16: tag v2.33.1 exists, card_store.rs is absent there, LOG_INGEST_VERSION is 7 at both, so that boot is a missing-store refusal, not version-stale; the boot itself is not run, and whether 2.33.1 boots already re-parsed everything is unknown). Before publishing: boot an upgrade from a 2.33.1 data dir on a full corpus and record peak RSS against the cap; the memory side is owned by USSG465Q (file bloat); related: 9VX3WTGU (store reuse). Enforced as a gate box under Definition of done — gates green.
 2026-10-16: related to the upgrade-boot gate box, TRDD-AJGTQ007: DeltaLog::load holds about 6.7x the on-disk size, and on this machine the card snapshot alone peaks at 478 MiB during that boot. The load-time spike is measured to rarely coincide with a death (28 of 1,539 cap deaths fall in the first 30 s); its share of the steady footprint and of deaths on refused-reuse boots is unmeasured. Not added to blocked-by; the gate box's peak-RSS measurement will show whether it matters.
 2026-10-17: 1RJBOEI1 added to blocked-by. N6A8VX3G's body-links writer ships in this release, and boot compaction of that log peaks at 3337 MiB at 700k records (measured), so without a fix every install reaches a boot crash loop as the log grows.
-2026-10-17: 1RJBOEI1 complete (5e39aa3b, 404b0021): boot compaction of a 700k body-links log now peaks at 184.7 MiB, down from 3337 MiB. Removed from blocked-by. The fsync gap it found is TRDD-O8MGRU72, which is not a release blocker because it predates this work.
+2026-10-17: 1RJBOEI1 complete (5e39aa3b, 404b0021): boot compaction of a 700k body-links log now peaks at 184.7 MiB, down from 3337 MiB. Removed from blocked-by. The fsync gap it found is TRDD-O8MGRU72, now in blocked-by: this card's gate requires every known issue fixed, and that one is a data-loss window. Exempting it is an owner decision.
 
 ## Notes and lessons learned
 
