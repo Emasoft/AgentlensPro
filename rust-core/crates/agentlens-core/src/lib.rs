@@ -1602,6 +1602,42 @@ mod body_links_tests {
         assert_ne!(k1, k2, "shifting U+001F across adjacent fields must stay two rows");
     }
 
+
+    #[test]
+    fn ingest_parsed_logs_payload_with_two_spanless_same_kind_pointers_keeps_both_link_rows() {
+        // TRDD-N6A8VX3G D4 at the real entry point: an OTLP /v1/logs payload with two
+        // api_response_body events (same session, no span id, different body refs) goes through
+        // process_logs and ingest_parsed; both link rows must reach the body-links DeltaLog.
+        // The old "{span_id}:{kind}:{ts}" key collided here (ts is the shared ingest time).
+        let dir = std::env::temp_dir().join(format!("agentlens-body-links-wire-test-{}", now_ns()));
+        let mut state = CoreState::open(&dir);
+        let event = |body_ref: &str| {
+            serde_json::json!({
+                "eventName": "api_response_body",
+                "attributes": [
+                    { "key": "session.id", "value": { "stringValue": "sess-wire-1" } },
+                    { "key": "body_ref", "value": { "stringValue": body_ref } },
+                ],
+            })
+        };
+        let payload = serde_json::json!({
+            "resourceLogs": [{ "scopeLogs": [{ "logRecords": [event("/tmp/bodies/resp_a.json"), event("/tmp/bodies/resp_b.json")] }] }],
+        });
+        ingest_parsed(&mut state, "logs", payload, "/v1/logs");
+        let mut reloaded = delta_log::DeltaLog::new(&dir, "body-links");
+        let map = reloaded.load().expect("load");
+        assert_eq!(map.len(), 2, "two spanless same-kind pointers in one payload must be two rows");
+        let mut stems: Vec<String> = Vec::new();
+        for row in map.values() {
+            assert_eq!(row["session_id"], "sess-wire-1");
+            assert_eq!(row["span_id"], "");
+            stems.push(row["stem"].as_str().expect("stem is a string").to_owned());
+        }
+        stems.sort();
+        assert_eq!(stems, ["/tmp/bodies/resp_a.json", "/tmp/bodies/resp_b.json"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn identical_reingest_costs_zero_bytes() {
         // Dedup safety: a re-ingested pointer with identical content re-appends nothing
