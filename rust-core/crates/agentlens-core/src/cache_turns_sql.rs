@@ -758,6 +758,43 @@ mod cache_turns_sql_tests {
         crate::cache_turns_sql::run_preset_or_sql(data, Some("acceptance"), None, window_hours, limit)
     }
 
+    /// seed_statusline_usage minus the two OPTIONAL keys: a sample from a Claude Code that emits neither
+    /// `prompt_id` nor the `prompt_cache` block (TRDD-Q0IFYJFO). Existing helpers keep their behaviour.
+    fn seed_statusline_without_optional_keys(data: &Path, session: &str, ts: i64) {
+        use crate::statusline_store::StatuslineStore;
+        let mut st = StatuslineStore::new(data.join("statusline"));
+        let mut m = Map::new();
+        m.insert("session_id".into(), json!(session));
+        m.insert("model_id".into(), json!("claude-opus-5"));
+        m.insert("context_window_current_usage_input_tokens".into(), json!(1000));
+        m.insert("context_window_current_usage_output_tokens".into(), json!(200));
+        m.insert("context_window_current_usage_cache_creation_input_tokens".into(), json!(500));
+        m.insert("context_window_current_usage_cache_read_input_tokens".into(), json!(3000));
+        st.append(&m, "main", ts as f64);
+        st.flush(None);
+    }
+
+    #[test]
+    fn window_without_prompt_id_or_prompt_cache_ttl_still_binds() {
+        // cache_turns_sql reads sl.prompt_id and sl.prompt_cache_ttl; a window whose samples lack both is a
+        // Binder error unless the statusline store guarantees the columns (TRDD-Q0IFYJFO).
+        let data = tmp("nokeys");
+        let ts = crate::now_ms() - 5_000;
+        seed_store(&data, &[
+            ("2f8c1a2b.request.json", request_body("sess-n", "claude-opus-5"), ts),
+            ("req_r1.response.json", response_body("msg_1", "claude-opus-5"), ts + 900),
+        ]);
+        seed_links(&data, &[
+            link_row("sess-n", "span-n", "request", "/b/2f8c1a2b.request.json", "rbid-1", "", ts),
+            link_row("sess-n", "span-n", "response", "/b/req_r1.response.json", "rbid-1", "msg_1", ts + 900),
+        ]);
+        seed_statusline_without_optional_keys(&data, "sess-n", ts + 500);
+        crate::cache_turns_sql::run_preset_or_sql(&data, Some("acceptance"), None, Some(24.0), None).expect("acceptance preset");
+        run_cache_turns_sql(&data.join("store"), &data, "SELECT * FROM turns", None, None, &HashMap::new())
+            .expect("run outer").expect("run inner");
+        let _ = std::fs::remove_dir_all(&data);
+    }
+
     const T0: i64 = 1_700_000_000_000;
 
     #[test]

@@ -152,7 +152,7 @@ pub fn files_in_window(root: &Path, stream: &str, since_ms: Option<f64>, until_m
 /// this, absence is a Binder ERROR rather than an empty result (measured: one sample lacking
 /// the optional rate_limits/current_usage blocks killed all five main-stream views). A
 /// CONTRACT, not a schema: files still contribute every other column they carry.
-const GUARANTEED_COLUMNS: [(&str, &str); 24] = [
+const GUARANTEED_COLUMNS: [(&str, &str); 26] = [
     ("ts", "BIGINT"),
     ("session_id", "VARCHAR"),
     ("model_display_name", "VARCHAR"),
@@ -177,6 +177,10 @@ const GUARANTEED_COLUMNS: [(&str, &str); 24] = [
     ("session_name", "VARCHAR"),
     ("fast_mode", "BOOLEAN"),
     ("thinking_enabled", "BOOLEAN"),
+    // WHY (TRDD-Q0IFYJFO): cache_turns_sql reads sl.prompt_id and sl.prompt_cache_ttl; a window whose
+    // samples lack a key is a Binder error at plan time, which COALESCE cannot catch.
+    ("prompt_id", "VARCHAR"),
+    ("prompt_cache_ttl", "VARCHAR"),
     // `exceeds_200k_tokens` + `rate_limits_seven_day_resets_at` complete the TS list below.
 ];
 
