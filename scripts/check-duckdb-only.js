@@ -151,13 +151,19 @@ const MAX_EXEMPTIONS = 27
 // Note the card that specified this cap guessed "~7", because it counted only SQLite openers.
 // Counting every engine — which is the point — gives 33. Seeded at the measured values so the
 // ratchet starts from the truth rather than from the estimate.
+// 2026-10-17 (TRDD-4BZPAQWM): the bare `duckdb::Connection` alternative was removed from the Rust
+// pattern. It matched files that only IMPORT or NAME the type and open nothing (agentlens-digest
+// src/views.rs and tests/digest.rs), so they were counted as openers they are not. `\bConnection::open`
+// still matches open, open_in_memory, open_with_flags and the qualified
+// `agentlens_store::duckdb::Connection::open*`. Residual blind spot: an aliased import
+// (`Connection as X; X::open`) is not counted; none exists in the tree today.
 const OPENERS = [
   // TS/JS — constructing a database handle, whatever the engine.
   { re: /\binitSqlJs\s*\(|new\s+SQL\.Database\b/, what: 'sql.js handle' },
   { re: /\bDuckDBInstance\.create\s*\(/, what: 'DuckDB handle' },
   // Rust — both engines expose the same constructor name, which is precisely why the cap must
   // count them together rather than trying to tell them apart.
-  { re: /\bConnection::open|duckdb::Connection/, what: 'Rust DB connection' },
+  { re: /\bConnection::open/, what: 'Rust DB connection' },
 ]
 
 // A file is TEST-side if it lives in a test tree, is named *.test.*, mocks, or generates fixtures.
@@ -245,6 +251,31 @@ function walk(dir, out) {
     } else if (EXTS.has(path.extname(e.name))) out.push(p)
   }
   return out
+}
+
+// `--self-test` checks the OPENERS patterns against known samples WITHOUT walking the tree, so a
+// pattern that drifts, or an alternative that over-matches an import, fails here before any count is
+// trusted. The inline samples are safe: this file is skipped by the scan (see `__filename` above).
+if (process.argv.includes('--self-test')) {
+  const samples = [
+    { text: 'use duckdb::Connection;\nfn f(c: &duckdb::Connection) {}', counted: false },
+    { text: 'use agentlens_store::duckdb::Connection;', counted: false },
+    { text: 'let c = Connection::open(p)?;', counted: true },
+    { text: 'let c = Connection::open_in_memory()?;', counted: true },
+    { text: 'let c = Connection::open_with_flags(p, f)?;', counted: true },
+    { text: 'let c = agentlens_store::duckdb::Connection::open_in_memory()?;', counted: true },
+  ]
+  let failures = 0
+  for (const { text, counted } of samples) {
+    const got = OPENERS.some(({ re }) => re.test(stripComments(text)))
+    if (got !== counted) {
+      failures++
+      console.error(`check-duckdb-only self-test: FAIL — ${JSON.stringify(text)} counted=${got}, expected ${counted}`)
+    }
+  }
+  if (failures) process.exit(1)
+  console.log(`check-duckdb-only self-test: OK (${samples.length} cases)`)
+  process.exit(0)
 }
 
 const files = SCAN_DIRS.flatMap((d) => walk(path.join(ROOT, d), []))
