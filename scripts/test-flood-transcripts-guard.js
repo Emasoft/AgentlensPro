@@ -84,6 +84,7 @@ function record(name, ok, detail) {
   return ok;
 }
 
+
 async function main() {
   const [uiPort, otlpPort] = await freePorts();
   const baseEnv = { ...process.env };
@@ -199,18 +200,24 @@ async function main() {
     const realHome = os.userInfo().homedir;
     fs.symlinkSync(realHome, linkHome);
     fs.symlinkSync(path.join(realHome, ".claude"), linkClaude);
+    // CI runners usually have no ~/.claude. Then linkClaude dangles, and the bench refuses it as a
+    // dangling link instead of a protected root, so case n expects whichever one this machine yields.
+    // With ~/.claude present, linkClaude resolves into the real home and must still refuse as a
+    // protected root.
+    const claudeExists = fs.existsSync(path.join(realHome, ".claude"));
+    const nPart = claudeExists ? "protected root" : "dangling";
     const realCases = [
       ["i  real home", realHome],
       ["j  real home/.claude", path.join(realHome, ".claude")],
       ["k  real home/<nonexistent>", path.join(realHome, rand())],
       ["l  /", "/"],
       ["m  link -> real home", linkHome],
-      ["n  link -> real home/.claude", linkClaude],
+      [`n  link -> real home/.claude (expect ${nPart})`, linkClaude, nPart],
       ["o  real home/<rand1>/../<rand2>", `${realHome}/${rand()}/../${rand()}`],
     ];
-    for (const [name, home] of realCases) {
+    for (const [name, home, part = "protected root"] of realCases) {
       const r = transcripts(home, baseEnv, ["--guard-only"]);
-      record(name, isRefusal(r, "protected root"), brief(r));
+      record(name, isRefusal(r, part), brief(r));
     }
     {
       const r = run(["--guard-only", "--ui-port", String(uiPort), "--otlp-port", String(otlpPort)], baseEnv);
