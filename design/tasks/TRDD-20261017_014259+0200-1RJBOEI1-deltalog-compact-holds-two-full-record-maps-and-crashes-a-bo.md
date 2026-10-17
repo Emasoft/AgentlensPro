@@ -4,7 +4,7 @@ title: DeltaLog compact holds two full record maps and crashes a boot once body-
 column: todo
 status: tasked
 created: 2026-10-17T01:42:59+0200
-updated: 2026-10-17T02:27:00+0200
+updated: 2026-10-17T02:28:21+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -34,3 +34,7 @@ Fix direction: stream compaction. Write the new snapshot line by line from the s
 
 - [ ] compact() on the 700k-record body-links dataset peaks under 1024 MiB phys_footprint (half the 2048 MiB cap, leaving room for alcore's resident footprint), measured in a separate process; the target may only be tightened.
 - [ ] Compaction still verifies the new snapshot from disk before replacing the old one (count and every record), and the delta_log and card_reuse tests pass.
+
+## Notes and lessons learned
+
+2026-10-17 after 5e39aa3b: the boot compaction step on n700000 went from 3337.3 to 184.7 MiB, and compact() on a caller's map now adds 91.4 MiB instead of 1772.8. Worker-measured in a separate process (docs_dev/20261017-1rjboei1-streaming-compact-report.md). Main read the code: the delta is still removed only after a verified rename, and an empty delta is still a no-op, as the old compact_now was. Open before close: (1) a push() failure leaves <snapshot>.tmp on disk and keeps reading every remaining record; (2) compact_from_disk reads winners in replay order. That is sequential for body-links, whose keys are inferred from their shape never to be superseded, but it would seek back and forth for log-sessions, so its doc must say it is for body-links-shaped logs. (3) Pre-existing, not a regression: the missing fsync before the rename is TRDD-O8MGRU72.
