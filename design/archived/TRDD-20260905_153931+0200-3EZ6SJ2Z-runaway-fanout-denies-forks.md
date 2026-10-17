@@ -1,9 +1,9 @@
 ---
 trdd-id: 3EZ6SJ2Z
 title: The burn-gate's RUNAWAY_FANOUT rule denies fork launches although a fork writes no new prefix
-column: ai_review
+column: complete
 created: 2026-09-05T15:39:31+0200
-updated: 2026-10-17T07:43:27+0200
+updated: 2026-10-17T07:53:06+0200
 current-owner: main-session
 task-type: bugfix
 priority: high
@@ -13,26 +13,26 @@ project-id: agentlenspro
 related: [DIZ289UQ, THRGX41P, VY1IUVUM]
 relevant-rules: []
 implementation-commits: [52155adf, 10715a00]
-status: tasked
+status: archived
 ---
 
 # The burn-gate's RUNAWAY_FANOUT rule denies fork launches although a fork writes no new prefix
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-09-05T16:38:00+0200
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-10-17
 
 **2026-10-17: behavioural acceptance OBSERVED (80 transcripts, the first one 20:36 on 2026-09-05; see Live acceptance observed). Next: ai_review of 52155adf and 10715a00.**
-The unit and route tests prove the rule; what remains is one real event: a fork
-launch while the machine is inside a ≥8-launches/60 s wave must produce the `[agentlens] … This fork
-is allowed` warn in the transcript instead of the deny. `/api/server-stats` at 16:38 already showed
-`gate.warns: 1` on the fresh server — cause NOT logged (`server.log` carries no gate lines), so it
-is not the acceptance; do not read it as the observation. The bin-native file is the 16:22 build:
-it carries the new reason string the 11:50 build could not, and `cmp` against `target/release`
-reports its first differing byte at 1794 (the signature region `codesign --force` rewrote). The live
-alcore is the tree at `10715a00`; `95fec703` (a `server_stats.rs` doc comment) is the only later
-change to the crate and needs no rebuild. **NEXT ACTION:** the next time a fork spawn
-is attempted during a wave (they were happening several times an hour today), record the transcript
-line here with its time; then `testing → ai_review`. If the deny still appears, the live binary is
-not the one built here — check `ps` for the `bin-native/darwin-arm64/alcore` path and its mtime.
+Closed 2026-10-17:
+ai_review passed,
+parity holds
+(1bd0e3cd), the warn
+path is observed
+live, and no fork
+has been denied since
+the deploy (0 of
+2650 fork launches;
+the control found 21
+fork denies before
+it).
 
 USER report 2026-09-05 15:36: "why the agentlenspro hook is blocking my fork-agents from doing their
 reviews?? they are fork agents, they reuse the same context of the parent, no cache build is triggered
@@ -86,8 +86,10 @@ machine-wide and still includes forks.
 
 ## Live acceptance observed (2026-10-17)
 
-- Behavioural acceptance OBSERVED on 2026-10-17. A recursive search of ~/.claude/projects/**/*.jsonl for the gate's fork-pass text "This fork is allowed" found 80 transcript files. The earliest hit is 2026-09-05T18:36:53Z, which is 20:36 +0200, after the 16:37 deploy. The latest is 2026-10-16T16:06:18Z. A sample hit, 2026-09-24 in another project, is a PreToolUse hook systemMessage: "[agentlens] AgentLens burn-gate: 10 subagent launches in the last 60s — runaway fan-out. From this project: lean-worker, fork. This fork is allowed: it reads the caller's cache entry and writes no new prefix…". Not checked: whether any fork was still DENIED by RUNAWAY_FANOUT after the deploy. No counter-search was run.
+- Behavioural acceptance OBSERVED on 2026-10-17. A recursive search of ~/.claude/projects/**/*.jsonl for the gate's fork-pass text "This fork is allowed" found 80 transcript files. The earliest hit is 2026-09-05T18:36:53Z, which is 20:36 +0200, after the 16:37 deploy. The latest is 2026-10-16T16:06:18Z. A sample hit, 2026-09-24 in another project, is a PreToolUse hook systemMessage: "[agentlens] AgentLens burn-gate: 10 subagent launches in the last 60s — runaway fan-out. From this project: lean-worker, fork. This fork is allowed: it reads the caller's cache entry and writes no new prefix…". Counter-check done the same day: see the next bullet.
+- Counter-check, same day (2026-10-17): docs_dev/20261017_074841+0200-runaway-fanout-fork-deny-check.md. Its control found 44 real RUNAWAY_FANOUT denies before the 2026-09-05T14:37Z deploy, 21 of them of `fork`. After the deploy there were 0 fork denies across 2650 fork launches, and 53 denies of fresh agent types (lean-worker 35, janitor memory agent 6, general-purpose 5, and others). The one post-deploy deny with no subagent_type (2026-09-23) has only description and prompt keys, so it is a fresh general-purpose launch, which is correctly denied.
 
 ## Approval log
 
 - 2026-10-17T07:43:27+0200 — column → ai_review by main-agent@agentlenspro. behavioural acceptance observed in 80 transcripts since 2026-09-05 20:36; code review of 52155adf and 10715a00 next
+- 2026-10-17T07:53:06+0200 — COMPLETE by main-agent@agentlenspro. ai_review passed; acceptance observed live; 0 post-deploy fork denies of 2650 launches; review done under the owner's 2026-10-05 delegation recorded on TRDD-AVUGZV1K.
