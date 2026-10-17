@@ -3,7 +3,7 @@ trdd-id: 4BZPAQWM
 title: pnpm run compile is red on main — store-opener caps exceeded, and they may only go down
 column: dev
 created: 2026-09-08T12:36:26+0200
-updated: 2026-10-17T11:08:25+0200
+updated: 2026-10-17T11:09:45+0200
 current-owner: main-session
 task-type: bugfix
 scope: project
@@ -22,7 +22,7 @@ blocker-holds-if: not-match:READY
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-24T11:15:51+0200
 
-MEASURED 2026-09-24. Guard fixed and merged to main at 8002f1f6 (commits a81972f9, 7a6d6038, b79c7752, e9ec120b): 22/22 non-test openers, 8/8 test openers, 27/27 exemptions, all three caps at zero headroom by design — the next new opener or exemption anywhere turns compile red and needs a raise defended in its commit message (guard text), so that is a defended raise, not a regression of this fix. Box 3 is annotated not ticked (every compile step through check-duckdb-only exits 0; the esbuild deploy step itself was not run because on this machine it deploys and waits on the owner, TRDD-C9BGEMSS decision 3). NEXT ACTION: box 4, the 6 failing tests — one, 'standalone server — P5 window auto-calibration', may belong to the now-dead capacityCalibration.ts rather than a live store defect (see TRDD-M3TWPLZO), not yet confirmed.
+REGRESSED 2026-10-17: compile is red again at HEAD of fix/setup-agent-preflight (non-test openers 27 > 22, test openers 12 > 8); the counts and NEXT ACTION below are superseded; see the section "Regression 2026-10-17 and fix plan" at the end; next step: the MEASURE pass named there. Box 4 was settled on 2026-10-17. MEASURED 2026-09-24. Guard fixed and merged to main at 8002f1f6 (commits a81972f9, 7a6d6038, b79c7752, e9ec120b): 22/22 non-test openers, 8/8 test openers, 27/27 exemptions, all three caps at zero headroom by design — the next new opener or exemption anywhere turns compile red and needs a raise defended in its commit message (guard text), so that is a defended raise, not a regression of this fix. Box 3 is annotated not ticked (every compile step through check-duckdb-only exits 0; the esbuild deploy step itself was not run because on this machine it deploys and waits on the owner, TRDD-C9BGEMSS decision 3). NEXT ACTION: box 4, the 6 failing tests — one, 'standalone server — P5 window auto-calibration', may belong to the now-dead capacityCalibration.ts rather than a live store defect (see TRDD-M3TWPLZO), not yet confirmed.
 
 
 
@@ -88,7 +88,7 @@ a judgement for whoever picks this up; both touch the store.
 - [x] The commit(s) that pushed the opener counts over the caps are identified by SHA.
 - [x] Each added opener is classified: reuses an existing entry point, or genuinely needs its own.
 - [ ] `pnpm run compile` exits 0 on `main` **without** raising either cap.
-- [ ] The 6 suite failures are either shown pre-existing by an actually-isolated run, or carded.
+- [x] The 6 suite failures are either shown pre-existing by an actually-isolated run, or carded.
 Box 3 not ticked: every compile step except the final `node esbuild.js` exits 0 and all three bundles (media/src/dashboard.tsx, standalone/cli.ts, media/src/sidebarWebview.ts) build into reports_dev/ with exit 0; the esbuild step itself was not run because on this machine it deploys and waits on the owner (TRDD-C9BGEMSS decision 3).
 Box 4 stays open: one of the 6 failing tests, 'standalone server — P5 window auto-calibration', may belong to the now-dead capacityCalibration.ts (see TRDD-M3TWPLZO) rather than to a live store defect — not yet confirmed.
 
@@ -103,3 +103,4 @@ Measured 2026-10-17 at HEAD of fix/setup-agent-preflight (not main): check-duckd
 Cause (docs_dev/20261017-4bz-openers-report.md): the guard rule is unchanged since 8002f1f6; 9 files added openers. Non-test: investigator_scan.rs (cbe06222, QSFYIHUO), cache_event_log.rs (cc49a819, QSFYIHUO), cache_turns_sql.rs (fb09facf, GVA8TTJF) are reusable; agentlens-digest/src/lib.rs (69b7d406) needs its own handle (separate database file for the aldigest process, kept out of alcore); digest/src/views.rs is a false positive (a type import). Test: card_reuse.rs (94125a8d) and spill.rs (cdb13539) need a raw handle; chores_prefix_wiring.rs (d74c74dd) probably reusable; digest/tests/digest.rs is a false positive.
 Plan (advisor-reviewed, not yet implemented; no cap raise): (a) narrow the guard pattern so a bare duckdb::Connection type import no longer counts (Connection::open still covers open, open_in_memory, open_with_flags), re-run the guard at 8002f1f6 and HEAD and confirm only the two type-import files drop; (b) add ONE pub opener in agentlens-store/src/lib.rs taking explicit in-memory-or-file target, memory_limit, threads and temp_directory, with no silent defaults, and migrate the two older private copies (statusline_store::open_duck, bodies_evidence::with_duck) with settings verified identical; (c) migrate investigator_scan, cache_event_log and all three opens in cache_turns_sql.rs (including its test module at :863 and :1350); (d) migrate the tests chores_prefix_wiring, card_reuse and spill if the helper can express their needs, else a defended raise logged as a narrowing; (e) lower both caps to the exact new counts and mutation-check the guard. Expected non-test count 21. Each step its own commit, cargo test and clippy -D warnings green at a 1-minute load at or below 20; alcore memory behaviour must not change (TRDD-H8F9S7MY).
 Next: a MEASURE pass of per-site DuckDB settings, the guard exemption mechanism and crate dependencies, then a reviewed proposal.
+- Box 4 (2026-10-17): of the six failures, five (the P5 calibration suite) are shown fixed: TRDD-CS2W7E77, fix c7c540c8, mutation-verified 2026-10-17; they run against the live Rust calibration, not the dead capacityCalibration.ts. The sixth, the real-corpus cost-peak test, is carded on TRDD-2R0AXCKL (backburner) via TRDD-B7DSTJLS; it skips under mocha since 091799ee and is no longer observable, so it is parked, not fixed.
