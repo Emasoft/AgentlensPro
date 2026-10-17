@@ -3,7 +3,7 @@ trdd-id: GVA8TTJF
 title: api_calls coalesced view, cache_turns statusline join, and the acceptance SQL
 column: dev
 created: 2026-09-03T04:47:31+0200
-updated: 2026-10-17T01:01:38+0200
+updated: 2026-10-17T07:05:49+0200
 current-owner: main-session
 task-type: feature
 priority: high
@@ -14,10 +14,10 @@ npt: []
 eht: []
 blocked-by: []
 status: tasked
-implementation-commits: [fb09facf]
+implementation-commits: [fb09facf, da5af103, 56d960e1]
 ---
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-03
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-10-17
 
 - 2026-09-03T08:34:55+0200 — column names in the landed api_call table are `system_fps` and
   `billing_header` (there is no `system_fp`, `cc_version` or `cc_is_subagent` column); the join
@@ -27,14 +27,14 @@ implementation-commits: [fb09facf]
   row kinds keyed by DIFFERENT stems (request stem = uuid, response stem = `request_id`) — no
   shared `call_id` to `GROUP BY` on directly. And response rows carry no `session_id` on their
   own — this view's join can only resolve one once N6A8VX3G's link table exists. Both changes are
-  now reflected in `blocked-by` and the WHAT below.
+  reflected in the WHAT below; the blockers were cleared on 2026-10-16.
 - Design source: `reports/trdd-caj5rcp9/20260903_044515+0200-api-calls-table-design.md` §4-5
   (acceptance SQL block) — superseded on the coalescing-key point by the advisor verdict.
-- Blocked on 9SYRK6SW (the writer) and N6A8VX3G (the OTLP-side link) — needs real rows AND a real
-  session_id link to test the join match rate against; the investigation report had 0 rows to
-  test with.
-- NEXT ACTION: once both are landed, create the two views and run the acceptance query against
-  live data to measure the actual statusline join match rate.
+- Blocked-by was cleared on 2026-10-16 (see Notes): 9SYRK6SW (now in deploy) and N6A8VX3G (now in testing)
+  had landed their code, so the card has no blocker and its column is dev;
+  neither is terminal.
+- 2026-10-17: round 2 committed as 56d960e1 (with da5af103, the rename and doc commit). The round 2 items are listed in the Round 2 landed section at the end of this card.
+  NEXT ACTION: after the owner-facing items in that section (live acceptance needs an alcore deploy; the memory box and B3 wait on TRDD-AJGTQ007), run the full agentlens-core test suite on HEAD (owed; only the 37 cache_turns_sql lib tests ran on the final bytes), then move this card to blocked on TRDD-AJGTQ007 for B3 (registration).
 
 ## WHY
 
@@ -140,3 +140,15 @@ DISPOSITION: forwarded to the in-flight worker as an amendment — ONE unpaired-
 
 OWNERSHIP NOTE (review item): the lean-worker died 3x on transient API timeouts after ~3h of reading with nothing on disk; the PARENT implemented everything (stop + take-over after the owner asked what the wait was for). Implemented per the spec + 7 amendments: cache_turns_sql.rs (api_calls_relation coalesced through the body-links link table with <>'' guards + the parse_filename stem bridge; cache_turns_relation per-turn collapse + 60s window + writePct; run_cache_turns_sql CTE surface; run_preset_or_sql + ACCEPTANCE_SQL) + ui.rs run_cache_turns_sql arm (spawn_blocking, lock released). 4 real-DuckDB tests through the REAL writers incl. check 7 (survival at the api_calls level). Gates: build 0, clippy -D warnings 0, 4/4, identities 0. Report: docs_dev/20261009-0000-GVA8TTJF-impl-report.md (gitignored). SEVEN CHECKS ALL PASS (review fork verdict): 1 kept-halves PASS (paired-req UNION orphan-resp shape), 2 window PASS w/ named limit, 3 real-writer PASS, 4 guards PASS (falsifiably failed pre-fix), 5 no-glob PASS, 6 no-ignore_errors PASS, 7 right-level PASS. Review dispositions APPLIED in code: (a) payload error-folding — tool_ok_lean takes &Value, sibling folds errors INTO the payload; the arm does unwrap_or_else(json!({error})) instead of ? so a SQL error is a structured answer, not a failed call; (b) from-turns heuristic DELETED — the full WITH always builds (extra CTEs harmless; heuristic missed newline variants). NAMED LIMITS (not blockers): (1) latest-tick collapse — a call near the START of a long turn can fall outside 60s of the LATEST tick and miss the join (spec-conformant cost of the prescribed collapse); (2) UNION BY NAME schema-growth — orphan arm aliases explicitly, paired arm projects from req.*/resp.*; a future api_call column addition updates both arms; per-column projection when next touched. Commit fb09facf. Live acceptance pending-deploy (owner).
 Review round 3 (post-implementation writes) — no blockers, three dispositions: (1) payload shape SETTLED by grep: the sibling transcript_sql.rs:328 folds errors as {"error": <string>} INSIDE an OK payload — the arm's {"error": e} IS the established convention; (2) entry-split contract documented in the module doc (run_preset_or_sql = both-sides-or-Err; run_cache_turns_sql = optional CTEs; do not unify); (3) CAVEAT on the seven-check verdict: the round-2 fork reviewed BLIND (no tool calls) against the transcript's verbatim reads — the mechanical claims are independently covered by this session's own gate re-runs (clippy 0, 4/4, identities 0), but the verdict's epistemic footing is transcript-bound, not file-bound.
+
+## Round 2 landed (2026-10-17)
+
+- 56d960e1: N2 span-window join (a call joins within 60 s of the turn's [min_ts, max_ts]; ranked by distance to the span, ties to the later span end); M4 subagent filter on the turn join only (any cc_is_subagent value other than false, case- and space-insensitive); m4 single wrapper LIMIT with the preset's 100-row default and outer ORDER BY ts DESC.
+- API change, fail-fast: limit must be a whole number in [1, 2000]; window_hours must be finite and in (0, 8760]. Before, for raw SQL, limit 0 ran as LIMIT 0, 5000 ran in full and 5.5 truncated to 5; for the acceptance preset any limit was a parser error (doubled LIMIT). The only caller is the ui.rs run_cache_turns_sql dispatch arm (ui.rs:3129), and the tool is not yet registered (B3), so no listed consumer sees the change.
+- Evidence: 37/37 cache_turns_sql lib tests green on the final bytes (119 other tests filtered out; the full agentlens-core suite has not yet run on HEAD), clippy -D warnings clean on the r11 bytes (r12 is comment-only), 14 mutants with 13 killed; Cord (the preset's outer ORDER BY removed) SURVIVED because DuckDB keeps the inner order. Report: reports/GVA8TTJF/20261017_065054+0200-review-rounds-2-to-5-final-report.md
+- Known limitation, pinned by an_orphan_response_without_a_header_joins_the_turn: an orphan response (no request part) has no billing header and joins as a main-thread call.
+- Raw caller SQL with no limit is still unbounded (deliberate; relevant to the memory box owned by TRDD-AJGTQ007). Raw-SQL order under a limit relies on DuckDB keeping a subquery's order (pinned by raw_sql_keeps_its_own_order_under_a_caller_limit).
+- Open: the doc comment above varchar_session_id still describes the code wrongly (fastedit refused the edit); rustfmt shows 81 hunks against 52 at HEAD, left unformatted; m6 (embed the api relation once) deferred until the caller-SQL hardening decision; the D4 link-key collision in lib.rs body_link_row belongs to TRDD-N6A8VX3G; the statusline GUARANTEED_COLUMNS gap (m2) (now TRDD-Q0IFYJFO); registration (B3) stays blocked on TRDD-AJGTQ007.
+- m2 now owned by TRDD-Q0IFYJFO.
+- Open, new: the ui.rs arm reads the MCP argument `window` (args.get("window")), but the refusal message says `window_hours must be…`, so an MCP caller sees an error naming an argument it never passed. To fix in a follow-up commit.
+- Open: lint DERIVED-FLAG-MISSING. The eht list of TRDD-CAJ5RCP9 names this card, but this card lacks derived: true. The lint header names TRDD-6SPXOV0P, which does not list this card (its eht is TRDD-7NHUU6GK only). Read the CAJ5RCP9 eht entry and its reason before changing either card; not yet read in full.

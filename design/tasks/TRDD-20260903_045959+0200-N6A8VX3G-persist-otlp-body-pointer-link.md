@@ -3,7 +3,7 @@ trdd-id: N6A8VX3G
 title: Persist the OTLP body-pointer link so response rows gain a session_id
 column: testing
 created: 2026-09-03T04:59:59+0200
-updated: 2026-10-16T21:42:38+0200
+updated: 2026-10-17T07:05:49+0200
 current-owner: main-session
 task-type: feature
 priority: high
@@ -104,3 +104,7 @@ The round-3 fork found the loop's own exit condition and two amendments, all app
 ## GVA8TTJF wired the link (2026-10-09)
 
 GVA8TTJF's api_calls_relation resolves a response row's session_id via the link table in real DuckDB tests (unpaired-half survival test asserts session from the response's OWN link row; paired test asserts the request-side session through the pair) — acceptance box 3's synthetic-form is now proven at the SQL level; the real-pair live form stays pending-deploy with GVA8TTJF.
+
+## Handed over from TRDD-GVA8TTJF review (2026-10-17)
+
+- D4 (GVA8TTJF review M3(d)): a possible link-key collision in agentlens-core lib.rs `body_link_row`. It was found in the GVA8TTJF round-2 review and recorded here because this card owns that code. Not yet reproduced; the next step is to read body_link_row and state whether two distinct calls can produce the same link key. This does not gate this card's acceptance boxes; if it reproduces, it becomes its own TRDD.
