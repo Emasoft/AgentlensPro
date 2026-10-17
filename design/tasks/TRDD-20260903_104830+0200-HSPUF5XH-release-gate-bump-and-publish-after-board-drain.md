@@ -3,7 +3,7 @@ trdd-id: HSPUF5XH
 title: Bump and publish agentlenspro only after every open card is terminal and every known issue is fixed
 column: blocked
 created: 2026-09-03T10:48:30+0200
-updated: 2026-10-17T04:50:35+0200
+updated: 2026-10-17T04:54:41+0200
 current-owner: main-session
 task-type: infra
 min-approval-requirement: user
@@ -253,6 +253,7 @@ review-gate: the gate no longer demands a review for a declared-role worker's sc
 2026-10-16: related to the upgrade-boot gate box, TRDD-AJGTQ007: DeltaLog::load holds about 6.7x the on-disk size, and on this machine the card snapshot alone peaks at 478 MiB during that boot. The load-time spike is measured to rarely coincide with a death (28 of 1,539 cap deaths fall in the first 30 s); its share of the steady footprint and of deaths on refused-reuse boots is unmeasured. Not added to blocked-by; the gate box's peak-RSS measurement will show whether it matters.
 2026-10-17: 1RJBOEI1 added to blocked-by. N6A8VX3G's body-links writer ships in this release, and boot compaction of that log peaks at 3337 MiB at 700k records (measured), so without a fix every install reaches a boot crash loop as the log grows.
 2026-10-17: 1RJBOEI1 complete (5e39aa3b, 404b0021): boot compaction of a 700k body-links log now peaks at 184.7 MiB, down from 3337 MiB. Removed from blocked-by. The fsync gap it found is TRDD-O8MGRU72, now in blocked-by: this card's gate requires every known issue fixed, and that one is a data-loss window. Exempting it is an owner decision.
+- 2026-10-17, before release: (1) confirm CI on ubuntu passes an_unsyncable_temp_snapshot_is_refused_and_keeps_the_old_snapshot (Linux behaviour of the /dev/null sync is unmeasured, TRDD-O8MGRU72 residue c); (2) the local alcore binary is not redeployed since at least 6B7VV2Z7 and O8MGRU72 — rebuild, codesign -s - --force, restart and check alcore --version is not 137 (residue d).
 
 ## Notes and lessons learned
 

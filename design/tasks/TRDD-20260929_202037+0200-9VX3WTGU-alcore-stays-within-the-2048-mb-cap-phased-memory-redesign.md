@@ -4,7 +4,7 @@ title: alcore stays within the 2048 MB cap — phased memory redesign
 column: todo
 status: tasked
 created: 2026-09-29T20:20:37+0200
-updated: 2026-10-17T04:50:14+0200
+updated: 2026-10-17T04:54:41+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: feature
@@ -221,3 +221,4 @@ Measured on this Mac supporting the proposal: reports/hook-binaries/ (spool appe
 ## Observations
 
 - 2026-10-17, from TRDD-O8MGRU72: one earlier full agentlens-core run was SIGKILLed (exit 137) inside tests/card_store.rs a_restore_sized_bulk_load_stays_inside_the_memory_limit at load average about 240; cause unmeasured (a memory limiter, the harness RSS guard, or the sync/read-back added by O8MGRU72 are all unexcluded); the same test passed in the 859-pass run. Partial log: reports_dev/o8mgru72-agentlens-core-test-killed-run1.txt.
+- Open action before this card closes: reproduce or exclude that SIGKILL — rerun tests/card_store.rs under normal load and check the unified log for a jetsam or memory-limit kill at that time; until then a regression from the O8MGRU72 sync/read-back is not excluded.
