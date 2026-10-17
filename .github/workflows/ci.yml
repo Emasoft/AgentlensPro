@@ -85,6 +85,9 @@ jobs:
       - name: Check no personal identities
         run: node scripts/check-no-identities.js
 
+      - name: Transcripts-guard regression test (TRDD-PQ40PZ9D)
+        run: node scripts/test-flood-transcripts-guard.js
+
       # TRDD-EAK9R8IY: ci.yml enumerates checks individually rather than running `pnpm run
       # compile`, so a guard wired only into compile/package silently never runs on PRs — this
       # one was, until a review caught it. Keep this list and package.json's compile script in
