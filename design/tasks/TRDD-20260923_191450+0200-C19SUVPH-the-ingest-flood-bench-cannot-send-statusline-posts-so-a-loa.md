@@ -3,7 +3,7 @@ trdd-id: C19SUVPH
 title: The ingest flood bench cannot send statusline POSTs so a load arm cannot vary statusline alone
 column: todo
 created: 2026-09-23T19:14:50+0200
-updated: 2026-10-17T15:26:10+0200
+updated: 2026-10-17T15:38:20+0200
 current-owner: main-session
 created-by: main-session
 task-type: infra
@@ -14,7 +14,7 @@ mandated-by: none
 approved: true
 approval-judge: main-session
 approval-datetime: 2026-09-23T19:14:50+0200
-implementation-commits: [bbf40fdf, ea835fdf, d18dc9a1, fb61c4f4, 9b599f21, 79dd2828, d35de9f2]
+implementation-commits: [bbf40fdf, ea835fdf, d18dc9a1, fb61c4f4, 9b599f21, 79dd2828, d35de9f2, 782cab31]
 status: tasked
 ---
 
@@ -32,17 +32,18 @@ status: tasked
 - Known and unfixed: --rate together with --sessions silently ignores --sessions.
 - Part 2 (deferred): a real-alcore rate test. In CI it goes after ci.yml:119, where AGENTLENS_ALCORE is downloaded. alcore takes flags, not env vars (--media-dir is required). It waits for the 1-minute load to drop under 20 (it was 54.6).
 - No acceptance box was ticked by this update.
-- P2 has no mutation yet. Its local safety relies on the live collector reporting ~/.agentlens as its dataDir; a follow-up commit adds that precondition (P2 is skipped when the server on port 3000 reports a different dataDir).
+- P2 precondition landed in 782cab31: P2 runs only when nothing listens on 3000 or the server there reports ~/.agentlens (same resolver as the bench); otherwise a visible skip. Accepted residual: a server change between that check and the P2 spawn (P2 never passes --allow-live). The skip branch is untested.
 - Part 2 recipe: runs after ci.yml:119 with AGENTLENS_ALCORE; alcore takes CLI flags, and --media-dir is required; poll the counters until two reads agree; assert floors, not only equality.
 - NEXT ACTION: Part 2 (real-alcore rate test plus the 5-minute box-2 run) when the 1-minute load is under 20
 
 scripts/bench/alcore-ingest-flood.mjs drives OTLP only. TRDD-EQCGAVGV's isolated run needs arms that vary statusline and OTLP independently, so the tool must: send POST /api/statusline-samples with a realistic payload at a configurable rate (including low rates, e.g. 1 per 10 s); pace OTLP independently; target a given port set (UI/API and OTLP) so it never touches the live collector's canonical ports by default.
+Known gap, not fixed: the bench's live-port refusal is keyed on the literal UI port 3000 (OTLP 4318 never moves) and does not read <dataDir>/ports.json, so a live collector whose UI port moved off 3000 is protected only by the dataDir refusal. On 2026-10-17 nothing listened on 3000 at the probe; the cause is unexplained (a moved port, or no collector running).
 
 ## Acceptance
 
-- [x] statusline-only and OTLP-only modes (the zero-load baseline is simply not running the tool).
+- [ ] statusline-only and OTLP-only modes (the zero-load baseline is simply not running the tool).
 - [ ] rate flags verified by the target's own counters (statusline receivedSinceBoot, spans.store.totalSpans; admitted_total counts UI-port POSTs) over 5 min.
-- [x] refuses to run against the canonical ports unless an explicit flag says so. (test-committed d35de9f2; P2/P3 first observed on CI)
+- [x] refuses to run against the canonical ports unless an explicit flag says so. (test-committed d35de9f2; P2/P3 first observed on CI; P1 mutation-proven; the P2 mutation was not run; the --allow-live bypass (P3) is CI-only and not yet observed)
 
 related: [EQCGAVGV].
 
@@ -56,6 +57,7 @@ related: [EQCGAVGV].
 - 2026-10-17T15:03:04+0200 — column → dev by main-agent@agentlenspro. Part 1 test (refusals, args) in progress per round-2-reviewed spec docs_dev/20261017-c19-args-test-spec.md; Part 2 real-alcore rate test deferred until load < 20
 - 2026-10-17T15:25:20+0200 — column → todo by main-agent@agentlenspro. Part 1 committed (d35de9f2); Part 2 waits for load < 20, nobody is working the card now
 - 2026-10-17 — box 2 unticked by main-agent@agentlenspro: its tick rested on one gitignored isolated run of 2026-09-23 on older code; it is re-ticked by the Part 2 five-minute run (load < 20).
+- 2026-10-17 — box 1 unticked by main-agent@agentlenspro: OTLP-only rests on the 2026-09-23 run only; statusline-only reaches the endpoint in d35de9f2 case D3 against a stand-in server, not alcore. Both are re-proven by Part 2.
 
 ## Evidence
 
