@@ -25,6 +25,7 @@
 //  i-o --guard-only against the REAL home, its .claude, a nonexistent child, "/", links to the
 //     real home and its .claude, and a ".." spelling (regression check only): all refuse.
 //  p  --guard-only without --mix transcripts is an argument error.
+//  q  an EMPTY BENCH_TEST_EXTRA_PROTECTED_ROOT must refuse too, never be dropped as falsy.
 "use strict";
 
 const { spawnSync } = require("node:child_process");
@@ -38,15 +39,18 @@ const BENCH = path.join(__dirname, "bench", "alcore-ingest-flood.mjs");
 const SPAWN_TIMEOUT_MS = 30_000;
 const BOOTSTRAP_FILES = 16;
 
-function freePort() {
-  return new Promise((resolve, reject) => {
+// Both listeners stay open until both ports are read, so the kernel cannot hand out the same
+// port twice (two sequential listen(0)+close calls could).
+async function freePorts() {
+  const open = () => new Promise((resolve, reject) => {
     const srv = net.createServer();
     srv.on("error", reject);
-    srv.listen(0, "127.0.0.1", () => {
-      const { port } = srv.address();
-      srv.close(() => resolve(port));
-    });
+    srv.listen(0, "127.0.0.1", () => resolve(srv));
   });
+  const servers = [await open(), await open()];
+  const ports = servers.map((s) => s.address().port);
+  await Promise.all(servers.map((s) => new Promise((resolve) => s.close(resolve))));
+  return ports;
 }
 
 // Regular files under dir, found with lstat semantics (Dirent types never follow a symlink),
@@ -81,8 +85,7 @@ function record(name, ok, detail) {
 }
 
 async function main() {
-  const uiPort = await freePort();
-  const otlpPort = await freePort();
+  const [uiPort, otlpPort] = await freePorts();
   const baseEnv = { ...process.env };
   delete baseEnv.BENCH_TEST_EXTRA_PROTECTED_ROOT;
 
@@ -123,6 +126,9 @@ async function main() {
     fs.symlinkSync(path.join(PROXY, "sub"), path.join(SCR, "linkSub"));
     fs.symlinkSync(path.join(SCR, "nowhere"), path.join(SCR, "dang"));
     const proxyEnv = { ...baseEnv, BENCH_TEST_EXTRA_PROTECTED_ROOT: PROXY };
+    // a, b and e must name PROXY itself as the hit root, not just "protected root": a TMPDIR under
+    // the real home would otherwise pass them because of REAL_HOME, proving nothing about PROXY.
+    const PROXY_HIT = `protected root ${fs.realpathSync.native(PROXY)};`;
 
     // A refusal case: exit 2 with the expected message, and zero new files under PROXY.
     function refusedNoWrite(name, home, part) {
@@ -134,8 +140,8 @@ async function main() {
     }
 
     let e2eOk = true;
-    e2eOk = refusedNoWrite("a  link into protected root + nonexistent leaf", path.join(SCR, "linkP", "zz"), "protected root") && e2eOk;
-    e2eOk = refusedNoWrite("b  link inside protected root, then ..", `${PROXY}/toS/../zz`, "protected root") && e2eOk;
+    e2eOk = refusedNoWrite("a  link into protected root + nonexistent leaf", path.join(SCR, "linkP", "zz"), PROXY_HIT) && e2eOk;
+    e2eOk = refusedNoWrite("b  link inside protected root, then ..", `${PROXY}/toS/../zz`, PROXY_HIT) && e2eOk;
     {
       const before = countFiles(PROXY);
       const r = transcripts(`${SCR}/linkSub/../zz`, proxyEnv);
@@ -146,7 +152,7 @@ async function main() {
     }
     e2eOk = refusedNoWrite("d  dangling symlink ancestor", path.join(SCR, "dang", "zz"), "dangling") && e2eOk;
     if (process.platform === "darwin") {
-      e2eOk = refusedNoWrite("e  case-variant spelling of protected root (darwin)", `${PROXY.toUpperCase()}/zz`, "protected root") && e2eOk;
+      e2eOk = refusedNoWrite("e  case-variant spelling of protected root (darwin)", `${PROXY.toUpperCase()}/zz`, PROXY_HIT) && e2eOk;
     } else {
       console.log("SKIP  e  case-variant spelling of protected root (darwin only)");
     }
@@ -163,6 +169,13 @@ async function main() {
       e2eOk = record("g  missing BENCH_TEST_EXTRA_PROTECTED_ROOT refuses",
         isRefusal(r, "BENCH_TEST_EXTRA_PROTECTED_ROOT") && r.stderr.includes("does not exist") && !fs.existsSync(h3),
         `${brief(r)} h3Exists=${fs.existsSync(h3)}`) && e2eOk;
+    }
+    {
+      const h4 = path.join(SCR, "h4");
+      const r = transcripts(h4, { ...baseEnv, BENCH_TEST_EXTRA_PROTECTED_ROOT: "" });
+      e2eOk = record("q  empty BENCH_TEST_EXTRA_PROTECTED_ROOT refuses",
+        isRefusal(r, "BENCH_TEST_EXTRA_PROTECTED_ROOT") && r.stderr.includes("does not exist") && !fs.existsSync(h4),
+        `${brief(r)} h4Exists=${fs.existsSync(h4)}`) && e2eOk;
     }
     if (!e2eOk) {
       console.log("end-to-end proxy cases failed; NOT running the real-home cases");

@@ -672,7 +672,10 @@ function realpathOfDeepestAncestor(p) {
 }
 
 // Is `p` equal to `root` or inside it? darwin compares lowercased: the default APFS/HFS+ volume is
-// case-insensitive, so `/Users/X/.Claude` names the same directory as `/Users/x/.claude`.
+// case-insensitive, so `/Users/X/.Claude` names the same directory as `/Users/x/.claude`. This is
+// defensive; realpath on darwin already returns the on-disk case for existing components, so this
+// only matters for a nonexistent tail; unproven by mutation (TRDD-PQ40PZ9D M3: removing the
+// lowercasing left scripts/test-flood-transcripts-guard.js green).
 function isUnderRoot(p, root) {
   const norm = (s) => (process.platform === 'darwin' ? s.toLowerCase() : s);
   const a = norm(p);
@@ -747,7 +750,9 @@ async function main() {
     // ADD a protected root, never remove one, so a test can prove the guard on a scratch proxy of
     // the real home without writing anywhere near it.
     const extraRoot = process.env.BENCH_TEST_EXTRA_PROTECTED_ROOT;
-    if (extraRoot) {
+    // !== undefined, not truthiness: an EMPTY value must be refused (existsSync("") is false),
+    // never silently dropped as "no extra root" (TRDD-PQ40PZ9D).
+    if (extraRoot !== undefined) {
       if (!fs.existsSync(extraRoot)) {
         console.error(`refusing: BENCH_TEST_EXTRA_PROTECTED_ROOT ${extraRoot} does not exist`);
         process.exit(2);
