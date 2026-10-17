@@ -26,9 +26,11 @@
 //     /api/server-stats. So the admitted delta is ok2xx + 2 for statusline, and 2 for OTLP (the
 //     OTLP port has no admission).
 //
-// CI flake budget: 2N is a hard ceiling (no worker can send early). The 2N-2 floor tolerates two
-// requests lost to timer lateness of 500 ms or more past the deadline. A red floor on a loaded
-// runner is load, not a bench bug — re-run before filing one.
+// CI flake budget: 2N is a hard ceiling because of the bench's shared send budget plus its
+// deadline break (TRDD-C19SUVPH deadline-edge fix: a timer can wake 1 ms early, and before the fix
+// that let an unscheduled send through; Case T below holds it with early-firing timers). The 2N-2
+// floor tolerates two requests lost to timer lateness of 500 ms or more past the deadline. A red
+// floor on a loaded runner is load, not a bench bug — re-run before filing one.
 
 import * as assert from 'assert'
 import * as http from 'http'
@@ -94,6 +96,7 @@ suite('ingest-flood bench — reported counts match a real alcore at a paced rat
   let otlpPort = 0
   let uiPort = 0
   let serverLog = ''
+  let earlyTimers = ''
 
   // /api/server-stats is admission-EXEMPT, so these reads never move admittedTotal.
   async function stats(): Promise<Stats> {
@@ -107,16 +110,16 @@ suite('ingest-flood bench — reported counts match a real alcore at a paced rat
     }
   }
 
-  function runBench(args: string[]): Promise<BenchRun> {
+  function runBench(args: string[], seconds = N, extraEnv: NodeJS.ProcessEnv = {}): Promise<BenchRun> {
     return new Promise((resolve, reject) => {
       const p = spawn(process.execPath, [BENCH, ...args, '--ui-port', String(uiPort), '--otlp-port', String(otlpPort),
-        '--concurrency', '4', '--rate', '2', '--seconds', String(N), '--progress-sec', '100000'],
-      { env, stdio: ['ignore', 'pipe', 'pipe'] })
+        '--concurrency', '4', '--rate', '2', '--seconds', String(seconds), '--progress-sec', '100000'],
+      { env: { ...env, ...extraEnv }, stdio: ['ignore', 'pipe', 'pipe'] })
       bench = p
       let stdout = ''; let stderr = ''
       p.stdout?.on('data', (c: Buffer) => { stdout += c.toString('utf-8') })
       p.stderr?.on('data', (c: Buffer) => { stderr += c.toString('utf-8') })
-      const killer = setTimeout(() => p.kill('SIGKILL'), (N + 30) * 1000)
+      const killer = setTimeout(() => p.kill('SIGKILL'), (seconds + 30) * 1000)
       p.on('error', (e) => { clearTimeout(killer); reject(e) })
       p.on('close', (status, signal) => {
         clearTimeout(killer)
@@ -142,7 +145,8 @@ suite('ingest-flood bench — reported counts match a real alcore at a paced rat
   }
 
   function assertRate(r: BenchResult): void {
-    // 2N is the exact ceiling (no worker can fire early); the floor allows two late-timer drops.
+    // 2N is the exact ceiling, held by the bench's send budget plus its deadline break (not by
+    // timers being punctual — they can wake 1 ms early); the floor allows two late-timer drops.
     assert.ok(r.ok2xx >= 2 * N - 2 && r.ok2xx <= 2 * N, `ok2xx=${r.ok2xx} outside [${2 * N - 2}, ${2 * N}]`)
   }
 
@@ -154,6 +158,10 @@ suite('ingest-flood bench — reported counts match a real alcore at a paced rat
     tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'al-floodrate-'))
     const home = path.join(tmp, 'home'); const data = path.join(tmp, 'data')
     fs.mkdirSync(home, { recursive: true }); fs.mkdirSync(data, { recursive: true })
+    // Case T's preload: every setTimeout above 5 ms fires 5 ms early, an exaggerated form of the
+    // measured 1 ms early wake, so the bench's ceiling is tested against early timers on purpose.
+    earlyTimers = path.join(tmp, 'early-timers.cjs')
+    fs.writeFileSync(earlyTimers, "const orig = globalThis.setTimeout; globalThis.setTimeout = (fn, d, ...a) => orig(fn, typeof d === 'number' && d > 5 ? d - 5 : d, ...a);\n")
     env = { ...process.env, HOME: home, AGENTLENS_WATCHDOG: 'off' }
     for (const k of SCRUBBED_ENV) delete env[k]
 
@@ -230,6 +238,18 @@ suite('ingest-flood bench — reported counts match a real alcore at a paced rat
 
   test('otlp mix: every ok2xx is 20 spans the server stored, and no statusline sample moves', async function () {
     this.timeout((2 * N + 60) * 1000)
+    // Settle the baseline: a failed Case S stops before its own 6 s span wait, so its unflushed
+    // spans could land in this window. Wait until two reads >= 6 s apart agree (15 s cap).
+    {
+      const settleBy = Date.now() + 15_000
+      let ref = await stats()
+      let refAt = Date.now()
+      while (Date.now() < settleBy) {
+        await sleep(1_000)
+        const cur = await stats()
+        if (cur.totalSpans !== ref.totalSpans) { ref = cur; refAt = Date.now() } else if (Date.now() - refAt >= 6_000) break
+      }
+    }
     const before = await stats()
     const run = await runBench(['--mix', 'otlp', '--spans-per-request', '20'])
     assertCleanRun(run)
@@ -250,5 +270,21 @@ suite('ingest-flood bench — reported counts match a real alcore at a paced rat
     assert.strictEqual(last.totalSpans - before.totalSpans, expected, `spans delta equals 20 x ok2xx (${r.ok2xx})`)
     assert.strictEqual(last.statuslineReceived - before.statuslineReceived, 0, 'an OTLP-only run sends no statusline sample')
     assert.strictEqual(last.admittedTotal - before.admittedTotal, 2, 'admitted = the two snapshot reads only (OTLP has no admission)')
+  })
+
+  // A fixed 7 s, not N: odd, so worker 2's stagger lands on a slot edge and the early-waking
+  // stagger path is exercised too (deadline-fix measure, section 2 residual). 2 x 7 = 14 is the ceiling.
+  test('early-firing timers cannot exceed the ceiling', async function () {
+    const T = 7
+    this.timeout((T * 2 + 60) * 1000)
+    const before = await stats()
+    const run = await runBench(['--mix', 'statusline'], T, { NODE_OPTIONS: `--require ${earlyTimers}` })
+    const after = await stats()
+    assertCleanRun(run)
+    const r = run.result
+    console.log(`    measured: ok2xx=${r.ok2xx} statusline=${after.statuslineReceived - before.statuslineReceived}`)
+    assert.ok(r.ok2xx <= 2 * T, `ok2xx=${r.ok2xx} exceeds the ceiling ${2 * T} with early-firing timers`)
+    assert.ok(r.ok2xx >= 1, 'the run sent at least one request')
+    assert.strictEqual(after.statuslineReceived - before.statuslineReceived, r.ok2xx, 'server statusline delta equals ok2xx')
   })
 })

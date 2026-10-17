@@ -532,6 +532,14 @@ async function worker(i, agentOtlp, agentUi, state, mix, counters, paceMsPerReq)
   while (Date.now() < state.deadline && !state.stopped) {
     if (paceMsPerReq > 0) {
       nextAt += paceMsPerReq;
+      // TRDD-C19SUVPH deadline edge: a slot at or past the deadline is not scheduled, so stop here
+      // instead of sleeping to the deadline. A timer may fire before Date.now() reaches its target
+      // (measured: 11 of 4000 woke 1 ms early, reports_dev/c19/20261017_183811+0200-deadline-fix-measure.md),
+      // and an early wake from that capped sleep let an unscheduled send through the post-sleep
+      // guard. That is the only mechanism found by code reading for the one 21-against-20 seen
+      // (under a mutant); it is not a confirmed cause. Must sit after the increment (it checks the
+      // NEXT slot) and inside this block (nextAt is stale when paceMsPerReq is 0).
+      if (nextAt >= state.deadline) break;
       const wait = Math.min(nextAt - Date.now(), state.deadline - Date.now());
       // Behind schedule: do not try to catch up, or a stall becomes a burst that measures
       // something the fleet would never do.
@@ -542,6 +550,11 @@ async function worker(i, agentOtlp, agentUi, state, mix, counters, paceMsPerReq)
     // Re-check after any sleep above: the deadline may have passed while we were waiting, and a
     // request sent past it would count against a window this run no longer owns.
     if (Date.now() >= state.deadline || state.stopped) break;
+    // TRDD-C19SUVPH: the shared send budget makes the total a hard ceiling whatever the timers do.
+    // The break above covers the deadline case; an early-waking stagger sleep can still shift a
+    // worker's schedule by a millisecond and admit one extra send, and the budget stops that.
+    // JS is single-threaded, so this check-and-claim cannot race between workers.
+    if (state.sendBudget !== undefined) { if (state.sendBudget <= 0) break; state.sendBudget--; }
     const t0 = performance.now();
     if (mix === 'transcripts') {
       // TRDD-PQ40PZ9D: the append IS the request. No pacing loop of its own — the shared
@@ -850,6 +863,16 @@ async function main() {
     const targetSpans = targetSpansPerSec();
     paceMsPerReq = targetSpans > 0 ? (1000 * args.spansPerRequest * args.concurrency) / targetSpans : 0;
   }
+  // TRDD-C19SUVPH send budget: the staggered schedule sends exactly ceil(concurrency*T/pace)
+  // requests (Hermite's identity), but a timer may fire before Date.now() reaches its target
+  // (measured: 11 of 4000 woke 1 ms early, reports_dev/c19/20261017_183811+0200-deadline-fix-measure.md),
+  // so an early-firing capped sleep or stagger can let an unscheduled send through. That is the
+  // only mechanism found by code reading for the one 21-against-20 seen (under a mutant); it is
+  // not a confirmed cause. The worker loop's deadline break stops the deadline case; this budget
+  // makes the total a hard ceiling. idealSends absorbs float noise: --rate 3 gives a pace of
+  // 1333.33 ms and x = 30.0000001, which must budget 30, not 31.
+  const idealSends = (x) => (Math.abs(x - Math.round(x)) < 1e-9 ? Math.round(x) : Math.ceil(x));
+  if (paceMsPerReq > 0) state.sendBudget = idealSends((args.seconds * 1000 * args.concurrency) / paceMsPerReq);
 
   // --new-session-every: grows the sliding session window on a timer, independent of request
   // pacing (item 4).
