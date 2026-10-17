@@ -5,7 +5,7 @@ column: todo
 pre-block-column: 
 unblock-when: [trdd:UTFVMVT8 terminal]
 created: 2026-08-29T10:44:23+0200
-updated: 2026-10-15T07:15:30+0200
+updated: 2026-10-17T20:39:26+0200
 current-owner: main-session
 task-type: bugfix
 scope: project
@@ -372,6 +372,7 @@ is not a criterion, so it now names the sample size and the statistic.
       narrowed from the configured 86,400,000 ms. Not comparable to the earlier 17.08 GB figure:
       different run length and a different effective window, so it is recorded, not claimed as
       an improvement.
+- 2026-10-17 box 4 re-verified at HEAD d8b491f4 (ui.rs last changed in 4ebb9196): `cargo test -p agentlens-core --lib ui:: -- --test-threads=1` gave 15 passed. With the guard disabled (`if false &&` at ui.rs:362), only ui::rebuild_admission_tests::a_reader_never_rebuilds_when_the_background_rebuilder_owns_it failed, panicking at its rebuild assertion ui.rs:4600 (14 passed, 1 failed). The other 7 rebuild_admission tests still passed, so the card's earlier '3 passed / 1 failed' counted an older, smaller group. ui.rs was restored byte-identical. Boxes 2, 3 and 5 still need a current-code collector at fleet rate (owner: redeploy the live collector, or an isolated flood-bench rig with a pre-fix A/B and a window prefill).
 
 ## AI review verdict — 2026-09-05T14:21:26+0200
 
