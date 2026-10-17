@@ -1091,6 +1091,7 @@ fn record_ingest_profile(parse_ns: u64, wait_ns: u64, held_ns: u64) {
 /// NO device_id, NO account_uuid — they ARE on the wire (metadata.user_id) but the no-identities
 /// doctrine forbids persisting them anywhere.
 fn body_link_row(p: &agentlens_ingest::BodyPointer) -> (String, Value) {
+    use sha2::Digest;
     let (span_id, stem, request_id, request_body_id, message_id) = (
         p.span_id.as_deref().unwrap_or(""),
         p.body_ref.as_deref().unwrap_or(""),
@@ -1101,9 +1102,18 @@ fn body_link_row(p: &agentlens_ingest::BodyPointer) -> (String, Value) {
     // WHY (TRDD-N6A8VX3G D4): the key derives from EVERY field the row stores. The old key
     // "{span_id}:{kind}:{ts}" collided for two different same-kind pointers without a span_id in
     // one OTLP payload (ts is the payload ingest time, shared by all its pointers), and DeltaLog
-    // replay keeps the last row per key, so a link row was silently lost. Identical content still
-    // collapses to one row (harmless). U+001F (unit separator) cannot appear in these ids.
-    let key = [p.session_id.as_str(), span_id, p.kind, stem, request_id, request_body_id, message_id, &p.ts.to_string()].join("\u{1f}");
+    // replay keeps the last row per key, so a link row was silently lost. The fields come from
+    // untrusted OTLP input, so no separator character is safe to join them with; a JSON array
+    // encodes each field with quoting and escaping, so distinct field tuples give distinct
+    // strings. The key is that string HASHED, not the string itself: keying by the full row
+    // content roughly doubled the snapshot and the boot rewrite cost (~19M rows a year).
+    // SHA-256 truncated to 128 bits (32 hex chars): a collision needs ~2^64 rows, far beyond 19M/yr,
+    // and a crafted collision would only drop one telemetry link row. Identical content still
+    // collapses to one row (harmless).
+    let encoded = serde_json::to_string(&[p.session_id.as_str(), span_id, p.kind, stem, request_id, request_body_id, message_id, &p.ts.to_string()])
+        .expect("a string array always serializes");
+    let digest = sha2::Sha256::digest(encoded.as_bytes());
+    let key: String = digest.iter().take(16).map(|b| format!("{b:02x}")).collect();
     (
         key,
         serde_json::json!({
@@ -1576,6 +1586,20 @@ mod body_links_tests {
         let map = reloaded.load().expect("load");
         assert_eq!(map.len(), 1, "the same pointer is one row");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+
+    #[test]
+    fn body_link_unit_separator_shifted_across_fields_keeps_both_rows() {
+        // TRDD-N6A8VX3G D4: ids are untrusted OTLP input, so a U+001F inside one field must not
+        // make two different field tuples share a key (a separator join gives "a\u{1f}b\u{1f}c" for both).
+        let mut one = spanless_pointer("a\u{1f}b");
+        one.request_id = Some("c".to_owned());
+        let mut two = spanless_pointer("a");
+        two.request_id = Some("b\u{1f}c".to_owned());
+        let (k1, _) = body_link_row(&one);
+        let (k2, _) = body_link_row(&two);
+        assert_ne!(k1, k2, "shifting U+001F across adjacent fields must stay two rows");
     }
 
     #[test]
