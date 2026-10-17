@@ -4,7 +4,7 @@ title: alcore stays within the 2048 MB cap — phased memory redesign
 column: todo
 status: tasked
 created: 2026-09-29T20:20:37+0200
-updated: 2026-10-16T11:16:43+0200
+updated: 2026-10-17T04:50:14+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: feature
@@ -217,3 +217,7 @@ Owner directive, verbatim (in reply to the agent's suggestion to tolerate unknow
 > no, if there are changes to the response bodies a new "producer_type" must be created with a new json schema reflecting the new changes. the previous data tables will stay available as different tables, and an index will contain the informations about the tables timelines (lifecycle from when introduced to when was superseeded). All you need to do to ensure those data is still parsed is to make all sql functions aware of the versions and tables lifelines, and integrate in the same query the data from multiple versions of the tables. behind the scenes the content is split in many tables, but the sql functions will make appear them as one single long lived table. this is easier than you think, because 1) the raw dumps of the responses is already split in multiple tables divided by topics/scope (json fields/arrays/sub-fields related to eache other must be grouped in the same table, like skills, agents, rules, costs, errors, tools, etc. each in its own table. so changes to a schema of a single table will affect only that topic/category table timeline, not all. and 2) the queries are usually done on specific fields, so even if some new field is suddenly added to an api response, the existing fields will still be give solid responses to the queries. removing fields is rare, but even if they do them, all we need to do is to write the new json schema in a way to make clear that a field is the replacement of an old field now removed. in this way the functions will be able to return the right values in all queries, even across multiple versions of the tables. Also for everything else i strongly advise to follow my proposal unless impossible. and implement this asap.
 Agent's reading and the build plan live in TRDD-LHCHVK9Z (not part of the ruling). Second owner message of 2026-10-04 (fixed schemas are for ingest speed) is quoted there.
 Measured on this Mac supporting the proposal: reports/hook-binaries/ (spool append 6.8 ms CPU/event vs 237 ms Node; shared-DuckDB-file writes lose events) and scripts_dev/duckplan-e6, duckplan-e7 (PK/unique indexes OOM at 512 MB).
+
+## Observations
+
+- 2026-10-17, from TRDD-O8MGRU72: one earlier full agentlens-core run was SIGKILLed (exit 137) inside tests/card_store.rs a_restore_sized_bulk_load_stays_inside_the_memory_limit at load average about 240; cause unmeasured (a memory limiter, the harness RSS guard, or the sync/read-back added by O8MGRU72 are all unexcluded); the same test passed in the 859-pass run. Partial log: reports_dev/o8mgru72-agentlens-core-test-killed-run1.txt.

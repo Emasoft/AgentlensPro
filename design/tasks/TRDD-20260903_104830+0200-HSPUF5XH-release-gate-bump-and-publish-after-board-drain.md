@@ -3,7 +3,7 @@ trdd-id: HSPUF5XH
 title: Bump and publish agentlenspro only after every open card is terminal and every known issue is fixed
 column: blocked
 created: 2026-09-03T10:48:30+0200
-updated: 2026-10-17T03:07:42+0200
+updated: 2026-10-17T04:50:35+0200
 current-owner: main-session
 task-type: infra
 min-approval-requirement: user
@@ -12,7 +12,7 @@ created-by: main-session
 npt: []
 eht: []
 pre-block-column: todo
-blocked-by: [2R36W8Q1, N60JUWU3, CAJ5RCP9, 9SYRK6SW, QE114936, 768NEX6E, 7YPQWKPG, 7NHUU6GK, ZSX34J8F, 2R0AXCKL, 2TQHNMEC, CS2W7E77, H3D5ZBO1, WCENKH6T, WCG7I5D8, WBYDQH8K, ATXO2E1J, OLKITCS7, JDQR0HDT, O8MGRU72]
+blocked-by: [2R36W8Q1, N60JUWU3, CAJ5RCP9, 9SYRK6SW, QE114936, 768NEX6E, 7YPQWKPG, 7NHUU6GK, ZSX34J8F, 2R0AXCKL, 2TQHNMEC, CS2W7E77, H3D5ZBO1, WCENKH6T, WCG7I5D8, WBYDQH8K, ATXO2E1J, OLKITCS7, JDQR0HDT]
 post-release-verification: [IXMB2JVD]
 blocker-probe: [trddgrep, why, HSPUF5XH]
 blocker-holds-if: not-match:READY
@@ -265,3 +265,4 @@ review-gate: the gate no longer demands a review for a declared-role worker's sc
 2026-10-16: the deployable set now includes ddb58799 (TRDD-USSG465Q): the card store opens with vacuum_rebuild_indexes at u64::MAX, so checkpoints reclaim dead rows; a DuckDB that refuses the option makes alcore panic at boot before touching the card files.
 2026-10-16: USSG465Q removed from blocked-by: it is complete (ddb58799).
 2026-10-16: drops 3RVTC1HY (complete; not yet deployed, which is this card's step).
+2026-10-17: O8MGRU72 complete (commits 3a9ec263, 45a7711a, 14e33321) and removed from blocked-by; its open residue (one intermittent watcher test, one SIGKILLed full run) is recorded on its STATE block.
