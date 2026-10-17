@@ -3,7 +3,7 @@ trdd-id: GVA8TTJF
 title: api_calls coalesced view, cache_turns statusline join, and the acceptance SQL
 column: blocked
 created: 2026-09-03T04:47:31+0200
-updated: 2026-10-17T07:41:36+0200
+updated: 2026-10-17T09:19:12+0200
 current-owner: main-session
 task-type: feature
 priority: high
@@ -14,7 +14,7 @@ npt: []
 eht: []
 blocked-by: [AJGTQ007]
 status: tasked
-implementation-commits: [fb09facf, da5af103, 56d960e1, 79f93dfc]
+implementation-commits: [fb09facf, da5af103, 56d960e1, 79f93dfc, 0bdad550, c7a43535]
 pre-block-column: dev
 unblock-when: [trdd:AJGTQ007 terminal]
 blocker-probe: [trddgrep, why, GVA8TTJF]
@@ -160,3 +160,4 @@ Review round 3 (post-implementation writes) — no blockers, three dispositions:
 - Open: lint DERIVED-FLAG-MISSING. The eht list of TRDD-CAJ5RCP9 names this card, but this card lacks derived: true. The lint header names TRDD-6SPXOV0P, which does not list this card (its eht is TRDD-7NHUU6GK only). Read the CAJ5RCP9 eht entry and its reason before changing either card; not yet read in full.
 - 79f93dfc closes the `window` naming item: the refusal now says `window (hours) must be ...` (the MCP argument the ui.rs arm reads is `window`); the test asserts that prefix, and restoring the old text fails exactly that test. The full agentlens-core suite with default features (lib, every integration target, doc-tests) ran on that commit's bytes: 878 passed, 0 failed. The main agent read the totals, the clippy output (clean) and the mutation run (36 passed, 1 failed, the target test only).
 - Residue: the doc comment of window_hours_outside_zero_to_one_year_is_refused_by_name still says the error names `window_hours`. fastedit cannot reach a doc comment above a #[test] attribute, the same limit as the varchar_session_id comment. Next try: one fastedit edit --replace of each whole function, doc comment included; if fastedit refuses, the owner decides.
+- 0bdad550 and c7a43535 (via TRDD-Q0IFYJFO): the cache-turns query now binds on statusline windows without prompt_id or prompt_cache_ttl, and on real UUID-shaped prompt ids, which failed before. It was latent, because the tool is unregistered (B3).

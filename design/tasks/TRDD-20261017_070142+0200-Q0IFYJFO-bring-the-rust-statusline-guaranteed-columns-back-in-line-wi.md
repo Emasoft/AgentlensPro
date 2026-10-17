@@ -1,10 +1,10 @@
 ---
 trdd-id: Q0IFYJFO
 title: Bring the Rust statusline GUARANTEED_COLUMNS back in line with the TypeScript column list
-column: backburner
+column: human_review
 status: tasked
 created: 2026-10-17T07:01:42+0200
-updated: 2026-10-17T08:48:53+0200
+updated: 2026-10-17T09:24:14+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -15,6 +15,7 @@ mandated-by: none
 approved: true
 approval-judge: main-agent@agentlenspro
 approval-datetime: 2026-10-17T07:01:42+0200
+implementation-commits: [0bdad550, c7a43535]
 ---
 
 # Bring the Rust statusline GUARANTEED_COLUMNS back in line with the TypeScript column list
@@ -24,6 +25,7 @@ Found 2026-10-17 in the TRDD-GVA8TTJF round-2 review (item m2). rust-core/crates
 ## Approval log
 
 - 2026-10-17T07:01:42+0200 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-10-17T09:24:14+0200 — column → human_review by main-agent@agentlenspro. fix done and verified (0bdad550, c7a43535); no acceptance checklist, so closing is the owner's call
 
 ## Column diff (2026-10-17)
 
@@ -35,3 +37,11 @@ Found 2026-10-17 in the TRDD-GVA8TTJF round-2 review (item m2). rust-core/crates
 - The other 15 TS-only names have no Rust source reader. Rust hits are test-only: cache_turns_sql.rs:667 seeds prompt_cache_ttl; spool_tap.rs:852 is test JSON; agentlens-digest/tests/digest.rs:160, 267, 292-293 use a nested prompt_cache struct path, not the flattened names.
 - Name in NEITHER list: prompt_id. cache_turns_sql.rs reads it at 7 places (e.g. :327, :342, :356) with no guarantee in either list; statuslineStore.ts:28 mentions it only in a comment. Confirms the card point that prompt_id is missing from both lists.
 - Report: /Volumes/EmaUITEK4TBSSD/Code/AgentlensPro/docs_dev/20261017_084820+0200-q0ifyjfo-column-diff.md (read-only code evidence; no test or query was run).
+
+## Fixed (2026-10-17)
+
+- 0bdad550: prompt_id and prompt_cache_ttl added to the Rust GUARANTEED_COLUMNS (VARCHAR). Measured before the fix: 'Binder Error: Values list "sl" does not have a column named "prompt_id"' on a window whose samples lack both. GUARANTEED_COLUMNS shapes both the read relation and the seal COPY (through varchar_session_id), so the claim that it decides the layout of files written from then on is verified. Rust-only columns are now 1 (prompt_id, which the TS list lacks); TS-only columns are 15.
+- c7a43535: prompt_id cast to VARCHAR at the relation, like session_id. Found by the mixed-window test: real Claude Code prompt ids are UUIDs, read_json_auto types them as UUID, and cache_turns' COALESCE failed with 'Cannot mix values of type UUID and VARCHAR'. This predates 0bdad550. The test covers four layouts, including a legacy UUID-typed parquet part.
+- Scope cut, stated: 'back in line with the TypeScript list' was reduced to 'the columns a Rust reader needs'. The other 15 TS-only columns have no Rust reader. Full alignment for the TS statusline-history CLI would be its own card if ever wanted.
+- Layout 3 (legacy UUID-typed part) mutation, run alone with the cast removed: FAIL, 'Binder Error: Cannot mix values of type UUID and VARCHAR in COALESCE operator' (reports_dev/q0if4-mut.txt); files restored, cmp clean. Layouts 0 and 3 were each shown to fail without the c7a43535 cast; layouts 1 and 2 were not run on their own without it.
+- Not closed: trddgrep refuses `complete` on a card with no acceptance checklist, and project practice is not to write acceptance at close time. Left for the owner: tick a checklist matching the Fixed bullets, or close as is. The owner's 2026-10-05 review delegation was considered and not used for this close.
