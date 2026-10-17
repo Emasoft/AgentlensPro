@@ -549,7 +549,7 @@ impl DeltaLog {
                 if !dir_sync_unsupported(&e) {
                     return Err(format!("{}: directory sync after compaction failed ({e}); snapshot replaced, delta KEPT", dir.display()));
                 }
-                eprintln!("{}: directory sync not supported by this filesystem ({e}); rename durability not provable here, removing the delta anyway", dir.display());
+                eprintln!("{} alcore: {}: directory sync not supported by this filesystem ({e}); rename durability not provable here, removing the delta anyway", crate::log_ts(), dir.display());
             }
         }
         // Only AFTER the snapshot is durable AND verified.
