@@ -620,6 +620,65 @@ function realpathOrResolve(p) {
   }
 }
 
+
+// TRDD-PQ40PZ9D (2026-10-17): the transcripts guard used realpathOrResolve(), whose
+// path.resolve() fallback for a nonexistent leaf never follows an ANCESTOR symlink — a link
+// L -> <home>/.claude/projects with --transcripts-home L/zz passed the guard and the bootstrap
+// wrote 16 files through it before the post-mkdir re-resolve refused. This resolves the path
+// the way the OS will: component by component, left to right, following every existing symlink
+// (fs.realpathSync.native) BEFORE applying a later `..` — path.resolve() collapses `L3/../zz` to
+// `zz` lexically while the kernel resolves it as `<target of L3>/../zz`. Components past the
+// deepest existing one are appended as a tail. Never creates anything. Returns
+// { refused: <reason> } on any lstat error other than ENOENT (EACCES, ELOOP, ...) or when an
+// existing component cannot be realpath'd (a dangling symlink) — the caller must exit 2.
+function realpathOfDeepestAncestor(p) {
+  let cur;
+  try {
+    cur = path.isAbsolute(p) ? path.parse(path.resolve(p)).root : fs.realpathSync.native(process.cwd());
+  } catch (e) {
+    return { refused: `cannot resolve the working directory: ${e.message}` };
+  }
+  const tail = [];
+  for (const part of p.split(path.sep)) {
+    if (part === '' || part === '.') continue;
+    if (part === '..') {
+      if (tail.length > 0) tail.pop();
+      else cur = path.dirname(cur);
+      continue;
+    }
+    if (tail.length > 0) { tail.push(part); continue; }
+    const candidate = path.join(cur, part);
+    try {
+      fs.lstatSync(candidate);
+    } catch (e) {
+      if (e && e.code === 'ENOENT') { tail.push(part); continue; }
+      return { refused: `cannot stat ${candidate}: ${e && e.code ? e.code : e}` };
+    }
+    try {
+      cur = fs.realpathSync.native(candidate);
+    } catch (e) {
+      return { refused: `cannot resolve ${candidate} (dangling symlink?): ${e && e.code ? e.code : e}` };
+    }
+  }
+  return { path: path.join(cur, ...tail) };
+}
+
+// Is `p` equal to `root` or inside it? darwin compares lowercased: the default APFS/HFS+ volume is
+// case-insensitive, so `/Users/X/.Claude` names the same directory as `/Users/x/.claude`.
+function isUnderRoot(p, root) {
+  const norm = (s) => (process.platform === 'darwin' ? s.toLowerCase() : s);
+  const a = norm(p);
+  const r = norm(root);
+  return a === r || a.startsWith(r.endsWith(path.sep) ? r : r + path.sep);
+}
+
+// The first protected root `p` falls under, '/' itself, or null when `p` is safe to write under.
+function protectedHit(p, roots) {
+  if (p === path.parse(p).root) return p;
+  for (const root of roots) if (isUnderRoot(p, root)) return root;
+  return null;
+}
+
 let lastFetchErrorMessage = null;
 
 /** One combined read of /api/server-stats + /api/debug/log-scan-stats, reduced to the fields the
