@@ -1,10 +1,10 @@
 ---
 trdd-id: H8F9S7MY
 title: Deploy alcore built from HEAD (owner decision)
-column: todo
+column: approval
 status: tasked
 created: 2026-10-17T08:32:55+0200
-updated: 2026-10-17T08:33:08+0200
+updated: 2026-10-17T08:38:03+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: infra
@@ -15,7 +15,7 @@ mandated-by: none
 approved: true
 approval-judge: main-agent@agentlenspro
 approval-datetime: 2026-10-17T08:32:55+0200
-unblock-when: [decision:the owner approves and runs the alcore deploy from HEAD]
+ 
 ---
 
 # Deploy alcore built from HEAD (owner decision)
@@ -25,3 +25,4 @@ Owner-decision card. Several cards wait on a deploy of alcore built from the cur
 ## Approval log
 
 - 2026-10-17T08:32:55+0200 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-10-17T08:38:03+0200 — column → approval by main-agent@agentlenspro. waiting on the owner's decision to deploy alcore from HEAD; no agent acts on it

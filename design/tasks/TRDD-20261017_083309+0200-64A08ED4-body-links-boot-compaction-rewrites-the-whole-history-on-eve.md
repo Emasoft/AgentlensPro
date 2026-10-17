@@ -4,7 +4,7 @@ title: Body-links boot compaction rewrites the whole history on every boot - add
 column: todo
 status: tasked
 created: 2026-10-17T08:33:09+0200
-updated: 2026-10-17T08:33:09+0200
+updated: 2026-10-17T08:38:28+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: infra
@@ -24,3 +24,8 @@ From TRDD-N6A8VX3G. TRDD-1RJBOEI1 measured compact_from_disk at 700k body-link r
 ## Approval log
 
 - 2026-10-17T08:33:09+0200 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+
+## Related residue (2026-10-17)
+
+- Whoever next edits delta_log.rs: two doc comments (about lines 574 and 591) still say body-links keys are 'unique per pointer'. Since 54f7b978 the key is a hash of the full row content. fastedit duplicated the doc block on two attempts, so the edit needs a different approach.
+- The wire-path test added in 1b40ac9a (lib.rs body_links_tests) opens a full CoreState, which reads the process HOME (Env::from_process, then BurnRuntime::new). Whether anything is written under the real HOME is unverified. Check it; if something is, set HOME to the temp dir in the test.

@@ -3,7 +3,7 @@ trdd-id: N6A8VX3G
 title: Persist the OTLP body-pointer link so response rows gain a session_id
 column: blocked
 created: 2026-09-03T04:59:59+0200
-updated: 2026-10-17T08:34:26+0200
+updated: 2026-10-17T08:38:13+0200
 current-owner: main-session
 task-type: feature
 priority: high
@@ -28,7 +28,7 @@ blocker-holds-if: not-match:READY
   (`agentlens-ingest`), in-memory, and is thrown away — `api_calls` (GVA8TTJF) cannot give a
   response row a `session_id` without it, so its join match rate would be 0 by construction.
 - NEXT ACTION (2026-10-17): every non-deploy item is done (D4 fixed, wire-path test, timing recorded).
-  Box 3 needs the live deploy, TRDD-H8F9S7MY; the card is blocked on it.
+  Box 3 needs the live deploy, TRDD-H8F9S7MY; the card is blocked on it. If H8F9S7MY ends cancelled or superseded, re-block on its successor: the auto-restore does not mean box 3 is checkable.
 
 ## WHY
 
