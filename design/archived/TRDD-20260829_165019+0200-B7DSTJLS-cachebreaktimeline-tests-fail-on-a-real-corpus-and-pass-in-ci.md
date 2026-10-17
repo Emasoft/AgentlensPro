@@ -1,16 +1,16 @@
 ---
 trdd-id: B7DSTJLS
 title: cacheBreakTimeline tests pass in CI and fail on a developer machine, and fail differently depending on run order
-column: todo
+column: complete
 created: 2026-08-29T16:50:19+0200
-updated: 2026-10-17T10:46:46+0200
+updated: 2026-10-17T10:47:42+0200
 current-owner: main-session
 task-type: bugfix
 scope: project
 project-id: agentlenspro
 relevant-rules: []
 implementation-commits: [aef94208, 842a6150]
-status: tasked
+status: archived
 ---
 
 # cacheBreakTimeline tests fail on a real corpus and pass in CI
@@ -145,6 +145,8 @@ used the pre-fix out/ and ran under a deliberate load storm). → ai_review.
 
 - 2026-10-16T11:13:11+0200 — column → todo by main-agent@agentlenspro. work stalled mid-way or never started; no one works it now; triage row 26
 2026-10-17 — main-agent@agentlenspro (under the owner order of 2026-10-05) STRUCK box 2 and REWORDED box 4. Grounds: since 091799ee the scratch HOME makes both unmeasurable as written; box 2's real-corpus half needs the real data dir, which the agent reads the 2026-10-04 directive ('anything against the real data directory') as reserving to the owner, and is carried by TRDD-2R0AXCKL, which is in backburner, so that coverage is parked, not actively worked; box 4 is verified by fs trace instead of a red test. Veto: the owner restores either box, which re-opens this card.
+- 2026-10-17T10:47:39+0200 — column → ai_review by main-agent@agentlenspro. work done and evidenced: runs and fs trace on 2026-10-17, commits 842a6150, a1d158d8, e1ba6b20
+- 2026-10-17T10:47:42+0200 — COMPLETE by main-agent@agentlenspro. adversarial review of e1ba6b20 returned GO; closed under the owner order of 2026-10-05.
 
 ## Closing evidence 2026-10-17
 
