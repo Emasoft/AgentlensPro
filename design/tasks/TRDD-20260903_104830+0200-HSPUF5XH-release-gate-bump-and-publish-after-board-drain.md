@@ -3,7 +3,7 @@ trdd-id: HSPUF5XH
 title: Bump and publish agentlenspro only after every open card is terminal and every known issue is fixed
 column: blocked
 created: 2026-09-03T10:48:30+0200
-updated: 2026-10-17T04:54:41+0200
+updated: 2026-10-17T09:42:47+0200
 current-owner: main-session
 task-type: infra
 min-approval-requirement: user
@@ -162,6 +162,7 @@ unless the user says otherwise:
 - [ ] The `api_call` table is observed filling on the live server (per
       9SYRK6SW's own acceptance recipe).
 - [ ] Upgrade boot from a v2.33.1 data dir on a full corpus with the release alcore: record peak RSS against the cap and confirm the boot finishes its cold rescan (B' crash-loop check from 6B7VV2Z7; see Notes 2026-10-16).
+- [ ] Two consecutive `pnpm run test:unit` runs, exit 0 and 0 failing, on exactly the committed release tree, each following every rule in the section "Release full-suite pair — gate rules" below. Moved here from TRDD-CS2W7E77 on 2026-10-17.
 
 ## Release recipe (run only after every box above is checked)
 
@@ -254,6 +255,7 @@ review-gate: the gate no longer demands a review for a declared-role worker's sc
 2026-10-17: 1RJBOEI1 added to blocked-by. N6A8VX3G's body-links writer ships in this release, and boot compaction of that log peaks at 3337 MiB at 700k records (measured), so without a fix every install reaches a boot crash loop as the log grows.
 2026-10-17: 1RJBOEI1 complete (5e39aa3b, 404b0021): boot compaction of a 700k body-links log now peaks at 184.7 MiB, down from 3337 MiB. Removed from blocked-by. The fsync gap it found is TRDD-O8MGRU72, now in blocked-by: this card's gate requires every known issue fixed, and that one is a data-loss window. Exempting it is an owner decision.
 - 2026-10-17, before release: (1) confirm CI on ubuntu passes an_unsyncable_temp_snapshot_is_refused_and_keeps_the_old_snapshot (Linux behaviour of the /dev/null sync is unmeasured, TRDD-O8MGRU72 residue c); (2) the local alcore binary is not redeployed since at least 6B7VV2Z7 and O8MGRU72 — rebuild, codesign -s - --force, restart and check alcore --version is not 137 (residue d).
+2026-10-17: the two-green-full-suite-runs requirement, previously carried by TRDD-CS2W7E77 (Notes lines of 2026-10-14 STATE and the CHANGELOG section), is now the box "Two consecutive `pnpm run test:unit` ..." under "Definition of done — gates green", with its rules in the section "Release full-suite pair — gate rules". CS2W7E77 stays in blocked-by until it reaches a terminal column.
 
 ## Notes and lessons learned
 
@@ -267,3 +269,18 @@ review-gate: the gate no longer demands a review for a declared-role worker's sc
 2026-10-16: USSG465Q removed from blocked-by: it is complete (ddb58799).
 2026-10-16: drops 3RVTC1HY (complete; not yet deployed, which is this card's step).
 2026-10-17: O8MGRU72 complete (commits 3a9ec263, 45a7711a, 14e33321) and removed from blocked-by; its open residue (one intermittent watcher test, one SIGKILLed full run) is recorded on its STATE block.
+
+## Release full-suite pair — gate rules
+
+- Consolidated 2026-10-17 from the dated Notes of TRDD-CS2W7E77 (2026-10-14 and 2026-10-15), where the history and the reason for each rule stay. Corrections to these rules go HERE, not on CS2W7E77.
+- Before each counted run, build alcore from HEAD: `cargo build --release --manifest-path rust-core/Cargo.toml -p agentlens-core --bin alcore`. Then a no-op rebuild, which must print no `Compiling agentlens-core` line. Then `rust-core/target/release/alcore --version` must exit other than 137 (137 is a SIGKILL before main; alcore has no --version flag, so 64 is the expected exit). Then take the binary sha256 last, run the suite, and take the sha256 again at run end: a changed sha voids the run.
+- Do NOT codesign rust-core/target/release/alcore: a codesign makes the next cargo build re-copy the output and change the sha. The codesign step in CLAUDE.md applies to the bin-native copy only.
+- `git status --short --untracked-files=no rust-core/` prints nothing at run time.
+- AGENTLENS_ALCORE is unset (the TS tests pick AGENTLENS_ALCORE, then rust-core/target/release/alcore, then bin-native: src/test/helpers/freePort.ts).
+- Run `node esbuild.js` before the suite (a fresh worktree without it failed 73 tests on `Cannot find module` for standalone/cli).
+- The CLI hot-path latency guard skips when the 1-minute load / CPUs exceeds 2; a pair counts only if at least one of its two runs EXECUTED the guard (its log shows the test passing, not a SKIPPED line).
+- Each run line records: HEAD, binary mtime and sha256, the 1-minute load at the start of the TypeScript suite, and the dirty working-tree files.
+- Any code commit after run 1 voids the pair. A commit counts as docs-only when `git diff --stat <A> <B> -- src rust-core media standalone package.json scripts` is empty.
+- TESTED-STATE: CI publishes from the committed tree, so the pair must run on exactly the committed release tree. While the owner-pending change in src/cli/hookInstall.ts (AGENT_NAMES gains cheap-worker, fast-worker, smart-worker), the untracked agents/cheap-worker.md, agents/fast-worker.md, agents/smart-worker.md, and the `skills: [ultimate-bug-scanner]` line in agents/agentlens-tldr-worker.md and agents/micro-worker.md stay uncommitted, a pair run on the working tree counts only if the release commits all of them unchanged (snapshot sha256 values: TRDD-CS2W7E77 Notes, "TESTED-STATE SNAPSHOT"). Any other owner decision on them requires one more pair on the committed tree.
+- Do not run the pair until the owner pending decisions are made and every other id in blocked-by is terminal.
+- These runs are local only: CI has not run on this branch since 2026-09-02 (see Notes).
