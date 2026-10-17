@@ -3,7 +3,7 @@ trdd-id: HSPUF5XH
 title: Bump and publish agentlenspro only after every open card is terminal and every known issue is fixed
 column: blocked
 created: 2026-09-03T10:48:30+0200
-updated: 2026-10-17T10:05:43+0200
+updated: 2026-10-17T10:33:28+0200
 current-owner: main-session
 task-type: infra
 min-approval-requirement: user
@@ -258,6 +258,7 @@ review-gate: the gate no longer demands a review for a declared-role worker's sc
 2026-10-17: the two-green-full-suite-runs requirement, previously carried by TRDD-CS2W7E77 (Notes lines of 2026-10-14 STATE and the CHANGELOG section), is now the box "Two consecutive `pnpm run test:unit` runs ..." under "Definition of done — gates green", with its rules in the section "Release full-suite pair — gate rules". CS2W7E77 stays in blocked-by until it reaches a terminal column.
 2026-10-17: owed, not done: TRDD-AVUGZV1K STATE still lists "CS2W7E77 full-suite runs" as release work; retarget it to this card's box under "Definition of done — gates green" once the other session's uncommitted edits to that file are committed. TRDD-4BZPAQWM also lists CS2W7E77 in blocked-by; drop it there when CS2W7E77 closes.
 2026-10-17: CS2W7E77 complete (fix c7c540c8, mutation-verified 2026-10-17); removed from blocked-by and from TRDD-4BZPAQWM blocked-by. Its tests 2 to 5 are order-dependent on test 1: TRDD-A77UKLVI. The TRDD-AVUGZV1K STATE retarget is still owed.
+2026-10-17: A77UKLVI closed (c65252c3, 1e22ca29). Its evidence line "Runs at HEAD 1efc0d24" means 1efc0d24 plus the test change committed as c65252c3: reproduce at c65252c3. Per-run load was not logged (runs were gated on a 1-minute load at or below 20).
 
 ## Notes and lessons learned
 
