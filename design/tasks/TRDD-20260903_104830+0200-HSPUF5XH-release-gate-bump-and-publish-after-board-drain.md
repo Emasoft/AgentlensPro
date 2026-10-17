@@ -3,7 +3,7 @@ trdd-id: HSPUF5XH
 title: Bump and publish agentlenspro only after every open card is terminal and every known issue is fixed
 column: blocked
 created: 2026-09-03T10:48:30+0200
-updated: 2026-10-17T09:42:47+0200
+updated: 2026-10-17T09:49:55+0200
 current-owner: main-session
 task-type: infra
 min-approval-requirement: user
@@ -162,7 +162,7 @@ unless the user says otherwise:
 - [ ] The `api_call` table is observed filling on the live server (per
       9SYRK6SW's own acceptance recipe).
 - [ ] Upgrade boot from a v2.33.1 data dir on a full corpus with the release alcore: record peak RSS against the cap and confirm the boot finishes its cold rescan (B' crash-loop check from 6B7VV2Z7; see Notes 2026-10-16).
-- [ ] Two consecutive `pnpm run test:unit` runs, exit 0 and 0 failing, on exactly the committed release tree, each following every rule in the section "Release full-suite pair — gate rules" below. Moved here from TRDD-CS2W7E77 on 2026-10-17.
+- [ ] Two consecutive `pnpm run test:unit` runs, exit 0 and 0 failing, on the release tree as defined in the section "Release full-suite pair — gate rules" below, each following every rule there; record each run line under that section. Moved here from TRDD-CS2W7E77 on 2026-10-17.
 
 ## Release recipe (run only after every box above is checked)
 
@@ -199,10 +199,10 @@ to `publish.yml` — a present token silently masks OIDC.
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-10-14
 
-2026-10-14: blocked by 13 cards on 2026-10-14 (trddgrep why HSPUF5XH); on 2026-10-15 the frontmatter blocked-by lists 20, and that list, not the Blocking cards table in the body, is authoritative; see TRDD-AVUGZV1K STATE for the release work not yet done (setup preflight, Docker, dist guard, CS2W7E77 full-suite runs).
+2026-10-14: blocked by 13 cards on 2026-10-14 (trddgrep why HSPUF5XH); on 2026-10-15 the frontmatter blocked-by lists 20, and that list, not the Blocking cards table in the body, is authoritative; see TRDD-AVUGZV1K STATE for the release work not yet done (setup preflight, Docker, dist guard); since 2026-10-17 the full-suite run pair is this card own box under "Definition of done — gates green", not TRDD-CS2W7E77.
 2026-10-14 release-goal state (owner goal: fix all issues, complete all TRDDs, publish). Work happens on branch fix/setup-agent-preflight; the review-gate work there (TRDD-QQ2XIIZ6, TRDD-LR4SI79M) is a detour the owner ordered mid-goal.
 NOT DONE: setup stepSkill agent preflight (dry-run returns before agent drift is checked; skills install before a missing agent source is detected) — only checkpoints cf6af337 and 4a9e87e9 exist, no fix; Dockerfile still copies and runs the retired standalone/server.js (lines 39, 65) and lacks a target-platform alcore build, media/index.html and sidebar.js; scripts/check-dist-contents.js checks only forbidden paths, not declared skills/agents or Git tracking.
-TRDD-CS2W7E77: focused serverCalibration run passed 5/5 on 2026-10-14 with alcore built at rust-core/target/release; the first full unit-suite run in a fresh worktree had 2,979 passing, 45 pending, 73 failing (exit 73), with 45 Cannot find module lines naming standalone/cli — run node esbuild.js before the suite; two consecutive full-suite runs are still required.
+TRDD-CS2W7E77: focused serverCalibration run passed 5/5 on 2026-10-14 with alcore built at rust-core/target/release; the first full unit-suite run in a fresh worktree had 2,979 passing, 45 pending, 73 failing (exit 73), with 45 Cannot find module lines naming standalone/cli — run node esbuild.js before the suite; two consecutive full-suite runs are still required: since 2026-10-17 that is this card own box under "Definition of done — gates green", with its rules in "Release full-suite pair — gate rules".
 Environment: the collector was RUNNING but not answering on port 3000 after a 'revive backoff: 6 quick crashes' warning (not restarted); more than a dozen agent worktrees under .claude/worktrees likely cause the 5 s 'git worktree list' timeouts that crash janitor detectors; the main checkout carries unrelated dirty files (src/cli/hookInstall.ts AGENT_NAMES, agents/*.md, untracked agents/cheap-worker.md fast-worker.md smart-worker.md, a staged empty design/requirements/PRRD.md) that must be handled before merging to main.
 These four lines duplicate the uncommitted STATE lines on TRDD-AVUGZV1K so they are restorable from git; this card is authoritative for them.
 
@@ -212,7 +212,7 @@ These four lines duplicate the uncommitted STATE lines on TRDD-AVUGZV1K so they 
 setup honours AGENTLENS_DATA_DIR (c24058ce); users who set only it may meet a one-time refusal naming a stray ~/.agentlens server and its stop command.
 setup refuses rather than migrating when a server owns a different data dir: changing DATA_DIR and re-running setup no longer stops the old server (973aead7, 29ec567a).
 cache-expired no longer runs the first-run self-heal (42017224).
-Do not run the TRDD-CS2W7E77 release pair until the owner's pending decisions are made and HSPUF5XH's other blockers are terminal; any later code change voids it.
+Do not run the release full-suite pair (the box under "Definition of done — gates green", formerly on TRDD-CS2W7E77) until the owner's pending decisions are made and HSPUF5XH's other blockers are terminal; any later code change voids it.
 setup's HTTP calls have overall deadlines (10 s, MCP 15 s) and its stop, verify and self-test loops are wall-clock bounded, so a stalled server fails setup within seconds instead of hanging (973aead7).
 setup refuses a stranger on the OTLP port even when our own server answers on the UI port: ownership is checked per port (973aead7).
 setup no longer stops or restarts a server it cannot prove is its own; a server run from a renamed AGENTLENS_ALCORE binary is refused as 'not provably ours' (29ec567a).
@@ -255,7 +255,7 @@ review-gate: the gate no longer demands a review for a declared-role worker's sc
 2026-10-17: 1RJBOEI1 added to blocked-by. N6A8VX3G's body-links writer ships in this release, and boot compaction of that log peaks at 3337 MiB at 700k records (measured), so without a fix every install reaches a boot crash loop as the log grows.
 2026-10-17: 1RJBOEI1 complete (5e39aa3b, 404b0021): boot compaction of a 700k body-links log now peaks at 184.7 MiB, down from 3337 MiB. Removed from blocked-by. The fsync gap it found is TRDD-O8MGRU72, now in blocked-by: this card's gate requires every known issue fixed, and that one is a data-loss window. Exempting it is an owner decision.
 - 2026-10-17, before release: (1) confirm CI on ubuntu passes an_unsyncable_temp_snapshot_is_refused_and_keeps_the_old_snapshot (Linux behaviour of the /dev/null sync is unmeasured, TRDD-O8MGRU72 residue c); (2) the local alcore binary is not redeployed since at least 6B7VV2Z7 and O8MGRU72 — rebuild, codesign -s - --force, restart and check alcore --version is not 137 (residue d).
-2026-10-17: the two-green-full-suite-runs requirement, previously carried by TRDD-CS2W7E77 (Notes lines of 2026-10-14 STATE and the CHANGELOG section), is now the box "Two consecutive `pnpm run test:unit` ..." under "Definition of done — gates green", with its rules in the section "Release full-suite pair — gate rules". CS2W7E77 stays in blocked-by until it reaches a terminal column.
+2026-10-17: the two-green-full-suite-runs requirement, previously carried by TRDD-CS2W7E77 (Notes lines of 2026-10-14 STATE and the CHANGELOG section), is now the box "Two consecutive `pnpm run test:unit` runs ..." under "Definition of done — gates green", with its rules in the section "Release full-suite pair — gate rules". CS2W7E77 stays in blocked-by until it reaches a terminal column.
 
 ## Notes and lessons learned
 
@@ -277,10 +277,10 @@ review-gate: the gate no longer demands a review for a declared-role worker's sc
 - Do NOT codesign rust-core/target/release/alcore: a codesign makes the next cargo build re-copy the output and change the sha. The codesign step in CLAUDE.md applies to the bin-native copy only.
 - `git status --short --untracked-files=no rust-core/` prints nothing at run time.
 - AGENTLENS_ALCORE is unset (the TS tests pick AGENTLENS_ALCORE, then rust-core/target/release/alcore, then bin-native: src/test/helpers/freePort.ts).
-- Run `node esbuild.js` before the suite (a fresh worktree without it failed 73 tests on `Cannot find module` for standalone/cli).
+- Run `node esbuild.js` before the suite (a fresh worktree without it failed 73 tests on `Cannot find module` for standalone/cli). If the installed agentlenspro resolves into this checkout (check with `ls -ld $(readlink -f $(which agentlenspro))`), that rebuilds the installed bundle, which TRDD-AVUGZV1K reserves to the owner: run the pair in a separate worktree instead, or only with the owner word.
 - The CLI hot-path latency guard skips when the 1-minute load / CPUs exceeds 2; a pair counts only if at least one of its two runs EXECUTED the guard (its log shows the test passing, not a SKIPPED line).
 - Each run line records: HEAD, binary mtime and sha256, the 1-minute load at the start of the TypeScript suite, and the dirty working-tree files.
-- Any code commit after run 1 voids the pair. A commit counts as docs-only when `git diff --stat <A> <B> -- src rust-core media standalone package.json scripts` is empty.
-- TESTED-STATE: CI publishes from the committed tree, so the pair must run on exactly the committed release tree. While the owner-pending change in src/cli/hookInstall.ts (AGENT_NAMES gains cheap-worker, fast-worker, smart-worker), the untracked agents/cheap-worker.md, agents/fast-worker.md, agents/smart-worker.md, and the `skills: [ultimate-bug-scanner]` line in agents/agentlens-tldr-worker.md and agents/micro-worker.md stay uncommitted, a pair run on the working tree counts only if the release commits all of them unchanged (snapshot sha256 values: TRDD-CS2W7E77 Notes, "TESTED-STATE SNAPSHOT"). Any other owner decision on them requires one more pair on the committed tree.
+- Any code commit after run 1 voids the pair. A commit counts as docs-only when `git diff --stat <A> <B> -- src rust-core media standalone package.json scripts` is empty. Exception: the release bump commit does not void the pair when its diff from the HEAD of run 2 touches only CHANGELOG.md and the `version` line of package.json (check with `git diff <run-2 HEAD> <bump commit> -- . ":!CHANGELOG.md"`, which must show only that line); otherwise the pair runs again on the bump commit.
+- TESTED-STATE: CI publishes from the committed tree, so the release tree is the committed tree. While the owner-pending change in src/cli/hookInstall.ts (AGENT_NAMES gains cheap-worker, fast-worker, smart-worker), the untracked agents/cheap-worker.md, agents/fast-worker.md, agents/smart-worker.md, and the `skills: [ultimate-bug-scanner]` line in agents/agentlens-tldr-worker.md and agents/micro-worker.md stay uncommitted, a pair run on the working tree counts only if the release commits all of them unchanged (snapshot sha256 values: TRDD-CS2W7E77 Notes, "TESTED-STATE SNAPSHOT"), and only if those five hashes, re-taken after each run, all match the snapshot. Any other owner decision on them requires one more pair on the committed tree.
 - Do not run the pair until the owner pending decisions are made and every other id in blocked-by is terminal.
 - These runs are local only: CI has not run on this branch since 2026-09-02 (see Notes).
