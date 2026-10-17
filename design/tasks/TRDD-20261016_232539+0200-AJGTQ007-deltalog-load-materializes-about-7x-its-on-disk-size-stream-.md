@@ -1,10 +1,10 @@
 ---
 trdd-id: AJGTQ007
 title: DeltaLog load materializes about 7x its on-disk size, stream the replay
-column: dev
+column: approval
 status: tasked
 created: 2026-10-16T23:25:39+0200
-updated: 2026-10-17T01:43:12+0200
+updated: 2026-10-17T08:42:55+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -32,6 +32,7 @@ TRAP: load() seeds self.written, and save(empty) tombstones only keys that seedi
 
 - 2026-10-16T23:25:39+0200 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-10-17T01:31:26+0200 — column → dev by main-agent@agentlenspro. a worker is implementing the streaming replay (uncommitted diff in delta_log.rs and cache_turns_sql.rs; tests running)
+- 2026-10-17T08:42:00+0200 — column → approval by main-agent@agentlenspro. re-scope of boxes 1 and 4 awaits the owner's decision; no code until then
 
 ## Acceptance
 
@@ -48,4 +49,16 @@ Baseline, a fact and not a criterion (2026-10-16, docs_dev/20261016-ajgtq007-rea
 2026-10-16: deaths split by boot type (read-only, a copy of server.log; docs_dev/20261016-ajgtq007-deaths-by-boot-type.md, worker-parsed). Boots that REUSED cards.duckdb died at the cap in 565 of 569 starts (median uptime 1.9 min); boots that REFUSED it, the only ones that run load() on the card snapshot, died in 10 of 11 (median 2.4 min). The crash loop happens without this card's load, so this card is not its cause. 11 refused boots are too few to rule out a moderate added effect.
 2026-10-17: box 1 reworded the same day it was written. load() returns the whole map by contract, so only the streamed query path can reach 300 MiB; load()'s reduction is measured separately. Out of scope but recorded: compact() holds the records, the whole new snapshot body and a second replayed map, which is likely about 2 GB for a 700k body-links log at boot (inferred, being measured).
 2026-10-17 after 4493f824 (two-pass streaming replay), worker-measured on n700000 in separate processes, docs_dev/20261017-ajgtq007-streaming-report.md. Query 2311.6 to 780.7 MiB: the replay is 98.6 MiB and the remaining roughly 680 MiB is DuckDB (the in-memory body_links table and query). Box 1 is NOT met. load() 1995.2 to 1564.5 MiB, because it still returns a map of serde Values; box at 997 MiB NOT met. compact() peaks at 3337.3 MiB, unchanged and over the cap: a boot that compacts a 700k body-links log would die. That is a real boot risk once body-links grows (live has none today). Next candidates, none started: (a) DuckDB, with a memory_limit and temp spill, or not materializing the table; (b) load() holding raw JSON strings or RawValue instead of Value, if callers allow; (c) compact() streaming from the replay into the new snapshot without a second full map. The review's heal-between-passes concern does not hold: heal only appends a newline, and pass 2 reads up to pass 1's length (worker's reading of the code). CI installs toolchain stable and local rustc is 1.97, so is_none_or is fine.
-2026-10-17 STATE in one line: replay streamed (4493f824); query 781 MiB and load() 1565 MiB are still over their boxes; compact() moved to TRDD-1RJBOEI1.
+2026-10-17 STATE in one line: replay streamed (4493f824). Boxes 1 and 4 measure paths production does not take as written; a re-scope is proposed to the owner (see Re-scope proposal). NEXT ACTION: the owner's decision, then implement the preset session pushdown.
+
+## Re-scope proposal for the owner (2026-10-17)
+
+- Production callers of DeltaLog::load, read at HEAD 2026-10-17: only log_reader.rs restore_from_snapshot (the card snapshot and the offsets log, lines 875-876) and the reused-boot path (the offsets log, line 1015). Body-links is never load()ed in production: boot uses compact_from_disk since TRDD-1RJBOEI1, and the remaining body-links load() calls are tests (lib.rs and cache_turns_sql.rs). So box 4 (load() on a 700k body-links log, at most 997 MiB) measures a path production does not take.
+- Proposed box 4, replacing the current one: load() on the real log-sessions card snapshot, today 478 MiB on 74.8 MB (6.7x), runs on refused-reuse boots. Target to be set after measuring.
+- Proposed box 1, replacing the current one: the cache-turns PRESET path stays under 300 MiB, by pushing the statusline window's session ids into the visitor so only relevant body-link rows are materialized in DuckDB. Raw caller SQL over api_calls stays a named limitation, because it expects every row. Pinned by a test of the preset/raw split.
+- Rejected: querying the NDJSON with read_ndjson. Its parallel scan gives no last-row-wins order guarantee, and it errors on a torn tail line, and ignore_errors is forbidden. Deferred: load() holding RawValue, which first needs proof that the hash of the on-disk bytes equals hash_json(to_string(v)) for all four writers (the 6B7VV2Z7 trap).
+- The card says loosening a box needs an owner decision. This re-scope retargets boxes 1 and 4, so it waits on the owner.
+
+## Owner decision pending (2026-10-17)
+
+- In approval because it waits on the owner's decision. Outside the ai-maestro harness the owner is the approver; min-approval-requirement stays none because the mandate was issued at none, and raising it is flagged MANDATE-FORGED by lint.
