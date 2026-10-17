@@ -93,6 +93,59 @@ function probePort(port) {
   });
 }
 
+
+function fetchDataDir(port) {
+  return new Promise((resolve, reject) => {
+    const fail = (e) => { clearTimeout(timer); reject(e); };
+    const timer = setTimeout(() => req.destroy(new Error("hard timeout 3 s")), 3000);
+    const req = http.get({ host: "127.0.0.1", port, path: "/api/server-stats", timeout: 2000 }, (res) => {
+      let body = "";
+      res.setEncoding("utf8");
+      res.on("data", (d) => { body += d; });
+      res.on("error", fail);
+      res.on("aborted", () => fail(new Error("response aborted")));
+      res.on("end", () => {
+        clearTimeout(timer);
+        if (res.statusCode !== 200) return reject(new Error(`HTTP ${res.statusCode}`));
+        try { resolve(JSON.parse(body).dataDir); } catch (e) { reject(e); }
+      });
+    });
+    req.on("timeout", () => req.destroy(new Error("timeout after 2 s")));
+    req.on("error", fail);
+  });
+}
+
+// WHY: the gate must reach the same verdict as the bench realpathOrResolve, because `.native`
+// case-canonicalizes on APFS while JS realpathSync keeps the given spelling, so each side is
+// resolved independently with the JS call and falls back to path.resolve only for that side.
+function sameDir(a, b) {
+  const resolveDir = (p) => {
+    try {
+      return fs.realpathSync(p);
+    } catch {
+      return path.resolve(p);
+    }
+  };
+  return resolveDir(a) === resolveDir(b);
+}
+
+// WHY: P2 sends real requests to whatever listens on 3000. Its dataDir gate is the only backstop
+// if the port guard regresses, and that backstop covers only a server whose reported dataDir is
+// the live ~/.agentlens. So P2 runs only when nothing listens on 3000 or the server there reports
+// the live dataDir; otherwise the caller prints a skip carrying the returned reason.
+async function p2Gate() {
+  if (!(await probePort(3000))) return null;
+  let reported;
+  try {
+    reported = await fetchDataDir(3000);
+  } catch (e) {
+    return `server on 3000 did not answer /api/server-stats: ${e.message}; the dataDir backstop cannot be checked`;
+  }
+  if (typeof reported !== "string") return "server on 3000 reports no dataDir; the dataDir backstop cannot be checked";
+  if (sameDir(reported, LIVE_DIR)) return null;
+  return `server on 3000 reports dataDir ${reported}, not ~/.agentlens; the dataDir backstop would not cover it`;
+}
+
 const results = [];
 function record(name, ok, detail) {
   results.push({ name, ok });
@@ -111,6 +164,7 @@ function brief(r) {
 const posts = () => fake.log.filter((x) => x.method === "POST").length;
 const statuslinePosts = () => fake.log.filter((x) => x.method === "POST" && x.url === "/api/statusline-samples").length;
 const isDataDirRefusal = (r) => r.status === 2 && r.stderr.includes("refusing: target dataDir (") && r.stderr.includes("is the live collector");
+
 
 async function main() {
   const srv = await startFake();
@@ -135,13 +189,19 @@ async function main() {
       p1.status === 2 && p1.stderr.includes(PORT_REFUSAL) && fake.log.length === 0 && !p1.stderr.includes("read failed"), brief(p1));
 
     // P2: --ui-port 3000. Only after D1 proved the dataDir backstop holds, since a regressed port
-    // guard would GET the live collector stats (read-only) and rely on that backstop.
+    // guard would GET the live collector stats (read-only) and rely on that backstop. Also only when
+    // p2Gate finds nothing on 3000 or a server there reporting the live dataDir (see p2Gate).
     if (!d1ok) {
       record("P2  --ui-port 3000 refuses", false, "not run: D1 failed, the dataDir backstop is unproven");
     } else {
-      const p2 = await rcase(LIVE_DIR, [...statusline, "--ui-port", "3000", "--otlp-port", F]);
-      record("P2  --ui-port 3000 refuses, 0 requests",
-        p2.status === 2 && p2.stderr.includes(PORT_REFUSAL) && fake.log.length === 0 && !p2.stderr.includes("read failed"), brief(p2));
+      const gate = await p2Gate();
+      if (gate) {
+        skip(`P2 (${gate})`);
+      } else {
+        const p2 = await rcase(LIVE_DIR, [...statusline, "--ui-port", "3000", "--otlp-port", F]);
+        record("P2  --ui-port 3000 refuses, 0 requests",
+          p2.status === 2 && p2.stderr.includes(PORT_REFUSAL) && fake.log.length === 0 && !p2.stderr.includes("read failed"), brief(p2));
+      }
     }
 
     // P3: --allow-live lifts the port refusal; with nothing on 3000 the first read fails ECONNREFUSED.
@@ -208,6 +268,8 @@ async function main() {
       if (e.code !== "ENOENT") throw e;
     }
     fs.rmSync(SCR, { recursive: true, force: true });
+    // Close any keep-alive sockets the bench left open first, so close() cannot wait on them.
+    srv.closeAllConnections();
     await new Promise((resolve) => srv.close(resolve));
   }
 
