@@ -11,6 +11,9 @@
 // (not http posts), underRate means "appends under target", and targetDownAtSec means the
 // append target (fs) went down. Acceptance deltas: logSessionsDelta>=1, summaryMissesDelta>=1,
 // dataVersionDelta>0 — the snapshot's /api/summary read is what drives the summary miss/rebuild.
+// --guard-only (transcripts mode only) is a TEST SEAM: it exits 0 right after the transcripts-home
+// guard accepts the path, before any write or http call. It only exits early; it never weakens the
+// guard. BENCH_TEST_EXTRA_PROTECTED_ROOT (env) is the other test seam: it can only ADD a protected root.
 import http from 'node:http';
 import path from 'node:path';
 import os from 'node:os';
@@ -47,12 +50,18 @@ function parseArgs(argv) {
     // TRDD-PQ40PZ9D: transcripts mode appends synthetic Claude Code JSONL lines to
     // <transcriptsHome>/.claude/projects/bench-transcripts/<session>.jsonl.
     transcriptsHome: '', linesPerSec: 5,
+    // TRDD-PQ40PZ9D: --guard-only is a TEST SEAM (scripts/test-flood-transcripts-guard.js). It
+    // only exits 0 right AFTER the transcripts-home guard has accepted the path, before any write
+    // or http call. It never skips or weakens the guard: a refused path still exits 2.
+    guardOnly: false,
   };
   const errors = [];
   const given = new Set();
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--allow-live') { out.allowLive = true; continue; }
+    // Boolean flag, so an explicit branch: FLAG_TO_KEY holds only value flags.
+    if (a === '--guard-only') { out.guardOnly = true; continue; }
     if (a === '--mix') { out.mix = argv[++i]; continue; }
     // Object.hasOwn, not a bare index: FLAG_TO_KEY[a] resolves an inherited name like
     // "constructor" or "toString" to Object.prototype's own method instead of undefined,
@@ -114,6 +123,9 @@ function validateArgs(out, given) {
   if (!Number.isInteger(out.linesPerSec) || out.linesPerSec < 1) errors.push('--lines-per-sec must be an integer >= 1');
   if (out.mix === 'transcripts' && !out.transcriptsHome) errors.push('--mix transcripts requires --transcripts-home');
   if (out.mix !== 'transcripts' && out.transcriptsHome) errors.push('--transcripts-home is only valid with --mix transcripts');
+  // TRDD-PQ40PZ9D: the --guard-only test seam exits right after the transcripts guard, so it means
+  // nothing (and would silently run a full flood) in any other mode.
+  if (out.guardOnly && out.mix !== 'transcripts') errors.push('--guard-only is only valid with --mix transcripts');
   return errors;
 }
 
@@ -624,28 +636,24 @@ function realpathOrResolve(p) {
 // TRDD-PQ40PZ9D (2026-10-17): the transcripts guard used realpathOrResolve(), whose
 // path.resolve() fallback for a nonexistent leaf never follows an ANCESTOR symlink — a link
 // L -> <home>/.claude/projects with --transcripts-home L/zz passed the guard and the bootstrap
-// wrote 16 files through it before the post-mkdir re-resolve refused. This resolves the path
-// the way the OS will: component by component, left to right, following every existing symlink
-// (fs.realpathSync.native) BEFORE applying a later `..` — path.resolve() collapses `L3/../zz` to
-// `zz` lexically while the kernel resolves it as `<target of L3>/../zz`. Components past the
-// deepest existing one are appended as a tail. Never creates anything. Returns
-// { refused: <reason> } on any lstat error other than ENOENT (EACCES, ELOOP, ...) or when an
-// existing component cannot be realpath'd (a dangling symlink) — the caller must exit 2.
+// wrote 16 files through it before the post-mkdir re-resolve refused. This walks the path's
+// components left to right, following each existing symlink with fs.realpathSync.native;
+// components past the deepest existing one are appended unchanged as a tail. ENOENT on a
+// component starts the tail; any other lstat error (EACCES, ELOOP, ...) or an existing component
+// that cannot be realpathed (a dangling symlink) returns { refused: <reason> } and the caller
+// must exit 2. Never creates anything.
+// PRECONDITION: `p` is absolute and already equal to path.resolve(p) (no "." or ".." segments).
+// The caller normalizes first because the writer (path.join) collapses ".." by text, so the
+// guard must judge that same string. A violation is a programmer error: it throws, and
+// main().catch turns that into exit 1.
 function realpathOfDeepestAncestor(p) {
-  let cur;
-  try {
-    cur = path.isAbsolute(p) ? path.parse(path.resolve(p)).root : fs.realpathSync.native(process.cwd());
-  } catch (e) {
-    return { refused: `cannot resolve the working directory: ${e.message}` };
+  if (!path.isAbsolute(p) || p !== path.resolve(p)) {
+    throw new Error(`realpathOfDeepestAncestor: expected an absolute, normalized path, got ${JSON.stringify(p)}`);
   }
+  let cur = path.parse(p).root;
   const tail = [];
   for (const part of p.split(path.sep)) {
-    if (part === '' || part === '.') continue;
-    if (part === '..') {
-      if (tail.length > 0) tail.pop();
-      else cur = path.dirname(cur);
-      continue;
-    }
+    if (part.length === 0) continue;
     if (tail.length > 0) { tail.push(part); continue; }
     const candidate = path.join(cur, part);
     try {
@@ -727,33 +735,52 @@ async function main() {
   // HOME=<scratch>, which would make os.homedir() compare against the wrong directory and let
   // the guard miss the hit. Runs BEFORE the first fetchSnapshot and before any worker starts.
   if (args.mix === 'transcripts') {
+    // The writer (ensureTranscriptFile) builds every path with path.join, which collapses ".." by
+    // TEXT before the kernel sees it, so the guard must judge exactly that normalized string:
+    // HOME/linkToScratch/../x is written under HOME/x, not under <target of linkToScratch>/../x.
+    const rawHome = args.transcriptsHome;
+    args.transcriptsHome = path.resolve(rawHome);
     const REAL_HOME = realpathOrResolve(os.userInfo().homedir);
     const realClaude = realpathOrResolve(path.join(REAL_HOME, '.claude'));
-    const resolvedHome = realpathOrResolve(args.transcriptsHome);
-    if (
-      resolvedHome === realClaude || resolvedHome.startsWith(realClaude + path.sep)
-      || resolvedHome === REAL_HOME || resolvedHome.startsWith(REAL_HOME + path.sep)
-      || resolvedHome === '/'
-    ) {
-      console.error(`refusing: --transcripts-home ${args.transcriptsHome} is the real home (or its .claude); pass an isolated scratch home`);
+    const roots = [REAL_HOME, realClaude];
+    // TEST SEAM (scripts/test-flood-transcripts-guard.js): BENCH_TEST_EXTRA_PROTECTED_ROOT can only
+    // ADD a protected root, never remove one, so a test can prove the guard on a scratch proxy of
+    // the real home without writing anywhere near it.
+    const extraRoot = process.env.BENCH_TEST_EXTRA_PROTECTED_ROOT;
+    if (extraRoot) {
+      if (!fs.existsSync(extraRoot)) {
+        console.error(`refusing: BENCH_TEST_EXTRA_PROTECTED_ROOT ${extraRoot} does not exist`);
+        process.exit(2);
+      }
+      roots.push(realpathOrResolve(extraRoot));
+    }
+    // Pre-write check: resolve every existing ancestor symlink the way the OS will before the
+    // first mkdir, so a link into a protected root is refused with nothing written.
+    const r = realpathOfDeepestAncestor(args.transcriptsHome);
+    if (r.refused) {
+      console.error(`refusing: --transcripts-home ${rawHome} (resolved: ${args.transcriptsHome}): ${r.refused}`);
       process.exit(2);
+    }
+    const hit = protectedHit(r.path, roots);
+    if (hit) {
+      console.error(`refusing: --transcripts-home ${rawHome} (resolved: ${r.path}) is inside protected root ${hit}; pass an isolated scratch home`);
+      process.exit(2);
+    }
+    if (args.guardOnly) {
+      console.log(`guard-only: --transcripts-home ${rawHome} accepted (resolved: ${r.path})`);
+      process.exit(0);
     }
     // Bootstrap the fixed bench project dir + one file per current session-window id; the
     // worker lazily ensures files for session ids the window grows into.
     for (const s of sessionWindow) ensureTranscriptFile(args.transcriptsHome, s);
-    // Symlink ceiling: the lexical resolve() above passes on a nonexistent scratch leaf, but a
-    // symlinked home could write through into the real tree — after the bootstrap mkdir,
-    // re-resolve and refuse if it resolves into the real home or its .claude.
-    const resolvedAfterMkdir = realpathOrResolve(args.transcriptsHome);
-    if (resolvedAfterMkdir !== resolvedHome) {
-      if (
-        resolvedAfterMkdir === realClaude || resolvedAfterMkdir.startsWith(realClaude + path.sep)
-        || resolvedAfterMkdir === REAL_HOME || resolvedAfterMkdir.startsWith(REAL_HOME + path.sep)
-        || resolvedAfterMkdir === '/'
-      ) {
-        console.error(`refusing: --transcripts-home ${args.transcriptsHome} resolves (symlink) into the real home; pass an isolated scratch home`);
-        process.exit(2);
-      }
+    // Post-mkdir ceiling (backstop): the kernel realpath of the directory just created, independent
+    // of realpathOfDeepestAncestor, checked after the bootstrap writes but before any worker
+    // starts. bench-transcripts is the only directory this script writes, so it is the one to judge.
+    const created = fs.realpathSync.native(path.join(args.transcriptsHome, '.claude', 'projects', TRANSCRIPT_SLUG));
+    const createdHit = protectedHit(created, roots);
+    if (createdHit) {
+      console.error(`refusing: --transcripts-home ${rawHome} resolves (after mkdir) into protected root ${createdHit}; pass an isolated scratch home`);
+      process.exit(2);
     }
   }
   // Item 5/7 read #1: the FIRST /api/server-stats read doubles as the live-dataDir check below —
