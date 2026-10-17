@@ -3,7 +3,7 @@ trdd-id: B7DSTJLS
 title: cacheBreakTimeline tests pass in CI and fail on a developer machine, and fail differently depending on run order
 column: todo
 created: 2026-08-29T16:50:19+0200
-updated: 2026-10-16T11:15:59+0200
+updated: 2026-10-17T10:44:11+0200
 current-owner: main-session
 task-type: bugfix
 scope: project
@@ -118,13 +118,13 @@ Find what is unbounded, before changing any timeout. In order:
 
 ## Acceptance
 
-- [ ] The failing cases are bounded by construction — no parameter of `buildCacheBreakTimeline`
+- [x] The failing cases are bounded by construction — no parameter of `buildCacheBreakTimeline`
       defaults to a real user path in any test in this file.
-- [ ] The whole file passes on THIS machine (a 26,377-session corpus), not only on a clean CI HOME.
-- [ ] The run-order dependence is explained and gone: `--grep` on a subset gives the same verdict
+- [x] ~~The whole file passes on THIS machine (a 26,377-session corpus), not only on a clean CI HOME.~~ STRUCK 2026-10-17 (see Approval log): since 091799ee every mocha run uses a scratch HOME, so this machine and a clean CI HOME are the same environment and the real-corpus cases always skip; the scratch part passes (72 passing, 3 pending, 0 failing). Real-corpus coverage is TRDD-2R0AXCKL's.
+- [x] The run-order dependence is explained and gone: `--grep` on a subset gives the same verdict
       for those cases as the full-file run.
-- [ ] Mutation-verified: reintroduce the unbounded default on one call site and its test must fail.
-- [ ] The 2026-08-13 comment is updated with what was actually found, so the next reader does not
+- [x] Mutation-verified: reintroduce the unbounded default on one call site and its test must fail. REWORDED 2026-10-17 (see Approval log): since 091799ee the default cannot be unbounded under mocha, so the test stays green; verified instead by fs trace that dropping hookEventsDir: noStore at :875 redirects the read to the scratch DATA_DIR hook-events (2 readdirSync) while the control reads no hook-events dir at all.
+- [x] The 2026-08-13 comment is updated with what was actually found, so the next reader does not
       re-derive it a third time.
 
 ## Notes and lessons learned
@@ -144,3 +144,12 @@ used the pre-fix out/ and ran under a deliberate load storm). → ai_review.
 ## Approval log
 
 - 2026-10-16T11:13:11+0200 — column → todo by main-agent@agentlenspro. work stalled mid-way or never started; no one works it now; triage row 26
+2026-10-17 — main-agent@agentlenspro (under the owner order of 2026-10-05) STRUCK box 2 and REWORDED box 4. Grounds: since 091799ee the scratch HOME makes both unmeasurable as written; box 2's real-corpus half needs the real data dir, which the agent reads the 2026-10-04 directive ('anything against the real data directory') as reserving to the owner, and is carried by TRDD-2R0AXCKL, which is in backburner, so that coverage is parked, not actively worked; box 4 is verified by fs trace instead of a red test. Veto: the owner restores either box, which re-opens this card.
+
+## Closing evidence 2026-10-17
+
+- Box 1: the 12 scratch sites pass storeDir and hookEventsDir as noStore (census of 2026-09-05; the :875 site re-confirmed 2026-10-17); the two deliberate real-corpus call sites (3 skipped tests in all) rely on the defaults, which since 091799ee resolve into the scratch HOME, so they skip (they are bounded, and hollow under mocha).
+- Box 2: whole file at HEAD 8b45b815, load 7.6: 72 passing, 3 pending (the real-corpus cases, skipped because defaultBodiesDir() is absent under the scratch HOME), 0 failing. Corpus on this machine: 44,433 transcripts, hook-events 493 MB, store 1.8 GB.
+- Box 3: the run-order shape is gone: the --grep subset gave 7 of 7 passing, the same verdict per title as the whole-file run (load 7.4). Both store and hook-events defaults now resolve to an empty scratch dir (source read: dataPath honours AGENTLENS_DATA_DIR, then DATA_DIR, then HOME; setup.js sets HOME and DATA_DIR and deletes AGENTLENS_DATA_DIR). Which change removed the shape, aef94208 or 091799ee, is not separated, and it was not re-run under heavy load.
+- Box 4: fs trace (scripts_dev/trace-fs-opens.cjs): control touched no hook-events dir; mutant listed <mocha scratch>/data/hook-events twice. Neither touched the real ~/.agentlens/hook-events or ~/.claude/projects (within what the preload patches: readdir, opendir, open, stat; a readFileSync of a fixed path would not show). Both runs listed the real ~/.agentlens/hook-spool: that is setup.js's deliberate read-only end-of-run leak check (setup.js:382), confirmed by position: in the control trace the test's own last read is line 59 and the hook-spool listing plus 172 stats are lines 60 to 232, the end of the run. Reports: docs_dev/20261017-b7dstjls-verify-report.md, docs_dev/20261017-b7ds-trace-mutation-report.md (gitignored scratch).
+- Box 5: the comment above noStore in src/test/cacheBreakTimeline.test.ts now records the hookEventsDir half, the setup.js isolation and the skip side effect.
