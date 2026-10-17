@@ -3,7 +3,7 @@ trdd-id: HSPUF5XH
 title: Bump and publish agentlenspro only after every open card is terminal and every known issue is fixed
 column: blocked
 created: 2026-09-03T10:48:30+0200
-updated: 2026-10-17T09:52:09+0200
+updated: 2026-10-17T10:05:43+0200
 current-owner: main-session
 task-type: infra
 min-approval-requirement: user
@@ -12,7 +12,7 @@ created-by: main-session
 npt: []
 eht: []
 pre-block-column: todo
-blocked-by: [2R36W8Q1, N60JUWU3, CAJ5RCP9, 9SYRK6SW, QE114936, 768NEX6E, 7YPQWKPG, 7NHUU6GK, ZSX34J8F, 2R0AXCKL, 2TQHNMEC, CS2W7E77, H3D5ZBO1, WCENKH6T, WCG7I5D8, WBYDQH8K, ATXO2E1J, OLKITCS7, JDQR0HDT]
+blocked-by: [2R36W8Q1, N60JUWU3, CAJ5RCP9, 9SYRK6SW, QE114936, 768NEX6E, 7YPQWKPG, 7NHUU6GK, ZSX34J8F, 2R0AXCKL, 2TQHNMEC, H3D5ZBO1, WCENKH6T, WCG7I5D8, WBYDQH8K, ATXO2E1J, OLKITCS7, JDQR0HDT]
 post-release-verification: [IXMB2JVD]
 blocker-probe: [trddgrep, why, HSPUF5XH]
 blocker-holds-if: not-match:READY
@@ -257,6 +257,7 @@ review-gate: the gate no longer demands a review for a declared-role worker's sc
 - 2026-10-17, before release: (1) confirm CI on ubuntu passes an_unsyncable_temp_snapshot_is_refused_and_keeps_the_old_snapshot (Linux behaviour of the /dev/null sync is unmeasured, TRDD-O8MGRU72 residue c); (2) the local alcore binary is not redeployed since at least 6B7VV2Z7 and O8MGRU72 — rebuild, codesign -s - --force, restart and check alcore --version is not 137 (residue d).
 2026-10-17: the two-green-full-suite-runs requirement, previously carried by TRDD-CS2W7E77 (Notes lines of 2026-10-14 STATE and the CHANGELOG section), is now the box "Two consecutive `pnpm run test:unit` runs ..." under "Definition of done — gates green", with its rules in the section "Release full-suite pair — gate rules". CS2W7E77 stays in blocked-by until it reaches a terminal column.
 2026-10-17: owed, not done: TRDD-AVUGZV1K STATE still lists "CS2W7E77 full-suite runs" as release work; retarget it to this card's box under "Definition of done — gates green" once the other session's uncommitted edits to that file are committed. TRDD-4BZPAQWM also lists CS2W7E77 in blocked-by; drop it there when CS2W7E77 closes.
+2026-10-17: CS2W7E77 complete (fix c7c540c8, mutation-verified 2026-10-17); removed from blocked-by and from TRDD-4BZPAQWM blocked-by. Its tests 2 to 5 are order-dependent on test 1: TRDD-A77UKLVI. The TRDD-AVUGZV1K STATE retarget is still owed.
 
 ## Notes and lessons learned
 

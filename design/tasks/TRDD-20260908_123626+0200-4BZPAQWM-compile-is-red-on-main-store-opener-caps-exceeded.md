@@ -3,14 +3,14 @@ trdd-id: 4BZPAQWM
 title: pnpm run compile is red on main — store-opener caps exceeded, and they may only go down
 column: blocked
 created: 2026-09-08T12:36:26+0200
-updated: 2026-10-16T17:07:15+0200
+updated: 2026-10-17T10:05:48+0200
 current-owner: main-session
 task-type: bugfix
 scope: project
 min-approval-requirement: none
 implementation-commits: [a81972f9, 7a6d6038, 8002f1f6, b79c7752, e9ec120b]
 assignee: main-session
-blocked-by: [B7DSTJLS, CS2W7E77]
+blocked-by: [B7DSTJLS]
 status: tasked
 pre-block-column: dev
 unblock-when: [trdd:B7DSTJLS terminal, trdd:CS2W7E77 terminal]

@@ -1,9 +1,9 @@
 ---
 trdd-id: CS2W7E77
 title: The five P5 window auto-calibration tests fail deterministically on a burn-config ENOENT
-column: todo
+column: complete
 created: 2026-09-04T14:22:35+0200
-updated: 2026-10-15T18:39:07+0200
+updated: 2026-10-17T10:03:12+0200
 current-owner: main-session
 task-type: bugfix
 project-id: agentlenspro
@@ -12,6 +12,7 @@ created-by: main-session
 npt: []
 eht: []
 blocked-by: []
+status: archived
 ---
 
 # The five P5 window auto-calibration tests fail deterministically
@@ -130,19 +131,19 @@ handoff that edit owed.
 
 ## Acceptance
 
-- [ ] Determine whether the five failures share ONE cause or five. The shared `suiteSetup` makes one
+- [x] Determine whether the five failures share ONE cause or five. The shared `suiteSetup` makes one
       likely but does not prove it. Tickable either way — this box asks a question, it does not
       presuppose the answer. (Reworded 2026-09-04: it previously read "the root cause of the empty
       span store is identified", which PRESUPPOSED the hypothesised chain, so an implementer who
       found four independent causes could not have ticked it without arguing with the card. That is
       the same defect as the load-average option on TRDD-2R0AXCKL — an unproven cause hardening
       into an acceptance criterion.)
-- [ ] Whether this is a product defect (calibration not ported to Rust) or a fixture defect (stale
+- [x] Whether this is a product defect (calibration not ported to Rust) or a fixture defect (stale
       binary, missed env var) is decided and recorded. Both are legitimate outcomes; an un-decided
       "it's probably the fixture" is not.
-- [ ] All five tests pass, or any that are mis-specified are rewritten to assert the real
+- [x] All five tests pass, or any that are mis-specified are rewritten to assert the real
       behaviour. A test deleted to make a gate green does not satisfy this box.
-- [ ] Two consecutive full-suite runs show zero `P5 window auto-calibration` failures.
+- [x] Two consecutive full-suite runs show zero `P5 window auto-calibration` failures.
 
 ## Notes and lessons learned
 2026-09-24T08:56:26+0200 — from superseded/duplicate TRDD-XI3UZUTK (same 5 P5 failures, same suite): the boot log showed "file watching unavailable ... falling back to a 5s full poll" — supports the timing/race hypothesis (5s poll interval racing a tighter test timeout) named as the leading candidate cause here.
@@ -186,3 +187,16 @@ Run E1: HEAD 7c077027 (code identical at 8a9e472f: git diff --stat 7c077027 8a9e
 2026-10-15: test-only commit cc0cee02 (TRDD-10NGH2BR) landed after run E1, so the pair restarts at cc0cee02; run E1 at 7c077027 no longer counts as run 1.
 2026-10-15: correction to Run E1: its load 10.7 was read at the start of the whole gate, not at the start of the TypeScript suite; the reading at the gate's end was 20.20 (1 minute) and 37.47 (15 minutes).
 2026-10-15: correction to Run E1: the TypeScript run also tested the other uncommitted files in the working tree (CLAUDE.md, memory pages, cards), which the five TESTED-STATE hashes do not cover.
+
+## Closing evidence 2026-10-17
+
+- Box 1, one cause, verified by mutation (2026-10-17, HEAD c166f05b): alcore built from HEAD at rust-core/target/release (sha256 b77e6b7897f03ccd892eb56db366b31de21a954a7a6e66b27f49c3b7822f57ce; the suite boots it, per alcoreTestBin in src/test/helpers/freePort.ts, which checks target/release before bin-native, read first-hand). With the 5 s poll that c7c540c8 put in burnStatusAccount: 3 of 3 runs pass all five tests. With the poll reverted to the single read: 5 of 5 runs fail all five. Test 1 fails at "account window must exist before the stall"; tests 2 to 5 fail on ENOENT for burn-config.json. By the test order and that assertion text, test 1 aborts before its stall can write the file the others read, so the ENOENT is downstream of the missing window, as the hypothesis above said. Detail: docs_dev/20261017-cs2w7e77-mutation-report.md (gitignored scratch).
+- Not separated: which server-side lag the poll absorbs, the stale cached summary of TRDD-2R36W8Q1 or the 5 s full-poll fallback when file watching is unavailable (the boot log noted from XI3UZUTK). The fix tolerates either for up to 5 s; a host where a lag exceeds 5 s would fail test 1 again.
+- Box 2, fixture defect: the test assumed read-your-writes from /api/burn-status right after an OTLP POST, which the product does not guarantee (TRDD-2R36W8Q1). Calibration itself is ported and works: all five pass against alcore built from HEAD.
+- Box 3: all five pass; none deleted or skipped (no skip in the file); the four negative tests do not call burnStatusAccount, so the poll cannot make them pass vacuously (read 2026-10-17).
+- Box 4: consecutive full-suite runs with zero P5 failures: gate run A1 (HEAD 29ec567a; it had 2 unrelated failures) then B1 (HEAD 0bb935cb; 0 failing); later E1 (7c077027) and the 0R0NGVK6 and A2KNXCNH runs also show 5 of 5. Local runs only; CI has not run on this branch since 2026-09-02.
+- The release requirement of two fully green full-suite runs, logged in the Notes above, is no longer this card's: it is a box on TRDD-HSPUF5XH with its rules (commits 446a95de, ea9ae030, c166f05b). The Notes above stay as history.
+
+## Approval log
+
+- 2026-10-17T10:03:12+0200 — COMPLETE by main-agent@agentlenspro. Fixed by c7c540c8, verified by a mutation run on HEAD c166f05b (poll reverted: 0 of 5 runs green; restored: 3 of 3); closed under the owner order of 2026-10-05 (decide on verified facts and tests)..
