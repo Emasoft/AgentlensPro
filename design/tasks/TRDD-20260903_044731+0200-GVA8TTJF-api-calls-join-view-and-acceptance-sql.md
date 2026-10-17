@@ -1,9 +1,9 @@
 ---
 trdd-id: GVA8TTJF
 title: api_calls coalesced view, cache_turns statusline join, and the acceptance SQL
-column: dev
+column: blocked
 created: 2026-09-03T04:47:31+0200
-updated: 2026-10-17T07:05:49+0200
+updated: 2026-10-17T07:38:09+0200
 current-owner: main-session
 task-type: feature
 priority: high
@@ -12,9 +12,13 @@ parent-trdd: CAJ5RCP9
 created-by: main-session
 npt: []
 eht: []
-blocked-by: []
+blocked-by: [AJGTQ007]
 status: tasked
-implementation-commits: [fb09facf, da5af103, 56d960e1]
+implementation-commits: [fb09facf, da5af103, 56d960e1, 79f93dfc]
+pre-block-column: dev
+unblock-when: [trdd:AJGTQ007 terminal]
+blocker-probe: [trddgrep, why, GVA8TTJF]
+blocker-holds-if: not-match:READY
 ---
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-10-17
@@ -31,10 +35,11 @@ implementation-commits: [fb09facf, da5af103, 56d960e1]
 - Design source: `reports/trdd-caj5rcp9/20260903_044515+0200-api-calls-table-design.md` §4-5
   (acceptance SQL block) — superseded on the coalescing-key point by the advisor verdict.
 - Blocked-by was cleared on 2026-10-16 (see Notes): 9SYRK6SW (now in deploy) and N6A8VX3G (now in testing)
-  had landed their code, so the card has no blocker and its column is dev;
-  neither is terminal.
+  had landed their code, so that blocker was cleared and the card entered dev;
+  neither is terminal. Since 2026-10-17 the card is blocked on TRDD-AJGTQ007 (see NEXT ACTION).
 - 2026-10-17: round 2 committed as 56d960e1 (with da5af103, the rename and doc commit). The round 2 items are listed in the Round 2 landed section at the end of this card.
-  NEXT ACTION: after the owner-facing items in that section (live acceptance needs an alcore deploy; the memory box and B3 wait on TRDD-AJGTQ007), run the full agentlens-core test suite on HEAD (owed; only the 37 cache_turns_sql lib tests ran on the final bytes), then move this card to blocked on TRDD-AJGTQ007 for B3 (registration).
+  NEXT ACTION: B3 (registration) waits on TRDD-AJGTQ007's memory box; the card is blocked on it. The owner-facing item (live acceptance needs an alcore deploy) does not gate unblocking; it gates closing boxes 2, 3 and 5. After B3 the next move is ai_review. The full suite ran green on 79f93dfc.
+  If AJGTQ007 ends cancelled or superseded, re-block on its successor: the auto-restore does not mean the memory box is solved.
 
 ## WHY
 
@@ -98,6 +103,7 @@ pattern), not as SQL `CREATE VIEW` statements:
 - 2026-10-16T21:42:38+0200 — column → testing by main-agent@agentlenspro. ai_review done: code on HEAD (fb09facf), synthetic tests pass; live acceptance boxes 2, 3, 5 need the alcore rebuild and restart
 - 2026-10-16T21:43:42+0200 — column → ai_review by main-agent@agentlenspro. correction: the earlier move to testing said 'ai_review done', but no code review of fb09facf had happened, only a blocker triage plus synthetic tests; back to ai_review for a real review
 - 2026-10-16T21:52:20+0200 — column → dev by main-agent@agentlenspro. ai_review failed: 4 blockers (body-links wrapper and UUID typing, unregistered tool, writePct formula)
+- 2026-10-17T07:33:57+0200 — column → blocked by main-agent@agentlenspro. B3 registration and the memory box wait on TRDD-AJGTQ007 streaming replay; round 2 landed (56d960e1, 79f93dfc); full suite 878/0
 
 ## Notes and lessons learned
 2026-10-16: blocked-by [9SYRK6SW, N6A8VX3G] cleared (not moved to npt: an NPT must be terminal before its parent passes dev, and neither is, and CAJ5RCP9 already claims both as EHTs). The dependency was build order and is satisfied. Figures in this note (timestamps, 4752 parts, strings count 0) are reported by the triage worker and not re-checked by main; that CAJ5RCP9 claims both as EHTs is inferred from lint output that showed one of them. Both landed before this card entered dev (34668285 at 19:57, dev at 20:07 on 2026-10-08; 9SYRK6SW's writer has written 4752 api_call parts). The one remaining gate for live boxes 2, 3 and 5 is an alcore rebuild from HEAD, codesign and restart: the deployed bin-native alcore is dated 2026-10-03 and contains neither body-links nor run_cache_turns_sql (strings count 0), and the collector is currently down in an RSS-cap crash loop. Synthetic tests pass: cache_turns_sql 4/4, body_link 2/2. Box wording is left for the owner: box 1 names a call_id that does not exist (pairing is via link rows), box 3 names run_diagnostics_sql where the arm is run_cache_turns_sql. Evidence: docs_dev/20261016-gva8-n6a8-cycle-report.md (gitignored).
@@ -145,10 +151,12 @@ Review round 3 (post-implementation writes) — no blockers, three dispositions:
 
 - 56d960e1: N2 span-window join (a call joins within 60 s of the turn's [min_ts, max_ts]; ranked by distance to the span, ties to the later span end); M4 subagent filter on the turn join only (any cc_is_subagent value other than false, case- and space-insensitive); m4 single wrapper LIMIT with the preset's 100-row default and outer ORDER BY ts DESC.
 - API change, fail-fast: limit must be a whole number in [1, 2000]; window_hours must be finite and in (0, 8760]. Before, for raw SQL, limit 0 ran as LIMIT 0, 5000 ran in full and 5.5 truncated to 5; for the acceptance preset any limit was a parser error (doubled LIMIT). The only caller is the ui.rs run_cache_turns_sql dispatch arm (ui.rs:3129), and the tool is not yet registered (B3), so no listed consumer sees the change.
-- Evidence: 37/37 cache_turns_sql lib tests green on the final bytes (119 other tests filtered out; the full agentlens-core suite has not yet run on HEAD), clippy -D warnings clean on the r11 bytes (r12 is comment-only), 14 mutants with 13 killed; Cord (the preset's outer ORDER BY removed) SURVIVED because DuckDB keeps the inner order. Report: reports/GVA8TTJF/20261017_065054+0200-review-rounds-2-to-5-final-report.md
+- Evidence: 37/37 cache_turns_sql lib tests green on the final bytes (119 other tests filtered out; the full suite ran later on 79f93dfc, see below), clippy -D warnings clean on the r11 bytes (r12 is comment-only), 14 mutants with 13 killed; Cord (the preset's outer ORDER BY removed) SURVIVED because DuckDB keeps the inner order. Report: reports/GVA8TTJF/20261017_065054+0200-review-rounds-2-to-5-final-report.md
 - Known limitation, pinned by an_orphan_response_without_a_header_joins_the_turn: an orphan response (no request part) has no billing header and joins as a main-thread call.
 - Raw caller SQL with no limit is still unbounded (deliberate; relevant to the memory box owned by TRDD-AJGTQ007). Raw-SQL order under a limit relies on DuckDB keeping a subquery's order (pinned by raw_sql_keeps_its_own_order_under_a_caller_limit).
 - Open: the doc comment above varchar_session_id still describes the code wrongly (fastedit refused the edit); rustfmt shows 81 hunks against 52 at HEAD, left unformatted; m6 (embed the api relation once) deferred until the caller-SQL hardening decision; the D4 link-key collision in lib.rs body_link_row belongs to TRDD-N6A8VX3G; the statusline GUARANTEED_COLUMNS gap (m2) (now TRDD-Q0IFYJFO); registration (B3) stays blocked on TRDD-AJGTQ007.
 - m2 now owned by TRDD-Q0IFYJFO.
-- Open, new: the ui.rs arm reads the MCP argument `window` (args.get("window")), but the refusal message says `window_hours must be…`, so an MCP caller sees an error naming an argument it never passed. To fix in a follow-up commit.
+- Open, new: the ui.rs arm reads the MCP argument `window` (args.get("window")), but the refusal message says `window_hours must be…`, so an MCP caller sees an error naming an argument it never passed. (fixed in 79f93dfc).
 - Open: lint DERIVED-FLAG-MISSING. The eht list of TRDD-CAJ5RCP9 names this card, but this card lacks derived: true. The lint header names TRDD-6SPXOV0P, which does not list this card (its eht is TRDD-7NHUU6GK only). Read the CAJ5RCP9 eht entry and its reason before changing either card; not yet read in full.
+- 79f93dfc closes the `window` naming item: the refusal now says `window (hours) must be ...` (the MCP argument the ui.rs arm reads is `window`); the test asserts that prefix, and restoring the old text fails exactly that test. The full agentlens-core suite with default features (lib, every integration target, doc-tests) ran on that commit's bytes: 878 passed, 0 failed. The main agent read the totals, the clippy output (clean) and the mutation run (36 passed, 1 failed, the target test only).
+- Residue: the doc comment of window_hours_outside_zero_to_one_year_is_refused_by_name still says the error names `window_hours`. fastedit cannot reach a doc comment above a #[test] attribute, the same limit as the varchar_session_id comment. Next try: one fastedit edit --replace of each whole function, doc comment included; if fastedit refuses, the owner decides.
