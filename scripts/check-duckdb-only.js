@@ -210,10 +210,28 @@ const isTestPath = (rel) =>
 // deleted by a81972f9 directly, not via a repoint; `forensicsDb.ts` is LIVE (bundled via
 // src/cli/setup.ts) and `forensicsIndex.ts` is LIVE as a rust-core parity-oracle root
 // (reports/4BZPAQWM/20260924_104703+0200-dead-module-set.md §3) — neither is scheduled for deletion.
-const MAX_NON_TEST_OPENERS = 22
-// 2026-09-24: lowered to the measured count after TRDD-4BZPAQWM deleted src/database/* and
-// sessionRepository.ts (a81972f9).
-const MAX_TEST_OPENERS = 8
+// 2026-10-17 (TRDD-4BZPAQWM): DEFENDED RAISE, and it moves the ratchet the wrong way. Seven files began
+// opening a store after 8002f1f6, the commit at which the caps stood at 22 and 8, and none stopped: the
+// opener sets at the two commits differ by exactly these seven. Two of them existed before 8002f1f6 and
+// became openers in the commit named, so "added" is the wrong word for them.
+//   non-test (+4):
+//     rust-core/crates/agentlens-core/src/burn/investigator_scan.rs (cbe06222, TRDD-QSFYIHUO)
+//     rust-core/crates/agentlens-core/src/cache_event_log.rs (cc49a819, TRDD-QSFYIHUO)
+//     rust-core/crates/agentlens-core/src/cache_turns_sql.rs (fb09facf, TRDD-GVA8TTJF)
+//     rust-core/crates/agentlens-digest/src/lib.rs (69b7d406, TRDD-VXD881R6): its own database file for
+//       the aldigest process, kept out of alcore by design.
+//   test (+3):
+//     rust-core/crates/agentlens-core/tests/card_reuse.rs (94125a8d, TRDD-9VX3WTGU): needs a raw handle on cards.duckdb.
+//     rust-core/crates/agentlens-store/tests/spill.rs (cdb13539, TRDD-9VX3WTGU Phase B): the store crate's own test of DuckDB spill.
+//     rust-core/crates/agentlens-core/tests/chores_prefix_wiring.rs (d74c74dd, TRDD-QSFYIHUO step 2): classification inferred, not verified.
+// The three non-test core files (burn/investigator_scan.rs, cache_event_log.rs, cache_turns_sql.rs) each
+// need a handle with duplicated settings. They are reducible only by a data-returning gateway, owed to the
+// follow-up card named on TRDD-4BZPAQWM. Deduplicating them into a helper that returns a Connection lowers
+// no count honestly: any such helper's call sites must be counted.
+const MAX_NON_TEST_OPENERS = 26
+// 2026-09-24: lowered to the measured count (raised again 2026-10-17, see above) after TRDD-4BZPAQWM
+// deleted src/database/* and sessionRepository.ts (a81972f9).
+const MAX_TEST_OPENERS = 11
 
 // WHAT THIS CAP DOES NOT MEASURE — stated here because the commit that added it overclaimed.
 // It counts CONSTRUCTION (`X::open`, `new SQL.Database`, `DuckDBInstance.create`). The card says
@@ -253,29 +271,49 @@ function walk(dir, out) {
   return out
 }
 
-// `--self-test` checks the OPENERS patterns against known samples WITHOUT walking the tree, so a
-// pattern that drifts, or an alternative that over-matches an import, fails here before any count is
-// trusted. The inline samples are safe: this file is skipped by the scan (see `__filename` above).
-if (process.argv.includes('--self-test')) {
-  const samples = [
-    { text: 'use duckdb::Connection;\nfn f(c: &duckdb::Connection) {}', counted: false },
-    { text: 'use agentlens_store::duckdb::Connection;', counted: false },
-    { text: 'let c = Connection::open(p)?;', counted: true },
-    { text: 'let c = Connection::open_in_memory()?;', counted: true },
-    { text: 'let c = Connection::open_with_flags(p, f)?;', counted: true },
-    { text: 'let c = agentlens_store::duckdb::Connection::open_in_memory()?;', counted: true },
-  ]
+// `SELF_TEST_SAMPLES` pins every OPENERS pattern to known inputs. It is checked on EVERY run, not only
+// under `--self-test`, and before the tree is walked: a pattern that drifts, or an alternative that
+// over-matches an import, must fail here before any count is trusted. The samples are inline and safe,
+// because this file is skipped by the scan (see `__filename` above).
+const SELF_TEST_SAMPLES = [
+  { text: 'use duckdb::Connection;\nfn f(c: &duckdb::Connection) {}', counted: false },
+  { text: 'use agentlens_store::duckdb::Connection;', counted: false },
+  { text: 'let c = Connection::open(p)?;', counted: true },
+  { text: 'let c = Connection::open_in_memory()?;', counted: true },
+  { text: 'let c = Connection::open_with_flags(p, f)?;', counted: true },
+  { text: 'let c = agentlens_store::duckdb::Connection::open_in_memory()?;', counted: true },
+  { text: 'const SQL = await initSqlJs({ locateFile })', counted: true },
+  { text: 'const db = new SQL.Database(buf)', counted: true },
+  { text: 'const inst = await DuckDBInstance.create(p)', counted: true },
+  { text: "import type { DuckDBInstance } from '@duckdb/node-api'", counted: false },
+  // Known BLIND SPOT, pinned as NOT counted so it stays visible: an aliased import is missed. This is
+  // the alias gap named in the 2026-10-17 OPENERS comment. A change that starts counting it must flip
+  // this line deliberately, in the same commit.
+  { text: 'use duckdb::Connection as Db;\nlet c = Db::open_in_memory()?;', counted: false },
+]
+
+// Returns the number of failed samples and prints one line per failure.
+function selfTest() {
   let failures = 0
-  for (const { text, counted } of samples) {
+  for (const { text, counted } of SELF_TEST_SAMPLES) {
     const got = OPENERS.some(({ re }) => re.test(stripComments(text)))
     if (got !== counted) {
       failures++
       console.error(`check-duckdb-only self-test: FAIL — ${JSON.stringify(text)} counted=${got}, expected ${counted}`)
     }
   }
-  if (failures) process.exit(1)
-  console.log(`check-duckdb-only self-test: OK (${samples.length} cases)`)
+  return failures
+}
+
+const selfTestFailures = selfTest()
+if (process.argv.includes('--self-test')) {
+  if (selfTestFailures) process.exit(1)
+  console.log(`check-duckdb-only self-test: OK (${SELF_TEST_SAMPLES.length} cases)`)
   process.exit(0)
+}
+if (selfTestFailures) {
+  console.error('check-duckdb-only: FAIL — opener self-test failed')
+  process.exit(1)
 }
 
 const files = SCAN_DIRS.flatMap((d) => walk(path.join(ROOT, d), []))
