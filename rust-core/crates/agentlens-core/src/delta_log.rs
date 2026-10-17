@@ -137,8 +137,23 @@ impl TmpSnapshot {
     /// file, and Windows will not rename a file that is still open). Returns (path, bytes written).
     fn finish(self) -> Result<(PathBuf, u64), String> {
         let TmpSnapshot { path, w, bytes } = self;
-        w.into_inner().map_err(|e| format!("{}: {}", path.display(), e.error()))?;
+        if let Err(e) = w.into_inner() {
+            let m = format!("{}: {}", path.display(), e.error());
+            // TRDD-1RJBOEI1: a failed flush is a failed write — close the file, then remove it, so
+            // no stray `<snapshot>.tmp` is left behind.
+            drop(e);
+            let _ = fs::remove_file(&path);
+            return Err(m);
+        }
         Ok((path, bytes))
+    }
+
+    /// TRDD-1RJBOEI1 — abandon a compaction whose write or source failed: close the file and remove
+    /// `<snapshot>.tmp`. A TmpSnapshot never touches the old snapshot or the delta, so they stay intact.
+    fn discard(self) {
+        let TmpSnapshot { path, w, .. } = self;
+        drop(w);
+        let _ = fs::remove_file(path);
     }
 }
 
@@ -426,7 +441,12 @@ impl DeltaLog {
     fn compact(&self, records: &IndexMap<String, Value>) -> Result<u64, String> {
         let mut tmp = TmpSnapshot::create(&self.snapshot_path)?;
         for (k, v) in records {
-            tmp.push(k, &serde_json::to_string(v).unwrap_or_default())?;
+            // TRDD-1RJBOEI1: a failed write removes `<snapshot>.tmp` before returning; a bare `?`
+            // here used to leave the half-written temp file next to the snapshot.
+            if let Err(e) = tmp.push(k, &serde_json::to_string(v).unwrap_or_default()) {
+                tmp.discard();
+                return Err(e);
+            }
         }
         let (tmp, bytes) = tmp.finish()?;
         // WHY Value equality and not a hash: `records` is in memory, so the exact old check (every
@@ -485,21 +505,30 @@ impl DeltaLog {
     /// map alone is 1564 MiB at 700k records, so no change inside compact() could bring that boot
     /// under alcore's 2048 MiB cap with room to spare (docs_dev/20261017-ajgtq007-streaming-report.md).
     ///
-    /// WHY the winners are read in REPLAY order (seeking per record) and not in visit_winners' file
-    /// order: the snapshot must come out in the order load()'s map had (insert a, insert b, update
-    /// a is order a, b but file order b, a), or every later load() order — and the bytes of the
-    /// snapshot — would change. Reads are buffered and the order is mostly sequential, so a seek is
-    /// a buffer move in the common case.
+    /// It reads the winners in REPLAY order (one relative seek per record), not in visit_winners'
+    /// file order. WHY: the snapshot must come out in the order load()'s map had (insert a, insert b,
+    /// update a is order a, b but file order b, a), or every later load() order — and the bytes of
+    /// the snapshot — would change. The cost of that order: the reads are sequential only for a log
+    /// whose keys are never superseded, as in body-links (one line per key, unique per pointer),
+    /// where each seek is a move inside the 64 KiB buffer. In a heavily updated log such as
+    /// log-sessions a winner sits wherever its last update landed, so replay order seeks back and
+    /// forth through both files and every jump outside the buffer is a real seek plus a refill. Do
+    /// NOT use it there: it is built for body-links only.
     ///
-    /// Failure semantics mirror the old pair: a source that does not replay is an Err with
-    /// `written` untouched (load() failing); a failed write or verify is an Err with `written`
-    /// already seeded (load() succeeding, then compact_now failing), and the old snapshot and the
-    /// delta stay in place.
+    /// Failure semantics, all of which leave the old snapshot and the delta in place:
+    /// - the source does not replay (load() would fail), or `<snapshot>.tmp` cannot be created or
+    ///   written: Err at the first error, `written` untouched, `<snapshot>.tmp` removed;
+    /// - the final flush or the from-disk verify fails: Err with `written` already seeded (as
+    ///   load() succeeding, then compact_now failing), `<snapshot>.tmp` removed.
+    ///
+    /// WHY a write error leaves `written` unseeded: body-links' only writer is append_changed with
+    /// keys unique per pointer, so a missing hash costs at most one re-append of a record that is
+    /// ingested again; reading the rest of the source to seed it would only feed a file about to be
+    /// removed.
     pub fn compact_from_disk(&mut self) -> Result<u64, String> {
         use std::io::{BufRead, BufReader, Seek, SeekFrom};
         let delta_empty = size_of(&self.delta_path) == 0;
         let ix = Self::index_files(&[&self.snapshot_path, &self.delta_path])?;
-        let mut out: Result<Option<TmpSnapshot>, String> = if delta_empty { Ok(None) } else { TmpSnapshot::create(&self.snapshot_path).map(Some) };
         let mut written: IndexMap<String, u64> = IndexMap::with_capacity(ix.live.len());
         let mut readers: Vec<Option<(BufReader<&fs::File>, u64)>> = Vec::with_capacity(ix.files.len());
         for rf in &ix.files {
@@ -512,8 +541,11 @@ impl DeltaLog {
                 None => None,
             });
         }
+        // Created only after every `?` above, so no early return can leave it behind; a failed
+        // create returns before anything is read.
+        let mut out: Option<TmpSnapshot> = if delta_empty { None } else { Some(TmpSnapshot::create(&self.snapshot_path)?) };
         let mut buf = Vec::new();
-        // The replay in a closure so that a source error can remove a half-written `tmp` below.
+        // The replay in a closure so that any error, read or write, can remove `tmp` below.
         let replayed = (|| -> Result<(), String> {
             for (key, &(fi, off)) in &ix.live {
                 let rf = &ix.files[fi];
@@ -536,25 +568,20 @@ impl DeltaLog {
                 }
                 let Some(v) = l.remove("v") else { return Err(changed()) };
                 let json = serde_json::to_string(&v).unwrap_or_default();
-                written.insert(key.clone(), hash_json(&json));
-                // A write error does not stop the pass: `written` must still be seeded (see above).
-                let pushed = match &mut out {
-                    Ok(Some(t)) => t.push(key, &json),
-                    _ => Ok(()),
-                };
-                if let Err(e) = pushed {
-                    out = Err(e);
+                // TRDD-1RJBOEI1: a write error stops the pass HERE. It used to keep reading every
+                // remaining record to seed `written` and then leave `<snapshot>.tmp` behind.
+                if let Some(t) = out.as_mut() {
+                    t.push(key, &json)?;
                 }
+                written.insert(key.clone(), hash_json(&json));
             }
             Ok(())
         })();
         if let Err(e) = replayed {
-            // The source did not replay (load() would have failed): `written` stays untouched, and a
-            // half-written `tmp` is removed — the old snapshot and the delta were never touched.
-            if let Ok(Some(t)) = out {
-                let path = t.path.clone();
-                drop(t);
-                let _ = fs::remove_file(path);
+            // `written` stays untouched and the half-written `tmp` is removed — the old snapshot and
+            // the delta were never touched.
+            if let Some(t) = out.take() {
+                t.discard();
             }
             return Err(e);
         }
@@ -562,7 +589,7 @@ impl DeltaLog {
         drop(readers);
         drop(ix);
         self.written = written;
-        let Some(tmp) = out? else { return Ok(0) };
+        let Some(tmp) = out else { return Ok(0) };
         let (tmp, bytes) = tmp.finish()?;
         let written = &self.written;
         self.commit_verified(&tmp, written.keys().map(String::as_str), |pos, v| {
@@ -659,13 +686,13 @@ impl DeltaLog {
         Ok(SaveResult { appended, deleted: 0, bytes: body.len() as u64, compacted: false })
     }
 
-    /// TRDD-N6A8VX3G — unconditional compaction of a caller-supplied record map, bypassing save()'s size gate:
-    /// one verified snapshot rewrite drops the delta, bounding it to per-boot volume and
-    /// healing a torn trailing line a hard kill can leave (replay tolerates ONE torn tail, and
-    /// the body-links SQL consumer reads through the same replay — cache_turns_sql.rs install_body_links,
-    /// via for_each_live —
-    /// so this is cleanup, not a precondition for reading).
-    /// No-op while the delta is empty: the snapshot already holds everything. Boot uses compact_from_disk instead.
+    /// TRDD-N6A8VX3G — unconditional compaction of a caller-supplied record map, bypassing save()'s
+    /// size gate. On Ok the snapshot holds exactly `records`, verified from disk, and the delta file
+    /// is gone; that also heals a torn trailing line a hard kill can leave (replay tolerates ONE
+    /// torn tail, and the body-links SQL consumer reads through the same replay — cache_turns_sql.rs
+    /// install_body_links, via for_each_live — so this is cleanup, not a precondition for reading).
+    /// It bounds the delta only as often as its caller calls it; boot uses compact_from_disk.
+    /// No-op while the delta is empty: the snapshot already holds everything.
     pub fn compact_now(&mut self, records: &IndexMap<String, Value>) -> Result<u64, String> {
         // TRDD-1RJBOEI1: boot no longer calls this after load(); log_reader.rs restore calls
         // compact_from_disk, which does the same without holding the record map. This stays for

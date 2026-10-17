@@ -526,3 +526,46 @@ fn a_corrupted_temp_snapshot_fails_verification_and_keeps_the_old_snapshot() {
         }
     }
 }
+
+
+/// TRDD-1RJBOEI1 — a write error inside the record loop (TmpSnapshot::push, not create and not the
+/// final flush) stops the compaction at once and removes `<snapshot>.tmp`. `<snapshot>.tmp` is
+/// pre-created as a FIFO whose only reader opens it and closes it at once, so the create succeeds
+/// and the first write that reaches the OS fails with EPIPE (Rust ignores SIGPIPE). The `big`
+/// record is larger than TmpSnapshot's 64 KiB buffer, so BufWriter hands it to the OS inside push.
+/// Both compactions must keep the old snapshot and the delta byte for byte, and leave no tmp.
+#[cfg(unix)]
+#[test]
+fn a_failed_write_stops_compaction_and_removes_the_temp_snapshot() {
+    use std::os::unix::ffi::OsStrExt;
+    let dir = tmp("compact-write-fail");
+    let big = "x".repeat(256 * 1024);
+    for name in ["m", "n"] {
+        let snap = dir.join(format!("{name}.snapshot.ndjson"));
+        let delta = dir.join(format!("{name}.delta.ndjson"));
+        let tmp_path = dir.join(format!("{name}.snapshot.ndjson.tmp"));
+        std::fs::write(&snap, "{\"k\":\"a\",\"v\":1}\n").unwrap();
+        std::fs::write(&delta, format!("{{\"k\":\"big\",\"v\":\"{big}\"}}\n{{\"k\":\"b\",\"v\":2}}\n")).unwrap();
+        let (snap_before, delta_before) = (std::fs::read(&snap).unwrap(), std::fs::read(&delta).unwrap());
+        let map = DeltaLog::new(&dir, name).load().unwrap();
+        let fifo = std::ffi::CString::new(tmp_path.as_os_str().as_bytes()).unwrap();
+        // SAFETY: a valid NUL-terminated path; mkfifo only creates the node.
+        assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0, "{name}: mkfifo");
+        let reader_path = tmp_path.clone();
+        // Blocks until the compaction opens the FIFO for writing, then closes: every write after is EPIPE.
+        let reader = std::thread::spawn(move || drop(std::fs::File::open(reader_path).unwrap()));
+        let mut log = DeltaLog::new(&dir, name);
+        let err = if name == "m" { log.compact_from_disk().unwrap_err() } else { log.compact_now(&map).unwrap_err() };
+        reader.join().unwrap();
+        assert!(err.contains(&format!("{name}.snapshot.ndjson.tmp")) && !err.contains("verify"), "{name}: a write error, not a verify: {err}");
+        assert!(std::fs::symlink_metadata(&tmp_path).is_err(), "{name}: no stray tmp is left");
+        assert_eq!(std::fs::read(&snap).unwrap(), snap_before, "{name}: old snapshot kept");
+        assert_eq!(std::fs::read(&delta).unwrap(), delta_before, "{name}: delta kept");
+        assert_eq!(DeltaLog::new(&dir, name).load().unwrap(), map, "{name}: nothing lost");
+        if name == "m" {
+            // The pass stopped at the failed write, so `written` was never seeded: all 3 re-append.
+            let r = log.append_changed(&map).unwrap();
+            assert_eq!(r.appended, 3, "written untouched after the failed write");
+        }
+    }
+}
