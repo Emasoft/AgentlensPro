@@ -47,13 +47,13 @@ collector + the standalone server each hold one long-lived instance (state persi
 across payloads/requests). Before S3-F3a the shipped `processLogs` had drifted to group
 Codex by conversation-id alone.
 
-^7VDN6TUV [desc:"src/summarizers/codex.ts groupCodexSpansBySession is a FOURTH, separate re-derivation of codex prompt grouping that determines the user-visible /api/summary grouping", keywords:"fourth_copy_of_codex_grouping groupCodexSpansBySession summarizer_grouper user_visible_api_summary_grouping ingest_grouping_change_has_zero_summary_effect how_many_places_parse_the_otlp_wire_format", ocd:2026-07-11, lmd:2026-07-30]
+^7VDN6TUV [desc: "src/summarizers/codex.ts groupCodexSpansBySession is a FOURTH, separate re-derivation of codex prompt grouping that determines the user-visible /api/summary grouping", keywords: fourth_copy_of_codex_grouping groupCodexSpansBySession summarizer_grouper user_visible_api_summary_grouping ingest_grouping_change_has_zero_summary_effect how_many_places_parse_the_otlp_wire_format, ocd: 2026-07-11, lmd: 2026-10-17]
 **THE FOURTH copy — the summarizer.** `src/summarizers/codex.ts` `groupCodexSpansBySession`
 re-derives the SAME `codex:<conv>:prompt-N` grouping from stored spans (honoring an
 explicit `codex.session.id` first, else re-deriving via its own ordinal). It is a fourth
 grouper — and the one that determines the **user-visible** `/api/summary` grouping. The
 ingest store-key (impls 1-3) and the summarized view (impl 4) are grouped by SEPARATE
-logic, so an ingest-side grouping change (S3-F3a) has ~zero `/api/summary` effect.
+logic, so an ingest-side grouping change (S3-F3a) has ~zero `/api/summary` effect.[^1]
 
 ^CGMU661G [desc:"Phase 0b unified only the shared atoms (prompt-event predicate + key format) between the batch grouper and the streaming normalizer; a full fold was rejected — it would change user-visible grouping", keywords:"phase_0b_partial_unification full_fold_rejected batch_grouper_vs_streaming_resolver isCodexPromptEventName isCodexPromptSpanName codexPromptSessionId characterization_test_codexGrouping_test_ts why_was_the_fourth_copy_not_merged", ocd:2026-07-11, lmd:2026-07-30]
 **Phase 0b (2026-07-11) — analyzed and PARTIALLY unified; full fold REJECTED.** impl 4 is a
