@@ -348,7 +348,8 @@ impl DeltaLog {
     }
 
     /// Replay files in order into a fresh map — the ONE definition of "how lines become state",
-    /// shared by load(), compaction's verify and for_each_live. TRDD-AJGTQ007: built on the two
+    /// used only by load(). for_each_live and compaction's verify (commit_verified) call index_files
+    /// and visit_winners directly, the same two passes. TRDD-AJGTQ007: built on the two
     /// streaming passes, so the map holds each live record ONCE. WHY placeholders: pass 1 fixes
     /// the order, pass 2 delivers values in file order (not the same: insert a, insert b, update a
     /// is order a, b but file order b, a), so each value is dropped into its slot by position.
@@ -658,13 +659,13 @@ impl DeltaLog {
         Ok(SaveResult { appended, deleted: 0, bytes: body.len() as u64, compacted: false })
     }
 
-    /// TRDD-N6A8VX3G — unconditional compaction for boot, bypassing save()'s size gate: after
-    /// load(), one verified snapshot rewrite drops the delta, bounding it to per-boot volume and
+    /// TRDD-N6A8VX3G — unconditional compaction of a caller-supplied record map, bypassing save()'s size gate:
+    /// one verified snapshot rewrite drops the delta, bounding it to per-boot volume and
     /// healing a torn trailing line a hard kill can leave (replay tolerates ONE torn tail, and
     /// the body-links SQL consumer reads through the same replay — cache_turns_sql.rs install_body_links,
     /// via for_each_live —
     /// so this is cleanup, not a precondition for reading).
-    /// No-op while the delta is empty: the snapshot already holds everything.
+    /// No-op while the delta is empty: the snapshot already holds everything. Boot uses compact_from_disk instead.
     pub fn compact_now(&mut self, records: &IndexMap<String, Value>) -> Result<u64, String> {
         // TRDD-1RJBOEI1: boot no longer calls this after load(); log_reader.rs restore calls
         // compact_from_disk, which does the same without holding the record map. This stays for
