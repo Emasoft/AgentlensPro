@@ -1,9 +1,9 @@
 ---
 trdd-id: 4BZPAQWM
 title: pnpm run compile is red on main — store-opener caps exceeded, raises must be defended per file
-column: dev
+column: todo
 created: 2026-09-08T12:36:26+0200
-updated: 2026-10-17T12:11:25+0200
+updated: 2026-10-17T12:16:13+0200
 current-owner: main-session
 task-type: bugfix
 scope: project
@@ -18,11 +18,11 @@ blocker-probe: [trddgrep, why, 4BZPAQWM]
 blocker-holds-if: not-match:READY
 ---
 
-# `pnpm run compile` is red on main — store-opener caps exceeded
+# pnpm run compile is red on main — store-opener caps exceeded, raises must be defended per file
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-24T11:15:51+0200
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-10-17
 
-GREEN ON BRANCH 2026-10-17: check-duckdb-only exits 0 on fix/setup-agent-preflight at 728b143b (26/26 non-test, 11/11 test, self-test 11 cases); commits 96468f6b (type-import false positive) and 728b143b (defended raise). main is still red: all seven opener commits are on main. NEXT ACTION: merge to main (--no-ff, owner or merge step), then measure compile on main and tick box 3. Follow-ups TRDD-0628HGM7 (data-returning gateway, the only honest way to lower the caps) and TRDD-D2KY0ZR9 (the missing gate). The rest of this block is history.
+GREEN ON BRANCH 2026-10-17: check-duckdb-only exits 0 on fix/setup-agent-preflight at 728b143b (26/26 non-test, 11/11 test, self-test 11 cases); commits 96468f6b (type-import false positive) and 728b143b (defended raise). main (04a8a100) is red, measured 2026-10-17: check-duckdb-only 27 > 22 non-test, 12 > 8 test. NEXT ACTION: the owner decides whether fix/setup-agent-preflight is merged to main (asked 2026-10-17); after the merge, measure compile on main and tick box 3. Follow-ups TRDD-0628HGM7 (data-returning gateway, the only honest way to lower the caps) and TRDD-D2KY0ZR9 (the missing gate). The rest of this block is history.
 
 
 
@@ -91,12 +91,14 @@ a judgement for whoever picks this up; both touch the store.
 - [x] The 6 suite failures are either shown pre-existing by an actually-isolated run, or carded.
 Box 3 not ticked: every compile step except the final `node esbuild.js` exits 0 and all three bundles (media/src/dashboard.tsx, standalone/cli.ts, media/src/sidebarWebview.ts) build into reports_dev/ with exit 0; the esbuild step itself was not run because on this machine it deploys and waits on the owner (TRDD-C9BGEMSS decision 3).
 Box 4 stays open: one of the 6 failing tests, 'standalone server — P5 window auto-calibration', may belong to the now-dead capacityCalibration.ts (see TRDD-M3TWPLZO) rather than to a live store defect — not yet confirmed.
+History (2026-10-17): the two annotation lines above describe 2026-09-24; box 4 was ticked on 2026-10-17 and box 3 now waits only on the merge to main.
 
 ## Approval log
 
 - 2026-10-16T11:13:31+0200 — column → blocked by main-agent@agentlenspro. its 6 failing suite tests are split between those two cards (commit 3e767d69); triage row 10
 - 2026-10-17T11:08:14+0200 — column → dev by main-agent@agentlenspro. blocker B7DSTJLS is complete (c4085381); the main agent works the regression found 2026-10-17 Cleared blocked-by (--clear-blocker override).
 - 2026-10-17 — box 3 reworded (was: without raising either cap) and title changed (was: pnpm run compile is red on main — store-opener caps exceeded, and they may only go down) by main-agent@agentlenspro under the owner order of 2026-10-05, quoted: "decide yourself. base your decisions on verified facts and tests. you are in charge, complete all TRDDs reviews in my stead." Why: the regression is explained, all seven openers are classified with commit and card (728b143b), no rename is counted as a reduction, and no PRRD rule names the opener cap (prrdgrep: no match for duckdb or opener). Box 3 is agent-authored (05f47cf5). Veto: revert 728b143b to restore 22/8 (compile goes red again) and work TRDD-0628HGM7 as the only route to green.
+- 2026-10-17T12:16:13+0200 — column → todo by main-agent@agentlenspro. only remaining step is the owner's merge decision; nobody is working it
 
 ## Regression 2026-10-17 and fix plan
 

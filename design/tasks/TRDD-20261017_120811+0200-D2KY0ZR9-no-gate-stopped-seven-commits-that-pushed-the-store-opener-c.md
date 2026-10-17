@@ -4,7 +4,7 @@ title: No gate stopped seven commits that pushed the store-opener counts over th
 column: backburner
 status: tasked
 created: 2026-10-17T12:08:11+0200
-updated: 2026-10-17T12:09:07+0200
+updated: 2026-10-17T12:16:13+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: infra
@@ -30,6 +30,7 @@ Which of these let a red compile reach main, decided from evidence:
 - compile is not required in CI: read .github/workflows and list which jobs run pnpm run compile and on which events.
 - compile is not run per commit: check whether a pre-commit or pre-push hook exists and is enabled (.githooks is opt-in).
 - worktree merges bypass the gate: check the merge path those commits took.
+- Per commit: was compile green before it and red after, or already red for an earlier reason (check-types, lint, an earlier over-cap commit)? An already-red gate whose signal was ignored is a different mechanism from a gate that never ran.
 
 ## Acceptance
 

@@ -4,7 +4,7 @@ title: Data-returning store gateway so the three core DuckDB openers stop holdin
 column: backburner
 status: tasked
 created: 2026-10-17T12:08:03+0200
-updated: 2026-10-17T12:09:03+0200
+updated: 2026-10-17T12:16:13+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: refactor
@@ -27,7 +27,7 @@ Three store openers in rust-core/crates/agentlens-core/src each open and hold th
 ## Scope
 
 - Scope investigator_scan.rs load_store_window, cache_event_log.rs load_store_facts and cache_turns_sql.rs (all in rust-core/crates/agentlens-core/src). Each opener becomes a function that RETURNS DATA, so the handle is opened and dropped inside the store gateway instead of being held by the caller.
-- Deduplicate the three identical 512MiB copies (bodies_evidence with_duck, statusline_store open_duck, cache_turns_sql open_duck) into one shared opener.
+- Deduplication of the three 512MiB copies (bodies_evidence with_duck, statusline_store open_duck, cache_turns_sql open_duck) is optional and lowers no count. If done, the shared function's call sites are counted by check-duckdb-only, with that rule added to the guard in the same change.
 
 ## Rules settled by measurement
 
@@ -38,8 +38,8 @@ Three store openers in rust-core/crates/agentlens-core/src each open and hold th
 
 ## Acceptance
 
-- The three named openers no longer hold a DuckDB handle in the caller, and check-duckdb-only counts them as zero.
-- Per-site current_setting tests committed, with the old-code measurement recorded first.
+- The three named openers no longer construct or hold a DuckDB Connection: each calls a store-crate function that returns rows or structs, verified by reading the three files, and any Connection-returning helper's call sites are counted by the guard.
+- Per-site current_setting tests committed, with the old-code measurement recorded first. Record the old-code current_setting values on this card before migrating.
 - Both opener caps in scripts/check-duckdb-only.js (MAX_NON_TEST_OPENERS, MAX_TEST_OPENERS) lowered to the new exact counts, and node scripts/check-duckdb-only.js exits 0.
 
 ## Origin
@@ -49,3 +49,7 @@ TRDD-4BZPAQWM, commit 728b143b.
 ## Approval log
 
 - 2026-10-17T12:08:03+0200 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+
+## Notes
+
+When this card next touches scripts/check-duckdb-only.js, fix three comments left by 728b143b: replace 'follow-up card named on TRDD-4BZPAQWM' with 'TRDD-0628HGM7'; 'and none stopped' becomes 'and no gate stopped them'; move '(raised again 2026-10-17, see above)' on the 2026-09-24 line to the end of that sentence. They were left because fastedit cannot replace comment lines between symbols.
