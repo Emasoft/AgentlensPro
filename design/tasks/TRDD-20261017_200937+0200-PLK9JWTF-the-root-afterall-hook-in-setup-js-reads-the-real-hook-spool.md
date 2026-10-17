@@ -4,7 +4,7 @@ title: The root afterAll hook in setup.js reads the real hook-spool and can exce
 column: backburner
 status: tasked
 created: 2026-10-17T20:09:37+0200
-updated: 2026-10-17T20:09:37+0200
+updated: 2026-10-17T20:18:32+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -29,7 +29,7 @@ The hook is src/test/setup.js mochaHooks.afterAll (around lines 365-400). It has
 
 ## Cause
 
-UNMEASURED. The spool held 52 files when measured (18:38), not 20,000, so the setup.js:269 comment about a standing 20,000-file cap is stale for this machine. Candidates: the execFileSync ps survivor polls under load, rmSync of TEST_ROOT, and the spool reads.
+UNMEASURED. The standing 20,000-file cap assumed in the setup.js:269 comment was not observed when measured (the spool was far smaller), so that comment is not a reliable account of the cause. Candidates: the execFileSync ps survivor polls under load, rmSync of TEST_ROOT, and the spool reads.
 
 ## Next step
 
@@ -37,7 +37,7 @@ Time each phase of the hook, then give it its own timeout.
 
 ## Evidence
 
-reports_dev/c19/20261017_183811+0200-deadline-fix-measure.md section 4 (gitignored), and docs_dev/20261017-c19-part2-mutations-report.md F2.
+TRDD-C19SUVPH ## Evidence, the 2026-10-17 Box 2 note (the run); src/test/setup.js mochaHooks.afterAll; src/test/floodBenchRate.test.ts (the run recipe: FLOOD_RATE_SECONDS=300). Gitignored detail: reports_dev/c19/20261017_183811+0200-deadline-fix-measure.md section 4 (gitignored), and docs_dev/20261017-c19-part2-mutations-report.md F2.
 
 related: [C19SUVPH].
 

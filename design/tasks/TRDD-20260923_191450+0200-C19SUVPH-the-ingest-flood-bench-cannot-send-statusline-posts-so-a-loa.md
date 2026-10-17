@@ -3,7 +3,7 @@ trdd-id: C19SUVPH
 title: The ingest flood bench cannot send statusline POSTs so a load arm cannot vary statusline alone
 column: human_review
 created: 2026-09-23T19:14:50+0200
-updated: 2026-10-17T20:12:06+0200
+updated: 2026-10-17T20:18:32+0200
 current-owner: main-session
 created-by: main-session
 task-type: infra
@@ -35,12 +35,12 @@ status: tasked
 - The stats endpoints come from a stand-in HTTP server inside the test: a real alcore cannot report the live ~/.agentlens as its data dir (one owner per data dir), so nothing else could reach that refusal.
 - D1 on CI (~/.agentlens absent) is first observed on CI; until then it rests on reading the code. P2 and P3 are likewise first observed on CI.
 - Statusline received and persisted are one counter (p.statusline_samples), so the 2026-09-23 result 600 received = 600 persisted was never a two-sided check.
-- Still unverified: the target-down exit 3; the hooks mix and the both mix; admitted_total; the 5-minute agreement between the rate flags and the target counters (box 2).
+- SUPERSEDED 2026-10-17 (see the current head) — Still unverified: the target-down exit 3; the hooks mix and the both mix; admitted_total; the 5-minute agreement between the rate flags and the target counters (box 2).
 - Known and unfixed: --rate together with --sessions silently ignores --sessions.
-- Part 2 (deferred): a real-alcore rate test. In CI it goes after ci.yml:119, where AGENTLENS_ALCORE is downloaded. alcore takes flags, not env vars (--media-dir is required). It waits for the 1-minute load to drop under 20 (it was 54.6).
-- No acceptance box was ticked by this update.
+- SUPERSEDED 2026-10-17 (see the current head) — Part 2 (deferred): a real-alcore rate test. In CI it goes after ci.yml:119, where AGENTLENS_ALCORE is downloaded. alcore takes flags, not env vars (--media-dir is required). It waits for the 1-minute load to drop under 20 (it was 54.6).
+- SUPERSEDED 2026-10-17 (see the current head) — No acceptance box was ticked by this update.
 - P2 precondition landed in 782cab31: P2 runs only when nothing listens on 3000 or the server there reports ~/.agentlens (same resolver as the bench); otherwise a visible skip. Accepted residual: a server change between that check and the P2 spawn (P2 never passes --allow-live). The skip branch is untested.
-- Part 2 recipe: runs after ci.yml:119 with AGENTLENS_ALCORE; alcore takes CLI flags, and --media-dir is required; poll the counters until two reads agree; assert floors, not only equality.
+- SUPERSEDED 2026-10-17 (see the current head) — Part 2 recipe: runs after ci.yml:119 with AGENTLENS_ALCORE; alcore takes CLI flags, and --media-dir is required; poll the counters until two reads agree; assert floors, not only equality.
 - SUPERSEDED 2026-10-17 (Part 2 is done; see the current head above) — former next action: Part 2 (real-alcore rate test plus the 5-minute box-2 run) when the 1-minute load is under 20
 
 scripts/bench/alcore-ingest-flood.mjs drives OTLP only. TRDD-EQCGAVGV's isolated run needs arms that vary statusline and OTLP independently, so the tool must: send POST /api/statusline-samples with a realistic payload at a configurable rate (including low rates, e.g. 1 per 10 s); pace OTLP independently; target a given port set (UI/API and OTLP) so it never touches the live collector's canonical ports by default.
@@ -49,10 +49,10 @@ Known gap, not fixed: the bench's live-port refusal is keyed on the literal UI p
 ## Acceptance
 
 - [x] statusline-only and OTLP-only modes (the zero-load baseline is simply not running the tool).
-- [x] rate flags verified by the target's own counters (statusline receivedSinceBoot, spans.store.totalSpans; admitted_total counts UI-port POSTs) over 5 min.
+- [x] rate flags verified by the target's own counters (statusline receivedSinceBoot, spans.store.totalSpans; admitted_total counts UI-port POSTs) over 5 min. (see the 2026-10-17 correction in ## Evidence: admitted_total also counts the bench's snapshot reads)
 - [x] refuses to run against the canonical ports unless an explicit flag says so. (test-committed d35de9f2; P2/P3 first observed on CI; P1 mutation-proven; the P2 mutation was not run; the --allow-live bypass (P3) is CI-only and not yet observed)
 
-related: [EQCGAVGV].
+related: [EQCGAVGV, PLK9JWTF].
 
 ## Approval log
 
@@ -72,9 +72,9 @@ related: [EQCGAVGV].
 ## Evidence
 
 The statusline POST handler is agentlens-core/src/ui.rs:1426-1444 (POST /api/statusline-samples); payload shape is any JSON object with an optional statusline_stream:"subagent" field (ui.rs:1439), not a fixed schema struct on this path. No per-route auth/header check on this handler; it relies on the global CSRF Origin gate (ui.rs:6-14,548-569) applied to every non-GET/HEAD request.
-- 2026-10-17 Box 1 (statusline-only and OTLP-only modes): src/test/floodBenchRate.test.ts (17ed1ce4, extended in 3f698179) boots a real isolated alcore (free ports, temp HOME and data dir, --no-log-scan, scrubbed env). Case S (statusline) measured ok2xx 20, statusline 20, admitted 22, spans 0. Case O (otlp, 20 spans per request) measured ok2xx 20, spans 400, statusline 0, admitted 2. Mutations: M1-M6 red on 17ed1ce4; on 3f698179, MB1 (no budget, no break) red at 17 of 14, MB2 (no budget) red at 15 of 14, MB3 (M6) red on spans-zero, MB4 (no break) green as expected. CI has not observed it yet (no push).
-- 2026-10-17 Box 2 (rate flags verified by the target's own counters over 5 min): the 5-minute agreement was observed once locally on 17ed1ce4's bench, BEFORE the deadline fix, using rust-core/target/release/alcore built from dbbadf86 (sha256 3e9aecfa2e519606f728bfcd6ad8b16821f64c5abab203909bbe4d3be043af14, built 2026-10-17 17:29). Results: S 600/600, admitted 602, spans 0; O 600 requests, 12000 spans, statusline 0. The fix only removes deadline-edge sends, and 600 = 2N. Disclosures: (a) a leftover duplicate PQ40PZ9D agent wrote the bench at 18:29 during that run (Case S spawned on a cmp-verified bench at about 18:19; Case O's bench at about 18:24 on unverified content, though its possible edits could not touch the otlp path); (b) the load spiked to about 76-127 during the run and the floor still held; (c) mocha exited 1 only because of the root afterAll hook (TRDD-PLK9JWTF). To get exit 0 on a 5-minute run, pass a larger global --timeout (e.g. 120000).
-- 2026-10-17 The committed test runs 10 s per case. The rate ceiling is 2N, held by the bench's shared send budget (mutation-proven by MB2) plus the deadline break (defence in depth, MB4). The 2N figure is code-read (measure r2 section 3) and confirmed by MB2. The total never exceeds the ideal schedule's count; which worker sends the last unit may change.
+- 2026-10-17 Box 1 (statusline-only and OTLP-only modes): src/test/floodBenchRate.test.ts (17ed1ce4, extended in 3f698179) boots a real isolated alcore (free ports, temp HOME and data dir, --no-log-scan, scrubbed env). Case S (statusline) measured ok2xx 20, statusline 20, admitted 22, spans 0. Case O (otlp, 20 spans per request) measured ok2xx 20, spans 400, statusline 0, admitted 2. Mutations on 17ed1ce4: M1-M5 red on their targets; M6 red, but on the ceiling, its intended spans-zero target proven later by MB3; on 3f698179, MB1 (no budget, no break) red at 17 of 14, MB2 (no budget) red at 15 of 14, MB3 (M6) red on spans-zero, MB4 (no break) green as expected. CI has not observed it yet (no push).
+- 2026-10-17 Box 2 (rate flags verified by the target's own counters over 5 min): the 5-minute agreement was observed once locally on 17ed1ce4's bench, BEFORE the deadline fix, using rust-core/target/release/alcore built from dbbadf86 (sha256 3e9aecfa2e519606f728bfcd6ad8b16821f64c5abab203909bbe4d3be043af14, built 2026-10-17 17:29). Results: S 600/600, admitted 602, spans 0; O 600 requests, 12000 spans, statusline 0. The fix only removes deadline-edge sends, and 600 = 2N. Disclosures: (a) a leftover duplicate PQ40PZ9D agent wrote the bench at 18:29 during that run (Case S spawned on a cmp-verified bench at about 18:19; Case O's bench at about 18:24 on unverified content, though by the leftover agent's own account (INFERRED, not checked) its edits could not touch the otlp path); (b) the load spiked to about 76-127 during the run and the floor still held; (c) mocha exited 1 only because of the root afterAll hook (TRDD-PLK9JWTF). To get exit 0 on a 5-minute run, pass a larger global --timeout (e.g. 120000).
+- 2026-10-17 The committed test runs 10 s per case. The rate ceiling is 2N, held by the bench's shared send budget (mutation-proven by MB2) plus the deadline break (defence in depth, MB4). The 2N figure is code-read (measure r2 section 3) and recorded in the bench worker-loop comments (3f698179) and confirmed by MB2. The total never exceeds the ideal schedule's count; which worker sends the last unit may change.
 - 2026-10-17 Correction (appended, box 2 text unchanged): admitted_total counts EVERY non-exempt UI-port request, including the bench's own snapshot reads (+2 per run with --progress-sec 100000), not only the statusline POSTs.
 - 2026-10-17 Known and not fixed: the bench's own spansAppendedDelta can undercount by about 5 s of spans, because totalSpans counts flushed segments only and the flush runs every 5 s; TRDD-EQCGAVGV's arms must not use that field without a settle. Statusline persistence is unproven (received and persisted are one counter). The deadline fix's F1 mechanism is INFERRED by code reading, with early timer wakes measured at 11 of 4000.
 - 2026-10-17 Process note: a leftover duplicate agent from an earlier session wrote this card's bench file for hours alongside this session's worker, breaking one writer per file. It removed its own edits; the committed fix 3f583f6d stands.
