@@ -3,7 +3,7 @@ trdd-id: PQ40PZ9D
 title: The flood bench cannot grow a transcript so no arm drives log-sweeper rebuilds
 column: human_review
 created: 2026-09-23T20:20:27+0200
-updated: 2026-10-17T14:28:36+0200
+updated: 2026-10-17T14:37:17+0200
 current-owner: main-session
 created-by: main-session
 task-type: infra
@@ -15,7 +15,7 @@ approved: true
 approval-judge: main-session
 approval-datetime: 2026-09-23T20:20:27+0200
 status: tasked
-implementation-commits: [df44e8de, 0f3b2ed7, 3f583f6d, 7339f295, ec496a73]
+implementation-commits: [df44e8de, 0f3b2ed7, 3f583f6d, 7339f295, ec496a73, 8173625f]
 ---
 
 # The flood bench cannot grow a transcript so no arm drives log-sweeper rebuilds
@@ -24,7 +24,7 @@ implementation-commits: [df44e8de, 0f3b2ed7, 3f583f6d, 7339f295, ec496a73]
 
 - The box-2 gap (an ancestor symlink let the bootstrap write 16 files before the post-mkdir check refused) is FIXED in commits 3f583f6d and 7339f295 (0f3b2ed7 is the WIP helper checkpoint before them). Box 2 is re-ticked; see ## Guard fix (2026-10-17).
 - Evidence for the fix: the scratch-proxy cases. a and b are refused with nothing written and go red under the mutations; c proves the guard does not over-refuse; d and q are refusals the old code did not make. Mutation results (M1: a and d fail; M2: b and c fail; M3: stays green) are from the worker's run; the orchestrator re-ran only the green suite. Real-home refusal is shown by exit codes and messages through the same protectedHit over the same roots list; write ordering for the real home rests on reasoning plus the proxy cases and was NOT measured on the real home. Counts: 14 refusals on darwin (a, b, d, e, g, q, i, j, k, l, m, n, o, p), 13 on Linux (e skipped), 3 accepted (c, f, h); 17/17 on darwin, 16 plus 1 SKIP on Linux.
-- Wiring: ec496a73 adds scripts/test-flood-transcripts-guard.js to check-guards (local run exit 0, 17/17) and as its own ci.yml step; not yet observed on CI (no push).
+- Wiring: ec496a73 adds scripts/test-flood-transcripts-guard.js to check-guards (local run exit 0, 17/17) and as its own ci.yml step; not yet observed on CI (no push). Case n made platform-aware in 8173625f: with no ~/.claude (usual on CI) the link dangles and the guard refuses it as dangling; that branch is first exercised on CI. Do not push before reviewing. Known red-not-false layouts, recorded not fixed: ~/.claude as a dangling symlink (case j), TMPDIR under the home, a home of /.
 - NEXT ACTION: owner review in human_review (moved 2026-10-17 by main-agent@agentlenspro). Open follow-ups, not blockers: the test asserts the bench's exact refusal text; freePorts can hang if the second listen fails.
 
 EQCGAVGV's arms need a log-growth driver: put_log_session (rust-core/crates/agentlens-core/src/lib.rs:292) bumps data_version whenever the log sweeper updates a session card, so transcript growth drives summary rebuilds, and no current flood-bench mode grows a transcript.
@@ -70,6 +70,6 @@ Test: scripts/test-flood-transcripts-guard.js, 17 cases: 17/17 on darwin, 16 plu
 | M2 | round-1 helper, no path.resolve | cases b and c fail |
 | M3 | drop the darwin lowercasing | stays green, so the lowercasing is documented as defensive and unproven |
 
-Commits: 0f3b2ed7 (WIP helper checkpoint), 3f583f6d (the fix plus the new scripts/test-flood-transcripts-guard.js), 7339f295 (review follow-ups: protected root pinned by name, freePorts race, empty extra root refused, darwin comment). Wiring: ec496a73 (check-guards + ci.yml).
+Commits: 0f3b2ed7 (WIP helper checkpoint), 3f583f6d (the fix plus the new scripts/test-flood-transcripts-guard.js), 7339f295 (review follow-ups: protected root pinned by name, freePorts race, empty extra root refused, darwin comment). Wiring: ec496a73 (check-guards + ci.yml), 8173625f (case n platform-aware).
 
 
