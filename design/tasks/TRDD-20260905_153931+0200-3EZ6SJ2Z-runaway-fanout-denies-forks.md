@@ -1,9 +1,9 @@
 ---
 trdd-id: 3EZ6SJ2Z
 title: The burn-gate's RUNAWAY_FANOUT rule denies fork launches although a fork writes no new prefix
-column: testing
+column: ai_review
 created: 2026-09-05T15:39:31+0200
-updated: 2026-09-05T16:43:02+0200
+updated: 2026-10-17T07:43:27+0200
 current-owner: main-session
 task-type: bugfix
 priority: high
@@ -13,14 +13,15 @@ project-id: agentlenspro
 related: [DIZ289UQ, THRGX41P, VY1IUVUM]
 relevant-rules: []
 implementation-commits: [52155adf, 10715a00]
+status: tasked
 ---
 
 # The burn-gate's RUNAWAY_FANOUT rule denies fork launches although a fork writes no new prefix
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-09-05T16:38:00+0200
 
-**`testing` — code committed in both twins and LIVE since 16:37; the behavioural acceptance is
-still unobserved.** The unit and route tests prove the rule; what remains is one real event: a fork
+**2026-10-17: behavioural acceptance OBSERVED (80 transcripts, the first one 20:36 on 2026-09-05; see Live acceptance observed). Next: ai_review of 52155adf and 10715a00.**
+The unit and route tests prove the rule; what remains is one real event: a fork
 launch while the machine is inside a ≥8-launches/60 s wave must produce the `[agentlens] … This fork
 is allowed` warn in the transcript instead of the deny. `/api/server-stats` at 16:38 already showed
 `gate.warns: 1` on the fresh server — cause NOT logged (`server.log` carries no gate lines), so it
@@ -79,6 +80,14 @@ machine-wide and still includes forks.
       (`--version` exit 64 = usage, not 137) → `agentlenspro server restart` (pid 39382 → 37474, the
       new path in `ps`); the binary carries the new reason string. NOT yet observed on a real ≥8/60 s
       wave — the first fork launch inside one is the acceptance read; until then this box is the
-      deployment, not the behaviour.
+      deployment, not the behaviour. OBSERVED: see Live acceptance observed (2026-10-17).
 
 ## Notes and lessons learned
+
+## Live acceptance observed (2026-10-17)
+
+- Behavioural acceptance OBSERVED on 2026-10-17. A recursive search of ~/.claude/projects/**/*.jsonl for the gate's fork-pass text "This fork is allowed" found 80 transcript files. The earliest hit is 2026-09-05T18:36:53Z, which is 20:36 +0200, after the 16:37 deploy. The latest is 2026-10-16T16:06:18Z. A sample hit, 2026-09-24 in another project, is a PreToolUse hook systemMessage: "[agentlens] AgentLens burn-gate: 10 subagent launches in the last 60s — runaway fan-out. From this project: lean-worker, fork. This fork is allowed: it reads the caller's cache entry and writes no new prefix…". Not checked: whether any fork was still DENIED by RUNAWAY_FANOUT after the deploy. No counter-search was run.
+
+## Approval log
+
+- 2026-10-17T07:43:27+0200 — column → ai_review by main-agent@agentlenspro. behavioural acceptance observed in 80 transcripts since 2026-09-05 20:36; code review of 52155adf and 10715a00 next

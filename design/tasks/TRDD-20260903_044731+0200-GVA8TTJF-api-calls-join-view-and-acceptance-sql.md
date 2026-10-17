@@ -3,7 +3,7 @@ trdd-id: GVA8TTJF
 title: api_calls coalesced view, cache_turns statusline join, and the acceptance SQL
 column: blocked
 created: 2026-09-03T04:47:31+0200
-updated: 2026-10-17T07:38:09+0200
+updated: 2026-10-17T07:41:36+0200
 current-owner: main-session
 task-type: feature
 priority: high
@@ -39,7 +39,7 @@ blocker-holds-if: not-match:READY
   neither is terminal. Since 2026-10-17 the card is blocked on TRDD-AJGTQ007 (see NEXT ACTION).
 - 2026-10-17: round 2 committed as 56d960e1 (with da5af103, the rename and doc commit). The round 2 items are listed in the Round 2 landed section at the end of this card.
   NEXT ACTION: B3 (registration) waits on TRDD-AJGTQ007's memory box; the card is blocked on it. The owner-facing item (live acceptance needs an alcore deploy) does not gate unblocking; it gates closing boxes 2, 3 and 5. After B3 the next move is ai_review. The full suite ran green on 79f93dfc.
-  If AJGTQ007 ends cancelled or superseded, re-block on its successor: the auto-restore does not mean the memory box is solved.
+  If AJGTQ007 ends cancelled or superseded, re-block on its successor: the auto-restore does not mean the memory box is solved. The probe syntax is copied from other cards but has never been observed firing (all 10 cards with this form are still blocked), so re-check by hand when AJGTQ007 closes.
 
 ## WHY
 
