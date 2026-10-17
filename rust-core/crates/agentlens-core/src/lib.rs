@@ -1091,16 +1091,29 @@ fn record_ingest_profile(parse_ns: u64, wait_ns: u64, held_ns: u64) {
 /// NO device_id, NO account_uuid — they ARE on the wire (metadata.user_id) but the no-identities
 /// doctrine forbids persisting them anywhere.
 fn body_link_row(p: &agentlens_ingest::BodyPointer) -> (String, Value) {
+    let (span_id, stem, request_id, request_body_id, message_id) = (
+        p.span_id.as_deref().unwrap_or(""),
+        p.body_ref.as_deref().unwrap_or(""),
+        p.request_id.as_deref().unwrap_or(""),
+        p.request_body_id.as_deref().unwrap_or(""),
+        p.message_id.as_deref().unwrap_or(""),
+    );
+    // WHY (TRDD-N6A8VX3G D4): the key derives from EVERY field the row stores. The old key
+    // "{span_id}:{kind}:{ts}" collided for two different same-kind pointers without a span_id in
+    // one OTLP payload (ts is the payload ingest time, shared by all its pointers), and DeltaLog
+    // replay keeps the last row per key, so a link row was silently lost. Identical content still
+    // collapses to one row (harmless). U+001F (unit separator) cannot appear in these ids.
+    let key = [p.session_id.as_str(), span_id, p.kind, stem, request_id, request_body_id, message_id, &p.ts.to_string()].join("\u{1f}");
     (
-        format!("{}:{}:{}", p.span_id.as_deref().unwrap_or(""), p.kind, p.ts),
+        key,
         serde_json::json!({
             "session_id": p.session_id,
-            "span_id": p.span_id.as_deref().unwrap_or(""),
+            "span_id": span_id,
             "kind": p.kind,
-            "stem": p.body_ref.as_deref().unwrap_or(""),
-            "request_id": p.request_id.as_deref().unwrap_or(""),
-            "request_body_id": p.request_body_id.as_deref().unwrap_or(""),
-            "message_id": p.message_id.as_deref().unwrap_or(""),
+            "stem": stem,
+            "request_id": request_id,
+            "request_body_id": request_body_id,
+            "message_id": message_id,
             "ts_ms": p.ts,
         }),
     )
@@ -1496,8 +1509,8 @@ mod body_links_tests {
         let mut reloaded = delta_log::DeltaLog::new(&dir, "body-links");
         let map = reloaded.load().expect("load");
         assert_eq!(map.len(), 2);
-        let req_row = map.get("span-42:request:1000").expect("request row key");
-        let resp_row = map.get("span-42:response:1500").expect("response row key");
+        let req_row = map.get(&body_link_row(&req).0).expect("request row key");
+        let resp_row = map.get(&body_link_row(&resp).0).expect("response row key");
         assert_eq!(req_row["session_id"], "sess-test-1");
         assert_eq!(req_row["stem"], "req-body-file");
         assert_eq!(req_row["request_body_id"], "rbid-7");
@@ -1510,6 +1523,58 @@ mod body_links_tests {
             assert!(obj.get("account_uuid").is_none(), "no account_uuid (no-identities doctrine)");
             assert_eq!(obj.len(), 8, "exactly the spec'd row shape");
         }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn spanless_pointer(body_ref: &str) -> agentlens_ingest::BodyPointer {
+        agentlens_ingest::BodyPointer {
+            session_id: "sess-test-2".to_owned(),
+            kind: "response",
+            body_ref: Some(body_ref.to_owned()),
+            inline_body: None,
+            request_id: None,
+            span_id: None,
+            model: None,
+            query_source: None,
+            request_body_id: None,
+            message_id: None,
+            message_uuid: None,
+            ts: 2_000,
+        }
+    }
+
+    #[test]
+    fn body_link_distinct_spanless_pointers_with_shared_ts_keep_both_rows() {
+        // TRDD-N6A8VX3G D4: same kind, no span_id, same ingest ts, different body_ref — the old
+        // "{span_id}:{kind}:{ts}" key collided and DeltaLog replay kept only the last row.
+        let dir = std::env::temp_dir().join(format!("agentlens-body-links-collide-test-{}", now_ns()));
+        let mut log = delta_log::DeltaLog::new(&dir, "body-links");
+        let mut records = IndexMap::new();
+        for p in [spanless_pointer("body-a"), spanless_pointer("body-b")] {
+            let (k, v) = body_link_row(&p);
+            records.insert(k, v);
+        }
+        log.append_changed(&records).expect("append");
+        let mut reloaded = delta_log::DeltaLog::new(&dir, "body-links");
+        let map = reloaded.load().expect("load");
+        assert_eq!(map.len(), 2, "two different pointers must be two rows");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn body_link_same_pointer_appended_twice_is_one_row() {
+        // TRDD-N6A8VX3G D4: identical row content still collapses to a single row.
+        let dir = std::env::temp_dir().join(format!("agentlens-body-links-same-test-{}", now_ns()));
+        let mut log = delta_log::DeltaLog::new(&dir, "body-links");
+        for _ in 0..2 {
+            let (k, v) = body_link_row(&spanless_pointer("body-a"));
+            let mut rec = IndexMap::new();
+            rec.insert(k, v);
+            log.append_changed(&rec).expect("append");
+        }
+        let mut reloaded = delta_log::DeltaLog::new(&dir, "body-links");
+        let map = reloaded.load().expect("load");
+        assert_eq!(map.len(), 1, "the same pointer is one row");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
