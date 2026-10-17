@@ -201,6 +201,11 @@ pub fn api_calls_relation(store_dir: &Path) -> Option<String> {
     //   without a timestamp sit at epoch 0, so it could out-claim a timed request whenever the
     //   response ts happened to be closer to 0. A NULL distance is unknown, not near: it is
     //   ordered NULLS LAST in both windows, so any timed candidate wins over an untimed one.
+
+    // WHY response_paired: true when the row's request part found its response part
+    // (resp.stem IS NOT NULL, paired arm only); false for a request with no response, and false on
+    // every orphan row even though an orphan's own response part exists. request_part_present is
+    // true on every paired-arm row and false on every orphan row.
     Some(format!(
         "{pairs}, \
          api_parts AS ({parts}), \
@@ -239,7 +244,7 @@ pub fn api_calls_relation(store_dir: &Path) -> Option<String> {
              resp.stop_reason, resp.msg_id, \
              req.system_fps, req.tools_fp, req.first_user_fp, req.breakpoint_positions, \
              req.billing_header, req.cc_prev_req, req.previous_message_id, \
-             true AS request_paired, resp.stem IS NOT NULL AS response_paired, \
+             true AS request_part_present, resp.stem IS NOT NULL AS response_paired, \
              pl.link_request_id, pl.link_msg_id, \
              resp.stem AS resp_stem \
            FROM claims k JOIN reqs req ON req.stem = k.call_stem \
@@ -261,7 +266,7 @@ pub fn api_calls_relation(store_dir: &Path) -> Option<String> {
              NULL::VARCHAR AS system_fps, NULL::VARCHAR AS tools_fp, NULL::VARCHAR AS first_user_fp, \
              NULL::VARCHAR AS breakpoint_positions, NULL::VARCHAR AS billing_header, \
              NULL::VARCHAR AS cc_prev_req, NULL::VARCHAR AS previous_message_id, \
-             false AS request_paired, false AS response_paired, \
+             false AS request_part_present, false AS response_paired, \
              rl.link_request_id, rl.link_msg_id \
            FROM resps resp LEFT JOIN (SELECT link_stem, link_request_id, link_msg_id, link_session_id, link_ts FROM links WHERE link_kind = 'response') rl \
              ON regexp_replace(parse_filename(rl.link_stem, true), '\\.(request|response)$', '') = resp.stem \
@@ -336,7 +341,7 @@ pub fn cache_turns_relation(store_dir: &Path, data_dir: &Path, since_ms: Option<
                      / (CAST(COALESCE(sl.context_window_current_usage_cache_creation_input_tokens, 0) AS DOUBLE) \
                         + CAST(COALESCE(sl.context_window_current_usage_cache_read_input_tokens, 0) AS DOUBLE)) \
                 ELSE NULL END AS writePct, \
-           api.call_stem, api.request_paired, api.response_paired \
+           api.call_stem, api.request_part_present, api.response_paired \
          FROM turns sl \
          LEFT JOIN matched api \
            ON api.turn_session_id = sl.session_id \
@@ -697,7 +702,7 @@ mod cache_turns_sql_tests {
             link_row("sess-c", "span-orphan", "response", "/b/req_r9.response.json", "", "msg_9", T0),
         ]);
         let rows = run_cache_turns_sql(&data.join("store"), &data,
-            "SELECT call_stem, session_id, cache_read_tokens, cache_miss_reason, request_paired, response_paired FROM api_calls",
+            "SELECT call_stem, session_id, cache_read_tokens, cache_miss_reason, request_part_present, response_paired FROM api_calls",
             None, None, &HashMap::new()).expect("run outer").expect("run inner");
         assert_eq!(rows.len(), 1, "the unpaired response half survives: {rows:?}");
         let r = &rows[0];
@@ -705,7 +710,7 @@ mod cache_turns_sql_tests {
         assert_eq!(r["session_id"], json!("sess-c"), "session from its OWN link row");
         assert_eq!(r["cache_read_tokens"], json!(900));
         assert_eq!(r["cache_miss_reason"], json!("below_min_cacheable"));
-        assert_eq!(r["request_paired"], json!(false));
+        assert_eq!(r["request_part_present"], json!(false));
         assert_eq!(r["response_paired"], json!(false), "present but unpaired");
         let _ = std::fs::remove_dir_all(&data);
     }
@@ -825,13 +830,13 @@ mod cache_turns_sql_tests {
             link_row("sess-m2b", "span-m2b", "response", "/b/req_rb.response.json", "rbid-m2b", "msg_b", T0 + 900),
         ]);
         let rows = run_cache_turns_sql(&data.join("store"), &data,
-            "SELECT call_stem, session_id, cache_read_tokens, request_paired, response_paired FROM api_calls",
+            "SELECT call_stem, session_id, cache_read_tokens, request_part_present, response_paired FROM api_calls",
             None, None, &HashMap::new()).expect("run outer").expect("run inner");
         assert_eq!(rows.len(), 1, "the response part survives as its own call: {rows:?}");
         assert_eq!(rows[0]["call_stem"], json!("req_rb"));
         assert_eq!(rows[0]["session_id"], json!("sess-m2b"), "session from its own link row");
         assert_eq!(rows[0]["cache_read_tokens"], json!(900));
-        assert_eq!(rows[0]["request_paired"], json!(false));
+        assert_eq!(rows[0]["request_part_present"], json!(false));
         assert_eq!(rows[0]["response_paired"], json!(false));
         let _ = std::fs::remove_dir_all(&data);
     }
@@ -902,7 +907,7 @@ mod cache_turns_sql_tests {
             link_row("sess-e", "span-e", "response", "/b/req_e2.response.json", "", "msg_e2", T0 + 10_900),
         ]);
         let rows = run_cache_turns_sql(&data.join("store"), &data,
-            "SELECT call_stem, response_paired FROM api_calls WHERE request_paired ORDER BY call_stem",
+            "SELECT call_stem, response_paired FROM api_calls WHERE request_part_present ORDER BY call_stem",
             None, None, &HashMap::new()).expect("run outer").expect("run inner");
         assert_eq!(rows.len(), 2, "one row per request part, never one per pair: {rows:?}");
         assert_eq!(rows[0]["call_stem"], json!("aaaa1111"));
@@ -928,7 +933,7 @@ mod cache_turns_sql_tests {
             link_row("sess-k", "span-k", "response", "/b/req_k1.response.json", "", "msg_k1", T0 + 900),
         ]);
         let rows = run_cache_turns_sql(&data.join("store"), &data,
-            "SELECT call_stem, cache_read_tokens, msg_id, link_msg_id, request_paired, response_paired FROM api_calls ORDER BY call_stem",
+            "SELECT call_stem, cache_read_tokens, msg_id, link_msg_id, request_part_present, response_paired FROM api_calls ORDER BY call_stem",
             None, None, &HashMap::new()).expect("run outer").expect("run inner");
         assert_eq!(rows.len(), 2, "one row per request part, no orphan for the claimed response: {rows:?}");
         let with_tokens = rows.iter().filter(|r| r["cache_read_tokens"] == json!(900)).count();
@@ -938,7 +943,7 @@ mod cache_turns_sql_tests {
         assert_eq!(rows[0]["response_paired"], json!(true));
         assert_eq!(rows[0]["msg_id"], json!("msg_k1"));
         assert_eq!(rows[1]["call_stem"], json!("bbbb2222"));
-        assert_eq!(rows[1]["request_paired"], json!(true));
+        assert_eq!(rows[1]["request_part_present"], json!(true));
         assert_eq!(rows[1]["response_paired"], json!(false));
         assert_eq!(rows[1]["cache_read_tokens"], Value::Null);
         assert_eq!(rows[1]["msg_id"], Value::Null);
@@ -979,10 +984,10 @@ mod cache_turns_sql_tests {
             link_row("sess-u", "span-4", "response", "/b/req_m4.response.json", "rbid-4", "msg_m4", T0 + 25_000),
         ]);
         let rows = run_cache_turns_sql(&data.join("store"), &data,
-            "SELECT call_stem, msg_id, request_paired, response_paired FROM api_calls ORDER BY call_stem",
+            "SELECT call_stem, msg_id, request_part_present, response_paired FROM api_calls ORDER BY call_stem",
             None, None, &HashMap::new()).expect("run outer").expect("run inner");
         assert_eq!(rows.len(), 4, "four paired calls, no orphan response: {rows:?}");
-        let paired = rows.iter().filter(|r| r["request_paired"] == json!(true) && r["response_paired"] == json!(true)).count();
+        let paired = rows.iter().filter(|r| r["request_part_present"] == json!(true) && r["response_paired"] == json!(true)).count();
         assert_eq!(paired, 4, "every request keeps its own response: {rows:?}");
         for (r, (stem, msg)) in rows.iter().zip([
             ("aaaa1111", "msg_m1"), ("bbbb2222", "msg_m2"), ("cccc3333", "msg_m3"), ("dddd4444", "msg_m4"),
@@ -1035,7 +1040,7 @@ mod cache_turns_sql_tests {
         let leaked: Vec<&&String> = response_cols.iter().filter(|c| loser[c.as_str()] != Value::Null).collect();
         assert!(leaked.is_empty(), "the lost response leaked onto the loser via {leaked:?}; response columns {response_cols:?}");
         assert_eq!(loser["response_paired"], json!(false));
-        assert_eq!(loser["request_paired"], json!(true));
+        assert_eq!(loser["request_part_present"], json!(true));
         let _ = std::fs::remove_dir_all(&data);
     }
 
