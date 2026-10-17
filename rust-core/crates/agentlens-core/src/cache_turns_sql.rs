@@ -282,7 +282,7 @@ pub fn api_calls_relation(store_dir: &Path) -> Option<String> {
 }
 
 /// The cache_turns relation: statusline samples collapsed to one row per TURN, joined to the
-/// coalesced api_calls within the 60s window. None when the statusline window holds nothing.
+/// coalesced api_calls within 60 s of each turn's sample span. None when the statusline window holds nothing.
 /// `since_ms` scopes the statusline side only (relation_for's window); the api_calls side is
 /// deliberately unscoped — a small store scan keeps the join honest for old sessions.
 pub fn cache_turns_relation(store_dir: &Path, data_dir: &Path, since_ms: Option<f64>) -> Option<String> {
@@ -297,13 +297,27 @@ pub fn cache_turns_relation(store_dir: &Path, data_dir: &Path, since_ms: Option<
     // creation / (input + read) fraction left the write out of its denominator and gave ~33,333
     // for a full cold write.
     // WHY `matched` (review M3, TRDD-GVA8TTJF): each call is assigned to its ONE nearest turn of
-    // its session within 60 s (QUALIFY per call_stem — unique because api_calls_relation emits one
-    // row per call), and turns then LEFT JOIN that assignment. A plain turns LEFT JOIN api_calls on
-    // the 60 s window put a call on EVERY turn of the session within the window — two prompts
-    // under 60 s apart listed one cold write twice, each with a different writePct. The QUALIFY
-    // is NOT on the turn-anchored join: there it would collapse every call-less turn (all NULL
-    // call_stem, one partition) and drop a turn whose only candidate went to a nearer turn.
-    // Turns are keyed by (session_id, prompt key), the same key the `turns` collapse partitions by.
+    // its session within 60 s of that turn's sample span (QUALIFY per call_stem — unique because
+    // api_calls_relation emits one row per call), and turns then LEFT JOIN that assignment. A plain
+    // turns LEFT JOIN api_calls on the 60 s window put a call on EVERY turn of the session within
+    // the window — two prompts under 60 s apart listed one cold write twice, each with a different
+    // writePct. The QUALIFY is NOT on the turn-anchored join: there it would collapse every call-less
+    // turn (all NULL call_stem, one partition) and drop a turn whose only candidate went to a nearer
+    // turn. Turns are keyed by (session_id, prompt key), the same key the `turns` collapse partitions by.
+    // WHY the window is the turn's sample SPAN (N2, TRDD-GVA8TTJF card amendment 2): a turn spans all
+    // its samples, and a fixed 60 s window around its last tick loses every call on a long streaming
+    // turn. Ranking is the distance to that span (0 inside it), so a call still lands on its nearest turn.
+    // WHY subagent calls stay out of the join (M4, TRDD-GVA8TTJF): a subagent shares its parent's
+    // session_id and would take a main-conversation call_stem. cc_is_subagent is ABSENT on main-thread
+    // requests (api_call.rs billing_header doc), so the test is on the VALUE: a present value other than
+    // false drops that call from the turn join only (it stays in api_calls). This errs on the cheaper
+    // side: a subagent spelled 1 or True never joins a main turn. lower() and trim() read `False` and a
+    // padded ` false ` as false, so a main-thread call spelled that way still joins.
+    // LIMITATION (M4, review round 2): the test reads the REQUEST's billing header, so it covers only
+    // calls whose request part is present. An orphan (a response with no request part) has none: the
+    // header is taken from the request body's system block (api_call.rs), the link row has no such
+    // column, and the orphans CTE projects a NULL billing_header. An orphan therefore joins as a
+    // main-thread call. Pinned by an_orphan_response_without_a_header_joins_the_turn.
     Some(format!(
         "WITH \
          turns AS ( \
@@ -312,7 +326,13 @@ pub fn cache_turns_relation(store_dir: &Path, data_dir: &Path, since_ms: Option<
                ROW_NUMBER() OVER ( \
                  PARTITION BY sl.session_id, COALESCE(sl.prompt_id, 'tick:' || CAST(sl.ts AS VARCHAR)) \
                  ORDER BY sl.ts DESC \
-               ) AS rn \
+               ) AS rn, \
+               MIN(sl.ts) OVER ( \
+                 PARTITION BY sl.session_id, COALESCE(sl.prompt_id, 'tick:' || CAST(sl.ts AS VARCHAR)) \
+               ) AS turn_min_ts, \
+               MAX(sl.ts) OVER ( \
+                 PARTITION BY sl.session_id, COALESCE(sl.prompt_id, 'tick:' || CAST(sl.ts AS VARCHAR)) \
+               ) AS turn_max_ts \
              FROM {statusline} sl \
            ) WHERE rn = 1 \
          ), \
@@ -320,11 +340,14 @@ pub fn cache_turns_relation(store_dir: &Path, data_dir: &Path, since_ms: Option<
          matched AS ( \
            SELECT api.*, sl.session_id AS turn_session_id, \
                   COALESCE(sl.prompt_id, 'tick:' || CAST(sl.ts AS VARCHAR)) AS turn_key \
-           FROM api_calls api JOIN turns sl \
-             ON api.session_id = sl.session_id AND abs(COALESCE(api.ts_ms, 0) - sl.ts) <= 60_000 \
+           FROM (SELECT * FROM api_calls WHERE lower(trim(COALESCE(regexp_extract(billing_header, 'cc_is_subagent=([^;]+)', 1), ''))) IN ('', 'false')) api \
+           JOIN turns sl \
+             ON api.session_id = sl.session_id \
+            AND COALESCE(api.ts_ms, 0) BETWEEN sl.turn_min_ts - 60_000 AND sl.turn_max_ts + 60_000 \
            QUALIFY ROW_NUMBER() OVER ( \
              PARTITION BY api.call_stem \
-             ORDER BY abs(COALESCE(api.ts_ms, 0) - sl.ts), sl.ts DESC, \
+             ORDER BY GREATEST(sl.turn_min_ts - COALESCE(api.ts_ms, 0), 0, COALESCE(api.ts_ms, 0) - sl.turn_max_ts), \
+                      sl.turn_max_ts DESC, \
                       COALESCE(sl.prompt_id, 'tick:' || CAST(sl.ts AS VARCHAR)) \
            ) = 1 \
          ) \
@@ -402,10 +425,15 @@ pub fn run_cache_turns_sql(
     Ok(Some(out))
 }
 
-/// The acceptance SQL (CAJ5RCP9 box 3): every cold write in the last N hours with its miss
-/// reason and the statusline write% for the same turn. Documented here AND on the card.
-pub const ACCEPTANCE_SQL: &str = "SELECT session_id, ts, model, prompt_id, cache_miss_reason, cache_read_tokens, cache_creation_tokens, writePct FROM turns WHERE cache_miss_reason IS NOT NULL ORDER BY ts DESC LIMIT 100";
+/// The acceptance SQL (CAJ5RCP9 box 3): every MAIN-CONVERSATION cold write in the last N hours with
+/// its miss reason and the statusline write% for the same turn (a subagent call whose request part is
+/// present never joins `turns`, M4). Documented here AND on the card. No LIMIT of its own:
+/// run_preset_or_sql applies one, exactly once.
+pub const ACCEPTANCE_SQL: &str = "SELECT session_id, ts, model, prompt_id, cache_miss_reason, cache_read_tokens, cache_creation_tokens, writePct FROM turns WHERE cache_miss_reason IS NOT NULL ORDER BY ts DESC";
 
+/// Rows the acceptance preset returns when the caller gives no `limit`: the cap ACCEPTANCE_SQL's
+/// own LIMIT 100 gave before the single wrapper replaced it. Raw SQL without a limit is never capped.
+pub const DEFAULT_LIMIT: i64 = 100;
 /// The entry the ui.rs dispatch arm calls: `preset` names a canned query, `sql` is raw caller
 /// SQL over the `api_calls`/`statusline`/`turns` CTEs. window_hours scopes the statusline side.
 /// CONTRACT SPLIT (review round 3): this entry requires BOTH sides (Err naming the absent one)
@@ -420,13 +448,38 @@ pub fn run_preset_or_sql(
     window_hours: Option<f64>,
     limit: Option<f64>,
 ) -> Result<Value, String> {
+    // WHY both bounds are refused, not clamped (review m4, TRDD-GVA8TTJF): this project is fail-fast.
+    // forensics_sql clamps, which answers a different question than the one asked without a word.
+    // WHY a whole number only: the `as i64` below would silently truncate 5.5 to 5.
+    // WHY 8760 for window_hours: arbitrary sanity bound (one year), catches unit mistakes such as
+    // milliseconds passed as hours; not derived from retention.
+    if let Some(h) = window_hours {
+        if !(h.is_finite() && h > 0.0 && h <= 8_760.0) {
+            return Err(format!("window_hours must be finite, > 0 and <= 8760 (one year), got {h}"));
+        }
+    }
+    if let Some(l) = limit {
+        if !((1.0..=crate::forensics_sql::HARD_MAX_ROWS).contains(&l) && l.fract() == 0.0) {
+            return Err(format!("limit must be a whole number in [1, {}], got {l}", crate::forensics_sql::HARD_MAX_ROWS));
+        }
+    }
     let store_dir = data_dir.join("store");
     let vars = HashMap::new();
     let since_ms = window_hours.map(|h| crate::now_ms() as f64 - h * 3_600_000.0);
-    let chosen: String = match (preset, sql) {
-        (Some("acceptance"), _) => ACCEPTANCE_SQL.to_owned(),
+    // WHY the preset restates its ORDER BY outside the wrapper: SQL does not promise that a subquery's
+    // order survives the outer SELECT, and the acceptance rows must be the NEWEST. Raw caller SQL gets
+    // no outer ORDER BY (its columns are unknown here, and `ts` may not be one of them), so its own
+    // ORDER BY under a limit relies on DuckDB keeping a subquery's order through the wrapper; pinned by
+    // raw_sql_keeps_its_own_order_under_a_caller_limit.
+    // WHY a trailing `;` is trimmed from raw SQL: the wrapper below applies to raw SQL whenever a limit
+    // is given, so `SELECT 1;` would put the semicolon inside the subquery, a parser error.
+    // Only trailing ones go; a second statement still fails loudly.
+    // LIMITATION: SQL ending in `; -- note` keeps its `;` (the text ends in the comment, not the `;`),
+    // so under a limit it still fails, as a loud parser error, never a silent wrong answer.
+    let (chosen, outer_order): (String, &str) = match (preset, sql) {
+        (Some("acceptance"), _) => (ACCEPTANCE_SQL.to_owned(), " ORDER BY ts DESC"),
         (Some(other), _) => return Err(format!("unknown preset {other:?} (only \"acceptance\")")),
-        (_, Some(s)) => s.to_owned(),
+        (_, Some(s)) => (s.trim_end().trim_end_matches(';').trim_end().to_owned(), ""),
         _ => return Err("pass preset or sql".into()),
     };
     // ALWAYS build the full WITH — extra CTEs are harmless to an api_calls-only query, and a
@@ -435,11 +488,28 @@ pub fn run_preset_or_sql(
     let sl_rel = crate::statusline_store::relation_for(&data_dir.join("statusline"), "main", since_ms, None)
         .ok_or("BLIND: no statusline samples")?;
     let turns_rel = cache_turns_relation(&store_dir, data_dir, since_ms).ok_or("BLIND: cache_turns")?;
-    let sql_text = format!("WITH api_calls AS ({api_rel}), statusline AS ({sl_rel}), turns AS ({turns_rel}) {chosen}");
-    let lim = limit.map(|l| format!(" LIMIT {}", l as i64)).unwrap_or_default();
+    let body = format!("WITH api_calls AS ({api_rel}), statusline AS ({sl_rel}), turns AS ({turns_rel}) {chosen}");
+    // WHY one wrapper and not a suffix (review m4, TRDD-GVA8TTJF): appending " LIMIT n" to SQL that
+    // already ends in LIMIT (ACCEPTANCE_SQL did) is two LIMIT clauses, a parser error. The wrapper
+    // applies the limit exactly once.
+    // WHY DEFAULT_LIMIT for the PRESET only (review rounds 2 and 3, TRDD-GVA8TTJF): ACCEPTANCE_SQL
+    // carried its own LIMIT 100 before; dropping it for the single wrapper must not turn a no-limit
+    // preset call into an unbounded MCP result. Raw SQL without a limit stays unwrapped and unbounded,
+    // as before: capping it would truncate the answer without a word, the opposite of fail-fast.
+    // WHY the newline before `)`: caller SQL ending in a `--` line comment would otherwise swallow
+    // the closing paren.
+    let rows_cap = match (preset.is_some(), limit) {
+        (_, Some(l)) => Some(l as i64),
+        (true, None) => Some(DEFAULT_LIMIT),
+        (false, None) => None,
+    };
+    let sql_text = match rows_cap {
+        Some(n) => format!("SELECT * FROM ({body}\n) AS q{outer_order} LIMIT {n}"),
+        None => body,
+    };
     let con = open_duck(data_dir, &vars)?;
     install_body_links(&con, data_dir)?;
-    let mut stmt = con.prepare(&format!("{sql_text}{lim}")).map_err(|e| e.to_string())?;
+    let mut stmt = con.prepare(&sql_text).map_err(|e| e.to_string())?;
     let mut rows = stmt.query([]).map_err(|e| e.to_string())?;
     let mut names: Option<Vec<String>> = None;
     let mut out = Vec::new();
@@ -600,6 +670,91 @@ mod cache_turns_sql_tests {
         m.insert("context_window_current_usage_cache_read_input_tokens".into(), json!(read));
         st.append(&m, "main", ts as f64);
         st.flush(None);
+    }
+
+    /// M4 fixture: the billing header of a subagent call (cc_is_subagent=true). Verbatim shape of api_call.rs REAL_HEADER.
+    const SUBAGENT_HEADER: &str = "x-anthropic-billing-header: cc_version=2.1.258.c18; cc_entrypoint=cli; cch=00000; cc_is_subagent=true; cc_prev_req=req_011aaaa; cc_prompt_id=bbbb2222; cc_workload=cron;";
+    /// The same header on a main-thread call: the cc_is_subagent key is ABSENT (api_call.rs doc).
+    const MAIN_HEADER: &str = "x-anthropic-billing-header: cc_version=2.1.258.c18; cc_entrypoint=cli; cch=00000; cc_prev_req=req_011aaaa; cc_prompt_id=bbbb2222; cc_workload=cron;";
+    /// A main-thread call that spells the key out as false: it must still join its turn.
+    const FALSE_HEADER: &str = "x-anthropic-billing-header: cc_version=2.1.258.c18; cc_entrypoint=cli; cch=00000; cc_is_subagent=false; cc_prev_req=req_011aaaa; cc_prompt_id=bbbb2222; cc_workload=cron;";
+
+    /// A request body whose system block carries `header` verbatim: the block api_call.rs keeps as
+    /// `billing_header` (its is_agent_meta test selects it).
+    fn request_body_with_billing_header(session: &str, model: &str, header: &str) -> String {
+        json!({
+            "model": model,
+            "system": [{"type": "text", "text": header}, {"type": "text", "text": "you are a fixture"}],
+            "messages": [{"role": "user", "content": "hello"}],
+            "metadata": {"user_id": session}
+        })
+        .to_string()
+    }
+
+    /// One call (request at `req_ts` carrying `header`, response 900 ms later) and one statusline
+    /// sample per `(prompt, ts)` for session `sess`, all through the real writers.
+    fn seed_call_and_samples(data: &Path, sess: &str, header: &str, req_ts: i64, samples: &[(&str, i64)]) {
+        seed_store(data, &[
+            ("2f8c1a2b.request.json", request_body_with_billing_header(sess, "claude-opus-5", header), req_ts),
+            ("req_r1.response.json", response_body("msg_1", "claude-opus-5"), req_ts + 900),
+        ]);
+        seed_links(data, &[
+            link_row(sess, "span-x", "request", "/b/2f8c1a2b.request.json", "rbid-x", "", req_ts),
+            link_row(sess, "span-x", "response", "/b/req_r1.response.json", "rbid-x", "msg_1", req_ts + 900),
+        ]);
+        for &(prompt, ts) in samples {
+            seed_statusline_usage(data, sess, Some(prompt), ts, 500, 3000);
+        }
+    }
+
+    /// Rows of caller SQL over `turns` and `api_calls` (no limit).
+    /// run_cache_turns_sql is the test seam: production calls run_preset_or_sql (the ui.rs dispatch arm).
+    fn turn_rows(data: &Path, sql: &str) -> Vec<Map<String, Value>> {
+        run_cache_turns_sql(&data.join("store"), data, sql, None, None, &HashMap::new())
+            .expect("run outer")
+            .expect("run inner")
+    }
+
+    /// Whether a call with request ts `req_ts` joins the single turn of a two-sample fixture
+    /// (samples at T0 and T0 + 100 000, both prompt p1).
+    fn joins_two_sample_turn(tag: &str, req_ts: i64) -> bool {
+        let data = tmp(tag);
+        seed_call_and_samples(&data, "sess-edge", MAIN_HEADER, req_ts, &[("p1", T0), ("p1", T0 + 100_000)]);
+        let rows = turn_rows(&data, "SELECT call_stem FROM turns");
+        let _ = std::fs::remove_dir_all(&data);
+        assert_eq!(rows.len(), 1, "one turn row, got {rows:?}");
+        rows[0]["call_stem"] != Value::Null
+    }
+
+    /// `n` acceptance-qualifying turns: each is one call with a below_min_cacheable miss and one
+    /// statusline sample, spaced 100 000 ms apart (101 turns span 2.8 h, so a 24 h window keeps them).
+    /// The newest turn sits 5 s before now, so a 0.05 h (180 s) window still keeps it.
+    fn seed_acceptance_turns(data: &Path, n: i64) {
+        let newest = crate::now_ms() - 5_000;
+        let base = newest - (n - 1) * 100_000;
+        let mut bodies: Vec<(String, String, i64)> = Vec::new();
+        let mut links: Vec<(String, Value)> = Vec::new();
+        for i in 0..n {
+            let ts = base + i * 100_000;
+            let span = format!("span-a{i}");
+            let rbid = format!("rbid-a{i}");
+            let msg = format!("msg_a{i}");
+            bodies.push((format!("a{i}.request.json"), request_body("sess-acc", "claude-opus-5"), ts));
+            bodies.push((format!("req_a{i}.response.json"), response_body(&msg, "claude-opus-5"), ts + 900));
+            links.push(link_row("sess-acc", &span, "request", &format!("/b/a{i}.request.json"), &rbid, "", ts));
+            links.push(link_row("sess-acc", &span, "response", &format!("/b/req_a{i}.response.json"), &rbid, &msg, ts + 900));
+        }
+        let refs: Vec<(&str, String, i64)> = bodies.iter().map(|(name, raw, ts)| (name.as_str(), raw.clone(), *ts)).collect();
+        seed_store(data, &refs);
+        seed_links(data, &links);
+        for i in 0..n {
+            seed_statusline_usage(data, "sess-acc", Some(format!("p{i}").as_str()), base + i * 100_000 + 500, 500, 3000);
+        }
+    }
+
+    /// The acceptance preset through run_preset_or_sql, the entry the ui.rs dispatch calls.
+    fn acceptance(data: &Path, window_hours: Option<f64>, limit: Option<f64>) -> Result<Value, String> {
+        crate::cache_turns_sql::run_preset_or_sql(data, Some("acceptance"), None, window_hours, limit)
     }
 
     const T0: i64 = 1_700_000_000_000;
@@ -1115,6 +1270,280 @@ mod cache_turns_sql_tests {
             assert!(err.contains("not JSON-able"), "{sql}: {err}");
         }
         let _ = std::fs::remove_dir_all(&data);
+    }
+
+    /// M4: a subagent call (cc_is_subagent=true) never joins a main-conversation turn; it stays in api_calls.
+    #[test]
+    fn a_subagent_call_never_takes_a_main_conversation_turn() {
+        let data = tmp("m4-sub");
+        seed_call_and_samples(&data, "sess-sub", SUBAGENT_HEADER, T0, &[("p1", T0 + 500)]);
+        let turns = turn_rows(&data, "SELECT prompt_id, call_stem FROM turns");
+        let calls = turn_rows(&data, "SELECT count(*) AS n FROM api_calls");
+        let _ = std::fs::remove_dir_all(&data);
+        assert_eq!(turns.len(), 1, "one turn row, got {turns:?}");
+        assert_eq!(turns[0]["call_stem"], Value::Null, "a subagent call joined the main turn: {turns:?}");
+        assert_eq!(calls[0]["n"], json!(1), "the subagent call must stay in api_calls");
+    }
+
+    /// Control for M4: the same call without the cc_is_subagent key joins its turn.
+    #[test]
+    fn a_main_call_joins_when_the_subagent_key_is_absent() {
+        let data = tmp("m4-main");
+        seed_call_and_samples(&data, "sess-main", MAIN_HEADER, T0, &[("p1", T0 + 500)]);
+        let rows = turn_rows(&data, "SELECT call_stem FROM turns");
+        let _ = std::fs::remove_dir_all(&data);
+        assert_eq!(rows.len(), 1, "one turn row, got {rows:?}");
+        assert_eq!(rows[0]["call_stem"], json!("2f8c1a2b"));
+    }
+
+    /// M4 value test: cc_is_subagent=false is a main-thread call and must still join its turn.
+    #[test]
+    fn an_explicit_false_subagent_key_still_joins() {
+        let data = tmp("m4-false");
+        seed_call_and_samples(&data, "sess-false", FALSE_HEADER, T0, &[("p1", T0 + 500)]);
+        let rows = turn_rows(&data, "SELECT call_stem FROM turns");
+        let _ = std::fs::remove_dir_all(&data);
+        assert_eq!(rows.len(), 1, "one turn row, got {rows:?}");
+        assert_eq!(rows[0]["call_stem"], json!("2f8c1a2b"));
+    }
+
+    /// M4 spelling: lower() and trim() read `False` and a padded ` FALSE ` as false, so these
+    /// main-thread calls still join their turn.
+    #[test]
+    fn a_false_subagent_key_in_any_case_or_padding_still_joins() {
+        for (tag, value) in [("m4-false-mixed", "cc_is_subagent=False"), ("m4-false-padded", "cc_is_subagent= FALSE ")] {
+            let data = tmp(tag);
+            let header = FALSE_HEADER.replace("cc_is_subagent=false", value);
+            assert_ne!(header, FALSE_HEADER, "{value:?}: the replace must change the header, or this case tests nothing");
+            seed_call_and_samples(&data, "sess-false", &header, T0, &[("p1", T0 + 500)]);
+            let rows = turn_rows(&data, "SELECT call_stem FROM turns");
+            let _ = std::fs::remove_dir_all(&data);
+            assert_eq!(rows.len(), 1, "{value:?}: one turn row, got {rows:?}");
+            assert_eq!(rows[0]["call_stem"], json!("2f8c1a2b"), "{value:?} is a main-thread call and must join");
+        }
+    }
+
+    /// M4 LIMITATION, pinned: a response with no request part (an orphan) has no billing header (this
+    /// fixture carries none at all), so the filter cannot tell a subagent call from a main-thread one
+    /// and the orphan joins as main-thread. If a header is ever carried across the request link, this
+    /// test changes together with the filter.
+    #[test]
+    fn an_orphan_response_without_a_header_joins_the_turn() {
+        let data = tmp("m4-orphan");
+        seed_store(&data, &[("req_r1.response.json", response_body("msg_1", "claude-opus-5"), T0 + 900)]);
+        seed_links(&data, &[link_row("sess-orph", "span-x", "response", "/b/req_r1.response.json", "rbid-x", "msg_1", T0 + 900)]);
+        seed_statusline_usage(&data, "sess-orph", Some("p1"), T0 + 500, 500, 3000);
+        let rows = turn_rows(&data, "SELECT call_stem, request_part_present FROM turns");
+        let _ = std::fs::remove_dir_all(&data);
+        assert_eq!(rows.len(), 1, "one turn row, got {rows:?}");
+        assert_eq!(rows[0]["request_part_present"], json!(false), "the fixture must be an orphan: {rows:?}");
+        assert_ne!(rows[0]["call_stem"], Value::Null, "an orphan joins as a main-thread call: {rows:?}");
+    }
+
+    /// N2: a turn spans all its samples, so a call 90 s before the LAST sample joins through the
+    /// FIRST sample (card amendment 2: interval window per collapsed turn).
+    #[test]
+    fn a_call_inside_a_turns_sample_span_joins_it() {
+        let data = tmp("n2-span");
+        seed_call_and_samples(&data, "sess-span", MAIN_HEADER, T0 + 10_000, &[("p1", T0), ("p1", T0 + 100_000)]);
+        let rows = turn_rows(&data, "SELECT call_stem FROM turns");
+        let _ = std::fs::remove_dir_all(&data);
+        assert_eq!(rows.len(), 1, "one turn row, got {rows:?}");
+        assert_eq!(rows[0]["call_stem"], json!("2f8c1a2b"), "the call sits inside the span of the turn");
+    }
+
+    /// N2 boundary: a call joins a turn whose samples span [min, max] iff it lies within 60 s of
+    /// that span, both edges inclusive: min - 60 s and max + 60 s join, one millisecond beyond does not.
+    /// The window is measured from api.ts_ms, which for a paired row is the REQUEST time (`req.ts_ms AS ts_ms`
+    /// in the `paired` CTE), not the response time (req + 900), so the inputs below are request times.
+    #[test]
+    fn the_turn_window_edges_are_inclusive_at_60s_and_exclusive_one_ms_beyond() {
+        assert!(joins_two_sample_turn("n2-lo-in", T0 - 60_000), "min - 60 s must join");
+        assert!(!joins_two_sample_turn("n2-lo-out", T0 - 60_001), "min - 60 s - 1 ms must not join");
+        assert!(joins_two_sample_turn("n2-hi-in", T0 + 160_000), "max + 60 s must join");
+        assert!(!joins_two_sample_turn("n2-hi-out", T0 + 160_001), "max + 60 s + 1 ms must not join");
+    }
+
+    /// N2 ranking: two turns of one session whose windows overlap. The call lies inside the span of
+    /// turn p1 and is nearer to turn p2 latest tick than to p1 latest tick, so it must land on p1
+    /// (ranking is distance to the span, not to the latest tick).
+    #[test]
+    fn a_call_inside_one_turns_span_is_not_stolen_by_an_overlapping_turn() {
+        let data = tmp("n2-overlap");
+        seed_call_and_samples(&data, "sess-ov", MAIN_HEADER, T0 + 120_000,
+            &[("p1", T0), ("p1", T0 + 200_000), ("p2", T0 + 150_000)]);
+        let rows = turn_rows(&data, "SELECT prompt_id, call_stem FROM turns ORDER BY prompt_id");
+        let _ = std::fs::remove_dir_all(&data);
+        assert_eq!(rows.len(), 2, "one row per turn, got {rows:?}");
+        assert_eq!(rows[0]["prompt_id"], json!("p1"));
+        assert_eq!(rows[0]["call_stem"], json!("2f8c1a2b"), "the call sits inside the span of turn p1");
+        assert_eq!(rows[1]["prompt_id"], json!("p2"));
+        assert_eq!(rows[1]["call_stem"], Value::Null, "turn p2 keeps its row without the call");
+    }
+
+    /// N2 tie-break: a call inside the span of BOTH turns (distance 0 to each) lands on the turn with the
+    /// later span end (max_ts DESC). The earlier turn's prompt id sorts first, so only that rule picks the later turn.
+    #[test]
+    fn a_call_inside_two_spans_lands_on_the_later_turn() {
+        let data = tmp("n2-tie");
+        seed_call_and_samples(&data, "sess-tie", MAIN_HEADER, T0 + 100_000,
+            &[("pa", T0 + 50_000), ("pa", T0 + 150_000), ("pz", T0), ("pz", T0 + 200_000)]);
+        let rows = turn_rows(&data, "SELECT prompt_id, call_stem FROM turns ORDER BY prompt_id");
+        let _ = std::fs::remove_dir_all(&data);
+        assert_eq!(rows.len(), 2, "one row per turn, got {rows:?}");
+        assert_eq!(rows[0]["prompt_id"], json!("pa"));
+        assert_eq!(rows[0]["call_stem"], Value::Null, "the earlier turn must not take the call");
+        assert_eq!(rows[1]["prompt_id"], json!("pz"));
+        assert_eq!(rows[1]["call_stem"], json!("2f8c1a2b"), "the later turn (max_ts DESC) takes the call");
+    }
+
+    /// m4: the acceptance preset applies the caller limit exactly once and keeps the NEWEST rows:
+    /// 5 of at least 6 qualifying rows, the 5 latest by ts, newest first.
+    #[test]
+    fn the_acceptance_preset_applies_its_limit_exactly_once() {
+        let data = tmp("m4-limit");
+        seed_acceptance_turns(&data, 6);
+        let all = acceptance(&data, Some(24.0), None).expect("acceptance without a limit");
+        let five = acceptance(&data, Some(24.0), Some(5.0)).expect("acceptance with limit 5");
+        let _ = std::fs::remove_dir_all(&data);
+        let ts_of = |v: &Value| -> Vec<f64> { v.as_array().expect("array").iter().map(|r| r["ts"].as_f64().expect("ts")).collect() };
+        let mut all_ts = ts_of(&all);
+        assert!(all_ts.len() >= 6, "the fixture must yield at least 6 qualifying rows, got {all_ts:?}");
+        all_ts.sort_by(|a, b| b.total_cmp(a));
+        assert_eq!(ts_of(&five), all_ts[..5].to_vec(), "limit 5 must keep the 5 newest rows, newest first");
+    }
+
+    /// The no-limit default: a call without `limit` returns DEFAULT_LIMIT rows at most (the cap
+    /// ACCEPTANCE_SQL's own LIMIT 100 gave), never every qualifying row.
+    #[test]
+    fn a_no_limit_acceptance_call_returns_at_most_the_default_rows() {
+        let data = tmp("m4-default");
+        let n = crate::cache_turns_sql::DEFAULT_LIMIT + 1;
+        seed_acceptance_turns(&data, n);
+        let explicit = acceptance(&data, Some(24.0), Some(n as f64)).expect("acceptance with limit n");
+        let default = acceptance(&data, Some(24.0), None).expect("acceptance without a limit");
+        let _ = std::fs::remove_dir_all(&data);
+        assert_eq!(explicit.as_array().expect("array").len(), n as usize, "the fixture must yield {n} qualifying rows");
+        assert_eq!(default.as_array().expect("array").len(), crate::cache_turns_sql::DEFAULT_LIMIT as usize);
+    }
+
+    /// Raw caller SQL ending in `;` or in a `--` line comment still answers when a limit wraps it. The
+    /// `;` case needs the trim (mutant Csemi). The `-- a note` case kills a bare `)` (mutant Cnl: the
+    /// comment swallows the closing paren, a parse error), but it passes on the pre-change suffix form too
+    /// (the comment swallowed ` LIMIT n` and count(*) is 1 either way), so it does not tell new from old.
+    #[test]
+    fn raw_sql_ending_in_a_semicolon_or_a_line_comment_still_answers_under_a_limit() {
+        let data = tmp("m4-semi");
+        seed_acceptance_turns(&data, 1);
+        for sql in ["SELECT count(*) AS n FROM turns; \n", "SELECT count(*) AS n FROM turns -- a note"] {
+            let rows = crate::cache_turns_sql::run_preset_or_sql(&data, None, Some(sql), Some(24.0), Some(5.0))
+                .unwrap_or_else(|e| panic!("{sql:?} must answer under the limit wrapper, got {e:?}"));
+            assert_eq!(rows[0]["n"], json!(1), "{sql:?}");
+        }
+        let _ = std::fs::remove_dir_all(&data);
+    }
+
+    /// Raw caller SQL without a limit is never capped: DEFAULT_LIMIT belongs to the preset only, so a raw
+    /// query that returns more rows than DEFAULT_LIMIT answers in full, never truncated without a word.
+    #[test]
+    fn raw_sql_without_a_limit_is_never_capped() {
+        let data = tmp("m4-uncapped");
+        seed_acceptance_turns(&data, 1);
+        let n = crate::cache_turns_sql::DEFAULT_LIMIT + 1;
+        let rows = crate::cache_turns_sql::run_preset_or_sql(&data, None, Some(&format!("SELECT * FROM range({n})")), Some(24.0), None)
+            .expect("raw SQL without a limit");
+        let _ = std::fs::remove_dir_all(&data);
+        assert_eq!(rows.as_array().expect("array").len(), n as usize);
+    }
+
+    /// Raw caller SQL keeps its own ORDER BY under a caller limit. Raw SQL gets no outer ORDER BY, so
+    /// this relies on DuckDB keeping a subquery's order through the wrapper; this test pins that.
+    /// If only the order assertion fails while the wrapper in this file is unchanged, DuckDB stopped keeping a
+    /// subquery's order through the wrapper (for example after a duckdb upgrade): the caller's SQL is not at
+    /// fault, the wrapper must change.
+    #[test]
+    fn raw_sql_keeps_its_own_order_under_a_caller_limit() {
+        let data = tmp("m4-raworder");
+        seed_acceptance_turns(&data, 5);
+        let three = crate::cache_turns_sql::run_preset_or_sql(&data, None, Some("SELECT ts FROM turns ORDER BY ts ASC"), Some(24.0), Some(3.0))
+            .expect("raw SQL with its own ORDER BY under a limit");
+        let all = crate::cache_turns_sql::run_preset_or_sql(&data, None, Some("SELECT ts FROM turns"), Some(24.0), None)
+            .expect("raw SQL without a limit");
+        let _ = std::fs::remove_dir_all(&data);
+        let ts_of = |v: &Value| -> Vec<f64> { v.as_array().expect("array").iter().map(|r| r["ts"].as_f64().expect("ts")).collect() };
+        let mut expected = ts_of(&all);
+        assert_eq!(expected.len(), 5, "the fixture must yield 5 turns, got {expected:?}");
+        expected.sort_by(|a, b| a.total_cmp(b));
+        assert_eq!(ts_of(&three), expected[..3].to_vec(), "limit 3 must keep the caller's ascending order: the 3 oldest, oldest first");
+    }
+
+    /// Raw caller SQL with its own LIMIT under a caller limit returns the smaller of the two.
+    #[test]
+    fn raw_sql_with_its_own_limit_returns_the_smaller_of_the_two_limits() {
+        let data = tmp("m4-rawlimit");
+        seed_acceptance_turns(&data, 1);
+        let run = |own: i64, caller: f64| -> usize {
+            crate::cache_turns_sql::run_preset_or_sql(&data, None, Some(&format!("SELECT * FROM range(10) LIMIT {own}")), Some(24.0), Some(caller))
+                .unwrap_or_else(|e| panic!("own LIMIT {own} under caller limit {caller}: {e:?}"))
+                .as_array()
+                .expect("array")
+                .len()
+        };
+        let (own_smaller, caller_smaller) = (run(2, 5.0), run(7, 3.0));
+        let _ = std::fs::remove_dir_all(&data);
+        assert_eq!(own_smaller, 2, "the query's own LIMIT 2 is the smaller");
+        assert_eq!(caller_smaller, 3, "the caller limit 3 is the smaller");
+    }
+
+    /// m4: window_hours must be finite and in (0, 8760]; any other value is refused, the error naming `window_hours`.
+    /// Refusals must come from the new check (never the old BLIND error); 8760 and 0.05 are accepted.
+    #[test]
+    fn window_hours_outside_zero_to_one_year_is_refused_by_name() {
+        let data = tmp("m4-window");
+        seed_acceptance_turns(&data, 1);
+        for bad in [-1.0, 0.0, f64::NAN, f64::INFINITY, 8_760.5] {
+            let err = acceptance(&data, Some(bad), None).expect_err("window_hours outside (0, 8760] must be refused");
+            assert!(
+                err.contains("window_hours") && !err.contains("BLIND"),
+                "window_hours {bad}: the new check must name the argument, got {err:?}"
+            );
+        }
+        for ok in [8_760.0, 0.05] {
+            let rows = acceptance(&data, Some(ok), None).unwrap_or_else(|e| panic!("window_hours {ok} must be accepted, got {e:?}"));
+            assert_eq!(rows.as_array().expect("array").len(), 1, "window_hours {ok} keeps the newest turn");
+        }
+        let _ = std::fs::remove_dir_all(&data);
+    }
+
+    /// m4: a limit below 1 is refused by name, never run as LIMIT 0.
+    #[test]
+    fn limit_below_one_is_refused_by_name() {
+        let data = tmp("m4-limit0");
+        seed_acceptance_turns(&data, 1);
+        let err = acceptance(&data, Some(24.0), Some(0.0)).expect_err("limit 0 must be refused");
+        let _ = std::fs::remove_dir_all(&data);
+        assert!(err.contains("limit must be"), "the error must name the argument, got {err:?}");
+    }
+
+    /// m4: a limit above HARD_MAX_ROWS is refused by name, never clamped.
+    #[test]
+    fn limit_above_hard_max_rows_is_refused_by_name() {
+        let data = tmp("m4-limitmax");
+        seed_acceptance_turns(&data, 1);
+        let err = acceptance(&data, Some(24.0), Some(crate::forensics_sql::HARD_MAX_ROWS + 1.0))
+            .expect_err("a limit above HARD_MAX_ROWS must be refused");
+        let _ = std::fs::remove_dir_all(&data);
+        assert!(err.contains("limit must be"), "the error must name the argument, got {err:?}");
+    }
+
+    /// m4: a fractional limit is refused by name, never truncated (5.5 would otherwise run as LIMIT 5).
+    #[test]
+    fn a_fractional_limit_is_refused_by_name() {
+        let data = tmp("m4-frac");
+        seed_acceptance_turns(&data, 1);
+        let err = acceptance(&data, Some(24.0), Some(5.5)).expect_err("limit 5.5 must be refused");
+        let _ = std::fs::remove_dir_all(&data);
+        assert!(err.contains("limit must be"), "the error must name the argument, got {err:?}");
     }
 
 }
