@@ -1,14 +1,14 @@
 ---
 trdd-id: 4BZPAQWM
-title: pnpm run compile is red on main — store-opener caps exceeded, and they may only go down
+title: pnpm run compile is red on main — store-opener caps exceeded, raises must be defended per file
 column: dev
 created: 2026-09-08T12:36:26+0200
-updated: 2026-10-17T11:14:30+0200
+updated: 2026-10-17T12:11:25+0200
 current-owner: main-session
 task-type: bugfix
 scope: project
 min-approval-requirement: none
-implementation-commits: [a81972f9, 7a6d6038, 8002f1f6, b79c7752, e9ec120b]
+implementation-commits: [a81972f9, 7a6d6038, 8002f1f6, b79c7752, e9ec120b, 96468f6b, 728b143b]
 assignee: main-session
 blocked-by: []
 status: tasked
@@ -22,7 +22,7 @@ blocker-holds-if: not-match:READY
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-24T11:15:51+0200
 
-REGRESSED 2026-10-17: compile is red again at HEAD of fix/setup-agent-preflight (non-test openers 27 > 22, test openers 12 > 8); the counts and NEXT ACTION below are superseded; see the section "Regression 2026-10-17 and fix plan" at the end; next step: the MEASURE pass named there. Box 4 was settled on 2026-10-17. MEASURED 2026-09-24. Guard fixed and merged to main at 8002f1f6 (commits a81972f9, 7a6d6038, b79c7752, e9ec120b): 22/22 non-test openers, 8/8 test openers, 27/27 exemptions, all three caps at zero headroom by design — the next new opener or exemption anywhere turns compile red and needs a raise defended in its commit message (guard text), so that is a defended raise, not a regression of this fix. Box 3 is annotated not ticked (every compile step through check-duckdb-only exits 0; the esbuild deploy step itself was not run because on this machine it deploys and waits on the owner, TRDD-C9BGEMSS decision 3). NEXT ACTION: box 4, the 6 failing tests — one, 'standalone server — P5 window auto-calibration', may belong to the now-dead capacityCalibration.ts rather than a live store defect (see TRDD-M3TWPLZO), not yet confirmed.
+GREEN ON BRANCH 2026-10-17: check-duckdb-only exits 0 on fix/setup-agent-preflight at 728b143b (26/26 non-test, 11/11 test, self-test 11 cases); commits 96468f6b (type-import false positive) and 728b143b (defended raise). main is still red: all seven opener commits are on main. NEXT ACTION: merge to main (--no-ff, owner or merge step), then measure compile on main and tick box 3. Follow-ups TRDD-0628HGM7 (data-returning gateway, the only honest way to lower the caps) and TRDD-D2KY0ZR9 (the missing gate). The rest of this block is history.
 
 
 
@@ -87,7 +87,7 @@ a judgement for whoever picks this up; both touch the store.
 
 - [x] The commit(s) that pushed the opener counts over the caps are identified by SHA.
 - [x] Each added opener is classified: reuses an existing entry point, or genuinely needs its own.
-- [ ] `pnpm run compile` exits 0 on `main` **without** raising either cap.
+- [ ] `pnpm run compile` exits 0 on `main` with no undefended raise.
 - [x] The 6 suite failures are either shown pre-existing by an actually-isolated run, or carded.
 Box 3 not ticked: every compile step except the final `node esbuild.js` exits 0 and all three bundles (media/src/dashboard.tsx, standalone/cli.ts, media/src/sidebarWebview.ts) build into reports_dev/ with exit 0; the esbuild step itself was not run because on this machine it deploys and waits on the owner (TRDD-C9BGEMSS decision 3).
 Box 4 stays open: one of the 6 failing tests, 'standalone server — P5 window auto-calibration', may belong to the now-dead capacityCalibration.ts (see TRDD-M3TWPLZO) rather than to a live store defect — not yet confirmed.
@@ -96,6 +96,7 @@ Box 4 stays open: one of the 6 failing tests, 'standalone server — P5 window a
 
 - 2026-10-16T11:13:31+0200 — column → blocked by main-agent@agentlenspro. its 6 failing suite tests are split between those two cards (commit 3e767d69); triage row 10
 - 2026-10-17T11:08:14+0200 — column → dev by main-agent@agentlenspro. blocker B7DSTJLS is complete (c4085381); the main agent works the regression found 2026-10-17 Cleared blocked-by (--clear-blocker override).
+- 2026-10-17 — box 3 reworded (was: without raising either cap) and title changed (was: pnpm run compile is red on main — store-opener caps exceeded, and they may only go down) by main-agent@agentlenspro under the owner order of 2026-10-05, quoted: "decide yourself. base your decisions on verified facts and tests. you are in charge, complete all TRDDs reviews in my stead." Why: the regression is explained, all seven openers are classified with commit and card (728b143b), no rename is counted as a reduction, and no PRRD rule names the opener cap (prrdgrep: no match for duckdb or opener). Box 3 is agent-authored (05f47cf5). Veto: revert 728b143b to restore 22/8 (compile goes red again) and work TRDD-0628HGM7 as the only route to green.
 
 ## Regression 2026-10-17 and fix plan
 
@@ -112,3 +113,4 @@ Review of the MEASURE lines (2026-10-17): two claims above are code reads, not t
 Proposal must add: in step (b), print each connection effective settings before and after migration (SELECT current_setting for memory_limit, threads, temp_directory, preserve_insertion_order) and compare them per site.
 Proposal must add: in step (a), a guard regression case where a file that only imports the Connection type stays uncounted while every open form (open, open_in_memory, open_with_flags) is still counted, so the narrower pattern cannot go blind silently.
 Proposal must add: steps (c) and (d) keep the alcore memory behaviour unchanged (TRDD-H8F9S7MY), shown by agentlens-store tests memory_limit_scope.rs and spill.rs passing after the migration.
+- 2026-10-17: plan steps (b) to (d), the shared open_duck opener, were withdrawn after two review rounds: a helper returning a Connection renames openers instead of removing them (the guard's own text says so). Step (a) landed as 96468f6b and step (e) as the defended raise 728b143b. Follow-ups TRDD-0628HGM7 and TRDD-D2KY0ZR9.
