@@ -792,7 +792,100 @@ mod cache_turns_sql_tests {
         crate::cache_turns_sql::run_preset_or_sql(&data, Some("acceptance"), None, Some(24.0), None).expect("acceptance preset");
         run_cache_turns_sql(&data.join("store"), &data, "SELECT * FROM turns", None, None, &HashMap::new())
             .expect("run outer").expect("run inner");
+        let rows = turn_rows(&data, "SELECT prompt_id FROM turns");
         let _ = std::fs::remove_dir_all(&data);
+        assert_eq!(rows.len(), 1, "one turn row, got {rows:?}");
+        assert_eq!(rows[0]["prompt_id"], json!(""), "absent prompt_id COALESCEs to the empty string, got {rows:?}");
+    }
+
+    /// One statusline sample appended through the real store; `keys` = Some((prompt_id, ttl)) adds the two
+    /// OPTIONAL keys, None leaves them out. Flushes but does not seal; callers seal.
+    fn append_mixed_sample(st: &mut crate::statusline_store::StatuslineStore, session: &str, keys: Option<(&str, &str)>, ts: i64) {
+        let mut m = Map::new();
+        m.insert("session_id".into(), json!(session));
+        m.insert("model_id".into(), json!("claude-opus-5"));
+        if let Some((prompt, ttl)) = keys {
+            m.insert("prompt_id".into(), json!(prompt));
+            m.insert("prompt_cache_ttl".into(), json!(ttl));
+        }
+        m.insert("context_window_current_usage_input_tokens".into(), json!(1000));
+        m.insert("context_window_current_usage_output_tokens".into(), json!(200));
+        m.insert("context_window_current_usage_cache_creation_input_tokens".into(), json!(500));
+        m.insert("context_window_current_usage_cache_read_input_tokens".into(), json!(3000));
+        st.append(&m, "main", ts as f64);
+        st.flush(None);
+    }
+
+    /// Force a seal through the store's own path (rotate the live WAL, WAL -> parquet part). SEAL_ROWS=1 makes
+    /// a one-row live WAL eligible; the heavy-DuckDB slot may be busy, so a skipped tick is retried.
+    fn seal_now(data: &Path) {
+        let vars = HashMap::from([("AGENTLENS_STATUSLINE_SEAL_ROWS".to_string(), "1".to_string())]);
+        let counters = crate::statusline_store::SealCounters::default();
+        // seal_one (the per-WAL step) is private to statusline_store, so the test goes through maybe_seal, which skips
+        // a tick while the process-wide heavy-DuckDB slot is held. 300 x 200 ms = 60 s: 10 s was flaky under load (TRDD-Q0IFYJFO).
+        for _ in 0..300 {
+            if crate::statusline_store::maybe_seal(&data.join("statusline"), &counters, &vars, crate::now_ms() as f64) > 0 {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(200));
+        }
+        panic!("statusline seal never ran: the heavy-DuckDB slot (acquire_heavy_for_chore \"statusline seal\") stayed busy for 60 s");
+    }
+
+    #[test]
+    fn mixed_window_with_and_without_prompt_keys_binds_in_wal_and_sealed_forms() {
+        // One sample carries a UUID-shaped prompt_id + prompt_cache_ttl, another carries neither. DuckDB infers
+        // a UUID-shaped string as UUID per file; this proves the union still binds and COALESCE yields '' (TRDD-Q0IFYJFO).
+        const UUID: &str = "0d5f7e3a-1b2c-4d5e-8f90-123456789abc";
+        const LEGACY_UUID: &str = "9a1b2c3d-4e5f-4a6b-8c7d-0123456789ab";
+        // layout: 0 = WAL only; 1 = both sealed into one part; 2 = UUID sample sealed, key-less sample in the WAL;
+        // 3 = layout 2 plus a legacy part whose prompt_id is TRULY UUID-typed (the form an older binary may have sealed).
+        for layout in 0..4 {
+            let data = tmp(&format!("mixed{layout}"));
+            let ts = crate::now_ms() - 5_000;
+            // An api-call pair keeps the store relation non-blind (every neighbour seeds one).
+            seed_store(&data, &[
+                ("2f8c1a2b.request.json", request_body("sess-m1", "claude-opus-5"), ts),
+                ("req_r1.response.json", response_body("msg_1", "claude-opus-5"), ts + 900),
+            ]);
+            seed_links(&data, &[
+                link_row("sess-m1", "span-m", "request", "/b/2f8c1a2b.request.json", "rbid-1", "", ts),
+                link_row("sess-m1", "span-m", "response", "/b/req_r1.response.json", "rbid-1", "msg_1", ts + 900),
+            ]);
+            let mut st = crate::statusline_store::StatuslineStore::new(data.join("statusline"));
+            append_mixed_sample(&mut st, "sess-m1", Some((UUID, "1h")), ts + 500);
+            if layout >= 2 {
+                seal_now(&data);
+            }
+            if layout == 3 {
+                let dir = data.join("statusline").join("main").join(crate::statusline_store::day_key(ts as f64));
+                let part = dir.join("part-1-1-0.parquet");
+                let con = agentlens_store::duckdb::Connection::open_in_memory().unwrap();
+                con.execute_batch(&format!(
+                    "COPY (SELECT {} AS ts, 'sess-m3' AS session_id, 'claude-opus-5' AS model_id, \
+                     1000 AS context_window_current_usage_input_tokens, 200 AS context_window_current_usage_output_tokens, \
+                     500 AS context_window_current_usage_cache_creation_input_tokens, 3000 AS context_window_current_usage_cache_read_input_tokens, \
+                     CAST('{LEGACY_UUID}' AS UUID) AS prompt_id, '1h' AS prompt_cache_ttl) TO '{}' (FORMAT PARQUET)",
+                    ts + 700,
+                    part.display()
+                ))
+                .expect("write legacy UUID-typed part");
+            }
+            append_mixed_sample(&mut st, "sess-m2", None, ts + 1_000);
+            if layout == 1 {
+                seal_now(&data);
+            }
+            let rows = turn_rows(&data, "SELECT prompt_id, prompt_cache_ttl FROM turns ORDER BY ts");
+            let _ = std::fs::remove_dir_all(&data);
+            let expected = if layout == 3 { 3 } else { 2 };
+            assert_eq!(rows.len(), expected, "layout {layout}: {expected} turn rows, got {rows:?}");
+            assert_eq!(rows[0]["prompt_id"], json!(UUID), "layout {layout}: the UUID row keeps its string, got {rows:?}");
+            assert_eq!(rows[0]["prompt_cache_ttl"], json!("1h"), "layout {layout}: ttl, got {rows:?}");
+            if layout == 3 {
+                assert_eq!(rows[1]["prompt_id"], json!(LEGACY_UUID), "layout 3: the UUID-typed part reads back as a string, got {rows:?}");
+            }
+            assert_eq!(rows[expected - 1]["prompt_id"], json!(""), "layout {layout}: the key-less row COALESCEs to '', got {rows:?}");
+        }
     }
 
     const T0: i64 = 1_700_000_000_000;

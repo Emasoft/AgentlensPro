@@ -181,7 +181,8 @@ const GUARANTEED_COLUMNS: [(&str, &str); 26] = [
     // samples lack a key is a Binder error at plan time, which COALESCE cannot catch.
     ("prompt_id", "VARCHAR"),
     ("prompt_cache_ttl", "VARCHAR"),
-    // `exceeds_200k_tokens` + `rate_limits_seven_day_resets_at` complete the TS list below.
+    // column_template appends `exceeds_200k_tokens` + `rate_limits_seven_day_resets_at` after this list; the Rust
+    // list still differs from the TS list (TRDD-Q0IFYJFO).
 ];
 
 fn column_template() -> String {
@@ -197,13 +198,18 @@ fn column_template() -> String {
 }
 
 /// varcharSessionId — normalize ONE source: guarantee the contract columns bind AND force
-/// session_id to VARCHAR. DuckDB infers a UUID-shaped string as the UUID type PER FILE; a
+/// session_id AND prompt_id to VARCHAR. DuckDB infers a UUID-shaped string as the UUID type PER FILE; a
 /// union of a UUID-typed part with a VARCHAR-typed WAL reconciles to UUID and ONE non-UUID id
 /// kills every view with `Could not convert string to INT128` — the cast must wrap each file's
 /// own relation (a SELECT-list cast is too late, the failure happens in the union).
 fn varchar_session_id(inner: &str) -> String {
+    // WHY (TRDD-Q0IFYJFO): prompt_id is cast too — read_json_auto types a UUID-shaped string column as UUID
+    // (Claude Code prompt ids are UUIDs), and cache_turns COALESCE(sl.prompt_id, <VARCHAR literal>) then fails to
+    // bind ("Cannot mix values of type UUID and VARCHAR"). The name says session_id only; not renamed in this change.
+    // Casting a UUID-typed value back to VARCHAR yields the canonical lowercase hyphenated form (already true for
+    // session_id); Claude Code emits lowercase ids, so the string round-trips unchanged.
     format!(
-        "SELECT * REPLACE (CAST(session_id AS VARCHAR) AS session_id) FROM ({} UNION ALL BY NAME {inner})",
+        "SELECT * REPLACE (CAST(session_id AS VARCHAR) AS session_id, CAST(prompt_id AS VARCHAR) AS prompt_id) FROM ({} UNION ALL BY NAME {inner})",
         column_template()
     )
 }
