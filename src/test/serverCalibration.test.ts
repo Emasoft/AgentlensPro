@@ -96,8 +96,28 @@ suite('standalone server — P5 window auto-calibration (real boot, real ingest 
 
   const configPath = (): string => path.join(home, '.agentlens', 'burn-config.json')
   const readConfig = (): Record<string, unknown> => JSON.parse(fs.readFileSync(configPath(), 'utf8')) as Record<string, unknown>
+  // Raw bytes of burn-config.json, or null when alcore has not created it: the file is created only
+  // on the calibrated path, so "unchanged" must keep null as null (TRDD-A77UKLVI).
+  const configSnapshot = (): string | null => fs.existsSync(configPath()) ? fs.readFileSync(configPath(), 'utf8') : null
+  // undefined when the file does not exist yet — a stand-alone negative test may run before any calibration.
   const observedOf = (account: string): Record<string, unknown> | undefined =>
-    ((readConfig().observed ?? {}) as Record<string, Record<string, unknown>>)[account]
+    fs.existsSync(configPath())
+      ? ((readConfig().observed ?? {}) as Record<string, Record<string, unknown>>)[account]
+      : undefined
+  // getLog() is append-only (freePort.ts: log += chunk), so an offset mark is sound: logSince(mark)
+  // holds only what the server printed after the mark.
+  const logMark = (): number => getLog().length
+  const logSince = (mark: number): string => getLog().slice(mark)
+  // Bounded poll: stdout and the HTTP socket are separate pipes, so the line may land just after the
+  // response; still fails after 2 s (TRDD-A77UKLVI).
+  const logLineSince = async (mark: number, needle: string, ms = 2_000): Promise<boolean> => {
+    const deadline = Date.now() + ms
+    for (;;) {
+      if (logSince(mark).includes(needle)) return true
+      if (Date.now() >= deadline) return false
+      await sleep(100)
+    }
+  }
 
   async function ingestAccountConsumption(sessionId: string, accountUuid: string, events: Array<{ ts: number; tokens: number; costUsd: number }>): Promise<void> {
     const logRecords = [
@@ -239,16 +259,39 @@ suite('standalone server — P5 window auto-calibration (real boot, real ingest 
 
   test('a second replay with LOWER consumption does not lower the observed capacity', async function () {
     this.timeout(20_000)
-    // Simulate a prior HIGHER observation (e.g. from an earlier week) by raising the persisted
-    // figure; the account's current window (300k) is far below it.
+    // Stand-alone (TRDD-A77UKLVI): own account + a real observation written by alcore itself, so
+    // this test no longer depends on test 1 having run first.
+    const now = Date.now()
+    await ingestAccountConsumption('sess-cal-f', 'acct-cal-f', [
+      { ts: now - 2 * HOUR, tokens: 120_000, costUsd: 0.36 },
+      { ts: now - 1 * HOUR, tokens: 100_000, costUsd: 0.3 },
+      { ts: now - 1 * MIN, tokens: 80_000, costUsd: 0.24 },
+    ])
+    // Wait for alcore to see the consumption before stalling: the calibration consumption lookup can read the same lagging summary /api/burn-status serves, so a stall posted straight after ingest could take the empty-consumption skip (TRDD-A77UKLVI).
+    const win = await burnStatusAccount('acct-cal-f')
+    assert.ok(win, 'precondition: acct-cal-f window visible before the stall')
+    assert.strictEqual(win?.budget.fiveHour.consumedTokens, 300_000)
+    const first = await httpReq(uiPort, 'POST', '/api/hook-events', stopFailureFixture('sess-cal-f'))
+    assert.ok(first.status >= 200 && first.status < 300, `hook ingest must be accepted: ${first.text}`)
+    const seeded = observedOf('acct-cal-f')
+    assert.ok(seeded, 'precondition: alcore must have written a real observation for acct-cal-f')
+    assert.strictEqual(seeded?.window5hTokens, 300_000)
+
+    // Simulate a prior HIGHER observation (e.g. from an earlier week) by raising ONLY
+    // window5hTokens of the real entry; every other field stays as alcore wrote it. The account's
+    // current window (300k) is far below it.
     const raw = readConfig()
     const observed = raw.observed as Record<string, Record<string, unknown>>
-    observed['acct-cal-a'] = { ...observed['acct-cal-a'], window5hTokens: 9_999_999_999 }
+    observed['acct-cal-f'] = { ...observed['acct-cal-f'], window5hTokens: 9_999_999_999 }
     fs.writeFileSync(configPath(), JSON.stringify(raw))
+    const observedAtBefore = observedOf('acct-cal-f')?.observedAt
 
-    const r = await httpReq(uiPort, 'POST', '/api/hook-events', stopFailureFixture('sess-cal-a'))
+    const r = await httpReq(uiPort, 'POST', '/api/hook-events', stopFailureFixture('sess-cal-f'))
     assert.ok(r.status >= 200 && r.status < 300)
-    assert.strictEqual(observedOf('acct-cal-a')?.window5hTokens, 9_999_999_999, 'the higher prior observation must survive')
+    const after = observedOf('acct-cal-f')
+    assert.strictEqual(after?.window5hTokens, 9_999_999_999, 'the higher prior observation must survive')
+    // observedAt unchanged proves the skip path ran and nothing was rewritten.
+    assert.strictEqual(after?.observedAt, observedAtBefore, 'the skip path must not rewrite the entry')
   })
 
   test('a natural 5h window rollover does not calibrate', async function () {
@@ -261,32 +304,71 @@ suite('standalone server — P5 window auto-calibration (real boot, real ingest 
       { ts: now - 4 * HOUR, tokens: 200_000, costUsd: 0.6 },
       { ts: now - 30 * MIN, tokens: 100_000, costUsd: 0.3 },
     ])
+    // Wait for alcore to see the consumption before stalling: the calibration consumption lookup can read the same lagging summary /api/burn-status serves, so a stall posted straight after ingest could take the empty-consumption skip (TRDD-A77UKLVI).
+    assert.ok(await burnStatusAccount('acct-cal-b'), 'precondition: acct-cal-b window visible before the stall')
+    // Mark the log BEFORE the stall: only lines this stall produced may satisfy the "rolled"
+    // assertion, so an earlier test's output can never make it pass (TRDD-A77UKLVI).
+    const mark = logMark()
     const r = await httpReq(uiPort, 'POST', '/api/hook-events', stopFailureFixture('sess-cal-b'))
     assert.ok(r.status >= 200 && r.status < 300)
     assert.strictEqual(observedOf('acct-cal-b'), undefined, 'a rolled window must not calibrate')
-    assert.ok(getLog().includes('rolled'), `server log must name the rollover guard. Log tail: ${getLog().slice(-600)}`)
+    assert.ok(await logLineSince(mark, 'rolled'), `server log must name the rollover guard. Log tail: ${getLog().slice(-600)}`)
   })
 
   test('a non-rate-limit StopFailure does not calibrate', async function () {
     this.timeout(20_000)
-    const before = JSON.stringify(readConfig())
-    const r = await httpReq(uiPort, 'POST', '/api/hook-events', stopFailureFixture('sess-cal-a', 'connection reset by peer'))
+    // Stand-alone (TRDD-A77UKLVI): own account with a clean window that WOULD calibrate if the
+    // error were rate-limit class, so the negative result is attributable to the error text alone.
+    const now = Date.now()
+    await ingestAccountConsumption('sess-cal-d', 'acct-cal-d', [
+      { ts: now - 2 * HOUR, tokens: 120_000, costUsd: 0.36 },
+      { ts: now - 1 * HOUR, tokens: 100_000, costUsd: 0.3 },
+      { ts: now - 1 * MIN, tokens: 80_000, costUsd: 0.24 },
+    ])
+    // Wait for alcore to see the consumption before stalling: the calibration consumption lookup can read the same lagging summary /api/burn-status serves, so a stall posted straight after ingest could take the empty-consumption skip (TRDD-A77UKLVI).
+    const win = await burnStatusAccount('acct-cal-d')
+    assert.ok(win, 'precondition: acct-cal-d window visible before the stall')
+    assert.strictEqual(win?.budget.fiveHour.consumedTokens, 300_000)
+    const before = configSnapshot()
+    const r = await httpReq(uiPort, 'POST', '/api/hook-events', stopFailureFixture('sess-cal-d', 'connection reset by peer'))
     assert.ok(r.status >= 200 && r.status < 300)
-    assert.strictEqual(JSON.stringify(readConfig()), before, 'a non-rate-limit turn death must not touch the config')
+    assert.strictEqual(observedOf('acct-cal-d'), undefined, 'a non-rate-limit turn death must not calibrate')
+    assert.strictEqual(configSnapshot(), before, 'a non-rate-limit turn death must not touch the config (null stays null)')
   })
 
   test('user-configured capacity is never overwritten by a later stall', async function () {
     this.timeout(20_000)
-    // The user sets a manual cap while the server is running — the calibration must re-read the
-    // file and stand down, leaving BOTH the cap and the observed section untouched.
-    const raw = readConfig()
-    raw.window5hTokens = 424_242
-    fs.writeFileSync(configPath(), JSON.stringify(raw))
-    const before = JSON.stringify(readConfig())
+    // Stand-alone (TRDD-A77UKLVI): own account with a clean window that WOULD calibrate absent the veto.
+    const now = Date.now()
+    await ingestAccountConsumption('sess-cal-e', 'acct-cal-e', [
+      { ts: now - 2 * HOUR, tokens: 120_000, costUsd: 0.36 },
+      { ts: now - 1 * HOUR, tokens: 100_000, costUsd: 0.3 },
+      { ts: now - 1 * MIN, tokens: 80_000, costUsd: 0.24 },
+    ])
+    // Wait for alcore to see the consumption before stalling: the calibration consumption lookup can read the same lagging summary /api/burn-status serves, so a stall posted straight after ingest could take the empty-consumption skip (TRDD-A77UKLVI).
+    const win = await burnStatusAccount('acct-cal-e')
+    assert.ok(win, 'precondition: acct-cal-e window visible before the stall')
+    assert.strictEqual(win?.budget.fiveHour.consumedTokens, 300_000)
+    const prior = configSnapshot()
+    try {
+      // The user sets a manual cap while the server is running — the calibration must re-read the
+      // file and stand down, leaving the file byte-identical.
+      const raw = (prior ? JSON.parse(prior) : {}) as Record<string, unknown>
+      raw.window5hTokens = 424_242
+      fs.mkdirSync(path.dirname(configPath()), { recursive: true })
+      fs.writeFileSync(configPath(), JSON.stringify(raw))
+      const before = configSnapshot()
+      const mark = logMark()
 
-    const r = await httpReq(uiPort, 'POST', '/api/hook-events', stopFailureFixture('sess-cal-a'))
-    assert.ok(r.status >= 200 && r.status < 300)
-    assert.strictEqual(JSON.stringify(readConfig()), before, 'a user-configured config must be byte-identical after the stall')
-    assert.ok(getLog().includes('user-configured'), `server log must name the veto. Log tail: ${getLog().slice(-600)}`)
+      const r = await httpReq(uiPort, 'POST', '/api/hook-events', stopFailureFixture('sess-cal-e'))
+      assert.ok(r.status >= 200 && r.status < 300)
+      assert.strictEqual(configSnapshot(), before, 'a user-configured config must be byte-identical after the stall')
+      assert.ok(await logLineSince(mark, 'user-configured'), `server log must name the veto. Log tail: ${getLog().slice(-600)}`)
+    } finally {
+      // The server re-reads the file on each stall, so the cap must not outlive this test and
+      // veto a later one: restore the prior bytes, or remove the file if there was none.
+      if (prior === null) fs.rmSync(configPath(), { force: true })
+      else fs.writeFileSync(configPath(), prior)
+    }
   })
 })
