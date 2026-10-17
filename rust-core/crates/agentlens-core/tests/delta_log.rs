@@ -496,13 +496,16 @@ fn compact_from_disk_refuses_a_corrupt_source() {
     assert!(dir.join("x.delta.ndjson").exists() && !dir.join("x.snapshot.ndjson.tmp").exists());
 }
 
-/// TRDD-1RJBOEI1 — the from-disk verify is real: `<snapshot>.tmp` is pre-created as a symlink to
-/// /dev/null, so the write "succeeds" and the read-back is empty. Both compactions must refuse,
-/// keep the old snapshot and the delta byte for byte, and remove the bad tmp. Without the verify,
-/// the rename would install the empty file as the snapshot.
+/// TRDD-1RJBOEI1, retargeted by TRDD-O8MGRU72 — `<snapshot>.tmp` is pre-created as a symlink to
+/// /dev/null, so every write "succeeds" while nothing reaches a file. This used to reach the
+/// from-disk verify (an empty read-back); since O8MGRU72 the sync before the rename refuses it first
+/// (measured on macOS: F_FULLFSYNC on /dev/null fails with ENODEV, os error 19). Both compactions
+/// must refuse, keep the old snapshot and the delta byte for byte, and remove the bad tmp. The
+/// verify itself has no fixture left: a regular file that sync_all accepted holds what was written,
+/// so a test can no longer make a synced tmp read back short without a fault hook.
 #[cfg(unix)]
 #[test]
-fn a_corrupted_temp_snapshot_fails_verification_and_keeps_the_old_snapshot() {
+fn an_unsyncable_temp_snapshot_is_refused_and_keeps_the_old_snapshot() {
     let dir = tmp("compact-bad-tmp");
     for name in ["m", "n"] {
         write_mixed_log(&dir, name);
@@ -514,7 +517,7 @@ fn a_corrupted_temp_snapshot_fails_verification_and_keeps_the_old_snapshot() {
         let mut log = DeltaLog::new(&dir, name);
         let map = DeltaLog::new(&dir, name).load().unwrap();
         let err = if name == "m" { log.compact_from_disk().unwrap_err() } else { log.compact_now(&map).unwrap_err() };
-        assert!(err.contains("compaction verify failed") && err.contains("expected 4"), "{name}: {err}");
+        assert!(err.contains(".tmp: sync:") && !err.contains("verify"), "{name}: refused at the sync: {err}");
         assert_eq!(std::fs::read(&snap).unwrap(), snap_before, "{name}: old snapshot kept");
         assert_eq!(std::fs::read(&delta).unwrap(), delta_before, "{name}: delta kept");
         assert!(std::fs::symlink_metadata(&tmp_path).is_err(), "{name}: the bad tmp is removed");
@@ -567,5 +570,28 @@ fn a_failed_write_stops_compaction_and_removes_the_temp_snapshot() {
             let r = log.append_changed(&map).unwrap();
             assert_eq!(r.appended, 3, "written untouched after the failed write");
         }
+    }
+}
+
+/// TRDD-O8MGRU72 — both compaction entry points (compact_now and compact_from_disk) now sync the
+/// temp snapshot before the rename and the directory after it, before the delta is removed. Each
+/// must still leave the snapshot, no delta and no `.tmp`, and the snapshot must read back intact
+/// through a fresh DeltaLog. What this CANNOT prove: that the data survives a power loss. The
+/// syncs only change what is on the device after a crash, which no userspace test can observe
+/// without cutting power; this proves the compaction returns Ok through the new sync calls (so a
+/// sync that errors on this platform, a directory fd included, would fail it), nothing more.
+#[test]
+fn compaction_with_syncs_leaves_the_snapshot_and_no_delta() {
+    let dir = tmp("compact-synced");
+    for name in ["m", "n"] {
+        write_mixed_log(&dir, name);
+        let map = DeltaLog::new(&dir, name).load().unwrap();
+        let mut log = DeltaLog::new(&dir, name);
+        let bytes = if name == "m" { log.compact_from_disk().unwrap() } else { log.compact_now(&map).unwrap() };
+        assert!(bytes > 0, "{name}: the delta was non-empty, so it compacted");
+        assert!(dir.join(format!("{name}.snapshot.ndjson")).exists(), "{name}: snapshot present");
+        assert!(!dir.join(format!("{name}.delta.ndjson")).exists(), "{name}: delta removed");
+        assert!(!dir.join(format!("{name}.snapshot.ndjson.tmp")).exists(), "{name}: no stray tmp");
+        assert_eq!(DeltaLog::new(&dir, name).load().unwrap(), map, "{name}: the snapshot reads back intact");
     }
 }

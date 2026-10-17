@@ -133,15 +133,31 @@ impl TmpSnapshot {
         Ok(())
     }
 
-    /// Flush and CLOSE the file (an unflushed buffer would make the from-disk verify read a short
-    /// file, and Windows will not rename a file that is still open). Returns (path, bytes written).
+    /// Flush, SYNC (TRDD-O8MGRU72) and CLOSE the file (an unflushed buffer would make the from-disk
+    /// verify read a short file, and Windows will not rename a file that is still open). Returns
+    /// (path, bytes written).
     fn finish(self) -> Result<(PathBuf, u64), String> {
         let TmpSnapshot { path, w, bytes } = self;
-        if let Err(e) = w.into_inner() {
-            let m = format!("{}: {}", path.display(), e.error());
-            // TRDD-1RJBOEI1: a failed flush is a failed write — close the file, then remove it, so
-            // no stray `<snapshot>.tmp` is left behind.
-            drop(e);
+        let f = match w.into_inner() {
+            Ok(f) => f,
+            Err(e) => {
+                let m = format!("{}: {}", path.display(), e.error());
+                // TRDD-1RJBOEI1: a failed flush is a failed write — close the file, then remove it, so
+                // no stray `<snapshot>.tmp` is left behind.
+                drop(e);
+                let _ = fs::remove_file(&path);
+                return Err(m);
+            }
+        };
+        // TRDD-O8MGRU72: SYNC before the file is closed and returned. The data must be on stable
+        // storage BEFORE commit_verified renames it over the snapshot and deletes the delta: the
+        // from-disk verify can be served from the page cache, so it proves nothing about the device,
+        // and a power loss right after the rename could otherwise leave an empty or partial snapshot
+        // as the only copy. On macOS std issues F_FULLFSYNC here (a drive-cache flush, not just
+        // fsync). A failed sync is a failed write: close the file, remove it, Err.
+        if let Err(e) = f.sync_all() {
+            let m = format!("{}: sync: {e}", path.display());
+            drop(f);
             let _ = fs::remove_file(&path);
             return Err(m);
         }
@@ -490,6 +506,28 @@ impl DeltaLog {
             return Err(format!("{}: compaction verify failed ({m}); delta KEPT, snapshot NOT replaced — no records lost", self.snapshot_path.display()));
         }
         fs::rename(tmp, &self.snapshot_path).map_err(|e| format!("{}: rename: {e}", self.snapshot_path.display()))?;
+        // TRDD-O8MGRU72: make the RENAME durable before the delta, the only other copy, is deleted.
+        // finish() synced the file contents; the rename itself is a directory entry change that can
+        // still be lost on a power loss until the parent directory is synced. On Linux fsync on a
+        // read-only directory fd is the documented way; on macOS std issues F_FULLFSYNC, which APFS
+        // accepts on a directory fd (observed in the delta_log tests on this machine). Windows has no
+        // directory handle without backup semantics and is not a shipped target, so the sync is
+        // unix-only. A failed directory sync returns Err and KEEPS the delta (never delete the only
+        // other copy while durability is unproven). What a later load() then sees: from
+        // compact_from_disk, the same records (the snapshot is the replay of snapshot + that delta);
+        // from compact() via save(), every key at either its new value or the value its last delta
+        // line holds, never a fabricated record: the same "this save did not persist" outcome a
+        // failed verify already has, and save() returns the Err.
+        #[cfg(unix)]
+        {
+            let dir = match self.snapshot_path.parent() {
+                Some(d) if !d.as_os_str().is_empty() => d,
+                _ => Path::new("."),
+            };
+            fs::File::open(dir)
+                .and_then(|d| d.sync_all())
+                .map_err(|e| format!("{}: directory sync after compaction failed ({e}); snapshot replaced, delta KEPT", dir.display()))?;
+        }
         // Only AFTER the snapshot is durable AND verified.
         let _ = fs::remove_file(&self.delta_path);
         Ok(())
@@ -515,11 +553,15 @@ impl DeltaLog {
     /// forth through both files and every jump outside the buffer is a real seek plus a refill. Do
     /// NOT use it there: it is built for body-links only.
     ///
-    /// Failure semantics, all of which leave the old snapshot and the delta in place:
+    /// Failure semantics:
     /// - the source does not replay (load() would fail), or `<snapshot>.tmp` cannot be created or
-    ///   written: Err at the first error, `written` untouched, `<snapshot>.tmp` removed;
-    /// - the final flush or the from-disk verify fails: Err with `written` already seeded (as
-    ///   load() succeeding, then compact_now failing), `<snapshot>.tmp` removed.
+    ///   written: Err at the first error, `written` untouched, `<snapshot>.tmp` removed, the old
+    ///   snapshot and the delta in place;
+    /// - the final flush, the sync (TRDD-O8MGRU72) or the from-disk verify fails: Err with `written`
+    ///   already seeded (as load() succeeding, then compact_now failing), `<snapshot>.tmp` removed,
+    ///   the old snapshot and the delta in place;
+    /// - the directory sync after the rename fails (TRDD-O8MGRU72): Err with the new snapshot
+    ///   installed and the delta KEPT; the next load() replays the same records from both.
     ///
     /// WHY a write error leaves `written` unseeded: body-links' only writer is append_changed with
     /// keys unique per pointer, so a missing hash costs at most one re-append of a record that is
