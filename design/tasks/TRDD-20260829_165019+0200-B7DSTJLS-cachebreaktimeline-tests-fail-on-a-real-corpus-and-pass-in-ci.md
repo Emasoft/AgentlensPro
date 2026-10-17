@@ -3,13 +3,13 @@ trdd-id: B7DSTJLS
 title: cacheBreakTimeline tests pass in CI and fail on a developer machine, and fail differently depending on run order
 column: todo
 created: 2026-08-29T16:50:19+0200
-updated: 2026-10-17T10:44:11+0200
+updated: 2026-10-17T10:46:46+0200
 current-owner: main-session
 task-type: bugfix
 scope: project
 project-id: agentlenspro
 relevant-rules: []
-implementation-commits: [aef94208]
+implementation-commits: [aef94208, 842a6150]
 status: tasked
 ---
 
@@ -17,7 +17,7 @@ status: tasked
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes every block below) — 2026-09-05T20:56
 
-**The fix landed on 2026-09-01 and the card never said so where it counts.** `aef94208`
+**CLOSED 2026-10-17: every acceptance box is resolved (box 2 struck to TRDD-2R0AXCKL, box 4 reworded; see the Approval log and "Closing evidence 2026-10-17" at the end). This block's status and NEXT ACTION below are superseded and kept as history.** **The fix landed on 2026-09-01 and the card never said so where it counts.** `aef94208`
 (`fix(test): cacheBreakTimeline fixtures no longer scan the LIVE hook-events store`, test file only,
 24 lines) is the implementing commit — it was recorded in a second STATE block at the BOTTOM of this
 file and `implementation-commits:` stayed empty, which is exactly why the 09-05 07:02 AI review found
@@ -153,3 +153,4 @@ used the pre-fix out/ and ran under a deliberate load storm). → ai_review.
 - Box 3: the run-order shape is gone: the --grep subset gave 7 of 7 passing, the same verdict per title as the whole-file run (load 7.4). Both store and hook-events defaults now resolve to an empty scratch dir (source read: dataPath honours AGENTLENS_DATA_DIR, then DATA_DIR, then HOME; setup.js sets HOME and DATA_DIR and deletes AGENTLENS_DATA_DIR). Which change removed the shape, aef94208 or 091799ee, is not separated, and it was not re-run under heavy load.
 - Box 4: fs trace (scripts_dev/trace-fs-opens.cjs): control touched no hook-events dir; mutant listed <mocha scratch>/data/hook-events twice. Neither touched the real ~/.agentlens/hook-events or ~/.claude/projects (within what the preload patches: readdir, opendir, open, stat; a readFileSync of a fixed path would not show). Both runs listed the real ~/.agentlens/hook-spool: that is setup.js's deliberate read-only end-of-run leak check (setup.js:382), confirmed by position: in the control trace the test's own last read is line 59 and the hook-spool listing plus 172 stats are lines 60 to 232, the end of the run. Reports: docs_dev/20261017-b7dstjls-verify-report.md, docs_dev/20261017-b7ds-trace-mutation-report.md (gitignored scratch).
 - Box 5: the comment above noStore in src/test/cacheBreakTimeline.test.ts now records the hookEventsDir half, the setup.js isolation and the skip side effect.
+The 2026-10-16 note on commit 3e767d69: the failure 3e767d69 assigned to this card is the real-corpus test "builds a cause cost-peak report from the REAL OTEL bodies without crashing" (a 120 s timeout in the 2026-09-05 full run). Since 091799ee it skips under mocha; it did not run on 2026-10-17 and is not shown fixed. It belongs to the struck box 2, carried by TRDD-2R0AXCKL.
