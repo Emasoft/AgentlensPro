@@ -4,7 +4,7 @@ title: alcore crash-loops under the RSS cap because the ingest pass and boot chu
 column: todo
 status: tasked
 created: 2026-09-27T00:23:04+0200
-updated: 2026-10-18T12:35:51+0200
+updated: 2026-10-18T12:36:47+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
