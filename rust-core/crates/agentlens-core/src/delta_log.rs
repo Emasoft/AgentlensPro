@@ -776,6 +776,8 @@ impl DeltaLog {
             let v: &Value = v.borrow();
             let (i, pushed) = self.note_record(k.as_ref(), v, &mut body);
             if i < original {
+                // WHY: keys must be unique (doc above); a repeated key must fail loudly in tests, not only at compaction's count check.
+                debug_assert!(!seen[i], "save_from: key {:?} repeated in records", k.as_ref());
                 seen[i] = true;
             }
             appended += usize::from(pushed);
@@ -940,6 +942,47 @@ mod tests {
     /// A file's text, "" when it does not exist.
     fn text(p: &Path) -> String {
         fs::read_to_string(p).unwrap_or_default()
+    }
+
+
+    /// TRDD-2JOIAH2G — the order half of "every key, in order": a `.tmp` holding exactly the right
+    /// keys and values but in the WRONG order must fail the verify. `pos` is the record's position
+    /// in replay (`ix.live`) order, and the `same` closure here is shaped like compact()'s (a
+    /// (key hash, value hash) per position, recorded in the order the records were written), so a
+    /// swap reads as a mismatch at position 0. WHY driven through commit_verified and not compact():
+    /// compact() writes its own `.tmp` from `records`, so it cannot be handed a pre-made out-of-order
+    /// file without a production fault hook. The control commits the same records in the right
+    /// order, so the refusal is shown to be about order, not a closure that refuses everything.
+    #[test]
+    fn a_temp_snapshot_with_the_right_records_in_the_wrong_order_fails_verify() {
+        let dir = unit_dir("order");
+        let recs = [("a", json!(1)), ("b", json!({"x": 2}))];
+        let sums: Vec<(u64, u64)> = recs.iter().map(|(k, v)| (hash_json(k), hash_json(&serde_json::to_string(v).unwrap()))).collect();
+        let same = |pos: usize, k: &str, v: &Value| sums.get(pos) == Some(&(hash_json(k), hash_json(&serde_json::to_string(v).unwrap())));
+        let in_order = "{\"k\":\"a\",\"v\":1}\n{\"k\":\"b\",\"v\":{\"x\":2}}\n";
+        let reversed = "{\"k\":\"b\",\"v\":{\"x\":2}}\n{\"k\":\"a\",\"v\":1}\n";
+        let snap_before = b"{\"k\":\"a\",\"v\":0}\n".to_vec();
+        let delta_before = b"{\"k\":\"a\",\"v\":1}\n{\"k\":\"b\",\"v\":{\"x\":2}}\n".to_vec();
+        for (name, tmp_body, ok) in [("reversed", reversed, false), ("in-order", in_order, true)] {
+            let log = DeltaLog::new(&dir, name);
+            fs::write(&log.snapshot_path, &snap_before).unwrap();
+            fs::write(&log.delta_path, &delta_before).unwrap();
+            let tmp = PathBuf::from(format!("{}.tmp", log.snapshot_path.display()));
+            fs::write(&tmp, tmp_body).unwrap();
+            let r = log.commit_verified(&tmp, recs.len(), same);
+            assert!(fs::symlink_metadata(&tmp).is_err(), "{name}: the temp snapshot is gone either way");
+            if ok {
+                assert!(r.is_ok(), "{name}: the right order commits: {r:?}");
+                assert_eq!(text(&log.snapshot_path), tmp_body, "{name}: the snapshot is the temp body");
+                assert!(!log.delta_path.exists(), "{name}: the delta is removed");
+            } else {
+                let err = r.unwrap_err();
+                assert!(err.contains("verify failed"), "{name}: refused by the verify: {err}");
+                assert_eq!(fs::read(&log.snapshot_path).unwrap(), snap_before, "{name}: old snapshot byte-identical");
+                assert_eq!(fs::read(&log.delta_path).unwrap(), delta_before, "{name}: delta still present");
+            }
+        }
+        let _ = fs::remove_dir_all(&dir);
     }
 
     /// TRDD-2JOIAH2G — the streamed seed_written hashes each record exactly as load() and

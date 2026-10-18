@@ -4,7 +4,7 @@ title: alcore crash-loops under the RSS cap because the ingest pass and boot chu
 column: todo
 status: tasked
 created: 2026-09-27T00:23:04+0200
-updated: 2026-10-18T07:33:48+0200
+updated: 2026-10-18T12:21:41+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -243,3 +243,10 @@ ROUND-204 (2026-09-28T16:09+0200): BLOCK-SCALE REFRESH executed (the cadence rul
 2026-10-18: INFERRED main startup holder — CardStore.parsed keeps every card (~51.5k) as serde_json Value trees for the process life (card_store.rs:236, load_resident at :427); sizes unmeasured.
 2026-10-18 qualifier: the isolated run survived only marginally — it peaked 38 MB under the cap and its footprint fell after a memory-pressure stage-3 cache shrink at 16 s; n=1.
 2026-10-18 qualifier: "every card for the process life" ignores the demotion path (demote_cold_timelines, card_store.rs:910); "the 3 October binary" rests on bin-native/darwin-arm64/alcore's file date, not on the running process's loaded image.
+
+## 2026-10-18 streaming card seed and save
+
+6a59f275 streams the restore seed and save_cards (DeltaLog::save_from). A/B on fresh clones, changed=478 both: up-0 s mimalloc commit 1,111 -> 852 MB (-259; pre-set bar 300, missed), purged 765 -> 349 MB (-416; bar 400, met), RSS 1,860 -> 1,537 MB. Report: reports/rss-crash-loop/20261018_122000+0200-ab-streaming-save.md
+Not a fix for the exits: HEAD exited at 20 s, 6a59f275 at 142 s, both over the 2,048 MB cap; survival is noisy (HEAD survived 300 s at 11:31). save_cards at 300 s never reached, unmeasured.
+Attribution: the seed map was part of the restore-on transient (INFERRED from code + this A/B); 852 vs 573 MB commit remains for the rest of the restore and the boot sweep.
+New lead: repeated 0.3-11 s state-lock holds in start_sweeper's post-sweep block (st.ingest_scanned after a watcher sweep_paths), the 11 s one just before the 142 s exit; under investigation.
