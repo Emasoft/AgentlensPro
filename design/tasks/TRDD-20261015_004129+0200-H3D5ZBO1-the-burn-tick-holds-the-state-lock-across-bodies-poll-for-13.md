@@ -4,7 +4,7 @@ title: The burn tick holds the state lock across bodies.poll, for 130-576 s on t
 column: todo
 status: tasked
 created: 2026-10-15T00:41:29+0200
-updated: 2026-10-15T00:42:18+0200
+updated: 2026-10-18T07:32:00+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -30,3 +30,7 @@ approval-datetime: 2026-10-15T00:41:29+0200
 - On the first pass after each boot it takes 130-576 s; after that it takes about 7.5 s per tick.
 - It is still under the state lock at HEAD.
 - It is the dominant long holder of the state lock today; TRDD-N60JUWU3's stop path starves behind it.
+
+## Findings (2026-10-18)
+
+2026-10-18: the 55 s hold is BodiesActivityTracker::poll (burn/bodies_activity.rs:247), which stats every unseen name on its first poll before the 15-min seed skip; it is also called from lib.rs:647. Footprint grew only ~55 MB during the hold, so moving it off the lock relieves lock starvation but is not shown to lower the memory peak. Skipping the first-poll stat would empty the burn-risk and warm-disarm evidence for 15 min after each restart.

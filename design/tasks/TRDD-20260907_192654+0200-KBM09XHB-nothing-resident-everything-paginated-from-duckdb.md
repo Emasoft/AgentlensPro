@@ -3,7 +3,7 @@ trdd-id: KBM09XHB
 title: Nothing is stored in RAM — every answer is a short or paginated DuckDB result, discarded immediately
 column: todo
 created: 2026-09-07T19:26:54+0200
-updated: 2026-09-08T10:02:32+0200
+updated: 2026-10-18T07:32:01+0200
 current-owner: main
 task-type: refactor
 parent-trdd: 7YPQWKPG
@@ -129,3 +129,7 @@ figure read promptly after restart measures a process that has not done anything
 - The `boot_load` doc-comment at `session_summary_sql.rs:5` already describes a function that no
   longer exists; deleting more symbols will strand more comments. Sweep them in the same change.
 - A latency regression on the dashboard is the expected cost. Measure it; do not discover it.
+
+## Findings (2026-10-18)
+
+2026-10-18: measured relevance to the RSS crash loop — the ~1.8-2.0 GB startup baseline is present with no body files, and CardStore.parsed (card_store.rs:236) holding every card in RAM is the INFERRED main holder. Evidence: reports/rss-crash-loop/20261018_070119+0200-isolated-empty-bodies-run.md
