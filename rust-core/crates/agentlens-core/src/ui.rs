@@ -4242,6 +4242,11 @@ pub async fn run_burn_tick(state: Arc<Mutex<CoreState>>, hub: Arc<SseHub>) {
         let t_off = std::time::Instant::now();
         let status = crate::burn_status_for(&tick_summary, &config, &ttl, now);
         let off_lock = t_off.elapsed();
+        // TRDD-2JOIAH2G: release the summary `Arc` the moment its last use is done (`status` is
+        // owned, nothing borrows from it). Held to the end of the tick, it made the previous
+        // summary shared whenever a rebuild landed in that window, so `take_sessions`
+        // (summary_engine.rs) deep-copied the whole sessions array (rig: +1 shared copy at +116 s).
+        drop(tick_summary);
         {
             let mut st = state.lock_timed();
             let t1 = std::time::Instant::now();

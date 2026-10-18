@@ -4,7 +4,7 @@ title: alcore crash-loops under the RSS cap because the ingest pass and boot chu
 column: todo
 status: tasked
 created: 2026-09-27T00:23:04+0200
-updated: 2026-10-18T12:36:47+0200
+updated: 2026-10-18T12:57:54+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -255,3 +255,4 @@ Attribution: the seed map was part of the restore-on transient (INFERRED from co
 Correction to the two 12:23 lines above (review): the jump is in phys_footprint, ~800 MB (1,746 MB at +61 s to a sampled 2,553 MB at +76 s, elevated until ~+96 s, 1,732 MB by +101 s); mimalloc commit reached its 2,398 MB high-water by the up-68 s line, with no commit value between up-0 s (839 MB) and up-68 s. The summary/stripped caches are first OBSERVED at up-68 s (absent at up-0 s): timing correlation only, not shown causal. Traffic: no dashboard or SSE client, only a 5 s poll of /api/debug/log-scan-stats (which itself calls summary_now). Post-boot lock holds <= 0.68 s; boot holds 2.2 s. Full reads +7 over 8 minutes, consistent with new or replaced files.
 Correction: streaming read_lines_from is DEFERRED, not dropped. It reaches only from-0 reads (boot, plus inode change, shrink, new files), about 2x the largest changed file at boot (~170 MB for the 86.7 MB transcript): a boot-margin candidate, since most rig exits happened during boot (20, 23, 28 s), not a fix for the post-boot spike. save_cards running near +300 s is NOT confirmed (no persist counter captured).
 Precision (review): the 5 s poll is not the only summary_now trigger; the burn tick (every 4 s, ui.rs:4206) and the 25 ms rebuild loop (bin/alcore.rs:473) refresh it with no client at all. Boot-time exits: 20 s (HEAD), 23 s (6a59f275), 28 s (3 Oct binary); 6a59f275 also exited post-boot at 142 s.
+Root mechanism of the forced summary copies split out as TRDD-REKYAXKP.

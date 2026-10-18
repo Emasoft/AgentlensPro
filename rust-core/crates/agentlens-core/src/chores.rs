@@ -609,6 +609,33 @@ fn log_spool_drain(d: &crate::hook_events::SpoolDrain) {
     }
 }
 
+/// TRDD-2JOIAH2G — what the composition line reports for one derived cache: a session COUNT, read
+/// under the state lock, never a serialized size. Three states because "absent" and "present but
+/// uncountable" are different facts: `Absent` prints `none`, and nothing else may.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CacheSessions {
+    /// No cached value (cold boot, or the cache was taken by an in-flight rebuild).
+    Absent,
+    /// A cached value with a top-level `sessions` array of this length.
+    Sessions(usize),
+    /// A cached value with no top-level `sessions` array (not an object, or the key missing).
+    Unknown,
+}
+
+impl CacheSessions {
+    /// Classify a borrowed cache value. Takes `&Value`, never an `Arc`, so the caller's handle
+    /// can be dropped inside the lock block (see `composition_tick`).
+    pub fn of(cached: Option<&Value>) -> Self {
+        match cached {
+            None => CacheSessions::Absent,
+            Some(v) => match v.get("sessions").and_then(Value::as_array) {
+                Some(arr) => CacheSessions::Sessions(arr.len()),
+                None => CacheSessions::Unknown,
+            },
+        }
+    }
+}
+
 /// TRDD-2JOIAH2G — the one-line composition report, PURE so its arithmetic is unit-testable.
 ///
 /// The crash-loop investigation proved (exit stats: post-GC committed == peak, 1.8/1.9/2.2 GiB)
@@ -631,23 +658,26 @@ pub fn composition_line(
     card_rows: usize,
     card_text_mb: u64,
     _persist_bytes: u64,
-    summary_cache_mb: Option<u64>,
-    stripped_cache_mb: Option<u64>,
+    summary_cache: CacheSessions,
+    stripped_cache: CacheSessions,
 ) -> String {
     let slack = commit_mb.saturating_sub(window_est_mb);
-    // `None` = no cached value for either cache (cold boot, or nothing derived yet) — reported
-    // as `none`, never as 0 MB, because "zero bytes" and "nothing cached" are different facts.
-    let cache_field = |mb: Option<u64>, name: &str| match mb {
-        Some(v) => format!("{name} {v} MB"),
-        None => format!("{name} none MB"),
+    // `Absent` = no cached value (cold boot, or nothing derived yet) — reported as `none`, and
+    // `none` means ONLY that: a present cache with zero sessions prints `0 sessions`, and a
+    // present cache whose shape carries no `sessions` array prints `present (count unknown)`.
+    // "nothing cached" and "cached but empty" are different facts and the line must not blur them.
+    let cache_field = |c: CacheSessions, name: &str| match c {
+        CacheSessions::Absent => format!("{name} none"),
+        CacheSessions::Sessions(n) => format!("{name} {n} sessions"),
+        CacheSessions::Unknown => format!("{name} present (count unknown)"),
     };
     format!(
         "alcore: composition: mimalloc commit {commit_mb} MB, process rss {rss_mb} MB, \
          window.spans {window_count} (~{window_est_mb} MB sampled est), {}, {}, \
          card rows {card_rows} (~{card_text_mb} MB text, DuckDB own allocator, limit 256 MiB), \
          derived slack = commit - window est = {slack} MB",
-        cache_field(summary_cache_mb, "summary-cache"),
-        cache_field(stripped_cache_mb, "stripped-cache"),
+        cache_field(summary_cache, "summary-cache"),
+        cache_field(stripped_cache, "stripped-cache"),
     )
 }
 
@@ -663,7 +693,7 @@ pub fn composition_line(
 ///   holds (partially-used pages + freed-but-undecommitted), the number Phases C/F/D re-rank
 ///   against.
 /// * A failed walk (`None`) prints `?` for BOTH fields: an unmeasurable quantity must be
-///   visible, not read as 0 — same contract as `none MB` for the caches above.
+///   visible, not read as 0 — same contract as `none` for the caches above.
 fn mi_suffix(mi: &crate::rss_guard::MimallocInfo, live_bytes: Option<u64>) -> String {
     const MB: u64 = 1024 * 1024;
     let mut s = String::new();
@@ -690,10 +720,11 @@ fn mi_suffix(mi: &crate::rss_guard::MimallocInfo, live_bytes: Option<u64>) -> St
 
 /// TRDD-2JOIAH2G — one composition report: what the committed bytes ARE, in one server.log line.
 /// Phase 1 runs under the state lock and touches nothing heavier than counter reads, ≤20 `Arc`
-/// refcount bumps and one aggregate SELECT (see the comment at that call); phase 2 — the only
+/// refcount bumps, two cache session counts (their handles dropped inside the lock) and one
+/// aggregate SELECT (see the comment at that call); phase 2 — the only
 /// allocation-heavy step, serializing the sample — runs OFF the lock.
 fn composition_tick(state: &Arc<Mutex<CoreState>>) {
-    let (window_count, sample, card_corpus, summary_cached, stripped_cached) = {
+    let (window_count, sample, card_corpus, summary_cache, stripped_cache) = {
         let st = state.lock_timed();
         let window_count = st.window.spans.len();
         // An even sample across the window, at most 20 handles: cloning an `Arc` is a refcount
@@ -704,19 +735,22 @@ fn composition_tick(state: &Arc<Mutex<CoreState>>) {
         } else {
             st.window.spans.iter().step_by(window_count / 20).take(20).cloned().collect()
         };
-        // TRDD-2JOIAH2G round-73: the two derived caches are the PRIME-but-UNMEASURED
-        // candidate for the ~2.3 GB unexplained live memory. Same contract as the window
-        // sample: an Arc clone under the lock, the multi-MB serialize happens below OFF the
-        // lock. `cached_value` (not `cached_any`) deliberately: a 60s measurement read must
-        // not inflate the served hit/miss ratio.
-        let summary_cached = st.summary_cache.cached_value();
-        let stripped_cached = st.stripped_cache.cached_value();
+        // TRDD-2JOIAH2G: the two derived caches are reported as SESSION COUNTS computed here,
+        // under the lock, from a statement-scoped `Arc` that is dropped before the lock is
+        // released. No `Arc<Value>` of either cache may leave this block: while this tick held
+        // them across an off-lock serialize, every rebuild landing in that window found the
+        // previous summary shared and `take_sessions` (summary_engine.rs) deep-copied the whole
+        // sessions array (rig: sharedCopies 0 -> 2 at +71 s, footprint 1,590 -> 2,365 MB).
+        // `cached_value` (not `cached_any`) deliberately: a 60s measurement read must not
+        // inflate the served hit/miss ratio.
+        let summary_cache = CacheSessions::of(st.summary_cache.cached_value().as_deref());
+        let stripped_cache = CacheSessions::of(st.stripped_cache.cached_value().as_deref());
         // Card corpus, one aggregate. DEVIATION from the card's "never under the state lock":
         // `CardStore` is a plain field of `CoreState` with no lock of its own, so its connection
         // is only reachable from here — and the boot restore already holds this lock across
         // THOUSANDS of DuckDB puts (log_reader.rs `restore`). One aggregate SELECT over ≤32k
         // rows is bounded and strictly cheaper than that precedent.
-        (window_count, sample, st.cards.corpus_bytes(), summary_cached, stripped_cached)
+        (window_count, sample, st.cards.corpus_bytes(), summary_cache, stripped_cache)
     };
 
     let (card_rows, card_text_bytes) = match card_corpus {
@@ -758,18 +792,10 @@ fn composition_tick(state: &Arc<Mutex<CoreState>>) {
         0
     };
     const MB: u64 = 1024 * 1024;
-    // Off the lock, same as the sample serialization: each cache holds ONE big Value (the
-    // merged summary / its stripped form over the whole corpus), so this can move real bytes.
-    // A value that fails to serialize (or is absent) reports `none` — the tick continues either
-    // way; a cache size we cannot measure must not cost the whole composition line.
-    let cache_mb = |cached: &Option<Arc<Value>>| -> Option<u64> {
-        cached.as_ref().map(|v| match serde_json::to_vec(v.as_ref()) {
-            Ok(b) => (b.len() as u64) / MB,
-            Err(_) => 0,
-        })
-    };
-    let summary_cache_mb = cache_mb(&summary_cached);
-    let stripped_cache_mb = cache_mb(&stripped_cached);
+    // TRDD-2JOIAH2G: the cache-size serialization is DELETED outright (no env var, no opt-in).
+    // Serializing the ~70/63 MB summary/stripped caches meant holding their Arcs across a
+    // multi-MB serialize, which forced full summary copies in `take_sessions` whenever a rebuild
+    // landed meanwhile (sizes recorded on TRDD-2JOIAH2G). The line reports session counts instead.
     let mi = crate::rss_guard::mimalloc_info();
     let commit_mb = mi.current_commit_bytes / MB;
     let live_bytes = crate::rss_guard::mi_live_bytes();
@@ -786,8 +812,8 @@ fn composition_tick(state: &Arc<Mutex<CoreState>>) {
             card_rows,
             card_text_bytes / MB,
             0, // persist_bytes: spec-reserved parameter; the line's shape does not print it
-            summary_cache_mb,
-            stripped_cache_mb,
+            summary_cache,
+            stripped_cache,
         ),
         suffix
     );
@@ -1299,7 +1325,8 @@ pub fn spawn_all(rt: &tokio::runtime::Runtime, bg: &tokio::runtime::Runtime, sta
 
 #[cfg(test)]
 mod tests {
-    use super::{collect_drop_pct, composition_line, control_passes, mi_suffix};
+    use super::{collect_drop_pct, composition_line, control_passes, mi_suffix, CacheSessions};
+    use serde_json::json;
     use crate::rss_guard::MimallocInfo;
 
     /// A stats-shaped MimallocInfo for suffix tests: the fields the mi-suffix reads, at
@@ -1321,12 +1348,22 @@ mod tests {
 
     #[test]
     fn composition_line_subtracts_window_est_from_commit() {
-        let line = composition_line(2048, 1800, 5000, 400, 32_000, 120, 0, Some(500), Some(300));
+        let line = composition_line(
+            2048,
+            1800,
+            5000,
+            400,
+            32_000,
+            120,
+            0,
+            CacheSessions::Sessions(500),
+            CacheSessions::Sessions(300),
+        );
         assert_eq!(
             line,
             "alcore: composition: mimalloc commit 2048 MB, process rss 1800 MB, \
-             window.spans 5000 (~400 MB sampled est), summary-cache 500 MB, \
-             stripped-cache 300 MB, card rows 32000 (~120 MB text, \
+             window.spans 5000 (~400 MB sampled est), summary-cache 500 sessions, \
+             stripped-cache 300 sessions, card rows 32000 (~120 MB text, \
              DuckDB own allocator, limit 256 MiB), derived slack = commit - window est = 1648 MB"
         );
     }
@@ -1349,16 +1386,16 @@ mod tests {
                 32_000,
                 120,
                 0,
-                Some(500),
-                Some(300),
+                CacheSessions::Sessions(500),
+                CacheSessions::Sessions(300),
             ),
             mi_suffix(&mi, Some(live))
         );
         assert_eq!(
             line,
             "alcore: composition: mimalloc commit 2048 MB, process rss 1800 MB, \
-             window.spans 5000 (~400 MB sampled est), summary-cache 500 MB, \
-             stripped-cache 300 MB, card rows 32000 (~120 MB text, \
+             window.spans 5000 (~400 MB sampled est), summary-cache 500 sessions, \
+             stripped-cache 300 sessions, card rows 32000 (~120 MB text, \
              DuckDB own allocator, limit 256 MiB), derived slack = commit - window est = 1648 MB, \
              mi committed 2048 MB, mi reset 3 MB, mi purged 0 MB, mi abandoned 146 pages \
              (peak 19600), mi live 640 MB, mi free-in-page 1408 MB"
@@ -1368,7 +1405,7 @@ mod tests {
     #[test]
     fn mi_suffix_unmeasured_live_prints_question_marks() {
         // A failed walk must print `?` for BOTH fields, never 0 — "unmeasured" and
-        // "zero bytes" are different facts (same contract as the caches' `none MB`).
+        // "zero bytes" are different facts (same contract as the caches' `none`).
         let s = mi_suffix(&fake_mi(), None);
         assert!(s.ends_with(", mi live ? MB, mi free-in-page ? MB"), "{s}");
         assert!(s.contains("mi committed 2048 MB"), "{s}");
@@ -1384,22 +1421,45 @@ mod tests {
 
     #[test]
     fn composition_line_prefix_is_exact() {
-        assert!(composition_line(1, 1, 0, 0, 0, 0, 0, None, None).starts_with("alcore: composition:"));
+        assert!(
+            composition_line(1, 1, 0, 0, 0, 0, 0, CacheSessions::Absent, CacheSessions::Absent)
+                .starts_with("alcore: composition:")
+        );
     }
 
     #[test]
     fn composition_line_none_reports_none_not_zero() {
-        // `None` (nothing cached) must print as `none`, never `0 MB` — "zero bytes" and
-        // "nothing cached" are different facts and the line must not blur them.
-        let line = composition_line(100, 90, 1000, 400, 10, 5, 0, None, None);
-        assert!(line.contains("summary-cache none MB"), "{line}");
-        assert!(line.contains("stripped-cache none MB"), "{line}");
+        // `Absent` (nothing cached) must print as `none`, and `none` must mean ONLY that: a
+        // present cache with zero sessions prints `0 sessions`, and a present cache with no
+        // countable `sessions` array prints `present (count unknown)` — "nothing cached",
+        // "cached but empty" and "cached, uncountable" are different facts.
+        let line = composition_line(100, 90, 1000, 400, 10, 5, 0, CacheSessions::Absent, CacheSessions::Absent);
+        assert!(line.contains("summary-cache none,"), "{line}");
+        assert!(line.contains("stripped-cache none,"), "{line}");
         assert!(line.ends_with("derived slack = commit - window est = 0 MB"), "{line}");
+
+        let line =
+            composition_line(100, 90, 1000, 400, 10, 5, 0, CacheSessions::Sessions(0), CacheSessions::Unknown);
+        assert!(line.contains("summary-cache 0 sessions,"), "{line}");
+        assert!(line.contains("stripped-cache present (count unknown),"), "{line}");
+        assert!(!line.contains("summary-cache none"), "{line}");
+        assert!(!line.contains("stripped-cache none"), "{line}");
+    }
+
+    #[test]
+    fn cache_sessions_classifies_absent_counted_and_uncountable() {
+        // The three states come from the cached value's shape, not its size: absent → Absent,
+        // a top-level `sessions` array → its length (0 included), anything else → Unknown.
+        assert_eq!(CacheSessions::of(None), CacheSessions::Absent);
+        assert_eq!(CacheSessions::of(Some(&json!({"sessions": []}))), CacheSessions::Sessions(0));
+        assert_eq!(CacheSessions::of(Some(&json!({"sessions": [1, 2, 3], "k": 1}))), CacheSessions::Sessions(3));
+        assert_eq!(CacheSessions::of(Some(&json!({"k": 1}))), CacheSessions::Unknown);
+        assert_eq!(CacheSessions::of(Some(&json!({"sessions": "x"}))), CacheSessions::Unknown);
     }
 
     #[test]
     fn composition_line_zero_window_yields_full_commit_as_slack() {
-        let line = composition_line(2048, 1800, 0, 0, 10, 5, 0, None, None);
+        let line = composition_line(2048, 1800, 0, 0, 10, 5, 0, CacheSessions::Absent, CacheSessions::Absent);
         assert!(line.ends_with("derived slack = commit - window est = 2048 MB"), "{line}");
     }
 
